@@ -2,8 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""The neighbour stitch pinned to the gather stitch through a whole 4x8 decode: same latents, weights and geometry,
-only the exchange differs. Real weights: a per-device stub would hide the tile placement this checks."""
+"""Neighbour stitch vs gather stitch on a 4x8 decode."""
 
 import json
 import os
@@ -30,13 +29,12 @@ from .common import MESH_4X8_RING, weights_subdir
 
 MINIMAX_H3_PIXEL_MEAN = (0.485, 0.456, 0.406)
 MINIMAX_H3_PIXEL_STD = (0.229, 0.224, 0.225)
-# The served 1344x768 canvas: a 4x7 tile grid over a 48x84 latent chunk.
 LATENT_HW = (48, 84)
 HEIGHT, WIDTH = 768, 1344
 
 
 def _decoder_state(weights_dir: str) -> dict[str, torch.Tensor]:
-    """The decoder-side tensors of the checkpoint, sharded or single-file."""
+    """Decoder tensors."""
     from safetensors.torch import load_file
 
     prefixes = ("decoder.", "post_quant_conv.")
@@ -110,8 +108,6 @@ def test_neighbor_stitch_matches_gather(mesh_device, reset_seeds):
     logger.info(f"canvas {tuple(gathered.shape)}; comparing the two exchanges")
     assert_quality(gathered, neighboured, pcc=0.9999, relative_rmse=0.02)
 
-    # The seams on their own: a whole-canvas metric averages a boundary defect away, and the
-    # boundaries are the only place the two exchanges do different arithmetic.
     ratio = config.spatial_compression_ratio
     _, _, height_overlaps = split_tiles(HEIGHT, 256, 64, ratio)
     _, _, width_overlaps = split_tiles(WIDTH, 256, 64, ratio)

@@ -40,7 +40,6 @@ ttnn::Tensor scaled_dot_product_attention(
     /// tensor, read at runtime rather than baked into the program. Shard it on the sequence-parallel axis
     /// so every device runs the SAME program yet sees its own origin. Overrides the scalar when set.
     const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor = std::nullopt,
-    /// Write the heads side by side, (B, 1, S, NQH*DH): the result nlp_concat_heads would give, without the op.
     bool output_concat_heads = false);
 
 /// Chunked SDPA over paged K/V: one Q chunk per call, K/V in paged layout.

@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""CPU-only checks of the time-packed weights in ``layers/audio_pack.py``: the dense packed conv on ``(T/k, k*C)`` rows
-must reproduce the unpacked op (exactly for zero-padded convs; away from the ends for replicate-padded resamplers)."""
+"""CPU checks: the packed conv matches the unpacked op."""
 
 import math
 
@@ -11,11 +10,11 @@ import torch.nn.functional as F
 
 from models.tt_dit.layers.audio_pack import conv1d_same, downsample2x_ref, kaiser_taps, packed_weight, upsample2x_ref
 
-BANDS = [(8, 4), (16, 2)]  # (channels, pack) -> 32-wide packed rows
+BANDS = [(8, 4), (16, 2)]
 
 
 def _pack(x_1CT, k):
-    """``(1, C, T) -> (1, k*C, T/k)`` slot-major (a row-major reshape of ``(T, C)``)."""
+    """``(1, C, T) -> (1, k*C, T/k)``."""
     c, t = x_1CT.shape[1], x_1CT.shape[2]
     return x_1CT[0].transpose(0, 1).reshape(t // k, k * c).transpose(0, 1).unsqueeze(0)
 
@@ -64,7 +63,7 @@ def test_packed_upsample_matches_interior(channels, pack):
     )
     out = _unpack(F.conv1d(_pack(x, pack), wp, padding=wp.shape[-1] // 2), 2 * pack, channels)
     assert out.shape == ref.shape
-    edge = 2 * pack * (wp.shape[-1] // 2 + 1)  # samples the zero-vs-replicate end padding can reach
+    edge = 2 * pack * (wp.shape[-1] // 2 + 1)
     assert torch.allclose(out[..., edge:-edge], ref[..., edge:-edge], atol=1e-4, rtol=1e-4)
     assert _psnr(ref, out) > 40, "end padding difference dominates the whole clip"
 
@@ -88,7 +87,7 @@ def test_packed_downsample_matches_interior(channels, pack):
 
 @pytest.mark.parametrize(("channels", "pack"), BANDS)
 def test_packed_kernel_widths(channels, pack):
-    """The packed kernels stay short: this is what keeps the dense form's FLOPs at today's padded-conv level."""
+    """Packed taps stay short."""
     for kernel, dilation in [(3, 1), (7, 1), (11, 1), (3, 3), (7, 3), (11, 3), (3, 5), (7, 5), (11, 5)]:
         wp = packed_weight(
             conv1d_same(torch.ones(channels, channels, kernel), dilation),

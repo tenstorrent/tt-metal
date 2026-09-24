@@ -67,7 +67,6 @@ void kernel_main() {
     // 0 == compact (page index unchanged).
     constexpr uint32_t output_pad_h = get_compile_time_arg_val(26);
     constexpr uint32_t output_pad_w = get_compile_time_arg_val(27);
-    // In-kernel operand split: a second weight block (W_lo) per (c_in, c_out) block, same shape as W.
     constexpr uint32_t cb_weight_lo_tiled = get_compile_time_arg_val(28);
     constexpr bool operand_split = get_compile_time_arg_val(29) == 1;
 
@@ -105,7 +104,6 @@ void kernel_main() {
     Noc noc;
     experimental::CB cb_out(cb_matmul_result_rm);
     experimental::CB cb_weight(cb_weight_tiled);
-    // Aliases cb_weight when the split is off, so the object is always a valid CB.
     experimental::CB cb_weight_lo(operand_split ? cb_weight_lo_tiled : cb_weight_tiled);
     experimental::CB cb_bias(cb_bias_tiled);
     experimental::CB cb_interm(cb_matmul_interm_tiled);
@@ -271,8 +269,6 @@ void kernel_main() {
                         noc, weight_reader, cb_weight, c_in_offset_t, c_out_offset_t);
                     cb_weight.push_back(weight_tiles);
                     if constexpr (operand_split) {
-                        // The host pins weight sharing to Disabled under the split, so W_lo only ever
-                        // takes this per-core DRAM read.
                         cb_weight_lo.reserve_back(weight_tiles);
                         read_weight_block<tile_bytes, matmul_K_t, matmul_N_t, C_out_t>(
                             noc, weight_lo_reader, cb_weight_lo, c_in_offset_t, c_out_offset_t);

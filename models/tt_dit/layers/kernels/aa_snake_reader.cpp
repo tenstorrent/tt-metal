@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Fused anti-aliased SnakeBeta activation, reader. A "tile" is a 4 KB block of R = 1024 / C row-major fp32 sticks.
-// Stages this core's sticks in L1 (whole pages, then the sequence-end clamp) and gathers 7 tap-shifted tiles per block.
+// AA SnakeBeta reader: gathers 7 tap-shifted fp32 tiles.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -16,14 +15,14 @@ void kernel_main() {
     constexpr uint32_t cb_fl = get_compile_time_arg_val(7);
     constexpr uint32_t C = get_compile_time_arg_val(8);
     constexpr uint32_t R = get_compile_time_arg_val(9);
-    constexpr uint32_t K = get_compile_time_arg_val(10);  // sticks per DRAM page (the time-pack factor)
+    constexpr uint32_t K = get_compile_time_arg_val(10);
     constexpr int32_t T_LOCAL = get_compile_time_arg_val(11);
     constexpr int32_t HALO = get_compile_time_arg_val(12);
-    constexpr uint32_t X_PAGES = get_compile_time_arg_val(13);  // pages per batch item of the halo'd input
+    constexpr uint32_t X_PAGES = get_compile_time_arg_val(13);
     constexpr uint32_t NB_EXTRA = get_compile_time_arg_val(15);
     constexpr uint32_t STICK = C * 4;
     constexpr uint32_t PAGE = K * STICK;
-    constexpr uint32_t TILE = R * STICK;  // 4096
+    constexpr uint32_t TILE = R * STICK;
 
     constexpr auto x_args = TensorAccessorArgs<16>();
     constexpr auto ab_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
@@ -48,12 +47,9 @@ void kernel_main() {
     experimental::CB ab_cb(cb_ab);
     experimental::CB fl_cb(cb_fl);
 
-    // Edge flags for this device: [is_first, is_last] along the time axis; the writer's z clamp reads them, and the
-    // sequence ends below clamp per stick (the halo's replicated row repeats k sticks when rows are packed).
     fl_cb.reserve_back(1);
     const uint32_t fl_l1 = fl_cb.get_write_ptr();
     noc.async_read(fl_acc, fl_cb, 64, {.page_id = 0, .offset_bytes = 0}, {.offset_bytes = 0});
-    // Alpha and beta blocks (the per-channel vectors repeated R times), one tile each.
     ab_cb.reserve_back(2);
     noc.async_read(ab_acc, ab_cb, TILE, {.page_id = 0, .offset_bytes = 0}, {.offset_bytes = 0});
     noc.async_read(ab_acc, ab_cb, TILE, {.page_id = 1, .offset_bytes = 0}, {.offset_bytes = TILE});
@@ -61,27 +57,22 @@ void kernel_main() {
     fl_cb.push_back(1);
     ab_cb.push_back(2);
 
-    // Sticks this core's up blocks read, in unpadded local coordinates: q range +-3.
     const int32_t q_lo = static_cast<int32_t>(o0) - 3;
     const uint32_t nblocks = n_tiles + NB_EXTRA;
     const int32_t x_lo = q_lo - 3;
     const int32_t x_hi = q_lo + static_cast<int32_t>(nblocks * R) + 3;
-    // The halo'd tensor holds unpadded sticks [-HALO, T_LOCAL + HALO). On a sequence end the halo is ignored and the
-    // edge stick is replicated per stick below, like the unpacked reference; elsewhere the neighbour's sticks are real.
     volatile tt_l1_ptr uint32_t* fl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fl_l1);
     const int32_t avail_lo = fl[0] != 0 ? 0 : -HALO;
     const int32_t avail_hi = fl[1] != 0 ? T_LOCAL : T_LOCAL + HALO;
     const int32_t r_lo = x_lo < avail_lo ? avail_lo : x_lo;
     const int32_t r_hi = x_hi > avail_hi ? avail_hi : x_hi;
 
-    // Staging: stick r lives at stage + (r - x_lo) * STICK, with a page of slack each side because page reads land
-    // whole (DRAM reads need 64 B alignment on both ends; whole pages at page-aligned offsets satisfy it).
     x_cb.reserve_back(1);
     const uint32_t stage = x_cb.get_write_ptr() + PAGE;
     const uint32_t p_lo = static_cast<uint32_t>(r_lo + HALO) / K;
     const uint32_t p_hi = (static_cast<uint32_t>(r_hi + HALO) + K - 1) / K;
     for (uint32_t p = p_lo; p < p_hi; ++p) {
-        const int32_t first = static_cast<int32_t>(p * K) - HALO;  // unpadded index of the page's first stick
+        const int32_t first = static_cast<int32_t>(p * K) - HALO;
         const uint32_t dst =
             static_cast<uint32_t>(static_cast<int32_t>(PAGE) + (first - x_lo) * static_cast<int32_t>(STICK));
         noc.async_read(x_acc, x_cb, PAGE, {.page_id = b * X_PAGES + p, .offset_bytes = 0}, {.offset_bytes = dst});
@@ -106,7 +97,6 @@ void kernel_main() {
         noc.async_read_barrier();
     }
 
-    // Up-stage gathers: 7 tap-shifted 4 KB tiles per block, local L1 -> CB_UP.
     experimental::set_read_state<TILE>(noc, stage);
     for (uint32_t blk = 0; blk < nblocks; ++blk) {
         const int32_t q0 = q_lo + static_cast<int32_t>(blk * R);

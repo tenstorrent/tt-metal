@@ -379,8 +379,6 @@ class MiniMaxH3Vae:
         # Blend the tile grid on device and read back the assembled canvas, instead of reading
         # overlapping tiles and blending them on host.
         self.device_stitch = device_stitch
-        # How a device-stitched wave shares tiles: "strips" (default) is the gather blend factored along the mesh,
-        # same bits as "gather" at ~1/4 of the programs and bytes; "neighbor" exchanges only the overlap strips.
         self.stitch_exchange = stitch_exchange
         # `(mean, std)` of the ImageNet normalization the decoder's pixels are still in. Set it and
         # the de-normalization is folded into `proj_out`, so `decode` emits `[-1, 1]` pixels and the
@@ -926,7 +924,7 @@ class MiniMaxH3Vae:
         return self._decode_clips_gather_stitched(chunk_latents, output_type)
 
     def _strips_unserved(self, latent_h: int, latent_w: int, output_type: str) -> str | None:
-        """Why the strips stitch cannot serve this decode, or None when it can."""
+        """Why strips cannot serve, or None."""
         (y_starts, y_lengths, _), (x_starts, x_lengths, _) = self._decode_tile_grid(latent_h, latent_w)
         grid_rows, grid_cols = len(y_lengths), len(x_lengths)
         mesh_rows, mesh_cols = tuple(self.mesh_device.shape)
@@ -940,8 +938,7 @@ class MiniMaxH3Vae:
         return None
 
     def _unpatchify(self, decoded: ttnn.Tensor, num_frames: int, height: int, width: int) -> ttnn.Tensor:
-        """Tokens (TILE, fp32) to `(1, C, T*pt, H*p, W*p)` ROW_MAJOR pixels: one page-remap program off the tiles
-        (unpatchify_minimax_h3.py), or the bit-identical to_layout + permute chain for shapes it does not serve."""
+        """Tokens to `(1, C, T*pt, H*p, W*p)` ROW_MAJOR pixels."""
         from .stitch_device_minimax_h3 import unpatchify_device
         from .unpatchify_minimax_h3 import unpatchify_tiled
 
@@ -961,8 +958,6 @@ class MiniMaxH3Vae:
                 f"the unpatchify program needs fp32 tokens 16 patches wide (got {decoded.dtype}, width {width}); "
                 "using the permute chain"
             )
-        # Row-major from here to the DMA: the rank-8 intermediate has trailing dims of 16, which a tiled
-        # reshape would pad to 32x32, and the stitch's slices land off tile boundaries.
         return unpatchify_device(ttnn.to_layout(decoded, ttnn.ROW_MAJOR_LAYOUT), **dims)
 
     def _decode_clips_gather_stitched(self, chunk_latents: list[torch.Tensor], output_type: str = "float") -> list:
@@ -1078,8 +1073,6 @@ class MiniMaxH3Vae:
                 canvas_shape = tuple(canvas.shape)
                 canvas_dtype = str(canvas.dtype)
                 if output_type == "yuv420":
-                    # The readback's GIL-releasing host half runs on a worker while the next wave's decoder is on the
-                    # device. One frame in flight on a FIFO queue, so `canvases` still comes out in chunk order.
                     finish = self._read_canvas_yuv(canvas)
                     ttnn.deallocate(canvas)
                     frames, canvas_h, canvas_w = canvas_shape[-3], canvas_shape[-2], canvas_shape[-1]
@@ -1102,7 +1095,6 @@ class MiniMaxH3Vae:
                     profile["readback_join"] += time.perf_counter() - mark
             ttnn.deallocate(gathered)
         if pending:
-            # Whatever is left had no wave behind it to hide under.
             mark = time.perf_counter()
             canvases.extend(future.result() for future in pending)
             pending.clear()
@@ -1110,8 +1102,7 @@ class MiniMaxH3Vae:
         return canvases
 
     def _decode_clips_strip_stitched(self, chunk_latents: list[torch.Tensor], output_type: str = "float") -> list:
-        """The gather stitch factored along the mesh: each device blends only what it reads back. Tile ``(k, r, c)``
-        lands on device ``(r, k * grid_cols + c)``; `StripTileStitcher` does the column and row stages. Same bits."""
+        """Each device blends only the tiles it reads back."""
         from .stitch_device_minimax_h3 import StripTileStitcher
 
         (y_starts, y_lengths, y_overlaps), (x_starts, x_lengths, x_overlaps) = self._decode_tile_grid(
@@ -1128,15 +1119,12 @@ class MiniMaxH3Vae:
         )
         chunks_per_wave = mesh_cols // grid_cols
         canvas_h, canvas_w = y_starts[-1] + y_lengths[-1], x_starts[-1] + x_lengths[-1]
-        # Both `mesh_partition`s need an even split; the yuv readback asserts the 4:2:0 evenness on top.
         assert canvas_h % mesh_rows == 0, f"canvas height {canvas_h} does not split over {mesh_rows} mesh rows"
         assert canvas_w % mesh_cols == 0, f"canvas width {canvas_w} does not split over {mesh_cols} mesh columns"
         if output_type != "yuv420" and ttnn.using_distributed_env():
             assert (
                 self.ccl_manager is not None
             ), "the strip stitch's float readback needs a CCLManager on a multi-host mesh"
-        # The W-blend right of a column reads the last `edge_width` columns of its ORIGINAL tiles; one uniform width
-        # covers every seam (the blend takes the tail it needs); 0 is a single-column grid with no W seam or edge strip.
         edge_width = max(x_overlaps) if x_overlaps else 0
 
         if self._stitcher is None or not isinstance(self._stitcher, StripTileStitcher):
@@ -1145,8 +1133,6 @@ class MiniMaxH3Vae:
         decoder = self.decoder
         profile = self._profile
 
-        # Wave plan. Dense (one idle mesh column): in wave w of a run of grid_cols waves the idle column decodes tile
-        # column w of an extra chunk and every device keeps that row strip; that chunk's row stage runs after the run.
         dense = chunks_per_wave == 1 and mesh_cols == grid_cols + 1
         waves: list[dict] = []
         if dense:
@@ -1189,8 +1175,6 @@ class MiniMaxH3Vae:
             ), f"unit shape {(num_frames, height, width)} != decoder {decoder.latent_shape}"
 
             mark = time.perf_counter()
-            # Grid-aligned slots (the neighbour form's placement); idle slots carry a filler tile
-            # whose blended output is never read.
             slots: list[torch.Tensor | None] = [None] * wave_size
             for k, units in enumerate(units_by_chunk):
                 assert len(units) == tiles_per_chunk
@@ -1260,8 +1244,6 @@ class MiniMaxH3Vae:
                 read_bytes = canvas_shape[-3] * canvas_shape[-2] * canvas_shape[-1] * 3 // 2
                 pending.append(self._yuv_finish_pool.submit(finish))
             else:
-                # Each device holds its rows of every column; split the columns too and let the
-                # 2-D reassembly put the canvas back together.
                 patch = ttnn.mesh_partition(canvas_rows, dim=-1, cluster_axis=1)
                 out = fast_device_to_host(patch, self.mesh_device, [3, 4], ccl_manager=self.ccl_manager).float()
                 ttnn.deallocate(patch)
@@ -1286,17 +1268,12 @@ class MiniMaxH3Vae:
 
             mark = time.perf_counter()
             decoded = decoder(tokens)
-            # Same cast and layout choices as the gather form, for the same reasons (see there).
             decoded = ttnn.typecast(decoded, ttnn.float32)
             pixels = self._unpatchify(decoded, num_frames, height, width)
-            # Stage 1: the column. A one-axis gather keeps mesh order, so gathered index r is tile
-            # row r of this device's column.
             column = ttnn.all_gather(pixels, 0, cluster_axis=0, topology=ttnn.Topology.Ring)
             strip, edge = stitcher.column(column, grid_rows, y_overlaps, edge_width)
             ttnn.deallocate(column)
             strip = ttnn.mesh_partition(strip, dim=-2, cluster_axis=0)
-            # Stage 2: the row. Every column's strip (and edge, when there is a W seam) for this
-            # device's rows.
             strips = ttnn.all_gather(strip, 0, cluster_axis=1, topology=ttnn.Topology.Ring)
             ttnn.deallocate(strip)
             edges = None
@@ -1309,14 +1286,12 @@ class MiniMaxH3Vae:
             profile["waves"] += 1
             profile["units"] += n_units
 
-            # Stage the next wave now, before this wave's readback blocks on the device.
             if wave_index + 1 < len(waves):
                 staged = stage(waves[wave_index + 1])
 
             for k in range(len(wave["mains"])):
                 readback(row_stage(strips, edges, k * grid_cols), str(pixels.dtype))
             if wave["extra"] is not None:
-                # The idle column's row strip is the extra chunk's tile column w for this device's rows: keep it.
                 held_strips.append(entry(strips, grid_cols))
                 if edges is not None:
                     held_edges.append(entry(edges, grid_cols))
@@ -1324,7 +1299,6 @@ class MiniMaxH3Vae:
             if edges is not None:
                 ttnn.deallocate(edges)
             if wave["flush"]:
-                # The extra chunk: its grid_cols row strips are all here already, so the row stage needs no gather.
                 strips_e = ttnn.concat(held_strips, dim=0)
                 edges_e = ttnn.concat(held_edges, dim=0) if held_edges else None
                 for kept in held_strips + held_edges:
@@ -1544,7 +1518,7 @@ class MiniMaxH3Vae:
 
     @property
     def _yuv_finish_pool(self) -> ThreadPoolExecutor:
-        """One worker: the AVX2 concat brings its own threads and the frames must stay in order."""
+        """One worker; frames stay ordered."""
         if self._yuv_pool is None:
             self._yuv_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="h3_yuv_finish")
         return self._yuv_pool

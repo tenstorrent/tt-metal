@@ -2,8 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""RoPE with the q/k RMS normalisation folded in (`rotary_embedding_llama(..., rms_norm_eps=eps)`) against the separate
-`ttnn.rms_norm` -> `rotary_embedding_llama` pair at the H3 VAE decoder's shape: at least as accurate vs float64."""
+"""Fused RMS-norm+RoPE vs separate pair, checked vs float64."""
 
 import time
 
@@ -34,10 +33,10 @@ def _timed(mesh_device, fn, n=15):
 
 
 def _reference(x, cos, sin, trans, eps):
-    """float64: RMS over the head dim, then x*cos + (x @ trans_mat per 32-column tile) * sin."""
+    """float64 RMS-norm + RoPE."""
     x = x.double()
     xn = x / torch.sqrt(x.pow(2).mean(dim=-1, keepdim=True) + eps)
-    t = trans.double()  # (32, 32) applied to each 32-wide column tile
+    t = trans.double()
     rot = (xn.reshape(*xn.shape[:-1], HEAD_DIM // 32, 32) @ t).reshape(xn.shape)
     return xn * cos.double() + rot * sin.double()
 
@@ -78,7 +77,7 @@ def test_rope_rms_fused(mesh_device, view):
 
     out_t, t_today = _timed(mesh_device, today)
     out_f, t_fused = _timed(mesh_device, fused)
-    x_bf16 = ttnn.to_torch(ttnn.from_torch(x, dtype=ttnn.bfloat16)).float()  # what the device saw
+    x_bf16 = ttnn.to_torch(ttnn.from_torch(x, dtype=ttnn.bfloat16)).float()
     ref = _reference(
         x_bf16.reshape(1, HEADS, SEQ, HEAD_DIM),
         ttnn.to_torch(cos_dev).float(),

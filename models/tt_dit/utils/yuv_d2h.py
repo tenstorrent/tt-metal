@@ -43,8 +43,7 @@ _FALLBACK_WARNED = False
 
 
 def _warn_once_about_the_fallback() -> None:
-    """The AVX2 concat is only built by hand (`models/tt_dit/utils/cpp/build.sh`), so a serving process can lose it
-    quietly; say so once per process rather than per frame."""
+    """Warn once that the AVX2 concat is missing."""
     global _FALLBACK_WARNED
     if _FALLBACK_WARNED:
         return
@@ -56,14 +55,14 @@ def _warn_once_about_the_fallback() -> None:
 
 
 def _as_hwt(shard: torch.Tensor, T: int) -> torch.Tensor:
-    """A wide (1, h, w*T) host shard back to the kernel-native (1, h, w, T) view; a 4-D shard passes through."""
+    """(1,h,w*T) -> (1,h,w,T)."""
     if shard.dim() == 4:
         return shard
     return shard.reshape(shard.shape[0], shard.shape[1], shard.shape[2] // T, T)
 
 
 def _all_contiguous(*shard_groups) -> bool:
-    """True when every shard is C-contiguous, for torch tensors and numpy arrays alike."""
+    """All C-contiguous?"""
     for group in shard_groups:
         for shard in group:
             flags = getattr(shard, "flags", None)
@@ -139,8 +138,6 @@ def _yuv_planar_d2h(
     out_H = H if out_H is None else out_H
     out_W = W if out_W is None else out_W
 
-    # Three async reads; a deferred caller waits on a recorded event in the host half (so the next wave is enqueued while
-    # this one drains), an inline caller synchronizes here.
     host_Y = tt_Y.cpu(blocking=False)
     host_Cb = tt_Cb.cpu(blocking=False)
     host_Cr = tt_Cr.cpu(blocking=False)
@@ -154,7 +151,7 @@ def _yuv_planar_d2h(
         if read_event is not None:
             ttnn.event_synchronize(read_event)
         if view is not None:
-            # --- Multi-host: extract local shards via host_buffer/get_shard ---
+
             def _extract_local(host_tensor):
                 host_mesh_coords = list(host_tensor.tensor_topology().mesh_coords())
                 distributed_buf = host_tensor.host_buffer()
@@ -178,7 +175,6 @@ def _yuv_planar_d2h(
             Cb_coords_shards = _extract_local(host_Cb)
             Cr_coords_shards = _extract_local(host_Cr)
 
-            # Remap global mesh coordinates to 0-based local coordinates.
             all_local_coords = [c for c, _ in Y_coords_shards]
             local_row_positions = sorted({int(c[0]) for c in all_local_coords})
             local_col_positions = sorted({int(c[1]) for c in all_local_coords})
@@ -195,7 +191,6 @@ def _yuv_planar_d2h(
             Cb_shards = [s for _, s in Cb_coords_shards]
             Cr_shards = [s for _, s in Cr_coords_shards]
         else:
-            # --- Single-host: extract all shards via get_device_tensors ---
             TP_eff, SP_eff = tuple(mesh_device.shape)
             h_per_y, w_per_y = H // TP_eff, W // SP_eff
             h_per_uv, w_per_uv = Hu // TP_eff, Wu // SP_eff
@@ -208,12 +203,10 @@ def _yuv_planar_d2h(
                 trim = tuple(slice(0, d) for d in logical_shape)
                 return [_as_hwt(_to_torch_zero_copy(s)[trim], T) for s in host_shards]
 
-            Y_shards = _extract(host_Y)  # each (1, h_per_y, w_per_y, T)
-            Cb_shards = _extract(host_Cb)  # each (1, h_per_uv, w_per_uv, T)
+            Y_shards = _extract(host_Y)
+            Cb_shards = _extract(host_Cb)
             Cr_shards = _extract(host_Cr)
 
-        # --- C++/AVX2 fast path --------------------------------------------- Drop-in replacement for the torch_threaded
-        # `planar_concat_cpp` copies non-contiguous shards one by one, slower than the torch scatter: hence the guard.
         use_cpp = (
             HAS_CPP_PLANAR_CONCAT
             and len(mesh_coords) == TP_eff * SP_eff
@@ -237,7 +230,6 @@ def _yuv_planar_d2h(
 
         _warn_once_about_the_fallback()
 
-        # --- Python fallback (torch_threaded scatter) ------------------------ Assemble directly into the logical-sized
         out_Hu, out_Wu = out_H // 2, out_W // 2
         out_hw, out_uv = out_H * out_W, out_Hu * out_Wu
         out_row = out_hw + 2 * out_uv
@@ -255,8 +247,7 @@ def _yuv_planar_d2h(
             vh = min(h_per, bound_h - r0)
             vw = min(w_per, bound_w - c0)
             if vh <= 0 or vw <= 0:
-                return  # shard lies entirely in the padded tail
-            # shard (1, h_per, w_per, T) -> squeeze(0).permute(2, 0, 1) -> (T, h_per, w_per).
+                return
             src = shard.squeeze(0).permute(2, 0, 1)[:, :vh, :vw]
             view[:, r0 : r0 + vh, c0 : c0 + vw].copy_(src)
 
@@ -466,7 +457,6 @@ def fast_device_to_host_yuv(
         print(f"  [yuv-d2h] after reshape to (C,h_per,w_per,T) per-shard: {list(tt_CHWT.shape)}")
 
     # 2. On-device YUV 4:2:0 -> 3 uint8 tensors.
-    # Wide rows: (1, h, w*T) pages instead of 28-byte (1, h, w, T) sticks read back faster; `_as_hwt` views them back.
     tt_Y, tt_Cb, tt_Cr = ttnn.experimental.rgb_to_yuv(tt_CHWT, coefficients=coefficients, wide_rows=True)
     if debug:
         print(f"  [yuv-d2h] yuv outputs per-shard:")

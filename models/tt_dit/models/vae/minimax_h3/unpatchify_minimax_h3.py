@@ -2,8 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Unpatchify as one page-remap program over TILE-layout fp32 tokens, no arithmetic: the 1 KB face of a (t, h) unit's
-feature group ``(c, f, yy)`` is canvas row ``(c, t*pt + f, h*p + yy)``. Needs patch_size 16 and 16-patch-wide tiles."""
+"""Unpatchify TILE fp32 tokens by page remap; patch_size 16."""
 
 from __future__ import annotations
 
@@ -53,8 +52,6 @@ def _build(
         reader_ct=ct + list(reader_acc),
         writer_ct=ct + list(writer_acc),
         cbs=[cb],
-        # Deterministic across processes (ints only, no str hashing); every compile-time and work-split input is in it,
-        # since generic_op trusts the hash on a program-cache hit.
         hash=(0xC13 << 52)
         | (
             hash((s_pad, d, num_frames, height, out_channels, pt, p, tuple(ct), reader_acc, writer_acc, len(cores)))
@@ -73,7 +70,7 @@ def unpatchify_tiled(
     patch_size: int = 16,
     patch_size_t: int = 4,
 ) -> ttnn.Tensor:
-    """``(1, S_pad, C*pt*p*p)`` TILE fp32 tokens (rows >= T*H*W ignored) to ``(1, C, T*pt, H*p, W*p)`` fp32 ROW_MAJOR."""
+    """Unpatchify tiled fp32 tokens."""
     assert tokens.layout == ttnn.TILE_LAYOUT and tokens.dtype == ttnn.float32, "tiled fp32 tokens only"
     batch, s_pad, d = (int(v) for v in tokens.shape)
     assert batch == 1, "one tile at a time"

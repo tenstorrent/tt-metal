@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Time-packed 1-D ops for the vocoder's narrow (8-16 channel) bands: ``(T, C) -> (T / k, k * C)`` turns 32/64-byte
-DRAM pages into 128-byte ones; every shift-invariant op has an exact packed form read off its impulse responses."""
+"""Time-packed 1-D ops, ``(T, C) -> (T/k, k*C)``."""
 
 from __future__ import annotations
 
@@ -17,10 +16,7 @@ from .module import Module
 def packed_weight(
     op, *, c_in: int, c_out: int, k_in: int, k_out: int, support: int, q_half: int | None = None
 ) -> torch.Tensor:
-    """Dense packed weight ``(k_out * c_out, k_in * c_in, K')`` of a shift-invariant torch op ``(1, c_in, L) ->
-    (1, c_out, L * k_out / k_in)`` (no bias, receptive field <= ``support`` input samples). The result is an odd "same"
-    kernel; ``q_half`` fixes ``K' = 2 * q_half + 1`` (a weight with chance zero taps keeps its module's kernel) and
-    ``None`` trims zero taps symmetrically."""
+    """Packed "same" weight ``(k_out*c_out, k_in*c_in, K')`` of a shift-invariant op on ``(1, c_in, L)``."""
     q_max = -(-(support + k_in) // k_in) + 1
     rows = 2 * q_max + 5
     t0 = rows // 2
@@ -33,11 +29,10 @@ def packed_weight(
             with torch.no_grad():
                 y = op(x)
             assert y.shape[-1] == rows * k_out, f"op must map {rows * k_in} -> {rows * k_out} samples, got {y.shape}"
-            y_rows = y[0].transpose(0, 1).reshape(rows, width)  # (T', k_out * c_out), slot-major
+            y_rows = y[0].transpose(0, 1).reshape(rows, width)
             for d in range(-q_max, q_max + 1):
                 taps[q_max - d, r * c_in + ci] = y_rows[t0 + d]
     if q_half is None:
-        # Trim zero taps symmetrically so the kernel stays "same"-padded.
         nonzero = [q for q in range(taps.shape[0]) if taps[q].abs().max() > 0]
         assert nonzero, "op has no response"
         trim = min(nonzero[0], taps.shape[0] - 1 - nonzero[-1])
@@ -46,11 +41,11 @@ def packed_weight(
         assert trim >= 0, f"q_half {q_half} exceeds the probed reach {q_max}"
         assert taps[:trim].abs().max() == 0 and taps[taps.shape[0] - trim :].abs().max() == 0, "response outside q_half"
     taps = taps[trim : taps.shape[0] - trim]
-    return taps.permute(2, 1, 0).contiguous().float()  # (k_out*c_out, k_in*c_in, K') = Conv1d weight layout
+    return taps.permute(2, 1, 0).contiguous().float()
 
 
 def conv1d_same(weight: torch.Tensor, dilation: int):
-    """Bias-free "same" ``Conv1d`` closure for ``packed_weight``."""
+    """Bias-free "same" conv1d closure."""
     k = weight.shape[-1]
     pad = (k - 1) * dilation // 2
     w = weight.double()
@@ -58,7 +53,7 @@ def conv1d_same(weight: torch.Tensor, dilation: int):
 
 
 def upsample2x_ref(taps: torch.Tensor, channels: int):
-    """BigVGAN ``UpSample1d`` (ratio 2) as a bias-free closure: replicate pad, ``2 * conv_transpose1d``, crop."""
+    """BigVGAN 2x ``UpSample1d`` closure."""
     k = taps.numel()
     pad = k // 2 - 1
     crop = pad * 2 + (k - 2) // 2
@@ -73,7 +68,7 @@ def upsample2x_ref(taps: torch.Tensor, channels: int):
 
 
 def downsample2x_ref(taps: torch.Tensor, channels: int):
-    """BigVGAN ``DownSample1d`` (ratio 2): replicate pad ``(k/2 - 1, k/2)``, strided depthwise conv."""
+    """BigVGAN 2x ``DownSample1d`` closure."""
     k = taps.numel()
     w = taps.double().reshape(1, 1, k).expand(channels, 1, k).contiguous()
 
@@ -89,8 +84,7 @@ def kaiser_taps(ratio: int = 2, kernel_size: int = 12) -> torch.Tensor:
 
 
 class PackedConv1d(Conv1dViaConv3d):
-    """A dilated "same" ``Conv1d`` on ``k``-packed rows, ``(B, T/k, k*C_in) -> (B, T/k, k*C_out)``; loads the ordinary
-    ``(C_out, C_in, K)`` torch weight and bias and packs them at load time."""
+    """Dilated "same" conv on ``k``-packed rows."""
 
     def __init__(self, in_channels: int, out_channels: int, *, kernel_size: int, dilation: int = 1, pack: int, **kw):
         support = (kernel_size - 1) * dilation + 1
@@ -136,9 +130,7 @@ def _packed_resample_weight(taps, channels, k_in, k_out, up, q_half=None):
 
 
 class PackedResample(Conv1dViaConv3d):
-    """A fixed depthwise 2x resampler (up or down) as a dense conv on packed rows: ``k_in`` input slots per row,
-    ``k_out`` output slots (``2 * k_in`` up, ``k_in / 2`` down). Taps come from the checkpoint filter if present, else
-    the kaiser-sinc default; replicate end padding becomes a replicate halo of packed rows when T-sharded."""
+    """2x resampler as a dense conv on packed rows: ``k_in`` slots in, ``k_out`` out."""
 
     def __init__(self, channels: int, *, k_in: int, k_out: int, up: bool, **kw):
         taps = kaiser_taps()
@@ -162,8 +154,7 @@ class PackedResample(Conv1dViaConv3d):
 
 
 class PackedActivation1d(Module):
-    """``UpSample1d(2x) -> SnakeBeta -> DownSample1d(2x)`` on ``k``-packed rows. Loads the unpacked ``Activation1d``
-    state, tiling the per-channel snake parameters over the ``2k`` slots of the upsampled row."""
+    """Up 2x -> SnakeBeta -> down 2x on ``k``-packed rows."""
 
     def __init__(
         self,

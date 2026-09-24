@@ -2,8 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""One fused anti-aliased SnakeBeta activation, ``UpSample1d(2x) -> SnakeBeta -> DownSample1d(2x)``, as a single
-``generic_op`` program (``layers/kernels/aa_snake_*.cpp``), bit-identical to the ``Activation1d`` chain it replaces."""
+"""Fused up-2x -> SnakeBeta -> down-2x as one generic_op."""
 
 from __future__ import annotations
 
@@ -19,11 +18,10 @@ from .audio_ops import _make_kaiser_sinc_kernel_1d, _t_neighbor_pad
 from .module import Module, Parameter
 
 KERNEL_DIR = "models/tt_dit/layers/kernels"
-# Circular buffer indices shared with the kernels (compile-time args 0-7).
 CB_X, CB_UP, CB_AB, CB_E, CB_O, CB_DN, CB_FL, CB_OUT = 0, 1, 2, 3, 4, 5, 6, 16
 _TILE = 4096
 _TAPS = 12
-_DRAM_READ_ALIGN = 64  # Blackhole NoC DRAM read alignment (NOC_DRAM_READ_ALIGNMENT_BYTES)
+_DRAM_READ_ALIGN = 64
 
 
 def _f32_bits(value: float) -> int:
@@ -31,8 +29,7 @@ def _f32_bits(value: float) -> int:
 
 
 class FusedActivation1d(Module):
-    """Drop-in for ``Activation1d(channels, SnakeBeta(alpha_logscale=True))``: same state keys, same ``(B, T, C)`` or
-    packed ``(B, T / k, k C)`` fp32 ROW_MAJOR input and output."""
+    """Fused SnakeBeta Activation1d, (B,T,C) fp32."""
 
     def __init__(
         self,
@@ -66,20 +63,16 @@ class FusedActivation1d(Module):
         taps = _make_kaiser_sinc_kernel_1d(cutoff=0.25, half_width=0.3, kernel_size=_TAPS).tolist()
         self._up_taps = list(taps)
         self._down_taps = list(taps)
-        # Alpha (row 0) and beta (row 1), each the per-channel vector repeated R times: one fp32 tile each.
         self.ab = Parameter(
             total_shape=[1, 2, 1024], device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.float32
         )
         self._flags: ttnn.Tensor | None = None
         self._programs: dict = {}
 
-    # -- state -------------------------------------------------------------------------------------------------
-
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "act.alpha" in state and "act.beta" in state:
             alpha = state.pop("act.alpha")
             beta = state.pop("act.beta")
-            # The same steps as SnakeBeta._prepare_torch_state so the values match bit for bit.
             if self.alpha_logscale:
                 alpha = torch.exp(alpha)
                 beta = torch.exp(beta)
@@ -97,7 +90,7 @@ class FusedActivation1d(Module):
         assert len(self._up_taps) == _TAPS and len(self._down_taps) == _TAPS
 
     def _flags_tensor(self) -> ttnn.Tensor:
-        """Per-device ``[is_first, is_last]`` along the time axis (uint32, one 64 B page)."""
+        """Per-device [is_first, is_last] flags."""
         if self._flags is None:
             if self._sharded:
                 factor, axis = self.parallel_config.factor, self.parallel_config.mesh_axis
@@ -122,8 +115,6 @@ class FusedActivation1d(Module):
             )
         return self._flags
 
-    # -- program -----------------------------------------------------------------------------------------------
-
     def _build(self, batch: int, t_sticks: int, pack: int, halo: int, x: ttnn.Tensor, out: ttnn.Tensor) -> dict:
         C, R = self.channels, self.rows_per_tile
         stick = C * 4
@@ -134,7 +125,6 @@ class FusedActivation1d(Module):
         per_batch = len(cores) // batch
         assert per_batch >= 1, f"batch {batch} exceeds the {len(cores)}-core grid"
         tiles = -(-t_sticks // R)
-        # (b, first output stick, output tiles) per core; the spare cores get no work and return at once.
         work = []
         for b in range(batch):
             base, rem = divmod(tiles, per_batch)
@@ -145,7 +135,7 @@ class FusedActivation1d(Module):
                 o0 += n * R
         work += [(0, 0, 0)] * (len(cores) - len(work))
         max_tiles = max(n for _, _, n in work)
-        nb_extra = -(-6 // R)  # E/O blocks cover the output range +-3 sticks
+        nb_extra = -(-6 // R)
         max_blocks = max_tiles + nb_extra
 
         rt = ttnn.RuntimeArgs()
@@ -155,8 +145,8 @@ class FusedActivation1d(Module):
         ct = [
             CB_X, CB_UP, CB_AB, CB_E, CB_O, CB_DN, CB_OUT, CB_FL,
             C, R, pack, t_sticks, halo,
-            (t_sticks + 2 * halo) // pack,  # input pages per batch item
-            t_sticks // pack,  # output pages per batch item
+            (t_sticks + 2 * halo) // pack,
+            t_sticks // pack,
             nb_extra,
         ]  # fmt: skip
         reader_ct = list(ct)
@@ -173,8 +163,6 @@ class FusedActivation1d(Module):
         def align64(n):
             return -(-n // _DRAM_READ_ALIGN) * _DRAM_READ_ALIGN
 
-        # Staging holds the block range +-3 sticks plus a page of slack on each side (see the reader); every CB
-        # size is a multiple of 64 B so the staging base keeps the DRAM read alignment.
         stage_bytes = align64((max_blocks * R + 6) * stick + 2 * page)
         cbs = [
             cb(CB_X, stage_bytes, 1),
@@ -190,7 +178,7 @@ class FusedActivation1d(Module):
         compute_cfg = ttnn.ComputeConfigDescriptor(
             math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, dst_full_sync_en=True
         )
-        modes = [ttnn.UnpackToDestMode.Default] * 64  # one entry per circular buffer slot
+        modes = [ttnn.UnpackToDestMode.Default] * 64
         for i in (CB_UP, CB_AB, CB_DN):
             modes[i] = ttnn.UnpackToDestMode.UnpackToDestFp32
         compute_cfg.unpack_to_dest_mode = ttnn.VectorUnpackToDestMode(modes)
@@ -205,7 +193,6 @@ class FusedActivation1d(Module):
             cbs=cbs,
             compute_cfg=compute_cfg,
             taps=taps,
-            # Deterministic across processes (no str hashing): the shape key is what makes the program distinct.
             hash=(0x5A5 << 52)
             | (C << 40)
             | (pack << 36)
@@ -254,15 +241,12 @@ class FusedActivation1d(Module):
         program.custom_program_hash = built["hash"]
         return program
 
-    # -- forward -----------------------------------------------------------------------------------------------
-
     def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
         assert x_BTC.layout == ttnn.ROW_MAJOR_LAYOUT and x_BTC.dtype == ttnn.float32
         batch, rows, width = (int(d) for d in x_BTC.shape)
         C = self.channels
         assert width % C == 0, f"row width {width} is not a multiple of {C} channels"
         pack = width // C
-        # DRAM reads need 64 B alignment: rows narrower than that (C = 8 unpacked) run two per row.
         x = x_BTC
         unpacked_shape = None
         if width * 4 < _DRAM_READ_ALIGN:
@@ -273,8 +257,6 @@ class FusedActivation1d(Module):
             rows, width, pack = rows // k2, width * k2, pack * k2
         t_sticks = rows * pack
         assert x.buffer_aligned_page_size() == width * 4, "the kernel reads whole unpadded DRAM pages"
-        # The accessor args baked into the kernels assume DRAM-interleaved pages, and the program hash packs
-        # (t_sticks, batch, pack) into fixed bit fields.
         assert (
             x.memory_config().buffer_type == ttnn.BufferType.DRAM and not x.is_sharded()
         ), "x must be DRAM interleaved"

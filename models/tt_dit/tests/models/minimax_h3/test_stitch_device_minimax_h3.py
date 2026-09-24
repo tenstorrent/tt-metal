@@ -42,7 +42,7 @@ def _geometry():
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
 def test_stitch_matches_host_at_production_geometry(mesh_device, reset_seeds):
-    """The whole 4x7 stitch, device against host, in the fp32 the decode blends in."""
+    """4x7 stitch vs host."""
     blend_dtype = ttnn.float32
     height_overlaps, width_overlaps = _geometry()
     rows, columns = len(height_overlaps) + 1, len(width_overlaps) + 1
@@ -197,7 +197,7 @@ def test_two_axis_all_gather_permutes_dim0_by_transpose(mesh_device):
 
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8, indirect=["mesh_device", "device_params"])
 def test_one_axis_all_gather_keeps_mesh_order(mesh_device):
-    """A one-axis gather stacks the shards in mesh order along that axis -- what the strip stitch indexes by."""
+    """Gather keeps mesh order."""
     rows, cols = tuple(mesh_device.shape)
     num_devices = rows * cols
     host = torch.arange(num_devices, dtype=torch.float32).reshape(num_devices, 1, 1, 1).expand(num_devices, 1, 1, 32)
@@ -233,12 +233,11 @@ MESH_4X8_RING_L1 = [
 
 MINIMAX_H3_PIXEL_MEAN = (0.485, 0.456, 0.406)
 MINIMAX_H3_PIXEL_STD = (0.229, 0.224, 0.225)
-DECODE_STAGE_LATENT_HW = (48, 84)  # the served 15 s chunk: a 4x7 tile grid on the 4x8 mesh
+DECODE_STAGE_LATENT_HW = (48, 84)
 
 
 def _stub_decoder_vae(mesh_device):
-    """A `MiniMaxH3Vae` whose decoder is a fixed projection of its tokens: the stitch and readback, no weights. The
-    projection ties a tile's pixels to the tile, not its device, since the two exchanges place tiles differently."""
+    """Weightless VAE: decoder maps tokens to tile pixels."""
     from ....models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae
     from ....parallel.manager import CCLManager
     from .common import weights_subdir
@@ -275,7 +274,6 @@ def _stub_decoder_vae(mesh_device):
             self._projection = projection
 
         def __call__(self, tokens):
-            # (1, T*h*w, latent_channels) -> (1, T*h*w, row_width); `unpatchify_device` reads exactly these rows.
             return ttnn.matmul(tokens, self._projection)
 
     vae.decoder = _StubDecoder((num_frames, height, width), projection)
@@ -287,8 +285,7 @@ def _stub_decoder_vae(mesh_device):
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8_RING_L1, indirect=["mesh_device", "device_params"])
 def test_strip_stitch_matches_gather_stitch_bitwise(mesh_device):
-    """`stitch_exchange="strips"` is the gather stitch's arithmetic on fewer bytes: the float canvas and the yuv420
-    planar frame must agree byte for byte with the gather form at the served 4x7 geometry."""
+    """Strip stitch matches gather stitch bitwise."""
     import numpy as np
 
     vae, chunk = _stub_decoder_vae(mesh_device)
@@ -314,9 +311,6 @@ def test_strip_stitch_matches_gather_stitch_bitwise(mesh_device):
     assert s_planar.shape == g_planar.shape and s_planar.dtype == g_planar.dtype == np.uint8
     differing = int((g_planar != s_planar).sum())
     assert differing == 0, f"{differing} of {g_planar.size} planar bytes differ"
-
-
-# --- host-only numerics for the YUV decode path (no device, no fixtures) ---------------------
 
 
 def test_pixel_denorm_fold_is_exact_and_commutes_with_the_blend():

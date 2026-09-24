@@ -98,7 +98,7 @@ ttnn::Tensor scaled_dot_product_attention(
         cu_window_seqlens,
         windowed_q_token_offset,
         windowed_q_token_offset_tensor,
-        std::nullopt,  // paged_cache_geometry
+        std::nullopt,
         output_concat_heads);
 }
 

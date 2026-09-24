@@ -92,8 +92,7 @@ ALWI void pack_tile_with_wh_destination_wait(uint32_t tile, uint32_t out_cb, uin
     pack_tile(tile, out_cb);
 }
 
-// The operand-split form of `matmul_blocks`: three K passes, x_hi*W_hi + x_hi*W_lo + x_lo*W_hi, accumulate into one
-// fp32 DST subblock (x_lo*W_lo is below fp32 resolution). All four CBs share the fp32 format, so one init serves all.
+// Split-operand matmul: hi*hi + hi*lo + lo*hi, fp32 DST.
 void matmul_blocks_split(
     const uint32_t in0_hi_cb,
     const uint32_t in0_lo_cb,
@@ -166,8 +165,7 @@ void matmul_blocks_split(
     }
 }
 
-// Split `num_tiles` tilized fp32 tiles into hi = bf16(x) (as masked fp32) and the exact residual lo = x - hi; `in_cb`
-// must be UnpackToDestFp32 so `copy_tile` lands the tile in DST unchanged. Bit-identical to the host `_split_operand`.
+// Split fp32 tiles: hi = bf16(x), lo = x - hi; in_cb fp32.
 template <uint32_t num_tiles>
 void split_operand_block(uint32_t in_cb, uint32_t hi_cb, uint32_t lo_cb) {
     CircularBuffer in_cb_obj(in_cb);
@@ -178,7 +176,6 @@ void split_operand_block(uint32_t in_cb, uint32_t hi_cb, uint32_t lo_cb) {
     in_cb_obj.wait_front(num_tiles);
     hi_cb_obj.reserve_back(num_tiles);
     lo_cb_obj.reserve_back(num_tiles);
-    // SrcA was last configured for the row-major input; the exact copy needs the fp32 tile format on it.
     reconfig_data_format_srca(in_cb);
     copy_init(in_cb);
     pack_reconfig_data_format(hi_cb);
@@ -473,12 +470,10 @@ void kernel_main() {
     constexpr uint32_t cb_reduction_acc_tiled = get_compile_time_arg_val(29);
     // fp32-exact output path: SFPU reduction/bias + UnpackToDestFp32 CB reads (fp32 dtype + fp32 dest).
     constexpr bool use_fp32_exact = get_compile_time_arg_val(30) == 1;
-    // In-kernel operand split (see matmul_blocks_split / split_operand_block); 32 (invalid) when off.
     constexpr uint32_t cb_x_hi_tiled = get_compile_time_arg_val(31);
     constexpr uint32_t cb_x_lo_tiled = get_compile_time_arg_val(32);
     constexpr uint32_t cb_weight_lo_tiled = get_compile_time_arg_val(33);
     constexpr bool operand_split = get_compile_time_arg_val(34) == 1;
-    // The matmul's in0: the split halves when splitting, the tilized activation otherwise.
     constexpr uint32_t cb_matmul_in0 = operand_split ? cb_x_hi_tiled : cb_vol2col_tiled;
 
     constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;
@@ -494,7 +489,6 @@ void kernel_main() {
     CircularBuffer cb_matmul_result_rm_cb(cb_matmul_result_rm);
     CircularBuffer cb_reduction_tiled_cb(cb_reduction_tiled);
     CircularBuffer cb_worker_ack_back_cb(cb_worker_ack_back);
-    // Alias the weight CB when the split is off, so these are always valid CB objects.
     CircularBuffer cb_weight_lo_tiled_cb(operand_split ? cb_weight_lo_tiled : cb_weight_tiled);
     CircularBuffer cb_x_hi_tiled_cb(operand_split ? cb_x_hi_tiled : cb_vol2col_tiled);
     CircularBuffer cb_x_lo_tiled_cb(operand_split ? cb_x_lo_tiled : cb_vol2col_tiled);
@@ -574,8 +568,6 @@ void kernel_main() {
 
                                     // Phase 2: matmul the batch
                                     if constexpr (operand_split) {
-                                        // Split the tilized batch into hi/lo, then three K passes into one
-                                        // fp32 DST accumulation against W_hi and W_lo.
                                         cb_weight_lo_tiled_cb.wait_front(weight_tiles);
                                         split_operand_block<batch_tiles>(
                                             cb_vol2col_tiled, cb_x_hi_tiled, cb_x_lo_tiled);

@@ -48,8 +48,6 @@ struct Conv3dConfig {
     std::array<uint32_t, 3> dilation;
     uint32_t alignment;
     tt::tt_metal::CoreCoord compute_with_storage_grid_size;
-    // In-kernel fp32 operand split: x -> hi = bf16(x), lo = x - hi on the SFPU, then x_hi*W_hi + x_hi*W_lo + x_lo*W_hi
-    // in one fp32 DST pass (W_lo = `weight_lo_tensor`), recovering the bits TF32 drops. Needs fp32 data and fp32 dest.
     bool operand_split;
 
     static constexpr auto attribute_names = std::make_tuple(
@@ -109,7 +107,6 @@ struct Conv3dInputs {
     std::optional<const Tensor> bias_tensor;
     std::optional<const Tensor> halo_buffer;
     std::optional<const Tensor> pad_offset_tensor;
-    // Prepared like `weight_tensor`; the residual W - bf16(W) for `Conv3dConfig::operand_split`.
     std::optional<const Tensor> weight_lo_tensor;
 };
 

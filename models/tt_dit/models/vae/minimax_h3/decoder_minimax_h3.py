@@ -123,8 +123,6 @@ class MiniMaxH3ViTAttention(Module):
             fp32_dest_acc_en=False,
         )
 
-        # Identity gate so the block's residual add folds into to_out's matmul epilogue.
-        # Broadcasts over the sequence dim; ones because LayerScale is already in the weights.
         self._ones_gate = bf16_tensor(torch.ones(1, 1, dim), device=mesh_device)
 
         self.rope_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
@@ -191,20 +189,15 @@ class MiniMaxH3ViTAttention(Module):
             transpose_k_heads=False,
         )
 
-        # Partial RoPE with the q/k RMS normalisation as its prologue (rms_norm_eps): the load-time lane permute + permuted
-        # cos/sin tables make this a single full-width op per q/k (see rope_minimax_h3 for the (2j, 2j+1) basis).
         rope_kwargs = dict(compute_kernel_config=self.rope_compute_kernel_config, rms_norm_eps=self.eps)
         query = ttnn.experimental.rotary_embedding_llama(query, rope_cos, rope_sin, self.rope_trans_mat, **rope_kwargs)
         key = ttnn.experimental.rotary_embedding_llama(key, rope_cos, rope_sin, self.rope_trans_mat, **rope_kwargs)
 
-        # No pad mask: q/k/v carry the logical length of the valid tokens (same buffers, padded shape unchanged) and SDPA
-        # blanks the tile-pad keys itself; the dense mask cost a hidden multiply and ~213 MB of reader traffic per layer.
         padded = ttnn.Shape([batch, self.num_heads, seq_len, self.head_dim])
         if valid_len is not None and valid_len < seq_len:
             logical = ttnn.Shape([batch, self.num_heads, valid_len, self.head_dim])
             query, key, value = (ttnn.reshape(t, logical, padded) for t in (query, key, value))
 
-        # SDPA writes the concat-heads layout (batch, 1, S, H*D) itself: one program less per layer than nlp_concat_heads.
         attended = ttnn.transformer.scaled_dot_product_attention(
             query,
             key,
@@ -220,7 +213,6 @@ class MiniMaxH3ViTAttention(Module):
         if attended.shape[-2] != seq_len:
             attended = ttnn.reshape(attended, full, full)
         attended = ttnn.reshape(attended, (batch, seq_len, dim))
-        # When the block hands us its residual, fold the residual add into to_out's epilogue.
         if residual is not None:
             return _proj_add_residual(self.to_out, attended, residual, self._ones_gate, self.mesh_device)
         return self.to_out(attended)

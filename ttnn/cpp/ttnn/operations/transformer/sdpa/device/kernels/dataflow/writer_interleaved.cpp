@@ -103,7 +103,6 @@ void kernel_main() {
     const auto out_writer = TensorAccessor(out_args, out_addr);
 
 #ifdef OUT_CONCAT_HEADS
-    // (B, 1, S, NQH*vDH): head nq owns tile columns [nq*vDHt, (nq+1)*vDHt) of every row.
     const auto out_tile_shape = TensorTileShape(B, 1, valid_Sqt, NQH * vDHt);
     constexpr uint32_t out_row_stride = NQH * vDHt;
 #else

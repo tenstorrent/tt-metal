@@ -173,9 +173,6 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
     TensorParameter output_param{.unique_id = OUTPUT_PARAM, .spec = output.tensor_spec()};
 
     // ------------------------------------------------------------------
-    // The RMS prologue's fp32 DFBs (x^2, the rsqrt scale) feed the FPU through the source registers. Metal 2.0 wants
-    // that said for every fp32 DFB a compute kernel is bound to under a 32-bit Dest, whether or not the kernel touches
-    // it.
     const bool fuse_rms = operation_attributes.rms_norm_eps.has_value();
     ComputeUnpackModes rms_unpack_modes;
     if (fuse_rms && fp32_dest_acc_en) {
@@ -186,7 +183,6 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
     // only math_fidelity + fp32_dest_acc_en, leaving the rest at descriptor defaults. Routing through
     // to_compute_hardware_config would instead translate the *resolved* math_approx_mode (default true)
     // into sfpu_precision_mode=Approximate, which the legacy descriptor discarded (Precise). All DFBs
-    // are bfloat16, so they need no unpack_modes entry; the RMS prologue's fp32 DFBs get theirs above.
     // ------------------------------------------------------------------
     ComputeHardwareConfig compute_hw_config = ComputeGen1Config{
         .fpu_math_fidelity = math_fidelity,

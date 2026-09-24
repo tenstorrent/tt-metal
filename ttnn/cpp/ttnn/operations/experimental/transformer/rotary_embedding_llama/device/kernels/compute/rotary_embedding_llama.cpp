@@ -72,7 +72,6 @@ void kernel_main() {
             RELOAD_IMPL == 0 ? ckl::TileAddressing::Offset : ckl::TileAddressing::Direct);
     };
 #ifdef FUSE_RMS
-    // x <- x * rsqrt(mean_W(x^2) + eps) per row before the rotation; the rope math then reads xn instead of the input.
     constexpr auto xx_dfb = dfb::xx;
     constexpr auto ex2pe_dfb = dfb::ex2pe;
     constexpr auto xn_dfb = dfb::xn;
@@ -139,7 +138,6 @@ void kernel_main() {
                 out_dfb_obj.reserve_back(Wt);
 
 #ifdef FUSE_RMS
-                // (1) xx = x * x (fp32 tiles)
                 reconfig_data_format(in_dfb, in_dfb);
                 pack_reconfig_data_format(xx_dfb);
                 xx_dfb_obj.reserve_back(Wt);
@@ -152,7 +150,6 @@ void kernel_main() {
                 REL();
                 xx_dfb_obj.push_back(Wt);
                 xx_dfb_obj.wait_front(Wt);
-                // (2) mean over W (reduce with the 1/W scaler; REDUCE_ROW SUM wants scaler as SrcA), + eps, rsqrt
                 reconfig_data_format(scaler_dfb, xx_dfb);
                 pack_reconfig_data_format(ex2pe_dfb);
                 ex2pe_dfb_obj.reserve_back(onetile);
@@ -171,7 +168,6 @@ void kernel_main() {
                 xx_dfb_obj.pop_front(Wt);
                 ex2pe_dfb_obj.push_back(onetile);
                 ex2pe_dfb_obj.wait_front(onetile);
-                // (3) xn = x * scale (the scale sits in column 0 of every row: broadcast over columns)
                 reconfig_data_format(in_dfb, ex2pe_dfb);
                 pack_reconfig_data_format(xn_dfb);
                 xn_dfb_obj.reserve_back(Wt);
@@ -185,8 +181,7 @@ void kernel_main() {
                 xn_dfb_obj.push_back(Wt);
                 xn_dfb_obj.wait_front(Wt);
                 ex2pe_dfb_obj.pop_front(onetile);
-                in_dfb_obj.pop_front(Wt);  // the rope math below reads xn
-                // Leave the unpacker in the state the rope math's first reconfig assumes (trans_mat SrcA, x SrcB).
+                in_dfb_obj.pop_front(Wt);
                 reconfig_data_format(trans_mat_dfb, x_dfb);
 #endif
 

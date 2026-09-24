@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Unpatchify from the TILE-layout fp32 token tensor, writer: face r of the staged unit (r = (c*pt + f)*p + yy,
-// 1 KB) is canvas row (c, t*pt + f, h*p + yy) of the (1, C, T*pt, H*p, W*p) row-major output, one 1 KB page.
+// Unpatchify writer: rows -> (1,C,T*pt,H*p,W*p) pages.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -17,7 +16,7 @@ void kernel_main() {
     constexpr uint32_t PT = get_compile_time_arg_val(5);
     constexpr uint32_t P = get_compile_time_arg_val(6);
     constexpr auto out_args = TensorAccessorArgs<7>();
-    constexpr uint32_t ROW = 1024;  // W * P * 4 bytes with W = P = 16
+    constexpr uint32_t ROW = 1024;
     constexpr uint32_t ROWS = C * PT * P;
 
     const uint32_t u0 = get_arg_val<uint32_t>(0);

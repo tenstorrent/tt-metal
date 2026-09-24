@@ -9,15 +9,10 @@
 // each (row-group, T-tile) unit the compute kernel emits Y (2 rows) then Cb
 // (1 UV row) then Cr, so the writer drains and writes them in that order.
 //
-// Two output layouts. Plain: planes are (1, H, W, T), one T-byte page per stick. Wide (`wide` = 1, one T tile
-// per unit): planes are (1, H, W*T); a unit's rows are staged in L1 and written whole, W*T bytes per page.
-//
 // Compile-time args:
 //   [0] cb_out_rm
 //   [1] num_t_tiles, [2] T, [3] W, [4] W2
 //   [5] y_tiles (= ceil(2W/32)), [6] uv_tiles (= ceil(W2/32))
-//   [7] wide (0/1), [8] cb_rowbuf, [9] row_bytes_y (= W*T), [10] row_bytes_uv (= W2*T), [11] rowpage
-//   [12..] TensorAccessorArgs for Y, U, V buffers
 //
 // Runtime args:
 //   [0] y_addr, [1] u_addr, [2] v_addr, [3] unit_start, [4] unit_count
@@ -93,8 +88,6 @@ void kernel_main() {
         }
     };
 
-    // Wide rows: stage `rows` complete rows of `sticks_per_row` sticks (T bytes each, one T tile) in
-    // L1, then one write per row. Stick gs of the plane is row gs / sticks_per_row, column gs mod it.
     auto write_plane_wide = [&](const auto& dst,
                                 uint32_t first_row,
                                 uint32_t rows,
@@ -137,7 +130,6 @@ void kernel_main() {
                 {.offset_bytes = row * rowpage},
                 {.page_id = first_row + row, .offset_bytes = 0});
         }
-        // The row buffer is reused by the next plane: wait until these writes have left L1.
         noc.async_writes_flushed();
     };
 
@@ -149,13 +141,13 @@ void kernel_main() {
         const uint32_t byte_off_out = tt * TILE_W;
 
         if constexpr (wide) {
-            write_plane_wide(sy, 2 * g, 2, W, y_tiles, row_bytes_y);  // Y: rows 2g, 2g+1
-            write_plane_wide(su, g, 1, W2, uv_tiles, row_bytes_uv);   // Cb: row g
-            write_plane_wide(sv, g, 1, W2, uv_tiles, row_bytes_uv);   // Cr: row g
+            write_plane_wide(sy, 2 * g, 2, W, y_tiles, row_bytes_y);
+            write_plane_wide(su, g, 1, W2, uv_tiles, row_bytes_uv);
+            write_plane_wide(sv, g, 1, W2, uv_tiles, row_bytes_uv);
         } else {
-            write_plane(sy, 2 * g * W, y_sticks, y_tiles, byte_off_out, n_elems);  // Y: 2 rows
-            write_plane(su, g * W2, W2, uv_tiles, byte_off_out, n_elems);          // Cb
-            write_plane(sv, g * W2, W2, uv_tiles, byte_off_out, n_elems);          // Cr
+            write_plane(sy, 2 * g * W, y_sticks, y_tiles, byte_off_out, n_elems);
+            write_plane(su, g * W2, W2, uv_tiles, byte_off_out, n_elems);
+            write_plane(sv, g * W2, W2, uv_tiles, byte_off_out, n_elems);
         }
     }
 

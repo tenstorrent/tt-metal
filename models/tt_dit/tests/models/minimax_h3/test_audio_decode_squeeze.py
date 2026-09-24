@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Speed/accuracy experiments for the H3 audio decoder on a 4x8 Galaxy at T-shard 8: each *recipe* builds the decoder
-differently, is timed traced and scored (PSNR, log-mel) against the cached CPU reference decode (``sqz_reference``)."""
+"""H3 audio decoder speed/accuracy recipes on a 4x8 Galaxy."""
 
 import os
 import time
@@ -36,14 +35,10 @@ RECIPES = {
     "full": {},
     "weight": {"all": "weight"},
     "off": {"all": "off"},
-    # time-packed late bands (layers/audio_pack.py): 2 steps/row at 16 ch, 4 steps/row at 8 ch
     "full_pack": {"pack": {5: 2, 6: 4}},
-    # the full split done inside conv3d (Conv3dConfig.operand_split): same operands, one launch per conv
     "kernel": {"all": "kernel"},
-    # the fused anti-alias SnakeBeta kernel (layers/audio_aa_snake.py) in place of every resampler/snake chain
     "fused_pack": {"pack": {5: 2, 6: 4}, "build_kwargs": {"act_mode": "fused"}},
     "kernel_fused_pack": {"all": "kernel", "pack": {5: 2, 6: 4}, "build_kwargs": {"act_mode": "fused"}},
-    # one stereo channel per mesh row (batch_shard_axis=0); must equal kernel_fused_pack bit for bit
     "kernel_fused_pack_bshard": {
         "all": "kernel",
         "pack": {5: 2, 6: 4},
@@ -60,12 +55,12 @@ RUN_ORDER = (
     "weight",
     "off",
 )
-BUILD_KWARGS_KEY = "build_kwargs"  # extra constructor kwargs
+BUILD_KWARGS_KEY = "build_kwargs"
 PACK_KEY = "pack"
 
 
 def _split_convs(decoder):
-    """Yields every split-capable conv: dec_in_proj, conv_pre, the upsamplers, the AMP block convs and conv_post."""
+    """Yield split-capable convs."""
     voc = decoder.decoder
     yield decoder.dec_in_proj
     yield voc.conv_pre
@@ -78,7 +73,7 @@ def _split_convs(decoder):
 
 
 def apply_recipe(decoder, recipe: dict) -> dict:
-    """Set ``split_mode`` per conv after construction (forward reads it per call; the unused residual is harmless)."""
+    """Set split_mode per conv."""
     counts = {}
     if PACK_KEY in recipe:
         counts["pack"] = dict(recipe[PACK_KEY])
@@ -130,8 +125,6 @@ def _best(fn, mesh_device, n=3):
     return best, out
 
 
-# PSNR against the CPU reference and log-mel distance for the recipes whose fidelity is a contract (the packed
-# kernel-split forms the pipeline ships measured 67.3 dB / 0.0034 at 600lat_b2); floors sit a little under that.
 FIDELITY_FLOORS = {
     "full_pack": (66.0, 0.006),
     "fused_pack": (66.0, 0.006),
@@ -145,7 +138,7 @@ FIDELITY_FLOORS = {
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESH, indirect=["mesh_device", "device_params"])
 @pytest.mark.parametrize(
     ("num_latent_frames", "batch"),
-    [(600, 1), (207, 2), (600, 2)],  # (600, 2) = the pipeline's shape: 15 s, stereo as two batch items
+    [(600, 1), (207, 2), (600, 2)],
     ids=["600lat_b1", "207lat_b2", "600lat_b2"],
 )
 def test_audio_decode_squeeze(mesh_device, num_latent_frames, batch):

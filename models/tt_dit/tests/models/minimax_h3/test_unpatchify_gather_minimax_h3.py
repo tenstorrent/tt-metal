@@ -2,8 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""`unpatchify_tiled` (one page-remap program on the tiled fp32 tokens) against today's `to_layout` +
-`unpatchify_device` chain, one chip, at the decoder's tile shape: bit-identical, and both paths timed."""
+"""`unpatchify_tiled` is bit-exact vs the old unpatchify chain."""
 
 import time
 
@@ -18,7 +17,7 @@ from ....models.vae.minimax_h3.stitch_device_minimax_h3 import unpatchify_device
 from ....models.vae.minimax_h3.unpatchify_minimax_h3 import unpatchify_tiled
 
 SINGLE_DEVICE = [pytest.param((1, 1), {"l1_small_size": 65536}, id="single_device")]
-FRAMES, HEIGHT, WIDTH, SEQ = 7, 16, 16, 1824  # 1792 patches + 32 suffix rows, D = 3*4*16*16
+FRAMES, HEIGHT, WIDTH, SEQ = 7, 16, 16, 1824
 
 
 def _best(fn, mesh_device, n=10):
@@ -41,7 +40,6 @@ def test_unpatchify_tiled_matches_permute(mesh_device):
     dims = dict(num_frames=FRAMES, height=HEIGHT, width=WIDTH, out_channels=3, patch_size=16, patch_size_t=4)
     for tag in ("a", "b"):
         x = torch.randn(1, SEQ, 3072).bfloat16()
-        # The decoder emits bf16 tiles; the pipeline casts to fp32 while still TILE.
         x_dev = ttnn.typecast(
             ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device), ttnn.float32
         )

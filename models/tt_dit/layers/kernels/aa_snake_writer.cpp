@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Fused anti-aliased SnakeBeta activation, writer. Once compute has produced every E/O block for this core, gathers
-// the 12 down-tap tiles per output tile into CB_DN (z clamp stick by stick at the sequence ends), then streams it out.
+// AA SnakeBeta writer: down taps into CB_DN, then out.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -55,7 +54,6 @@ void kernel_main() {
     const uint32_t e_base = e_cb.get_read_ptr();
     const uint32_t o_base = o_cb.get_read_ptr();
 
-    // Stream (E or O) and shift for down tap k: out[n] += t[k] z[2n + k - 5], z[2q] = E[q], z[2q + 1] = O[q].
     auto tap_src = [&](uint32_t k, int32_t q) -> uint32_t {
         const bool odd = (k & 1u) != 0;
         const int32_t shift = odd ? (static_cast<int32_t>(k) - 5) / 2 : (static_cast<int32_t>(k) - 6) / 2;
@@ -66,7 +64,6 @@ void kernel_main() {
     for (uint32_t i = 0; i < n_tiles; ++i) {
         const int32_t n0 = static_cast<int32_t>(o0 + i * R);
         const int32_t n1 = n0 + static_cast<int32_t>(R);
-        // A sequence-end tile needs the z clamp: m = 2n + k - 5 below 0 or above 2T - 1.
         const bool edge = (is_first && 2 * n0 - 5 < 0) || (is_last && 2 * (n1 - 1) + 6 > 2 * T_LOCAL - 1);
         dn_cb.reserve_back(12);
         if (!edge) {
@@ -86,9 +83,9 @@ void kernel_main() {
                     const int32_t m = 2 * n + static_cast<int32_t>(k) - 5;
                     uint32_t src;
                     if (m < 0) {
-                        src = e_base + static_cast<uint32_t>(0 - q_lo) * STICK;  // z[0] = E[0]
+                        src = e_base + static_cast<uint32_t>(0 - q_lo) * STICK;
                     } else if (m > 2 * T_LOCAL - 1) {
-                        src = o_base + static_cast<uint32_t>(T_LOCAL - 1 - q_lo) * STICK;  // z[2T-1] = O[T-1]
+                        src = o_base + static_cast<uint32_t>(T_LOCAL - 1 - q_lo) * STICK;
                     } else {
                         src = tap_src(k, n);
                     }
@@ -99,7 +96,6 @@ void kernel_main() {
         noc.async_read_barrier();
         dn_cb.push_back(12);
 
-        // The finished tile: valid sticks only, page by page (DRAM writes need 16 B alignment only).
         out_cb.wait_front(1);
         const int32_t valid = (n1 <= T_LOCAL) ? static_cast<int32_t>(R) : (T_LOCAL - n0);
         uint32_t written = 0;

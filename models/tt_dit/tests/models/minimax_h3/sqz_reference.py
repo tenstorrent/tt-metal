@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""CPU reference clips for the audio-decoder squeeze experiments (encoder latents of a seeded noise clip and their
-decode), cached as ``ref_<T>lat_b<B>.pt``; no ttnn import, so ``python -m <module> <frames> <batch>`` needs no build."""
+"""Cached CPU reference clips for the audio squeeze tests."""
 
 import json
 import os
@@ -17,7 +16,7 @@ def ref_dir() -> str:
 
 
 def reference_clip(num_latent_frames: int, batch: int):
-    """``(latents, expected)``; computed with the pinned diffusers reference on first use, then cached."""
+    """(latents, expected) pair"""
     os.makedirs(ref_dir(), exist_ok=True)
     path = os.path.join(ref_dir(), f"ref_{num_latent_frames}lat_b{batch}.pt")
     if os.path.exists(path):

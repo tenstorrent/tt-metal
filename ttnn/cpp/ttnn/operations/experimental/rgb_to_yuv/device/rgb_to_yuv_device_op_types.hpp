@@ -34,8 +34,6 @@ enum class YUVFormat { YUV420Planar };
 struct RgbToYuvParams {
     YUVCoefficients coefficients;
     YUVFormat format = YUVFormat::YUV420Planar;
-    // Emit each plane as (1, H, W*T) rows instead of (1, H, W, T) sticks: 4.7 KB DRAM pages instead of 28 B ones for
-    // the readback that follows (needs one T tile per unit, i.e. T <= 32). The bytes are the same.
     bool wide_rows = false;
     tt::tt_metal::MemoryConfig output_memory_config;
 };

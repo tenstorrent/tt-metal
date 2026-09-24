@@ -1572,7 +1572,7 @@ void write_block(
     const uint32_t out_tile_id,
     const uint32_t tile_bytes,
     const uint32_t barrier_threshold,
-    const uint32_t row_stride = 0) {  // tiles between row starts; 0 = cols (rows contiguous)
+    const uint32_t row_stride = 0) {
     uint32_t barrier_count = 0;
     uint32_t tile_id = out_tile_id;
     const uint32_t row_skip = (row_stride ? row_stride : cols) - cols;
@@ -1616,7 +1616,7 @@ void write_block_row_grouped(
     const uint32_t tile_bytes,
     const uint32_t sbh,
     const uint32_t barrier_threshold,
-    const uint32_t row_stride = 0) {  // tiles between row starts; 0 = cols (rows contiguous)
+    const uint32_t row_stride = 0) {
     constexpr uint32_t default_trid = 0;
     uint32_t tile_id = out_tile_id;
     uint32_t barrier_count = 0;

@@ -42,7 +42,7 @@ TILE_HEIGHT = ttnn.TILE_SIZE  # 32; the per-shard T-height floor for HEIGHT_SHAR
 
 
 def _reshape_rows(x: ttnn.Tensor, shape) -> ttnn.Tensor:
-    """Row-major reshape that changes the row width (a device copy); frees the source when it was copied."""
+    """Reshape, freeing x."""
     y = ttnn.reshape(x, shape)
     try:
         distinct = y.buffer_address() != x.buffer_address()
@@ -54,8 +54,7 @@ def _reshape_rows(x: ttnn.Tensor, shape) -> ttnn.Tensor:
 
 
 def _batch_sharded_to_torch(x_dev: ttnn.Tensor, axis: int, batch: int) -> torch.Tensor:
-    """Batch item b lives on the devices whose coordinate along ``axis`` is b (T already gathered on each): read one
-    local device per item and stack them."""
+    """Stack batch items from mesh axis."""
     mesh_device = x_dev.device()
     view = mesh_device.get_view() if ttnn.using_distributed_env() else None
     coords = list(x_dev.tensor_topology().mesh_coords())
@@ -245,10 +244,7 @@ class Vocoder(Module):
         polyphase_ups: bool = False,
     ) -> None:
         super().__init__()
-        # band index -> time steps packed per row for that band's AMP blocks (layers/audio_pack.py); the
-        # narrow late bands (8-16 channels) run ~2x faster per op on 32-wide packed rows.
         self.pack_bands = dict(pack_bands or {})
-        # Set by MiniMaxH3AudioDecoder when the batch is sharded over a mesh axis: (axis, batch) for the readback.
         self.batch_shard = None
 
         if resblock_kernel_sizes is None:
@@ -282,8 +278,6 @@ class Vocoder(Module):
         # the pipeline warms the decode eagerly at warmup, which the vocoder frees back to a
         # deterministic state, so capture and replay share one free-list.
 
-        # conv_pre runs replicated under T-sharding: its 8 KB fp32 sticks break the neighbor_pad halo exchange (4 KB
-        # sticks are exact). Channel-TP still shards it: `gather_channel_to_full` rebuilds C_in from the C-shard.
         self._conv_pre_unsharded = channel_factor(parallel_config) == 1
         self.conv_pre = _AlignedOutConv1d(
             in_channels=in_channels,
@@ -439,19 +433,17 @@ class Vocoder(Module):
         return self._upload_BCT(x_t)
 
     def t_pad_for(self, t_rows: int) -> int:
-        """Rows to pad T by so each T-shard holds >= one tile (see ``_upload_BCT``); 0 when unsharded."""
+        """T pad for tile shards."""
         if self.parallel_config is None or self.parallel_config.factor <= 1:
             return 0
         factor = self.parallel_config.factor
-        per_shard = max(-(-t_rows // factor), TILE_HEIGHT)  # ceil(t_rows / factor), floored at a tile
+        per_shard = max(-(-t_rows // factor), TILE_HEIGHT)
         return per_shard * factor - t_rows
 
     def forward_device_BTC(
         self, x_dev: ttnn.Tensor, *, t_pad: int, traced: bool = False, trace_key=None
     ) -> torch.Tensor:
-        """``(B, T + t_pad, C_in)`` ROW_MAJOR already on device (padded per ``t_pad_for``) -> ``(B, C_out, T_out)``
-        torch. Lets a caller that produces the vocoder input on device (MiniMax-H3's ``dec_in_proj``) skip the
-        readback + re-upload that ``forward_BCT`` implies."""
+        """``(B, T+t_pad, C_in)`` on device -> ``(B, C_out, T_out)`` torch."""
         self._t_pad = t_pad
         y_dev = self._forward_device(x_dev, traced=traced, tracer_trace_key=trace_key)
         return self._device_to_host(y_dev)
@@ -499,8 +491,6 @@ class Vocoder(Module):
         def _set_tail(xd, cumrate, mode, pack=1):
             # Materialize the tile-align pad image (t_pad*cumrate tail rows) to the op's boundary so
             # it matches unsharded: zeros for gather/zeros-pad convs, the real last row for
-            # replicate-pad activations. No-op when unsharded (t_pad == 0). On packed rows the image
-            # is t_pad*cumrate/pack rows.
             if t_pad == 0:
                 return xd
             assert (t_pad * cumrate) % pack == 0, f"pad image {t_pad * cumrate} rows not a multiple of pack {pack}"
@@ -560,8 +550,6 @@ class Vocoder(Module):
         x_dev = _set_tail(x_dev, cumrate, "zeros")  # conv_post is zeros-pad
         x_dev = self.conv_post(x_dev)
 
-        # A mono waveform is (T, 1): 4-byte rows, one DRAM page per sample. Carry it as (T/32, 32) through the
-        # clamp, the T gather and the readback (32x fewer pages); _device_to_host flattens it back.
         B_, T_, C_ = x_dev.shape
         if C_ == 1 and T_ % TILE_HEIGHT == 0:
             x_dev = _reshape_rows(x_dev, (B_, T_ // TILE_HEIGHT, TILE_HEIGHT))
@@ -587,7 +575,7 @@ class Vocoder(Module):
         else:
             x_host = local_device_to_torch(x_dev)
         if self.out_channels == 1 and x_host.shape[-1] == TILE_HEIGHT:
-            x_host = x_host.reshape(x_host.shape[0], -1, 1)  # packed mono output (see _forward_device)
+            x_host = x_host.reshape(x_host.shape[0], -1, 1)
         x_host = x_host[..., : self.out_channels]  # trim any padded out channels
         # Crop the upsampled image of the input T-padding.
         if self._t_pad > 0:

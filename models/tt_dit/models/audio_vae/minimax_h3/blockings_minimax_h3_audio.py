@@ -82,25 +82,23 @@ def h3_audio_channel_widths(
     channels = decoder_dim
     for rate in decoder_rates:
         nxt = channels // 2
-        pairs.add((channels, nxt))  # upsampler inner conv (zero-stuffed form)
-        pairs.add((channels, rate * nxt))  # upsampler inner conv (polyphase form: s*out outputs over unstuffed rows)
+        pairs.add((channels, nxt))
+        pairs.add((channels, rate * nxt))
         pairs.add((aligned_channels(nxt), aligned_channels(nxt)))  # AMP convs
         channels = nxt
     pairs.add((aligned_channels(channels), aligned_channels(1)))  # conv_post -> mono
     return pairs
 
 
-# Swept on one chip with the operand split on, at the per-device AMP shapes: T_out / C_out blocks only, so the
-# per-output reduction order and the output are unchanged (torch.equal); 2-3x per conv over the LTX-tuned rows.
-_SWEPT_BLOCKINGS = {  # (C_in, C_out, k) -> (C_out_block, T_out_block); C_in_block stays the stub's
-    (32, 32, 7): (32, 32),  # k7 d1 T15000: 0.652 -> 0.304 ms (2.14x)
-    (64, 64, 7): (32, 32),  # k7 d1 T7500: 0.898 -> 0.292 ms (3.07x)
-    (128, 128, 7): (32, 32),  # k7 d1 T3750: 1.916 -> 0.560 ms (3.42x)
-    (256, 256, 3): (32, 16),  # k3 d3 T1875: 1.549 -> 0.637 ms (2.43x)
-    (256, 256, 7): (32, 16),  # k7 d1 T1875: 4.441 -> 1.227 ms (3.62x)
-    (256, 256, 11): (128, 32),  # k11 d1 T1875: 3.945 -> 1.065 ms (3.70x)
-    (512, 512, 3): (64, 32),  # k3 d1 T375: 1.378 -> 0.420 ms (3.28x)
-    (512, 512, 11): (64, 32),  # k11 d1 T375: 3.144 -> 1.229 ms (2.56x)
+_SWEPT_BLOCKINGS = {
+    (32, 32, 7): (32, 32),
+    (64, 64, 7): (32, 32),
+    (128, 128, 7): (32, 32),
+    (256, 256, 3): (32, 16),
+    (256, 256, 7): (32, 16),
+    (256, 256, 11): (128, 32),
+    (512, 512, 3): (64, 32),
+    (512, 512, 11): (64, 32),
 }
 
 

@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Unpatchify straight from the TILE-layout fp32 token tensor (1, S_pad, D), reader: a (t, h) unit's 16 tokens are one
-// half of a tile row, so its data is the 96 half-tiles of that row, staged as 96 contiguous 2 KB reads for the writer.
+// Reader: stages a unit (half a tile row of fp32 tokens).
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -11,7 +10,7 @@
 
 void kernel_main() {
     constexpr uint32_t cb = get_compile_time_arg_val(0);
-    constexpr uint32_t d_tiles = get_compile_time_arg_val(1);  // D / 32
+    constexpr uint32_t d_tiles = get_compile_time_arg_val(1);
     constexpr auto in_args = TensorAccessorArgs<7>();
     constexpr uint32_t TILE = 4096;
     constexpr uint32_t HALF = 2048;
@@ -24,7 +23,7 @@ void kernel_main() {
     const auto in_acc = TensorAccessor(in_args, in_addr, TILE);
     experimental::CB stage(cb);
     for (uint32_t u = u0; u < u1; ++u) {
-        const uint32_t s0 = u * 16;  // (t*H + h) * W with W = 16
+        const uint32_t s0 = u * 16;
         const uint32_t tile_row = s0 / 32;
         const uint32_t half = (s0 % 32) / 16;
         stage.reserve_back(1);

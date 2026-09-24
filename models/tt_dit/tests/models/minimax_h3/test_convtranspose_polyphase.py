@@ -2,8 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""`ConvTranspose1dViaConv3d` in its polyphase form against the zero-stuffed form and torch at H3 upsampler shapes: same
-fp32 weights, so both must sit at the same distance from a float64 reference, including the first/last k samples."""
+"""Polyphase vs zero-stuffed ConvTranspose1dViaConv3d at H3."""
 
 import copy
 import time
@@ -19,7 +18,6 @@ from ....models.audio_vae.minimax_h3.blockings_minimax_h3_audio import register_
 
 SINGLE_DEVICE = [pytest.param((1, 1), {"l1_small_size": 65536}, id="single_device")]
 
-# (in, out, kernel, stride, frames): ups[0], ups[2], ups[6] of the H3 vocoder, T per chip at the served 15 s decode.
 SHAPES = [
     pytest.param(1024, 512, 9, 5, 80, id="ups0_k9_s5"),
     pytest.param(256, 128, 4, 2, 400, id="ups2_k4_s2"),
@@ -87,8 +85,6 @@ def test_polyphase_matches_zero_stuffed(mesh_device, in_channels, out_channels, 
         f"polyphase={errors['polyphase']:.3e} | ends max|err| {ends:.3e} | min-of-10 ms stuffed={times['stuffed']:.3f} "
         f"polyphase={times['polyphase']:.3f}"
     )
-    # The two device forms share operands and rounding; the ends check exists to catch a wrong crop, which would put
-    # errors of the output's own scale there, so it is judged against the interior's device-vs-device noise.
     dd = outputs["polyphase"].double() - outputs["stuffed"].double()
     rms_dd = dd.pow(2).mean().sqrt().item()
     ends_dd = max(dd[..., : 2 * kernel].abs().max().item(), dd[..., -2 * kernel :].abs().max().item())

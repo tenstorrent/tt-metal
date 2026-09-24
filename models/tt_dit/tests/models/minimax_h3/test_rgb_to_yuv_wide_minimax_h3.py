@@ -2,8 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""`rgb_to_yuv(..., wide_rows=True)` writes the same bytes as the (1, H, W, T) planes, laid out as (1, H, W*T) rows:
-the strips path's per-device shard and a small odd shape, every plane checked with torch.equal; both forms timed."""
+"""rgb_to_yuv wide_rows=True matches the (1,H,W,T) planes."""
 
 import time
 

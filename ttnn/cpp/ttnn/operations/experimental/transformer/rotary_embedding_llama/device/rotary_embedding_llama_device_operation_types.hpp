@@ -13,7 +13,6 @@ struct RotaryEmbeddingLlamaParams {
     bool is_decode_mode{};
     tt::tt_metal::MemoryConfig output_mem_config;
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
-    // Fold x <- x * rsqrt(mean(x^2) + eps) over the head dim into the kernel (prefill, interleaved only).
     std::optional<float> rms_norm_eps;
 };
 

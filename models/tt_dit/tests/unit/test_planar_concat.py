@@ -141,8 +141,7 @@ def test_fast_device_to_host_yuv_rejects_invalid_crop(logical_h, logical_w, expe
 
 @pytest.mark.skipif(not HAS_CPP_PLANAR_CONCAT, reason="planar concat extension not built (models/tt_dit/utils/cpp)")
 def test_planar_concat_default_results_do_not_alias():
-    """Back-to-back calls must own their results: the H3 decode appends every chunk of a clip to one list, so a
-    shared output buffer would leave all of them showing the frame decoded last."""
+    """Consecutive calls return distinct arrays."""
     rng = np.random.default_rng(0xA11A5)
     TP, SP, h_per, w_per, T = 2, 2, 32, 32, 16
     u = _make_shards(rng, TP * SP, h_per // 2, w_per // 2, T, "CHWT")
@@ -159,7 +158,7 @@ def test_planar_concat_default_results_do_not_alias():
 
 @pytest.mark.skipif(not HAS_CPP_PLANAR_CONCAT, reason="planar concat extension not built (models/tt_dit/utils/cpp)")
 def test_planar_concat_explicit_buffer_is_written_in_place():
-    """The opt-in buffer path returns the caller's array, which is what makes it unsafe to share."""
+    """Returns out= in place."""
     rng = np.random.default_rng(0xB0B)
     TP, SP, h_per, w_per, T = 2, 2, 32, 32, 8
     y = _make_shards(rng, TP * SP, h_per, w_per, T, "CHWT")
@@ -176,8 +175,7 @@ def test_planar_concat_explicit_buffer_is_written_in_place():
 
 
 def test_all_contiguous_rejects_a_trimmed_padded_view():
-    """The AVX2 concat copies non-contiguous shards one at a time while the fallback scatters
-    them in place, so a padded shard view must not reach the C++ path."""
+    """A padded shard view is non-contiguous."""
     import torch
 
     from ...utils.yuv_d2h import _all_contiguous

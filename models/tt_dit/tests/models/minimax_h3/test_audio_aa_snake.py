@@ -2,8 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""The fused anti-aliased SnakeBeta kernel (`layers/audio_aa_snake.py`) against the `Activation1d` chain it replaces
-at the H3 vocoder's per-device shapes; bit-identical, both timed."""
+"""Fused AA SnakeBeta vs Activation1d chain."""
 
 import time
 
@@ -21,7 +20,6 @@ from ....parallel.manager import CCLManager
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import resolve_mesh_preset
 
 SINGLE_DEVICE = [pytest.param((1, 1), {"l1_small_size": 65536}, id="single_device")]
-# The pipeline's audio layout: T-shard 8 over mesh axis 1 (the rows of the 4x8 mesh hold replicas).
 MESH = [
     pytest.param(
         (4, 8),
@@ -34,7 +32,6 @@ MESH = [
     )
 ]
 
-# (channels, pack, rows): the tensor is (2, rows, pack * channels): bands 0, 1, 4, the packed bands 5-6 and act_post.
 SHAPES = [
     pytest.param(256, 1, 1875, id="band1_c256"),
     pytest.param(512, 1, 375, id="band0_c512"),
@@ -43,7 +40,6 @@ SHAPES = [
     pytest.param(8, 4, 15000, id="band6_c8_k4"),
     pytest.param(8, 1, 60000, id="post_c8"),
 ]
-# Per-device rows on the mesh; the last one leaves cores idle (32 tiles for 60 cores per batch item).
 MESH_SHAPES = SHAPES + [pytest.param(256, 1, 128, id="band1_c256_spare_cores")]
 
 
@@ -91,7 +87,6 @@ def test_fused_matches_chain(mesh_device, channels, pack, rows):
         got = ttnn.to_torch(out_fused).float().reshape(batch, rows * pack, channels)
         return t_ref, t_fused, ref, got
 
-    # Two inputs: the second call hits the program cache with new buffer addresses.
     for tag, x_cpu in (("a", x), ("b", x * 0.5 + 0.1)):
         t_ref, t_fused, ref, got = run(x_cpu)
         diff = (got.double() - ref.double()).abs()
@@ -115,8 +110,7 @@ def test_fused_matches_chain(mesh_device, channels, pack, rows):
 @pytest.mark.parametrize(("channels", "pack", "rows"), MESH_SHAPES)
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESH, indirect=["mesh_device", "device_params"])
 def test_fused_matches_chain_t_sharded(mesh_device, channels, pack, rows):
-    """T-sharded like the vocoder: neighbour halo pages, the per-stick clamp at both sequence ends (also for packed
-    rows), per-device flags and idle cores, against the unpacked ``Activation1d`` on the same shards; bit-identical."""
+    """T-sharded fused kernel vs Activation1d, bit-identical."""
     torch.manual_seed(0)
     mesh_rows, mesh_cols = tuple(mesh_device.shape)
     pc = ParallelFactor(factor=mesh_cols, mesh_axis=1)
@@ -150,7 +144,6 @@ def test_fused_matches_chain_t_sharded(mesh_device, channels, pack, rows):
         )
 
     def gather(t):
-        # (mesh_rows * batch, total_rows, width): the mesh rows are replicas and must agree.
         full = ttnn.to_torch(t, mesh_composer=composer).float()
         full = full.reshape(mesh_rows, batch, -1, full.shape[-1])
         for r in range(1, mesh_rows):

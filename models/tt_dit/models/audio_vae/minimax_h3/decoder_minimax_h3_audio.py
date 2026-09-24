@@ -93,8 +93,6 @@ class MiniMaxH3AudioDecoder(Module):
         self.pack_bands = dict(pack_bands or {})
         self.act_mode = act_mode
         self.polyphase_ups = polyphase_ups
-        # One stereo channel per row of the mesh along this axis (the T-shard runs along the other), so every
-        # vocoder op sees one batch item instead of the replicated pair. None: both items on every device.
         self.batch_shard_axis = batch_shard_axis
         if batch_shard_axis is not None:
             mesh_shape = tuple(mesh_device.shape)
@@ -178,9 +176,7 @@ class MiniMaxH3AudioDecoder(Module):
         """
         _, channels, _ = latents_BCT.shape
         assert channels == self.latent_channels, f"expected {self.latent_channels} latent channels, got {channels}"
-        # dec_in_proj is a k=1 conv, so it runs on the vocoder's own T padding and hands its output to the
-        # vocoder on device: no readback + re-upload of the (B, T, 2048) projection between the two.
-        x = latents_BCT.transpose(1, 2).float().contiguous()  # (B, T, C)
+        x = latents_BCT.transpose(1, 2).float().contiguous()
         t_pad = self.decoder.t_pad_for(x.shape[1])
         if t_pad:
             x = torch.nn.functional.pad(x, (0, 0, 0, t_pad))
@@ -191,8 +187,6 @@ class MiniMaxH3AudioDecoder(Module):
             self.decoder.batch_shard = (self.batch_shard_axis, x.shape[0])
         projected_dev = self.dec_in_proj(x_dev)
         if t_pad:
-            # k=1 with a bias: the zero pad rows project to the bias, but the vocoder expects zero pad rows
-            # (conv_pre reads them). One multiply by a cached (1, T + t_pad, 1) validity mask restores that.
             projected_dev = ttnn.multiply(projected_dev, self._pad_row_mask(x.shape[1], t_pad))
         return self.decoder.forward_device_BTC(
             projected_dev,
@@ -202,7 +196,7 @@ class MiniMaxH3AudioDecoder(Module):
         )
 
     def _upload_batch_sharded(self, x_BTC: torch.Tensor) -> ttnn.Tensor:
-        """Row r of the mesh along ``batch_shard_axis`` gets batch item ``r % B`` (rows past B hold replicas)."""
+        """Mesh row r: batch r % B."""
         axis = self.batch_shard_axis
         mesh_shape = tuple(self.mesh_device.shape)
         batch = x_BTC.shape[0]

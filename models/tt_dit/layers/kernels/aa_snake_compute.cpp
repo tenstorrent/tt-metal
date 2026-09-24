@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Fused anti-aliased SnakeBeta activation, compute. Phase A: per up block, the E/O phase streams as fp32 SFPU
-// multiply-then-add over 6 taps each, then SnakeBeta. Phase B: 12 down taps per out tile.
+// Fused anti-aliased SnakeBeta compute kernel.
 
 #include <cstdint>
 
@@ -33,7 +32,6 @@ void kernel_main() {
         return;
     }
     const uint32_t nblocks = n_tiles + NB_EXTRA;
-    // Tap bit patterns: s[0..11] (twice the up taps) then t[0..11] (the down taps).
     uint32_t s[12];
     uint32_t t[12];
     for (uint32_t k = 0; k < 12; ++k) {
@@ -57,7 +55,6 @@ void kernel_main() {
 
     ab.wait_front(2);
 
-    // Phase A: E and O per block.
     pack_reconfig_data_format(cb_e);
     for (uint32_t blk = 0; blk < nblocks; ++blk) {
         up.wait_front(7);
@@ -98,7 +95,6 @@ void kernel_main() {
         up.pop_front(7);
     }
 
-    // Phase B: the down taps per output tile.
     pack_reconfig_data_format(cb_out);
     reconfig_data_format_srca(cb_dn);
     copy_init(cb_dn);

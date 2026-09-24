@@ -2,8 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""The in-kernel fp32 operand split (`split_mode="kernel"`) against the three-conv host split (`"full"`) at H3 audio
-shapes, one chip: same operands, only the fp32 summation order differs, so they must agree to a few ulp; also timed."""
+"""Kernel vs host operand split, H3 audio shapes, one chip."""
 
 import copy
 import time
@@ -19,7 +18,6 @@ from ....models.audio_vae.minimax_h3.blockings_minimax_h3_audio import register_
 
 SINGLE_DEVICE = [pytest.param((1, 1), {"l1_small_size": 65536}, id="single_device")]
 
-# (in_channels, out_channels, kernel, frames): the widest AMP band, a narrow band, and conv_pre.
 SHAPES = [
     pytest.param(512, 512, 11, 400, id="band0_k11"),
     pytest.param(512, 512, 3, 400, id="band0_k3"),
@@ -92,7 +90,6 @@ def test_kernel_split_matches_host_split(mesh_device, in_channels, out_channels,
         f"max |out|), mean |diff| {kernel_vs_full.mean().item():.3e}"
     )
 
-    # The two splits see the same operands; only the fp32 summation order differs.
     assert errors["kernel"] <= 1.05 * errors["full"], f"kernel split is less accurate than the host split: {errors}"
     assert errors["kernel"] <= 0.70 * errors["off"], f"kernel split did not beat the unsplit conv: {errors}"
     assert kernel_vs_full.max().item() <= 1e-5 * scale, f"kernel and host splits disagree by {kernel_vs_full.max():.3e}"

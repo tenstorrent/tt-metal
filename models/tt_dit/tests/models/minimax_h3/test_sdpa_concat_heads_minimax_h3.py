@@ -2,9 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""SDPA writing the concat-heads layout itself (`output_concat_heads=True`) against SDPA + `nlp_concat_heads`, at the
-H3 VAE decoder's shape (32 heads, 1824 padded / 1797 logical tokens, head dim 64), one chip: bit-identical, both timed.
-"""
+"""output_concat_heads=True SDPA vs SDPA + nlp_concat_heads."""
 
 import time
 
@@ -78,7 +76,7 @@ def test_sdpa_concat_heads_matches(mesh_device, valid_len):
     ref, t_chain = _timed(mesh_device, chain)
     got, t_fused = _timed(mesh_device, fused)
     ref_t, got_t = ttnn.to_torch(ref), ttnn.to_torch(got)
-    rows = valid_len  # rows past the logical length are pad
+    rows = valid_len
     same = torch.equal(got_t[:, :rows], ref_t[:, :rows])
     n_diff = int((got_t[:, :rows] != ref_t[:, :rows]).sum())
     logger.info(
