@@ -7,12 +7,7 @@
 #include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
-// The where kernel and its op class live in tt-llk on Wormhole/Blackhole and in the metal ckernels on Quasar.
-#ifdef ARCH_QUASAR
 #include "ckernel_sfpu_where.h"
-#else
-#include "sfpu/ckernel_sfpu_where.h"
-#endif
 #endif
 
 namespace ckernel {

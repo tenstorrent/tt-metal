@@ -103,7 +103,7 @@ inline __attribute__((always_inline)) void _sfpu_ternary_check_(
 
 /*
  * Init with a templated callback.
- *   SFPU_TERNARY_INIT_FN(where, sfpu::_init_where_, (APPROXIMATE));
+ *   SFPU_TERNARY_INIT_FN(where, sfpu::where_init, (APPROXIMATE));
  */
 #define SFPU_TERNARY_INIT_FN(OP, INIT_FN, TEMPLATES) \
     ::ckernel::llk_math_eltwise_ternary_sfpu_init<::ckernel::SfpuType::OP>(INIT_FN<_SFPU_TERN_EXPAND TEMPLATES>)
