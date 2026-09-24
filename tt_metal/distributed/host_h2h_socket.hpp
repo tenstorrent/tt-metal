@@ -68,6 +68,16 @@ public:
     // ranks' clocks need not be related. Empty unless Config::collect_timing.
     const std::vector<uint64_t>& put_to_credit_ns() const;
 
+    // Why a pass costs what it does. The per-pass overhead is fixed, so it lands on however
+    // many frames that pass posted: posts/passes sets throughput, not the window depth.
+    struct PassStats {
+        uint64_t passes = 0;    // poll() calls that reached the flush
+        uint64_t starved = 0;   // of those, the ones that posted nothing
+        uint64_t posts = 0;     // payload puts issued
+        uint64_t flush_ns = 0;  // time inside flush_dirty(); zero unless collect_timing
+    };
+    const PassStats& pass_stats() const;
+
     std::string barrier();
 
     // LOCAL ONLY: a per-frame failure drops the frame with nothing telling the peer, so poll

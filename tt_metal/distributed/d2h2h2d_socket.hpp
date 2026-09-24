@@ -83,6 +83,14 @@ public:
         std::vector<uint64_t> h2h_put_to_credit_ns;
         // This host's clock, publish -> device drained. As test_h2d_bw.cpp.
         std::vector<uint64_t> h2d_publish_to_drained_ns;
+
+        // Wall time inside each leg, summed over every poll(). Latency samples above say
+        // how long a FRAME takes; these say where the CALLER's time goes, which is what a
+        // throughput limit is made of. Zero unless collect_timing.
+        uint64_t poll_calls = 0;
+        uint64_t d2h_poll_ns = 0;
+        uint64_t h2h_poll_ns = 0;
+        uint64_t h2d_drain_ns = 0;
     };
 
     const Counters& counters() const;
