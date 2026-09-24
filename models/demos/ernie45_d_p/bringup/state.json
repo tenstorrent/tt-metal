@@ -128,6 +128,10 @@
   "started": "2026-09-24T19:31:28",
   "status": "PASS"
  },
+ "P1.6": {
+  "started": "2026-09-24T19:38:22",
+  "status": "RUNNING"
+ },
  "P2.1": {
   "duration_s": 10.9,
   "history": [
@@ -266,6 +270,25 @@
   },
   "rc": 0,
   "started": "2026-09-24T19:38:00",
+  "status": "PASS"
+ },
+ "P2.7": {
+  "duration_s": 24.0,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-24T19:39:03"
+   }
+  ],
+  "last_run": "2026-09-24T19:39:03",
+  "log": "models/demos/ernie45_d_p/bringup/logs/P2.7.log",
+  "metrics": {
+   "pcc_dense_L00": 0.9999933370719214,
+   "pcc_shared_L01": 0.9999844888845741,
+   "pcc_shared_L27": 0.9999838681044786
+  },
+  "rc": 0,
+  "started": "2026-09-24T19:38:39",
   "status": "PASS"
  }
 }
