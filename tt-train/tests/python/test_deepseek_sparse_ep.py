@@ -32,9 +32,6 @@ a mesh afterwards leaves the fabric routers half-initialized.
 
 from __future__ import annotations
 
-import os
-from typing import Optional
-
 import numpy as np
 import pytest
 import torch
@@ -54,13 +51,6 @@ SEED = 2026
 DP_AXIS_SIZE = 8
 EP_AXIS_SIZE = 4
 MESH_SHAPE = (DP_AXIS_SIZE, EP_AXIS_SIZE)
-
-_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-# Blackhole galaxy only — see the module docstring. The galaxy fabric is a torus
-# in X; a LINE/LINE descriptor faults with SIGBUS, so this must be the torus_x one.
-_MGD_FOR_SHAPE = {
-    MESH_SHAPE: os.path.join(_REPO_ROOT, "configs", "mgd", "bh_galaxy_8_4_torus_x.textproto"),
-}
 
 
 class _Cfg:
@@ -105,51 +95,15 @@ pytestmark = [
 ]
 
 
-def _ensure_mgd_path(shape: tuple[int, ...]) -> Optional[str]:
-    """Point TT_MESH_GRAPH_DESC_PATH at a bundled MGD if unset. Returns the old value."""
-    previous = os.environ.get("TT_MESH_GRAPH_DESC_PATH")
-    if previous:
-        return previous
-    candidate = _MGD_FOR_SHAPE.get(shape)
-    if candidate and os.path.isfile(candidate):
-        os.environ["TT_MESH_GRAPH_DESC_PATH"] = candidate
-    return previous
-
-
-def _restore_mgd_path(previous: Optional[str]) -> None:
-    if previous is None:
-        os.environ.pop("TT_MESH_GRAPH_DESC_PATH", None)
-    else:
-        os.environ["TT_MESH_GRAPH_DESC_PATH"] = previous
-
-
 @pytest.fixture(scope="module")
-def ep_mesh(skip_if_host_too_small, reset_metal_env_quietly):
+def ep_mesh(fresh_device_mesh):
     """Open the ``[8, 4]`` galaxy mesh with axes ``("dp", "ep")``.
 
     Skips on a host too small for the shape. A host that has enough but
     still can't open the mesh fails instead.
     """
-    shape = MESH_SHAPE
-    skip_if_host_too_small(shape, f"sparse_ep tests ('ep' axis = {EP_AXIS_SIZE})")
-    previous_mgd = _ensure_mgd_path(shape)
-
-    # The host-size check above already created the process-wide MetalEnv, and a MetalEnv
-    # reads TT_MESH_GRAPH_DESC_PATH only once, when it is created. Drop it now that
-    # _ensure_mgd_path has set the descriptor, so the open below builds a new one from it;
-    # otherwise the fabric control plane is built from the wrong descriptor.
-    ttml.reset_metal_env()
-    try:
-        ttml.open_device_mesh(ttml.Mesh(shape, ("dp", "ep")))
-    except Exception:  # noqa: BLE001
-        reset_metal_env_quietly()
-        _restore_mgd_path(previous_mgd)
-        raise
-
-    yield ttml.mesh()
-
-    reset_metal_env_quietly()
-    _restore_mgd_path(previous_mgd)
+    with fresh_device_mesh(MESH_SHAPE, ("dp", "ep"), what=f"sparse_ep tests ('ep' axis = {EP_AXIS_SIZE})") as mesh:
+        yield mesh
 
 
 # ---------------------------------------------------------------------------
