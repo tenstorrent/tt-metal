@@ -84,7 +84,7 @@ void ttnn_device(nb::module_& mod) {
 
             Keyword Args:
                 device_id (int): The device ID to open.
-                l1_small_size (int, optional): The size of the L1 small buffer. Defaults to `ttnn.device.DEFAULT_L1_SMALL_SIZE`.
+                l1_small_size (int, optional): The size of the L1 small buffer. Defaults to `ttnn.device.DEFAULT_L1_SMALL_SIZE`. The default is 0: ops that allocate from the L1_SMALL region (conv2d and pooling with kernel > 1, CCL semaphores) fail with an `L1_SMALL` out-of-memory error, or fall back to L1, until a non-zero size such as 32768 or 65536 is set here.
                 trace_region_size (int, optional): The size of the trace region. Defaults to `ttnn.device.DEFAULT_TRACE_REGION_SIZE`.
                 num_command_queues (int, optional): The number of command queues to open. Defaults to 1.
                 dispatch_core_config (ttnn.device.DispatchCoreConfig, optional): The dispatch core config to use. Defaults to a hardware-specific value.

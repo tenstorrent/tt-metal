@@ -8,6 +8,7 @@
 #include <tt-metalium/allocator.hpp>
 #include "allocator_state.hpp"
 #include <limits>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <algorithm>
@@ -20,6 +21,25 @@
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
 
 namespace tt::tt_metal {
+
+namespace {
+
+// L1_SMALL is sized once at device open, so running out of it looks like fragmentation of a
+// near-empty card unless the message names the parameter that sizes it.
+std::string l1_small_hint(BufferType buffer_type, DeviceAddr bank_size) {
+    if (buffer_type != BufferType::L1_SMALL) {
+        return "";
+    }
+    if (bank_size == 0) {
+        return " The L1_SMALL region is 0 B: it is reserved at device open, so pass a non-zero l1_small_size to "
+               "ttnn.open_device / ttnn.open_mesh_device / CreateDevice (conv2d, pooling and CCL semaphores allocate "
+               "from it).";
+    }
+    return " The L1_SMALL region is sized at device open; increase l1_small_size in ttnn.open_device / "
+           "ttnn.open_mesh_device / CreateDevice.";
+}
+
+}  // namespace
 
 BankManager::AllocatorDependencies::AllocatorDependencies() = default;
 
@@ -484,7 +504,7 @@ uint64_t BankManager::allocate_buffer(
             TT_FATAL(
                 false,
                 "Out of Memory: Not enough space to allocate {} B {} buffer across {} banks, where each bank needs to "
-                "store {} B, but bank size is {} B (allocated: {} B, free: {} B, largest free block: {} B)",
+                "store {} B, but bank size is {} B (allocated: {} B, free: {} B, largest free block: {} B).{}",
                 size,
                 enchantum::to_string(buffer_type_),
                 num_banks,
@@ -492,7 +512,8 @@ uint64_t BankManager::allocate_buffer(
                 bank_size(),
                 mem_stats.total_allocated_bytes,
                 mem_stats.total_free_bytes,
-                mem_stats.largest_free_block_bytes);
+                mem_stats.largest_free_block_bytes,
+                l1_small_hint(buffer_type_, bank_size()));
         }
         allocated_buffers_[allocator_id.get()].insert(address.value());
 
@@ -554,7 +575,7 @@ uint64_t BankManager::allocate_buffer(
             "Out of Memory: Not enough space after considering dependencies to allocate {} B {} across {} banks ({} B "
             "per bank), bank size is {} B (allocated: {} B, free: {} B, largest free block: {} B). After subtracting "
             "{} dependency range(s) and {} additional occupied range(s), {} B remained placeable across {} window(s), "
-            "largest {} B",
+            "largest {} B.{}",
             size,
             enchantum::to_string(buffer_type_),
             num_banks,
@@ -569,7 +590,8 @@ uint64_t BankManager::allocate_buffer(
             additional_occupied_ranges.size(),
             placeable_bytes,
             available_ranges.size(),
-            largest_placeable);
+            largest_placeable,
+            l1_small_hint(buffer_type_, bank_size()));
     }
     TT_FATAL(
         chosen.value() % alignment_bytes_ == 0,
