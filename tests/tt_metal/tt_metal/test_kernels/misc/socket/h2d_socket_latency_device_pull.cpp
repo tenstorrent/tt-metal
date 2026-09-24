@@ -36,7 +36,7 @@ void kernel_main() {
         socket_notify_sender(receiver_socket);
     }
 
-    // The chunked reads above left PCIe routing on read_cmd_buf, and on-chip reads no longer reprogram MID.
+    // The PCIe reads above leave MID routed to host, and firmware does not reset it before the next kernel.
     noc_async_read_clear_pcie_state(NOC_INDEX, read_cmd_buf);
     update_socket_config(receiver_socket);
     noc_async_write_barrier();

@@ -54,8 +54,8 @@ void kernel_main() {
     noc_read_with_state<DM_DEDICATED_NOC, BRISC_RD_CMD_BUF, CQ_NOC_SNDL>(
         NOC_INDEX, drisc_src_coord, drisc_l1_src_addr, tensix_dst_addr, sizeof(uint32_t));
     noc_async_read_barrier();
-    // Bit 37 stays in NOC_TARG_ADDR_MID and the plain read path no longer rewrites it, so put the command
-    // buffer back to ordinary on-chip routing. The clear is not PCIe specific despite the name.
+    // Bit 37 stays in NOC_TARG_ADDR_MID and plain reads do not program it, so put the command buffer back
+    // to ordinary on-chip routing. The clear is not PCIe specific despite the name.
     noc_async_read_clear_pcie_state(NOC_INDEX, BRISC_RD_CMD_BUF);
 #endif
 }

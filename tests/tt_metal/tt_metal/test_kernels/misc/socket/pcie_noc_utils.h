@@ -25,8 +25,8 @@ inline void noc_write_page_chunked(uint32_t pcie_xy_enc, uint32_t src_l1, uint64
 
 // H2D: read one page from PCIe host RAM into L1 in NOC_MAX_BURST_SIZE chunks.
 // Caller must call noc_async_read_barrier() after this returns, and noc_async_read_clear_pcie_state on
-// read_cmd_buf once the run of reads is done. Each call refreshes MID, so no cleanup is needed between
-// them, but the plain read path no longer rewrites MID and would inherit whatever is left.
+// read_cmd_buf once the run of reads is done. Each call rewrites MID, so no cleanup is needed between
+// them, but plain reads do not program MID and would inherit the PCIe routing.
 inline void noc_read_page_chunked(uint32_t pcie_xy_enc, uint64_t src_pcie, uint32_t dst_l1, uint32_t size) {
     while (size) {
         uint32_t chunk = size > NOC_MAX_BURST_SIZE ? NOC_MAX_BURST_SIZE : size;

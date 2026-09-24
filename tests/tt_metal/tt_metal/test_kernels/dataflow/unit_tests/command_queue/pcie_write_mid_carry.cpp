@@ -12,8 +12,8 @@
 // the address registers it left behind. Sending is disabled, so the synthetic destination never reaches the NOC
 // and no mapping has to exist for it.
 //
-// NOC_RET_ADDR_LO holds the low 32 bits of the destination and NOC_RET_ADDR_MID the high 32. The loop advances a
-// 64-bit address but only reprograms LO, so once the address carries past 2^32 the two registers disagree.
+// NOC_RET_ADDR_LO holds the low 32 bits of the destination and NOC_RET_ADDR_MID the high 32. If the loop reprograms
+// only LO, the two registers disagree once the address carries past 2^32.
 void kernel_main() {
     const uint32_t dst_lo = get_compile_time_arg_val(0);
     const uint32_t dst_hi = get_compile_time_arg_val(1);
