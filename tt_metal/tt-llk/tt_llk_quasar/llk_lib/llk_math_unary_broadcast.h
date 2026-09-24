@@ -97,7 +97,6 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
 
     // One MOV covers one FPU row band, so every fixed replay image below is a band count rather than a
     // hand-unrolled instruction list: the same source serves any FPU width.
-    constexpr std::uint32_t MOV_FPU_ROWS    = ckernel::arch::mov_fpu_rows;
     constexpr std::uint32_t BANDS_PER_FACE  = ckernel::FACE_R_DIM / ELTWISE_MATH_ROWS;
     constexpr std::uint32_t BANDS_PER_GROUP = ckernel::arch::dest_row_group / ELTWISE_MATH_ROWS;
     // SrcB rows holding the lo16 plane, and the dest offset of the far face of the pair.
@@ -108,6 +107,8 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
 
     if constexpr (unpack_to_dest)
     {
+        constexpr std::uint32_t MOV_FPU_ROWS = ckernel::arch::mov_fpu_rows;
+
         if constexpr (BROADCAST_TYPE == BroadcastType::COL)
         {
             // Six passes over one face: two reads (hi16, lo16) and four writes (hi16 and lo16, each to
@@ -278,7 +279,7 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
             constexpr std::uint32_t bcast_row = (BROADCAST_TYPE != BroadcastType::COL) ? 1U : 0U;
             constexpr std::uint32_t bcast_col = (BROADCAST_TYPE != BroadcastType::ROW) ? 1U : 0U;
             const auto movb2d                 = [bcast_col, bcast_row](std::uint8_t addr_mod)
-            { return TT_OP_MOVB2D(0, 0, addr_mod, MOV_FPU_ROWS, bcast_col, bcast_row); }; // dst_addr += 1 enables row broadcast
+            { return TT_OP_MOVB2D(0, 0, addr_mod, ckernel::arch::mov_fpu_rows, bcast_col, bcast_row); }; // dst_addr += 1 enables row broadcast
 
             ckernel_template temp(outer, inner, movb2d(ADDR_MOD_0));
             temp.set_end_op(TT_OP_CLEARDVALID(p_cleardvalid::CLR_SRCB_VLD, 0, 0, 0, 0, 0));
