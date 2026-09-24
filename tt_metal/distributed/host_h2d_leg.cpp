@@ -39,7 +39,7 @@ struct H2DLeg::Impl {
     // Everything one core owns, in one place. `connector`/`bytes_acked` point into the alias.
     struct Core {
         std::unique_ptr<dist::H2DSocket> socket;
-        CoreCoord virt{};
+        CoreCoord virt;
         uint32_t cfg_addr = 0;
         dist::HDSocketConnectorState* connector = nullptr;
         const volatile uint32_t* bytes_acked = nullptr;
