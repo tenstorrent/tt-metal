@@ -68,15 +68,26 @@ H2DLeg::~H2DLeg() = default;
 std::unique_ptr<H2DLeg> H2DLeg::create(
     const std::shared_ptr<dist::MeshDevice>& mesh, const Config& cfg, std::string& err) {
     err.clear();
-    if (mesh == nullptr || cfg.cores == 0 || cfg.grid_width == 0 || cfg.page_bytes == 0) {
-        err = "H2DLeg::create: mesh, cores, grid_width and page_bytes are all required";
+    if (mesh == nullptr || cfg.cores == 0 || cfg.grid_width == 0 || cfg.page_bytes == 0 || cfg.ring_pages == 0) {
+        err = "H2DLeg::create: mesh, cores, grid_width, page_bytes and ring_pages are all required";
+        return nullptr;
+    }
+
+    // In 64 bits, as D2HLeg::create does: the 32-bit product wraps to a small valid FIFO
+    // while callers go on addressing slots with the ring count they asked for.
+    const uint64_t fifo64 = static_cast<uint64_t>(cfg.page_bytes) * cfg.ring_pages;
+    if (fifo64 > UINT32_MAX) {
+        err = fmt::format(
+            "H2DLeg::create: {} B page x {} ring pages overflows the 32-bit ring geometry",
+            cfg.page_bytes,
+            cfg.ring_pages);
         return nullptr;
     }
 
     std::unique_ptr<H2DLeg> leg(new H2DLeg());
     Impl& im = *leg->impl_;
     im.cfg = cfg;
-    im.fifo_bytes = cfg.ring_pages * cfg.page_bytes;
+    im.fifo_bytes = static_cast<uint32_t>(fifo64);
     im.device_id = static_cast<uint32_t>(mesh->get_devices()[0]->id());
 
     const uint32_t n = cfg.cores;
