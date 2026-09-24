@@ -643,7 +643,8 @@ def test_gdn_out_agmm_vs_mmrs(mesh_device, OUTER_CHUNK_SIZE, reset_seeds, ensure
     tt_ccl = TT_CCL(mesh_device)
     tw = load_gdn_weights_tp(mesh_device, sd, args)
     gdn = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
-    assert gdn._out_colpar_prefill, "column-parallel prefill out-proj not active"
+    if not gdn._out_colpar_prefill:
+        pytest.skip("column-parallel prefill out-proj is Blackhole-only")
     composer = tp_composer(mesh_device)
 
     x = torch.randn(1, 1, OUTER_CHUNK_SIZE, args.dim, dtype=torch.bfloat16)
@@ -699,7 +700,8 @@ def test_gdn_out_agmm_deterministic_under_device_skew(mesh_device, monkeypatch, 
     from models.tt_transformers.tt.ccl import TT_CCL
 
     gdn = TPGatedDeltaNet(mesh_device, args, load_gdn_weights_tp(mesh_device, sd, args), TT_CCL(mesh_device))
-    assert gdn._out_colpar_prefill, "column-parallel prefill out-proj not active"
+    if not gdn._out_colpar_prefill:
+        pytest.skip("column-parallel prefill out-proj is Blackhole-only")
     composer = tp_composer(mesh_device)
     x_tt = shard_to_device(mesh_device, torch.randn(1, 1, T, args.dim, dtype=torch.bfloat16), dim=-1)
 

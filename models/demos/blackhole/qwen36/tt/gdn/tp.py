@@ -193,7 +193,7 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
         cache_path=c("out.dramshard" if _out_sharded else "out"),
         dtype=ttnn.bfloat8_b,
     )
-    if getattr(args, "num_devices", 1) > 1:
+    if getattr(args, "num_devices", 1) > 1 and tpc.is_blackhole():
         # COLUMN-parallel copy of the out-proj for prefill.
         # Decode keeps the row-sharded tw["out"] (matmul + all-reduce).
         tw["out_colpar"] = tpc.shard_w(
@@ -745,6 +745,7 @@ class TPGatedDeltaNet:
                 return_output_dim=False,
                 return_weights_and_bias=False,
             )
+
         # Carry splice (big native-pad conv + a TILE-sized fix conv spliced in with slice_write):
         # IMPLEMENTED and VERIFIED BIT-EXACT -- test_gdn_conv1d_splice_bitexact, 9 cases, max|diff| 0.0
         # -- but OFF. It saves the 205us concat and loses more on the extra conv program. Do not redo.
