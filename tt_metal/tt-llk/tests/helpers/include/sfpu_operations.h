@@ -1875,8 +1875,8 @@ void call_binary_sfpu_operation(
     else if constexpr (BINOP == BinaryOp::LOGADDEXP)
     {
         // The fused overflow-safe kernel from ckernel_sfpu_logaddexp.h; DST_ACCUM_MODE
-        // (is_fp32_dest_acc_en) selects the fp32 vs bf16 log1p coefficient set that the
-        // paired init loaded, and the bf16 round-to-nearest-even on store.
+        // (is_fp32_dest_acc_en) selects the fp32 or bf16 exponential, the log1p coefficient
+        // set that the paired init loaded, and the bf16 rounding before the store.
         SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
@@ -1889,10 +1889,11 @@ void call_binary_sfpu_operation(
     }
     else if constexpr (BINOP == BinaryOp::LOGADDEXP2)
     {
-        // Same kernel shape in base 2: the input is scaled by ln 2 and the log1p result
-        // by log2(e), so log1p sees the same (0, 1] argument range and needs no new
-        // coefficients. Measured: a variant with log2(e) folded into its own minimax fit
-        // came out at the same 1.45e-06 worst relative error over 262144 pairs.
+        // Same kernel shape in base 2: 2^-|a - b| comes from exp on the fp32 path and from
+        // exp2's bf16 body on the bf16 path, and the log1p result is scaled by log2(e), so
+        // log1p sees the same (0, 1] argument range and needs no new coefficients. Measured
+        // on the fp32 path: a variant with log2(e) folded into its own minimax fit came out
+        // at the same 1.45e-06 worst relative error over 262144 pairs.
         SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
