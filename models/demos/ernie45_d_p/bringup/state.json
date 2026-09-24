@@ -108,6 +108,10 @@
   "rc": 0,
   "status": "PASS"
  },
+ "P1.5": {
+  "started": "2026-09-24T19:31:28",
+  "status": "RUNNING"
+ },
  "P2.1": {
   "duration_s": 10.9,
   "history": [
@@ -131,6 +135,51 @@
    "worker_grid": "11x10"
   },
   "rc": 0,
+  "status": "PASS"
+ },
+ "P2.2": {
+  "duration_s": 1.7,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-24T19:34:46"
+   }
+  ],
+  "last_run": "2026-09-24T19:34:46",
+  "log": "models/demos/ernie45_d_p/bringup/logs/P2.2.log",
+  "metrics": {
+   "per_chip_total_gb": 11.42,
+   "plan_fits_dram": 1
+  },
+  "rc": 0,
+  "started": "2026-09-24T19:34:44",
+  "status": "PASS"
+ },
+ "P2.3": {
+  "duration_s": 17.7,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-24T19:35:05"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-24T19:35:57"
+   }
+  ],
+  "last_run": "2026-09-24T19:35:57",
+  "log": "models/demos/ernie45_d_p/bringup/logs/P2.3.log",
+  "metrics": {
+   "pcc_attn_norm_L00": 0.9999984432664203,
+   "pcc_attn_norm_L13": 0.9999960315228926,
+   "pcc_attn_norm_L27": 0.999995974564264,
+   "pcc_ffn_norm_L00": 0.9999955183739444,
+   "pcc_ffn_norm_L13": 0.9999958025947977,
+   "pcc_ffn_norm_L27": 0.9999958587395468,
+   "pcc_final_norm": 0.9999958697900421
+  },
+  "rc": 0,
+  "started": "2026-09-24T19:35:39",
   "status": "PASS"
  }
 }
