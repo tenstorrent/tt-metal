@@ -94,7 +94,7 @@ Wormhole's channel figure is the peak the `ttnn` performance model uses. Blackho
 
 ## What sets the floor
 
-### Latency
+### Per-hop latency
 
 The first byte cannot reach the farthest device until it has crossed the network diameter, and that cost does not depend on tensor size. Per-hop forwarding latency was measured by timing a round trip `n` hops out and halving the slope, which cancels device clock skew.
 
@@ -103,25 +103,37 @@ The first byte cannot reach the farthest device until it has crossed the network
 | Wormhole | 711 ns | 874 ns |
 | Blackhole | 515 ns | 619 ns |
 
-Multiplied by the diameter, this is a few microseconds for a typical 8-device collective. Setting it equal to the bandwidth term estimates where the two regimes cross:
-
-```
-bottleneck_bytes / (line_rate * links * directions)  =  per_hop_latency * hops
-```
-
-These figures are a linear fit. 1D latency grows superlinearly with distance, so the estimate understates long lines.
+These figures are a linear fit. 1D latency grows superlinearly with distance.
 
 ### Per-invocation cost
 
-A collective also pays setup and teardown once per call, independent of tensor size:
+A collective also pays setup and teardown once per call, independent of tensor size. The costs below were measured with device profiler zones around each step of `all_gather`, called back to back in a trace:
 
-- A barrier at entry, so no device starts before its peers are ready.
-- A wait at exit, until remote data has landed locally.
-- Opening and closing a fabric connection. Each ends in a blocking wait for a remote acknowledgement.
-- When a Fabric Mux is involved, a handshake to connect to it and an acknowledgement to tear it down. The connect waits for the mux to report ready.
-- Allocating packet headers and programming route state. Route state is programmed once and reused by every packet, so this part is cheap.
+| Step | Wormhole | Blackhole |
+| --- | --- | --- |
+| Launch the kernel and allocate packet headers | 1.2 µs | 1.4 µs |
+| Open fabric connections | 0.8 µs | 0.7 µs |
+| Or connect through a Fabric Mux | 1.7 µs | 1.7 µs |
+| Entry barrier, so no device starts before its peers are ready | 0.7 µs + 0.95 µs per hop | 0.3 µs + 0.64 µs per hop |
+| Send the first packet | 1.0 µs | 0.8 µs |
+| Exit wait, until remote data has landed locally | 0.7 µs + 0.95 µs per hop | 0.3 µs + 0.64 µs per hop |
+| Close fabric connections | 0.4 µs | 0.5 µs |
+| Or tear down the mux, draining its buffers | 3.2 µs | 2.9 µs |
 
-The barrier thresholds count devices, so they grow with device count but not with tensor size. This cost is not a fixed constant. Both barriers and the mux ready poll block for however long cross-device launch skew happens to be, and that varies from call to call.
+Each barrier crosses the line once, so it grows with distance. At eight devices the two barriers are about three quarters of the total. Launch skew shifts time between them from call to call, but their sum is stable.
+
+### Floor plus ceiling
+
+Adding the floor to the ceiling gives the kernel time of one call at any size:
+
+```
+kernel_time   ≈ fixed_latency + bottleneck_bytes / (0.96 * line_rate * links * directions)
+
+fixed_latency ≈ 4.4 µs + 1.9 µs * hops * r      Wormhole,  r = 1 on a line, 1.3 on a ring
+              ≈ 3.7 µs + 1.3 µs * hops * r      Blackhole, r = 1 on a line, 1.2 on a ring
+```
+
+The line terms were fitted from `all_gather` at one, three and seven hops. `r` was derived from an eight-device ring, it carries the ring's extra cost per hop.
 
 ## The metric
 
@@ -204,12 +216,7 @@ Poor packet fill produces a flat plateau instead. At a given fill, neither data 
 
 In our data, every curve keeps falling as size shrinks, and none of them flatten. Hence per-invocation cost sets the small-size behavior, not packet fill.
 
-**The ramp.** Fixed costs amortize as the payload grows, and packet fill improves. In our data, the ramp begins near the crossover estimate, and the curve does not reach its asymptote until well past it. The crossover estimate from the latency section leaves out:
-
-- per-invocation cost
-- packet fill, which improves with size
-- host dispatch
-- superlinear growth of hop latency with distance
+**The ramp.** Fixed costs amortize as the payload grows. In our data, the floor-plus-ceiling model predicts `all_gather` on a line within about 5% at every size, on both machines. `reduce_scatter` runs slower than the model: up to 35% at large sizes, and up to 90% at small sizes on a line. On a line, it passes data through a worker at every hop, which adds and forwards it. So each hop costs about twice as much as in `all_gather`.
 
 **Steps in the ramp.** Worker cores per link and synchronization granularity are chosen by size-thresholded heuristics that differ by collective and topology, so bandwidth should be piecewise. In our data, ring `reduce_scatter` dips at 512 KiB and jumps at 1 MiB. Up to 512 KiB per device it uses a one-shot direct algorithm, which sends about 2.3× the bytes.
 
