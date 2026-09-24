@@ -46,6 +46,24 @@ Sustained after step 12: **17.6 / 120.9 / 227.6 / 446.4 ms**. Configuration live
 `demo/_common.py::apply_workload_env` (per-batch defaults, every knob overridable from the shell), the kernels in
 `tt/custom_ops/`, the shared-code changes in `models/tt_transformers/tt/`, the SDPA op and the 2D matmul factory.
 
+## Data parallel on 32 chips
+
+`demo/dp32_multiprocess.py --num-devices 32 --batch-size B --iterations 30 --warmup 5`: one resident model per
+chip, workers released together after warm-up, per-chip latency = median of 30 extended-trace iterations,
+throughput gated by the slowest chip (pplx-embed-4B, ISL 512, 2026-09-24, 32/32 chips active in every run).
+
+| per-chip batch | global batch | per-chip median | slowest chip | vs one chip sustained | embeddings/s | tokens/s | scaling vs 32 × one chip |
+|---|---|---|---|---|---|---|---|
+| 1 | 32 | 18.2 ms | 18.4 ms | +3% | 1,741 | 0.89 M | 96% |
+| 4 | 128 | 70.1 | 72.0 | +2% | 1,777 | 0.91 M | 96% |
+| 8 | 256 | 121.5 | 126.6 | +0.5% | 2,023 | 1.04 M | 96% |
+| 16 | 512 | 227.8 | 242.8 | +0.1% | 2,109 | 1.08 M | 94% |
+| 32 | 1,024 | 442.4 | 468.1 | −1% | 2,188 | 1.12 M | 95% |
+
+The per-chip median matches the single-chip sustained numbers, so the chips do not interfere; the 4–6% lost
+against ideal scaling is chip-to-chip spread (fastest to slowest chip: 17.3–18.6 ms at bs1, 420–469 ms at bs32),
+which gates the synchronous aggregate.
+
 ## Where the time goes now
 
 Device-profiled bs32 (365 ms of kernels at the nominal clock; sustained e2e 446 ms): matmuls 65%, SwiGLU
