@@ -51,6 +51,11 @@ class MiniMaxH3Scheduler:
             raise ValueError(f"shift must be positive, got {shift}")
         self._shift = float(shift)
 
+    def shifted(self, base: list[float] | tuple[float, ...] | torch.Tensor) -> torch.Tensor:
+        """Push a pre-shift ladder in ``[0, 1]`` through this scheduler's exponential shift."""
+        base = torch.as_tensor(base, dtype=torch.float32)
+        return self._shift * base / (1 + (self._shift - 1) * base)
+
     def set_begin_index(self, begin_index: int = 0) -> None:
         self._begin_index = begin_index
 
@@ -73,7 +78,7 @@ class MiniMaxH3Scheduler:
             # The rectified-flow sigma range is fixed at [1.0, 0.0], and the shift
             # maps 0 to exactly 0 so the terminal point survives it.
             base = torch.linspace(1.0, 0.0, int(num_inference_steps), dtype=torch.float32)
-            sigmas = self._shift * base / (1 + (self._shift - 1) * base)
+            sigmas = self.shifted(base)
             # The shift compresses the grid near sigma = 1; collapse the float32
             # collisions that creates rather than stepping with ratio == 1.
             sigmas = torch.unique_consecutive(sigmas)

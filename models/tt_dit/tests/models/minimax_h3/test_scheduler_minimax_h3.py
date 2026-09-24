@@ -124,3 +124,38 @@ def test_matches_diffusers_reference():
             sample_ours = ours.step(velocity, timestep, sample_ours)
             sample_theirs = theirs.step(velocity, theirs.timesteps[index], sample_theirs, return_dict=False)[0]
         assert torch.equal(sample_ours, sample_theirs)
+
+
+# FastH3's trained grids as published (vLLM-Omni / FastVideo), from the uniform q = [1, .75, .5, .25]; the
+# pinned 0.999/0.749 ladder sits within 5e-4 of them at H3's shifts.
+FASTH3_PUBLISHED_SIGMAS = {
+    VIDEO_SHIFT: [1.0, 0.9730, 0.9231, 0.8000, 0.0],
+    AUDIO_SHIFT: [1.0, 0.9000, 0.7500, 0.5000, 0.0],
+}
+
+
+def _pipeline_schedulers(lora_path, num_inference_steps):
+    from types import SimpleNamespace
+
+    from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
+
+    return MiniMaxH3Pipeline._schedulers(SimpleNamespace(lora_path=lora_path), num_inference_steps)
+
+
+def test_fasth3_runs_four_forwards_on_its_trained_grid():
+    video, audio = _pipeline_schedulers("adapter.safetensors", 4)
+    for scheduler in (video, audio):
+        expected = torch.tensor(FASTH3_PUBLISHED_SIGMAS[scheduler.shift])
+        assert scheduler.num_inference_steps == 4
+        assert scheduler.sigmas[-1].item() == 0.0
+        assert torch.allclose(scheduler.sigmas, expected, atol=5e-4)
+
+
+@pytest.mark.parametrize(("lora_path", "num_inference_steps"), [(None, 4), (None, 50), ("adapter.safetensors", 3)])
+def test_uniform_grid_outside_the_fasth3_contract(lora_path, num_inference_steps):
+    """Base H3 always counts grid points; so do warmup's short runs with the adapter bound."""
+    for scheduler in _pipeline_schedulers(lora_path, num_inference_steps):
+        reference = MiniMaxH3Scheduler(shift=scheduler.shift)
+        reference.set_timesteps(num_inference_steps)
+        assert torch.equal(scheduler.sigmas, reference.sigmas)
+        assert scheduler.num_inference_steps == num_inference_steps - 1

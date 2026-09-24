@@ -159,6 +159,12 @@ MINIMAX_H3_AUDIO_CONDITION_TIMESTEP = 1.0
 VIDEO_SHIFT = 12.0
 AUDIO_SHIFT = 3.0
 
+# FastH3 is a four-forward DMD2 student trained on five pinned pre-shift points: FastVideo's
+# `dmd_denoising_steps=[999, 749, 500, 250]` over 1000, plus the terminal 0. Each modality pushes
+# them through its own shift, as the base grid does. Its "4 steps" counts forwards, not points.
+FASTH3_NUM_FORWARDS = 4
+FASTH3_BASE_LADDER = (0.999, 0.749, 0.5, 0.25, 0.0)
+
 
 _AUDIO_T_FACTOR_ENV = "MINIMAX_H3_AUDIO_T_FACTOR"
 _DEFAULT_AUDIO_T_FACTOR = 8
@@ -567,7 +573,7 @@ class MiniMaxH3Pipeline:
             raise ValueError(f"audio_split_mode must be 'off', 'weight', 'full' or 'kernel', got {audio_split_mode!r}")
         self.audio_split_mode = audio_split_mode
         # The vocoder replays a captured device graph (0.5 -> 0.3 s); off for meshes opened without a trace region.
-        self.audio_trace = True if audio_trace is None else bool(audio_trace)
+        self.audio_trace = False if audio_trace is None else bool(audio_trace)
         # Audio T-shard factor/axis: explicit kwarg > MINIMAX_H3_AUDIO_T_FACTOR env > preset (32 on the
         # quad, else 8), then the 8->4->1 fallback; logged before decode.
         audio_t_factor, self._audio_t_factor_from_env = _requested_audio_t_factor(
@@ -2003,6 +2009,30 @@ class MiniMaxH3Pipeline:
         shape = (1, -1) + (1,) * (latents.ndim - 2)
         return latents * torch.tensor(std).view(shape) + torch.tensor(mean).view(shape)
 
+    def _schedulers(self, num_inference_steps: int) -> tuple[MiniMaxH3Scheduler, MiniMaxH3Scheduler]:
+        """The video and audio schedulers for one request, fully set up.
+
+        The base checkpoint's `num_inference_steps` counts sigma grid points (`N - 1` forwards, as in
+        diffusers). With a FastH3 adapter bound, the served `FASTH3_NUM_FORWARDS` counts forwards
+        instead and runs the student's trained `FASTH3_BASE_LADDER`; the uniform grid would drop a
+        forward and land off its trained sigmas. Other counts -- warmup's short runs -- keep the grid
+        convention, which is safe because step count keys no program: the levels and Euler
+        coefficients reach the device as data, outside the trace.
+        """
+        schedulers = MiniMaxH3Scheduler(shift=VIDEO_SHIFT), MiniMaxH3Scheduler(shift=AUDIO_SHIFT)
+        fasth3 = self.lora_path is not None and num_inference_steps == FASTH3_NUM_FORWARDS
+        for scheduler in schedulers:
+            if fasth3:
+                scheduler.set_timesteps(sigmas=scheduler.shifted(FASTH3_BASE_LADDER))
+            else:
+                scheduler.set_timesteps(num_inference_steps)
+
+        self._log(
+            f"schedulers: n={num_inference_steps} lora={self.lora_path} fasth3={fasth3} "
+            f"sigmas={schedulers[0].sigmas.tolist()}"
+        )
+        return schedulers
+
     # ------------------------------------------------------------------ the call
 
     @torch.no_grad()
@@ -2098,10 +2128,7 @@ class MiniMaxH3Pipeline:
         # Both schedules. Built here rather than after the layout because the keyframe step below needs
         # `scale_noise`, which takes its `t` at face value and works before `set_timesteps` -- but they
         # are set up fully so there is only one place that decides the schedule.
-        scheduler = MiniMaxH3Scheduler(shift=VIDEO_SHIFT)
-        audio_scheduler = MiniMaxH3Scheduler(shift=AUDIO_SHIFT)
-        scheduler.set_timesteps(num_inference_steps)
-        audio_scheduler.set_timesteps(num_inference_steps)
+        scheduler, audio_scheduler = self._schedulers(num_inference_steps)
 
         # All noise for the request, off one generator, in the reference's draw order: conditioning
         # first, then video, then audio. The reference spreads these across two blocks -- the keyframe
@@ -2236,10 +2263,7 @@ class MiniMaxH3Pipeline:
         with event_section(on_event, "encoder"):
             prompt_embeds, text_token_tags = self.encode_prompt(prompt, references=prepared)
 
-        scheduler = MiniMaxH3Scheduler(shift=VIDEO_SHIFT)
-        audio_scheduler = MiniMaxH3Scheduler(shift=AUDIO_SHIFT)
-        scheduler.set_timesteps(num_inference_steps)
-        audio_scheduler.set_timesteps(num_inference_steps)
+        scheduler, audio_scheduler = self._schedulers(num_inference_steps)
 
         # 3. Reference VAE encode. Before the layout, because it is what resolves the geometry the
         # layout is built from. Sub-models load on first use inside the timed row.
@@ -2975,6 +2999,8 @@ class MiniMaxH3Pipeline:
             device=self.mesh_device,
         )
 
+        sigmas_ = []
+        sigmas_audio_ = []
         t_preamble = time.time() - t_preamble
         t_first = t_steady = 0.0
         if _is_host_rank():
@@ -3031,6 +3057,9 @@ class MiniMaxH3Pipeline:
             ttnn.synchronize_device(self.mesh_device)
             if ttnn.using_distributed_env():
                 ttnn.distributed_context_barrier()
+
+            sigmas_.append(scheduler.step_coefficient(i))
+            sigmas_audio_.append(audio_scheduler.step_coefficient(i))
             ttnn.multiply_(video_velocity, float(scheduler.step_coefficient(i)))
             ttnn.add_(self._tt_video.value, video_velocity)
             ttnn.multiply_(audio_velocity, float(audio_scheduler.step_coefficient(i)))
@@ -3050,6 +3079,8 @@ class MiniMaxH3Pipeline:
             f"denoise breakdown: preamble {t_preamble:.1f}s (rope {t_rope:.1f}s) | "
             f"first step {t_first:.1f}s | steady {t_steady:.1f}s over {steady_steps} steps "
             f"({t_steady / steady_steps * 1000:.0f} ms/step)"
+            f"sigmas: {sigmas_}"
+            f"sigmas_audio: {sigmas_audio_}"
         )
 
         # condition rows live in their own arenas, so `[:num_cond]` stays pristine -- the return

@@ -26,8 +26,8 @@ from ....utils.video import Audio, export_video_audio_yuv
 from .common import GALAXY_MESHES, MESH_4X8_RING
 from .common_av import CALIBRATED_FOX_PROMPT, artifact_dir, log_timing_table, weights_dir
 
-NUM_INFERENCE_STEPS = 5
-EXPECTED_FORWARDS = NUM_INFERENCE_STEPS - 1
+NUM_INFERENCE_STEPS = 4
+EXPECTED_FORWARDS = 4  # NUM_INFERENCE_STEPS - 1
 # MINIMAX_H3_SEED overrides it, so a sweep can move off seed 0 -- the audio a seed produces is part of the
 # generation, not the decoder, so comparing decoder configurations does not require keeping it.
 SEED = int(os.environ.get("MINIMAX_H3_SEED", "0"))
