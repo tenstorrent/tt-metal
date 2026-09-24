@@ -269,7 +269,9 @@ void HostRegion::provision(
     if (region_ == nullptr) {
         throw std::runtime_error("HostRegion::provision called before reserved_base(); there is no region to pin");
     }
-    if (cores_in_use != reserved_cores_) {
+    // Fewer than reserved is the design: the arenas are interleaved so pinned_bytes_for()
+    // covers a prefix. Only asking for MORE than the mapping holds is an error.
+    if (cores_in_use > reserved_cores_) {
         throw std::runtime_error(fmt::format(
             "provision asks for {} cores but the region was sized for {}", cores_in_use, reserved_cores_));
     }
