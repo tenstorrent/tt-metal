@@ -312,10 +312,12 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
     reconfig_data_format(in0_cb, in1_cb);
     sub_bcast_cols_init(in0_cb, in1_cb);
 
-    // The exponential function uses InputClamping::None for better performance. This version
-    // produces incorrect outputs for inputs <~ -88, but those outputs are guaranteed to be negative.
-    // Enable packer ReLU to zero any negative values produced by the exponential approximation.
-    exp_tile_init<true /* approx */, scale_fp32, InputClamping::None>();
+    // Approximate exp skips negative-input clamping for speed. Inputs below about -88 can
+    // produce negative outputs, which packer ReLU clears. Keep this path for partial faces.
+    // The accurate branch below handles full RC tiles.
+    if constexpr (EXP_APPROX_MODE || vector_mode != VectorMode::RC) {
+        exp_tile_init<true /* approx */, scale_fp32, InputClamping::None>();
+    }
     PACK((llk_pack_relu_config(ReluConfig::zero())));
 
     cb_in0.wait_front(rows * cols);
@@ -337,9 +339,22 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
             tile_regs_acquire();
             for (uint32_t j = 0; j < dst_tiles; ++j) {
                 sub_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
+                // A 32x32 tile has four 16x16 faces, each requiring eight SFPU iterations.
+                // None visits the full tile in 32 iterations; R/C traverse faces with eight each.
                 constexpr int iterations = (vector_mode == VectorMode::RC) ? 32 /*ITER*/ : 8 /*ITER*/;
                 constexpr VectorMode vector_mode_exp = (vector_mode == VectorMode::RC) ? VectorMode::None : vector_mode;
-                exp_tile<true /* approx */, false /* scale_en */, InputClamping::None, iterations>(j, vector_mode_exp);
+                if constexpr (EXP_APPROX_MODE || vector_mode != VectorMode::RC) {
+                    exp_tile<true /* approx */, false /* scale_en */, InputClamping::None, iterations>(
+                        j, vector_mode_exp);
+                } else {
+                    // Apply the full FP32 attention scale once before accurate exponentiation.
+                    // The init scale 0x3F800000 is the IEEE-754 encoding of 1.0f.
+                    // Negative clamping protects masked/large-negative scores in accurate BF16 exp.
+                    binop_with_scalar_tile_init();
+                    mul_unary_tile(j, scale_fp32);
+                    exp_tile_init<false, 0x3F800000, InputClamping::ClampToNegative>();
+                    exp_tile<false, false, InputClamping::ClampToNegative, iterations>(j, vector_mode_exp);
+                }
             }
             tile_regs_commit();
 

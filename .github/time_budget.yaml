@@ -157,7 +157,7 @@ train:
     bh_p100: 105
     bh_p150b_civ2: 90
   perf:
-    bh_p100: 180
+    bh_p100: 160
     bh_p150b_civ2: 400
   e2e_tier3:
     bh_sc1_high_power: 140
@@ -214,8 +214,7 @@ scaleout:
     wh_galaxy: 75
     wh_n300_civ2: 15
     wh_llmbox_civ2: 65
-    bh_loudbox: 195
-    bh_loudbox_civ2_viommu: 45
+    bh_loudbox: 240
     bh_p300: 195
     bh_quietbox_2: 195
   stress:
@@ -238,7 +237,7 @@ scaleout:
     wh_galaxy: 100
     bh_galaxy: 125
     bh_sc1: 20
-    bh_sc4: 160
+    bh_sc4: 90
     bh_sc16: 150
     bh_loudbox: 80
     bh_p300: 80
@@ -408,7 +407,7 @@ models:
     wh_llmbox_perf: 58
     wh_n150: 75
     wh_n150_civ2: 12
-    wh_n300: 33
+    wh_n300: 43  # +10 DiffusionDrive unit tests (#42995)
     bh_p150: 30
     bh_p300: 30
     bh_quietbox_2: 25
@@ -422,7 +421,7 @@ models:
     bh_quietbox_2: 80
   demo:
     bh_galaxy: 470
-    bh_sc1: 1470
+    bh_sc1: 1533
     bh_sc1_high_power: 388
     wh_n150: 500
     wh_n150_civ2: 300

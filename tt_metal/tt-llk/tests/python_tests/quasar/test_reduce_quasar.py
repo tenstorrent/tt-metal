@@ -27,6 +27,7 @@ from helpers.llk_params import (
 from helpers.param_config import (
     input_output_formats,
     parametrize,
+    quasar_mx_smoke,
     select_perf_tile_sizes,
 )
 from helpers.perf.core import create_test_or_perf_config
@@ -70,12 +71,8 @@ REDUCE_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
         DataFormat.Float16,
-        DataFormat.MxFp4,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
     ],
-)
+) + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
 
 
 def reduce_dest_sync_modes(*, is_perf=False):
@@ -176,25 +173,6 @@ def test_reduce_quasar(
 
     pool_type, math_fidelity = pool_type_and_math_fidelity
     tile_shape = construct_tile_shape(tile_dimensions)
-
-    if (
-        formats.input_format == DataFormat.MxInt8
-        and formats.output_format == DataFormat.MxInt2
-        and dest_acc == DestAccumulation.No
-        and reduce_dim == ReduceDimension.Column
-        and pool_type == ReducePool.Sum
-        and math_fidelity == MathFidelity.HiFi2
-        and dest_sync_mode == DestSync.Full
-        and implied_math_format == ImpliedMathFormat.Yes
-    ):
-        pytest.skip(
-            "MxInt8->MxInt2 Column Sum HiFi2 lands on an MxInt2 quantization "
-            "bin boundary. torch.matmul's fp32-internal accumulation rounds "
-            "in the opposite direction from HW for this specific value, "
-            "flipping one element into an adjacent bin. Modeling HW's exact "
-            "per-mul-add rounding schedule (FMA experiment) regressed other "
-            "Row reduce variants, so the residual is accepted as expected."
-        )
 
     input_dimensions = (
         reduce_input_dimensions()

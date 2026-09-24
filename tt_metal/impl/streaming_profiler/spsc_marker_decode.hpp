@@ -281,6 +281,7 @@ constexpr bool spsc_is_zone_or_sticky(Kind k) { return k == Kind::Zone || k == K
 // false when there is none. The chain unrolls in table order. always_inline, like the handlers it takes: a handler
 // left out of line captures the walk's locals by address and pushes them all out of registers.
 template <bool (*Pred)(Kind), size_t I = 0, typename H>
+// NOLINTNEXTLINE(cppcoreguidelines-missing-std-forward) -- Reuse the callback as an lvalue through recursive calls.
 __attribute__((always_inline)) inline bool spsc_for_format(uint32_t t, H&& handle) {
     if constexpr (I == kFormats.size()) {
         return false;
@@ -296,6 +297,7 @@ __attribute__((always_inline)) inline bool spsc_for_format(uint32_t t, H&& handl
 }
 // Runs handle.template operator()<F>() for every row whose kind Pred accepts, in table order.
 template <bool (*Pred)(Kind), size_t I = 0, typename H>
+// NOLINTNEXTLINE(cppcoreguidelines-missing-std-forward) -- Reuse the callback as an lvalue through recursive calls.
 __attribute__((always_inline)) inline void spsc_for_each_format(H&& handle) {
     if constexpr (I < kFormats.size()) {
         if constexpr (Pred(kFormats[I].kind)) {
@@ -678,12 +680,12 @@ __attribute__((noinline)) inline SpscBlockResult spsc_block_qword(
             simde_mm_prefetch(reinterpret_cast<const char*>(p + 144), SIMDE_MM_HINT_T0);
         }
         uint32_t n = 0;
-        for (int i = 0; i < 4; i++) {
-            const simde__m256i cm = simde_mm256_cmpeq_epi64(simde_mm256_and_si256(v[i], type_mask), ftype);
+        for (const auto& value : v) {
+            const simde__m256i cm = simde_mm256_cmpeq_epi64(simde_mm256_and_si256(value, type_mask), ftype);
             if constexpr (!kDelta) {
                 // Timestamps as zero-extended qwords against the record before (`carry`: the previous load's
                 // last); only F lanes count.
-                const simde__m256i ts = simde_mm256_srli_epi64(v[i], 32);
+                const simde__m256i ts = simde_mm256_srli_epi64(value, 32);
                 const simde__m256i before =
                     simde_mm256_blend_epi32(simde_mm256_permute4x64_epi64(ts, 0x90), carry, 0x03);
                 back = simde_mm256_or_si256(back, simde_mm256_and_si256(simde_mm256_cmpgt_epi64(before, ts), cm));

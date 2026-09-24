@@ -41,8 +41,10 @@
 namespace tt::tt_metal::distributed {
 namespace {
 
+using ::testing::HasSubstr;
 using ::testing::IsEmpty;
 using ::testing::SizeIs;
+using ::testing::ThrowsMessage;
 
 // Builds the expected bank id -> worker core map from a per-bank list (indexed by DRAM bank id).
 std::unordered_map<uint32_t, CoreCoord> to_bank_map(const std::vector<CoreCoord>& per_bank) {
@@ -59,6 +61,29 @@ TEST(MeshDeviceInitTest, Init1x1Mesh) {
     EXPECT_NO_THROW({
         auto mesh = tt::tt_metal::distributed::MeshDevice::create(
             config, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, tt::tt_metal::DispatchCoreType::WORKER);
+        mesh->close();
+    });
+}
+
+// A 2x2 shape over one device makes MeshDeviceView throw; that must surface as an exception rather
+// than a segfault in ~MeshDevice, and must leave the devices reusable. Issue #51236.
+TEST(MeshDeviceInitTest, CreateWithMismatchedShapeThrowsWithoutCrashing) {
+    MeshDeviceConfig mismatched_config(MeshShape(2, 2), /*offset=*/std::nullopt, /*physical_device_ids=*/{0});
+
+    EXPECT_THAT(
+        [&] {
+            MeshDevice::create(
+                mismatched_config, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreType::WORKER);
+        },
+        ThrowsMessage<std::runtime_error>(HasSubstr("Shape and values size mismatch")));
+
+    EXPECT_NO_THROW({
+        auto mesh = MeshDevice::create(
+            MeshDeviceConfig(MeshShape(1, 1)),
+            DEFAULT_L1_SMALL_SIZE,
+            DEFAULT_TRACE_REGION_SIZE,
+            1,
+            DispatchCoreType::WORKER);
         mesh->close();
     });
 }
