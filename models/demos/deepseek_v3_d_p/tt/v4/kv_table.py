@@ -49,12 +49,17 @@ def walk_linear(
     base_addr: int,
     chunk_size_bytes: int,
     first_layer: int = 0,
+    extent: int | None = None,
 ) -> Iterator[ChunkAddr]:
-    """Every (slot, layer, 32-row chunk) of one group tensor, in storage order. ``rows`` must be a multiple of 32.
-    ``first_layer`` offsets the table's layer index (a PP stage's first kind-rank); the tensor's own batch index
-    is ``slot * num_layers + local_layer``."""
+    """Every (slot, layer, 32-row chunk) of one group tensor, in storage order. ``rows`` is the tensor's ALLOCATED
+    row count (a multiple of 32; it fixes the addresses); only chunks whose position is below ``extent`` (default
+    ``rows``) are emitted -- the writers' headroom rows are never migrated. ``first_layer`` offsets the table's
+    layer index (a PP stage's first kind-rank); the tensor's own batch index is ``slot * num_layers + local_layer``."""
     if rows % CHUNK_N_TOKENS:
         raise ValueError(f"rows {rows} must be a multiple of {CHUNK_N_TOKENS}")
+    extent = rows if extent is None else int(extent)
+    if extent % CHUNK_N_TOKENS or extent > rows:
+        raise ValueError(f"extent {extent} must be a multiple of {CHUNK_N_TOKENS} and <= rows {rows}")
     chunks_per_layer = rows // CHUNK_N_TOKENS
     flat = 0
     for slot in range(int(num_slots)):
@@ -62,13 +67,11 @@ def walk_linear(
             for c in range(chunks_per_layer):
                 bank = flat % num_banks
                 offset = int(base_addr) + (flat // num_banks) * int(chunk_size_bytes)
-                yield ChunkAddr(
-                    layer=int(first_layer) + local_layer,
-                    position=c * CHUNK_N_TOKENS,
-                    slot=slot,
-                    bank=bank,
-                    offset=offset,
-                )
+                position = c * CHUNK_N_TOKENS
+                if position < extent:
+                    yield ChunkAddr(
+                        layer=int(first_layer) + local_layer, position=position, slot=slot, bank=bank, offset=offset
+                    )
                 flat += 1
 
 
@@ -95,7 +98,9 @@ def group_table_config(spec: KvGroupSpec, *, max_seq_len: int, num_layers_total:
     return cfg
 
 
-def populate_group(table, config_id: int, *, spec: KvGroupSpec, rows: int, num_slots: int, stages: list) -> None:
+def populate_group(
+    table, config_id: int, *, spec: KvGroupSpec, rows: int, num_slots: int, stages: list, extent: int | None = None
+) -> None:
     """Fill config ``config_id`` from per-stage descriptors ``{first_layer, count, base_addr, num_banks, host_tag,
     fnids}`` (``allgather_kv_stage_layout`` output, with the layer fields in KIND-RANK units). One device group
     per stage = every chip of the stage (the rows are replicated)."""
@@ -117,6 +122,7 @@ def populate_group(table, config_id: int, *, spec: KvGroupSpec, rows: int, num_s
             base_addr=int(st["base_addr"]),
             chunk_size_bytes=spec.chunk_size_bytes,
             first_layer=int(st["first_layer"]),
+            extent=extent,
         ):
             loc = ttnn.experimental.disaggregation.KvCacheLocation()
             loc.noc_addr = a.noc_addr
@@ -157,5 +163,13 @@ def build_v4_kv_chunk_table(
         first, count = kind_rank_range(all_of_kind[g.name], geom.layers(g.name))
         base = int(tensor.buffer_address()) if tensor is not None else 0
         stages = allgather_kv_stage_layout(mesh_device, base, mesh_shape, first, count)
-        populate_group(table, config_id, spec=g, rows=geom.rows(g.name), num_slots=num_slots, stages=stages)
+        populate_group(
+            table,
+            config_id,
+            spec=g,
+            rows=geom.rows(g.name),
+            num_slots=num_slots,
+            stages=stages,
+            extent=geom.extent(g.name),
+        )
     return serialize_prebuilt_kv_chunk_table(table=table, path=path)

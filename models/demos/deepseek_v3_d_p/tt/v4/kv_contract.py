@@ -87,10 +87,17 @@ class KvGroupSpec:
     dtype_tag: str
     width: int
     pending: bool = False  # configs 4-5: compressor partial-window state (contract gap, see module docstring)
+    # Rows ALLOCATED past the migratable extent: the entry writers write whole tiles from the tile boundary below
+    # the entry count (TtHCA's tail-tile write covers up to 96 rows for a 5120-token chunk), so the tensor needs
+    # that headroom; those rows are zero and are never migrated (extent() excludes them).
+    write_headroom: int = 0
 
     @property
     def chunk_size_bytes(self) -> int:
         return chunk_size_bytes(self.dtype_tag, self.width)
+
+    def alloc_rows(self, max_seq_len: int) -> int:
+        return self.extent(max_seq_len) + self.write_headroom
 
     def extent(self, max_seq_len: int) -> int:
         s = int(max_seq_len)
@@ -117,9 +124,9 @@ def build_contract(window_dtype_tag: str | None = None) -> tuple[KvGroupSpec, ..
     wd = window_dtype_tag or window_cache_dtype_tag()
     return (
         KvGroupSpec("swa_window", "sliding_attention", wd, HEAD_DIM),
-        KvGroupSpec("hca_unified", "heavily_compressed_attention", wd, HEAD_DIM),
-        KvGroupSpec("csa_unified", "compressed_sparse_attention", "bf16_rm", HEAD_DIM),
-        KvGroupSpec("csa_index_k", "compressed_sparse_attention", "bfp8_tile", INDEX_HEAD_DIM),
+        KvGroupSpec("hca_unified", "heavily_compressed_attention", wd, HEAD_DIM, write_headroom=96),
+        KvGroupSpec("csa_unified", "compressed_sparse_attention", "bf16_rm", HEAD_DIM, write_headroom=TILE),
+        KvGroupSpec("csa_index_k", "compressed_sparse_attention", "bfp8_tile", INDEX_HEAD_DIM, write_headroom=TILE),
         KvGroupSpec("csa_pending", "compressed_sparse_attention", "bf16_rm", 2 * HEAD_DIM, pending=True),
         KvGroupSpec("hca_pending", "heavily_compressed_attention", "bf16_rm", 2 * HEAD_DIM, pending=True),
     )

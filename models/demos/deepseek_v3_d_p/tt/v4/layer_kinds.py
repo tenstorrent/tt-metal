@@ -99,7 +99,7 @@ class V4FlashKvGeometry:
 
     Every group is a per-layer, per-user tensor ``[users * layers_in_group, 1, rows, width]`` holding the SAME
     rows on every chip (replicated over SP). ``rows`` is the contract extent for ``max_seq_len`` (window ring
-    128 + tile-aligned entries), so the allocation and the migratable extent coincide. ``sp_factor`` is carried
+    128 + tile-aligned entries) plus the writers' whole-tile headroom; ``extent`` is what migrates. ``sp_factor`` is carried
     only to size ``init_kvpe_cache``'s ``seq_len`` argument (it divides by the SP extent internally)."""
 
     max_seq_len: int
@@ -163,7 +163,12 @@ class V4FlashKvGeometry:
         return compressed_entries(self.max_seq_len, self.csa_rate)
 
     def rows(self, group: str) -> int:
-        """Rows allocated (= migratable extent) for ``group`` at this context length."""
+        """Rows ALLOCATED for ``group`` at this context length: the migratable extent plus the writers' whole-tile
+        headroom (``KvGroupSpec.write_headroom``)."""
+        return self._spec(group).alloc_rows(self.max_seq_len)
+
+    def extent(self, group: str) -> int:
+        """Rows MIGRATED for ``group`` (the decode side's ``per_layer_seq_len``)."""
         return self._spec(group).extent(self.max_seq_len)
 
     @staticmethod
@@ -186,7 +191,7 @@ class V4FlashKvGeometry:
                 continue
             n_layers = len(self.layers(g.name))
             if n_layers:
-                out[g.name] = (u * n_layers, 1, g.extent(self.max_seq_len), g.width)
+                out[g.name] = (u * n_layers, 1, g.alloc_rows(self.max_seq_len), g.width)
         return out
 
     def group_bytes(self, num_users: int = 1) -> dict[str, int]:

@@ -483,6 +483,9 @@ class TtHCA(_TtHCABase):
         self._shift_cache = {}
         self._take_cache = {}
         self._carry_index = {}
+        self._ring_select_cache = {}  # (r, a, E_prev % 128) -> one-hot [128, 256] selecting + rotating the ring rows
+        self._ring_merge = {}  # (r, E_prev % 128) -> one-hot [128, 256] for a final chunk shorter than a window
+        self._ring_window_index = {}  # a -> device start/end for the 256-row slab window
         self._slab_rope = None
         self._slab_index = None
         self._mask = None  # persistent additive mask; forward overwrites only the moving columns
@@ -833,7 +836,7 @@ class TtHCA(_TtHCABase):
         # Undoing V's RoPE is the same rotation with the sign of sin flipped, so cos is reused and the
         # negation is one op on device instead of another host build.
         rope = ttnn.experimental.rotary_embedding_llama(rope, cos, ttnn.neg(sin), self.trans_mat, is_decode_mode=False)
-        return ttnn.concat([nope, rope], dim=-1), next_carry
+        return ttnn.concat([nope, rope], dim=-1), next_carry, sliding_kv
 
     def _write_compressed(self, state, new_entries, n_new):
         """Append this call's entries to the cache at row ``state.entry_count``.
@@ -851,7 +854,7 @@ class TtHCA(_TtHCABase):
             f"compressed cache full: writing rows [{tile_start}, {write_end}) exceeds capacity "
             f"{state.compressed_kv.shape[2]}; allocate the state with a larger max_seq_len"
         )
-        self._write_tail_tile(state, new_entries, width, n_new)
+        return self._write_tail_tile(state, new_entries, width, n_new)
 
     def _write_tail_tile(self, state, new_entries, width, n_new):
         """fill_cache leaves update_idx out of its program but needs it tile-aligned, so this writes at the
@@ -871,6 +874,7 @@ class TtHCA(_TtHCABase):
         merged = ttnn.matmul(shift, src, memory_config=self.memory_config)
         ttnn.kv_cache.fill_cache_for_user_(state.compressed_kv, merged, 0, update_idx=f * tile)
         state.tail = ttnn.matmul(take, merged, memory_config=self.memory_config)
+        return merged, f * tile
 
     def _build_tail_tile_matrices(self, width):
         """Every one-hot pair the write can need, for one slab width. Called from alloc_state and never
@@ -975,12 +979,19 @@ class TtHCA(_TtHCABase):
         seq_len_actual: int | None = None,
         *,
         state: TtHCAState,
+        export=None,
     ):
         """One chunk: [B, 1, S_pad/sp, hidden/tp] in and out; the caller keeps the first S_real rows.
 
         ``seq_len_actual`` is the chunk's real pre-pad length. Where the chunk sits in the sequence comes
         from ``state``, which ``alloc_state`` builds and this advances in place -- a prefill of one chunk
-        passes a state too, so there is no second path through here."""
+        passes a state too, so there is no second path through here.
+
+        ``export=(cache, batch_idx)`` additionally mirrors this chunk into the engine-owned UNIFIED cache of
+        the prefill <-> decode contract (``tt/v4/kv_contract.py``): the compressed entries land at rows
+        ``128 + entry`` and, after every chunk, the last 128 real tokens' K rows land in rows ``[0, 128)`` in
+        ring order (row = token % 128). The module keeps reading its own working copies; the unified cache is
+        the migration copy. ``cache`` is TILE with the contract's dtype (bfp8), batch ``slot * L + layer``."""
         batch = hidden_states.shape[0]
         seq_pad_global = hidden_states.shape[2] * self.sp_factor
         real_len = seq_pad_global if seq_len_actual is None else seq_len_actual
@@ -988,13 +999,13 @@ class TtHCA(_TtHCABase):
         assert batch == 1, f"HCA prefill expects batch 1, got {batch}"
 
         if self.compressor is None:
-            return self._forward_sliding(hidden_states, real_len, state)
+            return self._forward_sliding(hidden_states, real_len, state, export)
         compress_rate = self.compressor.compress_rate
 
-        assert real_len >= compress_rate, (
-            f"HCA prefill needs at least one full compression window: got seq_len {real_len} < "
-            f"compress_rate {compress_rate}"
-        )
+        # A chunk shorter than one compression window adds no entries; it can only be the FINAL chunk of a prompt
+        # (the next call would trip the kv_actual % compress_rate assert below). Attention still runs over the
+        # window carry, this chunk's keys and every entry written so far.
+        short_final = real_len < compress_rate
 
         n_new = real_len // compress_rate
         total_entries = state.entry_count + n_new
@@ -1016,16 +1027,24 @@ class TtHCA(_TtHCABase):
         cos, sin = self._rope_gather(self._slab_rope, self._rope_index(self._slab_index, state.kv_actual))
         q = self._q_stem(hidden_states, cos, sin)
         sliding_kv = self._kv_stem(hidden_states, cos, sin)
-        new_entries, mask_block = self.compressor(
-            hidden_states,
-            seq_len_actual=seq_len_actual,
-            first_window_position=state.entry_count * compress_rate,
-        )
-        # Attention then reads the WHOLE cache every chunk, so its shape stays constant and the mask
-        # -infs everything past total_entries.
-        self._write_compressed(state, new_entries, n_new)
+        if short_final:
+            # no new entries: the mask's compressed columns = every existing entry visible, pad rows attend nothing
+            mask_block = self.compressor._mask_block(
+                hidden_states.shape[2], state.entry_count * compress_rate, real_len
+            )
+        else:
+            new_entries, mask_block = self.compressor(
+                hidden_states,
+                seq_len_actual=seq_len_actual,
+                first_window_position=state.entry_count * compress_rate,
+            )
+            # Attention then reads the WHOLE cache every chunk, so its shape stays constant and the mask
+            # -infs everything past total_entries.
+            merged, tile_start = self._write_compressed(state, new_entries, n_new)
+            if export is not None:
+                self._export_entries(export, merged, tile_start)
 
-        attn, next_carry = self._attention(
+        attn, next_carry, slab = self._attention(
             q,
             sliding_kv,
             state.compressed_kv,
@@ -1037,12 +1056,94 @@ class TtHCA(_TtHCABase):
             real_len=real_len,
         )
 
+        if export is not None:
+            self._export_ring(export, slab, state.sliding_carry, state.kv_actual, real_len)
         state.entry_count = total_entries
         state.kv_actual += real_len
         state.sliding_carry = next_carry
         return self._o_proj(attn)
 
-    def _forward_sliding(self, hidden_states, real_len: int, state: TtHCAState):
+    # ---- export into the unified (migration) cache ------------------------------------------------------------
+    def _export_entries(self, export, merged, tile_start: int):
+        """Mirror the tile-aligned block the working cache just received into the unified cache at row
+        ``128 + tile_start`` (rows [0, 128) are the window ring)."""
+        cache, batch_idx = export
+        row = self.sliding_window + int(tile_start)
+        assert (
+            row + merged.shape[2] <= cache.shape[2]
+        ), f"unified cache too small: writing rows [{row}, {row + merged.shape[2]}) into {cache.shape[2]} rows"
+        block = merged if merged.dtype == cache.dtype else ttnn.typecast(merged, cache.dtype)
+        ttnn.kv_cache.fill_cache_for_user_(cache, block, int(batch_idx), update_idx=row)
+
+    def _ring_select(self, r: int, a: int, k_prev: int):
+        """One-hot [128, 256]: from a slab window of 256 rows starting at slab row ``a`` (token E_prev + a), pick
+        the rows of tokens [E-128, E) (slab rows [r-128, r), E = E_prev + r) into ring order (row = token % 128;
+        only k_prev = E_prev % 128 matters). Built on first use (64 KB), then data for a matmul -- no recompiles."""
+        key = (int(r), int(a), int(k_prev))
+        m = self._ring_select_cache.get(key)
+        if m is None:
+            sw = self.sliding_window
+            S = torch.zeros(1, 1, sw, 2 * sw)
+            for i in range(r - sw, r):
+                S[0, 0, (k_prev + i) % sw, i - a] = 1.0
+            m = self._ring_select_cache[key] = self._from_torch(S)
+        return m
+
+    def _ring_merge_matrix(self, r: int, k_prev: int):
+        """One-hot [128, 256] for a final chunk shorter than a window: x = [prev carry (tokens [E_prev-128, E_prev))
+        | slab head (tokens E_prev..E_prev+127)], ring row t % 128 takes x row t - E_prev + 128 for t in
+        [E_prev + r - 128, E_prev + r). Only k_prev = E_prev % 128 matters."""
+        key = (int(r), int(k_prev))
+        m = self._ring_merge.get(key)
+        if m is None:
+            sw = self.sliding_window
+            S = torch.zeros(1, 1, sw, 2 * sw)
+            for i in range(sw):
+                t_rel = k_prev + r - sw + i  # token minus (E_prev - k_prev): only its residue mod 128 matters
+                S[0, 0, t_rel % sw, r + i] = 1.0
+            m = self._ring_merge[key] = self._from_torch(S)
+        return m
+
+    def _slab_window(self, slab, a: int):
+        """Rows [a, a + 256) of the SP-gathered slab, the start carried as a device tensor (MEASURED 2026-09-24: this
+        slice form rounds the start down to a tile and returns rows / num_devices rows, so ``a`` is a multiple of 128
+        and the slab a multiple of 256 rows)."""
+        sw = self.sliding_window
+        rows = int(slab.shape[2])
+        assert rows % (2 * sw) == 0, f"the slab ({rows} rows) must be a multiple of {2 * sw} rows for the export window"
+        pair = self._ring_window_index.get(int(a))
+        if pair is None:
+
+            def idx(vals):
+                return self._from_torch(
+                    torch.tensor(vals, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+                )
+
+            pair = self._ring_window_index[int(a)] = (idx([0, 0, a, 0]), idx([1, 1, a + 2 * sw, self.head_dim]))
+        return ttnn.slice(slab, pair[0], pair[1], slice_dim=2, num_devices=rows // (2 * sw))
+
+    def _export_ring(self, export, slab, prev_carry, kv_actual_before: int, real_len: int):
+        """Write the last 128 REAL tokens' K rows (tokens [E-128, E), E = kv_actual_before + real_len) into rows
+        [0, 128) of the unified cache in ring order (row = token % 128)."""
+        cache, batch_idx = export
+        sw = self.sliding_window
+        k_prev = int(kv_actual_before) % sw
+        if real_len >= sw:
+            rows = int(slab.shape[2])
+            a = min(((real_len - sw) // sw) * sw, rows - 2 * sw)  # 256-row window containing slab rows [r-128, r)
+            assert 0 <= a and a + 2 * sw <= rows and a <= real_len - sw and real_len <= a + 2 * sw
+            ring = ttnn.matmul(
+                self._ring_select(real_len, a, k_prev), self._slab_window(slab, a), memory_config=self.memory_config
+            )
+        else:
+            head = ttnn.slice(slab, [0, 0, 0, 0], [1, 1, sw, self.head_dim])
+            x = ttnn.concat([prev_carry, head], dim=2)  # [1, 1, 256, head_dim]
+            ring = ttnn.matmul(self._ring_merge_matrix(real_len, k_prev), x, memory_config=self.memory_config)
+        if ring.dtype != cache.dtype:
+            ring = ttnn.typecast(ring, cache.dtype)
+        ttnn.kv_cache.fill_cache_for_user_(cache, ring, int(batch_idx), update_idx=0)
+
+    def _forward_sliding(self, hidden_states, real_len: int, state: TtHCAState, export=None):
         """The sliding-window layer's chunk: stems, window attention over ``[carry | chunk | pad]`` with the
         sinks, un-rope, o-projection. No entries, no cache write."""
         assert real_len >= 1, f"empty chunk (real_len {real_len})"
@@ -1059,9 +1160,11 @@ class TtHCA(_TtHCABase):
         cos, sin = self._rope_gather(self._slab_rope, self._rope_index(self._slab_index, state.kv_actual))
         q = self._q_stem(hidden_states, cos, sin)
         sliding_kv = self._kv_stem(hidden_states, cos, sin)
-        attn, next_carry = self._attention(
+        attn, next_carry, slab = self._attention(
             q, sliding_kv, None, None, cos, sin, carry=state.sliding_carry, kv_actual=state.kv_actual, real_len=real_len
         )
+        if export is not None:
+            self._export_ring(export, slab, state.sliding_carry, state.kv_actual, real_len)
         state.kv_actual += real_len
         state.sliding_carry = next_carry
         return self._o_proj(attn)

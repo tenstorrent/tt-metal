@@ -45,6 +45,11 @@ def test_walk_linear_matches_the_round_robin_shard_model():
     # a harvested part with 7 banks wraps at 7
     addrs = list(kt.walk_linear(num_slots=1, num_layers=1, rows=32 * 9, num_banks=7, base_addr=0, chunk_size_bytes=10))
     assert [a.bank for a in addrs] == [0, 1, 2, 3, 4, 5, 6, 0, 1] and addrs[7].offset == 10
+    # headroom rows are addressed (they shift the next layer's chunks) but not emitted
+    sub = list(
+        kt.walk_linear(num_slots=1, num_layers=2, rows=96, num_banks=8, base_addr=0, chunk_size_bytes=10, extent=64)
+    )
+    assert [(a.layer, a.position, a.bank) for a in sub] == [(0, 0, 0), (0, 32, 1), (1, 0, 3), (1, 32, 4)]
 
 
 def test_first_layer_offsets_the_kind_rank_for_pp_stages():
