@@ -92,7 +92,7 @@ on:
       perf-test-names:
         description: >
           Filter by test name.
-          Fabric ubench - BW && Latency ,
+          T3K ubench - Fabric BW && Latency ,
           T3K ubench - Fabric Mux BW ,
           Fabric ubench - Mux V2 Throughput ,
           Fabric Collectives ubench - Point to Point

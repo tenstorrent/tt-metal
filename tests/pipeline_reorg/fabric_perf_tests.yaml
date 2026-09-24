@@ -20,7 +20,7 @@
 #
 # For max allowed timeout refer to .github/time_budget.yaml (scaleout -> perf).
 
-- name: Fabric ubench - BW && Latency
+- name: T3K ubench - Fabric BW && Latency
   # TT_METAL_DEVICE_PROFILER=0 overrides the job-level profiler env: the BW
   # golden is calibrated to real (uninstrumented) fabric bandwidth, but the
   # container enables the device profiler, which JIT-compiles kernels with
@@ -28,13 +28,9 @@
   # multicast/ring/mesh: 11-18% low) -> systematic golden-comparison failures.
   # BW is measured from the fabric router's own always-on telemetry, not Tracy,
   # so disabling the profiler yields the clean measurement the golden expects.
-  #
-  # Both SKUs are 4-device: the ubench config needs at least a 2x2 mesh.
   cmd: TT_METAL_CLEAR_L1=1 TT_METAL_DEVICE_PROFILER=0 ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_ubench_at_least_2x2_mesh.yaml
   skus:
     wh_llmbox_perf:
-      timeout: 45
-    bh_quietbox_2:
       timeout: 45
   team: scaleout
   budget_type: perf
