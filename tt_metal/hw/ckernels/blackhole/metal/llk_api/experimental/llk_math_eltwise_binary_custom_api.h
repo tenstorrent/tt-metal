@@ -82,6 +82,7 @@ inline void llk_math_eltwise_binary_mul_bcast_cols_init_custom(
  * @param ct_dim: Number of column tiles written, into dest range [dst_index, dst_index + ct_dim).
  * @note Run @ref llk_math_eltwise_binary_mul_bcast_cols_init_custom first.
  */
+template <MathFidelity math_fidelity = MathFidelity::LoFi>
 inline void llk_math_eltwise_binary_mul_bcast_cols_custom(
     const std::uint32_t dst_index, const std::uint32_t ct_dim = 1) {
     SAN_HOOK(unsupported());
@@ -90,6 +91,6 @@ inline void llk_math_eltwise_binary_mul_bcast_cols_custom(
         "dst range out of bounds");
 
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
-    _llk_math_bcast_cols_reuse_custom_<EltwiseBinaryType::ELWMUL>(ct_dim);
+    _llk_math_bcast_cols_reuse_custom_<EltwiseBinaryType::ELWMUL, math_fidelity>(ct_dim);
     math::clear_dst_reg_addr();
 }
