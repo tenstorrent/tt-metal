@@ -514,3 +514,47 @@ def test_distributed_rmsnorm_2d_core_grid(mesh_device, batch_size, seq_len, hidd
         f"max_abs_diff={max_abs_diff:.6e} | "
         f"max_rel_diff={max_rel_diff:.6e}"
     )
+
+
+# Regression test for bounty #56908. The 2D-core-grid path corrupted output when a core owns more than one
+# row-tile (tiles_per_core_x > 1): the per-core tile/stats offsets omitted the tiles_per_core_x factor, and the
+# reader/writer walked rows contiguously instead of striding by the full row width. The existing 2D test above
+# uses seq_len=128 (tiles_per_core_x == 1), where the bug is inert. seq_len=1024 -> 32 row-tiles ->
+# tiles_per_core_x > 1 on the 2D grid, which exercises the row-stride path this fix corrects.
+@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("seq_len", [1024])
+@pytest.mark.parametrize("hidden_dim", [2048])
+@pytest.mark.parametrize("eps", [1e-5])
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+    ],
+    indirect=True,
+)
+def test_distributed_rmsnorm_2d_core_grid_multi_row(mesh_device, batch_size, seq_len, hidden_dim, eps):
+    """Regression for #56908: 2D-core-grid RMS norm with tiles_per_core_x > 1 (seq_len=1024 -> 32 row-tiles)."""
+    passes, max_abs_diff, max_rel_diff, mean_rel_diff = run_distributed_norm_test(
+        mesh_device=mesh_device,
+        batch_size=batch_size,
+        seq_len=seq_len,
+        hidden_dim=hidden_dim,
+        eps=eps,
+        norm_type="rms_norm",
+        input_dtype=ttnn.bfloat16,
+        mean=0,
+        var=1,
+        outlier_pct=0,
+        outlier_var=0,
+        use_legacy=False,
+        use_high_precision=True,
+        verbose=False,
+        use_welford=False,  # RMS norm does not support Welford
+        use_2d_core_grid=True,
+    )
+
+    assert passes, (
+        f"#56908: 2D-core-grid RMS norm corrupted output for tiles_per_core_x > 1 | "
+        f"max_abs_diff={max_abs_diff:.6e} | max_rel_diff={max_rel_diff:.6e}"
+    )

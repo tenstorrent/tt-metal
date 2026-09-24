@@ -144,9 +144,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
 
     const uint32_t double_buffer_constant = 2;
     const uint32_t in0_tiles = Wt * double_buffer_constant;
-    const uint32_t in1_tiles = 1;  // reduce scalar
-    const uint32_t res_tiles = Wt * double_buffer_constant;    // residual b
-    const uint32_t fused_tiles = Wt;                           // a + b
+    const uint32_t in1_tiles = 1;                            // reduce scalar
+    const uint32_t res_tiles = Wt * double_buffer_constant;  // residual b
+    const uint32_t fused_tiles = Wt;                         // a + b
 
     // The x^2 buffer is sized per ROW, so a wide fp32_dest_acc_en row is what pushes this program
     // past L1 (#54697). Keep the double buffer wherever it fits -- the packer and the unpacker are
@@ -262,8 +262,11 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
     if (fuse_pre_add) {
-        reader.dfb_bindings.push_back(m2::DFBBinding{
-            .dfb_spec_name = PRE1D_RESIDUAL, .accessor_name = "res", .endpoint_type = m2::DFBEndpointType::PRODUCER});
+        reader.dfb_bindings.push_back(
+            m2::DFBBinding{
+                .dfb_spec_name = PRE1D_RESIDUAL,
+                .accessor_name = "res",
+                .endpoint_type = m2::DFBEndpointType::PRODUCER});
         reader.tensor_bindings.push_back(
             m2::TensorBinding{.tensor_parameter_name = PRE1D_RESIDUAL_T, .accessor_name = "res_src"});
     }
@@ -297,8 +300,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
                 m2::DFBBinding{
                     .dfb_spec_name = PRE1D_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::PRODUCER},
             },
-        .compile_time_args =
-            {{"Wt", Wt}, {"blk", block_size}, {"unpack_fp32_active", unpack_fp32_active ? 1u : 0u}},
+        .compile_time_args = {{"Wt", Wt}, {"blk", block_size}, {"unpack_fp32_active", unpack_fp32_active ? 1u : 0u}},
         .runtime_arg_schema = {.runtime_arg_names = {"NCHt"}},
         .hw_config = compute_hw,
     };
@@ -307,8 +309,11 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
     bind_self_loop(compute, PRE1D_X2, "x2");
     if (fuse_pre_add) {
         bind_self_loop(compute, PRE1D_FUSED, "fused");
-        compute.dfb_bindings.push_back(m2::DFBBinding{
-            .dfb_spec_name = PRE1D_RESIDUAL, .accessor_name = "res", .endpoint_type = m2::DFBEndpointType::CONSUMER});
+        compute.dfb_bindings.push_back(
+            m2::DFBBinding{
+                .dfb_spec_name = PRE1D_RESIDUAL,
+                .accessor_name = "res",
+                .endpoint_type = m2::DFBEndpointType::CONSUMER});
     }
     auto& compute_gen1 = gen1_compute_config(std::get<m2::ComputeHardwareConfig>(compute.hw_config));
     // With the 32-bit Dest register enabled, every Float32 buffer the compute kernel consumes needs an
@@ -464,9 +469,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
 
     const uint32_t double_buffer_constant = 2;
     const uint32_t in0_tiles = Wt * double_buffer_constant;
-    const uint32_t in1_tiles = 1;  // reduce scalar
-    const uint32_t res_tiles = Wt * double_buffer_constant;    // residual b
-    const uint32_t fused_tiles = Wt;                           // a + b
+    const uint32_t in1_tiles = 1;                            // reduce scalar
+    const uint32_t res_tiles = Wt * double_buffer_constant;  // residual b
+    const uint32_t fused_tiles = Wt;                         // a + b
 
     const uint32_t intermed0_tiles = Wt * double_buffer_constant;  // x^2
     uint32_t out0_tiles = 1;
@@ -589,12 +594,22 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
         .compile_time_args = {{"blk", block_size}, {"num_cores_to_wait", cores_y}},
         .runtime_arg_schema =
             {.runtime_arg_names =
-                 {"NCHt", "Wt", "tile_offset", "is_merge_core", "reduce_core_noc_x", "reduce_core_noc_y", "y"}},
+                 {"NCHt",
+                  "Wt",
+                  "tile_offset",
+                  "is_merge_core",
+                  "reduce_core_noc_x",
+                  "reduce_core_noc_y",
+                  "y",
+                  "Wt_full"}},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
     if (fuse_pre_add) {
-        reader.dfb_bindings.push_back(m2::DFBBinding{
-            .dfb_spec_name = PRE2D_RESIDUAL, .accessor_name = "res", .endpoint_type = m2::DFBEndpointType::PRODUCER});
+        reader.dfb_bindings.push_back(
+            m2::DFBBinding{
+                .dfb_spec_name = PRE2D_RESIDUAL,
+                .accessor_name = "res",
+                .endpoint_type = m2::DFBEndpointType::PRODUCER});
         reader.tensor_bindings.push_back(
             m2::TensorBinding{.tensor_parameter_name = PRE2D_RESIDUAL_T, .accessor_name = "res_src"});
     }
@@ -657,16 +672,18 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
         bind_self_loop(compute, PRE2D_X2, "x2");
         if (fuse_pre_add) {
             bind_self_loop(compute, PRE2D_FUSED, "fused");
-            compute.dfb_bindings.push_back(m2::DFBBinding{
-                .dfb_spec_name = PRE2D_RESIDUAL,
-                .accessor_name = "res",
-                .endpoint_type = m2::DFBEndpointType::CONSUMER});
+            compute.dfb_bindings.push_back(
+                m2::DFBBinding{
+                    .dfb_spec_name = PRE2D_RESIDUAL,
+                    .accessor_name = "res",
+                    .endpoint_type = m2::DFBEndpointType::CONSUMER});
         }
         if (is_merge_core) {
-            compute.dfb_bindings.push_back(m2::DFBBinding{
-                .dfb_spec_name = PRE2D_OUT_FINAL,
-                .accessor_name = "out_final",
-                .endpoint_type = m2::DFBEndpointType::PRODUCER});
+            compute.dfb_bindings.push_back(
+                m2::DFBBinding{
+                    .dfb_spec_name = PRE2D_OUT_FINAL,
+                    .accessor_name = "out_final",
+                    .endpoint_type = m2::DFBEndpointType::PRODUCER});
         }
         auto& compute_gen1 = gen1_compute_config(std::get<m2::ComputeHardwareConfig>(compute.hw_config));
         // Float32 operands use UnpackToDest on the accurate SFPU path and SrcA/SrcB on the FPU path.
@@ -735,7 +752,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
 
             uint32_t num_tile_rows_per_core = tiles_per_core_x;
 
-            uint32_t in_tile_offset = (x * Wt) + (y * tiles_per_core_y);
+            // Core (x,y) owns tiles_per_core_x rows starting at global row x*tiles_per_core_x, so the
+            // top-left tile is (x*tiles_per_core_x)*Wt + y*tiles_per_core_y. The old x*Wt was only correct
+            // when tiles_per_core_x == 1 (bounty #56908).
+            uint32_t in_tile_offset = (x * tiles_per_core_x * Wt) + (y * tiles_per_core_y);
             uint32_t out_tile_offset = x * out0_tiles;
 
             m2::AddRuntimeArgsForNode(
@@ -747,7 +767,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
                  {"is_merge_core", static_cast<uint32_t>(is_merge_core)},
                  {"reduce_core_noc_x", static_cast<uint32_t>(merge_core.x)},
                  {"reduce_core_noc_y", static_cast<uint32_t>(merge_core.y)},
-                 {"y", y}});
+                 {"y", y},
+                 {"Wt_full", Wt}});
             if (is_merge_core) {
                 m2::AddRuntimeArgsForNode(
                     writer_run.runtime_arg_values,
@@ -761,11 +782,15 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
     //                      Assemble
     ////////////////////////////////////////////////////////////////////////////
     m2::Group<m2::WorkUnitSpec> work_units;
-    work_units.push_back(m2::WorkUnitSpec{
-        .name = "merge", .kernels = {PRE2D_READER, PRE2D_WRITER, PRE2D_COMPUTE_MERGE}, .target_nodes = merge_cores});
+    work_units.push_back(
+        m2::WorkUnitSpec{
+            .name = "merge",
+            .kernels = {PRE2D_READER, PRE2D_WRITER, PRE2D_COMPUTE_MERGE},
+            .target_nodes = merge_cores});
     if (has_worker_cores) {
-        work_units.push_back(m2::WorkUnitSpec{
-            .name = "worker", .kernels = {PRE2D_READER, PRE2D_COMPUTE_WORKER}, .target_nodes = worker_cores});
+        work_units.push_back(
+            m2::WorkUnitSpec{
+                .name = "worker", .kernels = {PRE2D_READER, PRE2D_COMPUTE_WORKER}, .target_nodes = worker_cores});
     }
 
     m2::ProgramSpec spec{
