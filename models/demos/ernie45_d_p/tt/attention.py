@@ -121,7 +121,7 @@ class TtAttention:
             exp_approx_mode=False,
         )
 
-    def __call__(self, x, start: int, cache: TtKVCache, debug: dict | None = None):
+    def __call__(self, x, start: int, cache: TtKVCache, debug: dict | None = None, contract_kv=None):
         """x: [1,1,S,H] replicated (already normed). Returns [1,1,S,H] replicated (all-reduced)."""
         seq = x.shape[-2]
         qkv = ttnn.linear(x, self.wqkv, compute_kernel_config=COMPUTE_HIFI2)
@@ -138,6 +138,8 @@ class TtAttention:
         if debug is not None:
             debug.update(q=q, k=k, v=v)
 
+        if contract_kv is not None:  # prefill-server contract layout (bf8, DRAM round-robin), see tt/kv_contract.py
+            contract_kv.write(self.layer, k, v, start)
         pt = cache.chunk_page_table(start, seq)
         ttnn.experimental.paged_fill_cache(
             cache.k[self.layer], ttnn.typecast(k, cache.dtype) if cache.dtype != k.dtype else k, pt, batch_idx=0
