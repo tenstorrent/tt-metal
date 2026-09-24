@@ -197,13 +197,28 @@ def default_ccl_topology(mesh_device=None, is_moe: bool = True):
     return ttnn.Topology.Linear
 
 
-def ccl_async_enabled() -> bool:
-    """True when prefill/decode allreduce should use async RS+AG.
+# Row count from which the tuned-prefill target auto-selects async RS+AG. Only
+# the Ring variant beats the sync all-reduce the model otherwise runs, and it
+# reduces in a different order, so it is not bit-identical to it. Async Linear
+# is bit-identical but slower, so a Linear manager (31B's pinned >=128k path)
+# stays on the sync op.
+_CCL_ASYNC_MIN_HEIGHT = 2048
 
-    Default off until measured green on the target board; enable with
-    ``GEMMA4_CCL_ASYNC=1``.
+
+def ccl_async_enabled(padded_height: int | None = None, tuned_prefill: bool = False) -> bool:
+    """True when the TP all-reduce should use async RS+AG.
+
+    ``GEMMA4_CCL_ASYNC=1/0`` forces it on/off at every height. When unset it is
+    off, except on the tuned-prefill target (``CCLManager.tuned_prefill``) on a
+    Ring, for activations of ``_CCL_ASYNC_MIN_HEIGHT`` rows and up; opt out with
+    ``GEMMA4_CCL_ASYNC_PREFILL=0``. Decode and short prefill stay sync.
     """
-    return os.environ.get("GEMMA4_CCL_ASYNC", "0").lower() in ("1", "true", "yes")
+    env = os.environ.get("GEMMA4_CCL_ASYNC")
+    if env is not None:
+        return env.lower() in ("1", "true", "yes")
+    if tuned_prefill and padded_height is not None and int(padded_height) >= _CCL_ASYNC_MIN_HEIGHT:
+        return os.environ.get("GEMMA4_CCL_ASYNC_PREFILL", "1").lower() not in ("0", "false", "no")
+    return False
 
 
 class CCLManager:
@@ -215,7 +230,15 @@ class CCLManager:
     so repeated collectives of the same activation shape skip realloc+barrier.
     """
 
-    def __init__(self, mesh_device, num_links=None, topology=None, is_moe: bool = True, tuned_decode: bool = False):
+    def __init__(
+        self,
+        mesh_device,
+        num_links=None,
+        topology=None,
+        is_moe: bool = True,
+        tuned_decode: bool = False,
+        tuned_prefill: bool = False,
+    ):
         if num_links is None:
             num_links = default_num_links()
         if topology is None:
@@ -228,6 +251,9 @@ class CCLManager:
         # reduce_scatter + all_gather pair below. False everywhere else, which
         # keeps the fused ``ttnn.all_reduce`` every other SKU runs today.
         self.tuned_decode = bool(tuned_decode)
+        # Same target, prefill side: tall all-reduces take async RS+AG (see
+        # ``ccl_async_enabled``). False everywhere else.
+        self.tuned_prefill = bool(tuned_prefill)
         self.num_devices = mesh_device.get_num_devices()
         topo_name = "Ring" if topology == ttnn.Topology.Ring else "Linear"
         logger.info(
@@ -389,7 +415,8 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
     chunks = ccl_chunks_per_sync()
     workers = ccl_num_workers_per_link()
     nbuf = ccl_num_buffers_per_channel()
-    if ccl_async_enabled():
+    tuned_prefill = ccl_manager.tuned_prefill and topology == ttnn.Topology.Ring
+    if ccl_async_enabled(activation_physical_height(tensor.shape), tuned_prefill):
         tp = mesh_config.tp
         rs_bufs = ccl_manager.get_persistent_rs_buffers(tensor, memory_config, tp)
         scattered = ttnn.experimental.reduce_scatter_minimal_async(

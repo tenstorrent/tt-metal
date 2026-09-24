@@ -25,7 +25,7 @@ from models.common.weight_cache import (
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tt.assistant.model import Gemma4AssistantModel
 from models.demos.gemma4.tt.ccl import LINEAR_PIN_MIN_SEQ_LEN, CCLManager, effective_pinned_ccl_topology
-from models.demos.gemma4.tt.dram_sharded import decode_tuning_enabled
+from models.demos.gemma4.tt.dram_sharded import decode_tuning_enabled, is_t3k_dense_target
 from models.demos.gemma4.tt.generator_trace import normalize_gemma4_model_key
 from models.demos.gemma4.tt.model import Gemma4Model
 from models.demos.gemma4.tt.model_config import Gemma4AssistantArgs, Gemma4ModelArgs
@@ -148,6 +148,7 @@ def create_tt_model(
             ),
             is_moe=_is_moe,
             tuned_decode=decode_tuning_enabled(mesh_device, model_args),
+            tuned_prefill=is_t3k_dense_target(mesh_device, model_args),
         )
     else:
         ccl_manager = None

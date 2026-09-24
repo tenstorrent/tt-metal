@@ -169,9 +169,19 @@ def test_ccl_topology_env_override_beats_device_count(monkeypatch):
 
 def test_ccl_async_env(monkeypatch):
     monkeypatch.delenv("GEMMA4_CCL_ASYNC", raising=False)
+    monkeypatch.delenv("GEMMA4_CCL_ASYNC_PREFILL", raising=False)
     assert ccl_async_enabled() is False
+    # Auto-enable is limited to tall activations on the tuned-prefill target.
+    assert ccl_async_enabled(2048) is False
+    assert ccl_async_enabled(2016, tuned_prefill=True) is False
+    assert ccl_async_enabled(2048, tuned_prefill=True) is True
+    monkeypatch.setenv("GEMMA4_CCL_ASYNC_PREFILL", "0")
+    assert ccl_async_enabled(2048, tuned_prefill=True) is False
+    monkeypatch.delenv("GEMMA4_CCL_ASYNC_PREFILL", raising=False)
     monkeypatch.setenv("GEMMA4_CCL_ASYNC", "1")
     assert ccl_async_enabled() is True
+    monkeypatch.setenv("GEMMA4_CCL_ASYNC", "0")
+    assert ccl_async_enabled(2048, tuned_prefill=True) is False
 
 
 def test_default_ccl_packet_bytes_only_on_a_wormhole_t3k(monkeypatch):
