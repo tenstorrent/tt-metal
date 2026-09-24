@@ -237,50 +237,43 @@ void kernel_main() {
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(6);
     constexpr uint32_t q_local_padded_Nt = get_compile_time_arg_val(7);
     constexpr uint32_t kv_local_padded_Nt = get_compile_time_arg_val(8);
-    constexpr uint32_t padded_Nt = get_compile_time_arg_val(9);
-    // Slot 10: reader-unused (writer/compute consume it for constexpr mask-CB sizing).
-    constexpr uint32_t logical_n [[maybe_unused]] = get_compile_time_arg_val(10);
-    // Slot 11 is retained for compile-time arg index stability; live logical_nt is a runtime arg below.
-    constexpr uint32_t logical_nt_compile [[maybe_unused]] = get_compile_time_arg_val(11);
-    constexpr uint32_t Lt = get_compile_time_arg_val(12);
-    constexpr uint32_t L = get_compile_time_arg_val(13);
-    constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(14);
-    constexpr uint32_t num_joint_q_chunks = get_compile_time_arg_val(15);
-    constexpr uint32_t num_local_k_chunks = get_compile_time_arg_val(16);
-    constexpr uint32_t num_joint_k_chunks = get_compile_time_arg_val(17);
-    constexpr uint32_t num_q_chunks = get_compile_time_arg_val(18);
-    constexpr uint32_t ring_size = get_compile_time_arg_val(19);
-    constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(20);
-    constexpr uint32_t is_causal = get_compile_time_arg_val(21);
-    constexpr uint32_t is_balanced = get_compile_time_arg_val(22);
-    constexpr bool use_zigzag_balancing = get_compile_time_arg_val(23) == 1;
-    // Reader's slot-24 carries chunked_enabled.
-    constexpr bool chunked_enabled = get_compile_time_arg_val(24) == 1;
-    constexpr uint32_t num_q_readers = get_compile_time_arg_val(25);
-    constexpr uint32_t chunk_size_t = get_compile_time_arg_val(26);
-    constexpr bool indexed_kv_cache = get_compile_time_arg_val(27) == 1;
-    constexpr bool kv_pad_rotation_enabled = get_compile_time_arg_val(28) == 1;
-    // Slot 29 is retained for compile-time arg index stability; live active-ring mask is a runtime arg below.
-    constexpr uint32_t active_ring_iter_mask_compile [[maybe_unused]] = get_compile_time_arg_val(29);
-    constexpr uint32_t NHV = get_compile_time_arg_val(30);
+    constexpr uint32_t Lt = get_compile_time_arg_val(9);
+    constexpr uint32_t L = get_compile_time_arg_val(10);
+    constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(11);
+    constexpr uint32_t num_joint_q_chunks = get_compile_time_arg_val(12);
+    constexpr uint32_t num_local_k_chunks = get_compile_time_arg_val(13);
+    constexpr uint32_t num_joint_k_chunks = get_compile_time_arg_val(14);
+    constexpr uint32_t num_q_chunks = get_compile_time_arg_val(15);
+    constexpr uint32_t ring_size = get_compile_time_arg_val(16);
+    constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(17);
+    constexpr uint32_t is_causal = get_compile_time_arg_val(18);
+    constexpr uint32_t is_balanced = get_compile_time_arg_val(19);
+    constexpr bool use_zigzag_balancing = get_compile_time_arg_val(20) == 1;
+    // Reader's slot-21 carries chunked_enabled.
+    constexpr bool chunked_enabled = get_compile_time_arg_val(21) == 1;
+    constexpr uint32_t num_q_readers = get_compile_time_arg_val(22);
+    constexpr uint32_t chunk_size_t = get_compile_time_arg_val(23);
+    constexpr bool indexed_kv_cache = get_compile_time_arg_val(24) == 1;
+    constexpr bool kv_pad_rotation_enabled = get_compile_time_arg_val(25) == 1;
+    constexpr uint32_t NHV = get_compile_time_arg_val(26);
     // Latent-V mode: absent V is materialized from the prefix of K tiles already in L1.
-    constexpr bool v_shares_k_buffer = get_compile_time_arg_val(31) == 1;
-    constexpr bool use_attention_sink = get_compile_time_arg_val(32) == 1;
-    constexpr uint32_t sliding_window_size = get_compile_time_arg_val(33);
+    constexpr bool v_shares_k_buffer = get_compile_time_arg_val(27) == 1;
+    constexpr bool use_attention_sink = get_compile_time_arg_val(28) == 1;
+    constexpr uint32_t sliding_window_size = get_compile_time_arg_val(29);
     constexpr bool has_sliding_window = sliding_window_size > 0;
     constexpr bool enable_kv_chains = !has_sliding_window;
-    constexpr uint32_t gathered_padded_Nt = get_compile_time_arg_val(34);
-    // Slots 35/36 are trace-safe metadata controls. Attention-sink and sliding-window
-    // fields occupy 32..34 in this branch.
-    // Slot 35: trace-safe slot select. When set, kv_cache_batch_idx is read from the slot_id tensor[0]
+    constexpr uint32_t gathered_padded_Nt = get_compile_time_arg_val(30);
+    // Slots 31/32 are trace-safe metadata controls. Attention-sink and sliding-window
+    // fields occupy 28..30 in this branch.
+    // Slot 31: trace-safe slot select. When set, kv_cache_batch_idx is read from the slot_id tensor[0]
     // on-device (common runtime arg 0 = slot_id DRAM addr) instead of the per-core runtime arg, so a
     // captured trace replays across cache slots.
-    constexpr bool slot_from_metadata = get_compile_time_arg_val(35) == 1;
-    // Slot 36: trace-safe KV-pad derivation. When set, the reader reads kv_actual_isl from the
+    constexpr bool slot_from_metadata = get_compile_time_arg_val(31) == 1;
+    // Slot 32: trace-safe KV-pad derivation. When set, the reader reads kv_actual_isl from the
     // kv_actual_isl tensor[0] (common runtime arg 4 = its DRAM addr), derives logical_nt / q-mapping /
     // ring masks on-device, and hands the compute-needed values to the compute kernel via
     // cb_kv_pad_derived (compute cannot NoC-read the DRAM tensor).
-    constexpr bool kv_pad_from_metadata = get_compile_time_arg_val(36) == 1;
+    constexpr bool kv_pad_from_metadata = get_compile_time_arg_val(32) == 1;
     constexpr bool gqa_grouped_kv = ring_joint::is_gqa_grouped_kv_head_mode(v_shares_k_buffer, NH, NHK, NHV);
     constexpr bool k_uses_batch_chain = ring_joint::uses_shared_k_batch_chain(gqa_grouped_kv, NHK);
     constexpr bool use_head_chain = enable_kv_chains && !gqa_grouped_kv;
@@ -288,26 +281,26 @@ void kernel_main() {
     // reader never materializes V. Shared with the program factory and compute kernel.
     constexpr bool kt_inplace_v = kt_inplace_v_enabled(v_shares_k_buffer, Sq_chunk_t);
     constexpr uint32_t q_heads_per_v = NH / NHV;
-    // Slots 37-39: sharded-joint scalars appended by the factory after upstream's attention-sink /
-    // sliding-window / metadata fields (slots 32-36 above).
+    // Slots 33-35: sharded-joint scalars appended by the factory after upstream's attention-sink /
+    // sliding-window / metadata fields (slots 28-32 above).
     // Lt_local: per-device joint-Q tile count (Lt/ring_size on sharded path, Lt on replicated).
-    constexpr uint32_t Lt_local = get_compile_time_arg_val(37);
-    constexpr bool joint_is_sharded = get_compile_time_arg_val(38) == 1;
-    // Slot 39: true (unpadded) joint length in tiles (twins spatial logical_nt). Joint K chunks whose
+    constexpr uint32_t Lt_local = get_compile_time_arg_val(33);
+    constexpr bool joint_is_sharded = get_compile_time_arg_val(34) == 1;
+    // Slot 35: true (unpadded) joint length in tiles (twins spatial logical_nt). Joint K chunks whose
     // global start tile is at/after logical_lt are pure padding and are skipped.
-    constexpr uint32_t logical_lt_compile = get_compile_time_arg_val(39);
-    // Slots 40-43: transport-to-tensor rank mapping.
-    constexpr bool full_mesh_rank_mapping = get_compile_time_arg_val(40) == 1;
-    constexpr auto snake_orientation = static_cast<ttnn::ccl::snake_ring::Orientation>(get_compile_time_arg_val(41));
-    constexpr uint32_t mesh_rows = get_compile_time_arg_val(42);
-    constexpr uint32_t mesh_cols = get_compile_time_arg_val(43);
-    // Slot 44: circular sliding KV slab count (0 = unbounded). Wraps the sliding work plan's
+    constexpr uint32_t logical_lt_compile = get_compile_time_arg_val(35);
+    // Slots 36-39: transport-to-tensor rank mapping.
+    constexpr bool full_mesh_rank_mapping = get_compile_time_arg_val(36) == 1;
+    constexpr auto snake_orientation = static_cast<ttnn::ccl::snake_ring::Orientation>(get_compile_time_arg_val(37));
+    constexpr uint32_t mesh_rows = get_compile_time_arg_val(38);
+    constexpr uint32_t mesh_cols = get_compile_time_arg_val(39);
+    // Slot 40: circular sliding KV slab count (0 = unbounded). Wraps the sliding work plan's
     // local slab addressing (sliding_window_work_plan.hpp) — must match host halo layout and compute.
-    constexpr uint32_t circular_kv_slab_count = get_compile_time_arg_val(44);
-    // Slots 45-46: read live logical_n / logical_l from device tensors (common runtime args below), then
+    constexpr uint32_t circular_kv_slab_count = get_compile_time_arg_val(40);
+    // Slots 41-42: read live logical_n / logical_l from device tensors (common runtime args below), then
     // re-derive logical_nt / logical_lt / the ring masks from them.
-    constexpr bool has_logical_n_tensor = get_compile_time_arg_val(45) == 1;
-    constexpr bool has_logical_l_tensor = get_compile_time_arg_val(46) == 1;
+    constexpr bool has_logical_n_tensor = get_compile_time_arg_val(41) == 1;
+    constexpr bool has_logical_l_tensor = get_compile_time_arg_val(42) == 1;
     constexpr bool has_logical_length_tensor = has_logical_n_tensor || has_logical_l_tensor;
     // Live joint tail in tiles; equals the compile-time value unless logical_l arrives as a tensor.
     uint32_t logical_lt = logical_lt_compile;
@@ -320,10 +313,10 @@ void kernel_main() {
     // Sharded joint requires the gathered joint K/V buffers (only meaningful when joint K is present).
     constexpr bool has_gathered_joint_k = joint_is_sharded && has_joint_k;
 
-    // Slots 37-39 are the sharded-joint scalars (Lt_local, joint_is_sharded, logical_lt), 40-43 the rank
-    // mapping, slot 44 the bounded sliding KV slab count, and 45-46 the logical-length transport flags, so
-    // the tensor accessors start at slot 47.
-    constexpr uint32_t kFirstAccessorArgOffset = 47;
+    // Slots 33-35 are the sharded-joint scalars (Lt_local, joint_is_sharded, logical_lt), 36-39 the rank
+    // mapping, slot 40 the bounded sliding KV slab count, and 41-42 the logical-length transport flags, so
+    // the tensor accessors start at slot 43.
+    constexpr uint32_t kFirstAccessorArgOffset = 43;
     constexpr auto q_args = TensorAccessorArgs<kFirstAccessorArgOffset>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
