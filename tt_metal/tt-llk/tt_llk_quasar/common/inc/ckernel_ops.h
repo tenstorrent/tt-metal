@@ -4,8 +4,14 @@
 
 #pragma once
 
+#if __riscv_xtttensixqsr || __clang__
 #define TTI_INSN(ENCODING)    void(({ __asm__ __volatile__(".ttinsn %0" : : "n"((ENCODING))); }))
 #define TT_INSN(ENCODING)     void(::ckernel::instrn_buffer[0] = (ENCODING))
+#else
+#define TTI_INSN(ENCODING) void((void(ENCODING), ({ __asm__ __volatile__(".error \"TTI_INSN in non-tensix code\""); })))
+#define TT_INSN(ENCODING)  void((void(ENCODING), ({ __asm__ __volatile__(".error \"TT_INSN in non-tensix code\""); })))
+#endif
+
 #define TT_OP(opcode, params) ((opcode << 24) + params)
 
 #define TT_OP_ADDGPR(OpB_is_Const, Result_GPR_Index, OpB_GPR_Index, OpA_GPR_Index) \
