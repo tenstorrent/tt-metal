@@ -372,10 +372,9 @@ TEST(QuasarAttAddressAether, WorkerMulticastSpansTheRow) {
     static_assert(mcast.end_node_xy == 0x41);
 }
 
-
 // ---------------------------------------------------------------------------
-// Operand diagnostics (the inverse of encode): what a complete operand
-// reaches, as the watcher's NoC sanitizer and its host report classify it.
+// Decoding an operand back to the core it reaches, the way the watcher's
+// NoC sanitizer and its host report do.
 // ---------------------------------------------------------------------------
 
 using noc_att::classify_operand;
@@ -393,7 +392,8 @@ TEST(QuasarAttOperandQsr1, WorkerOperandsClassifyToTheirEndpointRow) {
     constexpr auto corner = classify_operand(QSR1, *Address::worker(9, 5, 0).encode<QSR1>());
     static_assert(corner.kind == Kind::Worker && corner.selector == 31 && corner.endpoint_word == 0x1cb);
     // A worker-window selector past the 32 programmed rows reaches nothing.
-    constexpr auto unlisted = classify_operand(QSR1, noc_att::map_window(QSR1, WindowClass::Worker).make_address(33, 0));
+    constexpr auto unlisted =
+        classify_operand(QSR1, noc_att::map_window(QSR1, WindowClass::Worker).make_address(33, 0));
     static_assert(unlisted.kind == Kind::Invalid);
     static_assert(unlisted.window == WindowClass::Worker && unlisted.selector == 33);
 }
@@ -463,8 +463,7 @@ TEST(QuasarAttOperandAether, LocalWindowIsSelfOnlyAtSelectorZero) {
 }
 
 TEST(QuasarAttOperand, MulticastDescriptorRoundTrips) {
-    constexpr auto rect =
-        noc_att::decode_multicast_descriptor(noc_att::make_multicast_descriptor(0, 1, 1, 1, 0x80));
+    constexpr auto rect = noc_att::decode_multicast_descriptor(noc_att::make_multicast_descriptor(0, 1, 1, 1, 0x80));
     static_assert(rect.valid);
     static_assert(rect.start_x == 0 && rect.start_y == 1 && rect.end_x == 1 && rect.end_y == 1);
     static_assert(rect.local_address == 0x80);

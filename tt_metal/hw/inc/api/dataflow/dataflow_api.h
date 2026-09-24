@@ -2128,8 +2128,6 @@ FORCE_INLINE void noc_inline_mcast_dw_write(
     uint32_t customized_src_addr = 0,
     uint32_t num_dest = 1) {
     WAYPOINT("NWIW");
-    // The destination is a multicast rectangle: check it as one (the unicast check would read the
-    // rectangle's end corner as a unicast coordinate, and under the ATT it matches nothing at all).
     DEBUG_SANITIZE_NOC_MULTI_ADDR(noc, addr, 4);
     DEBUG_SANITIZE_NO_DRAM_ADDR(noc, addr, 4);
 #if defined(ARCH_BLACKHOLE) && defined(WATCHER_ENABLED)
