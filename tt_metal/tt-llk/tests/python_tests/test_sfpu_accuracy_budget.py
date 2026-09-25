@@ -399,6 +399,20 @@ def test_the_usable_ceiling_is_tighter_than_the_meaningful_one():
     assert usable_budget_ceiling(DataFormat.Float16_b) == 6.4
 
 
+@pytest.mark.parametrize("enrolled", [False, True], ids=["unenrolled", "enrolled"])
+def test_a_bad_query_is_refused_whether_or_not_the_op_is_enrolled(enrolled):
+    """Validation must not depend on the table's contents, or a miswired driver passes
+    until the day its op is enrolled. The op is picked from the table, not named, so
+    enrolling more ops later does not change what this checks."""
+    op = next(
+        op
+        for op in sorted(MathOperation, key=lambda op: op.name)
+        if (op in _SFPU_ACCURACY_BUDGET) == enrolled
+    )
+    with _refuses("BudgetKey.arch must be a"):
+        accuracy_contract(op, output_format=DataFormat.Float32, arch="wormhole")
+
+
 def test_arch_must_be_passed_explicitly():
     """``arch`` is the one dimension where the numbers do not transfer, so unlike the
     others it cannot be left unset and quietly resolved against the Wormhole table."""
@@ -477,6 +491,14 @@ def test_the_loader_refuses_what_it_cannot_turn_into_a_contract(tmp_path):
     # ...and the contract invariants still come from AccuracyContract itself.
     with _refuses("a ulp contract replaces the tolerance gate"):
         _table(tmp_path, "Abs:\n  - {max_ulp: 1, atol: 0.5}\n")
+
+
+@pytest.mark.parametrize("alias", ["1", "0", "1.0"])
+def test_a_numeric_alias_for_a_boolean_enum_is_refused(tmp_path, alias):
+    """``True == 1`` in Python, so a by-value lookup alone would load ``approx: 1`` as
+    ``Yes``: a typo in a key dimension would select a contract instead of failing."""
+    with _refuses("is not a ApproximationMode"):
+        _table(tmp_path, f"Abs:\n  - {{approx: {alias}, max_ulp: 1}}\n")
 
 
 def test_a_quoted_and_an_unquoted_no_mean_the_same_thing(tmp_path):
