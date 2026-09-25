@@ -83,11 +83,16 @@ def test_t2va_hyperflow_end_to_end(mesh_device, reset_seeds, expect_error):
     if not os.environ.get("TT_DIT_CACHE_DIR"):
         logger.warning("TT_DIT_CACHE_DIR is unset; every weight load reads safetensors and the run will drag")
 
+    # The 4x32 trace region (150 MB) arms audio tracing but cannot hold the vocoder's ~375 MB
+    # graph (test_audio_minimax_h3.py measured it); capture overflows mid-run and the surviving
+    # ranks deadlock in close_mesh_device. Off unless explicitly requested.
+    audio_trace = os.environ.get("MINIMAX_H3_AUDIO_TRACE", "0") == "1"
     pipeline = MiniMaxH3Pipeline.create_pipeline(
         mesh_device=mesh_device,
         weights_dir=weights,
         lora_path=lora_path,
         lora_strength=strength,
+        audio_trace=audio_trace,
     )
 
     # 1. The contract, before anything is built: this is what decides the schedule, so a run that
