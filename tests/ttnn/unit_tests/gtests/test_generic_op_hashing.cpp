@@ -30,11 +30,13 @@
 #include <cstdint>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/blaze/named_kernel_args.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt_stl/reflection.hpp>
 
 namespace ttnn::operations::generic {
@@ -118,4 +120,49 @@ TEST(GenericOpNamedArgsHash, ValueOnlyDifferenceKeepsHash) {
     };
     EXPECT_EQ(program_hash(a), program_hash(b))
         << "Named-arg values (and per-core core count) must not change the generic-op program hash";
+}
+
+namespace genop_cb_format_hash_test {
+
+using namespace tt::tt_metal;
+
+ProgramDescriptor program_with_cb(std::variant<tt::DataFormat, DataType> data_format) {
+    CBDescriptor cb{
+        .total_size = 4096,
+        .core_ranges = CoreRangeSet(CoreRange(CoreCoord{0, 0})),
+        .format_descriptors = {{.buffer_index = 0, .data_format = data_format, .page_size = 2048}},
+    };
+    return ProgramDescriptor{.cbs = {cb}};
+}
+
+}  // namespace genop_cb_format_hash_test
+
+// A CB format given as a DataType must share a program-cache entry with the same format given as its DataFormat.
+TEST(GenericOpCBFormatHash, DataTypeAndEquivalentDataFormatHashEqual) {
+    using namespace genop_cb_format_hash_test;
+    const std::pair<DataType, tt::DataFormat> kEquivalent[] = {
+        {DataType::BFLOAT16, tt::DataFormat::Float16_b},
+        {DataType::BFLOAT8_B, tt::DataFormat::Bfp8_b},
+        {DataType::INT8, tt::DataFormat::Int8},
+    };
+    for (const auto& [dtype, format] : kEquivalent) {
+        const auto via_type = program_with_cb(dtype);
+        const auto via_format = program_with_cb(format);
+        EXPECT_EQ(
+            ttnn::operations::generic::compute_program_descriptor_hash(via_type),
+            ttnn::operations::generic::compute_program_descriptor_hash(via_format))
+            << "DataType=" << dtype;
+        EXPECT_EQ(std::hash<ProgramDescriptor>{}(via_type), std::hash<ProgramDescriptor>{}(via_format))
+            << "DataType=" << dtype;
+    }
+}
+
+TEST(GenericOpCBFormatHash, DifferentFormatsHashDifferently) {
+    using namespace genop_cb_format_hash_test;
+    EXPECT_NE(
+        ttnn::operations::generic::compute_program_descriptor_hash(program_with_cb(DataType::BFLOAT16)),
+        ttnn::operations::generic::compute_program_descriptor_hash(program_with_cb(DataType::FLOAT32)));
+    EXPECT_NE(
+        std::hash<ProgramDescriptor>{}(program_with_cb(DataType::BFLOAT16)),
+        std::hash<ProgramDescriptor>{}(program_with_cb(tt::DataFormat::Float32)));
 }

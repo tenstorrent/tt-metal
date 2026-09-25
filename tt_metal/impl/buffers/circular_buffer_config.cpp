@@ -106,7 +106,7 @@ CircularBufferConfig::CircularBufferConfig(const CBDescriptor& descriptor) : tot
                 format_descriptor.buffer_index,
                 max_cbs);
         }
-        this->data_formats_[format_descriptor.buffer_index] = format_descriptor.data_format;
+        this->data_formats_[format_descriptor.buffer_index] = resolve_data_format(format_descriptor.data_format);
         if (this->total_size_ % format_descriptor.page_size != 0) {
             TT_THROW(
                 "Total circular buffer size {} B must be divisible by page size {} B",
