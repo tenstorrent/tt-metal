@@ -3,6 +3,7 @@
 
 #include "tt_metal/distributed/host_h2h_socket.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <functional>
 #include <string>
@@ -149,7 +150,9 @@ struct H2HSocket::Impl {
     // The origin's frame index this ring expects next. next_slot wraps at ring_pages and so
     // cannot tell a slot re-armed before its credit from the frame that belongs there.
     std::vector<uint64_t> rx_seq;
-    std::vector<bool> dirty;           // peers with an unflushed put
+    // Bytes, not a flag: a flush costs one ~7 us round trip whatever it covers, so the
+    // amount pending is the only thing that says whether issuing one now is worth it.
+    std::vector<uint64_t> pending;
 
     // put -> credit, collected here because nothing above this class can see either end:
     // submit() only queues, and the credit word is read by credit_seen() alone.
@@ -175,10 +178,16 @@ struct H2HSocket::Impl {
     // until this runs. Batched per peer: a flush is a round trip, so an idle one is latency.
     void flush_dirty() {
         for (uint32_t h = 0; h < cfg.topo.num; ++h) {
-            if (!dirty[h]) {
+            if (pending[h] == 0) {
                 continue;
             }
-            dirty[h] = false;
+            ++stats.flushes;
+            stats.pending_sum += pending[h];
+            stats.pending_max = std::max(stats.pending_max, pending[h]);
+            if (pending[h] < cfg.page_bytes) {
+                ++stats.flushes_tiny;
+            }
+            pending[h] = 0;
             if (const std::string e = win->flush(h); !e.empty()) {
                 fail("h2h: " + e);
             }
@@ -354,7 +363,7 @@ std::unique_ptr<H2HSocket> H2HSocket::create(const Config& cfg, std::string& err
     im.tx_payload.reset(cfg.cores, cfg.ring_pages);
     im.tx_trailer.reset(cfg.cores, cfg.ring_pages);
     im.tx_flight.reset(cfg.cores, cfg.ring_pages);
-    im.dirty.assign(cfg.topo.num, false);
+    im.pending.assign(cfg.topo.num, 0);
     if (cfg.collect_timing) {
         // Sized by cfg.cores, not kProvisionedCores: a 4-core run should not carry 128.
         im.put_at.assign(per_peer * cfg.ring_pages, std::chrono::steady_clock::time_point{});
@@ -394,6 +403,7 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
     im.harvest_credits();
     ++im.stats.passes;
     const uint64_t posts_before = im.stats.posts;
+    bool credit_blocked = false;
 
     // flush_dirty() ran at the end of last pass, so these are remotely visible -- that, not
     // test(), is the license. test() is still required: it is what returns the request slot.
@@ -420,7 +430,8 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
                 im.fail("h2h: " + e);
                 break;
             }
-            im.dirty[f.host] = true;
+            im.pending[f.host] += kFrameTrailerBytes;
+            ++im.stats.trailer_puts;
             (void)im.tx_flight.push_back(c, f);
             im.tx_trailer.pop_front(c);
             ++progress;
@@ -477,6 +488,7 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
         // Keyed on the DESTINATION core, not this one: the ring being filled belongs to the
         // target, so every sender into it must draw slots and credit from one counter.
         if (im.posted_at(dest_core, host) - im.credit_seen(dest_core, host) >= im.cfg.ring_pages) {
+            credit_blocked = true;
             continue;
         }
 
@@ -503,7 +515,7 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
             im.put_at_of(dest_core, host, im.posted_at(dest_core, host)) = std::chrono::steady_clock::now();
         }
         im.posted_at(dest_core, host)++;
-        im.dirty[host] = true;
+        im.pending[host] += t.page_bytes - kFrameTrailerBytes;
         (void)im.tx_payload.push_back(t.core, f);
         ++im.in_flight;
         ++im.stats.posts;
@@ -582,6 +594,11 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
     }
     if (im.stats.posts == posts_before) {
         ++im.stats.starved;
+        if (credit_blocked) {
+            ++im.stats.starved_credit;
+        } else {
+            ++im.stats.starved_empty;
+        }
     }
     return progress;
 }
@@ -628,7 +645,8 @@ void H2HSocket::consumed(uint32_t core, uint32_t pages) {
             im.fail("h2h: done: " + e);
             return;
         }
-        im.dirty[host] = true;
+        im.pending[host] += 2 * sizeof(uint64_t);
+        im.stats.credit_puts += 2;
     }
     // More consumed than delivered means the two legs disagree about what was handed over.
     if (pages != 0) {
