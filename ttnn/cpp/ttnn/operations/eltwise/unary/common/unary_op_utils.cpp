@@ -377,10 +377,21 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("sigmoid_tile<{}, {}u>({});", vec_mode_sym, param1, idst)};
         }
         case UnaryOpType::ERF:
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16 && params.size() == 1 && param0 == 0.0f) {
+                return {"erf_tt_poly_bf16_tile_init<false>();", fmt::format("erf_tt_poly_bf16_tile<false>({});", idst)};
+            }
+#endif
             return {
                 fmt::format("erf_tile_init<{}u>();", (uint32_t)param0),
                 fmt::format("erf_tile<{1}u>({0});", idst, (uint32_t)param0)};
-        case UnaryOpType::ERFC: return {"erfc_tile_init();", fmt::format("erfc_tile({0});", idst)};
+        case UnaryOpType::ERFC:
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16) {
+                return {"erfc_tt_poly_bf16_tile_init();", fmt::format("erfc_tt_poly_bf16_tile({});", idst)};
+            }
+#endif
+            return {"erfc_tile_init();", fmt::format("erfc_tile({0});", idst)};
         case UnaryOpType::RDIV: {
             TT_FATAL(params.size() == 2, "Expected rdiv to take 2 parameters (divisor, rounding mode)");
             static constexpr const char* rounding_mode_strs[] = {
@@ -806,8 +817,20 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::I1: return {"i1_tile_init();", fmt::format("i1_tile({});", idst)};
         case UnaryOpType::EXP: return {"exp_tile_init();", fmt::format("exp_tile({});", idst)};
         case UnaryOpType::SIGMOID: return {"sigmoid_tile_init();", fmt::format("sigmoid_tile({});", idst)};
-        case UnaryOpType::ERF: return {"erf_tile_init();", fmt::format("erf_tile({0});", idst)};
-        case UnaryOpType::ERFC: return {"erfc_tile_init();", fmt::format("erfc_tile({});", idst)};
+        case UnaryOpType::ERF:
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16) {
+                return {"erf_tt_poly_bf16_tile_init();", fmt::format("erf_tt_poly_bf16_tile({});", idst)};
+            }
+#endif
+            return {"erf_tile_init();", fmt::format("erf_tile({0});", idst)};
+        case UnaryOpType::ERFC:
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16) {
+                return {"erfc_tt_poly_bf16_tile_init();", fmt::format("erfc_tt_poly_bf16_tile({});", idst)};
+            }
+#endif
+            return {"erfc_tile_init();", fmt::format("erfc_tile({});", idst)};
         case UnaryOpType::ERFINV: return {"erfinv_tile_init();", fmt::format("erfinv_tile({});", idst)};
         case UnaryOpType::LOG10:
             // log10[x] = log[x]/log[10] = log[x]*0.4342944819032518; FP32@U32 0x3ede5bd9; FP16@U16 0x36f3;
