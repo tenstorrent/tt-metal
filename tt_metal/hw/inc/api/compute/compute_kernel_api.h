@@ -1373,4 +1373,40 @@ ALWI void abs_tt_poly_bf16_tile_init() {
 
 #undef TT_POLY_ABS_BF16_ROUTE_ACTIVE
 
+#if !defined(TT_POLY_LLK_DISABLE) && (defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE))
+#define TT_POLY_LOG2_BF16_ROUTE_ACTIVE 1
+#else
+#define TT_POLY_LOG2_BF16_ROUTE_ACTIVE 0
+#endif
+
+/** Internal BF16 typed-compiler route; public callers retain the stock entry point. */
+ALWI void log2_tt_poly_bf16_tile(uint32_t idst) {
+#if !TT_POLY_LOG2_BF16_ROUTE_ACTIVE
+    log_with_base_tile<false, true>(idst, 0x3fb8aa3bu);
+#else
+    if constexpr (DST_ACCUM_MODE) {
+        log_with_base_tile<false, true>(idst, 0x3fb8aa3bu);
+    } else {
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_log2_tt_poly_bf16, (8 /* ITERATIONS */), idst, VectorMode::RC));
+    }
+#endif
+}
+
+/** Initialize the internal BF16 typed-compiler route. */
+ALWI void log2_tt_poly_bf16_tile_init() {
+#if !TT_POLY_LOG2_BF16_ROUTE_ACTIVE
+    log_with_base_tile_init();
+#else
+    if constexpr (DST_ACCUM_MODE) {
+        log_with_base_tile_init();
+    } else {
+        // TODO(AP): move out init
+        MATH(SFPU_UNARY_INIT_FN(log_with_base, sfpu::init_log2_tt_poly_bf16, (APPROX, false, DST_ACCUM_MODE)));
+    }
+#endif
+}
+
+#undef TT_POLY_LOG2_BF16_ROUTE_ACTIVE
+
 }  // namespace ckernel

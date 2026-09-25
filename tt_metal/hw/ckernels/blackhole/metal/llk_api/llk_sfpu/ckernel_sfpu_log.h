@@ -175,3 +175,22 @@ inline void log_init() {
 
 }  // namespace sfpu
 }  // namespace ckernel
+
+#if !defined(TT_POLY_LLK_DISABLE)
+#include "ckernel_sfpu_log2_bf16.h"
+#endif
+
+namespace ckernel::sfpu {
+
+#if !defined(TT_POLY_LLK_DISABLE)
+template <int ITERATIONS = 8>
+inline void calculate_log2_tt_poly_bf16() {
+    ckernel::sfpu::ttpoly::calculate_log2<ttpoly_generated::Log2Bf16Config, ITERATIONS>();
+}
+template <auto...>
+inline void init_log2_tt_poly_bf16() {
+    ckernel::sfpu::ttpoly::init_log2<ttpoly_generated::Log2Bf16Config>();
+}
+#endif
+
+}  // namespace ckernel::sfpu
