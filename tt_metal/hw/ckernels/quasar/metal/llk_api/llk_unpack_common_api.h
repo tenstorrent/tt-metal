@@ -16,6 +16,7 @@
 #include "llk_io.h"
 #include "llk_operands.h"
 #include "llk_unpack_common.h"
+#include "llk_unpack_unary_operand_to_dest.h"
 #include "api/dataflow/dataflow_buffer.h"
 
 /*************************************************************************
@@ -49,6 +50,8 @@ inline void llk_unpack_program_bfd(const std::uint32_t operand_id) {
  * allocated from the per-TRISC partition (see llk_bfd_alloc.h) and each op's llk_unpack_*_init
  * programs its own table entry. DFB ids never double as BFD ids.
  *
+ * Also the unpack thread's once-per-program DEST bank reset in the unpack-to-dest path (see below).
+ *
  * @param operandA: The input0 operand circular buffer
  * @param operandB: The input1 operand circular buffer
  */
@@ -59,6 +62,14 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
     _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
         static_cast<DataFormat>(unpack_dst_format[unpA_operand_id]),
         static_cast<DataFormat>(unpack_dst_format[unpB_operand_id]));
+
+    // Unpack-to-dest: the unpack thread owns the DEST section base, and this is its once-per-program init. Every
+    // compute-API site that calls llk_unpack_hw_configure pairs it with llk_math_pack_sync_init, so unpack and
+    // math reset their bank parity together. The reset must NOT live in the per-op llk_unpack_A_init: op writers
+    // call copy_init inside their tile loop, and a per-op reset would pin unpack to bank 0 while pack keeps alternating in SyncHalf.
+    if constexpr (UnpackToDestEn) {
+        _llk_unpack_dest_init_();
+    }
 }
 
 /**
