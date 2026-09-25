@@ -261,14 +261,27 @@ extern "C" std::uint32_t _start1() {
             WAYPOINT("D");
             DEVICE_PRINT_KERNEL_FINISHED();
 
-#if defined(UCK_CHLKC_PACK)
-            // Tear down packer remapper pairs programmed this launch so they cannot leak into the next.
-            dfb_clear_packer_remapper_window(packer_rmp.lo, packer_rmp.hi);
-#endif
-
             // Signal completion
             DPRINT("SIGNALING COMPLETION {:x}\n", (std::uint32_t)*trisc_run);
             tensix_sync();
+
+#if defined(UCK_CHLKC_PACK)
+            // Tear down packer remapper pairs programmed this launch so they cannot leak into the next.
+            // Each pair shadows an intra-tensix DFB counter that the unpacker keeps acking until its own
+            // Tensix pipe drains, and this RISC-V can get here long before that: the pack kernel's waits
+            // and pushes are queued Tensix instructions. Clearing early re-opens the counter's default
+            // route, and on Quasar A0 (AIHWE-5914) those acks then alias onto overlay counters 0-15,
+            // i.e. onto some DM-fed DFB's counter. So drain this pipe (above) and wait for this Neo's
+            // other TRISCs, which each tensix_sync() before signaling done, then clear.
+            WAYPOINT("PRW");
+            volatile tt_l1_ptr std::uint8_t* const neo_trisc_run = trisc_run - trisc_id;
+            for (std::uint32_t t = 0; t < MaxNumKernels - MaxDMProcessorsPerCoreType; t++) {
+                while (t != trisc_id && neo_trisc_run[t] == RUN_SYNC_MSG_GO) {
+                }
+            }
+            WAYPOINT("PRD");
+            dfb_clear_packer_remapper_window(packer_rmp.lo, packer_rmp.hi);
+#endif
         }
         *trisc_run = RUN_SYNC_MSG_DONE;
         DPRINT("COMPLETION SIGNED OFF {:x}\n", (std::uint32_t)*trisc_run);
