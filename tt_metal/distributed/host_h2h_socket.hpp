@@ -59,6 +59,10 @@ public:
     // credit that lets the origin reuse its slot.
     void consumed(uint32_t core, uint32_t pages);
 
+    // Puts what consumed() noted: one op per array per peer, spanning every core touched.
+    // Call after a drain loop, not per core, or the coalescing is lost. False means failed.
+    bool publish_credits();
+
     // Frames of this core's the peers have consumed. One peer per core today, so the
     // sum is that peer's count.
     uint64_t credit_total(uint32_t core) const;
@@ -77,9 +81,11 @@ public:
         // harder, no room means flush sooner, since our flush is what frees the peer's ring.
         uint64_t starved_credit = 0;  // a destination ring was full
         uint64_t starved_empty = 0;   // nothing was queued to send
-        uint64_t posts = 0;           // payload puts issued
-        uint64_t trailer_puts = 0;    // the second phase of each frame
-        uint64_t credit_puts = 0;     // credit and done words
+        uint64_t posts = 0;           // FRAMES posted, not puts: coalescing adds `run` at once
+        uint64_t payload_puts = 0;    // the operations those frames cost, one per run
+        uint64_t trailer_puts = 0;    // the second phase, also one per run
+        uint64_t credit_puts = 0;     // coalesced credit puts, NOT frames credited
+    uint64_t done_puts = 0;       // the same for the done array; the two coalesce apart
         // A flush costs the same whatever it covers, so the bytes it covered are what say
         // whether it was worth issuing. pending_max bounds any batching threshold we pick.
         uint64_t flushes = 0;
