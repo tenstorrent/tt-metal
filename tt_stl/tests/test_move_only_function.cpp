@@ -21,6 +21,11 @@ static_assert(std::is_nothrow_move_constructible_v<move_only_function<void()>>, 
 static_assert(
     sizeof(move_only_function<void()>) <= sizeof(std::function<void()>),
     "must not be larger than the std::function it replaces");
+static_assert(!std::is_convertible_v<move_only_function<void()>, int>, "operator bool must be explicit");
+static_assert(std::is_invocable_v<move_only_function<void()>&>, "must be invocable with its own signature");
+static_assert(
+    !std::is_invocable_v<move_only_function<void()>&, int, int>,
+    "must not claim to be invocable with a wrong argument list");
 
 TEST(MoveOnlyFunctionTest, CPU_InvokesLambda) {
     int calls = 0;
@@ -47,7 +52,7 @@ TEST(MoveOnlyFunctionTest, CPU_EmptyByDefault) {
     move_only_function<void()> f;
     EXPECT_FALSE(static_cast<bool>(f));
     EXPECT_TRUE(f == nullptr);
-    EXPECT_FALSE(f.has_value());
+    EXPECT_FALSE(static_cast<bool>(f));
 }
 
 TEST(MoveOnlyFunctionTest, CPU_EngagedReportsNonEmpty) {
@@ -56,7 +61,7 @@ TEST(MoveOnlyFunctionTest, CPU_EngagedReportsNonEmpty) {
     move_only_function<void()> f{[]() {}};
     EXPECT_TRUE(static_cast<bool>(f));
     EXPECT_FALSE(f == nullptr);
-    EXPECT_TRUE(f.has_value());
+    EXPECT_TRUE(static_cast<bool>(f));
 }
 
 TEST(MoveOnlyFunctionTest, CPU_MoveConstructionTransfersTarget) {
@@ -103,6 +108,51 @@ TEST(MoveOnlyFunctionTest, CPU_NonNullFunctionPointerIsEngaged) {
     move_only_function<int()> f{+[]() { return 5; }};
     EXPECT_TRUE(static_cast<bool>(f));
     EXPECT_EQ(f(), 5);
+}
+
+// The backing type leaves a moved-from wrapper engaged, so operator bool lies and calling it
+// dereferences null.
+TEST(MoveOnlyFunctionTest, CPU_MovedFromIsEmpty) {
+    move_only_function<int()> src{[]() { return 42; }};
+    move_only_function<int()> dst{std::move(src)};
+    EXPECT_FALSE(static_cast<bool>(src));
+    EXPECT_TRUE(src == nullptr);
+    EXPECT_TRUE(static_cast<bool>(dst));
+}
+
+TEST(MoveOnlyFunctionTest, CPU_MoveAssignLeavesSourceEmpty) {
+    move_only_function<int()> src{[]() { return 42; }};
+    move_only_function<int()> dst;
+    dst = std::move(src);
+    EXPECT_FALSE(static_cast<bool>(src));
+    EXPECT_EQ(dst(), 42);
+}
+
+// Heap-stored targets corrupt on self-move without the guard in operator=.
+TEST(MoveOnlyFunctionTest, CPU_SelfMoveAssignIsSafe) {
+    struct Big {
+        std::uint64_t data[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+    };
+    Big big{};
+    move_only_function<std::uint64_t()> f{[big]() { return big.data[0]; }};
+    auto& alias = f;
+    f = std::move(alias);
+    ASSERT_TRUE(static_cast<bool>(f));
+    EXPECT_EQ(f(), 1u);
+}
+
+// std::move_only_function yields an empty wrapper here; the backing type would store it engaged.
+TEST(MoveOnlyFunctionTest, CPU_EmptyStdFunctionIsEmpty) {
+    std::function<void()> empty;
+    move_only_function<void()> f{empty};
+    EXPECT_FALSE(static_cast<bool>(f));
+}
+
+TEST(MoveOnlyFunctionTest, CPU_NonEmptyStdFunctionIsEngaged) {
+    std::function<int()> src{[]() { return 3; }};
+    move_only_function<int()> f{src};
+    ASSERT_TRUE(static_cast<bool>(f));
+    EXPECT_EQ(f(), 3);
 }
 
 // Pinned deliberately: std::move_only_function makes this undefined, so at the C++23 switch this
