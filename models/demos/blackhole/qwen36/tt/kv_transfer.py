@@ -45,6 +45,10 @@ Env knobs: ``TT_PD_STRICT_SHAPES`` (1: raise on program-cache growth inside a ho
 bisect only), ``TT_PD_CHECKSUM`` (1: check ``Source.crc32c()`` in ``validate_gdn_parts``), ``TT_PD_TIMING`` (1: log a
 per-call timing line), ``TT_PD_TAPS_WRITE`` (``update_cache`` | ``write_index``), ``TT_PD_TAPS_SPLIT`` (width slabs of
 the tap-row view, default 40 -> 256 columns each; ``update_cache`` stages ``32 x slab`` tiles per core),
+``TT_PD_HIST_WRITE`` (``batched`` | ``legacy``: the fused-conv packed conv-history row of an install -- one host pack
+of all layers + per layer one H2D into persistent staging and one ``fill_cache``, or the per-layer pack/upload +
+``_write_index``), ``TT_PD_ROWS_PREFETCH`` (1: ``validate_gdn_parts`` loads the taps rows while the K/V fills run and
+``install_gdn_state`` reuses them; 0: read at install),
 ``TT_PD_EXPORT_MIRROR`` (0: never bind the staging; the export gathers from the paged cache as before),
 ``TT_PD_CHUNK_SYNC`` (1: before a chunk boundary at which the pump could send -- a published export is waiting for
 its claim -- the observer synchronizes the device, so the sends follow a FINISHED chunk; a request with no pending
