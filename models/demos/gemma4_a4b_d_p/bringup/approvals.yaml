@@ -6,3 +6,13 @@ intake:
   note: 'owner: deterministic canonical prompt; chat-wrapped with the book as the
     model turn (measured 67% top-1 vs 18% raw, 13% user turn); target and ladder as
     the ERNIE run'
+plan:
+  by: dnijemcevic
+  at: '2026-09-25T23:11:27'
+  files:
+    models/demos/gemma4_a4b_d_p/bringup/plan.yaml: 9c2ac95b1da2cc4903f7b3acec8308ebf1b60d308ee2b9270efb086fcec50136
+    models/demos/gemma4_a4b_d_p/bringup/plan.md: 055b8761c0fa338d64e5d2f36609808a0d3db2e555adb421466d2e4140987bbf
+    models/demos/gemma4_a4b_d_p/bringup/components.yaml: d5ea5e119ee709bdc0a4921ce83088581283671436e9dbc6219fb306c55b590f
+  note: 'owner approved 2026-09-25; experts: hack unified_routed_expert_moe to add
+    GeluTanh (owner''s instruction)'
+  ledger: b8edafa294386369c0d02b7858ffe53fbf98dd7b626259d50c2d9b5da7f2e941
