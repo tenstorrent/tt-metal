@@ -13,7 +13,7 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d {
 
-// Everything every core of the untilizer pool is told, which is everything except which stripes it
+// Everything every core of the untilizer pool is told, which is everything except which tile rows it
 // takes. Built only for a TILE input; `plan_untilize` returns nothing for a row-major one, and that
 // absence is what the rest of the program factory branches on.
 //
@@ -22,7 +22,7 @@ namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d {
 // takes a BFLOAT16 input and pages a BFLOAT16 payload, and keeping them apart is what leaves room for
 // the fp8 payload the sibling `dispatch` already packs this way.
 struct UntilizePlan {
-    uint32_t num_stripes = 0;
+    uint32_t num_tile_rows = 0;
     uint32_t tiles_per_row = 0;
     uint32_t block_ct_dim = 0;
     uint32_t tile_bytes = 0;
@@ -43,7 +43,7 @@ std::optional<UntilizePlan> plan_untilize(
     tt::tt_metal::Buffer* staging);
 
 // Untilizers per link, a link being its two streams. Five per link covers the production shape (20
-// stripes at seq 640). The stream readers' `dspf2d_wait_untilize` zone rising off zero is the signal
+// tile rows at seq 640). The stream readers' `dspf2d_wait_untilize` zone rising off zero is the signal
 // this is too low, and it is the only one.
 constexpr uint32_t UNTILIZERS_PER_LINK = 5;
 
@@ -53,10 +53,10 @@ enum class UntilizerPoolFallback : uint8_t {
     kRowTooNarrow,  // the row has fewer spare cores than the pool wants; the rest come from elsewhere
 };
 
-// The pool that turns a TILE input into staging: a bounded subset of the universe's spare cores, each
-// running a reader / pack_untilize / writer trio over its round-robin share of the stripes.
+// The pool that turns a TILE input into staging: a bounded subset of the allowed cores' spare cores, each
+// running a reader / pack_untilize / writer trio over its round-robin share of the tile rows.
 //
-// UNTILIZERS_PER_LINK per link, capped at one per stripe, in the row directly under the streams and
+// UNTILIZERS_PER_LINK per link, capped at one per tile row, in the row directly under the streams and
 // spread across the streams' columns. The streams sit in the row under the eth cores; an untilizer on
 // that same row puts its DRAM reads and staging writes on the NoC row the streams' own DRAM traffic
 // (forwarding pages, output pages, staging reads) already fills, and the row below is the closest one
@@ -64,12 +64,12 @@ enum class UntilizerPoolFallback : uint8_t {
 // tops the pool up from elsewhere, and the return value says so for the caller to report once per build.
 //
 // These cores run nothing else, which is what lets the untilize circular buffers take most of their
-// L1 -- and it is why the pool is drawn from the universe rather than from the grid: on the model's
+// L1 -- and it is why the pool is drawn from the allowed cores rather than from the grid: on the model's
 // split, everything outside it belongs to the shared expert running at the same time.
 UntilizerPoolFallback add_untilizer_pool(
     tt::tt_metal::ProgramDescriptor& desc,
     const StreamPlacements& streams,
-    const CoreRangeSet& universe,
+    const CoreRangeSet& allowed_cores,
     const UntilizePlan& plan);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d

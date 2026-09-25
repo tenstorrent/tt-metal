@@ -8,7 +8,7 @@
 // counting positions, so the two cannot drift: adding a field in the wrong place is a compile error on
 // one side instead of a silently misread word on the other.
 //
-// The sender has scalars only -- every address it writes arrives per token in the slot's routing tail.
+// The sender has scalars only -- every address it writes arrives per token in the entry's routing tail.
 
 #include "dispatch_fabric2d_kernel_interface.hpp"
 
@@ -16,13 +16,13 @@ namespace dspf2d {
 
 struct SenderCtArgs {
     enum Idx : uint32_t {
-        kNumL1Slots,
+        kQueueDepth,
         kTokenSizeBytes,
         kForwardingMetadataSize,
         kPeerChipId,
         kPeerMeshId,
-        kRingAddr,
-        kPktHdrRingAddr,
+        kQueueAddr,
+        kPktHdrQueueAddr,
         kPktHdrDrainAddr,
         kDrainSinkAddr,
         kBatch,
@@ -34,13 +34,13 @@ struct SenderCtArgs {
         kCount,
     };
 
-    uint32_t num_l1_slots;
+    uint32_t queue_depth;
     uint32_t token_size_bytes;
     uint32_t forwarding_metadata_size;
     uint32_t peer_chip_id;
     uint32_t peer_mesh_id;
-    uint32_t ring_addr;
-    uint32_t pkt_hdr_ring_addr;
+    uint32_t queue_addr;
+    uint32_t pkt_hdr_queue_addr;
     uint32_t pkt_hdr_drain_addr;
     uint32_t drain_sink_addr;
     uint32_t batch;
@@ -51,7 +51,7 @@ struct SenderCtArgs {
     uint32_t fwd_sem_addr;
 
 #ifndef KERNEL_BUILD
-    // `downstream` is the worker serving this stream on the next chip: the sender bumps its
+    // `downstream` is the worker serving this stream on the next chip: the sender signals its
     // arrived-page counter through the fabric packet header, which is why every worker placement on the
     // mesh is decided before any kernel is built.
     SenderCtArgs(
@@ -60,18 +60,18 @@ struct SenderCtArgs {
         const op::StreamPlacement& downstream,
         const op::L1Layout& l1,
         const op::KernelPlan& plan) :
-        num_l1_slots(NUM_L1_SLOTS),
+        queue_depth(QUEUE_DEPTH),
         token_size_bytes(token_bytes),
         forwarding_metadata_size(FORWARDING_METADATA_SIZE),
         peer_chip_id(static_cast<uint32_t>(self.downstream_node.chip_id)),
         peer_mesh_id(*self.downstream_node.mesh_id),
-        ring_addr(l1.ring),
-        pkt_hdr_ring_addr(l1.pkt_hdr_ring),
+        queue_addr(l1.queue),
+        pkt_hdr_queue_addr(l1.pkt_hdr_queue),
         pkt_hdr_drain_addr(l1.pkt_hdr_drain),
         drain_sink_addr(l1.drain_sink),
         batch(BATCH),
-        filled_addr(plan.ring_filled_addr),
-        freed_addr(plan.ring_freed_addr),
+        filled_addr(plan.queue_filled_addr),
+        freed_addr(plan.queue_freed_addr),
         fwd_sem_noc_x(static_cast<uint32_t>(downstream.worker_virtual.x)),
         fwd_sem_noc_y(static_cast<uint32_t>(downstream.worker_virtual.y)),
         fwd_sem_addr(plan.fwd_arrived_addr) {}
@@ -79,13 +79,13 @@ struct SenderCtArgs {
     std::vector<uint32_t> to_ct_word_arr() const {
         constexpr uint32_t kUnset = 0xDEADBEEFu;
         std::vector<uint32_t> w(kCount, kUnset);
-        w[kNumL1Slots] = num_l1_slots;
+        w[kQueueDepth] = queue_depth;
         w[kTokenSizeBytes] = token_size_bytes;
         w[kForwardingMetadataSize] = forwarding_metadata_size;
         w[kPeerChipId] = peer_chip_id;
         w[kPeerMeshId] = peer_mesh_id;
-        w[kRingAddr] = ring_addr;
-        w[kPktHdrRingAddr] = pkt_hdr_ring_addr;
+        w[kQueueAddr] = queue_addr;
+        w[kPktHdrQueueAddr] = pkt_hdr_queue_addr;
         w[kPktHdrDrainAddr] = pkt_hdr_drain_addr;
         w[kDrainSinkAddr] = drain_sink_addr;
         w[kBatch] = batch;
@@ -101,13 +101,13 @@ struct SenderCtArgs {
     }
 #else
     constexpr SenderCtArgs() :
-        num_l1_slots(get_compile_time_arg_val(kNumL1Slots)),
+        queue_depth(get_compile_time_arg_val(kQueueDepth)),
         token_size_bytes(get_compile_time_arg_val(kTokenSizeBytes)),
         forwarding_metadata_size(get_compile_time_arg_val(kForwardingMetadataSize)),
         peer_chip_id(get_compile_time_arg_val(kPeerChipId)),
         peer_mesh_id(get_compile_time_arg_val(kPeerMeshId)),
-        ring_addr(get_compile_time_arg_val(kRingAddr)),
-        pkt_hdr_ring_addr(get_compile_time_arg_val(kPktHdrRingAddr)),
+        queue_addr(get_compile_time_arg_val(kQueueAddr)),
+        pkt_hdr_queue_addr(get_compile_time_arg_val(kPktHdrQueueAddr)),
         pkt_hdr_drain_addr(get_compile_time_arg_val(kPktHdrDrainAddr)),
         drain_sink_addr(get_compile_time_arg_val(kDrainSinkAddr)),
         batch(get_compile_time_arg_val(kBatch)),
@@ -118,7 +118,7 @@ struct SenderCtArgs {
         fwd_sem_addr(get_compile_time_arg_val(kFwdSemAddr)) {}
 #endif
 
-    constexpr uint32_t slot_stride() const { return token_size_bytes + forwarding_metadata_size; }
+    constexpr uint32_t entry_stride() const { return token_size_bytes + forwarding_metadata_size; }
 };
 
 }  // namespace dspf2d

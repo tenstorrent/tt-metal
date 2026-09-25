@@ -36,15 +36,15 @@ namespace {
 // them on another.
 constexpr uint32_t PKT_HDR_DRAIN_OFF = 0x0000;
 constexpr uint32_t DRAIN_SINK_OFF = 0x0400;
-constexpr uint32_t RING_OFF = 0x1000;
+constexpr uint32_t QUEUE_OFF = 0x1000;
 static_assert(PKT_HDR_DRAIN_OFF < DRAIN_SINK_OFF, "drain sink overlaps the drain packet header");
-static_assert(DRAIN_SINK_OFF < RING_OFF, "drain sink overlaps the token ring");
+static_assert(DRAIN_SINK_OFF < QUEUE_OFF, "drain sink overlaps the token queue");
 
 uint32_t ring_extent_of(const DispatchFabric2dParams& args) {
     return static_cast<uint32_t>(args.device->shape()[static_cast<int32_t>(args.axis)]);
 }
 
-// One token, in the ring, in a fabric packet, in staging, and in a forwarding page. Taken from the
+// One token, in the queue, in a fabric packet, in staging, and in a forwarding page. Taken from the
 // output payload buffer because that is the one tensor whose page IS a token in both input layouts --
 // a TILE input is paged by tile, not by token.
 uint32_t token_size_bytes(const ttnn::Tensor& out_payload) {
@@ -68,9 +68,9 @@ std::vector<uint32_t> ring_chip_ids(ttnn::MeshDevice* mesh, const ttnn::MeshCoor
 // routing index it builds from them. Sized for the worst case, which is every token routed to experts
 // this chip actually sends.
 //
-// The block sizes live in the kernel interface, because the kernel's carve reads the same list. A
-// second, independent sum here would drift from that carve, and an undersized reservation overruns
-// the control region into the global semaphores.
+// The block sizes live in the kernel interface, because the kernel's layout reads the same list. A
+// second, independent sum here would drift from that layout, and an undersized reservation overruns
+// the scratch into the global semaphores.
 dspf2d::ControlGeometry control_geometry(const DispatchFabric2dParams& args, uint32_t extent) {
     return dspf2d::ControlGeometry{
         .seq_len = args.seq_len_per_chip,
@@ -80,39 +80,39 @@ dspf2d::ControlGeometry control_geometry(const DispatchFabric2dParams& args, uin
         .num_routed_experts = args.num_routed_experts,
         .experts_per_chip = args.experts_per_chip,
         .topk = args.num_experts_per_tok,
-        .num_relay = relay_chunks_per_stream(extent)};
+        .num_forward = forward_chunks_per_stream(extent)};
 }
 
 L1Layout compute_l1_layout(
     ttnn::MeshDevice* mesh, uint32_t token_bytes, const dspf2d::ControlGeometry& g, uint32_t sem_floor) {
-    const uint32_t control_bytes = dspf2d::control_region_bytes(g);
+    const uint32_t control_bytes = dspf2d::scratch_bytes(g);
     const uint32_t base =
         static_cast<uint32_t>(mesh->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
     L1Layout l;
     l.pkt_hdr_drain = base + PKT_HDR_DRAIN_OFF;
     l.drain_sink = base + DRAIN_SINK_OFF;
-    l.ring = base + RING_OFF;
-    l.pkt_hdr_ring = l.ring + dspf2d::NUM_L1_SLOTS * (token_bytes + dspf2d::FORWARDING_METADATA_SIZE);
-    // One header per slot, the same stride the sender indexes the pool with.
-    const uint32_t hdr_ring_bytes =
-        dspf2d::NUM_L1_SLOTS * static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
-    // 64-byte aligned: a DRAM read needs a 64-byte-aligned L1 destination on Blackhole, and the control
-    // region is read straight out of DRAM.
-    l.control = (l.pkt_hdr_ring + hdr_ring_bytes + 63u) & ~63u;
+    l.queue = base + QUEUE_OFF;
+    l.pkt_hdr_queue = l.queue + dspf2d::QUEUE_DEPTH * (token_bytes + dspf2d::FORWARDING_METADATA_SIZE);
+    // One header per entry, the same stride the sender indexes the pool with.
+    const uint32_t hdr_queue_bytes =
+        dspf2d::QUEUE_DEPTH * static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
+    // 64-byte aligned: a DRAM read needs a 64-byte-aligned L1 destination on Blackhole, and the
+    // scratch is read straight out of DRAM.
+    l.control = (l.pkt_hdr_queue + hdr_queue_bytes + 63u) & ~63u;
     const uint32_t end = l.control + control_bytes;
-    // Naming every driver rather than one: the ring scales with the token page, while the control
-    // region's blocks divide between those that scale with the sequence and those that scale with the
+    // Naming every driver rather than one: the queue scales with the token page, while the
+    // scratch's blocks divide between those that scale with the sequence and those that scale with the
     // expert count and the ring extent, and which of them overflowed is not something the caller can
     // infer from a single total.
     TT_FATAL(
         end <= sem_floor,
         "dispatch_fabric2d: the L1 layout needs {} B, ending at 0x{:x}, but the global semaphores start at 0x{:x}. "
-        "The token ring is {} B of it at a {} B token page; the control region is {} B and grows with "
+        "The token queue is {} B of it at a {} B token page; the scratch is {} B and grows with "
         "seq_len_per_chip={}, num_routed_experts={}, extent={}, experts_per_chip={} and topk={}.",
         end - base,
         end,
         sem_floor,
-        dspf2d::NUM_L1_SLOTS * (token_bytes + dspf2d::FORWARDING_METADATA_SIZE),
+        dspf2d::QUEUE_DEPTH * (token_bytes + dspf2d::FORWARDING_METADATA_SIZE),
         token_bytes,
         control_bytes,
         g.seq_len,
@@ -123,20 +123,20 @@ L1Layout compute_l1_layout(
     return l;
 }
 
-// Four counters: the reader/sender ring handshake is two monotonic single-writer ones, `fwd_arrived`
-// is bumped by the upstream chip's sender as it fills this stream's forwarding region, and
-// `untilized` is bumped by this chip's untilizer writers as they land stripes in staging.
+// Four counters: the reader/sender queue handshake is two monotonic single-writer ones, `fwd_arrived`
+// is signalled by the upstream chip's sender as it fills this stream's forwarding section, and
+// `untilized` is signalled by this chip's untilizer writers as they land tile rows in staging.
 //
 // GlobalSemaphores rather than the op's own L1 region so they sit at an address uniform across the mesh:
-// `fwd_arrived` is bumped by the upstream chip, which has to know where it lives.
+// `fwd_arrived` is signalled by the upstream chip, which has to know where it lives.
 //
 // Nothing zeroes them between launches -- they outlive the cached workload -- so the kernels reset all
-// four at end of stream, `untilized` only where there is a pool to have bumped it.
+// four at end of stream, `untilized` only where there is a pool to have signalled it.
 struct RingSemaphores {
     tt::tt_metal::GlobalSemaphore filled;
     tt::tt_metal::GlobalSemaphore freed;
     tt::tt_metal::GlobalSemaphore fwd_arrived;
-    // Stripes the untilizer pool has landed in staging. Allocated whatever the input layout, so the
+    // Tile rows the untilizer pool has landed in staging. Allocated whatever the input layout, so the
     // reader's argument list does not depend on it -- the row-major path never reads it.
     tt::tt_metal::GlobalSemaphore untilized;
 
@@ -146,9 +146,9 @@ struct RingSemaphores {
     }
 };
 
-RingSemaphores allocate_ring_semaphores(ttnn::MeshDevice* mesh, const CoreRangeSet& universe) {
+RingSemaphores allocate_ring_semaphores(ttnn::MeshDevice* mesh, const CoreRangeSet& allowed_cores) {
     const auto make = [&] {
-        return ttnn::global_semaphore::create_global_semaphore(mesh, universe, 0, tt::tt_metal::BufferType::L1);
+        return ttnn::global_semaphore::create_global_semaphore(mesh, allowed_cores, 0, tt::tt_metal::BufferType::L1);
     };
     RingSemaphores sems{make(), make(), make(), make()};
     tt::tt_metal::distributed::Synchronize(mesh, std::nullopt, {});
@@ -240,7 +240,7 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
     // cores address a token by page index exactly as they do a row-major input. The row-major path
     // allocates nothing and runs the program it always has.
     //
-    // Rounded up to whole stripes because the untilizer packs a tile's 32 rows whether or not the
+    // Rounded up to whole tile rows because the untilizer packs a tile's 32 rows whether or not the
     // sequence fills them; the slack holds a ragged tail's padding rows and is never read back.
     const uint32_t staging_pages =
         tt::round_up(args.seq_len_per_chip, static_cast<uint32_t>(tt::constants::TILE_HEIGHT));
@@ -287,9 +287,9 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
         workload.buffers.push_back({staging.owner, staging.buffer});
     }
 
-    // Stripes the stream readers wait for before their first token read; zero is the row-major path,
+    // Tile rows the stream readers wait for before their first token read; zero is the row-major path,
     // where the wait compiles out and there is no pool.
-    const uint32_t untilize_stripes = untilize.has_value() ? untilize->num_stripes : 0u;
+    const uint32_t untilize_tile_rows = untilize.has_value() ? untilize->num_tile_rows : 0u;
 
     // Chips whose untilizer pool spilled out of the row under the streams, reported once for the build
     // rather than once per chip.
@@ -309,11 +309,11 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
             plan.stream = stream;
             plan.extent = extent;
             plan.fwd_pages_per_stream = fwd_pages;
-            plan.ring_filled_addr = static_cast<uint32_t>(sems.filled.address());
-            plan.ring_freed_addr = static_cast<uint32_t>(sems.freed.address());
+            plan.queue_filled_addr = static_cast<uint32_t>(sems.filled.address());
+            plan.queue_freed_addr = static_cast<uint32_t>(sems.freed.address());
             plan.fwd_arrived_addr = static_cast<uint32_t>(sems.fwd_arrived.address());
             plan.untilize_sem_addr = static_cast<uint32_t>(sems.untilized.address());
-            plan.untilize_stripes = untilize_stripes;
+            plan.untilize_tile_rows = untilize_tile_rows;
 
             tt::tt_metal::KernelDescriptor snd;
             snd.kernel_source =
@@ -333,7 +333,7 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
             uint32_t own_count = 0;
             std::vector<uint32_t> assignment_words;
             for (const auto& a : work) {
-                if (a.is_relay) {
+                if (a.is_forward) {
                     continue;
                 }
                 own_count++;
@@ -390,27 +390,27 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
             }
             rdr.emplace_runtime_args(self.worker_logical, rdr_rt);
 
-            // The three compute RISCs of the same core take three of the four lanes of the routing-index
+            // The three compute RISCs of the same core take three of the four RISCs of the routing-index
             // build. They get the reader's compile-time arguments verbatim: the pass they run is the
-            // reader's own code, carving the same control region from the same constants. The vector
+            // reader's own code, laying out the same scratch from the same constants. The vector
             // carries per-core words the pass never reads, so the JIT builds one TRISC binary per
             // stream core rather than per chip; a cold cache pays that once. No runtime args: nothing
             // they touch is an allocation.
-            tt::tt_metal::KernelDescriptor pro;
-            pro.kernel_source =
+            tt::tt_metal::KernelDescriptor index_kernel;
+            index_kernel.kernel_source =
                 "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch_fabric2d/device/kernels/compute/"
-                "prologue_lane_dispatch_fabric2d.cpp";
-            pro.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-            pro.core_ranges = CoreRangeSet(CoreRange(self.worker_logical));
-            pro.compile_time_args = rdr.compile_time_args;
-            pro.config = tt::tt_metal::ComputeConfigDescriptor{};
+                "routing_index_dispatch_fabric2d.cpp";
+            index_kernel.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+            index_kernel.core_ranges = CoreRangeSet(CoreRange(self.worker_logical));
+            index_kernel.compile_time_args = rdr.compile_time_args;
+            index_kernel.config = tt::tt_metal::ComputeConfigDescriptor{};
             desc.kernels.push_back(std::move(rdr));
-            desc.kernels.push_back(std::move(pro));
+            desc.kernels.push_back(std::move(index_kernel));
 
-            // The words the four lanes hand off on. Program semaphores rather than words in the op's
-            // own L1: the runtime writes the initial value on every launch, so a lane can never take
+            // The words the four RISCs hand off on. Program semaphores rather than words in the op's
+            // own L1: the runtime writes the initial value on every launch, so a RISC can never take
             // what a previous launch -- or an aborted one -- left behind for a signal.
-            for (uint32_t id = 0; id < dspf2d::PROLOGUE_SEMAPHORES; id++) {
+            for (uint32_t id = 0; id < dspf2d::INDEX_SEMAPHORES; id++) {
                 desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
                     .id = id,
                     .core_type = tt::CoreType::WORKER,

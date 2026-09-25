@@ -35,7 +35,7 @@ StreamPlacements decide_device_placement(
     const ttnn::MeshCoordinate& coord,
     uint32_t axis,
     uint32_t num_links,
-    const std::vector<tt::tt_metal::CoreCoord>& universe) {
+    const std::vector<tt::tt_metal::CoreCoord>& allowed_cores) {
     auto* dev = mesh->get_device(coord);
     const auto self_node = mesh->get_fabric_node_id(coord);
 
@@ -127,32 +127,32 @@ StreamPlacements decide_device_placement(
 
     for (const StreamId stream : order) {
         const auto& candidate = candidates.at(stream);
-        const auto at = std::find(universe.begin(), universe.end(), candidate.worker);
-        // Refused rather than quietly relocated: the whole point of bounding the universe is that the
+        const auto at = std::find(allowed_cores.begin(), allowed_cores.end(), candidate.worker);
+        // Refused rather than quietly relocated: the whole point of bounding the allowed cores is that the
         // cores it does NOT hand this op belong to whatever else shares the chip, so a stream that
-        // wants one of those is the caller's carve being wrong, not something to work around. The
-        // model's carve is a row of the compute grid, which is where get_closest_worker_to_eth_core
+        // wants one of those is the caller's core set being wrong, not something to work around. The
+        // model's core set is a row of the compute grid, which is where get_closest_worker_to_eth_core
         // lands anyway.
         TT_FATAL(
-            at != universe.end(),
+            at != allowed_cores.end(),
             "dispatch_fabric2d {}: the worker nearest stream {}'s eth core is {}, which is outside the "
-            "{} cores this op was given. Widen the subdevice_id's carve to include it.",
+            "{} cores this op was given. Widen the subdevice_id's core set to include it.",
             self_node,
             stream,
             candidate.worker,
-            universe.size());
-        size_t pos = static_cast<size_t>(at - universe.begin());
-        for (size_t tried = 0; taken.contains(universe[pos]); tried++) {
+            allowed_cores.size());
+        size_t pos = static_cast<size_t>(at - allowed_cores.begin());
+        for (size_t tried = 0; taken.contains(allowed_cores[pos]); tried++) {
             TT_FATAL(
-                tried < universe.size(),
+                tried < allowed_cores.size(),
                 "dispatch_fabric2d {}: every one of the {} cores this op was given is taken; stream {} "
                 "has nowhere to go",
                 self_node,
-                universe.size(),
+                allowed_cores.size(),
                 stream);
-            pos = (pos + 1) % universe.size();
+            pos = (pos + 1) % allowed_cores.size();
         }
-        assign(stream, candidate, universe[pos]);
+        assign(stream, candidate, allowed_cores[pos]);
     }
     return placements;
 }
@@ -160,11 +160,11 @@ StreamPlacements decide_device_placement(
 }  // namespace
 
 MeshPlacement decide_placement(
-    ttnn::MeshDevice* mesh, uint32_t axis, uint32_t num_links, const tt::tt_metal::CoreRangeSet& universe) {
+    ttnn::MeshDevice* mesh, uint32_t axis, uint32_t num_links, const tt::tt_metal::CoreRangeSet& allowed_cores) {
     TT_FATAL(mesh != nullptr, "dispatch_fabric2d: mesh device is null");
     // One order for every chip, so a stream's core is decided the same way everywhere -- a sender's
     // arguments name the worker serving the same stream on the downstream chip.
-    const std::vector<tt::tt_metal::CoreCoord> cores = corerange_to_cores(universe);
+    const std::vector<tt::tt_metal::CoreCoord> cores = corerange_to_cores(allowed_cores);
     TT_FATAL(
         cores.size() >= stream_count(num_links),
         "dispatch_fabric2d: {} worker cores for {} streams",
@@ -177,16 +177,16 @@ MeshPlacement decide_placement(
     return placement;
 }
 
-// The cores of the universe this op does NOT use for a stream, in universe order. There is nothing
+// The cores of the allowed cores this op does NOT use for a stream, in allowed cores order. There is nothing
 // else on them, which is what lets the untilize CBs take most of an untilizer's L1.
 std::vector<tt::tt_metal::CoreCoord> spare_cores(
-    const tt::tt_metal::CoreRangeSet& universe, const StreamPlacements& streams) {
+    const tt::tt_metal::CoreRangeSet& allowed_cores, const StreamPlacements& streams) {
     std::set<tt::tt_metal::CoreCoord> taken;
     for (const auto& [stream, placement] : streams) {
         taken.insert(placement.worker_logical);
     }
     std::vector<tt::tt_metal::CoreCoord> spare;
-    for (const auto& core : corerange_to_cores(universe)) {
+    for (const auto& core : corerange_to_cores(allowed_cores)) {
         if (!taken.contains(core)) {
             spare.push_back(core);
         }

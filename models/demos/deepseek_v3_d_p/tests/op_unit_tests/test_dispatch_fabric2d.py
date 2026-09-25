@@ -10,7 +10,7 @@ each token lands is fully determined by the routing, so the gate is byte-exact e
 torch reference rather than a correlation threshold.
 
 The routing metadata is derived by `get_gate_outputs` from the same indices the op is given, so the
-control tensors and the routing agree by construction -- which is what the reader's own prologue check
+control tensors and the routing agree by construction -- which is what the reader's own routing index check
 relies on.
 
 Cases default to the production chunk: 5120 tokens over an 8-chip dispatch group, so
@@ -311,7 +311,7 @@ class _Fixture:
     test_dispatch_fabric2d's parametrization.
     """
 
-    # emb_dim 512 is 16 tiles wide, so the untilizer packs TWO column blocks per stripe. At 256 it is
+    # emb_dim 512 is 16 tiles wide, so the untilizer packs TWO column blocks per tile row. At 256 it is
     # exactly one, and a block's L1 column offset -- the thing block_ct_dim exists to make legal --
     # would never be anything but zero.
     def __init__(
@@ -577,7 +577,7 @@ def test_dispatch_fabric2d_subdevice(mesh_device, device_params, num_links, capf
     indirect=["mesh_device", "device_params"],
 )
 # 90 and 224 tiles wide. 90 is not a multiple of 8, so it is the width that exercises
-# `untilize_block_ct_dim`'s divisor search (block 6, fifteen blocks per stripe) rather than taking the
+# `untilize_block_ct_dim`'s divisor search (block 6, fifteen blocks per tile row) rather than taking the
 # 8 every power-of-two width takes; gpt_oss_120b's 2880 is a deployed emb_dim of exactly this shape.
 # 7168 is the production token, 14336 B: the size every packet-size bound in the sender is measured at.
 @pytest.mark.parametrize("emb_dim", [2880, 7168], ids=lambda e: f"emb{e}")
@@ -703,7 +703,7 @@ def test_dispatch_fabric2d_back_to_back(mesh_device, device_params, num_links):
     _PRODUCTION_MESH,
     indirect=["mesh_device", "device_params"],
 )
-# Half the tokens is the shape production pads to. 3 leaves one of the four prologue lanes with no
+# Half the tokens is the shape production pads to. 3 leaves one of the four routing index RISCs with no
 # tokens at all, which is the degenerate shape the slice arithmetic has to survive.
 @pytest.mark.parametrize("real", [320, 3], ids=lambda r: f"real{r}")
 @pytest.mark.timeout(900)
