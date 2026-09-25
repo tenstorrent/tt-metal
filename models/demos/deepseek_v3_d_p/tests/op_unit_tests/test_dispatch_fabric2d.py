@@ -4,17 +4,17 @@
 
 """Bring-up and correctness for dispatch_fabric2d.
 
-The op moves each token to the chips hosting the experts it was routed to, one fabric hop at a time,
-relaying through a DRAM forwarding buffer rather than leaving multi-hop routing to the fabric. Where
-each token lands is fully determined by the routing, so the gate is byte-exact equality against a
-torch reference rather than a correlation threshold.
+The op moves each token to the chips hosting the experts it was routed to, one fabric hop at a time.
+Each chip on the way stores the token in a DRAM forwarding buffer and forwards it. Where each token
+lands is fully determined by the routing, so the gate is byte-exact equality against a torch
+reference.
 
 The routing metadata is derived by `get_gate_outputs` from the same indices the op is given, so the
-control tensors and the routing agree by construction -- which is what the reader's own routing index check
-relies on.
+control tensors and the routing agree by construction. The bucket-fill ASSERT in merge_routing_index
+(watcher builds only) relies on that.
 
 Cases default to the production chunk: 5120 tokens over an 8-chip dispatch group, so
-seq_len_per_chip is 640. Two tests vary it on purpose --
+seq_len_per_chip is 640. Two tests vary it on purpose:
 `test_dispatch_fabric2d_partial_last_tile` and `test_dispatch_fabric2d_padding_config`.
 
 The mesh axis comes from the shared table in `tests/pcc/mesh_configs.py`, so CI's hardware-class
@@ -37,8 +37,8 @@ CHUNK = 5 * 1024
 DISPATCH_GROUP_SIZE = 8
 SEQ_LEN_PER_CHIP = CHUNK // DISPATCH_GROUP_SIZE
 
-# The production Galaxy row and the 8x1 TorusY LoudBox proxy. This op relays single hops around a
-# ring, so it needs an axis whose closing link is cabled and an extent of at least 4 -- which rules
+# The production Galaxy row and the 8x1 TorusY LoudBox proxy. This op forwards single hops around a
+# ring, so it needs an axis whose closing link is cabled and an extent of at least 4, which rules
 # out the 2x1 and mesh rows. The proxy is one dispatch group on a single-axis ring, so it covers
 # neither cross-group routing nor the 2D torus.
 _MESH_IDS = (
@@ -57,7 +57,8 @@ def _reference_dispatch(indices, table, offs, x, capacity, G, H, seq, topk, emb)
     """The pages the op must place, per destination chip, from every source chip.
 
     Replays the per-expert page allocator, including the rule that a token past capacity is dropped
-    while its counter still advances -- every later token's page depends on it.
+    while its counter still advances: page numbers must match the offsets table, which counts every
+    routed token.
 
     Returns payload[g][dst_row], metadata[g][dst_row] and, per (g, dst_row, page), the source row that
     wrote it, so a caller can compare only the pages a given source contributed.
@@ -102,7 +103,7 @@ def _expert_dispatch_table(num_routed_experts: int, dispatch_group_size: int, nu
 # (share of a token's picks landing in its own dispatch group, weight on the hot half of that group's
 # chips). Calibrated against captured MoE layers: the ones the perf harness ranks first sit at a 37%
 # in-group share (see the capture table in perf/test_dispatch_combine_perf.py), against 25% for an
-# evenly spread layer. The hot-half weight is what concentrates the survivors onto a few destination
+# evenly spread layer. The hot-half weight is what concentrates the kept tokens onto a few destination
 # chips, which is where the link load the transport is measured on comes from.
 #
 # The two knobs move together and must stay a calibrated pair: an in-group share from one layer with
@@ -150,7 +151,7 @@ def _draw_indices(G, H, seq, topk, num_routed_experts, in_group_share, hot_weigh
 # more tokens than any origin actually sends.
 @pytest.mark.parametrize("capacity_div", [1, 64], ids=lambda d: "roomy" if d == 1 else "tight")
 # In-group routing gives every token somewhere to go and is what the byte-exactness gate was built on;
-# production routes over all experts, so most picks resolve to -1 and the survivors concentrate on a
+# production routes over all experts, so most picks resolve to -1 and the kept tokens concentrate on a
 # few chips.
 @pytest.mark.parametrize("routing", [None, "production"], ids=lambda r: r or "in-group")
 # The model hands dispatch TILED activations. A TILE input is untilized on device into a staging
@@ -222,7 +223,7 @@ def test_dispatch_fabric2d(mesh_device, device_params, num_links, capacity_div, 
     # path's untilizer byte-exact rather than merely close.
     tt_x = shard(x, (0, 1), ttnn.bfloat16, layout=input_layout)
     tt_idx = shard(indices.permute(1, 0, 2, 3).to(torch.int32).to(torch.int16), (0, 1), ttnn.uint16)
-    # expert_offsets is the ALL-ROWS table: replicated along the dispatch axis, since a relaying chip
+    # expert_offsets is the ALL-ROWS table: replicated along the dispatch axis, since a forwarding chip
     # sizes a run it neither wrote nor receives.
     tt_offs = shard(offs, (None, 0), ttnn.int32)
     tt_counts = shard(counts[:, 0:1, :], (None, 0), ttnn.int32)
@@ -255,8 +256,8 @@ def test_dispatch_fabric2d(mesh_device, device_params, num_links, capacity_div, 
         indices, table, offs, x, max_dispatch_buffer_token_size, G, H, seq_len_per_chip, num_experts_per_tok, emb_dim
     )
 
-    # Every page any chip sourced should now be in place: the neighbour's by a single hop, farther
-    # ones relayed through the forwarding regions, and this chip's own by the local phase. `src_of`
+    # Every page any chip sourced should now be in place: the downstream chip's by a single hop, farther
+    # ones forwarded through the fwd_sections, and this chip's own by the local phase. `src_of`
     # marks the pages no token lands on, which stay untouched.
     got_payload = ttnn.get_device_tensors(payload)
     got_meta = ttnn.get_device_tensors(metadata)
@@ -311,7 +312,7 @@ class _Fixture:
     test_dispatch_fabric2d's parametrization.
     """
 
-    # emb_dim 512 is 16 tiles wide, so the untilizer packs TWO column blocks per tile row. At 256 it is
+    # emb_dim 512 is 16 tiles wide, so the untilizer packs two column blocks per tile row. At 256 it is
     # exactly one, and a block's L1 column offset -- the thing block_ct_dim exists to make legal --
     # would never be anything but zero.
     def __init__(
@@ -364,8 +365,8 @@ class _Fixture:
         Recomputes the expert offsets, counts and region tables from `indices`, uploads them together
         with `indices` itself, and clears the cached `reference()`.
 
-        The op trusts the offsets table to match the indices: it is how every chip on the axis, relays
-        included, sizes the chunks it waits for and forwards. A table from a stale draw has the right
+        The op trusts the offsets table to match the indices: it is how every chip on the axis, forwarding
+        chips included, sizes the chunks it waits for and forwards. A table from a stale draw has the right
         shape, so nothing rejects it, and the op then places the wrong pages.
         """
         G, H = self.G, self.H
@@ -559,7 +560,7 @@ def test_dispatch_fabric2d_subdevice(mesh_device, device_params, num_links, capf
             fx.run(cfg.sp_axis, num_links, subdevice_id=shared_sd)
         message = str(refusal.value)
         # The core it names is the one the eth-nearest placement wanted. CoreCoord formats as x-y, so
-        # a trailing -0 is row 0 -- which is the whole claim this test exists to make.
+        # a trailing -0 is row 0, which is what this test checks.
         assert re.search(r"eth core is \d+-0,", message), message
 
     # The eth-nearest workers are spread along row 0, so dispatch needs all of it; the error naming
@@ -618,7 +619,7 @@ def test_dispatch_fabric2d_relaunch(mesh_device, device_params, num_links, emb_d
         )
         payload, metadata = fx.run(cfg.sp_axis, num_links, layout=layout)
         # Reading the outputs back is what synchronises the launches: this op deadlocks if a chip
-        # starts sending into a neighbour that is still retiring the previous one.
+        # starts sending into a downstream chip that is still retiring the previous one.
         fx.check(payload, metadata, f"{label}, emb {emb_dim}")
         if entries_after_first is None:
             entries_after_first = mesh_device.num_program_cache_entries()
@@ -679,11 +680,11 @@ def test_dispatch_fabric2d_back_to_back(mesh_device, device_params, num_links):
     """Four launches queued with no host sync between them, as in a traced replay.
 
     Every other test reads outputs between launches, so launches never overlap. Here a chip that
-    finishes early can start sending into a neighbour still finishing the previous launch, racing the
+    finishes early can start sending into a downstream chip still finishing the previous launch, racing the
     reset of the arrival counter:
 
-    - An increment lost to the reset hangs the relay waiting for it.
-    - A counter left too high lets the relay read pages before they arrive. Alternating two draws
+    - An increment lost to the reset hangs the forward waiting for it.
+    - A counter left too high lets the forward read pages before they arrive. Alternating two draws
       makes those stale pages differ from the expected ones.
     """
     cfg = extract_mesh_config(mesh_device)

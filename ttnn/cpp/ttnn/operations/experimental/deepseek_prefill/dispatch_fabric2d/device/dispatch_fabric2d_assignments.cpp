@@ -218,7 +218,7 @@ std::map<StreamId, std::vector<Assignment>> generate_assignments(
                     .split_count = split_count});
             };
 
-            // Furthest destination first, the order outgoing_chunks writes them into the downstream section.
+            // Furthest destination first, the order outgoing_chunks writes them into the downstream fwd_section.
             for (uint32_t j = 1; j <= m; j++) {
                 const uint32_t distance = m - j + 1;
                 if (distance == m) {
