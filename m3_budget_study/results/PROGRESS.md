@@ -74,3 +74,12 @@ Q3) not started — needs model-code work, waiting on the owner's go-ahead.
 - Per-segment packing overhead seg_a: dense 0.61, sparse 0.33 ms/segment/layer; model vs packed 3.2% mean.
 - E8 at 141k: K ≥ 0.9989, V ≥ 0.9959, index_k ≥ 0.9992 over 8 layers. Top-k overlap not measured.
 - Sim rerun with seg_a: 3,9,8,… split 28.0k vs 18.8k tok/s default (+49%).
+
+## Remaining experiments (23:00)
+- E6 done: SP=2 30–35 vs SP=4 36–53 chip-µs/token-layer; gap widens at depth (1.2–1.3× cold → 1.4–1.5× at 549k).
+- E8 top-k: deep segment 94–97% vs reference; control (other companion) 100% identical → no packing effect.
+- E7 done on the common runner (2 × (4,4), 16 layers, W=4096): K=1/2/4/open cold 33/50/51/56k tok/s, hot
+  26/40/41/44k; bottleneck flips B → A with depth; hop 8.45 ms. Added default-off producer knobs
+  MAX_IN_FLIGHT and PREFIX_TOKENS. First E7 attempt aborted (stale acks from un-gated producers would have
+  skewed K and could fill the 4 KB ack FIFO); logs in results/e7_aborted/.
+- Traced repeats: not possible, M3 prefill has no trace path.

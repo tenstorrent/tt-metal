@@ -434,6 +434,9 @@ class ProducerConfig:
     interleave: str = "random"
     slot_lengths: dict = None
     multi_turn_prob: float = 0.0
+    # Perf only: fresh requests start at this cached_len (a multiple of the KV chunk) without the history
+    # having been written, to time hot requests on a deep history. 0 = start at 0.
+    prefix_tokens: int = 0
 
 
 def _config_from_env() -> ProducerConfig:
@@ -462,6 +465,7 @@ def _config_from_env() -> ProducerConfig:
         pcc_threshold=float(os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.93")),
         interleave=interleave,
         multi_turn_prob=float(os.environ.get("PREFILL_PRODUCER_MULTI_TURN_PROB", "0.0")),
+        prefix_tokens=int(os.environ.get("PREFILL_PRODUCER_PREFIX_TOKENS", "0")),
     )
 
 
@@ -526,7 +530,7 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
 
     next_req_id = 0
     for slot in slots:
-        _new_request(slot, next_req_id, cfg, rng)
+        _new_request(slot, next_req_id, cfg, rng, prefix_len=cfg.prefix_tokens)
         next_req_id += 1
 
     push_ms: list = []
@@ -555,7 +559,7 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
                 ):
                     _new_request(slot, next_req_id, cfg, rng, prefix_len=prefix, turn_idx=slot.turn_idx + 1)
                 else:
-                    _new_request(slot, next_req_id, cfg, rng)
+                    _new_request(slot, next_req_id, cfg, rng, prefix_len=cfg.prefix_tokens)
                 next_req_id += 1
 
     while (now_fn() - start) < cfg.duration_s and completed < cfg.max_requests:
@@ -1538,7 +1542,10 @@ def main() -> None:
 
     kv_table = _read_kv_chunk_table(timeout_s) if cfg.verify else None
 
-    ack_channel = _connect_layer_ack_channel(timeout_s) if cfg.verify else None
+    # PREFILL_PRODUCER_MAX_IN_FLIGHT=K (0 = off): push chunk t only after chunk t-K's layer acks are back,
+    # bounding the chunks in flight across the pipeline. Needs the LayerAck channel even without CHECK_PCC.
+    max_in_flight = int(os.environ.get("PREFILL_PRODUCER_MAX_IN_FLIGHT", "0"))
+    ack_channel = _connect_layer_ack_channel(timeout_s) if cfg.verify or max_in_flight > 0 else None
     if cfg.verify and ack_channel is None:
         logger.error(
             "[producer] CHECK_PCC=1 but LayerAck channel missing — UMD read would race the runner's "
@@ -1556,9 +1563,20 @@ def main() -> None:
     slot_traces, slot_lengths, pools_by_trace = _resolve_slot_prompts(cfg)
     cfg.slot_lengths = slot_lengths
 
+    gate = {"on": False, "pushed": 0, "acked": 0}
+
     def push_chunk(slot_id: int, chunk_idx: int, actual_start: int, actual_end: int, actual_isl: int) -> float:
+        if gate["on"] and max_in_flight > 0 and ack_channel is not None:
+            need = (gate["pushed"] - max_in_flight + 1) * ack_layers
+            if need > gate["acked"]:
+                gate["acked"] += _drain_layer_acks(ack_channel, need - gate["acked"])
+        gate["pushed"] += 1
         pool = pools_by_trace[slot_traces[slot_id]]
-        tokens = _chunk_slice(pool, actual_start, actual_isl)
+        tok_start = actual_start
+        if cfg.prefix_tokens and tok_start + CHUNK_SIZE > len(pool):
+            tok_start %= len(pool) - CHUNK_SIZE + 1  # perf-only deep offsets: reuse the pool's tokens
+        shift = actual_start - tok_start
+        tokens = _chunk_slice(pool, tok_start, None if actual_isl is None else actual_isl - shift)
         metadata = _pack_metadata(slot_id, actual_start, actual_end)
         logger.info(f"[producer] push slot={slot_id} cidx={chunk_idx} start={actual_start} end={actual_end}")
         push_start = time.perf_counter()
@@ -1575,6 +1593,10 @@ def main() -> None:
             _drain_layer_acks(ack_channel, ack_layers * warmup_chunks)
         logger.info("[producer] warmup complete; starting the measured request")
 
+    if max_in_flight > 0 and ack_channel is not None:
+        # Acks left in the channel by an earlier producer on the same runner would count toward this run.
+        logger.info(f"[producer] discarded {ack_channel.try_consume_all()} stale layer acks before the measured run")
+    gate.update(on=True, pushed=0, acked=0)
     stats = run_schedule(cfg, push_fn=push_chunk)
     service.barrier()
 
@@ -1587,7 +1609,7 @@ def main() -> None:
         f"p99={_percentile(sorted_ms, 0.99):.1f}"
     )
 
-    _drain_layer_acks(ack_channel, ack_layers * stats.total_pushes)
+    _drain_layer_acks(ack_channel, ack_layers * stats.total_pushes - gate["acked"])
 
     if world_size > 1:
         _mr_bcast_resident(mr_rank, stats.resident)

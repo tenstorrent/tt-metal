@@ -26,6 +26,7 @@ Env:
   BUDGET_WARMUP / BUDGET_ITERS   warm-up and timed forwards per composition                [2 / 5]
   BUDGET_DUMP_KV     directory: after the last composition, save each slot's [k, v, index_k] (torch)
   BUDGET_REFERENCE   1 -> run each segment alone on the plain path (see above)            [default 0]
+  BUDGET_TOPK_DUMP   file: record the MSA top-k block ids of one extra forward of the last composition
   BUDGET_STAGES / BUDGET_STAGE, BUDGET_TOKENS, M3_FABRIC, EXPERT_DTYPE, HF_MODEL, TT_CACHE_PATH as
   for budget_sweep.py.
 """
@@ -211,6 +212,25 @@ def main():
             )
             for slot, stream, h, n in segs:  # the composition wrote these positions: history now reaches them
                 depth[slot] = (stream, max(depth.get(slot, (stream, 0))[1], h + SEG))
+
+        topk_dump = os.getenv("BUDGET_TOPK_DUMP")
+        if topk_dump:
+            # One extra untimed forward of the last composition, recording every MSA call's top-k block ids
+            # (order: packed = layer-major then segment; reference = segment-major then layer).
+            import torch
+
+            from models.demos.minimax_m3.tt.attention import msa
+
+            composer = ttnn.ConcatMesh2dToTensor(mesh, dims=(2, 1), mesh_shape=mesh.shape)
+            captured = []
+            msa.set_block_id_sink(lambda ids: captured.append(ttnn.to_torch(ids, mesh_composer=composer)))
+            run(compos[-1][2])
+            msa.set_block_id_sink(None)
+            segs = compos[-1][2]
+            torch.save(
+                {"ids": captured, "reference": reference, "segments": [(h, n) for _, _, h, n in segs]}, topk_dump
+            )
+            emit(kind="topk_dumped", path=topk_dump, calls=len(captured))
 
         if dump:
             import torch

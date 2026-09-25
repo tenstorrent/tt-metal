@@ -1,0 +1,5 @@
+deep segment, sparse layer 0: mean overlap 1.0000 rows identical 1.000
+deep segment, sparse layer 1: mean overlap 1.0000 rows identical 1.000
+deep segment, sparse layer 2: mean overlap 1.0000 rows identical 1.000
+deep segment, sparse layer 3: mean overlap 1.0000 rows identical 1.000
+deep segment, sparse layer 4: mean overlap 1.0000 rows identical 1.000

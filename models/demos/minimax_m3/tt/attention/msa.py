@@ -180,6 +180,8 @@ def msa_indexer_sparse(
             assert kv_len % block_size == 0, f"kv_len ({kv_len}) must be a whole number of {block_size}-token blocks"
             topk_kwargs["valid_length"] = kv_len // block_size
         block_ids = ttnn.experimental.topk_large_indices(block_scores, k=topk_blocks, **topk_kwargs)
+        if _block_id_sink is not None:
+            _block_id_sink(block_ids)
 
     # sparse_sdpa_msa (#48700): q + block-ids row-major, K/V tiled; expands blocks->tokens internally.
     # chunk_start_idx + cluster_axis drive the token-level diagonal-block causal mask with the per-device
@@ -202,6 +204,16 @@ def msa_indexer_sparse(
         # dense (ring_joint) output so the shared post-attention path works for MSA layers too.
         out = ttnn.to_layout(out, ttnn.TILE_LAYOUT)
     return (out, block_ids) if return_block_ids else out
+
+
+# Debug hook (default off): called with every MSA call's top-k block ids, e.g. to compare block selection
+# between two runs. Set with set_block_id_sink(fn) / set_block_id_sink(None).
+_block_id_sink = None
+
+
+def set_block_id_sink(fn):
+    global _block_id_sink
+    _block_id_sink = fn
 
 
 def msa_sp_attention_nocache(

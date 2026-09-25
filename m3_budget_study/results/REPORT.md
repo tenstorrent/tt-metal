@@ -107,14 +107,58 @@ real rows; a short segment that is not last in the forward makes MoE route every
 Packed `[141312:2048, 0:2048]` vs the same segments alone on the original path, real history, S0 layers
 (0–7), all 143k real positions: K PCC ≥ 0.9989, V ≥ 0.9959 (worst: layer 7), index_k ≥ 0.9992; dense
 layers 1.00000. Drift grows with layer depth, consistent with the wider MoE matmul (4096 vs 2048 rows) —
-a width effect, well inside the 0.94–0.95 wide-forward drift seen before. **Indexer top-k overlap was not
-measured**: the selected blocks stay inside `msa_indexer_sparse`; it needs a debug output from that op.
+a width effect, well inside the 0.94–0.95 wide-forward drift seen before.
 
-### Q7 — not run
+Indexer top-k (default-off `msa.set_block_id_sink` hook; `topk_overlap.py`): the deep segment's selected
+blocks agree with the reference on **94.4–97.2%** per sparse layer (29–59% of rows identical); the cold
+segment agrees 100% (trivially — at h = 0 all 16 blocks are selected). **Control:** the same deep segment
+packed with a *different* cold companion (same packed history fill) selects **identical blocks in every row
+of every sparse layer**. So a segment's selection does not depend on what it is packed with; the 3–6%
+difference vs the reference comes from the forward width (4096-row MoE vs 2048) and the history having been
+written by packed forwards — near-tie indexer scores flipping under bf16/bf8 numerics, not a packing effect.
 
-E6 (SP=2 vs SP=4 at depth) and E7 (2-stage pipeline, hop) not run in Phase A. The simulator's flowshop has no
-limit on forwards in flight, so hop_ms = 5/10 changes latency but not tok/s (verified); a bounded in-flight
-count is needed before hop can matter.
+### Q7 — SP=2 vs SP=4 at depth (E6) and the 2-stage pipeline (E7)
+
+**E6** — chip-µs per token-layer (chips × stage ms × 1000 / (W × layers)); SP=2 = (2,4) with 15 sparse
+layers (15–29), SP=4 = (4,4) with S8; plain path, real history; 139264 stands in for 141312 (h % W = 0):
+
+| W | layout | h = 0 | 139k | 549k |
+|---|---|---|---|---|
+| 4096 | SP=2 | 31.3 | 30.9 | 34.9 |
+| 4096 | SP=4 | 39.9 | 41.3 | 53.4 |
+| 8192 | SP=2 | 29.7 | 28.8 | 31.0 |
+| 8192 | SP=4 | 35.7 | 36.0 | 42.3 |
+
+The SP=2 advantage **grows with depth**: 1.20–1.27× cold (previously 27 vs 33) → 1.36–1.53× at 549k. This is
+the E3 finding again: every chip gathers the whole K/V/index_k history each sparse layer, so SP=4 pays that
+per-chip cost on twice as many chips for half the rows each. SP=2 per stage is slower (15 layers, 8 chips:
+241 vs 82 ms at W=4096), so the choice is chips-per-token efficiency vs per-forward latency.
+
+**E7** — the common prefill runner, 2 ranks = 2 × (4,4) on this galaxy (2d fabric, Z-linked), 16 layers
+(A = 0–7, B = 8–15), W = 4096, untraced. Two default-off producer knobs were added for it:
+`PREFILL_PRODUCER_MAX_IN_FLIGHT` (push chunk t only after chunk t−K's layer acks) and
+`PREFILL_PRODUCER_PREFIX_TOKENS` (perf-only deep start offset). Throughput = tokens / (push wall + final ack
+drain), 48 chunks per run:
+
+| in flight | cold stream | hot stream (1 chunk on 139k history) |
+|---|---|---|
+| K = 1 | 33.2k tok/s | 25.7k |
+| K = 2 | 49.6k | 40.1k |
+| K = 4 | 50.5k | 41.4k |
+| open (FIFO, ~8) | 56.3k | 44.1k |
+
+- The pipeline runs at its slowest stage: cold = stage B (8 sparse; ~73 ms/chunk vs 79–82 ms alone), hot =
+  **stage A** (3 dense + 5 sparse; the cost model predicts 102 ms → 40.1k tok/s, measured 40.1k at K = 2).
+  The bottleneck moving to the dense stage with depth is Q5, measured end to end.
+- **K = 2 reaches 88–91% of open-loop**; K = 4 adds 2–3%.
+- **Hop** (stage A done → stage B start, incl. D2D; sync session, chunks where B was idle): **8.45 ms median**
+  (8.0–10.8, n = 24). It overlaps compute when un-synced, so it costs latency (~8.5 ms per stage boundary),
+  not throughput. `hop_ms = 8.45` is now in `coeffs.json`; the simulator result does not change.
+- Caveats: layer acks fire at host issue, not device completion, so K bounds host-side chunks in flight;
+  the end-of-run error is ≤ one chunk (~2%). E7 used 2d fabric, the timing runs 1d.
+
+**Trace**: M3 prefill has no traced path (`TtPrefillRuntime` never captures a trace; `PREFILL_USE_TRACE=1`
+only reserves a trace region), so the optional traced repeats are **not possible** today.
 
 ## Cost model (`coeffs.json`)
 
@@ -157,7 +201,9 @@ segment. Validated on the 32 packed E4 forwards: 3.2% mean, 10.3% max error (D W
    start-up, visible only in 1–2-layer runs.
 5. Packing on a (4,4) sub-mesh is nearly free (+3–6% cold at the same W) and additive, so the scheduler can
    treat a forward's cost as a sum of per-segment costs — which is what the `cost` policy needs.
-6. Next: E6/E7; indexer top-k overlap instrumentation; traced repeats; `prefill_segments` under trace.
+6. SP=2 sub-meshes are 1.2–1.5× more chip-efficient than SP=4 and more so at depth — the full-history
+   gathers are per chip. Fixing the gather (item 2) narrows that gap.
+7. Next: a trace path for M3 prefill (then traced repeats); `prefill_segments` in the pipeline runner.
 
 ## Runs that failed
 

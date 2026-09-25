@@ -1,0 +1,3 @@
+segment 0 (h=141312, n=2048): mean overlap per sparse layer 0.9720 0.9527 0.9443 0.9490 0.9478 | rows identical 0.593 0.389 0.288 0.324 0.328
+segment 1 (h=0, n=2048): mean overlap per sparse layer 1.0000 1.0000 1.0000 1.0000 1.0000 | rows identical 1.000 1.000 1.000 1.000 1.000
+worst mean overlap 0.9443
