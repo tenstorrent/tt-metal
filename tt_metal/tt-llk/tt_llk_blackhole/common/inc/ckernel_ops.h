@@ -10,7 +10,7 @@
 #elif defined(ARCH_BLACKHOLE) && defined(LLK_TEST)
 // The llk test infra compiles this on brisc to (unreachable?) code.
 // So icky.
-#define TTI_INSN(ENCODING) void((void(ENCODING), ({ __asm__ __volatile__(".warning \"TTI_INSN in non-tensix code\""); }), __builtin_trap()))
+#define TTI_INSN(ENCODING) void((void(ENCODING), ({ __asm__ __volatile__(".warning \"TTI_INSN in non-tensix code\""); }) /*, __builtin_trap()*/))
 #define TT_INSN(ENCODING)  void((void(ENCODING), ({ __asm__ __volatile__(".error \"TT_INSN in non-tensix code\""); })))
 #else
 #define TTI_INSN(ENCODING) void((void(ENCODING), ({ __asm__ __volatile__(".error \"TTI_INSN in non-tensix code\""); })))
