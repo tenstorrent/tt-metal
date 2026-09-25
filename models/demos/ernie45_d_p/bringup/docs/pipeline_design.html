@@ -1,0 +1,636 @@
+<title>Gated Prefill Bring-up</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=Source+Sans+3:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --bg:#f5f6f3; --paper:#fcfcfa; --ink:#1b1f1d; --ink2:#48504c; --muted:#6d7571; --line:#d7dbd6; --soft:#eceee9;
+  --agent:#3456a8; --agent-soft:#e3e9f6;
+  --mech:#5e6662; --mech-soft:#e9ebe7;
+  --gate:#1e7a4f; --gate-soft:#dcefe5;
+  --human:#a0620c; --human-soft:#f6e8d2;
+  --fail:#b3402e;
+  --f-display:"IBM Plex Sans Condensed","Arial Narrow",system-ui,sans-serif;
+  --f-body:"Source Sans 3",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --bg:#121413; --paper:#191c1a; --ink:#e4e8e5; --ink2:#b9c0bc; --muted:#8f9893; --line:#2f3431; --soft:#222623;
+    --agent:#86a4ec; --agent-soft:#1c2640; --mech:#a3aba7; --mech-soft:#262a28;
+    --gate:#5cc893; --gate-soft:#15301f; --human:#e3a24a; --human-soft:#33260f; --fail:#ec7a66;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#121413; --paper:#191c1a; --ink:#e4e8e5; --ink2:#b9c0bc; --muted:#8f9893; --line:#2f3431; --soft:#222623;
+  --agent:#86a4ec; --agent-soft:#1c2640; --mech:#a3aba7; --mech-soft:#262a28;
+  --gate:#5cc893; --gate-soft:#15301f; --human:#e3a24a; --human-soft:#33260f; --fail:#ec7a66;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.6 var(--f-body)}
+.page{max-width:1080px;margin:0 auto;padding-inline:20px;padding-block:40px 80px;display:grid;gap:44px}
+.col{max-width:70ch}
+h1,h2,h3{font-family:var(--f-display);line-height:1.15;margin:0;text-wrap:balance}
+h1{font-size:clamp(30px,4.2vw,42px);font-weight:700}
+h2{font-size:25px;font-weight:600}
+h3{font-size:19px;font-weight:600}
+p{margin:0}
+.stack{display:grid;gap:14px}
+.eyebrow{font:500 12px/1 var(--f-mono);letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.lede{font-size:19px;color:var(--ink2)}
+code,.mono{font-family:var(--f-mono);font-size:.84em}
+code{background:var(--soft);padding:1px 5px;border-radius:4px}
+.meta{display:flex;flex-wrap:wrap;gap:6px 20px;font-size:14px;color:var(--muted)}
+.meta b{color:var(--ink);font-weight:600}
+.rule{border-left:3px solid var(--gate);padding:10px 0 10px 16px;font-size:18px;max-width:70ch}
+figure{margin:0;display:grid;gap:10px}
+.fig{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:16px;overflow-x:auto}
+.fig svg{display:block;width:100%;height:auto;min-width:720px;color:var(--ink)}
+figcaption{font-size:14.5px;color:var(--muted);max-width:80ch}
+.legend{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:14px;color:var(--ink2)}
+.sw{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-1px;margin-right:6px;border:1.5px solid}
+ol.steps{list-style:none;margin:0;padding:0;display:grid;gap:0;border-top:1px solid var(--line)}
+ol.steps>li{display:grid;grid-template-columns:52px minmax(0,1fr);gap:16px;padding:20px 0;border-bottom:1px solid var(--line)}
+.num{font:600 26px/1 var(--f-display);color:var(--muted);font-variant-numeric:tabular-nums}
+.step-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px 12px}
+.who{font:500 11.5px/1 var(--f-mono);letter-spacing:.06em;text-transform:uppercase;padding:4px 8px;border-radius:999px;border:1px solid}
+.who.agent{color:var(--agent);background:var(--agent-soft);border-color:transparent}
+.who.mech{color:var(--mech);background:var(--mech-soft);border-color:transparent}
+.who.human{color:var(--human);background:var(--human-soft);border-color:transparent}
+.io{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:4px 14px;font-size:15px;margin-top:10px}
+.io dt{color:var(--muted)} .io dd{margin:0}
+.io dd.gate{color:var(--gate)}
+.tbl{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--paper)}
+table{border-collapse:collapse;width:100%;font-size:15px}
+th{font:500 12px/1.2 var(--f-mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);text-align:left;padding:10px 14px;border-bottom:1px solid var(--line)}
+td{padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:0}
+pre{margin:0;background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:16px 18px;overflow-x:auto;font:13.5px/1.55 var(--f-mono);color:var(--ink)}
+pre .c{color:var(--muted)}
+ul.plain{margin:0;padding-left:1.2em;display:grid;gap:8px;max-width:72ch}
+.qs{counter-reset:q;list-style:none;margin:0;padding:0;display:grid;gap:12px;max-width:76ch}
+.qs li{counter-increment:q;display:grid;grid-template-columns:34px minmax(0,1fr);gap:8px}
+.qs li::before{content:"Q" counter(q);font:600 14px/1.6 var(--f-mono);color:var(--human)}
+.two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:24px}
+@media (max-width:760px){.two{grid-template-columns:minmax(0,1fr)} ol.steps>li{grid-template-columns:36px minmax(0,1fr)}}
+.small{font-size:14.5px;color:var(--ink2)}
+a{color:var(--agent)}
+</style>
+
+<main class="page">
+  <header class="stack col">
+    <span class="eyebrow">Design draft 4 · for review</span>
+    <h1>A gated pipeline for bringing up transformer prefill on Tenstorrent</h1>
+    <p class="lede">This page proposes a model-agnostic version of the process used to bring up ERNIE-4.5-21B-A3B chunked prefill on a 4-chip Blackhole box. Agents do the creative work in fixed steps. Tests that were written and checked before the implementation decide whether each step passed.</p>
+    <div class="meta">
+      <span>Evidence run <b>ERNIE-4.5-21B-A3B</b>, 28 layers, 55k@5k</span>
+      <span>Box <b>4× p150b</b>, mesh 1×4</span>
+      <span>Result <b>26 gates passed</b>, 55k TTFT 4.4 s</span>
+      <span>Code <b>models/demos/ernie45_d_p/bringup</b></span>
+    </div>
+  </header>
+
+  <section class="stack col">
+    <h2>Changes since draft 3</h2>
+    <ul class="plain small">
+      <li>Swap tests run on one layer per block type. Step 5 and the bring-up section say so.</li>
+      <li>Every run records the git hash of each agent definition it used; <code>compare</code> is an optional orchestrator subcommand.</li>
+      <li>No open questions remain.</li>
+    </ul>
+    <h2>Changes since draft 2</h2>
+    <ul class="plain small">
+      <li>A single orchestrator script runs the pipeline, started from a conversational intake skill. New section.</li>
+      <li>The artifact folder defaults to the user's localdev folder.</li>
+      <li>Performance opportunities are ranked by measured time.</li>
+      <li>The two unclear questions from draft 2, about swap tests and comparing forked runs, are rewritten with a proposed answer.</li>
+    </ul>
+    <h2>Changes since draft 1</h2>
+    <ul class="plain small">
+      <li>Runs can be resumed from any step and forked from any passed step. New section and figure.</li>
+      <li>Large models can be brought up on a subset of layers. New section.</li>
+      <li>Blocks are brought up one component at a time, with a check after every swap. New section and figure.</li>
+      <li>Weights and goldens are cached once and reused. Every file the pipeline creates lives under one folder.</li>
+      <li>The planner, and every other agent, starts from a repo map and a known-issues file instead of searching the repo again.</li>
+      <li>The performance step now ends in a list of opportunities that a person picks from. It no longer loops on its own.</li>
+      <li>Answers to the six review questions are recorded at the end, together with new open questions.</li>
+    </ul>
+  </section>
+
+  <section class="stack col">
+    <h2>The one rule</h2>
+    <p class="rule">An agent never writes the gate it has to pass. A separate step writes each test, checks the test against the reference, and freezes it before any implementation exists. The gate runner only executes frozen tests and compares their recorded numbers with thresholds that were fixed in advance.</p>
+    <p>The pipeline is a fixed sequence of agent calls. Between two calls sits a gate that a script runs without judgment. A gate either passes, and the pipeline commits the step and moves on, or fails, and the same agent gets the failure log and tries again.</p>
+  </section>
+
+  <section class="stack col">
+    <h2>What a model must look like to enter</h2>
+    <p>The pipeline does not care about the attention flavor, the MLP type, or the number of layers. It needs five things from a model.</p>
+    <ul class="plain">
+      <li>A checkpoint with a runnable reference, today a Hugging Face model, that the pipeline can run on CPU as an oracle.</li>
+      <li>A forward pass that is an embedding, a stack of blocks, and a head. Blocks may differ by layer, for example ERNIE's dense layer 0 followed by 27 MoE layers.</li>
+      <li>Blocks that decompose into components with a fixed order and residual wiring, where each component maps a named input tensor to a named output tensor.</li>
+      <li>Per-layer state that chunked prefill carries between chunks, such as a KV cache or a recurrent state, with a known shape per layer.</li>
+      <li>A deterministic CPU forward pass, so that chunked and one-shot prefill agree to about 1e-6 and every golden is reproducible.</li>
+    </ul>
+  </section>
+
+  <section class="stack">
+    <div class="col stack">
+      <h2>The pipeline</h2>
+      <p>Nine steps run in order. Five are agent calls, three are scripts with no agent, and people approve decisions at three points. Each arrow between steps carries a gate and the files that the next step reads.</p>
+    </div>
+    <figure>
+      <div class="fig">
+        <svg viewBox="0 0 1040 600" role="img" aria-label="Pipeline of nine steps in three rows. Row one: intake, reference, goldens. Row two, right to left: plan, tests, implement. Row three: integrate, contract, performance. A gate sits on every arrow. Implement retries up to three times, then hands over to ttnn-expert-debugger. Performance ends in an opportunity list that a person picks from.">
+          <defs>
+            <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" fill="currentColor"/></marker>
+            <marker id="arf" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" style="fill:var(--fail)"/></marker>
+          </defs>
+          <text x="18" y="36" font-size="11" font-family="JetBrains Mono, monospace" fill="currentColor" opacity=".55">REFERENCE</text>
+          <text x="18" y="226" font-size="11" font-family="JetBrains Mono, monospace" fill="currentColor" opacity=".55">COMPONENTS</text>
+          <text x="18" y="416" font-size="11" font-family="JetBrains Mono, monospace" fill="currentColor" opacity=".55">SYSTEM</text>
+          <g font-family="Source Sans 3, sans-serif">
+            <rect x="40" y="50" width="240" height="84" rx="9" style="fill:var(--agent-soft);stroke:var(--agent)" stroke-width="1.6"/>
+            <text x="56" y="76" font-size="11" font-family="JetBrains Mono, monospace" style="fill:var(--agent)">0 · AGENT + HUMAN</text>
+            <text x="56" y="100" font-size="17" font-weight="600" fill="currentColor">Intake</text>
+            <text x="56" y="121" font-size="13" fill="currentColor" opacity=".75">spec, box, target, layer subset</text>
+            <rect x="400" y="50" width="240" height="84" rx="9" style="fill:var(--agent-soft);stroke:var(--agent)" stroke-width="1.6"/>
+            <text x="416" y="76" font-size="11" font-family="JetBrains Mono, monospace" style="fill:var(--agent)">1 · AGENT</text>
+            <text x="416" y="100" font-size="17" font-weight="600" fill="currentColor">Reference</text>
+            <text x="416" y="121" font-size="13" fill="currentColor" opacity=".75">standalone CPU model + hooks</text>
+            <rect x="760" y="50" width="240" height="84" rx="9" style="fill:var(--mech-soft);stroke:var(--mech)" stroke-width="1.6" stroke-dasharray="5 4"/>
+            <text x="776" y="76" font-size="11" font-family="JetBrains Mono, monospace" style="fill:var(--mech)">2 · SCRIPT</text>
+            <text x="776" y="100" font-size="17" font-weight="600" fill="currentColor">Goldens</text>
+            <text x="776" y="121" font-size="13" fill="currentColor" opacity=".75">recorded once, reused by all</text>
+          </g>
+          <line x1="280" y1="92" x2="398" y2="92" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+          <rect x="296" y="68" width="86" height="20" rx="10" style="fill:var(--gate-soft);stroke:var(--gate)"/>
+          <text x="339" y="82" font-size="11" text-anchor="middle" font-family="JetBrains Mono, monospace" style="fill:var(--gate)">weights ok</text>
+          <text x="339" y="112" font-size="11.5" text-anchor="middle" font-family="JetBrains Mono, monospace" fill="currentColor" opacity=".7">spec.yaml</text>
+          <line x1="640" y1="92" x2="758" y2="92" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+          <rect x="648" y="68" width="102" height="20" rx="10" style="fill:var(--gate-soft);stroke:var(--gate)"/>
+          <text x="699" y="82" font-size="11" text-anchor="middle" font-family="JetBrains Mono, monospace" style="fill:var(--gate)">= HF, chunked</text>
+          <text x="699" y="112" font-size="11.5" text-anchor="middle" font-family="JetBrains Mono, monospace" fill="currentColor" opacity=".7">reference.py</text>
+          <line x1="880" y1="134" x2="880" y2="238" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+          <rect x="890" y="166" width="108" height="20" rx="10" style="fill:var(--gate-soft);stroke:var(--gate)"/>
+          <text x="944" y="180" font-size="11" text-anchor="middle" font-family="JetBrains Mono, monospace" style="fill:var(--gate)">complete, hashed</text>
+          <text x="890" y="206" font-size="11.5" font-family="JetBrains Mono, monospace" fill="currentColor" opacity=".7">golden/…</text>
+          <g font-family="Source Sans 3, sans-serif">
+            <rect x="760" y="240" width="240" height="84" rx="9" style="fill:var(--agent-soft);stroke:var(--agent)" stroke-width="1.6"/>
+            <text x="776" y="266" font-size="11" font-family="JetBrains Mono, monospace" style="fill:var(--agent)">3 · AGENT + HUMAN</text>
+            <text x="776" y="290" font-size="17" font-weight="600" fill="currentColor">Plan</text>
+            <text x="776" y="311" font-size="13" fill="currentColor" opacity=".75">components, sharding, gates</text>
+            <rect x="400" y="240" width="240" height="84" rx="9" style="fill:var(--agent-soft);stroke:var(--agent)" stroke-width="1.6"/>
+            <text x="416" y="266" font-size="11" font-family="JetBrains Mono, monospace" style="fill:var(--agent)">4 · AGENT (test role)</text>
+            <text x="416" y="290" font-size="17" font-weight="600" fill="currentColor">Tests</text>
+            <text x="416" y="311" font-size="13" fill="currentColor" opacity=".75">one test per component</text>
+            <rect x="52" y="252" width="240" height="84" rx="9" style="fill:var(--paper);stroke:var(--agent)" stroke-width="1.2" opacity=".6"/>
+            <rect x="46" y="246" width="240" height="84" rx="9" style="fill:var(--paper);stroke:var(--agent)" stroke-width="1.2" opacity=".8"/>
+            <rect x="40" y="240" width="240" height="84" rx="9" style="fill:var(--agent-soft);stroke:var(--agent)" stroke-width="1.6"/>
+            <text x="56" y="266" font-size="11" font-family="JetBrains Mono, monospace" style="fill:var(--agent)">5 · AGENT × components</text>
+            <text x="56" y="290" font-size="17" font-weight="600" fill="currentColor">Implement</text>
+            <text x="56" y="311" font-size="13" fill="currentColor" opacity=".75">one component swap at a time</text>
+          </g>
+          <line x1="760" y1="282" x2="642" y2="282" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+          <rect x="652" y="258" width="98" height="20" rx="10" style="fill:var(--gate-soft);stroke:var(--gate)"/>
+          <text x="701" y="272" font-size="11" text-anchor="middle" font-family="JetBrains Mono, monospace" style="fill:var(--gate)">fits + approved</text>
+          <text x="701" y="302" font-size="11.5" text-anchor="middle" font-family="JetBrains Mono, monospace" fill="currentColor" opacity=".7">tasks.yaml</text>
+          <line x1="400" y1="282" x2="296" y2="282" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+          <rect x="304" y="258" width="88" height="20" rx="10" style="fill:var(--gate-soft);stroke:var(--gate)"/>
+          <text x="348" y="272" font-size="11" text-anchor="middle" font-family="JetBrains Mono, monospace" style="fill:var(--gate)">ref ✓ stub ✗</text>
+          <text x="348" y="302" font-size="11.5" text-anchor="middle" font-family="JetBrains Mono, monospace" fill="currentColor" opacity=".7">frozen tests</text>
+          <path d="M 120,240 C 120,196 210,196 210,238" fill="none" style="stroke:var(--fail)" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arf)"/>
+          <text x="165" y="192" font-size="11.5" text-anchor="middle" font-family="JetBrains Mono, monospace" style="fill:var(--fail)">fail: retry, up to 3</text>
+          <rect x="180" y="360" width="190" height="36" rx="7" style="fill:var(--paper);stroke:var(--fail)" stroke-width="1.3" stroke-dasharray="4 3"/>
+          <text x="275" y="383" font-size="13" text-anchor="middle" font-family="Source Sans 3, sans-serif" fill="currentColor">ttnn-expert-debugger</text>
+          <path d="M 250,336 L 250,358" style="stroke:var(--fail)" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#arf)"/>
+          <text x="258" y="352" font-size="10.5" font-family="JetBrains Mono, monospace" style="fill:var(--fail)">WIP commit, then hand over</text>
+          <line x1="120" y1="336" x2="120" y2="428" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+          <rect x="44" y="396" width="140" height="20" rx="10" style="fill:var(--gate-soft);stroke:var(--gate)"/>
+          <text x="114" y="410" font-size="11" text-anchor="middle" font-family="JetBrains Mono, monospace" style="fill:var(--gate)">component PCC</text>
+          <text x="128" y="372" font-size="11.5" font-family="JetBrains Mono, monospace" fill="currentColor" opacity=".7">tt/*.py</text>
+          <g font-family="Source Sans 3, sans-serif">
+            <rect x="40" y="430" width="240" height="84" rx="9" style="fill:var(--mech-soft);stroke:var(--mech)" stroke-width="1.6" stroke-dasharray="5 4"/>
+            <text x="56" y="456" font-size="11" font-family="JetBrains Mono, monospace" style="fill:var(--mech)">6 · SCRIPT</text>
+            <text x="56" y="480" font-size="17" font-weight="600" fill="currentColor">Integrate</text>
+            <text x="56" y="501" font-size="13" fill="currentColor" opacity=".75">layers, then context ladder</text>
+            <rect x="400" y="430" width="240" height="84" rx="9" style="fill:var(--agent-soft);stroke:var(--agent)" stroke-width="1.6"/>
+            <text x="416" y="456" font-size="11" font-family="JetBrains Mono, monospace" style="fill:var(--agent)">7 · AGENT</text>
+            <text x="416" y="480" font-size="17" font-weight="600" fill="currentColor">Serving contract</text>
+            <text x="416" y="501" font-size="13" fill="currentColor" opacity=".75">as the Blaze CI checks it</text>
+            <rect x="760" y="430" width="240" height="84" rx="9" style="fill:var(--mech-soft);stroke:var(--mech)" stroke-width="1.6" stroke-dasharray="5 4"/>
+            <text x="776" y="456" font-size="11" font-family="JetBrains Mono, monospace" style="fill:var(--mech)">8 · SCRIPT + HUMAN</text>
+            <text x="776" y="480" font-size="17" font-weight="600" fill="currentColor">Performance review</text>
+            <text x="776" y="501" font-size="13" fill="currentColor" opacity=".75">profile, list opportunities</text>
+          </g>
+          <line x1="280" y1="472" x2="398" y2="472" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+          <rect x="292" y="448" width="94" height="20" rx="10" style="fill:var(--gate-soft);stroke:var(--gate)"/>
+          <text x="339" y="462" font-size="11" text-anchor="middle" font-family="JetBrains Mono, monospace" style="fill:var(--gate)">ladder PCC</text>
+          <text x="339" y="492" font-size="11.5" text-anchor="middle" font-family="JetBrains Mono, monospace" fill="currentColor" opacity=".7">working model</text>
+          <line x1="640" y1="472" x2="758" y2="472" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+          <rect x="652" y="448" width="94" height="20" rx="10" style="fill:var(--gate-soft);stroke:var(--gate)"/>
+          <text x="699" y="462" font-size="11" text-anchor="middle" font-family="JetBrains Mono, monospace" style="fill:var(--gate)">contract ok</text>
+          <text x="699" y="492" font-size="11.5" text-anchor="middle" font-family="JetBrains Mono, monospace" fill="currentColor" opacity=".7">servable model</text>
+          <line x1="880" y1="514" x2="880" y2="548" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+          <rect x="760" y="550" width="240" height="36" rx="8" style="fill:var(--human-soft);stroke:var(--human)"/>
+          <text x="880" y="573" font-size="13" text-anchor="middle" font-family="Source Sans 3, sans-serif" fill="currentColor">person picks items → new tasks</text>
+          <g font-family="JetBrains Mono, monospace" font-size="10.5">
+            <rect x="222" y="42" width="66" height="18" rx="9" style="fill:var(--human-soft);stroke:var(--human)"/>
+            <text x="255" y="55" text-anchor="middle" style="fill:var(--human)">approve</text>
+            <rect x="942" y="232" width="66" height="18" rx="9" style="fill:var(--human-soft);stroke:var(--human)"/>
+            <text x="975" y="245" text-anchor="middle" style="fill:var(--human)">approve</text>
+          </g>
+        </svg>
+      </div>
+      <div class="legend">
+        <span><span class="sw" style="background:var(--agent-soft);border-color:var(--agent)"></span>agent call (fresh <code>claude -p</code>)</span>
+        <span><span class="sw" style="background:var(--mech-soft);border-color:var(--mech);border-style:dashed"></span>script, no agent</span>
+        <span><span class="sw" style="background:var(--gate-soft);border-color:var(--gate)"></span>gate on the arrow</span>
+        <span><span class="sw" style="background:var(--human-soft);border-color:var(--human)"></span>human decision</span>
+        <span><span class="sw" style="background:transparent;border-color:var(--fail);border-style:dashed"></span>failure path</span>
+      </div>
+      <figcaption>Figure 1. The nine steps. Monospace labels under an arrow name the files the next step reads. A failed gate sends the failure log back to the agent that produced the step. The performance review produces a list, and a person turns the chosen items into new implement tasks that go through the same gates.</figcaption>
+    </figure>
+  </section>
+
+  <section class="stack col">
+    <h2>Who runs the pipeline</h2>
+    <p>A single orchestrator script runs every step in order. It writes each step's brief, starts the agent, runs the gate, commits on a pass and retries on a fail. It stops when a step needs a person: an approval at intake or plan, a debugger that gave up, or the opportunity list at the end. <code>resume</code>, <code>rerun</code> and <code>fork</code> are subcommands of the same script.</p>
+    <p>A person starts a run by talking to Claude, not by writing a config file. A companion skill, for example <code>/bringup</code>, asks for the model, the box, the target context and chunk size, and the layer subset if the model does not fit. It checks what it can on the spot, such as whether the checkpoint is reachable and how many chips the box has. It then writes a draft <code>spec.yaml</code>, shows it for approval, and launches the orchestrator. The same skill can report on a running pipeline and resume it after a stop.</p>
+  </section>
+
+  <section class="stack col">
+    <h2>How one agent step runs</h2>
+    <p>Every agent step is a new <code>claude -p</code> process with the same model. It starts with no memory of earlier steps. It gets a brief, a small file the runner writes, which names the task id, the input files, the paths the agent may change, the gate it has to pass, and two shared documents that every agent reads first: the repo map and the known-issues file. The runner records the session id, the model id and the git hash of the agent definition in the task's state entry. That lets a step be replayed with the same inputs, and lets two runs be compared step by step after a fork.</p>
+    <p>Only <code>scripts/run_safe_pytest.sh</code> and <code>scripts/tt-probe.sh</code> may touch the device. Both hold a file lock on the device and reset it after each run, so several implement agents can work at once and queue for the same box. An agent that calls <code>pytest</code> or <code>python</code> directly on device code fails the gate, because the runner checks the command log in the step's output.</p>
+    <p>Test writing and implementation use the same agent definition with two roles. The test role may write only under <code>tests/</code> and runs first. The implement role may write only the component's module and cannot change a frozen test, which the hash check enforces.</p>
+  </section>
+
+  <section class="stack">
+    <div class="col stack">
+      <h2>What each step does</h2>
+      <p>Each step lists what it reads, what it writes, and the gate that must pass before the next step starts. The ERNIE task ids in brackets point to the gates that ran in the evidence run.</p>
+    </div>
+    <ol class="steps">
+      <li><span class="num">0</span><div>
+        <div class="step-head"><h3>Intake</h3><span class="who agent">agent</span><span class="who human">human approves</span></div>
+        <p>A person picks the model, the box, the target, for example 55k tokens in 5k chunks, and optionally a subset of layers to bring up. The agent turns that into a model spec with the block types, the layer schedule, the per-layer state and the expected checkpoint tensors with their shapes. It downloads the checkpoint into the artifact folder.</p>
+        <dl class="io"><dt>Reads</dt><dd>HF config, checkpoint index, box description</dd><dt>Writes</dt><dd><code>spec.yaml</code>, <code>$ART/&lt;model&gt;/hf/</code></dd><dt>Gate</dt><dd class="gate">every tensor the spec names exists with the listed shape [P1.1]</dd></dl>
+      </div></li>
+      <li><span class="num">1</span><div>
+        <div class="step-head"><h3>Reference</h3><span class="who agent">agent</span></div>
+        <p>The agent writes a standalone CPU implementation against a fixed interface: <code>forward_chunk(tokens, start, state, recorder, layers)</code>. The recorder receives every tensor at a component boundary under a name such as <code>L14.attn_out</code>. The reference loads one layer's weights at a time, so a model larger than host memory still runs.</p>
+        <dl class="io"><dt>Reads</dt><dd><code>spec.yaml</code>, HF modeling code, paper, repo map</dd><dt>Writes</dt><dd><code>reference.py</code></dd><dt>Gate</dt><dd class="gate">per-layer output matches HF at PCC ≥ 0.9999, and chunked prefill equals one-shot prefill [P1.2, P1.3]</dd></dl>
+      </div></li>
+      <li><span class="num">2</span><div>
+        <div class="step-head"><h3>Goldens</h3><span class="who mech">script</span></div>
+        <p>A script runs the reference once per rung of the context ladder over a real long text. It stores every boundary tensor, the per-layer state and the top logits, in the serving layer's golden-trace format. Every later comparison reads these files and never reruns the CPU model. For ERNIE the longest rung took 61 minutes on CPU and every comparison after that took seconds.</p>
+        <dl class="io"><dt>Reads</dt><dd><code>reference.py</code>, text, ladder and layer subset from <code>spec.yaml</code></dd><dt>Writes</dt><dd><code>$ART/&lt;model&gt;/golden/</code> with a manifest and a content hash</dd><dt>Gate</dt><dd class="gate">manifest lists every layer and chunk; the hash is recorded for the tests to pin [P1.4 to P1.6]</dd></dl>
+      </div></li>
+      <li><span class="num">3</span><div>
+        <div class="step-head"><h3>Plan</h3><span class="who agent">agent</span><span class="who human">human approves</span></div>
+        <p>The agent maps every component to a TTNN op, tagged NATIVE, COMPOSED or CPU when no op fits, and checks the repo map before tagging anything COMPOSED. It writes the sharding plan in the reference format described below and the task ledger with one task per component swap, per integration rung and per contract check. A person approves the plan, because sharding and the choice of op are decisions the later gates cannot judge.</p>
+        <dl class="io"><dt>Reads</dt><dd><code>spec.yaml</code>, repo map, reference plans, known issues</dd><dt>Writes</dt><dd><code>components.yaml</code>, <code>plan.md</code>, <code>tasks.yaml</code></dd><dt>Gate</dt><dd class="gate">schema valid; weights, caches and activations fit in per-chip DRAM [P2.2]; approval recorded</dd></dl>
+      </div></li>
+      <li><span class="num">4</span><div>
+        <div class="step-head"><h3>Tests</h3><span class="who agent">agent, test role</span></div>
+        <p>The test role fills one template per component kind and one per swap in the block. A component test loads the golden input, runs the module, and records the PCC of its output against the golden output. Before freezing, the gate runs each test twice. With the CPU reference as the module it must pass. With a stub that returns zeros it must fail.</p>
+        <dl class="io"><dt>Reads</dt><dd><code>components.yaml</code>, <code>tasks.yaml</code>, test templates, goldens</dd><dt>Writes</dt><dd><code>tests/</code>, test hashes in <code>tasks.yaml</code></dd><dt>Gate</dt><dd class="gate">passes with the reference, fails with the stub; then frozen</dd></dl>
+      </div></li>
+      <li><span class="num">5</span><div>
+        <div class="step-head"><h3>Implement</h3><span class="who agent">agent, implement role, one per component</span></div>
+        <p>The implement role writes one TTNN module and swaps it into the block while every other component stays on the CPU reference. Swap tests run on one representative layer per block type; the other layers of that type are covered by the layer-stack tests in step 6. Components without dependencies on each other run in parallel. After three failed attempts the agent commits its current code as a work-in-progress commit and hands over to <code>ttnn-expert-debugger</code>, the repo's debugging agent, which gets the WIP commit, the three failure logs and the hang triage report. If the debugger also fails three times, the runner stops and pages a person.</p>
+        <dl class="io"><dt>Reads</dt><dd>frozen test, <code>components.yaml</code> entry, repo map, known issues</dd><dt>Writes</dt><dd><code>tt/&lt;component&gt;.py</code>, a known-issues entry if it hit something new</dd><dt>Gate</dt><dd class="gate">the frozen component test, then the block test with this swap [P2.3 to P2.10]</dd></dl>
+      </div></li>
+      <li><span class="num">6</span><div>
+        <div class="step-head"><h3>Integrate</h3><span class="who mech">script</span></div>
+        <p>Generic tests stack the device blocks: one layer, then the selected subset, then all layers if the model fits. Then they climb the context ladder. For ERNIE the rungs were 2k→2k, 8k→8k, the last chunk after a golden 50k prefix, and the full 55k in 11 chunks. Each rung records the per-layer PCC trail, the state PCC, the final hidden-state PCC and top-5 agreement. A failure points back to step 5 for the component whose layer first broke the trail.</p>
+        <dl class="io"><dt>Reads</dt><dd><code>tt/*.py</code>, goldens</dd><dt>Writes</dt><dd>metrics, PCC trail</dd><dt>Gate</dt><dd class="gate">block ≥ 0.98, state and final hidden ≥ 0.97, top-5 ≥ 0.9 at every rung [P2.11 to P2.14]</dd></dl>
+      </div></li>
+      <li><span class="num">7</span><div>
+        <div class="step-head"><h3>Serving contract</h3><span class="who agent">agent</span></div>
+        <p>The agent writes the adapter and runtime that tt-metal's prefill engine loads, and the per-layer state in the layout the engine migrates. The target is the contract the Blaze prefill CI checks. Generic tests read the state back through the engine's address table and compare it with the goldens using their own PCC. The tt-d-gen audit found two more checks in this scope that the ERNIE run missed: a layer is acknowledged only after its state is readable, and the runtime accepts the engine's uint32 input with a padded tail.</p>
+        <dl class="io"><dt>Reads</dt><dd>working model, <code>common/prefill/docs/ADDING_A_PREFILL_MODEL.md</code>, repo map</dd><dt>Writes</dt><dd>adapter, runtime, cache layout, manifest</dd><dt>Gate</dt><dd class="gate">layout, table round trip, producer read-back [P2.15, P2.16], ack timing, H2D input</dd></dl>
+      </div></li>
+      <li><span class="num">8</span><div>
+        <div class="step-head"><h3>Performance review</h3><span class="who mech">script</span><span class="who human">human picks</span></div>
+        <p>A script profiles one long chunk per phase and per chip after a warm-up run, and writes an opportunity list. Each entry names a phase, its measured device time, a candidate change, and where in the repo a similar change already exists. The script does not apply anything. A person picks entries, and each picked entry becomes an implement task behind a switch. That task passes only if warm device time drops and every accuracy gate still passes. The person also decides on changes that trade accuracy for speed.</p>
+        <dl class="io"><dt>Reads</dt><dd>the model, profile, repo map</dd><dt>Writes</dt><dd><code>opportunities.md</code>, per-phase and per-chip profile</dd><dt>Gate</dt><dd class="gate">profile complete [P3.3]; each picked item passes its own speed and accuracy gate [P3.1, P3.2, P3.4]</dd></dl>
+      </div></li>
+    </ol>
+    <div class="col stack">
+      <p class="small">An example entry from the ERNIE run, in the form the script would write it: "SDPA, 1,328 ms of 1,570 ms per 50k→55k chunk. The compute config sets <code>fp32_dest_acc_en=True</code>, which turns off SDPA's streaming kernel on Blackhole (<code>sdpa_program_factory.cpp:75</code>). Candidate: HiFi2, fp32 accumulate off, approximate exp, k chunk 512, as in <code>gemma4_d_p</code> and <code>minimax_m3</code>." Picked and measured, this cut 55k TTFT from 10.9 s to 4.4 s.</p>
+    </div>
+  </section>
+
+  <section class="stack">
+    <div class="col stack">
+      <h2>Bring a block up one component at a time</h2>
+      <p>Yes, this ordering makes sense, and the pipeline should enforce it. A block test that swaps in several device components at once cannot say which one broke the output. Swapping one component at a time, with the rest of the block on the CPU reference, means that when the block output drifts, the component just swapped caused it.</p>
+      <p>A swap test feeds the golden block input, runs the listed components on the device and the rest on the CPU reference, and compares the block output with the golden block output. The data crosses between host and device at every boundary. That is slow, but only the tests do it.</p>
+    </div>
+    <figure>
+      <div class="fig">
+        <svg viewBox="0 0 1040 330" role="img" aria-label="Five columns show one MoE block. Column one runs all components on CPU. Each next column moves one more component to the device: norms, attention, router and experts, shared MLP. Every column is checked against the golden block output. Below, the layer stack grows from one layer to a subset to all layers.">
+          <defs><marker id="ar4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" fill="currentColor"/></marker></defs>
+          <g id="swaps" font-family="Source Sans 3, sans-serif" font-size="12.5"></g>
+          <g font-family="Source Sans 3, sans-serif" font-size="13">
+            <text x="20" y="262" font-size="12" font-family="JetBrains Mono, monospace" fill="currentColor" opacity=".6">THEN THE LAYER STACK</text>
+            <rect x="20" y="276" width="180" height="36" rx="7" style="fill:var(--agent-soft);stroke:var(--agent)"/><text x="110" y="299" text-anchor="middle" fill="currentColor">1 layer of each type</text>
+            <rect x="260" y="276" width="220" height="36" rx="7" style="fill:var(--agent-soft);stroke:var(--agent)"/><text x="370" y="299" text-anchor="middle" fill="currentColor">selected subset, e.g. 0, 1, 14, 27</text>
+            <rect x="540" y="276" width="200" height="36" rx="7" style="fill:var(--agent-soft);stroke:var(--agent)"/><text x="640" y="299" text-anchor="middle" fill="currentColor">all layers, if they fit</text>
+            <rect x="800" y="276" width="200" height="36" rx="7" style="fill:var(--gate-soft);stroke:var(--gate)"/><text x="900" y="299" text-anchor="middle" fill="currentColor">context ladder</text>
+          </g>
+          <g stroke="currentColor" stroke-width="1.4">
+            <line x1="200" y1="294" x2="258" y2="294" marker-end="url(#ar4)"/>
+            <line x1="480" y1="294" x2="538" y2="294" marker-end="url(#ar4)"/>
+            <line x1="740" y1="294" x2="798" y2="294" marker-end="url(#ar4)"/>
+          </g>
+        </svg>
+      </div>
+      <div class="legend">
+        <span><span class="sw" style="background:var(--mech-soft);border-color:var(--mech)"></span>CPU reference</span>
+        <span><span class="sw" style="background:var(--agent-soft);border-color:var(--agent)"></span>on device</span>
+        <span><span class="sw" style="background:transparent;border-color:var(--agent);border-width:2.5px"></span>swapped in this column</span>
+      </div>
+      <figcaption>Figure 2. The order used for an ERNIE MoE block, run on one layer of that type (layer 1). Each column is one task with one frozen test, and each checks the block output against the golden block output. The ERNIE run tested components alone and then the whole block, and skipped the columns in between. That was enough there only because every component already matched its golden at PCC ≥ 0.9999.</figcaption>
+    </figure>
+  </section>
+
+  <section class="stack col">
+    <h2>Bringing up a subset of layers</h2>
+    <p>For a model that does not fit the box, <code>spec.yaml</code> lists the layers to bring up, for example one of each block type plus the first and last layer. The subset changes three things.</p>
+    <ul class="plain">
+      <li>The golden step still runs every layer on CPU, because a layer's input depends on all layers before it, but it stores boundary tensors and state only for the selected layers.</li>
+      <li>The device runs the selected layers only. When the subset is not contiguous, each run of selected layers starts from its golden input, so the gaps never run on the device.</li>
+      <li>The ladder rungs, the contract tests and the profile use the subset, and every result records which layers it covers. A subset result is never reported as a full-model result.</li>
+    </ul>
+  </section>
+
+  <section class="stack">
+    <div class="col stack">
+      <h2>Resuming and forking a run</h2>
+      <p>A run is a directory with a task ledger, a state file and one git branch. Every passed step leaves a commit tagged with its task id, and an artifact manifest listing the hashes of the files it produced. Three operations use this.</p>
+      <ul class="plain">
+        <li><code>resume</code> starts from the first step that has not passed. A hang counts as a failed step: the harness kills the process, resets the device and attaches the triage report to the step's log.</li>
+        <li><code>rerun --from P2.6</code> reruns one step and everything downstream of it, keeping the earlier steps.</li>
+        <li><code>fork --from P2.9 --name runB</code> starts a new branch at P2.9's commit and a new run directory. It reuses the upstream artifacts, such as goldens and weight caches, by reference. Use it after changing an agent definition, to compare the two runs from that step on.</li>
+      </ul>
+    </div>
+    <figure>
+      <div class="fig">
+        <svg viewBox="0 0 1040 250" role="img" aria-label="Run A passes steps 0 to 5 and fails at step 6; resume restarts at step 6. Run B forks from step 5's commit with changed downstream agents and shares goldens and weight caches with run A through the artifact folder.">
+          <defs><marker id="ar5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" fill="currentColor"/></marker>
+          <marker id="ar5f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" style="fill:var(--fail)"/></marker></defs>
+          <g id="runA" font-family="JetBrains Mono, monospace" font-size="11"></g>
+          <text x="20" y="64" font-size="13" font-family="Source Sans 3, sans-serif" font-weight="600" fill="currentColor">run A</text>
+          <text x="20" y="164" font-size="13" font-family="Source Sans 3, sans-serif" font-weight="600" fill="currentColor">run B</text>
+          <path d="M 480,72 C 480,130 620,150 686,150" fill="none" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar5)"/>
+          <text x="500" y="122" font-size="11.5" text-anchor="start" font-family="JetBrains Mono, monospace" fill="currentColor" opacity=".8">fork --from step 5</text>
+          <path d="M 566,50 C 580,18 520,18 534,50" fill="none" style="stroke:var(--fail)" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#ar5f)"/>
+          <text x="550" y="14" font-size="11.5" text-anchor="middle" font-family="JetBrains Mono, monospace" style="fill:var(--fail)">resume at 6</text>
+          <rect x="250" y="200" width="500" height="34" rx="7" style="fill:var(--mech-soft);stroke:var(--mech)" stroke-dasharray="5 4"/>
+          <text x="500" y="222" text-anchor="middle" font-size="13" font-family="Source Sans 3, sans-serif" fill="currentColor">$ART/&lt;model&gt;/ : hf, golden, tt_cache (shared by both runs)</text>
+          <g stroke="currentColor" stroke-width="1.2" stroke-dasharray="2 4" opacity=".6">
+            <line x1="270" y1="90" x2="270" y2="198"/><line x1="700" y1="178" x2="700" y2="198"/>
+          </g>
+        </svg>
+      </div>
+      <figcaption>Figure 3. Steps are circles and a filled circle has a passing commit. Run A failed at step 6 and resumes there. Run B forks from step 5's commit, reruns steps 6 to 8 with changed agent definitions, and reads the same goldens and weight cache as run A.</figcaption>
+    </figure>
+  </section>
+
+  <section class="stack">
+    <div class="col stack">
+      <h2>One artifact folder, and what is cached in it</h2>
+      <p>Every file the pipeline creates outside the git tree goes under one root, <code>$ART</code>, which defaults to <code>/localdev/$USER/bringup/</code>. Deleting <code>$ART/&lt;model&gt;</code> removes everything for that model. The ERNIE run spread these over the HF cache, <code>generated/</code> and the scratch directory, which made cleanup manual.</p>
+    </div>
+    <div class="two">
+      <pre>$ART/&lt;model&gt;/
+  hf/                 <span class="c">checkpoint, tokenizer</span>
+  golden/&lt;rung&gt;/      <span class="c">boundary tensors, state, logits</span>
+    manifest.json     <span class="c">layers, chunks, content hash</span>
+  tt_cache/&lt;mesh&gt;/&lt;version&gt;/
+                      <span class="c">.tensorbin weights, per task</span>
+  profiles/           <span class="c">per-phase, per-chip JSON</span>
+  runs/&lt;run&gt;/         <span class="c">logs, triage, briefs, state</span></pre>
+      <div class="stack small">
+        <p>Two kinds of data are cached, because tests use them many times.</p>
+        <p><b>Weights on device.</b> Every weight goes through <code>ttnn.as_tensor(cache_file_name=...)</code>, which stores the tilized, bfp8-packed, per-device tensor as a <code>.tensorbin</code> file. A 4096×14336 weight loads in 0.01 to 0.02 s from the cache against 0.3 to 0.8 s from torch. The file name holds only the name, dtype and layout, so the path must add the mesh shape, the sharding and a version. The cache writes to a temporary name and renames, so an interrupted run cannot leave a half-written file. Source: <code>tensor_caching_research.md</code>.</p>
+        <p><b>CPU reference outputs.</b> Goldens are recorded once per rung. Tests, swaps, ladder rungs and contract checks all read them and pin their content hash, so no gate runs the CPU model again.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="stack col">
+    <h2>What the planner starts from</h2>
+    <p>The planner writes <code>plan.md</code> in a fixed shape: for each layer type, a table with one row per component that lists what each chip holds, the collective that follows it, and the per-chip memory. It closes with a per-chip memory total and the per-layer list of collectives. Two reference plans show the shape.</p>
+    <ul class="plain">
+      <li>The Kimi K2.7 layer on a 4×4 mesh, from the artifact shared in this project. It shows rows splitting tokens and columns splitting weights, the dispatch and combine traffic per column, and a time per step.</li>
+      <li>ERNIE on a 1×4 mesh: <code>models/demos/ernie45_d_p/SHARDING.md</code> and <code>bringup/plan.py</code>. It shows one KV head per chip, 16 experts per chip, and the memory check that the plan gate runs.</li>
+    </ul>
+    <p>The planner copies the table shape, not the numbers. A plan that departs from both references says why in one sentence per departure.</p>
+  </section>
+
+  <section class="stack">
+    <div class="col stack">
+      <h2>The repo map</h2>
+      <p>The ERNIE run lost time searching for things the repo already had. It first wrote its own MoE and only later found <code>unified_routed_expert_moe</code>. The repo map is a checked-in file of pointers that every agent reads first, grouped by what they are for. Agents add rows when they find something new, and a person reviews the additions at the next approval point.</p>
+    </div>
+    <div class="tbl"><table>
+      <thead><tr><th>Need</th><th>Where it is</th></tr></thead>
+      <tbody>
+        <tr><td>MoE, expert parallel</td><td><code>deepseek_v3_d_p/tt/moe/</code> (routing setup, dispatch, <code>unified_routed_expert_moe</code>, combine, reduce); <code>gpt_oss_d_p/tt/moe/</code> for an external router; <code>blackhole/qwen36/tt/moe/</code> for <code>sparse_matmul</code></td></tr>
+        <tr><td>Chunked attention</td><td><code>tt_transformers/tt/attention.py</code>; ring SDPA in <code>gemma4_d_p/tt/attention/</code>; SDPA settings survey from P3.4</td></tr>
+        <tr><td>Collectives on 1×N</td><td><code>tt_transformers/tt/ccl.py</code>; sync <code>ttnn.all_gather</code>, <code>reduce_scatter</code>, <code>all_reduce</code></td></tr>
+        <tr><td>Prefill engine contract</td><td><code>common/prefill/docs/ADDING_A_PREFILL_MODEL.md</code>, <code>common/prefill/adapter.py</code>, <code>runners/prefill_producer.py</code></td></tr>
+        <tr><td>GQA KV layout and table</td><td><code>gpt_oss_d_p/tt/attention/kv_cache.py</code>, <code>gpt_oss_d_p/tt/runners/kv_chunk_table.py</code></td></tr>
+        <tr><td>Device safety and triage</td><td><code>scripts/run_safe_pytest.sh</code>, <code>scripts/tt-probe.sh</code>, <code>generated/tt-triage/triage.txt</code></td></tr>
+        <tr><td>Tensor caching</td><td><code>tensor_caching_research.md</code>, <code>models/common/weight_cache.py</code>, <code>deepseek_v3_b1/weights/cache/cache.py</code></td></tr>
+        <tr><td>Reference plans</td><td>Kimi K2.7 4×4 artifact, <code>ernie45_d_p/SHARDING.md</code></td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section class="stack col">
+    <h2>The known-issues file</h2>
+    <p>Every agent reads the known-issues file before it starts, because the brief includes it. It has five sections: API behavior, accuracy, performance, infrastructure, and serving contract. Each entry names the symptom, the cause, the fix, the task where it was found, and the model. An agent that hits a new issue adds an entry in a proposed section at the end of its step. The gate checks the entry's format, and a person moves it into its section at the next approval point. Entries from the ERNIE run would seed it.</p>
+    <div class="tbl"><table>
+      <thead><tr><th>Section</th><th>Example entry from the ERNIE run</th></tr></thead>
+      <tbody>
+        <tr><td>API behavior</td><td><code>unified_routed_expert_moe</code> writes its output into the input buffer for TILE input; freeing the input frees the output.</td></tr>
+        <tr><td>API behavior</td><td>Expert counts and offsets are indexed by global expert id; a local [1, 16] array makes the kernel hang.</td></tr>
+        <tr><td>Accuracy</td><td>The fused expert kernel packs activations to bfp8 even for bf16 input; top-1 agreement fell from 97.7% to 95.7%.</td></tr>
+        <tr><td>Performance</td><td><code>fp32_dest_acc_en=True</code> turns off SDPA's streaming kernel on Blackhole; SDPA ran 6.5 times slower.</td></tr>
+        <tr><td>Infrastructure</td><td>The precompile pass replaces <code>comp_pcc</code> with a stub returning 0.999999, and the stub leaks into later calls.</td></tr>
+        <tr><td>Serving contract</td><td>ERNIE K is already in interleaved RoPE order; the producer must skip its HF-to-Meta permutation.</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section class="stack">
+    <div class="col stack">
+      <h2>Inside one gate</h2>
+      <p>The gate runner is a small script, <code>gate.py</code> in the ERNIE run. It never decides anything that was not written down before the step started.</p>
+    </div>
+    <figure>
+      <div class="fig">
+        <svg viewBox="0 0 1040 200" role="img" aria-label="Gate runner flow: check dependencies, check frozen test hashes, run the command with a pinned environment and the device lock, read recorded metrics, compare with thresholds, then commit the task's files on pass or return the log on fail.">
+          <defs><marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" fill="currentColor"/></marker>
+          <marker id="ar3f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" style="fill:var(--fail)"/></marker></defs>
+          <g font-family="Source Sans 3, sans-serif" font-size="13.5">
+            <rect x="20" y="40" width="140" height="56" rx="8" style="fill:var(--paper)" stroke="currentColor" stroke-width="1.3"/>
+            <text x="90" y="64" text-anchor="middle" fill="currentColor">deps passed?</text><text x="90" y="82" text-anchor="middle" font-size="11.5" fill="currentColor" opacity=".7">else BLOCKED</text>
+            <rect x="192" y="40" width="150" height="56" rx="8" style="fill:var(--paper)" stroke="currentColor" stroke-width="1.3"/>
+            <text x="267" y="64" text-anchor="middle" fill="currentColor">frozen files intact?</text><text x="267" y="82" text-anchor="middle" font-size="11.5" fill="currentColor" opacity=".7">hash check</text>
+            <rect x="374" y="40" width="170" height="56" rx="8" style="fill:var(--paper)" stroke="currentColor" stroke-width="1.3"/>
+            <text x="459" y="64" text-anchor="middle" fill="currentColor">run the test command</text><text x="459" y="82" text-anchor="middle" font-size="11.5" fill="currentColor" opacity=".7">run_safe_pytest, pinned env</text>
+            <rect x="576" y="40" width="160" height="56" rx="8" style="fill:var(--paper)" stroke="currentColor" stroke-width="1.3"/>
+            <text x="656" y="64" text-anchor="middle" fill="currentColor">read metrics file</text><text x="656" y="82" text-anchor="middle" font-size="11.5" fill="currentColor" opacity=".7">results/&lt;task&gt;.json</text>
+            <rect x="768" y="40" width="150" height="56" rx="8" style="fill:var(--paper)" stroke="currentColor" stroke-width="1.3"/>
+            <text x="843" y="64" text-anchor="middle" fill="currentColor">compare thresholds</text><text x="843" y="82" text-anchor="middle" font-size="11.5" fill="currentColor" opacity=".7">every glob must match</text>
+            <rect x="950" y="30" width="80" height="34" rx="17" style="fill:var(--gate-soft);stroke:var(--gate)"/><text x="990" y="52" text-anchor="middle" style="fill:var(--gate)">PASS</text>
+            <rect x="950" y="76" width="80" height="34" rx="17" style="fill:var(--paper);stroke:var(--fail)"/><text x="990" y="98" text-anchor="middle" style="fill:var(--fail)">FAIL</text>
+          </g>
+          <g stroke="currentColor" stroke-width="1.4">
+            <line x1="160" y1="68" x2="190" y2="68" marker-end="url(#ar3)"/>
+            <line x1="342" y1="68" x2="372" y2="68" marker-end="url(#ar3)"/>
+            <line x1="544" y1="68" x2="574" y2="68" marker-end="url(#ar3)"/>
+            <line x1="736" y1="68" x2="766" y2="68" marker-end="url(#ar3)"/>
+            <line x1="918" y1="58" x2="948" y2="48" marker-end="url(#ar3)"/>
+            <line x1="918" y1="78" x2="948" y2="92" marker-end="url(#ar3)"/>
+          </g>
+          <g font-family="Source Sans 3, sans-serif" font-size="12.5" fill="currentColor">
+            <text x="990" y="136" text-anchor="middle" opacity=".8">commit only</text>
+            <text x="990" y="152" text-anchor="middle" opacity=".8">the task's paths</text>
+          </g>
+          <path d="M 990,110 C 990,180 459,190 459,98" fill="none" style="stroke:var(--fail)" stroke-width="1.3" stroke-dasharray="4 3" marker-end="url(#ar3f)" opacity=".85"/>
+          <text x="700" y="186" text-anchor="middle" font-size="12" font-family="JetBrains Mono, monospace" style="fill:var(--fail)">log back to the step's agent</text>
+          <text x="459" y="124" text-anchor="middle" font-size="11.5" font-family="JetBrains Mono, monospace" fill="currentColor" opacity=".7">tests call record(); the precompile pass is ignored</text>
+        </svg>
+      </div>
+      <figcaption>Figure 4. One gate, left to right. The test only records numbers. The runner owns the verdict, so an agent that edits a threshold or a test fails the hash check before anything runs.</figcaption>
+    </figure>
+    <div class="col stack">
+      <p>Five rules came out of problems the ERNIE run hit. The runner enforces each one; none depends on agent instructions.</p>
+      <ul class="plain">
+        <li>Tests compute PCC with their own function, because of the <code>comp_pcc</code> stub listed in the known issues.</li>
+        <li>The runner pins <code>PYTHONPATH</code> to the checkout. An inherited value pointed at a second checkout and mixed modules from both.</li>
+        <li>A commit stages only the task's declared paths. A background gate once committed files another step was still editing.</li>
+        <li>Performance gates measure a warm run. The first run with new SDPA kernels compiled one program per chunk offset and read 22 s instead of 4.4 s.</li>
+        <li>The runner locks the task ledger and the state file. Two gates running at once overwrote each other's verdicts.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="stack">
+    <div class="col stack">
+      <h2>Generic parts and per-model parts</h2>
+      <p>Most of the code from the ERNIE run is already generic. It needs its ERNIE names replaced by values from the spec.</p>
+    </div>
+    <div class="tbl"><table>
+      <thead><tr><th>Part</th><th>Generic, lives in the framework</th><th>Per model</th></tr></thead>
+      <tbody>
+        <tr><td>Runs and gates</td><td><code>gate.py</code>, <code>metrics.py</code>, resume, rerun, fork, scoped commits, briefs</td><td><code>tasks.yaml</code> content</td></tr>
+        <tr><td>Shared knowledge</td><td>repo map, known-issues file, reference plans</td><td>new entries, reviewed by a person</td></tr>
+        <tr><td>Reference</td><td>the <code>forward_chunk</code> interface, recorder, HF parity and chunked checks</td><td><code>reference.py</code></td></tr>
+        <tr><td>Goldens and caches</td><td>generator, manifest, hash, weight-cache paths under <code>$ART</code></td><td>text, ladder rungs, layer subset</td></tr>
+        <tr><td>Tests</td><td>templates per component kind and per swap</td><td>the filled-in tests</td></tr>
+        <tr><td>Integration</td><td>layer-stack and ladder tests, PCC trail</td><td>nothing beyond the spec</td></tr>
+        <tr><td>Serving contract</td><td>layout, table, read-back, ack-timing and H2D-input tests</td><td>adapter, runtime, cache layout</td></tr>
+        <tr><td>Performance review</td><td>warm per-phase, per-chip profiler, opportunity-list writer</td><td>picked changes and their switches</td></tr>
+        <tr><td>Dashboard</td><td>exporter and page</td><td><code>components.yaml</code>, findings</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section class="stack col">
+    <h2>Where it stops being model-agnostic</h2>
+    <ul class="plain">
+      <li>The reference parity gate needs an oracle. Models without an HF implementation need another trusted forward pass, or a reference a person reviews.</li>
+      <li>Chunked prefill of non-attention state is less uniform. Sliding windows, recurrent state and compressed caches each need a state template, and the chunked-equals-one-shot gate has to know which state to compare.</li>
+      <li>The Blaze contract assumes attention KV with one KV head per tensor-parallel column. Other state types need the engine to support them first.</li>
+      <li>Sharding depends on the model and the box together. The planner proposes it and a person approves it, because no gate measures whether a different split would have been better.</li>
+      <li>Missing TTNN ops end in COMPOSED or CPU tags. Composing an op well took the most judgment in the ERNIE run.</li>
+    </ul>
+  </section>
+
+  <section class="stack col">
+    <h2>Decisions from review 1</h2>
+    <div class="tbl"><table>
+      <thead><tr><th>Question</th><th>Decision</th></tr></thead>
+      <tbody>
+        <tr><td>Q1 Test author and implementer</td><td>Same agent definition with two roles, because both need the same context. Paths and the hash check keep them apart.</td></tr>
+        <tr><td>Q2 Validating a test</td><td>The zero stub is enough.</td></tr>
+        <tr><td>Q3 Debugging</td><td>The repo's <code>ttnn-expert-debugger</code>. The implementer commits its failing code first. Three attempts each.</td></tr>
+        <tr><td>Q4 Contract scope</td><td>Stop at the contract the Blaze prefill CI checks.</td></tr>
+        <tr><td>Q5 Thresholds</td><td>Fixed thresholds for now.</td></tr>
+        <tr><td>Q6 Second model</td><td>Decided after this design converges.</td></tr>
+      </tbody>
+    </table></div>
+    <h2>Decisions from review 2</h2>
+    <div class="tbl"><table>
+      <thead><tr><th>Question</th><th>Decision</th></tr></thead>
+      <tbody>
+        <tr><td>Where <code>$ART</code> lives</td><td>The user's localdev folder, <code>/localdev/$USER/bringup/</code>.</td></tr>
+        <tr><td>Who runs the pipeline</td><td>One orchestrator script, started from a conversational intake skill that collects the model details and launches it.</td></tr>
+        <tr><td>Ranking opportunities</td><td>By measured device time.</td></tr>
+        <tr><td>Which layers get swap tests</td><td>One representative layer per block type, for ERNIE layer 0 (dense) and layer 1 (MoE). The layer-stack tests in step 6 cover the other layers.</td></tr>
+        <tr><td>Comparing forked runs</td><td>Every run records the git hash of each agent definition it used, in its state file. A <code>compare runA runB</code> subcommand can print attempts, debugger hand-overs, gate metrics and wall time per step from those records.</td></tr>
+      </tbody>
+    </table></div>
+    <p class="small">No open questions remain from review 2.</p>
+  </section>
+</main>
+
+<script>
+(function(){
+  var NS="http://www.w3.org/2000/svg";
+  function el(tag,a,t){var e=document.createElementNS(NS,tag);for(var k in a){e.setAttribute(k,a[k]);}if(t!=null)e.textContent=t;return e;}
+  // Figure 2: swap columns
+  var g=document.getElementById("swaps");
+  var comps=["RMSNorm","attention","RMSNorm","router + experts","shared MLP"];
+  var cols=[
+    {title:"all on CPU", dev:[]},
+    {title:"swap norms", dev:[0,2], now:[0,2]},
+    {title:"swap attention", dev:[0,1,2], now:[1]},
+    {title:"swap router + experts", dev:[0,1,2,3], now:[3]},
+    {title:"swap shared MLP", dev:[0,1,2,3,4], now:[4]}
+  ];
+  var cw=176, gap=24, x0=20, y0=20;
+  cols.forEach(function(c,ci){
+    var x=x0+ci*(cw+gap);
+    g.appendChild(el("text",{x:x,y:y0+10,"font-size":"12","font-family":"JetBrains Mono, monospace",fill:"currentColor",opacity:".7"},(ci+1)+". "+c.title));
+    comps.forEach(function(nm,k){
+      var y=y0+22+k*34, on=c.dev.indexOf(k)>=0, now=(c.now||[]).indexOf(k)>=0;
+      g.appendChild(el("rect",{x:x,y:y,width:cw,height:28,rx:6,style:on?"fill:var(--agent-soft);stroke:var(--agent)":"fill:var(--mech-soft);stroke:var(--mech)","stroke-width":now?"2.6":"1.1"}));
+      g.appendChild(el("text",{x:x+cw/2,y:y+18,"text-anchor":"middle",fill:"currentColor"},nm));
+    });
+    var yb=y0+22+5*34+6;
+    g.appendChild(el("rect",{x:x+14,y:yb,width:cw-28,height:22,rx:11,style:"fill:var(--gate-soft);stroke:var(--gate)"}));
+    g.appendChild(el("text",{x:x+cw/2,y:yb+15,"text-anchor":"middle","font-size":"11","font-family":"JetBrains Mono, monospace",style:"fill:var(--gate)"},"block out vs golden"));
+  });
+  // Figure 3: run timelines
+  var r=document.getElementById("runA");
+  function step(x,y,label,state){
+    var st={pass:"fill:var(--gate);stroke:var(--gate)",fail:"fill:var(--paper);stroke:var(--fail)",todo:"fill:var(--paper);stroke:var(--mech)",fork:"fill:var(--agent);stroke:var(--agent)",forktodo:"fill:var(--paper);stroke:var(--agent)"}[state];
+    r.appendChild(el("circle",{cx:x,cy:y,r:11,style:st,"stroke-width":"2"}));
+    r.appendChild(el("text",{x:x,y:y+28,"text-anchor":"middle",fill:"currentColor",opacity:".75"},label));
+  }
+  var xs=[110,175,240,305,370,435,500,565,630];
+  for(var i=0;i<9;i++){
+    if(i>0) r.appendChild(el("line",{x1:xs[i-1]+11,y1:60,x2:xs[i]-11,y2:60,stroke:"currentColor","stroke-width":"1.2",opacity:".5"}));
+  }
+  // run A: 0..5 pass (index 0..5 are steps 0..5), step 6 fail, 7..8 todo; place steps at xs shifted
+  var labA=["0","1","2","3","4","5","6","7","8"];
+  var xa=[100,170,240,310,380,450,520,590,660].map(function(v){return v+30;});
+  r.innerHTML="";
+  for(var a=0;a<9;a++){ if(a>0) r.appendChild(el("line",{x1:xa[a-1]+11,y1:60,x2:xa[a]-11,y2:60,stroke:"currentColor","stroke-width":"1.2",opacity:".5"})); }
+  for(var a2=0;a2<9;a2++) step(xa[a2],60,labA[a2], a2<6?"pass":(a2===6?"fail":"todo"));
+  var xb=[700,770,840];
+  for(var b=0;b<3;b++){ if(b>0) r.appendChild(el("line",{x1:xb[b-1]+11,y1:150,x2:xb[b]-11,y2:150,stroke:"currentColor","stroke-width":"1.2",opacity:".5"})); step(xb[b],150,["6'","7'","8'"][b],"forktodo"); }
+  r.appendChild(el("text",{x:880,y:154,"font-size":"11.5",fill:"currentColor",opacity:".8"},"changed agents"));
+})();
+</script>
