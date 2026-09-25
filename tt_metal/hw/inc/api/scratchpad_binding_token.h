@@ -27,10 +27,13 @@ class Scratchpad;
 // Here my_scratchpad_name is a constexpr ScratchpadBindingToken, auto-included in
 // kernel_bindings_generated.h.
 //
-// This header holds only the token, with no dependency beyond <cstdint> plus the LLK metadata
-// sidecar, so the generated bindings header (and anything else that just needs to name a binding)
+// This header holds only the token, with no dependency beyond <cstdint> minimal support headers,
+// so the generated bindings header (and anything else that just needs to name a binding)
 // does not have to pull in the whole Scratchpad implementation. See api/scratchpad.h for the
 // Scratchpad class this token constructs.
+//
+
+// Support for LLKOperandFrom.
 namespace binding_details {
 template <const auto& Token>
 struct LLKOperandExtractor;
@@ -45,7 +48,7 @@ public:
     explicit constexpr ScratchpadBindingToken(uint32_t crta_offset, uint32_t size_in_bytes) noexcept :
         crta_offset_(crta_offset), size_in_bytes_(size_in_bytes) {}
 
-    // Optional binding token constructor used when the host supplies LLK metadata.
+    // Binding token constructor used when the host supplies LLK metadata.
     // See "Entry format metadata" in ScratchpadSpec.
     constexpr ScratchpadBindingToken(
         uint32_t crta_offset, uint32_t size_in_bytes, binding_details::LLKMetadata llk) noexcept :

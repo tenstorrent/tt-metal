@@ -9,8 +9,6 @@
 #include <type_traits>
 
 #include "api/compute/experimental/2_0/llk_operand.h"
-#include "api/dataflow/dataflow_buffer.h"
-#include "api/scratchpad.h"
 #include "api/tensor/tensor_binding_token.h"
 
 namespace binding_details {
@@ -57,8 +55,7 @@ struct LLKOperandExtractor {
  * LLKOperand is associated with llk metadata needed to operate on compute kernels.
  * These metadata are specified/ inferred from host.
  *
- * Will cause a compile-time error if BindingToken that does not have llk metadata is used to instantiate this type
- * alias.
+ * pre-condition: Resource represented by the tokens has llk metadata configured on the host side.
  */
 template <const auto& Token>
 using LLKOperandFrom = typename binding_details::LLKOperandExtractor<Token>::OperandT;

@@ -139,7 +139,7 @@ struct TensorBindingHandle {
     // distinguish them with a boolean.
     // (We'll need to extend this to something more flexible if additional possibilities are added.)
     bool runtime_field_is_page_size = false;
-    std::optional<LLKMetadata> llk_metadata;
+    LLKMetadata llk_metadata;
 };
 
 // Metal 2.0: per-kernel resolved scratchpad binding.
@@ -273,7 +273,7 @@ public:
                                             uint32_t cta_offset,
                                             uint32_t addr_crta_offset,
                                             uint32_t num_runtime_field_crta_words,
-                                            const std::optional<LLKMetadata>&)>&) const override;
+                                            const LLKMetadata&)>&) const override;
     const std::vector<TensorBindingHandle>& tensor_binding_handles() const { return tensor_binding_handles_; }
     void process_scratchpad_binding_handles(const std::function<void(
                                                 const std::string& accessor_name,
