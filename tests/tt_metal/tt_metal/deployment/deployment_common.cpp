@@ -8,18 +8,6 @@
 
 #include <fstream>
 
-std::atomic_bool g_stop_requested = false;
-std::atomic_bool g_stop_message_printed = false;
-
-void handle_sigint(int) {
-    g_stop_requested.store(true);
-
-    if (!g_stop_message_printed.exchange(true)) {
-        const char msg[] = "\nSIGINT received, waiting to finish current test...\n";
-        [[maybe_unused]] ssize_t written = write(STDERR_FILENO, msg, sizeof msg - 1); /* NOLINT */
-    }
-}
-
 static std::map<uint32_t, std::string> id_to_bdf;
 static void init_id_to_bdf() {
     if (id_to_bdf.empty()) {

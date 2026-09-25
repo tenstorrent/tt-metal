@@ -54,23 +54,6 @@ extern std::atomic<bool> g_watchdog_requested;
 using namespace std;
 using namespace tt;
 
-static std::string trim_copy(std::string s) {
-    while (!s.empty() && std::isspace(s.front())) {
-        s.erase(s.begin());
-    }
-    while (!s.empty() && std::isspace(s.back())) {
-        s.pop_back();
-    }
-    return s;
-}
-
-static std::string read_text_file_trimmed(const std::string& path) {
-    std::ifstream file(path);
-    std::string value;
-    std::getline(file, value);
-    return trim_copy(value);
-}
-
 static const std::vector<std::string>& get_tenstorrent_pci_bdfs_cached() {
     static const std::vector<std::string> bdfs = []() {
         std::vector<std::string> out;
