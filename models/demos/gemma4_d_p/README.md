@@ -2,13 +2,13 @@
 
 This package supports only the dense **Gemma4-31B-it** variant and owns its context-parallel prefill implementation and its migration-ready KV caches. It runs on one 32-device Blackhole Galaxy. Supported layouts are **8×4 (CP8/TP4)** and **4×8 (CP4/TP8)**; the migration address table currently supports **8×4** only.
 
-The original `models/demos/gemma4` implementation is independent of this package. Model, attention, weight-loading, and test helpers are local to `gemma4_d_p`. TTNN and model-independent utilities under `models/common`, `models/demos/common/prefill`, and `models/tt_transformers` remain shared. The prefill service uses the shared engine under `models/demos/common/prefill`.
+The `models/demos/gemma4` implementation is independent of this package. Model, attention, weight-loading, and test helpers are local to `gemma4_d_p`. TTNN and model-independent utilities under `models/common`, `models/demos/common/prefill`, and `models/tt_transformers` are shared. The prefill service uses the shared engine under `models/demos/common/prefill`.
 
-For the runner, producer, and service validation, see [Prefill service](PREFILL_SERVICE.md).
+For the runner, producer, and service validation, see [Prefill service](docs/PREFILL_SERVICE.md).
 
 ## Run
 
-Use the existing checkpoint and tensor-cache configuration:
+Set the checkpoint and tensor-cache paths:
 
 ```bash
 export \
@@ -50,4 +50,4 @@ Each model call prefills one user's chunk and returns post-norm hidden states. `
 python_env/bin/python3 -m pytest models/demos/gemma4_d_p/tests/unit -k 'not device' -q
 ```
 
-These checks cover packed-cache algebra, projection/RoPE permutations, migration addresses, supported mesh/chunk geometry, and independence from the original Gemma4 package. Device correctness and performance require a Galaxy run; host checks do not establish numerical trace-replay equivalence.
+These checks cover packed-cache algebra, projection/RoPE permutations, migration addresses, supported mesh/chunk geometry, and independence from `models/demos/gemma4`. Device correctness and performance require a Galaxy run; host checks do not establish numerical trace-replay equivalence.
