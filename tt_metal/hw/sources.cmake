@@ -399,6 +399,7 @@ set(HW_JIT_API_HEADERS
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_mirrored_terminals.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_polynomial_dst_tile.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_polynomial_dual_tile.inc
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_polynomial_single_tile.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_rational_dst_core.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_rational_interleaved_core.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_rational_parity.h
@@ -423,5 +424,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/eltwise_unary/hardsigmoid_bw_tt_poly_bf16.h
     inc/api/compute/eltwise_unary/hardswish_bw_tt_poly_bf16.h
     inc/api/compute/eltwise_unary/hardtanh_bw_tt_poly_bf16.h
+    inc/api/compute/eltwise_unary/log_sigmoid_bw_tt_poly_bf16.h
+    inc/api/compute/eltwise_unary/softplus_bw_tt_poly_bf16.h
     inc/api/compute/eltwise_unary/softshrink_bw_tt_poly_bf16.h
 )
