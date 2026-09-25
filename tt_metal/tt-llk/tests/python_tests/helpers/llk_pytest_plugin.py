@@ -214,6 +214,22 @@ def pytest_addoption(parser):
     )
 
     parser.addoption(
+        "--ulp-emit",
+        action="store_true",
+        help="Re-measure rather than gate: the exhaustive unary sweep records what it "
+        "measures and folds it back into helpers/sfpu_accuracy_budget.yaml at the end "
+        "of the session, replacing each swept op's rows. Writes the table; use it "
+        "deliberately.",
+    )
+    parser.addoption(
+        "--ulp-report",
+        action="store_true",
+        help="Log the measured ULP distance for every comparison on a ULP-capable "
+        "format, on a pass as well as a failure, and including ops that carry no step "
+        "budget yet. Reporting only: it cannot change a verdict.",
+    )
+
+    parser.addoption(
         "--bit-exact-runs",
         action="store",
         type=int,
@@ -457,6 +473,13 @@ def pytest_configure(config):
             _UNIFIED_ORDER_FILE = _RECORD_TEST_ORDER
         _RECORD_TEST_ORDER = True
         utils_module._RECORD_TEST_ORDER = True
+
+    if config.getoption("--ulp-emit"):
+        from . import ulp_sweep
+
+        ulp_sweep.EMIT = True
+    if config.getoption("--ulp-report"):
+        utils_module._ULP_REPORT = True
 
     log_file = "pytest_errors.log"
     if not hasattr(config, "workerinput"):  # executed only by master pytest runner

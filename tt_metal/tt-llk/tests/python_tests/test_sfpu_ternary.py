@@ -5,6 +5,7 @@ import struct
 
 import pytest
 import torch
+from helpers.chip_architecture import get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     TernarySFPUGolden,
@@ -18,6 +19,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
+from helpers.sfpu_accuracy_budget import accuracy_contract
 from helpers.sfpu_domains import (
     _OP_DOMAIN_REGISTRY,
     Operand,
@@ -156,8 +158,25 @@ def _run_sfpu_ternary(
     golden_tensor = torch.tensor(golden, dtype=torch_format).flatten()
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()
 
+    # The op's declared accuracy contract for this exact variant, the same lookup the
+    # unary and binary drivers make. No ternary op is enrolled yet, so every one of them
+    # resolves to today's per-format tolerance -- enrolling one is then a table edit.
+    contract = accuracy_contract(
+        mathop,
+        output_format=formats.output_format,
+        input_format=formats.input_format,
+        # Fixed, because this driver compiles APPROX_MODE(ApproximationMode.No). Left
+        # unset, a row keyed `approx: "No"` would not match and would silently fall back
+        # to the default tolerance.
+        approx_mode=ApproximationMode.No,
+        dest_acc=dest_acc,
+        arch=get_chip_architecture(),
+    )
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
+        golden_tensor,
+        res_tensor,
+        formats.output_format,
+        **contract.tolerance_kwargs(),
     ), "Assert against golden failed"
 
 
