@@ -161,9 +161,7 @@ def test_video_rope_output_tracks_fps(monkeypatch):
     cos_25, sin_25 = rope(fps=25.0)
     cos_default, sin_default = rope()
 
-    assert not torch.equal(cos_24, cos_25) or not torch.equal(sin_24, sin_25), (
-        "fps had no effect on video RoPE cos/sin"
-    )
+    assert not torch.equal(cos_24, cos_25) or not torch.equal(sin_24, sin_25), "fps had no effect on video RoPE cos/sin"
     assert torch.equal(cos_default, cos_24) and torch.equal(sin_default, sin_24)
 
 
