@@ -14,6 +14,11 @@ enum class DevicePrintRiscCoreState : uint8_t {
     PrintingDisabled = 2,
 };
 
+// Quasar keeps the print-buffer lock on a 64-byte cache line of its own, so its header (Aux below)
+// is two lines: the positions and per-RISC state, then the lock.
+constexpr uint32_t DEVICE_PRINT_QUASAR_LOCK_LINE_BYTES = 64;
+constexpr uint32_t DEVICE_PRINT_QUASAR_AUX_BYTES = 2 * DEVICE_PRINT_QUASAR_LOCK_LINE_BYTES;
+
 template <uint32_t BufferSize, uint32_t ProcessorCount, uint32_t ProcessorOffset = 0>
 struct DevicePrintBuffer {
     static constexpr uint32_t buffer_size = BufferSize;
@@ -32,16 +37,17 @@ struct DevicePrintBuffer {
         // The lock is taken with an amoswap through the cached L1 alias while the rest of the header is
         // written uncached or over the NoC; a dirty line write-back would clobber its neighbours, so
         // the lock gets a 64-byte line of its own.
-        uint8_t pad_before_lock[64 - 2 * sizeof(uint32_t) - ProcessorCount];
+        uint8_t pad_before_lock[DEVICE_PRINT_QUASAR_LOCK_LINE_BYTES - 2 * sizeof(uint32_t) - ProcessorCount];
         std::atomic<uint32_t> lock;
-        uint8_t pad_after_lock[64 - sizeof(uint32_t)];
+        uint8_t pad_after_lock[DEVICE_PRINT_QUASAR_LOCK_LINE_BYTES - sizeof(uint32_t)];
 #else
         std::atomic<uint32_t> lock;  // Lock for synchronizing access to the buffer. 0 means free, 1 means locked.
 #endif
     } aux;
 #if defined(ARCH_QUASAR) && !defined(ENV_LLK_INFRA)
-    static_assert(sizeof(Aux) == 128, "Aux struct size must be correct");
-    static_assert(offsetof(Aux, lock) == 64, "The print lock must start its own 64-byte line");
+    static_assert(sizeof(Aux) == DEVICE_PRINT_QUASAR_AUX_BYTES, "Aux struct size must be correct");
+    static_assert(
+        offsetof(Aux, lock) == DEVICE_PRINT_QUASAR_LOCK_LINE_BYTES, "The print lock must start its own 64-byte line");
 #else
     static_assert(
         sizeof(Aux) == sizeof(uint32_t) + sizeof(uint32_t) +

@@ -214,8 +214,9 @@ public:
                                uint64_t address, uint16_t size, uint16_t processor_count, uint16_t processor_offset) {
             const uint16_t risc_state_bytes = ((processor_count + 3) / 4) * 4;
             // Quasar isolates the lock on its own 64-byte line.
-            const uint16_t buffer_offset =
-                quasar_layout ? 128u : static_cast<uint16_t>(8u + risc_state_bytes + sizeof(uint32_t));
+            const uint16_t buffer_offset = quasar_layout
+                                               ? static_cast<uint16_t>(DEVICE_PRINT_QUASAR_AUX_BYTES)
+                                               : static_cast<uint16_t>(8u + risc_state_bytes + sizeof(uint32_t));
             const uint16_t buffer_size = size - buffer_offset;
             return DPrintBufferInfo{address, size, 0, buffer_offset, buffer_size, processor_count, processor_offset};
         };
