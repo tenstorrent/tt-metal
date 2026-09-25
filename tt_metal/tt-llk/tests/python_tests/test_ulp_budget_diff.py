@@ -312,19 +312,30 @@ def test_the_headroom_report_classifies_against_the_declared_budget(measured, ex
     assert over == (1 if expect == "over budget" else 0)
 
 
-def test_a_cell_on_tolerance_is_not_judged_for_headroom():
-    """There is no budget to have headroom against, and the measurement is recorded
-    on the row for a human rather than checked here."""
+def test_a_tolerance_cell_is_judged_against_its_recorded_measurement():
+    """No budget, so the sweep passes it whatever it measures -- this is the only
+    place a regression there can show. The row's own "max N ULP" is the baseline; a
+    cell whose row records none is not judged at all."""
     table = parse_table(
-        "Abs:\n  - {in: Float16_b, out: Float16_b, metric: tolerance}\n"
+        "Abs:\n"
+        "  - {in: Float16_b, out: Float16_b, metric: tolerance}  # max 393 ULP, budget 433 > ceiling 7\n"
+        "  - {in: Float16, out: Float16_b, metric: tolerance}  # block-quantized, so tolerance\n"
     )
-    report, over = render_headroom(
-        table,
-        _measured_cells(
-            [_measure(**{"in": "Float16_b", "out": "Float16_b", "max": 99999})]
-        ),
+    same = _measured_cells(
+        [_measure(**{"in": "Float16_b", "out": "Float16_b", "max": 393})]
     )
-    assert over == 0 and "over budget" not in report
+    report, over = render_headroom(table, same)
+    assert over == 0 and "regressed" not in report
+    worse = _measured_cells(
+        [
+            _measure(**{"in": "Float16_b", "out": "Float16_b", "max": 500}),
+            _measure(**{"in": "Float16", "out": "Float16_b", "max": 10**6}),
+        ]
+    )
+    report, over = render_headroom(table, worse)
+    assert over == 1  # the un-baselined cell is not counted
+    assert "| 500 | 393 | regressed |" in report
+    assert "Regressed on the tolerance metric" in report
 
 
 def test_a_measurement_resolves_against_the_most_specific_row():

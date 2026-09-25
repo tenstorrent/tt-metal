@@ -93,9 +93,9 @@ jobs:
             echo "CHIP_ARCH=unknown" >> "$GITHUB_ENV"
           fi
 
-      # The gate itself. A cell whose measurement no longer fits its declared budget
-      # fails here, which is the regression signal; the report below is what the run
-      # says about the cells that did fit.
+      # The gate itself. A gated cell whose measurement no longer fits its declared
+      # budget fails here. Tolerance cells are measured too but have no budget to
+      # fail, so the step below judges them against the measurement their row records.
       - name: Run the exhaustive ULP sweep
         shell: bash
         working-directory: ${{ env.LLK_PATH }}
@@ -104,7 +104,7 @@ jobs:
         run: |
           ${{ matrix.test-group.cmd }}
 
-      - name: Compare the measurements against the declared budgets
+      - name: Compare the measurements against the declared budgets and recorded measurements
         if: always()
         shell: bash
         working-directory: ${{ env.LLK_PATH }}/tests/python_tests
@@ -116,15 +116,19 @@ jobs:
             exit 0
           fi
           # By path, not `-m`: the package __init__ imports ttexalens, and the tool
-          # is deliberately standalone.
+          # is deliberately standalone. Its exit status is the regression signal for
+          # the tolerance cells, which the sweep itself cannot fail: a worst lane past
+          # the measurement the row records. The report is published either way.
+          status=0
           python3 helpers/ulp_budget_diff.py headroom \
             --table helpers/sfpu_accuracy_budget.yaml \
             --measured "${{ env.MEASURE_FILE }}" \
-            --out ulp_headroom_report.md || true
+            --out ulp_headroom_report.md || status=$?
           {
             echo "## ${{ env.CHIP_ARCH }}"
             cat ulp_headroom_report.md
           } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
 
       - name: Comment the report on the pull request
         if: ${{ always() && inputs.report-to-pr && github.event_name == 'pull_request' }}

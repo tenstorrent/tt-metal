@@ -410,23 +410,47 @@ def _measured_cells(rows: Iterable[dict]) -> Dict[Cell, int]:
     return worst
 
 
+#: The worst lane a row's comment says the last sweep measured. Written by the
+#: emitter on every row it produces ("max 393 ULP, budget 433 > ceiling 25"), and by
+#: hand on most of the others; a row without one has no baseline and is not judged.
+_RECORDED_MAX = re.compile(r"\bmax (\d+) ULP")
+
+
+def recorded_max(row: Row) -> Optional[int]:
+    """The measurement a row records, or ``None`` if its comment names none."""
+    found = _RECORDED_MAX.search(row.provenance)
+    return int(found.group(1)) if found else None
+
+
 def render_headroom(
     table: Dict[Cell, Row], measured: Dict[Cell, int]
 ) -> Tuple[str, int]:
-    """What the run says about the gates. Returns the report and the over-budget count.
+    """What the run says about the gates. Returns the report and the regression count.
 
-    The sweep already fails a cell it cannot meet, so an over-budget line here is a
-    second voice on a test that is already red. The value is the rest: which cells
-    have no headroom left, and which are carrying slack.
+    A gated cell is judged against its budget. The sweep already fails one it cannot
+    meet, so an over-budget line here is a second voice on a test that is already red;
+    the value is the rest: which cells have no headroom left, and which carry slack.
+
+    A *tolerance* cell has no budget, so the sweep passes it whatever it measures --
+    and it is judged here instead, against the measurement its own row records. A
+    worst lane past that number is a regression the gate cannot see, and it is the
+    only voice for it, which is why the count returned includes it and the workflow
+    fails on the count.
     """
     over: List[str] = []
+    regressed: List[str] = []
     tight: List[str] = []
     slack: List[str] = []
     for cell, worst in sorted(measured.items()):
         row = _resolve(table, cell[0], cell[1])
-        if row is None or not row.gated:
+        if row is None:
             continue
         named = f"{cell[0]} {{" + ", ".join(f"{k}: {v}" for k, v in cell[1]) + "}"
+        if not row.gated:
+            was = recorded_max(row)
+            if was is not None and worst > was:
+                regressed.append(f"| `{named}` | {worst} | {was} | regressed |")
+            continue
         if worst > row.max_ulp:
             over.append(f"| `{named}` | {worst} | {row.max_ulp} | over budget |")
         elif worst == row.max_ulp and row.max_ulp > 0:
@@ -446,6 +470,10 @@ def render_headroom(
     out.append("")
     for title, lines in (
         ("Over budget", over),
+        (
+            "Regressed on the tolerance metric (past the row's recorded measurement)",
+            regressed,
+        ),
         ("No headroom left", tight),
         (f"Carrying slack (measured under {_SLACK_FRACTION:.0%} of budget)", slack),
     ):
@@ -459,16 +487,23 @@ def render_headroom(
             out.append(f"**{title} — {len(lines)}**")
             out.append("")
         shown, withheld = lines[:_MAX_ROWS], max(0, len(lines) - _MAX_ROWS)
-        out += ["| cell | measured | budget | |", "| --- | --- | --- | --- |"] + shown
+        second = "last measured" if lines is regressed else "budget"
+        out += [
+            f"| cell | measured | {second} | |",
+            "| --- | --- | --- | --- |",
+        ] + shown
         if withheld:
             out.append(f"| _… {withheld} more_ | | | |")
         out.append("")
         if collapse:
             out += ["</details>", ""]
-    if not (over or tight or slack):
-        out.append("Every gated cell is inside its budget with headroom to spare.")
+    if not (over or regressed or tight or slack):
+        out.append(
+            "Every gated cell is inside its budget with headroom to spare, and no "
+            "tolerance cell is past its recorded measurement."
+        )
         out.append("")
-    return "\n".join(out), len(over)
+    return "\n".join(out), len(over) + len(regressed)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
