@@ -215,6 +215,14 @@ candidate needs a new sealed attempt and all its required evidence.
 For example, `llk+ttnn` runs the Layer-1 and end-to-end suites, while
 `llk+metal+ttnn` runs all three. Never stop after the first successful suite.
 
+Do stop at the first *failing* one. When a suite returns `COMPILE_FAILED`,
+`TESTS_FAILED`, `ENV_ERROR` or `SIM_ISA_GAP`, its advance helper for the next
+suite exits 21 and prints `SUITE_ROUTE_SHORT_CIRCUIT <suite>` with the blocking
+`<arch>/<suite>: <verdict>` lines. Treat exit 21 as that failure already routed:
+go straight to the outcome rules for the printed verdict — repair, or a stop
+condition — and do not run the remaining suites or retry the advance. The
+repair re-runs the whole route, so the skipped suites lose no coverage.
+
 The analyzer and worker must leave every required suite at coverage
 `existing` or `added`. If routing returns `missing`, consume one debug retry:
 

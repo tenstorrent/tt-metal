@@ -1216,3 +1216,133 @@ def test_review_round_validates_candidate_without_original_issue_completion(
     assert finalized.returncode == 0, finalized.stderr
     run = json.loads((logs / "run.json").read_text())
     assert run["status"] == ("failed" if stale else "success")
+
+
+def _short_circuit_case(tmp_path, worktree, suite_results, *, suite, route):
+    """Minimal state+run.json, then try to advance to `suite`."""
+    log_dir = tmp_path / f"sc-{suite}-{route.replace('+', '_')}"
+    log_dir.mkdir()
+    (log_dir / "state.json").write_text(
+        json.dumps(
+            {
+                "LOG_DIR": str(log_dir),
+                "VERIFY_ROUTE": route,
+                "TARGET_ARCHES_JSON": ["blackhole"],
+                "ISSUE_NUMBER": "24095",
+                "RUN_MODE": "single",
+                "TEST_BACKEND": "silicon",
+                "METAL_FILTER": "LLK.Reduce",
+                "TTNN_TEST": "test_transpose.py",
+                "GIT_COMMIT": "a" * 40,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (log_dir / "run.json").write_text(
+        json.dumps({"run_id": "run-1", "arch_results": suite_results}),
+        encoding="utf-8",
+    )
+    llk = worktree / "tt_metal" / "tt-llk"
+    (llk / ".codegen_run_state.json").write_text(
+        json.dumps({"LOG_DIR": str(log_dir)}), encoding="utf-8"
+    )
+    return _bash(
+        f"execute_step_advance_{'metal_test' if suite == 'metal' else 'ttnn_test'}", llk
+    )
+
+
+def _suites(**by_suite):
+    return {
+        "blackhole": {
+            "suite_results": {
+                name: {"status": "done", "verdict": verdict}
+                for name, verdict in by_suite.items()
+            }
+        }
+    }
+
+
+@pytest.mark.parametrize(
+    "verdict", ["COMPILE_FAILED", "TESTS_FAILED", "ENV_ERROR", "SIM_ISA_GAP"]
+)
+def test_advance_short_circuits_after_a_terminal_earlier_suite(
+    tmp_path, worktree, verdict
+):
+    """Run 24095 spent 2,432s on metal+ttnn after llk returned COMPILE_FAILED.
+
+    A broken new test file cannot be redeemed by a later suite, and the repair
+    re-runs the whole route, so those two suites were pure dead time.
+    """
+    result = _short_circuit_case(
+        tmp_path, worktree, _suites(llk=verdict), suite="metal", route="llk+metal+ttnn"
+    )
+    assert result.returncode == 21, result.stderr
+    assert "SUITE_ROUTE_SHORT_CIRCUIT metal" in result.stderr
+    assert f"blackhole/llk: {verdict}" in result.stderr
+
+
+def test_advance_proceeds_when_the_earlier_suite_passed(tmp_path, worktree):
+    result = _short_circuit_case(
+        tmp_path, worktree, _suites(llk="PASSED"), suite="metal", route="llk+metal+ttnn"
+    )
+    assert result.returncode == 0, result.stderr
+    assert "SHORT_CIRCUIT" not in result.stderr
+
+
+def test_ttnn_short_circuits_on_either_earlier_suite(tmp_path, worktree):
+    result = _short_circuit_case(
+        tmp_path,
+        worktree,
+        _suites(llk="PASSED", metal="TESTS_FAILED"),
+        suite="ttnn",
+        route="llk+metal+ttnn",
+    )
+    assert result.returncode == 21, result.stderr
+    assert "blackhole/metal: TESTS_FAILED" in result.stderr
+
+
+def test_a_failure_outside_the_route_does_not_short_circuit(tmp_path, worktree):
+    """A stale non-member result must not block a route that never selected it."""
+    result = _short_circuit_case(
+        tmp_path, worktree, _suites(llk="COMPILE_FAILED"), suite="ttnn", route="ttnn"
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_a_later_suite_failure_does_not_block_an_earlier_one(tmp_path, worktree):
+    """Only suites *before* the next one in llk -> metal -> ttnn order can block."""
+    result = _short_circuit_case(
+        tmp_path,
+        worktree,
+        _suites(ttnn="TESTS_FAILED"),
+        suite="metal",
+        route="metal+ttnn",
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_a_nonterminal_earlier_result_does_not_short_circuit(tmp_path, worktree):
+    """An in-flight suite has not failed yet; only status done counts."""
+    case = {
+        "blackhole": {
+            "suite_results": {"llk": {"status": "running", "verdict": "COMPILE_FAILED"}}
+        }
+    }
+    result = _short_circuit_case(
+        tmp_path, worktree, case, suite="metal", route="llk+metal+ttnn"
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_a_skipped_arch_does_not_short_circuit(tmp_path, worktree):
+    """Out-of-scope architectures are skipped by design, not failing."""
+    case = {
+        "blackhole": {
+            "verdict": "SKIPPED",
+            "suite_results": {"llk": {"status": "done", "verdict": "COMPILE_FAILED"}},
+        }
+    }
+    result = _short_circuit_case(
+        tmp_path, worktree, case, suite="metal", route="llk+metal+ttnn"
+    )
+    assert result.returncode == 0, result.stderr

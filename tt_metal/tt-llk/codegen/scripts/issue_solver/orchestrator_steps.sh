@@ -1084,11 +1084,49 @@ execute_step_advance_tester() {
         --prev-result "success" --prev-message "Fix applied" --agent "$agent"
 }
 
+# A terminal failure in an earlier suite cannot be redeemed by a later one, and
+# the repair re-runs the whole route anyway, so verifying on is dead time. Prints
+# one "<arch>/<suite>: <verdict>" line per blocking earlier result, nothing when
+# the route is clear so far. Route order guarantees every earlier suite in the
+# route already ran this round, so these results are never stale.
+rj-blocking-suite-failure() {
+    local _L; _L="$(_LOG)"
+    python - "$_L" "$1" "$(sg VERIFY_ROUTE)" <<'PY'
+import json, sys
+from pathlib import Path
+
+log_dir, next_suite, route = sys.argv[1:4]
+ORDER = ("llk", "metal", "ttnn")
+BLOCKING = {"ENV_ERROR", "COMPILE_FAILED", "TESTS_FAILED", "SIM_ISA_GAP"}
+if next_suite not in ORDER:
+    sys.exit(0)
+try:
+    run = json.loads((Path(log_dir) / "run.json").read_text())
+except (OSError, ValueError):
+    sys.exit(0)
+members = [s for s in ORDER if s in route.split("+")]
+earlier = [s for s in members if ORDER.index(s) < ORDER.index(next_suite)]
+for arch, result in sorted((run.get("arch_results") or {}).items()):
+    if result.get("verdict") == "SKIPPED":
+        continue
+    suites = result.get("suite_results") or {}
+    for suite in earlier:
+        entry = suites.get(suite) or {}
+        if entry.get("status") == "done" and entry.get("verdict") in BLOCKING:
+            print(f"{arch}/{suite}: {entry['verdict']}")
+PY
+}
+
 # ===========================================================================
 # Step 4b — advance to the metal unit_tests_llk suite.
 # ===========================================================================
 execute_step_advance_metal_test() {
     local _L; _L="$(_LOG)"
+    local blocking; blocking="$(rj-blocking-suite-failure metal)"
+    if [ -n "$blocking" ]; then
+        printf 'SUITE_ROUTE_SHORT_CIRCUIT metal\n%s\n' "$blocking" >&2
+        return 21
+    fi
     local num mode arches route filt agent; num="$(sg ISSUE_NUMBER)"; mode="$(sg RUN_MODE)"
     arches="$(sg TARGET_ARCHES_JSON)"; route="$(sg VERIFY_ROUTE)"; filt="$(sg METAL_FILTER)"
     agent="${1:-writer}"
@@ -1104,6 +1142,11 @@ execute_step_advance_metal_test() {
 # ===========================================================================
 execute_step_advance_ttnn_test() {
     local _L; _L="$(_LOG)"
+    local blocking; blocking="$(rj-blocking-suite-failure ttnn)"
+    if [ -n "$blocking" ]; then
+        printf 'SUITE_ROUTE_SHORT_CIRCUIT ttnn\n%s\n' "$blocking" >&2
+        return 21
+    fi
     local num mode arches route test agent; num="$(sg ISSUE_NUMBER)"; mode="$(sg RUN_MODE)"
     arches="$(sg TARGET_ARCHES_JSON)"; route="$(sg VERIFY_ROUTE)"; test="$(sg TTNN_TEST)"
     agent="${1:-writer}"

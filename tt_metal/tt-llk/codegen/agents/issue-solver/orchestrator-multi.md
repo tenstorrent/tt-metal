@@ -119,6 +119,15 @@ Use the shared canonical `VERIFY_ROUTE` and run every named suite in
 | `missing` | send one combined `MISSING_TEST_COVERAGE` retry to the shared worker |
 | `none` | call `execute_step_mark_unverifiable`; valid only when verification is not applicable |
 
+Stop at the first *failing* suite. When any architecture's suite returns
+`COMPILE_FAILED`, `TESTS_FAILED`, `ENV_ERROR` or `SIM_ISA_GAP`, the advance
+helper for the next suite exits 21 and prints `SUITE_ROUTE_SHORT_CIRCUIT
+<suite>` with the blocking `<arch>/<suite>: <verdict>` lines. Treat exit 21 as
+that failure already routed: go straight to the outcome rules for the printed
+verdict and do not run the remaining suites or retry the advance. One
+architecture's hard failure short-circuits the shared route, because the repair
+re-runs it for every architecture anyway.
+
 When routing returns `missing`, call `execute_step_coverage_feedback`, spawn
 one shared worker with `FAILURE_CLASS=MISSING_TEST_COVERAGE`, and consume one
 debug retry. The worker must add runnable coverage for every affected in-scope
