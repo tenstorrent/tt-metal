@@ -1,0 +1,14 @@
+# Framework build ledger. Drive with:
+#   python -m models.demos.common.bringup gate F1 --spec models/demos/common/bringup/dev/spec.yaml --commit
+tasks:
+  - id: F1
+    title: Core - spec, ledger, gate runner, metrics, CLI
+    step: framework
+    deps: []
+    paths: [models/demos/common/bringup/__init__.py, models/demos/common/bringup/__main__.py,
+            models/demos/common/bringup/core, models/demos/common/bringup/selftest/__init__.py,
+            models/demos/common/bringup/selftest/conftest.py, models/demos/common/bringup/selftest/test_core.py,
+            models/demos/common/bringup/dev/spec.yaml]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/test_core.py
+      metrics: {selftest_passed: ">= 20", selftest_failed: "== 0"}
