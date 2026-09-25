@@ -4,7 +4,7 @@
 
 #include "api/compute/matmul.h"
 #include "api/compute/pack.h"
-#include "tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel.h"
+#include "tt_metal/tt-llk/tt_llk_blackhole/common/inc/ckernel.h"
 #include <tools/profiler/kernel_profiler.hpp>
 
 // Compute kernel for max-utilization workload.
@@ -395,31 +395,6 @@ ALWI void max_util_pack(uint32_t num_loops, uint32_t num_tiles, uint32_t l1_buff
     }
 }
 
-// #include "ckernel_sfpu_typecast.h"
-#include "tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_typecast.h"
-#include "llk_math_eltwise_unary_sfpu.h"
-ALWI void max_util_sfpu(uint32_t num_loops, uint32_t num_tiles) {
-    // init
-    constexpr bool is_fp32_dest_acc_en = false;
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en>(
-        (uint32_t)DataFormat::Float16_b, (uint32_t)DataFormat::Float16_b, 128 /* tile size for float16_b >> 4 */);
-    _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-
-    // typecast (Float16_b -> UInt16): programs SFPLOADMACRO macros for a 2-cycle/row pipeline
-    _llk_math_eltwise_unary_sfpu_init_<SfpuType::typecast>();
-    ckernel::sfpu::_init_typecast_uint16_to_fp16b_<false>();
-
-    // compute loop
-    _llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(0);
-    for (uint32_t i = 0; i < num_loops; i++) {
-        _llk_packer_wait_for_math_done_();
-        for (uint32_t j = 0; j < num_tiles; j++) {
-            ckernel::sfpu::_calculate_typecast_uint16_to_fp16b_<false, 10>();
-        }
-        _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-    }
-    _llk_math_eltwise_unary_sfpu_done_();
-}
 #endif
 
 void kernel_main() {
@@ -445,7 +420,6 @@ void kernel_main() {
 
     // TRISC2: perform pack to output L1 addr or SFPU programming
     PACK((max_util_pack(num_loops, num_tiles, l1_buffer2_addr)));
-    // PACK((max_util_sfpu(num_loops, num_tiles)));
 
     // std::uint64_t t1 = ckernel::read_wall_clock();
     // std::uint64_t kernel_fpu_cycles = (16*8)*num_loops*num_tiles;

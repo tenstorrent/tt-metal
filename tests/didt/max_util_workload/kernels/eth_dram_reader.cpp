@@ -65,8 +65,12 @@ void kernel_main() {
                 }
             }
         }
+#ifdef USE_IDLE_ETH
+        noc_async_read_barrier();
+#else
         // Active-ETH kernels must service base-firmware routing while waiting.
         eth_noc_async_read_barrier();
+#endif
     }
 
     uint64_t t1 = eth_read_wall_clock();
@@ -78,5 +82,9 @@ void kernel_main() {
     timing_out[2] = static_cast<uint32_t>(t1 & 0xFFFFFFFFu);
     timing_out[3] = static_cast<uint32_t>(t1 >> 32);
     noc_async_write(eth_l1_staging_addr, bank_noc_base, 16);
+#ifdef USE_IDLE_ETH
+    noc_async_write_barrier();
+#else
     eth_noc_async_write_barrier();
+#endif
 }
