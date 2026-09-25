@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from asyncio import StreamReader
 from enum import Enum, auto
 from sys import stdout
+import requests
 import asyncio
 import json
 import sys
@@ -41,9 +42,12 @@ testmissinglinks = re.compile(
 testtimeout = re.compile(f"({timeregex}).*Test \| Timed out! You probably need to reset the device .*")
 locinfo = "sdev: \[(.*) \((.*)\), ubb: (.*), chip: (.*)\], rdev: \[(.*) \((.*)\), ubb: (.*), chip: (.*)\], score: \[(.*)\], rcore: \[(.*)\], processor: \[(.*)\], link: \[(.*)\]"
 testcheck = re.compile(f"({timeregex}).*Test \| core_check: {locinfo} .*")
+testasic = re.compile(f"({timeregex}).*Test \|   UBB: (.*), Chip: (.*), BDF: (.*), SN: (.*) .*")
 
 print_logs = True
 missing_links: dict[str, dict] = {}
+
+http_post_url = "http://localhost:8080/"
 
 
 class TestCase(str, Enum):
@@ -106,6 +110,7 @@ class EventType(Enum):
     TESTEND = auto()
     DEVICES = auto()
     CORES = auto()
+    ASIC = auto()
     PROCS = auto()
     RUNS = auto()
     BW = auto()
@@ -350,6 +355,21 @@ def parse_missinglinks(l: str) -> Optional[Event]:
     return Event(EventType.MISSINGLINKS, extra)
 
 
+def parse_asic(l: str) -> Optional[Event]:
+    m = testasic.match(l)
+    if m is None:
+        return None
+
+    extra = {
+        "ubb": m.group(2),
+        "chip": m.group(3),
+        "bdf": m.group(4),
+        "sn": m.group(5),
+    }
+    # print(f"\tASIC {extra}")
+    return Event(EventType.ASIC, extra)
+
+
 def parse_line(l: str, logf: Optional[TextIO]) -> Optional[Event]:
     if print_logs:
         print(f"l: {l}")
@@ -370,6 +390,7 @@ def parse_line(l: str, logf: Optional[TextIO]) -> Optional[Event]:
         parse_check,
         parse_setup,
         parse_procs,
+        parse_asic,
         parse_runs,
         parse_done,
         parse_bw,
@@ -402,7 +423,23 @@ async def parse_logs(inf: asyncio.StreamReader, logf: Optional[TextIO]) -> list[
     return evs
 
 
-def parse_evs(evs: list[Event]) -> Iterator[TestRun]:
+def publish_link(test, link: TestedLink, srcsn, dstsn, *args):
+    payload = {
+        "test": test,
+        "src_chip": srcsn,
+        "src_core": link.src_core,
+        "dst_chip": dstsn,
+        "dst_core": link.dst_core,
+        "proc": link.proc,
+        "bw": link.bw,
+        "errors": link.errors,
+    }
+    requests.post(http_post_url, json=payload)
+    print(json.dumps(payload, indent=4), link)
+    print(args)
+
+
+def parse_evs(evs: Iterator[Event]) -> Iterator[TestRun]:
     test: str = ""
     sdev: str = ""
     sdevbdf: str = ""
@@ -418,6 +455,7 @@ def parse_evs(evs: list[Event]) -> Iterator[TestRun]:
     proc: str = ""
     bw: dict = {}
 
+    serialnums: dict[str, str] = {}
     runs: list[TestRun] = []
     links: list[TestedLink] = []
     errors: list = []
@@ -426,8 +464,8 @@ def parse_evs(evs: list[Event]) -> Iterator[TestRun]:
     drambidir = "MeshDispatchFixture.TensixDeploymentEthernet04DataIntegrityDramBidir"
     noprocs = [drambidir]
 
-    it = iter(evs)
-    for e in it:
+    # it = iter(evs)
+    for e in evs:
         if e.typ == EventType.TESTSTART:
             test = e.extra["name"]
             sdev = sdevbdf = rdev = rdevbdf = score = rcore = ltype = proc = ""
@@ -461,6 +499,8 @@ def parse_evs(evs: list[Event]) -> Iterator[TestRun]:
             proc = ""
             errors = []
             bw = {}
+        elif e.typ == EventType.ASIC:
+            serialnums[e.extra["bdf"]] = e.extra["sn"]
         elif e.typ == EventType.PROCS:
             proc = e.extra["proc"]
             bw = {}
@@ -495,24 +535,24 @@ def parse_evs(evs: list[Event]) -> Iterator[TestRun]:
             errors = []
             bw = {}
         elif e.typ == EventType.TESTDONE:
-            links.append(
-                TestedLink(
-                    sdev,
-                    sdevbdf,
-                    score,
-                    sdevubb,
-                    sdevchip,
-                    rdev,
-                    rdevbdf,
-                    rcore,
-                    rdevubb,
-                    rdevchip,
-                    ltype,
-                    proc,
-                    bw,
-                    errors,
-                )
+            tlink = TestedLink(
+                sdev,
+                sdevbdf,
+                score,
+                sdevubb,
+                sdevchip,
+                rdev,
+                rdevbdf,
+                rcore,
+                rdevubb,
+                rdevchip,
+                ltype,
+                proc,
+                bw,
+                errors,
             )
+            links.append(tlink)
+            publish_link(test, tlink, serialnums[sdevbdf], serialnums[rdevbdf])
         elif e.typ == EventType.MISSINGLINKS:
             global missing_links
             missing_links[e.extra["id"]] = e.extra
@@ -756,7 +796,7 @@ def print_results(runs: list[TestRun], logf: TextIO = stdout):
     print_summary(runs, logf)
 
 
-async def file_to_streamreader(path: str, chunk_size: int = 8192) -> StreamReader:
+async def file_to_streamreader(path: str, chunk_size: int = 16) -> StreamReader:
     loop = asyncio.get_running_loop()
     reader = StreamReader()
 
