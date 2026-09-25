@@ -109,7 +109,7 @@ void HDSocketDescriptor::write_to_file(const std::string& path) const {
 
 namespace {
 
-std::optional<HDSocketDescriptor> read_if_present(const std::string& path) {
+std::optional<HDSocketDescriptor> read_socket_descriptor_if_present(const std::string& path) {
     std::ifstream ifs(path, std::ios::binary | std::ios::ate);
     if (!ifs.is_open()) {
         return std::nullopt;
@@ -156,7 +156,7 @@ std::optional<HDSocketDescriptor> read_if_present(const std::string& path) {
 }  // namespace
 
 HDSocketDescriptor HDSocketDescriptor::read_from_file(const std::string& path) {
-    auto desc = read_if_present(path);
+    auto desc = read_socket_descriptor_if_present(path);
     TT_FATAL(desc.has_value(), "Failed to open descriptor file for reading: {}", path);
     return std::move(*desc);
 }
@@ -174,7 +174,7 @@ HDSocketDescriptor HDSocketDescriptor::wait_and_read(
     auto start_time = std::chrono::high_resolution_clock::now();
     bool logged_dead_owner = false;
     while (true) {
-        if (auto desc = read_if_present(descriptor_path)) {
+        if (auto desc = read_socket_descriptor_if_present(descriptor_path)) {
             if (desc->owner_alive()) {
                 TT_FATAL(
                     desc->socket_type == expected_type,

@@ -181,7 +181,7 @@ void D2HStreamServiceDescriptor::write_to_file(const std::string& path) const {
 
 namespace {
 
-std::optional<D2HStreamServiceDescriptor> read_if_present(const std::string& path) {
+std::optional<D2HStreamServiceDescriptor> read_d2h_service_descriptor_if_present(const std::string& path) {
     std::ifstream ifs(path, std::ios::binary | std::ios::ate);
     if (!ifs.is_open()) {
         return std::nullopt;
@@ -197,11 +197,11 @@ std::optional<D2HStreamServiceDescriptor> read_if_present(const std::string& pat
     const auto* fb = flatbuffer::GetD2HStreamServiceDescriptor(buf.data());
     TT_FATAL(fb, "Failed to parse flatbuffer D2H service descriptor from: {}", path);
     TT_FATAL(
-        fb->version() == kVersion,
+        fb->version() == D2HStreamServiceDescriptor::kVersion,
         "D2HStreamServiceDescriptor version mismatch at {}: got {}, expected {}",
         path,
         fb->version(),
-        kVersion);
+        D2HStreamServiceDescriptor::kVersion);
 
     D2HStreamServiceDescriptor desc;
 
@@ -277,7 +277,7 @@ std::optional<D2HStreamServiceDescriptor> read_if_present(const std::string& pat
 }  // namespace
 
 D2HStreamServiceDescriptor D2HStreamServiceDescriptor::read_from_file(const std::string& path) {
-    auto desc = read_if_present(path);
+    auto desc = read_d2h_service_descriptor_if_present(path);
     TT_FATAL(desc.has_value(), "Failed to open D2H service descriptor for reading: {}", path);
     return std::move(*desc);
 }
@@ -286,7 +286,7 @@ D2HStreamServiceDescriptor D2HStreamServiceDescriptor::wait_and_read(const std::
     auto start_time = std::chrono::high_resolution_clock::now();
     bool logged_dead_owner = false;
     while (true) {
-        if (auto desc = read_if_present(path)) {
+        if (auto desc = read_d2h_service_descriptor_if_present(path)) {
             if (desc->owner_alive()) {
                 return std::move(*desc);
             }
