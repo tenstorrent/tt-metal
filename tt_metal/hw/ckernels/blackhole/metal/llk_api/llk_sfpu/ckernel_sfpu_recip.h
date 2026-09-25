@@ -8,7 +8,10 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "ckernel_addrmod.h"
 #include "ckernel_defs.h"
+#include "ckernel_instr_params.h"
+#include "ckernel_ops.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_rsqrt_compat.h"
@@ -376,8 +379,134 @@ sfpi_inline void sfpu_reciprocal_init() {
     }
 }
 
+// Fast bf16 reciprocal for Blackhole. Origin: llk-bench (LLM-agent-written kernel, claude-fable-5, 2026-08),
+// validated exhaustively over all 65,536 bf16 inputs vs the exact golden: max 1 ULP (gate <= 2).
+// Measured 327.1 cycles/tile vs 1202.1 for the previous kernel on p150b (tt-metal v0.76.0 baseline). NOTE: that
+// baseline is recip_tile's header default, legacy_compat = true (_calculate_reciprocal_compat_); this kernel is
+// wired into the legacy_compat = false / !APPROX / bf16 slot in place of _calculate_reciprocal_fast_8b_3c_, whose
+// cycles/tile were not measured by the bench -- compare against it when validating on hardware.
+// SFPU state programmed by the init: programmable constant vConstFloatPrgm1 (LREG13) = 0.5f (LREG12 keeps
+// sfpu_reciprocal_init's 2.0f, see recip_init); SFPLOADMACRO InstructionTemplate[0..3] (T0 0.5*x MAD, T1 CAST,
+// T2 MULI 2^75, T3 SETSGN), LoadMacroConfig.Sequence[0..3] (macros 0..3) + Misc; all lanes enabled (SFPENCC).
+// No replay slots. ADDR_MOD_6 = dest incr 2 (programmed by recip_init) and ADDR_MOD_7. bf16 DEST only (the
+// SETSGN/CAST bit tricks assume bf16 bit patterns) -- gated on !is_fp32_dest_acc_en; the existing paths stay
+// as the fallback for every other configuration and for DISABLE_SFPLOADMACRO builds.
+//
+// Region-free algorithm (validated exhaustively against documented models):
+//   C = x*0.5 + 0                   ; |C| == 0  <=>  exp(x) <= 1
+//   B = arecipU(C) * 0.5*(1+2^-7)   ; unsigned main path (+inf on fixup lanes)
+//   D = arecipU(cast_sm32(bits(x))) * 2^74 * 2^75
+//                                   ; unsigned fixup path; == |1/x| on fixup
+//                                     lanes, provably >= |1/x| on normal lanes
+//   B = min(B, D)                   ; SFPSWAP vec min/max -- no lane predication
+//   out = sign(x) | B               ; SFPSETSGN into the sign-carrying reg
+// Max ULP 1 exhaustively. No CC anywhere.
+//
+// Two vectors (even/odd) per 17-issue block, software-pipelined across blocks
+// (each block loads the next block's C). SFPLOADMACRO fuses the in-place MAD,
+// the CAST, the final D*2^75, the even-vector SETSGN and both stores. Macro
+// delays count issued instructions (Misc=0xFF0) so the schedule is issue-
+// indexed and stall-tolerant. Constraints honored: macro loads only target
+// L0..L3 (VDHi doubles as the address LSB); no macro op fires during either
+// execution cycle of an SFPSWAP.
+//   T = L0 (sign source + store data), D_e = L2, B_e = L4, B_o = L6,
+//   C_e/C_o/D_o rotate over {L1, L3} (D_o reuses the dead C_e register).
+// Macros: 0 = load C + {MAD C=0.5*C @d2}
+//         1 = load D + {CAST D @d0, MULI D*=2^75 @d6}
+//         2 = load T + {SETSGN T=sgn(T)|mag(B_e=L4) @d0, STORE(T) @d1}
+//         3 = load T + {STORE(T) @d1}
+#ifndef DISABLE_SFPLOADMACRO
+inline void _init_reciprocal_bf16_fast_() {
+    // recip_init has already run the common prologue (SFPU config reg, ADDR_MOD_7, ADDR_MOD_6 = dest incr 2,
+    // counter reset) and sfpu_reciprocal_init<false>() (vConstFloatPrgm0 = 2.0f). The 0.5f constant therefore
+    // lives in vConstFloatPrgm1 (LREG13) rather than vConstFloatPrgm0 (LREG12) as in the original kernel, so
+    // callers that follow recip_init<false, false, false>() with sfpu_reciprocal_iter (e.g. the moe_gpt SwiGLU
+    // kernel) keep the 2.0f Newton-Raphson constant they rely on. T0 below reads VA = LREG13 accordingly.
+    sfpi::vConstFloatPrgm1 = 0.5f;  // LREG13
+    TTI_SFPENCC(3, 0, 0, 10);       // all lanes enabled
+
+    // Instruction templates (T0..T2 via backdoor write: VD in 12..14 captures).
+    TTI_SFPMAD(13, 0, 9, 12, 0);  // T0: VD = 0.5*VB + 0    (VB,VD <- macro load reg; VA = LREG13 = 0.5f)
+    TTI_SFPCAST(0, 13, 0);        // T1: cast               (VC,VD <- macro load reg)
+    TTI_SFPMULI(0x6500, 14, 0);   // T2: *= 2^75            (VC=VD <- macro load reg)
+    {
+        // T3: VD = sign(VB)|mag(L4); VB,VD <- macro load reg. Written via
+        // SFPCONFIG because SETSGN's write gate does not backdoor-capture.
+        constexpr std::uint32_t setsgn_word = TT_OP_SFPSETSGN(0, 4, 0, 0);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, setsgn_word & 0xFFFF);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, setsgn_word >> 16);
+        TTI_SFPCONFIG(0, 3, 0);
+    }
+    // Sequence bytes: [store]<<24 | [round]<<16 | [mad]<<8 | [simple];
+    // byte = 0x80(VB<-load) | 0x40(VD=L16) | delay<<3 | slot(3=builtin store, 4+i=template i)
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, 0x9400);  // macro0: mad = T0 d2
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, 0x0000);
+    TTI_SFPCONFIG(0, 4 + 0, 0);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, 0x3605);  // macro1: simple = T1 d0; mad = T2 d6
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, 0x0000);
+    TTI_SFPCONFIG(0, 4 + 1, 0);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, 0x0087);  // macro2: simple = T3 d0; store = builtin d1
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, 0x0B00);
+    TTI_SFPCONFIG(0, 4 + 2, 0);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, 0x0000);  // macro3: store = builtin d1
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, 0x0B00);
+    TTI_SFPCONFIG(0, 4 + 3, 0);
+    // Misc: UnitDelayKind = 0xF (instruction-counted), UsesLoadMod0ForStore = 0xF.
+    TTI_SFPCONFIG(0xFF0, 8, 1);
+}
+
+// One even/odd pair. CE/CO = this block's C regs; D_o reuses CE's register.
+// The b14 load fetches the NEXT block's C_e into CO's register (dead by then).
+#define RECIP_FAST_PAIR(CE, CO)                                                                  \
+    TTI_SFPLOADMACRO((1 << 2) | 2, 0, ADDR_MOD_6, 0);      /* b1  D_e=x_e {CAST@2,*2^75@8};  */ \
+                                                           /*     ctr += 2                   */ \
+    TTI_SFPLOADMACRO((0 << 2) | (CO), 0, ADDR_MOD_7, 0);   /* b2  C_o=x_o {MAD@5}            */ \
+    TTI_SFPARECIP(11, 2, 2, 1);                            /* b3  D_e = arecipU(D_e)         */ \
+    TTI_SFPMULI(0x6480, 2, 0);                             /* b4  D_e *= 2^74                */ \
+    TTI_SFPARECIP(11, (CE), 4, 1);                         /* b5  B_e = arecipU(C_e)         */ \
+    TTI_SFPLOADMACRO((1 << 2) | (CE), 0, ADDR_MOD_7, 0);   /* b6  D_o=x_o {CAST@7,*2^75@13}  */ \
+    TTI_SFPMULI(0x3F01, 4, 0);                             /* b7  B_e *= 0.5*(1+2^-7)        */ \
+    TTI_SFPARECIP(11, (CE), (CE), 1);                      /* b8  D_o = arecipU(D_o)         */ \
+    TTI_SFPMULI(0x6480, (CE), 0);                          /* b9  D_o *= 2^74                */ \
+    TTI_SFPARECIP(11, (CO), 6, 1);                         /* b10 B_o = arecipU(C_o)         */ \
+    TTI_SFPSWAP(0, 2, 4, 1);                               /* b11 B_e = min(B_e, D_e)        */ \
+    TTI_SFPMULI(0x3F01, 6, 0);                             /* b12 B_o *= 0.5*(1+2^-7)        */ \
+    TTI_SFPLOADMACRO((2 << 2) | 0, 0, ADDR_MOD_7, 0x3FE);  /* b13 T=x_e@-2 {SETSGN@14,ST@15} */ \
+    TTI_SFPLOADMACRO((0 << 2) | (CO), 0, ADDR_MOD_7, 2);   /* b14 next C_e (CO reg) {MAD@17} */ \
+    TTI_SFPSWAP(0, (CE), 6, 1);                            /* b15 B_o = min(B_o, D_o)        */ \
+    TTI_SFPLOADMACRO((3 << 2) | 0, 0, ADDR_MOD_6, 0);      /* b16 T=x_o {ST@18}; ctr += 2    */ \
+    TTI_SFPSETSGN(0, 6, 0, 0);                             /* b17 T = sign(T)|mag(B_o)       */
+
+// One face (8 dst vectors) as 4 even/odd blocks.
+inline void _calculate_reciprocal_bf16_fast_() {
+    TTI_SFPLOADMACRO((0 << 2) | 1, 0, ADDR_MOD_7, 0);  // prologue: C_e(L1) = x {MAD@+3}
+    RECIP_FAST_PAIR(1, 3)  // block 0: C_e=L1 C_o=L3 D_o=L1; loads block1's C_e into L3
+    RECIP_FAST_PAIR(3, 1)  // block 1
+    RECIP_FAST_PAIR(1, 3)  // block 2
+    RECIP_FAST_PAIR(3, 1)  // block 3 (its next-C load reads past the face; harmless)
+    TTI_SFPNOP;            // flush the final pending store (fires on this issue)
+}
+
+#undef RECIP_FAST_PAIR
+#endif  // DISABLE_SFPLOADMACRO
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8, bool legacy_compat = false>
 inline void calculate_reciprocal() {
+#ifndef DISABLE_SFPLOADMACRO
+    if constexpr (!legacy_compat && !APPROXIMATION_MODE && !is_fp32_dest_acc_en && ITERATIONS == 8) {
+        _calculate_reciprocal_bf16_fast_();
+        return;
+    }
+    if constexpr (
+        !legacy_compat && !APPROXIMATION_MODE && !is_fp32_dest_acc_en &&
+        !(!legacy_compat && !APPROXIMATION_MODE && !is_fp32_dest_acc_en && ITERATIONS == 8)) {
+        // ITERATIONS != 8 (tt-llk tests): recip_init<false, false> cannot see ITERATIONS and has programmed the
+        // fast kernel's SFPLOADMACRO InstructionTemplate[0..3] / Sequence[0..3] / Misc in place of the 8b_3c macro
+        // state _calculate_reciprocal_fast_8b_3c_ depends on; re-program it before falling back. The fast init
+        // leaves vConstFloatPrgm0 = 2.0f (sfpu_reciprocal_init) untouched and 8b_3c does not read vConstFloatPrgm1.
+        _init_reciprocal_fast_8b_3c_();
+    }
+#endif
     if constexpr (legacy_compat) {
         _calculate_reciprocal_compat_<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(ITERATIONS);
     } else if constexpr (APPROXIMATION_MODE) {
@@ -406,7 +535,12 @@ void recip_init() {
         } else if constexpr (is_fp32_dest_acc_en) {
             _init_reciprocal_fast_24b_5c_();
         } else {
+#ifndef DISABLE_SFPLOADMACRO
+            // Fast bf16 kernel (see _init_reciprocal_bf16_fast_) replaces the 8b_3c macro path on this combination.
+            _init_reciprocal_bf16_fast_();
+#else
             _init_reciprocal_fast_8b_3c_();
+#endif
         }
     }
 }

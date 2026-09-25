@@ -69,7 +69,7 @@ inline void calculate_cube_root() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en /* unused on Wormhole */>
 inline void cube_root_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstFloatPrgm0 = 0x1.c09806p0f;

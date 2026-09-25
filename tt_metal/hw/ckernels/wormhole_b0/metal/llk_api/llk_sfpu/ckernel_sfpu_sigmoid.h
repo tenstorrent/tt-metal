@@ -61,8 +61,11 @@ inline void calculate_sigmoid() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+// is_fp32_dest_acc_en mirrors the Blackhole signature (arch-shared sigmoid_tile_init); Wormhole has no
+// dest-acc-dependent sigmoid init, so it is unused here.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void sigmoid_init() {
+    [[maybe_unused]] constexpr bool fp32_dest_acc_en = is_fp32_dest_acc_en;
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (!APPROXIMATION_MODE) {
         recip_init<false, false, false>();

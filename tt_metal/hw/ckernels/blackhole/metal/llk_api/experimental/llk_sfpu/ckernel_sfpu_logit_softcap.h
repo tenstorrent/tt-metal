@@ -17,7 +17,7 @@ namespace sfpu {
 
 // Polynomial variant with explicit destination precision. This overload keeps
 // the fused Blaze epilogue's rounding; the accurate two-argument API below is unchanged.
-// Requires tanh_init<false, false>() regardless of destination precision. Reinitialize
+// Requires tanh_init_constants<false, false>() regardless of destination precision. Reinitialize
 // after switching variants or another SFPU init overwrites vConstFloatPrgm0/1/2.
 template <bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_logit_softcap(std::uint32_t cap_bits) {
@@ -34,7 +34,7 @@ inline void calculate_logit_softcap(std::uint32_t cap_bits) {
     }
 }
 
-// Accurate variant. Requires tanh_init<false, true>(). Reinitialize after switching
+// Accurate variant. Requires tanh_init_constants<false, true>(). Reinitialize after switching
 // variants or another SFPU init overwrites the shared vConstFloatPrgm0/1/2 constants.
 template <int ITERATIONS>
 inline void calculate_logit_softcap(std::uint32_t cap_bits, std::uint32_t) {

@@ -325,7 +325,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 PackMode::Default>(params.num_faces, formats.math);
             copy_to_dest_tile(SCORES_TILE, formats.math);
 
-            SFPU_UNARY_INIT_FN(sigmoid, sfpu::sigmoid_init, (false /* fast_and_approx */));
+            SFPU_UNARY_INIT_FN(sigmoid, sfpu::sigmoid_init, (false /* fast_and_approx */, is_fp32_dest_acc_en));
             SFPU_UNARY_CALL(
                 dest_sync,
                 is_fp32_dest_acc_en,

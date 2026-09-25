@@ -15,9 +15,9 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-template <bool legacy_compat = false>
+template <bool legacy_compat = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void rsqrt_tile_init() {
-    MATH(SFPU_UNARY_INIT_FN(rsqrt, sfpu::rsqrt_init, (APPROX, legacy_compat)));
+    MATH(SFPU_UNARY_INIT_FN(rsqrt, sfpu::rsqrt_init, (APPROX, legacy_compat, is_fp32_dest_acc_en)));
 }
 
 // clang-format off

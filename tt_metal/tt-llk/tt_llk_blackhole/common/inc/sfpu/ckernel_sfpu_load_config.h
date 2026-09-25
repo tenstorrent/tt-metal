@@ -37,6 +37,12 @@ inline void _sfpu_load_config32_(const std::uint32_t dest, const std::uint32_t u
 inline void _init_sfpu_config_reg()
 {
     TTI_SFPCONFIG(0, 0xF, 1);
+    // Restore the compiler-reserved constant LReg[11] (sfpi vConstNeg1) to its hardware default -1.0f.
+    // SFPCONFIG(VD=11, MOD1_IMM16_IS_VALUE) writes the architectural default value (0xBF800000), so no
+    // LReg[0] staging is required. Several Blackhole bf16 fast-path SFPU kernels (abs, sign, exp, expm1, erf,
+    // erfc, sin) repurpose LReg[11] as a per-op constant; every SFPU op init runs this function first, so the
+    // value sfpi-compiled code relies on is re-established before each op regardless of what ran before.
+    TTI_SFPCONFIG(0, 11, 1);
 }
 
 } // namespace sfpu

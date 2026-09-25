@@ -25,11 +25,11 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void i0_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_i0, (APPROX), idst, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_i0, (APPROX, DST_ACCUM_MODE), idst, VectorMode::RC));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void i0_tile_init() { MATH(SFPU_UNARY_INIT(i0)); }
+ALWI void i0_tile_init() { MATH(SFPU_UNARY_INIT_FN(i0, sfpu::i0_init, (DST_ACCUM_MODE))); }
 }  // namespace ckernel

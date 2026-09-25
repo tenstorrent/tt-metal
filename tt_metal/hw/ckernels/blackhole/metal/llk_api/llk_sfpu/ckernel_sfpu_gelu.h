@@ -7,8 +7,12 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "ckernel_addrmod.h"
 #include "ckernel_defs.h"
+#include "ckernel_instr_params.h"
+#include "ckernel_ops.h"
 #include "cmath_common.h"  // math::reset_counters, p_setrwc
+#include "lltt.h"
 
 #include "ckernel_sfpu_exp.h"  // For _sfpu_round_to_nearest_int32_
 #include "sfpu/ckernel_sfpu_polyval.h"
@@ -201,6 +205,152 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
     return result;
 }
 
+// =====================================================================================================================
+// Fast bf16 gelu for Blackhole. Origin: llk-bench (LLM-agent-written kernel, claude-fable-5, 2026-08),
+// validated exhaustively over all 65,536 bf16 inputs vs the exact golden 0.5*x*(1+erf(x/sqrt(2))): max 2 ULP
+// (gate <= 2). Measured 1519.1 cycles/tile vs 2834.1 for the previous kernel on p150b (tt-metal v0.76.0 baseline).
+//
+// State programmed by _init_gelu_bf16_fast_: LREG11..14 (config path) and LREG6/7; replay slot 0, 32 instructions
+// (recorded per init, like exp); ADDR_MOD_6 = {dest incr 2} (its SFPSTORE walks the face) and ADDR_MOD_7 =
+// {0,0,0}. No SFPLOADMACRO. bf16 DEST only: never use for fp32 dest or on Wormhole. Processes one face (8 dst
+// vectors, advancing the dst RWC by one vector per store; the params wrapper re-bases the RWC from CR_D between
+// faces, so this leaves no residue).
+//
+// gelu(x) = 0.5 x (1 + erf(x/sqrt(2))) -- bf16 SFPU kernel for Blackhole.
+// Hand-scheduled TTI implementation, replay-buffer resident.
+//
+// Math (validated exhaustively in a bit-exact FTZ-aware simulator and on
+// silicon):
+//   n  = max(-|x|, -9)
+//   u  = n*n ; t = u*(-0.5/ln2) + 127 ; z = trunc(t*2^23)  (exexp/exman/shft)
+//   m  = 1 + f*(FC1 + f*FC2), f = float(z & 0x7fffff)      (2^frac mantissa)
+//   E  = setexp(m, z[30:23]) ~= exp(-u/2)
+//   ch = poly7(n), c0 pinned 0.5                           (Phi(n)*e^{u/2})
+//   H  = E*ch ; w = 1-H ; Hs = snap_2^-54(H)
+//   r  = x<0 ? n*Hs : x*w    (store truncates fp32->bf16; the LP fit below
+//                             targets truncation, so no round step needed)
+//   |x| == 0x00FF pattern: golden is exactly +-min-normal (unreachable under
+//   FTZ) -- patched by exact bit match.
+//
+// The 2^-54 snap reproduces the float64 staircase of the golden's
+// 0.5x(1+erf) catastrophic cancellation near x~-8 and zeroes the deep tail
+// (golden is -0 below x~-8.4) for free. Coefficients come from a max-margin
+// LP over exact per-input allowed intervals (ULP<=2 propagated through bf16
+// truncation, FTZ, the snap, and the exact simulated exp path); c7,c6,c5,c4
+// are bf16-quantized with LP refit. Verified: 0 failures over all 65536
+// inputs, max ULP 2.
+//
+// Schedule: 46 instructions/vector, no back-to-back dependent SFPU ops
+// (2-cycle MAD latency hidden by interleaving the exp chain, the Horner
+// chain and immediate loads). First 32 instructions live in the replay
+// buffer (recorded once in the init); the 14-instruction tail is issued
+// inline. x is reloaded from DST mid-body so its register can carry the
+// exp-poly intermediates.
+// =====================================================================================================================
+
+constexpr int GELU_FAST_REPLAY_LEN = 32;
+
+// Recorded prefix: load, clamp, exp bit-trick and the ch Horner chain.
+// LREGs: L0 = x -> fpoly/m -> 0.5, L1 = n, L2 = u/t/z/E/H, L3/L5 = shuttles,
+// L4 = Horner acc, L6 = c3 (fp32), L7 = c4, L11 = -1, L12 = -0.5/ln2,
+// L13 = FC1, L14 = FC2.
+sfpi_inline void _gelu_bf16_fast_body_prefix_() {
+    TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);                                   // x
+    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, 0xC110);                // -9.0
+    TTI_SFPSETSGN(1, p_sfpu::LREG0, p_sfpu::LREG1, 1);                              // n = -|x|
+    TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_FLOATB, 0x35E1);                // acc = c7
+    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG2, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);   // n = max(n,-9)
+    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_FLOATB, 0x388D);                // c6
+    TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);   // u = n*n
+    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpu::LREG4, 0);      // acc = acc*n + c6
+    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG12, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);  // u*C1
+    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_FLOATB, 0x3A93);                // c5
+    TTI_SFPADDI(0x42FE, p_sfpu::LREG2, 0);                                          // t = u*C1 + 127
+    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpu::LREG4, 0);      // acc = acc*n + c5
+    TTI_SFPEXEXP(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);                               // e = exexp(t)
+    TTI_SFPEXMAN(0, p_sfpu::LREG2, p_sfpu::LREG2, 0);                               // man | implicit1
+    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG1, p_sfpu::LREG7, p_sfpu::LREG4, 0);      // acc = acc*n + c4
+    TTI_SFPSHFT(0, p_sfpu::LREG3, p_sfpu::LREG2, 0);                                // z = man << e
+    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG1, p_sfpu::LREG6, p_sfpu::LREG4, 0);      // acc = acc*n + c3
+    TTI_SFPEXMAN(0, p_sfpu::LREG2, p_sfpu::LREG5, 1);                               // f = frac(z) (PAD9)
+    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_UPPER, 0x3E37);                 // c2 hi
+    TTI_SFPCAST(p_sfpu::LREG5, p_sfpu::LREG5, 0);                                   // f = float(f), RNE
+    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_LOWER, 0x827D);                 // c2 lo
+    TTI_SFPMAD(p_sfpu::LREG5, p_sfpu::LREG14, p_sfpu::LREG13, p_sfpu::LREG0, 0);    // f*FC2 + FC1
+    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpu::LREG4, 0);      // acc = acc*n + c2
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG5, p_sfpu::LCONST_1, p_sfpu::LREG0, 0);   // m = (..)*f + 1
+    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_UPPER, 0x3EBE);                 // c1 hi
+    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_LOWER, 0xD3A0);                 // c1 lo
+    TTI_SFPSETEXP(0, p_sfpu::LREG0, p_sfpu::LREG2, 2);                              // E = setexp(m, z)
+    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpu::LREG4, 0);      // acc = acc*n + c1
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATB, 0x3F00);                // 0.5
+    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG1, p_sfpu::LREG0, p_sfpu::LREG4, 0);      // ch = acc*n + 0.5
+    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_FLOATB, 0x80FF);                // cursed pattern
+    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);   // H = ch*E
+}
+
+// Inline tail: snap, sign select, cursed patch, store (14 instructions).
+sfpi_inline void _gelu_bf16_fast_body_tail_() {
+    TTI_SFPXOR(0, p_sfpu::LREG1, p_sfpu::LREG3, 0);                                 // L3 = n ^ 0x80FF0000
+    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG11, p_sfpu::LCONST_1, p_sfpu::LREG5, 0);  // w = 1 - H
+    TTI_SFPADDI(0x3040, p_sfpu::LREG2, 0);                                          // snap +1.5*2^-31
+    TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);                                   // reload x
+    TTI_SFPADDI(0xB040, p_sfpu::LREG2, 0);                                          // snap -> Hs
+    TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_FLOATB, 0x3F01);                // 0.50390625
+    TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);   // r = n*Hs
+    TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);               // x >= 0 ?
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG5, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);   // r = x*w
+    TTI_SFPENCC(3, 0, 0, 10);
+    TTI_SFPSETCC(0, p_sfpu::LREG3, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);                // cursed lanes
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG4, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);   // r = x*0.50390625
+    TTI_SFPENCC(3, 0, 0, 10);
+    TTI_SFPSTORE(p_sfpu::LREG2, 0, ADDR_MOD_6, 0);                                  // store, dest += 2
+}
+
+inline void _init_gelu_bf16_fast_() {
+    // Self-contained: re-assert the common SFPU state (config reg + RWC reset + ADDR_MOD_7), program the
+    // ADDR_MOD_6 dest increment the tail's SFPSTORE relies on, then this kernel's constants and replay body.
+    _init_sfpu_config_reg();
+    math::reset_counters(p_setrwc::SET_ABD_F);
+
+    addr_mod_t{
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 0},
+    }
+        .set(ADDR_MOD_7);
+    addr_mod_t{
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 2},
+    }
+        .set(ADDR_MOD_6);
+
+    // Programmable constants (config path):
+    _sfpu_load_config32_(11, 0xBF80, 0x0000);  // LREG11 = -1.0
+    _sfpu_load_config32_(12, 0xBF38, 0xAA3B);  // LREG12 = -0.5/ln2
+    _sfpu_load_config32_(13, 0x33AA, 0x7D0F);  // LREG13 = FC1
+    _sfpu_load_config32_(14, 0x27A8, 0xEA9D);  // LREG14 = FC2
+
+    // Kernel-lifetime coefficient registers (nothing else on the math
+    // thread touches LREGs between tiles):
+    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, 0x3D5E);  // c3 = 0.054292925
+    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_LOWER, 0x6242);
+    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_FLOATB, 0x3C26);  // c4 = 0.0101318359375
+
+    // Record the body prefix into the replay buffer without executing it.
+    lltt::record<lltt::NoExec>(0, GELU_FAST_REPLAY_LEN);
+    _gelu_bf16_fast_body_prefix_();
+}
+
+inline void _calculate_gelu_bf16_fast_() {
+#pragma GCC unroll 8
+    for (int i = 0; i < 8; i++) {
+        lltt::replay(0, GELU_FAST_REPLAY_LEN);
+        _gelu_bf16_fast_body_tail_();
+    }
+}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void gelu_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
@@ -219,8 +369,11 @@ void gelu_init() {
     } else if constexpr (is_fp32_dest_acc_en) {
         // FP32 accurate mode: rational erf evaluation requires reciprocal init
         sfpu_reciprocal_init<false>();
+    } else {
+        // BF16 accurate mode: calculate_gelu<false, false, 8> runs the fast kernel below; program its state.
+        // The piecewise-CDF fallback (ITERATIONS != 8) needs no init of its own and reads none of it.
+        _init_gelu_bf16_fast_();
     }
-    // BF16 accurate mode: no init needed (correction polynomial has no reciprocal)
 }
 
 template <int ITERATIONS>
@@ -294,6 +447,10 @@ constexpr float GELU_ERF_DEN[17] = {  // even powers only (c1=0, c3=0, ..., c15=
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_gelu() {
+    if constexpr (!APPROXIMATION_MODE && !is_fp32_dest_acc_en && ITERATIONS == 8) {
+        _calculate_gelu_bf16_fast_();
+        return;
+    }
     if constexpr (APPROXIMATION_MODE) {
         calculate_gelu_appx<ITERATIONS>();
     } else if constexpr (is_fp32_dest_acc_en) {
@@ -377,8 +534,9 @@ inline void calculate_gelu_tanh() {
 
 inline void gelu_tanh_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
-    // initialise constants for _sfpu_tanh_fp32_accurate_
-    tanh_init<false, true>();
+    // initialise constants for _sfpu_tanh_fp32_accurate_ (constants only; calculate_tanh's fast-path init is
+    // not wanted here)
+    tanh_init_constants<false, true>();
 }
 
 // =============================================================================

@@ -89,7 +89,14 @@ inline constexpr std::array<float, 84> PRECOMPUTED_POW10_TABLE = {
     1e23F,  1e24F,  1e25F,  1e26F,  1e27F,  1e28F,  1e29F,  1e30F,  1e31F,  1e32F,  1e33F,  1e34F,  1e35F,  1e36F,  1e37F,  1e38F,
 };
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+// No Wormhole fast path; the dest-acc parameter mirrors the Blackhole signature. The common prologue
+// (config reg + ADDR_MOD_7 + counter reset) is run by the callback init overload.
+template <bool is_fp32_dest_acc_en>
+inline void _init_floor_()
+{
+}
+
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en /* unused on Wormhole */, int ITERATIONS = 8>
 sfpi_inline void _calculate_floor_()
 {
 #pragma GCC unroll 4
@@ -100,7 +107,14 @@ sfpi_inline void _calculate_floor_()
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+// No Wormhole fast path; the dest-acc parameter mirrors the Blackhole signature. The common prologue
+// (config reg + ADDR_MOD_7 + counter reset) is run by the callback init overload.
+template <bool is_fp32_dest_acc_en>
+inline void _init_ceil_()
+{
+}
+
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en /* unused on Wormhole */, int ITERATIONS = 8>
 sfpi_inline void _calculate_ceil_()
 {
 #pragma GCC unroll 4
@@ -111,7 +125,14 @@ sfpi_inline void _calculate_ceil_()
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+// No Wormhole fast path; the dest-acc parameter mirrors the Blackhole signature. The common prologue
+// (config reg + ADDR_MOD_7 + counter reset) is run by the callback init overload.
+template <bool is_fp32_dest_acc_en>
+inline void _init_trunc_()
+{
+}
+
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en /* unused on Wormhole */, int ITERATIONS = 8>
 sfpi_inline void _calculate_trunc_()
 {
 #pragma GCC unroll 2
@@ -154,7 +175,14 @@ sfpi_inline sfpi::vFloat _round_even_(sfpi::vFloat v)
     return v;
 }
 
-template <bool APPROXIMATE, int ITERATIONS = 8>
+// No Wormhole fast path; the dest-acc parameter mirrors the Blackhole signature. The common prologue
+// (config reg + ADDR_MOD_7 + counter reset) is run by the callback init overload.
+template <bool is_fp32_dest_acc_en>
+inline void _init_round_()
+{
+}
+
+template <bool APPROXIMATE, bool is_fp32_dest_acc_en /* unused on Wormhole */, int ITERATIONS = 8>
 void _calculate_round_(const int decimals)
 {
     const auto exp10i = [](int n)

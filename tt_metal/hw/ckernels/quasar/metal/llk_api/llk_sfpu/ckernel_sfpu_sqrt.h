@@ -21,7 +21,8 @@ inline void calculate_sqrt() {
     _calculate_sqrt_<APPROXIMATION_MODE, ITERATIONS>();
 }
 
-template <bool APPROXIMATION_MODE /*maybe_unused*/>
+// is_fp32_dest_acc_en mirrors the Blackhole/Wormhole signature (sqrt_tile_init passes it); unused here.
+template <bool APPROXIMATION_MODE /*maybe_unused*/, bool is_fp32_dest_acc_en /*maybe_unused*/ = false>
 void sqrt_init() {
     // Empty function kept for backwards compatibility
 }

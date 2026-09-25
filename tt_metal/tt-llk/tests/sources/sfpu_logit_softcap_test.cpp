@@ -4,8 +4,8 @@
 
 // Driver for calculate_logit_softcap (llk_sfpu/ckernel_sfpu_logit_softcap.h).
 //
-// LOGIT_SOFTCAP_POLYNOMIAL selects tanh_init<false, false>() for the polynomial
-// variant or tanh_init<false, true>() for the accurate variant, independently of
+// LOGIT_SOFTCAP_POLYNOMIAL selects tanh_init_constants<false, false>() for the polynomial
+// variant or tanh_init_constants<false, true>() for the accurate variant, independently of
 // destination precision. Both variants use shared vConstFloatPrgm0/1/2 constants.
 
 #include <cstdint>
@@ -106,7 +106,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_dest_init_wrapper_<DST_SYNC, is_fp32_dest_acc_en, PackMode::Default>();
 
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
-    ckernel::sfpu::tanh_init<false /* APPROXIMATION_MODE */, !LOGIT_SOFTCAP_POLYNOMIAL>();
+    ckernel::sfpu::tanh_init_constants<false /* APPROXIMATION_MODE */, !LOGIT_SOFTCAP_POLYNOMIAL>();
 
     for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
     {

@@ -67,7 +67,7 @@ sfpi_inline sfpi::vFloat _sfpu_sqrt_endpoint_(sfpi::vFloat x) {
 template <bool is_fp32_dest_acc_en>
 void asin_acos_init() {
     if constexpr (is_fp32_dest_acc_en) {
-        sqrt_init<false>();
+        sqrt_init<false, is_fp32_dest_acc_en>();
     }
 }
 
@@ -839,7 +839,9 @@ inline void calculate_sinh() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+// is_fp32_dest_acc_en is unused on Wormhole; it matches the Blackhole signature, which uses it to select
+// the fast bf16 kernel, so the shared compute API can pass it on every arch.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void sine_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     // P2 and P3 of four-part Cody-Waite reduction by PI.
@@ -849,7 +851,9 @@ void sine_init() {
     sfpi::vConstFloatPrgm2 = FRAC_1_PI;
 }
 
-template <bool APPROXIMATION_MODE>
+// is_fp32_dest_acc_en is unused on Wormhole; it matches the Blackhole signature, which uses it to select
+// the fast bf16 kernel, so the shared compute API can pass it on every arch.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void cosine_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     // P2 and P3 of four-part Cody-Waite reduction by PI/2.
@@ -859,7 +863,9 @@ void cosine_init() {
     sfpi::vConstFloatPrgm2 = FRAC_1_PI;
 }
 
-template <bool APPROXIMATION_MODE>
+// is_fp32_dest_acc_en is unused on Wormhole; it matches the Blackhole signature, which uses it to select
+// the fast bf16 kernel, so the shared compute API can pass it on every arch.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void tangent_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     // P2 and P3 of four-part Cody-Waite reduction by PI/2.

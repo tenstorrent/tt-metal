@@ -26,6 +26,7 @@ namespace sfpu {
 // ckernel_sfpu_<op>.h). Declared -- not #included -- here so the dispatch below resolves these names
 // under two-phase lookup WITHOUT pulling the op headers into every TRISC_MATH translation unit via
 // compute_kernel_hw_startup. Each op's definition is in scope at its <op>_tile_init instantiation site.
+template <bool is_fp32_dest_acc_en>
 void abs_init();
 template <bool is_fp32_dest_acc_en>
 void acos_init();
@@ -46,6 +47,7 @@ void hardmish_init();
 void hardshrink_init();
 void hardtanh_init();
 void heaviside_init();
+template <bool is_fp32_dest_acc_en>
 void i0_init();
 void left_shift_init();
 void less_than_equal_zero_init();
@@ -59,6 +61,7 @@ void relu_max_init();
 void reshuffle_rows_init();
 void right_shift_init();
 void selu_init();
+template <bool is_fp32_dest_acc_en>
 void sign_init();
 void softplus_init();
 void softshrink_init();
@@ -76,6 +79,17 @@ void unary_ne_init();
 // op's residual state (op-specific ADDR_MOD_6 where needed + reset the RWC counters).
 // Rounding-family ops (ceil/floor/trunc/frac/round): pure-arithmetic SFPI kernels with no LUT/ADDR_MOD_6
 // state (production shares rounding_op_tile_init -> SFPU_UNARY_INIT(unused)); only reset the RWC counters.
+// Rounding ops: the per-op inits live in the tt-llk rounding_ops header (they program the Blackhole
+// bf16 fast-path state); declared here, defined there, resolved at the <op>_tile_init instantiation site.
+template <bool is_fp32_dest_acc_en>
+void _init_ceil_();
+template <bool is_fp32_dest_acc_en>
+void _init_floor_();
+template <bool is_fp32_dest_acc_en>
+void _init_round_();
+template <bool is_fp32_dest_acc_en>
+void _init_trunc_();
+
 inline void ceil_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 inline void fill_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
@@ -125,7 +139,7 @@ inline void llk_math_eltwise_unary_sfpu_init() {
     // programs only the op's residual state (op-specific ADDR_MOD_6 where needed + counter reset).
     _llk_math_eltwise_unary_sfpu_init_once_();
     if constexpr (sfpu_op == SfpuType::abs) {
-        sfpu::abs_init();
+        sfpu::abs_init<is_fp32_dest_acc_en>();
     } else if constexpr (sfpu_op == SfpuType::acos) {
         sfpu::acos_init<is_fp32_dest_acc_en>();
     } else if constexpr (sfpu_op == SfpuType::alt_complex_rotate90) {
@@ -141,7 +155,7 @@ inline void llk_math_eltwise_unary_sfpu_init() {
     } else if constexpr (sfpu_op == SfpuType::bitwise_xor) {
         sfpu::bitwise_xor_init();
     } else if constexpr (sfpu_op == SfpuType::ceil) {
-        sfpu::ceil_init();
+        sfpu::_init_ceil_<is_fp32_dest_acc_en>();
     } else if constexpr (sfpu_op == SfpuType::celu) {
         sfpu::celu_init();
     } else if constexpr (sfpu_op == SfpuType::clamp) {
@@ -153,13 +167,13 @@ inline void llk_math_eltwise_unary_sfpu_init() {
     } else if constexpr (sfpu_op == SfpuType::fill) {
         sfpu::fill_init();
     } else if constexpr (sfpu_op == SfpuType::floor) {
-        sfpu::floor_init();
+        sfpu::_init_floor_<is_fp32_dest_acc_en>();
     } else if constexpr (sfpu_op == SfpuType::frac) {
         sfpu::frac_init();
     } else if constexpr (sfpu_op == SfpuType::round) {
-        sfpu::round_init();
+        sfpu::_init_round_<is_fp32_dest_acc_en>();
     } else if constexpr (sfpu_op == SfpuType::trunc) {
-        sfpu::trunc_init();
+        sfpu::_init_trunc_<is_fp32_dest_acc_en>();
     } else if constexpr (sfpu_op == SfpuType::greater_than_equal_zero) {
         sfpu::greater_than_equal_zero_init();
     } else if constexpr (sfpu_op == SfpuType::greater_than_zero) {
@@ -173,7 +187,7 @@ inline void llk_math_eltwise_unary_sfpu_init() {
     } else if constexpr (sfpu_op == SfpuType::heaviside) {
         sfpu::heaviside_init();
     } else if constexpr (sfpu_op == SfpuType::i0) {
-        sfpu::i0_init();
+        sfpu::i0_init<is_fp32_dest_acc_en>();
     } else if constexpr (sfpu_op == SfpuType::isfinite) {
         sfpu::isfinite_init();
     } else if constexpr (sfpu_op == SfpuType::isinf) {
@@ -211,7 +225,7 @@ inline void llk_math_eltwise_unary_sfpu_init() {
     } else if constexpr (sfpu_op == SfpuType::selu) {
         sfpu::selu_init();
     } else if constexpr (sfpu_op == SfpuType::sign) {
-        sfpu::sign_init();
+        sfpu::sign_init<is_fp32_dest_acc_en>();
     } else if constexpr (sfpu_op == SfpuType::silu) {
         sfpu::silu_init();
     } else if constexpr (sfpu_op == SfpuType::softplus) {

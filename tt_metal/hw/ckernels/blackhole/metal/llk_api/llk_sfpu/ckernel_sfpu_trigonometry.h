@@ -5,9 +5,16 @@
 
 #pragma once
 
+#include <cstddef>
+
 #include "ckernel.h"
+#include "ckernel_addrmod.h"
 #include "ckernel_defs.h"
+#include "ckernel_instr_params.h"
+#include "ckernel_ops.h"
 #include "cmath_common.h"
+#include "lltt.h"
+#include "sfpu/ckernel_sfpu_load_config.h"
 #include "ckernel_sfpu_recip.h"
 #include "ckernel_sfpu_sqrt.h"
 #include "ckernel_sfpu_sqrt_custom.h"
@@ -53,7 +60,7 @@ sfpi_inline sfpi::vFloat _sfpu_sqrt_endpoint_(sfpi::vFloat x) {
 template <bool is_fp32_dest_acc_en>
 void asin_acos_init() {
     if constexpr (is_fp32_dest_acc_en) {
-        sqrt_init<false>();
+        sqrt_init<false, is_fp32_dest_acc_en>();
     }
 }
 
@@ -130,8 +137,125 @@ sfpi_inline sfpi::vFloat sfpu_tan<false>(sfpi::vFloat a, sfpi::vInt i) {
     return r;
 }
 
+// Fast bf16 tan for Blackhole. Origin: llk-bench (LLM-agent-written kernel, claude-opus-5, 2026-08),
+// validated exhaustively over all 65,536 bf16 inputs vs the exact golden: max 2 ULP (gate <= 2).
+// Measured 395 cycles/tile on p150b (tt-metal v0.76.0 baseline; the bench manifest records no v0.76.0
+// production reference number for tan).
+// Domain: the bench golden only checked |x| <= 65536 (larger |x| is don't-care there). The previous
+// kernel's behaviour beyond that range is NOT preserved by construction and must be checked on hardware.
+// State: programs vConstFloatPrgm0/1/2 (LREG12-14) only. No SFPLOADMACRO, no replay slots, no ADDR_MOD_6
+// (sfpi dst_reg[] indexing over ADDR_MOD_7, zero increments, from the common init).
+// Selected by tangent_init / calculate_tangent when !APPROXIMATION_MODE && !is_fp32_dest_acc_en
+// (&& ITERATIONS == 8 in calculate); the fast init replaces the production Cody-Waite constant setup,
+// which lives in the same three LREGs.
+//
+// tan(x) for bf16 on Blackhole SFPU.  10 SFPU ops per 32-lane vector.
+//
+//   1. j = round(x / pi)                       (1.5*2^23 rounding-bias trick)
+//   2. a = x - j*pi                            (2-stage Cody-Waite, |a| <= pi/2)
+//   3. tan(a) = a * (1 + C1 + C2 / (K - a*a)),  K = (pi/2)^2
+//
+// The idea that makes this cheap is keeping the pole *in* the approximation
+// instead of folding the argument into [-pi/4, pi/4].  (K - a^2)*tan(a)/a is
+// analytic over the whole half-period (2.4674 at a=0, 2 at a=pi/2), so a
+// linear numerator already fits to 0.17%.  Consequences:
+//   * no quadrant bit, no reciprocal-vs-polynomial branch, no predication --
+//     the same 10 instructions run for every lane;
+//   * the formula stays valid straight *through* the pole, so it does not
+//     matter which side of pi/2 the rounded argument lands on;
+//   * the single hardware reciprocal that the pole needs is also the whole
+//     numerator evaluation, and no Newton step is required: SFPARECIP is good
+//     to +-0.55%, and 2 bf16 ulp is 0.78%.  C1/C2 were fitted against the
+//     *measured* SFPARECIP error over the exact set of denominators this
+//     kernel produces, which leaves >= 0.3% of slack on the 2-ulp gate.
+//   * C1 carries a +2^-9 bias so that the truncating SFPSTORE rounds
+//     symmetrically, and the last op is a*q + a rather than a*(1+q) so tiny
+//     arguments (where a*q flushes) come back bit-exact.
+//
+// Only 1/pi and the rounding bias need LREGs; that leaves four live values,
+// i.e. two vectors in flight.  The SFPU here is latency-bound (~1.9 cycles
+// per dependent op, ~1.15 with two independent chains), so the loop is
+// unrolled and interleaved by two.
+
+// -pi = P0 + P1, with P0 bf16-exact: j*P0 (|j| <= 65536/pi) and v + j*P0 are
+// then both exact, so the whole reduction error is one fp32 rounding.
+static constexpr float TANGENT_FAST_P0 = -3.140625f;
+static constexpr float TANGENT_FAST_P1 = -0.0009676535846665502f;
+static constexpr float TANGENT_FAST_K = 2.4674010276794434f;  // (pi/2)^2
+static constexpr float TANGENT_FAST_INV_PI = 0.31830987334251404f;
+static constexpr float TANGENT_FAST_C1 = -0.8121f;  // C1 - 1
+static constexpr float TANGENT_FAST_C2 = 2.0119f;
+
+inline void _init_tangent_bf16_fast_() {
+    sfpi::vConstFloatPrgm0 = TANGENT_FAST_P0;
+    sfpi::vConstFloatPrgm1 = TANGENT_FAST_K;
+    sfpi::vConstFloatPrgm2 = TANGENT_FAST_P1;
+}
+
+inline void _calculate_tangent_bf16_fast_() {
+    const sfpi::vFloat p0 = sfpi::vConstFloatPrgm0;
+    const sfpi::vFloat k = sfpi::vConstFloatPrgm1;
+    const sfpi::vFloat p1 = sfpi::vConstFloatPrgm2;
+    const sfpi::vFloat bias = sfpi::sFloat16b(0x1.8p23f);
+    const sfpi::vFloat inv_pi = TANGENT_FAST_INV_PI;
+    const sfpi::vFloat c1 = TANGENT_FAST_C1;
+    const sfpi::vFloat c2 = TANGENT_FAST_C2;
+
+#pragma GCC unroll 4
+    for (size_t i = 0; i < 8; i += 2) {
+        sfpi::vFloat v0 = sfpi::dst_reg[i];
+        sfpi::vFloat v1 = sfpi::dst_reg[i + 1];
+
+        // j = round(v/pi): the bias forces rounding at the units place.
+        sfpi::vFloat j0 = __builtin_rvtt_sfpmad(v0.get(), inv_pi.get(), bias.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        sfpi::vFloat j1 = __builtin_rvtt_sfpmad(v1.get(), inv_pi.get(), bias.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        j0 -= bias;
+        j1 -= bias;
+
+        sfpi::vFloat a0 = j0 * p0 + v0;
+        sfpi::vFloat a1 = j1 * p0 + v1;
+        a0 = j0 * p1 + a0;
+        a1 = j1 * p1 + a1;
+
+        sfpi::vFloat d0 = -a0 * a0 + k;
+        sfpi::vFloat d1 = -a1 * a1 + k;
+
+        sfpi::vFloat r0 = sfpi::approx_recip(d0);
+        sfpi::vFloat r1 = sfpi::approx_recip(d1);
+
+        sfpi::vFloat q0 = c2 * r0 + c1;
+        sfpi::vFloat q1 = c2 * r1 + c1;
+
+        sfpi::dst_reg[i] = a0 * q0 + a0;
+        sfpi::dst_reg[i + 1] = a1 * q1 + a1;
+    }
+}
+
+// P2/P3 of the four-stage Cody-Waite reduction by PI/2 plus 2/PI, read by calculate_tangent's generic body from
+// vConstFloatPrgm0..2. tangent_init programs these except on the fast bf16 gate (same LREGs); the ITERATIONS != 8
+// fallback in calculate_tangent re-seeds them.
+inline void _init_tangent_body_constants_() {
+    // P2 and P3 of four-part Cody-Waite reduction by PI/2.
+    sfpi::vConstFloatPrgm0 = -0x1.51p-22f;
+    sfpi::vConstFloatPrgm1 = -0x1.0b4612p-34f;
+
+    sfpi::vConstFloatPrgm2 = FRAC_2_PI;
+}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_tangent() {
+    if constexpr (!APPROXIMATION_MODE && !is_fp32_dest_acc_en && ITERATIONS == 8) {
+        _calculate_tangent_bf16_fast_();
+        return;
+    }
+    if constexpr (
+        (!APPROXIMATION_MODE && !is_fp32_dest_acc_en) &&
+        !(!APPROXIMATION_MODE && !is_fp32_dest_acc_en && ITERATIONS == 8)) {
+        // ITERATIONS != 8: tangent_init<false, false> cannot see ITERATIONS and has programmed the fast kernel's
+        // LREG12-14 over the Cody-Waite constants this path reads from vConstFloatPrgm0..2; re-seed them.
+        _init_tangent_body_constants_();
+    }
+
     // Constants for four-stage Cody-Waite reduction with -PI/2 = P0 + P1 + P2 + P3
     const float P0 = -0x1.92p+0f;   // representable as bf16
     const float P1 = -0x1.fbp-12f;  // representable as fp16
@@ -175,8 +299,156 @@ inline void calculate_tangent() {
     }
 }
 
+#ifndef DISABLE_SFPLOADMACRO
+// Fast bf16 sin for Blackhole. Origin: llk-bench (LLM-agent-written kernel, claude-fable-5, 2026-08),
+// validated exhaustively over all 65,536 bf16 inputs vs the exact golden: max 1 ULP (gate <= 2).
+// Measured 370 cycles/tile vs 935 for the previous kernel on p150b (tt-metal v0.76.0 baseline).
+// Domain: the bench golden only checked |x| <= 65536 (larger |x| is don't-care there). The previous
+// kernel's behaviour beyond that range is NOT preserved by construction and must be checked on hardware.
+// State: programs LREG11-14 via SFPCONFIG (LREG11 = rounding bias, LREG12 = 1/pi, LREG13 = -P1,
+// LREG14 = C0), SFPLOADMACRO instruction templates 0..3, macro sequences 0..3 (SFPCONFIG dest 4..7) and
+// the macro Misc register (dest 8). No replay slots, no ADDR_MOD_6 (raw TTI_* with ADDR_MOD_7).
+// Selected by sine_init / calculate_sine when !APPROXIMATION_MODE && !is_fp32_dest_acc_en
+// (&& ITERATIONS == 8 in calculate); the fast init replaces the production Cody-Waite constant setup
+// (vConstFloatPrgm0/1/2 = LREG12-14, the same LREGs the fast kernel programs).
+// Integration note: LREG11 is the architectural -1.0f constant (sfpi vConstNeg1) and nothing in the
+// per-op common init (SFPCONFIG(0, 0xF, 1) only writes LaneConfig) restores it, so the per-face body
+// below re-loads the bias into LREG11 on entry and restores -1.0f on exit; the bench kernel left the
+// bias in LREG11 permanently (it ran alone). Those two config writes are the only additions.
+//
+// Algorithm (validated bit-exactly offline against the Blackhole FMA model):
+//   j  = round(x / pi)            (bias trick: x*(1/pi) + 1.5*2^23)
+//   a  = x - j*P0 - j*P1          (2-stage Cody-Waite; P0 = 3.140625 has an
+//                                  exact 28-bit product with any |j| <= 2^15,
+//                                  P1 = fp32(pi - P0) rides the partially
+//                                  fused MAD's 28-bit product precision)
+//   sin(x) = (-1)^j * (a + a^3*(C0 + C1*a^2))   (degree-5 odd minimax)
+// Sign fold: parity bit of the biased j, shifted to bit 31, XORed into the
+// reduced argument. Plain truncating SFPSTORE to bf16 (whole pipeline stays
+// within 1 ULP of the correctly rounded golden over all 65536 bf16 inputs).
+//
+// Performance: hand-scheduled with SFPLOADMACRO so three ops per vector ride
+// the loads for free (jb-MAD + parity-shift on the first load, stage-1
+// reduction MAD on the second load). Two dst vectors are processed in
+// lockstep so every issued instruction is independent of its predecessor:
+// 21 issued instructions per vector pair, ~1 instruction/cycle.
+//
+// Register map (per pair; A = even vector, B = odd vector):
+//   L0: xA -> jbA -> qA -> sA        L4: -P0 (pinned per face)
+//   L1: xB -> jbB -> qB -> sB        L5: jA -> pA -> vA
+//   L2: xA' -> a1A -> a2A -> aA -> rB L6: jB -> pB -> vB
+//   L3: xB' -> a1B -> a2B -> aB      L7: C1 -> rA
+// Constant regs: L11 = bias, L12 = 1/pi, L13 = -P1, L14 = C0.
+//
+// Macros (configured in _init_sine_bf16_fast_):
+//   M0 (first load of a vector, VD=L0/L1):
+//     MAD slot, delay 0:   VD = 1/pi * VD + bias          (template T0)
+//     Simple slot, delay 3: VD <<= 31 (parity -> sign bit) (template T1)
+//   M1 (second load of vector A, VD=L2):
+//     MAD slot, delay 2:   VD = jA * (-P0) + VD            (template T2)
+//   M2 (second load of vector B, VD=L3):
+//     MAD slot, delay 0:   VD = jB * (-P0) + VD            (template T3)
+// Delays are instruction-counted (UnitDelayKind = all ones), so the schedule
+// is robust against any issue-side stalls.
+inline void _init_sine_bf16_fast_() {
+    // Programmable constant LREGs. LREG11 normally holds -1.0f; nothing in
+    // this kernel uses -1.0f, so it is repurposed for the rounding bias
+    // (re-loaded per face and restored to -1.0f afterwards, see
+    // _calculate_sine_bf16_fast_).
+    _sfpu_load_config32_(11, 0x4B40, 0x0000);  // bias = 1.5*2^23
+    _sfpu_load_config32_(12, 0x3EA2, 0xF983);  // 1/pi
+    _sfpu_load_config32_(13, 0xBA7D, 0xAA22);  // -P1 = -(pi - 3.140625)
+    _sfpu_load_config32_(14, 0xBE2A, 0x1BF3);  // C0 (refit for fp16 C1)
+
+    // Instruction templates for the load macros.
+    _sfpu_load_imm32_(0, TT_OP_SFPMAD(12, 0, 11, 0, 0));  // T0: jb = 1/pi*VB + bias
+    TTI_SFPCONFIG(0, 0, 0);
+    _sfpu_load_imm32_(0, TT_OP_SFPSHFT(31, 0, 0, 1));     // T1: VD <<= 31
+    TTI_SFPCONFIG(0, 1, 0);
+    _sfpu_load_imm32_(0, TT_OP_SFPMAD(5, 4, 0, 0, 0));    // T2: a1A = jA*(-P0) + VC
+    TTI_SFPCONFIG(0, 2, 0);
+    _sfpu_load_imm32_(0, TT_OP_SFPMAD(6, 4, 0, 0, 0));    // T3: a1B = jB*(-P0) + VC
+    TTI_SFPCONFIG(0, 3, 0);
+
+    // Macro sequences: per sub-unit byte = [7]=VB-not-VC override,
+    // [6]=VD->LREG16, [5:3]=delay, [2:0]=template select (4..7 = T0..T3).
+    // Word layout: Simple | MAD<<8 | Round<<16 | Store<<24.
+    TTI_SFPCONFIG(0x849D, 4, 1);  // M0: MAD=T0 d0 VB<-load; Simple=T1 d3 VB<-load
+    TTI_SFPCONFIG(0x1600, 5, 1);  // M1: MAD=T2 d2 VC<-load
+    TTI_SFPCONFIG(0x0700, 6, 1);  // M2: MAD=T3 d0 VC<-load
+    TTI_SFPCONFIG(0x0000, 7, 1);  // M3: unused
+    // Misc: UnitDelayKind = 0xF (instruction-counted delays on all sub-units).
+    TTI_SFPCONFIG(0x0F00, 8, 1);
+    TTI_SFPNOP;
+}
+
+template <int A>
+inline __attribute__((always_inline)) void _sine_bf16_fast_pair_() {
+    constexpr int B = A + 2;
+    TTI_SFPLOADMACRO((0 << 2) | 0, 0, 7, A);  // M0: L0 = xA; jbA; qA
+    TTI_SFPLOADMACRO((0 << 2) | 1, 0, 7, B);  // M0: L1 = xB; jbB; qB
+    TTI_SFPLOADMACRO((1 << 2) | 2, 0, 7, A);  // M1: L2 = xA; a1A (after jA)
+    TTI_SFPMAD(0, 10, 11, 5, 2);              // jA = jbA - bias        -> L5
+    TTI_SFPMAD(1, 10, 11, 6, 2);              // jB = jbB - bias        -> L6
+    TTI_SFPLOADMACRO((2 << 2) | 3, 0, 7, B);  // M2: L3 = xB; a1B
+    TTI_SFPLOADI(7, 1, 0x1FD6);               // C1 (fp16)              -> L7
+    TTI_SFPMAD(5, 13, 2, 2, 0);               // a2A = jA*(-P1) + a1A   -> L2
+    TTI_SFPMAD(6, 13, 3, 3, 0);               // a2B = jB*(-P1) + a1B   -> L3
+    TTI_SFPXOR(0, 0, 2, 0);                   // aA ^= qA
+    TTI_SFPXOR(0, 1, 3, 0);                   // aB ^= qB
+    TTI_SFPMAD(2, 2, 9, 0, 0);                // sA = aA*aA             -> L0
+    TTI_SFPMAD(3, 3, 9, 1, 0);                // sB = aB*aB             -> L1
+    TTI_SFPMAD(0, 7, 14, 5, 0);               // pA = sA*C1 + C0        -> L5
+    TTI_SFPMAD(1, 7, 14, 6, 0);               // pB = sB*C1 + C0        -> L6
+    TTI_SFPMAD(5, 0, 10, 5, 0);               // vA = pA*sA + 1         -> L5
+    TTI_SFPMAD(6, 1, 10, 6, 0);               // vB = pB*sB + 1         -> L6
+    TTI_SFPMAD(5, 2, 9, 7, 0);                // rA = vA*aA             -> L7
+    TTI_SFPMAD(6, 3, 9, 2, 0);                // rB = vB*aB             -> L2
+    TTI_SFPSTORE(7, 0, 7, A);                 // dst[A] = rA (truncate to bf16)
+    TTI_SFPSTORE(2, 0, 7, B);                 // dst[B] = rB
+}
+
+inline void _calculate_sine_bf16_fast_() {
+    // LREG11 holds the rounding bias for this op (programmed by _init_sine_bf16_fast_). The next SFPU op's init
+    // re-establishes the architectural -1.0f through _init_sfpu_config_reg(), so no per-face restore is needed.
+    TTI_SFPLOADI(4, 0, 0xC049);  // -P0 = -3.140625 (bf16) -> L4, per face
+    _sine_bf16_fast_pair_<0>();
+    _sine_bf16_fast_pair_<4>();
+    _sine_bf16_fast_pair_<8>();
+    _sine_bf16_fast_pair_<12>();
+}
+#endif  // DISABLE_SFPLOADMACRO
+
+// P2/P3 of the four-stage Cody-Waite reduction by PI plus 1/PI, read by calculate_sine's generic body from
+// vConstFloatPrgm0..2. sine_init programs these except on the fast bf16 gate (same LREGs); the ITERATIONS != 8
+// fallback in calculate_sine re-seeds them.
+inline void _init_sine_body_constants_() {
+    // P2 and P3 of four-part Cody-Waite reduction by PI.
+    sfpi::vConstFloatPrgm0 = -0x1.51p-21f;
+    sfpi::vConstFloatPrgm1 = -0x1.0b4612p-33f;
+
+    sfpi::vConstFloatPrgm2 = FRAC_1_PI;
+}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_sine() {
+#ifndef DISABLE_SFPLOADMACRO
+    if constexpr (!APPROXIMATION_MODE && !is_fp32_dest_acc_en && ITERATIONS == 8) {
+        _calculate_sine_bf16_fast_();
+        return;
+    }
+    if constexpr (
+        (!APPROXIMATION_MODE && !is_fp32_dest_acc_en) &&
+        !(!APPROXIMATION_MODE && !is_fp32_dest_acc_en && ITERATIONS == 8)) {
+        // ITERATIONS != 8: sine_init<false, false> cannot see ITERATIONS and has programmed the fast kernel's
+        // LREG11-14 over the Cody-Waite constants this path reads from vConstFloatPrgm0..2 and over the
+        // architectural -1.0f in LREG11 that sfpi-compiled code assumes; re-seed both (SFPCONFIG imm mode
+        // writes the default, as in _init_sfpu_config_reg).
+        _init_sine_body_constants_();
+        TTI_SFPCONFIG(0, 11, 1);
+    }
+#endif
+
     // 1. Reduce argument using a four-stage Cody-Waite reduction to the interval [-PI/2, PI/2].
     // 2. Use odd symmetry (sin(-x) = -sin(x)) via quadrant/sign tracking.
     // 3. Evaluate sin(a) = a + a^3 (C0 + a^2 (C1 + a^2 (C2 + a^2 C3))) on [0, PI/2].
@@ -248,8 +520,200 @@ inline void calculate_sine() {
     }
 }
 
+// Fast bf16 cos for Blackhole. Origin: llk-bench (LLM-agent-written kernel, claude-fable-5, 2026-08),
+// validated exhaustively over all 65,536 bf16 inputs vs the exact golden: max 1 ULP (gate <= 2).
+// Measured 375 cycles/tile vs 1095 for the previous kernel on p150b (tt-metal v0.76.0 baseline).
+// Domain: the bench golden only checked |x| <= 65536 (larger |x| is don't-care there). The previous
+// kernel's behaviour beyond that range is NOT preserved by construction and must be checked on hardware.
+// State: programs vConstFloatPrgm0/1/2 (LREG12-14) plus loop constants in L4-L7 at init time (L4-L7 must
+// survive between tiles, i.e. no other SFPU op may run between cosine_init and the cos_tile calls it
+// serves -- the same init-immediately-before-use contract the Prgm constants already impose). Uses
+// replay slots 0..17 (two 9-instruction cores recorded per calculate call, lltt::record<lltt::Exec>).
+// No SFPLOADMACRO, no ADDR_MOD_6 (raw TTI_* with ADDR_MOD_7).
+// Face handling: the whole 32x32 tile (dst offsets 0..62) is processed on the FIRST of the four per-face
+// calls made by the VectorMode::RC loop in _llk_math_eltwise_sfpu_apply_vector_mode_; the other three
+// calls return immediately, tracked by a function-local static call counter. calculate_cosine must
+// therefore only be reached through that 4-call RC loop (cos_tile does); VectorMode::R/C would
+// desynchronise the counter.
+// Selected by cosine_init / calculate_cosine when !APPROXIMATION_MODE && !is_fp32_dest_acc_en
+// (&& ITERATIONS == 8 in calculate); the fast init replaces the production Cody-Waite constant setup,
+// which lives in the same three LREGs.
+//
+// Algorithm (validated bit-exactly against the documented Blackhole FMA model
+// over all 65536 bf16 inputs; max observed error 1 ULP):
+//   j = round(x/(2pi))  via the 1.5*2^23 bias trick
+//   a = x - j*2pi       via 2-stage Cody-Waite: M0 = -6.28125 (8-bit mantissa,
+//                       j*M0 exact in the 27-bit partial product),
+//                       M1 = fp32(6.28125 - 2pi)
+//   cos(x) = E0 + s*(E1 + s*(E2 + s*E3)),  s = a^2,  a in [-pi, pi]
+// The full-period reduction makes cos's sign fall out of the polynomial
+// itself (root aligned with pi/2), so there is no quadrant/parity logic at
+// all: no shift, no xor, no sign register.
+//
+// Implementation: hand-scheduled TTI software pipeline, two vectors in
+// flight, 12 issue slots per vector with zero idle slots. The whole
+// 32-vector tile is processed on the first of the four per-face wrapper
+// calls (VectorMode::RC), so the pipeline fills/drains once per tile.
+// The 9-instruction loop-invariant core is issued from the replay buffer
+// (recorded while executing bodies 1 and 2).
+//
+// Correctness is interlock-safe: every producer/consumer pair is either
+// spaced >= 2 cycles by construction or covered by the hardware's automatic
+// one-cycle stall (none of the buggy-stall instructions are used).
+//
+// Register map:
+//   L0/L1 = alternating v -> a1 -> a -> s chain (body k works vector k in V[k%2])
+//   L2    = u -> t -> j        L3 = r chain
+//   L4 = E3   L5 = M0 = -6.28125   L6 = E0   L7 = E2
+//   L12 (Prgm0) = 1/(2pi)   L13 (Prgm1) = M1   L14 (Prgm2) = E1
+//
+// Steady-state body for vector i (12 slots; tail of vector i-1 interleaved):
+//   c0  MAD  Vb = T*M1 + Vb        a2 of i-1 (T = j of i-1 until c1)
+//   c1  MUL  T  = Va*(1/2pi)       u of i
+//   c2  MUL  Vb = Vb*Vb            s of i-1
+//   c3  ADDI T += 12582912         t of i
+//   c4  MAD  R  = E3*Vb + E2       r1 of i-1
+//   c5  ADDI T -= 12582912         j of i
+//   c6  MAD  R  = R*Vb + E1        r2 of i-1
+//   c7  MAD  Va = T*M0 + Va        a1 of i (j ready exactly now)
+//   c8  MAD  R  = R*Vb + E0        r3 of i-1 (last read of Vb)
+//   c9  LOAD Vb <- dst[2(i+1)]     v of i+1 (inline)
+//   c10 STORE dst[2(i-1)] <- R     (inline; bf16 truncating store --
+//        coefficients are refit with a +2^-9 relative bias to recenter
+//        the truncation error, so no explicit rounding op is needed)
+inline void _init_cosine_bf16_fast_() {
+    sfpi::vConstFloatPrgm0 = 0x1.45f306p-3f;    // L12 = 1/(2pi)
+    sfpi::vConstFloatPrgm1 = -0x1.fb5444p-10f;  // L13 = M1 = fp32(6.28125 - 2pi)
+    sfpi::vConstFloatPrgm2 = -0x1.fc7f18p-2f;   // L14 = E1 (bias-refit)
+    // Loop constants. Nothing else touches the SFPU LRegs between tiles of one op,
+    // so these survive across _calculate_cosine_bf16_fast_ calls.
+    TTI_SFPLOADI(4, 8, 0xBA81);   // L4 = E3 hi
+    TTI_SFPLOADI(4, 10, 0xDC27);  // L4 = E3 lo
+    TTI_SFPLOADI(5, 0, 0xC0C9);   // L5 = M0 = -6.28125 (bf16)
+    TTI_SFPLOADI(6, 8, 0x3F7F);   // L6 = E0 hi
+    TTI_SFPLOADI(6, 10, 0xE0DA);  // L6 = E0 lo
+    TTI_SFPLOADI(7, 8, 0x3D21);   // L7 = E2 hi
+    TTI_SFPLOADI(7, 10, 0xE284);  // L7 = E2 lo
+}
+
+// Loop-invariant 9-instruction core (slots c0..c8). VA/VB: (1,0) for odd
+// bodies, (0,1) for even bodies.
+#define COSINE_FAST_CORE(VA, VB)                  \
+    TTI_SFPMAD(2, 13, VB, VB, 0);   /* c0 a2'  */ \
+    TTI_SFPMUL(VA, 12, 9, 2, 0);    /* c1 u    */ \
+    TTI_SFPMUL(VB, VB, 9, VB, 0);   /* c2 s'   */ \
+    TTI_SFPADDI(0x4B40, 2, 0);      /* c3 t    */ \
+    TTI_SFPMAD(4, VB, 7, 3, 0);     /* c4 r1'  */ \
+    TTI_SFPADDI(0xCB40, 2, 0);      /* c5 j    */ \
+    TTI_SFPMAD(3, VB, 14, 3, 0);    /* c6 r2'  */ \
+    TTI_SFPMAD(2, 5, VA, VA, 0);    /* c7 a1   */ \
+    TTI_SFPMAD(3, VB, 6, 3, 0)      /* c8 r3'  */
+
+inline void _calculate_cosine_bf16_fast_() {
+    // The RC face loop invokes this once per face; the first call handles the
+    // whole tile with immediate dst offsets 0..62.
+    static unsigned cosine_fast_call_idx = 0;
+    if ((cosine_fast_call_idx++ & 3u) != 0) {
+        return;
+    }
+
+    // Prologue: front of vector 0 (into L0), preload vector 1 (into L1).
+    // Producer/consumer gaps here rely on the hardware interlock.
+    TTI_SFPLOAD(0, 0, ADDR_MOD_7, 0);  // L0 = v0
+    TTI_SFPLOAD(1, 0, ADDR_MOD_7, 2);  // L1 = v1
+    TTI_SFPMUL(0, 12, 9, 2, 0);        // u0
+    TTI_SFPADDI(0x4B40, 2, 0);         // t0
+    TTI_SFPADDI(0xCB40, 2, 0);         // j0
+    TTI_SFPMAD(2, 5, 0, 0, 0);         // a1 of v0
+
+    // Body 1 (odd): execute + record the core into replay slots 0..8.
+    lltt::record<lltt::Exec>(0, 9);
+    COSINE_FAST_CORE(1, 0);
+    TTI_SFPLOAD(0, 0, ADDR_MOD_7, 4);   // v2
+    TTI_SFPSTORE(3, 0, ADDR_MOD_7, 0);  // result 0
+
+    // Body 2 (even): execute + record into replay slots 9..17.
+    lltt::record<lltt::Exec>(9, 9);
+    COSINE_FAST_CORE(0, 1);
+    TTI_SFPLOAD(1, 0, ADDR_MOD_7, 6);   // v3
+    TTI_SFPSTORE(3, 0, ADDR_MOD_7, 2);  // result 1
+
+    // Bodies 3..31: replay the recorded cores. Body 31 skips the prefetch
+    // load (there is no vector 32).
+#define COSINE_FAST_BODY(K)                                 \
+    lltt::replay(((K) & 1) ? 0 : 9, 9);                     \
+    TTI_SFPLOAD(((K) + 1) & 1, 0, ADDR_MOD_7, 2 * (K) + 2); \
+    TTI_SFPSTORE(3, 0, ADDR_MOD_7, 2 * (K) - 2)
+    COSINE_FAST_BODY(3);
+    COSINE_FAST_BODY(4);
+    COSINE_FAST_BODY(5);
+    COSINE_FAST_BODY(6);
+    COSINE_FAST_BODY(7);
+    COSINE_FAST_BODY(8);
+    COSINE_FAST_BODY(9);
+    COSINE_FAST_BODY(10);
+    COSINE_FAST_BODY(11);
+    COSINE_FAST_BODY(12);
+    COSINE_FAST_BODY(13);
+    COSINE_FAST_BODY(14);
+    COSINE_FAST_BODY(15);
+    COSINE_FAST_BODY(16);
+    COSINE_FAST_BODY(17);
+    COSINE_FAST_BODY(18);
+    COSINE_FAST_BODY(19);
+    COSINE_FAST_BODY(20);
+    COSINE_FAST_BODY(21);
+    COSINE_FAST_BODY(22);
+    COSINE_FAST_BODY(23);
+    COSINE_FAST_BODY(24);
+    COSINE_FAST_BODY(25);
+    COSINE_FAST_BODY(26);
+    COSINE_FAST_BODY(27);
+    COSINE_FAST_BODY(28);
+    COSINE_FAST_BODY(29);
+    COSINE_FAST_BODY(30);
+#undef COSINE_FAST_BODY
+    lltt::replay(0, 9);                  // body 31 (odd)
+    TTI_SFPMAD(2, 13, 1, 1, 0);          // a2 of 31 (in the prefetch slot)
+    TTI_SFPSTORE(3, 0, ADDR_MOD_7, 60);  // result 30
+
+    // Epilogue: tail of vector 31 (odd -> chain lives in L1, j in L2).
+    TTI_SFPMUL(1, 1, 9, 1, 0);           // s
+    TTI_SFPMAD(4, 1, 7, 3, 0);           // r1
+    TTI_SFPMAD(3, 1, 14, 3, 0);          // r2
+    TTI_SFPMAD(3, 1, 6, 3, 0);           // r3
+    TTI_SFPSTORE(3, 0, ADDR_MOD_7, 62);  // result 31
+}
+
+#undef COSINE_FAST_CORE
+
+// P2/P3 of the four-stage Cody-Waite reduction by PI/2 plus 1/PI, read by calculate_cosine's generic body from
+// vConstFloatPrgm0..2. cosine_init programs these except on the fast bf16 gate (same LREGs); the ITERATIONS != 8
+// fallback in calculate_cosine re-seeds them.
+inline void _init_cosine_body_constants_() {
+    // P2 and P3 of four-part Cody-Waite reduction by PI/2.
+    sfpi::vConstFloatPrgm0 = -0x1.51p-22f;
+    sfpi::vConstFloatPrgm1 = -0x1.0b4612p-34f;
+
+    sfpi::vConstFloatPrgm2 = FRAC_1_PI;
+}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_cosine() {
+    if constexpr (!APPROXIMATION_MODE && !is_fp32_dest_acc_en && ITERATIONS == 8) {
+        _calculate_cosine_bf16_fast_();
+        return;
+    }
+    if constexpr (
+        (!APPROXIMATION_MODE && !is_fp32_dest_acc_en) &&
+        !(!APPROXIMATION_MODE && !is_fp32_dest_acc_en && ITERATIONS == 8)) {
+        // ITERATIONS != 8: cosine_init<false, false> cannot see ITERATIONS and has programmed the fast kernel's
+        // LREG12-14 over the Cody-Waite constants this path reads from vConstFloatPrgm0..2; re-seed them. (Its
+        // L4-L7 loop constants and LREG11 = -1.0f need nothing: sfpi allocates L0-L7 itself and the fast init
+        // leaves LREG11 alone.)
+        _init_cosine_body_constants_();
+    }
+
     // 1. Build an odd quadrant index j for PI/2-based reduction.
     // 2. Reduce to a in [-PI/2, PI/2] and fold sign from the quadrant parity.
     // 3. Evaluate sin(a) polynomial and use identity cos(x) = sin(x + PI/2).
@@ -419,8 +883,97 @@ sfpi_inline sfpi::vFloat sfpu_atan_fp32(sfpi::vFloat x) {
     return r;
 }
 
+// Fast bf16 atan for Blackhole. Origin: llk-bench (LLM-agent-written kernel, claude-fable-5, 2026-08),
+// validated exhaustively over all 65,536 bf16 inputs vs the exact golden: max 2 ULP (gate <= 2).
+// Measured 443 cycles/tile vs 1704 for the previous kernel on p150b (tt-metal v0.76.0 baseline).
+// Domain: validated on the full bf16 domain (NaN inputs were don't-care in the bench because the unpacker
+// flushes them to +/-inf; unlike the previous kernel there is no explicit NaN pass-through -- check).
+// State: programs vConstFloatPrgm0/1/2 (LREG12-14) only. No SFPLOADMACRO, no replay slots, no ADDR_MOD_6
+// (sfpi dst_reg[] indexing over ADDR_MOD_7, zero increments, from the common init).
+// Selected by atan_init / calculate_atan when !APPROXIMATION_MODE && !is_fp32_dest_acc_en
+// (&& ITERATIONS == 8 in calculate); the fast init replaces sfpu_reciprocal_init<false>() (which
+// only sets vConstFloatPrgm0 = 2.0f for the production bf16 path).
+//
+// Algorithm:
+//   t = min(|x|, approx_recip(|x|))    -- SFPARECIP hardware reciprocal
+//   p = t + t^2*(C1 + C2*t)            -- 3-op tuned correction (bit-exact
+//                                         search against the full bf16 sweep)
+//   r = (|x| >= 1) ? PIO2C - p : p     -- PIO2C tuned above pi/2 to center
+//                                         the truncating bf16 store
+//   result = setsgn(r, x)              -- store truncates fp32->bf16
+//
+// approx_recip(|x|) returns 0 for |x| = inf or >= 2^126, so atan(+/-inf)
+// lands on PIO2C (rounds to bf16(pi/2)). The correction polynomial has
+// P(0) == 1 exactly, so p == t for tiny t (atan(x) == x at bf16 precision
+// there; keeps the smallest normal 2^-126 from underflowing to zero).
+// NaN inputs are don't-care (the unpacker flushes them to +/-inf anyway).
+inline void _init_atan_bf16_fast_() {
+    sfpi::vConstFloatPrgm0 = 1.5746880519769257f;    // pi/2 + truncation bias
+    sfpi::vConstFloatPrgm1 = -0.04294930753096212f;  // C1
+    sfpi::vConstFloatPrgm2 = -0.1777010704459626f;   // C2
+}
+
+inline void _calculate_atan_bf16_fast_() {
+#pragma GCC unroll 4
+    for (int i = 0; i < 8; i += 2) {
+        sfpi::vFloat x0 = sfpi::dst_reg[i];
+        sfpi::vFloat x1 = sfpi::dst_reg[i + 1];
+        sfpi::vFloat ax0 = sfpi::abs(x0);
+        sfpi::vFloat u0 = sfpi::approx_recip(ax0);
+        sfpi::vFloat ax1 = sfpi::abs(x1);
+        sfpi::vFloat t0 = sfpi::min(ax0, u0);
+        sfpi::vFloat u1 = sfpi::approx_recip(ax1);
+        sfpi::vFloat t1 = sfpi::min(ax1, u1);
+        sfpi::vFloat q0 = t0 * sfpi::vConstFloatPrgm2 + sfpi::vConstFloatPrgm1;
+        sfpi::vFloat q1 = t1 * sfpi::vConstFloatPrgm2 + sfpi::vConstFloatPrgm1;
+        sfpi::vFloat s0 = t0 * t0;
+        sfpi::vFloat s1 = t1 * t1;
+        sfpi::vFloat p0 = q0 * s0 + t0;
+        sfpi::vFloat p1 = q1 * s1 + t1;
+        v_if(sfpi::exexp(x0) >= 0) {  // |x| >= 1 (denormals/zero give exp < 0)
+            p0 = sfpi::vConstFloatPrgm0 - p0;
+        }
+        v_endif;
+        v_if(sfpi::exexp(x1) >= 0) {
+            p1 = sfpi::vConstFloatPrgm0 - p1;
+        }
+        v_endif;
+        p0 = sfpi::copysgn(p0, x0);  // sfpi >= 7.80: setsgn(vFloat, vFloat) removed, copysgn is the replacement
+        p1 = sfpi::copysgn(p1, x1);
+        sfpi::dst_reg[i] = p0;
+        sfpi::dst_reg[i + 1] = p1;
+    }
+}
+
+// Constants read by calculate_atan's generic body: the fp32 path's polynomial tail in vConstFloatPrgm1/2, the
+// bf16 path's sfpu_reciprocal<false> Newton constant (vConstFloatPrgm0 = 2.0f). atan_init programs these except
+// on the fast bf16 gate (same LREGs); the ITERATIONS != 8 fallback in calculate_atan re-seeds them.
+template <bool is_fp32_dest_acc_en>
+inline void _init_atan_body_constants_() {
+    if constexpr (is_fp32_dest_acc_en) {
+        sfpi::vConstFloatPrgm1 = 0x1.999384p-3f;
+        sfpi::vConstFloatPrgm2 = -0x1.555552p-2f;
+    } else {
+        // sfpu_atan_bf16 uses sfpu_reciprocal<false>.
+        sfpu_reciprocal_init<false>();
+    }
+}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_atan() {
+    if constexpr (!APPROXIMATION_MODE && !is_fp32_dest_acc_en && ITERATIONS == 8) {
+        _calculate_atan_bf16_fast_();
+        return;
+    }
+    if constexpr (
+        (!APPROXIMATION_MODE && !is_fp32_dest_acc_en) &&
+        !(!APPROXIMATION_MODE && !is_fp32_dest_acc_en && ITERATIONS == 8)) {
+        // ITERATIONS != 8: atan_init<false, false> cannot see ITERATIONS and has programmed the fast kernel's
+        // LREG12-14 over sfpu_reciprocal_init's vConstFloatPrgm0 = 2.0f that sfpu_reciprocal<false> (inside
+        // sfpu_atan_bf16) reads; re-seed it.
+        _init_atan_body_constants_<is_fp32_dest_acc_en>();
+    }
+
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
         sfpi::vFloat result;
@@ -804,34 +1357,42 @@ inline void calculate_sinh() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void sine_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
-    // P2 and P3 of four-part Cody-Waite reduction by PI.
-    sfpi::vConstFloatPrgm0 = -0x1.51p-21f;
-    sfpi::vConstFloatPrgm1 = -0x1.0b4612p-33f;
-
-    sfpi::vConstFloatPrgm2 = FRAC_1_PI;
+#ifndef DISABLE_SFPLOADMACRO
+    if constexpr (!APPROXIMATION_MODE && !is_fp32_dest_acc_en) {
+        // Fast bf16 kernel: programs LREG11-14 + load macros itself and does not use the Cody-Waite
+        // constants below (same LREGs), so they are skipped rather than overwritten.
+        _init_sine_bf16_fast_();
+        return;
+    }
+#endif
+    _init_sine_body_constants_();
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void cosine_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
-    // P2 and P3 of four-part Cody-Waite reduction by PI/2.
-    sfpi::vConstFloatPrgm0 = -0x1.51p-22f;
-    sfpi::vConstFloatPrgm1 = -0x1.0b4612p-34f;
-
-    sfpi::vConstFloatPrgm2 = FRAC_1_PI;
+    if constexpr (!APPROXIMATION_MODE && !is_fp32_dest_acc_en) {
+        // Fast bf16 kernel: programs vConstFloatPrgm0/1/2 + L4-L7 itself and does not use the
+        // Cody-Waite constants below (same LREGs), so they are skipped rather than overwritten.
+        _init_cosine_bf16_fast_();
+        return;
+    }
+    _init_cosine_body_constants_();
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void tangent_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
-    // P2 and P3 of four-part Cody-Waite reduction by PI/2.
-    sfpi::vConstFloatPrgm0 = -0x1.51p-22f;
-    sfpi::vConstFloatPrgm1 = -0x1.0b4612p-34f;
-
-    sfpi::vConstFloatPrgm2 = FRAC_2_PI;
+    if constexpr (!APPROXIMATION_MODE && !is_fp32_dest_acc_en) {
+        // Fast bf16 kernel: programs vConstFloatPrgm0/1/2 itself and does not use the Cody-Waite
+        // constants below (same LREGs), so they are skipped rather than overwritten.
+        _init_tangent_bf16_fast_();
+        return;
+    }
+    _init_tangent_body_constants_();
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
@@ -863,13 +1424,13 @@ void sinh_init() {
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void atan_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
-    if constexpr (is_fp32_dest_acc_en) {
-        sfpi::vConstFloatPrgm1 = 0x1.999384p-3f;
-        sfpi::vConstFloatPrgm2 = -0x1.555552p-2f;
-    } else {
-        // sfpu_atan_bf16 uses sfpu_reciprocal<false>.
-        sfpu_reciprocal_init<false>();
+    if constexpr (!APPROXIMATION_MODE && !is_fp32_dest_acc_en) {
+        // Fast bf16 kernel: programs vConstFloatPrgm0/1/2 itself; sfpu_reciprocal_init<false>() below
+        // (vConstFloatPrgm0 = 2.0f) is only needed by the production bf16 path, so it is skipped.
+        _init_atan_bf16_fast_();
+        return;
     }
+    _init_atan_body_constants_<is_fp32_dest_acc_en>();
 }
 
 template <bool APPROXIMATION_MODE>
@@ -1194,7 +1755,9 @@ void init_inverse_hyperbolic() {
     // asinh/acosh route through calculate_log1p_fp32, which expects the log1p
     // polynomial constants in vConstFloatPrgm0/1/2. The sqrt used internally is
     // self-contained (_sfpu_sqrt_ge0_) and does not touch the program registers.
-    log1p_init<APPROXIMATION_MODE, false, is_fp32_dest_acc_en>();
+    // Production constants, not log1p_init: that would program the bf16 fast-kernel state on bf16 dest, which
+    // calculate_log1p_fp32 does not read.
+    _init_log1p_body_constants_<is_fp32_dest_acc_en>();
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
@@ -1202,7 +1765,9 @@ void init_atanh() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     // atanh routes through calculate_log1p_fp32; the reciprocal it uses is the
     // self-contained _sfpu_reciprocal_gt0_, so log1p owns the program registers.
-    log1p_init<APPROXIMATION_MODE, false, is_fp32_dest_acc_en>();
+    // Production constants, not log1p_init: that would program the bf16 fast-kernel state on bf16 dest, which
+    // calculate_log1p_fp32 does not read.
+    _init_log1p_body_constants_<is_fp32_dest_acc_en>();
 }
 
 }  // namespace ckernel::sfpu

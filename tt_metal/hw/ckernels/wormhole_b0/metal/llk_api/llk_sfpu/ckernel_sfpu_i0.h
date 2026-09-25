@@ -23,9 +23,12 @@ namespace sfpu {
            t4) *                                                                                                  \
           t4) *                                                                                                   \
      t4)
-inline void i0_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+template <bool is_fp32_dest_acc_en /* unused on Wormhole */>
+inline void i0_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en /* unused on Wormhole */, int ITERATIONS = 8>
 inline void calculate_i0() {
 #pragma GCC unroll 0
 

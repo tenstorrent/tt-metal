@@ -176,7 +176,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 "fill_tile_init();",
                 fmt::format("fill_tile_bitcast({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
         case UnaryOpType::ROUND:
-            return {"rounding_op_tile_init();", fmt::format("round_tile({}, {});", idst, (int)params[0])};
+            return {"round_tile_init();", fmt::format("round_tile({}, {});", idst, (int)params[0])};
         case UnaryOpType::RELU_MAX:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
@@ -916,19 +916,19 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::FLOOR:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
-            return {"rounding_op_tile_init();", fmt::format("floor_tile({});", idst)};
+            return {"floor_tile_init();", fmt::format("floor_tile({});", idst)};
         case UnaryOpType::CEIL:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
-            return {"rounding_op_tile_init();", fmt::format("ceil_tile({});", idst)};
+            return {"ceil_tile_init();", fmt::format("ceil_tile({});", idst)};
         case UnaryOpType::TRUNC:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
-            return {"rounding_op_tile_init();", fmt::format("trunc_tile({});", idst)};
+            return {"trunc_tile_init();", fmt::format("trunc_tile({});", idst)};
         case UnaryOpType::FRAC:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
-            return {"rounding_op_tile_init();", fmt::format("frac_tile({});", idst)};
+            return {"frac_tile_init();", fmt::format("frac_tile({});", idst)};
         case UnaryOpType::RELU6:
             if (input_dtype == DataType::UINT16) {
                 return {"relu_max_tile_init();", fmt::format("relu_max_tile_uint16({}, 6u);", idst)};

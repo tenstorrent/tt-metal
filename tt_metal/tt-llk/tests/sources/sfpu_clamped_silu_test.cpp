@@ -6,8 +6,9 @@
 //
 // _sfpu_sigmoid_ takes its reciprocal from sfpu_reciprocal_iter, which needs
 // vConstFloatPrgm0 = 2.0f. The kernel neither programs it nor exposes an init;
-// sigmoid_init<false>() is what does, on both dest_acc arms. Without it the
-// reciprocal iterates against whatever the previous op left in Prgm0.
+// sfpu_reciprocal_init<false>() (what the non-approx sigmoid_init seeds) is what
+// does, on both dest_acc arms. Without it the reciprocal iterates against
+// whatever the previous op left in Prgm0.
 
 #include <cstdint>
 
@@ -101,9 +102,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
     _llk_pack_dest_init_wrapper_<DST_SYNC, is_fp32_dest_acc_en, PackMode::Default>();
 
-    // Programs vConstFloatPrgm0 = 2.0f for the reciprocal inside _sfpu_sigmoid_.
+    // Programs vConstFloatPrgm0 = 2.0f for the reciprocal inside _sfpu_sigmoid_ (what the non-approx
+    // sigmoid_init seeds; sigmoid_init<false, false> itself would also program calculate_sigmoid's bf16 fast
+    // kernel over that register).
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
-    ckernel::sfpu::sigmoid_init<false /* APPROXIMATION_MODE */>();
+    ckernel::sfpu::sfpu_reciprocal_init<false>();
 
     for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
     {

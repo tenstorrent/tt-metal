@@ -15,7 +15,10 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void sin_tile_init() { MATH(SFPU_UNARY_INIT_FN(sine, ckernel::sfpu::sine_init, (APPROX))); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void sin_tile_init() {
+    MATH(SFPU_UNARY_INIT_FN(sine, ckernel::sfpu::sine_init, (APPROX, is_fp32_dest_acc_en)));
+}
 
 // clang-format off
 /**
@@ -45,7 +48,10 @@ ALWI void sin_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void cos_tile_init() { MATH(SFPU_UNARY_INIT_FN(cosine, ckernel::sfpu::cosine_init, (APPROX))); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void cos_tile_init() {
+    MATH(SFPU_UNARY_INIT_FN(cosine, ckernel::sfpu::cosine_init, (APPROX, is_fp32_dest_acc_en)));
+}
 
 // clang-format off
 /**
@@ -108,7 +114,10 @@ ALWI void acosh_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void tan_tile_init() { MATH(SFPU_UNARY_INIT_FN(tan, ckernel::sfpu::tangent_init, (APPROX))); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void tan_tile_init() {
+    MATH(SFPU_UNARY_INIT_FN(tan, ckernel::sfpu::tangent_init, (APPROX, is_fp32_dest_acc_en)));
+}
 
 // clang-format off
 /**
@@ -260,7 +269,9 @@ ALWI void atan_tile(uint32_t idst) {
  */
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void atan_tile_init() {
-    MATH(SFPU_UNARY_INIT_FN(atan, sfpu::atan_init, (true /*APPROXIMATION_MODE*/, is_fp32_dest_acc_en)));
+    // APPROX (not a hard-coded true) so that atan_init can select the same fast/production path as
+    // calculate_atan; no arch's atan_init otherwise depends on APPROXIMATION_MODE.
+    MATH(SFPU_UNARY_INIT_FN(atan, sfpu::atan_init, (APPROX, is_fp32_dest_acc_en)));
 }
 
 // clang-format off

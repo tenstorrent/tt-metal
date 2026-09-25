@@ -95,6 +95,15 @@ sfpi_inline sfpi::vFloat softplus_exp_negative(sfpi::vFloat x) {
 
 inline void softplus_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
+// Templated overload mirroring the Blackhole signature (arch-shared softplus_tile_init passes
+// (APPROX, DST_ACCUM_MODE)); Wormhole has no mode-dependent softplus init, so both parameters are unused.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+inline void softplus_init() {
+    [[maybe_unused]] constexpr bool approximation_mode = APPROXIMATION_MODE;
+    [[maybe_unused]] constexpr bool fp32_dest_acc_en = is_fp32_dest_acc_en;
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void calculate_softplus_body(const float beta, const float beta_reciprocal, const float threshold) {
     sfpi::vFloat val = sfpi::dst_reg[0];

@@ -33,12 +33,20 @@
 #pragma once
 
 #include "ckernel.h"
+#include "ckernel_addrmod.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
+#include "sfpi.h"
+#include "sfpu/ckernel_sfpu_load_config.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 
 namespace ckernel {
 namespace sfpu {
+
+// Production constant setup (defined with the init below); declared early so the ITERATIONS != 8
+// fallback re-seed inside the calculate function can name it.
+template <bool is_fp32_dest_acc_en>
+inline void _init_log_body_constants_();
 
 template <bool FAST_APPROX, bool HAS_BASE_SCALING, bool is_fp32_dest_acc_en, bool IS_BASE_TWO = false>
 sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_scale_factor) {
@@ -132,6 +140,88 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_
     return result;
 }
 
+// Fast bf16 log for Blackhole. Origin: llk-bench (LLM-agent-written kernel, claude-fable-5, 2026-08),
+// validated exhaustively over all 65,536 bf16 inputs vs the exact golden: max 2 ULP (gate <= 2).
+// Measured 679.1 cycles/tile vs 978.1 for the previous kernel on p150b (tt-metal v0.76.0 baseline).
+// SFPU state programmed by the init: programmable constants vConstFloatPrgm0..2 (LREG12-14) = K1, K2', NEGBIG.
+// Pure sfpi (dst_reg[0..7], ADDR_MOD_7 only): no SFPLOADMACRO, no replay slots, no ADDR_MOD_6. bf16 DEST only:
+// the polynomial is fitted against the TRUNCATING bf16 store, so this is gated on !is_fp32_dest_acc_en (and on
+// the plain natural log: !HAS_BASE_SCALING && !IS_BASE_TWO); the Juffa-derived sfpi path above stays as the
+// fallback for every other configuration.
+//
+// 16 SFPU ops per 32-lane vector (+load/store), scheduled for the observed
+// 2-cycle MAD latency (each MAD-class consumer >= 2 slots after producer).
+//
+// Range reduction (per lane; x arrives as fp32 with low 16 mantissa bits 0):
+//   c = sm32_to_fp32(bits(|x|))            exact: <= 15 significant bits
+//     normal x:  c = (e_biased + u) * 2^23, u = mantissa fraction in [0,1)
+//     denormal:  predicated re-encode: c = sm32_to_fp32(bits(c)) + CDADJ,
+//                CDADJ = -149*2^23  (log(x) = log(k*2^16) - 149*ln2);
+//                CDADJ is bf16-exact, so the add is a single SFPADDI.
+//   r = c*K1 + K2'  ~= ln2*(e + u) + c0
+//     K1 = 90852*2^-40 (17-bit mantissa) with K2 anchored to -127*90852*2^-17
+//     so x==1.0 cancels EXACTLY under fused or non-fused MAD; c0 is the
+//     polynomial constant term folded into K2'.
+//   result = ((c3*m + c2)*m + c1)*m + r,  m = setexp(x,127) in [1,2)
+//     c1..c3 fitted by LP against the exact per-input 2-ULP acceptance
+//     intervals under TRUNCATING bf16 store (no rounding op needed); c1
+//     nudged so the x==1 sum is exactly 0. A quadratic is provably
+//     infeasible against those intervals, so cubic is minimal.
+// Specials (no predicated blocks beyond the denormal one):
+//   zero: rec = approx_recip(c) is +inf for c==0 and < 0.5ulp(c) otherwise,
+//     so c -= rec turns only zero lanes into -inf (bit-exact no-op on all
+//     finite lanes; verified). The final max() then lifts -inf to w=NEGBIG,
+//     which truncates to 0xFF7F = 1 ULP from the golden -inf.
+//   +inf: result = max(result, x + NEGBIG), NEGBIG = -(max_bf16 + 1 f32
+//     ulp): the w arm is +inf only for x=+inf and never exceeds the result
+//     for positive finite x (at x=max_bf16, w <= 0 < log(x)).
+//   negatives / NaN: don't-care (goldens NaN); |x| keeps them non-NaN and
+//   routes -0 through the zero path (the hardware x==0 predicate is bitwise,
+//   and approx_recip(-0) = -inf, so the abs is required).
+// All 65536 inputs verified bit-exactly offline under both fused and
+// non-fused MAD semantics, and by exhaustive sweep on silicon.
+inline void _init_log_bf16_fast_() {
+    // Common SFPU init (config reg + ADDR_MOD_7 + counter reset) inlined so this init is self-contained; the
+    // kernel only uses ADDR_MOD_7 (sfpi dst_reg accesses).
+    _init_sfpu_config_reg();
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+
+    sfpi::vConstFloatPrgm0 = 0x1.62e4p-24f;      // K1
+    sfpi::vConstFloatPrgm1 = -0x1.637650p+6f;    // K2' = -127*90852*2^-17 + c0
+    sfpi::vConstFloatPrgm2 = -0x1.fe0002p+127f;  // NEGBIG = -(max_bf16 + 1ulp)
+}
+
+// One face (8 dst vectors).
+inline void _calculate_log_bf16_fast_() {
+    // Loop-invariant constants; hoisted into LREGs once per face.
+    sfpi::vFloat vc1 = 0x1.7d4750p+0f;
+    sfpi::vFloat vc2 = -0x1.8ac49ap-1f;
+    sfpi::vFloat vc3 = 0x1.e20fc8p-4f;
+
+#pragma GCC unroll 8
+    for (int i = 0; i < 8; i++) {
+        sfpi::vFloat x = sfpi::abs(sfpi::vFloat(sfpi::dst_reg[i]));
+        sfpi::vFloat c = sfpi::convert<sfpi::vFloat>(sfpi::as<sfpi::vSMag>(x), sfpi::RoundMode::Nearest);
+        sfpi::vInt ee = sfpi::exexp(x, sfpi::ExponentMode::Biased);
+        sfpi::vFloat rec = sfpi::approx_recip(c);
+        sfpi::vFloat m = sfpi::setexp(x, 127);
+        v_if(ee == 0) {
+            c = sfpi::convert<sfpi::vFloat>(sfpi::as<sfpi::vSMag>(c), sfpi::RoundMode::Nearest);
+            c = c + -0x1.2ap+30f;  // CDADJ, bf16-exact -> single SFPADDI
+        }
+        v_endif;
+        c = c - rec;  // -inf on zero lanes; exact no-op on every finite lane
+        sfpi::vFloat acc = vc3 * m + vc2;
+        sfpi::vFloat r = c * sfpi::vConstFloatPrgm0 + sfpi::vConstFloatPrgm1;
+        acc = acc * m + vc1;
+        sfpi::vFloat w = x + sfpi::vConstFloatPrgm2;
+        r = acc * m + r;
+        r = sfpi::max(r, w);
+        sfpi::dst_reg[i] = r;
+    }
+}
+
 template <
     bool APPROXIMATION_MODE,
     bool FAST_APPROX,
@@ -140,6 +230,21 @@ template <
     int ITERATIONS = 8,
     bool IS_BASE_TWO = false>
 inline void calculate_log(uint log_base_scale_factor) {
+    if constexpr (
+        !APPROXIMATION_MODE && !FAST_APPROX && !HAS_BASE_SCALING && !IS_BASE_TWO && !is_fp32_dest_acc_en &&
+        ITERATIONS == 8) {
+        _calculate_log_bf16_fast_();
+        return;
+    }
+    if constexpr (
+        !APPROXIMATION_MODE && !FAST_APPROX && !HAS_BASE_SCALING && !IS_BASE_TWO && !is_fp32_dest_acc_en &&
+        !(!APPROXIMATION_MODE && !FAST_APPROX && !HAS_BASE_SCALING && !IS_BASE_TWO && !is_fp32_dest_acc_en &&
+          ITERATIONS == 8)) {
+        // ITERATIONS != 8 (tt-llk tests): log_init cannot see ITERATIONS and has programmed the fast kernel's
+        // K1 / K2' / NEGBIG into vConstFloatPrgm0..2 on top of the constants calculate_log_body reads; re-seed
+        // them before falling back.
+        _init_log_body_constants_<is_fp32_dest_acc_en>();
+    }
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat result = calculate_log_body<FAST_APPROX, HAS_BASE_SCALING, is_fp32_dest_acc_en, IS_BASE_TWO>(
@@ -152,9 +257,10 @@ inline void calculate_log(uint log_base_scale_factor) {
     }
 }
 
-template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en>
-inline void log_init() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
+// Production constants read by calculate_log_body (log, log_with_base, log2, and body re-users such as erfinv).
+// Body re-users call this directly: log_init below programs the fast bf16 kernel's constants instead on its gate.
+template <bool is_fp32_dest_acc_en>
+inline void _init_log_body_constants_() {
     const float LOG_TWO = 0.693147182f;       // 0x1.62e430p-1
     const float TWO_TO_M23 = 1.19209290e-7f;  // 0x1.0p-23
     // e represents k << 23 rather than k, so pre-fold the 2^(-23) factor into
@@ -170,6 +276,20 @@ inline void log_init() {
         // Horner coefficients used by bf16 polynomial
         sfpi::vConstFloatPrgm1 = 0x1.744p-2f;
         sfpi::vConstFloatPrgm2 = -0x1.008p-1f;
+    }
+}
+
+// HAS_BASE_SCALING / IS_BASE_TWO mirror calculate_log's template parameters: the fast bf16 kernel replaces only
+// the plain natural log, so the init has to know which variant the matching calculate_log will dispatch to.
+// ITERATIONS is not threaded here (same convention as recip_init); every caller instantiates calculate_log with
+// ITERATIONS == 8.
+template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en, bool HAS_BASE_SCALING, bool IS_BASE_TWO>
+inline void log_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    if constexpr (!APPROXIMATION_MODE && !FAST_APPROX && !HAS_BASE_SCALING && !IS_BASE_TWO && !is_fp32_dest_acc_en) {
+        _init_log_bf16_fast_();
+    } else {
+        _init_log_body_constants_<is_fp32_dest_acc_en>();
     }
 }
 

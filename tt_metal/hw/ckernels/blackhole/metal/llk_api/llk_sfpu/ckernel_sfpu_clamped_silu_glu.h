@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "cmath_common.h"
+#include "ckernel_sfpu_recip.h"
 #include "ckernel_sfpu_sigmoid.h"
 
 // Clamped SwiGLU (DeepSeek-V4), a fused binary SFPU op:
@@ -65,8 +66,11 @@ inline void calculate_clamped_silu_glu(const uint gate_tile_idx, const uint up_t
 }
 
 inline void clamped_silu_glu_init() {
-    // _sfpu_sigmoid_'s own init: it owns the Prgm0 requirement noted above.
-    sigmoid_init</*APPROXIMATION_MODE=*/false>();
+    // _sfpu_sigmoid_'s requirement noted above: the reciprocal's vConstFloatPrgm0 = 2.0f, seeded exactly as the
+    // non-approx sigmoid_init does. Not sigmoid_init<false, false> itself: for bf16 dest that also programs
+    // calculate_sigmoid's fast kernel, which repurposes LREG12 (vConstFloatPrgm0).
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    sfpu_reciprocal_init<false>();
 }
 
 }  // namespace ckernel::sfpu
