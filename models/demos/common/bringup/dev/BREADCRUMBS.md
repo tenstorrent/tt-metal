@@ -127,3 +127,18 @@ Drive this ledger with
   graphs exist, and appends the C, S, L, K, X tasks.
 - `skill/bringup/SKILL.md`: the conversational intake. It is not installed under `.claude/skills/` (shared config); it
   needs the owner's go-ahead to copy or link it there.
+
+## F7 (2026-09-25): dashboard
+- Owner's requirement: every new model gets a dashboard with the ERNIE dashboard's look and sections.
+  `dashboard/template.html` keeps the ERNIE CSS, layout and interactions (progress meter, clickable gate ladder, model
+  graph + layer strip, op coverage, findings, chunk timing, per-chip sharding cards with memory bars, the Kimi-style
+  "where the time goes" timeline with the per-chip grid, the PCC trail on a log scale). Everything ERNIE-specific
+  became data: the model graph is drawn from the reference's block graphs (`results/block_graphs.json`, written by
+  `check_reference`), one column per block type with residual skips; the layer strip and trail x-axis size to the
+  model; sharding reads `results/plan_memory.json` (the plan gate's computation) plus optional `chips` and
+  `ccl_per_layer` in plan.yaml; profile phases come from the section names, with the bound (compute / memory /
+  comm / other) guessed from the name unless plan.yaml `profile_sections` describes them; the chip grid follows the mesh.
+- New in the ladder: STOPPED and HANG states, "waiting for a person", frozen-test and agent-run summaries per task.
+- `dashboard/export.py --spec S` writes `<bringup_dir>/dashboard/index.html`.
+- Test: the page script runs under node with a small DOM stand-in (`selftest/dom_shim.js`) on synthetic records and on
+  an empty bring-up, so a runtime error in any section fails the gate.
