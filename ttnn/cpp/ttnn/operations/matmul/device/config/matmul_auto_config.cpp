@@ -112,6 +112,32 @@ bool packer_l1_acc_enabled(const Problem& p, Family family, uint32_t num_k_block
     return false;
 }
 
+// Format partial sums are kept in between K blocks
+tt::DataFormat interm_format(const Problem& p, Family family, uint32_t num_k_blocks) {
+    if (p.fp32_dest_acc_en) {
+        return tt::DataFormat::Float32;
+    }
+    return packer_l1_acc_enabled(p, family, num_k_blocks) ? tt::DataFormat::Float16_b : p.out_format;
+}
+
+bool is_block_float(tt::DataFormat format) {
+    switch (format) {
+        case tt::DataFormat::Bfp8:
+        case tt::DataFormat::Bfp8_b:
+        case tt::DataFormat::Bfp4:
+        case tt::DataFormat::Bfp4_b:
+        case tt::DataFormat::Bfp2:
+        case tt::DataFormat::Bfp2_b: return true;
+        default: return false;
+    }
+}
+
+// With several K blocks and no packer L1 accumulation, partial sums go through the output format between
+// blocks; a block-float output then loses precision (e.g. the 2D factory with exactly two K blocks).
+bool partials_lose_precision(const Problem& p, Family family, uint32_t num_k_blocks) {
+    return num_k_blocks > 1 && is_block_float(interm_format(p, family, num_k_blocks));
+}
+
 }  // namespace
 
 HardwareDesc HardwareDesc::for_arch(tt::ARCH arch, CoreCoord grid, uint32_t l1_cb_budget) {
@@ -129,10 +155,8 @@ uint32_t circular_buffer_bytes(const Problem& p, const HardwareDesc& hw, Family 
     const uint32_t out_tile = tt::tile_size(p.out_format);
     const uint32_t num_k_blocks = p.Kt / b.in0_block_w;
 
-    const bool l1_acc = packer_l1_acc_enabled(p, family, num_k_blocks);
-    const tt::DataFormat interm_format =
-        p.fp32_dest_acc_en ? tt::DataFormat::Float32 : (l1_acc ? tt::DataFormat::Float16_b : p.out_format);
-    const bool interm_shares_out = interm_format == p.out_format;
+    const tt::DataFormat interm = interm_format(p, family, num_k_blocks);
+    const bool interm_shares_out = interm == p.out_format;
 
     uint32_t in0_bytes = 0;
     uint32_t in1_bytes = 0;
@@ -154,7 +178,7 @@ uint32_t circular_buffer_bytes(const Problem& p, const HardwareDesc& hw, Family 
     }
     uint32_t total = in0_bytes + in1_bytes + out_tiles * out_tile + bias_bytes;
     if (!interm_shares_out) {
-        total += out_tiles * tt::tile_size(interm_format);
+        total += out_tiles * tt::tile_size(interm);
     }
     if (p.transpose_a) {
         total += in0_bytes;  // CB holding the transposed in0 block
@@ -181,7 +205,7 @@ std::optional<Blocking> block_2d(
                 break;  // narrower blocks for this h can't win
             }
             for (uint32_t k : k_options) {
-                if (k > k_max) {
+                if (k > k_max || partials_lose_precision(p, Family::Mcast2D, p.Kt / k)) {
                     continue;
                 }
                 Blocking b{per_core_M, per_core_N, k, h, w, 0, 0, fuse_batch};
@@ -231,7 +255,7 @@ std::optional<Blocking> block_1d(
         }
         const uint32_t k_limit = max_in0_block_w(p.Kt, family, out_block_h, out_block_w);
         for (uint32_t k : divisors_desc(p.Kt)) {
-            if (k > k_limit) {
+            if (k > k_limit || partials_lose_precision(p, family, p.Kt / k)) {
                 continue;
             }
             Blocking b{per_core_M, per_core_N, k, out_block_h, out_block_w, 0, 0, fuse_batch};
@@ -265,7 +289,8 @@ std::optional<Blocking> block_reuse(const Problem& p, const HardwareDesc& hw) {
             continue;
         }
         for (uint32_t k : divisors_desc(p.Kt)) {
-            if (k > max_in0_block_w(p.Kt, Family::Reuse, per_core_M, p.Nt)) {
+            if (k > max_in0_block_w(p.Kt, Family::Reuse, per_core_M, p.Nt) ||
+                partials_lose_precision(p, Family::Reuse, p.Kt / k)) {
                 continue;
             }
             Blocking b{per_core_M, p.Nt, k, per_core_M, p.Nt, 0, 0};
@@ -279,6 +304,17 @@ std::optional<Blocking> block_reuse(const Problem& p, const HardwareDesc& hw) {
 
 // Input tiles per K tile each core reads: its rows of A plus its columns of B
 uint32_t per_core_input_tiles(const Blocking& b) { return b.per_core_M + b.per_core_N; }
+
+// Input tiles read from memory in total. The mcast layouts read A once per output column block and B once
+// per output row block (each shared by multicast); Reuse reads A once and B once per M slice of a batch.
+uint64_t total_input_tiles(const Problem& p, Family family, const Blocking& b) {
+    const uint64_t a_tiles = static_cast<uint64_t>(p.batch_a) * p.Mt * p.Kt;
+    const uint64_t b_tiles = static_cast<uint64_t>(p.batch_b) * p.Kt * p.Nt;
+    if (family == Family::Reuse) {
+        return a_tiles + b_tiles * div_up(p.Mt, b.per_core_M);
+    }
+    return a_tiles * (b.per_core_N / b.out_block_w) + b_tiles * (b.per_core_M / b.out_block_h);
+}
 
 uint32_t cores_used(const Problem& p, const HardwareDesc& hw, Family family, const Blocking& b) {
     if (family == Family::Reuse) {
@@ -360,9 +396,15 @@ std::optional<Candidate> choose_candidate(const Problem& p, const HardwareDesc& 
     };
     const Candidate* mcast = choose_mcast(find(Family::Mcast2D), find(Family::Mcast1DIn0), find(Family::Mcast1DIn1));
     // Batched B: Reuse, whose cores work on their blocks independently, unless the multicast layout (which
-    // loops over the batch across the whole grid) keeps clearly more cores busy.
+    // loops over the batch across the whole grid) keeps clearly more cores busy, or Reuse would read clearly
+    // more input (it re-reads a batch's B for every M slice it splits the batch matrix into).
     if (const auto* reuse = find(Family::Reuse)) {
-        return mcast && mcast->cores >= ONE_D_CORE_ADVANTAGE * reuse->cores ? *mcast : *reuse;
+        if (mcast && (mcast->cores >= ONE_D_CORE_ADVANTAGE * reuse->cores ||
+                      total_input_tiles(p, Family::Reuse, reuse->blocking) >=
+                          ONE_D_CORE_ADVANTAGE * total_input_tiles(p, mcast->family, mcast->blocking))) {
+            return *mcast;
+        }
+        return *reuse;
     }
     if (mcast) {
         return *mcast;
@@ -481,7 +523,11 @@ std::optional<MatmulProgramConfig> select_program_config(
     p.fp32_dest_acc_en = fp32_dest_acc_en;
     p.packer_l1_acc = packer_l1_acc;
     p.dst_full_sync_en = dst_full_sync_en;
-    p.activation = attributes.user_fused_activation;
+    // Fuse the activation only if the kernels support it; otherwise matmul applies it as a separate op
+    if (attributes.user_fused_activation.has_value() &&
+        utilities::is_fusable_activation(attributes.user_fused_activation->op_type)) {
+        p.activation = attributes.user_fused_activation;
+    }
 
     auto grid = device->compute_with_storage_grid_size();
     if (attributes.user_core_coord.has_value()) {

@@ -245,6 +245,23 @@ TEST(MatmulAutoConfig, UsesWholeGridForLargeMatmul) {
     }
 }
 
+// With several K blocks and no packer L1 accumulation, partial sums go through the output format; a block-float
+// output must not be used that way (the 2D factory with exactly two K blocks loses precision in bfp4).
+TEST(MatmulAutoConfig, NoBlockFloatPartials) {
+    const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
+    for (auto out : {tt::DataFormat::Bfp4_b, tt::DataFormat::Bfp8_b}) {
+        auto p = make_problem(1, 1, 64, 128, 64, tt::DataFormat::Bfp4_b);
+        p.in0_format = tt::DataFormat::Bfp4_b;
+        p.out_format = out;
+        const auto chosen = choose_candidate(p, hw);
+        ASSERT_TRUE(chosen.has_value());
+        const uint32_t num_k_blocks = p.Kt / chosen->blocking.in0_block_w;
+        if (chosen->family == Family::Mcast2D || chosen->family == Family::Mcast1DIn1) {
+            EXPECT_NE(num_k_blocks, 2u) << "k=" << chosen->blocking.in0_block_w;
+        }
+    }
+}
+
 // Family choices of the heuristics, from the Wormhole config sweep (tests/ttnn/unit_tests/benchmarks/matmul_oob)
 TEST(MatmulAutoConfig, FamilyChoice) {
     const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
@@ -263,6 +280,9 @@ TEST(MatmulAutoConfig, FamilyChoice) {
         {{1, 1, 16384, 384, 1152}, Family::Mcast2D},     // nanoGPT
         {{768, 1, 768, 128, 32}, Family::Mcast1DIn1},    // tall and one tile wide
         {{384, 384, 256, 256, 64}, Family::Reuse},       // batched attention
+        {{48, 48, 1024, 1024, 64}, Family::Reuse},       // gpt2-style transpose_a attention
+        {{32, 32, 704, 704, 704}, Family::Mcast2D},      // #25502: Reuse would re-read B for every M slice
+        {{2, 2, 1024, 64, 512}, Family::Mcast2D},        // few large batch matrices
         {{4, 4, 256, 2048, 7168}, Family::Mcast2D},      // #31743: batched with wide N, looped over batch
     };
     for (const auto& e : expected) {

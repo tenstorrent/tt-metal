@@ -212,7 +212,8 @@ inline ttnn::Shape get_matmul_tensor_logical_shape(const Tensor& input_tensor, b
     return shape;
 }
 
-inline KernelActivation get_activation_type(ttnn::operations::unary::UnaryOpType opType) {
+// Kernel activation for a fused (non-RELU) activation, or nullopt if the matmul kernels can't fuse it.
+inline std::optional<KernelActivation> find_activation_type(ttnn::operations::unary::UnaryOpType opType) {
     using ttnn::operations::unary::UnaryOpType;
     switch (opType) {
         case UnaryOpType::GELU: return KernelActivation::GELU;
@@ -225,8 +226,19 @@ inline KernelActivation get_activation_type(ttnn::operations::unary::UnaryOpType
         case UnaryOpType::HARDTANH: return KernelActivation::HARDTANH;
         case UnaryOpType::SELU: return KernelActivation::SELU;
         case UnaryOpType::SOFTPLUS: return KernelActivation::SOFTPLUS;
-        default: TT_THROW("Unsupported UnaryOpType for fused activation: {}", opType);
+        default: return std::nullopt;
     };
+}
+
+inline KernelActivation get_activation_type(ttnn::operations::unary::UnaryOpType opType) {
+    const auto type = find_activation_type(opType);
+    TT_FATAL(type.has_value(), "Unsupported UnaryOpType for fused activation: {}", opType);
+    return type.value();
+}
+
+// Whether the 1D/2D matmul kernels can apply `opType` as a fused activation (RELU is done by the packer).
+inline bool is_fusable_activation(ttnn::operations::unary::UnaryOpType opType) {
+    return opType == ttnn::operations::unary::UnaryOpType::RELU || find_activation_type(opType).has_value();
 }
 
 /**

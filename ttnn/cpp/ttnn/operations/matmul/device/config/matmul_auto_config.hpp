@@ -27,7 +27,8 @@
 //    ONE_D_CORE_ADVANTAGE times as many cores busy (small M or small N), in which case that 1D layout is used,
 //    or 1D in0-mcast keeps as many cores busy with less input per core (per_core_M + per_core_N);
 //  - batched B: Reuse, unless the multicast layout looping over the batch (chosen as above) keeps
-//    ONE_D_CORE_ADVANTAGE times as many cores busy (e.g. large N, where Reuse's per_core_N = N leaves few cores);
+//    ONE_D_CORE_ADVANTAGE times as many cores busy (e.g. large N, where Reuse's per_core_N = N leaves few cores)
+//    or Reuse would read ONE_D_CORE_ADVANTAGE times as much input (splitting batch matrices re-reads B);
 //  - block sizes follow the #57884 heuristics within the L1 budget, with one K block depth rule
 //    (MAX_IN0_BLOCK_W, MAX_SELF_READ_TILES_PER_K_STEP).
 // Problems it does not handle yet return nullopt, and the caller falls back to the legacy selection.
