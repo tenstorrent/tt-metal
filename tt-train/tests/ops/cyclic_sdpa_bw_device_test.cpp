@@ -37,6 +37,7 @@
 #include <cstring>
 #include <limits>
 #include <map>
+#include <sstream>
 #include <string>
 #include <vector>
 #include <xtensor-blas/xlinalg.hpp>
@@ -47,6 +48,8 @@
 #include "core/tt_tensor_utils.hpp"
 #include "core/xtensor_utils.hpp"
 #include "metal/ops/cyclic_sdpa_bw/device/parity_snake.hpp"
+#include "ops/distributed/ring_attention_sdpa.hpp"
+#include "ttnn_fixed/trivial_ttnn_ops.hpp"
 #include "ttnn/operations/transformer/sdpa/sdpa.hpp"
 
 namespace {
@@ -3500,6 +3503,178 @@ TEST(CyclicSdpaFwTimingTest, DISABLED_TimeTheForward) {
         "  cyclic_sdpa_fw heads %u/%u N %u d %u %s Bt %u%s%s: %.2f ms, %.1f TFLOP/s\n", heads, kv_heads, N, d,
         causal ? "causal" : "dense", Bt, experiment ? " experiment " : "", experiment ? experiment : "", cyc_s * 1e3,
         flop / cyc_s / 1e12);
+}
+
+// The one-chip backward against tt-train's own, both through their op entry
+// points with the same tensors: sdpa_bw given sdpa_fw's output and
+// intermediates, cyclic_sdpa_bw_from_forward given the cyclic forward's (so
+// the cyclic side pays for forming D = rowsum(dO . O), as it does in
+// training). Warm, median of seven, blocking on the queue after each call.
+// The block height is the ring planner's for the whole sequence. Before
+// timing, the two sides' gradients are compared, so the numbers are of the
+// same computation. TTML_BW_COMPARE_SHAPES="heads:kv:N:d:Bt,..." replaces
+// the table.
+TEST(CyclicSdpaBwTimingTest, DISABLED_CompareBackwardWithTtTrain) {
+    using namespace tt::tt_metal;
+    auto* device = &ttml::autograd::ctx().get_device();
+    // heads, key heads, rows, d, block height (0: the planner's). One head
+    // fills the grid only at the block height whose schedule has 110 cores;
+    // the planner prefers the tallest block, which is right when many heads
+    // share the grid (the model shapes) and not for a single head.
+    std::vector<std::array<uint32_t, 5>> shapes = {
+        {1, 1, 7040, 64, 1},
+        {1, 1, 14080, 64, 2},
+        {1, 1, 28160, 64, 4},
+        {20, 10, 5632, 64, 0},
+        {32, 8, 5632, 128, 0},
+    };
+    if (const char* spec = std::getenv("TTML_BW_COMPARE_SHAPES"); spec != nullptr && *spec != '\0') {
+        shapes.clear();
+        std::stringstream ss(spec);
+        std::string item;
+        while (std::getline(ss, item, ',')) {
+            std::array<uint32_t, 5> sh{};
+            std::sscanf(item.c_str(), "%u:%u:%u:%u:%u", &sh[0], &sh[1], &sh[2], &sh[3], &sh[4]);
+            shapes.push_back(sh);
+        }
+    }
+    const auto time_it = [&](const auto& call) {
+        call();  // warm: kernel build and program cache
+        std::vector<double> samples;
+        for (uint32_t r = 0; r < 7; ++r) {
+            const auto start = std::chrono::steady_clock::now();
+            call();
+            samples.push_back(std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+        }
+        std::sort(samples.begin(), samples.end());
+        return std::array<double, 3>{samples.front(), samples[samples.size() / 2], samples.back()};
+    };
+    for (const auto& [heads, kv_heads, N, d, Bt_in] : shapes) {
+        xt::xarray<float> Q = xt::zeros<float>({1u, heads, N, d});
+        xt::xarray<float> dO = xt::zeros<float>({1u, heads, N, d});
+        xt::xarray<float> K = xt::zeros<float>({1u, kv_heads, N, d});
+        xt::xarray<float> V = xt::zeros<float>({1u, kv_heads, N, d});
+        for (uint32_t h = 0; h < heads; ++h) {
+            xt::view(Q, 0, h, xt::all(), xt::all()) = random_bf16_matrix(N, d, 3000u + h);
+            xt::view(dO, 0, h, xt::all(), xt::all()) = random_bf16_matrix(N, d, 6000u + h);
+        }
+        for (uint32_t g = 0; g < kv_heads; ++g) {
+            xt::view(K, 0, g, xt::all(), xt::all()) = random_bf16_matrix(N, d, 4000u + g);
+            xt::view(V, 0, g, xt::all(), xt::all()) = random_bf16_matrix(N, d, 5000u + g);
+        }
+        const auto q = ttml::core::from_xtensor(Q, device);
+        const auto k = ttml::core::from_xtensor(K, device);
+        const auto v = ttml::core::from_xtensor(V, device);
+        const auto grad_output = ttml::core::from_xtensor(dO, device);
+        const uint32_t Bt = Bt_in != 0U ? Bt_in
+                                        : ttml::ops::distributed::plan_rows_per_block_tiles(
+                                              q, ttml::metal::ops::RingLayout::Contiguous);
+
+        const auto theirs_fw = ttml::metal::sdpa_fw(
+            q, k, v, ttml::metal::AttentionMaskType::Causal, std::nullopt, 0.0F, /*return_intermediates=*/true);
+        const auto theirs_o = theirs_fw[0].value();
+        const auto theirs_stats = theirs_fw[1].value();
+        const auto [ours_o, ours_lse] = ttml::metal::cyclic_sdpa_fw(q, k, v, Bt);
+
+        const auto theirs = [&]() {
+            return ttml::metal::sdpa_bw(
+                grad_output, theirs_o, q, k, v, theirs_stats, ttml::metal::AttentionMaskType::Causal, std::nullopt,
+                0.0F);
+        };
+        const auto ours = [&]() { return ttml::metal::cyclic_sdpa_bw_from_forward(q, k, v, grad_output, ours_o, ours_lse, Bt); };
+
+        // Same computation: each gradient of the cyclic side against tt-train's
+        // and, for one head with TTML_BW_COMPARE_REFERENCE set, both against a
+        // host Float32 backward on the same inputs.
+        {
+            const auto [tq, tk, tv] = theirs();
+            const auto [oq, ok, ov] = ours();
+            if (heads == 1U && std::getenv("TTML_BW_COMPARE_REFERENCE") != nullptr) {
+                const xt::xarray<float> q2 = xt::view(Q, 0, 0, xt::all(), xt::all());
+                const xt::xarray<float> k2 = xt::view(K, 0, 0, xt::all(), xt::all());
+                const xt::xarray<float> v2 = xt::view(V, 0, 0, xt::all(), xt::all());
+                const xt::xarray<float> do2 = xt::view(dO, 0, 0, xt::all(), xt::all());
+                const float scale = 1.0F / std::sqrt(static_cast<float>(d));
+                xt::xarray<float> P = xt::linalg::dot(q2, xt::transpose(k2)) * scale;
+                for (uint32_t i = 0; i < N; ++i) {
+                    float m = -std::numeric_limits<float>::infinity();
+                    for (uint32_t j = 0; j <= i; ++j) m = std::max(m, P(i, j));
+                    double sum = 0.0;
+                    for (uint32_t j = 0; j <= i; ++j) sum += std::exp(static_cast<double>(P(i, j) - m));
+                    const float lse = m + static_cast<float>(std::log(sum));
+                    for (uint32_t j = 0; j < N; ++j) P(i, j) = j <= i ? std::exp(P(i, j) - lse) : 0.0F;
+                }
+                const xt::xarray<float> O = xt::linalg::dot(P, v2);
+                xt::xarray<float> dS = xt::linalg::dot(do2, xt::transpose(v2));
+                for (uint32_t i = 0; i < N; ++i) {
+                    double u = 0.0;
+                    for (uint32_t c = 0; c < d; ++c) u += static_cast<double>(do2(i, c)) * O(i, c);
+                    for (uint32_t j = 0; j < N; ++j) dS(i, j) = P(i, j) * (dS(i, j) - static_cast<float>(u)) * scale;
+                }
+                const std::array<std::pair<const char*, xt::xarray<float>>, 3> ref = {{
+                    {"dQ", xt::linalg::dot(dS, k2)},
+                    {"dK", xt::linalg::dot(xt::transpose(dS), q2)},
+                    {"dV", xt::linalg::dot(xt::transpose(P), do2)}}};
+                const std::array<std::pair<ttnn::Tensor, ttnn::Tensor>, 3> dev = {{{tq, oq}, {tk, ok}, {tv, ov}}};
+                for (size_t g = 0; g < 3; ++g) {
+                    const auto& r = ref[g].second;
+                    const auto rel = [&](const ttnn::Tensor& t) {
+                        const xt::xarray<float> a = xt::view(ttml::core::to_xtensor(t), 0, 0, xt::all(), xt::all());
+                        return std::sqrt(xt::mean(xt::square(a - r))()) / std::sqrt(xt::mean(xt::square(r))());
+                    };
+                    std::printf(
+                        "    %s against the host Float32 reference: sdpa_bw %.2e, cyclic %.2e\n", ref[g].first,
+                        rel(dev[g].first), rel(dev[g].second));
+                }
+            }
+            const std::array<std::pair<const char*, std::pair<ttnn::Tensor, ttnn::Tensor>>, 3> grads = {{
+                {"dQ", {tq, oq}}, {"dK", {tk, ok}}, {"dV", {tv, ov}}}};
+            for (const auto& [name, pair] : grads) {
+                const xt::xarray<float> a = ttml::core::to_xtensor(pair.first);
+                const xt::xarray<float> b = ttml::core::to_xtensor(pair.second);
+                const double rel = std::sqrt(xt::mean(xt::square(a - b))()) / std::sqrt(xt::mean(xt::square(a))());
+                // Not a pass criterion: sdpa_bw's own error grows with N on
+                // these inputs (1.7e-2 at 7040 rows, 3.6e-2 at 14080 against
+                // the host reference, where the cyclic side stays at 2-4e-4),
+                // so the two sides drift apart by tt-train's error.
+                std::printf("    %s: relative RMS difference between the two %.2e\n", name, rel);
+            }
+        }
+        const auto t_theirs = time_it([&]() {
+            auto out = theirs();
+            distributed::Finish(device->mesh_command_queue());
+        });
+        const auto t_ours = time_it([&]() {
+            auto out = ours();
+            distributed::Finish(device->mesh_command_queue());
+        });
+        if (std::getenv("TTML_BW_COMPARE_SPLIT") != nullptr) {
+            // Where the cyclic side's time goes: forming D alone, and the op
+            // with D given.
+            const auto form_d = [&]() {
+                const auto dO32 = ttnn::typecast(grad_output, ttnn::DataType::FLOAT32);
+                const auto O32 = ttnn::typecast(ours_o, ttnn::DataType::FLOAT32);
+                return ttml::ttnn_fixed::sum_ttnn(ttnn::multiply(dO32, O32), 3, true);
+            };
+            const auto D = form_d();
+            const auto t_d = time_it([&]() {
+                auto out = form_d();
+                distributed::Finish(device->mesh_command_queue());
+            });
+            const auto t_k = time_it([&]() {
+                auto out = ttml::metal::cyclic_sdpa_bw(q, k, v, grad_output, ours_lse, D, Bt);
+                distributed::Finish(device->mesh_command_queue());
+            });
+            std::printf("    cyclic split: forming D %.3f ms, cyclic_sdpa_bw given D %.3f ms\n", t_d[1] * 1e3, t_k[1] * 1e3);
+        }
+        const double flop = 5.0 * static_cast<double>(N) * N * d * heads;  // five matmuls, causal half
+        std::printf(
+            "  heads %u/%u N %u d %u, Bt %u: sdpa_bw %.2f ms (%.1f TFLOP/s; min %.2f max %.2f), cyclic %.2f ms "
+            "(%.1f TFLOP/s; min %.2f max %.2f), %.2fx\n",
+            heads, kv_heads, N, d, Bt, t_theirs[1] * 1e3, flop / t_theirs[1] / 1e12, t_theirs[0] * 1e3,
+            t_theirs[2] * 1e3, t_ours[1] * 1e3, flop / t_ours[1] / 1e12, t_ours[0] * 1e3, t_ours[2] * 1e3,
+            t_theirs[1] / t_ours[1]);
+    }
 }
 
 // One profiled launch of the cyclic forward, then an explicit device close

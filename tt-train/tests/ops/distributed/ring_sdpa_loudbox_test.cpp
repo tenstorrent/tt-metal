@@ -1688,7 +1688,8 @@ struct StepTimes {
 StepTimes time_ring_step(
     size_t batch, size_t num_heads, size_t num_kv_heads, size_t seq_len, size_t head_dim,
     ttml::ops::distributed::RingBackwardKind kind, uint32_t Bt, RingLayout layout, uint32_t samples_to_take,
-    ttml::ops::distributed::RingForwardKind forward = ttml::ops::distributed::RingForwardKind::TwoPass) {
+    ttml::ops::distributed::RingForwardKind forward = ttml::ops::distributed::RingForwardKind::TwoPass,
+    RingShiftTransport transport = RingShiftTransport::Direct) {
     using namespace ttml;
     auto* device = &autograd::ctx().get_device();
     const uint32_t cp_axis = autograd::ctx().get_parallelism_context().get_cp_axis().value();
@@ -1711,7 +1712,7 @@ StepTimes time_ring_step(
         const auto t0 = std::chrono::steady_clock::now();
         auto out = ops::distributed::ring_attention_sdpa(
             query, key, value, std::nullopt, ttml::metal::AttentionMaskType::Causal, kind, Bt,
-            RingShiftTransport::Direct, layout, forward);
+            transport, layout, forward);
         tt::tt_metal::distributed::Synchronize(device, std::nullopt, {});
         const auto t1 = std::chrono::steady_clock::now();
         out->set_grad(grad);
@@ -1736,6 +1737,56 @@ StepTimes time_ring_step(
     return {fwd[fwd.size() / 2], bwd[bwd.size() / 2]};
 }
 }  // namespace
+
+// The ring step against what tt-train has: its two-pass forward and backward
+// on the contiguous layout with FIFO shifts, against the cyclic forward and
+// in-place backward on the zigzag layout with the direct (fused) shifts, at
+// block height 4 (the planner's choice for these shapes). Median of seven
+// after a warm-up. TTML_LOUDBOX_STEP_SHAPES="heads:kv:rows:d,..." replaces the
+// table.
+TEST_F(LoudboxRingSDPATest, DISABLED_CompareWithTtTrain) {
+    const uint32_t cp_size = ttml::autograd::ctx().get_parallelism_context().get_cp_size();
+    std::cout << "ring step on " << cp_size << " chips, tt-train's path against the cyclic one, median of seven (ms)\n";
+    using Kind = ttml::ops::distributed::RingBackwardKind;
+    using Fwd = ttml::ops::distributed::RingForwardKind;
+    std::vector<std::array<size_t, 4>> table = {
+        {4, 4, 4096, 64},
+        {20, 10, 5632, 64},
+        {32, 8, 5632, 128},
+    };
+    if (const char* spec = std::getenv("TTML_LOUDBOX_STEP_SHAPES")) {
+        table.clear();
+        std::stringstream ss(spec);
+        std::string item;
+        while (std::getline(ss, item, ',')) {
+            std::array<size_t, 4> cfg{};
+            std::stringstream is(item);
+            std::string field;
+            for (size_t k = 0; k < 4 && std::getline(is, field, ':'); ++k) {
+                cfg[k] = std::stoul(field);
+            }
+            table.push_back(cfg);
+        }
+    }
+    for (const auto& cfg : table) {
+        const size_t heads = cfg[0], kv_heads = cfg[1], rows = cfg[2], d = cfg[3];
+        const size_t seq_len = rows * cp_size;
+        const auto base = time_ring_step(
+            1, heads, kv_heads, seq_len, d, Kind::TwoPass, 1U, RingLayout::Contiguous, 7U, Fwd::TwoPass,
+            RingShiftTransport::Fifo);
+        const auto cyc = time_ring_step(
+            1, heads, kv_heads, seq_len, d, Kind::CyclicInPlace, 4U, RingLayout::Zigzag, 7U, Fwd::Cyclic,
+            RingShiftTransport::Direct);
+        std::cout << "  heads=" << heads << " kv_heads=" << kv_heads << " rows/chip=" << rows << " d=" << d << ":\n"
+                  << "    tt-train  forward " << base.forward_ms << " backward " << base.backward_ms << " step "
+                  << base.forward_ms + base.backward_ms << "\n"
+                  << "    cyclic    forward " << cyc.forward_ms << " backward " << cyc.backward_ms << " step "
+                  << cyc.forward_ms + cyc.backward_ms << "\n"
+                  << "    speed-up  forward " << base.forward_ms / cyc.forward_ms << "x backward "
+                  << base.backward_ms / cyc.backward_ms << "x step "
+                  << (base.forward_ms + base.backward_ms) / (cyc.forward_ms + cyc.backward_ms) << "x\n";
+    }
+}
 
 // Forward and backward of a ring step for both backward kinds, zigzag,
 // direct shifts, median of five. TTML_LOUDBOX_STEP_SHAPES="heads:kv:rows:d:Bt,..."
