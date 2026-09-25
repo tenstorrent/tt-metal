@@ -61,7 +61,15 @@ AGENT_DEF = HERE / "agents" / "bringup-engineer.md"
 DEBUGGER = "ttnn-expert-debugger"
 DEBUGGER_DEF = CODE_ROOT / ".claude" / "agents" / f"{DEBUGGER}.md"
 ROLE_OF_STEP = {"reference": "reference", "plan": "plan", "implement": "implement", "contract": "contract"}
-IGNORED = (r"(^|/)__pycache__/", r"\.pyc$", r"^generated/", r"/probes/probe_\d+\.py$", r"(^|/)\.lock$", r"\.tmp$")
+IGNORED = (
+    r"/dashboard/index\.html$",
+    r"(^|/)__pycache__/",
+    r"\.pyc$",
+    r"^generated/",
+    r"/probes/probe_\d+\.py$",
+    r"(^|/)\.lock$",
+    r"\.tmp$",
+)
 DONE, STOPPED, HUMAN = 0, 1, 3
 
 
@@ -174,7 +182,9 @@ def dirty(repo: Path) -> dict[str, str]:
 
 
 def changed_since(before: dict, after: dict) -> list[str]:
-    return sorted(p for p, h in after.items() if before.get(p) != h) + sorted(p for p in before if p not in after)
+    """Files that are modified after the step and were not modified the same way before it. A file that was dirty
+    before and is clean after was committed or reverted meanwhile (agents never commit), so it is not the agent's."""
+    return sorted(p for p, h in after.items() if before.get(p) != h)
 
 
 def allowed(path: str, patterns: list[str]) -> bool:
@@ -515,7 +525,7 @@ def main(argv=None) -> int:
     if a.command == "resume":
         led = orch.led
         for tid, e in led.state().items():
-            if isinstance(e, dict) and e.get("status") == "STOPPED":
+            if isinstance(e, dict) and e.get("status") in ("STOPPED", "RUNNING"):  # RUNNING = an interrupted run
                 led.update(tid, status="TODO", history_add={"t": now(), "status": "RESUMED"})
     return orch.run(until=a.until, only=a.only)
 

@@ -164,3 +164,9 @@ Drive this ledger with
   chunked == one-shot, a CPU run over the longest rung) and where to split the block into steps.
 - Gate commits also stage the model's `approvals.yaml` and `findings.yaml` when present.
 - Gemma-4 26B-A4B: R.1 passed (63d8dc763b8); the orchestrator runs from R.2 as run `run1`.
+
+## F11 (2026-09-25): first false violation in a real run
+- Gemma R.2 attempt 1 was flagged for "changed files outside the allowed paths": my own F10 commit and the dashboard
+  re-export loop ran during the agent step. The orchestrator was stopped before attempt 2 (whose brief would have told
+  an agent to revert framework files). Now a file that is clean after the step is not attributed to the agent (agents
+  never commit), `*/dashboard/index.html` is ignored, and `resume` also resets tasks an interrupted run left RUNNING.
