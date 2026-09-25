@@ -30,7 +30,7 @@ Template axes, all reachable from the compute API (add_rsqrt_tile):
                 reduce. 1.0 (the default) skips the multiply; the other values are
                 test_sfpu_add_rsqrt_input_scale.
 
-Domain. rsqrt is only defined for x + addend > 0, so the main sweep stays strictly
+Domain. rsqrt is only defined for x * INPUT_SCALE + addend > 0, so every sweep stays strictly
 positive; the negative and zero arguments are their own tests with their own exact
 expectations (NaN and +inf respectively) rather than tolerance comparisons, since
 neither is a value passed_test can meaningfully bound.

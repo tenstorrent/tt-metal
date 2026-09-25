@@ -155,7 +155,7 @@ ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb
  * | Function   | icb0                   | Input circular buffer 0 (tensor A)                         | uint32_t | 0 to 31     | True     |
  * | Function   | icb1                   | Input circular buffer 1 (tensor B)                         | uint32_t | 0 to 31     | True     |
  * | Function   | ocb                    | Output circular buffer (used to program packer face_r_dim) | uint32_t | 0 to 31     | True     |
- * | Function   | num_tiles              | Number of tiles to process                                 | uint32_t | 1 to 8, or any with accumulate_in_one_tile | True |
+ * | Function   | num_tiles              | Number of tiles to process                                 | uint32_t | 1 to the DEST tile capacity (4 in fp32 half-sync), or any with accumulate_in_one_tile | True |
  * | Function   | scalar                 | Scalar multiplier for reduction (default: 1.0)             | float    | Any float   | False    |
  *
  * Return value: None
