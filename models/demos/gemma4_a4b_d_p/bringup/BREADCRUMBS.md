@@ -34,3 +34,10 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Gate: hidden pcc=1.000000000, state min pcc=1.000000000, sliding/global graph replay max abs 0.0, 0 missing.
 - check_hf was not re-run (padding rows are discarded, so the math is the same as R.2).
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup.reference.check_reference --seq 4096 --chunk 2048`
+
+## R.2 coverage check past the sliding window (2026-09-25, by hand)
+- R.2 ran HF parity at 512 tokens, below the 1024-token sliding window. Checked by hand on the canonical prompt:
+  HF fp32 vs the s4096 golden, top-1 agreement 100% at positions 0-1024, 1024-2048 and 2048-4096; next-token
+  accuracy on the text 78.3% / 55.8% / 45.8% for both. The fall with position is the model's own (header, then the
+  novel recited from memory). The framework now requires hf.parity_seq > sliding window at spec validation; this
+  spec keeps 512 for run1 (changing R.2 would reset the goldens), with this check as the evidence.
