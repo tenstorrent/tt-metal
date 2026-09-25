@@ -97,7 +97,6 @@ from .packing import (
     MINIMAX_H3_VIDEO_TAG,
     MiniMaxH3PackedSequence,
     adaln_indices,
-    align_num_frames,
     audio_latent_num_frames,
     build_packed_sequence,
     build_rope_tables,
@@ -125,12 +124,13 @@ from .policy import (
     MINIMAX_H3_MAX_KEYFRAME_TOKENS,
     MINIMAX_H3_MAX_TEXT_TOKENS,
     MINIMAX_H3_SERVED_REFERENCE_RESIZE_MODE,
+    align_num_frames,
+    get_num_frames,
     served_canvases,
     served_envelope,
     served_reference_image_sizes,
     served_reference_video_canvases,
-    validate_input,
-    validate_ref2va,
+    validate_request,
 )
 from .references import encode_references, prepare_references, reference_condition_shapes, split_condition_blocks
 from .scheduler import MiniMaxH3Scheduler
@@ -1634,10 +1634,18 @@ class MiniMaxH3Pipeline:
         order.
         """
         on_event = on_event if on_event is not None else null_callback
+        validate_request(
+            image=image,
+            last_image=last_image,
+            references=references,
+            aspect_ratio=aspect_ratio,
+            height=height,
+            width=width,
+            # Warmup's forced runs shrink num_frames below the served range to fit the smaller rungs.
+            num_frames=num_frames if self._force_bucket is None else None,
+        )
 
         if references is not None:
-            if image is not None or last_image is not None:
-                raise ValueError("references (ref2va) and image/last_image (fl2va) are different tasks")
             return self._call_ref2va(
                 prompt,
                 references=references,
@@ -1654,8 +1662,6 @@ class MiniMaxH3Pipeline:
             raise ValueError("num_frames may only be left to the references, and only for ref2va")
 
         # 1. Setup: keyframes, canvas, frame alignment and the derived latent geometry.
-        validate_input(image=image, last_image=last_image, aspect_ratio=aspect_ratio, height=height, width=width)
-
         # EXIF-transpose and RGB before anything else. `prepare_keyframe_image` does neither, and both
         # matter: a phone photo carries its rotation in EXIF and would encode sideways, and a palette or
         # RGBA PNG would reach `normalize_keyframe_pixels`'s channel permute with the wrong channel
@@ -1793,9 +1799,6 @@ class MiniMaxH3Pipeline:
         # 1. Setup. The canvas comes from the request, never from a reference: references do not bind
         # the generated geometry, which is the property that makes them cost extra rows rather than
         # change the output shape.
-        if (height is None) != (width is None):
-            raise ValueError("pass both height and width, or neither")
-        validate_ref2va(aspect_ratio=aspect_ratio, height=height, width=width)
         if height is None:
             height, width = resolve_canvas_size(*aspect_ratio)
         ratio = self.vae_config.spatial_compression_ratio
@@ -1987,7 +1990,7 @@ class MiniMaxH3Pipeline:
         """Compile and (when tracing) capture every module a served request touches, per task: the
         keyframe encoder for t2va/fl2va, and the image, video and audio encoders for ref2va."""
         height, width = resolve_canvas_size(16, 9)
-        num_frames = align_num_frames(round(5 * MINIMAX_H3_FPS))
+        num_frames = get_num_frames(5)
         if self.task != "ref2va":
             rung_requests = {
                 max(self.bucket_ladder): dict(
@@ -2008,8 +2011,8 @@ class MiniMaxH3Pipeline:
             )
             return
 
-        full_frames = align_num_frames(round(MINIMAX_H3_MAX_DURATION * MINIMAX_H3_FPS))
-        mid_frames = align_num_frames(round(10 * MINIMAX_H3_FPS))
+        full_frames = get_num_frames(MINIMAX_H3_MAX_DURATION)
+        mid_frames = get_num_frames(10)
         waveform, sample_rate = self._warmup_audio(MINIMAX_H3_MAX_DURATION)
         ladder = sorted(self.bucket_ladder, reverse=True)
         video_audio = MiniMaxH3Reference(
@@ -2254,9 +2257,9 @@ class MiniMaxH3Pipeline:
 
         video_canvas = resolve_canvas_size(*MINIMAX_H3_DEFAULT_ASPECT_RATIO)
         for duration_s in (MINIMAX_H3_DURATIONS_S[0], MINIMAX_H3_DURATIONS_S[-1]):
-            frames = align_num_frames(round(duration_s * MINIMAX_H3_FPS))
+            frames = get_num_frames(duration_s)
             add(f"1 video {duration_s}s at {video_canvas[1]}x{video_canvas[0]}", [video_ref(frames, video_canvas)])
-        clip = align_num_frames(round(5 * MINIMAX_H3_FPS))
+        clip = get_num_frames(5)
         add("3 videos totaling 15s", [video_ref(clip, video_canvas) for _ in range(3)])
 
         host = _is_host_rank()

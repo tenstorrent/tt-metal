@@ -19,6 +19,7 @@ from loguru import logger
 
 from ....pipelines.minimax_h3 import packing as p
 from ....pipelines.minimax_h3 import packing_ref2va as rp
+from ....pipelines.minimax_h3 import policy
 from ....pipelines.minimax_h3 import references as R
 from ....utils.check import assert_quality
 from ....utils.test import ring_params_req_exact_devices
@@ -168,7 +169,7 @@ def test_num_frames_may_be_derived_from_a_single_audio_bearing_reference():
     _, num_frames = R.prepare_references(
         references, None, AUDIO_RATE, target_height=TARGET_HEIGHT, target_width=TARGET_WIDTH
     )
-    assert num_frames == p.align_num_frames(round(6.0 * p.MINIMAX_H3_FPS))
+    assert num_frames == policy.get_num_frames(6.0)
     assert num_frames % p.MINIMAX_H3_FRAMES_PER_CHUNK == p.MINIMAX_H3_LATENTS_PER_CHUNK
     theirs = [
         reference_packing.MiniMaxH3Reference(image=_image(512, 512)),
@@ -187,7 +188,7 @@ def test_num_frames_is_ambiguous_with_two_soundtracks(expect_error):
         R.prepare_references(references, None, AUDIO_RATE)
 
 
-@pytest.mark.parametrize("seconds", [4.0, 16.0])
+@pytest.mark.parametrize("seconds", [3.0, 16.0])
 def test_a_derived_duration_outside_the_models_range_is_rejected(seconds, expect_error):
     references = [rp.MiniMaxH3Reference(image=_image(512, 512)), rp.MiniMaxH3Reference(audio=_waveform(seconds))]
     with expect_error(ValueError, "seconds"):
@@ -207,7 +208,7 @@ def test_pad_waveform_to_max_duration_is_one_fixed_shape(seconds):
 def test_max_reference_audio_latents_covers_the_longest_soundtrack():
     """604 hops: 15 s of frames aligns up to 362 (15.083 s), and the encoder count is a ceil."""
     assert R.MINIMAX_H3_MAX_REFERENCE_AUDIO_LATENTS == 604
-    longest = R.align_num_frames(round(R.MINIMAX_H3_MAX_DURATION * R.MINIMAX_H3_FPS)) / R.MINIMAX_H3_FPS
+    longest = policy.get_num_frames(R.MINIMAX_H3_MAX_DURATION) / R.MINIMAX_H3_FPS
     assert int(np.ceil(longest * AUDIO_RATE / R.MINIMAX_H3_AUDIO_HOP)) == 604
 
 

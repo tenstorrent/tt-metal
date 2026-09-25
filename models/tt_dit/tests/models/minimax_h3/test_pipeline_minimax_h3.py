@@ -22,12 +22,13 @@ from loguru import logger
 
 import ttnn
 
-from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames, resolve_canvas_size
+from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, resolve_canvas_size
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import (
     MiniMaxH3Pipeline,
     _requested_audio_t_factor,
     _resolve_audio_t_shard,
 )
+from ....pipelines.minimax_h3.policy import align_num_frames, get_num_frames
 from ..wan2_2.common import check_output_sanity
 from .common import GALAXY_MESHES
 from .common_av import (
@@ -125,7 +126,7 @@ def test_t2va_end_to_end(mesh_device, reset_seeds, aspect_ratio, duration_s):
     prompt = PROMPT
 
     HEIGHT, WIDTH = resolve_canvas_size(*aspect_ratio)
-    NUM_FRAMES = align_num_frames(round(duration_s * MINIMAX_H3_FPS))
+    NUM_FRAMES = get_num_frames(duration_s)
     # One artifact per working point, so a sweep does not overwrite itself.
     stem = f"t2va_{aspect_ratio[0]}x{aspect_ratio[1]}_{WIDTH}x{HEIGHT}_{duration_s}s"
     if is_host():
