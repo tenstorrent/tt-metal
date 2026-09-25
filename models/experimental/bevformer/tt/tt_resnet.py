@@ -338,8 +338,7 @@ class TtBottleneck:
         if self.is_downsample:
             x_identity, _, _ = self.downsample(x_identity)
         x_identity = ttnn.to_memory_config(x_identity, ttnn.DRAM_MEMORY_CONFIG)
-        x = ttnn.add(x, x_identity)
-        x = ttnn.relu(x)
+        x = ttnn.add(x, x_identity, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)])
 
         ttnn.deallocate(x_identity)
         return x
