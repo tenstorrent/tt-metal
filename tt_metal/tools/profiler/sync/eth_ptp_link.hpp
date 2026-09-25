@@ -427,21 +427,59 @@ constexpr uint32_t kRoleT0 = kernel_profiler::kSyncRoleT0;
 constexpr uint32_t kRoleT1 = kernel_profiler::kSyncRoleT1;
 constexpr uint32_t kRoleT1B = kernel_profiler::kSyncRoleT1B;
 constexpr uint32_t kRoleT2 = kernel_profiler::kSyncRoleT2;
-// `Bracket`: the record's (wall, refclk) pair is read at a refclk update (read_bracketed, ~5 us of spinning), so the
-// host's AICLK-to-AICLK check of the round reads the wall clock to a cycle; a router's end takes the plain pair.
+// A record's (wall, refclk) pair is read at a refclk update, so the host's AICLK-to-AICLK check of the round reads the
+// wall clock to a cycle. With `Bracket` record_hw spins for it at once (read_bracketed, up to ~5 us); a router's end,
+// whose steps must stay short, holds the round's records instead, and each step's poll() makes kPollTries attempts
+// until one lands.
 template <bool Bracket>
 struct Ring {
-    uint32_t base = 0, n = 0;
+    static constexpr uint32_t kPollTries = 8;
+    struct Held {
+        uint64_t value;
+        uint32_t round, role;
+    };
+    uint32_t base = 0, n = 0, held = 0;
+    Held hold[2] = {};
     volatile uint32_t* tail = nullptr;
     void open(uint32_t l1) {
         base = l1 + kernel_profiler::kLinkSyncRingOffset;
         n = 0;
+        held = 0;
         tail = reinterpret_cast<volatile uint32_t*>(GET_MAILBOX_ADDRESS_DEV(profiler.control_vector)) +
                kernel_profiler::SPSC_LINK_SYNC_TAIL;
         *tail = 0;
     }
     void record_hw(uint64_t value, uint32_t round, uint32_t role) {
-        const Instant t = Bracket ? read_bracketed() : read_instant();
+        if constexpr (Bracket) {
+            write(read_bracketed(), value, round, role);
+        } else if (held < 2) {
+            hold[held++] = Held{value, round, role};
+        }
+    }
+    __attribute__((always_inline)) void poll() {
+        if constexpr (!Bracket) {
+            if (held != 0) {
+                poll_held();
+            }
+        }
+    }
+
+private:
+    __attribute__((noinline)) void poll_held() {
+        Instant t = read_instant();
+        uint32_t x = t.wall_lo | 1u;
+        for (uint32_t i = 0; i < kPollTries; i++) {
+            if (try_bracket(t, x)) {
+                t.spins = i + 1;
+                for (uint32_t j = 0; j < held; j++) {
+                    write(t, hold[j].value, hold[j].round, hold[j].role);
+                }
+                held = 0;
+                return;
+            }
+        }
+    }
+    void write(const Instant& t, uint64_t value, uint32_t round, uint32_t role) {
         volatile uint32_t* r = reinterpret_cast<volatile uint32_t*>(
             base + (n % kernel_profiler::kLinkSyncRingRecords) * kernel_profiler::kSyncRecordWords * 4);
         r[kernel_profiler::SYNC_META] =
@@ -519,6 +557,7 @@ struct SenderLink {
         pre_wall = slot_wall - ((kRatioTicks * grid.c16) >> 4);
     }
     __attribute__((always_inline)) void step() {
+        ring.poll();
         if (out_sent != kBurstFrames) {
             send_next();
             return;
@@ -666,6 +705,7 @@ struct ReceiverLink {
     // before that frame's echo: the sender issues nothing more until every echo is in. An echo the queue did not take
     // goes at the next step.
     __attribute__((always_inline)) void step() {
+        ring.poll();
         if constexpr (DataCache) {
             invalidate_l1_cache();
         }

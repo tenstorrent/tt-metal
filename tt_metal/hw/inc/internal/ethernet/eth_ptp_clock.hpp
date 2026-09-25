@@ -102,19 +102,27 @@ inline __attribute__((always_inline)) void phase_walk(uint32_t& x) {
         asm volatile("nop");
     }
 }
+// One attempt at a bracketed pair: true when a refclk update fell between the refclk reads around the wall read, `t`
+// (a read_instant, for the high words) then holding that wall read and the new refclk.
+inline __attribute__((always_inline)) bool try_bracket(Instant& t, uint32_t& x) {
+    phase_walk(x);
+    const uint32_t ra = rd(kPtpCfrLo);
+    const uint32_t w = rd(kWallClockLo);
+    const uint32_t rb = rd(kPtpCfrLo);
+    if (ra == rb) {
+        return false;
+    }
+    t.wall_hi += w < t.wall_lo;
+    t.wall_lo = w;
+    const uint32_t r_hi = static_cast<uint32_t>(t.refclk >> 32) + (rb < static_cast<uint32_t>(t.refclk));
+    t.refclk = (static_cast<uint64_t>(r_hi) << 32) | rb;
+    return true;
+}
 inline __attribute__((always_inline)) Instant read_bracketed() {
     Instant t = read_instant();
     uint32_t x = t.wall_lo | 1u;
     for (uint32_t spin = 0; spin < 65536u; spin++) {
-        phase_walk(x);
-        const uint32_t ra = rd(kPtpCfrLo);
-        const uint32_t w = rd(kWallClockLo);
-        const uint32_t rb = rd(kPtpCfrLo);
-        if (ra != rb) {
-            t.wall_hi += w < t.wall_lo;
-            t.wall_lo = w;
-            const uint32_t r_hi = static_cast<uint32_t>(t.refclk >> 32) + (rb < static_cast<uint32_t>(t.refclk));
-            t.refclk = (static_cast<uint64_t>(r_hi) << 32) | rb;
+        if (try_bracket(t, x)) {
             t.spins = spin + 1;
             return t;
         }
