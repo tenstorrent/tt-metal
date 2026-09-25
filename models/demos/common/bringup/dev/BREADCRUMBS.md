@@ -199,3 +199,9 @@ Drive this ledger with
   request, then the text as the model's reply). Measured on Gemma-4 26B-A4B-it, top-1 next-token over 2048 tokens:
   raw 18%, user_turn 13%, model_turn 67%. Instruction-tuned models are trained on model turns only, so
   `model_turn` is the choice for `-it` checkpoints; F13's user-turn wrapping was the wrong one.
+
+## F15 (2026-09-25): parity length vs sliding window
+- Owner asked whether Gemma's 43% next-token accuracy at 8k-16k was a red flag. It was not (HF agrees with the golden
+  100% past the window; the model's own accuracy falls with position), but it showed R.2's 512-token parity never
+  reached the 1024-token sliding window, and R.3 (reference vs itself) cannot catch a window bug. `validate()` now
+  rejects `hf.parity_seq` <= `checkpoint.config.sliding_window`.
