@@ -436,53 +436,6 @@ def _safe_half_out_block_w(per_core_N, out_subblock_w):
     return best
 
 
-def prefill_kpass_width(n, grid_size=None, max_waste=0.20):
-    """Smallest width >= n whose TILE count minimises the prefill matmul's K-pass count.
-
-    A 2D prefill matmul walks its per-core output in ceil(per_core_N / out_block_w) N-blocks and
-    re-traverses K once per block -- re-reading a DRAM-resident in0 each time. MEASURED on N300
-    (M=2048, K=4096, HiFi2 BF16 x BFP8, 8x8 grid) the cost tracks that pass count almost exactly and
-    is NOT explained by the output subblock:
-
-        N=6176 (193 tiles, prime) per_core_N=25 out_block_w=5   5 passes  2631us
-        N=6528 (204 tiles)        per_core_N=26 out_block_w=2  13 passes  4194us  +59%
-        N=6912 (216 tiles)        per_core_N=27 out_block_w=9   3 passes  1906us  -28%
-        N=7168 (224 tiles)        per_core_N=28 out_block_w=4   7 passes  2938us  +12%
-
-    The trap is that out_block_w must be a MULTIPLE of out_subblock_w, so _get_out_subblock_w's greedy
-    "widest subblock" can force a narrow block and MORE passes -- N=7168 gets the ideal 1x4 subblock
-    and is still slower than N=6912's 1x3. A prime tile count (193) is worst of all: its only divisors
-    are 1/5/25, and 25 (one pass) overflows L1.
-
-    So: pad the width until the tile count factors well. Candidates are multiples of grid_size[0] (so
-    per_core_N divides exactly and every column of the grid is used), within max_waste extra tiles.
-    Scored by (passes, waste) -- fewest K passes, then least padding. Returns n unchanged when nothing
-    beats it, so callers can use it unconditionally.
-
-    NOT CURRENTLY CALLED BY THE MODEL. Its one user was the GDN in-proj width, which now reaches ONE K
-    pass unpadded via create_prefill_kpass1_matmul_program_config -- padding to improve the tile count's
-    factorization only helps when out_block_w must divide per_core_N into several blocks. Kept because it
-    is the right tool for any shape stuck on the multi-pass path (and see the gdn_qkvzab_pad_tiles note
-    in model_config.py for how to restore the pad); tests/perf/test_gdn_inproj_sweep.py still sweeps it."""
-    if grid_size is None:
-        grid_size = prefill_grid_default()
-    cols = grid_size[0]
-    n_tiles = math.ceil(n / TILE_SIZE)
-
-    def passes_for(tiles):
-        per_core_N = math.ceil(tiles / cols)
-        sub_w = _get_out_subblock_w(per_core_N, 1)
-        blk_w = _safe_half_out_block_w(per_core_N, sub_w)
-        return math.ceil(per_core_N / blk_w)
-
-    best = (passes_for(n_tiles), 0, n_tiles)
-    for tiles in range(_roundup(n_tiles, cols), int(n_tiles * (1 + max_waste)) + 1, cols):
-        cand = (passes_for(tiles), tiles - n_tiles, tiles)
-        if cand < best:
-            best = cand
-    return best[2] * TILE_SIZE
-
-
 def _largest_divisor_le(n, cap):
     """Largest divisor of n that is <= cap (1 if none, since 1 always divides)."""
     for d in range(min(n, cap), 0, -1):
@@ -621,8 +574,8 @@ def create_prefill_kpass1_matmul_program_config(m, k, n, grid_size=None, fused_a
     """2D prefill progcfg that walks K exactly ONCE: out_block_w == per_core_N.
 
     A 2D prefill matmul re-traverses K once per N-block (ceil(per_core_N / out_block_w) blocks),
-    re-reading a DRAM-resident in0 every time, and prefill_kpass_width's measurements show that pass
-    count is the dominant cost term for the GDN in-proj shape. One pass is the floor.
+    re-reading a DRAM-resident in0 every time, and that pass count is the dominant cost term for the
+    GDN in-proj shape. One pass is the floor.
 
     REQUIRES a compute kernel config with fp32_dest_acc_en=False (COMPUTE_HIFI2_NO_FP32_ACC). Two
     reasons, both load-bearing:

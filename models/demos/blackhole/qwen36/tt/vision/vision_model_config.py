@@ -104,7 +104,6 @@ _FIDELITY_NAMES = ("lofi", "hifi2", "hifi2_na", "hifi2_fp16", "hifi2_nol1acc", "
 # SDPA tuning, from tests/perf/test_sweep_vision_sdpa.py. Wormhole-only, same gate as the matmuls.
 # The tower's SDPA is its largest single op. Two things were wrong:
 _VISION_SDPA_TUNING = dict(fidelity="hifi2", k_bf8b=True, q_chunk=128, k_chunk=512, exp_approx=False)
-_VISION_SDPA_TUNING_BY_DEVICE = {}
 
 _TILE_BYTES = {
     ttnn.bfloat16: 2048,
@@ -396,7 +395,7 @@ class VisionModelArgs(ModelArgs):
                 fidelity="untuned",
             )
         else:
-            tune = {**_VISION_SDPA_TUNING, **_VISION_SDPA_TUNING_BY_DEVICE.get(self.device_name, {})}
+            tune = dict(_VISION_SDPA_TUNING)
             grid = self.mesh_device.compute_with_storage_grid_size()
             plan = VisionSdpaPlan(
                 compute_kernel_config=getattr(self, f"compute_kernel_config_{tune['fidelity']}"),
@@ -413,7 +412,6 @@ class VisionModelArgs(ModelArgs):
                 f"vision sdpa: seq {seq_len}, grid {grid.x}x{grid.y}, "
                 f"q/k chunk {tune['q_chunk']}/{tune['k_chunk']}, {tune['fidelity']}, "
                 f"K {'bf8b' if tune['k_bf8b'] else str(kv_cache_dtype)}, exp_approx {tune['exp_approx']}"
-                f"{f' [{self.device_name} override]' if self.device_name in _VISION_SDPA_TUNING_BY_DEVICE else ''}"
             )
         self._vision_sdpa_plans[(seq_len, kv_cache_dtype)] = plan
         return plan
