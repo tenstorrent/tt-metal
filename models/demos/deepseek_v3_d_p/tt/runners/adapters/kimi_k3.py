@@ -164,7 +164,7 @@ class KimiK3Adapter(MLAPrefillAdapter):
         # KDA layers, allocated from the config alone (the model's own carries are built later and
         # bound to these at compile()). Allocated after the KV cache so both bases stay stable and low.
         kda_states = None
-        kda_layer_ids = schedule.kda_layer_ids_local()
+        kda_layer_ids = schedule.rank_kda_layer_ids()
         if kda_layer_ids:
             geometry = KdaContractGeometry.from_kda_config(
                 kimi_k3_kda_config(),

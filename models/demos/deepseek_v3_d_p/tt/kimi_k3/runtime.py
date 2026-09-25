@@ -102,7 +102,7 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         first_slot = sum(1 for layer in schedule.mla_layer_ids if layer < first_layer_idx)
         my_slots = [layer for layer in schedule.mla_layer_ids if first_layer_idx <= layer < last]
         first_kda = sum(1 for layer in KimiK3Config.kda_layer_ids() if layer < first_layer_idx)
-        my_kda = list(schedule.kda_layer_ids_local())
+        my_kda = list(schedule.rank_kda_layer_ids())
 
         if kv_caches.index is not None:
             raise RuntimeError("Kimi-K3 has no DSA index cache; a merged table here is unexpected")
@@ -172,10 +172,10 @@ class TtKimiK3Runtime(TtPrefillRuntime):
 
         `stage_layouts` is one gathered layout per stage of `kv_migration_stages`, in order; None
         (single-rank / tests) gathers them here. Only the kvpe layout goes to the shared builder as a
-        block-cyclic stage; the KDA layouts travel inside `KdaTableSpec`, since their configs are
-        segment-addressed rather than token-addressed. Under pipeline parallelism rank 0 builds the
-        table and may hold different KDA layers than a stage it describes, which is why the spec
-        carries the geometry and the gathered layouts rather than only this rank's tensors.
+        block-cyclic stage; the KDA layouts travel inside `KdaTableSpec`, since their configs sit on
+        the contract's synthetic position axis, not the token axis. Under pipeline parallelism rank 0
+        builds the table and may hold different KDA layers than a stage it describes, which is why the
+        spec carries the geometry and the gathered layouts rather than only this rank's tensors.
         """
         from models.demos.common.prefill.runners.migration import allgather_kv_stage_layout
         from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config

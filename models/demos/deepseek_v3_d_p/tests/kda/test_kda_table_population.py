@@ -78,11 +78,7 @@ def _fake_location(monkeypatch):
 
 
 def _config(geometry, kind, num_layers, num_users):
-    segments = (
-        geometry.recurrent_segments_per_layer if kind == "kda_recurrent" else geometry.convolution_segments_per_layer
-    )
     bytes_ = geometry.recurrent_segment_bytes if kind == "kda_recurrent" else geometry.convolution_segment_bytes
-    del segments
     return SimpleNamespace(
         num_layers=num_layers,
         max_sequence_length=kda_max_sequence_length(geometry),
