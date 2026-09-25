@@ -1333,9 +1333,11 @@ TopologyMappingEnumerationSession<TargetNode, GlobalNode>::TopologyMappingEnumer
     ConnectionValidationMode connection_validation_mode,
     bool quiet_mode,
     TopologyMappingSolverEngine solver_engine,
-    bool unique_shapes) :
+    bool unique_shapes,
+    int conflict_cap) :
     quiet_(quiet_mode),
     unique_shapes_(unique_shapes),
+    conflict_cap_(conflict_cap),
     snap_target_(target_graph),
     snap_global_(global_graph),
     snap_constraints_(constraints),
@@ -1349,6 +1351,9 @@ TopologyMappingEnumerationSession<TargetNode, GlobalNode>::TopologyMappingEnumer
         solver_engine, graph_data_->n_target, graph_data_->n_global, snap_constraints_.resource_count());
     // NOLINTNEXTLINE(cppcoreguidelines-prefer-member-initializer) depends on use_sat_ computed above
     search_engine_ = make_topology_search_engine<TargetNode, GlobalNode>(use_sat_);
+    if (conflict_cap_ > 0) {
+        search_engine_->set_conflict_cap(conflict_cap_);
+    }
     if (!search_engine_->start(*graph_data_, *constraint_data_, mode_, unique_shapes_, {}, quiet_)) {
         start_error_ = search_engine_->get_state().error_message.empty()
                            ? "TopologyMappingEnumerationSession: engine start failed"

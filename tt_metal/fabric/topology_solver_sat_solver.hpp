@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -38,6 +39,14 @@ struct TopologySatSolver {
     // The limit is cleared afterwards so subsequent solve() calls are unbounded.
     int solve_limited(int max_conflicts);
     int val(int lit) const;
+
+    // CNF size diagnostics (post-encode): active variables and clause counts from the underlying solver.
+    int active_vars() const;
+    int64_t irredundant_clauses() const;
+    int64_t redundant_clauses() const;
+    // Dump CaDiCaL's full statistics (incl. conflicts/decisions/propagations). Only prints when the solver
+    // was constructed un-quiet (TT_METAL_SAT_VERBOSE=1).
+    void print_statistics();
 
     /**
      * Must be called immediately after construction, before any add() / encoding.
