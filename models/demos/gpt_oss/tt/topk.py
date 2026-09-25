@@ -86,6 +86,7 @@ class TopKRouter:
         # The fused kernel uses 4 groups of 3 cores, one per N-tile (32 experts
         # each), so it requires exactly 128 experts and 12 DRAM-aligned cores.
         # Blackhole has only 8 DRAM banks; use the generic router on that architecture.
+        # Issue for native 8 bank BH support: https://github.com/tenstorrent/tt-metal/issues/57186
         self.use_fused_op = self.num_experts == 128 and not ttnn.device.is_blackhole(mesh_device)
         self._fused_bias = None
         # Keep the original unsharded bias for fused op initialization
