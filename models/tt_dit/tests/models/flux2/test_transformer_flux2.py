@@ -122,8 +122,14 @@ def test_transformer(
     assert isinstance(torch_model, diffusers.Flux2Transformer2DModel)
     torch_model.eval()
 
-    assert len(torch_model.transformer_blocks) == num_layers
-    assert len(torch_model.single_transformer_blocks) == num_single_layers
+    assert len(torch_model.transformer_blocks) == num_layers, (
+        f"from_pretrained built {len(torch_model.transformer_blocks)} double blocks, expected {num_layers}: "
+        "the num_layers config override was not applied"
+    )
+    assert len(torch_model.single_transformer_blocks) == num_single_layers, (
+        f"from_pretrained built {len(torch_model.single_transformer_blocks)} single blocks, expected "
+        f"{num_single_layers}: the num_single_layers config override was not applied"
+    )
 
     head_dim = torch_model.config.attention_head_dim
     num_heads = torch_model.config.num_attention_heads
