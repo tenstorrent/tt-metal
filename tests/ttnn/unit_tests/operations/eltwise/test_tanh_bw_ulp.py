@@ -27,30 +27,15 @@ import pytest
 import torch
 import ttnn
 from loguru import logger
-from mpmath import mp, cosh as mp_cosh
+
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
-    float_to_bf16_bits,
     bf16_bits_to_float,
     bf16_daz_normalize,
-    ulp_distance_bf16_daz,
     bf16_quantize_rne,
+    float_to_bf16_bits,
+    sech2_exact,
+    ulp_distance_bf16_daz,
 )
-
-
-def sech2_exact(x: float) -> float:
-    """
-    Exact tanh derivative using mpmath 256-bit precision.
-
-    tanh'(x) = sech²(x) = 1 / cosh²(x)
-
-    Uses 1/cosh²(x) form (not 1 - tanh²(x)) to avoid the catastrophic cancellation
-    that motivated this PR's existence (the original buggy composite kernel).
-    """
-    mp.prec = 256
-    x_mp = mp.mpf(x)
-    cosh_x = mp_cosh(x_mp)
-    result = 1 / (cosh_x * cosh_x)
-    return float(result)
 
 
 def tanh_derivative_expected_bf16_daz(x: float) -> float:

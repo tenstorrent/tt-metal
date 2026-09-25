@@ -24,10 +24,14 @@ import pytest
 import torch
 import ttnn
 from loguru import logger
-from mpmath import cosh as mp_cosh
-from mpmath import mp
+
+from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import sech2_exact
 
 FP32_MIN_NORMAL = float(np.finfo(np.float32).tiny)  # 1.1754944e-38
+
+# The exact identity sech²(x) = 4e/(1+e)², e = exp(-2|x|), costs one rounding for the
+# exp, one for (1+e)², one for the reciprocal and one for the final multiply.
+FP32_MAX_ULP = 4
 
 # The fp32 path is Blackhole-only for now: the Wormhole copy of
 # ckernel_sfpu_tanh_derivative.h still carries the bfloat16-grade approximation on
@@ -48,10 +52,7 @@ def sech2_exact_fp32_input(x: float) -> float:
     half-ulp perturbation of a large x is worth tens of ulp in the result, and
     would otherwise be charged to the kernel.
     """
-    mp.prec = 256
-    x32 = float(np.float32(x))
-    c = mp_cosh(mp.mpf(x32))
-    result = float(1 / (c * c))
+    result = sech2_exact(float(np.float32(x)))
     return 0.0 if result < FP32_MIN_NORMAL else float(np.float32(result))
 
 
@@ -60,7 +61,7 @@ def _fp32_bits(x: float) -> int:
 
 
 def ulp_distance_fp32(actual: float, expected: float) -> int:
-    """Distance in fp32 ULP. Both arguments here are non-negative and finite."""
+    """Distance in fp32 ULP. The bit difference assumes both arguments share a sign."""
     a, e = np.float32(actual), np.float32(expected)
     if np.isnan(a) or np.isnan(e):
         return 0 if (np.isnan(a) and np.isnan(e)) else 2**31
@@ -110,13 +111,14 @@ class TestTanhBwFp32Peak:
         actual = _run_tanh_bw_fp32(device, [0.0])[0]
         ulp = ulp_distance_fp32(actual, 1.0)
         logger.info(f"x=0: expected=1.0, actual={actual:.9f}, fp32 ULP={ulp}")
-        assert ulp <= 4, f"sech2(0) should be 1.0 within 4 fp32 ULP, got {actual!r} ({ulp} ULP)"
+        assert ulp <= FP32_MAX_ULP, f"sech2(0) should be 1.0 within {FP32_MAX_ULP} fp32 ULP, got {actual!r} ({ulp} ULP)"
 
 
 class TestTanhBwFp32Monotonicity:
-    """sech² is strictly decreasing in |x|. The kernel switches approximation at
-    |x| = 3, and a mismatch between the two pieces shows up as the function
-    stepping back up across that boundary."""
+    """sech² is strictly decreasing in |x|. The bfloat16-grade math this arm replaced
+    switched approximation at |x| = 3, and the mismatch between its two pieces
+    stepped the function back up across that boundary. The fp32 arm is now one
+    formula with no boundary; these cases guard against that step coming back."""
 
     def test_no_step_across_core_tail_boundary(self, device):
         xs = [2.999, 2.9999, 3.0, 3.0001, 3.001]
@@ -125,7 +127,7 @@ class TestTanhBwFp32Monotonicity:
             logger.info(f"x={x:<8} actual={a:.9e} expected={sech2_exact_fp32_input(x):.9e}")
         for i in range(len(xs) - 1):
             assert actual[i] > actual[i + 1], (
-                f"sech2 must decrease across the |x|=3 region boundary, but "
+                f"sech2 must decrease across |x|=3 (the old bf16-grade region boundary), but "
                 f"f({xs[i]})={actual[i]:.9e} <= f({xs[i + 1]})={actual[i + 1]:.9e}"
             )
 
@@ -140,11 +142,7 @@ class TestTanhBwFp32Monotonicity:
 
 
 class TestTanhBwFp32Accuracy:
-    """Per-region fp32 ULP. The threshold is 4: the exact identity
-    sech²(x) = 4e/(1+e)², e = exp(-2|x|), costs one rounding for the exp, one for
-    the reciprocal and two for the surrounding arithmetic."""
-
-    MAX_ULP = 4
+    """Per-region fp32 ULP, against FP32_MAX_ULP."""
 
     @pytest.mark.parametrize(
         "name,xs",
@@ -159,7 +157,7 @@ class TestTanhBwFp32Accuracy:
     def test_ulp_by_region(self, device, name, xs):
         actual = _run_tanh_bw_fp32(device, xs)
         max_ulp, worst_x = _report(xs, actual)
-        assert max_ulp <= self.MAX_ULP, f"{name}: max fp32 ULP {max_ulp} at x={worst_x} exceeds {self.MAX_ULP}"
+        assert max_ulp <= FP32_MAX_ULP, f"{name}: max fp32 ULP {max_ulp} at x={worst_x} exceeds {FP32_MAX_ULP}"
 
     def test_ulp_sweep(self, device):
         """Dense deterministic sweep over the whole non-saturated range."""
@@ -167,15 +165,30 @@ class TestTanhBwFp32Accuracy:
         xs = [float(v) for v in np.concatenate([rng.uniform(0.0, 3.0, 512), rng.uniform(3.0, 44.0, 512)])]
         actual = _run_tanh_bw_fp32(device, xs)
         max_ulp, worst_x = _report(xs, actual)
-        assert max_ulp <= self.MAX_ULP, f"sweep: max fp32 ULP {max_ulp} at x={worst_x} exceeds {self.MAX_ULP}"
+        assert max_ulp <= FP32_MAX_ULP, f"sweep: max fp32 ULP {max_ulp} at x={worst_x} exceeds {FP32_MAX_ULP}"
 
 
 class TestTanhBwFp32Saturation:
     """FTZ behaviour at the far end must survive the fp32 retune: 4·exp(-2|x|) is
-    still a normal fp32 number out to |x| ~= 44.4, and zero past it."""
+    still a normal fp32 number out to |x| ~= 44.4, and zero past it. The infinities
+    and NaN of either sign also return 0; -NaN is the case that sfpi::abs would have
+    let through, since it leaves the sign bit of a NaN set."""
 
     def test_saturation_boundary(self, device):
-        xs = [43.0, 43.75, 44.0, 44.3, 44.5, 45.0, 50.0, 100.0, float("inf"), -float("inf")]
+        xs = [
+            43.0,
+            43.75,
+            44.0,
+            44.3,
+            44.5,
+            45.0,
+            50.0,
+            100.0,
+            float("inf"),
+            -float("inf"),
+            float("nan"),
+            -float("nan"),
+        ]
         actual = _run_tanh_bw_fp32(device, xs)
         for x, a in zip(xs, actual):
             expected = 0.0 if not np.isfinite(x) else sech2_exact_fp32_input(x)
@@ -183,7 +196,7 @@ class TestTanhBwFp32Saturation:
             if expected == 0.0:
                 assert float(a) == 0.0, f"expected flush to zero at x={x}, got {float(a)!r}"
             else:
-                assert ulp_distance_fp32(a, expected) <= 4, f"x={x}: {float(a)!r} vs {expected!r}"
+                assert ulp_distance_fp32(a, expected) <= FP32_MAX_ULP, f"x={x}: {float(a)!r} vs {expected!r}"
 
 
 class TestTanhBwFp32Gradient:
@@ -196,4 +209,4 @@ class TestTanhBwFp32Gradient:
         expected = np.float32(np.float32(grad) * np.float32(sech2_exact_fp32_input(x)))
         ulp = ulp_distance_fp32(actual, expected)
         logger.info(f"x={x}, grad={grad}: expected={float(expected):.9e}, actual={float(actual):.9e}, ULP={ulp}")
-        assert ulp <= 4, f"x={x}, grad={grad}: {float(actual)!r} vs {float(expected)!r} ({ulp} ULP)"
+        assert ulp <= FP32_MAX_ULP, f"x={x}, grad={grad}: {float(actual)!r} vs {float(expected)!r} ({ulp} ULP)"

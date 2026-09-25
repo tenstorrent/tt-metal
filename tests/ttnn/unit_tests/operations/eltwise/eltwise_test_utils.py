@@ -3,9 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import struct
+
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import generate_all_bfloat16_bitpatterns, flush_subnormal_values_to_zero
+from mpmath import cosh as mp_cosh
+from mpmath import mp
+
+from tests.ttnn.utils_for_testing import (
+    flush_subnormal_values_to_zero,
+    generate_all_bfloat16_bitpatterns,
+)
 
 
 def generate_bfloat16_bits(dtype=torch.bfloat16, include_spl_values=False):
@@ -295,3 +302,18 @@ def bf16_quantize_rne(x: float) -> float:
     the device input — uses round-to-nearest-even. For test points that are not
     exact BF16 values (e.g., 2.9, 3.01), truncation and RNE diverge."""
     return float(torch.tensor([x], dtype=torch.bfloat16).item())
+
+
+def sech2_exact(x: float) -> float:
+    """
+    Exact tanh derivative using mpmath 256-bit precision.
+
+    tanh'(x) = sech²(x) = 1 / cosh²(x)
+
+    Uses 1/cosh²(x) form (not 1 - tanh²(x)) to avoid the catastrophic cancellation
+    in the latter. Shared golden for test_tanh_bw_ulp.py and test_tanh_bw_fp32_ulp.py,
+    which apply their own input rounding and flushing around it.
+    """
+    mp.prec = 256
+    cosh_x = mp_cosh(mp.mpf(x))
+    return float(1 / (cosh_x * cosh_x))
