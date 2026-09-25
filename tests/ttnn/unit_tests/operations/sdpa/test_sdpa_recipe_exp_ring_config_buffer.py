@@ -208,10 +208,12 @@ def test_dit_auto_blocking_default_l1(exp_ring_mesh, heads, local, variant, reco
     auto = run(auto_config)
     assert torch.isfinite(auto.float()).all()
     assert torch.equal(auto, run(resolved))
-    # Sanity: a head/row sample against FP32 attention (catches a broken build, not a precision gate).
+    # Sanity: a head/row sample against FP32 attention on the (prepared) device inputs (catches a broken
+    # build, not a precision gate).
+    device = [ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=2)).float() for x in inputs]
     rows = torch.linspace(0, local - 1, 64).long()
-    q = host[0][:, :1, rows].float()
-    ref = torch.softmax(q @ host[1][:, :1].float().transpose(-1, -2) / math.sqrt(128), dim=-1) @ host[2][:, :1].float()
+    q = device[0][:, :1, rows]
+    ref = torch.softmax(q @ device[1][:, :1].transpose(-1, -2) / math.sqrt(128), dim=-1) @ device[2][:, :1]
     got = auto[:1, :1, rows].float()
     rel = ((got - ref).norm() / ref.norm()).item()
     record_property("sample_rel_l2", rel)
