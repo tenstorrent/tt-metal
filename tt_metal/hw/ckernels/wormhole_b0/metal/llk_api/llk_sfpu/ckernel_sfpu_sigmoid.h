@@ -57,7 +57,7 @@ inline void calculate_sigmoid() {
             sfpi::dst_reg++;
         }
     } else {
-        calculate_sigmoid_appx<ITERATIONS>();
+        calculate_sigmoid_appx<ITERATIONS, is_fp32_dest_acc_en>();
     }
 }
 
