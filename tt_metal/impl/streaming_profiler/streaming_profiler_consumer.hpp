@@ -32,7 +32,8 @@ namespace tt::tt_metal::streaming_profiler {
 
 using ConsumerHandle = uint64_t;
 // Indexed by Core::risc; the order is tracy::RiscType's.
-inline constexpr std::array<const char*, 5> kRiscNames = {"BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2"};
+inline constexpr std::array<const char*, 7> kRiscNames = {
+    "BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2", "ERISC_0", "ERISC_1"};
 
 // Immutable once the receiver starts. Zone names are not here: they arrive per ELF as binaries JIT-load, so
 // the process-wide site table publishes them as ELFs load (init_site_registry).

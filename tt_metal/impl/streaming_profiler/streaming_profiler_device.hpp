@@ -146,7 +146,7 @@ private:
     // Idle-eth cores as padded standard cores in the decode roster (never the relay roster).
     void enumerate_eth_cores(DeviceCtx& ctx);
     // Registers a core with the decoder (its XY and five lanes) and returns its producer record.
-    Producer& enroll(DeviceCtx& ctx, const CoreCoords& core, uint64_t prof_l1, bool blocking);
+    Producer& enroll(DeviceCtx& ctx, const CoreCoords& core, CoreType type, uint64_t prof_l1, bool blocking);
     void zero_control(const DeviceCtx& ctx, const Producer& p);
     // Relay count, each relay's DRAM view and core, and a check that firmware left that core's NIUs in stream
     // mode. False: no relay can run on this device.

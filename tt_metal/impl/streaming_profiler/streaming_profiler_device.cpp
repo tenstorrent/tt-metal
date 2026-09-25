@@ -380,7 +380,13 @@ bool Devices::boot_device(
     return true;
 }
 
-Devices::Producer& Devices::enroll(DeviceCtx& ctx, const CoreCoords& core, uint64_t prof_l1, bool blocking) {
+Devices::Producer& Devices::enroll(
+    DeviceCtx& ctx, const CoreCoords& core, CoreType type, uint64_t prof_l1, bool blocking) {
+    using experimental::streaming_profiler::Risc;
+    // An eth core has two RISCs; its other lanes never carry a record.
+    constexpr std::array<Risc, kNRisc> kTensix = {Risc::BRISC, Risc::NCRISC, Risc::TRISC0, Risc::TRISC1, Risc::TRISC2};
+    constexpr std::array<Risc, kNRisc> kEth = {Risc::ERISC0, Risc::ERISC1, Risc::ERISC1, Risc::ERISC1, Risc::ERISC1};
+    const std::array<Risc, kNRisc>& risc = type == CoreType::ETH ? kEth : kTensix;
     CaptureContext::Device& cap = ctx.out.ctx;
     cap.core_xy.push_back(packed_xy(core.virt));
     for (uint32_t r = 0; r < kNRisc; r++) {
@@ -388,7 +394,7 @@ Devices::Producer& Devices::enroll(DeviceCtx& ctx, const CoreCoords& core, uint6
             .logical = core.logical,
             .physical = core.phys,
             .chip_id = static_cast<ChipId>(ctx.chip_id),
-            .risc = static_cast<experimental::streaming_profiler::Risc>(r)});
+            .risc = risc[r]});
     }
     ctx.producers.push_back(Producer{core, prof_l1, blocking});
     return ctx.producers.back();
@@ -411,7 +417,10 @@ void Devices::enumerate_worker_grid(const std::shared_ptr<distributed::MeshDevic
     const CoreCoord grid = mesh_device->compute_with_storage_grid_size();
     for (uint32_t ly = 0; ly < grid.y; ly++) {
         for (uint32_t lx = 0; lx < grid.x; lx++) {
-            zero_control(ctx, enroll(ctx, locate(cluster, chip, CoreCoord{lx, ly}, CoreType::WORKER), prof_l1_, true));
+            zero_control(
+                ctx,
+                enroll(
+                    ctx, locate(cluster, chip, CoreCoord{lx, ly}, CoreType::WORKER), CoreType::WORKER, prof_l1_, true));
         }
     }
     ctx.n_workers = static_cast<uint32_t>(ctx.producers.size());
@@ -666,7 +675,7 @@ void Devices::enumerate_eth_cores(DeviceCtx& ctx) {
     }
     Drainer pusher;
     pusher.core = ctx.idle_eth.front();
-    zero_control(ctx, enroll(ctx, pusher.core, eth_prof_l1_, true));
+    zero_control(ctx, enroll(ctx, pusher.core, CoreType::ETH, eth_prof_l1_, true));
     // The drainer: the idle core nearest the pusher on the NoC (fewest hops for its reads of the pusher's L1).
     Drainer drainer;
     drainer.core = ctx.idle_eth[1];
@@ -690,7 +699,8 @@ void Devices::enumerate_eth_cores(DeviceCtx& ctx) {
             MetalContext::instance(context_id_).get_fabric_config() != tt_fabric::FabricConfig::DISABLED;
         for (const CoreCoord& al :
              sorted_yx(ctx.device->get_active_ethernet_cores(/*skip_reserved_tunnel_cores=*/true))) {
-            const Producer& p = enroll(ctx, locate(cluster, chip, al, CoreType::ETH), aeth_prof_l1_, false);
+            const Producer& p =
+                enroll(ctx, locate(cluster, chip, al, CoreType::ETH), CoreType::ETH, aeth_prof_l1_, false);
             linked++;
             if (!fabric_on) {
                 zero_control(ctx, p);

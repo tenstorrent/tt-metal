@@ -40,7 +40,7 @@ class Service;
 
 namespace tt::tt_metal::experimental::streaming_profiler {
 
-enum class Risc : uint8_t { BRISC = 0, NCRISC = 1, TRISC0 = 2, TRISC1 = 3, TRISC2 = 4 };
+enum class Risc : uint8_t { BRISC = 0, NCRISC = 1, TRISC0 = 2, TRISC1 = 3, TRISC2 = 4, ERISC0 = 5, ERISC1 = 6 };
 
 struct SourceLocation {
     std::string_view file;  // Valid for the lifetime of the process.
@@ -56,7 +56,8 @@ struct MarkerSite {
 /**
  * @brief The core a record came from.
  *
- * `logical` is the coordinate a program addresses it with; `physical` is its NoC 0 position on the die.
+ * `logical` is the coordinate a program addresses it with, in the Ethernet cores' own logical space when `risc` is
+ * ERISC0 or ERISC1; `physical` is its NoC 0 position on the die.
  */
 struct Core {
     CoreCoord logical;

@@ -45,7 +45,7 @@ private:
     // Each RISC's timeline row is created and named on first use.
     struct CoreEntry {
         TracyTTCtx ctx = nullptr;
-        std::array<uint32_t, 5> thread{};
+        std::array<uint32_t, 7> thread{};
         uint8_t named = 0;
     };
     struct SrclocEntry {

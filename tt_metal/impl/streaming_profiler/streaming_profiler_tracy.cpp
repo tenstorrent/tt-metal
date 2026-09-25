@@ -28,9 +28,10 @@ namespace {
 constexpr uint32_t kStallColor = 0xCD4F39u;
 constexpr size_t kSrclocTableInitial = 1024;
 
+// By physical coordinate: an eth core's logical coordinate can equal a Tensix core's.
 uint64_t lane_key(const api::Core& core) {
-    return (static_cast<uint64_t>(core.chip_id) << 32) | ((static_cast<uint64_t>(core.logical.x) & 0xFFFu) << 20) |
-           ((static_cast<uint64_t>(core.logical.y) & 0xFFFu) << 8) | (static_cast<uint64_t>(core.risc) & 0xFFu);
+    return (static_cast<uint64_t>(core.chip_id) << 32) | ((static_cast<uint64_t>(core.physical.x) & 0xFFFu) << 20) |
+           ((static_cast<uint64_t>(core.physical.y) & 0xFFFu) << 8) | (static_cast<uint64_t>(core.risc) & 0xFFu);
 }
 
 uint64_t srcloc_key(std::string_view name, uint32_t color, uint32_t risc) {
@@ -42,13 +43,17 @@ size_t srcloc_hash(const char* name, uint64_t key) {
 }
 
 #if defined(TRACY_ENABLE)
-constexpr tracy::RiscType kRisc[5] = {
+// Tracy's RiscType has one ERISC. The second takes a value of the 6-bit RISC field that no RiscType uses, which gives
+// its row a thread id of its own.
+constexpr tracy::RiscType kRisc[7] = {
     tracy::RiscType::BRISC,
     tracy::RiscType::NCRISC,
     tracy::RiscType::TRISC_0,
     tracy::RiscType::TRISC_1,
-    tracy::RiscType::TRISC_2};
-constexpr uint32_t kRiscColor[5] = {0xEE9A00u, 0x43CD80u, 0x6CA6CDu, 0x00E5EEu, 0x98F5FFu};
+    tracy::RiscType::TRISC_2,
+    tracy::RiscType::ERISC,
+    static_cast<tracy::RiscType>(32 + static_cast<uint8_t>(tracy::RiscType::ERISC))};
+constexpr uint32_t kRiscColor[7] = {0xEE9A00u, 0x43CD80u, 0x6CA6CDu, 0x00E5EEu, 0x98F5FFu, 0xCDCD00u, 0xEEEE00u};
 #endif
 
 // Tracy's timer at construction; every context's cpuTime is expressed against it. Without Tracy there is no
@@ -148,8 +153,9 @@ TracySink::Lane TracySink::lane(const Core& core) {
         // lock-free queue, whose FIFO order is what keeps the context ahead of the zones that reference it.
         TracyTTContextPopulateCalibratedLockfree(ce.ctx, anchor_tracy_, static_cast<double>(origin_margin_ns_), 1.0);
         const std::string name = fmt::format(
-            "Device: {}, Logical ({},{}) Physical ({},{})",
+            "Device: {}, {}Logical ({},{}) Physical ({},{})",
             core.chip_id,
+            core.risc >= api::Risc::ERISC0 ? "Ethernet " : "",
             core.logical.x,
             core.logical.y,
             core.physical.x,
@@ -275,6 +281,8 @@ void TracySink::push_marker(
     marker.core_x = core.logical.x;
     marker.core_y = core.logical.y;
     marker.risc = kRisc[static_cast<uint32_t>(core.risc)];
+    // Tracy's fallback color asserts on a RiscType it does not know.
+    marker.color = kRiscColor[static_cast<uint32_t>(core.risc)];
     marker.timestamp = static_cast<uint64_t>(ts);
     marker.runtime_host_id = runtime_id;
     marker.marker_type = values.empty() ? tracy::TTDeviceMarkerType::EVENT : tracy::TTDeviceMarkerType::DATA;
