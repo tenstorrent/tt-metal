@@ -66,6 +66,7 @@ def _write_tt_model_yaml(
     vllm_version: str,
     extra_models_dir: str,
     commit: str | None,
+    lock: str | None = None,
 ) -> None:
     """Emit a schema-5.1 tt-model.yaml describing how to build+serve this optimized model as a
     v5.1 container package. Fields the run can't provide (the vLLM adapter dir, plugin) are stated
@@ -110,7 +111,9 @@ def _write_tt_model_yaml(
         f'  vllm: {{version: "{vllm_version}"}}',
         f"  plugin: {{repo: https://github.com/tenstorrent/vllm-tt-plugin, ref: {plugin_ref}}}",
         f"  extra_models_dir: {extra_models_dir}",
-        "  lock: requirements.lock",
+        # runtime.lock is optional; only emit it when a real requirements.lock is provided, else the
+        # build fails resolving a path that doesn't exist. Deps resolve live without it.
+        *([f"  lock: {lock}"] if lock else []),
         "",
         "serve:",
         "  port: 8000",
@@ -425,6 +428,7 @@ def _run_container(args, state: dict, slug: str, demo_dir, commit: str | None) -
         vllm_version=getattr(args, "vllm_version", None) or "0.24.0",
         extra_models_dir=extra,
         commit=commit,
+        lock=getattr(args, "lock", None),
     )
     print(f"  [publish-hf] tt-model.yaml -> {yaml_path}")
     print("  " + "-" * 60)
