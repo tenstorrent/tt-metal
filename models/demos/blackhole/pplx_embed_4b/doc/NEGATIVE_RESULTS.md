@@ -901,3 +901,42 @@ inlined LLK calls no longer constant-fold); `#pragma GCC optimize("Os")` made it
 29.6 µs standalone; in-model 28.7 µs, the gap before the op back to 0.34 µs (after it: 2.1 µs, still open).
 Lesson: on Blackhole a model-local kernel's binary size is part of its cost; check `TENSIX COMPUTE n MAX KERNEL
 SIZE` and the op-to-op latency around the op, not only its kernel time.
+
+## 52. bs1 SDPA on more than 64 cores: the unit count decides, and most of the op is fixed cost (2026-09-25)
+
+8× p150b host, chip 0; standalone `perf_tools/bench_sdpa_bs1_wide.py` (traced, Q/K/V bfp8 in L1, `pack_gqa_heads`,
+LoFi, exp approx, output unconcatenated so chunks may cross Q heads; each config checked against the 8×8 q256/k512
+output).
+
+**Why 120 cores does not come for free.** Packed, Q is 8 heads × 64 row tiles = 512 row tiles. The op gives each core a
+contiguous run of Q chunks and one K/V chain per head, and a core's time is set by its row tiles plus a per-chunk fixed
+cost. q256 on 8×8 is 64 chunks, one per core, 8 row tiles each, each grid row one head (row multicast of K/V).
+Candidates, standalone µs:
+
+| grid, q/k chunk | chunks | row tiles per busiest core | µs |
+|---|--:|--:|--:|
+| 8×8 q256/k512 (09-24 default) | 64 | 8 | 40.2 |
+| **11×8 q192/k512 (shipped)** | 88 (11 per head, last one 4 tiles) | 6 | **36.6** (33.6 on a second run) |
+| 11×8 q192/k256 | 88 | 6 | 37.3 |
+| 12×9 q160/k512 | 104 (13 per head) | 5 | 44.0 |
+| 12×10 q128/k512 | 128 | 8 (8 cores do 2 chunks) | 53.4 |
+| 12×10 q64/k256 | 256 | 6 (3 chunks) | 55.4 |
+
+- q128 on 120 cores cannot help: 128 chunks leave 8 cores with two, so the busiest core still has 8 row tiles.
+- q160 gives 5 row tiles per core but a head's 13 chunks span two grid rows, so the chain multicast (all-or-nothing:
+  same physical row, no gaps, uniform q counts) turns off for every head and K/V hops core to core down 13-core chains.
+- q64 re-streams K/V and pays the per-chunk cost three times per core.
+
+**Most of the op is fixed cost.** Fitting time = fixed + per-row × rows to q256 (8 rows, 40.2 µs) and q192 (6 rows,
+36.6 µs) gives ~26 µs fixed and ~1.8 µs per row tile: cutting rows by 25% bought 9% (16% on the second run). With
+one Q chunk and one K chunk per core nothing overlaps the K arrival (injector read of ~70 KB from L1-interleaved
+banks + multicast), the Q read, the V arrival and the output drain; only the subblock streaming inside the chunk does.
+The kernel already overlaps exp (SFPU, pack thread) with the matmuls (FPU, math thread), so the 64-core bound is
+~max(12 µs FPU, ~21 µs SFPU), not their sum. The remaining headroom is in that fixed part (a device-profiler zone
+split is the next measurement), not in the core count.
+
+**Shipping q192 needed a writer change.** A 6-tile chunk crosses the 16-tile Q heads of its group, and the
+concatenated `[1, 1, S, NQH·d]` output assumed it never did (host check `q_chunk | Sq`). `write_block_row_grouped` /
+`write_block` take the head length and the chunk's first row in its head and move a wrapped row back one head length
+and right one head (`head_wrap_tile_offset`); the check is gone. Without the concat output the model needs the 4.6 µs
+concat op again, which cancels the gain.
