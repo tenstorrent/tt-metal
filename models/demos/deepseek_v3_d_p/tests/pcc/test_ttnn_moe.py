@@ -81,6 +81,12 @@ from tests.ttnn.utils_for_testing import comp_pcc
 # trace stores its post-attention RMSNorm output, i.e. the MoE block input.
 _MOE_LAYER_IDX = 3
 
+# Opt-in: run the routed expert and combine as one overlapped program (TtMoe
+# overlap_routed_expert_with_combine). combine_fabric2d sends a whole bf16 token plus a routing tail per
+# fabric packet, so the DeepSeek rows then keep the default payload instead of FABRIC_PAYLOAD_SIZE.
+_OVERLAP_RE_COMBINE = os.environ.get("TT_MOE_OVERLAP_RE_COMBINE", "0") == "1"
+_DSV3_FABRIC_PAYLOAD = None if _OVERLAP_RE_COMBINE else DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
+
 
 # dispatch_buffer_capacity_factor below is ceil(N/2) of the most conservative
 # integer N such that dgs*seq*N >= theoretical worst-case dispatch buffer.
@@ -560,6 +566,7 @@ def run_model(
         latent_weights=latent_weights,
         latent_use_norm=latent_use_norm,
         rms_norm_eps=rms_norm_eps,
+        overlap_routed_expert_with_combine=_OVERLAP_RE_COMBINE,
     )
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_moe_creation")
@@ -893,28 +900,28 @@ def _ci_unsupported_param_combos_ds_moe(**params):
         # its non-TP ops on the assumption that this slot is an SP=8 run.
         pytest.param(
             (8, 1),
-            torus_y_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
+            torus_y_device_params(fabric_payload_size=_DSV3_FABRIC_PAYLOAD),
             2 if is_blackhole() else 1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
             id="torus-y-8x1",
         ),
         pytest.param(
             (4, 2),
-            fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
+            fabric2d_device_params(fabric_payload_size=_DSV3_FABRIC_PAYLOAD),
             2 if is_blackhole() else 1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
             id="fabric2d-mesh-4x2",
         ),
         pytest.param(
             (2, 4),
-            fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
+            fabric2d_device_params(fabric_payload_size=_DSV3_FABRIC_PAYLOAD),
             2 if is_blackhole() else 1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-mesh-2x4",
         ),
         pytest.param(
             (8, 4),
-            torus_xy_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
+            torus_xy_device_params(fabric_payload_size=_DSV3_FABRIC_PAYLOAD),
             2 if is_blackhole() else 1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",

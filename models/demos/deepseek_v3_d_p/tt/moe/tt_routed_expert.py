@@ -736,3 +736,61 @@ class TtRoutedExpert(LightweightModule):
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
         return expert_outputs
+
+    def forward_with_combine(
+        self,
+        dispatched_buffer: ttnn.Tensor,
+        expert_token_counts: ttnn.Tensor,
+        expert_region_offsets: ttnn.Tensor,
+        dispatched_metadata: ttnn.Tensor,
+        expert_offsets: ttnn.Tensor,
+        replicated_global_expert_idx_table: ttnn.Tensor,
+        *,
+        combine_axis: int,
+        combine_num_links: int,
+        num_experts_per_tok: int,
+        seq_len_per_chip: int,
+    ) -> ttnn.Tensor:
+        """The routed expert overlapped with combine_fabric2d in one program; returns combine's output.
+
+        Blackhole only, on the ROW_MAJOR bf16 dispatch buffer: the routed expert writes bf16 tiles, which
+        is what combine's untilizers read. The threshold splits the experts as in forward(), except that the
+        fused-only sentinel is not available: the one-program op always runs the unified half.
+        """
+        if not self._is_blackhole:
+            raise NotImplementedError("the routed expert / combine overlap is Blackhole-only")
+        if dispatched_buffer.layout != ttnn.ROW_MAJOR_LAYOUT or dispatched_buffer.dtype != ttnn.bfloat16:
+            raise ValueError(
+                f"the routed expert / combine overlap needs a ROW_MAJOR bfloat16 dispatch buffer, got "
+                f"{dispatched_buffer.layout} {dispatched_buffer.dtype}"
+            )
+        threshold = 0 if self.hybrid_token_threshold is None else self.hybrid_token_threshold
+        if threshold >= self.max_tokens:
+            raise ValueError(
+                f"hybrid_token_threshold {threshold} leaves no expert to the unified half (max_tokens "
+                f"{self.max_tokens}); the one-program overlap needs it below max_tokens"
+            )
+        ttnn.tracy_message("`TT_SIGNPOST: HybridRoutedExpertMoeCombine`")
+        return ttnn.experimental.deepseek_prefill.hybrid_routed_expert_moe(
+            dispatched_buffer,
+            expert_region_offsets,
+            expert_token_counts,
+            self.global_expert_idx_table,
+            self.gate_projs,
+            self.up_projs,
+            self.down_projs,
+            max_dispatched_tokens_per_expert=self.max_tokens,
+            hybrid_token_threshold=threshold,
+            compute_kernel_config=self.compute_kernel_config,
+            activation=self.activation,
+            gate_biases=self.gate_biases,
+            up_biases=self.up_biases,
+            down_biases=self.down_biases,
+            dispatched_metadata=dispatched_metadata,
+            expert_offsets=expert_offsets,
+            replicated_global_expert_idx_table=replicated_global_expert_idx_table,
+            combine_axis=combine_axis,
+            combine_num_links=combine_num_links,
+            num_experts_per_tok=num_experts_per_tok,
+            seq_len_per_chip=seq_len_per_chip,
+        )

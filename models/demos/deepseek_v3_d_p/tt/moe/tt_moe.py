@@ -229,6 +229,7 @@ class TtMoe(LightweightModule):
         latent_use_norm: bool = True,
         rms_norm_eps: float = 1e-5,
         max_gate_seq_len_per_chip: Optional[int] = None,
+        overlap_routed_expert_with_combine: bool = False,
     ):
         """
         Initialize TtMoe module.
@@ -307,6 +308,12 @@ class TtMoe(LightweightModule):
                 host sync. The crossover is per model and per shape, not a constant -- measure
                 before choosing T: the two ops' per-shape device times are gated by
                 test_moe_fused_swiglu_perf.py and test_single_routed_expert_perf.py.
+            overlap_routed_expert_with_combine: run the routed expert and combine_fabric2d as ONE program
+                (hybrid_routed_expert_moe in overlap mode), combine taking each expert as soon as it is
+                written. Blackhole only. Needs a fabric payload of a whole bf16 token plus combine_fabric2d's
+                routing tail (get_max_payload_size()), and a threshold that leaves the unified half some
+                experts. A threshold above zero keeps an L1 arena for the program's lifetime, so nothing
+                else may place static circular buffers while its program is cached.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -513,6 +520,22 @@ class TtMoe(LightweightModule):
         global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
         global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
 
+        # combine_fabric2d relays other chips' tokens, so it needs every chip's slice of the table.
+        self.overlap_routed_expert_with_combine = overlap_routed_expert_with_combine
+        self.replicated_global_expert_idx_tt = None
+        if overlap_routed_expert_with_combine:
+            self.replicated_global_expert_idx_tt = ttnn.from_torch(
+                ExpertMapping.create_global_expert_idx_table(
+                    experts_per_chip=experts_per_chip,
+                    dispatch_group_size=dispatch_group_size,
+                    num_dispatch_groups=num_dispatch_groups,
+                ),
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh_device,
+                dtype=ttnn.uint32,
+            )
+
         # Initialize routed expert
         self.routed_expert = TtRoutedExpert(
             mesh_device=mesh_device,
@@ -679,6 +702,36 @@ class TtMoe(LightweightModule):
             )
         except Exception as exc:  # diagnostics must never fail a run
             logger.warning(f"[TtMoe] routing dump for layer {self.layer_idx} failed: {exc}")
+
+    def _routed_expert_and_combine(
+        self, dispatched_buffer, metadata, expert_offsets, expert_token_counts, expert_region_offsets
+    ):
+        """Steps 3 and 4 as one program: the routed expert, and combine_fabric2d taking each expert as soon
+        as it is written. Returns combine's output, the same (1, 1, seq_len_per_chip, topk, emb) the separate
+        combine produces."""
+        # Each chip holds only its own origin row of the dispatch offsets; combine walks every origin chip's
+        # runs, so it takes all of them.
+        all_expert_offsets = ttnn.all_gather(
+            expert_offsets,
+            dim=0,
+            cluster_axis=0,
+            num_links=self.row_num_links,
+            topology=self.row_topology,
+        )
+        combined_output = self.routed_expert.forward_with_combine(
+            dispatched_buffer,
+            expert_token_counts,
+            expert_region_offsets,
+            metadata,
+            all_expert_offsets,
+            self.replicated_global_expert_idx_tt,
+            combine_axis=0,
+            combine_num_links=self.row_num_links,
+            num_experts_per_tok=self.num_experts_per_tok,
+            seq_len_per_chip=self.seq_len_per_chip,
+        )
+        ttnn.deallocate(all_expert_offsets)
+        return combined_output
 
     def forward(
         self,
@@ -943,31 +996,39 @@ class TtMoe(LightweightModule):
         # is independent of the result and can be freed here, unless the PCC check
         # needs it to compare against the bfloat16 torch reference.
         squeezed_dispatch = ttnn.squeeze(ttnn.squeeze(dispatched_buffer, dim=0), dim=0)
-        expert_outputs = self.routed_expert(squeezed_dispatch, tt_expert_token_counts, tt_expert_region_offsets)
+        if self.overlap_routed_expert_with_combine:
+            combined_output = self._routed_expert_and_combine(
+                squeezed_dispatch, metadata, tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets
+            )
+            # The routed expert's output is internal to the overlapped program.
+            expert_outputs = None
+        else:
+            expert_outputs = self.routed_expert(squeezed_dispatch, tt_expert_token_counts, tt_expert_region_offsets)
         if not return_intermediates:
             dispatched_buffer = ttnn.deallocate(dispatched_buffer)
-        if DEBUG_LOGGING_ENABLED:
+        if DEBUG_LOGGING_ENABLED and expert_outputs is not None:
             logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape}")
 
-        # Add back the batch dimensions for combine
-        # (experts_per_chip, max_tokens, emb_dim) -> (1, 1, experts_per_chip, max_tokens, emb_dim)
-        expert_outputs = ttnn.unsqueeze(expert_outputs, dim=0)
-        expert_outputs = ttnn.unsqueeze(expert_outputs, dim=0)
-        if DEBUG_LOGGING_ENABLED:
-            logger.debug(f"[TtMoe.forward] expert_outputs (unsqueezed) shape: {expert_outputs.shape}")
+        if not self.overlap_routed_expert_with_combine:
+            # Add back the batch dimensions for combine
+            # (experts_per_chip, max_tokens, emb_dim) -> (1, 1, experts_per_chip, max_tokens, emb_dim)
+            expert_outputs = ttnn.unsqueeze(expert_outputs, dim=0)
+            expert_outputs = ttnn.unsqueeze(expert_outputs, dim=0)
+            if DEBUG_LOGGING_ENABLED:
+                logger.debug(f"[TtMoe.forward] expert_outputs (unsqueezed) shape: {expert_outputs.shape}")
 
-            logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape} {expert_outputs.dtype=}")
+                logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape} {expert_outputs.dtype=}")
 
-        # ========================================
-        # Step 4: Combine (enabled)
-        # ========================================
-        # Combine expects TILE_LAYOUT input
-        combined_output = self.combine_module(
-            expert_outputs,
-            metadata,
-            tt_expert_token_counts,
-            tt_expert_region_offsets,
-        )
+            # ========================================
+            # Step 4: Combine (enabled)
+            # ========================================
+            # Combine expects TILE_LAYOUT input
+            combined_output = self.combine_module(
+                expert_outputs,
+                metadata,
+                tt_expert_token_counts,
+                tt_expert_region_offsets,
+            )
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"[TtMoe.forward] combined_output shape: {combined_output.shape} {combined_output.dtype=}")
 
