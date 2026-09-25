@@ -860,12 +860,47 @@ def _host_transfer_ops(sigs) -> set:
     return known
 
 
+# ONE more attempt for a probe that came back empty on a board that reported a fault. Bounded and
+# env-tunable like every other retry budget in this file; 0 restores the single-shot behaviour.
+_OP_SIG_WEDGE_RETRIES = max(0, int(os.environ.get("PERF_MCP_OP_SIG_WEDGE_RETRIES", "1") or "1"))
+
+
+def _parse_op_sigs(raw: str):
+    """The probe's two output lines, read once. Returns (sigs_set_or_None, sequence_list)."""
+    sigs = None
+    seq = []
+    for line in (raw or "").splitlines():
+        if line.startswith("PERF_OP_SIGS="):
+            try:
+                sigs = set(json.loads(line.split("=", 1)[1]))
+            except (ValueError, TypeError):
+                sigs = None
+        elif line.startswith("PERF_OP_SIG_SEQUENCE="):
+            try:
+                seq = json.loads(line.split("=", 1)[1])
+            except (ValueError, TypeError):
+                seq = []
+    return sigs, seq
+
+
 def _run_op_sigs(repo_root: Path, mcp_env: dict, devices: str, node: str, case, k: int):
     """Run the perf test forward at TT_PERF_LAYERS=k (no tracy, 1 decode token) through the generic
     _op_sig_probe. Returns (sigs_set_or_None, raw_stdout_stderr, sequence_list) -- ALWAYS a 3-tuple.
     The device-timeout path used to return a 2-tuple while all four callers unpack three, so a
     timeout raised ValueError and _print_optimize_stop then blamed "a build/env/version mismatch"
-    while the pipeline was simply never optimized."""
+    while the pipeline was simply never optimized.
+
+    A DEAD BOARD IS NOT AN EMPTY MODEL. The probe exits 0 after printing `PERF_OP_SIGS=[]` whenever
+    the test dispatched no op -- including when it dispatched none because the mesh fixture could
+    not bring the board up. So "this model has nothing to count" and "the hardware was dead" reach
+    the caller as the same empty set, and a profiling window is sized from it.
+
+    Measured 2026-09-25: the probe errored at fixture setup with a stuck ETH heartbeat, reported no
+    window, and the run then spent twenty rounds with no per-op levers and no stated reason. The
+    evidence sat in the probe's own output the whole time and nothing read it -- recovery had only
+    ever been wired into the paths that run AFTER this one (the baseline and the per-op loop), and
+    a wedge had never been seen this early. So hand the output to the SAME shared predicate those
+    paths use, reclaim through the SAME primitive, and give the probe one more attempt."""
     env = cc_env(repo_root, devices)
     env.update(mcp_env)
     # k<=0 means ALL LAYERS and is expressed by REMOVING the cap, never by sending "0": that value
@@ -880,36 +915,37 @@ def _run_op_sigs(repo_root: Path, mcp_env: dict, devices: str, node: str, case, 
     cmd = [_python_bin(repo_root), str(repo_root / CC_DIR / "_op_sig_probe.py"), node]
     if case:
         cmd.append(case)
-    rc, raw = _run_device_step(
-        cmd,
-        repo_root,
-        env,
-        devices,
-        _measure_backstop(repo_root),
-        "coverage probe",
-        stall_s=adaptive_timer(repo_root, "profile", env_key="PERF_MCP_MEASURE_STALL_SEC"),
-        observe_op="profile",
-        observe_root=repo_root,
-    )
-    if rc is None:
-        return None, "", []
-    raw = raw or ""
-    sigs = None
-    seq = []
-    for line in raw.splitlines():
-        if line.startswith("PERF_OP_SIGS="):
-            try:
-                sigs = set(json.loads(line.split("=", 1)[1]))
-            except (ValueError, TypeError):
-                sigs = None
-        elif line.startswith("PERF_OP_SIG_SEQUENCE="):
-            try:
-                seq = json.loads(line.split("=", 1)[1])
-            except (ValueError, TypeError):
-                seq = []
-    if not sigs:
-        return None, raw, []
-    return sigs, raw, seq
+    raw = ""
+    for attempt in range(1 + _OP_SIG_WEDGE_RETRIES):
+        rc, out = _run_device_step(
+            cmd,
+            repo_root,
+            env,
+            devices,
+            _measure_backstop(repo_root),
+            "coverage probe",
+            stall_s=adaptive_timer(repo_root, "profile", env_key="PERF_MCP_MEASURE_STALL_SEC"),
+            observe_op="profile",
+            observe_root=repo_root,
+        )
+        if rc is None:
+            # UNCHANGED. The timeout path inside _run_device_proc has already reclaimed the device
+            # on its way out and captured no output to reason about, so every caller sees exactly
+            # what it saw before: no signatures, no evidence.
+            return None, "", []
+        raw = out or ""
+        sigs, seq = _parse_op_sigs(raw)
+        if sigs:
+            return sigs, raw, seq
+        if attempt >= _OP_SIG_WEDGE_RETRIES or not _dr().is_dead_board(raw):
+            break
+        print(
+            "  [optimize/cc] coverage probe dispatched no ops and its output names a dead board -- "
+            "reclaiming and retrying (attempt %d of %d): %s"
+            % (attempt + 2, _OP_SIG_WEDGE_RETRIES + 1, _reclaim_device(devices, error_text=raw)),
+            flush=True,
+        )
+    return None, raw, []
 
 
 _LAYER_PATTERN_ATTRS = ("hybrid_override_pattern", "layer_types", "layers_block_type", "block_types")
@@ -3078,6 +3114,15 @@ def _coverage_layers(
         )
         _coverage_cache_put(repo_root, node, case, _cov)
         return {"stack0": _cov}, facts
+    # WHICH KIND OF NOTHING. An empty probe on a live board means there were no ops to count; an
+    # empty probe on a DEAD one means the model never ran at all. Both used to be reported as
+    # "probe_failed", which reads as a defect in the model and sends the reader looking at the
+    # walk, the stacks and the builder -- none of which were involved. _run_op_sigs has already
+    # reclaimed and retried by the time this is reached, so the signature still being present in
+    # the evidence means the board did not come back.
+    if _dr().is_dead_board(raw):
+        facts["no_window"] = "board_wedged"
+        return None, facts
     facts["no_window"] = "probe_failed"
     return None, facts
 

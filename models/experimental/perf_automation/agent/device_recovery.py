@@ -578,7 +578,26 @@ def recover(where: str, reset, error_text: str = "", config_target: str = "", lo
     # reset it might have wanted, and gets one on the next attempt once its telemetry goes. A board
     # that is alive and healthy no longer gets reset at all, which is the failure that cost four
     # chips today.
-    if not _board_needs_reset():
+    # EVIDENCE OUTRANKS TELEMETRY, and only evidence does.
+    #
+    # The temperature veto reads the ARC: a chip that reports a plausible die temperature has a
+    # running ARC, "which is the thing a reset exists to restore". That holds for the fault it was
+    # written for -- 2026-08-17, a reset fired by a TIMEOUT, with no failure signature behind it.
+    #
+    # It does not hold for a stuck ETH fabric. The ARC keeps running and every chip keeps publishing
+    # its temperature while the fabric is dead, so the veto cancels the reset, recover() returns
+    # True, and the caller is told the board came back when nothing was done. Measured 2026-09-25 on
+    # this box: the coverage probe failed with "Timed out waiting for ETH heartbeat ... Stuck at
+    # 0xaabb0024", the reclaim reported "no reset issued", the retry hit the identical wedge, and
+    # `tt-smi -s` answered normally throughout. The veto's own escape hatch -- "gets one on the next
+    # attempt once its telemetry goes" -- never opens for this fault, because the telemetry never
+    # goes.
+    #
+    # So a failure whose OWN TEXT carries a dead-board signature is not vetoed. That is a narrow
+    # door: is_dead_board matches specific runtime faults, never a slow op or a plain timeout, so
+    # the 2026-08-17 path (no signature in its output) still cancels exactly as before. Absent
+    # evidence the telemetry veto is unchanged and still has the last word.
+    if not is_dead_board(error_text) and not _board_needs_reset():
         if log:
             log(
                 "reset SKIPPED at %s: every chip reports a die temperature (%s), so nothing is "

@@ -1083,6 +1083,9 @@ def before_loop(
                 "no_node": "no perf-test node to probe",
                 "probe_failed": "the op-signature probe found nothing and no config declares a layer "
                 "pattern -- this one is NOT a decision, it is unknown",
+                "board_wedged": "the board reported a fault while the op-signature probe ran, so the "
+                "probe never got as far as running the model; the reclaim+retry did not bring it "
+                "back -- the measurement was LOST, and the model has not been shown to be at fault",
             }.get(_why, "reason not reported by the coverage probe (%r)" % (_why or None))
             print(
                 "      depth-bridge: no profiling window -- %s. The baseline profiles FULL depth "
