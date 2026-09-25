@@ -1,9 +1,9 @@
 {
  "last_run": {
-  "run_id": "36103953460",
-  "timestamp": "2026-09-25T06:44:00Z"
+  "run_id": "36135896637",
+  "timestamp": "2026-09-25T12:42:00Z"
  },
- "run_id": "36103953460",
+ "run_id": "36135896637",
  "open_prs": {
   "52106": {
    "issue": 51660,
@@ -51,7 +51,6 @@
    "date": "2026-09-02T18:41:19Z",
    "ci_status_2026-09-08": "5/5 checks green (RTL Sim CI success)"
   },
-  "54901_softshrink": "PR#54901 closed_by_maintainer (mateusznowakTT): softshrink undefined for negative lambda, no further action",
   "54932_hardsigmoid_fp32": {
    "issue": 54897,
    "status": "Open, mergeable_state=behind. No update since 2026-09-02, 2 comments. Low activity - candidate for stale-PR watch next round."
@@ -63,10 +62,6 @@
    "branch": "repo-assist/fix-issue-55434-wh-narrow-row-stride",
    "status": "RTL Sim CI test shows failure conclusion, but its details_url is a broken/placeholder link (github.com/tenstorrernt, a typo domain) suggesting this check result may be infra noise rather than a real regression; overall PR Gate workflow run still action_required (blocked on maintainer approval), so build-artifact.yaml has not executed; needs another look once gate is approved",
    "run_id": "33845189301"
-  },
-  "55424_clamp_output_tensor": {
-   "issue": 55334,
-   "status": "MERGED 2026-09-08 by mateusznowakTT. Remove from active tracking."
   },
   "55435": {
    "ci_status_2026-09-07": "RTL Sim CI test FAILING (~14min run, unusual vs ~1s passes); other 4 Cycode checks green; job log 404 - could not self-diagnose; posted comment flagging for maintainer",
@@ -94,9 +89,6 @@
   "55847_gather_clamp": {
    "issue": 55819,
    "status": "Open. 5/5 pre-checks green (RTL Sim CI + 4 Cycode). Awaiting reviewer action / full PR-Gate not yet triggered. mergeable_state=behind. No action needed this run."
-  },
-  "55293_softplus_bias": {
-   "status": "MERGED 2026-09-09T11:24:16Z"
   },
   "54792_expm1_upper_clamp": {
    "issue": 54770,
@@ -184,10 +176,6 @@
    "title": "fix(models): disable fused topk_router_gpt on Blackhole (needs 12 DRAM banks, Blackhole has 8)",
    "status": "opened this run; gates use_fused_op on not ttnn.device.is_blackhole(mesh_device) in both models/demos/gpt_oss/tt/topk.py and its models/experimental/ops/quasar duplicate; Python-only, no build required; CI outcome unknown yet, check next run"
   },
-  "56864": {
-   "issue": 56827,
-   "status": "CLOSED without merge by CI automation (closed_by github-actions[bot], no comments, no failing checks visible via get_check_runs -- 5/5 green). Root cause of closure unclear from API; #56827 remains open. A fresh fix PR is needed next run."
-  },
   "56955_welford_groupnorm_stride": {
    "issue": 56955,
    "branch": "repo-assist/fix-issue-56955-welford-groupnorm-batch-stride",
@@ -212,15 +200,6 @@
    "issue": 57090,
    "branch": "repo-assist/fix-issue-57090-dedupe-mesh-graph-descriptors",
    "status": "opened this run, [skip ci] docs/config-only; collapsed glm52/kimi27 mgd textprotos (verified byte-identical) to shared sc1_mgd/sc4_mgd, updated run_multirank_pcc.sh + RUN_COMMANDS.md"
-  },
-  "56827_concat_width_retry": {
-   "issue": 56827,
-   "branch": "repo-assist/fix-issue-56827-concat-block-sharded-width-ragged",
-   "status": "SUPERSEDED: issue #56827 fixed and closed via external PR #57100 on 2026-09-21; this repo-assist retry is moot"
-  },
-  "57099": {
-   "issue": 56827,
-   "status": "auto-closed unmerged (unexplained, same pattern as prior #56864); external draft PR #57100 (VirdhatchaniKN) now also targets same issue with a broader 2-defect fix; flagged for maintainer consolidation in monthly summary, no new repo-assist attempt opened"
   },
   "57110_kda_state_dedupe": {
    "issue": 57110,
@@ -258,21 +237,11 @@
    "title": "fix(ttnn): hash Alignment/Tile in ternary and tanh_bw program-cache keys",
    "status": "opened this run; follow-up to #55702, verified root cause against current ternary_device_operation.cpp and tanh_bw_device_operation.cpp; CI triggered, outcome unknown yet, check next run; docker unavailable in sandbox so build unverified locally"
   },
-  "57413_square_bf16_rne": {
-   "issue": 57408,
-   "branch": "repo-assist/fix-issue-57408-square-bf16-rne-rounding",
-   "title": "fix(sfpu): round ttnn.square to nearest-even instead of truncating to bf16",
-   "status": "MERGED as PR #57421 (confirmed 2026-09-24 run)"
-  },
   "57446": {
    "issue": 57446,
    "branch": "repo-assist/fix-issue-57446-unary-pow-fp32-underflow-nan",
    "title": "fix(sfpu): flush ttnn.pow (fp32) underflow to 0 instead of NaN",
    "status": "opened this run; resets FastTwoSum residual e when clamping s (mirrors existing binary_pow reset) and adds explicit out_exp<=0 underflow guard alongside existing overflow guard on WH+BH ckernel_sfpu_unary_power.h; added regression tests for both unary and binary pow paths using issue's exact inputs; CI triggered via pr-gate.yaml, outcome unknown yet, check next run; docker unavailable in sandbox so build unverified locally"
-  },
-  "57349": {
-   "issue": 57322,
-   "status": "MERGED 2026-09-22T14:49:43Z by ijankowskiTT (ternary/tanh_bw program-cache Alignment/Tile hash fix)"
   },
   "57475_moreh_fold_norm_oob": {
    "date": "2026-09-23",
@@ -340,6 +309,24 @@
    "issue": 57732,
    "branch": "repo-assist/fix-issue-57732-dram-width-sharded-narrow-block",
    "status": "opened this run; clamps unclamped first DRAM-bank read in 2D-mcast width-shard walker (both DramWidthShardWalker helper + duplicated inline copy) to per_core_N, matching decode-path factory's existing guard; added regression test; CI triggered via pr-gate.yaml, outcome unknown yet, check next run"
+  },
+  "57867_addcmul_bw": {
+   "issue": 57867,
+   "branch": "repo-assist/fix-issue-57867-addcmul-bw-value-order",
+   "title": "fix(ttnn): fold value into grad before multiplying in addcmul_bw",
+   "status": "opened this run; verified addcdiv_bw in same file already folds value into grad first, addcmul_bw applied it last; reordered both multiplies in addcmul_bw to match; added test_bw_addcmul_no_intermediate_overflow (grad=tensor1=tensor2=1e20, value=1e-3: old order overflows 1e40>3.4e38, fixed order finite at 1e37); clang-format-17 clean, py_compile clean; CI triggered via pr-gate.yaml, outcome unknown yet, check next run; docker unavailable in sandbox so build unverified locally"
+  },
+  "57769": {
+   "issue": 57715,
+   "status": "previously opened (2026-09-24 run), CI/checks not yet reviewed for reviewer activity this run; no comments/reviews yet"
+  },
+  "57697": {
+   "issue": 57410,
+   "status": "previously opened (2026-09-24 run, test-build-wiring fix); no comments/reviews yet"
+  },
+  "57844": {
+   "issue": 57732,
+   "status": "previously opened (2026-09-25 06:44 run, DRAM width-sharded matmul fix); no comments/reviews yet"
   }
  },
  "issues_labeled": [
@@ -1177,8 +1164,9 @@
   }
  },
  "backlog_cursor": {
-  "task1_task2_latest": "2026-09-25 (run 36103953460): reviewed newest ~30 open issues (down to #57732); found and fixed issue #57732 (2D-mcast matmul DRAM width-sharded narrow-block silent garbage output) -- exceptionally well-documented community report with exact line numbers, root cause, and one-line fix; independently re-verified against current matmul_multicore_reuse_mcast_2d_program_factory.cpp before applying (line numbers in the issue were stale vs current main, but the bug pattern and fix were confirmed present at both the DramWidthShardWalker class and inline duplicate). Opened fix PR + regression test + issue comment. Continue backlog from #57732-and-below next run.",
-  "task6_latest": "2026-09-25: nudged 3 never-previously-touched author-blocked stale PRs (no update since 2026-09-02, 3+ weeks): #51129 (digamma fix, PR Gate Status failing), #51155 (snake_beta Cody-Waite, unresolved CHANGES_REQUESTED from mateusznowakTT), #52315 (softmax numeric_stable default, mergeable_state behind, no reviews). 3-action cap reached."
+  "task1_task2_latest": "2026-09-25 (run 36135896637): reviewed newest ~50 open issues (down through #57625); labeled 13 fresh unlabeled issues (10 ijankowskiTT AI-static-analysis defect-catalog issues #57674-#57684 as bug, plus #57873/#57854/#57836). Investigated and fixed #57867 (ttnn.addcmul_bw overflows to inf, applies value after grad*tensorN instead of before, unlike sibling addcdiv_bw in same file) -- verified root cause line-by-line against current ternary_backward.cpp, confirmed no existing PR, opened fix PR + regression test + issue comment. Continue backlog from #57625-and-below next run.",
+  "task6_latest": "2026-09-25: nudged 3 never-previously-touched author-blocked stale PRs (no update since 2026-09-02, 3+ weeks): #51129 (digamma fix, PR Gate Status failing), #51155 (snake_beta Cody-Waite, unresolved CHANGES_REQUESTED from mateusznowakTT), #52315 (softmax numeric_stable default, mergeable_state behind, no reviews). 3-action cap reached.",
+  "task7_latest": "2026-09-25: checked 5 candidate authors from last-24h issues (mooire733, Yusaku-062255, alexxony, brnorris03, adrian-pascual-bernal) via search_issues/search_pull_requests -- all have prior repo history (4, unknown/likely some, 1, 2, and 29 merged PRs respectively); none qualified as new contributor. No welcomes posted this run."
  },
  "labeled_issues": {
   "54827": {
@@ -1523,7 +1511,20 @@
   "57694": {
    "label": "bug",
    "date": "2026-09-25"
-  }
+  },
+  "57674": "bug",
+  "57675": "bug",
+  "57676": "bug",
+  "57677": "bug",
+  "57678": "bug",
+  "57679": "bug",
+  "57680": "bug",
+  "57682": "bug",
+  "57683": "bug",
+  "57684": "bug",
+  "57873": "bug",
+  "57854": "infra-ci",
+  "57836": "performance monitoring"
  },
  "issues_commented": {
   "53922": {
@@ -1616,6 +1617,26 @@
  },
  "run_history": [
   {
+   "run_id": "36135896637",
+   "date": "2026-09-25T12:42:00Z",
+   "summary": "Task1: labeled 13 fresh unlabeled issues -- 10 AI-static-analysis defect-catalog issues from ijankowskiTT (#57674/#57675/#57676/#57677/#57678/#57679/#57680/#57682/#57683/#57684) as bug, plus #57873 (bug, Gemma4 chunked-prefill wrong answers), #57854 (infra-ci, QB2 host losses during qualification), #57836 (performance monitoring, SDPA chunk-sizing). Task2/3: investigated fresh issue #57867 (ttnn.addcmul_bw multiplies grad*tensorN before applying value, overflowing to inf where the true gradient grad*value*tensorN is finite) -- verified root cause line-by-line against current ternary_backward.cpp (confirmed sibling addcdiv_bw already folds value into grad first); confirmed no existing open PR references #57867; opened ready-for-review fix PR reordering both multiplies in addcmul_bw to match addcdiv_bw's pattern, added regression test test_bw_addcmul_no_intermediate_overflow (grad=tensor1=tensor2=1e20, value=1e-3: old order overflows 1e40>3.4e38fp32max, fixed order finite at 1e37); posted confirming comment on the issue. Task5: checked CI via get_check_runs on ~31 open [repo-assist] PRs -- all green except 2 previously-flagged unchanged RTL Sim CI infra-noise cases (#56195/#55435, broken details_url placeholder domain) and PR #57130's 4 pre-existing unrelated squared_difference ULP-flake checks (PR Gate Status itself green, CHANGES_REQUESTED already addressed per prior comment, no new maintainer activity). Discovered 3 previously-untracked open repo-assist PRs (#57769/#57697/#57844) via PR search, no reviews/comments on any yet. Task7: checked 5 candidate recent-issue authors for new-contributor welcome eligibility -- all disqualified by existing repo history (merged PRs or prior issues). Task8: rewrote monthly summary #55015 (had regrown to ~131KB with a stale Suggested Actions list from run 35861476577 on 2026-09-23), refreshed to current PR/issue state, added new #57867 fix PR, trimmed Run History to last 5 runs."
+  },
+  {
+   "run_id": "36079942303",
+   "date": "2026-09-25T01:03:00Z",
+   "summary": "Task1: labeled 16 fresh unlabeled issues -- 7 newest (57815 feature, 57813 ci-bug, 57810 bug, 57807 infra-ci, 57806 performance monitoring, 57800/57798 bug) plus 9 AI-static-analysis defect-catalog issues from ijankowskiTT (57685/57686/57687/57688/57689/57691/57692/57693/57694) as bug. Task2: investigated #57798 (MeshBuffer::deallocate use-after-free when a MeshDevice outlives ReleaseOwnership()) -- confirmed reporter's full root-cause chain line-by-line against current mesh_device_impl.hpp (raw metal_env_ pointer), tt_metal.cpp (ReleaseOwnership has no live-device check), mesh_buffer.cpp (deallocate reads metal_env() after lock() succeeds); posted a confirming comment discussing trade-offs of both suggested fixes, deferred to maintainer since a teardown-ordering fix needs device validation this agent can't do. Checked #57750 (Kimi-K2.7 NFS->Weka) -- already has open PR #57805 from the reporter with CI evidence, skipped duplicate. Task5: spot-checked CI on repo-assist PRs opened in the last 1-2 runs (57624/57645/57697/57769) via get_check_runs -- #57645 (softmax fp32 accurate exp) already fully green+approved per prior memory, others still only 5/5 RTL-Sim/Cycode pre-checks (opened same day, full PR-Gate not yet triggered), no new action needed; re-verified the two known infra-noise RTL-Sim-CI-failure PRs (#56195/#55435) are unchanged (still broken-placeholder details_url pattern, not a real regression). Task6: nudged 3 never-previously-touched author-blocked stale PRs with no update since 2026-09-02 (3+ weeks): #51129, #51155, #52315 (3-action cap reached). Task8: updating monthly summary #55015 with this run's entries."
+  },
+  {
+   "run_id": "36041714939",
+   "date": "2026-09-24T18:36:00Z",
+   "summary": "Task5: checked CI via get_check_runs on ~32 open [repo-assist] PRs -- all green except 2 previously-flagged unchanged RTL Sim CI infra-noise cases (#56195/#55435, broken details_url placeholder domain) and PR #57130's 4 pre-existing unrelated squared_difference ULP-flake checks (PR Gate Status itself green; CHANGES_REQUESTED already addressed per prior-run comment). Task1: labeled 7 fresh 2026-09-24 issues: #57731 feature, #57709/#57708/#57707/#57695/#57716 bug, #57715/#57722 performance monitoring. Task2/3: investigated #57715 (ttnn.transpose bfloat8_b identity typecast waste, iklemenskiTT) -- cloned+verified root cause line-by-line against current transpose.cpp::transpose_impl (matches reporter's exact code citation); confirmed no existing open PR; opened ready-for-review fix PR moving the identity check above the bfloat8_b typecast (mirrors reporter's own suggested fix) plus a regression test (test_transpose_identity_bfloat8_b) mirroring the existing test_transpose_wh_bfp4 pattern; posted confirming comment on the issue. Checked #57724 (nlp_concat_heads_decode vararg OOB) -- already has an open fix PR #57726 from the reporter, no duplicate opened. Task8: rewrote monthly summary #55015 (body had regrown to ~93KB via repeated duplicated Activity/Run-History blocks across at least 5 copies, a recurring failure mode) -- trimmed to a single canonical copy, refreshed Suggested Actions (added new PR, removed stale resolved items like the merged #57421 and the already-resolved #57474/#57518 coverage note and #57324/#57396 duplicate-merge note), kept a trimmed Run History."
+  },
+  {
+   "run_id": "36000165336",
+   "date": "2026-09-24T12:42:00Z",
+   "summary": "Task5: found PR #57130's CHANGES_REQUESTED review was already addressed by a prior commit (via blozano-tt/Claude Opus); posted a comment confirming this and diagnosing its 4 failing checks as a pre-existing unrelated squared_difference_ ULP flake (this PR only touches ttnn.selu golden). Task2: investigated fresh issue #57410 (host BFP4/BFP2 packer rounds directly to destination width instead of via an intermediate BFP8 stage) -- cloned main and verified the root-cause claim line-by-line against current blockfloat_common.cpp::convert_u32_to_bfp; posted a confirming comment; judged a direct fix too high-risk without device access, deferred to maintainer. Task3/4: fixed the smaller, independent build-wiring gap #57410 itself flagged -- test_bfp4_conversion.cpp was never added to sources.cmake's UNIT_TESTS_LEGACY_SRC despite its bfp8 sibling being present, so the only Bfp4 host conversion test in the tree has never compiled; opened a one-line ready-for-review PR. Task6: nudged 3 non-repo-assist author-blocked stale PRs past the 3-day cadence: #45949, #49787, #50519 (3-action cap reached). Task8: refreshed monthly summary Suggested Actions (added #57645/#57624/#57581/#57535/#57410-build-PR, removed merged #57421, added #57130/#57410 coordination items) and prepended this run-history entry."
+  },
+  {
    "run_id": "35767666005",
    "date": "2026-09-22T18:34:00Z",
    "summary": "Task5: checked CI via get_check_runs on 26 open [repo-assist] PRs (57131/57146/57130/56817/57244/57311/57288/57145/56529/56375/56428/56943/56598/56396/55688/51868/54932/54666/54792/53113/56195/56714/53690/54246/54862/52106) -- all green except the same known infra-noise case on #56195 (RTL Sim CI details_url=github.com/tenstorrernt typo domain, unchanged since 09-11); #53113 shows only the aw workflow scaffolding jobs (no repo build checks present on this PR's head, unchanged). Task2/3: investigated fresh, highly detailed issue #57408 (ttnn.square vs ttnn.mul(x,x) disagree bit-for-bit on bfloat16 output because calculate_square's SFPSTORE truncates instead of rounding to nearest-even like the binary MUL path already does) -- verified the reporter's root cause and proposed diff against current tt_metal/hw/ckernels/{wormhole_b0,blackhole}/metal/llk_api/llk_sfpu/ckernel_sfpu_square.h and compute_kernel_api.h::square_tile; confirmed no existing open PR references #57408 (search_pull_requests 0 hits). Opened a scoped fix PR covering square only on WH+BH (added is_fp32_dest_acc_en template param, round via existing float32_to_bf16_rne helper mirroring calculate_sfpu_binary_mul; fixed the one test-harness call site in tt-llk/tests/helpers/include/sfpu_operations.h that needed the extra template arg; added test_square_matches_mul_bit_exact regression test). Left the other affected ops from the issue (rad2deg/deg2rad/softsign/hardsigmoid/prelu) and the Quasar architecture for follow-up PRs -- Quasar's SFPU addressing (ADDR_MOD_6 based calculate_square_sfp_rows) doesn't fit the same if-constexpr pattern without deeper changes, and doing all 5 remaining ops + 3 archs in one PR would be too large to review surgically. Also reviewed #57323 (generalized_moe_gate Blackhole compile failure) -- already has 2 open fix PRs (#57324, #57396), no action needed. Reviewed #57326 (sfpi::lz cannot set CC without v_block) -- assigned to nathan-TT, sfpi compiler-level feature request, not a quick surgical fix, left alone. Reviewed #57410 (host vs device BFP4/BFP2 rounding disagreement) -- well documented but a deeper blockfloat_common.cpp packer algorithm change, deferred as a candidate for a future run given its complexity and cross-cutting host/device correctness implications. Task8: updated monthly summary #55015 with new PR."
@@ -1624,36 +1645,6 @@
    "run_id": "35638744281",
    "date": "2026-09-21T18:36:21Z",
    "summary": "Task5: checked CI via get_check_runs on all 24 currently open [repo-assist] PRs (57131/57146/57130/56817/55435/57145/56529/56375/56428/56943/56598/56396/55688/54932/51868/54792/54666/53113/56195/56714/53690/54246/54862/52106) -- all green except the 3 previously-flagged infra-noise cases (#55435/#51868/#56195 RTL Sim CI details_url is broken placeholder domain 'github.com/tenstorrernt', unchanged from prior runs). Task1: labeled 5 unlabeled fresh open issues found by paging through newest-open-issues search below the prior cursor: #57055 (Metalium include-path CMake refactor, 47 occurrences across 32 files) infra-ci, #57003 ([CI] retire T3K dispatch tests pipeline 31-Oct-2026) infra-ci, #56914 (load weights to device via sockets) feature, #56913 (optimize slow dispatch weight upload perf) performance monitoring, #57011 (some SFPU insns have restricted-range results, useful for 32-bit-correct comparison logic) feature. Task2: verified against current main and commented on 2 fresh issues from iklemenskiTT with zero prior repo-assist engagement: #57213 (squared_difference golden reads input_tensor_a.dtype positionally at binary.py:796, breaking scalar-first calls -- confirmed the sibling add/subtract/multiply/divide goldens already use _tensor_operand/_matched_operands, this one didn't) and #57212 (comparison mode never grades scalar-first div -- confirmed test_binary_scalar.py:832 already carries xfail(strict=True) recording exactly this gap). Task3: opened ready-for-review fix PR for #57213 (branch repo-assist/fix-issue-57213-squared-difference-golden-scalar-dtype) after confirming no existing open PR references #57213 (search_pull_requests returned 0 hits); the fix reuses the _tensor_operand/_matched_operands/_integer_path_scalars helpers #55722 already introduced for the sibling arithmetic goldens in the same file, plus a new regression test (test_squared_difference_scalar_tensor_golden_matches_device) mirroring the existing scalar-first golden test for add/subtract/multiply/div. Verified the diff applies cleanly against the working tree (same commit as a shallow clone used for local inspection); unverified via CI build in this sandbox (no local build capability), CI triggered via pr-gate.yaml on PR open, outcome unknown yet -- check next run. Task6/Task7 skipped this cycle: Task6 last ran 2026-09-20 (still within 3-day cadence, no new nudge needed); Task7 found no fresh 24h issues/PRs with a qualifying new-contributor history this run. Task8: rewrote monthly summary #55015 (body had regrown with duplicated/stale sections again), trimmed to canonical current-state format with the new #57213 PR added to Suggested Actions."
-  },
-  {
-   "run_id": "35600280323",
-   "date": "2026-09-21T12:36:23Z",
-   "summary": "Task5: checked CI on 26 open repo-assist PRs (57145/57146/57131/57130/56817/56997/56956/56943/56714/56598/56529/56428/56396/56375/56195/55670/55688/55435/54932/54792/54666/54246/54862/52106/55670/53113/53690/51868) via get_check_runs -- all green except 3 previously-flagged, unchanged infra-noise cases (#51868 and #56195/#55435 RTL Sim CI broken-placeholder details_url domain 'github.com/tenstorrernt'; #55670's 3 failures already root-caused in a prior run as pre-existing tilize/glm5-perf issues, unrelated to the PR's tensor-aliasing fix). Re-verified via get_job_logs that #55670's flagged run genuinely has 0 failed jobs by the job-logs API despite 3 non-success check runs (consistent with the prior root-cause). Confirmed issue #56827 (concat block-sharded width ragged-tail) is now CLOSED, fixed by external PR #57100 -- removed the stale 'fresh fix needed' suggested-action item; no new repo-assist attempt needed (superseded prior repo-assist retries #56864/#57099, both already closed/unmerged). Task1/2: reviewed newest ~50 open issues (#57186 down through #57001); most already labeled or are maintainer-authored perf/infra notes. Found and verified 3 fresh, well-documented reports from mvlahovicTT (SDPA integration sweep on Blackhole p100a): #57162 (test_sdpa_create_perf_table deadlocks other-session device lock) -- confirmed against current tests/nightly/blackhole/sdpa/test_scaled_dot_product_attention_sprint.py (missing device fixture at line 281, CI-only skipif at lines 190/275, subprocess-based tracy profiler invocation matches reporter's exact mechanism); labeled bug and commented with root-cause confirmation (attributed to reporter, not independently derived). #57165 (indexer_score math-utilization band board-variance) and #57178 (streaming SDPA fp32 DEST rescale slower than legacy at 8q/1kv bfp8) -- both credible perf-board reports with detailed measurement tables, labeled performance monitoring, no comment (reporter's own numbers, not independently verifiable, no additional insight to add beyond labeling). Did not comment on 57165/57178 to avoid restating unverified reporter benchmark numbers as fact. Task6: skipped (last run 2026-09-21 06:53, well under 3-day cadence). Task8: rewrote monthly summary #55015 with this run's entries, removed the resolved #56827 item, added new #57162 comment entry."
-  },
-  {
-   "run_id": "35549609194",
-   "date": "2026-09-20T18:57:00Z",
-   "summary": "Task2/3: investigated fresh issue #57042 (resnet-on-quasar REDUCE_DIM macro-collision compile failure) -- verified against current tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/ckernel_sfpu_reduce.h that it is ALREADY FIXED on main (param renamed to lowercase reduce_dim, with explanatory comment about the -DREDUCE_DIM=... macro collision), matching the reporter's own suggested fix; flagged as closeable in monthly summary, no PR needed. Investigated #56945 (32-bit unpack-to-dest wrong-DST-tile bug) and #56986 (hf_rope decode PCC fail on BH) -- both already have open non-repo-assist fix PRs (#56932 awliu-TT, #57035) per the required existing-fix check; no duplicates opened. Fixed and opened ready-for-review PRs for two fresh, well-scoped 'found by review of #54850' bug reports: #57111 (_forward_shutdown building a plane-scaled host torch.zeros, up to ~513MB, at teardown -- switched to ttnn.zeros(device=dev) for direct on-device alloc) and #57110 (KdaState._zeros duplicate carry cache doubling KDA carry memory -- removed the shadow cache, reset() now zeroes in place via ttnn.fill(state, 0, output_tensor=state), verified ttnn.fill's output_tensor kwarg writes to a preallocated address so it preserves the class's documented trace-safety invariant). Both Python-only, no build needed. Left #57108/#57109 (Kimi-K3 weight-cache dtype gap, AttnRes plane-count triple-derivation) labeled bug but unfixed this run. Task5: spot-checked CI on newest PRs #57131/#57130 (green) and re-verified no new maintainer requests on previously-flagged PRs (#51868/#53690/#56396/#54932/#52106/#53113, all quiet). Task6: skipped -- ran last cycle (2026-09-20T06:38), too soon for the 3-day re-ping cadence. Task8: rewrote monthly summary #55015 with this run's entries and refreshed suggested-actions list."
-  },
-  {
-   "run_id": "35494639210",
-   "date": "2026-09-20T06:38:00Z",
-   "summary": "Task1/2: reviewed newest ~50 open issues (#57103 down through #56904); confirmed #56976 (ttnn.matmul/linear ~4x slower with L1-interleaved operand/output on default program config) as a fresh, well-documented defect -- verified the reported root cause line-by-line against current ttnn/cpp/ttnn/operations/matmul/device/config/matmul_program_config.cpp (all_dram_interleaved gate at L1129-1133 requires DRAM on all three buffers; the spread-blocking branch at L1183 is keyed on that flag), labeled performance monitoring, commented with citations (did not restate reporter's own perf numbers as independently confirmed -- no HW access). Checked #56827 (concat block-sharded width ragged-tail) for existing fixes before considering a new attempt: found repo-assist's own PR #57099 (opened last run) was auto-closed unmerged despite 5/5 green checks -- same unexplained pattern as prior #56864 -- and discovered a new external draft PR #57100 (VirdhatchaniKN) claiming a broader two-defect fix (cursor arithmetic + an alignment-boundary rejection); flagged both for maintainer consolidation in the monthly summary rather than opening a third repo-assist PR. Re-verified CI on #57092/#57093 (opened previous run) -- both 5/5 green. Task6: nudged 3 never-previously-touched stale PRs from the oldest-updated, non-repo-assist list: #52375 (author checkin, dirty since 2026-09-02), #50598 (author checkin, dirty despite 2 approvals, asked to reconfirm an earlier CHANGES_REQUESTED is resolved), #51447 (author checkin, dirty, no substantive review since opened 2026-07-29). Hit the 3-action cap; noted #41596/#40339 (aarch64/Gentoo support, both behind main and untouched since spring 2026) as likely-abandoned candidates for a future closure discussion rather than another nudge. Task8: rewrote monthly summary #55015 with this run's entry, added the #56827 three-way-fix-conflict item and #56976 investigate item, added the 3 new stale-PR author-followup items."
-  },
-  {
-   "run_id": "36000165336",
-   "date": "2026-09-24T12:42:00Z",
-   "summary": "Task5: found PR #57130's CHANGES_REQUESTED review was already addressed by a prior commit (via blozano-tt/Claude Opus); posted a comment confirming this and diagnosing its 4 failing checks as a pre-existing unrelated squared_difference_ ULP flake (this PR only touches ttnn.selu golden). Task2: investigated fresh issue #57410 (host BFP4/BFP2 packer rounds directly to destination width instead of via an intermediate BFP8 stage) -- cloned main and verified the root-cause claim line-by-line against current blockfloat_common.cpp::convert_u32_to_bfp; posted a confirming comment; judged a direct fix too high-risk without device access, deferred to maintainer. Task3/4: fixed the smaller, independent build-wiring gap #57410 itself flagged -- test_bfp4_conversion.cpp was never added to sources.cmake's UNIT_TESTS_LEGACY_SRC despite its bfp8 sibling being present, so the only Bfp4 host conversion test in the tree has never compiled; opened a one-line ready-for-review PR. Task6: nudged 3 non-repo-assist author-blocked stale PRs past the 3-day cadence: #45949, #49787, #50519 (3-action cap reached). Task8: refreshed monthly summary Suggested Actions (added #57645/#57624/#57581/#57535/#57410-build-PR, removed merged #57421, added #57130/#57410 coordination items) and prepended this run-history entry."
-  },
-  {
-   "run_id": "36041714939",
-   "date": "2026-09-24T18:36:00Z",
-   "summary": "Task5: checked CI via get_check_runs on ~32 open [repo-assist] PRs -- all green except 2 previously-flagged unchanged RTL Sim CI infra-noise cases (#56195/#55435, broken details_url placeholder domain) and PR #57130's 4 pre-existing unrelated squared_difference ULP-flake checks (PR Gate Status itself green; CHANGES_REQUESTED already addressed per prior-run comment). Task1: labeled 7 fresh 2026-09-24 issues: #57731 feature, #57709/#57708/#57707/#57695/#57716 bug, #57715/#57722 performance monitoring. Task2/3: investigated #57715 (ttnn.transpose bfloat8_b identity typecast waste, iklemenskiTT) -- cloned+verified root cause line-by-line against current transpose.cpp::transpose_impl (matches reporter's exact code citation); confirmed no existing open PR; opened ready-for-review fix PR moving the identity check above the bfloat8_b typecast (mirrors reporter's own suggested fix) plus a regression test (test_transpose_identity_bfloat8_b) mirroring the existing test_transpose_wh_bfp4 pattern; posted confirming comment on the issue. Checked #57724 (nlp_concat_heads_decode vararg OOB) -- already has an open fix PR #57726 from the reporter, no duplicate opened. Task8: rewrote monthly summary #55015 (body had regrown to ~93KB via repeated duplicated Activity/Run-History blocks across at least 5 copies, a recurring failure mode) -- trimmed to a single canonical copy, refreshed Suggested Actions (added new PR, removed stale resolved items like the merged #57421 and the already-resolved #57474/#57518 coverage note and #57324/#57396 duplicate-merge note), kept a trimmed Run History."
-  },
-  {
-   "run_id": "36079942303",
-   "date": "2026-09-25T01:03:00Z",
-   "summary": "Task1: labeled 16 fresh unlabeled issues -- 7 newest (57815 feature, 57813 ci-bug, 57810 bug, 57807 infra-ci, 57806 performance monitoring, 57800/57798 bug) plus 9 AI-static-analysis defect-catalog issues from ijankowskiTT (57685/57686/57687/57688/57689/57691/57692/57693/57694) as bug. Task2: investigated #57798 (MeshBuffer::deallocate use-after-free when a MeshDevice outlives ReleaseOwnership()) -- confirmed reporter's full root-cause chain line-by-line against current mesh_device_impl.hpp (raw metal_env_ pointer), tt_metal.cpp (ReleaseOwnership has no live-device check), mesh_buffer.cpp (deallocate reads metal_env() after lock() succeeds); posted a confirming comment discussing trade-offs of both suggested fixes, deferred to maintainer since a teardown-ordering fix needs device validation this agent can't do. Checked #57750 (Kimi-K2.7 NFS->Weka) -- already has open PR #57805 from the reporter with CI evidence, skipped duplicate. Task5: spot-checked CI on repo-assist PRs opened in the last 1-2 runs (57624/57645/57697/57769) via get_check_runs -- #57645 (softmax fp32 accurate exp) already fully green+approved per prior memory, others still only 5/5 RTL-Sim/Cycode pre-checks (opened same day, full PR-Gate not yet triggered), no new action needed; re-verified the two known infra-noise RTL-Sim-CI-failure PRs (#56195/#55435) are unchanged (still broken-placeholder details_url pattern, not a real regression). Task6: nudged 3 never-previously-touched author-blocked stale PRs with no update since 2026-09-02 (3+ weeks): #51129, #51155, #52315 (3-action cap reached). Task8: updating monthly summary #55015 with this run's entries."
   }
  ],
  "no_action_reviewed": [
@@ -1712,7 +1703,7 @@
    "note": "verified 0 merged PRs, 0 issues, exactly 1 PR authored (this one)"
   }
  },
- "task8_last_update": "2026-09-25T06:44:00Z",
+ "task8_last_update": "2026-09-25T12:42:00Z",
  "ci_pattern_note": "2026-09-20: PR #56195 shows RTL Sim CI failure with details_url=github.com/tenstorrernt (typo domain) -- same broken-placeholder pattern already seen on #55434/#51868, treating as infra noise not a code defect until a real job log can be fetched.",
  "lessons_learned": [
   "2026-09-21: PR #56817 case study -- a prior Repo Assist 'root cause' diagnosis (sign-magnitude vs two's-complement for Int32 SFPABS) was WRONG despite citing DeepWiki/ISA docs, and was only caught by a maintainer's real on-device measurement. Always weight a contributor's device-measured counter-evidence over a prior confident-sounding root-cause comment, even one from Repo Assist itself; re-verify the ISA claim from scratch rather than trusting the earlier chain of reasoning.",
