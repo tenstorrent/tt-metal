@@ -510,6 +510,104 @@ def test_a_downgrade_lands_on_the_ops_own_tolerance_row(
         assert contract.atol == 0.13 and contract.rtol == 0.05
 
 
+def test_a_bare_tolerance_row_opts_out_of_ulp_without_retracting_a_declared_atol(
+    monkeypatch,
+):
+    """The sweep writes `metric: tolerance` with no numbers for every cell whose budget
+    crossed the format's ceiling, keyed on (in, out, dest). Those rows beat the shared
+    `atol 0.13` row on specificity, and resolving them as-is handed SigmoidAppx the
+    per-format default -- eight device failures on p7 that no host test saw."""
+    op = MathOperation.Abs
+    monkeypatch.setitem(
+        _SFPU_ACCURACY_BUDGET,
+        op,
+        {
+            DEFAULT: AccuracyContract(metric=Metric.TOLERANCE, atol=0.13, rtol=0.05),
+            BudgetKey(
+                input_format=DataFormat.Float16_b, output_format=DataFormat.Float16_b
+            ): AccuracyContract(metric=Metric.TOLERANCE),
+            BudgetKey(output_format=DataFormat.Float32): AccuracyContract(
+                metric=Metric.TOLERANCE, atol=0.5, rtol=0.5
+            ),
+        },
+    )
+    bare_cell = accuracy_contract(
+        op,
+        input_format=DataFormat.Float16_b,
+        output_format=DataFormat.Float16_b,
+        arch=MEASURED_ARCH,
+    )
+    assert bare_cell.metric is Metric.TOLERANCE
+    assert bare_cell.atol == 0.13 and bare_cell.rtol == 0.05
+    # ...and the most specific *numbered* row still wins where there is one.
+    assert (
+        accuracy_contract(op, output_format=DataFormat.Float32, arch=MEASURED_ARCH).atol
+        == 0.5
+    )
+    # An op with only bare rows has nothing to fall through to and keeps the default.
+    monkeypatch.setitem(
+        _SFPU_ACCURACY_BUDGET,
+        op,
+        {
+            BudgetKey(output_format=DataFormat.Float16_b): AccuracyContract(
+                metric=Metric.TOLERANCE
+            )
+        },
+    )
+    assert (
+        accuracy_contract(op, output_format=DataFormat.Float16_b, arch=MEASURED_ARCH)
+        == TOLERANCE_CONTRACT
+    )
+
+
+def test_no_declared_tolerance_is_shadowed_by_a_numberless_row():
+    """The live-table form of the test above: wherever an op declares atol/rtol, every
+    variant that row covers resolves to a *numbered* tolerance or to a step budget,
+    never to the per-format default. Fails on the p7 table without the fall-through."""
+    shadowed = []
+    for op, table in _SFPU_ACCURACY_BUDGET.items():
+        numbered = [
+            key
+            for key, contract in table.items()
+            if contract.metric is Metric.TOLERANCE
+            and (contract.atol is not None or contract.rtol is not None)
+        ]
+        if not numbered:
+            continue
+        input_formats = sorted(
+            {key.input_format for key in table} - {None}, key=lambda f: f.name
+        ) + [None]
+        for input_format in input_formats:
+            for output_format in ULP_CAPABLE_FORMATS:
+                for approx_mode in [*ApproximationMode, None]:
+                    for dest_acc in [*DestAccumulation, None]:
+                        for arch in ChipArchitecture:
+                            query = BudgetKey(
+                                approx_mode=approx_mode,
+                                input_format=input_format,
+                                output_format=output_format,
+                                dest_acc=dest_acc,
+                                arch=arch,
+                            )
+                            if not any(key.matches(query) for key in numbered):
+                                continue
+                            contract = accuracy_contract(
+                                op,
+                                input_format=input_format,
+                                output_format=output_format,
+                                approx_mode=approx_mode,
+                                dest_acc=dest_acc,
+                                arch=arch,
+                            )
+                            if (
+                                contract.metric is Metric.TOLERANCE
+                                and contract.atol is None
+                                and contract.rtol is None
+                            ):
+                                shadowed.append(f"{op.name} {query.describe()}")
+    assert not shadowed, "\n".join(shadowed[:20])
+
+
 @pytest.mark.parametrize(
     "arch", [a for a in ChipArchitecture if a != MEASURED_ARCH], ids=lambda a: a.name
 )
