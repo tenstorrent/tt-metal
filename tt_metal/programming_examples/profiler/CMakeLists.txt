@@ -19,6 +19,7 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_streaming_profiler_zones)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_streaming_profiler_pingpong)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_streaming_profiler_pingpong_fabric)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_streaming_profiler_multicast)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_streaming_profiler_tile_offsets)
 
 add_custom_target(
     profiler_examples
@@ -28,4 +29,5 @@ add_custom_target(
         test_streaming_profiler_pingpong
         test_streaming_profiler_pingpong_fabric
         test_streaming_profiler_multicast
+        test_streaming_profiler_tile_offsets
 )
