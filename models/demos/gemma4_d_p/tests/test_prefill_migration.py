@@ -87,6 +87,7 @@ def migration_environment(request, tmp_path):
                 "PREFILL_MIGRATION_CMD_QUEUE",
                 "PREFILL_MIGRATION_TABLE_QUEUE",
                 "PREFILL_MIGRATION_RESP_QUEUE",
+                "PREFILL_LAYER_COMPLETION_RING",  # LOCAL - do not commit: dodge another user's stale /dev/shm ring
             )
             if key in os.environ
         }
@@ -98,7 +99,7 @@ def migration_environment(request, tmp_path):
         PREFILL_TP="4",
         PREFILL_NUM_LAYERS="60",
         PREFILL_MAX_SEQ_LEN="262144",
-        PREFILL_CHUNK_SIZE="8192",
+        PREFILL_CHUNK_SIZE=str(Gemma4ServiceConfig.CHUNK_SIZE),  # LOCAL PCC OVERRIDE
         PREFILL_NUM_USERS=str(Gemma4ServiceConfig.MAX_USER_SLOTS),
         PREFILL_LAYER_ACK_D2H="1",
         PREFILL_H2D_SERVICE_ID=f"gemma4_migration_{gate}_{os.getpid()}",
