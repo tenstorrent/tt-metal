@@ -406,6 +406,13 @@ tasks:
     - attn_residual
     - ffn_norm
     layer: 0
+  frozen:
+    at: '2026-09-25T23:57:16'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_05_ffn_norm.py: ab360c1beaddcbd086746c905c0b0850d8b0e92d4da815a6af55d4bed1ad5f8d
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
 - id: C.sliding.mlp
   title: sliding mlp (mlp) on device, layer 0
   step: implement
