@@ -15,7 +15,7 @@ namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d {
 
 namespace {
 
-void validate_dram_interleaved(const ttnn::Tensor& t, const char* name) {
+void validate_interleaved(const ttnn::Tensor& t, const char* name) {
     TT_FATAL(t.buffer() != nullptr, "dispatch_fabric2d: {} has no device buffer", name);
     TT_FATAL(
         t.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
@@ -23,19 +23,19 @@ void validate_dram_interleaved(const ttnn::Tensor& t, const char* name) {
         name);
 }
 
-void validate_dram_row_major(const ttnn::Tensor& t, const char* name) {
+void validate_interleaved_row_major(const ttnn::Tensor& t, const char* name) {
     TT_FATAL(
         t.layout() == tt::tt_metal::Layout::ROW_MAJOR,
         "dispatch_fabric2d: {} must be ROW_MAJOR, got {}",
         name,
         t.layout());
-    validate_dram_interleaved(t, name);
+    validate_interleaved(t, name);
 }
 
 // Page indices computed on one chip name pages on another, which only holds while every chip's copy of a
 // buffer starts at the same address. Interleaved allocation on a uniform mesh gives that.
 void validate_control_tensor(const ttnn::Tensor& t, uint32_t num_routed_experts, const char* name) {
-    validate_dram_row_major(t, name);
+    validate_interleaved_row_major(t, name);
     TT_FATAL(
         t.dtype() == tt::tt_metal::DataType::INT32 || t.dtype() == tt::tt_metal::DataType::UINT32,
         "dispatch_fabric2d: {} must be INT32 or UINT32, got {}",
@@ -85,11 +85,11 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
         args.axis,
         extent);
     // The reader resolves a pick through a per-expert word that is either a bucket index or the
-    // ES_NOT_HERE sentinel, and it tells the two apart by magnitude alone.
+    // BUCKET_NOT_HERE sentinel, and it tells the two apart by magnitude alone.
     TT_FATAL(
-        static_cast<uint64_t>(extent) * args.experts_per_chip < dspf2d::ES_NOT_HERE,
+        static_cast<uint64_t>(extent) * args.experts_per_chip < dspf2d::BUCKET_NOT_HERE,
         "dispatch_fabric2d: this dispatch group has {} x {} experts, but a bucket index has to stay "
-        "below the ES_NOT_HERE sentinel the routing pass tests against",
+        "below the BUCKET_NOT_HERE sentinel the routing pass tests against",
         extent,
         args.experts_per_chip);
     TT_FATAL(
@@ -99,7 +99,7 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
         "a line or mesh.",
         args.axis);
 
-    // The relay sizes a chunk from the counts of a chip that is neither its origin nor its destination,
+    // The forward sizes a chunk from the counts of a chip that is neither its origin nor its destination,
     // so it needs every source chip's boundaries, not just its own. offset_cumsum's fourth output is
     // that table; the single-row form the production op takes is not enough.
     validate_control_tensor(tensor_args.expert_offsets_tensor, args.num_routed_experts, "expert_offsets");
@@ -118,7 +118,7 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
 
     if (tensor_args.padding_config.has_value()) {
         const auto& pc = *tensor_args.padding_config;
-        validate_dram_row_major(pc, "padding_config");
+        validate_interleaved_row_major(pc, "padding_config");
         TT_FATAL(
             pc.dtype() == tt::tt_metal::DataType::INT32 || pc.dtype() == tt::tt_metal::DataType::UINT32,
             "dispatch_fabric2d: padding_config must be INT32 or UINT32, got {}",
@@ -131,7 +131,7 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
     }
 
     // A padded token's unguarded lookup lands on a trailing sentinel column that maps to -1.
-    validate_dram_row_major(tensor_args.expert_dispatch_table_tensor, "expert_dispatch_table");
+    validate_interleaved_row_major(tensor_args.expert_dispatch_table_tensor, "expert_dispatch_table");
     TT_FATAL(
         tensor_args.expert_dispatch_table_tensor.dtype() == tt::tt_metal::DataType::INT32,
         "dispatch_fabric2d: expert_dispatch_table must be INT32, got {}",
@@ -146,7 +146,7 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
         args.num_routed_experts + 1);
 
     const auto& input = tensor_args.input_tensor;
-    validate_dram_interleaved(input, "input_tensor");
+    validate_interleaved(input, "input_tensor");
     TT_FATAL(
         input.dtype() == tt::tt_metal::DataType::BFLOAT16,
         "dispatch_fabric2d: input must be BFLOAT16, got {}. The fp8-scaled path appends per-block scales "
@@ -162,22 +162,22 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
             hidden % tt::constants::TILE_WIDTH == 0,
             "dispatch_fabric2d: a TILE input needs emb_dim ({}) to be a multiple of {}. The untilizer "
             "reads whole tile columns and its row stride is the token page, so a partial tile column "
-            "would drop values and misalign every stripe after the first",
+            "would drop values and misalign every tile row after the first",
             hidden,
             tt::constants::TILE_WIDTH);
     }
 
     // Both the stream cores and, under TILE, the untilizer pool come out of this set.
     TT_FATAL(
-        args.worker_core_range_set.num_cores() >= stream_count(args.num_links) +
-                                                     (input.layout() == tt::tt_metal::Layout::TILE ? 1u : 0u),
+        args.worker_core_range_set.num_cores() >=
+            stream_count(args.num_links) + (input.layout() == tt::tt_metal::Layout::TILE ? 1u : 0u),
         "dispatch_fabric2d: the op was given {} worker cores but needs {} streams{}",
         args.worker_core_range_set.num_cores(),
         stream_count(args.num_links),
         input.layout() == tt::tt_metal::Layout::TILE ? " plus at least one untilizer" : "");
 
     const auto& indices = tensor_args.indices_tensor;
-    validate_dram_row_major(indices, "indices_tensor");
+    validate_interleaved_row_major(indices, "indices_tensor");
     TT_FATAL(
         indices.dtype() == tt::tt_metal::DataType::UINT16,
         "dispatch_fabric2d: indices must be UINT16, got {}",

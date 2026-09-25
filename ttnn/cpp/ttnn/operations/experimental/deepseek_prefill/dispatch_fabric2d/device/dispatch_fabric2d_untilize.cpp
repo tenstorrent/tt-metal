@@ -18,7 +18,7 @@ namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d {
 
 namespace {
 
-// Tile columns the untilizer packs per call: the largest divisor of a stripe's tile count that is at
+// Tile columns the untilizer packs per call: the largest divisor of a tile row's tile count that is at
 // most eight. pack_untilize computes a block's L1 column offset as block_index * block_ct_dim, so a
 // remainder block would land on top of the previous one -- a divisor is the requirement, not a
 // preference, and eight is where the packer's own tile budget ends.
@@ -38,14 +38,14 @@ constexpr const char* kKernelDir =
 // gets a second: the traffic those untilizers add stays as close to the columns the streams already use
 // as the row allows, instead of clustering at one end of it.
 std::vector<tt::tt_metal::CoreCoord> decide_untilizer_cores(
-    const CoreRangeSet& universe,
+    const CoreRangeSet& allowed_cores,
     const StreamPlacements& streams,
-    uint32_t num_stripes,
+    uint32_t num_tile_rows,
     UntilizerPoolFallback* fallback) {
-    const auto spare = spare_cores(universe, streams);
+    const auto spare = spare_cores(allowed_cores, streams);
     const std::size_t num_links = streams.size() / 2u;  // two streams per link
-    // No point in more cores than stripes; a core with no stripes would still pay its program build.
-    const std::size_t want = std::min<std::size_t>(UNTILIZERS_PER_LINK * num_links, num_stripes);
+    // No point in more cores than tile rows; a core with no tile rows would still pay its program build.
+    const std::size_t want = std::min<std::size_t>(UNTILIZERS_PER_LINK * num_links, num_tile_rows);
 
     // A displaced stream can sit a row lower than the rest; the pool goes under all of them.
     std::size_t lowest_stream_row = 0;
@@ -127,10 +127,10 @@ std::optional<UntilizePlan> plan_untilize(
     UntilizePlan plan;
     plan.tiles_per_row = static_cast<uint32_t>(input.logical_shape()[-1]) / tt::constants::TILE_WIDTH;
     plan.block_ct_dim = untilize_block_ct_dim(plan.tiles_per_row);
-    // A ragged tail gets a whole stripe of its own, which the packer fills with the tile's padding
+    // A ragged tail gets a whole tile row of its own, which the packer fills with the tile's padding
     // rows the way production `dispatch` does. Staging is allocated to match, so those rows land in
-    // pages past the sequence that nothing reads -- the routing pass walks tokens, not stripes.
-    plan.num_stripes = (seq_len_per_chip + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
+    // pages past the sequence that nothing reads -- the routing pass walks tokens, not tile rows.
+    plan.num_tile_rows = (seq_len_per_chip + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
     plan.tile_bytes = static_cast<uint32_t>(input.buffer()->aligned_page_size());
     plan.token_bytes = token_bytes;
     plan.sem_addr = sem_addr;
@@ -142,7 +142,7 @@ std::optional<UntilizePlan> plan_untilize(
     // The packer writes its rows at a stride of tiles_per_row * TILE_WIDTH datums in the PAYLOAD's
     // format, while the writer beside it and the staging page both count a row as token_bytes. Those
     // agree only while the row needs no alignment padding; if they ever diverge, every token after the
-    // first of a stripe shears by the difference, which is the one failure this path has no way to
+    // first of a tile row shears by the difference, which is the one failure this path has no way to
     // notice.
     const uint32_t packed_row_bytes =
         plan.tiles_per_row * tt::constants::TILE_WIDTH * static_cast<uint32_t>(out_payload.element_size());
@@ -157,15 +157,15 @@ std::optional<UntilizePlan> plan_untilize(
 UntilizerPoolFallback add_untilizer_pool(
     tt::tt_metal::ProgramDescriptor& desc,
     const StreamPlacements& streams,
-    const CoreRangeSet& universe,
+    const CoreRangeSet& allowed_cores,
     const UntilizePlan& plan) {
     UntilizerPoolFallback fallback = UntilizerPoolFallback::kNone;
-    const auto pool = decide_untilizer_cores(universe, streams, plan.num_stripes, &fallback);
+    const auto pool = decide_untilizer_cores(allowed_cores, streams, plan.num_tile_rows, &fallback);
     TT_FATAL(!pool.empty(), "dispatch_fabric2d: a TILE input needs at least one core beside the streams");
     const uint32_t pool_size = static_cast<uint32_t>(pool.size());
     const CoreRangeSet pool_cores(ttsl::Span<const tt::tt_metal::CoreCoord>(pool.data(), pool_size));
 
-    // Tiled stripe, reader -> compute. A whole number of block_ct_dim blocks deep, so a block never
+    // Tiled tile row, reader -> compute. A whole number of block_ct_dim blocks deep, so a block never
     // straddles the ring wrap, and two blocks deep so the reader runs ahead of the packer.
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = 2u * plan.block_ct_dim * plan.tile_bytes,
@@ -176,7 +176,7 @@ UntilizerPoolFallback add_untilizer_pool(
             .page_size = plan.tile_bytes,
         }}},
     });
-    // Untilized rows, compute -> writer. A whole number of stripes, so a stripe's rows are one
+    // Untilized rows, compute -> writer. A whole number of tile rows, so a tile row's rows are one
     // contiguous run -- pack_untilize writes each column block at an offset into that run. The index
     // is c_11 to match the sibling `dispatch` op's untilize output, so a profile of the two reads the
     // same. Its format is the payload's rather than the input's: the packer converts as it writes here,
@@ -194,13 +194,13 @@ UntilizerPoolFallback add_untilizer_pool(
     std::vector<uint32_t> ct(dspf2d::UntilizeCtArgs::kCount, 0u);
     ct[dspf2d::UntilizeCtArgs::kTileCb] = static_cast<uint32_t>(tt::CBIndex::c_0);
     ct[dspf2d::UntilizeCtArgs::kRowCb] = static_cast<uint32_t>(tt::CBIndex::c_11);
-    ct[dspf2d::UntilizeCtArgs::kNumStripes] = plan.num_stripes;
+    ct[dspf2d::UntilizeCtArgs::kNumTileRows] = plan.num_tile_rows;
     ct[dspf2d::UntilizeCtArgs::kPoolSize] = pool_size;
     ct[dspf2d::UntilizeCtArgs::kTilesPerRow] = plan.tiles_per_row;
     ct[dspf2d::UntilizeCtArgs::kBlockCtDim] = plan.block_ct_dim;
     ct[dspf2d::UntilizeCtArgs::kTileBytes] = plan.tile_bytes;
     ct[dspf2d::UntilizeCtArgs::kTokenBytes] = plan.token_bytes;
-    ct[dspf2d::UntilizeCtArgs::kRowsPerStripe] = tt::constants::TILE_HEIGHT;
+    ct[dspf2d::UntilizeCtArgs::kRowsPerTileRow] = tt::constants::TILE_HEIGHT;
     ct[dspf2d::UntilizeCtArgs::kStreamCount] = static_cast<uint32_t>(streams.size());
     ct[dspf2d::UntilizeCtArgs::kUntilizeSemAddr] = plan.sem_addr;
     ct[dspf2d::UntilizeCtArgs::kStreamCoordsBase] = dspf2d::UntilizeCtArgs::kCount;
@@ -210,7 +210,7 @@ UntilizerPoolFallback add_untilizer_pool(
         ct.push_back(static_cast<uint32_t>(placement.worker_virtual.y));
     }
     // The kernels index the coordinates from this base and chain their accessor arguments past them.
-    // A base that does not match the block actually appended sends every stripe's arrival to a core
+    // A base that does not match the block actually appended sends every tile row's arrival to a core
     // that is not there, which the stream readers then wait for forever.
     TT_FATAL(
         ct.size() == dspf2d::UntilizeCtArgs::kCount + 2u * streams.size(),

@@ -21,7 +21,7 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
         mod,
         R"doc(
         MoE prefill dispatch over an explicitly-forwarded FABRIC_2D: each token goes to the chips
-        hosting the experts it was routed to, one hop at a time, relaying through a DRAM forwarding
+        hosting the experts it was routed to, one hop at a time, forwarding through a DRAM forwarding
         buffer rather than leaving multi-hop routing to the fabric.
 
         Same job as `ttnn.experimental.deepseek_prefill.dispatch`, different call. Against that op:
@@ -37,12 +37,12 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
                                   staging buffer by a pool of cores beside the stream cores, which
                                   runs while the stream cores build their routing index; the transport
                                   itself is unchanged. TILE needs emb_dim to be a multiple of 32; a
-                                  ragged sequence gets a final stripe of tile padding that staging has
+                                  ragged sequence gets a final tile row of tile padding that staging has
                                   room for and nothing reads.
             indices_tensor        top-k expert ids per token, UINT16 ROW_MAJOR.
             expert_offsets        where each SOURCE chip's run starts inside each expert's region, for
                                   every source chip: offset_cumsum's all_global_dispatch_offsets. Must
-                                  be REPLICATED along the dispatch axis, because a relaying chip sizes a
+                                  be REPLICATED along the dispatch axis, because a forwarding chip sizes a
                                   run it neither wrote nor receives.
             expert_dispatch_table global expert id -> chip in the dispatch group, -1 when the expert is
                                   not in this group.
@@ -62,7 +62,7 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
 
         Constraints, all enforced:
 
-            topology              Ring or Torus, and `cluster_axis` must be WRAP-WIRED. This op relays
+            topology              Ring or Torus, and `cluster_axis` must be WRAP-WIRED. This op forwards
                                   single hops around a ring; on a mesh or a line there is no ring to go
                                   around. A galaxy cabled for TORUS_XY satisfies this on either axis, a
                                   TORUS_Y one only on axis 0. Note that fabric auto-discovery silently
@@ -107,7 +107,7 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
         subdevice_id: the sub-device whose Tensix cores the op may use, for both its stream cores and
         a TILE input's untilizer pool. Omitted, it is the device's first sub-device, which with no
         sub-device manager loaded is the whole compute grid. The model passes the row it carves for
-        dispatch, and a stream whose eth-nearest worker falls outside the carve is refused rather than
+        dispatch, and a stream whose eth-nearest worker falls outside the core set is refused rather than
         relocated onto a core something else is using.
 
         `cluster_axis` other than 0 is reachable but untested: it is only bounds-checked, and a
