@@ -1,4 +1,4 @@
-# M3 prefill budget study — results (Phase A)
+# M3 prefill budget study — results
 
 Branch `vmelnykov/m3_prefill_budget_study` from `main` `f5093e7` (includes #57199). 2026-09-25, Blackhole
 galaxy bh-glx-120-b09u02, one (4,4) sub-mesh (stage 0 of 2), SP=4 TP=4 EP=16, bf4 experts, untraced.
@@ -6,10 +6,14 @@ History: **real tokens** (tiled `longbook_qa_eng_prefill_56320_nopad`), filled c
 history in any timed run, so the §E2 synthetic-vs-real validation is not needed. The E3 depth profiles attend
 a zeroed cache; their totals match the real-history wall times within the host gap (below).
 
-**Phase B (packed forwards) is not done.** The experiment branch was lost; `main` has no packed path. Q3, the
-packed half of Q4, E4, E5-packed and E8 are pending. The simulator numbers below *assume* additivity.
+The experiment branch was lost, so the packed path was **rebuilt on this branch** (Phase B): a default-off
+`TtPrefillRuntimeConfig.segment_size` plus `TtPrefillRuntime.prefill_segments` — norms, projections and MoE
+once on the packed rows, the per-chunk attention core (moved unchanged into `_attention_core`) once per
+segment. Gate vs the original `prefill_chunk` path: dense KV PCC 1.00000, sparse ≥ 0.9996 (layers 0+3); at
+141k depth (E8) ≥ 0.9959 over 8 layers. The default path is unchanged (S8 W=2048 47.78 ms before and after).
 
-133 rows in `runs.csv` (128 OK, 5 ERROR — see the end), 248 zone rows in `ops.csv`, plots in `plots/`.
+All rows are in `runs.csv` (5 ERROR — see the end), 248 zone rows in `ops.csv`, plots in `plots/`,
+additivity in `additivity.csv`, model-vs-measured packed forwards in `model_check.txt`.
 
 ## Answers
 
@@ -41,26 +45,34 @@ W = 2048/5120/8192 = 47.8/95.8/146.2 ms vs ~47/92/140 expected. **W = 8192 runs 
   although the dense ring-gather buffer is sized to capacity.
 - The only n dependence is MoE: pad rows are skipped, 0.9–1.3 ms per sparse layer between n = 2048 and 256.
 
-### Q3 — additivity / mixed depths
+### Q3 — additivity / mixed depths (E4)
 
-**Pending Phase B** (needs the packed path). Evidence so far: per-layer costs compose — S0 is predicted from
-the D and S8 fits within −7…+10% at every W and h, and three different 5-sparse-layer sets (3–7, 8–12,
-11–15) agree within 1–2%. Loop-order and mixed-depth coupling cannot be measured without packing.
+**Additive.** `T_pred = T(W, all cold) + Σ [T1(h_i, n_i) − T1(0, 2048)]` matches all 32 packed forwards
+(D, S8, S0; W = 4096 and 8192; C1–C12) within **±6%**, and E5's padding pair at −9.3%; max |residual|
+9.3% (< 10%). **No mixed-depth penalty**: C2 + C1 = 181.3 ms vs 2 × C5 = 181.0 ms (S8; D 82.6 vs 80.9),
+and the mixed forwards are more uniform (90.5/90.5 vs 97.2/84.1). Loop order: C4r vs C4 +1.0% (S8), +2.3% (D).
+Depth-first chunks of one slot (C6, C12) behave like independent segments.
 
-### Q4 — forward budget and grouping (simulator, additivity assumed)
+Packing overhead: a fixed **0.33 ms (sparse) / 0.61 ms (dense) per extra segment per layer** — all-cold packed
+vs plain at the same W: S8 84.1 vs 81.8 (W=4096), 155.1 vs 146.2 (W=8192); packed 2×2k (layers 0+3)
+18.3 vs 20.4 ms run back to back. In `coeffs.json` as `seg_a`. With it, the cost model predicts every
+measured packed forward with **3.2% mean / 10.3% max** error (`model_check.txt`).
+
+### Q4 — forward budget and grouping (simulator; additivity confirmed by E4)
 
 - **Budget in ms, not tokens.** At 549k a 2048-row segment adds ~125 ms to stage 0 vs ~28 ms to an
   8-sparse stage; a token budget lets one deep segment stall the pipeline (fwd p99 ~940 ms at W = 8192).
   The `cost` policy (cap each forward at a full cold forward's cost) holds p99 at ~200–260 ms for −1…5% tok/s.
 - **Grouping: fcfs ≈ bucket** (within 0.1%); with an additive model grouping changes variance, not work.
-- **W:** today no SP=4 limit remains (#57199). tok/s gains are small past 4096 (+2–4% to 8192), p50 latency
-  doubles. Recommend W = 4096–8192 with the `cost` cap.
+- **W:** today no SP=4 limit remains (#57199). tok/s gains are small past 4096 (+2.7% to 8192) and p50
+  latency doubles; the per-segment overhead eats most of the width gain. Recommend W = 4096 with the `cost` cap
+  (8192 only if the extra 2–3% matters more than latency).
 
 | W (split 8,8,8,8,7,7,7,7) | fcfs tok/s | cost tok/s | cost fwd p99 ms |
 |---|---|---|---|
 | 2048 | 17.4k | 17.4k | 253 |
-| 4096 | 18.6k | 17.5k | 254 |
-| 8192 | 19.3k | 18.4k | 257 |
+| 4096 | 18.3k | 17.5k | 254 |
+| 8192 | 18.8k | 18.1k | 257 |
 
 ### Q5 — stage 0 and the layer split
 
@@ -72,10 +84,11 @@ costs ~10× a sparse layer at 549k (prior estimate 13×). With the default split
 
 | split (W = 8192, fcfs) | tok/s | stage utilisation |
 |---|---|---|
-| 8,8,8,8,7,7,7,7 (default) | 19.3k | 100 / 49–55 |
-| 6,8,8,8,8,8,7,7 | 22.3k | 100 / 56–64 |
-| 4,8,8,8,8,8,8,8 | 26.4k | 100 / 76 |
-| **3,9,8,8,8,8,8,8** | **28.7k (+48%)** | 98 / 82–92 |
+| 8,8,8,8,7,7,7,7 (default) | 18.8k | 100 / 49–56 |
+| 6,8,8,8,8,8,7,7 | 21.7k | 100 / 57–65 |
+| 5,8,8,8,8,8,8,7 | 23.6k | 100 / 62–70 |
+| 4,8,8,8,8,8,8,8 | 25.7k | 100 / 77 |
+| **3,9,8,8,8,8,8,8** | **28.0k (+49%)** | 98 / 83–94 |
 
 **Recommend 3,9,8,8,8,8,8,8** (stage 0 = dense layers only). Check that 9 layers + KV fit a (4,4) stage.
 
@@ -84,8 +97,18 @@ costs ~10× a sparse layer at 549k (prior estimate 13×). With the default split
 Pad rows are **not free in attention**: dense attention charges the full padded segment (and at least ~2944
 rows); sparse attention cost does not depend on rows at all. Pad rows **are** skipped by MoE (≈0.5 µs per pad
 token-layer saved). On the AgentX mix, 2048 rounding gives 82.5% fill; `--paged` (128) raises fill to 98% but
-tok/s only +2–4%, because the dense row floor means shorter segments do not get cheaper. Packed pad-row
-cost (`0:2048,0:256` vs `0:2048,0:2048`) is pending Phase B.
+tok/s only +2–4%, because the dense row floor means shorter segments do not get cheaper. Packed (E5):
+`0:2048,0:256` vs `0:2048,0:2048` — S8 74.4 vs 84.1 ms (−11.5%: MoE skips the tail pad rows), D 14.0 vs
+13.9 ms (+1%: dense attention pays for pad rows). The MoE saving needs the pad rows to sit after each chip's
+real rows; a short segment that is not last in the forward makes MoE route every row (C7: +3% over prediction).
+
+### E8 — accuracy at depth
+
+Packed `[141312:2048, 0:2048]` vs the same segments alone on the original path, real history, S0 layers
+(0–7), all 143k real positions: K PCC ≥ 0.9989, V ≥ 0.9959 (worst: layer 7), index_k ≥ 0.9992; dense
+layers 1.00000. Drift grows with layer depth, consistent with the wider MoE matmul (4096 vs 2048 rows) —
+a width effect, well inside the 0.94–0.95 wide-forward drift seen before. **Indexer top-k overlap was not
+measured**: the selected blocks stay inside `msa_indexer_sparse`; it needs a debug output from that op.
 
 ### Q7 — not run
 
@@ -100,12 +123,14 @@ layer_ms = a + b·W + c·max(p, p0)·h + d·h + e·n        stage_ms = o·W + Σ
 dense : a 1.078  b 4.35e-4  c 2.22e-8  d 0        e 0        p0 2944   R² 0.9999 (29 pts)
 sparse: a 2.020  b 1.36e-3  c 0        d 6.39e-6  e 5.06e-4  p0 0      R² 0.998  (29 pts)
 o = 7.09e-4 ms/token (from 8- vs 5-sparse-layer sets; 2·T1 − T2 gives 0–2.5 ms, noisy)
+seg_a (per extra packed segment per layer): dense 0.609, sparse 0.331 ms (E4 cold packed vs E1 plain)
 ```
 
 p = padded rows of the segment. Fitted by non-negative least squares on E1 + E2 + E2c (smallest capacity) +
 E2w. Worst residuals: dense W = 4096 cold +17%, dense W = 2048 cold +12…13% (h = 0 uses the no-cache
 attention path, which the model does not separate); sparse W = 2048 h = 16k +8%, cold n = 256 +8%. All
-others within ±6%. The simulator now uses `max(padded(n), p0)` for the c term and `o` per token.
+others within ±6%. The simulator now uses `max(padded(n), p0)` for the c term, `o` per token and `seg_a` per
+segment. Validated on the 32 packed E4 forwards: 3.2% mean, 10.3% max error (D W=8192 C12, model high).
 
 ## Equivalent-token table (W = 2048, n = 2048)
 
@@ -130,7 +155,9 @@ others within ±6%. The simulator now uses `max(padded(n), p0)` for the c term a
 3. Capacity does not cost time — size caches for the max context.
 4. The first layer of a process costs more than later ones at W = 8192 (20.8 vs ~17.3 ms sparse): dispatch
    start-up, visible only in 1–2-layer runs.
-5. Next: Phase B packed path → E4/E5/E8; then E6/E7; traced repeats.
+5. Packing on a (4,4) sub-mesh is nearly free (+3–6% cold at the same W) and additive, so the scheduler can
+   treat a forward's cost as a sum of per-segment costs — which is what the `cost` policy needs.
+6. Next: E6/E7; indexer top-k overlap instrumentation; traced repeats; `prefill_segments` under trace.
 
 ## Runs that failed
 
@@ -139,4 +166,4 @@ others within ±6%. The simulator now uses `max(padded(n), p0)` for the c term a
 - E3 with `compile()` + real prefix under tracy: the 141k capture wrote a 30 GB ops log and used 198 GB RAM in
   post-processing; stopped before 549k. Replaced by `PROFILE_SKIP_COMPILE=1 SKIP_PREFIX=1` (E3b, ~2 GB each).
 - E3 first attempt: `run_prefill_profile.sh` needs `FABRIC` set; no data lost.
-- No HANG, OOM or LOAD_TIMEOUT.
+- No HANG, OOM or LOAD_TIMEOUT (Phase A or B).

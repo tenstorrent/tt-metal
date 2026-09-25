@@ -64,3 +64,13 @@ First forward of a new shape pays 3–39 s JIT (incl. a new n — MoE padding co
 ## Status (20:15)
 Phase A done: coeffs.json, sim/, plots 1/2/2b/3/5, REPORT.md. Phase B (packed path; E4, E5-packed, E8,
 Q3) not started — needs model-code work, waiting on the owner's go-ahead.
+
+## Phase B (22:20)
+- Rebuilt the packed path on this branch: `segment_size` + `prefill_segments` (tt_prefill_runtime.py),
+  `_attention_core` per segment (attention/prefill.py), per-chip padding config (topk.py).
+- Gate (layers 0+3) vs original path: dense KV PCC 1.00000, sparse ≥ 0.9996. Regression: default path S8
+  W=2048 47.78 ms (was 47.80).
+- E4: 32 packed forwards additive within ±6% (E5 pair −9.3%); no mixed-depth penalty; loop order ≤ 2.3%.
+- Per-segment packing overhead seg_a: dense 0.61, sparse 0.33 ms/segment/layer; model vs packed 3.2% mean.
+- E8 at 141k: K ≥ 0.9989, V ≥ 0.9959, index_k ≥ 0.9992 over 8 layers. Top-k overlap not measured.
+- Sim rerun with seg_a: 3,9,8,… split 28.0k vs 18.8k tok/s default (+49%).

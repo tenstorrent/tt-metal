@@ -88,13 +88,17 @@ class CostModel:
             self.stages.append(kinds)
         assert start == N_LAYERS, split
         self.S = len(split)
-        self.A = [C.get("stage_overhead_ms", 0.0) + sum(k["a"] for k in ks) for ks in self.stages]
+        # seg_a: fixed attention cost per packed segment; charged per segment, so remove one from `a`.
+        self.A = [C.get("stage_overhead_ms", 0.0) + sum(k["a"] - k.get("seg_a", 0.0) for k in ks) for ks in self.stages]
         self.Bw = [C.get("stage_overhead_per_token_ms", 0.0) + sum(k["b"] for k in ks) for ks in self.stages]
 
     def seg_vec(self, seg):
         n, h = seg["n"], seg["h"]
         p = padded(n)
-        return [sum(k["c"] * max(p, k.get("p0", 0)) * h + k["d"] * h + k["e"] * n for k in ks) for ks in self.stages]
+        return [
+            sum(k.get("seg_a", 0.0) + k["c"] * max(p, k.get("p0", 0)) * h + k["d"] * h + k["e"] * n for k in ks)
+            for ks in self.stages
+        ]
 
     def fwd_vec(self, W, segsum):
         return [self.A[s] + self.Bw[s] * W + segsum[s] for s in range(self.S)]

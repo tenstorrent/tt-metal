@@ -174,6 +174,47 @@ def main(res):
         fig.tight_layout()
         fig.savefig(os.path.join(out, "3_op_breakdown_vs_h.png"), dpi=150)
 
+    # 4. additivity: measured vs predicted packed forwards (additivity.py output)
+    add = os.path.join(res, "additivity.csv")
+    if os.path.exists(add):
+        rows = list(csv.DictReader(open(add)))
+        fig, ax = plt.subplots(figsize=(6.2, 5.2), facecolor=SURF)
+        lim = max(max(float(r["meas_ms"]), float(r["pred_ms"])) for r in rows) * 1.08
+        ax.plot([0, lim], [0, lim], color=INK2, linewidth=1, linestyle="--", label="y = x")
+        for x in (0.9, 1.1):
+            ax.plot([0, lim], [0, lim * x], color=GRID, linewidth=1)
+        for i, ls in enumerate(("S8", "S0", "D")):
+            pts_ = [(float(r["pred_ms"]), float(r["meas_ms"])) for r in rows if r["layer_set"] == ls]
+            ax.scatter(
+                [p for p, _ in pts_],
+                [m for _, m in pts_],
+                s=40,
+                color=SERIES[i],
+                edgecolor=SURF,
+                linewidth=1.5,
+                label=f"{ls} ({len(pts_)} forwards)",
+                zorder=3,
+            )
+        worst = max(rows, key=lambda r: abs(float(r["resid_pct"])))
+        ax.annotate(
+            f"worst {worst['layer_set']} {worst['compo']} {float(worst['resid_pct']):+.1f}%",
+            (float(worst["pred_ms"]), float(worst["meas_ms"])),
+            xytext=(8, -14),
+            textcoords="offset points",
+            color=INK,
+            fontsize=9,
+        )
+        style(
+            ax, "Packed forwards: measured vs additive prediction", "predicted ms (cold packed + Σ ΔT1)", "measured ms"
+        )
+        ax.set_xlim(0, lim)
+        ax.set_ylim(0, lim)
+        ax.legend(
+            frameon=False, fontsize=9, labelcolor=INK, loc="upper left", title="grey lines: ±10%", title_fontsize=8
+        )
+        fig.tight_layout()
+        fig.savefig(os.path.join(out, "4_additivity.png"), dpi=150)
+
     # 5. simulator: tok/s vs W per policy (default split); tok/s per layer split (W=8192, fcfs)
     def sim_rows(path):
         rows = []
