@@ -229,19 +229,20 @@ all pass (`test_mlp_tp` skips on a MoE checkpoint, which has no dense MLP):
 | Long prefill T=2304, chunked vs single-pass | 0.99745 |
 | Traced vs eager chunked prefill, T=4096 / 4352 | 0.99823 / 0.99928 |
 
-Full component suites, same mesh and checkpoint, measured **before** the MoE prefill change above
-(not re-run since, except the PCC cases in the table):
+Full component suites, same mesh and checkpoint. The first group was re-run with the current code
+(including with the watcher on, as the CI leg runs it); the second group was measured before the MoE
+prefill change and has not been re-run since:
 
-| Suite | Result |
-| ----- | ------ |
-| `test_gdn_tp.py` | 17/17 |
-| `test_attention_tp.py` | 7/7 |
-| `test_moe_tp.py` | 6/6 |
-| `test_rope_tp.py` | 2/2 |
-| `test_generate_tp.py`, `test_sampling.py` | 1/1 each |
-| `test_decode_bucketing.py` | 16/17 (the remaining one imports vLLM) |
-| `test_model_tp.py` | 13/14 |
-| `demo/text_demo.py` `determinism_128` | PASSED (two runs, identical output) |
+| Suite | Result | Measured |
+| ----- | ------ | -------- |
+| `test_gdn_tp.py` | 17/17 | current code |
+| `test_attention_tp.py` | 7/7 | current code |
+| `test_moe_tp.py` | 6/6 | current code |
+| `test_rope_tp.py` | 2/2 | current code |
+| `demo/text_demo.py` `determinism_128` | PASSED (two runs, identical output) | current code |
+| `test_generate_tp.py`, `test_sampling.py` | 1/1 each | before the MoE prefill change |
+| `test_decode_bucketing.py` | 16/17 (the remaining one imports vLLM) | before the MoE prefill change |
+| `test_model_tp.py` | 13/14 | before the MoE prefill change |
 
 The one `test_model_tp` failure is `prefill_paged_slots_long[eager-2chunks_plus_tail]`: for one
 user of eight, first-step decode logits land at PCC 0.96 against the B=1 chunk-outer reference.
@@ -421,3 +422,43 @@ pytest models/demos/blackhole/qwen36/tests/test_model_tp.py       -q --timeout=2
 > the remaining modules with it. `tt-smi -r` between the heavy modules clears a wedged card.
 
 > `test_decode_bucketing.py` needs vLLM for one case; without it that case skips.
+
+> **Watcher on Wormhole:** set `TT_METAL_WATCHER_DISABLE_ETH=1` alongside `TT_METAL_WATCHER`. With the
+> watcher on the ethernet cores the Wormhole `fabric_erisc_router` fails to link (`.data` overlaps
+> `.text`), so every test errors at mesh open, and the half-initialized fabric leaves the ethernet cores
+> wedged (`Timed out waiting for ETH heartbeat`) until `tt-smi -r`. Worker cores stay watched.
+
+## CI
+
+The Qwen3.6 CI legs live in `tests/pipeline_reorg/` (unit: `models_unit_tests.yaml`, e2e:
+`models_e2e_tests.yaml`, vLLM: `vllm_model_tests.yaml`); perf targets for the e2e legs are in
+`models/model_targets.yaml`. The 35B-A3B unit and e2e entries each serve both arches from one
+command: `MESH_DEVICE` (and, for the unit leg, the watcher setup) come from per-SKU fields.
+
+| Model | Leg | Arch / SKU | Tier | Runs |
+| ----- | --- | ---------- | ---- | ---- |
+| Qwen3.6-35B-A3B | unit | BH QuietBox 2 — `bh_quietbox_2`, `MESH_DEVICE=P150x4` | 1 | `test_moe_tp`, `unit/test_moe`, `test_gdn_tp`, `test_attention_tp` (watcher on) |
+| Qwen3.6-35B-A3B | unit | WH LoudBox — `wh_llmbox`, `MESH_DEVICE=N150x4` | 2 | same files (`unit/test_moe` skips; watcher on, ethernet cores excluded) |
+| Qwen3.6-35B-A3B | e2e | BH QuietBox 2 — `bh_quietbox_2` | 1 | `text_demo.py` `traced_128`, `traced_4k`, `determinism_128` |
+| Qwen3.6-35B-A3B | e2e | WH LoudBox — `wh_llmbox_perf` | 2 | same cases |
+| Qwen3.6-27B | unit, e2e, vLLM | BH QuietBox 2 — `bh_quietbox_2` | 1 | see the yamls |
+
+Scheduled runs pick every leg up automatically: the Tier 1 workflows run the Blackhole legs and the
+Tier 2 workflows run the Wormhole ones. To run one leg by hand (Actions tab, or `gh`), select the
+model `qwen3.6-35b-a3b` and the SKU:
+
+```bash
+# Blackhole (Tier 1)
+gh workflow run "(Tier 1) Models Unit Tests"       --ref <branch> -f model=qwen3.6-35b-a3b -f sku="bh_quietbox_2 (BH QB2)"
+gh workflow run "(Tier 1) Models End-To-End Tests" --ref <branch> -f model=qwen3.6-35b-a3b -f sku="bh_quietbox_2 (BH QB2)"
+# Wormhole LoudBox (Tier 2)
+gh workflow run "(Tier 2) Models Unit Tests"       --ref <branch> -f model=qwen3.6-35b-a3b -f sku="wh_llmbox (T3000)"
+gh workflow run "(Tier 2) Models End-To-End Tests" --ref <branch> -f model=qwen3.6-35b-a3b -f sku="wh_llmbox_perf (T3000 perf)"
+```
+
+The Wormhole runners read the checkpoint from `/mnt/MLPerf/huggingface` with the HF hub offline, and
+the shared tensor cache is mounted read-only by default. A first Wormhole run therefore needs the
+checkpoint on that share and `-f mlperf-write-access=true`, so it can write the Wormhole tensor cache
+(kept separate from Blackhole's: the cache path includes the device name). The `wh_llmbox_perf`
+targets were measured on a development LoudBox, not a CI runner; re-baseline them from the first
+CI run.
