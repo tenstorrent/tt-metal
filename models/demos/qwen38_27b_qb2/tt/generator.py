@@ -30,12 +30,6 @@ class Qwen38Generator:
         self.host_sampling = host_sampling
         self.batched_prefill = os.getenv("QWEN_BATCHED_PREFILL", "0") == "1"
         self.skip_intermediate_prefill_head = os.getenv("QWEN_PREFILL_SKIP_INTERMEDIATE_HEAD", "0") == "1"
-        if os.getenv("QWEN_BATCHED_PREFILL_SDPA", "0") == "1":
-            for layer in model.layers:
-                layer.policy["batched_prefill_sdpa"] = True
-        if os.getenv("QWEN_FLATTEN_PREFILL_BATCH", "0") == "1":
-            for layer in model.layers:
-                layer.policy["flatten_prefill_batch"] = True
         self.seed = 0
         args = SimpleNamespace(
             vocab_size=model.config.vocab_size,
@@ -417,11 +411,8 @@ class Qwen38Generator:
             length, start = prompt_lens[0], starts[0]
             if not 1 <= length <= tokens.shape[-1] or start < 0 or start + length > kv_cache.capacity:
                 raise ValueError("Invalid batched prompt length or prefix")
-            chunk_size = getattr(self, "batched_prefill_chunk_size", 4096)
-            if chunk_size < 32 or chunk_size % 32:
-                raise ValueError("Batched prefill chunk size must be a positive multiple of 32")
-            for offset in range(0, length, chunk_size):
-                count = min(chunk_size, length - offset)
+            for offset in range(0, length, 4096):
+                count = min(4096, length - offset)
                 ids = self.model.upload(
                     tokens[:, offset : offset + count].int(), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
                 )

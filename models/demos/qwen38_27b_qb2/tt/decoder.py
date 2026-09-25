@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.qwen38_27b_qb2.tt.decode_conv import make_actual_start, packed_decode_conv, packed_prefill_conv
+from models.demos.qwen38_27b_qb2.tt.decode_conv import make_actual_start, packed_decode_conv
 
 # Measured Blackhole 11x10 / eight-bank policy. Overrides are full experiment policies.
 DEFAULT_POLICY = {
@@ -833,44 +833,14 @@ class Qwen38Decoder(LightweightModule):
         while start_pos % k_chunk or ((start_pos + t + k_chunk - 1) // k_chunk) * k_chunk > capacity:
             k_chunk //= 2
         outputs = []
-        grouped_sdpa = b > 1 and self.policy.get("batched_prefill_sdpa", False)
-        grouped_fill = b > 1 and self.policy.get("batched_prefill_cache_fill", False)
-        if grouped_fill:
-            indices = getattr(self, "_prefill_batch_indices", {})
-            if b not in indices:
-                indices[b] = ttnn.reshape(
-                    ttnn.arange(
-                        0,
-                        b,
-                        1,
-                        device=self.device,
-                        dtype=ttnn.int32,
-                        layout=ttnn.ROW_MAJOR_LAYOUT,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    ),
-                    [b],
-                )
-                self._prefill_batch_indices = indices
-            chunk_table = page_table[
-                :, start_pos // self.PAGE_SIZE : (start_pos + t + self.PAGE_SIZE - 1) // self.PAGE_SIZE
-            ]
-            for cache, update in ((state.key, k), (state.value, v)):
-                if update.dtype != cache.dtype:
-                    update = ttnn.typecast(update, cache.dtype)
-                ttnn.experimental.paged_fill_cache(cache, update, chunk_table, batch_idx_tensor=indices[b])
         for user in range(b):
             table = page_table[user : user + 1, :]
-            if not grouped_fill:
-                chunk_table = table[
-                    :, start_pos // self.PAGE_SIZE : (start_pos + t + self.PAGE_SIZE - 1) // self.PAGE_SIZE
-                ]
-                for cache, update in ((state.key, k), (state.value, v)):
-                    part = update[user : user + 1, :, :, :]
-                    if part.dtype != cache.dtype:
-                        part = ttnn.typecast(part, cache.dtype)
-                    ttnn.experimental.paged_fill_cache(cache, part, chunk_table, batch_idx=0)
-            if grouped_sdpa:
-                continue
+            chunk_table = table[:, start_pos // self.PAGE_SIZE : (start_pos + t + self.PAGE_SIZE - 1) // self.PAGE_SIZE]
+            for cache, update in ((state.key, k), (state.value, v)):
+                part = update[user : user + 1, :, :, :]
+                if part.dtype != cache.dtype:
+                    part = ttnn.typecast(part, cache.dtype)
+                ttnn.experimental.paged_fill_cache(cache, part, chunk_table, batch_idx=0)
             outputs.append(
                 ttnn.transformer.chunked_scaled_dot_product_attention(
                     q[user : user + 1, :, :, :],
@@ -886,22 +856,7 @@ class Qwen38Decoder(LightweightModule):
                     ),
                 )
             )
-        if grouped_sdpa:
-            attention = ttnn.transformer.chunked_scaled_dot_product_attention(
-                q,
-                state.key,
-                state.value,
-                page_table,
-                start_pos,
-                scale=self.config.head_dim**-0.5,
-                program_config=ttnn.SDPAProgramConfig(
-                    compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
-                    q_chunk_size=q_chunk,
-                    k_chunk_size=k_chunk,
-                ),
-            )
-        else:
-            attention = outputs[0] if b == 1 else ttnn.concat(outputs, dim=0)
+        attention = outputs[0] if b == 1 else ttnn.concat(outputs, dim=0)
         return self._attention_output(attention, gate)
 
     def _delta(self, x, state):
@@ -929,10 +884,6 @@ class Qwen38Decoder(LightweightModule):
         row_qkv = ttnn.to_layout(padded_qkv, ttnn.ROW_MAJOR_LAYOUT)
         if packed_conv:
             q, k, v = packed_decode_conv(
-                row_qkv, state.conv, self.conv_taps, (h * d, h * d, hv * d), self.conv_actual_start
-            )
-        elif t > 1 and b > 1 and self.policy.get("experimental_packed_prefill_conv", False):
-            q, k, v = packed_prefill_conv(
                 row_qkv, state.conv, self.conv_taps, (h * d, h * d, hv * d), self.conv_actual_start
             )
         else:
@@ -976,33 +927,7 @@ class Qwen38Decoder(LightweightModule):
         grid = self.device.compute_with_storage_grid_size()
         scan_batch = grid.x * grid.y // hv
         outputs, states = [], []
-        single_step = t == 1 and b == 16 and self.policy.get("experimental_single_step_recurrence", False)
-        if single_step:
-            # Experimental component only: changed rounding needs quality validation.
-            from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
-                recurrent_gated_delta_rule_decode_ttnn,
-            )
-
-            shaped = []
-            for flat_input, heads in zip((q, k, v), (h, h, hv)):
-                live = ttnn.to_layout(flat_input[:, :1, :], ttnn.ROW_MAJOR_LAYOUT)
-                live = ttnn.reshape(live, [b, 1, heads, d])
-                live = ttnn.to_layout(live, ttnn.TILE_LAYOUT)
-                shaped.append(ttnn.repeat_interleave(live, hv // heads, dim=2) if heads != hv else live)
-            output_part, state_part = recurrent_gated_delta_rule_decode_ttnn(
-                *shaped,
-                beta[:, :1, :],
-                g[:, :1, :],
-                initial_state=state.recurrent,
-                device=self.device,
-                high_precision=True,
-            )
-            output_part = ttnn.permute(output_part, (0, 2, 1, 3))
-            output_part = ttnn.pad(output_part, [(0, 0), (0, 0), (0, 31), (0, 0)], 0.0)
-            output_part = ttnn.reshape(output_part, [b * hv, 32, d])
-            outputs.append(output_part)
-            states.append(state_part)
-        for start in range(0, b, scan_batch) if not single_step else []:
+        for start in range(0, b, scan_batch):
             end = min(start + scan_batch, b)
             output_part, state_part = ttnn.transformer.chunk_gated_delta_rule(
                 q[start:end],

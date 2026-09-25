@@ -64,22 +64,6 @@ class BatchedPrefillDispatchTests(unittest.TestCase):
         self.assertEqual([c[2].get("return_logits", True) for c in self.calls], [False, True])
         self.assertEqual([c[2]["start_pos"] for c in self.calls], [32, 4128])
 
-    def test_experimental_chunks_preserve_all_tokens_and_absolute_positions(self):
-        self.gen.batched_prefill_chunk_size = 2048
-        self.gen.skip_intermediate_prefill_head = True
-        self.run_prefill([4128, 4128], [0, 1], [32, 32])
-        self.assertEqual([c[2]["length"] for c in self.calls], [2048, 2048, 32])
-        self.assertEqual([c[2]["start_pos"] for c in self.calls], [32, 2080, 4128])
-        self.assertEqual([c[2].get("return_logits", True) for c in self.calls], [False, False, True])
-        self.assertEqual(sum(c[1].shape[1] for c in self.calls), 4128)
-
-    def test_invalid_experimental_chunk_rejected_before_model(self):
-        for size in [0, -32, 31, 33]:
-            self.gen.batched_prefill_chunk_size = size
-            with self.subTest(size=size), self.assertRaises(ValueError):
-                self.run_prefill([128, 128], [0, 1])
-        self.assertFalse(self.calls)
-
     def test_ragged_reordered_unaligned_and_single_fall_back(self):
         for lengths, slots, starts in [
             ([64, 128], [0, 1], [0, 0]),

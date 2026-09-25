@@ -87,15 +87,11 @@ class Qwen38Model:
             raise ValueError("Unknown QWEN_PREFILL_RESIDUAL_LAYOUT")
         self.prefill_sharded_residual = prefill_layout != "replicated"
         self.prefill_batched_head = os.getenv("QWEN_PREFILL_BATCHED_HEAD", "0") == "1"
-        row_parallel_norm = os.getenv("QWEN_PREFILL_ROW_PARALLEL_NORM", "0") == "1"
-        if row_parallel_norm and prefill_layout != "sharded_replicated_norm":
-            raise ValueError("QWEN_PREFILL_ROW_PARALLEL_NORM requires sharded_replicated_norm layout")
         prefill_policy = {}
         if self.prefill_sharded_residual:
             prefill_policy.update(
                 prefill_sharded_residual=True,
                 prefill_replicated_norm=prefill_layout == "sharded_replicated_norm",
-                prefill_row_parallel_norm=row_parallel_norm,
             )
         for i in self.layer_indices:
             logger.debug("Loading Qwen3.8 layer {}", i)

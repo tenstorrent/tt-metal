@@ -20,11 +20,9 @@ Batch-1 vLLM performance on QB2/P300x2:
 | --- | ---: | ---: |
 | 128 / 128 | 40.37 | 69.30 ms |
 
-Results: [release run 35974290238](https://github.com/tenstorrent/tt-shield/actions/runs/35974290238).
-
 ## Evaluation
 
-The release run also tested the model on CI subsets of:
+CI subset results:
 
 - GPQA Diamond: 9/10 (90%).
 - Terminal-Bench 2.1: 4/5 (80%).
