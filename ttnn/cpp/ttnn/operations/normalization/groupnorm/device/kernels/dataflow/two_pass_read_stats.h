@@ -24,7 +24,8 @@ inline void read_two_pass_stats_block(
     std::uint32_t rows) {
     // Calibrated batch sizes, not hardware limits on outstanding NOC reads.
 #if defined(ARCH_WORMHOLE)
-    constexpr std::uint32_t max_tiles_per_read_batch = 2;
+    // The FP32 input-alias path is faster with per-tile publication.
+    constexpr std::uint32_t max_tiles_per_read_batch = HasAlias ? 1 : 2;
 #else
     constexpr std::uint32_t max_tiles_per_read_batch = 4;
 #endif
