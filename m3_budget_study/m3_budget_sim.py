@@ -22,8 +22,8 @@ N_LAYERS = 60
 # W_padded = forward width after trace-bucket rounding, n_i = real tokens of segment i,
 # p_i = padded(n_i) = rows attention actually computes, h_i = its cached_len (history).
 # a,b: per-layer fixed + per-token cost; c: segment rows x history (attention / indexer compute,
-# pad rows included); d: history-only (e.g. index_k gather); e: per real token (MoE skips pad rows).
-# stage_ms = overhead + sum over the stage's layers of layer_ms
+# pad rows included; charged for at least p0 rows, since few rows per chip leave cores idle); d: history-only (e.g. index_k gather); e: per real token (MoE skips pad rows).
+# stage_ms = overhead + overhead_per_token*W_padded + sum over the stage's layers of layer_ms
 DEFAULT_COEFFS = {  # PLACEHOLDERS - replace with fitted values
     "sparse": {"a": 2.2, "b": 1.8e-3, "c": 1.0e-9, "d": 1.0e-6, "e": 0.0},
     "dense": {"a": 2.2, "b": 1.8e-3, "c": 3.0e-8, "d": 1.0e-6, "e": 0.0},
@@ -89,12 +89,12 @@ class CostModel:
         assert start == N_LAYERS, split
         self.S = len(split)
         self.A = [C.get("stage_overhead_ms", 0.0) + sum(k["a"] for k in ks) for ks in self.stages]
-        self.Bw = [sum(k["b"] for k in ks) for ks in self.stages]
+        self.Bw = [C.get("stage_overhead_per_token_ms", 0.0) + sum(k["b"] for k in ks) for ks in self.stages]
 
     def seg_vec(self, seg):
         n, h = seg["n"], seg["h"]
         p = padded(n)
-        return [sum(k["c"] * p * h + k["d"] * h + k["e"] * n for k in ks) for ks in self.stages]
+        return [sum(k["c"] * max(p, k.get("p0", 0)) * h + k["d"] * h + k["e"] * n for k in ks) for ks in self.stages]
 
     def fwd_vec(self, W, segsum):
         return [self.A[s] + self.Bw[s] * W + segsum[s] for s in range(self.S)]

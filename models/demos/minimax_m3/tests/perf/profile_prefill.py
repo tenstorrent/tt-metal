@@ -43,6 +43,8 @@ Env:
   PROFILE_READ_EVERY  call ttnn.ReadDeviceProfiler every N layers (<1000 ops/read!)   [default 1]
   PROFILE_N_REAL      real tokens in the profiled chunk; the rest is pad (actual_end < chunk end)
                       [default: PROFILE_CHUNK]
+  PROFILE_SKIP_COMPILE "1" -> skip runtime.compile()'s sweep over every cache bucket and warm only the
+                      profiled chunk. Keeps the tracy capture small at deep caches   [default 0]
   PROFILE_SKIP_PREFIX "1" -> skip the prefix fill and attend a ZEROED cache. Shapes (and op costs)
                       are identical but MoE routing is not representative — bring-up only  [default 0]
   PROFILE_STAGES      intra-galaxy pipeline depth: 1 (whole 8x4 galaxy), 2 ((4,4) sub-meshes, EP16) or
@@ -344,7 +346,9 @@ def main():
         # too, but outside the `profiled_chunk` zone, so the parser drops them.
         print(f"[zone-prof] warmup / compile ({num_layers}L, SP={sp} x TP={tp} + EP={sp * tp}) ...", flush=True)
         t0 = time.perf_counter()
-        runtime.compile(kv_cache)
+        skip_compile = os.getenv("PROFILE_SKIP_COMPILE") == "1"
+        if not skip_compile:
+            runtime.compile(kv_cache)
         print(f"[zone-prof] warmup done in {(time.perf_counter()-t0):.1f}s", flush=True)
 
         tokens = load_tokens(total)
@@ -380,6 +384,11 @@ def main():
             ttnn.synchronize_device(mesh)
             print(f"[zone-prof] prefix filled in {(time.perf_counter()-t0):.1f}s", flush=True)
 
+        if skip_compile:
+            # No bucket sweep: warm the profiled chunk's own programs instead (twice, like the timing harness).
+            for _ in range(2):
+                prefill_chunk(n_chunks - 1)
+            ttnn.synchronize_device(mesh)
         if n_real < chunk:
             # A short chunk builds a different MoE padding config: warm it here, not inside the profile.
             prefill_chunk(n_chunks - 1, n_real)
