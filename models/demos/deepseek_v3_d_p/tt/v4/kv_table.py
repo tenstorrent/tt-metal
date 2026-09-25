@@ -131,6 +131,33 @@ def populate_group(
             table.set(a.layer, a.position, a.slot, loc, config_id)
 
 
+def _stage_layout(mesh_device, base: int, mesh_shape, first: int, count: int) -> list:
+    """The per-stage descriptors: the runner's cross-rank all-gather when a distributed context with more than one
+    rank is up, else this process's own single stage (the mock-migration / in-process Gate 1 path)."""
+    import ttnn
+    from models.demos.common.prefill.runners.migration import allgather_kv_stage_layout, get_num_dram_banks
+
+    try:
+        size = int(ttnn.distributed_context_get_size())
+    except Exception:  # no distributed context in this process
+        size = 1
+    if size > 1:
+        return allgather_kv_stage_layout(mesh_device, base, mesh_shape, first, count)
+    rows, cols = int(mesh_shape[0]), int(mesh_shape[1])
+    fnids = [[mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(r, c)) for c in range(cols)] for r in range(rows)]
+    return [
+        {
+            "rank": 0,
+            "first_layer": int(first),
+            "count": int(count),
+            "base_addr": int(base),
+            "num_banks": int(get_num_dram_banks(mesh_device)),
+            "host_tag": 0,
+            "fnids": fnids,
+        }
+    ]
+
+
 def build_v4_kv_chunk_table(
     *, mesh_device, caches, hf_config, num_slots: int, path: str, include_pending: bool = True
 ) -> str:
@@ -138,10 +165,7 @@ def build_v4_kv_chunk_table(
     model has and serialize it to ``path``. Every rank calls this (the per-config stage all-gather is
     symmetric); ``caches`` is this rank's ``V4FlashKvCaches``. Config order = contract order, pending last."""
     import ttnn
-    from models.demos.common.prefill.runners.migration import (
-        allgather_kv_stage_layout,
-        serialize_prebuilt_kv_chunk_table,
-    )
+    from models.demos.common.prefill.runners.migration import serialize_prebuilt_kv_chunk_table
     from models.demos.deepseek_v3_d_p.tt.v4.layer_kinds import layers_of_kind
 
     geom = caches.geometry
@@ -162,7 +186,7 @@ def build_v4_kv_chunk_table(
         tensor = caches.group_tensors().get(g.name)
         first, count = kind_rank_range(all_of_kind[g.name], geom.layers(g.name))
         base = int(tensor.buffer_address()) if tensor is not None else 0
-        stages = allgather_kv_stage_layout(mesh_device, base, mesh_shape, first, count)
+        stages = _stage_layout(mesh_device, base, mesh_shape, first, count)
         populate_group(
             table,
             config_id,

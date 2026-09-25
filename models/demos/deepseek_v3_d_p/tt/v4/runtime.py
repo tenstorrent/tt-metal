@@ -36,6 +36,7 @@ class TtV4PrefillRuntimeConfig:
     tp_axis: int = 1
     kv_only_last_layer: bool = True
     weight_cache_path: Optional[Path] = None
+    use_trace: bool = False  # eager only in this milestone; the runner reads the flag on pipeline ranks
 
     @property
     def sp_factor(self) -> int:
