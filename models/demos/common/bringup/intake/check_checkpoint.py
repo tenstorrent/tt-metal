@@ -66,6 +66,11 @@ def main(argv=None):
         for x in items:
             print(f"{kind.upper():8} {x}")
     print(f"{len(tensors)} tensors in {hf}")
+    from models.demos.common.bringup.plan import approvals
+
+    approved = approvals.is_approved(spec, "intake")
+    print(f"intake approved: {approved}")
+    metrics.record("intake_approved", int(approved))
     metrics.record("checkpoint_tensors", len(tensors))
     metrics.record("missing_tensors", len(res["missing"]))
     metrics.record("shape_mismatches", len(res["shape"]))
