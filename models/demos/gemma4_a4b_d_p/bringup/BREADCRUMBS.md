@@ -216,3 +216,13 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Gate PASS: pcc_attn_residual_L00 0.999996, rel L2 0.00282, per-token norm ratio [0.9947, 1.0060] (matches the bf16-add estimate in the test review).
 - Gotcha: the log shows a `FAIL pcc=0.000000` line first; that is the precompile collect pass (stubbed ops), the real pass line follows.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_attn_residual.py`
+
+## S.sliding.04 test (run1, attempt 1): swap attn_norm + attention + post_attn_norm + attn_residual into the sliding block
+- Reviewed the rendered swap test (layer 0, golden s4096 chunk 1, start 2048). The gated metric stays `pcc_swap_out` >= 0.98.
+- Replaced the one-line template body with swap 3's checks (SWAPPED extended). Changed one thing: the check against the CPU step on the device step's own inputs
+  now covers `residual` steps as well as `norm` steps (`ISO_STEP_KINDS`). It asserts rel L2 <= 0.03 and per-token norm ratio in [0.97, 1.03]. Reason: PCC misses `2 * (a + b)`
+  and zeroed rows (test_c_sliding_attn_residual.py). Checking against the CPU add on the same inputs keeps upstream attention error out of the result.
+- Verified: BRINGUP_IMPL=reference PASS (pcc 0.999996, block rel 0.0027); stub FAIL (all checks). Device gate PASS: pcc_swap_out 0.999969,
+  block out rel 0.0079 / 0.0064, attention 0.0052 / 0.0052, post_attn_norm 0.0052 (iso 0.0019), attn_residual 0.0054 (iso 0.0017, ratio [0.9977, 1.0031]).
+- Block-out rel 0.0079 is within the 0.02 limit, but it creeps up with each added device step (0.0074 at swap 3). Watch the margin as more steps move to the device.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_04_attn_residual.py`
