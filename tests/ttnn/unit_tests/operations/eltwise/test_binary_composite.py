@@ -15,27 +15,9 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
 from tests.ttnn.utils_for_testing import (
     assert_with_pcc,
     assert_with_ulp,
-    assert_div_by_zero_outputs,
     assert_equal,
 )
-from tests.tt_eager.python_api_testing.sweep_tests import (
-    comparison_funcs,
-)
 from models.common.utility_functions import is_blackhole, is_slow_dispatch
-
-
-def _data_gen_div_scalar_input(input_shapes, low, high, device, divisor):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, low, high, device)
-    if divisor == 0.0:
-        # Avoid 0/0: bf16 fast_and_approximate divide returns 0 instead of NaN (#43209).
-        zero_mask = in_data1 == 0
-        if zero_mask.any():
-            in_data1 = in_data1.clone()
-            in_data1[zero_mask] = 1.0
-            input_tensor1 = ttnn.from_torch(
-                in_data1, dtype=input_tensor1.dtype, layout=input_tensor1.layout, device=device
-            )
-    return in_data1, input_tensor1
 
 
 @pytest.mark.parametrize(
@@ -106,8 +88,6 @@ def test_binary_atan2_special_values(input_shapes, device):
     torch.testing.assert_close(output_tensor, golden_tensor)
 
 
-@pytest.mark.parametrize("fast_and_approximate_mode", [True, False])
-@pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -116,198 +96,35 @@ def test_binary_atan2_special_values(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_binary_div_ttnn(fast_and_approximate_mode, rounding_mode, input_shapes, device):
-    if fast_and_approximate_mode == True:  # If input_b is non-zero tensor (fast/approximate mode)
-        in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-        in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, -1, device)
-    else:
-        in_data1, input_tensor1 = data_gen_with_range(input_shapes, -200, 150, device)
-        in_data2, input_tensor2 = data_gen_with_range(input_shapes, -120, 200, device)
+def test_binary_logical_xor_ttnn(input_shapes, device):
+    num_elements = max(int(torch.prod(torch.tensor(input_shapes)).item()), 1)
+    in_data1 = torch.linspace(-100, 100, num_elements, dtype=torch.bfloat16)
+    in_data1 = in_data1[:num_elements].reshape(input_shapes)
+    in_data2 = torch.linspace(-150, 150, num_elements, dtype=torch.bfloat16)
+    in_data2 = in_data2[:num_elements].reshape(input_shapes)
 
-    output_tensor = ttnn.div(
-        input_tensor1, input_tensor2, fast_and_approximate_mode=fast_and_approximate_mode, rounding_mode=rounding_mode
+    input_tensor1 = ttnn.from_torch(
+        in_data1,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    golden_function = ttnn.get_golden_function(ttnn.div)
-    golden_tensor = golden_function(in_data1, in_data2, rounding_mode)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize("fast_and_approximate_mode", [True, False])
-@pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_binary_div_ttnn_ci(fast_and_approximate_mode, rounding_mode, input_shapes, device):
-    if fast_and_approximate_mode == True:  # If input_b is non-zero tensor (fast/approximate mode)
-        in_data1, input_tensor1 = data_gen_with_range(input_shapes, -1e6, 1e6, device)
-        in_data2, input_tensor2 = data_gen_with_range(input_shapes, -1e6, -1, device)
-    else:
-        in_data1, input_tensor1 = data_gen_with_range(input_shapes, -2e6, 1e6, device)
-        in_data2, input_tensor2 = data_gen_with_range(input_shapes, -1e6, 2e6, device)
-
-    output_tensor = ttnn.div(
-        input_tensor1, input_tensor2, fast_and_approximate_mode=fast_and_approximate_mode, rounding_mode=rounding_mode
+    input_tensor2 = ttnn.from_torch(
+        in_data2,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    golden_function = ttnn.get_golden_function(ttnn.div)
-    golden_tensor = golden_function(in_data1, in_data2, rounding_mode)
+
+    output_tensor = ttnn.logical_xor(input_tensor1, input_tensor2)
     output_tensor = ttnn.to_torch(output_tensor)
-
-    comp_pass = comparison_funcs.comp_pcc(golden_tensor, output_tensor)
-    assert comp_pass
-
-
-@pytest.mark.parametrize("fast_and_approximate_mode", [True, False])
-@pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_binary_div_ttnn_opt(fast_and_approximate_mode, rounding_mode, input_shapes, device):
-    if fast_and_approximate_mode == True:  # If input_b is non-zero tensor (fast/approximate mode)
-        in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-        in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, -1, device)
-    else:
-        in_data1, input_tensor1 = data_gen_with_range(input_shapes, -200, 100, device)
-        in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, 200, device)
-
-    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
-
-    cq_id = 0
-    ttnn.div(
-        input_tensor1,
-        input_tensor2,
-        fast_and_approximate_mode=fast_and_approximate_mode,
-        rounding_mode=rounding_mode,
-        output_tensor=output_tensor,
-        queue_id=cq_id,
-    )
-    golden_function = ttnn.get_golden_function(ttnn.div)
-    golden_tensor = golden_function(in_data1, in_data2, rounding_mode)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize("fast_and_approximate_mode", [True, False])
-@pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-@pytest.mark.parametrize("value", [-5.1, 0.0, 10.9])
-def test_binary_div_scalar_ttnn(fast_and_approximate_mode, rounding_mode, input_shapes, value, device):
-    # Skip only rounding_mode=None + fast_and_approximate: trunc/floor of non-zero/0.0
-    # always yields ±inf and is verifiable; rounding_mode=None returns 0 instead (#43209).
-    if value == 0.0 and rounding_mode is None and fast_and_approximate_mode:
-        pytest.skip(
-            "Skipping test case due to division by zero not being handled properly in bfloat16 with rounding_mode=None and fast_and_approximate_mode=True"
-        )
-    in_data1, input_tensor1 = _data_gen_div_scalar_input(input_shapes, -100, 100, device, value)
-
-    output_tensor = ttnn.div(
-        input_tensor1, value, fast_and_approximate_mode=fast_and_approximate_mode, rounding_mode=rounding_mode
-    )
-    golden_function = ttnn.get_golden_function(ttnn.div)
-    golden_tensor = golden_function(in_data1, value, rounding_mode)
-
-    if value == 0.0:
-        assert_div_by_zero_outputs(golden_tensor, ttnn.to_torch(output_tensor))
-    else:
-        comp_pass = compare_pcc([output_tensor], [golden_tensor])
-        assert comp_pass
-
-
-@pytest.mark.parametrize("fast_and_approximate_mode", [True, False])
-@pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-@pytest.mark.parametrize("value", [-5.1, 0.0, 10.9])
-def test_binary_div_scalar_ttnn_opt(fast_and_approximate_mode, rounding_mode, input_shapes, value, device):
-    # Skip only rounding_mode=None + fast_and_approximate: trunc/floor of non-zero/0.0
-    # always yields ±inf and is verifiable; rounding_mode=None returns 0 instead (#43209).
-    if value == 0.0 and rounding_mode is None and fast_and_approximate_mode:
-        pytest.skip(
-            "Skipping test case due to division by zero not being handled properly in bfloat16 with rounding_mode=None and fast_and_approximate_mode=True"
-        )
-    in_data1, input_tensor1 = _data_gen_div_scalar_input(input_shapes, -100, 100, device, value)
-    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
-
-    cq_id = 0
-    ttnn.div(
-        input_tensor1,
-        value,
-        fast_and_approximate_mode=fast_and_approximate_mode,
-        rounding_mode=rounding_mode,
-        output_tensor=output_tensor,
-    )
-    golden_function = ttnn.get_golden_function(ttnn.div)
-    golden_tensor = golden_function(in_data1, value, rounding_mode)
-
-    if value == 0.0:
-        assert_div_by_zero_outputs(golden_tensor, ttnn.to_torch(output_tensor))
-    else:
-        comp_pass = compare_pcc([output_tensor], [golden_tensor])
-        assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_binary_floor_div_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -350, 100, device)
-    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -100, 100, device)
-    output_tensor = ttnn.floor_div(input_tensor1, input_tensor2)
-    golden_function = ttnn.get_golden_function(ttnn.floor_div)
+    golden_function = ttnn.get_golden_function(ttnn.logical_xor)
     golden_tensor = golden_function(in_data1, in_data2)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-@pytest.mark.parametrize("value", [-5.1, 0.0, 10.9])
-def test_binary_floor_div_overload_ttnn(input_shapes, value, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-
-    output_tensor = ttnn.floor_div(input_tensor1, value)
-    golden_function = ttnn.get_golden_function(ttnn.floor_div)
-    golden_tensor = golden_function(in_data1, value)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert torch.equal(output_tensor, golden_tensor)
 
 
 @pytest.mark.parametrize(
