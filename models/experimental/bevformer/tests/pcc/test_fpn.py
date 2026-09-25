@@ -73,6 +73,7 @@ def test_fpn(device, reset_seeds):
         conv_args=parameters.model_args,
         conv_pth=parameters,
         device=device,
+        input_dtypes=[ttnn.bfloat8_b] * len(input_tensors),
         dram_activation_levels=DRAM_ACTIVATION_LEVELS,
     )
     tt_outputs = tt_model([_to_ttnn_nhwc(tensor, device) for tensor in input_tensors])

@@ -104,6 +104,7 @@ def test_backbone_fpn(device, reset_seeds):
         conv_args=fpn_parameters.model_args,
         conv_pth=fpn_parameters,
         device=device,
+        input_dtypes=tt_backbone.output_dtypes,
         dram_activation_levels=DRAM_ACTIVATION_LEVELS,
     )
 

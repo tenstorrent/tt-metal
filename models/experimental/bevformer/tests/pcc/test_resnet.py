@@ -303,6 +303,7 @@ def test_reslayer2(device, reset_seeds):
         conv_cfg=None,
         dcn=None,
         dram_activation=1 in DRAM_ACTIVATION_STAGES,
+        input_dtype=ttnn.bfloat8_b,
     )
     torch_input_permute = torch_input.permute(0, 2, 3, 1)
     torch_input_permute = torch_input_permute.reshape(

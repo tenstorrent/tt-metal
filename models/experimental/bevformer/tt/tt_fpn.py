@@ -16,6 +16,8 @@ class TtConvModule:
         config_override=None,
         dealloc_act=True,
         dram_activation=False,
+        input_dtype=ttnn.bfloat16,
+        input_layout=ttnn.TILE_LAYOUT,
     ):
         self.device = device
         self.conv = TtnnConv2D(
@@ -27,6 +29,8 @@ class TtConvModule:
             is_blk=is_blk,
             config_override=config_override,
             dram_activation=dram_activation,
+            input_dtype=input_dtype,
+            input_layout=input_layout,
         )
 
     def __call__(self, x):
@@ -40,9 +44,11 @@ class TtFPN:
         conv_args,
         conv_pth,
         device,
+        input_dtypes,
         dram_activation_levels=(),
     ):
-        """``dram_activation_levels`` lists the pyramid levels whose lateral and output convs
+        """``input_dtypes`` are the dtypes of the backbone levels the FPN reads, in order.
+        ``dram_activation_levels`` lists the pyramid levels whose lateral and output convs
         keep their activations in DRAM, for levels too large for L1."""
         assert conv_args.add_extra_convs == "on_output", f"extra convs {conv_args.add_extra_convs!r} are not supported"
         self.device = device
@@ -52,6 +58,12 @@ class TtFPN:
         self.conv_pth = conv_pth
         self.relu_before_extra_convs = conv_args.relu_before_extra_convs
         num_levels = len(conv_args.lateral_convs)
+        assert len(input_dtypes) == num_levels, f"{num_levels} levels, got {len(input_dtypes)} input dtypes"
+        # Each level keeps its input's dtype through its lateral conv and the top-down add.
+        # The top-down pass turns every level but the lowest to ROW_MAJOR for the upsample,
+        # which also makes it bfloat16, since bfloat8_b exists only in TILE.
+        output_conv_layouts = [ttnn.TILE_LAYOUT] + [ttnn.ROW_MAJOR_LAYOUT] * (num_levels - 1)
+        output_conv_dtypes = [input_dtypes[0]] + [ttnn.bfloat16] * (num_levels - 1)
         for i in range(num_levels):
             self.lateral_convs.append(
                 TtConvModule(
@@ -59,6 +71,7 @@ class TtFPN:
                     conv_pth.fpn.lateral_convs[str(i)],
                     device=device,
                     dram_activation=i in dram_activation_levels,
+                    input_dtype=input_dtypes[i],
                 )
             )
         for i in range(num_levels):
@@ -71,6 +84,8 @@ class TtFPN:
                         is_blk=True,
                         config_override={"act_block_h": 128},
                         dram_activation=i in dram_activation_levels,
+                        input_dtype=output_conv_dtypes[i],
+                        input_layout=output_conv_layouts[i],
                     )
                 )
             else:
@@ -80,6 +95,8 @@ class TtFPN:
                         conv_pth.fpn.fpn_convs[str(i)],
                         device=device,
                         dram_activation=i in dram_activation_levels,
+                        input_dtype=output_conv_dtypes[i],
+                        input_layout=output_conv_layouts[i],
                     )
                 )
         for i in range(num_levels, len(conv_args.fpn_convs)):
@@ -89,6 +106,7 @@ class TtFPN:
                     conv_pth.fpn.fpn_convs[str(i)],
                     device=device,
                     dealloc_act=False,
+                    input_dtype=output_conv_dtypes[-1],
                 )
             )
 
