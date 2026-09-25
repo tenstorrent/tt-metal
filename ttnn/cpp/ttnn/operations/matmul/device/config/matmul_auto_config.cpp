@@ -38,7 +38,7 @@ uint32_t max_in0_block_w(uint32_t Kt, Family family, uint32_t out_block_h, uint3
         case Family::Reuse: self_read = out_block_h + out_block_w; break;
     }
     const uint32_t self_read_limit =
-        self_read == 0 ? MAX_IN0_BLOCK_W : std::max(1u, MAX_SELF_READ_TILES_PER_K_STEP / self_read);
+        self_read == 0 ? MAX_IN0_BLOCK_W : std::max(MIN_IN0_BLOCK_W, MAX_SELF_READ_TILES_PER_K_STEP / self_read);
     return std::min({MAX_IN0_BLOCK_W, two_blocks, self_read_limit});
 }
 
@@ -164,7 +164,9 @@ uint32_t circular_buffer_bytes(const Problem& p, const HardwareDesc& hw, Family 
 
 namespace {
 
-// 2D mcast (issue #57884 heuristic 1): largest in0_block_w * out_block_h * out_block_w that fits L1.
+// 2D mcast (issue #57884 heuristic 1): largest in0_block_w * out_block_h * out_block_w that fits L1; ties go
+// to the larger output block, then the squarer one (each loaded A and B tile is reused across the block's
+// width and height, so a square block reuses the most for its area).
 std::optional<Blocking> block_2d(
     const Problem& p, const HardwareDesc& hw, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
     const auto k_options = divisors_desc(p.Kt);
@@ -187,7 +189,13 @@ std::optional<Blocking> block_2d(
                     continue;
                 }
                 const uint64_t product = area * k;
-                if (product > best_product || (product == best_product && area > best_area)) {
+                const uint32_t skew = h > w ? h - w : w - h;
+                const uint32_t best_skew =
+                    best ? (best->out_block_h > best->out_block_w ? best->out_block_h - best->out_block_w
+                                                                  : best->out_block_w - best->out_block_h)
+                         : 0;
+                if (product > best_product || (product == best_product && area > best_area) ||
+                    (product == best_product && area == best_area && skew < best_skew)) {
                     best = b;
                     best_product = product;
                     best_area = area;
@@ -246,29 +254,27 @@ std::optional<Blocking> block_1d(
     return best;
 }
 
-// Reuse (batched B): per_core_N = Nt, and each core block is a whole batch matrix (per_core_M = Mt) unless
-// the batch alone leaves cores idle. Then each matrix is split into row slices, as many as still give every
-// core at most one block: the reuse factory leaves output unwritten when a core gets several blocks that are
-// partial batch matrices (#57954). in0_block_w is the largest divisor of Kt up to MAX_IN0_BLOCK_W that fits L1.
+// Reuse (batched B): per_core_N = Nt and per_core_M is the tallest slice of a batch matrix that still gives
+// every core a block (all of Mt when the batch alone fills the grid) and fits L1; in0_block_w is the largest
+// that fits within the K depth rule.
 std::optional<Blocking> block_reuse(const Problem& p, const HardwareDesc& hw) {
     const uint32_t cores = hw.grid.x * hw.grid.y;
-    std::optional<Blocking> best;
     for (uint32_t per_core_M : divisors_desc(p.Mt)) {
-        if (per_core_M < p.Mt && p.batch_a * (p.Mt / per_core_M) > cores) {
-            break;  // smaller slices would put several partial blocks on a core
+        const bool fills_grid = p.batch_a * (p.Mt / per_core_M) >= cores;
+        if (!fills_grid && per_core_M > 1) {
+            continue;
         }
         for (uint32_t k : divisors_desc(p.Kt)) {
-            if (k > max_in0_block_w(p.Kt, Family::Reuse, std::min(per_core_M, p.Mt), p.Nt)) {
+            if (k > max_in0_block_w(p.Kt, Family::Reuse, per_core_M, p.Nt)) {
                 continue;
             }
             Blocking b{per_core_M, p.Nt, k, per_core_M, p.Nt, 0, 0};
             if (circular_buffer_bytes(p, hw, Family::Reuse, b) <= hw.l1_cb_budget) {
-                best = b;  // fits; keep looking for a finer split that is still one block per core
-                break;
+                return b;
             }
         }
     }
-    return best;
+    return std::nullopt;
 }
 
 // Input tiles per K tile each core reads: its rows of A plus its columns of B
@@ -318,11 +324,32 @@ std::vector<Candidate> candidates(const Problem& p, const HardwareDesc& hw) {
     return result;
 }
 
+namespace {
+
+// Among the multicast layouts: 2D unless a 1D layout keeps clearly more cores busy (in0-mcast first when both
+// do), or 1D in0-mcast keeps as many cores busy with less input per core.
+const Candidate* choose_mcast(const Candidate* two_d, const Candidate* in0, const Candidate* in1) {
+    if (!two_d) {
+        return in0 ? in0 : in1;
+    }
+    const double threshold = ONE_D_CORE_ADVANTAGE * two_d->cores;
+    if (in0 && in0->cores >= threshold && (!in1 || in0->cores >= in1->cores)) {
+        return in0;
+    }
+    if (in1 && in1->cores >= threshold) {
+        return in1;
+    }
+    if (in0 && in0->cores >= two_d->cores &&
+        per_core_input_tiles(in0->blocking) < per_core_input_tiles(two_d->blocking)) {
+        return in0;  // a taller, squarer per-core block reads less input
+    }
+    return two_d;
+}
+
+}  // namespace
+
 std::optional<Candidate> choose_candidate(const Problem& p, const HardwareDesc& hw) {
     const auto all = candidates(p, hw);
-    if (all.empty()) {
-        return std::nullopt;
-    }
     auto find = [&](Family family) -> const Candidate* {
         for (const auto& c : all) {
             if (c.family == family) {
@@ -331,35 +358,16 @@ std::optional<Candidate> choose_candidate(const Problem& p, const HardwareDesc& 
         }
         return nullptr;
     };
-    const Candidate* two_d = find(Family::Mcast2D);
-    const Candidate* in0 = find(Family::Mcast1DIn0);
-    const Candidate* in1 = find(Family::Mcast1DIn1);
+    const Candidate* mcast = choose_mcast(find(Family::Mcast2D), find(Family::Mcast1DIn0), find(Family::Mcast1DIn1));
+    // Batched B: Reuse, whose cores work on their blocks independently, unless the multicast layout (which
+    // loops over the batch across the whole grid) keeps clearly more cores busy.
     if (const auto* reuse = find(Family::Reuse)) {
-        // Reuse unless a batch-looping mcast layout keeps clearly more cores busy
-        const Candidate* widest = nullptr;
-        for (const auto* c : {two_d, in0, in1}) {
-            if (c && (!widest || c->cores > widest->cores)) {
-                widest = c;
-            }
-        }
-        return widest && widest->cores >= ONE_D_CORE_ADVANTAGE * reuse->cores ? *widest : *reuse;
+        return mcast && mcast->cores >= ONE_D_CORE_ADVANTAGE * reuse->cores ? *mcast : *reuse;
     }
-    // 2D unless a 1D layout keeps clearly more cores busy; in0-mcast first when both do
-    const double threshold = two_d ? ONE_D_CORE_ADVANTAGE * two_d->cores : 0;
-    const Candidate* one_d = nullptr;
-    if (in0 && in0->cores >= threshold && (!in1 || in0->cores >= in1->cores)) {
-        one_d = in0;
-    } else if (in1 && in1->cores >= threshold) {
-        one_d = in1;
-    } else if (!two_d) {
-        one_d = in0 ? in0 : in1;
-    } else if (
-        in0 && in0->cores >= two_d->cores &&
-        per_core_input_tiles(in0->blocking) < per_core_input_tiles(two_d->blocking)) {
-        // As many cores busy and each reads less input (a taller, squarer per-core block): in0-mcast
-        one_d = in0;
+    if (mcast) {
+        return *mcast;
     }
-    return one_d ? *one_d : *two_d;
+    return std::nullopt;
 }
 
 std::optional<MatmulProgramConfig> select_program_config(const Problem& p, const HardwareDesc& hw) {

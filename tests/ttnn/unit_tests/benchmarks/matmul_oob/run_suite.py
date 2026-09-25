@@ -413,6 +413,8 @@ class CaseRun:
                 golden = torch.relu(golden)
             elif case.activation == "gelu":
                 golden = torch.nn.functional.gelu(golden)
+            elif case.activation == "gelu_approx":
+                golden = torch.nn.functional.gelu(golden, approximate="tanh")
             self.golden = golden
         return self.golden
 

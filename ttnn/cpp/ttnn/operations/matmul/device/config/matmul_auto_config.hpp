@@ -26,29 +26,30 @@
 //  - B not batched: the batch is fused into M and 2D mcast is used, unless a 1D layout keeps at least
 //    ONE_D_CORE_ADVANTAGE times as many cores busy (small M or small N), in which case that 1D layout is used,
 //    or 1D in0-mcast keeps as many cores busy with less input per core (per_core_M + per_core_N);
-//  - batched B: Reuse (one batch matrix per core block), unless a 2D/1D layout looping over the batch keeps
+//  - batched B: Reuse, unless the multicast layout looping over the batch (chosen as above) keeps
 //    ONE_D_CORE_ADVANTAGE times as many cores busy (e.g. large N, where Reuse's per_core_N = N leaves few cores);
 //  - block sizes follow the #57884 heuristics within the L1 budget, with one K block depth rule
 //    (MAX_IN0_BLOCK_W, MAX_SELF_READ_TILES_PER_K_STEP).
 // Problems it does not handle yet return nullopt, and the caller falls back to the legacy selection.
 namespace ttnn::operations::matmul::auto_config {
 
-// A 1D layout is chosen over 2D (or a mcast layout over Reuse) only if it keeps at least this many times as
-// many cores busy: 1D multicasts a whole operand to every core, so it has to win clearly on parallelism to
-// beat 2D's lower data traffic. On the Wormhole sweep anything from 1.25 to 2 performs about the same.
+// Switching away from the default layout needs at least this many times as many cores busy: 1D over 2D (1D
+// multicasts a whole operand to every core), and for batched B a batch-looping multicast layout over Reuse.
+// On the Wormhole sweep anything from 1.25 to 2 performs about the same.
 constexpr double ONE_D_CORE_ADVANTAGE = 1.5;
 
-// K block depth, for every family: in0_block_w is at most this (#57884: "around 8"). Deeper K blocks stop
-// paying for themselves, and in 2D the block-size heuristic would otherwise trade output-block size (the
-// only source of data reuse) for K depth. The mcast families also keep at least two K blocks, since with a
-// single block they single-buffer the inputs.
+// K block depth, for every family: in0_block_w is at most this. Deeper K blocks stop paying for themselves,
+// and in 2D the block-size heuristic would otherwise trade output-block size (the only source of data reuse)
+// for K depth. The mcast families also keep at least two K blocks, since with a single block they
+// single-buffer the inputs.
 constexpr uint32_t MAX_IN0_BLOCK_W = 8;
 
 // K block depth is further limited so that the operand a core reads by itself (not by multicast) moves at
 // most this many tiles per K step: B's slice in 1D in0-mcast, A's in 1D in1-mcast, both in Reuse, none in 2D.
 // Small per-step reads keep the double-buffered DRAM stream ahead of math; wide per-core blocks get
-// shallower K blocks.
-constexpr uint32_t MAX_SELF_READ_TILES_PER_K_STEP = 16;
+// shallower K blocks, but never below MIN_IN0_BLOCK_W (single-tile K steps pay a block handshake per tile).
+constexpr uint32_t MAX_SELF_READ_TILES_PER_K_STEP = 8;
+constexpr uint32_t MIN_IN0_BLOCK_W = 2;
 
 // Hardware facts the selector depends on. Tests can describe other architectures directly.
 struct HardwareDesc {

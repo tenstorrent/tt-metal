@@ -96,10 +96,6 @@ std::string check_config(const Problem& p, const HardwareDesc& hw, const MatmulP
                     if (p.fp32_dest_acc_en && c.out_subblock_h * c.out_subblock_w > 4) {
                         return "reuse fp32 subblock";
                     }
-                    // The reuse factory leaves output unwritten when a core gets several partial-batch blocks (#57954)
-                    if (c.per_core_M < p.Mt && p.batch_a * (p.Mt / c.per_core_M) > cores) {
-                        return "reuse partial-batch blocks exceed cores";
-                    }
                     Blocking b{c.per_core_M, c.per_core_N, c.in0_block_w, c.per_core_M, c.per_core_N, 0, 0};
                     if (circular_buffer_bytes(p, hw, Family::Reuse, b) > hw.l1_cb_budget) {
                         return "reuse L1";

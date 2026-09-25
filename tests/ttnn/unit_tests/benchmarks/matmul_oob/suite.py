@@ -327,9 +327,101 @@ TIERS = {
 
 
 def get_cases(tiers=None):
-    tiers = tiers or list(TIERS)
+    tiers = tiers or [t for t in TIERS if t != "traced"]
     cases = [c for t in tiers for c in TIERS[t]()]
     names = [c.name for c in cases]
     dupes = {n for n in names if names.count(n) > 1}
     assert not dupes, f"duplicate case names: {sorted(dupes)}"
     return cases
+
+
+# ---------------------------------------------------------------------------
+# Tier: traced (real-model matmul/linear calls from the model tracer's master JSON)
+# ---------------------------------------------------------------------------
+
+TRACE_JSON_ENV = "MATMUL_OOB_TRACE_JSON"
+_TRACE_DTYPES = {"BFLOAT16": "bf16", "BFLOAT8_B": "bfp8", "BFLOAT4_B": "bfp4", "FLOAT32": "fp32"}
+_TRACE_ACTIVATIONS = {"gelu", "silu", "relu", "gelu_approx"}
+
+
+def _traced_cases():
+    """Single-device ttnn.matmul/ttnn.linear calls that reach the default config selection.
+
+    Reads the master JSON produced by model_tracer (the `ttnn-operations-master-json` CI artifact), path given
+    by $MATMUL_OOB_TRACE_JSON. Keeps calls without a program_config whose operands and output are interleaved,
+    and skips anything it can't reproduce (multi-device placements, global CBs, sub-devices, other dtypes).
+    """
+    import json
+    import os
+    import re
+
+    path = os.environ.get(TRACE_JSON_ENV)
+    if not path:
+        return []
+    ops = json.load(open(path))["operations"]
+    cases = {}
+    for op_name in ("ttnn.matmul", "ttnn.linear"):
+        for cfg in ops.get(op_name, {}).get("configurations", []):
+            a = cfg["arguments"]
+            if a.get("program_config") or a.get("global_cb") or a.get("sub_device_id"):
+                continue
+            t0, t1 = a.get("arg0"), a.get("arg1")
+            if not isinstance(t0, dict) or not isinstance(t1, dict):
+                continue
+            if any(t.get("tensor_placement", {}).get("mesh_device_shape") != "[1, 1]" for t in (t0, t1)):
+                continue
+
+            def mem(mc):
+                if mc is None:
+                    return "dram"
+                if mc.get("is_sharded") or not mc.get("interleaved", True):
+                    return None
+                return "l1" if mc.get("buffer_type") == "BufferType.L1" else "dram"
+
+            def dtype(t):
+                return _TRACE_DTYPES.get(str(t).replace("DataType.", ""))
+
+            a_mem, b_mem, out_mem = mem(t0["memory_config"]), mem(t1["memory_config"]), mem(a.get("memory_config"))
+            a_dt, b_dt = dtype(t0["original_dtype"]), dtype(t1["original_dtype"])
+            out_dt = dtype(a["dtype"]["repr"]) if isinstance(a.get("dtype"), dict) else None
+            if None in (a_mem, b_mem, out_mem, a_dt, b_dt) or (a.get("dtype") and out_dt is None):
+                continue
+            ckc = a.get("compute_kernel_config") or {}
+            fidelity = str(ckc.get("math_fidelity", "MathFidelity.HiFi2")).replace("MathFidelity.", "")
+            activation = a.get("activation")
+            if activation is not None and activation not in _TRACE_ACTIVATIONS:
+                continue
+            core_grid = None
+            if isinstance(a.get("core_grid"), dict):
+                m = re.search(r"x=(\d+), y=(\d+)", a["core_grid"].get("value", ""))
+                core_grid = (int(m[1]), int(m[2])) if m else None
+            op = "linear" if op_name == "ttnn.linear" else "matmul"
+            case = Case(
+                name=f"t_{op}_{cfg['config_hash'][:10]}",
+                a_shape=tuple(t0["original_shape"]),
+                b_shape=tuple(t1["original_shape"]),
+                tier="traced",
+                source=op_name,
+                a_dtype=a_dt,
+                b_dtype=b_dt,
+                out_dtype=out_dt,
+                a_mem=a_mem,
+                b_mem=b_mem,
+                out_mem=out_mem,
+                transpose_a=bool(a.get("transpose_a", False)),
+                transpose_b=bool(a.get("transpose_b", False)),
+                op=op,
+                bias=op == "linear" and isinstance(a.get("bias"), dict),
+                activation=activation if op == "linear" else None,
+                core_grid=core_grid,
+                fidelity=fidelity if fidelity in FIDELITIES else "HiFi2",
+                fp32_acc=bool(ckc.get("fp32_dest_acc_en", False)),
+                packer_l1_acc=bool(ckc.get("packer_l1_acc", True)),
+                tags=("core_grid",) if core_grid else ("default",),
+            )
+            key = tuple(v for k, v in case.__dict__.items() if k != "name")
+            cases.setdefault(key, case)
+    return list(cases.values())
+
+
+TIERS["traced"] = _traced_cases
