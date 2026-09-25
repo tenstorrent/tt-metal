@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
@@ -15,6 +17,7 @@ from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils.substate import rename_substate
+from ....utils.tensor import bf16_tensor
 from .agmm_config import agmm_block_size
 from .attention_minimax_h3 import MiniMaxH3Attention
 from .mmrs_config import has_mmrs_config, register_mmrs_config
@@ -141,6 +144,9 @@ class MiniMaxH3TransformerBlock(Module):
             packer_l1_acc=True,
         )
         self.use_fused_agmm = ccl_manager.topology == ttnn.Topology.Ring and self.tp_factor > 1
+        # MINIMAX_H3_ADALN_GATHER=matmul: one-hot matmul instead of ttnn.embedding for the six modulation gathers.
+        self._adaln_gather = os.environ.get("MINIMAX_H3_ADALN_GATHER", "embedding")
+        self._eye_tables: dict[int, ttnn.Tensor] = {}
         # ff1 packs gate and up together for the fused SwiGLU, so its per-device N is 2 * ffn_dim / tp.
         self._ff1_kn = (hidden_size, 2 * ffn_dim // self.tp_factor)
 
@@ -215,9 +221,20 @@ class MiniMaxH3TransformerBlock(Module):
             tables.append(ttnn.to_layout(table, ttnn.TILE_LAYOUT))
         return tables
 
-    def _gather_rows(self, table: ttnn.Tensor, adaln_indices: ttnn.Tensor) -> ttnn.Tensor:
+    def _gather_rows(
+        self, table: ttnn.Tensor, adaln_indices: ttnn.Tensor, onehot: ttnn.Tensor | None = None
+    ) -> ttnn.Tensor:
         """Select one table row per row of the local packed sequence -> [1, 1, S_local, hidden_local]."""
+        if onehot is not None:
+            return ttnn.matmul(onehot, table, compute_kernel_config=self.mm_compute_kernel_config)
         out = ttnn.embedding(adaln_indices, table, layout=ttnn.TILE_LAYOUT)
+        return ttnn.unsqueeze(out, 0)
+
+    def _onehot(self, adaln_indices: ttnn.Tensor, rows: int) -> ttnn.Tensor:
+        """[1, 1, S_local, rows] bf16 one-hot of the table row per token; exact when multiplied into a bf16 table."""
+        if rows not in self._eye_tables:
+            self._eye_tables[rows] = bf16_tensor(torch.eye(rows), device=self.mesh_device)
+        out = ttnn.embedding(adaln_indices, self._eye_tables[rows], layout=ttnn.TILE_LAYOUT)
         return ttnn.unsqueeze(out, 0)
 
     # ------------------------------------------------------------------ forward
@@ -247,8 +264,10 @@ class MiniMaxH3TransformerBlock(Module):
         if indices.dtype != ttnn.uint32:
             indices = ttnn.typecast(indices, ttnn.uint32)
 
+        onehot = self._onehot(indices, tables[0].shape[0]) if self._adaln_gather == "matmul" else None
+
         def modulation(param: int) -> ttnn.Tensor:
-            return self._gather_rows(tables[param], indices)
+            return self._gather_rows(tables[param], indices, onehot)
 
         # 1. Modulated self-attention. The (1 + scale) and shift are handed to the norm as a per-token
         # dynamic weight and bias, so the fused norm op applies the modulation itself rather than the
