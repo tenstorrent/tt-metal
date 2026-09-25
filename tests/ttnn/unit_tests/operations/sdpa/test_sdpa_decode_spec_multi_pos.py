@@ -816,6 +816,11 @@ NH12 = 12
         (4, 4, 32768, 30000, 27),  # 1 user x T=16 (4 groups of 4)
         (4, 2, 2048, 1024, 16),  # narrow rows
         (2, 4, 512, 5, 16),  # first block: the mask cuts inside column-tile 0
+        # the model's other _SPEC_SDPA_L1_FIT_GQA plans (T=4 and T=12 per user)
+        (1, 4, 2048, 1024, 64),  # 1 user x T=4: one group, 64-core cap -> 55 cores per KV head
+        (1, 4, 32768, 30000, 64),
+        (3, 4, 2048, 1024, 36),  # 1 user x T=12: three groups, 36-core cap -> 18 cores per KV head
+        (3, 4, 32768, 30000, 36),
     ],
     ids=[
         "B2Tg4_s2k_p1024",
@@ -829,6 +834,10 @@ NH12 = 12
         "B4Tg4_s32k_p30000",
         "B4Tg2_s2k_p1024",
         "B2Tg4_s512_p5_first_block",
+        "B1Tg4_s2k_p1024_cap64",
+        "B1Tg4_s32k_p30000_cap64",
+        "B3Tg4_s2k_p1024_cap36",
+        "B3Tg4_s32k_p30000_cap36",
     ],
 )
 def test_spec_nkv2_groups_matches_batched(device, B, Tg, seq_len, p, max_cores):
@@ -919,3 +928,53 @@ def test_rejects_nkv2_without_spec_q_heads(device, expect_error):
                 spec_multi_pos_tiles=Tg,
                 spec_q_heads=bad,
             )
+
+
+# ── Other GQA geometries: the writer's face-half-1 rows (>= 16) ─────────────
+#
+# At NH=12/NKV=2 every written row is < 16 (face half 0). These cases put a KV head's Q group in
+# face half 1 (rows 16-31) or across row 16, the writer's other branch: NKV=4/NH=24 (the TP=1
+# geometry, g=6: head 2 = rows 12-17 straddles, head 3 = rows 18-23), NH=20/NKV=2 (g=10: head 1 =
+# rows 10-19), NH=32/NKV=2 (g=16: head 1 = rows 16-31 exactly) and NH=32/NKV=4 (g=8: heads 2,3 in
+# half 1). Held to the legacy per-row GQA call and to fp32.
+
+GQA_GEOMETRIES = [(4, 24), (2, 20), (2, 32), (4, 32)]
+GQA_IDS = ["nkv4_nh24", "nkv2_nh20", "nkv2_nh32", "nkv4_nh32"]
+
+
+@pytest.mark.parametrize("nkv, nh", GQA_GEOMETRIES, ids=GQA_IDS)
+@pytest.mark.parametrize(
+    "B, Tg, seq_len, p, max_cores",
+    [(2, 4, 2048, 1024, 55), (2, 4, 32768, 30000, 55), (8, 4, 8192, 5000, 13)],
+    ids=["B2Tg4_s2k", "B2Tg4_s32k", "B8Tg4_s8k"],
+)
+def test_spec_gqa_geometry_matches_batched(device, nkv, nh, B, Tg, seq_len, p, max_cores):
+    pcc = 0.995 if B == 8 else None  # the 32-row reference runs 1 core per (row, KV head); see nkv2 test
+    _check_groups(device, B=B, Tg=Tg, p=p, seq_len=seq_len, max_cores=max_cores, seed=131, nkv=nkv, nh=nh, pcc=pcc)
+
+
+@pytest.mark.parametrize("nkv, nh", GQA_GEOMETRIES, ids=GQA_IDS)
+@pytest.mark.parametrize("seq_len, p", [(2048, 1024), (32768, 30000)], ids=["s2k", "s32k"])
+def test_spec_gqa_geometry_is_bit_exact(device, nkv, nh, seq_len, p):
+    """Matched reduction tree (the largest cap that gives the B=2 spec call and the 8-row reference
+    the same cores per (row, KV head)): bit-identical to the legacy per-row GQA call for every
+    valid q head, including the rows the writer's face-half-1 branch writes."""
+    B, Tg = 2, 4
+    T = B * Tg
+    caps = [c for c in range(1, 65) if _cores_per_head(device, B, c, nkv) == _cores_per_head(device, T, c, nkv)]
+    if not caps:
+        pytest.skip("no matched reduction tree on this grid")
+    max_cores = max(caps)
+    assert not _group_straddles(B, Tg, p, GROUP_CHUNK)
+    torch.manual_seed(137)
+    inp = _build_inputs(device, T, p, seq_len, seed=139, nkv=nkv, nh=nh)
+    pc = _program_config(device, max_cores=max_cores, k_chunk_size=GROUP_CHUNK)
+    ref = _run_reference(device, inp, T, pc)
+    spec = _run_spec_groups(device, inp, B, Tg, pc)
+    torch_ref = _torch_reference(inp["q_heads"], inp["k"], inp["v"], inp["cur_pos"])
+    eq, msg = comp_pcc(torch_ref, spec, pcc=0.99)
+    assert eq, f"spec vs torch (nkv={nkv}, nh={nh}): {msg}"
+    assert torch.equal(ref, spec), (
+        f"expected bit-identical output (nkv={nkv}, nh={nh}, max_cores={max_cores}, p={p}, seq_len={seq_len}); "
+        f"max abs diff {(ref - spec).abs().max().item():.8f}"
+    )

@@ -14,8 +14,11 @@ Every device does identical SDPA work at TP=2 (its own 2 KV heads), so one chip'
 time x 16 full-attention layers = the per-verify-step SDPA device time. Run under tracy
 (``python -m tracy -r -v -m pytest``) and aggregate the SdpaDecodeDeviceOperation rows per signpost.
 
-Env: LANES_MODES (legacy,fold), LANES_ITERS (default 5), LANES_CASES (comma list of ids, default all).
+Env: LANES_MODES (legacy,fold) -- REQUIRED, the module is skipped without it so a plain pytest sweep of
+qwen36/tests never runs this device bench; LANES_ITERS (default 5), LANES_CASES (comma list of ids, default
+all), LANES_BLOCKS (page-table width per user), LANES_TORCH_CHECK=1 (per-row fp32 check of every mode).
 ``hold`` = rows of users that are not active in the served 4x8 bucket (cur_pos = -1).
+``u1_T8_p32768`` / ``u4_T8_p32768`` verify positions >= 32768 (the page-table-width repro: LANES_BLOCKS=513 vs 1024).
 """
 
 import os
@@ -32,6 +35,10 @@ except Exception:  # pragma: no cover
     def signpost(*a, **k):
         pass
 
+
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("LANES_MODES"), reason="lane S device bench: set LANES_MODES=legacy,fold to run"
+)
 
 NH, NKV, HD, BLOCK = 12, 2, 256, 64
 TILE = 32
@@ -55,6 +62,8 @@ CASES = [
     ("u4_T8_8k", 4, 8, 8192, 4),
     ("u1_T16_2k", 1, 16, 2048, 1),
     ("u1_T16_128", 1, 16, 128, 1),
+    ("u1_T8_p32768", 1, 8, 32776, 1),  # positions 32768..32775
+    ("u4_T8_p32768", 4, 8, 32776, 4),  # user u: 32768+3u..32775+3u
 ]
 
 # fold plan per T: (groups per user, max_cores_per_head_batch cap) -- env override LANES_FOLD_PLAN="8:2:55,16:4:36"

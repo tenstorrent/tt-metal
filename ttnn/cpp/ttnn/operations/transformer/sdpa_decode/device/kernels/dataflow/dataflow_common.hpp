@@ -534,13 +534,13 @@ uint32_t write_partial_tiles_to_memory(
     return barrier_count;
 }
 
-// Speculative multi-position mode with num_kv_heads > 1: the output of batch group b is PNHt == Tg
-// candidate tiles, and in EVERY candidate tile rows [cur_head*g, (cur_head+1)*g) belong to this
+// Speculative multi-position mode with num_kv_heads > 1: the output of batch group b is Tg (the
+// writer's PNHt) candidate tiles, and in EVERY candidate tile rows [cur_head*g, (cur_head+1)*g) belong to this
 // kv head (g = num_heads_to_write = spec_q_heads / num_kv_heads, all rows < 32). The rows of one
 // face half are contiguous in L1 and in the output tile (row r of face 0/1 sits at r*16 elements,
 // row r >= 16 of face 2/3 at (r+16)*16), so each (candidate tile, hidden tile, face half, column
 // face) is ONE contiguous write of nrows*16 elements.
-template <uint32_t cb_out, uint32_t ELEMENT_SIZE, uint32_t barrier_threshold, uint32_t PNHt, typename WriterType>
+template <uint32_t cb_out, uint32_t ELEMENT_SIZE, uint32_t barrier_threshold, typename WriterType>
 uint32_t write_spec_partial_rows_to_memory(
     uint32_t& out_tile_id,  // base tile index of this batch group
     const WriterType& out_writer,
