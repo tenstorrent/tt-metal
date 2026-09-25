@@ -71,7 +71,7 @@ jobs:
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       tracy: ${{ inputs.tracy }}
-      build-wheel: true
+      build-inplace-wheel: true
       ref: ${{ inputs.commit || github.sha }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-type: ${{ inputs.build-type || 'Release' }}
@@ -93,7 +93,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - ${{ !contains(inputs.runner-label, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G' || '/nohugepages:/nohugepages' }}
-        - ${{ !contains(inputs.runner-label, 'tt-ubuntu-2204') && '/mnt/MLPerf:/mnt/MLPerf:ro' || '/donotmount:/donotmount:ro' }}
+        - ${{ contains(inputs.runner-label, 'BH-Quietbox-2') && '/mnt/models/huggingface:/mnt/MLPerf/huggingface:ro' || (!contains(inputs.runner-label, 'tt-ubuntu-2204') && '/mnt/MLPerf:/mnt/MLPerf:ro' || '/donotmount:/donotmount:ro') }}
       options: "--device /dev/tenstorrent"
     defaults:
       run:
