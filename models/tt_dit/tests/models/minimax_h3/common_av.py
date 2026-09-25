@@ -789,19 +789,27 @@ def _read_optional_image_path(label: str) -> str | None:
         print(f"no such file: {raw}", file=sys.stderr)
 
 
+def _read_prompt() -> str | None:
+    """The prompt text, or a file's contents when the entry names an existing file. `q` quits; EOFError aborts."""
+    while True:
+        try:
+            text = _prompt_line("User prompt (prompt or file path; q to quit): ").strip()
+        except EOFError:
+            return None
+        if text.lower() == "q":
+            return None
+        if not text:
+            continue
+        return Path(text).read_text().strip() if os.path.isfile(text) else text
+
+
 def _read_user_spec(
     default_aspect_ratio: tuple[int, int], default_duration_s: float, default_num_steps: int, default_seed: int = 0
 ) -> tuple[str, str | None, str | None, int | None, int | None, tuple[int, int], float, int, int] | None:
     """Host stdin: prompt (`q` quits), keyframes, then canvas/aspect (only without keyframes), duration, steps, seed."""
-    while True:
-        try:
-            prompt = _prompt_line("User prompt (q to quit): ").strip()
-        except EOFError:
-            return None
-        if prompt.lower() == "q":
-            return None
-        if prompt:
-            break
+    prompt = _read_prompt()
+    if prompt is None:
+        return None
     try:
         first_image = _read_optional_image_path("First image path (blank for none): ")
         last_image = _read_optional_image_path("Last image path (blank for none): ")
@@ -921,15 +929,9 @@ def _read_reference_spec(
     default_aspect_ratio: tuple[int, int], default_duration_s: float, default_num_steps: int
 ) -> dict | None:
     """Host stdin: prompt, aspect, duration, steps, a counts triple, then paths; None on `q` or EOF."""
-    while True:
-        try:
-            prompt = _prompt_line("User prompt (q to quit): ").strip()
-        except EOFError:
-            return None
-        if prompt.lower() == "q":
-            return None
-        if prompt:
-            break
+    prompt = _read_prompt()
+    if prompt is None:
+        return None
 
     while True:
         try:
