@@ -235,7 +235,7 @@ scaleout:
   e2e:
     wh_llmbox: 185
     wh_galaxy: 100
-    bh_galaxy: 125
+    bh_galaxy: 155
     bh_sc1: 20
     bh_sc4: 90
     bh_sc16: 150
@@ -421,7 +421,7 @@ models:
     bh_quietbox_2: 80
   demo:
     bh_galaxy: 470
-    bh_sc1: 1678
+    bh_sc1: 1708
     bh_sc1_high_power: 388
     bh_sc4: 60
     wh_n150: 500
@@ -468,3 +468,8 @@ syseng:
     wh_n300_civ2: 36
     bh_p100: 18
     bh_p150b_civ2: 18
+
+gtm:
+  e2e:
+    wh_galaxy: 135
+    bh_galaxy: 135

@@ -302,6 +302,7 @@ class PrefillModelAdapter(ABC):
 DEFAULT_MODEL = "kimi_k2_7"
 
 ADAPTER_PATHS = {
+    "llama_3p1_8b": "models.demos.llama_3p1_8b_d_p.tt.runners.adapters.llama_3p1_8b:Llama31PrefillAdapter",
     # DeepSeek-V3.2-Exp: DSA, still test-only (config + sparse-MLA reference parity; serving not wired).
     "deepseek_v32": "models.demos.deepseek_v3_d_p.tt.runners.adapters.sparse_mla:DeepSeekV32Adapter",
     "deepseek_v3_d_p": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v3:DeepSeekV3Adapter",

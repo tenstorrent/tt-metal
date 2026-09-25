@@ -34,7 +34,8 @@ METALIUM_GUIDE.md @davorchap @tenstorrent/metalium-developers-infra
 # Agentic research CI: @uaydonat is the backup owner.
 .github/workflows/agentic-research-model-tests.yaml @yieldthought @tchedaTT @mtairum @uaydonat @tenstorrent/metalium-developers-infra
 .github/workflows/fabric-cpu-only-tests-impl.yaml @Riddy21 @tt-asaigal @aliuTT @cfjchu @p1-0tr @tenstorrent/metalium-developers-infra
-.github/workflows/galaxy-multi-user-isolation-tests.yaml @sott0n @changh95
+.github/workflows/galaxy-multi-user-isolation-tests-impl.yaml @sott0n @changh95
+tests/pipeline_reorg/galaxy_multi_user_isolation_tests.yaml @sott0n @changh95
 .github/workflows/galaxy-profiler-tests-impl.yaml @mo-tenstorrent @akerteszTT @yusufbashiTT @tenstorrent/metalium-developers-infra
 .github/workflows/galaxy-profiler-tests.yaml @mo-tenstorrent @akerteszTT @yusufbashiTT @tenstorrent/metalium-developers-infra
 .github/workflows/models-t1*.yaml @mtairum @uaydonat @tenstorrent/metalium-developers-infra
@@ -494,6 +495,7 @@ tests/ttnn/stress_tests/test_ccl.py @tenstorrent/metalium-developers-ops-data-mo
 tests/ttnn/stress_tests/test_data_movement.py @tenstorrent/metalium-developers-ops-data-movement
 tests/ttnn/unit_tests/gtests/ccl/ @tenstorrent/metalium-developers-ops-data-movement
 tests/ttnn/unit_tests/gtests/conv/ @tenstorrent/metalium-developers-convolutions
+tests/ttnn/unit_tests/gtests/sdpa/ @tenstorrent/metalium-developers-sdpa
 tests/ttnn/unit_tests/gtests/udm/ @yugaoTT @SeanNijjar
 tests/ttnn/unit_tests/gtests/udm/**/CMakeLists.txt @yugaoTT @SeanNijjar @tenstorrent/metalium-developers-infra
 tests/ttnn/unit_tests/operations/ccl/ @tenstorrent/metalium-developers-ops-data-movement

@@ -32,6 +32,7 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "test_helpers.hpp"
 #include "impl/program/program_impl.hpp"  // ScratchpadBaseReDeliveredAfterDfbResize: DFB allocated-address query
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal::experimental {
 namespace {
@@ -348,11 +349,10 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
 
 TEST_F(ProgramSpecHWTest, NamedArgsLoopbackCompute) {
     auto mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
 
     constexpr uint32_t entry_size = 1024;  // CTA value folded into the XOR (not a DFB size)
     constexpr uint32_t num_tiles = 8;      // CRTA value folded into the XOR
-    const uint32_t report_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t report_addr = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
 
     const NodeCoord node{0, 0};
 
@@ -398,12 +398,12 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopbackCompute) {
     SetProgramRunArgs(program, params);
 
     std::vector<uint32_t> zero_report(1, 0u);
-    detail::WriteToDeviceL1(device, node, report_addr, zero_report);
+    slow_dispatch::WriteToL1(*mesh_device, node, report_addr, zero_report);
 
     LaunchProgram(*mesh_device, std::move(program));
 
     std::vector<uint32_t> reported;
-    detail::ReadFromDeviceL1(device, node, report_addr, sizeof(uint32_t), reported);
+    slow_dispatch::ReadFromL1(*mesh_device, node, report_addr, sizeof(uint32_t), reported);
     ASSERT_EQ(reported.size(), 1u);
     EXPECT_EQ(reported[0], kTargetXorSum);
 }
@@ -515,11 +515,10 @@ TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopback) {
 
 TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopbackCompute) {
     auto mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
 
     constexpr uint32_t entry_size = 1024;  // CTA value folded into the XOR (not a DFB size)
     constexpr uint32_t num_tiles = 8;      // CRTA value folded into the XOR
-    const uint32_t report_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t report_addr = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
 
     const NodeCoord node{0, 0};
 
@@ -552,12 +551,12 @@ TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopbackCompute) {
     SetProgramRunArgs(program, params);
 
     std::vector<uint32_t> zero_report(1, 0u);
-    detail::WriteToDeviceL1(device, node, report_addr, zero_report);
+    slow_dispatch::WriteToL1(*mesh_device, node, report_addr, zero_report);
 
     LaunchProgram(*mesh_device, std::move(program));
 
     std::vector<uint32_t> reported;
-    detail::ReadFromDeviceL1(device, node, report_addr, sizeof(uint32_t), reported);
+    slow_dispatch::ReadFromL1(*mesh_device, node, report_addr, sizeof(uint32_t), reported);
     ASSERT_EQ(reported.size(), 1u);
     EXPECT_EQ(reported[0], kTargetXorSum);
 }
@@ -795,7 +794,6 @@ TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
 
 TEST_F(ProgramSpecHWTest, LocalTensorAccessorBindingCompileComputeKernel) {
     auto mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
 
     constexpr uint32_t kReportAddr = 100 * 1024;  // host-known fixed L1 addr (same idiom as ScratchpadWriteReadback)
     constexpr uint32_t kNumReportWords = 4;
@@ -831,12 +829,12 @@ TEST_F(ProgramSpecHWTest, LocalTensorAccessorBindingCompileComputeKernel) {
     SetProgramRunArgs(program, params);
 
     std::vector<uint32_t> zero_report(kNumReportWords, 0u);
-    detail::WriteToDeviceL1(device, node, kReportAddr, zero_report);
+    slow_dispatch::WriteToL1(*mesh_device, node, kReportAddr, zero_report);
 
     LaunchProgram(*mesh_device, std::move(program));
 
     std::vector<uint32_t> reported;
-    detail::ReadFromDeviceL1(device, node, kReportAddr, kNumReportWords * sizeof(uint32_t), reported);
+    slow_dispatch::ReadFromL1(*mesh_device, node, kReportAddr, kNumReportWords * sizeof(uint32_t), reported);
     ASSERT_EQ(reported.size(), kNumReportWords);
 
     const uint32_t expected_address = static_cast<uint32_t>(local_tensor.address());
@@ -906,7 +904,6 @@ TEST_F(ProgramSpecHWTest, MultiBindingProducerMaskMismatchFails) {
 // real, writable, node-local L1" and "the framework delivered its base address to the kernel".
 TEST_F(ProgramSpecHWTest, ScratchpadWriteReadback) {
     auto mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
 
     constexpr uint32_t kScratchpadBytes = 64;                            // 16 x uint32_t
     constexpr uint32_t kNumElems = kScratchpadBytes / sizeof(uint32_t);  // 16
@@ -950,19 +947,19 @@ TEST_F(ProgramSpecHWTest, ScratchpadWriteReadback) {
     // Pre-zero the report location so a kernel that never wrote it would be caught (the readback base
     // address would be 0, which is not a valid scratchpad L1 address → the pattern check fails).
     std::vector<uint32_t> zero_report(1, 0u);
-    detail::WriteToDeviceL1(device, node, kReportAddr, zero_report);
+    slow_dispatch::WriteToL1(*mesh_device, node, kReportAddr, zero_report);
 
     // Dispatch via the slow-dispatch path (blocking — wait_until_cores_done defaults to true).
     LaunchProgram(*mesh_device, std::move(program));
 
     std::vector<uint32_t> reported;
-    detail::ReadFromDeviceL1(device, node, kReportAddr, sizeof(uint32_t), reported);
+    slow_dispatch::ReadFromL1(*mesh_device, node, kReportAddr, sizeof(uint32_t), reported);
     ASSERT_EQ(reported.size(), 1u);
     const uint32_t scratch_base = reported[0];
     EXPECT_NE(scratch_base, 0u) << "Kernel reported a 0 scratchpad base address (token not delivered?)";
 
     std::vector<uint32_t> scratch_contents;
-    detail::ReadFromDeviceL1(device, node, scratch_base, kScratchpadBytes, scratch_contents);
+    slow_dispatch::ReadFromL1(*mesh_device, node, scratch_base, kScratchpadBytes, scratch_contents);
     ASSERT_EQ(scratch_contents.size(), kNumElems);
 
     std::vector<uint32_t> expected(kNumElems);
@@ -1230,7 +1227,6 @@ void kernel_main() {
 // (base_B == base_A → the NE check fails) and its pattern write lands inside the grown DFB's region.
 TEST_F(ProgramSpecHWTest, ScratchpadBaseReDeliveredAfterDfbResize) {
     auto mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
 
     constexpr uint32_t entry_size = 1024;      // bytes per DFB entry (constant)
     constexpr uint32_t num_entries_small = 2;  // initial DFB depth
@@ -1337,7 +1333,7 @@ void kernel_main() {
 
         // The scratchpad must be real, writable L1 at the reported base.
         std::vector<uint32_t> scratch_contents;
-        detail::ReadFromDeviceL1(device, node, base, kScratchpadBytes, scratch_contents);
+        slow_dispatch::ReadFromL1(*mesh_device, node, base, kScratchpadBytes, scratch_contents);
         EXPECT_EQ(scratch_contents, expected_pattern)
             << "Scratchpad L1 at reported base 0x" << std::hex << base << " did not contain the pattern";
 
@@ -1425,14 +1421,13 @@ std::vector<std::uint32_t> RunComputeSemaphore(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const ComputeSemaphoreRun& run,
     std::uint32_t n_report) {
-    IDevice* device = mesh_device->get_devices()[0];
     Program program = MakeComputeSemaphoreProgram(*mesh_device, run);
     std::vector<std::uint32_t> zero_report(64, 0u);
-    detail::WriteToDeviceL1(device, kSemNode, kSemReportAddr, zero_report);
+    slow_dispatch::WriteToL1(*mesh_device, kSemNode, kSemReportAddr, zero_report);
     LaunchProgram(*mesh_device, std::move(program));
 
     std::vector<std::uint32_t> r;
-    detail::ReadFromDeviceL1(device, kSemNode, kSemReportAddr, n_report * sizeof(std::uint32_t), r);
+    slow_dispatch::ReadFromL1(*mesh_device, kSemNode, kSemReportAddr, n_report * sizeof(std::uint32_t), r);
     return r;
 }
 
@@ -1480,8 +1475,7 @@ struct DatacopyResult {
 };
 
 DatacopyResult RunComputeSemaphoreDatacopy(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, std::uint32_t num_tiles, std::uint32_t nosync) {
-    IDevice* device = mesh_device->get_devices()[0];
+    distributed::MeshDevice& mesh_device, std::uint32_t num_tiles, std::uint32_t nosync) {
     constexpr std::uint32_t kMaxTiles = 8;
     constexpr std::uint32_t kDepth = kSemDepth;
     constexpr std::uint32_t kTileWords = 32 * 32 * 2 / 4;
@@ -1495,7 +1489,7 @@ DatacopyResult RunComputeSemaphoreDatacopy(
 
     // Capacity = ring depth, so PACK's wait_not_full() holds the packer while all kDepth slots are full.
     Program program = MakeComputeSemaphoreProgram(
-        *mesh_device, {.pattern = 3, .num_iters = num_tiles, .nosync = nosync, .max_value = kSemDepth});
+        mesh_device, {.pattern = 3, .num_iters = num_tiles, .nosync = nosync, .max_value = kSemDepth});
 
     // Input: tile t, datum k = bf16 0x4000 + (t << 7) + (k & 0x7F). Normal positive values (exact through a
     // bf16 datacopy) and distinct per tile, so a stale ring read (the previous tile) is detected.
@@ -1509,15 +1503,15 @@ DatacopyResult RunComputeSemaphoreDatacopy(
     }
     std::vector<std::uint32_t> zero_report(64, 0u);
     std::vector<std::uint32_t> poison((kDepth + kMaxTiles) * kTileWords, 0xDEADBEEFu);
-    detail::WriteToDeviceL1(device, kSemNode, kSemReportAddr, zero_report);
-    detail::WriteToDeviceL1(device, kSemNode, kSemReportAddr + kInOffset, in);
-    detail::WriteToDeviceL1(device, kSemNode, kSemReportAddr + kMidOffset, poison);  // covers mid and out
-    LaunchProgram(*mesh_device, std::move(program));
+    slow_dispatch::WriteToL1(mesh_device, kSemNode, kSemReportAddr, zero_report);
+    slow_dispatch::WriteToL1(mesh_device, kSemNode, kSemReportAddr + kInOffset, in);
+    slow_dispatch::WriteToL1(mesh_device, kSemNode, kSemReportAddr + kMidOffset, poison);  // covers mid and out
+    LaunchProgram(mesh_device, std::move(program));
 
     DatacopyResult res;
-    detail::ReadFromDeviceL1(device, kSemNode, kSemReportAddr, 4 * sizeof(std::uint32_t), res.report);
+    slow_dispatch::ReadFromL1(mesh_device, kSemNode, kSemReportAddr, 4 * sizeof(std::uint32_t), res.report);
     std::vector<std::uint32_t> out;
-    detail::ReadFromDeviceL1(device, kSemNode, kSemReportAddr + kOutOffset, num_tiles * kTileWords * 4, out);
+    slow_dispatch::ReadFromL1(mesh_device, kSemNode, kSemReportAddr + kOutOffset, num_tiles * kTileWords * 4, out);
     for (std::uint32_t t = 0; t < num_tiles; ++t) {
         if (!std::equal(
                 out.begin() + t * kTileWords, out.begin() + (t + 1) * kTileWords, in.begin() + t * kTileWords)) {
@@ -1535,7 +1529,7 @@ TEST_F(ProgramSpecHWTest, ComputeSemaphoreDatacopy) {
         GTEST_SKIP() << "Blackhole-only";
     }
     constexpr std::uint32_t num_tiles = 8;
-    const auto r = RunComputeSemaphoreDatacopy(mesh_device, num_tiles, /*nosync=*/0);
+    const auto r = RunComputeSemaphoreDatacopy(*mesh_device, num_tiles, /*nosync=*/0);
     GTEST_LOG_(INFO) << "datacopy: packed=" << r.report[0] << " final_sem=" << r.report[2]
                      << " mismatched_tiles=" << r.mismatched_tiles;
     EXPECT_EQ(r.report[0], num_tiles) << "PACK did not finish every tile";
@@ -1552,7 +1546,7 @@ TEST_F(ProgramSpecHWTest, ComputeSemaphoreDatacopyNoSyncControl) {
         GTEST_SKIP() << "Blackhole-only";
     }
     constexpr std::uint32_t num_tiles = 8;
-    const auto r = RunComputeSemaphoreDatacopy(mesh_device, num_tiles, /*nosync=*/1);
+    const auto r = RunComputeSemaphoreDatacopy(*mesh_device, num_tiles, /*nosync=*/1);
     GTEST_LOG_(INFO) << "datacopy no-sync control: packed=" << r.report[0] << " mismatched_tiles=" << r.mismatched_tiles
                      << " / " << num_tiles;
     EXPECT_EQ(r.report[0], num_tiles);
