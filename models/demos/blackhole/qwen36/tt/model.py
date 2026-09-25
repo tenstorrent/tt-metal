@@ -19,6 +19,7 @@ from models.common.utility_functions import is_blackhole
 from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
+from models.demos.blackhole.qwen36.tt.spec_sampling_device import topk_support
 from models.tt_transformers.tt.common import Mode, get_block_size, num_blocks_in_seq
 
 
@@ -1794,7 +1795,9 @@ class Qwen36Model:
             dn._conv_taps_stale, dn._conv_win_stale = False, True
             dn.sync_conv_win()
 
-    def verify_traced(self, draft_tokens, chunk_start, read_logits=False, clone_rows=True, page_table=None):
+    def verify_traced(
+        self, draft_tokens, chunk_start, read_logits=False, clone_rows=True, page_table=None, logits_topk=0
+    ):
         """Replay the captured verify trace for `draft_tokens` at absolute `chunk_start`. Advances GDN
         in place + captures per-token slots (commit_verify_slot rolls to the accepted slot after).
         Returns (logits [T,vocab] host float or None, rows [1,1,T,dim/tp] device hidden, ids [T] host
@@ -1803,6 +1806,9 @@ class Qwen36Model:
         read_logits: pull the full [T, vocab] logits back to host as well. Off for greedy acceptance,
         which needs the argmax ids alone (the trace produces them on device); the caller flips it via
         SpeculativeDecoder.read_verify_logits when it needs the distributions (future sampling).
+
+        logits_topk: with read_logits, return the device-selected top-k support as host
+        (idx, vals) [T, k] instead of the dense block (tt/spec_sampling_device.py).
 
         page_table: this sequence's block table, [1, num_blocks] / [num_blocks] torch or a sequence
         of ints. When given, BOTH persistent page-table buffers are re-staged for this replay
@@ -1864,8 +1870,12 @@ class Qwen36Model:
         ids = [int(v) for v in ids[:T]]
         lt = None
         if read_logits:
-            lt = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_logits_out)[0])
-            lt = lt.reshape(-1, self.vocab_size)[:T].float()
+            if logits_topk:
+                # Cut to the top-k support on device: [T, k] back instead of [T, vocab].
+                lt = topk_support(self._vfy_logits_out, logits_topk, T)
+            else:
+                lt = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_logits_out)[0])
+                lt = lt.reshape(-1, self.vocab_size)[:T].float()
         # clone_rows=False hands back the trace's OWN persistent [1,1,T,dim/tp] output instead of a
         # fresh DRAM clone. The caller must then not deallocate it and must be done with it before
         # the next replay (the spec loop is: it reads the anchor row and reseeds the drafter, both

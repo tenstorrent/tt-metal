@@ -1,0 +1,67 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Device front half of the speculative sampler: ttnn.topk cuts [T, vocab] down to [T, k].
+
+Split measured on T3K against the fp32 reference -- topk is the only pipeline op that is exact
+on device (values bit-exact, err 0.0); temperature, softmax, cumsum and the presence penalty
+are bf16 there (3.9e-2 / 9.7e-3 / 2.6e-3 / 1.6e-2) so they stay in torch.
+
+OPT-IN (QWEN36_SPEC_DEVICE_TOPK=1), not the default: exact and fast standalone (2.6 ms against
+47 ms for the dense readback + host accept), but the per-iteration ttnn.pad below allocates a
+4 MB buffer while the decode traces are live and that wedges the verify readback. Making this
+the default needs a persistent padded buffer allocated before capture_verify_trace.
+"""
+
+import math
+
+import torch
+
+import ttnn
+
+# ttnn.topk wants a tile-aligned width; ask for a multiple of 32 and slice back.
+_TOPK_ALIGN = 32
+
+# ttnn.topk is fast only at POWER-OF-TWO widths <= 32768: measured 0.5-0.9 ms at 8k/16k/32k
+# against 15 ms at 31040, 20 ms at 40960 and 132 ms at the full 248320 vocab. So the row is
+# padded and split into 32768-wide chunks, and the per-chunk top-k's are merged on host.
+_CHUNK = 32768
+
+# Fills the pad columns. Below any real logit, so padding never enters a chunk's top-k.
+_NEG = -1e30
+
+
+def topk_support(logits_dev, top_k, rows):
+    """Top-k of a replicated [..., T, vocab] device tensor as host ``(idx, vals)``, ``[rows, top_k]``.
+
+    Values return bit-exact because topk only selects and copies. Exactly-tied logits may select
+    a different token id than ``torch.topk`` would; the probability vector is identical either
+    way, so only the labels on tied mass move.
+
+    The global top-k is the top-k of the union of the per-chunk top-k's, so chunking is exact as
+    long as each chunk returns at least ``top_k`` entries.
+    """
+    assert top_k > 0, "device support needs top_k > 0"
+    vocab = int(logits_dev.shape[-1])
+    top_k = min(top_k, vocab)  # dist() clamps the same way, so the two supports agree
+    n = min(-(-top_k // _TOPK_ALIGN) * _TOPK_ALIGN, vocab)
+    chunks = -(-vocab // _CHUNK)
+    assert _CHUNK >= n, f"chunk {_CHUNK} must hold {n} entries for the merge to be exact"
+    # Logical shape, not volume(): that returns the tile-padded row count and oversizes the reshape.
+    r_in = math.prod(int(d) for d in logits_dev.shape) // vocab
+
+    padded = ttnn.pad(logits_dev, [(0, 0), (0, 0), (0, 0), (0, chunks * _CHUNK - vocab)], value=_NEG)
+    split = ttnn.reshape(padded, (1, 1, r_in * chunks, _CHUNK))
+    vals, idx = ttnn.topk(split, n, dim=-1)
+    # One replica is the whole answer: the trace replicates the logits across the mesh.
+    c_idx = ttnn.to_torch(ttnn.get_device_tensors(idx)[0]).reshape(-1, chunks, n)[:rows].long()
+    c_vals = ttnn.to_torch(ttnn.get_device_tensors(vals)[0]).reshape(-1, chunks, n)[:rows].float()
+    for t in (vals, idx, split, padded):
+        ttnn.deallocate(t)
+
+    # Chunk-local ids -> vocabulary ids, then one host merge over the chunks * n candidates.
+    c_idx = c_idx + torch.arange(chunks).view(1, chunks, 1) * _CHUNK
+    flat_v, flat_i = c_vals.reshape(rows, -1), c_idx.reshape(rows, -1)
+    h_vals, order = torch.topk(flat_v, top_k, dim=-1)
+    h_idx = flat_i.gather(-1, order)
+    assert bool((h_idx < vocab).all()), "pad column selected; _NEG is not below the real logits"
+    return h_idx, h_vals

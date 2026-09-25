@@ -416,9 +416,10 @@ The head drafts K tokens autoregressively; the base model verifies all of them i
 K+1-token chunk forward; accepted tokens are committed by pointing the Gated DeltaNet recurrent
 state at the accepted slot (no rollback, no re-processing). Rejected positions in the paged KV are
 corrected implicitly — they are never attended and get overwritten on the next iteration.
-Greedy, batch 1. `QWEN36_SPEC=0` opts out; it also falls back to plain decode automatically if
-sampling is not pure greedy (temperature, repetition penalty or no-repeat-ngram set), since
-losslessness is only defined against a greedy target.
+Batch 1. `QWEN36_SPEC=0` opts out. Greedy acceptance is token-for-token lossless; temperature
+sampling switches to exact speculative rejection sampling (see
+[Sampling under spec decode](#sampling-under-spec-decode)), which is lossless in DISTRIBUTION
+instead. No-repeat-ngram still falls back to plain decode.
 MEASURED on T3K/27B at K=7, one build, back to back. Acceptance is `accepted/K -> committed
 tokens per iteration` (a committed iteration always yields at least the verified token):
 Both arms ran back to back on one build; `plain` is the same demo under `QWEN36_SPEC=0`.
@@ -454,6 +455,60 @@ target's own verify rows, so spec decode must reproduce the plain greedy traject
 token rather than merely a plausible one — a high acceptance rate alone would not prove that.
 `tests/test_spec_lossless.py` is that gate; `tests/test_spec_determinism.py` pins run-to-run
 identity.
+
+#### Sampling under spec decode
+`QWEN35_TEMP>0` switches acceptance from argmax-prefix to exact speculative rejection sampling
+(`tt/spec_sampling.py`). The drafts are the drafter's argmax, so the proposal is a delta and the
+accept test is `u_j < p_j(d_j)`, which makes `P(x) = p(x)` exactly — lossless in distribution
+rather than token for token. `tests/test_spec_sampling_math.py` proves it (27 tests).
+Knobs: `QWEN35_TEMP`, `QWEN35_TOP_K`, `QWEN35_TOP_P`, `QWEN35_SEED`, and `--repetition_penalty`
+(mapped to a presence penalty).
+
+Sampling needs the verify distributions, which greedy does not read back at all. Of that
+pipeline only the O(vocab) top-k runs on device; the rest is bf16 there and would move the
+accept boundary, so it stays in fp32 torch over the `k`-wide support. Measured on T3K (max abs
+error against the fp32 reference):
+
+| op | error | where |
+| --- | --- | --- |
+| `ttnn.topk` values / sorted values | 0.0 | device |
+| `ttnn.argmax`, `ttnn.ge` | 0.0 | device |
+| `ttnn.cumsum` (top-p scan) | 2.6e-3 | host |
+| `ttnn.softmax` (full vocab) | 4.6e-3 | host |
+| `ttnn.softmax` (k-wide) | 9.7e-3 | host |
+| `ttnn.subtract` (presence penalty) | 1.6e-2 | host |
+| `ttnn.div` (temperature) | 3.9e-2 | host |
+
+`topk` is exact because it only selects and copies. Exactly-tied bf16 logits can select a
+different token id than `torch.topk`, but never a different *value* — the probability vector is
+identical, so only the labels on tied mass move (measured: 0 non-tie swaps).
+
+Bare `top_p` needs a full-vocab `logsumexp` for the denominator (no exact device op:
+`ttnn.logsumexp` does not exist and an fp32 device reduction TT_FATALs), and the presence penalty
+must be applied before the selection — both keep the dense `[T, vocab]` readback.
+
+MEASURED on T3K/27B at K=7, ISL 128, `QWEN36_SPEC_TIMING=1`, ms per iteration. Sampling costs the
+readback the greedy path does not do, plus the host accept:
+
+| path | tok/s | readback | accept | total |
+| --- | --- | --- | --- | --- |
+| greedy | 43.18 | 1.92 | 0.05 | 114.85 |
+| sampling, `top_k=64 top_p=0.95` | 29.43 | 25.27 | 16.78 | 153.70 |
+| sampling, `top_p=0.95` (no top-k) | 27.70 | 24.58 | 26.03 | 175.36 |
+
+Sampling costs about a third of the greedy rate; the dense baseline varies ~8% run to run
+(27.3–29.7 tok/s across three runs). `draft` and `verify` are unchanged by the sampler, so the
+whole difference is readback + accept.
+
+**The device top-k is exact but not yet the default** (`QWEN36_SPEC_DEVICE_TOPK=1` opts in).
+Run naively over the full 248,320-wide row it costs 131 ms and loses outright (18.2 tok/s): the
+`ttnn.topk` fast path needs a POWER-OF-TWO width <= 32768 (0.5–0.9 ms), and 31,040 — the vocab
+shard width — is *slower* than 32,768 despite being narrower. Padding to 262,144 and reshaping to
+`[T*8, 32768]` gets the same exact answer in 2.60 ms against the 47 ms the dense path spends, but
+its per-iteration `ttnn.pad` allocates while the decode traces are live and wedges the verify
+readback. Making it the default needs a persistent padded buffer allocated before
+`capture_verify_trace`.
+
 Two Wormhole-specific limits, both documented in `docs/mtp-v2-port.md`:
 * **K is 6 on Wormhole, 11 on Blackhole.** The fused multi-pos verify SDPA
   (`sdpa_decode(spec_multi_pos_tiles=...)`, which reads KV once per group of 4 candidates instead

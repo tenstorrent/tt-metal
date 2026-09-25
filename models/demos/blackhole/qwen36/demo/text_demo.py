@@ -41,6 +41,7 @@ from tracy import signpost
 import ttnn
 from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
+from models.demos.blackhole.qwen36.tt.spec_sampling import SpecSamplingParams
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.generator import Generator
@@ -400,7 +401,7 @@ def _should_use_chunked_trace(model):
     )
 
 
-def _run_tp_spec_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks):
+def _run_tp_spec_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks, sampling=None):
     """MTP speculative decode: the default single-user TP decode path (QWEN36_SPEC=0 opts out).
     draft -> traced verify -> slot commit via SpeculativeDecoder. Returns (tokens, perf_dict) shaped
     like _run_tp_generation so the caller prints/saves it unchanged. Lossless: reproduces the
@@ -499,7 +500,7 @@ def _run_tp_spec_generation(model, tokenizer, token_ids, max_generated_tokens, n
     model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=1)
     signpost("compile_decode")
     profiler.start("compile_decode")
-    dec = SpeculativeDecoder(model, page_table, draft_len=draft_len)
+    dec = SpeculativeDecoder(model, page_table, draft_len=draft_len, sampling=sampling)
     dec.generate(prompt_ids, min(6, max_generated_tokens))
     profiler.end("compile_decode")
 
@@ -537,12 +538,29 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
         # Permuted RoPE (9B/N300 only) shards decode cos/sin on rope_k_shard_cfg -- one user per
         # core -- which the spec reseed's multi-row window overflows. Only the 27B is prepared.
         _permuted_rope = getattr(model.args, "rope_permuted_enabled", False)
-        if model.mtp is not None and not _permuted_rope and _temp == 0 and _rep == 1.0 and _nr == 0:
-            logger.info("[TP] MTP speculative decode (default path; QWEN36_SPEC=0 opts out)")
+        _spec_ok = model.mtp is not None and not _permuted_rope and _nr == 0
+        if _spec_ok and _temp == 0 and _rep == 1.0:
+            logger.info("[TP] MTP speculative decode, greedy (default path; QWEN36_SPEC=0 opts out)")
             return _run_tp_spec_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks)
+        if _spec_ok and _temp > 0:
+            # temperature > 0 switches acceptance to exact speculative rejection sampling
+            # (tt/spec_sampling.py): lossless in DISTRIBUTION rather than token-for-token, and it
+            # turns on the [T, vocab] verify-logits readback the greedy path avoids.
+            _sp = SpecSamplingParams(
+                temperature=_temp,
+                top_k=int(os.environ.get("QWEN35_TOP_K", "0") or 0),
+                top_p=float(os.environ.get("QWEN35_TOP_P", "1.0") or 1.0),
+                presence_penalty=(_rep - 1.0) if _rep != 1.0 else 0.0,
+                seed=int(os.environ.get("QWEN35_SEED", "0") or 0),
+            )
+            logger.info(
+                f"[TP] MTP speculative decode, SAMPLING temp={_sp.temperature} top_k={_sp.top_k} "
+                f"top_p={_sp.top_p} presence_penalty={_sp.presence_penalty} seed={_sp.seed}"
+            )
+            return _run_tp_spec_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks, sampling=_sp)
         logger.info(
             f"[TP] spec decode unavailable (mtp={model.mtp is not None}, permuted_rope={_permuted_rope}, "
-            f"temp={_temp}, rep={_rep}, no_repeat={_nr}); it needs an MTP head + pure greedy. Using plain decode."
+            f"temp={_temp}, no_repeat={_nr}); needs an MTP head and no no-repeat-ngram. Using plain decode."
         )
     else:
         logger.info("[TP] QWEN36_SPEC=0 -> plain single-token decode (spec-decode baseline)")
