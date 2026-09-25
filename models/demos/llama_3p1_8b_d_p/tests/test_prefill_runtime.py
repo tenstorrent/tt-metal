@@ -170,10 +170,18 @@ def test_adapter_allocates_the_runner_resolved_two_slot_cache():
     }
 
 
+class _RecordingSink:
+    def __init__(self, events):
+        self.events = events
+
+    def layers_completed(self, layer_start, layer_end, request_id, slot_id, actual_start, actual_end):
+        self.events.append(("ack", layer_start, layer_end, request_id, slot_id, actual_start, actual_end))
+
+
 # Serve a two-chunk continuation and an independent slot while preserving the runner-owned tensors and cache.
 def test_runtime_borrows_inputs_and_cache_for_two_distinct_slots_and_chunks():
     runtime, cache, events, uploads = _runtime()
-    runtime.set_layer_completion_sink(lambda layer, request: events.append(("ack", layer, request)))
+    runtime.set_layer_completion_sink(_RecordingSink(events))
 
     for request, slot, start in ((7, 0, 0), (8, 0, 1024), (9, 1, 0)):
         token_ids = [request] * 1024
@@ -205,7 +213,7 @@ def test_runtime_borrows_inputs_and_cache_for_two_distinct_slots_and_chunks():
             {"slot_idx": slot, "actual_start": start, "actual_end": start + 1024, "skip_lm_head": True},
         )
         assert chunk_events[1:3] == [("sync", "mesh"), ("free", True)]
-        assert chunk_events[3:] == [("ack", layer, request) for layer in range(32)]
+        assert chunk_events[3:] == [("ack", 0, 32, request, slot, start, start + 1024)]
 
 
 # A model or synchronization failure must emit no residency acknowledgements and poison the worker.
@@ -213,7 +221,7 @@ def test_runtime_borrows_inputs_and_cache_for_two_distinct_slots_and_chunks():
 def test_runtime_failure_emits_no_layer_acknowledgements(failure, expect_error):
     """A failed write or device wait must poison the runtime without certifying a layer."""
     runtime, cache, events, _ = _runtime(failure=failure)
-    runtime.set_layer_completion_sink(lambda layer, request: events.append(("ack", layer, request)))
+    runtime.set_layer_completion_sink(_RecordingSink(events))
 
     with expect_error(RuntimeError, f"{failure} failed"):
         runtime.prefill_chunk(object(), cache, slot_id=1, actual_start=32, actual_end=65, request_id=7)

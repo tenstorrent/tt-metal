@@ -40,13 +40,28 @@ namespace nb = nanobind;
 
 void bind_layer_completion_api(nb::module_& mod) {
     using tt::tt_metal::internal::LayerCompletionMessage;
+    using tt::tt_metal::internal::LayerCompletionMessageV2;
+    using tt::tt_metal::internal::LayerCompletionProtocol;
     using tt::tt_metal::internal::LayerCompletionQueue;
+    using tt::tt_metal::internal::LayerCompletionQueueBase;
+    using tt::tt_metal::internal::LayerCompletionQueueV2;
     using tt::tt_metal::internal::LayerCompletionRouter;
     using tt::tt_metal::internal::LayerCompletionRouterConfig;
 
     mod.doc() = "Pipelined-prefill layer-completion ring/router/consumer.";
 
-    nb::class_<LayerCompletionQueue>(mod, "LayerCompletionQueue")
+    // Protocol-neutral surface, shared by both ring versions. Everything a constructed ring
+    // supports regardless of message version lives here; the versioned classes below add only
+    // their create/connect factories and their message-typed try_push/try_pop.
+    nb::class_<LayerCompletionQueueBase>(mod, "LayerCompletionQueueBase")
+        .def(
+            "shutdown",
+            &LayerCompletionQueueBase::shutdown,
+            "Idempotent teardown. Owner unlinks; connector unmaps.")
+        .def_prop_ro("shm_name", &LayerCompletionQueueBase::shm_name)
+        .def_prop_ro_static("capacity", [](nb::handle) { return LayerCompletionQueue::capacity(); });
+
+    nb::class_<LayerCompletionQueue, LayerCompletionQueueBase>(mod, "LayerCompletionQueue")
         .def_static(
             "create",
             &LayerCompletionQueue::create,
@@ -81,10 +96,59 @@ void bind_layer_completion_api(nb::module_& mod) {
                 }
                 return std::make_tuple(m.seq, m.source_rank, m.layer_idx, m.request_id);
             },
-            "Consumer pop. Returns (seq, source_rank, layer_idx, request_id) or None when empty.")
-        .def("shutdown", &LayerCompletionQueue::shutdown, "Idempotent teardown. Owner unlinks; connector unmaps.")
-        .def_prop_ro("shm_name", &LayerCompletionQueue::shm_name)
-        .def_prop_ro_static("capacity", [](nb::handle) { return LayerCompletionQueue::capacity(); });
+            "Consumer pop. Returns (seq, source_rank, layer_idx, request_id) or None when empty.");
+
+    nb::class_<LayerCompletionQueueV2, LayerCompletionQueueBase>(mod, "LayerCompletionQueueV2")
+        .def_static(
+            "create",
+            &LayerCompletionQueueV2::create,
+            nb::arg("shm_name"),
+            "Create the v2 SHM ring as OWNER. Throws if the segment already exists.")
+        .def_static(
+            "connect",
+            &LayerCompletionQueueV2::connect,
+            nb::arg("shm_name"),
+            nb::arg("connect_timeout_ms") = 30'000u,
+            "Attach to an owner-created v2 ring by name (polls until present or timeout).")
+        .def(
+            "try_push",
+            [](LayerCompletionQueueV2& self,
+               uint64_t seq,
+               uint32_t source_rank,
+               uint32_t request_id,
+               uint32_t slot_id,
+               uint32_t pos_start,
+               uint32_t pos_end,
+               uint32_t layer_start,
+               uint32_t layer_end) {
+                return self.try_push(LayerCompletionMessageV2{
+                    seq, source_rank, request_id, slot_id, pos_start, pos_end, layer_start, layer_end, 0u});
+            },
+            nb::arg("seq"),
+            nb::arg("source_rank"),
+            nb::arg("request_id"),
+            nb::arg("slot_id"),
+            nb::arg("pos_start"),
+            nb::arg("pos_end"),
+            nb::arg("layer_start"),
+            nb::arg("layer_end"),
+            "Producer push of a self-describing v2 completion (position + layer ranges). "
+            "Returns False (no write) when the ring is full.")
+        .def(
+            "try_pop",
+            [](LayerCompletionQueueV2& self)
+                -> std::optional<
+                    std::tuple<uint64_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>> {
+                LayerCompletionMessageV2 m{};
+                if (!self.try_pop(m)) {
+                    return std::nullopt;
+                }
+                return std::make_tuple(
+                    m.seq, m.source_rank, m.request_id, m.slot_id, m.pos_start, m.pos_end, m.layer_start,
+                    m.layer_end);
+            },
+            "Consumer pop. Returns (seq, source_rank, request_id, slot_id, pos_start, pos_end, layer_start, "
+            "layer_end) or None when empty.");
 
     nb::class_<LayerCompletionRouter>(mod, "LayerCompletionRouter")
         .def(
@@ -94,28 +158,40 @@ void bind_layer_completion_api(nb::module_& mod) {
                int world_size,
                int master_rank,
                const std::string& ring_shm_name,
-               const std::string& scheduler_channel_shm_name,
+               const std::string& scheduler_shm_name,
                int poll_idle_us,
-               int teardown_timeout_ms) {
+               int teardown_timeout_ms,
+               int protocol) {
                 LayerCompletionRouterConfig cfg;
                 cfg.rank = rank;
                 cfg.world_size = world_size;
                 cfg.master_rank = master_rank;
                 cfg.ring_shm_name = ring_shm_name;
-                cfg.scheduler_channel_shm_name = scheduler_channel_shm_name;
+                cfg.scheduler_shm_name = scheduler_shm_name;
                 cfg.poll_idle_us = poll_idle_us;
                 cfg.teardown_timeout_ms = teardown_timeout_ms;
+                switch (protocol) {
+                    case 1: cfg.protocol = LayerCompletionProtocol::kCountOnlyV1; break;
+                    case 2: cfg.protocol = LayerCompletionProtocol::kStructuredV2; break;
+                    default:
+                        throw std::invalid_argument(
+                            "LayerCompletionRouter: protocol must be 1 or 2, got " + std::to_string(protocol));
+                }
                 new (self) LayerCompletionRouter(std::move(cfg));
             },
             nb::arg("rank"),
             nb::arg("world_size"),
             nb::arg("master_rank"),
             nb::arg("ring_shm_name"),
-            nb::arg("scheduler_channel_shm_name") = std::string{},
+            nb::arg("scheduler_shm_name") = std::string{},
             nb::arg("poll_idle_us") = 100,
             nb::arg("teardown_timeout_ms") = 5000,
+            // Appended (after every pre-existing arg) so positional callers are unaffected.
+            nb::arg("protocol") = 1,
             "Create the host's router: owns the local ring, spawns the listener thread, and on the master "
-            "rank owns the scheduler-facing counter channel.")
+            "rank owns the scheduler-facing segment at scheduler_shm_name (one name for both protocols). "
+            "protocol=1 (default): reorder to a bare count on a counter channel there. protocol=2: forward "
+            "self-describing messages as-arrived into a structured ring there.")
         .def("stop", &LayerCompletionRouter::stop, "Idempotent: stop + join the listener thread.")
         .def_prop_ro("processed", &LayerCompletionRouter::processed)
         .def_prop_ro("is_master", &LayerCompletionRouter::is_master);
