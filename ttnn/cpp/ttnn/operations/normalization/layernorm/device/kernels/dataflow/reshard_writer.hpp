@@ -66,7 +66,7 @@ inline void write_resharded_data(
     noc.async_write_barrier();
 
     // The output tiles are waited cumulatively as they are written out to the storage cores. The
-    // barrier above is the last use of them, so release the whole queue to leave the buffer
+    // barrier above is the last use of them, so pop the whole queue to leave the buffer
     // balanced. (The sibling helper in rms_allgather waits and pops one tile at a time instead.)
     dfb_out.pop_front(static_cast<uint16_t>(num_tiles_in_write_queue));
 }

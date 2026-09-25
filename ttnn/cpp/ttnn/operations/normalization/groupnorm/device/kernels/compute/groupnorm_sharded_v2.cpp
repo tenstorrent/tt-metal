@@ -223,17 +223,22 @@ void kernel_main() {
         ckl::DataFormatReconfig::Disabled,
         ckl::TileAddressing::Strided);
 
+    DataflowBuffer dfb_beta(dfb_beta_id);
     DataflowBuffer dfb_eps(dfb_eps_id);
     DataflowBuffer dfb_ex(dfb_ex_id);
     DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
+    DataflowBuffer dfb_gamma(dfb_gamma_id);
     DataflowBuffer dfb_in(dfb_in_id);
     DataflowBuffer dfb_in_negative_mask(dfb_in_negative_mask_id);
     DataflowBuffer dfb_input_mask(dfb_input_mask_id);
     DataflowBuffer dfb_mask_last(dfb_mask_last_id);
+    DataflowBuffer dfb_ones(dfb_ones_id);
     DataflowBuffer dfb_out(dfb_out_id);
     DataflowBuffer dfb_outbeta(dfb_outbeta_id);
     DataflowBuffer dfb_outgamma(dfb_outgamma_id);
     DataflowBuffer dfb_rowvalid(dfb_rowvalid_id);
+    DataflowBuffer dfb_scaler(dfb_scaler_id);
+    DataflowBuffer dfb_scaler_global(dfb_scaler_global_id);
     DataflowBuffer dfb_x(dfb_x_id);
 
 // tilize input from RM to tile layout
@@ -829,22 +834,26 @@ void kernel_main() {
 
     // Buffers that hold a value reused for the whole core's work are waited once (or re-waited) and
     // never popped inside the loops above; pop them here so they are left balanced. This mirrors the
-    // cleanup the Welford variant of this kernel performs.
-    DataflowBuffer(dfb_scaler_id).pop_front(1);
+    // cleanup the Welford variant of this kernel performs. The scaler wait is not in this
+    // file: compute_kernel_lib::reduce waits one page on the buffer it is given as the scaler and
+    // leaves it unpopped so that one pushed tile serves all of this kernel's reduce calls. Popping
+    // it is left to this kernel.
+    dfb_scaler.pop_front(1);
     // The all-ones tile is one tile the writer generates once into c_26 and this kernel re-waits
     // inside the loops above, so pop that one tile here.
     dfb_ones.pop_front(1);
     // When has_row_mask is true, this kernel waits one more single-use tile near the top: a
     // row-validity tile the writer synthesizes per core into c_18. Pop that tile here too.
     // When has_row_mask is false, c_18 does not exist and dfb_rowvalid_id is c_26, which the pop
-    // above has already released, so no need to pop again.
+    // above already covers, so no need to pop again.
     if constexpr (has_row_mask) {
         dfb_rowvalid.pop_front(1);
     }
     if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
         // The global-reduce scaler is waited by the two global reductions on the mcast sender only;
-        // pop it under the same guard that gated those reductions.
-        DataflowBuffer(dfb_scaler_global_id).pop_front(1);
+        // pop it under the same guard that gated those reductions. The wait is inside
+        // compute_kernel_lib::reduce, as for the local scaler above.
+        dfb_scaler_global.pop_front(1);
     }
     dfb_eps.pop_front(1);
     if constexpr (do_beta) {
