@@ -964,6 +964,23 @@ void py_module(nb::module_& mod) {
            TensorToMesh: A mapper providing the desired sharding.
    )doc");
     mod.def(
+        "create_mesh_mapper",
+        [](const MeshShape& mesh_shape, const MeshMapperConfig& config) -> nbh::unique_ptr<TensorToMesh> {
+            return nbh::steal_rewrap_unique<TensorToMesh>(create_mesh_mapper(mesh_shape, config));
+        },
+        nb::arg("mesh_shape"),
+        nb::arg("config"),
+        R"doc(
+       Returns an ND mapper that constructs every host shard without a device.
+
+       Args:
+           mesh_shape (MeshShape): The full logical mesh shape.
+           config (MeshMapperConfig): The placements, distribution shape, and mesh offset.
+
+       Returns:
+           TensorToMesh: A mapper providing the desired sharding.
+   )doc");
+    mod.def(
         "compute_distribution_to_mesh_mapping",
         [](const tt::tt_metal::distributed::MeshShape& distribution_shape,
            const tt::tt_metal::distributed::MeshShape& mesh_shape)
