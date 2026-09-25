@@ -208,13 +208,16 @@ class BudgetKey:
                     f"BudgetKey.{name} must be a {expected.__name__} member or None, "
                     f"got {value!r}; a non-member is counted as set and matches nothing"
                 )
-
-    def _values(self) -> Tuple[Any, ...]:
-        return tuple(getattr(self, f.name) for f in fields(self))
+        # Cached once, in _BUDGET_KEY_TYPES order on both the key and the query side.
+        # `matches` runs millions of times under validate_registry, and reading the
+        # fields back through `dataclasses.fields` on every call made it 4x slower.
+        object.__setattr__(
+            self, "_values", tuple(getattr(self, name) for name in _BUDGET_KEY_TYPES)
+        )
 
     @property
     def specificity(self) -> int:
-        return sum(value is not None for value in self._values())
+        return sum(value is not None for value in self._values)
 
     def matches(self, query: BudgetKey) -> bool:
         """Whether this key covers *query*. A dimension the query leaves unset matches
@@ -222,7 +225,7 @@ class BudgetKey:
         setting."""
         return all(
             wanted is None or wanted == asked
-            for wanted, asked in zip(self._values(), query._values())
+            for wanted, asked in zip(self._values, query._values)
         )
 
     def describe(self) -> str:
