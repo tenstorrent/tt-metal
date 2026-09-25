@@ -269,7 +269,6 @@ def _postprocess_golden_function_outputs(output, args, kwargs):
     return output
 
 
-
 def _golden_function_batch_norm(
     input,
     *,
@@ -312,103 +311,6 @@ def _golden_function_batch_norm(
 
 
 ttnn.attach_golden_function(ttnn.batch_norm, golden_function=_golden_function_batch_norm)
-
-
-# All-gather stats tensors are laid out in tile-wide blocks: sum(x^2) rides column 0 of each
-# block, and sum(x) column _TILE_WIDTH when present.
-_TILE_WIDTH = 32
-
-
-def _apply_affine(normalized, weight, bias):
-    """Apply per-channel scale/shift, slicing padded parameters to the hidden width."""
-    if weight is not None:
-        weight = weight.reshape(-1)[: normalized.shape[-1]]
-        normalized = normalized * weight.reshape(*([1] * (normalized.ndim - 1)), normalized.shape[-1])
-    if bias is not None:
-        bias = bias.reshape(-1)[: normalized.shape[-1]]
-        normalized = normalized + bias.reshape(*([1] * (normalized.ndim - 1)), normalized.shape[-1])
-    return normalized
-
-
-def _golden_pre_all_gather_stats(input_tensor, residual_input_tensor, *, include_sum):
-    """Pack partial statistics into tile-wide blocks; only the stat columns are well-defined."""
-    import torch
-
-    if residual_input_tensor is not None:
-        input_tensor = input_tensor + residual_input_tensor
-    *batch_dims, _ = input_tensor.shape
-    stats_width = 2 * _TILE_WIDTH if include_sum else _TILE_WIDTH
-    stats = torch.zeros((*batch_dims, stats_width), dtype=torch.float32)
-    mask = torch.zeros((*batch_dims, stats_width), dtype=torch.bool)
-    stats[..., 0] = (input_tensor**2).sum(dim=-1)
-    mask[..., 0] = True
-    if include_sum:
-        stats[..., _TILE_WIDTH] = input_tensor.sum(dim=-1)
-        mask[..., _TILE_WIDTH] = True
-    ttnn.decorators.set_golden_comparison_config(stats, method="allclose", scope="all", rtol=1e-2, atol=1e-2, mask=mask)
-    return stats
-
-
-def _golden_function_layer_norm_pre_all_gather(input_tensor, *, residual_input_tensor=None, **_):
-    # The stats tensor is two tiles wide: sum(x^2) rides the leftmost column of tile 0, sum(x) tile 1.
-    return _golden_pre_all_gather_stats(input_tensor, residual_input_tensor, include_sum=True)
-
-
-ttnn.attach_golden_function(ttnn.layer_norm_pre_all_gather, golden_function=_golden_function_layer_norm_pre_all_gather)
-
-
-def _golden_function_layer_norm_post_all_gather(input_tensor, stats, *, epsilon=1e-12, weight=None, bias=None, **_):
-    import torch
-
-    # Tile column 0 of each device block is sum(x^2), and column _TILE_WIDTH is sum(x).
-    num_devices = stats.shape[-1] // (2 * _TILE_WIDTH)
-    global_width = input_tensor.shape[-1] * num_devices
-    ex2 = sum(stats[..., d * 2 * _TILE_WIDTH] for d in range(num_devices)) / global_width
-    ex = sum(stats[..., d * 2 * _TILE_WIDTH + _TILE_WIDTH] for d in range(num_devices)) / global_width
-    var = ex2 - ex**2
-    normalized = (input_tensor - ex.unsqueeze(-1)) * torch.rsqrt(var.unsqueeze(-1) + epsilon)
-    return _apply_affine(normalized, weight, bias)
-
-
-ttnn.attach_golden_function(
-    ttnn.layer_norm_post_all_gather, golden_function=_golden_function_layer_norm_post_all_gather
-)
-
-
-def _golden_function_rms_norm_pre_all_gather(input_tensor, *, residual_input_tensor=None, **_):
-    # RMS norm only needs sum(x^2); the stats tensor is a single tile wide with sum(x^2) at column 0.
-    return _golden_pre_all_gather_stats(input_tensor, residual_input_tensor, include_sum=False)
-
-
-ttnn.attach_golden_function(ttnn.rms_norm_pre_all_gather, golden_function=_golden_function_rms_norm_pre_all_gather)
-
-
-def _golden_function_rms_norm_post_all_gather(input_tensor, stats, *, epsilon=1e-12, weight=None, bias=None, **_):
-    import torch
-
-    # Stats holds one per-device partial sum(x^2) in column 0 of each tile-wide block.
-    num_devices = stats.shape[-1] // _TILE_WIDTH
-    global_width = input_tensor.shape[-1] * num_devices
-    ex2 = sum(stats[..., d * _TILE_WIDTH] for d in range(num_devices)) / global_width
-    normalized = input_tensor * torch.rsqrt(ex2.unsqueeze(-1) + epsilon)
-    return _apply_affine(normalized, weight, bias)
-
-
-ttnn.attach_golden_function(ttnn.rms_norm_post_all_gather, golden_function=_golden_function_rms_norm_post_all_gather)
-
-
-def _golden_function_fused_rms_minimal(input_tensor, *_, residual_input_tensor=None, epsilon=1e-12, weight=None, **__):
-    import torch
-
-    # Fused distributed RMS norm: optional residual add, then RMS norm over the hidden dim with gamma scaling.
-    if residual_input_tensor is not None:
-        input_tensor = input_tensor + residual_input_tensor
-    variance = input_tensor.to(torch.float32).pow(2).mean(-1, keepdim=True)
-    normalized = input_tensor * torch.rsqrt(variance + epsilon)
-    return _apply_affine(normalized, weight, None)
-
-
-ttnn.attach_golden_function(ttnn.fused_rms_minimal, golden_function=_golden_function_fused_rms_minimal)
 
 
 __all__ = []
