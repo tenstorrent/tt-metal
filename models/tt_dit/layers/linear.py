@@ -10,6 +10,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 
 from ..utils.matmul import (
+    get_1d_matmul_config,
     get_agmm_config,
     get_fabric_agmm_config,
     get_fused_mmrs_config,
@@ -135,17 +136,15 @@ class Linear(Module):
             state["bias"] = bias
 
     def forward(self, x: ttnn.Tensor, compute_kernel_config=None, dtype=None, default_block_size=None) -> ttnn.Tensor:
-        M, K, N = x.padded_shape[-2], x.padded_shape[-1], self.weight.data.padded_shape[-1]
-        core_grid = get_matmul_core_grid(self.mesh_device)
-        matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
-        output = ttnn.experimental.minimal_matmul(
-            input_tensor=x,
-            weight_tensor=self.weight.data,
-            bias_tensor=self.bias.data if self.bias is not None else None,
-            config=matmul_config,
-            fused_activation=self.fused_activation_fn,
+        output = _linear(
+            x,
+            self.weight.data,
+            bias=self.bias.data if self.bias is not None else None,
+            mesh_device=self.mesh_device,
             compute_kernel_config=compute_kernel_config or self.compute_config,
             dtype=dtype,
+            default_block_size=default_block_size,
+            fused_activation=self.fused_activation_fn,
             fuse_swiglu=self.fuse_swiglu,
         )
 
@@ -509,15 +508,15 @@ class ColParallelLinear(Module):
                     dtype=dtype,
                 )
             else:
-                matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
-                output = ttnn.experimental.minimal_matmul(
-                    input_tensor=x,
-                    weight_tensor=weight,
-                    bias_tensor=self.bias.data if self.bias is not None else None,
-                    config=matmul_config,
-                    fused_activation=self.fused_activation_fn,
+                output = _linear(
+                    x,
+                    weight,
+                    bias=self.bias.data if self.bias is not None else None,
+                    mesh_device=self.mesh_device,
                     compute_kernel_config=compute_kernel_config or self.compute_config,
                     dtype=dtype,
+                    default_block_size=default_block_size,
+                    fused_activation=self.fused_activation_fn,
                     fuse_swiglu=self.fuse_swiglu,
                 )
 
@@ -625,23 +624,29 @@ class RowParallelLinear(Module):
 
         if isinstance(x, (list, tuple)):
             assert len(x) == 2, f"RowParallelLinear.forward: list x must be [prefix, suffix], got {len(x)}"
-            x, x_second = x
             K = weight.padded_shape[-2]
-        else:
-            x_second = None
-            K = x.padded_shape[-1]
+            M, N = x[0].padded_shape[-2], weight.padded_shape[-1]
 
-        M, N = x.padded_shape[-2], weight.padded_shape[-1]
-        core_grid = get_matmul_core_grid(self.mesh_device)
-        matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
-        output = ttnn.experimental.minimal_matmul(
-            input_tensor=[x, x_second] if x_second is not None else x,
-            weight_tensor=weight,
-            bias_tensor=self.bias.data if self.bias is not None else None,
-            config=matmul_config,
-            compute_kernel_config=compute_kernel_config or self.compute_config,
-            dtype=dtype,
-        )
+            core_grid = get_matmul_core_grid(self.mesh_device)
+            matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
+            output = ttnn.experimental.minimal_matmul(
+                input_tensor=list(x),
+                weight_tensor=weight,
+                bias_tensor=self.bias.data if self.bias is not None else None,
+                config=matmul_config,
+                compute_kernel_config=compute_kernel_config or self.compute_config,
+                dtype=dtype,
+            )
+        else:
+            output = _linear(
+                x,
+                weight,
+                bias=self.bias.data if self.bias is not None else None,
+                mesh_device=self.mesh_device,
+                compute_kernel_config=compute_kernel_config or self.compute_config,
+                dtype=dtype,
+                default_block_size=default_block_size,
+            )
 
         if self._mesh_axis_size > 1:
             # Reduce over rows when replicating: N may be too narrow to scatter over the mesh axis.
@@ -742,6 +747,50 @@ class RowParallelLinear(Module):
         if needs_reshape:
             output = ttnn.squeeze(output, 0)
         return output
+
+
+# Up to here the 1D multicast kernel is faster than the 2D one on most encoder linears, measured on
+# Wormhole.
+MAX_1D_MATMUL_ROWS = 128
+
+
+def _linear(
+    x: ttnn.Tensor,
+    weight: ttnn.Tensor,
+    *,
+    bias: ttnn.Tensor | None,
+    mesh_device: ttnn.MeshDevice,
+    compute_kernel_config: ttnn.DeviceComputeKernelConfig,
+    dtype: ttnn.DataType | None,
+    default_block_size: tuple[int, int, int] | None = None,
+    fused_activation: ttnn.UnaryOpType | tuple[ttnn.UnaryOpType, bool] | None = None,
+    fuse_swiglu: bool = False,
+) -> ttnn.Tensor:
+    core_grid = get_matmul_core_grid(mesh_device)
+    *_, rows, in_features = x.padded_shape
+    *_, out_features = weight.padded_shape
+    total_rows = math.prod(list(x.padded_shape)[:-1])
+
+    if total_rows <= MAX_1D_MATMUL_ROWS and fused_activation is None and not fuse_swiglu and default_block_size is None:
+        return ttnn.linear(
+            x,
+            weight,
+            bias=bias,
+            program_config=get_1d_matmul_config(total_rows, in_features, out_features, core_grid),
+            compute_kernel_config=compute_kernel_config,
+            dtype=dtype,
+        )
+
+    return ttnn.experimental.minimal_matmul(
+        input_tensor=x,
+        weight_tensor=weight,
+        bias_tensor=bias,
+        config=get_matmul_config(rows, in_features, out_features, core_grid, default_block_size),
+        fused_activation=fused_activation,
+        compute_kernel_config=compute_kernel_config,
+        dtype=dtype,
+        fuse_swiglu=fuse_swiglu,
+    )
 
 
 def _apply_activation_fn(t: ttnn.Tensor, activation_fn: str | None) -> ttnn.Tensor:

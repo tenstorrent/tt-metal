@@ -45,6 +45,11 @@ grid_1d_configs: dict[tuple[int, int, int, int, int], tuple[int, int, int]] = {
     (32, 6144, 3072, 11, 10): (12, 3, 3),  # 99.5 μs
     (64, 6144, 9216, 11, 10): (8, 5, 1),  # 297.4 μs
     (64, 15360, 1536, 11, 10): (8, 2, 2),  # 122.8 μs
+    # FIBO-vlm tp8 decode down projection — BH 11×10 grid (2026-09-12)
+    (32, 1216, 2560, 11, 10): (2, 3, 3),  # 20.6 μs
+    # Mistral3 tp4 decode qkv and gate/up — WH 8×8 grid (2026-09-12)
+    (32, 5120, 1536, 8, 8): (8, 1, 1),  # 53.1 μs
+    (32, 5120, 16384, 8, 8): (1, 8, 4),  # 436.0 μs
 }
 
 
@@ -120,6 +125,18 @@ grid_88_configs = {
     (512, 8192, 5120): (4, 16, 4),
     (512, 16384, 5120): (2, 16, 8),
     (512, 32768, 5120): (4, 16, 8),
+    # FIBO on the T3000 (cfg=2, sp=2, tp=2) 2026-09-16
+    (2048, 3072, 1536): (8, 6, 6, (2, 2)),  # DiT attention out projection — 291.5 μs
+    (2048, 3072, 4608): (4, 6, 10, (2, 2)),  # DiT to_qkv — 835.3 μs
+    (2048, 3072, 6144): (8, 6, 12, (2, 2)),  # DiT ff1 (fused GELU) / proj_mlp — 1611.9 μs
+    (2048, 6144, 3072): (8, 6, 12, (2, 2)),  # DiT ff2 — 1012.0 μs
+    (2048, 7680, 3072): (8, 6, 12, (2, 2)),  # DiT single-block proj_out — 1236.8 μs
+    (1024, 2048, 1536): (4, 4, 6, (2, 2)),  # DiT per-layer text projection — 121.4 μs
+    (1024, 3072, 1536): (4, 4, 6, (2, 2)),  # DiT attention out projection — 173.0 μs
+    (1024, 3072, 4608): (4, 6, 10, (2, 2)),  # DiT to_qkv — 438.2 μs
+    (1024, 3072, 6144): (4, 6, 12, (2, 2)),  # DiT ff1 (fused GELU) / proj_mlp — 858.5 μs
+    (1024, 6144, 3072): (4, 6, 12, (2, 2)),  # DiT ff2 — 547.7 μs
+    (1024, 7680, 3072): (4, 8, 12, (2, 2)),  # DiT single-block proj_out — 680.8 μs
 }
 
 
@@ -231,6 +248,25 @@ grid_11_10_configs = {
     (2048, 6144, 4608): (4, 4, 15, (4, 1)),  # 462.3 μs  proj_mlp spatial
     (2048, 6144, 9216): (8, 8, 10, (2, 2)),  # 972.7 μs  ff1 / qkv spatial
     (64, 6144, 4608): (2, 8, 8, (2, 2)),  # 196.3 μs  proj_mlp prompt
+    # FIBO per-block ops on the 2x2 QB2 (tp=2) 2026-09-16
+    (2048, 3072, 4608): (4, 6, 15, (4, 1)),  # to_qkv spatial — 301.3 μs
+    (2048, 3072, 6144): (7, 6, 6, (1, 3)),  # ff.ff1 spatial (fused GELU; proj_mlp twin) — 639.5 μs
+    (2048, 7680, 3072): (4, 8, 9, (4, 1)),  # single-block proj_out spatial — 429.0 μs
+    (1024, 1920, 3072): (4, 3, 9, (4, 1)),  # single proj_out spatial — 82.8 μs
+    (1024, 3072, 1152): (4, 3, 4, (2, 2)),  # to_qkv spatial — 65.0 μs
+    (1024, 3072, 1536): (4, 3, 5, (4, 1)),  # dual ff.ff1 / proj_mlp spatial — 71.7 μs
+    (1024, 3072, 4608): (4, 6, 7, (4, 1)),  # to_qkv prompt — 167.7 μs
+    (1024, 3072, 6144): (4, 3, 9, (4, 1)),  # ff_context.ff1 prompt (fused GELU; proj_mlp twin) — 361.9 μs
+    (1024, 7680, 3072): (4, 4, 9, (4, 1)),  # single-block proj_out prompt — 252.4 μs
+    (256, 2048, 1536): (2, 4, 5, (2, 1)),  # caption_projection (M=256) — 37.4 μs
+    (256, 3072, 6144): (2, 32, 2, (2, 2)),  # ff_context.ff1 prompt (M=256, fused GELU; twin) — 187.6 μs
+    (256, 7680, 3072): (2, 6, 9, (1, 3)),  # single-block proj_out prompt (M=256) — 192.4 μs
+    (128, 1920, 3072): (2, 3, 9, (1, 3)),  # single proj_out prompt twin — 56.4 μs
+    # FIBO per-block ops for the 2x2 QB2 cfg=2 preset, which runs the spatial branch unsharded (2026-09-15).
+    (4096, 3072, 4608): (8, 2, 14, (2, 2)),  # DiT to_qkv spatial — 580.9 μs
+    (4096, 3072, 6144): (13, 4, 9, (1, 3)),  # DiT ff1 (fused GELU) / proj_mlp spatial — 1184.5 μs
+    (4096, 7680, 3072): (14, 8, 6, (2, 2)),  # DiT single-block proj_out spatial — 799.1 μs
+    (1024, 2048, 1536): (4, 2, 5, (4, 1)),  # DiT per-layer text projection / caption_projection — 55.9 μs
 }
 
 grid_12_9_configs = {
@@ -725,6 +761,14 @@ def get_agmm_config(
     return ttnn.CoreCoord(grid_x, grid_y), config, math.ceil(in0_axis / num_links)
 
 
+# Measured to be optimally on Wormhole for the decode linears of the tt_dit encoders at one and two
+# tile rows.
+_MAX_1D_BLOCK_AREA_TILES = 16
+
+# The destination registers hold 4 tiles with fp32 accumulation; the kernel rejects more.
+_MAX_1D_SUBBLOCK_W = 4
+
+
 def get_1d_matmul_config(
     M: int,
     K: int,
@@ -738,9 +782,8 @@ def get_1d_matmul_config(
     2D minimal_matmul distribution, where (grid_y - 1)/grid_y cores process
     zero-padded rows when M_tiles < grid_y.
 
-    Parameters are computed as safe defaults suitable for correctness; run
-    the 1D sweep in test_sweep_mm.py to find the optimal in0_block_w /
-    per_core_N / out_subblock_w for each shape.
+    Run the 1D sweep in test_sweep_mm.py to find the optimal in0_block_w / per_core_N /
+    out_subblock_w for each shape.
     """
     num_cores = core_grid.x * core_grid.y
     M_tiles = M // 32
@@ -755,26 +798,18 @@ def get_1d_matmul_config(
         in0_block_w, per_core_N, out_subblock_w = config_tuple
     else:
         if signature not in _warned_1d_matmul_signatures:
-            log_warning(
+            log_info(
                 f"1D matmul: no swept config for (M, K, N) = ({M}, {K}, {N}) on "
-                f"{core_grid.x}x{core_grid.y} grid; using default blocking — "
-                f"run test_1d_matmul_sweep_bh4x8_ring to find optimal params"
+                f"{core_grid.x}x{core_grid.y} grid; using default blocking"
             )
             _warned_1d_matmul_signatures.add(signature)
 
         per_core_N = max(1, math.ceil(N_tiles / num_cores))
-
-        # in0_block_w: K-tiles per inner loop step. Must divide K_tiles.
-        # 4 tiles is a conservative default that fits all target K shapes.
-        in0_block_w = 4
-        while K_tiles % in0_block_w != 0 and in0_block_w > 1:
-            in0_block_w -= 1
+        in0_block_w = _largest_divisor(K_tiles, max(1, _MAX_1D_BLOCK_AREA_TILES // per_core_N))
 
         # out_subblock_h = 1 satisfies the 1D mcast constraint:
         #   out_subblock_w == per_core_N  OR  out_subblock_h == 1
-        out_subblock_w = min(8, per_core_N)
-        while per_core_N % out_subblock_w != 0 and out_subblock_w > 1:
-            out_subblock_w -= 1
+        out_subblock_w = _largest_divisor(per_core_N, _MAX_1D_SUBBLOCK_W)
 
     out_subblock_h = 1
 
@@ -789,6 +824,10 @@ def get_1d_matmul_config(
         fused_activation=None,
         mcast_in0=True,
     )
+
+
+def _largest_divisor(n: int, limit: int) -> int:
+    return next(d for d in range(limit, 0, -1) if n % d == 0)
 
 
 class FusedMMRSConfig(NamedTuple):

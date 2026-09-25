@@ -400,7 +400,7 @@ class Flux1Transformer(Module):
                 skip_time_embed_activation_fn=True,
             )
 
-        prompt = ttnn.clone(prompt, dtype=spatial.dtype)
+        prompt = ttnn.typecast(prompt, spatial.dtype)
 
         for i, block in enumerate(self.single_transformer_blocks, start=1):
             spatial, prompt = block.forward(

@@ -37,10 +37,21 @@ class DiTGParallelConfigNoCFG(NamedTuple):
 class EncoderParallelConfig(NamedTuple):
     tensor_parallel: ParallelFactor
     sequence_parallel: ParallelFactor | None = None
+    fsdp: ParallelFactor | None = None
 
     @classmethod
     def from_tuple(cls, tp: tuple[int, int]) -> EncoderParallelConfig:
         return cls(tensor_parallel=ParallelFactor(*tp))
+
+    @classmethod
+    def from_tuples(
+        cls, *, tp: tuple[int, int], sp: tuple[int, int] | None, fsdp: tuple[int, int] | None = None
+    ) -> EncoderParallelConfig:
+        return cls(
+            tensor_parallel=ParallelFactor(*tp),
+            sequence_parallel=ParallelFactor(*sp) if sp is not None else None,
+            fsdp=ParallelFactor(*fsdp) if fsdp is not None else None,
+        )
 
 
 class VAEParallelConfig(NamedTuple):
@@ -131,14 +142,16 @@ class Flux2VaeParallelConfig:
     @classmethod
     def from_axes(
         cls,
-        mesh_device: ttnn.MeshDevice,
+        mesh: ttnn.MeshDevice | ttnn.MeshShape,
         *,
         tp_axis: int | None = None,
         h_axis: int | None = None,
         w_axis: int | None = None,
     ) -> Flux2VaeParallelConfig:
+        shape = mesh.shape if isinstance(mesh, ttnn.MeshDevice) else mesh
+
         def _pf(axis: int | None) -> ParallelFactor | None:
-            return ParallelFactor(factor=int(mesh_device.shape[axis]), mesh_axis=axis) if axis is not None else None
+            return ParallelFactor(factor=int(shape[axis]), mesh_axis=axis) if axis is not None else None
 
         return cls(tp_parallel=_pf(tp_axis), h_parallel=_pf(h_axis), w_parallel=_pf(w_axis))
 

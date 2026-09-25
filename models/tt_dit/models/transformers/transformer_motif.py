@@ -308,7 +308,7 @@ class MotifTransformer(Module):
 
         # append time token
         t_token = self.t_token_proj(time_embed)
-        t_token = ttnn.clone(t_token, dtype=prompt.dtype)
+        t_token = ttnn.typecast(t_token, prompt.dtype)
         prompt = ttnn.concat([prompt, t_token], dim=1)
 
         for i, block in enumerate(self.transformer_blocks, start=1):
