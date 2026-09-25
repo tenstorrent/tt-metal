@@ -82,3 +82,25 @@ Drive this ledger with
 - Generic pytest entry points in `tests/` (ladder, contract, profile) take the spec from `BRINGUP_SPEC`.
 - Selftests use fake device hooks in `selftest/fixture_model.py` (reference + deterministic noise). Real device runs
   start with the first model.
+
+## F5 (2026-09-25): plan, approvals, ledger generator, knowledge
+- Owner's requirement: the planning step must check its plan against the memory available on the device. `plan/memory.py`
+  does it from the checkpoint, not from the planner's numbers: the plan (`plan.yaml`) gives a placement and dtype per
+  tensor pattern (replicate / shard / expert / shard_rows / shard_cols / skip); the check reads every tensor's shape
+  from the safetensors headers (no data loaded), fails on any unplaced tensor or unused pattern, computes per-layer
+  state from heads per chip x head_dim x dtype x min(target seq, window) x users (and checks the heads cover the
+  config's KV heads), adds the planner's activation estimate (must be > 0) and extras, and compares with
+  `box.chip_dram_gb` minus headroom (default 15%). Result in `results/plan_memory.json` for the dashboard.
+- `plan/components.py`: every step of every block type and embed / final_norm / lm_head mapped once; COMPOSED or CPU
+  needs `searched` (what was looked for). Findings live in `findings.yaml`, so appending one keeps the plan approved.
+- `plan/approvals.py` + `approve <point>`: approvals store the hashes of the approved files (formatted first) and, for
+  the plan, a signature of the ledger's structure (ids, deps, gate commands, thresholds, tests). Freezing and picked perf
+  items keep the approval; any other change voids it, and the plan gate (`plan_approved == 1`) fails.
+- `plan/ledger_gen.py`: the standard ledger R.1-3, G.<rung>, B.1, PL.1, C.<bt>.<step> (parallel), S.<bt>.<nn>
+  (sequential swap order), L.<rung>, K.1, X.1-2. C and S tasks carry `tests`, the component golden's manifest as
+  `freeze_extra`, and a `brief`. The gate now fails a task that declares tests but is not frozen.
+- `intake/check_checkpoint.py`: expected tensor globs with shapes, counts, config fields vs the spec.
+- `knowledge/repo_map.md` (every path checked to exist), `knowledge/known_issues.md` seeded with 20 entries from the
+  ERNIE run and this build, `knowledge/check.py` format check. `plan/opportunities.py` ranks profiled sections by
+  device ms and attaches matching repo-map rows and performance known issues; it never overwrites a list with picks.
+- `tests/test_box.py`: mesh opens, all_gather exact and all_reduce error per axis, DRAM per chip.
