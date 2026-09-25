@@ -442,6 +442,84 @@ def test_rotary_embedding_hf_decode_batch_per_core_gt_one(device, head_dim):
     ttnn.deallocate(sin_tt)
 
 
+@pytest.mark.parametrize("head_dim", [64, 128])
+@pytest.mark.parametrize(
+    "input_dtype,sincos_dtype",
+    [
+        (ttnn.bfloat16, ttnn.bfloat16),
+        (ttnn.bfloat16, ttnn.bfloat8_b),
+        (ttnn.bfloat8_b, ttnn.bfloat16),
+        (ttnn.bfloat8_b, ttnn.bfloat8_b),
+        (ttnn.float32, ttnn.bfloat16),
+        (ttnn.bfloat16, ttnn.float32),
+    ],
+)
+def test_rotary_embedding_hf_decode_mixed_dtype(device, head_dim, input_dtype, sincos_dtype):
+    """Decode HEIGHT-sharded path with mixed input vs cos/sin dtypes (head_dim > 32)."""
+    torch.manual_seed(0)
+
+    batch = 8
+    num_heads = 8
+    cache_size = 2048
+    positions = [0, 57, 113, 179, 241, 307, 367, 431]
+
+    cos_full = torch.randn(1, 1, cache_size, head_dim, dtype=torch.float32)
+    sin_full = torch.randn(1, 1, cache_size, head_dim, dtype=torch.float32)
+    cos_1b1d = torch.stack([cos_full[0, 0, pos, :] for pos in positions], dim=0).unsqueeze(0).unsqueeze(2)
+    sin_1b1d = torch.stack([sin_full[0, 0, pos, :] for pos in positions], dim=0).unsqueeze(0).unsqueeze(2)
+
+    torch_input = torch.randn(1, batch, num_heads, head_dim, dtype=torch.float32)
+    torch_golden = _torch_hf_rope_decode_broadcast_heads(torch_input, cos_1b1d, sin_1b1d)
+
+    padded_heads = nearest_32(num_heads)
+    inp_for_dev = torch_input
+    if padded_heads != num_heads:
+        pad_h = padded_heads - num_heads
+        z = torch.zeros(1, batch, pad_h, head_dim, dtype=torch_input.dtype)
+        inp_for_dev = torch.cat([torch_input, z], dim=2)
+
+    input_host_dtype = torch.float32 if input_dtype == ttnn.float32 else torch.bfloat16
+    sincos_host_dtype = torch.float32 if sincos_dtype == ttnn.float32 else torch.bfloat16
+
+    qk_mem = _decode_qk_heads_mem_config(device, batch, num_heads, head_dim)
+    input_tensor = ttnn.from_torch(
+        inp_for_dev.to(input_host_dtype),
+        dtype=input_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=qk_mem,
+    )
+    cos_tt, sin_tt = _decode_hf_cos_sin_sharded(
+        device,
+        batch,
+        head_dim,
+        cos_1b1d.to(sincos_host_dtype),
+        sin_1b1d.to(sincos_host_dtype),
+        dtype=sincos_dtype,
+    )
+
+    rope_cfg = _hf_rope_compute_kernel_config()
+    out_tt = ttnn.experimental.rotary_embedding_hf(
+        input_tensor,
+        cos_tt,
+        sin_tt,
+        is_decode_mode=True,
+        compute_kernel_config=rope_cfg,
+    )
+    out_torch = ttnn.to_torch(out_tt).to(torch.float32)
+    if padded_heads != num_heads:
+        out_torch = out_torch[:, :, :num_heads, :]
+
+    p, o = comp_pcc(torch_golden, out_torch)
+    logger.info(o)
+    assert p
+
+    ttnn.deallocate(out_tt)
+    ttnn.deallocate(input_tensor)
+    ttnn.deallocate(cos_tt)
+    ttnn.deallocate(sin_tt)
+
+
 @pytest.mark.parametrize(
     "W, Z, Y, X",
     (
@@ -717,7 +795,7 @@ def test_rotary_embedding_hf_row_major(W, Z, Y, X, cache_size, device):
         (128, 64),
     ],
 )
-def test_rotary_embedding_hf_prefill_rejects_cos_seq_smaller_than_input_seq(input_seq, head_dim, device):
+def test_rotary_embedding_hf_prefill_rejects_cos_seq_smaller_than_input_seq(input_seq, head_dim, device, expect_error):
     torch.manual_seed(0)
     num_heads = 8
     x = torch.randn([1, num_heads, input_seq, head_dim]).bfloat16().float()
@@ -729,7 +807,7 @@ def test_rotary_embedding_hf_prefill_rejects_cos_seq_smaller_than_input_seq(inpu
     sint = ttnn.Tensor(sin, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
     rope_cfg = _hf_rope_compute_kernel_config()
-    with pytest.raises(RuntimeError, match="Cos seq_len must be >= input seq_len"):
+    with expect_error(RuntimeError, "Cos seq_len must be >= input seq_len"):
         ttnn.experimental.rotary_embedding_hf(
             xt,
             cost,

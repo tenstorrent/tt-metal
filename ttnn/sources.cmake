@@ -159,6 +159,7 @@ set(TTNN_CORE_JIT_API_HEADERS
     cpp/ttnn/kernel/compute/bmm_tilize_untilize.cpp
     cpp/ttnn/kernel/compute/dest_format_helpers.hpp
     cpp/ttnn/kernel/compute/eltwise_copy.cpp
+    cpp/ttnn/kernel/compute/eltwise_copy_metal2.cpp
     cpp/ttnn/kernel/compute/moreh_common.hpp
     cpp/ttnn/kernel/compute/tilize.cpp
     cpp/ttnn/kernel/compute/tilize_metal2.cpp
@@ -171,7 +172,7 @@ set(TTNN_CORE_JIT_API_HEADERS
     cpp/ttnn/kernel/dataflow/generate_reduce_scaler.hpp
     cpp/ttnn/kernel/dataflow/moreh_common.hpp
     cpp/ttnn/kernel/dataflow/reader_unary_stick_layout_interleaved_start_id.cpp
-    cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp
+    cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_blocks_metal2.cpp
     cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp
     cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id_metal2.cpp
     cpp/ttnn/kernel/kernel_common_utils.hpp

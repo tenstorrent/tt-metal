@@ -91,7 +91,7 @@ ttnn:
     wh_galaxy: 125
     bh_galaxy: 40
     bh_p100: 815
-    bh_p150b_civ2: 850
+    bh_p150b_civ2: 855
     wh_n150_civ2: 1040
     wh_n300_civ2: 1190
     bh_p150b_civ2_viommu: 125
@@ -421,7 +421,7 @@ models:
     bh_quietbox_2: 80
   demo:
     bh_galaxy: 470
-    bh_sc1: 1533
+    bh_sc1: 1563
     bh_sc1_high_power: 388
     wh_n150: 500
     wh_n150_civ2: 300
