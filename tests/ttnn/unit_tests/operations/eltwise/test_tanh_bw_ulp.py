@@ -211,6 +211,28 @@ class TestTanhBwDeepTail:
         ), f"ULP {ulp_error} and abs error {abs(actual - expected):.3e} both exceed thresholds"
 
 
+@pytest.mark.skipif(
+    ttnn.get_arch_name() != "blackhole",
+    reason=(
+        "Wormhole's tanh derivative still builds |x| with sfpi::abs, which leaves a sign-set NaN "
+        "sign-set; tracked by https://github.com/tenstorrent/tt-metal/issues/57509"
+    ),
+)
+class TestTanhBwNonFinite:
+    """Non-finite inputs return 0, whatever the sign bit. The sign-set NaNs are the
+    ones that matter: torch rounds every NaN to bf16 as 0xFFFF, and with |x| taken by
+    sfpi::abs those came out as +inf while 0x7FC0 gave 0."""
+
+    @pytest.mark.parametrize("bits", [0x7FC0, 0xFFC0, 0xFFFF, 0x7F81, 0xFF81, 0x7F80, 0xFF80])
+    def test_non_finite_is_zero(self, device, bits):
+        x = torch.tensor([bits], dtype=torch.int32).to(torch.int16).view(torch.bfloat16).reshape(1, 1)
+        tt_x = ttnn.from_torch(x, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_g = ttnn.from_torch(torch.ones_like(x), device=device, layout=ttnn.TILE_LAYOUT)
+        actual = ttnn.to_torch(ttnn.tanh_bw(tt_g, tt_x)[0]).reshape(-1)[0].item()
+        logger.info(f"x=0x{bits:04X}: actual={actual!r}")
+        assert actual == 0.0, f"x=0x{bits:04X}: expected 0, got {actual!r}"
+
+
 class TestTanhBwWithGradientScaling:
     """Correctness guard (unique): only tests using grad != 1.0 (grad=0.5, 2.0, -1.0, 0.1, 10.0).
     Catches swapped grad/input tensors or missing gradient multiplication in backward pass."""
