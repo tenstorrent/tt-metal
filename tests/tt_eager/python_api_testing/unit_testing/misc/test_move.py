@@ -153,3 +153,10 @@ def test_move_op_with_program_cache(dtype, device):
         tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype).to(ttnn.TILE_LAYOUT).to(device, mem_config)
 
     assert device.num_program_cache_entries() == 2
+
+
+def test_move_op_overlap_narrow_core_range(device):
+    # Regression: few tiles on a wide grid gave the overlap factory a single-column shard range,
+    # which used to crash building an invalid CoreRange to the controller's right.
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+    run_move_op(0, [1, 1, 160, 32], ttnn.TILE_LAYOUT, ttnn.bfloat16, mem_config, mem_config, device)

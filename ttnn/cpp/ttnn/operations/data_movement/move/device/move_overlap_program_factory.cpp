@@ -30,16 +30,18 @@ std::vector<CoreRange> get_multicast_regions(const CoreRangeSet& all_cores, cons
 
     std::vector<CoreRange> logical_core_ranges;
     logical_core_ranges.reserve(3);
+    // Either split can be empty: the controller's range may be a single row, column, or just itself.
     auto split_core_range_containing_controller = [&](const CoreRange& controller_core_range) {
         TT_ASSERT(controller_core_range.start_coord == logical_controller);
-        CoreRange right_block(
-            CoreCoord(logical_controller.x + 1, logical_controller.y), controller_core_range.end_coord);
-        CoreRange remaining_stick = CoreRange(
-            CoreCoord(logical_controller.x, logical_controller.y + 1),
-            CoreCoord(logical_controller.x, controller_core_range.end_coord.y));
-
-        logical_core_ranges.push_back(right_block);
-        logical_core_ranges.push_back(remaining_stick);
+        if (controller_core_range.end_coord.x > logical_controller.x) {
+            logical_core_ranges.push_back(
+                CoreRange(CoreCoord(logical_controller.x + 1, logical_controller.y), controller_core_range.end_coord));
+        }
+        if (controller_core_range.end_coord.y > logical_controller.y) {
+            logical_core_ranges.push_back(CoreRange(
+                CoreCoord(logical_controller.x, logical_controller.y + 1),
+                CoreCoord(logical_controller.x, controller_core_range.end_coord.y)));
+        }
     };
 
     CoreRange range_0 = *all_cores.ranges().begin();
@@ -58,7 +60,7 @@ std::vector<CoreRange> get_multicast_regions(const CoreRangeSet& all_cores, cons
         }
     }
 
-    TT_ASSERT(logical_core_ranges.size() == 2 or logical_core_ranges.size() == 3);
+    TT_ASSERT(logical_core_ranges.size() <= 3);
     return logical_core_ranges;
 }
 
@@ -149,9 +151,27 @@ ProgramDescriptor MoveOverlapProgramFactory::create_descriptor(
         noc_multicast_regions.push_back(noc_cr);
     }
 
-    const CoreRange range_0_noc = noc_multicast_regions[0];
-    const CoreRange range_1_noc = noc_multicast_regions[1];
-    const bool do_third_multicast = (noc_multicast_regions.size() == 3);
+    // 0-3 regions depending on shard shape; the kernel only multicasts the first num_multicast_regions
+    // slots, so unused slots below are just padding.
+    const uint32_t num_multicast_regions = static_cast<uint32_t>(noc_multicast_regions.size());
+    struct McastRegionArgs {
+        uint32_t start_x = 0, start_y = 0, end_x = 0, end_y = 0, size = 0;
+    };
+    auto region_args = [&](uint32_t index) -> McastRegionArgs {
+        if (index >= num_multicast_regions) {
+            return {};
+        }
+        const CoreRange& r = noc_multicast_regions[index];
+        return {
+            static_cast<uint32_t>(r.start_coord.x),
+            static_cast<uint32_t>(r.start_coord.y),
+            static_cast<uint32_t>(r.end_coord.x),
+            static_cast<uint32_t>(r.end_coord.y),
+            static_cast<uint32_t>(logical_multicast_regions[index].size())};
+    };
+    const McastRegionArgs region_0_args = region_args(0);
+    const McastRegionArgs region_1_args = region_args(1);
+    const McastRegionArgs region_2_args = region_args(2);
 
     for (uint32_t i = 0, pages_handled_per_core = 0; i < num_cores; i++) {
         const CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -178,22 +198,22 @@ ProgramDescriptor MoveOverlapProgramFactory::create_descriptor(
         runtime_args.push_back(static_cast<uint32_t>(noc_controller.y));
         runtime_args.push_back(num_cores - 1);  // control_value
         runtime_args.push_back(static_cast<uint32_t>(is_controller));
-        runtime_args.push_back(static_cast<uint32_t>(range_0_noc.start_coord.x));
-        runtime_args.push_back(static_cast<uint32_t>(range_0_noc.start_coord.y));
-        runtime_args.push_back(static_cast<uint32_t>(range_0_noc.end_coord.x));
-        runtime_args.push_back(static_cast<uint32_t>(range_0_noc.end_coord.y));
-        runtime_args.push_back(static_cast<uint32_t>(logical_multicast_regions[0].size()));
-        runtime_args.push_back(static_cast<uint32_t>(range_1_noc.start_coord.x));
-        runtime_args.push_back(static_cast<uint32_t>(range_1_noc.start_coord.y));
-        runtime_args.push_back(static_cast<uint32_t>(range_1_noc.end_coord.x));
-        runtime_args.push_back(static_cast<uint32_t>(range_1_noc.end_coord.y));
-        runtime_args.push_back(static_cast<uint32_t>(logical_multicast_regions[1].size()));
-        runtime_args.push_back(static_cast<uint32_t>(noc_multicast_regions.back().start_coord.x));
-        runtime_args.push_back(static_cast<uint32_t>(noc_multicast_regions.back().start_coord.y));
-        runtime_args.push_back(static_cast<uint32_t>(noc_multicast_regions.back().end_coord.x));
-        runtime_args.push_back(static_cast<uint32_t>(noc_multicast_regions.back().end_coord.y));
-        runtime_args.push_back(static_cast<uint32_t>(logical_multicast_regions.back().size()));
-        runtime_args.push_back(static_cast<uint32_t>(do_third_multicast));
+        runtime_args.push_back(region_0_args.start_x);
+        runtime_args.push_back(region_0_args.start_y);
+        runtime_args.push_back(region_0_args.end_x);
+        runtime_args.push_back(region_0_args.end_y);
+        runtime_args.push_back(region_0_args.size);
+        runtime_args.push_back(region_1_args.start_x);
+        runtime_args.push_back(region_1_args.start_y);
+        runtime_args.push_back(region_1_args.end_x);
+        runtime_args.push_back(region_1_args.end_y);
+        runtime_args.push_back(region_1_args.size);
+        runtime_args.push_back(region_2_args.start_x);
+        runtime_args.push_back(region_2_args.start_y);
+        runtime_args.push_back(region_2_args.end_x);
+        runtime_args.push_back(region_2_args.end_y);
+        runtime_args.push_back(region_2_args.size);
+        runtime_args.push_back(num_multicast_regions);
         if (!tilized) {
             runtime_args.push_back(aligned_page_size);
         }
