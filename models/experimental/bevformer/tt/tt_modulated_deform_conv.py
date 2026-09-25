@@ -2,18 +2,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device-side modulated deformable conv 2D — starting scaffold using ttnn.grid_sample.
+"""Device-side modulated deformable conv 2D, composed from ttnn.grid_sample and matmul.
 
-UniAD's ResNet101 backbone has 26 modulated deformable conv calls per
-inference (stages 3 & 4 with `stage_with_dcn=(False, False, True, True)`).
-The host fallback path in TtModulatedDeformConv2dPack pulls x / offset /
-mask to host and calls `torchvision.ops.deform_conv2d` (DCNv2) on CPU —
-TT_DCN_TIMING=1 shows the CPU compute dominates that path.
-
-This module decomposes modulated deformable conv (Dai et al. 2018) into
-K*K (= 9 for K=3) `ttnn.grid_sample` calls + per-kernel-position
-matmuls, so the whole op can stay on device and the surrounding ResNet
-can eventually be captured by Metal Trace.
+The ResNet101 backbone has 26 modulated deformable convs per inference (stages 3 and
+4, `stage_with_dcn=(False, False, True, True)`). This module decomposes modulated
+deformable conv (Dai et al. 2018) into K*K (= 9 for K=3) sample positions per output
+pixel, one `ttnn.grid_sample` over all of them and a matmul over K*K*C_in, so the
+whole op stays on device.
 
 Math (per output (h_o, w_o), output channel c_out):
 
@@ -36,11 +31,11 @@ Math (per output (h_o, w_o), output channel c_out):
     reference since both invert to the same pixel-space sample location)
 
 ttnn.grid_sample's input is bounded to C_in <= TILE_WIDTH * 8 = 256
-channels. UniAD DCNs hit C_in = 1024 (stage 3) and 2048 (stage 4), so
-this module slices x along C_in into ≤256-channel chunks, runs the K*K
-grid_sample / mask / matmul pipeline per chunk, and adds the partial
-C_out outputs. The summed result is mathematically identical to a single
-matmul over the full K*K*C_in reduction axis.
+channels. The stage-4 DCNs have C_in = 512, so this module slices x along
+C_in into <=256-channel chunks, runs the grid_sample / mask / matmul
+pipeline per chunk, and adds the partial C_out outputs. The summed result
+is mathematically identical to a single matmul over the full K*K*C_in
+reduction axis.
 """
 
 import torch
@@ -55,8 +50,8 @@ _GRID_SAMPLE_C_CAP = 256
 class TtModulatedDeformConv2dDevice:
     """Device-side modulated deformable conv 2D.
 
-    Stateful so per-instance constants (base grids, normalized weight
-    slices, bias) can be uploaded once and reused across warm calls.
+    Per-instance constants (base grids, weight slices, bias) are uploaded once, at
+    construction.
     """
 
     def __init__(
@@ -69,7 +64,11 @@ class TtModulatedDeformConv2dDevice:
         groups,
         deform_groups,
         device,
+        input_shape,
     ):
+        """``input_shape`` is the (batch, height, width) of the NHWC input every call will see.
+        It fixes the sampling base grid, which is built and uploaded here so a forward does
+        no host work."""
         assert groups == 1, "device DCN prototype only supports groups=1"
         assert deform_groups == 1, "device DCN prototype only supports deform_groups=1"
 
@@ -126,9 +125,21 @@ class TtModulatedDeformConv2dDevice:
             math_approx_mode=False,
         )
 
-        # Base grid is built lazily on first call (depends on H_out/W_out,
-        # which we only learn at runtime).
-        self._base_grid_cache = {}  # keyed by (B, H_in, W_in, H_out, W_out)
+        batch, H_in, W_in = input_shape
+        H_out = (H_in + 2 * self.padding[0] - self.dilation[0] * (self.K - 1) - 1) // self.stride[0] + 1
+        W_out = (W_in + 2 * self.padding[1] - self.dilation[1] * (self.K - 1) - 1) // self.stride[1] + 1
+        self.io_shape = (batch, H_in, W_in, H_out, W_out)
+        base_grids, self.gy_scale, self.gx_scale = self._build_base_grid(H_in, W_in, H_out, W_out, batch)
+        # ttnn.grid_sample wants grid as (B, H_out, W_out, 2) with (x, y) order.
+        self.base_grids_dev = [
+            ttnn.from_torch(
+                torch.stack([gx_base_b, gy_base_b], dim=-1),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+            )
+            for gx_base_b, gy_base_b in base_grids
+        ]
 
     def _build_base_grid(self, H_in, W_in, H_out, W_out, batch):
         """Build the per-kernel-position normalized base grids.
@@ -195,20 +206,11 @@ class TtModulatedDeformConv2dDevice:
         _, H_out, W_out, _ = mask_nhwc.shape
         K = self.K
 
-        cache_key = (B, H_in, W_in, H_out, W_out)
-        if cache_key not in self._base_grid_cache:
-            base_grids, gy_scale, gx_scale = self._build_base_grid(H_in, W_in, H_out, W_out, B)
-            # Upload base grids once per (input-shape, output-shape) combo.
-            base_grids_dev = []
-            for gx_base_b, gy_base_b in base_grids:
-                # ttnn.grid_sample wants grid as (B, H_out, W_out, 2) with (x, y) order.
-                grid_xy = torch.stack([gx_base_b, gy_base_b], dim=-1)
-                base_grids_dev.append(
-                    ttnn.from_torch(grid_xy, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
-                )
-            self._base_grid_cache[cache_key] = (base_grids_dev, gy_scale, gx_scale)
-
-        base_grids_dev, gy_scale, gx_scale = self._base_grid_cache[cache_key]
+        assert (B, H_in, W_in, H_out, W_out) == self.io_shape, (
+            f"DCN built for (B, H_in, W_in, H_out, W_out) = {self.io_shape}, "
+            f"called with {(B, H_in, W_in, H_out, W_out)}"
+        )
+        base_grids_dev, gy_scale, gx_scale = self.base_grids_dev, self.gy_scale, self.gx_scale
 
         # grid_sample's reader expects ROW_MAJOR for both input and grid;
         # convert x, offsets, and mask up front so the per-kp slice + add +
