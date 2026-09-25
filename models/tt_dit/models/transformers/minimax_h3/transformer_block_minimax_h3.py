@@ -78,8 +78,11 @@ class MiniMaxH3TransformerBlock(Module):
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
         adaln_tables: bool = False,
+        adaln_fsdp: bool = False,
     ) -> None:
         super().__init__()
+        if adaln_tables and adaln_fsdp:
+            raise ValueError("adaln_tables and adaln_fsdp are alternative placements of the adaLN projection; pick one")
 
         self.hidden_size = hidden_size
         self.ffn_dim = ffn_dim
@@ -151,8 +154,14 @@ class MiniMaxH3TransformerBlock(Module):
             bias=True,
             mesh_device=mesh_device,
             mesh_axis=self.tp_mesh_axis,
-            # Host-resident weights are staged whole per device, so they are never FSDP-sharded.
-            fsdp_mesh_axis=None if adaln_tables else fsdp_mesh_axis,
+            # Host-resident weights are staged whole per device, so they are never FSDP-sharded. `adaln_fsdp`
+            # shards this one projection across SP with the rest of the DiT unsharded: the per-step gather is
+            # ~49 MB per block at SP=4 (~1 ms on the ring) against 193 MiB/bank of residency at TP=8.
+            fsdp_mesh_axis=(
+                None
+                if adaln_tables
+                else (parallel_config.sequence_parallel.mesh_axis if (is_fsdp or adaln_fsdp) else None)
+            ),
             ccl_manager=ccl_manager,
             on_host=adaln_tables,
         )

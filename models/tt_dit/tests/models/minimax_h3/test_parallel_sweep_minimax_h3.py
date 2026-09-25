@@ -153,7 +153,7 @@ def test_t2va_parallel_sweep(mesh_device, device_params, tp_axis, sp_axis, reset
     )
     # The residency choice is what an unsharded DiT lives or dies by on 12 GB, so it is stated, not implied.
     logger.info(
-        f"parallel sweep {config_id}: dit_fsdp={pipeline.dit_fsdp} adaln_tables={pipeline.adaln_tables} "
+        f"parallel sweep {config_id}: dit_fsdp={pipeline.dit_fsdp} adaln_tables={pipeline.adaln_tables} adaln_fsdp={pipeline.adaln_fsdp} "
         f"coresident={pipeline.coresident} trace_denoise={pipeline.trace_denoise}"
     )
 
@@ -215,6 +215,7 @@ def test_t2va_parallel_sweep(mesh_device, device_params, tp_axis, sp_axis, reset
         "num_links": NUM_LINKS,
         "dit_fsdp": pipeline.dit_fsdp,
         "adaln_tables": pipeline.adaln_tables,
+        "adaln_fsdp": pipeline.adaln_fsdp,
         "coresident": pipeline.coresident,
         "aspect": list(ASPECT),
         "canvas": [width, height],
