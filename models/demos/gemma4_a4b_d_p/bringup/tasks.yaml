@@ -347,6 +347,13 @@ tasks:
     - post_attn_norm
     - attn_residual
     layer: 0
+  frozen:
+    at: '2026-09-25T23:51:42'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_04_attn_residual.py: aa3c913cb014c9f109bfef751ce185b992260f0df1aed8195c3a8d845b3aaf7d
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
 - id: C.sliding.ffn_norm
   title: sliding ffn_norm (norm) on device, layer 0
   step: implement
