@@ -4,7 +4,10 @@
 
 #pragma once
 
+#include <variant>
+
 #include "hybrid_routed_expert_ffn_types.hpp"
+#include "hybrid_overlap_program_factory.hpp"
 
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/device_operation.hpp"
@@ -29,11 +32,9 @@ struct HybridRoutedExpertFfnDeviceOperation {
     using tensor_args_t = HybridRoutedExpertFfnInputs;
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = ttnn::Tensor;
+    using program_factory_t = std::variant<HybridSoloProgramFactory, HybridOverlapProgramFactory>;
 
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& output);
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
