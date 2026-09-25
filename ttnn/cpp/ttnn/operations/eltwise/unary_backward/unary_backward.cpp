@@ -1321,6 +1321,21 @@ std::vector<Tensor> ceil_bw(
 // result = grad_data / torch.square(1 + torch.abs(input))
 std::vector<Tensor> softsign_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+#if !defined(TT_POLY_LLK_DISABLE)
+    // Complete selected callback; numerical closure is validated by the package.
+    if (input.storage_type() == StorageType::DEVICE && grad.storage_type() == StorageType::DEVICE &&
+        input.device() == grad.device() &&
+        (input.device()->arch() == tt::ARCH::BLACKHOLE || input.device()->arch() == tt::ARCH::WORMHOLE_B0) &&
+        input.dtype() == DataType::BFLOAT16 && grad.dtype() == DataType::BFLOAT16 && input.layout() == Layout::TILE &&
+        grad.layout() == Layout::TILE && !input.is_sharded() && !grad.is_sharded() &&
+        input.logical_shape() == grad.logical_shape() && input.padded_shape() == grad.padded_shape() &&
+        (!output_mem_config.has_value() || !output_mem_config->is_sharded())) {
+        const std::vector<operations::unary::EltwiseUnaryWithParam> factor{
+            {operations::unary::UnaryOpType::TT_POLY_BACKWARD_SOFTSIGN_BW}};
+        return {ttnn::multiply(input, grad, std::nullopt, output_mem_config, std::nullopt, {}, factor, {}, false)};
+    }
+#endif
+
     std::vector<Tensor> grad_tensor;
     using ttnn::operations::unary::EltwiseUnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
