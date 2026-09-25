@@ -73,6 +73,12 @@ public:
     [[nodiscard]] bool try_begin_hybrid_allocation(const std::vector<AllocatorImpl*>& device_allocators);
     void end_hybrid_allocation();
 
+    // Preserve ownership while lending the storage to program-local static CBs.
+    // Ordinary buffer allocations continue to avoid the reserved ranges.
+    void suspend_l1_buffer(Buffer* buffer);
+    void resume_l1_buffer(Buffer* buffer);
+    bool is_l1_buffer_suspended(const Buffer* buffer) const;
+
     void deallocate_buffer(Buffer* buffer);
     void deallocate_buffers();
 
@@ -116,7 +122,10 @@ public:
     MemoryBlockTable get_memory_block_table(const BufferType& buffer_type) const;
     void dump_memory_blocks(const BufferType& buffer_type, std::ostream& out) const;
 
-    std::optional<DeviceAddr> get_lowest_occupied_l1_address(std::uint32_t bank_id) const;
+    // Persistent placement must include reservations. Only program-local static
+    // scratch validation may exclude storage explicitly lent by its owner.
+    std::optional<DeviceAddr> get_lowest_occupied_l1_address(
+        std::uint32_t bank_id, bool include_suspended = true) const;
 
     void shrink_allocator_size(const BufferType& buffer_type, DeviceAddr shrink_size, bool bottom_up = true);
     void reset_allocator_size(const BufferType& buffer_type);
@@ -177,6 +186,8 @@ private:
     std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(
         SubDeviceManagerId manager_id, const distributed::MeshTraceId& trace_id);
     void remove_unsafe_tracked_id(size_t buffer_unique_id);
+    void remove_unsafe_tracked_id(
+        SubDeviceManagerId manager_id, const distributed::MeshTraceId& trace_id, size_t buffer_unique_id);
     void verify_safe_allocation() const;
     void record_allocation_if_unsafe(Buffer* buffer);
     void record_deallocation(size_t buffer_unique_id);
@@ -185,6 +196,7 @@ private:
     void clear_trace_allocation_state();
     bool in_corruptible_allocation_scope() const;
 
+    std::unordered_map<const Buffer*, std::pair<DeviceAddr, DeviceAddr>> suspended_l1_buffers_;
     mutable std::mutex mutex_;
 
     std::unique_ptr<BankManager> dram_manager_;
