@@ -22,9 +22,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include "hostdev/streaming_profiler_sync.h"
 #include "tools/profiler/sync/tile_read.hpp"
-#if defined(COMPILE_FOR_DRISC)
-#include "experimental/drisc_mode.h"
-#endif
 
 namespace kp = kernel_profiler;
 
@@ -52,9 +49,6 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* hist_d = s->hist;
     volatile tt_l1_ptr uint32_t* hist_r = s->hist + kp::kTileNetBins;
     volatile uint32_t* const wall = reinterpret_cast<volatile uint32_t*>(tile_read::kWallLo);
-#if defined(COMPILE_FOR_DRISC)
-    experimental::drisc_set_stream_mode_all();
-#endif
     tab.go = 0;
     tab.ready = nonce;
     uint32_t go;
@@ -106,7 +100,4 @@ void kernel_main() {
     for (uint32_t i = 0; i < sizeof(kp::TileNetScratch) / 4; i++) {
         p[i] = 0;
     }
-#if defined(COMPILE_FOR_DRISC)
-    experimental::drisc_set_noc2axi_mode_all();
-#endif
 }

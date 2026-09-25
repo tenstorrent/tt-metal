@@ -111,11 +111,11 @@ std::vector<double> solve_normal(std::vector<std::vector<double>> N, std::vector
 }
 
 // Every tile with a RISC: the whole Tensix grid (the dispatch cores included), every eth core, every DRAM core Metal
-// may place a kernel on. Where a kernel scratches, and zeroes on exit: a compute core in the user L1 the allocator
-// hands out (nothing is allocated yet); a dispatch core in the profiler ring space past its control vector (drained
-// by nobody); an eth or DRAM core at the bottom of its unreserved region, below the pusher's and the link ends'
-// carves and under the relay's staging, which the relay fills before it sends. A ring the profiler decodes is not
-// usable even zeroed: the pusher's and the relay's first frames broke with the scratch there.
+// may place a kernel on that is no DRAM view's endpoint. Where a kernel scratches, and zeroes on exit: a compute core
+// in the user L1 the allocator hands out (nothing is allocated yet); a dispatch core in the profiler ring space past
+// its control vector (drained by nobody); an eth or DRAM core at the bottom of its unreserved region, below the
+// pusher's and the link ends' carves and under the relay's staging, which the relay fills before it sends. A ring the
+// profiler decodes is not usable even zeroed: the pusher's and the relay's first frames broke with the scratch there.
 std::vector<Node> enumerate_nodes(IDevice* device, ContextId ctx) {
     auto& mc = MetalContext::instance(ctx);
     auto& cluster = mc.get_cluster();
@@ -180,6 +180,11 @@ std::vector<Node> enumerate_nodes(IDevice* device, ContextId ctx) {
         const std::vector<CoreCoord> noc0 = soc.get_metal_dram_cores(CoordSystem::NOC0);
         TT_FATAL(logical.size() == noc0.size(), "streaming profiler: DRAM core lists disagree");
         for (size_t i = 0; i < logical.size(); i++) {
+            // Firmware holds a DRAM view endpoint's NIU in NOC2AXI: a read it issues there never goes out, and one
+            // arriving there goes to GDDR, so the tile has no mirrored pair to take part in.
+            if (soc.get_dram_endpoint_noc_mask(soc.get_physical_dram_core_from_logical(logical[i])) != 0) {
+                continue;
+            }
             add(CoreType::DRAM, logical[i], false, scratch, host);
             nodes.back().phys = noc0[i];
         }
