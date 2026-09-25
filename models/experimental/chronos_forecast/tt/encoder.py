@@ -105,8 +105,12 @@ class TtEncoder:
 
         if group_mask is None or group_mask.shape[0] == 1:
             return group_mask
+        total_blocks = group_mask.shape[0] // seq_len
+        if first_block == 0 and num_blocks == total_blocks:
+            # A full-range slice can alias the input, and the caller frees chunk masks.
+            return group_mask
         s = group_mask.shape[-1]
-        per_time = ttnn.reshape(group_mask, (seq_len, group_mask.shape[0] // seq_len, s, s))
+        per_time = ttnn.reshape(group_mask, (seq_len, total_blocks, s, s))
         part = ttnn.slice(
             per_time,
             (0, first_block, 0, 0),
