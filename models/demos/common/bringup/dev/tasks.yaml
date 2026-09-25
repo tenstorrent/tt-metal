@@ -115,3 +115,11 @@ tasks:
     gate:
       cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/
       metrics: {selftest_passed: ">= 100", selftest_failed: "== 0"}
+  - id: F13
+    title: Chat-template option for the golden text (instruction-tuned checkpoints)
+    step: framework
+    deps: [F12]
+    paths: [models/demos/common/bringup/reference/golden.py, models/demos/common/bringup/selftest/test_reference.py]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/
+      metrics: {selftest_passed: ">= 101", selftest_failed: "== 0"}
