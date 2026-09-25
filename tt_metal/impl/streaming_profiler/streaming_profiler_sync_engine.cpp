@@ -635,36 +635,24 @@ void LinkSolver::try_solve_links(bool final) {
         out.solved_at_refclk = newest;
         std::vector<RoundPoint> pts;
         pts.reserve(w);
-        const double path_med = path_median(rounds, begin, n, out.rate);
-        out.path_dropped = 0;
         for (size_t i = begin; i < n; i++) {
-            const Round& r = rounds[i];
-            if (std::abs(path_ns(r, out.rate) - path_med) > kPathDevNs) {
-                out.path_dropped++;
-                continue;
-            }
-            const double mid = mid_a_refclk(r);
-            pts.push_back(RoundPoint{mid, mid_b_refclk(r) - mid});
+            const double mid = mid_a_refclk(rounds[i]);
+            pts.push_back(RoundPoint{mid, mid_b_refclk(rounds[i]) - mid});
         }
-        if (solve_link(L, std::move(pts), out)) {
-            out.rounds = w;
-            gen_++;
-            if (!final) {
-                continue;
-            }
+        solve_link(L, pts, out);
+        gen_++;
+        if (final) {
             log_info(
                 tt::LogMetal,
-                "[streaming profiler] d2d sync link chip {} -> chip {}: solved at round {} over {} ({} kept): offset "
-                "{:.1f} ns, rate {:.3f} ppm, residual {:.1f} ns{}",
+                "[streaming profiler] d2d sync link chip {} -> chip {}: solved at round {} over {}: offset {:.1f} ns, "
+                "rate {:.3f} ppm, residual {:.1f} ns",
                 L.chip_a,
                 L.chip_b,
                 n,
                 w,
-                out.kept,
                 out.offset_refclk * kNsPerRefclk,
                 out.rate * 1e6,
-                out.residual_rms_ns,
-                out.path_dropped != 0 ? fmt::format(", {} rounds off the stamp path band", out.path_dropped) : "");
+                out.residual_rms_ns);
         }
     }
 }
@@ -765,17 +753,10 @@ bool solve_potential(
 // log rates, so rates compose exactly. A chip's offset is the potential whose edges equate the two placements of a
 // link's midpoint through the solved rates: anchored there, a link's constraint holds exactly at its own midpoint
 // whatever the mesh's rates differ from its own by (a ppb over the refclk count is a microsecond; over the distance
-// from the midpoint, nothing). The offsets are reweighted by residual against half a stamp tick (Tukey's biweight):
-// the cables' path asymmetries leave a link within 4 ns of the mesh, while a stamp reference that moved at one end
-// (a hardware latency quantum, one launch in four, never under 9 ns and up to a tick) puts its link a good part of
-// a tick off, and such a link loses its weight instead of averaging into its pair; the report names it (weights,
-// per link, in `weights`).
-std::vector<RootXf> LinkSolver::root_transforms(uint32_t root, std::vector<double>* weights) const {
+// from the midpoint, nothing). Each link's offset weighs by its own estimate's precision.
+std::vector<RootXf> LinkSolver::root_transforms(uint32_t root) const {
     std::vector<RootXf> to_root(ctx_->devices.size());
     to_root[root] = RootXf{1.0, 0.0, true};
-    if (weights != nullptr) {
-        weights->assign(solved_.size(), 0.0);
-    }
     // The chips the root reaches over solved links, each an unknown; the root is fixed.
     std::map<uint32_t, int> idx;
     idx[root] = -1;
@@ -796,21 +777,19 @@ std::vector<RootXf> LinkSolver::root_transforms(uint32_t root, std::vector<doubl
     if (n == 0) {
         return to_root;
     }
-    std::vector<size_t> li_of;
     std::vector<std::array<int, 2>> ends;
-    std::vector<double> log_rate, mid, offset, w0;
+    std::vector<double> log_rate, mid, offset, w;
     for (size_t li = 0; li < solved_.size(); li++) {
         const LinkSolution& s = solved_[li];
         if (!s.ok || idx.count(s.dev_snd) == 0 || idx.count(s.dev_rcv) == 0) {
             continue;
         }
-        li_of.push_back(li);
         ends.push_back({idx[s.dev_snd], idx[s.dev_rcv]});
         log_rate.push_back(std::log1p(s.rate));  // A_snd = A_rcv * (1 + rate)
         mid.push_back(s.mid_refclk);
         offset.push_back(s.offset_refclk);
         const double p = std::max(s.precision_ns, 0.01);
-        w0.push_back(1.0 / (p * p));
+        w.push_back(1.0 / (p * p));
     }
     std::vector<double> x;
     if (!solve_potential(ends, log_rate, std::vector<double>(ends.size(), 1.0), n, x)) {
@@ -818,32 +797,17 @@ std::vector<RootXf> LinkSolver::root_transforms(uint32_t root, std::vector<doubl
     }
     const auto A_of = [&](int i) { return i < 0 ? 1.0 : std::exp(x[i]); };
     // Offsets: at the link's midpoint the sender reads mid and the receiver mid + offset, one instant on the root:
-    // A_snd * mid + B_snd = A_rcv * (mid + offset) + B_rcv. Four passes of reweighting on the residuals' robust scale.
-    std::vector<double> value(ends.size()), w = w0, B, resid(ends.size(), 0.0);
+    // A_snd * mid + B_snd = A_rcv * (mid + offset) + B_rcv.
+    std::vector<double> value(ends.size()), B;
     for (size_t i = 0; i < ends.size(); i++) {
         value[i] = A_of(ends[i][1]) * (mid[i] + offset[i]) - A_of(ends[i][0]) * mid[i];
     }
-    std::vector<double> robust(ends.size(), 1.0);
-    for (int pass = 0; pass < 4; pass++) {
-        if (!solve_potential(ends, value, w, n, B)) {
-            return to_root;
-        }
-        const auto B_of = [&](int i) { return i < 0 ? 0.0 : B[i]; };
-        for (size_t i = 0; i < ends.size(); i++) {
-            resid[i] = (B_of(ends[i][0]) - B_of(ends[i][1]) - value[i]) * kNsPerRefclk;
-            const double u = resid[i] / (kNsPerRefclk / 2.0);
-            robust[i] = std::abs(u) < 1.0 ? (1.0 - u * u) * (1.0 - u * u) : 0.0;
-            w[i] = w0[i] * std::max(robust[i], 1e-6);
-        }
+    if (!solve_potential(ends, value, w, n, B)) {
+        return to_root;
     }
     for (const auto& [dev, i] : idx) {
         if (i >= 0) {
             to_root[dev] = RootXf{A_of(i), B[i], true};
-        }
-    }
-    if (weights != nullptr) {
-        for (size_t i = 0; i < ends.size(); i++) {
-            (*weights)[li_of[i]] = robust[i];
         }
     }
     return to_root;
@@ -886,7 +850,7 @@ bool SyncEngine::publish_dev(uint32_t dev) {
         return false;
     }
     if (to_root_gen_ != links_.generation()) {
-        to_root_ = links_.root_transforms(root_dev(), nullptr);
+        to_root_ = links_.root_transforms(root_dev());
         to_root_gen_ = links_.generation();
     }
     // The series starts only once the chip is on the root's tree (the root is there from the start): its first node
@@ -980,8 +944,8 @@ void SyncEngine::log_link_solutions() const {
         }
         log_info(
             tt::LogMetal,
-            "[streaming profiler] d2d sync link chip {} eth({},{}) -> chip {} eth({},{}): {} rounds ({} kept); refclk "
-            "domain offset {:.1f} ns, rate {:.3f} ppm, residual rms {:.1f} ns, estimate precision {:.2f} ns",
+            "[streaming profiler] d2d sync link chip {} eth({},{}) -> chip {} eth({},{}): {} rounds; refclk domain "
+            "offset {:.1f} ns, rate {:.3f} ppm, residual rms {:.1f} ns, estimate precision {:.2f} ns",
             L.chip_a,
             L.eth_a.x,
             L.eth_a.y,
@@ -989,7 +953,6 @@ void SyncEngine::log_link_solutions() const {
             L.eth_b.x,
             L.eth_b.y,
             s.rounds,
-            s.kept,
             s.offset_refclk * kNsPerRefclk,
             s.rate * 1e6,
             s.residual_rms_ns,
@@ -998,12 +961,10 @@ void SyncEngine::log_link_solutions() const {
 }
 
 // Each link against the mesh solve: the difference between its own solution and the two chips' placements on the
-// root. With every link on one consistent mesh the residuals are the cables' path asymmetries, a nanosecond or two;
-// a link the reweighting dropped carries a stamp bias, and its rounds still place through the mesh.
+// root. With every link on one consistent mesh the residuals are the cables' path asymmetries, a nanosecond or two.
 void SyncEngine::log_loop_closures() const {
     const std::vector<LinkSolver::LinkSolution>& solved = links_.solutions();
-    std::vector<double> weights;
-    const std::vector<RootXf> to_root = links_.root_transforms(root_dev(), &weights);
+    const std::vector<RootXf> to_root = links_.root_transforms(root_dev());
     for (size_t li = 0; li < solved.size() && li < ctx_.links.size(); li++) {
         const LinkSolver::LinkSolution& s = solved[li];
         if (!s.ok) {
@@ -1017,105 +978,46 @@ void SyncEngine::log_loop_closures() const {
         const double direct = (1.0 + s.rate) * s.mid_refclk + (s.offset_refclk - s.rate * s.mid_refclk);
         const double via_mesh = (S.scale * s.mid_refclk + S.shift - R.shift) / R.scale;
         const double off_ns = (via_mesh - direct) * kNsPerRefclk;
-        if (weights[li] < 0.5) {
-            log_warning(
-                tt::LogMetal,
-                "[streaming profiler] d2d sync link chip {} eth({},{}) -> chip {} eth({},{}): its stamps sit {:+.1f} "
-                "ns "
-                "off the mesh (weight {:.2f}); a stamp reference at one end moved this launch, the link is left out "
-                "of the placement",
-                ctx_.links[li].chip_a,
-                ctx_.links[li].eth_a.x,
-                ctx_.links[li].eth_a.y,
-                ctx_.links[li].chip_b,
-                ctx_.links[li].eth_b.x,
-                ctx_.links[li].eth_b.y,
-                off_ns,
-                weights[li]);
-        } else {
-            log_info(
-                tt::LogMetal,
-                "[streaming profiler] d2d sync link chip {} eth({},{}) -> chip {}: {:+.1f} ns off the mesh (path "
-                "asymmetry; weight {:.2f}, solution good to ~{:.1f} ns)",
-                ctx_.links[li].chip_a,
-                ctx_.links[li].eth_a.x,
-                ctx_.links[li].eth_a.y,
-                ctx_.links[li].chip_b,
-                off_ns,
-                weights[li],
-                s.precision_ns);
-        }
+        log_info(
+            tt::LogMetal,
+            "[streaming profiler] d2d sync link chip {} eth({},{}) -> chip {}: {:+.1f} ns off the mesh (path "
+            "asymmetry; solution good to ~{:.1f} ns)",
+            ctx_.links[li].chip_a,
+            ctx_.links[li].eth_a.x,
+            ctx_.links[li].eth_a.y,
+            ctx_.links[li].chip_b,
+            off_ns,
+            s.precision_ns);
     }
 }
 
-// The link solve: receiver refclk = sender refclk + offset + rate * (sender refclk - mean midpoint), a straight line
-// through the rounds' (midpoint, receiver minus midpoint) points with two passes of 3-sigma trimming. A solution
-// that is not finite, beyond 100 ppm or a millisecond of residual is refused and the previous one stands.
-bool LinkSolver::solve_link(const CaptureContext::Link& L, std::vector<RoundPoint> pts, LinkSolution& out) const {
-    if (pts.size() < 4) {
-        return false;
-    }
+// The link solve: receiver refclk = sender refclk + offset + rate * (sender refclk - mean midpoint), the least-squares
+// line through the rounds' (midpoint, receiver minus midpoint) points.
+void LinkSolver::solve_link(const CaptureContext::Link& L, const std::vector<RoundPoint>& pts, LinkSolution& out) {
     double mid0 = pts.front().mid_refclk;
     long double mid_acc = 0;
     for (const RoundPoint& p : pts) {
         mid0 = std::min(mid0, p.mid_refclk);
         mid_acc += p.mid_refclk;
     }
-    std::vector<char> keep(pts.size(), 1);
-    double inter = 0.0, slope = 0.0, rms = 0.0;
-    size_t nk = 0;
-    for (int pass = 0; pass < 3; pass++) {
-        double sx = 0, sy = 0, sxx = 0, sxy = 0;
-        nk = 0;
-        for (size_t i = 0; i < pts.size(); i++) {
-            if (!keep[i]) {
-                continue;
-            }
-            const double x = pts[i].mid_refclk - mid0, y = pts[i].off_refclk;
-            sx += x;
-            sy += y;
-            sxx += x * x;
-            sxy += x * y;
-            nk++;
-        }
-        if (nk < 4) {
-            return false;
-        }
-        const double nn = static_cast<double>(nk);
-        const double den = nn * sxx - sx * sx;
-        slope = std::abs(den) > 1e-9 ? (nn * sxy - sx * sy) / den : 0.0;
-        inter = (sy - slope * sx) / nn;
-        double ss = 0;
-        for (size_t i = 0; i < pts.size(); i++) {
-            if (keep[i]) {
-                const double res = pts[i].off_refclk - (inter + slope * (pts[i].mid_refclk - mid0));
-                ss += res * res;
-            }
-        }
-        rms = std::sqrt(ss / nn);
-        if (pass == 2) {
-            break;
-        }
-        const double cut = 3.0 * std::max(rms, 0.5);
-        for (size_t i = 0; i < pts.size(); i++) {
-            if (keep[i] && std::abs(pts[i].off_refclk - (inter + slope * (pts[i].mid_refclk - mid0))) > cut) {
-                keep[i] = 0;
-            }
-        }
+    double sx = 0, sy = 0, sxx = 0, sxy = 0;
+    for (const RoundPoint& p : pts) {
+        const double x = p.mid_refclk - mid0, y = p.off_refclk;
+        sx += x;
+        sy += y;
+        sxx += x * x;
+        sxy += x * y;
     }
-    if (!std::isfinite(inter) || !std::isfinite(slope) || std::abs(slope) > 1e-4 || rms * kNsPerRefclk > 1e6) {
-        log_warning(
-            tt::LogMetal,
-            "[streaming profiler] d2d sync link chip {} -> chip {}: link solution refused (offset {:.1f} ns, rate "
-            "{:.3f} ppm, "
-            "residual {:.1f} ns); keeping the previous one",
-            L.chip_a,
-            L.chip_b,
-            inter * kNsPerRefclk,
-            slope * 1e6,
-            rms * kNsPerRefclk);
-        return false;
+    const double nn = static_cast<double>(pts.size());
+    const double den = nn * sxx - sx * sx;
+    const double slope = std::abs(den) > 1e-9 ? (nn * sxy - sx * sy) / den : 0.0;
+    const double inter = (sy - slope * sx) / nn;
+    double ss = 0;
+    for (const RoundPoint& p : pts) {
+        const double res = p.off_refclk - (inter + slope * (p.mid_refclk - mid0));
+        ss += res * res;
     }
+    const double rms = std::sqrt(ss / nn);
     out.ok = true;
     out.dev_snd = L.dev_a;
     out.dev_rcv = L.dev_b;
@@ -1126,10 +1028,8 @@ bool LinkSolver::solve_link(const CaptureContext::Link& L, std::vector<RoundPoin
     // ns).
     out.offset_refclk = inter + slope * (out.mid_refclk - mid0);
     out.residual_rms_ns = rms * kNsPerRefclk;
-    out.precision_ns = rms * kNsPerRefclk / std::sqrt(static_cast<double>(nk));
+    out.precision_ns = rms * kNsPerRefclk / std::sqrt(nn);
     out.rounds = pts.size();
-    out.kept = nk;
-    return true;
 }
 
 bool SyncEngine::round_error(
@@ -1194,12 +1094,11 @@ struct SyncEngine::LinkErrors {
     std::vector<double> raw_x, raw_y;  // the round's sender midpoint and the receiver's offset from it, refclk
     std::vector<double> rtt, turn, path, resid;
     double path_med = 0.0, rtt_median = 0.0;
-    size_t off_path = 0;
     size_t past_model = 0;     // rounds past an end's newest instant
     size_t before_series = 0;  // rounds before a chip's oldest kept node: the series wrapped, nothing places them
 };
 
-// The rounds inside the path band, placed through the final map. Next to the placement error: the sender's round
+// The rounds, placed through the final map. Next to the placement error: the sender's round
 // trip and the one way and turnaround inside the stamps.
 SyncEngine::LinkErrors SyncEngine::link_errors(size_t li, bool anchored) const {
     const CaptureContext::Link& L = ctx_.links[li];
@@ -1211,10 +1110,6 @@ SyncEngine::LinkErrors SyncEngine::link_errors(size_t li, bool anchored) const {
     const double until_b = static_cast<double>(local_[L.dev_b].frontier());
     const int64_t oldest_a = map_.oldest_at(L.chip_a), oldest_b = map_.oldest_at(L.chip_b);
     for (const Round& r : rounds) {
-        if (std::abs(LinkSolver::path_ns(r, rate) - e.path_med) > LinkSolver::kPathDevNs) {
-            e.off_path++;
-            continue;
-        }
         if (LinkSolver::mid_a_refclk(r) > until_a || LinkSolver::mid_b_refclk(r) > until_b) {
             e.past_model++;
             continue;
@@ -1285,8 +1180,7 @@ void SyncEngine::log_link_stats(const CaptureContext::Link& L, const LinkErrors&
         tt::LogMetal,
         "[streaming profiler] d2d sync link chip {} -> chip {}: one way inside the stamps {:.1f} ns (p10 {:.1f}, p90 "
         "{:.1f}); receiver's stamped turnaround {:.1f} ns (p10 {:.1f}, p90 {:.1f}); sender's round trip {:.1f} ns "
-        "(p10 {:.1f}, p90 {:.1f}); {} rounds, {} off the path band dropped, {} past a chip's clock model, {} before "
-        "a chip's oldest kept node",
+        "(p10 {:.1f}, p90 {:.1f}); {} rounds, {} past a chip's clock model, {} before a chip's oldest kept node",
         L.chip_a,
         L.chip_b,
         pct(e.path, 0.5),
@@ -1299,7 +1193,6 @@ void SyncEngine::log_link_stats(const CaptureContext::Link& L, const LinkErrors&
         pct(e.rtt, 0.1),
         pct(e.rtt, 0.9),
         rounds,
-        e.off_path,
         e.past_model,
         e.before_series);
     long double se = 0, ss = 0, srr = 0;

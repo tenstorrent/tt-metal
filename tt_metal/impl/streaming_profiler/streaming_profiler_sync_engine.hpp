@@ -178,15 +178,12 @@ public:
     struct LinkSolution {
         bool ok = false;
         double solved_at_refclk = 0.0;  // the sender chip's refclk at the newest round of the last solve
-        double precision_ns = 0.0;      // residual_rms_ns / sqrt(kept): the offset estimate's own precision
+        double precision_ns = 0.0;      // residual_rms_ns / sqrt(rounds): the offset estimate's own precision
         uint32_t dev_snd = 0, dev_rcv = 0;
         double offset_refclk = 0.0, rate = 0.0, mid_refclk = 0.0;
         double residual_rms_ns = 0.0;
-        size_t rounds = 0, kept = 0, path_dropped = 0;
+        size_t rounds = 0;
     };
-    // A hardware round whose one-way delay inside the stamps sits this far from the window's median had a frame
-    // delayed on one leg, and its offset is off by that same amount; the delay itself holds to 0.5 ns.
-    static constexpr double kPathDevNs = 2.0;
 
     // Starts over on a capture's links; `ctx` must outlive the solver's use of it.
     void reset(const CaptureContext& ctx);
@@ -203,9 +200,8 @@ public:
     // Samples ignored: an unknown kind, a core on no link, or a role that end does not stamp.
     uint64_t dropped() const { return dropped_; }
     // Per device index, the chip onto the root's refclk from all the links at once (see the definition); not ok for a
-    // chip the root does not reach over solved links. `weights`, per link, gets the robust weight each ended with: 1
-    // on the mesh, 0 left out.
-    std::vector<RootXf> root_transforms(uint32_t root, std::vector<double>* weights) const;
+    // chip the root does not reach over solved links.
+    std::vector<RootXf> root_transforms(uint32_t root) const;
 
     // A round in the refclk domain: each end's midpoint; the sender's round trip, the receiver's turnaround and the
     // one-way delay inside the stamps, in ns. Each end averages the frames it could pair, which need not be the same
@@ -237,8 +233,7 @@ private:
         double mid_refclk, off_refclk;
     };
     void try_solve_links(bool final);
-    // Whether the solution was accepted into `out`.
-    bool solve_link(const CaptureContext::Link& L, std::vector<RoundPoint> pts, LinkSolution& out) const;
+    static void solve_link(const CaptureContext::Link& L, const std::vector<RoundPoint>& pts, LinkSolution& out);
 
     const CaptureContext* ctx_ = nullptr;
     std::vector<LinkRounds> rounds_;  // per ctx_->links index
