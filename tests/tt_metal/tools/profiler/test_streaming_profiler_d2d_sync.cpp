@@ -69,21 +69,28 @@ double wall(int chip, double tau) {
     }
     return kW0[chip] + kF0 * kTauSwitch + kSlow * kF0 * (tau - kTauSwitch);
 }
-// A 1588 stamp of the event at tau, in the link's stamp units (quarter-ns) of the refclk domain.
-double hw_stamp(int chip, double tau) { return refclk(chip, tau) * 80.0; }
+// A 1588 stamp of the event at tau, in the link's stamp units (kLinkSyncStampUnitsPerNs per ns) of the refclk domain.
+double hw_stamp(int chip, double tau) {
+    return refclk(chip, tau) * (1e9 / kernel_profiler::kEthRefclkHz) * kernel_profiler::kLinkSyncStampUnitsPerNs;
+}
 double tsc(double tau) { return kTsc0 + tau * 1e9 * kTicksPerNs; }
 double host_ns(double tau) { return kHostBase + tau * 1e9; }
 
-// `lane` is the roster lane (core * lanes per core), as the callers were written; the engine takes the core.
-ClockSample sample(uint32_t dev, uint32_t lane, uint32_t kind, uint32_t round, uint32_t role, double rc, double w) {
-    return ClockSample{
-        dev,
-        lane / profiler::kSpscNRiscDecode,
-        kind,
+// Hands the engine one sync record as the stream carries it. `lane` is the roster lane (core * lanes per core), as
+// the callers were written; the engine takes the core.
+void feed(
+    SyncEngine& sync, uint32_t dev, uint32_t lane, uint32_t kind, uint32_t round, uint32_t role, double rc, double w) {
+    const auto value = static_cast<uint64_t>(std::llround(rc)), wall = static_cast<uint64_t>(std::llround(w));
+    const uint32_t rec[kernel_profiler::kSyncRecordWords] = {
+        (kind << 8) | role,
         round,
-        role,
-        static_cast<uint64_t>(std::llround(rc)),
-        static_cast<uint64_t>(std::llround(w))};
+        static_cast<uint32_t>(value),
+        static_cast<uint32_t>(value >> 32),
+        static_cast<uint32_t>(wall),
+        static_cast<uint32_t>(wall >> 32),
+        0,
+        0};
+    sync.on_clock(dev, lane / profiler::kSpscNRiscDecode, rec);
 }
 
 int main() {
@@ -108,7 +115,6 @@ int main() {
             d.core_xy.push_back(0);
         }
         d.n_eth_cores = static_cast<uint32_t>(eth[c].size());
-        d.frequency_ghz = kF0 * 1e-9;
         d.has_eth_tracker = true;
         ctx.devices.push_back(d);
     }
@@ -139,14 +145,15 @@ int main() {
     // second point a hundred microseconds later.
     constexpr uint32_t kK8Fast = 216, kK8Slow = 215;  // 27.0 and 26.875 wall ticks per refclk tick, in eighths
     const auto point = [&](int c, double tau, uint32_t k8, bool close) {
-        sync.on_clock(sample(
+        feed(
+            sync,
             static_cast<uint32_t>(c),
             0,
             kLocal,
             k8 | (k8 << 24),
             1u | (close ? 1u << 2 : 0u),
             refclk(c, tau),
-            8.0 * wall(c, tau)));  // a local point's wall travels in eighths of a tick
+            8.0 * wall(c, tau));  // a local point's wall travels in eighths of a tick
     };
     bool switched = false;
     for (int k = 0; k < 1000; k++) {
@@ -172,19 +179,15 @@ int main() {
     const auto burst = [&](uint32_t snd_dev, uint32_t snd_lane, uint32_t rcv_dev, uint32_t rcv_lane) {
         const auto receiver = [&](uint32_t k) {
             const double t = 0.020 + k * 10e-6;
-            sync.on_clock(
-                sample(rcv_dev, rcv_lane, kLink, k, kT0, hw_stamp(snd_dev, t), wall(rcv_dev, t + kOneWay)));
-            sync.on_clock(
-                sample(rcv_dev, rcv_lane, kLink, k, kT1, hw_stamp(rcv_dev, t + kOneWay), wall(rcv_dev, t + kOneWay)));
+            feed(sync, rcv_dev, rcv_lane, kLink, k, kT0, hw_stamp(snd_dev, t), wall(rcv_dev, t + kOneWay));
+            feed(sync, rcv_dev, rcv_lane, kLink, k, kT1, hw_stamp(rcv_dev, t + kOneWay), wall(rcv_dev, t + kOneWay));
         };
         for (uint32_t k = 0; k < 300; k++) {
             const double t = 0.020 + k * 10e-6;
             const double echo_out = t + kOneWay + kTurn, echo_in = t + 2 * kOneWay + kTurn;
-            sync.on_clock(
-                sample(snd_dev, snd_lane, kLink, k, kT1B, hw_stamp(rcv_dev, echo_out), wall(snd_dev, echo_in)));
+            feed(sync, snd_dev, snd_lane, kLink, k, kT1B, hw_stamp(rcv_dev, echo_out), wall(snd_dev, echo_in));
             if (k % 11 != 5) {
-                sync.on_clock(
-                    sample(snd_dev, snd_lane, kLink, k, kT2, hw_stamp(snd_dev, echo_in), wall(snd_dev, echo_in)));
+                feed(sync, snd_dev, snd_lane, kLink, k, kT2, hw_stamp(snd_dev, echo_in), wall(snd_dev, echo_in));
             }
             if (k % 7 != 3 && k != 100) {
                 receiver(k);

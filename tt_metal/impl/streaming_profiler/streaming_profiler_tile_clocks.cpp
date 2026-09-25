@@ -400,14 +400,14 @@ void measure_chip(IDevice* device, ContextId ctx) {
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
 
     // A pair: the lower node's NoC 0 reading of the higher and the higher's NoC 1 reading of the lower. Half their
-    // difference is the offset, half their sum the flight; their round trips must agree.
+    // difference is the offset; their round trips must agree.
     std::map<std::pair<uint32_t, uint32_t>, const Reading*> by_pair;
     for (const Reading& r : readings) {
         by_pair[{r.s, r.t}] = &r;
     }
     struct Pair {
         uint32_t lo, hi;
-        double offset, flight, rtt_diff;
+        double offset, rtt_diff;
     };
     std::vector<Pair> pairs;
     // An active eth tile's own reads leave its NIU ~6 cycles later than an idle eth tile's (their mirrored round
@@ -425,7 +425,6 @@ void measure_chip(IDevice* device, ContextId ctx) {
             r.s,
             r.t,
             static_cast<double>(r.whole2() - m->second->whole2()) / 4.0,
-            static_cast<double>(r.whole2() + m->second->whole2()) / 4.0,
             static_cast<double>(r.rtt - m->second->rtt)});
     }
     // x[i] = tile i's wall tick minus tile 0's; x[0] = 0.

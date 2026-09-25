@@ -82,27 +82,7 @@ constexpr uint32_t kCtrlBytes = 2 * kernel_profiler::kRelayCtrlWordStride;
 constexpr uint32_t kEthScratchBytes = 16384;
 static_assert(
     kEthScratchBytes >= kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE + 2 * kernel_profiler::PROFILER_L1_BUFFER_SIZE,
-    "the pusher scratch must hold a control vector and two whole rings");
-// The worker wall clock's rate, to a few parts in 1e5: for tick-to-time conversions in logs and bounds. The sync
-// engine measures the clocks it places records by.
-double measure_frequency_ghz(tt::Cluster& cluster, uint32_t chip_id, const CoreCoord& worker) {
-    constexpr uint64_t kWallClockL = 0xFFB121F0ULL;  // RISCV_DEBUG_REG_WALL_CLOCK_L; reading it latches H
-    constexpr uint64_t kWallClockH = 0xFFB121F8ULL;
-    const tt_cxy_pair target(chip_id, worker);
-    const auto read = [&]() {
-        uint32_t lo = 0, hi = 0;
-        const auto t0 = std::chrono::steady_clock::now();
-        cluster.read_reg(&lo, target, kWallClockL);
-        cluster.read_reg(&hi, target, kWallClockH);
-        const auto t1 = std::chrono::steady_clock::now();
-        return std::pair{t0 + (t1 - t0) / 2, (static_cast<uint64_t>(hi) << 32) | lo};
-    };
-    const auto [h0, d0] = read();
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
-    const auto [h1, d1] = read();
-    return static_cast<double>(d1 - d0) /
-           static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(h1 - h0).count());
-}
+    "the drainer scratch must hold a control vector and two whole rings");
 
 CoreCoords locate(tt::Cluster& cluster, uint32_t chip, const CoreCoord& logical, CoreType type) {
     return CoreCoords{
@@ -362,11 +342,7 @@ bool Devices::boot_device(
     if (!choose_relay_cores(mesh_device, ctx)) {
         return false;
     }
-    auto& cluster = MetalContext::instance(context_id_).get_cluster();
-    ctx.out.ctx.frequency_ghz = measure_frequency_ghz(cluster, ctx.chip_id, ctx.producers.front().virt);
-    TT_FATAL(ctx.out.ctx.frequency_ghz > 0.0, "streaming profiler: device {} wall clock did not advance", ctx.chip_id);
-    SyncDevices::Device sd{
-        .chip_id = ctx.chip_id, .device = ctx.device, .eth = ctx.idle_eth, .frequency_ghz = ctx.out.ctx.frequency_ghz};
+    SyncDevices::Device sd{.chip_id = ctx.chip_id, .device = ctx.device, .eth = ctx.idle_eth};
     sd.tensix.assign(ctx.producers.begin(), ctx.producers.begin() + ctx.n_workers);
     if (ctx.pusher) {
         sd.linked.assign(ctx.producers.begin() + ctx.n_workers + 1, ctx.producers.end());

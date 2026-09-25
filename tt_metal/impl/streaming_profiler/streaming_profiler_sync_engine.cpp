@@ -149,9 +149,7 @@ bool refill(const Log<Key>& log, Cursor<Key>& c, Key t, double& value) noexcept 
             // Past the cover: a batch the service released before the sync covered it (counted and reported as a
             // fault). The newest tangent carries on; holding still here would collapse every such record onto one
             // instant. Not cached, the cover moves.
-            c = Cursor<Key>{.gen = gen};
-            value = a.value + a.tangent * static_cast<double>(t - a.at);
-            return true;
+            c = Cursor<Key>{.gen = gen, .origin = a.at, .value = a.value, .slope = a.tangent};
         }
         value = on_line(c, t);
         return true;
@@ -224,14 +222,12 @@ void ClockMap::append(uint32_t chip_id, SyncNode node) {
     impl_->cover_generation.fetch_add(1, std::memory_order_release);
 }
 
-void ClockMap::extend(uint32_t chip_id, int64_t cover_ticks) {
+void ClockMap::finish(uint32_t chip_id) {
     if (chip_id < kMaxChips) {
-        impl_->chips[chip_id].extend(cover_ticks);
+        impl_->chips[chip_id].extend(std::numeric_limits<int64_t>::max());
         impl_->cover_generation.fetch_add(1, std::memory_order_release);
     }
 }
-
-void ClockMap::finish(uint32_t chip_id) { extend(chip_id, std::numeric_limits<int64_t>::max()); }
 
 void ClockMap::clear(uint32_t chip_id) {
     if (chip_id < kMaxChips) {
@@ -296,12 +292,17 @@ uint64_t ClockMap::cover_generation() const noexcept { return impl_->cover_gener
 
 size_t ClockMap::host_published() const noexcept { return impl_->host.nodes.count() - impl_->host.nodes.first(); }
 
-double ClockMap::lookup_root(uint32_t chip_id, int64_t wall) const noexcept {
-    double root = 0.0;
-    if (chip_id >= kMaxChips || !place(impl_->chips[chip_id], view_of(impl_.get()).chip[chip_id], wall, root)) {
+double ClockMap::lookup_root(uint32_t chip_id, double wall) const noexcept {
+    if (chip_id >= kMaxChips) {
         return 0.0;
     }
-    return root;
+    Cursor<int64_t>& c = view_of(impl_.get()).chip[chip_id];
+    const auto tick = static_cast<int64_t>(std::floor(wall));
+    double root = 0.0;
+    if (!place(impl_->chips[chip_id], c, tick, root)) {
+        return 0.0;
+    }
+    return root + c.slope * (wall - static_cast<double>(tick));
 }
 
 double ClockMap::host_tsc(double root) const noexcept {
@@ -408,7 +409,7 @@ void AnchorAudit::settle(const LocalClockModel& m, bool final) {
     if (pts.size() < 2 && !final) {
         return;
     }
-    const double until = m.frontier();
+    const int64_t until = m.frontier();
     while (!pending.empty() && pending.front().r < until) {
         const Pending a = pending.front();
         pending.pop_front();
@@ -416,12 +417,13 @@ void AnchorAudit::settle(const LocalClockModel& m, bool final) {
             before_model++;
             continue;
         }
-        const double w = m.wall_at(a.r);
-        const double ns = (a.w - w) * kNsPerRefclk / (m.wall_at(a.r + 1.0) - w);
+        const double r = static_cast<double>(a.r);
+        const double w = m.wall_at(r);
+        const double ns = (static_cast<double>(a.w) - w) * kNsPerRefclk / (m.wall_at(r + 1.0) - w);
         err.add(ns);
         if (std::abs(ns) > std::abs(worst_ns)) {
             worst_ns = ns;
-            worst_r = a.r;
+            worst_r = r;
         }
     }
     if (final) {
@@ -463,22 +465,31 @@ void AnchorAudit::add_drainer_audit(const ClockSample& s) {
 }
 
 void SyncEngine::on_attach(const CaptureContext& ctx) {
+    const size_t n = ctx.devices.size();
+    TT_FATAL(ctx.root_dev < n, "streaming profiler: the sync root is device {} of {}", ctx.root_dev, n);
+    for (const CaptureContext::Link& L : ctx.links) {
+        TT_FATAL(
+            L.dev_a < n && L.dev_b < n,
+            "streaming profiler: the sync link chip {} -> chip {} names a device outside the capture",
+            L.chip_a,
+            L.chip_b);
+    }
     ctx_ = ctx;
-    local_.clear();
-    audit_.clear();
+    local_.assign(n, LocalClockModel{});
+    audit_.assign(n, AnchorAudit{});
     links_.reset(ctx_);
-    series_.reset();
+    series_.reset(n);
     to_root_gen_ = ~0ull;
     // A chip the capture cannot place -- no eth tracker, or no link path to the root -- is finished at once, so no
     // consumer waits for it.
-    std::vector<bool> reach(ctx.devices.size(), false);
+    std::vector<bool> reach(n, false);
     const uint32_t root = ctx.root_dev;
-    if (root < ctx.devices.size() && ctx.devices[root].has_eth_tracker) {
+    if (ctx.devices[root].has_eth_tracker) {
         reach[root] = true;
         for (bool progress = true; progress;) {
             progress = false;
             for (const CaptureContext::Link& L : ctx.links) {
-                if (L.dev_a < reach.size() && L.dev_b < reach.size() && reach[L.dev_a] != reach[L.dev_b]) {
+                if (reach[L.dev_a] != reach[L.dev_b]) {
                     reach[L.dev_a] = reach[L.dev_b] = true;
                     progress = true;
                 }
@@ -494,40 +505,41 @@ void SyncEngine::on_attach(const CaptureContext& ctx) {
     }
 }
 
-void SyncEngine::on_clock(const ClockSample& s) {
-    if (s.kind == kernel_profiler::kSyncKindAnchor) {
-        const int64_t off = s.dev < ctx_.devices.size() ? ctx_.devices[s.dev].drainer_offset : 0;
-        audit_[s.dev].pending.push_back(
-            AnchorAudit::Pending{static_cast<double>(s.ref), static_cast<double>(s.ts) + static_cast<double>(off)});
+void SyncEngine::on_clock(uint32_t dev, uint32_t core, const uint32_t* rec) {
+    namespace kp = kernel_profiler;
+    TT_FATAL(dev < local_.size(), "streaming profiler: a sync record names device {} of {}", dev, local_.size());
+    const uint32_t kind = (rec[kp::SYNC_META] >> 8) & 0xFFu;
+    if (kind == kp::kSyncKindLocal) {
+        kp::SyncLocalPoint pts[kp::kSyncLocalPoints];
+        const uint32_t n = kp::sync_local_unpack(rec, pts);
+        LocalClockModel& m = local_[dev];
+        for (uint32_t i = 0; i < n; i++) {
+            m.add_point(pts[i].r, pts[i].w8, pts[i].k8);
+        }
+        audit_[dev].settle(m, /*final=*/false);
+        if (publish_dev(dev)) {
+            service().wake_consumers();
+        }
         return;
     }
-    if (s.kind == kernel_profiler::kSyncKindAnchorHist) {
-        audit_[s.dev].add_drainer_audit(s);
-        return;
-    }
-    if (s.kind != kernel_profiler::kSyncKindLocal) {
+    const auto word64 = [&](uint32_t lo, uint32_t hi) { return (static_cast<uint64_t>(rec[hi]) << 32) | rec[lo]; };
+    const ClockSample s{
+        .dev = dev,
+        .core = core,
+        .kind = kind,
+        .round = rec[kp::SYNC_ROUND],
+        .role = rec[kp::SYNC_META] & 0xFFu,
+        .value = word64(kp::SYNC_VALUE_LO, kp::SYNC_VALUE_HI),
+        .ts = word64(kp::SYNC_WALL_LO, kp::SYNC_WALL_HI),
+        .ref = word64(kp::SYNC_REF_LO, kp::SYNC_REF_HI),
+        .spins = rec[kp::SYNC_META] >> 16};
+    if (kind == kp::kSyncKindAnchor) {
+        audit_[dev].pending.push_back(AnchorAudit::Pending{
+            static_cast<int64_t>(s.ref), static_cast<int64_t>(s.ts) + ctx_.devices[dev].drainer_offset});
+    } else if (kind == kp::kSyncKindAnchorHist) {
+        audit_[dev].add_drainer_audit(s);
+    } else {
         links_.on_stamp(s);
-        return;
-    }
-    const uint32_t rec[kernel_profiler::kSyncRecordWords] = {
-        s.role,
-        s.round,
-        static_cast<uint32_t>(s.value),
-        static_cast<uint32_t>(s.value >> 32),
-        static_cast<uint32_t>(s.ts),
-        static_cast<uint32_t>(s.ts >> 32),
-        static_cast<uint32_t>(s.ref),
-        static_cast<uint32_t>(s.ref >> 32)};
-    kernel_profiler::SyncLocalPoint pts[kernel_profiler::kSyncLocalPoints];
-    const uint32_t n = kernel_profiler::sync_local_unpack(rec, pts);
-    for (uint32_t i = 0; i < n; i++) {
-        local_[s.dev].add_point(pts[i].r, pts[i].w8, pts[i].k8, pts[i].close);
-    }
-    if (const auto a = audit_.find(s.dev); a != audit_.end()) {
-        a->second.settle(local_[s.dev], /*final=*/false);
-    }
-    if (publish_dev(s.dev)) {
-        service().wake_consumers();
     }
 }
 
@@ -758,8 +770,8 @@ bool solve_potential(
 // (a hardware latency quantum, one launch in four, never under 9 ns and up to a tick) puts its link a good part of
 // a tick off, and such a link loses its weight instead of averaging into its pair; the report names it (weights,
 // per link, in `weights`).
-std::map<uint32_t, RootXf> LinkSolver::root_transforms(uint32_t root, std::vector<double>* weights) const {
-    std::map<uint32_t, RootXf> to_root;
+std::vector<RootXf> LinkSolver::root_transforms(uint32_t root, std::vector<double>* weights) const {
+    std::vector<RootXf> to_root(ctx_->devices.size());
     to_root[root] = RootXf{1.0, 0.0, true};
     if (weights != nullptr) {
         weights->assign(solved_.size(), 0.0);
@@ -837,79 +849,38 @@ std::map<uint32_t, RootXf> LinkSolver::root_transforms(uint32_t root, std::vecto
     return to_root;
 }
 
-void SeriesPublisher::push_node(Series& s, uint32_t chip, const Node& n) {
-    const int64_t wall = static_cast<int64_t>(std::llround(n.H));
-    if (s.count != 0 && wall <= static_cast<int64_t>(std::llround(s.last.H))) {
-        return;  // within the tick of the last node: the placement cannot differ measurably there
-    }
-    s.last = n;
-    s.count++;
-    s.last_r = std::max(s.last_r, n.r);
-    map_.append(chip, SyncNode{.at = wall, .value = n.root, .tangent = n.tangent});
-}
-
 // Frozen nodes never move (consumers have placed records against them), so a publish can only add beyond them, at
 // the newest estimate's values; a join carries whatever the estimate moved by since the last node (a few ns at a
 // knot). Shifting fresh nodes to meet the frozen tail and fading that shift over a quarter second is worse: every
 // discrepancy at a join becomes a level the map carries for 250 ms, 30-60 ns during DVFS dithering at 1 ms.
-void SeriesPublisher::append_node(Series& s, uint32_t chip, const Node& n) {
-    const double end_H = s.count == 0 ? -1.0 : s.last.H;
-    if (n.H >= end_H && n.H < end_H + 1.0) {
-        return;  // the series' end re-derived, or a knot within the tick of it: the same node
-    }
-    if (n.H < end_H) {
-        log_warning(
-            tt::LogMetal,
-            "[streaming profiler] d2d sync: placement node at wall {:.0f} lies {:.0f} wall ticks behind the frozen "
-            "series' end; the frozen node stands",
-            n.H,
-            end_H - n.H);
-        s.dropped++;
-        return;
-    }
-    if (!std::isfinite(n.H) || !std::isfinite(n.root) || !std::isfinite(n.tangent) ||
-        !(n.tangent > 0.0 && n.tangent < 1.0)) {
-        s.dropped++;
-        return;
-    }
-    push_node(s, chip, n);
-}
-
-bool SeriesPublisher::publish(uint32_t dev, uint32_t chip, const LocalClockModel& fit, const RootXf& xf, bool final) {
+bool SeriesPublisher::publish(uint32_t dev, uint32_t chip, const LocalClockModel& fit, const RootXf& xf) {
     Series& s = series_[dev];
     const auto& pts = fit.pts;
     const size_t before = s.count;
-    const auto root_at = [&](const LocalClockModel::Instant& p) { return xf.scale * p.r + xf.shift; };
-    auto it = std::upper_bound(
-        pts.begin(), pts.end(), s.last_r, [](double x, const LocalClockModel::Instant& p) { return x < p.r; });
-    for (; it != pts.end(); ++it) {
-        const size_t i = static_cast<size_t>(it - pts.begin());
-        const bool has_next = i + 1 < pts.size();
-        if (it->k8 == 0 && !has_next && !final) {
+    const auto root_at = [&](const LocalClockModel::Instant& p) {
+        return xf.scale * static_cast<double>(p.r) + xf.shift;
+    };
+    for (; s.next < pts.size(); s.next++) {
+        const LocalClockModel::Instant& p = pts[s.next];
+        const double root = root_at(p);
+        double tangent = 0.0;
+        if (p.k8 != 0) {
+            tangent = xf.scale * 8.0 / p.k8;
+        } else if (pts.size() > 1) {
+            const LocalClockModel::Instant& o = pts[s.next == 0 ? 1 : s.next - 1];
+            tangent = (root_at(o) - root) / (o.wall() - p.wall());
+        } else {
             break;
         }
-        const double root = root_at(*it);
-        double tangent = 0.0;
-        if (has_next) {
-            tangent = (root_at(*(it + 1)) - root) / ((it + 1)->w - it->w);
-        } else if (it->k8 != 0) {
-            tangent = xf.scale * 8.0 / it->k8;
-        } else if (it != pts.begin()) {
-            tangent = (root - root_at(*(it - 1))) / (it->w - (it - 1)->w);
-        } else {
-            break;  // a lone raw instant: no rate yet
+        if (std::isfinite(root) && tangent > 0.0 && tangent < 1.0) {
+            map_.append(chip, SyncNode{.at = p.wall_tick(), .value = root, .tangent = tangent});
+            s.count++;
         }
-        append_node(s, chip, Node{it->w, root, it->r, tangent});
-        s.last_r = it->r;
     }
     return s.count > before;
 }
 
-bool SyncEngine::publish_dev(uint32_t dev, bool final) {
-    const auto st = local_.find(dev);
-    if (st == local_.end() || st->second.pts.empty() || dev >= ctx_.devices.size()) {
-        return false;
-    }
+bool SyncEngine::publish_dev(uint32_t dev) {
     // Nothing is placed before the host series exists: a record converted then would land nowhere.
     if (map_.host_published() == 0) {
         return false;
@@ -920,16 +891,15 @@ bool SyncEngine::publish_dev(uint32_t dev, bool final) {
     }
     // The series starts only once the chip is on the root's tree (the root is there from the start): its first node
     // fixes the placement every later node joins.
-    const auto xf = to_root_.find(dev);
-    if (xf == to_root_.end() || !xf->second.ok) {
+    if (!to_root_[dev].ok) {
         return false;
     }
-    return series_.publish(dev, ctx_.devices[dev].chip_id, st->second, xf->second, final);
+    return series_.publish(dev, ctx_.devices[dev].chip_id, local_[dev], to_root_[dev]);
 }
 
 void SyncEngine::publish_all() {
-    for (const auto& kv : local_) {
-        publish_dev(kv.first, /*final=*/true);
+    for (uint32_t dev = 0; dev < local_.size(); dev++) {
+        publish_dev(dev);
     }
     for (const CaptureContext::Device& d : ctx_.devices) {
         map_.finish(d.chip_id);
@@ -950,49 +920,43 @@ void SyncEngine::log_summary() const {
 }
 
 void SyncEngine::log_clock_models() const {
-    for (const auto& [dev, l] : local_) {
-        const uint32_t chip = dev < ctx_.devices.size() ? ctx_.devices[dev].chip_id : dev;
+    for (uint32_t dev = 0; dev < local_.size(); dev++) {
+        const LocalClockModel& l = local_[dev];
         if (l.pts.empty()) {
-            log_warning(
-                tt::LogMetal,
-                "[streaming profiler] d2d sync chip {}: {} clock records but no instant of the local clock",
-                chip,
-                l.points);
             continue;
         }
         // The applied AICLK: each point's k/8 slope over the refclk until the next instant.
         long double ssum = 0.0, wsum = 0.0;
         double smin = std::numeric_limits<double>::max(), smax = 0.0;
-        size_t raw = 0;
+        size_t raw = 0, changes = 0;
         for (size_t i = 0; i < l.pts.size(); i++) {
             const LocalClockModel::Instant& p = l.pts[i];
+            changes += l.ends_line(i);
             if (p.k8 == 0) {
                 raw++;
                 continue;
             }
             const double s = p.k8 / 8.0;
-            const double span = i + 1 < l.pts.size() ? l.pts[i + 1].r - p.r : 0.0;
+            const double span = i + 1 < l.pts.size() ? static_cast<double>(l.pts[i + 1].r - p.r) : 0.0;
             ssum += static_cast<long double>(s) * span;
             wsum += span;
             smin = std::min(smin, s);
             smax = std::max(smax, s);
         }
         const double to_ghz = LocalClockModel::kRefclkHz * 1e-9;
-        const double anchor_ghz = dev < ctx_.devices.size() ? ctx_.devices[dev].frequency_ghz : 0.0;
         const double mean_ghz = wsum > 0.0 ? static_cast<double>(ssum / wsum) * to_ghz : 0.0;
         log_info(
             tt::LogMetal,
-            "[streaming profiler] d2d sync chip {}: local clock {} instants, {} of them inside its {} transitions; "
-            "applied AICLK mean {:.5f} GHz (min {:.5f}, max {:.5f}; boot anchor {:.5f}); {} placement nodes",
-            chip,
+            "[streaming profiler] d2d sync chip {}: local clock {} instants ({} single samples) across {} FBDIV "
+            "changes; applied AICLK mean {:.5f} GHz (min {:.5f}, max {:.5f}); {} placement nodes",
+            ctx_.devices[dev].chip_id,
             l.pts.size(),
             raw,
-            l.transitions,
+            changes,
             mean_ghz,
             smax > 0.0 ? smin * to_ghz : 0.0,
             smax * to_ghz,
-            anchor_ghz,
-            series_.series(dev) != nullptr ? series_.series(dev)->count : 0);
+            series_.nodes(dev));
     }
 }
 
@@ -1037,24 +1001,21 @@ void SyncEngine::log_link_solutions() const {
 // root. With every link on one consistent mesh the residuals are the cables' path asymmetries, a nanosecond or two;
 // a link the reweighting dropped carries a stamp bias, and its rounds still place through the mesh.
 void SyncEngine::log_loop_closures() const {
-    if (local_.empty()) {
-        return;
-    }
     const std::vector<LinkSolver::LinkSolution>& solved = links_.solutions();
     std::vector<double> weights;
-    const std::map<uint32_t, RootXf> to_root = links_.root_transforms(root_dev(), &weights);
+    const std::vector<RootXf> to_root = links_.root_transforms(root_dev(), &weights);
     for (size_t li = 0; li < solved.size() && li < ctx_.links.size(); li++) {
         const LinkSolver::LinkSolution& s = solved[li];
         if (!s.ok) {
             continue;
         }
-        const auto S = to_root.find(s.dev_snd);
-        const auto R = to_root.find(s.dev_rcv);
-        if (S == to_root.end() || R == to_root.end() || !S->second.ok || !R->second.ok) {
+        const RootXf& S = to_root[s.dev_snd];
+        const RootXf& R = to_root[s.dev_rcv];
+        if (!S.ok || !R.ok) {
             continue;
         }
         const double direct = (1.0 + s.rate) * s.mid_refclk + (s.offset_refclk - s.rate * s.mid_refclk);
-        const double via_mesh = (S->second.scale * s.mid_refclk + S->second.shift - R->second.shift) / R->second.scale;
+        const double via_mesh = (S.scale * s.mid_refclk + S.shift - R.shift) / R.scale;
         const double off_ns = (via_mesh - direct) * kNsPerRefclk;
         if (weights[li] < 0.5) {
             log_warning(
@@ -1174,17 +1135,11 @@ bool LinkSolver::solve_link(const CaptureContext::Link& L, std::vector<RoundPoin
 bool SyncEngine::round_error(
     const CaptureContext::Link& L, const Round& r, bool anchored, int64_t& tsc_a, double& err, RoundTerms* terms)
     const {
-    if (L.dev_a >= ctx_.devices.size() || L.dev_b >= ctx_.devices.size()) {
+    if (series_.nodes(L.dev_a) == 0 || series_.nodes(L.dev_b) == 0) {
         return false;
     }
-    const auto la = local_.find(L.dev_a);
-    const auto lb = local_.find(L.dev_b);
-    if (la == local_.cend() || lb == local_.cend()) {
-        return false;
-    }
-    if (!series_.has_nodes(L.dev_a) || !series_.has_nodes(L.dev_b)) {
-        return false;
-    }
+    const LocalClockModel& la = local_[L.dev_a];
+    const LocalClockModel& lb = local_[L.dev_b];
     // Anchored: each end's wall clock at the round's midpoint from the (wall, refclk) pair it read together when it
     // recorded the stamp, moved to the midpoint by the model's slope over that ~1 ms, a measured AICLK instant.
     // Otherwise the model's wall for the midpoint, which cancels the model out of the error.
@@ -1196,12 +1151,12 @@ bool SyncEngine::round_error(
         return core < t.size() ? static_cast<double>(t[core]) : 0.0;
     };
     const double off_a = tile_offset_of(L.dev_a, L.core_a), off_b = tile_offset_of(L.dev_b, L.core_b);
-    const double wa = anchored ? static_cast<double>(r.t2.wall) + off_a + la->second.wall_at(mid_a) -
-                                     la->second.wall_at(static_cast<double>(r.t2.ref))
-                               : la->second.wall_at(mid_a);
-    const double wb = anchored ? static_cast<double>(r.t1.wall) + off_b + lb->second.wall_at(mid_b) -
-                                     lb->second.wall_at(static_cast<double>(r.t1.ref))
-                               : lb->second.wall_at(mid_b);
+    const double wa = anchored ? static_cast<double>(r.t2.wall) + off_a + la.wall_at(mid_a) -
+                                     la.wall_at(static_cast<double>(r.t2.ref))
+                               : la.wall_at(mid_a);
+    const double wb = anchored ? static_cast<double>(r.t1.wall) + off_b + lb.wall_at(mid_b) -
+                                     lb.wall_at(static_cast<double>(r.t1.ref))
+                               : lb.wall_at(mid_b);
     if (wa <= 0.0 || wb <= 0.0) {
         return false;
     }
@@ -1214,8 +1169,8 @@ bool SyncEngine::round_error(
             const double ghz = (m.wall_at(ref + 1.0) - m.wall_at(ref)) / kNsPerRefclk;
             return (static_cast<double>(st.wall) + off - m.wall_at(ref)) / std::max(ghz, 0.1);
         };
-        t.res_a = res_ns(la->second, r.t2, off_a);
-        t.res_b = res_ns(lb->second, r.t1, off_b);
+        t.res_a = res_ns(la, r.t2, off_a);
+        t.res_b = res_ns(lb, r.t1, off_b);
         t.spins_a = r.t2.spins;
         t.spins_b = r.t1.spins;
         t.ref_a = static_cast<double>(r.t2.ref);
@@ -1223,8 +1178,8 @@ bool SyncEngine::round_error(
         t.ref_b = static_cast<double>(r.t1.ref);
         t.wraw_b = static_cast<double>(r.t1.wall);
     }
-    t.root_a = map_.lookup_root(ctx_.devices[L.dev_a].chip_id, std::llround(wa));
-    t.root_b = map_.lookup_root(ctx_.devices[L.dev_b].chip_id, std::llround(wb));
+    t.root_a = map_.lookup_root(ctx_.devices[L.dev_a].chip_id, wa);
+    t.root_b = map_.lookup_root(ctx_.devices[L.dev_b].chip_id, wb);
     tsc_a = std::llround(map_.host_tsc(t.root_a));
     err = (t.root_b - t.root_a) * kNsPerRefclk;
     if (terms != nullptr) {
@@ -1240,8 +1195,7 @@ struct SyncEngine::LinkErrors {
     std::vector<double> rtt, turn, path, resid;
     double path_med = 0.0, rtt_median = 0.0;
     size_t off_path = 0;
-    size_t past_model = 0;  // rounds after an end's clock model stopped, in a transition the capture cut short
-    size_t unbracketed = 0;  // rounds an end recorded with a plain (wall, refclk) pair: read_bracketed gave up
+    size_t past_model = 0;     // rounds past an end's newest instant
     size_t before_series = 0;  // rounds before a chip's oldest kept node: the series wrapped, nothing places them
 };
 
@@ -1253,11 +1207,8 @@ SyncEngine::LinkErrors SyncEngine::link_errors(size_t li, bool anchored) const {
     LinkErrors e;
     const double rate = links_.solutions()[li].rate;
     e.path_med = LinkSolver::path_median(rounds, 0, rounds.size(), rate);
-    const auto until = [&](uint32_t dev) {
-        const auto it = local_.find(dev);
-        return it == local_.end() ? 0.0 : it->second.frontier();
-    };
-    const double until_a = until(L.dev_a), until_b = until(L.dev_b);
+    const double until_a = static_cast<double>(local_[L.dev_a].frontier());
+    const double until_b = static_cast<double>(local_[L.dev_b].frontier());
     const int64_t oldest_a = map_.oldest_at(L.chip_a), oldest_b = map_.oldest_at(L.chip_b);
     for (const Round& r : rounds) {
         if (std::abs(LinkSolver::path_ns(r, rate) - e.path_med) > LinkSolver::kPathDevNs) {
@@ -1280,7 +1231,6 @@ SyncEngine::LinkErrors SyncEngine::link_errors(size_t li, bool anchored) const {
         }
         e.pts.push_back(PlotPoint{H, err});
         e.terms.push_back(t);
-        e.unbracketed += anchored && (r.t2.spins == 0 || r.t1.spins == 0);
         e.raw_x.push_back(LinkSolver::mid_a_refclk(r));
         e.raw_y.push_back(LinkSolver::mid_b_refclk(r) - e.raw_x.back());
         e.rtt.push_back(LinkSolver::rtt_ns(r));
@@ -1335,8 +1285,8 @@ void SyncEngine::log_link_stats(const CaptureContext::Link& L, const LinkErrors&
         tt::LogMetal,
         "[streaming profiler] d2d sync link chip {} -> chip {}: one way inside the stamps {:.1f} ns (p10 {:.1f}, p90 "
         "{:.1f}); receiver's stamped turnaround {:.1f} ns (p10 {:.1f}, p90 {:.1f}); sender's round trip {:.1f} ns "
-        "(p10 {:.1f}, p90 {:.1f}); {} rounds, {} off the path band dropped, {} past a chip's clock model, {} read "
-        "unbracketed, {} before a chip's oldest kept node",
+        "(p10 {:.1f}, p90 {:.1f}); {} rounds, {} off the path band dropped, {} past a chip's clock model, {} before "
+        "a chip's oldest kept node",
         L.chip_a,
         L.chip_b,
         pct(e.path, 0.5),
@@ -1351,7 +1301,6 @@ void SyncEngine::log_link_stats(const CaptureContext::Link& L, const LinkErrors&
         rounds,
         e.off_path,
         e.past_model,
-        e.unbracketed,
         e.before_series);
     long double se = 0, ss = 0, srr = 0;
     for (size_t i = 0; i < e.pts.size(); i++) {
@@ -1362,11 +1311,10 @@ void SyncEngine::log_link_stats(const CaptureContext::Link& L, const LinkErrors&
     const double nn = static_cast<double>(e.pts.size());
     log_info(
         tt::LogMetal,
-        "[streaming profiler] d2d sync check chip {} vs chip {} (AICLK-anchored{}): {} rounds, mean {:+.1f} ns, rms "
+        "[streaming profiler] d2d sync check chip {} vs chip {} (AICLK-anchored): {} rounds, mean {:+.1f} ns, rms "
         "{:.1f} ns{}",
         L.chip_b,
         L.chip_a,
-        e.unbracketed != 0 ? fmt::format(", {} of them from plain reads, ~30 ns each", e.unbracketed) : "",
         e.pts.size(),
         static_cast<double>(se) / nn,
         std::sqrt(static_cast<double>(ss) / nn),
@@ -1455,15 +1403,20 @@ void SyncEngine::write_model_csv() const {
     if (csv.empty()) {
         return;
     }
-    for (const auto& [dev, l] : local_) {
-        const uint32_t chip = dev < ctx_.devices.size() ? ctx_.devices[dev].chip_id : dev;
-        std::FILE* f = std::fopen(fmt::format("{}.model_{}.csv", csv, chip).c_str(), "w");
+    for (uint32_t dev = 0; dev < local_.size(); dev++) {
+        const LocalClockModel& l = local_[dev];
+        if (l.pts.empty()) {
+            continue;
+        }
+        std::FILE* f = std::fopen(fmt::format("{}.model_{}.csv", csv, ctx_.devices[dev].chip_id).c_str(), "w");
         if (f == nullptr) {
             continue;
         }
         std::fprintf(f, "kind,r,w,k8\n");
-        for (const LocalClockModel::Instant& p : l.pts) {
-            std::fprintf(f, "%s,%.1f,%.3f,%u\n", p.k8 == 0 ? "raw" : p.close ? "close" : "point", p.r, p.w, p.k8);
+        for (size_t i = 0; i < l.pts.size(); i++) {
+            const LocalClockModel::Instant& p = l.pts[i];
+            const char* kind = p.k8 == 0 ? "raw" : l.ends_line(i) ? "close" : "point";
+            std::fprintf(f, "%s,%.1f,%.3f,%u\n", kind, static_cast<double>(p.r), p.wall(), p.k8);
         }
         std::fclose(f);
     }
@@ -1487,11 +1440,7 @@ void SyncEngine::publish_error_plots() {
         log_link_stats(L, e, rounds);
         log_worst_rounds(L, e);
         write_err_csv(L, e);
-        // The anchored check reads the wall clock to a cycle only where the link end brackets its reads; a router's
-        // plain pair puts the refclk register's 80 ns step into every round, so it is not plotted as an error.
-        if (e.unbracketed == 0) {
-            plot(fmt::format("d2d sync check chip{} vs chip{}, AICLK-anchored (ns)", L.chip_b, L.chip_a), e.pts);
-        }
+        plot(fmt::format("d2d sync check chip{} vs chip{}, AICLK-anchored (ns)", L.chip_b, L.chip_a), e.pts);
         // The same rounds with the model cancelled: the links' and the map's own error, at the stamps' 0.3 ns. The
         // signed cross-chip error stays in the CSV.
         const LinkErrors em = link_errors(li, /*anchored=*/false);
@@ -1533,18 +1482,16 @@ void SyncEngine::log_audit() const {
             h.abs_quantile(0.999),
             h.worst);
     };
-    std::map<uint32_t, AnchorAudit> audit = audit_;
-    for (auto& [dev, a] : audit) {
-        const auto m = local_.find(dev);
-        if (m != local_.end()) {
-            a.settle(m->second, /*final=*/true);
+    for (uint32_t dev = 0; dev < audit_.size(); dev++) {
+        const AnchorAudit& a = audit_[dev];
+        if (a.err.n <= 0.0 && a.pending.empty() && a.before_model + a.past_model + a.drainer_unbracketed == 0) {
+            continue;
         }
-        const uint32_t chip = dev < ctx_.devices.size() ? ctx_.devices[dev].chip_id : dev;
         log_info(
             tt::LogMetal,
             "[streaming profiler] sync audit chip {}: the drainer's anchors against the clock model, {}; worst at "
             "refclk {:.0f}; {} before the model, {} past it, {} dropped for a read with no refclk update",
-            chip,
+            ctx_.devices[dev].chip_id,
             parts(a.err),
             std::abs(a.drainer_worst_ns) > std::abs(a.worst_ns) ? a.drainer_worst_r : a.worst_r,
             a.before_model,
@@ -1556,8 +1503,9 @@ void SyncEngine::log_audit() const {
     size_t links = 0;
     for (size_t li = 0; li < ctx_.links.size(); li++) {
         const CaptureContext::Link& L = ctx_.links[li];
-        const auto aa = audit.find(L.dev_a), ab = audit.find(L.dev_b);
-        if (aa == audit.end() || ab == audit.end() || links_.rounds(li).empty()) {
+        const ErrorHistogram& ea = audit_[L.dev_a].err;
+        const ErrorHistogram& eb = audit_[L.dev_b].err;
+        if (ea.n <= 0.0 || eb.n <= 0.0 || links_.rounds(li).empty()) {
             continue;
         }
         const LinkErrors em = link_errors(li, /*anchored=*/false);
@@ -1567,10 +1515,6 @@ void SyncEngine::log_audit() const {
         ErrorHistogram lh;
         for (const PlotPoint& p : em.pts) {
             lh.add(p.value);
-        }
-        const ErrorHistogram ea = aa->second.err, eb = ab->second.err;
-        if (ea.n <= 0.0 || eb.n <= 0.0) {
-            continue;
         }
         const ErrorHistogram total = lh.convolve(eb, 1).convolve(ea, -1);
         log_info(
@@ -1614,17 +1558,17 @@ void SyncEngine::log_audit() const {
 }
 
 void SyncEngine::publish_clock_plots() {
-    for (const auto& [dev, fit] : local_) {
-        if (!series_.has_nodes(dev) || dev >= ctx_.devices.size()) {
+    for (uint32_t dev = 0; dev < local_.size(); dev++) {
+        if (series_.nodes(dev) == 0) {
             continue;
         }
         const uint32_t chip = ctx_.devices[dev].chip_id;
         std::vector<PlotPoint> pts;
-        for (const LocalClockModel::Instant& p : fit.pts) {
+        for (const LocalClockModel::Instant& p : local_[dev].pts) {
             if (p.k8 == 0) {
                 continue;
             }
-            const double root = map_.lookup_root(chip, std::llround(p.w));
+            const double root = map_.lookup_root(chip, static_cast<double>(p.wall_tick()));
             pts.push_back(PlotPoint{std::llround(map_.host_tsc(root)), p.k8 / 8.0 * LocalClockModel::kRefclkHz * 1e-9});
         }
         if (!pts.empty()) {
@@ -1651,6 +1595,11 @@ void SyncEngine::on_capture_end(const CaptureContext& ctx) {
     publish_error_plots();
     publish_clock_plots();
     log_summary();
+    for (size_t dev = 0; dev < audit_.size(); dev++) {
+        if (!local_[dev].pts.empty()) {
+            audit_[dev].settle(local_[dev], /*final=*/true);
+        }
+    }
     log_audit();
     // The published corrections stay for the sinks that write at process end; the next attach starts fresh.
     local_.clear();

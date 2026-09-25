@@ -165,7 +165,7 @@ struct CoreCoords {
 struct EthL1 {
     uint32_t cfg = 0, sync_cfg = 0, ctrl = 0, stage = 0, scratch = 0, pll = 0, sync_ring = 0, link_ring = 0;
 };
-constexpr uint32_t kEthPointUs = 1000;  // the open segment's line reaches the host at least this often
+constexpr uint32_t kEthPointUs = 1000;  // the pusher closes a window into a point at least this often
 
 // The idle-eth pusher kernel over its L1 carve, reading AICLK's PLL on the ARC tile at `arc` (translated), and the
 // drainer that ships its ring (and the chip's eth cores' frames) from a second idle core: both cores carve their own
@@ -187,7 +187,6 @@ public:
             eth;  // the idle eth cores, the pusher first: the origin the tile offsets are solved against
         std::vector<CoreCoords> linked;  // the active eth cores the pusher drains, in their roster order
         std::optional<CoreCoords> drainer;  // the idle eth core whose anchors audit the pusher's clock model
-        double frequency_ghz = 0.0;
     };
 
     SyncDevices(ContextId context_id, const EthL1& eth_l1, uint32_t aeth_unreserved, uint32_t aeth_unres_size);

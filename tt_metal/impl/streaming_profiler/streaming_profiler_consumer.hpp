@@ -41,18 +41,18 @@ struct CaptureContext {
         std::vector<experimental::streaming_profiler::Core> lanes;  // index by the record's lane
         std::vector<uint32_t> core_xy;  // core index -> packed NoC (y << 16) | x, the identity a frame carries
         uint32_t chip_id = 0;
-        double frequency_ghz = 0.0;    // the worker wall clock's ticks per nanosecond, a few parts in 1e5
         bool has_eth_tracker = false;  // an idle-eth pusher tracks this chip's refclk: its records can be placed
         uint32_t n_eth_cores = 0;      // trailing cores in `lanes` that are eth (idle + active)
-        // Per core, in `core_xy` order: eth wall tick minus that core's wall tick, measured by the pusher at arm.
-        // Every tile keeps its own wall clock on the one AICLK, so each is one integer for the capture; eth cores 0.
+        // Per core, in `core_xy` order: the pusher's wall tick minus that core's, from the chip's tile clocks measured
+        // at boot. Every tile keeps its own wall clock on the one AICLK, so each is one integer for the capture; the
+        // pusher's own is 0.
         std::vector<int64_t> tile_offset;
         int64_t drainer_offset = 0;  // eth wall tick minus the drainer's: its anchors into the pusher's wall domain
     };
     std::vector<Device> devices;
     // A link of the sync: the sender on device index dev_a, the receiver on dev_b, each end's eth core as the decoder
-    // numbers it (core_a, core_b) and as it is placed (eth_a, eth_b). The sync engine pairs the two ends' PP_CLOCK
-    // link samples by round.
+    // numbers it (core_a, core_b) and as it is placed (eth_a, eth_b). The sync engine pairs the two ends' LINK
+    // records by round.
     struct Link {
         uint32_t dev_a = 0, dev_b = 0;
         uint32_t chip_a = 0, chip_b = 0;
@@ -65,9 +65,9 @@ struct CaptureContext {
 };
 
 // What the decoder writes into every record of a lane besides the packet's own words (Record's coordinate, chip and
-// RISC fields, and its host_time_ slot), in the record's byte layout. `offset` takes the lane's ticks into the chip's
-// eth wall domain: the tile offset for a worker lane, 0 for an eth lane; the service reads it from the slot at
-// release and writes the record's host time over it.
+// RISC fields, and its host_time_ slot), in the record's byte layout. `offset` takes the lane's ticks into the
+// pusher's wall domain (its core's CaptureContext::Device::tile_offset); the service reads it from the slot at release
+// and writes the record's host time over it.
 inline profiler::SpscRecConsts record_consts(const experimental::streaming_profiler::Core& core, int64_t offset) {
     return profiler::SpscRecConsts{
         .coords =

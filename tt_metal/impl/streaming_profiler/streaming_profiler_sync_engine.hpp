@@ -26,9 +26,9 @@
 
 namespace tt::tt_metal::streaming_profiler {
 
-// One record of the sync stream (hostdev/streaming_profiler_common.h, kSyncRecordWords) as the engine takes it: the
-// device and roster core that wrote it, its kind and role, the round a link stamp names, the reading, and the wall
-// clock at it.
+// A LINK, ANCHOR or ANCHOR_HIST record of the sync stream (hostdev/streaming_profiler_common.h, kSyncRecordWords)
+// split into its fields: the device and roster core that wrote it, its kind and role, the round a link stamp names,
+// the reading, and the wall clock at it.
 struct ClockSample {
     uint32_t dev;
     uint32_t core;
@@ -48,34 +48,35 @@ class LocalClockModel {
 public:
     static constexpr double kRefclkHz = kernel_profiler::kEthRefclkHz;
     struct Instant {
-        double r = 0.0, w = 0.0;
+        int64_t r = 0;
+        int64_t w8 = 0;   // the wall tick in eighths
         uint32_t k8 = 0;  // the line's slope in eighths of a wall tick per refclk tick at a point; 0 at a raw instant
-        bool close = false;  // a line's last instant
+        double wall() const { return static_cast<double>(w8) / 8.0; }
+        int64_t wall_tick() const { return (w8 + 4) >> 3; }
     };
-    std::deque<Instant> pts;   // in refclk order; a deque, so growth never copies on the sync thread
-    uint64_t points = 0;       // instants received, those behind the frontier included
-    uint64_t transitions = 0;  // closes
-    void add_point(uint64_t refclk, uint64_t wall8, uint32_t k8, bool close) {
-        points++;
-        const double r = static_cast<double>(refclk), w = static_cast<double>(wall8) / 8.0;
-        if (!pts.empty() && (r <= pts.back().r || w <= pts.back().w)) {
+    std::deque<Instant> pts;  // in refclk order; a deque, so growth never copies on the sync thread
+    void add_point(uint64_t refclk, uint64_t wall8, uint32_t k8) {
+        const auto r = static_cast<int64_t>(refclk), w8 = static_cast<int64_t>(wall8);
+        if (!pts.empty() && (r <= pts.back().r || w8 <= pts.back().w8)) {
             return;
         }
-        transitions += close;
-        pts.push_back(Instant{r, w, k8, close});
+        pts.push_back(Instant{r, w8, k8});
     }
+    // Whether instant i is the last of a line whose slope the next instant does not share: an FBDIV change.
+    bool ends_line(size_t i) const { return pts[i].k8 != 0 && i + 1 < pts.size() && pts[i + 1].k8 != pts[i].k8; }
     // The newest instant's refclk: nothing later is known.
-    double frontier() const { return pts.empty() ? 0.0 : pts.back().r; }
+    int64_t frontier() const { return pts.empty() ? 0 : pts.back().r; }
     // The wall tick at refclk r: on the chord between the instants around it, along the last two past the newest,
     // and 0 before the first, where nothing places.
     double wall_at(double r) const {
-        if (pts.empty() || r < pts.front().r) {
+        if (pts.empty() || r < static_cast<double>(pts.front().r)) {
             return 0.0;
         }
         if (pts.size() == 1) {
-            return pts[0].w + (r - pts[0].r) * pts[0].k8 / 8.0;
+            return pts[0].wall() + (r - static_cast<double>(pts[0].r)) * pts[0].k8 / 8.0;
         }
-        auto hi = std::lower_bound(pts.begin(), pts.end(), r, [](const Instant& p, double x) { return p.r < x; });
+        const auto key = static_cast<int64_t>(std::ceil(r));
+        auto hi = std::lower_bound(pts.begin(), pts.end(), key, [](const Instant& p, int64_t x) { return p.r < x; });
         if (hi == pts.end()) {
             hi = pts.end() - 1;
         }
@@ -85,8 +86,8 @@ public:
         const size_t i = static_cast<size_t>(hi - pts.begin());
         const Instant& a = pts[i - 1];
         const Instant& b = pts[i];
-        const double dr = b.r - a.r, x = r - a.r;
-        return a.w + (b.w - a.w) / dr * x;
+        const double dr = static_cast<double>(b.r - a.r), x = r - static_cast<double>(a.r);
+        return a.wall() + static_cast<double>(b.w8 - a.w8) / 8.0 / dr * x;
     }
 };
 
@@ -130,7 +131,7 @@ struct ErrorHistogram {
 // audit carries the drainer's and the pusher's difference.
 struct AnchorAudit {
     struct Pending {
-        double r, w;
+        int64_t r, w;
     };
     std::deque<Pending> pending;
     ErrorHistogram err;
@@ -154,7 +155,7 @@ struct RootXf {
 };
 
 // The eth links' rounds and what they solve to. Each link's two ends stamp their frames with the 1588 hardware and
-// report a round's stamp averages as PP_CLOCK link samples; the solver pairs the two ends' samples by round number,
+// report a round's stamp averages as LINK sync records; the solver pairs the two ends' records by round number,
 // fits each link's offset and rate over a window of rounds in the refclk domain (so DVFS on either wall clock cannot
 // enter), combines a chip pair's parallel links, and composes every chip onto the root along the solved tree.
 class LinkSolver {
@@ -201,9 +202,10 @@ public:
     uint64_t generation() const { return gen_; }
     // Samples ignored: an unknown kind, a core on no link, or a role that end does not stamp.
     uint64_t dropped() const { return dropped_; }
-    // Every chip the root reaches over solved links, onto the root's refclk, from all the links at once (see the
-    // definition). `weights`, per link, gets the robust weight each ended with: 1 on the mesh, 0 left out.
-    std::map<uint32_t, RootXf> root_transforms(uint32_t root, std::vector<double>* weights) const;
+    // Per device index, the chip onto the root's refclk from all the links at once (see the definition); not ok for a
+    // chip the root does not reach over solved links. `weights`, per link, gets the robust weight each ended with: 1
+    // on the mesh, 0 left out.
+    std::vector<RootXf> root_transforms(uint32_t root, std::vector<double>* weights) const;
 
     // A round in the refclk domain: each end's midpoint; the sender's round trip, the receiver's turnaround and the
     // one-way delay inside the stamps, in ns. Each end averages the frames it could pair, which need not be the same
@@ -255,8 +257,8 @@ private:
     static constexpr size_t kPendingMax = 4096;
 };
 
-// One frozen node of a placement series: at `at` the placement is `value`, linear to the next node, and past the
-// newest node along `tangent` (d value / d at) as far as the series' cover reaches.
+// One frozen node of a placement series: at `at` the placement is `value`, linear to the next node. Before the oldest
+// kept node, and past the newest once the series is finished, it carries on along `tangent` (d value / d at).
 template <typename Key>
 struct ClockNode {
     Key at{};
@@ -279,14 +281,14 @@ using HostNode = ClockNode<double>;
 //
 // Reads never lock and never block the writer (IndexedRing). A reader keeps a thread-local cursor on the segment it
 // last converted in and converts without touching shared state until a record leaves the segment. A series' cover
-// is the key up to which the newest node's tangent has been confirmed: a record at or before it converts against
+// is its newest node's key, and every key once the series is finished: a record at or before it converts against
 // frozen data on both sides.
 class ClockMap {
 public:
     static constexpr uint32_t kMaxChips = 256;
-    // Nodes a series keeps before the oldest go: 2 GB at most per chip, allocated as nodes arrive (32 B each). Under
-    // heavy DVFS a chip takes ~300 nodes a second, so a series holds two and a half days of it; the sync report
-    // counts any round that fell off the front.
+    // Nodes a series keeps before the oldest go: 1.5 GB at most per chip, allocated as nodes arrive (24 B each). A
+    // chip takes a node at least every millisecond (kEthPointUs) and more under DVFS, so a series holds ~18.6 hours
+    // of a steady clock; the sync report counts any round that fell off the front.
     static constexpr uint32_t kSeriesNodes = 1u << 26;
 
     explicit ClockMap(uint32_t series_nodes = kSeriesNodes);
@@ -296,16 +298,14 @@ public:
 
     // Appends a node past every earlier one (a node at the last node's key is dropped) and moves the cover to it.
     void append(uint32_t chip_id, SyncNode node);
-    // The newest node's tangent holds up to cover_ticks; the cover never moves back.
-    void extend(uint32_t chip_id, int64_t cover_ticks);
     // The series is complete for the capture: every later instant converts on the newest tangent.
     void finish(uint32_t chip_id);
     // Empties a chip's series for a new capture.
     void clear(uint32_t chip_id);
     void append_host(HostNode node);
 
-    // The root refclk tick of a chip's eth wall tick; 0 before the chip's first node.
-    double lookup_root(uint32_t chip_id, int64_t wall) const noexcept;
+    // The root refclk tick of a chip's eth wall tick, which may be fractional; 0 before the chip's first node.
+    double lookup_root(uint32_t chip_id, double wall) const noexcept;
     // Wall tick `wall` of chip `chip_id` on host_clock (tenths of a ns of the TSC): the chip series and the host
     // series composed into one line per segment pair, one multiply-add per record while a batch stays inside it. 0
     // when nothing places the tick yet.
@@ -328,64 +328,47 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-// Each chip's published placement series: a node per instant of its clock model, the instant's eth wall tick and
-// the root's refclk tick there through the chip's refclk and the solved links, the chord to the next instant as its
-// tangent. Nodes are frozen once published (consumers have placed records against them), so a publish only appends
-// beyond them; records are placed only up to the newest node, on the chord to it.
+// Each chip's published placement series: a node per instant of its clock model, at the instant's eth wall tick the
+// root's refclk tick through the chip's refclk and the solved links. A node's tangent is its line's k8 slope, or at a
+// raw instant the chord to the instant before it (for the first instant, the one after it). Nodes are frozen once
+// published (consumers have placed records against them), so a publish only appends beyond them; records are placed
+// only up to the newest node, on the chord to it.
 class SeriesPublisher {
 public:
-    // A placement node: at eth wall tick H the chip sits at root refclk tick `root`; r is the chip's own refclk it
-    // was placed at, tangent the rate on the root (root refclk ticks per wall tick) past it.
-    struct Node {
-        double H, root, r, tangent;
-    };
-    // One chip's series: its newest node and how many went before it (the map holds them; a vector of them here
-    // doubled into a 45 ms copy on the sync thread at two million nodes, and every drainer's ring overflowed
-    // meanwhile), and `last_r`, the refclk of the newest instant published.
-    struct Series {
-        Node last{};
-        size_t count = 0;
-        double last_r = -1.0;
-        size_t dropped = 0;  // nodes refused: behind the frozen series, or not a rate
-    };
-
     explicit SeriesPublisher(ClockMap& map) : map_(map) {}
-    void reset() { series_.clear(); }
+    void reset(size_t devices) { series_.assign(devices, Series{}); }
     // Publishes one chip's instants beyond its series' end, from its model and root transform as they stand; true
-    // when a node was added. A raw instant waits for the one after it (its tangent needs the next instant); `final`
-    // publishes the newest regardless.
-    bool publish(uint32_t dev, uint32_t chip, const LocalClockModel& fit, const RootXf& xf, bool final);
-    // A chip's series, null before its first publish.
-    const Series* series(uint32_t dev) const {
-        const auto it = series_.find(dev);
-        return it == series_.end() ? nullptr : &it->second;
-    }
-    bool has_nodes(uint32_t dev) const {
-        const Series* s = series(dev);
-        return s != nullptr && s->count != 0;
-    }
+    // when a node was added.
+    bool publish(uint32_t dev, uint32_t chip, const LocalClockModel& fit, const RootXf& xf);
+    size_t nodes(uint32_t dev) const { return series_[dev].count; }
 
 private:
-    void append_node(Series& s, uint32_t chip, const Node& n);
-    void push_node(Series& s, uint32_t chip, const Node& n);
+    // One chip's series: how many nodes it has (the map holds them; a vector of them here doubled into a 45 ms copy
+    // on the sync thread at two million nodes, and every drainer's ring overflowed meanwhile) and its model's first
+    // instant not yet published.
+    struct Series {
+        size_t count = 0;
+        size_t next = 0;
+    };
 
     ClockMap& map_;
-    std::map<uint32_t, Series> series_;  // device index -> series
+    std::vector<Series> series_;  // per device index
 };
 
-// Device<->device sync from the PP_CLOCK samples the idle-eth pushers carry, and the correction it publishes.
+// Device<->device sync from the sync records the idle-eth pushers carry, and the correction it publishes.
 //
 // LOCAL points feed one LocalClockModel per device. LINK samples feed the LinkSolver, refclk against refclk, so DVFS
 // on either wall clock cannot enter the link solve. From those the SeriesPublisher publishes, per chip, a placement
 // series in the ClockMap every record is placed through: the chip's eth wall tick onto the root chip's refclk,
 // which the host probe's series takes onto the host. Published incrementally for live sinks, finally at capture end.
-// Driven from the Service's sync thread, which decodes the eth pushers' streams and hands it every clock sample in
-// order; a capture is on_attach, the samples, on_capture_end. The unit test drives it the same way.
+// Driven from the Service's sync thread, which walks the eth pushers' streams and hands it every sync record in
+// order; a capture is on_attach, the records, on_capture_end. The unit test drives it the same way.
 class SyncEngine {
 public:
     explicit SyncEngine(uint32_t series_nodes = ClockMap::kSeriesNodes) : map_(series_nodes), series_(map_) {}
     void on_attach(const CaptureContext& ctx);
-    void on_clock(const ClockSample& s);
+    // One sync record (kSyncRecordWords words) from roster core `core` of device index `dev`.
+    void on_clock(uint32_t dev, uint32_t core, const uint32_t* rec);
     void on_capture_end(const CaptureContext& ctx);
     // The clock map the service places records with: this engine writes its chip series, the host probe its
     // host series.
@@ -397,7 +380,7 @@ private:
     // The fleet timeline's root: the chip the host probe reads, fixed for the capture.
     uint32_t root_dev() const { return ctx_.root_dev; }
     // Publishes one chip's series from its fit as it stands; true when the chip's cover moved.
-    bool publish_dev(uint32_t dev, bool final = false);
+    bool publish_dev(uint32_t dev);
     void publish_all();
     // The capture-end report: each chip's clock model, every link's solution, the loop closures; the sync error per
     // round and each chip's AICLK as plots.
@@ -445,13 +428,13 @@ private:
 
     ClockMap map_;
     CaptureContext ctx_;
-    std::map<uint32_t, LocalClockModel> local_;  // device index -> local fit
-    std::map<uint32_t, AnchorAudit> audit_;      // device index -> its model's audit
+    std::vector<LocalClockModel> local_;  // per device index
+    std::vector<AnchorAudit> audit_;      // per device index, its model's audit
     void log_audit() const;
     LinkSolver links_;
     SeriesPublisher series_;
     // The composed root transforms as of the newest accepted link solution.
-    std::map<uint32_t, RootXf> to_root_;
+    std::vector<RootXf> to_root_;
     uint64_t to_root_gen_ = ~0ull;
     std::unordered_set<std::string> plot_names_;  // Tracy keys a plot by its name's address, for the process
 };

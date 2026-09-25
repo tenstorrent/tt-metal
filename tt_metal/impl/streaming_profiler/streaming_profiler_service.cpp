@@ -633,17 +633,7 @@ private:
                 n,
                 frame_words_[i]);
             for (uint32_t r = 0; r < n; r++) {
-                const uint32_t* rec = f + kp::SPSC_SPAN_PREFIX_WORDS + r * kp::kSyncRecordWords;
-                service_.sync_->on_clock(ClockSample{
-                    .dev = dev,
-                    .core = core->second,
-                    .kind = (rec[kp::SYNC_META] >> 8) & 0xFFu,
-                    .round = rec[kp::SYNC_ROUND],
-                    .role = rec[kp::SYNC_META] & 0xFFu,
-                    .value = (static_cast<uint64_t>(rec[kp::SYNC_VALUE_HI]) << 32) | rec[kp::SYNC_VALUE_LO],
-                    .ts = (static_cast<uint64_t>(rec[kp::SYNC_WALL_HI]) << 32) | rec[kp::SYNC_WALL_LO],
-                    .ref = (static_cast<uint64_t>(rec[kp::SYNC_REF_HI]) << 32) | rec[kp::SYNC_REF_LO],
-                    .spins = rec[kp::SYNC_META] >> 16});
+                service_.sync_->on_clock(dev, core->second, f + kp::SPSC_SPAN_PREFIX_WORDS + r * kp::kSyncRecordWords);
             }
             p += size_t{frame_words_[i]} * 4;
         }
