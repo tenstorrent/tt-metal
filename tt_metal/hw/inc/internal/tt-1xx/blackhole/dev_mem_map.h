@@ -47,7 +47,7 @@
 // Taken from base fw executable. It places the stack here.
 #define MEM_ERISC_LOCAL_SIZE (8 * 1024)
 #define MEM_ERISC_BASE_FW_LOCAL_SIZE 0x700
-#define MEM_ERISC_KERNEL_SIZE (24 * 1024)
+#define MEM_ERISC_KERNEL_SIZE (32 * 1024)
 #define MEM_ERISC_RESERVED1 0
 #define MEM_ERISC_RESERVED1_SIZE 256
 
@@ -230,7 +230,7 @@
 #define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_2D  // Union size
 #define MEM_ERISC_MAILBOX_SIZE 12768
 // Must fit the largest erisc kernel config: the 2D-torus fabric_erisc_router needs 25680B.
-#define MEM_ERISC_KERNEL_CONFIG_SIZE (26 * 1024)
+#define MEM_ERISC_KERNEL_CONFIG_SIZE (32 * 1024)
 #define MEM_ERISC_BASE 0
 
 // From the top of L1. Common.

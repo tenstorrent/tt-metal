@@ -159,6 +159,8 @@ int main() {
             // Idle ERISC Kernels aren't given go-signals corresponding to empty launch messages. Always profile this
             // iteration, since it's guaranteed to be valid.
             DeviceZoneScopedMainN("ERISC-IDLE-FW");
+            // A PROFILER_VALIDATES_ZONE RISC publishes nothing until this call.
+            DeviceValidateProfiler(true);
             uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
             DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);

@@ -69,7 +69,10 @@ enum SpscControlBuffer {
     // the BroadcastRing. 8 slots so SPSC_CONTROL_END stays inside the 64-word vector.
     SPSC_STALL_COUNT_0 = 2 * PROFILER_SPSC_MAX_RISC + 2,
     SPSC_STALL_COUNT_MAX = 8,
-    SPSC_CONTROL_END = SPSC_STALL_COUNT_0 + SPSC_STALL_COUNT_MAX,  // first unused word; grow the layout here
+    // On an active eth core hosting a link end: the records written to its sync ring (streaming_profiler_sync.h,
+    // LinkSyncL1::ring). Here rather than in the link L1 so the drainer's per-sweep read of this vector carries it.
+    SPSC_LINK_SYNC_TAIL = SPSC_STALL_COUNT_0 + SPSC_STALL_COUNT_MAX,
+    SPSC_CONTROL_END = SPSC_LINK_SYNC_TAIL + 1,  // first unused word; grow the layout here
 };
 // Runtime-id slot of Tensix RISC `risc`: 21..23, then 29..30 past the tails.
 constexpr std::uint32_t spsc_state_prog_word(std::uint32_t risc) {
@@ -201,7 +204,7 @@ static_assert(
 // a real producer cost over 16 -- and producer overhead outranks the knee here by policy.
 static constexpr std::uint32_t SPSC_PUBLISH_BATCH_WORDS = 16;
 
-static constexpr std::uint32_t SPSC_TYPE_ZONE_L = 4;      // >3.2 s zone: id | end_lo | end_hi | dur_lo | dur_hi
+static constexpr std::uint32_t SPSC_TYPE_ZONE_L = 4;  // >3.2 s zone: id | end_lo | end_hi | dur_lo | dur_hi
 static constexpr std::uint32_t SPSC_TYPE_STICKY_TIMER = 9;
 static constexpr std::uint32_t SPSC_TIMER_HI_MASK = 0x7FFFFFFu;  // the 27-bit low field of word0
 
