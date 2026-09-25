@@ -237,6 +237,10 @@ public:
         bool map_to_noc = false,
         tt::umd::DeviceBufferAccess device_access = tt::umd::DeviceBufferAccess::READ_WRITE) const;
 
+    // Lets up to `count` threads pin host memory for the MMIO device `mmio_device_id` concurrently: each pinning
+    // thread gets its own device handle, and the driver serializes pins per handle. The count only grows.
+    void set_pin_handle_count(ChipId mmio_device_id, size_t count) const;
+
     int get_device_aiclk(const ChipId& chip_id) const;
 
     uint32_t get_arc_timer_heartbeat(const ChipId& chip_id) const;

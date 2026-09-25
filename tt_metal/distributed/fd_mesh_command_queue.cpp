@@ -61,6 +61,7 @@
 #include <tt_stl/overloaded.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <distributed/mesh_device_impl.hpp>
+#include "impl/tensor/pinned_upload.hpp"
 #include "dispatch/simple_trace_allocator.hpp"
 #if defined(TT_UMD_BUILD_SIMULATION)
 #include "buffers/simulator_direct_write.hpp"
@@ -795,6 +796,9 @@ void FDMeshCommandQueue::finish_nolock(ttsl::Span<const SubDeviceId> sub_device_
 
 void FDMeshCommandQueue::finish(ttsl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("FDMeshCommandQueue::finish");
+    // Uploads from device-immutable host memory return before their writes complete; finish also releases their pins
+    // and the storage they keep alive. Done before taking the API lock since it only waits on events.
+    pinned_upload::drain(*mesh_device_, id_);
     auto lock = lock_api_function_();
     this->finish_nolock(sub_device_ids);
 

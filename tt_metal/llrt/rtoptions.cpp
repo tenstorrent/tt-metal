@@ -79,6 +79,7 @@ enum class EnvVarID {
     // HOST MEMORY
     // ========================================
     TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES,  // Maximum cached pinned host memory
+    TT_METAL_PINNED_UPLOAD_THREADS,            // Threads pinning chunks of large tensor uploads
 
     // ========================================
     // DEBUG & TESTING
@@ -654,6 +655,34 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
                 TT_THROW("Invalid TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES: {}", value);
             } catch (const std::out_of_range&) {
                 TT_THROW("TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES value out of range: {}", value);
+            }
+            break;
+        }
+
+        // TT_METAL_PINNED_UPLOAD_THREADS
+        // Number of threads that pin host memory for large tensor uploads (Blackhole with IOMMU). Each upload is
+        // pinned in chunks by these threads, each through its own device handle, while earlier chunks transfer.
+        // 0 pins each shard whole on the uploading thread instead. Pinning is off entirely when
+        // TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES is 0.
+        // Default: 8
+        // Usage: export TT_METAL_PINNED_UPLOAD_THREADS=4
+        case EnvVarID::TT_METAL_PINNED_UPLOAD_THREADS: {
+            // Each thread pins through its own extra device file handle; keep the handle count modest.
+            constexpr unsigned long long max_threads = 64;
+            try {
+                std::string threads_value = trim_copy(value);
+                size_t parse_pos = 0;
+                unsigned long long parsed_threads = std::stoull(threads_value, &parse_pos, 10);
+                if (threads_value.empty() || threads_value.front() == '-' || parse_pos != threads_value.size() ||
+                    parsed_threads > max_threads) {
+                    TT_THROW(
+                        "TT_METAL_PINNED_UPLOAD_THREADS must be a thread count from 0 to {}: {}", max_threads, value);
+                }
+                this->pinned_upload_threads = static_cast<uint32_t>(parsed_threads);
+            } catch (const std::invalid_argument&) {
+                TT_THROW("TT_METAL_PINNED_UPLOAD_THREADS must be a thread count from 0 to {}: {}", max_threads, value);
+            } catch (const std::out_of_range&) {
+                TT_THROW("TT_METAL_PINNED_UPLOAD_THREADS must be a thread count from 0 to {}: {}", max_threads, value);
             }
             break;
         }

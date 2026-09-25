@@ -76,6 +76,7 @@
 #include "mesh_device_view_impl.hpp"
 #include "dummy_mesh_command_queue.hpp"
 #include "impl/context/metal_env_accessor.hpp"
+#include "impl/tensor/pinned_upload.hpp"
 
 namespace tt::tt_metal {
 class SystemMemoryManager;
@@ -1017,6 +1018,10 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     // Shut down the CQ first so dispatch_s sends TERMINATE to the profiler core with the
     // final buffer; the push kernel, receiver thread, and callbacks must still be alive.
     if (is_initialized()) {
+        // Uploads from device-immutable host memory may still hold pins whose writes are in flight; wait for them
+        // while the command queues can still complete, and unpin before the devices close.
+        pinned_upload::drain(*pimpl_wrapper);
+
         if (metal_env().get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
             ReadMeshDeviceProfilerResults(*pimpl_wrapper, ProfilerReadState::LAST_FD_READ);
         }
