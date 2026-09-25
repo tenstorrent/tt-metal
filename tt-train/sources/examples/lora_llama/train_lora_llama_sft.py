@@ -20,7 +20,7 @@ from ttml.common.config import load_config
 from ttml.common.data import CharTokenizer, load_shakespeare_text
 from ttml.common.utils import get_tt_metal_runtime_root, set_seed, summary
 from ttml.datasets import InMemoryDataloader, causal_lm_collate_fn
-from ttml.models import RunnerType, WeightTyingType
+from ttml.models import EmbeddingPlacement, RunnerType, WeightTyingType
 from ttml.models.llama import (
     Llama,
     LlamaConfig,
@@ -295,7 +295,12 @@ def main():
 
     if pretrained_path is not None:
         # The checkpoint decides the architecture; the YAML only contributes training-time knobs.
-        llama_cfg = LlamaConfig.from_hf(pretrained_path, use_tp=use_tp, **runtime_from_yaml(yaml_config or {}))
+        llama_cfg = LlamaConfig.from_hf(
+            pretrained_path,
+            use_tp=use_tp,
+            embedding_placement=EmbeddingPlacement.VocabParallel if use_tp else EmbeddingPlacement.Replicated,
+            **runtime_from_yaml(yaml_config or {}),
+        )
         if num_tokens > llama_cfg.vocab_size:
             raise ValueError(f"the tokenizer has {num_tokens} tokens but the checkpoint embeds {llama_cfg.vocab_size}")
     else:
