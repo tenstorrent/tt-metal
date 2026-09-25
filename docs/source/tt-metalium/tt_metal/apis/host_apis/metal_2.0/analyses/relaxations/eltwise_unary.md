@@ -70,7 +70,13 @@ The declaration is one line, applied to **both** `TensorParameter`s — input an
 
 - **`dynamic_tensor_shape`** is mandatory, not optional: the TILE-path key omits `padded_shape` entirely, so one cache entry legitimately serves many shapes. Without it the *first* cache hit at a different shape throws.
 - **`relax_logical_rank`** is required for the same reason — the TILE key omits rank along with the rest of the shape, so two tensors of different logical rank reach the same entry. Hashing `tensor_layout` does not change this: rank lives in `logical_shape`, on the other side of the split.
-- **Do not** set `match_page_size`, and note the reasoning differs from [binary_ng](eltwise_binary_ng.md)'s even though the answer matches. binary_ng declines it because its row-major kernels override the accessor's page size per dispatch. Unary would be *entitled* to set it — it hashes `padded_shape` on the `ROW_MAJOR` branch, so it does independently pin the last-dim width, which is exactly the condition binary_ng's rule names — but it is declined here on precedent grounds: **no shipped factory in the tree sets `match_page_size`**, and unary should not be the op that introduces an untravelled flag while also being the first shipped op to declare a relaxation at all (see below). Revisit if a second op needs it.
+- **Do not** set `match_page_size`, and note the reasoning differs from [binary_ng](eltwise_binary_ng.md)'s even though the answer matches. binary_ng declines it because its row-major kernels override the accessor's page size per dispatch. Unary's reason is that **the key does not pin the output slot's page size in full generality.**
+
+  Declining it is not free, and the cost should be stated rather than waved at precedent. Leaving it unset induces `dyn_page` (`program_spec.cpp`), which moves the accessor's `aligned_page_size` from a compile-time constant to a per-dispatch common runtime argument, re-read from `buffer->aligned_page_size()` on every dispatch (`program_run_args.cpp`). Legacy kept the page size compile-time and made only the shape a runtime arg, via `ArgConfig::RuntimeTensorShape`. So this is a real codegen difference, and it is the one behaviour change a before/after test comparison cannot see.
+
+  The input slot would be safe to pin: the key hashes `padded_shape` on the `ROW_MAJOR` branch, so the last-dim width cannot vary within an entry. The output slot does not close. Its page size is `round_up(output_logical[-1], output_alignment[-1]) * element_size` — `compute_page_size_bytes` runs `compute_physical_shape(logical_shape)`, so it is the alignment-padded width. Output alignment is pinned inside the hashed `output_spec.tensor_layout()`, and `compute_output_specs` forces the output's logical shape to equal the input's, so the chain closes only if the *input's logical* shape is pinned. The key pins the input's *padded* shape, and that map is not injective: with a non-empty input alignment two logical widths can round up to one padded width, share an entry, and resolve to two different output page sizes. Ordinary row-major tensors are unaffected, since `legacyShapeToAlignment` returns `Alignment{}` when logical equals padded and padded then pins logical — the exposure is an over-padded `ROW_MAJOR` input, where the dynamic page size tracks the change correctly and a pinned one would be a hard `TT_FATAL`.
+
+  To set it, hash the output's padded shape too, or assert that a `ROW_MAJOR` input is never over-padded. Either is a key change, so it is not this port's.
 - **Do not** set `match_padded_shape_only`. It is strictly weaker than `dynamic_tensor_shape` and pins nothing this op needs.
 
 ### The one code change that ships with the declaration
@@ -136,6 +142,22 @@ All five land on the same declaration; the regimes differ only in *why* it is sa
 ---
 
 ## 4. Not covered
+
+- **Framework hazard — on a sharded slot, `dynamic_tensor_shape` assembles the accessor from two different resolutions, and the guard between them is a rank comparison.** This is not specific to unary and the port does not introduce it; it applies to any op declaring the flag on a sharded tensor. Unary is simply the first shipped factory to declare a relaxation at all, and so the first op exposed to it. **Raise it with the framework owners rather than filing it as a coverage gap.**
+
+  The static half — shard shape in pages, bank count, bank coordinates — is resolved once from the **spec**, at `ProgramSpec` build time (`program_spec.cpp`, `spec.compute_buffer_sharding_args()`). The dynamic half — the tensor's shape in pages — is emitted per dispatch from the **buffer** (`program_run_args.cpp`, `buffer->buffer_distribution_spec()->tensor_shape_in_pages()`). For an ordinarily allocated tensor the two agree and nothing is observable, because `tensor_impl.cpp` builds the buffer from the spec's own resolution. For a `view` / `reshape` they can diverge, since the view keeps its parent buffer's `sharding_args` under a freshly computed spec.
+
+  The only check between them compares ranks:
+
+  ```cpp
+  TT_FATAL(
+      tensor_shape.rank() == handle.num_runtime_field_crta_words,
+      "... sharded distribution rank ({}) differs from the rank ({}) reserved at ProgramSpec resolution time ...");
+  ```
+
+  Equal rank with different shape-in-pages values passes, and is silently mis-addressed. The relaxations header advertises the opposite — *"Such an argument is REJECTED rather than silently mis-addressed"* — but the rejection it means is `tensorspecs_match_with_relaxation` comparing `relaxation_fields::shard_distribution_of`, which reads the **spec**. That does not cover a spec/buffer mix.
+
+  Note this needs only one dispatch. On a cache **miss** the `ProgramSpec` is built from the dispatched tensor's own spec, so the spec-side match is trivially satisfied and the buffer-side words are the only thing that could disagree — there is nothing left to catch it. A hash term cannot close it either: the key is consulted before any of this, and both candidate sources are reachable from the op, which is precisely the ambiguity the §2 swap had to resolve.
 
 - **Non-`32x32` tile support, as distinct from `Tile` in the key. This is a family-wide bug, and it does not gate this port.** `create_descriptor` sizes its buffers with `tile_size(cb_data_format)`, which takes only a `DataFormat` and therefore assumes `32x32`, while `enumerate_core_rt_args` reads the real `tensor_spec().tile()` for the work split. The two disagree, and nothing in `eltwise/` guards the tile. Confirmed on silicon: `ttnn.relu` on a `16x32`-tile `bfloat16` tensor returns wrong data **in isolation**, with a clean `from_torch`/`to_torch` round-trip at the same tile — an op bug, not a caching artifact.
 
