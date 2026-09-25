@@ -940,10 +940,21 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         compute_kernel_defines["ISCLOSE_ATOL_RT_ARG_IDX"] = "4";
     }
 
+    // Complete backward markers are cache keys, never unary preprocessing.
+    const auto tt_poly_complete_init = [](unary::UnaryOpType type) -> const char* {
+        switch (type) {
+            case unary::UnaryOpType::TT_POLY_BACKWARD_ERF_BW: return "erf_bw_tt_poly_bf16_tile_init();";
+            default: return nullptr;
+        }
+    };
     {
         ttsl::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations = operation_attributes.lhs_activations;
         ttsl::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations = operation_attributes.rhs_activations;
         ttsl::SmallVector<unary::EltwiseUnaryWithParam> post_activations = operation_attributes.post_activations;
+        if (lhs_activations.size() == 1 && !lhs_activations[0].has_parameter() &&
+            tt_poly_complete_init(lhs_activations[0].type()) != nullptr) {
+            lhs_activations.clear();
+        }
 
         // Under a left-hand scalar the kernel evaluates op(c_1, c_0), so the mathematical
         // operands are swapped relative to the physical CBs. The caller's per-operand
@@ -1244,9 +1255,67 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     uint32_t src0interim_cb_index = tt::CBIndex::c_3;
     uint32_t src1interim_cb_index = tt::CBIndex::c_4;
 
+    // Selected constant-factor gradient transport; the original kernel remains unchanged.
+    const auto tt_poly_gradient_entry = [](unary::UnaryOpType type) -> const char* {
+        switch (type) {
+            case unary::UnaryOpType::TT_POLY_BACKWARD_ERF_BW: return "erf_bw_tt_poly_bf16_gradient";
+            default: return nullptr;
+        }
+    };
+    const auto tt_poly_has_factor = [&](const auto& chain) {
+        for (const auto& activation : chain) {
+            if (tt_poly_gradient_entry(activation.type()) != nullptr) {
+                return true;
+            }
+        }
+        return false;
+    };
+    const bool tt_poly_gradient_context = tt_poly_has_factor(operation_attributes.lhs_activations) ||
+                                          tt_poly_has_factor(operation_attributes.rhs_activations) ||
+                                          tt_poly_has_factor(operation_attributes.post_activations);
+    if (tt_poly_gradient_context) {
+#if defined(TT_POLY_LLK_DISABLE)
+        TT_FATAL(false, "Disabled selected gradient requires the original public backward composition");
+#else
+        TT_FATAL(
+            is_sfpu_op && !is_quant_op && !is_where_op && op_type == BinaryOpType::MUL && b.has_value() &&
+                !operation_attributes.scalar.has_value() && a.device() == b->device() && a.device() == c.device() &&
+                (a.device()->arch() == tt::ARCH::BLACKHOLE || a.device()->arch() == tt::ARCH::WORMHOLE_B0) &&
+                a_dtype == DataType::BFLOAT16 && b_dtype == DataType::BFLOAT16 && c_dtype == DataType::BFLOAT16 &&
+                a.layout() == Layout::TILE && b->layout() == Layout::TILE && c.layout() == Layout::TILE &&
+                !has_sharding && a.logical_shape() == b->logical_shape() && a.logical_shape() == c.logical_shape() &&
+                a.padded_shape() == b->padded_shape() && a.padded_shape() == c.padded_shape() &&
+                operation_attributes.subtile_broadcast_type == SubtileBroadcastType::NONE &&
+                operation_attributes.lhs_activations.size() == 1 &&
+                !operation_attributes.lhs_activations[0].has_parameter() &&
+                tt_poly_gradient_entry(operation_attributes.lhs_activations[0].type()) != nullptr &&
+                operation_attributes.rhs_activations.empty() && operation_attributes.post_activations.empty() &&
+                !op_config.process_lhs.has_value() && !op_config.process_rhs.has_value() &&
+                !op_config.postprocess.has_value() && !operation_attributes.compute_kernel_config.has_value() &&
+                num_tiles_per_cycle == 1 && !fp32_dest_acc_en && !compute_kernel_defines.contains("PACK_RELU"),
+            "Selected gradient requires one private LHS factor, BF16 MUL, equal interleaved tiles and no extra chains");
+        compute_kernel_defines["BINARY_SFPU_OP"] =
+            tt_poly_gradient_entry(operation_attributes.lhs_activations[0].type());
+        compute_kernel_defines["TT_POLY_BINARY_GRADIENT_CONTEXT"] = "1";
+        if (const auto* const init = tt_poly_complete_init(operation_attributes.lhs_activations[0].type())) {
+            TT_FATAL(
+                compute_kernel_defines["PROCESS_LHS_ACTIVATIONS(i)"].empty() &&
+                    compute_kernel_defines["PROCESS_RHS_ACTIVATIONS(i)"].empty() &&
+                    compute_kernel_defines["PROCESS_POST_ACTIVATIONS(i)"].empty(),
+                "Complete backward callback requires raw operands without preprocessing");
+            compute_kernel_defines["BINARY_SFPU_INIT"] = init;
+            switch (operation_attributes.lhs_activations[0].type()) {
+                case unary::UnaryOpType::TT_POLY_BACKWARD_ERF_BW:
+                    compute_kernel_defines["TT_POLY_BACKWARD_ERF_BW_INCLUDE"] = "1";
+                    break;
+                default: break;
+            }
+        }
+#endif
+    }
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
 
-    if (is_sfpu_op) {
+    if (is_sfpu_op && !tt_poly_gradient_context) {
         if (op_type != BinaryOpType::POWER) {
             unpack_to_dest_mode[src0_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
             unpack_to_dest_mode[src1_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
