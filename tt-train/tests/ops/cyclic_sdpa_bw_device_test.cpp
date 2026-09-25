@@ -3675,6 +3675,54 @@ TEST(CyclicSdpaBwTimingTest, DISABLED_CompareBackwardWithTtTrain) {
     }
 }
 
+// One backward call of one side, for the NoC event trace: with
+// TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1 every read and write lands in a JSON
+// trace per program, and summing the bytes whose far end is a DRAM core gives
+// the backward's DRAM traffic, measured. TTML_DRAM_SHAPE="heads:kv:N:d:Bt"
+// (default 1:1:7040:64:1), TTML_DRAM_SIDE=sdpa_bw | cyclic. The forward runs
+// first to produce the inputs; its programs are traced too and are told apart
+// by name. The device is closed explicitly, since the trace is written then.
+TEST(CyclicSdpaBwProfileTest, DISABLED_MeasureDramTraffic) {
+    using namespace tt::tt_metal;
+    auto* device = &ttml::autograd::ctx().get_device();
+    uint32_t heads = 1, kv_heads = 1, N = 7040, d = 64, Bt = 1;
+    if (const char* e = std::getenv("TTML_DRAM_SHAPE"); e != nullptr && *e != '\0') {
+        std::sscanf(e, "%u:%u:%u:%u:%u", &heads, &kv_heads, &N, &d, &Bt);
+    }
+    const char* side_env = std::getenv("TTML_DRAM_SIDE");
+    const std::string side = side_env != nullptr ? side_env : "cyclic";
+    xt::xarray<float> Q = xt::zeros<float>({1u, heads, N, d});
+    xt::xarray<float> dO = xt::zeros<float>({1u, heads, N, d});
+    xt::xarray<float> K = xt::zeros<float>({1u, kv_heads, N, d});
+    xt::xarray<float> V = xt::zeros<float>({1u, kv_heads, N, d});
+    for (uint32_t h = 0; h < heads; ++h) {
+        xt::view(Q, 0, h, xt::all(), xt::all()) = random_bf16_matrix(N, d, 3000u + h);
+        xt::view(dO, 0, h, xt::all(), xt::all()) = random_bf16_matrix(N, d, 6000u + h);
+    }
+    for (uint32_t g = 0; g < kv_heads; ++g) {
+        xt::view(K, 0, g, xt::all(), xt::all()) = random_bf16_matrix(N, d, 4000u + g);
+        xt::view(V, 0, g, xt::all(), xt::all()) = random_bf16_matrix(N, d, 5000u + g);
+    }
+    const auto q = ttml::core::from_xtensor(Q, device);
+    const auto k = ttml::core::from_xtensor(K, device);
+    const auto v = ttml::core::from_xtensor(V, device);
+    const auto grad_output = ttml::core::from_xtensor(dO, device);
+    if (side == "sdpa_bw") {
+        const auto fw = ttml::metal::sdpa_fw(
+            q, k, v, ttml::metal::AttentionMaskType::Causal, std::nullopt, 0.0F, /*return_intermediates=*/true);
+        distributed::Finish(device->mesh_command_queue());
+        auto out = ttml::metal::sdpa_bw(
+            grad_output, fw[0].value(), q, k, v, fw[1].value(), ttml::metal::AttentionMaskType::Causal, std::nullopt,
+            0.0F);
+    } else {
+        const auto [o, lse] = ttml::metal::cyclic_sdpa_fw(q, k, v, Bt);
+        distributed::Finish(device->mesh_command_queue());
+        auto out = ttml::metal::cyclic_sdpa_bw_from_forward(q, k, v, grad_output, o, lse, Bt);
+    }
+    distributed::Finish(device->mesh_command_queue());
+    ttml::autograd::ctx().close_device();
+}
+
 // One profiled launch of the cyclic forward, then an explicit device close
 // (the profiler writes its CSV on a real close only; see the backward's
 // profile test). Shape from TTML_CYCLIC_FW_TIME as in the timing test

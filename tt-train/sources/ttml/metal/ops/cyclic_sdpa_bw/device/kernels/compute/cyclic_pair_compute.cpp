@@ -300,6 +300,14 @@ void compute_grad_scores_with_transposes(bool want_probe, uint32_t a = 0, uint32
 
 }  // namespace
 
+// Under NoC event tracing the zones below are noise, and at a whole launch
+// they overflow the per-core marker buffer, which breaks the trace's zone
+// pairing; compiled out there, unchanged in an ordinary profiling build.
+#if defined(PROFILE_NOC_EVENTS)
+#undef DeviceZoneScopedN
+#define DeviceZoneScopedN(name)
+#endif
+
 void kernel_main() {
     compute_kernel_hw_startup(cb_query, cb_key, cb_attention_weights);
     copy_init(cb_query);

@@ -681,6 +681,14 @@ void exp_scaled(const uint32_t idst) {
 
 }  // namespace
 
+// Under NoC event tracing the zones below are noise, and at a whole launch
+// they overflow the per-core marker buffer, which breaks the trace's zone
+// pairing; compiled out there, unchanged in an ordinary profiling build.
+#if defined(PROFILE_NOC_EVENTS)
+#undef DeviceZoneScopedN
+#define DeviceZoneScopedN(name)
+#endif
+
 void kernel_main() {
     const uint32_t my_core = get_arg_val<uint32_t>(0);
     const uint32_t slice_count = get_arg_val<uint32_t>(1);
