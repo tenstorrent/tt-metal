@@ -103,7 +103,7 @@ ALWI void sum_reduce_scalar_tile(uint32_t icb, uint32_t ocb, uint32_t num_tiles,
         0.0f));
 
     // Step 5: Configure packer for scalar reduction
-    PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_SCALAR, PackMode::Default>(ocb)));
+    PACK((llk_pack_reduce_mask_config<PoolType::SUM, ReduceDim::REDUCE_SCALAR, PackMode::Default>(ocb)));
 
     // Step 6: Column-reduce each tile, accumulating into dest[0]
     MATH((llk_math_mul_reduce_column<MATH_FIDELITY>(0, icb)));

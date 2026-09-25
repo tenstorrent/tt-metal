@@ -63,7 +63,7 @@ template <std::uint32_t block_ct_dim, bool respect_trigger = false, bool is_fp32
 ALWI void reduce_block_max_row_init(const ckernel::TensorShape& tensor_shape, std::uint32_t ocb) {
     UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, is_fp32_dest_acc_en, respect_trigger>(tensor_shape)));
     MATH((llk_math_reduce_block_max_row_init<block_ct_dim, is_fp32_dest_acc_en>(tensor_shape)));
-    PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
+    PACK((llk_pack_reduce_mask_config<PoolType::MAX, ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
 }
 
 // num_faces convenience overload: constructs a TensorShape from a flat face count (2 or 4).
@@ -170,7 +170,7 @@ template <std::uint32_t block_ct_dim, bool respect_trigger = false, bool is_fp32
 ALWI void reduce_block_max_row_reinit_short(const ckernel::TensorShape& tensor_shape, std::uint32_t ocb) {
     UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, is_fp32_dest_acc_en, respect_trigger>(tensor_shape)));
     MATH((llk_math_reduce_block_max_row_reinit_with_mop<block_ct_dim>(tensor_shape)));
-    PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
+    PACK((llk_pack_reduce_mask_config<PoolType::MAX, ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
 }
 
 // num_faces convenience overload: constructs a TensorShape from a flat face count (2 or 4).
@@ -190,7 +190,7 @@ template <std::uint32_t block_ct_dim, bool respect_trigger = false, bool is_fp32
 ALWI void reduce_block_max_row_reinit_minimal(const ckernel::TensorShape& tensor_shape, std::uint32_t ocb) {
     UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, is_fp32_dest_acc_en, respect_trigger>(tensor_shape)));
     MATH((llk_math_reduce_block_max_row_reinit_minimal()));
-    PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
+    PACK((llk_pack_reduce_mask_config<PoolType::MAX, ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
 }
 
 // num_faces convenience overload: constructs a TensorShape from a flat face count (2 or 4).
@@ -214,7 +214,7 @@ ALWI void reduce_block_max_row_reinit_minimal_runtime(
     UNPACK((llk_unpack_AB_reduce_block_max_row_init_runtime<is_fp32_dest_acc_en>(
         block_ct_dim, respect_trigger, tensor_shape)));
     MATH((llk_math_reduce_block_max_row_reinit_minimal_runtime()));
-    PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
+    PACK((llk_pack_reduce_mask_config<PoolType::MAX, ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
 }
 
 // num_faces convenience overload: constructs a TensorShape from a flat face count (2 or 4).
@@ -237,7 +237,7 @@ ALWI void reduce_block_max_row_reinit_short_runtime(
     UNPACK((llk_unpack_AB_reduce_block_max_row_init_runtime<is_fp32_dest_acc_en>(
         block_ct_dim, respect_trigger, tensor_shape)));
     MATH((llk_math_reduce_block_max_row_reinit_short_runtime<is_fp32_dest_acc_en>(block_ct_dim, tensor_shape)));
-    PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
+    PACK((llk_pack_reduce_mask_config<PoolType::MAX, ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
 }
 
 // num_faces convenience overload: constructs a TensorShape from a flat face count (2 or 4).
@@ -320,7 +320,7 @@ ALWI void reduce_block_max_row_init_runtime(
         (llk_unpack_AB_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, respect_trigger, tensor_shape)));
 #endif
     MATH((llk_math_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, tensor_shape)));
-    PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
+    PACK((llk_pack_reduce_mask_config<PoolType::MAX, ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
 }
 
 // num_faces convenience overload: constructs a TensorShape from a flat face count (2 or 4).

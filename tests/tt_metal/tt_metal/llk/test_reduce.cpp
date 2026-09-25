@@ -226,6 +226,9 @@ void validate_reduce_result(
 
     int argfail = -1;
     auto comparison_function = [&](float a, float b) {
+        if (std::isinf(a) || std::isinf(b)) {
+            return a == b;
+        }
         float maxabs = fmaxf(fabsf(a), fabsf(b));
         float absdiff = fabsf(a - b);
         auto result = (absdiff <= test_config.atol) || (absdiff <= test_config.rtol * maxabs);
@@ -926,13 +929,16 @@ void expect_reduce_matches_golden(
         TensorLayoutType::TILED_NFACES,
         TensorLayoutType::LIN_ROW_MAJOR,
         PhysicalSize{32, 32});
-    auto gold_lin = golden_fn(src_linear, shape, /*scaler=*/1.0f, red_type, /*zeropad=*/true);
+    auto gold_lin = golden_fn(src_linear, shape, /*scaler=*/1.0f, red_type, /*pad=*/true);
     auto gold_tiled = u32_from_u16_vector(convert_layout<std::uint16_t>(
         gold_lin, shape, TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_NFACES, PhysicalSize{32, 32}));
 
     EXPECT_EQ(gold_tiled.size(), result.size());
     int argfail = -1;
     auto cmp = [](float a, float b) {
+        if (std::isinf(a) || std::isinf(b)) {
+            return a == b;
+        }
         float maxabs = fmaxf(fabsf(a), fabsf(b));
         float absdiff = fabsf(a - b);
         return (absdiff <= 0.1f) || (absdiff <= 0.1f * maxabs);

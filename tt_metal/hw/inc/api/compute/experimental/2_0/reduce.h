@@ -25,14 +25,14 @@ namespace experimental {
 
 // Id-free (2.0) reduce (data + scaler -> reduced). Takes one LLKOperand per input (data, scaler) and one for
 // the output. Format-free at the op level (formats set at compute_kernel_hw_startup); every LLK core here
-// consumes only geometry (data tile shape / output face_r_dim) + the two runtime input addresses. Geometry
+// consumes only geometry (data and output tile shapes) + the two runtime input addresses. Geometry
 // (for MATH + unpack init) comes from the DATA operand. Packing is separate (experimental::pack_tile); the
-// packer edge mask is programmed here by reduce_init.
+// packer edge mask and fill mode are programmed here by reduce_init.
 
 // clang-format off
 /**
  * Reduce init: programs UNPACK (AB reduce), MATH, and the PACK edge-mask. compute_kernel_hw_startup(data,
- * scaler, out) must already have programmed the formats. Uses only DATA geometry and OUT's face_r_dim;
+ * scaler, out) must already have programmed the formats. Uses DATA and OUT geometry;
  * the scaler operand contributes nothing at init (it's passed to reduce_tile).
  *
  * | Template | reduce_type | SUM / AVG / MAX                                | PoolType  | | True |
@@ -55,7 +55,8 @@ ALWI void reduce_init(LLKOperand<DF, DS> /*data*/, LLKOperand<OF, OS> /*out*/) {
     static_assert(is_legal_tile_shape(OS), "reduce_init: illegal output tile shape.");
     UNPACK((llk_unpack_AB_reduce_init_impl<reduce_type, reduce_dim>(DS)));
     MATH((llk_math_reduce_init_impl<reduce_type, reduce_dim, is_fp32_dest_acc_en, MATH_FIDELITY>(DS)));
-    PACK((llk_pack_reduce_mask_config_impl<reduce_dim, PackMode::Default>(OS.face_r_dim)));
+    PACK((llk_pack_reduce_mask_config_impl<reduce_type, reduce_dim, PackMode::Default>(
+        static_cast<std::uint32_t>(OF), OS)));
 }
 
 // clang-format off

@@ -234,7 +234,7 @@ ALWI void sampling_reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb, 
     UNPACK((llk_unpack_AB_reduce_init<reduce_dim>(icb, icb_scaler)));
     MATH((llk_math_reduce_init<reduce_type, reduce_dim, math_fidelity>(icb)));
 #endif
-    PACK((llk_pack_reduce_mask_config<reduce_dim, ckernel::PackMode::Default>(ocb)));
+    PACK((llk_pack_reduce_mask_config<reduce_type, reduce_dim, ckernel::PackMode::Default>(ocb)));
 }
 
 template <PoolType reduce_type, ReduceDim reduce_dim, MathFidelity math_fidelity>
