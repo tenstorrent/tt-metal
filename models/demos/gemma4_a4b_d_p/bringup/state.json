@@ -59,7 +59,26 @@
  },
  "G.s56320": {
   "attempts": 0,
-  "status": "TODO"
+  "duration_s": 1751.5,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-25T22:54:23"
+   }
+  ],
+  "last_run": "2026-09-25T22:54:23",
+  "log": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/logs/G.s56320.log",
+  "metrics": {
+   "cpu_seconds": 1738.1,
+   "golden_chunks": 11,
+   "golden_hash_ok": 1,
+   "golden_layers": 30,
+   "text_top5_acc_last_chunk": 0.6538386344909668
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-25T22:25:11",
+  "status": "PASS"
  },
  "PL.0": {
   "attempts": 0,
