@@ -249,7 +249,7 @@ std::optional<Blocking> block_1d(
 // Reuse (batched B): per_core_N = Nt, and each core block is a whole batch matrix (per_core_M = Mt) unless
 // the batch alone leaves cores idle. Then each matrix is split into row slices, as many as still give every
 // core at most one block: the reuse factory leaves output unwritten when a core gets several blocks that are
-// partial batch matrices. in0_block_w is the largest divisor of Kt up to MAX_IN0_BLOCK_W that fits L1.
+// partial batch matrices (#57954). in0_block_w is the largest divisor of Kt up to MAX_IN0_BLOCK_W that fits L1.
 std::optional<Blocking> block_reuse(const Problem& p, const HardwareDesc& hw) {
     const uint32_t cores = hw.grid.x * hw.grid.y;
     std::optional<Blocking> best;
