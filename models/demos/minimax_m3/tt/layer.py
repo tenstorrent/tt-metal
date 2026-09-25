@@ -205,6 +205,7 @@ class DecoderLayer:
         cached_len=0,
         indexed_rope=False,
         actual_isl=None,
+        segments=None,
     ):
         seqlen = hidden_states.shape[-2]
         if seqlen > 32 * 1024:
@@ -230,6 +231,7 @@ class DecoderLayer:
                     batch_size=batch_size,
                     cached_len=cached_len,
                     indexed_rope=indexed_rope,
+                    segments=segments,
                 )
             hidden_states_post_norm.deallocate(True)
 

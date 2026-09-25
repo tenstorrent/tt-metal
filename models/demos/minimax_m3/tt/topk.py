@@ -155,7 +155,8 @@ class TopKRouter:
 
     def build_padding_config(self, actual_isl):
         """Per-device ``[num_real_tokens, pad_side]`` for a chunk with ``actual_isl`` real tokens, or
-        None when the chunk is full (nothing to mark).
+        None when the chunk is full (nothing to mark). A tuple ``actual_isl`` gives each SP chip's count of
+        leading real rows directly (packed forwards).
 
         The SAME tensor must go to the gate topk AND the dispatch op — see
         route_tokens_to_experts_fused. Owned here and memoized per real-token count, so a chunked
@@ -172,12 +173,20 @@ class TopKRouter:
         tokens_per_chip = self.num_tokens
         sp_axis = self.mesh_config.sp_axis if self.mesh_config is not None else 0
         sp_factor = self.mesh_device.shape[sp_axis] if isinstance(self.mesh_device, ttnn.MeshDevice) else 1
-        if actual_isl is None or not tokens_per_chip or actual_isl >= sp_factor * tokens_per_chip:
+        if isinstance(actual_isl, tuple):
+            # Packed forward: the caller's per-chip count of leading real rows (see prefill_segments).
+            assert len(actual_isl) == sp_factor, f"per-chip real rows {actual_isl} for {sp_factor} SP chips"
+            if all(r >= tokens_per_chip for r in actual_isl):
+                return None
+        elif actual_isl is None or not tokens_per_chip or actual_isl >= sp_factor * tokens_per_chip:
             return None  # full chunk: every row is real
         if actual_isl not in self._padding_config_cache:
             rows = torch.zeros((sp_factor, 2), dtype=torch.int32)
             for c in range(sp_factor):
-                rows[c, 0] = max(0, min(tokens_per_chip, actual_isl - c * tokens_per_chip))
+                if isinstance(actual_isl, tuple):
+                    rows[c, 0] = min(tokens_per_chip, actual_isl[c])
+                else:
+                    rows[c, 0] = max(0, min(tokens_per_chip, actual_isl - c * tokens_per_chip))
                 rows[c, 1] = 0  # right padding
             self._padding_config_cache[actual_isl] = ttnn.from_torch(
                 rows,

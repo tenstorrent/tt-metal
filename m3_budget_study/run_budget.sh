@@ -6,7 +6,7 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export TT_METAL_HOME="${TT_METAL_HOME:-$(cd "$HERE/.." && pwd)}"
 RES="$HERE/results"
-: "${RUN_ID:?}" "${BUDGET_LAYER_IDS:?}"
+: "${RUN_ID:?}" "${BUDGET_LAYER_IDS:?}"; [ -n "${HARNESS:-}" ] && export HARNESS
 export HF_MODEL="${HF_MODEL:-/mnt/weka/model-weights/llm/minimax/MiniMax-M3}"
 export TT_CACHE_PATH="${TT_CACHE_PATH:-/mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill}"
 export BUDGET_TOKENS="${BUDGET_TOKENS:-$TT_CACHE_PATH/golden/longbook_qa_eng_prefill_56320_nopad/metadata.json}"
@@ -20,7 +20,7 @@ ulimit -Su "$(ulimit -Hu)" 2>/dev/null
 { echo "run_id=$RUN_ID"; echo "git_sha=$(git rev-parse HEAD)"; echo "dirty=$(git status --porcelain -uno | wc -l)"
   echo "date=$(date -Is)"; env | grep -E '^(BUDGET_|M3_|TT_|EXPERT_|HF_|EXP=|LAYER_SET=)' | sort; } > "$ENVF"
 tt-smi -glx_reset > "$RES/logs/$RUN_ID.reset" 2>&1 || { echo "STATUS=ERROR reset failed" | tee -a "$LOG"; exit 1; }
-python3 -u models/demos/minimax_m3/tests/perf/budget_sweep.py > "$LOG" 2>&1 &
+python3 -u models/demos/minimax_m3/tests/perf/${HARNESS:-budget_sweep.py} > "$LOG" 2>&1 &
 PID=$!; T0=$(date +%s); STATUS=""
 while kill -0 $PID 2>/dev/null; do
   sleep 10; now=$(date +%s); age=$(( now - $(stat -c %Y "$LOG") ))
