@@ -369,11 +369,13 @@ set(HW_JIT_API_HEADERS
     toolchain/erisc-b0-kernel.ld
     ckernels/common/llk_sfpu/ckernel_sfpu_acosh_bf16.h
     ckernels/common/llk_sfpu/ckernel_sfpu_expm1_bf16.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_relu_bf16.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_abs_exp_correction.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_abs_exp_correction_core.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_asymptotic_exp.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_asymptotic_factor.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_cascade_signed_abs.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_clamped_affine.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_config_tile.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_core_bridge_exponent.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_core_bridge_rational.h
