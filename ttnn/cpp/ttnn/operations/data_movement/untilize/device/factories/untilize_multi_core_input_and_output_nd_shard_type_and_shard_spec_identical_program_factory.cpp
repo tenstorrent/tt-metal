@@ -25,10 +25,8 @@ ProgramDescriptor UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdentica
     const Tensor& output = tensor_return_value;
     const auto& fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
 
-    tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    uint32_t input_single_tile_size = tt::tt_metal::tile_size(a.dtype());
+    uint32_t output_single_tile_size = tt::tt_metal::tile_size(output.dtype());
 
     Buffer* src0_buffer = a.buffer();
     Buffer* dst_buffer = output.buffer();
@@ -75,7 +73,7 @@ ProgramDescriptor UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdentica
         cb_src0.core_ranges = grid;
         cb_src0.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(src0_cb_index),
-            .data_format = input_cb_data_format,
+            .data_format = a.dtype(),
             .page_size = input_single_tile_size,
         });
         cb_src0.buffer = src0_buffer;
@@ -89,7 +87,7 @@ ProgramDescriptor UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdentica
         cb_output.core_ranges = grid;
         cb_output.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(output_cb_index),
-            .data_format = output_cb_data_format,
+            .data_format = output.dtype(),
             .page_size = output_single_tile_size,
         });
         cb_output.buffer = dst_buffer;

@@ -21,10 +21,8 @@ ProgramDescriptor ExampleDeviceOperation::MultiCore::create_descriptor(
     auto* src_buffer = input_tensor.buffer();
     auto* dst_buffer = output_tensor.buffer();
 
-    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t single_tile_size = tile_size(cb_data_format);
-    tt::DataFormat cb_data_format_output = datatype_to_dataformat_converter(output_tensor.dtype());
-    uint32_t single_tile_size_output = tt::tile_size(cb_data_format_output);
+    uint32_t single_tile_size = tt::tt_metal::tile_size(input_tensor.dtype());
+    uint32_t single_tile_size_output = tt::tt_metal::tile_size(output_tensor.dtype());
 
     uint32_t num_tiles = input_tensor.physical_volume() / constants::TILE_HW;
 
@@ -43,7 +41,7 @@ ProgramDescriptor ExampleDeviceOperation::MultiCore::create_descriptor(
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = src0_cb_index,
-            .data_format = cb_data_format,
+            .data_format = input_tensor.dtype(),
             .page_size = single_tile_size,
         }}},
     });
@@ -55,7 +53,7 @@ ProgramDescriptor ExampleDeviceOperation::MultiCore::create_descriptor(
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = output_cb_index,
-            .data_format = cb_data_format_output,
+            .data_format = output_tensor.dtype(),
             .page_size = single_tile_size_output,
         }}},
     });

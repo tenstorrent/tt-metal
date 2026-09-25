@@ -24,7 +24,6 @@ tt::tt_metal::ProgramDescriptor ConcatS2IProgramFactory::create_descriptor(
 
     const uint32_t num_output_rows = output.padded_shape()[-1];
     const uint32_t num_input_tensors = input_tensors.size();
-    const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(output.dtype());
     const CoreRangeSet all_cores = input_tensors[0].shard_spec().value().grid;
 
     const uint32_t input_unit_size = input_tensors[0].shard_spec().value().shape[1] * input_tensors[0].element_size();
@@ -39,7 +38,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2IProgramFactory::create_descriptor(
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(input_id),
-                .data_format = cb_data_format,
+                .data_format = output.dtype(),
                 .page_size = input_page_size,
             }}},
             .buffer = input_tensors[input_id].buffer(),

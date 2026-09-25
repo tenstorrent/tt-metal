@@ -73,7 +73,6 @@ ProgramDescriptor MoveOverlapProgramFactory::create_descriptor(
     const Tensor& input = tensor_args.input_tensor;
     const Tensor& output = tensor_return_value;
 
-    const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
     const bool tilized = input.layout() == Layout::TILE;
     const uint32_t page_size = input.buffer()->page_size();
 
@@ -102,7 +101,7 @@ ProgramDescriptor MoveOverlapProgramFactory::create_descriptor(
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(cb_index),
-            .data_format = cb_data_format,
+            .data_format = input.dtype(),
             .page_size = aligned_page_size,
         }}},
     });

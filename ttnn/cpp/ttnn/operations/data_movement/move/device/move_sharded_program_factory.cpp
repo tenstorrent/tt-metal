@@ -27,7 +27,6 @@ ProgramDescriptor MoveShardedProgramFactory::create_descriptor(
     const Tensor& input = tensor_args.input_tensor;
     Tensor& output = tensor_return_value;
 
-    const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
     const auto shard_spec = input.shard_spec().value();
     const auto shard_shape = shard_spec.shape;
     const auto shard_grid = shard_spec.grid;
@@ -71,7 +70,7 @@ ProgramDescriptor MoveShardedProgramFactory::create_descriptor(
         .core_ranges = shard_grid,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(src_cb_sharded),
-            .data_format = cb_data_format,
+            .data_format = input.dtype(),
             .page_size = page_size_bytes,
         }}},
         .buffer = src_buffer,
@@ -83,7 +82,7 @@ ProgramDescriptor MoveShardedProgramFactory::create_descriptor(
         .core_ranges = shard_grid,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(dst_cb_sharded),
-            .data_format = cb_data_format,
+            .data_format = input.dtype(),
             .page_size = page_size_bytes,
         }}},
         .buffer = dst_buffer,

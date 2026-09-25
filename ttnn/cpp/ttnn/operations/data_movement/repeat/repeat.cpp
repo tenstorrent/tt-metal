@@ -160,8 +160,7 @@ ttnn::Tensor repeat_dim_tile(
     uint32_t h_tiles = shape[-2] / tt::constants::TILE_HEIGHT;
     uint32_t w_tiles = shape[-1] / tt::constants::TILE_WIDTH;
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
-    uint32_t tile_page_size = tt::tile_size(cb_data_format);
+    uint32_t tile_page_size = tt::tt_metal::tile_size(tensor.dtype());
 
     uint32_t higher, rep_dim_pages, lower;
 

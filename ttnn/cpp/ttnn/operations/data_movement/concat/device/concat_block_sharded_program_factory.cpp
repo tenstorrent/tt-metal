@@ -46,7 +46,6 @@ ProgramDescriptor ConcatBlockShardedProgramFactory::create_descriptor(
     const uint32_t num_input_tensors = input_tensors.size();
     constexpr uint32_t cb_dst_id = 16;
 
-    const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(output.dtype());
     const bool rm_layout = output.layout() == Layout::ROW_MAJOR;
     const uint32_t element_size = input_tensors[0].element_size();
 
@@ -78,7 +77,7 @@ ProgramDescriptor ConcatBlockShardedProgramFactory::create_descriptor(
     } else {
         unit_h = TILE_HEIGHT;
         unit_w = TILE_WIDTH;
-        unit_size = tt::tile_size(cb_data_format);
+        unit_size = tt::tt_metal::tile_size(output.dtype());
     }
 
     std::vector<uint32_t> input_shard_h(num_input_tensors);
@@ -188,7 +187,7 @@ ProgramDescriptor ConcatBlockShardedProgramFactory::create_descriptor(
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(i),
-                .data_format = cb_data_format,
+                .data_format = output.dtype(),
                 .page_size = unit_size,
             }}},
             .buffer = input_tensors[i].buffer(),
@@ -201,7 +200,7 @@ ProgramDescriptor ConcatBlockShardedProgramFactory::create_descriptor(
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(cb_dst_id),
-            .data_format = cb_data_format,
+            .data_format = output.dtype(),
             .page_size = unit_size,
         }}},
         .buffer = output.buffer(),
