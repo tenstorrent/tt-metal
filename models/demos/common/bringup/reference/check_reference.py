@@ -34,6 +34,22 @@ def prefill(ref, tokens, chunk, rec_for_chunk=None):
     return torch.cat(outs), state
 
 
+def write_graphs(ref, reps: dict) -> None:
+    """results/block_graphs.json: each block type's steps, for the dashboard's model graph."""
+    import json
+
+    out = {
+        bt: [
+            {"name": s.name, "inputs": list(s.inputs), "output": s.output, "kind": s.kind, "stateful": s.stateful}
+            for s in ref.block_graph(li)
+        ]
+        for bt, li in reps.items()
+    }
+    p = metrics.results_dir() / "block_graphs.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(out, indent=1) + "\n")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--spec")
@@ -109,6 +125,7 @@ def main(argv=None):
             if d > 0:
                 print(f"graph {bt} (layer {li}): replayed {n} differs by {d:.3e}")
         print(f"graph {bt} (layer {li}): {len(steps)} steps replayed, max abs diff {worst:.3e}")
+    write_graphs(ref, reps)
     metrics.record("graph_errors", graph_errs)
     metrics.record("boundaries_missing", missing)
     metrics.record("graph_replay_maxabs", worst)
