@@ -15,48 +15,28 @@ transformer, and the VAE decoder.
 - Prompt expansion: `models/tt_dit/pipelines/fibo/vlm.py`
 - Pipeline: `models/tt_dit/pipelines/fibo/pipeline_fibo.py`
 
-Both weights are gated on HuggingFace, so fetching them needs an `HF_TOKEN` with access granted.
-
 ## Performance
 
 1024x1024, 30 denoising steps, guidance scale 5.0 with CFG on (two transformer forwards per step),
 traced, starting from a natural-language prompt. Each figure is the median of 8 generations after 2
 untimed ones, as `models/tt_dit/tests/models/fibo/test_performance_fibo.py` reports them.
 
-| System   | CFG | SP | TP | Image | Throughput |
-|----------|-----|----|----|-------|------------|
-| Galaxy (4x8 Blackhole) | 2 | 4 | 4 | 10.35 s | 0.0966 images/s |
-| QuietBox 2 (2x2 Blackhole) | 2 | 1 | 2 | 25.16 s | 0.0397 images/s |
-| T3000 (2x4 Wormhole) | 2 | 2 | 2 | 41.16 s | 0.0243 images/s |
+| System                     | CFG | SP  | TP  | Image   | Throughput      |
+| -------------------------- | --- | --- | --- | ------- | --------------- |
+| Galaxy (4x8 Blackhole)     | 2   | 4   | 4   | 10.35 s | 0.0966 images/s |
+| QuietBox 2 (2x2 Blackhole) | 2   | 1   | 2   | 25.16 s | 0.0397 images/s |
+| T3000 (2x4 Wormhole)       | 2   | 2   | 2   | 41.16 s | 0.0243 images/s |
 
 Per stage, in seconds:
 
-| Stage | Galaxy | QuietBox 2 | T3000 |
-|-------|--------|------------|-------|
-| vlm (prompt expansion) | 5.81 | 8.44 | 13.69 |
-| encoder (SmolLM3) | 0.59 | 0.22 | 0.66 |
-| prepare | 0.08 | 0.07 | 0.19 |
-| denoising (30 steps) | 3.81 (7.87 it/s) | 16.15 (1.86 it/s) | 26.15 (1.15 it/s) |
-| vae | 0.07 | 0.28 | 0.39 |
-| **total** | **10.35** | **25.16** | **41.16** |
-
-No two systems run the transformer on the same number of chips, so these totals do not isolate the
-architectures. With `cfg=2` the mesh is split into two submeshes, each holding one conditioning
-branch: 16 chips on a Galaxy (tp 4 x sp 4), 4 on a T3000 (tp 2 x sp 2) and 2 on a QuietBox 2
-(tp 2 x sp 1). The T3000 gives the transformer twice the chips the QuietBox does and is still
-1.62x slower on denoising, so per chip the gap between Wormhole and Blackhole is wider than the
-totals suggest.
-
-Prompt expansion is the largest single stage on a Galaxy, at 56% of wall time: the transformer
-scales with the mesh while the VLM generates its JSON one token at a time, and decode is bound by
-per-step latency rather than by compute. It stays about a third of wall time on every system.
-
-Measured on `friedrich/fibo` at `9e097ec4908f`, in runs
-[35801583645](https://github.com/tenstorrent/tt-metal/actions/runs/35801583645) (Galaxy) and
-[35803686833](https://github.com/tenstorrent/tt-metal/actions/runs/35803686833) (QuietBox 2); the
-T3000 figures come from the same test run locally at the same commit.
-
-No target performance has been set yet.
+| Stage                  | Galaxy           | QuietBox 2        | T3000             |
+| ---------------------- | ---------------- | ----------------- | ----------------- |
+| vlm (prompt expansion) | 5.81             | 8.44              | 13.69             |
+| encoder (SmolLM3)      | 0.59             | 0.22              | 0.66              |
+| prepare                | 0.08             | 0.07              | 0.19              |
+| denoising (30 steps)   | 3.81 (7.87 it/s) | 16.15 (1.86 it/s) | 26.15 (1.15 it/s) |
+| vae                    | 0.07             | 0.28              | 0.39              |
+| **total**              | **10.35**        | **25.16**         | **41.16**         |
 
 ## How to Run
 
@@ -64,10 +44,9 @@ No target performance has been set yet.
 # Set the directory to cache the weights to speed up future runs
 export TT_DIT_CACHE_DIR=/path/to/cache
 
-# Generate images from JSON prompts, and one from a natural-language prompt via the VLM
-pytest models/tt_dit/tests/models/fibo/test_pipeline_fibo.py
+# Generate images from structured JSON prompts
+pytest models/tt_dit/tests/models/fibo/test_pipeline_fibo.py::test_fibo_pipeline
 
-# Reproduce the numbers above (4x8 Galaxy, or 2x2 QuietBox 2)
-pytest models/tt_dit/tests/models/fibo/test_performance_fibo.py -k 4x8
-pytest models/tt_dit/tests/models/fibo/test_performance_fibo.py -k 2x2
+# Generate images from natural-language prompts, expanded into JSON by the VLM
+pytest models/tt_dit/tests/models/fibo/test_pipeline_fibo.py::test_fibo_pipeline_vlm
 ```
