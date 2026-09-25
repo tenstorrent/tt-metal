@@ -329,6 +329,7 @@ def check_case(c, out, ring, win_prev, win_next, out_ref, st_ref, Wn_ref, tag=""
         (2, 8, ()),
         (4, 8, ()),
         (8, 4, ()),
+        (4, 4, ()),  # a T = 4 case that fits (24, 8) too: the two-tile a|b path at a second T
         (8, 8, ()),
         (1, 1, ()),
         (8, 1, ()),

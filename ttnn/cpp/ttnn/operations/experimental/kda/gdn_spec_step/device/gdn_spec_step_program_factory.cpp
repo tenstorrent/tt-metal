@@ -211,7 +211,10 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
         {"l2_eps_bits", float_bits(a.l2_epsilon)},
         {"norm_eps_bits", float_bits(a.norm_epsilon)},
         {"ctrl_bytes", ctrl_bytes},
-        {"hold_sentinel", kHoldSentinel}};
+        {"hold_sentinel", kHoldSentinel},
+        // the ab_in entry count (1 + AB2) the reader reserves/pushes: the factory's value, the same contract compute
+        // has, so the reader's DFB accounting cannot drift from the ab_in / g1 sizing above
+        {"AB2", AB2}};
 
     // ---- writer
     m2::KernelSpec writer{

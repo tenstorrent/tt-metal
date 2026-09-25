@@ -298,8 +298,8 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
           ``gdn_spec_step`` verify (QWEN36_GDN_SPEC_FUSED=1) and the fused spec SDPA both apply, any bucket set.
         * TP=2 (p150x2: Nv=24, 2 KV heads per device): the fused ``gdn_spec_step`` verify applies too since the op
           reads a head's a|b gate pair from two tiles (2*Nv = 48 gate columns; profiles/thatch_adopt/laneH_RESULTS.md),
-          with the composite GDN verify (QWEN36_GDN_SPEC_FUSED=0, single-bucket) as the fallback. Either way every
-          bucket's B and max_num_seqs are capped at B*Nv <= compute cores (B <= 4 at Nv=24): the fused op runs one
+          with the composite GDN verify (QWEN36_GDN_SPEC_FUSED=0, single-bucket) as the fallback. At BOTH TPs every
+          bucket's B and max_num_seqs are capped at B*Nv <= compute cores (B <= 4 at Nv=24, 9 at Nv=12): the fused op runs one
           core per (user, head), the composite ``fused_recurrent`` has the same core budget, and plain decode runs
           the fused recurrence at full batch width. The spec SDPA folds each user's candidates into groups of 4
           per KV head (spec_multi_pos_tiles with spec_q_heads, attention/tp.py::_SPEC_SDPA_L1_FIT_GQA) for
@@ -310,23 +310,36 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
         nd = int(model.num_devices)
         nv = int(model.args.gdn_nv_tp)
         fused = os.environ.get("QWEN36_GDN_SPEC_FUSED", "0") == "1"
+        if nd not in (2, 4):
+            raise RuntimeError(
+                f"Qwen36DFlash speculative serving is validated at TP=4 (fused) and TP=2 (fused or composite) only; "
+                f"got {nd} device(s) (use QWEN36_DRAFTER=mtp for plain decode)"
+            )
+        # The GDN core budget is device-count agnostic (one core per (user, value head) in the fused op; the composite
+        # fused_recurrent has the same budget), so it is checked at TP=4 too. Every shipped TP=4 bucket set fits
+        # (B <= 8 at Nv=12: 96 of 110 cores); a 16x2 set would otherwise pass here and TT_FATAL in the warm-up.
+        grid = model.mesh_device.compute_with_storage_grid_size()
+        cores = int(grid.x * grid.y)
+        over = [f"{b}x{t}" for b, t in buckets if b * nv > cores]
+        core_problem = None
+        if over or int(model.args.max_batch_size) * nv > cores:
+            core_problem = (
+                f"GDN core budget B*Nv <= {cores} with Nv={nv}: --max-num-seqs and every bucket's B must be "
+                f"<= {cores // nv} (got max_num_seqs={model.args.max_batch_size}, buckets {[f'{b}x{t}' for b, t in buckets]})"
+            )
         if nd == 4:
+            if core_problem:
+                raise RuntimeError("Qwen36DFlash speculative serving at TP=4: " + core_problem)
             return
         if nd == 2:
-            grid = model.mesh_device.compute_with_storage_grid_size()
-            cores = int(grid.x * grid.y)
             problems = []
             if not fused and len(buckets) > 1:
                 problems.append(
                     f"the composite verify (QWEN36_GDN_SPEC_FUSED=0) is single-bucket "
                     f"({_BUCKETS_ENV}={os.environ.get(_BUCKETS_ENV)!r}); set QWEN36_GDN_SPEC_FUSED=1 for multi-bucket"
                 )
-            over = [f"{b}x{t}" for b, t in buckets if b * nv > cores]
-            if over or int(model.args.max_batch_size) * nv > cores:
-                problems.append(
-                    f"GDN core budget B*Nv <= {cores} with Nv={nv}: --max-num-seqs and every bucket's B must be "
-                    f"<= {cores // nv} (got max_num_seqs={model.args.max_batch_size}, buckets {[f'{b}x{t}' for b, t in buckets]})"
-                )
+            if core_problem:
+                problems.append(core_problem)
             if problems:
                 raise RuntimeError("Qwen36DFlash speculative serving at TP=2: " + "; ".join(problems))
             verify = "FUSED gdn_spec_step verify (two-tile a|b gates)" if fused else "FALLBACK composite GDN verify"
@@ -342,10 +355,6 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
                 f"buckets {','.join(bucket_id(bt) for bt in buckets)}, Nv={nv}/device ({cores} cores -> B <= {cores // nv})"
             )
             return
-        raise RuntimeError(
-            f"Qwen36DFlash speculative serving is validated at TP=4 (fused) and TP=2 (fused or composite) only; got {nd} "
-            "device(s) (use QWEN36_DRAFTER=mtp for plain decode)"
-        )
 
     @staticmethod
     def _load_eos_ids(model):

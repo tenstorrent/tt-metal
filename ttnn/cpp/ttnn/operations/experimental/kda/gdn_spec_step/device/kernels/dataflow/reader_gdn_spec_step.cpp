@@ -38,7 +38,8 @@ template <
     uint32_t l2_eps_bits,
     uint32_t norm_eps_bits,
     uint32_t ctrl_bytes,
-    uint32_t hold_sentinel>
+    uint32_t hold_sentinel,
+    uint32_t AB2>
 TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx) {
     const auto qkv_acc = TensorAccessor(tensor::qkv);
     const auto wa_acc = TensorAccessor(tensor::win_a);
@@ -123,8 +124,8 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx) {
     z_in.reserve_back(Vt);
     read_tiles_at(qkv_acc, z_in, noc, pg + z_tile0 + h * Vt, Vt, 0);
     // ab_in[0] = a's tile (ab_page + h/32); ab_in[1] = b's tile (ab_page + (Nv+h)/32) only when it differs (b_idx = 1;
-    // AB2 = 0 -> one tile, one entry, exactly the 2*Nv <= 32 read)
-    constexpr uint32_t AB2 = (2 * Nv > 32) ? 1u : 0u;
+    // AB2 = 0 -> one tile, one entry, exactly the 2*Nv <= 32 read). AB2 is the factory's compile-time arg (it also
+    // sizes ab_in and g1), not re-derived here.
     ab_in.reserve_back(1 + AB2);
     read_tiles_at(qkv_acc, ab_in, noc, pg + ab_page + (h >> 5), 1, 0);
     if constexpr (AB2 != 0) {
@@ -162,6 +163,8 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx) {
     rsel.push_back(T);
     noc.async_read_barrier();
     z_in.push_back(Vt);
+    // With AB2 = 1 and b_idx = 0 (a and b share a tile: heads h < 8 at Nv = 24) entry 1 is pushed UNWRITTEN; compute
+    // gathers b from ab_in[b_idx] = entry 0, so it is never indexed.
     ab_in.push_back(1 + AB2);
 
     // ---- phase 2 (bulk): window + raw projection tiles, taps, weight row; the conv selectors built meanwhile
