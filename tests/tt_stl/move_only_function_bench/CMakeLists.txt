@@ -60,7 +60,11 @@ target_link_libraries(
         zoo_headers
 )
 
-add_executable(bench bench.cpp)
+add_executable(
+    bench
+    bench.cpp
+    job_path.cpp
+)
 target_link_libraries(
     bench
     PRIVATE

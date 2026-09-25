@@ -6,7 +6,7 @@
 // ttsl::move_only_function. Compares zoo and fu2 against std::function at a common inline
 // capacity. See README.md for how to run and how to read the numbers.
 
-#include "candidates.hpp"
+#include "job_path.hpp"
 
 #include <benchmark/benchmark.h>
 
@@ -18,6 +18,7 @@
 #include <memory>
 #include <cstdio>
 #include <new>
+#include <type_traits>
 #include <utility>
 
 namespace {
@@ -29,7 +30,16 @@ std::atomic<std::size_t> g_allocations{0};
 
 std::size_t take_allocations() { return g_allocations.exchange(0, std::memory_order_relaxed); }
 
+using bench::BoundaryCapture;
 using bench::kInlineBytes;
+using bench::LargeCapture;
+using bench::NonTrivialCapture;
+using bench::SmallCapture;
+static_assert(sizeof(SmallCapture) <= kInlineBytes);
+static_assert(sizeof(BoundaryCapture) == 24);
+static_assert(sizeof(LargeCapture) > kInlineBytes);
+static_assert(sizeof(NonTrivialCapture) <= kInlineBytes);
+static_assert(!std::is_trivially_copyable_v<NonTrivialCapture>);
 using bench::kInlinePointers;
 
 using StdFn = bench::StdFunction<void()>;
@@ -37,29 +47,8 @@ using ZooFn = bench::ZooFunction<void()>;
 using Fu2Fn = bench::Fu2Function<void()>;
 
 // Captures sized to sit either side of kInlineBytes.
-struct SmallCapture {
-    std::uint64_t a = 1;
-    std::uint64_t b = 2;
-    std::uint64_t value() const { return a; }
-};
-static_assert(sizeof(SmallCapture) <= kInlineBytes);
-
 // Three 64-bit words. On LP64 that is 24 bytes: inline under libc++ (3-pointer buffer), heap under
 // libstdc++ (2-pointer buffer), so it probes exactly the band where the two disagree.
-struct BoundaryCapture {
-    std::uint64_t a = 1;
-    std::uint64_t b = 2;
-    std::uint64_t c = 3;
-    std::uint64_t value() const { return a; }
-};
-static_assert(sizeof(BoundaryCapture) == 24);
-
-struct LargeCapture {
-    std::uint64_t data[8] = {1, 2, 3, 4, 5, 6, 7, 8};
-    std::uint64_t value() const { return data[0]; }
-};
-static_assert(sizeof(LargeCapture) > kInlineBytes);
-
 std::uint64_t g_sink = 0;
 
 // --- 1 / 2: construct, invoke, destroy ---------------------------------------------------------
@@ -179,22 +168,9 @@ void BM_RingBufferJobPath(benchmark::State& state) {
     for (auto _ : state) {
         for (std::size_t i = 0; i < batch; ++i) {
             Capture cap{};
-            benchmark::DoNotOptimize(cap);
-            // push: move-assign the job into its slot.
-            Fn* slot = &slots[i % kSlots];
-            benchmark::DoNotOptimize(slot);
-            *slot = Fn{[cap]() mutable { g_sink += cap.value(); }};
-            // Keep the stored callable opaque. Without a memory clobber the compiler devirtualises
-            // the invocation and deletes the whole push/pop/call -- std::function collapsed to
-            // three instructions and measured ~3x faster than it really is. ThreadPool::push takes
-            // its argument across a TU boundary with the type erased, so that optimisation is not
-            // available to it. DoNotOptimize on the pointer alone is not enough; the clobber is.
-            benchmark::ClobberMemory();
-            // pop: move-assign out into the worker's local, then invoke.
-            Fn task = std::move(*slot);
-            benchmark::DoNotOptimize(task);
-            benchmark::ClobberMemory();
-            task();
+            // Erase the job here, as an enqueue site does, then hand it over. Everything past this
+            // point runs in job_path.cpp, which only knows Fn.
+            bench::push_pop_invoke(&slots[i % kSlots], Fn{[cap]() mutable { g_sink += cap.value(); }});
         }
         benchmark::ClobberMemory();
         ++iterations;
@@ -259,6 +235,9 @@ BENCHMARK_TEMPLATE(BM_MoveOnlyCapture, Fu2Fn);
 BENCHMARK_TEMPLATE(BM_RingBufferJobPath, StdFn, SmallCapture)->Arg(1024);
 BENCHMARK_TEMPLATE(BM_RingBufferJobPath, ZooFn, SmallCapture)->Arg(1024);
 BENCHMARK_TEMPLATE(BM_RingBufferJobPath, Fu2Fn, SmallCapture)->Arg(1024);
+BENCHMARK_TEMPLATE(BM_RingBufferJobPath, StdFn, NonTrivialCapture)->Arg(1024);
+BENCHMARK_TEMPLATE(BM_RingBufferJobPath, ZooFn, NonTrivialCapture)->Arg(1024);
+BENCHMARK_TEMPLATE(BM_RingBufferJobPath, Fu2Fn, NonTrivialCapture)->Arg(1024);
 BENCHMARK_TEMPLATE(BM_RingBufferJobPath, StdFn, LargeCapture)->Arg(1024);
 BENCHMARK_TEMPLATE(BM_RingBufferJobPath, ZooFn, LargeCapture)->Arg(1024);
 BENCHMARK_TEMPLATE(BM_RingBufferJobPath, Fu2Fn, LargeCapture)->Arg(1024);
