@@ -148,69 +148,37 @@ constexpr uint64_t kStampFrameDa = 0x02A5'A5A5'A5A5ull;
 constexpr uint32_t kTimerLeadTicks = 5000;    // the scheduled rate update lands this far ahead of the CFR: 100 us
 constexpr uint32_t kTimerAckSpins = 200'000;  // polls of the update status before PtpTimer::start gives up
 
-// The eth_ctrl PTP timer. start() programs its per-tick increment through the scheduled-update mechanism and enables
-// the main counter (a timer already at the rate is left alone), then measures PTP64NS against the CFR count. Cold: in
-// a kernel built -O3 (the fabric router) the once-per-link routines would otherwise unroll into a couple of KB of a
-// 26 KB kernel budget shared with the router.
+// The eth_ctrl PTP timer. start() enables its main counter, then schedules, at a CFR tick kTimerLeadTicks ahead, both
+// its per-tick increment and a restart of its timestamp from 0, which lands on the tick after the one scheduled (the
+// timer compares the CFR count against it, then updates); PTP64NS is 20 ns per tick from there, so its offset from the
+// CFR count is known exactly. The counter runs before the restart lands, so it counts from that very tick.
+// Cold: in a kernel built -O3 (the fabric router) the once-per-link routines would otherwise unroll into a couple of KB
+// of a 26 KB kernel budget shared with the router.
 struct PtpTimer {
-    bool ok = false;        // the timer runs at kPtiRefclk; its stamps are meaningless otherwise
-    int64_t offset_64 = 0;  // PTP64NS minus the CFR count in ns, in 64ths of a ns, while the timer runs
+    bool ok = false;        // the restart landed; the timer's stamps are meaningless otherwise
+    int64_t offset_64 = 0;  // PTP64NS minus the CFR count in ns, in 64ths of a ns: -20 ns times the restart tick
 
+    // False, and the timestamp as it was, if the hardware never acknowledges both updates.
     __attribute__((noinline, cold)) bool start() {
-        ok = set_rate(kPtiRefclk);
-        offset_64 = measure_offset();
-        return ok;
-    }
-
-private:
-    // If the hardware never acknowledges the update the timer is left as it was.
-    static bool set_rate(uint32_t pti) {
-        if ((rd(kPtpTimerCtrl) & 1u) && (rd(kPtpPtiStat) & 0xFFFFFFu) == pti) {
-            return true;
-        }
-        const uint64_t target = read_cfr() + kTimerLeadTicks;
-        wr(kPtpFutureCfrLo, static_cast<uint32_t>(target));
-        wr(kPtpFutureCfrHi, static_cast<uint32_t>(target >> 32));
-        wr(kPtpFuturePti, pti);
+        wr(kPtpTimerCtrl, 1);
+        const uint64_t at = read_cfr() + kTimerLeadTicks;
+        wr(kPtpFutureCfrLo, static_cast<uint32_t>(at));
+        wr(kPtpFutureCfrHi, static_cast<uint32_t>(at >> 32));
+        wr(kPtpFuturePti, kPtiRefclk);
+        wr(kPtpFutureTimestampLo, 0);
+        wr(kPtpFutureTimestampHi, 0);
         wr(kPtpUpdatePti, 1);
-        bool acked = false;
-        for (uint32_t i = 0; i < kTimerAckSpins && !acked; i++) {
-            acked = (rd(kPtpUpdateStat) & kUpdateStatPtiAck) != 0;
+        wr(kPtpUpdateTimestamp, 1);
+        constexpr uint32_t kAcks = kUpdateStatPtiAck | kUpdateStatTsAck;
+        uint32_t stat = 0;
+        for (uint32_t i = 0; i < kTimerAckSpins && (stat & kAcks) != kAcks; i++) {
+            stat = rd(kPtpUpdateStat);
         }
         wr(kPtpUpdatePti, 0);
-        if (acked) {
-            wr(kPtpTimerCtrl, 1);
-        }
-        return acked;
-    }
-    // The count moves in four-tick steps and PTP64NS on its own step, so one pair of reads sits anywhere from zero to
-    // a few ticks above the constant depending on where the reads fell in the registers' update cycles. The mean over
-    // many pairs at pseudo-random phases, read in both orders so the read latency cancels, is the constant plus the
-    // same phase term on every end, and the term cancels between the two ends of a link. The count's staleness is
-    // spread over its four ticks, 22 ns rms per read, and an error in the mean sits on every stamp of the end for the
-    // session: 32768 pairs (~2 ms) hold the mean of 65536 reads to 0.09 ns. The fraction of a nanosecond is kept:
-    // rounded, it sat on every stamp of the end as a bias of up to a nanosecond that the other end did not share.
-    static int64_t measure_offset() {
-        constexpr uint32_t kPairs = 32768;
-        // Summed as deviations from the first pair: the constant itself grows with the count's uptime and 4096 of it
-        // would overflow within weeks, while the deviations stay within ticks of it.
-        int64_t first = 0, dev = 0;
-        uint32_t walk = rd(kWallClockLo) | 1u;
-        for (uint32_t i = 0; i < kPairs; i++) {
-            phase_walk(walk);
-            const uint64_t c1 = read_cfr();
-            const uint64_t n1 = read_ptp64ns();
-            phase_walk(walk);
-            const uint64_t n2 = read_ptp64ns();
-            const uint64_t c2 = read_cfr();
-            const int64_t d1 = static_cast<int64_t>(n1 - ((c1 << 4) + (c1 << 2)));
-            const int64_t d2 = static_cast<int64_t>(n2 - ((c2 << 4) + (c2 << 2)));
-            if (i == 0) {
-                first = d1;
-            }
-            dev += (d1 - first) + (d2 - first);
-        }
-        return first * 64 + (dev * 32) / static_cast<int64_t>(kPairs);
+        wr(kPtpUpdateTimestamp, 0);
+        ok = (stat & kAcks) == kAcks;
+        offset_64 = -static_cast<int64_t>(at + 1) * kNsPerRefclkTick * 64;
+        return ok;
     }
 };
 
