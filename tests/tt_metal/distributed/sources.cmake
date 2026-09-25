@@ -30,3 +30,6 @@ if(ENABLE_DISTRIBUTED)
 else()
     list(APPEND DISTRIBUTED_UNIT_TEST_SOURCES test_single_host_context.cpp)
 endif()
+
+# Layer-completion ring + router (tt-metal PR #55286; host-only, no device).
+list(APPEND DISTRIBUTED_UNIT_TEST_SOURCES test_layer_completion_ring.cpp test_layer_completion_router.cpp)
