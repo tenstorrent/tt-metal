@@ -9,15 +9,21 @@ set(TTNN_OP_TRANSFORMER_SRCS
     sdpa/device/joint_sdpa_program_factory.cpp
     sdpa/device/ring_joint_sdpa_device_operation.cpp
     sdpa/device/ring_joint_sdpa_program_factory.cpp
+    sdpa/device/ring_joint_sdpa_recipe_program_factory.cpp
     sdpa/device/sliding_halo_layout.cpp
     sdpa/device/exp_ring_joint_sdpa_device_operation.cpp
     sdpa/device/exp_ring_joint_sdpa_program_factory.cpp
+    sdpa/device/exp_ring_joint_sdpa_recipe_program_factory.cpp
     sdpa/device/ring_distributed_sdpa_device_operation.cpp
     sdpa/device/ring_distributed_sdpa_program_factory.cpp
     sdpa/device/sdpa_device_operation.cpp
     sdpa/device/sdpa_perf_model.cpp
     sdpa/device/sdpa_program_factory.cpp
     sdpa/sdpa.cpp
+    sdpa/sdpa_numerics.cpp
+    sdpa/sdpa_recipe.cpp
+    sdpa/sdpa_recipe_blocking.cpp
+    sdpa/sdpa_input_preparation.cpp
     sdpa/device/sparse_sdpa_device_operation.cpp
     sdpa/device/sparse_sdpa_program_factory.cpp
     sdpa/sparse_sdpa.cpp
@@ -47,6 +53,7 @@ set(TTNN_OP_TRANSFORMER_NANOBIND_SRCS
     attention_softmax/attention_softmax_nanobind.cpp
     concatenate_heads/concatenate_heads_nanobind.cpp
     sdpa/sdpa_nanobind.cpp
+    sdpa/sdpa_recipe_blocking_nanobind.cpp
     sdpa_decode/sdpa_decode_nanobind.cpp
     split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_nanobind.cpp
     gated_delta_attn/gated_delta_attn_nanobind.cpp

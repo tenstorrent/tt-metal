@@ -19,7 +19,7 @@ from ...layers.module import Module, ModuleList, Parameter
 from ...layers.normalization import RMSNorm
 from ...parallel.config import VaeHWParallelConfig
 from ...parallel.manager import CCLManager
-from ...utils import cache
+from ...utils import cache, sdpa_recipe
 from ...utils.conv3d import (
     ConvDims,
     _ntuple,
@@ -86,6 +86,9 @@ def conv3d_to_linear_weight(state):
 
 
 class WanAttentionBlock(Module):
+    # SDPA recipe of the attention call on Blackhole (see __init__).
+    sdpa_precision_default = ttnn.SDPAPrecision.BALANCED
+
     def __init__(
         self,
         *,
@@ -125,18 +128,30 @@ class WanAttentionBlock(Module):
             dtype=dtype,
         )
 
-        self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
+        # Named SDPA recipe on Blackhole (single-head D=dim, dense, noncausal). The legacy setup was
+        # HiFi2 / FP32 dest / exact exp at Q32/K256; BALANCED (FP32 state) is more accurate than it and
+        # ~4x faster at the 480p/720p mid-block shapes (test_sdpa_dit_recipe_parity.py::test_vae_*).
+        self.sdpa_precision = sdpa_recipe.resolve_precision(
+            None, self.sdpa_precision_default, blackhole=is_blackhole(), model="WanAttentionBlock"
         )
-        self.sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
-            q_chunk_size=32,
-            k_chunk_size=256,
-            exp_approx_mode=False,  # NOTE: False is more correct
-        )
+        grid = self.mesh_device.compute_with_storage_grid_size()
+        if self.sdpa_precision is not None:
+            self.sdpa_program_config = sdpa_recipe.recipe_config(grid)
+            self.sdpa_compute_kernel_config = None
+        else:
+            # Legacy SDPA (non-Blackhole).
+            self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                self.mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+            )
+            self.sdpa_program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=grid,
+                q_chunk_size=32,
+                k_chunk_size=256,
+                exp_approx_mode=False,  # NOTE: False is more correct
+            )
         self.hifi4_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -241,7 +256,7 @@ class WanAttentionBlock(Module):
             ttnn.typecast(v_THNC, ttnn.bfloat16) if v_THNC.dtype != ttnn.bfloat16 else v_THNC,
             is_causal=False,
             program_config=self.sdpa_program_config,
-            compute_kernel_config=self.sdpa_compute_kernel_config,
+            **sdpa_recipe.sdpa_kwargs(self.sdpa_precision, self.sdpa_compute_kernel_config),
         )
         out_THNC = ttnn.typecast(out_THNC, q_THNC.dtype) if out_THNC.dtype != q_THNC.dtype else out_THNC
         out_TNC = ttnn.transformer.concatenate_heads(out_THNC)
