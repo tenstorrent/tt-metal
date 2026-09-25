@@ -49,7 +49,12 @@ ProgramDescriptor RandnDeviceOperation::ProgramFactory::create_descriptor(
     uint32_t units_to_divide = output.physical_volume() / constants::TILE_HW;
     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
         split_work_to_cores(grid, units_to_divide);
-    TT_ASSERT(num_cores == randn_num_cores(units_to_divide, grid));
+    TT_FATAL(
+        num_cores == randn_num_cores(units_to_divide, grid),
+        "randn core count {} diverged from split_work_to_cores ({}); override_runtime_arguments would patch the wrong "
+        "cores",
+        randn_num_cores(units_to_divide, grid),
+        num_cores);
 
     ProgramDescriptor desc;
 
