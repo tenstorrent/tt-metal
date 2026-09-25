@@ -20,98 +20,53 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
     ttnn::bind_function<"dispatch_fabric2d", "ttnn.experimental.deepseek_prefill.">(
         mod,
         R"doc(
-        MoE prefill dispatch over an explicitly-forwarded FABRIC_2D: each token goes to the chips
-        hosting the experts it was routed to, one hop at a time, forwarding through a DRAM forwarding
-        buffer rather than leaving multi-hop routing to the fabric.
+        MoE prefill dispatch over FABRIC_2D. Each token is sent to the chips that host its top-k experts,
+        one hop at a time around the ring of chips on `cluster_axis`. Each chip on the way stores the token
+        in a DRAM forwarding buffer and forwards it to the next chip.
 
-        Same job as `ttnn.experimental.deepseek_prefill.dispatch`, different call. Against that op:
-        `expert_offsets` is the all-rows table rather than this device's row; `expert_token_counts` and
-        `expert_region_offsets` are additional required inputs; `seq_len_per_chip` is required and
-        `dispatch_group_size` is not taken (the extent comes from the mesh); `topology` and
-        `memory_config` are required rather than defaulted; and there is no scales input (see
-        fp8_scaled_input below). The model's `TtDispatchModule.forward` also passes a weights tensor,
-        which neither op reads.
+        Inputs. All are interleaved, and all except input_tensor are ROW_MAJOR:
 
-            input_tensor          the tokens, BFLOAT16, either ROW_MAJOR (one token per page) or TILE.
-                                  A TILE input is untilized on device into an op-private row-major
-                                  staging buffer by a pool of cores beside the stream cores, which
-                                  runs while the stream cores build their routing index; the transport
-                                  itself is unchanged. TILE needs emb_dim to be a multiple of 32; a
-                                  ragged sequence gets a final tile row of tile padding that staging has
-                                  room for and nothing reads.
-            indices_tensor        top-k expert ids per token, UINT16 ROW_MAJOR.
-            expert_offsets        where each SOURCE chip's run starts inside each expert's region, for
-                                  every source chip: offset_cumsum's all_global_dispatch_offsets. Must
-                                  be REPLICATED along the dispatch axis, because a forwarding chip sizes a
-                                  run it neither wrote nor receives.
-            expert_dispatch_table global expert id -> chip in the dispatch group, -1 when the expert is
-                                  not in this group.
-            expert_token_counts   tokens per expert summed over every source chip.
-            expert_region_offsets where each expert's region starts in the destination buffer. Together
-                                  with expert_token_counts this closes the last source chip's run, which
-                                  expert_offsets alone cannot: its rows are absolute buffer positions, so
-                                  the close is counts + region_offsets - row, not counts alone.
+            input_tensor          tokens, BFLOAT16, ROW_MAJOR (one token per page) or TILE. A TILE input is
+                                  untilized on device and needs emb_dim to be a multiple of 32.
+            indices_tensor        top-k expert ids, UINT16, (..., seq_len_per_chip, num_experts_per_tok).
+            expert_offsets        INT32 or UINT32, (..., extent, num_routed_experts): where each source
+                                  chip's tokens start in each expert's region, one row per source chip.
+                                  Pass offset_cumsum's all_global_dispatch_offsets, replicated along
+                                  cluster_axis.
+            expert_dispatch_table INT32, num_routed_experts + 1 columns: global expert id -> chip in the
+                                  dispatch group, or -1 when the expert is not in this group. The extra
+                                  last column must be -1; padded tokens look it up.
+            expert_token_counts   INT32 or UINT32, (..., num_routed_experts): tokens per expert, summed over
+                                  all source chips.
+            expert_region_offsets INT32 or UINT32, (..., num_routed_experts): where each expert's region
+                                  starts in the output buffer.
+            padding_config        optional INT32 or UINT32 [real_token_count, pad_side]. With right padding
+                                  (pad_side 0) only the first real_token_count tokens are routed; other
+                                  sides are ignored. Padded tokens must resolve to no expert.
+            subdevice_id          sub-device whose Tensix cores the op may use. Defaults to the first
+                                  sub-device, which is the whole compute grid when no sub-device manager
+                                  is loaded.
 
-        Returns {dispatched_buffer, metadata}, both per device and ROW_MAJOR:
-        dispatched_buffer is (1, 1, max_dispatch_buffer_token_size, emb_dim) BFLOAT16 and metadata is
-        (1, 1, max_dispatch_buffer_token_size, 3) INT32 carrying (src chip, token index, top-k slot) at
-        the same page index as the token.
+        Returns [dispatched_buffer, metadata], both per device and ROW_MAJOR, in `memory_config`.
+        dispatched_buffer is (1, 1, max_dispatch_buffer_token_size, emb_dim) BFLOAT16. metadata is
+        (1, 1, max_dispatch_buffer_token_size, 3) INT32 and holds (source chip, token index, topk index) at
+        the same page as its token. A token past the buffer capacity is dropped but still counts toward its
+        expert's offsets.
 
-        A token whose expert region is full is dropped while its counter still advances, so pages match
-        what `dispatch` would have assigned.
+        Checked constraints:
 
-        Constraints, all enforced:
+            topology              Ring or Torus, and cluster_axis must be wrap-wired.
+            cluster_axis extent   even and at least 4.
+            num_links             1 to 4, and the axis must have that many forwarding links.
+            num_routed_experts    a multiple of 16.
+            metadata_len          3.
+            memory_config         interleaved.
+            subdevice_id          must contain the worker core nearest each ethernet core the op sends on,
+                                  one per link direction (2 * num_links cores). A TILE input also needs at
+                                  least one core in the row under those.
 
-            topology              Ring or Torus, and `cluster_axis` must be WRAP-WIRED. This op forwards
-                                  single hops around a ring; on a mesh or a line there is no ring to go
-                                  around. A galaxy cabled for TORUS_XY satisfies this on either axis, a
-                                  TORUS_Y one only on axis 0. Note that fabric auto-discovery silently
-                                  falls back when the requested wrap is not cabled, so asking for
-                                  FABRIC_2D_TORUS_XY does not guarantee you got it.
-            cluster_axis extent   even and at least 4. The schedule splits the diametrically opposite
-                                  chip across both directions, which needs a distinct opposite chip.
-            num_links             1 to 4, and the axis must actually have that many forwarding links.
-            num_routed_experts    a multiple of 16, so a row of the offsets table is a whole number of
-                                  64-byte lines: the reader reads row r to `control + r * W` words and a
-                                  DRAM read needs a 64-byte-aligned L1 destination. Separately,
-                                  cluster_axis extent x experts_per_chip must stay below the
-                                  all-ones sentinel the routing pass tells a live bucket index from.
-            subdevice_id          must contain the worker nearest each stream's eth core, and hold at
-                                  least 2 * num_links cores -- one more again for a TILE input, which
-                                  needs somewhere to put an untilizer. A TILE input places up to
-                                  5 * num_links untilizers in the row under the streams, so its
-                                  sub-device must include that row: one row is refused.
-            input_tensor layout   ROW_MAJOR, or TILE with emb_dim a multiple of 32.
-            all six inputs        interleaved, and every one but input_tensor ROW_MAJOR; the output
-                                  memory config must be interleaved too. DRAM is assumed and not
-                                  checked -- the cross-chip page addressing rests on an interleaved
-                                  DRAM base that is uniform across the mesh.
-            dtypes                BFLOAT16 input, and metadata_len must be 3.
-
-        Where this op cannot follow `dispatch`, and why:
-
-            fp8_scaled_input      unsupported. It extends metadata to 3 + emb_dim/128 words, and those
-                                  scales would have to ride the 64-byte routing tail on EVERY hop of a
-                                  store-and-forward journey, where 56 bytes are already spoken for.
-            topology=Linear       unsupported. On a line the neighbour one way round is the far end,
-                                  and its route leaves by the same ethernet core as the other
-                                  direction, so both streams would open on one channel and deadlock.
-            fp8_output            not implemented. The untilizer already packs in the payload's format,
-                                  so the mechanism is there; the wire and page sizes are not.
-
-        padding_config: [real_token_count, pad_side], as `dispatch` takes it. Right padding (pad_side 0)
-        bounds the routing pass at real_token_count; any other side is ignored, exactly as there. Passing
-        it asserts that padded tokens are sentinel-marked and resolve to no expert, which is the same
-        contract `dispatch` relies on -- it changes how far the pass walks, never what a chunk holds.
-
-        subdevice_id: the sub-device whose Tensix cores the op may use, for both its stream cores and
-        a TILE input's untilizer pool. Omitted, it is the device's first sub-device, which with no
-        sub-device manager loaded is the whole compute grid. The model passes the row it carves for
-        dispatch, and a stream whose eth-nearest worker falls outside the core set is refused rather than
-        relocated onto a core something else is using.
-
-        `cluster_axis` other than 0 is reachable but untested: it is only bounds-checked, and a
-        different axis gives a structurally different schedule.
+        Not checked: every tensor must be in DRAM, and expert_offsets must be replicated along
+        cluster_axis. fp8 input and output are not supported. cluster_axis other than 0 is untested.
         )doc",
         &dispatch_fabric2d,
         nb::arg("input_tensor"),

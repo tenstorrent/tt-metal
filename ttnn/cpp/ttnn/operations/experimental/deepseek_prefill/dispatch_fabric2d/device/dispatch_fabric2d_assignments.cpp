@@ -14,7 +14,7 @@ namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d {
 namespace {
 
 // Every remote destination must be claimed exactly once, in whole. How many tokens go to each is
-// data-dependent and unknown here, so the check is on the FRACTIONS: for each destination the claimed
+// data-dependent and unknown here, so the check is on the fractions: for each destination the claimed
 // shares must partition [0,1), which for split_idx in [0,split_count) means the indices are distinct and
 // there are split_count of them.
 void validate_coverage(const std::map<StreamId, std::vector<Assignment>>& per_stream, uint32_t ring_extent) {
@@ -63,16 +63,14 @@ void validate_coverage(const std::map<StreamId, std::vector<Assignment>>& per_st
     }
 }
 
-// Every chunk a chip forwards, as (origin, destination) hop offsets from that chip along the stream's own
-// direction: origins upstream so negative, destinations downstream so positive. A chunk whose destination
-// is the forwarder itself is delivered rather than forwarded and so is not here, which is why the nearest
-// destination is 1 and the furthest origin is -(m - 1). Offsets are the same on every chip, so this takes
-// only the extent.
+// Every chunk a chip forwards, as (origin, destination) hop offsets from that chip along the stream's
+// direction: origins upstream are negative, destinations downstream are positive. A chunk addressed to the
+// forwarding chip itself is delivered, not forwarded, so the nearest destination is 1 and the furthest
+// origin is -(m - 1). The offsets are the same on every chip, so this takes only the extent.
 //
-// The order is the order the upstream chip writes the chunks, which the forwarder must match: the section
-// is dense and holds no per-chunk addresses, so a chunk is found only by walking those before it. Upstream
-// emits its own destinations furthest first (the whole origin == -1 group) before any chunk it is itself
-// forwarding, so origins run outwards from -1.
+// The order is the order the upstream chip writes the chunks (see validate_chunk_agreement). Upstream
+// writes its own destinations furthest first (the origin == -1 group) before any chunk it forwards, so
+// origins run outwards from -1.
 std::vector<std::pair<int32_t, int32_t>> chunks_in_forwarder_ref_frame(uint32_t ring_extent) {
     const int32_t m = static_cast<int32_t>(ring_extent / 2);
     std::vector<std::pair<int32_t, int32_t>> chunks;
@@ -97,8 +95,8 @@ std::vector<dspf2d::ChunkDescriptor> forwarding_chunks(
 
     std::vector<dspf2d::ChunkDescriptor> chunks;
     for (const auto& [origin, dst] : chunks_in_forwarder_ref_frame(ring_extent)) {
-        // A counter-clockwise stream mirrors the offsets through 0; then both land on a position on the
-        // dispatch axis by adding where this chip sits.
+        // A counter-clockwise stream mirrors the offsets through 0; adding this chip's row then gives a
+        // position on the dispatch axis.
         const uint32_t distance = static_cast<uint32_t>(dst - origin);
         chunks.push_back(dspf2d::ChunkDescriptor{
             .origin_row = static_cast<uint32_t>((static_cast<int32_t>(my_row) + travel * origin + extent) % extent),
@@ -220,10 +218,7 @@ std::map<StreamId, std::vector<Assignment>> generate_assignments(
                     .split_count = split_count});
             };
 
-            // Furthest destination first, and all own assignments before any forward. Emission order is
-            // what the downstream chip walks its section by, and upstream emits its own destinations
-            // before anything it forwards; the own phase is also the slack a forward has between the
-            // upstream chunk being written and this stream consuming it.
+            // Furthest destination first, the order outgoing_chunks writes them into the downstream section.
             for (uint32_t j = 1; j <= m; j++) {
                 const uint32_t distance = m - j + 1;
                 if (distance == m) {

@@ -11,30 +11,24 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d {
 
-// See the dispatch_fabric2d nanobind docstring for what each tensor carries. The framework reflects over
-// these members for the program-cache hash and to find the mesh, so every field is part of the cache key.
+// Every field is part of the program-cache key.
 struct DispatchFabric2dParams {
     ttnn::MeshDevice* device = nullptr;
     uint32_t experts_per_chip = 2;
     uint32_t num_routed_experts = 8;
     uint32_t num_experts_per_tok = 2;
     uint32_t metadata_len = 3;
-    // Total token capacity of the destination dispatch buffer, shared across that chip's experts.
-    // Also the in-kernel bound: the production op drops a token past it while still advancing the
-    // per-expert counter, and this op has to make the same choice to land the same pages.
+    // Token capacity of a chip's dispatch buffer. A token past it is dropped but still advances its expert's count.
     uint32_t max_dispatch_buffer_token_size = 64;
     uint32_t seq_len_per_chip = 640;
     uint32_t axis = 0;
     uint32_t num_links = 2;
-    // Whether a padding_config was supplied. The kernel reads it under a compile-time branch, so two
-    // callers differing only in this need different programs.
+    // The kernel reads padding_config under a compile-time branch, so this must be in the cache key.
     bool has_padding_config = false;
     tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Mesh;
     tt::tt_metal::MemoryConfig output_mem_config{
         tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
-    // Every core the op may use: the stream cores and, for a TILE input, the untilizer pool. Resolved
-    // from the caller's sub-device in the front end, so the device op never holds a SubDeviceId -- the
-    // cores are what the program is built from and what the cache key has to distinguish.
+    // Cores the op may use, resolved from the caller's sub-device.
     CoreRangeSet worker_core_range_set;
 };
 
@@ -43,17 +37,11 @@ struct DispatchFabric2dInputs {
     ttnn::Tensor indices_tensor;
     ttnn::Tensor expert_offsets_tensor;
     ttnn::Tensor expert_dispatch_table_tensor;
-    // A forward sizes a chunk as expert_offsets[origin+1][e] - expert_offsets[origin][e]. The last origin
-    // has no next row, and rows are absolute buffer positions, so it closes against
-    // total_counts_per_expert + expert_region_offsets -- totals alone is wrong for every expert that is
-    // not first in its chip group.
+    // The last source chip's chunk for expert e ends at expert_token_counts[e] + expert_region_offsets[e].
     ttnn::Tensor expert_token_counts;
     ttnn::Tensor expert_region_offsets;
-    // [real_token_count, pad_side] -- the same two words production `dispatch` takes. Right padding
-    // (pad_side 0) bounds the routing pass at real_token_count; any other side is ignored, matching
-    // production, because only right padding keeps the real tokens at the low indices the allocator
-    // walks first. Supplying it asserts that padded tokens are sentinel-marked and resolve to no
-    // expert, which is the same contract production relies on.
+    // [real_token_count, pad_side]. With right padding (pad_side 0) only the first real_token_count tokens
+    // are routed; other sides are ignored.
     std::optional<ttnn::Tensor> padding_config;
 };
 

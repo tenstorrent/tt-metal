@@ -2,12 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Untilizer pool, compute RISC. Packs each tiled tile row the reader stages into TILE_HEIGHT row-major
-// token rows for the writer.
-//
-// The tile row list is bounded rather than terminated by a sentinel, because this core's share is known
-// before the launch: a compute kernel that waited on a CB for its stop signal would spin forever if
-// the reader beside it ever failed to reach the end, on an op where a spin is a wedged board.
+// Untilizer pool, compute RISC. Untilizes each tile row from the reader into TILE_HEIGHT row-major token
+// rows for the writer. The loop bound is this core's share of tile rows, known before launch, so no
+// stop signal is needed.
 
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
@@ -38,9 +35,9 @@ void kernel_main() {
     pack_untilize_init<block_ct_dim, full_ct_dim>(cb_in_id, cb_out_id);
 
     for (uint32_t s = first_tile_row; s < num_tile_rows; s += pool_size) {
-        // The whole tile row is reserved before any of it is packed: the packer writes each column
-        // block at its own offset into one contiguous run of rows_per_tile_row pages, so that run must
-        // not wrap. The CB is a whole number of tile rows deep, which is what holds that.
+        // Reserve the whole tile row first: the packer writes each column block at its own offset into
+        // one contiguous run of rows_per_tile_row pages. The CB is a whole number of tile rows deep, so
+        // that run never wraps.
         cb_out.reserve_back(rows_per_tile_row);
         for (uint32_t block = 0; block < num_blocks; block++) {
             cb_in.wait_front(block_ct_dim);

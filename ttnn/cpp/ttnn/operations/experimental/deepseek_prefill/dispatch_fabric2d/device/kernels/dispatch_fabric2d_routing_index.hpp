@@ -4,27 +4,13 @@
 
 #pragma once
 
-// The routing index of a stream core: the routing index, built by its four RISCs at once. Included by the
-// reader (a dataflow kernel) and by the compute kernel that runs on the three TRISCs, so nothing here
-// touches the NoC; everything is L1 loads and stores and program semaphores.
+// A stream core's routing index: a counting sort of this chip's (token, topk index) picks into buckets, one
+// bucket per expert of each chip on the axis, giving each kept pick its output page. Included by the reader
+// and by the compute kernel on the three TRISCs, so it uses only L1 loads, stores and program semaphores.
 //
-// Why it splits. Production `dispatch` assigns a token's output page by advancing one counter per
-// expert as it walks the picks in token order, dropping a pick whose counter has passed the expert's
-// capacity while still advancing the counter. Replaying that walk exactly is what keeps the output
-// byte-identical to production, and every later page depends on every earlier one -- so the walk
-// cannot be shortcut, but it can be composed: a RISC holding a contiguous slice of the tokens knows
-// each pick's position within its bucket up to a per-bucket offset, and that offset is the count of
-// picks the earlier slices routed to the same bucket. One count pass, one exchange of num_buckets()
-// counts per RISC through L1, one fill pass. Every RISC writes disjoint, token-ordered runs, and
-// together they are exactly what one sequential walk over all tokens would write, so the phases that
-// consume the index need not know it was built in slices.
-//
-// Why here and not upstream. The index is a pure function of (indices, dispatch table, offsets,
-// capacity), the inputs the routing-setup ops already hold, so an op there could emit it once per
-// chip for the stream cores to DMA. That costs a launch, a per-chip DRAM output, and a second op that
-// has to agree byte for byte with production's allocator. Replaying it here costs nothing outside
-// this op and stays inside the same trace; the four-RISC split brings it under the untilize pool,
-// which is the point at which it stops being the exposed part of the launch.
+// The four RISCs build it at once, each over a contiguous slice of the tokens. Each RISC counts its slice's
+// picks per bucket, the counts are exchanged through L1, and each RISC fills its entries starting from the
+// sum of the earlier slices' counts. The result equals one sequential walk over the tokens in order.
 
 #include <cstdint>
 #include "api/debug/assert.h"
@@ -36,16 +22,14 @@
 
 namespace dspf2d::routing_index {
 
-// The reader's compile-time arguments, which the compute kernel is built from verbatim so that every
-// RISC lays out the same scratch from the same constants.
+// The reader's compile-time arguments. The compute kernel is built from the same ones, so every RISC lays out
+// the same scratch.
 inline constexpr dspf2d::ReaderCtArgs ct{};
 
 constexpr uint32_t RISCS = INDEX_RISCS;
 
-// The stream core's L1 working set, laid out in the scratch in one fixed order from the
-// compile-time arguments alone: every chip lays it out identically, and so do the four RISCs of one
-// core, each of which lays it out for itself. `indices` comes first because it is the only part read
-// straight from DRAM per token, and its records must stay 64-byte aligned.
+// The stream core's L1 working set, laid out in scratch in a fixed order from compile-time arguments only, so
+// every chip and every RISC computes the same layout. `indices` comes first to keep its records 64-byte aligned.
 struct Control {
     volatile tt_l1_ptr uint16_t* indices;         // seq_len records, each padded to indices_pad_stride
     volatile tt_l1_ptr uint32_t* offsets;         // extent x num_routed_experts: every source chip's row
@@ -57,7 +41,7 @@ struct Control {
     volatile tt_l1_ptr uint32_t* chip_experts;    // extent x experts_per_chip, ascending global expert id
     volatile tt_l1_ptr uint32_t* row_fill;        // extent, while the chip -> experts inverse is built
     volatile tt_l1_ptr uint32_t* bucket_start;    // extent x experts_per_chip + 1, exclusive prefix sums with a total
-    volatile tt_l1_ptr uint32_t* entries;         // 3 words per surviving (token, top-k slot)
+    volatile tt_l1_ptr uint32_t* entries;         // 3 words per kept (token, topk index)
     volatile tt_l1_ptr uint32_t* padding;         // [real_token_count, pad_side], when one was supplied
     volatile tt_l1_ptr uint32_t* in_start;        // page offset of each chunk this stream reads
     volatile tt_l1_ptr uint32_t* out_start;       // page offset of each chunk it writes downstream
@@ -65,9 +49,8 @@ struct Control {
     uint32_t end;
 };
 
-// The geometry the scratch is sized from. The host builds the same struct and reserves
-// scratch_bytes of it; layout_scratch below walks the same block list in the same order, so the
-// two cannot drift apart.
+// The geometry the scratch is sized from. The host builds the same struct to reserve scratch_bytes, and
+// layout_scratch walks the same block list in the same order.
 inline dspf2d::ControlGeometry control_geometry() {
     dspf2d::ControlGeometry g;
     g.seq_len = ct.seq_len;
@@ -106,19 +89,14 @@ inline Control layout_scratch() {
     c.out_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbOutStart));
     c.risc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbRisc));
     c.end = a;
-    // The host reserved exactly this, from the same list. A layout that outgrew the reservation would
-    // run into the global semaphores, so say so here rather than corrupting them.
+    // The host reserved exactly this; anything more would run into the global semaphores.
     ASSERT(c.end - ct.control_addr == dspf2d::scratch_bytes(g));
     return c;
 }
 
-// Tokens the routing pass walks. A padding_config shortens it to the real ones, exactly as the
-// production op shortens its batch loop, and for the same reason: with right padding the real tokens
-// hold the low indices, so the allocator reaches all of them before the first padded one.
-//
-// This cannot desynchronise the ring. Every chunk length comes from the offsets table, never from how
-// far this loop ran, and supplying the config asserts that padded tokens are sentinel-marked -- their
-// picks resolve to BUCKET_NOT_HERE and contribute no page. Skipping them is skipping no-ops.
+// Tokens the routing index walks. With right padding the real tokens come first, so the walk stops after
+// them. Chunk lengths come from the offsets table, not from this count, and padded tokens are sentinel-marked
+// so their picks resolve to BUCKET_NOT_HERE; stopping early changes no page.
 inline uint32_t routed_token_count(const Control& c) {
     if constexpr (ct.has_padding_config) {
         const uint32_t real = c.padding[0];
@@ -134,22 +112,21 @@ inline uint32_t routed_token_count(const Control& c) {
 // host, and integer arithmetic makes consecutive slices meet exactly whatever the count turns out to be.
 constexpr uint32_t slice_begin(uint32_t n, uint32_t idx, uint32_t count) { return (n * idx) / count; }
 
-// RISC w's slice of the tokens: contiguous, in token order, the slices tiling [0, tokens).
+// A RISC's slice of the tokens: contiguous and in token order; the slices tile [0, tokens).
 constexpr uint32_t slice_lo(uint32_t tokens, uint32_t risc) { return slice_begin(tokens, risc, RISCS); }
 constexpr uint32_t slice_hi(uint32_t tokens, uint32_t risc) { return slice_begin(tokens, risc + 1u, RISCS); }
 
 constexpr uint32_t num_buckets() { return ct.extent * ct.experts_per_chip; }
 
-// How many of `routed` picks at a bucket whose first page is `first_page` survive capacity: pages are
-// handed out in order and dropped once past it, so the kept are the first `room` picks. The one
-// rule that makes the replay byte-identical to production, spelled once.
+// How many of `routed` picks to a bucket starting at `first_page` are kept. Pages are handed out in order and
+// picks past max_dispatch_buf_tokens are dropped, so the kept are the first `room`.
 constexpr uint32_t kept_count(uint32_t first_page, uint32_t routed) {
     const uint32_t room = ct.max_dispatch_buf_tokens > first_page ? ct.max_dispatch_buf_tokens - first_page : 0u;
     return routed < room ? routed : room;
 }
 
-// A block this RISC only reads, and that nothing writes after the handoff that made it visible: dropping
-// volatile lets the compiler keep loads in registers instead of a round trip to L1 for every reread.
+// For a block nothing writes after the signal that made it visible. Dropping volatile lets the compiler keep
+// its values in registers.
 template <typename T>
 inline const T* frozen(volatile tt_l1_ptr T* p) {
     return reinterpret_cast<const T*>(reinterpret_cast<uint32_t>(p));
@@ -170,11 +147,10 @@ inline Risc risc_view(const Control& c, uint32_t risc) {
     return Risc{base, base + n, base + 2u * n};
 }
 
-// Program semaphores: the runtime writes their initial value on every launch, so no RISC can take a
-// stale word for a signal. They sit in the launch's kernel-config region, whose base the dataflow
-// firmware resolves into sem_l1_base. The TRISC firmware on this architecture does not carry that
-// symbol, so a compute RISC reads the same launch message the firmware did; BRISC advances the read
-// pointer only after every RISC of the core has finished, so it names this launch for the whole run.
+// Program semaphores: the runtime resets them on every launch, so a stale value is never read as a signal.
+// Dataflow firmware exposes their base as sem_l1_base; TRISC firmware does not, so a compute RISC reads it
+// from the launch message. BRISC advances launch_msg_rd_ptr only after every RISC of the core finishes, so
+// the pointer names this launch throughout.
 inline uint32_t semaphore_base() {
 #if defined(COMPILE_FOR_TRISC)
     const uint32_t rd = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
@@ -190,8 +166,7 @@ inline volatile tt_l1_ptr uint32_t* semaphore(uint32_t id) {
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(semaphore_base() + id * L1_ALIGNMENT);
 }
 
-// A fence before the store orders this RISC's data stores ahead of the signal; the one after keeps the
-// signal from being reordered behind what follows.
+// The fences keep this RISC's earlier stores ahead of the signal and later accesses behind it.
 inline void fence() { asm volatile("fence" ::: "memory"); }
 
 inline void signal(uint32_t id, uint32_t value) {
@@ -200,8 +175,8 @@ inline void signal(uint32_t id, uint32_t value) {
     fence();
 }
 
-// Invalidating before each poll keeps a data cache, if the runtime turned one on, from pinning a stale
-// line. The waypoints are the only hang-diagnosis channel this op has: kernel asserts are compiled out.
+// Invalidate before each poll in case the data cache is enabled. With the watcher enabled, the waypoints show
+// a RISC stuck in this wait.
 inline void wait_at_least(uint32_t id, uint32_t value) {
     WAYPOINT("PLW");
     volatile tt_l1_ptr uint32_t* sem = semaphore(id);
@@ -221,8 +196,8 @@ inline void wait_all_riscs(uint32_t value) {
     }
 }
 
-// Pass 1: how many picks my slice routes to each bucket, counting the ones capacity will drop as well,
-// because the allocator counter they advance is what positions everything after them.
+// Pass 1: count my slice's picks per bucket, including those capacity will drop, since they still advance
+// the page counter.
 inline void count_pass(const Control& c, const Risc& me, uint32_t t0, uint32_t t1) {
     const uint32_t n = num_buckets();
     for (uint32_t b = 0; b < n; b++) {
@@ -236,8 +211,8 @@ inline void count_pass(const Control& c, const Risc& me, uint32_t t0, uint32_t t
 #pragma GCC unroll 8
         for (uint32_t k = 0; k < ct.topk; k++) {
             const uint32_t bucket = es[idx[k]];
-            // A word past the table (an index the host never validated) could name any bucket; a
-            // counter outside this RISC's block is somebody else's state.
+            // An index the host did not validate can read past the table and name any bucket. Skip it so
+            // this RISC never writes another RISC's counters.
             if (bucket >= n) {
                 continue;  // BUCKET_NOT_HERE, or an expert id the table does not resolve
             }
@@ -261,8 +236,7 @@ inline void place_slice(const Control& c, const Risc& me, uint32_t risc) {
     }
 }
 
-// Pass 2: the walk over my slice, from the positions place_slice gave me. The same per-pick rule as
-// production, with the cursors per RISC.
+// Pass 2: walk my slice from the positions place_slice computed, writing one entry per kept pick.
 inline void fill_pass(const Control& c, const Risc& me, uint32_t t0, uint32_t t1) {
     const uint32_t cap = ct.max_dispatch_buf_tokens;
     const uint32_t n = num_buckets();
@@ -282,9 +256,8 @@ inline void fill_pass(const Control& c, const Risc& me, uint32_t t0, uint32_t t1
                 continue;  // dropped for want of capacity, with the counter already advanced
             }
             const uint32_t at = me.next_entry[bucket];
-            // The bucket was sized from the offsets table, which the same routing produced. A table
-            // that disagrees would otherwise write over the next bucket, and the ASSERT that reports
-            // the disagreement is compiled out on this hardware.
+            // Keeps an offsets table that disagrees with the indices from writing into the next bucket.
+            // The ASSERT in merge_routing_index reports it, but only when the watcher is enabled.
             if (at >= c.bucket_start[bucket + 1u]) {
                 continue;
             }
@@ -310,10 +283,8 @@ inline void run_risc(const Control& c, uint32_t risc) {
     signal(dspf2d::index_risc_sem(risc), dspf2d::kRiscFilled);
 }
 
-// The reader's side, in the one order that is correct: the tables the RISCs read with plain loads
-// are complete before the signal that releases them, and this RISC runs its own RISC in between.
-// The caller waits for the other RISCs' fills (wait_all_riscs(kRiscFilled)) before it reads anything
-// they wrote.
+// The reader's side. The other RISCs read the tables with plain loads, so the tables must be complete before
+// the signal that releases them. The caller must wait_all_riscs(kRiscFilled) before reading their entries.
 template <typename BuildTables>
 inline void reader_routing_index(const Control& c, BuildTables&& build_tables) {
     build_tables();

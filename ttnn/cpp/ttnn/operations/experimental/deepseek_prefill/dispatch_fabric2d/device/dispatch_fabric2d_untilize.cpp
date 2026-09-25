@@ -18,10 +18,9 @@ namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d {
 
 namespace {
 
-// Tile columns the untilizer packs per call: the largest divisor of a tile row's tile count that is at
-// most eight. pack_untilize computes a block's L1 column offset as block_index * block_ct_dim, so a
-// remainder block would land on top of the previous one -- a divisor is the requirement, not a
-// preference, and eight is where the packer's own tile budget ends.
+// Tiles the untilizer packs per call: the largest divisor of the tiles per tile row that is at most eight,
+// the packer's limit. pack_untilize puts block i at column offset i * block_ct_dim, so it must be a
+// divisor; a smaller last block would overlap the one before it.
 uint32_t untilize_block_ct_dim(uint32_t tiles_per_row) {
     uint32_t block = 8;
     while (block > 1 && tiles_per_row % block != 0) {
@@ -33,10 +32,9 @@ uint32_t untilize_block_ct_dim(uint32_t tiles_per_row) {
 constexpr const char* kKernelDir =
     "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch_fabric2d/device/kernels/";
 
-// Which spare cores take the pool. Round-robin over the streams' columns, each stream taking the
-// nearest free core in the row under it in turn, so every stream gets untilizers under it before any
-// gets a second: the traffic those untilizers add stays as close to the columns the streams already use
-// as the row allows, instead of clustering at one end of it.
+// Picks the spare cores for the pool. The streams take turns, each taking the nearest free core in the
+// row under it, so every stream gets one untilizer before any gets a second. This keeps the untilizers'
+// traffic near the columns the streams already use.
 std::vector<tt::tt_metal::CoreCoord> decide_untilizer_cores(
     const CoreRangeSet& allowed_cores,
     const StreamPlacements& streams,
@@ -44,10 +42,10 @@ std::vector<tt::tt_metal::CoreCoord> decide_untilizer_cores(
     UntilizerPoolFallback* fallback) {
     const auto spare = spare_cores(allowed_cores, streams);
     const std::size_t num_links = streams.size() / 2u;  // two streams per link
-    // No point in more cores than tile rows; a core with no tile rows would still pay its program build.
+    // At most one core per tile row; an extra core would do no work.
     const std::size_t want = std::min<std::size_t>(UNTILIZERS_PER_LINK * num_links, num_tile_rows);
 
-    // A displaced stream can sit a row lower than the rest; the pool goes under all of them.
+    // A moved stream can sit a row lower than the rest; the pool goes under all of them.
     std::size_t lowest_stream_row = 0;
     std::vector<std::size_t> stream_cols;
     for (const auto& [stream, placement] : streams) {
@@ -64,8 +62,8 @@ std::vector<tt::tt_metal::CoreCoord> decide_untilizer_cores(
             below.push_back(core);
         }
     }
-    // Refused rather than run on the streams' row: the pool's DRAM traffic there lands on the NoC row
-    // the streams already saturate, which is a slowdown nothing but a profile would ever show.
+    // Refused, not run on the streams' row: the pool's DRAM traffic there would share the NoC row the
+    // streams already fill and slow them down.
     TT_FATAL(
         !below.empty(),
         "dispatch_fabric2d: a TILE input needs its sub-device to include row {}, the row under the streams "
@@ -127,9 +125,8 @@ std::optional<UntilizePlan> plan_untilize(
     UntilizePlan plan;
     plan.tiles_per_row = static_cast<uint32_t>(input.logical_shape()[-1]) / tt::constants::TILE_WIDTH;
     plan.block_ct_dim = untilize_block_ct_dim(plan.tiles_per_row);
-    // A ragged tail gets a whole tile row of its own, which the packer fills with the tile's padding
-    // rows the way production `dispatch` does. Staging is allocated to match, so those rows land in
-    // pages past the sequence that nothing reads -- the routing pass walks tokens, not tile rows.
+    // A partial last tile row is packed whole, including the tile's padding rows. Staging is sized to
+    // match, so those rows land in pages past the sequence that nothing reads.
     plan.num_tile_rows = (seq_len_per_chip + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
     plan.tile_bytes = static_cast<uint32_t>(input.buffer()->aligned_page_size());
     plan.token_bytes = token_bytes;
@@ -139,11 +136,10 @@ std::optional<UntilizePlan> plan_untilize(
     plan.input = input.buffer();
     plan.staging = staging;
 
-    // The packer writes its rows at a stride of tiles_per_row * TILE_WIDTH datums in the PAYLOAD's
-    // format, while the writer beside it and the staging page both count a row as token_bytes. Those
-    // agree only while the row needs no alignment padding; if they ever diverge, every token after the
-    // first of a tile row shears by the difference, which is the one failure this path has no way to
-    // notice.
+    // The packer writes rows at a stride of tiles_per_row * TILE_WIDTH elements in the payload's format,
+    // while the writer and the staging page count a row as token_bytes. They agree only while a row needs
+    // no alignment padding; otherwise every token after the first in a tile row is shifted, and nothing
+    // later detects it.
     const uint32_t packed_row_bytes =
         plan.tiles_per_row * tt::constants::TILE_WIDTH * static_cast<uint32_t>(out_payload.element_size());
     TT_FATAL(
@@ -165,8 +161,8 @@ UntilizerPoolFallback add_untilizer_pool(
     const uint32_t pool_size = static_cast<uint32_t>(pool.size());
     const CoreRangeSet pool_cores(ttsl::Span<const tt::tt_metal::CoreCoord>(pool.data(), pool_size));
 
-    // Tiled tile row, reader -> compute. A whole number of block_ct_dim blocks deep, so a block never
-    // straddles the ring wrap, and two blocks deep so the reader runs ahead of the packer.
+    // Tiles, reader -> compute. Two blocks of block_ct_dim tiles: a whole number of blocks, so a block
+    // never wraps around the end of the CB, and two so the reader can work one block ahead of the packer.
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = 2u * plan.block_ct_dim * plan.tile_bytes,
         .core_ranges = pool_cores,
@@ -177,10 +173,8 @@ UntilizerPoolFallback add_untilizer_pool(
         }}},
     });
     // Untilized rows, compute -> writer. A whole number of tile rows, so a tile row's rows are one
-    // contiguous run -- pack_untilize writes each column block at an offset into that run. The index
-    // is c_11 to match the sibling `dispatch` op's untilize output, so a profile of the two reads the
-    // same. Its format is the payload's rather than the input's: the packer converts as it writes here,
-    // which is where that op puts its BFLOAT16 -> FP8 conversion too.
+    // contiguous run; pack_untilize writes each column block at an offset into that run. The format is
+    // the payload's, because the packer converts as it writes.
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = 2u * tt::constants::TILE_HEIGHT * plan.token_bytes,
         .core_ranges = pool_cores,
@@ -209,9 +203,8 @@ UntilizerPoolFallback add_untilizer_pool(
         ct.push_back(static_cast<uint32_t>(placement.worker_virtual.x));
         ct.push_back(static_cast<uint32_t>(placement.worker_virtual.y));
     }
-    // The kernels index the coordinates from this base and chain their accessor arguments past them.
-    // A base that does not match the block actually appended sends every tile row's arrival to a core
-    // that is not there, which the stream readers then wait for forever.
+    // The kernels read the stream coordinates from this base and their accessor arguments after them, so
+    // the kernels and this block must agree on its size.
     TT_FATAL(
         ct.size() == dspf2d::UntilizeCtArgs::kCount + 2u * streams.size(),
         "dispatch_fabric2d: untilizer compile-time args are {} words but the kernels index {}",
@@ -244,8 +237,8 @@ UntilizerPoolFallback add_untilizer_pool(
         .noc = tt::tt_metal::NOC::NOC_1,
     };
 
-    // The only thing that differs between the pool's cores, so the only thing held per core: as a
-    // compile-time argument it would build a separate binary for each of them.
+    // The pool index is the only per-core value. It is a runtime argument because a compile-time one
+    // would build a separate binary per core.
     for (uint32_t i = 0; i < pool_size; i++) {
         tt::tt_metal::KernelDescriptor::RTArgList rdr_rt;
         rdr_rt.push_back(i);

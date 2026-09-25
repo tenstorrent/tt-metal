@@ -4,11 +4,10 @@
 
 #pragma once
 
-// The sender kernel's compile-time arguments. Host and kernel index the SAME enum by name rather than
-// counting positions, so the two cannot drift: adding a field in the wrong place is a compile error on
-// one side instead of a silently misread word on the other.
+// The sender kernel's compile-time arguments. Host and kernel index the same enum by name, so the
+// argument order cannot drift between them.
 //
-// The sender has scalars only -- every address it writes arrives per token in the entry's routing tail.
+// The sender takes scalars only: each address it writes to arrives with the token in its fwd_meta.
 
 #include "dispatch_fabric2d_kernel_interface.hpp"
 
@@ -51,9 +50,8 @@ struct SenderCtArgs {
     uint32_t fwd_sem_addr;
 
 #ifndef KERNEL_BUILD
-    // `downstream` is the worker serving this stream on the next chip: the sender signals its
-    // arrived-page counter through the fabric packet header, which is why every worker placement on the
-    // mesh is decided before any kernel is built.
+    // `downstream` is the core serving this stream on the next chip; the sender signals its arrived-page
+    // counter, so placement must be decided on every chip before any kernel is built.
     SenderCtArgs(
         uint32_t token_bytes,
         const op::StreamPlacement& self,

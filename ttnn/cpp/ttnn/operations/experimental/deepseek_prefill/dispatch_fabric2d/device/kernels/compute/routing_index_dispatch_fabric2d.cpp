@@ -2,14 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Stream core, compute RISCs: one RISC of the routing-index build each. The op has no tile math, so
-// without this the three TRISCs idle for the whole launch; the pass is nothing but L1 loads and
-// stores, which they issue as well as the reader does.
-//
-// Built from the reader's compile-time arguments, unchanged, so the layout of the scratch and
-// every constant the pass reads are the reader's own. The JIT compiles this file three times, once per
-// TRISC, with exactly one of TRISC_UNPACK / TRISC_MATH / TRISC_PACK defined (jit_build's TRISC
-// prolog); each build is one RISC.
+// Compute kernel of a stream core: each TRISC builds its slice of the routing index. Built from the reader's
+// compile-time arguments so the scratch layout matches, and compiled once per TRISC with one of
+// TRISC_UNPACK / TRISC_MATH / TRISC_PACK defined.
 
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
@@ -25,12 +20,10 @@ constexpr uint32_t kRisc = dspf2d::kRiscMath;
 #elif defined(TRISC_PACK)
 constexpr uint32_t kRisc = dspf2d::kRiscPack;
 #else
-#error "routing index risc kernel built for an unknown TRISC"
+#error "routing index kernel built for an unknown TRISC"
 #endif
-// The RISC set is the reader plus these three builds and nothing else; a RISC no RISC runs would leave
-// the reader waiting forever.
-static_assert(
-    dspf2d::INDEX_RISCS == 4u, "one routing index risc per RISC that runs run_risc: the reader and three TRISCs");
+// run_risc waits for all INDEX_RISCS, so each one must be run: by the reader and these three TRISCs.
+static_assert(dspf2d::INDEX_RISCS == 4u, "INDEX_RISCS must be the reader plus three TRISCs");
 static_assert(kRisc != dspf2d::kRiscReader && kRisc < dspf2d::INDEX_RISCS);
 
 void kernel_main() {

@@ -6,25 +6,21 @@
 
 #include <cstdint>
 
-// The untilizer pool's three kernels, which turn a TILE input into the row-major staging buffer the
-// stream cores read tokens from. The transport does not change: a token still arrives at the stream
-// core's queue as one page of an interleaved DRAM buffer, and only which buffer that is moves.
+// Arguments of the untilizer pool's three kernels, which turn a TILE input into a row-major staging
+// buffer in DRAM. The stream cores then read tokens from staging as pages of an interleaved buffer.
 //
-// A tile row is one tile row of the input -- TILE_HEIGHT tokens, and TILE_HEIGHT pages of staging. The
-// reader streams a tile row's tile columns into cb_in `block_ct_dim` at a time, the compute kernel packs
-// each of those blocks into cb_out as rows, and the writer puts the rows into staging and tells every
-// stream core that one more tile row has landed.
+// A tile row is TILE_HEIGHT tokens of the input and TILE_HEIGHT pages of staging. The reader moves a
+// tile row into cb_in `block_ct_dim` tiles at a time, the compute kernel untilizes each block into
+// cb_out, and the writer copies the rows to staging and signals every stream core.
 //
-// The three roles share ONE compile-time argument layout, built once on the host, because the only
-// thing that differs between the pool's cores is which tile rows they take. That is `first_tile_row`, a
-// RUNTIME argument: held compile-time it would build a separate kernel binary per core for nothing.
+// The three kernels share one compile-time layout. Only the tile rows a core takes differ between the
+// pool's cores, so `first_tile_row` is a runtime argument and all cores share one binary.
 
 namespace dspf2d {
 
 struct UntilizeCtArgs {
     enum Idx : uint32_t {
-        // Circular buffer indices, unlike the kCb* of the reader's scratch, which are blocks
-        // of one flat L1 layout.
+        // Circular buffer indices.
         kTileCb,  // tiled tile row, reader -> compute
         kRowCb,   // untilized rows, compute -> writer
         kNumTileRows,
@@ -36,9 +32,8 @@ struct UntilizeCtArgs {
         kRowsPerTileRow,  // TILE_HEIGHT
         kStreamCount,
         kUntilizeSemAddr,
-        // Where the kStreamCount pairs of (virtual x, virtual y) begin -- the stream cores whose
-        // counter a landed tile row signals. A BASE held in an argument, not the index of this argument:
-        // the pairs are appended after the whole scalar block, and the TensorAccessorArgs after them.
+        // Holds the index where the kStreamCount (virtual x, virtual y) pairs of the stream cores begin.
+        // The pairs follow the scalars, and the TensorAccessorArgs follow the pairs.
         kStreamCoordsBase,
         kCount,
     };
@@ -46,11 +41,8 @@ struct UntilizeCtArgs {
 
 struct UntilizeRtArg {
     enum Idx : uint32_t {
-        // Index 0 for all three roles, which is the whole reason this enum is shared.
-        kFirstTileRow,
-        // Pushed by the reader (the TILE input) and by the writer (the staging buffer) only. The
-        // compute kernel addresses no memory and is handed `kFirstTileRow` alone, so its runtime-arg
-        // list is one word long and this slot is not there to read.
+        kFirstTileRow,  // all three kernels
+        // Reader: the TILE input. Writer: the staging buffer. The compute kernel does not get this arg.
         kBufferAddr,
     };
 };
