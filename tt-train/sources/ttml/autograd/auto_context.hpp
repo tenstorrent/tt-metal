@@ -111,6 +111,8 @@ public:
 
     void initialize_distributed_context(int argc, char** argv);
 
+    [[nodiscard]] bool is_distributed_context_initialized() const;
+
     [[nodiscard]] std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> get_distributed_context()
         const;
 
@@ -127,6 +129,8 @@ public:
     [[nodiscard]] bool is_parallelism_context_initialized() const;
 
     void initialize_parallelism_context(const DistributedConfig& config);
+
+    void reset_parallelism_context();
 
 private:
     AutoContext();

@@ -128,6 +128,10 @@ void AutoContext::initialize_distributed_context(int argc, char** argv) {
     m_distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
 }
 
+bool AutoContext::is_distributed_context_initialized() const {
+    return m_distributed_context != nullptr;
+}
+
 core::TTProfiler& AutoContext::get_profiler() {
     if (!m_profiler) {
         m_profiler = std::make_unique<core::TTProfiler>();
@@ -235,6 +239,10 @@ void AutoContext::initialize_parallelism_context(const DistributedConfig& config
         throw std::runtime_error("ParallelismContext is already initialized.");
     }
     m_parallelism_context = std::make_unique<ParallelismContext>(get_device(), config);
+}
+
+void AutoContext::reset_parallelism_context() {
+    m_parallelism_context = nullptr;
 }
 
 const uint32_t ParallelismContext::get_ddp_size() const {
