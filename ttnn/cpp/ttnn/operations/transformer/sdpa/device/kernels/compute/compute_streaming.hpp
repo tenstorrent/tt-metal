@@ -1083,13 +1083,17 @@ static void apply_lightweight_mask_streaming(
                         }
                     }
                 } else {
-                    // Chunked-prefill straddle: K coord jumps by straddle_jump at col >= straddle_col
-                    // (the K-chunk crosses a slab boundary). Evaluate per-col.
+                    // Each cache slab belongs to a different global chunk. A wide K chunk can
+                    // cross several slabs, so apply the gap at every boundary, not just the first.
                     if (apply_causal) {
                         for (uint32_t col = 0; col < mask_cols; col++) {
                             int32_t k_pos = static_cast<int32_t>(k_start_tile) + static_cast<int32_t>(col);
                             if (col >= straddle_col) {
-                                k_pos += static_cast<int32_t>(straddle_jump);
+                                uint32_t crossed_slabs = 1;
+                                if constexpr (kv_pad_q_local_padded_Nt > 0 && num_cols > kv_pad_q_local_padded_Nt) {
+                                    crossed_slabs += (col - straddle_col) / kv_pad_q_local_padded_Nt;
+                                }
+                                k_pos += static_cast<int32_t>(crossed_slabs * straddle_jump);
                             }
                             l1_acc_causal_col_mask(
                                 mask_cb, out_cb, row_offset, col, q_pos, k_pos, neginf_idx, primary_diag_idx);
@@ -1553,6 +1557,12 @@ static void sdpa_inner_loop_step(
         static_assert(vDHt % qktv_subblock_w == 0, "vDHt must be evenly divisible by qktv_subblock_w");
         static_assert(qktv_h * qktv_subblock_w <= dst_size, "qktv subblock must fit in dest register file");
         constexpr uint32_t qktv_q_num_subblocks = Sq_chunk_t / qktv_h;  // full subblocks only
+        // The in-place sub_exp below PACK-writes the last QK row group; the first V matmul then
+        // UNPACK-reads rows [0, qktv_h). Overlapping ranges need a pack->unpack rendezvous or the
+        // matmul reads stale L1. q_num_subblocks == 1 was too narrow: the granularities also diverge
+        // when the QK solver falls back to subblock_h == 1 (Sk_chunk_t not divisible by 4) while
+        // Phase 2 widens qktv_h to 2, i.e. exactly Sq_chunk_t == 2.
+        constexpr bool qktv_first_group_reads_inplace_row = (q_num_subblocks - 1) * qkt_subblock_h < qktv_h;
         constexpr uint32_t qktv_v_num_subblocks = vDHt / qktv_subblock_w;
         constexpr uint32_t qktv_output_num_tiles = Sq_chunk_t * vDHt;
         // cb_qkt_im row width is KT_stride (for pointer alignment), not Sk_chunk_t
@@ -1576,8 +1586,7 @@ static void sdpa_inner_loop_step(
 
             // sub_exp_block_bcast_cols softmaxes the last Q row in place, one column-subblock at a
             // time. The PACK->UNPACK barrier after it makes those in-place pack writes visible to
-            // the V-matmul unpack; only needed when q_num_subblocks==1 (Phase 1's hold_wr_ptr
-            // didn't sync them).
+            // the V-matmul unpack whenever its first row group overlaps the in-place writes.
 
             if constexpr (!kt_inplace_v) {
                 // Split-drain (common, materialized-V path): interleave each column-subblock's
@@ -1592,10 +1601,11 @@ static void sdpa_inner_loop_step(
                         kt_sub * actual_sbw,
                         qkt_subblock_h,
                         actual_sbw);
-                    if constexpr (q_num_subblocks == 1) {
+                    if constexpr (qktv_first_group_reads_inplace_row) {
+                        // PACK half only; SEMGET head-of-line-blocks the unpack thread, so the
+                        // UNPACK half waits just before the matmul instead of stalling the setup
+                        // below, none of which reads cb_qkt_im tile data.
                         PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
-                        UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
-                        UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
                     }
                     if (kt_sub == 0) {
                         CircularBuffer(cb_qkt_im).wait_front(qktv_in0_wait_tiles);
@@ -1615,6 +1625,11 @@ static void sdpa_inner_loop_step(
                         // still limits how many V rows are multiplied.
                         mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
                         configure_row_pack_width(out_cb, qktv_subblock_w);
+                        if constexpr (qktv_first_group_reads_inplace_row) {
+                            // UNPACK half of the rendezvous posted above.
+                            UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+                            UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+                        }
                         for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                             const uint32_t qktv_in1_index = kt_sub * matmul_inner * vDHt + v_index_offset;
                             blocked_matmul_and_pack<false, vDHt, vDHt>(
@@ -1655,7 +1670,7 @@ static void sdpa_inner_loop_step(
                         qkt_subblock_h,
                         actual_sbw);
                 }
-                if constexpr (q_num_subblocks == 1) {
+                if constexpr (qktv_first_group_reads_inplace_row) {
                     PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
                     UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
                     UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
@@ -2329,6 +2344,9 @@ template <
     // reader's kv_chunk_is_beyond_logical_l skip so the K/V CB producer/consumer counts stay aligned.
     bool joint_n_skip_enabled = false,
     uint32_t joint_local_padded_Nt = 0,  // Lt_local: per-device joint tile count (sharded path)
+    // Rotated Q split: map q-loop positions through the fixed base range and moving remainder.
+    // Off by default (position is the flat id).
+    bool rotated_q_split_enabled = false,
     typename MaskCtx = LightweightMaskContext>
 void sdpa_ring_v2(
     const uint32_t global_q_start,
@@ -2356,7 +2374,9 @@ void sdpa_ring_v2(
     // True (unpadded) joint length in tiles; joint K chunks starting at/after it are pure padding.
     const uint32_t logical_lt = 0,
     // Tile offset of this call's Q chunk within cb_q_in (head-serial passes; 0 otherwise).
-    const uint32_t q_base_tiles = 0) {
+    const uint32_t q_base_tiles = 0,
+    // Rotated Q split only: fixed base range plus this iteration's remainder unit.
+    [[maybe_unused]] const RotatedQSlots& rotated_slots = {}) {
     init_sdpa_streaming_semaphores();
 
     constexpr bool has_sliding_window = sliding_window_size > 0;
@@ -2496,7 +2516,11 @@ void sdpa_ring_v2(
         // Compute Q chunk index (with optional zigzag remapping for causal balancing).
         // num_q_chunks is total per-head chunks (local + joint), matching the divisor the
         // writer/reader use to flatten (batch, head, q_chunk) — see ring_joint_sdpa.cpp.
-        uint32_t q_chunk = remap_q_index(q, num_q_chunks, use_zigzag_balancing) % num_q_chunks;
+        uint32_t q_flat = q;
+        if constexpr (rotated_q_split_enabled) {
+            q_flat = rotated_slots.at(q);
+        }
+        uint32_t q_chunk = remap_q_index(q_flat, num_q_chunks, use_zigzag_balancing) % num_q_chunks;
 
         // Causal K-chunk limit and Q start tile for this Q chunk
         uint32_t causal_k_limit = num_kv_chunks;
@@ -2524,6 +2548,11 @@ void sdpa_ring_v2(
         ttnn::operations::transformer::sdpa::ring_joint::SlidingQWorkPlan sliding_q_plan;
         constexpr bool circular_kv_cache = circular_kv_slab_count > 1;
         if constexpr (has_sliding_window) {
+            const ttnn::operations::transformer::sdpa::ring_joint::ChunkedQMapping q_mapping{
+                chunked.kv_pad_rotation.q_pre_wrap_start_tile,
+                chunked.kv_pad_rotation.q_pre_wrap_tile_count,
+                chunked.kv_pad_rotation.q_post_wrap_start_tile,
+                chunked.kv_pad_rotation.q_valid_tile_count};
             sliding_q_plan = ttnn::operations::transformer::sdpa::ring_joint::build_sliding_q_work_plan(
                 q_chunk * Sq_chunk_t,
                 Sq_chunk_t,
@@ -2535,7 +2564,8 @@ void sdpa_ring_v2(
                 local_padded_Nt,
                 Sk_chunk_t,
                 logical_nt,
-                circular_kv_slab_count);
+                circular_kv_slab_count,
+                kv_pad_rotation_enabled ? &q_mapping : nullptr);
             ASSERT(sliding_q_plan.is_valid);
             ASSERT(sliding_q_plan.total_k_chunk_count > 0);
         }
@@ -2592,10 +2622,7 @@ void sdpa_ring_v2(
             const uint32_t source_ring_id = has_sliding_window ? sliding_k_chunk.source_ring_id : ring_id;
             const uint32_t source_k_chunk = has_sliding_window ? sliding_k_chunk.source_k_chunk : k_chunk;
             const bool kv_chunk_is_joint = !has_sliding_window && k_chunk >= num_local_k_chunks;
-            if (try_skip_oob_kv(source_ring_id, source_k_chunk, kv_chunk_is_joint)) {
-                // Sliding plans are clipped to logical_n before chunking. Treat a future mismatch
-                // as a device failure rather than leaving the writer waiting for a missing signal.
-                ASSERT(!has_sliding_window);
+            if (!has_sliding_window && try_skip_oob_kv(source_ring_id, source_k_chunk, kv_chunk_is_joint)) {
                 continue;
             }
             if (try_skip_causal_above_diag(source_k_chunk, causal_k_limit)) {
@@ -2701,8 +2728,12 @@ void sdpa_ring_v2(
                 }
             }
             if constexpr (straddle_mask_enabled) {
-                if (!narrowed_by_mask && is_straddle_mask_chunk) {
-                    active_Sk_param = Sk_chunk_t - lw_mask.straddle_num_padded_tiles;
+                // A short balanced shard can end inside the same K chunk as its
+                // causal half boundary. Padding does not supersede that tighter
+                // boundary: intersect both masks rather than keeping the first one.
+                const uint32_t straddle_active = Sk_chunk_t - lw_mask.straddle_num_padded_tiles;
+                if (is_straddle_mask_chunk && straddle_active < active_Sk_param) {
+                    active_Sk_param = straddle_active;
                     chunk_sbw = straddle_sbw;
                 }
             }
@@ -2772,7 +2803,7 @@ void sdpa_ring_v2(
             // Chunked-prefill straddle. Background: each device's K cache holds the per-chunk
             // K region for every chunk back-to-back, q_local_padded_Nt tiles per region. When
             // k_chunk_size does not divide q_local_padded_Nt, a single K-chunk can begin in
-            // one region (chunk j) and end in the next (chunk j+1). Because adjacent regions
+            // one region (chunk j) and end one or more regions later. Because adjacent regions
             // map to *non-adjacent* global K positions (jumping by chunk_size_t between them),
             // the global K coord is no longer contiguous across the K-chunk's columns. We
             // signal this to the diag stamp via:
@@ -2782,7 +2813,7 @@ void sdpa_ring_v2(
             //     (= chunk_size_t - q_local_padded_Nt, i.e. the gap between region j's end and
             //     region j+1's start in global K).
             // When straddle_col > 0 the stamp evaluates the diagonal per column instead of
-            // per row, applying the jump for columns >= straddle_col.
+            // per row, applying the jump at straddle_col and every q_local_padded_Nt tiles thereafter.
             uint32_t step_straddle_col = 0;
             uint32_t step_straddle_jump = 0;
             if constexpr (chunked_enabled) {

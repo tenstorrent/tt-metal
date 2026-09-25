@@ -31,7 +31,7 @@ class VAEModelOptimisationsBH(ModelOptimisations1024x1024BH):
             compute_with_storage_grid_size=(8, 8),
             q_chunk_size=64,
             k_chunk_size=64,
-            exp_approx_mode=False,
+            exp_approx_mode=True,
         )
 
         self.groupnorm_configs["DRAM_GROUPNORM_32"] = {
