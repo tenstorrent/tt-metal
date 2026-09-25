@@ -44,6 +44,7 @@ def attention_forward(
     layer_idx=0,
     cached_len=0,
     indexed_rope=False,
+    segments=None,
 ):
     """
     Prefill forward pass - optimized for sequence processing (seq_len>1).
@@ -64,6 +65,8 @@ def attention_forward(
         layer_idx: this layer's index, for the per-layer cache write
         cached_len: valid prefix length already in the cache BEFORE this chunk (0 = first/only chunk).
             >0 selects the cache-read attention paths (current chunk attends the accumulated prefix).
+        segments: packed forward — list of (slot, cached_len), one per equal row block of hidden_states.
+            None (default) = one chunk for ``user_id`` at ``cached_len``.
 
     Returns:
         Attention output [batch, seq_len, hidden_size]
@@ -96,7 +99,124 @@ def attention_forward(
     if batch_size > 1:
         xqkv_fused = ttnn.reshape(xqkv_fused, [batch_size, 1, seq_len, -1])
 
-    # Split into Q, K, V heads
+    if segments is None:
+        tt_sdpa_out = _attention_core(
+            xqkv_fused,
+            hidden_states,
+            rope_mats,
+            weights,
+            kv_cache,
+            config,
+            mesh_config,
+            mesh_device,
+            program_config,
+            transformation_mat,
+            ccl_manager,
+            user_id,
+            batch_size,
+            layer_idx,
+            cached_len,
+            indexed_rope,
+            seq_len,
+        )
+    else:
+        # Packed forward: projections, o_proj and the closing CCL run once on the packed rows; each
+        # segment's rows go through the per-chunk core with its own slot and cached_len.
+        s_local = total_seq_len // len(segments)
+        outs = []
+        for i, (slot, seg_cached_len) in enumerate(segments):
+            rows = lambda t: ttnn.slice(t, (0, 0, i * s_local, 0), (1, 1, (i + 1) * s_local, t.shape[-1]))
+            outs.append(
+                _attention_core(
+                    rows(xqkv_fused),
+                    rows(hidden_states) if config.is_sparse else None,
+                    rope_mats,
+                    weights,
+                    kv_cache,
+                    config,
+                    mesh_config,
+                    mesh_device,
+                    program_config,
+                    transformation_mat,
+                    ccl_manager,
+                    slot,
+                    1,
+                    layer_idx,
+                    seg_cached_len,
+                    indexed_rope,
+                    s_local,
+                )
+            )
+        xqkv_fused.deallocate(True)
+        if config.is_sparse:
+            hidden_states.deallocate(True)
+        tt_sdpa_out = ttnn.concat(outs, dim=2)
+        for o in outs:
+            o.deallocate(True)
+
+    # Flatten back for output projection: [B, 1, S, H] -> [1, 1, B*S, H]
+    if batch_size > 1:
+        tt_sdpa_out = ttnn.reshape(tt_sdpa_out, [1, 1, total_seq_len, -1])
+
+    # Output projection + the closing TP collective. Under a SHARDED residual the collective is a
+    # reduce-scatter only (o_proj is row-parallel, so the RS both completes the partial sums and lands
+    # the result already in the residual's emb/tp layout); under the replicated residual it must be a
+    # full all-reduce.
+    # When TP > 1 we use the fused matmul + reduce-scatter op; the trailing
+    # all-gather + padding slice stay as separate ops. See
+    # apply_output_projection_fused_rs for the per-shape tuned configs.
+    # The fused MM+RS op (minimal_matmul_strided_reduce_scatter_async) ONLY supports Ring topology, so
+    # fall back to the plain o_proj + all-reduce under Linear (e.g. the single-galaxy FABRIC_1D mesh).
+    sharded_residual = use_sharded_residual() and mesh_config.tp > 1
+    use_fused_rs = (
+        mesh_config.tp > 1
+        and is_shape_fused_mm_rs_supported(tt_sdpa_out)
+        and ccl_manager.topology == ttnn.Topology.Ring
+    )
+    if use_fused_rs:
+        with zone("o_proj_fused_rs"):
+            rs_out = apply_output_projection_fused_rs(tt_sdpa_out, weights, mesh_config, ccl_manager)
+        tt_sdpa_out.deallocate(True)
+        if sharded_residual:
+            # The fused op already reduce-scattered: that IS the sharded-residual output. Only the
+            # padding trim would remain, and a sharded residual admits no padding, so nothing is left.
+            assert_sharded_residual_unpadded(mesh_config, hidden_size)
+            return rs_out
+        with zone("ccl_out_allgather"):
+            tt_out_result = apply_allgather_and_slice(rs_out, mesh_config, ccl_manager, hidden_size)
+    else:
+        with zone("o_proj"):
+            tt_out = apply_output_projection(tt_sdpa_out, weights, activation_dtype)
+        tt_sdpa_out.deallocate(True)
+        if sharded_residual:
+            with zone("ccl_out_reduce_scatter"):
+                return apply_reduce_scatter(tt_out, mesh_config, ccl_manager, hidden_size)
+        with zone("ccl_out_allreduce"):
+            tt_out_result = apply_allreduce(tt_out, mesh_config, ccl_manager, hidden_size)
+    return tt_out_result
+
+
+def _attention_core(
+    xqkv_fused,
+    hidden_states,
+    rope_mats,
+    weights,
+    kv_cache,
+    config,
+    mesh_config,
+    mesh_device,
+    program_config,
+    transformation_mat,
+    ccl_manager,
+    user_id,
+    batch_size,
+    layer_idx,
+    cached_len,
+    indexed_rope,
+    seq_len,
+):
+    """Split heads -> QK-norm -> RoPE -> KV write -> attention -> concat heads, for ONE chunk's rows
+    (one cache slot, one cached_len). Consumes xqkv_fused (and hidden_states on MSA layers)."""
     num_local_heads = mesh_config.shard_size(config.num_heads)
     num_local_kv_heads = mesh_config.shard_size(config.num_kv_heads)
 
@@ -312,44 +432,4 @@ def attention_forward(
     with zone("concat_heads", FINE):
         tt_sdpa_out = concat_heads(tt_sdpa_out)
     tt_sdpa_out_pre_concat.deallocate(True)
-
-    # Flatten back for output projection: [B, 1, S, H] -> [1, 1, B*S, H]
-    if batch_size > 1:
-        tt_sdpa_out = ttnn.reshape(tt_sdpa_out, [1, 1, total_seq_len, -1])
-
-    # Output projection + the closing TP collective. Under a SHARDED residual the collective is a
-    # reduce-scatter only (o_proj is row-parallel, so the RS both completes the partial sums and lands
-    # the result already in the residual's emb/tp layout); under the replicated residual it must be a
-    # full all-reduce.
-    # When TP > 1 we use the fused matmul + reduce-scatter op; the trailing
-    # all-gather + padding slice stay as separate ops. See
-    # apply_output_projection_fused_rs for the per-shape tuned configs.
-    # The fused MM+RS op (minimal_matmul_strided_reduce_scatter_async) ONLY supports Ring topology, so
-    # fall back to the plain o_proj + all-reduce under Linear (e.g. the single-galaxy FABRIC_1D mesh).
-    sharded_residual = use_sharded_residual() and mesh_config.tp > 1
-    use_fused_rs = (
-        mesh_config.tp > 1
-        and is_shape_fused_mm_rs_supported(tt_sdpa_out)
-        and ccl_manager.topology == ttnn.Topology.Ring
-    )
-    if use_fused_rs:
-        with zone("o_proj_fused_rs"):
-            rs_out = apply_output_projection_fused_rs(tt_sdpa_out, weights, mesh_config, ccl_manager)
-        tt_sdpa_out.deallocate(True)
-        if sharded_residual:
-            # The fused op already reduce-scattered: that IS the sharded-residual output. Only the
-            # padding trim would remain, and a sharded residual admits no padding, so nothing is left.
-            assert_sharded_residual_unpadded(mesh_config, hidden_size)
-            return rs_out
-        with zone("ccl_out_allgather"):
-            tt_out_result = apply_allgather_and_slice(rs_out, mesh_config, ccl_manager, hidden_size)
-    else:
-        with zone("o_proj"):
-            tt_out = apply_output_projection(tt_sdpa_out, weights, activation_dtype)
-        tt_sdpa_out.deallocate(True)
-        if sharded_residual:
-            with zone("ccl_out_reduce_scatter"):
-                return apply_reduce_scatter(tt_out, mesh_config, ccl_manager, hidden_size)
-        with zone("ccl_out_allreduce"):
-            tt_out_result = apply_allreduce(tt_out, mesh_config, ccl_manager, hidden_size)
-    return tt_out_result
+    return tt_sdpa_out

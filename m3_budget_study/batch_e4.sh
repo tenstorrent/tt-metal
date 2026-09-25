@@ -1,0 +1,17 @@
+#!/bin/bash
+# E4 packing / coupling by history (+ E5 packed padding pair). Compositions ordered so fills are reused;
+# the ones that leave pad-row KV in a slot (C7, E5) run last.
+cd "$(dirname "$0")"
+declare -A L=([S8]=8,9,10,11,12,13,14,15 [D]=0,1,2 [S0]=0,1,2,3,4,5,6,7)
+W4="C1=0:2048,0:2048;C5=141312:2048,0:2048;C2=141312:2048,141312:2048;C6=20480:2048+22528:2048;C3=548864:2048,548864:2048;C4=548864:2048,0:2048;C4r=0:2048,548864:2048;C7=548864:1024,0:2048;E5p=0:2048,0:256"
+W8="C8=0:2048,0:2048,0:2048,0:2048;C11=141312:2048,141312:2048,141312:2048,141312:2048;C12=141312:2048,0:2048,40960:2048+43008:2048;C9=548864:2048,0:2048,0:2048,0:2048;C10=548864:2048,548864:2048,0:2048,0:2048"
+S0W4="C1=0:2048,0:2048;C4=548864:2048,0:2048"
+S0W8="C8=0:2048,0:2048,0:2048,0:2048;C9=548864:2048,0:2048,0:2048,0:2048"
+run () { HARNESS=budget_packed.py RUN_ID=$1 EXP=E4 LAYER_SET=$2 BUDGET_LAYER_IDS=${L[$2]} BUDGET_B=$3 BUDGET_COMPOS="$4" ./run_budget.sh; }
+for LS in S8 D; do
+  run e4_$(echo $LS | tr A-Z a-z)_w4096 $LS 2 "$W4"
+  run e4_$(echo $LS | tr A-Z a-z)_w8192 $LS 4 "$W8"
+done
+run e4_s0_w4096 S0 2 "$S0W4"
+run e4_s0_w8192 S0 4 "$S0W8"
+RUN_ID=reg_s8_w2048 EXP=REG LAYER_SET=S8 BUDGET_LAYER_IDS=8,9,10,11,12,13,14,15 BUDGET_W=2048 BUDGET_POINTS=0:2048,16384:2048 NOTES="default-path regression after Phase B" ./run_budget.sh

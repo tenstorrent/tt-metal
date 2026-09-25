@@ -64,10 +64,31 @@ def main(log, envf, out):
         B=1,
         replicated_tokens=0,
         traced=0,
-        synth_history=int(cfg["fill"] != "real"),
+        synth_history=int(cfg.get("fill", "real") != "real"),
         iters=cfg["iters"],
     )
-    note = f"capacity={cfg['capacity']} fill={cfg['fill']} {env.get('NOTES', '')}".strip()
+    note = f"capacity={cfg['capacity']} fill={cfg.get('fill', 'real')} {env.get('NOTES', '')}".strip()
+    if "compos" in cfg:  # packed harness (budget_packed.py): one row per composition
+        done = {r["compo"]: r for r in recs if r["kind"] == "point"}
+        rows = []
+        for name, spec in cfg["compos"]:
+            r = done.get(name)
+            row = dict(
+                base,
+                B=cfg["B"],
+                W=cfg["W"],
+                notes=f"{name} {spec} ref={int(cfg['reference'])} {note}",
+                segments_json=json.dumps(r["segments"]) if r else json.dumps(spec),
+                status="OK" if r else (status if status != "OK" else "ERROR"),
+            )
+            if r:
+                row.update(
+                    wall_ms_median=r["wall_ms_median"], wall_ms_min=r["wall_ms_min"], wall_ms_max=r["wall_ms_max"]
+                )
+            rows.append(row)
+        append(out, COLS, rows)
+        print(f"[collect] {env['run_id']}: status={status}, {len(done)}/{len(rows)} compositions")
+        return
     done = {(r["h"], r["n"]): r for r in recs if r["kind"] == "point"}
     rows = []
     for h, n in [tuple(p) for p in cfg["points"]] or [(None, None)]:

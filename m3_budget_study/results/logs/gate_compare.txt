@@ -1,0 +1,7 @@
+slot 0 k        real=10496: per-layer PCC 1.00000 0.99974
+slot 0 v        real=10496: per-layer PCC 1.00000 0.99961
+slot 0 index_k  real=10496: per-layer PCC 0.99971
+slot 1 k        real=14336: per-layer PCC 1.00000 0.99973
+slot 1 v        real=14336: per-layer PCC 1.00000 0.99961
+slot 1 index_k  real=14336: per-layer PCC 0.99970
+worst PCC 0.99961
