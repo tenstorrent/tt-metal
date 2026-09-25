@@ -15,7 +15,6 @@
 #define TTI_INSN(ENCODING) void((void(ENCODING), ({ __asm__ __volatile__(".error \"TTI_INSN in non-tensix code\""); })))
 #define TT_INSN(ENCODING)  void((void(ENCODING), ({ __asm__ __volatile__(".error \"TT_INSN in non-tensix code\""); })))
 #endif
-#endif
 
 #define TT_OP(opcode, params) ((opcode << 24) + params)
 
