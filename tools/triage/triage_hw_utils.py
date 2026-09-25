@@ -8,8 +8,24 @@ import datetime
 from dataclasses import dataclass
 from pathlib import Path
 
+from ttexalens.device import Device
 from ttexalens.tt_exalens_lib import read_firmware_telemetry_entry
 from ttexalens.umd_device import TimeoutDeviceRegisterError
+
+
+# ---------------------------------------------------------------------------
+# Device capabilities
+# ---------------------------------------------------------------------------
+
+
+def device_has_firmware(device: Device) -> bool:
+    """Whether this device carries firmware that triage can read (versions, telemetry, postcode)."""
+    # Firmware is considered present if the device has an ARC block on Wormhole or Blackhole architectures.
+    if device.is_wormhole() or device.is_blackhole():
+        return len(device.get_blocks(block_type="arc")) == 1
+
+    # Until we have hardware for other architectures, we assume no firmware is present.
+    return False
 
 
 # ---------------------------------------------------------------------------

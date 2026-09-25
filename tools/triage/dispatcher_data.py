@@ -16,6 +16,7 @@ Owner:
 """
 
 from dataclasses import dataclass
+from functools import cached_property
 import os
 import threading
 from typing import Callable
@@ -28,8 +29,10 @@ from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDev
 from elfs_cache import run as get_elfs_cache, ElfsCache
 from triage import triage_singleton, ScriptConfig, run_script, log_check_location
 from ttexalens.coordinate import OnChipCoordinate
-from ttexalens.elf import ElfVariable
+from ttexalens.elf import ElfFile, ElfVariable
+from ttexalens.hardware.risc_debug import RiscLocation
 from ttexalens.memory_access import create_l1_memory_access
+from ttexalens._native_ttexalens import MemoryAccess
 from ttexalens.context import Context
 from triage import TTTriageError, triage_field, hex_serializer
 from run_checks import run as get_run_checks
@@ -90,7 +93,15 @@ class DispatcherCoreData:
     kernel_lookup_warning: str | None = None
 
 
+ProcessorEnums = dict[str, dict[str, int | None]]
+
+
 class DispatcherData:
+    _dm0_elf: ElfFile
+    _idle_erisc_elf: ElfFile | None
+    _active_erisc_elf: ElfFile | None
+    _drisc_elf: ElfFile | None
+
     def __init__(
         self,
         inspector_data: InspectorData,
@@ -107,7 +118,7 @@ class DispatcherData:
         # Caches that are populated on demand
         self.lock = threading.Lock()
         self._mailboxes_cache: dict[OnChipCoordinate, ElfVariable] = {}
-        self._core_data_cache: dict[tuple[OnChipCoordinate, str], DispatcherCoreData] = {}
+        self._core_data_cache: dict[RiscLocation, DispatcherCoreData] = {}
         self._get_block_type: Callable[[OnChipCoordinate], BlockType | None] = run_checks.get_block_type
 
         # Cache build_env per device to avoid multiple RPC calls
@@ -136,20 +147,7 @@ class DispatcherData:
 
             build_env = self._build_env_cache[device_unique_id]
             self._drisc_enabled_flag: bool | None = bool(build_env.dramProgrammableCoresEnabled)
-            # Use build_env for initial firmware paths
-            brisc_elf_path = os.path.join(build_env.firmwarePath, "brisc", "brisc.elf")
-            idle_erisc_elf_path = os.path.join(build_env.firmwarePath, "idle_erisc", "idle_erisc.elf")
-            active_erisc_elf_name = "erisc" if run_checks.devices[0].is_wormhole() else "active_erisc"
-            active_erisc_elf_path = os.path.join(
-                build_env.firmwarePath, active_erisc_elf_name, active_erisc_elf_name + ".elf"
-            )
-
-            # On blackhole we have 2 modes (1-ERISC and 2-ERISC)
-            # By checking if the subordinate active erisc elf exists, we can determine in which mode we are
-            if run_checks.devices[0].is_blackhole():
-                self._is_2_erisc_mode = os.path.exists(
-                    os.path.join(build_env.firmwarePath, "subordinate_active_erisc", "subordinate_active_erisc.elf")
-                )
+            self._build_env = build_env
 
         except Exception as e:
             raise TTTriageError(
@@ -158,68 +156,17 @@ class DispatcherData:
                 "Set TT_METAL_INSPECTOR_RPC=1 when running your Metal application."
             )
 
-        self._brisc_elf = elfs_cache[brisc_elf_path]
-        self._idle_erisc_elf = elfs_cache[idle_erisc_elf_path]
-        self._active_erisc_elf = elfs_cache[active_erisc_elf_path]
-
-        self._is_blackhole = run_checks.devices[0].is_blackhole()
-
-        # Load DRISC ELF for DRAM cores (Blackhole only)
-        self._drisc_elf = None
-        if self._is_blackhole and self._drisc_enabled_flag:
-            try:
-                drisc_elf_path = os.path.join(build_env.firmwarePath, "drisc", "drisc.elf")
-                self._drisc_elf = elfs_cache[drisc_elf_path]
-            except Exception:
-                # DRISC firmware is optional; if it cannot be loaded, leave self._drisc_elf as None
-                pass
+        self._load_firmware_elfs(build_env, elfs_cache, run_checks.devices[0])
 
         # Access the value of enumerator for supported blocks
-        self._ProgrammableCoreTypes_TENSIX = self._brisc_elf.get_enum_value("ProgrammableCoreType::TENSIX")
-        self._ProgrammableCoreTypes_IDLE_ETH = self._brisc_elf.get_enum_value("ProgrammableCoreType::IDLE_ETH")
-        self._ProgrammableCoreTypes_ACTIVE_ETH = self._brisc_elf.get_enum_value("ProgrammableCoreType::ACTIVE_ETH")
-        self._ProgrammableCoreTypes_DRAM = self._brisc_elf.get_enum_value("ProgrammableCoreType::DRAM")
-
-        # Enumerators for tensix block
-        self._enum_values_tenisx = {
-            "ProcessorTypes": {
-                "BRISC": self._brisc_elf.get_enum_value("TensixProcessorTypes::DM0"),
-                "NCRISC": self._brisc_elf.get_enum_value("TensixProcessorTypes::DM1"),
-                "TRISC0": self._brisc_elf.get_enum_value("TensixProcessorTypes::MATH0"),
-                "TRISC1": self._brisc_elf.get_enum_value("TensixProcessorTypes::MATH1"),
-                "TRISC2": self._brisc_elf.get_enum_value("TensixProcessorTypes::MATH2"),
-            },
-        }
-
-        # Enumerators for eth block
-        self._enum_values_eth = {
-            "ProcessorTypes": {
-                "ERISC": self._idle_erisc_elf.get_enum_value("EthProcessorTypes::DM0"),
-                "ERISC0": self._idle_erisc_elf.get_enum_value("EthProcessorTypes::DM0"),
-            },
-        }
-
-        # EthProcessorTypes::DM1 is only available on blackhole
-        # ERISC1 behaves like DM0 if 1 ERISC mode is used
-        if self._idle_erisc_elf.get_enum_value("EthProcessorTypes::DM1") is not None:
-            self._enum_values_eth["ProcessorTypes"]["ERISC1"] = (
-                self._idle_erisc_elf.get_enum_value("EthProcessorTypes::DM1")
-                if self._is_2_erisc_mode
-                else self._idle_erisc_elf.get_enum_value("EthProcessorTypes::DM0")
-            )
-
-        # Enumerators for DRAM block (Blackhole only)
-        self._enum_values_dram: dict = {}
-        if self._drisc_elf is not None:
-            self._enum_values_dram = {
-                "ProcessorTypes": {
-                    "DRISC": self._drisc_elf.get_enum_value("DramProcessorTypes::DM0"),
-                },
-            }
+        self._ProgrammableCoreTypes_TENSIX = self._dm0_elf.get_enum_value("ProgrammableCoreType::TENSIX")
+        self._ProgrammableCoreTypes_IDLE_ETH = self._dm0_elf.get_enum_value("ProgrammableCoreType::IDLE_ETH")
+        self._ProgrammableCoreTypes_ACTIVE_ETH = self._dm0_elf.get_enum_value("ProgrammableCoreType::ACTIVE_ETH")
+        self._ProgrammableCoreTypes_DRAM = self._dm0_elf.get_enum_value("ProgrammableCoreType::DRAM")
 
         # Go message states are constant values in the firmware elf, so we cache them
         def get_const_value(name) -> int:
-            value = self._brisc_elf.get_constant(name)
+            value = self._dm0_elf.get_constant(name)
             assert isinstance(value, int)
             return value
 
@@ -243,24 +190,59 @@ class DispatcherData:
         }
 
         # Dispatch mode constants
-        self._DISPATCH_MODE_DEV = self._brisc_elf.get_enum_value("dispatch_mode::DISPATCH_MODE_DEV")
-        self._DISPATCH_MODE_HOST = self._brisc_elf.get_enum_value("dispatch_mode::DISPATCH_MODE_HOST")
+        self._DISPATCH_MODE_DEV = self._dm0_elf.get_enum_value("dispatch_mode::DISPATCH_MODE_DEV")
+        self._DISPATCH_MODE_HOST = self._dm0_elf.get_enum_value("dispatch_mode::DISPATCH_MODE_HOST")
 
         # Watcher enable constants (not used in firmware elf, so can't be retrieved from elf)
         self._WATCHER_ENABLED = 3
         self._WATCHER_DISABLED = 2
 
-        # Subordinate sync map indices for each processor type
-        # BRISC is the master, so it doesn't have a subordinate sync entry
-        # For Tensix: NCRISC=0, TRISC0=1, TRISC1=2, TRISC2=3
-        # For ETH (2-ERISC mode): ERISC1=0
-        self._subordinate_sync_index = {
-            "NCRISC": 0,
-            "TRISC0": 1,
-            "TRISC1": 2,
-            "TRISC2": 3,
-            "ERISC1": 0,
-        }
+    def _load_firmware_elfs(self, build_env: BuildEnvData, elfs_cache: ElfsCache, device) -> None:
+        raise NotImplementedError
+
+    @cached_property
+    def _enum_values_tenisx(self) -> ProcessorEnums:
+        raise NotImplementedError
+
+    @cached_property
+    def _enum_values_eth(self) -> ProcessorEnums:
+        raise NotImplementedError
+
+    @cached_property
+    def _enum_values_dram(self) -> ProcessorEnums:
+        raise NotImplementedError
+
+    @cached_property
+    def _subordinate_sync_index(self) -> dict[str, int]:
+        raise NotImplementedError
+
+    def _firmware_elf_path(self, build_env: BuildEnvData, proc_name: str, block_type: BlockType | None) -> str:
+        raise NotImplementedError
+
+    def processor_index(self, risc_name: str, neo_id: int | None, enum_values: ProcessorEnums) -> int | None:
+        raise NotImplementedError
+
+    def _enables_bit_letters(self, block_type: BlockType | None) -> str:
+        raise NotImplementedError
+
+    def kernel_load_offset(
+        self,
+        proc_name: str,
+        block_type: BlockType | None,
+        kernel_config_base: int,
+        kernel_text_offset: int,
+    ) -> int:
+        # For most blocks, the kernel is loaded at an offset from the config base, so we add them together to get the actual load address.
+        # The & 0xFFFFFFFF is needed to wrap around to 32 bits, since the offset can be negative and Python ints are unbounded.
+        return (kernel_config_base + kernel_text_offset) & 0xFFFFFFFF
+
+    def has_xip_kernel_elf(self, proc_name: str) -> bool:
+        return True
+
+    def _fallback_kernel_elf_path(self, kernel, proc_name: str, block_type: BlockType | None) -> str | None:
+        # When Inspector did not record the kernel ELF path, this method provides a fallback based on
+        # the kernel's directory and processor name.
+        return None
 
     def _get_build_env_for_device(self, device_unique_id: int) -> BuildEnvData:
         """Get build_env for a specific device, with caching"""
@@ -320,13 +302,14 @@ class DispatcherData:
             return self.drisc_enabled()
         return True
 
-    def is_idle_in_default_view(self, location: OnChipCoordinate, risc_name: str) -> bool:
+    def is_idle_in_default_view(self, risc_location: RiscLocation) -> bool:
         """Risc hidden unless --all-cores: finished (Go=DONE) or never enabled by the program."""
-        d = self.get_cached_core_data(location, risc_name)
+        d = self.get_cached_core_data(risc_location)
         return d.go_message == "DONE" or d.risc_enabled_by_kernel is False
 
-    def get_cached_core_data(self, location: OnChipCoordinate, risc_name: str) -> DispatcherCoreData:
-        key = (location, risc_name)
+    def get_cached_core_data(self, risc_location: RiscLocation) -> DispatcherCoreData:
+        location = risc_location.location
+        key = risc_location
         with self.lock:
             value = self._core_data_cache.get(key)
         if value is None:
@@ -337,31 +320,40 @@ class DispatcherData:
                     if mailboxes is None:
                         mailboxes = self.read_mailboxes(location)
                         self._mailboxes_cache[location] = mailboxes
-                    value = self.get_core_data(location, risc_name, mailboxes=mailboxes)
+                    value = self.get_core_data(risc_location, mailboxes=mailboxes)
                     self._core_data_cache[key] = value
         return value
 
+    def l1_memory_access(self, location: OnChipCoordinate) -> MemoryAccess:
+        return create_l1_memory_access(location)
+
     def read_mailboxes(self, location: OnChipCoordinate) -> ElfVariable:
         block_type = self._get_block_type(location)
-        l1_mem_access = create_l1_memory_access(location)
+        l1_mem_access = self.l1_memory_access(location)
+        fw_elf: ElfFile | None
         match block_type:
             case "tensix":
-                fw_elf = self._brisc_elf
+                fw_elf = self._dm0_elf
             case "idle_eth":
                 fw_elf = self._idle_erisc_elf
             case "active_eth":
                 fw_elf = self._active_erisc_elf
             case "dram":
-                if self._drisc_elf is None:
-                    raise TTTriageError("DRISC ELF not available for DRAM block type (Blackhole only)")
                 fw_elf = self._drisc_elf
             case _:
                 raise TTTriageError(f"Unsupported block type: {block_type}")
+        if fw_elf is None:
+            raise TTTriageError(
+                f"No firmware ELF for {block_type} blocks on this architecture, so their mailboxes cannot be read."
+            )
         return fw_elf.read_global("mailboxes", l1_mem_access)
 
-    def get_core_data(
-        self, location: OnChipCoordinate, risc_name: str, mailboxes: ElfVariable | None = None
-    ) -> DispatcherCoreData:
+    def get_core_data(self, risc_location: RiscLocation, mailboxes: ElfVariable | None = None) -> DispatcherCoreData:
+        location = risc_location.location
+        risc_name = risc_location.risc_name
+        neo_id = risc_location.neo_id
+        # From inspector / the metal control plane, not location.device.active_eth_block_locations
+        # (cluster descriptor / exalens). Everything below keys off this one source of truth.
         block_type = self._get_block_type(location)
         match block_type:
             case "tensix":
@@ -385,9 +377,9 @@ class DispatcherData:
         device_unique_id = location.device.unique_id
         build_env = self._get_build_env_for_device(device_unique_id)
         proc_name = risc_name.upper()
-        proc_type = enum_values["ProcessorTypes"][proc_name]
+        proc_type = self.processor_index(risc_name, neo_id, enum_values)
         if proc_type is None:
-            raise TTTriageError(f"Processor type for '{proc_name}' not found in firmware ELF enums.")
+            raise TTTriageError(f"Processor index for '{risc_name}' [neo: {neo_id}] not found in firmware ELF enums.")
         if mailboxes is None:
             mailboxes = self.read_mailboxes(location)
 
@@ -529,22 +521,11 @@ class DispatcherData:
 
         try:
             enables_val = int(mailboxes.launch[launch_msg_rd_ptr].kernel_config.enables)
-            # Format enables like watcher: uppercase = enabled, lowercase = disabled
-            # Tensix: "BNT" (B=BRISC, N=NCRISC, T=TRISC)
-            # ETH Blackhole: "EE" (2 ERISCs)
-            # ETH Wormhole: "E" (1 ERISC)
-            # DRAM: "D" (1 DRISC)
-            if self._get_block_type(location) == "tensix":
-                symbols = "BNT"
-            elif self._get_block_type(location) == "dram":
-                symbols = "D"
-            elif location.device.is_blackhole():
-                symbols = "EE"
-            else:
-                symbols = "E"
+            # Format enables like watcher: uppercase = enabled, lowercase = disabled.
+            letters = self._enables_bit_letters(block_type)
             enables = ""
-            for i, sym in enumerate(symbols):
-                enables += sym if (enables_val & (1 << i)) else sym.lower()
+            for i, letter in enumerate(letters):
+                enables += letter if (enables_val & (1 << i)) else letter.lower()
             # bit i set => processor i enabled; proc_type is this risc's processor index.
             risc_enabled_by_kernel = bool(enables_val & (1 << proc_type))
         except Exception:
@@ -588,38 +569,8 @@ class DispatcherData:
                 f"failed to read subordinate sync from mailboxes. {MAILBOX_CORRUPTED_MESSAGE}",
             )
 
-        # Path picking must use the same source of truth as block_type above (inspector /
-        # metal control plane), not location.device.active_eth_block_locations (cluster
-        # descriptor / exalens).
-        is_active_eth = block_type == "active_eth"
-
-        # Construct the firmware path from the build_env instead of relative paths
-        # This ensures we get the correct firmware path for this device and build config
-        if block_type == "dram":
-            firmware_path = os.path.join(build_env.firmwarePath, "drisc", "drisc.elf")
-        elif is_active_eth:
-            if proc_name.lower() == "erisc":
-                firmware_path = os.path.join(build_env.firmwarePath, "erisc", "erisc.elf")
-            elif proc_name.lower() == "erisc0":
-                firmware_path = os.path.join(build_env.firmwarePath, "active_erisc", "active_erisc.elf")
-            elif proc_name.lower() == "erisc1":
-                firmware_path = (
-                    os.path.join(build_env.firmwarePath, "subordinate_active_erisc", "subordinate_active_erisc.elf")
-                    if self._is_2_erisc_mode
-                    else os.path.join(build_env.firmwarePath, "active_erisc", "active_erisc.elf")
-                )
-            else:
-                raise TTTriageError(f"Unsupported active ETH processor '{proc_name}' for firmware path.")
-        else:
-            if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
-                firmware_path = os.path.join(build_env.firmwarePath, "idle_erisc", "idle_erisc.elf")
-            elif proc_name.lower() == "erisc1":
-                firmware_path = os.path.join(
-                    build_env.firmwarePath, "subordinate_idle_erisc", "subordinate_idle_erisc.elf"
-                )
-            else:
-                firmware_path = os.path.join(build_env.firmwarePath, proc_name.lower(), f"{proc_name.lower()}.elf")
-        firmware_path = os.path.realpath(firmware_path)
+        # Construct the firmware path from the build_env instead of relative paths.
+        firmware_path = os.path.realpath(self._firmware_elf_path(build_env, proc_name, block_type))
 
         kernel_path: str | None
         if kernel:
@@ -627,46 +578,15 @@ class DispatcherData:
             # processor index.
             kernel_path = self._inspector_kernel_elf_path(kernel, proc_type)
             if not kernel_path:
-                if is_active_eth:
-                    if proc_name.lower() == "erisc":
-                        kernel_path = kernel.path + "/erisc/erisc.elf"
-                    elif proc_name.lower() == "erisc0":
-                        kernel_path = kernel.path + "/active_erisc/active_erisc.elf" if self._is_2_erisc_mode else None
-                    elif proc_name.lower() == "erisc1":
-                        kernel_path = (
-                            kernel.path + "/subordinate_active_erisc/subordinate_active_erisc.elf"
-                            if self._is_2_erisc_mode
-                            else kernel.path + "/active_erisc/active_erisc.elf"
-                        )
-                    else:
-                        raise TTTriageError(f"Unsupported active ETH processor '{proc_name}' for kernel path.")
-                else:
-                    if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
-                        kernel_path = kernel.path + "/idle_erisc/idle_erisc.elf"
-                    elif proc_name.lower() == "erisc1":
-                        kernel_path = kernel.path + "/subordinate_idle_erisc/subordinate_idle_erisc.elf"
-                    else:
-                        kernel_path = kernel.path + f"/{proc_name.lower()}/{proc_name.lower()}.elf"
+                kernel_path = self._fallback_kernel_elf_path(kernel, proc_name, block_type)
             kernel_path = os.path.realpath(kernel_path) if kernel_path else None
-            # For NCRISC we don't have XIP ELF file
-            kernel_xip_path = (
-                kernel_path + ".xip.elf"
-                if kernel_path and not (proc_name == "NCRISC" and location.device.is_wormhole())
-                else None
+            kernel_xip_path = kernel_path + ".xip.elf" if kernel_path and self.has_xip_kernel_elf(proc_name) else None
+            kernel_offset = self.kernel_load_offset(
+                proc_name=proc_name,
+                block_type=block_type,
+                kernel_config_base=kernel_config_base,
+                kernel_text_offset=kernel_text_offset,
             )
-            if proc_name == "NCRISC" and location.device.is_wormhole():
-                kernel_offset = 0xFFC00000
-            # In wormhole we only use text offset to calculate the kernel offset for active ETH
-            elif is_active_eth and location.device.is_wormhole():
-                kernel_offset = kernel_text_offset
-            elif block_type == "dram":
-                # DRAM kernel ELFs are linked at their actual load address (kernel_text_offset),
-                # not at address 0 like Tensix kernels, so no base adjustment is needed.
-                kernel_offset = kernel_text_offset
-            else:
-                # For most blocks, the kernel is loaded at an offset from the config base, so we add them together to get the actual load address.
-                # The & 0xFFFFFFFF is needed to wrap around to 32 bits, since the offset can be negative and Python ints are unbounded.
-                kernel_offset = (kernel_config_base + kernel_text_offset) & 0xFFFFFFFF
         else:
             kernel_path = None
             kernel_xip_path = None
@@ -704,13 +624,314 @@ class DispatcherData:
         )
 
 
+class DispatcherData1xx(DispatcherData):
+    # One letter per ERISC an eth core has, for the Enables field. Architecture specific.
+    _eth_enables_bit_letters: str
+    # Whether this build runs a second ERISC on each active eth core.
+    _is_2_erisc_mode: bool
+
+    def _load_firmware_elfs(self, build_env: BuildEnvData, elfs_cache: ElfsCache, device) -> None:
+        # The ELFs both Gen1 architectures have. Each one loads the rest on top of these.
+        self._dm0_elf = elfs_cache[os.path.join(build_env.firmwarePath, "brisc", "brisc.elf")]
+        self._idle_erisc_elf = elfs_cache[os.path.join(build_env.firmwarePath, "idle_erisc", "idle_erisc.elf")]
+
+    def _enables_bit_letters(self, block_type: BlockType | None) -> str:
+        # B=BRISC, N=NCRISC, T=TRISC on tensix; D=DRISC on dram; one E per ERISC on eth.
+        if block_type == "tensix":
+            return "BNT"
+        if block_type == "dram":
+            return "D"
+        return self._eth_enables_bit_letters
+
+    @cached_property
+    def _enum_values_tenisx(self) -> ProcessorEnums:
+        return {
+            "ProcessorTypes": {
+                "BRISC": self._dm0_elf.get_enum_value("TensixProcessorTypes::DM0"),
+                "NCRISC": self._dm0_elf.get_enum_value("TensixProcessorTypes::DM1"),
+                "TRISC0": self._dm0_elf.get_enum_value("TensixProcessorTypes::MATH0"),
+                "TRISC1": self._dm0_elf.get_enum_value("TensixProcessorTypes::MATH1"),
+                "TRISC2": self._dm0_elf.get_enum_value("TensixProcessorTypes::MATH2"),
+            },
+        }
+
+    @cached_property
+    def _subordinate_sync_index(self) -> dict[str, int]:
+        # BRISC is the master, so it doesn't have a subordinate sync entry
+        # For Tensix: NCRISC=0, TRISC0=1, TRISC1=2, TRISC2=3
+        # For ETH (2-ERISC mode): ERISC1=0
+        return {"NCRISC": 0, "TRISC0": 1, "TRISC1": 2, "TRISC2": 3, "ERISC1": 0}
+
+    def _firmware_elf_path(self, build_env: BuildEnvData, proc_name: str, block_type: BlockType | None) -> str:
+        name = proc_name.lower()
+        if block_type == "dram":
+            return os.path.join(build_env.firmwarePath, "drisc", "drisc.elf")
+        if block_type == "active_eth":
+            if name == "erisc":
+                return os.path.join(build_env.firmwarePath, "erisc", "erisc.elf")
+            if name == "erisc0":
+                return os.path.join(build_env.firmwarePath, "active_erisc", "active_erisc.elf")
+            if name == "erisc1":
+                return (
+                    os.path.join(build_env.firmwarePath, "subordinate_active_erisc", "subordinate_active_erisc.elf")
+                    if self._is_2_erisc_mode
+                    else os.path.join(build_env.firmwarePath, "active_erisc", "active_erisc.elf")
+                )
+            raise TTTriageError(f"Unsupported active ETH processor '{proc_name}' for firmware path.")
+        if name in ("erisc", "erisc0"):
+            return os.path.join(build_env.firmwarePath, "idle_erisc", "idle_erisc.elf")
+        if name == "erisc1":
+            return os.path.join(build_env.firmwarePath, "subordinate_idle_erisc", "subordinate_idle_erisc.elf")
+        return os.path.join(build_env.firmwarePath, name, f"{name}.elf")
+
+    def processor_index(self, risc_name: str, neo_id: int | None, enum_values: ProcessorEnums) -> int | None:
+        return enum_values["ProcessorTypes"].get(risc_name.upper())
+
+    def _fallback_kernel_elf_path(self, kernel, proc_name: str, block_type: BlockType | None) -> str | None:
+        kernel_dir: str = kernel.path
+        name = proc_name.lower()
+        if block_type == "active_eth":
+            if name == "erisc":
+                return kernel_dir + "/erisc/erisc.elf"
+            if name == "erisc0":
+                return kernel_dir + "/active_erisc/active_erisc.elf" if self._is_2_erisc_mode else None
+            if name == "erisc1":
+                return (
+                    kernel_dir + "/subordinate_active_erisc/subordinate_active_erisc.elf"
+                    if self._is_2_erisc_mode
+                    else kernel_dir + "/active_erisc/active_erisc.elf"
+                )
+            raise TTTriageError(f"Unsupported active ETH processor '{proc_name}' for kernel path.")
+        if name in ("erisc", "erisc0"):
+            return kernel_dir + "/idle_erisc/idle_erisc.elf"
+        if name == "erisc1":
+            return kernel_dir + "/subordinate_idle_erisc/subordinate_idle_erisc.elf"
+        return kernel_dir + f"/{name}/{name}.elf"
+
+
+class DispatcherDataWormhole(DispatcherData1xx):
+    _eth_enables_bit_letters = "E"
+    _is_2_erisc_mode = False
+    _drisc_elf = None
+
+    def _load_firmware_elfs(self, build_env: BuildEnvData, elfs_cache: ElfsCache, device) -> None:
+        super()._load_firmware_elfs(build_env, elfs_cache, device)
+        self._active_erisc_elf = elfs_cache[os.path.join(build_env.firmwarePath, "erisc", "erisc.elf")]
+
+    @cached_property
+    def _enum_values_eth(self) -> ProcessorEnums:
+        # One ERISC per eth core, so both names triage knows it by are DM0. There is no
+        # EthProcessorTypes::DM1 on this architecture, hence no ERISC1 entry: asking for one raises
+        # rather than quietly resolving to the wrong processor.
+        assert self._idle_erisc_elf is not None, "Wormhole always loads the idle ERISC firmware"
+        dm0 = self._idle_erisc_elf.get_enum_value("EthProcessorTypes::DM0")
+        return {"ProcessorTypes": {"ERISC": dm0, "ERISC0": dm0}}
+
+    @cached_property
+    def _enum_values_dram(self) -> ProcessorEnums:
+        # Wormhole DRAM cores have no programmable RISC.
+        return {}
+
+    def has_xip_kernel_elf(self, proc_name: str) -> bool:
+        # NCRISC is the one processor with no XIP ELF.
+        return proc_name != "NCRISC"
+
+    def kernel_load_offset(
+        self,
+        proc_name: str,
+        block_type: BlockType | None,
+        kernel_config_base: int,
+        kernel_text_offset: int,
+    ) -> int:
+        if proc_name == "NCRISC":
+            return 0xFFC00000
+        if block_type == "active_eth":
+            # Active ETH kernels are reached by the text offset alone.
+            return kernel_text_offset
+        return super().kernel_load_offset(proc_name, block_type, kernel_config_base, kernel_text_offset)
+
+
+class DispatcherDataBlackhole(DispatcherData1xx):
+    """Blackhole: one or two ERISCs per eth core depending on the build, and a DRISC on DRAM cores
+    when the build enables programmable DRAM."""
+
+    _eth_enables_bit_letters = "EE"
+
+    def _load_firmware_elfs(self, build_env: BuildEnvData, elfs_cache: ElfsCache, device) -> None:
+        super()._load_firmware_elfs(build_env, elfs_cache, device)
+        self._active_erisc_elf = elfs_cache[os.path.join(build_env.firmwarePath, "active_erisc", "active_erisc.elf")]
+
+        # There are 2 modes (1-ERISC and 2-ERISC); the subordinate ELF existing means 2-ERISC.
+        self._is_2_erisc_mode = os.path.exists(
+            os.path.join(build_env.firmwarePath, "subordinate_active_erisc", "subordinate_active_erisc.elf")
+        )
+
+        self._drisc_elf = None
+        if self._drisc_enabled_flag:
+            try:
+                self._drisc_elf = elfs_cache[os.path.join(build_env.firmwarePath, "drisc", "drisc.elf")]
+            except Exception:
+                # DRISC firmware is optional; if it cannot be loaded, leave self._drisc_elf as None
+                pass
+
+    @cached_property
+    def _enum_values_eth(self) -> ProcessorEnums:
+        assert self._idle_erisc_elf is not None, "Blackhole always loads the idle ERISC firmware"
+        dm0 = self._idle_erisc_elf.get_enum_value("EthProcessorTypes::DM0")
+        dm1 = self._idle_erisc_elf.get_enum_value("EthProcessorTypes::DM1")
+        processor_types: dict[str, int | None] = {"ERISC": dm0, "ERISC0": dm0}
+
+        # ERISC1 is the second ERISC only in 2-ERISC mode; in 1-ERISC mode it behaves like DM0.
+        # A firmware build with no DM1 enumerator at all gets no ERISC1 entry.
+        if dm1 is not None:
+            processor_types["ERISC1"] = dm1 if self._is_2_erisc_mode else dm0
+        return {"ProcessorTypes": processor_types}
+
+    @cached_property
+    def _enum_values_dram(self) -> ProcessorEnums:
+        # Only present when the build loaded DRISC firmware.
+        if self._drisc_elf is None:
+            return {}
+        return {
+            "ProcessorTypes": {
+                "DRISC": self._drisc_elf.get_enum_value("DramProcessorTypes::DM0"),
+            },
+        }
+
+    def kernel_load_offset(
+        self,
+        proc_name: str,
+        block_type: BlockType | None,
+        kernel_config_base: int,
+        kernel_text_offset: int,
+    ) -> int:
+        if block_type == "dram":
+            # DRAM kernel ELFs are linked at their actual load address (kernel_text_offset), not at
+            # address 0 like Tensix kernels, so no base adjustment is needed.
+            return kernel_text_offset
+        return super().kernel_load_offset(proc_name, block_type, kernel_config_base, kernel_text_offset)
+
+
+class DispatcherData2xx(DispatcherData):
+    # TODO: For now this is the same as Quasar, but in the future, we should adapt it to any Gen2-specific differences.
+
+    @staticmethod
+    def _fold_uncached_l1_alias(address: int) -> int:
+        # 4 MB-8 MB is the uncached alias of the same 4 MB of L1 for rocket cores, so for simplicity
+        # we fold any address in that range back onto the 0-4 MB cached view.
+        alias_base = 0x00400000
+        alias_end = 0x00800000
+        if alias_base <= address < alias_end:
+            return address - alias_base
+        return address
+
+    class _UncachedL1AliasMemoryAccess(MemoryAccess):
+        def __init__(self, inner: MemoryAccess):
+            super().__init__()
+            self._inner = inner
+
+        def read(self, address: int, buffer) -> None:
+            self._inner.read(DispatcherData2xx._fold_uncached_l1_alias(address), buffer)
+
+        def write(self, address: int, data) -> None:
+            self._inner.write(DispatcherData2xx._fold_uncached_l1_alias(address), data)
+
+        def read_register(self, register_index: int) -> int:
+            return self._inner.read_register(register_index)
+
+        def write_register(self, register_index: int, value: int) -> None:
+            self._inner.write_register(register_index, value)
+
+    def _load_firmware_elfs(self, build_env: BuildEnvData, elfs_cache: ElfsCache, device) -> None:
+        self._dm0_elf = elfs_cache[os.path.join(build_env.firmwarePath, "dm0", "dm0.elf")]
+        # Quasar has no eth or dram firmware; the shared code guards on these being None.
+        self._idle_erisc_elf = None
+        self._active_erisc_elf = None
+        self._drisc_elf = None
+
+    @cached_property
+    def _enum_values_tenisx(self) -> ProcessorEnums:
+        # A tensix cluster is eight data movement cores plus four NEOs of four TRISCs each, and
+        # TensixProcessorTypes numbers the compute processors after the eight DMs.
+        num_dm_cores = 8
+        num_neos = 4
+        num_triscs_per_neo = 4
+        processor_types: dict[str, int | None] = {
+            f"ROCKET{i}": self._dm0_elf.get_enum_value(f"TensixProcessorTypes::DM{i}") for i in range(num_dm_cores)
+        }
+        for neo in range(num_neos):
+            for trisc in range(num_triscs_per_neo):
+                processor_types[f"E{neo}_TRISC{trisc}"] = self._dm0_elf.get_enum_value(
+                    f"TensixProcessorTypes::E{neo}_MATH{trisc}"
+                )
+        return {"ProcessorTypes": processor_types}
+
+    @cached_property
+    def _enum_values_eth(self) -> ProcessorEnums:
+        # TODO: Quasar triage does not cover eth blocks yet.
+        return {"ProcessorTypes": {}}
+
+    @cached_property
+    def _enum_values_dram(self) -> ProcessorEnums:
+        # TODO: Quasar triage does not cover dram blocks yet.
+        return {}
+
+    def _enables_bit_letters(self, block_type: BlockType | None) -> str:
+        # TODO: Implement enables bit letters for Quasar.
+        return ""
+
+    @cached_property
+    def _subordinate_sync_index(self) -> dict[str, int]:
+        # TODO: Quasar's launch/sync layout is not the Gen1 master/subordinate map; until it is modelled,
+        # report no subordinate slots rather than Gen1's, which would decode to nonsense.
+        return {}
+
+    def _firmware_elf_path(self, build_env: BuildEnvData, proc_name: str, block_type: BlockType | None) -> str:
+        name = proc_name.lower()
+        if name.startswith("rocket"):
+            return os.path.join(build_env.firmwarePath, "dm0", "dm0.elf")
+        return os.path.join(build_env.firmwarePath, name, f"{name}.elf")
+
+    def processor_index(self, risc_name: str, neo_id: int | None, enum_values: ProcessorEnums) -> int | None:
+        name = risc_name.lower()
+        processor_types = enum_values["ProcessorTypes"]
+        if name.startswith("rocket"):
+            return processor_types.get(f"ROCKET{name[len('rocket'):]}")
+        if name.startswith("trisc") and neo_id is not None:
+            return processor_types.get(f"E{neo_id}_TRISC{name[len('trisc'):]}")
+        return None
+
+    def l1_memory_access(self, location: OnChipCoordinate) -> MemoryAccess:
+        return self._UncachedL1AliasMemoryAccess(create_l1_memory_access(location))
+
+    def kernel_load_offset(
+        self,
+        proc_name: str,
+        block_type: BlockType | None,
+        kernel_config_base: int,
+        kernel_text_offset: int,
+    ) -> int:
+        return self._fold_uncached_l1_alias(
+            super().kernel_load_offset(proc_name, block_type, kernel_config_base, kernel_text_offset)
+        )
+
+
 @triage_singleton
-def run(args, context: Context):
+def run(args, context: Context) -> DispatcherData:
     inspector_data = get_inspector_data(args, context)
     elfs_cache = get_elfs_cache(args, context)
     run_checks = get_run_checks(args, context)
     metal_device_id_mapping = get_metal_device_id_mapping(args, context)
-    return DispatcherData(inspector_data, elfs_cache, run_checks, metal_device_id_mapping)
+
+    if not run_checks.devices:
+        raise TTTriageError("No devices to inspect, so there is no generation to pick dispatcher data for.")
+    device = run_checks.devices[0]
+    if device.is_wormhole():
+        return DispatcherDataWormhole(inspector_data, elfs_cache, run_checks, metal_device_id_mapping)
+    elif device.is_blackhole():
+        return DispatcherDataBlackhole(inspector_data, elfs_cache, run_checks, metal_device_id_mapping)
+    else:
+        return DispatcherData2xx(inspector_data, elfs_cache, run_checks, metal_device_id_mapping)
 
 
 if __name__ == "__main__":

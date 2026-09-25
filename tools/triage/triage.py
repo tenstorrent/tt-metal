@@ -85,6 +85,7 @@ import sys
 from ttexalens.context import Context, to_noc_id
 from ttexalens.device import Device
 from ttexalens.coordinate import OnChipCoordinate
+from ttexalens.hardware.risc_debug import RiscLocation
 from ttexalens.elf import ElfVariable
 from ttexalens.umd_device import TimeoutDeviceRegisterError
 from typing import Any, Callable, Iterable, TypeVar, cast
@@ -962,10 +963,7 @@ def _patch_risc_debug() -> None:
     """
 
     from ttexalens.hardware.baby_risc_debug import BabyRiscDebugHardware
-    from triage_session import get_triage_session
-
-    def is_affected_by_cont_bug(device) -> bool:
-        return bool(device.is_wormhole() or device.is_blackhole())
+    from triage_session import get_triage_session, is_affected_by_cont_bug
 
     original_hw_cont = BabyRiscDebugHardware.cont
     original_hw_continue_without_debug = BabyRiscDebugHardware.continue_without_debug
@@ -983,12 +981,11 @@ def _patch_risc_debug() -> None:
 
     def patched_halt(self):
         session = get_triage_session()
-        location = self.risc_info.noc_block.location
-        risc_name = self.risc_info.risc_name
-        already_halted_by_triage = session.is_halted_core(location, risc_name)
+        risc_location = RiscLocation(self.risc_info.noc_block.location, self.risc_info.neo_id, self.risc_info.risc_name)
+        already_halted_by_triage = session.is_halted_core(risc_location)
         if not already_halted_by_triage:
             original_hw_halt(self)
-            session.add_halted_core(location, risc_name)
+            session.add_halted_core(risc_location)
 
     BabyRiscDebugHardware.halt = patched_halt  # type: ignore[method-assign]
 

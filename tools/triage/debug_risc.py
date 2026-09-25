@@ -113,6 +113,16 @@ def find_location(run_checks: RunChecks, device: Device, requested_locations: li
     raise TTTriageError(f"{requested_locations[0]} is not a block of device {device.id}.")
 
 
+def describe_risc(risc_location: RiscLocation) -> str:
+    """How a core is named in a message: "trisc0 on 0-1 (0,0)".
+
+    The NEO is named only where there is one, since on Quasar the same risc name appears once per
+    NEO and the name alone does not say which core is meant.
+    """
+    neo = f" (NEO {risc_location.neo_id})" if risc_location.neo_id is not None else ""
+    return f"{risc_location.risc_name}{neo} on {risc_location.location.to_user_str()}"
+
+
 def find_risc_debug(location: OnChipCoordinate, risc_name: str | None, neo_id: int | None) -> RiscDebug:
     """Return the RiscDebug of the requested core, checking that it can actually be debugged."""
     noc_block = location.device.get_block(location)
@@ -127,21 +137,22 @@ def find_risc_debug(location: OnChipCoordinate, risc_name: str | None, neo_id: i
     risc_debug = noc_block.get_risc_debug(risc_name, neo_id)
     if not risc_debug.can_debug():
         raise TTTriageError(
-            f"{risc_name} on {location.to_user_str()} has no debug hardware, so GDB cannot attach to it. "
+            f"{describe_risc(risc_debug.risc_location)} has no debug hardware, so GDB cannot attach to it. "
             f"Use dump_callstacks to get its top callstack instead."
         )
     if risc_debug.is_in_reset():
-        raise TTTriageError(f"{risc_name} on {location.to_user_str()} is in reset.")
+        raise TTTriageError(f"{describe_risc(risc_debug.risc_location)} is in reset.")
     return risc_debug
 
 
-def get_elfs(dispatcher_data: DispatcherData, location: OnChipCoordinate, risc_name: str):
+def get_elfs(dispatcher_data: DispatcherData, risc_debug: RiscDebug):
     """Return (firmware path, kernel path, kernel offset) of the program loaded on the core."""
+    risc_location = risc_debug.risc_location
     try:
-        core_data = dispatcher_data.get_cached_core_data(location, risc_name)
+        core_data = dispatcher_data.get_cached_core_data(risc_location)
     except Exception as e:
         raise TTTriageError(
-            f"Could not read dispatcher data for {risc_name} on {location.to_user_str()}: {e}. "
+            f"Could not read dispatcher data for {describe_risc(risc_location)}: {e}. "
             f"The firmware ELF is needed to attach, since the GDB server only serves cores it knows an ELF for."
         )
     return core_data.firmware_path, core_data.kernel_path, core_data.kernel_offset
@@ -172,7 +183,7 @@ def find_process_id(gdb_server: GdbServer, risc_location: RiscLocation) -> int:
     for process_id, process in available_processes.items():
         if process.risc_debug.risc_location == risc_location:
             return process_id
-    raise TTTriageError(f"GDB server does not serve a process for {risc_location}.")
+    raise TTTriageError(f"GDB server does not serve a process for {describe_risc(risc_location)}.")
 
 
 def quote_gdb_path(path: str) -> str:
@@ -246,7 +257,7 @@ def run(args, context: Context):
     risc_debug = find_risc_debug(location, risc_name, neo_id)
     assert risc_name is not None  # find_risc_debug raises if it is not given
 
-    firmware_path, kernel_path, kernel_offset = get_elfs(dispatcher_data, location, risc_name)
+    firmware_path, kernel_path, kernel_offset = get_elfs(dispatcher_data, risc_debug)
     elf_paths: list[str] = [firmware_path]
     offsets: list[int | None] = [None]
     if kernel_path is not None:
@@ -268,7 +279,7 @@ def run(args, context: Context):
 
         utils.INFO(f"  GDB server listening on localhost:{port}")
         utils.INFO(
-            f"  Attaching to process {process_id}: {risc_name} on {location.to_user_str()} of device {device.id}"
+            f"  Attaching to process {process_id}: {describe_risc(risc_debug.risc_location)} of device {device.id}"
         )
         if can_resume_core(device):
             utils.INFO("  The core is halted while GDB is attached. Detach or quit GDB to resume it.")
@@ -288,11 +299,11 @@ def run(args, context: Context):
         try:
             if risc_debug.is_halted():
                 utils.WARN(
-                    f"  {risc_name} on {location.to_user_str()} is still halted - GDB left it that way, so "
+                    f"  {describe_risc(risc_debug.risc_location)} is still halted - GDB left it that way, so "
                     f"whatever runs on it stays stopped. Attach again and 'detach' to resume it."
                 )
         except Exception as e:
-            utils.WARN(f"  Could not read the halted state of {risc_name} on {location.to_user_str()}: {e}")
+            utils.WARN(f"  Could not read the halted state of {describe_risc(risc_debug.risc_location)}: {e}")
 
     # The session was the output, so there is nothing for the triage framework to report. Leave with
     # the exit code of the GDB client, before run_script gets to print its result table.

@@ -23,6 +23,7 @@ from run_checks import run as get_run_checks, RunChecks
 from ttexalens.context import Context
 from ttexalens.device import Device
 from ttexalens.tt_exalens_lib import read_firmware_telemetry_entry
+from triage_hw_utils import device_has_firmware
 
 script_config = ScriptConfig(
     data_provider=True,
@@ -46,14 +47,17 @@ class ArcHeartbeatSampling:
             for sample in (run_checks.run_per_device_check(self.get_heartbeat_sample) or [])
         }
 
-    def get_heartbeat_sample(self, device: Device) -> HeartbeatSample:
+    def get_heartbeat_sample(self, device: Device) -> HeartbeatSample | None:
+        # No readable device firmware means no heartbeat to sample.
+        if not device_has_firmware(device):
+            return None
         return HeartbeatSample(
-            heartbeat=read_firmware_telemetry_entry(device.arc_block.location.device_id, "TIMER_HEARTBEAT"),
+            heartbeat=read_firmware_telemetry_entry(device.id, "TIMER_HEARTBEAT"),
             timestamp=time.monotonic(),
         )
 
-    def get_initial_heartbeat_sample(self, device: Device) -> HeartbeatSample:
-        return self.initial_samples[device]
+    def get_initial_heartbeat_sample(self, device: Device) -> HeartbeatSample | None:
+        return self.initial_samples.get(device)
 
 
 @triage_singleton

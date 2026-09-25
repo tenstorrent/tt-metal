@@ -15,7 +15,15 @@ Owner:
 """
 
 from dataclasses import dataclass
-from triage import ScriptConfig, ScriptPriority, triage_field, hex_serializer, log_check_device, run_script
+from triage import (
+    ScriptConfig,
+    ScriptPriority,
+    TTTriageError,
+    triage_field,
+    hex_serializer,
+    log_check_device,
+    run_script,
+)
 from run_checks import run as get_run_checks
 from arc_heartbeat_sampling import run as get_arc_heartbeat_sampling, ArcHeartbeatSampling
 from datetime import timedelta
@@ -26,6 +34,7 @@ from ttexalens.device import Device
 from ttexalens.hardware.noc_block import NocBlock
 from ttexalens.tt_exalens_lib import read_firmware_telemetry_entry
 import utils
+from triage_hw_utils import device_has_firmware
 
 script_config = ScriptConfig(
     depends=["run_checks", "arc_heartbeat_sampling"],
@@ -46,12 +55,16 @@ class ArcCheckData:
     heartbeats_per_second: float = triage_field("Heartbeats/s")
 
 
-def check_arc_block(arc: NocBlock, postcode: int | None, arc_heartbeat_sampling: ArcHeartbeatSampling) -> ArcCheckData:
+def check_arc_block(
+    arc: NocBlock, postcode: int | None, arc_heartbeat_sampling: ArcHeartbeatSampling
+) -> ArcCheckData | None:
     device = arc.location.device
     device_id = arc.location.device_id
     # Heartbeat must be increasing
     current_heartbeat_sample = arc_heartbeat_sampling.get_heartbeat_sample(device)
     initial_heartbeat_sample = arc_heartbeat_sampling.get_initial_heartbeat_sample(device)
+    if current_heartbeat_sample is None or initial_heartbeat_sample is None:
+        return None
     arcclk_mhz = read_firmware_telemetry_entry(device_id, "ARCCLK")
     heartbeats_per_second = (current_heartbeat_sample.heartbeat - initial_heartbeat_sample.heartbeat) / (
         current_heartbeat_sample.timestamp - initial_heartbeat_sample.timestamp
@@ -92,6 +105,10 @@ def check_arc_block(arc: NocBlock, postcode: int | None, arc_heartbeat_sampling:
 
 
 def check_arc(device: Device, arc_heartbeat_sampling: ArcHeartbeatSampling):
+    # Nothing to check where triage cannot read the device firmware.
+    if not device_has_firmware(device):
+        utils.DEBUG(f"Device {device.id} has no readable firmware; skipping check_arc.")
+        return None
     arc = device.arc_block
     # We skip postcode check for blackhole devices due to https://github.com/tenstorrent/tt-exalens/issues/535
     if device.is_blackhole():
@@ -113,13 +130,15 @@ def run(args, context: Context):
     run_checks = get_run_checks(args, context)
     arc_heartbeat_sampling = get_arc_heartbeat_sampling(args, context)
 
-    # Ensuring that we wait at least MINIMAL_WAIT_SECONDS to ensure hb/s prediction is precise.
-    latest_timestamp = max(sample.timestamp for sample in arc_heartbeat_sampling.initial_samples.values())
-    smallest_wait = time.monotonic() - latest_timestamp
-    if smallest_wait < MINIMAL_WAIT_SECONDS:
-        time.sleep(MINIMAL_WAIT_SECONDS - smallest_wait)
+    # If there aren't initial samples, that means we don't have ARC
+    if arc_heartbeat_sampling.initial_samples:
+        # Ensuring that we wait at least MINIMAL_WAIT_SECONDS to ensure hb/s prediction is precise.
+        latest_timestamp = max(sample.timestamp for sample in arc_heartbeat_sampling.initial_samples.values())
+        smallest_wait = time.monotonic() - latest_timestamp
+        if smallest_wait < MINIMAL_WAIT_SECONDS:
+            time.sleep(MINIMAL_WAIT_SECONDS - smallest_wait)
 
-    return run_checks.run_per_device_check(lambda device: check_arc(device, arc_heartbeat_sampling))
+        return run_checks.run_per_device_check(lambda device: check_arc(device, arc_heartbeat_sampling))
 
 
 if __name__ == "__main__":
