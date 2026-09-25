@@ -66,7 +66,11 @@ def test_patch_merger_inference(rows, batch_size, mesh_device, reset_seeds, ensu
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
+        # Match the merger's input contract: fractured along dim=3 normally, but replicated at full
+        # hidden_size when TP cannot split dim into whole tiles (vision_replicated_acts).
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)
+        if getattr(model_args, "vision_replicated_acts", False)
+        else ttnn.ShardTensor2dMesh(
             mesh_device,
             dims=(None, -1),
             mesh_shape=model_args.cluster_shape,

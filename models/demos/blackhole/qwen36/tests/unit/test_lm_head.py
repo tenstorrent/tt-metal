@@ -10,12 +10,15 @@ import torch.nn.functional as F
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole
+from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
 from models.demos.blackhole.qwen36.tests.test_factory import compute_pcc, get_pcc_threshold
 
 from .conftest import DEVICE_PARAMS
 
-pytestmark = [run_for_blackhole(), pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)]
+pytestmark = [
+    run_for_wormhole_b0_or_blackhole(),
+    pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True),
+]
 
 
 def test_lm_head_precision(device, setup, request):

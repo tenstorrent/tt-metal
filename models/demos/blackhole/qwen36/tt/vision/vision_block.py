@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.tt_transformers.tt.common import Mode
 
 from .vision_attention import VisionAttention
@@ -61,8 +62,9 @@ class VisionBlock(LightweightModule):
             weight_cache_path=weight_cache_path,
             layer_num=layer_num,
         )
-        # Block I/O is fractured along dim=3, so the norms all-gather first
-        # (mirrors `DistributedNorm` in the LLM).
+        # Block I/O is fractured along dim=3, so the norms all-gather first (mirrors `DistributedNorm`
+        # in the LLM) — unless the tower keeps activations replicated (args.vision_replicated_acts),
+        # in which case there is no fracture and the norms run locally.
         ln_kwargs = dict(
             device=mesh_device,
             dim=args.dim,
@@ -72,6 +74,16 @@ class VisionBlock(LightweightModule):
             weight_dtype=ttnn.bfloat16,
             tt_ccl=tt_ccl,
             ccl_topology=args.ccl_topology(),
+            replicated_input=getattr(args, "vision_replicated_acts", False),
+            ccl_kwargs=args.vision_ccl_kwargs,
+            # fp32 dest accumulation on the norm's SHARDED path, SCOPED TO WORMHOLE 9B ON N300
+            # (tp_common.wh_9b_n300_vision -- the vision-args variant, since VisionModelArgs.dim is
+            # the 1152 vision hidden size, blind to 9B vs 27B). Off elsewhere.
+            # Currently latent: nothing in qwen36 passes in_sharded=True, so this changes no live op
+            # today. It exists so that enabling the sharded path later cannot silently drop the
+            # fp32 accumulation that the interleaved path documents as non-optional for this tower
+            # (absmax 354 vs rms 0.65 swamps a bf16 sum; +0.005 PCC at depth).
+            sharded_fp32_acc=tpc.wh_9b_n300_vision(args),
         )
         self.attention_norm = DistributedLayerNorm(
             state_dict_prefix=args.get_state_dict_prefix("norm1", layer_num),
@@ -89,18 +101,24 @@ class VisionBlock(LightweightModule):
     ) -> ttnn.Tensor:
         """Run the vision block.
 
-        I/O contract: ``x`` is fractured along dim=3 (each device holds dim/TP),
-        output is fractured along dim=3. Norms internally all-gather to a
-        replicated tensor; attention/MLP end with a ``reduce_scatter`` (via
-        ``tt_all_reduce``), restoring the fracture.
+        I/O contract: ``x`` is fractured along dim=3 (each device holds dim/TP) and the output is
+        fractured the same way. Norms internally all-gather to a replicated tensor; attention/MLP end
+        with a ``reduce_scatter`` (via ``tt_all_reduce``), restoring the fracture.
+
+        Under ``args.vision_replicated_acts`` (TP cannot split dim into whole tiles, e.g. dim 1152 on
+        8 devices) both ends are instead REPLICATED at full dim: the norms skip their gather and the
+        out-projections all-reduce rather than reduce-scatter. Weights stay sharded either way, so
+        the block is never computed redundantly. See vision_ccl.
         """
         skip_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
         assert (
             x.memory_config() == skip_mem_cfg
         ), f"VisionBlock input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
 
-        # The norm gathers along dim=3 and outputs a replicated tensor.
-        attn_in = self.attention_norm(x)
+        # The norm gathers along dim=3 and outputs a replicated tensor, into L1 when qkv is faster
+        # reading input 0 from there (a matmul cannot place its own input -- see vision_mm_plan).
+        seq_len = x.shape[-2]
+        attn_in = self.attention_norm(x, memory_config=self.attention.qkv_plan(seq_len).in0_memory_config)
         # Attention takes replicated input and produces a tensor fractured
         # along dim=3 (because tt_all_reduce reduce-scatters on T3K/QB2).
         attn_out = self.attention.forward(
@@ -113,9 +131,9 @@ class VisionBlock(LightweightModule):
         ttnn.deallocate(attn_out)
         ttnn.deallocate(x)
 
-        ff_in = self.ff_norm(h)
+        ff_in = self.ff_norm(h, memory_config=self.feed_forward.fc1_plan(seq_len).in0_memory_config)
+        # MLP.forward owns ff_in and frees it after fc1, so it must not be freed again here.
         ff_out = self.feed_forward.forward(ff_in, mode=Mode.PREFILL)
-        ttnn.deallocate(ff_in)
         out = ttnn.add(
             h,
             ff_out,
