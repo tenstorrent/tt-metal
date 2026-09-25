@@ -36,6 +36,22 @@
 // by imperative Metal calls with positional compile-time args, whereas everything here is named.
 
 /**
+ * @brief Points the packer at a different output dataflow buffer.
+ *
+ * On Quasar the packer writes through a buffer descriptor that the pack init programs for one
+ * dataflow buffer; the id passed to pack_tile/pack_block does not address L1. Every change of the
+ * packed-to buffer therefore needs a pack re-init, or tiles land in the previously programmed
+ * buffer. Other architectures address L1 from the id on each pack call, so this is a no-op there.
+ *
+ * @param dfb_id Dataflow buffer the following packs write to.
+ */
+FORCE_INLINE void pack_retarget(uint32_t dfb_id) {
+#ifdef ARCH_QUASAR
+    PACK((llk_pack_init(dfb_id)));
+#endif
+}
+
+/**
  * @brief Transposes a block of tiles from one dataflow buffer to another.
  *
  * This function reads a block of tiles from the input dataflow buffer, performs a width-height
@@ -341,11 +357,20 @@ void kernel_main() {
 #ifdef PACKER_L1_ACC
                         PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
+                        pack_retarget(in0_dfb_id);
                         transpose_tile_block<in0_block_num_tiles>(in0_transpose_dfb_id, in0_dfb_id);
                         reconfig_data_format_srca(in0_transpose_dfb_id, in1_dfb_id);
                         matmul_block_init(
                             in0_dfb_id, in1_dfb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
                         PACK((pack_reconfig_data_format(mm_partials_dfb_id)));
+                    }
+
+                    // The last block packs to mm_out_dfb_id, every other block to the partials buffer.
+                    // Re-point the packer where the target can differ from the previous block's: the
+                    // first block (the previous output block ended on another target), the last block,
+                    // and after the in0 transpose above packed into in0.
+                    if (block == 0 || last_out || in0_transpose_tile) {
+                        pack_retarget(last_out ? mm_out_dfb_id : mm_partials_dfb_id);
                     }
 
                     in0_dfb.wait_front(in0_block_num_tiles);
@@ -525,6 +550,7 @@ void kernel_main() {
                 } else {
                     add_init(mm_partials_dfb_id, bias_dfb_id);
                 }
+                pack_retarget(untilize_mode_out_dfb_id);
                 // Reader only pushes bias once when num_blocks_w_dim == 1;
                 // the tiles stay in the buffer for reuse across bh/batch iterations.
                 if ((b == 0 && bh == 0) || num_blocks_w_dim > 1) {
