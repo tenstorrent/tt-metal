@@ -72,3 +72,22 @@ Workflow for any agent picking up a step:
 - Next steps (not gated yet): sparse_matmul experts (about 2.7x fewer expert FLOPs; needs a tile-aligned 16-expert routing slice),
   trace capture, bf8 weights, attention from the contract bf8 cache (ring_joint SDPA) instead of the extra bf16 attention cache,
   two-process runner + producer over H2D sockets (`PREFILL_MOCK_MIGRATION=1` / `PREFILL_PRODUCER_CHECK_PCC=1`).
+
+## P3.1 (2026-09-25): reuse of ttnn.experimental.deepseek_prefill.unified_routed_expert_moe. Probe PASS, integration blocked
+- The op is the fused routed-expert FFN only (all local experts in one program, SiLU-SwiGLU = ERNIE's activation).
+  It is fed by the DeepSeek EP pipeline: routing_setup -> dispatch -> unified op -> combine -> reduce (as in gpt_oss_d_p).
+- Measured on real routing (layer 1/14, last 5120-token chunk of the 55k golden), bf8 activations, bf16 weights, HiFi2:
+  **2.0-2.1 ms vs 26.9 ms** for the dense-EP experts (**about 13x**), worst per-expert PCC 0.9992. Dense-EP experts are about
+  0.73 s of the about 2.7 s fixed per-5k-chunk cost, so the expected TTFT gain is about 20-25%, not the dominant term.
+- Blockers on a 1x4 mesh (dispatch group = 1 chip on axis 0):
+  1. `offset_cumsum` all-gathers over the dispatch axis; all_gather rejects a 1-device axis. Patched (skips the gather
+     when the axis size is 1; separate commit touching ttnn C++).
+  2. The `dispatch` program factory always wires fabric neighbours on the dispatch axis: TT_FATAL "No neighbors found".
+     This is not patched; it needs a local-only dispatch/combine path.
+  3. The dispatch op only supports cluster_axis=0, so dispatching along the 4-chip axis 1 is rejected.
+- Gotchas: (a) the op writes its output IN PLACE into a TILE dispatched buffer; re-running on the same buffer silently
+  computes on its own output. (b) expert_token_counts / expert_region_offsets are indexed by GLOBAL expert id ([1, 64] per
+  chip); passing a local [1, 16] makes the kernel read garbage counts and HANG (cb_wait_front deadlock).
+- The probe dispatched buffer is built on the host from golden routing (`tests/pcc/test_unified_expert_probe.py`).
+- P3.2 (TtMoEUnified, full pipeline) stays TODO until a 1-chip dispatch/combine exists. Options: patch dispatch/combine
+  for dispatch_group_size == 1 (local NOC copy, no fabric), or compose a local dispatch from TTNN ops.
