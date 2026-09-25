@@ -1060,12 +1060,16 @@ class LTXPipeline:
         self.transformer = state.model
 
     def _device_embed_cache_path(self, prompts: list[str]) -> str:
-        """Disk-cache path for on-device prompt embeddings. Separate namespace from the
-        reference cache (different format) — lets a repeated prompt skip the encoder."""
+        """Reuse embeddings only for the same prompt, weights and encoder policy.
+
+        The old prompt-only namespace cannot establish source identity. Leave it
+        intact, but make the first request under each verified policy encode.
+        """
         cache_dir = os.environ.get("TT_DIT_CACHE_DIR") or os.path.expanduser("~/.cache/tt-dit")
-        embed_cache_dir = os.path.join(cache_dir, "ltx-embeddings")
+        embed_cache_dir = os.path.join(cache_dir, "ltx-embeddings-v2")
         os.makedirs(embed_cache_dir, exist_ok=True)
-        key = hashlib.md5(("device||" + "||".join(prompts)).encode()).hexdigest()
+        identity = {"prompts": prompts, "encoder": self.gemma_encoder_pair.embedding_cache_identity()}
+        key = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         return os.path.join(embed_cache_dir, f"{key}.device.pt")
 
     def encode_prompts(
@@ -1074,7 +1078,7 @@ class LTXPipeline:
         """Encode prompts on device via the Gemma encoder pair, with a prompt-embedding disk
         cache (orchestration kept here). A cache hit returns saved embeddings without running
         the encoder; ``use_cache=False`` forces a real encode (used by warmup)."""
-        cache_path = self._device_embed_cache_path(prompts)
+        cache_path = self._device_embed_cache_path(prompts) if use_cache else None
         if use_cache and os.path.exists(cache_path):
             logger.info(f"Loading cached device embeddings from {cache_path}")
             return torch.load(cache_path, weights_only=False)
