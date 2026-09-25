@@ -84,11 +84,12 @@ StreamPlacements decide_device_placement(
             eth_core_of.at(cw) != eth_core_of.at(ccw),
             "dispatch_fabric2d {}: link {} leaves by eth core {} in both directions, so axis {} is not "
             "wrap-wired. This op sends single hops around a ring; run it on a topology that wraps that "
-            "axis (e.g. FABRIC_2D_TORUS_Y or _TORUS_XY), not a line or mesh.",
+            "axis (e.g. {} or FABRIC_2D_TORUS_XY), not a line or mesh.",
             self_node,
             k,
             eth_core_of.at(cw),
-            axis);
+            axis,
+            torus_for_axis(axis));
     }
 
     StreamPlacements placements;

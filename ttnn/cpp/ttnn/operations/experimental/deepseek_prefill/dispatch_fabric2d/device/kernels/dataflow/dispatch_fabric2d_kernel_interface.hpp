@@ -65,7 +65,6 @@ namespace dspf2d {
 constexpr uint32_t DRAM_CHANNELS = 8;  // blackhole_140_arch.yaml, `dram:`
 constexpr uint32_t BATCH = DRAM_CHANNELS;
 constexpr uint32_t QUEUE_DEPTH = 2 * BATCH;
-static_assert(BATCH <= QUEUE_DEPTH / 2, "the sender must be able to drain one batch while the next is read");
 
 // Pad each prefetched routing-metadata record to 64 B. A DRAM read needs a 64-byte-aligned L1
 // destination on Blackhole, which a packed record of num_experts_per_tok uint16 would not keep.

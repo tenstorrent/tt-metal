@@ -12,6 +12,9 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d {
 
+// The single-axis torus fabric config that wraps `axis`, for error messages.
+constexpr const char* torus_for_axis(uint32_t axis) { return axis == 0 ? "FABRIC_2D_TORUS_Y" : "FABRIC_2D_TORUS_X"; }
+
 // A stream is one fabric link in one direction along the dispatch axis: a reader and a sender on one core.
 // A stream keeps its id across chips: the stream with the same id on the next chip continues in the same
 // direction on the same link.
