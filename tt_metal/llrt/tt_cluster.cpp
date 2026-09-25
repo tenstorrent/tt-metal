@@ -670,8 +670,8 @@ CoreCoord Cluster::get_virtual_coordinate_from_logical_coordinates(
         core_type_to_use = CoreType::TENSIX;
     }
 
-    // Keeping the old behavior, although UMD does define translation for other cores as well.
-    if (core_type_to_use != CoreType::TENSIX && core_type != CoreType::DRAM && core_type != CoreType::ETH) {
+    if (core_type_to_use != CoreType::TENSIX && core_type != CoreType::DRAM && core_type != CoreType::ETH &&
+        core_type != CoreType::L2CPU) {
         TT_THROW("Undefined conversion for core type.");
     }
 

@@ -103,6 +103,9 @@ public:
     virtual std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) = 0;
 
     // Convert a logical coordinate to virtual coordinate
+    // Supports TENSIX/WORKER, ETH, DRAM, and L2CPU where the SoC descriptor provides a mapping.
+    // L2CPU logical coordinates use UMD ordering, not hardware tile indices.
+    // Throws for unsupported core types or unavailable logical coordinates.
     virtual CoreCoord virtual_core_from_logical_core(
         const CoreCoord& logical_coord, const CoreType& core_type) const = 0;
 
