@@ -435,6 +435,53 @@ jobs:
           path: test-reports
           merge-multiple: false
 
+      # AIIPSW-15 (Horizon) is tested in the separate private tt-umd-horizon repo.
+      # Its "Release Horizon" workflow (tt-umd-horizon#29) runs the /dev/horizon
+      # suite on a main commit and, on green, tags it `horizon-<shortsha>` and
+      # publishes a GitHub Release carrying the evidence as a `latest.json` asset
+      # (schema horizon-test-results/v1). A red run publishes nothing, so the
+      # newest horizon-* release is always the last main commit that passed.
+      #
+      # Select by tag prefix + asset, not GitHub's "latest" pointer: the repo also
+      # carries UMD version tags (v0.9.x), and a version release without the asset
+      # must not shadow the evidence. Read-only, cross-repo. Non-fatal: a missing
+      # token/release/asset just leaves AIIPSW-15 inconclusive.
+      - name: Pull tt-umd-horizon test evidence
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.HORIZON_RESULTS_TOKEN }}
+          HORIZON_REPO: tenstorrent/tt-umd-horizon
+        run: |
+          set -uo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::notice::HORIZON_RESULTS_TOKEN not configured; skipping Horizon evidence."
+            exit 0
+          fi
+          # Newest published horizon-* release that actually carries latest.json.
+          TAG=$(gh api "repos/${HORIZON_REPO}/releases?per_page=50" --jq '
+            [ .[] | select(.draft == false)
+                  | select(.tag_name | startswith("horizon-"))
+                  | select(any(.assets[]?; .name == "latest.json")) ]
+            | sort_by(.created_at) | last | .tag_name // empty' 2>/dev/null || true)
+          if [ -n "${TAG}" ] \
+             && gh release download "${TAG}" --repo "${HORIZON_REPO}" \
+                  --pattern latest.json --output horizon-results.json --clobber 2>/dev/null \
+             && [ -s horizon-results.json ]; then
+            # Log only the verdict, never the file: it comes from a private repo
+            # and this log is public. The report step prints the per-test rows.
+            python3 - <<'PY' || echo "::notice::Horizon results downloaded but not parseable; report will treat as inconclusive."
+          import json
+          d = json.load(open("horizon-results.json"))
+          d = d if isinstance(d, dict) else {}
+          t = d.get("totals") or {}
+          print("Pulled Horizon results:", "schema=%s conclusion=%s passed=%s failed=%s timestamp=%s"
+                % (d.get("schema"), d.get("conclusion"), t.get("passed"), t.get("failed"), d.get("timestamp")))
+          PY
+          else
+            echo "::notice::No horizon-* release with a latest.json asset (or no access); AIIPSW-15 inconclusive."
+            rm -f horizon-results.json
+          fi
+
       - name: Build report
         continue-on-error: true
         env:
@@ -450,6 +497,7 @@ jobs:
           RTL_SIM_SHA: ${{ needs.check-rtl-sim-status.outputs.sha }}
           RTL_SIM_URL: ${{ needs.check-rtl-sim-status.outputs.url }}
           RTL_SIM_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          HORIZON_RESULTS_FILE: horizon-results.json
           RELEASE_VERSION: ${{ inputs.tag-version }}
           TEST_REPORTS_DIR: test-reports
           REPORT_MD_OUT: release-test-evidence.md
