@@ -44,7 +44,9 @@ const std::vector<int64_t> kPageSizes = {4096, 16384, 65536, 262144};
 const std::vector<int64_t> kCores = {1, 2, 4, 8, 16, 32, 64};
 // Was never an arg: the socket defaulted to kNumAliasRingSlots == 1, so a volume run paid a
 // full host-to-host credit round trip per frame. ring_pages x page must fit one arena.
-const std::vector<int64_t> kRingPages = {1, 4, 8};
+// Runs break at a ring wrap, so depth bounds how many frames one put can carry. The guard
+// array holds kMaxRingSlots per core, and ring x page must still fit the arena.
+const std::vector<int64_t> kRingPages = {1, 4, 8, 16, 32, 64};
 const std::vector<int64_t> kVolumeMiB = {1024, 4096, 20480};
 const std::vector<int64_t> kPctSteady = {0, 10, 25};
 const std::vector<int64_t> kVerify = {0, 1};
