@@ -51,7 +51,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_fp32_accurate_(sfpi::vFloat x) {
         e += i;
         v_if(sfpi::nearby(e < 255)) {
             y = sfpi::setexp(r, e);
-            v_if(sfpi::nearby(e <= 0)) {
+            v_if(sfpi::nearby(e < 1)) {
                 // Underflow, including subnormals.
                 y = 0.0f;
             }
