@@ -40,3 +40,18 @@ inline void calculate_selu(uint32_t scale, uint32_t alpha) {
 }
 
 }  // namespace ckernel::sfpu
+
+#if !defined(TT_POLY_LLK_DISABLE)
+#include "ckernel_sfpu_selu_bf16.h"
+#endif
+
+namespace ckernel::sfpu {
+
+#if !defined(TT_POLY_LLK_DISABLE)
+template <int ITERATIONS = 8>
+inline void calculate_selu_tt_poly_bf16() {
+    ckernel::sfpu::ttpoly::calculate_dense_polynomial<ttpoly_generated::SeluBf16Config, ITERATIONS>();
+}
+#endif
+
+}  // namespace ckernel::sfpu

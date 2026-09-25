@@ -40,4 +40,46 @@ ALWI void elu_tile(uint32_t idst, uint32_t param0) {
  */
 ALWI void elu_tile_init() { MATH(SFPU_UNARY_INIT(elu)); }
 #endif
+#if !defined(TT_POLY_LLK_DISABLE) && ((defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)) && \
+                                      defined(TT_METAL_SFPU_SINGLE_TILE_DST) && TT_METAL_SFPU_SINGLE_TILE_DST == 1)
+#define TT_POLY_ELU_BF16_ROUTE_ACTIVE 1
+#else
+#define TT_POLY_ELU_BF16_ROUTE_ACTIVE 0
+#endif
+
+/** Internal BF16 typed-compiler route; public callers retain the stock entry point. */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void elu_tt_poly_bf16_tile(uint32_t idst, uint32_t param0) {
+#if !TT_POLY_ELU_BF16_ROUTE_ACTIVE
+    elu_tile<is_fp32_dest_acc_en>(idst, param0);
+#else
+    if constexpr (is_fp32_dest_acc_en) {
+        elu_tile<is_fp32_dest_acc_en>(idst, param0);
+    } else {
+        if (param0 != 0x3f800000u) {
+            elu_tile_init();
+            elu_tile<is_fp32_dest_acc_en>(idst, param0);
+            return;
+        }
+        if (idst != 0) {
+            elu_tile_init();
+            elu_tile<is_fp32_dest_acc_en>(idst, param0);
+            return;
+        }
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            calculate_elu_tt_poly_bf16,
+            (32 /* ITERATIONS */),
+            idst,
+            VectorMode::None));
+    }
+#endif
+}
+
+/** Initialize the internal BF16 typed-compiler route. */
+ALWI void elu_tt_poly_bf16_tile_init() { elu_tile_init(); }
+
+#undef TT_POLY_ELU_BF16_ROUTE_ACTIVE
+
 }  // namespace ckernel

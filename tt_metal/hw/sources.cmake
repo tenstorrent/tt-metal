@@ -374,11 +374,13 @@ set(HW_JIT_API_HEADERS
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_abs_exp_correction_core.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_asymptotic_exp.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_asymptotic_factor.inc
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_cascade_dense.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_cascade_signed_abs.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_clamped_affine.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_config_tile.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_core_bridge_exponent.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_core_bridge_rational.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_dense_polynomial.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_domain_action_coordinate.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_domain_finalize.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_domain_prepare.inc

@@ -43,6 +43,46 @@ def generate_bfloat16_bits(dtype=torch.bfloat16, include_spl_values=False):
     return all_bf16
 
 
+def generate_bfloat16_zero_band():
+    """All raw BF16 words and the zero/subnormal lanes within them."""
+    raw = generate_all_bfloat16_bitpatterns()
+    zero_band = (raw.contiguous().view(torch.uint16) & 0x7F80) == 0
+    return raw.unsqueeze(0).unsqueeze(0), zero_band.unsqueeze(0).unsqueeze(0)
+
+
+def assert_bfloat16_finite_pure_ulp(raw, actual, reference, terminals=()):
+    """Check <1 pure ULP on every finite raw word; qualification owns specials."""
+    import numpy as np
+
+    words = raw.contiguous().view(torch.uint16).cpu().numpy().reshape(-1)
+    result = actual.to(torch.bfloat16).contiguous().view(torch.uint16).cpu().numpy().reshape(-1)
+    finite = (words & 0x7FFF) < 0x7F80
+    values = raw.to(torch.float32).to(torch.float64).cpu().numpy().reshape(-1)[finite]
+    values[(words[finite] & 0x7F80) == 0] = 0.0  # typed ingress: DAZ, including -0
+    golden = reference(torch.from_numpy(values.copy())).numpy()
+    for direction, bound, inclusive, kind, value in terminals:
+        if direction == "below":
+            owned = values <= bound if inclusive else values < bound
+        else:
+            owned = values >= bound if inclusive else values > bound
+        if kind == "constant":
+            golden[owned] = value
+        elif kind not in {"identity", "affine"}:
+            raise AssertionError("unknown finite terminal")
+    rounded = torch.from_numpy(golden).to(torch.bfloat16).to(torch.float64).numpy()
+    rounded[(np.abs(rounded) < 2.0**-126) & (rounded != 0)] = 0.0
+    scored = np.isfinite(golden) & np.isfinite(rounded)
+    got = (result[finite][scored].astype(np.uint32) << 16).view(np.float32).astype(np.float64)
+    expected = np.where(rounded[scored] == 0, np.copysign(0.0, golden[scored]), golden[scored])
+    magnitude = (np.abs(rounded[scored]).astype(np.float32).view(np.uint32) >> 16).astype(np.uint32)
+    upper = (np.minimum(magnitude + 1, 0x7F80) << 16).view(np.float32)
+    lower = (magnitude << 16).view(np.float32)
+    spacing = np.where(np.isinf(upper), 2.0**120, (upper - lower).astype(np.float64))
+    pure_ulp = np.abs(expected - got) / spacing
+    assert np.isfinite(pure_ulp).all()
+    assert not pure_ulp.size or float(pure_ulp.max()) < 1.0
+
+
 SMALLEST_NORMAL_BF16 = 2.0 ** (-126)
 MAX_BF16 = float(torch.finfo(torch.bfloat16).max)
 
