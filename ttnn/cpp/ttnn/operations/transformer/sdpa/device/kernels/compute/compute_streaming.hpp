@@ -420,10 +420,13 @@ void inplace_v_matmul_pack_batched(
 /**
  * Re-enter the no-mop matmul for the PV phase after the QK^T phase's init. A different PV fidelity
  * needs the full init (the replay image is recorded per fidelity); otherwise the addrmod-only reinit.
+ * LoFi always re-records: its replay image bakes the operand clear chosen from the init's ct/rt, and a
+ * QK^T image recorded for a narrowed tail chunk (ct < rt) deadlocks the PV matmul (ct >= rt).
  */
 ALWI void pv_mm_no_mop_reinit_short(
     uint32_t in0_cb, uint32_t in1_cb, uint32_t ct_dim, uint32_t rt_dim, uint32_t kt_dim) {
-    if constexpr (PV_MATH_FIDELITY != QK_MATH_FIDELITY) {
+    constexpr bool pv_lofi = PV_MATH_FIDELITY == 0;  // MathFidelity::LoFi
+    if constexpr (PV_MATH_FIDELITY != QK_MATH_FIDELITY || pv_lofi) {
         mm_no_mop_init_short<PV_MATH_FIDELITY>(in0_cb, in1_cb, false, ct_dim, rt_dim, kt_dim);
     } else {
         mm_no_mop_reinit_short<PV_MATH_FIDELITY>(in0_cb, in1_cb, false, ct_dim, rt_dim, kt_dim);
