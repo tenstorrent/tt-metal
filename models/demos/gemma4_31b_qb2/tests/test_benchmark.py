@@ -207,7 +207,6 @@ def test_startup_status_never_copies_log_content():
 
 def test_report_preserves_run_start_and_every_shape(monkeypatch, tmp_path):
     import importlib
-    import pickle
 
     from infra.data_collection.pydantic_models import BenchmarkMeasurement, PartialBenchmarkRun
     from models.perf import benchmarking_utils
@@ -218,6 +217,10 @@ def test_report_preserves_run_start_and_every_shape(monkeypatch, tmp_path):
     monkeypatch.setattr(benchmarking_utils, "BenchmarkMeasurement", BenchmarkMeasurement, raising=False)
     monkeypatch.setattr(benchmarking_utils, "PartialBenchmarkRun", PartialBenchmarkRun, raising=False)
     monkeypatch.setattr(report, "IS_CI_ENV", True)
+    # Exercise the real writer and filename handling without deserializing pickle.
+    monkeypatch.setattr(
+        benchmarking_utils, "pickle", SimpleNamespace(dumps=lambda record: record.model_dump_json().encode())
+    )
     row = dict(
         measurement_start="2026-09-25T10:01:00+00:00",
         measurement_end="2026-09-25T10:02:00+00:00",
@@ -246,7 +249,7 @@ def test_report_preserves_run_start_and_every_shape(monkeypatch, tmp_path):
     report.report(summary)
     files = list((tmp_path / "generated/benchmark_data").glob("partial_run_*.pkl"))
     assert len(files) == 4, "Shapes sharing a run start must not overwrite each other"
-    records = [pickle.loads(path.read_bytes()) for path in files]
+    records = [PartialBenchmarkRun.model_validate_json(path.read_text()) for path in files]
     assert {r.batch_size for r in records} == {1, 10, 32}
     for record in records:
         assert record.run_start_ts.isoformat() == summary["run_start"]
