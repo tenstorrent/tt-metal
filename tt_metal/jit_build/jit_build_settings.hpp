@@ -155,30 +155,21 @@ public:
     //  - Tensor bindings
     // prefetcher_pipe_id is 0xFF unless the binding is a PrefetcherPipe relay, in which case
     // it identifies the persistent slot the relay-token constructor aligns from on TRISC.
-<<<<<<< HEAD
     // Callbacks are copied to isolate mutable target state, matching the overrides.
-    virtual void process_dataflow_buffer_binding_handles(
-        std::function<
-            // NOLINTNEXTLINE(performance-unnecessary-value-param)
-            void(const std::string& accessor_name, uint16_t logical_dfb_id, bool is_relay, uint8_t prefetcher_pipe_id)>)
-        const {}
-    virtual void process_semaphore_binding_handles(
-        std::function<
-            // NOLINTNEXTLINE(performance-unnecessary-value-param)
-            void(const std::string& accessor_name, uint16_t semaphore_id, SemScope scope, uint32_t total_binder_harts)>)
-        const {}
-=======
-    virtual void process_dataflow_buffer_binding_handles(std::function<void(
+    virtual void process_dataflow_buffer_binding_handles(std::function<
+                                                         // NOLINTNEXTLINE(performance-unnecessary-value-param)
+                                                         void(
                                                              const std::string& accessor_name,
                                                              std::uint16_t logical_dfb_id,
                                                              bool is_relay,
                                                              std::uint8_t prefetcher_pipe_id)>) const {}
-    virtual void process_semaphore_binding_handles(std::function<void(
+    virtual void process_semaphore_binding_handles(std::function<
+                                                   // NOLINTNEXTLINE(performance-unnecessary-value-param)
+                                                   void(
                                                        const std::string& accessor_name,
                                                        std::uint16_t semaphore_id,
                                                        SemScope scope,
                                                        std::uint32_t total_binder_harts)>) const {}
->>>>>>> 183236bba9d (Initial quasar RVV enable)
 
     // TensorBinding callback emits the codegen-relevant fields only:
     //  - accessor_name: kernel-side identifier, used as the symbol name in the `tensor::` namespace
@@ -193,10 +184,10 @@ public:
     // (The tensor_parameter_name is also part of TensorBindingHandle, but we don't need it for codegen.)
     virtual void process_tensor_binding_handles(std::function<void(
                                                     const std::string& accessor_name,
-                                                    uint32_t cta_offset,
-                                                    uint32_t addr_crta_offset,
+                                                    std::uint32_t cta_offset,
+                                                    std::uint32_t addr_crta_offset,
                                                     // NOLINTNEXTLINE(performance-unnecessary-value-param)
-                                                    uint32_t num_runtime_field_crta_words)>) const {}
+                                                    std::uint32_t num_runtime_field_crta_words)>) const {}
 
     // Scratchpad binding callback emits the codegen-relevant fields:
     //  - accessor_name: kernel-side identifier, used as the symbol name in the `scratch::` namespace
@@ -205,14 +196,15 @@ public:
     //    scratchpad's (framework-allocated) L1 base address
     virtual void process_scratchpad_binding_handles(
         // NOLINTNEXTLINE(performance-unnecessary-value-param)
-        std::function<void(const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_word)>) const {}
+        std::function<void(const std::string& accessor_name, std::uint32_t size_bytes, std::uint32_t addr_crta_word)>)
+        const {}
 
     // PrefetcherPipe binding callback (Metal 2.0):
     //  - accessor_name: kernel-side identifier, used as the symbol name in the `pipe::` namespace
     //  - prefetcher_pipe_id: the program PrefetcherPipe slot the accessor constructs its PrefetcherPipe with
     virtual void process_prefetcher_pipe_binding_handles(
         // NOLINTNEXTLINE(performance-unnecessary-value-param)
-        std::function<void(const std::string& accessor_name, uint8_t prefetcher_pipe_id)>) const {}
+        std::function<void(const std::string& accessor_name, std::uint8_t prefetcher_pipe_id)>) const {}
 
     // Tensor binding sequence callback: sequence_name + ordered member TensorBinding accessor names.
     // Emitted as constexpr std::tuple tokens in the `tensor::` namespace (user order; no sort).

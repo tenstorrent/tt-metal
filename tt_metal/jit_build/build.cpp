@@ -73,7 +73,7 @@ namespace {
 // define-variants of one source then share a tu_id, which the host reports as a collision rather than
 // mis-naming. Append-only "<source_id>\t<tu_id>" lines, lowest free id; flock() covers parallel builds
 // sharing a cache root, the mutex covers the JIT's own thread pool.
-uint32_t get_or_assign_profiler_tu_id(const std::string& registry_path, const std::string& source_id) {
+std::uint32_t get_or_assign_profiler_tu_id(const std::string& registry_path, const std::string& source_id) {
     static std::mutex mtx;
     std::lock_guard<std::mutex> lk(mtx);
 
@@ -102,9 +102,9 @@ uint32_t get_or_assign_profiler_tu_id(const std::string& registry_path, const st
             if (tab == std::string::npos) {
                 continue;
             }
-            uint32_t entry_id = 0;
+            std::uint32_t entry_id = 0;
             try {
-                entry_id = static_cast<uint32_t>(std::stoul(line.substr(tab + 1)));
+                entry_id = static_cast<std::uint32_t>(std::stoul(line.substr(tab + 1)));
             } catch (const std::exception&) {
                 continue;
             }
@@ -119,7 +119,7 @@ uint32_t get_or_assign_profiler_tu_id(const std::string& registry_path, const st
     }
 
     taken[TT_ZONE_RESERVED_TU] = true;
-    uint32_t id = 0;
+    std::uint32_t id = 0;
     while (id < TT_ZONE_TU_COUNT && taken[id]) {
         ++id;
     }
@@ -765,11 +765,7 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     // Add the machine-local PCH here so exported recipes remain portable.
     // Exclude build-map dump flags from the PCH profile.
     const std::string pch = tt::jit_build::ensure_pch(
-        env_.gpp_,
-        recipe.compiler_opt_level,
-        recipe.cflags,
-        recipe.pch_umbrella,
-        fs::path(env_.out_root_) / "pch");
+        env_.gpp_, recipe.compiler_opt_level, recipe.cflags, recipe.pch_umbrella, fs::path(env_.out_root_) / "pch");
 
     // Preserve the recipe's defines for watcher logging.
     std::vector<std::string> defines = recipe.defines;
@@ -792,7 +788,7 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
         const std::string source_id = (settings != nullptr)
                                           ? settings->get_profiler_zone_src_id() + '\x1f' + this->target_name_
                                           : "fw\x1f" + this->srcs_[src_index] + '\x1f' + this->target_name_;
-        const uint32_t tu_id =
+        const std::uint32_t tu_id =
             get_or_assign_profiler_tu_id(env_.get_out_root_path() + ".profiler_zone_tu_ids", source_id);
         defines.push_back(fmt::format("-DTT_PROFILER_TU_ID={}", tu_id));
     }
@@ -1117,10 +1113,11 @@ tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSe
     target.target_name = target_name_;
     target.cflags = cflags_;
     target.pch_umbrella = (fs::path(env_.root_) / jit_build::PCH_UMBRELLA).string();
-    // Per-kernel RVV opt-in: only the pack (TRISC2) compile of a kernel that set
-    // ComputeConfig::enable_trisc2_rvv gets the vector flags. Compile-only: lflags_ is
-    // untouched, so the link stays stock (the -fno-lto object simply opts out of LTO).
-    if (settings != nullptr && this->is_compute_pack_ && settings->get_trisc2_rvv_enabled()) {
+    // Per-kernel RVV opt-in: only the compile of the compute processor the kernel opted in for
+    // gets the vector flags. Right now, RVV on TRISC0 is supported on Quasar and TRISC2 on BH
+    // Compile-only: lflags_ is untouched, so the link stays stock (the -fno-lto object simply opts out of LTO).
+    if (settings != nullptr && this->is_tensix_compute_ &&
+        settings->get_rvv_enabled_for_compute_processor(this->processor_id_)) {
         TT_FATAL(
             !this->rvv_cflags_.empty(),
             "Kernel {} enables RVV code generation for compute processor {}, but this architecture does not "
