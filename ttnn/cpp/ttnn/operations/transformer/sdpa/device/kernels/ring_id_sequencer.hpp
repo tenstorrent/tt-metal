@@ -40,6 +40,7 @@ struct RingIdSequencer {
      *                 - wait_val: semaphore threshold (0 on first iteration)
      */
     template <typename SyncFn>
+    // NOLINTNEXTLINE(cppcoreguidelines-missing-std-forward) -- Preserve lvalue invocation of temporary callbacks.
     uint32_t get_next_ring_id(SyncFn&& sync_fn) {
         uint32_t sender_ring_id;
         uint32_t sync_dir = curr_dir;

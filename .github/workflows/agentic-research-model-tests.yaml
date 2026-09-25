@@ -12,6 +12,7 @@ on:
         options:
           - all
           - llama3.1-8b-qb2
+          - gemma4-31b-qb2
       sku:
         description: Hardware to test
         type: choice
@@ -31,8 +32,7 @@ on:
       vllm-tt-plugin-ref:
         description: vLLM TT plugin branch or tag for serving tests
         type: string
-        # Switch back to main once vllm-tt-plugin#116 has merged.
-        default: yieldthought/llama31-qb2-serving
+        default: main
 
 permissions:
   contents: read
@@ -51,7 +51,7 @@ jobs:
       SKU: ${{ inputs.sku || 'all' }}
       MODEL: ${{ inputs.model || 'all' }}
       TIER: ${{ inputs.tier || 'all' }}
-      VLLM_TT_PLUGIN_REF: ${{ inputs.vllm-tt-plugin-ref || 'yieldthought/llama31-qb2-serving' }}
+      VLLM_TT_PLUGIN_REF: ${{ inputs.vllm-tt-plugin-ref || 'main' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -61,10 +61,11 @@ jobs:
       - run: pip3 install PyYAML
       - name: Resolve hardware
         id: hardware
-        run: |
-          if [ "$SKU" = all ]; then SKU=ALL_SKUS_IN_TESTS; fi
-          python3 .github/scripts/utils/prepare_test_matrix.py \
-            "$REGISTRY" "$SKU" .github/sku_config.yaml
+        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        with:
+          tests-yaml: ${{ env.REGISTRY }}
+          enabled-skus: ${{ env.SKU == 'all' && 'ALL_SKUS_IN_TESTS' || env.SKU }}
+          sku-config: .github/sku_config.yaml
       - name: Select model and tier
         id: select
         env:
@@ -113,3 +114,4 @@ jobs:
       enabled-skus: ""
       tier: ""
       summary-scope: agentic-research
+      run-tt-check: true

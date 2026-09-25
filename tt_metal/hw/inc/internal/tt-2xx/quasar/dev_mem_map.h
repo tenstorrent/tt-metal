@@ -151,20 +151,19 @@
 
 // Tensix routing table for fabric networking
 #define MEM_TENSIX_ROUTING_TABLE_BASE (MEM_FABRIC_CONNECTION_LOCK_BASE + MEM_FABRIC_CONNECTION_LOCK_SIZE)
-#define MEM_ROUTING_TABLE_SIZE 2704  // struct layout: base(516) + union(1160) + exit(1024) + coords(2) + shape(2)
+#define MEM_ROUTING_TABLE_SIZE 2576  // struct layout: base(516) + union(1024) + exit(1024) + pad(12)
 #define MEM_OFFSET_OF_ROUTING_PATHS 516
-// Tail of routing_l1_info_t after exit_node_table: my_mesh_coord_y/x (2 B) + mesh_y/x_size (2 B).
-// Must match the struct tail in hostdevcommon/fabric_common.h.
-#define MEM_ROUTING_TABLE_PADDING 4
+#define MEM_ROUTING_TABLE_PADDING 12
 
-#define ROUTING_PATH_SIZE_1D 1024  // 64 chips × 16 bytes
-#define COMPRESSED_ROUTING_PATH_SIZE_1D 0  // sizeof(intra_mesh_routing_path_t<1, true>)
-#define ROUTE_TABLE_SIZE_2D 1160           // sizeof(route_table_2d_t)
+#define ROUTING_PATH_SIZE_1D 1024  // Was 256 (64 chips × 16 bytes)
+// 2D uncompressed size is too large to fit in L1 memory
+#define COMPRESSED_ROUTING_PATH_SIZE_1D 0     // sizeof(intra_mesh_routing_path_t<1, true>)
+#define COMPRESSED_ROUTING_PATH_SIZE_2D 1024  // sizeof(intra_mesh_routing_path_t<2, true>)
 // Union: 1D and 2D routing tables share the same offset
 #define MEM_TENSIX_ROUTING_PATH_BASE (MEM_TENSIX_ROUTING_TABLE_BASE + MEM_OFFSET_OF_ROUTING_PATHS)
 #define MEM_TENSIX_ROUTING_PATH_BASE_1D MEM_TENSIX_ROUTING_PATH_BASE  // 516
 #define MEM_TENSIX_ROUTING_PATH_BASE_2D MEM_TENSIX_ROUTING_PATH_BASE  // 516
-#define MEM_TENSIX_ROUTING_PATH_SIZE ROUTE_TABLE_SIZE_2D
+#define MEM_TENSIX_ROUTING_PATH_SIZE 1024                             // max(1024, 1024)
 
 #define MEM_TENSIX_EXIT_NODE_TABLE_BASE (MEM_TENSIX_ROUTING_PATH_BASE + MEM_TENSIX_ROUTING_PATH_SIZE)
 #define MEM_EXIT_NODE_TABLE_SIZE 1024  // sizeof(exit_node_table_t)
@@ -201,7 +200,7 @@
 // Dedicated cached-only pool for DM_LOCAL_CACHED semaphores: whole 64B cache lines that
 // nothing on the NoC/uncached path ever writes, so a cached AMO's line write-back can never
 // clobber NoC-written data. 8B rows indexed by semaphore id: [0] = counter, [1] = the seed
-// protocol word for the generated entry/exit stubs.
+// protocol word for the firmware's cached-pool entry/exit.
 #define MEM_DM_CACHED_SEM_BASE (MEM_NOC_SEM_LOCK_BASE + MEM_NOC_SEM_LOCK_SIZE)
 #define MEM_DM_CACHED_SEM_ROW 8
 #define MEM_DM_CACHED_SEM_SIZE 128  // keep >= NUM_SEMAPHORES * MEM_DM_CACHED_SEM_ROW
@@ -340,7 +339,8 @@
 #define MEM_AERISC_FABRIC_TELEMETRY_SIZE 128
 // Routing path sizes (union = same memory, consolidated from intermediate aliases)
 #define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_1D ROUTING_PATH_SIZE_1D
-#define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE ROUTE_TABLE_SIZE_2D  // Union size
+#define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_2D COMPRESSED_ROUTING_PATH_SIZE_2D
+#define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_2D  // Union size
 #define MEM_ERISC_MAILBOX_SIZE 12768
 #define MEM_ERISC_KERNEL_CONFIG_SIZE (25 * 1024)
 #define MEM_ERISC_BASE 0

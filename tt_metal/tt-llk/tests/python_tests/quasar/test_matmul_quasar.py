@@ -5,6 +5,7 @@
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.constraints import get_valid_math_fidelities
 from helpers.data_format_inference import data_formats
 from helpers.device import BootMode
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -29,6 +30,7 @@ from helpers.param_config import (
     DEST_SYNC_TILE_LIMITS,
     input_output_formats,
     parametrize,
+    quasar_mx_smoke,
     runtime,
 )
 from helpers.perf.core import create_test_or_perf_config
@@ -134,21 +136,6 @@ class IndependentMatmulStimuliConfig(StimuliConfig):
             )
 
 
-def matmul_math_fidelities(format, *, is_perf=False):
-    # Integer matmul is LoFi-only on Quasar. MX is already full precision at LoFi,
-    # so perf skips the extra HiFi phases.
-    if format.input_format == DataFormat.Int8 or (
-        is_perf and format.input_format.is_mx_format()
-    ):
-        return [MathFidelity.LoFi]
-    return [
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ]
-
-
 def matmul_dest_sync_modes(*, is_perf=False):
     return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
 
@@ -193,12 +180,17 @@ def matmul_implied_math_formats(format, *, is_perf=False):
 
 
 def matmul_register_format_hints(format):
-    return (
-        [DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B]
-        # MxFp4_2x is Quasar only. Quasar Architecture derivations don't support it.
-        if format.input_format == DataFormat.MxFp4 and _ARCH == ChipArchitecture.QUASAR
-        else [None]
-    )
+    # MxFp4_2x is Quasar only. Quasar Architecture derivations don't support it.
+    if format.input_format != DataFormat.MxFp4 or _ARCH != ChipArchitecture.QUASAR:
+        return [None]
+    # One hint per exponent family. infer_downstream_unpack_out maps 2x_A to
+    # Float16 and 2x_B to Float16_b; the crossed output is a pack conversion
+    # owned by test_pack_quasar.
+    if format.output_format == DataFormat.Float16:
+        return [DataFormat.MxFp4_2x_A]
+    if format.output_format == DataFormat.Float16_b:
+        return [DataFormat.MxFp4_2x_B]
+    return [DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B]
 
 
 def matmul_enable_direct_indexing(register_format_hint):
@@ -238,21 +230,25 @@ def matmul_tiny_transpose_modes(
     return [Transpose.No, Transpose.Yes]
 
 
-# Generate format-aware combinations. MxFp4 is an input-only (L1) format here: the
-# unpacker produces MxFp4_2x_A/B in the src registers, so drop the cross-product
-# entries where MxFp4 would land as an output.
-MATMUL_FORMAT = input_output_formats(
-    [
-        DataFormat.Float16,
-        DataFormat.Float16_b,
-        DataFormat.MxFp8R,
-        DataFormat.MxFp8P,
-        DataFormat.MxFp4,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
-    ],
-) + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
+# MxFp4 is an input-only (L1) format here. Each row is one exponent family:
+# matmul_register_format_hints pairs Float16 with MxFp4_2x_A and Float16_b with
+# MxFp4_2x_B, so the output matches the math format the hint selects.
+MATMUL_2X_FORMATS = [
+    InputOutputFormat(DataFormat.MxFp4, DataFormat.Float16),
+    InputOutputFormat(DataFormat.MxFp4, DataFormat.Float16_b),
+]
+
+MATMUL_FORMAT = (
+    input_output_formats(
+        [
+            DataFormat.Float16,
+            DataFormat.Float16_b,
+        ],
+    )
+    + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
+    + MATMUL_2X_FORMATS
+    + quasar_mx_smoke(DataFormat.MxInt8, DataFormat.Float16_b)
+)
 
 FULL_MATMUL_SHAPES = [((TILE_DIM, TILE_DIM), (TILE_DIM, TILE_DIM))]
 TINY_MATMUL_SHAPE_CASES = [((16, 16), (16, 16))] + [
@@ -277,7 +273,7 @@ _ARCH = get_chip_architecture()
 @parametrize(
     input_tile_dimensions=runtime(FULL_MATMUL_SHAPES),
     format=MATMUL_FORMAT,
-    math_fidelity=lambda format: matmul_math_fidelities(format),
+    math_fidelity=lambda format: get_valid_math_fidelities(format),
     dest_sync_mode=lambda: matmul_dest_sync_modes(),
     dest_acc=matmul_dest_acc_modes,
     matmul_tile_dims=runtime(

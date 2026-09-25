@@ -34,7 +34,8 @@ METALIUM_GUIDE.md @davorchap @tenstorrent/metalium-developers-infra
 # Agentic research CI: @uaydonat is the backup owner.
 .github/workflows/agentic-research-model-tests.yaml @yieldthought @tchedaTT @mtairum @uaydonat @tenstorrent/metalium-developers-infra
 .github/workflows/fabric-cpu-only-tests-impl.yaml @Riddy21 @tt-asaigal @aliuTT @cfjchu @p1-0tr @tenstorrent/metalium-developers-infra
-.github/workflows/galaxy-multi-user-isolation-tests.yaml @sott0n @changh95
+.github/workflows/galaxy-multi-user-isolation-tests-impl.yaml @sott0n @changh95
+tests/pipeline_reorg/galaxy_multi_user_isolation_tests.yaml @sott0n @changh95
 .github/workflows/galaxy-profiler-tests-impl.yaml @mo-tenstorrent @akerteszTT @yusufbashiTT @tenstorrent/metalium-developers-infra
 .github/workflows/galaxy-profiler-tests.yaml @mo-tenstorrent @akerteszTT @yusufbashiTT @tenstorrent/metalium-developers-infra
 .github/workflows/models-t1*.yaml @mtairum @uaydonat @tenstorrent/metalium-developers-infra
@@ -82,7 +83,9 @@ tests/pipeline_reorg/vllm_model_tests.yaml @viktorpusTT @tchedaTT @ppetrovicTT @
 tests/pipeline_reorg/ttsim-skip-list.yaml @roseli-TT @tdowdallTT @mcraigheadTT @tenstorrent-github-bot @dpopovTT
 tests/scripts/ @tenstorrent/metalium-developers-infra
 tests/scripts/quasar @kstevensTT @fvranicTT @tenstorrent/metalium-developers-infra
+tests/scripts/single_card/run_bh_tensor_prefetcher_mpfe_tune.py @anashTT @jbaumanTT @tt-asaigal @tt-aho @sidnadTT @tenstorrent/metalium-developers-infra
 tests/scripts/single_card/run_single_card_profiler_tests.sh @mo-tenstorrent @akerteszTT @yusufbashiTT @tenstorrent/metalium-developers-infra
+tests/scripts/single_card/test_run_bh_tensor_prefetcher_mpfe_tune.py @anashTT @jbaumanTT @tt-asaigal @tt-aho @sidnadTT @tenstorrent/metalium-developers-infra
 tests/scripts/t3000/run_t3000_profiler_tests.sh @mo-tenstorrent @akerteszTT @yusufbashiTT @tenstorrent/metalium-developers-infra
 tests/tt_metal/distributed/multiprocess/run_visible_devices_mp_tests.sh @cfjchu @tenstorrent/metalium-developers-infra
 
@@ -492,6 +495,7 @@ tests/ttnn/stress_tests/test_ccl.py @tenstorrent/metalium-developers-ops-data-mo
 tests/ttnn/stress_tests/test_data_movement.py @tenstorrent/metalium-developers-ops-data-movement
 tests/ttnn/unit_tests/gtests/ccl/ @tenstorrent/metalium-developers-ops-data-movement
 tests/ttnn/unit_tests/gtests/conv/ @tenstorrent/metalium-developers-convolutions
+tests/ttnn/unit_tests/gtests/sdpa/ @tenstorrent/metalium-developers-sdpa
 tests/ttnn/unit_tests/gtests/udm/ @yugaoTT @SeanNijjar
 tests/ttnn/unit_tests/gtests/udm/**/CMakeLists.txt @yugaoTT @SeanNijjar @tenstorrent/metalium-developers-infra
 tests/ttnn/unit_tests/operations/ccl/ @tenstorrent/metalium-developers-ops-data-movement
@@ -577,6 +581,7 @@ models/demos/blackhole/qwen36 @atupe-tt @tenstorrent/cse-developer-ttnn
 models/demos/blackhole/sentence_bert @arginugaTT @tenstorrent/cse-developer-ttnn
 models/demos/falcon7b_common @djordje-tt @uaydonat
 models/demos/gemma4 @handrewsTT @mtairum @uaydonat @dwadhwaniTT @arginugaTT
+models/demos/gemma4_31b_qb2 @yieldthought @handrewsTT @mtairum @uaydonat @dwadhwaniTT @arginugaTT
 models/demos/gemma4_d_p @svuckovicTT @amilovanovicTT @sdjordjevicTT
 models/demos/llama3_70b_galaxy @johanna-rock-tt @kpaigwar @sraizada-tt @djordje-tt @mtairum @yalrawwashTT @alingTT
 models/demos/llama_3p1_8b_d_p @mgiermakowskiTT @djordje-tt

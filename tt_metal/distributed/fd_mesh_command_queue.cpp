@@ -1223,24 +1223,54 @@ void FDMeshCommandQueue::reset_worker_state(
     cq_shared_state_->sub_device_cq_owner.clear();
     cq_shared_state_->sub_device_cq_owner.resize(num_sub_devices);
     in_use_ = true;
-    for (auto* device : mesh_device_->get_devices()) {
+    const auto devices = mesh_device_->get_devices();
+    auto cached =
+        std::find_if(sub_device_setup_commands_.begin(), sub_device_setup_commands_.end(), [&](const auto& entry) {
+            return entry.devices == devices && entry.reset_launch_msg_state == reset_launch_msg_state &&
+                   std::equal(
+                       entry.workers.begin(),
+                       entry.workers.end(),
+                       workers_per_sub_device.begin(),
+                       workers_per_sub_device.end()) &&
+                   entry.noc_data == go_signal_noc_data && entry.core_mapping == core_go_message_mapping;
+        });
+    if (cached == sub_device_setup_commands_.end()) {
+        SubDeviceSetupCommands entry{
+            .devices = devices,
+            .workers = {workers_per_sub_device.begin(), workers_per_sub_device.end()},
+            .noc_data = go_signal_noc_data,
+            .core_mapping = core_go_message_mapping,
+            .reset_launch_msg_state = reset_launch_msg_state,
+            .device_batches = {}};
+        entry.device_batches.reserve(devices.size());
+        for (auto* device : devices) {
+            entry.device_batches.push_back(program_dispatch::build_sub_device_setup_commands(
+                static_cast<Device*>(device),  // NOLINT(cppcoreguidelines-pro-type-static-cast-downcast)
+                id_,
+                workers_per_sub_device,
+                go_signal_noc_data,
+                core_go_message_mapping,
+                reset_launch_msg_state));
+        }
+        if (sub_device_setup_commands_.size() == max_sub_device_setup_cache_entries) {
+            sub_device_setup_commands_.pop_back();
+        }
+        sub_device_setup_commands_.push_back(std::move(entry));
+        cached = std::prev(sub_device_setup_commands_.end());
+    }
+    std::rotate(sub_device_setup_commands_.begin(), cached, std::next(cached));
+    cached = sub_device_setup_commands_.begin();
+    for (size_t i = 0; i < devices.size(); ++i) {
+        // Old-manager completion counts remain dynamic. The cached tail still resets GO mailboxes
+        // and retains all barriers; batching changes only host submission granularity.
         program_dispatch::reset_worker_dispatch_state_on_device(
             mesh_device_,
-            device->sysmem_manager(),
+            devices[i]->sysmem_manager(),
             id_,
             this->virtual_program_dispatch_core(),
             expected_num_workers_completed_,
-            reset_launch_msg_state);
-        program_dispatch::set_num_worker_sems_on_dispatch(
-            device->sysmem_manager(), id_, num_sub_devices, workers_per_sub_device);
-        program_dispatch::set_go_signal_noc_data_on_dispatch(go_signal_noc_data, device->sysmem_manager(), id_);
-        if (reset_launch_msg_state) {
-            program_dispatch::set_core_go_message_mapping_on_device(
-                static_cast<Device*>(device),  // NOLINT(cppcoreguidelines-pro-type-static-cast-downcast)
-                core_go_message_mapping,
-                device->sysmem_manager(),
-                id_);
-        }
+            reset_launch_msg_state,
+            cached->device_batches[i]);
     }
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
         MetalContext::instance(mesh_device_->impl().get_context_id()).hal(),
@@ -1261,6 +1291,24 @@ void FDMeshCommandQueue::write_program_commands_to_devices(
     ProgramCommandSequence& program_cmd_seq,
     bool stall_first,
     bool stall_before_program) {
+    if (devices.size() > 1) {
+        const auto size = program_cmd_seq.get_one_shot_fetch_size(stall_first, stall_before_program, true);
+        if (size <= program_cmd_seq.ctx->dispatch_mem_map().max_prefetch_command_size()) {
+            // Every local device receives the same bytes. Pack the fragments once before the device copies.
+            static thread_local vector_aligned<uint32_t> packed;
+            program_dispatch::pack_program_command_sequence(
+                program_cmd_seq, stall_first, stall_before_program, true, packed);
+            for (auto* device : devices) {
+                auto& manager = device->sysmem_manager();
+                manager.issue_queue_reserve(size, id_);
+                manager.cq_write(packed.data(), size, manager.get_issue_queue_write_ptr(id_));
+                manager.issue_queue_push_back(size, id_);
+                manager.fetch_queue_reserve_back(id_);
+                manager.fetch_queue_write(size, id_);
+            }
+            return;
+        }
+    }
     for (auto* device : devices) {
         program_dispatch::write_program_command_sequence(
             program_cmd_seq, device->sysmem_manager(), id_, stall_first, stall_before_program);
@@ -1753,7 +1801,8 @@ void FDMeshCommandQueue::wait_for_completion(bool reset_launch_msg_state) {
                 id_,
                 this->virtual_program_dispatch_core(),
                 expected_num_workers_completed_,
-                reset_launch_msg_state);
+                reset_launch_msg_state,
+                /*setup_commands=*/{});
         }
         program_dispatch::reset_config_buf_mgrs_and_expected_workers(
             MetalContext::instance(mesh_device_->impl().get_context_id()).hal(),
