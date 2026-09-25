@@ -20,9 +20,6 @@ routed token.
 Cases default to the production chunk: 5120 tokens over an 8-chip dispatch group, so
 seq_len_per_chip is 640. `test_combine_fabric2d_partial_last_tile` varies it on purpose.
 
-Calls the op directly. The TtCombine2dModule wrapper is covered by
-test_prefill_combine.py::test_ttnn_combine_fabric2d.
-
 H is the dispatch group size (mesh rows), G the number of groups (mesh columns). Routing tensors are
 indexed (G, H, ...), device tensors (H, G, ...) to match the mesh.
 """
