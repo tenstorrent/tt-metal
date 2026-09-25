@@ -152,3 +152,22 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Verified: BRINGUP_IMPL=reference PASS (rel 0.0027); stub FAIL (pcc 0.604). Device gate PASS: pcc_swap_out 0.999973, block out rel 0.0074 / 0.0062,
   attn_norm 0.999996 / 0.0031, attention 0.999988 / 0.0052 / first rows 0.0052.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_02_attention.py`
+
+## C.sliding.post_attn_norm test (attempt 1)
+- Reviewed the rendered test (layer 0, golden [2048, 2816] attn_out -> attn_post_norm). The gated metric stays `pcc_post_attn_norm_L00` >= 0.99.
+- Gap: the same one as attn_norm. PCC ignores scale. post_attention_layernorm w is in [0.014, 16.5]. On CPU (PCC / rel L2): `1 + w` 0.9954 / 0.135
+  (passes PCC), sum instead of mean ~1.0 / 0.98, no weight 0.51 / 0.94, 1% noise ~1.0 / 0.010, bf16 in/out rel 0.0028.
+- Decision: copied the asserted scale checks from test_c_sliding_attn_norm.py (rel L2 <= 0.03, per-token norm ratio in [0.97, 1.03], finite output;
+  informational metrics `rel_l2_post_attn_norm_L00`, `row_norm_ratio_{min,max}_post_attn_norm_L00`). The reference ratio is [0.9954, 1.0042], so the margin is fine.
+- Verified: BRINGUP_IMPL=reference PASS (pcc 0.999997, rel 0.0023); BRINGUP_IMPL=stub FAIL (pcc 0.0). The device gate fails for now with
+  `NotImplementedError: implement step: no device module for post_attn_norm yet`.
+- Gotcha: the reference run's log also prints a "FAIL pcc=0.000000" line from the precompile pass; the real run's line follows it.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_post_attn_norm.py`
+
+## C.sliding.post_attn_norm implement (attempt 1)
+- Reused the existing `tt/rms_norm.py` TtRMSNorm (ttnn.rms_norm, plain `w`, HiFi4 + fp32 acc, replicated [1, 1, S, 2816]). No new module.
+- hooks.py: added `post_attn_norm -> post_attention_layernorm.weight` to `_NORM_WEIGHTS` (so `device_component` serves it) and
+  `post_attn_norm` to `DEVICE_STEPS["sliding"]` (so the ladder's `device_model` swaps it in). Swap tests use `device_component` per step, so they are unaffected.
+- Gate PASS: pcc_post_attn_norm_L00 0.999996, rel L2 0.0029, row-norm ratio [0.9941, 1.0052]. (The first "FAIL pcc=0.000000" line is the precompile pass.)
+- Hidden states still round-trip through the host between steps.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_post_attn_norm.py`
