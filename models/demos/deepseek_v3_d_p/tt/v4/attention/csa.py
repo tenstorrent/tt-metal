@@ -41,8 +41,12 @@ class TtCSAState(TtHCAState):
     def __init__(self, *, compressed_kv, index_k, sliding_carry, prior_c, prior_i, max_seq_len):
         super().__init__(compressed_kv=compressed_kv, sliding_carry=sliding_carry, tail=None, max_seq_len=max_seq_len)
         self.index_k = index_k
-        self.slab_rm = (
-            None  # path A v2: persistent RM slab [1,1,128 + chunk + capacity, 512] (ND-sharded bf16), lazily allocated
+        self.slab_rm = None  # path A v2: persistent RM slab [1,1,128 + chunk + capacity, 512] (ND-sharded bf16), lazy
+        self.score_mask = (
+            None  # traced path A3: persistent [1,1,S_l,cap] bf16 TILE additive mask (-inf beyond the live entries)
+        )
+        self.mask_zeroed_upto = (
+            0  # entry columns [0, this) of score_mask are 0 (fully visible); the rest carry cut / -inf
         )
         self.prior_c = prior_c  # (kv_a_last32 [1,1,32,512], gate_a_last32 [1,1,32,512])
         self.prior_i = prior_i  # (kv_a_last32 [1,1,32,128], gate_a_last32 [1,1,32,128])
@@ -182,7 +186,9 @@ class TtCSACompressor(TtHCACompressor):
             )
         return ttnn.slice(x, pair[0], pair[1], slice_dim=2, num_devices=S // C.TILE)
 
-    def forward(self, hidden_states, seq_len_actual: int, first_window_position: int, prior: tuple):
+    def forward(
+        self, hidden_states, seq_len_actual: int, first_window_position: int, prior: tuple, need_mask: bool = True
+    ):
         """-> (entries bf16 [1, 1, S/rate, W] replicated on every chip, mask_block [1, 1, S_l, mask_width],
         new_prior). ``seq_len_actual`` is the chunk's real length (a multiple of 32 unless it is the final chunk,
         whose prior nobody reads)."""
@@ -227,7 +233,7 @@ class TtCSACompressor(TtHCACompressor):
         # TtCSA.forward on the next call); a ragged FINAL chunk keeps the old prior, which nobody reads.
         aligned = seq_len_actual % C.TILE == 0 and seq_len_actual >= C.TILE
         new_prior = (self._last32(kv_a, seq_len_actual), self._last32(g_a, seq_len_actual)) if aligned else prior
-        mask_block = self._mask_block(S_l, first_window_position, seq_len_actual)
+        mask_block = self._mask_block(S_l, first_window_position, seq_len_actual) if need_mask else None
         return entries, mask_block, new_prior
 
 
@@ -403,6 +409,65 @@ class TtCSAIndexer(_TtHCABase):
                 seg, logits, start=[0, 0, 0, entry_count], end=[1, 1, S_l, E], step=[1, 1, 1, 1]
             )
         return ttnn.experimental.topk_large_indices(logits, k=self.topk, valid_length=E)
+
+    def select_indices_static(self, q_latent, hidden_states, cos, sin, index_k, score_mask):
+        """Trace-safe variant of ``select_indices_fused``: every argument is chunk-invariant. The fused scorer runs over
+        the WHOLE key cache (kv_len = the capacity's k-chunk multiple; the op's own token mask only touches the top sp*Sq
+        headroom rows, never a live entry), the caller-maintained additive ``score_mask`` [1,1,S_l,cap] (TILE; 0 on the
+        visible entries incl. this chunk's rate-4 cut, -inf beyond) is added, and the large top-k ranks the full width.
+        """
+        S_l = q_latent.shape[2]
+        if self._wq_b_all is None:
+            self._wq_b_all = self._to_tt_linear_weight(
+                self._host_q_b_proj_weight, tp_shard_dim=None, cache_name="wq_b_all"
+            )
+        q = ttnn.linear(q_latent, self._wq_b_all, memory_config=self.memory_config)
+        q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            q, num_heads=self.n_heads, num_kv_heads=0, transpose_k_heads=False, memory_config=self.memory_config
+        )
+        nope_dim = self.head_dim - self.rope_head_dim
+        nope = ttnn.slice(q, [0, 0, 0, 0], [1, self.n_heads, S_l, nope_dim])
+        rope = ttnn.slice(q, [0, 0, 0, nope_dim], [1, self.n_heads, S_l, self.head_dim])
+        rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, self.trans_mat, is_decode_mode=False)
+        q = ttnn.concat([nope, rope], dim=-1)
+        w = self.compressor._tp_all_reduce(ttnn.linear(hidden_states, self.w_proj, memory_config=self.memory_config))
+        w = ttnn.permute(ttnn.multiply(w, self.scale), (0, 3, 2, 1))
+        cap = int(index_k.shape[2])
+        sp = self.sp_factor
+        kv_len = (cap // 64) * 64
+        logits = ttnn.experimental.indexer_score_dsa(
+            q,
+            index_k,
+            w,
+            chunk_start_idx=kv_len - sp * S_l,
+            kv_len=kv_len,
+            program_config=ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=64, head_group_size=0),
+            seq_shard_axes=[self.sp_axis] if self.is_mesh and sp > 1 else [],
+        )  # [1, 1, S_l, cap] bf16 ROW_MAJOR
+        mask_rm = ttnn.to_layout(score_mask, ttnn.ROW_MAJOR_LAYOUT)
+        logits = ttnn.add(logits, mask_rm)
+        return ttnn.experimental.topk_large_indices(logits, k=self.topk, valid_length=kv_len)
+
+    def _chunk_cut_mask_tile(self, seq_local: int, n_cols: int):
+        """TILE twin of ``_chunk_cut_mask`` (for slice_write into the TILE score mask)."""
+        key = ("tile", seq_local, n_cols)
+        dev = self._cut_masks.get(key)
+        if dev is None:
+            S = seq_local * self.sp_factor
+            rows = torch.arange(S).view(S, 1)
+            cols = torch.arange(n_cols).view(1, n_cols)
+            m = torch.where(4 * cols + 3 <= rows, 0.0, float("-inf")).view(1, 1, S, n_cols)
+            dev = self._cut_masks[key] = self._from_torch(
+                m, mesh_mapper=self._mesh_mapper(sp_dim=2), dtype=ttnn.bfloat16
+            )
+        return dev
+
+    def _zeros_block_tile(self, seq_local: int, n_cols: int):
+        key = ("zeros", seq_local, n_cols)
+        dev = self._cut_masks.get(key)
+        if dev is None:
+            dev = self._cut_masks[key] = self._from_torch(torch.zeros(1, 1, seq_local, n_cols), dtype=ttnn.bfloat16)
+        return dev
 
     def _chunk_cut_mask(self, seq_local: int, n_cols: int):
         """[1, 1, S_l, n_cols] bf16 ROW_MAJOR per SP chip: 0 where this chunk's entry w' (tokens 4w'..4w'+3) is visible to
@@ -657,6 +722,172 @@ class TtCSA(TtHCA):
                 kv_actual_global=(row + j * piece) * self.sp_factor,
                 cluster_axis=self.sp_axis,
             )
+
+    # ---- PATH A3: the attention as two trace islands + eager glue (DS4F-0246: host-issue bound on the galaxy) --------
+    # forward == prepare_chunk (eager scalar pushes) -> forward_pre (island) -> glue_chunk (eager: cache/slab/mask writes)
+    #         -> forward_attn (island, all shapes chunk-invariant) -> epilogue_chunk (eager: exports, counters).
+    def traceable(self) -> bool:
+        return self.sparse_path and self.fused_indexer
+
+    def prepare_chunk(self, state, real_len: int) -> None:
+        """Eager, before the islands replay: push this chunk's position scalars into the persistent buffers the traced
+        ops read (value-cached -> no host write happens inside a capture that follows a matching prepare)."""
+        rate = self.compressor.compress_rate
+        self._push_scalar(self._slab_index[1], state.kv_actual)
+        fwp = state.entry_count * rate
+        self.compressor._push_scalar(self.compressor._entry_index_full[1], fwp // rate)
+        self.indexer.compressor._push_scalar(self.indexer.compressor._entry_index_full[1], fwp // rate)
+
+    def forward_pre(self, hidden_states, state, real_len: int):
+        """Island A1 (chunk-invariant shapes; reads the persistent scalar buffers): rope gather, q / kv stems, both
+        compressors (priors updated in place), the SP gather of the chunk's K rows and the next carry slice.
+        -> (q, q_latent, sliding_kv_gathered, next_carry, entries, keys, cos, sin), all persistent island outputs."""
+        rate = self.compressor.compress_rate
+        cos, sin = self._rope_gather(self._slab_rope, self._rope_index(self._slab_index, state.kv_actual))
+        q, q_latent = self._q_stem(hidden_states, cos, sin, return_latent=True)
+        sliding_kv = self._kv_stem(hidden_states, cos, sin)
+        fwp = state.entry_count * rate
+        entries, _, new_prior_c = self.compressor(hidden_states, real_len, fwp, state.prior_c, need_mask=False)
+        keys, _, new_prior_i = self.indexer.compressor(hidden_states, real_len, fwp, state.prior_i, need_mask=False)
+        for persistent, new in zip(state.prior_c + state.prior_i, new_prior_c + new_prior_i):
+            self._update_in_place(persistent, new)
+        if self.sp_factor > 1:
+            sliding_kv = ttnn.experimental.all_gather_async(
+                sliding_kv,
+                dim=2,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.sp_axis),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.sp_axis),
+                num_links=self.ccl_num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=self.tp_ccl_topology,
+                cluster_axis=self.sp_axis,
+            )
+        seq_len = hidden_states.shape[2] * self.sp_factor
+        start, end = self._carry_index[self._carry_key(real_len)]
+        next_carry = ttnn.slice(sliding_kv, start, end, slice_dim=2, num_devices=seq_len // self.sliding_window)
+        return q, q_latent, sliding_kv, next_carry, entries, keys, cos, sin
+
+    def glue_chunk(self, state, outs, real_len: int) -> None:
+        """Eager, between the islands: this chunk's entries / keys into the working caches, the slab rows the sparse
+        gather reads (carry, chunk, entries), and the static scorer's mask: the previous chunk's cut block becomes 0,
+        this chunk's [entry_count, E) columns get the rate-4 cut."""
+        q, q_latent, sliding_kv_g, next_carry, entries, keys, cos, sin = outs
+        rate = self.compressor.compress_rate
+        n_new = real_len // rate
+        seq_pad_global = sliding_kv_g.shape[2]
+        S_l = q.shape[2]
+        ttnn.kv_cache.fill_cache_for_user_(state.compressed_kv, entries, 0, update_idx=state.entry_count)
+        ttnn.kv_cache.fill_cache_for_user_(state.index_k, keys, 0, update_idx=state.entry_count)
+        self._slab_write(state, entries, self.sliding_window + seq_pad_global + state.entry_count)
+        self._slab_write(state, state.sliding_carry, 0)
+        self._slab_write(state, sliding_kv_g, self.sliding_window)
+        mask = self._score_mask(state, S_l)
+        if state.entry_count > state.mask_zeroed_upto:
+            # every entry before this chunk is fully visible now (covers an eager chunk 0 that never touched the mask)
+            c0, n = state.mask_zeroed_upto, state.entry_count - state.mask_zeroed_upto
+            ttnn.experimental.slice_write(
+                self.indexer._zeros_block_tile(S_l, n),
+                mask,
+                start=[0, 0, 0, c0],
+                end=[1, 1, S_l, c0 + n],
+                step=[1, 1, 1, 1],
+            )
+            state.mask_zeroed_upto = state.entry_count
+        if n_new > 0:
+            ttnn.experimental.slice_write(
+                self.indexer._chunk_cut_mask_tile(S_l, n_new),
+                mask,
+                start=[0, 0, 0, state.entry_count],
+                end=[1, 1, S_l, state.entry_count + n_new],
+                step=[1, 1, 1, 1],
+            )
+
+    def _score_mask(self, state, S_l: int):
+        if state.score_mask is None:
+            cap = int(state.index_k.shape[2])
+            state.score_mask = self._from_torch(torch.full((1, 1, S_l, cap), float("-inf")))
+            state.mask_zeroed_upto = 0
+        return state.score_mask
+
+    def reset_score_mask(self, state) -> None:
+        """A new prompt in this slot: every entry column back to -inf (device copy from a constant, no host write)."""
+        if state.score_mask is None:
+            return
+        const = self.__dict__.get("_neg_inf_mask_const")
+        if const is None or tuple(const.shape) != tuple(state.score_mask.shape):
+            const = self._neg_inf_mask_const = self._from_torch(
+                torch.full(tuple(state.score_mask.shape), float("-inf"))
+            )
+        ttnn.copy(const, state.score_mask)
+        state.mask_zeroed_upto = 0
+
+    def forward_attn(self, q, q_latent, hidden_states, sliding_kv_g, cos, sin, state):
+        """Island A2 (chunk-invariant): the static fused scorer + top-k over the whole key cache, the sparse gather
+        over the persistent slab, the TP head<->seq transposes, V's un-RoPE and the output projection -> y."""
+        idx = self.indexer.select_indices_static(q_latent, hidden_states, cos, sin, state.index_k, state.score_mask)
+        attn = self._sparse_core(q, idx, cos, sin, state.slab_rm, seq_len=sliding_kv_g.shape[2])
+        return self._o_proj(attn)
+
+    def epilogue_chunk(self, state, outs, export, real_len: int) -> None:
+        """Eager, after the islands: the contract exports (unified rows, index keys, ring, pending) and the counters."""
+        q, q_latent, sliding_kv_g, next_carry, entries, keys, cos, sin = outs
+        rate = self.compressor.compress_rate
+        if export is not None:
+            self._export_csa(export, entries, keys, sliding_kv_g, state, real_len)
+        state.entry_count += real_len // rate
+        state.kv_actual += real_len
+        # NOT _update_in_place: that deallocates its source, and next_carry is island A1's PERSISTENT output
+        ttnn.copy(next_carry, state.sliding_carry)
+
+    def _sparse_core(self, q, topk_idx, cos, sin, slab_rm, *, seq_len: int):
+        """The chunk-invariant heart of path A: indices [window | top-k] -> TP head->seq transpose -> sparse_sdpa over
+        the slab (fixed T) -> back -> V un-RoPE. Shared by the eager path (_attention_sparse) and island A2."""
+        batch, seq_local = q.shape[0], q.shape[2]
+        heads_local = self.num_heads // self.tp_factor
+        ent = ttnn.typecast(topk_idx, ttnn.int32)
+        ent = ttnn.add(ent, self.sliding_window + seq_len)
+        ent = ttnn.typecast(ent, ttnn.uint32)
+        if ent.layout != ttnn.ROW_MAJOR_LAYOUT:
+            ent = ttnn.to_layout(ent, ttnn.ROW_MAJOR_LAYOUT)
+        idx = ttnn.concat([self._window_indices(seq_local), ent], dim=3)  # [1, 1, S_l, 128 + topk]
+        transpose = self.tp_factor > 1 and heads_local % ttnn.TILE_SIZE != 0
+        if transpose:
+            q = ttnn.experimental.all_to_all_async_generic(
+                q,
+                in_dim=1,
+                out_dim=2,
+                num_links=self.ccl_num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cluster_axis=self.tp_axis,
+            )
+            idx = ttnn.mesh_partition(idx, dim=2, cluster_axis=self.tp_axis)
+        q_rm = ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT)
+        out = ttnn.transformer.sparse_sdpa(
+            q_rm,
+            slab_rm,
+            idx,
+            self.head_dim,
+            kv_format=ttnn.transformer.SparseKVFormat.BF16,
+            scale=self.scaling,
+            k_chunk_size=128,
+            cache_batch_idx=0,
+            attention_sink=self._sink_column(transpose),
+        )
+        out = ttnn.to_layout(out, ttnn.TILE_LAYOUT)
+        if transpose:
+            out = ttnn.experimental.all_to_all_async_generic(
+                out,
+                in_dim=2,
+                out_dim=1,
+                num_links=self.ccl_num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cluster_axis=self.tp_axis,
+            )
+        nope_dim = self.head_dim - self.rope_head_dim
+        nope = ttnn.slice(out, [0, 0, 0, 0], [batch, heads_local, seq_local, nope_dim])
+        rope = ttnn.slice(out, [0, 0, 0, nope_dim], [batch, heads_local, seq_local, self.head_dim])
+        rope = ttnn.experimental.rotary_embedding_llama(rope, cos, ttnn.neg(sin), self.trans_mat, is_decode_mode=False)
+        return ttnn.concat([nope, rope], dim=-1)
 
     # ---- PATH A: sparse attention over [window | top-k entries] ---------------------------------------------------
     def _window_indices(self, seq_local: int):

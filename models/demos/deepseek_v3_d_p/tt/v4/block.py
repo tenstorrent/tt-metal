@@ -257,6 +257,8 @@ class TtV4PrefillBlock(LightweightModule):
             # in place: the prior tensors keep their addresses (a captured chunk-0 trace reads them there)
             self.attn.compressor.reset_prior(st.prior_c)
             self.attn.indexer.compressor.reset_prior(st.prior_i)
+            if getattr(st, "score_mask", None) is not None:
+                self.attn.reset_score_mask(st)  # traced path A3: every entry column back to -inf
         st.fresh = True
 
     # ---- trace islands (DS4F-0246/0247) --------------------------------------------------------------------------
@@ -278,6 +280,39 @@ class TtV4PrefillBlock(LightweightModule):
 
         A = TraceIsland(self.mesh_device, island_a, S_in, name=f"layer{self.layer_idx}.A")
         post, comb, h = A.capture()
+        self._attn_islands = {}
+        if self.kind == CSA and getattr(self.attn, "traceable", lambda: False)():
+            # PATH A3 (DS4F-0246, galaxy: CSA issue 104 ms vs 20 ms device): the attention itself as two islands per slot,
+            # A1 = stems + compressors + SP gather, A2 = static fused scorer + sparse gather + o-proj, with eager glue for
+            # the position-dependent writes. Warm each phase eagerly first (compiles; mutates the slot, reset at request
+            # start), then capture with the same scalars pushed so no host write lands inside the capture.
+            S_l = streams[0].shape[2]
+            chunk_tokens = S_l * self.mesh_device.shape[self.sp_axis]
+            for slot, state in self.states.items():
+                self.attn.prepare_chunk(state, chunk_tokens)
+                warm = self.attn.forward_pre(h, state, chunk_tokens)
+                self.attn.glue_chunk(state, warm, chunk_tokens)
+                y_warm = self.attn.forward_attn(warm[0], warm[1], h, warm[2], warm[6], warm[7], state)
+                ttnn.deallocate(y_warm)
+                for t in warm:
+                    ttnn.deallocate(t)
+                self.attn.prepare_chunk(state, chunk_tokens)
+                A1 = TraceIsland(
+                    self.mesh_device,
+                    lambda hh, _st=state: self.attn.forward_pre(hh, _st, chunk_tokens),
+                    [h],
+                    name=f"layer{self.layer_idx}.A1.slot{slot}",
+                )
+                outs = A1.capture()
+                self.attn.glue_chunk(state, outs, chunk_tokens)
+                A2 = TraceIsland(
+                    self.mesh_device,
+                    lambda _o=outs, _st=state: self.attn.forward_attn(_o[0], _o[1], h, _o[2], _o[6], _o[7], _st),
+                    [],
+                    name=f"layer{self.layer_idx}.A2.slot{slot}",
+                )
+                A2.capture()
+                self._attn_islands[slot] = (A1, A2)
         if self.kv_only:
             self._islands = (A, None, S_in, None, None)
             return
@@ -319,15 +354,30 @@ class TtV4PrefillBlock(LightweightModule):
             copy_into(dst, src)
         post, comb, h = A.replay()
         state.fresh = False
-        y = self.attn(h, seq_len_actual=real_len, state=state, export=self._export_target(caches, slot))
+        attn_islands = self._attn_islands.get(slot) if getattr(self, "_attn_islands", None) else None
+        rate = getattr(getattr(self.attn, "compressor", None), "compress_rate", 4)
+        traced_attn = attn_islands is not None and state.kv_actual >= max(
+            self.attn.sliding_window, self.attn.indexer.topk * rate
+        )
+        if traced_attn:
+            A1, A2 = attn_islands
+            self.attn.prepare_chunk(state, real_len)
+            outs = A1.replay()
+            self.attn.glue_chunk(state, outs, real_len)
+            y = A2.replay()[0]
+            self.attn.epilogue_chunk(state, outs, self._export_target(caches, slot), real_len)
+        else:
+            y = self.attn(h, seq_len_actual=real_len, state=state, export=self._export_target(caches, slot))
         if on_layer_complete is not None:
             ttnn.synchronize_device(self.mesh_device)
             on_layer_complete(self.layer_idx)
         if self.kv_only:
-            ttnn.deallocate(y)
+            if not traced_attn:
+                ttnn.deallocate(y)
             return None
         copy_into(y_buf, y)
-        ttnn.deallocate(y)  # nothing eager may outlive the replay below
+        if not traced_attn:
+            ttnn.deallocate(y)  # nothing eager may outlive the replay below
         if ids_buf is not None:
             copy_into(ids_buf, input_ids)
         out = list(B.replay())

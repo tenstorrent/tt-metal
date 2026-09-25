@@ -44,6 +44,11 @@ _MESH_CONFIGS_TRACE = [
         {**_MESH_CONFIGS[0].values[1], "trace_region_size": 256 * 1024 * 1024},
         id="fabric2d-mesh-2x4-trace",
     ),
+    pytest.param(
+        (8, 4),
+        {**_MESH_CONFIGS[0].values[1], "trace_region_size": 256 * 1024 * 1024},
+        id="fabric2d-mesh-8x4-trace",  # the galaxy: 640 tokens per chip -- the deployment's host-issue vs device balance
+    ),
 ]
 
 
