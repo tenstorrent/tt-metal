@@ -3339,13 +3339,16 @@ def _functional_execution_plan(log_dir: Path, worktree: Path) -> dict[str, Any]:
         return {"supported": False, "reason": "not_opted_in_audit"}
     log_dir, worktree, run, state, manifest_path, manifest = bound
     leaves = [r for r in manifest["requirements"] if r["suite"] != "perf"]
+    # metal and ttnn leaves reach silicon only through the sealed dispatcher,
+    # which owns their selector and build contracts; only llk has a host path.
     if (
         not leaves
         or manifest["waivers"]
         or any(
-            r["suite"] != "llk"
+            r["suite"] not in {"llk", "metal", "ttnn"}
             or r["architecture"] not in {"blackhole", "wormhole"}
             or r["backend"] not in {"silicon", "host"}
+            or (r["suite"] != "llk" and r["backend"] != "silicon")
             or r["required_measurements"]
             for r in leaves
         )
@@ -3358,6 +3361,13 @@ def _functional_execution_plan(log_dir: Path, worktree: Path) -> dict[str, Any]:
     )
     if any(r["backend"] == "silicon" for r in leaves) and not dispatch:
         return {"supported": False, "reason": "sealed_dispatch_unavailable"}
+    # The dispatcher rejects a metal/ttnn leaf without its dispatch mode. Fall
+    # back before executing any leaf rather than part-way through the route.
+    for suite in ("metal", "ttnn"):
+        if any(r["suite"] == suite for r in leaves) and state.get(
+            f"{suite.upper()}_DISPATCH"
+        ) not in ("slow", "fast"):
+            return {"supported": False, "reason": f"sealed_{suite}_dispatch_unset"}
     llk = worktree / "tt_metal/tt-llk"
     wrapper = Path(__file__).resolve().parents[2] / ".claude/scripts/run_test.sh"
     commands = []
@@ -3366,16 +3376,32 @@ def _functional_execution_plan(log_dir: Path, worktree: Path) -> dict[str, Any]:
         if not re.fullmatch(r"[A-Za-z0-9_.:-]+", identity):
             raise ValueError("unsafe functional requirement identity")
         selector = leaf["selector"]
-        test_path = (llk / "tests/python_tests" / selector["test"]).resolve()
-        if (
-            not test_path.is_relative_to(llk / "tests/python_tests")
-            or not test_path.is_file()
-            or (
-                selector["test_id"] is not None
-                and not selector["test_id"].startswith(selector["test"] + "::")
-            )
-        ):
-            raise ValueError("functional selector is not a current contained test")
+        if leaf["suite"] == "llk":
+            test_path = (llk / "tests/python_tests" / selector["test"]).resolve()
+            if (
+                not test_path.is_relative_to(llk / "tests/python_tests")
+                or not test_path.is_file()
+                or (
+                    selector["test_id"] is not None
+                    and not selector["test_id"].startswith(selector["test"] + "::")
+                )
+            ):
+                raise ValueError("functional selector is not a current contained test")
+        elif leaf["suite"] == "metal":
+            # A gtest filter, not a path: the dispatcher rejects a metal leaf
+            # carrying a pytest node or -k expression.
+            if (
+                not selector["test"]
+                or selector["test_id"] is not None
+                or selector["k"] is not None
+            ):
+                raise ValueError("metal selector must be a bare gtest filter")
+        else:
+            # ttnn tests live in the tt-metal tree, which the dispatcher
+            # resolves against the candidate worktree it transports.
+            ttnn_path = (worktree / selector["test"].split("::")[0]).resolve()
+            if not ttnn_path.is_relative_to(worktree) or not ttnn_path.is_file():
+                raise ValueError("ttnn selector is not a current contained test")
         result = (
             log_dir
             / "verification-results"
@@ -3386,7 +3412,7 @@ def _functional_execution_plan(log_dir: Path, worktree: Path) -> dict[str, Any]:
             "CODEGEN_RUN_ID": run["run_id"],
             "CODEGEN_ATTEMPT_ID": manifest["attempt_id"],
             "CODEGEN_REQUIREMENT_ID": identity,
-            "CODEGEN_VERIFICATION_SUITE": "llk",
+            "CODEGEN_VERIFICATION_SUITE": leaf["suite"],
             "CODEGEN_VERIFICATION_BACKEND": leaf["backend"],
             "CODEGEN_REQUIRED_VERIFICATION_MANIFEST": str(manifest_path),
             "CODEGEN_BASE_COMMIT": manifest["expected_base_sha"],
@@ -3534,7 +3560,7 @@ def cmd_execute_functional(args: argparse.Namespace) -> int:
                 "manifest_id": plan["manifest_id"],
                 "requirement_id": leaf["requirement_id"],
                 "arch": leaf["architecture"],
-                "kind": "llk",
+                "kind": leaf["suite"],
                 "base": plan["base"],
                 "worktree": str(worktree),
                 "runner_pool": "audit",

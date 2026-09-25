@@ -5879,7 +5879,7 @@ def _fake_functional_dispatch(
                 "manifest_id": plan["manifest_id"],
                 "requirement_id": identity,
                 "arch": leaf["architecture"],
-                "kind": "llk",
+                "kind": leaf["suite"],
                 "base": plan["base"],
                 "worktree": args.worktree,
                 "runner_pool": "audit",
@@ -6961,3 +6961,193 @@ def test_sealed_dispatch_cmd_in_state_wins_over_the_environment(tmp_path, monkey
     monkeypatch.setenv("HW_TEST_DISPATCH_CMD", "env-client")
     plan = writer._functional_execution_plan(Path(args.log_dir), Path(args.worktree))
     assert plan["dispatch"] == ["sealed-dispatch-fixture"]
+
+
+# ── sealed executor over metal and ttnn leaves ──────────────────────────────
+# Run 24095 spent 7,155s of 11,380s verification time in the agent wrapper
+# around the jobs -- 63%, against 3,984s of build and ~500s of execution --
+# because the sealed executor refused any route carrying a metal or ttnn leaf.
+def _multi_suite_fixture(tmp_path, monkeypatch, requirements, **dispatch_modes):
+    ttnn_rel = "tests/ttnn/unit_tests/operations/test_transpose.py"
+    fixture = _functional_fixture(tmp_path, monkeypatch, requirements=requirements)
+    writer, args, manifest, _ = fixture
+    root = Path(args.worktree)
+    target = root / ttnn_rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("def test_transpose(): pass\n")
+    state_path = Path(args.log_dir) / "state.json"
+    state = json.loads(state_path.read_text())
+    state.update(dispatch_modes)
+    state_path.write_text(json.dumps(state))
+    return fixture
+
+
+def _ttnn_requirement(**over):
+    fields = {
+        "selector": {
+            "test": "tests/ttnn/unit_tests/operations/test_transpose.py",
+            "test_id": None,
+            "k": None,
+        },
+        **over,
+    }
+    return _requirement(suite="ttnn", index=3, **fields)
+
+
+def test_sealed_functional_executes_metal_and_ttnn_leaves(tmp_path, monkeypatch):
+    metal = _requirement(suite="metal", index=2)
+    requirements = [metal, _ttnn_requirement()]
+    writer, args, manifest, _ = _multi_suite_fixture(
+        tmp_path,
+        monkeypatch,
+        requirements,
+        METAL_DISPATCH="fast",
+        TTNN_DISPATCH="fast",
+    )
+    calls = _fake_functional_dispatch(monkeypatch, writer, args, manifest)
+    assert writer.cmd_execute_functional(args) == 0
+    run = json.loads((Path(args.log_dir) / "run.json").read_text())
+    reduction = json.loads(
+        (Path(args.log_dir) / "verification_reduction.json").read_text()
+    )
+    assert reduction["classification"] == "success"
+    assert [r["requirement_id"] for r in run["functional_execution"]["leaves"]] == [
+        "blackhole:metal:2",
+        "blackhole:ttnn:3",
+    ]
+    # Each leaf reaches the dispatcher under its own suite, not as llk.
+    plan = writer._functional_execution_plan(Path(args.log_dir), Path(args.worktree))
+    suites = {
+        c["leaf"]["requirement_id"]: c["env"]["CODEGEN_VERIFICATION_SUITE"]
+        for c in plan["commands"]
+    }
+    assert suites == {"blackhole:metal:2": "metal", "blackhole:ttnn:3": "ttnn"}
+    assert len(_submitted(calls)) == 2
+
+
+@pytest.mark.parametrize("suite", ["metal", "ttnn"])
+def test_sealed_functional_falls_back_when_the_dispatch_mode_is_unset(
+    tmp_path, monkeypatch, suite
+):
+    """The dispatcher rejects these leaves without a mode; fall back before any
+    leaf runs rather than part-way through the route."""
+    requirement = (
+        _requirement(suite="metal", index=2)
+        if suite == "metal"
+        else _ttnn_requirement()
+    )
+    writer, args, _, _ = _multi_suite_fixture(tmp_path, monkeypatch, [requirement])
+    plan = writer._functional_execution_plan(Path(args.log_dir), Path(args.worktree))
+    assert plan == {"supported": False, "reason": f"sealed_{suite}_dispatch_unset"}
+    # Exit 20 hands the route back to the existing tester with nothing executed.
+    assert writer.cmd_execute_functional(args) == 20
+    assert "functional_execution" not in json.loads(
+        (Path(args.log_dir) / "run.json").read_text()
+    )
+
+
+@pytest.mark.parametrize("mode", ["", "turbo", None])
+def test_sealed_functional_rejects_an_unknown_dispatch_mode(
+    tmp_path, monkeypatch, mode
+):
+    writer, args, manifest, _ = _multi_suite_fixture(
+        tmp_path,
+        monkeypatch,
+        [_requirement(suite="metal", index=2)],
+        METAL_DISPATCH=mode,
+    )
+    plan = writer._functional_execution_plan(Path(args.log_dir), Path(args.worktree))
+    assert plan["supported"] is False
+
+
+def test_sealed_functional_rejects_a_metal_leaf_carrying_a_pytest_node(
+    tmp_path, monkeypatch
+):
+    """Metal selects by gtest filter; a node or -k would silently select nothing."""
+    metal = _requirement(
+        suite="metal",
+        index=2,
+        selector={"test": "LLK.Reduce", "test_id": "LLK.Reduce::x", "k": None},
+    )
+    writer, args, _, _ = _multi_suite_fixture(
+        tmp_path, monkeypatch, [metal], METAL_DISPATCH="fast"
+    )
+    with pytest.raises(ValueError, match="bare gtest filter"):
+        writer._functional_execution_plan(Path(args.log_dir), Path(args.worktree))
+
+
+def test_sealed_functional_rejects_a_ttnn_selector_outside_the_worktree(
+    tmp_path, monkeypatch
+):
+    ttnn = _ttnn_requirement(
+        selector={"test": "../../../etc/passwd", "test_id": None, "k": None}
+    )
+    writer, args, _, _ = _multi_suite_fixture(
+        tmp_path, monkeypatch, [ttnn], TTNN_DISPATCH="fast"
+    )
+    with pytest.raises(ValueError, match="ttnn selector"):
+        writer._functional_execution_plan(Path(args.log_dir), Path(args.worktree))
+
+
+def test_sealed_functional_rejects_a_ttnn_selector_that_no_longer_exists(
+    tmp_path, monkeypatch
+):
+    ttnn = _ttnn_requirement(
+        selector={"test": "tests/ttnn/deleted_test.py", "test_id": None, "k": None}
+    )
+    writer, args, _, _ = _multi_suite_fixture(
+        tmp_path, monkeypatch, [ttnn], TTNN_DISPATCH="fast"
+    )
+    with pytest.raises(ValueError, match="ttnn selector"):
+        writer._functional_execution_plan(Path(args.log_dir), Path(args.worktree))
+
+
+@pytest.mark.parametrize("suite", ["metal", "ttnn"])
+def test_a_host_backed_metal_or_ttnn_leaf_is_refused_before_the_executor(
+    tmp_path, monkeypatch, suite
+):
+    """Only llk has a host path. The manifest validator already rejects this, so
+    the executor's own guard is the second line, not the first."""
+    requirement = (
+        _requirement(suite="metal", index=2, backend="host")
+        if suite == "metal"
+        else _ttnn_requirement(backend="host")
+    )
+    writer, args, _, _ = _multi_suite_fixture(
+        tmp_path,
+        monkeypatch,
+        [requirement],
+        METAL_DISPATCH="fast",
+        TTNN_DISPATCH="fast",
+    )
+    with pytest.raises(ValueError, match="host verification is an LLK"):
+        writer._functional_execution_plan(Path(args.log_dir), Path(args.worktree))
+
+
+def test_sealed_functional_still_covers_a_mixed_llk_metal_ttnn_route(
+    tmp_path, monkeypatch
+):
+    """The 24095 route: all three suites under one manifest and one patch."""
+    host = _requirement(
+        backend="host",
+        selector={"test": "test_host.py", "test_id": None, "k": None},
+        minimum_selected=19,
+        minimum_executed=19,
+    )
+    requirements = [host, _requirement(suite="metal", index=2), _ttnn_requirement()]
+    writer, args, manifest, _ = _multi_suite_fixture(
+        tmp_path,
+        monkeypatch,
+        requirements,
+        METAL_DISPATCH="fast",
+        TTNN_DISPATCH="fast",
+    )
+    calls = _fake_functional_dispatch(monkeypatch, writer, args, manifest)
+    assert writer.cmd_execute_functional(args) == 0
+    reduction = json.loads(
+        (Path(args.log_dir) / "verification_reduction.json").read_text()
+    )
+    assert reduction["classification"] == "success"
+    # One patch digest across all three suites: the sealed invariant holds.
+    assert reduction["patch_sha256"]
+    assert len(_submitted(calls)) == 2  # host runs locally, two silicon leaves
