@@ -236,7 +236,10 @@ public:
         if (curr_storage_core_ < num_dram_banks_) {
             num_iter++;
 
-            worker_core_stride_ = per_core_N_storage_ - storage_core_stride_;
+            // Clamp to per_core_N_: when the worker's block is narrower than the remaining bank
+            // shard, the unclamped stride would consume tiles belonging to the next worker's block,
+            // corrupting every later column's reads (see issue #57732).
+            worker_core_stride_ = std::min(per_core_N_storage_ - storage_core_stride_, per_core_N_);
 
             dram_tensor_start_offset = storage_core_stride_ * in1_single_tile_size_;
             bank_varargs.push_back(worker_core_stride_ * in1_single_tile_size_);
@@ -3209,7 +3212,11 @@ create_program_mcast_in0_in1(
                         if (curr_storage_core < num_dram_banks) {
                             num_iter++;
 
-                            worker_core_stride = per_core_N_storage - storage_core_stride;
+                            // Clamp to per_core_N: when the worker's block is narrower than the
+                            // remaining bank shard, the unclamped stride would consume tiles
+                            // belonging to the next worker's block, corrupting every later column's
+                            // reads (see issue #57732).
+                            worker_core_stride = std::min(per_core_N_storage - storage_core_stride, per_core_N);
 
                             mm_in1_sender_writer_args.push_back(
                                 storage_core_stride * in1_single_tile_size);  // dram_tensor_start_offset
