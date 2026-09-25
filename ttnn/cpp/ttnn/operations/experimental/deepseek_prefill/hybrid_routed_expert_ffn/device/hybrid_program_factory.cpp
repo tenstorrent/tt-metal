@@ -18,6 +18,7 @@
 // these were the per-half program factory headers; the interface they declared is now one call.
 
 #include <algorithm>
+#include <set>
 #include <string>
 #include <array>
 #include <cstdint>
@@ -453,7 +454,8 @@ void append_to_descriptor(
     // budget: it is what a core actually owns, it already excludes the kernel-config ring, and the
     // merge lays these buffers into it. Budgeting against anything else lets the blocking pick a
     // size the arena cannot hold.
-    const uint32_t l1_budget = hybrid_l1_arena_bytes(device);
+    const uint32_t l1_budget =
+        operation_arguments.l1_budget_bytes != 0 ? operation_arguments.l1_budget_bytes : hybrid_l1_arena_bytes(device);
     TT_FATAL(l1_budget > 0, "moe_fused_swiglu: the shared L1 arena is empty");
 
     geo::Blocking blocking(
@@ -2937,7 +2939,8 @@ std::optional<ttnn::DeviceComputeKernelConfig> fused_compute_config(
     return cleared;
 }
 
-fused::OperationArguments fused_attributes(const HybridRoutedExpertFfnParams& op) {
+fused::OperationArguments fused_attributes(
+    const HybridRoutedExpertFfnParams& op, const HybridRoutedExpertFfnInputs& t, uint32_t l1_budget_bytes = 0) {
     return fused::OperationArguments{
         .experts_per_chip = op.experts_per_chip,
         .m_tiles = op.m_tiles,
@@ -2952,7 +2955,9 @@ fused::OperationArguments fused_attributes(const HybridRoutedExpertFfnParams& op
         .max_active_tokens = op.hybrid_token_threshold,
         .activation = op.activation,
         .fuse_bias = op.fuse_bias,
+        .output_dtype = t.output.dtype(),
         .compute_kernel_config = fused_compute_config(op.compute_kernel_config),
+        .l1_budget_bytes = l1_budget_bytes,
     };
 }
 
@@ -3021,7 +3026,7 @@ void validate_arguments(const HybridRoutedExpertFfnParams& op, const HybridRoute
     // dispatch cannot pass a configuration either op alone would reject.
     unified::validate(unified_attributes(op), unified_inputs(t));
     if (op.hybrid_token_threshold > 0) {
-        fused::validate(fused_attributes(op), fused_inputs(t));
+        fused::validate(fused_attributes(op, t), fused_inputs(t));
 
         // A union program carries BOTH halves' kernel binaries, so its config is far larger than
         // either op's alone, and the kernel-config ring has to hold it. It fits the ring the
@@ -3044,6 +3049,14 @@ void validate_arguments(const HybridRoutedExpertFfnParams& op, const HybridRoute
 
 tt::tt_metal::ProgramDescriptor create_hybrid_program_descriptor(
     const HybridRoutedExpertFfnParams& op, const HybridRoutedExpertFfnInputs& t, ttnn::Tensor& output) {
+    return create_hybrid_program_descriptor(op, t, output, t.l1_arena ? t.l1_arena->buffer() : nullptr);
+}
+
+tt::tt_metal::ProgramDescriptor create_hybrid_program_descriptor(
+    const HybridRoutedExpertFfnParams& op,
+    const HybridRoutedExpertFfnInputs& t,
+    ttnn::Tensor& output,
+    tt::tt_metal::Buffer* l1_arena) {
     // Both implementations, ONE program, ONE dispatch -- the two-op forward folded into a single
     // launch so the layer can be overlapped with combine.
     //
@@ -3071,11 +3084,12 @@ tt::tt_metal::ProgramDescriptor create_hybrid_program_descriptor(
     // to one: the fold has to see them separately to pair their kernels by processor class and to
     // join each pair's argument lists behind the right base.
     tt::tt_metal::ProgramDescriptor fused_descriptor;
-    fused::append_to_descriptor(fused_descriptor, fused_attributes(op), fused_inputs(t), output);
-
-    TT_FATAL(
-        t.l1_arena.has_value(),
-        "pass A runs, so both halves' circular buffers need the caller-owned L1 arena to share");
+    TT_FATAL(l1_arena != nullptr, "pass A runs, so both halves' circular buffers need an L1 arena to share");
+    fused::append_to_descriptor(
+        fused_descriptor,
+        fused_attributes(op, t, static_cast<uint32_t>(l1_arena->aligned_size_per_bank())),
+        fused_inputs(t),
+        output);
 
     MergeReport report;
     auto merged = merge_halves(
@@ -3083,7 +3097,7 @@ tt::tt_metal::ProgramDescriptor create_hybrid_program_descriptor(
         std::move(unified_descriptor),
         merged_kernel_sources(),
         /*run_fused_pass=*/true,
-        t.l1_arena->buffer(),
+        l1_arena,
         barrier_plan(t.x.device()),
         report);
 
@@ -3107,5 +3121,63 @@ tt::tt_metal::ProgramDescriptor create_hybrid_program_descriptor(
 }
 
 uint32_t hybrid_l1_arena_bytes(tt::tt_metal::IDevice* device) { return arena_bytes_for(device); }
+
+namespace {
+
+template <typename Descriptor>
+auto find_writer(Descriptor& desc) {
+    const auto is_writer = [](const tt::tt_metal::KernelDescriptor& k) {
+        return k.kernel_source.ends_with("hybrid_writer.cpp") ||
+               k.kernel_source.ends_with("unified_routed_expert_ffn_writer.cpp");
+    };
+    auto writer = desc.kernels.end();
+    for (auto it = desc.kernels.begin(); it != desc.kernels.end(); ++it) {
+        if (is_writer(*it)) {
+            TT_FATAL(writer == desc.kernels.end(), "hybrid routed expert: the program carries two writer kernels");
+            writer = it;
+        }
+    }
+    TT_FATAL(writer != desc.kernels.end(), "hybrid routed expert: the program carries no writer kernel");
+    return writer;
+}
+
+}  // namespace
+
+uint32_t expert_done_writer_count(const tt::tt_metal::ProgramDescriptor& desc) {
+    return static_cast<uint32_t>(find_writer(desc)->core_ranges.num_cores());
+}
+
+void append_expert_done_signal(tt::tt_metal::ProgramDescriptor& desc, const ExpertDoneSignal& signal) {
+    auto writer = find_writer(desc);
+
+    // One base for every core, so it can be a define: the widest core's list decides it.
+    uint32_t base = 0;
+    for (const auto& [core, args] : writer->runtime_args) {
+        base = std::max(base, static_cast<uint32_t>(args.size()));
+    }
+    // A writer core with no arguments of its own still walks every expert and must still report.
+    std::set<CoreCoord> carried;
+    for (const auto& [core, args] : writer->runtime_args) {
+        carried.insert(core);
+    }
+    for (const auto& range : writer->core_ranges.ranges()) {
+        for (uint32_t y = range.start_coord.y; y <= range.end_coord.y; y++) {
+            for (uint32_t x = range.start_coord.x; x <= range.end_coord.x; x++) {
+                if (!carried.contains(CoreCoord{x, y})) {
+                    writer->runtime_args.emplace_back(
+                        CoreCoord{x, y}, tt::tt_metal::KernelDescriptor::CoreRuntimeArgs{});
+                }
+            }
+        }
+    }
+    for (auto& [core, args] : writer->runtime_args) {
+        args.resize(base, 0);
+        args.push_back(signal.collector_noc_x);
+        args.push_back(signal.collector_noc_y);
+        args.push_back(signal.collector_counts_addr);
+        args.push_back(signal.go_addr);
+    }
+    writer->defines.emplace_back("HYB_EXPERT_DONE_RT_BASE", std::to_string(base));
+}
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn
