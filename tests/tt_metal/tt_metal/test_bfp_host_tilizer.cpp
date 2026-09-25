@@ -17,9 +17,8 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
-#include <cstdlib>
+#include <optional>
 #include <random>
-#include <string>
 #include <utility>
 #include <vector>
 
@@ -31,43 +30,44 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt_stl/span.hpp>
 
+#include "impl/context/metal_context.hpp"
+#include "llrt/rtoptions.hpp"
+
 using namespace tt;
 
 namespace {
 
-// Scoped env-var override - sets a variable for the duration of a test, then
-// restores its previous value. Posix-ish but works under Linux which is what
-// the project's CI builds against.
-class ScopedEnv {
+// Scoped override of the host BFP tilizer RunTimeOptions knobs
+// (TT_METAL_BFP_HOST_TILIZER_THREADS / TT_METAL_BFP_HOST_TILIZER_DISABLE_SIMD).
+// The env vars are parsed once into RunTimeOptions at context creation, so
+// tests toggle the cached values via setters and restore them on scope exit.
+// std::nullopt leaves the corresponding setting unchanged.
+class ScopedTilizerConfig {
 public:
-    ScopedEnv(const char* name, const char* value) : name_(name) {
-        const char* prev = std::getenv(name);
-        had_prev_ = (prev != nullptr);
-        if (had_prev_) {
-            prev_value_ = prev;
+    ScopedTilizerConfig(std::optional<int> threads, std::optional<bool> disable_simd) :
+        rtoptions_(tt::tt_metal::MetalContext::instance().rtoptions()),
+        prev_threads_(rtoptions_.get_bfp_host_tilizer_threads()),
+        prev_disable_simd_(rtoptions_.get_bfp_host_tilizer_disable_simd()) {
+        if (threads.has_value()) {
+            rtoptions_.set_bfp_host_tilizer_threads(*threads);
         }
-        if (value != nullptr) {
-            ::setenv(name, value, /*overwrite=*/1);
-        } else {
-            ::unsetenv(name);
-        }
-    }
-
-    ~ScopedEnv() {
-        if (had_prev_) {
-            ::setenv(name_, prev_value_.c_str(), /*overwrite=*/1);
-        } else {
-            ::unsetenv(name_);
+        if (disable_simd.has_value()) {
+            rtoptions_.set_bfp_host_tilizer_disable_simd(*disable_simd);
         }
     }
 
-    ScopedEnv(const ScopedEnv&) = delete;
-    ScopedEnv& operator=(const ScopedEnv&) = delete;
+    ~ScopedTilizerConfig() {
+        rtoptions_.set_bfp_host_tilizer_threads(prev_threads_);
+        rtoptions_.set_bfp_host_tilizer_disable_simd(prev_disable_simd_);
+    }
+
+    ScopedTilizerConfig(const ScopedTilizerConfig&) = delete;
+    ScopedTilizerConfig& operator=(const ScopedTilizerConfig&) = delete;
 
 private:
-    const char* name_;
-    bool had_prev_ = false;
-    std::string prev_value_;
+    tt::llrt::RunTimeOptions& rtoptions_;
+    int prev_threads_;
+    bool prev_disable_simd_;
 };
 
 // Build a vector of 1024*num_tiles fp32 values with deterministic content
@@ -113,15 +113,14 @@ std::vector<float> make_edge_case_inputs(uint32_t num_tiles, int seed = 42) {
     return out;
 }
 
-// Pack the input under specific env-var settings and return the resulting
+// Pack the input under specific tilizer settings and return the resulting
 // bytes. Caller picks which BFP packer via `pack_fn`. Templated on the input
 // element type so we can drive both `Span<const float>` and
 // `Span<const bfloat16>` paths with the same helper.
 template <typename PackFn, typename T>
-std::vector<uint32_t> pack_under_env(
-    PackFn&& pack_fn, const char* threads_env, const char* simd_env, tt::stl::Span<const T> input) {
-    ScopedEnv t("TT_BFP_HOST_TILIZER_THREADS", threads_env);
-    ScopedEnv s("TT_BFP_HOST_TILIZER_DISABLE_SIMD", simd_env);
+std::vector<uint32_t> pack_under_config(
+    PackFn&& pack_fn, int num_threads, bool disable_simd, tt::stl::Span<const T> input) {
+    ScopedTilizerConfig config(num_threads, disable_simd);
     return std::forward<PackFn>(pack_fn)(input);
 }
 
@@ -156,8 +155,8 @@ TEST(HostBfpTilizerEquivalence, Bfp8b_SerialMatchesParallel_RowMajor) {
         return pack_as_bfp8_tiles(in, /*row_major_input=*/true, /*is_exp_a=*/false);
     };
 
-    auto serial = pack_under_env(pack, "1", nullptr, tt::stl::make_const_span(input));
-    auto parallel = pack_under_env(pack, "4", nullptr, tt::stl::make_const_span(input));
+    auto serial = pack_under_config(pack, 1, false, tt::stl::make_const_span(input));
+    auto parallel = pack_under_config(pack, 4, false, tt::stl::make_const_span(input));
 
     EXPECT_TRUE(ExpectPackedEqual(serial, parallel, "serial", "parallel"));
 }
@@ -170,8 +169,8 @@ TEST(HostBfpTilizerEquivalence, Bfp8b_SimdMatchesScalar_RowMajor) {
         return pack_as_bfp8_tiles(in, /*row_major_input=*/true, /*is_exp_a=*/false);
     };
 
-    auto simd = pack_under_env(pack, "1", nullptr, tt::stl::make_const_span(input));
-    auto scalar = pack_under_env(pack, "1", "1", tt::stl::make_const_span(input));
+    auto simd = pack_under_config(pack, 1, false, tt::stl::make_const_span(input));
+    auto scalar = pack_under_config(pack, 1, true, tt::stl::make_const_span(input));
 
     EXPECT_TRUE(ExpectPackedEqual(simd, scalar, "simd", "scalar"));
 }
@@ -190,8 +189,8 @@ TEST(HostBfpTilizerEquivalence, Bfp8b_SimdMatchesScalar_Tiled) {
         return pack_as_bfp8_tiles(in, /*row_major_input=*/false, /*is_exp_a=*/false);
     };
 
-    auto simd = pack_under_env(pack, "1", nullptr, tt::stl::make_const_span(tiled));
-    auto scalar = pack_under_env(pack, "1", "1", tt::stl::make_const_span(tiled));
+    auto simd = pack_under_config(pack, 1, false, tt::stl::make_const_span(tiled));
+    auto scalar = pack_under_config(pack, 1, true, tt::stl::make_const_span(tiled));
 
     EXPECT_TRUE(ExpectPackedEqual(simd, scalar, "simd", "scalar"));
 }
@@ -219,7 +218,7 @@ TEST(HostBfpTilizerEquivalence, Bfp8b_RowMajorMatchesTiledInput) {
     EXPECT_TRUE(ExpectPackedEqual(rm_simd, tile_simd, "row_major", "pre_tiled"));
 
     {
-        ScopedEnv simd_off("TT_BFP_HOST_TILIZER_DISABLE_SIMD", "1");
+        ScopedTilizerConfig simd_off(/*threads=*/std::nullopt, /*disable_simd=*/true);
         auto rm_scalar =
             pack_as_bfp8_tiles(tt::stl::make_const_span(input), /*row_major_input=*/true, /*is_exp_a=*/false);
         auto tile_scalar =
@@ -247,8 +246,8 @@ TEST(HostBfpTilizerEquivalence, Bfp8b_Bfloat16_SimdMatchesScalar) {
         return pack_as_bfp8_tiles(in, /*row_major_input=*/true, /*is_exp_a=*/false);
     };
 
-    auto simd = pack_under_env(pack, "1", nullptr, tt::stl::make_const_span(bf16_input));
-    auto scalar = pack_under_env(pack, "1", "1", tt::stl::make_const_span(bf16_input));
+    auto simd = pack_under_config(pack, 1, false, tt::stl::make_const_span(bf16_input));
+    auto scalar = pack_under_config(pack, 1, true, tt::stl::make_const_span(bf16_input));
 
     EXPECT_TRUE(ExpectPackedEqual(simd, scalar, "simd", "scalar"));
 }
@@ -267,8 +266,8 @@ TEST(HostBfpTilizerEquivalence, Bfp4b_SerialMatchesParallel) {
         return pack_as_bfp4_tiles(in, /*row_major_input=*/true, /*is_exp_a=*/false);
     };
 
-    auto serial = pack_under_env(pack, "1", nullptr, tt::stl::make_const_span(input));
-    auto parallel = pack_under_env(pack, "4", nullptr, tt::stl::make_const_span(input));
+    auto serial = pack_under_config(pack, 1, false, tt::stl::make_const_span(input));
+    auto parallel = pack_under_config(pack, 4, false, tt::stl::make_const_span(input));
 
     EXPECT_TRUE(ExpectPackedEqual(serial, parallel, "serial", "parallel"));
 }
@@ -284,8 +283,8 @@ TEST(HostBfpTilizerEquivalence, Bfp2b_SerialMatchesParallel) {
         return ::pack_as_bfp2_tiles(in, /*row_major_input=*/true, /*is_exp_a=*/false);
     };
 
-    auto serial = pack_under_env(pack, "1", nullptr, tt::stl::make_const_span(input));
-    auto parallel = pack_under_env(pack, "4", nullptr, tt::stl::make_const_span(input));
+    auto serial = pack_under_config(pack, 1, false, tt::stl::make_const_span(input));
+    auto parallel = pack_under_config(pack, 4, false, tt::stl::make_const_span(input));
 
     EXPECT_TRUE(ExpectPackedEqual(serial, parallel, "serial", "parallel"));
 }
@@ -306,8 +305,8 @@ TEST(HostBfpTilizerEquivalence, Bfp8_IsExpA_SerialMatchesParallel) {
         return pack_as_bfp8_tiles(in, /*row_major_input=*/true, /*is_exp_a=*/true);
     };
 
-    auto serial = pack_under_env(pack, "1", nullptr, tt::stl::make_const_span(input));
-    auto parallel = pack_under_env(pack, "4", nullptr, tt::stl::make_const_span(input));
+    auto serial = pack_under_config(pack, 1, false, tt::stl::make_const_span(input));
+    auto parallel = pack_under_config(pack, 4, false, tt::stl::make_const_span(input));
 
     EXPECT_TRUE(ExpectPackedEqual(serial, parallel, "serial", "parallel"));
 }

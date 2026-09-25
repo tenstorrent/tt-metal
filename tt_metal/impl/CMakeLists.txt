@@ -7,13 +7,13 @@ include(sources.cmake)
 # implementation that uses `#pragma omp parallel for` and OpenMP's
 # persistent thread pool, in addition to the existing `std::thread` path.
 # The runtime choice between the two is made by the env var
-# `TT_BFP_HOST_TILIZER_USE_OPENMP=1` -- this lets us A/B the two dispatch
-# strategies in the same binary without rebuilding.
+# `TT_METAL_BFP_HOST_TILIZER_USE_OPENMP=1` (read via RunTimeOptions) -- this
+# lets us A/B the two dispatch strategies in the same binary without rebuilding.
 #
 # Default: OFF. The std::thread path remains the production code path.
 option(
     TT_BFP_HOST_TILIZER_OPENMP
-    "Build the host BFP tilizer with an optional OpenMP dispatch path (runtime toggle: TT_BFP_HOST_TILIZER_USE_OPENMP=1)"
+    "Build the host BFP tilizer with an optional OpenMP dispatch path (runtime toggle: TT_METAL_BFP_HOST_TILIZER_USE_OPENMP=1)"
     OFF
 )
 
@@ -163,12 +163,16 @@ target_include_directories(impl SYSTEM PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/intern
 target_compile_options(impl PUBLIC -Wno-int-to-pointer-cast PRIVATE -DKJ_NO_EXCEPTIONS=0)
 
 # Optional OpenMP dispatch path for the host BFP tilizer. Linked privately so
-# downstream targets are unaffected; the runtime path is selected by env var.
+# downstream targets are unaffected; the runtime path is selected by
+# TT_METAL_BFP_HOST_TILIZER_USE_OPENMP.
 if(TT_BFP_HOST_TILIZER_OPENMP)
     find_package(OpenMP REQUIRED COMPONENTS CXX)
     target_link_libraries(impl PRIVATE OpenMP::OpenMP_CXX)
     target_compile_definitions(impl PRIVATE TT_BFP_HOST_TILIZER_OPENMP=1)
-    message(STATUS "Host BFP tilizer: OpenMP dispatch path enabled (runtime toggle: TT_BFP_HOST_TILIZER_USE_OPENMP=1)")
+    message(
+        STATUS
+        "Host BFP tilizer: OpenMP dispatch path enabled (runtime toggle: TT_METAL_BFP_HOST_TILIZER_USE_OPENMP=1)"
+    )
 endif()
 
 if(TT_UMD_BUILD_SIMULATION)

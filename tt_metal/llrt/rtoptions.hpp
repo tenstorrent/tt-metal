@@ -463,6 +463,11 @@ class RunTimeOptions {
     bool shm_tracking_disabled = false;
     bool shm_verbose = false;
 
+    // Host BFP tilizer tuning (see TT_METAL_BFP_HOST_TILIZER_* in rtoptions.cpp)
+    int bfp_host_tilizer_threads = -1;  // -1 = adaptive heuristic, 0 = single-threaded, N>=1 = pinned
+    bool bfp_host_tilizer_disable_simd = false;
+    bool bfp_host_tilizer_use_openmp = false;
+
     SanitizerSettings sanitizer_settings;
 
 public:
@@ -561,6 +566,15 @@ public:
 
     bool get_shm_tracking_disabled() const { return shm_tracking_disabled; }
     bool get_shm_verbose() const { return shm_verbose; }
+
+    // Host BFP tilizer tuning. Setters are provided so tests/benchmarks can toggle
+    // the code paths within a single process.
+    int get_bfp_host_tilizer_threads() const { return bfp_host_tilizer_threads; }
+    void set_bfp_host_tilizer_threads(int threads) { bfp_host_tilizer_threads = threads; }
+    bool get_bfp_host_tilizer_disable_simd() const { return bfp_host_tilizer_disable_simd; }
+    void set_bfp_host_tilizer_disable_simd(bool disable) { bfp_host_tilizer_disable_simd = disable; }
+    bool get_bfp_host_tilizer_use_openmp() const { return bfp_host_tilizer_use_openmp; }
+    void set_bfp_host_tilizer_use_openmp(bool use_openmp) { bfp_host_tilizer_use_openmp = use_openmp; }
 
     // Info from inspector environment variables, setters included so that user
     // can override with a SW call.

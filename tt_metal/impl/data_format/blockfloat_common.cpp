@@ -22,6 +22,7 @@
 #include "constants.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include "llrt/rtoptions.hpp"
 #include "math.hpp"
 #include "tile.hpp"
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
@@ -637,15 +638,12 @@ inline void pack_one_tile(
 
     // Whether the AVX2/simde fast path is applicable for the current
     // (BfpFormat, T, face_W, is_exp_a) combination. Decided at compile time
-    // for the format/type axes and at runtime for face_W and is_exp_a. The
-    // TT_BFP_HOST_TILIZER_DISABLE_SIMD env var (set to anything non-empty)
-    // forces the scalar path - useful for benchmarking or debugging.
+    // for the format/type axes and at runtime for face_W and is_exp_a.
+    // TT_METAL_BFP_HOST_TILIZER_DISABLE_SIMD=1 (see RunTimeOptions) forces the
+    // scalar path - useful for benchmarking or debugging.
     constexpr bool simd_eligible_format = (BfpFormat == tt::DataFormat::Bfp8_b) && kSimdEligibleType<T>;
-    static const bool simd_disabled_by_env = []() {
-        const char* env = std::getenv("TT_BFP_HOST_TILIZER_DISABLE_SIMD");
-        return env != nullptr && env[0] != '\0' && env[0] != '0';
-    }();
-    const bool use_simd = simd_eligible_format && (face_W == 16) && !is_exp_a && !simd_disabled_by_env;
+    const bool use_simd = simd_eligible_format && (face_W == 16) && !is_exp_a &&
+                          !tt::tt_metal::MetalContext::instance().rtoptions().get_bfp_host_tilizer_disable_simd();
 
     // Helper: compute the start-of-row pointer in the input buffer for either
     // layout. `fp32_element_index` is captured by reference and advanced in
@@ -799,15 +797,11 @@ void pack_tile_range(
 // thresholds are intentionally conservative so that small offline conversions
 // stay single-threaded.
 inline uint32_t pick_num_pack_threads(uint32_t num_tiles, uint32_t num_float_in_tile) {
-    // Allow pinning thread count via env var (useful for debugging / benchmarking).
-    // 0 disables threading; >=1 forces that many threads (capped by tile count).
-    static const int env_threads = []() {
-        const char* env = std::getenv("TT_BFP_HOST_TILIZER_THREADS");
-        if (env == nullptr) {
-            return -1;
-        }
-        return std::atoi(env);
-    }();
+    // Allow pinning thread count via TT_METAL_BFP_HOST_TILIZER_THREADS (see
+    // RunTimeOptions; useful for debugging / benchmarking). 0 disables
+    // threading; >=1 forces that many threads (capped by tile count); unset
+    // (-1) falls through to the adaptive heuristic below.
+    const int env_threads = tt::tt_metal::MetalContext::instance().rtoptions().get_bfp_host_tilizer_threads();
     if (env_threads == 0) {
         return 1;
     }
@@ -835,16 +829,11 @@ inline uint32_t pick_num_pack_threads(uint32_t num_tiles, uint32_t num_float_in_
 
 // Runtime A/B switch between the std::thread and OpenMP dispatch paths.
 // Returns true only if (a) the build was configured with
-// TT_BFP_HOST_TILIZER_OPENMP=ON, and (b) the env var
-// TT_BFP_HOST_TILIZER_USE_OPENMP is set to a non-empty, non-"0" value.
-// Evaluated once per process via a static; no per-call cost.
+// TT_BFP_HOST_TILIZER_OPENMP=ON, and (b) TT_METAL_BFP_HOST_TILIZER_USE_OPENMP=1
+// (parsed once by RunTimeOptions).
 inline bool host_tilizer_use_openmp() {
 #if defined(TT_BFP_HOST_TILIZER_OPENMP) && TT_BFP_HOST_TILIZER_OPENMP
-    static const bool enabled = []() {
-        const char* env = std::getenv("TT_BFP_HOST_TILIZER_USE_OPENMP");
-        return env != nullptr && env[0] != '\0' && env[0] != '0';
-    }();
-    return enabled;
+    return tt::tt_metal::MetalContext::instance().rtoptions().get_bfp_host_tilizer_use_openmp();
 #else
     return false;
 #endif

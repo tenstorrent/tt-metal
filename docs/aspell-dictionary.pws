@@ -6,7 +6,9 @@ APIs
 AST
 AnotherVecType
 AssignGlobalBufferToProgram
+AVX
 BFLOAT
+BFP
 BNT
 BRISC
 BRISCs
@@ -145,6 +147,7 @@ SetRuntimeArgs
 Sharded
 ShardedBufferConfig
 SliceRange
+tilizer
 TRISC
 TSLICE
 TT

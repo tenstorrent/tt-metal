@@ -7,17 +7,17 @@
 // Measures `pack_as_bfp8_tiles` (and BFP4_b for comparison) under whatever
 // configuration is selected by these env vars at process startup:
 //
-//   TT_BFP_HOST_TILIZER_DISABLE_SIMD=1   force scalar fallback
-//   TT_BFP_HOST_TILIZER_THREADS=N        cap worker thread count
+//   TT_METAL_BFP_HOST_TILIZER_DISABLE_SIMD=1   force scalar fallback
+//   TT_METAL_BFP_HOST_TILIZER_THREADS=N        cap worker thread count
 //
-// IMPORTANT: those env vars are cached at first use inside the production
-// code, so we cannot toggle them between benchmarks within one process.
+// IMPORTANT: those env vars are parsed once into RunTimeOptions at context
+// creation, so this benchmark does not toggle them between runs.
 // To compare scalar vs SIMD, run this binary three times - one per config
 // - with the env vars set before launch:
 //
-//   TT_BFP_HOST_TILIZER_DISABLE_SIMD=1 TT_BFP_HOST_TILIZER_THREADS=1 \
+//   TT_METAL_BFP_HOST_TILIZER_DISABLE_SIMD=1 TT_METAL_BFP_HOST_TILIZER_THREADS=1 \
 //     ./bench_bfp_pack | tee bench-scalar-1t.txt
-//   TT_BFP_HOST_TILIZER_THREADS=1 \
+//   TT_METAL_BFP_HOST_TILIZER_THREADS=1 \
 //     ./bench_bfp_pack | tee bench-simd-1t.txt
 //   ./bench_bfp_pack | tee bench-simd-nt.txt
 //
