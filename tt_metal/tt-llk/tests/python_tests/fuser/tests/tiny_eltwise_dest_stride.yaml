@@ -1,6 +1,6 @@
 operands:
-  - {name: a, dims: [16, 16], tile_dims: [16, 16], format: Float16_b, const_value: 3}
-  - {name: b, dims: [16, 16], tile_dims: [16, 16], format: Float16_b, const_value: 0}
+  - {name: a, dims: [16, 16], tile_dims: [16, 16], format: Float16_b}
+  - {name: b, dims: [16, 16], tile_dims: [16, 16], format: Float16_b}
   - {name: out, dims: [16, 16], tile_dims: [16, 16], format: Float16_b}
 
 operations:
