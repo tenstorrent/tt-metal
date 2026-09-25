@@ -438,8 +438,6 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     // Scratch.
     add_cb(pcb::scan_vnew, cv);
     add_cb(pcb::ointer, cv);
-    add_cb(pcb::supd, kv);
-    add_cb(pcb::stmp, kv);
     add_cb(pcb::scr1, scr);
 
     CoreRangeSet sender_set, receiver_set;

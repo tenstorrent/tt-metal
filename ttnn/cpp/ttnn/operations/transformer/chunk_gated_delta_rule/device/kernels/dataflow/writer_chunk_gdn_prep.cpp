@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Phase A (prep) writer: per chunk, drain the 7 state-independent intermediates to DRAM.
-//   v_beta [C,V], kd [C,K], q_decay [C,K], intra [C,C], k_dec_t [K,C], dl [1 tile], t_inv [C,C].
+//   v_beta [C,V], kd [C,K], q_decay [C,K], intra [C,C], k_dec_t [K,C], dl*I [1 tile], t_inv [C,C].
 // All fp32. Each DRAM tensor is [BH, NC, R, Col] TILE, so head h chunk c starts at
 // tile (h*NC + c) * (tiles-per-chunk).
 

@@ -5,7 +5,7 @@
 // direct NoC hand-off into the NV RECEIVER cores of ONE head (per-head producer form; the pooled
 // form generalizes the item walk and the owner function, not this protocol). Per item (chunk c):
 //   1. wait for the seven compute-pushed intermediates
-//        v_beta [C,V], t_inv [C,C], kd [C,K], intra [C,C], q_decay [C,K], k_dec_t [K,C], dl [1 tile]
+//        v_beta [C,V], t_inv [C,C], kd [C,K], intra [C,C], q_decay [C,K], k_dec_t [K,C], dl*I [1 tile]
 //   2. wait credit[h] == NV      — every receiver of head h has reserved chunk c's slots
 //      credit[h] <- 0
 //   3. v_beta: NV V-slice writes (1x1-rectangle multicasts, unlinked), slice v -> receiver v's ring slot

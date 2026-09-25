@@ -131,7 +131,7 @@ struct ChunkGdnScanInputs {
     Tensor q_decay;                       // [BH, NC, C, K] fp32
     Tensor intra;                         // [BH, NC, C, C] fp32
     Tensor k_dec_t;                       // [BH, NC, K, C] fp32
-    Tensor dl;                            // [BH, NC, 1, 1] fp32 (scalar per chunk in tile [0,0])
+    Tensor dl;                            // [BH, NC, 32, 32] fp32: dl*I, dl = exp(g_sum) of the chunk on the diagonal
     Tensor t_inv;                         // [BH, NC, C, C] fp32  (WY inverse)
     std::optional<Tensor> initial_state;  // [BH, K, V] fp32 or absent (zeros)
 };
