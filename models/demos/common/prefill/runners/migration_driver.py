@@ -623,7 +623,10 @@ def _verify_dst_vs_src_bytes(table, device_map: dict, triples: list, layers, *, 
         for cfg_id in range(n_configs):
             tcfg = table.config() if cfg_id == 0 else table.config(cfg_id)
             stride, cfg_layers = int(tcfg.chunk_n_tokens), int(tcfg.num_layers)
-            n_full = (real_len // stride) * stride  # whole chunks only; see the docstring
+            # a config whose position axis is shorter than the token range (DeepSeek-V4-Flash: rows, not tokens; the
+            # window ring is 128, a compressed config 128 + S/4, the pending state 32) is checked over ITS extent --
+            # the engine clips the migrate the same way (dcn_sender_backend.cpp migrate_slot_config)
+            n_full = (min(real_len, int(tcfg.max_sequence_length)) // stride) * stride  # whole chunks only
             tail_tokens += real_len - n_full
             wanted = [l for l in sorted(set(layers)) if l < cfg_layers] if layers else list(range(cfg_layers))
             logger.info(

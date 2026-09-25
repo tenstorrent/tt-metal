@@ -15,7 +15,8 @@ transport:
   h2d_service_id: dsv4_prefill
   connect_timeout_s: 600
 workload:
-  num_users: 2            # src slot 0 -> dst slot 1
+  num_users: 1            # ONE source slot (0); the driver prefills every slot in [0, num_users) and migrates each to
+                          # slot + dst_slot_offset, so the RUNNER needs PREFILL_NUM_USERS=2 (slots 0 and 1) while this stays 1
   chunks: "2"
   max_requests: 1
   interleave: round_robin

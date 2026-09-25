@@ -69,7 +69,7 @@ def _export_for(kind, caches, batch=0):
         return (caches.hca_unified, batch)
     if kind == SLIDING:
         return (caches.swa_window, batch)
-    return (caches.csa_unified, caches.csa_index_k, batch)
+    return (caches.csa_unified, caches.csa_index_k, batch, caches.csa_pending)
 
 
 def _pcc(a, b):
@@ -137,6 +137,8 @@ def test_prefill_kv_matches_decode_seed(mesh_device, device_params):
         exp = _export_for(kind, caches)
         unified = _one_chip(mesh_device, exp[0]).float()[0, 0]  # [rows, 512]
         keys = _one_chip(mesh_device, exp[1]).float()[0, 0] if kind == CSA else None  # [rows, 128]
+        if kind == CSA and exp[3] is not None:
+            run_and_export.pending = _one_chip(mesh_device, exp[3]).float()[0, 0]  # [32, 1024]
         return unified, keys
 
     # (1) the window ring. The decode seed holds tokens 0..127 (rows p); our smallest exportable chunk on 2x4 is 256 tokens
@@ -191,6 +193,29 @@ def test_prefill_kv_matches_decode_seed(mesh_device, device_params):
         f"[parity] compressed entries [{window},{window + n_entries}) ({int(valid.sum())} seeded rows): PCC {pcc_ent:.6f}  "
         f"(ours |row| {unified[window:window + n_entries][valid].norm(dim=-1).mean():.3f}, decode seed {seed_entries[valid].norm(dim=-1).mean():.3f})"
     )
+    if kind == CSA and getattr(run_and_export, "pending", None) is not None:
+        # contract config 4: the compressor overlap state for the decode ring's next entry (DS4F-0242)
+        h4 = hist[n_tok - ratio : n_tok]
+        wc, gc = w["self_attn.compressor.kv_proj.weight"].float(), w["self_attn.compressor.gate_proj.weight"].float()
+        wi, gi = (
+            w["self_attn.compressor.indexer.kv_proj.weight"].float(),
+            w["self_attn.compressor.indexer.gate_proj.weight"].float(),
+        )
+        d, di = wc.shape[0] // 2, wi.shape[0] // 2
+        # the stored Ca gate carries the position bias (csa_math.pool_entries keeps the BIASED gate); S % 4 == 0, so the
+        # last 4 tokens are bias rows 0..3 in order
+        apec = w["self_attn.compressor.position_bias"].float()[:ratio, :d]
+        apei = w["self_attn.compressor.indexer.position_bias"].float()[:ratio, :di]
+        exp_main = torch.cat([(h4 @ wc.T)[:, :d], (h4 @ gc.T)[:, :d] + apec], dim=1)  # [4, 1024] Ca [kv | gate + ape]
+        exp_idx = torch.cat([(h4 @ wi.T)[:, :di], (h4 @ gi.T)[:, :di] + apei], dim=1)  # [4, 256]
+        got = run_and_export.pending
+        pcc_main = _pcc(exp_main, got[:ratio])
+        pcc_idx = _pcc(exp_idx, got[ratio : 2 * ratio, : 2 * di])
+        results["pending_main_ca"], results["pending_indexer_ca"] = pcc_main, pcc_idx
+        logger.info(
+            f"[parity] csa_pending rows 0..3 (main Ca [kv|gate]) PCC {pcc_main:.6f}; rows 4..7 (indexer Ca) PCC {pcc_idx:.6f}; "
+            f"rows 8..31 |max| {got[2 * ratio:].abs().max():.3g}"
+        )
     if kind == CSA and seed.get("idx_keys") is not None:
         idx = seed["idx_keys"].float()
         n = min(idx.shape[0], n_entries)
@@ -208,3 +233,5 @@ def test_prefill_kv_matches_decode_seed(mesh_device, device_params):
     assert results["entries"] >= _PCC, results
     if "index_keys_h128" in results:
         assert results["index_keys_plain"] >= _PCC, results
+    if "pending_main_ca" in results:
+        assert results["pending_main_ca"] >= _PCC and results["pending_indexer_ca"] >= _PCC, results

@@ -348,7 +348,11 @@ class TtV4PrefillBlock(LightweightModule):
             layers, tensors = geom.csa_layers, (caches.csa_unified, caches.csa_index_k)
         if any(t is None for t in tensors):
             return None
-        return (*tensors, int(slot) * len(layers) + list(layers).index(self.layer_idx))
+        batch_idx = int(slot) * len(layers) + list(layers).index(self.layer_idx)
+        if self.kind == CSA:
+            # + the compressor pending-state group (contract config 4, DS4F-0242): None when not allocated
+            return (*tensors, batch_idx, caches.csa_pending)
+        return (*tensors, batch_idx)
 
     # ---- forward ------------------------------------------------------------------------------------------------
     def forward(

@@ -4,6 +4,8 @@
 weights: the two-series compressor's entries (PCC >= 0.999), the indexer's top-k selection (Jaccard >= 0.9 vs the
 reference block bias), and the block output single-shot / chunked (PCC >= 0.99) against an UNCHUNKED reference."""
 
+import os
+
 import pytest
 import torch
 from loguru import logger
@@ -222,7 +224,12 @@ def test_csa_sparse_path_matches_dense(mesh_device, device_params, sp_axis, tp_a
             worst["A vs B"] = min(worst["A vs B"], pcc_ab)
         kv_actual += valid
     assert worst["B"] >= _BLOCK_PCC and worst["A"] >= _BLOCK_PCC, worst
-    assert worst["A vs B"] >= 0.999, worst
+    # A vs B: 0.999+ when both paths rank the same indexer scores (materialised scorer); the fused scorer
+    # (indexer_score_dsa, bf16 head-sum in a different order) breaks near-ties differently, so its selected sets --
+    # and the outputs -- may differ at the 1e-3 level while both stay equally close to the reference.
+    fused = os.environ.get("PREFILL_CSA_FUSED_INDEXER", "1") == "1"
+    assert worst["A vs B"] >= (0.995 if fused else 0.999), worst
+    assert worst["A"] >= worst["B"] - 0.002, f"path A drifted from the reference more than path B: {worst}"
 
 
 @pytest.mark.parametrize("name, chunk_size, iters_valid", _CHUNKED, ids=[n for n, _, _ in _CHUNKED])

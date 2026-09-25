@@ -60,3 +60,21 @@ def allocate_v4_flash_kv_caches(*, mesh_device, hf_config, params) -> V4FlashKvC
         csa_pending=_alloc("csa_pending"),
         hca_pending=_alloc("hca_pending"),
     )
+
+
+def alloc_rm_nd_cache(mesh_device, rows: int, width: int, *, mesh_shape, sp_axis: int, sp_factor: int):
+    """One zero-filled bf16 ROW_MAJOR [1, 1, rows, width] cache, DRAM ND-sharded exactly like the CSA unified export
+    cache (``init_kvpe_cache`` geometry, replicated over SP) -- the CSA path A slab the sparse gather reads."""
+    from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+
+    return init_kvpe_cache(
+        kvpe_cache_head_dim=width,
+        mesh_device=mesh_device,
+        seq_len=rows * sp_factor,
+        mesh_shape=list(mesh_shape),
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=1,
+        num_users=1,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )

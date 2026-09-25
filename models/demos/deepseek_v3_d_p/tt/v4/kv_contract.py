@@ -114,8 +114,10 @@ class KvGroupSpec:
         if self.name == "csa_index_k":
             return tiles_up(compressed_entries(s, CSA_RATE))
         if self.name == "csa_pending":
-            # rows 0..3: the last window's Ca-series [kv | gate] rows (HEAD_DIM each -> 1024 wide);
-            # rows 4..7: the indexer compressor's Ca rows ([kv | gate] of INDEX_HEAD_DIM each, zero-padded)
+            # rows 0..3: the last complete window's Ca-series rows [kv_a (512) | gate_a (512)] for tokens S-4..S-1;
+            # rows 4..7: the indexer compressor's Ca rows [kv_a (128) | gate_a (128) | zeros (768)]; rows 8..31 zero.
+            # Written by TtCSA._export_pending after every chunk whose real length is a multiple of the rate
+            # (the Cb half of a partial window is NOT carried: handovers need S % 4 == 0 for now). DS4F-0242.
             return TILE
         if self.name == "hca_pending":
             # up to 127 token rows of [kv | gate] past the last full 128-window, plus a count row
