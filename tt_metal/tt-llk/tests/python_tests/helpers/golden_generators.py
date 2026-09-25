@@ -2449,6 +2449,7 @@ class UnarySFPUGolden:
         unpack_to_srcs: bool = False,
         shift_amount: int = 3,
         relu_min_int_threshold: int = int(RELU_MIN_THRESHOLD),
+        tile_dimensions: tuple[int, int] = TILE_DIMENSIONS,
     ):
         self.data_format = data_format
         self.dst_format = data_format
@@ -2546,16 +2547,25 @@ class UnarySFPUGolden:
         )
 
         if not skip_tilize:
-            result = tilize_block(result, dimensions, input_format).flatten()
+            result = tilize_block(
+                result,
+                dimensions,
+                input_format,
+                tile_dimensions=tile_dimensions,
+            ).flatten()
             if whole_tensor_res is not None:
                 # Tilized as Float32 so this permutation does not round the accumulated
                 # values; the single Dest-format rounding is applied below, together with
                 # the element-wise path's.
                 whole_tensor_res = tilize_block(
-                    whole_tensor_res, dimensions, DataFormat.Float32
+                    whole_tensor_res,
+                    dimensions,
+                    DataFormat.Float32,
+                    tile_dimensions=tile_dimensions,
                 ).flatten()
 
-        start = ELEMENTS_PER_TILE * dest_idx
+        elements_per_tile = tile_dimensions[0] * tile_dimensions[1]
+        start = elements_per_tile * dest_idx
         elements_to_process = TILE_SIZE * iterations
 
         if start + elements_to_process > tensor.numel():
@@ -2600,13 +2610,15 @@ class UnarySFPUGolden:
         # Two casts, both NaN-sign preserving: the Dest write's own rounding, then the store
         # into `result`, whose dtype is not always the Dest dtype.
         op_rounded = cast_to_dest_dtype(op_tensor, op_dtype).float()
-        result[
-            ELEMENTS_PER_TILE * dest_idx : ELEMENTS_PER_TILE * dest_idx
-            + TILE_SIZE * iterations
-        ] = cast_to_dest_dtype(op_rounded, result.dtype)
+        result[window] = cast_to_dest_dtype(op_rounded, result.dtype)
 
         if not skip_tilize:
-            result = untilize_block(result, input_format, dimensions).flatten()
+            result = untilize_block(
+                result,
+                input_format,
+                dimensions,
+                tile_dimensions=tile_dimensions,
+            ).flatten()
 
         if self.data_format in (
             DataFormat.Bfp8_b,
@@ -2634,7 +2646,10 @@ class UnarySFPUGolden:
                 else result.float()
             )
             tilized = tilize_block(
-                result_t.flatten(), dimensions, DataFormat.Float16_b
+                result_t.flatten(),
+                dimensions,
+                DataFormat.Float16_b,
+                tile_dimensions=tile_dimensions,
             ).flatten()
             converter = (
                 _bfp4b_to_float16b
@@ -3817,6 +3832,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         dest_acc: DestAccumulation = None,
         output_format: DataFormat = None,
         collect_generated_nan: bool = False,
+        tile_dimensions: tuple[int, int] = TILE_DIMENSIONS,
     ):
         """*dest_acc* and *output_format* enable the Dest-width and pack-path modelling.
 
@@ -3854,7 +3870,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
             tensor = quantize_mx_tensor_chunked(tensor, input_format)
 
         total_elements = dimensions[0] * dimensions[1]
-        elements_per_tile = ELEMENTS_PER_TILE
+        elements_per_tile = tile_dimensions[0] * tile_dimensions[1]
         elements_per_row = 32
 
         num_tiles = total_elements // elements_per_tile
@@ -3864,6 +3880,11 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         dst_start = dst_idx * elements_per_tile
 
         if operation == MathOperation.SfpuAddTopRow:
+            if tile_dimensions != TILE_DIMENSIONS:
+                raise ValueError(
+                    "SfpuAddTopRow only supports 32x32 tile indexing, got "
+                    f"{tile_dimensions}"
+                )
             if collect_generated_nan:
                 raise ValueError(
                     "SfpuAddTopRow returns before the Dest modelling that produces the "
@@ -3882,7 +3903,12 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
             DataFormat.Bfp4_b,
             DataFormat.Bfp2_b,
         ):
-            result = tilize_block(tensor.flatten(), dimensions, data_format).flatten()
+            result = tilize_block(
+                tensor.flatten(),
+                dimensions,
+                data_format,
+                tile_dimensions=tile_dimensions,
+            ).flatten()
         else:
             result = tensor.flatten().clone()
 
@@ -3982,12 +4008,20 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
             DataFormat.Bfp4_b,
             DataFormat.Bfp2_b,
         ):
-            result = untilize_block(result, data_format, dimensions)
+            result = untilize_block(
+                result,
+                data_format,
+                dimensions,
+                tile_dimensions=tile_dimensions,
+            )
             # The same permutation, so the mask keeps pointing at the lanes it was recorded for.
             # 0.0 and 1.0 are exact in every format this branch runs for, so untilize_block's
             # format cast cannot lose a lane.
             generated_nan = untilize_block(
-                generated_nan.to(torch.float32), data_format, dimensions
+                generated_nan.to(torch.float32),
+                data_format,
+                dimensions,
+                tile_dimensions=tile_dimensions,
             ).flatten()
 
         if model_dest and not nan_survives_to_l1(data_format, output_format, dest_acc):
