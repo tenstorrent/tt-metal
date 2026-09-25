@@ -4,7 +4,7 @@
 
 #include "api/compile_time_args.h"
 #include "api/dataflow/dataflow_api.h"
-#include "tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel.h"
+#include "tt_metal/tt-llk/tt_llk_blackhole/common/inc/ckernel.h"
 
 // Reader kernel for max-utilization workload.
 // Only the top-left core of the grid performs a NOC0 multicast to all

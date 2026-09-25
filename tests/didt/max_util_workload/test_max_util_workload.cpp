@@ -21,7 +21,7 @@
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -108,6 +108,11 @@ struct MaxUtilConfig {
     // eth_dram_util_pct by setup_eth_stream_config via kDramUtilToCyclesMap.
     uint32_t eth_noc_wait_cycles = 0;
 
+    // Use one idle Ethernet core per DRAM bank. Idle Ethernet kernels require
+    // TT_METAL_SLOW_DISPATCH_MODE=1; the default fast-dispatch path uses both
+    // processors on each connected Ethernet core.
+    bool use_idle_eth = false;
+
     // When true, all kernels perform a super-sync barrier at program start
     // before entering their main loop.
     bool super_sync = false;
@@ -184,6 +189,17 @@ static bool get_super_sync() {
     return false;
 }
 
+/// Reads MAX_UTIL_USE_IDLE_ETH from the environment.
+/// Any non-empty value other than "0" or "false" selects one idle ETH core per bank.
+static bool get_use_idle_eth() {
+    const char* env = std::getenv("MAX_UTIL_USE_IDLE_ETH");
+    if (env != nullptr) {
+        std::string val(env);
+        return !val.empty() && val != "0" && val != "false";
+    }
+    return false;
+}
+
 /// Returns a MaxUtilConfig that covers every compute core on @p device.
 static MaxUtilConfig full_grid_config(
     IDevice* device,
@@ -202,6 +218,12 @@ static MaxUtilConfig full_grid_config(
     cfg.num_slow_wl_loops = num_slow_wl_loops;
     cfg.fpu_utilization_pct = get_fpu_utilization_pct();
     cfg.eth_dram_util_pct = get_dram_utilization_pct();
+    cfg.use_idle_eth = get_use_idle_eth();
+    // A single idle-ETH stream benefits from Blackhole's full 16 KiB NOC burst.
+    // The dual-processor active-ETH path retains its empirically optimal 1 KiB pages.
+    if (cfg.use_idle_eth) {
+        cfg.eth_page_size = 16 * 1024;
+    }
     cfg.super_sync = super_sync;
     return cfg;
 }
@@ -272,9 +294,10 @@ static CoreCoord dram_noc0_coord(IDevice* device, uint32_t bank_id) {
 }
 
 // ---------------------------------------------------------------------------
-// assign_eth_streams_to_banks – assigns every DRAM bank to a unique active-ETH
-// core/processor stream. Blackhole has two data-movement processors per active
-// ETH core, so four connected cores can drive all eight GDDR6 channels.
+// assign_eth_streams_to_banks – assigns every DRAM bank to a unique Ethernet
+// core/processor stream. The default fast-dispatch path uses two processors on
+// each of four active cores. The slow-dispatch idle path uses one physical core
+// per bank.
 // ---------------------------------------------------------------------------
 
 struct EthStreamAssignment {
@@ -283,17 +306,20 @@ struct EthStreamAssignment {
     uint32_t bank_id;
 };
 
-static std::vector<EthStreamAssignment> assign_eth_streams_to_banks(IDevice* device) {
+static std::vector<EthStreamAssignment> assign_eth_streams_to_banks(IDevice* device, bool use_idle_eth) {
     auto active_eth = device->get_active_ethernet_cores(/*skip_reserved_tunnel_cores=*/true);
-    std::vector<CoreCoord> active_cores(active_eth.begin(), active_eth.end());
+    auto inactive_eth = device->get_inactive_ethernet_cores();
+    std::vector<CoreCoord> eth_cores = use_idle_eth ? std::vector<CoreCoord>(inactive_eth.begin(), inactive_eth.end())
+                                                    : std::vector<CoreCoord>(active_eth.begin(), active_eth.end());
     auto cmp = [](const CoreCoord& a, const CoreCoord& b) { return a.x < b.x || (a.x == b.x && a.y < b.y); };
-    std::sort(active_cores.begin(), active_cores.end(), cmp);
+    std::sort(eth_cores.begin(), eth_cores.end(), cmp);
 
     const uint32_t num_processors =
-        MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
+        use_idle_eth ? 1 : MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
+
     std::vector<EthStreamAssignment> available_streams;
     for (uint32_t processor = 0; processor < num_processors; ++processor) {
-        for (const auto& core : active_cores) {
+        for (const auto& core : eth_cores) {
             available_streams.push_back({core, processor, 0});
         }
     }
@@ -321,14 +347,14 @@ static std::vector<EthStreamAssignment> assign_eth_streams_to_banks(IDevice* dev
 
 // ---------------------------------------------------------------------------
 // setup_eth_stream_config – configures DRAM buffer and ETH L1 addresses for
-//   the ETH DRAM streaming kernel.  Only ACTIVE ethernet cores are used.
+//   the ETH DRAM streaming kernel.
 //
 // Each selected ETH processor reads from exactly one DRAM bank so that summing
 // per-stream bandwidths gives the aggregate ETH-to-DRAM bandwidth.
 //
 // Returns a shared_ptr<Buffer> holding the DRAM staging buffer; the caller
 // must keep this alive until the program finishes.  Returns nullptr when no
-// active ETH cores are assignable.
+// Ethernet cores are assignable.
 // ---------------------------------------------------------------------------
 
 static shared_ptr<Buffer> setup_eth_stream_config(IDevice* device, MaxUtilConfig& cfg) {
@@ -337,27 +363,30 @@ static shared_ptr<Buffer> setup_eth_stream_config(IDevice* device, MaxUtilConfig
 
     log_info(
         LogTest,
-        "Device {}: ETH cores available: {} active (connected), {} inactive (idle); using active only",
+        "Device {}: ETH cores available: {} active (connected), {} inactive (idle); using {}",
         device->id(),
         active_eth.size(),
-        inactive_eth.size());
+        inactive_eth.size(),
+        cfg.use_idle_eth ? "idle (one physical core per bank)" : "active (two processors per core)");
 
-    auto assignments = assign_eth_streams_to_banks(device);
+    auto assignments = assign_eth_streams_to_banks(device, cfg.use_idle_eth);
     if (assignments.empty()) {
         log_warning(
-            LogTest, "Device {}: no active ETH cores available – skipping ETH DRAM streaming kernel", device->id());
+            LogTest, "Device {}: no selected ETH cores available – skipping ETH DRAM streaming kernel", device->id());
         return nullptr;
     }
 
-    // HAL parameters for ACTIVE_ETH cores.
     auto& hal = MetalContext::instance().hal();
-    cfg.eth_l1_staging_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
-    uint32_t eth_l1_size = hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+    const auto eth_core_type =
+        cfg.use_idle_eth ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH;
+    cfg.eth_l1_staging_addr = hal.get_dev_addr(eth_core_type, HalL1MemAddrType::UNRESERVED);
+    uint32_t eth_l1_size = hal.get_dev_size(eth_core_type, HalL1MemAddrType::UNRESERVED);
 
     uint32_t num_banks = static_cast<uint32_t>(device->num_dram_channels());
     uint32_t page_size_bytes = cfg.eth_page_size;
 
-    const uint32_t num_processors = hal.get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
+    const uint32_t num_processors =
+        cfg.use_idle_eth ? 1 : hal.get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
     cfg.eth_l1_staging_stride = eth_l1_size / num_processors;
     cfg.eth_pages_per_bank = (cfg.eth_l1_staging_stride - 16) / page_size_bytes;
 
@@ -377,11 +406,12 @@ static shared_ptr<Buffer> setup_eth_stream_config(IDevice* device, MaxUtilConfig
 
     log_info(
         LogTest,
-        "Device {}: ETH DRAM streaming – {} bank streams across {} active cores, pages_per_bank={}, "
+        "Device {}: ETH DRAM streaming – {} bank streams across {} {} cores, pages_per_bank={}, "
         "page_size={} B ({}KB), eth_l1_staging_addr=0x{:x}, eth_l1_size={} B",
         device->id(),
         assignments.size(),
-        active_eth.size(),
+        cfg.use_idle_eth ? inactive_eth.size() : active_eth.size(),
+        cfg.use_idle_eth ? "idle" : "active",
         cfg.eth_pages_per_bank,
         page_size_bytes,
         page_size_bytes / 1024,
@@ -470,8 +500,8 @@ static Program build_prefill_program(IDevice* device, MaxUtilConfig& cfg) {
     detail::WriteToBuffer(dram_buffer_0x5555, data_0x5555);
 
     // Get L1 base address and pack all buffers densely
-    CoreCoord physical_core = device->worker_core_from_logical_core(CoreCoord{0, 0});
-    uint64_t l1_base_addr = device->get_dev_addr(physical_core, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    uint64_t l1_base_addr = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
 
     uint32_t addr = static_cast<uint32_t>(l1_base_addr);
     cfg.l1_buffer0_addr = addr;
@@ -817,13 +847,15 @@ static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
         }
     }
 
-    // -- ETH DRAM streaming kernels (one bank per active-ETH processor) --
+    // -- ETH DRAM streaming kernels (one bank per selected ETH processor) --
     // Guard: skip when setup_eth_stream_config was not called.
     if (cfg.eth_dram_buffer_addr != 0) {
-        auto assignments = assign_eth_streams_to_banks(device);
+        auto assignments = assign_eth_streams_to_banks(device, cfg.use_idle_eth);
         if (!assignments.empty()) {
             const uint32_t num_processors =
-                MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
+                cfg.use_idle_eth
+                    ? 1
+                    : MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
             for (uint32_t processor = 0; processor < num_processors; ++processor) {
                 std::set<CoreRange> eth_ranges;
                 for (const auto& assignment : assignments) {
@@ -836,7 +868,7 @@ static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
                 }
 
                 EthernetConfig eth_cfg{
-                    .eth_mode = Eth::RECEIVER,
+                    .eth_mode = cfg.use_idle_eth ? Eth::IDLE : Eth::RECEIVER,
                     .noc = static_cast<NOC>(processor),
                     .processor = static_cast<DataMovementProcessor>(processor),
                     .compile_args =
@@ -846,8 +878,12 @@ static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
                             cfg.eth_page_size,
                             cfg.eth_noc_wait_cycles,  // 3: noc_wait_cycles (0 = max DRAM util)
                         },
+                    .defines = cfg.use_idle_eth ? std::map<std::string, std::string>{{"USE_IDLE_ETH", "1"}}
+                                                : std::map<std::string, std::string>{},
                 };
-                eth_test_common::set_arch_specific_eth_config(eth_cfg);
+                if (!cfg.use_idle_eth) {
+                    eth_test_common::set_arch_specific_eth_config(eth_cfg);
+                }
                 auto eth_kernel = CreateKernel(
                     program,
                     "tests/didt/max_util_workload/kernels/eth_dram_reader.cpp",
@@ -1009,7 +1045,7 @@ static bool log_eth_bw(IDevice* device, const MaxUtilConfig& cfg, const shared_p
         return true;
     }
 
-    auto assignments = assign_eth_streams_to_banks(device);
+    auto assignments = assign_eth_streams_to_banks(device, cfg.use_idle_eth);
     if (assignments.empty()) {
         return true;
     }
