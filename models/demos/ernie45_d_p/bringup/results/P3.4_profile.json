@@ -1,0 +1,164 @@
+{
+ "sdpa": {
+  "fidelity": "HiFi2",
+  "fp32": false,
+  "packer_l1": false,
+  "exp_approx": true,
+  "q": 256,
+  "k": 512,
+  "grid": null
+ },
+ "wall_ms": 445.1630115509033,
+ "device_ms": {
+  "attention: sdpa (chunked, 5k q x 56k kv)": 202.87,
+  "moe: router + dispatch + combine/reduce": 100.04,
+  "moe: routed experts (fused FFN)": 53.51,
+  "moe: shared expert": 27.97,
+  "ccl: all_reduce (attn + moe)": 19.72,
+  "attention: qkv / rope / kv write / o_proj": 19.61,
+  "other: norms, residual adds, embed": 18.79,
+  "dense MLP (layer 0)": 2.44
+ },
+ "sections_ms": {
+  "model.other.embed": 0.1666,
+  "other.attn_norm": 4.170268,
+  "attn.qkv": 9.597129,
+  "attn.rope": 2.48018,
+  "attn.kv_write": 0.469516,
+  "attn.sdpa": 202.874952,
+  "attn.o_proj": 7.063798,
+  "attn.all_reduce": 9.991581,
+  "other.residual": 14.307247,
+  "dense_mlp": 2.440279,
+  "moe.router": 21.742363,
+  "moe.dispatch": 34.673992,
+  "moe.experts": 53.507448,
+  "moe.combine_reduce": 43.624622,
+  "moe.shared": 27.966817,
+  "moe.all_reduce": 9.727834,
+  "model.other.final_norm": 0.148058
+ },
+ "sections_ms_per_chip": {
+  "model.other.embed": {
+   "1": 0.165811,
+   "3": 0.16581,
+   "0": 0.165974,
+   "2": 0.1666
+  },
+  "other.attn_norm": {
+   "1": 4.138857,
+   "3": 4.149236,
+   "0": 4.142914,
+   "2": 4.135991
+  },
+  "attn.qkv": {
+   "1": 9.528526,
+   "3": 9.552615,
+   "0": 9.53574,
+   "2": 9.516983
+  },
+  "attn.rope": {
+   "1": 2.460509,
+   "3": 2.463347,
+   "0": 2.460521,
+   "2": 2.458792
+  },
+  "attn.kv_write": {
+   "1": 0.463173,
+   "3": 0.464493,
+   "0": 0.464151,
+   "2": 0.463888
+  },
+  "attn.sdpa": {
+   "1": 202.704302,
+   "3": 202.753285,
+   "0": 202.742555,
+   "2": 202.802334
+  },
+  "attn.o_proj": {
+   "1": 7.031322,
+   "3": 7.026355,
+   "0": 7.038594,
+   "2": 7.029877
+  },
+  "attn.all_reduce": {
+   "1": 9.641274,
+   "3": 9.991581,
+   "0": 9.484649,
+   "2": 9.861605
+  },
+  "other.residual": {
+   "1": 14.204856,
+   "3": 14.221359,
+   "0": 14.242992,
+   "2": 14.203297
+  },
+  "dense_mlp": {
+   "1": 2.437334,
+   "3": 2.428721,
+   "0": 2.440279,
+   "2": 2.436108
+  },
+  "moe.router": {
+   "1": 21.67815,
+   "3": 21.679109,
+   "0": 21.674632,
+   "2": 21.668036
+  },
+  "moe.dispatch": {
+   "1": 33.996366,
+   "3": 34.195619,
+   "0": 34.226947,
+   "2": 34.135983
+  },
+  "moe.experts": {
+   "1": 50.15716,
+   "3": 51.155475,
+   "0": 50.900779,
+   "2": 50.783554
+  },
+  "moe.combine_reduce": {
+   "1": 41.46783,
+   "3": 42.288569,
+   "0": 41.802475,
+   "2": 41.896381
+  },
+  "moe.shared": {
+   "1": 27.819196,
+   "3": 27.835998,
+   "0": 27.833055,
+   "2": 27.812829
+  },
+  "moe.all_reduce": {
+   "1": 9.315869,
+   "3": 9.727834,
+   "0": 9.175562,
+   "2": 9.568671
+  },
+  "model.other.final_norm": {
+   "1": 0.147447,
+   "3": 0.14763,
+   "0": 0.147704,
+   "2": 0.148058
+  }
+ },
+ "programs": {
+  "model.other.embed": 4,
+  "other.attn_norm": 112,
+  "attn.qkv": 224,
+  "attn.rope": 224,
+  "attn.kv_write": 224,
+  "attn.sdpa": 112,
+  "attn.o_proj": 224,
+  "attn.all_reduce": 224,
+  "other.residual": 336,
+  "dense_mlp": 24,
+  "moe.router": 1944,
+  "moe.dispatch": 756,
+  "moe.experts": 108,
+  "moe.combine_reduce": 324,
+  "moe.shared": 540,
+  "moe.all_reduce": 216,
+  "model.other.final_norm": 4
+ }
+}
