@@ -11694,6 +11694,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         dest="extra_models_dir",
         help="dir the plugin scans for vllm_metadata.json (under source.code)",
     )
+    pph.add_argument(
+        "--no-scaffold",
+        dest="no_scaffold",
+        action="store_true",
+        help="do not auto-create the vLLM adapter bundle for --container",
+    )
     pph.add_argument("--out", help="tt-model build staging dir (default ~/tt-model-builds)")
     pph.add_argument("--tt-model-bin", dest="tt_model_bin", help="path to the tt-model executable")
     pph.add_argument("--public", action="store_true", help="push the bundle public (shared by link)")
