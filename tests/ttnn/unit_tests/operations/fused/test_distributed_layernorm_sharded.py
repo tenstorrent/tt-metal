@@ -129,7 +129,16 @@ def compute_pre_allgather_stats(tt_input_tensor, core_grid, input_width, is_rmsn
 
 
 def compute_post_allgather_output(
-    tt_input_tensor, tt_weights, tt_stats_tensor, eps, is_rmsnorm, core_grid, input_width, output_df, out_memory_config
+    tt_input_tensor,
+    tt_weights,
+    tt_stats_tensor,
+    eps,
+    is_rmsnorm,
+    core_grid,
+    input_width,
+    output_df,
+    out_memory_config,
+    tt_bias=None,
 ):
     SHARDED_NORM_PRGM_CFG = ttnn.LayerNormShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=(core_grid[0], core_grid[1]),
@@ -144,6 +153,7 @@ def compute_post_allgather_output(
             tt_input_tensor,
             epsilon=eps,
             weight=tt_weights,
+            bias=tt_bias,
             program_config=SHARDED_NORM_PRGM_CFG,
             stats=tt_stats_tensor,
             dtype=output_df,
@@ -154,6 +164,7 @@ def compute_post_allgather_output(
             tt_input_tensor,
             epsilon=eps,
             weight=tt_weights,
+            bias=tt_bias,
             program_config=SHARDED_NORM_PRGM_CFG,
             stats=tt_stats_tensor,
             dtype=output_df,
@@ -161,14 +172,23 @@ def compute_post_allgather_output(
         )
 
 
-def compute_reference_output(torch_input_tensor, torch_weight, is_rmsnorm, eps):
+def compute_reference_output(torch_input_tensor, torch_weight, is_rmsnorm, eps, torch_bias=None):
     if is_rmsnorm:
-        return rms_norm(torch_input_tensor, torch_weight, eps=eps)
+        gamma = torch_weight
+        if gamma is None:
+            gamma = torch.ones((1, 1, 1, torch_input_tensor.shape[-1]), dtype=torch_input_tensor.dtype)
+        torch_output_tensor = rms_norm(torch_input_tensor, gamma, eps=eps)
+        if torch_bias is not None:
+            torch_output_tensor = torch_output_tensor + torch_bias
+        return torch_output_tensor
     else:
+        weight = None if torch_weight is None else torch_weight.squeeze(0).squeeze(0).squeeze(0)
+        bias = None if torch_bias is None else torch_bias.squeeze(0).squeeze(0).squeeze(0)
         return torch.nn.functional.layer_norm(
             torch_input_tensor,
             (torch_input_tensor.shape[-1],),
-            weight=torch_weight.squeeze(0).squeeze(0).squeeze(0),
+            weight=weight,
+            bias=bias,
             eps=eps,
         )
 
@@ -388,18 +408,7 @@ def test_pre_allgather_layernorm_1d_reduce(
     )
 
 
-@pytest.mark.parametrize("is_rmsnorm", [True, False])
-@pytest.mark.parametrize("seed", [0, 1234])
-@pytest.mark.parametrize("eps", [1e-6])
-@pytest.mark.parametrize(("min_pcc", "max_atol"), ((0.9997, 0.45),))
-@pytest.mark.parametrize("input_width", [2048])
-@pytest.mark.parametrize("num_devices", [4, 8])
-@pytest.mark.parametrize("input_df", [ttnn.bfloat8_b, ttnn.bfloat16])
-@pytest.mark.parametrize("output_df", [ttnn.bfloat8_b, ttnn.bfloat16])
-@pytest.mark.parametrize("weights_df", [ttnn.bfloat8_b, ttnn.bfloat16])
-@pytest.mark.parametrize(("mean", "std"), ([0, 1],))
-@pytest.mark.parametrize("core_grid", ((8, 2),))
-def test_post_allgather_layernorm(
+def run_post_allgather_layernorm(
     device,
     input_width,
     num_devices,
@@ -411,15 +420,28 @@ def test_post_allgather_layernorm(
     eps,
     mean,
     std,
+    core_grid,
     min_pcc,
     max_atol,
-    core_grid,
+    has_weight=True,
+    has_bias=False,
 ):
     torch_input_tensor, torch_weight, torch_input_chunks, torch_weight_chunks = create_input_and_weight_tensors(
         input_width, num_devices, seed, mean, std
     )
+    torch_bias = None
+    torch_bias_chunks = None
+    if has_bias:
+        torch_bias = torch.normal(mean, std, size=torch_weight.shape, dtype=torch.bfloat16)
+        torch_bias_chunks = torch.chunk(torch_bias, num_devices, dim=-1)
 
-    torch_output_tensor = compute_reference_output(torch_input_tensor, torch_weight, is_rmsnorm, eps)
+    torch_output_tensor = compute_reference_output(
+        torch_input_tensor,
+        torch_weight if has_weight else None,
+        is_rmsnorm,
+        eps,
+        torch_bias=torch_bias,
+    )
     torch_output_chunks = torch.chunk(torch_output_tensor, num_devices, dim=-1)
 
     # Compute distributed statistics
@@ -453,11 +475,27 @@ def test_post_allgather_layernorm(
 
     for d in range(num_devices):
         tt_input_tensor = create_tt_tensors(torch_input_chunks[d], device, input_df, core_grid, input_width)
-        tt_weights = create_tt_tensors(
-            torch_weight_chunks[d], device, weights_df, core_grid, input_width, is_weight=True
+        tt_weights = (
+            create_tt_tensors(torch_weight_chunks[d], device, weights_df, core_grid, input_width, is_weight=True)
+            if has_weight
+            else None
+        )
+        tt_bias = (
+            create_tt_tensors(torch_bias_chunks[d], device, weights_df, core_grid, input_width, is_weight=True)
+            if has_bias
+            else None
         )
         tt_output_tensor = compute_post_allgather_output(
-            tt_input_tensor, tt_weights, tt_device_stats, eps, is_rmsnorm, core_grid, input_width, output_df, None
+            tt_input_tensor,
+            tt_weights,
+            tt_device_stats,
+            eps,
+            is_rmsnorm,
+            core_grid,
+            input_width,
+            output_df,
+            None,
+            tt_bias=tt_bias,
         )
         tt_output_torch = ttnn.to_torch(tt_output_tensor).to(torch.bfloat16)
 
@@ -471,6 +509,103 @@ def test_post_allgather_layernorm(
         )
 
     logger.info("Post-allgather layernorm test passed for all devices")
+
+
+@pytest.mark.parametrize("is_rmsnorm", [True, False])
+@pytest.mark.parametrize("seed", [0, 1234])
+@pytest.mark.parametrize("eps", [1e-6])
+@pytest.mark.parametrize(("min_pcc", "max_atol"), ((0.9997, 0.45),))
+@pytest.mark.parametrize("input_width", [2048])
+@pytest.mark.parametrize("num_devices", [4, 8])
+@pytest.mark.parametrize("input_df", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("output_df", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("weights_df", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize(("mean", "std"), ([0, 1],))
+@pytest.mark.parametrize("core_grid", ((8, 2),))
+def test_post_allgather_layernorm(
+    device,
+    input_width,
+    num_devices,
+    is_rmsnorm,
+    input_df,
+    output_df,
+    weights_df,
+    seed,
+    eps,
+    mean,
+    std,
+    min_pcc,
+    max_atol,
+    core_grid,
+):
+    run_post_allgather_layernorm(
+        device,
+        input_width,
+        num_devices,
+        is_rmsnorm,
+        input_df,
+        output_df,
+        weights_df,
+        seed,
+        eps,
+        mean,
+        std,
+        core_grid,
+        min_pcc,
+        max_atol,
+    )
+
+
+# Bias without weight used to hang the sharded post-all-gather compute kernel (issue #51230).
+@pytest.mark.parametrize("is_rmsnorm", [True, False])
+@pytest.mark.parametrize("seed", [0, 1234])
+@pytest.mark.parametrize("eps", [1e-6])
+@pytest.mark.parametrize(("min_pcc", "max_atol"), ((0.9997, 0.45),))
+@pytest.mark.parametrize("input_width", [2048])
+@pytest.mark.parametrize("num_devices", [4])
+@pytest.mark.parametrize("input_df", [ttnn.bfloat16])
+@pytest.mark.parametrize("output_df", [ttnn.bfloat16])
+@pytest.mark.parametrize("weights_df", [ttnn.bfloat16])
+@pytest.mark.parametrize(("mean", "std"), ([0, 1],))
+@pytest.mark.parametrize("core_grid", ((8, 2),))
+@pytest.mark.parametrize("has_weight", [True, False])
+@pytest.mark.parametrize("has_bias", [True, False])
+def test_post_allgather_layernorm_optional_affine(
+    device,
+    input_width,
+    num_devices,
+    is_rmsnorm,
+    input_df,
+    output_df,
+    weights_df,
+    seed,
+    eps,
+    mean,
+    std,
+    min_pcc,
+    max_atol,
+    core_grid,
+    has_weight,
+    has_bias,
+):
+    run_post_allgather_layernorm(
+        device,
+        input_width,
+        num_devices,
+        is_rmsnorm,
+        input_df,
+        output_df,
+        weights_df,
+        seed,
+        eps,
+        mean,
+        std,
+        core_grid,
+        min_pcc,
+        max_atol,
+        has_weight=has_weight,
+        has_bias=has_bias,
+    )
 
 
 @pytest.mark.parametrize("is_rmsnorm", [True, False])

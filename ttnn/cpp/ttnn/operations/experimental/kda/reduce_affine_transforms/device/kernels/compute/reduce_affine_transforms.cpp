@@ -138,7 +138,8 @@ TT_KERNEL void compute(uint32_t group) {
         DataflowBuffer chronology(dfb::chronology_compute);
         topology = kda_chronology::receive(chronology);
     }
-    if (group >= topology.head_groups(G)) {
+    const uint32_t active = topology.head_groups(G);
+    if (group >= active) {
         return;
     }
     initial_a.wait_front(a_tiles);
@@ -148,7 +149,7 @@ TT_KERNEL void compute(uint32_t group) {
     initial_a.pop_front(a_tiles);
     initial_b.pop_front(b_tiles);
 
-    for (uint32_t distance = 1; distance < G; distance *= 2) {
+    for (uint32_t distance = 1; distance < active; distance *= 2) {
         // Every participating group produces a prefix consumed by a later group at a subsequent power-of-two
         // distance. Only the final group writes DRAM, but these intermediate prefixes are required inputs.
         if (group < distance) {
