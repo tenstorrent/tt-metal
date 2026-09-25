@@ -112,6 +112,18 @@ def test_small_q_chunks_avoided_when_balanced():
     assert q > 128
 
 
+@pytest.mark.parametrize("variant", VARIANTS)
+@pytest.mark.parametrize(
+    "name, heads, q_rows, k_rows", [("ltx_text_cross", 8, 4864, 32), ("ltx_a2v_cross", 8, 4864, 256), ("k128", 10, 4096, 128)]
+)
+def test_short_k_cross_avoids_large_q(name, heads, q_rows, k_rows, variant):
+    # One K block per Q chunk: per-core Q fill/drain and per-chunk K fill dominate, and the largest Q
+    # chunk that still fits one job per core (Q384) measured 1.1-1.2x the best blocking (Q128/Q192).
+    q, k, *_ = choose("dense", variant, heads, q_rows, k_rows)
+    assert q <= 192, (name, q, k)
+    assert k <= max(k_rows, 64)
+
+
 def test_l1_limits_chunks():
     # D256 at C/D: the frozen Q256/K512 does not fit; the choice must.
     for variant in ("C", "D"):
@@ -396,7 +408,9 @@ def test_exp_ring_auto_matches_explicit(blocking_mesh, heads, local, variant, re
         "exp_ring", options["precision"], inputs[0], inputs[1], program_config=auto_config, ring_size=2
     )
     record_property("chosen", str(chunks(resolved)))
-    assert resolved.q_chunk_size and resolved.k_chunk_size == 512
+    # FAST keeps the legacy exp ring kernels (K512 only); B-E take any supported K in the search range.
+    assert resolved.q_chunk_size
+    assert resolved.k_chunk_size == 512 if variant == "A" else 256 <= resolved.k_chunk_size <= 512
 
     def run(config):
         out, _joint, _lse = ttnn.transformer.exp_ring_joint_scaled_dot_product_attention(

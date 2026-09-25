@@ -45,6 +45,23 @@ uint32_t div_up(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 // docs/sdpa_precision_qualification.md (single P150b, 10 heads, 8192 x 8192, D128, full grid):
 // `c` from Q256/K512, `ck` from Q256/K256 (it also predicts Q320/K256 within 2%), `bw` from
 // Q128/K512.
+//
+// A core's makespan adds pipeline fill/drain the block roofline does not see (block_overhead): the
+// first Q chunk is read before any compute and the last output chunk is written after it (per core,
+// proportional to the Q chunk), and each Q chunk's first K/V block arrives before its first matmul
+// (per job, proportional to that block's keys). Both are negligible at long K (16+ K blocks per Q
+// chunk) and dominate short-K cross attention (one K block per Q chunk: LTX-2 text / A2V cross,
+// K32/K256), where the roofline alone ties every Q chunk that divides the heads evenly over the
+// cores and the tie went to the largest Q (e.g. FAST Q384/K32, 1.19x the best measured blocking).
+// Fitted on dense trace timings of 7 short/medium-K DiT shapes x FAST/COMPENSATED/BALANCED/
+// LOW_PRECISION(BFP8) over Q128-512 x K32-512 (bh-38, 1x2 mesh, 16 back-to-back ops per trace).
+constexpr double kQFillDrain = 12.0;  // x c x q_tiles x d_tiles / 4, once per core
+constexpr double kKFill = 0.5;        // x bw x (first K block's tiles) x d_tiles / 4, once per Q chunk
+// Dense/joint paired BF16 recipes (B, E) with an odd Q chunk run a single-row tail group and a
+// size-optimized pack thread; measured 1.1-1.2x the per-row cost of the neighbouring even chunks,
+// beyond the size-optimized penalty below. (Not applied to ring: its measurements are mixed, e.g.
+// Wan 480p 8x4 LOW_PRECISION BFP4 Q224 is 4% faster than Q256 while B/BFP8 are 1-2% slower.)
+constexpr double kPairedOddQPenalty = 1.10;
 struct BlockCostModel {
     double c;
     double ck;
@@ -84,15 +101,33 @@ constexpr double kRingGenericGeometryPenalty = 1.05;
 double subblock_penalty(uint32_t width) { return width >= 4 ? 1.0 : width == 2 ? 1.10 : 1.30; }
 
 double block_cost(
-    const PrecisionPolicy& policy, uint32_t q_tiles, uint32_t k_tiles, uint32_t d_tiles, const RecipeBuild& build) {
+    const PrecisionPolicy& policy,
+    uint32_t q_tiles,
+    uint32_t k_tiles,
+    uint32_t d_tiles,
+    const RecipeBuild& build,
+    bool dense) {
     const auto m = block_cost_model(policy);
     const double d = d_tiles / 4.0;
-    double compute = m.c * (static_cast<double>(q_tiles) * k_tiles * d + m.ck * q_tiles * d);
-    compute *= std::max(subblock_penalty(build.qk_width), subblock_penalty(build.pv_width));
+    // The q*k*d term is the QK and PV matmuls in equal parts; each pays its own subblock-width penalty
+    // (a one-tile K chunk narrows QK only, so it does not slow PV or the softmax state work).
+    const double matmul = 0.5 * (subblock_penalty(build.qk_width) + subblock_penalty(build.pv_width));
+    double compute = m.c * (static_cast<double>(q_tiles) * k_tiles * d * matmul + m.ck * q_tiles * d);
     if (build.size_optimized) {
         compute *= kSizeOptimizedPenalty;
     }
+    if (dense && policy.selection.recipe != Recipe::A && !policy.fp32_destination && q_tiles % 2 != 0) {
+        compute *= kPairedOddQPenalty;
+    }
     return std::max(compute, m.bw * k_tiles * d);
+}
+
+// Pipeline fill/drain of one core running `jobs` Q chunks (see kQFillDrain / kKFill). `first_k_tiles`
+// is the K tiles of a Q chunk's first K/V block (the chunk, or the whole sequence when shorter).
+double block_overhead(const PrecisionPolicy& policy, uint32_t q_tiles, uint32_t first_k_tiles, uint32_t d_tiles, uint32_t jobs) {
+    const auto m = block_cost_model(policy);
+    const double d = d_tiles / 4.0;
+    return kQFillDrain * m.c * q_tiles * d + kKFill * jobs * m.bw * first_k_tiles * d;
 }
 
 uint64_t cb_bytes(const tt::tt_metal::ProgramDescriptor& program) {
@@ -382,16 +417,19 @@ std::vector<RecipeBlocking> recipe_blocking_candidates(const RecipeBlockingProbl
                 build.size_optimized = true;  // the factory's small-kernel-config-buffer build flags
                 build.generic_geometry = true;
             }
-            double block = block_cost(p.policy, qt, kt, p.d_tiles, build);
+            double block = block_cost(p.policy, qt, kt, p.d_tiles, build, dense);
             if (!dense && build.generic_geometry) {
                 block *= kRingGenericGeometryPenalty;
             }
+            // K tiles of a Q chunk's first K/V block: the chunk, or the whole (primary) sequence when shorter.
+            const uint32_t first_k_tiles = std::min(kt, std::max(1u, div_up(p.k_rows, kTile)));
             auto admit = [&](uint32_t jobs, uint32_t k_blocks, CoreCoord grid, const RecipeL1Context& context) {
                 const auto l1 = recipe_l1_bytes(p.op, p.policy, qt, kt, p.d_tiles, context);
                 if (l1.minimum > p.l1_bytes) {
                     return;
                 }
-                double cost = static_cast<double>(jobs) * k_blocks * block;
+                double cost = static_cast<double>(jobs) * k_blocks * block +
+                              block_overhead(p.policy, qt, first_k_tiles, p.d_tiles, jobs);
                 if (l1.preferred > p.l1_bytes) {
                     cost *= kFallbackPenalty;
                 }
