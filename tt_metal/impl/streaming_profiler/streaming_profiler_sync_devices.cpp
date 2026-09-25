@@ -654,7 +654,7 @@ bool SyncDevices::launch_link_ends(const CaptureContext::Link& L, uint32_t link_
         "tt_metal/tools/profiler/sync/eth_ptp_link_receiver.cpp",
         L.eth_b,
         EthernetConfig{.noc = NOC::RISCV_0_default});
-    SetRuntimeArgs(*ps, kid_s, L.eth_a, {link_l1, kernel_profiler::kLinkSyncPaceTicks});
+    SetRuntimeArgs(*ps, kid_s, L.eth_a, {link_l1});
     SetRuntimeArgs(*pr, kid_r, L.eth_b, {link_l1});
     try {
         detail::CompileProgram(out.dev_a, *ps, /*force_slow_dispatch=*/true);

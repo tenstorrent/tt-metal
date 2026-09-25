@@ -130,7 +130,7 @@ static constexpr std::uint32_t kTileNetScratchBytes = kTileNetHist + 2 * 4 * kTi
 // eth core's unreserved region with the control word inside it (done at +4, diagnostics from +8), and the round
 // period in refclk ticks.
 static constexpr std::uint32_t kEthRefclkHz = 50'000'000u;
-static constexpr std::uint32_t kLinkSyncStampUnitsPerNs = 4;
+static constexpr std::uint32_t kLinkSyncStampUnitsPerNs = 64;
 static constexpr std::uint32_t kLinkSyncL1Bytes = 800;
 static constexpr std::uint32_t kLinkSyncCtlOffset = 480;
 static constexpr std::uint32_t kLinkSyncCtlRun = 1, kLinkSyncCtlStop = 2;

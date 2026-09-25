@@ -2,9 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// One end of the 1588 stamping test: opens a StampSession, handshakes with the peer, then each round the initiator
-// sends a frame and the peer echoes it, each end keeping its frame's egress stamp and the other's frame's ingress
-// stamp; the session is closed and the registers it borrows are read back. Compile args: initiator (1) or echo (0).
+// One end of the 1588 stamping test: starts the PTP timer and installs the stamp rule and header row, handshakes with
+// the peer, then each round the initiator sends a frame and the peer echoes it, each end keeping its frame's egress
+// stamp (two-step FIFO) and the other's frame's ingress stamp; the rule and row are removed and the registers they
+// borrowed are read back. Compile args: initiator (1) or echo (0).
 // Runtime arg: the unreserved L1 base (eth_ptp_stamps.hpp's layout).
 
 #include <cstdint>
@@ -15,18 +16,20 @@
 #include "eth_ptp_stamps.hpp"
 
 namespace eth_ptp = tt::tt_metal::eth_ptp;
-namespace raw = eth_ptp::raw;
 using namespace eth_ptp_stamps;
 
 constexpr bool kInitiator = get_compile_time_arg_val(0) != 0;
-using Session = eth_ptp::StampSession<2, 3, 63, 0x15>;
-static Session g_sess;
+constexpr uint32_t kTxq = 2, kLabel = 0x15;
+constexpr eth_ptp::TxQueue<kTxq> g_txq{};
+static eth_ptp::PtpTimer g_timer;
+static eth_ptp::TxHeaderRow<kTxq, 3> g_header;
+static eth_ptp::RxStampRule<63, kLabel> g_rule;
 static constexpr uint32_t kHandshake = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 static constexpr uint32_t kSpins = 1u << 20;
 
 inline void send(uint32_t addr) {
-    internal_::eth_send_packet<false>(Session::kTxq, addr >> 4, addr >> 4, kFrameBytes >> 4);
-    while (internal_::eth_txq_is_busy(Session::kTxq)) {
+    internal_::eth_send_packet<false>(kTxq, addr >> 4, addr >> 4, kFrameBytes >> 4);
+    while (internal_::eth_txq_is_busy(kTxq)) {
     }
 }
 
@@ -35,13 +38,13 @@ inline void send(uint32_t addr) {
 // cannot take the frame's tag. The request is disarmed as soon as the frame's stamp is in: armed ~6 us past it, the
 // queue's idle keepalive is stamped under the tag too.
 bool send_stamped(uint32_t pilot, uint32_t frame, uint64_t tag, uint64_t& ts, uint32_t& extra) {
-    const uint32_t units0 = raw::txq_word_cnt(Session::kTxq);
-    eth_ptp::tx_header_row_select(g_sess, true);
+    const uint32_t units0 = g_txq.words_sent();
+    g_header.select(false);
     send(pilot);
-    eth_ptp::tx_header_row_select(g_sess, false);
-    for (uint32_t s = 0; raw::txq_word_cnt(Session::kTxq) - units0 < 2 && s < kSpins; s++) {
+    g_header.select(true);
+    for (uint32_t s = 0; g_txq.words_sent() - units0 < 2 && s < kSpins; s++) {
     }
-    eth_ptp::stamps_arm(g_sess, tag);
+    g_txq.arm_two_step(tag);
     send(frame);
     uint32_t n = 0;
     const auto first = [&](uint64_t t) {
@@ -50,16 +53,16 @@ bool send_stamped(uint32_t pilot, uint32_t frame, uint64_t tag, uint64_t& ts, ui
         }
     };
     for (uint32_t s = 0; n == 0 && s < kSpins; s++) {
-        eth_ptp::tx_stamps_drain(static_cast<uint32_t>(tag), first);
+        eth_ptp::TxStampFifo{}.drain(static_cast<uint32_t>(tag), first);
     }
-    eth_ptp::stamps_disarm(g_sess);
+    g_txq.disarm();
     extra += n > 1 ? n - 1 : 0;
     return n != 0;
 }
 
 bool take_ingress(uint64_t& ts, uint32_t& extra) {
     uint32_t n = 0;
-    eth_ptp::rx_stamps_drain(g_sess, [&](uint64_t t) {
+    eth_ptp::RxStampFifo{}.drain<kLabel>([&](uint64_t t) {
         if (n++ == 0) {
             ts = t;
         }
@@ -87,12 +90,15 @@ void kernel_main() {
     frame->bytes_sent = 0;
     frame->receiver_ack = 0;
     res->done = 0;
-    res->sel_before = raw::rd(eth_ptp::txq_reg(Session::kTxq, eth_ptp::kTxqPktCfgSelSwOff));
-    res->no_match_before = raw::rd(eth_ptp::kRxFlNoMatchActions);
-    res->timer_ok = g_sess.begin();
-    eth_ptp::raw::mac_tx_fifo_drain();
-    res->ptp_offset_lo = static_cast<uint32_t>(g_sess.ptp_offset_64);
-    res->ptp_offset_hi = static_cast<uint32_t>(static_cast<uint64_t>(g_sess.ptp_offset_64) >> 32);
+    res->sel_before = eth_ptp::rd(eth_ptp::txq_reg(kTxq, eth_ptp::kTxqPktCfgSelSwOff));
+    res->no_match_before = eth_ptp::rd(eth_ptp::kRxFlNoMatchActions);
+    res->timer_ok = g_timer.start();
+    g_rule.install();
+    g_header.install();
+    g_txq.disarm();
+    eth_ptp::TxStampFifo{}.clear();
+    res->ptp_offset_lo = static_cast<uint32_t>(g_timer.offset_64);
+    res->ptp_offset_hi = static_cast<uint32_t>(static_cast<uint64_t>(g_timer.offset_64) >> 32);
 
     if constexpr (kInitiator) {
         eth_send_bytes(kHandshake, kHandshake, 16);
@@ -128,9 +134,11 @@ void kernel_main() {
         }
     }
 
-    g_sess.end();
-    res->sel_after = raw::rd(eth_ptp::txq_reg(Session::kTxq, eth_ptp::kTxqPktCfgSelSwOff));
-    res->no_match_after = raw::rd(eth_ptp::kRxFlNoMatchActions);
+    g_txq.disarm();
+    g_header.restore();
+    g_rule.remove();
+    res->sel_after = eth_ptp::rd(eth_ptp::txq_reg(kTxq, eth_ptp::kTxqPktCfgSelSwOff));
+    res->no_match_after = eth_ptp::rd(eth_ptp::kRxFlNoMatchActions);
     res->tx_missing = tx_missing;
     res->tx_extra = tx_extra;
     res->rx_missing = rx_missing;

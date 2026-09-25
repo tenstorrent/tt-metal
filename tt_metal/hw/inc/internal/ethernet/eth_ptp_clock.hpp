@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The Blackhole Ethernet tile's clocks: the ERISC wall clock (AICLK ticks) and the eth_ctrl PTP timer's two counters,
-// CFR (refclk ticks, free-running from power-on) and PTP64NS (ns, running once ptp_timer_start() in eth_ptp.hpp
+// CFR (refclk ticks, free-running from power-on) and PTP64NS (ns, running once PtpTimer::start() in eth_ptp.hpp
 // enables it). Reading a counter's LO half captures its HI half (tt_ptp_timer.sv; for the wall clock the captured
 // half is WALL_CLOCK_1_AT, WALL_CLOCK_1 being live). Usable from idle and active eth kernels alike; the stamping
 // hardware is eth_ptp.hpp.
@@ -45,6 +45,14 @@ constexpr uint32_t kUpdateStatTsAck = 1u << 9;
 
 FORCE_INLINE uint32_t rd(uint32_t addr) { return *reinterpret_cast<volatile uint32_t*>(addr); }
 FORCE_INLINE void wr(uint32_t addr, uint32_t v) { *reinterpret_cast<volatile uint32_t*>(addr) = v; }
+
+// One step of a xorshift32 walk, any nonzero state.
+FORCE_INLINE uint32_t xorshift(uint32_t& x) {
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    return x;
+}
 
 // LO first: the read latches HI.
 FORCE_INLINE uint64_t read_cfr() {
@@ -89,15 +97,14 @@ FORCE_INLINE Instant read_instant() {
 // refclk reads that differ is within a cycle of the update, with no read-latency term. The ERISC sees the refclk
 // move every four ticks and the three reads span a couple of cycles, so a spin catches one in ~50, about 5 us.
 // The spin is bounded only so a dead refclk cannot hold the core; then the plain instant stands.
-// Each iteration is padded by a pseudo-random 0-15 cycles (phase_walk): with a fixed iteration length, at an AICLK
-// where the 80 ns between updates is a whole number of iterations, the update lands at the same phase of every one
-// and, outside the bracket, is never caught -- whole half seconds without a sample at 1237.5 and 1306.25 MHz; a
+// Each iteration is padded by a pseudo-random 0-15 turns of a nop loop (phase_walk): with a fixed iteration length, at
+// an AICLK where the 80 ns between updates is a whole number of iterations, the update lands at the same phase of every
+// one and, outside the bracket, is never caught -- whole half seconds without a sample at 1237.5 and 1306.25 MHz; a
 // short regular walk locked the same way at 1350 MHz. `x` is the walk's state, any nonzero seed.
 FORCE_INLINE void phase_walk(uint32_t& x) {
-    x ^= x << 13;
-    x ^= x >> 17;
-    x ^= x << 5;
-    for (uint32_t d = x & 15u; d != 0; d--) {
+    // A loop even at -O3, where complete unrolling makes a 180-byte nop sled of every copy.
+#pragma GCC unroll 1
+    for (uint32_t d = xorshift(x) & 15u; d != 0; d--) {
         asm volatile("nop");
     }
 }

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The Blackhole eth tile's IEEE-1588 stamping (hw/inc/internal/ethernet/eth_ptp.hpp) on every link between local
-// chips: a StampSession opens and closes on both ends and gives back what it borrowed, every frame of a two-way
+// chips: both ends borrow the stamp rule and header row and give back what they changed, every frame of a two-way
 // exchange gets its egress and ingress stamps, and the stamps describe a plausible link.
 
 #include <gtest/gtest.h>

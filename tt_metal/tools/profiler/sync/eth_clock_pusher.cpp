@@ -369,10 +369,7 @@ FORCE_INLINE uint32_t pass(uint32_t (&w)[3], uint32_t (&o)[4]) {
 }
 __attribute__((noinline)) uint32_t pass_out_of_line(uint32_t (&w)[3], uint32_t (&o)[4]) { return pass(w, o); }
 FORCE_INLINE void pad(uint32_t& walk) {
-    walk ^= walk << 13;
-    walk ^= walk >> 17;
-    walk ^= walk << 5;
-    const uint32_t n = ((walk >> 16) * 6u) >> 16;
+    const uint32_t n = ((eth_ptp::xorshift(walk) >> 16) * 6u) >> 16;
     asm volatile(
         ".option push\n\t"
         ".option norvc\n\t"
