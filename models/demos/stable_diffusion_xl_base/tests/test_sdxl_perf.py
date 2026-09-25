@@ -128,7 +128,8 @@ DEVICE_PERF_EXPECTATIONS = {
     },
     "vae_decode_1024x1024": {
         "wormhole": 663_083_865,
-        "blackhole": 267_498_780,
+        # bh_p150 run 2026-09-25 (260.30M) on #55698; previous target 267.50M
+        "blackhole": 260_304_000,
     },
     "vae_decode_512x512": {
         "wormhole": 167_473_541,
@@ -136,7 +137,8 @@ DEVICE_PERF_EXPECTATIONS = {
     },
     "vae_encode_1024x1024": {
         "wormhole": 328_968_938,  # Note: this is an average value of 30 test runs due to high variability
-        "blackhole": 141_175_333,
+        # bh_p150 run 2026-09-25 (137.84M) on #55698; previous target 141.18M
+        "blackhole": 137_841_000,
     },
     "vae_encode_512x512": {
         "wormhole": 82_885_000,  # mean of 10 scheduled wh_n150 runs 2026-09-05..09-14 (82.69M..83.09M, sigma 0.16%)
