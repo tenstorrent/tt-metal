@@ -35,7 +35,7 @@ def _timed(fn, mesh, reps=2):
 @pytest.mark.parametrize("layer", [1, 14, 27])
 def test_moe_unified(mesh_device, cfg, layer_weights, golden_2k, record, layer):
     w = layer_weights(layer)
-    moe = TtMoEUnified(mesh_device, cfg, layer, w, seq_len=golden_2k.chunk)
+    moe = TtMoEUnified(mesh_device, cfg, layer, w)
     for c in range(golden_2k.seq // golden_2k.chunk):
         g = golden_2k.layer(c, layer)
         x = to_mesh_activation(mesh_device, g["ffn_norm"].float())
