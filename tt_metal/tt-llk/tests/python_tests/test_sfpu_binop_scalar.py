@@ -5,7 +5,7 @@ import struct
 
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import ScalarBinopGolden, get_golden_generator
 from helpers.llk_params import (
@@ -15,6 +15,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
+from helpers.sfpu_accuracy_budget import accuracy_contract
 from helpers.sfpu_domains import (
     SPECIALS_READY_OPS,
     edge_spec,
@@ -137,8 +138,28 @@ def _run_sfpu_binop_scalar(
     golden_tensor = torch.tensor(golden, dtype=torch_format).flatten()
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()
 
+    # The same lookup the unary, binary and ternary drivers make, and the same arm: the
+    # registry's *tolerance*, not its step budgets. This file had no lookup at all, so
+    # the five Scalar* ops could not even pick up a declared tolerance. The budgets stay
+    # with the exhaustive sweep that measured them -- one derived from a whole format is
+    # far wider than this driver's sampled domain, so enforcing it here would loosen the
+    # gate rather than tighten it.
+    contract = accuracy_contract(
+        mathop,
+        output_format=formats.output_format,
+        input_format=formats.input_format,
+        # Fixed, because this kernel compiles APPROX_MODE(ApproximationMode.No). Left
+        # unset, a row keyed `approx: "No"` would not match and would fall back to the
+        # default tolerance, and --ulp-measure would tag the reading `approx: null`.
+        approx_mode=ApproximationMode.No,
+        dest_acc=dest_acc,
+        arch=get_chip_architecture(),
+    )
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
+        golden_tensor,
+        res_tensor,
+        formats.output_format,
+        **contract.tolerance_kwargs(),
     ), "Assert against golden failed"
 
 

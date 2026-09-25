@@ -112,42 +112,40 @@ BLOCK_FORMATS_WITHOUT_ULP = sorted(
 # ── The contract's own coherence ──────────────────────────────────────────────
 
 
-def test_a_ulp_contract_needs_a_budget():
-    with _refuses("needs max_ulp"):
-        AccuracyContract(metric=Metric.ULP)
-
-
-def test_a_ulp_contract_rejects_a_tolerance():
-    """Both cannot apply, and an entry carrying both is a half-finished conversion that
-    would read as deliberate."""
-    with _refuses("silently ignored"):
-        AccuracyContract(max_ulp=1, atol=0.13)
-
-
-def test_a_tolerance_contract_rejects_a_budget():
-    with _refuses("belong to the ulp metric"):
-        AccuracyContract(metric=Metric.TOLERANCE, max_ulp=1)
-
-
-def test_a_negative_budget_is_rejected():
-    with _refuses("must not be negative"):
-        AccuracyContract(max_ulp=-1)
-
-
-@pytest.mark.parametrize("bogus", [True, 1.0, "3"], ids=repr)
-def test_a_budget_that_is_not_an_int_is_rejected(bogus):
-    """YAML 1.1 reads ``true`` as a bool -- and bool is an int, so it would pass the sign
-    check and enforce a 1-step budget; ``1.0e+1`` lands as a float."""
-    with _refuses("must be an int step count"):
-        AccuracyContract(max_ulp=bogus)
-
-
-@pytest.mark.parametrize("bogus", [True, float("nan"), float("inf")], ids=repr)
-def test_a_tolerance_field_must_be_a_finite_number(bogus):
-    """``atol: yes`` would apply as 1.0; ``.nan`` is silently ignored by ``passed_test``
-    and ``.inf`` makes its gate unconditional."""
-    with _refuses("must be (a number|finite)"):
-        AccuracyContract(metric=Metric.TOLERANCE, atol=bogus)
+# A half-finished conversion is the case these cover: an entry carrying both metrics,
+# or neither's required field, reads as deliberate and would gate on whichever arm
+# `passed_test` happens to take.
+@pytest.mark.parametrize(
+    "kwargs, match",
+    [
+        ({"metric": Metric.ULP}, "needs max_ulp"),
+        ({"max_ulp": 1, "atol": 0.13}, "silently ignored"),
+        ({"metric": Metric.TOLERANCE, "max_ulp": 1}, "belong to the ulp metric"),
+        ({"max_ulp": -1}, "must not be negative"),
+        # YAML 1.1 reads `true` as a bool, and bool is an int; `1.0e+1` lands as a float.
+        ({"max_ulp": True}, "must be an int step count"),
+        ({"max_ulp": 1.0}, "must be an int step count"),
+        # `atol: yes` would apply as 1.0; `.nan` is silently ignored by passed_test and
+        # `.inf` makes its gate unconditional.
+        ({"metric": Metric.TOLERANCE, "atol": True}, "must be a number"),
+        ({"metric": Metric.TOLERANCE, "atol": float("nan")}, "must be finite"),
+        ({"metric": Metric.TOLERANCE, "rtol": float("inf")}, "must be finite"),
+    ],
+    ids=[
+        "no-budget",
+        "both-metrics",
+        "budget-on-tolerance",
+        "negative-budget",
+        "bool-budget",
+        "float-budget",
+        "bool-atol",
+        "nan-atol",
+        "inf-rtol",
+    ],
+)
+def test_an_incoherent_contract_is_refused(kwargs, match):
+    with _refuses(match):
+        AccuracyContract(**kwargs)
 
 
 def test_the_metric_is_a_closed_set():
@@ -266,27 +264,6 @@ def test_a_more_specific_key_wins_over_the_default():
     )
 
 
-def test_specificity_counts_every_set_dimension():
-    table = {
-        BudgetKey(output_format=DataFormat.Float32): AccuracyContract(max_ulp=4),
-        BudgetKey(
-            output_format=DataFormat.Float32, dest_acc=DestAccumulation.No
-        ): AccuracyContract(max_ulp=8),
-    }
-    resolved = resolve_contract(
-        table,
-        BudgetKey(output_format=DataFormat.Float32, dest_acc=DestAccumulation.No),
-        label="op",
-    )
-    assert resolved.max_ulp == 8
-    resolved = resolve_contract(
-        table,
-        BudgetKey(output_format=DataFormat.Float32, dest_acc=DestAccumulation.Yes),
-        label="op",
-    )
-    assert resolved.max_ulp == 4
-
-
 def test_a_per_arch_override_beats_the_shared_entry():
     """Open question 4's answer: one value plus overrides, rather than per-arch from the
     start. WH and BH differ in available SFPU instructions and therefore in kernel, so the
@@ -317,6 +294,87 @@ def test_an_unset_query_dimension_only_matches_a_wildcard():
     )
 
 
+def test_specificity_counts_every_set_dimension():
+    """The only comparison of two *non-DEFAULT* keys: a 2-field key beating a 1-field
+    one, and the 1-field one winning where the 2-field key does not match.
+
+    Load-bearing here as it was not before: the ``Fill`` block now stacks 1-, 2- and
+    4-field keys on one op, and ``resolve_contract`` raises only on an equal-specificity
+    tie -- so a miscount would silently repoint budgets while every bounds-only guard in
+    this file still passed.
+    """
+    table = {
+        BudgetKey(output_format=DataFormat.Float32): AccuracyContract(max_ulp=4),
+        BudgetKey(
+            output_format=DataFormat.Float32, dest_acc=DestAccumulation.No
+        ): AccuracyContract(max_ulp=8),
+    }
+    resolved = resolve_contract(
+        table,
+        BudgetKey(output_format=DataFormat.Float32, dest_acc=DestAccumulation.No),
+        label="op",
+    )
+    assert resolved.max_ulp == 8
+    resolved = resolve_contract(
+        table,
+        BudgetKey(output_format=DataFormat.Float32, dest_acc=DestAccumulation.Yes),
+        label="op",
+    )
+    assert resolved.max_ulp == 4
+
+
+def test_a_key_describes_itself_for_an_error_message():
+    assert DEFAULT.describe() == "DEFAULT"
+    described = BudgetKey(
+        output_format=DataFormat.Float32, dest_acc=DestAccumulation.No
+    ).describe()
+    assert "output_format" in described and "dest_acc" in described
+
+
+def test_a_query_left_over_from_another_test_is_replaced_not_flagged(monkeypatch):
+    """`--ulp-measure` associates a reading with the variant `accuracy_contract` was
+    last asked about, and refuses to record when two lookups race one comparison. That
+    has to mean two lookups *in one test*.
+
+    The exhaustive sweep resolves a contract and then skips the cell when it is on the
+    tolerance metric, leaving a query nobody consumed. Treating that as ambiguity threw
+    away the next test's reading: measured, it dropped all 40 readings that followed a
+    skip in a 130-test run.
+    """
+    import helpers.sfpu_accuracy_budget as budget
+
+    def resolve(test_id):
+        monkeypatch.setenv("PYTEST_CURRENT_TEST", f"{test_id} (call)")
+        accuracy_contract(
+            MathOperation.Abs,
+            output_format=DataFormat.Float16_b,
+            arch=MEASURED_ARCH,
+        )
+
+    budget.LAST_QUERY = None
+    budget.PENDING_AMBIGUOUS = False
+
+    # A cell that resolved and then skipped, followed by a different test: ordinary.
+    resolve("t_one")
+    resolve("t_two")
+    assert not budget.PENDING_AMBIGUOUS
+    assert budget.LAST_QUERY[0] == "t_two"
+
+    # Two lookups inside one test with nothing consumed between them: not ordinary.
+    resolve("t_three")
+    resolve("t_three")
+    assert budget.PENDING_AMBIGUOUS
+
+    budget.LAST_QUERY = None
+    budget.PENDING_AMBIGUOUS = False
+
+
+def test_enrolled_ops_is_sorted_and_stable():
+    ops = enrolled_ops()
+    assert list(ops) == sorted(ops, key=lambda op: op.name)
+    assert len(set(ops)) == len(ops)
+
+
 def test_equally_specific_keys_are_an_error_not_a_tie_break():
     """Two keys, one dimension each, both matching: the table's iteration order must not
     decide a budget."""
@@ -339,14 +397,6 @@ def test_an_empty_table_falls_back_to_the_tolerance_metric():
         resolve_contract({}, BudgetKey(output_format=DataFormat.Float32), label="op")
         is TOLERANCE_CONTRACT
     )
-
-
-def test_a_key_describes_itself_for_an_error_message():
-    assert DEFAULT.describe() == "DEFAULT"
-    described = BudgetKey(
-        output_format=DataFormat.Float32, dest_acc=DestAccumulation.No
-    ).describe()
-    assert "output_format" in described and "dest_acc" in described
 
 
 # ── The live registry ─────────────────────────────────────────────────────────
@@ -570,17 +620,17 @@ ONLY_EVER_TOLERANCE = frozenset(
         MathOperation.GeluAppx,
         MathOperation.SfpuElwpow,
         MathOperation.SfpuXlogy,
-        # Past the usable ceiling on every float column, so the tolerance they would
-        # replace is the tighter bound. Measurements are on their YAML rows.
-        MathOperation.GeluTanh,
-        MathOperation.Tanhshrink,
-        MathOperation.SfpuElwmul,
     }
 )
 # Sign and Heaviside are not here, despite the -0.0 divergence: WH's bit-pattern compare
 # reads -0.0 as negative, so a 0-ULP budget on a cell where that lane is in play would
 # fail a kernel behaving as specified. The whole-format sweep measures each cell
 # separately, and both carry a budget on the cells where that lane is not in play.
+# GeluTanh, Tanhshrink and SfpuElwmul used to sit here, on a per-op-per-format maximum
+# that was past the ceiling everywhere. The full sweep measures each variant separately,
+# and some of their cells are well inside it -- GeluTanh's Float32 worst lane is 8.7e8
+# steps, but not in every cell. They now carry a budget where one is meaningful and fall
+# through to tolerance elsewhere, which is what per-variant keying is for.
 
 
 def test_every_enrolled_op_resolves_to_something_usable_on_a_float_format():
@@ -591,7 +641,7 @@ def test_every_enrolled_op_resolves_to_something_usable_on_a_float_format():
     ``TOLERANCE_CONTRACT`` and the ULP branch below never ran for any — a test named
     "every enrolled op" exercising only the nine that predate them.
     """
-    assert len(_TRANSCENDENTALS_ENROLLED_WITH_AN_INPUT_FORMAT) == 54, sorted(
+    assert len(_TRANSCENDENTALS_ENROLLED_WITH_AN_INPUT_FORMAT) == 69, sorted(
         op.name for op in _TRANSCENDENTALS_ENROLLED_WITH_AN_INPUT_FORMAT
     )
     saw_ulp = set()
@@ -616,12 +666,6 @@ def test_every_enrolled_op_resolves_to_something_usable_on_a_float_format():
     assert (
         _TRANSCENDENTALS_ENROLLED_WITH_AN_INPUT_FORMAT - ONLY_EVER_TOLERANCE <= saw_ulp
     )
-
-
-def test_enrolled_ops_is_sorted_and_stable():
-    ops = enrolled_ops()
-    assert list(ops) == sorted(ops, key=lambda op: op.name)
-    assert len(set(ops)) == len(ops)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -903,6 +947,20 @@ def test_the_integer_valued_ops_are_the_only_ones_enrolled_on_bfp8_b():
         for _, fmt, contract in _every_variant(op)
         if fmt is DataFormat.Bfp8_b and contract.metric == Metric.ULP
     }
+    # The ceiling is necessary but not sufficient, and it is not the guard: every
+    # Bfp8_b cell already passes through `test_no_budget_exceeds_its_formats_usable_
+    # ceiling`, because `ULP_CAPABLE_FORMATS` includes Bfp8_b via `_ULP_PROXY_DTYPES`.
+    # A regeneration enrolling `Abs` at the 3 steps a sorted sweep reads would clear
+    # 25.6, clear provenance, and be exactly the failure this test is named for. So the
+    # bound is on *membership*, and it is an equality.
+    ceiling = usable_budget_ceiling(DataFormat.Bfp8_b)
+    for op in enrolled_ops():
+        for _, fmt, contract in _every_variant(op):
+            if fmt is DataFormat.Bfp8_b and contract.metric == Metric.ULP:
+                assert contract.max_ulp <= ceiling, (
+                    f"{op.name} carries a {contract.max_ulp}-step Bfp8_b budget against "
+                    f"a {ceiling:.0f}-step ceiling; past it the number gates nothing."
+                )
     assert enrolled_on_bfp8 == {
         MathOperation.Floor,
         MathOperation.Ceil,
@@ -910,12 +968,16 @@ def test_the_integer_valued_ops_are_the_only_ones_enrolled_on_bfp8_b():
         # Fill is block-friendly by a different mechanism from the three above, and a
         # stronger one: its output is a single constant, so every block is uniform
         # whatever the input held and the shared exponent is exact by construction.
-        # Threshold is *not* here. Its sampled 0 came from uniform(-5, 5) against
-        # THRESHOLD_T=5.0, where the pass-through branch never fires and the output is
-        # likewise the constant 10.0 -- but the exhaustive sweep, whose domain reaches
-        # past the threshold, reads 16545, so that 0 described the domain and not the op.
+        #
+        # Threshold is deliberately absent, and so is every op enrolled only through a
+        # sampled `{in: Bfp4_b, out: Bfp8_b}` or `{in: Float32, out: Bfp8_b}` row. Those
+        # 0s and 13-to-25s are the block exponent fitting a degenerate or narrow
+        # stimulus, not the op: Threshold's came from uniform(-5, 5) against
+        # THRESHOLD_T=5.0, where the pass-through branch never fires, while the
+        # exhaustive sweep reads 16545. They are recorded as tolerance with their
+        # measurements.
         MathOperation.Fill,
-    }
+    }, sorted(op.name for op in enrolled_on_bfp8)
 
 
 #: The input formats the unary driver pairs with a Bfp8_b *output* for the three

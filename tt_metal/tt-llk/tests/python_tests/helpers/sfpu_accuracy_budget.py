@@ -47,6 +47,34 @@ from .ulp import MANTISSA_BITS_FOR_ULP, MAX_MEANINGFUL_ULP, has_ulp_gate, ulp_dt
 #: to the tolerance metric until the sweep has been re-run there.
 MEASURED_ARCH = ChipArchitecture.WORMHOLE
 
+#: The variant :func:`accuracy_contract` was last asked about and that nothing has
+#: consumed yet, as ``(test_id, op, input_format, output_format, approx_mode,
+#: dest_acc)``. Written on every call and read only by the ``--ulp-measure`` collector;
+#: nothing here depends on it.
+#:
+#: Call order alone cannot associate a reading with a variant -- two lookups followed by
+#: one comparison would file it under the second op, and a lookup with no comparison
+#: would leak into a later test. So the query carries the test it was made in, and a
+#: second lookup arriving before the first is consumed *within the same test* sets
+#: :data:`PENDING_AMBIGUOUS` rather than overwriting silently. The collector then
+#: records nothing at all, which costs a datapoint; filing it under the wrong variant
+#: would cost a budget.
+#:
+#: Within the same test, specifically. A query left unconsumed by a *previous* test is
+#: ordinary and common -- the exhaustive sweep resolves a contract and then skips the
+#: cell when it is on the tolerance metric -- and treating that as ambiguity discarded
+#: the next test's reading. Measured: it silently dropped every one of the 40 readings
+#: that followed a skip in an 130-test run.
+LAST_QUERY: Optional[Tuple[Any, ...]] = None
+PENDING_AMBIGUOUS: bool = False
+
+
+def _current_test() -> str:
+    """The test a query was made in, so a stale one cannot cross a test boundary."""
+    import os
+
+    return os.environ.get("PYTEST_CURRENT_TEST", "").rsplit(" (", 1)[0]
+
 
 class Metric(Enum):
     """Which gate a contract is written against: a closed two-member set, so there is no
@@ -413,6 +441,29 @@ def accuracy_contract(
         dest_acc=dest_acc,
         arch=arch,
     )
+
+    # The variant just asked about, for --ulp-measure to tag its reading with. The
+    # driver resolves a contract immediately before it compares, so this is the exact
+    # key the comparison belongs to -- which a test id cannot always give: the dedicated
+    # per-op sweeps (div, signbit) name their op in the function, not the parameters.
+    # Overwriting an unconsumed query means the association is no longer one-to-one; see
+    # LAST_QUERY.
+    global LAST_QUERY, PENDING_AMBIGUOUS
+    here = _current_test()
+    if LAST_QUERY is not None and LAST_QUERY[0] == here:
+        # Two lookups, one test, nothing consumed between them: the association is no
+        # longer one-to-one. A stale query from an earlier test is not that -- it is a
+        # cell that resolved to tolerance and skipped -- so it is replaced, not flagged.
+        PENDING_AMBIGUOUS = True
+    LAST_QUERY = (
+        here,
+        op.name,
+        input_format,
+        output_format,
+        approx_mode,
+        dest_acc,
+    )
+
     table = _SFPU_ACCURACY_BUDGET.get(op)
     if table is None:
         return TOLERANCE_CONTRACT
@@ -449,8 +500,10 @@ def usable_budget_ceiling(output_format: DataFormat) -> float:
     ``MAX_MEANINGFUL_ULP`` is the wrong bound: ``2**mantissa_bits`` is roughly 100%
     relative error, so it admits budgets that gate nothing -- and since ``passed_test``
     returns on the ULP verdict and skips both ``isclose`` and PCC, such a budget *is* the
-    whole gate. Measured, approximate tanh on an fp32 output reached 2,949,120 steps,
-    about 35% relative error, on an op bounded in (-1, 1).
+    whole gate. Measured, approximate tanh on an fp32 output reaches 655,360 steps, about
+    7.8% relative error, on an op bounded in (-1, 1) -- and that is *after* #57179 traded
+    the 3-segment SFPLUT for a 6-entry table; the same measurement was 2,949,120 steps,
+    about 35%, before it. A bound that admits either is not a gate.
 
     The real bound is the ``rtol`` half of the ``isclose`` this replaces, itself a step
     budget at large magnitude: about 419,430 steps for fp32, 51 for fp16, 6 for bf16.

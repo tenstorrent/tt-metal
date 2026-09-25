@@ -280,7 +280,8 @@ def _verdict(measured: int, out_fmt: str) -> Tuple[str, int]:
     """What the table should say for a measured worst lane on *out_fmt*.
 
     ``("ulp", budget)`` while a step budget is still *stronger* than the tolerance it
-    replaces, and ``("tolerance", measured)`` once it is not. The bound is the table's
+    replaces, and ``("tolerance", budget)`` once it is not -- the budget either way, so
+    the row's comment can name the number that actually crossed the line. The bound is the table's
     own ``usable_budget_ceiling``: ~419,430 steps for fp32, 51 for fp16, 6 for bf16, 25
     for Bfp8_b. Decided per cell and before collapsing, because it depends on the output
     format and collapsing may drop it.
@@ -307,7 +308,10 @@ def _verdict(measured: int, out_fmt: str) -> Tuple[str, int]:
         return ("block", measured)
     budget = 0 if measured == 0 else math.ceil(measured * EMIT_HEADROOM)
     if budget > usable_budget_ceiling(DataFormat[out_fmt]):
-        return ("tolerance", measured)
+        # The *budget* is what crosses the line, not the measurement: with 1.1x headroom
+        # a measured 6 becomes a budget of 7, past bf16's 6.4. Writing "max 6 ULP, past
+        # this output's usable ceiling" then made a checkable claim that is false.
+        return ("tolerance", budget)
     return ("ulp", budget)
 
 
@@ -361,17 +365,38 @@ def _collapse(decided: Dict[Tuple, Tuple]) -> List[dict]:
     return rows
 
 
+#: What a key line says about the run every emitted row below it came from. The sweep
+#: identity is identical on every one of them -- ~63 characters times ~2,000 rows, a
+#: quarter of the file -- so it is stated once per op instead. "except where a row says
+#: otherwise" is not hedging: rows this run did not supersede keep their own suffix.
+_MEASURED_BY = "measured by: {suffix}, except where a row says otherwise"
+
+#: The same clause, for stripping a previous run's before writing this one's. Without
+#: it a second `--ulp-emit` appends rather than replaces, and the key line accumulates
+#: one stale run identity per regeneration.
+_MEASURED_BY_RE = re.compile(
+    r";?\s*measured by: .*?, except where a row says otherwise"
+)
+
+
 def _render(key_line: str, rows: List[dict], suffix: str) -> List[str]:
     """One op's block: each row with its verdict, and the measurement behind it.
 
-    *key_line* is passed through verbatim. Several ops carry their measurement as a
+    *key_line* keeps whatever it already said. Several ops carry their measurement as a
     header comment on that line -- `Fill:  # 0 ULP, 115 variants` -- and it is the
     provenance for every row of theirs this sweep does not reach. Rewriting the key as
     a bare `Fill:` dropped it, and the guard that every budget names its measurement
-    then failed on rows that had one all along.
+    then failed on rows that had one all along. The run identity is *appended* to it.
+
+    Each row still carries its own number, which is what the provenance audit reads and
+    what a budget may only be raised against. What moves to the key line is the part
+    that is the same on every row: which sweep, on which arch, on which day.
     """
     order = ("in", "out", "approx", "dest")
-    out = [key_line]
+    head, sep, comment = key_line.rstrip("\n").partition("#")
+    measured_by = _MEASURED_BY.format(suffix=suffix)
+    existing = _MEASURED_BY_RE.sub("", comment).strip().rstrip(";").strip()
+    out = [f"{head.rstrip()}  # {existing + '; ' if existing else ''}{measured_by}\n"]
     for row in rows:
         metric, value = row["verdict"]
         body = ", ".join(
@@ -387,10 +412,17 @@ def _render(key_line: str, rows: List[dict], suffix: str) -> List[str]:
         pairs = f"{body}, {decided}" if body else decided
         note = f"max {row['measured']} ULP"
         if metric == "tolerance":
-            note += ", past this output's usable ceiling, so tolerance"
+            from helpers.sfpu_accuracy_budget import usable_budget_ceiling
+
+            # Terse on purpose: the clause is repeated on every demoted row, and the
+            # reason it names is stated once in the table header. What has to be *here*
+            # is the pair of numbers, so the claim stays checkable against
+            # `usable_budget_ceiling`.
+            ceiling = usable_budget_ceiling(DataFormat[row["out"]])
+            note += f", budget would be {value} > {ceiling:.0f}-step ceiling"
         elif metric == "block":
-            note += ", but a sorted sweep flatters a block format, so tolerance"
-        out.append(f"  - {{{pairs}}}  # {note}, {suffix}\n")
+            note += ", block-quantized, so tolerance"
+        out.append(f"  - {{{pairs}}}  # {note}\n")
     return out
 
 
