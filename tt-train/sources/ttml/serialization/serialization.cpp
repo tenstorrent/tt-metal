@@ -125,7 +125,8 @@ void read_ttnn_tensor(FlatBufferFile& file, std::string_view name, ttnn::Tensor&
 
 void write_autograd_tensor(
     FlatBufferFile& file, std::string_view name, const ttml::autograd::TensorPtr& tensor, bool save_grads) {
-    write_ttnn_tensor(file, std::string(name) + "/value", tensor->get_value(ttml::autograd::PreferredPrecision::FULL));
+    write_ttnn_tensor(
+        file, std::string(name) + "/value", tensor->get_value(ttml::autograd::PreferredPrecision::NATIVE));
     auto& grad = tensor->get_grad();
     bool has_grads = save_grads && core::is_tensor_initialized(grad);
     file.put(std::string(name) + "/requires_grads", tensor->get_requires_grad());

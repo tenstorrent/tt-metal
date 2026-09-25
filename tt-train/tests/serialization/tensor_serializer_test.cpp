@@ -13,9 +13,12 @@
 #include "autograd/auto_context.hpp"
 #include "core/device.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "modules/linear_module.hpp"
 #include "modules/multi_layer_perceptron.hpp"
+#include "optimizers/adamw.hpp"
 #include "serialization/flatbuffer_file.hpp"
 #include "serialization/serialization.hpp"
+#include "test_utils/random_data.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace {
@@ -136,4 +139,122 @@ TEST_F(TensorFileTest, SerializeDeserializeNamedParameters) {
     for (const auto& [key, value] : params_to_read) {
         EXPECT_TRUE(compare_tensors(value->get_value(), params_to_write.at(key)->get_value()));
     }
+}
+
+class CheckpointTrainingTest : public ::testing::Test {
+public:
+    static void SetUpTestSuite() {
+        ttml::autograd::ctx().open_device();
+    }
+    static void TearDownTestSuite() {
+        ttml::autograd::ctx().close_device();
+    }
+
+protected:
+    void SetUp() override {
+        temp_dir = create_unique_temp_dir();
+        ttml::autograd::ctx().set_seed(123U);
+    }
+    void TearDown() override {
+        std::filesystem::remove_all(temp_dir);
+    }
+
+    static ttml::optimizers::AdamWConfig adamw_config() {
+        ttml::optimizers::AdamWConfig config;
+        config.lr = 1e-2F;
+        return config;
+    }
+
+    static void train(
+        const ttml::serialization::NamedParameters& params, ttml::optimizers::AdamW& optimizer, int steps) {
+        auto& gen = ttml::autograd::ctx().get_generator();
+        auto* device = &ttml::autograd::ctx().get_device();
+        for (int step = 0; step < steps; ++step) {
+            for (const auto& [name, param] : params) {
+                const auto& shape = param->get_shape();
+                const std::vector<std::size_t> dims(shape.cbegin(), shape.cend());
+                auto grad = ttml::test_utils::make_uniform_xarray<float>(dims, -1.0F, 1.0F, gen());
+                param->set_grad(ttml::core::from_xtensor(grad, device));
+            }
+            optimizer.step();
+        }
+    }
+
+    std::filesystem::path save(
+        const std::string& tag, const ttml::modules::ModuleBase& model, const ttml::optimizers::AdamW& optimizer) {
+        ttml::serialization::FlatBufferFile file;
+        ttml::serialization::write_module(file, "model", &model);
+        ttml::serialization::write_optimizer(file, "optimizer", &optimizer);
+        auto path = temp_dir / tag;
+        file.serialize(path.string());
+        return path;
+    }
+
+    // Every weight and AdamW moment in the checkpoint must equal the value the training step
+    // actually produced: the HALF view that the fused kernel updated in place.
+    static void expect_checkpoint_matches(
+        const std::filesystem::path& path,
+        const ttml::serialization::NamedParameters& params,
+        const ttml::optimizers::AdamW& optimizer) {
+        ttml::serialization::FlatBufferFile file;
+        file.deserialize(path.string());
+        auto state = optimizer.get_state_dict();
+        const auto expect_saved = [&](const std::string& key, const ttml::autograd::TensorPtr& live) {
+            ttnn::Tensor saved;
+            ttml::serialization::read_ttnn_tensor(file, key + "/value", saved);
+            const auto trained = ttml::core::to_xtensor(live->get_value(ttml::autograd::PreferredPrecision::HALF));
+            EXPECT_TRUE(xt::allclose(ttml::core::to_xtensor(saved), trained, 0.0, 0.0))
+                << key << " in the checkpoint does not match the trained value";
+        };
+        for (const auto& [name, param] : params) {
+            expect_saved("model/" + name, param);
+        }
+        for (const auto* moment : {"exp_avg", "exp_avg_sq"}) {
+            const auto& moments = std::get<ttml::serialization::NamedParameters>(state.at(moment));
+            for (const auto& [name, value] : moments) {
+                expect_saved(std::string("optimizer/") + moment + "/" + name, value);
+            }
+        }
+    }
+
+    std::filesystem::path temp_dir;
+};
+
+TEST_F(CheckpointTrainingTest, CheckpointMatchesTrainedValuesOnFirstSave) {
+    ttml::modules::LinearLayer model(32, 64);
+    auto params = model.parameters();
+    ttml::optimizers::AdamW optimizer(params, adamw_config());
+
+    train(params, optimizer, 3);
+    expect_checkpoint_matches(save("only", model, optimizer), params, optimizer);
+}
+
+TEST_F(CheckpointTrainingTest, CheckpointMatchesTrainedValues) {
+    ttml::modules::LinearLayer model(32, 64);
+    auto params = model.parameters();
+    ttml::optimizers::AdamW optimizer(params, adamw_config());
+
+    train(params, optimizer, 1);
+    save("first", model, optimizer);
+    train(params, optimizer, 3);
+    expect_checkpoint_matches(save("second", model, optimizer), params, optimizer);
+}
+
+TEST_F(CheckpointTrainingTest, CheckpointMatchesTrainedValuesAfterResume) {
+    ttml::modules::LinearLayer model(32, 64);
+    auto params = model.parameters();
+    ttml::optimizers::AdamW optimizer(params, adamw_config());
+    train(params, optimizer, 1);
+    const auto first = save("first", model, optimizer);
+
+    ttml::modules::LinearLayer resumed_model(32, 64);
+    auto resumed_params = resumed_model.parameters();
+    ttml::optimizers::AdamW resumed_optimizer(resumed_params, adamw_config());
+    ttml::serialization::FlatBufferFile file;
+    file.deserialize(first.string());
+    ttml::serialization::read_module(file, "model", &resumed_model);
+    ttml::serialization::read_optimizer(file, "optimizer", &resumed_optimizer);
+
+    train(resumed_params, resumed_optimizer, 3);
+    expect_checkpoint_matches(save("resumed", resumed_model, resumed_optimizer), resumed_params, resumed_optimizer);
 }
