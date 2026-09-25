@@ -6,10 +6,14 @@
 // factory, reader and compute kernels (sliding_window_work_plan.hpp). The plan is pure integer math
 // over the chunked block-cyclic K/V layout, so its contract is pinned here without a device.
 
+#include <algorithm>
 #include <cstdint>
+#include <set>
+#include <utility>
 #include <vector>
 
 #include "gtest/gtest.h"
+#include "ttnn/operations/transformer/sdpa/device/kernels/chunked_q_mapping.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
 
 namespace {
@@ -18,6 +22,75 @@ using namespace ttnn::operations::transformer::sdpa::ring_joint;
 
 constexpr uint32_t kTileHeight = 32;
 constexpr uint32_t kWindowTokens = 128;
+
+TEST(ChunkedQMapping, MatchesPackedAbsoluteTiles) {
+    for (uint32_t ring : {1u, 2u, 4u, 8u}) {
+        for (uint32_t local : {2u, 8u, 32u}) {
+            const uint32_t group = ring * local;
+            for (uint32_t start = 0; start < 2 * group; ++start) {
+                for (uint32_t length : {1u, local - 1, local, group - 1, group}) {
+                    for (uint32_t device = 0; device < ring; ++device) {
+                        SCOPED_TRACE(
+                            ::testing::Message() << "ring=" << ring << " local=" << local << " start=" << start
+                                                 << " length=" << length << " device=" << device);
+                        std::vector<uint32_t> positions;
+                        uint32_t pre_wrap_count = 0;
+                        for (uint32_t tile = start; tile < start + length; ++tile) {
+                            if (tile / local % ring == device) {
+                                positions.push_back(tile);
+                                pre_wrap_count += tile / group == start / group;
+                            }
+                        }
+                        const auto mapping = build_chunked_q_mapping(start, start + length, local, ring, device);
+                        ASSERT_EQ(mapping.q_valid_tile_count, positions.size());
+                        EXPECT_LE(mapping.q_valid_tile_count, local);
+                        EXPECT_EQ(mapping.q_pre_wrap_tile_count, pre_wrap_count);
+                        EXPECT_EQ(mapping.q_pre_wrap_start_tile, pre_wrap_count ? positions.front() : 0u);
+                        EXPECT_EQ(
+                            mapping.q_post_wrap_start_tile,
+                            pre_wrap_count < positions.size() ? positions[pre_wrap_count] : 0u);
+                        for (uint32_t row = 0; row < positions.size(); ++row) {
+                            const uint32_t absolute =
+                                row < mapping.q_pre_wrap_tile_count
+                                    ? mapping.q_pre_wrap_start_tile + row
+                                    : mapping.q_post_wrap_start_tile + row - mapping.q_pre_wrap_tile_count;
+                            EXPECT_EQ(absolute, positions[row]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST(ChunkedQMapping, WrapDetectionMatchesPackedSegments) {
+    for (uint32_t ring : {4u, 8u}) {
+        for (uint32_t local : {8u, 32u}) {
+            const uint32_t group = ring * local;
+            for (uint32_t start = 0; start < 2 * group; ++start) {
+                for (uint32_t length : {1u, local, group - 1, group}) {
+                    bool has_split_device = false;
+                    for (uint32_t device = 0; device < ring; ++device) {
+                        const auto mapping = build_chunked_q_mapping(start, start + length, local, ring, device);
+                        has_split_device |= mapping.q_pre_wrap_tile_count > 0 &&
+                                            mapping.q_valid_tile_count > mapping.q_pre_wrap_tile_count;
+                    }
+                    EXPECT_EQ(chunked_q_wraps(start, start + length, local, ring), has_split_device);
+                }
+            }
+        }
+    }
+    EXPECT_FALSE(chunked_q_wraps(47, 288, 32, 8));  // Stops before the second segment.
+    EXPECT_TRUE(chunked_q_wraps(47, 289, 32, 8));
+}
+
+TEST(ChunkedQMapping, Offset1504SplitsOneDeviceSlab) {
+    constexpr auto mapping = build_chunked_q_mapping(67040 / 32, 75232 / 32, 1024 / 32, 8, 1);
+    static_assert(mapping.q_pre_wrap_start_tile == 67040 / 32);
+    static_assert(mapping.q_pre_wrap_tile_count == 544 / 32);
+    static_assert(mapping.q_post_wrap_start_tile == 74752 / 32);
+    static_assert(mapping.q_valid_tile_count == 1024 / 32);
+}
 
 struct Geometry {
     uint32_t ring_size;
@@ -161,8 +234,10 @@ TEST(SlidingWindowWorkPlan, RemoteRangesStartInsideTheHalo) {
                     EXPECT_EQ(rc.first_compact_k_chunk, 0u) << where;
                     continue;
                 }
-                const uint32_t halo_start = chunked_sliding_halo_source_start_tile(
-                    rc.source_ring_id, g.q_local_tile_rows, g.ring_size, logical_k, halo, g.slabs);
+                const auto mapping = build_chunked_q_mapping(
+                    logical_k - g.ring_size * g.q_local_tile_rows, logical_k, g.q_local_tile_rows, g.ring_size, device);
+                const uint32_t halo_start =
+                    sliding_halo_sources(mapping, g.q_local_tile_rows, g.ring_size, halo, g.slabs).first_start_tile;
                 const uint32_t range_start = rc.first_k_chunk * g.k_chunk_tile_rows;
                 EXPECT_GE(range_start, halo_start) << where;
                 EXPECT_EQ(rc.first_compact_k_chunk, (range_start - halo_start) / g.k_chunk_tile_rows) << where;
@@ -211,6 +286,88 @@ TEST(SlidingWindowWorkPlan, PinnedDevice0Geometry) {
     EXPECT_EQ(unbounded.source_ranges[1].first_k_chunk, 8u);
     EXPECT_EQ(unbounded.source_ranges[0].first_global_k_chunk, 31u);
     EXPECT_EQ(unbounded.source_ranges[1].first_global_k_chunk, 32u);
+}
+
+TEST(SlidingWindowWorkPlan, RotatedQueriesCoverExactlyTheirCausalWindows) {
+    for (uint32_t ring : {4u, 8u}) {
+        for (uint32_t local : {8u, 32u, 64u}) {
+            const uint32_t group = ring * local;
+            const uint32_t capacity = 3 * group;
+            for (uint32_t window : {128u, std::min(1024u, local * 32)}) {
+                const uint32_t halo = chunked_sliding_halo_tile_rows(window, 32, 4);
+                for (uint32_t start : {0u, 1u, local - 1, local, group - 1, group + 1, capacity - 3}) {
+                    for (uint32_t length : {1u, local + 1, group}) {
+                        const uint32_t end = std::min(start + length, capacity);
+                        for (uint32_t device = 0; device < ring; ++device) {
+                            std::vector<uint32_t> positions;
+                            for (uint32_t token = start; token < end; ++token) {
+                                if (token / local % ring == device) {
+                                    positions.push_back(token);
+                                }
+                            }
+                            const auto mapping = build_chunked_q_mapping(start, end, local, ring, device);
+                            const auto sources = sliding_halo_sources(mapping, local, ring, halo);
+                            ASSERT_EQ(mapping.q_valid_tile_count, positions.size());
+                            EXPECT_EQ(
+                                sources.count,
+                                mapping.q_pre_wrap_tile_count &&
+                                        mapping.q_valid_tile_count > mapping.q_pre_wrap_tile_count
+                                    ? 2u
+                                    : 1u);
+                            for (uint32_t qsize : {2u, 4u}) {
+                                for (uint32_t q = 0; q < local; q += qsize) {
+                                    SCOPED_TRACE(
+                                        ::testing::Message()
+                                        << "ring=" << ring << " local=" << local << " start=" << start << " end=" << end
+                                        << " device=" << device << " q=" << q << " qsize=" << qsize
+                                        << " window=" << window);
+                                    const auto plan = build_sliding_q_work_plan(
+                                        q,
+                                        qsize,
+                                        device,
+                                        local,
+                                        ring,
+                                        window,
+                                        32,
+                                        capacity / ring,
+                                        4,
+                                        end,
+                                        0,
+                                        &mapping);
+                                    ASSERT_TRUE(plan.is_valid);
+                                    if (q >= positions.size()) {
+                                        EXPECT_EQ(plan.total_k_chunk_count, 1u);
+                                        continue;
+                                    }
+                                    std::set<std::pair<uint32_t, uint32_t>> expected, actual;
+                                    for (uint32_t row = q; row < std::min<uint32_t>(q + qsize, positions.size());
+                                         ++row) {
+                                        const uint32_t pos = positions[row];
+                                        const uint32_t left = (window - 1 + 31) / 32;
+                                        for (uint32_t k = pos > left ? pos - left : 0; k <= pos; ++k) {
+                                            expected.emplace(k / local % ring, (k / group * local + k % local) / 4);
+                                        }
+                                    }
+                                    for (uint32_t work = 0; work < plan.total_k_chunk_count; ++work) {
+                                        const auto ref = plan.k_chunk_at(work);
+                                        EXPECT_TRUE(actual.emplace(ref.source_ring_id, ref.source_k_chunk).second);
+                                        if (ref.source_ring_id != device) {
+                                            const uint32_t compact = ref.compact_k_chunk * 4;
+                                            ASSERT_LT(compact, sources.count * halo);
+                                            const uint32_t origin =
+                                                compact < halo ? sources.first_start_tile : sources.second_start_tile;
+                                            EXPECT_EQ(origin + compact % halo, ref.source_k_chunk * 4);
+                                        }
+                                    }
+                                    EXPECT_EQ(actual, expected);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 }  // namespace

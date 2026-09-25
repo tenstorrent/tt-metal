@@ -10,6 +10,7 @@
 #include <optional>
 #include <string_view>
 
+#include <enchantum/enchantum.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -304,6 +305,18 @@ void FabricFirmwareInitializer::init(
     }
 
     if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
+        // Reject fabric launch on a single-host mesh with fewer than 2 opened chips.
+        // Multi-host meshes with 1 local chip per rank are unaffected: peers live on other ranks.
+        const auto local_mesh_ids = control_plane_.get_local_mesh_id_bindings();
+        const size_t num_hosts = control_plane_.get_mesh_graph().get_host_ranks(local_mesh_ids.front()).size();
+        TT_FATAL(
+            devices_.size() > 1 || num_hosts > 1,
+            "Fabric config {} requires at least 2 participating chips, but the opened mesh has {} "
+            "local device(s) on a single host. Either open a larger mesh (e.g. a MeshShape with >= 2 "
+            "devices) or call SetFabricConfig(FabricConfig::DISABLED) before opening a 1-chip mesh.",
+            enchantum::to_string(fabric_config),
+            devices_.size());
+
         log_info(tt::LogMetal, "Initializing Fabric");
 #if defined(TT_UMD_BUILD_SIMULATION)
         if (rtoptions_.get_simulator_enabled()) {

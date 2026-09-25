@@ -73,10 +73,12 @@ def eltwise_binary_implied_math_formats(formats, *, is_perf=False):
 
 
 def eltwise_binary_math_fidelities(mathop, formats):
-    if (
-        mathop in [MathOperation.Elwadd, MathOperation.Elwsub]
-        or formats.input_format == DataFormat.Int8
-    ):
+    # Add/sub ignore fidelity. Int8 is an exact integer op, and Float16_b is
+    # already full precision at LoFi: HiFi only touches the low 3 mantissa bits.
+    if mathop in [
+        MathOperation.Elwadd,
+        MathOperation.Elwsub,
+    ] or formats.input_format in (DataFormat.Int8, DataFormat.Float16_b):
         return [MathFidelity.LoFi]
     return [
         MathFidelity.LoFi,
