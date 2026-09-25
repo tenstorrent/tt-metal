@@ -152,3 +152,12 @@ tasks:
         BRINGUP_SPEC=models/demos/gemma4_a4b_d_p/bringup/spec.yaml scripts/run_safe_pytest.sh --run-all
         models/demos/common/bringup/tests/test_box.py && python -m models.demos.common.bringup.knowledge.check
       metrics: {chips: "== 4", all_gather_maxabs: "== 0", known_issue_errors: "== 0"}
+  - id: F17
+    title: Approval waits only on tasks that declare an approval point (PL.0 is scripted)
+    step: framework
+    deps: [F16]
+    paths: [models/demos/common/bringup/orchestrator.py, models/demos/common/bringup/plan/ledger_gen.py,
+            models/demos/common/bringup/selftest/test_orchestrator.py]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/
+      metrics: {selftest_passed: ">= 108", selftest_failed: "== 0"}

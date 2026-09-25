@@ -215,3 +215,8 @@ Drive this ledger with
 - The F16 gate itself was refused by the device policy: a device gate could not run any `python`, not even the CPU-only
   knowledge check. Now a python command in a device gate is refused only if its script or `-m` module imports ttnn
   (or cannot be resolved).
+
+## F17 (2026-09-25): approval scope
+- Gemma PL.0 (ledger extension) had step "plan", so after its gate passed the orchestrator stopped for a plan
+  approval before the plan agent had written anything. Now PL.0 is a scripted `ledger` step, PL.1 declares
+  `approval: plan`, and only tasks with an `approval` field wait for a person.
