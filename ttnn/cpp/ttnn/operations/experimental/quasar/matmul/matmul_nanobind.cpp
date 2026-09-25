@@ -684,18 +684,19 @@ void py_module(nb::module_& mod) {
         )doc")
         .def_rw("C_slice_M_tiles", &MatmulUnifiedProgramConfig::C_slice_M_tiles, R"doc(
             Height of the C slice each core produces, in tiles. 0 = auto: the output shard height when C is
-            sharded, else M in tiles split over the rows of the bounding box of `cores`.
+            sharded, else the core's share of M (M in tiles over the rows of the bounding box of `cores`),
+            shrunk along its divisors only if the share does not fit L1.
         )doc")
         .def_rw("C_slice_N_tiles", &MatmulUnifiedProgramConfig::C_slice_N_tiles, R"doc(
             Width of the C slice each core produces, in tiles. 0 = auto: the output shard width when C is
-            sharded, else N in tiles split over the columns of the bounding box of `cores`.
+            sharded, else the core's share of N (N in tiles over the columns of the bounding box of `cores`),
+            shrunk along its divisors only if the share does not fit L1.
         )doc")
         .def_rw("K_chunk_tiles", &MatmulUnifiedProgramConfig::K_chunk_tiles, R"doc(
             K tiles multiplied per accumulation step. One A slice (C_slice_M_tiles x K_chunk_tiles tiles) and
             one B slice (K_chunk_tiles x C_slice_N_tiles tiles) are resident in L1 at a time, and the partial
             sums round-trip L1 between steps. Must divide K in tiles. 0 = auto: the largest divisor of K in
-            tiles up to 8 whose buffers fit L1 (8 bounds the L1 footprint of the double-buffered slices; it is
-            a tuning point, not a hardware limit).
+            tiles whose buffers fit L1, capped at 8 unless the C slice is 4 tiles or fewer.
         )doc")
         .def_rw("subblock_M_tiles", &MatmulUnifiedProgramConfig::subblock_M_tiles, R"doc(
             Subblock height in tiles (the C slice's tiles accumulated in DST at once). Need not divide
