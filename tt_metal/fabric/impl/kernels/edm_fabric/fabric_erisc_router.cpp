@@ -1426,7 +1426,7 @@ bool any_sender_channels_active(
 
 bool any_receiver_channels_active() {
     for (size_t i = 0; i < NUM_RECEIVER_CHANNELS; i++) {
-        if (get_ptr_val<to_receiver_packets_sent_streams[i]>() != 0) {
+        if (get_ptr_val(to_receiver_packets_sent_streams[i]) != 0) {
             return true;
         }
     }
