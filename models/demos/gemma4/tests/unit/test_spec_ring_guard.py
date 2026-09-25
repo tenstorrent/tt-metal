@@ -148,6 +148,19 @@ def test_width_one_needs_no_headroom():
     _reserve_spec_ring_headroom(WINDOW, 1, "Gemma4DFlash")
 
 
+def test_an_invalid_ring_is_reported_whatever_the_width(monkeypatch, expect_error):
+    """The ring is validated before the width check.
+
+    Width 1 needs no headroom, but a ring that is not a power of two is wrong for
+    any width. Validating after the width check would have made this guard's
+    error path depend on verify_width, leaving a bad env value to surface later
+    from the model or trace path instead of at config time.
+    """
+    monkeypatch.setenv(SPEC_RING_HEADROOM_ENV, "32")  # 1024 + 32*64 = 3072
+    with expect_error(ValueError, "power of two"):
+        _reserve_spec_ring_headroom(WINDOW, 1, "Gemma4DFlash")
+
+
 def test_full_attention_is_unaffected_by_the_guard():
     _reserve_spec_ring_headroom(None, SHIPPED_WIDTH, "Gemma4DFlash")
 

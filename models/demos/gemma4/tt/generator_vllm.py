@@ -2406,13 +2406,17 @@ def _reserve_spec_ring_headroom(sliding_window, verify_width, where, *, declines
     window = int(sliding_window)
     if window <= 0 or window % _RING_HEADROOM_BLOCK:
         return
+    # Validated before the width check so this guard's error path does not depend
+    # on verify_width: a ring that is not a power of two is wrong for any width,
+    # and bounded_ring_modulo raising here names the bad env value at config time
+    # rather than leaving it to surface from the model or trace path later.
+    ring = bounded_ring_modulo(window)
+
     # Only the drafts evict live history; the anchor write lands on a slot
     # holding ``p - ring``, which the window has already dropped.
     drafts = int(verify_width or 0) - 1
     if drafts <= 0:
         return
-
-    ring = bounded_ring_modulo(window)
     if ring is not None and int(ring) - window >= drafts:
         return  # headroom covers every draft write
     if declines_at_wrap:
