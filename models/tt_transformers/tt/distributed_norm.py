@@ -71,7 +71,7 @@ class DistributedNorm(LightweightModule):
         self.tt_ccl = tt_ccl
         self.prefetcher = prefetcher
         self.ag_config_key = ag_config_key
-        # (num_links or None, chunks_per_sync, num_workers_per_link); None keeps the 10/2 default.
+        # (num_links|None, chunks_per_sync, num_workers_per_link). None keeps the prefill 10/2 default.
         self.prefill_ag_tuning = prefill_ag_tuning
 
         # Flag to control whether all_gather is performed after distributed norm (can be disabled when output should remain sharded)

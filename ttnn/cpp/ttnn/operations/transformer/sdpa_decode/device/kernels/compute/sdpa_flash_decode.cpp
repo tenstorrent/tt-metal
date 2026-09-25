@@ -70,7 +70,7 @@ void kernel_main() {
     // Speculative multi-position mode: Tg candidates per batch row (Sq_chunk_t == PNHt == Tg),
     // each row-tile carrying its own causal bound from this row's group of Tg entries in the
     // [B*Tg] cur_pos vector (group base = cur_batch*Tg). 0 = off.
-    constexpr uint32_t spec_multi_pos_T = get_compile_time_arg_val(32);
+    constexpr uint32_t spec_multi_pos_T = get_compile_time_arg_val(27);
     constexpr bool spec_multi_pos = spec_multi_pos_T > 0;
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;

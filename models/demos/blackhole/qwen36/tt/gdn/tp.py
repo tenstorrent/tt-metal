@@ -13,13 +13,11 @@ import torch
 
 import ttnn
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
-from models.demos.blackhole.qwen36.tt.gdn.recurrent_decode_wh import (
-    recurrent_gated_delta_rule_decode_dispatch as recurrent_gated_delta_rule_decode_ttnn,  # Wormhole skips q's fp32 promotion (q never feeds the state write); see recurrent_decode_wh.py.
-)
 
 # Spec verify's multi-token recurrence; the only source of per-token state.
-from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
-    fused_recurrent_gated_delta_rule_ttnn,
+from models.demos.blackhole.qwen36.tt.gdn.fused_recurrent_op import fused_recurrent_gated_delta_rule_ttnn
+from models.demos.blackhole.qwen36.tt.gdn.recurrent_decode_wh import (
+    recurrent_gated_delta_rule_decode_dispatch as recurrent_gated_delta_rule_decode_ttnn,  # Wormhole skips q's fp32 promotion (q never feeds the state write); see recurrent_decode_wh.py.
 )
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq import (
     chunk_gated_delta_rule_seq_adapter,

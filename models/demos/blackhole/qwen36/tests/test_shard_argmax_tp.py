@@ -39,7 +39,12 @@ def _cases(vocab, shard):
     t[0, 0, 0, vocab - 5] = 50.0
     cases["last_shard"] = t
     t = flat()
-    for p in (2 * shard + 11, 5 * shard + 3, vocab - 100):
+    # Distinct shards. Mod by the shard count; a fixed 5*shard overruns the vocab when tp < 6.
+    tp = vocab // shard
+    s_a, s_b = 2 % tp, 5 % tp
+    if s_b == s_a:
+        s_b = (s_a + 1) % tp
+    for p in (s_a * shard + 11, s_b * shard + 3, vocab - 100):
         t[0, 0, 0, p] = 50.0
     cases["tie_across_shards"] = t
     t = flat()

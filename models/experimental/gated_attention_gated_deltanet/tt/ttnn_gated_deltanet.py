@@ -155,6 +155,7 @@ def _causal_conv1d_fir(
 
     x [B,T,D]; conv_state [B,K-1,D] or list of [B,1,D]; weight_taps/bias_dev optional.
     Returns output [B,T,D], new_state [B,K-1,D].
+
     pad_layout: TILE has no sub-tile row shift, so None is ROW_MAJOR on Wormhole and TILE on Blackhole.
     """
     mc = memory_config
@@ -231,10 +232,11 @@ def _causal_conv1d_fir(
 
     total_len = (kernel_size - 1) + T
     _dram = ttnn.DRAM_MEMORY_CONFIG
-    # ROW_MAJOR x_padded must tilize every tap; TILE only retile k>=1.
+    # TILE x_padded retiles only k>=1 (k=0 is tile-aligned). ROW_MAJOR retiles every tap.
     out = None
     for k in range(kernel_size):
         x_slice = x_padded[:, k : k + T]
+        # k != 0 always retiles. The layout test adds k=0 only when x_padded is not TILE.
         if k != 0 or x_slice.layout != ttnn.TILE_LAYOUT:
             x_slice = ttnn.to_layout(x_slice, ttnn.TILE_LAYOUT)
         if out is None:
