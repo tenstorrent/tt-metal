@@ -68,6 +68,18 @@ _SINGLETONS = {
     "ff.net.2": ("ff", "ff2", None),
 }
 
+# Targets that hang off the transformer rather than a block. `time_embedder` is a plain replicated
+# `Linear`, whose `_prepare_torch_state` only transposes, so its B needs no transform.
+#
+# It is held in float32 on purpose -- every block reads the one `temb`, so rounding it early biases
+# all 50 blocks identically at every step -- while `register_lora` uploads A and B as bfloat16. An
+# adapter that targets it therefore merges a bf16-rounded delta into an fp32 weight. Whether that is
+# acceptable is the adapter's call, not this loader's, but it is not free.
+_GLOBALS = {
+    "time_embedder.linear_1": ("time_embedder", "linear_1"),
+    "time_embedder.linear_2": ("time_embedder", "linear_2"),
+}
+
 
 @dataclass
 class H3AdapterHandle:
@@ -101,6 +113,14 @@ def load_h3_adapter_into(transformer, path: str, *, scale: float = 1.0, name: st
     unmapped: list[str] = []
 
     for base, ab in sorted(pairs.items()):
+        if base in _GLOBALS:
+            owner_name, attr = _GLOBALS[base]
+            linear = getattr(getattr(transformer, owner_name), attr)
+            eff = scale * _scale_of(base, ab, alphas, file_alpha)
+            bank_idx = linear.register_lora(ab["A"], ab["B"], scale=eff, name=name)
+            handle.indices[base] = bank_idx
+            bindings.append((linear, bank_idx))
+            continue
         target = _parse_target(base)
         if target is None:
             unmapped.append(base)
@@ -129,7 +149,10 @@ def load_h3_adapter_into(transformer, path: str, *, scale: float = 1.0, name: st
     if unmapped:
         sample = ", ".join(unmapped[:5])
         more = "" if len(unmapped) <= 5 else f" (+{len(unmapped) - 5} more)"
-        raise RuntimeError(f"{len(unmapped)} adapter target(s) have no H3 destination: {sample}{more}")
+        roots = sorted({t.split(".")[0] for t in unmapped})
+        absent = [r for r in roots if not hasattr(transformer, r)]
+        detail = f"; {absent} is not a module on this transformer" if absent else ""
+        raise RuntimeError(f"{len(unmapped)} adapter target(s) have no H3 destination: {sample}{more}{detail}")
 
     for linear, bank_idx in bindings:
         linear.bind_active(bank_idx)
@@ -144,7 +167,7 @@ def _read(path: str) -> tuple[dict[str, torch.Tensor], dict[str, str]]:
 
 def _file_alpha(metadata: dict[str, str]) -> float | None:
     """The file-level alpha, which is where a diffusers publish puts it when the tensors do not."""
-    raw = metadata.get("alpha") or metadata.get("training_alpha")
+    raw = metadata.get("alpha") or metadata.get("training_alpha") or metadata.get("lora_alpha")
     return None if raw is None else float(raw)
 
 
