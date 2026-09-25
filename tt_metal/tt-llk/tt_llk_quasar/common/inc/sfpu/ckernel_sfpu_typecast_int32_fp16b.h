@@ -6,6 +6,7 @@
 
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
+#include "sfpi.h"
 
 namespace ckernel
 {
@@ -13,24 +14,18 @@ namespace sfpu
 {
 // Calculates Typecast for number of rows of output SFPU ops (Quasar = 2 rows)
 //
-// Unpack-to-Dest copies Int32 L1 bits as two's-complement (see _mul_int32_). Cast mode 0
-// (int32 → fp32 RNE) reads sign-magnitude, so convert 2SC → SM before the cast. An Int32
-// source also forces 32-bit Dest; name INT32 / FP16B explicitly instead of sfpmem::DEFAULT.
+// Unpack-to-Dest copies Int32 L1 bits as two's-complement (see _mul_int32_), so the value is loaded
+// as sfpi::vInt rather than sfpi::vSMag: convert<> then emits the 2SC → SM cast that the int → fp32
+// cast mode requires, followed by the SM → fp32 and fp32 → fp16b round-nearest-even steps.
+//
+// An Int32 source also forces 32-bit Dest, so both accesses name their layout explicitly (I32 /
+// F16b, the sfpmem INT32 / FP16B modes) rather than letting DataLayout::Default re-derive it from
+// ALU_FORMAT_SPEC_REG / ACC_CTRL_SFPU_Fp32.
 inline void _calculate_typecast_int32_to_fp16b_rows()
 {
-    TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, 0);              // load from dest into lreg[0], uses ADDR_MOD_7 (set to all zeroes)
-    TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, p_sfpu::sfp_sfpcast_mod::TWO_SC_TO_SM); // 2's complement → sign-magnitude
+    const sfpi::vInt value = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
 
-    TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG1, 0); // convert from int32 sign+mag to fp32 using rnd nearest even
-    TTI_SFP_STOCH_RND(
-        p_sfpu::sfp_stochrnd_rnd_mod::NearEven,
-        0,
-        0,
-        p_sfpu::LREG1,
-        p_sfpu::LREG1,
-        p_sfpu::sfp_stochrnd_mod::FP32_TO_FP16B); // convert from fp32 to fp16b using rnd nearest even
-
-    TTI_SFPSTORE(p_sfpu::LREG1, p_sfpu::sfpmem::FP16B, ADDR_MOD_7, 0, 0); // Store from lreg[1] into dest register
+    sfpi::dst_reg[0].mode<sfpi::DataLayout::F16b>() = sfpi::convert<sfpi::vFloat16b>(value, sfpi::RoundMode::NearestEven);
 }
 
 template <int ITERATIONS = SFPU_ITERATIONS>
@@ -40,7 +35,7 @@ inline void _calculate_typecast_int32_to_fp16b_()
     for (int d = 0; d < ITERATIONS; d++)
     {
         _calculate_typecast_int32_to_fp16b_rows();
-        ckernel::math::_incr_counters_<0x0, 0x0, ckernel::math::SFP_ROWS, 0x0>(); // does the dest_reg++ (increments by 2 rows)
+        sfpi::dst_reg++; // increments by 2 rows (SFP_DESTREG_STRIDE), one SFPU pass
     }
 }
 
