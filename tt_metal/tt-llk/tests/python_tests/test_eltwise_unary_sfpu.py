@@ -1253,6 +1253,7 @@ def eltwise_unary_sfpu(
     contract = accuracy_contract(
         mathop,
         output_format=formats.output_format,
+        input_format=formats.input_format,
         approx_mode=approx_mode,
         dest_acc=dest_acc,
         arch=TestConfig.CHIP_ARCH,

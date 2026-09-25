@@ -19,7 +19,7 @@
 // ============================================================================
 //
 // Decides how each semaphore is accessed. The answer is a SemScope, which codegen bakes
-// into every binding's token, so the kernel receives it as a compile-time property.
+// into every binding's token, so the kernel receives it as a compile-time constant.
 //
 // Two steps:
 //   1. CollectSemaphoreBinders() takes the census: which kernel instances bind each semaphore,
@@ -147,8 +147,8 @@ inline SemaphoreBinderCensus CollectSemaphoreBinders(
             SemaphoreBinderInfo& sem_info = census[binding.semaphore_spec_name];
             // A kernel may bind a given semaphore only once. A second binding would be the same
             // harts reaching the same L1 word under a second name: the derivation below would
-            // count those harts twice (over-sizing the cached pool's seed), and codegen would
-            // emit two pool entry blocks for the single row they share.
+            // count those harts twice (over-sizing the cached pool's seed), and the generated
+            // kCachedSemaphores list would carry two entries for the single row they share.
             for (const auto& rec : sem_info.binders) {
                 TT_FATAL(
                     rec.kernel != &kernel,
