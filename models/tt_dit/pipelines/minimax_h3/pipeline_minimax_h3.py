@@ -302,8 +302,10 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
 #   * `num_links: 4`, matching the 4 KB router payload the Wormhole Galaxy meshes open with.
 #
 # There is no (4, 32) entry: the quad is a Blackhole configuration.
+# TODO: Try to figure out how we can keep components of the the model coresident throughout generation
+# to improve perf. Easy target would be to keep the text encoder resident if possible, might save a
+# few seconds. This will matter when video gen is ~1 minute or so.
 _PRESETS_WH: dict[tuple[int, ...], dict] = {
-    # `coresident` off: at 12 GB/chip the DiT alone fills DRAM. `dit_fsdp` on: unsharded, only 5 s fits.
     (4, 8): {
         "tp_axis": 0,
         "sp_axis": 1,
@@ -336,13 +338,6 @@ def _presets_for_this_arch() -> tuple[str, dict[tuple[int, ...], dict]]:
 def resolve_mesh_preset(mesh_shape: tuple[int, ...], *, required: bool = True) -> dict:
     """The measured defaults for this mesh shape on this architecture, or `{}` when unlisted and
     `required` is False.
-
-    Keyed on architecture as well as shape, following `pipelines/flux1/pipeline_flux1.py`: a Wormhole
-    and a Blackhole Galaxy are both `(4, 8)`, and the residency that fits 32 GB/chip does not fit 12,
-    so a shape lookup alone would hand Wormhole a Blackhole-sized config and OOM in the first matmul.
-    Only those two architectures are matched; any other raises `NotImplementedError` rather than
-    inheriting one of their configs, whose link count, residency and FSDP settings are measured for
-    that silicon and are not safe defaults elsewhere.
 
     An unlisted shape is only an error when something is left to the preset to fill in; a caller that
     passes every parallel setting explicitly is running an untuned shape deliberately.
