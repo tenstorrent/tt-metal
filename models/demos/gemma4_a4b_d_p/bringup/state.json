@@ -1,14 +1,30 @@
 {
  "G.s16384": {
   "attempts": 0,
+  "duration_s": 368.6,
   "history": [
    {
     "status": "RESET",
     "t": "2026-09-25T22:04:39"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-25T22:25:09"
    }
   ],
-  "started": "2026-09-25T21:58:23",
-  "status": "TODO"
+  "last_run": "2026-09-25T22:25:09",
+  "log": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/logs/G.s16384.log",
+  "metrics": {
+   "cpu_seconds": 355.7,
+   "golden_chunks": 2,
+   "golden_hash_ok": 1,
+   "golden_layers": 30,
+   "text_top5_acc_last_chunk": 0.6806250810623169
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-25T22:19:01",
+  "status": "PASS"
  },
  "G.s4096": {
   "attempts": 0,
