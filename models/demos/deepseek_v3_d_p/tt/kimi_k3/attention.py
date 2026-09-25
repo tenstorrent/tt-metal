@@ -25,6 +25,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional, Protocol
 
+import torch
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
@@ -33,8 +35,8 @@ from models.common.lightweightmodule import LightweightModule
 class K3AttnContext:
     """Everything an attention module needs from the caller for one chunk.
 
-    One object rather than eleven keyword arguments, because MLA reads most of it and KDA reads
-    none of it — a KDA layer carries its state on the module, not in the call.
+    MLA consumes the KV and rotary inputs. KDA uses the user ID to select its carry
+    and the start position to order its sequence-parallel segments.
     """
 
     rope_tensors: Optional[dict] = None
@@ -163,7 +165,27 @@ class TtK3KdaAttention(LightweightModule):
             raise ValueError(
                 f"KDA layer {self.layer_idx} has no state cache; call bind_state_cache() before the first forward"
             )
-        output, new_state = self.kda.forward(hidden, self._states.read(self.layer_idx, ctx.cache_user_id))
+        # Reuse the caller-owned scalar during capture so replay sees updated offsets.
+        # Eager calls carry a host position, which KDA also consumes as a device scalar.
+        actual_start = (
+            ctx.metadata[1]
+            if ctx.metadata is not None
+            else ttnn.from_torch(
+                torch.tensor([0 if ctx.actual_start is None else ctx.actual_start], dtype=torch.int64),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.kda.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.kda.device),
+            )
+        )
+        try:
+            output, new_state = self.kda.forward(
+                hidden, self._states.read(self.layer_idx, ctx.cache_user_id), actual_start=actual_start
+            )
+        finally:
+            if ctx.metadata is None:
+                ttnn.deallocate(actual_start)
         ttnn.deallocate(hidden)
         self._states.commit(self.layer_idx, new_state, ctx.cache_user_id)
 
@@ -246,7 +268,10 @@ def build_attention(
             tt_ccl=get_tt_ccl(mesh_device),
             sp_axis=sp_axis,
             tp_axis=tp_axis,
-            program_config=kimi_k3_program_config(tp_ccl_topology=tp_topology),
+            program_config=kimi_k3_program_config(
+                active_seq_len_local=seq_len // tuple(mesh_device.shape)[sp_axis], tp_ccl_topology=tp_topology
+            ),
+            active_seq_len=seq_len,
         ),
         layer_idx=layer_idx,
         tp_axis=tp_axis,

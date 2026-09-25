@@ -33,8 +33,7 @@ void VerifyIssuesOnAllCores(
     bool expect_issue,
     const IssueChecker& has_issue,
     const std::string& issue_type) {
-    auto* device = mesh_device->get_devices()[0];
-    auto device_id = device->id();
+    auto device_id = mesh_device->get_device_ids()[0];
 
     for (uint32_t x = grid_start.x; x <= grid_end.x; ++x) {
         for (uint32_t y = grid_start.y; y <= grid_end.y; ++y) {
@@ -354,8 +353,7 @@ void RunSemaphoreIncMulticastTest(
 
     ReadMeshDeviceProfilerResults(*mesh_device);
 
-    auto* device = mesh_device->get_devices()[0];
-    auto device_id = device->id();
+    auto device_id = mesh_device->get_device_ids()[0];
     auto sender_core_virtual = mesh_device->worker_core_from_logical_core(sender_core);
 
     bool has_issue = fixture->has_unflushed_semaphore_mcast_issue(device_id, sender_core_virtual, BRISC_PROCESSOR_ID);
@@ -1101,7 +1099,7 @@ TEST_F(NOCDebuggingFixture, IncrementalProcessingDuringLongKernel) {
         [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             auto& noc_debug_state = tt::tt_metal::MetalContext::instance().noc_debug_state();
             ASSERT_TRUE(noc_debug_state != nullptr);
-            const auto device_id = mesh_device->get_devices()[0]->id();
+            const auto device_id = mesh_device->get_device_ids()[0];
             const uint32_t writes = marker_test_iterations();
             const uint32_t burst = writes / 4;
             constexpr uint32_t wait_iters = 50'000'000u;
@@ -1152,7 +1150,7 @@ TEST_F(NOCDebuggingFixture, IncrementalProcessingFastCycle) {
         [all_devices](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             auto& noc_debug_state = tt::tt_metal::MetalContext::instance().noc_debug_state();
             ASSERT_TRUE(noc_debug_state != nullptr);
-            const auto device_id = mesh_device->get_devices()[0]->id();
+            const auto device_id = mesh_device->get_device_ids()[0];
 
             // The margin must exceed the poll interval (start_debug_dump_thread enforces that) and must be well
             // under the kernel's event span, or nothing ever falls behind the watermark. That threshold is what this
@@ -1430,8 +1428,7 @@ void RunMcastTest(
 
     ReadMeshDeviceProfilerResults(*mesh_device);
 
-    auto* device = mesh_device->get_devices()[0];
-    auto device_id = device->id();
+    auto device_id = mesh_device->get_device_ids()[0];
     auto sender_core_virtual = mesh_device->worker_core_from_logical_core(sender_core);
 
     bool has_write_mcast_issue =

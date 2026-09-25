@@ -218,7 +218,7 @@ def global_ring_prefill_attention(
     return out
 
 
-def ring_prefill_program_config(mesh_device, ccl_manager, head_dim, q_chunk_size=64, k_chunk_size=128):
+def ring_prefill_program_config(mesh_device, ccl_manager, head_dim, q_chunk_size, k_chunk_size):
     """SDPA program config for the ring path.
 
     The compute grid must exclude the CCL column that ``ccl_core_grid_offset``
@@ -359,14 +359,15 @@ def _ring_prefill_attention(
     """
     mesh_device = mesh_config.device
     if program_config is None:
-        # Global (non-sliding) layers take a wider K chunk. ring_joint SDPA's
-        # `q in {64,128}` / `k == 128` allowlist lives inside `if (args.has_sliding_window())`
-        # -- it is a structural requirement of the halo, which dense layers do not have. Swept
-        # at 32k, per-chunk device time at ring depth 7: k=256 gives 197.8 ms against 201.2 at
-        # k=128. q stays 64: it is a true optimum, worse in both directions (214.8 ms at q=32,
-        # 221.7 at q=128), and q>=256 overflows L1.
-        _k_chunk = 128 if sliding_window_size else 256
-        program_config = ring_prefill_program_config(mesh_device, ccl_manager, head_dim, k_chunk_size=_k_chunk)
+        # Utilization testing identified these as the best-performing chunk sizes.
+        _q_chunk, _k_chunk = (128, 128) if sliding_window_size else (96, 256)
+        program_config = ring_prefill_program_config(
+            mesh_device,
+            ccl_manager,
+            head_dim,
+            q_chunk_size=_q_chunk,
+            k_chunk_size=_k_chunk,
+        )
     cp = mesh_config.cp_degree
     cache_seq = ring_cache_seq_len(max_seq_len, cp)
 

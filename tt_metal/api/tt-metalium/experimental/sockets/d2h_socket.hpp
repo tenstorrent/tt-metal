@@ -91,6 +91,12 @@ public:
      * Creates a configuration buffer on the device that the kernel uses to access
      * socket metadata and downstream (host) buffer addresses.
      *
+     * All ranks sharing the mesh must construct the socket to reserve device buffers together.
+     * Shared meshes support worker-core endpoints only; claimed service cores are rejected on every rank.
+     * Only the rank owning sender_core maps host memory and may read or export the socket.
+     * Non-owning ranks may set the page size and query configuration; barrier() is a no-op.
+     * Host I/O on a non-owning rank throws. Descriptor connectors retain host I/O access.
+     *
      * @param mesh_device The mesh device containing the sender core.
      * @param sender_core The source core coordinate (device + core) that sends data.
      * @param fifo_size Size of the circular FIFO buffer in bytes. Must be PCIe-aligned.
@@ -112,7 +118,7 @@ public:
      * Used by callers that own their sender core's L1 layout (e.g. the real-time
      * profiler, which carves its config out of dispatch L1 on the reserved
      * profiler tensix). The region must be at least
-     * D2HSocket::required_config_buffer_size() bytes, L1-aligned, and live for
+     * D2HSocket::required_config_buffer_size(l1_alignment) bytes, L1-aligned, and live for
      * the lifetime of the socket.
      *
      * For any sender_core_type but TENSIX, `sender_core.core_coord` is the core's
@@ -131,7 +137,7 @@ public:
      * socket's configuration buffer should use this to size that region (or
      * static_assert their own constant against it).
      */
-    static uint32_t required_config_buffer_size();
+    static uint32_t required_config_buffer_size(uint32_t l1_alignment);
 
     /**
      * @brief Constructs a D2HSocket using a caller-provided config buffer address.
@@ -160,7 +166,7 @@ public:
      *                     coord of an L2CPU tile on the target device.
      * @param fifo_size Size of the circular FIFO buffer in bytes. Must be PCIe-aligned.
      * @param config_buffer_address LIM address on the sender L2CPU for the socket metadata.
-     *                              Must be L1-aligned, at least required_config_buffer_size()
+     *                              Must be L1-aligned, at least required_config_buffer_size(l1_alignment)
      *                              bytes, and within the L2CPU's IoWindow.
      */
     D2HSocket(
@@ -395,8 +401,7 @@ private:
         const std::shared_ptr<MeshDevice>& mesh_device,
         const PinnedBufferInfo& data_info,
         const PinnedBufferInfo& bytes_sent_info) const;
-    void init_sender_tlb(
-        const std::shared_ptr<MeshDevice>& mesh_device, std::optional<uint32_t> device_id = std::nullopt);
+    void init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device);
     CoreCoord sender_virtual_core(const MeshDevice& mesh_device, ChipId device_id) const;
 
     void wait_for_bytes(uint32_t num_bytes);

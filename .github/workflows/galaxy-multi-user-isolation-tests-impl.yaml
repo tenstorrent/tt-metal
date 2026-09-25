@@ -1,0 +1,350 @@
+name: "[internal] Galaxy multi-user isolation tests impl"
+
+# Runs the Galaxy multi-user isolation matrix. Reads
+# tests/pipeline_reorg/galaxy_multi_user_isolation_tests.yaml and budgets under gtm.e2e.
+# Each leg splits one Galaxy into docker-compose containers and runs the entry's cmd in
+# every container at once.
+
+on:
+  workflow_call:
+    inputs:
+      docker-image:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+        description: "The manylinux wheel; every container pip-installs it."
+      enabled-skus:
+        required: true
+        type: string
+        description: "Comma-separated SKUs (see .github/sku_config.yaml); wh_galaxy and/or bh_galaxy."
+      extra-tag:
+        required: false
+        type: string
+        default: "in-service"
+        description: "Replaces the in-service runner label, to aim a run at another pool."
+
+jobs:
+  load-test-matrix:
+    runs-on: ubuntu-slim
+    outputs:
+      matrix: ${{ steps.apply-runner-labels.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/galaxy_multi_user_isolation_tests.yaml
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Build test matrix based on enabled SKUs
+        id: build-matrix
+        run: |
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "${{ inputs.enabled-skus }}" \
+            ./.github/sku_config.yaml
+      # The matrix JSON carries single quotes (the -k expressions in test_args), so it
+      # goes through env, never through a quoted shell literal.
+      - name: Apply runner labels (extra-tag)
+        id: apply-runner-labels
+        env:
+          MATRIX: ${{ steps.build-matrix.outputs.matrix }}
+          EXTRA_TAG: ${{ inputs.extra-tag }}
+        run: |
+          UPDATED=$(jq -c --arg tag "$EXTRA_TAG" \
+            'map(.runs_on |= map(if . == "in-service" then $tag else . end))' <<<"$MATRIX")
+          echo "matrix<<EOF" >> $GITHUB_OUTPUT
+          echo "$UPDATED" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+  galaxy-multi-user-isolation-tests:
+    needs: load-test-matrix
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs_on }}
+    timeout-minutes: ${{ matrix.test-group.timeout }}
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          submodules: recursive
+      - name: ⬇️ Download Build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.build-artifact-name }}
+      - name: Extract files
+        run: tar --zstd -xvf ttm_any.tar.zst
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.wheel-artifact-name }}
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.10"
+      - name: Install Wheel
+        run: |
+          python3 -m pip install --force-reinstall ttnn-*.whl
+      - name: Reset and health-check cluster
+        # A cold/degraded cluster yields an inconsistent descriptor that crashes
+        # serialize_cluster_descriptor() in the next step (SYS-1634 / BH-84).
+        timeout-minutes: 25
+        env:
+          DEV_IMAGE: ${{ inputs.docker-image }}
+        run: |
+          HEALTH_CHECK=./build/test/tt_metal/tt_fabric/test_system_health
+          # Run the binary inside the dev image, which carries its runtime deps
+          # (OpenMPI etc.) that are absent on the bare-metal runner. LD_LIBRARY_PATH
+          # is *prepended* to the image's own value on purpose: build/lib holds the
+          # extracted libtt_metal.so, while libmpi.so.40 (ULFM OpenMPI) only resolves
+          # via the path the image already sets.
+          health_check() {
+            docker run --rm --privileged \
+              --device /dev/tenstorrent --device /dev/ipmi0 \
+              -v /dev/hugepages-1G:/dev/hugepages-1G \
+              -v "$PWD":/work -w /work -e TT_METAL_HOME=/work \
+              "$DEV_IMAGE" \
+              bash -c 'export LD_LIBRARY_PATH="/work/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"; exec ./build/test/tt_metal/tt_fabric/test_system_health'
+          }
+          if [ ! -x "$HEALTH_CHECK" ]; then
+            echo "::warning::test_system_health not in the build artifact; resetting without link verification"
+            exec python3 .github/scripts/utils/cluster_recover.py reset
+          fi
+          # A full galaxy reset takes minutes, so a handful of attempts is the most
+          # that fits the step timeout -- and a state that survives 3 resets is not
+          # the transient cold-start this works around.
+          ATTEMPTS=3
+          for i in $(seq 1 $ATTEMPTS); do
+            echo "Reset/health-check attempt $i of $ATTEMPTS"
+            if python3 .github/scripts/utils/cluster_recover.py reset && health_check; then
+              echo "Reset + health check passed"
+              exit 0
+            fi
+            echo "Attempt $i failed, retrying in 5s..."
+            sleep 5
+          done
+          echo "Cluster did not become healthy after $ATTEMPTS reset attempts"
+          exit 1
+      - name: Generate tray to PCIe device mapping
+        # Retry with a reset in between: the first cluster open of a nightly run
+        # can still hit a transient degraded state (manual re-runs historically
+        # pass), so automate that recovery instead of failing the whole job.
+        # Budget covers 3 mapping attempts plus the 2 galaxy resets between them.
+        timeout-minutes: 20
+        run: |
+          # A board reset does not free a stale process still holding the device,
+          # so kill holders too (sudo: needed to read other users' /proc fds).
+          free_tt_devices() { sudo python3 .github/scripts/utils/cluster_recover.py free || true; sleep 3; }
+          # A missing/unenumerated device yields an incomplete mapping that would
+          # only fail later in create-files with no recovery; treat it as a failed
+          # attempt so the reset+retry below can bring the device back.
+          EXPECTED=$(( ${{ matrix.test-group.num_containers }} * ${{ matrix.test-group.chips_per_container }} ))
+          generate_ok() {
+            local count
+            python3 .github/scripts/utils/generate_tray_mapping.py || return 1
+            count=$(python3 -c "import yaml; d=yaml.safe_load(open('tray_to_pcie_device_mapping.yaml')); print(sum(len(v) for v in d.get('device_mapping', {}).values()))") || return 1
+            if [ "$count" -ne "$EXPECTED" ]; then
+              echo "Incomplete cluster: mapped $count devices, expected $EXPECTED"
+              return 1
+            fi
+          }
+          ATTEMPTS=3
+          free_tt_devices
+          for i in $(seq 1 $ATTEMPTS); do
+            echo "generate_tray_mapping attempt $i of $ATTEMPTS"
+            if generate_ok; then
+              echo "Tray mapping generated successfully"
+              exit 0
+            fi
+            echo "generate_tray_mapping failed on attempt $i"
+            if [ "$i" -lt "$ATTEMPTS" ]; then
+              free_tt_devices
+              echo "Resetting cluster before retry..."
+              python3 .github/scripts/utils/cluster_recover.py reset || true
+              sleep 10
+            fi
+          done
+          echo "generate_tray_mapping failed after $ATTEMPTS attempts"
+          exit 1
+      - name: Create Docker Compose file
+        run: |
+          TRAY_MAPPING_ARG=""
+          if [ "${{ matrix.test-group.scenario }}" = "tray" ] || [ "${{ matrix.test-group.scenario }}" = "tp2" ] || [ "${{ matrix.test-group.scenario }}" = "tray_reset" ]; then
+            TRAY_MAPPING_ARG="--tray-mapping-file tray_to_pcie_device_mapping.yaml"
+          fi
+          python3 .github/scripts/utils/multi-user-create-files.py \
+            --image "${{ inputs.docker-image }}" \
+            --num-containers ${{ matrix.test-group.num_containers }} \
+            --chips-per-container ${{ matrix.test-group.chips_per_container }} \
+            $TRAY_MAPPING_ARG \
+            --mesh-descriptor ${{ matrix.test-group.mesh_descriptor }} \
+            --container-prefix ${{ matrix.test-group.container_prefix }}
+      - name: Pull container image
+        # Pull the dev image up-front so its (multi-minute) download does not eat
+        # into the container-readiness wait budget below. Previously the image
+        # pull happened inside `docker compose up -d` while the readiness timer
+        # was already running, so a slow pull timed the wait out on its first
+        # iteration before any container could write its marker file.
+        timeout-minutes: 15
+        run: |
+          # --ignore-pull-failures: `up -d` below pulls when the image is
+          # missing, so a registry blip must not fail a cache-warm job.
+          docker compose -p multi-user -f multi-user-dc.yaml pull --ignore-pull-failures
+      - name: Run Docker Compose
+        timeout-minutes: 15
+        run: |
+          shopt -s nullglob
+          CONTAINERS_DIR=".multi-user-galaxy-docker-files"
+          REQUIRED_CONTAINERS=${{ matrix.test-group.num_containers }}
+          # Budget covers only in-container dependency install (uv pip install)
+          # across all containers, not the image pull (done in the previous step).
+          TIMEOUT=600
+          CONTAINER_PREFIX="${{ matrix.test-group.container_prefix }}"
+
+          rm -rf "$CONTAINERS_DIR"
+          mkdir -p "$CONTAINERS_DIR"
+
+          docker compose -p multi-user -f multi-user-dc.yaml up -d
+
+          # Start timing only after containers are up, so the wait measures
+          # container readiness rather than image-pull latency.
+          EPOCH_START=$(date +%s)
+
+          # wait for container marker files to appear (with timeout)
+          while true; do
+            files=( "$CONTAINERS_DIR"/${CONTAINER_PREFIX}-*.txt )
+            count=${#files[@]}
+            elapsed=$(( $(date +%s) - EPOCH_START))
+            if [ "$count" -ge "$REQUIRED_CONTAINERS" ]; then
+              break
+            fi
+            if [ "$elapsed" -ge "$TIMEOUT" ]; then
+              echo "Error: Not all $REQUIRED_CONTAINERS containers started within $TIMEOUT seconds (found $count)."
+              exit 1
+            fi
+            sleep 1
+          done
+
+          echo "All $REQUIRED_CONTAINERS docker containers have started (found $count)."
+
+      - name: Run the tests
+        if: matrix.test-group.scenario != 'tray_reset' && matrix.test-group.scenario != 'asic_reset'
+        timeout-minutes: 15
+        run: |
+          NUM_CONTAINERS=${{ matrix.test-group.num_containers }}
+          CONTAINER_PREFIX="${{ matrix.test-group.container_prefix }}"
+          TEST_CMD=$(cat <<'TEST_CMD_EOF'
+          ${{ matrix.test-group.cmd }}
+          TEST_CMD_EOF
+          )
+          RESULTS_DIR=".multi-user-test-results"
+
+          mkdir -p "$RESULTS_DIR"
+
+          run_test() {
+            testname="$1"
+            command="$2"
+            pids=()
+            for i in $(seq 0 $(( NUM_CONTAINERS - 1 ))); do
+              container="${CONTAINER_PREFIX}-${i}"
+              echo ">>> Running $testname in $container"
+              (
+                docker exec "$container" bash -c "$command" | sed "s/^/[$container] /"
+                status=${PIPESTATUS[0]}
+                echo $status > "$RESULTS_DIR/${container}.status"
+                exit $status
+              ) &
+              pids+=($!)
+            done
+
+            status=0
+            for pid in "${pids[@]}"; do
+              if ! wait "$pid"; then
+                status=1
+              fi
+            done
+
+            if [ $status -ne 0 ]; then
+              exit 1
+            fi
+          }
+
+          export -f run_test
+          export NUM_CONTAINERS
+          export CONTAINER_PREFIX
+          export RESULTS_DIR
+
+          # Output: ">>> Running single in chip-0" etc.
+          run_test "${{ matrix.test-group.scenario }}" "$TEST_CMD" || true
+
+      - name: Run reset isolation test
+        if: matrix.test-group.scenario == 'tray_reset' || matrix.test-group.scenario == 'asic_reset'
+        # Survivors hold one long run each; ~20min at the repeat_counts above.
+        timeout-minutes: 35
+        run: |
+          if [ "${{ matrix.test-group.scenario }}" = "tray_reset" ]; then
+            RESET_DEVICE_IDS=$(python3 -c "
+          import yaml
+          with open('tray_to_pcie_device_mapping.yaml') as f:
+              m = yaml.safe_load(f)
+          devices = m['device_mapping']['1']
+          print(','.join(str(d) for d in devices))
+          ")
+          else
+            # asic_reset: reset device 0 only (used by chip_reset-0 / bh_chip_reset-0)
+            RESET_DEVICE_IDS="0"
+          fi
+          bash .github/scripts/utils/run-reset-isolation-test.sh \
+            ${{ matrix.test-group.num_containers }} \
+            "${{ matrix.test-group.container_prefix }}" \
+            "${{ matrix.test-group.test_path }}" \
+            "${{ matrix.test-group.test_args }}" \
+            "$RESET_DEVICE_IDS" \
+            ${{ matrix.test-group.repeat_count }}
+
+      - name: Check test results
+        run: |
+          RESULTS_DIR=".multi-user-test-results"
+          NUM_CONTAINERS=${{ matrix.test-group.num_containers }}
+          CONTAINER_PREFIX="${{ matrix.test-group.container_prefix }}"
+
+          failed=0
+          for i in $(seq 0 $(( NUM_CONTAINERS - 1 ))); do
+            container="${CONTAINER_PREFIX}-${i}"
+            status_file="$RESULTS_DIR/${container}.status"
+            if [ -f "$status_file" ]; then
+              status=$(cat "$status_file")
+              if [ "$status" != "0" ]; then
+                failed=1
+              fi
+            else
+              # No status file means container didn't complete
+              failed=1
+            fi
+          done
+
+          if [ $failed -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Tear down containers
+        if: always()
+        run: |
+          docker compose -p multi-user -f multi-user-dc.yaml down
