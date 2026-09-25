@@ -5,7 +5,8 @@
 """
 Tanh Backward FP32-destination Precision Tests
 
-Companion to test_tanh_bw_ulp.py, which covers the bfloat16-destination path.
+Companion to test_tanh_bw_ulp.py, which covers the bfloat16-destination path on every
+architecture; TestTanhBwBf16Exhaustive here checks it exhaustively on Blackhole.
 A float32 input tensor makes tanh_bw_program_factory set fp32_dest_acc_en, which
 instantiates calculate_tanh_derivative_sech2<..., is_fp32_dest_acc_en = true>.
 The reference for that path is the same sech²(x) = 1/cosh²(x) evaluated at 256-bit
@@ -29,17 +30,16 @@ from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import sech2_ex
 
 FP32_MIN_NORMAL = float(np.finfo(np.float32).tiny)  # 1.1754944e-38
 
-# The exact identity sech²(x) = 4e/(1+e)², e = exp(-2|x|), costs one rounding for the
-# exp, one for (1+e)², one for the reciprocal and one for the final multiply.
-FP32_MAX_ULP = 4
+# Exhaustive over every non-negative fp32 input on Blackhole, the kernel's max is 2 ULP
+# (742 inputs; every other input is within 1).
+FP32_MAX_ULP = 2
 
-# The fp32 path is Blackhole-only for now: the Wormhole copy of
-# ckernel_sfpu_tanh_derivative.h still carries the bfloat16-grade approximation on
-# its fp32-dest instantiation (see tenstorrent/tt-metal#57509, defect 3).
+# Blackhole-only for now: the Wormhole copy of ckernel_sfpu_tanh_derivative.h still
+# carries the bfloat16-grade two-piece fit (see tenstorrent/tt-metal#57509, defect 3).
 pytestmark = pytest.mark.skipif(
     ttnn.get_arch_name() != "blackhole",
     reason=(
-        "fp32-dest tanh derivative is only fixed on Blackhole; Wormhole tracked by "
+        "tanh derivative is only fixed on Blackhole; Wormhole tracked by "
         "https://github.com/tenstorrent/tt-metal/issues/57509"
     ),
 )
@@ -197,6 +197,47 @@ class TestTanhBwFp32Saturation:
                 assert float(a) == 0.0, f"expected flush to zero at x={x}, got {float(a)!r}"
             else:
                 assert ulp_distance_fp32(a, expected) <= FP32_MAX_ULP, f"x={x}: {float(a)!r} vs {expected!r}"
+
+
+class TestTanhBwBf16Exhaustive:
+    """Every finite bfloat16 input must come out correctly rounded, both with a bfloat16
+    destination (grad bfloat16) and through an fp32 destination (grad float32 with input
+    bfloat16 turns on fp32_dest_acc_en, and the packer rounds back to bfloat16). Both use
+    the same fp32-grade math; the bfloat16 destination adds only the final RNE."""
+
+    @pytest.mark.parametrize("grad_dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16_dest", "fp32_dest"])
+    def test_all_bf16_inputs_correctly_rounded(self, device, grad_dtype):
+        bits = torch.arange(65536, dtype=torch.int32).to(torch.int16)
+        x = bits.view(torch.bfloat16)
+        x = x[torch.isfinite(x)]
+        n = x.numel()
+        pad = (-n) % 1024
+        x_in = torch.cat([x, torch.zeros(pad, dtype=torch.bfloat16)]).reshape(-1, 1024)
+
+        tt_x = ttnn.from_torch(x_in, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_g = ttnn.from_torch(torch.ones(x_in.shape), dtype=grad_dtype, device=device, layout=ttnn.TILE_LAYOUT)
+        out = ttnn.tanh_bw(tt_g, tt_x)[0]
+        assert out.dtype == ttnn.bfloat16
+        actual = ttnn.to_torch(out).reshape(-1)[:n]
+
+        # sech² is even, so only |x| matters; each distinct magnitude is scored once.
+        mags = torch.unique(x.abs().to(torch.float32))
+        expected = {}
+        for m in mags.tolist():
+            e = sech2_exact(m)
+            expected[m] = 0.0 if e < FP32_MIN_NORMAL else float(torch.tensor(e, dtype=torch.bfloat16))
+        exp_t = torch.tensor([expected[m] for m in x.abs().to(torch.float32).tolist()], dtype=torch.bfloat16)
+
+        ulp = (actual.view(torch.int16).to(torch.int32) - exp_t.view(torch.int16).to(torch.int32)).abs()
+        worst = int(ulp.argmax())
+        logger.info(
+            f"{grad_dtype}: {n} inputs, max bf16 ULP {int(ulp.max())} at x={float(x[worst])!r}, "
+            f"{float((ulp == 0).double().mean()) * 100:.2f}% correctly rounded"
+        )
+        assert int(ulp.max()) == 0, (
+            f"max bf16 ULP {int(ulp.max())} at x={float(x[worst])!r}: "
+            f"{float(actual[worst])!r} vs {float(exp_t[worst])!r}"
+        )
 
 
 class TestTanhBwFp32Gradient:
