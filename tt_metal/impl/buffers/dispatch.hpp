@@ -108,6 +108,39 @@ struct ShardedBufferReadDispatchParams : BufferReadDispatchParams {
     CoreCoord core;
 };
 
+// True when write_to_device_buffer can read an interleaved-layout write straight out of pinned host memory: the
+// buffer is not sharded and its pages carry no padding.
+bool pinned_interleaved_write_layout_supported(const Buffer& buffer);
+
+// True when the device can read a pinned write whose first source byte is at `src_region_start`: the prefetcher
+// relays the data to the dispatcher in L1, so the source must meet the L1 read alignment.
+bool pinned_write_source_aligned(const Buffer& buffer, const void* src_region_start);
+
+// Where the device reads an interleaved-buffer write from when it takes the pinned path.
+struct PinnedInterleavedWriteSource {
+    enum class Status {
+        Pinned,      // The device reads the source directly; noc_addr / noc_xy / remote_chip are valid.
+        NotMapped,   // The pin has no NOC address usable by the buffer's device.
+        Unaligned,   // The source start fails pinned_write_source_aligned.
+        OutsidePin,  // The source range is not contained in the pinned range.
+    };
+    Status status = Status::NotMapped;
+    uint64_t noc_addr = 0;
+    uint32_t noc_xy = 0;
+    bool remote_chip = false;
+};
+
+// The pinned-path decision write_to_device_buffer makes for a buffer that passes
+// pinned_interleaved_write_layout_supported. `src_region_start` is the host address of the first byte written and
+// `region_size` the number of bytes. write_to_device_buffer derives it as `src + root_buffer_region().offset`, so for
+// a pinned write `src` is the host address of the whole root buffer, whereas the copy fallback reads from `src`
+// itself. A caller that pre-computes this decision must pass `src` accordingly.
+PinnedInterleavedWriteSource resolve_pinned_interleaved_write_source(
+    const Buffer& buffer,
+    const void* src_region_start,
+    uint64_t region_size,
+    const experimental::PinnedMemory& pinned_memory);
+
 // Returns true if pinned memory was used for the transfer
 // If logical_core_filter is non-null, only cores contained in the set are written (sharded buffers only).
 bool write_to_device_buffer(
