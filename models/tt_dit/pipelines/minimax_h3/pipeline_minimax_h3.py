@@ -130,6 +130,7 @@ from .policy import (
     served_reference_image_sizes,
     served_reference_video_canvases,
     validate_input,
+    validate_ref2va,
 )
 from .references import encode_references, prepare_references, reference_condition_shapes, split_condition_blocks
 from .scheduler import MiniMaxH3Scheduler
@@ -1794,11 +1795,10 @@ class MiniMaxH3Pipeline:
         # change the output shape.
         if (height is None) != (width is None):
             raise ValueError("pass both height and width, or neither")
+        validate_ref2va(aspect_ratio=aspect_ratio, height=height, width=width)
         if height is None:
             height, width = resolve_canvas_size(*aspect_ratio)
         ratio = self.vae_config.spatial_compression_ratio
-        if height % 32 or width % 32:
-            raise ValueError(f"canvas {height}x{width} must be a multiple of 32 on both axes")
 
         prepared, num_frames = prepare_references(
             references,
