@@ -129,7 +129,7 @@ def mem_config(memory):
 
 
 def _router_config(payload):
-    cfg = ttnn._ttnn.fabric.FabricRouterConfig()
+    cfg = ttnn.FabricRouterConfig()
     cfg.max_packet_payload_size_bytes = payload
     return cfg
 

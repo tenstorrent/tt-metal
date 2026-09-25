@@ -59,10 +59,10 @@ bench() {
     # The parser pairs profiler signposts with this file in order, so a stale one
     # from an earlier run would break the pairing.
     rm -f "${CONFIGS}"
-    env "$@" python -m tracy -o "${RUN_DIR}/profiler" -r -p -v -m pytest "${TEST}" -k test_perf > "${LOG}" 2>&1
-    # `python -m tracy` exits 0 even when pytest fails, so read its summary line.
-    if grep -qE '^=+ .*[0-9]+ (failed|error)' "${LOG}"; then
-        printf -- '\npytest reported failures. Last 40 lines of %s:\n\n' "${LOG}"
+    # --check-exit-code makes tracy fail, without post-processing, when pytest fails
+    # or crashes, so a partial run is never parsed.
+    if ! env "$@" python -m tracy --check-exit-code -o "${RUN_DIR}/profiler" -r -p -v -m pytest "${TEST}" -k test_perf > "${LOG}" 2>&1; then
+        printf -- '\ntest run failed. Last 40 lines of %s:\n\n' "${LOG}"
         tail -40 "${LOG}"
         exit 1
     fi

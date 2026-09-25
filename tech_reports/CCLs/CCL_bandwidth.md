@@ -164,13 +164,13 @@ per_link_bandwidth = bottleneck_bytes / ( kernel_time * num_links * num_directio
 
 This report sweeps `ttnn.all_gather`, `ttnn.reduce_scatter`, `ttnn.all_reduce` and `ttnn.experimental.all_to_all_async_generic` across tensor size, device count and topology. All measurements are **traced**, so host dispatch is excluded.
 
-The ops query link count, topology and the rest of the machine's wiring themselves, so nothing is configured by hand and no tuning is applied. The curves show what a caller gets out of the box.
+The ops query link count, topology and the rest of the machine's wiring themselves, and no op is tuned. The one setting made by hand is the fabric packet payload. Otherwise the curves show what a caller gets out of the box.
 
 The topology is read with `ttnn.get_usable_topology`, the same check the ops use. The link count is read from each op's profiler attributes. Every figure reports what ran rather than what was requested.
 
 | Held fixed | Why |
 | --- | --- |
-| Fabric packet payload | A global setting fixed at initialization. It shifts the whole curve, so it belongs to the run rather than the collective. |
+| Fabric packet payload |  A global setting fixed at initialization. Set to 6144 B on Wormhole and 8192 B on Blackhole in our tests. |
 | Fabric configuration | 1D routing, with lower per-hop latency and a smaller header than 2D. Lines run on `FABRIC_1D`, rings on `FABRIC_1D_RING`. A ring is measured only where the axis closes. |
 | Datatype | Only a byte count under this metric. |
 

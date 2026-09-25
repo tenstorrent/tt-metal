@@ -124,7 +124,8 @@ def measure(seg, iters, n, calls):
     PM IDEAL is the op's own roofline model. Ops without one report 1, so the
     ideal is dropped if any kernel in the call lacks a model.
     """
-    if len(seg) % (iters * n * calls):
+    # A missing device duration would sum to zero and publish infinite bandwidth.
+    if seg.empty or seg[DURATION_COL].isna().any() or len(seg) % (iters * n * calls):
         return None, None
     rows = len(seg) // iters
     stages = rows // (n * calls)
