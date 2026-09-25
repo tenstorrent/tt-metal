@@ -202,10 +202,13 @@ def test_plan_waits_for_approval_then_gates(orch, sandbox):
     )
     o = orch(
         [
+            {"id": "PL.0", "title": "ledger", "step": "ledger", "gate": {"cmd": "true"}},
             {
                 "id": "PL.1",
                 "title": "plan",
                 "step": "plan",
+                "approval": "plan",
+                "deps": ["PL.0"],
                 "gate": {"cmd": plan_cmd, "metrics": {"plan_approved": "== 1"}},
             },
             {"id": "N.1", "title": "next", "deps": ["PL.1"], "gate": {"cmd": "true"}},
@@ -220,7 +223,9 @@ def test_plan_waits_for_approval_then_gates(orch, sandbox):
             }
         },
     )
-    assert o.run() == HUMAN
+    rc = o.run()
+    assert rc == HUMAN, orch.lines
+    assert o.led.status("PL.0") == "PASS"  # a plan-phase task without an approval point does not wait
     assert o.led.status("PL.1") != "PASS" and "approve plan" in o.led.state()["PL.1"]["waiting"]
     assert o.run() == HUMAN and orch.calls() == ["PL.1.plan.1.md bringup-engineer"]  # no re-planning while waiting
     approvals.approve(sandbox.spec, "plan", by="reviewer")

@@ -402,7 +402,8 @@ class Orchestrator:
         return f"tests could not be frozen after {budget} attempts: {previous.splitlines()[0] if previous else ''}"
 
     def needs_human(self, task: dict) -> str | None:
-        if task.get("step") == "plan" and not approvals.is_approved(self.spec, "plan"):
+        # A task that declares an approval point (PL.1: plan) waits for a person until that approval is recorded.
+        if task.get("approval") == "plan" and not approvals.is_approved(self.spec, "plan"):
             return (
                 f"approve the plan in {rel(self.spec, self.spec.bringup_dir)} (plan.yaml, plan.md, components.yaml, tasks.yaml), "
                 f"then: python -m models.demos.common.bringup approve plan --spec {self.spec.path}"
@@ -423,7 +424,7 @@ class Orchestrator:
         pol = self.policy(task, role)
         for attempt in range(1, pol["attempts"] + 1):
             problems = self.run_agent(task, role, attempt, self.brief(task, role, attempt, previous))
-            if task.get("step") == "plan" and not problems and self.needs_human(task):
+            if task.get("approval") and not problems and self.needs_human(task):
                 return True  # the plan exists; the gate needs the approval next
             res = self.gate(task["id"])
             if res.verdict == "PASS" and not problems:
@@ -482,7 +483,7 @@ class Orchestrator:
                 self.led.update(tid, status="STOPPED", reason=[reason], history_add={"t": now(), "status": "STOPPED"})
                 return STOPPED
             task = self.led.task(tid)
-        plan_written = task.get("step") == "plan" and (self.spec.bringup_dir / "plan.yaml").exists()
+        plan_written = task.get("approval") == "plan" and (self.spec.bringup_dir / "plan.yaml").exists()
         if role is None or plan_written:
             # A scripted step, or a plan written by an earlier run: gate it; an agent only sees it after a failure.
             if plan_written and self.needs_human(task):
