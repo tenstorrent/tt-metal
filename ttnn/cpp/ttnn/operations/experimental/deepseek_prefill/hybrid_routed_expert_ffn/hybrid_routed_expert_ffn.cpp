@@ -24,7 +24,15 @@ ttnn::Tensor hybrid_routed_expert_moe(
     RoutedExpertActivation activation,
     const std::optional<std::vector<ttnn::Tensor>>& gate_biases,
     const std::optional<std::vector<ttnn::Tensor>>& up_biases,
-    const std::optional<std::vector<ttnn::Tensor>>& down_biases) {
+    const std::optional<std::vector<ttnn::Tensor>>& down_biases,
+    const std::optional<ttnn::Tensor>& dispatched_metadata,
+    const std::optional<ttnn::Tensor>& expert_offsets,
+    const std::optional<ttnn::Tensor>& replicated_global_expert_idx_table,
+    uint32_t combine_axis,
+    uint32_t combine_num_links,
+    uint32_t num_experts_per_tok,
+    uint32_t seq_len_per_chip,
+    std::optional<tt::tt_metal::DataType> output_dtype) {
     TT_FATAL(
         gate_projs.size() == up_projs.size() && gate_projs.size() == down_projs.size(),
         "gate/up/down projection lists must have the same length (got {}, {}, {})",
@@ -74,11 +82,26 @@ ttnn::Tensor hybrid_routed_expert_moe(
     // every path -- seeding a distinct output with a copy of x would take a second program.
     const bool x_is_row_major = dispatched_buffer.layout() == tt::tt_metal::Layout::ROW_MAJOR;
     const bool fused_half_runs = hybrid_token_threshold > 0;
+    const bool overlap_combine = dispatched_metadata.has_value();
     ttnn::Tensor output = dispatched_buffer;
+    TT_FATAL(
+        !output_dtype.has_value() || x_is_row_major,
+        "output_dtype applies only to a ROW_MAJOR dispatched_buffer; a TILE one is written back in its own dtype");
+    if (overlap_combine) {
+        // Combine reads bfloat16 tiles, and a TILE x is bfloat8_b, so the tilized row-major path is the one
+        // that can produce them.
+        TT_FATAL(
+            x_is_row_major &&
+                output_dtype.value_or(tt::tt_metal::DataType::BFLOAT16) == tt::tt_metal::DataType::BFLOAT16,
+            "overlapped with combine, dispatched_buffer must be ROW_MAJOR and the output bfloat16 (got {} {})",
+            dispatched_buffer.dtype(),
+            dispatched_buffer.layout());
+        output_dtype = tt::tt_metal::DataType::BFLOAT16;
+    }
     if (x_is_row_major) {
         output = ttnn::empty(
             dispatched_buffer.logical_shape(),
-            tt::tt_metal::DataType::BFLOAT8_B,
+            output_dtype.value_or(tt::tt_metal::DataType::BFLOAT8_B),
             tt::tt_metal::Layout::TILE,
             dispatched_buffer.device(),
             tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM});
@@ -95,8 +118,9 @@ ttnn::Tensor hybrid_routed_expert_moe(
     // inside the op: the program keeps a raw pointer to this buffer and re-reads its address on
     // every program-cache hit, so it must be owned by something that outlives the program. One
     // shard per worker core, which gives every core an arena at one common L1 address.
+    // Overlapped with combine, the op allocates its own arena; see HybridOverlapProgramFactory.
     std::optional<ttnn::Tensor> l1_arena;
-    if (fused_half_runs) {
+    if (fused_half_runs && !overlap_combine) {
         auto* device = dispatched_buffer.device();
         const uint32_t arena_bytes = hybrid_l1_arena_bytes(device);
         // Whole bfloat16 elements. hybrid_l1_arena_bytes rounds down to 64B units, so the halving
@@ -129,7 +153,12 @@ ttnn::Tensor hybrid_routed_expert_moe(
             .compute_kernel_config = compute_kernel_config.has_value()
                                          ? std::optional<ttnn::DeviceComputeKernelConfig>(*compute_kernel_config)
                                          : std::nullopt,
-            .hybrid_token_threshold = hybrid_token_threshold},
+            .hybrid_token_threshold = hybrid_token_threshold,
+            .overlap_combine = overlap_combine,
+            .combine_axis = combine_axis,
+            .combine_num_links = combine_num_links,
+            .num_experts_per_tok = num_experts_per_tok,
+            .seq_len_per_chip = seq_len_per_chip},
         OperationType::tensor_args_t{
             .x = dispatched_buffer,
             .gate_projs = gate_projs,
@@ -142,7 +171,10 @@ ttnn::Tensor hybrid_routed_expert_moe(
             .gate_biases = has_bias ? *gate_biases : std::vector<ttnn::Tensor>{},
             .up_biases = has_bias ? *up_biases : std::vector<ttnn::Tensor>{},
             .down_biases = has_bias ? *down_biases : std::vector<ttnn::Tensor>{},
-            .l1_arena = l1_arena});
+            .l1_arena = l1_arena,
+            .dispatched_metadata = dispatched_metadata,
+            .expert_offsets = expert_offsets,
+            .replicated_global_expert_idx_table = replicated_global_expert_idx_table});
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn

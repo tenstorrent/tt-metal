@@ -11,8 +11,16 @@ set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_HYBRID_ROUTED_EXPERT_FFN_API_HEADERS
 set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_HYBRID_ROUTED_EXPERT_FFN_SRCS
     device/hybrid_half_merge.cpp
     device/hybrid_routed_expert_ffn_device_operation.cpp
+    device/hybrid_overlap_program_factory.cpp
     device/hybrid_program_factory.cpp
     hybrid_routed_expert_ffn.cpp
+    # combine_fabric2d, carried the same way (device/combine, device/kernels/combine) under the
+    # hybrid_routed_expert_ffn::combine and hyb_cmbf2d namespaces, so the overlap can change it
+    # without touching the standalone op.
+    device/combine/combine_fabric2d_assignments.cpp
+    device/combine/combine_fabric2d_placement.cpp
+    device/combine/combine_fabric2d_program_factory.cpp
+    device/combine/combine_fabric2d_device_operation.cpp
 )
 
 # Registered on the shared `ttnn` Python module target from this op's CMakeLists.txt (see the
