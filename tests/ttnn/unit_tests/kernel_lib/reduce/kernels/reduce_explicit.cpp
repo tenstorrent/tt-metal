@@ -73,7 +73,7 @@ ALWI void run_reduce_calls(
             make_accumulation<call>(),
             make_post_op(),
             REDUCE_PARTIAL_MODE,
-            compute_kernel_lib::ReduceInputChunk::of(0, REDUCE_CHUNK_OUTPUTS),
+            REDUCE_OUTPUT_GROUP,
             REDUCE_AUXILIARY_OFFSET);
 
         constexpr bool helper_pops_input =
