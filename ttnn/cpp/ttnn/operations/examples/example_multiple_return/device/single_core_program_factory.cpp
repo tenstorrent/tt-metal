@@ -24,12 +24,10 @@ ExampleMultipleReturnDeviceOperation::SingleCore::create(
 
     tt::tt_metal::Program program{};
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    uint32_t single_tile_size = tt::tt_metal::tile_size(input_tensor.dtype());
 
     auto output_dtype = output_tensor1.has_value() ? output_tensor1.value().dtype() : output_tensor2.value().dtype();
-    tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output_dtype);
-    uint32_t single_tile_size_output = tt::tile_size(cb_data_format_output);
+    uint32_t single_tile_size_output = tt::tt_metal::tile_size(output_dtype);
 
     uint32_t num_tiles = input_tensor.physical_volume() / tt::constants::TILE_HW;
 
@@ -41,7 +39,7 @@ ExampleMultipleReturnDeviceOperation::SingleCore::create(
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_tiles = 2;
     tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
+        tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, input_tensor.dtype()}})
             .set_page_size(src0_cb_index, single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
@@ -49,7 +47,7 @@ ExampleMultipleReturnDeviceOperation::SingleCore::create(
     uint32_t num_output_tiles = 2;
     tt::tt_metal::CircularBufferConfig cb_output_config =
         tt::tt_metal::CircularBufferConfig(
-            num_output_tiles * single_tile_size_output, {{output_cb_index, cb_data_format_output}})
+            num_output_tiles * single_tile_size_output, {{output_cb_index, output_dtype}})
             .set_page_size(output_cb_index, single_tile_size_output);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 

@@ -109,7 +109,6 @@ ProgramDescriptor NonZeroIndicesProgramFactory::create_descriptor(
     constexpr uint32_t output_cb_index_0 = 1;
     constexpr uint32_t output_cb_index_1 = 2;
 
-    const tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(input.dtype());
     const tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(DataType::UINT32);
 
     ProgramDescriptor desc;
@@ -120,7 +119,7 @@ ProgramDescriptor NonZeroIndicesProgramFactory::create_descriptor(
         .core_ranges = core_ranges,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = input_cb_index,
-            .data_format = input_cb_data_format,
+            .data_format = input.dtype(),
             .page_size = input_page_size,
         }}},
     });

@@ -35,8 +35,6 @@ ProgramDescriptor ReshapeRMProgramFactory::create_descriptor(
     Buffer* src0_buffer = input_tensor.buffer();
     Buffer* dst_buffer = output_tensor.buffer();
 
-    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
-
     uint32_t num_old_sticks =
         input_tensor.padded_shape()[0] * input_tensor.padded_shape()[1] * input_tensor.padded_shape()[2];
     uint32_t num_new_sticks = output_shape[0] * output_shape[1] * output_shape[2];
@@ -79,7 +77,7 @@ ProgramDescriptor ReshapeRMProgramFactory::create_descriptor(
         .core_ranges = total_core_ranges,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(src0_cb_index),
-            .data_format = cb_data_format,
+            .data_format = input_tensor.dtype(),
             .page_size = page_size,
         }}},
     });

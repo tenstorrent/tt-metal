@@ -27,8 +27,7 @@ ProgramDescriptor ReshapeTileProgramFactory::create_descriptor(
     const CoreRangeSet core_ranges{CoreRange{{0, 0}, {0, 0}}};
     const CoreCoord core{0, 0};
 
-    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    uint32_t single_tile_size = tt::tt_metal::tile_size(input_tensor.dtype());
 
     Buffer* src0_buffer = input_tensor.buffer();
 
@@ -52,7 +51,7 @@ ProgramDescriptor ReshapeTileProgramFactory::create_descriptor(
         .core_ranges = core_ranges,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(src0_cb_index),
-            .data_format = cb_data_format,
+            .data_format = input_tensor.dtype(),
             .page_size = single_tile_size,
         }}},
     });
@@ -75,7 +74,7 @@ ProgramDescriptor ReshapeTileProgramFactory::create_descriptor(
             .core_ranges = core_ranges,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(src1_cb_index),
-                .data_format = cb_data_format,
+                .data_format = input_tensor.dtype(),
                 .page_size = alignment,
             }}},
         });

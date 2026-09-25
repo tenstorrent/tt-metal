@@ -38,8 +38,7 @@ ttnn::device_operation::ProgramArtifacts FillRMProgramFactory::create_program_ar
 
     const NodeCoord node{0, 0};
 
-    const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
-    const std::uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    const std::uint32_t single_tile_size = tt::tt_metal::tile_size(input.dtype());
 
     const std::uint32_t num_cb_tiles = 16;
     TT_FATAL(

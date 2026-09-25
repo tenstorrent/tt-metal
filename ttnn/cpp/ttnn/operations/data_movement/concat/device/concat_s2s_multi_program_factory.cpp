@@ -48,7 +48,6 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
     const uint32_t num_input_tensors = input_tensors.size();
     const uint32_t cb_dst_id = 16;
     TT_FATAL(num_input_tensors <= cb_dst_id, "Not enough circular buffer for {} inputs.", num_input_tensors);
-    const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(output.dtype());
     const bool rm_layout = output.layout() == Layout::ROW_MAJOR;
 
     // Assume inputs and output have the same element size and alignment.
@@ -70,7 +69,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
         elements_per_page_width = page_size / element_size;
         elements_per_page_height = 1;
     } else {
-        page_size = tt::tile_size(cb_data_format);
+        page_size = tt::tt_metal::tile_size(output.dtype());
         elements_per_page_width = TILE_WIDTH;
         elements_per_page_height = TILE_HEIGHT;
     }
@@ -124,7 +123,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(input_id),
-                .data_format = cb_data_format,
+                .data_format = output.dtype(),
                 .page_size = page_size,
             }}},
             .buffer = input_tensors[input_id].buffer(),
@@ -145,7 +144,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(cb_dst_id),
-            .data_format = cb_data_format,
+            .data_format = output.dtype(),
             .page_size = page_size,
         }}},
         .buffer = output.buffer(),

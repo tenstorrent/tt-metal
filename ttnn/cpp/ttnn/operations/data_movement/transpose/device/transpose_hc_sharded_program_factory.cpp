@@ -330,9 +330,6 @@ tt::tt_metal::ProgramDescriptor TransposeHCShardedProgramFactory::create_descrip
 
     ProgramDescriptor desc;
 
-    tt::DataFormat src0_cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
-    tt::DataFormat dst_cb_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
-
     uint32_t W = input_tensor.logical_shape()[3], H = input_tensor.logical_shape()[2];
     uint32_t C = input_tensor.logical_shape()[1], N = input_tensor.logical_shape()[0];
     uint32_t stick_size_bytes = W * input_tensor.element_size();
@@ -361,7 +358,7 @@ tt::tt_metal::ProgramDescriptor TransposeHCShardedProgramFactory::create_descrip
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(src0_cb_index),
-            .data_format = src0_cb_data_format,
+            .data_format = input_tensor.dtype(),
             .page_size = stick_size_bytes,
         }}},
         .buffer = input_tensor.buffer(),
@@ -373,7 +370,7 @@ tt::tt_metal::ProgramDescriptor TransposeHCShardedProgramFactory::create_descrip
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(output_cb_index),
-            .data_format = dst_cb_data_format,
+            .data_format = output_tensor.dtype(),
             .page_size = stick_size_bytes,
         }}},
         .buffer = output_tensor.buffer(),

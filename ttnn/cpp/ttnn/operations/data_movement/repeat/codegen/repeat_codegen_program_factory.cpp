@@ -92,7 +92,6 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
     const bool is_last_dim_rm = is_row_major && operation_attributes.rep_dim == 3;
 
     const CoreSplit split = split_work(input, operation_attributes.total_out_pages);
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
 
     ProgramDescriptor desc;
 
@@ -106,7 +105,7 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
             .core_ranges = split.all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = 0,
-                .data_format = cb_data_format,
+                .data_format = input.dtype(),
                 .page_size = page_size,
             }}},
         });
@@ -175,7 +174,7 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
             .core_ranges = split.all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = 0,
-                .data_format = cb_data_format,
+                .data_format = input.dtype(),
                 .page_size = out_aligned,
             }}},
         });
@@ -228,7 +227,7 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
         .core_ranges = split.all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = 0,
-            .data_format = cb_data_format,
+            .data_format = input.dtype(),
             .page_size = aligned_page_size,
         }}},
     });
