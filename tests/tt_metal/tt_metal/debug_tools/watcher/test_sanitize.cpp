@@ -115,6 +115,13 @@ void RunTestOnCore(
     if (tt::tt_metal::MetalContext::instance().rtoptions().watcher_noc_sanitize_disabled()) {
         GTEST_SKIP();
     }
+    // Under the Quasar address translation tables a bad coordinate never reaches the sanitizer: the
+    // address backend traps on it first. So the two tests about the coordinate itself are skipped, and
+    // the stateful and inline tests below target the buffer's real core with a bad offset instead.
+    const bool att = is_quasar && tt::tt_metal::MetalContext::instance().rtoptions().get_noc_att_map().has_value();
+    if (att && (feature == SanitizeNOCAddress || feature == SanitizeNOCInlineWriteDram)) {
+        GTEST_SKIP() << "Coordinates outside the ATT map trap in the address backend before the sanitizer runs";
+    }
 
     // Non-IDLE_ETH cores (TENSIX/ACTIVE_ETH, all archs) run under both fast and slow dispatch.
     // IDLE_ETH cores only support slow dispatch (FD not yet implemented for them).
@@ -409,6 +416,14 @@ void RunTestOnCore(
             break;
         }
         case SanitizeNOCWriteWithStateBadCoord:
+            if (att) {
+                // Stateful write to the buffer's real core at offset 0: the mailboxes. The bad coordinate
+                // of the XY variant would trap in the ATT address backend before the sanitizer runs.
+                output_buffer_addr = 0;
+                buffer_size = 32;
+                use_write_with_state = 1;
+                break;
+            }
             // Stateful write to a non-existent core. The destination coordinate lives in NOC_RET_ADDR; a
             // sanitizer that mistakenly read NOC_TARG_ADDR would instead see the sender's own (valid) coordinate
             // and fail to flag the bad target. The zero destination offset keeps the failure deterministic
@@ -420,6 +435,12 @@ void RunTestOnCore(
             use_write_with_state = 1;
             break;
         case SanitizeNOCWriteWithStateAnyLenBadCoord:
+            if (att) {
+                output_buffer_addr = 0;
+                buffer_size = 32;
+                use_write_with_state = 2;
+                break;
+            }
             // Same bad coordinate through the any-length stateful path. Any-len set_state does not program
             // AT_LEN, so a sanitizer that read the size back from the command buffer would report a 0-byte
             // transfer (Quasar RoCC) and the expected "tried to unicast write <buffer_size> bytes" would not match.
@@ -430,6 +451,13 @@ void RunTestOnCore(
             use_write_with_state = 2;
             break;
         case SanitizeNOCInlineWriteFromState:
+            if (att) {
+                // The buffer's real core with an offset one past its L1: the state is read back from the
+                // command buffer as a whole ATT operand and the offset check fires.
+                output_buffer_addr = device->l1_size_per_core();
+                use_inline_dw_write_from_state = true;
+                break;
+            }
             // Bad destination coordinate, but keep the (nonzero) destination offset: this exercises
             // DEBUG_SANITIZE_NOC_ADDR_FROM_STATE after noc_inline_dw_write_set_state. The reported offset
             // discriminates low-bits bugs: dropping NOC_TARG_ADDR_LO on tt-1xx or NOC_RET_ADDR_LO on tt-2xx
@@ -442,8 +470,12 @@ void RunTestOnCore(
             if (hal.get_arch() == tt::ARCH::BLACKHOLE) {
                 GTEST_SKIP() << "cq_noc_inline_dw_write_with_state-style helper is not exposed on Blackhole";
             }
-            output_buf_noc_xy.x = 26;
-            output_buf_noc_xy.y = 18;
+            if (att) {
+                output_buffer_addr = device->l1_size_per_core();
+            } else {
+                output_buf_noc_xy.x = 26;
+                output_buf_noc_xy.y = 18;
+            }
             use_inline_dw_write_with_state = true;
             break;
         case SanitizeNOCInvalidTxnId: invalid_txn_id = k_invalid_txn_id; break;
@@ -545,6 +577,27 @@ void RunTestOnCore(
         // The any-length variant must also report the real byte count (size is not in cmd-buf state).
         case SanitizeNOCWriteWithStateBadCoord:
         case SanitizeNOCWriteWithStateAnyLenBadCoord:
+            if (att) {
+                // The ATT variant writes offset 0 of the buffer's core: the mailboxes.
+                expected = fmt::format(
+                    "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast write {} "
+                    "bytes from local L1[{:#08x}] to Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (NOC target "
+                    "overwrites mailboxes).",
+                    device->id(),
+                    core_name,
+                    core.x,
+                    core.y,
+                    virtual_core.x,
+                    virtual_core.y,
+                    risc_name,
+                    noc,
+                    buffer_size,
+                    buffer_addr,
+                    output_core_virtual_coords.str(),
+                    output_buffer_addr);
+                break;
+            }
+            [[fallthrough]];
         case SanitizeNOCAddress:
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast write {} "
@@ -712,6 +765,25 @@ void RunTestOnCore(
         } break;
         case SanitizeNOCInlineWriteFromState:
         case SanitizeNOCInlineWriteWithState:
+            if (att) {
+                // The ATT variant names the buffer's core with an offset one past its L1.
+                expected = fmt::format(
+                    "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast read 4 "
+                    "bytes to local L1[{:#08x}] from Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (NOC target "
+                    "address overflow).",
+                    device->id(),
+                    core_name,
+                    core.x,
+                    core.y,
+                    virtual_core.x,
+                    virtual_core.y,
+                    risc_name,
+                    noc,
+                    0,  // l1_addr is 0 for address-only (FROM_STATE) sanitization
+                    output_core_virtual_coords.str(),
+                    output_buffer_addr);
+                break;
+            }
             // Inline dw write sanitized straight from the command-buffer state (DEBUG_SANITIZE_NOC_ADDR_FROM_STATE
             // uses read semantics with l1_addr 0). The destination coordinate is invalid; [addr=...] is the
             // reconstructed destination offset, which must be the real offset rather than 0.

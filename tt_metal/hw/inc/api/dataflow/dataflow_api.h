@@ -2128,7 +2128,7 @@ FORCE_INLINE void noc_inline_mcast_dw_write(
     uint32_t customized_src_addr = 0,
     uint32_t num_dest = 1) {
     WAYPOINT("NWIW");
-    DEBUG_SANITIZE_NOC_ADDR(noc, addr, 4);
+    DEBUG_SANITIZE_NOC_MULTI_ADDR(noc, addr, 4);
     DEBUG_SANITIZE_NO_DRAM_ADDR(noc, addr, 4);
 #if defined(ARCH_BLACKHOLE) && defined(WATCHER_ENABLED)
     if constexpr (dst_type == InlineWriteDst::L1) {
@@ -2583,7 +2583,7 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid_with_state(
         noc);
 
     // In order to sanitize, need to grab full noc addr + xfer size from state.
-    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_STATE(noc, dst_local_l1_addr, src_local_l1_addr, size);
+    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_STATE_ON(noc, cmd_buf, dst_local_l1_addr, src_local_l1_addr, size);
 
 #ifdef ARCH_BLACKHOLE
     // Issue https://github.com/tenstorrent/tt-metal/issues/28758: always update counter for blackhole as a temporary
