@@ -176,7 +176,7 @@ _MESH_CONFIGS_ISLANDS = _MESH_CONFIGS + [
 
 
 @pytest.mark.timeout(0)
-@pytest.mark.parametrize("layer_idx", [2, 3], ids=["csa-layer2-hash", "hca-layer3-topk"])
+@pytest.mark.parametrize("layer_idx", [0, 2, 3], ids=["swa-layer0-hash", "csa-layer2-hash", "hca-layer3-topk"])
 @pytest.mark.parametrize("mesh_device, device_params", _MESH_CONFIGS_ISLANDS, indirect=["mesh_device", "device_params"])
 def test_v4_block_islands_chunk1(mesh_device, device_params, layer_idx):
     """The ATTENTION islands (A1 / glue / A2 / epilogue, DS4F-0246 path A3) vs the eager block on chunk 1 -- the first chunk

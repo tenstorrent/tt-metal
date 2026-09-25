@@ -1164,7 +1164,9 @@ class TtHCA(_TtHCABase):
     # dense SDPA over [carry | chunk | every entry column] (static: the full capacity, masked by the compressor's
     # block), un-rope, o-proj, the export's ring rows; eager epilogue = ring write + counters + carry copy.
     def traceable(self) -> bool:
-        return self.compressor is not None and os.environ.get("PREFILL_HCA_ISLANDS", "1") == "1"
+        if self.compressor is None:  # sliding-window layer: stems + window attention, no entries
+            return os.environ.get("PREFILL_SWA_ISLANDS", "1") == "1"
+        return os.environ.get("PREFILL_HCA_ISLANDS", "1") == "1"
 
     def trace_ready(self, state) -> bool:
         """Chunk 0 stays eager: it masks the (still empty) carry columns; the islands are captured with them visible."""
@@ -1175,22 +1177,27 @@ class TtHCA(_TtHCABase):
         (value-cached, so the capture that follows a matching prepare writes nothing from host)."""
         c = self.compressor
         self._push_scalar(self._slab_index[1], int(state.kv_actual))
-        c._push_scalar(c._entry_index[1], int(state.entry_count))  # == first_window_position // rate
-        c._push_scalar(c._mask_consts["ec"], int(state.entry_count))
-        c._push_scalar(c._mask_consts["rl"], int(real_len))
+        if c is not None:
+            c._push_scalar(c._entry_index[1], int(state.entry_count))  # == first_window_position // rate
+            c._push_scalar(c._mask_consts["ec"], int(state.entry_count))
+            c._push_scalar(c._mask_consts["rl"], int(real_len))
 
     def forward_pre(self, hidden_states, state, real_len: int):
-        rate = self.compressor.compress_rate
-        assert real_len % rate == 0 and real_len >= rate, real_len
         cos, sin = self._rope_gather(self._slab_rope, self._rope_index(self._slab_index, int(state.kv_actual)))
         q = self._q_stem(hidden_states, cos, sin)
         sliding_kv = self._kv_stem(hidden_states, cos, sin)
+        if self.compressor is None:
+            return q, sliding_kv, None, None, cos, sin
+        rate = self.compressor.compress_rate
+        assert real_len % rate == 0 and real_len >= rate, real_len
         new_entries, mask_block = self.compressor(
             hidden_states, seq_len_actual=real_len, first_window_position=int(state.entry_count) * rate
         )
         return q, sliding_kv, new_entries, mask_block, cos, sin
 
     def glue_chunk(self, state, outs, real_len: int, export=None) -> None:
+        if self.compressor is None:
+            return
         _q, _kv, new_entries, _m, _c, _s = outs
         merged, tile_start = self._write_compressed(state, new_entries, real_len // self.compressor.compress_rate)
         if export is not None:
@@ -1201,7 +1208,7 @@ class TtHCA(_TtHCABase):
         attn, next_carry, slab = self._attention(
             q,
             sliding_kv,
-            state.compressed_kv,
+            None if self.compressor is None else state.compressed_kv,
             mask_block,
             cos,
             sin,
@@ -1222,14 +1229,15 @@ class TtHCA(_TtHCABase):
             cache, batch_idx = export
             assert ring.dtype == cache.dtype, (ring.dtype, cache.dtype)
             ttnn.kv_cache.fill_cache_for_user_(cache, ring, int(batch_idx), update_idx=0)
-        state.entry_count += real_len // self.compressor.compress_rate
+        if self.compressor is not None:
+            state.entry_count += real_len // self.compressor.compress_rate
         state.kv_actual += real_len
         ttnn.copy(next_carry, state.sliding_carry)  # NOT _update_in_place: next_carry is an island output
 
     def _export_dtype(self):
         from models.demos.deepseek_v3_d_p.tt.v4 import kv_contract as kc
 
-        tag = kc.spec("hca_unified").dtype_tag
+        tag = kc.spec("swa_window" if self.compressor is None else "hca_unified").dtype_tag
         return {"bf16_rm": ttnn.bfloat16, "bfp8_tile": ttnn.bfloat8_b, "bfp4_tile": ttnn.bfloat4_b}[tag]
 
     # ---- export into the unified (migration) cache ------------------------------------------------------------
