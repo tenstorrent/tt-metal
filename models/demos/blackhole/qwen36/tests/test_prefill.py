@@ -28,12 +28,21 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.blackhole.qwen36.tests.test_factory import compute_pcc
 
 # Single-device test: default to the 9B checkpoint (the 27B needs a multi-device mesh for TP).
 os.environ.setdefault("HF_MODEL", "Qwen/Qwen3.5-9B")
 
-DEVICE_PARAMS = [{"l1_small_size": 24576, "num_command_queues": 2}]
+# l1_small_size reserves a slice of every core's L1 for small allocations. 24576 is what the GDN
+# prefill depthwise ttnn.conv1d needs (GDN_CONV1D_L1_SMALL_SIZE) — but that op is only on the TP
+# path; this single-device suite goes through the MAC FIR instead and never allocates from it. On
+# Wormhole that unused 24KB/core reservation is exactly what the chunk-seq kernel's statically
+# allocated circular buffers collide with (they need up to ~1354944 B of the 1368896 usable, and the
+# reservation sits at 1343488 — an ~11.5KB overlap). Blackhole has ~72KB/core more L1 and absorbs
+# both, so keep its validated value there.
+_L1_SMALL = 24576 if is_blackhole() else 4096
+DEVICE_PARAMS = [{"l1_small_size": _L1_SMALL, "num_command_queues": 2}]
 BLOCK_SIZE = 64
 MNB_MASKED = 64  # 64 * 64 = 4096 token capacity — plenty for short-prompt buckets
 MNB_CHUNKED = 1280  # 1280 * 64 = 81920 token capacity (covers the >64k isolation case)

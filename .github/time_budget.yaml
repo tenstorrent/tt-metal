@@ -374,22 +374,24 @@ models:
     wh_n300: 6
     bh_p150: 26
     bh_p300: 42
-    bh_quietbox_2: 186
+    bh_quietbox_2: 220
   e2e_tier3:
+    wh_llmbox: 12
     wh_llmbox_perf: 180
     wh_galaxy_perf: 55
     wh_n150: 108
-    wh_n300: 60
+    # wh_n300 = 60 + 20 for the Qwen3.5-9B e2e tests (measured 16 min).
+    wh_n300: 80
     bh_p150: 33
     bh_p300: 13
-    bh_quietbox_2: 62
+    bh_quietbox_2: 140 # 62 + 78 for cherry-picked Qwen3.6-27B teacher-forced accuracy; needs #tt-metal-infra sign-off
   unit_tier1:
     wh_llmbox: 155
     wh_n150: 133
     wh_galaxy: 260
     wh_galaxy_perf: 65
     bh_p150: 20
-    bh_quietbox_2: 502  # +15 for test_decode_bucketing's own 1800 s budget (#55790)
+    bh_quietbox_2: 512  # +15 for test_decode_bucketing's own 1800 s budget (#55790); +10 for cherry-picked Qwen3.6 unit tests (rope_tp/generate_tp), needs #tt-metal-infra sign-off
     bh_galaxy: 75
     bh_sc1: 370
     bh_sc4: 50
@@ -400,15 +402,15 @@ models:
     wh_n300: 30
     wh_galaxy_perf: 80
     bh_p150: 20
-    bh_quietbox_2: 60
+    bh_quietbox_2: 95
   unit_tier3:
-    wh_llmbox: 90
+    wh_llmbox: 100
     wh_galaxy: 80
     wh_llmbox_perf: 58
     wh_n150: 75
     wh_n150_civ2: 12
     wh_n300: 43  # +10 DiffusionDrive unit tests (#42995)
-    bh_p150: 30
+    bh_p150: 50 # 30 + 20 for cherry-picked Qwen3.5-9B P150 unit tests; needs #tt-metal-infra sign-off
     bh_p300: 30
     bh_quietbox_2: 25
   integration:

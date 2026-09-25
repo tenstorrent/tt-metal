@@ -3155,10 +3155,12 @@ class ModelArgs:
         from transformers import AutoConfig
 
         if self.dummy_weights:
-            logger.info(f"Loading state param for dummy {self.model_name} from {self.LOCAL_HF_PARAMS[self.model_name]}")
-            self.hf_config = AutoConfig.from_pretrained(
-                self.LOCAL_HF_PARAMS[self.model_name], trust_remote_code=self.trust_remote_code_hf
-            )
+            # LOCAL_HF_PARAMS is an optimisation, not a requirement: it lets a dummy-weight build
+            # skip fetching the checkpoint at all. Fall back to CKPT_DIR, which already holds
+            # config.json, so a model needs an entry here only if it must build without one.
+            _cfg_src = self.LOCAL_HF_PARAMS.get(self.model_name, self.CKPT_DIR)
+            logger.info(f"Loading state param for dummy {self.model_name} from {_cfg_src}")
+            self.hf_config = AutoConfig.from_pretrained(_cfg_src, trust_remote_code=self.trust_remote_code_hf)
         else:
             self.hf_config = AutoConfig.from_pretrained(
                 self.CKPT_DIR,

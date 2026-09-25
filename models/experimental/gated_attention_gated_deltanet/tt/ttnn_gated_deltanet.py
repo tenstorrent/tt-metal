@@ -6,9 +6,15 @@
 TTNN implementation of the Gated DeltaNet layer.
 """
 
-import torch
 
 import ttnn
+
+#: Cached [1, 1, total_len] arange per (device, total_len) for the conv1d one-hot selector.
+#: ttnn.arange uploads from host, which is illegal inside a trace capture; total_len is fixed per
+#: bucket so one build serves every step. Keyed by id(device): entries outlive their device if a
+#: device is closed and another allocated at the same address, which no current caller does, but a
+#: long-running multi-device harness should clear this between devices.
+_ARANGE_CACHE = {}
 
 from .ttnn_delta_rule_ops import (
     recurrent_gated_delta_rule_ttnn,
@@ -17,12 +23,20 @@ from .ttnn_delta_rule_ops import (
 )
 from .ttnn_delta_rule_seq import chunk_gated_delta_rule_seq_adapter
 
+# Blackhole has ~1.84x Wormhole's total L1 (140 cores vs 80) and 80 interleave banks vs 64, so a
+# working set that fits beside the chunk-seq kernel's circular buffers there does not fit on
+# Wormhole -- short sequences failed as "clash with L1 buffers" at T <= 512. CBs are L1-only by
+# hardware, so the activations are what has to move.
 _L1_SEQ_THRESHOLD = 512
+_L1_SEQ_THRESHOLD_WH = 0  # Wormhole: never L1
 
 
 def _seq_memory_config(seq_len):
-    """L1 for short sequences (faster), DRAM for long (avoids OOM)."""
-    return ttnn.L1_MEMORY_CONFIG if seq_len <= _L1_SEQ_THRESHOLD else None
+    """L1 for short sequences (faster), DRAM for long (avoids OOM). Wormhole always takes DRAM."""
+    from models.common.utility_functions import is_blackhole
+
+    threshold = _L1_SEQ_THRESHOLD if is_blackhole() else _L1_SEQ_THRESHOLD_WH
+    return ttnn.L1_MEMORY_CONFIG if seq_len <= threshold else None
 
 
 def rms_norm_gated_ttnn(x, gate, weight, eps=1e-5, memory_config=None):
@@ -144,11 +158,19 @@ def _causal_conv1d_fir(
     weight_taps=None,
     bias_dev=None,
     valid_len=None,
+    pad_layout=None,
 ):
     """Depthwise causal conv1d + SiLU via K shifted multiply-accumulate slices.
 
     x [B,T,D]; conv_state [B,K-1,D] or list of [B,1,D]; weight_taps/bias_dev optional.
     Returns output [B,T,D], new_state [B,K-1,D].
+
+    pad_layout: layout for x_padded. The K shifted windows read below start at rows 1..K-1, which
+        are never tile-aligned, and ttnn has no sub-tile row shift on TILE data -- so a TILE
+        x_padded makes every tap untilize the whole [B,(K-1)+T,D] tensor. Building it ROW_MAJOR
+        costs one untilize and lets each tap tilize only its own slice: same ops, same order, same
+        taps. Measured on N300 at T=2048/D=4096, UntilizeWithUnpadding 1,033us -> 15us (layer
+        19,941 -> 19,144us). None -> TILE on Blackhole (its validated path), ROW_MAJOR on Wormhole.
     """
     mc = memory_config
     B, T, D = x.shape[0], x.shape[1], x.shape[2]
@@ -159,17 +181,25 @@ def _causal_conv1d_fir(
             x, conv_state, kernel_size, device, memory_config=mc, weight_taps=weight_taps, bias_dev=bias_dev
         )
 
+    if pad_layout is None:
+        from models.common.utility_functions import is_blackhole
+
+        pad_layout = ttnn.TILE_LAYOUT if is_blackhole() else ttnn.ROW_MAJOR_LAYOUT
+    _x = x if x.layout == pad_layout else ttnn.to_layout(x, pad_layout, memory_config=mc)
     if conv_state is not None:
-        x_padded = ttnn.concat([conv_state, x], dim=1, memory_config=mc)
+        _cs = (
+            conv_state if conv_state.layout == pad_layout else ttnn.to_layout(conv_state, pad_layout, memory_config=mc)
+        )
+        x_padded = ttnn.concat([_cs, _x], dim=1, memory_config=mc)
     else:
         pad = ttnn.zeros(
             [B, kernel_size - 1, D],
             device=device,
             dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
+            layout=pad_layout,
             memory_config=mc,
         )
-        x_padded = ttnn.concat([pad, x], dim=1, memory_config=mc)
+        x_padded = ttnn.concat([pad, _x], dim=1, memory_config=mc)
 
     # new_state: last K-1 tokens; land in DRAM (carry alive across downstream kernel CBs).
     total_len = (kernel_size - 1) + T
@@ -188,15 +218,40 @@ def _causal_conv1d_fir(
         # only the one-hot VALUES depend on valid_len.
         # valid_len may be a scalar (one length for all B rows) or a per-row list/tuple of length
         # B (batched prefill: each user's own real length picks that user's decode conv window).
-        sel = torch.zeros(B, kernel_size - 1, total_len, dtype=torch.float32)
-        if isinstance(valid_len, (list, tuple)):
-            for bi in range(B):
-                for j in range(kernel_size - 1):
-                    sel[bi, j, int(valid_len[bi]) + j] = 1.0
+        # Built on device -- row j of the one-hot is (arange(total_len) == valid_len + j) -- so no
+        # host tensor is uploaded and the masked-bucket prefill can be trace-captured (host->device
+        # writes are not allowed during trace capture). ttnn.arange itself uploads from host, so the
+        # range is cached per (device, total_len) in _ARANGE_CACHE; warm-up populates it before any
+        # capture begins.
+        _ar_key = (id(device), int(total_len))
+        _ar = _ARANGE_CACHE.get(_ar_key)
+        if _ar is None:
+            _ar = ttnn.arange(start=0, end=total_len, step=1, dtype=ttnn.float32, device=device)
+            _ar = ttnn.reshape(ttnn.to_layout(_ar, ttnn.TILE_LAYOUT), [1, 1, total_len])
+            _ARANGE_CACHE[_ar_key] = _ar
+
+        def _one_hot(vl):
+            rows = [ttnn.eq(_ar, float(int(vl) + j)) for j in range(kernel_size - 1)]
+            out = rows[0] if len(rows) == 1 else ttnn.concat(rows, dim=1)
+            if len(rows) != 1:
+                for r in rows:
+                    ttnn.deallocate(r)
+            return out  # [1, K-1, total_len]
+
+        if isinstance(valid_len, (list, tuple)) and len(set(int(v) for v in valid_len)) > 1:
+            blocks = [_one_hot(valid_len[bi]) for bi in range(B)]
+            sel_tt = ttnn.concat(blocks, dim=0)
+            for b in blocks:
+                ttnn.deallocate(b)
         else:
-            for j in range(kernel_size - 1):
-                sel[:, j, valid_len + j] = 1.0
-        sel_tt = ttnn.from_torch(sel, dtype=x_padded.dtype, layout=ttnn.TILE_LAYOUT, device=device)
+            _vl = valid_len[0] if isinstance(valid_len, (list, tuple)) else valid_len
+            _one = _one_hot(_vl)
+            sel_tt = _one if B == 1 else ttnn.repeat(_one, ttnn.Shape([B, 1, 1]))
+            if B != 1:
+                ttnn.deallocate(_one)
+        # _ar is cached and shared across calls -- do NOT deallocate it.
+        if sel_tt.dtype != x_padded.dtype:
+            sel_tt = ttnn.typecast(sel_tt, x_padded.dtype)
         xp = ttnn.to_layout(x_padded, ttnn.TILE_LAYOUT)
         # cross-chunk carry -> DRAM
         new_state = ttnn.matmul(sel_tt, xp, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -216,11 +271,16 @@ def _causal_conv1d_fir(
 
     total_len = (kernel_size - 1) + T
     _dram = ttnn.DRAM_MEMORY_CONFIG
-    # Depthwise K-tap FIR via multiply + addcmul; re-tilize k>=1 slices (only k=0 is tile-aligned).
+    # Depthwise K-tap FIR via multiply + addcmul. Each tap tilizes only its own slice: with a TILE
+    # x_padded that is just k>=1 (k=0 alone is tile-aligned); with a ROW_MAJOR one it is every tap,
+    # which is the point -- one untilize up front instead of one per tap over the whole tensor.
     out = None
     for k in range(kernel_size):
         x_slice = x_padded[:, k : k + T]
-        if k != 0:
+        # k != 0 keeps the original unconditional re-tilize (k=0 alone is tile-aligned); the
+        # layout test only ADDS the k=0 case, which a ROW_MAJOR x_padded needs. Blackhole is
+        # therefore bit-for-bit unchanged.
+        if k != 0 or x_slice.layout != ttnn.TILE_LAYOUT:
             x_slice = ttnn.to_layout(x_slice, ttnn.TILE_LAYOUT)
         if out is None:
             out = ttnn.multiply(x_slice, weight_taps[k], memory_config=mc)

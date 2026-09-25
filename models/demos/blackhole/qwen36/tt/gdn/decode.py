@@ -30,6 +30,9 @@ def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None)
 
     T = x.shape[1]
 
+    # NOTE (Wormhole): do NOT force valid_len here to buy the DRAM working set. Passing valid_len
+    # makes gated_deltanet_forward_ttnn build the conv-tail one-hot selector on the host
+
     # After prefill, fuse separate conv states into one for efficient decode
     if T == 1 and gdn.fused_conv_state is None and gdn.conv_state_q is not None:
         gdn.fused_conv_state = ttnn.concat([gdn.conv_state_q, gdn.conv_state_k, gdn.conv_state_v], dim=2)
