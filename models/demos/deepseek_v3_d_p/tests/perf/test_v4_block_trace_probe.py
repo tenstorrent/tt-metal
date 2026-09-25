@@ -164,3 +164,88 @@ def test_v4_block_trace_probe(mesh_device, device_params, layer_idx):
     block.moe.set_trace_controller(None)
     del keep
     assert worst >= 0.999, worst
+
+
+_MESH_CONFIGS_ISLANDS = _MESH_CONFIGS + [
+    pytest.param(
+        (8, 4),
+        {**_MESH_CONFIGS[0].values[1]},
+        id="fabric2d-mesh-8x4-trace",
+    ),
+]
+
+
+@pytest.mark.timeout(0)
+@pytest.mark.parametrize("layer_idx", [2, 3], ids=["csa-layer2-hash", "hca-layer3-topk"])
+@pytest.mark.parametrize("mesh_device, device_params", _MESH_CONFIGS_ISLANDS, indirect=["mesh_device", "device_params"])
+def test_v4_block_islands_chunk1(mesh_device, device_params, layer_idx):
+    """The ATTENTION islands (A1 / glue / A2 / epilogue, DS4F-0246 path A3) vs the eager block on chunk 1 -- the first chunk
+    whose attention runs traced (chunk 0 is eager in both paths). Every earlier replay-vs-eager check compared chunk 0 only,
+    which is how DS4F-0262 (HCA KV export 0.9997 -> 0.98 behind a wrong CSA output on 8x4) got through. Two chunks of random
+    streams; eager first, then the islands on a reset slot; worst-stream PCC per chunk, floor 0.999 on chunk 1."""
+    cfg = _cfg()
+    layer = init_reference_layer(cfg, layer_idx)
+    rot = DeepseekV4RotaryEmbedding(cfg)
+    sp = mesh_device.shape[0]
+    params = SimpleNamespace(
+        max_seq_len=2 * _CHUNK,
+        sp_factor=sp,
+        first_layer_idx=0,
+        num_layers=4,
+        mesh_shape=tuple(mesh_device.shape),
+        sp_axis=0,
+        num_users=1,
+    )
+    caches = allocate_v4_flash_kv_caches(mesh_device=mesh_device, hf_config=cfg, params=params)
+    block = TtV4PrefillBlock(
+        mesh_device,
+        cfg,
+        layer_idx,
+        reference_layer_weights(layer),
+        rotary_emb=rot,
+        seq_len_per_chip=_CHUNK // sp,
+        num_routed_experts=_EXPERTS,
+    )
+    block.alloc_states(1, 2 * _CHUNK, _CHUNK)
+    torch.manual_seed(1)
+    host = [(torch.randn(1, _CHUNK, 4, cfg.hidden_size) * 1.5).to(torch.bfloat16).float() for _ in range(2)]
+    streams = [to_device_streams(mesh_device, h) for h in host]
+    input_ids = block.moe.gate._input_ids_to_device(torch.randint(0, cfg.vocab_size, (_CHUNK,)))
+
+    def run_two():
+        outs = []
+        for c in range(2):
+            out = block(
+                streams[c],
+                slot=0,
+                caches=caches,
+                actual_start=c * _CHUNK,
+                actual_end=(c + 1) * _CHUNK,
+                input_ids=input_ids,
+            )
+            ttnn.synchronize_device(mesh_device)
+            outs.append(to_host_streams(mesh_device, out))
+            if not block.islands_enabled():
+                for t in out:
+                    ttnn.deallocate(t)
+        return outs
+
+    block.reset_slot(0)
+    ref = run_two()  # eager, both chunks
+    block.reset_slot(0)
+    block.enable_trace_islands(streams[0], input_ids=input_ids if block.hash_layer else None)
+    # the runtime's sequence: one traced warm chunk (marks the slot used), then the reset, then the request
+    out = block(streams[0], slot=0, caches=caches, actual_start=0, actual_end=_CHUNK, input_ids=input_ids)
+    ttnn.synchronize_device(mesh_device)
+    block.reset_slot(0)
+    got = run_two()
+    pccs = []
+    for c in range(2):
+        pccs.append(min(comp_pcc(ref[c][0, :, h, :].float(), got[c][0, :, h, :].float())[1] for h in range(4)))
+    traced1 = block._attn_islands.get(0) is not None
+    logger.info(
+        f"[v4 islands] layer {layer_idx} ({block.kind}) islands vs eager: chunk 0 (attention eager) worst-stream PCC "
+        f"{pccs[0]:.6f}; chunk 1 (attention {'TRACED' if traced1 else 'eager'}) {pccs[1]:.6f}  ({tuple(mesh_device.shape)})"
+    )
+    block.release_islands()
+    assert pccs[0] >= 0.999 and pccs[1] >= 0.999, pccs
