@@ -44,6 +44,7 @@ These models use the [weekly Agentic Research pipeline](#agentic-research-model-
 |----------------------|--------|------|-----------------|
 | Llama3.1-8B QB2 TP4 | BH QuietBox 2 | 3 | Decoder PCC and trace replay; scored IFEval serving |
 | Gemma4 31B QB2 TP4 | BH QuietBox 2 | 3 | Decoder PCC, trace and API tests; GPQA 10/198 subset; fixed-length serving performance |
+| Qwen3.8-27B QB2 TP4 | BH QuietBox 2 | 3 | Real-weight linear-attention convolution; scored GPQA and serving API coverage |
 
 ## Daily Model Pipelines
 
