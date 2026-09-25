@@ -142,3 +142,9 @@ Drive this ledger with
 - `dashboard/export.py --spec S` writes `<bringup_dir>/dashboard/index.html`.
 - Test: the page script runs under node with a small DOM stand-in (`selftest/dom_shim.js`) on synthetic records and on
   an empty bring-up, so a runtime error in any section fails the gate.
+
+## F8 (2026-09-25): README
+- `README.md`: start, steps and task ids, layout, the rules the runner enforces. Known issue added: templated YAML
+  fails check-yaml at commit (the F6 commit did not land the first time).
+- Next: the first real use, Gemma-4 26B-A4B on the 1x4 Blackhole box (the owner's choice), ledger in
+  `models/demos/gemma4_a4b_d_p/bringup/`.
