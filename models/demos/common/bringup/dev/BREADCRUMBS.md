@@ -205,3 +205,13 @@ Drive this ledger with
   100% past the window; the model's own accuracy falls with position), but it showed R.2's 512-token parity never
   reached the 1024-token sliding window, and R.3 (reference vs itself) cannot catch a window bug. `validate()` now
   rejects `hf.parity_seq` <= `checkpoint.config.sliding_window`.
+
+## F16 (2026-09-25): first device run of a generic test
+- Gemma B.1 failed on the framework's own `tests/test_box.py`: `MeshDevice.get_devices()` does not exist (the selftests
+  never open a device). It uses `get_num_devices()` now and records the mesh shape; the DRAM size comes from the spec.
+  The orchestrator had handed the failure to a fix agent that is not allowed to edit framework code; stopped it and
+  fixed it here. Lesson: a generic device test needs one real device run before a model depends on it.
+- Also committed: the R.3 agent's known-issues entry on M-dependent CPU sgemm (padding expert groups to 32 rows).
+- The F16 gate itself was refused by the device policy: a device gate could not run any `python`, not even the CPU-only
+  knowledge check. Now a python command in a device gate is refused only if its script or `-m` module imports ttnn
+  (or cannot be resolved).

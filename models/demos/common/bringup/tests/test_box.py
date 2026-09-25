@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 """Box step: the spec's mesh opens with its device params, and the collectives the plan relies on work on it.
-Records chips, dram_gb_per_chip, and the max abs error of all_gather / all_reduce / reduce_scatter on each mesh axis
+Records chips, mesh_rows, mesh_cols, and the max abs error of all_gather / all_reduce / reduce_scatter on each mesh axis
 with more than one device."""
 
 import torch
@@ -18,10 +18,9 @@ def test_box(mesh_device):
     import ttnn
 
     rows, cols = mesh_device.shape
-    metrics.record("chips", rows * cols)
-    dev = mesh_device.get_devices()[0]
-    dram = dev.dram_size_per_channel() * dev.num_dram_channels() if hasattr(dev, "dram_size_per_channel") else 0
-    metrics.record("dram_gb_per_chip", round(dram / 2**30, 2))
+    metrics.record("chips", mesh_device.get_num_devices())
+    metrics.record("mesh_rows", rows)
+    metrics.record("mesh_cols", cols)
     worst = 0.0
     for axis, n in ((0, rows), (1, cols)):
         if n < 2:
