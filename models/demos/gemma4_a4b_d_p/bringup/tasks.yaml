@@ -5,13 +5,14 @@ target:
   dtype: bf16
 tasks:
 - id: R.1
-  title: Checkpoint has every tensor the spec expects; intake approved
+  title: Checkpoint has every tensor the spec expects; intake approved; canonical prompt built
   step: intake
   deps: []
   gate:
-    cmd: python -m models.demos.common.bringup.intake.check_checkpoint
+    cmd: python -m models.demos.common.bringup.intake.check_checkpoint && python -m models.demos.common.bringup.reference.prompt
     metrics:
       intake_approved: == 1
+      prompt_hash_ok: == 1
       missing_tensors: == 0
       shape_mismatches: == 0
       count_mismatches: == 0
