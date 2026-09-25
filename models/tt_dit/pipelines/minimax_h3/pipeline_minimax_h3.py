@@ -2324,7 +2324,8 @@ class MiniMaxH3Pipeline:
         if over:
             raise ValueError(f"request exceeds the arena caps: {', '.join(over)} (see MiniMaxH3ArenaCaps)")
 
-        alignment = self.sp_factor * ttnn.TILE_SIZE
+        # MINIMAX_H3_SEQ_ALIGN_TILES=2 keeps the per-device tile count even (denoise tuning knob).
+        alignment = self.sp_factor * ttnn.TILE_SIZE * int(os.environ.get("MINIMAX_H3_SEQ_ALIGN_TILES", "1"))
         if self.bucket_denoise:
             rung = self._select_bucket(layout.sequence_length)
         else:
