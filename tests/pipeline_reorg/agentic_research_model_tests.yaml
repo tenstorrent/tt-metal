@@ -13,9 +13,13 @@
     export LLAMA_MODEL_PATH
     LLAMA_MODEL_PATH=$(python -c 'from models.demos.llama31_8b_qb2.tt.model import checkpoint_path; print(checkpoint_path())')
 
-    # Switch back to main once vllm-tt-plugin#116 has merged.
-    git clone --depth 1 --branch "${VLLM_TT_PLUGIN_REF:-yieldthought/llama31-qb2-serving}" \
-        https://github.com/tenstorrent/vllm-tt-plugin.git "$work/vllm-tt-plugin"
+    # Fetch accepts an immutable commit as well as a manual branch/tag override.
+    # Keep the fallback in sync with the workflow input and select-tests.env defaults.
+    git init "$work/vllm-tt-plugin"
+    git -C "$work/vllm-tt-plugin" remote add origin https://github.com/tenstorrent/vllm-tt-plugin.git
+    git -C "$work/vllm-tt-plugin" fetch --depth 1 origin "${VLLM_TT_PLUGIN_REF:-7250ddfaa988cc7417f518266dce52e425745472}"
+    git -C "$work/vllm-tt-plugin" checkout --detach FETCH_HEAD
+    git -C "$work/vllm-tt-plugin" rev-parse HEAD
     unset VLLM_TT_PLUGIN_REF
     pushd "$work/vllm-tt-plugin"
     source docs/install-vllm-tt.sh

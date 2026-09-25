@@ -29,10 +29,11 @@ on:
           - "2"
           - "3"
       vllm-tt-plugin-ref:
-        description: vLLM TT plugin branch or tag for serving tests
+        description: vLLM TT plugin commit, branch or tag for serving tests
         type: string
-        # Switch back to main once vllm-tt-plugin#116 has merged.
-        default: yieldthought/llama31-qb2-serving
+        # Merged main revision; includes the Llama QB2 adapter from plugin #116.
+        # Keep in sync with select-tests.env and the registry command fallback.
+        default: 7250ddfaa988cc7417f518266dce52e425745472
 
 permissions:
   contents: read
@@ -51,7 +52,8 @@ jobs:
       SKU: ${{ inputs.sku || 'all' }}
       MODEL: ${{ inputs.model || 'all' }}
       TIER: ${{ inputs.tier || 'all' }}
-      VLLM_TT_PLUGIN_REF: ${{ inputs.vllm-tt-plugin-ref || 'yieldthought/llama31-qb2-serving' }}
+      # Keep in sync with the input default and tests/pipeline_reorg/agentic_research_model_tests.yaml.
+      VLLM_TT_PLUGIN_REF: ${{ inputs.vllm-tt-plugin-ref || '7250ddfaa988cc7417f518266dce52e425745472' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:

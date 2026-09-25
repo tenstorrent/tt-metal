@@ -272,6 +272,10 @@ jobs:
         GTEST_TOTAL_SHARDS: ${{ matrix.leg.gtest_shard_total || 1 }}
         GTEST_SHARD_INDEX: ${{ matrix.leg.gtest_shard_index || 0 }}
         HF_HUB_OFFLINE: ${{ (matrix.leg['weights-cache-mode'] == 'local-disk' || matrix.leg['weights-cache-mode'] == 'lfc') && '0' || '1' }}
+        # Match the owning model workflows: the mounted cache and gated eval data
+        # must resolve the same way when a registry entry runs in this PR gate.
+        HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
+        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
         # The tracy paths the three profiler impls set. Empty on every other leg,
         # which the consuming scripts treat as unset (they test with -z).
         PROFILER_SCRIPTS_ROOT: ${{ matrix.leg.gate_profile == 'profiler' && '/work/tools/tracy' || '' }}
