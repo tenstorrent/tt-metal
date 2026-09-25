@@ -50,8 +50,12 @@ def _capture(run, monkeypatch):
             return ""
 
         @staticmethod
-        def recover(where, reset, error_text="", config_target="", log=None, expand=None):
+        def recover(where, reset, error_text="", config_target="", log=None, expand=None, fault_is_certain=False):
+            # Mirrors the real signature, which gained fault_is_certain (default False, so every
+            # existing caller is unchanged): after a SIGKILL the evidence is the kill itself, and
+            # the telemetry veto must not cancel the reset this path exists to issue.
             seen["target"] = config_target
+            seen["fault_is_certain"] = fault_is_certain
             return True
 
     monkeypatch.setattr(run, "_dr", lambda: _DR, raising=False)

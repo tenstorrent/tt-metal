@@ -581,7 +581,15 @@ def reap_device_holders() -> list:
     return killed
 
 
-def recover(where: str, reset, error_text: str = "", config_target: str = "", log=None, expand=None) -> bool:
+def recover(
+    where: str,
+    reset,
+    error_text: str = "",
+    config_target: str = "",
+    log=None,
+    expand=None,
+    fault_is_certain: bool = False,
+) -> bool:
     """Reset the device and REPORT WHETHER IT CAME BACK. True only on a VERIFIED-healthy device.
 
     ``reset`` is a callable taking the target spec -- the only per-caller part. Everything else
@@ -676,7 +684,13 @@ def recover(where: str, reset, error_text: str = "", config_target: str = "", lo
     # door: is_dead_board matches specific runtime faults, never a slow op or a plain timeout, so
     # the 2026-08-17 path (no signature in its output) still cancels exactly as before. Absent
     # evidence the telemetry veto is unchanged and still has the last word.
-    if not is_dead_board(error_text) and not _board_needs_reset():
+    # ``fault_is_certain`` is the caller saying it already KNOWS -- see _reset_is_mandatory_after_kill
+    # in run.py. A SIGKILL of a multi-chip run is a fabric-corrupting event whether or not the dead
+    # process left any text behind, and after a kill there usually is none: the evidence is the kill,
+    # not the output. Without this the two halves disagreed -- measured 2026-09-25, the caller
+    # correctly decided "reset mandatory" and this still answered "no reset issued", because every
+    # ARC was warm and error_text was empty.
+    if not fault_is_certain and not is_dead_board(error_text) and not _board_needs_reset():
         if log:
             log(
                 "reset SKIPPED at %s: every chip reports a die temperature (%s), so nothing is "

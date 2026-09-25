@@ -3432,6 +3432,10 @@ def _reclaim_device(devices: str, error_text: str = "", after_kill: bool = False
         "reclaim",
         _issue,
         error_text=error_text,
+        # AFTER A KILL THE EVIDENCE IS THE KILL. A killed process usually left no output to match,
+        # and the telemetry veto reads the ARC, which a wedged fabric leaves warm -- so without this
+        # the reset this path exists to issue was cancelled. See _reset_is_mandatory_after_kill.
+        fault_is_certain=after_kill,
         # NOT named `killed`: that local already holds reap_device_holders()'s list, and a
         # parameter by the same name is overwritten before it is read -- silently, because the
         # list is empty after a SIGKILL and an empty string is falsy.
@@ -3755,6 +3759,60 @@ def _run_device_step(*args, **kwargs):
     return result
 
 
+def _reset_is_mandatory_after_kill(devices, env=None) -> bool:
+    """After SIGKILLing a device process, is a reset required REGARDLESS of the liveness probe?
+
+    THE PROBE ANSWERS THE WRONG QUESTION. `_device_answers()` asks tt-smi, which reports the ARC.
+    A multi-chip ETH fabric can be wedged solid while every ARC is still answering, so "the board
+    replied" is not evidence that the next run can open the mesh -- it is evidence about a different
+    component.
+
+    REPRODUCED 2026-09-25 on a T3K, deliberately, with nothing else on the box:
+
+        a workload ran 5180 all_gathers across the 2x4 mesh, healthy throughout;
+        SIGKILL mid-collective -- exactly what this function does on a timeout;
+        the very next mesh open:
+            RuntimeError: Firmware startup error on device 0 at core 0-10 over NOC0:
+                          scratch_status=0xffffffff, postcode=0xffffffff
+
+    Open/close cycling is NOT the cause and was ruled out in the same session: 10 in-process cycles
+    and 8 consecutive fresh processes, fabric on, all clean. It is the KILL, mid-collective, that
+    leaves the fabric stuck -- and the run that inherits it fails at device open, over and over. The
+    perf-test builder recorded exactly that shape: "First run: VERDICT=WEDGE (rc=124, a timeout) ...
+    Next three runs: all FAIL at device open", 51 minutes for nothing.
+
+    So the kill itself is the evidence, and the reset stops being optional.
+
+    NARROW, because the probe was added for a real injury: "On 2026-08-15 that reset four HEALTHY
+    chips because an op ran long", and the reset is what produced a fault no PCIe reset could clear.
+    That incident was a SINGLE-CHIP run, where there is no fabric to wedge and the probe's answer is
+    the whole truth -- so single-chip keeps the gate exactly as it was. Only a run that held more
+    than one chip, which is the only way the fabric can be involved at all, skips it.
+
+    The chip count comes from the child's own environment first (the same `device_count`/`mesh_chips`
+    keys every other caller in this file reads), because nothing may open a device to answer a
+    question asked at the moment a device just died.
+
+    AND IT MUST NOT ASK ttnn. The first version of this fell back to _chip_count(devices), whose
+    "all" branch calls ttnn.GetNumAvailableDevices() and returns 1 when that raises -- which is
+    exactly what it does on a wedged board. Measured while writing this: with the fabric wedged and
+    devices="all" it answered False, so the one case the change exists for would have skipped its
+    reset. A count that cannot be taken is UNKNOWN, not one, and the rule this file already states
+    for an unverifiable target applies ("must widen, never narrow"): "all" means every chip on the
+    box, so it is treated as a fabric. Only a spec that NAMES a single chip keeps the gate, and that
+    parse is pure string work with no device in it.
+    """
+    try:
+        chips = int((env or {}).get("device_count") or (env or {}).get("mesh_chips") or 0)
+    except (TypeError, ValueError, AttributeError):
+        chips = 0
+    if chips:
+        return chips > 1
+    if (devices or "").strip().lower() in ("", "all"):
+        return True
+    return _chip_count(devices) > 1
+
+
 def _run_device_proc(
     cmd,
     cwd,
@@ -3978,7 +4036,7 @@ def _run_device_proc(
         # A timeout means SLOW. It does not mean wedged, and the difference is cheap to establish:
         # measured on this host, a live board answers tt_smi_probe() in 0.24 s and a wedged one does
         # not answer at all. Resetting a working board is not a neutral act, so it needs evidence.
-        if reset_on_timeout and _device_answers():
+        if reset_on_timeout and not _reset_is_mandatory_after_kill(devices, env) and _device_answers():
             tail = "process group killed; device answered a liveness probe, so it was NOT reset"
         else:
             tail = (
