@@ -337,9 +337,8 @@ def accuracy_contract(
     not transfer, so defaulting it would resolve an unknown chip straight against the
     :data:`MEASURED_ARCH` table.
     """
-    table = _SFPU_ACCURACY_BUDGET.get(op)
-    if table is None:
-        return TOLERANCE_CONTRACT
+    # Built before the enrolment fallback, so a miswired driver -- a string arch, a bool
+    # dest_acc -- fails on every op, not only once its op is enrolled.
     query = BudgetKey(
         approx_mode=approx_mode,
         input_format=input_format,
@@ -347,6 +346,9 @@ def accuracy_contract(
         dest_acc=dest_acc,
         arch=arch,
     )
+    table = _SFPU_ACCURACY_BUDGET.get(op)
+    if table is None:
+        return TOLERANCE_CONTRACT
     found = _winner(table, query, op.name)
     if found is None:
         return TOLERANCE_CONTRACT

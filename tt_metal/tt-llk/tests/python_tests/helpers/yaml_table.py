@@ -63,11 +63,19 @@ def load_yaml_table(path: Path) -> Dict[str, Any]:
 
 
 def enum_member(enum_cls: Type[E], value: Any, where: str) -> E:
-    """One YAML scalar as an enum member, by name or by value."""
+    """One YAML scalar as an enum member, by name or by value.
+
+    By value only when the scalar has the member value's own type: ``True == 1`` in
+    Python, so ``ApproximationMode(1)`` and even ``ApproximationMode(1.0)`` resolve to
+    ``Yes``, and a malformed row would load as a valid key.
+    """
     try:
         if isinstance(value, str) and value in enum_cls.__members__:
             return enum_cls[value]
-        return enum_cls(value)
+        member = enum_cls(value)
+        if type(member.value) is not type(value):
+            raise ValueError(value)
+        return member
     except (KeyError, ValueError):
         raise ValueError(
             f"{where}: {value!r} is not a {enum_cls.__name__}; expected one of "
