@@ -193,7 +193,9 @@ class Gemma4Model:
             )
         return logits
 
-    def prefill_device(self, tokens, *, sequence_length, page_tables, kv_cache, all_logits=False):
+    def prefill_device(
+        self, tokens, *, sequence_length, page_tables, kv_cache, all_logits=False, start_pos=0, histories=None
+    ):
         if len(kv_cache) != len(self.layers):
             raise ValueError("Expected one cache pair per loaded layer")
         x = self.embed(tokens, sequence_length=sequence_length)
@@ -205,7 +207,12 @@ class Gemma4Model:
                 page_table=page_tables[i] if i in page_tables else page_tables[layer.kind],
                 kv_cache=cache,
                 consume_input=True,
+                start_pos=start_pos,
+                history=histories[i] if histories is not None else None,
+                return_history=histories is not None,
             )
+            if histories is not None:
+                x, histories[i] = x
         if not all_logits:
             # An unaligned slice begin untilizes its entire input. Copy
             # the aligned final tile first, then select its logical row.

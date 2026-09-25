@@ -98,3 +98,32 @@ def test_decoder_rejects_other_four_chip_blackhole_topologies(monkeypatch, expec
     monkeypatch.setattr(ttnn.cluster, "get_cluster_type", lambda: object())
     with expect_error(ValueError, "P300_X2"):
         Decoder.from_state_dict({}, hf_config=None, layer_idx=0, mesh_device=mesh)
+
+
+def test_prefill_history_follows_slot_moves_and_request_release():
+    model = object.__new__(Gemma4ForCausalLM)
+    model.prefill_slot_keys = {0: 11, 1: 12}
+    model.cache = SimpleNamespace(prefill_history={11: object(), 12: object()})
+    model.note_state_slots_moved({0: 2, 1: 0})
+    model.release_request(0)
+    assert model.prefill_slot_keys == {2: 11}
+    assert set(model.cache.prefill_history) == {11}
+    model.release_request(1)  # Already empty: do not discard another request.
+    assert set(model.cache.prefill_history) == {11}
+    model.release_request(2)
+    assert model.prefill_slot_keys == {}
+    assert model.cache.prefill_history == {}
+
+
+def test_persistent_capture_release_discards_all_prefill_history():
+    closed = []
+    model = object.__new__(Gemma4ForCausalLM)
+    model.prefill_slot_keys = {0: 11}
+    model.cache = SimpleNamespace(prefill_history={11: object()})
+    model.generator = SimpleNamespace(close=lambda: closed.append(True))
+    model.entry = object()
+    model.release_persistent_capture()
+    assert model.prefill_slot_keys == {}
+    assert model.cache.prefill_history == {}
+    assert model.entry is None
+    assert closed == [True]

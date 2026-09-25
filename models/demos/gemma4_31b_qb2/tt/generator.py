@@ -35,6 +35,7 @@ class CacheState:
     # Serving supplies per-layer allocator tables (including null/evicted pages).
     # Standalone mode retains the stricter private cyclic-cache contract.
     vllm_owned: bool = False
+    prefill_history: dict = field(default_factory=dict)
 
 
 class Gemma4Generator:
@@ -336,6 +337,8 @@ class Gemma4Generator:
         return_all_logits=False,
         slots=None,
         return_device=False,
+        start_positions=None,
+        history_keys=None,
         **kwargs,
     ):
         state = kv_cache
@@ -354,7 +357,10 @@ class Gemma4Generator:
         self._validate_tokens(tokens)
         if any(not isinstance(n, int) or not 0 < n <= min(state.capacity, tokens.shape[1]) for n in prompt_lens):
             raise ValueError("Invalid logical prompt length")
-        shape_key = (state.batch, state.capacity, tuple(prompt_lens), bool(return_all_logits))
+        starts = [0] * len(prompt_lens) if start_positions is None else list(start_positions)
+        if len(starts) != len(prompt_lens) or any(s < 0 or s >= n for s, n in zip(starts, prompt_lens)):
+            raise ValueError("Prefill must advance each request from its current position")
+        shape_key = (state.batch, state.capacity, tuple(prompt_lens), tuple(starts), bool(return_all_logits))
         if shape_key not in self.prefill_shapes:
             # A new prefill signature may create cached protocol semaphores or
             # norm buffers. Retire old traces before those persistent allocations.
@@ -364,8 +370,32 @@ class Gemma4Generator:
         for row, (slot, length) in enumerate(zip(slots, prompt_lens)):
             if not 0 < length <= state.capacity or length > tokens.shape[1]:
                 raise ValueError("Invalid logical prompt length")
-            ids = torch.zeros(1, (length + 31) // 32 * 32, dtype=torch.int32)
-            ids[0, :length] = tokens[row, :length]
+            start = starts[row]
+            aligned_start = start // Decoder.PAGE_SIZE * Decoder.PAGE_SIZE
+            chunk_length = length - aligned_start
+            histories = None
+            if history_keys is not None:
+                key = history_keys[row]
+                if start == 0:
+                    histories = [None] * len(self.model.layers)
+                else:
+                    previous = state.prefill_history[key]
+                    if previous["end"] != start:
+                        raise ValueError("Prefill history does not match the scheduler continuation")
+                    rewind = start - aligned_start
+                    histories = []
+                    for tail in previous["layers"]:
+                        if tail is None:
+                            histories.append(None)
+                            continue
+                        valid = tail[0].shape[2] - rewind
+                        if valid == 0:
+                            histories.append(None)
+                            continue
+                        begin = max(0, valid - 1024)
+                        histories.append(tuple(t[:, :, begin:valid, :] for t in tail))
+            ids = torch.zeros(1, (chunk_length + 31) // 32 * 32, dtype=torch.int32)
+            ids[0, :chunk_length] = tokens[row, aligned_start:length]
             tt_ids = self._upload(ids, ttnn.uint32)
             tables, uploaded_rows = {}, {}
             for kind, table in page_table.items():
@@ -382,8 +412,16 @@ class Gemma4Generator:
                     self.counters["prefill_table_uploads"] += 1
                 tables[kind] = uploaded_rows[key]
             out = self.model.prefill_device(
-                tt_ids, sequence_length=length, page_tables=tables, kv_cache=state.kv, all_logits=return_all_logits
+                tt_ids,
+                sequence_length=chunk_length,
+                page_tables=tables,
+                kv_cache=state.kv,
+                all_logits=return_all_logits,
+                start_pos=aligned_start,
+                histories=histories,
             )
+            if history_keys is not None:
+                state.prefill_history[history_keys[row]] = {"end": length, "layers": histories}
             outputs.append(
                 out if return_device else self._host_logits(out).reshape(1, -1, self.model.config.vocab_size)
             )

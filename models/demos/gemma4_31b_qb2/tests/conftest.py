@@ -25,3 +25,15 @@ def qb2_mesh():
     finally:
         ttnn.close_mesh_device(mesh)
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+
+
+def pytest_addoption(parser):
+    parser.addoption("--gemma-server-url", help="URL of a running Gemma4 QB2 server")
+
+
+@pytest.fixture
+def gemma_server_url(request):
+    url = request.config.getoption("--gemma-server-url")
+    if url is None:
+        pytest.skip("Pass --gemma-server-url to run live serving checks")
+    return url.rstrip("/")

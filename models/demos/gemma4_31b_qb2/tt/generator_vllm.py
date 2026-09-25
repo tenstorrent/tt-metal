@@ -17,7 +17,7 @@ class Gemma4ForCausalLM:
         "supports_async_decode": True,
         "supports_sample_on_device": True,
         "supports_device_penalties": False,
-        "supports_chunked_prefill": False,
+        "supports_chunked_prefill": True,
         "max_device_top_k": 32,
         "fabric_config": {
             "config": ttnn.FabricConfig.FABRIC_1D_RING,
@@ -25,6 +25,7 @@ class Gemma4ForCausalLM:
         },
     }
     decode_input_update_contract = 1
+    MAX_PREFILL_TOKENS = 8192
 
     def __init__(self, generator, max_batch_size, max_seq_len, *, vllm_config=None):
         # vLLM inspects this keyword before the TT loader supplies a live mesh.
@@ -36,6 +37,7 @@ class Gemma4ForCausalLM:
         self.max_seq_len = max_seq_len
         self.entry = None
         self.cache = None
+        self.prefill_slot_keys = {}
 
     def embed_input_ids(self, input_ids):
         raise RuntimeError("Use the TT prefill_forward/decode_forward interface")
@@ -61,10 +63,12 @@ class Gemma4ForCausalLM:
 
     @classmethod
     def get_kv_cache_spec(cls, vllm_config):
-        from vllm.v1.kv_cache_interface import FullAttentionSpec
-        from vllm_tt_plugin.whole_prompt_cache import WholePromptSlidingWindowSpec, validate_whole_prompt_cache
+        from vllm.v1.kv_cache_interface import FullAttentionSpec, SlidingWindowSpec
 
-        validate_whole_prompt_cache(vllm_config)
+        if vllm_config.cache_config.enable_prefix_caching:
+            raise ValueError("Gemma4 QB2 does not implement prefix caching")
+        if vllm_config.max_in_flight_tokens > 2 * cls.MAX_PREFILL_TOKENS:
+            raise ValueError("Gemma4 QB2 supports at most 8192 batched tokens with async chunked prefill")
         config = vllm_config.model_config.hf_text_config
         block = vllm_config.cache_config.block_size
         if block != 128:
@@ -84,7 +88,7 @@ class Gemma4ForCausalLM:
                 page_size_padded=page_bytes,
             )
             result[f"model.layers.{i}.self_attn"] = (
-                WholePromptSlidingWindowSpec(**common, sliding_window=config.sliding_window)
+                SlidingWindowSpec(**common, sliding_window=config.sliding_window)
                 if sliding
                 else FullAttentionSpec(**common)
             )
@@ -93,9 +97,11 @@ class Gemma4ForCausalLM:
     @classmethod
     def get_max_tokens_all_users(cls, *, max_num_seqs, **kwargs):
         # The shared pool uses one full-attention group and five sliding groups.
-        # Each window can straddle nine pages. The plugin adds one output page
-        # per request separately; this budget covers full history plus live tails.
-        return 262144 + 5 * Decoder.SLIDING_WINDOW_PAGES * Decoder.PAGE_SIZE * max_num_seqs
+        # Each window can straddle nine pages. Reserve both async batches of
+        # in-flight prefill tokens globally, in addition to the per-request tails.
+        # The plugin separately adds one output page per request.
+        tails = Decoder.SLIDING_WINDOW_PAGES * Decoder.PAGE_SIZE * max_num_seqs
+        return 262144 + 5 * (tails + 2 * cls.MAX_PREFILL_TOKENS)
 
     def allocate_kv_cache_per_layer(self, per_layer_specs):
         pools, kv, scratch = {}, [], {}
@@ -181,12 +187,16 @@ class Gemma4ForCausalLM:
         empty_slots=None,
         **kwargs,
     ):
-        if start_pos is not None and torch.as_tensor(start_pos).ne(0).any():
-            raise ValueError("Gemma4 QB2 prefills whole prompts; the generator chunks them internally")
+        starts = [0] * len(prompt_lens) if start_pos is None else [int(x) for x in start_pos]
         lengths = [int(x) for x in prompt_lens]
         slots = list(range(len(lengths))) if empty_slots is None else list(empty_slots)
         tables = self._tables(kv_cache, page_tables_per_layer, slots=slots)
         self.entry = None
+        # Full-attention block zero identifies a live request across row moves.
+        full_layer = next(i for i, layer in enumerate(self.generator.model.layers) if not layer.sliding)
+        keys = [int(tables[full_layer][slot, 0]) for slot in slots]
+        self.prefill_slot_keys = {s: k for s, k in self.prefill_slot_keys.items() if s not in slots and k not in keys}
+        self.prefill_slot_keys.update(zip(slots, keys))
         outputs = self.generator.prefill_forward(
             tokens,
             page_table=tables,
@@ -194,6 +204,8 @@ class Gemma4ForCausalLM:
             prompt_lens=lengths,
             slots=slots,
             return_device=sampling_params is not None,
+            start_positions=starts,
+            history_keys=keys,
         )
         if sampling_params is None:
             return outputs
@@ -228,6 +240,11 @@ class Gemma4ForCausalLM:
         sample = sampling_params is not None
         if reload_inputs:
             tables = self._tables(kv_cache, page_tables_per_layer)
+            full_layer = next(i for i, layer in enumerate(self.generator.model.layers) if not layer.sliding)
+            done = {int(tables[full_layer][row, 0]) for row, position in enumerate(start_pos) if int(position) >= 0}
+            for key in done:
+                kv_cache.prefill_history.pop(key, None)
+            self.prefill_slot_keys = {slot: key for slot, key in self.prefill_slot_keys.items() if key not in done}
             self.entry = self.generator.prepare_decode(tokens, start_pos, page_table=tables, kv_cache=kv_cache)
         elif self.entry is None or self.generator.traces.get(id(kv_cache)) is not self.entry:
             raise ValueError("A retired decode trace requires current scheduler inputs")
@@ -267,6 +284,17 @@ class Gemma4ForCausalLM:
         self.generator.configure_sampling(batch=self.max_batch_size, temperature=0)
         self.entry = self.generator._entry(kv_cache)
 
+    def note_state_slots_moved(self, moves):
+        self.prefill_slot_keys = {moves.get(slot, slot): key for slot, key in self.prefill_slot_keys.items()}
+
+    def release_request(self, slot):
+        key = self.prefill_slot_keys.pop(slot, None)
+        if key is not None and self.cache is not None:
+            self.cache.prefill_history.pop(key, None)
+
     def release_persistent_capture(self):
+        if self.cache is not None:
+            self.cache.prefill_history.clear()
+        self.prefill_slot_keys.clear()
         self.generator.close()
         self.entry = None

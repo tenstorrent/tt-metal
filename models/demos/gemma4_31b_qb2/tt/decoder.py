@@ -765,11 +765,18 @@ class Decoder:
             v = self._norm(v)
         return (q, k, v)
 
-    def prefill_forward(self, x, *, page_table, kv_cache, consume_input=False):
-        """Prefill at position zero; consume_input permits model-private storage reuse."""
+    def prefill_forward(
+        self, x, *, page_table, kv_cache, consume_input=False, start_pos=0, history=None, return_history=False
+    ):
+        """Prefill a page-aligned span, optionally retaining sliding history for a continuation."""
+        if start_pos < 0 or start_pos % self.PAGE_SIZE:
+            raise ValueError("Prefill start must be a nonnegative cache-page boundary")
+        if start_pos and self.sliding and history is None:
+            raise ValueError("Sliding continuation requires its preceding K/V history")
+        next_history = None
         batch, one, seq, width = x.shape
         assert one == 1 and width == self.prefill_input_width(seq) and (0 < seq <= self.max_context)
-        assert page_table.shape[0] == batch and page_table.shape[1] * self.PAGE_SIZE >= seq
+        assert page_table.shape[0] == batch and page_table.shape[1] * self.PAGE_SIZE >= start_pos + seq
         if consume_input:
             assert batch == 1 and x.dtype == ttnn.bfloat16 and x.layout == ttnn.TILE_LAYOUT
             assert x.memory_config() == ttnn.DRAM_MEMORY_CONFIG
@@ -792,7 +799,7 @@ class Decoder:
                         device=self.device,
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     )
-            previous_kv = None
+            previous_kv = history
             pt = (
                 ttnn.reshape(
                     page_table, ttnn.Shape([1, page_table.shape[1]]), ttnn.Shape([1, page_table.padded_shape[1]])
@@ -810,12 +817,13 @@ class Decoder:
                 pad = -inp.shape[2] % self.PAGE_SIZE
                 if pad:
                     inp = ttnn.pad(inp, [(0, 0), (0, 0), (0, pad), (0, 0)], value=0.0)
-                q, k, v = self._prefill_qkv(inp, start)
+                absolute_start = start_pos + start
+                q, k, v = self._prefill_qkv(inp, absolute_start)
                 if not self.sliding:
                     q = ttnn.typecast(q, ttnn.bfloat8_b)
-                sdpa_config = self._prefill_sdpa_config(q, kv_cache[0], pt, start=start)
+                sdpa_config = self._prefill_sdpa_config(q, kv_cache[0], pt, start=absolute_start)
                 length = inp.shape[2]
-                fill_pt = pt[:, start // self.PAGE_SIZE : (start + length) // self.PAGE_SIZE]
+                fill_pt = pt[:, absolute_start // self.PAGE_SIZE : (absolute_start + length) // self.PAGE_SIZE]
                 ttnn.experimental.paged_fill_cache(
                     kv_cache[0], ttnn.typecast(k, kv_cache[0].dtype), fill_pt, batch_idx=0
                 )
@@ -833,7 +841,9 @@ class Decoder:
                         q,
                         both_k,
                         both_v,
-                        attn_mask=self.history_mask[:, :, : inp.shape[2], : both_k.shape[2]],
+                        attn_mask=self.history_mask[
+                            :, :, : inp.shape[2], 1024 - previous_kv[0].shape[2] : 1024 + inp.shape[2]
+                        ],
                         is_causal=False,
                         scale=1.0,
                         program_config=sdpa_config,
@@ -857,12 +867,22 @@ class Decoder:
                         kv_cache[0],
                         kv_cache[1],
                         pt,
-                        chunk_start_idx=start,
+                        chunk_start_idx=absolute_start,
                         scale=1.0,
                         program_config=sdpa_config,
                         compute_kernel_config=self.pref_compute,
                     )
                 if self.sliding:
+                    if return_history and end == seq:
+                        # Keep one extra page so a later unaligned scheduler boundary
+                        # can replay its partial page without losing the prior window.
+                        tails = []
+                        for index, value in enumerate((k, v)):
+                            live = value[:, :, : end - start, :]
+                            joined = ttnn.concat([previous_kv[index], live], dim=2) if previous_kv is not None else live
+                            tail_start = max(0, joined.shape[2] - (self.window + self.PAGE_SIZE))
+                            tails.append(joined[:, :, tail_start:, :])
+                        next_history = tuple(tails)
                     previous_kv = (k, v)
                 if attn.dtype != ttnn.bfloat16 and self.sliding:
                     attn = ttnn.typecast(attn, ttnn.bfloat16)
@@ -938,7 +958,8 @@ class Decoder:
                 del tiled_parts, joined_parts
             else:
                 users.append(parts[0])
-        return ttnn.concat(users, dim=0) if batch > 1 else users[0]
+        result = ttnn.concat(users, dim=0) if batch > 1 else users[0]
+        return (result, next_history) if return_history else result
 
     def decode_forward(self, x, *, positions, page_table, kv_cache, rope_positions=None, cyclic_cache=True):
         """One token per user; all runtime data inputs and outputs are device tensors."""

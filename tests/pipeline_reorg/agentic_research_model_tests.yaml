@@ -116,6 +116,7 @@
     python -m pytest "$model_dir/tests/test_benchmark.py" "$model_dir/tests/test_serving_inputs.py" \
         "$model_dir/tests/test_decoder.py::test_prefill_and_live_decode_trace[1025-2-sliding]" \
         "$model_dir/tests/test_decoder.py::test_prefill_and_live_decode_trace[1025-2-full]" \
+        "$model_dir/tests/test_chunked_prefill.py" \
         --timeout 600 --junitxml "$results/decoder.xml"
     mark_phase model_tests_complete
 
@@ -165,8 +166,8 @@
             --model "$HF_MODEL" --served-model-name google/gemma-4-31B-it \
             --hf-overrides '{"architectures":["TTGemma4QB2ForCausalLM"]}' \
             --host 127.0.0.1 --port 8000 --block-size 128 --max-num-seqs "$capacity" \
-            --max-model-len 262144 --max-num-batched-tokens 262144 --max-logprobs -1 \
-            --async-scheduling --no-enable-prefix-caching --no-enable-chunked-prefill \
+            --max-model-len 262144 --max-num-batched-tokens 8192 --max-logprobs -1 \
+            --async-scheduling --no-enable-prefix-caching --enable-chunked-prefill --override-generation-config '{"top_k":20}' \
             --no-enable-log-requests --no-enable-log-outputs \
             --reasoning-parser gemma4 --default-chat-template-kwargs '{"enable_thinking":true}' \
             --additional-config "$tt_config" > "$work/server_${capacity}.log" 2>&1 &
@@ -224,17 +225,10 @@
     wait_for_server
     mark_phase server_32_ready
 
-    pushd "$work/vllm-tt-plugin"
-    # Device sampling/page growth, isolation, host sampling, mixed penalties and logprobs.
-    python -m pytest --confcutdir=. \
-        'tests/tt/test_sampling_routes.py::test_seeded_page_growth_and_slot_reordering[20]' \
-        tests/tt/test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch \
-        tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_allowed_token_ids \
-        tests/tt/test_tt_penalties.py::TestFrequencyPenalty::test_frequency_penalty_mixed_batch \
-        'tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[5-1]' \
-        --tt-server-url http://127.0.0.1:8000 --tt-model-name google/gemma-4-31B-it \
-        --tt-max-num-seqs 32 --junitxml "$results/api.xml"
-    popd
+    # Model-owned checks use the accepted 32-bit seed and top-k 1..32 domain.
+    # They cover page growth, slot isolation, host routing and default sampling.
+    python -m pytest "$model_dir/tests/test_api.py" \
+        --gemma-server-url http://127.0.0.1:8000 --junitxml "$results/api.xml"
     mark_phase api_tests_complete
 
     # Accuracy is ONLY the first 10/198 Diamond rows, one seed, at 32K output tokens.
