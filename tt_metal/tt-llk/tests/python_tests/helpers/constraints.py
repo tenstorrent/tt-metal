@@ -134,7 +134,7 @@ def get_valid_math_fidelities(format, operation=None, PERF_RUN: bool = False):
         # 8-instead-of-16 MVMULs the 2x format exists to deliver. 2x above LoFi is slower than not
         # using 2x at all, so it is a configuration nothing would ship.
         if (
-            format.input in (DataFormat.Int8, DataFormat.Float16_b)
+            format.input in (DataFormat.Int8, DataFormat.UInt8, DataFormat.Float16_b)
             or format.input.is_mx_format()
         ):
             return [MathFidelity.LoFi]
