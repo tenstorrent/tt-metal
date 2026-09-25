@@ -338,6 +338,17 @@ TEST(QuasarAttAddressAether, OversizedIdentitiesClampAndReject) {
     static_assert(!Address::dispatch(65536 + 1, 2, 0).encode<AETHER>().has_value());
 }
 
+TEST(QuasarAttAddress, BankBaseComposesWithALocalOffset) {
+    // The command-queue kernels keep a bank's operand base (offset 0) in software and OR the
+    // per-transfer local offset in when they issue (noc_read_with_state_bank). That is only sound
+    // when the base has an empty local field, so base | offset must equal encoding the offset.
+    static_assert((*Address::dram(1, 0).encode<QSR1>() | 0x1000) == *Address::dram(1, 0x1000).encode<QSR1>());
+    static_assert((*Address::worker(9, 5, 0).encode<QSR1>() | 0x1234) == *Address::worker(9, 5, 0x1234).encode<QSR1>());
+    static_assert((*Address::dram(0, 0).encode<AETHER>() | 0x2000) == *Address::dram(0, 0x2000).encode<AETHER>());
+    static_assert(
+        (*Address::worker(1, 1, 0).encode<AETHER>() | 0x1000) == *Address::worker(1, 1, 0x1000).encode<AETHER>());
+}
+
 TEST(QuasarAttAddressAether, PackedDramEndpointsMatchAddressDram) {
     // On this map the NOC_NODE_ID frame is the descriptor frame (no offset),
     // so a host coordinate resolves through the inverse tables unchanged; a

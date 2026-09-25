@@ -846,19 +846,20 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
 
 void WatcherDeviceReader::Core::DumpAssertStatus() const {
     auto assert_status = mbox_data_.watcher().assert_status();
-    // On the qsr.s1 simulator the DM firmware's assert record travels through the cached L1 alias and
-    // can arrive partially written. There the record is reported and polling continues (a hart that
-    // really asserted stays at its waypoint, which the regular dump shows); elsewhere the record is
-    // authoritative and stops the run.
-    const bool tolerant_record = reader_.env.get_hal().get_arch() == tt::ARCH::QUASAR &&
-                                 reader_.env.get_rtoptions().get_simulator_enabled();
+    // On the qsr.s1 model an assert record can reach the host partially written through the cached L1
+    // alias: the firmware claims the record before filling it, and its TRISC boot assert shows up with
+    // the claim but failure code 0, or with a garbled claim. On that model only, such a record is
+    // reported and polling continues.
+    const bool qsr_s1 = reader_.env.get_rtoptions().is_qsr_s1_simulator();
+    const bool tolerant_record = qsr_s1;
     if (assert_status.tripped() == dev_msgs::DebugAssertOK) {
         if (assert_status.line_num() != DEBUG_SANITIZE_SENTINEL_OK_16 ||
             assert_status.which() != DEBUG_SANITIZE_SENTINEL_OK_8) {
             if (tolerant_record) {
                 log_warning(
                     tt::LogMetal,
-                    "Watcher assert record on {} reported OK with non-sentinel fields (which={} line=0x{:x}); ignoring (Quasar simulator)",
+                    "Watcher assert record on {} reported OK with non-sentinel fields (which={} line=0x{:x}); ignoring "
+                    "(qsr.s1 simulator, partial record)",
                     core_str_,
                     assert_status.which(),
                     assert_status.line_num());
@@ -898,7 +899,8 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
             DumpRingBuffer(true);
             log_warning(
                 tt::LogMetal,
-                "Watcher assert record on {} has unknown failure code {}; continuing to poll (Quasar simulator)",
+                "Watcher assert record on {} has unknown failure code {}; continuing to poll (qsr.s1 simulator, "
+                "partial record)",
                 core_str_,
                 assert_status.tripped());
             return;
@@ -915,8 +917,11 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
     DumpWaypoints(true);
     DumpRingBuffer(true);
     LogRunningKernels();
-    if (tolerant_record) {
-        log_warning(tt::LogMetal, "Watcher assert record on {} noted; continuing to poll (Quasar simulator)", core_str_);
+    if (qsr_s1 && assert_status.claim() != 0xDEADBEEF) {
+        log_warning(
+            tt::LogMetal,
+            "Watcher assert record on {} noted; continuing to poll (qsr.s1 simulator, partial record)",
+            core_str_);
         return;
     }
     reader_.watcher_server.set_exception_message(error_msg);
