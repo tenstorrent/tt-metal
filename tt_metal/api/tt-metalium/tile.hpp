@@ -20,6 +20,8 @@ enum class DataFormat : uint8_t;
 
 namespace tt::tt_metal {
 
+enum class DataType;
+
 struct Tile {
     // The shape of the tile in elements (H, W)
     using TileShape = std::array<uint32_t, 2>;
@@ -81,6 +83,8 @@ struct Tile {
     bool get_transpose_of_faces() const { return transpose_of_faces; }
 
     uint32_t get_tile_size(const DataFormat& format) const;
+    // Uses datatype_to_dataformat_converter(data_type).
+    uint32_t get_tile_size(DataType data_type) const;
 
     // operators
     bool operator==(const Tile& other) const;

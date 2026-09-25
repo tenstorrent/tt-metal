@@ -34,7 +34,9 @@ using CBHandle = uintptr_t;
 
 class CircularBufferConfig {
 public:
-    // Static circular buffer spec
+    // Static circular buffer spec.
+    // DataType overloads use datatype_to_dataformat_converter. Kernels that do their own INT8 sign handling
+    // must pass cb_dataformat_for(dtype) as a DataFormat instead.
     CircularBufferConfig(uint32_t total_size, const std::map<uint8_t, tt::DataFormat>& data_format_spec);
     CircularBufferConfig(uint32_t total_size, const std::map<uint8_t, DataType>& data_type_spec);
 
@@ -44,6 +46,7 @@ public:
     // Dynamic circular buffer spec
     CircularBufferConfig(
         uint32_t total_size, const std::map<uint8_t, tt::DataFormat>& data_format_spec, const Buffer& buffer);
+    CircularBufferConfig(uint32_t total_size, const std::map<uint8_t, DataType>& data_type_spec, const Buffer& buffer);
 
     // For flatbuffer deserialization, set all private members.
     CircularBufferConfig(
@@ -115,6 +118,7 @@ public:
         static Builder RemoteBuilder(CircularBufferConfig& parent, uint8_t buffer_index);
 
         const Builder& set_data_format(tt::DataFormat data_format) const;
+        const Builder& set_data_format(DataType data_type) const;
 
         const Builder& set_total_size(uint32_t total_size) const;
 
