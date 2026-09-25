@@ -474,6 +474,31 @@ def test_a_numeric_alias_for_a_boolean_enum_is_refused(tmp_path, alias):
         _table(tmp_path, f"Abs:\n  - {{approx: {alias}, max_ulp: 1}}\n")
 
 
+def test_a_duplicate_field_inside_a_row_is_refused(tmp_path):
+    """The same silent last-wins rule applies inside a row, where it would swap the key
+    a budget is filed under."""
+    with _refuses("duplicate entry for 'out'"):
+        _table(tmp_path, "Abs:\n  - {out: Float16_b, out: Float32, max_ulp: 1}\n")
+
+
+def test_anchors_and_merge_keys_load_and_may_override(tmp_path):
+    """The table shares rows through anchors, and a ``<<`` merge that overrides a field
+    is not a duplicate."""
+    table = _table(
+        tmp_path,
+        """\
+        Abs:
+          - &base {out: Float16_b, max_ulp: 2}
+        Neg:
+          - *base
+          - {<<: *base, out: Float32, max_ulp: 5}
+        """,
+    )
+    neg = table[MathOperation.Neg]
+    assert neg[BudgetKey(output_format=DataFormat.Float16_b)].max_ulp == 2
+    assert neg[BudgetKey(output_format=DataFormat.Float32)].max_ulp == 5
+
+
 def test_a_quoted_and_an_unquoted_no_mean_the_same_thing(tmp_path):
     """YAML 1.1 reads a bare ``No`` as ``False``, and ``ApproximationMode.No`` is spelled
     ``False`` too, so the two spellings must not disagree. The table quotes them; the
