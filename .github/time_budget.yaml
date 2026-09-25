@@ -369,7 +369,7 @@ models:
     bh_sc1: 335
     bh_sc4: 160
   e2e_tier2:
-    wh_llmbox_perf: 270
+    wh_llmbox_perf: 308  # +38 Qwen3.6-35B-A3B WH LoudBox e2e (40 min leg; 2 min was left)
     wh_n150: 45
     wh_n300: 6
     bh_p150: 26
@@ -394,7 +394,7 @@ models:
     bh_sc1: 370
     bh_sc4: 50
   unit_tier2:
-    wh_llmbox: 114
+    wh_llmbox: 137  # +23 Qwen3.6-35B-A3B WH LoudBox unit tests (30 min leg; 7 min was left)
     wh_llmbox_perf: 191
     wh_n150: 87
     wh_n300: 30

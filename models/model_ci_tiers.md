@@ -93,6 +93,7 @@ it is classified differently on different systems.
 | Qwen2.5-Coder-32B | WH LLMBox, BH QuietBox 2 |
 | Qwen2.5-VL-72B | WH LLMBox, BH QuietBox 2 |
 | Qwen3-VL-32B | WH LLMBox |
+| Qwen3.6-35B-A3B | WH LLMBox |
 | Shallow-UNet | WH N150, WH LLMBox, BH P150 |
 | Mistral-7B | WH N150 |
 | Mixtral-8x7B | WH LLMBox |
