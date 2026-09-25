@@ -356,7 +356,7 @@ def _verdict(measured: int, out_fmt: str) -> Tuple[str, int]:
             # only step gate Exp could have on bf16 over rounding. Cap at the ceiling:
             # a budget sitting exactly on it is still stronger than the tolerance it
             # replaces, and zero slack means any drift fails, which is what a gate is
-            # for. 15 cells on the 2026-09-25 sweep: Exp, and one ReciprocalCompat.
+            # for. 14 cells on the 2026-09-25 sweep, all Exp.
             return ("ulp", int(ceiling))
         # The *budget* is what crosses the line, not the measurement, so the row's
         # comment names both and the claim stays checkable.
