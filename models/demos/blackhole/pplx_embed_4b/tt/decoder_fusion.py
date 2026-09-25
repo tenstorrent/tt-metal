@@ -189,18 +189,20 @@ def _wrap_layer(layer, ff_consts, next_attn_consts, stash, is_first=False, verif
             # (stock add + rms_norm -> split), vs 178 / 299 / 530 for the row-granular fused kernel.
             R_env = int(os.getenv("QWEN_FUSED_ADD_NORM_R", "0") or 0)
             if R_env >= 2:
-                fuse = lambda a, b, consts, dt, mc: fused_add_rmsnorm_split(
-                    a, b, *consts, R=R_env, sum_dtype=dt, memory_config=mc
+                fuse = lambda a, b, consts, dt, mc, out_mc=None: fused_add_rmsnorm_split(
+                    a, b, *consts, R=R_env, sum_dtype=dt, memory_config=mc, out_memory_config=out_mc
                 )
             else:
-                fuse = lambda a, b, consts, dt, mc: fused_add_rmsnorm(a, b, *consts, sum_dtype=dt, memory_config=mc)
+                fuse = lambda a, b, consts, dt, mc, out_mc=None: fused_add_rmsnorm(
+                    a, b, *consts, sum_dtype=dt, memory_config=mc
+                )
         elif os.getenv("QWEN_FUSED_ADD_NORM_SPLIT", "0") == "1":  # probe: +5% e2e at bs1, see NEGATIVE_RESULTS 34
             # Few rows (bs1: 16 tile-rows): split each row over R cores with a partial-sum exchange.
             grid = x.device().compute_with_storage_grid_size()
             R = pick_split(rows // 32, int(x.padded_shape[-1]) // 32, int(grid.x) * int(grid.y))
             if R >= 2:
-                fuse = lambda a, b, consts, dt, mc: fused_add_rmsnorm_split(
-                    a, b, *consts, R=R, sum_dtype=dt, memory_config=mc
+                fuse = lambda a, b, consts, dt, mc, out_mc=None: fused_add_rmsnorm_split(
+                    a, b, *consts, R=R, sum_dtype=dt, memory_config=mc, out_memory_config=out_mc
                 )
         if fuse is None:
             if model_args is not None and os.getenv("QWEN_BS1_RESID_SHARDED", "1") == "1":
@@ -211,6 +213,15 @@ def _wrap_layer(layer, ff_consts, next_attn_consts, stash, is_first=False, verif
         if is_first:
             stash.clear()
         shape = list(x.padded_shape)
+        # L1 placement of the fused op's short-lived tensors (batched ISL 512 defaults, _common.py):
+        #   QWEN_FUSED_ADD_NORM_OUT_L1=1   both norms' outputs (read by QKV / FF1+FF3) go to L1 interleaved
+        #   QWEN_FUSED_ADD_NORM_SUM1_L1=1  the post-attention residual sum (add 2's a, alive across the MLP only)
+        #   QWEN_FUSED_ADD_NORM_SUM2_L1=1  the post-MLP residual sum (alive across the next attention, incl. SDPA)
+        # The b operands (WO / FF2 outputs) follow TT_PREFILL_WO_L1 / TT_PREFILL_FF2_L1.
+        l1 = ttnn.L1_MEMORY_CONFIG
+        out_mc = l1 if os.getenv("QWEN_FUSED_ADD_NORM_OUT_L1", "0") == "1" else None
+        sum1_mc = l1 if os.getenv("QWEN_FUSED_ADD_NORM_SUM1_L1", "0") == "1" else None
+        sum2_mc = l1 if os.getenv("QWEN_FUSED_ADD_NORM_SUM2_L1", "0") == "1" else None
         pending = {}
         calls = [0]
         orig_add = ttnn.add
@@ -229,7 +240,7 @@ def _wrap_layer(layer, ff_consts, next_attn_consts, stash, is_first=False, verif
             calls[0] += 1
             mc, dt = a_kwargs.get("memory_config"), a_kwargs.get("dtype")
             if calls[0] == 1:  # post-attention residual -> feeds ff_norm
-                s, n = fuse(a, b, ff_consts, dt, mc)
+                s, n = fuse(a, b, ff_consts, dt, sum1_mc or mc, out_mc)
                 if do_verify:
                     s_ref = orig_add(a, b, *a_args, **a_kwargs)
                     n_ref = orig_ff_norm(s_ref, mode)
@@ -241,7 +252,7 @@ def _wrap_layer(layer, ff_consts, next_attn_consts, stash, is_first=False, verif
                 pending[id(s)] = (s, n)
                 return s
             if calls[0] == 2 and next_attn_consts is not None:  # post-MLP residual -> next attention_norm
-                s, n = fuse(a, b, next_attn_consts, dt, mc)
+                s, n = fuse(a, b, next_attn_consts, dt, sum2_mc or mc, out_mc)
                 if do_verify and next_layer is not None:
                     s_ref = orig_add(a, b, *a_args, **a_kwargs)
                     n_ref = next_layer.attention_norm(s_ref, mode)
@@ -266,13 +277,34 @@ def _wrap_layer(layer, ff_consts, next_attn_consts, stash, is_first=False, verif
                 return hit[1]
             return orig_attn_norm(h, *n_args, **n_kwargs)
 
+        # The decoder moves the attention output to the residual's memory config before the post-attention add
+        # (decoder.py, a workaround for the stock ttnn.add). The fused op reads b from anywhere, so an attention
+        # output already in L1 (TT_PREFILL_WO_L1=1) stays there; otherwise the move was an L1 -> DRAM copy per layer
+        # (36 copies, 7.2 ms at bs32).
+        orig_tmc = ttnn.to_memory_config
+
+        def tmc_wrapper(t, memory_config=None, *t_args, **t_kwargs):
+            if (
+                not t_args
+                and not t_kwargs
+                and memory_config is not None
+                and memory_config.buffer_type == ttnn.BufferType.DRAM
+                and hasattr(t, "padded_shape")
+                and list(t.padded_shape) == shape
+                and t.memory_config().buffer_type == ttnn.BufferType.L1
+            ):
+                return t
+            return orig_tmc(t, memory_config, *t_args, **t_kwargs)
+
         ttnn.add = add_wrapper
+        ttnn.to_memory_config = tmc_wrapper
         layer.ff_norm = ff_norm_wrapper
         layer.attention_norm = attn_norm_wrapper
         try:
             return orig_forward(x, *args, **kwargs)
         finally:
             ttnn.add = orig_add
+            ttnn.to_memory_config = orig_tmc
             layer.ff_norm = orig_ff_norm
             layer.attention_norm = orig_attn_norm
 
