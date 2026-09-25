@@ -45,6 +45,10 @@ Env knobs: ``TT_PD_STRICT_SHAPES`` (1: raise on program-cache growth inside a ho
 bisect only), ``TT_PD_CHECKSUM`` (1: check ``Source.crc32c()`` in ``validate_gdn_parts``), ``TT_PD_TIMING`` (1: log a
 per-call timing line), ``TT_PD_TAPS_WRITE`` (``update_cache`` | ``write_index``), ``TT_PD_TAPS_SPLIT`` (width slabs of
 the tap-row view, default 40 -> 256 columns each; ``update_cache`` stages ``32 x slab`` tiles per core),
+``TT_PD_HIST_WRITE`` (``batched`` | ``legacy``: the fused-conv packed conv-history row of an install -- one host pack
+of all layers + per layer one H2D into persistent staging and one ``fill_cache``, or the per-layer pack/upload +
+``_write_index``), ``TT_PD_ROWS_PREFETCH`` (1: ``validate_gdn_parts`` loads the taps rows while the K/V fills run and
+``install_gdn_state`` reuses them; 0: read at install),
 ``TT_PD_EXPORT_MIRROR`` (0: never bind the staging; the export gathers from the paged cache as before),
 ``TT_PD_CHUNK_SYNC`` (1: before a chunk boundary at which the pump could send -- a published export is waiting for
 its claim -- the observer synchronizes the device, so the sends follow a FINISHED chunk; a request with no pending
@@ -54,6 +58,7 @@ host-time boundary would make the consumer post recvs that park its cq behind th
 mirror copies stay, the claim-gated sends wait for the step-begin hold / step end as before).
 """
 
+import collections
 import os
 import time
 from dataclasses import dataclass, field
@@ -161,6 +166,7 @@ class Qwen36KVTransfer:
     """Model-side hook (design 5.1). ``model`` is the ``Qwen36Model`` (TP code path, paged KV allocated)."""
 
     BLOCKS_PER_CHUNK = 32
+    _ROWS_CACHE_MAX = 16
 
     def __init__(self, model):
         self.model = model
@@ -212,6 +218,21 @@ class Qwen36KVTransfer:
         self.taps_write = os.environ.get("TT_PD_TAPS_WRITE", "update_cache")
         assert self.taps_write in ("update_cache", "write_index"), f"TT_PD_TAPS_WRITE={self.taps_write!r}"
         self.taps_split = int(os.environ.get("TT_PD_TAPS_SPLIT", "40"))
+        # consumer, fused-conv decode: how the packed conv history row of an install is written. batched = ONE
+        # host pack of all layers into a persistent per-parity host buffer, then per layer an H2D into persistent
+        # staging + ONE fill_cache; legacy = per layer host pack + fresh upload + _write_index (slice/concat/copy).
+        self.hist_write = os.environ.get("TT_PD_HIST_WRITE", "batched")
+        assert self.hist_write in ("batched", "legacy"), f"TT_PD_HIST_WRITE={self.hist_write!r}"
+        self._hist_stage = None  # L x [1, Nv*K, 32, 32] bf16 TILE device staging (one per GDN layer)
+        self._hist_host = None  # {parity: torch bf16 [L, Nv, K, 32, 32]} (rows other than 2c+parity stay zero)
+        self.last_install_timing = None
+        # consumer: validate_gdn_parts loads the taps rows (host) while the K/V fills run; install_gdn_state reuses them
+        self.rows_prefetch = os.environ.get("TT_PD_ROWS_PREFETCH", "1") != "0"
+        # id(sources) -> (sources, [K, D] bf16 rows per GDN layer). A job that fails after validate never installs, so its
+        # entry (~3.9 MB of rows + a reference to its sources dict; transports release explicitly, no device memory)
+        # stays until _ROWS_CACHE_MAX newer validates evict it: <= ~63 MB host under an abort-heavy load. If more than
+        # _ROWS_CACHE_MAX validated jobs wait for their join at once, the oldest falls back to reading at install.
+        self._rows_cache = collections.OrderedDict()
         self._taps_stage_rm = None  # [1, 1, R32, D] bf16 ROW_MAJOR device staging (R32 = tap rows rounded up to 32)
         self.mirrored_chunks = 0  # chunks copied by the mirror (all requests)
         self.gathered_chunks = 0  # chunks the export had to gather from the paged cache
@@ -505,6 +526,14 @@ class Qwen36KVTransfer:
                 zero_rec_dev = None
                 if self.taps_write == "update_cache":
                     self._alloc_taps_stage(g, len(dns), dn0.K)
+                hist_batched = (
+                    self.hist_write == "batched"
+                    and not self.via_write_slot
+                    and self.mesh.get_num_devices() == 1  # replicated staging == the legacy dim-0 shard only at 1x1
+                    and all(getattr(dn, "_decode_fused_conv", False) and dn.conv_hist_packed is not None for dn in dns)
+                )
+                if hist_batched:
+                    self._alloc_hist_stage(dns)
                 for slot in slots:
                     assert 0 <= slot < dn0.B, f"slot {slot} outside [0, {dn0.B})"
                     if self.rec_write == "fill_cache":
@@ -525,7 +554,14 @@ class Qwen36KVTransfer:
                             c = self._tap_row_tensor(zero_row, dn0)
                             self._note_shape("write_index_tap", (tuple(int(d) for d in dn0.conv_states[m].shape), slot))
                             dn0._write_index(dn0.conv_states[m], c, slot, dim=1)
-                    if getattr(dn0, "_decode_fused_conv", False) and dn0.conv_hist_packed is not None:
+                    if hist_batched:
+                        # zeros into every layer's packed row `slot` (= the zero tap rows written above)
+                        keep = self._write_hist_batched(
+                            dns, torch.zeros(len(dns), dn0.K, g["conv_dim"], dtype=torch.bfloat16), slot
+                        )
+                        ttnn.synchronize_device(self.mesh)
+                        del keep
+                    elif getattr(dn0, "_decode_fused_conv", False) and dn0.conv_hist_packed is not None:
                         packed = self._packed_slot_tensor(
                             dn0, torch.zeros(dn0.K, g["conv_dim"], dtype=torch.bfloat16), slot
                         )
@@ -543,7 +579,8 @@ class Qwen36KVTransfer:
             f"[PD] warmup_kv_transfer role={role} mode={mode} chunk_tokens={chunk_tokens} slots={slots}: "
             f"+{self._n_program_cache_after_warmup - n0} programs ({self._n_program_cache_after_warmup} total), "
             f"{len(self._shape_keys)} shape keys, {1e3 * (time.perf_counter() - t0):.0f} ms; "
-            f"strict_shapes={self.strict} rec_write={self.rec_write} via_write_slot={self.via_write_slot}"
+            f"strict_shapes={self.strict} rec_write={self.rec_write} via_write_slot={self.via_write_slot} "
+            f"hist_write={self.hist_write} (staged={self._hist_stage is not None}) rows_prefetch={self.rows_prefetch}"
         )
 
     # ----------------------------------------------------------------------------------------------------------- #
@@ -809,6 +846,86 @@ class Qwen36KVTransfer:
             mesh_mapper=self._rep(),
         )
 
+    def _alloc_hist_stage(self, dns) -> None:
+        # TP=1 only: the staging and the host pack are replicated (``_rep``) where the legacy path shards the packed
+        # row over dim 0 (``ShardTensorToMesh``); the two write the same bytes only on a 1x1 mesh. A TP>1 consumer
+        # takes the legacy path (the warmup does not allocate this staging, so install_gdn_state falls back).
+        n_dev = self.mesh.get_num_devices()
+        assert n_dev == 1, f"batched hist write is TP=1 only ({n_dev} devices)"
+        if self._hist_stage is not None:
+            return
+        dn0 = dns[0]
+        L, Nv, K = len(dns), int(dn0.Nv), int(dn0.K)
+        for dn in dns:
+            assert tuple(int(d) for d in dn.conv_hist_packed.shape)[1:] == (Nv, K, 32, 32), tuple(
+                dn.conv_hist_packed.shape
+            )
+        self._hist_host = {p: torch.zeros(L, Nv, K, 32, 32, dtype=torch.bfloat16) for p in (0, 1)}
+        z = torch.zeros(1, Nv * K, 32, 32, dtype=torch.bfloat16)
+        self._hist_stage = [
+            ttnn.from_torch(
+                z,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=self._rep(),
+            )
+            for _ in range(L)
+        ]
+
+    @staticmethod
+    def _pack_hist_into(out, dn, rows, parity: int) -> None:
+        """rows [L, K, D] bf16 -> out [L, Nv, K, 32, 32]: row 2c + parity of tile (l, h, m) = channel chunk c of head h's
+        [q(hk) | k(hk) | v(h)] row of tap m -- the bytes ``dn._pack_rows_vec`` + permute(1, 0, 2, 3) produce per layer
+        (``_packed_slot_tensor``), for every layer in one vectorized copy. Only the parity rows are written: the other
+        rows of ``out`` (the persistent per-parity host buffer) are zero from allocation and never touched."""
+        Nv, Nk, Dk, Dv = int(dn.Nv), int(dn.Nk), int(dn.Dk), int(dn.Dv)
+        kd = Nk * Dk
+        L, K = int(rows.shape[0]), int(rows.shape[1])
+        hk = torch.arange(Nv) // (Nv // Nk)
+        rows = rows.to(torch.bfloat16)
+        q = rows[..., :kd].reshape(L, K, Nk, Dk)[:, :, hk, :]
+        k = rows[..., kd : 2 * kd].reshape(L, K, Nk, Dk)[:, :, hk, :]
+        v = rows[..., 2 * kd : 2 * kd + Nv * Dv].reshape(L, K, Nv, Dv)
+        chunks = torch.cat([q, k, v], dim=-1).reshape(L, K, Nv, -1, 32)  # [L, K, Nv, n, 32]
+        n = int(chunks.shape[-2])
+        assert 2 * n <= 32, f"{n} channel chunks per head do not fit a parity-interleaved 32-row tile"
+        out[:, :, :, parity : 2 * n + parity : 2, :] = chunks.permute(0, 2, 1, 3, 4)
+
+    def _write_hist_batched(self, dns, rows, slot: int, tm=None):
+        """rows [n_layers, K, D] bf16 host -> packed conv history row ``slot`` (parity ``slot & 1``) of every layer, in
+        place: one vectorized host pack of all layers into the persistent parity buffer, then per layer a host tilize
+        (``from_torch`` TILE of a [1, Nv*K, 32, 32] view: 2 KiB pages, unlike a ROW_MAJOR [.., 32] upload whose 64 B
+        pages make the H2D 5x slower), one H2D copy into the layer's persistent TILE staging and ONE ``fill_cache``
+        over the zero-copy [B, Nv*K, 32, 32] view of ``conv_hist_packed`` (``batch_idx`` = slot is a runtime arg).
+        Returns the host tensors, to keep alive until the device is synchronized."""
+        dn0 = dns[0]
+        L, Nv, K = len(dns), int(dn0.Nv), int(dn0.K)
+        assert self._hist_stage is not None, "warmup_kv_transfer(role=consumer) must run first"
+        assert self.mesh.get_num_devices() == 1, "batched hist write is TP=1 only (see _alloc_hist_stage)"
+        assert tuple(int(d) for d in rows.shape[:2]) == (L, K), tuple(rows.shape)
+        slot = int(slot)
+        t0 = time.perf_counter()
+        host = self._hist_host[slot & 1]
+        self._pack_hist_into(host, dn0, rows, slot & 1)
+        t_pack = time.perf_counter()
+        hs = []
+        for j, dn in enumerate(dns):
+            buf = dn.conv_hist_packed
+            B = int(buf.shape[0])
+            assert 0 <= slot < B, f"slot {slot} outside [0, {B})"
+            h = ttnn.from_torch(host[j].view(1, Nv * K, 32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            hs.append(h)
+            ttnn.copy_host_to_device_tensor(h, self._hist_stage[j])
+            cache = ttnn.experimental.view(buf, (B, Nv * K, 32, 32))
+            self._note_shape("fill_cache_hist", ((B, Nv * K, 32, 32), slot))
+            ttnn.fill_cache(cache, self._hist_stage[j], slot)
+        if tm is not None:
+            tm["pack"] += t_pack - t0
+            tm["hist"] += time.perf_counter() - t_pack
+        return hs
+
     def _write_taps_update_cache(self, dns, rows, slot: int):
         """rows [n_layers, K, D] bf16 host -> row ``slot`` of every ``conv_states[m]`` of every layer, in place:
         ONE compact ROW_MAJOR upload into the persistent staging, one device tilize, one tile-aligned slice per 32
@@ -1040,6 +1157,20 @@ class Qwen36KVTransfer:
         for name, _ in self._kv_tensors():
             if name not in sources:
                 raise RuntimeError(f"PD: missing K/V part {name}")
+        if self.rows_prefetch:
+            # Host-only: load the taps rows now (the worker calls this right after enqueueing the K/V fills and before
+            # its device sync, so the ~48 row-file reads overlap the fills instead of sitting inside install_gdn_state
+            # at the join step). Cached per sources dict; install_gdn_state pops the entry.
+            want = (g["K"], g["conv_dim"])
+            rows = []
+            for j in range(len(self.gdn_layers)):
+                r = sources[f"gdn.L{j}.taps"].read_rows().to(torch.bfloat16)
+                if tuple(r.shape) != want:
+                    raise RuntimeError(f"PD: gdn.L{j}.taps rows {tuple(r.shape)} != expected {want}")
+                rows.append(r)
+            self._rows_cache[id(sources)] = (sources, rows)
+            while len(self._rows_cache) > self._ROWS_CACHE_MAX:  # a job that failed after validate never installs
+                self._rows_cache.popitem(last=False)
 
     def install_gdn_state(self, sources, slot: int) -> None:
         """Write the rec row + 4 conv tap rows (+ the packed conv history on a fused-conv decode) into ``slot`` of every
@@ -1054,8 +1185,21 @@ class Qwen36KVTransfer:
             slot = int(slot)
             t0 = time.perf_counter()
             batched_taps = self.taps_write == "update_cache" and not self.via_write_slot
+            # packed conv history of a fused-conv decode: batched = one vectorized host pack of all layers, then per layer
+            # a host tilize + one TILE H2D into persistent staging + one fill_cache, after the loop (_write_hist_batched);
+            # legacy = per layer host pack/tilize + fresh upload + _write_index (slice/slice/concat/copy)
+            batched_hist = (
+                self.hist_write == "batched"
+                and not self.via_write_slot
+                and self._hist_stage is not None  # allocated by the warmup only on a single-device mesh
+                and all(getattr(dn, "_decode_fused_conv", False) for dn in dns)
+            )
+            tm = {"rec": 0.0, "rows": 0.0, "pack": 0.0, "hist": 0.0, "taps": 0.0}
+            cached = self._rows_cache.pop(id(sources), None)
+            pre_rows = cached[1] if cached is not None and cached[0] is sources else None
             for j, dn in enumerate(dns):
                 assert 0 <= slot < dn.B, f"slot {slot} outside [0, {dn.B})"
+                ta = time.perf_counter()
                 src = sources[f"gdn.L{j}.rec"].chunk(0)
                 dev_tensor = getattr(src, "device_tensor", None)
                 if callable(dev_tensor):
@@ -1073,8 +1217,14 @@ class Qwen36KVTransfer:
                     rc = ttnn.typecast(r, dn.rec_state.dtype)
                     fresh.append(rc)
                     r = rc
-                rows = sources[f"gdn.L{j}.taps"].read_rows().to(torch.bfloat16)  # [K, D] host
+                tb = time.perf_counter()
+                if pre_rows is not None:
+                    rows = pre_rows[j]  # loaded by validate_gdn_parts
+                else:
+                    rows = sources[f"gdn.L{j}.taps"].read_rows().to(torch.bfloat16)  # [K, D] host
                 keep.append(rows)
+                tc = time.perf_counter()
+                tm["rows"] += tc - tb
                 assert tuple(rows.shape) == (dn.K, int(dn.conv_states[0].shape[-1])), f"taps {tuple(rows.shape)}"
                 if self.via_write_slot:
                     # bisect path: TPGatedDeltaNet.write_slot verbatim (consumes rec + convs; its tail re-syncs the packed
@@ -1088,9 +1238,11 @@ class Qwen36KVTransfer:
                 else:
                     self._note_shape("write_index_rec", (tuple(int(d) for d in dn.rec_state.shape), slot))
                     dn._write_index(dn.rec_state, ttnn.clone(r), slot, dim=0)
-                if batched_taps:
+                td = time.perf_counter()
+                tm["rec"] += (tb - ta) + (td - tc)
+                if batched_taps or batched_hist:
                     rows_all.append(rows)  # written below, all layers in one pass
-                else:
+                if not batched_taps:
                     for m in range(dn.K):
                         c = self._tap_row_tensor(rows[m], dn)
                         self._note_shape("write_index_tap", (tuple(int(d) for d in dn.conv_states[m].shape), slot))
@@ -1103,23 +1255,43 @@ class Qwen36KVTransfer:
                     # rebuild here (it would revert every live user's history from their stale conv_states, I4).
                     if not dn._hist_packed_valid or dn.conv_hist_packed is None:
                         raise RuntimeError(f"PD: GDN layer {j}: conv_hist_packed invalid while slots are live")
-                    packed = self._packed_slot_tensor(dn, rows, slot)
-                    self._note_shape("write_index_packed", (tuple(int(d) for d in dn.conv_hist_packed.shape), slot))
-                    dn._write_index(dn.conv_hist_packed, packed, slot, dim=0)
+                    if not batched_hist:
+                        te = time.perf_counter()
+                        packed = self._packed_slot_tensor(dn, rows, slot)
+                        tf = time.perf_counter()
+                        self._note_shape("write_index_packed", (tuple(int(d) for d in dn.conv_hist_packed.shape), slot))
+                        dn._write_index(dn.conv_hist_packed, packed, slot, dim=0)
+                        tm["pack"] += tf - te
+                        tm["hist"] += time.perf_counter() - tf
             t_layers = time.perf_counter()
+            stacked = torch.stack(rows_all) if rows_all else None
             if batched_taps and rows_all:
-                keep.append(self._write_taps_update_cache(dns, torch.stack(rows_all), slot))
+                keep.append(self._write_taps_update_cache(dns, stacked, slot))
             t_taps = time.perf_counter()
+            tm["taps"] = t_taps - t_layers
+            if batched_hist:
+                keep.append(self._write_hist_batched(dns, stacked, slot, tm))
+            t_hist = time.perf_counter()
             ttnn.synchronize_device(self.mesh)  # every H2D done before any host buffer above goes away
             t_sync = time.perf_counter()
             for t in fresh:
                 ttnn.deallocate(t)
             del keep
+            self.last_install_timing = dict(
+                total=time.perf_counter() - t0,
+                layers=t_layers - t0,
+                sync=t_sync - t_hist,
+                hist_mode="batched" if batched_hist else "legacy",
+                rows_prefetched=pre_rows is not None,
+                **tm,
+            )
             if self.timing:
                 logger.info(
-                    f"[PD_TIMING] install_gdn_state slot={slot}: {1e3 * (time.perf_counter() - t0):.1f} ms = rec writes + "
-                    f"rows reads {1e3 * (t_layers - t0):.1f} + taps device write {1e3 * (t_taps - t_layers):.1f} + sync "
-                    f"{1e3 * (t_sync - t_taps):.1f}"
+                    f"[PD_TIMING] install_gdn_state slot={slot}: {1e3 * (time.perf_counter() - t0):.1f} ms = layer loop "
+                    f"{1e3 * (t_layers - t0):.1f} + taps {1e3 * (t_taps - t_layers):.1f} + hist "
+                    f"{1e3 * (t_hist - t_taps):.1f} + sync {1e3 * (t_sync - t_hist):.1f} (hist={'batched' if batched_hist else 'legacy'}: "
+                    f"rec {1e3 * tm['rec']:.1f}, rows read {1e3 * tm['rows']:.1f}, hist pack {1e3 * tm['pack']:.1f}, hist "
+                    f"write {1e3 * tm['hist']:.1f} ms; rows {'prefetched' if pre_rows is not None else 'read here'})"
                 )
 
     def import_request_state(self, sources, block_ids, num_tokens: int, slot: int, *, chunk_range=None) -> None:
