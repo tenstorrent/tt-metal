@@ -459,7 +459,13 @@ void kernel_main() {
             // we are assuming here that num_heads_to_write = nh/nkv is a power of 2 here, so that we don't write
             // partial across phase
             constexpr uint32_t num_heads_to_write = num_q_heads / num_kv_heads;  // each head is one row in a tile
-            if (!is_out_sharded) {
+            if constexpr (spec_multi_pos) {
+                // Spec mode: PNHt == Tg candidate tiles, each holding ALL q heads of one candidate
+                // (num_q_heads = spec_q_heads here, set by the factory); this kv head owns the same
+                // row range of every candidate tile. Output is interleaved (validated on host).
+                barrier_count = write_spec_partial_rows_to_memory<cb_out, ELEMENT_SIZE, barrier_threshold, PNHt>(
+                    out_tile_id, out_writer, barrier_count, cur_head, num_heads_to_write, out_chunk_tiles);
+            } else if (!is_out_sharded) {
                 barrier_count = write_partial_tiles_to_memory<cb_out, ELEMENT_SIZE, barrier_threshold, PNHt>(
                     out_tile_id, out_writer, barrier_count, cur_head, num_heads_to_write, out_chunk_tiles);
             }

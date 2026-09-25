@@ -129,6 +129,7 @@ Tensor sdpa_decode(
     std::optional<uint32_t> head_dim_v,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry = std::nullopt,
     std::optional<uint32_t> cache_position_modulo = std::nullopt,
-    uint32_t spec_multi_pos_tiles = 0);
+    uint32_t spec_multi_pos_tiles = 0,
+    uint32_t spec_q_heads = 0);
 
 }  // namespace ttnn::prim

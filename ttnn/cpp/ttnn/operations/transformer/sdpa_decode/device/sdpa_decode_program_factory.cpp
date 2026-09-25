@@ -65,6 +65,8 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     // SdpaDecodeParams::spec_multi_pos_tiles.
     const uint32_t spec_multi_pos_tiles = operation_attributes.spec_multi_pos_tiles;
     const bool spec_multi_pos = spec_multi_pos_tiles > 0;
+    // Spec mode, num_kv_heads > 1 only: valid q heads per candidate tile (see SdpaDecodeParams).
+    const uint32_t spec_q_heads = operation_attributes.spec_q_heads;
 
     // V tensor: use K if MLA (V is subset of K), otherwise require explicit V
     TT_FATAL(use_mla || tensor_args.v.has_value(), "V tensor must be provided when MLA is disabled.");
@@ -486,7 +488,17 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         // off. num_q_heads = T*32 > 16 already forces this; assert rather than assume.
         TT_FATAL(!use_half_tile, "spec_multi_pos_tiles requires full 32x32 tiles, but use_half_tile was selected");
         TT_FATAL(B >= 1, "spec_multi_pos_tiles requires B >= 1, got {}", B);
-        TT_FATAL(num_kv_heads == 1, "spec_multi_pos_tiles requires num_kv_heads == 1, got {}", num_kv_heads);
+        // num_kv_heads > 1 (GQA): every (batch group, kv head) pair is its own reduction group (the
+        // generic core split below), each core computes all Tg*32 rows against its kv head, and the
+        // root writes back only its q group's rows of every candidate tile (writer, spec branch).
+        TT_FATAL(
+            num_kv_heads == 1 || (spec_q_heads > 0 && spec_q_heads <= TILE_HEIGHT && spec_q_heads % num_kv_heads == 0),
+            "spec_multi_pos_tiles with num_kv_heads={} requires spec_q_heads > 0, <= 32 and divisible by it, got {}",
+            num_kv_heads,
+            spec_q_heads);
+        TT_FATAL(
+            num_kv_heads == 1 || !is_output_sharded,
+            "spec_multi_pos_tiles with num_kv_heads > 1 requires an interleaved output");
         TT_FATAL(is_causal, "spec_multi_pos_tiles requires is_causal");
         TT_FATAL(is_paged_attention, "spec_multi_pos_tiles requires paged attention");
         TT_FATAL(use_cur_pos_tensor, "spec_multi_pos_tiles requires a cur_pos tensor");
@@ -822,7 +834,11 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         output_semaphore_id,
         static_cast<uint32_t>(is_output_sharded),
         k_chunk_size,
-        num_q_heads,
+        // The writer's GQA branch writes num_q_heads / num_kv_heads rows per kv head. In spec mode
+        // Q's logical row count is Tg*32 (whole candidate tiles), so pass the real per-candidate
+        // head count there; num_kv_heads == 1 never reads it (MQA writes whole tiles) and keeps the
+        // pre-change value, so its compile-time args are unchanged.
+        (spec_multi_pos && num_kv_heads > 1) ? spec_q_heads : num_q_heads,
         num_kv_heads,
         num_cores_per_head,
         num_heads_per_core,

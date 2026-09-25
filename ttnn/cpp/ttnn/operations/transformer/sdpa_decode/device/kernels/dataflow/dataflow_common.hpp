@@ -534,6 +534,65 @@ uint32_t write_partial_tiles_to_memory(
     return barrier_count;
 }
 
+// Speculative multi-position mode with num_kv_heads > 1: the output of batch group b is PNHt == Tg
+// candidate tiles, and in EVERY candidate tile rows [cur_head*g, (cur_head+1)*g) belong to this
+// kv head (g = num_heads_to_write = spec_q_heads / num_kv_heads, all rows < 32). The rows of one
+// face half are contiguous in L1 and in the output tile (row r of face 0/1 sits at r*16 elements,
+// row r >= 16 of face 2/3 at (r+16)*16), so each (candidate tile, hidden tile, face half, column
+// face) is ONE contiguous write of nrows*16 elements.
+template <uint32_t cb_out, uint32_t ELEMENT_SIZE, uint32_t barrier_threshold, uint32_t PNHt, typename WriterType>
+uint32_t write_spec_partial_rows_to_memory(
+    uint32_t& out_tile_id,  // base tile index of this batch group
+    const WriterType& out_writer,
+    uint32_t& barrier_count,
+    uint32_t cur_head,            // kv-head index 0..num_kv_heads-1
+    uint32_t num_heads_to_write,  // q heads per kv head within one candidate tile
+    uint32_t out_chunk_tiles) {   // PNHt * vDHt
+    Noc noc;
+    constexpr uint32_t FACE_HW = 16;
+    constexpr uint32_t FACE_ELEMENT_CNT = FACE_HW * FACE_HW;
+    constexpr uint32_t tile_bytes = get_tile_size(cb_out);
+    constexpr uint32_t FACE_LINE_BYTES = FACE_HW * ELEMENT_SIZE;
+    const uint32_t row_lo = cur_head * num_heads_to_write;
+    const uint32_t row_hi = row_lo + num_heads_to_write;  // exclusive, <= 32 (validated on host)
+
+    CircularBuffer cb(cb_out);
+    const uint32_t l1_base_addr = cb.get_read_ptr();
+
+    for (uint32_t tile_index = 0; tile_index < out_chunk_tiles; ++tile_index) {
+        // [candidate row-tile][hidden tile] order, same as the output tensor's tiles of this group
+        for (uint32_t half = 0; half < 2; ++half) {
+            const uint32_t r0 = half == 0 ? row_lo : (row_lo > FACE_HW ? row_lo : FACE_HW);
+            const uint32_t r1 = half == 0 ? (row_hi < FACE_HW ? row_hi : FACE_HW) : row_hi;
+            if (r0 >= r1) {
+                continue;
+            }
+            const uint32_t in_tile_offset = (half == 0 ? r0 : r0 + FACE_HW) * FACE_LINE_BYTES;
+            const uint32_t nbytes = (r1 - r0) * FACE_LINE_BYTES;
+            const uint32_t l1_addr = l1_base_addr + tile_index * tile_bytes + in_tile_offset;
+            const uint32_t dram_tile_id = out_tile_id + tile_index;
+            noc.async_write(
+                CoreLocalMem<uint32_t>(l1_addr),
+                out_writer,
+                nbytes,
+                {},
+                {.page_id = dram_tile_id, .offset_bytes = in_tile_offset});
+            noc.async_write(
+                CoreLocalMem<uint32_t>(l1_addr + FACE_ELEMENT_CNT * ELEMENT_SIZE),
+                out_writer,
+                nbytes,
+                {},
+                {.page_id = dram_tile_id, .offset_bytes = in_tile_offset + FACE_ELEMENT_CNT * ELEMENT_SIZE});
+            if (++barrier_count == barrier_threshold) {
+                noc.async_writes_flushed();
+                barrier_count = 0;
+            }
+        }
+    }
+    out_tile_id += out_chunk_tiles;
+    return barrier_count;
+}
+
 /******************************************************************************
  *                   Reader Kernel Specific Functions                         *
  ******************************************************************************/

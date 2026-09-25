@@ -48,9 +48,16 @@ struct SdpaDecodeParams {
     // candidate b*Tg+j attends to [0, cur_pos[b*Tg+j]] inclusive, exactly like batch row
     // b*Tg+j with that cur_pos in the legacy B*Tg-row form. B groups let the op fill a grid
     // that one group's row-tile count cannot (L1 caps cores/head by Tg).
-    // Requires num_kv_heads==1, causal, paged, no sliding window, no MLA, unsharded bf16
-    // TILE Q with Tg*32 padded rows per batch.
+    // Requires causal, paged, no sliding window, no MLA, unsharded bf16 TILE Q with Tg*32
+    // padded rows per batch. num_kv_heads > 1 (GQA) additionally needs spec_q_heads.
     uint32_t spec_multi_pos_tiles = 0;
+    // Spec mode with num_kv_heads > 1 only: the number of valid q heads in each candidate's
+    // 32-row Q tile (rows [0, spec_q_heads)), q head i reading kv head i / (spec_q_heads /
+    // num_kv_heads). Every (batch group, kv head) pair gets its own reduction group; its root
+    // writes back rows [h*g, (h+1)*g) of every candidate tile, g = spec_q_heads / num_kv_heads.
+    // Ignored (must be 0 or <= 32) at num_kv_heads == 1, where the whole tile is written as
+    // before, so that path's program is unchanged.
+    uint32_t spec_q_heads = 0;
 };
 
 struct SdpaDecodeInputs {

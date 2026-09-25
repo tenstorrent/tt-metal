@@ -47,6 +47,8 @@ boundaries, including cases where the T bounds straddle a chunk boundary so that
 carry a mask instead of one.
 """
 
+import os
+
 import pytest
 import torch
 
@@ -85,21 +87,52 @@ SPEC_CONFIG = {
 }
 
 
+# ── Golden dump / check (bit-identity of the num_kv_heads == 1 path across a kernel change) ──
+#
+# SDPA_SPEC_GOLDEN_MODE=dump writes every raw device output of every test (keyed by test id + call
+# index) to SDPA_SPEC_GOLDEN_DIR; =check torch.equal-compares against those files. Dump with the
+# pre-change build (cd into its tree: the JIT resolves kernel sources from the cwd first), check
+# with the new one.
+_GOLDEN_MODE = os.environ.get("SDPA_SPEC_GOLDEN_MODE", "")
+_GOLDEN_DIR = os.environ.get("SDPA_SPEC_GOLDEN_DIR", "")
+_golden_calls = {}
+
+
+def _golden(t):
+    if not _GOLDEN_MODE:
+        return t
+    test_id = os.environ.get("PYTEST_CURRENT_TEST", "unknown").split(" ")[0].split("::")[-1]
+    idx = _golden_calls.get(test_id, 0)
+    _golden_calls[test_id] = idx + 1
+    safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in test_id)
+    path = os.path.join(_GOLDEN_DIR, f"{safe}__{idx}.pt")
+    if _GOLDEN_MODE == "dump":
+        os.makedirs(_GOLDEN_DIR, exist_ok=True)
+        torch.save(t.clone(), path)
+    elif _GOLDEN_MODE == "check":
+        assert os.path.exists(path), f"golden missing: {path}"
+        g = torch.load(path)
+        eq = torch.equal(g, t)
+        print(f"GOLDEN {safe}__{idx} equal={eq}")
+        assert eq, f"golden mismatch {path}: max abs diff {(g.float() - t.float()).abs().max().item()}"
+    return t
+
+
 # ── Helpers ────────────────────────────────────────────────────────────────
 
 
-def _build_kv(seq_len, seed):
+def _build_kv(seq_len, seed, nkv=NUM_KV_HEADS):
     """One logical user's K/V, bf16-rounded so the paged cache round-trips exactly."""
     g = torch.Generator().manual_seed(seed)
-    k = torch.randn(NUM_KV_HEADS, seq_len, HEAD_DIM, generator=g).bfloat16().float()
-    v = torch.randn(NUM_KV_HEADS, seq_len, HEAD_DIM, generator=g).bfloat16().float()
+    k = torch.randn(nkv, seq_len, HEAD_DIM, generator=g).bfloat16().float()
+    v = torch.randn(nkv, seq_len, HEAD_DIM, generator=g).bfloat16().float()
     return k, v
 
 
 def _paged_layout(k, v, page_table_row):
     """Scatter the user's K/V into a paged buffer keyed by physical block id."""
     num_blocks = page_table_row.numel()
-    paged_k = torch.zeros(num_blocks, NUM_KV_HEADS, BLOCK_SIZE, HEAD_DIM)
+    paged_k = torch.zeros(num_blocks, k.shape[0], BLOCK_SIZE, HEAD_DIM)
     paged_v = torch.zeros_like(paged_k)
     for virtual_block in range(num_blocks):
         physical_block = int(page_table_row[virtual_block])
@@ -111,15 +144,19 @@ def _paged_layout(k, v, page_table_row):
 
 
 def _torch_reference(q_heads, k, v, cur_pos):
-    """fp32 causal reference: candidate j attends to KV positions [0, cur_pos[j]]."""
-    T = q_heads.shape[0]
-    out = torch.zeros(T, NUM_Q_HEADS, HEAD_DIM, dtype=torch.float32)
+    """fp32 causal reference: candidate j attends to KV positions [0, cur_pos[j]]. GQA: q head i
+    reads kv head i // (nh / nkv) (contiguous groups, the model's head order)."""
+    T, nh = q_heads.shape[0], q_heads.shape[1]
+    nkv = k.shape[0]
+    group = nh // nkv
+    out = torch.zeros(T, nh, HEAD_DIM, dtype=torch.float32)
     for j in range(T):
         pos = int(cur_pos[j])
-        k_j = k[0, : pos + 1, :].float()
-        v_j = v[0, : pos + 1, :].float()
-        scores = (q_heads[j].float() @ k_j.T) * SCALE
-        out[j] = torch.softmax(scores, dim=-1) @ v_j
+        for h in range(nkv):
+            k_j = k[h, : pos + 1, :].float()
+            v_j = v[h, : pos + 1, :].float()
+            scores = (q_heads[j, h * group : (h + 1) * group].float() @ k_j.T) * SCALE
+            out[j, h * group : (h + 1) * group] = torch.softmax(scores, dim=-1) @ v_j
     return out
 
 
@@ -138,14 +175,14 @@ def _config_for(device, T):
     return _program_config(device, cfg["max_cores"], cfg["k_chunk_size"])
 
 
-def _build_inputs(device, T, p, seq_len, seed):
+def _build_inputs(device, T, p, seq_len, seed, nkv=NUM_KV_HEADS, nh=NUM_Q_HEADS):
     """Everything both calls share, plus the two call-specific Q / page-table tensors."""
     assert seq_len % BLOCK_SIZE == 0
     num_blocks = seq_len // BLOCK_SIZE
     cur_pos = torch.tensor([p + j for j in range(T)], dtype=torch.int32)
     assert int(cur_pos[-1]) < seq_len, "cur_pos must stay inside the cache"
 
-    k, v = _build_kv(seq_len, seed)
+    k, v = _build_kv(seq_len, seed, nkv)
     g = torch.Generator().manual_seed(seed + 1)
     # Shuffled blocks: the two calls must resolve the same physical blocks through the
     # page table, not through a coincidentally identity mapping.
@@ -155,11 +192,13 @@ def _build_inputs(device, T, p, seq_len, seed):
     # Q: one 32-row tile per candidate, rows 0..NUM_Q_HEADS-1 valid, the rest zero padding.
     # [1, T, 32, DH] and [1, 1, T*32, DH] are byte-identical once tilized, which is exactly
     # the equivalence the mode relies on.
-    q_heads = torch.randn(T, NUM_Q_HEADS, HEAD_DIM, generator=g).bfloat16().float()
+    q_heads = torch.randn(T, nh, HEAD_DIM, generator=g).bfloat16().float()
     q_batched = torch.zeros(1, T, TILE, HEAD_DIM)
-    q_batched[0, :, :NUM_Q_HEADS, :] = q_heads
+    q_batched[0, :, :nh, :] = q_heads
 
     return {
+        "nkv": nkv,
+        "nh": nh,
         "k": k,
         "v": v,
         "q_heads": q_heads,
@@ -176,8 +215,12 @@ def _build_inputs(device, T, p, seq_len, seed):
 def _run_reference(device, inp, T, program_config):
     """Today's mode: B == T pseudo-users, T identical (aliased) page-table rows."""
     page_table = inp["page_row"].unsqueeze(0).repeat(T, 1).contiguous()
+    # GQA (nkv > 1): the legacy op maps q heads to kv heads from Q's LOGICAL head count, so the
+    # reference Q is [1, T, nh, DH] (tile-padded to 32 rows, the model's layout). nkv == 1 keeps the
+    # original 32-row Q, byte-for-byte.
+    q_ref = inp["q_batched"] if inp["nkv"] == 1 else inp["q_batched"][:, :, : inp["nh"], :].contiguous()
     out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
-        ttnn.Tensor(inp["q_batched"], ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device),
+        ttnn.Tensor(q_ref, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device),
         inp["k_tt"],
         inp["v_tt"],
         page_table_tensor=ttnn.Tensor(page_table, ttnn.int32).to(device),
@@ -185,9 +228,15 @@ def _run_reference(device, inp, T, program_config):
         scale=SCALE,
         program_config=program_config,
     )
-    torch_out = ttnn.to_torch(out)
-    assert tuple(torch_out.shape) == (1, T, TILE, HEAD_DIM)
-    return torch_out[0, :, :NUM_Q_HEADS, :].float()
+    torch_out = _golden(ttnn.to_torch(out))
+    assert tuple(torch_out.shape) == (1, T, TILE if inp["nkv"] == 1 else inp["nh"], HEAD_DIM)
+    return torch_out[0, :, : inp["nh"], :].float()
+
+
+def _spec_kwargs(inp):
+    """spec_q_heads is only passed at num_kv_heads > 1, so every num_kv_heads == 1 call is the
+    exact pre-change call."""
+    return {"spec_q_heads": inp["nh"]} if inp["nkv"] > 1 else {}
 
 
 def _run_spec(device, inp, T, program_config):
@@ -202,11 +251,12 @@ def _run_spec(device, inp, T, program_config):
         scale=SCALE,
         program_config=program_config,
         spec_multi_pos_tiles=T,
+        **_spec_kwargs(inp),
     )
-    torch_out = ttnn.to_torch(out)
+    torch_out = _golden(ttnn.to_torch(out))
     # Byte-identical layout to the B=T output [1, T, 32, DH].
     assert tuple(torch_out.shape) == (1, 1, T * TILE, HEAD_DIM)
-    return torch_out.reshape(1, T, TILE, HEAD_DIM)[0, :, :NUM_Q_HEADS, :].float()
+    return torch_out.reshape(1, T, TILE, HEAD_DIM)[0, :, : inp["nh"], :].float()
 
 
 def _straddles_chunk_boundary(T, p):
@@ -497,7 +547,7 @@ def test_legacy_path_unaffected(device):
 GROUP_CHUNK = 128  # k_chunk_size for the group sweep: 4 tiles, the spec-mode dynamic cap
 
 
-def _cores_per_head(device, batch, max_cores):
+def _cores_per_head(device, batch, max_cores, nkv=1):
     """The program factory's core split, mirrored (see 'Core Allocation' in the factory).
 
     Bit-equality between the spec call (B rows) and the legacy reference (B*Tg rows) is only
@@ -506,7 +556,7 @@ def _cores_per_head(device, batch, max_cores):
     """
     grid = device.compute_with_storage_grid_size()
     available = grid.x * grid.y
-    return max(1, min(available, max_cores * batch) // batch)
+    return max(1, (min(available, max_cores * batch * nkv) // batch) // nkv)
 
 
 def _run_spec_groups(device, inp, B, Tg, program_config):
@@ -526,10 +576,11 @@ def _run_spec_groups(device, inp, B, Tg, program_config):
         scale=SCALE,
         program_config=program_config,
         spec_multi_pos_tiles=Tg,
+        **_spec_kwargs(inp),
     )
-    torch_out = ttnn.to_torch(out)
+    torch_out = _golden(ttnn.to_torch(out))
     assert tuple(torch_out.shape) == (1, B, Tg * TILE, HEAD_DIM)
-    return torch_out.reshape(1, T, TILE, HEAD_DIM)[0, :, :NUM_Q_HEADS, :].float()
+    return torch_out.reshape(1, T, TILE, HEAD_DIM)[0, :, : inp["nh"], :].float()
 
 
 def _group_straddles(B, Tg, p, chunk):
@@ -543,19 +594,24 @@ def _group_straddles(B, Tg, p, chunk):
     return any((p + b * Tg) // chunk != (p + (b + 1) * Tg - 1) // chunk for b in range(B))
 
 
-def _check_groups(device, B, Tg, p, seq_len, max_cores, seed=0, k_chunk_size=GROUP_CHUNK, pcc=None):
+def _check_groups(
+    device, B, Tg, p, seq_len, max_cores, seed=0, k_chunk_size=GROUP_CHUNK, pcc=None, nkv=NUM_KV_HEADS, nh=NUM_Q_HEADS
+):
     T = B * Tg
     torch.manual_seed(seed)
-    inp = _build_inputs(device, T, p, seq_len, seed)
+    inp = _build_inputs(device, T, p, seq_len, seed, nkv=nkv, nh=nh)
     pc = _program_config(device, max_cores=max_cores, k_chunk_size=k_chunk_size)
-    matched_tree = _cores_per_head(device, B, max_cores) == _cores_per_head(device, T, max_cores)
+    matched_tree = _cores_per_head(device, B, max_cores, nkv) == _cores_per_head(device, T, max_cores, nkv)
     if pcc is None:
         pcc = 0.9999 if matched_tree and not _group_straddles(B, Tg, p, k_chunk_size) else 0.999
 
     ref = _run_reference(device, inp, T, pc)
     spec = _run_spec_groups(device, inp, B, Tg, pc)
     torch_ref = _torch_reference(inp["q_heads"], inp["k"], inp["v"], inp["cur_pos"])
-    where = f"B={B}, Tg={Tg}, p={p}, seq_len={seq_len}, max_cores={max_cores}"
+    where = f"B={B}, Tg={Tg}, p={p}, seq_len={seq_len}, max_cores={max_cores}, nkv={nkv}"
+    err_ref = (ref - torch_ref).abs().max().item()
+    err_spec = (spec - torch_ref).abs().max().item()
+    print(f"GROUPS_ACC {where}: |ref-fp32|={err_ref:.5f} |spec-fp32|={err_spec:.5f}")
 
     eq, msg = comp_pcc(ref, spec, pcc=pcc)
     assert eq, f"spec groups vs batched ({where}): {msg}"
@@ -731,3 +787,135 @@ def test_rejects_group_cur_pos_length(device, expect_error):
             program_config=_program_config(device, max_cores=16, k_chunk_size=GROUP_CHUNK),
             spec_multi_pos_tiles=Tg,
         )
+
+
+# ── num_kv_heads > 1 (GQA): the TP=2 geometry ──────────────────────────────
+#
+# Qwen3.8-27B at TP=2 holds NH=12 Q heads and NKV=2 KV heads per device; q head i reads kv head
+# i // 6. The op gives every (batch group, KV head) pair its own reduction group of cores; each
+# core computes all 32 rows of the group's Tg candidate tiles against ITS KV head and the root
+# writes back only the rows of its Q group (rows [h*6, (h+1)*6) of every candidate tile), which
+# needs the real per-candidate head count: ``spec_q_heads=12``. The reference is the legacy
+# B*Tg-row GQA call (one batch row per candidate), exactly what the model runs at TP=2 today.
+
+NKV2 = 2
+NH12 = 12
+
+
+@pytest.mark.parametrize(
+    "B, Tg, seq_len, p, max_cores",
+    [
+        (2, 4, 2048, 1024, 55),  # 1 user x T=8, the served split (2 groups of 4)
+        (2, 4, 2048, 1021, 55),  # straddles a 128-chunk boundary
+        (2, 4, 2048, 1020, 55),  # the two groups scan different ranges
+        (2, 4, 8192, 5000, 55),
+        (2, 4, 32768, 30000, 55),
+        (2, 4, 32768, 32700, 55),  # last chunk of the cache
+        (8, 4, 2048, 1024, 13),  # 4 users x T=8 folded (8 groups, 110 // 8 = 13 cores/head cap)
+        (8, 4, 32768, 30000, 13),
+        (4, 4, 32768, 30000, 27),  # 1 user x T=16 (4 groups of 4)
+        (4, 2, 2048, 1024, 16),  # narrow rows
+        (2, 4, 512, 5, 16),  # first block: the mask cuts inside column-tile 0
+    ],
+    ids=[
+        "B2Tg4_s2k_p1024",
+        "B2Tg4_s2k_p1021_straddle",
+        "B2Tg4_s2k_p1020_split_scan",
+        "B2Tg4_s8k_p5000",
+        "B2Tg4_s32k_p30000",
+        "B2Tg4_s32k_p32700",
+        "B8Tg4_s2k_p1024",
+        "B8Tg4_s32k_p30000",
+        "B4Tg4_s32k_p30000",
+        "B4Tg2_s2k_p1024",
+        "B2Tg4_s512_p5_first_block",
+    ],
+)
+def test_spec_nkv2_groups_matches_batched(device, B, Tg, seq_len, p, max_cores):
+    # B=8 at 32k: the 32-row reference gets min(110, 13*32*2) // 32 // 2 = 1 core per (row, KV head)
+    # and accumulates ~1000 bf16 flash chunks serially (the documented single-core accuracy loss,
+    # see test_spec_multi_pos_long_context_single_core), while the folded call gets 6. The pair then
+    # agrees only to ~0.997; both are still held to fp32 at 0.99 and the fold must be no less accurate.
+    pcc = 0.995 if (B == 8 and seq_len == 32768) else None
+    _check_groups(device, B=B, Tg=Tg, p=p, seq_len=seq_len, max_cores=max_cores, seed=71, nkv=NKV2, nh=NH12, pcc=pcc)
+
+
+def test_spec_nkv2_dynamic_chunk(device):
+    """k_chunk_size=0 (what the model passes) with the two groups on opposite sides of a
+    dynamic-chunk step, at num_kv_heads=2."""
+    _check_groups(
+        device, B=2, Tg=4, p=60, seq_len=512, max_cores=16, seed=73, k_chunk_size=0, pcc=0.999, nkv=NKV2, nh=NH12
+    )
+
+
+@pytest.mark.parametrize("seq_len, p", [(2048, 1024), (32768, 30000)], ids=["s2k", "s32k_dyn"])
+def test_spec_nkv2_dynamic_chunk_long(device, seq_len, p):
+    """The model's config at 1 user x T=8: 2 groups, 55 cores/head cap, in-kernel dynamic chunk."""
+    _check_groups(
+        device, B=2, Tg=4, p=p, seq_len=seq_len, max_cores=55, seed=79, k_chunk_size=0, pcc=0.999, nkv=NKV2, nh=NH12
+    )
+
+
+@pytest.mark.parametrize("seq_len, p", [(2048, 1024), (8192, 5000), (32768, 30000)], ids=["s2k", "s8k", "s32k"])
+def test_spec_nkv2_is_bit_exact(device, seq_len, p):
+    """Matched reduction tree (max_cores=4 -> 4 cores per (row, KV head) on both calls: the B*Tg=8
+    row reference gets min(110, 4*8*2) // 8 // 2 = 4 too) and no group straddling a chunk: the
+    folded GQA call is bit-identical to the legacy per-row GQA call, for every valid q head of
+    every candidate."""
+    B, Tg, max_cores = 2, 4, 4
+    T = B * Tg
+    if _cores_per_head(device, B, max_cores, NKV2) != _cores_per_head(device, T, max_cores, NKV2):
+        pytest.skip("grid too small to give the spec and reference calls a matched reduction tree")
+    assert not _group_straddles(B, Tg, p, GROUP_CHUNK)
+    torch.manual_seed(83)
+    inp = _build_inputs(device, T, p, seq_len, seed=89, nkv=NKV2, nh=NH12)
+    pc = _program_config(device, max_cores=max_cores, k_chunk_size=GROUP_CHUNK)
+    ref = _run_reference(device, inp, T, pc)
+    spec = _run_spec_groups(device, inp, B, Tg, pc)
+    assert torch.equal(ref, spec), (
+        f"expected bit-identical output (nkv=2, B={B}, Tg={Tg}, p={p}, seq_len={seq_len}); "
+        f"max abs diff {(ref - spec).abs().max().item():.8f}"
+    )
+
+
+def test_spec_nkv2_hold_group(device):
+    """A group whose Tg bounds are all -1 (a held user in the served bucket) is skipped by every
+    core of both KV heads; the active group is unaffected (compared with the legacy call, whose
+    held rows are likewise skipped)."""
+    B, Tg, p, seq_len = 2, 4, 1024, 2048
+    T = B * Tg
+    torch.manual_seed(97)
+    inp = _build_inputs(device, T, p, seq_len, seed=101, nkv=NKV2, nh=NH12)
+    cur_pos = inp["cur_pos"].clone()
+    cur_pos[Tg:] = -1
+    inp["cur_pos"] = cur_pos
+    inp["cur_pos_tt"] = ttnn.Tensor(cur_pos, ttnn.int32).to(device)
+    pc = _program_config(device, max_cores=4, k_chunk_size=GROUP_CHUNK)  # matched tree (see bit-exact test)
+    ref = _run_reference(device, inp, T, pc)[:Tg]
+    spec = _run_spec_groups(device, inp, B, Tg, pc)[:Tg]
+    assert torch.equal(ref, spec), f"active group differs: {(ref - spec).abs().max().item()}"
+    torch_ref = _torch_reference(inp["q_heads"][:Tg], inp["k"], inp["v"], cur_pos[:Tg])
+    eq, msg = comp_pcc(torch_ref, spec, pcc=0.99)
+    assert eq, msg
+
+
+def test_rejects_nkv2_without_spec_q_heads(device, expect_error):
+    """At num_kv_heads > 1 the op cannot tell which rows of a candidate tile belong to which KV
+    head without the real per-candidate head count."""
+    B, Tg = 2, 4
+    inp = _build_inputs(device, B * Tg, p=100, seq_len=512, seed=103, nkv=NKV2, nh=NH12)
+    q_spec = inp["q_batched"].reshape(1, B, Tg * TILE, HEAD_DIM)
+    page_table = inp["page_row"].unsqueeze(0).repeat(B, 1).contiguous()
+    for bad in (0, 11, 34):
+        with expect_error(RuntimeError, "spec_q_heads"):
+            ttnn.transformer.paged_scaled_dot_product_attention_decode(
+                ttnn.Tensor(q_spec, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device),
+                inp["k_tt"],
+                inp["v_tt"],
+                page_table_tensor=ttnn.Tensor(page_table, ttnn.int32).to(device),
+                cur_pos_tensor=inp["cur_pos_tt"],
+                scale=SCALE,
+                program_config=_program_config(device, max_cores=16, k_chunk_size=GROUP_CHUNK),
+                spec_multi_pos_tiles=Tg,
+                spec_q_heads=bad,
+            )

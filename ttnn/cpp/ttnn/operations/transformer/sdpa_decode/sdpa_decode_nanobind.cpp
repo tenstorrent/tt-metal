@@ -111,8 +111,12 @@ void bind_sdpa_decode(nb::module_& mod) {
         // cur_pos_tensor holds B*Tg positions, ascending within each group of Tg; candidate
         // b*Tg+j attends to [0, cur_pos[b*Tg+j]] inclusive. Output is [1, B, Tg*32, DH] —
         // byte-identical to the legacy B*Tg-row output [1, B*Tg, 32, DH]. Requires causal +
-        // paged + num_kv_heads==1, unsharded bf16 TILE Q, no sliding window, no MLA.
-        nb::arg("spec_multi_pos_tiles") = 0u);
+        // paged, unsharded bf16 TILE Q, no sliding window, no MLA.
+        nb::arg("spec_multi_pos_tiles") = 0u,
+        // spec_q_heads (spec mode with num_kv_heads > 1 only): valid q heads per candidate
+        // tile; q head i reads kv head i / (spec_q_heads / num_kv_heads). Required for GQA
+        // (e.g. 12 at Qwen3.8 TP=2: 12 q heads, 2 kv heads per device); 0 at num_kv_heads == 1.
+        nb::arg("spec_q_heads") = 0u);
 
     ttnn::bind_function<"flash_multi_latent_attention_decode", "ttnn.transformer.">(
         mod,

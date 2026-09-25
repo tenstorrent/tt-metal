@@ -109,7 +109,25 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             input_tensors.at(0).layout() == Layout::TILE,
             "spec_multi_pos_tiles requires a TILE layout Q tensor, got {}",
             input_tensors.at(0).layout());
-        TT_FATAL(k_shape[1] == 1, "spec_multi_pos_tiles requires num_kv_heads == 1, got {}", k_shape[1]);
+        // num_kv_heads > 1 (GQA): the op must know which rows of a candidate tile belong to which
+        // KV head, so the real per-candidate head count is required, split evenly over the KV
+        // heads, inside one tile. The output is written row-group by row-group from L1, so it
+        // must be interleaved (the sharded-output gather path is not wired for spec mode).
+        const auto& geo = operation_attributes.paged_cache_geometry;
+        const uint32_t spec_nkv = (!use_mla && geo.active()) ? geo.num_kv_heads : k_shape[1];
+        const uint32_t spec_qh = operation_attributes.spec_q_heads;
+        TT_FATAL(spec_qh <= tt::constants::TILE_HEIGHT, "spec_q_heads={} must be <= 32", spec_qh);
+        if (spec_nkv > 1) {
+            TT_FATAL(
+                spec_qh > 0 && spec_qh % spec_nkv == 0,
+                "spec_multi_pos_tiles with num_kv_heads={} requires spec_q_heads (valid q heads per candidate "
+                "tile) > 0 and divisible by num_kv_heads, got spec_q_heads={}",
+                spec_nkv,
+                spec_qh);
+            TT_FATAL(
+                !operation_attributes.output_mem_config.is_sharded(),
+                "spec_multi_pos_tiles with num_kv_heads > 1 requires an interleaved output memory config");
+        }
         TT_FATAL(
             q_shape[2] == spec_T * tt::constants::TILE_HEIGHT,
             "spec_multi_pos_tiles={}: Q must have {} padded rows per batch (one 32-row tile per candidate), got {}",
@@ -133,6 +151,11 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             q_shape_unpadded[2] > 16,
             "spec_multi_pos_tiles requires full 32x32 tiles (use_half_tile must be false), but Q has {} logical heads",
             q_shape_unpadded[2]);
+    } else {
+        TT_FATAL(
+            operation_attributes.spec_q_heads == 0,
+            "spec_q_heads={} is only meaningful with spec_multi_pos_tiles",
+            operation_attributes.spec_q_heads);
     }
 
     // Input 0 must be sharded by height or DRAM interleaved. All other inputs must be in DRAM.
@@ -622,7 +645,8 @@ Tensor sdpa_decode(
     std::optional<uint32_t> head_dim_v,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
     std::optional<uint32_t> cache_position_modulo,
-    uint32_t spec_multi_pos_tiles) {
+    uint32_t spec_multi_pos_tiles,
+    uint32_t spec_q_heads) {
     using OperationType = SdpaDecodeDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
         .is_causal = is_causal,
@@ -641,6 +665,7 @@ Tensor sdpa_decode(
             paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
         .cache_position_modulo = cache_position_modulo,
         .spec_multi_pos_tiles = spec_multi_pos_tiles,
+        .spec_q_heads = spec_q_heads,
     };
 
     auto tensor_args = OperationType::tensor_args_t{
