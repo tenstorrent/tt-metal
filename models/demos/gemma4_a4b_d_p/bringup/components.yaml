@@ -1,0 +1,266 @@
+components:
+- block_type: sliding
+  step: attn_norm
+  tag: NATIVE
+  ttnn: ttnn.rms_norm (replicated [S, 2816], weight w, eps 1e-6)
+  reuse: models/demos/gemma4/tt/rms_norm.py
+  notes: input_layernorm; Gemma-4 RMSNorm is x * w, not 1 + w.
+- block_type: sliding
+  step: attention
+  tag: COMPOSED
+  ttnn: ttnn.linear (q 4 heads, k/v 2 heads x 256 per chip) -> ttnn.rms_norm (q_norm, k_norm; unscaled rms for V) -> ttnn.experimental.rotary_embedding
+    (rotate-half, theta 1e4) -> ttnn.fill_cache K and V -> ttnn.concat(prev 1024-token K/V tail, chunk K/V) -> ttnn.transformer.scaled_dot_product_attention(is_causal,
+    sliding_window_size=1024, scale 1.0) -> ttnn.slice -> ttnn.linear o_proj (row-parallel) -> ttnn.all_reduce
+  reuse: models/demos/gemma4/tt/attention/prefill.py (sliding branch with sliding_tail concat), models/demos/ernie45_d_p/tt/attention.py
+    (cache, SDPA presets)
+  searched:
+  - 'repo_map: Chunked causal attention, Sliding-window + global attention'
+  - 'grep sliding_window_size sdpa_nanobind.cpp: only scaled_dot_product_attention and ring SDPA take it; chunked SDPA does
+    not'
+  - gemma4/tt/attention/prefill.py lines 660-735 (tail concat + windowed SDPA)
+  notes: 'TP by KV head: 8 KV heads / 4 = 2 per chip, 16 Q heads / 4 = 4 per chip (GQA 2:1 locally, no CCL inside). For chunk
+    > 0 the previous 1024 K/V positions are read back from the full-length cache (not a stash), so the step stays a pure function
+    of (x, state).'
+- block_type: sliding
+  step: post_attn_norm
+  tag: NATIVE
+  ttnn: ttnn.rms_norm (replicated [S, 2816], weight w, eps 1e-6)
+  reuse: models/demos/gemma4/tt/rms_norm.py
+  notes: post_attention_layernorm; Gemma-4 RMSNorm is x * w, not 1 + w. Runs on the all_reduced (replicated) attention output.
+- block_type: sliding
+  step: attn_residual
+  tag: NATIVE
+  ttnn: ttnn.add
+  reuse: models/demos/gemma4/tt/layer.py
+  notes: h_mid = in + attn_post_norm, replicated.
+- block_type: sliding
+  step: ffn_norm
+  tag: NATIVE
+  ttnn: ttnn.rms_norm (replicated [S, 2816], weight w, eps 1e-6)
+  reuse: models/demos/gemma4/tt/rms_norm.py
+  notes: pre_feedforward_layernorm; Gemma-4 RMSNorm is x * w, not 1 + w.
+- block_type: sliding
+  step: mlp
+  tag: COMPOSED
+  ttnn: ttnn.linear gate/up (column-parallel) -> ttnn.gelu (tanh) * up (ttnn.mul) -> ttnn.linear down (row-parallel) -> ttnn.all_reduce
+  reuse: models/demos/gemma4/tt/shared_mlp.py (TP padding of the intermediate), models/demos/gemma4/tt/experts/operations.py:apply_geglu
+  searched:
+  - 'repo_map: MoE tensor parallel (gemma4 shared_mlp.py)'
+  - grep apply_geglu models/demos/gemma4/tt
+  notes: '2112 / 4 = 528 is not tile aligned: pad to 544 per chip (zero rows in gate/up, zero cols in down). All-reduce before
+    post_mlp_norm (norm is nonlinear).'
+- block_type: sliding
+  step: post_mlp_norm
+  tag: NATIVE
+  ttnn: ttnn.rms_norm (replicated [S, 2816], weight w, eps 1e-6)
+  reuse: models/demos/gemma4/tt/rms_norm.py
+  notes: post_feedforward_layernorm_1; Gemma-4 RMSNorm is x * w, not 1 + w.
+- block_type: sliding
+  step: router
+  tag: COMPOSED
+  ttnn: ttnn.rms_norm (no weight) -> ttnn.mul (router.scale * 2816^-0.5) -> ttnn.linear (fp32, [2816 -> 128]) -> ttnn.softmax
+    (fp32) -> ttnn.topk(k=8) -> ttnn.sum / ttnn.div -> ttnn.mul per_expert_scale[idx] -> dense [S, 128] via ttnn.scatter (bf16)
+    for the boundary
+  reuse: models/demos/gemma4/tt/router.py, models/demos/ernie45_d_p/tt/moe.py:TtRouter (fp32 path, topk idx/weights for dispatch)
+  searched:
+  - 'repo_map: MoE tensor parallel (gemma4 router.py)'
+  - 'known_issues: scatter has no fp32 TILE path, Router selection vs weights'
+  notes: 'Replicated: every chip computes the same routing from replicated h_mid, no CCL. The experts module consumes topk
+    idx/weights; the dense [S, 128] tensor exists only for the boundary check.'
+- block_type: sliding
+  step: moe_norm
+  tag: NATIVE
+  ttnn: ttnn.rms_norm (replicated [S, 2816], weight w, eps 1e-6)
+  reuse: models/demos/gemma4/tt/rms_norm.py
+  notes: pre_feedforward_layernorm_2; Gemma-4 RMSNorm is x * w, not 1 + w.
+- block_type: sliding
+  step: experts
+  tag: COMPOSED
+  ttnn: ttnn.experimental.deepseek_prefill dispatch (1-chip dispatch axis) -> unified_routed_expert_moe with a new GeluTanh
+    activation (gelu_tanh(gate) * up) -> combine + post_combine_reduce (weighted top-k) -> ttnn.all_reduce
+  reuse: models/demos/ernie45_d_p/tt/moe_unified.py (the whole pipeline on 1x4), ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn
+  searched:
+  - 'repo_map: MoE expert parallel'
+  - 'grep RoutedExpertActivation unified_routed_expert_ffn_types.hpp: Silu, SwiGluOai, SituGlu, ClampedSiluGlu only, no GeGLU
+    (gelu_tanh)'
+  - 'gemma4/tt/experts/prefill.py: sparse_matmul over all experts (dense-EP)'
+  - 'ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn: RoutedExpertActivation Silu, SwiGluOai,
+    SituGlu, ClampedSiluGlu; no GeluTanh yet'
+  notes: 'Owner decision (plan approval, 2026-09-25): hack unified_routed_expert_moe to support gelu_tanh. Add RoutedExpertActivation::GeluTanh
+    (next free value) in device/unified_routed_expert_ffn_types.hpp, bind it in unified_routed_expert_ffn_nanobind.cpp, and
+    in the compute kernel (device/kernels/compute/fused_swiglu.cpp) compute gelu_tanh(gate) * up where the other activations
+    are selected (the SFPU has gelu with the tanh approximation). Host-side changes need ./build_metal.sh; kernel-only changes
+    build at runtime. No PR, an exercise, like the ERNIE dispatch/combine patches. EP=4: chip c holds experts 32c..32c+31
+    (gate_up [32,1408,2816], down [32,2816,704], bf16). Global counts/offsets [1,128] (known issue). Routed partial all_reduced
+    alone (post_moe_norm is nonlinear).'
+- block_type: sliding
+  step: post_moe_norm
+  tag: NATIVE
+  ttnn: ttnn.rms_norm (replicated [S, 2816], weight w, eps 1e-6)
+  reuse: models/demos/gemma4/tt/rms_norm.py
+  notes: post_feedforward_layernorm_2; Gemma-4 RMSNorm is x * w, not 1 + w.
+- block_type: sliding
+  step: ffn_combine
+  tag: NATIVE
+  ttnn: ttnn.add
+  reuse: models/demos/gemma4/tt/layer.py
+  notes: mlp_post_norm + moe_post_norm, replicated.
+- block_type: sliding
+  step: post_ffn_norm
+  tag: NATIVE
+  ttnn: ttnn.rms_norm (replicated [S, 2816], weight w, eps 1e-6)
+  reuse: models/demos/gemma4/tt/rms_norm.py
+  notes: post_feedforward_layernorm; Gemma-4 RMSNorm is x * w, not 1 + w.
+- block_type: sliding
+  step: ffn_residual
+  tag: COMPOSED
+  ttnn: ttnn.add (h_mid + ffn_out) -> ttnn.mul (layer_scalar, scalar)
+  reuse: models/demos/gemma4/tt/layer.py
+  searched:
+  - gemma4/tt/layer.py layer_scalar handling
+  notes: out = (h_mid + ffn_out) * layer_scalar; the scalar is read on the host at load and applied as a scalar multiply.
+- block_type: global
+  step: attn_norm
+  tag: NATIVE
+  ttnn: ttnn.rms_norm (replicated [S, 2816], weight w, eps 1e-6)
+  reuse: models/demos/gemma4/tt/rms_norm.py
+  notes: input_layernorm; Gemma-4 RMSNorm is x * w, not 1 + w.
+- block_type: global
+  step: attention
+  tag: COMPOSED
+  ttnn: ttnn.linear (q 4 heads x 512 + k 1 head x 512 per chip) -> ttnn.rms_norm (q_norm, k_norm; unscaled rms for V) -> ttnn.experimental.rotary_embedding
+    (partial proportional RoPE theta 1e6) -> ttnn.fill_cache K and V -> ttnn.transformer.scaled_dot_product_attention (chunk
+    0) / chunked_scaled_dot_product_attention (scale 1.0) -> ttnn.linear o_proj (row-parallel) -> ttnn.all_reduce
+  reuse: models/demos/gemma4/tt/attention/prefill.py (global branch, k_eq_v), models/demos/ernie45_d_p/tt/attention.py (chunked
+    SDPA, KV cache, sdpa_settings)
+  searched:
+  - 'repo_map: Chunked causal attention, Sliding-window + global attention, SDPA program config'
+  - grep chunked_scaled_dot_product_attention sdpa_nanobind.cpp (keyword args, no sliding window)
+  - gemma4/tt/attention/prefill.py global path
+  notes: 'Chip c holds Q heads 4c..4c+3 and KV head c//2 (GQA 8:1, each KV head on 2 chips). V = rms(k_raw) without weight,
+    K = RoPE(k_norm(k_raw)); store both (V != K). Head dim 512: check SDPA chunk sizes fit L1.'
+- block_type: global
+  step: post_attn_norm
+  tag: NATIVE
+  ttnn: ttnn.rms_norm (replicated [S, 2816], weight w, eps 1e-6)
+  reuse: models/demos/gemma4/tt/rms_norm.py
+  notes: post_attention_layernorm; Gemma-4 RMSNorm is x * w, not 1 + w. Runs on the all_reduced (replicated) attention output.
+- block_type: global
+  step: attn_residual
+  tag: NATIVE
+  ttnn: ttnn.add
+  reuse: models/demos/gemma4/tt/layer.py
+  notes: h_mid = in + attn_post_norm, replicated.
+- block_type: global
+  step: ffn_norm
+  tag: NATIVE
+  ttnn: ttnn.rms_norm (replicated [S, 2816], weight w, eps 1e-6)
+  reuse: models/demos/gemma4/tt/rms_norm.py
+  notes: pre_feedforward_layernorm; Gemma-4 RMSNorm is x * w, not 1 + w.
+- block_type: global
+  step: mlp
+  tag: COMPOSED
+  ttnn: ttnn.linear gate/up (column-parallel) -> ttnn.gelu (tanh) * up (ttnn.mul) -> ttnn.linear down (row-parallel) -> ttnn.all_reduce
+  reuse: models/demos/gemma4/tt/shared_mlp.py (TP padding of the intermediate), models/demos/gemma4/tt/experts/operations.py:apply_geglu
+  searched:
+  - 'repo_map: MoE tensor parallel (gemma4 shared_mlp.py)'
+  - grep apply_geglu models/demos/gemma4/tt
+  notes: '2112 / 4 = 528 is not tile aligned: pad to 544 per chip (zero rows in gate/up, zero cols in down). All-reduce before
+    post_mlp_norm (norm is nonlinear).'
+- block_type: global
+  step: post_mlp_norm
+  tag: NATIVE
+  ttnn: ttnn.rms_norm (replicated [S, 2816], weight w, eps 1e-6)
+  reuse: models/demos/gemma4/tt/rms_norm.py
+  notes: post_feedforward_layernorm_1; Gemma-4 RMSNorm is x * w, not 1 + w.
+- block_type: global
+  step: router
+  tag: COMPOSED
+  ttnn: ttnn.rms_norm (no weight) -> ttnn.mul (router.scale * 2816^-0.5) -> ttnn.linear (fp32, [2816 -> 128]) -> ttnn.softmax
+    (fp32) -> ttnn.topk(k=8) -> ttnn.sum / ttnn.div -> ttnn.mul per_expert_scale[idx] -> dense [S, 128] via ttnn.scatter (bf16)
+    for the boundary
+  reuse: models/demos/gemma4/tt/router.py, models/demos/ernie45_d_p/tt/moe.py:TtRouter (fp32 path, topk idx/weights for dispatch)
+  searched:
+  - 'repo_map: MoE tensor parallel (gemma4 router.py)'
+  - 'known_issues: scatter has no fp32 TILE path, Router selection vs weights'
+  notes: 'Replicated: every chip computes the same routing from replicated h_mid, no CCL. The experts module consumes topk
+    idx/weights; the dense [S, 128] tensor exists only for the boundary check.'
+- block_type: global
+  step: moe_norm
+  tag: NATIVE
+  ttnn: ttnn.rms_norm (replicated [S, 2816], weight w, eps 1e-6)
+  reuse: models/demos/gemma4/tt/rms_norm.py
+  notes: pre_feedforward_layernorm_2; Gemma-4 RMSNorm is x * w, not 1 + w.
+- block_type: global
+  step: experts
+  tag: COMPOSED
+  ttnn: ttnn.experimental.deepseek_prefill dispatch (1-chip dispatch axis) -> unified_routed_expert_moe with a new GeluTanh
+    activation (gelu_tanh(gate) * up) -> combine + post_combine_reduce (weighted top-k) -> ttnn.all_reduce
+  reuse: models/demos/ernie45_d_p/tt/moe_unified.py (the whole pipeline on 1x4), ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn
+  searched:
+  - 'repo_map: MoE expert parallel'
+  - 'grep RoutedExpertActivation unified_routed_expert_ffn_types.hpp: Silu, SwiGluOai, SituGlu, ClampedSiluGlu only, no GeGLU
+    (gelu_tanh)'
+  - 'gemma4/tt/experts/prefill.py: sparse_matmul over all experts (dense-EP)'
+  - 'ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn: RoutedExpertActivation Silu, SwiGluOai,
+    SituGlu, ClampedSiluGlu; no GeluTanh yet'
+  notes: 'Owner decision (plan approval, 2026-09-25): hack unified_routed_expert_moe to support gelu_tanh. Add RoutedExpertActivation::GeluTanh
+    (next free value) in device/unified_routed_expert_ffn_types.hpp, bind it in unified_routed_expert_ffn_nanobind.cpp, and
+    in the compute kernel (device/kernels/compute/fused_swiglu.cpp) compute gelu_tanh(gate) * up where the other activations
+    are selected (the SFPU has gelu with the tanh approximation). Host-side changes need ./build_metal.sh; kernel-only changes
+    build at runtime. No PR, an exercise, like the ERNIE dispatch/combine patches. EP=4: chip c holds experts 32c..32c+31
+    (gate_up [32,1408,2816], down [32,2816,704], bf16). Global counts/offsets [1,128] (known issue). Routed partial all_reduced
+    alone (post_moe_norm is nonlinear).'
+- block_type: global
+  step: post_moe_norm
+  tag: NATIVE
+  ttnn: ttnn.rms_norm (replicated [S, 2816], weight w, eps 1e-6)
+  reuse: models/demos/gemma4/tt/rms_norm.py
+  notes: post_feedforward_layernorm_2; Gemma-4 RMSNorm is x * w, not 1 + w.
+- block_type: global
+  step: ffn_combine
+  tag: NATIVE
+  ttnn: ttnn.add
+  reuse: models/demos/gemma4/tt/layer.py
+  notes: mlp_post_norm + moe_post_norm, replicated.
+- block_type: global
+  step: post_ffn_norm
+  tag: NATIVE
+  ttnn: ttnn.rms_norm (replicated [S, 2816], weight w, eps 1e-6)
+  reuse: models/demos/gemma4/tt/rms_norm.py
+  notes: post_feedforward_layernorm; Gemma-4 RMSNorm is x * w, not 1 + w.
+- block_type: global
+  step: ffn_residual
+  tag: COMPOSED
+  ttnn: ttnn.add (h_mid + ffn_out) -> ttnn.mul (layer_scalar, scalar)
+  reuse: models/demos/gemma4/tt/layer.py
+  searched:
+  - gemma4/tt/layer.py layer_scalar handling
+  notes: out = (h_mid + ffn_out) * layer_scalar; the scalar is read on the host at load and applied as a scalar multiply.
+- block_type: model
+  step: embed
+  tag: COMPOSED
+  ttnn: ttnn.embedding (replicated bf16 table [262144, 2816]) -> ttnn.mul (sqrt(2816), fp32-rounded constant)
+  reuse: models/demos/ernie45_d_p/tt (embedding from the engine's uint32 device tokens), models/demos/gemma4/tt/model.py
+  searched:
+  - 'repo_map: Prefill engine contract'
+  - 'known_issues: Engine input (uint32 ROW_MAJOR, padded tail)'
+  notes: Input is the engine's uint32 device tensor; positions >= actual_end are masked downstream.
+- block_type: model
+  step: final_norm
+  tag: NATIVE
+  ttnn: ttnn.rms_norm
+  reuse: models/demos/gemma4/tt/rms_norm.py
+  notes: model.language_model.norm; replicated.
+- block_type: model
+  step: lm_head
+  tag: COMPOSED
+  ttnn: ttnn.linear (vocab-sharded tied embedding, 65536 rows per chip, last tokens only) -> ttnn.all_gather (or gather on
+    host) -> 30 * tanh(x / 30) softcap
+  reuse: models/demos/ernie45_d_p/tt (vocab-sharded LM head, gather on host), models/demos/gemma4/tt/model.py (softcap on
+    device)
+  searched:
+  - 'repo_map: A worked bring-up (ernie45_d_p)'
+  - grep final_logit_softcapping models/demos/gemma4/tt
+  notes: Prefill needs only the last-token logits; the tied weight is kept as a second, transposed, vocab-sharded copy (0.37
+    GB per chip).
