@@ -36,7 +36,6 @@ public:
 
     std::span<const ProducerStream> streams() const override { return streams_view_; }
     const CaptureContext& capture_context() const override { return ctx_; }
-    const DeviceClock& clock(uint32_t dev) const override { return devices_[dev].clock; }
     uint64_t live_head(uint32_t stream) const override;
     void finish_stream(uint32_t stream, uint64_t dropped_bytes, const StreamStats& stats) override;
 

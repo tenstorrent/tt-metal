@@ -71,9 +71,15 @@ Receiver::Receiver(std::unique_ptr<Devices> relays, std::vector<CapturedDevice> 
         }
         ctx_.devices.push_back(dev.ctx);
     }
+    ctx_.links = relays_->sync().links();
+    ctx_.d2d_csv_path = MetalContext::instance(relays_->context_id()).rtoptions().get_streaming_profiler_d2d_csv_path();
     for (const auto& st : streams_) {
         streams_view_.push_back(
-            {st->fifo, &st->walked_bytes, st->dev, std::span<const std::atomic<uint64_t>>(st->marks)});
+            {st->fifo,
+             &st->walked_bytes,
+             st->dev,
+             std::span<const std::atomic<uint64_t>>(st->marks),
+             st->sock_idx == devices_[st->dev].sync_socket});
     }
 }
 
@@ -84,7 +90,6 @@ std::unique_ptr<Receiver> Receiver::create(const std::shared_ptr<distributed::Me
         devices = relays->boot(mesh_device);
     } catch (const std::exception& e) {
         log_warning(tt::LogMetal, "[streaming profiler] init failed ({}); disabled for this session.", e.what());
-        relays->quiesce({});
         return nullptr;
     }
     if (devices.empty()) {
@@ -104,6 +109,9 @@ std::unique_ptr<Receiver> Receiver::create(const std::shared_ptr<distributed::Me
             receiver->ingest_threads_.emplace_back(&Receiver::ingest_thread, receiver.get(), std::move(owned));
         }
     }
+    // Ordered after the ingest threads: the link syncs' armed producers stall without a live drain.
+    receiver->relays_->release_eth_pushers();
+    receiver->relays_->sync().launch_links();
     return receiver;
 }
 

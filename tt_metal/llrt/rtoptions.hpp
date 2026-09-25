@@ -258,6 +258,8 @@ class RunTimeOptions {
     uint32_t streaming_profiler_fifo_mb = STREAMING_PROFILER_FIFO_MB_DEFAULT;
     std::string streaming_profiler_ops_csv_path;
     std::string streaming_profiler_zone_csv_path;
+    std::string streaming_profiler_d2d_csv_path;
+    bool streaming_profiler_link_sync_enabled = true;
     bool experimental_noc_debug_dump_enabled = false;
     // Tuning for the NOC-debug-dump background thread (see ProfilerStateManager::start_debug_dump_thread).
     std::chrono::milliseconds noc_debug_poll_interval{500};
@@ -733,6 +735,8 @@ public:
     uint32_t get_streaming_profiler_fifo_mb() const { return streaming_profiler_fifo_mb; }
     const std::string& get_streaming_profiler_ops_csv_path() const { return streaming_profiler_ops_csv_path; }
     const std::string& get_streaming_profiler_zone_csv_path() const { return streaming_profiler_zone_csv_path; }
+    const std::string& get_streaming_profiler_d2d_csv_path() const { return streaming_profiler_d2d_csv_path; }
+    bool get_streaming_profiler_link_sync_enabled() const { return streaming_profiler_link_sync_enabled; }
     void set_experimental_noc_debug_dump_enabled(bool enabled);
     bool get_experimental_noc_debug_dump_enabled() const { return experimental_noc_debug_dump_enabled; }
     // How often the NOC-debug-dump background thread polls for stalled cores (light, unblocking poll).
