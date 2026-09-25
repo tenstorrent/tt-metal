@@ -1,0 +1,31 @@
+# Role text inserted into briefs/brief.md. $-placeholders come from the task and the spec.
+reference: |
+  Role: reference. Write the standalone CPU reference for $model in `$model_dir/reference/` against the interface in
+  `models/demos/common/bringup/reference/interface.py`, and the `reference` hook (plus `tokenizer` / `hf_layers` if
+  the defaults do not fit) in `$model_dir/bringup/hooks.py`. The HF implementation is the oracle; the checkpoint is at
+  `$hf_dir`. Block types and layers are in the spec. Every block's forward goes through `run_block`, and every step
+  output is recorded as `L{i}.<output>`.
+plan: |
+  Role: plan. Map every component to TTNN and shard the model over the $mesh mesh ($chips chips, $dram GB each). Write
+  `$bringup_dir/plan.yaml` (schema in `models/demos/common/bringup/plan/memory.py`), `$bringup_dir/plan.md`, and
+  `$bringup_dir/components.yaml` (schema in `models/demos/common/bringup/plan/components.py`). The gate computes
+  per-chip memory from the real checkpoint shapes under your placements, so every checkpoint tensor needs a placement.
+  Adjust `$bringup_dir/tasks.yaml` only if the plan needs different tasks (keep the id scheme). A person approves the
+  plan afterwards; the gate passes only then.
+test: |
+  Role: test. Review the rendered test $tests for $component_desc against the golden and the component, and adjust it
+  if needed (comparison mode, threshold, extra checks). It will be frozen next: it must pass with the CPU reference as
+  the module (BRINGUP_IMPL=reference) and fail with a zero stub (BRINGUP_IMPL=stub). You can check both with
+  `BRINGUP_IMPL=reference $gate_cmd` and `BRINGUP_IMPL=stub $gate_cmd`.
+implement: |
+  Role: implement. Implement $component_desc on the device. The frozen test is $tests. Components entry:
+  $component_entry
+  Register the module in `$model_dir/bringup/hooks.py` (`device_component`, and `device_model` for the ladder).
+  Everything not swapped stays on the CPU reference.
+contract: |
+  Role: contract. Make $model servable by the prefill engine: adapter, runtime, KV layout and address table (see
+  `models/demos/common/prefill/docs/ADDING_A_PREFILL_MODEL.md` and the repo map). Registering the adapter changes
+  `models/demos/common/prefill/adapter.py`, which is shared code: add only the registry line.
+fix: |
+  Role: fix. The scripted gate below failed. Find the component whose layer first broke the PCC trail (or the contract
+  check that failed), fix it in its module, and re-run the gate. The log is quoted below.
