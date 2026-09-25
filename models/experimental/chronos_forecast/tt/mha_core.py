@@ -17,6 +17,8 @@ from dataclasses import dataclass
 
 import torch
 
+from models.experimental.chronos_forecast.tt import program_configs
+
 
 @dataclass(frozen=True)
 class TtMhaWeights:
@@ -123,7 +125,7 @@ class TtMhaCore:
         # 1. RMSNorm (T5-style: no mean subtraction, no bias).
         x_norm = ttnn.rms_norm(x, epsilon=self.weights.eps, weight=rms_w)
         # 2. Fused QKV + head split. transpose_key=False: SDPA needs K as [B,H,S,Dh].
-        xqkv = ttnn.linear(x_norm, wqkv, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        xqkv = program_configs.linear(x_norm, wqkv)
         ttnn.deallocate(x_norm)
         if head_dim % 32 == 0:
             q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
@@ -168,20 +170,7 @@ class TtMhaCore:
             k_chunk_size=32,
             exp_approx_mode=True,
         )
-        # Wormhole and Blackhole need different compute kernel configs; the
-        # WH config raises on BH (and vice versa), so pick by host arch.
-        from models.common.utility_functions import is_blackhole
-
-        compute_kernel_config_cls = (
-            ttnn.types.BlackholeComputeKernelConfig if is_blackhole() else ttnn.WormholeComputeKernelConfig
-        )
-        compute_kernel_config = compute_kernel_config_cls(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=False,
-        )
-
+        compute_kernel_config = program_configs.compute_kernel_config(packer_l1_acc=False)
         ctx = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
@@ -210,7 +199,7 @@ class TtMhaCore:
             merged = ttnn.reshape(ctx_t, (batch, seq, num_heads * head_dim))
             ttnn.deallocate(ctx_t)
         ttnn.deallocate(ctx)
-        out = ttnn.linear(merged, wo, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = program_configs.linear(merged, wo)
         ttnn.deallocate(merged)
         return out
 
@@ -226,9 +215,9 @@ class TtMhaCore:
             raise RuntimeError("diagonal group path was not enabled for this MHA core")
         _wqkv, wo, rms_w = self._tt
         x_norm = ttnn.rms_norm(x, epsilon=self.weights.eps, weight=rms_w)
-        value = ttnn.linear(x_norm, self._diagonal_v_weight, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        value = program_configs.linear(x_norm, self._diagonal_v_weight)
         ttnn.deallocate(x_norm)
-        out = ttnn.linear(value, wo, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = program_configs.linear(value, wo)
         ttnn.deallocate(value)
         return out
 

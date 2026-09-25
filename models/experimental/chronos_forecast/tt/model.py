@@ -26,7 +26,11 @@ from models.experimental.chronos_forecast.tt.model_preprocessing import (
     prepare_patched_context,
     prepare_patched_future,
 )
-from models.experimental.chronos_forecast.tt.residual_block import TtResidualBlock, TtResidualBlockWeights
+from models.experimental.chronos_forecast.tt.residual_block import (
+    TtResidualBlock,
+    TtResidualBlockWeights,
+    pad_input_features,
+)
 from models.experimental.chronos_forecast.tt.time_attention import build_rope_cache
 
 
@@ -190,9 +194,10 @@ class TtChronos:
         position_ids = torch.arange(seq_len).unsqueeze(0).expand(batch_size, -1)
         inv_freq = self.weights.encoder.blocks[0].time.inv_freq
         cos, sin = build_rope_cache(position_ids, inv_freq)
+        in_features = self._input_embed.in_features
         return TtChronosPreparedInputs(
-            patched_context=patched_context,
-            patched_future=patched_future,
+            patched_context=pad_input_features(patched_context, in_features),
+            patched_future=pad_input_features(patched_future, in_features),
             cos=cos,
             sin=sin,
             time_mask=time_mask,

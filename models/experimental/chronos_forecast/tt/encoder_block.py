@@ -14,6 +14,7 @@ from dataclasses import dataclass
 
 import torch
 
+from models.experimental.chronos_forecast.tt import program_configs
 from models.experimental.chronos_forecast.tt.group_attention import TtGroupAttentionWeights
 from models.experimental.chronos_forecast.tt.mha_core import TtMhaCore, maybe_upload_mask
 from models.experimental.chronos_forecast.tt.time_attention import TtTimeAttentionWeights
@@ -104,9 +105,9 @@ class TtEncoderBlock:
 
         # Sublayer 3: feedforward (inline) + residual
         n = ttnn.rms_norm(x, epsilon=self.weights.ff_eps, weight=ff_rms)
-        h = ttnn.linear(n, ff_wi, activation="relu", memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        h = program_configs.linear(n, ff_wi, activation="relu")
         ttnn.deallocate(n)
-        m = ttnn.linear(h, ff_wo, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        m = program_configs.linear(h, ff_wo)
         ttnn.deallocate(h)
         x = self._residual_add(x, m)
         return x
