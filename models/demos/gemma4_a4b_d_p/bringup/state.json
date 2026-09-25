@@ -109,7 +109,24 @@
  },
  "PL.0": {
   "attempts": 0,
-  "status": "TODO"
+  "duration_s": 3.3,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-25T22:57:05"
+   }
+  ],
+  "last_run": "2026-09-25T22:57:05",
+  "log": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/logs/PL.0.log",
+  "metrics": {
+   "ledger_errors": 0,
+   "ledger_tasks": 72,
+   "ledger_tasks_added": 64
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-25T22:57:02",
+  "status": "PASS"
  },
  "R.1": {
   "attempts": 0,
