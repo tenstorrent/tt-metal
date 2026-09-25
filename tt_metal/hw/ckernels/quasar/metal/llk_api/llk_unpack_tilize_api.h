@@ -6,6 +6,7 @@
 #include <cstdint>
 #include "llk_assert.h"
 #include "llk_unpack_common_api.h"
+#include "llk_sync.h"
 #include "llk_unpack_tilize.h"
 #include "llk_unpack_reduce_col_tilizeA_strided.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -39,6 +40,27 @@ inline void llk_unpack_tilize_init(
         tensor_shape.total_num_faces() == NUM_FACES ||
             (tensor_shape.total_num_faces() == 2 && (tensor_shape.face_r_dim == 1 || tensor_shape.face_r_dim == 2)),
         "only 1x32 and 2x32 tiny tiles supported for unpack tilize on Quasar");
+
+    // Unpack-to-dest (e.g. lossless FP32): the JIT sets this operand's unpack_dst_format to Float32, which
+    // is only a legal unpacker output format on the DEST path (SrcA/SrcB would require Tf32), and math's
+    // dest sync waits on UNPACK_MATH. So tilize straight into DEST one tile at a time, like copy_tile.
+    if constexpr (UnpackToDestEn) {
+        LLK_ASSERT(
+            tensor_shape.total_num_faces() == NUM_FACES, "unpack-to-dest tilize supports only 32x32 tiles on Quasar");
+        llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operand_id);
+
+        // Unpack is the DEST producer on this path, so it owns the dest section base (math does not flip it).
+        ckernel::trisc::_reset_dest_register_offset_();
+        ckernel::trisc::_set_dest_section_base_<to_underlying(ckernel::trisc::TriscID::Unpack)>(
+            ckernel::trisc::_get_dest_buffer_base_());
+
+        // Same single-tile tilize MOP/counter sequence as the SrcA path (validated across block boundaries),
+        // with UNP_DEST as the target: UNP_DEST shares UNP_A's config and counters, no dvalid is set, and the
+        // ELWADD opposite-unpacker dvalid is not emitted.
+        _llk_unpack_tilize_init_<p_unpacr::UNP_DEST, DST_ACCUM_MODE>(
+            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), full_ct_dim, block_ct_dim, tensor_shape);
+        return;
+    }
 
     if (tensor_shape.total_num_faces() == NUM_FACES) {
         llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operand_id);
@@ -95,6 +117,38 @@ inline void llk_unpack_tilize_block(
     const std::uint32_t offset = input_tile_index % block_c_tiles;
     const std::uint32_t l1_base_idx =
         rd_entry_idx * l1_index_per_entry + block * (block_c_tiles * tensor_shape.total_row_dim());
+
+    if constexpr (UnpackToDestEn) {
+        _llk_unpack_tilize_set_src_offset_<p_unpacr::UNP_DEST>(tensor_shape, l1_base_idx);
+        for (std::uint32_t t = 0; t < block_c_tiles; t++) {
+            // Unpack is the only DEST producer here, so it takes math's usual role on MATH_PACK directly:
+            // wait for a free dest section, fill it, post.
+            _llk_sync_wait_<p_stall::STALL_UNPACK, p_stall::STALL_ON_MAX>(semaphore::MATH_PACK);
+            _llk_unpack_tilize_<p_unpacr::UNP_DEST>(t + offset /*l1_tile_idx*/);
+            _llk_sync_post_<p_stall::UNPACK0>(semaphore::MATH_PACK);
+
+            // Keep one tile in flight. The per-TRISC dest section offsets flipped below do not move UNP_DEST's
+            // writes or PACR's reads, so both land on the same DEST rows every tile. With MATH_PACK allowing two
+            // tiles in flight, tile k+1 overwrites tile k whenever pack stalls before reading it (e.g. on output
+            // DFB space at a block boundary), and pack emits tile k+1 in tile k's place. Wait for pack to release
+            // tile k before unpacking tile k+1. tensix_sync() first so the post above has landed; the SEMWAIT
+            // above never blocks under this scheme, so the stream is drained when tensix_sync() returns.
+            // TODO(#57780): real DEST double-buffering for semaphore-synced unpack-to-dest.
+            ckernel::tensix_sync();
+            while (ckernel::semaphore_read(semaphore::MATH_PACK) != 0) {
+            }
+
+            if constexpr (DST_SYNC_MODE == ckernel::DstSync::SyncHalf) {
+                // Must flip with the same section stride as pack's unpack-to-dest release
+                // (llk_pack_dest_section_done), which always uses the 32-bit layout.
+                _llk_sync_advance_dest_section_<
+                    to_underlying(ckernel::trisc::TriscID::Unpack),
+                    true /*EN_32BIT_DEST*/,
+                    p_stall::UNPACK0>();
+            }
+        }
+        return;
+    }
 
     if (tensor_shape.total_num_faces() == NUM_FACES) {
         _llk_unpack_tilize_set_src_offset_<p_unpacr::UNP_A>(tensor_shape, l1_base_idx);

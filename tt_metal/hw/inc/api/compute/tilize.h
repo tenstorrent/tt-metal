@@ -69,7 +69,12 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_
     // block_ct_dim against full_ct_dim would need a compute-API-level workaround since BH/WH operate
     // tile-by-tile and have no equivalent concept. Deferred: not on the Quasar critical path.
     UNPACK((llk_unpack_tilize_init(icb, block /*full_ct_dim*/)));  // block_ct_dim defaults to 1
-    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, is_fp32_dest_acc_en>(icb)));
+    // With UnpackToDestEn the unpacker tilizes straight into DEST and math is a sync-only forwarder.
+    MATH((llk_math_eltwise_unary_datacopy_init<
+          DataCopyType::A2D,
+          is_fp32_dest_acc_en,
+          BroadcastType::NONE,
+          UnpackToDestEn>(icb)));
 #endif
 }
 
@@ -158,9 +163,18 @@ ALWI void tilize_block(
     uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
     UNPACK((llk_unpack_tilize_block(icb, block, input_tile_index)));
 
+#ifdef ARCH_QUASAR
+    // Unpack-to-dest: the unpacker fills DEST and syncs with pack on MATH_PACK itself, so math has no work.
+    constexpr bool math_syncs_dest = !UnpackToDestEn;
+#else
+    constexpr bool math_syncs_dest = true;
+#endif
+
     for (uint32_t t = 0; t < block; t++) {
         // Acquire dst
-        MATH((llk_math_wait_for_dest_available()));
+        if constexpr (math_syncs_dest) {
+            MATH((llk_math_wait_for_dest_available()));
+        }
         PACK((llk_packer_wait_for_math_done()));
 
 #ifndef ARCH_QUASAR
@@ -169,11 +183,17 @@ ALWI void tilize_block(
             0 /*dst index*/, icb)));
         PACK((llk_pack<is_fp32_dest_acc_en, true, PackMode::Default>(0 /*tile index*/, ocb, t + output_tile_index)));
 #else
-        MATH((llk_math_eltwise_unary_datacopy(0 /*dst index*/, icb)));
+        MATH((llk_math_eltwise_unary_datacopy<
+              DataCopyType::A2D,
+              is_fp32_dest_acc_en,
+              BroadcastType::NONE,
+              UnpackToDestEn>(0 /*dst index*/, icb)));
         PACK((llk_pack<true /*out_of_order*/>(0 /*tile index*/, ocb, t + output_tile_index)));
 #endif
         // Release dest
-        MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
+        if constexpr (math_syncs_dest) {
+            MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
+        }
         PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en>()));
     }
 }
