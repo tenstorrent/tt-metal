@@ -233,6 +233,7 @@ def test_prep_dispatch_combine(
         tt_expert_token_counts,
         tt_expert_region_offsets,
         tt_per_device_expert_counter,
+        tt_all_dispatch_offsets,
     ) = tt_gate_outputs(
         ttnn_top_k_experts_indices=tt_indices,
         num_routed_experts=num_routed_experts,
@@ -292,3 +293,11 @@ def test_prep_dispatch_combine(
 
     for r in [replication_result, region_replication_result, offsets_result, counts_result, region_offsets_result]:
         r.assert_passed(f"{r.name} validation failed")
+
+    # Every chip in dispatch group g holds group g's whole offsets table (groups run along mesh columns).
+    mesh_cols = mesh_device.shape[1]
+    for dev_idx, tensor in enumerate(ttnn.get_device_tensors(tt_all_dispatch_offsets)):
+        table = ttnn.to_torch(tensor).reshape(dispatch_group_size, num_routed_experts).int()
+        assert torch.equal(
+            table, expert_offsets[dev_idx % mesh_cols].int()
+        ), f"all_dispatch_offsets mismatch on device {dev_idx}"
