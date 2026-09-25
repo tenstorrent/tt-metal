@@ -125,9 +125,9 @@ def gpqa_args(output_dir, *, prepare_only=False):
 
 
 def test_performance_concurrency_is_bounded_by_server_capacity():
-    for capacity, batches in ((1, (1,)), (8, (1, 8)), (16, (1, 8, 16))):
+    for capacity in (1, 8, 16):
         assert list(benchmark.performance_shapes(capacity, (128, 1024))) == [
-            (length, batch) for length in (128, 1024) for batch in batches
+            (length, capacity) for length in (128, 1024)
         ]
 
 
@@ -268,6 +268,10 @@ def test_report_preserves_run_start_and_every_shape(monkeypatch, tmp_path):
     assert len(files) == 4, "Shapes sharing a run start must not overwrite each other"
     records = [PartialBenchmarkRun.model_validate_json(path.read_text()) for path in files]
     assert {record.batch_size for record in records} == {1, 10, 16}
+    gpqa = next(record for record in records if record.batch_size == 10)
+    assert [(measurement.step_name, measurement.name) for measurement in gpqa.measurements] == [
+        ("inference", "gpqa_accuracy")
+    ]
     for record in records:
         assert record.run_start_ts.isoformat() == summary["run_start"]
         assert record.run_end_ts.isoformat() == row["measurement_end"]
