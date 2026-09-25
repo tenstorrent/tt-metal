@@ -493,12 +493,17 @@ void reduce_c_row_group(
 
     if (do_eltwise_max) {
         CircularBuffer(prev_cb).wait_front(cumulative_prev_tiles);
-        reconfig_data_format_srca(in0_cb, prev_cb);
+        // fp32 DEST keeps the scores in fp32 and the max in bf16; without it both are bf16
+        if constexpr (DST_ACCUM_MODE) {
+            reconfig_data_format_srca(in0_cb, prev_cb);
+        }
         sdpa_reduce_copy_tile_to_dst_init_short(prev_cb);
         for (uint32_t i = 0; i < group_size; i++) {
             copy_tile(prev_cb, row_start + i, i);
         }
-        reconfig_data_format_srca(prev_cb, in0_cb);
+        if constexpr (DST_ACCUM_MODE) {
+            reconfig_data_format_srca(prev_cb, in0_cb);
+        }
     }
 
     // Deferred: wait for in0_cb just before its first use (reduce_block_max_row).
