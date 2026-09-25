@@ -244,12 +244,17 @@ class TtV4PrefillBlock(LightweightModule):
 
     def reset_slot(self, slot: int) -> None:
         """A new prompt starts in ``slot``: counters back to zero (stale rows are masked by the counters), CSA
-        compressor priors back to empty."""
+        compressor priors back to empty. A slot nothing has been written to since its last reset is left alone,
+        so the reset at chunk 0 inside ``forward`` allocates nothing when the caller already reset it -- which is
+        what lets a trace capture of chunk 0 follow its warm-up without a host write (DS4F-0247)."""
         st = self.states[slot]
+        if getattr(st, "fresh", False):
+            return
         st.kv_actual, st.entry_count = 0, 0
         if hasattr(st, "prior_c"):
             st.prior_c = self.attn.compressor.empty_prior()
             st.prior_i = self.attn.indexer.compressor.empty_prior()
+        st.fresh = True
 
     def _export_target(self, caches, slot: int):
         """(unified cache tensor, batch index) of this layer for ``slot``; None when the kind has no export yet."""
@@ -292,6 +297,7 @@ class TtV4PrefillBlock(LightweightModule):
         post, comb, x = self.attn_hc(streams)
         h = self.input_norm(x)
         ttnn.deallocate(x)
+        state.fresh = False  # the attention below writes this slot's state
         y = self.attn(h, seq_len_actual=real_len, state=state, export=self._export_target(caches, slot))
         ttnn.deallocate(h)
         if on_layer_complete is not None:

@@ -117,12 +117,19 @@ class _TtHCABase(LightweightModule):
 
     def _push_scalar(self, buf, v):
         """Overwrite an existing device buffer with one value -- the only thing forward still sends from
-        host."""
+        host. Skipped when the buffer already holds ``v`` (the last pushed value is remembered per buffer):
+        a forward re-run at the same chunk position -- a trace capture after its warm-up -- then writes
+        nothing (DS4F-0247: a host write inside ``begin_trace_capture`` is fatal)."""
+        pushed = self.__dict__.setdefault("_pushed_scalars", {})
+        key = buf.buffer_address() if hasattr(buf, "buffer_address") else id(buf)
+        if pushed.get(key) == v:
+            return buf
         host_dtype = torch.float32 if buf.dtype == ttnn.float32 else torch.int32
         host = self._from_torch(
             torch.full(tuple(buf.shape), v, dtype=host_dtype), dtype=buf.dtype, layout=buf.layout, on_device=False
         )
         ttnn.copy_host_to_device_tensor(host, buf)
+        pushed[key] = v
         return buf
 
     def _build_rope_table(self, count: int, stride: int):

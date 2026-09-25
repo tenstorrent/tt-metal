@@ -108,6 +108,12 @@ def test_kv_chunk_table_reads_back_every_config(mesh_device, device_params, tmp_
             x = prepare_prefill_input_tensor(chunk_ids, mesh_device, sp, False, (sp, tp), 0)
             assert rt._needs_token_ids
             assert torch.equal(rt._token_ids_from_device(x), torch.tensor(chunk_ids, dtype=torch.int64))
+            # the device view the gate consumes: global [S/32, 32] SP-sharded, TP-replicated -> the same ids in order
+            view = ttnn.to_torch(
+                rt._token_ids_view(x),
+                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=(sp, tp), dims=(0, 1)),
+            )
+            assert torch.equal(view[:, :32].reshape(-1).to(torch.int64), torch.tensor(chunk_ids, dtype=torch.int64))
         out = rt.prefill_chunk(x, caches, slot_id=0, actual_start=start, actual_end=start + n, request_id=0)
         assert out is None  # last (and only) rank: the caches are the output
         start += n

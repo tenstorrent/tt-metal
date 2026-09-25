@@ -134,6 +134,17 @@ class TtV4PrefillRuntime:
         )  # [sp, tp, S/sp]: rows = the SP shards, the TP replicas identical
         return full[:, 0, :].reshape(-1).to(torch.int64)
 
+    def _token_ids_view(self, input_tensor):
+        """The chunk's token ids as the hash gate's device layout -- per chip ``[S/sp/32, 32]`` uint32 ROW_MAJOR, i.e.
+        the global ``[S/32, 32]`` SP-sharded exactly as ``TtMoEGatePrefill._input_ids_to_device`` lays it out --
+        reshaped on device from the H2D input ``[1, 1, S/sp]`` per chip. No host round trip (the read-back +
+        re-upload of ``_token_ids_from_device`` was two host writes per chunk, one of them inside the forward, which
+        a trace capture cannot hold -- DS4F-0247)."""
+        c = self.config
+        per_chip = c.chunk_size // c.sp_factor
+        assert per_chip % 32 == 0, per_chip
+        return ttnn.reshape(input_tensor, (per_chip // 32, 32))
+
     def make_placeholder_activation(self):
         """A non-first rank's input: the packed 4 streams [1, 1, S_l, 4 D_l] the D2D socket overwrites."""
         c = self.config
@@ -169,8 +180,8 @@ class TtV4PrefillRuntime:
             ids = None if entry is None else entry[1]
             if ids is None and self._needs_token_ids:
                 # request mode: the chunk arrived over the H2D socket as a device tensor [sp, 1, S/sp] uint32
-                # (SP-sharded, TP-replicated) -- read the ids back (20 KB per chunk) for the hash-routed MoE layers
-                ids = self._token_ids_from_device(input_tensor)
+                # (SP-sharded, TP-replicated) -- hand the hash-routed MoE layers a device view of it
+                ids = self._token_ids_view(input_tensor)
         self._request_id = int(request_id)
         out = self.model(
             input_tensor,
@@ -181,6 +192,8 @@ class TtV4PrefillRuntime:
             input_ids=ids,
             on_layer_complete=None if warmup else self._ack,
         )
+        if isinstance(ids, ttnn.Tensor):
+            ttnn.deallocate(ids)
         if c.is_last_rank:
             return None
         return out

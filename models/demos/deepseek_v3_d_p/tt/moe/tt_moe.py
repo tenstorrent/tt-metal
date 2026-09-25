@@ -574,8 +574,9 @@ class TtMoe(LightweightModule):
         """
         Forward pass through the full MoE pipeline.
 
-        ``input_ids`` (host tensor, total tokens in SP order) is required by the DeepSeek-V4 hash-routed gate modes
-        and ignored otherwise.
+        ``input_ids`` (host tensor, total tokens in SP order -- or the equivalent device tensor from
+        ``TtMoEGatePrefill._input_ids_to_device``, reused across calls) is required by the DeepSeek-V4 hash-routed
+        gate modes and ignored otherwise.
 
         Args:
             x: Input tensor - ROW_MAJOR, sharded:

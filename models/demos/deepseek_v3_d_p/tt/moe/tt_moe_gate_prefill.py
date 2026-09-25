@@ -864,7 +864,10 @@ class TtMoEGatePrefill(LightweightModule):
             )
 
         logits_f32 = ttnn.typecast(logits, ttnn.float32)
-        input_ids_dev = self._input_ids_to_device(input_ids)
+        # A device tensor ([total_tokens // 32, 32] uint32, SP-sharded like _input_ids_to_device makes it) is used as
+        # is and left to its owner -- no host->device write inside the forward (trace capture, DS4F-0247).
+        owns_ids = not isinstance(input_ids, ttnn.Tensor)
+        input_ids_dev = self._input_ids_to_device(input_ids) if owns_ids else input_ids
         ttnn_scores, ttnn_top_k_experts_indices = ttnn.experimental.deepseek_prefill.moe_hash_gate(
             logits_f32,
             input_ids_dev,
@@ -876,7 +879,8 @@ class TtMoEGatePrefill(LightweightModule):
             padding_config=padding_config,
         )
         ttnn.deallocate(logits_f32)
-        ttnn.deallocate(input_ids_dev)
+        if owns_ids:
+            ttnn.deallocate(input_ids_dev)
         # padding_config is memoized + owned by build_padding_config (reused across forwards/replays). Do
         # NOT deallocate it here even on the owns_padding_config path — freeing it breaks the next cache hit.
         return ttnn_scores, ttnn_top_k_experts_indices

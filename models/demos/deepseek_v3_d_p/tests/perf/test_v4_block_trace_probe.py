@@ -8,6 +8,7 @@ bound (issue == wall, 571-780 programs per layer), so the replay time is the cei
 sub-device swaps go through SubDeviceTraceController (segmented capture, as the V3 engine does). Whatever op rejects
 the capture is the finding; the replay is compared with the eager output (same chunk, same state) for PCC."""
 
+import os
 import time
 import traceback
 from types import SimpleNamespace
@@ -84,13 +85,14 @@ def test_v4_block_trace_probe(mesh_device, device_params, layer_idx):
     streams = to_device_streams(
         mesh_device, (torch.randn(1, _CHUNK, 4, cfg.hidden_size) * 1.5).to(torch.bfloat16).float()
     )
-    input_ids = torch.randint(0, cfg.vocab_size, (_CHUNK,))
+    # the hash gate's token ids as a persistent device tensor (uploaded once, outside any capture)
+    input_ids = block.moe.gate._input_ids_to_device(torch.randint(0, cfg.vocab_size, (_CHUNK,)))
 
     def run():
-        block.reset_slot(0)
         return block(streams, slot=0, caches=caches, actual_start=0, actual_end=_CHUNK, input_ids=input_ids)
 
     # eager warm-up (compile) + reference output
+    block.reset_slot(0)
     out = run()
     ttnn.synchronize_device(mesh_device)
     ref = to_host_streams(mesh_device, out)
@@ -99,6 +101,15 @@ def test_v4_block_trace_probe(mesh_device, device_params, layer_idx):
 
     controller = SubDeviceTraceController(mesh_device)
     block.moe.set_trace_controller(controller)
+    block.reset_slot(0)  # OUTSIDE the capture: the reset inside forward is then a no-op (fresh slot)
+    # Causal test for the replay hazard: the forward REASSIGNS its state tensors (sliding_carry, tail, CSA priors), so
+    # the pre-capture ones are freed during the capture and their addresses recycled by later intermediates -- at
+    # replay the captured reads of those addresses see garbage (CSA prior -> PCC ~0, HCA tail -> 0.98, SWA carry is
+    # masked at chunk 0 -> 1.0). Holding references keeps the addresses live; V4_TRACE_KEEP_STATE=0 shows the hazard.
+    st = block.states[0]
+    keep = [getattr(st, n) for n in ("sliding_carry", "tail", "prior_c", "prior_i") if getattr(st, n, None) is not None]
+    if os.environ.get("V4_TRACE_KEEP_STATE", "1") != "1":
+        keep = []
     try:
         controller.begin_capture()
         out = run()
@@ -124,10 +135,10 @@ def test_v4_block_trace_probe(mesh_device, device_params, layer_idx):
             pass
         block.moe.set_trace_controller(None)
         pytest.fail(f"trace capture rejected in {block.kind}: {frames[-1] if frames else e}")
-    logger.info(
-        f"[v4 trace] layer {layer_idx} ({block.kind}) captured: {controller.num_segments()} segments, "
-        f"{controller.trace_bytes() / 1e6:.1f} MB trace"
-    )
+    n_seg, n_bytes = controller.num_segments, controller.trace_bytes
+    n_seg = n_seg() if callable(n_seg) else n_seg
+    n_bytes = n_bytes() if callable(n_bytes) else n_bytes
+    logger.info(f"[v4 trace] layer {layer_idx} ({block.kind}) captured: {n_seg} segments, {n_bytes / 1e6:.1f} MB trace")
     times = []
     for _ in range(5):
         ttnn.synchronize_device(mesh_device)
@@ -143,4 +154,5 @@ def test_v4_block_trace_probe(mesh_device, device_params, layer_idx):
     )
     controller.release()
     block.moe.set_trace_controller(None)
+    del keep
     assert worst >= 0.999, worst
