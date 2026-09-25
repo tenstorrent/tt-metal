@@ -23,6 +23,7 @@ from dataclasses import dataclass
 import torch
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 
 TILE_SIZE = 32
 
@@ -69,7 +70,15 @@ def load_expert_weights(
         gate_up_fused = state_dict["gate_up_proj"]  # [E, 2I, H], rows [:I]=gate, [I:]=up
         down_proj = state_dict["down_proj"]  # [E, H, I]
 
-    # Cast, [up|gate] fusion and transposes run as the as_tensor preprocess (cache-miss only) and upload as ONE tensor; a device-side concat would need more resident memory than Wormhole has L1.
+    # Cast, [up|gate] fusion and transposes run as the as_tensor preprocess (cache-miss only). Wormhole
+    # uploads the fused tensor as ONE tensor (a device-side concat would need more resident memory than
+    # Wormhole has L1); Blackhole keeps the original separate gate/up upload + on-device concat.
+    def _gate(t):
+        return t.to(torch.bfloat16)[:, :I, :].transpose(-2, -1).unsqueeze(0).contiguous()
+
+    def _up(t):
+        return t.to(torch.bfloat16)[:, I:, :].transpose(-2, -1).unsqueeze(0).contiguous()
+
     def _gate_up(t):
         # [E, 2I, H] -> [up | gate] -> [1, E, H, 2I]. The [up|gate] order matches ttnn.swiglu's
         # first_half * silu(second_half) contract.
@@ -104,16 +113,38 @@ def load_expert_weights(
     def _cache(name):
         return str(tensor_cache_path / f"moe.experts.{name}{tp_suffix}") if tensor_cache_path else None
 
-    gate_up_proj_tt = ttnn.as_tensor(
-        gate_up_fused,
-        device=mesh_device,
-        dtype=gate_up_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=col_mapper,
-        cache_file_name=_cache("gate_up_proj"),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        preprocess=_gate_up,
-    )
+    if is_blackhole():
+        gate_proj_tt = ttnn.as_tensor(
+            gate_up_fused,
+            device=mesh_device,
+            dtype=gate_up_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=col_mapper,
+            cache_file_name=_cache("gate_proj"),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            preprocess=_gate,
+        )
+        up_proj_tt = ttnn.as_tensor(
+            gate_up_fused,
+            device=mesh_device,
+            dtype=gate_up_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=col_mapper,
+            cache_file_name=_cache("up_proj"),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            preprocess=_up,
+        )
+    else:
+        gate_up_proj_tt = ttnn.as_tensor(
+            gate_up_fused,
+            device=mesh_device,
+            dtype=gate_up_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=col_mapper,
+            cache_file_name=_cache("gate_up_proj"),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            preprocess=_gate_up,
+        )
     down_proj_tt = ttnn.as_tensor(
         down_proj,
         device=mesh_device,
@@ -124,6 +155,16 @@ def load_expert_weights(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         preprocess=_down,
     )
+
+    if is_blackhole():
+        # Fused up|gate along N. Each device holds its expert shard of both at FULL intermediate,
+        # so a local concat yields [up | gate] with N = 2*full_intermediate. This order matches
+        # ttnn.swiglu's first_half * silu(second_half) contract.
+        gate_up_proj_tt = ttnn.concat([up_proj_tt, gate_proj_tt], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Only the fused gate_up_proj is consumed by decode/prefill; free the standalone gate/up copies
+        # so they do not sit resident in DRAM for the model's lifetime (they are still disk-cached).
+        up_proj_tt.deallocate(True)
+        gate_proj_tt.deallocate(True)
 
     return ExpertWeights(
         down_proj=down_proj_tt,
