@@ -31,8 +31,8 @@ public:
     // Origin is ordinary memory inside the region; only the target has to be in the window.
     std::string put(const void* src, uint64_t bytes, uint32_t peer_rank, uint64_t target_offset, Op& op);
 
-    // Small-word put. Stages the value, because an Rput's origin must outlive the call and
-    // a caller's temporary does not.
+    // Stages the value, since an origin must outlive the call and a temporary does not.
+    // Unused since credits moved to CreditPublisher's coalesced multi-word put.
     std::string put_word(uint64_t value, uint32_t peer_rank, uint64_t target_offset);
 
     // True once the ORIGIN buffer is reusable, which is what frees the page behind it.

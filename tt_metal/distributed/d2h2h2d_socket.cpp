@@ -245,6 +245,8 @@ uint32_t D2H2H2DSocket::poll() {
         // Publish the inbound credit to our own sender, so tt_uva_sync() can see it.
         im.d2h->credit(c, im.h2h->credit_total(c));
     }
+    // After the whole loop, so one put covers every core that freed a slot this pass.
+    (void)im.h2h->publish_credits();
     if (t) {
         im.timing.h2d_drain_ns += ns_since(h2d_t0);
     }

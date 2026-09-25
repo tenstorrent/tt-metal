@@ -124,6 +124,91 @@ private:
     uint32_t limit_ = 0;  // the protocol bound this was asked for
 };
 
+// The backward counters and their puts. Both are absolute and monotone, so every value but
+// the last in a batch is superseded: one put per peer per pass replaces two per frame.
+class CreditPublisher {
+public:
+    void reset(uint32_t cores, uint32_t hosts) {
+        cores_ = cores;
+        credit_.assign(static_cast<size_t>(hosts) * cores, 0);
+        done_.assign(static_cast<size_t>(hosts) * cores, 0);
+        credit_dirty_.assign(hosts, Span{});
+        done_dirty_.assign(hosts, Span{});
+    }
+
+    uint64_t& credit(uint32_t host, uint32_t core) { return credit_[idx(host, core)]; }
+    uint64_t& done(uint32_t host, uint32_t core) { return done_[idx(host, core)]; }
+
+    void note_credit(uint32_t host, uint32_t core) {
+        ++credit_[idx(host, core)];
+        credit_dirty_[host].add(core);
+    }
+    void note_done(uint32_t host, uint32_t core) {
+        ++done_[idx(host, core)];
+        done_dirty_[host].add(core);
+    }
+
+    bool pending(uint32_t host) const { return !credit_dirty_[host].empty() || !done_dirty_[host].empty(); }
+
+    // One put per array over lo..hi; unchanged cores inside the span are re-put, which is
+    // idempotent. Source is the live array: a racing increment can only raise a word.
+    template <typename Put>
+    std::string publish(uint32_t host, uint32_t ident, Put&& put) {
+        if (const std::string e = emit(credit_dirty_[host], credit_, host, ident, credit_offset, put, credit_puts_);
+            !e.empty()) {
+            return e;
+        }
+        return emit(done_dirty_[host], done_, host, ident, done_offset, put, done_puts_);
+    }
+
+    uint64_t credit_puts() const { return credit_puts_; }
+    uint64_t done_puts() const { return done_puts_; }
+
+private:
+    // Lowest and highest core touched since the last publish. A span, not a bitmask: the
+    // put is one contiguous range either way, so the endpoints are all emit needs.
+    struct Span {
+        uint32_t lo = UINT32_MAX;
+        uint32_t hi = 0;
+        bool empty() const { return lo > hi; }
+        void add(uint32_t c) {
+            lo = c < lo ? c : lo;
+            hi = c > hi ? c : hi;
+        }
+        void clear() {
+            lo = UINT32_MAX;
+            hi = 0;
+        }
+    };
+
+    size_t idx(uint32_t host, uint32_t core) const { return static_cast<size_t>(host) * cores_ + core; }
+
+    template <typename Off, typename Put>
+    std::string emit(
+        Span& d, std::vector<uint64_t>& src, uint32_t host, uint32_t ident, Off&& off, Put&& put, uint64_t& count) {
+        if (d.empty()) {
+            return {};
+        }
+        const uint32_t n = d.hi - d.lo + 1;
+        const std::string e =
+            put(&src[idx(host, d.lo)], static_cast<uint64_t>(n) * sizeof(uint64_t), off(d.lo, ident));
+        if (!e.empty()) {
+            return e;
+        }
+        d.clear();
+        ++count;
+        return {};
+    }
+
+    std::vector<uint64_t> credit_;  // [host][core]
+    std::vector<uint64_t> done_;    // [host][core]
+    std::vector<Span> credit_dirty_;
+    std::vector<Span> done_dirty_;
+    uint64_t credit_puts_ = 0;
+    uint64_t done_puts_ = 0;
+    uint32_t cores_ = 0;
+};
+
 uint64_t load_acquire(const volatile uint64_t* p) {
     return __atomic_load_n(const_cast<const uint64_t*>(p), __ATOMIC_ACQUIRE);
 }
@@ -178,8 +263,9 @@ struct H2HSocket::Impl {
         uint32_t slot = 0;    // the RX slot it landed in, so consumed() can disarm its guard
     };
     CoreRings<Delivered> rx_pending;
-    std::vector<uint64_t> credit_out;  // frames this host has credited back, per RECEIVING core
-    std::vector<uint64_t> done_out;    // the same frames counted per SENDING core
+    // Owns both backward counters and the coalesced puts that publish them.
+    CreditPublisher credits;
+    RdmaWindow::Op credit_op{};  // MPI_Put takes no request; kept only to satisfy put()
     std::vector<uint32_t> next_slot;   // next RX slot to inspect, per core
     // The origin's frame index this ring expects next. next_slot wraps at ring_pages and so
     // cannot tell a slot re-armed before its credit from the frame that belongs there.
@@ -222,9 +308,8 @@ struct H2HSocket::Impl {
         }
         return kFlushWatermark;
     }
-    // Long enough to reach the watermark at the measured frame rate, not a latency bound:
-    // a lone frame is covered by the no-supply force, which fires the moment nothing is
-    // queued. This only catches a queue that has stopped moving for another reason.
+    // Breaks the credit deadlock, not just a stuck queue: holding the flush stops the peer
+    // crediting, which blocks posting, and no force fires because frames are still queued.
     static constexpr auto kFlushDeadline = std::chrono::microseconds(500);
 
     uint64_t watermark = kFlushWatermark;
@@ -271,8 +356,27 @@ struct H2HSocket::Impl {
     }
 
     uint64_t& posted_at(uint32_t core, uint32_t host) { return posted[core * kMaxCreditPeers + host]; }
-    uint64_t& credit_out_at(uint32_t core, uint32_t host) { return credit_out[core * kMaxCreditPeers + host]; }
-    uint64_t& done_out_at(uint32_t core, uint32_t host) { return done_out[core * kMaxCreditPeers + host]; }
+    // One put per array per peer, covering every core touched since the last call. Called
+    // after the drain loop, not inside consumed(), so it can span cores rather than one.
+    bool publish_credits() {
+        for (uint32_t h = 0; h < topo_hosts(); ++h) {
+            if (h == cfg.topo.ident || !credits.pending(h)) {
+                continue;
+            }
+            const std::string e =
+                credits.publish(h, cfg.topo.ident, [&](const void* src, uint64_t bytes, uint64_t off) {
+                    mark_pending(h, bytes);
+                    return win->put(src, bytes, h, off, credit_op);
+                });
+            if (!e.empty()) {
+                fail("h2h: credit: " + e);
+                return false;
+            }
+        }
+        stats.credit_puts = credits.credit_puts();
+        stats.done_puts = credits.done_puts();
+        return true;
+    }
 
     // The peer writes an absolute count into our region at credit_offset(my core, its host).
     uint64_t credit_seen(uint32_t core, uint32_t host) const {
@@ -437,8 +541,7 @@ std::unique_ptr<H2HSocket> H2HSocket::create(const Config& cfg, std::string& err
 
     const size_t per_peer = static_cast<size_t>(cfg.cores) * kMaxCreditPeers;
     im.posted.assign(per_peer, 0);
-    im.credit_out.assign(per_peer, 0);
-    im.done_out.assign(per_peer, 0);
+    im.credits.reset(cfg.cores, cfg.topo.num);
     // ring_pages deep: submit() refuses past it, the harvest breaks at it, and the credit
     // gate bounds payload+trailer+flight COMBINED, so each is safe at that cap.
     im.rx_pending.reset(cfg.cores, cfg.ring_pages);
@@ -636,8 +739,12 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
             break;
         }
         if (im.cfg.collect_timing) {
-            // Keyed by the sequence this put IS, which is posted_at before the increment.
-            im.put_at_of(dest_core, host, im.posted_at(dest_core, host)) = std::chrono::steady_clock::now();
+            // Every sequence in the run, not just the first: harvest_credits() closes them
+            // one at a time, and an unstamped slot reads a default time_point (224G us).
+            const auto now = std::chrono::steady_clock::now();
+            for (uint32_t k = 0; k < run; ++k) {
+                im.put_at_of(dest_core, host, im.posted_at(dest_core, host) + k) = now;
+            }
         }
         im.posted_at(dest_core, host) += run;
         f.epoch = im.flush_epoch[host];
@@ -645,6 +752,7 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
         (void)im.tx_payload.push_back(t.core, f);
         im.in_flight += run;
         im.stats.posts += run;
+        ++im.stats.payload_puts;
         for (uint32_t k = 0; k < run; ++k) {
             im.tx_queue.pop_front(c);
         }
@@ -668,9 +776,12 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
     // pass of a run that asked for none, and the split says which half of a pass to go after.
     const auto flush_t0 =
         im.cfg.collect_timing ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-    // No-supply only. Forcing on credit-gating as well was measured to defeat the watermark:
-    // holding a publish is itself what stops the peer crediting, so the gate fires, forces a
-    // flush of whatever little is pending, and the batch never grows. The deadline bounds it.
+    // Before the flush, so counters noted this pass ride the flush already happening.
+    if (!im.publish_credits()) {
+        return progress;
+    }
+    // No-supply only. Forcing on credit-gating too was measured to defeat the watermark:
+    // holding a publish is what stops the peer crediting, so the batch never grows.
     im.flush_dirty(im.tx_queued == 0);
     if (im.cfg.collect_timing) {
         im.stats.flush_ns += static_cast<uint64_t>(
@@ -757,7 +868,7 @@ void H2HSocket::consumed(uint32_t core, uint32_t pages) {
         const uint32_t host = tt_uva_t6_selector_host(d.origin, im.cfg.topo.chips_per_host);
         const uint32_t src_core = tt_uva_t6_selector_core(d.origin);
         const uint32_t src_chip = tt_uva_t6_selector_chip(d.origin, im.cfg.topo.chips_per_host);
-        // cfg.cores, not kProvisionedCores: src_core indexes done_out, which is sized by it.
+        // cfg.cores, not kProvisionedCores: src_core indexes the done array, sized by it.
         if (host >= im.cfg.topo.num || host == im.cfg.topo.ident || src_core >= im.cfg.cores ||
             src_chip != im.cfg.chip) {
             im.fail(
@@ -765,24 +876,10 @@ void H2HSocket::consumed(uint32_t core, uint32_t pages) {
                 ", which is not a peer core");
             return;
         }
-        // Keyed on THIS core -- the ring that just freed a slot -- at our host id, which is
-        // exactly where every sender into this ring reads its gate.
-        uint64_t& n = im.credit_out_at(core, host);
-        ++n;
-        if (const std::string e = im.win->put_word(n, host, credit_offset(core, im.cfg.topo.ident)); !e.empty()) {
-            im.fail("h2h: credit: " + e);
-            return;
-        }
-        // The same frame counted against its SENDER, which is what tt_uva_sync() waits on.
-        // Two counts because a slot freeing and a sender's frame landing are different facts.
-        uint64_t& m = im.done_out_at(src_core, host);
-        ++m;
-        if (const std::string e = im.win->put_word(m, host, done_offset(src_core, im.cfg.topo.ident)); !e.empty()) {
-            im.fail("h2h: done: " + e);
-            return;
-        }
-        im.mark_pending(host, 2 * sizeof(uint64_t));
-        im.stats.credit_puts += 2;
+        // Counters only. publish_credits() puts them once per pass, across every core at
+        // once -- keyed on THIS core for the gate, and on the SENDER for tt_uva_sync().
+        im.credits.note_credit(host, core);
+        im.credits.note_done(host, src_core);
     }
     // More consumed than delivered means the two legs disagree about what was handed over.
     if (pages != 0) {
@@ -798,6 +895,10 @@ const std::vector<uint64_t>& H2HSocket::put_to_credit_ns() const { return impl_-
 
 const H2HSocket::PassStats& H2HSocket::pass_stats() const { return impl_->stats; }
 
+// Publishes everything consumed() has noted. The chain calls this after its drain loop:
+// deferring one pass is what lets a single put span every core that freed a slot.
+bool H2HSocket::publish_credits() { return impl_->publish_credits(); }
+
 uint64_t H2HSocket::credit_total(uint32_t core) const {
     const Impl& im = *impl_;
     uint64_t sum = 0;
@@ -810,6 +911,7 @@ uint64_t H2HSocket::credit_total(uint32_t core) const {
 }
 
 std::string H2HSocket::barrier() {
+    impl_->publish_credits();
     impl_->flush_dirty(true);
     return impl_->win->barrier();
 }
