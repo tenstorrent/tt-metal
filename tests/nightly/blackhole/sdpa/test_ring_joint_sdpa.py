@@ -6284,6 +6284,30 @@ def test_ring_mla_split_accumulation_cancellation(v_tiles):
         close_ring_joint_sdpa_runtime(runtime)
 
 
+@pytest.mark.timeout(600)
+def test_ring_mla_single_packet_padded_multicast():
+    """Single-packet K transfers finish issuing before padded iterations reuse the source slot."""
+    model = replace(RING_MLA_CHUNKED_MODEL_CONFIGS["kimi_k3"], nhq=24, nhv=24, d_q=64, d_k=64, d_v=32)
+    chunk_size = 64 * MESH_CONFIG.sp_size
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG, reserve_llk_kernel_config=False)
+    try:
+        for iterations in (1, 3):
+            run_ring_joint_sdpa_chunked(
+                MESH_CONFIG,
+                model,
+                chunk_size=chunk_size,
+                total_seq=3 * chunk_size,
+                qk_configs=[(32, 32)],
+                use_ring_mla=True,
+                persistent_buffer_mode="reuse_max",
+                num_iterations=iterations,
+                runtime=runtime,
+                reserve_llk_kernel_config=False,
+            )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
+
+
 @pytest.mark.timeout(1200)
 @pytest.mark.parametrize("q_chunk_size,k_chunk_size", [(32, 640), (64, 448)], ids=["q32", "q64_pack_unpack"])
 def test_ring_mla_rotated_q_accuracy_and_determinism(q_chunk_size, k_chunk_size):
@@ -6862,15 +6886,15 @@ if MESH_CONFIG.is_galaxy:
     RING_MLA_CHUNKED_PERF_CHECK_CONFIGS = [
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
         # 8-device ring (Galaxy, sp=8 tp=4)
-        ("kimi50k", 32, 640, 8, 68.5),
-        ("kimi_k3", 32, 640, 8, 68.04),
+        ("kimi50k", 32, 640, 8, 72.56),
+        ("kimi_k3", 32, 640, 8, 72.35),
     ]
 else:
     RING_MLA_CHUNKED_PERF_CHECK_CONFIGS = [
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
         # 4-device ring (QuietBox, 100 SDPA cores)
-        ("kimi50k", 32, 640, 4, 69.53),
-        ("kimi_k3", 32, 640, 4, 70.73),
+        ("kimi50k", 32, 640, 4, 69.64),
+        ("kimi_k3", 32, 640, 4, 71.08),
     ]
 
 

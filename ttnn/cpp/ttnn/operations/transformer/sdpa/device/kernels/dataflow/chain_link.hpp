@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include "deferred_k_multicast.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
@@ -242,6 +243,36 @@ public:
                 {.noc_x = next_core_x_, .noc_y = next_core_y_, .addr = cb_addr});
             noc.async_writes_flushed();
             Semaphore<>(valid_sem_id_).relay_unicast(noc, Semaphore<>(receiver_sem_id_), next_core_x_, next_core_y_);
+        }
+    }
+
+    /**
+     * Start a deferred K multicast: try one data packet now, then let issue_block_reads send
+     * the rest between the next chunk's DRAM read requests. Finish issuing any previous chunk
+     * before waiting for receiver readiness; receivers announce readiness for the next chunk
+     * only after the previous one has landed. Unicast chains keep the blocking forward().
+     * Callers drain pending commands before source-slot reuse, ring-iteration sync, and exit.
+     */
+    void arm_deferred_mcast(Noc noc, DeferredKMulticast& m, uint32_t cb_addr, uint32_t num_tiles, uint32_t tile_bytes) {
+        if constexpr (mcast_enabled) {
+            m.drain(noc);
+            Semaphore<> sender_sem(sender_sem_id_);
+            sender_sem.wait(sender_wait_count_);
+            sender_sem.set(0);
+            m.source_slot_addr = cb_addr;
+            m.next_src_addr = cb_addr;
+            m.bytes_left = num_tiles * tile_bytes;
+            m.dst_mcast_addr =
+                get_noc_multicast_addr(mcast_start_x_, mcast_start_y_, mcast_end_x_, mcast_end_y_, cb_addr);
+            m.num_dests = mcast_num_dests_;
+            m.sem_src_addr = get_semaphore(valid_sem_id_);
+            m.sem_dst_mcast_addr = get_noc_multicast_addr(
+                mcast_start_x_, mcast_start_y_, mcast_end_x_, mcast_end_y_, get_semaphore(receiver_sem_id_));
+            m.commands_pending = true;
+            m.source_in_flight = true;
+            m.try_issue_packet();
+        } else {
+            forward(noc, cb_addr, num_tiles, tile_bytes);
         }
     }
 

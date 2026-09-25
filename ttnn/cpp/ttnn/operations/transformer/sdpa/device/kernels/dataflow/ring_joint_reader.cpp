@@ -276,6 +276,7 @@ void kernel_main() {
     constexpr bool kv_pad_from_metadata = get_compile_time_arg_val(32) == 1;
     constexpr bool gqa_grouped_kv = ring_joint::is_gqa_grouped_kv_head_mode(v_shares_k_buffer, NH, NHK, NHV);
     constexpr bool k_uses_batch_chain = ring_joint::uses_shared_k_batch_chain(gqa_grouped_kv, NHK);
+    constexpr bool defer_k_mcast = v_shares_k_buffer && k_uses_batch_chain && !has_sliding_window;
     constexpr bool use_head_chain = ring_joint::uses_v_head_chain(enable_kv_chains, gqa_grouped_kv, v_shares_k_buffer);
     // In-place latent-V (single-tile Q): the compute kernel reads V straight from K^T, so the
     // reader never materializes V. Shared with the program factory and compute kernel.
@@ -791,8 +792,13 @@ void kernel_main() {
             fused_op_receiver.get_next_ring_id_and_consume_one_signal();
         }
     }
+    DeferredKMulticast k_mcast;
     constexpr uint32_t sdpa_ring_iterations = has_sliding_window ? 1 : ring_size;
     for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
+        if constexpr (defer_k_mcast) {
+            // Receivers must not wait on the last parked K chunk across the ring-iteration sync.
+            k_mcast.drain(noc);
+        }
         const bool ring_iter_is_active = has_sliding_window || ((active_ring_iter_mask >> ring_iter) & 1u) != 0;
         // Sliding already advanced/synchronized the sequencer above and uses a synthetic local
         // iteration whose K loop decodes the real source ring ID for each chunk.
@@ -1123,6 +1129,11 @@ void kernel_main() {
                     }
                 }
                 if (!received_k_from_chain) {
+                    // The previous chunk's multicast may still be reading this slot (padded
+                    // iterations re-reserve it); otherwise the fetch overlaps that multicast.
+                    if constexpr (defer_k_mcast) {
+                        k_mcast.drain_before_reuse(noc, cb_k_start_address);
+                    }
                     // Injector or non-participant: read K from DRAM. Dispatch directly so
                     // local and gathered tensors may use different accessor types.
                     const auto fetch_k = [&](const auto& k_gen) {
@@ -1133,7 +1144,13 @@ void kernel_main() {
                             cb_k_in,
                             cb_k_start_address,
                             k_tile_bytes,
-                            true /*transpose*/);
+                            true /*transpose*/,
+                            0 /*barrier_threshold*/,
+                            [&]() {
+                                if constexpr (defer_k_mcast) {
+                                    k_mcast.progress_reads();
+                                }
+                            });
                     };
                     fetch_k_from_source<has_joint_k, has_gathered_joint_k, joint_tensor_args_offset>(
                         kv_chunk_is_joint,
@@ -1153,7 +1170,14 @@ void kernel_main() {
                 // Forward K chunk via chain (uses K's data size explicitly)
                 if constexpr (!has_sliding_window) {
                     if (k_chain.should_forward(k_chain_head, q_iter_local)) {
-                        k_chain.forward(noc, cb_k_start_address, k_chunk_tiles, k_tile_bytes);
+                        // Park K only when no V multicast follows it: with a separate V (head or GQA
+                        // chain) receivers would wait for the parked K relay while the injector waits
+                        // for their V readiness. Latent V rides the K^T buffer.
+                        if constexpr (defer_k_mcast) {
+                            k_chain.arm_deferred_mcast(noc, k_mcast, cb_k_start_address, k_chunk_tiles, k_tile_bytes);
+                        } else {
+                            k_chain.forward(noc, cb_k_start_address, k_chunk_tiles, k_tile_bytes);
+                        }
                     }
                 }
 
@@ -1318,5 +1342,8 @@ void kernel_main() {
                 }
             }
         }
+    }
+    if constexpr (defer_k_mcast) {
+        k_mcast.drain(noc);
     }
 }
