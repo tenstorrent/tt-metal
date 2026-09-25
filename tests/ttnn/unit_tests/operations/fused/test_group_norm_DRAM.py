@@ -184,7 +184,7 @@ def test_group_norm_interleaved_l1_replay_respects_occupied_l1(device, enabled_p
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("num_out_blocks", [13, 17, 73])
-@pytest.mark.parametrize("cores_y", [1, 4])
+@pytest.mark.parametrize("cores_y", [1, 4, 8])
 @pytest.mark.parametrize("C, cores_x, groups", [(64, 1, 2), (256, 8, 32)], ids=["strided", "bank_contiguous"])
 def test_group_norm_streaming_stats_wrap_DRAM(
     device, enabled_program_cache, dtype, num_out_blocks, cores_y, C, cores_x, groups
@@ -194,9 +194,13 @@ def test_group_norm_streaming_stats_wrap_DRAM(
         pytest.skip("Requested streaming grid exceeds the available compute grid")
     # One core's input exceeds L1. Odd CB sizes and partial final blocks make
     # statistics batches split at wrap boundaries, including on the second batch.
-    # The eight-bank Blackhole case also coalesces one-tile rows within each bank.
+    # The eight-bank Blackhole case also covers coalesced reads and reordered
+    # reader columns, including affine/mask offsets and multi-row multicast groups.
     N = 2
-    HW = 16384 * max(1, cores_y // N)
+    # The new eight-row, single-bank geometry retains at least 2 MiB of BF16
+    # input per core, so even the smallest CB blocks cannot enable full replay.
+    rows_per_core = 32768 if C == 256 and cores_y == 8 else 16384
+    HW = rows_per_core * max(1, cores_y // N)
     grid = ttnn.CoreGrid(y=cores_y, x=cores_x)
     torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
     weight = torch.linspace(0.75, 1.25, C).to(torch_dtype).float()

@@ -363,6 +363,32 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
 
     std::vector<CoreCoord> core_coords = grid_to_cores(num_cores, num_actual_cols, num_actual_rows, row_wise);
     std::vector<CoreCoord> virtual_core_coords = grid_to_cores(num_cores, num_virtual_cols, num_virtual_rows, row_wise);
+    if ((device->arch() == tt::ARCH::BLACKHOLE || device->arch() == tt::ARCH::WORMHOLE_B0) && use_welford &&
+        !sfpu_two_pass_l1_replay && a.layout() == Layout::TILE && a.buffer()->buffer_type() == BufferType::DRAM &&
+        per_core_Nt == 1 && num_actual_cols == num_virtual_cols && num_virtual_cols == device->num_dram_channels() &&
+        Wt == num_virtual_cols && detail::preferred_noc_for_dram_read(device->arch()) == NOC::NOC_0) {
+        // Each virtual column reads one DRAM bank. Keep NoC0 responses near their
+        // preferred worker columns so banks sharing a NoC row do not wrap over
+        // each other's links. Reorder whole columns, preserving multicast groups
+        // and the virtual ordering used by input, output, mask and affine offsets.
+        const auto preferred = device->get_optimal_dram_bank_to_logical_worker_assignment(NOC::NOC_0);
+        const auto device_columns = device->compute_with_storage_grid_size().x;
+        std::vector<uint32_t> column_order(num_actual_cols);
+        std::vector<bool> used(num_actual_cols, false);
+        for (uint32_t bank = 0; bank < num_virtual_cols; ++bank) {
+            for (uint32_t offset = 0; offset < device_columns; ++offset) {
+                const uint32_t column = (preferred.at(bank).x + offset) % device_columns;
+                if (column < num_actual_cols && !used[column]) {
+                    column_order[bank] = column;
+                    used[column] = true;
+                    break;
+                }
+            }
+        }
+        for (auto& core : core_coords) {
+            core.x = column_order[core.x];
+        }
+    }
     std::set<CoreRange> all_cores_group_1_core_ranges;
     for (size_t i = 0; i < num_cores; ++i) {
         all_cores_group_1_core_ranges.insert(CoreRange(core_coords[i]));
