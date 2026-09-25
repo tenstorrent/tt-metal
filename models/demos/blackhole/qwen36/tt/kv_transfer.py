@@ -228,7 +228,11 @@ class Qwen36KVTransfer:
         self.last_install_timing = None
         # consumer: validate_gdn_parts loads the taps rows (host) while the K/V fills run; install_gdn_state reuses them
         self.rows_prefetch = os.environ.get("TT_PD_ROWS_PREFETCH", "1") != "0"
-        self._rows_cache = collections.OrderedDict()  # id(sources) -> (sources, [K, D] bf16 rows per GDN layer)
+        # id(sources) -> (sources, [K, D] bf16 rows per GDN layer). A job that fails after validate never installs, so its
+        # entry (~3.9 MB of rows + a reference to its sources dict; transports release explicitly, no device memory)
+        # stays until _ROWS_CACHE_MAX newer validates evict it: <= ~63 MB host under an abort-heavy load. If more than
+        # _ROWS_CACHE_MAX validated jobs wait for their join at once, the oldest falls back to reading at install.
+        self._rows_cache = collections.OrderedDict()
         self._taps_stage_rm = None  # [1, 1, R32, D] bf16 ROW_MAJOR device staging (R32 = tap rows rounded up to 32)
         self.mirrored_chunks = 0  # chunks copied by the mirror (all requests)
         self.gathered_chunks = 0  # chunks the export had to gather from the paged cache
@@ -525,6 +529,7 @@ class Qwen36KVTransfer:
                 hist_batched = (
                     self.hist_write == "batched"
                     and not self.via_write_slot
+                    and self.mesh.get_num_devices() == 1  # replicated staging == the legacy dim-0 shard only at 1x1
                     and all(getattr(dn, "_decode_fused_conv", False) and dn.conv_hist_packed is not None for dn in dns)
                 )
                 if hist_batched:
@@ -842,6 +847,11 @@ class Qwen36KVTransfer:
         )
 
     def _alloc_hist_stage(self, dns) -> None:
+        # TP=1 only: the staging and the host pack are replicated (``_rep``) where the legacy path shards the packed
+        # row over dim 0 (``ShardTensorToMesh``); the two write the same bytes only on a 1x1 mesh. A TP>1 consumer
+        # takes the legacy path (the warmup does not allocate this staging, so install_gdn_state falls back).
+        n_dev = self.mesh.get_num_devices()
+        assert n_dev == 1, f"batched hist write is TP=1 only ({n_dev} devices)"
         if self._hist_stage is not None:
             return
         dn0 = dns[0]
@@ -893,6 +903,7 @@ class Qwen36KVTransfer:
         dn0 = dns[0]
         L, Nv, K = len(dns), int(dn0.Nv), int(dn0.K)
         assert self._hist_stage is not None, "warmup_kv_transfer(role=consumer) must run first"
+        assert self.mesh.get_num_devices() == 1, "batched hist write is TP=1 only (see _alloc_hist_stage)"
         assert tuple(int(d) for d in rows.shape[:2]) == (L, K), tuple(rows.shape)
         slot = int(slot)
         t0 = time.perf_counter()
@@ -1174,12 +1185,13 @@ class Qwen36KVTransfer:
             slot = int(slot)
             t0 = time.perf_counter()
             batched_taps = self.taps_write == "update_cache" and not self.via_write_slot
-            # packed conv history of a fused-conv decode: batched = one host pack + ONE upload + device tilize + one
-            # fill_cache per layer after the loop; legacy = per layer host pack/tilize/upload + _write_index (4 ops)
+            # packed conv history of a fused-conv decode: batched = one vectorized host pack of all layers, then per layer
+            # a host tilize + one TILE H2D into persistent staging + one fill_cache, after the loop (_write_hist_batched);
+            # legacy = per layer host pack/tilize + fresh upload + _write_index (slice/slice/concat/copy)
             batched_hist = (
                 self.hist_write == "batched"
                 and not self.via_write_slot
-                and self._hist_stage is not None
+                and self._hist_stage is not None  # allocated by the warmup only on a single-device mesh
                 and all(getattr(dn, "_decode_fused_conv", False) for dn in dns)
             )
             tm = {"rec": 0.0, "rows": 0.0, "pack": 0.0, "hist": 0.0, "taps": 0.0}
@@ -1275,8 +1287,8 @@ class Qwen36KVTransfer:
             )
             if self.timing:
                 logger.info(
-                    f"[PD_TIMING] install_gdn_state slot={slot}: {1e3 * (time.perf_counter() - t0):.1f} ms = rec writes + "
-                    f"rows reads {1e3 * (t_layers - t0):.1f} + taps device write {1e3 * (t_taps - t_layers):.1f} + hist "
+                    f"[PD_TIMING] install_gdn_state slot={slot}: {1e3 * (time.perf_counter() - t0):.1f} ms = layer loop "
+                    f"{1e3 * (t_layers - t0):.1f} + taps {1e3 * (t_taps - t_layers):.1f} + hist "
                     f"{1e3 * (t_hist - t_taps):.1f} + sync {1e3 * (t_sync - t_hist):.1f} (hist={'batched' if batched_hist else 'legacy'}: "
                     f"rec {1e3 * tm['rec']:.1f}, rows read {1e3 * tm['rows']:.1f}, hist pack {1e3 * tm['pack']:.1f}, hist "
                     f"write {1e3 * tm['hist']:.1f} ms; rows {'prefetched' if pre_rows is not None else 'read here'})"
