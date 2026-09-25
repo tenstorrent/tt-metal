@@ -12,16 +12,23 @@ from ...layers.module import Module
 from ...layers.normalization import RMSNorm
 from ...parallel.config import DiTParallelConfig
 from ...parallel.manager import CCLManager
+from ...utils import sdpa_recipe
+from ...utils.sdpa_recipe import prepare_recipe_inputs, recipe_config, sdpa_kwargs, validate_recipe_args
 from ...utils.substate import pop_substate, rename_substate
 
 
 class MochiAttention(Module):
-    # Map from (is_blackhole, sp_factor, tp_factor) -> (q_chunk_size, k_chunk_size)
+    # Named SDPA recipe of every SDPA call in this module on Blackhole. DiT models default to
+    # FAST (legacy streaming numerics with the approximate exponential; user decision
+    # 2026-09-25): at the models' shapes it is as accurate as the legacy HiFi2 / BF16-dest /
+    # exact-exp setup within a few percent and at least as fast. Pass sdpa_precision to opt
+    # up (e.g. BALANCED). See tests/ttnn/unit_tests/operations/sdpa/test_sdpa_dit_recipe_parity.py.
+    sdpa_precision_default = ttnn.SDPAPrecision.FAST
+
+    # Legacy ring SDPA chunks (non-Blackhole only): (is_blackhole, sp_factor, tp_factor) -> (q, k).
     sdpa_chunk_size_map = {
         (False, 2, 4): (128, 512),
         (False, 8, 4): (128, 512),
-        (True, 2, 2): (128, 512),
-        (True, 8, 4): (128, 512),
     }
     default_sdpa_chunk_size = (256, 256)
 
@@ -43,6 +50,8 @@ class MochiAttention(Module):
         ccl_manager: CCLManager | None = None,
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
         super().__init__()
 
@@ -55,6 +64,14 @@ class MochiAttention(Module):
         self.query_dim = query_dim
         self.head_dim = head_dim
         self.added_kv_proj_dim = added_kv_proj_dim
+        # Named SDPA recipe (sdpa_precision=None: sdpa_precision_default); legacy off Blackhole only.
+        blackhole = is_blackhole()
+        self.sdpa_precision = sdpa_recipe.resolve_precision(
+            sdpa_precision, self.sdpa_precision_default, blackhole=blackhole, model="Mochi"
+        )
+        self.sdpa_kv_dtype = self._validate_sdpa_recipe(
+            self.sdpa_precision, sdpa_kv_dtype, head_dim=head_dim, blackhole=blackhole
+        )
 
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
@@ -123,34 +140,39 @@ class MochiAttention(Module):
 
         full_grid = self.mesh_device.compute_with_storage_grid_size()
         self.sdpa_worker_grid = (full_grid.x, full_grid.y - 1)
-        self.sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=full_grid,
-            q_chunk_size=256,
-            k_chunk_size=512,
-            exp_approx_mode=False,  # NOTE: False is more correct
-        )
-
-        ring_sdpa_chunk_size = self.sdpa_chunk_size_map.get(
-            (
-                is_blackhole(),
-                self.parallel_config.sequence_parallel.factor,
-                self.parallel_config.tensor_parallel.factor,
-            ),
-            self.default_sdpa_chunk_size,
-        )
-        self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.sdpa_worker_grid,
-            q_chunk_size=ring_sdpa_chunk_size[0],
-            k_chunk_size=ring_sdpa_chunk_size[1],
-            exp_approx_mode=False,  # NOTE: False is more correct
-        )
-
-        self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
-        )
+        if self.sdpa_precision is not None:
+            # The recipe owns the numerics; SDPA chooses the chunks for each grid.
+            self.sdpa_program_config = recipe_config(full_grid)
+            self.ring_sdpa_program_config = recipe_config(self.sdpa_worker_grid)
+            self.sdpa_compute_kernel_config = None
+        else:
+            # Legacy SDPA (non-Blackhole).
+            self.sdpa_program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=full_grid,
+                q_chunk_size=256,
+                k_chunk_size=512,
+                exp_approx_mode=False,  # NOTE: False is more correct
+            )
+            ring_sdpa_chunk_size = self.sdpa_chunk_size_map.get(
+                (
+                    blackhole,
+                    self.parallel_config.sequence_parallel.factor,
+                    self.parallel_config.tensor_parallel.factor,
+                ),
+                self.default_sdpa_chunk_size,
+            )
+            self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=self.sdpa_worker_grid,
+                q_chunk_size=ring_sdpa_chunk_size[0],
+                k_chunk_size=ring_sdpa_chunk_size[1],
+                exp_approx_mode=False,  # NOTE: False is more correct
+            )
+            self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                self.mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
+            )
 
         self.rope_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
@@ -178,6 +200,25 @@ class MochiAttention(Module):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+
+    @staticmethod
+    def _validate_sdpa_recipe(
+        precision: ttnn.SDPAPrecision | None, kv_dtype: ttnn.DataType | None, *, head_dim: int, blackhole: bool
+    ) -> ttnn.DataType:
+        return validate_recipe_args(precision, kv_dtype, head_dim=head_dim, model="Mochi", is_blackhole=blackhole)
+
+    def _sdpa_kwargs(self) -> dict:
+        # Recipe kwargs; off Blackhole the legacy compute config, read at call time.
+        return sdpa_kwargs(self.sdpa_precision, self.sdpa_compute_kernel_config)
+
+    def _check_recipe_logical_lengths(self, *lengths) -> None:
+        """Named recipes need scalar logical lengths (device-tensor logical_n/logical_l are unsupported)."""
+        if self.sdpa_precision is not None and any(isinstance(n, ttnn.Tensor) for n in lengths):
+            raise ValueError("Mochi: named SDPA recipes require scalar logical_n/logical_l")
+
+    def _ring_buffer_kwargs(self, t: ttnn.Tensor) -> dict:
+        # Recipe inputs may be stored in a non-BF16 KV dtype; the legacy path keeps the default buffer dtype.
+        return {} if self.sdpa_precision is None else {"dtype": t.dtype}
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         def reshape_and_merge_qkv(q_state, k_state, v_state):
@@ -268,7 +309,15 @@ class MochiAttention(Module):
             k_BHNE, rope_cos, rope_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
         )
 
+        # LOW_PRECISION: prepare spatial and prompt Q/K/V separately after norm/RoPE, before ring
+        # communication (no-op otherwise).
+        q_BHNE, k_BHNE, v_BHNE = prepare_recipe_inputs(self.sdpa_precision, self.sdpa_kv_dtype, q_BHNE, k_BHNE, v_BHNE)
+        add_q_BHLE, add_k_BHLE, add_v_BHLE = prepare_recipe_inputs(
+            self.sdpa_precision, self.sdpa_kv_dtype, add_q_BHLE, add_k_BHLE, add_v_BHLE
+        )
+
         if self.parallel_config.sequence_parallel.factor > 1:
+            self._check_recipe_logical_lengths(N)
             spatial_BHNE, prompt_BHLE, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 q_BHNE,
                 k_BHNE,
@@ -277,15 +326,21 @@ class MochiAttention(Module):
                 add_k_BHLE,
                 add_v_BHLE,
                 persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
-                    k_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
+                    k_BHNE.shape,
+                    2,
+                    self.parallel_config.sequence_parallel.mesh_axis,
+                    **self._ring_buffer_kwargs(k_BHNE),
                 ),
                 persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
-                    v_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
+                    v_BHNE.shape,
+                    2,
+                    self.parallel_config.sequence_parallel.mesh_axis,
+                    **self._ring_buffer_kwargs(v_BHNE),
                 ),
                 joint_strategy="rear",
                 logical_n=N,
                 program_config=self.ring_sdpa_program_config,
-                compute_kernel_config=self.sdpa_compute_kernel_config,
+                **self._sdpa_kwargs(),
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
                     self.parallel_config.sequence_parallel.mesh_axis
@@ -307,7 +362,7 @@ class MochiAttention(Module):
                 add_v_BHLE,
                 joint_strategy="rear",
                 program_config=self.sdpa_program_config,
-                compute_kernel_config=self.sdpa_compute_kernel_config,
+                **self._sdpa_kwargs(),
             )
 
         spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE)
