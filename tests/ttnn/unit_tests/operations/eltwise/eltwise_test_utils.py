@@ -43,6 +43,14 @@ def generate_bfloat16_bits(dtype=torch.bfloat16, include_spl_values=False):
     return all_bf16
 
 
+def generate_bfloat16_zero_band():
+    """Raw BF16 zero and subnormal words, with other lanes made finite and safe."""
+    raw = generate_all_bfloat16_bitpatterns()
+    zero_band = raw.to(torch.float32).abs() < torch.finfo(torch.bfloat16).tiny
+    values = torch.where(zero_band, raw, torch.ones_like(raw))
+    return values.unsqueeze(0).unsqueeze(0), zero_band.unsqueeze(0).unsqueeze(0)
+
+
 SMALLEST_NORMAL_BF16 = 2.0 ** (-126)
 MAX_BF16 = float(torch.finfo(torch.bfloat16).max)
 

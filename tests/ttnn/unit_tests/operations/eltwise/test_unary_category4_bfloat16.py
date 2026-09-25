@@ -9,12 +9,13 @@ import math
 from tests.ttnn.utils_for_testing import assert_with_ulp, assert_with_pcc, assert_allclose
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     generate_bfloat16_bits,
+    generate_bfloat16_zero_band,
     generate_bfloat16_bits_in_range,
     to_tt_tensor,
     float_to_bf16_bits,
     bf16_bits_to_float,
 )
-from models.common.utility_functions import is_blackhole
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
 
 pytestmark = pytest.mark.use_module_device
 
@@ -275,6 +276,11 @@ def test_elu_op(device, alpha):
 
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1, allow_nonfinite=True)
 
+    if alpha == 1.0 and (is_blackhole() or is_wormhole_b0()):
+        raw_zero_band, zero_band = generate_bfloat16_zero_band()
+        raw_result = ttnn.to_torch(ttnn.elu(to_tt_tensor(raw_zero_band, device), alpha=alpha))
+        assert torch.all(raw_result[zero_band] == 0)
+
 
 @pytest.mark.parametrize("alpha", [1.0, 0.5, 2.0, 0.1])
 def test_celu_op(device, alpha):
@@ -291,6 +297,11 @@ def test_celu_op(device, alpha):
     result = ttnn.to_torch(tt_result)
 
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1, allow_nonfinite=True)
+
+    if alpha == 1.0 and (is_blackhole() or is_wormhole_b0()):
+        raw_zero_band, zero_band = generate_bfloat16_zero_band()
+        raw_result = ttnn.to_torch(ttnn.celu(to_tt_tensor(raw_zero_band, device), alpha=alpha))
+        assert torch.all(raw_result[zero_band] == 0)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
