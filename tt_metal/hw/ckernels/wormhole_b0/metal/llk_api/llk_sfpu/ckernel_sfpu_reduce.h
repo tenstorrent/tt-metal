@@ -162,10 +162,17 @@ inline void load_face_data(std::uint32_t face_addr, std::uint32_t column_offset)
  *         unsigned formats (UInt32, UInt16), whose sum is an unsigned 32-bit value.
  *
  * Wormhole B0 only has a logical right shift, so the signed path takes the magnitude, shifts it and
- * restores the sign, while the unsigned path shifts directly. The arm must follow the data's
+ * restores the sign, while the unsigned path shifts directly. The average is left in
+ * int_average_result_lreg<is_signed_int>(): LREG1 for the signed path, which keeps the original sum in
+ * LREG0 for its sign check, and LREG0 otherwise. The arm must follow the data's
  * signedness, not the load mode: Int32 and UInt32 both load with INT32, and treating an unsigned
  * column sum with bit 31 set as negative returns a wrong, negated average (tt-metal#57509).
  */
+template <bool is_signed_int>
+constexpr std::uint32_t int_average_result_lreg() {
+    return is_signed_int ? p_sfpu::LREG1 : p_sfpu::LREG0;
+}
+
 template <InstrModLoadStore INSTRUCTION_MODE, bool is_signed_int>
 inline void perform_int_average() {
     // Both arms operate on the raw DEST word. INT32_2S_COMP would reinterpret a two's-complement
@@ -178,12 +185,11 @@ inline void perform_int_average() {
         // Two's-complement signed divide-by-32 (round toward zero): shift the magnitude, then negate
         // the lanes whose sum was negative. Integer SFPABS is a two's-complement abs (tt-isa SFPABS.md)
         // and leaves INT32_MIN as 0x80000000, which the logical shift still maps to 2^26 and the
-        // negate to INT32_MIN / 32.
-        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);                      // Save the signed sum for the sign check
-        TTI_SFPABS(0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPABS_MOD1_INT);  // |x|
-        TTI_SFPSHFT(-AVG_SHIFT_AMOUNT & AVG_SHIFT_MASK, p_sfpu::LREG0, p_sfpu::LREG0, 0b01);  // |x| >> 5 (divide by 32)
-        TTI_SFPSETCC(0, p_sfpu::LREG1, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);  // cc if the sum was negative
-        TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 6);               // Restore sign (2's-complement negate)
+        // negate to INT32_MIN / 32. The magnitude is built in LREG1 so LREG0 keeps the signed sum.
+        TTI_SFPABS(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPABS_MOD1_INT);                   // LREG1 = |x|
+        TTI_SFPSHFT(-AVG_SHIFT_AMOUNT & AVG_SHIFT_MASK, p_sfpu::LREG1, p_sfpu::LREG1, 0b01);  // |x| >> 5 (divide by 32)
+        TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);  // cc if the sum was negative
+        TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG1, 6);               // Restore sign (2's-complement negate)
         TTI_SFPENCC(0, 0, 0, 0);
     } else {
         // Unsigned formats (UInt32, UInt16): a logical shift is already the exact divide.
@@ -307,7 +313,9 @@ inline void perform_reduce_col_sum_avg() {
         // the whole dest word, so we use the plain INSTRUCTION_MODE store even for UInt16 input.
         constexpr std::uint32_t STORE_MODE =
             pack_low16 ? 9u /* SFPSTORE_MOD0_FMT_LO16 */ : static_cast<std::uint32_t>(INSTRUCTION_MODE);
-        TTI_SFPSTORE(p_sfpu::LREG0, STORE_MODE, ADDR_MOD_3, upper_face_addr + column_offset);
+        constexpr std::uint32_t RESULT_LREG =
+            (pool_type == PoolType::AVG && is_integer_mode) ? int_average_result_lreg<is_signed_int>() : p_sfpu::LREG0;
+        TTI_SFPSTORE(RESULT_LREG, STORE_MODE, ADDR_MOD_3, upper_face_addr + column_offset);
     }
 }
 
