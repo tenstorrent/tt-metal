@@ -135,6 +135,12 @@ class TtChronosTraceRunner:
             ttnn.synchronize_device(self.device)
         if not readback:
             return self._trace_output
+        return self.read_output()
+
+    def read_output(self) -> TraceExecutionResult:
+        """Download and unscale the last replay's output for the current inputs."""
+        if self._trace_output is None:
+            raise RuntimeError("capture() must be called before read_output()")
         return TraceExecutionResult(
             quantile_preds=self.model.postprocess_output(
                 self._trace_output,
@@ -164,15 +170,7 @@ class TtChronosTraceRunner:
         if not readback:
             return self._trace_output
         ttnn.synchronize_device(self.device)
-        return TraceExecutionResult(
-            quantile_preds=self.model.postprocess_output(
-                self._trace_output,
-                self._prepared.loc_scale,
-                num_output_patches=self._prepared.num_output_patches,
-                output_rows=self._prepared.output_rows,
-            ),
-            prepared=self._prepared,
-        )
+        return self.read_output()
 
     def release(self) -> None:
         import ttnn
