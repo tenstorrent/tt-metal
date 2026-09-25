@@ -297,10 +297,9 @@ struct H2HSocket::Impl {
         }
     }
 
-    // 768 KiB: a flush is a fixed ~7.2 us round trip, and at the measured 12.18 GB/s
-    // marginal rate that many bytes puts its cost near 10% of the transfer -- 55 frames at
-    // 14 KB, 3 at 256 KB. Bytes rather than frames so one constant spans the whole sweep.
-    static constexpr uint64_t kFlushWatermark = 768u * 1024u;
+    // 12 MiB, measured: a sweep from 64 KiB to 16 MiB peaked here (9.70 vs 8.79 at 1 MiB),
+    // and the run coalescer's own output is ~1 MiB, so nothing below that has any effect.
+    static constexpr uint64_t kFlushWatermark = 12288u * 1024u;
     // Overridable so the right value can be swept without a rebuild: the measured wire rate
     // moved 10.67 -> 10.04 GB/s when batches grew 1 MB -> 2.7 MB, so it is worth tuning.
     static uint64_t watermark_bytes() {
