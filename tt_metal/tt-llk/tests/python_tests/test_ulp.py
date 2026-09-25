@@ -25,7 +25,6 @@ from helpers.ulp import (
     _MIN_LANES_FOR_P95,
     _MIN_LANES_FOR_P99,
     _ULP_DTYPES,
-    INTEGER_FORMATS,
     MAX_MEANINGFUL_ULP,
     NEAR_ZERO_FRACTION,
     ULP_FORMATS,
@@ -105,20 +104,6 @@ def test_adjacent_representable_values_are_one_step(dtype, value):
 def test_n_representable_steps_read_as_n(dtype, steps):
     golden = _t([1.0], dtype)
     assert int(ulp_distance(golden, _step_up(1.0, dtype, steps=steps))[0]) == steps
-
-
-@pytest.mark.parametrize("dtype", FLOAT_DTYPES, ids=str)
-def test_the_distance_is_symmetric_and_shape_preserving(dtype):
-    """An int64 tensor the shape of its inputs, and the same whichever side is golden."""
-    torch.manual_seed(0)
-    golden = torch.randn(3, 5, 7, dtype=torch.float32).to(dtype)
-    result = golden.clone()
-    flat = result.reshape(-1)
-    flat[::3] = torch.nextafter(flat[::3], torch.full_like(flat[::3], float("inf")))
-    forward = ulp_distance(golden, result)
-    assert forward.shape == golden.shape and forward.dtype == torch.int64
-    assert torch.equal(forward, ulp_distance(result, golden))
-    assert int(forward.max()) == 1
 
 
 @pytest.mark.parametrize("dtype", FLOAT_DTYPES, ids=str)
@@ -437,6 +422,15 @@ def test_ulp_stats_keeps_unmeasurable_lanes_out_of_the_aggregates():
     assert stats["worst_index"] == 3
 
 
+def test_the_worst_index_is_a_flat_index_into_the_input():
+    golden = torch.ones(3, 4, dtype=torch.bfloat16)
+    result = golden.clone()
+    result[2, 1] = _step_up(1.0, torch.bfloat16, steps=5)[0]
+    stats = ulp_stats(ulp_distance(golden, result))
+    assert stats["max"] == 5
+    assert stats["worst_index"] == 2 * 4 + 1
+
+
 def test_the_quantiles_fall_back_to_the_max_below_their_thresholds():
     """Borrowed from ttnn: a quantile over 5 elements is not a percentile."""
     stats = ulp_stats(_t([0, 0, 0, 9, 0], torch.int64))
@@ -466,6 +460,33 @@ def test_ulp_stats_on_an_all_unmeasurable_tensor():
     assert stats["worst_index"] is None
     assert stats["max"] == 0
     assert all(math.isnan(stats[key]) for key in ("mean", "p95", "p99", "exact_frac"))
+
+
+def test_the_failure_message_locates_the_lane_and_sizes_its_step():
+    """A ULP verdict is only useful if it names the point: which lane, what the hardware
+    produced there, and what one step is worth at that value."""
+    golden = torch.ones(8, dtype=torch.bfloat16)
+    result = golden.clone()
+    result[5] = _step_up(1.0, torch.bfloat16, steps=7)[0]
+    message = ulp_failure_message(
+        golden, result, ulp_distance(golden, result), DataFormat.Float16_b, max_ulp=3
+    )
+    assert "max 7 ULP @ [5]" in message
+    assert repr(float(result[5])) in message
+    # The step is the *upward* gap at 1.0, since the result moved up. Against the constant
+    # rather than against local_step(), which is the function the message already called.
+    assert f"{ABOVE_ONE:.6e}" in message
+
+
+def test_the_message_builder_can_reuse_stats_it_was_given():
+    """The verdict already computed them; building the message must not pay again."""
+    golden = torch.ones(8, dtype=torch.bfloat16)
+    result = golden.clone()
+    result[3] = _step_up(1.0, torch.bfloat16, steps=4)[0]
+    distance = ulp_distance(golden, result)
+    assert ulp_failure_message(
+        golden, result, distance, DataFormat.Float16_b, stats=ulp_stats(distance)
+    ) == ulp_failure_message(golden, result, distance, DataFormat.Float16_b)
 
 
 @pytest.mark.parametrize("dtype", FLOAT_DTYPES, ids=str)
@@ -715,6 +736,34 @@ def test_ulp_distance_refuses_what_it_cannot_measure(
         ulp_distance(golden, result)
 
 
+@pytest.mark.parametrize("dtype", [torch.float64, torch.int32, torch.bool], ids=str)
+def test_the_step_and_the_flush_default_refuse_an_unmeasured_dtype(dtype):
+    """``.get(dtype, True)`` invented an answer for a dtype ``ulp_distance`` refuses, on
+    the error-hiding polarity: ``local_step(1.0, torch.float64)`` handed back ``2**-52``.
+    ``local_step`` needs its own guard, since an explicit ``flush_subnormals=`` skips the
+    lookup."""
+    with _refuses("unsupported dtype"):
+        flushes_subnormals(dtype)
+    with _refuses("unsupported dtype"):
+        local_step(1.0, dtype)
+    with _refuses("unsupported dtype"):
+        local_step(1.0, dtype, flush_subnormals=True)
+
+
+@pytest.mark.parametrize(
+    "fmt",
+    [DataFormat.Bfp4_b, DataFormat.Bfp2_b, DataFormat.MxFp8P, DataFormat.Tf32],
+    ids=lambda f: f.name,
+)
+def test_the_verdict_refuses_a_format_with_no_per_element_ulp(fmt):
+    """``fmt`` is not only a label: ``format_dict`` collapses these onto
+    ``torch.bfloat16``, so a verdict labelled ``Bfp2_b`` would come back measured in
+    bfloat16 steps -- the measurement ``ulp_dtype`` exists to refuse."""
+    values = torch.ones(4, dtype=torch.bfloat16)
+    with _refuses("no per-element ULP"):
+        within_ulp(values, values.clone(), max_ulp=1, fmt=fmt)
+
+
 @pytest.mark.parametrize(
     "fmt, wrong",
     [
@@ -746,6 +795,17 @@ def test_the_verdict_refuses_a_mask_it_would_otherwise_broadcast(shape):
         ulp_stats(ulp_distance(golden, golden.clone()), mask)
 
 
+def test_the_verdict_refuses_a_non_boolean_mask():
+    """The selection is combined with ``&``. An integer mask makes that bitwise, where a
+    truthy ``2`` becomes ``2 & 1 == 0`` and drops the lane it was meant to select."""
+    golden = torch.ones(2, 6, dtype=torch.bfloat16)
+    mask = torch.full((2, 6), 2, dtype=torch.int64)
+    with _refuses("mask must be bool"):
+        within_ulp(golden, golden.clone(), max_ulp=1, mask=mask)
+    with _refuses("mask must be bool"):
+        ulp_stats(ulp_distance(golden, golden.clone()), mask)
+
+
 @pytest.mark.parametrize("dtype", FLOAT_DTYPES, ids=str)
 def test_the_threshold_warning_fires_past_one_binade(dtype):
     assert MAX_MEANINGFUL_ULP[dtype] == 1 << MANTISSA_BITS[dtype]
@@ -756,6 +816,29 @@ def test_the_threshold_warning_fires_past_one_binade(dtype):
 # ─────────────────────────────────────────────────────────────────────────────
 # Shape, symmetry and layout
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("dtype", FLOAT_DTYPES, ids=str)
+def test_the_distance_is_symmetric_and_shape_preserving(dtype):
+    torch.manual_seed(0)
+    golden = torch.randn(3, 5, 7, dtype=torch.float32).to(dtype)
+    result = golden.clone()
+    flat = result.reshape(-1)
+    flat[::3] = torch.nextafter(flat[::3], torch.full_like(flat[::3], float("inf")))
+
+    forward = ulp_distance(golden, result)
+    assert forward.shape == golden.shape
+    assert forward.dtype == torch.int64
+    assert torch.equal(forward, ulp_distance(result, golden))
+    assert int(forward.max()) == 1
+
+
+@pytest.mark.parametrize("dtype", FLOAT_DTYPES, ids=str)
+def test_identical_tensors_are_zero_steps_apart(dtype):
+    torch.manual_seed(0)
+    values = torch.randn(64, dtype=torch.float32).to(dtype)
+    assert int(ulp_distance(values, values.clone()).max()) == 0
+    assert within_ulp(values, values.clone(), max_ulp=0)[0]
 
 
 def test_a_non_contiguous_input_is_measured_correctly():
@@ -1027,35 +1110,6 @@ def test_the_verdict_reproduces_every_gate_verdict_including_the_floor():
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_the_failure_message_locates_the_lane_and_sizes_its_step():
-    """The inner builder, directly: `ulp_verdict_message` wraps it, so a regression in
-    the line the gate prints would otherwise only be caught by a substring match on a
-    NaN case. A ULP verdict is only useful if it names the point -- which lane, what the
-    hardware produced there, and what one step is worth at that value."""
-    golden = torch.ones(8, dtype=torch.bfloat16)
-    result = golden.clone()
-    result[5] = _step_up(1.0, torch.bfloat16, steps=7)[0]
-    message = ulp_failure_message(
-        golden, result, ulp_distance(golden, result), DataFormat.Float16_b, max_ulp=3
-    )
-    assert "max 7 ULP @ [5]" in message
-    assert repr(float(result[5])) in message
-    # The step is the *upward* gap at 1.0, since the result moved up. Against the constant
-    # rather than against local_step(), which is the function the message already called.
-    assert f"{ABOVE_ONE:.6e}" in message
-
-
-def test_the_message_builder_can_reuse_stats_it_was_given():
-    """The verdict already computed them; building the message must not pay again."""
-    golden = torch.ones(8, dtype=torch.bfloat16)
-    result = golden.clone()
-    result[3] = _step_up(1.0, torch.bfloat16, steps=4)[0]
-    distance = ulp_distance(golden, result)
-    assert ulp_failure_message(
-        golden, result, distance, DataFormat.Float16_b, stats=ulp_stats(distance)
-    ) == ulp_failure_message(golden, result, distance, DataFormat.Float16_b)
-
-
 def test_a_missing_nan_is_named_rather_than_reported_as_zero_steps():
     """A NaN lane is UNMEASURABLE and drops out of the statistics, so a verdict that
     failed only on a missing NaN reported "max 0 ULP (budget 0)" -- true, and useless.
@@ -1073,6 +1127,39 @@ def test_a_missing_nan_is_named_rather_than_reported_as_zero_steps():
     )
     assert message.startswith("non-finite disagreement @ [1]")
     assert "max 0 ULP" in message  # the step summary is still there, as detail
+
+
+def test_an_agreeing_verdict_has_no_disagreement_line():
+    values = _t([1.0, float("nan"), float("inf")], torch.float32)
+    assert (
+        nonfinite_disagreement_summary(values, values.clone(), DataFormat.Float32)
+        is None
+    )
+
+
+def test_the_disagreement_count_covers_every_bad_lane():
+    nan = float("nan")
+    golden = _t([nan, nan, nan, 1.0], torch.float32)
+    result = _t([1.0, 2.0, nan, 1.0], torch.float32)
+    summary = nonfinite_disagreement_summary(golden, result, DataFormat.Float32)
+    assert "@ [0]" in summary and "2 such lane(s)" in summary
+
+
+def test_the_verdict_and_the_gate_describe_a_failure_the_same_way():
+    """One message builder for both, so they cannot drift apart."""
+    golden, result = _t([1.0, float("nan")], torch.float32), _t(
+        [1.0, 1.0], torch.float32
+    )
+    _, from_verdict = within_ulp(golden, result, max_ulp=0, fmt=DataFormat.Float32)
+    from_builder = ulp_verdict_message(
+        golden,
+        result,
+        ulp_distance(golden, result),
+        DataFormat.Float32,
+        mask=torch.ones_like(golden, dtype=torch.bool),
+        max_ulp=0,
+    )
+    assert from_verdict == from_builder
 
 
 def test_a_failure_at_the_top_of_the_range_reports_a_usable_step():
@@ -1120,7 +1207,9 @@ TORCH_INT_DTYPES = (
 )
 
 
-@pytest.mark.parametrize("fmt", INTEGER_FORMATS, ids=lambda f: f.name)
+@pytest.mark.parametrize(
+    "fmt", [f for f in DataFormat if f.is_integer()], ids=lambda f: f.name
+)
 def test_no_integer_format_is_ulp_gateable(fmt):
     assert not has_ulp_gate(fmt) and fmt not in ULP_FORMATS
     with _refuses("no per-element ULP"):

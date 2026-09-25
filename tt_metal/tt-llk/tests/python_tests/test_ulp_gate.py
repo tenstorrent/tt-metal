@@ -16,7 +16,7 @@ import torch
 from helpers.format_config import DataFormat
 from helpers.llk_params import format_dict
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
-from helpers.ulp import INTEGER_FORMATS, MANTISSA_BITS_FOR_ULP, ulp_distance, ulp_dtype
+from helpers.ulp import MANTISSA_BITS_FOR_ULP, ulp_distance, ulp_dtype
 from helpers.utils import PCC_SIGNAL_FLOOR, calculate_pcc, passed_test, tolerances
 
 TILE_SIZE = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
@@ -619,7 +619,9 @@ def test_the_near_zero_band_follows_the_mask_through_passed_test():
 # ── Integers are not ULP territory ──────────────────────────────────────────
 
 
-@pytest.mark.parametrize("fmt", INTEGER_FORMATS, ids=lambda f: f.name)
+@pytest.mark.parametrize(
+    "fmt", [f for f in DataFormat if f.is_integer()], ids=lambda f: f.name
+)
 def test_a_budget_on_an_integer_format_raises(fmt):
     """ULP is not a weaker gate for an integer format, it is a meaningless one: the
     values are exact and the only sensible verdict is bit equality."""
