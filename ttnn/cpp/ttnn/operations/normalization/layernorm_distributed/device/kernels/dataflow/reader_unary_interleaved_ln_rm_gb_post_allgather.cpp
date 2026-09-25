@@ -76,7 +76,11 @@ void kernel_main() {
     constexpr auto gamma_is_row_major = get_arg(args::gamma_is_row_major);
     constexpr auto beta_is_row_major = get_arg(args::beta_is_row_major);
     constexpr auto dfb_length = get_arg(args::dfb_length);
-    constexpr auto Wt = get_arg(args::Wt);  // Width in tiles
+    constexpr auto Wt = get_arg(args::Wt);  // Width in tiles of this core's column slice
+    // Full global row width in tiles. Equals Wt on the 1D path, so the per-row rebase below is a
+    // no-op there; on the 2D path Wt is only Wt_full / cores_y and rows must be rebased by the
+    // full width, exactly as the pre-all-gather reader now does.
+    constexpr auto Wt_full = get_arg(args::Wt_full);
     constexpr auto reduce_factor = get_arg(args::reduce_factor);
 
     const auto src_a = TensorAccessor(tensor::src);
@@ -121,6 +125,11 @@ void kernel_main() {
     constexpr uint32_t dfb_iterations = Wt / dfb_length;
     constexpr uint32_t dfb_leftovers = Wt % dfb_length;
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
+        // Rebase to this local row's first input tile. Row ncht of this core starts at
+        // tile_offset + ncht * Wt_full. Previously inp_tile_idx was only incremented, which is
+        // correct solely when Wt == Wt_full (1D); under the 2D core grid every row after the
+        // first was read from a tile belonging to a neighbouring core.
+        inp_tile_idx = tile_offset + ncht * Wt_full;
         // Read stats tiles
         dfb_stats_buf.reserve_back(stats_tiles_cols);
         uint32_t stats_write_offset = 0;
