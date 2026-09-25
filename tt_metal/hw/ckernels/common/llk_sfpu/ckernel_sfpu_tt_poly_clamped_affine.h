@@ -6,7 +6,9 @@
 #include "ckernel_defs.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_relu.h"
+#ifndef ENV_LLK_INFRA
 #include "api/compute/pack.h"
+#endif
 
 namespace ckernel::sfpu::ttpoly {
 #if defined(ARCH_WORMHOLE)
@@ -32,6 +34,7 @@ inline void init_clamped_affine() {
         TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_UPPER, Config::kInterceptBits >> 16);
         TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_LOWER, Config::kInterceptBits & 0xffffu);
     }
+#ifndef ENV_LLK_INFRA
     if constexpr (Config::kRoute == 4u) {
         // Packer clamp: STACC_RELU applies the selected bound to datums leaving
         // Dst after early format conversion, at zero per-tile cost. This is a
@@ -48,15 +51,18 @@ inline void init_clamped_affine() {
             pack_relu_config(ckernel::ReluConfig::zero());
         }
     }
+#endif
 }
 
 template <typename Config>
 inline void finish_clamped_affine() {
+#ifndef ENV_LLK_INFRA
     if constexpr (Config::kRoute == 4u) {
         // STACC_RELU outlives this program: disarm after the final
         // pack/release, mirroring ttpoly_compiled_program_finish.
         pack_relu_config(ckernel::ReluConfig::none());
     }
+#endif
 }
 
 template <typename Config>

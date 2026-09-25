@@ -50,3 +50,21 @@ void hardsigmoid_init() {
 }
 
 }  // namespace ckernel::sfpu
+
+#if !defined(TT_POLY_LLK_DISABLE)
+#include "ckernel_sfpu_hardsigmoid_bf16.h"
+#endif
+
+namespace ckernel::sfpu {
+
+#if !defined(TT_POLY_LLK_DISABLE)
+template <int ITERATIONS = 8>
+inline void calculate_hardsigmoid_tt_poly_bf16() {
+    ckernel::sfpu::ttpoly::calculate_clamped_affine<ttpoly_generated::HardsigmoidBf16Config, ITERATIONS>();
+}
+inline void init_hardsigmoid_tt_poly_bf16() {
+    ckernel::sfpu::ttpoly::init_clamped_affine<ttpoly_generated::HardsigmoidBf16Config>();
+}
+#endif
+
+}  // namespace ckernel::sfpu
