@@ -14,6 +14,7 @@ from contextlib import contextmanager
 import pytest
 import torch
 from helpers.format_config import DataFormat
+from helpers.llk_params import format_dict
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
 from helpers.ulp import MANTISSA_BITS_FOR_ULP, ulp_distance, ulp_dtype
 from helpers.utils import PCC_SIGNAL_FLOOR, calculate_pcc, passed_test, tolerances
@@ -658,3 +659,19 @@ def test_the_near_zero_band_follows_the_mask_through_passed_test():
     # Unmasked, 1e6 stretches the band past 1.0 and the floor rescues every lane.
     assert passed_test(golden, result, fmt, **kwargs)
     assert not passed_test(golden, result, fmt, mask=keep, **kwargs)
+
+
+# ── Integers are not ULP territory ──────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "fmt", [f for f in DataFormat if f.is_integer()], ids=lambda f: f.name
+)
+def test_a_budget_on_an_integer_format_raises(fmt):
+    """ULP is not a weaker gate for an integer format, it is a meaningless one: the
+    values are exact and the only sensible verdict is bit equality."""
+    golden = torch.ones(TILE_SIZE, dtype=format_dict[fmt])
+    with _refuses("no per-element ULP"):
+        passed_test(golden, golden.clone(), fmt, max_ulp=0)
+    # ...and refusing the budget must not have broken the ordinary path.
+    assert passed_test(golden, golden.clone(), fmt)
