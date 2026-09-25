@@ -456,7 +456,7 @@ def test_model_tp_prefill_paged_slots_long(mesh_device, T, traced, reset_seeds, 
     omodel, args, opt, _ = _build(1)
     vocab = args.vocab_size
     prompts = [torch.randint(0, vocab, (T,)).tolist() for _ in range(B)]
-    oracle_pf, oracle_rec, oracle_dec = [], [], [[] for _ in range(B)]
+    oracle_pf, oracle_rec, oracle_dec, oracle_fed = [], [], [[] for _ in range(B)], []
     for u in range(B):
         lg = omodel.prefill_traced_chunked(torch.tensor([prompts[u]], dtype=torch.long), opt, actual_len=T)
         ttnn.synchronize_device(mesh_device)
@@ -470,7 +470,14 @@ def test_model_tp_prefill_paged_slots_long(mesh_device, T, traced, reset_seeds, 
         )
         pos = T
         fed = int(torch.argmax(oracle_pf[u]))
+        # Teacher-force: record the token fed into each step so the batched path below replays
+        # the SAME input sequence rather than following its own greedy argmax. A tiny numeric
+        # delta at any step can flip a near-tied argmax, and once the two paths feed different
+        # tokens forward, every later step legitimately diverges (different question, not a
+        # wrong answer) -- teacher-forcing isolates per-step compute correctness from that cascade.
+        fed_tokens_u = []
         for _ in range(N_DEC):
+            fed_tokens_u.append(fed)
             dev = omodel.prepare_inputs_decode(
                 torch.tensor([[fed]], dtype=torch.int32), torch.tensor([pos], dtype=torch.int32), opt
             )
@@ -479,6 +486,7 @@ def test_model_tp_prefill_paged_slots_long(mesh_device, T, traced, reset_seeds, 
             oracle_dec[u].append(ls[0, 0, :vocab].float())
             fed = int(torch.argmax(ls[0, 0, :vocab]))
             pos += 1
+        oracle_fed.append(fed_tokens_u)
     n_gdn = len(oracle_rec[0])
     omodel.free_kv_caches()
     del omodel
@@ -515,15 +523,15 @@ def test_model_tp_prefill_paged_slots_long(mesh_device, T, traced, reset_seeds, 
     ]
     batched_dec = [[] for _ in range(B)]
     pos = list(prompt_lens)
-    fed = [int(torch.argmax(batched_pf[u])) for u in range(B)]
-    for _ in range(N_DEC):
-        tokens_step = torch.tensor([[fed[u]] for u in range(B)], dtype=torch.int32)
+    # Teacher-forced: feed the oracle's own per-step tokens rather than each user's own argmax,
+    # so a near-tied logit flip at one step can't cascade into an unrelated divergence downstream.
+    for s in range(N_DEC):
+        tokens_step = torch.tensor([[oracle_fed[u][s]] for u in range(B)], dtype=torch.int32)
         dev = bmodel.prepare_inputs_decode(tokens_step, torch.tensor(pos, dtype=torch.int32), bpt)
         out, _ = bmodel.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
         ls = bmodel.process_output_decode(out, B)
         for u in range(B):
             batched_dec[u].append(ls[u, 0, :vocab].float())
-            fed[u] = int(torch.argmax(ls[u, 0, :vocab]))
         pos = [p + 1 for p in pos]
     bmodel.free_kv_caches()
     del bmodel
@@ -760,6 +768,7 @@ def test_model_tp_prefill_chunked_batched(mesh_device, B, seqlen, reset_seeds, e
     oracle_pf = []
     oracle_rec = []  # per user: list over GDN layers of device-0 rec_state shard [Nv,Dk,Dv]
     oracle_dec = [[] for _ in range(B)]
+    oracle_fed = []  # per user: token fed into each decode step (for teacher-forcing the batched path)
     for u in range(B):
         toks = torch.tensor([prompts[u]], dtype=torch.long)
         lg = omodel.prefill_traced_chunked(toks, opt, actual_len=prompt_lens[u])
@@ -774,7 +783,14 @@ def test_model_tp_prefill_chunked_batched(mesh_device, B, seqlen, reset_seeds, e
         )
         pos = prompt_lens[u]
         fed = int(torch.argmax(oracle_pf[u]))
+        # Teacher-force: record the token fed into each step so the batched path below replays
+        # the SAME input sequence rather than following its own greedy argmax. A tiny numeric
+        # delta at any step can flip a near-tied argmax, and once the two paths feed different
+        # tokens forward, every later step legitimately diverges (different question, not a
+        # wrong answer) -- teacher-forcing isolates per-step compute correctness from that cascade.
+        fed_tokens_u = []
         for s in range(N_DEC):
+            fed_tokens_u.append(fed)
             dev = omodel.prepare_inputs_decode(
                 torch.tensor([[fed]], dtype=torch.int32), torch.tensor([pos], dtype=torch.int32), opt
             )
@@ -783,6 +799,7 @@ def test_model_tp_prefill_chunked_batched(mesh_device, B, seqlen, reset_seeds, e
             oracle_dec[u].append(ls[0, 0, :vocab].float())
             fed = int(torch.argmax(ls[0, 0, :vocab]))
             pos += 1
+        oracle_fed.append(fed_tokens_u)
     n_gdn = len(oracle_rec[0])
     omodel.free_kv_caches()
     del omodel
@@ -802,16 +819,16 @@ def test_model_tp_prefill_chunked_batched(mesh_device, B, seqlen, reset_seeds, e
     ]
     batched_dec = [[] for _ in range(B)]
     pos = list(prompt_lens)
-    fed = [int(torch.argmax(batched_pf[u])) for u in range(B)]
+    # Teacher-forced: feed the oracle's own per-step tokens rather than each user's own argmax,
+    # so a near-tied logit flip at one step can't cascade into an unrelated divergence downstream.
     for s in range(N_DEC):
-        tokens_step = torch.tensor([[fed[u]] for u in range(B)], dtype=torch.int32)
+        tokens_step = torch.tensor([[oracle_fed[u][s]] for u in range(B)], dtype=torch.int32)
         pos_t = torch.tensor(pos, dtype=torch.int32)
         dev = bmodel.prepare_inputs_decode(tokens_step, pos_t, bpt)
         out, _ = bmodel.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
         ls = bmodel.process_output_decode(out, B)
         for u in range(B):
             batched_dec[u].append(ls[u, 0, :vocab].float())
-            fed[u] = int(torch.argmax(ls[u, 0, :vocab]))
         pos = [p + 1 for p in pos]
     bmodel.free_kv_caches()
     del bmodel
