@@ -104,3 +104,1454 @@ tasks:
       ledger_tasks: '>= 1'
   paths:
   - models/demos/gemma4_a4b_d_p/bringup/tasks.yaml
+- id: PL.1
+  title: 'Plan: fits per-chip DRAM (from the checkpoint), every step mapped, ledger valid, approved'
+  step: plan
+  deps:
+  - PL.0
+  - B.1
+  gate:
+    cmd: python -m models.demos.common.bringup.plan.check_plan
+    metrics:
+      plan_fits: == 1
+      unplaced_tensors: == 0
+      plan_errors: == 0
+      component_errors: == 0
+      ledger_errors: == 0
+      plan_approved: == 1
+  paths:
+  - models/demos/gemma4_a4b_d_p/bringup/plan.yaml
+  - models/demos/gemma4_a4b_d_p/bringup/plan.md
+  - models/demos/gemma4_a4b_d_p/bringup/components.yaml
+  - models/demos/gemma4_a4b_d_p/bringup/approvals.yaml
+  - models/demos/gemma4_a4b_d_p/bringup/results/plan_memory.json
+- id: C.sliding.attn_norm
+  title: sliding attn_norm (norm) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_attn_norm.py
+    metrics:
+      pcc_attn_norm_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_attn_norm.py
+  freeze_extra: &id002
+  - /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json
+  paths: &id003
+  - models/demos/gemma4_a4b_d_p/tt
+  - models/demos/gemma4_a4b_d_p/bringup/hooks.py
+  brief:
+    block_type: sliding
+    step: attn_norm
+    kind: norm
+    layer: 0
+    stateful: false
+- id: S.sliding.01
+  title: 'sliding block with steps 1-1 on device (last: attn_norm)'
+  step: implement
+  deps:
+  - C.sliding.attn_norm
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_01_attn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_01_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    swapped:
+    - attn_norm
+    layer: 0
+- id: C.sliding.attention
+  title: sliding attention (attention) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_attention.py
+    metrics:
+      pcc_attention_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    step: attention
+    kind: attention
+    layer: 0
+    stateful: true
+- id: S.sliding.02
+  title: 'sliding block with steps 1-2 on device (last: attention)'
+  step: implement
+  deps:
+  - C.sliding.attention
+  - S.sliding.01
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_02_attention.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_02_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    swapped:
+    - attn_norm
+    - attention
+    layer: 0
+- id: C.sliding.post_attn_norm
+  title: sliding post_attn_norm (norm) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_post_attn_norm.py
+    metrics:
+      pcc_post_attn_norm_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_post_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    step: post_attn_norm
+    kind: norm
+    layer: 0
+    stateful: false
+- id: S.sliding.03
+  title: 'sliding block with steps 1-3 on device (last: post_attn_norm)'
+  step: implement
+  deps:
+  - C.sliding.post_attn_norm
+  - S.sliding.02
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_03_post_attn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_03_post_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    layer: 0
+- id: C.sliding.attn_residual
+  title: sliding attn_residual (residual) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_attn_residual.py
+    metrics:
+      pcc_attn_residual_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    step: attn_residual
+    kind: residual
+    layer: 0
+    stateful: false
+- id: S.sliding.04
+  title: 'sliding block with steps 1-4 on device (last: attn_residual)'
+  step: implement
+  deps:
+  - C.sliding.attn_residual
+  - S.sliding.03
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_04_attn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_04_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    layer: 0
+- id: C.sliding.ffn_norm
+  title: sliding ffn_norm (norm) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_ffn_norm.py
+    metrics:
+      pcc_ffn_norm_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    step: ffn_norm
+    kind: norm
+    layer: 0
+    stateful: false
+- id: S.sliding.05
+  title: 'sliding block with steps 1-5 on device (last: ffn_norm)'
+  step: implement
+  deps:
+  - C.sliding.ffn_norm
+  - S.sliding.04
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_05_ffn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_05_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    layer: 0
+- id: C.sliding.mlp
+  title: sliding mlp (mlp) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_mlp.py
+    metrics:
+      pcc_mlp_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_mlp.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    step: mlp
+    kind: mlp
+    layer: 0
+    stateful: false
+- id: S.sliding.06
+  title: 'sliding block with steps 1-6 on device (last: mlp)'
+  step: implement
+  deps:
+  - C.sliding.mlp
+  - S.sliding.05
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_06_mlp.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_06_mlp.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    - mlp
+    layer: 0
+- id: C.sliding.post_mlp_norm
+  title: sliding post_mlp_norm (norm) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_post_mlp_norm.py
+    metrics:
+      pcc_post_mlp_norm_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_post_mlp_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    step: post_mlp_norm
+    kind: norm
+    layer: 0
+    stateful: false
+- id: S.sliding.07
+  title: 'sliding block with steps 1-7 on device (last: post_mlp_norm)'
+  step: implement
+  deps:
+  - C.sliding.post_mlp_norm
+  - S.sliding.06
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_07_post_mlp_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_07_post_mlp_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    - mlp
+    - post_mlp_norm
+    layer: 0
+- id: C.sliding.router
+  title: sliding router (router) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_router.py
+    metrics:
+      pcc_router_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    step: router
+    kind: router
+    layer: 0
+    stateful: false
+- id: S.sliding.08
+  title: 'sliding block with steps 1-8 on device (last: router)'
+  step: implement
+  deps:
+  - C.sliding.router
+  - S.sliding.07
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_08_router.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_08_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    - mlp
+    - post_mlp_norm
+    - router
+    layer: 0
+- id: C.sliding.moe_norm
+  title: sliding moe_norm (norm) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_moe_norm.py
+    metrics:
+      pcc_moe_norm_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_moe_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    step: moe_norm
+    kind: norm
+    layer: 0
+    stateful: false
+- id: S.sliding.09
+  title: 'sliding block with steps 1-9 on device (last: moe_norm)'
+  step: implement
+  deps:
+  - C.sliding.moe_norm
+  - S.sliding.08
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_09_moe_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_09_moe_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    - mlp
+    - post_mlp_norm
+    - router
+    - moe_norm
+    layer: 0
+- id: C.sliding.experts
+  title: sliding experts (moe) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_experts.py
+    metrics:
+      pcc_experts_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_experts.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    step: experts
+    kind: moe
+    layer: 0
+    stateful: false
+- id: S.sliding.10
+  title: 'sliding block with steps 1-10 on device (last: experts)'
+  step: implement
+  deps:
+  - C.sliding.experts
+  - S.sliding.09
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_10_experts.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_10_experts.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    - mlp
+    - post_mlp_norm
+    - router
+    - moe_norm
+    - experts
+    layer: 0
+- id: C.sliding.post_moe_norm
+  title: sliding post_moe_norm (norm) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_post_moe_norm.py
+    metrics:
+      pcc_post_moe_norm_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_post_moe_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    step: post_moe_norm
+    kind: norm
+    layer: 0
+    stateful: false
+- id: S.sliding.11
+  title: 'sliding block with steps 1-11 on device (last: post_moe_norm)'
+  step: implement
+  deps:
+  - C.sliding.post_moe_norm
+  - S.sliding.10
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_11_post_moe_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_11_post_moe_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    - mlp
+    - post_mlp_norm
+    - router
+    - moe_norm
+    - experts
+    - post_moe_norm
+    layer: 0
+- id: C.sliding.ffn_combine
+  title: sliding ffn_combine (residual) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_ffn_combine.py
+    metrics:
+      pcc_ffn_combine_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_ffn_combine.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    step: ffn_combine
+    kind: residual
+    layer: 0
+    stateful: false
+- id: S.sliding.12
+  title: 'sliding block with steps 1-12 on device (last: ffn_combine)'
+  step: implement
+  deps:
+  - C.sliding.ffn_combine
+  - S.sliding.11
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_12_ffn_combine.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_12_ffn_combine.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    - mlp
+    - post_mlp_norm
+    - router
+    - moe_norm
+    - experts
+    - post_moe_norm
+    - ffn_combine
+    layer: 0
+- id: C.sliding.post_ffn_norm
+  title: sliding post_ffn_norm (norm) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_post_ffn_norm.py
+    metrics:
+      pcc_post_ffn_norm_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_post_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    step: post_ffn_norm
+    kind: norm
+    layer: 0
+    stateful: false
+- id: S.sliding.13
+  title: 'sliding block with steps 1-13 on device (last: post_ffn_norm)'
+  step: implement
+  deps:
+  - C.sliding.post_ffn_norm
+  - S.sliding.12
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_13_post_ffn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_13_post_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    - mlp
+    - post_mlp_norm
+    - router
+    - moe_norm
+    - experts
+    - post_moe_norm
+    - ffn_combine
+    - post_ffn_norm
+    layer: 0
+- id: C.sliding.ffn_residual
+  title: sliding ffn_residual (residual) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_ffn_residual.py
+    metrics:
+      pcc_ffn_residual_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    step: ffn_residual
+    kind: residual
+    layer: 0
+    stateful: false
+- id: S.sliding.14
+  title: 'sliding block with steps 1-14 on device (last: ffn_residual)'
+  step: implement
+  deps:
+  - C.sliding.ffn_residual
+  - S.sliding.13
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_14_ffn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_14_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    - mlp
+    - post_mlp_norm
+    - router
+    - moe_norm
+    - experts
+    - post_moe_norm
+    - ffn_combine
+    - post_ffn_norm
+    - ffn_residual
+    layer: 0
+- id: C.global.attn_norm
+  title: global attn_norm (norm) on device, layer 5
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_attn_norm.py
+    metrics:
+      pcc_attn_norm_L05: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    step: attn_norm
+    kind: norm
+    layer: 5
+    stateful: false
+- id: S.global.01
+  title: 'global block with steps 1-1 on device (last: attn_norm)'
+  step: implement
+  deps:
+  - C.global.attn_norm
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_01_attn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_01_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    swapped:
+    - attn_norm
+    layer: 5
+- id: C.global.attention
+  title: global attention (attention) on device, layer 5
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_attention.py
+    metrics:
+      pcc_attention_L05: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    step: attention
+    kind: attention
+    layer: 5
+    stateful: true
+- id: S.global.02
+  title: 'global block with steps 1-2 on device (last: attention)'
+  step: implement
+  deps:
+  - C.global.attention
+  - S.global.01
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_02_attention.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_02_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    swapped:
+    - attn_norm
+    - attention
+    layer: 5
+- id: C.global.post_attn_norm
+  title: global post_attn_norm (norm) on device, layer 5
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_post_attn_norm.py
+    metrics:
+      pcc_post_attn_norm_L05: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_post_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    step: post_attn_norm
+    kind: norm
+    layer: 5
+    stateful: false
+- id: S.global.03
+  title: 'global block with steps 1-3 on device (last: post_attn_norm)'
+  step: implement
+  deps:
+  - C.global.post_attn_norm
+  - S.global.02
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_03_post_attn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_03_post_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    layer: 5
+- id: C.global.attn_residual
+  title: global attn_residual (residual) on device, layer 5
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_attn_residual.py
+    metrics:
+      pcc_attn_residual_L05: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    step: attn_residual
+    kind: residual
+    layer: 5
+    stateful: false
+- id: S.global.04
+  title: 'global block with steps 1-4 on device (last: attn_residual)'
+  step: implement
+  deps:
+  - C.global.attn_residual
+  - S.global.03
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_04_attn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_04_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    layer: 5
+- id: C.global.ffn_norm
+  title: global ffn_norm (norm) on device, layer 5
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_ffn_norm.py
+    metrics:
+      pcc_ffn_norm_L05: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    step: ffn_norm
+    kind: norm
+    layer: 5
+    stateful: false
+- id: S.global.05
+  title: 'global block with steps 1-5 on device (last: ffn_norm)'
+  step: implement
+  deps:
+  - C.global.ffn_norm
+  - S.global.04
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_05_ffn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_05_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    layer: 5
+- id: C.global.mlp
+  title: global mlp (mlp) on device, layer 5
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_mlp.py
+    metrics:
+      pcc_mlp_L05: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_mlp.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    step: mlp
+    kind: mlp
+    layer: 5
+    stateful: false
+- id: S.global.06
+  title: 'global block with steps 1-6 on device (last: mlp)'
+  step: implement
+  deps:
+  - C.global.mlp
+  - S.global.05
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_06_mlp.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_06_mlp.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    - mlp
+    layer: 5
+- id: C.global.post_mlp_norm
+  title: global post_mlp_norm (norm) on device, layer 5
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_post_mlp_norm.py
+    metrics:
+      pcc_post_mlp_norm_L05: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_post_mlp_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    step: post_mlp_norm
+    kind: norm
+    layer: 5
+    stateful: false
+- id: S.global.07
+  title: 'global block with steps 1-7 on device (last: post_mlp_norm)'
+  step: implement
+  deps:
+  - C.global.post_mlp_norm
+  - S.global.06
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_07_post_mlp_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_07_post_mlp_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    - mlp
+    - post_mlp_norm
+    layer: 5
+- id: C.global.router
+  title: global router (router) on device, layer 5
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_router.py
+    metrics:
+      pcc_router_L05: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    step: router
+    kind: router
+    layer: 5
+    stateful: false
+- id: S.global.08
+  title: 'global block with steps 1-8 on device (last: router)'
+  step: implement
+  deps:
+  - C.global.router
+  - S.global.07
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_08_router.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_08_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    - mlp
+    - post_mlp_norm
+    - router
+    layer: 5
+- id: C.global.moe_norm
+  title: global moe_norm (norm) on device, layer 5
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_moe_norm.py
+    metrics:
+      pcc_moe_norm_L05: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_moe_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    step: moe_norm
+    kind: norm
+    layer: 5
+    stateful: false
+- id: S.global.09
+  title: 'global block with steps 1-9 on device (last: moe_norm)'
+  step: implement
+  deps:
+  - C.global.moe_norm
+  - S.global.08
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_09_moe_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_09_moe_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    - mlp
+    - post_mlp_norm
+    - router
+    - moe_norm
+    layer: 5
+- id: C.global.experts
+  title: global experts (moe) on device, layer 5
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_experts.py
+    metrics:
+      pcc_experts_L05: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_experts.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    step: experts
+    kind: moe
+    layer: 5
+    stateful: false
+- id: S.global.10
+  title: 'global block with steps 1-10 on device (last: experts)'
+  step: implement
+  deps:
+  - C.global.experts
+  - S.global.09
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_10_experts.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_10_experts.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    - mlp
+    - post_mlp_norm
+    - router
+    - moe_norm
+    - experts
+    layer: 5
+- id: C.global.post_moe_norm
+  title: global post_moe_norm (norm) on device, layer 5
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_post_moe_norm.py
+    metrics:
+      pcc_post_moe_norm_L05: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_post_moe_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    step: post_moe_norm
+    kind: norm
+    layer: 5
+    stateful: false
+- id: S.global.11
+  title: 'global block with steps 1-11 on device (last: post_moe_norm)'
+  step: implement
+  deps:
+  - C.global.post_moe_norm
+  - S.global.10
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_11_post_moe_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_11_post_moe_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    - mlp
+    - post_mlp_norm
+    - router
+    - moe_norm
+    - experts
+    - post_moe_norm
+    layer: 5
+- id: C.global.ffn_combine
+  title: global ffn_combine (residual) on device, layer 5
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_ffn_combine.py
+    metrics:
+      pcc_ffn_combine_L05: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_ffn_combine.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    step: ffn_combine
+    kind: residual
+    layer: 5
+    stateful: false
+- id: S.global.12
+  title: 'global block with steps 1-12 on device (last: ffn_combine)'
+  step: implement
+  deps:
+  - C.global.ffn_combine
+  - S.global.11
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_12_ffn_combine.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_12_ffn_combine.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    - mlp
+    - post_mlp_norm
+    - router
+    - moe_norm
+    - experts
+    - post_moe_norm
+    - ffn_combine
+    layer: 5
+- id: C.global.post_ffn_norm
+  title: global post_ffn_norm (norm) on device, layer 5
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_post_ffn_norm.py
+    metrics:
+      pcc_post_ffn_norm_L05: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_post_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    step: post_ffn_norm
+    kind: norm
+    layer: 5
+    stateful: false
+- id: S.global.13
+  title: 'global block with steps 1-13 on device (last: post_ffn_norm)'
+  step: implement
+  deps:
+  - C.global.post_ffn_norm
+  - S.global.12
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_13_post_ffn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_13_post_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    - mlp
+    - post_mlp_norm
+    - router
+    - moe_norm
+    - experts
+    - post_moe_norm
+    - ffn_combine
+    - post_ffn_norm
+    layer: 5
+- id: C.global.ffn_residual
+  title: global ffn_residual (residual) on device, layer 5
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_ffn_residual.py
+    metrics:
+      pcc_ffn_residual_L05: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    step: ffn_residual
+    kind: residual
+    layer: 5
+    stateful: false
+- id: S.global.14
+  title: 'global block with steps 1-14 on device (last: ffn_residual)'
+  step: implement
+  deps:
+  - C.global.ffn_residual
+  - S.global.13
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_14_ffn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_14_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    - mlp
+    - post_mlp_norm
+    - router
+    - moe_norm
+    - experts
+    - post_moe_norm
+    - ffn_combine
+    - post_ffn_norm
+    - ffn_residual
+    layer: 5
+- id: L.s4096
+  title: 'Ladder s4096: all chunks of 4096 in 2048'
+  step: integrate
+  deps:
+  - S.sliding.14
+  - S.global.14
+  - G.s4096
+  gate:
+    cmd: BRINGUP_RUNG=s4096 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      pcc_final_hidden: '>= 0.97'
+      top5_overlap: '>= 0.9'
+  device: true
+  paths: *id003
+- id: L.s16384
+  title: 'Ladder s16384: all chunks of 16384 in 8192'
+  step: integrate
+  deps:
+  - L.s4096
+  - G.s16384
+  gate:
+    cmd: BRINGUP_RUNG=s16384 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      pcc_final_hidden: '>= 0.97'
+      top5_overlap: '>= 0.9'
+  device: true
+  paths: *id003
+- id: L.last
+  title: 'Ladder last: last chunk after a golden prefix of 56320 in 5120'
+  step: integrate
+  deps:
+  - L.s16384
+  - G.s56320
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      pcc_final_hidden: '>= 0.97'
+      top5_overlap: '>= 0.9'
+  device: true
+  paths: *id003
+- id: L.s56320
+  title: 'Ladder s56320: all chunks of 56320 in 5120'
+  step: integrate
+  deps:
+  - L.last
+  - G.s56320
+  gate:
+    cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      pcc_final_hidden: '>= 0.97'
+      top5_overlap: '>= 0.9'
+  device: true
+  paths: *id003
+- id: K.1
+  title: Serving contract through the prefill engine API (layout, table, acks, engine input, read-back)
+  step: contract
+  deps:
+  - L.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+    metrics:
+      contract_checks_failed: == 0
+      acks_early: == 0
+      pcc_producer_kv_*: '>= 0.97'
+  device: true
+  paths:
+  - models/demos/gemma4_a4b_d_p/tt
+  - models/demos/common/prefill/adapter.py
+- id: X.1
+  title: Warm per-section, per-chip profile of one long chunk
+  step: perf
+  deps:
+  - L.s56320
+  gate:
+    cmd: TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh
+      --run-all models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      device_ms_total: '> 0'
+      profiled_programs: '>= 1'
+  device: true
+- id: X.2
+  title: Opportunity list ranked by measured device time
+  step: perf
+  deps:
+  - X.1
+  gate:
+    cmd: python -m models.demos.common.bringup.plan.opportunities --profile X.1
+    metrics:
+      opportunities_listed: '>= 1'
+  paths:
+  - models/demos/gemma4_a4b_d_p/bringup/opportunities.md
