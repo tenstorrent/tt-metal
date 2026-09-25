@@ -65,34 +65,57 @@ class EthCoreCheckData:
         self.mailbox = None
 
 
+class InvalidHeartbeatSignature(ValueError):
+    """A nonzero heartbeat word has an unsupported firmware signature."""
+
+
 class EthCore(ABC):
     """
     Base class for Ethernet cores that provides common functionality.
     """
 
     eth_core_definitions: EthCoreDefinitions
+    BASE_FW_HEARTBEAT_SIGNATURE: int
+    FABRIC_HEARTBEAT_SIGNATURE: int
+    # Both supported architectures put the signature in bits 31:16.
+    HEARTBEAT_SIGNATURE_SHIFT = 16
 
     def __init__(self, location: OnChipCoordinate, context: Context):
         self.location = location
         self.context = context
-        self._heartbeat_sample: int = 0
+        self._heartbeat_sample: int | None = None
         self._heartbeat_deadline: float | None = None
+        self._heartbeat_error: InvalidHeartbeatSignature | None = None
 
     @abstractmethod
     def port_status_to_string(self, port_status: int) -> str | None:
         """Convert port status value to a readable string."""
         pass
 
-    @abstractmethod
     def is_valid_heartbeat(self, value: int) -> bool:
         """Check the heartbeat format for this architecture."""
-        pass
+        return value >> self.HEARTBEAT_SIGNATURE_SHIFT in (
+            self.BASE_FW_HEARTBEAT_SIGNATURE,
+            self.FABRIC_HEARTBEAT_SIGNATURE,
+        )
+
+    def read_heartbeat(self) -> int | None:
+        """Read a valid heartbeat sample, or None if the word is still zero."""
+        value = read_word_from_device(self.location, self.eth_core_definitions.heartbeat, context=self.context)
+        if value == 0:
+            return None
+        if not self.is_valid_heartbeat(value):
+            raise InvalidHeartbeatSignature(f"Invalid heartbeat signature: 0x{value:08X}")
+        return value
 
     def start_heartbeat_check(self) -> None:
         """Save a first sample and start this core's observation window."""
-        self._heartbeat_sample = read_word_from_device(
-            self.location, self.eth_core_definitions.heartbeat, context=self.context
-        )
+        self._heartbeat_error = None
+        try:
+            self._heartbeat_sample = self.read_heartbeat()
+        except InvalidHeartbeatSignature as error:
+            # Report this core's invalid sample in get_results; keep checking other cores.
+            self._heartbeat_error = error
         self._heartbeat_deadline = monotonic() + HEARTBEAT_TIMEOUT_SECONDS
 
     def check_for_heartbeat(self) -> bool:
@@ -100,30 +123,23 @@ class EthCore(ABC):
         if self._heartbeat_deadline is None:
             self.start_heartbeat_check()
         assert self._heartbeat_deadline is not None
-        previous_data: int | None = self._heartbeat_sample
-        if not self.is_valid_heartbeat(previous_data):
-            if previous_data != 0:
-                log_check_location(self.location, False, f"Invalid heartbeat signature: 0x{previous_data:08X}")
-                return False
-            previous_data = None
-
-        # Always take a fresh sample, even if other cores consumed this core's wait time.
-        while True:
-            read_data = read_word_from_device(self.location, self.eth_core_definitions.heartbeat, context=self.context)
-            if not self.is_valid_heartbeat(read_data):
-                if read_data != 0:
-                    log_check_location(self.location, False, f"Invalid heartbeat signature: 0x{read_data:08X}")
-                    return False
-                # Zero without the required signature cannot supply a baseline.
-                previous_data = None
-            else:
-                if previous_data is not None and read_data != previous_data:
+        try:
+            if self._heartbeat_error is not None:
+                raise self._heartbeat_error
+            previous_data = self._heartbeat_sample
+            # Always take a fresh sample, even if other cores consumed this core's wait time.
+            while True:
+                read_data = self.read_heartbeat()
+                if previous_data is not None and read_data is not None and read_data != previous_data:
                     return True
                 previous_data = read_data
-            remaining = self._heartbeat_deadline - monotonic()
-            if remaining <= 0:
-                break
-            sleep(min(HEARTBEAT_POLL_INTERVAL_SECONDS, remaining))
+                remaining = self._heartbeat_deadline - monotonic()
+                if remaining <= 0:
+                    break
+                sleep(min(HEARTBEAT_POLL_INTERVAL_SECONDS, remaining))
+        except InvalidHeartbeatSignature as error:
+            log_check_location(self.location, False, str(error))
+            return False
         log_check_location(self.location, False, "No heartbeat detected")
         return False
 
@@ -203,7 +219,6 @@ class WormholeEthCore(EthCore):
     # RISC_POST_HEARTBEAT in tt_metal/hw/inc/api/dataflow/dataflow_api.h writes the fabric format.
     BASE_FW_HEARTBEAT_SIGNATURE = 0xABCD
     FABRIC_HEARTBEAT_SIGNATURE = 0xAABB
-    HEARTBEAT_SIGNATURE_SHIFT = 16
 
     def __init__(self, location: OnChipCoordinate, context: Context):
         super().__init__(location, context)
@@ -214,12 +229,6 @@ class WormholeEthCore(EthCore):
             heartbeat=0x1C,
             mailbox=None,
             mailbox_slots=0,
-        )
-
-    def is_valid_heartbeat(self, value: int) -> bool:
-        return value >> self.HEARTBEAT_SIGNATURE_SHIFT in (
-            self.BASE_FW_HEARTBEAT_SIGNATURE,
-            self.FABRIC_HEARTBEAT_SIGNATURE,
         )
 
     def port_status_to_string(self, port_status: int) -> str | None:
@@ -238,7 +247,6 @@ class BlackholeEthCore(EthCore):
     # This differs from Wormhole's 0xAABB fabric signature; UMD does not export it to Python.
     BASE_FW_HEARTBEAT_SIGNATURE = 0xABCD
     FABRIC_HEARTBEAT_SIGNATURE = 0xDCBA
-    HEARTBEAT_SIGNATURE_SHIFT = 16
 
     def __init__(self, location: OnChipCoordinate, context: Context):
         super().__init__(location, context)
@@ -249,12 +257,6 @@ class BlackholeEthCore(EthCore):
             heartbeat=0x7CC70,
             mailbox=0x7D000,
             mailbox_slots=4,
-        )
-
-    def is_valid_heartbeat(self, value: int) -> bool:
-        return value >> self.HEARTBEAT_SIGNATURE_SHIFT in (
-            self.BASE_FW_HEARTBEAT_SIGNATURE,
-            self.FABRIC_HEARTBEAT_SIGNATURE,
         )
 
     def port_status_to_string(self, port_status: int) -> str | None:
