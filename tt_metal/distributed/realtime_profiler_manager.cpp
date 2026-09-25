@@ -750,7 +750,10 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
             CreateKernel(
                 realtime_profiler_program, realtime_profiler_push_kernel_path, realtime_profiler_core, ncrisc_config);
 
-            realtime_profiler_program.impl().compile(device, /*force_slow_dispatch=*/true);
+            {
+                ZoneScopedN("CompileProgram");
+                realtime_profiler_program.impl().compile(device, /*force_slow_dispatch=*/true);
+            }
             ::tt::tt_metal::slow_dispatch::WriteRuntimeArgsToDevice(
                 *device, realtime_profiler_program, /*force_slow_dispatch=*/true);
             ::tt::tt_metal::slow_dispatch::LaunchProgram(
