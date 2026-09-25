@@ -4,6 +4,7 @@
 
 #include "device_manager.hpp"
 
+#include <mutex>
 #include <numa.h>
 #include <pthread.h>
 #include <tracy/Tracy.hpp>
@@ -284,11 +285,16 @@ void DeviceManager::open_devices(const std::vector<ChipId>& device_ids) {
             MetalEnvAccessor(descriptor_->env()).impl().fabric_config_ = fabric_config;
             // Call initialize again because previously it was a no-op
             ctx_.initialize_fabric_config();
-            log_info(
-                tt::LogMetal,
-                "Enabling {} only for dispatch. If your workload requires fabric, please set the fabric config "
-                "accordingly.",
-                fabric_config);
+            // Once per process: open_devices() runs once per DeviceManager, and unit-test binaries
+            // construct many DeviceManagers (one per gtest case), re-emitting this identical advisory.
+            static std::once_flag fabric_dispatch_only_warned;
+            std::call_once(fabric_dispatch_only_warned, [&] {
+                log_info(
+                    tt::LogMetal,
+                    "Enabling {} only for dispatch. If your workload requires fabric, please set the fabric config "
+                    "accordingly.",
+                    fabric_config);
+            });
         } else {
             // Use the same mode
             ctx_.set_fabric_config(
@@ -296,7 +302,11 @@ void DeviceManager::open_devices(const std::vector<ChipId>& device_ids) {
         }
         MetalEnvAccessor(descriptor_->env()).impl().fabric_reliability_mode_ =
             tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
-        log_info(tt::LogMetal, "Dispatch on {} with {} Command Queues\n", fabric_config, num_hw_cqs_);
+        // Once per process: same rationale as fabric_dispatch_only_warned above.
+        static std::once_flag dispatch_fabric_config_logged;
+        std::call_once(dispatch_fabric_config_logged, [&] {
+            log_info(tt::LogMetal, "Dispatch on {} with {} Command Queues\n", fabric_config, num_hw_cqs_);
+        });
     }
 
     skip_remote_devices_ = skip;
