@@ -68,6 +68,14 @@ inline void llk_unpack_AB_matmul_impl(
     WAYPOINT("UPMD");
 }
 
+// Matmul in1 maps to hardware SrcA. CB page sizes already use unpacker address units.
+inline void llk_unpack_AB_matmul_set_in1_column_stride(
+    const std::uint32_t in1_cb_id, const std::uint32_t stride_tiles) {
+    const std::uint32_t operand_id = get_operand_id(in1_cb_id);
+    const std::uint32_t tile_size = get_local_cb_interface(operand_id).fifo_page_size;
+    _llk_unpack_AB_matmul_set_in1_column_stride_(tile_size, stride_tiles);
+}
+
 __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const std::uint32_t operandA,
     const std::uint32_t operandB,

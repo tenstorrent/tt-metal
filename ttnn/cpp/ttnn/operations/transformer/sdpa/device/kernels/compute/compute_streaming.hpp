@@ -361,13 +361,13 @@ void blocked_matmul_and_pack(
 
 /**
  * Matmul + pack of scores against in-place latent V (V read from K^T: V[sk][vd] == K^T[vd][sk]).
- * Each output column vd is its own matmul chain over K^T row vd (in1 base vd*KT_stride, inner
- * stride 1), so unlike blocked_matmul_and_pack the strided columns can't be folded into one matmul.
- * Batches as many columns as DST holds per acquire/commit/pack to keep the FPU busy, instead of
- * paying the handshake + pack-configure per column (~2/3 FPU idle for the 1-wide path).
+ * Output column vd is a matmul chain over K^T row vd (in1 base vd*KT_stride, inner stride 1), so
+ * adjacent output columns are KT_stride tiles apart in the CB. The srcA per-tile address step is
+ * widened to KT_stride tiles for the duration of the call, which lets one matmul call reuse the
+ * score tile across a DST-sized batch of columns, like blocked_matmul_and_pack does for Q@K^T.
  *
- * Loops: outer walks columns in DST-sized batches; middle does one column (= one matmul chain) per
- * DST tile; inner accumulates that chain over inner_dim tiles. Each batch is packed out in one go.
+ * Loops: outer walks columns in DST-sized batches; inner accumulates the batch over inner_dim score
+ * tiles. Each batch is packed out in one go.
  */
 template <uint32_t vDHt, uint32_t dst_size, uint32_t subblock_h>
 void inplace_v_matmul_pack_batched(
@@ -382,27 +382,37 @@ void inplace_v_matmul_pack_batched(
     // kt_inplace_v guarantees via Sq_chunk_t==1. Enforce it so this can't silently corrupt if
     // reused with multi-tile Q.
     static_assert(subblock_h == 1, "inplace_v_matmul_pack_batched requires single-tile Q (subblock_h==1)");
-    // subblock_h DST tiles per output column; batch as many columns as DST holds.
-    const uint32_t cols_per_batch = dst_size / subblock_h;
+    // One matmul call covers a DST-sized batch of output columns: the score tile is unpacked once
+    // (srcB) and the MOP streams one V tile per column (srcA). V column vd lives in K^T row vd, so
+    // consecutive columns are KT_stride tiles apart: stretch the srcA per-tile address step to a
+    // K^T row for the duration of the V matmul, then restore it.
+    constexpr uint32_t cols_per_batch = vDHt < dst_size / subblock_h ? vDHt : dst_size / subblock_h;
+    mm_no_mop_reinit_short(in0_cb, in1_cb, false, cols_per_batch, subblock_h, KT_stride);
+    matmul_set_in1_column_stride(in1_cb, KT_stride);
+    configure_row_pack_width(out_cb, cols_per_batch);
     for (uint32_t vs0 = 0; vs0 < vDHt; vs0 += cols_per_batch) {
-        const uint32_t cols = (vDHt - vs0 < cols_per_batch) ? (vDHt - vs0) : cols_per_batch;
-        tile_regs_acquire();
-        for (uint32_t c = 0; c < cols; ++c) {
-            uint32_t in0_index = in0_index_start;
-            uint32_t in1_index = (vs0 + c) * KT_stride;
-            for (uint32_t inner = 0; inner < inner_dim; ++inner) {
-                matmul_block_no_mop(
-                    in0_cb, in1_cb, in0_index, in1_index, c * subblock_h, false, 1, subblock_h, KT_stride);
-                in0_index++;
-                in1_index++;
+        const uint32_t cols = vDHt - vs0 < cols_per_batch ? vDHt - vs0 : cols_per_batch;
+        if constexpr (vDHt % cols_per_batch != 0) {
+            if (cols != cols_per_batch) {
+                mm_no_mop_reinit_short(in0_cb, in1_cb, false, cols, subblock_h, KT_stride);
+                matmul_set_in1_column_stride(in1_cb, KT_stride);
+                configure_row_pack_width(out_cb, cols);
             }
+        }
+        tile_regs_acquire();
+        uint32_t in0_index = in0_index_start;
+        uint32_t in1_index = vs0 * KT_stride;
+        for (uint32_t inner = 0; inner < inner_dim; ++inner) {
+            matmul_block_no_mop(in0_cb, in1_cb, in0_index, in1_index, 0, false, cols, subblock_h, KT_stride);
+            in0_index++;
+            in1_index++;
         }
         tile_regs_commit();
         tile_regs_wait();
-        configure_row_pack_width(out_cb, cols);
         pack_contiguous_rows_nocfg(out_cb, 0, subblock_h, vDHt, vs0, cols);
         tile_regs_release();
     }
+    matmul_set_in1_column_stride(in1_cb, 1);
 }
 
 /**
@@ -1680,7 +1690,6 @@ static void sdpa_inner_loop_step(
                     MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
                     sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(
                         out_cb, out_cb);
-                    mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
                     inplace_v_matmul_pack_batched<vDHt, dst_size, qktv_h>(
                         cb_qkt_im,
                         cb_v_in,
