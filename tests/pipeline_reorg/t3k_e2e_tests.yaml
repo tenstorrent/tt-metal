@@ -10,7 +10,7 @@
 # For max allowed timeout refer to .github/time_budget.yaml
 
 - name: t3k_ccl_tests
-  cmd: pytest tests/nightly/t3000/ccl/test_moe_expert_token_remap.py
+  cmd: pytest tests/nightly/t3000/ccl
   skus:
     wh_llmbox:
       timeout: 90
