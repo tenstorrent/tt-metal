@@ -402,27 +402,13 @@ ErrorHistogram ErrorHistogram::convolve(const ErrorHistogram& other, int sign) c
     return out;
 }
 
-ErrorHistogram AnchorAudit::both() const {
-    ErrorHistogram h = line;
-    for (int b = 0; b < ErrorHistogram::kBins; b++) {
-        h.bins[b] += glide.bins[b];
-    }
-    h.n += glide.n;
-    h.sum += glide.sum;
-    h.sumsq += glide.sumsq;
-    h.beyond += glide.beyond;
-    h.worst = std::max(h.worst, glide.worst);
-    return h;
-}
-
-// An anchor is checked once the model's instants around it can no longer change: the curve between two instants
-// needs the one after them.
+// An anchor is checked once an instant lies past it: the chord between the two around it no longer changes.
 void AnchorAudit::settle(const LocalClockModel& m, bool final) {
     const auto& pts = m.pts;
-    if (pts.size() < 3 && !final) {
+    if (pts.size() < 2 && !final) {
         return;
     }
-    const double until = final ? m.frontier() : pts[pts.size() - 2].r;
+    const double until = m.frontier();
     while (!pending.empty() && pending.front().r < until) {
         const Pending a = pending.front();
         pending.pop_front();
@@ -432,10 +418,7 @@ void AnchorAudit::settle(const LocalClockModel& m, bool final) {
         }
         const double w = m.wall_at(a.r);
         const double ns = (a.w - w) * kNsPerRefclk / (m.wall_at(a.r + 1.0) - w);
-        const auto hi = std::lower_bound(
-            pts.begin(), pts.end(), a.r, [](const LocalClockModel::Instant& p, double x) { return p.r < x; });
-        const bool in_glide = hi != pts.end() && hi != pts.begin() && hi->k8 == 0 && (hi - 1)->k8 == 0;
-        (in_glide ? glide : line).add(ns);
+        err.add(ns);
         if (std::abs(ns) > std::abs(worst_ns)) {
             worst_ns = ns;
             worst_r = a.r;
@@ -444,6 +427,38 @@ void AnchorAudit::settle(const LocalClockModel& m, bool final) {
     if (final) {
         past_model += pending.size();
         pending.clear();
+    }
+}
+
+void AnchorAudit::add_drainer_audit(const ClockSample& s) {
+    constexpr double kUnitsPerNs = 16.0;  // the drainer's bins and sums are in 1/16 ns
+    if (s.round == kernel_profiler::kSyncAnchorHistSummary) {
+        const double w = static_cast<int32_t>(static_cast<uint32_t>(s.ref >> 32)) / kUnitsPerNs;
+        err.sum += static_cast<int64_t>(s.value) / kUnitsPerNs;
+        err.sumsq += static_cast<double>(s.ts) / (kUnitsPerNs * kUnitsPerNs);
+        if (std::abs(w) > std::abs(drainer_worst_ns)) {
+            drainer_worst_ns = w;
+        }
+        err.worst = std::max(err.worst, std::abs(w));
+        return;
+    }
+    if (s.round == kernel_profiler::kSyncAnchorHistWorstAt) {
+        drainer_worst_r = static_cast<double>(s.value);
+        drainer_unbracketed += s.ts;
+        return;
+    }
+    const uint32_t counts[6] = {
+        static_cast<uint32_t>(s.value),
+        static_cast<uint32_t>(s.value >> 32),
+        static_cast<uint32_t>(s.ts),
+        static_cast<uint32_t>(s.ts >> 32),
+        static_cast<uint32_t>(s.ref),
+        static_cast<uint32_t>(s.ref >> 32)};
+    for (uint32_t j = 0; j < 6; j++) {
+        const int b = static_cast<int>(s.round + j) - static_cast<int>(kernel_profiler::kSyncAnchorHistBins / 2) +
+                      ErrorHistogram::kRangeNs * ErrorHistogram::kBinsPerNs;
+        err.bins[b] += counts[j];
+        err.n += counts[j];
     }
 }
 
@@ -486,17 +501,28 @@ void SyncEngine::on_clock(const ClockSample& s) {
             AnchorAudit::Pending{static_cast<double>(s.ref), static_cast<double>(s.ts) + static_cast<double>(off)});
         return;
     }
+    if (s.kind == kernel_profiler::kSyncKindAnchorHist) {
+        audit_[s.dev].add_drainer_audit(s);
+        return;
+    }
     if (s.kind != kernel_profiler::kSyncKindLocal) {
         links_.on_stamp(s);
         return;
     }
-    local_[s.dev].add_point(
-        s.value,
-        s.ts,
-        s.round & 0xFFu,
-        s.round >> 8,
-        s.role == kernel_profiler::kSyncLocalClose,
-        static_cast<uint32_t>(s.ref));
+    const uint32_t rec[kernel_profiler::kSyncRecordWords] = {
+        s.role,
+        s.round,
+        static_cast<uint32_t>(s.value),
+        static_cast<uint32_t>(s.value >> 32),
+        static_cast<uint32_t>(s.ts),
+        static_cast<uint32_t>(s.ts >> 32),
+        static_cast<uint32_t>(s.ref),
+        static_cast<uint32_t>(s.ref >> 32)};
+    kernel_profiler::SyncLocalPoint pts[kernel_profiler::kSyncLocalPoints];
+    const uint32_t n = kernel_profiler::sync_local_unpack(rec, pts);
+    for (uint32_t i = 0; i < n; i++) {
+        local_[s.dev].add_point(pts[i].r, pts[i].w8, pts[i].k8, pts[i].close);
+    }
     if (const auto a = audit_.find(s.dev); a != audit_.end()) {
         a->second.settle(local_[s.dev], /*final=*/false);
     }
@@ -863,15 +889,6 @@ bool SeriesPublisher::publish(uint32_t dev, uint32_t chip, const LocalClockModel
             break;
         }
         const double root = root_at(*it);
-        if (fit.curved(i)) {
-            const LocalClockModel::Instant& a = pts[i - 1];
-            for (uint32_t q = 1; q <= kBendNodes; q++) {
-                const double r = a.r + (it->r - a.r) * q / (kBendNodes + 1);
-                const double w = fit.wall_at(r);
-                const double w2 = fit.wall_at(r + 1.0);
-                append_node(s, chip, Node{w, xf.scale * r + xf.shift, r, xf.scale / (w2 - w)});
-            }
-        }
         double tangent = 0.0;
         if (has_next) {
             tangent = (root_at(*(it + 1)) - root) / ((it + 1)->w - it->w);
@@ -963,12 +980,10 @@ void SyncEngine::log_clock_models() const {
         const double to_ghz = LocalClockModel::kRefclkHz * 1e-9;
         const double anchor_ghz = dev < ctx_.devices.size() ? ctx_.devices[dev].frequency_ghz : 0.0;
         const double mean_ghz = wsum > 0.0 ? static_cast<double>(ssum / wsum) * to_ghz : 0.0;
-        const double ns_ghz = mean_ghz > 0.0 ? mean_ghz : std::max(anchor_ghz, 0.1);
         log_info(
             tt::LogMetal,
             "[streaming profiler] d2d sync chip {}: local clock {} instants, {} of them inside its {} transitions; "
-            "applied AICLK mean {:.5f} GHz (min {:.5f}, max {:.5f}; boot anchor {:.5f}); {} placement nodes; samples "
-            "within {:.2f} ns of their line at worst, {} points over {:.1f} ns",
+            "applied AICLK mean {:.5f} GHz (min {:.5f}, max {:.5f}; boot anchor {:.5f}); {} placement nodes",
             chip,
             l.pts.size(),
             raw,
@@ -977,10 +992,7 @@ void SyncEngine::log_clock_models() const {
             smax > 0.0 ? smin * to_ghz : 0.0,
             smax * to_ghz,
             anchor_ghz,
-            series_.series(dev) != nullptr ? series_.series(dev)->count : 0,
-            l.max_resid_ticks / ns_ghz,
-            l.resid_warn_points,
-            LocalClockModel::kResidWarnTicks / ns_ghz);
+            series_.series(dev) != nullptr ? series_.series(dev)->count : 0);
     }
 }
 
@@ -1443,12 +1455,9 @@ void SyncEngine::write_model_csv() const {
         if (f == nullptr) {
             continue;
         }
-        std::fprintf(f, "kind,r,w,k8,resid\n");
+        std::fprintf(f, "kind,r,w,k8\n");
         for (const LocalClockModel::Instant& p : l.pts) {
-            std::fprintf(f, "%s,%.1f,%.3f,%u,0\n", p.k8 == 0 ? "raw" : p.close ? "close" : "point", p.r, p.w, p.k8);
-        }
-        for (const auto& [r, e] : l.resid) {
-            std::fprintf(f, "resid,%.1f,0,0,%.3f\n", r, e);
+            std::fprintf(f, "%s,%.1f,%.3f,%u\n", p.k8 == 0 ? "raw" : p.close ? "close" : "point", p.r, p.w, p.k8);
         }
         std::fclose(f);
     }
@@ -1477,22 +1486,12 @@ void SyncEngine::publish_error_plots() {
         if (e.unbracketed == 0) {
             plot(fmt::format("d2d sync check chip{} vs chip{}, AICLK-anchored (ns)", L.chip_b, L.chip_a), e.pts);
         }
-        // The same rounds with the model cancelled: the links' and the map's own error, at the stamps' 0.3 ns. With
-        // each chip's model bound added, the worst a record of either chip can be off the other's. That series is
-        // drawn at every point of either chip's model, each carrying the worst residual over all the samples since
-        // the previous point, with the cross-chip error taken from the nearest round: crystals and nodes move slowly,
-        // the models do not. The signed cross-chip error stays in the log and the CSV.
+        // The same rounds with the model cancelled: the links' and the map's own error, at the stamps' 0.3 ns. The
+        // signed cross-chip error stays in the CSV.
         const LinkErrors em = link_errors(li, /*anchored=*/false);
         if (em.pts.empty()) {
             continue;
         }
-        const auto la = local_.find(L.dev_a), lb = local_.find(L.dev_b);
-        const auto xa = to_root_.find(L.dev_a), xb = to_root_.find(L.dev_b);
-        if (la == local_.end() || lb == local_.end() || xa == to_root_.end() || xb == to_root_.end()) {
-            continue;
-        }
-        const double ghz_a = std::max(ctx_.devices[L.dev_a].frequency_ghz, 0.1);
-        const double ghz_b = std::max(ctx_.devices[L.dev_b].frequency_ghz, 0.1);
         double se = 0, ss = 0, worst = 0;
         for (const PlotPoint& p : em.pts) {
             se += p.value;
@@ -1500,60 +1499,17 @@ void SyncEngine::publish_error_plots() {
             worst = std::max(worst, std::abs(p.value));
         }
         const double nn = static_cast<double>(em.pts.size());
-        // Both chips' point instants on the root, in order; the round nearest each carries the cross-chip term.
-        struct At {
-            int64_t tsc;
-            double root;
-            bool a;
-            double resid_ns;
-        };
-        std::vector<At> at;
-        at.reserve(la->second.resid.size() + lb->second.resid.size());
-        for (const auto& [r, ticks] : la->second.resid) {
-            const double root = xa->second.scale * r + xa->second.shift;
-            at.push_back(At{std::llround(map_.host_tsc(root)), root, true, ticks / ghz_a});
-        }
-        for (const auto& [r, ticks] : lb->second.resid) {
-            const double root = xb->second.scale * r + xb->second.shift;
-            at.push_back(At{std::llround(map_.host_tsc(root)), root, false, ticks / ghz_b});
-        }
-        std::sort(at.begin(), at.end(), [](const At& x, const At& y) { return x.tsc < y.tsc; });
-        std::vector<PlotPoint> bound;
-        bound.reserve(at.size());
-        std::vector<double> bounds;
-        bounds.reserve(at.size());
-        size_t ri = 0;
-        double other_a = 0.0, other_b = 0.0;  // each chip's newest residual, in force until its next point
-        for (const At& x : at) {
-            if (x.tsc < em.pts.front().tsc) {
-                continue;  // before the first placed round: no cross-chip term measured there
-            }
-            while (ri + 1 < em.pts.size() && em.pts[ri + 1].tsc <= x.tsc) {
-                ri++;
-            }
-            (x.a ? other_a : other_b) = x.resid_ns;
-            bound.push_back(PlotPoint{x.tsc, std::abs(em.pts[ri].value) + other_a + other_b});
-            bounds.push_back(bound.back().value);
-        }
-        if (bounds.empty()) {
-            continue;
-        }
-        std::nth_element(bounds.begin(), bounds.begin() + bounds.size() / 2, bounds.end());
         log_info(
             tt::LogMetal,
             "[streaming profiler] d2d sync error chip {} vs chip {} (links and map, model cancelled): {} rounds, mean "
-            "{:+.2f} ns, rms {:.2f} ns, worst {:.2f} ns; with both chips' model bounds at their {} points: median "
-            "{:.2f} ns, worst {:.2f} ns",
+            "{:+.2f} ns, rms {:.2f} ns, worst {:.2f} ns",
             L.chip_b,
             L.chip_a,
             em.pts.size(),
             se / nn,
             std::sqrt(ss / nn),
-            worst,
-            bounds.size(),
-            bounds[bounds.size() / 2],
-            *std::max_element(bounds.begin(), bounds.end()));
-        plot(fmt::format("d2d sync error chip{} vs chip{} (ns)", L.chip_b, L.chip_a), bound);
+            worst);
+        plot(fmt::format("d2d sync error chip{} vs chip{} (ns)", L.chip_b, L.chip_a), em.pts);
     }
 }
 
@@ -1580,14 +1536,14 @@ void SyncEngine::log_audit() const {
         const uint32_t chip = dev < ctx_.devices.size() ? ctx_.devices[dev].chip_id : dev;
         log_info(
             tt::LogMetal,
-            "[streaming profiler] sync audit chip {}: the drainer's anchors against the clock model, on lines {}; "
-            "inside transitions {}; worst at refclk {:.0f}; {} before the model, {} past it",
+            "[streaming profiler] sync audit chip {}: the drainer's anchors against the clock model, {}; worst at "
+            "refclk {:.0f}; {} before the model, {} past it, {} dropped for a read with no refclk update",
             chip,
-            parts(a.line),
-            parts(a.glide),
-            a.worst_r,
+            parts(a.err),
+            std::abs(a.drainer_worst_ns) > std::abs(a.worst_ns) ? a.drainer_worst_r : a.worst_r,
             a.before_model,
-            a.past_model);
+            a.past_model,
+            a.drainer_unbracketed);
     }
     ErrorHistogram pooled;
     double bound = 0.0;
@@ -1606,7 +1562,7 @@ void SyncEngine::log_audit() const {
         for (const PlotPoint& p : em.pts) {
             lh.add(p.value);
         }
-        const ErrorHistogram ea = aa->second.both(), eb = ab->second.both();
+        const ErrorHistogram ea = aa->second.err, eb = ab->second.err;
         if (ea.n <= 0.0 || eb.n <= 0.0) {
             continue;
         }

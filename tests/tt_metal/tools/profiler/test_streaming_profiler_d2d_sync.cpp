@@ -36,7 +36,6 @@ namespace api = tt::tt_metal::experimental::streaming_profiler;
 
 // The sync's record kinds and roles (hostdev/streaming_profiler_common.h).
 constexpr uint32_t kLocal = kernel_profiler::kSyncKindLocal, kLink = kernel_profiler::kSyncKindLink;
-constexpr uint32_t kPoint = kernel_profiler::kSyncLocalPoint, kClose = kernel_profiler::kSyncLocalClose;
 constexpr uint32_t kT0 = kernel_profiler::kSyncRoleT0, kT1 = kernel_profiler::kSyncRoleT1;
 constexpr uint32_t kT1B = kernel_profiler::kSyncRoleT1B, kT2 = kernel_profiler::kSyncRoleT2;
 
@@ -133,19 +132,19 @@ int main() {
     SteadyView::set(seg);
 
     sync.on_attach(ctx);
-    // Trackers: the pushers' model points, one per ms on all three chips over one second, each behind 4095 samples,
+    // Trackers: the pushers' model points, one per ms on all three chips over one second, one point to a LOCAL record,
     // except that chip 1 goes silent from 0.40 to 0.75 s: longer than the refclk's 24-bit period, so a stream
     // reassembled from its neighbours would come back a wrap off, and the check at 0.5 s lies inside the hole. Chip
-    // 0's step: its first segment closes a microsecond before the switch, the next opens 50 us after it behind 64
-    // samples and settles behind 1024 a hundred microseconds later.
+    // 0's step: its first segment closes a microsecond before the switch, the next opens 50 us after it and has a
+    // second point a hundred microseconds later.
     constexpr uint32_t kK8Fast = 216, kK8Slow = 215;  // 27.0 and 26.875 wall ticks per refclk tick, in eighths
-    const auto point = [&](int c, double tau, uint32_t k8, uint32_t n, bool close) {
+    const auto point = [&](int c, double tau, uint32_t k8, bool close) {
         sync.on_clock(sample(
             static_cast<uint32_t>(c),
             0,
             kLocal,
-            k8 | (n << 8),
-            close ? kClose : kPoint,
+            k8 | (k8 << 24),
+            1u | (close ? 1u << 2 : 0u),
             refclk(c, tau),
             8.0 * wall(c, tau)));  // a local point's wall travels in eighths of a tick
     };
@@ -153,16 +152,16 @@ int main() {
     for (int k = 0; k < 1000; k++) {
         const double tau = k * 1e-3;
         if (!switched && tau > kTauSwitch) {
-            point(0, kTauSwitch - 1e-6, kK8Fast, 4095, true);
-            point(0, kTauSwitch + 50e-6, kK8Slow, 64, false);
-            point(0, kTauSwitch + 150e-6, kK8Slow, 1024, false);
+            point(0, kTauSwitch - 1e-6, kK8Fast, true);
+            point(0, kTauSwitch + 50e-6, kK8Slow, false);
+            point(0, kTauSwitch + 150e-6, kK8Slow, false);
             switched = true;
         }
         for (int c = 0; c < 3; c++) {
             if (c == 1 && tau > 0.40 && tau < 0.75) {
                 continue;
             }
-            point(c, tau, c == 0 && tau > kTauSwitch ? kK8Slow : kK8Fast, 4095, false);
+            point(c, tau, c == 0 && tau > kTauSwitch ? kK8Slow : kK8Fast, false);
         }
     }
     // Two boot-time link bursts, 300 rounds each, 10 us apart. For (snd_dev, snd_lane) sender and (rcv_dev, rcv_lane)

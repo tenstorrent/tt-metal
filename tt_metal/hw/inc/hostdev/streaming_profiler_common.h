@@ -157,15 +157,51 @@ enum SyncRecordWord : std::uint32_t {
     SYNC_REF_HI,
 };
 static_assert(SYNC_REF_HI < kSyncRecordWords);
-// LOCAL: a point of the chip's clock model, value the refclk, wall its line there, round = k8 | n << 8. LINK: a
-// round's 1588 stamp average in kLinkSyncStampUnitsPerNs per ns. ANCHOR: the drainer's (wall, refclk) pair at a
-// refclk update, taken independently of the pusher's samples; value and round unused.
-static constexpr std::uint32_t kSyncKindLocal = 0, kSyncKindLink = 1, kSyncKindAnchor = 2;
+// LOCAL: up to kSyncLocalPoints points of the chip's clock model (refclk, wall in eighths of a tick): the first whole
+// in value and wall, each later one in a REF word as its refclk past the first (low 16 bits) and its wall's offset in
+// eighths (high 16 bits, signed) from the first's plus the record's slope times that refclk step. META low bits: the
+// count, then one close bit per point from bit 2; round: each point's k8 in a byte (0 for a single sample), the byte
+// from bit 24 the slope the offsets are against. LINK: a round's 1588 stamp average in kLinkSyncStampUnitsPerNs per
+// ns. ANCHOR: the drainer's (wall, refclk) pair at a refclk update, taken independently of the pusher's samples;
+// value and round unused. ANCHOR_HIST: the drainer's own audit of its anchors against the pusher's points, sent at
+// stop: bin records (round the first bin, value, wall and ref six counts), then the summary (round
+// kSyncAnchorHistSummary: value the sum and wall the sum of squares of the errors in 1/16 ns, ref_lo the count,
+// ref_hi the worst in 1/16 ns, signed) and the worst's refclk (round kSyncAnchorHistWorstAt, value).
+static constexpr std::uint32_t kSyncKindLocal = 0, kSyncKindLink = 1, kSyncKindAnchor = 2, kSyncKindAnchorHist = 3;
 static constexpr std::uint32_t kSyncLocalPoint = 0, kSyncLocalClose = 1;
+static constexpr std::uint32_t kSyncLocalPoints = 3;
+static constexpr std::uint32_t kSyncAnchorHistBins = 512;  // 1/16 ns each over +-16 ns
+static constexpr std::uint32_t kSyncAnchorHistSummary = 0xFFFFFFFFu, kSyncAnchorHistWorstAt = 0xFFFFFFFEu;
+struct SyncLocalPoint {
+    std::uint64_t r, w8;
+    std::uint32_t k8;
+    bool close;
+};
+// The points of a LOCAL record, in order; returns how many.
+template <typename Word>
+inline std::uint32_t sync_local_unpack(const Word* rec, SyncLocalPoint* out) {
+    const std::uint32_t meta = rec[SYNC_META], round = rec[SYNC_ROUND];
+    const std::uint32_t n = meta & 3u;
+    const std::uint64_t r0 = (static_cast<std::uint64_t>(rec[SYNC_VALUE_HI]) << 32) | rec[SYNC_VALUE_LO];
+    const std::uint64_t w0 = (static_cast<std::uint64_t>(rec[SYNC_WALL_HI]) << 32) | rec[SYNC_WALL_LO];
+    const std::uint32_t slope = round >> 24;
+    for (std::uint32_t i = 0; i < n; i++) {
+        std::uint64_t r = r0, w = w0;
+        if (i != 0) {
+            const std::uint32_t d = rec[SYNC_REF_LO + i - 1];
+            const std::uint32_t dr = d & 0xFFFFu;
+            r += dr;
+            w += static_cast<std::uint64_t>(slope) * dr +
+                 static_cast<std::uint64_t>(static_cast<std::int64_t>(static_cast<std::int16_t>(d >> 16)));
+        }
+        out[i] = SyncLocalPoint{r, w, (round >> (8 * i)) & 0xFFu, ((meta >> (2 + i)) & 1u) != 0};
+    }
+    return n;
+}
 static constexpr std::uint32_t kSyncRoleT0 = 0, kSyncRoleT1 = 1, kSyncRoleT1B = 2, kSyncRoleT2 = 3;
 static constexpr std::uint32_t kLinkSyncRingOffset = 544;
 static constexpr std::uint32_t kLinkSyncRingRecords = 8;
-// A whole seam's instants, one per ~1.2 us: the pusher ships nothing while it acquires a slope.
+// The pusher's records: a firmware FBDIV walk sends a few per ~1.25 us step.
 static constexpr std::uint32_t kSyncRingRecords = 512;
 static constexpr std::uint32_t kSyncRingBytes = kSyncRingRecords * kSyncRecordWords * 4;
 static constexpr std::uint32_t kSyncFrameRecords = 32;  // records per sync frame at most

@@ -160,16 +160,17 @@ struct CoreCoords {
 };
 
 // The idle-eth pusher's L1, carved from the top of IDLE_ETH UNRESERVED: the two socket configs, ctrl words
-// (done/heartbeat, go, stop), one frame slot, the linked-core scratch, the sample ring, the sync ring of its clock
-// model's points. link_ring is the link ends' sync ring on every active eth core (0 without active eth).
+// (done/heartbeat, go, stop), one frame slot, the linked-core scratch, the 64 B its PLL reads land in, the sync ring of
+// its clock model's points. link_ring is the link ends' sync ring on every active eth core (0 without active eth).
 struct EthL1 {
-    uint32_t cfg = 0, sync_cfg = 0, ctrl = 0, stage = 0, scratch = 0, ring = 0, sync_ring = 0, link_ring = 0;
+    uint32_t cfg = 0, sync_cfg = 0, ctrl = 0, stage = 0, scratch = 0, pll = 0, sync_ring = 0, link_ring = 0;
 };
 constexpr uint32_t kEthPointUs = 1000;  // the open segment's line reaches the host at least this often
 
-// The idle-eth pusher kernel over its L1 carve, and the drainer that ships its ring (and the chip's eth cores'
-// frames) from a second idle core: both cores carve their own L1 alike, so one EthL1 addresses either.
-KernelHandle create_pusher_kernel(Program& program, const EthL1& l1, const CoreCoords& core);
+// The idle-eth pusher kernel over its L1 carve, reading AICLK's PLL on the ARC tile at `arc` (translated), and the
+// drainer that ships its ring (and the chip's eth cores' frames) from a second idle core: both cores carve their own
+// L1 alike, so one EthL1 addresses either.
+KernelHandle create_pusher_kernel(Program& program, const EthL1& l1, const CoreCoords& core, const CoreCoord& arc);
 KernelHandle create_drainer_kernel(Program& program, const EthL1& l1, const CoreCoords& core, const CoreCoords& pusher);
 
 // The device-to-device sync's use of the devices. At boot it measures each chip's tile clock offsets before any

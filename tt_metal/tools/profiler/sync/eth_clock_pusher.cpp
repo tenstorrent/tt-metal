@@ -14,37 +14,39 @@
 #include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "internal/ethernet/eth_ptp_clock.hpp"
+#include "internal/tt-1xx/blackhole/arc_pll_regs.h"
 
 constexpr uint32_t kPointTicks = get_compile_time_arg_val(0);  // refclk between the open segment's points (50/us)
 constexpr uint32_t kCtrlAddr =
     get_compile_time_arg_val(1);  // done +0, heartbeat +4, go +8, sync tail +12, head +16, stop +64
-constexpr uint32_t kRingAddr = get_compile_time_arg_val(2);      // model::kRingSamples raw samples, for transitions
+constexpr uint32_t kPllAddr = get_compile_time_arg_val(2);       // a 64 B-aligned L1 scratch for the PLL reads
 constexpr uint32_t kSyncRingAddr = get_compile_time_arg_val(3);  // this core's instants, kSyncRingRecords of them
+constexpr uint32_t kArcXy = get_compile_time_arg_val(4);         // the ARC tile, x | y << 16
 
 namespace kp = kernel_profiler;
 namespace eth_ptp = tt::tt_metal::eth_ptp;
 
 #if defined(PROFILE_KERNEL)
 
-// AICLK is a PLL multiple of the crystal the refclk counts: k8/8 wall ticks per refclk tick, k8 an integer, exact
-// between DVFS steps (every run longer than 50 ms measured sits on its multiple to <0.005 ppm). So over one rate the
-// wall clock is a line whose slope is known once k8 is, and whose only free parameter is the phase of the refclk's
-// increment against the wall ticks -- the intercept. This core measures both, and the host receives POINTS of the
-// line, never samples to fit: a point is (refclk r, the line's wall at r in eighths of a tick), tagged with k8 and
-// the sample count behind it; a new k8, or a CLOSE point, starts the next segment, and two consecutive segments meet
-// where their lines cross.
+// AICLK is PLL0's multiple of the crystal the refclk counts (arc_pll_regs.h): the wall clock gains k8/8 ticks per
+// refclk tick, k8 = 8 * FBDIV / (REFDIV * postdiv0), for as long as FBDIV holds. This core reads FBDIV from PLL0 over
+// the NoC and sends the host POINTS of the wall clock against the refclk, which the host joins with straight lines.
 //
 // A sample is one advance of the refclk the ERISC reads (it moves in steps of 4 ticks, 80 ns apart) caught between
 // two consecutive refclk reads of the sampler below, and placed at the centre of that pair: the wall time of one
 // update to within half the pair's width, with no quantisation noise, and unbiased, the update being uniform over
-// the pair. About one update in three or four is caught; a fresh segment's intercept is at a quarter of a tick after
-// 16 of them and keeps improving as 1/sqrt(n), and the host never places a record on a line drawn through a handful
-// of points.
+// the pair. About one update in three or four is caught.
 //
-// A step shows as kConfirm consecutive samples off the line by more than kOffTicks. The old segment's last on-line
-// sample closes it; the new slope is locked once the newest kWinTicks of samples lie on one line, which rejects the
-// PLL's glide. Nothing here is a typed-in correction: the pairs' widths are measured, k8 is integer arithmetic, and
-// the intercept is a mean.
+// A point is the centroid of a window of consecutive samples at one FBDIV, moved along that FBDIV's exact slope to
+// the nearest whole refclk tick (the refclk moves in fours, so a centroid's own refclk is fractional). Windows restart
+// at every change of FBDIV and double from one sample, closing at kPointTicks: right after a change the points follow
+// the clock sample by sample while the PLL settles, and on a steady rate each is a mean of a few thousand samples.
+// The centroid of samples on a line is on the line, so the chord between two points is exact wherever the clock is
+// straight, and nothing lags the clock.
+//
+// One read of PLL0 is in flight at a time. A sample joins a window once a read issued after it has returned that
+// window's FBDIV. A read that returns another FBDIV closes the window, and the samples taken while the change could
+// have happened go out alone.
 
 // This core's instants, in a ring of kSyncRingRecords the drainer reads over the NoC: the tail is published in the
 // control block, the drainer writes the count it consumed back beside it. An instant the ring has no room for is
@@ -55,315 +57,199 @@ inline volatile tt_l1_ptr uint32_t* rec(uint32_t i) {
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
         kSyncRingAddr + (i % kp::kSyncRingRecords) * kp::kSyncRecordWords * 4u);
 }
-// `resid8`: the largest residual, in eighths of a wall tick, of the samples behind this point against its line.
-inline void write(uint32_t kind, uint32_t role, uint32_t round, uint64_t value, uint64_t wall, uint32_t resid8) {
+inline void emit(uint32_t meta, uint32_t round, uint64_t value, uint64_t wall, uint32_t ref_lo, uint32_t ref_hi) {
     const uint32_t head = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kCtrlAddr + 16);
     if (g_tail - head >= kp::kSyncRingRecords) {
         return;
     }
     volatile tt_l1_ptr uint32_t* r = rec(g_tail);
-    r[kp::SYNC_META] = (kind << 8) | role;
+    r[kp::SYNC_META] = meta;
     r[kp::SYNC_ROUND] = round;
     r[kp::SYNC_VALUE_LO] = static_cast<uint32_t>(value);
     r[kp::SYNC_VALUE_HI] = static_cast<uint32_t>(value >> 32);
     r[kp::SYNC_WALL_LO] = static_cast<uint32_t>(wall);
     r[kp::SYNC_WALL_HI] = static_cast<uint32_t>(wall >> 32);
-    r[kp::SYNC_REF_LO] = resid8;
-    r[kp::SYNC_REF_HI] = 0;
+    r[kp::SYNC_REF_LO] = ref_lo;
+    r[kp::SYNC_REF_HI] = ref_hi;
     asm volatile("fence" ::: "memory");
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kCtrlAddr + 12) = ++g_tail;
 }
 }  // namespace sync
 
+// Points go out kSyncLocalPoints to a LOCAL record (hostdev/streaming_profiler_common.h): the first whole, the rest as
+// a refclk step and an offset from the record's slope; a point whose step or offset does not fit starts the next one.
+namespace pack {
+static uint32_t g_n = 0, g_meta = 0, g_round = 0, g_d[kp::kSyncLocalPoints - 1] = {};
+static uint64_t g_r0 = 0, g_w0 = 0;
+inline void flush() {
+    if (g_n != 0) {
+        sync::emit(g_meta | g_n, g_round, g_r0, g_w0, g_d[0], g_d[1]);
+        g_n = 0;
+    }
+}
+__attribute__((noinline)) void add(uint64_t r, uint64_t w8, uint32_t k8, bool close, uint32_t slope) {
+    if (g_n != 0) {
+        if (r - g_r0 <= 0xFFFFu) {
+            const uint32_t dr = static_cast<uint32_t>(r - g_r0);
+            const int32_t off =
+                static_cast<int32_t>(static_cast<uint32_t>(w8) - static_cast<uint32_t>(g_w0) - (g_round >> 24) * dr);
+            if (off >= -32768 && off <= 32767) {
+                g_d[g_n - 1] = dr | (static_cast<uint32_t>(off) << 16);
+                g_round |= k8 << (8 * g_n);
+                g_meta |= static_cast<uint32_t>(close) << (2 + g_n);
+                if (++g_n == kp::kSyncLocalPoints) {
+                    flush();
+                }
+                return;
+            }
+        }
+        flush();
+    }
+    g_r0 = r;
+    g_w0 = w8;
+    g_round = k8 | (slope << 24);
+    g_meta = (kp::kSyncKindLocal << 8) | (static_cast<uint32_t>(close) << 2);
+    g_d[0] = g_d[1] = 0;
+    g_n = 1;
+}
+}  // namespace pack
+
 namespace model {
-constexpr uint32_t kRingSamples = 512;  // raw samples kept, ~0.3 us apart: ~150 us deep (kEthRingBytes on the host)
-constexpr uint32_t kConfirm = 4;        // consecutive off-line samples that make a step
-// A sample sits at the centre of the pair of refclk reads that caught its advance, within half a cycle or a cycle
-// and a half (kernel_main); the thresholds below sit well above that. Off the line by kOffTicks is off: a 1/8 step
-// gets there in ~1 us.
-constexpr int64_t kOffTicks = 6;
-// The intercept follows the samples: once this many are behind the line it moves by 1/2^kEmaShift of each residue
-// (the mean is kept scaled by 2^kEmaShift so sub-tick residues are not lost to the shift), so the phase's wander and
-// a frequency a few ppm off the k8 grid walk the intercept instead of the residues, and the points stay on the true
-// line. 32 samples is ~15 us; a one-notch step walks the residue ~3 ticks a sample, far past kOffTicks, so it shows.
-constexpr uint32_t kEmaShift = 5;
-constexpr uint32_t kAcqTicks = 1024;       // refclk after a departure before the first lock test (20 us): past any ramp
-constexpr uint32_t kWinTicks = 1024;       // the window that must lie on one line to lock its slope (~45 samples)
-constexpr uint32_t kWinSpreadTicks = 14;   // one line's samples spread less than this; a glide inside bends more
-constexpr uint32_t kAcqTestEvery = 64;     // samples between lock tests: a scan of the window every ~30 us
-constexpr uint32_t kFirstPointN = 16;      // samples behind a segment's first point: a quarter of a tick
-constexpr uint32_t kLastDoublingN = 4096;  // points at every doubling of the count up to here, then every kPointTicks
-// While no line holds (a step's acquisition, which a PLL glide keeps failing), every kRawMean samples go out as one
-// point, their mean, k8 0: the map then bends through the glide instead of bridging it with one chord (whose error is
-// the frequency change times the seam length over eight).
-constexpr uint32_t kCountMax = 1u << 22;  // the residue sum stops here, and it stays in 32 bits
-// A point lies this far behind the newest sample (164 us): a departure is confirmed within ~25 us of samples, and
-// a sweep can hold sampling for ~100 us, so no point ever lands on a step the model has not yet seen.
-constexpr uint32_t kPointLagTicks = 8192;
-constexpr uint64_t kReanchorTicks = 1ull << 30;
-static_assert((kRingSamples & (kRingSamples - 1)) == 0);
-
-// A sample: its refclk and the wall clock at it in eighths of a cycle, the unit of every wall quantity below.
-struct Raw {
-    uint32_t r_lo, r_hi, w8_lo, w8_hi;
-};
-inline volatile tt_l1_ptr Raw* ring() { return reinterpret_cast<volatile tt_l1_ptr Raw*>(kRingAddr); }
-inline uint64_t raw_r(const volatile tt_l1_ptr Raw& e) { return (static_cast<uint64_t>(e.r_hi) << 32) | e.r_lo; }
-inline uint64_t raw_w8(const volatile tt_l1_ptr Raw& e) { return (static_cast<uint64_t>(e.w8_hi) << 32) | e.w8_lo; }
-
 struct Model {
-    uint32_t k8 = 0;          // wall ticks per refclk tick in eighths; 0 while a slope is being acquired
-    uint64_t ra = 0, wa8 = 0;  // anchor: the line passes wa8 + c8 at ra
-    int32_t sum = 0;           // residues (w8 - wa8) - k8*(r - ra) summed over the counted samples
-    uint32_t n = 0;
-    int32_t c8 = 0;          // the residues' running mean: sum / n until 2^kEmaShift samples, then ema >> kEmaShift
-    int32_t ema = 0;         // that mean times 2^kEmaShift
-    uint64_t r_last_on = 0;  // newest sample on the line
-    uint32_t off = 0;        // consecutive samples off the line
-    uint64_t r_dep = 0;      // the first of them
-    uint64_t r_acq0 = 0;     // where the acquisition began
-    uint32_t acq_count = 0;
-    uint64_t r_lock = 0;  // where the segment's line begins: the oldest sample of the window that locked it
-    uint64_t r_last_point = 0;
-    uint32_t max_d8 = 0;  // the largest |residual| of an on-line sample since the last point, in eighths
-    uint32_t ring_n = 0;  // ring entries written; the newest is ring()[(ring_n - 1) & (kRingSamples - 1)]
-    uint32_t win_i = 0;   // the oldest ring entry within kWinTicks of the newest sample (try_lock's window)
-    // The last kWin samples, in this RISC's local memory (the L1 ring above is for the lock test; reading it back
-    // costs an L1 miss per word). A raw instant is the mean of kRawMean of them, each sample in one instant. The mean
-    // of samples spread over a bending stretch sits above the curve by the curvature times the spread's variance over
-    // two: four samples over ~0.75 us put an instant ~0.2 cycles off in the steepest glide at 0.8 GHz, while their
-    // mean halves a sample's noise (within half a cycle to a cycle and a half of the truth). A mean must not span a
-    // hole in the samples (it would average across the glide's bend): win_from is the first sample after the last one.
-    static constexpr uint32_t kWin = 16;
+    uint32_t cntl1 = 0;  // PLL0 CNTL_1 of the open window
+    uint32_t den = 8;    // REFDIV * postdiv0
+    uint32_t k8 = 0;     // wall ticks per refclk tick in eighths
+    // The open window: its first sample, the sums past it of the samples' refclk and of their residues against the
+    // slope, (w8 - w0) - k8 * (r - r0), its count, and the count that closes it.
+    uint64_t r0 = 0, w0 = 0;
+    uint32_t sr = 0;
+    int32_t se = 0;
+    uint32_t cnt = 0, size = 1;
+    // The samples not yet in a window or sent, in this RISC's local memory: a read's round trip is ~2 samples, so
+    // kWin holds several reads' worth.
+    static constexpr uint32_t kWin = 32;
     uint64_t win_r[kWin] = {}, win_w8[kWin] = {};
-    uint32_t win_n = 0;     // samples pushed; the newest is win_r[(win_n - 1) & (kWin - 1)]
-    uint32_t win_from = 0;  // the first sample a mean may include
-    uint32_t since = 0;     // samples since the last instant
+    uint32_t win_n = 0;  // samples pushed; sample i is at i & (kWin - 1)
+    uint32_t done = 0;   // samples before this one are in a window or sent
 };
 
-inline __attribute__((always_inline)) void ring_push(Model& m, uint64_t r, uint64_t w8) {
-    volatile tt_l1_ptr Raw& e = ring()[m.ring_n & (kRingSamples - 1)];
-    e.r_lo = static_cast<uint32_t>(r);
-    e.r_hi = static_cast<uint32_t>(r >> 32);
-    e.w8_lo = static_cast<uint32_t>(w8);
-    e.w8_hi = static_cast<uint32_t>(w8 >> 32);
-    m.ring_n++;
-}
-
-// The line's wall at refclk r.
-inline int64_t line_w8(const Model& m, uint64_t r) {
-    return static_cast<int64_t>(m.wa8) + m.c8 + static_cast<int64_t>(m.k8) * static_cast<int64_t>(r - m.ra);
-}
-
-// A point of the line at refclk r, in eighths of a tick, never before the segment's own start: the host keeps
-// segments disjoint in refclk.
-inline void write_point(Model& m, uint64_t r, uint32_t role) {
-    r = r > m.r_lock ? r : m.r_lock;
-    m.r_last_point = r;
-    const uint32_t n = m.n < kCountMax ? m.n : kCountMax - 1;
-    sync::write(kp::kSyncKindLocal, role, m.k8 | (n << 8), r, static_cast<uint64_t>(line_w8(m, r)), m.max_d8);
-    m.max_d8 = 0;
-}
-
-// A sample as a point: k8 0 tells the host it is an instant of the wall clock, on no line.
-inline void write_raw_point(Model& m, uint64_t r, uint64_t w8) {
-    m.r_last_point = r;
-    sync::write(kp::kSyncKindLocal, kp::kSyncLocalPoint, 0, r, w8, 0u);
-}
-inline void begin_acquire(Model& m, uint64_t r_from) {
-    m.k8 = 0;
-    m.n = 0;
-    m.sum = 0;
-    m.r_acq0 = r_from;
-    m.acq_count = 0;
-    m.since = 0;
-    m.win_i = m.ring_n;
-}
-constexpr uint32_t kRawMean = 4;
-constexpr uint32_t kGroupGapTicks = 125;  // 2.5 us
-static_assert((kRawMean & (kRawMean - 1)) == 0);
-constexpr uint32_t kRawMeanShift = __builtin_ctz(kRawMean);
 inline __attribute__((always_inline)) void win_push(Model& m, uint64_t r, uint64_t w8) {
-    if (m.win_n != 0 && static_cast<uint32_t>(r - m.win_r[(m.win_n - 1) & (Model::kWin - 1)]) > kGroupGapTicks) {
-        m.win_from = m.win_n;
+    if (m.win_n - m.done >= Model::kWin) {
+        m.done = m.win_n - Model::kWin + 1;
     }
     m.win_r[m.win_n & (Model::kWin - 1)] = r;
     m.win_w8[m.win_n & (Model::kWin - 1)] = w8;
     m.win_n++;
 }
-// The mean of the kRawMean samples ending at (exclusive) window index `end`: the refclk exact (the ERISC sees the
-// count move in fours), the wall rounded to its eighth.
-inline void win_mean(const Model& m, uint32_t end, uint64_t& mr, uint64_t& mw8) {
-    uint64_t sr = 0, sw = 0;
-    for (uint32_t i = end - kRawMean; i < end; i++) {
-        sr += m.win_r[i & (Model::kWin - 1)];
-        sw += m.win_w8[i & (Model::kWin - 1)];
-    }
-    mr = sr >> kRawMeanShift;
-    mw8 = (sw + (kRawMean / 2)) >> kRawMeanShift;
-}
-__attribute__((noinline)) void raw_sample(Model& m) {
-    if (++m.since < kRawMean) {
-        return;
-    }
-    m.since = 0;
-    if (m.win_n - m.win_from < kRawMean) {
-        return;
-    }
-    uint64_t mr, mw;
-    win_mean(m, m.win_n, mr, mw);
-    write_raw_point(m, mr, mw);
+
+// The open window's centroid as a point, tagged with k8 and the count behind it.
+__attribute__((noinline)) void close_window(Model& m, uint32_t role) {
+    const uint32_t dr = (m.sr + m.cnt / 2u) / m.cnt;
+    const int32_t half = static_cast<int32_t>(m.cnt / 2u);
+    const int32_t e = (m.se + (m.se < 0 ? -half : half)) / static_cast<int32_t>(m.cnt);
+    pack::add(
+        m.r0 + dr,
+        m.w0 + static_cast<uint64_t>(m.k8) * dr + static_cast<int64_t>(e),
+        m.k8,
+        role == kp::kSyncLocalClose,
+        m.k8);
+    m.cnt = 0;
+    m.size = m.size < (1u << 23) ? m.size * 2u : m.size;
 }
 
-// Locks the slope from the newest kWinTicks of the ring when those samples lie on one line: the slope from the
-// window's ends, then every kLockStride-th entry's residue against it within one refclk tick of phase. A window
-// across a glide bends more than that and the test is retried after kAcqTestEvery samples. The window's oldest
-// entry is carried in m.win_i, advanced a step at a time as samples arrive, so the test walks ~17 entries: whole,
-// over every entry, it held the sampler 4-6 us at +40 and +60 us of every seam, holes a glide bent across.
-constexpr uint32_t kLockStride = 4;
-inline __attribute__((always_inline)) void advance_window(Model& m, uint64_t r_now) {
-    while (m.win_i + 1 < m.ring_n && r_now - raw_r(ring()[m.win_i & (kRingSamples - 1)]) > kWinTicks) {
-        m.win_i++;
+inline __attribute__((always_inline)) void add(Model& m, uint64_t r, uint64_t w8) {
+    if (m.cnt == 0) {
+        m.r0 = r;
+        m.w0 = w8;
+        m.sr = 0;
+        m.se = 0;
     }
-}
-__attribute__((noinline)) bool try_lock(Model& m, uint64_t r_now) {
-    const uint32_t cnt = m.ring_n - m.win_i;
-    if (cnt < 8 || cnt > kRingSamples) {
-        return false;
-    }
-    const volatile tt_l1_ptr Raw& oldest = ring()[m.win_i & (kRingSamples - 1)];
-    const volatile tt_l1_ptr Raw& newest = ring()[(m.ring_n - 1) & (kRingSamples - 1)];
-    const uint64_t r_old = raw_r(oldest), w_old8 = raw_w8(oldest);
-    const uint32_t dr = static_cast<uint32_t>(raw_r(newest) - r_old);
-    const uint32_t dw8 = static_cast<uint32_t>(raw_w8(newest) - w_old8);
-    if (dr < kWinTicks / 2) {
-        return false;
-    }
-    const uint32_t k8 = (dw8 + dr / 2u) / dr;
-    int32_t lo = 0, hi = 0, sum = 0;
-    uint32_t n = 0;
-    for (uint32_t i = m.win_i; i < m.ring_n; i += kLockStride, n++) {
-        const volatile tt_l1_ptr Raw& e = ring()[i & (kRingSamples - 1)];
-        const int32_t res = static_cast<int32_t>(static_cast<uint32_t>(raw_w8(e) - w_old8)) -
-                            static_cast<int32_t>(k8 * static_cast<uint32_t>(raw_r(e) - r_old));
-        lo = n == 0 || res < lo ? res : lo;
-        hi = n == 0 || res > hi ? res : hi;
-        sum += res;
-    }
-    if (static_cast<uint32_t>(hi - lo) > 8u * kWinSpreadTicks) {
-        return false;
-    }
-    m.k8 = k8;
-    m.ra = r_old;
-    m.wa8 = w_old8;
-    m.r_lock = r_old;
-    m.n = n;
-    m.sum = sum;
-    m.c8 = sum / static_cast<int32_t>(n);
-    m.ema = m.c8 << kEmaShift;
-    m.r_last_on = r_now;
-    m.off = 0;
-    return true;
-}
-
-// A confirmed step. The glide is under way before any sample is off the line by kOffTicks: the samples drift
-// within it for a microsecond, then kConfirm of them are counted off. The line closes kPreSamples before the first
-// off sample, where the samples still sat on it, the slope acquisition restarts from the departure, and those
-// samples and the confirming ones open the seam, so the onset is placed from measurements, not from the line.
-constexpr uint32_t kPreSamples = 8;
-__attribute__((noinline, cold)) void step(Model& m) {
-    constexpr uint32_t back = kConfirm + kPreSamples;
-    static_assert(back % kRawMean == 0);
-    static_assert(back + 1 <= Model::kWin);
-    write_point(m, m.win_r[(m.win_n - back - 1) & (Model::kWin - 1)], kp::kSyncLocalClose);
-    begin_acquire(m, m.r_dep);
-    // The seam's first instants, the means over those samples, from local memory: every cycle here is a sample
-    // not taken at the onset, the glide's steepest microseconds.
-    for (uint32_t end = m.win_n - back + kRawMean; end <= m.win_n; end += kRawMean) {
-        if (end - kRawMean < m.win_from) {
-            continue;
-        }
-        uint64_t mr, mw;
-        win_mean(m, end, mr, mw);
-        write_raw_point(m, mr, mw);
+    const uint32_t dr = static_cast<uint32_t>(r - m.r0);
+    m.sr += dr;
+    m.se += static_cast<int32_t>(static_cast<uint32_t>(w8 - m.w0) - m.k8 * dr);
+    if (++m.cnt == m.size || dr >= kPointTicks) {
+        close_window(m, kp::kSyncLocalPoint);
     }
 }
 
-// A sample while no line holds: the ring (the lock test's window) gets it, and the seam its instants.
-__attribute__((noinline)) void acquire(Model& m, uint64_t r, uint64_t w8) {
-    ring_push(m, r, w8);
-    advance_window(m, r);
-    if (r - m.r_acq0 >= kAcqTicks && ++m.acq_count >= kAcqTestEvery) {
-        m.acq_count = 0;
-        if (try_lock(m, r)) {
-            return;
+// A sample alone as a point: k8 0 tells the host it is a single reading.
+inline void write_sample(const Model& m, uint32_t i) {
+    pack::add(m.win_r[i & (Model::kWin - 1)], m.win_w8[i & (Model::kWin - 1)], 0, false, m.k8);
+}
+
+// A completed read of PLL0 CNTL_1: `issued` and `completed` are the sample counts when it was issued and when its
+// data was seen, so samples before `issued` were taken before the register was read, and samples from `completed` on
+// after it.
+__attribute__((noinline)) void on_read(Model& m, uint32_t cntl1, uint32_t issued, uint32_t completed) {
+    if (cntl1 == m.cntl1) {
+        for (; static_cast<int32_t>(issued - m.done) > 0; m.done++) {
+            add(m, m.win_r[m.done & (Model::kWin - 1)], m.win_w8[m.done & (Model::kWin - 1)]);
         }
-    }
-    raw_sample(m);
-}
-__attribute__((noinline)) void off_line(Model& m, uint64_t r) {
-    if (m.off++ == 0) {
-        m.r_dep = r;
-    }
-    if (m.off >= kConfirm) {
-        step(m);
-    }
-}
-__attribute__((noinline)) void count_point(Model& m, uint64_t r) {
-    if (m.n <= (1u << kEmaShift)) {
-        m.c8 = m.sum / static_cast<int32_t>(m.n);
-        m.ema = m.c8 << kEmaShift;
-    }
-    if (m.n >= kFirstPointN && m.n <= kLastDoublingN) {
-        write_point(m, r - kPointLagTicks, kp::kSyncLocalPoint);
-    }
-}
-__attribute__((noinline)) void line_housekeeping(Model& m, uint64_t r) {
-    if (r - m.r_last_point >= kPointTicks) {
-        write_point(m, r - kPointLagTicks, kp::kSyncLocalPoint);
-    }
-    if (r - m.ra >= kReanchorTicks) {
-        m.ra += kReanchorTicks;
-        m.wa8 += static_cast<uint64_t>(m.k8) * kReanchorTicks;
-    }
-}
-// On a line the residue is computed in 32 bits: it is small, and the line's terms wrap alike. The ring is left alone
-// (only a lock test reads it, and a step restarts it).
-inline __attribute__((always_inline)) void feed(Model& m, uint64_t r, uint64_t w8) {
-    win_push(m, r, w8);
-    if (m.k8 == 0) {
-        acquire(m, r, w8);
         return;
     }
-    const int32_t e = static_cast<int32_t>(
-        static_cast<uint32_t>(w8 - m.wa8) -
-        m.k8 * static_cast<uint32_t>(static_cast<uint32_t>(r) - static_cast<uint32_t>(m.ra)));
-    const int32_t d = e - m.c8;
-    if (d > 8 * kOffTicks || d < -8 * kOffTicks) {
-        off_line(m, r);
-        return;
+    if (m.cnt != 0) {
+        close_window(m, kp::kSyncLocalClose);
     }
-    m.off = 0;
-    m.r_last_on = r;
-    const uint32_t ad = static_cast<uint32_t>(d < 0 ? -d : d);
-    m.max_d8 = ad > m.max_d8 ? ad : m.max_d8;
-    if (m.n >= (1u << kEmaShift)) {
-        m.ema += e - (m.ema >> kEmaShift);
-        m.c8 = (m.ema + (1 << (kEmaShift - 1))) >> kEmaShift;
+    for (uint32_t i = m.done; static_cast<int32_t>(completed - i) > 0; i++) {
+        write_sample(m, i);
     }
-    if (m.n < kCountMax) {
-        m.sum += e;
-        m.n++;
-        if ((m.n & (m.n - 1)) == 0) {
-            count_point(m, r);
-        }
-    }
-    if (static_cast<uint32_t>(r) - static_cast<uint32_t>(m.r_last_point) >= kPointTicks ||
-        static_cast<uint32_t>(r) - static_cast<uint32_t>(m.ra) >= kReanchorTicks) {
-        line_housekeeping(m, r);
-    }
+    m.done = completed;
+    m.cntl1 = cntl1;
+    m.k8 = ((cntl1 >> 16) * 8u) / m.den;
+    m.size = 1;
 }
 }  // namespace model
+
+// The reads of PLL0 CNTL_1 on NoC 0, one in flight. The destination sits at the register's offset modulo 64 B.
+namespace pll {
+constexpr uint32_t kCntl1 = ARC_PLL0_BASE + ARC_PLL_CNTL_1;
+constexpr uint32_t kDst = kPllAddr + (kCntl1 & 63u);
+inline uint64_t src(uint32_t reg) { return get_noc_addr(kArcXy & 0xFFFFu, kArcXy >> 16, reg, 0); }
+// A blocking read for the setup, which gives up rather than hang the core.
+inline bool read(uint32_t reg, uint32_t& v) {
+    const uint32_t dst = kPllAddr + (reg & 63u);
+    noc_async_read(src(reg), dst, 4, 0);
+    for (uint32_t spin = 0; !ncrisc_noc_reads_flushed(0); spin++) {
+        if (spin == (1u << 24)) {
+            return false;
+        }
+    }
+    v = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst);
+    return true;
+}
+struct Poll {
+    uint32_t issued = 0;
+    bool out = false;
+};
+inline __attribute__((always_inline)) void step(Poll& p, model::Model& m) {
+    if (!p.out) {
+        noc_async_read(src(kCntl1), kDst, 4, 0);
+        p.issued = m.win_n;
+        p.out = true;
+    } else if (ncrisc_noc_reads_flushed(0)) {
+        p.out = false;
+        model::on_read(m, *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDst), p.issued, m.win_n);
+    }
+}
+// REFDIV * postdiv0 from PLL0, and the CNTL_1 the first line opens with; false if the divider does not divide eight
+// FBDIVs into whole k8 (the line's slope would not be exact) or the ARC tile did not answer.
+bool setup(model::Model& m) {
+    uint32_t c1, c5, use;
+    if (!read(ARC_PLL0_BASE + ARC_PLL_CNTL_1, c1) || !read(ARC_PLL0_BASE + ARC_PLL_CNTL_5, c5) ||
+        !read(ARC_PLL0_BASE + ARC_PLL_USE_POSTDIV, use)) {
+        return false;
+    }
+    const uint32_t pd = c5 & 0xFFu;
+    const uint32_t post = (use & 1u) == 0u ? 1u : pd <= 16u ? pd + 1u : (pd + 1u) * 2u;
+    m.den = (c1 & 0xFFu) * post;
+    if (m.den == 0u || 8u % m.den != 0u) {
+        return false;
+    }
+    m.cntl1 = c1;
+    m.k8 = ((c1 >> 16) * 8u) / m.den;
+    return true;
+}
+}  // namespace pll
 
 // Both clocks' high words and the low words they were last seen at.
 struct Carry {
@@ -375,7 +261,7 @@ inline __attribute__((always_inline)) void sample(model::Model& m, Carry& c, uin
     c.w_hi += w < c.prev_w_lo;
     c.prev_r_lo = r_lo;
     c.prev_w_lo = w;
-    model::feed(
+    model::win_push(
         m, (static_cast<uint64_t>(c.r_hi) << 32) | r_lo, (((static_cast<uint64_t>(c.w_hi) << 32) | w) << 3) + pos8);
 }
 
@@ -763,6 +649,10 @@ void kernel_main() {
     *go = 0;
     *stop = 0;
 
+    model::Model m;
+    if (!pll::setup(m)) {
+        return;
+    }
     const sampler::Table table = sampler::calibrate(go, stop, hb);
     // Sampling waits for the host's go word, written once the receiver's ingest threads are up.
     while (*go == 0u && *stop == 0u) {
@@ -775,14 +665,14 @@ void kernel_main() {
     const eth_ptp::Instant start = eth_ptp::read_instant();
     Carry carry{
         static_cast<uint32_t>(start.refclk >> 32), start.wall_hi, static_cast<uint32_t>(start.refclk), start.wall_lo};
-    model::Model m;
-    model::begin_acquire(m, start.refclk);
+    pll::Poll poll;
     uint32_t iter = 0, walk = start.wall_lo | 1u;
     while (true) {
         sampler::Catch c;
         if (sampler::take<sampler::pass>(walk, c, table)) {
             sample(m, carry, c.r, c.w, c.pos8);
         }
+        pll::step(poll, m);
         if ((++iter & 255u) != 0u) {
             continue;
         }
@@ -795,6 +685,10 @@ void kernel_main() {
             break;
         }
     }
+    if (m.cnt != 0) {
+        model::close_window(m, kp::kSyncLocalPoint);
+    }
+    pack::flush();
     *done = kp::kRelayDoneWord;
 #endif
 }

@@ -454,7 +454,7 @@ Role role_of(const tt::Cluster& cluster, uint32_t chip, const CoreCoord& eth_log
 
 }  // namespace link_sync
 
-KernelHandle create_pusher_kernel(Program& program, const EthL1& l1, const CoreCoords& core) {
+KernelHandle create_pusher_kernel(Program& program, const EthL1& l1, const CoreCoords& core, const CoreCoord& arc) {
     return CreateKernel(
         program,
         "tt_metal/tools/profiler/sync/eth_clock_pusher.cpp",
@@ -463,7 +463,7 @@ KernelHandle create_pusher_kernel(Program& program, const EthL1& l1, const CoreC
             .eth_mode = Eth::IDLE,
             .noc = NOC::RISCV_0_default,
             .processor = DataMovementProcessor::RISCV_0,
-            .compile_args = {kEthPointUs * 50u, l1.ctrl, l1.ring, l1.sync_ring}});
+            .compile_args = {kEthPointUs * 50u, l1.ctrl, l1.pll, l1.sync_ring, packed_xy(arc)}});
 }
 
 KernelHandle create_drainer_kernel(

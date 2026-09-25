@@ -32,6 +32,7 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>  // MeshCoreCoord
+#include <umd/device/cluster.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/tlb.hpp>
 
@@ -72,12 +73,13 @@ constexpr uint32_t kNRisc = kernel_profiler::PROFILER_SPSC_TENSIX_RISC;
 // fault while the host process freed memory, so the sync FIFO holds half a minute of the steady stream.
 constexpr uint32_t kEthFifoBytes = 1u << 20;
 constexpr uint32_t kEthSyncFifoBytes = 128u << 20;
-constexpr uint32_t kEthRingBytes = 8192;  // model::kRingSamples raw samples of 16 B (eth_clock_pusher.cpp)
+constexpr uint32_t kEthPllBytes = 64;  // the pusher's PLL reads land at the register's offset in an aligned 64 B
 constexpr uint32_t kEthSyncRingBytes = kernel_profiler::kSyncRingBytes;
 // A drainer's control block: done and heartbeat words, then the stop word one stride up.
 constexpr uint32_t kCtrlBytes = 2 * kernel_profiler::kRelayCtrlWordStride;
-// Pusher scratch for one linked core: its control vector, then its two ring images (BH eth has DM0 and DM1).
-constexpr uint32_t kEthScratchBytes = 6144;
+// Drainer scratch (eth_clock_drainer.cpp): a linked core's control vector and two ring images (BH eth has DM0 and
+// DM1), the sync record images, and the anchor audit.
+constexpr uint32_t kEthScratchBytes = 16384;
 static_assert(
     kEthScratchBytes >= kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE + 2 * kernel_profiler::PROFILER_L1_BUFFER_SIZE,
     "the pusher scratch must hold a control vector and two whole rings");
@@ -236,7 +238,7 @@ void Devices::carve_eth_l1(const Hal& hal, uint32_t& aeth_unreserved, uint32_t& 
         const uint32_t ebase = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
         const uint32_t esize = hal.get_dev_size(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
         const uint32_t need =
-            kCfgReserve + kCtrlBytes + slot_bytes_ + kEthScratchBytes + kEthRingBytes + kEthSyncRingBytes + kPageSize;
+            kCfgReserve + kCtrlBytes + slot_bytes_ + kEthScratchBytes + kEthPllBytes + kEthSyncRingBytes + kPageSize;
         if (esize >= need) {
             eth_l1_.cfg = ebase + esize - kCfgReserve;
             eth_l1_.sync_cfg = eth_l1_.cfg + kCfgReserve / 2;
@@ -244,8 +246,8 @@ void Devices::carve_eth_l1(const Hal& hal, uint32_t& aeth_unreserved, uint32_t& 
             eth_l1_.stage =
                 (eth_l1_.ctrl - slot_bytes_) & ~(kPageSize - 1u);  // the pack pads assume a page-aligned slot
             eth_l1_.scratch = (eth_l1_.stage - kEthScratchBytes) & ~(kPageSize - 1u);
-            eth_l1_.ring = eth_l1_.scratch - kEthRingBytes;
-            eth_l1_.sync_ring = eth_l1_.ring - kEthSyncRingBytes;
+            eth_l1_.pll = eth_l1_.scratch - kEthPllBytes;
+            eth_l1_.sync_ring = eth_l1_.pll - kEthSyncRingBytes;
             eth_l1_.link_ring = aeth_ok_ ? aeth_unreserved + aeth_unres_size - kernel_profiler::kLinkSyncL1Bytes +
                                                kernel_profiler::kLinkSyncRingOffset
                                          : 0u;
@@ -742,8 +744,14 @@ bool Devices::launch_eth_pusher(
     Drainer& p = *ctx.pusher;
     p.state_addr = eth_l1_.ctrl;
     p.stop_addr = eth_l1_.ctrl + kernel_profiler::kRelayCtrlWordStride;
+    const auto arc = MetalContext::instance(context_id_)
+                         .get_cluster()
+                         .get_driver()
+                         ->get_soc_descriptor(ctx.chip_id)
+                         .get_cores(CoreType::ARC, CoordSystem::TRANSLATED);
+    TT_FATAL(!arc.empty(), "streaming profiler: device {} has no ARC tile in its descriptor", ctx.chip_id);
     auto program = std::make_unique<Program>(CreateProgram());
-    create_pusher_kernel(*program, eth_l1_, p.core);
+    create_pusher_kernel(*program, eth_l1_, p.core, CoreCoord(arc.front().x, arc.front().y));
     if (!launch_drainer(
             mesh_device,
             ctx,
@@ -766,6 +774,7 @@ bool Devices::launch_eth_pusher(
         rt.push_back(packed_xy(ctx.producers[i].virt));
         rt.push_back(static_cast<uint32_t>(ctx.producers[i].prof_l1));
     }
+    rt.push_back(static_cast<uint32_t>(static_cast<int32_t>(ctx.out.ctx.drainer_offset)));
     SetRuntimeArgs(*dprogram, dkid, dr.core.logical, rt);
     if (!launch_drainer(
             mesh_device,

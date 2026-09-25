@@ -42,10 +42,8 @@ struct ClockSample {
 };
 
 // A chip's clock as the pusher describes it: instants (its refclk tick, its eth wall tick) in refclk order, the wall
-// linear between consecutive ones. On a steady line the pusher sends a point every kEthPointUs with the line's exact
-// k/8 slope and the residual bound of the samples behind it; inside a transition it sends the samples that keep the
-// chord through them within kRawEpsTicks of every sample (k8 0), so the map bends through a glide as the clock did.
-// Records are placed only up to the newest instant, on the chord to it.
+// linear between consecutive ones. An instant is the centroid of a window of samples at one FBDIV (k8 its slope) or,
+// where FBDIV changed, a single sample (k8 0). Records are placed only up to the newest instant, on the chord to it.
 class LocalClockModel {
 public:
     static constexpr double kRefclkHz = kernel_profiler::kEthRefclkHz;
@@ -57,35 +55,9 @@ public:
     std::deque<Instant> pts;   // in refclk order; a deque, so growth never copies on the sync thread
     uint64_t points = 0;       // instants received, those behind the frontier included
     uint64_t transitions = 0;  // closes
-    // The pusher's own check of each line against its samples: the largest residual any point reported, in wall
-    // ticks, and how many points reported one beyond kResidWarnTicks.
-    static constexpr double kResidWarnTicks = 8.0;
-    double max_resid_ticks = 0.0;
-    uint64_t resid_warn_points = 0;
-    // Each point's residual as (refclk, wall ticks): the line's error bound over the samples between the previous
-    // point and it, in refclk order.
-    std::vector<std::pair<double, double>> resid;
-    // The bound in force at refclk r: the first point at or after it, the last point's past the end.
-    double resid_at(double r) const {
-        if (resid.empty()) {
-            return 0.0;
-        }
-        const auto it = std::lower_bound(
-            resid.begin(), resid.end(), r, [](const std::pair<double, double>& p, double x) { return p.first < x; });
-        return it == resid.end() ? resid.back().second : it->second;
-    }
-
-    void add_point(uint64_t refclk, uint64_t wall8, uint32_t k8, uint32_t, bool close, uint32_t resid8 = 0) {
+    void add_point(uint64_t refclk, uint64_t wall8, uint32_t k8, bool close) {
         points++;
         const double r = static_cast<double>(refclk), w = static_cast<double>(wall8) / 8.0;
-        const double res = resid8 / 8.0;
-        max_resid_ticks = std::max(max_resid_ticks, res);
-        resid_warn_points += res > kResidWarnTicks;
-        if (k8 != 0 && (resid.empty() || r > resid.back().first)) {
-            resid.emplace_back(r, res);
-        }
-        // A new line's first points sit at its lock, behind the seam's last instants: nothing behind the frontier
-        // is placed again.
         if (!pts.empty() && (r <= pts.back().r || w <= pts.back().w)) {
             return;
         }
@@ -94,18 +66,8 @@ public:
     }
     // The newest instant's refclk: nothing later is known.
     double frontier() const { return pts.empty() ? 0.0 : pts.back().r; }
-    // Between the raw instants pts[i-1] and pts[i] the wall clock's rate runs linearly from the rate at the first
-    // to the rate at the second (each from its neighbours) when the pair is close: a glide's instants are ~1 us
-    // apart and a chord across them misses the bend by (rate change per tick) x gap^2 / 8, up to 5 cycles. Across a
-    // longer gap -- a straight stretch the cone held through, or a hole -- the same construction scales rate noise
-    // by gap^2 (a 64 ms pair bowed 55 cycles on a 0.001 cycle/tick difference) and the chord stands.
-    static constexpr double kBendMaxTicks = 250.0;  // 5 us
-    bool curved(size_t i) const {
-        return i >= 2 && i + 1 < pts.size() && pts[i - 1].k8 == 0 && pts[i].k8 == 0 &&
-               pts[i].r - pts[i - 1].r <= kBendMaxTicks;
-    }
-    // The wall tick at refclk r: on the curve between the instants around it (see curved), along the last two
-    // past the newest, and 0 before the first, where nothing places.
+    // The wall tick at refclk r: on the chord between the instants around it, along the last two past the newest,
+    // and 0 before the first, where nothing places.
     double wall_at(double r) const {
         if (pts.empty() || r < pts.front().r) {
             return 0.0;
@@ -124,16 +86,7 @@ public:
         const Instant& a = pts[i - 1];
         const Instant& b = pts[i];
         const double dr = b.r - a.r, x = r - a.r;
-        const double chord = (b.w - a.w) / dr;
-        if (!curved(i)) {
-            return a.w + chord * x;
-        }
-        const Instant& p = pts[i - 2];
-        const Instant& n = pts[i + 1];
-        const double rate_a = (b.w - p.w) / (b.r - p.r);
-        const double rate_b = (n.w - a.w) / (n.r - a.r);
-        const double kappa = (rate_b - rate_a) / (2.0 * dr);
-        return a.w + chord * x + kappa * x * (x - dr);
+        return a.w + (b.w - a.w) / dr * x;
     }
 };
 
@@ -171,22 +124,27 @@ struct ErrorHistogram {
 };
 
 // A chip's model audited against anchors: the chip's eth wall clock read at a refclk update by a core that builds no
-// model (the drainer), each held until the model is final past it, then its distance from the model in ns, apart
-// for anchors on a line and inside a transition. The refclk reaches the eth cores at different times (up to ~1 ns
-// earlier at the die centre than at its edges), so the audit carries the drainer's and the pusher's difference.
+// model (the drainer), each held until the model is final past it, then its distance from the model in ns. The drainer
+// checks most of them itself and sends its histogram at stop (add_drainer_audit); those it sends are checked here. The
+// refclk reaches the eth cores at different times (up to ~1 ns earlier at the die centre than at its edges), so the
+// audit carries the drainer's and the pusher's difference.
 struct AnchorAudit {
     struct Pending {
         double r, w;
     };
     std::deque<Pending> pending;
-    ErrorHistogram line, glide;
+    ErrorHistogram err;
     double worst_r = 0.0, worst_ns = 0.0;
     uint64_t before_model = 0;  // anchors before the model's first instant: nothing places them
     uint64_t past_model = 0;    // anchors after its last, at capture end
-    ErrorHistogram both() const;
 
     // Checks every pending anchor the model is final past; `final` checks the rest up to its frontier.
     void settle(const LocalClockModel& m, bool final);
+    // One record of the drainer's own audit of the anchors it did not send (hostdev/streaming_profiler_common.h,
+    // ANCHOR_HIST).
+    void add_drainer_audit(const ClockSample& s);
+    uint64_t drainer_unbracketed = 0;  // anchors the drainer dropped: their read found no refclk update
+    double drainer_worst_ns = 0.0, drainer_worst_r = 0.0;  // the worst of the anchors the drainer checked itself
 };
 
 // A device's refclk onto the root chip's: root_refclk = scale * dev_refclk + shift.
@@ -394,13 +352,9 @@ public:
     explicit SeriesPublisher(ClockMap& map) : map_(map) {}
     void reset() { series_.clear(); }
     // Publishes one chip's instants beyond its series' end, from its model and root transform as they stand; true
-    // when a node was added. A raw instant waits for the one after it (the curve across the gap before it needs
-    // the rate at both ends); `final` publishes the newest regardless.
+    // when a node was added. A raw instant waits for the one after it (its tangent needs the next instant); `final`
+    // publishes the newest regardless.
     bool publish(uint32_t dev, uint32_t chip, const LocalClockModel& fit, const RootXf& xf, bool final);
-    // Where the model curves between two instants (LocalClockModel::curved), kBendNodes nodes sampled from its
-    // wall_at go between them, so consumers interpolate linearly as ever and follow the curve to a sixteenth of
-    // the chord's error.
-    static constexpr uint32_t kBendNodes = 3;
     // A chip's series, null before its first publish.
     const Series* series(uint32_t dev) const {
         const auto it = series_.find(dev);

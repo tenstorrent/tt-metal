@@ -62,8 +62,11 @@ constexpr uint32_t kSliceBytes = kp::kSyncFrameRecords * kRecordBytes;
 constexpr uint32_t kPusherCtrlScratch = (kSliceScratch + kSliceBytes + 63u) & ~63u;
 constexpr uint32_t kAnchorRecords = 8;
 constexpr uint32_t kAnchorScratch = kPusherCtrlScratch + 64;
-static_assert(
-    kAnchorScratch + kAnchorRecords * kRecordBytes <= kScratchAddr + 6144, "the host carves 6144 B of scratch");
+// The anchor audit: anchors waiting for the pusher's next point, then the histogram's bins.
+constexpr uint32_t kPendingAnchors = 512;
+constexpr uint32_t kPendingScratch = kAnchorScratch + kAnchorRecords * kRecordBytes;
+constexpr uint32_t kBinScratch = kPendingScratch + kPendingAnchors * 16u;
+static_assert(kBinScratch + kp::kSyncAnchorHistBins * 4u <= kScratchAddr + 16384, "the host carves 16384 B of scratch");
 
 inline void write_to_host(const SocketSenderInterface& s, uint32_t src_l1, uint64_t dst_pcie, uint32_t size) {
     noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
@@ -235,6 +238,7 @@ void kernel_main() {
     const uint32_t n_linked = n_linked_arg < kMaxLinked ? n_linked_arg : kMaxLinked;
     uint32_t linked_xy[kMaxLinked];
     uint32_t linked_l1[kMaxLinked];
+    const int32_t tile_offset = static_cast<int32_t>(get_arg_val<uint32_t>(1 + 2 * n_linked_arg));
     for (uint32_t i = 0; i < n_linked; i++) {
         linked_xy[i] = get_arg_val<uint32_t>(1 + 2 * i);
         linked_l1[i] = get_arg_val<uint32_t>(2 + 2 * i);
@@ -246,6 +250,154 @@ void kernel_main() {
     SocketSenderInterface sync_sender = create_sender_socket_interface(kSyncCfgAddr);
     set_sender_socket_page_size(sync_sender, kPageBytes);
     noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC);
+
+    // Records of this core's own, eight to a frame: anchors the host checks itself, and the audit at stop.
+    uint32_t outs = 0;
+    const auto out = [&](uint32_t meta, uint32_t rnd, uint64_t v, uint64_t w, uint64_t ref) __attribute__((noinline)) {
+        volatile tt_l1_ptr uint32_t* r =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kAnchorScratch + outs * kRecordBytes);
+        r[kp::SYNC_META] = meta;
+        r[kp::SYNC_ROUND] = rnd;
+        r[kp::SYNC_VALUE_LO] = static_cast<uint32_t>(v);
+        r[kp::SYNC_VALUE_HI] = static_cast<uint32_t>(v >> 32);
+        r[kp::SYNC_WALL_LO] = static_cast<uint32_t>(w);
+        r[kp::SYNC_WALL_HI] = static_cast<uint32_t>(w >> 32);
+        r[kp::SYNC_REF_LO] = static_cast<uint32_t>(ref);
+        r[kp::SYNC_REF_HI] = static_cast<uint32_t>(ref >> 32);
+        if (++outs == kAnchorRecords) {
+            ship(
+                sync_sender,
+                pack_sync_frame(
+                    kPusherXy,
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kAnchorScratch),
+                    0,
+                    outs,
+                    kAnchorRecords));
+            outs = 0;
+        }
+    };
+    const auto flush_out = [&]() {
+        if (outs != 0) {
+            ship(
+                sync_sender,
+                pack_sync_frame(
+                    kPusherXy,
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kAnchorScratch),
+                    0,
+                    outs,
+                    kAnchorRecords));
+            outs = 0;
+        }
+    };
+
+    // Anchors: this core's own (wall, refclk) pair at a refclk update, once per poll, independent of the pusher's
+    // samples. Each waits for the pusher's next point; between two centroids at one FBDIV its distance from their chord
+    // (the host's line there too) goes into the histogram in 1/16 ns, the wall moved into the pusher's wall domain by
+    // this core's tile offset. Any other anchor, and one off by more than the histogram's range, goes to the host as
+    // it is; an anchor whose read found no refclk update is not one.
+    struct Pending {
+        uint32_t r_lo, r_hi, w_lo, w_hi;
+    };
+    volatile tt_l1_ptr Pending* pending = reinterpret_cast<volatile tt_l1_ptr Pending*>(kPendingScratch);
+    volatile tt_l1_ptr uint32_t* bins = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kBinScratch);
+    for (uint32_t b = 0; b < kp::kSyncAnchorHistBins; b++) {
+        bins[b] = 0;
+    }
+    uint32_t pend_head = 0, pend_tail = 0, audited = 0, unbracketed = 0;
+    int64_t err_sum = 0;
+    uint64_t err_sumsq = 0, worst_r = 0;
+    int32_t worst = 0;
+    kp::SyncLocalPoint prev{};
+    bool have_prev = false;
+    const auto raw_anchor = [&](const volatile tt_l1_ptr Pending& a) {
+        out(1u << 16 | kp::kSyncKindAnchor << 8,
+            0,
+            0,
+            (static_cast<uint64_t>(a.w_hi) << 32) | a.w_lo,
+            (static_cast<uint64_t>(a.r_hi) << 32) | a.r_lo);
+    };
+    const auto anchor = [&]() __attribute__((noinline)) {
+        const eth_ptp::Instant t = eth_ptp::read_bracketed();
+        if (t.spins == 0) {
+            unbracketed++;
+            return;
+        }
+        if (pend_tail - pend_head == kPendingAnchors) {
+            raw_anchor(pending[pend_head++ % kPendingAnchors]);
+        }
+        volatile tt_l1_ptr Pending& a = pending[pend_tail++ % kPendingAnchors];
+        a.r_lo = static_cast<uint32_t>(t.refclk);
+        a.r_hi = static_cast<uint32_t>(t.refclk >> 32);
+        a.w_lo = t.wall_lo;
+        a.w_hi = t.wall_hi;
+    };
+    const auto point = [&](const kp::SyncLocalPoint& p) __attribute__((noinline)) {
+        while (pend_head != pend_tail) {
+            const volatile tt_l1_ptr Pending& a = pending[pend_head % kPendingAnchors];
+            const uint64_t ar = (static_cast<uint64_t>(a.r_hi) << 32) | a.r_lo;
+            if (ar > p.r) {
+                break;
+            }
+            pend_head++;
+            if (!have_prev || ar < prev.r || prev.k8 == 0 || prev.k8 != p.k8) {
+                raw_anchor(a);
+                continue;
+            }
+            const uint32_t dr = static_cast<uint32_t>(p.r - prev.r);
+            const uint32_t x = static_cast<uint32_t>(ar - prev.r);
+            const int32_t e =
+                static_cast<int32_t>(static_cast<uint32_t>(p.w8) - static_cast<uint32_t>(prev.w8) - p.k8 * dr);
+            const uint32_t line = static_cast<uint32_t>(prev.w8) + p.k8 * x +
+                                  static_cast<uint32_t>(static_cast<int32_t>((static_cast<int64_t>(e) * x) / dr));
+            const int32_t err8 = static_cast<int32_t>((a.w_lo + static_cast<uint32_t>(tile_offset)) * 8u - line);
+            const int32_t q = err8 * 320;
+            const int32_t k = static_cast<int32_t>(p.k8);
+            const int32_t ns16 = q >= 0 ? q / k : -((-q + k - 1) / k);
+            const int32_t b = ns16 + static_cast<int32_t>(kp::kSyncAnchorHistBins / 2);
+            if (b < 0 || b >= static_cast<int32_t>(kp::kSyncAnchorHistBins)) {
+                raw_anchor(a);
+                continue;
+            }
+            bins[b]++;
+            audited++;
+            err_sum += ns16;
+            err_sumsq += static_cast<uint64_t>(static_cast<int64_t>(ns16) * ns16);
+            if ((ns16 < 0 ? -ns16 : ns16) > (worst < 0 ? -worst : worst)) {
+                worst = ns16;
+                worst_r = ar;
+            }
+        }
+        prev = p;
+        have_prev = true;
+    };
+    // The audit to the host at stop: every nonzero run of six bins, then the summary and the worst's refclk.
+    const auto send_audit = [&]() {
+        while (pend_head != pend_tail) {
+            raw_anchor(pending[pend_head++ % kPendingAnchors]);
+        }
+        for (uint32_t b = 0; b < kp::kSyncAnchorHistBins; b += 6) {
+            uint32_t c[6] = {};
+            uint32_t any = 0;
+            for (uint32_t j = 0; j < 6 && b + j < kp::kSyncAnchorHistBins; j++) {
+                c[j] = bins[b + j];
+                any |= c[j];
+            }
+            if (any != 0) {
+                out(kp::kSyncKindAnchorHist << 8,
+                    b,
+                    (static_cast<uint64_t>(c[1]) << 32) | c[0],
+                    (static_cast<uint64_t>(c[3]) << 32) | c[2],
+                    (static_cast<uint64_t>(c[5]) << 32) | c[4]);
+            }
+        }
+        out(kp::kSyncKindAnchorHist << 8,
+            kp::kSyncAnchorHistSummary,
+            static_cast<uint64_t>(err_sum),
+            err_sumsq,
+            (static_cast<uint64_t>(static_cast<uint32_t>(worst)) << 32) | audited);
+        out(kp::kSyncKindAnchorHist << 8, kp::kSyncAnchorHistWorstAt, worst_r, unbracketed, 0);
+        flush_out();
+    };
 
     // The pusher's records [head, tail): the tail from its control block, the records from its ring, the consumed
     // count written back so it knows how far it may overwrite. One frame per call, or everything with `all`.
@@ -275,6 +427,17 @@ void kernel_main() {
                     (n - to_end) * kRecordBytes);
             }
             noc_async_read_barrier();
+            for (uint32_t i = 0; i < n; i++) {
+                const volatile tt_l1_ptr uint32_t* rec =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kSliceScratch + i * kRecordBytes);
+                if (((rec[kp::SYNC_META] >> 8) & 0xFFu) == kp::kSyncKindLocal) {
+                    kp::SyncLocalPoint pts[kp::kSyncLocalPoints];
+                    const uint32_t np = kp::sync_local_unpack(rec, pts);
+                    for (uint32_t j = 0; j < np; j++) {
+                        point(pts[j]);
+                    }
+                }
+            }
             ship(
                 sync_sender,
                 pack_sync_frame(
@@ -342,34 +505,6 @@ void kernel_main() {
         }
     };
 
-    // Anchors: this core's own (wall, refclk) pair at a refclk update, once per poll, against which the host checks
-    // the pusher's model.
-    uint32_t anchors = 0;
-    const auto anchor = [&]() __attribute__((noinline)) {
-        const eth_ptp::Instant t = eth_ptp::read_bracketed();
-        volatile tt_l1_ptr uint32_t* r =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kAnchorScratch + anchors * kRecordBytes);
-        r[kp::SYNC_META] = ((t.spins < 0xFFFFu ? t.spins : 0xFFFFu) << 16) | (kp::kSyncKindAnchor << 8);
-        r[kp::SYNC_ROUND] = 0;
-        r[kp::SYNC_VALUE_LO] = 0;
-        r[kp::SYNC_VALUE_HI] = 0;
-        r[kp::SYNC_WALL_LO] = t.wall_lo;
-        r[kp::SYNC_WALL_HI] = t.wall_hi;
-        r[kp::SYNC_REF_LO] = static_cast<uint32_t>(t.refclk);
-        r[kp::SYNC_REF_HI] = static_cast<uint32_t>(t.refclk >> 32);
-        if (++anchors == kAnchorRecords) {
-            ship(
-                sync_sender,
-                pack_sync_frame(
-                    kPusherXy,
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kAnchorScratch),
-                    0,
-                    anchors,
-                    kAnchorRecords));
-            anchors = 0;
-        }
-    };
-
     // Shipping waits for the host's go word, written once the receiver's ingest threads drain these sockets.
     while (*go == 0u && *stop == 0u) {
         (*hb)++;
@@ -396,6 +531,7 @@ void kernel_main() {
         }
     }
     drain_pusher(true);
+    send_audit();
     sweep();
     *done = kp::kRelayDrainedWord;
     socket_barrier(sender);
