@@ -695,15 +695,18 @@ def apply_partial_rope_decode(x, cos_tt, sin_tt, n_heads, batch_size, rope_dim):
     return result
 
 
-def apply_partial_rope_prefill(x, cos_tt, sin_tt, n_heads, rope_dim):
+def apply_partial_rope_prefill(x, cos_tt, sin_tt, n_heads, rope_dim, memory_config=None):
     """x: [1, n_heads, seq_len, HD]; cos/sin: [1, 1, seq_len, rope_dim].
 
     Fused HF-convention rotate-half via ttnn.experimental.rotary_embedding_hf (replaces manual
     slice/neg/concat/mul/add). Partial: only the first rope_dim is rotated; tail passes through.
+
+    ``memory_config`` defaults to L1 (see below). A caller whose ``n_heads x seq_len`` can outgrow L1
+    -- the DFlash drafter's prompt step, which ropes every head over the whole prompt -- passes DRAM.
     """
     # Prefill-only: roped q/k feed SDPA directly; L1 is safe at S=2048 (SDPA CBs fit; verified).
     # forward_prefill_paged's chunked_scaled_dot_product_attention still clashes with this at S=2048
-    _L1 = ttnn.L1_MEMORY_CONFIG
+    _L1 = ttnn.L1_MEMORY_CONFIG if memory_config is None else memory_config
     hd = x.shape[-1]
     seq_len = x.shape[-2]
     x_rope = ttnn.slice(x, (0, 0, 0, 0), (1, n_heads, seq_len, rope_dim), memory_config=_L1)

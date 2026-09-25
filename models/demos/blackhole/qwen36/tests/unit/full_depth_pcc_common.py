@@ -193,7 +193,7 @@ def _build_prompt(tokenizer, length):
     return ids[:, :length].to(torch.long)
 
 
-def hf_reference(ckpt_dir, token_ids, decode_steps=0):
+def hf_reference(ckpt_dir, token_ids, decode_steps=0, all_positions=False):
     """HF prefill + ``decode_steps`` greedy decode steps on CPU, then free the model.
 
     Returns ``(prefill_logits [vocab], [decode_logits [vocab], ...], [teacher_token, ...])``
@@ -201,6 +201,9 @@ def hf_reference(ckpt_dir, token_ids, decode_steps=0):
     argmax from the previous step), so TT can be driven with the identical inputs and
     step ``k``'s PCC measures step ``k`` rather than the compounding of a greedy
     divergence at step 0. ``decode_steps=0`` returns just the prefill logits.
+
+    ``all_positions=True`` returns the prefill logits of every prompt position,
+    ``[T, vocab]``, instead of only the last.
     """
     from transformers.models.qwen3_5 import Qwen3_5ForCausalLM, Qwen3_5TextConfig
 
@@ -218,11 +221,11 @@ def hf_reference(ckpt_dir, token_ids, decode_steps=0):
 
     with torch.no_grad():
         out = hf_model(token_ids, use_cache=True)
-        prefill_logits = out.logits[0, -1].float()
+        prefill_logits = out.logits[0].float() if all_positions else out.logits[0, -1].float()
         cache = out.past_key_values
 
         decode_logits, teacher_tokens = [], []
-        tok = int(prefill_logits.argmax())
+        tok = int(out.logits[0, -1].argmax())
         for _ in range(decode_steps):
             teacher_tokens.append(tok)
             out = hf_model(torch.tensor([[tok]], dtype=torch.long), past_key_values=cache, use_cache=True)

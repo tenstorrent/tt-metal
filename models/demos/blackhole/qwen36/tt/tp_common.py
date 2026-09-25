@@ -382,7 +382,7 @@ def decode_embed(emb, tok, args):
 
     ``EmbeddingsDeviceOperation`` with interleaved output parallelizes over token tiles, so
     decode B=32 is 1 core / ~21us of serial DRAM gathers. Width-sharded L1 output splits
-    across dim instead; measured 3.0us on N300 (test_embedding_decode_sweep.py) with PCC=1.0,
+    across dim instead; measured 3.0us on N300 with PCC=1.0,
     and the pre-norm all-gather accepts that layout with no extra reshard.
 
     Only used when ``args.emb_decode_memcfg`` is set (wh_9b_n300) AND the token tensor already
@@ -459,7 +459,7 @@ def create_prefill_mlp_matmul_program_config_full_grid(
     but the 27B MLP's prefill arm calls this.
 
     Two measured departures from create_prefill_mlp_matmul_program_config (both at the 27B's TP=8
-    shapes with a bf8 in0 -- tests/perf/test_mlp_prefill_matmul_sweep.py, numbers in tt/mlp.py):
+    shapes with a bf8 in0 -- numbers in tt/mlp.py):
 
       * The grid width is the full device width instead of _best_prefill_cols'. That heuristic
         maximises the output subblock, and at hidden_dim/tp = 68 tiles (17408/8/32, whose only

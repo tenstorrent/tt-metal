@@ -207,7 +207,7 @@ class Qwen36ModelArgs(ModelArgs):
         self.decode_grid_w = mesh_device.compute_with_storage_grid_size().x
         self.mlp_1d_decode = True
         # gate/up: 44 cores (11x4) on BH, the fastest measured (42.8us vs 43.9 for 8x4). On WH,
-        # swept at the exact production shape (M=32 K=4096 N=6144, test_mlp_decode_matmul_sweep.py):
+        # swept at the exact production shape (M=32 K=4096 N=6144):
         _gateup_9b = tpc.wh_9b_n300(self)
         _gateup_cores = 56 if _gateup_9b else (44 if tpc.is_blackhole() else 64)
         self.mlp_w1_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
@@ -310,8 +310,8 @@ class Qwen36ModelArgs(ModelArgs):
         self.act_shard_gdn_value = tpc.create_activation_shard_config(self.gdn_value_dim_tp)
         self.act_shard_attn_out = tpc.create_activation_shard_config(self.attn_out_dim_tp)
         # Decode token embedding: width-sharded L1 on dim_tp, 32 cores (8x4). Interleaved lands on
-        # 1 core / ~21us at B=32; this layout is 3.0us and the all-gather consumes it directly
-        # (test_embedding_decode_sweep.py). None outside wh_9b_n300.
+        # 1 core / ~21us at B=32; this layout is 3.0us and the all-gather consumes it directly.
+        # None outside wh_9b_n300.
         self.emb_decode_memcfg = tpc.create_activation_shard_config(self.dim // tp) if tpc.wh_9b_n300(self) else None
 
         # KV-cache height shard for paged_update_cache (one user per core).

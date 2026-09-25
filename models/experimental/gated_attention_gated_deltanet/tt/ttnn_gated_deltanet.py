@@ -6,9 +6,15 @@
 TTNN implementation of the Gated DeltaNet layer.
 """
 
-import torch
 
 import ttnn
+
+#: Cached [1, 1, total_len] arange per (device, total_len) for the conv1d one-hot selector.
+#: ttnn.arange uploads from host, which is illegal inside a trace capture; total_len is fixed per
+#: bucket so one build serves every step. Keyed by id(device): entries outlive their device if a
+#: device is closed and another allocated at the same address, which no current caller does, but a
+#: long-running multi-device harness should clear this between devices.
+_ARANGE_CACHE = {}
 
 from .ttnn_delta_rule_ops import (
     recurrent_gated_delta_rule_ttnn,
@@ -212,15 +218,40 @@ def _causal_conv1d_fir(
         # only the one-hot VALUES depend on valid_len.
         # valid_len may be a scalar (one length for all B rows) or a per-row list/tuple of length
         # B (batched prefill: each user's own real length picks that user's decode conv window).
-        sel = torch.zeros(B, kernel_size - 1, total_len, dtype=torch.float32)
-        if isinstance(valid_len, (list, tuple)):
-            for bi in range(B):
-                for j in range(kernel_size - 1):
-                    sel[bi, j, int(valid_len[bi]) + j] = 1.0
+        # Built on device -- row j of the one-hot is (arange(total_len) == valid_len + j) -- so no
+        # host tensor is uploaded and the masked-bucket prefill can be trace-captured (host->device
+        # writes are not allowed during trace capture). ttnn.arange itself uploads from host, so the
+        # range is cached per (device, total_len) in _ARANGE_CACHE; warm-up populates it before any
+        # capture begins.
+        _ar_key = (id(device), int(total_len))
+        _ar = _ARANGE_CACHE.get(_ar_key)
+        if _ar is None:
+            _ar = ttnn.arange(start=0, end=total_len, step=1, dtype=ttnn.float32, device=device)
+            _ar = ttnn.reshape(ttnn.to_layout(_ar, ttnn.TILE_LAYOUT), [1, 1, total_len])
+            _ARANGE_CACHE[_ar_key] = _ar
+
+        def _one_hot(vl):
+            rows = [ttnn.eq(_ar, float(int(vl) + j)) for j in range(kernel_size - 1)]
+            out = rows[0] if len(rows) == 1 else ttnn.concat(rows, dim=1)
+            if len(rows) != 1:
+                for r in rows:
+                    ttnn.deallocate(r)
+            return out  # [1, K-1, total_len]
+
+        if isinstance(valid_len, (list, tuple)) and len(set(int(v) for v in valid_len)) > 1:
+            blocks = [_one_hot(valid_len[bi]) for bi in range(B)]
+            sel_tt = ttnn.concat(blocks, dim=0)
+            for b in blocks:
+                ttnn.deallocate(b)
         else:
-            for j in range(kernel_size - 1):
-                sel[:, j, valid_len + j] = 1.0
-        sel_tt = ttnn.from_torch(sel, dtype=x_padded.dtype, layout=ttnn.TILE_LAYOUT, device=device)
+            _vl = valid_len[0] if isinstance(valid_len, (list, tuple)) else valid_len
+            _one = _one_hot(_vl)
+            sel_tt = _one if B == 1 else ttnn.repeat(_one, ttnn.Shape([B, 1, 1]))
+            if B != 1:
+                ttnn.deallocate(_one)
+        # _ar is cached and shared across calls -- do NOT deallocate it.
+        if sel_tt.dtype != x_padded.dtype:
+            sel_tt = ttnn.typecast(sel_tt, x_padded.dtype)
         xp = ttnn.to_layout(x_padded, ttnn.TILE_LAYOUT)
         # cross-chunk carry -> DRAM
         new_state = ttnn.matmul(sel_tt, xp, memory_config=ttnn.DRAM_MEMORY_CONFIG)

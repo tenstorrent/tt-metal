@@ -212,7 +212,7 @@ class Qwen36MLP:
             math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=True
         )
         # WH-only, gate/up decode matmuls ONLY (not down): MEASURED (N300, M=32 K=4096 N=6144,
-        # test_mlp_decode_matmul_sweep.py, 3 independent runs each) fp32_dest_acc_en=False beats
+        # 3 independent runs each) fp32_dest_acc_en=False beats
         self.compute_kernel_config_gateup_decode = (
             ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False, packer_l1_acc=False

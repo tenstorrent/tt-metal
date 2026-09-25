@@ -483,6 +483,14 @@ class TPGatedDeltaNet:
             return None
         return valid_len
 
+    #: Set by a caller that overwrites the conv carry this forward produces before anything reads it
+    #: (see Qwen36Model.gdn_conv_carry_discarded). ``valid_len`` only affects the FIR's ``new_state``
+    #: (the real tail at ``valid_len``); the convolution is causal, so rows below valid_len never see
+    #: the padding. With the carry discarded the FIR passes ``valid_len=None`` and skips building it.
+    #: DFlash's verify is such a caller: TtTarget._run restores the anchor's GDN snapshot (conv_carry
+    #: and conv_states) at the head of every step, and re-anchors run on whole buckets.
+    conv_carry_discarded = False
+
     def prefill_uses_native_conv1d(self, T, valid_len=None):
         """Will a T-token prefill chunk with this ``valid_len`` take the native ttnn.conv1d depthwise
         path (True), or the MAC FIR fallback (False)?
@@ -913,7 +921,9 @@ class TPGatedDeltaNet:
         ttnn.deallocate(ab)
         return qkv, z, a, b
 
-    def forward_prefill(self, x, chunk_size=128, valid_len=None, capture_state=False, return_state=False):
+    def forward_prefill(
+        self, x, chunk_size=128, valid_len=None, capture_state=False, return_state=False, valid_mask=None
+    ):
         """Causal chunk-prefill from scratch. x [1,1,T,dim]: K-sharded (dim/tp per device) when the
         fused in-proj AG-matmul path is active (``_fuse_agmm`` and T>TILE — the norm skips its
         post-AG); replicated otherwise. Output reduce-scattered.
@@ -973,7 +983,11 @@ class TPGatedDeltaNet:
                 conv_state=_cstate,
                 weight_taps=tw["conv_taps"],
                 bias_dev=None,
-                valid_len=valid_len,
+                # valid_len is used by the FIR only to select new_state from the real tail (an
+                # on-device one-hot select matmul); the taps never read it. When the carry is
+                # discarded, pass None: the conv output is identical and new_state becomes the
+                # padding-tail slice, which nothing reads. return_state callers need the real tail.
+                valid_len=None if (self.conv_carry_discarded and not return_state) else valid_len,
             )
         ttnn.deallocate(qkv)
 
@@ -1015,8 +1029,10 @@ class TPGatedDeltaNet:
 
         _use_fused = fused_chunk_enabled()
         _delta_fn = chunk_gated_delta_rule_fused_adapter if _use_fused else chunk_gated_delta_rule_seq_adapter
-        # const_tiles only applies to the fused op; the seq adapter has no such param.
+        # const_tiles and valid_mask only apply to the fused op; the seq adapter has neither.
         _extra = {"const_tiles": self._fused_const_tiles} if _use_fused else {}
+        if _use_fused and valid_mask is not None:
+            _extra["valid_mask"] = valid_mask
         o, final_state = _delta_fn(
             q,
             k,
