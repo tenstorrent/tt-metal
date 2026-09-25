@@ -1424,6 +1424,15 @@ bool any_sender_channels_active(
     return false;
 }
 
+bool any_receiver_channels_active() {
+    for (size_t i = 0; i < NUM_RECEIVER_CHANNELS; i++) {
+        if (get_ptr_val<to_receiver_packets_sent_streams[i]>() != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /*
  * In Blackhole, there are typically 2-eriscs running cooperatively to implement the fabric router. They
  * execute the sender and receiver traffic flows, respectively (hence they run completely independently).
@@ -1528,7 +1537,9 @@ FORCE_INLINE void update_telemetry(
         auto* state_manager_l1 = const_cast<tt_l1_ptr RouterStateManager*>(&routing_table_l1->state_manager);
         fabric_telemetry->dynamic_info.erisc[MY_ERISC_ID].router_state = state_manager_l1->state;
     }
-    if constexpr (FABRIC_TELEMETRY_HEARTBEAT_TX) {
+
+    // In dual-erisc mode (for blackhole), only the master erisc (erisc 0) handles sender channels (tx)
+    if constexpr (FABRIC_TELEMETRY_HEARTBEAT_TX && (NUM_ACTIVE_ERISCS == 1 || MY_ERISC_ID == 0)) {
         bool sender_idle = false;
         if (!tx_progress) {
             sender_idle = !any_sender_channels_active(local_sender_channel_free_slots_stream_ids_ordered);
@@ -1540,10 +1551,12 @@ FORCE_INLINE void update_telemetry(
             tx_heartbeat_addr->full = local_fabric_telemetry.dynamic_info.erisc[MY_ERISC_ID].tx_heartbeat.full;
         }
     }
-    if constexpr (FABRIC_TELEMETRY_HEARTBEAT_RX) {
+
+    // In dual-erisc mode (for blackhole), only the subordinate erisc (erisc 1) handles receiver channels (rx)
+    if constexpr (FABRIC_TELEMETRY_HEARTBEAT_RX && (NUM_ACTIVE_ERISCS == 1 || MY_ERISC_ID == 1)) {
         bool receiver_idle = false;
         if (!rx_progress) {
-            receiver_idle = (get_ptr_val<to_receiver_packets_sent_streams[0]>() == 0);
+            receiver_idle = !any_receiver_channels_active();
         }
         if (rx_progress || receiver_idle) {
             volatile RiscTimestampV2* rx_heartbeat_addr =
