@@ -660,11 +660,11 @@ namespace {
 // What each end leaves past its control word (eth_ptp::StopDiag): rounds, the timer word (0 no hardware path, 1 ran,
 // 2 never acknowledged its rate, in which case that end emitted no hardware stamps; the session's PTP offset in the
 // bits above, a tick multiple), wall cycles inside steps that sent or took frames, wall cycles and refclk ticks of the
-// run, the longest such step in wall cycles, then rounds not recorded, frames with queue units beyond their own (a
-// keepalive or a resend), frames whose pilot or itself did not hand off in time, bursts whose ingress stamps did not
-// match their frames, and frames that came in without an egress stamp.
+// run, the longest such step in wall cycles, then rounds not recorded, frames left for a later step (the queue was busy
+// at their phase), bursts whose ingress stamps did not match their frames, and frames that came in without an egress
+// stamp.
 struct StopDiag {
-    uint32_t rounds, timer, hold_lo, hold_hi, wall_lo, wall_hi, ref_lo, ref_hi, hold_max, drop[5];
+    uint32_t rounds, timer, hold_lo, hold_hi, wall_lo, wall_hi, ref_lo, ref_hi, hold_max, drop[4];
     double wall() const { return static_cast<double>((uint64_t{wall_hi} << 32) | wall_lo); }
     double refclk() const { return static_cast<double>((uint64_t{ref_hi} << 32) | ref_lo); }
     // The share of the core's time inside bursts, and the longest burst in us.
@@ -673,7 +673,7 @@ struct StopDiag {
     }
     double longest_us() const { return wall() == 0.0 ? 0.0 : hold_max * (refclk() * 20.0 / wall()) / 1000.0; }
 };
-static_assert(sizeof(StopDiag) == 14 * sizeof(uint32_t));
+static_assert(sizeof(StopDiag) == 13 * sizeof(uint32_t));
 
 StopDiag read_stop_diag(tt::Cluster& cluster, uint32_t chip, const CoreCoord& virt, uint32_t ctl) {
     StopDiag d{};
@@ -703,7 +703,7 @@ void log_link_diag(uint32_t chip_a, uint32_t chip_b, const StopDiag& da, const S
         static_cast<int32_t>(da.timer & ~3u),
         static_cast<int32_t>(db.timer & ~3u));
     for (const auto& [chip, name, d] : {std::tuple{chip_a, "sender", &da}, std::tuple{chip_b, "receiver", &db}}) {
-        if (d->drop[0] != 0 || d->drop[3] != 0 || d->drop[4] != 0) {
+        if (d->drop[0] != 0 || d->drop[2] != 0 || d->drop[3] != 0) {
             log_warning(
                 tt::LogMetal,
                 "[streaming profiler] link sync chip {} {}: left out: {} rounds not recorded, {} bursts whose ingress "
@@ -711,17 +711,15 @@ void log_link_diag(uint32_t chip_a, uint32_t chip_b, const StopDiag& da, const S
                 chip,
                 name,
                 d->drop[0],
-                d->drop[3],
-                d->drop[4]);
+                d->drop[2],
+                d->drop[3]);
         }
-        if (d->drop[1] != 0 || d->drop[2] != 0) {
+        if (d->drop[1] != 0) {
             log_info(
                 tt::LogMetal,
-                "[streaming profiler] link sync chip {} {}: frames retried at a later step (queue busy) {}, frames "
-                "that went beside a keepalive or resend {}",
+                "[streaming profiler] link sync chip {} {}: {} frames retried at a later step (queue busy)",
                 chip,
                 name,
-                d->drop[2],
                 d->drop[1]);
         }
         if ((d->timer & 3u) == 2) {

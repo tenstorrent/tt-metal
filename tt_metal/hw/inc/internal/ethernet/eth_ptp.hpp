@@ -29,6 +29,9 @@
 //     sequence number (the RX queues' sequence registers stand still through them) and, per the ISA documentation, are
 //     generated only when the queue has no other packet to carry the numbers, so none is sent between or behind queued
 //     frames.
+//   - A keepalive is its link header and padding to the minimum frame; an in-frame stamp at ts_offset 2 lands in that
+//     padding and the keepalive arrives intact, so a queue can stay armed in-frame for a whole session (2026-09-25:
+//     every keepalive stamped at ts_offset 2 or 8 arrived, while at ts_offset 40 every one was lost).
 //   - Reading the LO half of CFR or PTP64NS captures its HI half (tt_ptp_timer.sv: the HI register loads on the LO
 //     read strobe). The wall clock has two HI addresses: WALL_CLOCK_1 is live, WALL_CLOCK_1_AT is the value at the
 //     last LO read; only the latter pairs with LO.
@@ -186,7 +189,8 @@ struct PtpTimer {
 // bits of ORIGIN_TIMESTAMP_MSBS then PTP64NS, big-endian (ts_offset kFrameStampOffset, in 2-byte units; the field
 // lands two bytes past it, measured). The peer reads the stamp out of the frame in its own L1, so no core reads the
 // MAC: under fabric traffic a router's reads of any MAC register, the egress FIFO or a status word, wedged the link.
-constexpr uint32_t kFrameStampOffset = 40;
+// The field sits where a keepalive has only padding, so the keepalives an armed queue sends stay intact.
+constexpr uint32_t kFrameStampOffset = 2;
 constexpr uint32_t kFrameStampField = 2 * kFrameStampOffset + 2;
 constexpr uint32_t kFrameStampHiWord = (kFrameStampField + 2) / 4;
 static_assert((kFrameStampField + 2) % 4 == 0);

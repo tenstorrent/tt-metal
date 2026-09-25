@@ -64,23 +64,17 @@ using LinkRule = RxStampRule<kLinkTcamRow, kLinkLabel>;
 constexpr uint32_t kTripsPerRound = 96;
 constexpr uint32_t kBurstFrames = 4;
 constexpr uint32_t kBurstsPerRound = kTripsPerRound / kBurstFrames;
-// A frame's payload: the sync word (bytes_sent the frame's key, receiver_ack the key an echo answers, reserved_2 the
-// round), the sending end's PTP offset and timer flag, then the MAC's egress stamp field. Two WORD_CNT units against
-// a keepalive's one, which is what counts the frames among the queue's hand-offs; 80 bytes is the first two-unit
-// size, 96 leaves a unit's margin either way. Frames of 16 to 128 bytes hand off in the same time.
+// A frame's payload: the MAC's egress stamp field first (eth_ptp.hpp kFrameStampField), then the sync word (bytes_sent
+// the frame's key, receiver_ack the key an echo answers, reserved_2 the round) and the sending end's PTP offset and
+// timer flag. Frames of 16 to 128 bytes hand off in the same time.
 constexpr uint32_t kFrameBytes = 96;
-constexpr uint32_t kWordOffsetLo = 4, kWordOffsetHi = 5, kWordTimerOk = 6;
-// The L1 both ends own, the same addresses on both (kernel_profiler::kLinkSyncL1Bytes): where the peer's pilot lands,
-// the frame slots, then the control and diagnostic words.
-constexpr uint32_t kPilotOffset = 0;
-constexpr uint32_t kSlotsOffset = kFrameBytes;
+constexpr uint32_t kWordSync = 4, kWordOffsetLo = 8, kWordOffsetHi = 9, kWordTimerOk = 10;
+// The L1 both ends own, the same addresses on both (kernel_profiler::kLinkSyncL1Bytes): the frame slots, then the
+// control and diagnostic words.
 constexpr uint32_t kSlotsBytes = kBurstFrames * kFrameBytes;
 constexpr uint32_t kCtlOffset = kernel_profiler::kLinkSyncCtlOffset;
 constexpr uint32_t kCombPhases = 256;
 constexpr uint32_t kFramePhaseStep = 157;  // odd, so the kCombPhases phases are a permutation
-// Polls for a hand-off on a queue the fabric may be loading (our frames wait behind its at the MAC), after which the
-// frame is left for a later step: ~6 us, a bound on a step's hold.
-constexpr uint32_t kHandoffSpins = 256;
 // The control word at the diagnostics' base, the host's: rounds are issued only while it reads kCtlRun, and a
 // resident kernel exits on kCtlStop. Set once the profiler's consumer and trackers are up, so no round predates
 // the clock coverage that places it.
@@ -88,20 +82,19 @@ constexpr uint32_t kCtlRun = kernel_profiler::kLinkSyncCtlRun, kCtlStop = kernel
 constexpr uint32_t kHwUnitsPerNs = kernel_profiler::kLinkSyncStampUnitsPerNs;
 constexpr uint32_t kPaceTicks = kernel_profiler::kLinkSyncPaceTicks;
 static_assert(kTripsPerRound % kBurstFrames == 0 && kBurstFrames >= 2 && (kFramePhaseStep & 1) == 1);
-static_assert(kFrameBytes >= 80 && kFrameBytes % 16 == 0 && kFrameBytes >= sizeof(eth_channel_sync_t));
-static_assert(sizeof(eth_channel_sync_t) <= 4 * kWordOffsetLo && 4 * (kWordTimerOk + 1) <= kFrameStampField);
-static_assert(kFrameStampField + 10 <= kFrameBytes);
-static_assert(kSlotsOffset + kSlotsBytes <= kCtlOffset);
-static_assert(kCtlOffset + 8 + 14 * sizeof(uint32_t) <= kernel_profiler::kLinkSyncRingOffset);  // StopDiag::write
+static_assert(kFrameBytes % 16 == 0 && 4 * (kWordTimerOk + 1) <= kFrameBytes);
+static_assert(
+    kFrameStampField + 10 <= 4 * kWordSync && 4 * kWordSync + sizeof(eth_channel_sync_t) <= 4 * kWordOffsetLo);
+static_assert(kSlotsBytes <= kCtlOffset);
+static_assert(kCtlOffset + 8 + 13 * sizeof(uint32_t) <= kernel_profiler::kLinkSyncRingOffset);  // StopDiag::write
 
 // Frame j of a round rides in slot j % kBurstFrames, the same L1 address on both ends, so the receiver's echo lands
 // on the frame it answers. The sync word carries the round and the trip: bytes_sent in the frame, which the receiver
 // clears once it has taken it, and receiver_ack in the echo; reserved_2 carries the round's full number.
-FORCE_INLINE volatile eth_channel_sync_t* slot(uint32_t base, uint32_t j) {
-    return reinterpret_cast<volatile eth_channel_sync_t*>(base + kSlotsOffset + (j % kBurstFrames) * kFrameBytes);
-}
-FORCE_INLINE volatile eth_channel_sync_t* pilot(uint32_t base) {
-    return reinterpret_cast<volatile eth_channel_sync_t*>(base + kPilotOffset);
+FORCE_INLINE uint32_t frame_at(uint32_t base, uint32_t j) { return base + (j % kBurstFrames) * kFrameBytes; }
+FORCE_INLINE volatile uint32_t* words(uint32_t frame) { return reinterpret_cast<volatile uint32_t*>(frame); }
+FORCE_INLINE volatile eth_channel_sync_t* sync_word(uint32_t frame) {
+    return reinterpret_cast<volatile eth_channel_sync_t*>(frame + 4 * kWordSync);
 }
 constexpr uint32_t kTripMask = 0x1FF;
 constexpr uint32_t frame_key(uint32_t round, uint32_t j) { return (round << 9) | (j + 1); }
@@ -194,8 +187,7 @@ struct StampSum {
 };
 // This end's offset and timer flag into a frame it is about to send, and its stamp field cleared: the slot still holds
 // the stamp of the last frame that came in through it, so a frame the MAC did not stamp reads as zero, not as that.
-FORCE_INLINE void carry_offset(volatile eth_channel_sync_t* s, const PtpTimer& timer) {
-    volatile uint32_t* w = reinterpret_cast<volatile uint32_t*>(s);
+FORCE_INLINE void carry_offset(volatile uint32_t* w, const PtpTimer& timer) {
     w[kWordOffsetLo] = static_cast<uint32_t>(timer.offset_64);
     w[kWordOffsetHi] = static_cast<uint32_t>(static_cast<uint64_t>(timer.offset_64) >> 32);
     w[kWordTimerOk] = timer.ok ? 1u : 0u;
@@ -206,14 +198,14 @@ FORCE_INLINE void carry_offset(volatile eth_channel_sync_t* s, const PtpTimer& t
 // What each end leaves past its control word for the host's log (streaming_profiler_device.cpp reads it back): +8
 // rounds, +12 the timer word (1 ran, 2 never acknowledged its rate, the PTP offset in the bits above), +16 wall cycles
 // inside steps that sent or took frames and +24 wall cycles of the run (two words each), +32 refclk ticks of the run
-// (two words), +40 the longest such step in wall cycles, then the counts: +44 rounds not recorded, +48 frames with
-// queue units beyond their own (a keepalive or a resend), +52 frames whose pilot or itself did not hand off in time,
-// +56 bursts whose ingress stamps did not match their frames, +60 frames that came in without an egress stamp.
+// (two words), +40 the longest such step in wall cycles, then the counts: +44 rounds not recorded, +48 frames left for
+// a later step (the queue was busy at their phase), +52 bursts whose ingress stamps did not match their frames, +56
+// frames that came in without an egress stamp.
 struct StopDiag {
     uint32_t rounds = 0, timer = 0;
     uint64_t hold = 0, span_wall = 0, span_refclk = 0;
     uint32_t hold_max = 0;
-    uint32_t drop[5] = {};
+    uint32_t drop[4] = {};
     FORCE_INLINE void note_hold(uint32_t cycles) {
         hold += cycles;
         hold_max = cycles > hold_max ? cycles : hold_max;
@@ -224,7 +216,7 @@ struct StopDiag {
     }
     void write(uint32_t stop_addr) const {
         volatile tt_l1_ptr uint32_t* w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stop_addr + 8);
-        const uint32_t words[14] = {
+        const uint32_t words[13] = {
             rounds,
             timer,
             static_cast<uint32_t>(hold),
@@ -237,9 +229,8 @@ struct StopDiag {
             drop[0],
             drop[1],
             drop[2],
-            drop[3],
-            drop[4]};
-        for (uint32_t i = 0; i < 14; i++) {
+            drop[3]};
+        for (uint32_t i = 0; i < 13; i++) {
             w[i] = words[i];
         }
     }
@@ -268,7 +259,7 @@ struct HwRound {
     __attribute__((noinline)) void pair(const uint64_t* tx_ts, const uint64_t* rx_ts, StopDiag& diag) {
         for (uint32_t m = 0; m < kBurstFrames; m++) {
             if (tx_ts[m] == 0) {
-                diag.drop[4]++;
+                diag.drop[3]++;
                 continue;
             }
             tx.add(tx_ts[m]);
@@ -292,78 +283,19 @@ __attribute__((noinline)) inline bool take_stamps(uint64_t* rx, StopDiag& diag) 
     }
     if (!ok) {
         fifo.flush();
-        diag.drop[3]++;
+        diag.drop[2]++;
     }
     return ok;
 }
-// The queue's own keepalives are kept out of the armed window. A keepalive is the queue's TT-link sequence update,
-// carrying its acks for the other direction, and the MAC stamps whatever the queue hands off while armed: a keepalive
-// stamped at byte 82 of a far shorter packet reaches the peer corrupt, which forces resends and, now and then, a
-// spurious ack that leaves the peer's queue re-sending a window the peer never accepts. A keepalive is generated only
-// after the keepalive timeout without a packet sent (documented; measured 8002 cycles), so a pilot frame sent just
-// before arming leaves the queue none to generate while armed, the armed window being one frame's. arm_burst waits for
-// the pilot's two WORD_CNT units (a keepalive that left just before it is one and cannot pass for it), then arms and
-// anchors the counters; false if the pilot did not go. The pilot goes under the queue's boot header row, so the peer's
-// classifier does not stamp it: ingress stamps stay the frames'.
-struct Anchor {
-    uint32_t start = 0, word = 0;
-};
-// A frame goes only onto a free queue, and the queue is given kHandoffSpins polls to free up: under fabric load a
-// link-level resend on it can keep it busy for good, and a router waiting on it stops serving the fabric, which then
-// deadlocks. No context switch while waiting: the core's owner may be a router, whose switches to base firmware are
-// coordinated with the tile's other RISC.
-FORCE_INLINE bool txq_free() {
-    for (uint32_t spin = 0; internal_::eth_txq_is_busy(kLinkTxq); spin++) {
-        if (spin == kHandoffSpins) {
-            return false;
-        }
-    }
-    return true;
-}
-FORCE_INLINE bool issue(volatile eth_channel_sync_t* s) {
-    if (!txq_free()) {
+// The queue stays armed in-frame for the whole session (EndBase::open), so every frame it sends carries its egress
+// stamp, and its keepalives take the stamp in their padding. A frame goes only onto a free queue and otherwise waits
+// for a later step: a router waiting on a queue a link-level resend keeps busy stops serving the fabric.
+FORCE_INLINE bool issue(uint32_t frame) {
+    if (internal_::eth_txq_is_busy(kLinkTxq)) {
         return false;
     }
-    const uint32_t addr = reinterpret_cast<uint32_t>(s);
-    internal_::eth_send_packet_unsafe(kLinkTxq, addr >> 4, addr >> 4, kFrameBytes >> 4);
+    internal_::eth_send_packet_unsafe(kLinkTxq, frame >> 4, frame >> 4, kFrameBytes >> 4);
     return true;
-}
-__attribute__((noinline)) inline bool arm_burst(
-    const LinkHeaderRow& header, uint32_t base, Anchor& at, StopDiag& diag) {
-    constexpr LinkQueue txq{};
-    const uint32_t units0 = txq.words_sent();
-    header.select(false);
-    const bool went = issue(pilot(base)) && txq_free();
-    header.select(true);
-    if (!went) {
-        diag.drop[2]++;
-        return false;
-    }
-    for (uint32_t spin = 0; txq.words_sent() - units0 < 2; spin++) {
-        if (spin == kHandoffSpins) {
-            diag.drop[2]++;
-            return false;
-        }
-    }
-    txq.arm_in_frame();
-    at.start = txq.packets_started();
-    at.word = txq.words_sent();
-    return true;
-}
-// Disarms once the armed frames have all started: the command is sampled as the queue latches each frame's command,
-// so a frame still queued when the polls run out goes without its egress stamp. WORD_CNT trails the starts while the
-// MAC is busy with the fabric's queue, so it is read after them; units beyond two per frame are a keepalive or a
-// link-level resend that went while armed.
-__attribute__((noinline)) inline void finish_burst(const Anchor& at, uint32_t frames, StopDiag& diag) {
-    constexpr LinkQueue txq{};
-    for (uint32_t spin = 0; txq.packets_started() - at.start < frames; spin++) {
-        if (spin == kHandoffSpins) {
-            diag.drop[2]++;
-            break;
-        }
-    }
-    txq.disarm();
-    diag.drop[1] += txq.words_sent() - at.word > 2 * frames;
 }
 
 // Each frame's place: a comb phase past the refclk update it waits for, the update period in wall cycles measured
@@ -391,14 +323,9 @@ struct Grid {
     }
     // Wall cycles per refclk tick, x16.
     uint32_t c16() const { return p16 >> 2; }
-    // Frame j of round `round` under an arming of its own: false if the queue did not take the frame in time, which
-    // leaves it for a later step. A gap of 2^27 cycles or more since the last update (a pause) keeps the period it had.
-    __attribute__((noinline)) bool send(
-        const LinkHeaderRow& header, uint32_t base, uint32_t round, uint32_t j, StopDiag& diag) {
-        Anchor at;
-        if (!arm_burst(header, base, at, diag)) {
-            return false;
-        }
+    // Frame j of round `round`: false if the queue was busy at its phase, which leaves it for a later step. A gap of
+    // 2^27 cycles or more since the last update (a pause) keeps the period it had.
+    __attribute__((noinline)) bool send(uint32_t base, uint32_t round, uint32_t j, StopDiag& diag) {
         uint32_t w = 0, r = 0;
         if (next_update(w, r)) {
             const uint32_t cycles = w - edge_wall, updates = (r - edge_refclk) / 4u;
@@ -411,8 +338,8 @@ struct Grid {
             w = rd(kWallClockLo);
         }
         pacer.until(w + kLeadCycles + frame_phase_cycles(round * kTripsPerRound + j, p16));
-        const bool went = issue(slot(base, j));
-        finish_burst(at, went ? 1u : 0u, diag);
+        const bool went = issue(frame_at(base, j));
+        diag.drop[1] += !went;
         return went;
     }
 };
@@ -453,7 +380,7 @@ struct Ring {
 // a burst whose frame was lost would hold the link for good.
 inline void clear_slots(uint32_t base) {
     for (uint32_t j = 0; j < kBurstFrames; j++) {
-        volatile eth_channel_sync_t* s = slot(base, j);
+        volatile eth_channel_sync_t* s = sync_word(frame_at(base, j));
         s->bytes_sent = 0;
         s->receiver_ack = 0;
         s->reserved_2 = 0;
@@ -483,7 +410,7 @@ struct EndBase {
         timer.start();
         rule.install();
         header.install();
-        LinkQueue{}.disarm();
+        LinkQueue{}.arm_in_frame();
     }
     void stop() {
         LinkQueue{}.disarm();
@@ -572,7 +499,7 @@ struct SenderLink : EndBase {
 private:
     FORCE_INLINE bool echoed() const {
         for (uint32_t i = 0; i < kBurstFrames; i++) {
-            if (slot(slot_base, i)->receiver_ack != frame_key(round, out_j0 + i)) {
+            if (sync_word(frame_at(slot_base, i))->receiver_ack != frame_key(round, out_j0 + i)) {
                 return false;
             }
         }
@@ -580,7 +507,7 @@ private:
     }
     __attribute__((noinline)) void send_next() {
         const uint32_t w = rd(kWallClockLo);
-        out_sent += grid.send(header, slot_base, round, out_j0 + out_sent, diag);
+        out_sent += grid.send(slot_base, round, out_j0 + out_sent, diag);
         diag.note_hold(rd(kWallClockLo) - w);
     }
     // A slot, once all the last burst's echoes are in: its pairs (egress stamps from the echoes themselves, ingress
@@ -593,7 +520,7 @@ private:
         if (started) {
             uint64_t tx[kBurstFrames], rx[kBurstFrames];
             for (uint32_t i = 0; i < kBurstFrames; i++) {
-                tx[i] = rnd.peer_frame(reinterpret_cast<volatile uint32_t*>(slot(slot_base, i)));
+                tx[i] = rnd.peer_frame(words(frame_at(slot_base, i)));
             }
             if (take_stamps(rx, diag)) {
                 rnd.pair(tx, rx, diag);
@@ -611,8 +538,9 @@ private:
         out_j0 = next_j;
         next_j += kBurstFrames;
         for (uint32_t i = 0; i < kBurstFrames; i++) {
-            volatile eth_channel_sync_t* s = slot(slot_base, i);
-            carry_offset(s, timer);
+            const uint32_t f = frame_at(slot_base, i);
+            carry_offset(words(f), timer);
+            volatile eth_channel_sync_t* s = sync_word(f);
             s->receiver_ack = 0;
             s->reserved_2 = round;
             s->bytes_sent = frame_key(round, out_j0 + i);
@@ -646,7 +574,7 @@ struct ReceiverLink : EndBase {
         }
         if (echoed != taken) {
             echo();
-        } else if (slot(slot_base, taken)->bytes_sent != 0) {
+        } else if (sync_word(frame_at(slot_base, taken))->bytes_sent != 0) {
             take();
             echo();
         }
@@ -658,7 +586,8 @@ private:
     // closes the previous. Its last frame takes the burst's ingress stamps and pairs them.
     __attribute__((noinline)) void take() {
         const uint32_t w = rd(kWallClockLo);
-        volatile eth_channel_sync_t* s = slot(slot_base, taken);
+        const uint32_t f = frame_at(slot_base, taken);
+        volatile eth_channel_sync_t* s = sync_word(f);
         if (taken == 0) {
             if (!started || s->reserved_2 != round) {
                 if (started) {
@@ -670,14 +599,14 @@ private:
             }
             echo_j0 = (s->bytes_sent & kTripMask) - 1;
         }
-        tx[taken] = rnd.peer_frame(reinterpret_cast<volatile uint32_t*>(s));
+        tx[taken] = rnd.peer_frame(words(f));
         if (taken == kBurstFrames - 1) {
             uint64_t rx[kBurstFrames];
             if (take_stamps(rx, diag)) {
                 rnd.pair(tx, rx, diag);
             }
         }
-        carry_offset(s, timer);
+        carry_offset(words(f), timer);
         s->receiver_ack = s->bytes_sent;
         s->bytes_sent = 0;
         taken++;
@@ -685,7 +614,7 @@ private:
     }
     __attribute__((noinline)) void echo() {
         const uint32_t w = rd(kWallClockLo);
-        echoed += grid.send(header, slot_base, round, echo_j0 + echoed, diag);
+        echoed += grid.send(slot_base, round, echo_j0 + echoed, diag);
         if (echoed == kBurstFrames) {
             taken = 0;
             echoed = 0;

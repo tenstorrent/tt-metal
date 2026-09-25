@@ -4,7 +4,7 @@
 
 // The sending end of the streaming profiler's link sync as a resident kernel: opens the 1588 session, handshakes
 // with the receiver, then steps the link until the host writes the stop word (eth_ptp_link.hpp). Runtime arg: the
-// link's L1 (pilot, frame slots, control words).
+// link's L1 (frame slots, control words).
 
 #include <cstdint>
 
