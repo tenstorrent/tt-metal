@@ -46,8 +46,7 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
     TT_FATAL(end_tensor.buffer() != nullptr, "End buffer should be allocated on device!");
     TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
 
-    tt::DataFormat dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t single_tile_size = tt::tile_size(dfb_data_format);
+    uint32_t single_tile_size = tt::tt_metal::tile_size(input_tensor.dtype());
 
     constexpr uint32_t num_input_tiles = 2;
 
@@ -55,13 +54,13 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
         .unique_id = TA_IN,
         .entry_size = single_tile_size,
         .num_entries = num_input_tiles,
-        .data_format_metadata = dfb_data_format,
+        .data_format_metadata = input_tensor.dtype(),
     };
     DataflowBufferSpec dfb_tensor{
         .unique_id = TA_TENSOR,
         .entry_size = single_tile_size,
         .num_entries = 1,
-        .data_format_metadata = dfb_data_format,
+        .data_format_metadata = input_tensor.dtype(),
     };
 
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_tensor.padded_shape().rank());

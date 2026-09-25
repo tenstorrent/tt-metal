@@ -28,11 +28,9 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingSingleCoreFactory::
     CoreRange core = sub_core_grids.has_value() ? corerange_to_cores(sub_core_grids.value()).at(0) : default_core;
     CoreRangeSet core_ranges{core};
 
-    tt::DataFormat input_dfb_data_format = datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_dfb_data_format);
+    uint32_t input_single_tile_size = tt::tt_metal::tile_size(a.dtype());
 
-    tt::DataFormat output_dfb_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_dfb_data_format);
+    uint32_t output_single_tile_size = tt::tt_metal::tile_size(output.dtype());
 
     bool fp32_llk_acc = a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 ||
                         output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B;
@@ -123,13 +121,13 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingSingleCoreFactory::
             .unique_id = IN,
             .entry_size = input_single_tile_size,
             .num_entries = num_input_tiles,
-            .data_format_metadata = input_dfb_data_format,
+            .data_format_metadata = a.dtype(),
         },
         DataflowBufferSpec{
             .unique_id = OUT,
             .entry_size = output_single_tile_size,
             .num_entries = num_output_tiles,
-            .data_format_metadata = output_dfb_data_format,
+            .data_format_metadata = output.dtype(),
         },
     };
 

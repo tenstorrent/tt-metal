@@ -201,8 +201,6 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
         actual_output_shape[i] = output_tensor_end[i] - output_tensor_start[i];
     }
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-
     TT_FATAL(output.is_sharded(), "padded_slice output tensor must be sharded.");
     auto output_shard_spec = output.shard_spec().value();
     uint32_t output_row_size_bytes = output_shard_spec.shape[1] * output.element_size();
@@ -257,7 +255,7 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
         .unique_id = PS_OUT_DFB,
         .entry_size = output_cb_page_size,
         .num_entries = num_output_sticks_per_core,
-        .data_format_metadata = cb_data_format,
+        .data_format_metadata = a.dtype(),
     };
     out_dfb.borrowed_from = PS_OUT;
     spec.dataflow_buffers.push_back(out_dfb);

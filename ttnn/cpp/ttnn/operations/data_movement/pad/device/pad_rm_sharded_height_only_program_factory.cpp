@@ -252,9 +252,6 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
         stick_size_unpadded == stick_size_padded,
         "sharded pad does not support pad on last dim currently as that will cause perf degradation");
 
-    tt::DataFormat dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    tt::DataFormat dst_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-
     IDevice* device = a.device();
 
     // input shard spec
@@ -295,7 +292,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
         .unique_id = SH_H_IN_SHARD,
         .entry_size = stick_size_unpadded,
         .num_entries = std::min(shard_height_unpadded, num_unpadded_sticks),
-        .data_format_metadata = dfb_data_format,
+        .data_format_metadata = a.dtype(),
         .borrowed_from = SH_H_INPUT,
     };
 
@@ -308,7 +305,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
         .unique_id = SH_H_OUT_SHARD,
         .entry_size = stick_size_padded,
         .num_entries = shard_height_padded,
-        .data_format_metadata = dst_dfb_data_format,
+        .data_format_metadata = output.dtype(),
         .borrowed_from = SH_H_OUTPUT,
     };
 
@@ -317,7 +314,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
         .unique_id = SH_H_PAD,
         .entry_size = stick_size_padded,
         .num_entries = 1,
-        .data_format_metadata = dfb_data_format,
+        .data_format_metadata = a.dtype(),
     };
 
     // construct const buffer with the pad_value

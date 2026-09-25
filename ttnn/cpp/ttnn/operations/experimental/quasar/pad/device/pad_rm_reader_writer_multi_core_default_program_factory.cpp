@@ -97,8 +97,6 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreDefaultProgra
             stick_size_padded - (num_output_pages_in_row - 1) * output_page_size;
     }
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-
     IDevice* device = a.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -146,19 +144,19 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreDefaultProgra
         .unique_id = CB_IN0,
         .entry_size = stick_size_padded_aligned,
         .num_entries = buffer_reader_writer_async_factor * num_sticks_per_barrier,
-        .data_format_metadata = cb_data_format,
+        .data_format_metadata = a.dtype(),
     };
     DataflowBufferSpec cb_pad_spec{
         .unique_id = CB_PAD,
         .entry_size = stick_size_padded_DRAM_aligned,
         .num_entries = 1,
-        .data_format_metadata = cb_data_format,
+        .data_format_metadata = a.dtype(),
     };
     DataflowBufferSpec cb_pad_align_spec{
         .unique_id = CB_PAD_ALIGN,
         .entry_size = stick_size_padded_DRAM_aligned,
         .num_entries = 1,
-        .data_format_metadata = cb_data_format,
+        .data_format_metadata = a.dtype(),
     };
 
     // ------------------------------------------------------------------------

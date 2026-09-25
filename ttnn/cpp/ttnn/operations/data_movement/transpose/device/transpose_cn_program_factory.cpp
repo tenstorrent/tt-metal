@@ -38,14 +38,14 @@ ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_progr
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_cn needs to be on device!");
     TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_cn needs to be allocated in a buffer on device!");
 
-    tt::DataFormat dfb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t page_shape[2] = {TILE_WIDTH, TILE_HEIGHT};
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
         page_shape[0] = 1;
         page_shape[1] = input_shape[-1];
     }
     uint32_t page_size = page_shape[0] * page_shape[1];
-    uint32_t stick_size = (row_major) ? page_shape[1] * input_tensor.element_size() : tt::tile_size(dfb_data_format);
+    uint32_t stick_size =
+        (row_major) ? page_shape[1] * input_tensor.element_size() : tt::tt_metal::tile_size(input_tensor.dtype());
 
     Buffer* src0_buffer = input_tensor.buffer();
     IDevice* device = input_tensor.device();
@@ -68,7 +68,7 @@ ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_progr
         .unique_id = IN0,
         .entry_size = stick_size,
         .num_entries = num_input_pages,
-        .data_format_metadata = dfb_data_format,
+        .data_format_metadata = input_tensor.dtype(),
     });
 
     spec.tensor_parameters.push_back(TensorParameter{.unique_id = INPUT, .spec = input_tensor.tensor_spec()});

@@ -33,8 +33,7 @@ ttnn::device_operation::ProgramArtifacts MorehDotOperation::ProgramFactory::crea
     const auto& input_b_mesh = input_b.mesh_tensor();
     const auto& output_mesh = output.mesh_tensor();
 
-    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_a.dtype());
-    const uint32_t cb_tile_size = tile_size(cb_data_format);
+    const uint32_t cb_tile_size = tt::tt_metal::tile_size(input_a.dtype());
 
     uint32_t num_tiles = input_a.physical_volume() / tt::constants::TILE_HW;
     const auto& a_shape_wo_padding = input_a.logical_shape();
@@ -72,17 +71,17 @@ ttnn::device_operation::ProgramArtifacts MorehDotOperation::ProgramFactory::crea
 
     // ----- Dataflow buffers (1:1 with legacy CBs; all bound to compute → data format required) -----
     DataflowBufferSpec dfb_in0{
-        .unique_id = IN0, .entry_size = cb_tile_size, .num_entries = in0_t, .data_format_metadata = cb_data_format};
+        .unique_id = IN0, .entry_size = cb_tile_size, .num_entries = in0_t, .data_format_metadata = input_a.dtype()};
     DataflowBufferSpec dfb_in1{
-        .unique_id = IN1, .entry_size = cb_tile_size, .num_entries = in1_t, .data_format_metadata = cb_data_format};
+        .unique_id = IN1, .entry_size = cb_tile_size, .num_entries = in1_t, .data_format_metadata = input_a.dtype()};
     DataflowBufferSpec dfb_scaler{
-        .unique_id = SCALER, .entry_size = cb_tile_size, .num_entries = in2_t, .data_format_metadata = cb_data_format};
+        .unique_id = SCALER, .entry_size = cb_tile_size, .num_entries = in2_t, .data_format_metadata = input_a.dtype()};
     DataflowBufferSpec dfb_out{
-        .unique_id = OUT, .entry_size = cb_tile_size, .num_entries = out0_t, .data_format_metadata = cb_data_format};
+        .unique_id = OUT, .entry_size = cb_tile_size, .num_entries = out0_t, .data_format_metadata = input_a.dtype()};
     DataflowBufferSpec dfb_im0{
-        .unique_id = IM0, .entry_size = cb_tile_size, .num_entries = im0_t, .data_format_metadata = cb_data_format};
+        .unique_id = IM0, .entry_size = cb_tile_size, .num_entries = im0_t, .data_format_metadata = input_a.dtype()};
     DataflowBufferSpec dfb_im1{
-        .unique_id = IM1, .entry_size = cb_tile_size, .num_entries = im1_t, .data_format_metadata = cb_data_format};
+        .unique_id = IM1, .entry_size = cb_tile_size, .num_entries = im1_t, .data_format_metadata = input_a.dtype()};
 
     // ----- Reader kernel -----
     KernelSpec reader{

@@ -32,8 +32,7 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
             ? tt::tt_metal::split_work_to_cores(args.sub_core_grids.value(), num_unpadded_tiles)
             : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_tiles);
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    uint32_t single_tile_size = tt::tt_metal::tile_size(input.dtype());
 
     const auto& input_shape = input.padded_shape();
     const auto& output_shape = output.padded_shape();
@@ -52,7 +51,7 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
         .unique_id = C0,
         .entry_size = single_tile_size,
         .num_entries = num_input_tiles,
-        .data_format_metadata = cb_data_format,
+        .data_format_metadata = input.dtype(),
     };
 
     // --- Common reader args: num_unpadded_per_dim..., num_padded_per_dim... (read in a loop

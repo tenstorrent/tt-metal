@@ -244,7 +244,6 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
         stick_size_unpadded == stick_size_padded,
         "sharded pad does not support pad on last dim currently as that will cause perf degradation");
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
     // input shard spec
@@ -306,7 +305,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
         .unique_id = CB_PAD,
         .entry_size = static_cast<uint32_t>(stick_size_padded),
         .num_entries = 1,
-        .data_format_metadata = cb_data_format,
+        .data_format_metadata = a.dtype(),
     };
 
     TensorParameter input_param{.unique_id = INPUT_TENSOR, .spec = a.tensor_spec()};

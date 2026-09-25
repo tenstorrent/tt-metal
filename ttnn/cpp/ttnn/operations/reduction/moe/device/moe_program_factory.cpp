@@ -67,20 +67,15 @@ ttnn::device_operation::ProgramArtifacts MoeProgramFactory::create_program_artif
 
     const NodeCoord node{0, 0};
 
-    tt::DataFormat input_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    tt::DataFormat topk_mask_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(topk_mask_tensor.dtype());
-    tt::DataFormat expert_mask_dfb_data_format =
-        tt::tt_metal::datatype_to_dataformat_converter(expert_mask_tensor.dtype());
-    tt::DataFormat out_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(out_tensor.dtype());
     tt::DataFormat scalar_df =
         (input_tensor.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat index_dfb_data_format = tt::DataFormat::UInt16;
     tt::DataFormat value_dfb_data_format = tt::DataFormat::Float16_b;
 
-    uint32_t input_tile_size = tile_size(input_dfb_data_format);
-    uint32_t topk_mask_tile_size = tile_size(topk_mask_dfb_data_format);
-    uint32_t expert_mask_tile_size = tile_size(expert_mask_dfb_data_format);
-    uint32_t out_tile_size = tile_size(out_dfb_data_format);
+    uint32_t input_tile_size = tt::tt_metal::tile_size(input_tensor.dtype());
+    uint32_t topk_mask_tile_size = tt::tt_metal::tile_size(topk_mask_tensor.dtype());
+    uint32_t expert_mask_tile_size = tt::tt_metal::tile_size(expert_mask_tensor.dtype());
+    uint32_t out_tile_size = tt::tt_metal::tile_size(out_tensor.dtype());
     uint32_t scalar_tile_size = tile_size(scalar_df);
     uint32_t index_tile_size = tile_size(index_dfb_data_format);
     uint32_t value_tile_size = tile_size(value_dfb_data_format);
@@ -113,21 +108,21 @@ ttnn::device_operation::ProgramArtifacts MoeProgramFactory::create_program_artif
         .unique_id = MOE_DFB_INPUT,
         .entry_size = input_tile_size,
         .num_entries = dfb_in_units,
-        .data_format_metadata = input_dfb_data_format,
+        .data_format_metadata = input_tensor.dtype(),
     });
 
     dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = MOE_DFB_EXPERT_MASK,
         .entry_size = expert_mask_tile_size,
         .num_entries = Wt,
-        .data_format_metadata = expert_mask_dfb_data_format,
+        .data_format_metadata = expert_mask_tensor.dtype(),
     });
 
     dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = MOE_DFB_TOPK_MASK,
         .entry_size = topk_mask_tile_size,
         .num_entries = topk_mask_dfb_units,
-        .data_format_metadata = topk_mask_dfb_data_format,
+        .data_format_metadata = topk_mask_tensor.dtype(),
     });
 
     // identity scale input
@@ -156,7 +151,7 @@ ttnn::device_operation::ProgramArtifacts MoeProgramFactory::create_program_artif
         .unique_id = MOE_DFB_INPUT_TRANSPOSED,
         .entry_size = input_tile_size,
         .num_entries = (Wt * value_tile_size) / input_tile_size,
-        .data_format_metadata = input_dfb_data_format,
+        .data_format_metadata = input_tensor.dtype(),
     });
 
     // Single buffered dataflow buffer that holds the transposed index tiles
@@ -187,14 +182,14 @@ ttnn::device_operation::ProgramArtifacts MoeProgramFactory::create_program_artif
         .unique_id = MOE_DFB_CUR_MAX,
         .entry_size = out_tile_size,
         .num_entries = num_out_tiles,
-        .data_format_metadata = out_dfb_data_format,
+        .data_format_metadata = out_tensor.dtype(),
     });
 
     dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = MOE_DFB_CUR_SUM,
         .entry_size = out_tile_size,
         .num_entries = num_out_tiles,
-        .data_format_metadata = out_dfb_data_format,
+        .data_format_metadata = out_tensor.dtype(),
     });
 
     // OUTPUT DFBs
@@ -202,7 +197,7 @@ ttnn::device_operation::ProgramArtifacts MoeProgramFactory::create_program_artif
         .unique_id = MOE_DFB_OUT,
         .entry_size = out_tile_size,
         .num_entries = num_out_tiles,
-        .data_format_metadata = out_dfb_data_format,
+        .data_format_metadata = out_tensor.dtype(),
     });
 
     // Intermediate buffer for adding input + expert_mask before sorting.
@@ -211,7 +206,7 @@ ttnn::device_operation::ProgramArtifacts MoeProgramFactory::create_program_artif
         .unique_id = MOE_DFB_MASKED_INPUT,
         .entry_size = input_tile_size,
         .num_entries = 2,
-        .data_format_metadata = input_dfb_data_format,
+        .data_format_metadata = input_tensor.dtype(),
     });
 
     const tt::ARCH arch = input_tensor.device().arch();

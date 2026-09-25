@@ -34,8 +34,7 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
             ? tt::tt_metal::split_work_to_cores(args.sub_core_grids.value(), num_unpadded_tiles)
             : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_tiles);
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    uint32_t single_tile_size = tt::tt_metal::tile_size(input_tensor.dtype());
 
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_tensor.padded_shape().rank());
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
@@ -58,7 +57,7 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
         .unique_id = C0,
         .entry_size = single_tile_size,
         .num_entries = num_input_tiles,
-        .data_format_metadata = cb_data_format,
+        .data_format_metadata = input_tensor.dtype(),
     };
     ScratchpadSpec c1_scratch{
         .unique_id = C1,

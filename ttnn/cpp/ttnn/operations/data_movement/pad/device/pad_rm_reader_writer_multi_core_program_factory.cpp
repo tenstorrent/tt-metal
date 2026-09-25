@@ -241,12 +241,11 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreProgramFactor
     uint32_t dfb_page_alignment = std::max(tt::constants::TILE_WIDTH, a.buffer()->alignment());
     uint32_t dfb_pagesize =
         static_cast<uint32_t>(std::ceil((float)dst_nbytes_per_core_w / dfb_page_alignment)) * dfb_page_alignment;
-    tt::DataFormat in_df = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     DataflowBufferSpec in0_dfb{
         .unique_id = RM_MC_IN0,
         .entry_size = dfb_pagesize,
         .num_entries = dfb_npages,
-        .data_format_metadata = in_df,
+        .data_format_metadata = a.dtype(),
     };
 
     uint32_t packed_pad_value;

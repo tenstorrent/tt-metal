@@ -731,22 +731,21 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
     const bool windowed_q_offset_present = tensor_args.windowed_q_token_offset_tensor.has_value();
     if (is_windowed) {
         const auto& cu = tensor_args.cu_window_seqlens.value();
-        const tt::DataFormat cu_df = tt::tt_metal::datatype_to_dataformat_converter(cu.dtype());
         // Writer's cu_window copy (windowed-mask generation).
         dfbs.push_back(DataflowBufferSpec{
             .unique_id = CU_WINDOW,
-            .entry_size = tt::tile_size(cu_df),
+            .entry_size = tt::tt_metal::tile_size(cu.dtype()),
             .num_entries = 1,
-            .data_format_metadata = cu_df});
+            .data_format_metadata = cu.dtype()});
         cu_window_seqlens_eles = cu.logical_shape()[-1];
         // K-range narrowing (#54492): the reader's OWN cu_window copy (a second producer on the writer's
         // CB is illegal), plus a small reader->compute ctrl CB carrying each Q chunk's {k_lo, k_hi},
         // double-buffered so the reader can run a Q chunk ahead.
         dfbs.push_back(DataflowBufferSpec{
             .unique_id = WINDOWED_CU_READER,
-            .entry_size = tt::tile_size(cu_df),
+            .entry_size = tt::tt_metal::tile_size(cu.dtype()),
             .num_entries = 1,
-            .data_format_metadata = cu_df});
+            .data_format_metadata = cu.dtype()});
         constexpr uint32_t k_range_page_size = 16;
         dfbs.push_back(DataflowBufferSpec{
             .unique_id = WINDOWED_K_RANGE,
@@ -756,12 +755,11 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
         // Per-device Q-offset tensor CB (only when the offset arrives as a tensor).
         if (windowed_q_offset_present) {
             const auto& off = tensor_args.windowed_q_token_offset_tensor.value();
-            const tt::DataFormat off_df = tt::tt_metal::datatype_to_dataformat_converter(off.dtype());
             dfbs.push_back(DataflowBufferSpec{
                 .unique_id = WINDOWED_Q_OFFSET,
-                .entry_size = tt::tile_size(off_df),
+                .entry_size = tt::tt_metal::tile_size(off.dtype()),
                 .num_entries = 1,
-                .data_format_metadata = off_df});
+                .data_format_metadata = off.dtype()});
         }
     }
     // Chunked page table: the reader both fills and reads it (former DM self-loop DFB). Converted to a

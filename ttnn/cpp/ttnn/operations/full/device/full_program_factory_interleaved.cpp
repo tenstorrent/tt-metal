@@ -44,8 +44,6 @@ ttnn::device_operation::ProgramArtifacts FullInterleavedProgramFactory::create_p
     TT_FATAL(page_size % output.element_size() == 0, "Page size must be divisible by element size");
     uint32_t elems_per_page = page_size / output.element_size();
 
-    tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(dtype);
-
     // Two instances of one kernel source split the output pages between the two data-movement RISCs.
     // Each instance owns a *private* single-entry buffer for its own copy of the fill-value page, so
     // neither instance is an endpoint of the other's buffer.
@@ -64,7 +62,7 @@ ttnn::device_operation::ProgramArtifacts FullInterleavedProgramFactory::create_p
             .unique_id = name,
             .entry_size = page_size,
             .num_entries = 1,
-            .data_format_metadata = data_format,
+            .data_format_metadata = dtype,
         };
     };
 

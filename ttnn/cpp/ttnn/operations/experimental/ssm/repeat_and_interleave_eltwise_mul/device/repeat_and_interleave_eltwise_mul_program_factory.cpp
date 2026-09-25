@@ -41,15 +41,12 @@ ttnn::device_operation::ProgramArtifacts RepeatAndInterleaveEltwiseMulProgramFac
     const auto& b_tensor = b.mesh_tensor();
     const auto& output_tensor = output.mesh_tensor();
 
-    tt::DataFormat in0_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    tt::DataFormat in1_data_format = tt::tt_metal::datatype_to_dataformat_converter(b.dtype());
     tt::DataFormat interm_data_format = tt::DataFormat::Float16_b;
-    tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
-    uint32_t in0_single_tile_size = tt::tile_size(in0_data_format);
-    uint32_t in1_single_tile_size = tt::tile_size(in1_data_format);
+    uint32_t in0_single_tile_size = tt::tt_metal::tile_size(a.dtype());
+    uint32_t in1_single_tile_size = tt::tt_metal::tile_size(b.dtype());
     uint32_t interm_single_tile_size = tt::tile_size(interm_data_format);
-    uint32_t output_single_tile_size = tt::tile_size(output_data_format);
+    uint32_t output_single_tile_size = tt::tt_metal::tile_size(output.dtype());
 
     // Parallelize on bshape[-1]
     auto num_output_blocks_total = bshape[-1] / TILE_WIDTH;
@@ -122,19 +119,19 @@ ttnn::device_operation::ProgramArtifacts RepeatAndInterleaveEltwiseMulProgramFac
             .unique_id = IN0,
             .entry_size = in0_single_tile_size,
             .num_entries = dfb0_entries,
-            .data_format_metadata = in0_data_format,
+            .data_format_metadata = a.dtype(),
         },
         DataflowBufferSpec{
             .unique_id = IN1,
             .entry_size = in1_single_tile_size,
             .num_entries = dfb1_entries,
-            .data_format_metadata = in1_data_format,
+            .data_format_metadata = b.dtype(),
         },
         DataflowBufferSpec{
             .unique_id = OUT,
             .entry_size = output_single_tile_size,
             .num_entries = output_dfb_entries,
-            .data_format_metadata = output_data_format,
+            .data_format_metadata = output.dtype(),
         },
         DataflowBufferSpec{
             .unique_id = IN0_TRANSPOSED,

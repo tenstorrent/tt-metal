@@ -42,10 +42,8 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
 
     auto* device = a.device();
 
-    tt::DataFormat input_data_format = datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_data_format);
-    tt::DataFormat output_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_data_format);
+    uint32_t input_single_tile_size = tt::tt_metal::tile_size(a.dtype());
+    uint32_t output_single_tile_size = tt::tt_metal::tile_size(output.dtype());
 
     TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
 
@@ -67,14 +65,14 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
         .unique_id = SRC0,
         .entry_size = input_single_tile_size,
         .num_entries = num_tiles_per_shard,
-        .data_format_metadata = input_data_format,
+        .data_format_metadata = a.dtype(),
         .borrowed_from = INPUT,
     };
     DataflowBufferSpec out_dfb{
         .unique_id = OUT,
         .entry_size = output_single_tile_size,
         .num_entries = num_tiles_per_shard,
-        .data_format_metadata = output_data_format,
+        .data_format_metadata = output.dtype(),
         .borrowed_from = OUTPUT,
     };
 

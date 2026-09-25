@@ -133,7 +133,6 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
 
     const auto& input_shape = input_tensor.padded_shape();
 
-    const tt::DataFormat in_df = datatype_to_dataformat_converter(input_tensor.dtype());
     const tt::DataFormat out_df = datatype_to_dataformat_converter(output_tensor.dtype());
     const uint32_t out_nbytes = datum_size(out_df);
 
@@ -151,7 +150,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
     const uint32_t input_nblocks_per_core = tt::div_up(remapped_input_shard_shape_for_output_grid, TILE_HEIGHT);
     uint32_t input_npages = ntiles_per_block * input_nblocks_per_core;
 
-    uint32_t in_page_size = tt::tile_size(in_df);
+    uint32_t in_page_size = tt::tt_metal::tile_size(input_tensor.dtype());
 
     // Calculate aligned stick size - used for both input and output since channels don't change
     const uint32_t stick_nbytes = output_shard_shape[1] * out_nbytes;
@@ -280,7 +279,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
             .unique_id = SRC_DFB,
             .entry_size = in_page_size,
             .num_entries = input_npages,
-            .data_format_metadata = in_df,
+            .data_format_metadata = input_tensor.dtype(),
             .borrowed_from = IN,
         });
 

@@ -71,14 +71,12 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedRetileProgramFact
         shard_height,
         out_tile_height);
 
-    tt::DataFormat input_data_format = datatype_to_dataformat_converter(a.dtype());
-    tt::DataFormat output_data_format = datatype_to_dataformat_converter(output.dtype());
-    const uint32_t input_single_tile_size = input_tile.get_tile_size(input_data_format);
-    const uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
+    const uint32_t input_single_tile_size = input_tile.get_tile_size(a.dtype());
+    const uint32_t output_single_tile_size = output_tile.get_tile_size(output.dtype());
     const uint32_t mid_page_size = input_single_tile_size;
     // The intermediate stays in the input data format (conversion happens on the final pack), so the
     // consumer view sizes an output tile in the input format, not the output format.
-    const uint32_t out_tile_size_input_fmt = output_tile.get_tile_size(input_data_format);
+    const uint32_t out_tile_size_input_fmt = output_tile.get_tile_size(a.dtype());
 
     const bool fp32_llk_acc = a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 ||
                               output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B;
@@ -118,7 +116,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedRetileProgramFact
         .unique_id = INPUT_DFB,
         .entry_size = input_single_tile_size,
         .num_entries = num_tiles_per_shard_in,
-        .data_format_metadata = input_data_format,
+        .data_format_metadata = a.dtype(),
         .tile_format_metadata = input_tile,
         .borrowed_from = INPUT,
     };
@@ -143,7 +141,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedRetileProgramFact
         .unique_id = MID_DFB,
         .entry_size = mid_page_size,
         .num_entries = 2 * mid_pages_per_out_block,
-        .data_format_metadata = input_data_format,
+        .data_format_metadata = a.dtype(),
         .tile_format_metadata = input_tile,
         .advanced_options = {.alias_with = {MID_VIEW_DFB}},
     };
@@ -151,7 +149,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedRetileProgramFact
         .unique_id = MID_VIEW_DFB,
         .entry_size = out_tile_size_input_fmt,
         .num_entries = mid_total_size / out_tile_size_input_fmt,
-        .data_format_metadata = input_data_format,
+        .data_format_metadata = a.dtype(),
         .tile_format_metadata = output_tile,
         .advanced_options = {.alias_with = {MID_DFB}},
     };
@@ -164,7 +162,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedRetileProgramFact
         .unique_id = OUTPUT_DFB,
         .entry_size = output_single_tile_size,
         .num_entries = output_is_interleaved ? (2u * tiles_per_block) : num_tiles_per_shard_out,
-        .data_format_metadata = output_data_format,
+        .data_format_metadata = output.dtype(),
         .tile_format_metadata = output_tile,
     };
     if (!output_is_interleaved) {

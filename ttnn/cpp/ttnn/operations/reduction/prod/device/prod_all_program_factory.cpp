@@ -36,9 +36,8 @@ ProgramArtifacts ProdAllDeviceOperation::ProdAllProgramFactory::create_program_a
     const m2::NodeCoord node{0, 0};
 
     const DataFormat in_cb_data_format = datatype_to_dataformat_converter(input.dtype());
-    const DataFormat out_cb_data_format = datatype_to_dataformat_converter(output.dtype());
     const uint32_t in_single_tile_size = tile_size(in_cb_data_format);
-    const uint32_t out_single_tile_size = tile_size(out_cb_data_format);
+    const uint32_t out_single_tile_size = tt::tt_metal::tile_size(output.dtype());
 
     const uint32_t num_tiles = input.physical_volume() / input.tensor_spec().tile().get_tile_hw();
     TT_FATAL(num_tiles > 0, "Prod_all workload num_tiles must be > 0, got {}", num_tiles);
@@ -58,7 +57,7 @@ ProgramArtifacts ProdAllDeviceOperation::ProdAllProgramFactory::create_program_a
         .unique_id = OUTPUT_DFB,
         .entry_size = out_single_tile_size,
         .num_entries = num_output_tiles,
-        .data_format_metadata = out_cb_data_format,
+        .data_format_metadata = output.dtype(),
     };
 
     // ------------------------------------------------------------------

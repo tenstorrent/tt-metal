@@ -32,8 +32,6 @@ ttnn::device_operation::ProgramArtifacts Fold::MultiCore::create_program_artifac
     auto all_cores = tensor_args.input_tensor.shard_spec()->grid;
     auto shard_shape = tensor_args.input_tensor.shard_spec()->shape;
 
-    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(tensor_args.input_tensor.dtype());
-
     uint32_t pixel_size = shard_shape[1] * tensor_args.input_tensor.element_size();
     uint32_t num_pixels = shard_shape[0];
     uint32_t num_dst_pixels = num_pixels / (stride_h * stride_w);
@@ -69,7 +67,7 @@ ttnn::device_operation::ProgramArtifacts Fold::MultiCore::create_program_artifac
         .unique_id = SRC0,
         .entry_size = aligned_pixel_size,
         .num_entries = num_pixels,
-        .data_format_metadata = cb_data_format,
+        .data_format_metadata = tensor_args.input_tensor.dtype(),
         .borrowed_from = INPUT,
     };
     // Output DFB — globally allocated to the sharded output buffer (legacy c_16).
@@ -77,7 +75,7 @@ ttnn::device_operation::ProgramArtifacts Fold::MultiCore::create_program_artifac
         .unique_id = DST0,
         .entry_size = aligned_dst_pixel_size,
         .num_entries = num_dst_pixels,
-        .data_format_metadata = cb_data_format,
+        .data_format_metadata = tensor_args.input_tensor.dtype(),
         .borrowed_from = OUTPUT,
     };
 

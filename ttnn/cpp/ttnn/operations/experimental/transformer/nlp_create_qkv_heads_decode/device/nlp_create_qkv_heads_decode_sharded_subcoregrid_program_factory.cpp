@@ -54,9 +54,7 @@ NLPCreateQKVHeadsDecodeShardedSubcoregridProgramFactory::create_program_artifact
 
     IDevice* device = input_tensor.device();
 
-    tt::DataFormat data_format = datatype_to_dataformat_converter(input_tensor.dtype());
-
-    const uint32_t single_tile_size = tt::tile_size(data_format);
+    const uint32_t single_tile_size = tt::tt_metal::tile_size(input_tensor.dtype());
 
     const uint32_t head_tiles = head_dim / TILE_WIDTH;
     const uint32_t head_size = head_tiles * single_tile_size;
@@ -80,22 +78,21 @@ NLPCreateQKVHeadsDecodeShardedSubcoregridProgramFactory::create_program_artifact
     // the legacy per-RISC circular-buffer split). Each is a sync-free single-toucher per node, so
     // its owning kernel binds both the PRODUCER and CONSUMER endpoints (a Gen1-legal self-loop).
     if (batch_offset.has_value()) {
-        tt::DataFormat batch_offset_data_format = datatype_to_dataformat_converter(batch_offset.value().dtype());
-        uint32_t single_batch_offset_tile_size = tt::tile_size(batch_offset_data_format);
+        uint32_t single_batch_offset_tile_size = tt::tt_metal::tile_size(batch_offset.value().dtype());
         batch_offset_index_stick_size = batch_offset.value().buffer()->aligned_page_size();
 
         dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = BATCH_OFFSET_READER,
             .entry_size = 1,
             .num_entries = single_batch_offset_tile_size,
-            .data_format_metadata = batch_offset_data_format,
+            .data_format_metadata = batch_offset.value().dtype(),
         });
 
         dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = BATCH_OFFSET_WRITER,
             .entry_size = 1,
             .num_entries = single_batch_offset_tile_size,
-            .data_format_metadata = batch_offset_data_format,
+            .data_format_metadata = batch_offset.value().dtype(),
         });
     }
 
@@ -103,7 +100,7 @@ NLPCreateQKVHeadsDecodeShardedSubcoregridProgramFactory::create_program_artifact
         .unique_id = Q_OUT,
         .entry_size = single_tile_size,
         .num_entries = q_num_tiles,
-        .data_format_metadata = data_format,
+        .data_format_metadata = input_tensor.dtype(),
         .borrowed_from = Q_OUT_TENSOR,
     });
 
@@ -111,7 +108,7 @@ NLPCreateQKVHeadsDecodeShardedSubcoregridProgramFactory::create_program_artifact
         .unique_id = K_OUT,
         .entry_size = single_tile_size,
         .num_entries = k_num_tiles,
-        .data_format_metadata = data_format,
+        .data_format_metadata = input_tensor.dtype(),
         .borrowed_from = K_OUT_TENSOR,
     });
 
@@ -126,7 +123,7 @@ NLPCreateQKVHeadsDecodeShardedSubcoregridProgramFactory::create_program_artifact
         .unique_id = V_OUT,
         .entry_size = single_tile_size,
         .num_entries = v_num_tiles,
-        .data_format_metadata = data_format,
+        .data_format_metadata = input_tensor.dtype(),
         .borrowed_from = V_OUT_TENSOR,
     });
 

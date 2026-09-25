@@ -92,7 +92,6 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
     const auto& input_mt = input.mesh_tensor();
     const auto& output_mt = output.mesh_tensor();
 
-    const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
     const bool tilized = input.layout() == Layout::TILE;
     const uint32_t page_size = input.buffer()->page_size();
 
@@ -125,7 +124,7 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
         .unique_id = SCRATCH,
         .entry_size = aligned_page_size,
         .num_entries = size_per_l1_bank / aligned_page_size,
-        .data_format_metadata = cb_data_format,
+        .data_format_metadata = input.dtype(),
     });
 
     // Semaphore used by the controller core to coordinate multicast.

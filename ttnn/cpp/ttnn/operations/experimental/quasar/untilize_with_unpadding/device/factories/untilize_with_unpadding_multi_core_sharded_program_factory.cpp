@@ -54,8 +54,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
         out_sharded && output.padded_shape()[-1] == 16 && output.padded_shape()[-2] % TILE_HEIGHT == 0;
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    uint32_t output_single_tile_size = tt::tt_metal::tile_size(output.dtype());
 
     uint32_t num_rows_block = 0, block_row_size = 0, last_block_row_size_unpadded = 0, num_output_rows_unpadded = 0;
     CoreCoord end_core;
@@ -128,13 +127,13 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
         .unique_id = OUT_DFB,
         .entry_size = output_single_tile_size,
         .num_entries = num_output_tiles,
-        .data_format_metadata = output_cb_data_format,
+        .data_format_metadata = output.dtype(),
     };
     DataflowBufferSpec out_sharded_dfb{
         .unique_id = OUT_SHARDED_DFB,
         .entry_size = aligned_page_size,
         .num_entries = num_output_rows_unpadded,
-        .data_format_metadata = output_cb_data_format,
+        .data_format_metadata = output.dtype(),
         .borrowed_from = OUTPUT,
     };
 

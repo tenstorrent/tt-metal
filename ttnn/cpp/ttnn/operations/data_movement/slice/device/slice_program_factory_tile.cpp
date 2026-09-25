@@ -40,8 +40,7 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
 
     TT_ASSERT(output.buffer() != nullptr, "Output buffer should be allocated on device!");
 
-    tt::DataFormat dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    uint32_t single_tile_size = tt::tile_size(dfb_data_format);
+    uint32_t single_tile_size = tt::tt_metal::tile_size(input.dtype());
 
     const auto& input_shape = input.padded_shape();
     const auto& output_shape = output.padded_shape();
@@ -54,7 +53,7 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
         .unique_id = TILE_IN,
         .entry_size = single_tile_size,
         .num_entries = num_input_tiles,
-        .data_format_metadata = dfb_data_format,
+        .data_format_metadata = input.dtype(),
     };
 
     // The reader walks a per-dimension tile-index odometer, incrementing it in place as it advances

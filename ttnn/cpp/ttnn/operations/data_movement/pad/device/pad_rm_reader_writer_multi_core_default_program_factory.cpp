@@ -80,8 +80,6 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreDefaultProgra
         num_output_pages_in_row = tt::div_up(W_padded, output_shard_width);
     }
 
-    tt::DataFormat dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-
     IDevice* device = a.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -319,7 +317,7 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreDefaultProgra
         .unique_id = RM_DEF_IN0,
         .entry_size = stick_size_padded_aligned,
         .num_entries = buffer_reader_writer_async_factor * dfb_npages,
-        .data_format_metadata = dfb_data_format,
+        .data_format_metadata = a.dtype(),
     });
 
     ProgramSpec spec{

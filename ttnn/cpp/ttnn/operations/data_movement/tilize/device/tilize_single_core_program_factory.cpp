@@ -35,11 +35,9 @@ ttnn::device_operation::ProgramArtifacts TilizeSingleCoreProgramFactory::create_
 
     TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
 
-    tt::DataFormat input_data_format = datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = operation_attributes.tile.get_tile_size(input_data_format);
+    uint32_t input_single_tile_size = operation_attributes.tile.get_tile_size(a.dtype());
 
-    tt::DataFormat output_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = operation_attributes.tile.get_tile_size(output_data_format);
+    uint32_t output_single_tile_size = operation_attributes.tile.get_tile_size(output.dtype());
 
     // UInt8 requires fp32 dest acc on Blackhole: hardware promotes 8-bit integers to 32-bit in
     // dest but keeps them as integers (not float), so the output DFB stays as UInt8 (not Float32).
@@ -96,14 +94,14 @@ ttnn::device_operation::ProgramArtifacts TilizeSingleCoreProgramFactory::create_
         .unique_id = INPUT_DFB,
         .entry_size = input_single_tile_size,
         .num_entries = num_input_tiles,
-        .data_format_metadata = input_data_format,
+        .data_format_metadata = a.dtype(),
         .tile_format_metadata = operation_attributes.tile,
     };
     DataflowBufferSpec output_dfb{
         .unique_id = OUTPUT_DFB,
         .entry_size = output_single_tile_size,
         .num_entries = num_output_tiles,
-        .data_format_metadata = output_data_format,
+        .data_format_metadata = output.dtype(),
         .tile_format_metadata = operation_attributes.tile,
     };
 

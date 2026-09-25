@@ -30,10 +30,8 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
     const uint32_t tile_width = operation_attributes.tile.get_width();
     const uint32_t tile_height = operation_attributes.tile.get_height();
 
-    tt::DataFormat input_data_format = datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = operation_attributes.tile.get_tile_size(input_data_format);
-    tt::DataFormat output_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = operation_attributes.tile.get_tile_size(output_data_format);
+    uint32_t input_single_tile_size = operation_attributes.tile.get_tile_size(a.dtype());
+    uint32_t output_single_tile_size = operation_attributes.tile.get_tile_size(output.dtype());
     bool fp32_llk_acc = a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 ||
                         output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B ||
                         a.dtype() == DataType::UINT8;
@@ -86,14 +84,14 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
         .unique_id = INPUT_DFB,
         .entry_size = input_single_tile_size,
         .num_entries = ntiles_per_block,
-        .data_format_metadata = input_data_format,
+        .data_format_metadata = a.dtype(),
         .tile_format_metadata = operation_attributes.tile,
     };
     DataflowBufferSpec output_dfb{
         .unique_id = OUTPUT_DFB,
         .entry_size = output_single_tile_size,
         .num_entries = ntiles_per_block,
-        .data_format_metadata = output_data_format,
+        .data_format_metadata = output.dtype(),
         .tile_format_metadata = operation_attributes.tile,
     };
 

@@ -53,14 +53,12 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreRetileProgramFactory::cr
         !a.is_sharded() && output.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Retile program factory currently supports interleaved input/output only");
 
-    tt::DataFormat input_data_format = datatype_to_dataformat_converter(a.dtype());
-    tt::DataFormat output_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t input_single_tile_size = input_tile.get_tile_size(input_data_format);
-    uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
+    uint32_t input_single_tile_size = input_tile.get_tile_size(a.dtype());
+    uint32_t output_single_tile_size = output_tile.get_tile_size(output.dtype());
     const uint32_t mid_page_size = input_single_tile_size;
     // The intermediate stays in the input data format (conversion happens on the final pack), so
     // the consumer view sizes an output tile in the input format, not the output format.
-    const uint32_t out_tile_size_input_fmt = output_tile.get_tile_size(input_data_format);
+    const uint32_t out_tile_size_input_fmt = output_tile.get_tile_size(a.dtype());
 
     bool fp32_llk_acc = a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 ||
                         output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B;
@@ -127,7 +125,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreRetileProgramFactory::cr
         .unique_id = INPUT_DFB,
         .entry_size = input_single_tile_size,
         .num_entries = src_dfb_tiles,
-        .data_format_metadata = input_data_format,
+        .data_format_metadata = a.dtype(),
         .tile_format_metadata = input_tile,
     };
 
@@ -151,7 +149,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreRetileProgramFactory::cr
         .unique_id = MID_DFB,
         .entry_size = mid_page_size,
         .num_entries = 2 * mid_pages_per_out_block,
-        .data_format_metadata = input_data_format,
+        .data_format_metadata = a.dtype(),
         .tile_format_metadata = input_tile,
         .advanced_options = {.alias_with = {MID_VIEW_DFB}},
     };
@@ -159,7 +157,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreRetileProgramFactory::cr
         .unique_id = MID_VIEW_DFB,
         .entry_size = out_tile_size_input_fmt,
         .num_entries = mid_total_size / out_tile_size_input_fmt,
-        .data_format_metadata = input_data_format,
+        .data_format_metadata = a.dtype(),
         .tile_format_metadata = output_tile,
         .advanced_options = {.alias_with = {MID_DFB}},
     };
@@ -169,7 +167,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreRetileProgramFactory::cr
         .unique_id = OUTPUT_DFB,
         .entry_size = output_single_tile_size,
         .num_entries = out_dfb_tiles,
-        .data_format_metadata = output_data_format,
+        .data_format_metadata = output.dtype(),
         .tile_format_metadata = output_tile,
     };
 

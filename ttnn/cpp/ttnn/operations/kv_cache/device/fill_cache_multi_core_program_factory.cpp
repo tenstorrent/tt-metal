@@ -111,8 +111,7 @@ ttnn::device_operation::ProgramArtifacts FillCacheMultiCoreProgramFactory::creat
     const auto& cache_tensor = tensor_args.cache;
     const auto& input_tensor = tensor_args.input;
 
-    tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    std::uint32_t single_tile_size = tt::tile_size(data_format);
+    std::uint32_t single_tile_size = tt::tt_metal::tile_size(input_tensor.dtype());
 
     // TODO: For interleaved and kv_heads > 1, we assert that each core only gets 1 tile along seq_len
     // For sharded, each core gets shard_shape[0] number of tiles along seq_len.
@@ -172,7 +171,7 @@ ttnn::device_operation::ProgramArtifacts FillCacheMultiCoreProgramFactory::creat
         .unique_id = SRC0_DFB,
         .entry_size = single_tile_size,
         .num_entries = num_input_tiles,
-        .data_format_metadata = data_format,
+        .data_format_metadata = input_tensor.dtype(),
         .borrowed_from = input_sharded ? std::optional<TensorParamName>(INPUT) : std::nullopt,
     };
 

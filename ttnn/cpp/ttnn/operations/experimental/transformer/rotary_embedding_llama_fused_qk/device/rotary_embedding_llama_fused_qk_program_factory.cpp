@@ -51,20 +51,15 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaFusedQKProgramFacto
     const auto& q_output = std::get<0>(tensor_return_value).mesh_tensor();
     const auto& k_output = std::get<1>(tensor_return_value).mesh_tensor();
 
-    const tt::DataFormat input_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(q_input.dtype());
-    const uint32_t input_single_tile_size = tt::tile_size(input_dfb_data_format);
+    const uint32_t input_single_tile_size = tt::tt_metal::tile_size(q_input.dtype());
 
-    const tt::DataFormat cos_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(cos.dtype());
-    const uint32_t cos_single_tile_size = tt::tile_size(cos_dfb_data_format);
+    const uint32_t cos_single_tile_size = tt::tt_metal::tile_size(cos.dtype());
 
-    const tt::DataFormat sin_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(sin.dtype());
-    const uint32_t sin_single_tile_size = tt::tile_size(sin_dfb_data_format);
+    const uint32_t sin_single_tile_size = tt::tt_metal::tile_size(sin.dtype());
 
-    const tt::DataFormat trans_mat_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(trans_mat.dtype());
-    const uint32_t trans_mat_single_tile_size = tt::tile_size(trans_mat_dfb_data_format);
+    const uint32_t trans_mat_single_tile_size = tt::tt_metal::tile_size(trans_mat.dtype());
 
-    const tt::DataFormat output_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(q_output.dtype());
-    const uint32_t output_single_tile_size = tt::tile_size(output_dfb_data_format);
+    const uint32_t output_single_tile_size = tt::tt_metal::tile_size(q_output.dtype());
 
     const std::optional<tt::tt_metal::ShardSpec>& q_shard_spec = q_input.shard_spec();
     const std::optional<tt::tt_metal::ShardSpec>& k_shard_spec = k_input.shard_spec();
@@ -116,28 +111,28 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaFusedQKProgramFacto
         .unique_id = Q_INPUT_DFB,
         .entry_size = input_single_tile_size,
         .num_entries = num_q_input_tiles,
-        .data_format_metadata = input_dfb_data_format,
+        .data_format_metadata = q_input.dtype(),
         .borrowed_from = Q_INPUT_PARAM,
     };
     DataflowBufferSpec k_input_dfb{
         .unique_id = K_INPUT_DFB,
         .entry_size = input_single_tile_size,
         .num_entries = num_k_input_tiles,
-        .data_format_metadata = input_dfb_data_format,
+        .data_format_metadata = q_input.dtype(),
         .borrowed_from = K_INPUT_PARAM,
     };
     DataflowBufferSpec cos_dfb{
         .unique_id = COS_DFB,
         .entry_size = cos_single_tile_size,
         .num_entries = num_cos_sin_tiles,
-        .data_format_metadata = cos_dfb_data_format,
+        .data_format_metadata = cos.dtype(),
         .borrowed_from = COS_PARAM,
     };
     DataflowBufferSpec sin_dfb{
         .unique_id = SIN_DFB,
         .entry_size = sin_single_tile_size,
         .num_entries = num_cos_sin_tiles,
-        .data_format_metadata = sin_dfb_data_format,
+        .data_format_metadata = sin.dtype(),
         .borrowed_from = SIN_PARAM,
     };
     // We only take one tile of trans_mat
@@ -146,7 +141,7 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaFusedQKProgramFacto
         .unique_id = TRANS_MAT_DFB,
         .entry_size = trans_mat_single_tile_size,
         .num_entries = num_trans_mat_tiles,
-        .data_format_metadata = trans_mat_dfb_data_format,
+        .data_format_metadata = trans_mat.dtype(),
         .borrowed_from = TRANS_MAT_PARAM,
     };
     uint32_t num_interm_tiles = head_dim_t;
@@ -154,32 +149,32 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaFusedQKProgramFacto
         .unique_id = ROTATED_INTERM_DFB,
         .entry_size = input_single_tile_size,
         .num_entries = num_interm_tiles,
-        .data_format_metadata = input_dfb_data_format,
+        .data_format_metadata = q_input.dtype(),
     };
     DataflowBufferSpec cos_interm_dfb{
         .unique_id = COS_INTERM_DFB,
         .entry_size = cos_single_tile_size,
         .num_entries = num_interm_tiles,
-        .data_format_metadata = cos_dfb_data_format,
+        .data_format_metadata = cos.dtype(),
     };
     DataflowBufferSpec sin_interm_dfb{
         .unique_id = SIN_INTERM_DFB,
         .entry_size = sin_single_tile_size,
         .num_entries = num_interm_tiles,
-        .data_format_metadata = sin_dfb_data_format,
+        .data_format_metadata = sin.dtype(),
     };
     DataflowBufferSpec q_out_dfb{
         .unique_id = Q_OUT_DFB,
         .entry_size = output_single_tile_size,
         .num_entries = num_q_output_tiles,
-        .data_format_metadata = output_dfb_data_format,
+        .data_format_metadata = q_output.dtype(),
         .borrowed_from = Q_OUTPUT_PARAM,
     };
     DataflowBufferSpec k_out_dfb{
         .unique_id = K_OUT_DFB,
         .entry_size = output_single_tile_size,
         .num_entries = num_k_output_tiles,
-        .data_format_metadata = output_dfb_data_format,
+        .data_format_metadata = q_output.dtype(),
         .borrowed_from = K_OUTPUT_PARAM,
     };
 

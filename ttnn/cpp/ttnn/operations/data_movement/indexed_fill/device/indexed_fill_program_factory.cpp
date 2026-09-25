@@ -151,8 +151,6 @@ ttnn::device_operation::ProgramArtifacts IndexedFillProgramFactory::create_progr
     auto cores = corerange_to_cores(all_cores, std::nullopt, /*row_wise=*/true);
     const uint32_t num_cores_total = static_cast<uint32_t>(cores.size());
 
-    tt::DataFormat dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_a.dtype());
-
     const bool is_tile = input_a.layout() == Layout::TILE;
 
     Buffer* input_a_buffer = input_a.buffer();
@@ -215,7 +213,7 @@ ttnn::device_operation::ProgramArtifacts IndexedFillProgramFactory::create_progr
 
     uint32_t page_size = 0;
     if (is_tile) {
-        page_size = tt::tile_size(dfb_data_format);
+        page_size = tt::tt_metal::tile_size(input_a.dtype());
     } else {
         page_size = input_a.padded_shape()[-1] * input_a.element_size();
     }
@@ -225,7 +223,7 @@ ttnn::device_operation::ProgramArtifacts IndexedFillProgramFactory::create_progr
     if (is_shard_local) {
         const auto& shard_spec = *input_a.memory_config().shard_spec();
         const uint32_t shard_width = shard_spec.shape[1];
-        shard_page_size = is_tile ? tt::tile_size(dfb_data_format) : shard_width * input_a.element_size();
+        shard_page_size = is_tile ? tt::tt_metal::tile_size(input_a.dtype()) : shard_width * input_a.element_size();
     }
 
     // Generic interleaved path: the DFB stages whole interleaved pages copied verbatim from
@@ -284,7 +282,7 @@ ttnn::device_operation::ProgramArtifacts IndexedFillProgramFactory::create_progr
         .unique_id = IF_DATA_DFB,
         .entry_size = kernel_rounded_page_size,
         .num_entries = data_dfb_num_entries,
-        .data_format_metadata = dfb_data_format,
+        .data_format_metadata = input_a.dtype(),
     };
     if (is_native || is_shard_local) {
         data_dfb.borrowed_from = IF_OUTPUT;

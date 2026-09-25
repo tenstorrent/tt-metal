@@ -59,8 +59,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFacto
     uint32_t C = input_tensor.logical_shape()[1];
     bool needs_padding = (C % tile_shape[1] != 0);
 
-    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    uint32_t single_tile_size = tt::tt_metal::tile_size(input_tensor.dtype());
 
     auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -108,7 +107,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFacto
         .unique_id = SRC_CB,
         .entry_size = single_tile_size,
         .num_entries = 2,
-        .data_format_metadata = cb_data_format,
+        .data_format_metadata = input_tensor.dtype(),
     });
     // PAD_CB (legacy c_1): only present when the output needs channel-tile padding.
     // Reader fills it once (PRODUCER); writer drains it (CONSUMER).
@@ -117,7 +116,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFacto
             .unique_id = PAD_CB,
             .entry_size = max_padding_write * element_size,
             .num_entries = 1,
-            .data_format_metadata = cb_data_format,
+            .data_format_metadata = input_tensor.dtype(),
         });
     }
 

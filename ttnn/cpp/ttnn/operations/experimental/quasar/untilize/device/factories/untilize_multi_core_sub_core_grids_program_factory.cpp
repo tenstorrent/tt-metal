@@ -33,10 +33,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreSubCoreGridsProgramFac
     const auto& input_mesh_tensor = a.mesh_tensor();
     const auto& output_mesh_tensor = output.mesh_tensor();
 
-    tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    uint32_t input_single_tile_size = tt::tt_metal::tile_size(a.dtype());
+    uint32_t output_single_tile_size = tt::tt_metal::tile_size(output.dtype());
 
     uint32_t ntiles = a.physical_volume() / TILE_HW;
     uint32_t ncores = sub_core_grids.num_cores();
@@ -88,13 +86,13 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreSubCoreGridsProgramFac
         .unique_id = IN,
         .entry_size = input_single_tile_size,
         .num_entries = num_input_tiles,
-        .data_format_metadata = input_cb_data_format,
+        .data_format_metadata = a.dtype(),
     };
     DataflowBufferSpec out_dfb{
         .unique_id = OUT,
         .entry_size = output_single_tile_size,
         .num_entries = num_output_tiles,
-        .data_format_metadata = output_cb_data_format,
+        .data_format_metadata = output.dtype(),
     };
 
     TensorParameter input_param{.unique_id = INPUT, .spec = a.tensor_spec()};

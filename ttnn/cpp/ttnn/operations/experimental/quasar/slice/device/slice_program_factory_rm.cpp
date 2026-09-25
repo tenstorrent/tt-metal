@@ -235,8 +235,6 @@ ttnn::device_operation::ProgramArtifacts SliceRmProgramFactory::create_program_a
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-
     // DFB sizing varies with slice_start; padded_shape folds into compute_program_hash() so each
     // unique DFB layout gets its own cache entry (entry_size/num_entries are not patched on cache hit).
     const auto [cb_page_size, num_read_per_barrier, misalignment] =
@@ -255,7 +253,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmProgramFactory::create_program_a
         .unique_id = C0,
         .entry_size = cb_page_size,
         .num_entries = num_read_per_barrier * 2,
-        .data_format_metadata = cb_data_format,
+        .data_format_metadata = input.dtype(),
     };
 
     auto all_cores_vec = corerange_to_cores(all_cores);

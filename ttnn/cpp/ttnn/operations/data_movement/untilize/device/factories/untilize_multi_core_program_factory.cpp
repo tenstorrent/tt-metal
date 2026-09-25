@@ -50,10 +50,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/"
         "untilize_variable_num_blocks_metal2.cpp";
 
-    tt::DataFormat input_data_format = datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_data_format);
-    tt::DataFormat output_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_data_format);
+    uint32_t input_single_tile_size = tt::tt_metal::tile_size(a.dtype());
+    uint32_t output_single_tile_size = tt::tt_metal::tile_size(output.dtype());
 
     IDevice* device = a.device();
     Buffer* src0_buffer = a.buffer();
@@ -133,7 +131,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
         .unique_id = SRC0,
         .entry_size = input_single_tile_size,
         .num_entries = input_dfb_num_tiles,
-        .data_format_metadata = input_data_format,
+        .data_format_metadata = a.dtype(),
     };
     if (input_dfb_borrowed) {
         src0_dfb.borrowed_from = INPUT;
@@ -146,7 +144,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
         .unique_id = OUT,
         .entry_size = output_single_tile_size,
         .num_entries = output_dfb_num_tiles,
-        .data_format_metadata = output_data_format,
+        .data_format_metadata = output.dtype(),
     };
 
     TensorParameter input_param{.unique_id = INPUT, .spec = a.tensor_spec()};

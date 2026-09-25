@@ -325,16 +325,11 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
 
     auto* mesh_device = tensor_args.input.device();
 
-    const tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(input.dtype());
-    const uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
-    const tt::DataFormat cos_cb_data_format = datatype_to_dataformat_converter(cos.dtype());
-    const uint32_t cos_single_tile_size = tt::tile_size(cos_cb_data_format);
-    const tt::DataFormat sin_cb_data_format = datatype_to_dataformat_converter(sin.dtype());
-    const uint32_t sin_single_tile_size = tt::tile_size(sin_cb_data_format);
-    const tt::DataFormat trans_mat_cb_data_format = datatype_to_dataformat_converter(trans_mat.dtype());
-    const uint32_t trans_mat_single_tile_size = tt::tile_size(trans_mat_cb_data_format);
-    const tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(out.dtype());
-    const uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    const uint32_t input_single_tile_size = tt::tt_metal::tile_size(input.dtype());
+    const uint32_t cos_single_tile_size = tt::tt_metal::tile_size(cos.dtype());
+    const uint32_t sin_single_tile_size = tt::tt_metal::tile_size(sin.dtype());
+    const uint32_t trans_mat_single_tile_size = tt::tt_metal::tile_size(trans_mat.dtype());
+    const uint32_t output_single_tile_size = tt::tt_metal::tile_size(out.dtype());
 
     const uint32_t batch = input.padded_shape()[0];
     const uint32_t n_heads = input.padded_shape()[1];
@@ -400,47 +395,47 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
             .unique_id = INPUT_DFB,
             .entry_size = input_single_tile_size,
             .num_entries = input_cb_num_tiles,
-            .data_format_metadata = input_cb_data_format},
+            .data_format_metadata = input.dtype()},
         DataflowBufferSpec{
             .unique_id = COS_DFB,
             .entry_size = cos_single_tile_size,
             .num_entries = num_cos_sin_tiles,
-            .data_format_metadata = cos_cb_data_format},
+            .data_format_metadata = cos.dtype()},
         DataflowBufferSpec{
             .unique_id = SIN_DFB,
             .entry_size = sin_single_tile_size,
             .num_entries = num_cos_sin_tiles,
-            .data_format_metadata = sin_cb_data_format},
+            .data_format_metadata = sin.dtype()},
         DataflowBufferSpec{
             .unique_id = TRANS_MAT_DFB,
             .entry_size = trans_mat_single_tile_size,
             .num_entries = 1,
-            .data_format_metadata = trans_mat_cb_data_format},
+            .data_format_metadata = trans_mat.dtype()},
         DataflowBufferSpec{
             .unique_id = ROTATED_INTERM_DFB,
             .entry_size = input_single_tile_size,
             .num_entries = head_dim_t,
-            .data_format_metadata = input_cb_data_format},
+            .data_format_metadata = input.dtype()},
         DataflowBufferSpec{
             .unique_id = COS_INTERM_DFB,
             .entry_size = cos_single_tile_size,
             .num_entries = head_dim_t,
-            .data_format_metadata = cos_cb_data_format},
+            .data_format_metadata = cos.dtype()},
         DataflowBufferSpec{
             .unique_id = SIN_INTERM_DFB,
             .entry_size = sin_single_tile_size,
             .num_entries = head_dim_t,
-            .data_format_metadata = sin_cb_data_format},
+            .data_format_metadata = sin.dtype()},
         DataflowBufferSpec{
             .unique_id = OUT_DFB,
             .entry_size = output_single_tile_size,
             .num_entries = num_output_tiles,
-            .data_format_metadata = output_cb_data_format},
+            .data_format_metadata = out.dtype()},
         DataflowBufferSpec{
             .unique_id = ZERO_DFB,
             .entry_size = output_single_tile_size,
             .num_entries = std::max(1u, input_head_dim_t - head_dim_t),
-            .data_format_metadata = output_cb_data_format},
+            .data_format_metadata = out.dtype()},
     };
     if (has_metadata) {
         dfbs.push_back(DataflowBufferSpec{

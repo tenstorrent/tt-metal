@@ -64,8 +64,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     tt::DataFormat scaler_cb_data_format =
         src0_cb_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     uint32_t scaler_single_tile_size = tt::tile_size(scaler_cb_data_format);
-    tt::DataFormat dst_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
+    uint32_t dst_single_tile_size = tt::tt_metal::tile_size(output.dtype());
 
     IDevice* device = &a.mutable_device();
 
@@ -111,10 +110,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
         .num_entries = 1,
         .data_format_metadata = scaler_cb_data_format};
     DataflowBufferSpec out_dfb{
-        .unique_id = OUT,
-        .entry_size = dst_single_tile_size,
-        .num_entries = 2,
-        .data_format_metadata = dst_cb_data_format};
+        .unique_id = OUT, .entry_size = dst_single_tile_size, .num_entries = 2, .data_format_metadata = output.dtype()};
 
     TensorParameter input_param{.unique_id = INPUT, .spec = a.tensor_spec()};
     TensorParameter output_param{.unique_id = OUTPUT, .spec = output.tensor_spec()};

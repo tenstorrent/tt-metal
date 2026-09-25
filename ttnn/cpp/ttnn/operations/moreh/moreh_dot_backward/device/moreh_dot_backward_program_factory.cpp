@@ -36,8 +36,7 @@ ttnn::device_operation::ProgramArtifacts MorehDotBackwardOperation::ProgramFacto
 
     const NodeCoord node = {0, 0};
 
-    const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(output_grad.dtype());
-    const uint32_t cb_tile_size = tile_size(cb_data_format);
+    const uint32_t cb_tile_size = tt::tt_metal::tile_size(output_grad.dtype());
 
     const uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
 
@@ -67,7 +66,7 @@ ttnn::device_operation::ProgramArtifacts MorehDotBackwardOperation::ProgramFacto
             .unique_id = id,
             .entry_size = cb_tile_size,
             .num_entries = num_entries,
-            .data_format_metadata = cb_data_format,
+            .data_format_metadata = output_grad.dtype(),
         };
     };
 

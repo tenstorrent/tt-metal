@@ -65,9 +65,6 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
     const auto& ordered_cores_with_data = get_optimal_worker_cores_for_sharded_tensor(output);
     auto all_cores_padded = CoreRangeSet(ttsl::Span<const CoreCoord>(ordered_cores_with_data));
 
-    tt::DataFormat input_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    tt::DataFormat output_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-
     // Input shard DFB — borrows the input buffer's L1 memory; the framework re-points it from the
     // input TensorArgument on every dispatch. The reader only takes its base pointer (a raw peek,
     // no FIFO ops), so the reader is its sole toucher and binds both endpoints (self-loop).
@@ -80,7 +77,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
         .unique_id = SH_W_IN_SHARD,
         .entry_size = unpadded_stick_bytes,
         .num_entries = std::min(shard_height_unpadded, num_input_sticks),
-        .data_format_metadata = input_dfb_data_format,
+        .data_format_metadata = input_tensor.dtype(),
         .borrowed_from = SH_W_INPUT,
     };
 
@@ -90,7 +87,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
         .unique_id = SH_W_OUT_SHARD,
         .entry_size = padded_stick_bytes,
         .num_entries = shard_height_padded,
-        .data_format_metadata = output_dfb_data_format,
+        .data_format_metadata = output.dtype(),
         .borrowed_from = SH_W_OUTPUT,
     };
 

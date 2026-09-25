@@ -41,8 +41,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
 
     const tt::DataFormat src0_cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     const uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
-    const tt::DataFormat dst_cb_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
-    const uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
+    const uint32_t dst_single_tile_size = tt::tt_metal::tile_size(output_tensor.dtype());
 
     const auto tile = input_tensor.tensor_spec().tile();
     const uint32_t tile_hw = tile.get_tile_hw();
@@ -73,7 +72,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
         .unique_id = CB_OUT0,
         .entry_size = dst_single_tile_size,
         .num_entries = num_tiles_per_shard,
-        .data_format_metadata = dst_cb_data_format,
+        .data_format_metadata = output_tensor.dtype(),
         .borrowed_from = OUTPUT_TENSOR,
     });
 

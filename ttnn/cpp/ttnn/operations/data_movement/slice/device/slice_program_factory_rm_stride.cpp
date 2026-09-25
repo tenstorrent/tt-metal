@@ -56,7 +56,6 @@ ttnn::device_operation::ProgramArtifacts SliceRmStrideProgramFactory::create_pro
             "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_multicore_slice_nd.cpp";
     }
 
-    tt::DataFormat dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t actual_input_w = input_shape[-1];
     uint32_t input_bytes_per_row = actual_input_w * element_size;
     uint32_t dfb_entry_size = input_bytes_per_row;
@@ -74,7 +73,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmStrideProgramFactory::create_pro
         .unique_id = STRIDE_IN,
         .entry_size = dfb_entry_size_aligned,
         .num_entries = 2,
-        .data_format_metadata = dfb_data_format,
+        .data_format_metadata = input_tensor.dtype(),
     };
 
     // The *_nd pair reads five rank-long blocks (reader) and one (writer); the *_4d pair spells the

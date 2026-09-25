@@ -75,7 +75,6 @@ ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_
 
     auto cores_in_order = corerange_to_cores(all_cores, num_cores, true);
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t page_size = output.buffer()->page_size();
     uint32_t multi_buffering_size = 2;
 
@@ -112,13 +111,13 @@ ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_
         .unique_id = CB_IN0,
         .entry_size = page_size,
         .num_entries = multi_buffering_size,
-        .data_format_metadata = cb_data_format,
+        .data_format_metadata = a.dtype(),
     };
     DataflowBufferSpec cb_pad_spec{
         .unique_id = CB_PAD,
         .entry_size = page_size,
         .num_entries = 1,
-        .data_format_metadata = cb_data_format,
+        .data_format_metadata = a.dtype(),
     };
 
     TensorParameter input_param{.unique_id = INPUT_TENSOR, .spec = a.tensor_spec()};

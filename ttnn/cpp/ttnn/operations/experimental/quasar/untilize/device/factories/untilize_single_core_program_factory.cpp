@@ -34,10 +34,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeSingleCoreProgramFactory::creat
     CoreRange core({0, 0}, {0, 0});
     CoreRangeSet core_ranges{core};
 
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    uint32_t input_single_tile_size = tt::tt_metal::tile_size(a.dtype());
+    uint32_t output_single_tile_size = tt::tt_metal::tile_size(output.dtype());
 
     const auto& tile_shape = a.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
@@ -104,13 +102,13 @@ ttnn::device_operation::ProgramArtifacts UntilizeSingleCoreProgramFactory::creat
         .unique_id = IN,
         .entry_size = input_single_tile_size,
         .num_entries = input_cb_num_tiles,
-        .data_format_metadata = input_cb_data_format,
+        .data_format_metadata = a.dtype(),
     };
     DataflowBufferSpec out_dfb{
         .unique_id = OUT,
         .entry_size = output_single_tile_size,
         .num_entries = output_cb_num_tiles,
-        .data_format_metadata = output_cb_data_format,
+        .data_format_metadata = output.dtype(),
     };
 
     // ---- Tensor parameters ----

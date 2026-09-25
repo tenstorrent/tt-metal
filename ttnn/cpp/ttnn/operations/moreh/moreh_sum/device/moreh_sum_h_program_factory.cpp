@@ -50,8 +50,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
         fp32_dest_acc_en,
         packer_l1_acc);
 
-    DataFormat src0_dfb_data_format = datatype_to_dataformat_converter(input.dtype());
-    uint32_t src0_single_tile_size = tile_size(src0_dfb_data_format);
+    uint32_t src0_single_tile_size = tt::tt_metal::tile_size(input.dtype());
     DataFormat scaler_dfb_data_format = DataFormat::Float16_b;
     uint32_t scaler_single_tile_size = tile_size(scaler_dfb_data_format);
     DataFormat mask_h_dfb_data_format = DataFormat::Float16_b;
@@ -59,8 +58,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
     DataFormat intermed_dfb_data_format = (fp32_dest_acc_en) ? DataFormat::Float32 : DataFormat::Float16_b;
     DataFormat intermed1_dfb_data_format = DataFormat::Float16_b;
     uint32_t intermed_single_tile_size = tile_size(intermed_dfb_data_format);
-    DataFormat dst_dfb_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t dst_single_tile_size = tile_size(dst_dfb_data_format);
+    uint32_t dst_single_tile_size = tt::tt_metal::tile_size(output.dtype());
 
     IDevice* device = input.device();
 
@@ -99,7 +97,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
         .unique_id = INPUT_DFB,
         .entry_size = src0_single_tile_size,
         .num_entries = num_input_tiles,
-        .data_format_metadata = src0_dfb_data_format,
+        .data_format_metadata = input.dtype(),
     });
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = SCALER_DFB,
@@ -131,7 +129,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
         .unique_id = OUT_DFB,
         .entry_size = dst_single_tile_size,
         .num_entries = num_output_tiles,
-        .data_format_metadata = dst_dfb_data_format,
+        .data_format_metadata = output.dtype(),
     });
 
     // ---- Tensor parameters (replace the Buffer* RTA + TensorAccessorArgs plumbing) ----

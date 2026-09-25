@@ -26,7 +26,6 @@ ttnn::device_operation::ProgramArtifacts PlusOneProgramFactory::create_program_a
     const PlusoneParams& operation_attributes, const Tensor& input, Tensor& /*tensor_return_value*/) {
     const MeshTensor& input_mesh_tensor = input.mesh_tensor();
 
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     uint32_t input_unit_size = input.element_size();
 
     CoreRangeSet all_cores = CoreRangeSet(std::vector{CoreRange({0, 0}, {0, 0})});
@@ -72,7 +71,7 @@ ttnn::device_operation::ProgramArtifacts PlusOneProgramFactory::create_program_a
         .unique_id = IN0,
         .entry_size = aligned_input_page_size,
         .num_entries = 1,
-        .data_format_metadata = input_cb_data_format,
+        .data_format_metadata = input.dtype(),
     };
     if (input.is_sharded()) {
         in0_dfb.borrowed_from = INPUT;

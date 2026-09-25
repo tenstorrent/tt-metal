@@ -42,15 +42,13 @@ CoreRangeSet compute_core_grid(
 // Helper function to describe a dataflow buffer holding a single tile-sized entry laid out like a tensor
 DataflowBufferSpec make_tensor_dataflow_buffer(DFBSpecName unique_id, const MeshTensor& tensor) {
     // Dataflow buffer config
-    const tt::DataFormat dfb_data_format =
-        tt::tt_metal::datatype_to_dataformat_converter(tensor.tensor_spec().data_type());
-    const uint32_t tensor_tile_size = tensor.tensor_spec().tile().get_tile_size(dfb_data_format);
+    const uint32_t tensor_tile_size = tensor.tensor_spec().tile().get_tile_size(tensor.tensor_spec().data_type());
 
     return DataflowBufferSpec{
         .unique_id = std::move(unique_id),
         .entry_size = tensor_tile_size,
         .num_entries = 1,
-        .data_format_metadata = dfb_data_format,
+        .data_format_metadata = tensor.tensor_spec().data_type(),
     };
 }
 
