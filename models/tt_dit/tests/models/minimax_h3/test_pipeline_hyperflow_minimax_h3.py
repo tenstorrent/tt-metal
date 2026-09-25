@@ -54,7 +54,7 @@ LORA_PATH_ENV = "MINIMAX_H3_HYPERFLOW_LORA_PATH"
 SEED = 0
 ASPECT_RATIO = (16, 9)
 PROMPT = CALIBRATED_FOX_PROMPT
-DURATION_S = 5
+DURATION_S = int(os.environ.get("MINIMAX_H3_HYPERFLOW_DURATION_S", 5))
 
 # Measured on this mesh and build at 49 forwards, seed 0, same prompt -- so the log carries its own
 # A/B rather than pointing at numbers from another day. Nothing here is a threshold.
