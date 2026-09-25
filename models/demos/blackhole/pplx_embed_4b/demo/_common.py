@@ -489,6 +489,12 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
         if os.getenv("QWEN_SDPA_GQA_PACK", "1") == "1":
             os.environ.setdefault("QWEN_SDPA_GQA_PACK", "1")
             os.environ.setdefault("QWEN_SDPA_K_CHUNK", "512")
+            # Packed calls on 88 cores: q192 gives each KV head 11 chunks of its 64 packed row tiles (the last one 4
+            # tiles), one per core of one 11-core grid row, so the K/V row multicast stays; 6 row tiles per core
+            # instead of 8. Standalone 40.2 -> 36.6 us. q160 on 104 cores (heads span two rows, unicast chains)
+            # 44.0 and q128/q64 on 120 cores 53-59 us are slower. Opt out: QWEN_SDPA_GQA_PACK_Q_CHUNK=0.
+            os.environ.setdefault("QWEN_SDPA_GQA_PACK_Q_CHUNK", "192")
+            os.environ.setdefault("QWEN_SDPA_GQA_PACK_GRID", "11,8")
         os.environ.setdefault("QWEN_SDPA_K_CHUNK", "256")
     # bs1 legacy 2D-multicast matmul blocks (8x8 grid, DRAM width-sharded bfp4 weights), from a
     # standalone in0_block_w x out_subblock sweep at M=512 on the model's operand placement:

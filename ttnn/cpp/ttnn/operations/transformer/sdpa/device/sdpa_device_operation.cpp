@@ -39,15 +39,6 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
             q_shape[2] % tt::constants::TILE_HEIGHT == 0 && tensors.q.padded_shape()[2] == q_shape[2],
             "SDPA pack_gqa_heads needs an unpadded, tile-aligned Q sequence length (got {})",
             q_shape[2]);
-        if (attrs.output_heads_concat) {
-            const uint32_t q_chunk = attrs.program_config ? attrs.program_config->q_chunk_size : 32;
-            TT_FATAL(
-                q_shape[2] % q_chunk == 0,
-                "SDPA pack_gqa_heads with output_heads_concat needs q_chunk_size ({}) to divide Sq ({}) so no Q chunk "
-                "spans two heads",
-                q_chunk,
-                q_shape[2]);
-        }
     }
     const bool use_mla = attrs.use_mla;
 

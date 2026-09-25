@@ -14,7 +14,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 @pytest.mark.parametrize("b, nh, nkv, s, d", [(1, 32, 8, 512, 128), (8, 32, 8, 512, 128), (2, 16, 4, 256, 64)])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
-@pytest.mark.parametrize("q_chunk, k_chunk", [(256, 256), (256, 512), (128, 256)])
+# 192 and 160 do not divide S: chunks run into the next query head of the group and the last chunk is padded
+@pytest.mark.parametrize("q_chunk, k_chunk", [(256, 256), (256, 512), (128, 256), (192, 512), (160, 256)])
 @pytest.mark.timeout(300)
 def test_sdpa_pack_gqa_heads(device, b, nh, nkv, s, d, dtype, q_chunk, k_chunk):
     if q_chunk > s or k_chunk > s:

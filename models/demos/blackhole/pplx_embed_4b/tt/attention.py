@@ -218,6 +218,26 @@ def _wrap_sdpa_bidirectional(original_fn, concat_out=False):
     # of 4*S rows, so each KV head's K/V streams once down one 8-core chain instead of once per Q head.
     # Unmasked non-causal calls only (the serving pad mask takes the unpacked call).
     gqa_pack = os.getenv("QWEN_SDPA_GQA_PACK", "0") == "1"
+    # Packed calls take their own q chunk and grid (QWEN_SDPA_GQA_PACK_Q_CHUNK, QWEN_SDPA_GQA_PACK_GRID=x,y): at bs1,
+    # q192 on 11x8 gives each KV head 11 chunks of its 64 packed row tiles, one per core of one grid row (88 cores,
+    # 6 row tiles each vs 8 on 8x8). Unpacked calls keep the model's config.
+    pack_q_chunk = int(os.getenv("QWEN_SDPA_GQA_PACK_Q_CHUNK", "0"))
+    pack_grid = tuple(int(x) for x in os.getenv("QWEN_SDPA_GQA_PACK_GRID", "0,0").split(","))
+    pack_cfgs = {}
+
+    def packed_program_config(pc):
+        if pc is None or not pack_q_chunk:
+            return pc
+        key = (pc.k_chunk_size, pc.exp_approx_mode)
+        if key not in pack_cfgs:
+            grid = pc.compute_with_storage_grid_size
+            pack_cfgs[key] = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(*pack_grid) if pack_grid[0] else grid,
+                q_chunk_size=pack_q_chunk,
+                k_chunk_size=pc.k_chunk_size,
+                exp_approx_mode=pc.exp_approx_mode,
+            )
+        return pack_cfgs[key]
 
     @functools.wraps(original_fn)
     def wrapper(*args, **kwargs):
@@ -235,11 +255,11 @@ def _wrap_sdpa_bidirectional(original_fn, concat_out=False):
             and int(q.shape[0]) == 1
             and int(q.shape[1]) > int(k.shape[1])
             and int(q.shape[1]) % int(k.shape[1]) == 0
-            # q chunks must not span two heads (the op validates this for the concat layout); the Generator's
-            # warm-up shapes (S=128 at q_chunk 256) take the unpacked call
-            and int(q.shape[2]) % getattr(kwargs.get("program_config"), "q_chunk_size", 32) == 0
+            # the op needs a tile-aligned Q sequence to view the group's heads as one
+            and int(q.shape[2]) % 32 == 0
         ):
             kwargs["pack_gqa_heads"] = True
+            kwargs["program_config"] = packed_program_config(kwargs.get("program_config"))
         if concat_out and q is not None and (int(q.shape[0]) > 1 or concat_out_bs1):
             kwargs["output_heads_concat"] = True
             out = original_fn(*args, **kwargs)
