@@ -727,7 +727,7 @@ ONLY_EVER_TOLERANCE = frozenset(
         # inaccurate cell is already past that output's usable ceiling, so there is no
         # variant a step budget would tighten: Erfc 376, Xielu 512, Polygamma 614,
         # Softplus 6,416, Lgamma 32,295 and Digamma 33,840 steps at best, against
-        # ceilings of 6.4 (bf16), 51.2 (fp16) and 25.6 (Bfp8_b). Lgamma's worst is
+        # ceilings of 7 (bf16), 52 (fp16) and 26 (Bfp8_b). Lgamma's worst is
         # 2.3e9, which is issue #55356 rather than a budgeting question.
         MathOperation.Erfc,
         MathOperation.Xielu,
@@ -1036,7 +1036,9 @@ def test_the_usable_ceiling_is_tighter_than_the_meaningful_one():
     for fmt in ULP_FORMATS:
         meaningful = MAX_MEANINGFUL_ULP[ulp_dtype(fmt)]
         assert usable_budget_ceiling(fmt) < meaningful, fmt.name
-    assert usable_budget_ceiling(DataFormat.Float16_b) == 6.4
+    assert (
+        usable_budget_ceiling(DataFormat.Float16_b) == 7
+    )  # 6.4 steps, rounded up to a whole one
 
 
 def test_the_integer_valued_ops_are_the_only_ones_enrolled_on_bfp8_b():
