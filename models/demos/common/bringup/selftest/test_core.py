@@ -119,6 +119,8 @@ def test_gate_pins_pythonpath(sandbox, monkeypatch):
         ("TT_METAL_X=1 scripts/run_safe_pytest.sh t.py", True, False),
         ("scripts/run_safe_pytest.sh t.py && python post.py", True, True),
         ("python check_plan.py", False, False),
+        ("scripts/run_safe_pytest.sh t.py && python -m models.demos.common.bringup.knowledge.check", True, False),
+        ("scripts/run_safe_pytest.sh t.py && python -m models.demos.common.bringup.testing.profiler", True, True),
     ],
 )
 def test_device_policy(cmd, device, bad):
