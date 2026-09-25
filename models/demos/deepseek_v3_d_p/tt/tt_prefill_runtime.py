@@ -173,6 +173,7 @@ class TtPrefillRuntime:
         self._trace_metadata_msg = None
         self._trace_d2h_service = None
         self._trace_output = None
+        self._trace_partial_in = None  # DFlash, non-first rank: persistent home of the imported drafter partial
         self._trace_captured = False
         self._kv_cache = None
         self._trace_request_id = 0
@@ -607,6 +608,11 @@ class TtPrefillRuntime:
         # back the 2H receive buffer, so ask for the hidden-only width explicitly.
         if self.config.dflash_enabled and not self.config.is_first_rank:
             self._trace_input = self.make_placeholder_activation(dflash_packed=False)
+            # The upstream drafter partial has to survive the replay too, so it gets a persistent home
+            # allocated BEFORE the capture. A tensor allocated after capture_trace() may sit on memory the
+            # captured forward uses as scratch, and replay() would overwrite it before the eager finalize
+            # reads it. Same [1, planes, chunk/sp, H/tp] shape as the hidden half.
+            self._trace_partial_in = self.make_placeholder_activation(dflash_packed=False)
         else:
             self._trace_input = self.make_chunk_input([0] * chunk)
         # Per-element metadata: (slot_id, actual_start, actual_end), seeded for chunk 0.
@@ -773,8 +779,13 @@ class TtPrefillRuntime:
                     # graph is identical to a non-DFlash one and only this slice pays for the packing.
                     model_input, partial = self._unpack_activation(input_tensor)
                     ttnn.deallocate(input_tensor)
-                    self.drafter.import_partial(partial)
+                    # Park the partial at its pre-capture address and free every post-capture buffer
+                    # BEFORE the replay: nothing allocated since capture_trace() may still be live when
+                    # replay() runs, or the captured forward's scratch writes land on it.
+                    ttnn.copy(partial, self._trace_partial_in)
+                    ttnn.deallocate(partial)
             ttnn.copy(model_input, self._trace_input)
+            ttnn.deallocate(model_input)
             # The three scalars come off the device from metadata_msg -- on this path the host is
             # not told the chunk offset at all (slot_id/actual_start/actual_end arrive None), which
             # is the point of consuming them on-device.
@@ -797,7 +808,11 @@ class TtPrefillRuntime:
                 )
             self._metadata_from_msg(metadata_msg)
             self._controller.replay()
-            ttnn.deallocate(model_input)
+
+            if self.config.dflash_enabled and not self.config.is_first_rank:
+                # Allocated after the replay, so it is safe until the next one; _finalize_sharded_partial
+                # consumes (frees) it below, within this chunk.
+                self.drafter.import_partial(ttnn.clone(self._trace_partial_in))
 
             if self.config.dflash_enabled:
                 # The drafter's KV finalize runs AFTER the replay and stays eager, reading the tap
