@@ -308,11 +308,15 @@
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-27B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-27B
     export MESH_DEVICE=T3K
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_gdn_tp.py
+    # MTP drafter head PCC vs the torch reference. Measured 19 s of call time on T3K; the tensor
+    # cache is already warm from test_gdn_tp above, so 120 s covers the load.
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_mtp_tp.py
   model: qwen3.6-27b
   model_family: Qwen
   skus:
     wh_llmbox:
-      timeout: 10
+      # 10 -> 12 for test_mtp_tp above (19 s of call time plus its own model load).
+      timeout: 12
       tier: 3
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
