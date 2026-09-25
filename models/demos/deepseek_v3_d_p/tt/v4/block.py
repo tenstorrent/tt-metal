@@ -18,9 +18,12 @@ of per-expert HF-orientation dicts under ``"__experts__"``.
 
 from __future__ import annotations
 
+import os
 from typing import Callable, Optional
 
 import torch
+
+_TRACED_RAGGED = os.environ.get("PREFILL_TRACED_RAGGED", "0") == "1"  # DS4F-0268: ragged final chunk on the islands
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -456,9 +459,24 @@ class TtV4PrefillBlock(LightweightModule):
         ), f"slot {slot}: state at {state.kv_actual}, chunk starts at {actual_start}"
         real_len = int(actual_end) - int(actual_start)
         S_l, D_l = streams[0].shape[2], streams[0].shape[3]
-        if self._islands is not None and real_len == S_l * self.mesh_device.shape[self.sp_axis]:
+        chunk = S_l * self.mesh_device.shape[self.sp_axis]
+        # DS4F-0268: a ragged FINAL chunk may ride the full-chunk islands (PREFILL_TRACED_RAGGED=1): the input buffer is
+        # always chunk-wide, the attention is causal (pad rows never feed a real row), the eager glue / epilogue take the
+        # real length (the HCA/CSA compressor masks read it from a scalar; the ring rows are re-derived; entries past the
+        # real ones stay -inf in the score mask and beyond the migrated range). Chunk 0 and tails under 256 tokens stay
+        # eager (the attention islands need trace_ready; the eager path's alignment step is 32 * sp).
+        ragged_traced = (
+            _TRACED_RAGGED
+            and real_len < chunk
+            and real_len >= 256
+            and int(actual_start) > 0
+            and bool(getattr(self, "_attn_islands", None))
+            and slot in self._attn_islands
+            and self.attn.trace_ready(state)
+        )
+        if self._islands is not None and (real_len == chunk or ragged_traced):
             # full chunk: the captured islands' MoE padding config (actual_isl = chunk) and the hash gate's device ids
-            # buffer hold; a ragged FINAL chunk (real_len < chunk) runs the eager path below
+            # buffer hold; a ragged FINAL chunk (real_len < chunk) runs the eager path below unless ragged_traced
             if not self.hash_layer or isinstance(input_ids, ttnn.Tensor):
                 return self._forward_traced(
                     streams,

@@ -1010,17 +1010,35 @@ class TtCSA(TtHCA):
         """Eager, after the islands: the contract exports, all prepared in A2 -> 10 + 1 + 1 ``update_padded_kv_cache``
         and one ``fill_cache_for_user_`` per layer -- and the counters."""
         next_carry = outs[3]
+        sliding_kv_g = outs[2]
         y, k_rot, ring_rm, pblock_rm = a2[:4]
         ent_pieces = list(a2[4:])
         rate = self.compressor.compress_rate
+        full = int(real_len) == int(sliding_kv_g.shape[2])
         if export is not None:
             unified, index_k, batch_idx = export[:3]
             pending = export[3] if len(export) > 3 else None
             assert unified.dtype == ent_pieces[0].dtype and index_k.dtype == k_rot.dtype, (unified.dtype, index_k.dtype)
+            # a ragged FINAL chunk on the traced path (DS4F-0268) still writes every entry / key piece of the padded
+            # chunk: the rows past ceil(real_len / rate) sit beyond the migrated range (128 + ceil(S / 4) rows), are -inf
+            # in the score mask (glue zeroes only the real columns) and are overwritten by the slot's next prompt
             self._write_rm_pieces(unified, ent_pieces, batch_idx, self.sliding_window + int(state.entry_count))
             ttnn.kv_cache.fill_cache_for_user_(index_k, k_rot, int(batch_idx), update_idx=int(state.entry_count))
-            self._write_rm_pieces(unified, [ring_rm], batch_idx, 0)
-            if pending is not None and real_len % rate == 0:
+            if full:
+                self._write_rm_pieces(unified, [ring_rm], batch_idx, 0)
+            else:
+                # the captured ring is the padded chunk's last 128 rows; re-derive the real ones (transient constants)
+                ring = self._ring_rows(
+                    sliding_kv_g, state.sliding_carry, int(state.kv_actual), int(real_len), transient=True
+                )
+                ring_rm_real = self._rm_pieces(ring, self.sliding_window, self._contract_dtype("csa_unified"))[0]
+                self._write_rm_pieces(unified, [ring_rm_real], batch_idx, 0)
+                for t in (ring, ring_rm_real):
+                    if t is not None:
+                        ttnn.deallocate(t)
+            if pending is not None and full and real_len % rate == 0:
+                # a ragged chunk's pending block would be the padded chunk's; the decode ring does not consume csa_pending
+                # for a final chunk (PREFILL_KV_TABLE_PENDING=0), so it is skipped rather than recomputed
                 self._write_rm_pieces(pending, [pblock_rm], batch_idx, 0)
         state.entry_count += real_len // rate
         state.kv_actual += real_len
