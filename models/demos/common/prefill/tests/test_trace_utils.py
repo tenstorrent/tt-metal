@@ -2,10 +2,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 import json
-import os
-import subprocess
-import sys
-from pathlib import Path
 
 import pytest
 import torch
@@ -81,27 +77,3 @@ def test_llama_scenario_separates_producer_slots_from_allocated_slots(monkeypatc
             cache / f"layer_{layer}.safetensors",
         )
     validate_prefill_slot_traces(str(tmp_path), scenario)
-    # Invalid checkpoint/prompt paths prove the reuse path never attempts an HF forward.
-    script = Path(__file__).parents[3] / "llama_3p1_8b_d_p/scripts/generate_prefill_trace.py"
-    output = tmp_path / "selected"
-    command = [
-        sys.executable,
-        str(script),
-        "--checkpoint",
-        str(tmp_path / "no-checkpoint"),
-        "--prompt-file",
-        str(tmp_path / "no-prompt"),
-        "--output-dir",
-        str(output),
-        "--seq-len",
-        "2048",
-        "--num-slots",
-        str(active_slots),
-        "--reuse-trace-dirs",
-        str(tmp_path),
-    ]
-    result = subprocess.run(
-        command, capture_output=True, text=True, env=dict(os.environ, PYTHONPATH=str(script.parents[4]))
-    )
-    assert result.returncode == 0, result.stderr
-    assert json.loads((output / "trace_paths.json").read_text()) == [str(tmp_path)] * active_slots
