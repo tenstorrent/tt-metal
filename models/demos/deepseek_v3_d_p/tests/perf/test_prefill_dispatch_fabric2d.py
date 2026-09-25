@@ -2,28 +2,18 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device-perf worker: production `dispatch` and `dispatch_fabric2d` on one set of inputs.
+"""Device-perf worker for dispatch_fabric2d: one warm-up launch, then ITERATIONS more.
 
-Both ops run in a single invocation, so Tracy captures DispatchDeviceOperation and
-DispatchFabric2dDeviceOperation in one CSV and the ratio between them comes from one build, one
-board state and one routing draw. Running them as separate invocations would fold board-to-board
-and boot-to-boot variance into a number whose whole purpose is to be a ratio -- and on these
-galaxies the realized fabric topology is not even stable across resets.
-
-No PCC here: `op_unit_tests/test_dispatch_fabric2d.py` owns correctness, and a host-side
-comparison would sit between the two ops in the capture.
+No correctness check here; `op_unit_tests/test_dispatch_fabric2d.py` covers that.
 
 Environment:
-    TT_DS_INPUT_LAYOUT        row_major (default) or tile, for BOTH ops. The model hands dispatch
-                              tiled activations and both ops untilize them on device, so tile is the
-                              like-for-like capture.
-    TT_DS_PROD_INPUT_LAYOUT   row_major or tile, production alone; defaults to TT_DS_INPUT_LAYOUT.
-    TT_DS_CAPTURED_LAYER      an integer: replay one captured MoE layer's real routing instead of the
-                              synthetic draw.
-    TT_DS_CAPTURED_PATH       where that capture lives; defaults to the golden prefill cache.
+    TT_DS_INPUT_LAYOUT     row_major (default) or tile. The model passes tile.
+    TT_DS_CAPTURED_LAYER   an integer: use one recorded MoE layer's real routing instead of the
+                           synthetic draw.
+    TT_DS_CAPTURED_PATH    where that recording lives; defaults to the golden prefill cache.
 
-These are read in this worker's process, so a harness that launches it has to pass them through its
-own `env=` parameter rather than prefixing them onto the command.
+These are read by this worker's own process, so a harness that launches it must pass them through
+its `env=` parameter, not as a prefix on the command.
 """
 
 import os
@@ -41,7 +31,6 @@ from models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_dispatch_fabric2d imp
 )
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import compute_constants, extract_mesh_config, get_gate_outputs
-from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 
 # Production prefill geometry: one 5120-token chunk over an 8-chip dispatch group.
 CHUNK = 5 * 1024
@@ -52,7 +41,7 @@ EMB_DIM = 7 * 1024
 NUM_ROUTED_EXPERTS = 256
 NUM_EXPERTS_PER_TOK = 8
 
-# Enough launches that per-op mean is not dominated by the first, which pays program build.
+# Launches after the warm-up one.
 ITERATIONS = 10
 
 _MESH_CONFIGS = [param for param in ALL_MESH_CONFIGS if param.id == "fabric2d-torus-xy-8x4-2link"]
@@ -64,8 +53,7 @@ assert len(_MESH_CONFIGS) == 1, "Galaxy TorusXY config missing from ALL_MESH_CON
     _MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
-# Finite on purpose. A hang here does not fail the run, it wedges the board: the eth links do not
-# retrain afterwards and recovering them needs privileges this account does not have.
+# Kept finite: a hang leaves the eth links down, and bringing them back needs admin access.
 @pytest.mark.timeout(900)
 def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links):
     cfg = extract_mesh_config(mesh_device)
@@ -89,9 +77,8 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links):
     in_group_share, hot_weight = PRODUCTION_ROUTING
     indices = _draw_indices(G, H, seq_len_per_chip, NUM_EXPERTS_PER_TOK, NUM_ROUTED_EXPERTS, in_group_share, hot_weight)
     routing = "synthetic"
-    # Real routing instead of the draw: one captured MoE layer, Galaxy-global expert ids, 5120 tokens
-    # viewed as 8 source chips x 640. Every dispatch column sees the same picks and resolves only its
-    # own experts, so one layer exercises all four columns at once. Read-only on the capture.
+    # Optionally, real routing from one recorded MoE layer: 5120 tokens split as 8 chips x 640. Every
+    # dispatch group gets the same picks and keeps only the ones for its own experts.
     captured_layer = os.environ.get("TT_DS_CAPTURED_LAYER")
     if captured_layer is not None:
         from safetensors import safe_open
@@ -132,28 +119,13 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links):
         )
 
     x = torch.randn(H, G, seq_len_per_chip, EMB_DIM, dtype=torch.bfloat16)
-    # The model hands dispatch TILED activations and both ops untilize them on device, so the
-    # measurement the model cares about is tile against tile. Row-major is kept selectable because it
-    # is a path each op still has and the layouts are otherwise only comparable one op at a time.
-    # Same values either way, so the routing draw and the outputs are unchanged.
-    both_layout = os.environ.get("TT_DS_INPUT_LAYOUT", "row_major")
-    prod_layout = os.environ.get("TT_DS_PROD_INPUT_LAYOUT", both_layout)
-    for name, value in (("TT_DS_INPUT_LAYOUT", both_layout), ("TT_DS_PROD_INPUT_LAYOUT", prod_layout)):
-        assert value in ("row_major", "tile"), f"{name}: expected row_major or tile, got {value!r}"
-
-    def activations(layout):
-        return shard(x, (0, 1), ttnn.bfloat16, layout=ttnn.TILE_LAYOUT if layout == "tile" else ttnn.ROW_MAJOR_LAYOUT)
-
-    tt_x = activations(both_layout)
-    # One tensor when the two agree, so the A/B feeds the identical bytes rather than two copies.
-    tt_x_prod = tt_x if prod_layout == both_layout else activations(prod_layout)
-    # Both ops take UINT16 indices, so the A/B feeds them the identical tensor.
-    tt_idx_u16 = shard(indices.permute(1, 0, 2, 3).to(torch.int32).to(torch.int16), (0, 1), ttnn.uint16)
+    layout = os.environ.get("TT_DS_INPUT_LAYOUT", "row_major")
+    assert layout in ("row_major", "tile"), f"TT_DS_INPUT_LAYOUT: expected row_major or tile, got {layout!r}"
+    tt_x = shard(x, (0, 1), ttnn.bfloat16, layout=ttnn.TILE_LAYOUT if layout == "tile" else ttnn.ROW_MAJOR_LAYOUT)
+    tt_idx = shard(indices.permute(1, 0, 2, 3).to(torch.int32).to(torch.int16), (0, 1), ttnn.uint16)
     tt_table = shard(table.unsqueeze(1), (None, 0), ttnn.int32)
-    # The two ops disagree about this tensor by design: fabric2d sizes runs it neither wrote nor
-    # receives, so it needs every source chip's row replicated; production only ever needs its own.
-    tt_offs_all = shard(offs, (None, 0), ttnn.int32)
-    tt_offs_own = shard(offs.permute(1, 0, 2).reshape(H, G, NUM_ROUTED_EXPERTS), (0, 1), ttnn.int32)
+    # Replicated: a relaying chip needs every source chip's row to know how much it forwards.
+    tt_offs = shard(offs, (None, 0), ttnn.int32)
     tt_counts = shard(counts[:, 0:1, :], (None, 0), ttnn.int32)
     tt_region = shard(region[:, 0:1, :], (None, 0), ttnn.int32)
 
@@ -163,38 +135,19 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links):
         f"capacity={max_dispatch_buffer_token_size} links={num_links} iters={ITERATIONS}"
     )
     logger.info(f"routing {routing}: picks landing in this dispatch group {100 * realized:.1f}%")
-    logger.info(f"input layout: fabric2d {both_layout}, production {prod_layout}")
+    logger.info(f"input layout: {layout}")
     if captured_layer is None:
-        # A drifting share is how this measurement goes wrong without anyone noticing: too low reads
-        # as noise, too high overstates how much traffic the transport actually carries.
+        # The draw must hit its target share, or the measured traffic silently isn't what we think.
         assert abs(realized - in_group_share) < 0.02, (
             f"the routing draw asked for {100 * in_group_share:.1f}% of picks in this dispatch group "
             f"and drew {100 * realized:.1f}%"
         )
 
-    production = TtDispatchModule(
-        mesh_device=mesh_device,
-        dispatch_group_size=H,
-        experts_per_chip=experts_per_chip,
-        num_routed_experts=NUM_ROUTED_EXPERTS,
-        num_experts_per_tok=NUM_EXPERTS_PER_TOK,
-        metadata_len=metadata_len,
-        max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
-        seq_len_per_chip=seq_len_per_chip,
-        emb_dim=EMB_DIM,
-        cluster_axis=sp_axis,
-        num_links=num_links,
-        topology=ttnn.Topology.Ring,
-    )
-    tt_weights = shard(
-        torch.zeros(H, G, seq_len_per_chip, NUM_EXPERTS_PER_TOK, dtype=torch.bfloat16), (0, 1), ttnn.bfloat16
-    )
-
     def fabric2d():
         return ttnn.experimental.deepseek_prefill.dispatch_fabric2d(
             tt_x,
-            tt_idx_u16,
-            tt_offs_all,
+            tt_idx,
+            tt_offs,
             tt_table,
             tt_counts,
             tt_region,
@@ -210,31 +163,13 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    # One untimed launch of each so the capture is not dominated by program build.
-    #
-    # The sync between the two ops is load-bearing, not hygiene. Program completion says nothing about
-    # whether a fabric packet has reached its destination chip, and `dispatch` does not drain the
-    # fabric before it retires; starting dispatch_fabric2d underneath that traffic hangs a relay
-    # waiting on pages that never arrive. It takes a heavy routing draw to show up, which is exactly
-    # the shape of a bug that survives a perf harness.
-    production.forward(tt_x_prod, tt_weights, tt_idx_u16, tt_offs_own, tt_table)
-    ttnn.synchronize_device(mesh_device)
-    fabric2d()
+    fabric2d()  # warm-up, before the signpost
     ttnn.synchronize_device(mesh_device)
 
-    signpost("dispatch_baseline")
-    for _ in range(ITERATIONS):
-        production.forward(tt_x_prod, tt_weights, tt_idx_u16, tt_offs_own, tt_table)
-    ttnn.synchronize_device(mesh_device)
-
-    # Synchronised between launches, and not for measurement: per-op DEVICE time is unaffected by host
-    # pacing -- a synced capture and an unsynchronised one agree within noise. The forwarding region is
-    # one allocation reused at the same offsets every launch, and nothing back-pressures a chip that is
-    # a launch ahead; it writes into its neighbour's copy whether or not that neighbour has drained it.
-    # An unsynchronised loop would therefore measure a configuration the op cannot yet be run in.
+    # Synced after every launch. This doesn't change device time; it stops a chip that runs a launch
+    # ahead from overwriting a neighbour's forwarding buffer before the neighbour has read it.
     signpost("dispatch_fabric2d")
     for _ in range(ITERATIONS):
         fabric2d()
         ttnn.synchronize_device(mesh_device)
-    ttnn.synchronize_device(mesh_device)
     signpost("done")
