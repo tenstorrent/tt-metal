@@ -468,7 +468,7 @@ class MigrationDriver:
                     layer_start=layer_start,
                     layer_end_exclusive=layer_end,
                     pos_start=0,
-                    pos_end_exclusive=real_len,
+                    pos_end_exclusive=self._pos_end_rows(real_len),
                 )
                 self.client.wait_complete(token, self.timeout_ms)  # self-polls when no poll thread is running
                 self.last_migrate_ms = (time.perf_counter() - t_mig0) * 1e3  # issue -> wait_complete, host wall clock
@@ -479,6 +479,26 @@ class MigrationDriver:
             migrated += 1
         logger.info(f"[migration_driver] migrations complete: {migrated} pair(s)")
         return migrated
+
+    @staticmethod
+    def _pos_end_rows(real_len: int) -> int:
+        """The migrate's position range end. The engine applies ONE range to every config as ROWS and only clips it to each
+        config's extent (dcn_sender_backend.cpp::migrate_slot_config), so asking for ``real_len`` tokens on a multi-config table
+        whose position axis is the cache ROW moves up to 4x the prompt's rows (DeepSeek-V4-Flash: csa_unified holds 128 + S/4
+        rows for S tokens) and saturates at the destination's extent from 32k tokens (tt-blaze DS4F-0270). Two knobs:
+          PREFILL_MIGRATION_POS_END       an explicit row count (benchmarks);
+          PREFILL_MIGRATION_ROW_BASE / _ROW_DIVISOR   rows = base + ceil(S / divisor), rounded up to 32 -- the largest
+                                          config's extent, e.g. 128 / 4 for DeepSeek-V4-Flash (the smaller configs clip).
+        Default: ``real_len`` (positions == tokens, every other model)."""
+        explicit = os.environ.get("PREFILL_MIGRATION_POS_END")
+        if explicit:
+            return min(int(real_len), int(explicit)) if int(explicit) > 0 else int(real_len)
+        div = os.environ.get("PREFILL_MIGRATION_ROW_DIVISOR")
+        if div:
+            base = int(os.environ.get("PREFILL_MIGRATION_ROW_BASE", "0"))
+            rows = base + (int(real_len) + int(div) - 1) // int(div)
+            return ((rows + 31) // 32) * 32
+        return int(real_len)
 
     def _write_handoff(self, triples: list, slot_traces: dict, pools_by_trace: dict) -> None:
         """Write the JSON handoff the DECODE-side consumer reads (blaze run_decode_from_migrated): one entry
@@ -1240,6 +1260,7 @@ def main() -> None:
         migration_ok=migration_ok,
         verify_ok=verify_ok,
         world_size=world_size,
+        migrate_ok=migrate_ok,
     )
 
 
@@ -1372,7 +1393,7 @@ def _run_one_request_set(
     return stats, triples, migrate_ok, migration_ok, verify_ok, slot_traces
 
 
-def _finish(args, cfg, *, producer_ns, service, migration_ok, verify_ok, world_size):
+def _finish(args, cfg, *, producer_ns, service, migration_ok, verify_ok, world_size, migrate_ok=True):
     """The verdict allgather + optional SHUTDOWN sentinel + exit code (the former tail of main())."""
     producer = producer_ns
     # Multi-rank DONE: the verdict allgather is also the barrier that holds this rank until every validator
