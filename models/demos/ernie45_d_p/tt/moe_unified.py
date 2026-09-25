@@ -27,7 +27,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_reduce import TtReduceModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from models.demos.ernie45_d_p.reference.ernie_ref import ErnieConfig, LayerWeights
-from models.demos.ernie45_d_p.tt.common import CACHE_ROOT, COMPUTE_HIFI2
+from models.demos.ernie45_d_p.tt.common import CACHE_ROOT, COMPUTE_HIFI2, signpost
 from models.demos.ernie45_d_p.tt.moe import TtRouter
 from models.demos.ernie45_d_p.tt.ops import TtSwiGLU
 
@@ -150,6 +150,7 @@ class TtMoEUnified:
         """This chip's routed-expert partial. x [1,1,S,H]; idx/wts [1,1,S,K] (replicated) -> [1,1,S,H] TILE."""
         S, K = x.shape[-2], self.cfg.moe_k
         dispatch, combine = self._seq_modules(S)
+        signpost("moe.dispatch")
         idx2 = ttnn.reshape(ttnn.typecast(idx, ttnn.uint16) if idx.dtype != ttnn.uint16 else idx, (S, K))
         offsets, counts, region_offsets = self._routing_setup(idx2)
         ind = ttnn.reshape(ttnn.to_layout(idx2, ttnn.ROW_MAJOR_LAYOUT), (1, S, K))
@@ -157,8 +158,10 @@ class TtMoEUnified:
         buf, meta = dispatch(ttnn.squeeze(x, dim=0), scores, ind, offsets, self.dispatch_table)
         # ROW_MAJOR bf16 buffer -> the op's fused fast path (tilize + bf8 pack inside the kernel, fresh output).
         buf2 = ttnn.squeeze(ttnn.squeeze(buf, dim=0), dim=0)
+        signpost("moe.experts")
         out = self.routed(buf2, counts, region_offsets)
         ttnn.deallocate(buf2)
+        signpost("moe.combine_reduce")
         out = ttnn.unsqueeze(ttnn.unsqueeze(out, dim=0), dim=0)
         comb = combine(out, meta, counts, region_offsets, seq_len_per_chip=S)
         ttnn.deallocate(out)
@@ -169,15 +172,18 @@ class TtMoEUnified:
 
     def __call__(self, x, debug: dict | None = None):
         """x [1,1,S,H] replicated -> MoE output [1,1,S,H] replicated (routed + shared)."""
+        signpost("moe.router")
         dense, idx, wts = self.router(x)
         ttnn.deallocate(dense)
         routed = self.routed_partial(x, idx, wts)
+        signpost("moe.shared")
         shared = self.shared(x)
         tot = ttnn.add(routed, shared if shared.dtype == routed.dtype else ttnn.typecast(shared, routed.dtype))
         if debug is not None:
             debug.update(routed=ttnn.all_reduce(routed, cluster_axis=1), topk_idx=idx, topk_w=wts)
         ttnn.deallocate(routed)
         ttnn.deallocate(shared)
+        signpost("moe.all_reduce")
         out = ttnn.all_reduce(tot, cluster_axis=1)
         ttnn.deallocate(tot)
         return out

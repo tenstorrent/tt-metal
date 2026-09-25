@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 import torch
@@ -115,3 +116,77 @@ class Golden:
 
     def tokens(self) -> torch.Tensor:
         return torch.tensor(json.loads((self.dir / "metadata.json").read_text())["token_ids"])
+
+
+_SIGNPOSTS = bool(os.environ.get("ERNIE_SIGNPOSTS"))
+_SECTION_PROFILE = {
+    "mesh": None,
+    "current": None,
+    "kernel_ns": {},
+    "kernel_ns_dev": {},
+    "programs": {},
+    "wall_s": {},
+    "t": 0.0,
+    "dev_to_chip": {},
+}
+
+
+def enable_section_profiling(mesh) -> None:
+    """Tracy-free per-section device time: every signpost syncs, flushes the device profiler and charges the
+    programs that ran since the previous signpost to that section (max over devices = critical path)."""
+    import time
+
+    dev_to_chip = {int(d): c for c, d in enumerate(mesh.get_device_ids())}  # mesh column c <- device id
+    _SECTION_PROFILE.update(
+        mesh=mesh,
+        current=None,
+        kernel_ns={},
+        kernel_ns_dev={},
+        programs={},
+        wall_s={},
+        t=time.time(),
+        dev_to_chip=dev_to_chip,
+    )
+    ttnn.synchronize_device(mesh)
+    ttnn.ReadDeviceProfiler(mesh)
+    ttnn.get_latest_programs_perf_data()
+
+
+def section_profile() -> dict:
+    return {k: dict(v) if isinstance(v, dict) else v for k, v in _SECTION_PROFILE.items() if k != "mesh"}
+
+
+def _charge_section(name: str) -> None:
+    import time
+
+    p = _SECTION_PROFILE
+    ttnn.synchronize_device(p["mesh"])
+    ttnn.ReadDeviceProfiler(p["mesh"])
+    per_dev = {}
+    n = 0
+    for dev, programs in (ttnn.get_latest_programs_perf_data() or {}).items():
+        for prog in programs:
+            e = (getattr(prog, "program_analyses_results", None) or {}).get("DEVICE KERNEL DURATION [ns]")
+            if e is not None:
+                per_dev[dev] = per_dev.get(dev, 0.0) + float(e.duration)
+                n += 1
+    now = time.time()
+    if p["current"] is not None:
+        cur = p["current"]
+        p["kernel_ns"][cur] = p["kernel_ns"].get(cur, 0.0) + (max(per_dev.values()) if per_dev else 0.0)
+        dev = p["kernel_ns_dev"].setdefault(cur, {})
+        for d, ns in per_dev.items():
+            chip = p["dev_to_chip"].get(int(d), int(d))
+            dev[chip] = dev.get(chip, 0.0) + ns
+        p["programs"][cur] = p["programs"].get(cur, 0) + n
+        p["wall_s"][cur] = p["wall_s"].get(cur, 0.0) + (now - p["t"])
+    p["current"], p["t"] = name, time.time()
+
+
+def signpost(name: str) -> None:
+    """Section marker. ERNIE_SIGNPOSTS=1: Tracy signpost row in the ops CSV. Section profiling enabled
+    (enable_section_profiling): charge device time since the last marker to the previous section."""
+    if _SIGNPOSTS:
+        ttnn.tracy_message(f"`TT_SIGNPOST: {name}`")
+    if _SECTION_PROFILE["mesh"] is not None:
+        _charge_section(re.sub(r"^L\d+\.", "", name))
