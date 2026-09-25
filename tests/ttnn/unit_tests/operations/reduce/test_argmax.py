@@ -270,6 +270,39 @@ def test_argmax_nc_preallocated_output(device):
     assert_equal(ref, ttnn.to_torch(ttnn.from_device(result)).to(torch.int32))
 
 
+@pytest.mark.merge_gate
+def test_argmax_nc_program_cache(device):
+    """NC argmax cache hit: a second call with a new same-spec input and preallocated output stays correct.
+
+    The max sits on a different channel in each input, so a stale reader address returns the first
+    result. Both device tensors are kept alive so the allocator cannot hand those buffers back.
+    """
+    device.clear_program_cache()
+    device.enable_program_cache()
+
+    def run(winner):
+        torch_tensor = torch.full((2, 4, 64, 64), -1.0, dtype=torch.bfloat16)
+        torch_tensor[:, winner, :, :] = 1.0
+        ref = torch.argmax(torch_tensor, dim=1, keepdim=True)
+        ttnn_in = ttnn.from_torch(torch_tensor, device=device, layout=ttnn.TILE_LAYOUT)
+        ttnn_in = ttnn.fill_implicit_tile_padding(ttnn_in, TEST_PADDING_VALUE)
+        ttnn_out = ttnn.zeros(list(ref.shape), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        result = ttnn.argmax(ttnn_in, dim=1, keepdim=True, output_tensor=ttnn_out)
+        return ref, ttnn_in, result
+
+    base = device.num_program_cache_entries()
+    ref1, input1, output1 = run(0)
+    after_first = device.num_program_cache_entries()
+    assert after_first > base, "first NC argmax must miss the program cache"
+
+    ref2, input2, output2 = run(3)
+    assert device.num_program_cache_entries() == after_first, "second NC argmax must hit the program cache"
+    assert input1.shape == input2.shape
+
+    assert_equal(ref1, ttnn.to_torch(ttnn.from_device(output1)).to(torch.int32))
+    assert_equal(ref2, ttnn.to_torch(ttnn.from_device(output2)).to(torch.int32))
+
+
 @pytest.mark.timeout(120, method="thread")
 def test_argmax_reduce_all_multicore_no_deadlock(device):
     """

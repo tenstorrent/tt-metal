@@ -72,11 +72,14 @@ ProgramDescriptor ArgMaxNCDeviceOperation::create_descriptor(
     const uint32_t input_tile_size = tile_size(input_data_format);
     const uint32_t output_tile_size = tile_size(output_data_format);
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+    // packer_l1_acc is irrelevant here: argmax packs a single index result per
+    // output tile, there is nothing to accumulate across passes.
+    // ComputeConfigDescriptor has no packer_l1_acc field, and the previous factory
+    // did not forward the knob either.
+    [[maybe_unused]] auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
     // We need 32-bit DST to hold uint32 indices in registers.
     fp32_dest_acc_en = true;
-    (void)packer_l1_acc;
 
     // Split work across cores.
     const auto grid = device->compute_with_storage_grid_size();
