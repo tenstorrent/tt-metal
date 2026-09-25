@@ -4,7 +4,9 @@
 
 // ETH DRAM streaming kernel: each ETH core reads from exactly ONE assigned DRAM
 // bank into ETH L1, times the run, and writes start/end wall-clock timestamps
-// to the first 16 bytes of the staging region.
+// to the first 16 bytes of the assigned bank's DRAM region. Persisting the
+// timing in DRAM is necessary because active-ETH L1 is reclaimed by firmware
+// after the kernel exits.
 //
 // One bank per core means summing per-core bandwidths gives total DRAM bandwidth.
 //
@@ -63,16 +65,18 @@ void kernel_main() {
                 }
             }
         }
-        // eth_noc_async_read_barrier calls run_routing() in its wait loop,
-        // keeping the cooperative base firmware alive on active ETH cores.
+        // Active-ETH kernels must service base-firmware routing while waiting.
         eth_noc_async_read_barrier();
     }
 
     uint64_t t1 = eth_read_wall_clock();
 
-    // Write t0 and t1 as lo/hi uint32_t pairs to first 16 bytes of staging region.
+    // Persist t0 and t1 as lo/hi uint32_t pairs in the assigned DRAM bank.
+    // The host cannot read these reliably from active-ETH L1 after completion.
     timing_out[0] = static_cast<uint32_t>(t0 & 0xFFFFFFFFu);
     timing_out[1] = static_cast<uint32_t>(t0 >> 32);
     timing_out[2] = static_cast<uint32_t>(t1 & 0xFFFFFFFFu);
     timing_out[3] = static_cast<uint32_t>(t1 >> 32);
+    noc_async_write(eth_l1_staging_addr, bank_noc_base, 16);
+    eth_noc_async_write_barrier();
 }

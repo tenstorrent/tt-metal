@@ -14,6 +14,7 @@
 //   No CB dependencies between data movement and compute.
 
 #include <cstdio>
+#include <memory>
 
 #include <fmt/core.h>
 #include <gtest/gtest.h>
@@ -89,9 +90,10 @@ struct MaxUtilConfig {
     uint32_t fpu_utilization_pct = 92;
 
     // ETH DRAM streaming fields (filled by setup_eth_stream_config before build_program).
-    uint32_t eth_dram_buffer_addr = 0;  // DRAM src base address for ETH streaming
-    uint32_t eth_pages_per_bank = 0;    // pages per bank read per iteration
-    uint32_t eth_l1_staging_addr = 0;   // ETH L1 unreserved base (first 16 bytes = timing)
+    uint32_t eth_dram_buffer_addr = 0;   // DRAM src base address for ETH streaming
+    uint32_t eth_pages_per_bank = 0;     // pages per bank read per iteration
+    uint32_t eth_l1_staging_addr = 0;    // ETH L1 unreserved base (first 16 bytes = timing scratch)
+    uint32_t eth_l1_staging_stride = 0;  // Per-processor slice of the shared ETH L1 staging region
     // DRAM read transaction size.  Larger values saturate bandwidth better.
     uint32_t eth_page_size = 1024;  // 1KB found to be optimal for BH
     // ETH loop count: 8x fewer loops than compute to match kernel duration.
@@ -211,21 +213,21 @@ static MaxUtilConfig full_grid_config(
 // consecutive NOC page-read issues in the ETH DRAM streaming kernel.
 // noc_wait_cycles == 0 means no throttle (maximum DRAM utilization).
 //
-// Values are placeholder estimates; calibrate on target hardware by measuring
-// achieved DRAM bandwidth at each setting and adjusting the cycle counts.
+// Calibrated on Blackhole p300c using 1 KiB reads from active ETH cores. The
+// values are empirical because wait instructions overlap NOC issue latency.
 // ---------------------------------------------------------------------------
 
 // clang-format off
 static const std::map<uint32_t, uint32_t> kDramUtilToCyclesMap = {
-    {10,  215},
-    {20,   95},
-    {30,   55},
-    {40,   35},
-    {50,   23},
-    {60,   15},
-    {70,    9},
-    {80,    5},
-    {90,    2},
+    {10,  360},
+    {20,  160},
+    {30,   93},
+    {40,   60},
+    {50,   40},
+    {60,   27},
+    {70,   17},
+    {80,   10},
+    {90,    4},
     {100,   0},
 };
 // clang-format on
@@ -270,50 +272,49 @@ static CoreCoord dram_noc0_coord(IDevice* device, uint32_t bank_id) {
 }
 
 // ---------------------------------------------------------------------------
-// assign_eth_cores_to_banks – partitions active ETH cores by NOC0 x-coordinate
-//   and assigns each to one DRAM bank.
-//
-// Layout rule (matches physical DRAM placement on current chips):
-//   NOC0 x < 8  → left-side cores  → DRAM banks 0-3
-//   NOC0 x >= 8 → right-side cores → DRAM banks 4-7
-//
-// At most 4 cores are taken from each side (capped to 1 core per bank).
-// Returns a vector of (logical_eth_core, bank_id) pairs, sorted for
-// determinism, with left-side entries first.
+// assign_eth_streams_to_banks – assigns every DRAM bank to a unique active-ETH
+// core/processor stream. Blackhole has two data-movement processors per active
+// ETH core, so four connected cores can drive all eight GDDR6 channels.
 // ---------------------------------------------------------------------------
 
-static std::vector<std::pair<CoreCoord, uint32_t>> assign_eth_cores_to_banks(IDevice* device) {
-    auto active_eth = device->get_active_ethernet_cores(/*skip_reserved_tunnel_cores=*/true);
+struct EthStreamAssignment {
+    CoreCoord core;
+    uint32_t processor;
+    uint32_t bank_id;
+};
 
-    std::vector<CoreCoord> left_cores, right_cores;
-    for (const auto& eth_core : active_eth) {
-        auto noc0 = eth_noc0_coord(device, eth_core);
-        if (noc0.x < 8) {
-            left_cores.push_back(eth_core);
-        } else {
-            right_cores.push_back(eth_core);
+static std::vector<EthStreamAssignment> assign_eth_streams_to_banks(IDevice* device) {
+    auto active_eth = device->get_active_ethernet_cores(/*skip_reserved_tunnel_cores=*/true);
+    std::vector<CoreCoord> active_cores(active_eth.begin(), active_eth.end());
+    auto cmp = [](const CoreCoord& a, const CoreCoord& b) { return a.x < b.x || (a.x == b.x && a.y < b.y); };
+    std::sort(active_cores.begin(), active_cores.end(), cmp);
+
+    const uint32_t num_processors =
+        MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
+    std::vector<EthStreamAssignment> available_streams;
+    for (uint32_t processor = 0; processor < num_processors; ++processor) {
+        for (const auto& core : active_cores) {
+            available_streams.push_back({core, processor, 0});
         }
     }
 
-    // Sort both groups for deterministic bank assignment.
-    auto cmp = [](const CoreCoord& a, const CoreCoord& b) { return a.x < b.x || (a.x == b.x && a.y < b.y); };
-    std::sort(left_cores.begin(), left_cores.end(), cmp);
-    std::sort(right_cores.begin(), right_cores.end(), cmp);
-
-    // Cap at 4 per side → at most 8 total, one core per bank.
-    if (left_cores.size() > 4) {
-        left_cores.resize(4);
-    }
-    if (right_cores.size() > 4) {
-        right_cores.resize(4);
-    }
-
-    std::vector<std::pair<CoreCoord, uint32_t>> assignments;
-    for (size_t i = 0; i < left_cores.size(); ++i) {
-        assignments.push_back({left_cores[i], static_cast<uint32_t>(i)});  // banks 0-3
-    }
-    for (size_t i = 0; i < right_cores.size(); ++i) {
-        assignments.push_back({right_cores[i], static_cast<uint32_t>(4 + i)});  // banks 4-7
+    std::vector<EthStreamAssignment> assignments;
+    const uint32_t num_banks = static_cast<uint32_t>(device->num_dram_channels());
+    for (uint32_t bank_id = 0; bank_id < num_banks && !available_streams.empty(); ++bank_id) {
+        const CoreCoord dram_coord = dram_noc0_coord(device, bank_id);
+        auto closest =
+            std::min_element(available_streams.begin(), available_streams.end(), [&](const auto& lhs, const auto& rhs) {
+                const CoreCoord lhs_coord = eth_noc0_coord(device, lhs.core);
+                const CoreCoord rhs_coord = eth_noc0_coord(device, rhs.core);
+                const uint32_t lhs_distance = std::abs(static_cast<int>(lhs_coord.x) - static_cast<int>(dram_coord.x)) +
+                                              std::abs(static_cast<int>(lhs_coord.y) - static_cast<int>(dram_coord.y));
+                const uint32_t rhs_distance = std::abs(static_cast<int>(rhs_coord.x) - static_cast<int>(dram_coord.x)) +
+                                              std::abs(static_cast<int>(rhs_coord.y) - static_cast<int>(dram_coord.y));
+                return lhs_distance < rhs_distance;
+            });
+        closest->bank_id = bank_id;
+        assignments.push_back(*closest);
+        available_streams.erase(closest);
     }
     return assignments;
 }
@@ -322,11 +323,8 @@ static std::vector<std::pair<CoreCoord, uint32_t>> assign_eth_cores_to_banks(IDe
 // setup_eth_stream_config – configures DRAM buffer and ETH L1 addresses for
 //   the ETH DRAM streaming kernel.  Only ACTIVE ethernet cores are used.
 //
-// Each selected ETH core reads from exactly one DRAM bank so that summing
-// per-core bandwidths gives the aggregate DRAM bandwidth.
-//
-// Logs the number of active and inactive (idle) ETH cores and the left/right
-// split so the caller can see the assignment at runtime.
+// Each selected ETH processor reads from exactly one DRAM bank so that summing
+// per-stream bandwidths gives the aggregate ETH-to-DRAM bandwidth.
 //
 // Returns a shared_ptr<Buffer> holding the DRAM staging buffer; the caller
 // must keep this alive until the program finishes.  Returns nullptr when no
@@ -344,29 +342,12 @@ static shared_ptr<Buffer> setup_eth_stream_config(IDevice* device, MaxUtilConfig
         active_eth.size(),
         inactive_eth.size());
 
-    auto assignments = assign_eth_cores_to_banks(device);
+    auto assignments = assign_eth_streams_to_banks(device);
     if (assignments.empty()) {
         log_warning(
             LogTest, "Device {}: no active ETH cores available – skipping ETH DRAM streaming kernel", device->id());
         return nullptr;
     }
-
-    // // Log the left/right split and per-core bank assignment with both NOC0 coordinates.
-    // uint32_t left_count  = 0, right_count = 0;
-    // for (const auto& [core, bank_id] : assignments) {
-    //     auto eth_noc0  = eth_noc0_coord(device, core);
-    //     auto dram_noc0 = dram_noc0_coord(device, bank_id);
-    //     if (eth_noc0.x < 8) ++left_count; else ++right_count;
-    //     log_info(
-    //         LogTest,
-    //         "Device {}: ETH core ({},{}) [NOC0 ({},{})] → DRAM bank {} [NOC0 ({},{})]",
-    //         device->id(), core.x, core.y, eth_noc0.x, eth_noc0.y,
-    //         bank_id, dram_noc0.x, dram_noc0.y);
-    // }
-    // log_info(
-    //     LogTest,
-    //     "Device {}: using {} ETH cores total ({} left-side → banks 0-3, {} right-side → banks 4-7)",
-    //     device->id(), assignments.size(), left_count, right_count);
 
     // HAL parameters for ACTIVE_ETH cores.
     auto& hal = MetalContext::instance().hal();
@@ -376,13 +357,14 @@ static shared_ptr<Buffer> setup_eth_stream_config(IDevice* device, MaxUtilConfig
     uint32_t num_banks = static_cast<uint32_t>(device->num_dram_channels());
     uint32_t page_size_bytes = cfg.eth_page_size;
 
-    // Each core reads from 1 bank only, so maximise staging over the full
-    // unreserved ETH L1 region (minus 16-byte timing header).
-    cfg.eth_pages_per_bank = (eth_l1_size - 16) / page_size_bytes;
+    const uint32_t num_processors = hal.get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
+    cfg.eth_l1_staging_stride = eth_l1_size / num_processors;
+    cfg.eth_pages_per_bank = (cfg.eth_l1_staging_stride - 16) / page_size_bytes;
 
     // ETH kernel runs 8x fewer loops than the compute kernel to match duration.
     // Also scale by utilization percentage to match the compute kernel duration.
-    cfg.eth_num_wl_loops = std::max(1u, cfg.num_wl_loops / 8 * (cfg.eth_dram_util_pct / 100));
+    cfg.eth_num_wl_loops = static_cast<uint32_t>(
+        std::max<uint64_t>(1, static_cast<uint64_t>(cfg.num_wl_loops) * cfg.eth_dram_util_pct / 800));
 
     cfg.eth_noc_wait_cycles = dram_pct_to_noc_wait_cycles(cfg.eth_dram_util_pct);
     const uint32_t matched_dram_pct = nearest_dram_pct(cfg.eth_dram_util_pct);
@@ -395,9 +377,11 @@ static shared_ptr<Buffer> setup_eth_stream_config(IDevice* device, MaxUtilConfig
 
     log_info(
         LogTest,
-        "Device {}: ETH DRAM streaming – 1 bank/core, pages_per_bank={}, page_size={} B ({}KB), "
-        "eth_l1_staging_addr=0x{:x}, eth_l1_size={} B",
+        "Device {}: ETH DRAM streaming – {} bank streams across {} active cores, pages_per_bank={}, "
+        "page_size={} B ({}KB), eth_l1_staging_addr=0x{:x}, eth_l1_size={} B",
         device->id(),
+        assignments.size(),
+        active_eth.size(),
         cfg.eth_pages_per_bank,
         page_size_bytes,
         page_size_bytes / 1024,
@@ -833,39 +817,61 @@ static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
         }
     }
 
-    // -- ETH DRAM streaming kernel (1 bank per core, left/right assignment) --
+    // -- ETH DRAM streaming kernels (one bank per active-ETH processor) --
     // Guard: skip when setup_eth_stream_config was not called.
     if (cfg.eth_dram_buffer_addr != 0) {
-        auto assignments = assign_eth_cores_to_banks(device);
+        auto assignments = assign_eth_streams_to_banks(device);
         if (!assignments.empty()) {
-            EthernetConfig eth_cfg{
-                .eth_mode = Eth::SENDER,
-                .noc = NOC::NOC_0,
-                .compile_args =
-                    {
-                        cfg.eth_num_wl_loops,
-                        cfg.eth_pages_per_bank,
-                        cfg.eth_page_size,
-                        cfg.eth_noc_wait_cycles,  // 3: noc_wait_cycles (0 = max DRAM util)
-                    },
-            };
-            eth_test_common::set_arch_specific_eth_config(eth_cfg);
+            const uint32_t num_processors =
+                MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
+            for (uint32_t processor = 0; processor < num_processors; ++processor) {
+                std::set<CoreRange> eth_ranges;
+                for (const auto& assignment : assignments) {
+                    if (assignment.processor == processor) {
+                        eth_ranges.insert(CoreRange(assignment.core, assignment.core));
+                    }
+                }
+                if (eth_ranges.empty()) {
+                    continue;
+                }
 
-            std::set<CoreRange> eth_ranges;
-            for (const auto& [core, bank_id] : assignments) {
-                eth_ranges.insert(CoreRange(core, core));
-            }
+                EthernetConfig eth_cfg{
+                    .eth_mode = Eth::RECEIVER,
+                    .noc = static_cast<NOC>(processor),
+                    .processor = static_cast<DataMovementProcessor>(processor),
+                    .compile_args =
+                        {
+                            cfg.eth_num_wl_loops,
+                            cfg.eth_pages_per_bank,
+                            cfg.eth_page_size,
+                            cfg.eth_noc_wait_cycles,  // 3: noc_wait_cycles (0 = max DRAM util)
+                        },
+                };
+                eth_test_common::set_arch_specific_eth_config(eth_cfg);
+                auto eth_kernel = CreateKernel(
+                    program,
+                    "tests/didt/max_util_workload/kernels/eth_dram_reader.cpp",
+                    CoreRangeSet(eth_ranges),
+                    eth_cfg);
 
-            auto eth_kernel = CreateKernel(
-                program, "tests/didt/max_util_workload/kernels/eth_dram_reader.cpp", CoreRangeSet(eth_ranges), eth_cfg);
-
-            for (const auto& [core, bank_id] : assignments) {
-                SetRuntimeArgs(program, eth_kernel, core, {cfg.eth_dram_buffer_addr, cfg.eth_l1_staging_addr, bank_id});
+                for (const auto& assignment : assignments) {
+                    if (assignment.processor == processor) {
+                        SetRuntimeArgs(
+                            program,
+                            eth_kernel,
+                            assignment.core,
+                            {
+                                cfg.eth_dram_buffer_addr,
+                                cfg.eth_l1_staging_addr + processor * cfg.eth_l1_staging_stride,
+                                assignment.bank_id,
+                            });
+                    }
+                }
             }
 
             log_info(
                 LogTest,
-                "ETH DRAM streaming: {} cores (1 bank each), {} enqueues × {} inner iterations "
+                "ETH DRAM streaming: {} bank streams, {} enqueues × {} inner iterations "
                 "(compute loops={}, ratio=1/8), {} pages/bank × {} B/page ({}KB)",
                 assignments.size(),
                 cfg.num_iterations,
@@ -995,33 +1001,39 @@ static Program build_slow_cos_program(IDevice* device, const MaxUtilConfig& cfg)
 }
 
 // ---------------------------------------------------------------------------
-// log_eth_bw – reads per-core timing from ETH L1 and logs DRAM bandwidth
+// log_eth_bw – reads per-core timing persisted in DRAM and logs bandwidth
 // ---------------------------------------------------------------------------
 
-static void log_eth_bw(IDevice* device, const MaxUtilConfig& cfg) {
-    if (cfg.eth_dram_buffer_addr == 0) {
-        return;
+static bool log_eth_bw(IDevice* device, const MaxUtilConfig& cfg, const shared_ptr<Buffer>& dram_buffer) {
+    if (cfg.eth_dram_buffer_addr == 0 || dram_buffer == nullptr) {
+        return true;
     }
 
-    auto assignments = assign_eth_cores_to_banks(device);
+    auto assignments = assign_eth_streams_to_banks(device);
     if (assignments.empty()) {
-        return;
+        return true;
     }
 
-    // Each core reads cfg.eth_pages_per_bank pages from 1 bank per iteration.
-    uint64_t bytes_per_core = static_cast<uint64_t>(cfg.eth_num_wl_loops) * cfg.eth_pages_per_bank * cfg.eth_page_size;
+    std::vector<uint32_t> readback;
+    detail::ReadFromBuffer(dram_buffer, readback);
 
-    // 1.35 GHz assumed clock: bytes/cycle × 1.35e9 cycles/s ÷ 1e9 bytes/GB = bytes/cycle × 1.35
-    constexpr double kClockGHz = 1.35;
+    // Each stream reads cfg.eth_pages_per_bank pages from 1 bank per iteration.
+    uint64_t bytes_per_stream =
+        static_cast<uint64_t>(cfg.eth_num_wl_loops) * cfg.eth_pages_per_bank * cfg.eth_page_size;
+
+    // The active-ETH wall clock runs at 1 GHz (ETH_CLOCK_CYCLE_1MS = 1,000,000),
+    // independently of the 1.35 GHz Tensix AI clock.
+    constexpr double kEthWallClockGHz = 1.0;
 
     double total_bw_bpc = 0.0;  // bytes/cycle
     uint32_t reported = 0;
 
-    for (const auto& [eth_core, bank_id] : assignments) {
-        std::vector<uint32_t> timing;
-        detail::ReadFromDeviceL1(device, eth_core, cfg.eth_l1_staging_addr, /*size=*/16, timing, tt::CoreType::ETH);
-
-        if (timing.size() < 4) {
+    for (const auto& assignment : assignments) {
+        const auto& eth_core = assignment.core;
+        const uint32_t processor = assignment.processor;
+        const uint32_t bank_id = assignment.bank_id;
+        const size_t timing_offset = static_cast<size_t>(bank_id) * cfg.eth_page_size / sizeof(uint32_t);
+        if (readback.size() < timing_offset + 4) {
             log_warning(
                 LogTest,
                 "Device {} ETH core ({},{}) bank {} – timing readback too short ({}), skipping",
@@ -1029,15 +1041,27 @@ static void log_eth_bw(IDevice* device, const MaxUtilConfig& cfg) {
                 eth_core.x,
                 eth_core.y,
                 bank_id,
-                timing.size());
+                readback.size());
             continue;
         }
 
-        uint64_t t0 = (static_cast<uint64_t>(timing[1]) << 32) | timing[0];
-        uint64_t t1 = (static_cast<uint64_t>(timing[3]) << 32) | timing[2];
-        uint64_t cycles = (t1 > t0) ? (t1 - t0) : 1u;
-        double bw_bpc = static_cast<double>(bytes_per_core) / static_cast<double>(cycles);
-        double bw_gbps = bw_bpc * kClockGHz;
+        uint64_t t0 = (static_cast<uint64_t>(readback[timing_offset + 1]) << 32) | readback[timing_offset];
+        uint64_t t1 = (static_cast<uint64_t>(readback[timing_offset + 3]) << 32) | readback[timing_offset + 2];
+        if (t1 <= t0) {
+            log_warning(
+                LogTest,
+                "Device {} ETH core ({},{}) bank {} – invalid timing (t0={}, t1={}), skipping",
+                device->id(),
+                eth_core.x,
+                eth_core.y,
+                bank_id,
+                t0,
+                t1);
+            continue;
+        }
+        uint64_t cycles = t1 - t0;
+        double bw_bpc = static_cast<double>(bytes_per_stream) / static_cast<double>(cycles);
+        double bw_gbps = bw_bpc * kEthWallClockGHz;
         total_bw_bpc += bw_bpc;
         ++reported;
 
@@ -1045,11 +1069,12 @@ static void log_eth_bw(IDevice* device, const MaxUtilConfig& cfg) {
         auto dram_noc0 = dram_noc0_coord(device, bank_id);
         log_info(
             LogTest,
-            "Device {} ETH ({},{}) [NOC0 ({},{})] → bank {} [NOC0 ({},{})] "
+            "Device {} ETH ({},{}) DM{} [NOC0 ({},{})] → bank {} [NOC0 ({},{})] "
             "BW: {:.3f} bytes/cycle  {:.2f} GB/s  ({} bytes, {} cycles)",
             device->id(),
             eth_core.x,
             eth_core.y,
+            processor,
             eth_noc0.x,
             eth_noc0.y,
             bank_id,
@@ -1057,21 +1082,22 @@ static void log_eth_bw(IDevice* device, const MaxUtilConfig& cfg) {
             dram_noc0.y,
             bw_bpc,
             bw_gbps,
-            bytes_per_core,
+            bytes_per_stream,
             cycles);
     }
 
     if (reported > 0) {
         log_info(
             LogTest,
-            "Device {}: aggregate DRAM BW ({} banks): {:.3f} bytes/cycle  {:.2f} GB/s  "
-            "(@ {:.2f} GHz assumed clock)",
+            "Device {}: aggregate ETH-to-DRAM BW ({} banks): {:.3f} bytes/cycle  {:.2f} GB/s  "
+            "(@ {:.2f} GHz ETH wall clock)",
             device->id(),
             reported,
             total_bw_bpc,
-            total_bw_bpc * kClockGHz,
-            kClockGHz);
+            total_bw_bpc * kEthWallClockGHz,
+            kEthWallClockGHz);
     }
+    return reported == assignments.size();
 }
 
 // ---------------------------------------------------------------------------
@@ -1125,7 +1151,7 @@ static bool run_single_device(const shared_ptr<distributed::MeshDevice>& mesh_de
     distributed::Finish(cq);
 
     // Report per-ETH-core DRAM bandwidth after the program completes.
-    log_eth_bw(device, cfg);
+    bool valid_eth_timing = log_eth_bw(device, cfg, eth_dram_buf);
 
     log_info(
         LogTest,
@@ -1141,81 +1167,71 @@ static bool run_single_device(const shared_ptr<distributed::MeshDevice>& mesh_de
         cfg.num_wl_loops,
         cfg.num_slow_wl_loops);
 
-    return true;
+    return valid_eth_timing;
 }
 
-/// Runs the workload on every device in the mesh simultaneously.
+/// Runs the workload on every unit-mesh device simultaneously. Active Ethernet
+/// link cores are reserved by a full-system mesh, so each device must use the
+/// same isolated unit-mesh setup as the active-ETH API tests.
 static bool run_all_devices(
-    const shared_ptr<distributed::MeshDevice>& mesh_device,
+    const std::vector<shared_ptr<distributed::MeshDevice>>& mesh_devices,
     uint32_t num_tiles,
     uint32_t num_iterations,
     uint32_t num_wl_loops,
     uint32_t num_slow_wl_loops = 0,
     bool super_sync = false) {
-    auto& cq = mesh_device->mesh_command_queue();
+    struct DeviceRun {
+        shared_ptr<distributed::MeshDevice> mesh_device;
+        IDevice* device;
+        MaxUtilConfig cfg;
+        shared_ptr<Buffer> eth_dram_buffer;
+        std::unique_ptr<distributed::MeshWorkload> main_workload;
+        std::unique_ptr<distributed::MeshWorkload> slow_workload;
+    };
 
-    // Phase 1: Pre-fill on all devices
-    auto prefill_workload = distributed::MeshWorkload();
-    std::map<IDevice*, MaxUtilConfig> device_configs;
+    const auto zero = distributed::MeshCoordinate({0, 0});
+    const auto target = distributed::MeshCoordinateRange(zero, zero);
+    std::vector<DeviceRun> runs;
+    runs.reserve(mesh_devices.size());
 
-    for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
-        IDevice* device = mesh_device->get_device(coord[0], coord[1]);
+    // Pre-fill each device before the simultaneous stress phase.
+    for (const auto& mesh_device : mesh_devices) {
+        IDevice* device = mesh_device->get_devices().at(0);
         MaxUtilConfig cfg =
             full_grid_config(device, num_tiles, num_iterations, num_wl_loops, num_slow_wl_loops, super_sync);
+        auto prefill_workload = distributed::MeshWorkload();
+        prefill_workload.add_program(target, build_prefill_program(device, cfg));
+        auto& cq = mesh_device->mesh_command_queue();
+        distributed::EnqueueMeshWorkload(cq, prefill_workload, /*blocking=*/true);
+        distributed::Finish(cq);
+        log_info(LogTest, "Pre-fill complete: device={}", device->id());
 
-        auto prefill_prog = build_prefill_program(device, cfg);
-        device_configs[device] = cfg;
-
-        auto target = distributed::MeshCoordinateRange(coord, coord);
-        prefill_workload.add_program(target, std::move(prefill_prog));
-
-        log_info(LogTest, "Pre-fill queuing: device={}", device->id());
-    }
-
-    distributed::EnqueueMeshWorkload(cq, prefill_workload, /*blocking=*/true);
-    distributed::Finish(cq);
-    log_info(LogTest, "Pre-fill phase complete on all devices");
-
-    // Set up ETH streaming for each device; keep all DRAM buffers alive until Finish.
-    std::map<IDevice*, shared_ptr<Buffer>> eth_dram_bufs;
-    for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
-        IDevice* device = mesh_device->get_device(coord[0], coord[1]);
-        MaxUtilConfig& cfg = device_configs[device];
-        eth_dram_bufs[device] = setup_eth_stream_config(device, cfg);
-    }
-
-    // Phase 2: Main program on all devices, optionally interleaved with slow cos.
-    auto mesh_workload = distributed::MeshWorkload();
-    auto slow_cos_mesh_workload = distributed::MeshWorkload();
-    bool has_slow_wl = false;
-
-    for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
-        IDevice* device = mesh_device->get_device(coord[0], coord[1]);
-        MaxUtilConfig cfg = device_configs[device];
-
-        auto target = distributed::MeshCoordinateRange(coord, coord);
-        mesh_workload.add_program(target, build_program(device, cfg));
-
+        auto eth_dram_buffer = setup_eth_stream_config(device, cfg);
+        auto main_workload = std::make_unique<distributed::MeshWorkload>();
+        main_workload->add_program(target, build_program(device, cfg));
+        std::unique_ptr<distributed::MeshWorkload> slow_workload;
         if (cfg.num_slow_wl_loops > 0) {
-            slow_cos_mesh_workload.add_program(target, build_slow_cos_program(device, cfg));
-            has_slow_wl = true;
+            slow_workload = std::make_unique<distributed::MeshWorkload>();
+            slow_workload->add_program(target, build_slow_cos_program(device, cfg));
         }
-
-        log_info(LogTest, "Main program queuing: device={}", device->id());
+        runs.push_back(DeviceRun{
+            mesh_device, device, cfg, std::move(eth_dram_buffer), std::move(main_workload), std::move(slow_workload)});
+        log_info(LogTest, "Main program ready: device={}", device->id());
     }
 
-    if (has_slow_wl) {
+    if (num_slow_wl_loops > 0) {
         log_info(LogTest, "Duty-cycle interleave active: slow cos between each max-util dispatch");
     }
 
     for (uint32_t i = 0; i < num_iterations; ++i) {
         bool is_last = (i == num_iterations - 1);
         bool is_log_iter = ((i + 1) % 100 == 0) || is_last;
-        if (has_slow_wl) {
-            distributed::EnqueueMeshWorkload(cq, mesh_workload, /*blocking=*/false);
-            distributed::EnqueueMeshWorkload(cq, slow_cos_mesh_workload, /*blocking=*/is_log_iter);
-        } else {
-            distributed::EnqueueMeshWorkload(cq, mesh_workload, /*blocking=*/is_log_iter);
+        for (auto& run : runs) {
+            auto& cq = run.mesh_device->mesh_command_queue();
+            distributed::EnqueueMeshWorkload(cq, *run.main_workload, /*blocking=*/false);
+            if (run.slow_workload != nullptr) {
+                distributed::EnqueueMeshWorkload(cq, *run.slow_workload, /*blocking=*/false);
+            }
         }
         if (is_log_iter) {
             fmt::print("\rIteration {}/{}   ", i + 1, num_iterations);
@@ -1225,15 +1241,17 @@ static bool run_all_devices(
             }
         }
     }
-    distributed::Finish(cq);
-
-    // Report per-ETH-core DRAM bandwidth for every device.
-    for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
-        IDevice* device = mesh_device->get_device(coord[0], coord[1]);
-        log_eth_bw(device, device_configs[device]);
+    for (auto& run : runs) {
+        distributed::Finish(run.mesh_device->mesh_command_queue());
     }
 
-    return true;
+    // Report per-ETH-core DRAM bandwidth for every device.
+    bool valid_eth_timing = true;
+    for (const auto& run : runs) {
+        valid_eth_timing &= log_eth_bw(run.device, run.cfg, run.eth_dram_buffer);
+    }
+
+    return valid_eth_timing;
 }
 
 // ---------------------------------------------------------------------------
@@ -1315,7 +1333,7 @@ void max_util_stress(const shared_ptr<distributed::MeshDevice>& mesh_device) {
 }
 
 /// All-devices stress run: every device in the mesh, all cores, many iterations.
-void max_util_all_devices(const shared_ptr<distributed::MeshDevice>& mesh_device) {
+void max_util_all_devices(const std::vector<shared_ptr<distributed::MeshDevice>>& mesh_devices) {
     uint32_t num_iterations = get_num_iterations();
     uint32_t num_wl_loops = get_num_wl_loops();
     uint32_t duty_cycle_pct = get_duty_cycle_pct();
@@ -1331,7 +1349,7 @@ void max_util_all_devices(const shared_ptr<distributed::MeshDevice>& mesh_device
         num_slow_wl_loops,
         super_sync);
     EXPECT_TRUE(run_all_devices(
-        mesh_device,
+        mesh_devices,
         /*num_tiles=*/8,
         /*num_iterations=*/num_iterations,
         /*num_wl_loops=*/num_wl_loops,
@@ -1345,16 +1363,16 @@ void max_util_all_devices(const shared_ptr<distributed::MeshDevice>& mesh_device
 // GTest fixtures
 // ---------------------------------------------------------------------------
 
-TEST_F(GenericMeshDeviceFixture, MaxUtilWorkload_Smoke) {
-    unit_tests::didt::max_util_workload::max_util_smoke(get_mesh_device());
+TEST_F(MeshDispatchFixture, MaxUtilWorkload_Smoke) {
+    unit_tests::didt::max_util_workload::max_util_smoke(devices_.at(0));
 }
 
-TEST_F(GenericMeshDeviceFixture, MaxUtilWorkload_Stress) {
-    unit_tests::didt::max_util_workload::max_util_stress(get_mesh_device());
+TEST_F(MeshDispatchFixture, MaxUtilWorkload_Stress) {
+    unit_tests::didt::max_util_workload::max_util_stress(devices_.at(0));
 }
 
-TEST_F(GenericMeshDeviceFixture, MaxUtilWorkload_AllDevices) {
-    unit_tests::didt::max_util_workload::max_util_all_devices(get_mesh_device());
+TEST_F(MeshDispatchFixture, MaxUtilWorkload_AllDevices) {
+    unit_tests::didt::max_util_workload::max_util_all_devices(devices_);
 }
 
 }  // namespace tt::tt_metal
