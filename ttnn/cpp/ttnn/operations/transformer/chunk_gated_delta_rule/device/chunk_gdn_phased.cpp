@@ -65,14 +65,15 @@ ChunkGdnPrepOperation::spec_return_value_t ChunkGdnPrepOperation::compute_output
             s, TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config));
     };
     const uint32_t BH = attrs.BH, NC = attrs.num_chunks, C = attrs.chunk_size, K = attrs.key_dim, V = attrs.val_dim;
+    const uint32_t TT = tt::constants::TILE_HEIGHT;  // dl*I is one 32x32 tile whatever C and K are
     return {
-        f32(ttnn::Shape({BH, NC, C, V})),  // v_beta
-        f32(ttnn::Shape({BH, NC, C, K})),  // kd
-        f32(ttnn::Shape({BH, NC, C, K})),  // q_decay
-        f32(ttnn::Shape({BH, NC, C, C})),  // intra
-        f32(ttnn::Shape({BH, NC, K, C})),  // k_dec_t
-        f32(ttnn::Shape({BH, NC, 1, 1})),  // dl (1 tile per chunk)
-        f32(ttnn::Shape({BH, NC, C, C})),  // t_inv
+        f32(ttnn::Shape({BH, NC, C, V})),    // v_beta
+        f32(ttnn::Shape({BH, NC, C, K})),    // kd
+        f32(ttnn::Shape({BH, NC, C, K})),    // q_decay
+        f32(ttnn::Shape({BH, NC, C, C})),    // intra
+        f32(ttnn::Shape({BH, NC, K, C})),    // k_dec_t
+        f32(ttnn::Shape({BH, NC, TT, TT})),  // dl*I: exp(g_sum) on the diagonal
+        f32(ttnn::Shape({BH, NC, C, C})),    // t_inv
     };
 }
 

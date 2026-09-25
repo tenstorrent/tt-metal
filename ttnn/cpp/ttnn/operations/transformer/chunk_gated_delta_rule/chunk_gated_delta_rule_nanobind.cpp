@@ -450,7 +450,7 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
             q_decay (ttnn.Tensor): [BH, NC, C, K] fp32
             intra (ttnn.Tensor):   [BH, NC, C, C] fp32
             k_dec_t (ttnn.Tensor): [BH, NC, K, C] fp32
-            dl (ttnn.Tensor):      [BH, NC, 1, 1] fp32 (per-chunk scalar in tile [0,0])
+            dl (ttnn.Tensor):      [BH, NC, 32, 32] fp32: dl*I, the per-chunk decay exp(g_sum) on the diagonal
             t_inv (ttnn.Tensor):   [BH, NC, C, C] fp32 (WY inverse)
 
         Keyword Args:
