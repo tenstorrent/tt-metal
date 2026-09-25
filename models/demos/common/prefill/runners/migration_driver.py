@@ -1206,6 +1206,10 @@ def main() -> None:
     # Attach + pair BEFORE pushing: a missing endpoint fails in seconds instead of after a multi-minute
     # prefill, and a cross-endpoint pairing rendezvous's while the decode side is still blocked on it.
     driver.attach()
+    if os.environ.get("PREFILL_FIRST_TOKEN_DIR", ""):
+        # the host LM head (~1 GB from NFS) is read lazily on the first handoff; that put 1.2 s into the first request's
+        # TTFT (launch 12, DS4F-0268). Load it here, before any prefill, so every request pays only the ~90 ms matmul.
+        _lm_head_weight()
 
     # DS4F-0263: PREFILL_PRODUCER_SLOT_TRACES_SEQUENCE="dirA,dirB,..." runs the whole prefill -> migrate -> handoff -> DONE
     # cycle once PER ENTRY in one process (one H2D client, one endpoint pairing), each entry standing in for
