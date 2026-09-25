@@ -445,7 +445,7 @@ function pccChart(){
 }
 
 function findings(){
-  const col = {"TTNN-GAP":"--s4", HARNESS:"--crit", CONTRACT:"--s1"};
+  const col = {"TTNN-GAP":"--s4", HARNESS:"--crit", CONTRACT:"--s1", PERF:"--s3"};
   $("#findings").innerHTML = (D.findings || []).map(f => `<div style="display:grid;gap:4px">
     <div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap"><span class="tag" style="border-color:var(${col[f.tag] || "--line"})">${esc(f.tag)}</span><b style="font-size:13.5px">${esc(f.title)}</b></div>
     <div class="sub" style="font-size:13px">${esc(f.text)}</div></div>`).join("") || `<div class="empty">None yet</div>`;
@@ -518,7 +518,7 @@ function profile(){
     const pill = $("#pd-pill"); pill.textContent = BN[s.bound]; pill.style.background = `var(--b-${s.bound}-soft)`; pill.style.color = `var(--b-${s.bound})`;
     $("#pd-ms").textContent = `${s.ms.toFixed(1)} ms · ${(100 * s.ms / total).toFixed(1)}%`;
     $("#pd-what").textContent = s.what; $("#pd-in").textContent = s.inp; $("#pd-out").textContent = s.out;
-    $("#pd-progs").textContent = `${s.programs} device programs (all layers, all chips)`;
+    $("#pd-progs").textContent = `${s.programs} device programs (all layers, all chips)` + (s.before_ms != null ? ` · before (base SDPA config): ${s.before_ms.toFixed(1)} ms` : "");
     const msg = draw(s);
     $("#pd-cap").textContent = `What each chip holds during this phase, and its measured device time summed over the 28 layers. ${msg.charAt(0).toUpperCase() + msg.slice(1)}.`;
   }
