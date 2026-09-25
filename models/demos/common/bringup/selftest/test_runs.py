@@ -60,6 +60,13 @@ def test_freeze_validates_with_reference_and_stub_then_commits(sandbox):
     assert res.verdict == "FAIL" and "frozen file changed" in res.summary()
 
 
+def test_unfrozen_tests_fail_the_gate(sandbox):
+    t = write_check(sandbox, {"reference": 1.0, "stub": 0.0, "device": 1.0})
+    led = sandbox.tasks(comp_task("C.1", t))
+    res = run_gate(sandbox.spec, led, "C.1")
+    assert res.verdict == "FAIL" and "not frozen" in res.summary()
+
+
 def test_freeze_rejects_a_test_that_passes_a_zero_stub(sandbox):
     t = write_check(sandbox, {"reference": 1.0, "stub": 1.0, "device": 1.0})
     led = sandbox.tasks(comp_task("C.1", t))
