@@ -240,6 +240,7 @@ class TTSpatialCrossAttention:
 
     def forward(
         self,
+        *,
         query,
         reference_points_cam,
         bev_mask,
