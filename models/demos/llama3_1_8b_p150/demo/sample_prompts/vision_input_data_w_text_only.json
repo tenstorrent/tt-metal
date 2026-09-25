@@ -1,0 +1,22 @@
+[
+    [{"role": "user", "content": [{"type": "text", "text": "Write a haiku."}]}],
+    [{"role": "user", "content": [{"type": "text", "text": "What is for dinner?"}]}],
+    [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "llama_models": "ocr_image.jpeg"},
+                {"type": "text", "text": "What is the full text of this image? Do OCR"}
+            ]
+        }
+    ],
+    [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "llama_models": "clutter.jpeg"},
+                {"type": "text", "text": "What objects are in this image?"}
+            ]
+        }
+    ]
+]

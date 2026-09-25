@@ -1,0 +1,292 @@
+{
+  "model": "Qwen/Qwen-Image-Edit",
+  "plan_version": 3,
+  "sources": {
+    "A_hf": {
+      "pipeline_class": "diffusers.QwenImageEditPipeline (model_index.json)",
+      "components": {
+        "processor": "Qwen2VLProcessor (processor/)",
+        "tokenizer": "Qwen2Tokenizer (tokenizer/)",
+        "scheduler": "FlowMatchEulerDiscreteScheduler (use_dynamic_shifting, exponential time shift)",
+        "text_encoder": "Qwen2_5_VLForConditionalGeneration (vision 32 blocks + LM 28 layers, output_hidden_states[-1])",
+        "transformer": "QwenImageTransformer2DModel (60 QwenImageTransformerBlock, 24 heads x 128, joint dim 3584 -> 3072)",
+        "vae": "AutoencoderKLQwenImage (causal 3D conv, z_dim 16, spatial /8)"
+      },
+      "task_heads_supported": [
+        "image_edit: (image, instruction) -> edited image"
+      ],
+      "golden": "QwenImageEditPipeline.__call__(image, prompt, negative_prompt=' ', true_cfg_scale=4.0, num_inference_steps=50, latents=<shared initial noise>, output_type='pt') in float32 on CPU"
+    },
+    "B_bringup": {
+      "note": "models/demos/qwen_image_edit does not exist. This model was brought up as three components, and their bring-up folders ARE Source B: models/demos/qwen_image_edit_text_encoder (mesh 2x4 TP=4xDP=2), models/tt_dit/pipelines/qwen_image_edit_vae (1x8 TP=8), models/tt_dit/pipelines/qwen_image_edit_transformer (1x8 TP=8).",
+      "graduation_rule": "status NEW with a _stubs/<name>.py.last_good_native or .last_good_sharded snapshot; the live _stubs/<name>.py equals that snapshot (verified by byte compare for all 25)."
+    }
+  },
+  "graduated_modules": {
+    "count": 25,
+    "verified_by": "bringup_status.json status==NEW and a last_good snapshot exists; the live stub equalled that snapshot when this run started (byte compare). Stubs this run changed were re-verified with their own tests/pcc tests on their graduated topologies: 40/40 pass, lowest qwen_image_decoder3d 0.9973.",
+    "text_encoder": {
+      "dir": "models/demos/qwen_image_edit_text_encoder/_stubs",
+      "modules": {
+        "vision_patch_embed": {
+          "hf": "visual.patch_embed",
+          "snapshot": "last_good_native",
+          "role": "patch features 1176 -> 1280, the first op of the vision tower"
+        },
+        "v_l_vision_block": {
+          "hf": "visual.blocks[0..31]",
+          "snapshot": "last_good_sharded",
+          "role": "each of the 32 vision blocks (window / full attention)"
+        },
+        "v_l_patch_merger": {
+          "hf": "visual.merger",
+          "snapshot": "last_good_sharded",
+          "role": "4-token merge -> 3584 image embeddings"
+        },
+        "vision_transformer_pretrained_model": {
+          "hf": "visual",
+          "snapshot": "last_good_sharded",
+          "role": "the vision tower container: patch_embed -> window reorder -> 32 blocks -> merger -> reverse order; composed of the three stubs above"
+        },
+        "v_l_decoder_layer": {
+          "hf": "language_model.layers[0..27]",
+          "snapshot": "last_good_sharded",
+          "role": "each of the 28 LM decoder layers"
+        },
+        "language_model_layers_0_mlp": {
+          "hf": "language_model.layers[i].mlp",
+          "snapshot": "last_good_sharded",
+          "role": "the SwiGLU MLP inside every decoder layer"
+        },
+        "v_l_text_model": {
+          "hf": "language_model",
+          "snapshot": "last_good_sharded",
+          "role": "the LM container: 28 decoder layers + final norm, composed of the two stubs above"
+        }
+      },
+      "non_graduated_used_as_glue": {
+        "token_embed": "ADAPT (last_good_native): embed_tokens lookup on device",
+        "v_l_rotary_embedding": "REUSE (last_good_native): on-device mRoPE cos/sin"
+      }
+    },
+    "vae": {
+      "dir": "models/tt_dit/pipelines/qwen_image_edit_vae/_stubs",
+      "modules": {
+        "qwen_image_encoder3d": {
+          "hf": "encoder",
+          "snapshot": "last_good_sharded",
+          "role": "VAE encode of the condition image (composed of the block stubs below)"
+        },
+        "qwen_image_decoder3d": {
+          "hf": "decoder",
+          "snapshot": "last_good_sharded",
+          "role": "VAE decode of the final latent (composed of the block stubs below)"
+        },
+        "qwen_image_causal_conv3d": {
+          "hf": "encoder/decoder conv_in, conv_out",
+          "snapshot": "last_good_sharded"
+        },
+        "qwen_image_residual_block": {
+          "hf": "encoder.down_blocks residual blocks, mid_block.resnets",
+          "snapshot": "last_good_sharded"
+        },
+        "qwen_image_resample": {
+          "hf": "encoder.down_blocks resample (downsample2d/3d)",
+          "snapshot": "last_good_sharded"
+        },
+        "zero_pad2d": {
+          "hf": "encoder.down_blocks.*.resample.0 (ZeroPad2d(0,1,0,1))",
+          "snapshot": "last_good_sharded",
+          "role": "the right/bottom zero pad before each stride-2 downsample conv"
+        },
+        "qwen_image_mid_block": {
+          "hf": "encoder.mid_block, decoder.mid_block",
+          "snapshot": "last_good_sharded"
+        },
+        "qwen_image_attention_block": {
+          "hf": "mid_block.attentions[0]",
+          "snapshot": "last_good_sharded"
+        },
+        "qwen_image_r_m_s": {
+          "hf": "norm_out (and residual-block norms)",
+          "snapshot": "last_good_sharded"
+        },
+        "qwen_image_up_block": {
+          "hf": "decoder.up_blocks[0..3]",
+          "snapshot": "last_good_sharded"
+        },
+        "qwen_image_upsample": {
+          "hf": "decoder.up_blocks.*.upsamplers.0.resample.0 (nearest-exact x2)",
+          "snapshot": "last_good_sharded",
+          "role": "the spatial x2 upsample inside each decoder up-resample"
+        }
+      },
+      "non_graduated_used_as_glue": {
+        "mlp": "ADAPT (last_good_sharded): quant_conv 1x1x1 (and the same port for post_quant_conv)"
+      }
+    },
+    "transformer": {
+      "dir": "models/tt_dit/pipelines/qwen_image_edit_transformer/_stubs",
+      "modules": {
+        "timesteps": {
+          "hf": "time_text_embed.time_proj",
+          "snapshot": "last_good_sharded"
+        },
+        "timestep_embedding": {
+          "hf": "time_text_embed.timestep_embedder",
+          "snapshot": "last_good_native"
+        },
+        "qwen_timestep_proj_embeddings": {
+          "hf": "time_text_embed",
+          "snapshot": "last_good_native",
+          "role": "temb = timestep_embedding(timesteps(t)), composed of the two stubs above"
+        },
+        "qwen_embed_rope": {
+          "hf": "pos_embed",
+          "snapshot": "last_good_native",
+          "role": "3-axis RoPE tables for [noise latent, condition latent] + text"
+        },
+        "qwen_image_transformer_block": {
+          "hf": "transformer_blocks[0..59]",
+          "snapshot": "last_good_sharded"
+        },
+        "feed_forward": {
+          "hf": "transformer_blocks[i].img_mlp / txt_mlp",
+          "snapshot": "last_good_sharded",
+          "role": "both FeedForwards inside every block"
+        },
+        "ada_layer_norm_continuous": {
+          "hf": "norm_out",
+          "snapshot": "last_good_native"
+        }
+      },
+      "non_graduated_used_as_glue": {
+        "patch_embed": "ADAPT (last_good_native): img_in; the same Linear port builds txt_in",
+        "decoder_head": "ADAPT (last_good_sharded): proj_out",
+        "attention": "REUSE (last_good_sharded): joint attention inside each block (the block body uses it)"
+      },
+      "no_stub_written_in_tt": [
+        "txt_norm (RMSNorm 3584): float32 mean/rsqrt/scale in tt/transformer.py (TtRMSNorm32)"
+      ]
+    },
+    "not_used_and_why": {
+      "text_encoder.decoder_head (lm_head)": "ADAPT, not graduated. The edit pipeline takes hidden_states[-1] and never computes logits.",
+      "REUSE/ADAPT duplicates (text_encoder attention/mlp/layer/encoder_stack/m_l_p/v_l_*; vae layer/encoder_stack/decoder_head/patch_embed/self_attention; transformer self_attention/mlp/layer/encoder_stack)": "not graduated work products; each is the same class as, or a thinner wrapper of, a graduated module above"
+    }
+  },
+  "task_heads": [
+    {
+      "call": 1,
+      "name": "image_edit",
+      "input": "PIL image(s) + edit instruction(s). The HF VaeImageProcessor resizes to calculate_dimensions(area, aspect) and preprocesses to [-1,1] for the VAE. The HF Qwen2VLProcessor builds input_ids / attention_mask / pixel_values / image_grid_thw from the pipeline prompt template, for the prompt and for negative_prompt=' '. Initial noise comes from the per-sample torch.Generator(seed) via diffusers randn_tensor.",
+      "output": "edited image tensor [B, 3, H, W] in [0,1] (HF postprocess output_type='pt'); the demo also saves PNGs",
+      "chain": [
+        "vision_encode: vision_transformer_pretrained_model(vision_patch_embed -> 32 x v_l_vision_block -> v_l_patch_merger) on the resized condition image",
+        "text_encode: token_embed(ids) with the image embeddings spliced at the <|image_pad|> run -> v_l_text_model (28 x v_l_decoder_layer, each with language_model_layers_0_mlp; row-staged 14 + 14) -> drop the 64 template tokens -> prompt_embeds (+mask). The prompts and negatives run as one 64-sequence batch.",
+        "vae_encode: qwen_image_encoder3d -> quant_conv -> mode (first z_dim channels) -> (x - mean)/std -> 2x2 pack -> image_latents",
+        "denoise x num_inference_steps: cat[latents, image_latents] -> img_in; txt_norm -> txt_in; qwen_timestep_proj_embeddings(t/1000); rope = qwen_embed_rope([(1,h,w),(1,h,w)], txt_len) -> 60 x qwen_image_transformer_block -> ada_layer_norm_continuous -> proj_out -> noise_pred[:, :S_latent]; same for uncond; true-CFG combine + norm rescale; flow-match Euler step",
+        "vae_decode: unpack -> x*std + mean -> post_quant_conv -> qwen_image_decoder3d -> clamp(-1,1) -> (x+1)/2"
+      ],
+      "shared_modules_with_other_calls": [],
+      "agent": "one agent (a single call; no other call shares modules)"
+    }
+  ],
+  "pass_definition": {
+    "gate1_native": "every routed graduated stub is ttnn (no torch compute in its forward). The sharded bodies stay sharded: ShardTensorToMesh plus all_reduce/all_gather, with the collectives extended from the 1x8 row to both axes of the 2x4 mesh; never replicated.",
+    "gate2_invoked": "each of the 25 graduated modules records >=1 call during the real image_edit forward. Counters sit on the stub instances inside the chain; there is no coverage sweep.",
+    "gate3_pcc": "final image PCC >= 0.99 vs the HF golden, per sample, for all 32 samples. Also asserted: PCC of the last-step latent. Printed on every run: 'e2e PCC=<min over samples>'.",
+    "host_free": "host_op_selftest(): zero non-benign aten ops inside the observed forward (encoded inputs -> image)",
+    "trace": "trace_capture_selftest(): per stage, capture / execute / release; output PCC vs eager"
+  },
+  "validation_metric": {
+    "primary": "PCC(tt_image[b], hf_image[b]) >= 0.99 for every b in 0..31, over the full image tensor (no crop)",
+    "secondary": [
+      "PCC of the final latents >= 0.99",
+      "per-stage PCC printed (prompt_embeds, image_latents, step-0 noise_pred) for diagnosis"
+    ],
+    "not_applicable": "rendered-signal scores (WER/MOS) apply to audio output with a rate; this output is an image tensor, so PCC is the gate"
+  },
+  "behavioral_proof": {
+    "real_input": "4 real photos from models/sample_data, each cut into 8 distinct square crops -> 32 distinct condition images, 32 distinct instructions, 32 distinct seeds",
+    "independence_check": "assert the 32 TT outputs are pairwise distinct, and each matches its own golden better than any other sample's golden",
+    "no_injection": "each stage consumes the previous TT stage's device tensor; the golden is used only for the final comparison"
+  },
+  "horizon": {
+    "kind": "diffusion (no autoregressive decode; no stop token)",
+    "steps": "num_inference_steps = 50, the QwenImageEditPipeline default; the same schedule (sigmas linspace(1, 1/50, 50) + dynamic shift mu(image_seq_len)) on both sides. The whole schedule runs; nothing is truncated.",
+    "cfg": "true_cfg_scale = 4.0 with negative_prompt ' ' (model-card usage)"
+  },
+  "resolution": {
+    "area": "256*256 for the gate. The HF pipeline hard-codes calculate_dimensions(1024*1024) for the condition image; the golden runs the same pipeline with that target area overridden to 256*256, which gives 256x256 for square inputs (512 image tokens + ~100 text tokens).",
+    "why": "The fp32 CPU golden costs ~10 s per sample-forward at 612 tokens, measured this run (B=4 took 38.9 s). 32 samples x 2 (CFG) x 50 steps is ~8.6 h at 256^2; 1024^2 (~9600 tokens) would be ~15x larger and quadratic in attention, so it is out of reach for 32 goldens. The demo exposes --area for other sizes."
+  },
+  "batch": {
+    "B": 32,
+    "axis": "leading axis of every tensor; the denoise loop runs one program per step for all 32 (cond and uncond as two B=32 transformer calls)",
+    "dp": "the text encoder rows split cond/uncond (64 sequences = 2 rows x 32)"
+  },
+  "hardware": {
+    "box": "T3K, 8 x Wormhole, opened as a 2x4 mesh",
+    "dram_per_chip_GB": 12,
+    "usable_per_chip_GB_with_ccl": 10.5,
+    "aggregate_GB": 96,
+    "weights_estimate_per_chip_GB": {
+      "transformer_TP8": 5.1,
+      "text_encoder_TP4_replicated_over_2_rows": "3.6 (+1.09 if embed_tokens stays replicated)",
+      "vae": 0.4,
+      "note": "estimate from parameter counts (20.4B/8, 7.1B/4 excluding lm_head, bf16), NOT measured; checked against the 10.5 GB usable figure (the CCL axis is in play)"
+    },
+    "weights_measured_per_chip_GB": {
+      "note": "measured this run from ttnn buffer reports (max over chips, DRAM buffers), 2x4 mesh",
+      "vae": 0.409,
+      "text_encoder_graduated_layout_TP4_DP2": 4.717,
+      "text_encoder_row_staged_TP4_x_2_stages": 2.264,
+      "transformer_TP8": 5.363,
+      "total_resident_after_build": 8.036,
+      "after_prepare_B32": 8.209,
+      "ceiling_used": "10.5 GB usable per chip with a CCL axis in play (registered figure)"
+    }
+  },
+  "self_validation_plan": [
+    "1. Build the HF golden once (fp32 CPU, B=32, 50 steps) and cache it with its inputs and per-step latents under models/demos/qwen_image_edit/_golden/",
+    "2. Stage bring-up on device in order vision -> text -> vae_encode -> one transformer step -> vae_decode; compare each against the golden intermediates at B=2, then at B=32",
+    "3. Re-run the modified stubs' own tests/pcc tests (captured B=1 inputs) to prove the batch generalisation and the 2x4 collectives did not regress them",
+    "4. Full e2e test at B=32: Gate 1 (static and runtime scan for torch compute in the stubs), Gate 2 (invocation counters), Gate 3 (PCC per sample); print e2e PCC before the assert",
+    "5. host_op_selftest and trace_capture_selftest per stage; build_pipeline(layers=2) proves the depth knob changes the op count"
+  ],
+  "decisions": {
+    "mesh": "one 2x4 mesh (T3K). The text encoder needs TP=4 (4 kv heads) on the 4 columns. The transformer keeps TP=8 over all 8 chips, with its collectives run on axis 1 then axis 0. The VAE is W-parallel over the 4 columns.",
+    "text_encoder_rows": "The graduated TP=4 x DP=2 layout replicates the 28-layer LM on both rows: 4.72 GB/chip, which with the 5.36 GB transformer is past the 10.5 GB ceiling. So the LM is row-staged: layers 0-13 on row 0, 14-27 on row 1, same TP=4 split per layer, exact all_gather hand-off between rows. The 32 prompts and 32 negatives run as one 64-sequence batch. embed_tokens is sharded over the columns (hidden dim) instead of replicated.",
+    "vae_batch": "The Wan causal conv fuses its temporal front pad into the H-halo neighbor_pad, which asserts B==1 (measured TT_FATAL at B=2 on the H2xW4 split). The VAE therefore runs W-parallel over the 4 columns and batch-parallel over the 2 rows.",
+    "vae_decode_ceiling": "32 images per decode program fail in the allocator; 16 per program fit (9.27 GB live + 896 MB trace region). Re-tested after the last memory change.",
+    "exact_collectives": "ttnn.all_reduce / reduce_scatter round float32 partials at bf16 level (7e-3..1.1e-2 abs measured). The transformer's row-parallel outputs and the precise text-encoder path use gather + fp32 add, which is exact.",
+    "text_encoder_precision": "The Qwen2.5-VL towers grow massive activations (|x| up to 2.6e4) that amplify per-block error ~1000x on a few tokens (HF fp32 vs fp64 differs <0.4% there). The text-encoder ports run in a precise mode: fp32 biases (ttnn.add(fp32, bf16) rounds the sum to bf16), packer_l1_acc off (auto configs lost 3-5x with it on), explicit fp32 softmax, fp32 manual RMSNorm, fp32 RoPE, exact TP reduce. The vision matmuls are exact-lane (3 bf16 limbs x 8 lanes spaced 8 apart, median of 3 rotated partitions against rare tile glitches). The LM uses 2-limb dense products. Measured at B=32: min prompt-embed PCC 0.999978 (before: 0.973); text-encode stage 80 s.",
+    "vae_gate2": "encoder3d / decoder3d route every child of the Wan stack through its graduated port (forward_sharded on the partitioned activation). zero_pad2d pads the bottom row explicitly before a valid-H conv; qwen_image_upsample is the x2 inside each decoder resample.",
+    "transformer_precision": "Precise transformer mode (_stubs/_precise.py, on in the pipeline): 2-limb bf16 activations for every projection, float32 AdaNorm modulation and biases, exact-lane QK^T (median of 3 rotated partitions). Measured per forward at B=2, full depth: CFG noise PCC 0.99993 -> 0.9999956. Cost at B=32: 55 -> 120 s per denoise step.",
+    "text_encode_chunks": "The 64 text sequences run as 2 programs of 32 (prompts, negatives). With the 896 MB trace region reserved, one 64-sequence program ran out of DRAM (a 704 MB allocation), measured."
+  },
+  "results": {
+    "measured_on": "T3K 2x4, B=32 distinct samples, 256x256, 50 steps, true-CFG 4.0, fp32 CPU golden",
+    "gate1": "PASS: static scan clean; host_op_observer 0 host aten ops over the full forward",
+    "gate2": "PASS: all 25 graduated modules invoked in the real forward",
+    "gate3": "NOT MET: 20/32 samples >= 0.99, min 0.720 (sample 30)",
+    "stage_pcc": {
+      "prompt_embeds_min": 0.99994,
+      "vae_encode": 0.99998,
+      "transformer_cfg_noise_per_forward": 0.9999956,
+      "vae_decode_of_golden_latents_min": 0.9963
+    },
+    "reference_reproducibility": {
+      "note": "HF fp32 at B=2 vs HF fp32 at B=32 (identical math, different text padding), final image PCC",
+      "30": 0.953,
+      "26": 0.966,
+      "25": 0.9992,
+      "5": 0.9984,
+      "14": 0.99999,
+      "20": 0.99992
+    },
+    "root_cause": "The 50-step CFG-4 trajectory is chaotic for some inputs. For samples 30 and 26 the reference itself does not reproduce above 0.99. For others, TT per-forward error (~100x fp32 rounding) is amplified over the trajectory.",
+    "trace": "all 5 stages capture and replay at 1.000000 vs eager (final configuration); trace region 896 MB, sized from the largest stage (denoise 760 MB, vision_encode 548 MB, vae_decode 267 MB)",
+    "timing_b32": "build 200 s; vision+text 80 s; vae_encode 1.4 s; denoise 120 s/step; vae_decode 20 s"
+  }
+}

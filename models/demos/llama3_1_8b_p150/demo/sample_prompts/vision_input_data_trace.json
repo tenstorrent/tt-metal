@@ -1,0 +1,38 @@
+[
+    [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "random": [560, 560]},
+                {"type": "text", "text": "Describe this image."}
+            ]
+        }
+    ],
+    [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "random": [1120, 560]},
+                {"type": "text", "text": "What do you see in this image?"}
+            ]
+        }
+    ],
+    [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "random": [560, 1120]},
+                {"type": "text", "text": "What do you see in this image?"}
+            ]
+        }
+    ],
+    [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "random": [1120, 1120]},
+                {"type": "text", "text": "Analyze this image."}
+            ]
+        }
+    ]
+]

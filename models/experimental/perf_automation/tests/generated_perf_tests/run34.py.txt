@@ -1,0 +1,324 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""PERFORMANCE test for the `main` pipeline of `mistralai/Voxtral-Mini-3B-2507`.
+
+Builds and runs the SAME resident TTNN pipeline the e2e gate builds
+(`tt/pipeline.py::build_pipeline`), on device, IN-PROCESS, through its generic per-stage trace
+contract (encode / prefill / decode). The reference/HF model construction and every PCC /
+comp_pcc / assert_with_pcc comparison from `tests/e2e/test_e2e_pipeline.py` are DROPPED — this is
+perf only.
+"""
+
+from __future__ import annotations
+
+import os
+import time
+
+import pytest
+import torch
+
+import ttnn
+from models.tt_transformers.demo.voxtral_mini_3b_2507.tt.inputs import (
+    BEGIN_AUDIO_ID,
+    BOS_ID,
+    DEFAULT_INSTRUCTION,
+    INST_END_ID,
+    INST_ID,
+    N_AUDIO_TOKENS_PER_CHUNK,
+    N_MEL_BINS,
+    get_tokenizer,
+)
+from models.tt_transformers.demo.voxtral_mini_3b_2507.tt.pipeline import (
+    AUDIO_TOKEN_ID,
+    DECODE_BATCH,
+    ENCODE_C,
+    PIPELINE_STAGES,
+    build_pipeline,
+)
+
+PERF_FLUSH_EVERY = int(os.environ.get("TT_PERF_FLUSH_EVERY", "32"))
+# ISL / OSL — the measurement conditions, echoed below so a reader never has to guess them.
+PERF_ISL_TOKENS = int(os.environ.get("TT_PERF_ISL_TOKENS", "128"))
+PERF_OSL_TOKENS = int(os.environ.get("TT_PERF_OSL_TOKENS", "128"))
+# BATCH belongs to the model: 0 == ask the artifact, which declares DECODE_BATCH streams.
+PERF_BATCH = int(os.environ.get("TT_PERF_BATCH", "0"))
+PERF_DECODE_BATCH = PERF_BATCH or DECODE_BATCH
+
+# DEPTH. A POSITIVE cap bounds the profiled marker stream; the variable being ABSENT means ALL
+# LAYERS (None), which is exactly what this builder's `layers` kwarg takes. This model runs 2
+# repeating block stacks across its stages, so each stage carries its own override as well.
+_pl = (os.environ.get("TT_PERF_LAYERS") or "").strip()
+PERF_LAYERS = int(_pl) if (_pl.isdigit() and int(_pl) > 0) else None
+_pl_encode = (os.environ.get("TT_PERF_ENCODE_LAYERS") or "").strip()
+PERF_ENCODE_LAYERS = int(_pl_encode) if (_pl_encode.isdigit() and int(_pl_encode) > 0) else None
+_pl_prefill = (os.environ.get("TT_PERF_PREFILL_LAYERS") or "").strip()
+PERF_PREFILL_LAYERS = int(_pl_prefill) if (_pl_prefill.isdigit() and int(_pl_prefill) > 0) else None
+_pl_decode = (os.environ.get("TT_PERF_DECODE_LAYERS") or "").strip()
+PERF_DECODE_LAYERS = int(_pl_decode) if (_pl_decode.isdigit() and int(_pl_decode) > 0) else None
+
+# TOPOLOGY — the source (tests/e2e/test_e2e_pipeline.py: the single-device `device` fixture) runs on
+# ONE chip; resolve_mesh_shape is what lets --devices/--mesh reshape it, and returns the source's
+# own shape when the env is unset.
+from models.experimental.perf_automation.agent.perf_adapter import resolve_batch, resolve_mesh_shape  # noqa: E402
+
+_MESH_SHAPE = resolve_mesh_shape(default_rows=1, default_cols=1)
+
+_PERF_TRACE = os.environ.get("TT_PERF_TRACE", "1") == "1"
+# l1_small_size feeds the audio tower's conv1d/halo scratch banks — the e2e source's own value.
+_DEV_PARAMS = {"l1_small_size": 24576}
+# The source never sets fabric_config (single-device fixture), so there is nothing to gate.
+if _PERF_TRACE:
+    _DEV_PARAMS["trace_region_size"] = int(os.environ.get("TT_PERF_TRACE_REGION", str(90 * 1024 * 1024)))
+    _DEV_PARAMS["num_command_queues"] = 1
+
+# ---------------------------------------------------------------- bounded work
+# The heavy axes for this model are TOKENS: the prefill sequence (batch x pinned capacity) and the
+# decode step count. The mel axis is pinned by the config (ENCODE_C=3000 frames == one 30 s chunk).
+# The main prompt is `<s> [INST] [BEGIN_AUDIO] [AUDIO]*375 <instruction> [/INST]`, so the 3-token
+# prefix + 375 audio placeholders + [/INST] are a STRUCTURAL floor on ISL; the instruction text run
+# is sized to reach the requested ISL. Nothing here uses max_position_embeddings.
+_AUDIO_START = 3
+_ISL_FLOOR = _AUDIO_START + N_AUDIO_TOKENS_PER_CHUNK + 2
+
+
+def _round32(n: int) -> int:
+    return int((int(n) + 31) // 32 * 32)
+
+
+PERF_ISL_ACTUAL = max(PERF_ISL_TOKENS, _ISL_FLOOR)
+# Pinned prefill capacity = the smallest tile-multiple that holds the prompt (NOT the model's
+# max_position_embeddings, which is a correctness stress size).
+PERF_PREFILL_C = int(os.environ.get("TT_PERF_PREFILL_C", "0")) or _round32(PERF_ISL_ACTUAL)
+# KV capacity must cover the prompt plus every decode step (warmup + capture + replays).
+PERF_KV_C = int(os.environ.get("TT_PERF_KV_C", "0")) or _round32(PERF_PREFILL_C + max(PERF_OSL_TOKENS, 64) + 64)
+
+_PROGRESS_LOG = os.environ.get("TT_PERF_PROGRESS_LOG", "/tmp/voxtral_main_perf_progress.log")
+
+
+def _progress(msg: str):
+    """Stdout + a PERSISTENT file, so a timed-out run still says where it stopped."""
+    line = "[perf %.1f] %s" % (time.monotonic(), msg)
+    print(line, flush=True)
+    try:
+        with open(_PROGRESS_LOG, "a") as fh:
+            fh.write(line + "\n")
+    except OSError:
+        pass
+
+
+def prompt_ids_for_isl(tokenizer, n_tokens: int):
+    """The FULL main-pipeline prompt, EXACTLY `n_tokens` ids: the frozen layout from tt/inputs.py
+    with its instruction run sized to hit the requested ISL. The measurement condition, not a
+    hand-written sentence."""
+    n_text = max(1, int(n_tokens) - _AUDIO_START - N_AUDIO_TOKENS_PER_CHUNK - 1)
+    text: list[int] = []
+    while len(text) < n_text:
+        text.extend(tokenizer.encode(DEFAULT_INSTRUCTION + " "))
+    ids = (
+        [BOS_ID, INST_ID, BEGIN_AUDIO_ID]
+        + [AUDIO_TOKEN_ID] * N_AUDIO_TOKENS_PER_CHUNK
+        + text[:n_text]
+        + [INST_END_ID]
+    )
+    return torch.tensor(ids, dtype=torch.long).unsqueeze(0)
+
+
+_PIPE = {}
+
+
+def _logged(name, fn):
+    """Wrap a stage hook with a progress marker — python-level only, so a captured step stays
+    host-op-free (no tensor construction, no readback)."""
+    n = [0]
+
+    def inner(*a, **k):
+        n[0] += 1
+        if n[0] <= 2 or n[0] % 8 == 0:
+            _progress("%s #%d" % (name, n[0]))
+        return fn(*a, **k)
+
+    return inner
+
+
+def _stage_inputs_for(pipe, prompt_ids):
+    """Host-side stage inputs, built ONCE, matching what each `<stage>_trace_setup` takes.
+
+    The pipeline's own `*_trace_inputs()` read `_captured/*.pt` golden tensors (a bring-up PCC
+    artifact that is not part of the perf path) and would also pull the real 8-clip audio batch;
+    perf needs only the SHAPES, so they are synthesized here and pre-uploaded by the pipeline's
+    unmodified `*_trace_setup` OUTSIDE the trace.
+    """
+    L = int(prompt_ids.shape[-1])
+    ids = prompt_ids.reshape(1, L).expand(pipe.B, L).contiguous()
+    audio = torch.randn(pipe.B, N_AUDIO_TOKENS_PER_CHUNK, pipe.hidden, dtype=torch.float32)
+    prefill = {
+        "input_ids": ids,
+        "audio_embeds": audio,
+        "audio_start": _AUDIO_START,
+        "n_audio_tokens": N_AUDIO_TOKENS_PER_CHUNK,
+        "prompt_len": L,
+    }
+    return {
+        "encode": torch.randn(1, N_MEL_BINS, ENCODE_C, dtype=torch.float32),
+        "prefill": prefill,
+        "decode": prefill,
+    }
+
+
+def _get_pipeline(dev, prompt_ids):
+    """Build the resident pipeline ONCE per device — a second full-depth build has no memory left
+    for its KV cache — and bind the perf stage inputs onto its zero-arg `*_trace_inputs` hooks."""
+    if _PIPE.get("dev") is not dev:
+        _PIPE.clear()
+        _PIPE["dev"] = dev
+        _progress(
+            "build_pipeline start batch=%d prefill_C=%d kv_C=%d layers=%s encode=%s prefill=%s decode=%s"
+            % (
+                PERF_DECODE_BATCH,
+                PERF_PREFILL_C,
+                PERF_KV_C,
+                PERF_LAYERS,
+                PERF_ENCODE_LAYERS,
+                PERF_PREFILL_LAYERS,
+                PERF_DECODE_LAYERS,
+            )
+        )
+        pipe = build_pipeline(
+            dev,
+            batch_size=PERF_DECODE_BATCH,
+            prefill_capacity=PERF_PREFILL_C,
+            kv_capacity=PERF_KV_C,
+            layers=PERF_LAYERS,  # None == every layer; a POSITIVE cap comes from TT_PERF_LAYERS
+            encode_layers=PERF_ENCODE_LAYERS,
+            prefill_layers=PERF_PREFILL_LAYERS,
+            decode_layers=PERF_DECODE_LAYERS,
+        )
+        _progress("build_pipeline done B=%d C=%d KV_C=%d n_layers=%d" % (pipe.B, pipe.C, pipe.KV_C, pipe.n_layers))
+        inputs = _stage_inputs_for(pipe, prompt_ids)
+        for _s in PIPELINE_STAGES:
+            setattr(pipe, "%s_trace_inputs" % _s, (lambda _v: (lambda: _v))(inputs[_s]))
+            for _suffix in ("_trace_setup", "_trace_step"):
+                _nm = _s + _suffix
+                setattr(pipe, _nm, _logged(_nm, getattr(pipe, _nm)))
+        _PIPE["pipe"] = pipe
+    return _PIPE["pipe"]
+
+
+@pytest.mark.parametrize("device_params", [_DEV_PARAMS], indirect=True)
+def test_main_perf(device_params, device):
+    _progress("==== test_main_perf start pid=%d trace=%s ====" % (os.getpid(), _PERF_TRACE))
+    print("PERF_MESH_SHAPE=%dx%d" % (_MESH_SHAPE[0], _MESH_SHAPE[1]), flush=True)
+    print("PERF_LAYERS=%s" % (PERF_LAYERS,), flush=True)
+
+    _prompt_ids = prompt_ids_for_isl(get_tokenizer(), PERF_ISL_ACTUAL)
+
+    def _eager_forward():
+        counter = [0]
+        _orig = []
+
+        def _draining(fn):
+            def inner(*a, **k):
+                r = fn(*a, **k)
+                counter[0] += 1
+                if PERF_FLUSH_EVERY and counter[0] % PERF_FLUSH_EVERY == 0:
+                    try:
+                        ttnn.ReadDeviceProfiler(device)
+                    except Exception:
+                        pass
+                return r
+
+            return inner
+
+        pipe = _get_pipeline(device, _prompt_ids)
+        # Every input / constant is uploaded here, OUTSIDE the timed region — exactly as the trace
+        # requires — so the forward below reads only resident device buffers.
+        for _s in PIPELINE_STAGES:
+            getattr(pipe, "%s_trace_setup" % _s)(getattr(pipe, "%s_trace_inputs" % _s)())
+        print("PERF_ISL_TOKENS=%d" % _prompt_ids.shape[-1], flush=True)
+        print("PERF_OSL_TOKENS=%d" % PERF_OSL_TOKENS, flush=True)
+        print("PERF_BATCH=%d" % resolve_batch(pipe, PERF_BATCH), flush=True)
+
+        _mods = [ttnn] + [getattr(ttnn, _m, None) for _m in ("transformer", "experimental")]
+        for _mod in [_m for _m in _mods if _m is not None]:
+            for _n in dir(_mod):
+                _op = getattr(_mod, _n, None)
+                if type(_op).__name__ == "FastOperation":
+                    _orig.append((_mod, _n, _op))
+                    setattr(_mod, _n, _draining(_op))
+        _fw0 = time.monotonic()
+        try:
+            out = pipe.encode_trace_step()
+            out = pipe.prefill_trace_step()
+            for _ in range(PERF_OSL_TOKENS):
+                out = pipe.decode_trace_step()
+            try:
+                ttnn.ReadDeviceProfiler(device)
+            except Exception:
+                pass
+        finally:
+            for _mod, _n, _f in _orig:
+                setattr(_mod, _n, _f)
+        print("FORWARD_WALL_MS=%.4f" % ((time.monotonic() - _fw0) * 1000.0))
+        assert out is not None  # perf only — NO PCC
+        # --- per-stage marks (injected) ---------------------------------------------------
+        # Runs HERE, at the end of the function that built the pipeline, because that object is a LOCAL of
+        # this scope: an earlier version copied the test's own PipelineStageAdapter(...) arguments into the
+        # profiling branch and raised NameError, since the generator had defined them inside another
+        # function. Handed locals() rather than a name, so nothing depends on how the test spells things.
+        print("STAGE_MARKS_ENTER", flush=True)
+        try:
+            from models.experimental.perf_automation.agent import stage_marks as _tt_sm2
+
+            print("STAGE_MARKS_RESULT=%d" % _tt_sm2.mark_stages_in_scope(locals(), device), flush=True)
+        except Exception as _tt_e2:  # noqa: BLE001
+            print("STAGE_MARKS_SKIPPED=%r" % (_tt_e2,), flush=True)
+
+    def _traced_forward():
+        from models.experimental.perf_automation.agent.perf_adapter import PipelineStageAdapter
+        from models.experimental.perf_automation.agent.trace_replay import measure_adapter
+
+        def _build_for_perf(dev):
+            return _get_pipeline(dev, _prompt_ids)
+
+        print("PERF_ISL_TOKENS=%d" % _prompt_ids.shape[-1], flush=True)
+        print("PERF_OSL_TOKENS=%d" % PERF_OSL_TOKENS, flush=True)
+        _progress("measure_adapter start")
+        measure_adapter(PipelineStageAdapter(_build_for_perf, _prompt_ids[0].tolist(), batch=PERF_BATCH), device)
+        _progress("measure_adapter done")
+
+    def _try_traced():
+        try:
+            _traced_forward()
+            return True
+        except Exception as _te:  # noqa: BLE001
+            print("TRACE_REPLAY_SKIPPED=%r" % (_te,), flush=True)
+            import traceback
+
+            traceback.print_exc()
+            return False
+
+    _PROFILING = os.environ.get("TT_METAL_DEVICE_PROFILER") == "1"
+    if _PERF_TRACE and not _PROFILING:
+        if not _try_traced():
+            print("TRACE_REPLAY_FALLBACK=eager  # trace_replay isn't working — timing eagerly", flush=True)
+            _eager_forward()
+    else:
+        # --- stage marks (injected by perf_test_gen) -------------------------------------
+        # The measured region is bracketed by the conventional start/stop pair so the main report
+        # slices exactly the ops run_head emitted; the pass below is additive and feeds per-stage
+        # fidelity only. Injected rather than written by the generator: the skeleton is advisory and
+        # a generated test simply omitted this, which is why five earlier attempts measured nothing.
+        try:
+            from models.experimental.perf_automation.agent import stage_marks as _tt_sm
+            from models.experimental.perf_automation.agent.perf_adapter import PipelineStageAdapter as _TtPSA
+        except Exception:  # noqa: BLE001
+            _tt_sm = None
+        if _tt_sm is not None:
+            _tt_sm.signpost("start")
+        _eager_forward()
+        if _tt_sm is not None:
+            _tt_sm.signpost("stop")
+        if _PERF_TRACE:
+            _try_traced()
