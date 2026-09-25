@@ -71,10 +71,22 @@ public:
     // Why a pass costs what it does. The per-pass overhead is fixed, so it lands on however
     // many frames that pass posted: posts/passes sets throughput, not the window depth.
     struct PassStats {
-        uint64_t passes = 0;    // poll() calls that reached the flush
-        uint64_t starved = 0;   // of those, the ones that posted nothing
-        uint64_t posts = 0;     // payload puts issued
-        uint64_t flush_ns = 0;  // time inside flush_dirty(); zero unless collect_timing
+        uint64_t passes = 0;          // poll() calls that reached the flush
+        uint64_t starved = 0;         // of those, the ones that posted nothing
+        // Why a pass posted nothing. These want opposite policies: no supply means batch
+        // harder, no room means flush sooner, since our flush is what frees the peer's ring.
+        uint64_t starved_credit = 0;  // a destination ring was full
+        uint64_t starved_empty = 0;   // nothing was queued to send
+        uint64_t posts = 0;           // payload puts issued
+        uint64_t trailer_puts = 0;    // the second phase of each frame
+        uint64_t credit_puts = 0;     // credit and done words
+        // A flush costs the same whatever it covers, so the bytes it covered are what say
+        // whether it was worth issuing. pending_max bounds any batching threshold we pick.
+        uint64_t flushes = 0;
+        uint64_t flushes_tiny = 0;    // covered less than one page: paid in full for nothing
+        uint64_t pending_sum = 0;     // bytes covered, summed over every flush
+        uint64_t pending_max = 0;     // most bytes a single flush ever covered
+        uint64_t flush_ns = 0;        // time inside flush_dirty(); zero unless collect_timing
     };
     const PassStats& pass_stats() const;
 
