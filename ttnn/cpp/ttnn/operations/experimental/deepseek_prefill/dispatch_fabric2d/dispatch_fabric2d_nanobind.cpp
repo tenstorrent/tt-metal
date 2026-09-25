@@ -78,8 +78,10 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
             input tensors         interleaved in DRAM.
             memory_config         interleaved DRAM.
             subdevice_id          must contain the worker core nearest each ethernet core the op sends on,
-                                  one per link direction (2 * num_links cores). A TILE input also needs at
-                                  least one core in the core row under those.
+                                  one per link direction (at least 2 * num_links cores). Two ethernet cores
+                                  can share a nearest worker on some chips, and the second stream then takes
+                                  a spare core in the same row, so keep spare cores in that row. A TILE input
+                                  also needs at least one core in the core row under those.
 
         Not checked: expert_offsets must be replicated along cluster_axis,
         the last column of expert_dispatch_table must be -1, and padded tokens must route to no expert.

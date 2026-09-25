@@ -45,7 +45,7 @@ std::vector<tt::tt_metal::CoreCoord> decide_untilizer_cores(
     // At most one core per tile row; an extra core would do no work.
     const std::size_t want = std::min<std::size_t>(UNTILIZERS_PER_LINK * num_links, num_tile_rows);
 
-    // A moved stream can sit a core row lower than the rest; the pool goes under all of them.
+    // A stream leaves its row only when that row is full (decide_placement); the pool goes under all of them.
     std::size_t lowest_stream_row = 0;
     std::vector<std::size_t> stream_cols;
     for (const auto& [stream, placement] : streams) {
