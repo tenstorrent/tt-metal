@@ -486,7 +486,7 @@ These features are determined by the hardware.
 Due to hardware limitations, ordering integral compares (both signed
 and unsigned) are not correct over the full range -- except on Quasar
 for signed compares. This is a compiler defect that is yet to be
-fixed. However, when values are within 2^31 of eachother, the
+fixed. However, when values are less than 2^31 apart, the
 ordering compares are (a) correct and (b) can be cheaper than the
 full sequence, even on Quasar.  To that and the ``sfpi::nearby``
 wrapper function is provided and may be used to wrap all, or part, of
