@@ -16,6 +16,14 @@
 
 namespace ttml::ops {
 
+namespace {
+
+ttnn::Tensor grad_or_zero(const autograd::TensorPtr& output) {
+    return output->is_grad_initialized() ? output->get_grad() : core::zeros_like(output->get_value());
+}
+
+}  // namespace
+
 std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> heads_creation(
     const autograd::TensorPtr& qkv, uint32_t num_heads) {
     // qkv shape is (B, 1, S, E * 3)
@@ -35,9 +43,9 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> heads_
     auto out_v = autograd::create_tensor(v);
 
     autograd::GradFunction grad_q = [out_q, out_k, out_v, qkv]() {
-        auto grad_q = out_q->get_grad();
-        auto grad_k = out_k->get_grad();
-        auto grad_v = out_v->get_grad();
+        auto grad_q = grad_or_zero(out_q);
+        auto grad_k = grad_or_zero(out_k);
+        auto grad_v = grad_or_zero(out_v);
         // (B, num_heads, S, E / num_heads) -> (B, 1, S, E)
         grad_q = ttnn::experimental::nlp_concat_heads(grad_q);
         grad_k = ttnn::experimental::nlp_concat_heads(grad_k);
@@ -107,9 +115,9 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> groupe
     auto out_v = autograd::create_tensor(v);
 
     autograd::GradFunction grad_q = [out_q, out_k, out_v, qs, kvs]() {
-        auto grad_q = out_q->get_grad();
-        auto grad_k = out_k->get_grad();
-        auto grad_v = out_v->get_grad();
+        auto grad_q = grad_or_zero(out_q);
+        auto grad_k = grad_or_zero(out_k);
+        auto grad_v = grad_or_zero(out_v);
         // (B, num_heads, S, E / num_heads) -> (B, 1, S, E)
         grad_q = ttnn::experimental::nlp_concat_heads(grad_q);
         grad_k = ttnn::experimental::nlp_concat_heads(grad_k);
