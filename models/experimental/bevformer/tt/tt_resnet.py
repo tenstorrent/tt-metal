@@ -2,69 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-import time
 import torch
-import torchvision.ops
 import ttnn
 
 import torch.nn as nn
-from typing import Tuple, Union, Optional
+from typing import Tuple, Union
 from torch.nn.modules.utils import _pair, _single
 
 from models.experimental.bevformer.tt.tt_common import TtnnConv2D
 from models.experimental.bevformer.tt.tt_modulated_deform_conv import TtModulatedDeformConv2dDevice
-
-# Diagnostic harness — set TT_DCN_TIMING=1 to print, on every TtResNet
-# forward, the accumulated time spent in TtModulatedDeformConv2dPack
-# split into:
-#   transfer: device->host reads for x / offset / mask
-#   cpu:      torchvision deform_conv2d on the host
-#   back:     host->device write of the result tensor
-# This is the diagnostic we used to confirm CPU compute (not PCIe) is
-# the dominant cost of the modulated deformable conv path.
-_DCN_TIMING = os.environ.get("TT_DCN_TIMING") == "1"
-_dcn_accum = {"transfer": 0.0, "cpu": 0.0, "back": 0.0, "device": 0.0, "n": 0}
-
-# Route TtModulatedDeformConv2dPack through the device-side
-# TtModulatedDeformConv2dDevice (grid_sample + fused matmul) instead of
-# the host CPU path. On by default — validated end-to-end against
-# the UniAD PCC gate (sdc_traj 0.9910, gate 0.99) and worth ~3.4 sec of
-# img_backbone wall time on Blackhole (CPU ~3.57 s → device ~0.35 s
-# across 26 DCN blocks in ResNet101 layer3/layer4). Set TT_DCN_DEVICE=0
-# to fall back to the host path for debugging or numerical bisection.
-_USE_DEVICE_DCN = os.environ.get("TT_DCN_DEVICE", "1") == "1"
-
-
-def modulated_deform_conv2d(
-    input: torch.Tensor,
-    offset: torch.Tensor,
-    mask: torch.Tensor,
-    weight: torch.Tensor,
-    bias: Optional[torch.Tensor] = None,
-    stride: int = 1,
-    padding: int = 0,
-    dilation: int = 1,
-    groups: int = 1,
-    deform_groups: int = 1,
-) -> torch.Tensor:
-    """DCNv2 host reference via `torchvision.ops.deform_conv2d`.
-
-    Offset is `(N, 2*deform_groups*K*K, H_out, W_out)` in interleaved
-    `(y, x)` order — same layout torchvision and mmcv both expect.
-    `groups` / `deform_groups` are derived by torchvision from tensor
-    shapes, so they're accepted here only for call-site compatibility.
-    """
-    return torchvision.ops.deform_conv2d(
-        input,
-        offset,
-        weight,
-        bias=bias,
-        stride=_pair(stride),
-        padding=_pair(padding),
-        dilation=_pair(dilation),
-        mask=mask,
-    )
 
 
 class TtModulatedDeformConv2dPack:
@@ -84,6 +30,7 @@ class TtModulatedDeformConv2dPack:
         groups: int = 1,
         deform_groups: int = 1,
         bias: Union[bool, str] = True,
+        input_dtype=ttnn.bfloat16,
     ):
         super().__init__()
         self.in_channels = in_channels
@@ -95,6 +42,10 @@ class TtModulatedDeformConv2dPack:
         self.groups = groups
         self.deform_groups = deform_groups
         self.device = device
+        # The device DCN samples x at the output grid and reshapes x to (B, out_h, out_w,
+        # C_in), which only holds at stride 1. ResNet101 puts every stride on conv1 or the
+        # downsample shortcut, never on the DCN conv2.
+        assert self.stride == (1, 1), f"device DCN supports stride 1 only, got {self.stride}"
         # enable compatibility with nn.Conv2d
         self.transposed = False
         self.output_padding = _single(0)
@@ -102,12 +53,10 @@ class TtModulatedDeformConv2dPack:
         self.weight = conv_pth.weight  # torch weight
         self.bias = conv_pth.bias  # torch bias, None
 
-        self.conv_offset = TtnnConv2D(conv_args.conv_offset, conv_pth.conv_offset, device=device)
+        self.conv_offset = TtnnConv2D(
+            conv_args.conv_offset, conv_pth.conv_offset, device=device, input_dtype=input_dtype
+        )
 
-        # Device-side modulated_deform_conv. Uploads per-chunk weights /
-        # base grids lazily, so initialisation here is cheap and warm-path
-        # cost is amortised across forward calls. Created unconditionally
-        # — `_USE_DEVICE_DCN` only gates whether __call__ uses it.
         self.device_dcn = TtModulatedDeformConv2dDevice(
             weight=self.weight,
             bias=self.bias,
@@ -117,6 +66,11 @@ class TtModulatedDeformConv2dPack:
             groups=self.groups,
             deform_groups=self.deform_groups,
             device=device,
+            input_shape=(
+                conv_args.conv_offset.batch_size,
+                conv_args.conv_offset.input_height,
+                conv_args.conv_offset.input_width,
+            ),
         )
 
     def __call__(self, x: torch.Tensor) -> torch.Tensor:  # type: ignore
@@ -135,79 +89,16 @@ class TtModulatedDeformConv2dPack:
         ttnn.deallocate(o2)
         mask = ttnn.sigmoid(mask)  # low pcc if we use ttnn sigmoid for mask
 
-        if _USE_DEVICE_DCN:
-            # The device path samples x at the output grid and reshapes x to
-            # (B, out_h, out_w, C_in), which only holds when input and output
-            # share spatial dims — i.e. stride 1. UniAD's ResNet101 runs all
-            # 26 DCN convs at stride 1 (downsampling happens at conv1 / the
-            # downsample shortcut, never at the DCN conv2), so this is always
-            # true here. Assert it so a future config that puts DCN on a
-            # strided conv fails with a clear message instead of a cryptic
-            # reshape volume error.
-            assert self.stride == (1, 1), (
-                f"device DCN path supports stride-1 only (got stride={self.stride}); "
-                "set TT_DCN_DEVICE=0 for the host fallback to run a strided DCN."
-            )
-            if _DCN_TIMING:
-                ttnn.synchronize_device(self.device)
-                _t0 = time.perf_counter()
-            # The caller's reshape to (B, H, W, C) doesn't always make
-            # x.shape[0] == B (the underlying tile-layout tensor can still
-            # report logical shape (1, 1, B*H*W, C)); reshape unconditionally
-            # so the scaffold sees a proper 4D NHWC tensor.
-            C_in = x.shape[-1]
-            x_nhwc = ttnn.reshape(x, (B, out_h, out_w, C_in))
-            out_nhwc = self.device_dcn(x_nhwc, offset, mask)  # (B, H_out, W_out, C_out) tile
-            ttnn.deallocate(offset)
-            ttnn.deallocate(mask)
-            C_out = out_nhwc.shape[-1]
-            result_ttnn = ttnn.reshape(out_nhwc, (1, 1, B * out_h * out_w, C_out))
-            if _DCN_TIMING:
-                ttnn.synchronize_device(self.device)
-                _dcn_accum["device"] += time.perf_counter() - _t0
-                _dcn_accum["n"] += 1
-            return result_ttnn, out_h, out_w
-
-        # Host fallback: pull x / offset / mask back, run torchvision
-        # deform_conv2d (DCNv2) on CPU.
-        mask = ttnn.permute(mask, (0, 3, 1, 2))
-
-        if _DCN_TIMING:
-            ttnn.synchronize_device(self.device)
-            _t0 = time.perf_counter()
-        mask = ttnn.to_torch(mask).to(dtype=torch.float)
-
-        x = ttnn.to_torch(x).permute(0, 3, 1, 2).to(dtype=torch.float)
-        offset = ttnn.to_torch(offset).permute(0, 3, 1, 2).to(dtype=torch.float)
-        if _DCN_TIMING:
-            _t1 = time.perf_counter()
-            _dcn_accum["transfer"] += _t1 - _t0
-
-        result = modulated_deform_conv2d(
-            x,
-            offset,
-            mask,
-            self.weight,
-            self.bias,
-            self.stride,
-            self.padding,
-            self.dilation,
-            self.groups,
-            self.deform_groups,
-        )
-        if _DCN_TIMING:
-            _t2 = time.perf_counter()
-            _dcn_accum["cpu"] += _t2 - _t1
-        out_h, out_w = result.shape[2], result.shape[3]
-        result = result.permute(0, 2, 3, 1)
-        result = result.reshape(1, 1, result.shape[0] * result.shape[1] * result.shape[2], result.shape[3])
-
-        result_ttnn = ttnn.from_torch(result, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-        if _DCN_TIMING:
-            ttnn.synchronize_device(self.device)
-            _dcn_accum["back"] += time.perf_counter() - _t2
-            _dcn_accum["n"] += 1
-        return result_ttnn, out_h, out_w
+        # The caller's reshape to (B, H, W, C) doesn't always make x.shape[0] == B (the
+        # underlying tile-layout tensor can still report logical shape (1, 1, B*H*W, C));
+        # reshape unconditionally so the device DCN sees a proper 4D NHWC tensor.
+        C_in = x.shape[-1]
+        x_nhwc = ttnn.reshape(x, (B, out_h, out_w, C_in))
+        out_nhwc = self.device_dcn(x_nhwc, offset, mask)  # (B, H_out, W_out, C_out) tile
+        ttnn.deallocate(offset)
+        ttnn.deallocate(mask)
+        C_out = out_nhwc.shape[-1]
+        return ttnn.reshape(out_nhwc, (1, 1, B * out_h * out_w, C_out)), out_h, out_w
 
 
 class TtResLayer:
@@ -230,6 +121,8 @@ class TtResLayer:
         dcn=None,
         dram_activation=False,
         dram_input=False,
+        input_dtype=ttnn.bfloat16,
+        input_layout=ttnn.TILE_LAYOUT,
     ):
         expansion = 4
 
@@ -255,6 +148,8 @@ class TtResLayer:
                 dcn=dcn,
                 dram_activation=dram_activation,
                 dram_input=dram_input,
+                input_dtype=input_dtype,
+                input_layout=input_layout,
             )
         )
         inplanes = planes * expansion
@@ -275,9 +170,11 @@ class TtResLayer:
                     conv_cfg=None,
                     dcn=dcn,
                     dram_activation=dram_activation,
+                    input_dtype=layers[-1].output_dtype,
                 )
             )
         self.layer = layers
+        self.output_dtype = layers[-1].output_dtype
 
     def __call__(self, x):
         for i in self.layer:
@@ -305,8 +202,11 @@ class TtBottleneck:
         dcn=None,
         dram_activation=False,
         dram_input=False,
+        input_dtype=ttnn.bfloat16,
+        input_layout=ttnn.TILE_LAYOUT,
     ):
-        """``dram_activation`` keeps the activations of conv1, conv3 and the downsample in
+        """``input_dtype`` and ``input_layout`` describe the block input; the dtype and layout
+        each conv sees follow from them. ``dram_activation`` keeps the activations of conv1, conv3 and the downsample in
         DRAM; a DCN conv2 is unaffected. ``dram_input`` only covers the convs that read the
         block input, for a block fed by a DRAM stage whose own activations fit in L1."""
         assert style in ["pytorch", "caffe"]
@@ -329,12 +229,22 @@ class TtBottleneck:
             self.conv1_stride = stride
             self.conv2_stride = 1
 
+        # conv2d and ttnn.linear keep their input's dtype and emit TILE, the DCN branch emits
+        # bfloat16, and a bfloat8_b block casts its identity before the downsample.
+        conv2_dtype = input_dtype
+        conv3_dtype = ttnn.bfloat16 if self.with_dcn else input_dtype
+        downsample_dtype = ttnn.bfloat8_b if activation_dtype == ttnn.bfloat8_b else input_dtype
+        downsample_layout = ttnn.TILE_LAYOUT if activation_dtype == ttnn.bfloat8_b else input_layout
+        self.output_dtype = conv3_dtype
+
         self.conv1 = TtnnConv2D(
             conv_args.conv1,
             conv_pth.conv1,
             device=device,
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             dram_activation=dram_activation or dram_input,
+            input_dtype=input_dtype,
+            input_layout=input_layout,
         )
 
         if not self.with_dcn:
@@ -346,6 +256,7 @@ class TtBottleneck:
                 act_block_h=32,
                 dealloc_act=True,
                 dram_activation=dram_activation,
+                input_dtype=conv2_dtype,
             )
         else:
             assert self.conv_cfg is None, "conv_cfg must be None for DCN"
@@ -360,6 +271,7 @@ class TtBottleneck:
                 padding=dilation,
                 dilation=dilation,
                 bias=False,
+                input_dtype=conv2_dtype,
             )
             # The DCN branch runs its BatchNorm as a separate op. Its parameters go to the
             # device once here, so a forward writes nothing from the host.
@@ -378,6 +290,7 @@ class TtBottleneck:
             is_blk=conv3_blk_sharded,
             dealloc_act=True,
             dram_activation=dram_activation,
+            input_dtype=conv3_dtype,
         )
 
         if is_downsample:
@@ -389,6 +302,8 @@ class TtBottleneck:
                 is_blk=True if self.dcn else False,
                 activation_dtype=activation_dtype,
                 dram_activation=dram_activation or dram_input,
+                input_dtype=downsample_dtype,
+                input_layout=downsample_layout,
             )
 
     def __call__(self, x_identity):
@@ -506,10 +421,17 @@ class TtResNet:
             activation_dtype=ttnn.bfloat16,
             act_block_h=64,
             dealloc_act=True,
+            input_dtype=ttnn.bfloat16,
+            input_layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
 
+        # The max pool emits a bfloat16 ROW_MAJOR tensor; forward casts stage 1's output to
+        # bfloat8_b; every stage emits TILE.
+        stage_input_dtype = ttnn.bfloat16
+        stage_input_layout = ttnn.ROW_MAJOR_LAYOUT
+        self.output_dtypes = []
         self.res_layers = []
         for i, num_blocks in enumerate(self.stage_blocks):
             stride = strides[i]
@@ -534,21 +456,20 @@ class TtResNet:
                 dcn=dcn,
                 dram_activation=i in dram_activation_stages,
                 dram_input=i not in dram_activation_stages and i - 1 in dram_activation_stages,
+                input_dtype=stage_input_dtype,
+                input_layout=stage_input_layout,
             )
             self.inplanes = planes * self.block.expansion
             self.res_layers.append(res_layer)
+            stage_input_dtype = ttnn.bfloat8_b if i == 0 else res_layer.output_dtype
+            stage_input_layout = ttnn.TILE_LAYOUT
+            if i in out_indices:
+                self.output_dtypes.append(stage_input_dtype)
 
         self.feat_dim = self.block.expansion * base_channels * 2 ** (len(self.stage_blocks) - 1)
 
     def __call__(self, x):
         """Forward function."""
-        if _DCN_TIMING:
-            _dcn_accum["transfer"] = 0.0
-            _dcn_accum["cpu"] = 0.0
-            _dcn_accum["back"] = 0.0
-            _dcn_accum["device"] = 0.0
-            _dcn_accum["n"] = 0
-
         x, out_h, out_w = self.conv1(x)
         x = ttnn.sharded_to_interleaved(x)
         x = ttnn.add(x, 0.0, dtype=ttnn.bfloat8_b)
@@ -573,15 +494,4 @@ class TtResNet:
                 x = ttnn.add(x, 0.0, dtype=ttnn.bfloat8_b)
             if i in self.out_indices:
                 outs.append(x)
-        if _DCN_TIMING and _dcn_accum["n"] > 0:
-            if _USE_DEVICE_DCN:
-                print(f"  [DCN device] count={_dcn_accum['n']:>3d} " f"device={_dcn_accum['device']*1000:.1f}ms")
-            else:
-                print(
-                    f"  [DCN host] count={_dcn_accum['n']:>3d} "
-                    f"transfer={_dcn_accum['transfer']*1000:.1f}ms "
-                    f"cpu={_dcn_accum['cpu']*1000:.1f}ms "
-                    f"back={_dcn_accum['back']*1000:.1f}ms "
-                    f"total={(_dcn_accum['transfer']+_dcn_accum['cpu']+_dcn_accum['back'])*1000:.1f}ms"
-                )
         return tuple(outs)
