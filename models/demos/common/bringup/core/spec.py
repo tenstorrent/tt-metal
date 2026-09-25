@@ -211,8 +211,14 @@ class Spec:
             if r.get("name") in names:
                 errs.append(f"duplicate ladder rung {r['name']}")
             names.add(r.get("name"))
-            if r.get("golden") and r["golden"] not in names:
-                errs.append(f"ladder rung {r['name']}: golden rung {r['golden']} must come earlier")
+            if r.get("golden"):
+                src = next((x for x in self.data["ladder"] if x.get("name") == r["golden"]), None)
+                if src is None:
+                    errs.append(f"ladder rung {r['name']}: golden rung {r['golden']} does not exist")
+                elif src.get("golden"):
+                    errs.append(f"ladder rung {r['name']}: golden rung {r['golden']} must own its golden")
+                elif (src.get("seq"), src.get("chunk")) != (r.get("seq"), r.get("chunk")):
+                    errs.append(f"ladder rung {r['name']}: seq/chunk differ from golden rung {r['golden']}")
         covered = []
         for bt, info in self.data["block_types"].items():
             if "layers" not in info:

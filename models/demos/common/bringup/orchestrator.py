@@ -254,7 +254,9 @@ class Orchestrator:
             "breadcrumbs": f"{rel(s, b)}/BREADCRUMBS.md",
         }
         vals["role_text"] = Template(self.roles[role]).safe_substitute(vals)
+        # spec agents.read.<role>: files every brief of that role lists (e.g. the HF modeling code for the reference role)
         reads = list(task.get("tests") or []) + list(extra_read) + list(brief.get("read") or [])
+        reads += [r for r in (s.get(f"agents.read.{role}") or []) if r not in reads]
         vals["read_list"] = "\n".join(f"- `{r}`" for r in reads)
         vals["allowed"] = "\n".join(f"- `{p}`" for p in self.allowed_paths(task, role))
         vals["thresholds"] = (
@@ -448,8 +450,15 @@ class Orchestrator:
             res = self.gate(tid)
             if res.verdict != "PASS" and not self.attempt_loop(task, role or "fix", self.failure_text(res)):
                 return STOPPED
-        elif not self.attempt_loop(task, role):
-            return STOPPED
+        else:
+            # The work may already exist (e.g. R.3 once R.2's reference is written, a swap test once its components
+            # pass): try the gate before starting an agent.
+            existing = any((self.spec.repo / p).exists() for p in task.get("paths") or [])
+            pre = self.gate(tid) if existing and task.get("precheck", True) else None
+            if (pre is None or pre.verdict != "PASS") and not self.attempt_loop(
+                task, role, self.failure_text(pre) if pre else ""
+            ):
+                return STOPPED
         if self.needs_human(task):
             return self._human(task, self.needs_human(task))
         return self._after(task) if self.led.status(tid) == "PASS" else STOPPED

@@ -97,7 +97,7 @@ def test_implement_freezes_first_then_retries_until_the_gate_passes(orch, sandbo
         "C.1.implement.2.md bringup-engineer",
     ]
     st = o.led.state()["C.1"]
-    assert st["status"] == "PASS" and st["attempts"] == 1
+    assert st["status"] == "PASS" and st["attempts"] == 2  # the pre-agent gate check + implement attempt 1
     assert [r["role"] for r in st["agent_runs"]] == ["test", "implement", "implement"]
     assert st["agent"]["session_id"] == "sess-C.1.implement.2" and st["agent"]["model"] == "mock-model"
     assert st["agent"]["defs"]["models/demos/common/bringup/agents/bringup-engineer.md"]["blob"]
