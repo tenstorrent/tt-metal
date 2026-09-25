@@ -825,6 +825,36 @@ row-major `[1, 1, 3, 2688]` fp32 tensors and hung in the concat's reader/writer 
 dispatch-timeout reset the fabric mapper refused the 4x8 once ("Logical mesh 0 failed to map"); a second
 `tt-smi -r` cleared it.
 
+**Resident adaLN with FSDP off (2026-09-25).** Run D above was ~60 MiB/bank short with the projections
+resident. Three residency fixes, all under `coresident=False` (so Blackhole is untouched), close that gap
+at TP8/SP4; none changes the output (frames and audio exactly equal to the FSDP-on run at 3 steps):
+
+1. **Audio decoder evicted for the denoise** (42 MiB/bank of replicated fp32). It is only read after the video
+   VAE, so it is now a coresident exclusion of the DiT and `_prepare_audio_decoder` reloads it from the cache
+   (~1 s) at the audio stage. This exposed a stale first-use cache in `Snake` / `SnakeBeta`: without
+   channel-TP their per-channel shard *is* the parameter tensor, so after an eviction the op was handed a
+   freed buffer ("Input Tensor is not allocated"); `deallocate_weights` now drops the cache.
+2. **`CCLManager.release_persistent_buffers()` before each DiT reload.** The ping-pong pools are keyed by
+   shape and never expire, so the init warmup (a 5 s request) left 99 MiB/bank behind for the 15 s request:
+   4 x 8.5 MiB gathered-input buffers, 2 x 11.3 and 2 x 5.7 MiB K/V pool entries, plus ~26 MiB of per-rung
+   state. The release recovers 74 of it; the per-rung state stays.
+
+| run | warmup | resident at denoise start | peak | contig free at peak | outcome |
+|---|---|---|---|---|---|
+| D | off | 726.1 | OOM at 957 | 17 MB | fails in block 0 |
+| H (audio evicted) | off | 682.5 | 944.8 | 63.6 MiB | pass, 12154 ms/step |
+| I (audio evicted) | on | 801.6 | OOM at 974 | 17 MB | fails in block 0 |
+| J (audio evicted + pool release) | on | 727.2 | **985.3** | **18.3 MiB** | pass, 12212 ms/step |
+
+End to end at 50 steps with the warmup on (the same harness as the table above): **12234 ms/fwd, 599.5 s
+denoise, 643.7 s total, CLIP 37.20 / min 35.40**, `coresident=False` in the record. That is 36 MiB/bank of
+nominal headroom at the peak and 18 MiB contiguous; a second sequence shape in the same process would eat
+it, so this configuration is serviceable for one working point and fragile beyond it. The tables mode
+(`adaln_tables`) runs the same point at 727.6 MiB/bank peak with ~290 of headroom. Note on the tables mode
+at 50 steps: its frames differ from this run at PCC 0.99971 (3-step runs were exactly equal), i.e. the
+147-row schedule projection is not bit-identical to the per-step 3-row one -- a per-step projection in
+`build_request_modulation` would restore exactness at ~2450 small matmuls per request.
+
 ### Open issues
 
 Fixed items have been removed; their forensics live in the commits. The intermittent mid-denoise

@@ -219,6 +219,31 @@ class CCLManager:
 
         return self._ping_pong_buffer_cache[cache_key][current_idx]
 
+    def release_persistent_buffers(self) -> None:
+        """Free every cached ping-pong / persistent scratch buffer; each pool is re-created on its next use.
+
+        The pools are keyed by tensor shape and never expire, so a process that serves more than one
+        sequence shape accumulates one pool per shape it has ever run (measured 68 MiB/bank left behind
+        on a 12 GB Wormhole chip by a 5 s warmup before a 15 s request). Not for traced use: a captured
+        trace bakes these buffers' addresses in. Semaphores and the small shared counter arrays stay.
+        """
+
+        def free(item) -> None:
+            # Pools hold a list of buffers, or a list of per-slot buffer lists (the reduce-scatter pool).
+            if isinstance(item, (list, tuple)):
+                for sub in item:
+                    free(sub)
+            elif item is not None:
+                ttnn.deallocate(item)
+
+        for buffers in self._ping_pong_buffer_cache.values():
+            free(buffers)
+        self._ping_pong_buffer_cache.clear()
+        self._ping_pong_buffer_indices.clear()
+        for entry in self._fused_norm_stats_buffer_cache.values():
+            free(entry["bufs"])
+        self._fused_norm_stats_buffer_cache.clear()
+
     def get_ag_ping_pong_buffer(self, shape, dim, mesh_axis, dtype=ttnn.bfloat16, device_synchronize=True):
         """
         Get or create ping pong buffers for all gather operations.

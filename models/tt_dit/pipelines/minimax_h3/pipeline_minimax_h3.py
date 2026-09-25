@@ -638,6 +638,12 @@ class MiniMaxH3Pipeline:
             self._prepare_transformer()
         self._prepare_text_encoder()
         self._prepare_audio_decoder()
+        if not self.coresident:
+            # The audio decoder is only read after the video VAE, so on the 12 GB part it leaves with the
+            # other stages when the DiT loads (42 MiB/bank of fp32 weights) and comes back for the audio
+            # stage. Registered after its build: the exclusion needs the module.
+            self._audio_decoder.register_coresident_exclusions(self._transformer)
+            self._transformer.register_coresident_exclusions(self._audio_decoder)
 
         if warmup:
             self._warmup_on_init()
@@ -1249,6 +1255,11 @@ class MiniMaxH3Pipeline:
         )
 
     def _prepare_transformer(self) -> MiniMaxH3Transformer3DModel:
+        if not self.coresident and not self._transformer.is_loaded():
+            # The DiT is about to be reloaded for a new request, so the collective scratch pools of every
+            # shape it has run so far are dead weight (68 MiB/bank after a 5 s warmup, on a 12 GB chip that
+            # the unsharded DiT fills). Untraced only, which `coresident=False` already implies.
+            self.ccl_manager.release_persistent_buffers()
         cache.load_model(
             self._transformer,
             model_name=MODEL_NAME,
@@ -1549,7 +1560,7 @@ class MiniMaxH3Pipeline:
                 else None
             )
             audio_ccl = self.audio_ccl_manager if audio_parallel_config is not None else None
-            decoder = MiniMaxH3AudioDecoder(
+            self._audio_decoder = MiniMaxH3AudioDecoder(
                 latent_channels=config["latent_channels"],
                 latent_dim=config["latent_dim"],
                 decoder_dim=config["decoder_dim"],
@@ -1562,6 +1573,11 @@ class MiniMaxH3Pipeline:
                 ccl_manager=audio_ccl,
                 split_mode=self.audio_split_mode,
             )
+        decoder = self._audio_decoder
+        # Reload after an eviction as well as on first build: without `coresident` the decoder is
+        # excluded from the DiT's residency (see `__init__`) and its 0.5 GB of fp32 weights leave the
+        # device for every denoise, coming back from the cache (~0.5 s) for the audio stage.
+        if not decoder.is_loaded():
 
             def read_state() -> dict[str, torch.Tensor]:
                 """Only the decoder's half of the converted checkpoint.
@@ -1587,8 +1603,7 @@ class MiniMaxH3Pipeline:
                 dtype="fp32",
                 get_torch_state_dict=read_state,
             )
-            self._audio_decoder = decoder
-        return self._audio_decoder
+        return decoder
 
     @property
     def audio_sampling_rate(self) -> int:
@@ -1967,7 +1982,7 @@ class MiniMaxH3Pipeline:
 
         with event_section(on_event, "audio"):
             audio = self._decode_audio(
-                self._audio_decoder, audio_rows, num_audio_latents, layout.num_condition_audio_rows
+                self._prepare_audio_decoder(), audio_rows, num_audio_latents, layout.num_condition_audio_rows
             )
 
         yuv = self.vae_output_type == "yuv420"
