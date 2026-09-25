@@ -70,15 +70,25 @@ std::vector<tt::tt_metal::HostBuffer> get_as(const ttnn::Tensor& tensor) {
     return buffers;
 }
 
+// moreh_full_like is a creation op (prim::full takes no tensor inputs), so ttnn allocates its output
+// fully replicated across the mesh no matter how `like` is distributed. Stamp `like`'s topology on the
+// result so a *_like of a TP/FSDP-sharded tensor is itself reported as sharded; the checkpointer gathers
+// and redistributes by the live topology, so a replicated-looking moment would be saved as one shard.
+ttnn::Tensor full_like_with_topology(const ttnn::Tensor& like, float value) {
+    auto result = ttnn::moreh_full_like(like, value, like.dtype(), like.layout(), like.memory_config());
+    result.update_tensor_topology(like.tensor_topology());
+    return result;
+}
+
 }  // namespace
 namespace ttml::core {
 
 ttnn::Tensor zeros_like(const ttnn::Tensor& tensor) {
-    return ttnn::moreh_full_like(tensor, 0.F, tensor.dtype(), tensor.layout(), tensor.memory_config());
+    return full_like_with_topology(tensor, 0.F);
 }
 
 ttnn::Tensor ones_like(const ttnn::Tensor& tensor) {
-    return ttnn::moreh_full_like(tensor, 1.F, tensor.dtype(), tensor.layout(), tensor.memory_config());
+    return full_like_with_topology(tensor, 1.F);
 }
 
 ttnn::Tensor empty(
