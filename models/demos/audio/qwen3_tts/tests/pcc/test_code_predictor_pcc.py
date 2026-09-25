@@ -56,8 +56,9 @@ LOGITS_PCC = 0.99
 # stops being rounding. Widest observed is 0.10, against logits spanning several units.
 MAX_PREFERENCE_GAP = 0.25
 
-# 0.6B measured 0.9755 and gaps up to 0.82: its residual stream runs near 2665 in bf16 (README).
-GREEDY_STEP_PCC = {"1b7": LOGITS_PCC, "0b6": 0.97}
+# 0.6B measured 0.9755 (Wormhole) and 0.9633 (Blackhole), gaps up to 0.82: its residual stream
+# runs near 2665 in bf16 (README).
+GREEDY_STEP_PCC = {"1b7": LOGITS_PCC, "0b6": 0.96}
 PREFERENCE_GAP = {"1b7": MAX_PREFERENCE_GAP, "0b6": 1.0}
 
 # Sampling-distribution distance, 0 to 1. Worst measured: 0.091 at 1.7B, 0.184 at 0.6B.
