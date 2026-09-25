@@ -13,6 +13,8 @@
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/tensor/tensor_apis.hpp>
 
+#include "stop_simulation_on_termination.hpp"
+
 using namespace tt;
 using namespace tt::tt_metal;
 #ifndef OVERRIDE_KERNEL_PREFIX
@@ -46,6 +48,10 @@ TensorSpec single_tile_dram_spec() {
 }  // namespace
 
 int main() {
+    // Killed while hung -- which is the whole point of this app -- we still have to release the
+    // simulator, so exit rather than die on SIGTERM.
+    triage_hang_apps::stop_simulation_on_termination();
+
     // A MeshDevice is a software concept that allows developers to virtualize a cluster of connected devices as a
     // single object, maintaining uniform memory and runtime state across all physical devices. A UnitMesh is a 1x1
     // MeshDevice that allows users to interface with a single physical device.
@@ -207,6 +213,11 @@ int main() {
         distributed::EnqueueMeshWorkload(cq, workload, false);
         distributed::Finish(cq);
     } catch (std::runtime_error& e) {
+        // Being torn down: teardown has closed the link to the simulator, so this failure is the
+        // expected end of the wait, not a fault to report.
+        if (triage_hang_apps::termination_requested()) {
+            triage_hang_apps::park_until_process_exits();
+        }
         std::string error_msg = e.what();
         if (error_msg.find("device timeout") != std::string::npos || error_msg.find("Timeout (") != std::string::npos) {
             printf("Device timeout detected as expected.\n");
