@@ -777,6 +777,29 @@ class TPAttention:
         ),  # three groups of 4, 36 cores/head each -> 108 active (2 idle), 6 tree rounds (at cap), same Tg=4 CB footprint
     }
 
+    # num_kv_heads > 1 (TP=2: 2 KV heads, 12 Q heads per device). The op gives every (group, KV head)
+    # pair its own reduction group -- the factory splits a group's cores over its KV heads -- and each
+    # core carries the same Tg=4 CB footprint as at NKV=1 (every core computes all 32 rows of its
+    # group's Tg tiles against its KV head; the root writes back its Q group's rows, spec_q_heads).
+    # Same table shape as _SPEC_SDPA_L1_FIT; the per-GROUP core cap is still what is passed (the op
+    # divides it by NKV). Re-derived on device (profiles/opt_round3/laneS_RESULTS.md 2.3).
+    _SPEC_SDPA_L1_FIT_GQA = {
+        4: (1, 64, 0),
+        8: (2, 55, 0),
+        12: (3, 36, 0),
+        16: (4, 27, 0),
+    }
+
+    def _spec_sdpa_fold_table(self):
+        """The fused spec-SDPA split table for this device's KV head count, or None when the fold is
+        off: NKV == 1 always folds (TP=4, unchanged); NKV > 1 folds unless QWEN36_SPEC_SDPA_FOLD_NKV=0
+        (the per-row legacy call, the pre-lane-S TP=2 path)."""
+        if self.NKV == 1:
+            return self._SPEC_SDPA_L1_FIT
+        if os.environ.get("QWEN36_SPEC_SDPA_FOLD_NKV", "1") != "1":
+            return None
+        return self._SPEC_SDPA_L1_FIT_GQA
+
     def _spec_sdpa_plan(self, T, n_users=1):
         """(SDPAProgramConfig, groups, tiles-per-group Tg) for the fused spec-verify SDPA at
         ``n_users`` users x T candidates each, or None when T has no L1-fitting split (caller falls
@@ -793,11 +816,11 @@ class TPAttention:
         if key not in self._spec_sdpa_cfg_cache:
             plan = None
             # The fused spec-verify SDPA kernel (spec_multi_pos_tiles) folds T candidate rows into one
-            # KV read for ONE KV head per device (num_kv_heads == 1 validate in sdpa_decode): TP=4 with
-            # 4 KV heads. At TP=2 (2 KV heads per device) or TP=1 the fold has no kernel, so the verify
-            # takes the legacy per-row path below (each candidate row re-reads its user's KV). TP=4 is
-            # byte-identical to before.
-            fit = self._SPEC_SDPA_L1_FIT.get(T) if self.NKV == 1 else None
+            # KV read per (group, KV head): NKV == 1 at TP=4, NKV == 2 at TP=2 (spec_q_heads = NH tells
+            # the op which rows of a candidate tile belong to which KV head). QWEN36_SPEC_SDPA_FOLD_NKV=0
+            # keeps NKV > 1 on the legacy per-row path. TP=4 is byte-identical to before.
+            table = self._spec_sdpa_fold_table()
+            fit = table.get(T) if table is not None else None
             if fit is not None:
                 groups, max_cores, k_chunk = fit
                 grid = self.mesh.compute_with_storage_grid_size()
@@ -1026,6 +1049,9 @@ class TPAttention:
                     program_config=_spec_cfg,
                     memory_config=_L1,
                     spec_multi_pos_tiles=_spec_tiles,
+                    # GQA only (NKV > 1): valid q heads per candidate tile. Omitted at NKV == 1 so
+                    # the TP=4 call is exactly the pre-change call.
+                    **({"spec_q_heads": NH} if NKV > 1 else {}),
                 )
                 ttnn.deallocate(q)
                 # Output is byte-identical to the legacy [1,B,32,HD]; view it back (same alias trick).

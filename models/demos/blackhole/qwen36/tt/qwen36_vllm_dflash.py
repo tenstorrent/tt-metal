@@ -301,8 +301,10 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
           with the composite GDN verify (QWEN36_GDN_SPEC_FUSED=0, single-bucket) as the fallback. Either way every
           bucket's B and max_num_seqs are capped at B*Nv <= compute cores (B <= 4 at Nv=24): the fused op runs one
           core per (user, head), the composite ``fused_recurrent`` has the same core budget, and plain decode runs
-          the fused recurrence at full batch width. The spec SDPA takes the per-row path (attention/tp.py::
-          _spec_sdpa_plan returns None at NKV != 1). See profiles/p150x2/DFLASH2_FEASIBILITY.md 3.
+          the fused recurrence at full batch width. The spec SDPA folds each user's candidates into groups of 4
+          per KV head (spec_multi_pos_tiles with spec_q_heads, attention/tp.py::_SPEC_SDPA_L1_FIT_GQA) for
+          T in {4, 8, 12, 16}; QWEN36_SPEC_SDPA_FOLD_NKV=0 (or any other T) takes the legacy per-row call.
+          See profiles/p150x2/DFLASH2_FEASIBILITY.md 3 and profiles/opt_round3/laneS_RESULTS.md.
         * anything else (TP=1, TP=8): unvalidated -> refuse.
         """
         nd = int(model.num_devices)
@@ -328,8 +330,15 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
             if problems:
                 raise RuntimeError("Qwen36DFlash speculative serving at TP=2: " + "; ".join(problems))
             verify = "FUSED gdn_spec_step verify (two-tile a|b gates)" if fused else "FALLBACK composite GDN verify"
+            try:  # log-only: which spec-SDPA path each bucket's verify takes
+                att0 = next(layer.attention for layer in model.layers if layer.is_full_attention)
+                sdpa = ",".join(
+                    f"{bucket_id((b, t))}:{'folded' if att0.spec_sdpa_enabled(t) else 'per-row'}" for b, t in buckets
+                )
+            except Exception as e:  # pragma: no cover
+                sdpa = f"unknown ({e})"
             logger.warning(
-                f"Qwen36DFlash speculative serving at TP=2: {verify}, per-row spec SDPA, "
+                f"Qwen36DFlash speculative serving at TP=2: {verify}, spec SDPA {sdpa}, "
                 f"buckets {','.join(bucket_id(bt) for bt in buckets)}, Nv={nv}/device ({cores} cores -> B <= {cores // nv})"
             )
             return

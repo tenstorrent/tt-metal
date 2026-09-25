@@ -9,6 +9,7 @@ is logged, never asserted.
 Run: MESH_DEVICE=P150x4 pytest models/demos/blackhole/qwen36/tests/test_dflash2_lossless.py -v -s
 Env: see test_spec_lossless.py (QWEN36_LOSSLESS_PROMPT_LEN, QWEN36_SPEC_NEAR_TIE_GAP, ...).
 """
+
 import os
 
 import pytest
@@ -26,6 +27,14 @@ from models.demos.blackhole.qwen36.tests.test_spec_lossless import (
     _reference_greedy,
 )
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
+
+# Long-prompt runs: QWEN36_LOSSLESS_PROMPT_LEN=<n> asks _get_prompt for n tokens (the long corpora may
+# return slightly fewer; the actual length is logged) and sizes the KV cache to fit prompt + MAX_NEW.
+# Unset = the 130-token default, byte-identical to before.
+_PROMPT_LEN = int(os.environ.get("QWEN36_LOSSLESS_PROMPT_LEN", str(PROMPT_LEN)))
+_NUM_BLOCKS = NUM_BLOCKS
+while _NUM_BLOCKS * BLOCK_SIZE < _PROMPT_LEN + MAX_NEW + 2 * BLOCK_SIZE:
+    _NUM_BLOCKS *= 2
 
 
 def check_lossless(spec, ref, gaps, tokenizer, tag, near_tie_gap=None):
@@ -71,13 +80,17 @@ def test_dflash2_decode_is_lossless(mesh_device):
 
     device = mesh_device
     device.enable_program_cache()
-    model = Qwen36Model.from_pretrained(device, max_batch_size=1, max_seq_len=NUM_BLOCKS * BLOCK_SIZE)
+    model = Qwen36Model.from_pretrained(device, max_batch_size=1, max_seq_len=_NUM_BLOCKS * BLOCK_SIZE)
     tokenizer = AutoTokenizer.from_pretrained(model.args.CKPT_DIR, trust_remote_code=True)
-    token_ids = _get_prompt(PROMPT_LEN, tokenizer)
+    token_ids = _get_prompt(_PROMPT_LEN, tokenizer)
     prompt_ids = token_ids[0].tolist()
-    assert len(prompt_ids) == PROMPT_LEN
-    kv_shape = [NUM_BLOCKS, model.args.n_local_kv_heads, BLOCK_SIZE, model.args.head_dim]
-    pt = torch.arange(NUM_BLOCKS, dtype=torch.int32).reshape(1, NUM_BLOCKS)
+    if _PROMPT_LEN == PROMPT_LEN:
+        assert len(prompt_ids) == PROMPT_LEN
+    else:
+        assert 0 < len(prompt_ids) <= _PROMPT_LEN
+    logger.info(f"[dflash2-lossless] prompt {len(prompt_ids)} tokens (asked {_PROMPT_LEN}), {_NUM_BLOCKS} KV blocks")
+    kv_shape = [_NUM_BLOCKS, model.args.n_local_kv_heads, BLOCK_SIZE, model.args.head_dim]
+    pt = torch.arange(_NUM_BLOCKS, dtype=torch.int32).reshape(1, _NUM_BLOCKS)
     # Explicit and model-scoped: verify runs the fused GDN op, so the plain reference must use the
     # same math or greedy near-ties flip between the two paths.
     model.set_gdn_fused_decode(True)
