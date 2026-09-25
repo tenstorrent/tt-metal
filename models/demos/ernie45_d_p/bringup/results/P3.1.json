@@ -1,0 +1,37 @@
+{
+ "metrics": {
+  "dense_ep_expert_ms_L01": {
+   "t": "2026-09-25T00:12:00",
+   "value": 26.92
+  },
+  "dense_ep_expert_ms_L14": {
+   "t": "2026-09-25T00:12:06",
+   "value": 26.94
+  },
+  "pcc_unified_expert_min_L01": {
+   "t": "2026-09-25T00:11:58",
+   "value": 0.9994872459931518
+  },
+  "pcc_unified_expert_min_L14": {
+   "t": "2026-09-25T00:12:05",
+   "value": 0.9992296031496473
+  },
+  "speedup_L01": {
+   "t": "2026-09-25T00:12:00",
+   "value": 13.29
+  },
+  "speedup_L14": {
+   "t": "2026-09-25T00:12:06",
+   "value": 12.56
+  },
+  "unified_expert_ms_L01": {
+   "t": "2026-09-25T00:12:00",
+   "value": 2.03
+  },
+  "unified_expert_ms_L14": {
+   "t": "2026-09-25T00:12:06",
+   "value": 2.15
+  }
+ },
+ "task": "P3.1"
+}
