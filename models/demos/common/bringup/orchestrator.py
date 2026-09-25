@@ -12,8 +12,9 @@ Per task:
                                                            bringup-engineer definition, check what it did, run the gate
   tests declared and not frozen                            render the template, ``test`` role reviews it, freeze
                                                            (reference passes, zero stub fails), then implement
-  three failed attempts                                    WIP commit, then ``ttnn-expert-debugger`` with the WIP sha,
-                                                           the failure logs and the triage report, three attempts
+  failed attempts (DEFAULT_POLICY)                         implement / device fix: WIP commit, then ``ttnn-expert-debugger``
+                                                           (TTNN only) with the WIP sha, logs and triage; other roles
+                                                           (reference, plan, contract, test): STOPPED for a person
   still failing                                            the task becomes STOPPED and the run stops (exit 1)
   approval needed (plan) or opportunity list written       the run stops for a person (exit 3)
 
@@ -60,6 +61,18 @@ HERE = Path(__file__).resolve().parent
 AGENT_DEF = HERE / "agents" / "bringup-engineer.md"
 DEBUGGER = "ttnn-expert-debugger"
 DEBUGGER_DEF = CODE_ROOT / ".claude" / "agents" / f"{DEBUGGER}.md"
+# Retry budget and escalation per role. ttnn-expert-debugger is specialized for TTNN ops (hangs, CB sync, kernel
+# numerics), so only roles whose code is TTNN device code escalate to it: implement, and fix after a device gate.
+# Everything else (reference, plan, contract, test, fix after a CPU gate) stops for a person with the logs.
+# The spec overrides per role: agents.policy.<role>: {attempts, escalate: debugger | stop, debugger_attempts}.
+DEFAULT_POLICY = {
+    "implement": {"attempts": 3, "escalate": "debugger", "debugger_attempts": 3},
+    "fix": {"attempts": 3, "escalate": "debugger", "debugger_attempts": 3},
+    "reference": {"attempts": 3, "escalate": "stop"},
+    "plan": {"attempts": 3, "escalate": "stop"},
+    "contract": {"attempts": 3, "escalate": "stop"},
+    "test": {"attempts": 3, "escalate": "stop"},
+}
 ROLE_OF_STEP = {"reference": "reference", "plan": "plan", "implement": "implement", "contract": "contract"}
 IGNORED = (
     r"/dashboard/index\.html$",
@@ -205,6 +218,7 @@ class Orchestrator:
         self.spec, self.led = spec, Ledger(spec.bringup_dir)
         self.model = model or spec.get("agents.model")
         self.max_attempts, self.debugger_attempts = max_attempts, debugger_attempts
+        self.attempts_override = None
         self.timeout_s = timeout_s or int(spec.get("agents.timeout_s", 4 * 3600))
         self.run_dir = spec.run_dir(run_name(self.led))
         (self.run_dir / "briefs").mkdir(parents=True, exist_ok=True)
@@ -372,7 +386,8 @@ class Orchestrator:
         elif "step" in b:
             render_component_test(self.spec, b["block_type"], b["step"])
         previous = ""
-        for attempt in range(1, self.max_attempts + 1):
+        budget = self.policy(task, "test")["attempts"]
+        for attempt in range(1, budget + 1):
             problems = self.run_agent(task, "test", attempt, self.brief(task, "test", attempt, previous))
             if problems:
                 previous = "\n".join(problems)
@@ -384,7 +399,7 @@ class Orchestrator:
             except FreezeError as e:
                 previous = str(e)
                 self.echo(f"  [{task['id']}] freeze failed: {str(e).splitlines()[0]}")
-        return f"tests could not be frozen after {self.max_attempts} attempts: {previous.splitlines()[0] if previous else ''}"
+        return f"tests could not be frozen after {budget} attempts: {previous.splitlines()[0] if previous else ''}"
 
     def needs_human(self, task: dict) -> str | None:
         if task.get("step") == "plan" and not approvals.is_approved(self.spec, "plan"):
@@ -394,9 +409,19 @@ class Orchestrator:
             )
         return None
 
+    def policy(self, task: dict, role: str) -> dict:
+        p = dict(DEFAULT_POLICY.get(role, {"attempts": 3, "escalate": "stop"}))
+        p.update(self.spec.get(f"agents.policy.{role}") or {})
+        if self.attempts_override:
+            p["attempts"] = p["debugger_attempts"] = self.attempts_override
+        if role == "fix" and not task.get("device"):
+            p["escalate"] = "stop"  # a failed CPU gate (goldens, plan check) is not a TTNN problem
+        return p
+
     def attempt_loop(self, task: dict, role: str, first_failure: str = "") -> bool:
         previous = first_failure
-        for attempt in range(1, self.max_attempts + 1):
+        pol = self.policy(task, role)
+        for attempt in range(1, pol["attempts"] + 1):
             problems = self.run_agent(task, role, attempt, self.brief(task, role, attempt, previous))
             if task.get("step") == "plan" and not problems and self.needs_human(task):
                 return True  # the plan exists; the gate needs the approval next
@@ -404,9 +429,14 @@ class Orchestrator:
             if res.verdict == "PASS" and not problems:
                 return True
             previous = "\n".join(problems + [self.failure_text(res)])
-        return self.debug(task, previous)
+        if pol["escalate"] == "debugger":
+            return self.debug(task, previous, pol["attempts"], pol.get("debugger_attempts", 3))
+        why = f"{role} failed {pol['attempts']} attempts; waiting for a person (logs in {self.run_dir / 'agents'})"
+        self.led.update(task["id"], status="STOPPED", reason=[why], history_add={"t": now(), "status": "STOPPED"})
+        self.echo(f"  [{task['id']}] STOPPED: {why}")
+        return False
 
-    def debug(self, task: dict, previous: str) -> bool:
+    def debug(self, task: dict, previous: str, attempts: int, debugger_attempts: int) -> bool:
         tid = task["id"]
         paths = [p for p in task.get("paths") or [] if (self.spec.repo / p).exists()]
         wip = None
@@ -415,13 +445,13 @@ class Orchestrator:
                 self.spec,
                 paths,
                 f"[{self.spec.tag}][{tid}][wip] {task['title']}",
-                f"Work in progress after {self.max_attempts} failed attempts; handed to {DEBUGGER}.",
+                f"Work in progress after {attempts} failed attempts; handed to {DEBUGGER}.",
             )
         triage = log_dir(self.spec, self.led) / f"{tid}.triage.txt"
         extra = [str(triage)] if triage.exists() else []
-        for attempt in range(1, self.debugger_attempts + 1):
+        for attempt in range(1, debugger_attempts + 1):
             text = (
-                f"WIP commit: {wip or '(no changes to commit)'}\nThe implementer failed {self.max_attempts} times; "
+                f"WIP commit: {wip or '(no changes to commit)'}\nThe implementer failed {attempts} times; "
                 f"the logs are in {self.run_dir / 'agents'} and {log_dir(self.spec, self.led)}.\n{previous}"
             )
             brief = self.brief(
@@ -437,7 +467,7 @@ class Orchestrator:
         self.led.update(
             tid,
             status="STOPPED",
-            reason=[f"stopped after {self.max_attempts} attempts and " f"{self.debugger_attempts} debugger attempts"],
+            reason=[f"stopped after {attempts} attempts and " f"{debugger_attempts} debugger attempts"],
             history_add={"t": now(), "status": "STOPPED"},
         )
         return False
@@ -518,10 +548,11 @@ def main(argv=None) -> int:
     ap.add_argument("--until", help="stop after this task")
     ap.add_argument("--only", help="run just this task (if runnable)")
     ap.add_argument("--model")
-    ap.add_argument("--attempts", type=int, default=3)
+    ap.add_argument("--attempts", type=int, default=None, help="override every role's attempt budget")
     a = ap.parse_args(argv)
     spec = Spec.load(a.spec)
-    orch = Orchestrator(spec, model=a.model, max_attempts=a.attempts, debugger_attempts=a.attempts)
+    orch = Orchestrator(spec, model=a.model)
+    orch.attempts_override = a.attempts
     if a.command == "resume":
         led = orch.led
         for tid, e in led.state().items():
