@@ -1204,14 +1204,16 @@ void jit_build_genfiles_descriptors(const JitBuildEnv& env, const JitBuildOption
 }
 
 void emit_llk_metadata(std::ostream& os, const LLKMetadata& metadata) {
-    const FaceGeometry& face = metadata.face_geometry;
-    const uint32_t num_faces_c_dim = std::min(metadata.tile.get_width() / constants::FACE_WIDTH, face.num_faces);
-    const uint32_t num_faces_r_dim = face.num_faces / num_faces_c_dim;
+    const Tile& tile = metadata.tile;
+    const uint32_t face_r_dim = tile.get_face_shape()[0];
+    const uint32_t num_faces = tile.get_num_faces();
+    const uint32_t num_faces_c_dim = std::min(tile.get_width() / constants::FACE_WIDTH, num_faces);
+    const uint32_t num_faces_r_dim = num_faces / num_faces_c_dim;
     os << fmt::format(
         "::binding_details::LLKMetadata{{.format = {}u, .face_r_dim = {}u, .face_c_dim = {}u, "
         ".num_faces_r_dim = {}u, .num_faces_c_dim = {}u}}",
         host_data_format_to_hw(metadata.format),
-        face.face_r_dim,
+        face_r_dim,
         constants::FACE_WIDTH,
         num_faces_r_dim,
         num_faces_c_dim);
