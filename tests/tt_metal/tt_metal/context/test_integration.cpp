@@ -25,6 +25,7 @@
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/sub_device.hpp>
 #include "impl/program/program_impl.hpp"
 
 #include <umd/device/types/arch.hpp>
@@ -516,6 +517,65 @@ TEST(MetalContextIntegrationTest, MockDeviceOnly) {
 
     // Assert that the MetalContext instance was cleaned up after MeshDevice close
     ASSERT_FALSE(MetalContext::instance_exists(context_id));
+}
+
+// SubDevice construction must not reach any MetalContext; it is validated against the device it is applied to.
+TEST(MetalContextIntegrationTest, MockDeviceSubDevice) {
+    MetalEnv mock_env{MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1).value())};
+
+    const SubDevice sub_device(std::array{CoreRangeSet(CoreRange({0, 0}, {1, 1}))});
+    EXPECT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
+
+    std::array<CoreRangeSet, NumHalProgrammableCoreTypes> unsupported_cores{};
+    unsupported_cores[static_cast<uint32_t>(HalProgrammableCoreType::TENSIX)] = CoreRangeSet(CoreRange({2, 2}, {2, 2}));
+    unsupported_cores[static_cast<uint32_t>(HalProgrammableCoreType::DISPATCH)] =
+        CoreRangeSet(CoreRange({0, 0}, {0, 0}));
+    const SubDevice unsupported_sub_device(unsupported_cores);
+
+    auto mesh_device = mock_env.create_mesh_device(distributed::MeshDeviceConfig(distributed::MeshShape(1)));
+    const auto manager_id = mesh_device->create_sub_device_manager({sub_device}, /*local_l1_size=*/0);
+    mesh_device->remove_sub_device_manager(manager_id);
+
+    // Blackhole never registers the DISPATCH core type.
+    EXPECT_THROW(mesh_device->create_sub_device_manager({unsupported_sub_device}, 0), std::runtime_error);
+
+    EXPECT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
+}
+
+// Quasar's HAL registers DISPATCH but leaves the lower DRAM slot as an unregistered placeholder.
+TEST(MetalContextIntegrationTest, MockQuasarSubDeviceRejectsPlaceholderCoreType) {
+    MetalEnv mock_env{MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::QUASAR, 1).value())};
+    auto mesh_device = mock_env.create_mesh_device(distributed::MeshDeviceConfig(distributed::MeshShape(1)));
+
+    const SubDevice tensix_sub_device(std::array{CoreRangeSet(CoreRange({0, 0}, {0, 0}))});
+    const auto manager_id = mesh_device->create_sub_device_manager({tensix_sub_device}, /*local_l1_size=*/0);
+    mesh_device->remove_sub_device_manager(manager_id);
+
+    std::array<CoreRangeSet, NumHalProgrammableCoreTypes> dram_cores{};
+    dram_cores[static_cast<uint32_t>(HalProgrammableCoreType::TENSIX)] = CoreRangeSet(CoreRange({0, 0}, {0, 0}));
+    dram_cores[static_cast<uint32_t>(HalProgrammableCoreType::DRAM)] = CoreRangeSet(CoreRange({0, 0}, {0, 0}));
+    const SubDevice dram_sub_device(dram_cores);
+    EXPECT_THROW(mesh_device->create_sub_device_manager({dram_sub_device}, 0), std::runtime_error);
+}
+
+TEST(MetalContextIntegrationTest, MockDeviceCreateUnitMeshes) {
+    MetalEnv mock_env{MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2).value())};
+
+    const std::vector<int> device_ids{0, 1};
+    auto meshes = mock_env.create_unit_meshes(device_ids);
+    ASSERT_EQ(meshes.size(), device_ids.size());
+    for (ChipId device_id : device_ids) {
+        ASSERT_TRUE(meshes.contains(device_id));
+        EXPECT_EQ(meshes.at(device_id)->num_devices(), 1u);
+    }
+    EXPECT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
+
+    // The parent mesh owns the context. Its devices must be closed before the context is destroyed; a failure
+    // there is caught in ~ScopedDevices and only logged.
+    testing::internal::CaptureStdout();
+    meshes.clear();
+    const std::string teardown_log = testing::internal::GetCapturedStdout();
+    EXPECT_EQ(teardown_log.find("Exception during device close"), std::string::npos) << teardown_log;
 }
 
 // A Metal 2.0 program built from a mock MeshDevice can be enqueued on that same mesh.

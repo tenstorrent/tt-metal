@@ -1127,6 +1127,9 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     // uplifted to the MetalEnv level.
     // https://github.com/tenstorrent/tt-metal/issues/21500
     if (destroy_metal_context_instance_on_close_) {
+        // The devices must be closed while their context still exists. An uninitialized mesh (the parent built by
+        // create_unit_meshes) skips the reset above.
+        scoped_devices_.reset();
         MetalContext::destroy_instance(false, context_id_);
         destroy_metal_context_instance_on_close_ = false;
     }
@@ -1666,9 +1669,8 @@ bool MeshDeviceImpl::initialize_impl(
 
     // For MeshDevice, we support uniform sub-devices across all devices and we do not support ethernet subdevices.
     const auto& compute_grid_size = this->compute_with_storage_grid_size();
-    auto sub_devices = {SubDevice(SubDeviceImpl(
-        &metal_env(),
-        std::array{CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}))}))};
+    auto sub_devices = {
+        SubDevice(std::array{CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}))})};
 
     // Resource shared across mesh command queues.
     auto cq_shared_state = std::make_shared<CQSharedState>();
