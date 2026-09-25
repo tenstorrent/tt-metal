@@ -163,12 +163,22 @@ def worker_grid(full, grid):
 
 def variant_kwargs(case, variant, full):
     grid = worker_grid(full, case.grid)
-    if variant.startswith("legacy"):
+    if variant.startswith("legacy") or variant == "FAST_legacy_chunks":
         q, k = case.legacy[:2]
         if len(case.legacy) > 2:
             grid = (case.legacy[2], full.y)
+    if variant == "FAST_legacy_chunks":
+        # Decomposition: FAST pinned to the legacy tuned chunks and grid (isolates op-selected blocking).
+        config = ttnn.SDPAProgramConfig(compute_with_storage_grid_size=grid, q_chunk_size=q, k_chunk_size=k)
+        return {"program_config": config, "precision": ttnn.SDPAPrecision.FAST, "inputs_prepared": False}
+    if variant.startswith("legacy"):
+        # Decomposition: legacy_approx is the legacy config with the approximate exponential
+        # (isolates exact vs approximate exp from the kernel path and blocking).
         config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=grid, q_chunk_size=q, k_chunk_size=k, exp_approx_mode=False
+            compute_with_storage_grid_size=grid,
+            q_chunk_size=q,
+            k_chunk_size=k,
+            exp_approx_mode=variant == "legacy_approx",
         )
         fidelity = ttnn.MathFidelity.LoFi if variant == "legacy_lofi" else ttnn.MathFidelity.HiFi2
         return {"program_config": config, "compute_kernel_config": legacy_compute_config(fidelity)}
