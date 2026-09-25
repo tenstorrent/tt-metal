@@ -187,3 +187,15 @@ Drive this ledger with
   The owner chose chat-wrapped input: `text.chat_template: true` puts the book in one user turn (the template
   supplies BOS) and truncates inside the turn. Worth a check at intake for any "-it" checkpoint: the goldens record
   `text_top1_acc`, and a value far below ERNIE's is the signal.
+
+## F14 (2026-09-25): canonical prefill prompt
+- Owner's requirement: the framework needs one deterministic input that prefill is tested on. Before this, every
+  script tokenized the text from the spec itself, so a spec edit silently changed every step's input.
+- `reference/prompt.py`: R.1 builds `$ART/<model>/input/prompt.json` once (token ids, wrap mode, source sha256, the
+  chat prefix, sha256 of the ids) and refuses to overwrite it with a different prompt. `text_tokens` now reads it,
+  so HF parity, the chunked check, every golden, the ladder and the contract prefill prefixes of the same tokens.
+  Goldens refuse to run without it and record `prompt_sha256`; frozen tests pin the golden manifest, hence the prompt.
+- Wrap modes: `raw` (BOS + text, base models; ERNIE's input), `user_turn`, `model_turn` (chat template with a short
+  request, then the text as the model's reply). Measured on Gemma-4 26B-A4B-it, top-1 next-token over 2048 tokens:
+  raw 18%, user_turn 13%, model_turn 67%. Instruction-tuned models are trained on model turns only, so
+  `model_turn` is the choice for `-it` checkpoints; F13's user-turn wrapping was the wrong one.
