@@ -411,7 +411,16 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     // RoutingPlaneConnectionManager (not array-indexable) and is excluded; this is_2d_fabric gate mirrors
     // the kernel's FABRIC_2D #ifdef (same INVARIANT as the is_2d_fabric derivation further below).
     const bool is_1d_fabric = !tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
-    const bool sparse_has_fabric = (operation_attributes.num_links > 0);
+    // A dispatch group of ONE device (e.g. a 1xN mesh dispatching along its size-1 rows) never sends
+    // over the fabric: every routed expert is either local or absent (-1) from the group. Build the
+    // kernels' existing no-fabric variant (no DEST_CHIP_ID) and skip neighbour/connection setup, which
+    // has no neighbours to find on a 1-device axis.
+    const uint32_t dispatch_axis_devices =
+        operation_attributes.axis.has_value()
+            ? (operation_attributes.axis.value() == 0 ? mesh_view.num_rows() : mesh_view.num_cols())
+            : mesh_view.num_devices();
+    const bool use_fabric = operation_attributes.num_links > 0 && dispatch_axis_devices > 1;
+    const bool sparse_has_fabric = use_fabric;
     // fp8_scaled_input is supported: it extends metadata to 3 routing fields + one word per
     // per-128-block scale, and because a group is one token fanned out to several chips, that scale tail
     // is a per-token constant. The grouped producer stages the page (tail included) once per slot and
@@ -553,7 +562,9 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     }
 
     const auto [neighbors, directions] =
-        ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, operation_attributes.axis);
+        use_fabric
+            ? ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, operation_attributes.axis)
+            : std::pair<std::vector<ttnn::MeshCoordinate>, std::array<bool, 4>>{{}, {false, false, false, false}};
 
     // FABRIC_2D uses the portable RoutingPlaneConnectionManager (one connection per required physical
     // first-hop direction) so dispatch-axis traffic forwards multi-hop; FABRIC_1D keeps the legacy
@@ -679,7 +690,7 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     tt::tt_metal::TensorAccessorArgs(dispatch_table_tensor.buffer()).append_to(compile_time_args);
 
     std::map<std::string, std::string> fabric_defines;
-    if (operation_attributes.num_links > 0) {
+    if (use_fabric) {
         fabric_defines["DEST_CHIP_ID"] = ccl::common::stringify(dest_chip_id);
         fabric_defines["DEST_MESH_ID"] = ccl::common::stringify(dest_mesh_id);
         fabric_defines["DIRECTIONS"] = ccl::common::stringify(directions);
@@ -1035,7 +1046,7 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
             writer_runtime_args.push_back(data_avail_semaphore_ids[s]);
         }
 
-        if (operation_attributes.num_links > 0) {
+        if (use_fabric) {
             // Fabric nodes used to open sender connections. The 1D fabric path follows the two
             // logical dispatch-axis neighbors. Under Fabric2D, however, routing to every peer in a
             // logical dispatch group may use additional physical first-hop directions when that group
