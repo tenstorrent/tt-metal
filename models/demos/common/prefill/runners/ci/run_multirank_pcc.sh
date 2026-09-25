@@ -8,9 +8,16 @@ CONFIG="${2:-sc4}"
 
 : "${TT_METAL_HOME:?TT_METAL_HOME must be set}"
 : "${PREFILL_SUMMARIES:?PREFILL_SUMMARIES must be set by the blaze impl (shared /ci scratch for the KV table)}"
-export PYTHONPATH="${TT_METAL_HOME}"
+export PYTHONPATH="${TT_METAL_HOME}${PYTHONPATH:+:${PYTHONPATH}}"
+printf -v CHILD_PYTHONPATH '%q' "${PYTHONPATH}"
 MANIFEST_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/tt/runners/manifests"
 MGD_DIR="${TT_METAL_HOME}/models/demos/common/prefill/runners/topology_configuration/ci"
+
+manifest_env() {
+  python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["env"][sys.argv[2]])' "${MANIFEST}" "$1"
+}
+
+MGD="${MGD_DIR}/${CONFIG}_mgd.textproto"
 
 CHUNK_SIZE=5120
 GOLDEN_LEN=56320
@@ -18,10 +25,13 @@ WARMUP_CHUNKS=10
 PCC_THRESHOLD=0.85
 RUNNER_ENV=""
 PRODUCER_ENV=""
+PRODUCER_USERS="${PREFILL_PRODUCER_NUM_USERS:-1}"
+TCP_INTERFACE="${PREFILL_TCP_INTERFACE:-ens5f0np0}"
 # sc1 runs a single galaxy, so both of these exist to shrink the sc4 model down to what one fits.
 # Defaults keep every model that does fit unchanged: full 256k context, full manifest depth.
 SC1_MAX_SEQ_LEN=256000
 SC1_NUM_LAYERS=""
+SC1_NUM_USERS=1
 
 case "${CONFIG}" in
   sc1|sc4) ;;
@@ -32,6 +42,9 @@ case "${CONFIG}" in
 esac
 
 case "${MODEL}" in
+  llama31)
+    source "${TT_METAL_HOME}/models/demos/llama_3p1_8b_d_p/scripts/ci/runner_config.sh"
+    ;;
   kimi27)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/prefill_runner_kv}"
     MANIFEST="${MANIFEST_DIR}/kimi27.json"
@@ -64,12 +77,8 @@ case "${MODEL}" in
     ;;
 esac
 
-MGD="${MGD_DIR}/${CONFIG}_mgd.textproto"
 [ -f "${MGD}" ] || { echo "no mesh-graph descriptor for ${CONFIG} at ${MGD}" >&2; exit 2; }
 
-manifest_env() {
-  python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["env"][sys.argv[2]])' "${MANIFEST}" "$1"
-}
 MAX_SEQ_LEN=$(manifest_env PREFILL_MAX_SEQ_LEN)
 NUM_USERS=$(manifest_env PREFILL_NUM_USERS)
 
@@ -78,7 +87,7 @@ SC4_MAX_SEQ_LEN=${MAX_SEQ_LEN}
 NUM_LAYERS_ENV=""
 if [ "${CONFIG}" = sc1 ]; then
   MAX_SEQ_LEN=${SC1_MAX_SEQ_LEN}
-  NUM_USERS=1
+  NUM_USERS=${SC1_NUM_USERS}
   RUNNER_OVERRIDES="export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; export PREFILL_NUM_USERS=${NUM_USERS};"
   # Exported to BOTH runner and producer, and only when the model asked for it: the manifest's depth
   # is applied with setdefault, so an explicit export is what shrinks it.
@@ -94,7 +103,8 @@ REAL_CHUNKS=$((MAX_SEQ_LEN / CHUNK_SIZE))
 
 SC1_CHUNKS=$((SC1_MAX_SEQ_LEN / CHUNK_SIZE))
 SC4_CHUNKS=$((SC4_MAX_SEQ_LEN / CHUNK_SIZE))
-PROBE_CHUNKS="0,$((50000 / CHUNK_SIZE)),$((SC1_CHUNKS / 2 - 1)),$((SC1_CHUNKS - 1)),$((SC4_CHUNKS / 2 - 1)),$((SC4_CHUNKS - 1))"
+PROBE_CHUNKS="${PROBE_CHUNKS:-0,$((50000 / CHUNK_SIZE)),$((SC1_CHUNKS / 2 - 1)),$((SC1_CHUNKS - 1)),$((SC4_CHUNKS / 2 - 1)),$((SC4_CHUNKS - 1))}"
+
 
 mkdir -p "${PIPELINE_DIR}"
 TTRUN_DIR="${TTRUN_DIR:-/etc/ttop}"
@@ -154,12 +164,13 @@ cd "${TTRUN_CWD}"
 python3 "${TTRUN_PY}" \
   --skip-executable-check \
   --force-rediscovery \
-  --tcp-interface ens5f0np0 \
+  --tcp-interface "${TCP_INTERFACE}" \
   --mesh-graph-descriptor "${MGD}" \
   --hosts "${RESOLVED_HOSTS}" \
   --mpi-args "--bind-to none --tag-output --allow-run-as-root --wdir ${TT_METAL_HOME} --output-filename ${RANKLOGS}/runner -x PATH -x LD_LIBRARY_PATH" \
   bash -lc "cd '${TT_METAL_HOME}'; \
-    export PYTHONPATH='${TT_METAL_HOME}'; \
+    export PYTHONPATH=${CHILD_PYTHONPATH}; \
+    export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0; \
     export PYTHONUNBUFFERED=1; \
     export PREFILL_MANIFEST='${MANIFEST}'; \
     export PREFILL_SYNC_PER_CHUNK=1; \
@@ -201,13 +212,14 @@ set +e
 "${MPIRUN}" \
   --host "${HOSTS}" --map-by slot --bind-to none --tag-output --allow-run-as-root \
   --output-filename "${RANKLOGS}/producer" \
-  --mca btl self,tcp --mca btl_tcp_if_include ens5f0np0 \
+  --mca btl self,tcp --mca btl_tcp_if_include "${TCP_INTERFACE}" \
   -x PATH -x LD_LIBRARY_PATH \
   bash -lc "cd '${TT_METAL_HOME}'; \
-    export PYTHONPATH='${TT_METAL_HOME}'; \
+    export PYTHONPATH=${CHILD_PYTHONPATH}; \
+    export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0; \
     export PYTHONUNBUFFERED=1; \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
-    export PREFILL_NUM_USERS=1; \
+    export PREFILL_NUM_USERS=${PRODUCER_USERS}; \
     export PREFILL_PRODUCER_CHUNKS=${REAL_CHUNKS}; \
     export PREFILL_PRODUCER_WARMUP_CHUNKS=${WARMUP_CHUNKS}; \
     export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN}; \
@@ -230,7 +242,7 @@ fi
 
 EXPECTED_RANKS=$(printf '%s' "${HOSTS}" | tr ',' '\n' | grep -c .)
 PCC_GATE_RC=0
-python3 - "${PCC_DIR}" "${EXPECTED_RANKS}" <<'PY' || PCC_GATE_RC=$?
+python3 - "${PCC_DIR}" "${EXPECTED_RANKS}" "${PRODUCER_USERS}" <<'PY' || PCC_GATE_RC=$?
 import glob, json, os, sys
 
 pcc_dir, expected = sys.argv[1], int(sys.argv[2])
@@ -247,9 +259,10 @@ for f in files:
         print(f"PCC GATE FAIL: {name} unreadable: {e}", file=sys.stderr)
         bad += 1
         continue
-    status = "ok" if v.get("ok") else "FAIL"
+    valid = bool(v.get("ok")) and v.get("slots_checked") == int(sys.argv[3])
+    status = "ok" if valid else "FAIL"
     print(f"  {name}: {status} min_pcc={v.get('min_pcc')} threshold={v.get('threshold')} per_cache={v.get('per_cache')}")
-    if not v.get("ok"):
+    if not valid:
         bad += 1
 if bad:
     print(f"PCC GATE FAIL: {bad}/{len(files)} rank(s) below threshold or unvalidated", file=sys.stderr)

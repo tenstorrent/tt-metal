@@ -10,7 +10,7 @@ Per host, once:
 - `bash build_metal.sh` and `bash create_venv.sh` in that clone.
 - The model's TTNN weight cache reachable at the adapter's default path, or
   `PREFILL_TTNN_CACHE` pointed elsewhere:
-  - kimi27: `/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill`
+  - kimi27: `/mnt/weka/model-cache/scratch/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill`
   - glm52: `/mnt/models/deepseek-prefill-cache/glm52_ttnn_cache`
 - Passwordless ssh between the hosts, both directions.
 

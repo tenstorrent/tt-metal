@@ -5,6 +5,7 @@
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.constraints import get_valid_math_fidelities
 from helpers.data_format_inference import data_formats
 from helpers.device import BootMode
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -133,22 +134,6 @@ class IndependentMatmulStimuliConfig(StimuliConfig):
                 use_srcs=self._operand_use_srcs(operand),
                 twos_complement=self.twos_complement,
             )
-
-
-def matmul_math_fidelities(format, *, is_perf=False):
-    # Int8 has no mantissa phases. Float16_b's 7-bit mantissa occupies the high 8
-    # bits of the TF32 source, so the HiFi low-3 phases add nothing. MX is already
-    # full precision at LoFi, so perf skips the extra HiFi phases.
-    if format.input_format in (DataFormat.Int8, DataFormat.Float16_b) or (
-        is_perf and format.input_format.is_mx_format()
-    ):
-        return [MathFidelity.LoFi]
-    return [
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ]
 
 
 def matmul_dest_sync_modes(*, is_perf=False):
@@ -288,7 +273,7 @@ _ARCH = get_chip_architecture()
 @parametrize(
     input_tile_dimensions=runtime(FULL_MATMUL_SHAPES),
     format=MATMUL_FORMAT,
-    math_fidelity=lambda format: matmul_math_fidelities(format),
+    math_fidelity=lambda format: get_valid_math_fidelities(format),
     dest_sync_mode=lambda: matmul_dest_sync_modes(),
     dest_acc=matmul_dest_acc_modes,
     matmul_tile_dims=runtime(
