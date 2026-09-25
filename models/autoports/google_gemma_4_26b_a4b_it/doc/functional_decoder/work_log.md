@@ -286,3 +286,14 @@ The mandatory local packet is
 created from the supplied template with exact identifiers. It contains compact
 measurements/references only. Raw captures, weights and full tables stay local;
 compact evidence and replay/stacked CSV summaries are checkpointed.
+
+Local stage checkpoint (after independent clean-pass):
+
+| Repository | Branch | Commit | Validation |
+| --- | --- | --- | --- |
+| `/workspace/tt-metal` | `gemma-4-26b-a4b-it` | `de9abb0d8c3c3dcc0c8ad04a5e66896b190cbb71` | Reviewed source and compact evidence; pre-commit passed before and during commit |
+
+The subsequent documentation-only commit records this checkpoint SHA. Its own
+SHA is recorded in the external telemetry packet so the committed work log does
+not require a self-referential hash. Both commits are local; nothing was pushed.
+The working tree was clean immediately after the stage checkpoint.
