@@ -7,12 +7,12 @@
 #if __riscv_xtttensixqsr || (__clang__ && defined(COMPILE_FOR_TRISC) && defined(ARCH_QUASAR))
 #define TTI_INSN(ENCODING)    void(({ __asm__ __volatile__(".ttinsn %0" : : "n"((ENCODING))); }))
 #define TT_INSN(ENCODING)     void(::ckernel::instrn_buffer[0] = (ENCODING))
-#else
-#define TTI_INSN(ENCODING) void((void(ENCODING), ({ __asm__ __volatile__(".error \"TTI_INSN in non-tensix code\""); })))
-#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_BRISC) && defined(LLK_TEST)
-// The llk test infra uses brisc to poke insns, keep that working
+#elif defined(ARCH_QUASAR) && defined(COMPILE_FOR_BRISC) && defined(LLK_TEST)
+// The llk test infra uses brisc to poke insns, make that work.  so icky.
+#define TTI_INSN(ENCODING) void(::ckernel::instrn_buffer[0] = (ENCODING))
 #define TT_INSN(ENCODING) void(::ckernel::instrn_buffer[0] = (ENCODING))
 #else
+#define TTI_INSN(ENCODING) void((void(ENCODING), ({ __asm__ __volatile__(".error \"TTI_INSN in non-tensix code\""); })))
 #define TT_INSN(ENCODING)  void((void(ENCODING), ({ __asm__ __volatile__(".error \"TT_INSN in non-tensix code\""); })))
 #endif
 #endif
