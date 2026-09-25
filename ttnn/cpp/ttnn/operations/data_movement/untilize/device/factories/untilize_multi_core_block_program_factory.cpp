@@ -66,8 +66,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreBlockProgramFactory::c
 
     tt::DataFormat input_data_format = datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_data_format);
-    tt::DataFormat output_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_data_format);
+    uint32_t output_single_tile_size = tt::tt_metal::tile_size(output.dtype());
 
     const auto& input_shape = a.padded_shape();
     const uint32_t a_tile_height = a.tensor_spec().tile().get_height();
@@ -146,7 +145,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreBlockProgramFactory::c
             .unique_id = out_dfb_of(*set),
             .entry_size = output_single_tile_size,
             .num_entries = set->block_tiles,
-            .data_format_metadata = output_data_format,
+            .data_format_metadata = output.dtype(),
         });
     }
 

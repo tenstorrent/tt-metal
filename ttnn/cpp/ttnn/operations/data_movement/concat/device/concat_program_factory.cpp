@@ -55,7 +55,6 @@ ttnn::device_operation::ProgramArtifacts ConcatProgramFactory::create_program_ar
 
     const auto& device = output.device();
 
-    const tt::DataFormat dfb_data_format = datatype_to_dataformat_converter(output.dtype());
     const bool rm_layout = output.layout() == Layout::ROW_MAJOR;
     constexpr bool rm_orientation = false;
 
@@ -69,7 +68,7 @@ ttnn::device_operation::ProgramArtifacts ConcatProgramFactory::create_program_ar
         single_page_size = tt::align(output.element_size() * output.padded_shape()[-1], common_align_len);
     } else {
         num_output_pages = output.physical_volume() / TILE_HW;
-        single_page_size = tt::tile_size(dfb_data_format);
+        single_page_size = tt::tt_metal::tile_size(output.dtype());
     }
 
     CoreRangeSet all_cores;
@@ -155,7 +154,7 @@ ttnn::device_operation::ProgramArtifacts ConcatProgramFactory::create_program_ar
         .unique_id = SRC0_DFB,
         .entry_size = single_page_size,
         .num_entries = num_input_pages,
-        .data_format_metadata = dfb_data_format,
+        .data_format_metadata = output.dtype(),
     };
 
     const uint32_t num_dims = output.padded_shape().rank();

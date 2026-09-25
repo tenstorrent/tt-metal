@@ -26,10 +26,8 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedProgramFactory::c
     const Tensor& output = tensor_return_value;
     const uint32_t tile_width = operation_attributes.tile.get_width();
     const uint32_t tile_hw = operation_attributes.tile.get_tile_hw();
-    tt::DataFormat input_data_format = datatype_to_dataformat_converter(input.dtype());
-    uint32_t input_single_tile_size = operation_attributes.tile.get_tile_size(input_data_format);
-    tt::DataFormat output_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = operation_attributes.tile.get_tile_size(output_data_format);
+    uint32_t input_single_tile_size = operation_attributes.tile.get_tile_size(input.dtype());
+    uint32_t output_single_tile_size = operation_attributes.tile.get_tile_size(output.dtype());
     bool fp32_llk_acc = input.dtype() == DataType::FLOAT32 || input.dtype() == DataType::FP8_E4M3 ||
                         output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B ||
                         input.dtype() == DataType::UINT8;
@@ -57,7 +55,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedProgramFactory::c
         .unique_id = INPUT_DFB,
         .entry_size = input_single_tile_size,
         .num_entries = num_tiles_per_shard,
-        .data_format_metadata = input_data_format,
+        .data_format_metadata = input.dtype(),
         .tile_format_metadata = operation_attributes.tile,
         .borrowed_from = INPUT,
     };
@@ -70,7 +68,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedProgramFactory::c
         .unique_id = OUTPUT_DFB,
         .entry_size = output_single_tile_size,
         .num_entries = output_is_interleaved ? num_tiles_per_row : num_tiles_per_shard,
-        .data_format_metadata = output_data_format,
+        .data_format_metadata = output.dtype(),
         .tile_format_metadata = operation_attributes.tile,
     };
     if (!output_is_interleaved) {

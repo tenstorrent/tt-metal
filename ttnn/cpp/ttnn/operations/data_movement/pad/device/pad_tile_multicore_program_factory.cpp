@@ -63,7 +63,6 @@ ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_
 
     auto cores_in_order = corerange_to_cores(all_cores, num_cores, true);
 
-    tt::DataFormat dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t page_size = output.buffer()->page_size();
     uint32_t multi_buffering_size = 2;
 
@@ -71,7 +70,7 @@ ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_
         .unique_id = TILE_MC_IN0,
         .entry_size = page_size,
         .num_entries = multi_buffering_size,
-        .data_format_metadata = dfb_data_format,
+        .data_format_metadata = a.dtype(),
     };
 
     // Pad buffer: the writer fills one entry with the pad value and NoC-writes it out for every

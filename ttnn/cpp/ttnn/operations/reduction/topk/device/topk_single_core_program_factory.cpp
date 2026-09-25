@@ -36,8 +36,6 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
 
     // Data format conversions for dataflow buffer configurations
     const tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    const tt::DataFormat output_val_cb_data_format =
-        tt::tt_metal::datatype_to_dataformat_converter(value_tensor.dtype());
     // The on-device sort datapath handles 32-bit indices as UInt32. INT32 shares the same 4-byte
     // little-endian layout for the non-negative positions TopK produces, so run the compute in UInt32
     // and let the writer copy the raw tile bytes into the (INT32-typed) output buffer unchanged.
@@ -60,7 +58,7 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
 
     // Calculate tile sizes for memory allocation
     const uint32_t input_tile_size = tile_size(input_cb_data_format);
-    const uint32_t value_tile_size = tile_size(output_val_cb_data_format);
+    const uint32_t value_tile_size = tt::tt_metal::tile_size(value_tensor.dtype());
     const uint32_t index_tile_size = tile_size(output_ind_cb_data_format);
 
     // Tensor shape and dimension calculations
@@ -193,7 +191,7 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
         .unique_id = OUTPUT_VAL_DFB,
         .entry_size = value_tile_size,
         .num_entries = output_cb_tile_count,
-        .data_format_metadata = output_val_cb_data_format,
+        .data_format_metadata = value_tensor.dtype(),
     });
 
     spec.dataflow_buffers.push_back(DataflowBufferSpec{

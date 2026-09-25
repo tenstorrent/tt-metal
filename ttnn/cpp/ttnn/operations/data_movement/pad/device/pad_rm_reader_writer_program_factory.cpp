@@ -89,12 +89,11 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterProgramFactory::create
         dfb_pagesize,
         l1_budget);
     uint32_t dfb_npages = std::clamp(l1_budget / dfb_pagesize, 1u, 16u);
-    tt::DataFormat in_df = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     DataflowBufferSpec in0_dfb{
         .unique_id = RM_SC_IN0,
         .entry_size = dfb_pagesize,
         .num_entries = dfb_npages,
-        .data_format_metadata = in_df,
+        .data_format_metadata = a.dtype(),
     };
 
     uint32_t packed_pad_value;

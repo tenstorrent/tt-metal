@@ -89,10 +89,6 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
     }
     uint32_t g1_numcores = core_group_1.num_cores();
 
-    tt::DataFormat input_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-
-    tt::DataFormat weights_data_format = tt::tt_metal::datatype_to_dataformat_converter(weights.dtype());
-
     uint32_t rounded_weight_page_size = tt::align(weight_page_size, alignment);
 
     constexpr uint32_t max_l1_budget_bytes = 1024 * 1024;  // 1MB budget for embedding output staging
@@ -164,7 +160,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
         .unique_id = OUTPUT,
         .entry_size = chunk_size,
         .num_entries = out_dfb_total_size / chunk_size,
-        .data_format_metadata = weights_data_format,
+        .data_format_metadata = weights.dtype(),
     };
     if (output_sharded) {
         // The staging buffer *is* the output shard: it is built on the output tensor's own SRAM, so
@@ -184,7 +180,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
             .unique_id = INDEX_SCRATCH,
             .entry_size = block_height * index_page_size,
             .num_entries = 1,
-            .data_format_metadata = input_data_format,
+            .data_format_metadata = a.dtype(),
         });
     }
 
@@ -200,7 +196,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
                 .unique_id = WEIGHT_CACHE,
                 .entry_size = cache_page_size,
                 .num_entries = cache_entries,
-                .data_format_metadata = weights_data_format,
+                .data_format_metadata = weights.dtype(),
             });
         }
     }

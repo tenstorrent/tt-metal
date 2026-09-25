@@ -25,9 +25,8 @@ ttnn::device_operation::ProgramArtifacts SplitProgramFactory::create_program_art
 
     auto input_shape = input_tensor.padded_shape();
     IDevice* device = input_tensor.device();
-    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
 
-    uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    uint32_t single_tile_size = tt::tt_metal::tile_size(input_tensor.dtype());
 
     // Collect output buffers and validate they are all the same type / page size. This invariant is
     // what lets every per-chunk writer share one identical compile-time-arg set and one src0 DFB shape.
@@ -107,7 +106,7 @@ ttnn::device_operation::ProgramArtifacts SplitProgramFactory::create_program_art
         .unique_id = SRC0,
         .entry_size = single_tile_size,
         .num_entries = 2,
-        .data_format_metadata = cb_data_format,
+        .data_format_metadata = input_tensor.dtype(),
     };
 
     // Reader: one KernelSpec over all cores. Producer of src0; reads the single input tensor.

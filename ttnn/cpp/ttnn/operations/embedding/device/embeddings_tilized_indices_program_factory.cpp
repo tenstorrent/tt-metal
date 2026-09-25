@@ -73,10 +73,6 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsTilizedIndicesProgramFactory:
 
     uint32_t g1_numcores = core_group_1.num_cores();
 
-    tt::DataFormat input_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-
-    tt::DataFormat weights_data_format = tt::tt_metal::datatype_to_dataformat_converter(weights.dtype());
-
     uint32_t rounded_weight_page_size = tt::align(weight_page_size, alignment);
 
     // PADDED and BINARY serve some weight rows out of a locally cached copy instead of fetching them
@@ -113,7 +109,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsTilizedIndicesProgramFactory:
         .unique_id = OUTPUT,
         .entry_size = rounded_weight_page_size,
         .num_entries = 2,
-        .data_format_metadata = weights_data_format,
+        .data_format_metadata = weights.dtype(),
     });
 
     // The reader loads one full input page of indices (`input.get_aligned_page_size()`) into this scratch buffer,
@@ -123,7 +119,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsTilizedIndicesProgramFactory:
         .unique_id = INDEX_SCRATCH,
         .entry_size = index_tile_page_size,
         .num_entries = 1,
-        .data_format_metadata = input_data_format,
+        .data_format_metadata = a.dtype(),
     });
 
     if (use_local_cache) {
@@ -133,7 +129,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsTilizedIndicesProgramFactory:
             .unique_id = WEIGHT_CACHE,
             .entry_size = cache_page_size,
             .num_entries = (embeddings_type == EmbeddingsType::PADDED) ? 1u : 2u,
-            .data_format_metadata = weights_data_format,
+            .data_format_metadata = weights.dtype(),
         });
     }
 

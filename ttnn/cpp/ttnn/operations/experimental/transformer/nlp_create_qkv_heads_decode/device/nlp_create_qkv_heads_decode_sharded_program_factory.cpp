@@ -52,9 +52,7 @@ ttnn::device_operation::ProgramArtifacts NLPCreateQKVHeadsDecodeShardedProgramFa
 
     IDevice* device = input_tensor.device();
 
-    tt::DataFormat data_format = datatype_to_dataformat_converter(input_tensor.dtype());
-
-    uint32_t single_tile_size = tt::tile_size(data_format);
+    uint32_t single_tile_size = tt::tt_metal::tile_size(input_tensor.dtype());
 
     uint32_t head_tiles = head_dim / TILE_WIDTH;
     uint32_t head_size = head_tiles * single_tile_size;
@@ -81,15 +79,14 @@ ttnn::device_operation::ProgramArtifacts NLPCreateQKVHeadsDecodeShardedProgramFa
     // the CONSUMER endpoint (the validator requires >=1 consumer per node, and once a kernel binds
     // both roles the producer and consumer kernel sets must be equal).
     if (batch_offset.has_value()) {
-        tt::DataFormat batch_offset_data_format = datatype_to_dataformat_converter(batch_offset.value().dtype());
-        uint32_t single_batch_offset_tile_size = tt::tile_size(batch_offset_data_format);
+        uint32_t single_batch_offset_tile_size = tt::tt_metal::tile_size(batch_offset.value().dtype());
         batch_offset_index_stick_size = batch_offset.value().buffer()->aligned_page_size();
 
         dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = BATCH_OFFSET_DFB,
             .entry_size = 1,
             .num_entries = single_batch_offset_tile_size,
-            .data_format_metadata = batch_offset_data_format,
+            .data_format_metadata = batch_offset.value().dtype(),
             .advanced_options = {.allow_instance_multi_binding = true},
         });
     }
@@ -98,7 +95,7 @@ ttnn::device_operation::ProgramArtifacts NLPCreateQKVHeadsDecodeShardedProgramFa
         .unique_id = Q_OUT,
         .entry_size = single_tile_size,
         .num_entries = q_num_tiles,
-        .data_format_metadata = data_format,
+        .data_format_metadata = input_tensor.dtype(),
         .borrowed_from = Q_OUT_TENSOR,
     });
 
@@ -106,7 +103,7 @@ ttnn::device_operation::ProgramArtifacts NLPCreateQKVHeadsDecodeShardedProgramFa
         .unique_id = K_OUT,
         .entry_size = single_tile_size,
         .num_entries = k_num_tiles,
-        .data_format_metadata = data_format,
+        .data_format_metadata = input_tensor.dtype(),
         .borrowed_from = K_OUT_TENSOR,
     });
 
@@ -117,7 +114,7 @@ ttnn::device_operation::ProgramArtifacts NLPCreateQKVHeadsDecodeShardedProgramFa
         .unique_id = V_OUT,
         .entry_size = single_tile_size,
         .num_entries = v_num_tiles,
-        .data_format_metadata = data_format,
+        .data_format_metadata = input_tensor.dtype(),
         .borrowed_from = V_OUT_TENSOR,
     });
 

@@ -42,8 +42,6 @@ ttnn::device_operation::ProgramArtifacts Fold::MultiCore::create_program_artifac
     auto all_cores = input.shard_spec()->grid;
     auto shard_shape = input.shard_spec()->shape;
 
-    tt::DataFormat dfb_data_format = datatype_to_dataformat_converter(input.dtype());
-
     uint32_t pixel_size = shard_shape[1] * input.element_size();
     uint32_t num_pixels = shard_shape[0];
     uint32_t num_dst_pixels = num_pixels / (stride_h * stride_w);
@@ -64,7 +62,7 @@ ttnn::device_operation::ProgramArtifacts Fold::MultiCore::create_program_artifac
         .unique_id = SRC0,
         .entry_size = aligned_pixel_size,
         .num_entries = num_pixels,
-        .data_format_metadata = dfb_data_format,
+        .data_format_metadata = input.dtype(),
         .borrowed_from = INPUT,
     };
 
@@ -73,7 +71,7 @@ ttnn::device_operation::ProgramArtifacts Fold::MultiCore::create_program_artifac
         .unique_id = DST0,
         .entry_size = aligned_dst_pixel_size,
         .num_entries = num_dst_pixels,
-        .data_format_metadata = dfb_data_format,
+        .data_format_metadata = input.dtype(),
         .borrowed_from = OUTPUT,
     };
 

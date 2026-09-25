@@ -55,9 +55,6 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreInterleavedProgramFact
 
     const bool is_tiled_layout = (input.layout() == Layout::TILE);
 
-    const tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(input.dtype());
-    const tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-
     const auto& output_shape = output.padded_shape();
     IDevice* const device = output.device();
 
@@ -73,8 +70,8 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreInterleavedProgramFact
 
     if (is_tiled_layout) {
         // Tiled layout specific calculations
-        input_unit_size = tt::tile_size(input_cb_data_format);
-        output_unit_size = tt::tile_size(output_cb_data_format);
+        input_unit_size = tt::tt_metal::tile_size(input.dtype());
+        output_unit_size = tt::tt_metal::tile_size(output.dtype());
         aligned_input_unit_size = input_unit_size;
 
         const std::uint32_t input_tensor_width = input.padded_shape()[-1];
@@ -121,7 +118,7 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreInterleavedProgramFact
         .unique_id = SRC0,
         .entry_size = aligned_input_unit_size,
         .num_entries = num_pages_in_input_cb,
-        .data_format_metadata = input_cb_data_format,
+        .data_format_metadata = input.dtype(),
     };
 
     // On the row-major path, the writer consumes directly from src0 (no separate output DFB /
@@ -136,7 +133,7 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreInterleavedProgramFact
             .unique_id = OUT,
             .entry_size = output_unit_size,
             .num_entries = num_pages_in_output_cb,
-            .data_format_metadata = output_cb_data_format,
+            .data_format_metadata = output.dtype(),
         };
     }
 

@@ -49,13 +49,9 @@ ttnn::device_operation::ProgramArtifacts BcastMultiCoreHProgramFactory::create_p
 
     IDevice* device = a.device();
 
-    const tt::DataFormat src0_cb_data_format = datatype_to_dataformat_converter(a.dtype());
-    const tt::DataFormat src1_cb_data_format = datatype_to_dataformat_converter(b.dtype());
-    const tt::DataFormat dst_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-
-    const std::uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
-    const std::uint32_t src1_single_tile_size = tt::tile_size(src1_cb_data_format);
-    const std::uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
+    const std::uint32_t src0_single_tile_size = tt::tt_metal::tile_size(a.dtype());
+    const std::uint32_t src1_single_tile_size = tt::tt_metal::tile_size(b.dtype());
+    const std::uint32_t dst_single_tile_size = tt::tt_metal::tile_size(output.dtype());
 
     const CoreCoord compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const std::uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -90,19 +86,19 @@ ttnn::device_operation::ProgramArtifacts BcastMultiCoreHProgramFactory::create_p
         .unique_id = IN0,
         .entry_size = src0_single_tile_size,
         .num_entries = num_input_tiles,
-        .data_format_metadata = src0_cb_data_format,
+        .data_format_metadata = a.dtype(),
     };
     DataflowBufferSpec in1_dfb{
         .unique_id = IN1,
         .entry_size = src1_single_tile_size,
         .num_entries = num_input_tiles,
-        .data_format_metadata = src1_cb_data_format,
+        .data_format_metadata = b.dtype(),
     };
     DataflowBufferSpec out_dfb{
         .unique_id = OUT,
         .entry_size = dst_single_tile_size,
         .num_entries = num_output_tiles,
-        .data_format_metadata = dst_cb_data_format,
+        .data_format_metadata = output.dtype(),
     };
 
     // ---- Tensor parameters ----

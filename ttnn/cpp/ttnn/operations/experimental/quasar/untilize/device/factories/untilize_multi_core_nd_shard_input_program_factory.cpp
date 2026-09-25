@@ -40,10 +40,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreNDShardInputProgramFac
     const auto& output_mesh_tensor = output.mesh_tensor();
     const auto& fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
 
-    tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    uint32_t input_single_tile_size = tt::tt_metal::tile_size(a.dtype());
+    uint32_t output_single_tile_size = tt::tt_metal::tile_size(output.dtype());
 
     uint32_t tensor_width = a.padded_shape()[-1];
     uint32_t output_tensor_width = output.padded_shape()[-1];
@@ -114,13 +112,13 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreNDShardInputProgramFac
         .unique_id = IN_DFB,
         .entry_size = input_single_tile_size,
         .num_entries = input_cb_num_tiles,
-        .data_format_metadata = input_cb_data_format,
+        .data_format_metadata = a.dtype(),
     };
     DataflowBufferSpec out_dfb{
         .unique_id = OUT_DFB,
         .entry_size = output_single_tile_size,
         .num_entries = output_cb_num_tiles,
-        .data_format_metadata = output_cb_data_format,
+        .data_format_metadata = output.dtype(),
     };
 
     TensorParameter input_param{.unique_id = INPUT, .spec = a.tensor_spec()};

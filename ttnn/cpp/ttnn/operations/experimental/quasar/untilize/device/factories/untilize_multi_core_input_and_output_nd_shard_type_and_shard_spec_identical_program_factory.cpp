@@ -37,10 +37,8 @@ UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory::c
     const auto& output_mesh_tensor = output.mesh_tensor();
     const auto& fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
 
-    tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    uint32_t input_single_tile_size = tt::tt_metal::tile_size(a.dtype());
+    uint32_t output_single_tile_size = tt::tt_metal::tile_size(output.dtype());
 
     const auto& tile_shape = a.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
@@ -75,14 +73,14 @@ UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory::c
         .unique_id = IN_DFB,
         .entry_size = input_single_tile_size,
         .num_entries = num_tiles_per_shard * num_shards_per_core,
-        .data_format_metadata = input_cb_data_format,
+        .data_format_metadata = a.dtype(),
     };
     in_dfb.borrowed_from = INPUT;
     DataflowBufferSpec out_dfb{
         .unique_id = OUT_DFB,
         .entry_size = output_single_tile_size,
         .num_entries = num_tiles_per_shard * num_shards_per_core,
-        .data_format_metadata = output_cb_data_format,
+        .data_format_metadata = output.dtype(),
     };
     out_dfb.borrowed_from = OUTPUT;
 

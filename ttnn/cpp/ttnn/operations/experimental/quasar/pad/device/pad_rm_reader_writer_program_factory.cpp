@@ -103,12 +103,11 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterProgramFactory::create
     const uint32_t cb_npages = 16;  // multibuffering
     const uint32_t cb_pagesize =
         tt::round_up(padded_row_size_nbytes, std::max<uint32_t>(a.buffer()->alignment(), tt::constants::TILE_WIDTH));
-    const tt::DataFormat in_df = datatype_to_dataformat_converter(a.dtype());
     DataflowBufferSpec cb_in0_spec{
         .unique_id = CB_IN0,
         .entry_size = cb_pagesize,
         .num_entries = cb_npages,
-        .data_format_metadata = in_df,
+        .data_format_metadata = a.dtype(),
     };
 
     // ------------------------------------------------------------------------

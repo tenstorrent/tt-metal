@@ -270,9 +270,6 @@ ttnn::device_operation::ProgramArtifacts SliceRmShardedProgramFactory::create_pr
     log_debug(tt::LogOp, "all_cores_unpadded: {}", all_cores_unpadded);
     log_debug(tt::LogOp, "num_cores_unpadded: {}", num_cores_unpadded);
 
-    tt::DataFormat dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    tt::DataFormat dst_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-
     TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
 
     // Real per-row L1 stride is aligned_page_size(), not the compact payload (differs when W·E % 16 != 0).
@@ -293,14 +290,14 @@ ttnn::device_operation::ProgramArtifacts SliceRmShardedProgramFactory::create_pr
         .unique_id = SHARDED_IN,
         .entry_size = src_stride_bytes,
         .num_entries = shard_height_padded,
-        .data_format_metadata = dfb_data_format,
+        .data_format_metadata = input.dtype(),
         .borrowed_from = INPUT,
     };
     DataflowBufferSpec dfb_out{
         .unique_id = SHARDED_OUT,
         .entry_size = dst_stride_bytes,
         .num_entries = shard_height_unpadded,
-        .data_format_metadata = dst_dfb_data_format,
+        .data_format_metadata = output.dtype(),
         .borrowed_from = OUTPUT,
     };
 

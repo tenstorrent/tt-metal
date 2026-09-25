@@ -337,8 +337,6 @@ ttnn::device_operation::ProgramArtifacts SliceRmProgramFactory::create_program_a
     ttnn::operations::data_movement::check_accessor_page_size(
         output, output.padded_shape()[-1] * input.element_size(), "output");
 
-    tt::DataFormat dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-
     // DFB sizing (incl. chunking) derives from padded_shape + slice_start + alignment, all of which
     // fold into compute_program_hash(), so cache entries stay distinct per unique DFB layout.
     const auto sizing = ttnn::operations::data_movement::compute_dfb_size(
@@ -350,7 +348,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmProgramFactory::create_program_a
         .unique_id = RM_IN,
         .entry_size = sizing.dfb_entry_size,
         .num_entries = sizing.num_read_per_barrier * 2,
-        .data_format_metadata = dfb_data_format,
+        .data_format_metadata = input.dtype(),
     };
 
     // The reader walks a per-dimension index odometer, incrementing it in place as it advances

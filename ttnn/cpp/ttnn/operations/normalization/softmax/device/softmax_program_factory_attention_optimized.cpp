@@ -75,8 +75,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
     const std::uint32_t max_scaler_tile_size = tt::tile_size(max_scaler_cb_data_format);
     const std::uint32_t fused_attention_scale_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
 
-    const tt::DataFormat out0_cb_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
-    const std::uint32_t out0_tile_size = tt::tile_size(out0_cb_data_format);
+    const std::uint32_t out0_tile_size = tt::tt_metal::tile_size(output_tensor.dtype());
 
     const tt::DataFormat mask_cb_data_format =
         has_mask ? datatype_to_dataformat_converter(tensor_args.mask.value().dtype()) : tt::DataFormat::Float16_b;
@@ -228,7 +227,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
         .unique_id = OUT0,
         .entry_size = out0_tile_size,
         .num_entries = out0_t,
-        .data_format_metadata = out0_cb_data_format});
+        .data_format_metadata = output_tensor.dtype()});
     dfbs.push_back(DataflowBufferSpec{
         .unique_id = RECIP_SUM_EXPS,
         .entry_size = im_tile_size,

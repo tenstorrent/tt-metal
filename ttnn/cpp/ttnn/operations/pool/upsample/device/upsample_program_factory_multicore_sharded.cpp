@@ -283,9 +283,6 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreShardedProgramFactory:
 
     distributed::MeshDevice* device = input.device();
 
-    const tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(input.dtype());
-    const tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-
     TT_FATAL(input.logical_shape()[-1] == output.logical_shape()[-1], "Expected input and output channels to match");
     TT_FATAL(input.layout() == Layout::ROW_MAJOR, "Only row-major layout is currently supported in nearest upsample");
 
@@ -356,7 +353,7 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreShardedProgramFactory:
         .unique_id = SHARD_IN,
         .entry_size = in_cb_pagesize,
         .num_entries = in_cb_npages,
-        .data_format_metadata = input_cb_data_format,
+        .data_format_metadata = input.dtype(),
         .borrowed_from = SHARD_INPUT,
     };
 
@@ -368,7 +365,7 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreShardedProgramFactory:
         .unique_id = SHARD_OUT,
         .entry_size = out_cb_pagesize,
         .num_entries = out_cb_npages,
-        .data_format_metadata = output_cb_data_format,
+        .data_format_metadata = output.dtype(),
         .borrowed_from = SHARD_OUTPUT,
     };
 

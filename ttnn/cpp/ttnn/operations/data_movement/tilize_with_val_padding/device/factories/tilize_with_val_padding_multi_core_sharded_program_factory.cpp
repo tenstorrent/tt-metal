@@ -27,10 +27,8 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreShardedFac
     bool src_sharded = a.memory_config().is_sharded();
     bool out_sharded = output.memory_config().is_sharded();
 
-    tt::DataFormat input_dfb_data_format = datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_dfb_data_format);
-    tt::DataFormat output_dfb_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_dfb_data_format);
+    uint32_t input_single_tile_size = tt::tt_metal::tile_size(a.dtype());
+    uint32_t output_single_tile_size = tt::tt_metal::tile_size(output.dtype());
 
     bool fp32_llk_acc = a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 ||
                         output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B;
@@ -92,27 +90,27 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreShardedFac
             .unique_id = SRC_SHARD,
             .entry_size = input_shard_width_bytes,
             .num_entries = num_input_rows,
-            .data_format_metadata = input_dfb_data_format,
+            .data_format_metadata = a.dtype(),
             .borrowed_from = src_sharded ? std::optional<TensorParamName>{INPUT} : std::nullopt,
         },
         DataflowBufferSpec{
             .unique_id = STAGE,
             .entry_size = input_single_tile_size,
             .num_entries = ntiles_per_batch * 2,
-            .data_format_metadata = input_dfb_data_format,
+            .data_format_metadata = a.dtype(),
         },
         DataflowBufferSpec{
             .unique_id = PAD,
             .entry_size = input_shard_width_bytes,
             .num_entries = 1,
-            .data_format_metadata = input_dfb_data_format,
+            .data_format_metadata = a.dtype(),
         },
         // Sharded output DFB — built on the output buffer's borrowed memory.
         DataflowBufferSpec{
             .unique_id = OUT_SHARD,
             .entry_size = output_single_tile_size,
             .num_entries = ntiles_per_core,
-            .data_format_metadata = output_dfb_data_format,
+            .data_format_metadata = output.dtype(),
             .borrowed_from = out_sharded ? std::optional<TensorParamName>{OUTPUT} : std::nullopt,
         },
     };

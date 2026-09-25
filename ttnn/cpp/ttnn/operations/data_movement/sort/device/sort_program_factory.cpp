@@ -920,9 +920,8 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryCrossCoreDataExchange
     op_owned.push_back(lookup_build_tensor.device_storage().release_mesh_tensor());
     const auto& lookup_mesh_tensor = op_owned.back();
 
-    const tt::DataFormat physical_core_lookup_table_cb_data_format =
-        tt::tt_metal::datatype_to_dataformat_converter(lookup_mesh_tensor.tensor_spec().data_type());
-    const uint32_t physical_core_lookup_table_tile_size = tile_size(physical_core_lookup_table_cb_data_format);
+    const uint32_t physical_core_lookup_table_tile_size =
+        tt::tt_metal::tile_size(lookup_mesh_tensor.tensor_spec().data_type());
 
     // -----------------------------------------------------------------------
     // Resource names
@@ -1037,7 +1036,7 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryCrossCoreDataExchange
         .unique_id = LOOKUP_TABLE,
         .entry_size = physical_core_lookup_table_tile_size,
         .num_entries = 1,
-        .data_format_metadata = physical_core_lookup_table_cb_data_format,
+        .data_format_metadata = lookup_mesh_tensor.tensor_spec().data_type(),
     });
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = PACKER_UNPACKER_SYNC,

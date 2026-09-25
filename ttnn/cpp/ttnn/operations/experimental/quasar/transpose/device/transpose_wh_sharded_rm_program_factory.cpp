@@ -43,8 +43,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
 
     const tt::DataFormat src0_cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     const uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
-    const tt::DataFormat dst_cb_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
-    const uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
+    const uint32_t dst_single_tile_size = tt::tt_metal::tile_size(output_tensor.dtype());
 
     const uint32_t W = input_tensor.logical_shape()[3], H = input_tensor.logical_shape()[2];
     const uint32_t stick_size_bytes = W * input_tensor.element_size();
@@ -120,7 +119,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
             .unique_id = CB_OUT0,
             .entry_size = output_page_size,
             .num_entries = (stick_size_bytes * shard_height) / output_page_size,
-            .data_format_metadata = dst_cb_data_format,
+            .data_format_metadata = output_tensor.dtype(),
             .borrowed_from = OUTPUT_TENSOR,
         });
     } else {
@@ -130,7 +129,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
             .unique_id = CB_OUT_STAGE,
             .entry_size = dst_single_tile_size,
             .num_entries = ht * 2,  // double buffer
-            .data_format_metadata = dst_cb_data_format,
+            .data_format_metadata = output_tensor.dtype(),
         });
     }
 

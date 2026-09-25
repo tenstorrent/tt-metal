@@ -77,8 +77,7 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
     tt::DataFormat scaler_cb_data_format =
         src0_cb_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     uint32_t scaler_single_tile_size = tt::tile_size(scaler_cb_data_format);
-    tt::DataFormat dst_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
+    uint32_t dst_single_tile_size = tt::tt_metal::tile_size(output.dtype());
 
     const bool use_post_mul = operation_attributes.post_mul_scaler != 1.0f;
     uint32_t post_mul_scaler_bits = std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler);
@@ -104,10 +103,7 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
         .num_entries = 1,
         .data_format_metadata = scaler_cb_data_format};
     DataflowBufferSpec out_dfb{
-        .unique_id = OUT,
-        .entry_size = dst_single_tile_size,
-        .num_entries = 2,
-        .data_format_metadata = dst_cb_data_format};
+        .unique_id = OUT, .entry_size = dst_single_tile_size, .num_entries = 2, .data_format_metadata = output.dtype()};
 
     std::vector<DataflowBufferSpec> dfbs = {in_dfb, scaler_dfb, out_dfb};
 

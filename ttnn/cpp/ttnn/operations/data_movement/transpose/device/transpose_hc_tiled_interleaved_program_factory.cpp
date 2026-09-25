@@ -109,8 +109,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFacto
     uint32_t C = input_tensor.logical_shape()[1];
     bool needs_padding = (C % tile_shape[1] != 0);
 
-    tt::DataFormat dfb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t single_tile_size = tt::tile_size(dfb_data_format);
+    uint32_t single_tile_size = tt::tt_metal::tile_size(input_tensor.dtype());
 
     IDevice* device = input_tensor.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -139,7 +138,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFacto
         .unique_id = IN0,
         .entry_size = single_tile_size,
         .num_entries = 2,
-        .data_format_metadata = dfb_data_format,
+        .data_format_metadata = input_tensor.dtype(),
     });
 
     auto max_padding_write = face_shape[0] * face_shape[1];
@@ -148,7 +147,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFacto
             .unique_id = PAD,
             .entry_size = max_padding_write * input_tensor.element_size(),
             .num_entries = 1,
-            .data_format_metadata = dfb_data_format,
+            .data_format_metadata = input_tensor.dtype(),
         });
     }
 

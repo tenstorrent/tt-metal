@@ -33,7 +33,6 @@ ttnn::device_operation::ProgramArtifacts UpsampleNearestFloatProgramFactory::cre
     const auto& input_mesh = input.mesh_tensor();
     const auto& output_mesh = output_tensor.mesh_tensor();
 
-    const tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
     auto* const device = output_tensor.device();
 
     const auto& input_shape = input.logical_shape();
@@ -92,7 +91,7 @@ ttnn::device_operation::ProgramArtifacts UpsampleNearestFloatProgramFactory::cre
         .unique_id = OUT,
         .entry_size = output_cb_page_size,
         .num_entries = num_cb_pages * BUFFERING_FACTOR,
-        .data_format_metadata = output_cb_data_format,
+        .data_format_metadata = output_tensor.dtype(),
     };
 
     metal2::KernelSpec reader{

@@ -72,9 +72,6 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
 
     TT_ASSERT(output.buffer() != nullptr, "Output buffer should be allocated on device!");
 
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-
     // W front-pad offset: input_tensor_start is [N, C, H, W];
     uint32_t W_padding_front_bytes = input_tensor_start[3] * input_tensor.element_size();
 
@@ -111,21 +108,21 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
         .unique_id = CB_INPUT_SHARD,
         .entry_size = static_cast<uint32_t>(unpadded_stick_bytes),
         .num_entries = shard_height_unpadded,
-        .data_format_metadata = input_cb_data_format,
+        .data_format_metadata = input_tensor.dtype(),
         .borrowed_from = INPUT_TENSOR,
     };
     DataflowBufferSpec cb_output_spec{
         .unique_id = CB_OUTPUT_SHARD,
         .entry_size = static_cast<uint32_t>(padded_stick_bytes),
         .num_entries = shard_height_padded,
-        .data_format_metadata = output_cb_data_format,
+        .data_format_metadata = output.dtype(),
         .borrowed_from = OUTPUT_TENSOR,
     };
     DataflowBufferSpec cb_pad_spec{
         .unique_id = CB_PAD,
         .entry_size = static_cast<uint32_t>(padded_stick_bytes),
         .num_entries = 1,
-        .data_format_metadata = input_cb_data_format,
+        .data_format_metadata = input_tensor.dtype(),
     };
 
     TensorParameter input_param{.unique_id = INPUT_TENSOR, .spec = input_tensor.tensor_spec()};

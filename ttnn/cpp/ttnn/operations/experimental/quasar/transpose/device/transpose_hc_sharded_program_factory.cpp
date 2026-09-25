@@ -324,9 +324,6 @@ ttnn::device_operation::ProgramArtifacts TransposeHCShardedProgramFactory::creat
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_hc needs to be on device!");
     TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_hc needs to be allocated in a buffer on device!");
 
-    const tt::DataFormat src0_cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
-    const tt::DataFormat dst_cb_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
-
     const uint32_t W = input_tensor.logical_shape()[3], H = input_tensor.logical_shape()[2];
     const uint32_t C = input_tensor.logical_shape()[1], N = input_tensor.logical_shape()[0];
     const uint32_t stick_size_bytes = W * input_tensor.element_size();
@@ -362,14 +359,14 @@ ttnn::device_operation::ProgramArtifacts TransposeHCShardedProgramFactory::creat
         .unique_id = CB_IN,
         .entry_size = stick_size_bytes,
         .num_entries = shard_height,
-        .data_format_metadata = src0_cb_data_format,
+        .data_format_metadata = input_tensor.dtype(),
         .borrowed_from = INPUT_TENSOR,
     });
     dfbs.push_back(DataflowBufferSpec{
         .unique_id = CB_OUT,
         .entry_size = stick_size_bytes,
         .num_entries = shard_height,
-        .data_format_metadata = dst_cb_data_format,
+        .data_format_metadata = output_tensor.dtype(),
         .borrowed_from = OUTPUT_TENSOR,
     });
 

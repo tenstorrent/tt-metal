@@ -84,7 +84,6 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     uint32_t g1_numcores = core_group_1.num_cores();
 
     // Create Buffers
-    tt::DataFormat input_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
 
     EmbeddingsIndexType embeddings_index_type;
     if (a.dtype() == DataType::BFLOAT16) {
@@ -93,10 +92,8 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
         embeddings_index_type = EmbeddingsIndexType::UINT32;
     }
 
-    tt::DataFormat weights_data_format = tt::tt_metal::datatype_to_dataformat_converter(weights.dtype());
-    uint32_t weights_single_tile_size = tt::tile_size(weights_data_format);
-    tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_data_format);
+    uint32_t weights_single_tile_size = tt::tt_metal::tile_size(weights.dtype());
+    uint32_t output_single_tile_size = tt::tt_metal::tile_size(output.dtype());
 
     // Hardcoded limit to reduce L1 usage. Should be updated to be tuned based on overall L1 usage
     constexpr uint32_t max_double_buffer_tiles = 64;
@@ -169,7 +166,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
         .unique_id = WEIGHTS_STAGING,
         .entry_size = weights_single_tile_size,
         .num_entries = buffering * tiles_per_chunk,
-        .data_format_metadata = weights_data_format,
+        .data_format_metadata = weights.dtype(),
     });
 
     const bool index_as_scratchpad = device->arch() == tt::ARCH::QUASAR;
@@ -182,7 +179,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
             .unique_id = INDEX_SCRATCH,
             .entry_size = TILE_HEIGHT * input_element_size_bytes,
             .num_entries = 1,
-            .data_format_metadata = input_data_format,
+            .data_format_metadata = a.dtype(),
         });
     }
 
@@ -205,7 +202,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
         .unique_id = OUTPUT,
         .entry_size = output_single_tile_size,
         .num_entries = output_dfb_total_size / output_single_tile_size,
-        .data_format_metadata = output_data_format,
+        .data_format_metadata = output.dtype(),
     };
     if (output_sharded) {
         // The output buffer *is* the output shard: it is built on the output tensor's own SRAM, so the
@@ -226,7 +223,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
                 .unique_id = WEIGHT_CACHE,
                 .entry_size = cache_page_size,
                 .num_entries = cache_entries,
-                .data_format_metadata = weights_data_format,
+                .data_format_metadata = weights.dtype(),
             });
         }
     }

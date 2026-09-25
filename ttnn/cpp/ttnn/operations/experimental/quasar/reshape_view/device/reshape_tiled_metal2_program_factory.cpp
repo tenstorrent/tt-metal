@@ -80,8 +80,7 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledMetalV2ProgramFactory::
     tt::tt_metal::MeshTensor mapping_mesh_tensor = mapping_tensor.device_storage().release_mesh_tensor();
 
     // ---- Tile CB sizing / formats ----
-    const tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(input.dtype());
-    const uint32_t input_tile_size_bytes = tt::tile_size(input_cb_data_format);
+    const uint32_t input_tile_size_bytes = tt::tt_metal::tile_size(input.dtype());
     const tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
     const uint32_t output_tile_size_bytes = tt::tile_size(output_cb_data_format);
     const uint32_t element_sz_bytes = tt::datum_size(output_cb_data_format);
@@ -120,7 +119,7 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledMetalV2ProgramFactory::
             .unique_id = RT_INPUT_DFB,
             .entry_size = input_tile_size_bytes,
             .num_entries = reader_cb_len,
-            .data_format_metadata = input_cb_data_format},
+            .data_format_metadata = input.dtype()},
     };
 
     // Private node-local scratch page the writer assembles each output tile into (single-kernel fill+drain).

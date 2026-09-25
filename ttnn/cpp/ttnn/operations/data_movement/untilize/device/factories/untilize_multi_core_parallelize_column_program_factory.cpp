@@ -44,10 +44,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreParallelizeColumnProgr
     constexpr const char* COMPUTE_SRC =
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_metal2.cpp";
 
-    tt::DataFormat input_data_format = datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_data_format);
-    tt::DataFormat output_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_data_format);
+    uint32_t input_single_tile_size = tt::tt_metal::tile_size(a.dtype());
+    uint32_t output_single_tile_size = tt::tt_metal::tile_size(output.dtype());
 
     IDevice* device = a.device();
     auto grid_size = device->compute_with_storage_grid_size();
@@ -92,13 +90,13 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreParallelizeColumnProgr
         .unique_id = SRC0,
         .entry_size = input_single_tile_size,
         .num_entries = num_input_tiles,
-        .data_format_metadata = input_data_format,
+        .data_format_metadata = a.dtype(),
     };
     DataflowBufferSpec out_dfb{
         .unique_id = OUT,
         .entry_size = output_single_tile_size,
         .num_entries = num_output_tiles,
-        .data_format_metadata = output_data_format,
+        .data_format_metadata = output.dtype(),
     };
 
     TensorParameter input_param{.unique_id = INPUT, .spec = a.tensor_spec()};

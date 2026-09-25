@@ -43,10 +43,8 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
     const KernelSpecName WRITER{"writer"};
     const KernelSpecName COMPUTE{"compute"};
 
-    tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(input.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    uint32_t input_single_tile_size = tt::tt_metal::tile_size(input.dtype());
+    uint32_t output_single_tile_size = tt::tt_metal::tile_size(output.dtype());
 
     TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
 
@@ -98,13 +96,13 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
         .unique_id = IN_DFB,
         .entry_size = input_single_tile_size,
         .num_entries = input_cb_num_tiles,
-        .data_format_metadata = input_cb_data_format,
+        .data_format_metadata = input.dtype(),
     };
     DataflowBufferSpec out_dfb{
         .unique_id = OUT_DFB,
         .entry_size = output_single_tile_size,
         .num_entries = output_cb_num_tiles,
-        .data_format_metadata = output_cb_data_format,
+        .data_format_metadata = output.dtype(),
     };
 
     // ---- Tensor parameters ----

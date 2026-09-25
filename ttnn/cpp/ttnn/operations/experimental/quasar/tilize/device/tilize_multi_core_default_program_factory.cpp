@@ -37,10 +37,8 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
     const Tensor& output = tensor_return_value;
     const auto& sub_core_grids = operation_attributes.sub_core_grids;
 
-    tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    uint32_t input_single_tile_size = tt::tt_metal::tile_size(a.dtype());
+    uint32_t output_single_tile_size = tt::tt_metal::tile_size(output.dtype());
     bool fp32_llk_acc = a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 ||
                         output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B;
 
@@ -87,13 +85,13 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
             .unique_id = MC_INPUT_DFB,
             .entry_size = input_single_tile_size,
             .num_entries = ntiles_per_block,
-            .data_format_metadata = input_cb_data_format,
+            .data_format_metadata = a.dtype(),
         },
         DataflowBufferSpec{
             .unique_id = MC_OUTPUT_DFB,
             .entry_size = output_single_tile_size,
             .num_entries = ntiles_per_block,
-            .data_format_metadata = output_cb_data_format,
+            .data_format_metadata = output.dtype(),
         },
     };
 

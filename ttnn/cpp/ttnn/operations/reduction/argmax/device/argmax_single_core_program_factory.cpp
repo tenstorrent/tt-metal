@@ -146,7 +146,6 @@ ttnn::device_operation::ProgramArtifacts ArgMaxSingleCoreProgramFactory::create_
     validate_reduce_op_program_grid(
         "Argmax single-core", all_cores, device->compute_with_storage_grid_size(), nullptr, true, {});
 
-    const tt::DataFormat input_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     const auto [src_page_size, dst_page_size] = get_page_sizes_single_core(input, output, keepdim, reduce_all);
 
     // Input DFB: one entry holding a whole input page.
@@ -154,7 +153,7 @@ ttnn::device_operation::ProgramArtifacts ArgMaxSingleCoreProgramFactory::create_
         .unique_id = SRC,
         .entry_size = src_page_size,
         .num_entries = 1,
-        .data_format_metadata = input_data_format,
+        .data_format_metadata = input.dtype(),
     };
 
     // Output scratchpad: private working memory holding a whole output page.

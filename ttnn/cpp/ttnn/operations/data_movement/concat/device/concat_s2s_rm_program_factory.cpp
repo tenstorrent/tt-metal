@@ -73,7 +73,6 @@ ttnn::device_operation::ProgramArtifacts ConcatS2SRMProgramFactory::create_progr
     // tile (prod(dims[0..-2]), dims[-1]). Using padded_shape()[-2] under-counts whenever the
     // leading dims are not all 1, which mis-sizes the ragged last core below.
     const uint32_t num_output_rows = output.physical_volume() / output.padded_shape()[-1];
-    const tt::DataFormat dfb_data_format = datatype_to_dataformat_converter(output.dtype());
     const CoreRangeSet all_cores = inputs[0].get().shard_spec().value().grid;
 
     // Each input's DFB borrows the input tensor's own shard memory: the kernel reaches tensor data
@@ -95,7 +94,7 @@ ttnn::device_operation::ProgramArtifacts ConcatS2SRMProgramFactory::create_progr
             .unique_id = input_dfb_names[input_id],
             .entry_size = input_page_size,
             .num_entries = num_input_units,
-            .data_format_metadata = dfb_data_format,
+            .data_format_metadata = output.dtype(),
             .borrowed_from = input_param_names[input_id],
         });
     }
@@ -107,7 +106,7 @@ ttnn::device_operation::ProgramArtifacts ConcatS2SRMProgramFactory::create_progr
         .unique_id = OUTPUT_DFB,
         .entry_size = output_page_size,
         .num_entries = num_output_units,
-        .data_format_metadata = dfb_data_format,
+        .data_format_metadata = output.dtype(),
         .borrowed_from = OUTPUT,
     });
 
