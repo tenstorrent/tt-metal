@@ -946,3 +946,21 @@ concatenated `[1, 1, S, NQH·d]` output assumed it never did (host check `q_chun
 `write_block` take the head length and the chunk's first row in its head and move a wrapped row back one head length
 and right one head (`head_wrap_tile_offset`); the check is gone. Without the concat output the model needs the 4.6 µs
 concat op again, which cancels the gain.
+
+## 53. Heads-op compute v3 at bs8/16/32: bit-identical, but slower than v1 (2026-09-25)
+
+`QWEN_FUSED_COMPUTE_V3=1` at the batched sizes (heads op on 114 cores, DRAM activations), 8× p150b host, same-chip
+alternating A/B, 3 pairs × 20 iterations. STS-B through the batched path is unchanged (0.8123 / 0.8140 / 0.8159 at
+batch 8 / 16 / 32), so the op stays bit-identical, but every pair was slower on best-of-run:
+
+| batch | v1 best (ms) | v3 best (ms) | Δ |
+|---|---|---|--:|
+| 8 (chip 0) | 108.2 / 108.1 / 108.2 | 108.6 / 108.7 / 108.7 | +0.5 (+0.4%) |
+| 16 (chip 1) | 202.7 / 202.8 / 202.8 | 205.0 / 205.0 / 204.7 | +2.2 (+1.1%) |
+| 32 (chip 2) | 392.8 / 397.4 / 398.7 | 398.7 / 402.1 / 402.0 | +4.6 (+1.2%) |
+
+Not profiled. At bs1 the per-phase set-up it removes is a large share of a 64-core, L1-resident op; at the batched
+sizes the op streams from DRAM and that share is small. The kernel is now `compute_qkv_heads_norm_bs1.cpp` and stays
+the bs1 default only. Resident heads-op constants (`QWEN_FUSED_RESIDENT_CONSTS=1`) also stay bs1-only: at bs8 and bs16
+the per-core shards clash with the heads op's static CBs (`TT_THROW: Statically allocated circular buffers ... clash
+with L1 buffers`) on the first warm-up forward.
