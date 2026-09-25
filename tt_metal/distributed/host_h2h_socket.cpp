@@ -273,6 +273,9 @@ struct H2HSocket::Impl {
     // Bytes, not a flag: a flush costs one ~7 us round trip whatever it covers, so the
     // amount pending is the only thing that says whether issuing one now is worth it.
     std::vector<uint64_t> pending;
+    // Credit bytes awaiting confirmation, and when the oldest was issued.
+    std::vector<uint64_t> ctrl_pending;
+    std::vector<std::chrono::steady_clock::time_point> first_ctrl;
 
     // put -> credit, collected here because nothing above this class can see either end:
     // submit() only queues, and the credit word is read by credit_seen() alone.
@@ -329,25 +332,45 @@ struct H2HSocket::Impl {
         pending[host] += bytes;
     }
 
+    // Credits only. Kept apart from pending because a guard put is small too, and holding
+    // a guard stalls the peer's drain -- holding a credit does not.
+    void mark_ctrl_pending(uint32_t host, uint64_t bytes) {
+        if (ctrl_pending[host] == 0) {
+            first_ctrl[host] = std::chrono::steady_clock::now();
+        }
+        ctrl_pending[host] += bytes;
+    }
+
     // Payload and credit puts alike are flush_local only, so nothing is visible on the peer
-    // until this runs. force is passed when nothing more is queued, and on teardown.
-    void flush_dirty(bool force) {
+    // until this runs. final_flush is barrier and teardown, where everything must go out.
+    void flush_dirty(bool force, bool final_flush = false) {
         const auto now = std::chrono::steady_clock::now();
         for (uint32_t h = 0; h < cfg.topo.num; ++h) {
-            if (pending[h] == 0) {
+            if (pending[h] + ctrl_pending[h] == 0) {
                 continue;
             }
-            if (!force && pending[h] < watermark && now - first_pending[h] < kFlushDeadline) {
-                ++stats.flushes_held;
-                continue;
+            if (!final_flush) {
+                if (pending[h] != 0) {
+                    if (!force && pending[h] < watermark && now - first_pending[h] < kFlushDeadline) {
+                        ++stats.flushes_held;
+                        continue;
+                    }
+                // Credits alone: a receiver's no_supply fires every pass, so `force` must not
+                // apply here. The put is at the NIC already; the flush only confirms it.
+                } else if (now - first_ctrl[h] < kFlushDeadline) {
+                    ++stats.flushes_held;
+                    continue;
+                }
             }
             ++stats.flushes;
-            stats.pending_sum += pending[h];
-            stats.pending_max = std::max(stats.pending_max, pending[h]);
-            if (pending[h] < cfg.page_bytes) {
+            const uint64_t covered = pending[h] + ctrl_pending[h];
+            stats.pending_sum += covered;
+            stats.pending_max = std::max(stats.pending_max, covered);
+            if (covered < cfg.page_bytes) {
                 ++stats.flushes_tiny;
             }
             pending[h] = 0;
+            ctrl_pending[h] = 0;
             if (const std::string e = win->flush(h); !e.empty()) {
                 fail("h2h: " + e);
             }
@@ -365,7 +388,7 @@ struct H2HSocket::Impl {
             }
             const std::string e =
                 credits.publish(h, cfg.topo.ident, [&](const void* src, uint64_t bytes, uint64_t off) {
-                    mark_pending(h, bytes);
+                    mark_ctrl_pending(h, bytes);
                     return win->put(src, bytes, h, off, credit_op);
                 });
             if (!e.empty()) {
@@ -553,6 +576,8 @@ std::unique_ptr<H2HSocket> H2HSocket::create(const Config& cfg, std::string& err
     im.tx_flight.reset(cfg.cores, cfg.ring_pages);
     im.pending.assign(cfg.topo.num, 0);
     im.first_pending.assign(cfg.topo.num, std::chrono::steady_clock::time_point{});
+    im.ctrl_pending.assign(cfg.topo.num, 0);
+    im.first_ctrl.assign(cfg.topo.num, std::chrono::steady_clock::time_point{});
     im.flush_epoch.assign(cfg.topo.num, 0);
     im.guard_stage.assign(static_cast<size_t>(cfg.cores) * cfg.ring_pages, 0);
     // Capped at a quarter of what can be outstanding: holding more than the rings can hold
@@ -912,7 +937,7 @@ uint64_t H2HSocket::credit_total(uint32_t core) const {
 
 std::string H2HSocket::barrier() {
     impl_->publish_credits();
-    impl_->flush_dirty(true);
+    impl_->flush_dirty(true, /*final_flush=*/true);
     return impl_->win->barrier();
 }
 bool H2HSocket::failed() const { return impl_->broken; }
