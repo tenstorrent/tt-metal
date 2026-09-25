@@ -6,9 +6,6 @@ import torch
 import ttnn
 
 import pytest
-from models.common.utility_functions import torch_random
-from functools import partial
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import assert_with_ulp
 
 pytestmark = pytest.mark.use_module_device
@@ -186,98 +183,6 @@ def test_div_no_nan_fp32(device):
     output = ttnn.div_no_nan(input_tensor_a, input_tensor_b)
     output = ttnn.to_torch(output)
     assert_with_ulp(expected_result=torch_output, actual_result=output, ulp_threshold=1, allow_nonfinite=True)
-
-
-# This test was added for #17361
-# If input is a multiple of the scalar, the result should be 0, but both Torch and TT output either 0 or the scalar value itself depending on the operands.
-# This inconsistency is persistent due to some fp precision loss in both Torch and TT.
-# Eg: torch.remainder of (3, 1.5) = 0.0 and of (3, 0.003) = 0.003
-# Eg: ttnn.remainder of (4, 0.004) = 0.004 and of (3, 0.003) = 0.0
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([6, 5, 320, 320])),
-        (torch.Size([2, 1, 384, 320])),
-        (torch.Size([3, 123, 115])),
-        (torch.Size([69, 178])),
-        (torch.Size([1024])),
-    ),
-)
-@pytest.mark.parametrize("scalar", [-0.002, -0.001, -0.0006, -0.0003, 0.0, 0.0005, 0.0007, 0.001, 0.002])
-def test_remainder_scalar(input_shapes, scalar, device):
-    torch.manual_seed(0)
-
-    torch_input_tensor = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.bfloat16), ttnn.bfloat16
-    )(input_shapes)
-    input_tensor = ttnn.from_torch(
-        torch_input_tensor,
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    golden_function = ttnn.get_golden_function(ttnn.remainder)
-    torch_output_tensor = golden_function(torch_input_tensor, scalar, device=device)
-
-    output_tensor = ttnn.remainder(input_tensor, scalar)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    # Handle special case where TT returns -inf but PyTorch returns nan for fmod with zero divisor
-    if scalar == 0.0:
-        output_tensor = torch.where(
-            torch.isinf(output_tensor), torch.tensor(float("nan"), dtype=output_tensor.dtype), output_tensor
-        )
-        assert torch.allclose(output_tensor, torch_output_tensor, equal_nan=True)
-    else:
-        assert torch.allclose(output_tensor, torch_output_tensor, atol=0.001, rtol=0)
-
-
-# This test was added for #17362
-# If input is a multiple of the scalar, the result should be 0, but both Torch and TT output either 0 or the scalar value itself depending on the operands.
-# This inconsistency is persistent due to some fp precision loss in both Torch and TT.
-# Eg: torch.remainder of (3, 1.5) = 0.0 and of (3, 0.003) = 0.003
-# Eg: ttnn.remainder of (4, 0.004) = 0.004 and of (3, 0.003) = 0.0
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([2, 5, 32, 320])),
-        (torch.Size([3, 123, 115])),
-        (torch.Size([69, 178])),
-        (torch.Size([1024])),
-    ),
-)
-@pytest.mark.parametrize("scalar", [-0.0029, -0.002, -0.0005, 0.0, 0.0007, 0.001, 0.0025])
-def test_fmod_scalar(input_shapes, scalar, device):
-    torch.manual_seed(0)
-
-    torch_input_tensor = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.bfloat16), ttnn.bfloat16
-    )(input_shapes)
-
-    input_tensor_a = ttnn.from_torch(
-        torch_input_tensor,
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    golden_function = ttnn.get_golden_function(ttnn.fmod)
-    torch_output_tensor = golden_function(torch_input_tensor, scalar, device=device)
-
-    output_tensor = ttnn.fmod(input_tensor_a, scalar)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    # Handle special case where TT returns -inf but PyTorch returns nan for fmod with zero divisor
-    if scalar == 0.0:
-        output_tensor = torch.where(
-            torch.isinf(output_tensor), torch.tensor(float("nan"), dtype=output_tensor.dtype), output_tensor
-        )
-        assert torch.allclose(output_tensor, torch_output_tensor, equal_nan=True)
-    else:
-        assert torch.allclose(output_tensor, torch_output_tensor, atol=0.001, rtol=0)
 
 
 @pytest.mark.parametrize("val_a, val_b", [(0.5, 0.0), (-0.5, 0.0), (0.0, 0.0)])

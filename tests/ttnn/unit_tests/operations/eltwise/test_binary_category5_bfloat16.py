@@ -29,67 +29,22 @@ Category 5: division family + power
  5. ttnn.floor_div   - floor(a / b)
  6. ttnn.pow         - tensor ** exponent (int / float / tensor)
 
-Accuracy criteria
-─────────────────
-  div (all rounding modes), div_no_nan, floor_div : exact, once golden is built
-      from the same bfloat16-rounded quotient the device itself computes (see
-      _bf16_quotient below). Both the SFPU subnormal-flush and the reciprocal
-      underflow at |b| >= 2**126 change what that quotient *is*, not just its
-      rounding, so the golden has to see them too.
-  remainder, fmod : exact, over operand pairs of comparable magnitude (see
-      _moderate_magnitude_grid). Both ops reduce to a - b * trunc(a / b); with
-      bfloat16's 8 mantissa bits, trunc(a / b) itself loses precision once
-      |a / b| grows large, and multiplying that error back by b amplifies it
-      without bound. This is a property of the algorithm at low precision, not
-      a device defect, so the grid here keeps every quotient it exercises well
-      inside bfloat16's exactly-representable integer range.
-  pow : within a few ULP (see assert_with_ulp calls). Non-integer exponents
-      make pow(negative_base, exponent) = NaN in torch; bfloat16 dest packs
-      that NaN as +inf (a separately-documented hardware limitation -- see
-      test_binary_pow in test_pow.py), so those cases use a positive-only base
-      to isolate the accuracy of the underlying computation.
+div/div_no_nan/floor_div are checked exact against the device's own bfloat16
+quotient (see _bf16_quotient). remainder/fmod use a magnitude-matched grid
+since a - b * trunc(a / b) loses precision once |a / b| is large. pow uses a
+few ULP of slack and a positive-only base for non-integer exponents (bfloat16
+packs NaN as +inf -- see test_binary_pow in test_pow.py).
 
-Tensor-scalar overloads
-────────────────────────
-  div and floor_div also each get a tensor-scalar variant (test_divide_scalar,
-  test_floor_div_scalar), moved from PCC-based tests in
-  test_binary_composite.py. The scalar overloads dispatch through a
-  host-computed reciprocal or a separate multiply-then-round rather than the
-  tensor-tensor binary_ng path, so they are checked with a few ULP of slack
-  rather than exact match.
-
-Deliberately NOT duplicated here
-──────────────────────────────────
-  A few bfloat16 tests elsewhere are narrower/fixed-value or random-sweep
-  checks rather than exhaustive stratified-grid coverage, so they were left
-  where they are instead of being folded into this file:
-    - test_pow.py's test_binary_sfpu_accuracy (a fixed 10-element tensor) and
-      test_binary_sfpu_accuracy_pos (a uniform-random continuous exponent
-      sweep) still test bfloat16 alongside float32.
-    - test_div_ops.py's test_remainder_scalar / test_fmod_scalar (tiny fixed
-      scalar divisors chosen to hit the documented #17361 / #17362
-      near-exact-multiple precision quirk) are unchanged.
-    - sub_core_grids coverage (test_div_composite_ops_with_subcore_grids,
-      test_remainder_composite_ops_with_subcore_grids in
-      test_binary_bcast.py) stays put too: its purpose is exercising the
-      sub_core_grids parameter itself, not general accuracy.
+Each op also gets a tensor-scalar variant, checked looser (ULP or atol)
+since the scalar overloads don't take the same binary_ng path.
 """
 
 
 def _bf16_quotient(tt_a, tt_b, input_a, input_b):
-    """Reproduce the bfloat16 quotient that ttnn.divide itself produces before
-    any rounding_mode is applied, so div/div_no_nan/floor_div goldens can all
-    be built from the same intermediate the device computes from.
-
-    Two device-only effects are folded in here, both changing the quotient
-    itself rather than just how it gets rounded:
-      - Subnormal flush: the SFPU flushes any |a / b| below the smallest
-        normal bfloat16 (2**-126) to zero before rounding to bfloat16.
-      - Reciprocal underflow: once |b| >= 2**126, the bfloat16 reciprocal of
-        b itself underflows, so the device's a * recip(b) collapses to zero
-        even though the true quotient is a representable nonzero value. The
-        exact cutoff is not a clean power of two, so this is detected from
-        the device's own plain divide rather than guessed at.
+    """The bfloat16 quotient ttnn.divide itself computes before rounding_mode
+    is applied: subnormal results flush to zero, and |b| >= 2**126 underflows
+    the reciprocal to zero too (detected from the device's own plain divide,
+    since the cutoff isn't a clean power of two).
     """
     raw_quotient = flush_subnormal_values_to_zero((input_a.float() / input_b.float()).clone())
     bf16_quotient = raw_quotient.to(torch.bfloat16).float()
@@ -103,10 +58,9 @@ def _bf16_quotient(tt_a, tt_b, input_a, input_b):
 
 @pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
 def test_divide_round_modes(device, rounding_mode):
-    """Pairwise coverage of ttnn.divide's rounding_mode over the stratified
-    bfloat16 grid. bfloat16 rounding_mode always runs SFPU-accurate (the
-    fast-and-approximate divide bug #43209 is suppressed internally for
-    bfloat16), so this only needs one path per mode.
+    """ttnn.divide's rounding_mode over the stratified grid. bfloat16 always
+    runs SFPU-accurate here (fast-and-approximate is suppressed internally
+    for bug #43209), so one path per mode is enough.
     """
     input_a, input_b = pairwise_inputs(include_zero=False)
     tt_a = to_tt_tensor(input_a, device)
@@ -130,14 +84,9 @@ _DIV_SCALAR_VALUES = [-5.1, 0.0, 10.9]
 @pytest.mark.parametrize("scalar", _DIV_SCALAR_VALUES)
 @pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
 def test_divide_scalar(device, rounding_mode, scalar):
-    """Tensor-scalar ttnn.divide over the stratified grid (moved from
-    test_binary_composite.py's test_binary_div_scalar_ttnn[_opt], which used
-    PCC over three shapes of random data instead).
-
-    The scalar overload multiplies by a host-computed reciprocal rather than
-    dividing directly, so unlike the tensor-tensor path above it is not
-    bit-exact -- a handful of ULP at the scale tested here -- hence
-    assert_with_ulp rather than assert_equal.
+    """Tensor-scalar ttnn.divide over the stratified grid. This overload
+    multiplies by a host-computed reciprocal instead of dividing directly, so
+    it's only a few ULP accurate, not bit-exact.
     """
     if scalar == 0.0:
         input_a = generate_bfloat16_binary_grid(include_spl_values=True).reshape(64, 32)
@@ -166,13 +115,9 @@ def test_divide_scalar(device, rounding_mode, scalar):
 
 
 def _moderate_magnitude_grid():
-    """Stratified bfloat16 grid restricted to a magnitude band safely away
-    from the subnormal/overflow edges, padded back out to a tile-friendly
-    (64, 32) shape by repeating its first (in-band) value.
-
-    See the module docstring: remainder/fmod's a - b * trunc(a / b) needs
-    |a / b| to stay inside bfloat16's exact-integer range, which restricting
-    both operands to 2**-115 .. 2**115 guarantees for every shift below.
+    """Stratified bfloat16 grid restricted to 2**-115 .. 2**115, padded to a
+    tile-friendly (64, 32) shape. Keeps a / b inside the exact-integer range
+    remainder/fmod need (see module docstring).
     """
     values = generate_bfloat16_binary_grid(include_spl_values=False)
     in_band = values[(values.float().abs() >= 2.0**-115) & (values.float().abs() <= 2.0**115)]
@@ -186,10 +131,8 @@ _MODULO_SHIFTS = [0.3, 0.7, 1.3, 2.7, 4.5, -0.5, -1.5, -3.25]
 @pytest.mark.parametrize("ttnn_op", [ttnn.remainder, ttnn.fmod])
 @pytest.mark.parametrize("shift", _MODULO_SHIFTS)
 def test_modulo_ops(device, ttnn_op, shift):
-    """ttnn.remainder / ttnn.fmod over the moderate-magnitude grid, paired
-    against itself scaled by ``shift`` so the quotient a / b is always close
-    to 1 / shift -- comparable in magnitude across the whole grid regardless
-    of where a itself sits in the bfloat16 range.
+    """ttnn.remainder / ttnn.fmod, paired against itself scaled by ``shift``
+    so a / b stays close to 1 / shift regardless of a's own magnitude.
     """
     input_a = _moderate_magnitude_grid()
     input_b = (input_a.float() * shift).to(torch.bfloat16)
@@ -202,11 +145,44 @@ def test_modulo_ops(device, ttnn_op, shift):
     assert_equal(golden, result)
 
 
+def _small_magnitude_grid():
+    """Stratified bfloat16 grid restricted to roughly [0.004, 128], padded to
+    a tile-friendly (64, 32) shape -- the regime the scalar divisors below
+    actually probe (see test_modulo_ops_scalar).
+    """
+    values = generate_bfloat16_binary_grid(include_spl_values=False)
+    in_band = values[(values.float().abs() >= 2.0**-8) & (values.float().abs() <= 2.0**7)]
+    padded = torch.cat([in_band, in_band[0].repeat(2048 - in_band.numel())])
+    return padded.reshape(64, 32)
+
+
+_MODULO_SCALAR_VALUES = [-0.002, -0.001, 0.0, 0.001, 0.002]
+
+
+@pytest.mark.parametrize("ttnn_op", [ttnn.remainder, ttnn.fmod])
+@pytest.mark.parametrize("scalar", _MODULO_SCALAR_VALUES)
+def test_modulo_ops_scalar(device, ttnn_op, scalar):
+    """Tensor-scalar ttnn.remainder / ttnn.fmod against a tiny divisor. Near
+    an exact multiple of the scalar, fp precision can round either to 0 or
+    to the scalar itself (#17361 / #17362), hence atol not exact match.
+    """
+    input_a = _small_magnitude_grid()
+    tt_a = to_tt_tensor(input_a, device)
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    golden = golden_function(input_a, scalar, device=device).float()
+    result = ttnn.to_torch(ttnn_op(tt_a, scalar)).float()
+
+    if scalar == 0.0:
+        # The device returns -inf where torch returns NaN for a zero divisor.
+        result = torch.where(torch.isinf(result), torch.full_like(result, float("nan")), result)
+        assert torch.allclose(result, golden, equal_nan=True)
+    else:
+        assert torch.allclose(result, golden, atol=0.001, rtol=0)
+
+
 def test_div_no_nan(device):
-    """ttnn.div_no_nan over the stratified grid, dividend without special
-    values (so 0 / 0 never arises -- that degenerate case is not part of this
-    op's documented contract) against a divisor grid that does include 0,
-    +-inf and NaN, since returning 0 there is the entire point of this op.
+    """Dividend grid has no special values (so 0 / 0 never arises); divisor
+    grid includes 0, +-inf and NaN, since returning 0 there is the point.
     """
     values_a = generate_bfloat16_binary_grid(include_zero=True)
     values_b = generate_bfloat16_binary_grid(include_spl_values=True)
@@ -216,8 +192,7 @@ def test_div_no_nan(device):
     tt_b = to_tt_tensor(input_b, device)
 
     bf16_quotient = _bf16_quotient(tt_a, tt_b, input_a, input_b)
-    # NaN divisor: div_no_nan's "return 0 unless the divisor is finite and
-    # nonzero" contract also swallows a NaN divisor as unsafe on this device.
+    # A NaN divisor is also treated as unsafe, returning 0.
     nan_divisor = torch.isnan(input_b) & torch.isfinite(input_a)
     bf16_quotient = torch.where(nan_divisor, torch.zeros_like(bf16_quotient), bf16_quotient)
     golden = torch.where(input_b.float() == 0, torch.zeros_like(bf16_quotient), bf16_quotient)
@@ -227,9 +202,8 @@ def test_div_no_nan(device):
 
 
 def test_floor_div(device):
-    """ttnn.floor_div(tensor, tensor) over the stratified grid, dividend
-    without special values (0 / 0's floor is undefined either way) against a
-    divisor grid that does include 0, +-inf and NaN.
+    """Dividend grid has no special values (0 / 0's floor is undefined
+    either way); divisor grid includes 0, +-inf and NaN.
     """
     values_a = generate_bfloat16_binary_grid()
     values_b = generate_bfloat16_binary_grid(include_spl_values=True)
@@ -250,13 +224,9 @@ def test_floor_div(device):
 
 @pytest.mark.parametrize("scalar", _DIV_SCALAR_VALUES)
 def test_floor_div_scalar(device, scalar):
-    """Tensor-scalar ttnn.floor_div over the stratified grid (moved from
-    test_binary_composite.py's test_binary_floor_div_overload_ttnn, which
-    used PCC over three shapes of random data instead).
-
-    Unlike the tensor-tensor path above, this overload computes
-    floor(a * (1 / scalar)) via a separate multiply-then-floor, so it also
-    isn't bit-exact.
+    """Tensor-scalar ttnn.floor_div. This overload computes
+    floor(a * (1 / scalar)) via a separate multiply-then-floor, so it's not
+    bit-exact either.
     """
     include_spl_values = scalar == 0.0
     input_a = generate_bfloat16_binary_grid(include_spl_values=include_spl_values).reshape(64, 32)
@@ -265,9 +235,7 @@ def test_floor_div_scalar(device, scalar):
 
     if scalar == 0.0:
         a = input_a.float()
-        # 0 and NaN inputs hit the same "packs NaN as +inf" quirk as elsewhere
-        # in this file, rather than the exact NaN the C++ zero-divisor branch
-        # (ttnn::where(eqz(a), nan, sign(a) * inf)) computes mathematically.
+        # 0 and NaN inputs hit the "packs NaN as +inf" quirk, not the exact NaN.
         golden = torch.where((a == 0) | torch.isnan(a), torch.full_like(a, float("inf")), torch.sign(a) * float("inf"))
         assert torch.equal(torch.isnan(golden), torch.isnan(result))
         assert torch.equal(torch.isinf(golden), torch.isinf(result))
@@ -291,9 +259,7 @@ _POW_FLOAT_EXPONENTS = [-1.5, -0.5, 0.5, 1.5, 2.5]
 
 @pytest.mark.parametrize("exponent", _POW_INT_EXPONENTS)
 def test_pow_int_exponent(device, exponent):
-    """tensor ** int over the stratified grid (both signs of base are
-    well-defined for an integer exponent).
-    """
+    """tensor ** int (both signs of base are well-defined here)."""
     input_a = generate_bfloat16_binary_grid(include_spl_values=False).reshape(64, 32)
     tt_a = to_tt_tensor(input_a, device)
 
@@ -310,9 +276,7 @@ def _positive_grid():
 
 @pytest.mark.parametrize("exponent", _POW_FLOAT_EXPONENTS)
 def test_pow_float_exponent(device, exponent):
-    """tensor ** float over a positive-base grid (see module docstring for
-    why negative bases are excluded here).
-    """
+    """tensor ** float; positive base only (see module docstring)."""
     input_a = _positive_grid()
     tt_a = to_tt_tensor(input_a, device)
 
@@ -323,10 +287,7 @@ def test_pow_float_exponent(device, exponent):
 
 
 def test_pow_tensor_exponent(device):
-    """tensor ** tensor: the binary pow overload, over a positive-base grid
-    against an exponent tensor cycling through both the int and float
-    exponents used above.
-    """
+    """tensor ** tensor, exponent cycling through the int/float lists above."""
     input_a = _positive_grid()
     tt_a = to_tt_tensor(input_a, device)
 
