@@ -94,14 +94,14 @@ struct MatmulMultiCoreProgramConfig {
 // sharded output needs batch 1 and one C slice per core.
 struct MatmulUnifiedProgramConfig {
     CoreRangeSet cores;
-    // C slice (in tiles) each core produces in one go. 0 = auto: the output shard when C is sharded, else
-    // M / N split over the bounding box of `cores` (its rows down M, its columns across N).
+    // C slice (in tiles) each core produces in one go. 0 = auto: the output shard when C is sharded, else the
+    // largest divisor piece of the core's share of C (M / N split over the bounding box of `cores`) that fits
+    // L1 (#57884).
     std::size_t C_slice_M_tiles = 0;
     std::size_t C_slice_N_tiles = 0;
     // K tiles multiplied per accumulation step: one A slice and one B slice are resident in L1 at a time and
     // the partial sums round-trip L1 between steps. Must divide K_tiles. 0 = auto: the largest divisor of
-    // K_tiles up to 8 whose buffers fit L1 (8 bounds the double-buffered slice footprint; a tuning point,
-    // not a hardware limit).
+    // K_tiles whose buffers fit L1, capped at 8 unless the C slice is 4 tiles or fewer (#57884).
     std::size_t K_chunk_tiles = 0;
     // Subblock: the C slice's tiles accumulated in DST at once; holds <= 8 tiles (4 with fp32
     // accumulation). Need not divide the C slice: it is padded up to subblock multiples and the

@@ -251,6 +251,27 @@ def test_auto_K_chunk_falls_back_to_one(device):
     _check(out, _golden(a, b))
 
 
+def test_auto_C_slice_shrinks_to_fit_l1(device):
+    """One core, 64x64-tile C: the whole share does not fit L1, so the auto C slice is the largest divisor
+    piece of it that does."""
+    M, K, N = 64 * TILE, 2 * TILE, 64 * TILE
+    torch.manual_seed(13)
+    a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
+    out = _run(device, a, b, qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 0, 0)))
+    _check(out, _golden(a, b))
+
+
+def test_small_C_slice_takes_all_of_K(device):
+    """A 1x1-tile C slice is not capped at 8 K tiles per chunk: K = 16 tiles goes through in one K chunk
+    (fp32 accumulation, since 512 products in 16-bit DST drift past the 2% bound)."""
+    M, K, N = TILE, 16 * TILE, TILE
+    torch.manual_seed(14)
+    a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
+    config = qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 0, 0), C_slice_M_tiles=1, C_slice_N_tiles=1)
+    out = _run(device, a, b, config, fp32_dest_acc_en=True)
+    _check(out, _golden(a, b))
+
+
 def test_sub_tile_dims(device):
     """M=5, K=10, N=7 elements: one partly-valid tile per operand; A's K padding must be zeroed."""
     M, K, N = 5, 10, 7
