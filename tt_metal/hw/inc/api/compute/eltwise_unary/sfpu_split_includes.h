@@ -251,3 +251,15 @@
 #if TT_POLY_BACKWARD_HARDSWISH_BW_INCLUDE
 #include "api/compute/eltwise_unary/hardswish_bw_tt_poly_bf16.h"
 #endif
+
+#if TT_POLY_FACTOR_HARDSHRINK_BW_INCLUDE
+#include "api/compute/eltwise_unary/hardshrink_bw_tt_poly_bf16.h"
+#endif
+
+#if TT_POLY_FACTOR_HARDTANH_BW_INCLUDE
+#include "api/compute/eltwise_unary/hardtanh_bw_tt_poly_bf16.h"
+#endif
+
+#if TT_POLY_FACTOR_SOFTSHRINK_BW_INCLUDE
+#include "api/compute/eltwise_unary/softshrink_bw_tt_poly_bf16.h"
+#endif

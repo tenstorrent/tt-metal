@@ -419,6 +419,9 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/eltwise_unary/celu_bw_tt_poly_bf16.h
     inc/api/compute/eltwise_unary/elu_bw_tt_poly_bf16.h
     inc/api/compute/eltwise_unary/erf_bw_tt_poly_bf16.h
+    inc/api/compute/eltwise_unary/hardshrink_bw_tt_poly_bf16.h
     inc/api/compute/eltwise_unary/hardsigmoid_bw_tt_poly_bf16.h
     inc/api/compute/eltwise_unary/hardswish_bw_tt_poly_bf16.h
+    inc/api/compute/eltwise_unary/hardtanh_bw_tt_poly_bf16.h
+    inc/api/compute/eltwise_unary/softshrink_bw_tt_poly_bf16.h
 )
