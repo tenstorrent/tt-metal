@@ -60,3 +60,30 @@ Append-only log, one section per task attempt: what was done, decisions and why,
   cache) with the chunk and run causal `scaled_dot_product_attention(sliding_window_size=1024)`, as in gemma4/tt/attention/prefill.py.
 - All metrics pass except plan_approved (needs a person's approval in approvals.yaml).
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup.plan.check_plan`
+
+## C.sliding.attn_norm test (attempt 1)
+- Reviewed the rendered test. Golden: s4096 rung, chunk 1 (start 2048), layer 0, `in` -> `attn_norm` [2048, 2816] bf16. PCC is the right
+  mode (float output), threshold stays at the spec's 0.99.
+- Gap: PCC ignores scale. On this golden, `rms(x) * (1 + w)` scores PCC 0.9977 (passes), and sum-instead-of-mean scores about 1.0.
+  Added scale checks after the gated PCC: relative L2 <= 0.03 and per-token ||got||/||want|| in [0.97, 1.03]. They are recorded as
+  informational metrics (`rel_l2_attn_norm_L00`, `row_norm_ratio_{min,max}_attn_norm_L00`) and asserted in the test.
+- Measured (CPU, from the golden): reference rel 0.0024, ratio [0.9985, 1.0012]; bf16 in/out rel 0.0029; `1 + w` rel 0.151, ratio >= 1.10;
+  LayerNorm-instead-of-RMS rel 0.0115 (not caught; mean is about 0 on this data, so harmless).
+- The test now builds the harness pipeline inline (`component_golden`, `_step`, `module_under_test`, `compare`), because
+  `run_component_test` returns only a bool. The metric name and threshold are unchanged.
+- Verified: BRINGUP_IMPL=reference PASS (pcc 0.999997); BRINGUP_IMPL=stub FAIL (pcc 0.0). Device gate fails for now with
+  `NotImplementedError: no device module for attn_norm` (the implement step adds it).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_attn_norm.py`
+
+## C.sliding.attn_norm implement (attempt 1)
+- New `tt/rms_norm.py`: `TtRMSNorm` (replicated `ttnn.rms_norm`, TILE gamma [1,1,1,2816] bf16, HiFi4 + fp32 dest acc, eps 1e-6),
+  adapted from the prefill path of `gemma4/tt/rms_norm.py`. The checkpoint weight is used as is (Gemma-4 is `x * w`, no `1 + w`).
+  Helpers `to_device_replicated` (host [S,H] -> replicated [1,1,S,H] TILE bf16) and `replicated_to_host` (chip 0's copy).
+- `hooks.py`: `DEVICE_STEPS = {"sliding": {"attn_norm"}, "global": set()}` and `_NORM_WEIGHTS` (step -> checkpoint weight name).
+  `device_component` builds the norm for any step in `_NORM_WEIGHTS` and loads only that one weight. `device_model` is now a
+  `HybridDeviceModel`: the CPU reference with the DEVICE_STEPS of each layer's block type swapped in through
+  `run_block(overrides=...)`, with host tensors between steps. Later implement steps add their step to DEVICE_STEPS (and to
+  `_NORM_WEIGHTS` for norms). Once more of the block runs on the device, it should keep activations on the device.
+- The device output (bf16) is cast back to the input dtype, so the CPU steps downstream still see fp32.
+- Gate: pcc_attn_norm_L00 = 0.999996, rel_l2 0.0031, row-norm ratio [0.9972, 1.0006]. PASS.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_attn_norm.py`
