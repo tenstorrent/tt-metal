@@ -109,8 +109,8 @@ struct MaxUtilConfig {
     uint32_t eth_noc_wait_cycles = 0;
 
     // Use one idle Ethernet core per DRAM bank. Idle Ethernet kernels require
-    // TT_METAL_SLOW_DISPATCH_MODE=1; the default fast-dispatch path uses both
-    // processors on each connected Ethernet core.
+    // TT_METAL_SLOW_DISPATCH_MODE=1. Both modes use only ERISC0/NOC0 so each
+    // physical Ethernet core contributes exactly one bandwidth stream.
     bool use_idle_eth = false;
 
     // When true, all kernels perform a super-sync barrier at program start
@@ -220,7 +220,7 @@ static MaxUtilConfig full_grid_config(
     cfg.eth_dram_util_pct = get_dram_utilization_pct();
     cfg.use_idle_eth = get_use_idle_eth();
     // A single idle-ETH stream benefits from Blackhole's full 16 KiB NOC burst.
-    // The dual-processor active-ETH path retains its empirically optimal 1 KiB pages.
+    // The active-ETH path retains its empirically optimal 1 KiB pages.
     if (cfg.use_idle_eth) {
         cfg.eth_page_size = 16 * 1024;
     }
@@ -294,10 +294,8 @@ static CoreCoord dram_noc0_coord(IDevice* device, uint32_t bank_id) {
 }
 
 // ---------------------------------------------------------------------------
-// assign_eth_streams_to_banks – assigns every DRAM bank to a unique Ethernet
-// core/processor stream. The default fast-dispatch path uses two processors on
-// each of four active cores. The slow-dispatch idle path uses one physical core
-// per bank.
+// assign_eth_streams_to_banks – assigns each selected Ethernet core to one
+// distinct DRAM bank. Both active and idle modes use only ERISC0/NOC0.
 // ---------------------------------------------------------------------------
 
 struct EthStreamAssignment {
@@ -309,22 +307,35 @@ struct EthStreamAssignment {
 static std::vector<EthStreamAssignment> assign_eth_streams_to_banks(IDevice* device, bool use_idle_eth) {
     auto active_eth = device->get_active_ethernet_cores(/*skip_reserved_tunnel_cores=*/true);
     auto inactive_eth = device->get_inactive_ethernet_cores();
-    std::vector<CoreCoord> eth_cores = use_idle_eth ? std::vector<CoreCoord>(inactive_eth.begin(), inactive_eth.end())
-                                                    : std::vector<CoreCoord>(active_eth.begin(), active_eth.end());
     auto cmp = [](const CoreCoord& a, const CoreCoord& b) { return a.x < b.x || (a.x == b.x && a.y < b.y); };
-    std::sort(eth_cores.begin(), eth_cores.end(), cmp);
+    std::vector<EthStreamAssignment> assignments;
 
-    const uint32_t num_processors =
-        use_idle_eth ? 1 : MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
-
-    std::vector<EthStreamAssignment> available_streams;
-    for (uint32_t processor = 0; processor < num_processors; ++processor) {
-        for (const auto& core : eth_cores) {
-            available_streams.push_back({core, processor, 0});
+    if (!use_idle_eth) {
+        // Restore the original physical mapping: up to four active cores on
+        // each side of the NOC map to the four DRAM banks on that side.
+        std::vector<CoreCoord> left_cores;
+        std::vector<CoreCoord> right_cores;
+        for (const auto& core : active_eth) {
+            (eth_noc0_coord(device, core).x < 8 ? left_cores : right_cores).push_back(core);
         }
+        std::sort(left_cores.begin(), left_cores.end(), cmp);
+        std::sort(right_cores.begin(), right_cores.end(), cmp);
+        left_cores.resize(std::min<size_t>(left_cores.size(), 4));
+        right_cores.resize(std::min<size_t>(right_cores.size(), 4));
+        for (size_t i = 0; i < left_cores.size(); ++i) {
+            assignments.push_back({left_cores[i], 0, static_cast<uint32_t>(i)});
+        }
+        for (size_t i = 0; i < right_cores.size(); ++i) {
+            assignments.push_back({right_cores[i], 0, static_cast<uint32_t>(4 + i)});
+        }
+        return assignments;
     }
 
-    std::vector<EthStreamAssignment> assignments;
+    std::vector<EthStreamAssignment> available_streams;
+    for (const auto& core : inactive_eth) {
+        available_streams.push_back({core, 0, 0});
+    }
+
     const uint32_t num_banks = static_cast<uint32_t>(device->num_dram_channels());
     for (uint32_t bank_id = 0; bank_id < num_banks && !available_streams.empty(); ++bank_id) {
         const CoreCoord dram_coord = dram_noc0_coord(device, bank_id);
@@ -367,7 +378,7 @@ static shared_ptr<Buffer> setup_eth_stream_config(IDevice* device, MaxUtilConfig
         device->id(),
         active_eth.size(),
         inactive_eth.size(),
-        cfg.use_idle_eth ? "idle (one physical core per bank)" : "active (two processors per core)");
+        cfg.use_idle_eth ? "idle (one physical core per bank)" : "active (one processor per core)");
 
     auto assignments = assign_eth_streams_to_banks(device, cfg.use_idle_eth);
     if (assignments.empty()) {
@@ -385,8 +396,7 @@ static shared_ptr<Buffer> setup_eth_stream_config(IDevice* device, MaxUtilConfig
     uint32_t num_banks = static_cast<uint32_t>(device->num_dram_channels());
     uint32_t page_size_bytes = cfg.eth_page_size;
 
-    const uint32_t num_processors =
-        cfg.use_idle_eth ? 1 : hal.get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
+    constexpr uint32_t num_processors = 1;
     cfg.eth_l1_staging_stride = eth_l1_size / num_processors;
     cfg.eth_pages_per_bank = (cfg.eth_l1_staging_stride - 16) / page_size_bytes;
 
@@ -852,10 +862,7 @@ static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
     if (cfg.eth_dram_buffer_addr != 0) {
         auto assignments = assign_eth_streams_to_banks(device, cfg.use_idle_eth);
         if (!assignments.empty()) {
-            const uint32_t num_processors =
-                cfg.use_idle_eth
-                    ? 1
-                    : MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
+            constexpr uint32_t num_processors = 1;
             for (uint32_t processor = 0; processor < num_processors; ++processor) {
                 std::set<CoreRange> eth_ranges;
                 for (const auto& assignment : assignments) {
