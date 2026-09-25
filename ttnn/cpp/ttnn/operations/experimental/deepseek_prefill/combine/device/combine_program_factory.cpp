@@ -170,8 +170,17 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
 
+    // A combine group of ONE device (1xN mesh, combine axis = its size-1 rows) never sends over the fabric:
+    // every expert output it holds belongs to a local token. Build the kernels' no-fabric variant (no
+    // DEST_CHIP_ID) and skip neighbour/connection setup, which has no neighbours on a 1-device axis.
+    const uint32_t combine_axis_devices = operation_attributes.axis.has_value()
+                                              ? (operation_attributes.axis.value() == 0 ? mesh_rows : mesh_cols)
+                                              : mesh_view.num_devices();
+    const bool use_fabric = num_links > 0 && combine_axis_devices > 1;
     const auto [neighbors, directions] =
-        ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, operation_attributes.axis);
+        use_fabric
+            ? ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, operation_attributes.axis)
+            : std::pair<std::vector<ttnn::MeshCoordinate>, std::array<bool, 4>>{{}, {false, false, false, false}};
 
     // FABRIC_2D uses the portable RoutingPlaneConnectionManager (one connection per required physical
     // first-hop direction) for multi-hop combine-axis forwarding; FABRIC_1D keeps the legacy
@@ -496,7 +505,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     }
 
     // c_5: packet header CB for fabric sends (writer-only)
-    if (num_links > 0) {
+    if (use_fabric) {
         constexpr uint32_t num_packet_headers = 2;
         auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
         uint32_t packet_header_cb_size = num_packet_headers * packet_header_size_bytes;
@@ -622,7 +631,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
 
     // Both reader and writer get fabric defines so the reader can compute routes
     std::map<std::string, std::string> fabric_defines;
-    if (num_links > 0) {
+    if (use_fabric) {
         fabric_defines["DEST_CHIP_ID"] = ccl::common::stringify(dest_chip_id);
         fabric_defines["DEST_MESH_ID"] = ccl::common::stringify(dest_mesh_id);
         fabric_defines["DIRECTIONS"] = ccl::common::stringify(directions);
@@ -1273,7 +1282,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             writer_runtime_args_raw.push_back(noc_y);
         }
 
-        if (num_links > 0) {
+        if (use_fabric) {
             // Fabric nodes used to open sender connections. Fabric2D hybrid routing to all peers in
             // the logical combine group can require more physical first-hop directions than the two
             // logical axis neighbors when the group turns through the physical mesh. Open one
