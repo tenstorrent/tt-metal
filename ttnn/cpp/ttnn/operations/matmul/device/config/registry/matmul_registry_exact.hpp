@@ -58,7 +58,7 @@ struct ProgramConfigDescriptor {
     bool untilize_out{};
     bool stream_in1{};
 
-    auto operator<=>(const ProgramConfigDescriptor&) const = default;
+    bool operator==(const ProgramConfigDescriptor&) const = default;
 };
 
 struct ProgramConfigCandidate {
@@ -71,7 +71,7 @@ struct ProgramConfigExactEntry {
     ProgramConfigDescriptor program_config{};
     ComputeKernelDescriptor compute_kernel_config{};
 
-    auto operator<=>(const ProgramConfigExactEntry&) const = default;
+    bool operator==(const ProgramConfigExactEntry&) const = default;
 };
 
 static_assert(std::is_trivially_copyable_v<ProgramConfigExactEntry>);
@@ -79,6 +79,9 @@ static_assert(std::is_standard_layout_v<ProgramConfigExactEntry>);
 
 inline constexpr const ProgramConfigExactEntry* lookup_program_config_exact(
     const KeyDescriptor& key, const std::span<const ProgramConfigExactEntry> entries) noexcept {
+    // The generated table has tens of thousands of entries and validate_entries
+    // enforces strict key ordering, so preserve logarithmic exact lookup rather
+    // than using a linear std::find.
     const auto candidate = std::lower_bound(
         entries.begin(),
         entries.end(),
@@ -103,12 +106,9 @@ constexpr KeyDescriptor normalize_key_compute_kernel(KeyDescriptor key) noexcept
 // entry whose value disagreed with its key would answer a caller with numerics
 // they never asked for.
 constexpr bool entries_bind_key_compute_kernel(const std::span<const ProgramConfigExactEntry> entries) noexcept {
-    for (const auto& entry : entries) {
-        if (entry.key.compute_kernel != entry.compute_kernel_config) {
-            return false;
-        }
-    }
-    return true;
+    return std::all_of(entries.begin(), entries.end(), [](const ProgramConfigExactEntry& entry) {
+        return entry.key.compute_kernel == entry.compute_kernel_config;
+    });
 }
 
 // The companion precondition for normalize_key_compute_kernel: normalizing
@@ -117,14 +117,11 @@ constexpr bool entries_bind_key_compute_kernel(const std::span<const ProgramConf
 // key/value pair and carry the normalized spelling.
 constexpr bool entries_permit_math_approx_normalization(
     const std::span<const ProgramConfigExactEntry> entries) noexcept {
-    for (const auto& entry : entries) {
-        if (entry.key.has_activation || entry.program_config.fused_activation_present ||
-            entry.key.compute_kernel.math_approx_mode != kMathApproxModeIsInertAt ||
-            entry.compute_kernel_config.math_approx_mode != kMathApproxModeIsInertAt) {
-            return false;
-        }
-    }
-    return true;
+    return std::none_of(entries.begin(), entries.end(), [](const ProgramConfigExactEntry& entry) {
+        return entry.key.has_activation || entry.program_config.fused_activation_present ||
+               entry.key.compute_kernel.math_approx_mode != kMathApproxModeIsInertAt ||
+               entry.compute_kernel_config.math_approx_mode != kMathApproxModeIsInertAt;
+    });
 }
 
 // Bank evidence is portable across board identities, but not harvested worker

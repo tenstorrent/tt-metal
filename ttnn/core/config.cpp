@@ -25,6 +25,10 @@
 namespace ttnn::core {
 
 namespace {
+// The generated registry tables are immutable static data. This atomic only
+// controls which behavior a later dispatch chooses; changing it does not
+// publish or mutate registry contents, and an in-flight dispatch may finish
+// with the mode it already observed. Relaxed ordering is therefore sufficient.
 std::atomic<MatmulRegistryMode> matmul_registry_mode{MatmulRegistryMode::Off};
 }  // namespace
 

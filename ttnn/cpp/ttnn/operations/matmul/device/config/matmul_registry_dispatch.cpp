@@ -192,6 +192,9 @@ void try_apply_registry_parameters(
     const CallSemantics call_semantics,
     ttnn::prim::MatmulParams& parameters,
     const std::optional<ttnn::Tensor>& optional_output_tensor) {
+    // This function runs entirely in host-side dispatch before a device
+    // operation or kernel is launched. Strict-mode exceptions are therefore
+    // ordinary host validation failures, never device-code exceptions.
     const auto mode = current_mode();
     if (mode == Mode::Off) {
         return;

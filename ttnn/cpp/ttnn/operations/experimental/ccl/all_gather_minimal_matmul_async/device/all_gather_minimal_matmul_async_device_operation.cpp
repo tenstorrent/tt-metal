@@ -673,12 +673,13 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
                 fsdp_topology_,
                 fuse_swiglu));
     }
-    if (registry_fallback_is_error && !registry_recipe) {
-        TT_THROW("AGMM registry required an exact recipe, but dispatch fell back: ineligible request");
-    }
+    // Registry validation is host-side and completes before the device operation is launched.
+    TT_FATAL(
+        !registry_fallback_is_error || registry_recipe,
+        "AGMM registry required an exact recipe, but dispatch fell back: ineligible request");
     auto selected_config = config;
     auto selected_kernel_config = compute_kernel_config;
-    if (registry_recipe) {
+    if (registry_mode == ttnn::MatmulRegistryMode::On && registry_recipe) {
         selected_config.emplace(registry_recipe->config);
         selected_kernel_config = registry_recipe->compute_kernel_config;
     }

@@ -110,6 +110,9 @@ struct KeyDescriptor {
     OptionalTensorDescriptor ternary_input_b{};
     OptionalTensorDescriptor persistent_output{};
     OptionalTensorDescriptor persistent_weight{};
+    // Generated cohorts are sorted by the complete exact key and queried with
+    // lower_bound. Ordering therefore has a concrete lookup contract here;
+    // nested key descriptors provide lexicographic ordering for this operator.
     auto operator<=>(const KeyDescriptor&) const = default;
 };
 struct MinimalMatmulConfigDescriptor {
@@ -120,7 +123,7 @@ struct MinimalMatmulConfigDescriptor {
     std::uint32_t subblock_w{};
     std::uint16_t compute_grid_x{};
     std::uint16_t compute_grid_y{};
-    auto operator<=>(const MinimalMatmulConfigDescriptor&) const = default;
+    bool operator==(const MinimalMatmulConfigDescriptor&) const = default;
 };
 struct ComputeKernelDescriptor {
     std::uint32_t math_fidelity{};
@@ -129,18 +132,18 @@ struct ComputeKernelDescriptor {
     bool packer_l1_acc{};
     bool dst_full_sync_en{};
     std::uint32_t throttle_level{};
-    auto operator<=>(const ComputeKernelDescriptor&) const = default;
+    bool operator==(const ComputeKernelDescriptor&) const = default;
 };
 struct ReplayDescriptor {
     std::uint16_t schema_version{kReplaySchemaVersion};
     MinimalMatmulConfigDescriptor config{};
     ComputeKernelDescriptor compute_kernel_config{};
-    auto operator<=>(const ReplayDescriptor&) const = default;
+    bool operator==(const ReplayDescriptor&) const = default;
 };
 struct EntryDescriptor {
     KeyDescriptor key{};
     ReplayDescriptor replay{};
-    auto operator<=>(const EntryDescriptor&) const = default;
+    bool operator==(const EntryDescriptor&) const = default;
 };
 struct CohortDescriptor {
     DeviceDescriptor device{};
@@ -152,7 +155,9 @@ inline constexpr bool is_supported_device(const DeviceDescriptor& device) noexce
         static_cast<std::uint32_t>(device.mesh_rows) * device.mesh_cols != device.device_count) {
         return false;
     }
-    return device.device_count == 8 || device.device_count == 32;
+    constexpr std::array<std::uint16_t, 2> supported_device_counts{8, 32};
+    return std::find(supported_device_counts.begin(), supported_device_counts.end(), device.device_count) !=
+           supported_device_counts.end();
 }
 inline constexpr bool validate_entries(
     const DeviceDescriptor& certified_device, std::span<const EntryDescriptor> entries) noexcept {

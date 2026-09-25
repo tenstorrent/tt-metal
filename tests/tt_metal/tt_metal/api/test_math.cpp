@@ -13,6 +13,18 @@
 
 namespace {
 
+TEST(Math, CheckedMul) {
+    std::uint64_t result = 0;
+    EXPECT_FALSE(tt::checked_mul(&result, std::uint64_t{6}, std::uint64_t{7}));
+    EXPECT_EQ(result, 42U);
+
+    EXPECT_TRUE(tt::checked_mul(&result, std::numeric_limits<std::uint64_t>::max(), std::uint64_t{2}));
+    EXPECT_EQ(result, std::numeric_limits<std::uint64_t>::max() - 1);
+
+    std::int32_t signed_result = 0;
+    EXPECT_TRUE(tt::checked_mul(&signed_result, std::numeric_limits<std::int32_t>::min(), std::int32_t{-1}));
+}
+
 TEST(Math, DivUp) {
     EXPECT_EQ(tt::div_up(0, 3), 0);
     EXPECT_EQ(tt::div_up(6, 3), 2);

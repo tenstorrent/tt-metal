@@ -38,6 +38,15 @@ TEST(AgmmRegistry, CohortsDoNotCrossDeviceCounts) {
     EXPECT_TRUE(registry::cohorts_for_device_count(16).empty());
 }
 
+TEST(AgmmRegistry, GeneratedMathFidelityValuesAreValidated) {
+    EXPECT_EQ(
+        ttnn::math_fidelity_from_raw_value(
+            static_cast<std::uint32_t>(tt::tt_metal::MathFidelity::HiFi3)),
+        tt::tt_metal::MathFidelity::HiFi3);
+    EXPECT_FALSE(ttnn::math_fidelity_from_raw_value(1).has_value());
+    EXPECT_FALSE(ttnn::math_fidelity_from_raw_value(0xff).has_value());
+}
+
 void expect_entries_round_trip(std::span<const registry::compact::CohortDescriptor> cohorts, std::size_t expected) {
     std::size_t entry_count = 0;
     for (const auto& cohort : cohorts) {
@@ -71,7 +80,7 @@ TEST(AgmmRegistry, SelectionUsesTheSharedMatmulMode) {
     const auto& entry = registry::generated::blackhole_32_device_cohorts().front().entries.front();
     auto facts = facts_from_key(entry.key);
     EXPECT_FALSE(registry::select_recipe(ttnn::MatmulRegistryMode::Off, facts).has_value());
-    EXPECT_FALSE(registry::select_recipe(ttnn::MatmulRegistryMode::Shadow, facts).has_value());
+    EXPECT_TRUE(registry::select_recipe(ttnn::MatmulRegistryMode::Shadow, facts).has_value());
     EXPECT_TRUE(registry::select_recipe(ttnn::MatmulRegistryMode::On, facts).has_value());
     facts.device.compute_grid_x += 1;
     facts.device.compute_grid_y += 1;

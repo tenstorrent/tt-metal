@@ -100,6 +100,9 @@ struct KeyDescriptor {
     // by knob vector.
     ComputeKernelDescriptor compute_kernel{};
 
+    // The generated exact table is lexicographically sorted by this complete
+    // key and queried with lower_bound. Ordering is intentionally limited to
+    // key material; recipe descriptors only need equality.
     auto operator<=>(const KeyDescriptor&) const = default;
 };
 

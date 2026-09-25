@@ -4,6 +4,19 @@ The matmul registry selects measured program and compute-kernel configurations
 for exact TTNN matmul calls. It is disabled by default, and a lookup miss keeps
 the existing TTNN behavior.
 
+## Motivation
+
+TTNN's general matmul path must choose a legal program configuration for a
+large range of shapes and hardware configurations. For workloads measured by
+the sweep pipeline, the registry lets TTNN reuse the fastest verified exact
+recipe instead of relying on a generic selection for that known call. Exact
+keys bind the operation semantics, tensor contract, device capability, and
+compute-kernel knobs, so unrelated calls continue through the existing path.
+
+The default remains `off`. This makes rollout explicit: use `shadow` to measure
+lookup overhead without changing execution, then compare the same model with
+`off` and `on` before enabling the registry in a production configuration.
+
 ## Runtime modes
 
 Set `matmul_registry_mode` through `TTNN_CONFIG_OVERRIDES` or
@@ -26,8 +39,10 @@ has a registry entry:
 TTNN_CONFIG_OVERRIDES='{"matmul_registry_mode":"on","throw_exception_on_fallback":true}' pytest ...
 ```
 
-The model CI workflows expose the same `off`, `shadow`, and `on` choice, so the
-same model command can be compared without model-specific registry code.
+The Tier 1, Tier 2, and Tier 3 model E2E and unit-test workflows expose the same
+`off`, `shadow`, and `on` choice. Tier 1 and Tier 2 sweep workflows expose it as
+well; Tier 3 has no sweep workflow. The same model command can therefore be
+compared without model-specific registry code.
 
 ## Current coverage
 
@@ -39,7 +54,9 @@ active trace capture use the existing TTNN path.
 
 The all-gather matmul table contains 36 eight-device entries and 104
 thirty-two-device entries. An exact match owns both the program config and the
-compute-kernel config; a miss leaves the caller's configs unchanged.
+compute-kernel config in `on` mode; a miss leaves the caller's configs
+unchanged. `shadow` performs the same exact lookup and materialization but does
+not apply the resulting recipe.
 
 ## Updating the tables
 

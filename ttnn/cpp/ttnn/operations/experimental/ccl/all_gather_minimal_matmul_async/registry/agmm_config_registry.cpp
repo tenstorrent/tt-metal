@@ -3,8 +3,8 @@
 
 #include "agmm_config_registry.hpp"
 
-#include <limits>
-
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "agmm_registry_data.hpp"
@@ -15,7 +15,8 @@ namespace ttnn::experimental::all_gather_minimal_matmul_registry {
 namespace {
 
 bool is_default_tile(const compact::TensorDescriptor& tensor) noexcept {
-    return tensor.layout == 1 && tensor.tile_height == 32 && tensor.tile_width == 32 &&
+    return tensor.layout == static_cast<std::uint32_t>(tt::tt_metal::Layout::TILE) &&
+           tensor.tile_height == tt::constants::TILE_HEIGHT && tensor.tile_width == tt::constants::TILE_WIDTH &&
            !tensor.tile_transpose_of_faces && !tensor.tile_transpose_within_face;
 }
 
@@ -41,10 +42,8 @@ bool optional_tensor_is_complete(const compact::OptionalTensorDescriptor& tensor
 }
 
 std::optional<std::uint64_t> checked_product(std::uint64_t lhs, std::uint64_t rhs) noexcept {
-    if (lhs != 0 && rhs > std::numeric_limits<std::uint64_t>::max() / lhs) {
-        return std::nullopt;
-    }
-    return lhs * rhs;
+    std::uint64_t product = 0;
+    return tt::checked_mul(&product, lhs, rhs) ? std::nullopt : std::make_optional(product);
 }
 
 bool shape_matches_workload(const compact::KeyDescriptor& key) noexcept {
@@ -112,7 +111,7 @@ bool operation_is_consistent(const compact::KeyDescriptor& key) noexcept {
     for (std::size_t index = 0; index < compact::kMaxChunkSizes; ++index) {
         const auto width = operation.chunk_sizes[index];
         if (index < operation.chunk_size_count) {
-            if (width == 0 || width % 32 != 0) {
+            if (width == 0 || width % tt::constants::TILE_WIDTH != 0) {
                 return false;
             }
             chunk_sum += width;
@@ -122,7 +121,9 @@ bool operation_is_consistent(const compact::KeyDescriptor& key) noexcept {
     }
     return operation.chunk_size_count == 0
                ? operation.chunks == 1 || (key.workload.logical_n % operation.chunks == 0 &&
-                                           (key.workload.logical_n / operation.chunks) % 32 == 0)
+                                           (key.workload.logical_n / operation.chunks) %
+                                                   tt::constants::TILE_WIDTH ==
+                                               0)
                : operation.chunk_size_count == static_cast<std::size_t>(operation.chunks) &&
                      chunk_sum == key.workload.logical_n;
 }
@@ -136,8 +137,11 @@ bool key_is_consistent(const compact::KeyDescriptor& key) noexcept {
            optional_tensor_is_complete(key.persistent_weight) && key.workload.logical_m != 0 &&
            key.workload.logical_k != 0 && key.workload.logical_n != 0 && key.workload.padded_m != 0 &&
            key.workload.padded_k != 0 && key.workload.padded_n != 0 && key.workload.batch != 0 &&
-           operation_is_consistent(key) && key.operation.output_layout == 1 && key.operation.output_tile_height == 32 &&
-           key.operation.output_tile_width == 32 && !key.operation.output_tile_transpose_of_faces &&
+           operation_is_consistent(key) &&
+           key.operation.output_layout == static_cast<std::uint32_t>(tt::tt_metal::Layout::TILE) &&
+           key.operation.output_tile_height == tt::constants::TILE_HEIGHT &&
+           key.operation.output_tile_width == tt::constants::TILE_WIDTH &&
+           !key.operation.output_tile_transpose_of_faces &&
            !key.operation.output_tile_transpose_within_face && shape_matches_workload(key);
 }
 
@@ -206,27 +210,16 @@ std::optional<Recipe> materialize_recipe(const compact::EntryDescriptor& descrip
         (descriptor.key.operation.fuse_swiglu && config.n_block_size % 2 != 0)) {
         return std::nullopt;
     }
-    const auto local_k_tiles = descriptor.key.input.padded_shape[descriptor.key.input.rank - 1] / 32;
+    const auto local_k_tiles =
+        descriptor.key.input.padded_shape[descriptor.key.input.rank - 1] / tt::constants::TILE_WIDTH;
     if (config.k_block_size > local_k_tiles ||
         (descriptor.key.operation.topology != 1 && local_k_tiles % config.k_block_size != 0)) {
         return std::nullopt;
     }
 
-    tt::tt_metal::MathFidelity fidelity;
-    switch (descriptor.replay.compute_kernel_config.math_fidelity) {
-        case static_cast<std::uint32_t>(tt::tt_metal::MathFidelity::LoFi):
-            fidelity = tt::tt_metal::MathFidelity::LoFi;
-            break;
-        case static_cast<std::uint32_t>(tt::tt_metal::MathFidelity::HiFi2):
-            fidelity = tt::tt_metal::MathFidelity::HiFi2;
-            break;
-        case static_cast<std::uint32_t>(tt::tt_metal::MathFidelity::HiFi3):
-            fidelity = tt::tt_metal::MathFidelity::HiFi3;
-            break;
-        case static_cast<std::uint32_t>(tt::tt_metal::MathFidelity::HiFi4):
-            fidelity = tt::tt_metal::MathFidelity::HiFi4;
-            break;
-        default: return std::nullopt;
+    const auto fidelity = math_fidelity_from_raw_value(descriptor.replay.compute_kernel_config.math_fidelity);
+    if (!fidelity) {
+        return std::nullopt;
     }
     using ThrottleLevel = ttnn::operations::compute_throttle_utils::ThrottleLevel;
     const auto raw_throttle = descriptor.replay.compute_kernel_config.throttle_level;
@@ -235,7 +228,7 @@ std::optional<Recipe> materialize_recipe(const compact::EntryDescriptor& descrip
     }
     const auto& kernel = descriptor.replay.compute_kernel_config;
     auto compute_kernel_config = DeviceComputeKernelConfig{
-        .math_fidelity = fidelity,
+        .math_fidelity = *fidelity,
         .math_approx_mode = kernel.math_approx_mode,
         .fp32_dest_acc_en = kernel.fp32_dest_acc_en,
         .packer_l1_acc = kernel.packer_l1_acc,
@@ -257,7 +250,7 @@ std::optional<Recipe> materialize_recipe(const compact::EntryDescriptor& descrip
 }
 
 std::optional<Recipe> select_recipe(const Mode mode, const RegistryRequestFacts& facts) {
-    if (mode != Mode::On) {
+    if (mode == Mode::Off) {
         return std::nullopt;
     }
     const auto key = build_registry_key(facts);
@@ -266,9 +259,10 @@ std::optional<Recipe> select_recipe(const Mode mode, const RegistryRequestFacts&
     if (entry != nullptr) {
         recipe = materialize_recipe(*entry);
     }
-    if (!recipe && ttnn::operations::matmul::registry::fallback_is_error(mode)) {
-        TT_THROW("AGMM registry required an exact recipe, but no exact match was found");
-    }
+    // This is host-side dispatch validation, before device-operation launch.
+    TT_FATAL(
+        recipe || !ttnn::operations::matmul::registry::fallback_is_error(mode),
+        "AGMM registry required an exact recipe, but no exact match was found");
     return recipe;
 }
 
