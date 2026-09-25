@@ -106,6 +106,20 @@ class QuantConfig:
         )
 
     @staticmethod
+    def bf8_weights_sdpa_bf8() -> QuantConfig:
+        """`all_weights_bf8` plus bfloat8_b inputs to the ring SDPA (HiFi2, no fp32 accumulate).
+
+        The middle step between `all_weights_bf8` and `all_bf8_lofi`: halves the K/V bytes the
+        sequence-parallel ring moves per step (~120 GB/device/generation at 720p in bf16) while
+        keeping every matmul at HiFi2. Added 2026-09-25 for the TI2V-5B.
+        """
+        base = QuantConfig.all_weights_bf8()
+        base.ring_sdpa = SDPAQuantConfig(
+            input_dtype=ttnn.bfloat8_b, math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc=False
+        )
+        return base
+
+    @staticmethod
     def all_lofi() -> QuantConfig:
         """All compute LoFi, rest default."""
         lc = LinearQuantConfig(math_fidelity=ttnn.MathFidelity.LoFi)
@@ -346,7 +360,7 @@ def quant_config_from_env(var: str = QUANT_CONFIG_ENV) -> tuple[str, QuantConfig
         return None
     factory = getattr(QuantConfig, name, None) if not name.startswith("_") else None
     if factory is None or not callable(factory):
-        presets = [n for n in ("default", "all_weights_bf8", "all_lofi", "all_bf8_lofi")]
+        presets = ["default", "all_weights_bf8", "bf8_weights_sdpa_bf8", "all_lofi", "all_bf8_lofi"]
         msg = f"{var}={name!r} is not a QuantConfig preset; expected one of {presets}"
         raise ValueError(msg)
     return name, factory()
