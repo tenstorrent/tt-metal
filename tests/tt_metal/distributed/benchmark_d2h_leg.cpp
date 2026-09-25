@@ -44,9 +44,13 @@ namespace {
 // Overridden by TT_LEG_DEVICE_ID; see leg_device_id(). Chips differ in PCIe width.
 const int kDeviceId = leg_device_id();
 
-const std::vector<int64_t> kPageSizes = {16384};
+// Spans the same range as the other legs: whether this leg's ceiling is a per-frame cost
+// or a bandwidth limit shows up only as page size changes.
+const std::vector<int64_t> kPageSizes = {4096, 16384, 65536, 131072, 262144};
 const std::vector<int64_t> kCores = {1, 2, 4, 8, 16, 32, 64};
-const std::vector<int64_t> kRingPages = {8};
+// ring_pages x page_bytes must fit the arena, so the deep ring is refused at the large
+// pages and the shallow ones are what carry 256 KiB.
+const std::vector<int64_t> kRingPages = {1, 4, 8};
 const std::vector<int64_t> kIterations = {2000, 20000, 200000};
 const std::vector<int64_t> kWarmupPct = {0, 10, 25};
 // Both: the verified case is the only correctness check this leg has, and it cannot be
