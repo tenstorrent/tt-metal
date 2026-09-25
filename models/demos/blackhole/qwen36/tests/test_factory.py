@@ -227,6 +227,31 @@ def compare_tensors(tt_tensor, torch_tensor, pcc_threshold=0.99):
     return passing, pcc
 
 
+# Argmax drift is allowed only where the reference top1-top2 gap is a near-tie.
+NEAR_TIE_GAP = float(os.environ.get("QWEN36_NEAR_TIE_GAP", 2.0))
+
+
+def top2_gap(logits_row):
+    """Reference confidence: top-1 minus top-2 logit."""
+    top2 = torch.topk(logits_row.float().reshape(-1), 2)
+    return float(top2.values[0] - top2.values[1])
+
+
+def assert_argmaxes_match_except_near_ties(ref_logits, got_logits, context, near_tie_gap=None):
+    """Fail only on argmax flips where the reference top1-top2 gap is confident."""
+    from loguru import logger
+
+    gap_limit = NEAR_TIE_GAP if near_tie_gap is None else near_tie_gap
+    failures = []
+    for idx, (ref_row, got_row) in enumerate(zip(ref_logits, got_logits)):
+        ref_tok, got_tok = int(ref_row.float().argmax()), int(got_row.float().argmax())
+        gap, pcc = top2_gap(ref_row), compute_pcc(ref_row, got_row)
+        logger.info(f"[{context}] idx={idx} ref={ref_tok} got={got_tok} pcc={pcc:.5f} ref_top2_gap={gap:.4f}")
+        if ref_tok != got_tok and gap >= gap_limit:
+            failures.append(f"idx={idx}: ref={ref_tok} got={got_tok} gap={gap:.4f} pcc={pcc:.5f}")
+    assert not failures, f"{context} diverged at CONFIDENT tokens (gap >= {gap_limit}):\n" + "\n".join(failures)
+
+
 @lru_cache(maxsize=1)
 def _load_pcc_thresholds():
     with open(_PCC_THRESHOLDS_PATH) as f:
@@ -247,6 +272,13 @@ def get_pcc_threshold(request, default=0.99):
     return table.get(func, default)
 
 
+def validated_on_wormhole():
+    """True on Wormhole. Gates test-oracle fixes that were not re-measured on Blackhole."""
+    from models.common.utility_functions import is_blackhole
+
+    return not is_blackhole()
+
+
 # --------------------------------------------------------------------------- #
 # Mesh / device helpers
 # --------------------------------------------------------------------------- #
@@ -255,7 +287,16 @@ def _resolve_mesh_shape(max_tp=8):
     # ``dict.get`` default, which Python evaluates eagerly) so an explicit MESH_DEVICE never
     # touches ttnn.get_device_ids() -- that call raises on clusters whose ClusterType lookup
     # fails, which would otherwise break collection even for a fully-specified mesh.
-    shape = {"P150": (1, 1), "P150x4": (1, 4), "P150x8": (1, 8)}.get(os.environ.get("MESH_DEVICE"))
+    shape = {
+        "P150": (1, 1),
+        "P150x4": (1, 4),
+        "P150x8": (1, 8),
+        # Wormhole meshes: the 9B needs the 2-chip N300 (a single N150 cannot hold it).
+        "N150": (1, 1),
+        "N300": (1, 2),
+        "N150x4": (1, 4),
+        "T3K": (1, 8),
+    }.get(os.environ.get("MESH_DEVICE"))
     if shape is not None:
         return shape
     return (1, min(len(ttnn.get_device_ids()), max_tp))

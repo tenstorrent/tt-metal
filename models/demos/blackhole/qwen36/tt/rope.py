@@ -11,6 +11,8 @@ portion (head_dim=64).
 import torch
 
 import ttnn
+from models.common.utility_functions import is_blackhole
+from models.demos.blackhole.qwen36.tt.attention.rope_tp import to_full_width_rot_mats
 
 
 def compute_rope_freqs(head_dim: int, max_seq_len: int, theta: float = 10_000_000.0):
@@ -43,15 +45,22 @@ class Qwen36RoPESetup:
 
     def __init__(self, device, args):
         self.device = device
-        self.head_dim = args.rope_head_dim  # 64
+        self.head_dim = args.rope_head_dim  # frequency dim; drives inv_freq
         self.max_seq_len = args.max_seq_len
         self.theta = args.rope_theta
+        # Permuted RoPE widens cos/sin to head_dim; consumers use rope_width, not head_dim.
+        self.full_head_dim = args.head_dim if getattr(args, "rope_permuted_enabled", False) else None
+        self.rope_width = self.full_head_dim or self.head_dim
 
         self.cos_cpu, self.sin_cpu = compute_rope_freqs(
             head_dim=self.head_dim,
             max_seq_len=self.max_seq_len,
             theta=args.rope_theta,
         )
+        if self.full_head_dim:
+            self.cos_cpu, self.sin_cpu = to_full_width_rot_mats(
+                self.cos_cpu, self.sin_cpu, self.full_head_dim, self.head_dim, self.device
+            )
 
         # --- M-RoPE (multimodal rotary) per-request state -------------------------------------
         # build_request_rope() stages a per-SEQUENCE cos/sin table for a multimodal prompt (the
@@ -112,8 +121,8 @@ class Qwen36RoPESetup:
 
         # General path for prefill (variable positions)
         flat_pos = position_ids.reshape(-1)
-        cos = self.cos_cpu[flat_pos].reshape(B, T, self.head_dim)
-        sin = self.sin_cpu[flat_pos].reshape(B, T, self.head_dim)
+        cos = self.cos_cpu[flat_pos].reshape(B, T, self.rope_width)
+        sin = self.sin_cpu[flat_pos].reshape(B, T, self.rope_width)
 
         cos_ttnn = ttnn.from_torch(
             cos,
@@ -135,7 +144,7 @@ class Qwen36RoPESetup:
         """Return cos/sin at position as host ttnn tensors for copy_host_to_device_tensor.
 
         Returns tensors on HOST (no device= arg) for fast DMA to pre-allocated device buffers.
-        Shape: [1, 1, rope_head_dim] — must match _trace_cos/_trace_sin device buffer shapes.
+        Shape: [1, 1, rope_width] — must match _trace_cos/_trace_sin device buffer shapes.
         Layout: TILE_LAYOUT — must match device buffer layout for copy compatibility.
 
         `pos` is the ROPE position (= KV position + rope_delta for a multimodal request); the
@@ -185,8 +194,10 @@ class Qwen36RoPESetup:
             spatial_merge_size=self.spatial_merge_size,
         )  # position_ids [3, B, S], deltas [B, 1]
         cos, sin = get_rot_mats(self.inv_freq, position_ids, self.mrope_section, self.attention_scaling)
-        # get_rot_mats returns [B, S, head_dim]; B==1 here (single-sequence prefill).
-        self._req_cos = cos[0].to(torch.bfloat16)  # [S, head_dim]
+        # get_rot_mats is [B, S, rope_head_dim]; B==1 for single-sequence prefill.
+        if self.full_head_dim:
+            cos, sin = to_full_width_rot_mats(cos, sin, self.full_head_dim, self.head_dim, self.device)
+        self._req_cos = cos[0].to(torch.bfloat16)
         self._req_sin = sin[0].to(torch.bfloat16)
         self.rope_delta = int(deltas[0, 0].item())
         return self.rope_delta
@@ -194,17 +205,27 @@ class Qwen36RoPESetup:
     def _extend_req_table(self, length):
         """Grow the per-request M-RoPE table to >= `length` positions with text-continuation rows
         (post-prompt positions have t==h==w, advancing as rope_pos = seq_idx + rope_delta). Used so
-        the masked-bucket padding past the real prompt still has cos/sin."""
+        the masked-bucket padding past the real prompt still has cos/sin.
+        """
         cur = self._req_cos.shape[0]
         if length <= cur:
             return
-        pos = torch.arange(cur, length, dtype=torch.float32) + self.rope_delta
+        target = min(max(length, 2 * cur), max(length, self.max_seq_len))
+        pos = torch.arange(cur, target, dtype=torch.float32) + self.rope_delta
         emb = torch.cat([torch.outer(pos, self.inv_freq)] * 2, dim=-1)
-        self._req_cos = torch.cat([self._req_cos, emb.cos().to(torch.bfloat16)], dim=0)
-        self._req_sin = torch.cat([self._req_sin, emb.sin().to(torch.bfloat16)], dim=0)
+        new_cos, new_sin = emb.cos(), emb.sin()
+        if self.full_head_dim:
+            new_cos, new_sin = to_full_width_rot_mats(new_cos, new_sin, self.full_head_dim, self.head_dim, self.device)
+        self._req_cos = torch.cat([self._req_cos, new_cos.to(torch.bfloat16)], dim=0)
+        self._req_sin = torch.cat([self._req_sin, new_sin.to(torch.bfloat16)], dim=0)
+
+    @property
+    def mrope_staged(self):
+        """True when a per-sequence M-RoPE table is staged, so 1D tables cannot serve this prefill."""
+        return self._req_cos is not None
 
     def prefill_cos_sin_torch(self, start, length):
-        """Torch bf16 cos/sin [length, head_dim] for SEQUENCE positions [start, start+length).
+        """Torch bf16 cos/sin [length, rope_width] for SEQUENCE positions [start, start+length).
 
         Uses the per-request M-RoPE table when staged (build_request_rope); otherwise ordinary 1D
         RoPE at absolute positions [start, start+length) — byte-identical to the pre-M-RoPE path."""
@@ -215,11 +236,35 @@ class Qwen36RoPESetup:
             return self._req_cos[start:end], self._req_sin[start:end]
         t = torch.arange(start, start + length, dtype=torch.float32)
         emb = torch.cat([torch.outer(t, self.inv_freq)] * 2, dim=-1)
-        return emb.cos().to(torch.bfloat16), emb.sin().to(torch.bfloat16)
+        cos_t, sin_t = emb.cos(), emb.sin()
+        if self.full_head_dim:
+            cos_t, sin_t = to_full_width_rot_mats(cos_t, sin_t, self.full_head_dim, self.head_dim, self.device)
+        return cos_t.to(torch.bfloat16), sin_t.to(torch.bfloat16)
+
+    def ensure_prefill_tables(self, n_rows):
+        """Grow resident cos/sin tables to n_rows outside any traced region (host write)."""
+        if is_blackhole():
+            return
+        from models.demos.blackhole.qwen36.tt.attention.rope_tp import _rope_dev_tables
+
+        _rope_dev_tables(self.device, self.head_dim, int(n_rows), self.theta, full_head_dim=self.full_head_dim)
 
     def get_prefill_rot_mats(self, start, length):
-        """ttnn cos/sin [1, length, head_dim] (replicated) for SEQUENCE positions [start, start+length),
-        M-RoPE-aware. Drop-in for the prefill sites that previously called get_rot_mats(arange(...))."""
+        """Device cos/sin for [start, start+length); M-RoPE uses the staged per-request table."""
+        if self._req_cos is None and not is_blackhole():
+            from models.demos.blackhole.qwen36.tt.attention.rope_tp import _rope_dev_tables
+
+            tbl_cos, tbl_sin = _rope_dev_tables(
+                self.device, self.head_dim, start + length, self.theta, full_head_dim=self.full_head_dim
+            )
+
+            def _slice(tbl):
+                r = ttnn.slice(tbl, [start, 0], [start + length, self.rope_width])
+                r = ttnn.reshape(r, (1, length, self.rope_width))
+                return ttnn.to_layout(r, ttnn.TILE_LAYOUT)
+
+            return _slice(tbl_cos), _slice(tbl_sin)
+
         cos_t, sin_t = self.prefill_cos_sin_torch(start, length)
         cos = ttnn.from_torch(
             cos_t.unsqueeze(0),

@@ -51,9 +51,30 @@ class TestPrefixStripping:
         for key in remapped:
             assert "visual" not in key, f"Vision key not filtered: {key}"
 
-    def test_no_mtp_keys(self, remapped):
-        for key in remapped:
-            assert "mtp" not in key.split(".")[0], f"MTP key not filtered: {key}"
+    def test_mtp_keys_present(self, remapped):
+        """MTP (spec-decode drafter) weights are KEPT verbatim through remap."""
+        expected = {
+            "mtp.fc.weight",
+            "mtp.pre_fc_norm_embedding.weight",
+            "mtp.pre_fc_norm_hidden.weight",
+            "mtp.norm.weight",
+            "mtp.layers.0.input_layernorm.weight",
+            "mtp.layers.0.post_attention_layernorm.weight",
+            "mtp.layers.0.self_attn.q_proj.weight",
+            "mtp.layers.0.self_attn.k_proj.weight",
+            "mtp.layers.0.self_attn.v_proj.weight",
+            "mtp.layers.0.self_attn.o_proj.weight",
+            "mtp.layers.0.self_attn.q_norm.weight",
+            "mtp.layers.0.self_attn.k_norm.weight",
+            "mtp.layers.0.mlp.gate_proj.weight",
+            "mtp.layers.0.mlp.up_proj.weight",
+            "mtp.layers.0.mlp.down_proj.weight",
+        }
+        missing = expected - set(remapped)
+        assert not missing, f"MTP keys dropped by remap: {sorted(missing)}"
+        # fc (eh_proj) maps concat(token_emb, hidden) -> hidden, i.e. [hidden, 2*hidden].
+        hidden = remapped["tok_embeddings.weight"].shape[1]
+        assert remapped["mtp.fc.weight"].shape == (hidden, 2 * hidden)
 
 
 class TestTopLevelWeights:

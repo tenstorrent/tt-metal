@@ -20,10 +20,12 @@ class LayerNorm(LightweightModule):
         weight_dtype=ttnn.bfloat8_b,
         model_config=None,
         eps: float = 1e-05,
+        sharded_fp32_acc: bool = False,
     ):
         super().__init__()
         self.device = device
         self.eps = eps
+        self.sharded_fp32_acc = sharded_fp32_acc
 
         torch_weight = (
             state_dict[f"{state_dict_prefix}.weight"].unsqueeze(0).view(1, 1, dim).expand([1, SHARD_HEIGHT, dim])
@@ -65,7 +67,6 @@ class LayerNorm(LightweightModule):
             ), f"Input dimension dim ({dim}) must be a multiple of SHARD_HEIGHT ({SHARD_HEIGHT})"
             shard_width_hidden_dim_across_32_cores = dim // SHARD_HEIGHT
             core_grid = ttnn.CoreGrid(x=8, y=SHARD_HEIGHT // 8)
-            # core_grid = ttnn.CoreGrid(x=8, y=8)
             self.sharded_input_config = ttnn.create_sharded_memory_config(
                 shape=(SHARD_HEIGHT, shard_width_hidden_dim_across_32_cores),
                 core_grid=core_grid,
@@ -82,7 +83,7 @@ class LayerNorm(LightweightModule):
             )
             self.sharded_output_config = self.sharded_input_config
 
-    def forward(self, x: ttnn.Tensor, in_sharded=False, out_sharded=False) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, in_sharded=False, out_sharded=False, memory_config=None) -> ttnn.Tensor:
         if in_sharded:
             x = ttnn.layer_norm(
                 x,
@@ -91,7 +92,13 @@ class LayerNorm(LightweightModule):
                 bias=self.bias,
                 program_config=self.sharded_program_config,
                 memory_config=self.sharded_output_config,
-                compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
+                compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                    math_fidelity=ttnn.MathFidelity.HiFi4,
+                    # WormholeComputeKernelConfig defaults math_approx_mode to True.
+                    math_approx_mode=not self.sharded_fp32_acc,
+                    fp32_dest_acc_en=self.sharded_fp32_acc,
+                    packer_l1_acc=False,
+                ),
             )
             if out_sharded:
                 return x
@@ -108,8 +115,10 @@ class LayerNorm(LightweightModule):
                 compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                     math_fidelity=ttnn.MathFidelity.HiFi4,
                     math_approx_mode=False,
-                    fp32_dest_acc_en=False,
+                    fp32_dest_acc_en=True,
                     packer_l1_acc=False,
                 ),
+                # Caller places input 0; a matmul cannot move its own input.
+                memory_config=memory_config,
             )
             return x

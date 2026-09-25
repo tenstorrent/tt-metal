@@ -48,9 +48,8 @@ def test_wrapped_vision_model_inference(
         pytest.skip("CI only runs the two_layers test")
 
     dtype = ttnn.bfloat8_b
-    pcc = (
-        0.99 if num_layers and num_layers <= 3 else 0.91
-    )  # Llama 3 repo allows 0.91 for prefill, vision probably even less sensitive to pcc
+    # Real-weight floors. Config-init tests miss the outlier quantization this gate exists for.
+    pcc = 0.998 if num_layers and num_layers <= 3 else 0.985
     batch_size = 1  # For prefill we only support batch_size = 1
 
     # Example inputs for http://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg

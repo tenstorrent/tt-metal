@@ -17,12 +17,17 @@ from .ttnn_delta_rule_ops import (
 )
 from .ttnn_delta_rule_seq import chunk_gated_delta_rule_seq_adapter
 
+# Wormhole cannot keep chunk-seq activations in L1 beside the kernel circular buffers.
 _L1_SEQ_THRESHOLD = 512
+_L1_SEQ_THRESHOLD_WH = 0  # Wormhole: never L1
 
 
 def _seq_memory_config(seq_len):
-    """L1 for short sequences (faster), DRAM for long (avoids OOM)."""
-    return ttnn.L1_MEMORY_CONFIG if seq_len <= _L1_SEQ_THRESHOLD else None
+    """L1 for short sequences (faster), DRAM for long (avoids OOM). Wormhole always takes DRAM."""
+    from models.common.utility_functions import is_blackhole
+
+    threshold = _L1_SEQ_THRESHOLD if is_blackhole() else _L1_SEQ_THRESHOLD_WH
+    return ttnn.L1_MEMORY_CONFIG if seq_len <= threshold else None
 
 
 def rms_norm_gated_ttnn(x, gate, weight, eps=1e-5, memory_config=None):
@@ -144,11 +149,14 @@ def _causal_conv1d_fir(
     weight_taps=None,
     bias_dev=None,
     valid_len=None,
+    pad_layout=None,
 ):
     """Depthwise causal conv1d + SiLU via K shifted multiply-accumulate slices.
 
     x [B,T,D]; conv_state [B,K-1,D] or list of [B,1,D]; weight_taps/bias_dev optional.
     Returns output [B,T,D], new_state [B,K-1,D].
+
+    pad_layout: TILE has no sub-tile row shift, so None is ROW_MAJOR on Wormhole and TILE on Blackhole.
     """
     mc = memory_config
     B, T, D = x.shape[0], x.shape[1], x.shape[2]
@@ -159,17 +167,25 @@ def _causal_conv1d_fir(
             x, conv_state, kernel_size, device, memory_config=mc, weight_taps=weight_taps, bias_dev=bias_dev
         )
 
+    if pad_layout is None:
+        from models.common.utility_functions import is_blackhole
+
+        pad_layout = ttnn.TILE_LAYOUT if is_blackhole() else ttnn.ROW_MAJOR_LAYOUT
+    _x = x if x.layout == pad_layout else ttnn.to_layout(x, pad_layout, memory_config=mc)
     if conv_state is not None:
-        x_padded = ttnn.concat([conv_state, x], dim=1, memory_config=mc)
+        _cs = (
+            conv_state if conv_state.layout == pad_layout else ttnn.to_layout(conv_state, pad_layout, memory_config=mc)
+        )
+        x_padded = ttnn.concat([_cs, _x], dim=1, memory_config=mc)
     else:
         pad = ttnn.zeros(
             [B, kernel_size - 1, D],
             device=device,
             dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
+            layout=pad_layout,
             memory_config=mc,
         )
-        x_padded = ttnn.concat([pad, x], dim=1, memory_config=mc)
+        x_padded = ttnn.concat([pad, _x], dim=1, memory_config=mc)
 
     # new_state: last K-1 tokens; land in DRAM (carry alive across downstream kernel CBs).
     total_len = (kernel_size - 1) + T
@@ -216,11 +232,12 @@ def _causal_conv1d_fir(
 
     total_len = (kernel_size - 1) + T
     _dram = ttnn.DRAM_MEMORY_CONFIG
-    # Depthwise K-tap FIR via multiply + addcmul; re-tilize k>=1 slices (only k=0 is tile-aligned).
+    # TILE x_padded retiles only k>=1 (k=0 is tile-aligned). ROW_MAJOR retiles every tap.
     out = None
     for k in range(kernel_size):
         x_slice = x_padded[:, k : k + T]
-        if k != 0:
+        # k != 0 always retiles. The layout test adds k=0 only when x_padded is not TILE.
+        if k != 0 or x_slice.layout != ttnn.TILE_LAYOUT:
             x_slice = ttnn.to_layout(x_slice, ttnn.TILE_LAYOUT)
         if out is None:
             out = ttnn.multiply(x_slice, weight_taps[k], memory_config=mc)

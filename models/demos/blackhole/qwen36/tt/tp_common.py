@@ -1,11 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""TP helpers for Qwen3.5/3.6 on Blackhole (9B single-device + 27B TP=4 / TP=8).
+"""TP helpers for Qwen3.5/3.6. Per-arch and per-mesh tuning is gated by the predicates below.
 
 Used only when num_devices > 1. DRAM-sharded matmul cfgs, prefill progcfgs,
 mesh shard/replicate, FP8 dequant, HF weight reorder for per-device sharding.
 """
+
 import math
+import os
 
 import torch
 
@@ -18,6 +20,11 @@ DRAM_CORES = 8
 DRAM_GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(DRAM_CORES - 1, 0))})
 
 
+# fp32 destination tiles take two half-DST slots, so fp32_dest_acc_en halves the output-subblock budget.
+DST_TILES = 8
+DST_TILES_FP32_ACC = 4
+
+
 # Compute kernel configs
 COMPUTE_HIFI2 = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -25,6 +32,59 @@ COMPUTE_HIFI2 = ttnn.WormholeComputeKernelConfig(
     fp32_dest_acc_en=True,
     packer_l1_acc=True,
 )
+
+# Same fidelity, fp32 destination accumulation off. Only the GDN prefill in-projection uses this.
+COMPUTE_HIFI2_NO_FP32_ACC = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi2,
+    math_approx_mode=True,
+    fp32_dest_acc_en=False,
+    packer_l1_acc=True,
+)
+
+
+# LoFi + no fp32 dest acc, for the two attention prefill matmuls on Wormhole.
+COMPUTE_LOFI_NO_FP32_ACC = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.LoFi,
+    math_approx_mode=True,
+    fp32_dest_acc_en=False,
+    packer_l1_acc=True,
+)
+
+
+def sdpa_bf8_enabled(args):
+    """QWEN_SDPA_BF8: bf8 Q/K/V and a bf8 paged KV cache. Default on for N300; the env var overrides either way."""
+    env = os.environ.get("QWEN_SDPA_BF8")
+    if env is not None:
+        return env == "1"
+    return not is_blackhole() and getattr(args, "device_name", None) == "N300"
+
+
+def wh_9b_n300(args):
+    """True only for Qwen3.5-9B on a Wormhole N300."""
+    return not is_blackhole() and getattr(args, "dim", 0) <= 4096 and getattr(args, "device_name", None) == "N300"
+
+
+def wh_t3k(args):
+    """True only for an 8-chip Wormhole mesh (T3K)."""
+    return not is_blackhole() and int(getattr(args, "num_devices", 1)) == 8
+
+
+def wh_9b_n300_vision(args):
+    """wh_9b_n300 for vision args. Key off text hidden size: args.dim is the vision width on both models."""
+    if is_blackhole() or getattr(args, "device_name", None) != "N300":
+        return False
+    hf = getattr(args, "hf_config", None)
+    text_cfg = getattr(hf, "text_config", None) if hf is not None else None
+    text_dim = getattr(text_cfg, "hidden_size", None)
+    if text_dim is None:
+        # No text_config: refuse rather than enable the 9B-only path.
+        return False
+    return text_dim <= 4096
+
+
+def rope_permuted_enabled(args):
+    """Permuted RoPE. Off on T3K: it is incompatible with the unpadded KV reshard (paged_update_cache segfault)."""
+    return wh_9b_n300(args) and getattr(args, "rope_head_dim", 0) < getattr(args, "head_dim", 0)
 
 
 # Grid helpers
@@ -37,26 +97,7 @@ def prefill_grid_default():
 # grid, but harvested P150s expose only 11, so tuning to 12 would not port. 11 x 10 = 110 cores.
 PREFILL_MAX_COLS_PORTABLE = 11
 
-# Why TP=8 wants different values (measured at S=2048, 27B, 1x8 Ring):
-#   * widest_cols -- `_best_prefill_cols` ranks candidate widths by (out_subblock_w, cols), i.e.
-#     subblock first. At TP=8 the halved N makes wide grids yield a small per_core_N and hence a
-#     narrow subblock, so that ranking retreats to fewer columns and leaves cores idle. Measured
-#     device time is monotonically decreasing in column count instead: attn_wo went 1944us @ 60
-#     cores -> 700us @ 110, and mlp_gate 2943us @ 60 -> 1935us @ 110. So take the width.
-#   * in0_block_w_divisor -- `min(cap, k_tiles // grid_x)` is a function of the per-device K, which
-#     halves. attn_wo/gdn_out go k_tiles 48 -> 24 and `24 // 11 = 2`, but in0_block_w only has to
-#     DIVIDE k_tiles, so a larger block is legal and much faster (attn_wo @ 11 cols, from the sweep:
-#     bw2 786us, bw4 719us, bw6 700us, bw8 705us).
-#
-# in0_block_w_cap is L1-BOUND, NOT just a legality bound. in0_block_w sizes the in0 circular
-# buffer, and `_wo_proj` / the MLP prefill arm write their OUTPUT to L1 (attention/tp.py:246,
-# mlp.py:284) -- so the CBs and a resident L1 output tensor compete for the same 1536 KB. Measured
-# on the real model: cap=8 overflows and test_model_tp_long_prefill dies with
-#   "Statically allocated circular buffers in program N clash with L1 buffers on core range
-#    [0-0 - 10-8]. L1 buffer allocated at 1314560 and static circular buffer region ends at 1372032"
-# from attention/tp.py:241. A standalone per-op sweep CANNOT see this: in isolation the only L1
-# tenant is the op under test, so it reports a win that the full model has no room for. Any future
-# raise of this cap must be validated by test_model_tp_long_prefill, not by the sweep alone.
+#   * widest_cols -- `_best_prefill_cols` ranks widths by (out_subblock_w, cols), subblock first.
 _PREFILL_TUNING = {
     4: dict(widest_cols=False, in0_block_w_divisor=False, in0_block_w_cap=4),
     8: dict(widest_cols=True, in0_block_w_divisor=True, in0_block_w_cap=4),
@@ -134,7 +175,9 @@ def create_dram_sharded_matmul_program_config(m, k, n, num_cores=None):
     )
 
 
-def create_matmul_1d_decode_progcfg(m, k, n, num_cores, fused_activation=None, fp32_acc=True, grid_w=8):
+def create_matmul_1d_decode_progcfg(
+    m, k, n, num_cores, fused_activation=None, fp32_acc=True, grid_w=8, in0_block_w_cap=8
+):
     """Explicit-grid 1D (mcast_in0) decode matmul progcfg on ~`num_cores` cores — small grids beat
     the ~80-core DRAM-sharded grid on the bandwidth-bound skinny decode matmuls. Weight must be interleaved.
 
@@ -148,7 +191,8 @@ def create_matmul_1d_decode_progcfg(m, k, n, num_cores, fused_activation=None, f
     k_tiles = math.ceil(k / TILE_SIZE)
     n_tiles = math.ceil(n / TILE_SIZE)
     # mcast_in0: every core streams the full K, so in0_block_w must divide the full k_tiles.
-    per_core_k = _find_largest_divisor(k_tiles)
+    # in0_block_w_cap bounds the K-block. Raise it only where that shape was checked.
+    per_core_k = _find_largest_divisor(k_tiles, max_div=in0_block_w_cap)
     per_core_n = math.ceil(n_tiles / (cols * rows))
     cap = 4 if fp32_acc else 8  # fp32_dest_acc caps subblock area at 4
     sub_w = max(i for i in range(1, cap + 1) if per_core_n % i == 0)
@@ -168,8 +212,21 @@ def create_matmul_1d_decode_progcfg(m, k, n, num_cores, fused_activation=None, f
 
 def matmul_1d_decode(x, weight, decode_1d_progcfg, compute_cfg, out_memory_config=ttnn.L1_MEMORY_CONFIG):
     """Small-grid 1D (mcast_in0) decode matmul on an interleaved weight; interleaves the K-sharded
-    activation first since mcast_in0 needs the full K per core. See test_mlp_matmul_sweep."""
-    x_il = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+    activation first. On Wormhole, compare memory_config by value so an aliased buffer is not deallocated."""
+    if is_blackhole():
+        x_il = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+        out = ttnn.linear(
+            x_il,
+            weight,
+            compute_kernel_config=compute_cfg,
+            program_config=decode_1d_progcfg,
+            memory_config=out_memory_config,
+        )
+        if x_il is not x:
+            ttnn.deallocate(x_il)
+        return out
+    already_il = x.memory_config() == ttnn.L1_MEMORY_CONFIG
+    x_il = x if already_il else ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
     out = ttnn.linear(
         x_il,
         weight,
@@ -177,7 +234,7 @@ def matmul_1d_decode(x, weight, decode_1d_progcfg, compute_cfg, out_memory_confi
         program_config=decode_1d_progcfg,
         memory_config=out_memory_config,
     )
-    if x_il is not x:
+    if not already_il:
         ttnn.deallocate(x_il)
     return out
 
@@ -197,9 +254,51 @@ def create_activation_shard_config(k):
     )
 
 
+def decode_ids_for_embed(token_ids):
+    """Host-flatten decode ids to [1, B]. Do not reshape a padded row-major [B, 1] on device."""
+    return token_ids.reshape(1, token_ids.numel())
+
+
+def decode_embed(emb, tok, args):
+    """Width-sharded decode embedding only when the index row is one full tile. Do not reshape [B, 1] on device."""
+    mc = getattr(args, "emb_decode_memcfg", None)
+    if mc is None:
+        return _embed_narrow_batch(emb, tok) if wh_t3k(args) else emb(tok)
+    last = int(tok.shape[-1])
+    if last == 0 or last > TILE_SIZE or last % TILE_SIZE != 0:
+        return _embed_narrow_batch(emb, tok) if wh_t3k(args) else emb(tok)
+    return emb(tok, memory_config=mc)
+
+
+# Split the single-core tilize only above this width; a narrow row loses to the extra launches.
+_FAST_TILIZE_MIN_WIDTH = 256
+
+
+def _embed_narrow_batch(emb, tok):
+    """Pad a short embedding row to a tile so tilize can be multicore, then slice the logical rows back."""
+    if getattr(emb, "embed_scale", None) is not None:
+        return emb(tok)
+    e = ttnn.embedding(tok, emb.weights, layout=ttnn.ROW_MAJOR_LAYOUT)
+    shape = list(e.shape)
+    rows = int(shape[-2]) if len(shape) >= 2 else 1
+    if len(shape) < 2 or rows >= TILE_SIZE or int(shape[-1]) < _FAST_TILIZE_MIN_WIDTH:
+        out = ttnn.to_layout(e, ttnn.TILE_LAYOUT)
+        ttnn.deallocate(e)
+        return out
+    pad = [(0, 0)] * (len(shape) - 2) + [(0, TILE_SIZE - rows), (0, 0)]
+    padded = ttnn.pad(e, pad, value=0.0)
+    ttnn.deallocate(e)
+    tiled = ttnn.tilize(padded, use_multicore=True)
+    ttnn.deallocate(padded)
+    out = ttnn.slice(tiled, [0] * len(shape), shape)
+    ttnn.deallocate(tiled)
+    return out
+
+
 # 2D prefill matmul config
-def _get_out_subblock_w(per_core_n, out_subblock_h):
-    for w in range(min(per_core_n, 4 // out_subblock_h), 0, -1):
+def _get_out_subblock_w(per_core_n, out_subblock_h, max_hw=DST_TILES_FP32_ACC):
+    """Widest out_subblock_w that divides per_core_n within the DST budget."""
+    for w in range(min(per_core_n, max_hw // out_subblock_h), 0, -1):
         if per_core_n % w == 0:
             return w
     return 1
@@ -211,11 +310,69 @@ def _full_grid_crs(grid):
     return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))})
 
 
-def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activation=None, tuning=None):
+def _safe_half_out_block_w(per_core_N, out_subblock_w):
+    """Largest divisor of per_core_N, a multiple of out_subblock_w, that is at most half of per_core_N."""
+    half = max(1, per_core_N // 2)
+    best = out_subblock_w
+    for w in range(out_subblock_w, half + 1, out_subblock_w):
+        if per_core_N % w == 0:
+            best = w
+    return best
+
+
+def _largest_divisor_le(n, cap):
+    """Largest divisor of n that is <= cap (1 if none, since 1 always divides)."""
+    for d in range(min(n, cap), 0, -1):
+        if n % d == 0:
+            return d
+    return 1
+
+
+# Longest prefill M the full-grid MLP config below is used at.
+PREFILL_FULL_GRID_MAX_M = 2048
+
+
+def create_prefill_mlp_matmul_program_config_full_grid(
+    m, k, n, grid_size=None, fused_activation=None, out_subblock_h=1
+):
+    """One-K-pass prefill MLP progcfg on the full grid (27B on Wormhole). out_subblock_h must divide per_core_M."""
+    if grid_size is None:
+        grid_size = prefill_grid_default()
+    per_core_M = max(1, math.ceil(m / TILE_SIZE / grid_size[1]))
+    per_core_N = max(1, math.ceil(n / TILE_SIZE / grid_size[0]))
+    out_subblock_h = _largest_divisor_le(per_core_M, out_subblock_h)
+    k_tiles = math.ceil(k / TILE_SIZE)
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        in0_block_w=_largest_divisor_le(k_tiles, DST_TILES),
+        out_subblock_h=out_subblock_h,
+        # DST_TILES, not the fp32-acc ceiling: this path has fp32 dest acc off.
+        out_subblock_w=_get_out_subblock_w(per_core_N, out_subblock_h, max_hw=DST_TILES),
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        out_block_w=per_core_N,  # one K pass
+        transpose_mcast=False,
+        fused_activation=fused_activation,
+        fuse_batch=False,
+    )
+
+
+def create_prefill_matmul_program_config(
+    m,
+    k,
+    n,
+    grid_size=None,
+    fused_activation=None,
+    tuning=None,
+    out_block_w=None,
+    halve_out_block=False,
+    max_subblock_hw=None,
+):
     """2D prefill matmul progcfg (DRAM-interleaved).
 
     fused_activation in packer; sharded kernel rejects ttnn.linear(activation=...) with progcfg.
-    tuning: a `_PREFILL_TUNING` entry (see `prefill_tuning`); None = the frozen TP=4 behavior."""
+    out_block_w holds one N-slice of the per-core output. halve_out_block is for grids already at max cores.
+    max_subblock_hw is the DST ceiling (4 with fp32 dest acc, 8 without)."""
     if grid_size is None:
         grid_size = prefill_grid_default()
     tuning = tuning or _PREFILL_TUNING[4]
@@ -223,7 +380,9 @@ def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activati
     per_core_N = max(1, math.ceil(n / TILE_SIZE / grid_size[0]))
 
     out_subblock_h = 1
-    out_subblock_w = _get_out_subblock_w(per_core_N, out_subblock_h)
+    out_subblock_w = _get_out_subblock_w(
+        per_core_N, out_subblock_h, max_hw=max_subblock_hw if max_subblock_hw is not None else DST_TILES_FP32_ACC
+    )
 
     k_tiles = math.ceil(k / TILE_SIZE)
     cap = tuning["in0_block_w_cap"]
@@ -234,7 +393,10 @@ def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activati
     else:
         in0_block_w = min(cap, max(1, k_tiles // grid_size[0]))
 
-    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+    if halve_out_block and out_block_w is None:
+        out_block_w = _safe_half_out_block_w(per_core_N, out_subblock_w)
+
+    kwargs = dict(
         compute_with_storage_grid_size=grid_size,
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
@@ -245,6 +407,37 @@ def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activati
         fused_activation=fused_activation,
         fuse_batch=False,
     )
+    if out_block_w is not None:
+        kwargs["out_block_w"] = out_block_w
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(**kwargs)
+
+
+def create_prefill_kpass1_matmul_program_config(m, k, n, grid_size=None, fused_activation=None):
+    """One-K-pass prefill progcfg. Requires fp32_dest_acc_en=False; an fp32-acc config overflows the CB."""
+    if grid_size is None:
+        grid_size = prefill_grid_default()
+    per_core_M = max(1, math.ceil(m / TILE_SIZE / grid_size[1]))
+    per_core_N = max(1, math.ceil(n / TILE_SIZE / grid_size[0]))
+    k_tiles = math.ceil(k / TILE_SIZE)
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        in0_block_w=min(4, max(1, k_tiles // grid_size[0])),
+        out_subblock_h=1,
+        out_subblock_w=_get_out_subblock_w(per_core_N, 1, max_hw=DST_TILES),
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        out_block_w=per_core_N,  # one K pass
+        transpose_mcast=False,
+        fused_activation=fused_activation,
+        fuse_batch=False,
+    )
+
+
+def prefill_out_memory_config(seq_len, out_width, elem_bytes=2, budget=8 << 20):
+    """L1 when the prefill output fits; DRAM on Wormhole when that output would clash with the matmul CBs."""
+    if is_blackhole():
+        return ttnn.L1_MEMORY_CONFIG
+    return ttnn.DRAM_MEMORY_CONFIG if seq_len * out_width * elem_bytes > budget else ttnn.L1_MEMORY_CONFIG
 
 
 def _widest_prefill_cols(n, max_cols, subblock_slack=1):
@@ -281,7 +474,9 @@ def _best_prefill_cols(n, max_cols):
     return best_cols
 
 
-def create_prefill_mlp_matmul_program_config(m, k, n, fused_activation=None, max_cols=None, tuning=None):
+def create_prefill_mlp_matmul_program_config(
+    m, k, n, fused_activation=None, max_cols=None, tuning=None, halve_out_block=False, max_subblock_hw=None
+):
     """FPU-tuned 2D prefill progcfg for MLP matmuls: picks the grid width that maximizes the output
     subblock (drives prefill FPU) instead of the default full width.
 
@@ -292,7 +487,8 @@ def create_prefill_mlp_matmul_program_config(m, k, n, fused_activation=None, max
 
     tuning: a `_PREFILL_TUNING` entry. With `widest_cols` (TP=8) the subblock-first width heuristic
     is replaced by "take the width, clamped to PREFILL_MAX_COLS_PORTABLE" -- measured device time at
-    TP=8 falls monotonically with column count, so trading cores for a wider subblock loses."""
+    TP=8 falls monotonically with column count, so widest_cols does not trade cores for a wider subblock.
+    halve_out_block is for grids already at max cores. max_subblock_hw does not change the grid width."""
     grid = prefill_grid_default()
     tuning = tuning or _PREFILL_TUNING[4]
     limit = max_cols or grid[0]
@@ -304,7 +500,14 @@ def create_prefill_mlp_matmul_program_config(m, k, n, fused_activation=None, max
     else:
         cols = _best_prefill_cols(n, limit)
     return create_prefill_matmul_program_config(
-        m, k, n, grid_size=(cols, grid[1]), fused_activation=fused_activation, tuning=tuning
+        m,
+        k,
+        n,
+        grid_size=(cols, grid[1]),
+        fused_activation=fused_activation,
+        tuning=tuning,
+        halve_out_block=halve_out_block,
+        max_subblock_hw=max_subblock_hw,
     )
 
 
@@ -417,9 +620,25 @@ def all_gather_matmul_prefill(
     return out
 
 
+def decode_ccl_tuning(args):
+    """Decode GDN out-proj all-reduce tuning, or None for the tt_all_reduce defaults. T3K only."""
+    return (1, 2) if wh_t3k(args) else None
+
+
+def prefill_ccl_tuning():
+    """Prefill (chunks_per_sync, num_workers_per_link). QWEN35_PREFILL_CCL overrides. Wormhole unless overridden."""
+    _v = os.environ.get("QWEN35_PREFILL_CCL")
+    if _v:
+        _c, _w = (int(t) for t in _v.split(","))
+        return _c, _w
+    if is_blackhole():
+        return 10, 2
+    return 10, 4
+
+
 def mlp_gateup_agmm_enabled(num_devices):
-    """Fuse the ff_norm all-gather into the MLP gate/up matmul (prefill). TP-only (needs the gather)."""
-    return num_devices > 1
+    """Fuse the ff_norm all-gather into the MLP gate/up matmul. Blackhole only; an 8-row grid overlaps NOC users."""
+    return num_devices > 1 and is_blackhole()
 
 
 def all_gather_swiglu_prefill(
@@ -556,7 +775,8 @@ def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, 
     Unlike decode (M=1, where the 2D matmul collapses to ~8 cores and this loses), at prefill M>>1 the
     2D matmul fills the grid, so overlapping the RS with the matmul is a WIN (biggest for the fp32
     GDN-out with its large RS). grid=(8,8): matmul rows 0-7, RS workers rows 8-9. x: K-sharded
-    [.,M,K_local]; weight [K_local,N]. Returns [1,1,M,N/nd] (cloned; shared buffer survives)."""
+    [.,M,K_local]; weight [K_local,N]. Returns [1,1,M,N/nd].
+    Blackhole only. The Wormhole port hangs and wedges ethernet; do not enable it by config."""
     M, K_local = x.shape[-2], x.shape[-1]
     N = weight.shape[-1]
     interm, out_buf = _mmrs_prefill_shared_bufs(tt_ccl, M, N, nd, dtype)
@@ -609,13 +829,17 @@ def sharded_decode_matmul(
     prefill_progcfg_fn,
     prefill_k,
     decode_out_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    prefill_compute_cfg=None,
+    prefill_out_dtype=None,
 ):
     """DRAM-WIDTH_SHARDED weight matmul; branches on M (decode vs prefill).
 
     Decode (M<=32): L1-sharded act + DRAM-sharded kernel. Prefill: 2D matmul.
     Gate on x.shape[-2] (seq/M), not x.shape[1] (Z=1 in both modes). Decode result placement is
     `decode_out_memory_config` (default DRAM-interleaved; pass L1 to keep the small decode
-    activation resident). Prefill result is always DRAM-interleaved."""
+    activation resident). Prefill result is always DRAM-interleaved.
+    prefill_compute_cfg must match the prefill progcfg (one K pass needs fp32 dest acc off).
+    prefill_out_dtype pins the prefill result; ttnn.linear otherwise inherits in0 dtype."""
     seq = x.shape[-2]
     if seq <= TILE_SIZE:
         # Reshard act to L1 if needed; skip dealloc when x already sharded (GDN reuses x).
@@ -633,7 +857,12 @@ def sharded_decode_matmul(
         return ttnn.to_memory_config(out, decode_out_memory_config)
     pc = prefill_progcfg_fn(seq, prefill_k, weight.shape[-1])
     return ttnn.linear(
-        x, weight, compute_kernel_config=compute_cfg, program_config=pc, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        x,
+        weight,
+        compute_kernel_config=prefill_compute_cfg or compute_cfg,
+        program_config=pc,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        **({"dtype": prefill_out_dtype} if prefill_out_dtype is not None else {}),
     )
 
 
@@ -744,6 +973,135 @@ def prepare_gdn_qkv(qkv_w, key_dim, value_dim, nk, dk, nv, dv, tp):
         v_s = v_part[s * v_per * dv : (s + 1) * v_per * dv, :]
         shards.append(torch.cat([q_s, k_s, v_s], dim=0))
     return torch.cat(shards, dim=0)
+
+
+def tuned_vocab_all_gather(
+    input_tensor, mesh_device, tt_ccl, dim, topology, num_workers_per_link, chunks_per_sync, dtype=ttnn.bfloat16
+):
+    """Vocab all-gather with tunable workers. dtype must match the logits; the drafter gathers fp32."""
+    if list(mesh_device.shape) == [1, 1]:
+        return input_tensor
+    num_links = tt_ccl.get_num_links(None)
+    input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
+    if input_tensor.dtype != dtype:
+        input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG, dtype)
+    gathered = ttnn.experimental.all_gather_async(
+        input_tensor,
+        persistent_output_buffer=None,
+        dim=dim,
+        multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
+        num_links=num_links,
+        topology=topology,
+        memory_config=None,
+        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+        chunks_per_sync=chunks_per_sync,
+        num_workers_per_link=num_workers_per_link,
+        num_buffers_per_channel=2,
+        subdevice_id=None,
+    )
+    input_tensor.deallocate(True)
+    return gathered
+
+
+def fc_decode_program_config(mesh_device, k, n):
+    """1-tile-tall decode matmul config for k >> n, or None when the shape does not fit."""
+    kt, nt = k // 32, n // 32
+    if k % 32 or n % 32 or kt == 0 or nt == 0:
+        return None
+    grid = mesh_device.compute_with_storage_grid_size()
+    per_core_n = 2 if nt % 2 == 0 else 1
+    cores = nt // per_core_n
+    if cores > grid.x * grid.y:
+        return None
+    in0_block_w = max((d for d in range(1, 33) if kt % d == 0), default=1)
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.num_cores_to_corerangeset(cores, grid, row_wise=True)
+        .bounding_box()
+        .grid_size(),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=per_core_n,
+        per_core_M=1,
+        per_core_N=per_core_n,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+
+def tiny_all_gather(input_tensor, mesh_device, tt_ccl, dim, topology, dtype):
+    """All-gather a one-element-per-device tensor. Deallocates input_tensor."""
+    num_links = tt_ccl.get_num_links(None)
+    input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
+    if input_tensor.dtype != dtype:
+        input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG, dtype)
+    gathered = ttnn.experimental.all_gather_async(
+        input_tensor,
+        persistent_output_buffer=None,
+        dim=dim,
+        multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
+        num_links=num_links,
+        topology=topology,
+        memory_config=None,
+        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+        chunks_per_sync=1,
+        num_workers_per_link=1,
+        num_buffers_per_channel=2,
+        subdevice_id=None,
+    )
+    input_tensor.deallocate(True)
+    return gathered
+
+
+def vocab_shard_offsets(mesh_device, num_devices, shard_width):
+    """Replicated offsets that turn shard-local argmaxes into global vocab ids."""
+    off = ttnn.Tensor(
+        [float(d * shard_width) for d in range(num_devices)],
+        [1, 1, 1, num_devices],
+        ttnn.float32,
+        ttnn.ROW_MAJOR_LAYOUT,
+    )
+    return ttnn.to_layout(ttnn.to_device(off, mesh_device), ttnn.TILE_LAYOUT)
+
+
+def greedy_pick(logits, mesh_device, tt_ccl, topology, shard_offsets=None, vocab_size=None):
+    """Greedy argmax of one logit row. With shard_offsets, reduce per shard and combine scalars; ties take the lowest global id."""
+    if shard_offsets is None:
+        u = ttnn.untilize(logits, use_multicore=True)
+        out = ttnn.argmax(u, dim=-1, keepdim=False)
+        ttnn.deallocate(u)
+        return out
+
+    num_devices = int(shard_offsets.shape[-1])
+    shard_width = int(logits.shape[-1])
+    # Evenly fractured vocab only; a partial last shard would need a per-device valid width.
+    assert (
+        shard_width * num_devices == vocab_size
+    ), f"shard argmax needs an evenly fractured head: {shard_width} x {num_devices} != {vocab_size}"
+
+    vmax = ttnn.max(logits, dim=-1, keepdim=True)
+    u = ttnn.untilize(logits, use_multicore=True)
+    idx = ttnn.argmax(u, dim=-1, keepdim=True)
+    ttnn.deallocate(u)
+    idxf = ttnn.typecast(idx, ttnn.float32)  # fp32 holds a vocab index exactly
+    ttnn.deallocate(idx)
+    idxf = ttnn.to_layout(ttnn.reshape(idxf, (1, 1, 1, 1)), ttnn.TILE_LAYOUT)
+
+    kw = dict(mesh_device=mesh_device, tt_ccl=tt_ccl, dim=3, topology=topology, dtype=ttnn.float32)
+    v8 = tiny_all_gather(vmax, **kw)
+    i8 = tiny_all_gather(idxf, **kw)
+
+    g8 = ttnn.add(i8, shard_offsets)
+    best = ttnn.max(v8, dim=-1, keepdim=True)
+    win = ttnn.eq(v8, best)
+    # vocab_size is past every valid id, so min cannot return it unless nothing won.
+    cand = ttnn.where(win, g8, float(vocab_size))
+    tok = ttnn.min(cand, dim=-1, keepdim=True)
+    for t in (v8, i8, g8, best, win, cand):
+        ttnn.deallocate(t)
+    out = ttnn.reshape(ttnn.typecast(ttnn.to_layout(tok, ttnn.ROW_MAJOR_LAYOUT), ttnn.uint32), (1, 1, 1))
+    ttnn.deallocate(tok)
+    return out
 
 
 def prepare_conv_taps(conv_w, key_dim, nk, dk, nv, dv, kernel_size, tp):

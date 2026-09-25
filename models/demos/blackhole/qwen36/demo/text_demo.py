@@ -13,9 +13,7 @@ Run batched:  MESH_DEVICE=P150x4 pytest models/demos/blackhole/qwen36/demo/text_
 GDN prefill runs the fast fused path by DEFAULT — no env vars needed: chunk-parallel phase-split
 (PREP fanned across the grid + V-block SCAN), fp32 o output, fp32 state, and flat token-major q/k/v
 with in-kernel L2-norm (eliminates the head-split relayouts + host l2_norm — the bulk of the
-preprocessing cost). Two opt-out flags exist only for benchmarking/debug:
-  QWEN_GDN_PHASED=0    fall back to the monolithic single-kernel fused op (no phase split).
-  QWEN_GDN_FLAT_QKV=0  fall back to head-split q/k/v + host l2_norm (no flat token-major reads).
+preprocessing cost).
 """
 
 import hashlib
@@ -31,14 +29,24 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole
+from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
+from models.demos.blackhole.qwen36.tt.spec_sampling import SpecSamplingParams
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import determine_device_name
 
-_MESH_SHAPE = {"P150": (1, 1), "P150x4": (1, 4), "P150x8": (1, 8)}.get(os.environ.get("MESH_DEVICE"), (1, 4))
+_MESH_SHAPE = {
+    "P150": (1, 1),
+    "P150x4": (1, 4),
+    "P150x8": (1, 8),
+    # N300 is the 2-chip mesh the 9B needs; one N150 cannot hold it.
+    "N150": (1, 1),
+    "N300": (1, 2),
+    "N150x4": (1, 4),
+    "T3K": (1, 8),
+}.get(os.environ.get("MESH_DEVICE"), (1, 4))
 _MULTI = _MESH_SHAPE != (1, 1)
 # Multi-device (TP) long-context prefill replays a captured per-chunk trace, so the mesh needs a
 # trace region (ttnn's DEFAULT_TRACE_REGION_SIZE is 0). 1 GiB is ample for every checkpoint,
@@ -135,7 +143,6 @@ def _get_prompt(seqlen, tokenizer, max_prompt_len=None):
         context = _load_and_cache_context(entry["context"], entry.get("max_length"))
         instruction = entry["prompt"]
         prefix = "<|im_start|>user\n"
-        # Seed <think> for reasoning; QWEN35_NO_THINK=1 disables it
         if os.environ.get("QWEN35_NO_THINK"):
             # Empty thinking block (enable_thinking=False)
             suffix = (
@@ -196,7 +203,7 @@ def _blocks_for(seqlen, max_generated_tokens):
     return min(MAX_BLOCK_BUDGET, blocks)
 
 
-@run_for_blackhole()
+@run_for_wormhole_b0_or_blackhole()
 @pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize(
@@ -294,6 +301,7 @@ def test_demo_text(
             assert len(rows[u]) == max_generated_tokens, f"row {u}: {len(rows[u])} != {max_generated_tokens}"
             assert rows[u] == rows[0], f"row {u} diverged from row 0 (identical prompts must decode identically)"
         assert len(set(rows[0])) > 1, f"degenerate generation: {rows[0]}"
+        _assert_output_quality(text0, len(rows[0]), seqlen)
         return
 
     if model.num_devices > 1:
@@ -309,13 +317,14 @@ def test_demo_text(
                     f"Non-deterministic output between run 0 and run {i}.\n"
                     f"Run 0: {results[0]}\nRun {i}: {results[i]}"
                 )
+            _assert_output_quality(tokenizer.decode(results[0], skip_special_tokens=True), len(results[0]), seqlen)
             return
         generated, perf = _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks)
         text = tokenizer.decode(generated, skip_special_tokens=True)
         logger.info(f"[TP {model.num_devices}-dev] ttft={perf['ttft_s']:.2f}s decode={perf['decode_tok_s']:.2f} tok/s")
         logger.info(f"[TP] GENERATED: {text!r}")
         assert len(generated) == max_generated_tokens, f"{len(generated)} != {max_generated_tokens}"
-        # assert len(set(generated)) > 1, f"degenerate generation: {generated}"
+        _assert_output_quality(text, len(generated), seqlen)
         # Perf JSON for CI target check (validate_perf_targets.py)
         _save_tp_benchmark(perf, model, seqlen=seqlen, prompt_len=actual_len, num_generated=len(generated))
         return
@@ -366,6 +375,7 @@ def test_demo_text(
     text = tokenizer.decode(generated, skip_special_tokens=True)
     _log_results(perf, actual_len, len(generated), text)
     _assert_results(perf, actual_len, len(generated))
+    _assert_output_quality(text, len(generated), seqlen)
 
 
 def _should_use_chunked_trace(model):
@@ -377,8 +387,96 @@ def _should_use_chunked_trace(model):
     )
 
 
+def _run_tp_spec_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks, sampling=None):
+    """MTP speculative decode via SpeculativeDecoder. Returns (tokens, perf_dict)."""
+    from models.demos.blackhole.qwen36.tt.spec_decode import SpeculativeDecoder
+
+    T = token_ids.shape[1]
+    # K=7 so T=8 fits fused verify SDPA groups of 4; other K use a verify that rounds differently.
+    _k = 7
+    # None defers K to QWEN36_SPEC_DRAFT_LEN (SpeculativeDecoder library default is 3).
+    draft_len = None if os.environ.get("QWEN36_SPEC_DRAFT_LEN") else _k
+    logger.info(
+        f"[TP SPEC] T={T} -> K={draft_len if draft_len is not None else os.environ['QWEN36_SPEC_DRAFT_LEN']}"
+        f"{'' if draft_len is not None else ' (QWEN36_SPEC_DRAFT_LEN)'}"
+        " (generate() logs the resolved K + reseed mode)"
+    )
+    num_blocks = ((num_blocks + 31) // 32) * 32
+    profiler = BenchmarkProfiler()
+    profiler.start("run")
+
+    kv_cache_shape = [num_blocks, model.args.n_local_kv_heads, BLOCK_SIZE, model.args.head_dim]
+    page_table = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
+    prompt_ids = token_ids[0, :T].tolist()
+
+    # spec decode captures no separate prefill trace (eager); keep the key present for the CI JSON.
+    profiler.start("compile_prefill")
+    profiler.end("compile_prefill")
+
+    # Verify uses fused GDN; plain decode must too or greedy near-ties diverge.
+    model.set_gdn_fused_decode(True)
+
+    # Do not free the KV cache before the timed run: the captured trace bakes buffer addresses.
+    model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=1)
+    signpost("compile_decode")
+    profiler.start("compile_decode")
+    dec = SpeculativeDecoder(model, page_table, draft_len=draft_len, sampling=sampling)
+    dec.generate(prompt_ids, min(6, max_generated_tokens))
+    profiler.end("compile_decode")
+
+    signpost("inference_prefill")
+    profiler.start("inference_prefill")
+    generated = dec.generate(prompt_ids, max_generated_tokens)
+    profiler.end("inference_prefill")
+    signpost("inference_decode")
+    profiler.start("inference_decode")
+    profiler.end("inference_decode")  # real decode timing comes from dec.decode_time below
+    model.free_kv_caches()
+    profiler.end("run")
+
+    ttft = dec.prefill_time
+    decode_tok_s = (len(generated) / dec.decode_time) if dec.decode_time > 0 else 0.0
+    logger.info(
+        f"[TP SPEC] accept={dec.accept_rate():.2f}/{dec.K} "
+        f"-> {dec.accept_rate() + 1:.2f} committed/iter over {dec.iters} iters; "
+        f"ttft={ttft:.2f}s decode={decode_tok_s:.2f} tok/s (compare vs a QWEN36_SPEC=0 run)"
+    )
+    return generated, {"ttft_s": ttft, "decode_tok_s": decode_tok_s, "profiler": profiler}
+
+
 def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks):
     """TP generation: traced chunk-outer prefill + paged decode. Returns (tokens, perf_dict)."""
+    _spec_req = os.environ.get("QWEN36_SPEC", "1") != "0"
+    if _spec_req:
+        _temp = float(os.environ.get("QWEN35_TEMP", "0") or 0)
+        _rep = float(os.environ.get("QWEN35_REP_PENALTY", "1.0") or 1.0)
+        _nr = int(os.environ.get("QWEN35_NO_REPEAT_NGRAM", "0") or 0)
+        # Permuted RoPE overflows the spec reseed window; only non-permuted models are prepared.
+        _permuted_rope = getattr(model.args, "rope_permuted_enabled", False)
+        _spec_ok = model.mtp is not None and not _permuted_rope and _nr == 0
+        if _spec_ok and _temp == 0 and _rep == 1.0:
+            logger.info("[TP] MTP speculative decode, greedy (default path; QWEN36_SPEC=0 opts out)")
+            return _run_tp_spec_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks)
+        if _spec_ok and _temp > 0:
+            # temperature > 0 uses rejection sampling and reads back full verify logits.
+            _sp = SpecSamplingParams(
+                temperature=_temp,
+                top_k=int(os.environ.get("QWEN35_TOP_K", "0") or 0),
+                top_p=float(os.environ.get("QWEN35_TOP_P", "1.0") or 1.0),
+                presence_penalty=(_rep - 1.0) if _rep != 1.0 else 0.0,
+                seed=int(os.environ.get("QWEN35_SEED", "0") or 0),
+            )
+            logger.info(
+                f"[TP] MTP speculative decode, SAMPLING temp={_sp.temperature} top_k={_sp.top_k} "
+                f"top_p={_sp.top_p} presence_penalty={_sp.presence_penalty} seed={_sp.seed}"
+            )
+            return _run_tp_spec_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks, sampling=_sp)
+        logger.info(
+            f"[TP] spec decode unavailable (mtp={model.mtp is not None}, permuted_rope={_permuted_rope}, "
+            f"temp={_temp}, no_repeat={_nr}); needs an MTP head and no no-repeat-ngram. Using plain decode."
+        )
+    else:
+        logger.info("[TP] QWEN36_SPEC=0 -> plain single-token decode (spec-decode baseline)")
     vocab = model.args.vocab_size
     T = token_ids.shape[1]
 
@@ -788,7 +886,8 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
     #            all-gather; measured slower overall than "shard" — kept for comparison.
     #   "host"  - legacy: full [B,1,vocab] logits to host, then torch.argmax. Baseline.
     _mode = os.environ.get("QWEN36_BATCHED_DECODE_MODE", "shard")
-    if _mode == "sample" and model.sampling is None:
+    # shard and sample both request on_device_logits, which asserts unless model.sampling is set.
+    if _mode in ("shard", "sample") and model.sampling is None:
         _mode = "host"
     if _mode == "shard":
         _per_shard = vocab // model.num_devices
@@ -1106,6 +1205,84 @@ def _log_results(perf, prompt_len, num_generated, text):
     logger.info(f"  Generated {num_generated} tokens in {perf['decode_steps']} steps")
     logger.info(f"  Text: {text[:6000]}")
     logger.info("=" * 70)
+
+
+# Content terms keyed by Gutenberg epub id so they stay aligned with eval_frankenstein_long.json.
+_CONTEXT_TERMS = {
+    "84": (
+        (
+            "frankenstein",
+            "victor",
+            "creature",
+            "monster",
+            "elizabeth",
+            "geneva",
+            "shelley",
+            "walton",
+            "margaret",
+            "arctic",
+            "expedition",
+            "ingolstadt",
+        ),
+        "Frankenstein",
+    ),
+    "2600": (
+        (
+            "tolstoy",
+            "pierre",
+            "natasha",
+            "andrei",
+            "bolkonski",
+            "rostov",
+            "napoleon",
+            "moscow",
+            "kuragin",
+            "borodino",
+            "war and peace",
+        ),
+        "War and Peace",
+    ),
+}
+
+
+def _context_terms(entry_idx):
+    """(terms, book_name) for one eval_frankenstein_long.json entry, chosen by its epub id."""
+    with open(f"{SAMPLE_PROMPTS_DIR}/eval_frankenstein_long.json") as f:
+        url = json.load(f)[entry_idx].get("context", "")
+    for epub, (terms, book) in _CONTEXT_TERMS.items():
+        if f"epub/{epub}/" in url:
+            return terms, book
+    raise AssertionError(f"no content terms registered for context {url!r} (entry {entry_idx})")
+
+
+def _assert_output_quality(text, num_generated, seqlen=None):
+    """Reject degenerate output: empty text, a dominant token, or a repeated 8-gram."""
+    stripped = text.strip()
+    assert stripped, f"generated {num_generated} tokens but the decoded text is empty/whitespace"
+
+    words = stripped.split()
+    if len(words) >= 20:
+        top = max(set(words), key=words.count)
+        frac = words.count(top) / len(words)
+        assert frac <= 0.6, f"degenerate output: {top!r} is {frac:.0%} of {len(words)} words. TEXT: {stripped[:300]!r}"
+
+    if len(words) >= 40:
+        grams = {}
+        for i in range(len(words) - 7):
+            g = " ".join(words[i : i + 8])
+            grams[g] = grams.get(g, 0) + 1
+        worst, count = max(grams.items(), key=lambda kv: kv[1])
+        assert count <= 10, f"looping output: 8-gram {worst!r} repeats {count}x. TEXT: {stripped[:300]!r}"
+
+    if seqlen in _FRANKENSTEIN_CONFIGS and num_generated >= 100:
+        terms, book = _context_terms(_FRANKENSTEIN_CONFIGS[seqlen])
+        low = stripped.lower()
+        hits = [t for t in terms if t in low]
+        assert hits, (
+            f"long-context output does not reference the {book} context at all "
+            f"(expected any of {list(terms)}) — suspect the long-prefill path. TEXT: {stripped[:300]!r}"
+        )
+        logger.info(f"  output content check OK ({book}, matched {hits})")
 
 
 def _assert_results(perf, prompt_len, num_generated):

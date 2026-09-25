@@ -3155,10 +3155,10 @@ class ModelArgs:
         from transformers import AutoConfig
 
         if self.dummy_weights:
-            logger.info(f"Loading state param for dummy {self.model_name} from {self.LOCAL_HF_PARAMS[self.model_name]}")
-            self.hf_config = AutoConfig.from_pretrained(
-                self.LOCAL_HF_PARAMS[self.model_name], trust_remote_code=self.trust_remote_code_hf
-            )
+            # Optional: LOCAL_HF_PARAMS skips the checkpoint fetch. Otherwise CKPT_DIR already has config.json.
+            _cfg_src = self.LOCAL_HF_PARAMS.get(self.model_name, self.CKPT_DIR)
+            logger.info(f"Loading state param for dummy {self.model_name} from {_cfg_src}")
+            self.hf_config = AutoConfig.from_pretrained(_cfg_src, trust_remote_code=self.trust_remote_code_hf)
         else:
             self.hf_config = AutoConfig.from_pretrained(
                 self.CKPT_DIR,

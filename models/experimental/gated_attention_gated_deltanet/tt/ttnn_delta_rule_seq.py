@@ -45,6 +45,15 @@ _TILE = 32
 _DRAM = ttnn.DRAM_MEMORY_CONFIG
 
 
+def _seq_out_dtype(out_dtype=None):
+    """None -> fp32 on Blackhole; bf16 on Wormhole, where the fp32 [BH, L, V] relayout does not fit L1."""
+    if out_dtype is not None:
+        return out_dtype
+    from models.common.utility_functions import is_blackhole
+
+    return ttnn.float32 if is_blackhole() else ttnn.bfloat16
+
+
 def _bmm_progcfg(device, mt, nt, kt):
     """Batched-matmul program config: one full [mt,nt] output block per core, with the batch
     spread across the whole device grid. TTNN's auto-config pins the recurrence's [128,128]@[128,128]
@@ -102,6 +111,7 @@ def chunk_gated_delta_rule_seq_adapter(
     valid_len=None,
     qkv_head_dims=None,  # (Hq,K,H,V): flat q/k/v [B,T,Hq*K]/[B,T,H*V]
     return_o_bh=False,  # True: return o as [BH,T,V], skip token-major relayout
+    out_dtype=None,  # kernel-output relayout dtype; None -> fp32 on Blackhole, bf16 on Wormhole
 ):
     """Drop-in for chunk_gated_delta_rule_ttnn using `gated_delta_attn_seq`.
 
@@ -185,6 +195,7 @@ def chunk_gated_delta_rule_seq_adapter(
         mesh_device=device,
         cached_masks=cached_masks,
         valid_len=valid_len,
+        out_dtype=_seq_out_dtype(out_dtype),
     )
 
     # o [BH,T,V] -> [B,T,H,V] (L1 shuffle, DRAM output). return_o_bh skips for caller-side fusion.
@@ -404,11 +415,14 @@ def chunk_gated_delta_rule_seq(
     mesh_device=None,
     cached_masks=None,
     valid_len=None,
+    out_dtype=ttnn.float32,
 ):
     """Chunked gated delta rule via C++ sequential scan (Path A).
 
     Returns (output [BH,T,V], final_state [BH,K,V]) float32.
     valid_len: zero q/k/v/beta/g past valid_len (padding); identity state updates preserve recurrent state.
+    out_dtype: dtype of the L1-resident [BH, L, V] output relayout. fp32 does not fit
+        Wormhole L1 beside the prefill working set; use bfloat16 there.
     """
     # Preprocessing matmuls: HiFi4 (matches block-inverse fidelity).
     _hifi_cfg = ttnn.WormholeComputeKernelConfig(
@@ -737,7 +751,7 @@ def chunk_gated_delta_rule_seq(
     _out_l1 = ttnn.L1_MEMORY_CONFIG
     # No memory_config: kernel output is already TILE, so it'd be a no-op that warns; the reshape below places it in L1.
     out_4d = ttnn.to_layout(
-        ttnn.typecast(out_4d, ttnn.float32, memory_config=_out_l1) if out_4d.dtype != ttnn.float32 else out_4d,
+        ttnn.typecast(out_4d, out_dtype, memory_config=_out_l1) if out_4d.dtype != out_dtype else out_4d,
         ttnn.TILE_LAYOUT,
     )
     o = ttnn.reshape(out_4d, [BH, L, V], memory_config=_out_l1)
