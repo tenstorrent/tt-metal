@@ -1,0 +1,5 @@
+# Ledger of the framework build itself. Not a model spec: only the gate-runner fields are set.
+model: bringup_framework
+tag: bringup
+paths:
+  bringup_dir: models/demos/common/bringup/dev
