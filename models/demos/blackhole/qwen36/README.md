@@ -14,20 +14,11 @@ additionally runs on a **Wormhole LoudBox** (4 × n300), as a `(1, 4)` mesh (`N1
 | Qwen3.6-35B-A3B  | `Qwen/Qwen3.6-35B-A3B` | Blackhole | P150x4 — `P150x4`    | 4-way TP + sparse MoE  |
 | Qwen3.6-35B-A3B  | `Qwen/Qwen3.6-35B-A3B` | Wormhole  | WH LoudBox — `N150x4` | 4-way TP + sparse MoE |
 
-The same `(1, 4)` TP code path serves `P150x4` and `N150x4` — what differs is hardware geometry,
-and every grid-, bank- and link-shaped constant is now derived from the mesh device rather than
-hardcoded. See [Running on the Wormhole LoudBox](#running-on-the-wormhole-loudbox).
+The same `(1, 4)` TP code path serves `P150x4` and `N150x4`. See
+[Running on the Wormhole LoudBox](#running-on-the-wormhole-loudbox).
 
-> **Wormhole is for the 35B-A3B only.** The 9B / 27B checkpoints remain Blackhole-only: their
-> program configs and memory budgets were tuned for a P150 (32 GB, 11x10 grid) and neither has
-> been brought up on a Wormhole chip (12 GB, 8x8). `demo/text_demo.py` skips them on Wormhole
-> rather than running something unvalidated.
->
-> **Blackhole runs the same code as before Wormhole support was added.** Every Wormhole-specific
-> change is behind an `is_blackhole()` check, and the device-derived constants reproduce the P150
-> values they replaced (`agmm_grid` → grid `(8,9)`, 2 links, 4 workers; GDN conv chunks 2 for the
-> MoE and 1 for the dense checkpoints; 8 DRAM banks). The one intentional exception is
-> `tp_common.pad_and_free`, a use-after-free fix that applies to both arches (see below).
+> **Wormhole is for the 35B-A3B only.** The 9B / 27B checkpoints are Blackhole-only;
+> `demo/text_demo.py` skips them on Wormhole.
 
 The **35B-A3B** is the sparse Mixture-of-Experts member of the family (`qwen3_5_moe`:
 256 routed experts, top-8, plus a gated shared expert on every layer). Every layer's
@@ -127,69 +118,11 @@ export MESH_DEVICE=N150x4
 pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced_128 and not 128k" --timeout=5000
 ```
 
-Five hardware properties differ from a P150, and each one is read off the mesh device at config
-time instead of being hardcoded:
+### Supported range
 
-| Property                  | BH P150 | WH chip | Where it is read                              |
-| ------------------------- | ------- | ------- | --------------------------------------------- |
-| Tensix worker grid        | 11 × 10 | 8 × 8   | `tp_common.worker_grid`                       |
-| Ethernet links per TP hop | 2       | 1       | `tp_common.ccl_num_links`                     |
-| DRAM banks                | 8       | 12      | `ModelArgs.num_dram_banks`                    |
-| DRAM per device           | 32 GB   | 12 GB   | budget only — see below                       |
-| L1 per core               | 1536 KB | 1464 KB | `tp_common.prefill_l1_output_ok`              |
-
-### What differs on Wormhole
-
-- **Fused all-gather + matmul.** `all_gather_matmul_prefill` / `all_gather_swiglu_prefill` place
-  their `2 × num_links` fabric mux cores on the *last row* of the worker grid, and assert
-  `ceil(grid.x / workers_per_link) == num_links`. `tp_common.agmm_grid` derives the grid height
-  (9 on BH, 7 on WH) and the worker count (4 on BH's 2 links, 8 on WH's 1) from the device. PR
-  #54572 disables this fusion on Wormhole because a grid height of 8 makes the op build
-  overlapping sender/receiver core ranges; the height here is `gy - 1` = 7, which leaves the mux
-  row free. Measured on WH at M=128, K=2048, N=1024: PCC 0.99997.
-- **Shared-GDN Wormhole compat layer** (`tt/wh_compat.py` + `tt/chunk_seq_wh.py`, taken from
-  PR #54572). The chunk-seq kernels in `models/experimental/gated_attention_gated_deltanet` were
-  tuned for Blackhole's much larger total L1; on Wormhole their activations collide with the
-  kernel's circular buffers. The compat layer sends chunk-seq activations to DRAM and switches the
-  `[BH, L, V]` output relayout to bf16 (33.5 MB -> 16.8 MB at L=2048). Both overrides delegate to
-  upstream whenever `is_blackhole()`. Without this the GDN prefill does not complete on Wormhole.
-- **Fused matmul + reduce-scatter is Blackhole-only.** `matmul_reduce_scatter_async` (the GDN
-  out-projection) *enqueues but never completes* on the `(1, 4)` WH mesh: the 1-link Linear hop
-  asks for 8 RS workers per direction (18 cores) and no split of the 8x8 grid lets it finish.
-  GDN prefill takes the **unfused** arm on Wormhole (`ttnn.linear` + `tt_all_reduce`); see
-  `tp_common.mmrs_prefill_supported`.
-- **L1-resident prefill outputs.** Keeping a tuned prefill matmul's `[seq, N]` output in L1 is a
-  Blackhole-only win; on WH the same program config's circular buffers plus that output overflow
-  L1. Those outputs go to DRAM on WH — program configs are unchanged.
-- **GDN depthwise conv chunking.** The prefill `ttnn.conv1d` is height-sharded, so per-core L1
-  scales with `channels / chunks / num_cores`. The chunk count is scaled by the core-count ratio
-  against the BH reference (110 cores): 4 chunks for the MoE checkpoint on WH versus 2 on BH. The
-  split is exact (depthwise is per-channel-independent).
-- **MoE prefill** (`tt/moe/prefill.py::_process_prefill_chunk_wh`). The routed-expert
-  `sparse_matmul`s were 82% of WH prefill device time. The WH path runs both expert matmuls per
-  (32-token tile, expert) pair gated by the same tile mask, where Blackhole's down_proj computes
-  every local expert over the whole chunk. It also uses the decode-swept block widths
-  (`in0_block_w = K/2`, `per_core_n = 2`), applies the routing weights on the 512-wide
-  intermediate before down_proj, and writes bfloat8_b matmul outputs. Measured on the first 4
-  layers at T=2048: 926 -> 234 ms of prefill; MoE prefill PCC moves by -0.00025.
-- **Decode.** The WH decode path keeps the attention head tensors height-sharded from the QKV
-  head split through SDPA, uses a local fork of the GDN recurrent step
-  (`tt/gdn/recurrent_decode_wh.py`, taken only when its `[B,H,K,V]` intermediate fits L1, i.e.
-  up to B=8), and uses the fused `generalized_moe_gate` router with tuned sparse-matmul configs.
-
-### Memory budget
-
-Each Wormhole chip has **12 GB of DRAM** against a P150's 32 GB, and that, not compute, is the
-binding constraint for the 35B-A3B. With the shipped dtypes (routed-expert gate/up `bfloat4_b`,
-down `bfloat8_b`, everything else `bfloat8_b`) and expert-parallel sharding of 256 experts over
-4 devices, the weights come to roughly **6–7 GB per device**, leaving ~5 GB for the 1 GiB trace
-region, the paged KV cache, the GDN recurrent/conv state and activations. The KV cache is
-~5.4 KB per token per device (10 full-attention layers × 1 local KV head × 256 head-dim × K and V
-in bf8), and the GDN state adds ~15 MB per batch row.
-
-Batch-1 prefill fits up to and including the `traced_128k` case (a 103,351-token prompt, see
-below). The `traced_256k` ISL and the `batched_*_b8` / `b32` cases past 128 tokens have not been
-run on this mesh; they were sized for the P150x4's 32 GB.
+Batch-1 prefill runs up to and including the `traced_128k` case (a 103,351-token prompt). The
+`traced_256k` case and batched cases with prompts longer than 128 tokens have not been run on
+Wormhole.
 
 ### Validated results
 
@@ -212,13 +145,12 @@ pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s --timeout=5000 \
 | `batched_128_b32` | 128 × 32 | 7.59 s  | 9.37 tok/s/user (299.9 aggregate)  | PASSED |
 
 `traced_4k` uses a 2,642-token prompt, and `traced_128k` runs the whole Frankenstein text, which
-is 103,351 tokens (its KV block budget is sized for 128k). The generated text is coherent and
-on-topic in every case (the test's non-degeneracy gate passes).
+is 103,351 tokens (its KV block budget is sized for 128k).
 
-Component PCC suite on the same mesh with the 35B-A3B checkpoint — `test_moe_tp.py`,
-`test_rope_tp.py`, `test_attention_tp.py`, `test_gdn_tp.py`, and `test_model_tp.py`'s
-`test_model_tp_contract` / `test_model_tp_long_prefill` / `test_model_tp_long_prefill_traced` —
-all pass (`test_mlp_tp` skips on a MoE checkpoint, which has no dense MLP):
+PCC on the same mesh with the 35B-A3B checkpoint. `test_moe_tp.py` (6/6), `test_gdn_tp.py`
+(17/17), `test_attention_tp.py` (7/7), `test_rope_tp.py` (2/2) and the `test_model_tp.py` cases
+below all pass; `test_mlp_tp` skips on a MoE checkpoint, which has no dense MLP. See
+[Running the tests on Wormhole](#running-the-tests-on-wormhole--35b-a3b-n150x4) for the commands.
 
 | Case | PCC vs reference |
 | ---- | ---------------- |
@@ -229,81 +161,103 @@ all pass (`test_mlp_tp` skips on a MoE checkpoint, which has no dense MLP):
 | Long prefill T=2304, chunked vs single-pass | 0.99745 |
 | Traced vs eager chunked prefill, T=4096 / 4352 | 0.99823 / 0.99928 |
 
-Full component suites, same mesh and checkpoint. The first group was re-run with the current code
-(including with the watcher on, as the CI leg runs it); the second group was measured before the MoE
-prefill change and has not been re-run since:
+## Running the demo and measuring performance
 
-| Suite | Result | Measured |
-| ----- | ------ | -------- |
-| `test_gdn_tp.py` | 17/17 | current code |
-| `test_attention_tp.py` | 7/7 | current code |
-| `test_moe_tp.py` | 6/6 | current code |
-| `test_rope_tp.py` | 2/2 | current code |
-| `demo/text_demo.py` `determinism_128` | PASSED (two runs, identical output) | current code |
-| `test_generate_tp.py`, `test_sampling.py` | 1/1 each | before the MoE prefill change |
-| `test_decode_bucketing.py` | 16/17 (the remaining one imports vLLM) | before the MoE prefill change |
-| `test_model_tp.py` | 13/14 | before the MoE prefill change |
+### Text demo (`demo/text_demo.py`)
 
-The one `test_model_tp` failure is `prefill_paged_slots_long[eager-2chunks_plus_tail]`: for one
-user of eight, first-step decode logits land at PCC 0.96 against the B=1 chunk-outer reference.
-Both per-slot prefill variants (eager and traced) show the same user, so it is a real
-per-slot-vs-reference numerical delta and not a cascade — the prefill logits and the GDN recurrent
-state round-trip are both bit-exact for that user.
+`demo/text_demo.py` is a single parametrized test, `test_demo_text`, that runs prefill + decode on a
+real prompt and prints TTFT and decode throughput. Every case is traced: the prefill (chunk-outer,
+2048-token chunks) and decode forward passes are captured as device traces and replayed — the path
+vLLM serves. The same command serves every checkpoint and arch; only `HF_MODEL` / `MESH_DEVICE`
+change (see [Environment setup](#environment-setup)).
 
-> **Fixed while porting:** the decode KV-cache update did `ttnn.pad(...)` and then
-> deallocated the pad's *source*. `ttnn.pad` returns a metadata-only view aliasing
-> its input when the requested pad already fits inside the tile padding — which is
-> exactly the `[1, B, 1, HD] → [1, B, 32, HD]` case here — so that freed the padded
-> tensor's own storage and the next L1 allocation clobbered it. On WH at B=32 this
-> dropped attention PCC to 0.09; on BH the larger L1 happens not to recycle the block
-> before the read, so it was latent. `tp_common.pad_and_free` frees the source only
-> when the pad really allocated, and is used on both arches.
-
-### Known limitations on Wormhole
-
-- **MoE prefill still does redundant work.** TTFT is about 1.0–1.2 ms per token. The WH expert
-  path still streams each expert's weights once per 32-token tile and runs swiglu over
-  zero-filled expanded tensors; grouping tokens by expert before the matmuls is the next step.
-- **No fused matmul + reduce-scatter** in GDN prefill (it hangs on this mesh, see above).
-- **Untested corners:** `traced_256k`, and batched cases with prompts longer than 128 tokens.
-
-## End-to-end demo test (`demo/text_demo.py`)
-
-The e2e text-generation test lives in `demo/text_demo.py`. It is a single
-parametrized test (`test_demo_text`) covering a range of input sequence lengths
-(ISLs): 128, 4k, 8k, 16k, 32k, 64k, 128k, and 256k tokens. Each ISL runs prefill
-+ decode and validates output (non-degenerate generation) and per-ISL
-performance gates (TTFT and decode tok/s).
-
-Two execution variants exist per ISL, identified by the test id prefix:
-
-- **`traced_*`** — captures the prefill (chunk-outer) and decode forward passes
-  as device traces and replays them. This is the **preferred** path and the one
-  vLLM serves; run these by default.
-- **`paged_*`** — non-traced paged path, useful as an eager reference/fallback.
-
-Run the preferred traced cases (the env vars above must already be exported):
+| Case id | ISL | Generated tokens | Batch | Notes |
+| ------- | --- | ---------------- | ----- | ----- |
+| `traced_128` | 128 | 50 | 1 | |
+| `traced_4k` / `traced_8k` | 4k / 8k | 100 | 1 | `traced_4k`'s Frankenstein prompt is 2,642 tokens |
+| `traced_16k` / `traced_32k` | 16k / 32k | 100 | 1 | |
+| `traced_64k` | 64k | 500 | 1 | |
+| `traced_128k` | 128k | 100 | 1 | the whole Frankenstein text: 103,351 tokens |
+| `traced_256k` | 256k | 100 | 1 | 900 s timeout |
+| `determinism_128` | 128 | 50 | 1 | runs twice, asserts identical output |
+| `batched_128_b8` / `_b32` | 128 | 50 | 8 / 32 | multi-device only |
+| `batched_256_b8` / `_b32` | 256 | 50 | 8 / 32 | multi-device only |
+| `batched_4k_b8` / `_b32` | 4k | 50 | 8 / 32 | per-user prefill; multi-device only |
+| `batched_8k_b8` … `batched_64k_b8` | 8k – 64k | 50 | 8 | per-user prefill; 64k has a 900 s timeout |
 
 ```bash
-# All traced ISLs
-pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced"
+export TT_METAL_HOME=$PWD PYTHONPATH=$PWD
+export HF_MODEL=Qwen/Qwen3.6-35B-A3B
+export MESH_DEVICE=N150x4          # Wormhole LoudBox; P150x4 on Blackhole
 
-# A single ISL, e.g. the short 128-token traced case
-pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced_128"
+# One case. Note "traced_128" alone also matches traced_128k.
+pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced_128 and not 128k" --timeout=5000
 
-# Medium / long traced ISLs
-pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced_4k"
-pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced_64k"
+# The Wormhole validation set from the results table above
+pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s --timeout=5000 \
+    -k "traced_128 or traced_4k or traced_8k or traced_64k or traced_128k or batched_128_b8 or batched_128_b32"
+
+# Every traced single-user ISL, and the determinism check
+pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced" --timeout=5000
+pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "determinism_128" --timeout=5000
 ```
 
-The **same command works for 9B, 27B, and 35B-A3B** — only the exported `HF_MODEL` /
-`MESH_DEVICE` differ. On a single device the test takes the validated 9B path; on
-the `(1,4)` mesh it routes through the TP chunk-outer traced prefill + paged
-traced decode path automatically (the sparse MoE block is selected per layer from
-the config, transparent to the demo).
+**Reading the output.** Each case logs its prompt length and one result line:
 
-> Long-context cases (64k+) download a public-domain corpus (Frankenstein, War
-> and Peace) on first run and cache it under `demo/sample_prompts/.context_cache`.
+```
+Prompt: 2642 tokens (block budget: 72 blocks x 64 = 4608 tokens)
+[TP 4-dev] ttft=3.00s decode=25.27 tok/s
+[TP 4-dev B=8] ttft=16.69s per-user-decode=20.12 tok/s aggregate=161.0 tok/s
+```
+
+followed by the generated text. The first case in a session also logs a one-time
+`prefill chunk-trace captured in …` (compile + trace capture); it is not part of TTFT.
+
+**What the test asserts.** On the multi-device path: the requested number of tokens was generated,
+batched rows (which all get the same prompt) decode identically, and generation is not degenerate.
+It does **not** assert TTFT or tok/s locally — in CI the case writes a benchmark JSON that
+`.github/scripts/utils/validate_perf_targets.py` checks against `models/model_targets.yaml` (see
+[CI](#ci)).
+
+> Long-context cases (64k+) download a public-domain corpus (Frankenstein, War and Peace) on first
+> run and cache it under `demo/sample_prompts/.context_cache`. `vision_demo.py` is Blackhole-only.
+
+| Env var | Default | Effect |
+| ------- | ------- | ------ |
+| `QWEN35_NO_THINK` | unset | `1` sends an empty thinking block instead of seeding `<think>` |
+| `QWEN35_REF_PROMPT` | unset | `1` uses the reference 64k extractive-summary prompt for ISL >= 4k |
+| `QWEN35_TEMP` / `QWEN35_TOP_K` / `QWEN35_TOP_P` | `0` / `0` / `1.0` | sampling (default: greedy) |
+| `QWEN35_REP_PENALTY` / `QWEN35_NO_REPEAT_NGRAM` | `1.0` / `0` | repetition controls |
+| `QWEN35_TP_PREFILL_EAGER` / `QWEN35_TP_DECODE_EAGER` | unset | `1` runs prefill / decode eagerly instead of traced (debugging) |
+| `QWEN36_BATCHED_DECODE_MODE` | `shard` | batched logits readback: `shard` (per-shard on device), `sample`, or `host` |
+| `QWEN36_DEBUG_DECODE_TIMING` | unset | `1` logs per-phase decode-step timing (update / execute / readback) |
+
+### Measuring performance
+
+**End-to-end (TTFT, tok/s).** Run the demo case and read its result line. TTFT is host wall time
+around the traced prefill; decode tok/s is the mean over decode steps after the first, each step
+timed end to end (input update + device + readback + sampling). Measure with nothing else running
+on the box.
+
+**Device profile (per-op time).** Tracy is built by default (`ENABLE_TRACY=ON`). Profile a
+component test, not the full demo: the 40-layer demo issues more ops than the per-device profiler
+buffer holds ("Profiler DRAM buffers were full, markers were dropped"), so its report comes out
+incomplete. Always pass `--timeout`, because profiling makes a run several times slower than
+pytest.ini's 300 s default allows for. For example, the MoE block at prefill seq 512:
+
+```bash
+python -m tracy -r -p -v -o generated/profiler/qwen36 \
+    -m "pytest models/demos/blackhole/qwen36/tests/test_moe_tp.py -svq -k prefill512 --timeout 1200"
+# per-op CSV: generated/profiler/qwen36/reports/<timestamp>/ops_perf_results_<timestamp>.csv
+```
+
+The CSV has one row per op per device, with `DEVICE KERNEL DURATION [ns]`, core count, shapes,
+dtypes and memory configs. To profile a multi-layer prefill, build `Qwen36Model` with `n_layers=4`, run `prefill_traced_chunked` twice, wrap the second
+call in `signpost("start")` / `signpost("stop")` (from `tracy`), and call
+`ttnn.ReadDeviceProfiler(mesh_device)` between the calls so the device buffer is flushed.
+
+**Perf targets.** CI targets per model / SKU / ISL live in `models/model_targets.yaml`
+(`qwen3.6-35b-a3b`: `bh_quietbox_2` and `wh_llmbox_perf`), with a +-20% tolerance.
 
 ## Tests
 
@@ -397,11 +351,7 @@ above are the applicable set; everything single-device is Blackhole-only in prac
   is pure CPU and passes anywhere.
 * `test_prefill.py`, `test_weight_mapping.py` and the vision tests (`test_patch_merger.py`,
   `test_vision_attention.py`, `test_vision_block.py`, `test_wrapped_model.py`, `test_mlp.py`,
-  `test_model.py`) target the 9B/27B/vision checkpoints and fail on 35B-A3B with
-  `KeyError: 'Qwen3.6-35B-A3B'` or an empty state dict — not a regression.
-* `test_prefill.py` additionally builds a **single-device** model. The chunk-seq kernel's circular
-  buffers want nearly a whole Wormhole L1 bank at this model's head count, so any resident L1
-  buffer collides; it needs the larger Blackhole L1.
+  `test_model.py`) target the 9B/27B/vision checkpoints and do not apply to 35B-A3B.
 
 ```bash
 export TT_METAL_HOME=$PWD PYTHONPATH=$PWD
@@ -417,16 +367,13 @@ pytest models/demos/blackhole/qwen36/tests/test_decode_bucketing.py -q --timeout
 pytest models/demos/blackhole/qwen36/tests/test_model_tp.py       -q --timeout=2400
 ```
 
-> Run these **module by module**, not as one pytest session: a single session collecting the whole
-> directory has been seen to die with a `Fatal Python error: Bus error` partway through and take
-> the remaining modules with it. `tt-smi -r` between the heavy modules clears a wedged card.
+> Run these **module by module**, not as one pytest session: a single long session can die with a
+> `Fatal Python error: Bus error`. `tt-smi -r` clears a wedged card.
 
 > `test_decode_bucketing.py` needs vLLM for one case; without it that case skips.
 
-> **Watcher on Wormhole:** set `TT_METAL_WATCHER_DISABLE_ETH=1` alongside `TT_METAL_WATCHER`. With the
-> watcher on the ethernet cores the Wormhole `fabric_erisc_router` fails to link (`.data` overlaps
-> `.text`), so every test errors at mesh open, and the half-initialized fabric leaves the ethernet cores
-> wedged (`Timed out waiting for ETH heartbeat`) until `tt-smi -r`. Worker cores stay watched.
+> **Watcher on Wormhole:** set `TT_METAL_WATCHER_DISABLE_ETH=1` alongside `TT_METAL_WATCHER`;
+> without it every test errors at mesh open and the cards need `tt-smi -r`.
 
 ## CI
 
@@ -459,6 +406,4 @@ gh workflow run "(Tier 2) Models End-To-End Tests" --ref <branch> -f model=qwen3
 The Wormhole runners read the checkpoint from `/mnt/MLPerf/huggingface` with the HF hub offline, and
 the shared tensor cache is mounted read-only by default. A first Wormhole run therefore needs the
 checkpoint on that share and `-f mlperf-write-access=true`, so it can write the Wormhole tensor cache
-(kept separate from Blackhole's: the cache path includes the device name). The `wh_llmbox_perf`
-targets were measured on a development LoudBox, not a CI runner; re-baseline them from the first
-CI run.
+(kept separate from Blackhole's: the cache path includes the device name).
