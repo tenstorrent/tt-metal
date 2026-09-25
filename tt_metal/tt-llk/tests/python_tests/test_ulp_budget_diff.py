@@ -184,8 +184,8 @@ def test_a_row_without_a_comment_inherits_its_op_header():
 
 
 def test_a_merge_key_row_is_read_through():
-    """`yaml_table` gained `<<` support, so the table may use it; values come from
-    PyYAML here for exactly that reason."""
+    """The registry loads the table with PyYAML's SafeLoader, which resolves `<<`, so the
+    table may use it; values come from PyYAML here for exactly that reason."""
     table = parse_table(
         "Base:\n"
         "  - &b {out: Float16_b, max_ulp: 2}  # max 1 ULP\n"
