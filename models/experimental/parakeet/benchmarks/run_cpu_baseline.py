@@ -10,6 +10,7 @@ Input: harness inputs.npz with keys <case>__mel [B,T,128], <case>__mel_lengths [
 Usage: python benchmarks/run_cpu_baseline.py --input /input --weights /weights --out baseline/cpu_fp32_<stage>
 (moved from baseline/run_cpu_baseline.py; the recorded baseline/*.json were produced by the same code.)
 """
+
 import argparse
 import json
 import os
@@ -28,8 +29,11 @@ def load_cases(input_dir):
     for n in names:
         mel = data[f"{n}__mel"].astype(np.float32)
         lens = data[f"{n}__mel_lengths"].astype(np.int64)
-        mask = data[f"{n}__attention_mask"] if f"{n}__attention_mask" in data else (
-            np.arange(mel.shape[1])[None, :] < lens[:, None]).astype(np.int64)
+        mask = (
+            data[f"{n}__attention_mask"]
+            if f"{n}__attention_mask" in data
+            else (np.arange(mel.shape[1])[None, :] < lens[:, None]).astype(np.int64)
+        )
         audio = data[f"{n}__audio_seconds"] if f"{n}__audio_seconds" in data else lens * 0.01
         cases.append((n, mel, lens, mask.astype(np.int64), audio.astype(np.float64)))
     return cases
@@ -55,10 +59,16 @@ def main():
     print(f"[load] {load_s:.2f}s threads={torch.get_num_threads()}", flush=True)
 
     os.makedirs(args.out, exist_ok=True)
-    results = {"host": platform.node(), "python": sys.version.split()[0], "torch": torch.__version__,
-               "threads": torch.get_num_threads(), "load_s": load_s, "repeats": args.repeats,
-               "protocol": "mel_features_to_tokens_with_sync_excluding_load_preprocessing_progress_v1",
-               "cases": {}}
+    results = {
+        "host": platform.node(),
+        "python": sys.version.split()[0],
+        "torch": torch.__version__,
+        "threads": torch.get_num_threads(),
+        "load_s": load_s,
+        "repeats": args.repeats,
+        "protocol": "mel_features_to_tokens_with_sync_excluding_load_preprocessing_progress_v1",
+        "cases": {},
+    }
     arrays = {}
     with torch.inference_mode():
         for name, mel, lens, mask_np, audio in cases:
@@ -78,13 +88,23 @@ def main():
             if hasattr(out, "durations") and out.durations is not None:
                 arrays[f"{name}__durations"] = out.durations.cpu().numpy()
             med = float(np.median(gen_t))
-            results["cases"][name] = {"batch": int(mel.shape[0]), "frames": int(mel.shape[1]),
-                                      "lengths": lens.tolist(), "audio_seconds": audio.tolist(),
-                                      "encode_s": enc_t, "transcribe_s": gen_t, "transcribe_median_s": med,
-                                      "rtf_audio_over_wall": float(audio.sum()) / med,
-                                      "enc_shape": list(enc.shape), "tokens_shape": list(seqs.shape)}
-            print(f"[case] {name} B={mel.shape[0]} T={mel.shape[1]} enc_med={np.median(enc_t):.3f}s "
-                  f"gen_med={med:.3f}s tokens={seqs.shape} row0={seqs[0][:12].tolist()}", flush=True)
+            results["cases"][name] = {
+                "batch": int(mel.shape[0]),
+                "frames": int(mel.shape[1]),
+                "lengths": lens.tolist(),
+                "audio_seconds": audio.tolist(),
+                "encode_s": enc_t,
+                "transcribe_s": gen_t,
+                "transcribe_median_s": med,
+                "rtf_audio_over_wall": float(audio.sum()) / med,
+                "enc_shape": list(enc.shape),
+                "tokens_shape": list(seqs.shape),
+            }
+            print(
+                f"[case] {name} B={mel.shape[0]} T={mel.shape[1]} enc_med={np.median(enc_t):.3f}s "
+                f"gen_med={med:.3f}s tokens={seqs.shape} row0={seqs[0][:12].tolist()}",
+                flush=True,
+            )
     np.savez_compressed(os.path.join(args.out, "oracle_cpu_fp32.npz"), **arrays)
     with open(os.path.join(args.out, "baseline.json"), "w") as f:
         json.dump(results, f, indent=1)

@@ -6,6 +6,7 @@
 Runs the cases in an order that switches (B, Tp) so trace release / re-capture is exercised.
 Usage: python tests/check_trace.py --input /input --cases short,long,short
 """
+
 import argparse
 import json
 import os
@@ -24,8 +25,10 @@ def main():
     ap.add_argument("--cases", default="short,long,short")
     ap.add_argument("--precision", default="bf16")
     args = ap.parse_args()
-    import ttnn
     import backend as be
+
+    import ttnn
+
     data = np.load(os.path.join(args.input, "inputs.npz"))
     with open(os.path.join(args.weights, "config.json")) as f:
         cfg = json.load(f)
@@ -52,13 +55,17 @@ def main():
             first, t_first = enc(mel, lens)  # untraced run + capture
             outs = [enc(mel, lens) for _ in range(3)]  # replays
             tok_tr = bk.transcribe(mel, lens)["tokens"]
-            rn = lambda a: float(np.sqrt(np.mean((a - ref) ** 2)) / (np.sqrt(np.mean(ref ** 2)) + 1e-12))
+            rn = lambda a: float(np.sqrt(np.mean((a - ref) ** 2)) / (np.sqrt(np.mean(ref**2)) + 1e-12))
             diffs = [float(np.abs(o - ref).max()) for o, _ in outs]
-            print(f"[{case}] shape={ref.shape} untraced={t_ref:.4f}/{t_ref2:.4f}s first+capture={t_first:.4f}s "
-                  f"replay={','.join(f'{t:.4f}' for _, t in outs)}s")
-            print(f"[{case}] first_maxdiff={float(np.abs(first - ref).max()):.3g} replay_maxdiff={diffs} "
-                  f"replay_nrmse={rn(outs[-1][0]):.3g} untraced_repeat_maxdiff={float(np.abs(ref2 - ref).max()):.3g} "
-                  f"tokens_equal={bool(np.array_equal(tok_ref, tok_tr))}")
+            print(
+                f"[{case}] shape={ref.shape} untraced={t_ref:.4f}/{t_ref2:.4f}s first+capture={t_first:.4f}s "
+                f"replay={','.join(f'{t:.4f}' for _, t in outs)}s"
+            )
+            print(
+                f"[{case}] first_maxdiff={float(np.abs(first - ref).max()):.3g} replay_maxdiff={diffs} "
+                f"replay_nrmse={rn(outs[-1][0]):.3g} untraced_repeat_maxdiff={float(np.abs(ref2 - ref).max()):.3g} "
+                f"tokens_equal={bool(np.array_equal(tok_ref, tok_tr))}"
+            )
         bk.release_trace()
     finally:
         ttnn.close_device(dev)

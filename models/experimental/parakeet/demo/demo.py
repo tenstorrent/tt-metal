@@ -10,6 +10,7 @@ Log-mel extraction and detokenization run on the host with the checkpoint's tran
 (declared host policy). Encoder and greedy TDT decode run on TT. Clips are processed one at a time
 (batch 1). The supported envelope is ≤ 32 s per clip.
 """
+
 import argparse
 import json
 import os
@@ -23,6 +24,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 
 def load_audio(path, target_sr):
     import soundfile as sf
+
     audio, sr = sf.read(path, dtype="float32", always_2d=True)
     audio = audio.mean(axis=1)
     if sr != target_sr:
@@ -38,10 +40,10 @@ def main():
     ap.add_argument("--precision", default="bf16", choices=["bf16", "fp32"])
     args = ap.parse_args()
 
-    import ttnn
     from transformers import AutoProcessor
-
     from tt import DEVICE_OPTIONS, create_backend
+
+    import ttnn
 
     processor = AutoProcessor.from_pretrained(args.checkpoint)
     sr = processor.feature_extractor.sampling_rate

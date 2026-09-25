@@ -8,6 +8,7 @@ Prints PCC / max-abs / row NRMSE at the subsampling output and selected conforme
 Usage: python tests/check_encoder_pcc.py [--input /input] [--weights /weights] [--case short]
        [--residual fp32|bf16|both]
 """
+
 import argparse
 import json
 import os
@@ -31,7 +32,7 @@ def row_nrmse(ref, out, lens):
     worst = 0.0
     for b, n in enumerate(lens):
         r, o = ref[b, :n].double(), out[b, :n].double()
-        worst = max(worst, (torch.sqrt(((r - o) ** 2).mean()) / torch.sqrt((r ** 2).mean())).item())
+        worst = max(worst, (torch.sqrt(((r - o) ** 2).mean()) / torch.sqrt((r**2).mean())).item())
     return worst
 
 
@@ -53,20 +54,33 @@ def main():
     print(f"[case] {name} mel={mel.shape} lens={lens.tolist()}", flush=True)
 
     from transformers import ParakeetForTDT
+
     model = ParakeetForTDT.from_pretrained(args.weights, dtype=torch.float32).eval()
     ref_taps = {}
-    hooks = [model.encoder.subsampling.register_forward_hook(
-        lambda m, i, o: ref_taps.__setitem__("subsampling", o.detach().float()))]
+    hooks = [
+        model.encoder.subsampling.register_forward_hook(
+            lambda m, i, o: ref_taps.__setitem__("subsampling", o.detach().float())
+        )
+    ]
     for i, layer in enumerate(model.encoder.layers):
-        hooks.append(layer.register_forward_hook(
-            lambda m, inp, o, i=i: ref_taps.__setitem__(f"layer{i}", (o[0] if isinstance(o, tuple) else o).detach().float())))
+        hooks.append(
+            layer.register_forward_hook(
+                lambda m, inp, o, i=i: ref_taps.__setitem__(
+                    f"layer{i}", (o[0] if isinstance(o, tuple) else o).detach().float()
+                )
+            )
+        )
     with torch.inference_mode():
-        ref = model.encoder(input_features=torch.from_numpy(mel), attention_mask=torch.from_numpy(mask)).last_hidden_state
+        ref = model.encoder(
+            input_features=torch.from_numpy(mel), attention_mask=torch.from_numpy(mask)
+        ).last_hidden_state
     for h in hooks:
         h.remove()
 
-    import ttnn
     import backend as be
+
+    import ttnn
+
     device = ttnn.open_device(device_id=0, **be.DEVICE_OPTIONS)
     try:
         with open(os.path.join(args.weights, "config.json")) as f:
@@ -75,8 +89,9 @@ def main():
         bk = be.create_backend(args.weights, cfg, device, precision="bf16")
         print(f"[load] {time.perf_counter() - t0:.1f}s", flush=True)
         L = bk.cfg.layers
-        keys = ["subsampling"] + [f"layer{i}" for i in range(L)
-                                  if i % args.every == args.every - 1 or i == 0 or i >= L - 4]
+        keys = ["subsampling"] + [
+            f"layer{i}" for i in range(L) if i % args.every == args.every - 1 or i == 0 or i >= L - 4
+        ]
         variants = ["bf16", "fp32"] if args.residual == "both" else [args.residual]
         for var in variants:
             bk.residual_dtype = ttnn.float32 if var == "fp32" else ttnn.bfloat16
@@ -96,8 +111,11 @@ def main():
             rv = torch.cat([ref[b, :n] for b, n in enumerate(vl)])
             ov = torch.cat([out_t[b, :n] for b, n in enumerate(vl)])
             pcc, mae = metrics(rv, ov)
-            print(f"[final] residual={var} pcc={pcc:.6f} maxabs={mae:.4f} "
-                  f"max_row_nrmse={row_nrmse(ref, out_t, vl):.5f}", flush=True)
+            print(
+                f"[final] residual={var} pcc={pcc:.6f} maxabs={mae:.4f} "
+                f"max_row_nrmse={row_nrmse(ref, out_t, vl):.5f}",
+                flush=True,
+            )
             for _ in range(2):
                 t0 = time.perf_counter()
                 bk.encode(mel, lens)
