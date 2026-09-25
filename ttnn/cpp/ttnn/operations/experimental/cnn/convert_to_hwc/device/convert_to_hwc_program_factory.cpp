@@ -5,6 +5,7 @@
 #include "convert_to_hwc_program_factory.hpp"
 
 #include "tt-metalium/tt_backend_api_types.hpp"
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>

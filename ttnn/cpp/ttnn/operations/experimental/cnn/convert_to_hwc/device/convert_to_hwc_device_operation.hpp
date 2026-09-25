@@ -34,6 +34,6 @@ struct ConvertToHWCDeviceOperation {
 namespace ttnn::prim {
 
 ttnn::experimental::prim::ConvertToHWCDeviceOperation::tensor_return_value_t convert_to_hwc(
-    const Tensor& input, const MemoryConfig& memory_config, const DataType& dtype);
+    const Tensor& input, const tt::tt_metal::MemoryConfig& memory_config, const tt::tt_metal::DataType& dtype);
 
 }  // namespace ttnn::prim
