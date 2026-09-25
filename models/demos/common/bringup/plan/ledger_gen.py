@@ -50,7 +50,7 @@ def generate(spec, ref=None, early: bool = False) -> dict:
         reps = sorted({spec.representative_layer(bt) for bt in spec.data["block_types"]})
         ref = spec.hooks().reference(spec, layers=reps, dtype=torch.float32)
     model_dir = rel(spec, spec.model_dir)
-    ref_paths = [f"{model_dir}/reference", f"{model_dir}/bringup/hooks.py", f"{model_dir}/bringup/spec.yaml"]
+    ref_paths = [f"{model_dir}/reference", f"{model_dir}/bringup/hooks.py", f"{model_dir}/__init__.py"]
     impl_paths = [f"{model_dir}/tt", f"{model_dir}/bringup/hooks.py"]
     ladder = spec.data["ladder"]
     first = ladder[0]
@@ -70,11 +70,12 @@ def generate(spec, ref=None, early: bool = False) -> dict:
 
     add(
         "R.1",
-        "Checkpoint has every tensor the spec expects",
-        "reference",
+        "Checkpoint has every tensor the spec expects; intake approved",
+        "intake",
         [],
         f"{PY}.intake.check_checkpoint",
         {
+            "intake_approved": "== 1",
             "missing_tensors": "== 0",
             "shape_mismatches": "== 0",
             "count_mismatches": "== 0",
@@ -111,7 +112,7 @@ def generate(spec, ref=None, early: bool = False) -> dict:
     golden_task = {}
     for r in ladder:
         if r.get("golden"):
-            golden_task[r["name"]] = golden_task[r["golden"]]
+            golden_task[r["name"]] = f"G.{r['golden']}"
             continue
         tid = f"G.{r['name']}"
         add(
