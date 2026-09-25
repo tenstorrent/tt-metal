@@ -5,78 +5,66 @@ Supported Data Types
 
 Reference for ``tt::tt_metal::DataType`` — the dtype a ``Tensor`` is created with, and what's actually usable per architecture.
 
-.. list-table:: ``tt::tt_metal::DataType`` → ``tt::DataFormat`` and hardware compute support
-    :widths: 15 15 12 12 12 34
+.. list-table:: ``tt::tt_metal::DataType`` hardware compute support
+    :widths: 15 12 12 12 49
     :header-rows: 1
 
     * - ``DataType``
-      - Maps to ``DataFormat``
       - Wormhole
       - Blackhole
       - Quasar
       - Notes
     * - ``BFLOAT16``
-      - ``Float16_b``
       - Yes
       - Yes
       - Yes
       -
     * - ``FLOAT32``
-      - ``Float32``
       - Yes
       - Yes
       - Yes
       -
     * - ``BFLOAT8_B``
-      - ``Bfp8_b``
       - Yes
       - Yes
       - No
       - Block-floating-point; see :ref:`ttnn.DataType` in the ttnn tensor docs for the block-float layout and tile-width caveats.
     * - ``BFLOAT4_B``
-      - ``Bfp4_b``
       - Yes
       - Yes
       - No
       - Block-floating-point, same caveats as ``BFLOAT8_B`` with coarser mantissa.
     * - ``UINT32``
-      - ``UInt32``
       - Yes
       - Yes
       - No
       -
     * - ``UINT16``
-      - ``UInt16``
       - Yes
       - Yes
       - No
       -
     * - ``UINT8``
-      - ``UInt8``
       - Yes
       - Yes
       - Yes
       -
     * - ``INT32``
-      - ``Int32``
       - Yes
       - Yes
       - Yes
       -
     * - ``INT8``
-      - ``Int8``
       - Yes
       - Yes
       - Yes
       -
     * - ``FP8_E4M3``
-      - ``Fp8_e4m3``
       - No
       - Yes
       - Yes
       -  Hardware/enum-legal on Blackhole and Quasar, but as of this writing the ``DataType`` is only wired up for one op path (the DeepSeek V3 prefill combine/dispatch ops), row-major layout only — check op support before opting in rather than assuming general elementwise support.
     * - ``INVALID``
-      - *(none)*
       - —
       - —
       - —
@@ -96,7 +84,38 @@ Metalium has two distinct type systems, and "is this data type supported" depend
 * ``tt::tt_metal::DataType`` (``tt_metal/api/tt-metalium/tensor/tensor_types.hpp``) — the table above. The type most host-side/ttnn code interacts with.
 * ``tt::DataFormat`` (``tt_metal/api/tt-metalium/tt_backend_api_types.hpp``) — the type a circular buffer, kernel unpacker/packer, or the Tensix compute engine operates on directly. Its own doc comment describes it as "the union of all data formats supported by Tensix hardware of all generations," with per-architecture legality checked at runtime, not by the enum itself.
 
-Every ``DataType`` maps to exactly one ``DataFormat`` (the "Maps to ``DataFormat``" column above), but the reverse is not true: most ``DataFormat`` values have no corresponding ``DataType`` and can only be reached by working directly with circular buffers and kernels, below the Tensor abstraction. See :ref:`Runtime Data Formats <runtime_data_formats>` below for the full picture.
+Every ``DataType`` maps to exactly one ``DataFormat``, via ``tt::tt_metal::datatype_to_dataformat_converter``:
+
+.. list-table:: ``DataType`` → ``DataFormat`` mapping
+    :widths: 30 30
+    :header-rows: 1
+
+    * - ``DataType``
+      - ``DataFormat``
+    * - ``BFLOAT16``
+      - ``Float16_b``
+    * - ``FLOAT32``
+      - ``Float32``
+    * - ``BFLOAT8_B``
+      - ``Bfp8_b``
+    * - ``BFLOAT4_B``
+      - ``Bfp4_b``
+    * - ``UINT32``
+      - ``UInt32``
+    * - ``UINT16``
+      - ``UInt16``
+    * - ``UINT8``
+      - ``UInt8``
+    * - ``INT32``
+      - ``Int32``
+    * - ``INT8``
+      - ``Int8``
+    * - ``FP8_E4M3``
+      - ``Fp8_e4m3``
+    * - ``INVALID``
+      - *(none — throws if converted)*
+
+The reverse is not true: most ``DataFormat`` values have no corresponding ``DataType`` and can only be reached by working directly with circular buffers and kernels, below the Tensor abstraction. See :ref:`Runtime Data Formats <runtime_data_formats>` below for the full picture.
 
 .. note::
 
