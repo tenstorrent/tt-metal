@@ -173,6 +173,29 @@ TEST_F(SoftmaxBackwardOpTest, SoftmaxBackward_BF16ReductionScratchAvoidsStoreNar
     EXPECT_TRUE(xt::allclose(result, expected, 0.0F, 1e-2F)) << "max_abs_diff=" << max_abs_diff;
 }
 
+TEST_F(SoftmaxBackwardOpTest, SoftmaxBackward_BF16ReductionAvoidsTf32Reload) {
+    using namespace ttml;
+
+    constexpr std::array<std::size_t, 4> shape{1, 1, 32, 32};
+    xt::xarray<float> y_tensor = xt::xarray<float>::from_shape(shape);
+    xt::xarray<float> grad_tensor = xt::xarray<float>::from_shape(shape);
+    y_tensor.fill(1.0F / 32.0F);
+    grad_tensor.fill(65536.0F);
+    for (std::size_t row = 0; row < shape[2]; ++row) {
+        grad_tensor(0, 0, row, shape[3] - 1) = 66048.0F;
+    }
+
+    auto y_tt = to_device_tensor(y_tensor, s_device, ttnn::DataType::BFLOAT16);
+    auto grad_tt = to_device_tensor(grad_tensor, s_device, ttnn::DataType::BFLOAT16);
+
+    auto result_tt = metal::softmax_backward(y_tt, grad_tt, -1);
+    auto result = core::to_xtensor(result_tt);
+    auto expected = reference_softmax_backward(core::to_xtensor(y_tt), core::to_xtensor(grad_tt), 3U);
+    const auto max_abs_diff = xt::amax(xt::abs(result - expected))();
+
+    EXPECT_TRUE(xt::allclose(result, expected, 0.0F, 0.0F)) << "max_abs_diff=" << max_abs_diff;
+}
+
 class SoftmaxBackwardOpTypedTest : public SoftmaxBackwardOpTest, public ::testing::WithParamInterface<DTypeParam> {};
 
 TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_LastDim_1Tile) {

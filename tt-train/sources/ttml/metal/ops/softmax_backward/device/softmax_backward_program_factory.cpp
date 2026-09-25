@@ -178,20 +178,28 @@ static void get_tensor_properties(
     num_rows = num_outer_dims * height_tiles;
     input_data_format = datatype_to_dataformat_converter(softmax_output.dtype());
     output_data_format = datatype_to_dataformat_converter(tensor_return_value.dtype());
-    // Avoid narrowing the two reduction scratch stores to the input format. Float32 scratch is
-    // subsequently consumed through the compute kernel's configured unpack path.
-    intermed_data_format = tt::DataFormat::Float32;
+    // Wormhole and Blackhole keep the row reduction in FP32 and consume its single scratch tile
+    // through unpack-to-DEST. Quasar retains the original FPU reduction path until it has an
+    // equivalent FP32 DEST column-broadcast primitive.
+    intermed_data_format =
+        softmax_output.device()->arch() == tt::ARCH::QUASAR ? input_data_format : tt::DataFormat::Float32;
     input_tile_size = tile_size(input_data_format);
     output_tile_size = tile_size(output_data_format);
     intermed_tile_size = tile_size(intermed_data_format);
 }
 
 static tt::tt_metal::ComputeConfig precise(
-    std::vector<uint32_t> compile_time_args, std::map<std::string, std::string> defines) {
+    std::vector<uint32_t> compile_time_args, std::map<std::string, std::string> defines, bool use_fp32_dest_reduction) {
     tt::tt_metal::ComputeConfig config;
     config.fp32_dest_acc_en = true;
     config.math_approx_mode = false;
     config.math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
+    if (use_fp32_dest_reduction) {
+        config.unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+        config.unpack_to_dest_mode[src0_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        config.unpack_to_dest_mode[src1_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        config.unpack_to_dest_mode[sum_reduce_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
     config.compile_args = std::move(compile_time_args);
     config.defines = std::move(defines);
     return config;
@@ -286,7 +294,7 @@ SoftmaxBackwardFactory::cached_program_t SoftmaxBackwardFactory::create(
 
     std::map<std::string, std::string> compute_defines = {
         {"BROADCAST_TYPE", "BroadcastType::COL"}, {"FP32_DEST_ACC_EN", "1"}};
-    const ComputeConfig wconf = precise(compute_compile_time_args, compute_defines);
+    const ComputeConfig wconf = precise(compute_compile_time_args, compute_defines, device->arch() != tt::ARCH::QUASAR);
 
     auto reader_kernel_id =
         CreateKernel(program, kReaderPath, worker_cores, ReaderDataMovementConfig(reader_compile_time_args));
