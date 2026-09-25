@@ -124,7 +124,6 @@ static_assert(kLinkSyncRingRecords <= kSyncFrameRecords);
 struct LinkSyncDiag {
     std::uint32_t timer;  // kLinkSyncTimerRan, or kLinkSyncTimerNoRate: this end sent no stamps
     std::uint32_t rounds_lost;
-    std::uint32_t frames_retried;     // frames left for a later step: the queue was busy at their phase
     std::uint32_t bursts_mismatched;  // bursts whose ingress stamps did not match their frames
     std::uint32_t frames_unstamped;   // frames that came in without an egress stamp
 };

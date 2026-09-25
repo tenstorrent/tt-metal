@@ -680,14 +680,6 @@ void log_link_diag(uint32_t chip_a, uint32_t chip_b, const LinkSyncDiag& da, con
                 d->bursts_mismatched,
                 d->frames_unstamped);
         }
-        if (d->frames_retried != 0) {
-            log_info(
-                tt::LogMetal,
-                "[streaming profiler] link sync chip {} {}: {} frames retried at a later step (queue busy)",
-                chip,
-                name,
-                d->frames_retried);
-        }
         if (d->timer == kernel_profiler::kLinkSyncTimerNoRate) {
             log_warning(
                 tt::LogMetal,

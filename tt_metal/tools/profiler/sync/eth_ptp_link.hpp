@@ -269,7 +269,7 @@ struct Grid {
     uint32_t c16() const { return p16 >> 2; }
     // Frame j of round `round`: false if the queue was busy at its phase, which leaves it for a later step. A gap of
     // 2^27 cycles or more since the last update (a pause) keeps the period it had.
-    __attribute__((noinline)) bool send(uint32_t base, uint32_t round, uint32_t j, Diag& diag) {
+    __attribute__((noinline)) bool send(uint32_t base, uint32_t round, uint32_t j) {
         uint32_t w = 0, r = 0;
         if (next_refclk_update(w, r)) {
             const uint32_t cycles = w - edge_wall, updates = (r - edge_refclk) / 4u;
@@ -282,9 +282,7 @@ struct Grid {
             w = kWallClockLo.read();
         }
         pacer.until(w + kLeadCycles + frame_phase_cycles(round * kTripsPerRound + j, p16));
-        const bool went = issue(frame_at(base, j));
-        diag.frames_retried += !went;
-        return went;
+        return issue(frame_at(base, j));
     }
 };
 
@@ -377,7 +375,6 @@ protected:
         volatile Diag& d = l1->diag;
         d.timer = diag.timer;
         d.rounds_lost = diag.rounds_lost;
-        d.frames_retried = diag.frames_retried;
         d.bursts_mismatched = diag.bursts_mismatched;
         d.frames_unstamped = diag.frames_unstamped;
     }
@@ -452,7 +449,7 @@ private:
         }
         return true;
     }
-    __attribute__((noinline)) void send_next() { out_sent += grid.send(slot_base, round, out_j0 + out_sent, diag); }
+    __attribute__((noinline)) void send_next() { out_sent += grid.send(slot_base, round, out_j0 + out_sent); }
     // A slot, once all the last burst's echoes are in: its pairs (egress stamps from the echoes themselves, ingress
     // stamps here), the round's records at a round boundary, then the next burst's frames, which the steps after it
     // send. A round is a count of bursts, not of slots: a burst whose steps outlast its slot delays the next, and the
@@ -553,7 +550,7 @@ private:
         taken++;
     }
     __attribute__((noinline)) void echo() {
-        echoed += grid.send(slot_base, round, echo_j0 + echoed, diag);
+        echoed += grid.send(slot_base, round, echo_j0 + echoed);
         if (echoed == kBurstFrames) {
             taken = 0;
             echoed = 0;
