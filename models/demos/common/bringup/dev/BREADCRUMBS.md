@@ -42,3 +42,20 @@ Drive this ledger with
   shared by path), and resets the downstream verdicts in the fork. The main checkout never switches branch.
 - `compare --other <spec>`: per task, status, attempts, debugger attempts, wall time, changed agent definitions
   (blob hashes from `agent_hashes`), metric deltas.
+
+## F3 (2026-09-25): reference side
+- `reference/interface.py`: the reference contract (`forward_chunk`, `new_state`, `state_tensors`, `load_state`,
+  `block_graph`, `component`, `chunk_context`) and `run_block`. A block is a list of `Step(name, inputs, output, kind,
+  stateful)`; the recorder names are `L{i}.in`, `L{i}.<step output>` (last = `out`), `embed`, `final_norm`, `logits`.
+  The graph is what the swap tests execute, so it must be the code: `check_reference` replays each block type's
+  representative layer from the recorded input and a state holding the recorded prefix, and requires an exact match
+  of every boundary (`graph_replay_maxabs == 0`).
+- `check_hf.py`: per-layer and logits parity against HF (forward hooks on `model.model.layers`, or the model's
+  `hf_layers` hook), with `--num-layers` truncation for checkpoints too large for fp32 on the host.
+- `generate_golden.py`: same on-disk format as the ERNIE goldens (prefill-server golden trace), plus `content_hash`
+  in the manifest, `state_tensors` in the metadata, and an atomic `.partial` -> final rename. It refuses to overwrite.
+  With a layer subset it stores only the selected layers, plus every chunk's block input at each contiguous run start.
+- `golden.py` `Golden` reader. Checked read-only against ERNIE's existing `s4096_c2048` (no content hash there;
+  `pinned_hash()` falls back to the manifest file's sha256).
+- Tests run the generic scripts on `selftest/fixture_model.py`: a synthetic 3-layer, 1-head fixture with an
+  independent one-shot "HF" twin and a byte-level tokenizer. It is a unit-test fixture, not a model bring-up.

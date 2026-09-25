@@ -1,0 +1,169 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+"""Goldens step: run the CPU reference once over one ladder rung and store every boundary (format in golden.py).
+
+    python -m models.demos.common.bringup.reference.generate_golden --spec S --rung s4096
+
+The reference always runs every layer, because a layer's input depends on all layers before it. With a layer
+subset in the spec, only the selected layers' boundaries and state are stored, and every chunk also stores the
+block input of the first layer of each contiguous run of selected layers, so the device can restart there.
+Boundaries are stored for every chunk if the rung sets ``full_dumps``, else only for the last chunk.
+Rungs with ``golden: <other>`` reuse that rung's golden and are skipped here.
+
+Records golden_layers, golden_chunks, golden_hash_ok, cpu_seconds, text_top5_acc_last_chunk.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import time
+from collections import defaultdict
+
+import torch
+from safetensors.torch import save_file
+
+from models.demos.common.bringup.core import metrics
+from models.demos.common.bringup.reference.golden import (
+    LOGITS_TAIL,
+    TOPK,
+    content_hash,
+    load_spec,
+    rung_dir,
+    store_dtype,
+    text_tokens,
+)
+
+
+def run_starts(selected: list[int]) -> list[int]:
+    """First layer of each contiguous run: [0, 1, 5, 6, 9] -> [0, 5, 9]."""
+    return [layer for k, layer in enumerate(selected) if k == 0 or selected[k - 1] != layer - 1]
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--spec")
+    ap.add_argument("--rung", required=True)
+    a = ap.parse_args(argv)
+    torch.set_num_threads(os.cpu_count())
+    spec = load_spec(a.spec)
+    rung = spec.rung(a.rung)
+    if rung.get("golden"):
+        print(f"rung {a.rung} reuses the golden of rung {rung['golden']}; nothing to generate")
+        return
+    seq, chunk = rung["seq"], rung["chunk"]
+    out = rung_dir(spec, rung)
+    if (out / "manifest.json").exists():
+        raise SystemExit(f"{out} exists; goldens are generated once. Delete it to regenerate.")
+    tmp = out.with_name(out.name + ".partial")
+    (tmp / "kv_cache").mkdir(parents=True, exist_ok=True)
+
+    t0 = time.time()
+    ref = spec.hooks().reference(spec, layers=None, dtype=torch.float32)
+    selected = spec.layers()
+    starts = set(run_starts(selected))
+    keep_fp32 = tuple(spec.get("golden.keep_fp32", []))
+    tokens = text_tokens(spec, seq)
+    n_chunks = seq // chunk
+    dumped = list(range(n_chunks)) if rung.get("full_dumps") else [n_chunks - 1]
+    print(f"reference loaded in {time.time() - t0:.0f}s; seq={seq} chunk={chunk}; storing layers {selected}")
+
+    state = ref.new_state(seq)
+    chunk_times, top1, top5 = [], [], []
+    for c in range(n_chunks):
+        per_layer, model_t = defaultdict(dict), {}
+        dump = c in dumped
+
+        def rec(name, t, per_layer=per_layer, model_t=model_t, dump=dump):
+            if name.startswith("L"):
+                li, key = name[1:].split(".", 1)
+                li = int(li)
+                if li in selected and (dump or (key == "in" and li in starts)):
+                    per_layer[li][key] = store_dtype(t.detach().clone(), keep_fp32, key)
+            elif name != "logits":
+                model_t[name] = store_dtype(t.detach().clone(), keep_fp32, name)
+
+        s = c * chunk
+        tc = time.time()
+        _, logits = ref.forward_chunk(tokens[s : s + chunk], s, state, rec, logits_last_n=chunk)
+        chunk_times.append(time.time() - tc)
+        logits = logits.float()
+        vals, ids = torch.topk(logits, TOPK, dim=-1)
+        model_t.update(
+            top32_values=vals.contiguous(),
+            top32_ids=ids.to(torch.int32).contiguous(),
+            logits_tail=logits[-LOGITS_TAIL:].contiguous(),
+            tokens=tokens[s : s + chunk].to(torch.int32).contiguous(),
+        )
+        nxt = tokens[s + 1 : s + chunk + 1]
+        top1.append((ids[: nxt.shape[0], 0] == nxt).float().mean().item())
+        top5.append((ids[: nxt.shape[0], :5] == nxt[:, None]).any(-1).float().mean().item())
+        cdir = tmp / f"chunk_{c:02d}"
+        cdir.mkdir(exist_ok=True)
+        save_file(model_t, str(cdir / "model.safetensors"))
+        for li, tensors in per_layer.items():
+            save_file(tensors, str(cdir / f"layer_{li:02d}.safetensors"))
+        print(
+            f"chunk {c + 1}/{n_chunks} [{s},{s + chunk}) {chunk_times[-1]:.0f}s top1={top1[-1]:.3f} "
+            f"top5={top5[-1]:.3f} layers stored={len(per_layer)}",
+            flush=True,
+        )
+
+    names = spec.get("state.tensors")
+    for i in selected:
+        st = ref.state_tensors(state, i, seq)
+        save_file(
+            {f"{n}_cache_layer_{i}": store_dtype(st[n], keep_fp32, n) for n in names},
+            str(tmp / "kv_cache" / f"layer_{i}.safetensors"),
+        )
+
+    (tmp / "metadata.json").write_text(
+        json.dumps(
+            {
+                "model": spec.data["hf_id"],
+                "token_ids": tokens.tolist(),
+                "num_layers": len(selected),
+                "layers": selected,
+                "state_tensors": names,
+                "kv_cache_format": spec.get("state.format", "separate_k_v"),
+                "k_rope_layout": spec.get("state.k_rope_layout"),
+                "seq_len": seq,
+            }
+        )
+    )
+    manifest = {
+        "model": spec.data["hf_id"],
+        "rung": a.rung,
+        "seq": seq,
+        "chunk": chunk,
+        "n_chunks": n_chunks,
+        "layers": selected,
+        "subset": selected != list(range(spec.num_layers)),
+        "run_starts": sorted(starts),
+        "full_dumps": bool(rung.get("full_dumps")),
+        "dumped_chunks": dumped,
+        "compute_dtype": "float32",
+        "text": spec.get("text.source", "tale-of-two-cities"),
+        "chunk_times_s": [round(t, 1) for t in chunk_times],
+        "text_top1_acc": top1,
+        "text_top5_acc": top5,
+        "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+    manifest["content_hash"] = content_hash(tmp)
+    (tmp / "manifest.json").write_text(json.dumps(manifest, indent=1))
+    tmp.rename(out)  # atomic: an interrupted run never leaves a half-written golden under the real name
+
+    from models.demos.common.bringup.reference.golden import Golden
+
+    metrics.record("golden_layers", len(selected))
+    metrics.record("golden_chunks", n_chunks)
+    metrics.record("golden_hash_ok", int(Golden(out).verify()))
+    metrics.record("cpu_seconds", round(time.time() - t0, 1))
+    metrics.record("text_top5_acc_last_chunk", top5[-1])
+    print(f"done in {time.time() - t0:.0f}s -> {out}\ncontent_hash {manifest['content_hash']}")
+
+
+if __name__ == "__main__":
+    main()
