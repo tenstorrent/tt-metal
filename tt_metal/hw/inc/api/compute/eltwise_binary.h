@@ -47,13 +47,15 @@ ALWI void binary_tiles_init(
 
 namespace detail {
 // Single source of truth for the dest-reuse init path. One source operand is taken from DST, so only
-// icb0 is unpacked (into SrcA/SrcB per reuse_dest). This is a single-operand (SrcA-only) reconfigure.
+// icb0 is unpacked (into SrcA/SrcB per reuse_dest). This is a single-operand reconfigure of whichever
+// source register the CB is actually unpacked into (SrcB under DEST_TO_SRCA, else SrcA).
 // Preserves the historic divergence: WH/BH accumulate the unpacked operand into DST (acc_to_dest=true
 // at the unpacker), Quasar does not. The public {add,sub,mul}_reuse_dest_init wrappers and the
 // deprecated binary_dest_reuse_tiles_init shim forward here.
 template <EltwiseBinaryType eltwise_binary_type, EltwiseBinaryReuseDestType reuse_dest>
 ALWI void binary_reuse_dest_init(uint32_t icb0, uint32_t call_line) {
-    state_configure(icb0, call_line);
+    state_configure<reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA ? Operand::SRCB : Operand::SRCA>(
+        icb0, call_line);
 #ifndef ARCH_QUASAR
     UNPACK(constexpr bool acc_to_dest = true);
 #else

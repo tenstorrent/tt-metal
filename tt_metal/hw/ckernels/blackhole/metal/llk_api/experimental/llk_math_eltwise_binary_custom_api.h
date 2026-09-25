@@ -89,7 +89,8 @@ inline void llk_math_eltwise_binary_mul_bcast_cols_custom(
         (dst_index + ct_dim <= get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
         "dst range out of bounds");
 
-    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
-    _llk_math_bcast_cols_reuse_custom_<EltwiseBinaryType::ELWMUL>(ct_dim);
-    math::clear_dst_reg_addr();
+    // Forward dst_index into the scaffold: it programs the absolute dest base per tile
+    // (set_dst_write_addr(dst_index + i)) and restores it on exit, so the wrapper must not pre-program
+    // (and leave defaulted to 0) a base the scaffold immediately overwrites. Mirrors the SUB wrapper.
+    _llk_math_bcast_cols_reuse_custom_<EltwiseBinaryType::ELWMUL>(ct_dim, ckernel::DEFAULT_TENSOR_SHAPE, dst_index);
 }
