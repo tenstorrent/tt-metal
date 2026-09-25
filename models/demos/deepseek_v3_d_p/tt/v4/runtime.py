@@ -299,6 +299,7 @@ class TtV4PrefillRuntime:
             actual_end=int(actual_end),
             input_ids=ids,
             on_layer_complete=cb,
+            on_layer_hidden=self._hidden_probe_hook(int(actual_start)) if not warmup else None,
         )
         t_issue1 = time.perf_counter()
         if deferred:
@@ -334,6 +335,43 @@ class TtV4PrefillRuntime:
 
     _chunks_logged = 0
     _chunk_log_every = int(os.environ.get("PREFILL_CHUNK_LOG_EVERY", "5"))  # 0 = never
+    # DS4F-0272 probe: PREFILL_HIDDEN_PROBE_STARTS="35840,40960" pulls the residual streams to the host after EVERY layer of
+    # the chunks that start at those positions and logs, per stream, the largest finite |x| and where the non-finite
+    # values are (chip, first bad row, bad-row count). Off by default (empty); a probed chunk costs ~1 s of host reads per
+    # layer on 32 chips, so it is a debugging aid for a runner started with the variable, never a serving default.
+    _hidden_probe_starts = frozenset(
+        int(x) for x in os.environ.get("PREFILL_HIDDEN_PROBE_STARTS", "").split(",") if x.strip()
+    )
+
+    def _hidden_probe_hook(self, actual_start: int):
+        if actual_start not in self._hidden_probe_starts:
+            return None
+
+        def hook(layer_idx, streams):
+            ts = list(streams) if isinstance(streams, (list, tuple)) else [streams]
+            parts = []
+            for si, t in enumerate(ts):
+                mx, bad_chips, n_bad_total, first = 0.0, 0, 0, None
+                for ci, d in enumerate(ttnn.get_device_tensors(t)):
+                    x = ttnn.to_torch(d).float().reshape(-1, t.shape[-1])
+                    fin = torch.isfinite(x)
+                    n_bad = int(x.numel() - int(fin.sum()))
+                    if fin.any():
+                        mx = max(mx, float(x[fin].abs().max()))
+                    if n_bad:
+                        bad_chips += 1
+                        n_bad_total += n_bad
+                        if first is None:
+                            bad_rows = torch.nonzero(~fin.all(dim=-1)).flatten()
+                            first = (ci, int(bad_rows[0]) if len(bad_rows) else -1, int(len(bad_rows)))
+                s = f"s{si}: max|x| {mx:.4g}"
+                if bad_chips:
+                    s += f" NONFINITE {n_bad_total} on {bad_chips} chip(s), first chip {first[0]} row {first[1]} ({first[2]} bad rows)"
+                parts.append(s)
+            logger.info(f"[v4 probe] chunk @{actual_start} layer {layer_idx}: " + " | ".join(parts))
+
+        return hook
+
     _pending_ack = None  # lag1: (MeshEvent, [layer ids], chunk start) of the last issued, not yet acked chunk
 
     @property
