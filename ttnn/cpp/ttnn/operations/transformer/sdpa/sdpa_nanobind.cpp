@@ -15,6 +15,8 @@
 #include <nanobind/stl/vector.h>
 
 #include "sdpa.hpp"
+#include "sdpa_recipe.hpp"
+#include "sdpa_recipe_blocking_nanobind.hpp"
 #include "sparse_sdpa.hpp"
 #include "sparse_sdpa_msa.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
@@ -62,7 +64,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& slot_id,
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     std::optional<uint32_t> kv_cache_num_layers,
-    std::optional<uint32_t> kv_cache_layer_idx) {
+    std::optional<uint32_t> kv_cache_layer_idx,
+    std::optional<ttnn::transformer::SDPAPrecision> precision,
+    bool inputs_prepared) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
 
@@ -103,7 +107,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         slot_id,
         kv_actual_isl_tensor,
         kv_cache_num_layers,
-        kv_cache_layer_idx);
+        kv_cache_layer_idx,
+        precision,
+        inputs_prepared);
     return outputs;
 }
 
@@ -183,7 +189,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> exp_ring_joint_scaled_dot_p
     ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     uint32_t num_workers_per_link,
-    uint32_t num_buffers_per_channel) {
+    uint32_t num_buffers_per_channel,
+    std::optional<ttnn::transformer::SDPAPrecision> precision,
+    bool inputs_prepared) {
     return ttnn::transformer::ExecuteExpRingJointAttention::invoke(
         input_tensor_q,
         input_tensor_k,
@@ -206,7 +214,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> exp_ring_joint_scaled_dot_p
         scale,
         compute_kernel_config,
         num_workers_per_link,
-        num_buffers_per_channel);
+        num_buffers_per_channel,
+        precision,
+        inputs_prepared);
 }
 
 }  // namespace
@@ -308,6 +318,39 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
 }  // namespace
 
 void bind_sdpa(nb::module_& mod) {
+    nb::enum_<ttnn::transformer::SDPAPrecision>(mod, "SDPAPrecision")
+        .value("FAST", ttnn::transformer::SDPAPrecision::FAST)
+        .value("COMPENSATED", ttnn::transformer::SDPAPrecision::COMPENSATED)
+        .value("BALANCED", ttnn::transformer::SDPAPrecision::BALANCED)
+        .value("ACCURATE", ttnn::transformer::SDPAPrecision::ACCURATE)
+        .value("LOW_PRECISION", ttnn::transformer::SDPAPrecision::LOW_PRECISION);
+    mod.def(
+        "_sdpa_recipe_compute_program",
+        [](ttnn::transformer::SDPAPrecision precision, DataType kv_type, const CoreRangeSet& grid, uint32_t k_chunks) {
+            namespace recipe = sdpa::detail;
+            return recipe::recipe_compute_program(
+                recipe::resolve_precision_policy(recipe::select_recipe(precision, kv_type)), grid, k_chunks);
+        });
+    bind_sdpa_recipe_blocking(mod);
+    ttnn::bind_function<"prepare_sdpa_input", "ttnn.transformer.">(
+        mod,
+        R"doc(Prepare an original BF16 tensor for LOW_PRECISION attention, without mutating it.
+
+        Q uses RNE7 (significand bits including the leading bit) and remains BF16.
+        K/V use RNE5 for BF16/BFP8 storage, or native 16-value BFP4-grid RNE with
+        saturation. Call before caching or communicating K/V; no host transfer
+        or implicit preparation is performed by attention itself.
+
+        Initially supports Blackhole, rank-four D128, unpadded tiled DRAM inputs.
+        Input values must be finite normal BF16 or zero. BFP4 nonzero groups must
+        have maximum exponent in [-124,106]; RNE5/7 must not overflow BF16.
+        Subnormal and nonfinite input semantics are not qualified.
+        )doc",
+        &ttnn::transformer::prepare_sdpa_input,
+        nb::arg("input_tensor").noconvert(),
+        nb::kw_only(),
+        nb::arg("is_query"),
+        nb::arg("dtype") = DataType::BFLOAT16);
     nb::enum_<ttnn::transformer::SparseKVFormat>(mod, "SparseKVFormat")
         .value("BF16", ttnn::transformer::SparseKVFormat::BF16)
         .value("FP8_E4M3", ttnn::transformer::SparseKVFormat::FP8_E4M3)
@@ -333,11 +376,19 @@ void bind_sdpa(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
+            precision (ttnn.SDPAPrecision, optional): Explicit numerical recipe. FAST (A), COMPENSATED (B), BALANCED (C), ACCURATE (D), or LOW_PRECISION (E). Omit to preserve legacy behavior. Cannot be combined with compute_kernel_config or exp_approx_mode=False.
+            inputs_prepared (bool): Must be True only for LOW_PRECISION, after explicit prepare_sdpa_input calls (or equivalent preparation). This asserts the caller's rounding contract; tensor dtype alone cannot verify it. Defaults to False.
             attention_sink (ttnn.Tensor, optional): Defaults to `None`. [1 x nqh x 1 x 1]. Single attention sink value per head. The kernel will efficiently replicate this value across all query positions.
             cu_window_seqlens (ttnn.Tensor, optional): Defaults to `None`. 1D int32/uint32 ROW_MAJOR tensor of cumulative window boundaries [0, w1, w1+w2, ..., s]. When provided, computes block-diagonal (windowed) attention where each token attends only within its window; the mask is built on-device. Non-causal; mutually exclusive with attn_mask/is_causal/sliding_window_size.
             windowed_q_token_offset (int): Defaults to `0`. Windowed mode only. Global row index of Q row 0, for a Q holding a contiguous slice of a longer sequence: Q and the output are indexed locally while `cu_window_seqlens` and K/V stay global, so this locates the slice among the windows. Must be a multiple of TILE_HEIGHT, and `offset + Sq` must not exceed `Sk`. Use it to split the Q dimension across devices under sequence parallelism.
             windowed_q_token_offset_tensor (ttnn.Tensor, optional): Defaults to `None`. Windowed mode only. The per-device form of `windowed_q_token_offset`: a 1-element int32/uint32 ROW_MAJOR on-device tensor holding the same global row index; when provided it overrides the scalar. Every device runs the same cached program, so a scalar cannot differ across a mesh -- shard this tensor on the sequence-parallel mesh axis (e.g. `arange(sp) * local_seq_len`) so each device reads its own shard's origin. The scalar's constraints apply to each device's value (a multiple of TILE_HEIGHT; `offset + Sq <= Sk`) but cannot be validated host-side -- they are the caller's responsibility.
 
+
+        Explicit recipes currently require a single Blackhole device, dense noncausal/unmasked
+        attention, batch 1, equal Q/K/V head counts, D128, Q256/K512 blocking, Q length
+        divisible by 256, K/V length divisible by 512, and unpadded tiled interleaved DRAM
+        tensors. Q and output are BF16. A-D take BF16 K/V; E also accepts prepared BFP8/BFP4.
+        Unsupported explicit recipes raise before dispatch; they never fall back.
 
         Returns:
             ttnn.Tensor: the output tensor [b x nqh x s x dh].
@@ -362,7 +413,9 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("attention_sink") = nb::none(),
         nb::arg("cu_window_seqlens") = nb::none(),
         nb::arg("windowed_q_token_offset") = 0,
-        nb::arg("windowed_q_token_offset_tensor") = nb::none());
+        nb::arg("windowed_q_token_offset_tensor") = nb::none(),
+        nb::arg("precision") = nb::none(),
+        nb::arg("inputs_prepared") = false);
 
     ttnn::bind_function<"sparse_sdpa", "ttnn.transformer.">(
         mod,
@@ -571,6 +624,8 @@ void bind_sdpa(nb::module_& mod) {
             program_config (ttnn.SDPAProgramConfig)
             scale (float, optional): Scale factor for QK^T. Defaults to None.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):Defaults to None.
+            precision (ttnn.SDPAPrecision, optional): Opt-in Blackhole D128 recipes with the same numerical contract as ordinary SDPA, including batch/GQA and sub-tile tails. Partial Q256/K512 chunks are masked internally. Omit to retain legacy support.
+            inputs_prepared (bool): Caller acknowledgment that LOW_PRECISION preparation was applied to both segments. Required only for LOW_PRECISION. Defaults to False.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor):
@@ -592,7 +647,9 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("joint_strategy"),
         nb::arg("program_config").noconvert(),
         nb::arg("scale").noconvert() = nb::none(),
-        nb::arg("compute_kernel_config").noconvert() = nb::none());
+        nb::arg("compute_kernel_config").noconvert() = nb::none(),
+        nb::arg("precision").noconvert() = nb::none(),
+        nb::arg("inputs_prepared") = false);
 
     const auto* const ring_joint_doc = R"doc(
         RingJointAttention operation supports both:
@@ -692,6 +749,13 @@ void bind_sdpa(nb::module_& mod) {
                 slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx.
             kv_cache_layer_idx (int, optional): Layer within the cache-user slot. None uses 0 and the
                 value must be less than kv_cache_num_layers.
+            precision (ttnn.SDPAPrecision, optional): Explicit Blackhole noncausal recipe at any tile-aligned
+                Q chunk (32-1024 rows), K chunk and head dim that fits L1; logical_n/logical_l may be scalars or
+                device tensors. Preserves recurrent state across ring steps; rejects unsupported
+                causal/cache/window/sink features.
+                Omit to retain legacy behavior. Cannot be combined with compute_kernel_config or exp_approx_mode=False.
+            inputs_prepared (bool): LOW_PRECISION caller acknowledgment; prepare Q and both primary/joint KV
+                before communication. Required only for LOW_PRECISION.
 
         Chunked-prefill mode is entered implicitly when input_tensor_q's per-device seq
         length is less than input_tensor_k's (Q is the latest slab; K is the populated
@@ -715,7 +779,7 @@ void bind_sdpa(nb::module_& mod) {
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
               - The attention output for the original Q/K/V shape [b x nh x N/num_devices x dv].
               - The attention output for the joint Q/K/V shape [b x nh x L/num_devices x dv] (or [b x nh x L x dv] on the replicated path).
-              - The final log-sum-exp of the operation.           [b x nh x (N/num_devices + L/num_devices) x 1]
+              - Internal scratch statistics, not a supported log-sum-exp result. Do not consume this tensor.
         )doc";
 
     ttnn::bind_function<"ring_joint_scaled_dot_product_attention", "ttnn.transformer.">(
@@ -759,7 +823,9 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("slot_id").noconvert() = nb::none(),
         nb::arg("kv_actual_isl_tensor").noconvert() = nb::none(),
         nb::arg("kv_cache_num_layers").noconvert() = nb::none(),
-        nb::arg("kv_cache_layer_idx").noconvert() = nb::none());
+        nb::arg("kv_cache_layer_idx").noconvert() = nb::none(),
+        nb::arg("precision") = nb::none(),
+        nb::arg("inputs_prepared") = false);
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.
@@ -883,6 +949,18 @@ void bind_sdpa(nb::module_& mod) {
             mesh_device (ttnn.MeshDevice): Multi-device mesh for distributed computation.
             topology (ttnn.ccl.Topology): Communication topology (Ring or Linear).
             subdevice_id (Optional[tt.tt_metal.SubDeviceId]): Sub-device identifier. Defaults to None.
+            num_workers_per_link (int): Must equal half the SDPA grid rows. Defaults to 1.
+            num_buffers_per_channel (int): Fabric MUX buffers per channel. Defaults to 8.
+            precision (ttnn.SDPAPrecision, optional): Explicit Blackhole noncausal numerical recipe (see
+                docs/sdpa_precision.md) at any tile-aligned Q chunk (32-1024 rows), K chunk and head dim that
+                fits L1. One recurrent state per Q chunk is kept in L1 across all active ring steps and
+                normalized once on the last one. logical_n may be a scalar or a device tensor; requires the
+                default scale; up to three head-segments per core row run pass-outer.
+                Omit to retain the legacy behavior. Cannot be combined with compute_kernel_config or
+                exp_approx_mode=False.
+            inputs_prepared (bool): LOW_PRECISION caller acknowledgment; prepare Q and both primary/joint
+                KV with ttnn.transformer.prepare_sdpa_input before communication. Required only for
+                LOW_PRECISION. Defaults to False.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
@@ -917,7 +995,9 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("topology"),
         nb::arg("subdevice_id") = nb::none(),
         nb::arg("num_workers_per_link") = 1,
-        nb::arg("num_buffers_per_channel") = 8);
+        nb::arg("num_buffers_per_channel") = 8,
+        nb::arg("precision") = nb::none(),
+        nb::arg("inputs_prepared") = false);
 
     const auto* const mla_doc =
         R"doc(

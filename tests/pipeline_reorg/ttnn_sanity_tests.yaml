@@ -230,7 +230,12 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
 
 - name: "ttnn sdpa group"
-  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/sdpa -xv -m "not disable_fast_runtime_mode"'
+  cmd: >-
+    pytest --timeout 300 tests/ttnn/unit_tests/operations/sdpa -xv -m "not disable_fast_runtime_mode"
+    --ignore-glob='*/test_sdpa_recipe*.py'
+    --ignore=tests/ttnn/unit_tests/operations/sdpa/test_sdpa_joint_recipes.py
+    --ignore=tests/ttnn/unit_tests/operations/sdpa/test_sdpa_input_preparation.py
+    --ignore=tests/ttnn/unit_tests/operations/sdpa/test_sdpa_fp32_state.py
   skus:
     wh_n300_civ2:
       timeout: 15
@@ -242,6 +247,39 @@
       timeout: 40
     sim_bh_p150:
       timeout: 40
+  team: ttnn
+  budget_type: sanity
+  owner_id: U085GDCAZTN # Pavle Josipovic
+
+- name: "ttnn sdpa recipe numerics"
+  cmd: >-
+    pytest --timeout 300 -xv
+    tests/ttnn/unit_tests/operations/sdpa/test_sdpa_recipes.py
+    tests/ttnn/unit_tests/operations/sdpa/test_sdpa_recipe_accuracy.py
+    tests/ttnn/unit_tests/operations/sdpa/test_sdpa_input_preparation.py
+    tests/ttnn/unit_tests/operations/sdpa/test_sdpa_fp32_state.py
+  skus:
+    bh_p100:
+      timeout: 15
+    bh_p150b_civ2:
+      timeout: 15
+  team: ttnn
+  budget_type: sanity
+  owner_id: U085GDCAZTN # Pavle Josipovic
+
+- name: "ttnn sdpa recipe adapters"
+  cmd: >-
+    pytest --timeout 300 -xv
+    tests/ttnn/unit_tests/operations/sdpa/test_sdpa_joint_recipes.py
+    tests/ttnn/unit_tests/operations/sdpa/test_sdpa_recipe_tails.py
+    tests/ttnn/unit_tests/operations/sdpa/test_sdpa_recipe_gqa.py
+    tests/ttnn/unit_tests/operations/sdpa/test_sdpa_recipe_mesh.py
+    tests/ttnn/unit_tests/operations/sdpa/test_sdpa_recipe_continuation.py
+  skus:
+    bh_p100:
+      timeout: 20
+    bh_p150b_civ2:
+      timeout: 20
   team: ttnn
   budget_type: sanity
   owner_id: U085GDCAZTN # Pavle Josipovic

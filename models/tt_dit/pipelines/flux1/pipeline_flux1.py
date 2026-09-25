@@ -124,6 +124,8 @@ class Flux1Pipeline(PipelineAPIMixin):
         height: int = 1024,
         cfg_enabled: bool = False,
         checkpoint_name: str,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> Flux1Pipeline:
         config = Flux1PipelineConfig.default(
             mesh_shape=mesh_device.shape,
@@ -132,9 +134,18 @@ class Flux1Pipeline(PipelineAPIMixin):
             cfg_enabled=cfg_enabled,
             checkpoint_name=checkpoint_name,
         )
-        return cls(device=mesh_device, config=config)
+        return cls(device=mesh_device, config=config, sdpa_precision=sdpa_precision, sdpa_kv_dtype=sdpa_kv_dtype)
 
-    def __init__(self, *, device: ttnn.MeshDevice, config: Flux1PipelineConfig) -> None:
+    def __init__(
+        self,
+        *,
+        device: ttnn.MeshDevice,
+        config: Flux1PipelineConfig,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
+    ) -> None:
+        """``sdpa_precision``/``sdpa_kv_dtype`` override the named SDPA recipe of every
+        denoiser attention call; omit them for each attention's default recipe (legacy SDPA off Blackhole)."""
         self._mesh_device = device
         self._parallel_config = config.dit_parallel_config
         self._encoder_parallel_config = config.encoder_parallel_config
@@ -165,7 +176,13 @@ class Flux1Pipeline(PipelineAPIMixin):
 
         checkpoint = Flux1Checkpoint(checkpoint_name)
         self.transformers = [
-            checkpoint.build(ccl_manager=mgr, parallel_config=config.dit_parallel_config) for mgr in self._ccl_managers
+            checkpoint.build(
+                ccl_manager=mgr,
+                parallel_config=config.dit_parallel_config,
+                sdpa_precision=sdpa_precision,
+                sdpa_kv_dtype=sdpa_kv_dtype,
+            )
+            for mgr in self._ccl_managers
         ]
         self.synchronize_devices()
 

@@ -15,6 +15,15 @@
 
 namespace ttnn::transformer {
 
+// Explicit numerical recipes. Omit precision to preserve the legacy API's
+// independent compute/program controls and broader platform/feature support.
+enum class SDPAPrecision : uint8_t { FAST, COMPENSATED, BALANCED, ACCURATE, LOW_PRECISION };
+
+// Explicit, out-of-place preparation for LOW_PRECISION. Apply Q preparation
+// after Q transforms and KV preparation before caching/communication. A cast
+// to BF16/BFP8/BFP4 is not a substitute for this rounding operation.
+ttnn::Tensor prepare_sdpa_input(const ttnn::Tensor& input, bool is_query, DataType dtype = DataType::BFLOAT16);
+
 // A logical (unpadded) sequence length: a host scalar, or a single-valued device tensor read on-device so
 // the value can change between replays of one captured trace.
 using LogicalLength = std::variant<std::size_t, ttnn::Tensor>;
@@ -39,7 +48,9 @@ ttnn::Tensor scaled_dot_product_attention(
     /// Windowed mode only. Per-device form of the offset above: a 1-element int32/uint32 ROW_MAJOR device
     /// tensor, read at runtime rather than baked into the program. Shard it on the sequence-parallel axis
     /// so every device runs the SAME program yet sees its own origin. Overrides the scalar when set.
-    const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor = std::nullopt);
+    const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor = std::nullopt,
+    std::optional<SDPAPrecision> precision = std::nullopt,
+    bool inputs_prepared = false);
 
 /// Chunked SDPA over paged K/V: one Q chunk per call, K/V in paged layout.
 /// Two overloads: legacy (chunk_start_idx as int) or flexible (chunk_start_idx_tensor on device).
@@ -83,7 +94,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
     const std::string& joint_strategy,
     operations::transformer::SDPAProgramConfig program_config,
     std::optional<float> scale = std::nullopt,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    std::optional<SDPAPrecision> precision = std::nullopt,
+    bool inputs_prepared = false);
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
@@ -126,7 +139,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& slot_id = std::nullopt,
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor = std::nullopt,
     std::optional<uint32_t> kv_cache_num_layers = std::nullopt,
-    std::optional<uint32_t> kv_cache_layer_idx = std::nullopt);
+    std::optional<uint32_t> kv_cache_layer_idx = std::nullopt,
+    std::optional<SDPAPrecision> precision = std::nullopt,
+    bool inputs_prepared = false);
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     const ttnn::Tensor& input_tensor_q,
@@ -181,7 +196,9 @@ struct ExecuteExpRingJointAttention {
         std::optional<float> scale = std::nullopt,
         std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         uint32_t num_workers_per_link = 1,
-        uint32_t num_buffers_per_channel = 8);
+        uint32_t num_buffers_per_channel = 8,
+        std::optional<SDPAPrecision> precision = std::nullopt,
+        bool inputs_prepared = false);
 };
 
 ttnn::Tensor flash_mla_prefill(

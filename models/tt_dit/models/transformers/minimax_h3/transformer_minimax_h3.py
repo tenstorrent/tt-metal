@@ -192,6 +192,11 @@ class MiniMaxH3Transformer3DModel(Module):
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
+        # Named SDPA recipe override for every attention call (blocks and token refiner); None selects
+        # MiniMaxH3Attention.sdpa_precision_default (legacy SDPA off Blackhole). See
+        # models/tt_dit/utils/sdpa_recipe.py.
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
         super().__init__()
 
@@ -262,6 +267,8 @@ class MiniMaxH3Transformer3DModel(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             is_fsdp=is_fsdp,
+            sdpa_precision=sdpa_precision,
+            sdpa_kv_dtype=sdpa_kv_dtype,
         )
 
         # 4. The block stack.
@@ -280,6 +287,8 @@ class MiniMaxH3Transformer3DModel(Module):
                     ccl_manager=ccl_manager,
                     parallel_config=parallel_config,
                     is_fsdp=is_fsdp,
+                    sdpa_precision=sdpa_precision,
+                    sdpa_kv_dtype=sdpa_kv_dtype,
                 )
                 for _ in range(num_layers)
             ]
