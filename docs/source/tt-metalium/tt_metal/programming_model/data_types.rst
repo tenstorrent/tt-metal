@@ -64,17 +64,12 @@ Reference for ``tt::tt_metal::DataType`` — the dtype a ``Tensor`` is created w
       - Yes
       - Yes
       - 1 sign + 4 exponent + 3 mantissa bits (the "E4M3" name). Hardware/enum-legal on Blackhole and Quasar, but as of this writing the ``DataType`` is only wired up for one op path (the DeepSeek V3 prefill combine/dispatch ops), row-major layout only — check op support before opting in rather than assuming general elementwise support.
-    * - ``INVALID``
-      - —
-      - —
-      - —
-      - Not a representable tensor value. Used as a sentinel default in op-attribute structs (e.g. ``output_dtype == DataType::INVALID`` meaning "inherit the input tensor's dtype") — see ``tt::tt_metal::datatype_to_dataformat_converter``, which throws if called with any value other than the ones in this table.
 
 .. note::
 
    "Supported" above means the Tensix compute engine supports the underlying ``DataFormat`` on that architecture (via ``tt::is_data_format_supported``). It does **not** mean every ttnn op has implemented that dtype end-to-end (padding, tilize/untilize, etc.) — ``FP8_E4M3`` above is a concrete example of that gap. Op-by-op dtype coverage changes too often to track accurately here.
 
-New ``DataType`` values are appended after ``INVALID`` rather than inserted in logical order, to keep previously-serialized tensor values stable — see the numbering of ``INVALID = 10`` followed by later additions in ``tensor_types.hpp``.
+New ``DataType`` values are appended at the end of the enum rather than inserted in logical order, to keep previously-serialized tensor values stable.
 
 Background: DataType vs. DataFormat
 -------------------------------------
@@ -112,8 +107,6 @@ Every ``DataType`` maps to exactly one ``DataFormat``, via ``tt::tt_metal::datat
       - ``Int8``
     * - ``FP8_E4M3``
       - ``Fp8_e4m3``
-    * - ``INVALID``
-      - *(none — throws if converted)*
 
 The reverse is not true: most ``DataFormat`` values have no corresponding ``DataType`` and can only be reached by working directly with circular buffers and kernels, below the Tensor abstraction. See :ref:`Runtime Data Formats <runtime_data_formats>` below for the full picture.
 
@@ -182,8 +175,3 @@ Runtime Data Formats
       - No
       - No
       - Declared in the enum but not wired into ``is_data_format_supported`` for any architecture as of this writing. Treat as reserved/placeholder.
-    * - ``Invalid``
-      - —
-      - —
-      - —
-      - Sentinel only, not a data format.
