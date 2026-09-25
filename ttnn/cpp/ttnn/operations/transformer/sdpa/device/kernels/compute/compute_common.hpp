@@ -654,15 +654,16 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
 
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 
-// The LLK body's first parameter picks the accurate exp when true (its tests name that variant ExpAccurate),
-// while callers pass the program config's approx flag, so it is negated here. On Blackhole with bf16 DEST the
-// accurate exp is also the faster one on these first column tiles, so both settings take it.
+// The LLK body's first parameter picks the exp its tests call ExpAccurate when true and a polynomial when false. On
+// these first column tiles the ExpAccurate body is the faster one with bf16 DEST and the polynomial ends with the
+// lower error, so the approximate setting takes the former and the exact setting the polynomial. With fp32 DEST the
+// polynomial is faster at the same error on Blackhole, so both settings take it there.
 template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 void exp_tile_first_column(uint32_t idst) {
 #if defined(ARCH_BLACKHOLE)
-    constexpr bool accurate = !SDPA_EXP_APPROX_MODE || !is_fp32_dest_acc_en;
+    constexpr bool accurate = SDPA_EXP_APPROX_MODE && !is_fp32_dest_acc_en;
 #else
-    constexpr bool accurate = !SDPA_EXP_APPROX_MODE;
+    constexpr bool accurate = SDPA_EXP_APPROX_MODE;
 #endif
     SFPU_UNARY_CALL(
         DST_SYNC_MODE,
