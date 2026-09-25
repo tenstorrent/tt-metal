@@ -91,7 +91,7 @@ def test_regression_message_carries_a_reproduce_command():
 def test_skipped_message_denies_the_green_check():
     ctx = dict(_CTX, reason="No baseline was found, so the gate compared nothing.")
     text = build_text("skipped", [], ctx)
-    assert "does not mean the PR is clean" in text
+    assert "does not mean anything was checked" in text
 
 
 def test_bullet_leads_with_the_marker():
