@@ -685,3 +685,88 @@ def test_measurement_equivalent_integer_spellings_cannot_duplicate_coverage():
     contract["variants"].append({**contract["variants"][0], "tile_cnt": "8.0"})
     with pytest.raises(ValueError, match="duplicate"):
         perf_eval.validate_measurement_contract(contract)
+
+
+def _multi_csv(path: Path, cycles_by_variant: dict[str, float]) -> Path:
+    """One TILE_LOOP row per variant, keyed by mathop."""
+    rows = [HEADER]
+    for mathop, cycles in cycles_by_variant.items():
+        rows.append(f"{mathop},DestAccumulation.No,8,INIT,457.0,0.0,176.0,12484")
+        rows.append(
+            f"{mathop},DestAccumulation.No,8,TILE_LOOP,{cycles},0.0,{cycles},12484"
+        )
+    path.write_text("\n".join(rows) + "\n")
+    return path
+
+
+def _eval_multi(current_csv, baseline_csv, *, goal="no_regress", regress_pct=0.5):
+    return perf_eval.evaluate(
+        perf_eval._read_csv(current_csv),
+        perf_eval._read_csv(baseline_csv),
+        op=None,
+        goal=goal,
+        noise_pct=regress_pct,
+        regress_pct=regress_pct,
+        improve_pct=2.0,
+        primary_metric=perf_eval.PRIMARY_METRIC,
+    )
+
+
+def test_single_variant_outlier_is_reported_not_blocking(tmp_path):
+    """Replays the measurement that force-closed run 24095.
+
+    Blackhole flagged 1 of 13 variants at +1.41% -- 354 -> 359 cycles, five
+    cycles -- against a 0.5% threshold on one sample per tree, while the median
+    was 0.00%. That false regression cost a repair round plus the re-verify
+    round that exhausted the wall clock.
+    """
+    names = [f"MathOperation.Op{i}" for i in range(13)]
+    base = _multi_csv(tmp_path / "b.csv", {n: 354.0 for n in names})
+    cur = dict.fromkeys(names, 354.0)
+    cur[names[0]] = 359.0  # +1.41%, five cycles
+    r = _eval_multi(_multi_csv(tmp_path / "c.csv", cur), base)
+
+    assert r["verdict"] == "neutral"
+    assert r["exit_code"] == 0
+    assert r["single_variant_outlier"] is True
+    assert r["variants_over_threshold"] == 1
+    assert r["regress_signal_basis"] == "median"
+    assert r["delta_pct_median"] == 0.0
+    assert r["delta_pct_worst"] > 1.4
+    # the outlier stays visible, with the cycle numbers a reader needs
+    assert r["reason_code"] == "single_variant_outlier"
+    assert "354.0 -> 359.0 cycles" in r["reason"]
+    assert "median was 0.0%" in r["reason"]
+
+
+def test_population_wide_regression_still_blocks(tmp_path):
+    """A real regression moves the population, so the median catches it."""
+    names = [f"MathOperation.Op{i}" for i in range(13)]
+    base = _multi_csv(tmp_path / "b.csv", {n: 354.0 for n in names})
+    cur = _multi_csv(tmp_path / "c.csv", {n: 361.0 for n in names})  # +1.98% each
+    r = _eval_multi(cur, base)
+    assert r["verdict"] == "regressed"
+    assert r["exit_code"] == 1
+    assert r["single_variant_outlier"] is False
+    assert r["variants_over_threshold"] == 13
+
+
+def test_majority_regression_blocks_even_with_some_clean_variants(tmp_path):
+    """Seven of thirteen is still the population, not an outlier."""
+    names = [f"MathOperation.Op{i}" for i in range(13)]
+    base = _multi_csv(tmp_path / "b.csv", {n: 354.0 for n in names})
+    cur = dict.fromkeys(names, 354.0)
+    for n in names[:7]:
+        cur[n] = 372.0  # +5%
+    r = _eval_multi(_multi_csv(tmp_path / "c.csv", cur), base)
+    assert r["verdict"] == "regressed"
+    assert r["variants_over_threshold"] == 7
+
+
+def test_fewer_than_three_variants_keeps_the_strict_worst_rule(tmp_path):
+    """A median over one or two samples is not robust, so do not soften there."""
+    base = _multi_csv(tmp_path / "b.csv", {"MathOperation.A": 354.0})
+    cur = _multi_csv(tmp_path / "c.csv", {"MathOperation.A": 359.0})
+    r = _eval_multi(cur, base)
+    assert r["regress_signal_basis"] == "worst_variant"
+    assert r["verdict"] == "regressed"

@@ -518,7 +518,23 @@ def evaluate(
     median = statistics.median(deltas)
 
     # Base verdict from thresholds, independent of goal.
-    if worst > regress_pct:
+    #
+    # The signal is the median across variants, not the worst one. These are
+    # single-sample cycle counts, so a 0.5% threshold sits inside the noise of
+    # one measurement: run 24095 was failed by 1 of 13 variants at +1.41% --
+    # 354 -> 359 cycles, five cycles -- while the median was 0.00%, and that
+    # false regression cost a repair round plus the re-verify round that
+    # exhausted the wall clock. A code change that really costs cycles moves
+    # the population; noise moves one variant.
+    #
+    # An outlier is not discarded, it is reported as advisory evidence with
+    # reason_code single_variant_outlier so a real one-variant regression stays
+    # visible instead of silently passing. With fewer than three variants a
+    # median is not robust, so those keep the strict worst-variant rule.
+    robust = len(deltas) >= 3
+    regress_signal = median if robust else worst
+    outlier_only = robust and worst > regress_pct >= median
+    if regress_signal > regress_pct:
         base_verdict = "regressed"
     elif best < -improve_pct:
         base_verdict = "improved"
@@ -589,6 +605,10 @@ def evaluate(
         "primary_metric": primary_label,
         "noise_pct": noise_pct,
         "regress_pct": regress_pct,
+        "regress_signal": regress_signal,
+        "regress_signal_basis": "median" if robust else "worst_variant",
+        "variants_over_threshold": sum(1 for d in deltas if d > regress_pct),
+        "single_variant_outlier": outlier_only,
         "improve_pct": improve_pct,
         "variants_compared": len(deltas),
         "coverage": coverage,
@@ -599,6 +619,26 @@ def evaluate(
         "worst_variant": worst_variant,
         "exit_code": exit_code,
     }
+    if outlier_only:
+        # Advisory, not blocking: say plainly that one variant moved past the
+        # threshold while the population did not, and give the cycle numbers so
+        # a reader can judge whether it is worth a second measurement.
+        cur = worst_variant.get("current_cycles")
+        base = worst_variant.get("baseline_cycles")
+        cycles = (
+            f", {base} -> {cur} cycles"
+            if isinstance(cur, (int, float)) and isinstance(base, (int, float))
+            else ""
+        )
+        result.update(
+            reason=(
+                f"{result['variants_over_threshold']} of {len(deltas)} variants "
+                f"exceeded {regress_pct}% (worst {round(worst, 3)}%{cycles}) while the "
+                f"median was {round(median, 3)}%; single-sample cycle counts cannot "
+                "separate that from noise, so it is reported rather than blocking"
+            ),
+            reason_code="single_variant_outlier",
+        )
     if incomplete_reason:
         result.update(
             reason=incomplete_reason,
