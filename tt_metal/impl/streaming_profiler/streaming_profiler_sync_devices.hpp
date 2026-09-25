@@ -222,12 +222,12 @@ private:
     const ContextId context_id_;
     const EthL1 eth_l1_;
     const uint32_t aeth_unreserved_, aeth_unres_size_;  // ACTIVE_ETH unreserved region: the link ends' L1
+    uint32_t root_dev_ = 0;
     std::vector<DeviceState> devices_;
     std::vector<CaptureContext::Link> links_;
     std::vector<ResidentSync> link_syncs_;
-    bool fabric_link_sync_ = false;  // fabric is on: the routers on the planned links run the ends, nothing is launched
     std::shared_ptr<HostProbe> host_probe_;
-    uint32_t root_dev_ = 0;
+    bool fabric_link_sync_ = false;  // fabric is on: the routers on the planned links run the ends, nothing is launched
 };
 
 }  // namespace streaming_profiler

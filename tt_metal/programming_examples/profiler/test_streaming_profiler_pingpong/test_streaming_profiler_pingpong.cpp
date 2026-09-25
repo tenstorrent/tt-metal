@@ -42,10 +42,10 @@ namespace {
 constexpr uint32_t kFlagAddr = 0x170000;  // L1 scratch the flags live in, above anything the program allocates
 
 struct Stamp {
-    uint32_t chip;
     CoreCoord core;
-    bool tx;
     sp::Zone zone;
+    uint32_t chip;
+    bool tx;
 };
 
 double mean(const std::vector<double>& v) {
@@ -81,7 +81,7 @@ int main(int argc, char** argv) {
         for (const sp::Zone& z : b.zones()) {
             const std::string_view name = z.site().name;
             if (name == "PP_TX" || name == "PP_RX") {
-                stamps.push_back(Stamp{z.core().chip_id, z.core().logical, name == "PP_TX", z});
+                stamps.push_back(Stamp{z.core().logical, z, z.core().chip_id, name == "PP_TX"});
             }
         }
     });

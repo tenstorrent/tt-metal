@@ -327,8 +327,8 @@ struct Sweep {
 enum class Kind { Idle, Low, High, Didt };
 struct Phase {
     const char* name;
-    Kind kind;
     double seconds;
+    Kind kind;
     bool sweep;
 };
 }  // namespace
@@ -429,19 +429,19 @@ int main(int argc, char** argv) {
     std::fflush(stdout);
 
     const std::vector<Phase> phases = {
-        {"start", Kind::Idle, 0, false},
-        {"start again", Kind::Idle, 0, false},
-        {"idle", Kind::Idle, 5, false},
-        {"idle", Kind::Idle, 30, false},
-        {"low load", Kind::Low, 30, false},
-        {"high load", Kind::High, 30, false},
-        {"di/dt", Kind::Didt, 30, false},
-        {"sweep idle", Kind::Idle, 10, true},
-        {"sweep low load", Kind::Low, 10, true},
-        {"sweep high load", Kind::High, 30, true},
-        {"sweep di/dt", Kind::Didt, 30, true},
-        {"high load", Kind::High, 30, false},
-        {"idle", Kind::Idle, 60, false},
+        {"start", 0, Kind::Idle, false},
+        {"start again", 0, Kind::Idle, false},
+        {"idle", 5, Kind::Idle, false},
+        {"idle", 30, Kind::Idle, false},
+        {"low load", 30, Kind::Low, false},
+        {"high load", 30, Kind::High, false},
+        {"di/dt", 30, Kind::Didt, false},
+        {"sweep idle", 10, Kind::Idle, true},
+        {"sweep low load", 10, Kind::Low, true},
+        {"sweep high load", 30, Kind::High, true},
+        {"sweep di/dt", 30, Kind::Didt, true},
+        {"high load", 30, Kind::High, false},
+        {"idle", 60, Kind::Idle, false},
     };
     std::vector<Checkpoint> cps;
     double worst = 0.0;

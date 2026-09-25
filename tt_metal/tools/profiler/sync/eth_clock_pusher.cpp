@@ -128,9 +128,6 @@ __attribute__((noinline)) void add(uint64_t r, uint64_t w8, uint32_t k8, bool cl
 
 namespace model {
 struct Model {
-    uint32_t cntl1 = 0;  // PLL0 CNTL_1 of the open window
-    uint32_t den = 8;    // REFDIV * postdiv0
-    uint32_t k8 = 0;     // wall ticks per refclk tick in eighths
     // The open window: its first sample, the sums past it of the samples' refclk and of their residues against the
     // slope, (w8 - w0) - k8 * (r - r0), its count, and the count that closes it. Between windows r0 and w0 are the
     // last window's first sample.
@@ -138,6 +135,9 @@ struct Model {
     uint32_t sr = 0;
     int32_t se = 0;
     uint32_t cnt = 0, size = 1;
+    uint32_t cntl1 = 0;  // PLL0 CNTL_1 of the open window
+    uint32_t den = 8;    // REFDIV * postdiv0
+    uint32_t k8 = 0;     // wall ticks per refclk tick in eighths
     // The samples not yet in a window or sent, as low words: each is widened against r0 and w0, which trail it by at
     // most a window. A read's round trip is ~2 samples, so kWin holds several reads' worth.
     static constexpr uint32_t kWin = 32;

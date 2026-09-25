@@ -258,12 +258,12 @@ struct Audit {
     struct Pending {
         uint32_t r_lo, r_hi, w_lo, w_hi;
     };
+    uint64_t worst_r = 0;
+    kp::SyncLocalPoint prev{};
     Outbox* outbox = nullptr;
     int32_t tile_offset = 0;
     uint32_t head = 0, tail = 0, unbracketed = 0;
-    uint64_t worst_r = 0;
     int32_t worst = 0;
-    kp::SyncLocalPoint prev{};
     bool have_prev = false;
 
     static volatile tt_l1_ptr Pending& pending(uint32_t i) {

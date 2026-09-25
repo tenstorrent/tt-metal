@@ -113,10 +113,10 @@ private:
     };
     struct DeviceCtx {
         uint32_t chip_id = 0;
+        uint32_t n_workers = 0;  // the relays' bands cover this prefix of producers
         IDevice* device = nullptr;
         CapturedDevice out;
         std::vector<Producer> producers;  // the worker grid row-major, then the pusher, then its linked cores
-        uint32_t n_workers = 0;           // the relays' bands cover this prefix
         std::vector<Drainer> relays;      // at most kMaxRelays; their sockets are the prefix of out.sockets
         std::optional<Drainer> pusher;
         std::optional<Drainer>
@@ -191,21 +191,21 @@ private:
     // A DRISC L1 address as the host reaches it over the NoC.
     uint64_t relay_noc_addr(uint32_t l1) const { return drisc_l1_noc_ + (l1 - drisc_l1_base_); }
 
-    ContextId context_id_{0};
-    uint64_t prof_l1_ = 0;        // Tensix profiler L1 base (control vector, then the per-RISC rings)
-    uint32_t drisc_l1_base_ = 0;  // DRISC L1 unreserved region, and its NoC-addressable base
+    uint64_t prof_l1_ = 0;  // Tensix profiler L1 base (control vector, then the per-RISC rings)
     uint64_t drisc_l1_noc_ = 0;
-    uint32_t slot_bytes_ = 0;  // staging slot; mirrors the relay kernel's kSlotWords
-    RelayL1 l1_;
-    bool eth_ok_ = false;  // an idle-eth pusher fits its L1
     uint64_t eth_prof_l1_ = 0;
-    EthL1 eth_l1_;
-    bool aeth_ok_ = false;  // ACTIVE_ETH profiler base resolved: the pusher can drain active eth cores
     uint64_t aeth_prof_l1_ = 0;
+    ContextId context_id_{0};
+    uint32_t drisc_l1_base_ = 0;  // DRISC L1 unreserved region, and drisc_l1_noc_ its NoC-addressable base
+    uint32_t slot_bytes_ = 0;     // staging slot; mirrors the relay kernel's kSlotWords
     // GDDR spool: the HAL's PROFILER DRAM region, which MetalEnv sizes for the spool when the streaming profiler
     // is on, so it lies below every allocator's unreserved base. Bytes 0 = direct push.
     uint32_t spool_bytes_ = 0;
     uint32_t spool_addr_ = 0;
+    RelayL1 l1_;
+    EthL1 eth_l1_;
+    bool eth_ok_ = false;   // an idle-eth pusher fits its L1
+    bool aeth_ok_ = false;  // ACTIVE_ETH profiler base resolved: the pusher can drain active eth cores
     std::vector<DeviceCtx> devices_;
     std::unique_ptr<SyncDevices> sync_;
 };
