@@ -123,7 +123,9 @@ class TtResLayer:
         dram_input=False,
         input_dtype=ttnn.bfloat16,
         input_layout=ttnn.TILE_LAYOUT,
+        output_dtype=None,
     ):
+        """``output_dtype`` is the dtype the last block emits; None keeps the one its convs produce."""
         expansion = 4
 
         if stride != 1 or inplanes != planes * expansion:
@@ -150,6 +152,7 @@ class TtResLayer:
                 dram_input=dram_input,
                 input_dtype=input_dtype,
                 input_layout=input_layout,
+                output_dtype=output_dtype if num_blocks == 1 else None,
             )
         )
         inplanes = planes * expansion
@@ -171,6 +174,7 @@ class TtResLayer:
                     dcn=dcn,
                     dram_activation=dram_activation,
                     input_dtype=layers[-1].output_dtype,
+                    output_dtype=output_dtype if j == num_blocks - 1 else None,
                 )
             )
         self.layer = layers
@@ -204,6 +208,7 @@ class TtBottleneck:
         dram_input=False,
         input_dtype=ttnn.bfloat16,
         input_layout=ttnn.TILE_LAYOUT,
+        output_dtype=None,
     ):
         """``input_dtype`` and ``input_layout`` describe the block input; the dtype and layout
         each conv sees follow from them. ``dram_activation`` keeps the activations of conv1, conv3 and the downsample in
@@ -235,7 +240,11 @@ class TtBottleneck:
         conv3_dtype = ttnn.bfloat16 if self.with_dcn else input_dtype
         downsample_dtype = ttnn.bfloat8_b if activation_dtype == ttnn.bfloat8_b else input_dtype
         downsample_layout = ttnn.TILE_LAYOUT if activation_dtype == ttnn.bfloat8_b else input_layout
-        self.output_dtype = conv3_dtype
+        # The residual add emits ``output_dtype``, so a cast the next stage needs costs no
+        # separate pass over the tensor.
+        self.output_dtype = conv3_dtype if output_dtype is None else output_dtype
+        # The identity is cast only when the block input is not bfloat8_b already.
+        self.cast_identity = activation_dtype == ttnn.bfloat8_b and input_dtype != ttnn.bfloat8_b
 
         self.conv1 = TtnnConv2D(
             conv_args.conv1,
@@ -308,9 +317,8 @@ class TtBottleneck:
 
     def __call__(self, x_identity):
         x, out_h, out_w = self.conv1(x_identity)
-        if self.activation_dtype == ttnn.bfloat8_b:
+        if self.cast_identity:
             x_identity = ttnn.to_memory_config(x_identity, ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
-            x_identity = ttnn.add(x_identity, 0.0, dtype=ttnn.bfloat8_b)
 
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         if self.dcn == True:
@@ -338,7 +346,7 @@ class TtBottleneck:
         if self.is_downsample:
             x_identity, _, _ = self.downsample(x_identity)
         x_identity = ttnn.to_memory_config(x_identity, ttnn.DRAM_MEMORY_CONFIG)
-        x = ttnn.add(x, x_identity, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)])
+        x = ttnn.add(x, x_identity, dtype=self.output_dtype, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)])
 
         ttnn.deallocate(x_identity)
         return x
@@ -426,8 +434,8 @@ class TtResNet:
 
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
 
-        # The max pool emits a bfloat16 ROW_MAJOR tensor; forward casts stage 1's output to
-        # bfloat8_b; every stage emits TILE.
+        # The max pool emits a bfloat16 ROW_MAJOR tensor, stage 1 emits bfloat8_b, and every
+        # stage emits TILE.
         stage_input_dtype = ttnn.bfloat16
         stage_input_layout = ttnn.ROW_MAJOR_LAYOUT
         self.output_dtypes = []
@@ -457,10 +465,11 @@ class TtResNet:
                 dram_input=i not in dram_activation_stages and i - 1 in dram_activation_stages,
                 input_dtype=stage_input_dtype,
                 input_layout=stage_input_layout,
+                output_dtype=ttnn.bfloat8_b if i == 0 else None,
             )
             self.inplanes = planes * self.block.expansion
             self.res_layers.append(res_layer)
-            stage_input_dtype = ttnn.bfloat8_b if i == 0 else res_layer.output_dtype
+            stage_input_dtype = res_layer.output_dtype
             stage_input_layout = ttnn.TILE_LAYOUT
             if i in out_indices:
                 self.output_dtypes.append(stage_input_dtype)
@@ -471,7 +480,6 @@ class TtResNet:
         """Forward function."""
         x, out_h, out_w = self.conv1(x)
         x = ttnn.sharded_to_interleaved(x)
-        x = ttnn.add(x, 0.0, dtype=ttnn.bfloat8_b)
         x = ttnn.max_pool2d(
             input_tensor=x,
             batch_size=self.conv1.conv.batch_size,
@@ -489,8 +497,6 @@ class TtResNet:
         outs = []
         for i, layer_name in enumerate(self.res_layers):
             x = layer_name(x)
-            if i == 0:
-                x = ttnn.add(x, 0.0, dtype=ttnn.bfloat8_b)
             if i in self.out_indices:
                 outs.append(x)
         return tuple(outs)
