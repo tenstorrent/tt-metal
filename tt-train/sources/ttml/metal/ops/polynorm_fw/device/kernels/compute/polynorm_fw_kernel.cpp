@@ -85,10 +85,10 @@ void reduce_sum_pows_to_inv_rms_triplet() {
     sqrt_tile_first_column(reg_a1);
     sqrt_tile_first_column(reg_a2);
 
-    recip_tile_init<false>();
-    recip_tile<false>(reg_a0, VectorMode::C);
-    recip_tile<false>(reg_a1, VectorMode::C);
-    recip_tile<false>(reg_a2, VectorMode::C);
+    recip_tile_init();
+    recip_tile(reg_a0, VectorMode::C);
+    recip_tile(reg_a1, VectorMode::C);
+    recip_tile(reg_a2, VectorMode::C);
 
     tile_regs_commit();
     pack_l1_acc_block(cb_inv_rms, /*first_block=*/true, /*num_tiles=*/3U, /*dst_start_index=*/0U);

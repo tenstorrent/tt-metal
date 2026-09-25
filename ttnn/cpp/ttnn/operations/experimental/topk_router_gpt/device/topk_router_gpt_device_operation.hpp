@@ -5,11 +5,11 @@
 #pragma once
 
 #include <optional>
-#include <variant>
 
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/device_operation.hpp"
 #include "topk_router_gpt_device_operation_types.hpp"
-#include "topk_router_gpt_program_factory.hpp"
 
 namespace ttnn::operations::experimental::topk_router_gpt {
 
@@ -19,7 +19,14 @@ struct TopkRouterGptDeviceOperation {
     using tensor_return_value_t = topk_router_gpt::tensor_return_value_t;
     using spec_return_value_t = topk_router_gpt::spec_return_value_t;
 
-    using program_factory_t = std::variant<program::TopkRouterGptProgramFactory>;
+    // The five tensor addresses are the only per-dispatch state; they are declared as runtime-arg
+    // bindings in create_descriptor, so the framework patches them on a cache hit. The rest of the
+    // per-core block (roles, k-tile split, ring ordering, vchannels) derives from the tensor specs
+    // and the device's DRAM bank assignment, all covered by the program hash — hence no override.
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value);
 
     static void validate_on_program_cache_miss(const operation_attributes_t& attrs, const tensor_args_t& tensor_args);
 

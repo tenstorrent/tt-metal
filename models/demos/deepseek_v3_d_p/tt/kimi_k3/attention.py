@@ -31,12 +31,22 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 
 
+def validate_kda_bounds(actual_start: int | None, actual_end: int | None) -> None:
+    """Validate host bounds; device-only trace metadata has the same caller contract."""
+    start = 0 if actual_start is None else actual_start
+    for name, value in (("actual_start", start), ("actual_end", actual_end)):
+        if value is not None and (value < 0 or value % ttnn.TILE_SIZE != 0):
+            raise ValueError(f"K3 KDA {name} must be nonnegative and 32-token aligned, got {value}")
+    if actual_end is not None and actual_end <= start:
+        raise ValueError("K3 KDA requires actual_end > actual_start")
+
+
 @dataclass(frozen=True)
 class K3AttnContext:
     """Everything an attention module needs from the caller for one chunk.
 
     MLA consumes the KV and rotary inputs. KDA uses the user ID to select its carry
-    and the start position to order its sequence-parallel segments.
+    and both bounds to order its sequence-parallel segments and stop at the last real token.
     """
 
     rope_tensors: Optional[dict] = None
@@ -46,10 +56,12 @@ class K3AttnContext:
     cache_layer_idx: Optional[int] = None
     cache_user_id: int = 0
     actual_start: Optional[int] = None
-    # Absolute KV position past this chunk's last real token. MLA clamps its cache write to it
-    # (#54744); the traced path takes the same value off `metadata[2]` on device instead.
+    # Absolute position past this chunk's last real token. MLA clamps its cache write to it
+    # (#54744), and KDA stops its carries there; trace reads `metadata[2]` on device.
     actual_end: Optional[int] = None
     # The traced path's `(slot_id, actual_start, actual_end)` triple of 1-element uint32 tensors.
+    # KDA requires both bounds to be 32-token aligned on every replay. Device-only
+    # values are caller preconditions; do not round real lengths or read them back.
     metadata: Optional[tuple] = None
 
 
@@ -150,6 +162,8 @@ class TtK3KdaAttention(LightweightModule):
         self._states = state_cache
 
     def forward(self, normed: ttnn.Tensor, ctx: K3AttnContext) -> ttnn.Tensor:
+        if ctx.metadata is None:
+            validate_kda_bounds(ctx.actual_start, ctx.actual_end)
         gathered = ttnn.all_gather(
             normed,
             dim=-1,
@@ -165,27 +179,36 @@ class TtK3KdaAttention(LightweightModule):
             raise ValueError(
                 f"KDA layer {self.layer_idx} has no state cache; call bind_state_cache() before the first forward"
             )
-        # Reuse the caller-owned scalar during capture so replay sees updated offsets.
-        # Eager calls carry a host position, which KDA also consumes as a device scalar.
-        actual_start = (
-            ctx.metadata[1]
-            if ctx.metadata is not None
-            else ttnn.from_torch(
-                torch.tensor([0 if ctx.actual_start is None else ctx.actual_start], dtype=torch.int64),
+
+        # Reuse both caller-owned scalars during capture: replay changes the
+        # interval without rebuilding the graph or reading bounds on the host.
+        def device_bound(value: int) -> ttnn.Tensor:
+            return ttnn.from_torch(
+                torch.tensor([value], dtype=torch.int64),
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.kda.device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.kda.device),
             )
-        )
+
+        if ctx.metadata is not None:
+            actual_start, actual_end = ctx.metadata[1:3]
+        else:
+            actual_start = device_bound(0 if ctx.actual_start is None else ctx.actual_start)
+            actual_end = None if ctx.actual_end is None else device_bound(ctx.actual_end)
         try:
             output, new_state = self.kda.forward(
-                hidden, self._states.read(self.layer_idx, ctx.cache_user_id), actual_start=actual_start
+                hidden,
+                self._states.read(self.layer_idx, ctx.cache_user_id),
+                actual_start=actual_start,
+                actual_end=actual_end,
             )
         finally:
             if ctx.metadata is None:
                 ttnn.deallocate(actual_start)
+                if actual_end is not None:
+                    ttnn.deallocate(actual_end)
         ttnn.deallocate(hidden)
         self._states.commit(self.layer_idx, new_state, ctx.cache_user_id)
 

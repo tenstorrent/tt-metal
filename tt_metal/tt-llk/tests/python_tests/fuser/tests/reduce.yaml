@@ -6,11 +6,10 @@ operands:
   - name: "input_A"
     dims: [32, 32]
     format: "Float32"
-    # const_value: 0.335
   - name: "input_B"
     dims: [32, 32]
     format: "Float32"
-    const_value: 1.0
+    stimuli: 1.0
   - name: "reduced_output"
     dims: [32, 32]
     format: "Float32"
@@ -18,6 +17,7 @@ operands:
 operations:
   - math:
       - type: "Fpu"
+        block_size: [64, 64]
         in0: "input_A"
         in1: "input_B"
         operation: "Reduce"
@@ -27,5 +27,5 @@ operations:
         math_fidelity: "HiFi4"
     pack:
       - output: "reduced_output"
+        block_size: [64, 64]
         packer: "Packer"
-    block_size: [64, 64]

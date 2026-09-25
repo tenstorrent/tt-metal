@@ -207,6 +207,17 @@ class ttKDA:
             ),
         )
 
+    @staticmethod
+    def _validate_runtime_bound(bound: ttnn.Tensor, name: str) -> None:
+        if not isinstance(bound, ttnn.Tensor):
+            raise TypeError(f"{name} must be a device UINT32 scalar")
+        if (
+            bound.dtype != ttnn.uint32
+            or bound.layout != ttnn.ROW_MAJOR_LAYOUT
+            or any(dimension != 1 for dimension in bound.shape)
+        ):
+            raise ValueError(f"device {name} must be a UINT32 row-major scalar")
+
     def _validate_forward(
         self,
         hidden_states: ttnn.Tensor,
@@ -214,14 +225,7 @@ class ttKDA:
         actual_start: ttnn.Tensor,
     ) -> None:
         """Validate shape/type plus the documented SP state-distribution contract."""
-        if not isinstance(actual_start, ttnn.Tensor):
-            raise TypeError("actual_start must be a device UINT32 scalar")
-        if (
-            actual_start.dtype != ttnn.uint32
-            or actual_start.layout != ttnn.ROW_MAJOR_LAYOUT
-            or any(dimension != 1 for dimension in actual_start.shape)
-        ):
-            raise ValueError("device actual_start must be a UINT32 row-major scalar")
+        self._validate_runtime_bound(actual_start, "actual_start")
         if len(hidden_states.shape) != 3 or hidden_states.shape[-1] != self.config.hidden_size:
             raise ValueError(
                 f"hidden_states shape {tuple(hidden_states.shape)} must be [B,T,{self.config.hidden_size}]"
@@ -259,7 +263,11 @@ class ttKDA:
         config = self.config
         if not self._is_sequence_parallel:
             batch, rows, width = qkv.shape
-            new_state = ttnn.slice(qkv, (0, rows - (config.conv_kernel_size - 1), 0), (batch, rows, width))
+            new_state = (
+                selections.select_local_final_history(qkv, 1)
+                if selections is not None
+                else ttnn.slice(qkv, (0, rows - (config.conv_kernel_size - 1), 0), (batch, rows, width))
+            )
             predecessor = incoming_layer_carry
         else:
             predecessor, new_state = exchange_convolution_carry(
@@ -402,6 +410,7 @@ class ttKDA:
         hidden_states: ttnn.Tensor,
         state: KdaState,
         actual_start: ttnn.Tensor,
+        actual_end: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, KdaState]:
         """Run prefill KDA and return replacement logical carries.
 
@@ -413,24 +422,32 @@ class ttKDA:
         nonnegative, 32-aligned position. No device-to-host value validation is
         performed. Pass an explicit zero-valued tensor for a zero-start call.
 
+        Optional ``actual_end`` is a replicated device scalar defining the
+        exclusive global valid end. The interval is nonempty, 32-aligned, and
+        no larger than the constructed capacity. Omission means full capacity.
+        Bounds may change during trace replay; their addresses must stay alive.
+        Padded output rows are unspecified; returned carries stop at the valid end.
+
         The input state is only read. No tensor reachable from it is used as a
         ``ttnn.copy`` destination or retained on this layer. The returned output
         is sequence-partitioned along SP and, when TP > 1, reduce-scattered on
         the hidden dimension; TP == 1 returns the full hidden dimension.
         """
         self._validate_forward(hidden_states, state, actual_start)
-        selections = None
-        if self._is_sequence_parallel:
-            selections = ChronologicalSelections(
-                ttnn.experimental.kda.chronological_selections(
-                    actual_start,
-                    self.sequence_parallel_axis,
-                    self.active_seq_len_local,
-                    self.config.num_heads,
-                    self.config.head_k_dim,
-                    self.config.head_v_dim,
-                ),
-            )
+        if actual_end is not None:
+            self._validate_runtime_bound(actual_end, "actual_end")
+        # All geometries use the same selection graph for full and padded calls.
+        selections = ChronologicalSelections(
+            ttnn.experimental.kda.chronological_selections(
+                actual_start,
+                self.sequence_parallel_axis,
+                self.active_seq_len_local,
+                self.config.num_heads,
+                self.config.head_k_dim,
+                self.config.head_v_dim,
+                actual_end=actual_end,
+            ),
+        )
         projected = self._project_inputs(hidden_states)
         qkv = ttnn.to_layout(projected.qkv, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         convolution_state = ttnn.to_layout(
@@ -448,8 +465,9 @@ class ttKDA:
             gate=gate,
             beta=beta,
             initial_state=state.recurrent,
-            selections=selections,
+            selections=selections if self._is_sequence_parallel else None,
             actual_start=actual_start,
+            actual_end=actual_end,
         )
         output = self._kda_rms_norm(result.output, projected.output_gate)
         output = self._project_output(output)

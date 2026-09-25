@@ -13,6 +13,34 @@ from models.common.utility_functions import is_blackhole
 
 # Track unique warning signatures to avoid stdout spam
 _warned_matmul_signatures = set()
+_logged_m_per_core_signatures = set()
+
+
+def _same_m_per_core_match(grid_dict, M, K, N, grid_x):
+    """A table entry for the same (K, N) whose M puts the same number of M tiles on each core.
+
+    A blocking is chosen against ``M_per_core = ceil(M_tiles / grid_x)`` -- how many rows of tiles each
+    core walks -- not against M itself. Two Ms with the same ``M_per_core`` pose the identical per-core
+    problem, so an entry swept at one is valid at the other. This is what makes the tables robust to
+    the difference between a harness's packed length and the pipeline's (e.g. 13632 vs 13664, both
+    ``M_per_core`` 54 on an 8-wide grid) and to prompt length within a padding bucket. M is taken as
+    parallelised across ``grid_x``, matching ``get_per_core_dims`` in ``sweep_mm_block_sizes.py``,
+    which produced the tables. Only consulted after an exact ``(M, K, N)`` miss; nearest M wins ties.
+
+    Returns ``(matched_M, config_tuple)`` or ``None``.
+    """
+    if not grid_dict or not grid_x:
+        return None
+    target = math.ceil(math.ceil(M / 32) / grid_x)
+    best = None
+    for (m, k, n), cfg in grid_dict.items():
+        if k != K or n != N or m == M:
+            continue
+        if math.ceil(math.ceil(m / 32) / grid_x) == target and (best is None or abs(m - M) < abs(best[0] - M)):
+            best = (m, cfg)
+    return best
+
+
 _warned_1d_matmul_signatures = set()
 _ENABLE_MM_LOG = os.environ.get("TT_DIT_ENABLE_MM_LOG", "true").lower() in ("1", "true")
 
@@ -120,12 +148,22 @@ grid_88_configs = {
     (512, 8192, 5120): (4, 16, 4),
     (512, 16384, 5120): (2, 16, 8),
     (512, 32768, 5120): (4, 16, 8),
+    # MiniMax-H3 at 15 s / 768P on the WH Galaxy 8x8 AGMM worker grid (13664 rows/device), keyed per-M
+    # because the winner moves with M on this grid. ff1 is the sweep winner (rank 1/320); to_qkv and
+    # to_out are the merge-base defaults the WH sweeps ranked within 0.5% of best -- listed so main's
+    # `agmm_block_size`, whose per-core-M key assumes Blackhole's 12 M-cores, does not hand Wormhole an
+    # unmeasured Blackhole blocking. Blackhole never resolves an 8x8 AGMM grid, so these are WH-only.
+    (13664, 5376, 7168): (8, 7, 10, (2, 2)),  # ff1, 15709.9 us
+    (13664, 5376, 5376): (8, 7, 12, (2, 2)),  # to_qkv
+    (13664, 7168, 1344): (8, 8, 6, (2, 2)),  # to_out
 }
 
 
 # Known best blockings for 8x9 core grid for specific (M, K, N) shapes
 # Each value is a tuple: (M_block_size, K_block_size, N_block_size)
 grid_89_configs = {
+    # MiniMax-H3 ff2, 15 s @ 768P, plain minimal_matmul on the WH Galaxy 8x9 grid (13664 rows/device): rank 2/322; (12, 7, 8) is 1.5% faster but not PCC-validated, so not landed.
+    (13664, 3584, 5376): (8, 7, 10, (2, 2)),  # ff2, 6770.7 us
     (32, 2432, 3648): (2, 4, 8),
     (1024, 2432, 1920): (4, 4, 8),
     (352, 2432, 1920): (2, 4, 4),
@@ -384,7 +422,7 @@ def get_matmul_core_grid(mesh_device):
     return core_grid
 
 
-def agmm_worker_grid(full_grid, transpose):
+def agmm_worker_grid(full_grid, transpose, num_links=None):
     """all_gather_minimal_matmul_async matmul worker grid, sized to leave the mux axis free.
 
     The op places its input muxes on the device's last ROW when the core grid is transposed and its
@@ -392,8 +430,19 @@ def agmm_worker_grid(full_grid, transpose):
     workers must therefore avoid that row/column: reserve a row when transposed -> (x, y-1); reserve a
     column when not -> (x-1, y). `transpose` should be the op's own decision, i.e.
     `force_transpose or (M > N)`.
+
+    With `num_links`, the in0 sender axis (x when transposed, y when not) is also shortened until it
+    splits into exactly `num_links` groups of `ceil(axis / num_links)` workers, which the op asserts.
+    Blackhole's 12- and 10-long axes already do at 2 links; Wormhole's 8x9 grid at 4 links does not
+    when the grid is not transposed (9 rows -> 3 groups of 3), so it runs on 8 of the 9 rows.
     """
-    return ttnn.CoreCoord(full_grid.x, full_grid.y - 1) if transpose else ttnn.CoreCoord(full_grid.x - 1, full_grid.y)
+    grid = ttnn.CoreCoord(full_grid.x, full_grid.y - 1) if transpose else ttnn.CoreCoord(full_grid.x - 1, full_grid.y)
+    if not num_links:
+        return grid
+    axis = grid.x if transpose else grid.y
+    while axis > num_links and math.ceil(axis / math.ceil(axis / num_links)) != num_links:
+        axis -= 1
+    return ttnn.CoreCoord(axis, grid.y) if transpose else ttnn.CoreCoord(grid.x, axis)
 
 
 def _compute_heuristic_blocking(M: int, K: int, N: int, grid_x: int, grid_y: int, tp_factor: int = -1):
@@ -579,6 +628,18 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic
     grid_dict = _grid_config_lookup.get((grid_x, grid_y))
     if grid_dict is not None:
         config_tuple = grid_dict.get((M, K, N))
+        if config_tuple is None:
+            near = _same_m_per_core_match(grid_dict, M, K, N, grid_x)
+            if near is not None:
+                matched_m, config_tuple = near
+                signature = (M, K, N, grid_x, grid_y)
+                if signature not in _logged_m_per_core_signatures:
+                    log_info(
+                        f"No exact blocking for (M, K, N) = ({M}, {K}, {N}) on {grid_x}x{grid_y}; using the "
+                        f"entry swept at M={matched_m}, which has the same M_per_core "
+                        f"({math.ceil(math.ceil(M / 32) / grid_x)} M tiles per core)"
+                    )
+                    _logged_m_per_core_signatures.add(signature)
 
     # Unpack: 3-tuple (M_block_size, K_block_size, N_block_size) or
     # 4-tuple (M_block_size, K_block_size, N_block_size, (sub_h, sub_w))
@@ -632,6 +693,42 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic
     )
 
 
+_logged_ring_safe_k_block_signatures = set()
+
+
+def _ring_safe_k_block(config, M, K, N, cluster_size):
+    """Shrink `K_block_size` to the largest divisor of the per-device K tiles when it does not divide them.
+
+    `all_gather_minimal_matmul_async` on a Ring topology asserts `K_tiles_per_device % K_block_size == 0`
+    (its bidirectional half-block scheme has no tail block), where `K_tiles_per_device = K / 32 / TP`. The
+    generic (8, 8, 8) fallback satisfies that at TP=4 for this repo's swept shapes only by luck of the
+    dimensions -- at TP=8 a 5376-wide input is 21 K tiles per device and the op throws on the first
+    matmul, 20 minutes into a weight load. Only the generic fallback is adjusted here: a swept table
+    entry or a caller-supplied `default_block_size` was chosen for a specific TP and is left alone.
+    """
+    k_tiles_per_device = K // 32 // max(cluster_size, 1)
+    k_block = config.K_block_size
+    if k_tiles_per_device <= 0 or k_tiles_per_device % k_block == 0:
+        return config
+    safe = max(d for d in range(1, min(k_block, k_tiles_per_device) + 1) if k_tiles_per_device % d == 0)
+    signature = (M, K, N, cluster_size)
+    if signature not in _logged_ring_safe_k_block_signatures:
+        log_warning(
+            f"AGMM generic fallback for (M, K, N) = ({M}, {K}, {N}) at TP={cluster_size}: K_block {k_block} does not "
+            f"divide the {k_tiles_per_device} K tiles per device the ring delivers; using K_block {safe}. Sweep the "
+            f"shape with sweep_mm_block_sizes.py and add a table entry to replace this."
+        )
+        _logged_ring_safe_k_block_signatures.add(signature)
+    return ttnn.MinimalMatmulConfig(
+        M_block_size=config.M_block_size,
+        K_block_size=safe,
+        N_block_size=config.N_block_size,
+        subblock_h=config.subblock_h,
+        subblock_w=config.subblock_w,
+        compute_with_storage_grid_size=config.compute_with_storage_grid_size,
+    )
+
+
 _logged_agmm_v3_signatures = set()
 
 
@@ -674,12 +771,14 @@ def get_agmm_config(
     # The op transposes when the caller forces it or the output is wide, and places its in0 muxes
     # on the axis the worker grid leaves free -- reserve a row when transposed, a column when not.
     transpose_core_grid = force_transpose or M > N
-    legacy_grid = core_grid or agmm_worker_grid(full_grid, transpose_core_grid)
+    legacy_grid = core_grid or agmm_worker_grid(full_grid, transpose_core_grid, num_links)
     # in0 senders group along the M-parallel axis (grid.x transposed, grid.y not); split it into
     # exactly num_links groups, matching the op's `ceil(in0_axis / workers) == num_links` assert.
     # For the default transposed grid this is the same 6 the old `full_grid.x // num_links` gave.
     legacy_workers = math.ceil((legacy_grid.x if transpose_core_grid else legacy_grid.y) / num_links)
-    table_hit = _grid_config_lookup.get((legacy_grid.x, legacy_grid.y), {}).get((M, K, N)) is not None
+    _legacy_table = _grid_config_lookup.get((legacy_grid.x, legacy_grid.y), {})
+    m_cores = legacy_grid.x if transpose_core_grid else legacy_grid.y
+    table_hit = (M, K, N) in _legacy_table or _same_m_per_core_match(_legacy_table, M, K, N, m_cores) is not None
     if core_grid is not None or default_block_size is not None or use_heuristic or table_hit:
         config = get_matmul_config(M, K, N, legacy_grid, default_block_size, use_heuristic)
         return legacy_grid, config, legacy_workers
@@ -699,6 +798,7 @@ def get_agmm_config(
         )
     if v3 is None:
         config = get_matmul_config(M, K, N, legacy_grid)  # legacy warned generic fallback
+        config = _ring_safe_k_block(config, M, K, N, cluster_size)
         return legacy_grid, config, legacy_workers
 
     grid_x, grid_y = v3["core_grid"]
@@ -837,6 +937,20 @@ class FusedMMRSConfig(NamedTuple):
             rs_zone_capacity = (core_grid.y - self.compute_with_storage_grid_size.y) * core_grid.x
             num_workers_per_link = rs_zone_capacity // (2 * num_links) - 1
 
+        # The expression above is unbounded below: a shallow RS zone or a high link count drives it
+        # to zero or negative (e.g. an 8x7 matmul grid on an 8x9 device yields 1 at num_links=4 and
+        # 0 at 8). A collective configured with no drainers does not fail -- it deadlocks, which is
+        # the most expensive way to find out. Fail here instead, where the numbers are still legible.
+        if num_workers_per_link < 1:
+            msg = (
+                f"fused MM/RS would run {num_workers_per_link} reduce-scatter workers per link "
+                f"(matmul grid {self.compute_with_storage_grid_size}, device grid {core_grid}, "
+                f"num_links={num_links}): the reduce-scatter zone is too shallow for this many links. "
+                "Give the config an explicit num_workers_per_link, use a shorter matmul grid, or do "
+                "not fuse this shape."
+            )
+            raise ValueError(msg)
+
         # Order is important. Guaranteed for python 3.7+
         return {
             "reduce_scatter_core_grid_offset": ttnn.CoreCoord(0, self.compute_with_storage_grid_size.y),
@@ -930,26 +1044,7 @@ def get_fused_mmrs_config(M, K, N, device_core_grid, num_links):
     with `sweep_mm_block_sizes.py` (use case ``mmrs``) and paste the winner into
     ``fused_mmrs_configs`` (or register it from a model table) to override the rules permanently.
     """
-    table = fused_mmrs_configs.get(device_core_grid, {})
-    config = table.get((M, K, N))
-
-    if config is None and is_blackhole() and M % 32 == 0:
-        from .mmrs_rules import pick_v23
-
-        v23 = pick_v23(M, K, N, full_grid=(device_core_grid.x, device_core_grid.y))
-        if v23 is not None:
-            m_blk, k_blk, n_blk = v23["blocks"]
-            sub_h, sub_w = v23["subblock"]
-            signature = (M, K, N, device_core_grid.x, device_core_grid.y)
-            if signature not in _logged_mmrs_rule_signatures:
-                log_info(
-                    f"MMRS v2.3 rule config for (M, K, N) = ({M}, {K}, {N}): "
-                    f"FusedMMRSConfig(ttnn.CoreCoord{v23['mm_grid']}, "
-                    f"{m_blk}, {k_blk}, {n_blk}, {sub_h}, {sub_w}, None, 1)  "
-                    f"# paste into fused_mmrs_configs after sweeping to override"
-                )
-                _logged_mmrs_rule_signatures.add(signature)
-            config = FusedMMRSConfig(ttnn.CoreCoord(*v23["mm_grid"]), m_blk, k_blk, n_blk, sub_h, sub_w, None, 1)
+    config = _resolve_fused_mmrs_config(M, K, N, device_core_grid, log=True)
 
     if config is None:
         log_warning(
@@ -959,6 +1054,56 @@ def get_fused_mmrs_config(M, K, N, device_core_grid, num_links):
         )
         config = default_fused_mmrs_config
     return config.get_params(device_core_grid, num_links, M=M)
+
+
+def _resolve_fused_mmrs_config(M, K, N, device_core_grid, *, log):
+    """Precedences 1 and 2 of `get_fused_mmrs_config` -- a swept table entry, then the rule engine.
+
+    Returns None when only `default_fused_mmrs_config` would serve the shape. Factored out so that
+    `resolves_fused_mmrs_config` answers with the *same* precedence the resolver actually applies,
+    rather than a second copy of it that can drift.
+
+    `log` gates the rule-hit info line, so the predicate stays free of side effects.
+    """
+    config = fused_mmrs_configs.get(device_core_grid, {}).get((M, K, N))
+    if config is not None:
+        return config
+
+    if is_blackhole() and M % 32 == 0:
+        from .mmrs_rules import pick_v23
+
+        v23 = pick_v23(M, K, N, full_grid=(device_core_grid.x, device_core_grid.y))
+        if v23 is not None:
+            m_blk, k_blk, n_blk = v23["blocks"]
+            sub_h, sub_w = v23["subblock"]
+            if log:
+                signature = (M, K, N, device_core_grid.x, device_core_grid.y)
+                if signature not in _logged_mmrs_rule_signatures:
+                    log_info(
+                        f"MMRS v2.3 rule config for (M, K, N) = ({M}, {K}, {N}): "
+                        f"FusedMMRSConfig(ttnn.CoreCoord{v23['mm_grid']}, "
+                        f"{m_blk}, {k_blk}, {n_blk}, {sub_h}, {sub_w}, None, 1)  "
+                        f"# paste into fused_mmrs_configs after sweeping to override"
+                    )
+                    _logged_mmrs_rule_signatures.add(signature)
+            return FusedMMRSConfig(ttnn.CoreCoord(*v23["mm_grid"]), m_blk, k_blk, n_blk, sub_h, sub_w, None, 1)
+
+    return None
+
+
+def resolves_fused_mmrs_config(M, K, N, device_core_grid) -> bool:
+    """Whether a *measured or rule-derived* fused MM+RS blocking exists for this shape and grid.
+
+    False means `get_fused_mmrs_config` would fall back to `default_fused_mmrs_config`, which is
+    slower than not fusing at all -- so this, not the shape alone, is what a caller should gate the
+    fused path on. Pure: no logging, no table mutation.
+
+    Both resolution sources are architecture-dependent: the table is keyed by the device core grid,
+    and the rule engine is Blackhole-only. So the answer has to be computed from the *actual*
+    `device_core_grid` and can never be inferred from (M, K, N) alone -- doing so is how Wormhole
+    silently ran every ff2 on the warned default.
+    """
+    return _resolve_fused_mmrs_config(M, K, N, device_core_grid, log=False) is not None
 
 
 def register_matmul_configs(configs: dict) -> None:
