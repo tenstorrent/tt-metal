@@ -13,6 +13,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "slice_write_device_operation_types.hpp"
+#include "ttnn/operations/experimental/padded_slice/device/slice_cb_descriptor.hpp"
 #include "tt-metalium/math.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 
@@ -25,25 +26,6 @@ namespace {
 constexpr uint32_t kSliceWriteRmShardedWriterKernelIdx = 1;
 constexpr uint32_t kSliceWriteRmShardedWriterAddressArgIdx = 0;
 constexpr uint8_t kSliceWriteRmShardedInputCbIndex = static_cast<uint8_t>(tt::CBIndex::c_0);
-
-CBDescriptor make_slice_write_rm_sharded_cb(
-    uint32_t cb_index,
-    const CoreRangeSet& core_ranges,
-    uint32_t page_size,
-    uint32_t num_pages,
-    tt::DataFormat data_format,
-    Buffer* buffer = nullptr) {
-    return CBDescriptor{
-        .total_size = num_pages * page_size,
-        .core_ranges = core_ranges,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(cb_index),
-            .data_format = data_format,
-            .page_size = page_size,
-        }}},
-        .buffer = buffer,
-    };
-}
 
 uint32_t slice_write_rm_sharded_writer_address(
     const Tensor& input_tensor,
@@ -314,7 +296,7 @@ ProgramDescriptor SliceWriteRMShardedInputProgramFactory::create_descriptor(
         "Input & output should have the same data format, {} , {}",
         input_cb_data_format,
         output_cb_data_format);
-    desc.cbs.push_back(make_slice_write_rm_sharded_cb(
+    desc.cbs.push_back(make_slice_cb_descriptor(
         src0_cb_index,
         input_cores,
         input_row_size_bytes_offset,
@@ -356,7 +338,15 @@ ProgramDescriptor SliceWriteRMShardedInputProgramFactory::create_descriptor(
     }
 
     desc.kernels.push_back(std::move(reader_kernel));
+    // kSliceWriteRmShardedWriterKernelIdx is the GetRuntimeArgs index in override_runtime_arguments.
+    // Capture it from the push so a reorder fails here instead of patching the reader.
+    const uint32_t writer_kernel_idx = static_cast<uint32_t>(desc.kernels.size());
     desc.kernels.push_back(std::move(writer_kernel));
+    TT_FATAL(
+        writer_kernel_idx == kSliceWriteRmShardedWriterKernelIdx,
+        "Slice-write RM sharded writer must be kernel index {}, got {}",
+        kSliceWriteRmShardedWriterKernelIdx,
+        writer_kernel_idx);
     return desc;
 }
 

@@ -13,6 +13,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "slice_write_device_operation_types.hpp"
+#include "ttnn/operations/experimental/padded_slice/device/slice_cb_descriptor.hpp"
 #include "tt-metalium/math.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 
@@ -36,23 +37,6 @@ void emplace_slice_write_interleaved_args(
         }
     }
     kernel.emplace_runtime_args(core, runtime_args);
-}
-
-CBDescriptor make_slice_write_interleaved_cb(
-    uint32_t cb_index,
-    const CoreRangeSet& core_ranges,
-    uint32_t page_size,
-    uint32_t num_pages,
-    tt::DataFormat data_format) {
-    return CBDescriptor{
-        .total_size = num_pages * page_size,
-        .core_ranges = core_ranges,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(cb_index),
-            .data_format = data_format,
-            .page_size = page_size,
-        }}},
-    };
 }
 
 SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
@@ -271,8 +255,8 @@ ProgramDescriptor SliceWriteRMInterleavedProgramFactory::create_descriptor(
             tt::tt_metal::merge_num_sticks_to_read(num_input_pages_pad32, cb_page_size, max_read_size);
         num_read_per_barrier = num_input_pages_pad32 / num_sticks_per_core_read;
     }
-    desc.cbs.push_back(make_slice_write_interleaved_cb(
-        src0_cb_index, total_cores, cb_page_size, num_read_per_barrier * 2, cb_data_format));
+    desc.cbs.push_back(
+        make_slice_cb_descriptor(src0_cb_index, total_cores, cb_page_size, num_read_per_barrier * 2, cb_data_format));
 
     KernelDescriptor::Defines writer_defines;
     if (stride[-1] != 1) {
@@ -280,7 +264,7 @@ ProgramDescriptor SliceWriteRMInterleavedProgramFactory::create_descriptor(
         uint32_t output_row_size_bytes = input_padded_shape[-1] * input.element_size();
         cb_page_size = tt::round_up(output_row_size_bytes, alignment);
         // input/output data_formats should be the same
-        desc.cbs.push_back(make_slice_write_interleaved_cb(
+        desc.cbs.push_back(make_slice_cb_descriptor(
             dst0_cb_index, total_cores, cb_page_size, num_read_per_barrier * 2, cb_data_format));
     }
 

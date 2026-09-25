@@ -4,6 +4,7 @@
 
 #include "padded_slice_tile_program_factory.hpp"
 #include "padded_slice_utils.hpp"
+#include "slice_cb_descriptor.hpp"
 
 #include <tt-metalium/program_descriptors.hpp>
 #include "hostdevcommon/kernel_structs.h"
@@ -33,25 +34,6 @@ namespace ttnn::experimental::prim {
 namespace {
 
 constexpr uint32_t kPaddedSliceTileReaderAddressArgIdx = 0;
-
-CBDescriptor make_padded_slice_tile_cb(
-    uint32_t cb_index,
-    const CoreRangeSet& core_ranges,
-    uint32_t page_size,
-    uint32_t num_pages,
-    tt::DataFormat data_format,
-    Buffer* buffer = nullptr) {
-    return CBDescriptor{
-        .total_size = num_pages * page_size,
-        .core_ranges = core_ranges,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(cb_index),
-            .data_format = data_format,
-            .page_size = page_size,
-        }}},
-        .buffer = buffer,
-    };
-}
 
 void emplace_padded_slice_tile_reader_args(
     KernelDescriptor& kernel, const CoreCoord& core, const std::vector<uint32_t>& args, Buffer* input_buffer) {
@@ -465,14 +447,14 @@ ProgramDescriptor PaddedSliceTileProgramFactory::create_descriptor(
         is_non_aligned = true;
     }
 
-    desc.cbs.push_back(make_padded_slice_tile_cb(
+    desc.cbs.push_back(make_slice_cb_descriptor(
         cb_input_index,
         total_cores,
         input_single_tile_size,
         cb_buffer_size * max_num_tiles_per_row,
         input_cb_data_format));
 
-    desc.cbs.push_back(make_padded_slice_tile_cb(
+    desc.cbs.push_back(make_slice_cb_descriptor(
         cb_untilized_index,
         total_cores,
         output_single_tile_size,
@@ -485,7 +467,7 @@ ProgramDescriptor PaddedSliceTileProgramFactory::create_descriptor(
         output_row_size_bytes,
         num_output_sticks_per_core);
 
-    desc.cbs.push_back(make_padded_slice_tile_cb(
+    desc.cbs.push_back(make_slice_cb_descriptor(
         cb_output_index,
         total_cores,
         output_row_size_bytes,
@@ -493,7 +475,7 @@ ProgramDescriptor PaddedSliceTileProgramFactory::create_descriptor(
         output_cb_data_format,
         dst_buffer));
 
-    desc.cbs.push_back(make_padded_slice_tile_cb(
+    desc.cbs.push_back(make_slice_cb_descriptor(
         cb_padding_index,
         total_cores,
         output_row_size_bytes,
