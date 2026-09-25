@@ -21,24 +21,26 @@ operands:
 operations:
   - math:
       - type: "Fpu"
+        block_size: [64, 64]
         in0: "input"
         in1: "weights_reduce"
         operation: "Matmul"
         unpacker: "MatmulUnpacker"
         math_fidelity: "HiFi2"
-    block_size: [64, 64]
     pack:
       - output: "intermediate"
+        block_size: [64, 64]
         packer: "Packer"
 
   - math:
       - type: "Fpu"
+        block_size: [64, 64]
         in0: "intermediate"
         in1: "weights_expand"
         operation: "Matmul"
         unpacker: "MatmulUnpacker"
         math_fidelity: "HiFi2"
-    block_size: [64, 64]
     pack:
       - output: "output"
+        block_size: [64, 64]
         packer: "Packer"

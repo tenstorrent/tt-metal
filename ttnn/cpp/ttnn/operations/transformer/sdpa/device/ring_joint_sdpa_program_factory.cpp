@@ -8,6 +8,7 @@
 #include "kernels/sliding_window_geometry.hpp"
 #include "kernels/sliding_window_work_plan.hpp"
 #include "sliding_halo_layout.hpp"
+#include "ring_joint_sdpa_schedule.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_id_sequencer.hpp"
@@ -29,6 +30,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -510,7 +512,7 @@ RingJointRuntimeArgLayout get_runtime_arg_layout(
     // 2 extra buffer slots for gathered_joint_k/v when the sharded-joint path is active
     const uint32_t gathered_joint_buffer_args = joint_input_params.joint_is_sharded ? 2 : 0;
     const bool enable_kv_chains = !args.has_sliding_window();
-    const bool use_head_chain = enable_kv_chains && !gqa_grouped_kv;
+    const bool use_head_chain = ring_joint::uses_v_head_chain(enable_kv_chains, gqa_grouped_kv, v_shares_k_buffer);
     const uint32_t head_chain_args = use_head_chain ? kRingJointChainConfigArgCount : 0;
     const uint32_t batch_chain_args =
         enable_kv_chains && k_uses_batch_chain ? (kRingJointChainConfigArgCount + kReaderBatchChainExtraArgCount) : 0;
@@ -608,6 +610,22 @@ void apply_ring_joint_scalar_runtime_args(
     const std::array<const Tensor*, 2> ag_inputs = {
         &input_k, tensor_args.input_v.has_value() ? &tensor_args.input_v.value() : &input_k};
     const bool uses_neighbor_halo = args.has_sliding_window();
+    // One reader/writer kernel pair per halo hop, appended in hop order after the three SDPA kernels.
+    std::optional<ring_joint::ChunkedSlidingHaloLayout> runtime_halo_layout;
+    if (uses_neighbor_halo) {
+        runtime_halo_layout = ring_joint::build_chunked_sliding_halo_layout(
+            tensor_args.input_q.padded_shape()[2] / tt::constants::TILE_HEIGHT,
+            args.get_k_chunk_size() / tt::constants::TILE_HEIGHT,
+            args.sliding_window_size.value(),
+            tt::constants::TILE_HEIGHT,
+            static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size),
+            runtime_plan.logical_nt,
+            derived_kv_slab_count(args, tensor_args),
+            args.kv_actual_isl.has_value() ? std::optional<uint32_t>(*args.kv_actual_isl / tt::constants::TILE_HEIGHT)
+                                           : std::nullopt);
+        TT_FATAL(runtime_halo_layout->uses_neighbor_halo(), "Sliding attention requires a neighbor halo");
+    }
+    const uint32_t halo_hop_count = runtime_halo_layout ? runtime_halo_layout->remote_hop_count() : 0;
     const uint32_t tensor_descriptor_field_count =
         tensor_args.has_metadata() ? ag_rt::kMetadataTensorDescriptorFieldCount : ag_rt::kTensorDescriptorFieldCount;
     const uint32_t neighbor_reader_tensor_descriptor_field_count =
@@ -641,11 +659,13 @@ void apply_ring_joint_scalar_runtime_args(
             }
         };
         if (uses_neighbor_halo) {
-            patch_reader_batch_base(
-                kNeighborHaloReaderKernelIndex,
-                ag_rt::kNeighborReaderRuntimeArgHeaderCount,
-                neighbor_reader_tensor_descriptor_field_count,
-                ag_rt::kNeighborReaderInputBatchBaseFieldOffset);
+            for (uint32_t hop = 1; hop <= halo_hop_count; ++hop) {
+                patch_reader_batch_base(
+                    kNeighborHaloReaderKernelIndex + 2 * (hop - 1),
+                    ag_rt::kNeighborReaderRuntimeArgHeaderCount,
+                    neighbor_reader_tensor_descriptor_field_count,
+                    ag_rt::kNeighborReaderInputBatchBaseFieldOffset);
+            }
         } else {
             patch_reader_batch_base(
                 kAllGatherReaderForwardKernelIndex,
@@ -713,61 +733,56 @@ void apply_ring_joint_scalar_runtime_args(
     }
 
     if (args.has_sliding_window() && (patch_indexed_kv_cache || patch_kv_pad_rotation)) {
-        const uint32_t runtime_ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
-        const auto runtime_chunked_sliding_layout = ring_joint::build_chunked_sliding_halo_layout(
-            tensor_args.input_q.padded_shape()[2] / tt::constants::TILE_HEIGHT,
-            args.get_k_chunk_size() / tt::constants::TILE_HEIGHT,
-            args.sliding_window_size.value(),
-            tt::constants::TILE_HEIGHT,
-            runtime_ring_size,
-            runtime_plan.logical_nt,
-            derived_kv_slab_count(args, tensor_args),
-            args.kv_actual_isl.has_value() ? std::optional<uint32_t>(*args.kv_actual_isl / tt::constants::TILE_HEIGHT)
-                                           : std::nullopt);
-        TT_FATAL(runtime_chunked_sliding_layout.uses_neighbor_halo(), "Sliding attention requires a neighbor halo");
+        const auto& runtime_chunked_sliding_layout = runtime_halo_layout.value();
         // logical_n/kv_actual_isl are runtime-patched and excluded from the program hash. For
-        // compact chunked sliding they also choose which cache-group tail the one-hop gather reads.
-        // Relocate every per-link reader/writer slice from the descriptor's previous group to the current group.
-        const auto sources = runtime_chunked_sliding_layout.send_sources(ring_write_plan.transport_rank);
-        auto& reader_grid_args = GetRuntimeArgs(program, kNeighborHaloReaderKernelIndex);
-        auto& writer_grid_args = GetRuntimeArgs(program, kNeighborHaloWriterKernelIndex);
-        TT_FATAL(reader_grid_args.size() == writer_grid_args.size(), "Directional gather runtime grids disagree");
-        for (uint32_t x = 0; x < reader_grid_args.size(); ++x) {
-            TT_FATAL(
-                reader_grid_args[x].size() == writer_grid_args[x].size(),
-                "Directional gather runtime grid columns disagree");
-            for (uint32_t y = 0; y < reader_grid_args[x].size(); ++y) {
-                auto& reader_args = reader_grid_args[x][y];
-                auto& writer_args = writer_grid_args[x][y];
-                if (reader_args.size() == 0 && writer_args.size() == 0) {
-                    continue;
-                }
+        // compact chunked sliding they also choose which cache-group tail each hop reads.
+        // Rewrite every per-link reader/writer slice for the current request.
+        // A one-hop halo spreads its exchange over every link; a multi-hop halo gives each hop one.
+        const uint32_t links_per_hop = halo_hop_count == 1 ? args.all_gather_operation_attributes.num_links : 1;
+        for (uint32_t hop = 1; hop <= halo_hop_count; ++hop) {
+            const auto sources = runtime_chunked_sliding_layout.send_sources(ring_write_plan.transport_rank, hop);
+            const uint32_t tail_rows = runtime_chunked_sliding_layout.hop_rows(hop);
+            auto& reader_grid_args = GetRuntimeArgs(program, kNeighborHaloReaderKernelIndex + 2 * (hop - 1));
+            auto& writer_grid_args = GetRuntimeArgs(program, kNeighborHaloWriterKernelIndex + 2 * (hop - 1));
+            TT_FATAL(reader_grid_args.size() == writer_grid_args.size(), "Directional gather runtime grids disagree");
+            for (uint32_t x = 0; x < reader_grid_args.size(); ++x) {
                 TT_FATAL(
-                    reader_args.size() != 0 && writer_args.size() != 0, "Directional gather worker pair is incomplete");
-                for (uint32_t in = 0; in < num_ag_inputs; ++in) {
-                    const uint32_t reader_base = ag_rt::kNeighborReaderRuntimeArgHeaderCount +
-                                                 in * neighbor_reader_tensor_descriptor_field_count;
-                    const uint32_t writer_base = ag_rt::kNeighborWriterRuntimeArgHeaderCount +
-                                                 in * ag_rt::kNeighborWriterTensorDescriptorFieldCount;
+                    reader_grid_args[x].size() == writer_grid_args[x].size(),
+                    "Directional gather runtime grid columns disagree");
+                for (uint32_t y = 0; y < reader_grid_args[x].size(); ++y) {
+                    auto& reader_args = reader_grid_args[x][y];
+                    auto& writer_args = writer_grid_args[x][y];
+                    if (reader_args.size() == 0 && writer_args.size() == 0) {
+                        continue;
+                    }
                     TT_FATAL(
-                        writer_args.size() >= writer_base + ag_rt::kNeighborWriterTensorDescriptorFieldCount,
-                        "Directional gather writer descriptor is incomplete");
-                    const uint32_t input_Wt = ag_inputs[in]->padded_shape()[3] / tt::constants::TILE_WIDTH;
-                    const uint32_t halo_pages = runtime_chunked_sliding_layout.halo_tile_rows * input_Wt;
-                    const uint32_t link = reader_args[ag_rt::kNeighborReaderRuntimeArgHeaderCount - 1];
-                    const uint32_t num_links = args.all_gather_operation_attributes.num_links;
-                    const uint32_t pages = sources.count * halo_pages;
-                    const uint32_t start = link * (pages / num_links) + std::min(link, pages % num_links);
-                    const uint32_t end = (link + 1) * (pages / num_links) + std::min(link + 1, pages % num_links);
-                    reader_args[reader_base + ag_rt::kNeighborReaderInputTileStartFieldOffset] = start;
-                    reader_args[reader_base + ag_rt::kNeighborReaderInputTileEndFieldOffset] = end;
-                    reader_args[reader_base + ag_rt::kNeighborReaderFirstOriginFieldOffset] =
-                        sources.first_start_tile * input_Wt;
-                    reader_args[reader_base + ag_rt::kNeighborReaderSecondOriginFieldOffset] =
-                        sources.second_start_tile * input_Wt;
-                    reader_args[reader_base + ag_rt::kNeighborReaderHaloPagesFieldOffset] = halo_pages;
-                    writer_args[writer_base + ag_rt::kNeighborWriterInputTileStartFieldOffset] = start;
-                    writer_args[writer_base + ag_rt::kNeighborWriterInputTileEndFieldOffset] = end;
+                        reader_args.size() != 0 && writer_args.size() != 0,
+                        "Directional gather worker pair is incomplete");
+                    for (uint32_t in = 0; in < num_ag_inputs; ++in) {
+                        const uint32_t reader_base = ag_rt::kNeighborReaderRuntimeArgHeaderCount +
+                                                     in * neighbor_reader_tensor_descriptor_field_count;
+                        const uint32_t writer_base = ag_rt::kNeighborWriterRuntimeArgHeaderCount +
+                                                     in * ag_rt::kNeighborWriterTensorDescriptorFieldCount;
+                        TT_FATAL(
+                            writer_args.size() >= writer_base + ag_rt::kNeighborWriterTensorDescriptorFieldCount,
+                            "Directional gather writer descriptor is incomplete");
+                        const uint32_t input_Wt = ag_inputs[in]->padded_shape()[3] / tt::constants::TILE_WIDTH;
+                        const uint32_t halo_pages = tail_rows * input_Wt;
+                        const uint32_t link = reader_args[ag_rt::kNeighborReaderRuntimeArgHeaderCount - 1];
+                        const uint32_t pages = sources.count * halo_pages;
+                        const uint32_t start = link * (pages / links_per_hop) + std::min(link, pages % links_per_hop);
+                        const uint32_t end =
+                            (link + 1) * (pages / links_per_hop) + std::min(link + 1, pages % links_per_hop);
+                        reader_args[reader_base + ag_rt::kNeighborReaderInputTileStartFieldOffset] = start;
+                        reader_args[reader_base + ag_rt::kNeighborReaderInputTileEndFieldOffset] = end;
+                        reader_args[reader_base + ag_rt::kNeighborReaderFirstOriginFieldOffset] =
+                            sources.first_start_tile * input_Wt;
+                        reader_args[reader_base + ag_rt::kNeighborReaderSecondOriginFieldOffset] =
+                            sources.second_start_tile * input_Wt;
+                        reader_args[reader_base + ag_rt::kNeighborReaderHaloPagesFieldOffset] = halo_pages;
+                        writer_args[writer_base + ag_rt::kNeighborWriterInputTileStartFieldOffset] = start;
+                        writer_args[writer_base + ag_rt::kNeighborWriterInputTileEndFieldOffset] = end;
+                    }
                 }
             }
         }
@@ -1027,7 +1042,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t vDH = tensor_args.v_head_dim(args.latent_v_head_dim);
     const bool gqa_grouped_kv = ring_joint::is_gqa_grouped_kv_head_mode(v_shares_k_buffer, NH, NHK, NHV);
     const bool k_uses_batch_chain = ring_joint::uses_shared_k_batch_chain(gqa_grouped_kv, NHK);
-    const bool use_head_chain = enable_kv_chains && !gqa_grouped_kv;
+    const bool use_head_chain = ring_joint::uses_v_head_chain(enable_kv_chains, gqa_grouped_kv, v_shares_k_buffer);
     // The store-and-forward chains are scheduled per head, not per (batch, head).
     // Until their batch-aware scheduling is restored, multi-batch requests read K/V
     // independently on each core. This preserves the established B>1 functional path.
@@ -2032,6 +2047,27 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         return std::pair<uint32_t, uint32_t>{head, q_chunk};
     };
 
+    // Describe a core's flat Q range for K/V chain construction.
+    auto append_head_work = [&](uint32_t core_idx, uint32_t flat_chunk, uint32_t remaining) {
+        auto& work = core_work.at(core_idx);
+        while (remaining > 0) {
+            const auto [head_idx, q_chunk_idx] = decode_flat_chunk(flat_chunk);
+            const uint32_t take = std::min(remaining, num_q_chunks - q_chunk_idx);
+            work.head_work.push_back(CoreHeadWork{.head = head_idx, .q_chunk_count = take});
+            if (use_head_chain) {
+                TT_FATAL(
+                    head_idx < head_segments.size(),
+                    "Head-chain segment index {} is outside {} configured query heads",
+                    head_idx,
+                    head_segments.size());
+                head_segments[head_idx].push_back(HeadSegmentRef{
+                    .core_idx = core_idx, .head_work_index = static_cast<uint32_t>(work.head_work.size() - 1)});
+            }
+            remaining -= take;
+            flat_chunk += take;
+        }
+    };
+
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
         uint32_t chunk_count = base_chunks_per_core + ((i < cores_doing_extra_work) ? extra_chunks_per_core : 0);
@@ -2046,31 +2082,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         work.global_q_start = next_global_chunk;
         work.global_q_count = chunk_count;
 
-        uint32_t remaining = chunk_count;
-        uint32_t flat_chunk = next_global_chunk;
-        while (remaining > 0) {
-            auto [head_idx, q_chunk_idx] = decode_flat_chunk(flat_chunk);
-            uint32_t chunk_capacity_in_head = num_q_chunks - q_chunk_idx;
-            uint32_t chunk_take = std::min(remaining, chunk_capacity_in_head);
-
-            if (enable_kv_chains) {
-                work.head_work.push_back(CoreHeadWork{
-                    .head = head_idx,
-                    .q_chunk_count = chunk_take,
-                });
-                if (use_head_chain) {
-                    TT_FATAL(
-                        head_idx < head_segments.size(),
-                        "Head-chain segment index {} is outside {} configured query heads",
-                        head_idx,
-                        head_segments.size());
-                    head_segments[head_idx].push_back(HeadSegmentRef{
-                        .core_idx = i, .head_work_index = static_cast<uint32_t>(work.head_work.size() - 1)});
-                }
-            }
-
-            remaining -= chunk_take;
-            flat_chunk += chunk_take;
+        if (enable_kv_chains) {
+            append_head_work(i, next_global_chunk, chunk_count);
         }
 
         next_global_chunk += chunk_count;
@@ -2214,7 +2227,351 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         }
     };
 
-    // Build head chains for MHA and separate-V shared-K. GQA uses KV-head-grouped chains instead.
+    uint32_t gqa_grouped_chains = 0;
+    uint32_t gqa_grouped_participant_cores = 0;
+    uint32_t gqa_local_fallback_cores = 0;
+    bool gqa_mcast_enabled = false;
+    std::string gqa_mcast_fallback_reason;
+    std::vector<uint32_t> gqa_chain_max_q(gqa_chain_configs.size(), 0);  // per-core loop-padding count
+    if (gqa_grouped_kv && build_kv_chains) {
+        std::vector<std::vector<ChainSegment>> kv_group_segments(NHK);
+
+        for (uint32_t ci = 0; ci < num_cores; ++ci) {
+            if (core_work[ci].global_q_count == 0) {
+                continue;
+            }
+
+            bool has_single_group = false;
+            bool spans_multiple_groups = false;
+            uint32_t single_group_id = 0;
+            uint32_t q_chunk_count = 0;
+            for (const auto& hw : core_work[ci].head_work) {
+                const uint32_t kv_head = hw.head / q_heads_per_kv;
+                if (!has_single_group) {
+                    has_single_group = true;
+                    single_group_id = kv_head;
+                } else if (single_group_id != kv_head) {
+                    spans_multiple_groups = true;
+                    break;
+                }
+                q_chunk_count += hw.q_chunk_count;
+            }
+
+            if (has_single_group && !spans_multiple_groups) {
+                kv_group_segments[single_group_id].emplace_back(ci, q_chunk_count);
+                gqa_grouped_participant_cores++;
+            } else {
+                gqa_local_fallback_cores++;
+            }
+        }
+
+        for (uint32_t kv_head = 0; kv_head < static_cast<uint32_t>(kv_group_segments.size()); ++kv_head) {
+            const auto& chain_segs = kv_group_segments[kv_head];
+            if (chain_segs.size() < 2) {
+                continue;
+            }
+            if (build_linear_chain(chain_segs, kv_head, gqa_chain_configs, core_work, false)) {
+                gqa_grouped_chains++;
+            }
+        }
+
+        // Production Minimax3 GQA has one local K/V head per chip (B=1, NHK=NHV=1). In that case every
+        // active Q-head core consumes the same K and V chunks, so use row-wide multicast instead
+        // of the store-and-forward grouped chain. Idle cores in an active row participate in padded iterations.
+        if (NHK != 1) {
+            gqa_mcast_fallback_reason = "NHK != 1 (multi-KV-head GQA mcast not supported)";
+        } else if (num_cores < 2) {
+            gqa_mcast_fallback_reason = "num_cores < 2";
+        } else if (grid_size.x < 2) {
+            gqa_mcast_fallback_reason = "grid_size.x < 2 (singleton rows)";
+        } else {
+            std::deque<uint32_t> recent_cols;  // FIFO of <= grid.x-1 most-recent claimed phys_x
+            uint32_t gqa_mcast_rows = 0;
+
+            for (uint32_t row = 0; row < grid_size.y; ++row) {
+                const auto selection = select_row_wide_chain_mcast(row, recent_cols);
+                if (!selection.has_value()) {
+                    continue;
+                }
+                configure_row_wide_chain_mcast(*selection, 0, gqa_chain_configs, gqa_chain_max_q);
+                gqa_mcast_rows++;
+                log_debug(
+                    tt::LogOp,
+                    "GQA K/V mcast row {}: injector core {} phys=({},{}) max_q={}, rect ({},{})-({},{})",
+                    selection->row,
+                    selection->injector_idx,
+                    selection->injector_physical.x,
+                    selection->injector_physical.y,
+                    selection->max_q,
+                    selection->phys_start.x,
+                    selection->phys_start.y,
+                    selection->phys_end.x,
+                    selection->phys_end.y);
+            }
+
+            gqa_mcast_enabled = gqa_mcast_rows > 0;
+            if (!gqa_mcast_enabled) {
+                gqa_mcast_fallback_reason = "no active groups";
+            }
+        }
+    }
+
+    // Build the shared-K chain for separate-V/latent cases.
+    // K is shared across all heads, so all active cores form one chain.
+    // Sorted by physical position for a stable unicast ordering (overwritten by mcast pass if eligible).
+    if (k_uses_batch_chain && build_kv_chains) {
+        std::vector<uint32_t> core_indices;
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            if (core_work[i].global_q_count == 0) {
+                continue;
+            }
+            core_indices.push_back(i);
+        }
+
+        std::sort(core_indices.begin(), core_indices.end(), [&](uint32_t a, uint32_t b) {
+            const auto& pa = core_work[a].physical_core;
+            const auto& pb = core_work[b].physical_core;
+            return (pa.y < pb.y) || (pa.y == pb.y && pa.x < pb.x);
+        });
+
+        std::vector<ChainSegment> chain_segs;
+        chain_segs.reserve(core_indices.size());
+        for (uint32_t ci : core_indices) {
+            chain_segs.emplace_back(ci, core_work[ci].global_q_count);
+        }
+        if (build_linear_chain(chain_segs, 0, batch_chain_configs, core_work)) {
+            log_debug(tt::LogOp, "K unicast chain: {} cores", chain_segs.size());
+        }
+    }
+
+    // K multicast pass: one mcast chain per logical row. Shared-K keeps the all-or-nothing policy:
+    // every row must contain work, otherwise the previously built linear chain remains active.
+    bool k_mcast_enabled = false;
+    std::string k_mcast_fallback_reason;
+    std::vector<uint32_t> k_chain_max_q(batch_chain_configs.size(), 0);  // per-core loop-padding count
+
+    if (!k_uses_batch_chain || !enable_kv_chains) {
+        // No non-GQA shared-K chain to multicast.
+    } else if (num_cores < 2) {
+        k_mcast_fallback_reason = "num_cores < 2";
+    } else if (grid_size.x < 2) {
+        // Each chain would be a singleton (1 core, no sinks) — mcast is degenerate.
+        k_mcast_fallback_reason = "grid_size.x < 2 (singleton chains)";
+    } else {
+        std::vector<RowWideChainMcastSelection> row_mcast_selections;
+        row_mcast_selections.reserve(grid_size.y);
+        std::deque<uint32_t> recent_cols;  // FIFO of <= grid.x-1 most-recent claimed phys_x
+
+        bool all_chains_picked = true;
+        for (uint32_t row = 0; row < grid_size.y; ++row) {
+            const std::optional<RowWideChainMcastSelection> selection = select_row_wide_chain_mcast(row, recent_cols);
+            if (!selection.has_value()) {
+                k_mcast_fallback_reason = fmt::format("row {} has no work", row);
+                all_chains_picked = false;
+                break;
+            }
+            row_mcast_selections.push_back(*selection);
+        }
+
+        if (all_chains_picked) {
+            k_mcast_enabled = true;
+
+            for (const auto& selection : row_mcast_selections) {
+                configure_row_wide_chain_mcast(selection, 0, batch_chain_configs, k_chain_max_q);
+
+                log_debug(
+                    tt::LogOp,
+                    "K mcast row {}: injector core {} phys=({},{}) max_q={}, rect ({},{})-({},{})",
+                    selection.row,
+                    selection.injector_idx,
+                    selection.injector_physical.x,
+                    selection.injector_physical.y,
+                    selection.max_q,
+                    selection.phys_start.x,
+                    selection.phys_start.y,
+                    selection.phys_end.x,
+                    selection.phys_end.y);
+            }
+        }
+    }
+
+    // Rotate remainder Q chunks across multicast groups between active ring iterations.
+    // Saved (m, l, O) state is addressed by chunk ID; semaphore handoffs protect migration.
+    const uint32_t rotated_base_chunks = base_chunks_per_core;
+    const uint32_t rotated_float_chunks = cores_doing_extra_work;  // pairs when zigzag balancing is enabled
+    const uint32_t rotation_unit_chunks = enable_zigzag_balancing ? 2 : 1;
+
+    // Only multicast groups share a row-wide barrier: linear chains do not have
+    // the same per-row cost. Use the live shared-K or GQA K/V multicast family.
+    std::vector<ChainConfig>* rotated_mcast_configs = nullptr;
+    if (k_mcast_enabled) {
+        rotated_mcast_configs = &batch_chain_configs;
+    } else if (gqa_mcast_enabled) {
+        rotated_mcast_configs = &gqa_chain_configs;
+    }
+    // Both multicast families cover full logical rows.
+    std::vector<ring_joint::RotatedQLockstepGroup> rotated_groups;
+    std::string rotated_group_reject;
+    if (rotated_mcast_configs == nullptr) {
+        rotated_group_reject = "no row-wide mcast family is live";
+    } else if (rotated_mcast_configs->size() != num_cores || grid_size.x == 0) {
+        rotated_group_reject = "mcast family is not built per core";
+    } else {
+        for (uint32_t row = 0; row < grid_size.y && rotated_group_reject.empty(); ++row) {
+            ring_joint::RotatedQLockstepGroup group;
+            group.members.reserve(grid_size.x);
+            bool injector_found = false;
+            for (uint32_t col = 0; col < grid_size.x; ++col) {
+                const auto& cfg = (*rotated_mcast_configs)[row * grid_size.x + col];
+                if (!cfg.participates) {
+                    // Every scheduled core must belong to a multicast group.
+                    rotated_group_reject = fmt::format("row {} has a non-participating core", row);
+                    break;
+                }
+                if (cfg.is_injector) {
+                    // Unlike participates/is_injector, this field distinguishes multicast
+                    // injectors from linear-chain injectors.
+                    if (cfg.mcast_num_dests == 0) {
+                        rotated_group_reject = fmt::format("row {} injector is not a mcast injector", row);
+                        break;
+                    }
+                    if (injector_found) {
+                        rotated_group_reject = fmt::format("row {} has more than one mcast injector", row);
+                        break;
+                    }
+                    group.injector_pos = static_cast<uint32_t>(group.members.size());
+                    injector_found = true;
+                }
+                group.members.push_back(row * grid_size.x + col);
+            }
+            if (!rotated_group_reject.empty()) {
+                break;
+            }
+            if (!injector_found) {
+                // Defaulting to member 0 would put the first float on a non-injector core and
+                // quietly violate the injector-never-pads invariant -- a wrong-but-running program.
+                rotated_group_reject = fmt::format("row {} has no mcast injector", row);
+                break;
+            }
+            rotated_groups.push_back(std::move(group));
+        }
+    }
+    if (!rotated_group_reject.empty()) {
+        rotated_groups.clear();
+    }
+    // Each accepted group contains exactly grid_size.x members by construction.
+    // Variable-size groups would need a different packing rule for the divide/modulo below.
+    const uint32_t rotated_group_size =
+        rotated_groups.empty() ? 0 : static_cast<uint32_t>(rotated_groups.front().members.size());
+    // Groups hosting floats on one iteration. The win comes from float-free groups, so at
+    // rotated_groups_needed == rotated_groups.size() ownership never actually moves.
+    const uint32_t rotated_groups_needed =
+        rotated_group_size ? tt::div_up(rotated_float_chunks, rotated_group_size) : 0;
+    // Keep non-moving schedules on the static path, including its single-Q L1 persistence.
+    // Do not gate on the current active mask: cached KV-padding programs can execute more
+    // iterations on a later call without rebuilding this compile-time schedule.
+    const bool remainder_changes_owner =
+        ring_size > 1 && rotated_groups_needed > 0 && rotated_groups_needed < rotated_groups.size();
+    const bool use_rotated_q_split =
+        // Valid groups are full multicast rows with Q work.
+        // build_kv_chains requires B == 1 so a row cannot mix batches' K/V data.
+        remainder_changes_owner && build_kv_chains &&
+        // Separate-V head chains use static forwarding counts and cannot follow migrated chunks.
+        !use_head_chain &&
+        // Only streaming compute consumes rotated IDs. The reader loads a sink for the
+        // scheduled Q head only on final normalization, so sinks need no ownership handoff.
+        // Balanced rotation requires whole low/high pairs; odd chunk layouts stay static.
+        use_streaming_compute && (!args.is_balanced || enable_zigzag_balancing) &&
+        // Every core needs a complete unit to supply indices for padded reader slots.
+        rotated_base_chunks >= 1;
+
+    ring_joint::RotatedQSchedule rotated_sched;
+    std::vector<uint32_t> rotated_handoff_sem_ids;
+    if (use_rotated_q_split) {
+        const uint32_t num_groups = static_cast<uint32_t>(rotated_groups.size());
+        const uint32_t groups_needed = rotated_groups_needed;
+        rotated_sched = ring_joint::build_rotated_q_schedule(
+            num_cores, ring_size, rotated_base_chunks, rotated_float_chunks, rotation_unit_chunks, rotated_groups);
+        // The mcast injector's forward gate (q_iter_local < next_core_q_chunks) must cover the
+        // extra-unit iterations of every group, not just the injector's static flat-split count.
+        // Patched on whichever family the groups came from -- batch for latent-V, gqa for GQA.
+        for (auto& cfg : *rotated_mcast_configs) {
+            if (cfg.participates && cfg.is_injector) {
+                cfg.next_core_q_chunks = rotated_base_chunks + rotation_unit_chunks;
+            }
+        }
+
+        // Completion bits are never cleared during a run; reset follows the last incoming
+        // handoff so early future signals survive arbitrary multicast-group skew.
+        for (uint32_t sem_slot = 0; sem_slot < kRotatedHandoffSemCount; ++sem_slot) {
+            const uint32_t sem_id = static_cast<uint32_t>(desc.semaphores.size());
+            // The descriptor path has no budget check of its own: an id >= NUM_SEMAPHORES surfaces
+            // later as a bare "bitset::set: __position (17) >= _Nb (16)" IndexError from whichever
+            // helper next scans for a free id, naming neither SDPA nor this feature.
+            // Mirrors tt::tt_metal::NUM_SEMAPHORES (tt_metal/impl/buffers/semaphore.hpp), which is
+            // not reachable from a ttnn op through any public header.
+            constexpr uint32_t kSemaphoresPerCore = 16;
+            TT_FATAL(
+                sem_id < kSemaphoresPerCore,
+                "Ring MLA rotated Q split needs {} handoff semaphores, but the program has already "
+                "allocated {} and a core supports {}.",
+                kRotatedHandoffSemCount,
+                desc.semaphores.size(),
+                kSemaphoresPerCore);
+            desc.semaphores.push_back(SemaphoreDescriptor{
+                .id = sem_id,
+                .core_type = tt::CoreType::WORKER,
+                .core_ranges = core_grid_set,
+                .initial_value = 0,
+            });
+            rotated_handoff_sem_ids.push_back(sem_id);
+        }
+        // Report the selected schedule once per program compilation.
+        log_info(
+            tt::LogOp,
+            "Rotated Q split ACTIVE: base={} floats={} groups={}x{} groups_needed={} ring_size={} "
+            "active_iters={} kv_pad_rotation={} unit_chunks={}",
+            rotated_base_chunks,
+            rotated_float_chunks,
+            num_groups,
+            rotated_group_size,
+            groups_needed,
+            ring_size,
+            std::popcount(active_ring_iter_mask),
+            kv_pad_rotation_enabled,
+            rotation_unit_chunks);
+    } else if (kernel_chunked || use_head_chain) {
+        log_info(
+            tt::LogOp,
+            "Ring joint rotated Q split declined: base={} floats={} groups_needed={} of {} groups, "
+            "balanced={} head_chain={} streaming={} attention_sink={} kv_chains={} groups=\"{}\"; "
+            "using the static flat split.",
+            rotated_base_chunks,
+            rotated_float_chunks,
+            rotated_groups_needed,
+            rotated_groups.size(),
+            args.is_balanced,
+            use_head_chain,
+            use_streaming_compute,
+            use_attention_sink,
+            build_kv_chains,
+            rotated_group_reject.empty() ? "ok" : rotated_group_reject);
+    }
+
+    // Rotated Q split, compile-time: the maximum owned chunk count (base chunks plus one
+    // remainder unit: a chunk or a balanced pair), or 0 when the rotation declines. Kernels gate on `> 0` via if
+    // constexpr, so both paths always compile. Pushed unconditionally as the LAST compile-time arg of all three
+    // kernels, which is how they read it back -- no per-kernel index to keep in sync. The
+    // TT_FATAL below pins that "last" so a future append fails loudly instead of silently
+    // handing the kernels some other value.
+    const uint32_t rotated_max_slots_ct = use_rotated_q_split ? rotated_base_chunks + rotation_unit_chunks : 0;
+    for (auto* args : {&reader_compile_time_args, &writer_compile_time_args, &compute_compile_time_args}) {
+        args->push_back(rotated_max_slots_ct);
+    }
+    const std::array<size_t, 3> ct_arg_sizes_with_rotated_last = {
+        reader_compile_time_args.size(), writer_compile_time_args.size(), compute_compile_time_args.size()};
+
+    // Build static MHA/shared-K V head chains. GQA uses KV-head-grouped chains instead.
     if (use_head_chain && build_kv_chains) {
         for (uint32_t head_id = 0; head_id < static_cast<uint32_t>(head_segments.size()); ++head_id) {
             const auto& segs = head_segments[head_id];
@@ -2419,174 +2776,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             static_cast<uint32_t>(candidates.size()));
     }
 
-    uint32_t gqa_grouped_chains = 0;
-    uint32_t gqa_grouped_participant_cores = 0;
-    uint32_t gqa_local_fallback_cores = 0;
-    bool gqa_mcast_enabled = false;
-    std::string gqa_mcast_fallback_reason;
-    std::vector<uint32_t> gqa_chain_max_q(gqa_chain_configs.size(), 0);  // per-core loop-padding count
-    if (gqa_grouped_kv && build_kv_chains) {
-        std::vector<std::vector<ChainSegment>> kv_group_segments(NHK);
-
-        for (uint32_t ci = 0; ci < num_cores; ++ci) {
-            if (core_work[ci].global_q_count == 0) {
-                continue;
-            }
-
-            bool has_single_group = false;
-            bool spans_multiple_groups = false;
-            uint32_t single_group_id = 0;
-            uint32_t q_chunk_count = 0;
-            for (const auto& hw : core_work[ci].head_work) {
-                const uint32_t kv_head = hw.head / q_heads_per_kv;
-                if (!has_single_group) {
-                    has_single_group = true;
-                    single_group_id = kv_head;
-                } else if (single_group_id != kv_head) {
-                    spans_multiple_groups = true;
-                    break;
-                }
-                q_chunk_count += hw.q_chunk_count;
-            }
-
-            if (has_single_group && !spans_multiple_groups) {
-                kv_group_segments[single_group_id].emplace_back(ci, q_chunk_count);
-                gqa_grouped_participant_cores++;
-            } else {
-                gqa_local_fallback_cores++;
-            }
-        }
-
-        for (uint32_t kv_head = 0; kv_head < static_cast<uint32_t>(kv_group_segments.size()); ++kv_head) {
-            const auto& chain_segs = kv_group_segments[kv_head];
-            if (chain_segs.size() < 2) {
-                continue;
-            }
-            if (build_linear_chain(chain_segs, kv_head, gqa_chain_configs, core_work, false)) {
-                gqa_grouped_chains++;
-            }
-        }
-
-        // Production Minimax3 GQA has one local K/V head per chip (B=1, NHK=NHV=1). In that case every
-        // active Q-head core consumes the same K and V chunks, so use row-wide multicast instead
-        // of the store-and-forward grouped chain. Idle cores in an active row participate in padded iterations.
-        if (NHK != 1) {
-            gqa_mcast_fallback_reason = "NHK != 1 (multi-KV-head GQA mcast not supported)";
-        } else if (num_cores < 2) {
-            gqa_mcast_fallback_reason = "num_cores < 2";
-        } else if (grid_size.x < 2) {
-            gqa_mcast_fallback_reason = "grid_size.x < 2 (singleton rows)";
-        } else {
-            std::deque<uint32_t> recent_cols;  // FIFO of <= grid.x-1 most-recent claimed phys_x
-            uint32_t gqa_mcast_rows = 0;
-
-            for (uint32_t row = 0; row < grid_size.y; ++row) {
-                const auto selection = select_row_wide_chain_mcast(row, recent_cols);
-                if (!selection.has_value()) {
-                    continue;
-                }
-                configure_row_wide_chain_mcast(*selection, 0, gqa_chain_configs, gqa_chain_max_q);
-                gqa_mcast_rows++;
-                log_debug(
-                    tt::LogOp,
-                    "GQA K/V mcast row {}: injector core {} phys=({},{}) max_q={}, rect ({},{})-({},{})",
-                    selection->row,
-                    selection->injector_idx,
-                    selection->injector_physical.x,
-                    selection->injector_physical.y,
-                    selection->max_q,
-                    selection->phys_start.x,
-                    selection->phys_start.y,
-                    selection->phys_end.x,
-                    selection->phys_end.y);
-            }
-
-            gqa_mcast_enabled = gqa_mcast_rows > 0;
-            if (!gqa_mcast_enabled) {
-                gqa_mcast_fallback_reason = "no active groups";
-            }
-        }
-    }
-
-    // Build the shared-K chain for separate-V/latent cases.
-    // K is shared across all heads, so all active cores form one chain.
-    // Sorted by physical position for a stable unicast ordering (overwritten by mcast pass if eligible).
-    if (k_uses_batch_chain && build_kv_chains) {
-        std::vector<uint32_t> core_indices;
-        for (uint32_t i = 0; i < num_cores; ++i) {
-            if (core_work[i].global_q_count == 0) {
-                continue;
-            }
-            core_indices.push_back(i);
-        }
-
-        std::sort(core_indices.begin(), core_indices.end(), [&](uint32_t a, uint32_t b) {
-            const auto& pa = core_work[a].physical_core;
-            const auto& pb = core_work[b].physical_core;
-            return (pa.y < pb.y) || (pa.y == pb.y && pa.x < pb.x);
-        });
-
-        std::vector<ChainSegment> chain_segs;
-        chain_segs.reserve(core_indices.size());
-        for (uint32_t ci : core_indices) {
-            chain_segs.emplace_back(ci, core_work[ci].global_q_count);
-        }
-        if (build_linear_chain(chain_segs, 0, batch_chain_configs, core_work)) {
-            log_debug(tt::LogOp, "K unicast chain: {} cores", chain_segs.size());
-        }
-    }
-
-    // K multicast pass: one mcast chain per logical row. Shared-K keeps the all-or-nothing policy:
-    // every row must contain work, otherwise the previously built linear chain remains active.
-    bool k_mcast_enabled = false;
-    std::string k_mcast_fallback_reason;
-    std::vector<uint32_t> k_chain_max_q(batch_chain_configs.size(), 0);  // per-core loop-padding count
-
-    if (!k_uses_batch_chain || !enable_kv_chains) {
-        // No non-GQA shared-K chain to multicast.
-    } else if (num_cores < 2) {
-        k_mcast_fallback_reason = "num_cores < 2";
-    } else if (grid_size.x < 2) {
-        // Each chain would be a singleton (1 core, no sinks) — mcast is degenerate.
-        k_mcast_fallback_reason = "grid_size.x < 2 (singleton chains)";
-    } else {
-        std::vector<RowWideChainMcastSelection> row_mcast_selections;
-        row_mcast_selections.reserve(grid_size.y);
-        std::deque<uint32_t> recent_cols;  // FIFO of <= grid.x-1 most-recent claimed phys_x
-
-        bool all_chains_picked = true;
-        for (uint32_t row = 0; row < grid_size.y; ++row) {
-            const std::optional<RowWideChainMcastSelection> selection = select_row_wide_chain_mcast(row, recent_cols);
-            if (!selection.has_value()) {
-                k_mcast_fallback_reason = fmt::format("row {} has no work", row);
-                all_chains_picked = false;
-                break;
-            }
-            row_mcast_selections.push_back(*selection);
-        }
-
-        if (all_chains_picked) {
-            k_mcast_enabled = true;
-
-            for (const auto& selection : row_mcast_selections) {
-                configure_row_wide_chain_mcast(selection, 0, batch_chain_configs, k_chain_max_q);
-
-                log_debug(
-                    tt::LogOp,
-                    "K mcast row {}: injector core {} phys=({},{}) max_q={}, rect ({},{})-({},{})",
-                    selection.row,
-                    selection.injector_idx,
-                    selection.injector_physical.x,
-                    selection.injector_physical.y,
-                    selection.max_q,
-                    selection.phys_start.x,
-                    selection.phys_start.y,
-                    selection.phys_end.x,
-                    selection.phys_end.y);
-            }
-        }
-    }
-
     // Update mcast compile-time args
     const bool head_mcast_enabled = (mcast_chains > 0);
 
@@ -2639,6 +2828,21 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_reader.cpp";
     reader_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_kernel.core_ranges = core_grid_set;
+    // The kernels read rotated_max_slots as their final compile-time arg, so nothing may be
+    // appended after it (in-place patching of earlier indices is fine and does not change size).
+    TT_FATAL(
+        reader_compile_time_args.size() == ct_arg_sizes_with_rotated_last[0] &&
+            writer_compile_time_args.size() == ct_arg_sizes_with_rotated_last[1] &&
+            compute_compile_time_args.size() == ct_arg_sizes_with_rotated_last[2],
+        "rotated_max_slots must stay the last compile-time arg; args were appended after it "
+        "(reader {}->{}, writer {}->{}, compute {}->{})",
+        ct_arg_sizes_with_rotated_last[0],
+        reader_compile_time_args.size(),
+        ct_arg_sizes_with_rotated_last[1],
+        writer_compile_time_args.size(),
+        ct_arg_sizes_with_rotated_last[2],
+        compute_compile_time_args.size());
+
     reader_kernel.compile_time_args = reader_compile_time_args;
     reader_kernel.defines = kernel_defines;
     reader_kernel.config = ReaderConfigDescriptor{};
@@ -2715,8 +2919,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
         // Prefer the computed even distribution above for chain construction
         const auto& work = core_work.at(i);
-        uint32_t global_q_start = work.global_q_start;
-        uint32_t global_q_end = work.global_q_start + work.global_q_count;
+        // Rotation keeps a contiguous base range; only its remainder unit changes by ordinal.
+        uint32_t global_q_start = use_rotated_q_split ? i * rotated_base_chunks : work.global_q_start;
+        uint32_t global_q_end = global_q_start + (use_rotated_q_split ? rotated_base_chunks : work.global_q_count);
 
         // log the above
         log_debug(tt::LogOp, "core: {}", i);
@@ -2799,6 +3004,15 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(reader_signaler_args);
         reader_args.append(reader_signaler_args);
 
+        // Rotated Q split: per active ordinal [remainder_start, group_has_remainder].
+        if (use_rotated_q_split) {
+            for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+                const auto& sched = rotated_sched[i][ring_iter];
+                reader_args.push_back(sched.remainder_start);
+                reader_args.push_back(sched.group_has_remainder);
+            }
+        }
+
         reader_kernel.emplace_runtime_args(core, reader_args.args);
 
         // Writer args
@@ -2818,6 +3032,28 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         std::vector<uint32_t> writer_signaler_args;
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_signaler_args);
         writer_args.append(writer_signaler_args);
+        // Rotated Q split: the completion-bit semaphore id, then per ring iteration
+        // [remainder_start, float_dest].
+        if (use_rotated_q_split) {
+            for (uint32_t sem_slot = 0; sem_slot < kRotatedHandoffSemCount; ++sem_slot) {
+                writer_args.push_back(rotated_handoff_sem_ids[sem_slot]);
+            }
+            for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+                const auto& sched = rotated_sched[i][ring_iter];
+                writer_args.push_back(sched.remainder_start);
+                uint32_t float_dest = kRotatedNoDest;
+                if (sched.float_dest_core != kRotatedNoDest) {
+                    const auto& dest_phys = core_work[sched.float_dest_core].physical_core;
+                    TT_FATAL(
+                        dest_phys.y < 256 && dest_phys.x < (1u << 24),
+                        "Rotated Q split cannot pack physical core ({}, {}) into a handoff dest",
+                        dest_phys.x,
+                        dest_phys.y);
+                    float_dest = rotated_pack_dest(dest_phys.x, dest_phys.y);
+                }
+                writer_args.push_back(float_dest);
+            }
+        }
         writer_kernel.emplace_runtime_args(core, writer_args.args);
 
         // Compute args
@@ -2847,6 +3083,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             "compute.q_valid_tile_count");
         compute_args.push_checked(
             runtime_arg_layout.compute_active_ring_iter_mask, active_ring_iter_mask, "compute.active_ring_iter_mask");
+        // Rotated Q split: one remainder_start per active ordinal.
+        if (use_rotated_q_split) {
+            for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+                const auto& sched = rotated_sched[i][ring_iter];
+                compute_args.push_back(sched.remainder_start);
+            }
+        }
         compute_kernel.emplace_runtime_args(core, compute_args.args);
     }
 
@@ -2886,68 +3129,210 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         all_gather_output_tensors.push_back(tensor_args.gathered_joint_v.value());
     }
     if (has_sliding_window) {
-        const bool linear_wrap_halo = args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Linear &&
-                                      transport_rank + 1 == ring_size;
-        std::optional<MeshCoordinate> halo_transport_coord = forward_coord;
-        std::optional<MeshCoordinate> halo_destination_coord = forward_coord;
-        if (linear_wrap_halo) {
-            // Preserve the cyclic logical Q/K layout on a physical line: send device N-1's
-            // predecessor tail backward over N-1 hops to device 0. The transport connection is
-            // its immediate backward neighbor; the packet route names the actual endpoint.
-            TT_FATAL(backward_coord.has_value(), "Linear sliding halo wrap requires a backward neighbor");
-            TT_FATAL(
-                args.all_gather_operation_attributes.cluster_axis.has_value(),
-                "Linear sliding halo wrap requires cluster_axis");
-            halo_transport_coord = backward_coord;
-            halo_destination_coord = coord;
-            halo_destination_coord->operator[](args.all_gather_operation_attributes.cluster_axis.value()) = 0;
-        }
-        TT_FATAL(
-            halo_transport_coord.has_value() && halo_destination_coord.has_value(),
-            "Sliding attention requires a next-device route");
-        // Metadata kernels derive source tails on-device for each trace replay.
-        const auto halo_sources = chunked_sliding_halo_layout.send_sources(transport_rank);
-        const RingAttentionNeighborHaloConfig neighbor_halo{
-            .send_to_next_start_Ht = halo_sources.first_start_tile,
-            .send_to_next_count_Ht = halo_sources.count * chunked_sliding_halo_layout.halo_tile_rows,
-            .send_second_start_Ht = halo_sources.second_start_tile,
-            .send_backward = linear_wrap_halo,
-            .unicast_hops = linear_wrap_halo ? ring_size - 1 : 1,
-            .slot_id = tensor_args.has_metadata() ? &tensor_args.slot_id.value() : nullptr,
-            .kv_actual_isl = tensor_args.has_metadata() ? &tensor_args.kv_actual_isl.value() : nullptr,
-            .kv_cache_num_layers = args.kv_cache_num_layers,
-            .kv_cache_layer_idx = args.kv_cache_layer_idx,
-            .q_local_tile_rows = chunked_sliding_halo_layout.q_local_tile_rows,
-            .halo_tile_rows = chunked_sliding_halo_layout.halo_tile_rows,
-            .source_device = transport_rank,
+        // A halo that fits in one Q slab is a single exchange with the +1 neighbour. A wider one is
+        // covered by one exchange per hop: hop d ships the tail of the slab d positions back into its
+        // own block of the receiver's compact buffer, and the SDPA reader waits for all of them
+        // before its K loop. A hop that lands back on this device (halo spanning the whole ring) is a
+        // local cache read and gets no exchange. validate_on_program_cache_miss bounds the hop count.
+        const uint32_t halo_remote_hops = chunked_sliding_halo_layout.remote_hop_count();
+        const auto& ag_attrs = args.all_gather_operation_attributes;
+        // A one-hop halo spreads over every link. With more hops each hop takes one link, and hops
+        // beyond the link count time-share one (see RingAttentionNeighborHaloConfig).
+        const uint32_t halo_links_per_hop = halo_remote_hops == 1 ? ag_attrs.num_links : 1;
+        // Each hop needs its own workers. The CCL offset points at a reserved column (or row), so
+        // walk along it: allocation order is the same for every call, so the blocks are disjoint.
+        const bool halo_column_major =
+            ag_attrs.core_allocation_strategy == ttnn::ccl::CoreAllocationStrategy::COL_MAJOR;
+        const auto halo_hop_core_grid_offset = [&](uint32_t hop) {
+            const uint32_t worker_stride = (hop - 1) * halo_links_per_hop;
+            return CoreCoord{
+                args.ccl_core_grid_offset.x + (halo_column_major ? 0 : worker_stride),
+                args.ccl_core_grid_offset.y + (halo_column_major ? worker_stride : 0)};
         };
-        log_debug(
-            tt::LogOp,
-            "Chunked sliding K/V halo: device={}, predecessor={}, tail=[{}, {}), payload_rows={}",
-            transport_rank,
-            (transport_rank + ring_size - 1) % ring_size,
-            neighbor_halo.send_to_next_start_Ht,
-            neighbor_halo.send_to_next_start_Ht + neighbor_halo.send_to_next_count_Ht,
-            neighbor_halo.send_to_next_count_Ht);
-        ring_attention_neighbor_halo_exchange_helper(
-            desc,
-            all_gather_input_tensors,
-            coord,
-            halo_transport_coord.value(),
-            halo_destination_coord.value(),
-            all_gather_output_tensors,
-            args.all_gather_operation_attributes.num_links,
-            args.all_gather_operation_attributes.ring_size,
-            transport_rank,
-            args.all_gather_operation_attributes.topology,
-            args.all_gather_operation_attributes.semaphore,
-            args.all_gather_operation_attributes.sub_device_id,
-            all_gather_fused_op_signaler.value(),
-            args.ccl_core_grid_offset,
-            args.all_gather_operation_attributes.core_allocation_strategy,
-            args.cache_batch_idx(),
-            compute_gather_valid_Ht(args, tensor_args),
-            neighbor_halo);
+        // Same allocator the helper uses, so the two agree. hop_first_cores[h - 1] is hop h's first
+        // (and, when h > 1, only) worker.
+        std::vector<CoreCoord> hop_first_cores;
+        hop_first_cores.reserve(halo_remote_hops);
+        for (uint32_t hop = 1; hop <= halo_remote_hops; ++hop) {
+            const auto [hop_core_range, hop_cores] = ttnn::ccl::choose_worker_cores(
+                halo_links_per_hop,
+                1,
+                mesh_device,
+                ag_attrs.sub_device_id,
+                halo_hop_core_grid_offset(hop),
+                std::nullopt,
+                ag_attrs.core_allocation_strategy);
+            hop_first_cores.push_back(hop_cores.front());
+        }
+        // Hop 1's worker is where every hop of this halo delivers its ready-increment, so one reader
+        // can gate on the whole halo.
+        const CoreCoord halo_rendezvous = mesh_device->worker_core_from_logical_core(hop_first_cores.front());
+        // A linear topology has no physical wrap link, so a hop whose destination wraps goes backward
+        // (at hop 1, the device N-1 -> 0 case). Forward and backward are separate fabric connections,
+        // so each direction time-shares only its own links: within a direction, hop k (0-based) runs
+        // on link k % span and, beyond the first span hops, waits for hop k - span to close its
+        // connection first. Queued hops still overlap their DRAM reads with the predecessor's send,
+        // so only the fabric transfer serialises.
+        const auto hop_sends_backward = [&](uint32_t hop) {
+            return ag_attrs.topology == ttnn::ccl::Topology::Linear && transport_rank + hop >= ring_size;
+        };
+        std::array<std::vector<uint32_t>, 2> direction_hops;  // [0] forward, [1] backward
+        for (uint32_t hop = 1; hop <= halo_remote_hops; ++hop) {
+            direction_hops[hop_sends_backward(hop)].push_back(hop);
+        }
+        std::array<uint32_t, 2> direction_link_span{0, 0};
+        for (uint32_t direction = 0; direction < 2; ++direction) {
+            if (direction_hops[direction].empty()) {
+                continue;
+            }
+            const auto& neighbour = direction == 0 ? forward_coord : backward_coord;
+            TT_FATAL(
+                neighbour.has_value(), "Sliding halo hop {} has no fabric neighbour", direction_hops[direction][0]);
+            const uint32_t links_available =
+                tt::tt_fabric::get_forwarding_link_indices(
+                    mesh_device->get_fabric_node_id(coord), mesh_device->get_fabric_node_id(neighbour.value()))
+                    .size();
+            TT_FATAL(links_available >= 1, "Chunked sliding halo found no forwarding fabric link");
+            // Never use more links than the caller asked for.
+            direction_link_span[direction] = std::min(
+                {static_cast<uint32_t>(direction_hops[direction].size()), ag_attrs.num_links, links_available});
+        }
+        const bool halo_links_shared =
+            direction_hops[0].size() > direction_link_span[0] || direction_hops[1].size() > direction_link_span[1];
+        // One local semaphore, same id on every hop worker, carries the hand-off. It is allocated
+        // before the helper's own per-core semaphores, so pick an id free on all hop workers.
+        uint32_t halo_chain_semaphore_id = 0;
+        if (halo_links_shared) {
+            // Per-core ids are handed out densely from 0, so the largest first-free id is free on
+            // every hop core; asserted below, since a taken id would silently alias a semaphore.
+            for (const auto& core : hop_first_cores) {
+                const auto sem_id = desc.find_available_semaphore_id(core, tt::CoreType::WORKER);
+                TT_FATAL(
+                    sem_id.has_value(),
+                    "Ran out of semaphore IDs on sliding-halo worker core ({}, {})",
+                    core.x,
+                    core.y);
+                halo_chain_semaphore_id = std::max(halo_chain_semaphore_id, sem_id.value());
+            }
+            for (const auto& sem : desc.semaphores) {
+                TT_FATAL(
+                    sem.core_type != tt::CoreType::WORKER || sem.id != halo_chain_semaphore_id ||
+                        std::none_of(
+                            hop_first_cores.begin(),
+                            hop_first_cores.end(),
+                            [&](const CoreCoord& core) { return sem.core_ranges.contains(core); }),
+                    "Sliding-halo link hand-off semaphore id {} is already used on a hop worker core",
+                    halo_chain_semaphore_id);
+            }
+            std::vector<CoreRange> chain_core_ranges;
+            chain_core_ranges.reserve(hop_first_cores.size());
+            for (const auto& core : hop_first_cores) {
+                chain_core_ranges.emplace_back(core, core);
+            }
+            desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+                .id = halo_chain_semaphore_id,
+                .core_type = tt::CoreType::WORKER,
+                .core_ranges = CoreRangeSet(chain_core_ranges),
+                .initial_value = 0,
+            });
+        }
+        for (uint32_t hop = 1; hop <= halo_remote_hops; ++hop) {
+            const uint32_t destination_rank = (transport_rank + hop) % ring_size;
+            const bool send_backward = hop_sends_backward(hop);
+            const uint32_t unicast_hops = send_backward ? transport_rank - destination_rank : hop;
+            const int32_t signed_hops =
+                send_backward ? -static_cast<int32_t>(unicast_hops) : static_cast<int32_t>(unicast_hops);
+            const auto halo_destination_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+                tensor_args.input_q, coord, signed_hops, ag_attrs.topology, ag_attrs.cluster_axis);
+            const auto halo_transport_coord = send_backward ? backward_coord : forward_coord;
+            TT_FATAL(
+                halo_transport_coord.has_value() && halo_destination_coord.has_value(),
+                "Sliding attention hop {} requires a route to ring device {}",
+                hop,
+                destination_rank);
+            const CoreCoord hop_core_grid_offset = halo_hop_core_grid_offset(hop);
+            // Hops beyond their direction's link count queue up behind the hop `span` earlier in the
+            // same direction, which shares their link, and hand it on to the hop `span` later.
+            const auto& lane = direction_hops[send_backward];
+            const uint32_t lane_span = direction_link_span[send_backward];
+            const uint32_t lane_index = std::find(lane.begin(), lane.end(), hop) - lane.begin();
+            const bool hop_waits = lane_index >= lane_span;
+            const bool hop_signals = lane_index + lane_span < lane.size();
+            const CoreCoord hop_successor =
+                hop_signals
+                    ? mesh_device->worker_core_from_logical_core(hop_first_cores[lane[lane_index + lane_span] - 1])
+                    : CoreCoord{0, 0};
+            // send_to_next_start_Ht is linear in the chunk index, so on the scalar path the host relocates
+            // the halo page ranges every dispatch (apply_ring_joint_scalar_runtime_args). A captured trace
+            // never replays that, so on the metadata path hand the halo kernels the same kv_actual_isl the
+            // rest of the op reads and let them derive the start themselves; the value here then serves as
+            // the baked origin they shift away from.
+            // The tail(s) this hop ships follow from the receiver's Q mapping; a one-hop halo can ship
+            // two when block-cyclic Q wraps. Metadata kernels re-derive them on-device each replay.
+            const auto hop_sources = chunked_sliding_halo_layout.send_sources(transport_rank, hop);
+            const uint32_t hop_tail_rows = chunked_sliding_halo_layout.hop_rows(hop);
+            const RingAttentionNeighborHaloConfig neighbor_halo{
+                .send_to_next_start_Ht = hop_sources.first_start_tile,
+                .send_to_next_count_Ht = hop_sources.count * hop_tail_rows,
+                .send_second_start_Ht = hop_sources.second_start_tile,
+                .send_backward = send_backward,
+                .unicast_hops = unicast_hops,
+                .hop = hop,
+                .tail_tile_rows = hop_tail_rows,
+                .dest_row_base = chunked_sliding_halo_layout.hop_dest_row(hop),
+                .link_base = lane_index % lane_span,
+                .arrivals_expected = halo_remote_hops,
+                .rendezvous_noc_x = static_cast<uint32_t>(halo_rendezvous.x),
+                .rendezvous_noc_y = static_cast<uint32_t>(halo_rendezvous.y),
+                .waits_for_predecessor = hop_waits,
+                .signals_successor = hop_signals,
+                .chain_semaphore_id = halo_chain_semaphore_id,
+                .successor_noc_x = static_cast<uint32_t>(hop_successor.x),
+                .successor_noc_y = static_cast<uint32_t>(hop_successor.y),
+                .slot_id = tensor_args.has_metadata() ? &tensor_args.slot_id.value() : nullptr,
+                .kv_actual_isl = tensor_args.has_metadata() ? &tensor_args.kv_actual_isl.value() : nullptr,
+                .kv_cache_num_layers = args.kv_cache_num_layers,
+                .kv_cache_layer_idx = args.kv_cache_layer_idx,
+                .q_local_tile_rows = chunked_sliding_halo_layout.q_local_tile_rows,
+                .halo_tile_rows = chunked_sliding_halo_layout.halo_tile_rows,
+                .source_device = transport_rank,
+            };
+            log_debug(
+                tt::LogOp,
+                "Chunked sliding K/V halo: device={}, hop={}/{} -> device={}, link={}, chain(w={}, s={}), "
+                "tail=[{}, {}), payload_rows={}, compact rows [{}, {})",
+                transport_rank,
+                hop,
+                halo_remote_hops,
+                destination_rank,
+                neighbor_halo.link_base,
+                hop_waits,
+                hop_signals,
+                neighbor_halo.send_to_next_start_Ht,
+                neighbor_halo.send_to_next_start_Ht + neighbor_halo.send_to_next_count_Ht,
+                neighbor_halo.send_to_next_count_Ht,
+                neighbor_halo.dest_row_base,
+                neighbor_halo.dest_row_base + neighbor_halo.send_to_next_count_Ht);
+            ring_attention_neighbor_halo_exchange_helper(
+                desc,
+                all_gather_input_tensors,
+                coord,
+                halo_transport_coord.value(),
+                halo_destination_coord.value(),
+                all_gather_output_tensors,
+                halo_links_per_hop,
+                ag_attrs.ring_size,
+                transport_rank,
+                ag_attrs.topology,
+                ag_attrs.semaphore,
+                ag_attrs.sub_device_id,
+                all_gather_fused_op_signaler.value(),
+                hop_core_grid_offset,
+                ag_attrs.core_allocation_strategy,
+                args.cache_batch_idx(),
+                compute_gather_valid_Ht(args, tensor_args),
+                neighbor_halo);
+        }
     } else {
         // Append the all-gather portion to `desc`. Buffer addresses are auto-patched on cache hits; the
         // indexed-mode input_batch_base scalar is re-patched in apply_ring_joint_scalar_runtime_args.

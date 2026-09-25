@@ -24,6 +24,7 @@ from safetensors import safe_open
 from tracy import signpost
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 
 from ....models.transformers.minimax_h3.attention_minimax_h3 import MiniMaxH3Attention, prepare_rope_tables
 from ....models.transformers.minimax_h3.token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
@@ -32,9 +33,12 @@ from ....models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3T
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....pipelines.minimax_h3.packing import (
+    MINIMAX_H3_AUDIO_CHANNELS,
     MINIMAX_H3_FPS,
     align_num_frames,
     audio_latent_num_frames,
+    packed_sequence_length,
+    padded_sequence_length,
     resolve_canvas_size,
     video_latent_num_frames,
 )
@@ -54,6 +58,7 @@ from .common import (
     randomize_norm_weights,
     upload_rope,
 )
+from .common_av import CALIBRATED_FOX_PROMPT_NUM_TOKENS
 
 
 def logical_length_tensor(mesh_device: ttnn.MeshDevice, value: int) -> ttnn.Tensor:
@@ -983,13 +988,11 @@ def test_minimax_h3_transformer_block(
 # ---- production-geometry block device-perf (Tracy signposts) ----
 #
 # Run under `scripts/run_safe_pytest.sh --profile`, one duration at a time with `-k`.
-
 VAE_SPATIAL_DOWNSAMPLE = 16
-NUM_TEXT_TOKENS = 512
 PERF_ASPECT = (16, 9)
 
 
-def _packed_sizes(duration_s: float) -> dict:
+def _packed_sizes(duration_s: float, num_text_tokens: int) -> dict:
     """Token counts for `duration_s` seconds of 768P video, derived from the pipeline's own packing helpers."""
     height, width = resolve_canvas_size(*PERF_ASPECT)
     tokens_per_latent_frame = (height // VAE_SPATIAL_DOWNSAMPLE // PATCH_SIZE[1]) * (
@@ -997,7 +1000,10 @@ def _packed_sizes(duration_s: float) -> dict:
     )
     num_frames = align_num_frames(int(duration_s * MINIMAX_H3_FPS))
     latent_frames = video_latent_num_frames(num_frames)
-    num_audio = audio_latent_num_frames(num_frames)
+    num_audio_latents = audio_latent_num_frames(num_frames)
+    # ROWS, not latents: `packed_layout`, `seq_len` and `sim_seq_len` all count rows, and the pipeline
+    # packs `MINIMAX_H3_AUDIO_CHANNELS` rows per audio latent (`packing.py`, `build_packed_sequence`).
+    num_audio = num_audio_latents * MINIMAX_H3_AUDIO_CHANNELS
     num_video = latent_frames * tokens_per_latent_frame
     return {
         "height": height,
@@ -1008,8 +1014,9 @@ def _packed_sizes(duration_s: float) -> dict:
         "grid_w": width // VAE_SPATIAL_DOWNSAMPLE // PATCH_SIZE[2],
         "num_video": num_video,
         "num_audio": num_audio,
-        "num_text": NUM_TEXT_TOKENS,
-        "seq_len": NUM_TEXT_TOKENS + num_audio + num_video,
+        "num_audio_latents": num_audio_latents,
+        "num_text": num_text_tokens,
+        "seq_len": packed_sequence_length(num_text_tokens, num_audio_latents, num_video),
     }
 
 
@@ -1020,6 +1027,13 @@ def _packed_sizes(duration_s: float) -> dict:
         pytest.param(5.0, id="5s_768p"),
         pytest.param(10.0, id="10s_768p"),
         pytest.param(15.0, id="15s_768p"),
+    ],
+)
+@pytest.mark.parametrize(
+    "num_text_tokens",
+    [
+        pytest.param(CALIBRATED_FOX_PROMPT_NUM_TOKENS, id="test_prompt_text_tokens"),
+        pytest.param(512, id="512_text_tokens"),
     ],
 )
 @pytest.mark.parametrize(
@@ -1035,22 +1049,26 @@ def test_minimax_h3_transformer_block_perf(
     tp_axis: int,
     num_links: int,
     duration_s: float,
+    num_text_tokens: int,
     sp_simulate: int,
     is_fsdp: bool,
     topology: ttnn.Topology,
     reset_seeds,
 ) -> None:
     skip_if_unsupported_num_links(mesh_device, num_links)
+    # SP simulation emulates the Blackhole 4x32 quad's per-device shard by shrinking the sequence so a
+    # 4x8 device carries what a 4x32 device would. There is no Wormhole quad, so sp_sim rows measure
+    # nothing there; the WH rows are only meaningful at sp_sim1.
+    if sp_simulate > 1 and not is_blackhole():
+        pytest.skip("SP simulation targets the Blackhole 4x32 quad; there is no Wormhole equivalent")
     SIM = sp_simulate
 
     sp_factor = tuple(mesh_device.shape)[sp_axis]
     tp_factor = tuple(mesh_device.shape)[tp_axis]
 
-    sizes = _packed_sizes(duration_s)
+    sizes = _packed_sizes(duration_s, num_text_tokens)
     seq_len = sizes["seq_len"]
-    alignment = sp_factor * ttnn.TILE_SIZE * SIM
-    padded_len = ((seq_len + alignment - 1) // alignment) * alignment
-    padded_len = padded_len // SIM
+    padded_len = padded_sequence_length(seq_len, sp_factor * SIM) // SIM
     logger.info(
         f"{duration_s:g}s @ {sizes['height']}x{sizes['width']}: {sizes['num_frames']} frames -> "
         f"{sizes['latent_frames']} latent frames x {sizes['grid_h']}x{sizes['grid_w']} patches = "
