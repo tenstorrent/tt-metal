@@ -142,9 +142,7 @@ def test_attention_tp_prefill(mesh_device, reset_seeds, ensure_gc, request):
     attn = TPAttention(mesh_device, args, tw, tt_ccl)
 
     x = torch.randn(1, 1, S, args.dim, dtype=torch.bfloat16)
-    # Prefill input is K-sharded only when the fused AGMM in-proj is active (Blackhole only — see
-    # attn._fuse_agmm); otherwise the model's ff_norm gathers before handing attention a full-width
-    # input, so the test must match.
+    # Prefill input is K-sharded only when the fused AGMM in-proj is active (Blackhole); else the input is full width.
     x_tt = shard_to_device(mesh_device, x, dim=-1) if attn._fuse_agmm else replicate_to_device(mesh_device, x)
     cos, sin = rot_mats_prefill(
         mesh_device, args.rope_head_dim, S, args.rope_theta, full_head_dim=rope_full_head_dim(args)
@@ -199,8 +197,7 @@ def test_attention_tp_paged(mesh_device, reset_seeds, ensure_gc, request):
     tt_ccl = TT_CCL(mesh_device) if nd > 1 else None
     tw = load_attention_weights_tp(mesh_device, sd, args)
 
-    # Fused AGMM in-proj (and thus the K-sharded prefill input contract) is Blackhole-only — see
-    # attention/tp.py's _fuse_agmm; on WH the model's ff_norm gathers before attention instead.
+    # Fused AGMM in-proj is Blackhole-only; on Wormhole ff_norm gathers before attention.
     _fused_prefill_in = getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None and is_blackhole()
 
     def to_dev(t):
@@ -214,8 +211,7 @@ def test_attention_tp_paged(mesh_device, reset_seeds, ensure_gc, request):
             torch.tensor(rows, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device
         )
 
-    # Cache dtype must match what TPAttention._sdpa_bf8 casts K/V to before the fill (same helper
-    # model.py's allocate_kv_caches uses) -- otherwise paged_fill_cache's dtype assert trips.
+    # Cache dtype must match TPAttention._sdpa_bf8 or paged_fill_cache's dtype assert trips.
     _cache_dtype = ttnn.bfloat8_b if tpc.sdpa_bf8_enabled(args) else ttnn.bfloat16
 
     def mk_cache():
@@ -303,12 +299,10 @@ def test_attention_tp_paged_peruser(mesh_device, B, reset_seeds, ensure_gc, requ
     tt_ccl = TT_CCL(mesh_device) if nd > 1 else None
     tw = load_attention_weights_tp(mesh_device, sd, args)
     comp = tp_composer(mesh_device)
-    # Fused AGMM in-proj (and thus the K-sharded prefill input contract) is Blackhole-only — see
-    # attention/tp.py's _fuse_agmm; on WH the model's ff_norm gathers before attention instead.
+    # Fused AGMM in-proj is Blackhole-only; on Wormhole ff_norm gathers before attention.
     _fused_prefill_in = getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None and is_blackhole()
 
-    # Cache dtype must match what TPAttention._sdpa_bf8 casts K/V to before the fill (same helper
-    # model.py's allocate_kv_caches uses) -- otherwise paged_fill_cache's dtype assert trips.
+    # Cache dtype must match TPAttention._sdpa_bf8 or paged_fill_cache's dtype assert trips.
     _cache_dtype = ttnn.bfloat8_b if tpc.sdpa_bf8_enabled(args) else ttnn.bfloat16
 
     def mk_cache(num_blocks):

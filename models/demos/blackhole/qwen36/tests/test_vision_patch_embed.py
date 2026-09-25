@@ -2,14 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""PCC test for the on-device vision patch embedding + interpolated positional embedding.
-
-Reference is the HF pair this replaces:
-    Qwen3_5VisionPatchEmbed(pixel_values)  +  (pos_embed(bilinear_indices) * weights).sum(0)
-
-Only the two weight tensors are pulled from the checkpoint (a targeted safetensors read), so the
-test does not materialize the 27B model.
-"""
+"""PCC for on-device vision patch embed plus interpolated position embed.
+Reference is the HF pair this replaces. Only the two weight tensors are loaded."""
 
 import json
 import os
@@ -26,13 +20,7 @@ from models.demos.blackhole.qwen36.tt.vision.vision_model_config import VisionMo
 
 
 def _load_embed_weights(model_args, keys):
-    """Read just `keys` out of a sharded safetensors checkpoint.
-
-    N300/9B only (tpc.wh_9b_n300_vision): VisionModelArgs.CKPT_DIR mirrors HF_MODEL verbatim there
-    (unlike Qwen36ModelArgs, whose __init__ snapshot_download's hub ids first) -- resolve a hub id
-    to its local snapshot dir the same way Qwen36ModelArgs.__init__ (tt/model_config.py) does for
-    the text model. Other configs keep their previously shipped behavior (CKPT_DIR already local).
-    """
+    """Read just ``keys`` from a sharded safetensors checkpoint."""
     from safetensors.torch import load_file
 
     from models.demos.blackhole.qwen36.tt import tp_common as tpc
@@ -90,8 +78,7 @@ def test_vision_patch_embed(grid_hw, mesh_device, reset_seeds, ensure_gc):
     n_patches = int(grid_thw.prod(dim=1).sum())
     seq_len = ((n_patches // 2048) + 1) * 2048
 
-    # Real weights (not dummy): the point of the test is that the Conv3d fold and the bilinear
-    # interpolation reproduce the checkpoint's own numerics.
+    # Real weights: the Conv3d fold and bilinear interpolation must match the checkpoint.
     model_args = VisionModelArgs(mesh_device, dummy_weights=False, max_batch_size=1, max_seq_len=seq_len)
     vcfg = model_args.hf_config.vision_config
 
@@ -105,7 +92,6 @@ def test_vision_patch_embed(grid_hw, mesh_device, reset_seeds, ensure_gc):
         weights["model.visual.pos_embed.weight"].float(),
     )
 
-    # ---- reference (host torch, what the port replaces) ----
     patch_dim = vcfg.in_channels * vcfg.temporal_patch_size * vcfg.patch_size * vcfg.patch_size
     pixel_values = torch.randn(n_patches, patch_dim, dtype=torch.float32)
 
@@ -120,18 +106,13 @@ def test_vision_patch_embed(grid_hw, mesh_device, reset_seeds, ensure_gc):
     ref_out = hf_patch_embed(pixel_values) + (ref.pos_embed(idx) * wts[:, :, None]).sum(0)
     ref_padded = torch.nn.functional.pad(ref_out, (0, 0, 0, seq_len - n_patches))
 
-    # ---- device ----
     tt_embed = VisionEmbed(mesh_device, model_args, ref, weight_cache_path=None)
     tt_out = tt_embed.forward(pixel_values, idx, wts, seq_len)
 
     shape = tuple(int(d) for d in tt_out.shape)
     assert shape[:3] == (1, 1, seq_len), f"unexpected shape {shape}"
 
-    # Concat the hidden fracture back together (a no-op read of one replica when the tower runs
-    # with replicated activations).
-    # getattr, not attribute access: vision_replicated_acts only exists on branches that hit the
-    # TP tile-divisibility problem (dim//TP not a whole number of tiles). VisionEmbed itself
-    # defaults it to False the same way, so the test must not be stricter than the module.
+    # Concat the hidden fracture. vision_replicated_acts may be absent; default it the way VisionEmbed does.
     if getattr(model_args, "vision_replicated_acts", False):
         out = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0:1]
     else:
@@ -161,16 +142,12 @@ def test_vision_patch_embed(grid_hw, mesh_device, reset_seeds, ensure_gc):
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_vision_dropin_embed_paths_agree(mesh_device, reset_seeds, ensure_gc, tmp_path):
-    """DropInVisionTransformer must produce the same tower output with the device embed as with
-    the old host embed. Uses a randomly-initialized 2-block vision tower so the wiring (env flag,
-    corner-index helper, input contract) is exercised without materializing the 27B checkpoint.
-    """
+    """Device embed and host embed must match through a random 2-block tower."""
     from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5VisionModel
 
     from models.demos.blackhole.qwen36.tt.vision.model import DropInVisionTransformer
 
-    # 28*42 = 1176 patches: deliberately NOT a multiple of the 32-row tile, so the device-side
-    # cos/sin pad to seq_len is exercised on a non-tile-aligned boundary.
+    # 1176 patches is not a multiple of 32, so the device cos/sin pad is exercised.
     grid_thw = torch.tensor([[1, 28, 42]], dtype=torch.long)
     n_patches = int(grid_thw.prod(dim=1).sum())
     seq_len = ((n_patches // 2048) + 1) * 2048
@@ -188,10 +165,7 @@ def test_vision_dropin_embed_paths_agree(mesh_device, reset_seeds, ensure_gc, tm
         prev = os.environ.get("QWEN36_HOST_VISION_EMBED")
         os.environ["QWEN36_HOST_VISION_EMBED"] = "1" if host_embed else "0"
         try:
-            # MUST use an isolated cache dir: this tower has RANDOM weights, and the ttnn weight
-            # cache is keyed by tensor name only. Writing these under the checkpoint's cache dir
-            # poisons it for every later run that loads the same names — which is exactly how a
-            # green test once left the demo describing a beach photo as "a corrupted image file".
+            # Random weights must use an isolated cache dir; the ttnn cache is keyed by tensor name only.
             tower = DropInVisionTransformer(
                 ref, model_args, dtype=ttnn.bfloat8_b, weight_cache_path=tmp_path / ("host" if host_embed else "dev")
             )

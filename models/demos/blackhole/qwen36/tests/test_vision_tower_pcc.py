@@ -1,64 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Checkpoint-free PCC gate and device-perf profile for the Qwen3.5 / 3.6 VISION TOWER.
-
-``test_wrapped_model.py`` is the tower's REAL-WEIGHT PCC test and is preferred for numerics. Its
-``dummy_weights=True`` build reads the config from ``LOCAL_HF_PARAMS`` if the model has an entry,
-else from ``CKPT_DIR``.
-
-This test builds the HF reference from ``vision_config`` alone (``Qwen3_5VisionModel(vcfg)``, random
-weights), which needs no checkpoint and makes it cheap to run anywhere.
-
-WHAT CONFIG-INIT WEIGHTS CANNOT SEE
------------------------------------
-"Weight *values* do not matter to PCC, only that both sides use the same ones" is FALSE for any error
-term that scales with the dynamic range of the activations. The trained tower develops MASSIVE
-ACTIVATIONS from block 9 on -- on the 9B, absmax 354 against an rms of 0.65, and absmax 12032 at the
-last block -- while config-init weights (iid, initializer_range 0.02) produce none. Anything that
-quantizes an activation in a block-float format is therefore invisible here and severe in the real
-model: this test read 0.99921 on the 9B while the real-weight tower was at 0.96875, because the
-attention out-projection was writing the residual stream in bfloat8_b, whose 16-channel shared
-exponent is set by the outlier. So treat this case as a CHEAP SMOKE TEST plus the profiling harness,
-and treat ``test_wrapped_model.py`` as the gate.
-
-TWO CASES, EACH AT THE DEPTH THAT SUITS IT
-------------------------------------------
-``oneblock``  -- ONE block, signpost-bounded, warmed up. This is the profiling case: with a single
-    block every block op appears exactly once, so the perf report needs no dividing and no "read the
-    second instance" caveat. A window is ``head + depth x block + tail``, so window totals are only
-    comparable at equal depth -- keeping the profiled depth pinned at 1 is what makes the numbers in
-    the main README ("Tower kernel tuning") mean the same thing run to run.
-
-``fulldepth`` -- ALL ``vision_config.depth`` blocks, no warmup, no signposts. Depth matters for
-    numerics: error compounds block over block, so a shallow check flatters the tower -- on the 9B,
-    0.99977 at depth 1 against 0.99929 at the real depth of 27. (With REAL weights the same spread is
-    0.99981 -> 0.98850, an order of magnitude wider; see above.) The host reference costs ~0.8 TFLOP
-    per block, which is ~30 s for the whole tower at this grid.
-
-Only the perf case emits signposts, so profiling the whole file still yields exactly ONE
-``start``/``stop`` window -- but prefer ``-k oneblock`` so the full-depth reference is not computed just
-to be thrown away.
-
-Run the numerical gate (full depth)::
-
-    MESH_DEVICE=N300 HF_MODEL=Qwen/Qwen3.5-9B pytest \\
-        models/demos/blackhole/qwen36/tests/test_vision_tower_pcc.py -v -s -k fulldepth
-
-Profile one block::
-
-    MESH_DEVICE=N300 HF_MODEL=Qwen/Qwen3.5-9B python -m tracy -p -v -r -m pytest \\
-        models/demos/blackhole/qwen36/tests/test_vision_tower_pcc.py -v -s -k oneblock
-    tt-perf-report --start-signpost start --end-signpost stop <ops_perf_results_*.csv>
-
-For the 27B tower, point ``HF_MODEL`` at the LOCAL config dir -- ``ModelArgs`` takes
-``CKPT_DIR = HF_MODEL`` and ``model_name`` from its basename, so no checkpoint or hub fetch is
-needed (this tower's reference weights are config-init either way)::
-
-    MESH_DEVICE=T3K HF_MODEL=$PWD/models/tt_transformers/model_params/Qwen3.6-27B pytest \\
-        models/demos/blackhole/qwen36/tests/test_vision_tower_pcc.py -v -s -k fulldepth
-
-``QWEN36_VISION_MM_TUNING=0`` runs either case with the Wormhole tuning gated off, for A/B.
-"""
+"""Checkpoint-free smoke PCC and one-block profile for the vision tower.
+Config-init weights miss outlier quantization; test_wrapped_model.py is the real-weight gate."""
 
 from __future__ import annotations
 
@@ -75,8 +18,7 @@ from models.demos.blackhole.qwen36.tt.vision.model import DropInVisionTransforme
 from models.demos.blackhole.qwen36.tt.vision.vision_model_config import VisionModelArgs
 from models.tt_transformers.tt.ccl import TT_CCL
 
-# (grid, depth, pcc_required, profile). depth=None means the config's full depth.
-# The thresholds are MEASURED values with a little margin, not aspirations. Demo grid, config-init
+# (grid, depth, pcc_required, profile). depth=None is the config's full depth.
 CASES = [
     ((1, 86, 128), 1, 0.999, True),
     ((1, 86, 128), None, 0.998, False),
@@ -106,8 +48,7 @@ DEVICE_PARAMS = [{"l1_small_size": 24576, **({"fabric_config": ttnn.FabricConfig
 @pytest.mark.parametrize(
     "grid, depth, pcc_required, profile",
     CASES,
-    # Selector strings deliberately avoid "pcc" and "vision_tower": `-k` also matches the module and
-    # function names, so `-k pcc` would select BOTH cases.
+    # Selector strings avoid pcc and vision_tower so -k cannot match both cases via the module name.
     ids=[
         f"{'oneblock' if prof else 'fulldepth'}_patches{math.prod(g)}_depth{d or 'full'}"
         for g, d, _, prof in CASES  # noqa: B023
@@ -144,8 +85,7 @@ def test_vision_tower_pcc(mesh_device, device_params, grid, depth, pcc_required,
     grid_thw = torch.tensor([grid], dtype=torch.long)
     pixel_values = torch.randn(n_patches, pixel_dim)
 
-    # `seq_len` above only sizes `max_seq_len`; the tower pads rows to a multiple of 128, so report
-    # what it will actually run at rather than the (larger) buffer bound.
+    # The tower pads rows to a multiple of 128; report that length, not the buffer bound.
     tower_rows = -(-n_patches // 128) * 128
     logger.info(
         f"{'PROFILE' if profile else 'PCC'} case: depth={vcfg.depth}, grid={grid} "
@@ -155,9 +95,7 @@ def test_vision_tower_pcc(mesh_device, device_params, grid, depth, pcc_required,
 
     signpost = None
     if profile:
-        # Warm up outside the signposts so kernel compilation and first-touch allocation are not
-        # measured, then drain the on-device profiler buffer so those markers neither accumulate nor
-        # land in the start..stop window. Both are no-ops without a profiler build.
+        # Warm up outside the signposts so compile and first-touch allocation are not in the window.
         ttnn.deallocate(tt_model(pixel_values, grid_thw))
         read_profiler = getattr(ttnn, "ReadDeviceProfiler", None)
         if read_profiler is not None:

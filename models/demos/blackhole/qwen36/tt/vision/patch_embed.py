@@ -2,29 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""On-device vision patch embedding + interpolated positional embedding.
-
-Replaces the two host-torch stages that used to run on the HF reference model once per image
-(``reference_model.patch_embed`` and ``reference_model.fast_pos_embed_interpolate``):
-
-    patch_input = patch_embed(pixel_values)            # nn.Conv3d on CPU
-    pos_embeds  = fast_pos_embed_interpolate(grid_thw) # 4 CPU gathers of [n_patches, dim]
-    x           = patch_input + pos_embeds             # then F.pad + upload
-
-``patch_embed`` is an ``nn.Conv3d`` whose stride equals its kernel, applied to a tensor that the
-processor has *already* patchified to ``[n_patches, in_ch*T*P*P]``. So it is exactly a linear:
-flatten the conv weight to ``[in_ch*T*P*P, embed_dim]`` and matmul. No convolution op needed.
-
-The positional embedding is a bilinear interpolation of a learned ``[num_positions, dim]`` table:
-four corner lookups combined with per-token weights. The corner *indices and weights* are integer
-/ fractional grid arithmetic over ``[4, n_patches]`` — vectorized, ~microseconds, and they stay on
-host. The expensive half — four ``[n_patches, dim]`` gathers, the weighting and the sum — moves to
-``ttnn.embedding`` + ``multiply`` + ``sum``.
-
-Output contract: identical to ``VisionModelArgs.prepare_residual_tensor_prefill`` —
-``[1, 1, seq_len, dim_local]`` bf16 TILE in DRAM, replicated when ``vision_replicated_acts`` and
-otherwise fractured along the hidden dim across cluster axis 1. Rows past ``n_patches`` are exactly
-zero, as the host ``F.pad`` produced them.
+"""On-device patch embed (Conv3d folded to a linear) and interpolated positional embedding.
+Output is [1, 1, seq_len, dim_local] bf16 TILE DRAM, zero past n_patches.
 """
 
 import torch
@@ -43,23 +22,11 @@ class VisionEmbed(LightweightModule):
     """patch_embed + interpolated pos_embed, entirely on device."""
 
     def __init__(self, mesh_device, args, reference_model, dtype=ttnn.bfloat16, weight_cache_path=None):
-        """
-        Args:
-            mesh_device: the mesh the vision tower runs on.
-            args (VisionModelArgs): supplies ``cluster_shape`` and ``vision_replicated_acts``.
-            reference_model: the HF vision module, read once for ``patch_embed.proj`` and
-                ``pos_embed`` weights. Not retained.
-            dtype: weight dtype. bf16 by default — this projection is small (1536x1152) and
-                feeds every downstream block, so it is not worth bfp8 error here.
-            weight_cache_path: optional ttnn weight cache dir.
-        """
         super().__init__()
         self.mesh_device = mesh_device
         self.args = args
         self.tp = args.cluster_shape[1]
-        # Match the activation distribution the vision blocks expect (see
-        # VisionModelArgs.prepare_residual_tensor_prefill): replicated when TP cannot split `dim`
-        # into whole tiles, otherwise fractured along the hidden dim.
+        # Replicated when TP cannot split dim into whole tiles; otherwise fractured on the hidden dim.
         self.replicated_acts = getattr(args, "vision_replicated_acts", False)
         self._hidden_mapper = (
             ttnn.ReplicateTensorToMesh(mesh_device)
@@ -73,12 +40,9 @@ class VisionEmbed(LightweightModule):
             else (lambda name: weight_cache_path / f"visual.{name}.tp{self.tp}")
         )
 
-        # ---- patch projection: Conv3d(stride == kernel) folded to a [K, dim] linear ----
         proj = reference_model.patch_embed.proj
         embed_dim = proj.weight.shape[0]
-        # [embed_dim, in_ch, T, P, P] -> [in_ch*T*P*P, embed_dim]. The flatten order matches the
-        # `hidden_states.view(-1, in_ch, T, P, P)` the reference does before the conv, which is the
-        # layout the image processor already emits, so no permutation is involved.
+        # Flatten [embed_dim, in_ch, T, P, P] to [in_ch*T*P*P, embed_dim]; order matches the processor.
         w = proj.weight.reshape(embed_dim, -1).t().contiguous()
         self.patch_dim = w.shape[0]
         self.embed_dim = embed_dim
@@ -101,7 +65,6 @@ class VisionEmbed(LightweightModule):
             cache_file_name=cache("patch_embed_proj_b"),
         )
 
-        # ---- learned positional embedding table, sharded the same way ----
         # ROW_MAJOR: ttnn.embedding untilizes a TILE table on every call. Cache key `_rm`.
         self.pos_table = ttnn.as_tensor(
             reference_model.pos_embed.weight.contiguous(),
@@ -114,18 +77,10 @@ class VisionEmbed(LightweightModule):
         )
         self.num_positions = reference_model.pos_embed.weight.shape[0]
 
-        # Row masks are keyed by (padded rows, real rows) and reused across images of the same
-        # shape — a request usually sends several tiles of one size.
         self._row_mask_cache = {}
 
-    # ------------------------------------------------------------------ helpers
-
     def _row_mask(self, rows, valid):
-        """[1, 1, rows, 1] bf16, 1.0 below `valid` and 0.0 at/above it — built on device.
-
-        Needed only because the projection has a bias: a zero-padded input row still comes out of
-        the matmul as `bias`, where the host `F.pad` used to leave an exact zero.
-        """
+        """Zero padded rows; a biased matmul would otherwise leave the bias there."""
         key = (rows, valid)
         cached = self._row_mask_cache.get(key)
         if cached is not None:
@@ -138,20 +93,7 @@ class VisionEmbed(LightweightModule):
         self._row_mask_cache[key] = mask
         return mask
 
-    # ------------------------------------------------------------------ forward
-
     def forward(self, pixel_values, bilinear_indices, bilinear_weights, seq_len):
-        """
-        Args:
-            pixel_values (torch.Tensor): ``[n_patches, in_ch*T*P*P]`` patchified pixels, host.
-            bilinear_indices (torch.Tensor): ``[4, n_patches]`` int corner indices into the
-                positional table (from ``transformers.vision_utils`` — host index arithmetic).
-            bilinear_weights (torch.Tensor): ``[4, n_patches]`` float corner weights.
-            seq_len (int): padded sequence length the vision blocks run at.
-
-        Returns:
-            ttnn.Tensor: ``[1, 1, seq_len, dim_local]`` bf16 TILE, DRAM.
-        """
         n = pixel_values.shape[0]
         assert n <= seq_len, f"{n} patches exceed the padded seq_len {seq_len}"
         assert (
@@ -159,14 +101,9 @@ class VisionEmbed(LightweightModule):
         ), f"expected patch dim {self.patch_dim}, got {pixel_values.shape[1]}"
         assert bilinear_indices.shape[1] == n, "one bilinear index column per patch"
 
-        # Round the uploaded rows up to a tile so the matmul and the embedding agree; the rest of
-        # the pad to seq_len is a tile-aligned device pad below (nothing to transfer for it).
+        # Tile-align the upload; pad the rest to seq_len on device.
         rows = ((n + 31) // 32) * 32
 
-        # --- patch projection ---
-        # Cast on host: the processor hands us fp32, and uploading that made ttnn tilize fp32 on
-        # device and then typecast (849 + 481 us/image on an N300). bf16 halves the bytes over PCIe
-        # and lands in the dtype the matmul wants.
         x = pixel_values.to(torch.bfloat16)
         if rows != n:
             x = torch.nn.functional.pad(x, (0, 0, 0, rows - n))
@@ -202,9 +139,8 @@ class VisionEmbed(LightweightModule):
         if plan.chunk != rows:
             h = ttnn.reshape(h, [1, 1, rows, -1])
 
-        # --- interpolated positional embedding: sum_c w_c * table[idx_c] ---
         idx = bilinear_indices.to(torch.int32)
-        wts = bilinear_weights.to(torch.bfloat16)  # same reason as the pixels above
+        wts = bilinear_weights.to(torch.bfloat16)
         if rows != n:
             # Pad rows look up entry 0 with weight 0, contributing exactly nothing.
             idx = torch.nn.functional.pad(idx, (0, rows - n))
@@ -219,9 +155,9 @@ class VisionEmbed(LightweightModule):
         wts_tt = from_torch_host_tiled(wts.reshape(4, rows, 1), self.mesh_device, replicate)
         pos = ttnn.embedding(idx_tt, self.pos_table, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
         ttnn.deallocate(idx_tt)
-        pos = ttnn.multiply(pos, wts_tt)  # broadcasts over the hidden dim
+        pos = ttnn.multiply(pos, wts_tt)
         ttnn.deallocate(wts_tt)
-        pos_sum = ttnn.sum(pos, dim=0, keepdim=True)  # [1, rows, dim_local]
+        pos_sum = ttnn.sum(pos, dim=0, keepdim=True)
         ttnn.deallocate(pos)
         pos_sum = ttnn.reshape(pos_sum, (1, 1, rows, pos_sum.shape[-1]))
 

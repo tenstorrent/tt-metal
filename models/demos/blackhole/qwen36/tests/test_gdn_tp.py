@@ -1,22 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""TP validation for Qwen3.5/3.6 Gated DeltaNet on a Blackhole or Wormhole TP mesh.
-
-One file per component (decode / chunk-prefill), sharing the loaders and mesh
-parametrization from ``test_factory``:
-
-* ``test_gdn_tp``         — decode PCC @ pos0 (recurrent state starts at zero, so
-  o = beta*(q̂·k̂)*v); the torch reference covers the sharded QKV/Z/AB reorder,
-  per-channel conv, GQA head expansion, L2 norm, gated RMSNorm, Z-gate, output
-  projection, and reduce-scatter. Plus a second decode step for shape/NaN.
-* ``test_gdn_tp_prefill`` — chunk-prefill (FIR conv + shared chunk kernel) must
-  agree with step-by-step decode over the same tokens (zero init state). An
-  internal-consistency check across two code paths; no hand-written reference.
-
+"""TP Gated DeltaNet decode and chunk-prefill checks on a Blackhole or Wormhole mesh.
 Run:
     MESH_DEVICE=P150x4 HF_MODEL=Qwen/Qwen3.6-27B \
       pytest models/demos/blackhole/qwen36/tests/test_gdn_tp.py -v -s
-    # Wormhole: MESH_DEVICE=T3K with the 27B, or MESH_DEVICE=N300 with the 9B.
 """
 
 import gc
@@ -48,24 +35,13 @@ from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops i
 
 
 def _pf_in(mesh_device, args, t):
-    """Prefill input placement: K-sharded when the fused AGMM in-proj is active (it gathers K itself),
-    replicated otherwise (the model's norm gathers before GDN instead).
-
-    Must mirror gdn/tp.py's _fuse_agmm exactly — a mismatch trips the op's `K == K_w` assert, since
-    the fused weight's height is full K while a K-sharded activation is K/tp wide. So if the AGMM
-    fusion is ever enabled beyond Blackhole, this predicate has to move with it."""
+    """K-sharded prefill input only when the fused AGMM in-proj is active; else replicated full K."""
     fused = getattr(args, "gdn_qkvz_weight_memcfg", None) is not None and is_blackhole()
     return shard_to_device(mesh_device, t, dim=-1) if fused else replicate_to_device(mesh_device, t)
 
 
 def _parametrize_prefill_in_dtype():
-    """Parametrize ``in_dtype`` over the PREFILL activation dtypes this ARCH actually produces.
-
-    bf8 is Wormhole-only (see test_gdn_tp_prefill), gated at COLLECTION time so the case does not
-    exist on Blackhole rather than being generated and skipped -- a skip would report a coverage
-    gap that is not one. Arch is the whole gate: gdn/tp.py's _fuse_agmm reduces to is_blackhole()
-    because _fuse_ab follows gdn_qkvz_weight_memcfg, which model_config.py always sets.
-    is_blackhole() reads ttnn.get_arch_name() only, so this is safe before a device is open."""
+    """Prefill activation dtypes this arch produces. bf8 is Wormhole-only and omitted on Blackhole."""
     dtypes = [pytest.param(ttnn.bfloat16, id="in_bf16")]
     if not is_blackhole():
         dtypes.append(pytest.param(ttnn.bfloat8_b, id="in_bf8"))
@@ -253,7 +229,7 @@ def test_gdn_tp_peruser_state(mesh_device, B, reset_seeds, ensure_gc, request):
         g.forward_prefill(_pf_in(mesh_device, args, xp[u]), chunk_size=T, capture_state=True)
         out_u = g.forward_decode(replicate_to_device(mesh_device, xd[u]))
         ref_rows.append(ttnn.to_torch(out_u, mesh_composer=comp)[0, 0, 0].float())
-        # Decode leaves rec_state in L1; native conv1d CBs on the next instance clash unless spilled.
+        # Decode leaves rec_state in L1; the next conv1d's CBs clash unless it is spilled.
         g._spill_rec_state_to_dram()
         del g
     gc.collect()
@@ -490,25 +466,7 @@ def test_gdn_tp_prefill(mesh_device, in_dtype, reset_seeds, ensure_gc, request):
     Both paths start from zero state. No hand-written reference — this is a
     self-consistency check between forward_prefill and forward_decode.
 
-    ``in_dtype`` is the PREFILL activation dtype only (decode always feeds bf16), which is what
-    makes that pair a measurement rather than a tautology: on Wormhole layer.py narrows
-    attention_norm's prefill gather to bf8 on GDN layers, so the in-proj sees a bf8 in0 in prefill
-    and a bf16 one in decode. Model-level TP tests cannot see this -- they compare two paths
-    carrying the same quantisation. MEASURED bf16/bf8: N300 9B TP=2 0.99926/0.99908,
-    T3K 27B TP=8 0.99939/0.99929 (threshold 0.95).
-
-    bf8 is Wormhole-only because on Blackhole the configuration cannot exist, not because it is
-    untested: the narrowing applies to attention_norm's gather, and layer.py's _fuse_norm_agmm
-    disables that gather and lets the in-proj AGMM do it instead (hardcoded bf16 by
-    tp_common.all_gather_matmul_prefill), which is why _attn_gather_dtype carries the same
-    ``not is_blackhole()``. Forcing bf8 there reports PCC 0.0: qwen36 lets the op allocate its own
-    activation-gather intermediate, which is sized at ``output_dtype`` (bf16, 2048 B/tile) rather
-    than at the activation's dtype (bf8_b, 1088 B/tile), and the gather is a raw page copy with no
-    conversion. A caller-side contract, not an op limit -- llama3_70b_galaxy keeps ``dtype`` equal
-    to its bf8 activation and tt_dit passes a ``persistent_output_buffer`` at ``x.get_dtype()``.
-    Adopting the latter would make a bf8 in0 correct here, at the cost of a buffer on the L1-tight
-    prefill path shared with attention and MLP. Until then do not relax the threshold, and do not
-    re-add the Blackhole row without that buffer.
+    bf8 prefill is Wormhole-only: Blackhole's AGMM gather intermediate is bf16, so a bf8 in0 is copied with no conversion.
     """
     os.environ.setdefault("HF_MODEL", model_path())
     T = 128
@@ -774,39 +732,12 @@ def _restore_layer_state(gdn, mesh_device, snap):
 @torch.no_grad()
 @parametrize_mesh_tp()
 def test_gdn_conv_fir_vs_native_masked(mesh_device, reset_seeds, ensure_gc, request):
-    """Do the MAC FIR and native ttnn.conv1d agree on a MASKED bucket?
-
-    WHY THIS EXISTS. forward_prefill picks native ttnn.conv1d only when the chunk is UNMASKED
-    (prefill_uses_native_conv1d -> _normalize_valid_len(...) is None); a masked bucket falls back to
-    the MAC FIR. MTP verify always masks (K+1 candidates padded to a 128-row bucket), so all 48 GDN
-    layers take the FIR on every verify -- and the FIR reads K shifted windows at offsets 1..K-1,
-    which are never tile-aligned, so each tap pays a whole-tensor untilize/tilize. MEASURED at
-    bucket 128 on T3K/27B: 3 x (untilize 29us + slice 6us + tilize 30us + addcmul 13us) plus the
-    x_padded prologue = ~312us of an 871us GDN layer, 36%, on every one of those 48 layers.
-
-    The stated reason for the fallback is the CARRY ("masked buckets keep the MAC FIR: valid_len
-    new_state differs") -- a masked bucket's register tail sits at valid_len, not T. That part is
-    recoverable: _shift_register_tail(qkv, valid_len) selects exactly the rows the FIR's one-hot
-    matmul selects. Swapping the conv on that basis alone was tried and REVERTED: the carry matched
-    but the model's greedy trajectory moved, so the OUTPUT differs too, somewhere the causality
-    argument (right-side padding, real positions see only real inputs) does not cover.
-
-    This test makes that difference observable instead of inferred. It runs both conv paths on the
-    same qkv and carry at verify's geometry and reports output PCC over the REAL rows plus the carry
-    PCC, separately -- so the next attempt can see which one moves and by how much.
-
-    It asserts only the weak, structural claim (both paths run and produce finite, same-shaped
-    output). The PCCs are logged, not gated: there is no prior WH number to regress against, and
-    inventing a threshold here would assert a conclusion this test exists to establish.
-    """
+    """MAC FIR vs native conv1d on a masked bucket. Asserts only that both paths run and stay finite."""
     os.environ.setdefault("HF_MODEL", model_path())
     args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
     li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
     sd = load_gdn_layer(args.CKPT_DIR, li)
-    # The SAME entry point forward_prefill uses (aliased there as _causal_conv1d_fir); it
-    # dispatches to the Wormhole ROW_MAJOR-taps fork, so this compares the shipping FIR.
-    # conv_fir_wh's dispatch was folded into upstream _causal_conv1d_fir: pad_layout=None resolves
-    # to TILE on Blackhole and ROW_MAJOR on Wormhole, which is what the shim chose.
+    # Same entry point as forward_prefill. pad_layout=None is TILE on Blackhole and ROW_MAJOR on Wormhole.
     from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import (
         _causal_conv1d_fir as causal_conv1d_fir_dispatch,
     )
@@ -841,17 +772,12 @@ def test_gdn_conv_fir_vs_native_masked(mesh_device, reset_seeds, ensure_gc, requ
         weight_taps=gdn.tw["conv_taps"],
         bias_dev=None,
         valid_len=VL,
-        # model_args was the shim's arch selector; upstream resolves it from pad_layout=None
-        # (TILE on Blackhole, ROW_MAJOR on Wormhole), which is the same choice.
+        # pad_layout=None selects TILE on Blackhole and ROW_MAJOR on Wormhole.
     )
-    # Shipping signature: the native path takes its carry at T, the FIR at valid_len. That
-    # carry difference is KNOWN and is the documented reason for the fallback, so it is
-    # reported but not the question. The question is the OUTPUT on the real rows.
+    # The carry difference is known; the question is the output on the real rows.
     nat_out, nat_state = gdn._conv1d_prefill(qkv(), T, None)
 
-    # The conv output is 3-D [B,T,qkv_dim_tp]; tp_composer composes on dim 3 and TT_FATALs here.
-    # Both paths see identical inputs on every device, so ONE device's shard answers the question:
-    # stack the per-device results on dim 0 and take device 0's.
+    # Output is 3-D; compose one device since every device sees the same inputs.
     _dev0 = lambda t: ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[  # noqa: E731
         0
     ].float()
@@ -868,13 +794,7 @@ def test_gdn_conv_fir_vs_native_masked(mesh_device, reset_seeds, ensure_gc, requ
         f"PAD rows[{VL}:] PCC={pad_pcc:.6f}  carry PCC={st_pcc:.6f} (carry EXPECTED to differ: "
         f"native reads the tail at T={T}, the FIR at valid_len={VL})"
     )
-    # THE CARRY FIX, checked at the op level. The reverted attempt replaced the FIR's one-hot
-    # carry select with _shift_register_tail(qkv, valid_len). Both name the same rows by
-    # construction -- the one-hot picks x_padded[valid_len : valid_len+K-1], and x[i] sits at
-    # x_padded[(K-1)+i], so that is x[valid_len-(K-1) : valid_len], which is exactly what
-    # _shift_register_tail(valid_len) slices. "Names the same rows" is not "returns the same
-    # bytes", though: the one-hot is a matmul against a 0/1 selector (fp32 accumulate) while the
-    # tail is a ttnn.slice at an unaligned start. This measures the gap that argument hides.
+    # One-hot carry select vs _shift_register_tail name the same rows but are not the same bytes.
     tail = gdn._shift_register_tail(qkv(), VL, None, C)
     tail = ttnn.to_layout(tail, ttnn.TILE_LAYOUT)
     t_o, f_s = _dev0(tail), _dev0(fir_state)
@@ -897,47 +817,9 @@ def test_gdn_conv_fir_vs_native_masked(mesh_device, reset_seeds, ensure_gc, requ
 @torch.no_grad()
 @parametrize_mesh_tp()
 def test_gdn_chunk_vs_recurrent_attribution(mesh_device, reset_seeds, ensure_gc, request):
-    """Localize the chunk-vs-recurrent divergence that speculative decoding runs into.
-
-    Two facts already established elsewhere:
-      * torch chunk == torch recurrent to >= 0.9999 PCC in exactly the verify regime, including a
-        nonzero carried state (test_gdn_chunk_recurrent_parity, CPU) — so the ALGORITHM is exact;
-      * on device, chunk prefill == step decode over T=128 tokens FROM ZERO STATE
-        (test_gdn_tp_prefill / test_gdn_tp_fused_chunk_prefill).
-
-    Neither covers what verify actually does: a SHORT chunk continuing from a warmed state. A
-    whole-model measurement (tests/test_spec_decode_features.py) shows the two paths' hidden states
-    at cosine 0.93 after a single step from a bit-identical state, which is far too large to be
-    rounding — so the natural suspicion is the carried recurrent/conv state handoff. This narrows it
-    to one GDN layer and three regimes:
-
-        cold  : both paths from zero state over T tokens      (the already-covered case)
-        warm  : both continue from the SAME warmed state      (the verify case)
-        warm1 : ONE real token in a masked bucket             (what verify_forward runs per step)
-
-    MEASURED: all three agree at PCC ~0.99999 (cold 0.999955, warm 0.999991, warm1 0.999965), so
-    the suspicion is wrong — the carried-state handoff is sound and one GDN layer is faithful in
-    exactly the regime verify uses. The model-level gap is instead the COMPOUNDING of per-layer
-    differences of this size: test_spec_decode_tp.py::test_verify_layer_localization measures the
-    hidden PCC decaying 0.999999 (layer 0) -> 0.99990 (layer 31) -> 0.9932 (layer 63) with no jump
-    at any single layer, GDN or attention. Two kernel pairs contribute along the way (the delta-rule
-    scan vs its recurrence, and prefill vs decode SDPA), and 64 residual+RMSNorm stages amplify.
-
-    Consequences, both measured elsewhere rather than assumed:
-      * acceptance barely cares — injecting 30% relative noise into the drafter's hidden costs only
-        ~0.19 committed tokens/iter (tests/mtp_cpu_check.py), and the chunk and recurrent feature
-        sets give the same ceiling;
-      * output text does care — the two paths' greedy trajectories fork within a couple of tokens
-        and the chunk path degenerates into repetition on some prompts, which is why
-        test_spec_decode_align.py pins the base at the recurrent kernel and guards degeneracy.
-
-    This test therefore stands as a regression guard on the per-layer kernels, not as a reproduction
-    of the model-level gap.
-    """
+    """Chunk vs recurrent on one GDN layer: cold, warm, and one real token in a masked bucket."""
     os.environ.setdefault("HF_MODEL", model_path())
-    # T must exceed TILE_SIZE (32): at exactly 32 the in-projection takes the decode-sized branch,
-    # which expects a replicated rather than K-sharded activation. verify_forward's real bucket is
-    # 128, so anything above the boundary reproduces the production path.
+    # T must exceed 32 or the in-projection takes the decode branch, which wants a replicated activation.
     W, T = 128, 64  # warmup tokens, then a short chunk (both 32-multiples for the fused kernel)
     args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
     nd = mesh_device.get_num_devices()
@@ -954,11 +836,7 @@ def test_gdn_chunk_vs_recurrent_attribution(mesh_device, reset_seeds, ensure_gc,
     warm_x = torch.randn(1, 1, W, args.dim, dtype=torch.bfloat16)
     x = torch.randn(1, 1, T, args.dim, dtype=torch.bfloat16)
 
-    # forward_prefill's input contract is CONDITIONAL (see its docstring): K-sharded [.., dim/tp]
-    # only when the fused in-proj AG-matmul path is live, replicated [.., dim] otherwise. That path
-    # is `self._fuse_ab and tpc.is_blackhole()`, i.e. Blackhole-only -- so on Wormhole this test used
-    # to hand a dim/tp=640 activation to a matmul wanting dim=5120 and TT_FATAL'd
-    # ("width=640 height=5120") before reaching a single assert. Pick the form the layer is in.
+    # K-sharded input only when fused AGMM is live (Blackhole, T>32); otherwise the activation is full width.
     def _feed_prefill(t, S):
         if gdn._fuse_agmm and S > 32:  # 32 = tile height; see forward_prefill's T>TILE gate
             return shard_to_device(mesh_device, t, dim=-1)
@@ -978,15 +856,13 @@ def test_gdn_chunk_vs_recurrent_attribution(mesh_device, reset_seeds, ensure_gc,
 
     results = {}
 
-    # ---- cold: both paths from zero state ----
     gdn.reset_state()
     cold_chunk = _chunk_rows()
     gdn.reset_state()
     cold_dec = _decode_rows(T)
     results["cold"] = (cold_chunk, cold_dec)
 
-    # ---- warm: one prefill establishes the state (populating BOTH conv_carry for the chunk path
-    # and conv_states for the decode path), then each path continues from that exact snapshot ----
+    # Warm: one prefill fills both conv carries, then each path continues from that snapshot.
     gdn.reset_state()
     gdn._stable_state = True  # carry the state in place, as the model does during serving
     ttnn.deallocate(gdn.forward_prefill(_feed_prefill(warm_x, W), chunk_size=W, capture_state=True))
@@ -998,7 +874,6 @@ def test_gdn_chunk_vs_recurrent_attribution(mesh_device, reset_seeds, ensure_gc,
     warm_dec = _decode_rows(T)
     results["warm"] = (warm_chunk, warm_dec)
 
-    # ---- warm1: a single real token in a masked bucket — verify_forward's per-step shape ----
     _restore_layer_state(gdn, mesh_device, snap)
     warm1_chunk = _chunk_rows(valid_len=1, n=1)
     _restore_layer_state(gdn, mesh_device, snap)
@@ -1022,26 +897,11 @@ def test_gdn_chunk_vs_recurrent_attribution(mesh_device, reset_seeds, ensure_gc,
             "in the carried recurrent/conv state handoff, not kernel precision"
         )
 
-    # Measured at ~0.99999 for all three; hold them near that rather than at a loose 0.99, since the
-    # whole point is that a single layer is far more faithful than the 64-layer stack.
-    # ARCH-CALIBRATED. 0.9995 was fitted on Blackhole, where the two kernels agree at ~0.99996.
-    # This test could not run on Wormhole at all until the input-contract fix above, so its first WH
-    # numbers are these: cold 0.999228, warm 0.999378, warm1 0.999461 -- one consistent precision
-    # level about an order of magnitude looser than Blackhole's, not a defect in any one regime:
-    #   * warm >= cold, so the carried recurrent/conv handoff is sound (a handoff defect inverts
-    #     that, which is exactly what the cold>0.99 / warm<0.99 branch above reports);
-    #   * warm1 -- the masked single-token bucket verify_forward actually runs -- is the FAITHFUL
-    #     one of the three;
-    #   * all three sit within 8e-4 of each other.
-    # Guard at 0.999 on Wormhole: tight enough to catch a real break (the diagnostic above cares
-    # about sub-0.99) while not asserting a Blackhole precision level the WH kernels never had.
-    # NOTE for the FIR-conv work: ~7e-4 per layer here compounds over 48 GDN layers, which is the
-    # scale that made a masked-bucket conv swap move the model's trajectory.
+    # Wormhole agrees more loosely than Blackhole. A warm drop is a carried-state defect.
     _default_thr = 0.9995 if is_blackhole() else 0.999
     thr = get_pcc_threshold(request, default=_default_thr)
     assert cold_pcc > thr, f"cold-start chunk vs decode regressed (PCC={cold_pcc:.6f})"
-    # The warm regimes are what speculative decoding depends on, and torch parity says they are
-    # exact; a drop here would be a real carried recurrent/conv state defect.
+    # A warm-regime drop is a carried recurrent/conv state defect.
     assert warm_pcc > thr, (
         f"chunk vs decode from a CARRIED state is only PCC={warm_pcc:.6f} (cold-start is "
         f"{cold_pcc:.6f}, and torch parity for this regime is >= 0.9999) — the carried "

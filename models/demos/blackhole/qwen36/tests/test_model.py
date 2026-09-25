@@ -81,17 +81,7 @@ def test_vision_model_inference(
     # pixel_values are produced by Qwen2_5_VLImageProcessor, these come from the above img
     pt_pixel_values = torch.randn([seq_len, 1536]) * 0.8320 + 1.2969  # std and mean from above img
     ref_seq_len = image_grid_thw[0, 1] * image_grid_thw[0, 2]
-    # Pad rows to 128, the tower's real requirement (VisionAttention.forward_prefill asserts
-    # seq_len % 128 == 0), matching DropInVisionTransformer.forward. This used to round up to a
-    # 2048 multiple, which broke two ways: SDPA runs is_causal=False with NO attn_mask, so every
-    # pad row is an unmasked key that each real query sums exp(0) over -- an error that compounds
-    # block over block -- and the row count itself feeds the SDPA/matmul chunk and grid selection
-    # in vision_model_config, which was swept at the 128-aligned count. The `(n // m) + 1` form
-    # also over-padded exact multiples (11008 -> 12288 for nothing).
-    # SCOPED to Wormhole (test_factory.validated_on_wormhole) -- every WH mesh and both models, since
-    # this is a correctness fix rather than tuning. It CHANGES THE MEASURED PCC (it removes the
-    # unmasked pad-key error the 2048 form silently carried), so Blackhole keeps the previously
-    # shipped 2048 rounding until someone re-measures it there.
+    # Pad to 128, the tower's real requirement. Wormhole only; Blackhole keeps 2048 rounding until re-measured.
     if validated_on_wormhole():
         seq_len = -(-ref_seq_len // 128) * 128
     else:

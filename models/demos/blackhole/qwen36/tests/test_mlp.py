@@ -73,9 +73,7 @@ def test_mlp_inference(rows, batch_size, mesh_device, reset_seeds, ensure_gc):
     logger.info("Run MLP")
     tt_output = tt_model(tt_input, mode)
 
-    # The TP MLP output is fractured along dim=3 (the hidden dim); concat along that axis to
-    # reassemble it. Under vision_replicated_acts each device already holds the full dim, so the
-    # concat repeats it num_devices times — keep one copy.
+    # Output is fractured on dim=3; under vision_replicated_acts each device already holds the full dim.
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3),

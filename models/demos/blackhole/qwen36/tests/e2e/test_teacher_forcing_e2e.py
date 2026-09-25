@@ -1,125 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""End-to-end teacher-forced evaluation for Qwen3.5-9B / Qwen3.6-27B.
-
-Drives the real generation path — ``prefill_paged`` followed by the demo's decode
-chain (``prepare_inputs_decode`` → ``ttnn_decode_forward`` →
-``process_output_decode``) — but replaces the sampled token at every decode step
-with the ground-truth token. Because the model is re-anchored to truth each step, a
-single bad prediction cannot derail the rest of the sequence, so every step is an
-independent measurement instead of one diverged sample. This is the teacher-forcing
-method ``TokenAccuracy`` implements for tt_transformers
-(``models/tt_transformers/demo/simple_text_demo.py``).
-
-Where this sits relative to the other qwen tests: ``tests/unit/test_prefill.py`` and
-``tests/unit/test_decode.py`` gate a 128-token prompt and 5 decode steps against HF.
-Five steps cannot show accuracy *drift* — error that accumulates through the paged KV
-and the GDN recurrent/conv state as the sequence grows. This test runs hundreds of
-steps and reports the trend, which is the failure mode a short test structurally
-cannot see.
-
-Ground truth defaults to *A Tale of Two Cities* (the corpus
-``models/tt_transformers/tests/generate_reference_hf.py`` uses). Override with
-``QWEN36_TF_TEXT_FILE``.
-
-Predictions scored, for ``prefill_len`` prompt tokens and ``max_new_tokens`` steps:
-
-  * **prefill** — 1 prediction. Prefill over tokens ``0..prefill_len-1`` predicts
-    token ``prefill_len``.
-  * **decode**  — ``max_new_tokens`` predictions. Step ``j`` is fed ground-truth
-    token ``prefill_len+j`` at position ``prefill_len+j`` and predicts
-    ``prefill_len+j+1``.
-  * **e2e**     — the ``max_new_tokens+1`` combined.
-
-Each is reported top-1 and top-5 against two references:
-
-  * **vs HF** — TT's token equals HF's token (top-1), and TT's token is inside HF's
-    top-5. This is the device-correctness signal and what the accuracy test asserts.
-  * **vs truth** — the token actually next in the text, for TT and HF alike.
-    Informational: it measures the checkpoint, not the device.
-
-Reading the pair: top-1 falling while top-5 holds means TT is reordering near-ties,
-the ordinary consequence of bfp8 weights. Top-5 falling too means TT is emitting
-tokens the reference does not rank at all — a real divergence, not rounding.
-
-Both sides pick tokens by argmax, which is what the qwen demo does at its default
-``QWEN35_TEMP=0`` (its sampler is an inner closure with repetition-penalty knobs that
-do not apply under teacher forcing, so it is not imported here).
-
-Diagnostics printed beyond the raw rates, because a sub-100% rate has two unrelated
-causes that want opposite fixes:
-
-  * **flip classification** — every top-1 flip scored by the *reference's own* top-1
-    minus top-2 margin. Flips inside ``QWEN36_TF_CONFIDENT_GAP`` (default 5.0 logits)
-    are positions the reference itself barely decided, which two numeric paths are
-    expected to reorder; only confident flips indicate a defect. The rank of TT's
-    pick under HF is printed separately, as severity.
-  * **position trend** — accuracy and PCC per position bin, beside the reference's
-    own accuracy, margin and entropy over the same bins. Agreement falling while the
-    reference's margin stays flat means state accumulating with position (paged KV,
-    GDN recurrent/conv carry, page table); both falling together means the text got
-    harder and the trend says nothing about the device; flat means per-step numerics.
-  * **resolution** — each rate with its Wilson interval next to the floor it is gated
-    on. A rate whose interval straddles the floor is an unresolved measurement, not a
-    defect. Floors are keyed per length case so changing the lengths cannot silently
-    inherit a floor calibrated elsewhere.
-  * **decision-relevant distance** — KL(HF||TT) and max |delta logit| over HF's
-    top-``QWEN36_TF_LOGIT_CMP_K``. Full-vocab PCC spreads its weight over 248320
-    mostly-irrelevant entries, so it tracks sampling behaviour poorly.
-
-Both tests also print the teacher-forced output itself — TT's token sequence and
-HF's, decoded and shown beside the ground truth. Every prediction is anchored to
-truth, so the three strings align position by position.
-``QWEN36_TF_PRINT_STEPS`` (default 16, 0 to disable) also prints the first steps as a
-truth / HF / TT token table.
-
-Measured (Wormhole, bf16 HF reference, prefill_128 / max_new_tokens_128)
-------------------------------------------------------------------------
-* **9B / N300 (TP=2), 32 layers** — top-1 90.70%, top-5 96.12%, logit PCC mean
-  0.9674, worst step 0.5763. Agreement declines only in the bins where the
-  reference's OWN margin declines (5.1 → 1.7 logits, entropy tripling), i.e. text
-  difficulty, not device drift.
-* **27B / T3K (TP=8), 64 layers** — top-1 75.97%, top-5 84.50%, logit PCC mean
-  0.8403, worst step 0.3957, and a drift signature the 9B does not show:
-  agreement falls 96.97% → 43.33% across the four position bins while the
-  reference's own margin RISES (7.75 → 9.75) and its entropy falls to 0.05. 20 of
-  31 top-1 flips are at positions the reference decided by a median 8.4 logits,
-  TT's pick ranking as far down as 751. ``tests/unit/test_decode.py`` (5 steps)
-  passes on the same checkpoint at min PCC 0.9595 with every argmax matching, so
-  this is accumulation over ~130 decode steps rather than per-step numerics —
-  exactly what a short test cannot see. Two caveats before calling it a device
-  defect: it was measured at TP=8 on Wormhole T3K, while the 27B's validated
-  configuration is P150x4 (TP=4, Blackhole), and it has not yet been bisected to
-  the paged KV vs the GDN recurrent/conv carry. The floors in ``_MEASURED_FLOORS``
-  record this state so a change is visible; they are not a statement that it is
-  acceptable.
-
-A single step's full-vocab PCC over 248320 logits is a coarse instrument — read
-the mean, the position trend and the flip classification, not one worst step.
-
-Tests in this module:
-
-  * ``test_teacher_forcing_e2e``        — top-1 / top-5 token accuracy.
-  * ``test_teacher_forcing_logits_pcc`` — full-vocab logit PCC at every step.
-
-Run (use ``--timeout=0``; both models, one test — ``HF_MODEL`` picks the checkpoint
-and ``MESH_DEVICE`` the mesh, same as the demo):
-
-  # 9B
-  HF_MODEL=Qwen/Qwen3.5-9B MESH_DEVICE=P150 \
-    pytest models/demos/blackhole/qwen36/tests/e2e/test_teacher_forcing_e2e.py -sv --timeout=0
-
-  # 27B
-  HF_MODEL=Qwen/Qwen3.6-27B MESH_DEVICE=P150x4 \
-    pytest models/demos/blackhole/qwen36/tests/e2e/test_teacher_forcing_e2e.py -sv --timeout=0
-
-  # accuracy only — select by node id, NOT ``-k``: the module filename is itself a
-  # keyword, so ``-k test_teacher_forcing_e2e`` also matches the PCC test.
-  pytest models/demos/blackhole/qwen36/tests/e2e/test_teacher_forcing_e2e.py::test_teacher_forcing_e2e -sv
-
-  # longer horizon (gemma4's default case)
-  QWEN36_TF_PREFILL_LEN=512 QWEN36_TF_MAX_NEW_TOKENS=500 pytest ... -sv --timeout=0
-"""
+"""End-to-end teacher-forced eval: prefill then decode fed ground-truth tokens.
+Scores top-1/top-5 and logit PCC vs HF so one bad step cannot derail the sequence."""
 
 from __future__ import annotations
 
@@ -142,16 +24,14 @@ from models.demos.blackhole.qwen36.tests.unit.full_depth_pcc_common import (
     tt_prefill_logits,
 )
 
-# Prefill length + decode steps; total tokens consumed is prefill_len +
-# max_new_tokens + 1 (the last decode step still needs a ground-truth target).
+# Total tokens consumed is prefill_len + max_new_tokens + 1 (last step needs a target).
 _PREFILL_LEN = int(os.getenv("QWEN36_TF_PREFILL_LEN", "128"))
 _MAX_NEW_TOKENS = int(os.getenv("QWEN36_TF_MAX_NEW_TOKENS", "128"))
 _TF_LENGTHS = [
     pytest.param(_PREFILL_LEN, _MAX_NEW_TOKENS, id=f"prefill_{_PREFILL_LEN}-max_new_tokens_{_MAX_NEW_TOKENS}"),
 ]
 
-# Floors for the assertions — REGRESSION DETECTORS at the model, mesh and length they
-# were measured at, not correctness targets.
+# Floors are regression detectors at the measured model, mesh, and length, not correctness targets.
 _MEASURED_FLOORS = {
     ("32L-4096", "prefill_128-max_new_tokens_128"): (
         0.84,
@@ -185,7 +65,6 @@ _MIN_TOP1_ENV = os.getenv("QWEN36_TF_MIN_TOP1")
 _MIN_TOP5_ENV = os.getenv("QWEN36_TF_MIN_TOP5")
 _MIN_LOGIT_PCC_ENV = os.getenv("QWEN36_TF_MIN_LOGIT_PCC")
 
-# Two-sided confidence level for the Wilson interval printed beside every rate.
 _CI_Z = float(os.getenv("QWEN36_TF_CI_Z", "1.96"))
 
 # Matches TokenAccuracy's top-5 in models/tt_transformers/demo/simple_text_demo.py.
@@ -194,16 +73,12 @@ _TOP_K = int(os.getenv("QWEN36_TF_TOP_K", "5"))
 # Per-step token table printed alongside the decoded text; 0 prints text only.
 _PRINT_STEPS = int(os.getenv("QWEN36_TF_PRINT_STEPS", "16"))
 
-# A top-1 flip is only a defect at a CONFIDENT token — one the REFERENCE itself
-# decided by more than this logit margin (its own top-1 minus its own top-2). Smaller
+# A top-1 flip is a defect only when the reference top1-top2 margin exceeds this.
 _CONFIDENT_GAP = float(os.getenv("QWEN36_TF_CONFIDENT_GAP", "5.0"))
 
-# Width of the decision-relevant logit comparison. Full-vocab PCC spreads its weight
-# over 248320 mostly-irrelevant entries, so it is a weak discriminator of sampling
-# behaviour; KL and max |delta logit| over HF's top-K are not.
+# Compare KL and max |delta logit| on HF's top-K; full-vocab PCC is a weak sampling signal.
 _LOGIT_CMP_K = int(os.getenv("QWEN36_TF_LOGIT_CMP_K", "32"))
 
-# Number of equal-width position bins in the drift report.
 _TREND_BINS = int(os.getenv("QWEN36_TF_TREND_BINS", "4"))
 
 _TALE_OF_TWO_CITIES = Path(__file__).resolve().parents[5] / "tt_transformers" / "tests" / "tale-of-two-cities.txt.bz2"
@@ -228,12 +103,7 @@ def _load_text():
 
 
 def _build_tokens(tokenizer, total_len):
-    """Ground-truth sequence of exactly ``total_len`` tokens, repeating text if short.
-
-    Repetition is harmless under teacher forcing: every position is re-anchored to
-    truth, so predictions stay independent, and TT and HF see identical input either
-    way.
-    """
+    """Repeat short text to ``total_len``; teacher forcing re-anchors every position to truth."""
     ids = tokenizer.encode(_load_text(), add_special_tokens=True)
     if len(ids) < total_len:
         body = tokenizer.encode(_load_text(), add_special_tokens=False)
@@ -242,18 +112,8 @@ def _build_tokens(tokenizer, total_len):
     return torch.tensor(ids[:total_len], dtype=torch.long).unsqueeze(0)
 
 
-# ── the two sides ─────────────────────────────────────────────────────────
-
-
 def _run_teacher_forced_tt(model, page_table, tokens, prefill_len, max_new_tokens):
-    """Prefill the prompt, then decode ``max_new_tokens`` steps feeding truth back.
-
-    Returns ``[1 + max_new_tokens, vocab]``: the prefill row followed by one row per
-    decode step, in order. Feeding the ground-truth token rather than TT's own pick is
-    the teacher forcing; what still accumulates across steps is device state — the
-    paged KV and the GDN recurrent/conv carry — which is the point of running hundreds
-    of steps rather than five.
-    """
+    """Prefill, then decode feeding ground truth; device KV and GDN state still accumulate."""
     rows = [tt_prefill_logits(model, tokens[:, :prefill_len], page_table)]
     for j in range(max_new_tokens):
         forced = int(tokens[0, prefill_len + j])
@@ -264,13 +124,7 @@ def _run_teacher_forced_tt(model, page_table, tokens, prefill_len, max_new_token
 
 
 def _hf_reference_rows(ckpt_dir, tokens, prefill_len, max_new_tokens):
-    """HF logits rows aligned to the TT predictions.
-
-    TT prediction ``i`` predicts token ``prefill_len + i``, which HF produces at row
-    ``prefill_len + i - 1``. ONE HF forward covers every row, because HF prefill is
-    itself teacher-forced by causal masking — no decode loop needed on the reference
-    side, which is what keeps a 500-step run affordable on CPU.
-    """
+    """HF row ``prefill_len + i - 1`` aligns with TT prediction ``i``; one causal HF forward covers all rows."""
     from transformers.models.qwen3_5 import Qwen3_5ForCausalLM, Qwen3_5TextConfig
 
     end = prefill_len + max_new_tokens
@@ -280,9 +134,7 @@ def _hf_reference_rows(ckpt_dir, tokens, prefill_len, max_new_tokens):
     hf_model, loading_info = Qwen3_5ForCausalLM.from_pretrained(
         ckpt_dir, config=text_config, dtype=ref_dtype, output_loading_info=True
     )
-    # A composite 3.6 VLM checkpoint carries visual.*/mtp.* the text-only class does
-    # not want (unexpected keys are fine); a MISSING key means a weight stayed at its
-    # random init and every rate below would be measured against noise.
+    # Unexpected visual.*/mtp.* keys are fine; a missing key leaves a weight at random init.
     assert not loading_info["missing_keys"], f"HF reference has uninitialized weights: {loading_info['missing_keys']}"
     hf_model.eval()
     try:
@@ -293,15 +145,8 @@ def _hf_reference_rows(ckpt_dir, tokens, prefill_len, max_new_tokens):
         del hf_model
 
 
-# ── scoring ───────────────────────────────────────────────────────────────
-
-
 def _greedy_tokens(rows):
-    """One token per row, argmax — the qwen demo's default (``QWEN35_TEMP=0``).
-
-    Used for TT and HF alike so the comparison isolates the logits rather than mixing
-    in two different selection rules.
-    """
+    """Argmax per row for TT and HF, matching the demo default ``QWEN35_TEMP=0``."""
     return rows.argmax(dim=-1).reshape(-1)
 
 
@@ -337,16 +182,7 @@ def _logit_pccs(tt_rows, hf_rows):
 
 
 def _wilson(successes, n, z=_CI_Z):
-    """Wilson score interval for a binomial proportion.
-
-    Printed beside every rate because the assertion compares a rate against a fixed
-    floor, and what the test can actually resolve is set by ``n``: at 129 predictions
-    a 95% interval is roughly ±7 points wide, so a rate within a few points of a floor
-    is neither a pass nor a fail — it is an unresolved measurement, and reading it as
-    a defect sends the next session chasing noise. Teacher-forced positions are
-    correlated (neighbouring tokens share context), so the true interval is wider than
-    this independent-Bernoulli one; treat the printed span as a lower bound.
-    """
+    """Wilson interval for a binomial rate; correlated positions make the true interval wider."""
     if n <= 0:
         return (0.0, 0.0)
     p = successes / n
@@ -357,27 +193,14 @@ def _wilson(successes, n, z=_CI_Z):
 
 
 def _reference_confidence(hf_rows):
-    """The reference's OWN per-position confidence: ``(margin, entropy)``.
-
-    ``margin`` is HF's top-1 minus HF's top-2 logit; ``entropy`` is the entropy of HF's
-    own distribution. Neither involves TT. This is the control the position-trend
-    report needs: a falling TT-vs-HF rate has two unrelated causes — device state
-    accumulating with position, or the reference simply becoming less decisive over
-    that stretch of text — and they are indistinguishable from the agreement rate
-    alone.
-    """
+    """HF's own per-position margin and entropy, independent of TT, for the drift report."""
     top2 = hf_rows.topk(2, dim=-1).values
     logprob = hf_rows.log_softmax(dim=-1)
     return top2[:, 0] - top2[:, 1], -(logprob.exp() * logprob).sum(dim=-1)
 
 
 def _tt_rank_under_hf(hf_rows, tt_top1):
-    """1-based rank of TT's pick in HF's own ordering (rank 1 = agreement).
-
-    Severity of a flip — how far down the reference's ordering TT landed — reported
-    separately from whether the reference was confident, because the two answer
-    different questions.
-    """
+    """1-based rank of TT's pick in HF's ordering (1 = agreement)."""
     picked = hf_rows.gather(-1, tt_top1.unsqueeze(-1))
     return (hf_rows > picked).sum(dim=-1) + 1
 
@@ -393,22 +216,12 @@ def _decision_metrics(tt_rows, hf_rows):
 
 
 def _model_key(model_args):
-    """Stable key for the checkpoint under test: ``"<layers>L-<dim>"``.
-
-    Derived from the config rather than from ``HF_MODEL`` because that variable is
-    rewritten to the resolved snapshot path, whose basename is an opaque hash — the
-    same reason ``pcc_thresholds.json`` is keyed by test rather than by model name.
-    """
+    """Checkpoint key ``"<layers>L-<dim>"`` from config; ``HF_MODEL`` is an opaque snapshot path."""
     return f"{model_args.n_layers}L-{model_args.dim}"
 
 
 def _resolve_floors(model_key, case_id):
-    """``(min_top1, min_top5, min_step_pcc, provenance, inherited)`` for one run.
-
-    ``inherited`` is True when this (model, length) has no row of its own in
-    ``_MEASURED_FLOORS`` and is therefore gated on numbers measured elsewhere — logged
-    as a warning rather than passing silently.
-    """
+    """``(min_top1, min_top5, min_step_pcc, provenance, inherited)``; inherited floors are warned."""
     row = _MEASURED_FLOORS.get((model_key, case_id))
     inherited = row is None
     top1, top5, step_pcc, provenance = row if row is not None else _FALLBACK_FLOORS
@@ -425,9 +238,6 @@ def _resolve_floors(model_key, case_id):
     if overrides:
         provenance, inherited = f"env override ({', '.join(overrides)})", False
     return top1, top5, step_pcc, provenance, inherited
-
-
-# ── reporting ─────────────────────────────────────────────────────────────
 
 
 def _where(i):
@@ -485,15 +295,7 @@ def _log_decision_metrics(tt_rows, hf_rows):
 
 
 def _log_position_trend(r, pccs, hf_rows, truth):
-    """Agreement and PCC per position bin, BESIDE the reference's own confidence.
-
-    Read the two halves together:
-      * agreement falls, reference margin flat  → positional drift; look at the paged
-        KV writes, the GDN state carry, position handling.
-      * agreement falls, reference margin falls → text difficulty; the trend says
-        nothing about the device.
-      * agreement flat                          → per-step numerics (dtype/fidelity).
-    """
+    """Per-bin agreement and PCC beside the reference margin: flat margin plus falling agreement is drift."""
     n = r["agree_top1"].numel()
     bins = max(1, min(_TREND_BINS, n))
     width = (n + bins - 1) // bins
@@ -531,12 +333,7 @@ def _log_position_trend(r, pccs, hf_rows, truth):
 
 
 def _log_confidence_split(r, hf_rows, truth, tokenizer):
-    """Split top-1 flips by the REFERENCE's own confidence; report severity apart.
-
-    Two independent questions: *should this flip have happened* (HF's own top1-top2
-    margin — a flip the reference decided by 0.3 logits is a near-tie no dtype knob
-    will remove) and *how badly did TT miss* (the rank of TT's pick under HF).
-    """
+    """Split top-1 flips by the reference's own top1-top2 margin, and report TT's rank separately."""
     ref_margin, _ = _reference_confidence(hf_rows)
     rank = _tt_rank_under_hf(hf_rows, r["tt_top1"])
     flipped = ~r["agree_top1"]
@@ -590,11 +387,7 @@ def _log_confidence_split(r, hf_rows, truth, tokenizer):
 
 
 def _log_resolution(r, min_top1, min_top5, provenance, inherited):
-    """Print each rate with its confidence interval next to the floor it is gated on.
-
-    The point of this block is to make an unresolved measurement look unresolved: a
-    rate whose interval straddles the floor is neither a pass nor a fail.
-    """
+    """Print each rate with its interval next to the floor it is gated on."""
     n = r["agree_top1"].numel()
     top1_hits, topk_hits = int(r["agree_top1"].sum()), int(r["agree_topk"].sum())
     t1_lo, t1_hi = _wilson(top1_hits, n)
@@ -639,12 +432,7 @@ def _log_resolution(r, min_top1, min_top5, provenance, inherited):
 
 
 def _log_generated_text(tokenizer, tt_top1, hf_top1, truth):
-    """Print the teacher-forced predictions as text, from TT and from HF alike.
-
-    Every prediction is made from ground-truth context, so these are not a free-running
-    generation: they are the token each side would have emitted at each position of the
-    reference text, which is what makes the two strings comparable line by line.
-    """
+    """Print teacher-forced TT and HF token strings; both are anchored to ground truth."""
 
     def _decode(ids):
         return tokenizer.decode([int(t) for t in ids])
@@ -672,9 +460,6 @@ def _log_generated_text(tokenizer, tt_top1, hf_top1, truth):
         logger.info("      ... {} more predictions omitted", len(tt_top1) - n)
 
 
-# ── shared run ────────────────────────────────────────────────────────────
-
-
 def _prepare_teacher_forcing_run(prefill_len, max_new_tokens, mesh_device, request):
     """Shared setup for the token-accuracy and logit-PCC teacher-forced tests."""
     max_prefill = request.config.getoption("--max-prefill")
@@ -682,8 +467,7 @@ def _prepare_teacher_forcing_run(prefill_len, max_new_tokens, mesh_device, reque
         pytest.skip(f"prefill_len={prefill_len} > --max-prefill={max_prefill}")
 
     total_len = prefill_len + max_new_tokens + 1
-    # Blocks must cover every position touched, and a multiple of 32 keeps the
-    # chunked-SDPA page-table alignment the demo rounds to.
+    # Block count must cover every position and be a multiple of 32 for chunked-SDPA page-table alignment.
     num_blocks = max(32, -(-total_len // BLOCK_SIZE))
     num_blocks = -(-num_blocks // 32) * 32
 

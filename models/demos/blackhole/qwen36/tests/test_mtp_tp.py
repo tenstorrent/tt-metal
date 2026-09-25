@@ -1,28 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""TP validation for the Qwen3.6-27B MTP (multi-token prediction) drafter head.
-
-The MTP head is the speculative-decode drafter (the ``mtp.*`` checkpoint weights):
-
-    h'  = fc( concat[ enorm(embed(token)), hnorm(hidden) ] )
-    h'' = DecoderLayer(h')                         # reuses the full-attention decoder layer
-    logits = LMHead( mtp.norm(h'') )
-
-This composes the same per-component torch references the other TP tests validate
-(gated causal attention, RMSNorm, SwiGLU MLP, LM head) end-to-end and PCC-checks the full
-head. It specifically pins the NEW wiring: the concat order ([embedding, hidden]) and which
-pre-fc norm applies to which input, plus the fc + norm sharding on the mesh.
-
-The torch reference lives in mtp_torch_ref.py, shared with the off-device acceptance oracle
-(mtp_cpu_check.py) so the device fidelity check and the acceptance ceiling cannot drift apart.
-
-A tiny ``n_layers=0`` model is built (embedding + LM head + final norm + MTP head only) so the
-64 base layers are never loaded — the head consumes a RANDOM hidden, so base layers are unused.
-
-Run:
-    MESH_DEVICE=P150x4 HF_MODEL=Qwen/Qwen3.6-27B \
-      pytest models/demos/blackhole/qwen36/tests/test_mtp_tp.py -v -s
-"""
+"""TP PCC for the MTP drafter head against the shared torch reference.
+n_layers=0 loads only embedding, LM head, final norm, and the MTP head."""
 import os
 
 import torch
@@ -64,8 +43,7 @@ def test_mtp_head_tp_pcc(mesh_device, reset_seeds, request):
     model = Qwen36Model(mesh_device, args, sd, tensor_cache_path=args.weight_cache_path())
     assert model.mtp is not None, "MTP head was not constructed"
 
-    # S must exceed TILE_SIZE (32) so the attention prefill takes the all-gather-matmul path
-    # (the fused in-proj gathers the K-sharded activation); a smaller S hits the decode-sized branch.
+    # S must exceed 32 so attention prefill takes the all-gather-matmul path.
     S = 64
     hidden = torch.randn(1, S, args.dim, dtype=torch.bfloat16)
     tokens = torch.randint(0, args.vocab_size, (1, S), dtype=torch.long)
@@ -93,15 +71,7 @@ def test_mtp_head_tp_pcc(mesh_device, reset_seeds, request):
     passing, pcc = comp_pcc(ref_logits, out_torch, get_pcc_threshold(request, default=0.97))
     logger.info(f"MTP HEAD TP PCC (S={S}) = {pcc}")
 
-    # Argmax agreement is the property speculative decode actually relies on: the drafter's output
-    # IS an argmax, so a logit PCC that passes while argmaxes flip would cap acceptance invisibly.
-    #
-    # The raw agreement rate is LOW here (~0.83) and that is expected: the hidden is random, which
-    # is far off the head's training distribution and yields a nearly flat output — the reference's
-    # median top-2 gap is only ~0.53. Measured on this input, every flip sits at a reference gap
-    # <= 0.51 and none of the ~19 rows with gap >= 1.0 flip, which is the signature of faithful
-    # arithmetic resolving near-ties differently, not of a broken head. Hence the 1.0 threshold
-    # below. test_mtp_head_on_real_features carries the strict check on in-distribution hiddens.
+    # Random hiddens are off-distribution, so only confident reference gaps are required to match.
     ref_ids = ref_logits.argmax(-1).tolist()
     tt_ids = out_torch.argmax(-1).tolist()
     agree = sum(int(a == b) for a, b in zip(ref_ids, tt_ids))
@@ -118,16 +88,7 @@ def test_mtp_head_tp_pcc(mesh_device, reset_seeds, request):
 @torch.no_grad()
 @parametrize_mesh_tp()
 def test_mtp_head_on_real_features(mesh_device, reset_seeds, request):
-    """Device MTP head vs the torch reference on REAL base hiddens (Gemma4's
-    test_assistant_first_step_vs_hf_realistic rung).
-
-    test_mtp_head_tp_pcc feeds a random hidden, which is off-distribution and leaves the output
-    nearly flat — so it cannot tell whether the head's argmax (the thing a draft IS) is faithful.
-    This replays the exported base features instead, and additionally reports the drafter's top-1
-    agreement with the base's own next token, which is the acceptance rate the device can reach.
-
-    Needs features from test_spec_decode_features.py; skipped when absent.
-    """
+    """Device MTP head vs torch on real base hiddens. Skipped when the feature dump is absent."""
     import pytest
 
     from models.demos.blackhole.qwen36.tests.mtp_torch_ref import MTPTorchHead
@@ -145,9 +106,7 @@ def test_mtp_head_on_real_features(mesh_device, reset_seeds, request):
 
     model = Qwen36Model(mesh_device, args, sd, tensor_cache_path=args.weight_cache_path())
 
-    # 'shift' alignment: slot i is fused from (base hidden_i, token_{i+1}) and predicts token_{i+2}
-    # — the convention mtp_cpu_check.py measured as this checkpoint's, so it is what the device
-    # head should be scored under.
+    # shift alignment: slot i is (hidden_i, token_{i+1}) and predicts token_{i+2}.
     S = 128
     assert feats["hidden"].shape[0] >= S + 2, "need more exported steps"
     hidden = feats["hidden"][:S]

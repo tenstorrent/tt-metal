@@ -133,8 +133,7 @@ def test_vision_block_inference(
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            # Match the block's input contract: fractured along dim=3 normally, but replicated at
-            # full dim when TP cannot split dim into whole tiles (vision_replicated_acts).
+            # Fractured on dim=3, or replicated at full dim when TP cannot split dim into whole tiles.
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)
             if getattr(model_args, "vision_replicated_acts", False)
             else ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=model_args.cluster_shape),
@@ -146,9 +145,7 @@ def test_vision_block_inference(
             rot_mats=rot_mats,
         )
 
-        # Process the output. The block output is fractured along dim=3 (the hidden dim), so concat
-        # along that axis to reassemble it. Under vision_replicated_acts every device already holds
-        # the full dim, so concatenating would just repeat it num_devices times — slice one copy.
+        # Output is fractured on dim=3; under vision_replicated_acts keep one copy.
         tt_out = ttnn.to_torch(
             tt_out,
             mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3),

@@ -71,9 +71,7 @@ class DistributedNorm(LightweightModule):
         self.tt_ccl = tt_ccl
         self.prefetcher = prefetcher
         self.ag_config_key = ag_config_key
-        # Per-op CCL tuning was honoured for DECODE only; prefill got the literals 10/2 and was
-        # never tunable. (num_links|None, chunks_per_sync, num_workers_per_link); None keeps 10/2.
-        # Measured N300 seq 2048, both gathers in a GDN layer: wpl 2 -> 2,487us, 8 -> 2,028us.
+        # (num_links or None, chunks_per_sync, num_workers_per_link); None keeps the 10/2 default.
         self.prefill_ag_tuning = prefill_ag_tuning
 
         # Flag to control whether all_gather is performed after distributed norm (can be disabled when output should remain sharded)
@@ -118,11 +116,7 @@ class DistributedNorm(LightweightModule):
         self.norm.update(weight=weight)
 
     def _ag_tuning(self, mode):
-        """(num_links, chunks_per_sync, num_workers_per_link) for this mode.
-
-        Falls back to the untuned defaults when the key is absent: a model may register a decode
-        entry without a prefill one (or neither), and the gather must still run.
-        """
+        """(num_links, chunks_per_sync, num_workers_per_link); missing keys use the untuned default."""
         if mode == "decode":
             cfg = self.args.model_config.get(self.ag_config_key) if self.ag_config_key else None
             if cfg:

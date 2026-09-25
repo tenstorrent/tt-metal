@@ -18,7 +18,7 @@ GDN_CONV1D_L1_SMALL_SIZE = 24576
 
 
 class Qwen36ModelArgs(ModelArgs):
-    """ModelArgs for the Qwen3.5 / 3.6 family (9B / 27B / 35B-A3B; dense + MoE); tuning gated in tp_common.py."""
+    """Tuning is gated in tp_common.py."""
 
     # Opt into base ModelArgs TP > n_kv_heads path; attention/tp.py replicates via replicate_kv_weight.
     SUPPORTS_KV_REPLICATION = True
@@ -39,14 +39,7 @@ class Qwen36ModelArgs(ModelArgs):
             offline = os.getenv("HF_HUB_OFFLINE") == "1" or os.getenv("CI") == "true"
             _snap = snapshot_download(hf_model, local_files_only=offline)
             os.environ["HF_MODEL"] = _snap
-            # ModelArgs takes model_name from HF_MODEL's BASENAME, which the line above just turned
-            # into an opaque snapshot hash ("c202236235..."), not "Qwen3.5-9B". Everything that keys
-            # off the hub name then misses -- notably the dummy_weights=True path, whose
-            # LOCAL_HF_PARAMS[model_name] lookup raised KeyError and took out every vision test that
-            # builds from dummy weights (test_vision_block, test_wrapped_model: 4 failures on both
-            # the 9B and the 27B). Alias the hash to whatever the friendly name already maps to, so
-            # the rewrite stays invisible to those lookups. Additive and idempotent: it only ever
-            # adds a key for a snapshot this process resolved, and never rebinds an existing one.
+            # Alias the snapshot-hash basename onto the friendly name's LOCAL_HF_PARAMS entry.
             _friendly = hf_model.strip("/").split("/")[-1]
             _params = ModelArgs.LOCAL_HF_PARAMS.get(_friendly)
             if _params is not None:
@@ -112,9 +105,7 @@ class Qwen36ModelArgs(ModelArgs):
         self.moe_decoder_sparse_step = getattr(text_config, "decoder_sparse_step", 1) or 1
         self.mlp_only_layers = set(getattr(text_config, "mlp_only_layers", None) or [])
 
-        # MTP (multi-token prediction) head. Every Qwen3.5/3.6 checkpoint ships a single-layer
-        # MTP head (mtp.*) that reuses the main embedding + LM head; it is the speculative-decode
-        # drafter. mtp_use_dedicated_embeddings=False means it shares tok_embeddings.
+        # mtp_use_dedicated_embeddings=False means the MTP head shares tok_embeddings.
         self.mtp_num_hidden_layers = getattr(text_config, "mtp_num_hidden_layers", 0)
         self.mtp_use_dedicated_embeddings = getattr(text_config, "mtp_use_dedicated_embeddings", False)
         self.has_mtp = self.mtp_num_hidden_layers > 0
@@ -178,15 +169,12 @@ class Qwen36ModelArgs(ModelArgs):
         self.gdn_conv_channel_chunks = 2 if self.moe_num_experts > 0 else 1
         self.gdn_z_dim_tp = self.gdn_z_dim // tp
         self.gdn_qkvz_dim_tp = (self.gdn_qkv_dim + self.gdn_z_dim) // tp
-        # Per-device width of the [qkv|z|a|b] fused in-projection. Folding the tiny a/b (decay/beta)
-        # projection into qkvz removes a whole decode matmul while keeping K=dim.
+        # Fused [qkv|z|a|b] width; folding a/b into qkvz keeps K=dim.
         if tpc.is_blackhole():
             self.gdn_ab_gap = 0
         else:
             self.gdn_ab_gap = -(-self.gdn_nv_tp // 32) * 32 - self.gdn_nv_tp
         self.gdn_qkvzab_dim_tp = self.gdn_qkvz_dim_tp + 2 * self.gdn_nv_tp + self.gdn_ab_gap
-        # No pad: geometry, cache key and decode progcfgs all use the natural width.
-        # The 2048x4096x6176 in-proj is K-PASS bound, not subblock bound -- cost tracks
         self.gdn_qkvzab_pad_tiles = 0
         self.gdn_value_dim_tp = self.gdn_value_dim // tp
         self.gdn_key_dim_tp = self.gdn_key_dim // tp
@@ -229,19 +217,12 @@ class Qwen36ModelArgs(ModelArgs):
         self.mlp_w3_progcfg = tpc.create_dram_sharded_matmul_program_config(M, self.dim, self.hidden_dim // tp)
         self.mlp_w2_progcfg = tpc.create_dram_sharded_matmul_program_config(M, self.hidden_dim // tp, self.dim)
 
-        # 1D decode MLP matmuls: small grids beat the ~80-core DRAM-sharded grid on the
         # bandwidth-bound skinny (M<=1) decode matmuls. Interleaved weights.
         self.decode_grid_w = mesh_device.compute_with_storage_grid_size().x
         self.mlp_1d_decode = True
-        # gate/up: 44 cores (11x4) on BH, the fastest measured (42.8us vs 43.9 for 8x4). On WH,
-        # swept at the exact production shape (M=32 K=4096 N=6144, test_mlp_decode_matmul_sweep.py):
         _gateup_9b = tpc.wh_9b_n300(self)
         _gateup_cores = 56 if _gateup_9b else (44 if tpc.is_blackhole() else 64)
-        # T3K only: lift create_matmul_1d_decode_progcfg's in0_block_w cap from 8 to 16. N=68 tiles
-        # here has no divisor between 35 and 64, so the core count is pinned at 34 and the K-block
-        # count is the only lever left. MEASURED 58.0 -> 52.1 us per matmul (1.11x) at identical
-        # PCC, and this config is used by the gate/up of EVERY layer, so it lands in verify as well
-        # as in the drafter. Left at 8 elsewhere: the other configs' shapes were not swept.
+        # T3K: in0_block_w cap 16; core count is pinned so the K-block is the lever.
         _gateup_cap = 16 if tpc.wh_t3k(self) else 8
         self.mlp_w1_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
             M,
@@ -262,7 +243,6 @@ class Qwen36ModelArgs(ModelArgs):
             fp32_acc=not _gateup_9b,
             in0_block_w_cap=_gateup_cap,
         )
-        # down: 33 cores (11x3) on BH, fastest measured (~63us). On WH this falls back to 8x5.
         self.mlp_w2_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
             M, self.hidden_dim // tp, self.dim, num_cores=33 if tpc.is_blackhole() else 64, grid_w=self.decode_grid_w
         )
@@ -273,8 +253,6 @@ class Qwen36ModelArgs(ModelArgs):
         self.attn_qkv_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
             M, self.dim, self.attn_qkv_fused_dim_tp, num_cores=64
         )
-        # gdn_qkvz: 44 cores (11x4) on BH, fastest measured (~59us). On WH the full 8x8=64-core grid
-        # measured 150.4us vs 8x6's 156.5us (-3.9%, no accuracy cost), matching attn_qkv above.
         self.gdn_qkvz_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
             M, self.dim, self.gdn_qkvzab_dim_tp, num_cores=44 if tpc.is_blackhole() else 64, grid_w=self.decode_grid_w
         )
@@ -283,13 +261,11 @@ class Qwen36ModelArgs(ModelArgs):
         self.attn_wo_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
             M, self.attn_out_dim_tp, self.dim, num_cores=33 if tpc.is_blackhole() else 48, grid_w=self.decode_grid_w
         )
-        # gdn_out: 33 cores (11x3) on BH, fastest measured (~24us; same 1536x5120 shape as attn_wo).
         self.gdn_out_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
             M, self.gdn_value_dim_tp, self.dim, num_cores=33, grid_w=self.decode_grid_w
         )
 
-        # Prefill matmul factory (M = seq_len), shared by the MLP down-proj and the attention/GDN
-        # in/out-projections. Blackhole's wider 8x10 grid fits the full per_core_N-wide CB; N300's
+        # Blackhole fits the full per-core-N CB; N300 does not.
         self._prefill_grid = tpc.prefill_grid_default()
         self.prefill_tuning = tpc.prefill_tuning(tp)
         if self.moe_num_experts > 0:
@@ -306,8 +282,7 @@ class Qwen36ModelArgs(ModelArgs):
             tuning=self.prefill_tuning,
             halve_out_block=tpc.wh_9b_n300(self),
         )
-        # WORMHOLE ONLY: one-K-pass factory for the GDN in-projection, paired with
-        # COMPUTE_HIFI2_NO_FP32_ACC (gdn/tp.py's _col_proj passes both -- the blocking is only legal
+        # Wormhole one-K-pass GDN in-proj; legal only with fp32 dest acc off.
         self.gdn_qkvzab_prefill_progcfg = (
             None
             if tpc.is_blackhole()
@@ -317,8 +292,7 @@ class Qwen36ModelArgs(ModelArgs):
                 )
             )
         )
-        # WORMHOLE ONLY: same one-K-pass fix for the fused attention QKV(+gate) in-projection.
-        # N=5120 (160 tiles) -> per_core_N=20 at 8 cols; fp32 dest acc caps the subblock at 4 (five
+        # Wormhole one-K-pass fused QKV; fp32 dest acc caps the subblock.
         self.attn_qkv_fused_prefill_progcfg = (
             None
             if tpc.is_blackhole()
@@ -328,8 +302,6 @@ class Qwen36ModelArgs(ModelArgs):
                 )
             )
         )
-        # WORMHOLE ONLY: same one-K-pass fix for the attention wo (output) projection. N=4096 (128
-        # tiles) -> per_core_N=16; fp32 dest acc on gives two K passes, off gives one. MEASURED
         self.attn_wo_prefill_progcfg = (
             None
             if tpc.is_blackhole()
@@ -344,9 +316,7 @@ class Qwen36ModelArgs(ModelArgs):
         self.act_shard_hidden = tpc.create_activation_shard_config(self.dim)
         self.act_shard_gdn_value = tpc.create_activation_shard_config(self.gdn_value_dim_tp)
         self.act_shard_attn_out = tpc.create_activation_shard_config(self.attn_out_dim_tp)
-        # Decode token embedding: width-sharded L1 on dim_tp, 32 cores (8x4). Interleaved lands on
-        # 1 core / ~21us at B=32; this layout is 3.0us and the all-gather consumes it directly
-        # (test_embedding_decode_sweep.py). None outside wh_9b_n300.
+        # Decode embedding: width-sharded L1. None outside wh_9b_n300.
         self.emb_decode_memcfg = tpc.create_activation_shard_config(self.dim // tp) if tpc.wh_9b_n300(self) else None
 
         # KV-cache height shard for paged_update_cache (one user per core).
@@ -360,13 +330,12 @@ class Qwen36ModelArgs(ModelArgs):
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
-        # Disjoint K/V grids for the fused paged-cache write (paged_fused_update_cache requires its
-        # two inputs' shard grids to be non-overlapping), collapsing 2 device programs into 1.
+        # Fused paged-cache write requires disjoint K/V shard grids.
         self.kv_cache_write_fused_enabled = (
             tpc.wh_9b_n300(self) and 2 * _rows <= mesh_device.compute_with_storage_grid_size().y
         )
         if self.kv_cache_write_fused_enabled:
-            # K -> SHIFTED half (it reshards from interleaved regardless, so the origin costs nothing)
+            # K on the shifted half.
             self.kv_cache_write_k_shard_cfg = ttnn.create_sharded_memory_config(
                 shape=(tpc.TILE_SIZE, self.head_dim),
                 core_grid=ttnn.CoreRangeSet(
@@ -376,8 +345,7 @@ class Qwen36ModelArgs(ModelArgs):
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
-            # V -> NATURAL half == kv_update_shard_cfg's grid == what the head split already emits,
-            # so forward_decode's equality guard skips V's reshard entirely.
+            # V on the natural half so the head-split grid matches and skips a reshard.
             self.kv_cache_write_v_shard_cfg = ttnn.create_sharded_memory_config(
                 shape=(tpc.TILE_SIZE, self.head_dim),
                 core_grid=ttnn.CoreRangeSet(
@@ -388,15 +356,9 @@ class Qwen36ModelArgs(ModelArgs):
                 use_height_and_width_as_shard_shape=True,
             )
 
-        # Permuted-head_dim full-width RoPE. ON for Wormhole 9B N300 (tpc.rope_permuted_enabled);
-        # see that helper for the measurements and attention/rope_tp.py's rope_channel_perm for the
-        # derivation.
         self.rope_permuted_enabled = tpc.rope_permuted_enabled(self)
-        # The ONE grid the decode rotary runs on, Q and K both: the natural one-user-per-core height
-        # shard, so a single cos/sin pair serves both.
+        # One decode-rotary grid for Q and K so one cos/sin pair serves both.
         self.rope_k_shard_cfg = self.kv_update_shard_cfg
-        # LOAD-BEARING: this grid becomes the grid of the q that reaches SDPA, which (see above)
-        # misreads any q not rooted at (0,0).
         if self.rope_permuted_enabled:
             _rope_q_origin = self.rope_k_shard_cfg.shard_spec.grid.bounding_box().start
             assert (_rope_q_origin.x, _rope_q_origin.y) == (0, 0), (
@@ -405,10 +367,6 @@ class Qwen36ModelArgs(ModelArgs):
                 "shard origin and reads from absolute (0,0) outward (silently, no assert). See the "
                 "root-cause note above and tests/perf/test_sdpa_decode_sharded_q_origin.py."
             )
-
-        # Attention projection weights stay bfloat8_b. bfp4 is a real -41% to -43% on these
-        # DRAM-bandwidth-bound decode matmuls, but costs 1.6-2.8% teacher-forced perplexity -- an
-        # order of magnitude past every other accuracy trade here (test_decode_weight_dtype_sweep.py).
 
     def _set_hf_params(self, checkpoint_dir):
         # trust_remote_code before base AutoConfig load.
@@ -506,12 +464,7 @@ class Qwen36ModelArgs(ModelArgs):
         if is_fp8_checkpoint(self.CKPT_DIR):
             return load_qwen36_state_dict_fp8(self.CKPT_DIR)
 
-        # Name the HF classes directly rather than going through AutoModelForCausalLM: under vLLM,
-        # vllm.transformers_utils.config registers its OWN Qwen3_5Config for model_type "qwen3_5",
-        # so AutoConfig hands back vLLM's class. transformers only unwraps a composite config to its
-        # text sub-config when `model_class.config_class == config.sub_configs["text_config"]`, an
-        # identity check that cannot hold across libraries -- the composite config would then reach
-        # Qwen3_5ForCausalLM and fail on `config.vocab_size`, which lives in text_config.
+        # Name HF classes directly: vLLM's Qwen3_5Config breaks AutoConfig's text-config identity check.
         #
         # Qwen3_5TextConfig.from_pretrained picks the `text_config` sub-dict on composite
         # (3.6 VLM) checkpoints via base_config_key, and reads a text-only (3.5) config.json

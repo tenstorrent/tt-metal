@@ -88,12 +88,7 @@ def test_gated_attention_pcc(device, setup, request):
 
 
 def test_gated_attention_decode_pcc(device, setup, request):
-    """Compare TTNN paged decode (the production decode branch) against torch for layer 3.
-
-    Fills a paged KV cache via paged prefill for a short prompt, then runs one paged
-    decode step and checks it against a torch reference computed over the full
-    prompt+decode sequence in one shot (equivalent to incremental KV-cache attention).
-    """
+    """Paged decode vs a full-sequence torch reference for layer 3."""
     from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup, compute_rope_freqs
     from models.experimental.gated_attention_gated_deltanet.torch_functional.gated_attention import (
         gated_attention_forward,

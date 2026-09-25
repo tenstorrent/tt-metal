@@ -175,14 +175,7 @@ class TestGetRotMats:
 
 
 class TestDeviceRopeConversions:
-    """Numerical coverage for the on-device rope paths.
-
-    These exist because the decode rope plumbing changed: cos/sin used to be computed on host and
-    packed (pack_rope_host / unpack_rope), and the old test_rope_pack_roundtrip only asserted
-    SHAPES of that now-retired path. Decode now sends a position index and gathers the rotation on
-    device (ttnn.embedding), and prefill slices the device table, so the live paths need VALUE
-    checks against the host trig reference -- a shape assertion would not catch a wrong rotation.
-    """
+    """On-device decode and prefill rope must match host trig, not just shapes."""
 
     @pytest.mark.parametrize("positions", [[0], [1], [7], [100], [1000], [4095], [0, 1, 5, 63]])
     def test_rot_mats_decode_matches_host_reference(self, rope_setup, positions):
@@ -210,8 +203,7 @@ class TestDeviceRopeConversions:
         assert cos_err < MAX_ABS_DIFF, f"decode cos rotation wrong at {positions}: err {cos_err}"
         assert sin_err < MAX_ABS_DIFF, f"decode sin rotation wrong at {positions}: err {sin_err}"
 
-    # Deliberately includes non-32-aligned start/length: the earlier implementation guarded on
-    # 32-alignment because it sliced a TILE table. The tables are ROW_MAJOR now, so these must work.
+    # Includes non-32-aligned slices. Tables are ROW_MAJOR, so tile alignment is not required.
     @pytest.mark.parametrize("start,length", [(0, 128), (0, 96), (7, 33), (128, 128), (1000, 64), (33, 97)])
     def test_get_prefill_rot_mats_matches_host_reference(self, rope_setup, start, length):
         """The prefill device slice must equal host trig over [start, start+length)."""
@@ -233,10 +225,7 @@ class TestDeviceRopeConversions:
         assert sin_err < MAX_ABS_DIFF, f"prefill sin wrong for start={start} length={length}: {sin_err}"
 
     def test_device_table_grows_beyond_initial_rows(self, rope_setup):
-        """A position past the current table end must grow the table, not silently wrap or clip.
-
-        This replaces the host-trig fallback that used to cover out-of-range positions.
-        """
+        """A position past the table end must grow the table, not wrap or clip."""
         from models.demos.blackhole.qwen36.tt.attention.rope_tp import _rope_dev_tables, rot_mats_decode
 
         setup, args = rope_setup

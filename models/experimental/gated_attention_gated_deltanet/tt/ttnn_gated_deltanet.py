@@ -17,10 +17,7 @@ from .ttnn_delta_rule_ops import (
 )
 from .ttnn_delta_rule_seq import chunk_gated_delta_rule_seq_adapter
 
-# Blackhole has ~1.84x Wormhole's total L1 (140 cores vs 80) and 80 interleave banks vs 64, so a
-# working set that fits beside the chunk-seq kernel's circular buffers there does not fit on
-# Wormhole -- short sequences failed as "clash with L1 buffers" at T <= 512. CBs are L1-only by
-# hardware, so the activations are what has to move.
+# Wormhole cannot keep chunk-seq activations in L1 beside the kernel circular buffers.
 _L1_SEQ_THRESHOLD = 512
 _L1_SEQ_THRESHOLD_WH = 0  # Wormhole: never L1
 
@@ -158,13 +155,7 @@ def _causal_conv1d_fir(
 
     x [B,T,D]; conv_state [B,K-1,D] or list of [B,1,D]; weight_taps/bias_dev optional.
     Returns output [B,T,D], new_state [B,K-1,D].
-
-    pad_layout: layout for x_padded. The K shifted windows read below start at rows 1..K-1, which
-        are never tile-aligned, and ttnn has no sub-tile row shift on TILE data -- so a TILE
-        x_padded makes every tap untilize the whole [B,(K-1)+T,D] tensor. Building it ROW_MAJOR
-        costs one untilize and lets each tap tilize only its own slice: same ops, same order, same
-        taps. Measured on N300 at T=2048/D=4096, UntilizeWithUnpadding 1,033us -> 15us (layer
-        19,941 -> 19,144us). None -> TILE on Blackhole (its validated path), ROW_MAJOR on Wormhole.
+    pad_layout: TILE has no sub-tile row shift, so None is ROW_MAJOR on Wormhole and TILE on Blackhole.
     """
     mc = memory_config
     B, T, D = x.shape[0], x.shape[1], x.shape[2]
@@ -240,15 +231,10 @@ def _causal_conv1d_fir(
 
     total_len = (kernel_size - 1) + T
     _dram = ttnn.DRAM_MEMORY_CONFIG
-    # Depthwise K-tap FIR via multiply + addcmul. Each tap tilizes only its own slice: with a TILE
-    # x_padded that is just k>=1 (k=0 alone is tile-aligned); with a ROW_MAJOR one it is every tap,
-    # which is the point -- one untilize up front instead of one per tap over the whole tensor.
+    # ROW_MAJOR x_padded must tilize every tap; TILE only retile k>=1.
     out = None
     for k in range(kernel_size):
         x_slice = x_padded[:, k : k + T]
-        # k != 0 keeps the original unconditional re-tilize (k=0 alone is tile-aligned); the
-        # layout test only ADDS the k=0 case, which a ROW_MAJOR x_padded needs. Blackhole is
-        # therefore bit-for-bit unchanged.
         if k != 0 or x_slice.layout != ttnn.TILE_LAYOUT:
             x_slice = ttnn.to_layout(x_slice, ttnn.TILE_LAYOUT)
         if out is None:

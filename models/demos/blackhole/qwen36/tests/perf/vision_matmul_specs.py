@@ -1,38 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Ground-truth inventory of every matmul the Qwen3.5 VISION TOWER issues.
-
-Two independent views of the same seven matmuls, so a tuning sweep can never silently drift
-from what the model actually runs:
-
-1. :func:`derive_specs` -- ANALYTIC. Builds the (M, K, N) / dtype / program-config / fidelity
-   table straight from ``VisionModelArgs`` (the same object the tower is built from), so it is
-   correct for any model + mesh combination: Qwen3.5-9B on N300 (TP=2, activations FRACTURED)
-   and Qwen3.5-27B on T3K (TP=8, activations REPLICATED -- see ``vision_ccl``).
-
-2. :func:`capture_specs` -- OBSERVED. Runs one real ``DropInVisionTransformer.forward`` with
-   ``ttnn.linear`` monkey-patched and records what every call site really passed.
-
-``assert_specs_match`` diffs the two. That is the gate that makes an isolated sweep the SAME
-experiment as the model (see the module-perf-optimization skill's rule 9): if someone changes a
-reshape granularity, a weight dtype or a fidelity in the tower, the sweep fails instead of
-optimizing a shape nothing runs.
-
-The seven matmuls, per device, for the demo image (grid 1x86x128 = 11008 patches -> 12288 padded)
-on N300 (TP=2), as the tower runs them after ``VisionModelArgs.vision_mm_plan`` was tuned:
-
-    patch_embed  5504 x 1536 x  576   bf16 x bf16   HiFi2       2D g6x8 ibw6  (+bias)
-    qkv          1536 x 1152 x 2304   bf16 x bf8b   HiFi2       2D g8x8 ibw18 (+bias folded in)
-    wo           4096 x  768 x 1152   bf8b x bf8b   LoFi        2D g6x8 ibw24
-    mlp_fc1      3072 x 1152 x 2176   bf16 x bf8b   HiFi2_fp16  2D g8x8 ibw6  (+bias, GELU fused)
-    mlp_fc2      1536 x 2176 x 1152   bf16 x bf8b   HiFi2_fp16  2D g6x8 ibw4  (L1 output)
-    merger_fc1   2752 x 4608 x 2304   bf16 x bf8b   HiFi2_fp16  auto (+bias, separate GELU)
-    merger_fc2   2752 x 2304 x 4096   bf16 x bf8b   HiFi2_fp16  auto
-
-``M`` is the PER-CHUNK row count: the tower reshapes ``[1, 1, S, K] -> [1, S/C, C, K]`` before each
-matmul (metadata-only on a TILE tensor) and the program config is sized for one chunk, so `qkv` runs
-as 8 chunks of 1536 rows, `wo` as 3 of 4096, and so on.
-"""
+"""Analytic and observed inventory of the seven vision-tower matmuls.
+assert_specs_match fails the sweep if the tower's shapes drift from derive_specs."""
 
 from __future__ import annotations
 
@@ -48,8 +17,7 @@ import ttnn
 
 SEQ_LEN_PAD = 2048
 
-# Call sites of the tower's seven matmuls, in the order each site issues them.
-# (module basename, ordinal within that basename) -> canonical family name.
+# (module basename, ordinal) -> family name, in the order each site issues them.
 _CALL_SITES = {
     ("patch_embed.py", 0): "patch_embed",
     ("vision_attention.py", 0): "qkv",
@@ -79,19 +47,12 @@ class MatmulSpec:
     has_bias: bool  # a bias the model folds into ttnn.linear via `bias=`
     separate_bias: bool  # a bias the model adds as its own op AFTER the matmul
     activation: str | None  # the activation this matmul applies, whatever the mechanism
-    # True when the tower folds `activation` into the program config's `fused_activation` instead of
-    # passing ttnn.linear's `activation=` kwarg (which dispatches a separate unary op). Either way the
-    # activation IS part of this matmul's cost -- a sweep that dropped it would compare a bare matmul
-    # against the model's matmul+GELU and report a bogus 1.3x.
+    # Fused activation is part of this matmul's cost; dropping it scores a bare matmul against matmul+GELU.
     activation_fused: bool = False
-    # True when the tower lands this matmul's OUTPUT in L1 rather than DRAM. The baseline candidate
-    # has to reproduce it, or the sweep compares a DRAM baseline against L1 candidates and reports
-    # the L1 win twice.
+    # Baseline must use the tower's L1 output or an L1 win is counted twice.
     out_l1: bool = False
     baseline_progcfg: Any = None  # None == the model leaves this matmul on `auto`
-    # True for a ROW-parallel matmul: its output is a partial sum, and the model adds the bias only
-    # after the all-reduce / reduce-scatter. Folding such a bias into the matmul is numerically
-    # WRONG (the collective would sum it TP times), so the sweep must not offer it.
+    # Row-parallel bias is added after the collective. Folding it in sums the bias TP times.
     bias_after_collective: bool = False
     notes: str = ""
 
@@ -151,12 +112,7 @@ def padded_seq_len(n_patches: int) -> int:
 
 
 def derive_specs(model_args, n_patches: int) -> dict[str, MatmulSpec]:
-    """Analytic per-device matmul table for one image of ``n_patches`` patches.
-
-    Every dimension is read off ``model_args`` (which the tower itself is built from), so this
-    is automatically right for 9B/N300 (TP=2, fractured acts) and 27B/T3K (TP=8, replicated
-    acts) without a per-model table.
-    """
+    """Analytic per-device matmul table. Dimensions come from model_args, so TP layout is included."""
     vcfg = model_args.hf_config.vision_config
     tile = model_args.tile_size
     tp = model_args.cluster_shape[1]
@@ -164,30 +120,25 @@ def derive_specs(model_args, n_patches: int) -> dict[str, MatmulSpec]:
 
     seq_len = padded_seq_len(n_patches)
     dim = model_args.dim
-    # The block I/O contract: fractured along dim=3 unless TP cannot split dim into whole tiles.
+    # Fractured on dim=3 unless TP cannot split dim into whole tiles.
     dim_local = dim if model_args.vision_replicated_acts else dim // tp
 
-    # --- patch embed: Conv3d folded to a linear over the already-patchified pixels ---
     pixel_dim = vcfg.in_channels * vcfg.temporal_patch_size * vcfg.patch_size**2
     embed_rows = math.ceil(n_patches / tile) * tile  # VisionEmbed rounds uploaded rows to a tile
 
-    # --- attention ---
     padded_head_dim = model_args.padded_head_dim
     n_local_heads = model_args.n_heads // tp
     n_local_kv_heads = model_args.n_kv_heads // tp
     local_qkv = (n_local_heads + 2 * n_local_kv_heads) * padded_head_dim
     wo_k = n_local_heads * padded_head_dim
 
-    # --- MLP ---
     hidden_local = model_args.hidden_dim // tp
 
-    # --- merger (consumes the tower output sliced back to the REAL patch count) ---
     merged_rows = n_patches // (merge**2)
     mlp_size = vcfg.hidden_size * (merge**2)
     mlp_local = mlp_size // tp
 
-    # Every matmul's chunk / program config / fidelity now comes from the tower's own planner, so
-    # the sweep automatically re-baselines whenever the tuning table changes.
+    # Chunk, program config, and fidelity come from the tower planner, so the baseline tracks the tuning table.
     plans = {
         "patch_embed": model_args.vision_mm_plan(
             "patch_embed",
@@ -272,8 +223,7 @@ def derive_specs(model_args, n_patches: int) -> dict[str, MatmulSpec]:
             separate_bias=separate_bias,
             bias_after_collective=after_ccl,
             activation=act,
-            # With a program config the tower fuses the activation INTO the matmul; the `activation=`
-            # kwarg (a separate unary op) only survives on the auto-config fallback.
+            # With a program config the activation is fused; activation= is only the auto-config fallback.
             activation_fused=bool(act) and plan.program_config is not None,
             out_l1=plan.memory_config is ttnn.L1_MEMORY_CONFIG,
             baseline_progcfg=plan.program_config,
@@ -295,7 +245,7 @@ def derive_specs(model_args, n_patches: int) -> dict[str, MatmulSpec]:
             act=None,
             notes="VisionEmbed.forward -- runs once per image, not per block",
         ),
-        # The qkv bias is folded into the matmul (column-parallel: the output is final).
+        # qkv bias is folded in: the column-parallel output is final.
         "qkv": _spec(
             "qkv",
             rows=seq_len,
@@ -382,9 +332,6 @@ def derive_specs(model_args, n_patches: int) -> dict[str, MatmulSpec]:
         ),
     }
     return specs
-
-
-# --------------------------------------------------------------------------------------- capture
 
 
 @dataclass
@@ -478,7 +425,7 @@ def assert_specs_match(specs: dict[str, MatmulSpec], calls: dict[str, CapturedCa
         spec, call = specs[name], calls[name]
         got_in0, got_in1 = call.in0_shape, call.in1_shape
         want_in0, want_in1 = spec.in0_shape, spec.in1_shape
-        # in0 is 4D [1, batch, chunk, K]; a batch of 1 may be reported as rank<4 by some ops.
+        # in0 is 4D [1, batch, chunk, K]; batch 1 may be reported as rank < 4.
         if tuple(got_in0[-2:]) != (spec.chunk, spec.k) or math.prod(got_in0[:-2]) != spec.batch:
             problems.append(f"{name}: in0 {got_in0} != analytic {want_in0}")
         if tuple(got_in1[-2:]) != (spec.k, spec.n):

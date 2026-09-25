@@ -107,9 +107,7 @@ class MLP(LightweightModule):
             cache_file_name=cache_name("linear_fc2_w_row"),
         )
 
-        # The bias must match how the output is distributed: sharded along dim=3 when the output is
-        # fractured by the reduce_scatter, replicated when the out-projection all-reduces to a
-        # full-width tensor instead (args.vision_replicated_acts — see vision_ccl).
+        # Bias sharding matches the output: fractured, or replicated when vision_replicated_acts.
         self.replicated_acts = getattr(args, "vision_replicated_acts", False)
         self.linear_fc2_bias = ttnn.as_tensor(
             torch_bias("linear_fc2"),
@@ -126,8 +124,7 @@ class MLP(LightweightModule):
         self.four_bit_mlp = args.optimizations.bfp4_mlp
 
     def fc1_plan(self, seq_len: int, in0_dtype=ttnn.bfloat16):
-        """The fc1 matmul's plan -- `VisionBlock` reads `.in0_memory_config` off it so `ff_norm`
-        writes fc1's input where it is fastest to read."""
+        """fc1 matmul plan; VisionBlock uses in0_memory_config for ff_norm's output."""
         return self.args.vision_mm_plan(
             "mlp_fc1",
             rows=seq_len,
@@ -166,12 +163,9 @@ class MLP(LightweightModule):
             program_config=fc1_plan.program_config,
         )
 
-        # Release the norm output the moment fc1 has consumed it. Holding it until the caller returns
-        # keeps 432 KB/core of L1 occupied across fc2 too (ff_in + fc2 in + fc2 out + CBs = 1769 KB
-        # against 1432), which clashes. Ownership matches VisionAttention, which also frees its input.
+        # Free the norm output now; holding it through fc2 overflows L1.
         ttnn.deallocate(x)
 
-        # fc2 picks its own row chunk; the reshape between the two is metadata-only on a TILE tensor.
         fc2_plan = self.args.vision_mm_plan(
             "mlp_fc2",
             rows=seq_len,
@@ -199,9 +193,7 @@ class MLP(LightweightModule):
         )
         ttnn.deallocate(w1_out)
 
-        # On T3K/QB2 `tt_all_reduce(dim=3)` is implemented as a reduce_scatter, so the result is
-        # fractured along dim=3 -- exactly the block I/O contract that the LLM uses. When dim cannot
-        # be split into whole tiles per device, all-reduce to a replicated full-width tensor instead.
+        # reduce_scatter when fractured; all-reduce to full width when dim is not tile-divisible.
         if self.replicated_acts:
             w2_frac = all_reduce_replicated(
                 w2_partial,

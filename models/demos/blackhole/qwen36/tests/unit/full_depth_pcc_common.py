@@ -1,72 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Shared harness for the full-depth (ALL layers, real weights) logits PCC tests.
-
-``test_prefill.py`` and ``test_decode.py`` both drive the **whole** model — every
-layer, the checkpoint's real weights, the shipped bfp8 dtypes — against the
-HuggingFace reference ``Qwen3_5ForCausalLM``, and both need the same setup: the
-mesh, the full-depth model, a paged KV cache, a deterministic prompt, and the HF
-forward to compare against. That setup lives here so the two test files stay short
-and cannot drift apart.
-
-Why this exists at all
-----------------------
-Every other model-level test in this suite compares TT against TT — the contract
-path (``prefill_paged`` + the Generator decode chain) against the bespoke
-``prefill_tp``/``decode_tp`` oracle — and all of them run a truncated stack
-(``n_layers=4`` in the unit tests, ``8`` in the TP ones). That answers "do the two
-TT paths agree", never "does the whole stack agree with the reference
-implementation": a per-layer bias, a wrong RoPE section split, or a GDN state that
-decays slightly wrong is invisible to a TT-vs-TT oracle and is diluted to nothing
-when only 4 or 8 of the 32 (or 64) layers run.
-
-One harness, both checkpoints
------------------------------
-Nothing here is model-specific: the checkpoint comes from ``HF_MODEL`` and the mesh
-from ``MESH_DEVICE``, exactly like the demo. The same two tests cover
-
-* Qwen3.5-9B  — ``HF_MODEL=Qwen/Qwen3.5-9B``  with ``MESH_DEVICE=P150`` (single
-  Blackhole) or ``MESH_DEVICE=N300`` (Wormhole, TP=2), 32 layers
-* Qwen3.6-27B — ``HF_MODEL=Qwen/Qwen3.6-27B`` with ``MESH_DEVICE=P150x4`` (or
-  ``T3K``), 64 layers
-
-and ``build_full_depth_model`` asserts the stack really is full depth
-(``n_layers == num_hidden_layers``), so a stray truncation cannot make either test
-pass cheaply.
-
-Reference notes
----------------
-* The HF model is the **text-only** ``Qwen3_5ForCausalLM`` built on
-  ``Qwen3_5TextConfig`` — the same pair ``Qwen36ModelArgs.load_state_dict`` uses, so
-  the composite (3.6 VLM) checkpoint and the text-only (3.5) one both resolve to the
-  weights the TT model loaded. ``output_loading_info`` is checked for missing keys:
-  a prefix mismatch would otherwise silently leave a randomly-initialised reference
-  and the PCC would be measured against noise.
-* It runs at the checkpoint's bf16 (``QWEN36_FULL_DEPTH_REF_DTYPE=float32`` to
-  upcast), on CPU, with ``use_cache=True`` so a decode step continues from the same
-  prompt state the TT decode does.
-
-Measured (Wormhole, bf16 HF reference, 128-token prompt, 5 decode steps)
------------------------------------------------------------------------
-* 9B  / N300 (TP=2), 32 layers: see the main README's "PCC results" table for current numbers
-  (this docstring's own copy drifted stale against it — don't duplicate the numbers here again).
-* 27B / T3K  (TP=8), 64 layers: prefill 0.9957; decode 0.9922 0.9595 0.9876
-  0.9909 0.9801 (min 0.9595, mean 0.9821)
-
-The gates in ``pcc_thresholds.json`` sit below the worse of the two with ~1% margin
-(prefill 0.98, decode 0.95): one flat function-keyed table serves both checkpoints,
-so a per-model number would only be reachable by making the key model-dependent —
-which that table deliberately is not. They are REGRESSION DETECTORS at this prompt
-and this length, not accuracy targets. A single step's full-vocab PCC over 248320
-logits is a coarse instrument (row variance, not device error, moves it), so read
-the per-step lines and the argmax/top-5 agreement the tests log, not just the
-pass/fail. Decode is the looser mode because each step also carries whatever the GDN
-recurrent + conv state and the paged KV accumulated, while prefill is one clean pass.
-
-Env knobs: ``QWEN36_FULL_DEPTH_PROMPT_LEN`` (default 128, keep it a multiple of the
-GDN chunk size 128 — the TP prefill runs the chunk-seq kernel over the whole span),
-``QWEN36_FULL_DEPTH_DECODE_STEPS`` (default 5), ``QWEN36_FULL_DEPTH_REF_DTYPE``.
-"""
+"""Shared full-depth, real-weight logits PCC harness for prefill and decode vs HuggingFace.
+Prompt length must be a multiple of the GDN chunk size 128. Floors are regression detectors."""
 
 import gc
 import os
@@ -79,9 +14,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc, is_blackhole, run_for_wormhole_b0_or_blackhole
 from models.demos.blackhole.qwen36.tt.model_config import GDN_CONV1D_L1_SMALL_SIZE
 
-# Mesh shape from MESH_DEVICE, same table the demo uses (a 9B on Wormhole needs the
-# 2-chip N300: a single N150 cannot hold it). Falls back to every visible device,
-# capped at 4 — the widest TP the 27B ships with.
+# Mesh from MESH_DEVICE. A 9B on Wormhole needs the 2-chip N300.
 MESH_SHAPE = {
     "P150": (1, 1),
     "P150x4": (1, 4),
@@ -92,11 +25,7 @@ MESH_SHAPE = {
 }.get(os.environ.get("MESH_DEVICE"), (1, min(len(ttnn.get_device_ids()), 4)))
 _MULTI = MESH_SHAPE != (1, 1)
 
-# Multi-device needs FABRIC_1D for the TP CCLs and the l1_small_size the GDN prefill
-# ttnn.conv1d allocates from. Single device never reaches that conv (it runs the MAC
-# FIR instead), and on Wormhole that unused 24KB/core reservation is exactly what the
-# chunk-seq kernel's static circular buffers collide with — same split
-# tests/test_prefill.py makes for the same reason.
+# Multi-device needs FABRIC_1D and l1_small for GDN conv1d. Wormhole single-device must not reserve it.
 _L1_SMALL = GDN_CONV1D_L1_SMALL_SIZE if (_MULTI or is_blackhole()) else 4096
 DEVICE_PARAMS = [
     {
@@ -107,15 +36,13 @@ DEVICE_PARAMS = [
 ]
 
 BLOCK_SIZE = 64
-# 32 blocks x 64 = 2048 tokens of KV budget, and a multiple of 32 so the chunked-SDPA
-# page-table alignment the demo rounds to holds here too.
+# 32 blocks, a multiple of 32 so chunked-SDPA page-table alignment holds.
 NUM_BLOCKS = 32
 
 PROMPT_LEN = int(os.environ.get("QWEN36_FULL_DEPTH_PROMPT_LEN", "128"))
 DECODE_STEPS = int(os.environ.get("QWEN36_FULL_DEPTH_DECODE_STEPS", "5"))
 
-# Long enough to tokenize past any prompt length these tests use; deterministic text so
-# the measured PCCs are comparable run to run.
+# Deterministic text, long enough for any prompt these tests use.
 _PROMPT_TEXT = (
     "The history of computing hardware spans several distinct eras. Mechanical calculators gave way to "
     "relay machines, relays to vacuum tubes, tubes to discrete transistors, and transistors to the "
@@ -129,11 +56,7 @@ _PROMPT_TEXT = (
 
 
 def parametrize_full_depth():
-    """The env-selected mesh + the device params both full-depth tests need.
-
-    One decorator rather than three copied ``@parametrize`` lines per file, so the
-    two tests cannot end up running on differently-configured devices.
-    """
+    """Env-selected mesh and device params, shared so the two tests cannot diverge."""
 
     def decorator(fn):
         fn = pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)(fn)
@@ -146,16 +69,7 @@ def parametrize_full_depth():
 
 
 def build_full_depth_model(mesh_device, *, max_seq_len=None, prompt_len=None):
-    """Full-depth TT model + tokenizer + a ``[1, prompt_len]`` prompt.
-
-    No ``n_layers`` / ``layer_indices`` truncation, and the depth is asserted rather
-    than assumed — a truncated stack would still produce plausible logits and quietly
-    turn this into a much weaker test.
-
-    ``max_seq_len`` / ``prompt_len`` default to this module's single-prompt geometry;
-    the teacher-forcing e2e test passes its own, since it consumes far more than one
-    prompt's worth of positions.
-    """
+    """Full-depth TT model. Depth is asserted so a truncated stack cannot pass quietly."""
     from transformers import AutoTokenizer
 
     from models.demos.blackhole.qwen36.tt.model import Qwen36Model
@@ -181,27 +95,14 @@ def build_full_depth_model(mesh_device, *, max_seq_len=None, prompt_len=None):
 
 
 def _build_prompt(tokenizer, length):
-    """Deterministic ``[1, length]`` prompt of exactly ``length`` real tokens (no padding).
-
-    Padding would be wrong here, not merely wasteful: the single-device
-    ``prefill_paged`` reads its logit from the LAST row of the sequence it was given
-    (``x[:, -1:, :]``), not from ``valid_len - 1``, so a right-padded prompt would
-    compare a pad position's logit against HF's real one.
-    """
+    """Exactly ``length`` real tokens. prefill_paged reads the last row, so right-padding would score a pad."""
     ids = tokenizer(_PROMPT_TEXT, return_tensors="pt").input_ids
     assert ids.shape[1] >= length, f"prompt text tokenizes to {ids.shape[1]} tokens, need {length}"
     return ids[:, :length].to(torch.long)
 
 
 def hf_reference(ckpt_dir, token_ids, decode_steps=0):
-    """HF prefill + ``decode_steps`` greedy decode steps on CPU, then free the model.
-
-    Returns ``(prefill_logits [vocab], [decode_logits [vocab], ...], [teacher_token, ...])``
-    where ``teacher_token[k]`` is the token HF *fed* at decode step ``k`` (its own
-    argmax from the previous step), so TT can be driven with the identical inputs and
-    step ``k``'s PCC measures step ``k`` rather than the compounding of a greedy
-    divergence at step 0. ``decode_steps=0`` returns just the prefill logits.
-    """
+    """HF prefill plus greedy decode. Returned teacher tokens let TT replay the same inputs."""
     from transformers.models.qwen3_5 import Qwen3_5ForCausalLM, Qwen3_5TextConfig
 
     ref_dtype = getattr(torch, os.environ.get("QWEN36_FULL_DEPTH_REF_DTYPE", "bfloat16"))
@@ -210,9 +111,7 @@ def hf_reference(ckpt_dir, token_ids, decode_steps=0):
     hf_model, loading_info = Qwen3_5ForCausalLM.from_pretrained(
         ckpt_dir, config=text_config, dtype=ref_dtype, output_loading_info=True
     )
-    # A composite 3.6 VLM checkpoint carries visual.*/mtp.* the text-only class does not
-    # want (unexpected keys are fine); a MISSING key means a weight stayed at its random
-    # init and every PCC below would be measured against noise.
+    # Unexpected visual.*/mtp.* keys are fine; a missing key leaves a weight at random init.
     assert not loading_info["missing_keys"], f"HF reference has uninitialized weights: {loading_info['missing_keys']}"
     hf_model.eval()
 
@@ -237,11 +136,7 @@ def hf_reference(ckpt_dir, token_ids, decode_steps=0):
 
 
 def allocate_paged_kv(model, num_blocks=NUM_BLOCKS):
-    """Paged KV cache + GDN external state; returns the identity page table.
-
-    ``num_blocks`` must cover every position the caller will touch — prompt plus, for
-    a decode loop, every step it will take.
-    """
+    """Paged KV plus GDN state. num_blocks must cover every position the caller will touch."""
     args = model.args
     n_kv = args.n_local_kv_heads if model.num_devices > 1 else args.n_kv_heads
     model.allocate_kv_caches([num_blocks, n_kv, BLOCK_SIZE, args.head_dim], ttnn.bfloat16, batch_size=1)
@@ -249,12 +144,7 @@ def allocate_paged_kv(model, num_blocks=NUM_BLOCKS):
 
 
 def tt_prefill_logits(model, token_ids, page_table):
-    """Whole prompt through every layer via ``prefill_paged``; returns ``[vocab]`` fp32.
-
-    ``prefill_paged`` is the trusted non-traced path the other prefill tests are
-    validated against, and it leaves behind exactly what decode reads: the paged KV of
-    the full-attention layers plus each GDN layer's recurrent + conv state.
-    """
+    """Whole prompt via prefill_paged. Leaves the KV and GDN state decode reads."""
     vocab = model.args.vocab_size
     tt_logits = model.prefill_paged(token_ids, page_table, valid_len=token_ids.shape[1])
     if model.num_devices > 1:
@@ -268,12 +158,7 @@ def tt_prefill_logits(model, token_ids, page_table):
 
 
 def tt_decode_logits(model, token, position, page_table):
-    """One decode step through the vLLM contract path; returns ``[vocab]`` fp32.
-
-    ``prepare_inputs_decode`` → ``ttnn_decode_forward`` → ``process_output_decode`` is
-    the chain vLLM and the demo drive, so this gates the shipped decode entry point
-    rather than a test-only shortcut.
-    """
+    """One decode step through prepare_inputs_decode, ttnn_decode_forward, process_output_decode."""
     dev = model.prepare_inputs_decode(
         torch.tensor([[token]], dtype=torch.int32), torch.tensor([position], dtype=torch.int32), page_table
     )
@@ -284,12 +169,7 @@ def tt_decode_logits(model, token, position, page_table):
 
 
 def report(label, hf_logits, tt_logits, tokenizer):
-    """PCC + argmax/top-5 agreement for one position; returns the PCC.
-
-    The argmax and top-5 lines are the point of logging rather than asserting: a
-    full-vocab PCC and a next-token disagreement mean different things, and at 248320
-    near-tied logits the second is not by itself a defect.
-    """
+    """PCC plus argmax/top-5 for one position. Near-tied logits can disagree without a defect."""
     _, pcc = comp_pcc(hf_logits, tt_logits, 0.0)
     hf_tok, tt_tok = int(hf_logits.argmax()), int(tt_logits.argmax())
     overlap = len(set(hf_logits.topk(5).indices.tolist()) & set(tt_logits.topk(5).indices.tolist()))
