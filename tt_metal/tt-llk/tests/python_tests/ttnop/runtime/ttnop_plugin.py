@@ -440,8 +440,7 @@ def pytest_runtest_call(item):
     unwatch = perturber.watch_baseline()
     _hb().beat(item.nodeid)
     try:
-        with quiet_harness():
-            outcome = yield
+        outcome = yield
 
         # A test that was already red tells us nothing about timing.
         if outcome.excinfo is not None:
