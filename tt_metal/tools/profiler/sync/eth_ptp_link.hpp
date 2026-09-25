@@ -413,73 +413,32 @@ struct Grid {
     }
 };
 
-// The records: one per stamp average, this core's refclk-domain reading against its wall clock with the round's
-// number and the stamp's role, so the host pairs the two ends by identity and fits refclk against refclk: DVFS on
-// either chip's wall clock cannot enter the link solve. They go to the ring at the end of this core's link L1
-// (hostdev kLinkSyncRingOffset), its count published in this core's profiler control vector for the pusher's sweep.
-// A record's (wall, refclk) pair is read at a refclk update, so the host's AICLK-to-AICLK check of the round reads the
-// wall clock to a cycle: the round's records are held until one of a step's kPollTries bracketed attempts lands, so
-// no step spins for one (read_bracketed takes up to ~5 us).
+// The records: one per stamp average, this core's refclk-domain reading with the round's number and the stamp's role,
+// so the host pairs the two ends by identity and fits refclk against refclk: DVFS on either chip's wall clock cannot
+// enter the link solve. They go to the ring at the end of this core's link L1 (hostdev kLinkSyncRingOffset), its count
+// published in this core's profiler control vector for the pusher's sweep.
 namespace link {
 constexpr uint32_t kRoleT0 = kernel_profiler::kSyncRoleT0;
 constexpr uint32_t kRoleT1 = kernel_profiler::kSyncRoleT1;
 constexpr uint32_t kRoleT1B = kernel_profiler::kSyncRoleT1B;
 constexpr uint32_t kRoleT2 = kernel_profiler::kSyncRoleT2;
 struct Ring {
-    static constexpr uint32_t kPollTries = 8;
-    struct Held {
-        uint64_t value;
-        uint32_t round, role;
-    };
-    uint32_t base = 0, n = 0, held = 0;
-    Held hold[2] = {};
+    uint32_t base = 0, n = 0;
     volatile uint32_t* tail = nullptr;
     void open(uint32_t l1) {
         base = l1 + kernel_profiler::kLinkSyncRingOffset;
         n = 0;
-        held = 0;
         tail = reinterpret_cast<volatile uint32_t*>(GET_MAILBOX_ADDRESS_DEV(profiler.control_vector)) +
                kernel_profiler::SPSC_LINK_SYNC_TAIL;
         *tail = 0;
     }
     void record_hw(uint64_t value, uint32_t round, uint32_t role) {
-        if (held < 2) {
-            hold[held++] = Held{value, round, role};
-        }
-    }
-    FORCE_INLINE void poll() {
-        if (held != 0) {
-            poll_held();
-        }
-    }
-
-private:
-    __attribute__((noinline)) void poll_held() {
-        Instant t = read_instant();
-        uint32_t x = t.wall_lo | 1u;
-        for (uint32_t i = 0; i < kPollTries; i++) {
-            if (try_bracket(t, x)) {
-                t.spins = i + 1;
-                for (uint32_t j = 0; j < held; j++) {
-                    write(t, hold[j].value, hold[j].round, hold[j].role);
-                }
-                held = 0;
-                return;
-            }
-        }
-    }
-    void write(const Instant& t, uint64_t value, uint32_t round, uint32_t role) {
         volatile uint32_t* r = reinterpret_cast<volatile uint32_t*>(
             base + (n % kernel_profiler::kLinkSyncRingRecords) * kernel_profiler::kSyncRecordWords * 4);
-        r[kernel_profiler::SYNC_META] =
-            ((t.spins < 0xFFFFu ? t.spins : 0xFFFFu) << 16) | (kernel_profiler::kSyncKindLink << 8) | role;
+        r[kernel_profiler::SYNC_META] = (kernel_profiler::kSyncKindLink << 8) | role;
         r[kernel_profiler::SYNC_ROUND] = round;
         r[kernel_profiler::SYNC_VALUE_LO] = static_cast<uint32_t>(value);
         r[kernel_profiler::SYNC_VALUE_HI] = static_cast<uint32_t>(value >> 32);
-        r[kernel_profiler::SYNC_WALL_LO] = t.wall_lo;
-        r[kernel_profiler::SYNC_WALL_HI] = t.wall_hi;
-        r[kernel_profiler::SYNC_REF_LO] = static_cast<uint32_t>(t.refclk);
-        r[kernel_profiler::SYNC_REF_HI] = static_cast<uint32_t>(t.refclk >> 32);
         asm volatile("fence" ::: "memory");
         *tail = ++n;
     }
@@ -581,7 +540,6 @@ struct SenderLink : EndBase {
         slot_wall = now.wall_lo + ((static_cast<uint32_t>(ticks < 0 ? 0 : ticks) * grid.c16()) >> 4);
     }
     FORCE_INLINE void step() {
-        ring.poll();
         if (out_sent != kBurstFrames) {
             send_next();
             return;
@@ -679,7 +637,6 @@ struct ReceiverLink : EndBase {
     // before that frame's echo: the sender issues nothing more until every echo is in. An echo the queue did not take
     // goes at the next step.
     FORCE_INLINE void step() {
-        ring.poll();
         if constexpr (DataCache) {
             invalidate_l1_cache();
         }

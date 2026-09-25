@@ -18,7 +18,7 @@
 
 constexpr uint32_t kPointTicks = get_compile_time_arg_val(0);  // refclk between the open segment's points (50/us)
 constexpr uint32_t kCtrlAddr =
-    get_compile_time_arg_val(1);  // done +0, heartbeat +4, go +8, sync tail +12, head +16, stop +64
+    get_compile_time_arg_val(1);  // done +0, heartbeat +4, go +8, sync tail +12, head +16, drops +20, stop +64
 constexpr uint32_t kPllAddr = get_compile_time_arg_val(2);       // a 64 B-aligned L1 scratch for the PLL reads
 constexpr uint32_t kSyncRingAddr = get_compile_time_arg_val(3);  // this core's instants, kSyncRingRecords of them
 constexpr uint32_t kArcXy = get_compile_time_arg_val(4);         // the ARC tile, x | y << 16
@@ -50,9 +50,9 @@ namespace eth_ptp = tt::tt_metal::eth_ptp;
 
 // This core's instants, in a ring of kSyncRingRecords the drainer reads over the NoC: the tail is published in the
 // control block, the drainer writes the count it consumed back beside it. An instant the ring has no room for is
-// dropped; this loop never waits for the drainer.
+// dropped and counted; this loop never waits for the drainer.
 namespace sync {
-static uint32_t g_tail = 0;
+static uint32_t g_tail = 0, g_dropped = 0;
 inline volatile tt_l1_ptr uint32_t* rec(uint32_t i) {
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
         kSyncRingAddr + (i % kp::kSyncRingRecords) * kp::kSyncRecordWords * 4u);
@@ -60,6 +60,7 @@ inline volatile tt_l1_ptr uint32_t* rec(uint32_t i) {
 inline void emit(uint32_t meta, uint32_t round, uint64_t value, uint64_t wall, uint32_t ref_lo, uint32_t ref_hi) {
     const uint32_t head = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kCtrlAddr + 16);
     if (g_tail - head >= kp::kSyncRingRecords) {
+        g_dropped++;
         return;
     }
     volatile tt_l1_ptr uint32_t* r = rec(g_tail);
@@ -132,6 +133,7 @@ struct Model {
     uint32_t win_r[kWin] = {}, win_w8[kWin] = {};
     uint32_t win_n = 0;  // samples pushed; sample i is at i & (kWin - 1)
     uint32_t done = 0;   // samples before this one are in a window or sent
+    uint32_t lost = 0;   // samples dropped before a read could place them
 };
 
 inline uint64_t widen(uint64_t ref, uint32_t lo) {
@@ -141,6 +143,7 @@ inline uint64_t widen(uint64_t ref, uint32_t lo) {
 FORCE_INLINE void win_push(Model& m, uint32_t r, uint32_t w8) {
     if (m.win_n - m.done >= Model::kWin) {
         m.done = m.win_n - Model::kWin + 1;
+        m.lost++;
     }
     m.win_r[m.win_n & (Model::kWin - 1)] = r;
     m.win_w8[m.win_n & (Model::kWin - 1)] = w8;
@@ -470,7 +473,11 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* hb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kCtrlAddr + 4);
     volatile tt_l1_ptr uint32_t* go = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kCtrlAddr + 8);
     volatile tt_l1_ptr uint32_t* stop = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kCtrlAddr + 64);
+    volatile tt_l1_ptr uint32_t* dropped =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kCtrlAddr + kp::kPusherDroppedOffset);
     *done = 0;
+    dropped[0] = 0;
+    dropped[1] = 0;
     *hb = 0;
     *go = 0;
     *stop = 0;
@@ -513,6 +520,8 @@ void kernel_main() {
         model::close_window(m, kp::kSyncLocalPoint);
     }
     pack::flush();
+    dropped[0] = m.lost;
+    dropped[1] = sync::g_dropped;
     *done = kp::kRelayDoneWord;
 #endif
 }

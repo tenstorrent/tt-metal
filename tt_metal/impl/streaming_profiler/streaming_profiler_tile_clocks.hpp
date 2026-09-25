@@ -33,13 +33,6 @@ struct TileClock {
 
 struct TileClocks {
     std::vector<TileClock> tiles;
-    // A DRAM tile's reading of a tile in its row at bring-up, 2 * (tile wall - bracket midpoint) in ticks: the drift
-    // check at capture end takes the same reading again.
-    struct RowReading {
-        uint32_t reader, tile;
-        int32_t median2;
-    };
-    std::vector<RowReading> row_readings;
     const TileClock* find(CoreType type, const CoreCoord& logical) const;
 };
 
@@ -47,9 +40,5 @@ struct TileClocks {
 // MUST run before the fabric and dispatch firmware: every Tensix, eth and DRAM core is launched on, one tile reading
 // at a time.
 void measure_tile_clocks(IDevice* device, ContextId context_id);
-
-// The DRAM tiles read their rows again and the largest change since bring-up is logged. Nothing of ours may be on
-// the DRAM cores.
-void check_tile_clock_drift(IDevice* device, ContextId context_id);
 
 }  // namespace tt::tt_metal::streaming_profiler

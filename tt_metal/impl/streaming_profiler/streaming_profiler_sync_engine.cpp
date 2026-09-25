@@ -49,6 +49,7 @@ constexpr Key key_max() {
 }
 
 constexpr uint32_t kHostSeries = std::numeric_limits<uint32_t>::max();
+constexpr uint32_t kSteadySeries = kHostSeries - 1;
 
 template <typename Key>
 struct Log {
@@ -70,7 +71,9 @@ struct Log {
                 tt::LogMetal,
                 "[streaming profiler] d2d sync: {} has {} placement nodes, the series' capacity; records before its "
                 "oldest kept node convert on that node's tangent",
-                chip_id == kHostSeries ? std::string("the host") : "chip " + std::to_string(chip_id),
+                chip_id == kHostSeries     ? std::string("the host")
+                : chip_id == kSteadySeries ? std::string("the host steady clock")
+                                           : "chip " + std::to_string(chip_id),
                 nodes.capacity());
         }
         nodes.push(node);
@@ -179,6 +182,7 @@ struct ThreadView {
     const void* owner = nullptr;
     std::array<Cursor<int64_t>, ClockMap::kMaxChips> chip{};
     Cursor<double> host{};
+    Cursor<int64_t> steady{};
     std::array<Composed, ClockMap::kMaxChips> composed{};
 };
 constinit thread_local ThreadView t_view;
@@ -195,9 +199,10 @@ ThreadView& view_of(const void* owner) noexcept {
 struct ClockMap::Impl {
     template <size_t... I>
     explicit Impl(uint32_t series_nodes, std::index_sequence<I...>) :
-        chips{{((void)I, Log<int64_t>(series_nodes))...}}, host(series_nodes) {}
+        chips{{((void)I, Log<int64_t>(series_nodes))...}}, host(series_nodes), steady(series_nodes) {}
     std::array<Log<int64_t>, kMaxChips> chips;
     Log<double> host;
+    Log<int64_t> steady;
     alignas(64) std::atomic<uint64_t> cover_generation{0};
 };
 
@@ -303,6 +308,20 @@ double ClockMap::lookup_root(uint32_t chip_id, double wall) const noexcept {
         return 0.0;
     }
     return root + c.slope * (wall - static_cast<double>(tick));
+}
+
+void ClockMap::append_steady(ClockNode<int64_t> node) {
+    TT_FATAL(
+        std::isfinite(node.value) && std::isfinite(node.tangent) && node.tangent > 0.0,
+        "streaming profiler: steady clock node at tsc {} is not a rate: {} ns, tangent {}",
+        node.at,
+        node.value,
+        node.tangent);
+    impl_->steady.append(kSteadySeries, node);
+}
+
+bool ClockMap::steady_ns(int64_t tsc, double& ns) const noexcept {
+    return place(impl_->steady, view_of(impl_.get()).steady, tsc, ns);
 }
 
 double ClockMap::host_tsc(double root) const noexcept {
@@ -531,8 +550,7 @@ void SyncEngine::on_clock(uint32_t dev, uint32_t core, const uint32_t* rec) {
         .role = rec[kp::SYNC_META] & 0xFFu,
         .value = word64(kp::SYNC_VALUE_LO, kp::SYNC_VALUE_HI),
         .ts = word64(kp::SYNC_WALL_LO, kp::SYNC_WALL_HI),
-        .ref = word64(kp::SYNC_REF_LO, kp::SYNC_REF_HI),
-        .spins = rec[kp::SYNC_META] >> 16};
+        .ref = word64(kp::SYNC_REF_LO, kp::SYNC_REF_HI)};
     if (kind == kp::kSyncKindAnchor) {
         audit_[dev].pending.push_back(AnchorAudit::Pending{
             static_cast<int64_t>(s.ref), static_cast<int64_t>(s.ts) + ctx_.devices[dev].drainer_offset});
@@ -580,7 +598,7 @@ void LinkSolver::on_stamp(const ClockSample& s) {
     LinkRounds& lr = rounds_[li];
     Round& r = lr.pending[s.round];
     r.id = s.round;
-    r.*slot = Stamp{.units = s.value, .wall = s.ts, .ref = s.ref, .spins = s.spins, .have = true};
+    r.*slot = Stamp{.units = s.value, .have = true};
     if (r.complete()) {
         lr.rounds.push_back(r);
         lr.pending.erase(s.round);
@@ -641,19 +659,6 @@ void LinkSolver::try_solve_links(bool final) {
         }
         solve_link(L, pts, out);
         gen_++;
-        if (final) {
-            log_info(
-                tt::LogMetal,
-                "[streaming profiler] d2d sync link chip {} -> chip {}: solved at round {} over {}: offset {:.1f} ns, "
-                "rate {:.3f} ppm, residual {:.1f} ns",
-                L.chip_a,
-                L.chip_b,
-                n,
-                w,
-                out.offset_refclk * kNsPerRefclk,
-                out.rate * 1e6,
-                out.residual_rms_ns);
-        }
     }
 }
 
@@ -663,19 +668,6 @@ double LinkSolver::mid_a_refclk(const Round& r) {
 
 double LinkSolver::mid_b_refclk(const Round& r) {
     return 0.5 * (static_cast<double>(r.t1.units) + static_cast<double>(r.t1b.units)) * kRefclkPerStampUnit;
-}
-
-double LinkSolver::path_median(const std::vector<Round>& rounds, size_t begin, size_t n, double rate) {
-    if (n <= begin) {
-        return std::numeric_limits<double>::quiet_NaN();
-    }
-    std::vector<double> v;
-    v.reserve(n - begin);
-    for (size_t i = begin; i < n; i++) {
-        v.push_back(path_ns(rounds[i], rate));
-    }
-    std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
-    return v[v.size() / 2];
 }
 
 namespace {
@@ -719,28 +711,24 @@ bool solve_dense(std::vector<double> m, std::vector<double> rhs, std::vector<dou
     return true;
 }
 
-// Weighted least squares for a potential on a graph: each edge says node_a - node_b = value with weight w; the root
-// is fixed at zero. `idx` maps a device to its unknown, -1 for the root.
+// Least squares for a potential on a graph: each edge says node_a - node_b = value; the root is fixed at zero. An
+// edge's end is the device's unknown, -1 for the root.
 bool solve_potential(
-    const std::vector<std::array<int, 2>>& ends,
-    const std::vector<double>& value,
-    const std::vector<double>& w,
-    size_t n,
-    std::vector<double>& x) {
+    const std::vector<std::array<int, 2>>& ends, const std::vector<double>& value, size_t n, std::vector<double>& x) {
     std::vector<double> m(n * n, 0.0), rhs(n, 0.0);
     for (size_t i = 0; i < ends.size(); i++) {
         const int a = ends[i][0], b = ends[i][1];
         if (a >= 0) {
-            m[a * n + a] += w[i];
-            rhs[a] += w[i] * value[i];
+            m[a * n + a] += 1.0;
+            rhs[a] += value[i];
         }
         if (b >= 0) {
-            m[b * n + b] += w[i];
-            rhs[b] -= w[i] * value[i];
+            m[b * n + b] += 1.0;
+            rhs[b] -= value[i];
         }
         if (a >= 0 && b >= 0) {
-            m[a * n + b] -= w[i];
-            m[b * n + a] -= w[i];
+            m[a * n + b] -= 1.0;
+            m[b * n + a] -= 1.0;
         }
     }
     return solve_dense(std::move(m), std::move(rhs), x);
@@ -753,7 +741,8 @@ bool solve_potential(
 // log rates, so rates compose exactly. A chip's offset is the potential whose edges equate the two placements of a
 // link's midpoint through the solved rates: anchored there, a link's constraint holds exactly at its own midpoint
 // whatever the mesh's rates differ from its own by (a ppb over the refclk count is a microsecond; over the distance
-// from the midpoint, nothing). Each link's offset weighs by its own estimate's precision.
+// from the midpoint, nothing). Every link weighs the same: its error is the fixed term each link training draws
+// (~0.5 ns rms), which its stamps' precision (~0.06 ns) says nothing about.
 std::vector<RootXf> LinkSolver::root_transforms(uint32_t root) const {
     std::vector<RootXf> to_root(ctx_->devices.size());
     to_root[root] = RootXf{1.0, 0.0, true};
@@ -778,7 +767,7 @@ std::vector<RootXf> LinkSolver::root_transforms(uint32_t root) const {
         return to_root;
     }
     std::vector<std::array<int, 2>> ends;
-    std::vector<double> log_rate, mid, offset, w;
+    std::vector<double> log_rate, mid, offset;
     for (size_t li = 0; li < solved_.size(); li++) {
         const LinkSolution& s = solved_[li];
         if (!s.ok || idx.count(s.dev_snd) == 0 || idx.count(s.dev_rcv) == 0) {
@@ -788,11 +777,9 @@ std::vector<RootXf> LinkSolver::root_transforms(uint32_t root) const {
         log_rate.push_back(std::log1p(s.rate));  // A_snd = A_rcv * (1 + rate)
         mid.push_back(s.mid_refclk);
         offset.push_back(s.offset_refclk);
-        const double p = std::max(s.precision_ns, 0.01);
-        w.push_back(1.0 / (p * p));
     }
     std::vector<double> x;
-    if (!solve_potential(ends, log_rate, std::vector<double>(ends.size(), 1.0), n, x)) {
+    if (!solve_potential(ends, log_rate, n, x)) {
         return to_root;
     }
     const auto A_of = [&](int i) { return i < 0 ? 1.0 : std::exp(x[i]); };
@@ -802,7 +789,7 @@ std::vector<RootXf> LinkSolver::root_transforms(uint32_t root) const {
     for (size_t i = 0; i < ends.size(); i++) {
         value[i] = A_of(ends[i][1]) * (mid[i] + offset[i]) - A_of(ends[i][0]) * mid[i];
     }
-    if (!solve_potential(ends, value, w, n, B)) {
+    if (!solve_potential(ends, value, n, B)) {
         return to_root;
     }
     for (const auto& [dev, i] : idx) {
@@ -1033,53 +1020,18 @@ void LinkSolver::solve_link(const CaptureContext::Link& L, const std::vector<Rou
 }
 
 bool SyncEngine::round_error(
-    const CaptureContext::Link& L, const Round& r, bool anchored, int64_t& tsc_a, double& err, RoundTerms* terms)
-    const {
+    const CaptureContext::Link& L, const Round& r, int64_t& tsc_a, double& err, RoundTerms* terms) const {
     if (series_.nodes(L.dev_a) == 0 || series_.nodes(L.dev_b) == 0) {
         return false;
     }
-    const LocalClockModel& la = local_[L.dev_a];
-    const LocalClockModel& lb = local_[L.dev_b];
-    // Anchored: each end's wall clock at the round's midpoint from the (wall, refclk) pair it read together when it
-    // recorded the stamp, moved to the midpoint by the model's slope over that ~1 ms, a measured AICLK instant.
-    // Otherwise the model's wall for the midpoint, which cancels the model out of the error.
-    const double mid_a = LinkSolver::mid_a_refclk(r), mid_b = LinkSolver::mid_b_refclk(r);
-    anchored = anchored && r.t2.ref != 0 && r.t1.ref != 0;
-    // Each end reads its own eth tile's wall clock: into the pusher's wall domain by that core's tile offset.
-    const auto tile_offset_of = [&](uint32_t dev, uint32_t core) {
-        const std::vector<int64_t>& t = ctx_.devices[dev].tile_offset;
-        return core < t.size() ? static_cast<double>(t[core]) : 0.0;
-    };
-    const double off_a = tile_offset_of(L.dev_a, L.core_a), off_b = tile_offset_of(L.dev_b, L.core_b);
-    const double wa = anchored ? static_cast<double>(r.t2.wall) + off_a + la.wall_at(mid_a) -
-                                     la.wall_at(static_cast<double>(r.t2.ref))
-                               : la.wall_at(mid_a);
-    const double wb = anchored ? static_cast<double>(r.t1.wall) + off_b + lb.wall_at(mid_b) -
-                                     lb.wall_at(static_cast<double>(r.t1.ref))
-                               : lb.wall_at(mid_b);
-    if (wa <= 0.0 || wb <= 0.0) {
+    RoundTerms t;
+    t.wall_a = local_[L.dev_a].wall_at(LinkSolver::mid_a_refclk(r));
+    t.wall_b = local_[L.dev_b].wall_at(LinkSolver::mid_b_refclk(r));
+    if (t.wall_a <= 0.0 || t.wall_b <= 0.0) {
         return false;
     }
-    RoundTerms t;
-    t.wall_a = wa;
-    t.wall_b = wb;
-    if (anchored) {
-        const auto res_ns = [](const LocalClockModel& m, const LinkSolver::Stamp& st, double off) {
-            const double ref = static_cast<double>(st.ref);
-            const double ghz = (m.wall_at(ref + 1.0) - m.wall_at(ref)) / kNsPerRefclk;
-            return (static_cast<double>(st.wall) + off - m.wall_at(ref)) / std::max(ghz, 0.1);
-        };
-        t.res_a = res_ns(la, r.t2, off_a);
-        t.res_b = res_ns(lb, r.t1, off_b);
-        t.spins_a = r.t2.spins;
-        t.spins_b = r.t1.spins;
-        t.ref_a = static_cast<double>(r.t2.ref);
-        t.wraw_a = static_cast<double>(r.t2.wall);
-        t.ref_b = static_cast<double>(r.t1.ref);
-        t.wraw_b = static_cast<double>(r.t1.wall);
-    }
-    t.root_a = map_.lookup_root(ctx_.devices[L.dev_a].chip_id, wa);
-    t.root_b = map_.lookup_root(ctx_.devices[L.dev_b].chip_id, wb);
+    t.root_a = map_.lookup_root(ctx_.devices[L.dev_a].chip_id, t.wall_a);
+    t.root_b = map_.lookup_root(ctx_.devices[L.dev_b].chip_id, t.wall_b);
     tsc_a = std::llround(map_.host_tsc(t.root_a));
     err = (t.root_b - t.root_a) * kNsPerRefclk;
     if (terms != nullptr) {
@@ -1092,36 +1044,35 @@ struct SyncEngine::LinkErrors {
     std::vector<PlotPoint> pts;  // (sender's host placement, receiver minus sender on the root, ns)
     std::vector<RoundTerms> terms;
     std::vector<double> raw_x, raw_y;  // the round's sender midpoint and the receiver's offset from it, refclk
-    std::vector<double> rtt, turn, path, resid;
-    double path_med = 0.0, rtt_median = 0.0;
+    std::vector<double> rtt, turn, path;
     size_t past_model = 0;     // rounds past an end's newest instant
     size_t before_series = 0;  // rounds before a chip's oldest kept node: the series wrapped, nothing places them
 };
 
-// The rounds, placed through the final map. Next to the placement error: the sender's round
-// trip and the one way and turnaround inside the stamps.
-SyncEngine::LinkErrors SyncEngine::link_errors(size_t li, bool anchored) const {
+// The rounds, placed through the final map. Next to the placement error: the sender's round trip and the one way and
+// turnaround inside the stamps.
+SyncEngine::LinkErrors SyncEngine::link_errors(size_t li) const {
     const CaptureContext::Link& L = ctx_.links[li];
     const std::vector<Round>& rounds = links_.rounds(li);
     LinkErrors e;
     const double rate = links_.solutions()[li].rate;
-    e.path_med = LinkSolver::path_median(rounds, 0, rounds.size(), rate);
     const double until_a = static_cast<double>(local_[L.dev_a].frontier());
     const double until_b = static_cast<double>(local_[L.dev_b].frontier());
-    const int64_t oldest_a = map_.oldest_at(L.chip_a), oldest_b = map_.oldest_at(L.chip_b);
+    const auto oldest_a = static_cast<double>(map_.oldest_at(L.chip_a));
+    const auto oldest_b = static_cast<double>(map_.oldest_at(L.chip_b));
     for (const Round& r : rounds) {
         if (LinkSolver::mid_a_refclk(r) > until_a || LinkSolver::mid_b_refclk(r) > until_b) {
             e.past_model++;
             continue;
         }
-        if (static_cast<int64_t>(r.t2.wall) < oldest_a || static_cast<int64_t>(r.t1.wall) < oldest_b) {
-            e.before_series++;
-            continue;
-        }
         int64_t H = 0;
         double err = 0.0;
         RoundTerms t;
-        if (!round_error(L, r, anchored, H, err, &t)) {
+        if (!round_error(L, r, H, err, &t)) {
+            continue;
+        }
+        if (t.wall_a < oldest_a || t.wall_b < oldest_b) {
+            e.before_series++;
             continue;
         }
         e.pts.push_back(PlotPoint{H, err});
@@ -1132,38 +1083,7 @@ SyncEngine::LinkErrors SyncEngine::link_errors(size_t li, bool anchored) const {
         e.path.push_back(LinkSolver::path_ns(r, rate));
         e.turn.push_back(e.rtt.back() - 2.0 * e.path.back());
     }
-    if (!e.rtt.empty()) {
-        std::vector<double> tmp = e.rtt;
-        std::nth_element(tmp.begin(), tmp.begin() + tmp.size() / 2, tmp.end());
-        e.rtt_median = tmp[tmp.size() / 2];
-    }
     return e;
-}
-
-// Each round's raw offset against a line through the neighbouring rounds': the ruler's own noise. A stamp glitch
-// shows here, a map error does not; the link rate wanders ~0.1 ppm over a run, so a single run-wide line would not do.
-void SyncEngine::stamp_residuals(LinkErrors& e) {
-    e.resid.assign(e.pts.size(), 0.0);
-    if (e.pts.size() < 8) {
-        return;
-    }
-    constexpr size_t kHalf = 12;
-    for (size_t i = 0; i < e.pts.size(); i++) {
-        const size_t lo = i > kHalf ? i - kHalf : 0, hi = std::min(e.pts.size(), i + kHalf + 1);
-        long double sx = 0, sy = 0, sxx = 0, sxy = 0;
-        size_t m = 0;
-        for (size_t j = lo; j < hi; j++) {
-            if (j == i) {
-                continue;
-            }
-            const long double x = e.raw_x[j] - e.raw_x[i], y = e.raw_y[j];
-            sx += x, sy += y, sxx += x * x, sxy += x * y, m++;
-        }
-        const long double den = static_cast<long double>(m) * sxx - sx * sx;
-        const long double b = den > 0 ? (static_cast<long double>(m) * sxy - sx * sy) / den : 0;
-        const long double a = (sy - b * sx) / static_cast<long double>(m);
-        e.resid[i] = static_cast<double>((e.raw_y[i] - a) * kNsPerRefclk);
-    }
 }
 
 void SyncEngine::log_link_stats(const CaptureContext::Link& L, const LinkErrors& e, size_t rounds) const {
@@ -1195,56 +1115,6 @@ void SyncEngine::log_link_stats(const CaptureContext::Link& L, const LinkErrors&
         rounds,
         e.past_model,
         e.before_series);
-    long double se = 0, ss = 0, srr = 0;
-    for (size_t i = 0; i < e.pts.size(); i++) {
-        se += e.pts[i].value;
-        ss += static_cast<long double>(e.pts[i].value) * e.pts[i].value;
-        srr += static_cast<long double>(e.resid[i]) * e.resid[i];
-    }
-    const double nn = static_cast<double>(e.pts.size());
-    log_info(
-        tt::LogMetal,
-        "[streaming profiler] d2d sync check chip {} vs chip {} (AICLK-anchored): {} rounds, mean {:+.1f} ns, rms "
-        "{:.1f} ns{}",
-        L.chip_b,
-        L.chip_a,
-        e.pts.size(),
-        static_cast<double>(se) / nn,
-        std::sqrt(static_cast<double>(ss) / nn),
-        e.pts.size() >= 8 ? fmt::format(
-                                "; the stamps' own noise (residual to the neighbouring rounds): rms {:.1f} ns",
-                                std::sqrt(static_cast<double>(srr) / nn))
-                          : "");
-}
-
-// The five worst rounds and their two glitch indicators: a map error has a small stamp residual; a stamp glitch has a
-// large one and often a shifted round trip.
-void SyncEngine::log_worst_rounds(const CaptureContext::Link& L, const LinkErrors& e) const {
-    std::vector<size_t> order(e.pts.size());
-    for (size_t i = 0; i < order.size(); i++) {
-        order[i] = i;
-    }
-    std::partial_sort(
-        order.begin(), order.begin() + std::min<size_t>(5, order.size()), order.end(), [&](size_t a, size_t b) {
-            return std::abs(e.pts[a].value) > std::abs(e.pts[b].value);
-        });
-    std::string worst;
-    for (size_t k = 0; k < std::min<size_t>(5, order.size()); k++) {
-        const size_t i = order[k];
-        const PlotPoint& p = e.pts[i];
-        worst += fmt::format(
-            " {:+.0f} ns at {:.3f} s (stamp resid {:+.0f} ns, path {:+.1f} ns vs median);",
-            p.value,
-            static_cast<double>(SteadyView::mono_ns(p.tsc) - SteadyView::mono_ns(e.pts.front().tsc)) / 1e9,
-            e.resid[i],
-            e.path[i] - e.path_med);
-    }
-    log_info(
-        tt::LogMetal,
-        "[streaming profiler] d2d sync check chip {} vs chip {}: worst rounds{}",
-        L.chip_b,
-        L.chip_a,
-        worst);
 }
 
 void SyncEngine::write_err_csv(const CaptureContext::Link& L, const LinkErrors& e) const {
@@ -1257,19 +1127,14 @@ void SyncEngine::write_err_csv(const CaptureContext::Link& L, const LinkErrors& 
     if (ef == nullptr) {
         return;
     }
-    std::fprintf(
-        ef,
-        "host_ns,err_ns,stamp_resid_ns,rtt_dev_ns,mid_a_refclk,r1_b_refclk,wall_a,wall_b,root_a,root_b,rtt_ns,"
-        "turn_ns,path_ns,res_a_ns,res_b_ns,spins_a,spins_b,ref_a,wraw_a,ref_b,wraw_b\n");
+    std::fprintf(ef, "host_ns,err_ns,mid_a_refclk,r1_b_refclk,wall_a,wall_b,root_a,root_b,rtt_ns,turn_ns,path_ns\n");
     for (size_t i = 0; i < e.pts.size(); i++) {
         const RoundTerms& t = e.terms[i];
         std::fprintf(
             ef,
-            "%lld,%.2f,%.2f,%.1f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.1f,%.1f,%.1f,%.2f,%.2f,%u,%u,%.0f,%.0f,%.0f,%.0f\n",
+            "%lld,%.2f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.1f,%.1f,%.1f\n",
             static_cast<long long>(SteadyView::mono_ns(e.pts[i].tsc)),
             e.pts[i].value,
-            e.resid[i],
-            e.rtt[i] - e.rtt_median,
             e.raw_x[i],
             e.raw_x[i] + e.raw_y[i],
             t.wall_a,
@@ -1278,15 +1143,7 @@ void SyncEngine::write_err_csv(const CaptureContext::Link& L, const LinkErrors& 
             t.root_b,
             e.rtt[i],
             e.turn[i],
-            e.path[i],
-            t.res_a,
-            t.res_b,
-            t.spins_a,
-            t.spins_b,
-            t.ref_a,
-            t.wraw_a,
-            t.ref_b,
-            t.wraw_b);
+            e.path[i]);
     }
     std::fclose(ef);
 }
@@ -1315,8 +1172,9 @@ void SyncEngine::write_model_csv() const {
     }
 }
 
-// Per link and round: the receiver's stamp and the sender's round midpoint (one instant, under the symmetric path)
-// placed on the host timeline exactly as the sink places a record from each chip's eth core, against the final map.
+// Per link and round: the two ends' round midpoints (one instant, under the symmetric path) placed on the host
+// timeline exactly as the sink places a record from each chip's eth core, against the final map. The chips' models
+// cancel, so this is the links' and the map's own error; the signed cross-chip error stays in the CSV.
 void SyncEngine::publish_error_plots() {
     write_model_csv();
     for (size_t li = 0; li < ctx_.links.size(); li++) {
@@ -1325,39 +1183,30 @@ void SyncEngine::publish_error_plots() {
         if (rounds == 0) {
             continue;
         }
-        LinkErrors e = link_errors(li, /*anchored=*/true);
+        const LinkErrors e = link_errors(li);
         if (e.pts.empty()) {
             continue;
         }
-        stamp_residuals(e);
         log_link_stats(L, e, rounds);
-        log_worst_rounds(L, e);
         write_err_csv(L, e);
-        plot(fmt::format("d2d sync check chip{} vs chip{}, AICLK-anchored (ns)", L.chip_b, L.chip_a), e.pts);
-        // The same rounds with the model cancelled: the links' and the map's own error, at the stamps' 0.3 ns. The
-        // signed cross-chip error stays in the CSV.
-        const LinkErrors em = link_errors(li, /*anchored=*/false);
-        if (em.pts.empty()) {
-            continue;
-        }
         double se = 0, ss = 0, worst = 0;
-        for (const PlotPoint& p : em.pts) {
+        for (const PlotPoint& p : e.pts) {
             se += p.value;
             ss += p.value * p.value;
             worst = std::max(worst, std::abs(p.value));
         }
-        const double nn = static_cast<double>(em.pts.size());
+        const double nn = static_cast<double>(e.pts.size());
         log_info(
             tt::LogMetal,
             "[streaming profiler] d2d sync error chip {} vs chip {} (links and map, model cancelled): {} rounds, mean "
             "{:+.2f} ns, rms {:.2f} ns, worst {:.2f} ns",
             L.chip_b,
             L.chip_a,
-            em.pts.size(),
+            e.pts.size(),
             se / nn,
             std::sqrt(ss / nn),
             worst);
-        plot(fmt::format("d2d sync error chip{} vs chip{} (ns)", L.chip_b, L.chip_a), em.pts);
+        plot(fmt::format("d2d sync error chip{} vs chip{} (ns)", L.chip_b, L.chip_a), e.pts);
     }
 }
 
@@ -1392,7 +1241,6 @@ void SyncEngine::log_audit() const {
             a.drainer_unbracketed);
     }
     ErrorHistogram pooled;
-    double bound = 0.0;
     size_t links = 0;
     for (size_t li = 0; li < ctx_.links.size(); li++) {
         const CaptureContext::Link& L = ctx_.links[li];
@@ -1401,7 +1249,7 @@ void SyncEngine::log_audit() const {
         if (ea.n <= 0.0 || eb.n <= 0.0 || links_.rounds(li).empty()) {
             continue;
         }
-        const LinkErrors em = link_errors(li, /*anchored=*/false);
+        const LinkErrors em = link_errors(li);
         if (em.pts.empty()) {
             continue;
         }
@@ -1413,8 +1261,7 @@ void SyncEngine::log_audit() const {
         log_info(
             tt::LogMetal,
             "[streaming profiler] sync audit chip {} vs chip {} eth({},{}): a record of one against one of the other, "
-            "|err| p50 {:.2f}, p99 {:.2f}, p99.9 {:.2f} ns, mean {:+.2f} ns; bound {:.2f} ns (link worst {:.2f} + "
-            "models {:.2f} + {:.2f})",
+            "|err| p50 {:.2f}, p99 {:.2f}, p99.9 {:.2f} ns, mean {:+.2f} ns",
             L.chip_b,
             L.chip_a,
             L.eth_a.x,
@@ -1422,11 +1269,7 @@ void SyncEngine::log_audit() const {
             total.abs_quantile(0.5),
             total.abs_quantile(0.99),
             total.abs_quantile(0.999),
-            total.mean(),
-            total.worst,
-            lh.worst,
-            eb.worst,
-            ea.worst);
+            total.mean());
         for (int b = 0; b < ErrorHistogram::kBins; b++) {
             pooled.bins[b] += total.bins[b];
         }
@@ -1434,19 +1277,17 @@ void SyncEngine::log_audit() const {
         pooled.sum += total.sum;
         pooled.sumsq += total.sumsq;
         pooled.beyond += total.beyond;
-        bound = std::max(bound, total.worst);
         links++;
     }
     if (links != 0) {
         log_info(
             tt::LogMetal,
             "[streaming profiler] sync audit over {} links: a record against one on a linked chip, |err| p50 {:.2f}, "
-            "p99 {:.2f}, p99.9 {:.2f} ns; bound {:.2f} ns",
+            "p99 {:.2f}, p99.9 {:.2f} ns",
             links,
             pooled.abs_quantile(0.5),
             pooled.abs_quantile(0.99),
-            pooled.abs_quantile(0.999),
-            bound);
+            pooled.abs_quantile(0.999));
     }
 }
 

@@ -102,6 +102,9 @@ static constexpr std::uint32_t kRelayDoneMask = 0xFFFF0000u;
 // Each relay control word owns a 64 B pad, so the words that share it (the sync rendezvous triple behind
 // the stop word, the heartbeat behind done) travel in one host write.
 static constexpr std::uint32_t kRelayCtrlWordStride = 64;
+// In the clock pusher's control block, two words written as it exits: the samples it dropped waiting on a PLL read,
+// then the clock instants its sync ring had no room for.
+static constexpr std::uint32_t kPusherDroppedOffset = 20;
 
 // Tile clock network scratch: the first 64 B take the landing word of the reads, the table follows at kTileNetTable,
 // two histograms of kTileNetBins uint32 counts (offsets, then round trips) at kTileNetHist.
@@ -153,7 +156,7 @@ enum SyncRecordWord : std::uint32_t {
     SYNC_VALUE_HI,
     SYNC_WALL_LO,
     SYNC_WALL_HI,
-    SYNC_REF_LO,  // link and anchor records: the refclk read together with the wall clock above
+    SYNC_REF_LO,  // anchor records: the refclk read together with the wall clock above
     SYNC_REF_HI,
 };
 static_assert(SYNC_REF_HI < kSyncRecordWords);

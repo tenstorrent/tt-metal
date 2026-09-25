@@ -907,29 +907,10 @@ void Devices::quiesce(const RelayStateFn& on_state) {
     for (uint32_t di = 0; di < devices_.size(); di++) {
         stop_device(di, devices_[di], on_state);
     }
-    // The relays have left their DRAM cores: those tiles read their rows again for the drift check.
-    for (const DeviceCtx& ctx : devices_) {
-        if (ctx.device == nullptr || ctx.relays.empty()) {
-            continue;
-        }
-        try {
-            for (const Drainer& r : ctx.relays) {
-                if (r.program) {
-                    detail::WaitProgramDone(ctx.device, *r.program, false);
-                }
-            }
-            check_tile_clock_drift(ctx.device, context_id_);
-        } catch (const std::exception& e) {
-            log_warning(
-                tt::LogMetal,
-                "[streaming profiler] Device {}: tile clock drift check skipped ({})",
-                ctx.chip_id,
-                first_line(e.what()));
-        }
-    }
 }
 
 void Devices::stop_device(uint32_t device_index, const DeviceCtx& ctx, const RelayStateFn& on_state) {
+    auto& cluster = MetalContext::instance(context_id_).get_cluster();
     for (uint32_t d = 0; d < ctx.relays.size(); d++) {
         if (ctx.relays[d].program) {
             stop_drainer(device_index, ctx, ctx.relays[d], fmt::format("relay {}", d), on_state);
@@ -938,6 +919,21 @@ void Devices::stop_device(uint32_t device_index, const DeviceCtx& ctx, const Rel
     // The pusher first: its ring's tail is final once it is done, and the drainer ships the rest before it stops.
     if (ctx.pusher && ctx.pusher->program) {
         stop_drainer(device_index, ctx, *ctx.pusher, "idle-eth pusher", on_state);
+        uint32_t dropped[2] = {};
+        cluster.read_core(
+            dropped,
+            sizeof(dropped),
+            tt_cxy_pair(ctx.chip_id, ctx.pusher->core.virt),
+            ctx.pusher->state_addr + kernel_profiler::kPusherDroppedOffset);
+        if (dropped[0] != 0 || dropped[1] != 0) {
+            log_warning(
+                tt::LogMetal,
+                "[streaming profiler] Device {}: the clock pusher dropped {} samples waiting on a PLL read and {} "
+                "clock instants its sync ring had no room for",
+                ctx.chip_id,
+                dropped[0],
+                dropped[1]);
+        }
     }
     if (ctx.eth_drainer && ctx.eth_drainer->program) {
         stop_drainer(device_index, ctx, *ctx.eth_drainer, "idle-eth drainer", on_state);

@@ -517,11 +517,6 @@ void measure_chip(IDevice* device, ContextId ctx) {
         clocks.tiles.push_back(
             TileClock{nodes[i].type, nodes[i].logical, nodes[i].virt, nodes[i].phys, std::llround(x_of(i))});
     }
-    for (const Reading& r : readings) {
-        if (nodes[r.s].type == CoreType::DRAM) {
-            clocks.row_readings.push_back(TileClocks::RowReading{r.s, r.t, r.median2});
-        }
-    }
     std::string kinds;
     for (const auto& [key, acc] : rtt_by_kind) {
         kinds += fmt::format(
@@ -584,54 +579,6 @@ void measure_tile_clocks(IDevice* device, ContextId ctx) {
             device->id(),
             e.what());
     }
-}
-
-void check_tile_clock_drift(IDevice* device, ContextId ctx) {
-    const uint32_t chip = static_cast<uint32_t>(device->id());
-    const TileClocks* clocks = service().tile_clocks(chip);
-    if (clocks == nullptr || clocks->row_readings.empty()) {
-        return;
-    }
-    std::vector<Node> nodes;
-    std::vector<uint32_t> dram;
-    for (const TileClock& t : clocks->tiles) {
-        nodes.push_back(Node{.type = t.type, .logical = t.logical, .virt = t.virt, .phys = t.phys});
-    }
-    const auto& hal = MetalContext::instance(ctx).hal();
-    const uint32_t scratch = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
-    for (uint32_t i = 0; i < nodes.size(); i++) {
-        if (nodes[i].type == CoreType::DRAM) {
-            nodes[i].scratch = scratch;
-            nodes[i].host_scratch = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
-            dram.push_back(i);
-        }
-    }
-    const std::vector<Reading> now = read_network(device, ctx, nodes, dram);
-    std::map<std::pair<uint32_t, uint32_t>, int32_t> then;
-    for (const TileClocks::RowReading& r : clocks->row_readings) {
-        then[{r.reader, r.tile}] = r.median2;
-    }
-    double worst = 0.0;
-    size_t compared = 0;
-    std::set<uint32_t> tiles;
-    for (const Reading& r : now) {
-        const auto it = then.find({r.s, r.t});
-        if (it == then.end()) {
-            continue;
-        }
-        worst = std::max(worst, std::fabs((r.median2 - it->second) / 2.0));
-        compared++;
-        tiles.insert(r.t);
-    }
-    log_info(
-        tt::LogMetal,
-        "[streaming profiler] Device {}: tile clocks at capture end: {} tiles re-read from {} DRAM tiles ({} "
-        "readings) moved by at most {:.1f} ticks since bring-up",
-        chip,
-        tiles.size(),
-        dram.size(),
-        compared,
-        worst);
 }
 
 }  // namespace tt::tt_metal::streaming_profiler

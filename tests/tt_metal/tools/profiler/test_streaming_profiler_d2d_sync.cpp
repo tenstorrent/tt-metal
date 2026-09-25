@@ -15,7 +15,7 @@
 //   (c) chip 1 (one hop): only the 0-1 link places it;
 //   (d) chip 2 (two hops): only 0-1 composed with 1-2 places it, refclk offset and all.
 // The root-refclk placement (the d2d level, which the host series never enters) and the steady_clock view
-// (tsc_to_mono_ns through a known segment) are checked alongside.
+// (SteadyView::mono_ns through a known steady series) are checked alongside.
 //
 // Chip 1 is a receiver (of 0-1) AND a sender (of 1-2), on two DIFFERENT eth cores -- exactly as real hardware, where
 // each link owns its own eth core -- so its two stamp streams stay separate.
@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "tt_metal/common/indexed_ring.hpp"
+#include "impl/streaming_profiler/streaming_profiler_service.hpp"
 #include "impl/streaming_profiler/streaming_profiler_sync_engine.hpp"
 #include "impl/streaming_profiler/streaming_profiler_sync_devices.hpp"
 
@@ -130,12 +131,11 @@ int main() {
         sync.map().append_host(
             HostNode{.at = refclk(0, tau), .value = tsc(tau), .tangent = kTicksPerNs * 1e9 / kRefHz});
     }
-    SteadySegment seg;
-    seg.tsc0 = static_cast<int64_t>(kTsc0);
-    seg.mono0 = static_cast<int64_t>(kHostBase);
-    seg.ns_per_tick = 1.0 / kTicksPerNs;
-    seg.ok = true;
-    SteadyView::set(seg);
+    // The steady series as the probe would write it, in the process's clock map, which SteadyView reads.
+    for (double tau : {0.0, 1.0}) {
+        service().sync().map().append_steady(ClockNode<int64_t>{
+            .at = static_cast<int64_t>(tsc(tau)), .value = host_ns(tau), .tangent = 1.0 / kTicksPerNs});
+    }
 
     sync.on_attach(ctx);
     // Trackers: the pushers' model points, one per ms on all three chips over one second, one point to a LOCAL record,

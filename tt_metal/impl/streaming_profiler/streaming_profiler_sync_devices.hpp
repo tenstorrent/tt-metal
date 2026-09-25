@@ -50,20 +50,11 @@ double tsc_ticks_per_ns();
 double units_per_tsc();
 int64_t clock_ns(clockid_t id);
 
-// The host TSC on CLOCK_MONOTONIC, one line between two NTP slews: mono_ns = mono0 + (tsc - tsc0) * ns_per_tick.
-struct SteadySegment {
-    int64_t tsc0 = 0, mono0 = 0;
-    double ns_per_tick = 0.0;
-    bool ok = false;
-    int64_t mono_of(int64_t tsc) const { return mono0 + std::llrint(static_cast<double>(tsc - tsc0) * ns_per_tick); }
-};
-
-// The host TSC on steady_clock as the host probe measures it: one segment for the process, readable from any thread
-// and cached per thread. No capture is involved, so the API's steady_time() reads it with no device open.
+// The host TSC on steady_clock as the host probe measures it: the clock map's steady series (ClockMap::steady_ns),
+// readable from any thread. No capture is involved, so the API's steady_time() reads it with no device open.
 class SteadyView {
 public:
-    static void set(const SteadySegment& segment) noexcept;
-    // A TSC/CLOCK_MONOTONIC pair taken here stands in until a probe publishes a segment.
+    // A TSC/CLOCK_MONOTONIC pair this thread takes once stands in until a probe has taken one.
     static int64_t mono_ns(int64_t tsc) noexcept;
 };
 
@@ -92,8 +83,7 @@ public:
 
     uint32_t chip_id() const { return chip_id_; }
     HostLine line() const;
-    SteadySegment steady() const;
-    // Ends the reads; the last line and segment stay readable. Must precede the device's teardown.
+    // Ends the reads; the last line stays readable. Must precede the device's teardown.
     void stop();
 
 private:
@@ -115,10 +105,10 @@ private:
     double ticks_per_ns_ = 0.0;
     int64_t rtt_floor_ = std::numeric_limits<int64_t>::max();  // fastest read round trip seen, TSC ticks
     std::deque<BurstPoint> points_;
-    std::deque<std::pair<int64_t, int64_t>> pairs_;  // (tsc, mono)
+    int64_t pair_tsc_ = 0, pair_mono_ = 0;  // the newest steady pair
+    double ns_per_tick_ = 0.0;              // CLOCK_MONOTONIC ns per TSC tick between the two newest pairs
     mutable std::mutex mu_;
     HostLine line_;
-    SteadySegment steady_;
     uint64_t bursts_ = 0, reads_ = 0, kept_ = 0;
     std::atomic<bool> stop_{false};
     std::thread thread_;

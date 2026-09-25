@@ -37,8 +37,7 @@ struct ClockSample {
     uint32_t role;
     uint64_t value;
     uint64_t ts;
-    uint64_t ref = 0;    // link and anchor records: the refclk read with ts
-    uint32_t spins = 0;  // link and anchor records: the bracketed read's spins to the caught refclk update, plus one
+    uint64_t ref = 0;  // anchor records: the refclk read with ts
 };
 
 // A chip's clock as the pusher describes it: instants (its refclk tick, its eth wall tick) in refclk order, the wall
@@ -163,8 +162,6 @@ public:
     // One end's stamp of a round: the reading, in the link's stamp units of the refclk domain.
     struct Stamp {
         uint64_t units = 0;
-        uint64_t wall = 0, ref = 0;  // the end's AICLK wall clock and refclk read together when it recorded this
-        uint32_t spins = 0;
         bool have = false;
     };
     // A round under the number the sender gave it, with both ends' stamps: the sender's frame egress and echo
@@ -218,7 +215,6 @@ public:
                kNsPerRefclk;
     }
     static double path_ns(const Round& r, double rate) { return 0.5 * (rtt_ns(r) * (1.0 + rate) - turn_ns(r)); }
-    static double path_median(const std::vector<Round>& rounds, size_t begin, size_t n, double rate);
 
 private:
     // A link's rounds: the complete ones in the order they completed, the rest waiting for their other end. A round
@@ -298,6 +294,11 @@ public:
     // Empties a chip's series for a new capture.
     void clear(uint32_t chip_id);
     void append_host(HostNode node);
+    // The host's steady series: host TSC tick -> CLOCK_MONOTONIC ns, a node per host probe pair, linear between them
+    // and on the newest node's tangent past it. Never cleared: steady_clock outlives any capture.
+    void append_steady(ClockNode<int64_t> node);
+    // CLOCK_MONOTONIC ns at host TSC tick `tsc`; false before the series' first node.
+    bool steady_ns(int64_t tsc, double& ns) const noexcept;
 
     // The root refclk tick of a chip's eth wall tick, which may be fractional; 0 before the chip's first node.
     double lookup_root(uint32_t chip_id, double wall) const noexcept;
@@ -386,32 +387,21 @@ private:
     void publish_error_plots();
     void publish_clock_plots();
     // One link's rounds placed through the final map: per round the error (as a plot point), the placement's terms,
-    // the raw offset, the stamps' own residual and the path figures.
+    // the raw offset and the path figures.
     struct LinkErrors;
-    LinkErrors link_errors(size_t li, bool anchored) const;
-    static void stamp_residuals(LinkErrors& e);
+    LinkErrors link_errors(size_t li) const;
     void log_link_stats(const CaptureContext::Link& L, const LinkErrors& e, size_t rounds) const;
-    void log_worst_rounds(const CaptureContext::Link& L, const LinkErrors& e) const;
     void write_err_csv(const CaptureContext::Link& L, const LinkErrors& e) const;
     void write_model_csv() const;
-    // The receiver's stamp and the sender's round midpoint placed on the root's refclk as the sink places records
-    // from each chip's eth core, and their difference in ns; tsc_a is the sender's host placement, the plots'
-    // abscissa. False when a chip has no fitted run or no node to place a stamp with.
+    // The receiver's round midpoint and the sender's, each through its chip's model to its wall clock and placed on
+    // the root's refclk as the sink places records from that chip's eth core, and their difference in ns: the links'
+    // and the map's error, the models cancelling. tsc_a is the sender's host placement, the plots' abscissa. False
+    // when a chip has no fitted run or no node to place a stamp with.
     struct RoundTerms {
         double wall_a = 0, wall_b = 0, root_a = 0, root_b = 0;
-        double res_a = 0, res_b = 0;  // each end's recorded pair against its chip's model, ns
-        double ref_a = 0, ref_b = 0, wraw_a = 0, wraw_b = 0;  // the pairs themselves
-        uint32_t spins_a = 0, spins_b = 0;
     };
-    // `anchored`: each end's wall from the (wall, refclk) pair its record carries, the wall clock at one refclk
-    // update; otherwise from the local model, which then cancels and the error is the links' and the map's.
     bool round_error(
-        const CaptureContext::Link& L,
-        const Round& r,
-        bool anchored,
-        int64_t& tsc_a,
-        double& err,
-        RoundTerms* terms = nullptr) const;
+        const CaptureContext::Link& L, const Round& r, int64_t& tsc_a, double& err, RoundTerms* terms = nullptr) const;
     // A (host TSC tick, value) series as a Tracy plot (each chip's AICLK, the sync error per link); the TSC is the
     // timer stamp Tracy places it by. Emitted whenever Tracy is compiled in: the record sink is what an env var
     // turns on, the plots ride with the profiler.

@@ -53,9 +53,6 @@ constexpr uint32_t kBurstReads = 1000;
 // Reads within this much of the burst's tightest round trip carry the least queueing on either leg.
 constexpr double kRttSlackNs = 50.0;
 constexpr size_t kWindowBursts = 10;
-constexpr size_t kWindowPairs = 20;
-// A steady pair off the segment by more than the pair bracket can explain is a slew step.
-constexpr double kSteadyKinkNs = 40.0;
 
 }  // namespace
 
@@ -87,34 +84,13 @@ double units_per_tsc() {
     return u;
 }
 
-namespace {
-// Double-buffered under a generation, so a reader that sees the new generation sees the whole segment.
-struct SteadySlots {
-    SteadySegment seg[2];
-    std::atomic<uint32_t> gen{0};
-};
-SteadySlots g_steady;
-}  // namespace
-
-void SteadyView::set(const SteadySegment& segment) noexcept {
-    const uint32_t g = g_steady.gen.load(std::memory_order_relaxed);
-    g_steady.seg[(g + 1) & 1] = segment;
-    g_steady.gen.store(g + 1, std::memory_order_release);
-}
-
 int64_t SteadyView::mono_ns(int64_t tsc) noexcept {
-    thread_local uint32_t gen = ~0u;
-    thread_local SteadySegment seg;
-    const uint32_t g = g_steady.gen.load(std::memory_order_acquire);
-    if (g != gen) {
-        seg = g_steady.seg[g & 1];
-        gen = g;
+    double ns = 0.0;
+    if (service().sync().map().steady_ns(tsc, ns)) {
+        return std::llround(ns);
     }
-    if (!seg.ok) {
-        // The stand-in pair is taken once per thread and generation.
-        seg = SteadySegment{static_cast<int64_t>(__rdtsc()), clock_ns(CLOCK_MONOTONIC), 1.0 / tsc_ticks_per_ns(), true};
-    }
-    return seg.mono_of(tsc);
+    thread_local const int64_t stand_in_tsc = tsc_now(), stand_in_mono = clock_ns(CLOCK_MONOTONIC);
+    return stand_in_mono + std::llround(static_cast<double>(tsc - stand_in_tsc) / tsc_ticks_per_ns());
 }
 
 HostProbe::HostProbe(tt::Cluster& cluster, uint32_t chip_id, ClockMap& map) :
@@ -160,11 +136,6 @@ void HostProbe::stop() {
 HostLine HostProbe::line() const {
     std::lock_guard<std::mutex> g(mu_);
     return line_;
-}
-
-SteadySegment HostProbe::steady() const {
-    std::lock_guard<std::mutex> g(mu_);
-    return steady_;
 }
 
 uint32_t HostProbe::read_cfr_lo() {
@@ -253,6 +224,7 @@ void HostProbe::refit() {
     line_ = l;
 }
 
+// CLOCK_MONOTONIC is slewed, never stepped, so the series is the pairs themselves, linear between them.
 void HostProbe::steady_pair() {
     int64_t best_gap = INT64_MAX, best_tsc = 0, best_mono = 0;
     for (int i = 0; i < 16; i++) {
@@ -265,51 +237,13 @@ void HostProbe::steady_pair() {
             best_mono = m;
         }
     }
-    SteadySegment cur = steady();
-    if (cur.ok) {
-        const double resid = static_cast<double>(best_mono - cur.mono_of(best_tsc));
-        if (std::abs(resid) > kSteadyKinkNs) {
-            log_debug(tt::LogMetal, "[streaming profiler] host probe: steady_clock slew step of {:+.0f} ns", resid);
-            pairs_.clear();
-        }
-    }
-    pairs_.emplace_back(best_tsc, best_mono);
-    while (pairs_.size() > kWindowPairs) {
-        pairs_.pop_front();
-    }
-    SteadySegment s;
-    const size_t n = pairs_.size();
-    if (n >= 2) {
-        double mt = 0.0, mm = 0.0;
-        for (const auto& [t, m] : pairs_) {
-            mt += static_cast<double>(t - pairs_.front().first);
-            mm += static_cast<double>(m - pairs_.front().second);
-        }
-        mt /= n;
-        mm /= n;
-        double stt = 0.0, stm = 0.0;
-        for (const auto& [t, m] : pairs_) {
-            const double dt = static_cast<double>(t - pairs_.front().first) - mt;
-            stt += dt * dt;
-            stm += dt * (static_cast<double>(m - pairs_.front().second) - mm);
-        }
-        if (stt > 0.0) {
-            s.ns_per_tick = stm / stt;
-            s.tsc0 = pairs_.front().first + static_cast<int64_t>(mt);
-            s.mono0 = pairs_.front().second + static_cast<int64_t>(mm);
-            s.ok = true;
-        }
-    } else {
-        s.tsc0 = best_tsc;
-        s.mono0 = best_mono;
-        s.ns_per_tick = 1.0 / ticks_per_ns_;
-        s.ok = true;
-    }
-    {
-        std::lock_guard<std::mutex> g(mu_);
-        steady_ = s;
-    }
-    SteadyView::set(s);
+    ns_per_tick_ = pair_tsc_ != 0 && best_tsc > pair_tsc_
+                       ? static_cast<double>(best_mono - pair_mono_) / static_cast<double>(best_tsc - pair_tsc_)
+                       : 1.0 / ticks_per_ns_;
+    map_.append_steady(
+        ClockNode<int64_t>{.at = best_tsc, .value = static_cast<double>(best_mono), .tangent = ns_per_tick_});
+    pair_tsc_ = best_tsc;
+    pair_mono_ = best_mono;
 }
 
 void HostProbe::run() {
@@ -381,7 +315,7 @@ void HostProbe::run() {
         reads_ != 0 ? static_cast<double>(rtt_floor_) / ticks_per_ns_ : 0.0,
         line().ok ? line().b / ticks_per_ns_ : 0.0,
         line().sigma_ns,
-        steady().ns_per_tick);
+        ns_per_tick_);
 }
 
 namespace link_sync {
