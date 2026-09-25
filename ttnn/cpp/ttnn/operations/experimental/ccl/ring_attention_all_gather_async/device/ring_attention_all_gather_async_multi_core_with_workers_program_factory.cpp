@@ -291,7 +291,16 @@ void ring_attention_neighbor_halo_exchange_helper(
     reader_kernel.core_ranges = workers;
     reader_kernel.config = WriterConfigDescriptor{};
     reader_kernel.compile_time_args = {
-        ring_index, ring_size, data_cb, pages_per_packet, page_size, num_inputs, kPrefetchPackets, reader_meta_cb};
+        ring_index,
+        ring_size,
+        data_cb,
+        pages_per_packet,
+        page_size,
+        num_inputs,
+        kPrefetchPackets,
+        reader_meta_cb,
+        static_cast<uint32_t>(halo.collects_arrivals()),
+        halo.arrivals_expected};
     for (uint32_t input = 0; input < num_inputs; ++input) {
         reader_kernel.compile_time_args.push_back(page_size);
     }
@@ -362,8 +371,11 @@ void ring_attention_neighbor_halo_exchange_helper(
         reader_args.push_back(link);
         KernelDescriptor::RTArgList writer_args;
         const CoreCoord worker_physical = mesh_device->worker_core_from_logical_core(worker_cores[link]);
-        writer_args.push_back(worker_physical.x);
-        writer_args.push_back(worker_physical.y);
+        // Every hop increments the SAME core's semaphore on the receiver, so one reader can wait for
+        // the whole halo. Sender and receiver lay out workers identically, so the sender's
+        // rendezvous core is also the receiver's.
+        writer_args.push_back(halo.has_rendezvous() ? halo.rendezvous_noc_x : worker_physical.x);
+        writer_args.push_back(halo.has_rendezvous() ? halo.rendezvous_noc_y : worker_physical.y);
         writer_args.push_back(
             static_cast<uint32_t>(halo_semaphore.address()));  // smuggled-rta-ok: persistent GlobalSemaphore address
 
@@ -385,12 +397,14 @@ void ring_attention_neighbor_halo_exchange_helper(
                 input_Wt,
                 output_Wt);
             TT_FATAL(
-                output_Ht >= halo.send_to_next_count_Ht,
-                "Neighbor halo output has {} tile rows but requires {}",
+                output_Ht >= halo.dest_row_base + halo.send_to_next_count_Ht,
+                "Neighbor halo output has {} tile rows but hop {} requires {}",
                 output_Ht,
-                halo.send_to_next_count_Ht);
+                halo.hop,
+                halo.dest_row_base + halo.send_to_next_count_Ht);
+            const uint32_t tail_rows = halo.tail_rows();
             TT_FATAL(
-                halo.send_to_next_start_Ht <= input_Ht && halo.halo_tile_rows <= input_Ht - halo.send_to_next_start_Ht,
+                halo.send_to_next_start_Ht <= input_Ht && tail_rows <= input_Ht - halo.send_to_next_start_Ht,
                 "Neighbor halo [{}, {}) exceeds input Ht={}",
                 halo.send_to_next_start_Ht,
                 halo.send_to_next_start_Ht + halo.send_to_next_count_Ht,
@@ -398,16 +412,15 @@ void ring_attention_neighbor_halo_exchange_helper(
 
             const uint32_t range_start_page = 0;
             TT_FATAL(
-                halo.send_to_next_count_Ht == halo.halo_tile_rows ||
-                    (halo.send_second_start_Ht <= input_Ht &&
-                     halo.halo_tile_rows <= input_Ht - halo.send_second_start_Ht),
+                halo.send_to_next_count_Ht == tail_rows ||
+                    (halo.send_second_start_Ht <= input_Ht && tail_rows <= input_Ht - halo.send_second_start_Ht),
                 "Second neighbor halo exceeds the input cache");
             const uint32_t range_page_count = halo.send_to_next_count_Ht * input_Wt;
             const uint32_t valid_pages = std::min(gather_valid_Ht.value_or(input_Ht), input_Ht) * input_Wt;
             TT_FATAL(
-                (halo.send_to_next_start_Ht + halo.halo_tile_rows) * input_Wt <= valid_pages &&
-                    (halo.send_to_next_count_Ht == halo.halo_tile_rows ||
-                     (halo.send_second_start_Ht + halo.halo_tile_rows) * input_Wt <= valid_pages),
+                (halo.send_to_next_start_Ht + tail_rows) * input_Wt <= valid_pages &&
+                    (halo.send_to_next_count_Ht == tail_rows ||
+                     (halo.send_second_start_Ht + tail_rows) * input_Wt <= valid_pages),
                 "Neighbor halo [{}, {}) exceeds the valid per-head page prefix {}",
                 range_start_page,
                 range_start_page + range_page_count,
@@ -440,7 +453,7 @@ void ring_attention_neighbor_halo_exchange_helper(
             reader_args.push_back(input_batch_base);
             reader_args.push_back(halo.send_to_next_start_Ht * input_Wt);
             reader_args.push_back(halo.send_second_start_Ht * input_Wt);
-            reader_args.push_back(halo.halo_tile_rows * input_Wt);
+            reader_args.push_back(tail_rows * input_Wt);
             if (halo.derives_cache_batch_on_device()) {
                 reader_args.push_back(input_shape[kBatchDimension]);
             }
@@ -449,6 +462,8 @@ void ring_attention_neighbor_halo_exchange_helper(
             writer_args.push_back(batch_head_count);
             writer_args.push_back(input_tile_start);
             writer_args.push_back(input_tile_end);
+            // Where this hop's block starts in the receiver's compact buffer.
+            writer_args.push_back(halo.dest_row_base * output_Wt);
             halo_input_Wt.push_back(input_Wt);
         }
 
@@ -483,6 +498,7 @@ void ring_attention_neighbor_halo_exchange_helper(
                         args.push_back(ring_size);
                     }
                     args.push_back(num_links);
+                    args.push_back(halo.hop);
                     for (const uint32_t wt : halo_input_Wt) {
                         args.push_back(wt);
                     }
@@ -513,7 +529,7 @@ void ring_attention_neighbor_halo_exchange_helper(
         tt::tt_fabric::append_fabric_connection_rt_args(
             mesh_device->get_fabric_node_id(target_device_coord),
             mesh_device->get_fabric_node_id(transport_device_coord),
-            link,
+            halo.link_base + link,
             desc,
             worker_cores[link],
             fabric_args);
@@ -521,6 +537,13 @@ void ring_attention_neighbor_halo_exchange_helper(
         if (!halo.send_backward) {
             writer_args.push_back(0u);
         }
+        // Link hand-off, read by the writer straight after the fabric args; both flags are 0 when
+        // this hop owns its link.
+        writer_args.push_back(static_cast<uint32_t>(halo.waits_for_predecessor));
+        writer_args.push_back(static_cast<uint32_t>(halo.signals_successor));
+        writer_args.push_back(halo.chain_semaphore_id);
+        writer_args.push_back(halo.successor_noc_x);
+        writer_args.push_back(halo.successor_noc_y);
         writer_kernel.emplace_runtime_args(worker_cores[link], writer_args);
     }
 
@@ -572,8 +595,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     }
     // Linear here is a full-mesh open path; the neighbour checks below adapt to it.
     TT_FATAL(
-        !rank_mapping.full_mesh || topology == ttnn::ccl::Topology::Ring ||
-            topology == ttnn::ccl::Topology::Linear,
+        !rank_mapping.full_mesh || topology == ttnn::ccl::Topology::Ring || topology == ttnn::ccl::Topology::Linear,
         "full-mesh ring-attention all-gather requires Ring or Linear topology");
     TT_FATAL(
         !rank_mapping.full_mesh || (rank_mapping.mesh_rows > 0 && rank_mapping.mesh_cols > 0 &&
@@ -1110,7 +1132,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
                 gather_valid_Ht.has_value() ? std::min(*gather_valid_Ht, input_tensor_Ht) * input_tensor_Wt
                                             : single_batch_head_num_pages;
             tensor_descriptor_args.push_back(valid_pages_per_batch_head);  // 6 == valid_pages_per_batch_head
-            tensor_descriptor_args.push_back(placement.link);  // 7 == worker_link
+            tensor_descriptor_args.push_back(placement.link);              // 7 == worker_link
             if (has_metadata) {
                 tensor_descriptor_args.push_back(input_tensor_shape[kBatchDimension]);  // 8 == input_cache_batch_extent
             }

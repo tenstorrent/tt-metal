@@ -2697,6 +2697,7 @@ def run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
     num_iterations=2,
     pcc_threshold=CHUNKED_PREFILL_PCC_THRESHOLD,
     rmse_threshold=DEFAULT_RMSE_THRESHOLD,
+    halo_slots=None,
 ):
     """Numerically validate compact GQA sliding attention over a fixed, garbage-padded KV cache.
 
@@ -2745,7 +2746,10 @@ def run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
     stable_kv_seq_len = sp_size * stable_cache_seq_per_dev
     k_chunk_size = 128
     halo_tokens = math.ceil((sliding_window_size - 1) / k_chunk_size) * k_chunk_size
-    compact_persistent_seq_len = max(halo_tokens, tile_height) * (2 if requests is not None else 1)
+    # Block-cyclic requests may wrap a slab, which needs a second halo slot, unless the caller knows none do.
+    if halo_slots is None:
+        halo_slots = 2 if requests is not None else 1
+    compact_persistent_seq_len = max(halo_tokens, tile_height) * halo_slots
 
     torch.manual_seed(CHUNKED_PREFILL_SEED + batch_size)
     q_full = fa_rand(batch_size, nhq, max_logical_n, d_q)
@@ -4512,13 +4516,18 @@ RING_JOINT_TRACE_REGION_SIZE = 32 * 1024 * 1024
 
 
 @pytest.mark.parametrize(
-    "block_cyclic,halo_slots",
+    "block_cyclic,halo_slots,sliding_window_size",
     [
-        pytest.param(False, 1, id="aligned-single-halo"),
-        pytest.param(True, 2, id="rotated-two-halos"),
+        pytest.param(False, 1, 128, id="aligned-single-halo"),
+        # A 256-token slab: the 384 and 1024 windows need two (the second a partial slab) and four halo
+        # hops, so replays also cover the per-hop page ranges and the shared-link hand-off.
+        pytest.param(False, 1, 384, id="aligned-two-hop-partial"),
+        pytest.param(False, 1, 1024, id="aligned-four-hop"),
+        pytest.param(True, 2, 128, id="rotated-two-halos"),
         pytest.param(
             True,
             1,
+            128,
             id="rotated-single-halo-guard",
             marks=[
                 skip_with_watcher("Exercises the invalid-metadata fallback with device assertions disabled."),
@@ -4527,12 +4536,16 @@ RING_JOINT_TRACE_REGION_SIZE = 32 * 1024 * 1024
         ),
     ],
 )
-def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores(block_cyclic, halo_slots):
+def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores(
+    block_cyclic, halo_slots, sliding_window_size
+):
     """Replay changing prefixes and slots; undersized halos use the bounded fallback."""
     invalid_wrap = block_cyclic and halo_slots == 1
+    halo_tokens = math.ceil((sliding_window_size - 1) / 128) * 128
     mesh_config = gpt_oss_chunked_mesh_config()
     sp_size = mesh_config.sp_size
     chunk_local = 256
+    halo_tokens = math.ceil((sliding_window_size - 1) / 128) * 128
     chunk_global = chunk_local * sp_size
     prefix_lengths = (
         (0, chunk_global + 32, 2 * chunk_global - 32) if block_cyclic else (0, chunk_global, 2 * chunk_global)
@@ -4614,7 +4627,7 @@ def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores(b
         tt_q = upload(chunks[0][2], ttnn.bfloat16, input_dims)
         tt_k = upload(chunks[0][3], ttnn.bfloat8_b, input_dims)
         tt_v = upload(chunks[0][4], ttnn.bfloat8_b, input_dims)
-        sliding_shape = (1, nhk, halo_slots * 128, head_dim)
+        sliding_shape = (1, nhk, halo_slots * halo_tokens, head_dim)
         dense_shape = (1, nhk, stable_kv_seq, head_dim)
         sliding_k = upload(torch.zeros(sliding_shape), ttnn.bfloat8_b, persistent_dims)
         sliding_v = upload(torch.zeros(sliding_shape), ttnn.bfloat8_b, persistent_dims)
@@ -4684,7 +4697,7 @@ def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores(b
                 tt_v,
                 p_buf_k=sliding_k,
                 p_buf_v=sliding_v,
-                sliding_window_size=128,
+                sliding_window_size=sliding_window_size,
                 **sliding_args,
             )
             dense = call_sdpa(tt_q, tt_k, tt_v, p_buf_k=dense_k, p_buf_v=dense_v, **common)
@@ -4714,7 +4727,7 @@ def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores(b
             k_full[:, :, :chunk_global, :].repeat_interleave(gqa_ratio, dim=1),
             v_full[:, :, :chunk_global, :].repeat_interleave(gqa_ratio, dim=1),
             0,
-            sliding_window_size=128,
+            sliding_window_size=sliding_window_size,
         )
         scalar_rmse = torch.sqrt(((torch_sliding_ref - references[0][0]) ** 2).mean()).item()
         assert scalar_rmse < DEFAULT_RMSE_THRESHOLD, f"scalar sliding reference RMSE={scalar_rmse}"
@@ -5701,6 +5714,72 @@ def test_ring_joint_attention_block_cyclic_sliding_reuse(
     )
 
 
+@pytest.mark.parametrize("chunk_size_local", [512, 384, 256], ids=["two_hop", "three_hop_partial", "four_hop"])
+def test_ring_joint_attention_gemma_multi_hop_sliding_halo_geometry(expect_error, chunk_size_local):
+    """Gemma's W1024 window over a Q slab too narrow to hold it, so the halo spans several predecessors.
+
+    The Gemma4 chunk-4096 (two-hop) and chunk-2048 (four-hop) shapes at CP8, plus a 384-token slab
+    whose farthest hop carries only a partial slab. On this SP4 ring the four-hop halo also wraps
+    onto the device's own earlier slab, which is read locally.
+    """
+    run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
+        gpt_oss_chunked_mesh_config(),
+        batch_size=1,
+        expect_error=expect_error,
+        chunk_size_local=chunk_size_local,
+        sliding_window_size=1024,
+        local_q_heads=4,
+        local_kv_heads=2,
+        head_dim=256,
+        prefix_group_counts=(0, 1),
+        num_iterations=1,
+    )
+
+
+# The multi-hop Gemma geometries under block-cyclic requests: 256- and 512-token slabs with W1024 are the
+# per-rank slabs of Gemma4 chunk 2048 and 4096 at CP8. Starts may be unaligned as long as no device's Q
+# wraps a slab; a one-slot halo buffer is enough for those.
+@pytest.mark.parametrize("local", [256, 512], ids=["four_hop", "two_hop"])
+def test_ring_joint_attention_multi_hop_block_cyclic_sliding_reuse(local, expect_error):
+    mesh_config = gpt_oss_chunked_mesh_config()
+    chunk = local * mesh_config.sp_size
+    run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
+        mesh_config,
+        batch_size=1,
+        expect_error=expect_error,
+        chunk_size_local=local,
+        sliding_window_size=1024,
+        local_q_heads=4,
+        local_kv_heads=2,
+        head_dim=256,
+        q_chunk_size=128,
+        requests=[(0, 32), (32, 96), (local, chunk + local), (chunk + 32, 2 * chunk), (2 * chunk + 32, 2 * chunk + 96)],
+        halo_slots=1,
+    )
+
+
+# A multi-hop halo does not support block-cyclic Q that wraps a slab yet, so the op rejects a two-slot
+# halo buffer (provisioned for wrapping Q) instead of computing a wrong answer.
+def test_ring_joint_attention_multi_hop_rejects_wrapping_block_cyclic(expect_error):
+    mesh_config = gpt_oss_chunked_mesh_config()
+    local = 256
+    chunk = local * mesh_config.sp_size
+    with expect_error(RuntimeError, "multi-hop halo does not support block-cyclic Q"):
+        run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
+            mesh_config,
+            batch_size=1,
+            expect_error=expect_error,
+            chunk_size_local=local,
+            sliding_window_size=1024,
+            local_q_heads=4,
+            local_kv_heads=2,
+            head_dim=256,
+            q_chunk_size=128,
+            requests=[(local - 32, chunk + local - 32)],
+            num_iterations=1,
+        )
+
+
 def test_ring_joint_attention_gpt_oss_chunked_sliding_indexed_kv_cache_accuracy():
     """Validate sliding halo reads from each requested indexed K/V-cache slot on a cache hit."""
     chunk_size = 1024
@@ -5763,6 +5842,45 @@ def test_ring_joint_attention_gpt_oss_chunked_sliding_linear_topology_accuracy()
                 qk_configs=[(64, 128)],
                 persistent_buffer_mode="exact_per_chunk",
                 sliding_window_size=GPT_OSS_RING_SINK_CONFIG.sliding_window_size,
+                runtime=runtime,
+            )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
+
+
+@pytest.mark.parametrize(
+    "window_multiplier, hops",
+    [(2, 2), (4, 4)],
+    ids=["two_hop", "four_hop"],
+)
+def test_ring_joint_attention_multi_hop_sliding_halo_linear_topology_accuracy(window_multiplier, hops):
+    """Multi-hop sliding halo on an SP8 ring with linear fabric, where wrapping hops travel backward.
+
+    A 1024-token chunk gives each rank a 128-token Q slab, so a 2x / 4x window needs two / four hops.
+    On a BH Galaxy's two fabric links the four-hop case time-shares them, two hops per link.
+    """
+    chunk_size = 1024
+    total_seq = 2 * chunk_size
+    final_chunk = total_seq // chunk_size - 1
+    model = replace(
+        GPT_OSS_CHUNKED_MODEL,
+        name=f"gpt_oss_chunked_sliding_linear_{hops}_hop",
+        q_chunk_sizes=[64],
+        seq_len=chunk_size,
+    )
+
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG, topology=Topology.Linear)
+    try:
+        with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(final_chunk)}):
+            run_ring_joint_sdpa_chunked(
+                MESH_CONFIG,
+                model,
+                batch_size=1,
+                chunk_size=chunk_size,
+                total_seq=total_seq,
+                qk_configs=[(64, 128)],
+                persistent_buffer_mode="exact_per_chunk",
+                sliding_window_size=window_multiplier * GPT_OSS_RING_SINK_CONFIG.sliding_window_size,
                 runtime=runtime,
             )
     finally:
