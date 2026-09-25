@@ -26,7 +26,7 @@ struct CombineFabric2dParams {
     uint32_t num_links = 2;
     tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Mesh;
     // The routed expert's hybrid_token_threshold. Experts are walked in the order the routed expert
-    // finishes them -- count <= threshold first, then the rest -- and it MUST be the value that op used.
+    // finishes them -- count > threshold first, then the rest -- and it MUST be the value that op used.
     uint32_t hybrid_token_threshold = 0;
     // Overlapped with the routed expert in one program: before reading an expert's rows, wait until the
     // routed expert reports it written. Off when the op runs alone, where the rows are there at launch.

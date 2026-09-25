@@ -22,7 +22,7 @@ namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert
 // ProgramDescriptor with three merged kernels, one per RISC-V. A program holds at most one kernel
 // per processor per core and both halves want the same 88, so side-by-side placement is rejected
 // by the framework outright -- the halves have to share binaries.
-// Bytes of L1 scratch per core the op needs when pass A runs. Exposed because the caller has to
+// Bytes of L1 scratch per core the op needs when the fused pass runs. Exposed because the caller has to
 // allocate the arena: the program keeps a raw pointer into it, so it must outlive the program,
 // which a buffer made inside create_descriptor would not.
 uint32_t hybrid_l1_arena_bytes(tt::tt_metal::IDevice* device);
