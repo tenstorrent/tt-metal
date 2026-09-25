@@ -110,6 +110,17 @@ class _TtHCABase(LightweightModule):
             return ttnn.ReplicateTensorToMesh(self.device)
         return ttnn.ShardTensor2dMesh(self.device, mesh_shape=tuple(self.device.shape), dims=dims)
 
+    @staticmethod
+    def _update_in_place(persistent, new):
+        """``persistent[:] = new`` on device, then free ``new``. State tensors keep ONE address for the whole
+        prefill: a captured trace that read the carry / tail / priors at that address reads the right data on
+        every replay, and nothing the forward frees can be recycled under a captured read (DS4F-0247)."""
+        if new is persistent:
+            return persistent
+        ttnn.copy(new, persistent)
+        ttnn.deallocate(new)
+        return persistent
+
     def _scalar_buffer(self, dtype, shape=(1, 1, 1, 1), layout=ttnn.TILE_LAYOUT):
         """A one-element device tensor, allocated once and then overwritten by ``_push_scalar``. Values
         that change every chunk live here so forward never has to allocate."""
@@ -919,7 +930,7 @@ class TtHCA(_TtHCABase):
         src = ttnn.concat([state.tail, new_entries], dim=2)  # [B, 1, tile + width, head_dim]
         merged = ttnn.matmul(shift, src, memory_config=self.memory_config)
         ttnn.kv_cache.fill_cache_for_user_(state.compressed_kv, merged, 0, update_idx=f * tile)
-        state.tail = ttnn.matmul(take, merged, memory_config=self.memory_config)
+        self._update_in_place(state.tail, ttnn.matmul(take, merged, memory_config=self.memory_config))
         return merged, f * tile
 
     def _build_tail_tile_matrices(self, width):
@@ -1107,7 +1118,7 @@ class TtHCA(_TtHCABase):
             self._export_ring(export, slab, state.sliding_carry, state.kv_actual, real_len)
         state.entry_count = total_entries
         state.kv_actual += real_len
-        state.sliding_carry = next_carry
+        self._update_in_place(state.sliding_carry, next_carry)
         return self._o_proj(attn)
 
     # ---- export into the unified (migration) cache ------------------------------------------------------------
@@ -1216,5 +1227,5 @@ class TtHCA(_TtHCABase):
         if export is not None:
             self._export_ring(export, slab, state.sliding_carry, state.kv_actual, real_len)
         state.kv_actual += real_len
-        state.sliding_carry = next_carry
+        self._update_in_place(state.sliding_carry, next_carry)
         return self._o_proj(attn)

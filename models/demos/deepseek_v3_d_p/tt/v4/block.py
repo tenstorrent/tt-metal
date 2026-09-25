@@ -252,8 +252,9 @@ class TtV4PrefillBlock(LightweightModule):
             return
         st.kv_actual, st.entry_count = 0, 0
         if hasattr(st, "prior_c"):
-            st.prior_c = self.attn.compressor.empty_prior()
-            st.prior_i = self.attn.indexer.compressor.empty_prior()
+            # in place: the prior tensors keep their addresses (a captured chunk-0 trace reads them there)
+            self.attn.compressor.reset_prior(st.prior_c)
+            self.attn.indexer.compressor.reset_prior(st.prior_i)
         st.fresh = True
 
     def _export_target(self, caches, slot: int):

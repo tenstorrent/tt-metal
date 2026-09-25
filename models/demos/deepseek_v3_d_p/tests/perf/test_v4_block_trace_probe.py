@@ -98,6 +98,17 @@ def test_v4_block_trace_probe(mesh_device, device_params, layer_idx):
     ref = to_host_streams(mesh_device, out)
     for t in out:
         ttnn.deallocate(t)
+    # eager determinism at the same state: separates a replay hazard from an eager one (both must be 1.0)
+    block.reset_slot(0)
+    out = run()
+    ttnn.synchronize_device(mesh_device)
+    ref2 = to_host_streams(mesh_device, out)
+    for t in out:
+        ttnn.deallocate(t)
+    eager_pcc = min(comp_pcc(ref[0, :, h, :].float(), ref2[0, :, h, :].float())[1] for h in range(4))
+    logger.info(
+        f"[v4 trace] layer {layer_idx} ({block.kind}) eager-vs-eager (same state) worst-stream PCC {eager_pcc:.6f}"
+    )
 
     controller = SubDeviceTraceController(mesh_device)
     block.moe.set_trace_controller(controller)

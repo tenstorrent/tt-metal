@@ -108,6 +108,15 @@ class TtCSACompressor(TtHCACompressor):
         pk, pg = C.empty_prior(self.head_dim)
         return (self._f32(pk.view(1, 1, C.TILE, self.head_dim)), self._f32(pg.view(1, 1, C.TILE, self.head_dim)))
 
+    def reset_prior(self, prior: tuple) -> None:
+        """Refill a slot's persistent prior pair with the empty prior by device copies (no allocation, no host
+        write): the constant empties are built once per compressor."""
+        const = self.__dict__.get("_empty_prior_const")
+        if const is None:
+            const = self._empty_prior_const = self.empty_prior()
+        for dst, src in zip(prior, const):
+            ttnn.copy(src, dst)
+
     def _mm(self, a, b):
         return ttnn.matmul(a, b, dtype=ttnn.float32, memory_config=self.memory_config, compute_kernel_config=self.fp32)
 
@@ -417,8 +426,10 @@ class TtCSA(TtHCA):
         q, q_latent = self._q_stem(hidden_states, cos, sin, return_latent=True)
         sliding_kv = self._kv_stem(hidden_states, cos, sin)
 
-        entries, mask_block, state.prior_c = self.compressor(hidden_states, real_len, fwp, state.prior_c)
-        keys, _, state.prior_i = self.indexer.compressor(hidden_states, real_len, fwp, state.prior_i)
+        entries, mask_block, new_prior_c = self.compressor(hidden_states, real_len, fwp, state.prior_c)
+        keys, _, new_prior_i = self.indexer.compressor(hidden_states, real_len, fwp, state.prior_i)
+        for persistent, new in zip(state.prior_c + state.prior_i, new_prior_c + new_prior_i):
+            self._update_in_place(persistent, new)
         # the whole padded width is written (pad-derived entries are -inf-masked); tile-aligned, no tail tile
         assert state.entry_count % ttnn.TILE_SIZE == 0 and entries.shape[2] % ttnn.TILE_SIZE == 0
         assert state.entry_count + entries.shape[2] <= state.compressed_kv.shape[2], "compressed cache full"
@@ -442,7 +453,7 @@ class TtCSA(TtHCA):
             self._export_csa(export, entries, keys, slab, state, real_len)
         state.entry_count += n_new
         state.kv_actual += real_len
-        state.sliding_carry = next_carry
+        self._update_in_place(state.sliding_carry, next_carry)
         return self._o_proj(attn)
 
     # ---- export into the contract's unified caches (M5b) -------------------------------------------------------
