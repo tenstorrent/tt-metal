@@ -6,7 +6,7 @@
 // (hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_add_rsqrt.h),
 // promoted out of the deepseek_v3_b1 demo tree by tt-metal #52709.
 //
-// Computes, per DEST element:  result = rsqrt(x + addend)
+// Computes, per DEST element:  result = rsqrt(x * input_scale + addend)
 //
 // The addend is the RMSNorm epsilon in production (rsqrt(variance + eps)), which is
 // why the fused form exists at all: the add happens inside the SFPU slot, so the
@@ -15,10 +15,10 @@
 // This mirrors the call the compute API makes
 // (api/compute/experimental/add_rsqrt.h -> add_rsqrt_tile<fast_and_approx>):
 //
-//     calculate_add_rsqrt<APPROX, ITERATIONS, DST_ACCUM_MODE, fast_and_approx>(addend)
+//     calculate_add_rsqrt<APPROX, ITERATIONS, DST_ACCUM_MODE, fast_and_approx, typed_bf16_store, input_scale>(addend)
 //
 // dispatched at VectorMode::RC with ITERATIONS=8, i.e. 8 SFPU slots covering all four
-// faces of the tile. Both template axes the compute API exposes are swept here:
+// faces of the tile. The template axes the compute API exposes are swept here:
 //
 //   APPROX_MODE      picks the LUT-only SQRT_10-bits body vs the SQRT_23-bits
 //                    Newton refinement (ckernel_sfpu_sqrt.h _calculate_sqrt_body_).
@@ -26,6 +26,7 @@
 //                    That guard is the ONLY difference the flag makes here, so the
 //                    python test drives a negative (x + addend) to tell the two apart;
 //                    with a non-negative domain the flag is unobservable.
+//   SFPU_INPUT_SCALE the fp32 factor applied to x before the add (1.0 skips the multiply).
 //
 // init_add_rsqrt<APPROX> forwards to sqrt_init<APPROX>, which programs vConstIntPrgm0
 // and vConstFloatPrgm1 (plus vConstFloatPrgm2 on the !APPROX path) — the seed constants
@@ -118,7 +119,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_unary_sfpu_params_(
         []
         {
-            ckernel::sfpu::calculate_add_rsqrt<APPROX_MODE, 8 /* ITERATIONS */, is_fp32_dest_acc_en, SFPU_FAST_APPROX, SFPU_TYPED_BF16_STORE>(
+            ckernel::sfpu::calculate_add_rsqrt<APPROX_MODE, 8 /* ITERATIONS */, is_fp32_dest_acc_en, SFPU_FAST_APPROX, SFPU_TYPED_BF16_STORE, SFPU_INPUT_SCALE>(
                 SFPU_UNARY_SCALAR);
         },
         0 /* dst_index */,

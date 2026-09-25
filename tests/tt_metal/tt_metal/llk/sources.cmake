@@ -19,6 +19,7 @@ set(UNIT_TESTS_LLK_SRC
     test_mxfp6_typecast.cpp
     test_mxfp8_typecast.cpp
     test_mxint_typecast.cpp
+    test_norm_fidelity.cpp
     test_pack_rows.cpp
     test_quasar_mailboxes.cpp
     test_quasar_bfd_datacopy.cpp

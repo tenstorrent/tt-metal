@@ -377,6 +377,16 @@ class SFPU_TYPED_BF16_STORE(TemplateParameter):
 
 
 @dataclass
+class SFPU_INPUT_SCALE(TemplateParameter):
+    """``calculate_add_rsqrt``'s ``INPUT_SCALE``: the fp32 factor on x, as raw bits."""
+
+    value_bits: int = 0x3F800000  # 1.0f
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t SFPU_INPUT_SCALE = {self.value_bits}u;"
+
+
+@dataclass
 class SFPU_FAST_APPROX(TemplateParameter):
     """The sqrt/rsqrt family's ``FAST_APPROX`` template argument.
 

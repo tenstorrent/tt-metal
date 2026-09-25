@@ -178,4 +178,48 @@ ALWI void mul_reduce_scalar_chunked_tile(uint32_t icb0, uint32_t icb1, uint32_t 
 
 #endif  // ARCH_BLACKHOLE
 
+// Explicit-fidelity forms of mul_reuse_dest_init / mul_reuse_dest_tiles (eltwise_binary.h) and
+// mul_bcast_scalar_init / mul_tiles_bcast_scalar (bcast.h), named apart for the same reason as the rmsnorm
+// _fidelity variants above.
+template <EltwiseBinaryReuseDestType reuse_dest, MathFidelity math_fidelity>
+ALWI void mul_reuse_dest_init_fidelity(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
+    static_assert(
+        reuse_dest != EltwiseBinaryReuseDestType::NONE,
+        "reuse_dest must be DEST_TO_SRCA or DEST_TO_SRCB; for the two-operand op call mul_init(icb0, icb1).");
+    state_configure(icb, call_line);
+    UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, reuse_dest>(false, false, icb)));
+    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, math_fidelity, reuse_dest>(
+        icb, icb, false /* acc_to_dest */)));
+}
+
+template <EltwiseBinaryReuseDestType reuse_dest, MathFidelity math_fidelity, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void mul_reuse_dest_tiles_fidelity(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
+    UNPACK((llk_unpack_A<BroadcastType::NONE, true, reuse_dest>(in_cb_id, in_tile_index)));
+    MATH((llk_math_eltwise_binary<
+          EltwiseBinaryType::ELWMUL,
+          BroadcastType::NONE,
+          is_fp32_dest_acc_en,
+          math_fidelity,
+          reuse_dest>(in_cb_id, in_cb_id, dst_tile_index, true /* clear_fp32_dst_acc */)));
+}
+
+template <MathFidelity math_fidelity>
+ALWI void mul_bcast_scalar_init_fidelity(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+    state_configure(icb0, icb1, call_line);
+    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::SCALAR, math_fidelity>(icb0, icb1)));
+    UNPACK((llk_unpack_AB_init<BroadcastType::SCALAR>(icb0, icb1)));
+}
+
+template <MathFidelity math_fidelity, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void mul_tiles_bcast_scalar_fidelity(
+    uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
+    MATH((llk_math_eltwise_binary<
+          EltwiseBinaryType::ELWMUL,
+          BroadcastType::SCALAR,
+          is_fp32_dest_acc_en,
+          math_fidelity,
+          EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true /* clear_fp32_dst_acc */)));
+    UNPACK((llk_unpack_AB<BroadcastType::SCALAR>(icb0, icb1, itile0, itile1)));
+}
+
 }  // namespace ckernel
