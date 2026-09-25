@@ -23,6 +23,7 @@ from tracy import signpost
 
 import ttnn
 from models.common.sampling.generator import SamplingGenerator
+from models.demos.gemma4.tt import pli_env
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig, flush_deferred_bounded_fills
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.rms_norm import RMSNorm
@@ -1478,6 +1479,7 @@ class Gemma4Model:
         """Drain captured taps: list of [1,1,rows,H] device tensors, tap order."""
         taps, self._dflash_taps = self._dflash_taps, []
         return taps
+
     def _verify_pli_device_tensors(self, token_ids_host, pli_device_tensors):
         """Build one PLI tensor per layer for speculative verification."""
         if pli_device_tensors is not None:
@@ -1516,6 +1518,7 @@ class Gemma4Model:
         token_ids_host=None,
         pli_device_tensors=None,
         pli_stacked=None,
+        pli_on_device=False,
     ):
         """Multi-token speculative *verify* forward (batch holds the candidates).
 
@@ -1538,13 +1541,16 @@ class Gemma4Model:
             pli_device_tensors: optional list with exactly one PLI tensor per layer.
             pli_stacked: optional [n_layers,1,K,pli_size] PLI buffer. It takes
                 precedence over the host ids and per-layer list.
+            pli_on_device: derive PLI from token IDs and scaled embeddings on device.
 
         Returns:
             (logits, hidden) — logits [1,1,K,vocab] from the post-norm hidden;
             ``hidden`` is the post-final-norm hidden [1,1,K,hidden], the
             it-assistant drafter's recurrent seed.
         """
-        if pli_stacked is None:
+        if pli_on_device and (pli_stacked is not None or pli_device_tensors is not None):
+            raise ValueError("pass either pli_on_device=True or explicit PLI tensors, not both")
+        if pli_stacked is None and not pli_on_device:
             pli_device_tensors = self._verify_pli_device_tensors(token_ids_host, pli_device_tensors)
 
         if x.dtype in (ttnn.uint32, ttnn.int32):
@@ -1554,13 +1560,18 @@ class Gemma4Model:
             input_embeds = ttnn.to_layout(input_embeds, ttnn.TILE_LAYOUT)
         else:
             input_embeds = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        owns_pli_stacked = pli_on_device and bool(self.hidden_size_per_layer_input)
+        if owns_pli_stacked:
+            if x.dtype not in (ttnn.uint32, ttnn.int32):
+                raise ValueError("device PLI verification requires token-id input")
+            pli_stacked = self.compute_pli_device(x, input_embeds)
 
         token_index = None if self.rope_caches_2d else 0
         if page_tables_per_layer is None:
             page_tables_per_layer = getattr(self, "_active_page_tables_per_layer", None)
         page_tables_per_layer = self._page_tables_to_ttnn(page_tables_per_layer)
 
-        return self(
+        result = self(
             hidden_states=input_embeds,
             position_idx=current_pos,
             page_table=page_table,
@@ -1577,6 +1588,9 @@ class Gemma4Model:
             # serialized KV-write loop (KV is corrupted when False — timing only).
             sequential_kv_write=getattr(self, "_verify_seq_kv_write", True),
         )
+        if owns_pli_stacked:
+            pli_stacked.deallocate(True)
+        return result
 
     def ttnn_packed_verify_forward(
         self,
@@ -2435,7 +2449,7 @@ class Gemma4Model:
         if self.hidden_size_per_layer_input and self.per_layer_input_weights:
             if batch != 1:
                 raise NotImplementedError("Batched decode with per-layer inputs (E2B/E4B) is not yet supported")
-            if os.environ.get("GEMMA4_DECODE_PLI_DEV") == "1":
+            if pli_env.pli_on_device("GEMMA4_DECODE_PLI_DEV"):
                 # Host preparation precedes trace capture; upload the opt-in
                 # table here so no weight allocation occurs inside capture.
                 self.init_pli_device_weights()
@@ -2545,7 +2559,7 @@ class Gemma4Model:
             pli_combined = self._decode_pli_combined
 
         pli_stacked = None
-        if os.environ.get("GEMMA4_DECODE_PLI_DEV") == "1" and self.hidden_size_per_layer_input:
+        if pli_env.pli_on_device("GEMMA4_DECODE_PLI_DEV") and self.hidden_size_per_layer_input:
             if x.dtype not in (ttnn.uint32, ttnn.int32):
                 raise ValueError("device PLI decode requires token-id input")
             pli_stacked = self.compute_pli_device(x_embed, input_embeds)
