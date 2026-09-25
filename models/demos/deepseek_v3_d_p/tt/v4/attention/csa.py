@@ -791,6 +791,7 @@ class TtCSA(TtHCA):
             self.indexer._wq_b_all = self.indexer._to_tt_linear_weight(
                 self.indexer._host_q_b_proj_weight, tp_shard_dim=None, cache_name="wq_b_all"
             )
+        self.precreate_ring_consts(int(real_len))
 
     def prepare_chunk(self, state, real_len: int) -> None:
         """Eager, before the islands replay: push this chunk's position scalars into the persistent buffers the traced

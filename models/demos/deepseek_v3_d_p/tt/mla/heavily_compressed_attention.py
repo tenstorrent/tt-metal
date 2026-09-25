@@ -652,6 +652,7 @@ class TtHCA(_TtHCABase):
             self._build_masks(chunk, 0)
             self._slab_rope = self._build_rope_table(_rope_table_tokens(max_seq_len, chunk), 1)
             self._slab_index = self._rope_index_base(chunk // self.sp_factor)
+            self.precreate_ring_consts(int(chunk))
             return TtHCAState(
                 compressed_kv=None,
                 sliding_carry=self._from_torch(torch.zeros(batch, 1, self.sliding_window, self.head_dim)),
@@ -681,6 +682,7 @@ class TtHCA(_TtHCABase):
         # builds its own, with a row per ENTRY.
         self._slab_rope = self._build_rope_table(_rope_table_tokens(max_seq_len, chunk), 1)
         self._slab_index = self._rope_index_base(chunk // self.sp_factor)
+        self.precreate_ring_consts(int(chunk))
         return TtHCAState(
             compressed_kv=self._from_torch(torch.zeros(batch, 1, capacity, self.head_dim)),
             sliding_carry=self._from_torch(torch.zeros(batch, 1, self.sliding_window, self.head_dim)),
@@ -1241,6 +1243,26 @@ class TtHCA(_TtHCABase):
         ), f"unified cache too small: writing rows [{row}, {row + merged.shape[2]}) into {cache.shape[2]} rows"
         block = merged if merged.dtype == cache.dtype else ttnn.typecast(merged, cache.dtype)
         ttnn.kv_cache.fill_cache_for_user_(cache, block, int(batch_idx), update_idx=row)
+
+    def precreate_ring_consts(self, chunk: int) -> None:
+        """Build the export ring's one-hot select matrix and slab-window index pair for a full chunk (k_prev = 0) at
+        allocation time: created lazily on the first export they could otherwise be allocated after a trace capture
+        and be overwritten by that trace's replay (DS4F-0262 class)."""
+        sw = self.sliding_window
+        if chunk < sw:
+            return
+        a = min(((chunk - sw) // sw) * sw, chunk - 2 * sw)
+        if a < 0:
+            return
+        self._ring_select(chunk, a, 0)
+        if int(a) not in self._ring_window_index:
+
+            def idx(vals):
+                return self._from_torch(
+                    torch.tensor(vals, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+                )
+
+            self._ring_window_index[int(a)] = (idx([0, 0, a, 0]), idx([1, 1, a + 2 * sw, self.head_dim]))
 
     def _ring_select(self, r: int, a: int, k_prev: int):
         """One-hot [128, 256]: from a slab window of 256 rows starting at slab row ``a`` (token E_prev + a), pick
