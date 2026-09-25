@@ -1,0 +1,39 @@
+# DeepSeek-V4-Flash -- Gate 3-lite (transport, CROSS-ENDPOINT): the source prefill runner (endpoint 1, this host) migrates
+# slot 0 of its 4 real layers x 10,240 tokens into slot 0 of a DESTINATION runner on another host (endpoint 2) through the
+# tt-llm-engine over TCP; the destination host verifies its slot against the same golden with the V4 reader.
+# Driver process: PREFILL_NUM_USERS=1; --verify-migration off (the destination is not on this host).
+model:
+  variant: deepseek_v4_flash
+  num_layers: 4
+  max_seq_len: 10240
+  chunk_size: 5120
+transport:
+  sp: 8
+  tp: 4
+  h2d_service_id: dsv4_prefill
+  connect_timeout_s: 600
+workload:
+  num_users: 1
+  chunks: "2"
+  max_requests: 1
+  interleave: round_robin
+  check_pcc: true
+  trace_dir: /mnt/tt-data/sdawle/dsv4_flash_traces/golden_4l_10k
+migration:
+  issue: true
+  src_endpoint_id: 1
+  dest_endpoint_id: 2     # != src -> cross-endpoint P->D pairing (connect_to remote endpoint 2)
+  dst_slot_offset: 0      # slot 0 -> remote slot 0
+  timeout_ms: 3600000
+  done_file: /tmp/migration_done.sentinel
+  handoff_path: /tmp/dsv4_handoff.json
+  client_dir: /home/ttuser/sdawle/tt-llm-engine/disaggregation/migration/build_RelWithDebInfo/python
+  cmd_queue: /mig_ep1_cmd
+  table_queue: /mig_ep1_table
+  resp_queue: /mig_ep1_resp
+env:
+  PREFILL_MIGRATION_TABLE_PATH: /tmp/dsv4_kv_table.pb
+  PREFILL_MIGRATION_DEVICE_MAP_PATH: /tmp/dsv4_kv_devmap.json
+  PREFILL_STANDALONE_CHUNKED_PCC: "0.97"
+  PREFILL_HF_MODEL: /mnt/tt-data/sdawle/models/DeepSeek-V4-Flash-0731
+  PREFILL_TTNN_CACHE: /mnt/tt-data/sdawle/dsv4_flash_ttnn_cache

@@ -588,11 +588,13 @@ class TtCSA(TtHCA):
         # headroom past the entries: one chunk's entries (the final chunk writes its whole padded width) and, for the
         # fused indexer, Sq phantom columns + k-chunk alignment (path A2 scores kv_len = E + Sq rounded to 64)
         capacity = -(-entries // ttnn.TILE_SIZE) * ttnn.TILE_SIZE + max(chunk // rate, chunk + 64)
+        capacity = -(-capacity // 128) * 128  # the slab's carry rows start at S + capacity: keep it 128-aligned
         self._build_carry_index(chunk)
         self._build_masks(chunk, capacity)
         self.compressor.alloc_tables(max_seq_len, chunk, capacity)
         self.indexer.compressor.alloc_tables(max_seq_len, chunk, capacity)
         self._slab_chunk_tokens = int(chunk)  # path A v2 slab geometry
+        self._slab_cap = int(capacity)
         self._slab_rope = self._build_rope_table(_rope_table_tokens(max_seq_len, chunk), 1)
         self._slab_index = self._rope_index_base(chunk // self.sp_factor)
         return TtCSAState(
@@ -636,7 +638,7 @@ class TtCSA(TtHCA):
             # path A v2: the persistent row-major slab [carry 128 | chunk S | entries] the sparse gather reads. Its
             # entry region is appended every chunk (chunk 0 included, though it still runs path B) so the slab's shape
             # never changes -- the attention's programs then no longer depend on the chunk index.
-            self._slab_write(state, entries, self.sliding_window + seq_pad_global + state.entry_count)
+            self._slab_write(state, entries, seq_pad_global + state.entry_count)
 
         # LIVE EXTENT (DS4F-0252): attend the entries written so far (this chunk's included), not the whole
         # allocated capacity -- the index keys, the compressor's causal block and the compressed rows are sliced
@@ -703,16 +705,40 @@ class TtCSA(TtHCA):
         ``r % piece == 0`` every chip lands on local row ``r`` (the writer kernel's slab arithmetic), so the block is
         cut into ``piece``-row pieces, the largest of 128 / 64 / 32 that divides both ``row`` and ``H`` (128 for the
         engine's 5120-token chunks: 1280 entries per chunk)."""
-        H, W = int(block_tile.shape[2]), int(block_tile.shape[3])
-        assert row % ttnn.TILE_SIZE == 0 and H % ttnn.TILE_SIZE == 0, (row, H)
+        H = int(block_tile.shape[2])
         assert row + H <= int(cache.shape[2]), f"unified cache too small: rows [{row}, {row + H}) into {cache.shape[2]}"
+        piece = self._piece_rows(H, row, int(cache.shape[2]))
+        self._write_rm_pieces(cache, self._rm_pieces(block_tile, piece, cache.dtype), batch_idx, row)
+
+    @staticmethod
+    def _piece_rows(H: int, row: int, cache_rows: int) -> int:
+        """Rows per ``update_padded_kv_cache`` call for an H-row block at ``row``: the whole block when it is aligned
+        (row % H == 0 and cache rows % H == 0: the chunk at slab row 0, an entries block at a multiple of its height,
+        the carry at S + CAP), else the largest of 128 / 64 / 32 dividing both."""
+        assert row % ttnn.TILE_SIZE == 0 and H % ttnn.TILE_SIZE == 0, (row, H)
+        if row % H == 0 and cache_rows % H == 0:
+            return H
         piece = 128
         while row % piece or H % piece:
             piece //= 2
-        src = block_tile if block_tile.dtype == cache.dtype else ttnn.typecast(block_tile, cache.dtype)
+        return piece
+
+    def _rm_pieces(self, block_tile, piece: int, dtype) -> list:
+        """The chunk-invariant half of a unified-cache write (device ops only, so an island can prepare them): typecast
+        to the cache dtype, TILE -> ROW_MAJOR, cut into ``piece``-row pieces."""
+        H, W = int(block_tile.shape[2]), int(block_tile.shape[3])
+        assert H % piece == 0, (H, piece)
+        src = block_tile if block_tile.dtype == dtype else ttnn.typecast(block_tile, dtype)
         rm = ttnn.to_layout(src, ttnn.ROW_MAJOR_LAYOUT)
-        for j in range(H // piece):
-            part = rm if H == piece else ttnn.slice(rm, [0, 0, j * piece, 0], [1, 1, (j + 1) * piece, W])
+        if H == piece:
+            return [rm]
+        return [ttnn.slice(rm, [0, 0, j * piece, 0], [1, 1, (j + 1) * piece, W]) for j in range(H // piece)]
+
+    def _write_rm_pieces(self, cache, pieces: list, batch_idx: int, row: int) -> None:
+        """The eager half: one ``update_padded_kv_cache`` per piece at rows ``row + j * piece`` of batch ``batch_idx``."""
+        piece = int(pieces[0].shape[2])
+        assert row % piece == 0 and int(cache.shape[2]) % piece == 0, (row, piece, cache.shape)
+        for j, part in enumerate(pieces):
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
                 cache,
                 part,
@@ -728,6 +754,11 @@ class TtCSA(TtHCA):
     #         -> forward_attn (island, all shapes chunk-invariant) -> epilogue_chunk (eager: exports, counters).
     def traceable(self) -> bool:
         return self.sparse_path and self.fused_indexer
+
+    def trace_ready(self, state) -> bool:
+        """The islands run the sparse path: only once the context holds a full window and top-k worth of entries."""
+        rate = self.compressor.compress_rate
+        return int(state.kv_actual) >= max(self.sliding_window, self.indexer.topk * rate)
 
     def prepare_chunk(self, state, real_len: int) -> None:
         """Eager, before the islands replay: push this chunk's position scalars into the persistent buffers the traced
@@ -765,22 +796,27 @@ class TtCSA(TtHCA):
         seq_len = hidden_states.shape[2] * self.sp_factor
         start, end = self._carry_index[self._carry_key(real_len)]
         next_carry = ttnn.slice(sliding_kv, start, end, slice_dim=2, num_devices=seq_len // self.sliding_window)
-        return q, q_latent, sliding_kv, next_carry, entries, keys, cos, sin
+        # ROW_MAJOR bf16 copies for the slab (each lands in ONE update_padded_kv_cache in glue_chunk): the chunk's K rows,
+        # this chunk's entries, the previous chunk's carry (state.sliding_carry is still the previous chunk's here)
+        kv_rm = self._rm_pieces(sliding_kv, int(sliding_kv.shape[2]), ttnn.bfloat16)[0]
+        entries_rm = self._rm_pieces(entries, int(entries.shape[2]), ttnn.bfloat16)[0]
+        carry_rm = self._rm_pieces(state.sliding_carry, self.sliding_window, ttnn.bfloat16)[0]
+        return q, q_latent, sliding_kv, next_carry, entries, keys, cos, sin, kv_rm, entries_rm, carry_rm
 
-    def glue_chunk(self, state, outs, real_len: int) -> None:
+    def glue_chunk(self, state, outs, real_len: int, export=None) -> None:
         """Eager, between the islands: this chunk's entries / keys into the working caches, the slab rows the sparse
         gather reads (carry, chunk, entries), and the static scorer's mask: the previous chunk's cut block becomes 0,
         this chunk's [entry_count, E) columns get the rate-4 cut."""
-        q, q_latent, sliding_kv_g, next_carry, entries, keys, cos, sin = outs
+        q, q_latent, sliding_kv_g, next_carry, entries, keys, cos, sin, kv_rm, entries_rm, carry_rm = outs
         rate = self.compressor.compress_rate
         n_new = real_len // rate
         seq_pad_global = sliding_kv_g.shape[2]
         S_l = q.shape[2]
         ttnn.kv_cache.fill_cache_for_user_(state.compressed_kv, entries, 0, update_idx=state.entry_count)
         ttnn.kv_cache.fill_cache_for_user_(state.index_k, keys, 0, update_idx=state.entry_count)
-        self._slab_write(state, entries, self.sliding_window + seq_pad_global + state.entry_count)
-        self._slab_write(state, state.sliding_carry, 0)
-        self._slab_write(state, sliding_kv_g, self.sliding_window)
+        self._slab_write_rm(state, entries_rm, seq_pad_global + state.entry_count)
+        self._slab_write_rm(state, kv_rm, 0)
+        self._slab_write_rm(state, carry_rm, seq_pad_global + self._slab_cap)
         mask = self._score_mask(state, S_l)
         if state.entry_count > state.mask_zeroed_upto:
             # every entry before this chunk is fully visible now (covers an eager chunk 0 that never touched the mask)
@@ -821,19 +857,57 @@ class TtCSA(TtHCA):
         ttnn.copy(const, state.score_mask)
         state.mask_zeroed_upto = 0
 
-    def forward_attn(self, q, q_latent, hidden_states, sliding_kv_g, cos, sin, state):
+    def forward_attn(self, hidden_states, outs, state, real_len: int):
         """Island A2 (chunk-invariant): the static fused scorer + top-k over the whole key cache, the sparse gather
-        over the persistent slab, the TP head<->seq transposes, V's un-RoPE and the output projection -> y."""
+        over the persistent slab, the TP head<->seq transposes, V's un-RoPE and the output projection -> y; plus the
+        static halves of the export (H128-rotated index keys, the window ring rows, the pending-state block), so the
+        eager epilogue is only writes. -> (y, k_rot, ring, pending_block)."""
+        q, q_latent, sliding_kv_g, _nc, entries, keys, cos, sin = outs[:8]
         idx = self.indexer.select_indices_static(q_latent, hidden_states, cos, sin, state.index_k, state.score_mask)
         attn = self._sparse_core(q, idx, cos, sin, state.slab_rm, seq_len=sliding_kv_g.shape[2])
-        return self._o_proj(attn)
+        y = self._o_proj(attn)
+        # export prep (contract dtypes from kv_contract): rotated index keys (bfp8 tiles), the unified rows as RM pieces
+        # -- entries land at unified row 128 + entry_count, so their pieces are 128 rows (gcd of 128 + k*1280 and 1280);
+        # the ring (rows [0, 128)) and the pending block (32 rows at row 0) are one piece each
+        k_rot = ttnn.matmul(keys, self._h128_export(), memory_config=self.memory_config)
+        k_rot = self._rm_pieces_dtype_only(k_rot, self._contract_dtype("csa_index_k"))
+        ent_pieces = self._rm_pieces(entries, self.sliding_window, self._contract_dtype("csa_unified"))
+        ring = self._ring_rows(
+            sliding_kv_g, state.sliding_carry, state.kv_actual, real_len
+        )  # k_prev = 0 on full chunks
+        ring_rm = self._rm_pieces(ring, self.sliding_window, self._contract_dtype("csa_unified"))[0]
+        pblock = self._pending_block(state)
+        pblock_rm = self._rm_pieces(pblock, int(pblock.shape[2]), self._contract_dtype("csa_pending"))[0]
+        return (y, k_rot, ring_rm, pblock_rm, *ent_pieces)
 
-    def epilogue_chunk(self, state, outs, export, real_len: int) -> None:
-        """Eager, after the islands: the contract exports (unified rows, index keys, ring, pending) and the counters."""
-        q, q_latent, sliding_kv_g, next_carry, entries, keys, cos, sin = outs
+    @staticmethod
+    def _rm_pieces_dtype_only(t, dtype):
+        return t if t.dtype == dtype else ttnn.typecast(t, dtype)
+
+    @staticmethod
+    def _contract_dtype(name: str):
+        from models.demos.deepseek_v3_d_p.tt.v4 import kv_contract as kc
+
+        return {"bf16_rm": ttnn.bfloat16, "bfp8_tile": ttnn.bfloat8_b, "bfp4_tile": ttnn.bfloat4_b}[
+            kc.spec(name).dtype_tag
+        ]
+
+    def epilogue_chunk(self, state, outs, a2, export, real_len: int) -> None:
+        """Eager, after the islands: the contract exports, all prepared in A2 -> 10 + 1 + 1 ``update_padded_kv_cache``
+        and one ``fill_cache_for_user_`` per layer -- and the counters."""
+        next_carry = outs[3]
+        y, k_rot, ring_rm, pblock_rm = a2[:4]
+        ent_pieces = list(a2[4:])
         rate = self.compressor.compress_rate
         if export is not None:
-            self._export_csa(export, entries, keys, sliding_kv_g, state, real_len)
+            unified, index_k, batch_idx = export[:3]
+            pending = export[3] if len(export) > 3 else None
+            assert unified.dtype == ent_pieces[0].dtype and index_k.dtype == k_rot.dtype, (unified.dtype, index_k.dtype)
+            self._write_rm_pieces(unified, ent_pieces, batch_idx, self.sliding_window + int(state.entry_count))
+            ttnn.kv_cache.fill_cache_for_user_(index_k, k_rot, int(batch_idx), update_idx=int(state.entry_count))
+            self._write_rm_pieces(unified, [ring_rm], batch_idx, 0)
+            if pending is not None and real_len % rate == 0:
+                self._write_rm_pieces(pending, [pblock_rm], batch_idx, 0)
         state.entry_count += real_len // rate
         state.kv_actual += real_len
         # NOT _update_in_place: that deallocates its source, and next_carry is island A1's PERSISTENT output
@@ -845,7 +919,7 @@ class TtCSA(TtHCA):
         batch, seq_local = q.shape[0], q.shape[2]
         heads_local = self.num_heads // self.tp_factor
         ent = ttnn.typecast(topk_idx, ttnn.int32)
-        ent = ttnn.add(ent, self.sliding_window + seq_len)
+        ent = ttnn.add(ent, seq_len)  # entries start at slab row S
         ent = ttnn.typecast(ent, ttnn.uint32)
         if ent.layout != ttnn.ROW_MAJOR_LAYOUT:
             ent = ttnn.to_layout(ent, ttnn.ROW_MAJOR_LAYOUT)
@@ -892,16 +966,18 @@ class TtCSA(TtHCA):
     # ---- PATH A: sparse attention over [window | top-k entries] ---------------------------------------------------
     def _window_indices(self, seq_local: int):
         """[1, 1, S_l, 128] uint32 ROW_MAJOR, per SP chip: slab rows of the 128 keys ending at each query. The slab is
-        ``[carry 128 | chunk S | entries]``, so chunk-local token t sits at row t + 128 and its window is rows
-        t+1 .. t+128 (the carry holds the previous chunk's last 128 tokens). SP chip r owns tokens r*S_l .. ."""
+        ``[chunk S | entries CAP | carry 128]``: chunk-local token t sits at row t, the previous chunk's token
+        (chunk_start - 128 + j) at row S + CAP + j. SP chip r owns tokens r*S_l .. ."""
         dev = self._window_idx_dev.get(seq_local)
         if dev is None:
             S = seq_local * self.sp_factor
-            win = (
-                torch.arange(S, dtype=torch.int32).view(1, 1, S, 1)
-                + 1
-                + torch.arange(self.sliding_window, dtype=torch.int32).view(1, 1, 1, -1)
-            )
+            carry_base = S + self._slab_cap
+            t = (
+                torch.arange(S, dtype=torch.int64).view(S, 1)
+                - (self.sliding_window - 1)
+                + torch.arange(self.sliding_window, dtype=torch.int64).view(1, -1)
+            )  # token index of each window key, negative = in the carry
+            win = torch.where(t >= 0, t, carry_base + t + self.sliding_window).to(torch.int32).view(1, 1, S, -1)
             dev = self._window_idx_dev[seq_local] = self._from_torch(
                 win, mesh_mapper=self._mesh_mapper(sp_dim=2), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
             )
@@ -912,8 +988,12 @@ class TtCSA(TtHCA):
         `update_padded_kv_cache` writer), rows = 128 carry + one chunk + the compressed capacity."""
         from models.demos.deepseek_v3_d_p.tt.v4 import kv_cache as kvc
 
-        rows = self.sliding_window + self._slab_chunk_tokens + int(state.compressed_kv.shape[2])
-        rows = -(-rows // 128) * 128  # update_padded_kv_cache writes 128-row pieces: cache rows must be a multiple
+        # layout [chunk S | entries CAP | carry 128]: the chunk lands in ONE write at row 0, an entries block in one
+        # write at S + entry_count (both multiples of 1280), the carry at S + CAP; rows a multiple of S so the whole-chunk
+        # write is legal (update_padded_kv_cache: cache rows % input rows == 0)
+        S = self._slab_chunk_tokens
+        rows = S + int(state.compressed_kv.shape[2]) + self.sliding_window
+        rows = -(-rows // S) * S
         mesh_shape = tuple(self.device.shape) if self.is_mesh else (1, 1)
         state.slab_rm = kvc.alloc_rm_nd_cache(
             self.device, rows, self.head_dim, mesh_shape=mesh_shape, sp_axis=self.sp_axis, sp_factor=self.sp_factor
@@ -925,6 +1005,12 @@ class TtCSA(TtHCA):
         if state.slab_rm is None:
             self._slab_alloc(state)
         self._write_rm(state.slab_rm, block_tile, 0, row)
+
+    def _slab_write_rm(self, state, rm_block, row: int):
+        """Write an already ROW_MAJOR bf16 block (prepared inside an island) at slab row ``row`` in one call."""
+        if state.slab_rm is None:
+            self._slab_alloc(state)
+        self._write_rm_pieces(state.slab_rm, [rm_block], 0, row)
 
     def _sink_column(self, all_heads: bool):
         """[1, 1, H, 32] bf16 TILE: each head's sink / scale in column 0 (sparse_sdpa's attention_sink contract). All
@@ -967,12 +1053,12 @@ class TtCSA(TtHCA):
         # the slab, row-major for the gather kernel: rows [0,128) carry, [128, 128+S) this chunk, then the entries
         # (already appended by forward). Persistent + ND-sharded like the export caches; written in place with
         # update_padded_kv_cache, so only this chunk's 128 + S rows move here (v1 re-tilized the whole slab per chunk).
-        self._slab_write(state, carry, 0)
-        self._slab_write(state, sliding_kv, self.sliding_window)
+        self._slab_write(state, sliding_kv, 0)
+        self._slab_write(state, carry, seq_len + self._slab_cap)
         kv_rm = state.slab_rm
         # indices: window rows (constant per chip) ++ entry rows (top-k + the slab offset of the entries)
         ent = ttnn.typecast(topk_idx, ttnn.int32)
-        ent = ttnn.add(ent, self.sliding_window + seq_len)
+        ent = ttnn.add(ent, seq_len)  # entries start at slab row S
         ent = ttnn.typecast(ent, ttnn.uint32)
         if ent.layout != ttnn.ROW_MAJOR_LAYOUT:
             ent = ttnn.to_layout(ent, ttnn.ROW_MAJOR_LAYOUT)
@@ -1056,6 +1142,11 @@ class TtCSA(TtHCA):
         itself carries between chunks (its persistent last-32-token Ca rows, of which the last 4 are the window);
         rows 4..7 = the indexer compressor's Ca rows ``[kv_a (128) | gate_a (128) | 0 ...]``; rows 8..31 zero.
         The Cb half of a PARTIAL window (S % 4 != 0) is not covered -- the first handovers use S % 4 == 0."""
+        self._write_rm(pending, self._pending_block(state), batch_idx, 0)
+
+    def _pending_block(self, state):
+        """The [1, 1, 32, 1024] bf16 TILE csa_pending block (rows 0..3 main Ca [kv | gate+ape], 4..7 indexer Ca) from the
+        persistent priors -- chunk-invariant ops, so island A2 can prepare it."""
         rate = self.compressor.compress_rate
         rows = []
         for (pk, pg), width in ((state.prior_c, self.head_dim), (state.prior_i, self.indexer.head_dim)):
@@ -1068,5 +1159,4 @@ class TtCSA(TtHCA):
                 row = ttnn.pad(row, [(0, 0), (0, 0), (0, 0), (0, 2 * self.head_dim - 2 * width)], 0.0)
             rows.append(row)
         block = ttnn.concat(rows, dim=2)  # [1, 1, 2*rate, 1024]
-        block = ttnn.pad(block, [(0, 0), (0, 0), (0, C.TILE - 2 * rate), (0, 0)], 0.0)  # [1, 1, 32, 1024]
-        self._write_rm(pending, block, batch_idx, 0)
+        return ttnn.pad(block, [(0, 0), (0, 0), (0, C.TILE - 2 * rate), (0, 0)], 0.0)  # [1, 1, 32, 1024]

@@ -18,6 +18,7 @@ from typing import Callable, Optional
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 import DeepseekV4RotaryEmbedding
+from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import SharedScalar
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
 from models.demos.deepseek_v3_d_p.tt.v4.block import HC, TtV4PrefillBlock
@@ -126,6 +127,41 @@ class TtV4PrefillTransformer(LightweightModule):
     def alloc_states(self, num_users: int, max_seq_len: int) -> None:
         for layer in self.layers:
             layer.alloc_states(num_users, max_seq_len, self.chunk_tokens)
+        self.share_scalar_buffers()
+
+    def share_scalar_buffers(self) -> None:
+        """Alias the per-chunk scalar buffers that every layer pushes with the same value -- the rope base
+        (kv_actual) of every attention module, and each compressor's entry-count base per compress rate -- to one
+        ``SharedScalar`` each, so a chunk costs 2-3 host writes instead of 3 per CSA layer + 1-2 per HCA / SWA layer
+        (each `copy_host_to_device_tensor` is a blocking round trip on the host-issue-bound galaxy). Every consumer
+        goes through ``_push_scalar`` / ``_rope_index``, which unwrap the alias. Idempotent."""
+        kv = None
+        ent = {}
+        for layer in self.layers:
+            attn = layer.attn
+            idx = getattr(attn, "_slab_index", None)
+            if idx is not None:
+                if kv is None:
+                    kv = idx[1] if isinstance(idx[1], SharedScalar) else SharedScalar(idx[1])
+                attn._slab_index = (idx[0], kv)
+            comps = [getattr(attn, "compressor", None), getattr(getattr(attn, "indexer", None), "compressor", None)]
+            for comp in comps:
+                if comp is None:
+                    continue
+                for name in ("_entry_index", "_entry_index_full"):
+                    t = getattr(comp, name, None)
+                    if t is None:
+                        continue
+                    key = (int(comp.compress_rate), name)
+                    if key not in ent:
+                        ent[key] = t[1] if isinstance(t[1], SharedScalar) else SharedScalar(t[1])
+                    setattr(comp, name, (t[0], ent[key]))
+                mc = getattr(comp, "_mask_consts", None)
+                if mc is not None:
+                    for name, key in (("ec", (int(comp.compress_rate), "ec")), ("rl", ("all", "rl"))):
+                        if key not in ent:
+                            ent[key] = mc[name] if isinstance(mc[name], SharedScalar) else SharedScalar(mc[name])
+                        mc[name] = ent[key]
 
     def enable_trace_islands(self, x, input_ids=None) -> None:
         """Capture every layer's trace islands (``TtV4PrefillBlock.enable_trace_islands``) after an eager warm-up
@@ -136,6 +172,10 @@ class TtV4PrefillTransformer(LightweightModule):
             layer.enable_trace_islands(streams, input_ids=input_ids if layer.hash_layer else None)
         for t in streams:
             ttnn.deallocate(t)
+
+    def release_islands(self) -> None:
+        for layer in self.layers:
+            layer.release_islands()
 
     def _entry_streams(self, x) -> list:
         if self.is_first_rank:

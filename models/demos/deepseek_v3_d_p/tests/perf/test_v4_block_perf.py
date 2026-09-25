@@ -179,8 +179,12 @@ def test_v4_block_perf(mesh_device, device_params, layer_idx):
             actual_start=start,
             actual_end=start + _CHUNK,
             input_ids=input_ids,
-            on_layer_complete=acks.append,
+            on_layer_complete=ack_after_drain,  # the runtime's PREFILL_LAYER_ACK_MODE=layer behaviour
         )
+
+    def ack_after_drain(layer):
+        ttnn.synchronize_device(mesh_device)
+        acks.append(layer)
 
     rows = []
     for it in range(_ITERS):

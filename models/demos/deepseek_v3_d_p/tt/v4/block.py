@@ -281,19 +281,22 @@ class TtV4PrefillBlock(LightweightModule):
         A = TraceIsland(self.mesh_device, island_a, S_in, name=f"layer{self.layer_idx}.A")
         post, comb, h = A.capture()
         self._attn_islands = {}
-        if self.kind == CSA and getattr(self.attn, "traceable", lambda: False)():
-            # PATH A3 (DS4F-0246, galaxy: CSA issue 104 ms vs 20 ms device): the attention itself as two islands per slot,
-            # A1 = stems + compressors + SP gather, A2 = static fused scorer + sparse gather + o-proj, with eager glue for
-            # the position-dependent writes. Warm each phase eagerly first (compiles; mutates the slot, reset at request
-            # start), then capture with the same scalars pushed so no host write lands inside the capture.
+        if getattr(self.attn, "traceable", lambda: False)():
+            # PATH A3 (DS4F-0246, galaxy: CSA issue 104 ms vs 20 ms device; HCA 26 vs 13.5): the attention itself as two
+            # islands per slot -- A1 = stems + compressor(s) (+ SP gather), A2 = the attention core + o-proj + export prep
+            # -- with eager glue / epilogue for the position-dependent writes. Protocol shared by the CSA and HCA modules:
+            # prepare_chunk / forward_pre / glue_chunk / forward_attn / epilogue_chunk + trace_ready(state). Warm each
+            # phase eagerly first (compiles; mutates the slot, reset at request start), then capture with the same
+            # scalars pushed so no host write lands inside the capture.
             S_l = streams[0].shape[2]
             chunk_tokens = S_l * self.mesh_device.shape[self.sp_axis]
             for slot, state in self.states.items():
                 self.attn.prepare_chunk(state, chunk_tokens)
                 warm = self.attn.forward_pre(h, state, chunk_tokens)
-                self.attn.glue_chunk(state, warm, chunk_tokens)
-                y_warm = self.attn.forward_attn(warm[0], warm[1], h, warm[2], warm[6], warm[7], state)
-                ttnn.deallocate(y_warm)
+                self.attn.glue_chunk(state, warm, chunk_tokens, None)
+                a2_warm = self.attn.forward_attn(h, warm, state, chunk_tokens)
+                for t in a2_warm:
+                    ttnn.deallocate(t)
                 for t in warm:
                     ttnn.deallocate(t)
                 self.attn.prepare_chunk(state, chunk_tokens)
@@ -304,10 +307,10 @@ class TtV4PrefillBlock(LightweightModule):
                     name=f"layer{self.layer_idx}.A1.slot{slot}",
                 )
                 outs = A1.capture()
-                self.attn.glue_chunk(state, outs, chunk_tokens)
+                self.attn.glue_chunk(state, outs, chunk_tokens, None)
                 A2 = TraceIsland(
                     self.mesh_device,
-                    lambda _o=outs, _st=state: self.attn.forward_attn(_o[0], _o[1], h, _o[2], _o[6], _o[7], _st),
+                    lambda _o=outs, _st=state: self.attn.forward_attn(h, _o, _st, chunk_tokens),
                     [],
                     name=f"layer{self.layer_idx}.A2.slot{slot}",
                 )
@@ -347,6 +350,24 @@ class TtV4PrefillBlock(LightweightModule):
     def islands_enabled(self) -> bool:
         return self._islands is not None
 
+    def release_islands(self) -> None:
+        """Free this layer's captured traces (A, B and the per-slot attention islands A1/A2) and the sub-device managers
+        that own them. Must run BEFORE the mesh device closes: a MeshTraceBuffer destroyed by the SubDeviceManager
+        tracker during close segfaults in BankManager::deallocate_buffer (DS4F-0258; same mechanism as the MLA runtime's
+        release_trace). Idempotent."""
+        for islands in (getattr(self, "_attn_islands", None) or {}).values():
+            for i in islands:
+                i.release()
+        self._attn_islands = {}
+        if self._islands is not None:
+            for i in self._islands[:2]:
+                if i is not None:
+                    i.release()
+            self._islands = None
+        release = getattr(self.moe, "release_sub_device_managers", None)
+        if release is not None:
+            release()
+
     def _forward_traced(self, streams, *, slot, caches, real_len, input_ids, on_layer_complete, on_layer_hidden):
         A, B, S_in, y_buf, ids_buf = self._islands
         state = self.states[slot]
@@ -355,22 +376,20 @@ class TtV4PrefillBlock(LightweightModule):
         post, comb, h = A.replay()
         state.fresh = False
         attn_islands = self._attn_islands.get(slot) if getattr(self, "_attn_islands", None) else None
-        rate = getattr(getattr(self.attn, "compressor", None), "compress_rate", 4)
-        traced_attn = attn_islands is not None and state.kv_actual >= max(
-            self.attn.sliding_window, self.attn.indexer.topk * rate
-        )
+        traced_attn = attn_islands is not None and self.attn.trace_ready(state)
         if traced_attn:
             A1, A2 = attn_islands
+            export = self._export_target(caches, slot)
             self.attn.prepare_chunk(state, real_len)
             outs = A1.replay()
-            self.attn.glue_chunk(state, outs, real_len)
-            y = A2.replay()[0]
-            self.attn.epilogue_chunk(state, outs, self._export_target(caches, slot), real_len)
+            self.attn.glue_chunk(state, outs, real_len, export)
+            a2 = A2.replay()
+            y = a2[0]
+            self.attn.epilogue_chunk(state, outs, a2, export, real_len)
         else:
             y = self.attn(h, seq_len_actual=real_len, state=state, export=self._export_target(caches, slot))
         if on_layer_complete is not None:
-            ttnn.synchronize_device(self.mesh_device)
-            on_layer_complete(self.layer_idx)
+            on_layer_complete(self.layer_idx)  # the runtime decides when (and whether) to drain the device first
         if self.kv_only:
             if not traced_attn:
                 ttnn.deallocate(y)
@@ -447,8 +466,7 @@ class TtV4PrefillBlock(LightweightModule):
         y = self.attn(h, seq_len_actual=real_len, state=state, export=self._export_target(caches, slot))
         ttnn.deallocate(h)
         if on_layer_complete is not None:
-            ttnn.synchronize_device(self.mesh_device)  # the unified-cache writes are done before the ack fires
-            on_layer_complete(self.layer_idx)
+            on_layer_complete(self.layer_idx)  # the runtime drains the device before the ack fires (per layer or chunk)
         if self.kv_only:
             return None
         streams = self.attn_hc.mix(streams, y, post, comb)

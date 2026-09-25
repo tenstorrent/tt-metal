@@ -9,6 +9,7 @@ owns the model and knows how to write the caches. Eager only (no trace) in this 
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -155,6 +156,16 @@ class TtV4PrefillRuntime:
         )
         logger.info(f"[v4 runtime] trace islands captured: {len(self.model.layers)} layers, {segs} trace segments")
 
+    def release_trace(self) -> None:
+        """The engine's shutdown hook (prefill_runner calls ``runtime.release_trace`` before ``close_mesh_device``):
+        free every layer's islands and their sub-device managers while the allocator is still alive. Without it a
+        traced runner segfaults at exit in BankManager::deallocate_buffer via SubDeviceManager::~SubDeviceManager ->
+        MeshTraceBuffer::~MeshTraceBuffer (DS4F-0258, MEASURED on run14 host 30 after a successful 26-chunk request).
+        Idempotent; a no-op when no islands were captured."""
+        if getattr(self, "_trace_captured", False):
+            self.model.release_islands()
+            self._trace_captured = False
+
     def make_chunk_input(self, token_ids: list):
         c = self.config
         if c.is_first_rank:
@@ -229,6 +240,17 @@ class TtV4PrefillRuntime:
                     ttnn.deallocate(ids)
                     ids = self._ids_dev
         self._request_id = int(request_id)
+        # LayerAck granularity (PREFILL_LAYER_ACK_MODE): "layer" drains the device after EVERY layer before acking it
+        # (the engine's pipelined per-layer migration; serialises host issue and device work 43 times per chunk),
+        # "chunk" (default) lets the layers queue up and drains once after the chunk, then acks every layer in order
+        # -- the consumer still sees one ack per layer, all of them after the chunk's KV writes have landed.
+        deferred: list = []
+        cb = None
+        if not warmup and self._ack is not None:
+            if self._ack_mode == "layer":
+                cb = self._ack_after_drain
+            else:
+                cb = deferred.append
         out = self.model(
             input_tensor,
             slot=slot_id,
@@ -236,13 +258,27 @@ class TtV4PrefillRuntime:
             actual_start=int(actual_start),
             actual_end=int(actual_end),
             input_ids=ids,
-            on_layer_complete=None if warmup else self._ack,
+            on_layer_complete=cb,
         )
+        if deferred:
+            ttnn.synchronize_device(self.mesh_device)
+            for layer_idx in deferred:
+                self._ack(layer_idx)
         if isinstance(ids, ttnn.Tensor) and ids is not getattr(self, "_ids_dev", None):
             ttnn.deallocate(ids)
         if c.is_last_rank:
             return None
         return out
+
+    @property
+    def _ack_mode(self) -> str:
+        mode = os.environ.get("PREFILL_LAYER_ACK_MODE", "chunk")
+        assert mode in ("layer", "chunk"), f"PREFILL_LAYER_ACK_MODE={mode!r}: expected 'layer' or 'chunk'"
+        return mode
+
+    def _ack_after_drain(self, layer_idx: int) -> None:
+        ttnn.synchronize_device(self.mesh_device)  # the unified-cache writes are done before the ack fires
+        self._ack(layer_idx)
 
     def set_layer_ack_channel(self, channel) -> None:
         self._ack = lambda layer_idx: channel.inject(1)

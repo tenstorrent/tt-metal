@@ -16,6 +16,8 @@ the module communicates.
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
@@ -45,6 +47,12 @@ class _TtHyperBase(LightweightModule):
             packer_l1_acc=True,
         )
         self._gather_bufs: dict = {}
+        # STACKED mode (PREFILL_MHC_STACKED=1): the four streams are concatenated into ONE [1, 4, S_l, D_l] tensor inside
+        # the module, so the per-stream loops become single batched ops (matmul over the batch dim, broadcast multiply +
+        # fast_reduce_nc). Same algebra, ~5x fewer programs per site: the block is device-bound on program count once
+        # the attention is traced (DS4F-0246: 574-896 programs per layer, ~280 of them these fp32 mHC ops).
+        self.stacked = os.environ.get("PREFILL_MHC_STACKED", "0") == "1"
+        self._sel_consts: dict = {}
 
     # ---- host -> device --------------------------------------------------------------------------------------
     def _mesh_mapper(self, sp_dim=None, tp_dim=None):
@@ -73,6 +81,7 @@ class _TtHyperBase(LightweightModule):
     def _upload_row_constants(self, W: dict):
         # FN / ONES: [H, D, 32] -> per stream [1, 1, D_l, 32], TP-split on D
         self.FN = [self._const(W["FN"][h].unsqueeze(0).unsqueeze(0), tp_dim=2) for h in range(M.HC)]
+        self.FN_STACK = self._const(W["FN"].view(1, M.HC, W["FN"].shape[1], M.ROW), tp_dim=2)  # [1, H, D_l, 32]
         self.ONES = self._const(W["ONES"][0].unsqueeze(0).unsqueeze(0), tp_dim=2)
         self.SV = self._const(W["SV"].view(1, 1, 1, M.ROW))
         self.BV = self._const(W["BV"].view(1, 1, 1, M.ROW))
@@ -114,6 +123,41 @@ class _TtHyperBase(LightweightModule):
         ms = self._mm(part, self.MS)
         rstd = ttnn.rsqrt(ttnn.add(ms, self.rms_eps))
         return ttnn.multiply(part, rstd)
+
+    # ---- stacked helpers (PREFILL_MHC_STACKED) -----------------------------------------------------------------
+    def _stack(self, streams: list):
+        """[1, H, S_l, D_l] fp32 from the H bf16 streams (2 programs)."""
+        return ttnn.typecast(ttnn.concat(streams, dim=1), ttnn.float32)
+
+    def _mix_row_stacked(self, Xf):
+        """``_mix_row`` on the stacked streams: batched fn matmul + squares in 5 programs instead of 5 per stream."""
+        p = self._mm(Xf, self.FN_STACK)  # [1, H, S_l, 32], per-stream fn
+        s_ = self._mm(ttnn.multiply(Xf, Xf), self.ONES)  # ONES broadcast over the stream dim
+        part = ttnn.experimental.fast_reduce_nc(
+            ttnn.add(p, s_), dims=[1], output=None, compute_kernel_config=self.fp32
+        )  # [1, 1, S_l, 32]
+        part = self._tp_all_reduce(part)
+        ms = self._mm(part, self.MS)
+        rstd = ttnn.rsqrt(ttnn.add(ms, self.rms_eps))
+        return ttnn.multiply(part, rstd)
+
+    def _select_cols(self, row, cols: list):
+        """``row[:, cols]`` as a [1, 1, S_l, len(cols)] tensor via one constant selection matmul (any column order)."""
+        key = (int(row.shape[3]), tuple(cols))
+        sel = self._sel_consts.get(key)
+        if sel is None:
+            m = torch.zeros(1, 1, int(row.shape[3]), len(cols))
+            for j, c in enumerate(cols):
+                m[0, 0, c, j] = 1.0
+            sel = self._sel_consts[key] = self._const(m)
+        return self._mm(row, sel)
+
+    def _weighted_sum_stacked(self, weights_cols, Xf):
+        """sum_h weights[:, h] * Xf[h]: weights [1, 1, S_l, H] -> [1, H, S_l, 1] (per-stream column), broadcast
+        multiply over D, reduce over the stream dim -> [1, 1, S_l, D_l] fp32 (3 programs instead of 3 per stream)."""
+        w = ttnn.permute(weights_cols, (0, 3, 2, 1))  # [1, H, S_l, 1]
+        prod = ttnn.multiply(Xf, w)
+        return ttnn.experimental.fast_reduce_nc(prod, dims=[1], output=None, compute_kernel_config=self.fp32)
 
     @staticmethod
     def _col(row, c: int):
@@ -176,8 +220,13 @@ class TtHyperConnection(_TtHyperBase):
 
     def forward(self, streams: list):
         assert len(streams) == M.HC
-        xf = [ttnn.typecast(x, ttnn.float32) for x in streams]
-        mix = self._mix_row(xf)
+        if self.stacked:
+            xf = None
+            Xf = self._stack(streams)
+            mix = self._mix_row_stacked(Xf)
+        else:
+            xf = [ttnn.typecast(x, ttnn.float32) for x in streams]
+            mix = self._mix_row(xf)
         aff = ttnn.add(ttnn.multiply(mix, self.SV), self.BV)
         sig = ttnn.sigmoid(aff)
         pre = ttnn.add(sig, self.hc_eps)
@@ -190,6 +239,11 @@ class TtHyperConnection(_TtHyperBase):
         for _ in range(self.sinkhorn_iters - 1):
             X = ttnn.div(X, self._mm(X, self.R_AUG))
             X = ttnn.div(X, self._mm(X, self.C_AUG))
+        if self.stacked:
+            w = self._select_cols(pre, list(range(M.PRE0, M.PRE0 + M.HC)))
+            collapsed = ttnn.typecast(self._weighted_sum_stacked(w, Xf), streams[0].dtype)
+            ttnn.deallocate(Xf)
+            return post, X, collapsed
         collapsed = ttnn.typecast(self._weighted_sum(pre, M.PRE0, xf), streams[0].dtype)
         for x in xf:
             ttnn.deallocate(x)
@@ -198,6 +252,8 @@ class TtHyperConnection(_TtHyperBase):
     def mix(self, streams: list, y, post_row, comb_row) -> list:
         """out_k = post[:, 4+k] * y + sum_j comb[j, k] * x_j   (comb consumed transposed, as the reference)."""
         assert len(streams) == M.HC
+        if self.stacked:
+            return self._mix_stacked(streams, y, post_row, comb_row)
         xf = [ttnn.typecast(x, ttnn.float32) for x in streams]
         yf = ttnn.typecast(y, ttnn.float32)
         out = []
@@ -210,6 +266,25 @@ class TtHyperConnection(_TtHyperBase):
         for x in xf:
             ttnn.deallocate(x)
         ttnn.deallocate(yf)
+        return out
+
+    def _mix_stacked(self, streams: list, y, post_row, comb_row) -> list:
+        """The stacked ``mix``: y joins the streams as a 5th slab, the (comb | post) rows are concatenated once and the
+        20 weights re-ordered k-major by one selection matmul; each output stream is then ONE broadcast multiply + ONE
+        stream-dim reduce (24 programs for the site instead of ~65)."""
+        X5 = self._stack(streams + [y])  # [1, H+1, S_l, D_l] fp32
+        rows = ttnn.concat([comb_row, post_row], dim=3)  # [1, 1, S_l, 64]: comb cols 0..31, post cols 32..63
+        cols = []
+        for k in range(M.HC):
+            cols += [M.comb_index(j, k) for j in range(M.HC)] + [M.ROW + M.POST0 + k]
+        W = self._select_cols(rows, cols)  # [1, 1, S_l, (H+1)*H], k-major
+        out = []
+        for k in range(M.HC):
+            wk = ttnn.slice(W, [0, 0, 0, k * (M.HC + 1)], [1, 1, W.shape[2], (k + 1) * (M.HC + 1)])
+            acc = self._weighted_sum_stacked(wk, X5)
+            out.append(ttnn.typecast(acc, streams[0].dtype))
+            ttnn.deallocate(acc)
+        ttnn.deallocate(X5)
         return out
 
 
@@ -246,6 +321,15 @@ class TtHyperHead(_TtHyperBase):
         )
 
     def forward(self, streams: list):
+        if self.stacked:
+            Xf = self._stack(streams)
+            mix = self._mix_row_stacked(Xf)
+            pre = ttnn.add(ttnn.sigmoid(ttnn.add(ttnn.multiply(mix, self.SV), self.BV)), self.hc_eps)
+            out = ttnn.typecast(
+                self._weighted_sum_stacked(self._select_cols(pre, list(range(M.HC))), Xf), streams[0].dtype
+            )
+            ttnn.deallocate(Xf)
+            return out
         xf = [ttnn.typecast(x, ttnn.float32) for x in streams]
         mix = self._mix_row(xf)
         pre = ttnn.add(ttnn.sigmoid(ttnn.add(ttnn.multiply(mix, self.SV), self.BV)), self.hc_eps)

@@ -7,6 +7,7 @@ Mirrors ``DeepseekV4Attention`` in ``reference/deepseek_v4/modeling_deepseek_v4.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import torch
@@ -29,6 +30,19 @@ def _rope_table_tokens(max_seq_len: int, chunk_tokens: int) -> int:
     """How many token positions a rope table has to cover: the context rounded up to whole chunks, plus one
     chunk more, because the last chunk's padded slab runs past the end of the real context."""
     return -(-int(max_seq_len) // chunk_tokens) * chunk_tokens + chunk_tokens
+
+
+class SharedScalar:
+    """A device scalar buffer shared by several modules that push the SAME value every chunk (the chunk's kv_actual,
+    a compressor's entry count), so the host writes it once per chunk instead of once per layer (63 -> 2 tiny
+    blocking writes per chunk on the 43-layer model). ``value`` is the last pushed value; the modules see the same
+    ``buf`` object, so the trace islands they captured read the shared buffer."""
+
+    __slots__ = ("buf", "value")
+
+    def __init__(self, buf):
+        self.buf = buf
+        self.value = None
 
 
 class _TtHCABase(LightweightModule):
@@ -130,18 +144,29 @@ class _TtHCABase(LightweightModule):
         """Overwrite an existing device buffer with one value -- the only thing forward still sends from
         host. Skipped when the buffer already holds ``v`` (the last pushed value is remembered per buffer):
         a forward re-run at the same chunk position -- a trace capture after its warm-up -- then writes
-        nothing (DS4F-0247: a host write inside ``begin_trace_capture`` is fatal)."""
+        nothing (DS4F-0247: a host write inside ``begin_trace_capture`` is fatal). A ``SharedScalar`` (one
+        buffer aliased by every layer that pushes the same value each chunk: kv_actual, entry counts) remembers
+        its value itself, so the first layer's push serves all of them."""
+        if isinstance(buf, SharedScalar):
+            if buf.value == v:
+                return buf.buf
+            self._write_scalar(buf.buf, v)
+            buf.value = v
+            return buf.buf
         pushed = self.__dict__.setdefault("_pushed_scalars", {})
         key = buf.buffer_address() if hasattr(buf, "buffer_address") else id(buf)
         if pushed.get(key) == v:
             return buf
+        self._write_scalar(buf, v)
+        pushed[key] = v
+        return buf
+
+    def _write_scalar(self, buf, v) -> None:
         host_dtype = torch.float32 if buf.dtype == ttnn.float32 else torch.int32
         host = self._from_torch(
             torch.full(tuple(buf.shape), v, dtype=host_dtype), dtype=buf.dtype, layout=buf.layout, on_device=False
         )
         ttnn.copy_host_to_device_tensor(host, buf)
-        pushed[key] = v
-        return buf
 
     def _build_rope_table(self, count: int, stride: int):
         """cos/sin for every position this layer can ever rotate by, built once. forward only gathers rows
@@ -1130,6 +1155,80 @@ class TtHCA(_TtHCABase):
         state.kv_actual += real_len
         self._update_in_place(state.sliding_carry, next_carry)
         return self._o_proj(attn)
+
+    # ---- trace islands (the CSA path-A3 pattern, DS4F-0246: the galaxy is host-issue bound) ---------------------
+    # A1 = rope gather + q / kv stems + compressor (entries, mask block); eager glue = the position-dependent tail-tile
+    # write of the entries into the working cache + their mirror into the unified cache; A2 = SP gather, carry slice,
+    # dense SDPA over [carry | chunk | every entry column] (static: the full capacity, masked by the compressor's
+    # block), un-rope, o-proj, the export's ring rows; eager epilogue = ring write + counters + carry copy.
+    def traceable(self) -> bool:
+        return self.compressor is not None and os.environ.get("PREFILL_HCA_ISLANDS", "1") == "1"
+
+    def trace_ready(self, state) -> bool:
+        """Chunk 0 stays eager: it masks the (still empty) carry columns; the islands are captured with them visible."""
+        return int(state.kv_actual) > 0
+
+    def prepare_chunk(self, state, real_len: int) -> None:
+        """Eager, before the islands replay: this chunk's position scalars into the buffers the captured ops read
+        (value-cached, so the capture that follows a matching prepare writes nothing from host)."""
+        c = self.compressor
+        self._push_scalar(self._slab_index[1], int(state.kv_actual))
+        c._push_scalar(c._entry_index[1], int(state.entry_count))  # == first_window_position // rate
+        c._push_scalar(c._mask_consts["ec"], int(state.entry_count))
+        c._push_scalar(c._mask_consts["rl"], int(real_len))
+
+    def forward_pre(self, hidden_states, state, real_len: int):
+        rate = self.compressor.compress_rate
+        assert real_len % rate == 0 and real_len >= rate, real_len
+        cos, sin = self._rope_gather(self._slab_rope, self._rope_index(self._slab_index, int(state.kv_actual)))
+        q = self._q_stem(hidden_states, cos, sin)
+        sliding_kv = self._kv_stem(hidden_states, cos, sin)
+        new_entries, mask_block = self.compressor(
+            hidden_states, seq_len_actual=real_len, first_window_position=int(state.entry_count) * rate
+        )
+        return q, sliding_kv, new_entries, mask_block, cos, sin
+
+    def glue_chunk(self, state, outs, real_len: int, export=None) -> None:
+        _q, _kv, new_entries, _m, _c, _s = outs
+        merged, tile_start = self._write_compressed(state, new_entries, real_len // self.compressor.compress_rate)
+        if export is not None:
+            self._export_entries(export, merged, tile_start)
+
+    def forward_attn(self, hidden_states, outs, state, real_len: int):
+        q, sliding_kv, _e, mask_block, cos, sin = outs
+        attn, next_carry, slab = self._attention(
+            q,
+            sliding_kv,
+            state.compressed_kv,
+            mask_block,
+            cos,
+            sin,
+            carry=state.sliding_carry,
+            kv_actual=1,  # never chunk 0 here (trace_ready): the carry columns are visible
+            real_len=real_len,
+        )
+        y = self._o_proj(attn)
+        ring = self._ring_rows(slab, state.sliding_carry, 0, real_len)  # k_prev = 0: chunk starts are window-aligned
+        dt = self._export_dtype()
+        if ring.dtype != dt:
+            ring = ttnn.typecast(ring, dt)
+        return y, next_carry, ring
+
+    def epilogue_chunk(self, state, outs, a2, export, real_len: int) -> None:
+        _y, next_carry, ring = a2
+        if export is not None:
+            cache, batch_idx = export
+            assert ring.dtype == cache.dtype, (ring.dtype, cache.dtype)
+            ttnn.kv_cache.fill_cache_for_user_(cache, ring, int(batch_idx), update_idx=0)
+        state.entry_count += real_len // self.compressor.compress_rate
+        state.kv_actual += real_len
+        ttnn.copy(next_carry, state.sliding_carry)  # NOT _update_in_place: next_carry is an island output
+
+    def _export_dtype(self):
+        from models.demos.deepseek_v3_d_p.tt.v4 import kv_contract as kc
+
+        tag = kc.spec("hca_unified").dtype_tag
+        return {"bf16_rm": ttnn.bfloat16, "bfp8_tile": ttnn.bfloat8_b, "bfp4_tile": ttnn.bfloat4_b}[tag]
 
     # ---- export into the unified (migration) cache ------------------------------------------------------------
     def _export_entries(self, export, merged, tile_start: int):
