@@ -8,7 +8,7 @@
 
 #include "ckernel_trisc_common.h"
 #include "llk_sync.h"
-#include "llk_unpack_unary_operand.h"
+#include "llk_unpack_common.h"
 
 using namespace ckernel;
 using namespace ckernel::trisc;
@@ -32,12 +32,34 @@ inline void _llk_unpack_dest_init_()
 }
 
 /**
+ * @brief MOP configuration for unpacking a single operand directly into the math DEST register (UNP_DEST).
+ *
+ * Consecutive tiles land at consecutive DEST positions (Dst_Tile_Idx_Inc = 1). No dvalid is set: no math is involved,
+ * and the UNPACK_MATH / MATH_PACK semaphore handshake in @ref _llk_unpack_unary_operand_to_dest_ takes its place.
+ *
+ * @param buf_desc_id: The buffer descriptor ID where the buffer information is stored in the buffer descriptor table;
+ *        allocated from the unpack TRISC partition [0,16) at op-init time (see llk_bfd_alloc.h)
+ * @param block_ct_dim: Number of tiles per DEST bank section (MOP outer loop length), see @ref _llk_unpack_unary_operand_to_dest_init_
+ */
+inline void _llk_unpack_unary_operand_to_dest_mop_config_(const std::uint32_t buf_desc_id, const std::uint32_t block_ct_dim)
+{
+    const std::uint32_t MOP_OUTER_LOOP     = block_ct_dim;
+    constexpr std::uint32_t MOP_INNER_LOOP = 1;
+
+    const std::uint32_t unpack_tile_instrn = TT_OP_UNPACR_DEST_TILE_INC(1 /*Dst_Tile_Idx_Inc*/, 1 /*Src_Tile_Idx_Inc*/, buf_desc_id, 0 /*SetDatValid*/);
+
+    ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, unpack_tile_instrn);
+    temp.program_bank0_sw_cntl(instrn_buffer);
+}
+
+/**
  * @brief Initializes the unpacker to unpack a single operand directly into the math DEST register, synchronized with
  *        math and pack through the UNPACK_MATH / MATH_PACK semaphores.
  *
- * Unpack-to-dest counterpart of @ref _llk_unpack_unary_operand_init_: it programs the same UNP_DEST MOP
- * (@ref _llk_unpack_unary_operand_mop_config_ with UNP_SEL = UNP_DEST), but the DEST handshake is the semaphore protocol of
- * @ref _llk_unpack_unary_operand_to_dest_ rather than dest-dvalid. Callers pick one family up front; neither branches into the other.
+ * Unpack-to-dest counterpart of @ref _llk_unpack_unary_operand_init_ (llk_unpack_unary_operand.h). The two families are
+ * independent: this one owns its MOP (@ref _llk_unpack_unary_operand_to_dest_mop_config_) and its DEST handshake is the
+ * semaphore protocol of @ref _llk_unpack_unary_operand_to_dest_ rather than dest-dvalid. Callers pick one family up front;
+ * neither branches into, or shares code with, the other.
  *
  * Per-op init: programs the transpose config and the MOP only. It does not touch the DEST bank tracking, so it is
  * safe to call inside a tile loop, which op writers do with copy-style inits; the once-per-program bank reset lives in
@@ -66,8 +88,7 @@ inline void _llk_unpack_unary_operand_to_dest_init_(const std::uint32_t buf_desc
 {
     cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0 /*TRANSPOSE_EN forced false for UNP_DEST*/);
     cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
-    // IS_32b_DEST_EN only adds the SrcB-clearing NOP for UNP_A/UNP_B; it is ignored for UNP_DEST.
-    _llk_unpack_unary_operand_mop_config_<p_unpacr::UNP_DEST, false /*IS_32b_DEST_EN*/>(buf_desc_id, block_ct_dim);
+    _llk_unpack_unary_operand_to_dest_mop_config_(buf_desc_id, block_ct_dim);
 }
 
 /**
