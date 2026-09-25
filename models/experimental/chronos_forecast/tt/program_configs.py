@@ -92,6 +92,14 @@ def fused_batch_matmul_config(
     )
 
 
+_MAX_SDPA_CHUNK = 256
+
+
+def sdpa_chunk_sizes(q_seq_padded: int, k_seq_padded: int) -> tuple[int, int]:
+    """One chunk per sequence for short time attention (seq 160: 8.0 -> 2.3 ms vs 32/32)."""
+    return min(q_seq_padded, _MAX_SDPA_CHUNK), min(k_seq_padded, _MAX_SDPA_CHUNK)
+
+
 def _fused_activation(name: str | None):
     import ttnn
 

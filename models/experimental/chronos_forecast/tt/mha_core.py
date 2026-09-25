@@ -186,10 +186,11 @@ class TtMhaCore:
 
             q, k, v = _pad_heads(q), _pad_heads(k), _pad_heads(v)
         # 4-6. Scores + mask + softmax + context in one SDPA (scale=1.0, NOT 1/sqrt).
+        q_chunk, k_chunk = program_configs.sdpa_chunk_sizes(q.padded_shape[-2], k.padded_shape[-2])
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
-            q_chunk_size=32,
-            k_chunk_size=32,
+            q_chunk_size=q_chunk,
+            k_chunk_size=k_chunk,
             exp_approx_mode=True,
         )
         compute_kernel_config = program_configs.compute_kernel_config(packer_l1_acc=False)
