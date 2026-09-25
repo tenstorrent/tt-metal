@@ -14,7 +14,7 @@ from ....layers.module import Module, ModuleList
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
-from ....utils.tensor import pad_single
+from ....utils.tensor import from_torch, pad_single
 from ....utils.tracing import StateTensor, traced_function
 from .token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
 from .transformer_block_minimax_h3 import MiniMaxH3TransformerBlock
@@ -203,6 +203,7 @@ class MiniMaxH3Transformer3DModel(Module):
         self._temb_state = StateTensor()
         self._timestep_idx_state: dict[int, StateTensor] = {}
         self._static_source_state = StateTensor()
+        self._prompt_windows_state = StateTensor()
         self.parallel_config = parallel_config
         self.tp_mesh_axis = parallel_config.tensor_parallel.mesh_axis
         self.tp_factor = parallel_config.tensor_parallel.factor
@@ -305,7 +306,7 @@ class MiniMaxH3Transformer3DModel(Module):
         self,
         *,
         prompt_1BLP: ttnn.Tensor,
-        prompt_windows: ttnn.Tensor | None = None,
+        prompt_len: int,
         condition_video_1BKC: ttnn.Tensor | None = None,
         condition_audio_1BKC: ttnn.Tensor | None = None,
         prompt_cap: int,
@@ -314,6 +315,7 @@ class MiniMaxH3Transformer3DModel(Module):
         """Refine and project the step-invariant streams, once per request.
 
         Stores the `[text | condition video | condition audio]` source-table prefix that `forward` reads.
+        `prompt_len` is the true prompt length; the rows past it are padding.
         """
         tile = ttnn.TILE_SIZE
         streams = {
@@ -325,9 +327,23 @@ class MiniMaxH3Transformer3DModel(Module):
             if stream is not None and stream.shape[2] % tile:
                 raise ValueError(f"{name} capacity {stream.shape[2]} must be a multiple of TILE ({tile})")
 
+        # Padding before the refiner, not after, keeps its programs independent of prompt length.
+        if prompt_1BLP.shape[2] < prompt_cap:
+            prompt_1BLP = pad_single(prompt_1BLP, dim=2, back=prompt_cap - prompt_1BLP.shape[2])
+        prompt_windows = None
+        if prompt_len < prompt_cap:
+            self._prompt_windows_state.update(
+                from_torch(
+                    torch.tensor([0, prompt_len, prompt_cap], dtype=torch.int32),
+                    device=self.mesh_device,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.Layout.ROW_MAJOR,
+                    mesh_axes=[None],
+                ),
+                traced=traced,
+            )
+            prompt_windows = self._prompt_windows_state.value
         refined = self.token_refiner(self.context_embedder(prompt_1BLP), cu_window_seqlens=prompt_windows)
-        if refined.shape[2] < prompt_cap:
-            refined = pad_single(refined, dim=2, back=prompt_cap - refined.shape[2])
         segments = [refined]
         if condition_video_1BKC is not None:
             segments.append(self.proj_in(condition_video_1BKC))
