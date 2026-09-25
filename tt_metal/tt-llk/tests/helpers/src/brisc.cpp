@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <type_traits>
 
+#define LLK_BOOT_BRISC 1
 #include "boot.h"
 #include "counters.h"
 
