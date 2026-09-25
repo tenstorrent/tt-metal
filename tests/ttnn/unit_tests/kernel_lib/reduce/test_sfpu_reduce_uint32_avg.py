@@ -101,11 +101,12 @@ def _run_column_average(device, grid: torch.Tensor) -> torch.Tensor:
     output = ttnn.allocate_tensor_on_device(
         ttnn.Shape(shape), ttnn.uint32, ttnn.TILE_LAYOUT, device, _sharded_memory_config(shape)
     )
+    num_tiles = 1
     kernel = ttnn.KernelDescriptor(
         kernel_source=COMPUTE_KERNEL,
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=_single_core(),
-        runtime_args=_runtime_args([1]),
+        runtime_args=_runtime_args([num_tiles]),
         defines=[("REDUCE_FORMAT", "DataFormat::UInt32")],
         config=_compute_config(),
     )

@@ -946,15 +946,14 @@ _UINT32_AVERAGE_BANDS = {
 }
 
 
-def _run_uint32_column_average(column_averages: list[int]):
-    """Single-tile UInt32 column AVG on device; returns (column_sums, golden, device) as int64.
+def _run_integer_column_average(grid: torch.Tensor, data_format: DataFormat):
+    """Single-tile integer column AVG on device; returns row 0 of the result (the averages) as int64.
 
-    Builds a 32x32 tile whose column c holds ``column_averages[c]`` in every row, then adds c to
-    row 0 so the column sums to ``32 * column_averages[c] + c``. The kernel divides by 32 with a
-    logical right shift, so the exact expected result is ``column_averages[c]`` for every lane and
-    the comparison can be exact, with no tolerance to hide a wrong high bit behind.
+    Int32 AVG loads with INT32_2S_COMP, which converts sign-magnitude L1 words to two's-complement, so
+    its stimuli stay sign-magnitude (use_int32_twos_complement); the unsigned formats have no sign
+    encoding to pick.
     """
-    formats = InputOutputFormat(DataFormat.UInt32, DataFormat.UInt32)
+    formats = InputOutputFormat(data_format, data_format)
     dest_acc = DestAccumulation.Yes  # 32-bit formats require dest accumulation
     mathop = MathOperation.ReduceColumn
     reduce_pool = ReducePool.Average
@@ -969,19 +968,6 @@ def _run_uint32_column_average(column_averages: list[int]):
         TILE_DIMENSIONS,
         BlocksCalculationAlgorithm.Standard,
     )
-
-    averages = torch.tensor(column_averages, dtype=torch.int64)
-    grid = averages.repeat(TILE_DIM, 1).clone()
-    grid[0, :] += torch.arange(TILE_DIM, dtype=torch.int64)
-
-    column_sums = grid.sum(dim=0)
-    assert int(column_sums.max()) <= 0xFFFFFFFF, (
-        f"stimuli overflow a UInt32 column sum (max {int(column_sums.max())}); "
-        "the device would wrap and the golden would not"
-    )
-    # Unsigned divide-by-32 of the exact column sum, i.e. a logical right shift by 5.
-    golden = column_sums >> 5
-    assert torch.equal(golden, averages), "band construction lost the intended quotient"
 
     src_A = tilize_block(
         grid.flatten(), input_dimensions, stimuli_format=formats.input_format
@@ -1010,7 +996,7 @@ def _run_uint32_column_average(column_averages: list[int]):
             tile_count_A=tile_cnt,
             tile_count_B=1,
             tile_count_res=tile_cnt,
-            twos_complement=False,  # unsigned data has no sign encoding to pick
+            twos_complement=use_int32_twos_complement(formats, reduce_pool, mathop),
         ),
         dest_acc=dest_acc,
         unpack_to_dest=True,
@@ -1021,7 +1007,31 @@ def _run_uint32_column_average(column_averages: list[int]):
 
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
     res_tensor = untilize_block(res_tensor, formats.output_format, input_dimensions)
-    return column_sums, golden, res_tensor[0].to(torch.int64)
+    return res_tensor[0].to(torch.int64)
+
+
+def _run_uint32_column_average(column_averages: list[int]):
+    """Single-tile UInt32 column AVG on device; returns (column_sums, golden, device) as int64.
+
+    Builds a 32x32 tile whose column c holds ``column_averages[c]`` in every row, then adds c to
+    row 0 so the column sums to ``32 * column_averages[c] + c``. The kernel divides by 32 with a
+    logical right shift, so the exact expected result is ``column_averages[c]`` for every lane and
+    the comparison can be exact, with no tolerance to hide a wrong high bit behind.
+    """
+    averages = torch.tensor(column_averages, dtype=torch.int64)
+    grid = averages.repeat(TILE_DIM, 1).clone()
+    grid[0, :] += torch.arange(TILE_DIM, dtype=torch.int64)
+
+    column_sums = grid.sum(dim=0)
+    assert int(column_sums.max()) <= 0xFFFFFFFF, (
+        f"stimuli overflow a UInt32 column sum (max {int(column_sums.max())}); "
+        "the device would wrap and the golden would not"
+    )
+    # Unsigned divide-by-32 of the exact column sum, i.e. a logical right shift by 5.
+    golden = column_sums >> 5
+    assert torch.equal(golden, averages), "band construction lost the intended quotient"
+
+    return column_sums, golden, _run_integer_column_average(grid, DataFormat.UInt32)
 
 
 @pytest.mark.parametrize(
@@ -1065,5 +1075,79 @@ def test_uint32_reduce_column_average_bit31(band):
 
     assert num_mismatch == 0, (
         f"{num_mismatch}/{TILE_DIM} mismatched UInt32 column-average lanes for band "
+        f"'{band}' (see stdout)"
+    )
+
+
+# =============================================================================
+# Signed Int32 column AVG, compared exactly. The divide-by-32 rounds toward zero: the magnitude is
+# shifted and the sign restored. The sweep above keeps every column sum within +-32000, so it never
+# reaches the ends of the range or pins the rounding direction on every remainder; these bands do.
+# Sums are two's-complement in DEST, so a column can sum to exactly INT32_MIN even though no single
+# sign-magnitude L1 element can hold it.
+# =============================================================================
+
+_INT32_COLUMN_SUM_BANDS = {
+    # -1 .. -32: every remainder of a small negative sum; only -32 has a non-zero quotient.
+    "small_negative": [-(c + 1) for c in range(TILE_DIM)],
+    # -16 .. 15: both signs and zero in one tile.
+    "zero_crossing": [c - TILE_DIM // 2 for c in range(TILE_DIM)],
+    # Exact negative multiples of 32, then the same with the largest remainder.
+    "negative_multiples": [-TILE_DIM * (c + 1) - (c % 2) * 31 for c in range(TILE_DIM)],
+    # Lane 0 sums to exactly INT32_MIN, whose two's-complement magnitude is itself.
+    "int32_min": [INT32_MIN + c for c in range(TILE_DIM)],
+    "int32_max": [INT32_MAX - c for c in range(TILE_DIM)],
+    "random_full_range": torch.randint(
+        INT32_MIN,
+        INT32_MAX + 1,
+        (TILE_DIM,),
+        generator=torch.Generator().manual_seed(57660),
+        dtype=torch.int64,
+    ).tolist(),
+}
+
+
+@pytest.mark.parametrize(
+    "band", list(_INT32_COLUMN_SUM_BANDS), ids=list(_INT32_COLUMN_SUM_BANDS)
+)
+def test_int32_reduce_column_average_exact(band):
+    """Int32 column AVG must equal the column sum divided by 32, rounded toward zero, on every lane."""
+    if TestConfig.WITH_COVERAGE:
+        pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1040")
+
+    column_sums = torch.tensor(_INT32_COLUMN_SUM_BANDS[band], dtype=torch.int64)
+    # Every row holds floor(sum / 32) and row 0 also carries the remainder in [0, 31], so the column
+    # sums to exactly the target and every element fits in sign-magnitude Int32.
+    base = torch.div(column_sums, TILE_DIM, rounding_mode="floor")
+    grid = base.repeat(TILE_DIM, 1).clone()
+    grid[0, :] += column_sums - TILE_DIM * base
+    assert torch.equal(
+        grid.sum(dim=0), column_sums
+    ), "band construction lost the column sum"
+    assert (
+        int(grid.abs().max()) <= INT32_MAX
+    ), "an element is not representable in Int32"
+    golden = torch.div(column_sums, TILE_DIM, rounding_mode="trunc")
+
+    res = _run_integer_column_average(grid, DataFormat.Int32)
+
+    mismatch = golden != res
+    num_mismatch = int(mismatch.sum().item())
+
+    if num_mismatch:
+        idxs = torch.nonzero(mismatch).flatten().tolist()
+        detail = "\n".join(
+            f"  col={i}: sum={int(column_sums[i])} golden={int(golden[i])} device={int(res[i])}"
+            for i in idxs[:12]
+        )
+        logger.info(
+            "\nInt32 column Average band '{}': {} mismatched lanes\n{}",
+            band,
+            num_mismatch,
+            detail,
+        )
+
+    assert num_mismatch == 0, (
+        f"{num_mismatch}/{TILE_DIM} mismatched Int32 column-average lanes for band "
         f"'{band}' (see stdout)"
     )

@@ -176,17 +176,15 @@ inline void perform_int_average() {
         "Integer AVG: the data is signed exactly when it is loaded with INT32_2S_COMP");
 
     if constexpr (is_signed_int) {
-        // Two's-complement signed divide-by-32 (round toward zero): take the magnitude via a conditional
-        // negate (0 - x), logical-shift, then restore the sign with a second conditional negate.
-        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);      // Save original (2's-complement) value for sign check
-        TTI_SFPSETCC(0, p_sfpu::LREG0, 0, 4);                // cc if sign bit == 0 (non-negative)
-        TTI_SFPCOMPC(0, 0, 0, 0);                            // Invert -> cc if negative
-        TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 6);  // LREG0 = -LREG0 (magnitude) when negative
-        TTI_SFPENCC(0, 0, 0, 0);
+        // Two's-complement signed divide-by-32 (round toward zero): shift the magnitude, then negate
+        // the lanes whose sum was negative. Integer SFPABS is a two's-complement abs (tt-isa SFPABS.md)
+        // and leaves INT32_MIN as 0x80000000, which the logical shift still maps to 2^26 and the
+        // negate to INT32_MIN / 32.
+        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);                      // Save the signed sum for the sign check
+        TTI_SFPABS(0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPABS_MOD1_INT);  // |x|
         TTI_SFPSHFT(-AVG_SHIFT_AMOUNT & AVG_SHIFT_MASK, p_sfpu::LREG0, p_sfpu::LREG0, 0b01);  // |x| >> 5 (divide by 32)
-        TTI_SFPSETCC(0, p_sfpu::LREG1, 0, 4);                // cc if original sign bit == 0 (non-negative)
-        TTI_SFPCOMPC(0, 0, 0, 0);                            // Invert -> cc if original was negative
-        TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 6);  // Restore sign (2's-complement negate) when negative
+        TTI_SFPSETCC(0, p_sfpu::LREG1, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);  // cc if the sum was negative
+        TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 6);               // Restore sign (2's-complement negate)
         TTI_SFPENCC(0, 0, 0, 0);
     } else {
         // Unsigned formats (UInt32, UInt16): a logical shift is already the exact divide.
@@ -1791,8 +1789,9 @@ inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block
                                                        ? InstrModLoadStore::DEFAULT
                                                        : GetSfpLoadStoreInstrMod<format, is_fp32_dest_accum_en>();
 
-    // Signedness of the data, which INSTRUCTION_MODE does not carry: UInt32 (and UInt16 in a 32-bit dest)
-    // loads with INT32 just like signed Int32. Only the integer column AVG divide consumes it.
+    // Signedness of the data. UInt32 (and UInt16 in a 32-bit dest) share INT32 with Int32 SUM/MAX/MIN, while
+    // Int32 AVG, the only consumer of this flag, is forced to INT32_2S_COMP; the static_assert in
+    // perform_int_average cross-checks the two.
     constexpr bool is_signed_int = (format == DataFormat::Int32);
 
     // Garbage high bits need to be cleared when loading UInt16 data from a 32-bit (fp32) dest word
