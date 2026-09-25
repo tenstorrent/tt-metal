@@ -32,7 +32,7 @@ public:
     std::string put(const void* src, uint64_t bytes, uint32_t peer_rank, uint64_t target_offset, Op& op);
 
     // Stages the value, since an origin must outlive the call and a temporary does not.
-    // Unused since credits moved to CreditPublisher's coalesced multi-word put.
+    // The socket now publishes credits via CreditPublisher; benchmark_h2h_leg still uses this.
     std::string put_word(uint64_t value, uint32_t peer_rank, uint64_t target_offset);
 
     // True once the ORIGIN buffer is reusable, which is what frees the page behind it.
