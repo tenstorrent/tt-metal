@@ -36,6 +36,7 @@
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
+#include <tracy/Tracy.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"  // DramConfig + CreateKernel(DramConfig)
@@ -784,7 +785,10 @@ void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& 
 
     // Launch programs (non-blocking — kernels park on the socket immediately).
     for (uint32_t d = 0; d < devices_.size(); ++d) {
-        programs_[d]->impl().compile(devices_[d], /*force_slow_dispatch=*/true);
+        {
+            ZoneScopedN("CompileProgram");
+            programs_[d]->impl().compile(devices_[d], /*force_slow_dispatch=*/true);
+        }
         ::tt::tt_metal::slow_dispatch::WriteRuntimeArgsToDevice(
             *devices_[d], *programs_[d], /*force_slow_dispatch=*/true);
         ::tt::tt_metal::slow_dispatch::LaunchProgram(*devices_[d], *programs_[d], /*force_slow_dispatch=*/true);
