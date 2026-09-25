@@ -19,8 +19,27 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/transformer/chunk_gated_delta_rule/chunk_gated_delta_rule_config.hpp"
 
 namespace ttnn::prim {
+
+// WY-inverse method of the prep compute (the `tinv` attr of the prep and fused prims): the op's
+// ChunkGdnWyInverse with AUTO resolved for this device and chunk size.
+//   HORNER    : invert_block — quadrant split, two 15-term Horner inverses and an exact off-diagonal on
+//               the matrix engine (~60 LLK calls per chunk). Runs on every architecture at every chunk
+//               size; the reference the SFPU method is validated against.
+//   SFPU_FP32 : one SFPU forward-substitution solve reading negN as fp32 in place
+//               (kernels/compute/chunk_gdn_tinv_sfpu.hpp). Blackhole-only, chunk_size == 32. PCC-class
+//               against HORNER — T_inv error no larger in any measured regime — for about a quarter less
+//               producer time per chunk.
+enum class GdnTinv : uint32_t { HORNER = 0, SFPU_FP32 = 1 };
+// The method for one call, resolved at attrs construction (hashed): HORNER / SFPU as requested (an
+// explicit SFPU the device or chunk size cannot honor FATALs in validate_gdn_tinv rather than falling
+// back); AUTO is SFPU_FP32 wherever that is supported and HORNER elsewhere.
+uint32_t gdn_tinv_resolve(
+    ttnn::transformer::ChunkGdnWyInverse wy_inverse, uint32_t chunk_size, const Tensor& any_input);
+// FATAL unless the method is supported for this chunk size on this device.
+void validate_gdn_tinv(uint32_t tinv, uint32_t chunk_size, const Tensor& any_input);
 
 // ---------------------------------------------------------------------------
 // PREP
@@ -49,6 +68,10 @@ struct ChunkGdnPrepParams {
     // ChunkGdnPhasedProgramConfig::prep_serial: BH cores (one per head) instead of fanning the BH*NC
     // work-items over the whole grid. Measurement only. Hashed, like every field here.
     bool prep_serial = false;
+    // WY-inverse method (GdnTinv): Horner quadrants on the matrix engine or the SFPU forward-substitution
+    // solve — the op's wy_inverse kwarg resolved by gdn_tinv_resolve at attrs construction (hashed); the
+    // fused prim carries the same field, so fused == phased stays bit-exact for any given method.
+    uint32_t tinv = 0;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
@@ -105,7 +128,8 @@ std::vector<Tensor> chunk_gdn_prep(
     float scale = 1.0f,
     bool qk_flat = false,
     uint32_t Hk = 0,
-    bool prep_serial = false);
+    bool prep_serial = false,
+    ttnn::transformer::ChunkGdnWyInverse wy_inverse = ttnn::transformer::ChunkGdnWyInverse::AUTO);
 
 // ---------------------------------------------------------------------------
 // SCAN

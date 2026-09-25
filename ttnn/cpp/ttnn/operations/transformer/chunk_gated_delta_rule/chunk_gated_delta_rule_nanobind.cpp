@@ -46,6 +46,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule_lau
     bool use_qk_l2norm,
     bool output_head_major,
     const std::optional<ttnn::transformer::ChunkGdnProgramConfig>& program_config,
+    ttnn::transformer::ChunkGdnWyInverse wy_inverse,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& eye,
@@ -65,6 +66,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule_lau
         use_qk_l2norm,
         output_head_major,
         program_config,
+        wy_inverse,
         memory_config,
         gdn_default_compute_kernel_config(q.device()->arch(), compute_kernel_config),
         eye,
@@ -92,7 +94,8 @@ std::vector<ttnn::Tensor> chunk_gdn_prep_launch(
     float scale,
     bool qk_flat,
     uint32_t Hk,
-    bool prep_serial) {
+    bool prep_serial,
+    ttnn::transformer::ChunkGdnWyInverse wy_inverse) {
     return ttnn::prim::chunk_gdn_prep(
         q,
         k,
@@ -112,7 +115,8 @@ std::vector<ttnn::Tensor> chunk_gdn_prep_launch(
         scale,
         qk_flat,
         Hk,
-        prep_serial);
+        prep_serial,
+        wy_inverse);
 }
 
 std::vector<ttnn::Tensor> chunk_gdn_scan_launch(
@@ -157,6 +161,29 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
     using ttnn::transformer::ChunkGdnFusedProgramConfig;
     using ttnn::transformer::ChunkGdnMonoProgramConfig;
     using ttnn::transformer::ChunkGdnPhasedProgramConfig;
+    using ttnn::transformer::ChunkGdnWyInverse;
+
+    // The WY-inverse method is arithmetic, not topology, so it is its own kwarg rather than a
+    // program-config field; see chunk_gated_delta_rule_config.hpp.
+    nb::enum_<ChunkGdnWyInverse>(
+        mod,
+        "ChunkGdnWyInverse",
+        R"doc(How chunk_gated_delta_rule computes each chunk's WY inverse T_inv = (I + N)^-1. The methods
+        agree to ~1e-3 (PCC-class), so this is a numerics choice and deliberately not part of the program
+        config; for a given method the fused, phased and mono paths stay bit-exact with each other.)doc")
+        .value(
+            "AUTO",
+            ChunkGdnWyInverse::AUTO,
+            "the SFPU solve wherever it is supported (Blackhole, chunk_size == 32), Horner everywhere else")
+        .value(
+            "HORNER",
+            ChunkGdnWyInverse::HORNER,
+            "quadrant-split Horner inverses on the matrix engine; every architecture and chunk size; the reference")
+        .value(
+            "SFPU",
+            ChunkGdnWyInverse::SFPU,
+            "one SFPU forward-substitution solve reading the factor as fp32 in place; Blackhole-only, chunk_size == "
+            "32, and refused (not downgraded) where unsupported");
 
     nb::class_<ChunkGdnMonoProgramConfig>(
         mod,
@@ -327,6 +354,12 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 ChunkGdnMonoProgramConfig, optional): which device implementation runs and how it is
                 laid out on the chip — the alternative you pass selects the path, its fields the
                 geometry (see each class). None: the fused path or the phased path depending on the cost model.
+            wy_inverse (ttnn.ChunkGdnWyInverse): default AUTO. How each chunk's WY inverse is
+                computed: HORNER on the matrix engine (every architecture; the reference), SFPU
+                (one forward-substitution solve, Blackhole and chunk_size 32 only, refused where
+                unsupported) or AUTO (SFPU wherever supported, else Horner). The two methods agree
+                to ~1e-3; unlike program_config this changes bits, though every path stays
+                bit-exact with the others for a given method.
             memory_config (ttnn.MemoryConfig, optional).
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): every path runs HiFi4 with
                 fp32 destination accumulation and no approx mode; a config asking for other arithmetic
@@ -360,6 +393,7 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("use_qk_l2norm") = false,
         nb::arg("output_head_major") = false,
         nb::arg("program_config") = nb::none(),
+        nb::arg("wy_inverse") = ttnn::transformer::ChunkGdnWyInverse::AUTO,
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("eye") = nb::none(),
@@ -399,6 +433,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
             qk_flat (bool) / Hk (int): OPT-A flat token-major q/k, chunk_gdn_phased.hpp:41-44.
             prep_serial (bool): default False. ChunkGdnPhasedProgramConfig.prep_serial: BH cores
                 (one per head) instead of the whole grid. Measurement only.
+            wy_inverse (ttnn.ChunkGdnWyInverse): default AUTO — the WY-inverse method, as on the
+                public op (HORNER / SFPU / AUTO).
 
         Returns:
             list[ttnn.Tensor]: the 7 fp32 per-chunk DRAM intermediates the scan consumes —
@@ -433,6 +469,7 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("qk_flat") = false,
         nb::arg("Hk") = 0,
         nb::arg("prep_serial") = false,
+        nb::arg("wy_inverse") = ttnn::transformer::ChunkGdnWyInverse::AUTO,
         nb::call_guard<nb::gil_scoped_release>(),
         prep_doc);
 

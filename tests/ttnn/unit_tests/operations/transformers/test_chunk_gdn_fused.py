@@ -112,7 +112,7 @@ def _make_inputs(device, batch, seq, num_k_heads, num_v_heads, with_initial_stat
     return (q, k, v, g, beta, s0), tensors, s0_dev
 
 
-def _run_op(device, tensors, const_tiles, initial_state, program_config=None):
+def _run_op(device, tensors, const_tiles, initial_state, program_config=None, wy_inverse=None):
     q, k, v, g, beta = tensors
     eye, tril, ones, masks = const_tiles
     o, fs = ttnn.transformer.chunk_gated_delta_rule(
@@ -125,6 +125,7 @@ def _run_op(device, tensors, const_tiles, initial_state, program_config=None):
         output_final_state=True,
         chunk_size=CHUNK,
         program_config=program_config,
+        wy_inverse=wy_inverse if wy_inverse is not None else ttnn.ChunkGdnWyInverse.AUTO,
         eye=eye,
         tril=tril,
         ones=ones,
@@ -498,20 +499,20 @@ def _vblock_mismatches(o_ref, o_got, hv, nv):
     return bad
 
 
-def _fused_vs_phased(device, hk, hv, nc, nv, np_producers, seed, **fused_kwargs):
+def _fused_vs_phased(device, hk, hv, nc, nv, np_producers, seed, wy_inverse=None, **fused_kwargs):
     """Run phased (twice, for cache stability), then fused with the given geometry and any further
-    fused-config fields. Returns the outputs and the program-cache delta of the fused run (must be
-    exactly 1: one fused program)."""
+    fused-config fields, both with the same WY-inverse method. Returns the outputs and the program-cache
+    delta of the fused run (must be exactly 1: one fused program)."""
     B = 1
     _, tensors, s0 = _make_inputs(device, B, nc * CHUNK, hk, hv, True, seed=seed)
     const_tiles = _const_tiles(device)
 
-    o_ph, fs_ph = _run_op(device, tensors, const_tiles, s0, _phased())
-    o_ph2, fs_ph2 = _run_op(device, tensors, const_tiles, s0, _phased())
+    o_ph, fs_ph = _run_op(device, tensors, const_tiles, s0, _phased(), wy_inverse)
+    o_ph2, fs_ph2 = _run_op(device, tensors, const_tiles, s0, _phased(), wy_inverse)
     n_phased = device.num_program_cache_entries()
     assert torch.equal(o_ph, o_ph2) and torch.equal(fs_ph, fs_ph2), "phased path is not deterministic"
 
-    o_fu, fs_fu = _run_op(device, tensors, const_tiles, s0, _fused(nv, np_producers, **fused_kwargs))
+    o_fu, fs_fu = _run_op(device, tensors, const_tiles, s0, _fused(nv, np_producers, **fused_kwargs), wy_inverse)
     delta = device.num_program_cache_entries() - n_phased
     return (o_ph, fs_ph), (o_fu, fs_fu), delta, (tensors, const_tiles, s0)
 
@@ -829,3 +830,120 @@ def test_fused_config_pinned_geometry_matches_free(device):
         device.num_program_cache_entries() == n_pin
     ), "a free fused config compiled a new program after its own pinned geometry: the model's pick is not the default"
     assert torch.equal(o_pin, o_free) and torch.equal(fs_pin, fs_free), "pinned and free geometries disagree"
+
+
+# ---------------------------------------------------------------------------
+# WY-inverse methods (wy_inverse = ttnn.ChunkGdnWyInverse.AUTO | HORNER | SFPU; AUTO = the SFPU solve on
+# Blackhole at chunk_size 32, Horner elsewhere). The SFPU forward-substitution solve changes the arithmetic
+# of T_inv (PCC-class against the Horner reference) — which is why it is a kwarg of its own and not a
+# program-config field — but the phased prep and the fused producer compile the same body for a given
+# method, so fused == phased stays bit-exact for every method. Every other test in this file runs AUTO, so
+# the solve is what they exercise; the tests below pin each method explicitly. The solver's own accuracy is
+# tested on the prep prim (test_chunk_gdn_prims.py).
+# ---------------------------------------------------------------------------
+
+AUTO, HORNER, SFPU = ttnn.ChunkGdnWyInverse.AUTO, ttnn.ChunkGdnWyInverse.HORNER, ttnn.ChunkGdnWyInverse.SFPU
+
+
+@pytest.mark.parametrize("method", [HORNER, SFPU], ids=["horner", "sfpu"])
+@pytest.mark.parametrize(
+    "hk, hv, nv, np_producers, nc, placement",
+    [
+        (4, 12, 2, 7, 64, 1),  # BH=12 (27B TP-4) at the model's geometry, T=2048
+        (4, 12, 4, 5, 16, 1),  # NV=4 receivers (Vtl=1)
+        (4, 12, 2, 3, 8, 0),  # row-major placement
+        (16, 48, 1, 1, 8, 1),  # BH=48 (single-device shape), one producer per head
+        (1, 4, 4, 7, 16, 1),  # BH=4
+    ],
+    ids=lambda v: str(v),
+)
+def test_fused_tinv_bit_exact_vs_phased(device, method, hk, hv, nv, np_producers, nc, placement):
+    """fused == phased, bit for bit, with the same WY-inverse method pinned on both paths."""
+    _skip_unless_geometry_fits(device, hv, nv, np_producers, nc, placement=placement)
+    (o_ph, fs_ph), (o_fu, fs_fu), delta, _ = _fused_vs_phased(
+        device, hk, hv, nc, nv, np_producers, 20261001 + hv, wy_inverse=method, row_local=bool(placement)
+    )
+    assert delta == 1, f"{method}: fused compiled {delta} new programs (expected 1)"
+    bad = _vblock_mismatches(o_ph, o_fu, hv, nv)
+    assert not bad, f"{method} BH={hv} NV={nv} NP={np_producers}: o differs in (head, vblock) slices {bad}"
+    assert torch.equal(o_fu, o_ph) and torch.equal(fs_fu, fs_ph), f"{method}: fused differs from phased"
+
+
+def test_fused_tinv_vs_horner(device):
+    """End to end at the 27B TP-4 shape (BH=12, T=2048, the model's default fused geometry): the default
+    WY-inverse (AUTO, the SFPU solve on this device) against pinned Horner, and against the torch golden. The
+    T_inv difference is ~1e-3 (prims test); across the 64-chunk recurrence it must stay PCC-class."""
+    hk, hv, nc = 4, 12, 64
+    host, tensors, s0 = _make_inputs(device, 1, nc * CHUNK, hk, hv, True, seed=20261002)
+    const_tiles = _const_tiles(device)
+    o_h, fs_h = _run_op(device, tensors, const_tiles, s0, _fused(), HORNER)
+    o_s, fs_s = _run_op(device, tensors, const_tiles, s0, _fused(), AUTO)
+    assert not torch.equal(o_s, o_h), "AUTO output identical to Horner — the SFPU solve did not run"
+    q, k, v, g, beta, s0_host = host
+    o_ref, fs_ref = _golden_chunk_gdn(q.float(), k.float(), v.float(), g, beta, KDIM**-0.5, s0_host, CHUNK)
+    for name, got, horner, ref in (("o", o_s, o_h, o_ref), ("final_state", fs_s, fs_h, fs_ref)):
+        pcc_h = _pcc(horner.float(), got.float())
+        assert pcc_h >= 0.99999, f"{name}: PCC vs Horner {pcc_h} < 0.99999"
+        pcc_ref, pcc_ref_h = _pcc(ref, got.float()), _pcc(ref, horner.float())
+        assert pcc_ref >= 0.999, f"{name}: PCC vs torch golden {pcc_ref} < 0.999"
+        # no worse than the Horner reference against the golden, beyond PCC noise
+        assert pcc_ref >= pcc_ref_h - 1e-5, f"{name}: PCC vs golden {pcc_ref} < Horner's {pcc_ref_h}"
+
+
+def test_fused_tinv_cache_identity(device):
+    """N1 for wy_inverse on both prims: AUTO resolves to SFPU on this device (the explicit form is the same
+    program and the same bits), HORNER compiles its own fused program and its own phased prep program (the
+    scan is unchanged, so phased compiles exactly one), and revisits are cache hits."""
+    hk, hv = NP_BH_KV_HEADS
+    _, tensors, s0 = _make_inputs(device, 1, T_SMALL, hk, hv, True, seed=20261003)
+    const_tiles = _const_tiles(device)
+    for cfg in (_fused(), _phased()):
+        o_def, fs_def = _run_op(device, tensors, const_tiles, s0, cfg, AUTO)
+        n = device.num_program_cache_entries()
+        o_exp, fs_exp = _run_op(device, tensors, const_tiles, s0, cfg, SFPU)
+        assert (
+            device.num_program_cache_entries() == n
+        ), f"{cfg}: explicit SFPU compiled a new program — AUTO must resolve to it on this device"
+        assert torch.equal(o_def, o_exp) and torch.equal(fs_def, fs_exp), f"{cfg}: AUTO != explicit SFPU"
+        _run_op(device, tensors, const_tiles, s0, cfg, HORNER)
+        n2 = device.num_program_cache_entries()
+        assert n2 - n == 1, f"{cfg}: SFPU->HORNER compiled {n2 - n} programs (expected 1: the method must be hashed)"
+        for method in (AUTO, SFPU, HORNER):
+            _run_op(device, tensors, const_tiles, s0, cfg, method)
+        assert device.num_program_cache_entries() == n2, f"{cfg}: revisiting the methods compiled new programs"
+
+
+def test_fused_tinv_chunk64(device, expect_error):
+    """The SFPU solve is a single-tile (chunk_size == 32) routine. At chunk_size 64 AUTO falls back to Horner
+    (the default is the solve wherever it is supported, and that program is the pinned-Horner one), but an
+    explicit SFPU must be refused, not silently downgraded (which would make any A/B vacuous)."""
+    _, tensors, s0 = _make_inputs(device, 1, 256, 4, 12, True, seed=20261004)
+    q, k, v, g, beta = tensors
+    eye, tril, ones, masks = _const_tiles(device, chunk_size=64)
+
+    def run(wy_inverse):
+        o, fs = ttnn.transformer.chunk_gated_delta_rule(
+            q,
+            k,
+            v,
+            g,
+            beta,
+            initial_state=s0,
+            output_final_state=True,
+            chunk_size=64,
+            program_config=_phased(),
+            wy_inverse=wy_inverse,
+            eye=eye,
+            tril=tril,
+            ones=ones,
+            masks=masks,
+        )
+        return ttnn.to_torch(o), ttnn.to_torch(fs)
+
+    o_def, fs_def = run(AUTO)
+    n = device.num_program_cache_entries()
+    o_h, fs_h = run(HORNER)
+    assert device.num_program_cache_entries() == n, "chunk 64: AUTO compiled a different program than HORNER"
+    assert torch.equal(o_def, o_h) and torch.equal(fs_def, fs_h), "chunk 64: AUTO is not the Horner inverse"
+    with expect_error(RuntimeError, "needs chunk_size == 32"):
+        run(SFPU)

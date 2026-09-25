@@ -101,6 +101,8 @@ def chunk_gated_delta_rule_fused_adapter(
     # host upload, illegal under trace); if None, the op builds them eagerly.
     program_config=None,  # ttnn.ChunkGdnFusedProgramConfig / ChunkGdnPhasedProgramConfig / ChunkGdnMono...:
     # None: the op's own dispatch — fused or phased depending on the cost model.
+    wy_inverse=None,  # ttnn.ChunkGdnWyInverse.HORNER / SFPU / AUTO: the WY-inverse arithmetic. None = the
+    # op's AUTO (the SFPU solve on Blackhole at chunk 32, Horner elsewhere).
 ):
     global _logged_path
     if not _logged_path:
@@ -193,6 +195,7 @@ def chunk_gated_delta_rule_fused_adapter(
         tril=_tril,
         ones=_ones,
         masks=_masks,
+        **({"wy_inverse": wy_inverse} if wy_inverse is not None else {}),
     )
 
     if return_o_bh:

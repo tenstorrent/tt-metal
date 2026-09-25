@@ -38,6 +38,12 @@ namespace ttnn::transformer {
  * model's geometry when it fits this grid and is predicted to beat phased, else phased. All three
  * paths are bit-identical for the same inputs and compute_kernel_config.
  *
+ * wy_inverse: how each chunk's WY inverse T_inv = (I + N)^-1 is computed — ChunkGdnWyInverse::HORNER
+ * (matrix engine, every architecture; the reference), SFPU (one forward-substitution solve on the
+ * SFPU, Blackhole and chunk_size == 32 only) or AUTO (SFPU wherever supported, Horner elsewhere).
+ * Unlike program_config this changes the arithmetic (PCC-class between methods); for a given method
+ * every path is still bit-identical.
+ *
  * output_head_major: the kernel natively produces o head-major ([BH,T,V]); the default
  * path permutes it to token-major [B,T,HV,V]. Callers that want head-major (e.g. the qwen36
  * GDN adapter's return_o_bh) should set this to get [BH,T,V] TILE directly and skip a
@@ -56,6 +62,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     bool use_qk_l2norm = false,
     bool output_head_major = false,
     const std::optional<ChunkGdnProgramConfig>& program_config = std::nullopt,
+    ChunkGdnWyInverse wy_inverse = ChunkGdnWyInverse::AUTO,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     const std::optional<ttnn::Tensor>& eye = std::nullopt,
