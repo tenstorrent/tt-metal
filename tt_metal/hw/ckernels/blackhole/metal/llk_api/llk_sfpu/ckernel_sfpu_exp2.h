@@ -77,7 +77,13 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_fp32_accurate_(sfpi::vFloat x) {
 // tensor ever reaches the SFPU (see the "NaN is packed as inf for ttnn.bfloat16"
 // xfails on fmod / remainder / where / rdiv), so a device-side NaN guard here
 // would be dead code.
-sfpi_inline sfpi::vFloat _sfpu_exp2_bf16_(sfpi::vFloat x) {
+//
+// The overload taking c0, c1 and c2 is for a caller that evaluates it once per element
+// (logaddexp2): as with _sfpu_exp_21f_bf16_unsafe_, it can load the fractional-part
+// coefficients once, before its loop, and pass the registers. Each may be a float or a
+// vFloat, so the one-argument form below, which passes floats, compiles as before.
+template <typename C0, typename C1, typename C2>
+sfpi_inline sfpi::vFloat _sfpu_exp2_bf16_(sfpi::vFloat x, C0 c0, C1 c1, C2 c2) {
     // Map x → xlog2 such that 2^x has biased exponent floor(xlog2) and the
     // fractional mantissa supplies the (xlog2 - floor) refinement.
     sfpi::vFloat xlog2 = x + 127.f;
@@ -98,7 +104,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_bf16_(sfpi::vFloat x) {
 
     // Refine 2^x_f on x_f to [0, 2^23). Same minimax coefficients as the
     // production exp_21f kernel (≤ 3 fp32 ULP, well under 1 bf16 ULP).
-    frac = PolynomialEvaluator::eval(frac, 1.0017248f, 7.839635491371155e-08f, 4.791750143340323e-15f);
+    frac = PolynomialEvaluator::eval(frac, c0, c1, c2);
 
     // Recombine: 2^x = (1.frac_mantissa) * 2^(exponential_part - 127).
     sfpi::vFloat y = sfpi::setexp(frac, exponential_part);
@@ -108,6 +114,10 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_bf16_(sfpi::vFloat x) {
     // that the saturation tricks above (overflow → +inf, underflow → 0) land
     // on the correct bf16 encoding.
     return sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
+}
+
+sfpi_inline sfpi::vFloat _sfpu_exp2_bf16_(sfpi::vFloat x) {
+    return _sfpu_exp2_bf16_(x, EXP_21F_BF16_C0, EXP_21F_BF16_C1, EXP_21F_BF16_C2);
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>

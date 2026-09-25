@@ -49,6 +49,10 @@ inline void calculate_sfpu_logaddexp2(const uint dst_index_in0, const uint dst_i
     // ln 2 and log2(e). Both are the correctly rounded float32 nearest values.
     constexpr float LN_TWO = 0.693147182f;
     constexpr float LOG2_E = 1.442695041f;
+    // The first two of exp2's fractional-part coefficients, loaded once for the whole loop, as
+    // in logaddexp. Only the bfloat16 path uses them.
+    [[maybe_unused]] const sfpi::vFloat exp_c0 = EXP_21F_BF16_C0;
+    [[maybe_unused]] const sfpi::vFloat exp_c1 = EXP_21F_BF16_C1;
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
@@ -65,7 +69,7 @@ inline void calculate_sfpu_logaddexp2(const uint dst_index_in0, const uint dst_i
             b = _sfpu_exp_fp32_accurate_(a * -LN_TWO);
             result = result + calculate_log1p_fp32<true>(b) * LOG2_E;
         } else {
-            b = _sfpu_exp2_bf16_(-a);
+            b = _sfpu_exp2_bf16_(-a, exp_c0, exp_c1, EXP_21F_BF16_C2);
             result = result + _sfpu_logaddexp_log1p_unit_bf16_(b) * LOG2_E;
 
             // Rounded as in logaddexp: SFPSTORE would truncate, and the hardware rounds a tie

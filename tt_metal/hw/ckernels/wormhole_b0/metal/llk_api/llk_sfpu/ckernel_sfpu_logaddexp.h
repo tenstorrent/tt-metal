@@ -68,6 +68,12 @@ sfpi_inline sfpi::vFloat _sfpu_logaddexp_log1p_unit_bf16_(const sfpi::vFloat& y)
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_sfpu_logaddexp(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     constexpr uint dst_tile_size_sfpi = 32;
+    // The first two of exp_21f's fractional-part coefficients, loaded once for the whole loop
+    // instead of as two SFPLOADIs each per element. Only the bfloat16 path uses them. The third,
+    // or the 88 and 1/ln 2 below, would not fit: holding one more constant across the loop runs
+    // the SFPI compiler out of registers ("cannot write SFPU object to memory").
+    [[maybe_unused]] const sfpi::vFloat exp_c0 = EXP_21F_BF16_C0;
+    [[maybe_unused]] const sfpi::vFloat exp_c1 = EXP_21F_BF16_C1;
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
@@ -89,7 +95,7 @@ inline void calculate_sfpu_logaddexp(const uint dst_index_in0, const uint dst_in
             // alone returns 1.0017 at zero, and the rounding makes it exactly 1, so equal
             // inputs get ln 2. The approximate body is not usable either: it returns
             // 255/256 rather than 1 at zero.
-            b = _sfpu_exp_21f_bf16_unsafe_<false>(-sfpi::min(a, 88.0f));
+            b = _sfpu_exp_21f_bf16_unsafe_<false>(-sfpi::min(a, 88.0f), exp_c0, exp_c1, EXP_21F_BF16_C2);
             result = result + _sfpu_logaddexp_log1p_unit_bf16_(b);
 
             // SFPSTORE would truncate to bfloat16, so round first, the way calculate_log1p and
