@@ -12,10 +12,9 @@
 #define TTI_INSN(ENCODING) ({ __asm__ __volatile__(".word (3 & (%0 >> 30)) | (0xfffffffc & (%0 << 2))" : : "n"(unsigned(ENCODING))); })
 #define TT_INSN(ENCODING)  ({ __asm__ __volatile__(".error \"TT_INSN in non-tensix code\"" ::"X"(unsigned(ENCODING))); })
 #else
-// #define TTI_INSN(ENCODING) ({ __asm__ __volatile__(".error \"TTI_INSN in non-tensix code\"" ::"X"(unsigned(ENCODING))); })
+// XXX
+#define TTI_INSN(ENCODING) ({ __asm__ __volatile__(".word (3 & (%0 >> 30)) | (0xfffffffc & (%0 << 2))" : : "n"(unsigned(ENCODING))); })
 #define TT_INSN(ENCODING)  ({ __asm__ __volatile__(".error \"TT_INSN in non-tensix code\"" ::"X"(unsigned(ENCODING))); })
-#define TTI_INSN(ENCODING) ({ __asm__ __volatile__(".ttinsn %0" : : "n"(unsigned(ENCODING))); })
-// #define TT_INSN(ENCODING)  void(::ckernel::instrn_buffer[0] = unsigned(ENCODING))
 #endif
 
 #define TT_OP(opcode, params) ((opcode << 24) + params)
