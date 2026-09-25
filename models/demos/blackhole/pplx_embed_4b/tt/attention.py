@@ -239,6 +239,28 @@ def _wrap_sdpa_bidirectional(original_fn, concat_out=False):
             )
         return pack_cfgs[key]
 
+    # Batched (QWEN_SDPA_REUSE_KV=1): SDPA's reuse_kv keeps K/V in a core's CBs across its consecutive Q chunks of the
+    # same (batch, KV head) instead of re-reading them per chunk (non-causal, unmasked, one K chunk). With K/V no
+    # longer re-read per chunk, finer Q chunks balance the grid for free: those calls take QWEN_SDPA_REUSE_Q_CHUNK
+    # (the grid stays). Masked / causal calls keep the model's config (a small q chunk without reuse is slower).
+    reuse_kv = os.getenv("QWEN_SDPA_REUSE_KV", "0") == "1"
+    reuse_q_chunk = int(os.getenv("QWEN_SDPA_REUSE_Q_CHUNK", "0"))
+    reuse_cfgs = {}
+
+    def reuse_program_config(pc):
+        if pc is None or not reuse_q_chunk:
+            return pc
+        grid = pc.compute_with_storage_grid_size
+        key = (int(grid.x), int(grid.y), pc.k_chunk_size, pc.exp_approx_mode)
+        if key not in reuse_cfgs:
+            reuse_cfgs[key] = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=grid,
+                q_chunk_size=reuse_q_chunk,
+                k_chunk_size=pc.k_chunk_size,
+                exp_approx_mode=pc.exp_approx_mode,
+            )
+        return reuse_cfgs[key]
+
     @functools.wraps(original_fn)
     def wrapper(*args, **kwargs):
         if not causal:
@@ -260,6 +282,18 @@ def _wrap_sdpa_bidirectional(original_fn, concat_out=False):
         ):
             kwargs["pack_gqa_heads"] = True
             kwargs["program_config"] = packed_program_config(kwargs.get("program_config"))
+        pc = kwargs.get("program_config")
+        if (
+            reuse_kv
+            and not causal
+            and kwargs.get("attn_mask") is None
+            and q is not None
+            and int(q.shape[0]) > 1
+            and pc is not None
+            and pc.k_chunk_size >= int(k.shape[2])  # one K chunk
+        ):
+            kwargs["reuse_kv"] = True
+            kwargs["program_config"] = reuse_program_config(pc)
         if concat_out and q is not None and (int(q.shape[0]) > 1 or concat_out_bs1):
             kwargs["output_heads_concat"] = True
             out = original_fn(*args, **kwargs)

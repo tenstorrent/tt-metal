@@ -1004,3 +1004,35 @@ asserts it sits in the residual's config, and it would have to share L1 with SDP
 in DRAM. One resident-mode bs16 run hung in warm-up (killed after 30 min) while a device profile ran on another chip;
 it did not recur in later runs. Profiles taken while other jobs ran on the host came out broken (device-only report,
 or "End marker found without a corresponding start marker"); profile with the host otherwise idle.
+
+## 55. bs16 batched SDPA: contention, not compute; packing does not help; K/V reuse does (2026-09-25)
+
+8× p150b host, chip 0; standalone traced time per call at the bs16 config (Q [16, 32, 512, 128], K/V [16, 8, 512, 128]
+bfp8 in DRAM, non-causal, 12×10, q512 / k512, LoFi, streaming kernel, heads-concat output), `perf_tools/bench_sdpa_bs16_ablate.py`.
+
+**Roofline miss.** In-model 485 µs (511-515 standalone) against a ~230 µs estimate (DRAM 89 MB at ~390 GB/s, softmax exp
+on the SFPU ~178 µs, matmuls ~104 µs). The estimate assumed K/V read once per KV head; at q512 each Q head is one unit on
+one core, the K/V chains never form, and the 4 Q heads sharing a KV head each read it: 71 MB of K/V (17.8 unique), 142 MB
+per call.
+
+**Device-profiler kernel spans** (one call; zones enabled by flipping `call_step`'s profiling tag in
+`compute_streaming.hpp`, reverted): compute and reader average 346 µs per core, slowest core 482 µs; writer 278 / 379. The
+op ends with its slowest core, and 512 units on 120 cores leave 32 cores with 5 units (balanced: ~412 µs). The zone
+detail was truncated after ~7 steps per core (profiler buffer); the recorded part has softmax (subtract max + exp) as the
+largest compute zone per step, then Q@Kᵀ. Profile a run with 1-2 units per core for complete zones.
+
+**Core count barely matters.** 12×10 511, 8×10 512, 8×8 530, 12×8 473 µs (fewer cores faster): the time per unit grows
+with the number of active cores (66 µs at 64 cores, 79 at 96, ~102 at 120), i.e. contention on DRAM, not compute (32
+cores: ~60 µs per unit). `exp_approx_mode` has no effect (the streaming kernel always uses the approximate exp). Finer Q
+chunks made it worse (q256 697, q128 954 µs): each chunk re-reads K/V.
+
+**GQA packing (`pack_gqa_heads`, op supports B > 1) did not help:** 12×10 packed 647 µs (units cross packed-head
+boundaries, chains mix q counts, multicast turns off, unicast forwarding serializes), 8×8 packed = unpacked (530).
+
+**K/V reuse** (landed as SDPA `reuse_kv`, POSITIVE_RESULTS): the reader skips K/V for a unit with the same (batch, KV
+head) as the previous one on its core, compute keeps them when the next unit shares them, and no chains are built.
+Bit-identical to reuse off. 12×10 q512 512 → 425 µs; since finer chunks no longer re-read K/V, q256 382, **q128 355**,
+q96 364, q64 402; 11×10 / 12×9 / 12×8 at q128 373 / 370 / 390; packed + reuse q128 359. bs8: 247.5 → 233.9 (12×8 q128;
+less DRAM-bound), bs32: 911.6 → 620.5 (12×10 q128). In the model the cold gain matches the standalone one (bs16 −5.6 ms,
+bs32 −9.8 ms over 36 calls) but the sustained gain is a third of it: less waiting on DRAM means more power per
+iteration, and the power manager settles the clock 10-15 MHz lower.
