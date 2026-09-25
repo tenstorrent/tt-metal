@@ -7,7 +7,7 @@ from itertools import chain, product
 
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     TILE_DIMENSIONS,
@@ -1349,7 +1349,7 @@ def eltwise_unary_sfpu(
         output_format=formats.output_format,
         approx_mode=approx_mode,
         dest_acc=dest_acc,
-        arch=get_chip_architecture(),
+        arch=TestConfig.CHIP_ARCH,
     )
     assert passed_test(
         golden_tensor,
