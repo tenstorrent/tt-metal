@@ -62,3 +62,12 @@ tasks:
     gate:
       cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/
       metrics: {selftest_passed: ">= 88", selftest_failed: "== 0"}
+  - id: F7
+    title: Generic dashboard (ERNIE look and sections) from any model's records
+    step: framework
+    deps: [F6]
+    paths: [models/demos/common/bringup/dashboard, models/demos/common/bringup/reference/check_reference.py,
+            models/demos/common/bringup/selftest]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/
+      metrics: {selftest_passed: ">= 96", selftest_failed: "== 0"}
