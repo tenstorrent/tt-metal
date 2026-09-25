@@ -58,6 +58,11 @@ from helpers.ulp import (
 from helpers.utils import passed_test
 
 
+def _refuses(match, kind=ValueError):
+    """The suite's ``expect_error`` fixture needs a device; these are host-only tests."""
+    return pytest.raises(kind, match=match)  # allow-pytest.raises: host-only test
+
+
 def _integer_only_ops() -> set:
     """Every SFPU op whose operands and result are integers, from canonical sources.
 
@@ -128,6 +133,22 @@ def test_a_tolerance_contract_rejects_a_budget():
 def test_a_negative_budget_is_rejected():
     with _refuses("must not be negative"):
         AccuracyContract(max_ulp=-1)
+
+
+@pytest.mark.parametrize("bogus", [True, 1.0, "3"], ids=repr)
+def test_a_budget_that_is_not_an_int_is_rejected(bogus):
+    """YAML 1.1 reads ``true`` as a bool -- and bool is an int, so it would pass the sign
+    check and enforce a 1-step budget; ``1.0e+1`` lands as a float."""
+    with _refuses("must be an int step count"):
+        AccuracyContract(max_ulp=bogus)
+
+
+@pytest.mark.parametrize("bogus", [True, float("nan"), float("inf")], ids=repr)
+def test_a_tolerance_field_must_be_a_finite_number(bogus):
+    """``atol: yes`` would apply as 1.0; ``.nan`` is silently ignored by ``passed_test``
+    and ``.inf`` makes its gate unconditional."""
+    with _refuses("must be (a number|finite)"):
+        AccuracyContract(metric=Metric.TOLERANCE, atol=bogus)
 
 
 def test_the_metric_is_a_closed_set():
@@ -208,18 +229,22 @@ def test_the_default_key_matches_every_variant():
     key = DEFAULT
     assert key.specificity == 0
     assert key.matches(
-        approx_mode=ApproximationMode.Yes,
-        input_format=DataFormat.Float32,
-        output_format=DataFormat.Float32,
-        dest_acc=DestAccumulation.No,
-        arch=ChipArchitecture.WORMHOLE,
+        BudgetKey(
+            approx_mode=ApproximationMode.Yes,
+            input_format=DataFormat.Float32,
+            output_format=DataFormat.Float32,
+            dest_acc=DestAccumulation.No,
+            arch=ChipArchitecture.WORMHOLE,
+        )
     )
     assert key.matches(
-        approx_mode=None,
-        input_format=None,
-        output_format=None,
-        dest_acc=None,
-        arch=None,
+        BudgetKey(
+            approx_mode=None,
+            input_format=None,
+            output_format=None,
+            dest_acc=None,
+            arch=None,
+        )
     )
 
 
@@ -229,11 +254,15 @@ def test_a_more_specific_key_wins_over_the_default():
         BudgetKey(output_format=DataFormat.Float32): AccuracyContract(max_ulp=4),
     }
     assert (
-        resolve_contract(table, label="op", output_format=DataFormat.Float32).max_ulp
+        resolve_contract(
+            table, BudgetKey(output_format=DataFormat.Float32), label="op"
+        ).max_ulp
         == 4
     )
     assert (
-        resolve_contract(table, label="op", output_format=DataFormat.Float16_b).max_ulp
+        resolve_contract(
+            table, BudgetKey(output_format=DataFormat.Float16_b), label="op"
+        ).max_ulp
         == 64
     )
 
@@ -247,16 +276,14 @@ def test_specificity_counts_every_set_dimension():
     }
     resolved = resolve_contract(
         table,
+        BudgetKey(output_format=DataFormat.Float32, dest_acc=DestAccumulation.No),
         label="op",
-        output_format=DataFormat.Float32,
-        dest_acc=DestAccumulation.No,
     )
     assert resolved.max_ulp == 8
     resolved = resolve_contract(
         table,
+        BudgetKey(output_format=DataFormat.Float32, dest_acc=DestAccumulation.Yes),
         label="op",
-        output_format=DataFormat.Float32,
-        dest_acc=DestAccumulation.Yes,
     )
     assert resolved.max_ulp == 4
 
@@ -276,7 +303,7 @@ def test_a_per_arch_override_beats_the_shared_entry():
         (ChipArchitecture.QUASAR, 4),
     ):
         resolved = resolve_contract(
-            table, label="op", output_format=DataFormat.Float32, arch=arch
+            table, BudgetKey(output_format=DataFormat.Float32, arch=arch), label="op"
         )
         assert resolved.max_ulp == expected, arch
 
@@ -286,7 +313,7 @@ def test_an_unset_query_dimension_only_matches_a_wildcard():
     one setting of it."""
     table = {BudgetKey(dest_acc=DestAccumulation.Yes): AccuracyContract(max_ulp=1)}
     assert (
-        resolve_contract(table, label="op", output_format=DataFormat.Float32)
+        resolve_contract(table, BudgetKey(output_format=DataFormat.Float32), label="op")
         is TOLERANCE_CONTRACT
     )
 
@@ -301,15 +328,16 @@ def test_equally_specific_keys_are_an_error_not_a_tie_break():
     with _refuses("equally specific"):
         resolve_contract(
             table,
+            BudgetKey(
+                output_format=DataFormat.Float32, approx_mode=ApproximationMode.No
+            ),
             label="Ambiguous",
-            output_format=DataFormat.Float32,
-            approx_mode=ApproximationMode.No,
         )
 
 
 def test_an_empty_table_falls_back_to_the_tolerance_metric():
     assert (
-        resolve_contract({}, label="op", output_format=DataFormat.Float32)
+        resolve_contract({}, BudgetKey(output_format=DataFormat.Float32), label="op")
         is TOLERANCE_CONTRACT
     )
 
@@ -431,6 +459,34 @@ def test_a_downgrade_lands_on_the_ops_own_tolerance_row(
 @pytest.mark.parametrize(
     "arch", [a for a in ChipArchitecture if a != MEASURED_ARCH], ids=lambda a: a.name
 )
+def test_a_ulp_row_that_names_its_arch_binds_there(arch, monkeypatch):
+    """The arch gate exists because unkeyed numbers are Wormhole measurements. A row
+    whose key names another arch *is* a measurement taken there, and must bind."""
+    op = MathOperation.Abs
+    monkeypatch.setitem(
+        _SFPU_ACCURACY_BUDGET,
+        op,
+        {
+            BudgetKey(output_format=DataFormat.Float16_b): AccuracyContract(max_ulp=3),
+            BudgetKey(output_format=DataFormat.Float16_b, arch=arch): AccuracyContract(
+                max_ulp=5
+            ),
+        },
+    )
+    contract = accuracy_contract(op, output_format=DataFormat.Float16_b, arch=arch)
+    assert contract.metric is Metric.ULP and contract.max_ulp == 5
+    # ...while the unkeyed row is still downgraded on any other unswept arch.
+    for other in ChipArchitecture:
+        if other not in (arch, MEASURED_ARCH):
+            assert (
+                accuracy_contract(op, output_format=DataFormat.Float16_b, arch=other)
+                is TOLERANCE_CONTRACT
+            )
+
+
+@pytest.mark.parametrize(
+    "arch", [a for a in ChipArchitecture if a != MEASURED_ARCH], ids=lambda a: a.name
+)
 def test_a_step_budget_does_not_bind_on_an_unswept_architecture(arch):
     """The other half: every number in the table was measured on Wormhole with no
     headroom, so a ULP contract must not survive the trip."""
@@ -469,11 +525,15 @@ def test_a_variant_specific_tolerance_needs_no_driver_override():
         ),
     }
     narrow = resolve_contract(
-        table, label="probe", output_format=DataFormat.Float32, arch=MEASURED_ARCH
+        table,
+        BudgetKey(output_format=DataFormat.Float32, arch=MEASURED_ARCH),
+        label="probe",
     )
     assert narrow.atol == 0.001
     broad = resolve_contract(
-        table, label="probe", output_format=DataFormat.Float16_b, arch=MEASURED_ARCH
+        table,
+        BudgetKey(output_format=DataFormat.Float16_b, arch=MEASURED_ARCH),
+        label="probe",
     )
     assert broad.atol == 0.13
 
@@ -714,11 +774,6 @@ def test_an_exactly_rounded_op_carries_a_zero_budget(op):
                 "the contract going away. Re-measure before widening it."
             )
     assert seen, f"{op.name} resolves to no ULP contract at all; the row was dropped"
-
-
-def _refuses(match, kind=ValueError):
-    """The suite's ``expect_error`` fixture needs a device; these are host-only tests."""
-    return pytest.raises(kind, match=match)  # allow-pytest.raises: host-only test
 
 
 def _every_variant(op):
@@ -996,7 +1051,8 @@ def test_a_budget_key_dimension_that_is_not_an_enum_member_is_refused(field, bog
     """The same rule as ``AccuracyContract.metric``, on the five dimensions that had no
     check. All of them are bare ``Enum``s, so ``DestAccumulation.No.value is False`` and
     ``ChipArchitecture.WORMHOLE.value == "wormhole"`` never compare equal to their
-    members -- and the failure mode is silence, not an exception: such a key is counted
+    members -- and the failure mode is silence, not an exception -- and the query is a ``BudgetKey`` too,
+    so one check covers both sides: such a key is counted
     as set by ``specificity``, matched by nothing in ``matches()``, seen as no duplicate
     as no duplicate row by the loader and as no tie by ``validate_registry()``, and rendered
     identically to the correct key by ``describe()``, since ``ChipArchitecture.__str__``

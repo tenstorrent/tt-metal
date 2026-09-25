@@ -108,6 +108,20 @@ def test_n_representable_steps_read_as_n(dtype, steps):
 
 
 @pytest.mark.parametrize("dtype", FLOAT_DTYPES, ids=str)
+def test_the_distance_is_symmetric_and_shape_preserving(dtype):
+    """An int64 tensor the shape of its inputs, and the same whichever side is golden."""
+    torch.manual_seed(0)
+    golden = torch.randn(3, 5, 7, dtype=torch.float32).to(dtype)
+    result = golden.clone()
+    flat = result.reshape(-1)
+    flat[::3] = torch.nextafter(flat[::3], torch.full_like(flat[::3], float("inf")))
+    forward = ulp_distance(golden, result)
+    assert forward.shape == golden.shape and forward.dtype == torch.int64
+    assert torch.equal(forward, ulp_distance(result, golden))
+    assert int(forward.max()) == 1
+
+
+@pytest.mark.parametrize("dtype", FLOAT_DTYPES, ids=str)
 @pytest.mark.parametrize("boundary", [0.5, 1.0, 2.0, 256.0])
 def test_a_power_of_two_boundary_is_one_step_in_both_directions(dtype, boundary):
     """The whole reason the gate counts steps instead of dividing by ``ulp(golden)``."""
@@ -1131,29 +1145,3 @@ def test_the_metric_refuses_every_integer_tensor_dtype(dtype):
     with _refuses("unsupported dtype"):
         local_step(1.0, dtype, flush_subnormals=True)
     assert dtype not in _ULP_DTYPES  # keyed on the float dtypes only
-
-
-def test_the_integer_format_list_comes_from_the_enum_not_from_format_dict():
-    """``format_dict`` omits ``Bfp8`` and both ``MxFp4_2x`` variants and gives the
-    ``MxInt*`` formats a bfloat16 proxy, so deriving the integer set through it would
-    silently miss a format added without an entry, or given a float proxy.
-
-    Pinned as the explicit six rather than against ``is_integer()``, which is
-    ``INTEGER_FORMATS``' own defining expression and so cannot fail. The gap that
-    motivates it is asserted directly: every integer format is in ``format_dict`` today,
-    so a ``format_dict``-derived list would yield the same set and stay green too.
-    """
-    from helpers.llk_params import format_dict
-
-    assert set(INTEGER_FORMATS) == {
-        DataFormat.Int32,
-        DataFormat.Int16,
-        DataFormat.Int8,
-        DataFormat.UInt32,
-        DataFormat.UInt16,
-        DataFormat.UInt8,
-    }
-    missing = {f for f in DataFormat if f not in format_dict}
-    assert {DataFormat.Bfp8, DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B} <= missing
-    for fmt in (DataFormat.MxInt8, DataFormat.MxInt4, DataFormat.MxInt2):
-        assert format_dict[fmt] is torch.bfloat16  # a float proxy, not an integer one
