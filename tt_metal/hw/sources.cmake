@@ -338,6 +338,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-2xx/tt-2.0.0/meta/registers/tt_cluster_clint_reg.h
     inc/internal/tt-2xx/tt-2.0.0/meta/registers/tt_cluster_ctrl_reg.h
     inc/internal/tt-2xx/tt-2.0.0/meta/registers/tt_cluster_ctrl_t6_l1_csr_reg.h
+    inc/internal/tt-2xx/tt-2.0.0/meta/registers/tt_cluster_plic_reg.h
     inc/internal/tt-2xx/tt-2.0.0/meta/registers/tt_overlay_llk_tile_counters_reg.h
     inc/internal/tt-2xx/tt-2.0.0/meta/registers/tt_rocc_accel_reg.h
     inc/internal/tt-2xx/tt-2.0.1/meta/fds_registers/tt_fds_dispatch_reg.h
@@ -349,6 +350,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-2xx/tt-2.0.1/meta/registers/tt_cluster_clint_reg.h
     inc/internal/tt-2xx/tt-2.0.1/meta/registers/tt_cluster_ctrl_reg.h
     inc/internal/tt-2xx/tt-2.0.1/meta/registers/tt_cluster_ctrl_t6_l1_csr_reg.h
+    inc/internal/tt-2xx/tt-2.0.1/meta/registers/tt_cluster_plic_reg.h
     inc/internal/tt-2xx/tt-2.0.1/meta/registers/tt_overlay_llk_tile_counters_reg.h
     inc/internal/tt-2xx/tt-2.0.1/meta/registers/tt_rocc_accel_reg.h
     inc/internal/tt-2xx/quasar/overlay/overlay_addresses.h
