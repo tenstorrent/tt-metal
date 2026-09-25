@@ -111,8 +111,7 @@ def test_fold_with_permute_for_dram_tensor(device, nhw, channels, stride, paddin
             f"Skipping invalid padding combination: padded_h={padded_h}, padded_w={padded_w}, stride_h={stride_h}, stride_w={stride_w}"
         )
 
-    # fp32 + channels=320 + stride=(32,32): output stick alone is 32*32*320*4=1.25 MB, so both
-    # tile-native and RM-fallback paths overflow per-core L1 (~1.5 MB) — device capacity, not a bug.
+    # fp32 + channels=320 + stride=(32,32): output stick alone is 1.25 MB > per-core L1 — device capacity, not a bug.
     if input_dtype == ttnn.float32 and channels == 320 and stride == (32, 32):
         pytest.skip("FP32 fold: channels=320 + 32x32 stride overflows per-core L1 (capacity limit)")
 

@@ -41,9 +41,8 @@ DataflowBufferSpec make_dfb(
     };
 }
 
-// TILE-native factory: work-split is at super-block (= stride_h input H-rows) granularity so the writer
-// can gather stride_h*W pixels into an L1 scratch (cb_asm) and emit one aligned output stick per patch,
-// avoiding the sub-page scatter that dominated the previous byte-level design.
+// Work-split at super-block (= stride_h input H-rows) so the writer gathers stride_h*W pixels
+// into SRC2 scratch and emits one aligned output stick per patch, avoiding sub-page scatter.
 ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
     const Tensor& input_tensor, const Tensor& output, const uint32_t stride_h, const uint32_t stride_w) {
     auto* device = input_tensor.device();
@@ -95,8 +94,7 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
     uint32_t tiles_per_width_dim = tt::div_up(input_padded_shape[-2], TILE_HEIGHT);
 
     const uint32_t c_padded_bytes = tiles_per_channel_dim * TILE_WIDTH * tt::datum_size(out_dfb_data_format);
-    // One super-block = stride_h consecutive input H-rows → one output H-row. compute_output_specs already
-    // requires stride_h | H, so N*(H/sh) is exact.
+    // compute_output_specs already requires stride_h | H, so N*(H/sh) is exact.
     const uint32_t num_super_blocks = input_tensor.logical_shape()[0] * (input_tensor.logical_shape()[1] / stride_h);
 
     log_debug(
@@ -117,7 +115,8 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
         nblocks_per_core,
         nblocks_per_core_cliff);
 
-    const uint32_t num_input_tiles = tiles_per_channel_dim;
+    // kFoldSrcCbDepthPerCTile lets reader/compute/writer overlap; predicate scales cb_bytes by the same constant.
+    const uint32_t num_input_tiles = tiles_per_channel_dim * kFoldSrcCbDepthPerCTile;
 
     // src0/src1: tile-format input + untilized output; src2: RM scratch sized to one full output row.
     DataflowBufferSpec src0_dfb = make_dfb(SRC0, single_tile_size, num_input_tiles, dfb_data_format);
@@ -164,8 +163,7 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
         .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
 
-    // Compute kernel (untilize). fp32 needs `UnpackToDest` — packer truncates mantissa otherwise and
-    // `torch.equal` fails vs the untilize→RM composite path.
+    // fp32 needs `UnpackToDest` — packer truncates mantissa otherwise and `torch.equal` fails vs the RM path.
     const bool fp32_dest_acc_en = dfb_data_format == tt::DataFormat::Float32;
     auto make_compute_spec = [&](const KernelSpecName& id, uint32_t nblocks) {
         ComputeGen1Config compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};

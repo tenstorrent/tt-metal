@@ -23,8 +23,7 @@ void kernel_main() {
     const auto s = TensorAccessor(tensor::src);
     Noc noc;
 
-    // Each super-block = `stride_height` consecutive input rows; the writer gathers them into scratch before
-    // emitting one aligned output row, so work must split at super-block granularity across cores.
+    // Split at super-block granularity: writer gathers `stride_height` input rows into scratch per output row.
     const uint32_t end_super_block_id = start_super_block_id + num_super_blocks;
     for (uint32_t sb = start_super_block_id; sb < end_super_block_id; ++sb) {
         const uint32_t input_h_base = sb * stride_height;

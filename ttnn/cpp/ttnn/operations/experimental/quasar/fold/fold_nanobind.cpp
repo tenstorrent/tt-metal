@@ -15,6 +15,7 @@
 #include <nanobind/stl/variant.h>
 
 #include "ttnn/operations/experimental/quasar/fold/fold.hpp"
+#include "ttnn/operations/experimental/quasar/fold/device/fold_device_op.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/types.hpp"
 
@@ -45,6 +46,22 @@ void bind_fold_operation(nb::module_& mod) {
         nb::arg("grid_size") = nb::none(),
         nb::arg("override_memory_config") = nb::none(),
         nb::arg("input_is_nhwc") = false);
+
+    // Test-only hook: _prim_fold bypasses the composite gate so validate_fold's FATAL surfaces.
+    mod.def(
+        "_prim_fold",
+        [](const ttnn::Tensor& input, uint32_t stride_h, uint32_t stride_w) {
+            return ttnn::prim::qsr::fold(input, stride_h, stride_w);
+        },
+        nb::arg("input"),
+        nb::arg("stride_h"),
+        nb::arg("stride_w"));
+    mod.def(
+        "_is_tile_native_fold_supported",
+        &ttnn::operations::experimental::quasar::is_tile_native_fold_supported,
+        nb::arg("input"),
+        nb::arg("stride_h"),
+        nb::arg("stride_w"));
 }
 
 }  // namespace ttnn::operations::experimental::quasar::detail
