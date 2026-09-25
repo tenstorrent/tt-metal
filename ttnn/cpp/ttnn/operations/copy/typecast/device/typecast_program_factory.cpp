@@ -18,12 +18,13 @@ using namespace tt::tt_metal::experimental;
 
 namespace {
 
-// Kernel sources shared by both factories in this file. The two interleaved dataflow kernels are
-// Metal 2.0 forks of the eltwise/unary donors (see the fork note in their headers).
+// Kernel sources shared by both factories in this file. The two interleaved dataflow kernels are the
+// shared eltwise/unary Metal 2.0 forks, so their binding names (dfb::in / dfb::out, tensor::src /
+// tensor::dst, args::num_pages / args::start_id) are those kernels' interface, not this op's choice.
 constexpr const char* kReaderSource =
-    "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/dataflow/reader_unary_interleaved_start_id_metal2.cpp";
+    "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id_metal2.cpp";
 constexpr const char* kWriterSource =
-    "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/dataflow/writer_unary_interleaved_start_id_metal2.cpp";
+    "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id_metal2.cpp";
 constexpr const char* kComputeSource =
     "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp";
 
@@ -134,7 +135,7 @@ ttnn::device_operation::ProgramArtifacts TypecastProgramFactory::create_program_
         .source = kReaderSource,
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}},
-        .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
@@ -144,7 +145,7 @@ ttnn::device_operation::ProgramArtifacts TypecastProgramFactory::create_program_
         .source = kWriterSource,
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
-        .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
         .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
@@ -297,7 +298,7 @@ ttnn::device_operation::ProgramArtifacts TypecastSubgridProgramFactory::create_p
         .source = kReaderSource,
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}},
-        .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
@@ -307,7 +308,7 @@ ttnn::device_operation::ProgramArtifacts TypecastSubgridProgramFactory::create_p
         .source = kWriterSource,
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
-        .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
         .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
