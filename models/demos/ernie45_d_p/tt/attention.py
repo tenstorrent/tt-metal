@@ -12,15 +12,51 @@ P2.15 converts to the prefill-server contract layout.
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
 from models.demos.ernie45_d_p.reference.ernie_ref import ErnieConfig, LayerWeights
-from models.demos.ernie45_d_p.tt.common import COMPUTE_HIFI2, COMPUTE_HIFI4, cache_name, shard, signpost
+from models.demos.ernie45_d_p.tt.common import COMPUTE_HIFI2, cache_name, shard, signpost
 from models.demos.ernie45_d_p.tt.ops import TtRope, all_reduce
 
 NUM_CHIPS = 4
 KV_BLOCK = 64
+
+# SDPA presets (ERNIE_SDPA_CFG). "base" = bring-up config (HiFi4 + fp32 dest acc: runs SDPA's older non-streaming
+# kernel). "A" = HiFi2, fp32 dest acc off (streaming kernel), approx exp, q256/k512 -- the common Blackhole prefill setup.
+SDPA_PRESETS = {
+    "base": dict(fidelity="HiFi4", fp32=True, packer_l1=True, exp_approx=False, q=256, k=256, grid=None),
+    "A": dict(fidelity="HiFi2", fp32=False, packer_l1=False, exp_approx=True, q=256, k=512, grid=None),
+}
+
+
+def sdpa_settings() -> dict:
+    """Preset from ERNIE_SDPA_CFG (default base), individually overridable: ERNIE_SDPA_{FIDELITY,FP32,EXP_APPROX,Q,K,GRID}."""
+    c = dict(SDPA_PRESETS[os.environ.get("ERNIE_SDPA_CFG", "base")])
+    env = os.environ.get
+    if env("ERNIE_SDPA_FIDELITY"):
+        c["fidelity"] = env("ERNIE_SDPA_FIDELITY")
+    for key, name in (("fp32", "ERNIE_SDPA_FP32"), ("exp_approx", "ERNIE_SDPA_EXP_APPROX")):
+        if env(name) is not None:
+            c[key] = env(name) == "1"
+    for key, name in (("q", "ERNIE_SDPA_Q"), ("k", "ERNIE_SDPA_K")):
+        if env(name):
+            c[key] = int(env(name))
+    if env("ERNIE_SDPA_GRID"):
+        c["grid"] = tuple(int(v) for v in env("ERNIE_SDPA_GRID").split("x"))
+    return c
+
+
+def sdpa_compute_config():
+    c = sdpa_settings()
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=getattr(ttnn.MathFidelity, c["fidelity"]),
+        math_approx_mode=False,
+        fp32_dest_acc_en=c["fp32"],
+        packer_l1_acc=c["packer_l1"],
+    )
 
 
 class TtKVCache:
@@ -109,16 +145,20 @@ class TtAttention:
         self.scale = D**-0.5
 
     def _sdpa_cfg(self, seq: int, start: int):
-        q = 256 if seq >= 2048 else 64
-        k = 256 if seq >= 2048 else 64
-        if start:
+        c = sdpa_settings()
+        q = c["q"] if seq >= 2048 else 64
+        k = c["k"] if seq >= 2048 else 64
+        if start:  # chunked SDPA: chunk_start must be a multiple of both chunk sizes
             lowbit = start & -start
             q, k = min(q, lowbit), min(k, lowbit)
+        grid = self.mesh.compute_with_storage_grid_size()
+        if c["grid"]:
+            grid = ttnn.CoreCoord(*c["grid"])
         return ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.mesh.compute_with_storage_grid_size(),
+            compute_with_storage_grid_size=grid,
             q_chunk_size=q,
             k_chunk_size=k,
-            exp_approx_mode=False,
+            exp_approx_mode=c["exp_approx"],
         )
 
     def __call__(self, x, start: int, cache: TtKVCache, debug: dict | None = None, contract_kv=None):
@@ -155,7 +195,13 @@ class TtAttention:
         prog = self._sdpa_cfg(seq, start)
         if start == 0:
             attn = ttnn.transformer.scaled_dot_product_attention(
-                q, k, v, is_causal=True, scale=self.scale, program_config=prog, compute_kernel_config=COMPUTE_HIFI4
+                q,
+                k,
+                v,
+                is_causal=True,
+                scale=self.scale,
+                program_config=prog,
+                compute_kernel_config=sdpa_compute_config(),
             )
         else:
             attn = ttnn.transformer.chunked_scaled_dot_product_attention(
@@ -165,7 +211,7 @@ class TtAttention:
                 page_table_tensor=cache.page_table,
                 chunk_start_idx=start,
                 program_config=prog,
-                compute_kernel_config=COMPUTE_HIFI4,
+                compute_kernel_config=sdpa_compute_config(),
             )
         if debug is None:
             ttnn.deallocate(q)
