@@ -29,8 +29,9 @@ import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 from ....pipelines.events import profiler_event_callback
-from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames, resolve_canvas_size
 from ....pipelines.minimax_h3.weights_minimax_h3 import WeightsNotFoundError, resolve_weights_dir
+from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, resolve_canvas_size
+from ....pipelines.minimax_h3.policy import get_num_frames
 
 # Truthy values for H3_LOG_QUALITY (quality logs) and ENABLE_USER_INPUT (post-perf prompt REPL).
 _QUALITY_LOG_ON = ("1", "true", "yes", "on")
@@ -1063,7 +1064,7 @@ def run_user_generations(
         last = Image.open(last_image).convert("RGB") if last_image else None
         profiler = BenchmarkProfiler()
         try:
-            num_frames = align_num_frames(round(duration_s * MINIMAX_H3_FPS))
+            num_frames = get_num_frames(duration_s)
             with profiler("run", iteration=0):
                 output = pipeline(
                     prompt,
@@ -1131,7 +1132,7 @@ def run_user_ref_generations(
             return
         prompt, references, aspect_ratio, duration_s, num_steps = request
         height, width = resolve_canvas_size(*aspect_ratio)
-        num_frames = align_num_frames(round(duration_s * MINIMAX_H3_FPS))
+        num_frames = get_num_frames(duration_s)
         profiler = BenchmarkProfiler()
         try:
             with profiler("run", iteration=0):

@@ -7,12 +7,13 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 
 from PIL import Image
 
 from .packing import (
     MINIMAX_H3_CANVAS_MULTIPLE,
+    MINIMAX_H3_FPS,
     MINIMAX_H3_FRAMES_PER_CHUNK,
     MINIMAX_H3_LATENTS_PER_CHUNK,
     MINIMAX_H3_MAX_ASPECT_RATIO,
@@ -20,13 +21,31 @@ from .packing import (
     MINIMAX_H3_MIN_ASPECT_RATIO,
     resolve_canvas_size,
 )
-from .packing_ref2va import resolve_reference_image_size
+from .packing_ref2va import MiniMaxH3Reference, resolve_reference_image_size
 
 MINIMAX_H3_ASPECT_RATIOS = ((21, 9), (16, 9), (4, 3), (1, 1), (3, 4), (9, 16))
 MINIMAX_H3_DEFAULT_ASPECT_RATIO = (16, 9)
 
+
+def align_num_frames(num_frames: int) -> int:
+    """Snap a frame count up to the next ``17n + 5`` the video VAE can encode."""
+    if num_frames < 1:
+        raise ValueError(f"num_frames must be positive, got {num_frames}")
+    while num_frames % MINIMAX_H3_FRAMES_PER_CHUNK != MINIMAX_H3_LATENTS_PER_CHUNK:
+        num_frames += 1
+    return num_frames
+
+
+def get_num_frames(duration_s: float) -> int:
+    """Frames generated for `duration_s` seconds: the 24 fps count, snapped up to the next `17n + 5`."""
+    return align_num_frames(round(duration_s * MINIMAX_H3_FPS))
+
+
 MINIMAX_H3_DURATIONS_S = tuple(range(4, 16))
 MINIMAX_H3_DEFAULT_DURATION_S = 5
+# Frame counts the shortest and longest served durations resolve to: 107 and 362.
+MINIMAX_H3_MIN_NUM_FRAMES = get_num_frames(MINIMAX_H3_DURATIONS_S[0])
+MINIMAX_H3_MAX_NUM_FRAMES = get_num_frames(MINIMAX_H3_DURATIONS_S[-1])
 
 # Served denoising step count.
 MINIMAX_H3_NUM_INFERENCE_STEPS = 50
@@ -78,6 +97,43 @@ def minimax_h3_frames_are_aligned(num_frames: int) -> bool:
     )
 
 
+def validate_num_frames(num_frames: int) -> None:
+    """`num_frames` must align into the frame counts the served durations produce, 4 s (107) to 15 s (362).
+
+    Bounds are on the aligned count so a request of exactly 15 s, which aligns up to 15.083 s, is served.
+    """
+    aligned = align_num_frames(num_frames)
+    if not MINIMAX_H3_MIN_NUM_FRAMES <= aligned <= MINIMAX_H3_MAX_NUM_FRAMES:
+        raise ValueError(
+            f"num_frames {num_frames} aligns to {aligned} ({aligned / MINIMAX_H3_FPS:.2f} s); served lengths are "
+            f"{MINIMAX_H3_MIN_NUM_FRAMES} to {MINIMAX_H3_MAX_NUM_FRAMES} frames "
+            f"({MINIMAX_H3_DURATIONS_S[0]} to {MINIMAX_H3_DURATIONS_S[-1]} s)"
+        )
+
+
+def validate_request(
+    *,
+    image: Image.Image | None,
+    last_image: Image.Image | None,
+    references: Sequence[MiniMaxH3Reference] | None,
+    aspect_ratio: tuple[int, int],
+    height: int | None,
+    width: int | None,
+    num_frames: int | None,
+) -> None:
+    """Reject a request outside the served envelope. A `num_frames` of None is left to the references."""
+    validate_input(
+        image=image,
+        last_image=last_image,
+        references=references,
+        aspect_ratio=aspect_ratio,
+        height=height,
+        width=width,
+    )
+    if num_frames is not None:
+        validate_num_frames(num_frames)
+
+
 def validate_input(
     *,
     image: Image.Image | None,
@@ -85,11 +141,16 @@ def validate_input(
     aspect_ratio: tuple[int, int],
     height: int | None,
     width: int | None,
+    references: Sequence[MiniMaxH3Reference] | None = None,
 ) -> None:
-    """Reject a t2va/fl2va request outside the served envelope; any keyframe makes it fl2va."""
+    """Reject inputs outside the served envelope; references make it ref2va, any keyframe fl2va."""
     if (height is None) != (width is None):
         raise ValueError("pass both height and width, or neither")
-    if image is None and last_image is None:
+    if references is not None:
+        if image is not None or last_image is not None:
+            raise ValueError("references (ref2va) and image/last_image (fl2va) are different tasks")
+        validate_ref2va(aspect_ratio=aspect_ratio, height=height, width=width)
+    elif image is None and last_image is None:
         validate_t2va(aspect_ratio=aspect_ratio, height=height, width=width)
     else:
         validate_fl2va(image=image, last_image=last_image, height=height, width=width)
