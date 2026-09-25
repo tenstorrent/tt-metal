@@ -5,11 +5,11 @@ Tracks prefill performance of the intra-/multi-galaxy pipeline runner over a fix
 
 | | values |
 |---|---|
-| new tokens (the request) | 640 (p25), 1600 (p50), 3072 (p75), 5120 (one chunk), 32768, 51200 (p99) |
-| cached tokens (prefix already in the KV cache) | 0, 61440 (p25), 143360 (p50), 312320 (p75), 552960 (p90) |
+| new tokens (the request) | 640 (p25), 1600 (p50), 3072 (p75), 5120 (one chunk), 6900 (p90), 32768, 51200 (p99) |
+| cached tokens (prefix already in the KV cache) | 0, 61440 (p25), 143360 (p50), 312320 (p75), 552960 (p90), 860160 (p99) |
 
 The values are percentiles of the **Agent X dataset** (`semianalysisai/cc-traces-weka-062126`):
-new-prefill tokens per request p25 / p50 / p75 / p99 and cached context p25 / p50 / p75 / p90,
+new-prefill tokens per request p25 / p50 / p75 / p90 / p99 and cached context p25 / p50 / p75 / p90 / p99,
 rounded to chunk multiples (chunk = 5120), plus 5120 (exactly one chunk) and 32768 as extra
 points. Per cell the script measures:
 
@@ -55,7 +55,7 @@ JOB=<slurm job id> HOSTS=bh-glx-120-b09u02,bh-glx-120-b09u08,bh-glx-120-b08u08,b
 ```
 
 Takes ~15 min bring-up (galaxy resets + first weight load) plus ~5-8 min per cached row
-(five rows). Knobs: `USERS` (0 = idle only), `ITERS`, `CACHED` / `NEW` lists, `REPS` (repeat the
+(six rows; the 860k row needs a 911360-token KV capacity per slot, ~2.8 GB/chip with 4 users). Knobs: `USERS` (0 = idle only), `ITERS`, `CACHED` / `NEW` lists, `REPS` (repeat the
 whole matrix for error bars), `STAGES=12` with three hosts, `WORK` (default
 `generated/m3_prefill_matrix/<stamp>`), `OUT` (results JSONL).
 

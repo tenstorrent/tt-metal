@@ -21,8 +21,8 @@ def load(path):
 
 
 # Agent X dataset percentiles the default matrix values correspond to (see README).
-NEW_PCT = {640: "p25", 1600: "p50", 3072: "p75", 51200: "p99"}
-CACHED_PCT = {61440: "p25", 143360: "p50", 312320: "p75", 552960: "p90"}
+NEW_PCT = {640: "p25", 1600: "p50", 3072: "p75", 6900: "p90", 51200: "p99"}
+CACHED_PCT = {61440: "p25", 143360: "p50", 312320: "p75", 552960: "p90", 860160: "p99"}
 
 
 def _lbl(v, pct):

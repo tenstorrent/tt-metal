@@ -10,7 +10,7 @@ set -uo pipefail
 PKG_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 TT_METAL_HOME=${TT_METAL_HOME:-$(cd "$PKG_DIR/../../../../.." && pwd)}
 JOB=${JOB:?}; HOSTS=${HOSTS:?comma list, rank-0 host first}; STAGES=${STAGES:-16}; CACHED=${CACHED:?}
-ITERS=${ITERS:-3}; RESET=${RESET:-0}; USERS=${USERS:-0}; NEW=${NEW:-640,1600,3072,5120,32768,51200}
+ITERS=${ITERS:-3}; RESET=${RESET:-0}; USERS=${USERS:-0}; NEW=${NEW:-640,1600,3072,5120,6900,32768,51200}
 WORK=${WORK:-$TT_METAL_HOME/generated/m3_prefill_matrix}; mkdir -p "$WORK"
 OUT=${OUT:-$WORK/results_${STAGES}stage.jsonl}
 IFS=, read -r -a HOST_ARR <<< "$HOSTS"; R0=${HOST_ARR[0]}
