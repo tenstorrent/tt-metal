@@ -71,10 +71,10 @@ constexpr uint32_t QUEUE_DEPTH = 2 * BATCH;
 // destination on Blackhole, which a packed record of num_experts_per_tok uint16 would not keep.
 constexpr uint32_t META_PAD_STRIDE = 64;
 
-// Words per assignment in the reader's assignment block: [dst_chip_id, dst_row, split_idx, split_count].
+// Words per assignment in the reader's assignment block: [dst_chip_id, dst_pos, split_idx, split_count].
 constexpr uint32_t ASSIGNMENT_WORDS = 4;
 
-// Words per chunk descriptor in the reader's in/out chunk blocks: [origin_row, dst_row, split_idx, split_count].
+// Words per chunk descriptor in the reader's in/out descriptor blocks: [origin_pos, dst_pos, split_idx, split_count].
 constexpr uint32_t CHUNK_DESCRIPTOR_WORDS = 4;
 
 // The RISCs of a stream core that build the routing index, each over a contiguous slice of the tokens:
@@ -107,8 +107,8 @@ constexpr uint32_t FORWARDING_METADATA_SIZE = 64;
 // uint64_t so the sender needs no sub-word loads.
 struct FwdMetadata {
     // First, because the last hop sends the token and these words as one scatter packet straight out of
-    // the entry: the second chunk starts at the byte after the token. The token size is a multiple of the
-    // 16-byte NoC write alignment, so that chunk's source is aligned like the metadata page it lands on.
+    // the entry: the second scatter part starts at the byte after the token. The token size is a multiple of
+    // the 16-byte NoC write alignment, so that part's source is aligned like the metadata page it lands on.
     uint32_t meta[3];  // (src chip, token index, topk index), the metadata this token carries
     // Aligns the addresses below to 8 bytes. It is also the fourth word of the METADATA_WIRE_BYTES the
     // last hop writes to the metadata page, so the reader zeroes it.
@@ -165,8 +165,8 @@ constexpr uint64_t CMD_FORWARD_END = 3;  // as CMD_FORWARD, and the last page of
 // in ascending global expert id. The experts come from expert_dispatch_table, a device tensor, so the
 // host does not know them when it builds the program.
 struct ChunkDescriptor {
-    uint32_t origin_row = 0;  // where the tokens started, as a position on the dispatch axis
-    uint32_t dst_row = 0;     // the chip hosting the experts
+    uint32_t origin_pos = 0;  // where the tokens started, as a position on the dispatch axis
+    uint32_t dst_pos = 0;     // the chip hosting the experts
     uint32_t split_idx = 0;
     uint32_t split_count = 1;
 };
@@ -188,7 +188,7 @@ enum ScratchBlock : uint32_t {
     kBlkExpertBucket,
     kBlkFirstPage,
     kBlkChipExperts,
-    kBlkRowFill,
+    kBlkPosFill,
     kBlkBucketStart,
     kBlkRecords,
     kBlkPadding,
@@ -211,10 +211,10 @@ struct ScratchGeometry {
     uint32_t num_routed_experts = 0;
     uint32_t experts_per_chip = 0;
     uint32_t topk = 0;
-    uint32_t num_forward = 0;  // forward_chunks_per_stream(extent), the same for every stream
+    uint32_t num_forward = 0;  // forward_descriptors_per_stream(extent), the same for every stream
 };
 
-// Chunk starts: one per (forward chunk, expert), which is also what the outgoing list expands to.
+// Chunk starts: one per (forward descriptor, expert), which is also what the outgoing list expands to.
 constexpr uint32_t chunk_start_count(const ScratchGeometry& g) { return g.num_forward * g.experts_per_chip; }
 
 constexpr uint32_t scratch_block_raw_bytes(const ScratchGeometry& g, uint32_t block) {
@@ -230,9 +230,9 @@ constexpr uint32_t scratch_block_raw_bytes(const ScratchGeometry& g, uint32_t bl
         // Indexed by bucket; only this group's experts have one.
         case kBlkFirstPage: return 4u * g.extent * g.experts_per_chip;
         case kBlkChipExperts: return 4u * g.extent * g.experts_per_chip;
-        // One counter per chip on the axis, used while the chip -> experts inverse is built. A separate
+        // One counter per position on the axis, used while the chip -> experts inverse is built. A separate
         // block because the blocks below are indexed by bucket.
-        case kBlkRowFill: return 4u * g.extent;
+        case kBlkPosFill: return 4u * g.extent;
         // Exclusive prefix sums plus a closing total: bucket b's records run from bucket_start[b] to
         // bucket_start[b + 1].
         case kBlkBucketStart: return 4u * (g.extent * g.experts_per_chip + 1u);

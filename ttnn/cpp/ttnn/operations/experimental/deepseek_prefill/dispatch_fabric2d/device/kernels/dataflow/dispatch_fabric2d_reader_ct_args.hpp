@@ -44,7 +44,7 @@ struct ReaderCtArgs {
         kNumRoutedExperts,
         kExpertsPerChip,
         kExtent,
-        kMyRow,
+        kMyPos,
         kDownstreamChipId,
         kLinearizedCoord,
         kNumLinks,
@@ -66,12 +66,12 @@ struct ReaderCtArgs {
         // added without renumbering anything the kernel already reads.
         kRingChipIdsBase,
         kAssignmentBase,
-        // (origin_row, dst_row, split_idx, split_count) per descriptor. `in` lists what this stream reads
+        // (origin_pos, dst_pos, split_idx, split_count) per descriptor. `in` lists what this stream reads
         // from its own fwd_section, `out` what it writes into the downstream chip's. The host's
-        // validate_chunk_agreement checks that `out` here matches `in` on the downstream chip in content
-        // and order, so a writer can place a chunk from its own list alone.
-        kInChunksBase,
-        kOutChunksBase,
+        // validate_descriptor_agreement checks that `out` here matches `in` on the downstream chip in content
+        // and order, so a writer can place a descriptor's chunks from its own list alone.
+        kInDescriptorsBase,
+        kOutDescriptorsBase,
         kCount,
     };
 
@@ -84,7 +84,7 @@ struct ReaderCtArgs {
     uint32_t num_routed_experts;
     uint32_t experts_per_chip;
     uint32_t extent;
-    uint32_t my_row;
+    uint32_t my_pos;
     uint32_t downstream_chip_id;
     // Written as metadata field 0, the source chip.
     uint32_t linearized_coord;
@@ -110,15 +110,15 @@ struct ReaderCtArgs {
     uint32_t has_padding_config;
     uint32_t ring_chip_ids_base;
     uint32_t assignment_base;
-    uint32_t in_chunks_base;
-    uint32_t out_chunks_base;
+    uint32_t in_descriptors_base;
+    uint32_t out_descriptors_base;
 
 #ifndef KERNEL_BUILD
     ReaderCtArgs(
         const op::DispatchFabric2dParams& args,
         uint32_t token_bytes,
         uint32_t linearized,
-        uint32_t row,
+        uint32_t pos,
         uint32_t neighbour_chip_id,
         const op::L1Layout& l1,
         const op::KernelPlan& plan,
@@ -133,7 +133,7 @@ struct ReaderCtArgs {
         num_routed_experts(args.num_routed_experts),
         experts_per_chip(args.experts_per_chip),
         extent(plan.extent),
-        my_row(row),
+        my_pos(pos),
         downstream_chip_id(neighbour_chip_id),
         linearized_coord(linearized),
         num_links(args.num_links),
@@ -153,16 +153,16 @@ struct ReaderCtArgs {
         has_padding_config(args.has_padding_config ? 1u : 0u),
         ring_chip_ids_base(kCount),
         assignment_base(kCount + args.device->shape()[args.axis]),
-        in_chunks_base(assignment_base + own_count * ASSIGNMENT_WORDS),
-        out_chunks_base(in_chunks_base + forward_count * CHUNK_DESCRIPTOR_WORDS) {}
+        in_descriptors_base(assignment_base + own_count * ASSIGNMENT_WORDS),
+        out_descriptors_base(in_descriptors_base + forward_count * CHUNK_DESCRIPTOR_WORDS) {}
 
-    // Scalars, then ring_chip_ids, the assignments and the two chunk-descriptor blocks, at the base
+    // Scalars, then ring_chip_ids, the assignments and the two descriptor blocks, at the base
     // indices set in the constructor.
     std::vector<uint32_t> to_ct_word_arr(
         const std::vector<uint32_t>& ring_chip_ids,
         const std::vector<uint32_t>& assignment_words,
-        const std::vector<uint32_t>& in_chunks,
-        const std::vector<uint32_t>& out_chunks) const {
+        const std::vector<uint32_t>& in_descriptors,
+        const std::vector<uint32_t>& out_descriptors) const {
         constexpr uint32_t kUnset = 0xDEADBEEFu;
         std::vector<uint32_t> w(kCount, kUnset);
         w[kQueueDepth] = queue_depth;
@@ -174,7 +174,7 @@ struct ReaderCtArgs {
         w[kNumRoutedExperts] = num_routed_experts;
         w[kExpertsPerChip] = experts_per_chip;
         w[kExtent] = extent;
-        w[kMyRow] = my_row;
+        w[kMyPos] = my_pos;
         w[kDownstreamChipId] = downstream_chip_id;
         w[kLinearizedCoord] = linearized_coord;
         w[kNumLinks] = num_links;
@@ -194,8 +194,8 @@ struct ReaderCtArgs {
         w[kHasPaddingConfig] = has_padding_config;
         w[kRingChipIdsBase] = ring_chip_ids_base;
         w[kAssignmentBase] = assignment_base;
-        w[kInChunksBase] = in_chunks_base;
-        w[kOutChunksBase] = out_chunks_base;
+        w[kInDescriptorsBase] = in_descriptors_base;
+        w[kOutDescriptorsBase] = out_descriptors_base;
         for (uint32_t i = 0; i < kCount; i++) {
             TT_FATAL(w[i] != kUnset, "dispatch_fabric2d: reader compile-time arg {} was never assigned", i);
         }
@@ -207,16 +207,16 @@ struct ReaderCtArgs {
             extent,
             num_own * ASSIGNMENT_WORDS);
         TT_FATAL(
-            in_chunks.size() == num_forward * CHUNK_DESCRIPTOR_WORDS &&
-                out_chunks.size() == num_forward * CHUNK_DESCRIPTOR_WORDS,
+            in_descriptors.size() == num_forward * CHUNK_DESCRIPTOR_WORDS &&
+                out_descriptors.size() == num_forward * CHUNK_DESCRIPTOR_WORDS,
             "dispatch_fabric2d: chunk descriptor blocks are {}/{} words but the kernel indexes {} each",
-            in_chunks.size(),
-            out_chunks.size(),
+            in_descriptors.size(),
+            out_descriptors.size(),
             num_forward * CHUNK_DESCRIPTOR_WORDS);
         w.insert(w.end(), ring_chip_ids.begin(), ring_chip_ids.end());
         w.insert(w.end(), assignment_words.begin(), assignment_words.end());
-        w.insert(w.end(), in_chunks.begin(), in_chunks.end());
-        w.insert(w.end(), out_chunks.begin(), out_chunks.end());
+        w.insert(w.end(), in_descriptors.begin(), in_descriptors.end());
+        w.insert(w.end(), out_descriptors.begin(), out_descriptors.end());
         return w;
     }
 #else
@@ -230,7 +230,7 @@ struct ReaderCtArgs {
         num_routed_experts(get_compile_time_arg_val(kNumRoutedExperts)),
         experts_per_chip(get_compile_time_arg_val(kExpertsPerChip)),
         extent(get_compile_time_arg_val(kExtent)),
-        my_row(get_compile_time_arg_val(kMyRow)),
+        my_pos(get_compile_time_arg_val(kMyPos)),
         downstream_chip_id(get_compile_time_arg_val(kDownstreamChipId)),
         linearized_coord(get_compile_time_arg_val(kLinearizedCoord)),
         num_links(get_compile_time_arg_val(kNumLinks)),
@@ -250,8 +250,8 @@ struct ReaderCtArgs {
         has_padding_config(get_compile_time_arg_val(kHasPaddingConfig)),
         ring_chip_ids_base(get_compile_time_arg_val(kRingChipIdsBase)),
         assignment_base(get_compile_time_arg_val(kAssignmentBase)),
-        in_chunks_base(get_compile_time_arg_val(kInChunksBase)),
-        out_chunks_base(get_compile_time_arg_val(kOutChunksBase)) {}
+        in_descriptors_base(get_compile_time_arg_val(kInDescriptorsBase)),
+        out_descriptors_base(get_compile_time_arg_val(kOutDescriptorsBase)) {}
 #endif
 
     constexpr uint32_t entry_stride() const { return token_size_bytes + forwarding_metadata_size; }
@@ -260,7 +260,7 @@ struct ReaderCtArgs {
     // The program factory appends the TensorAccessorArgs after the blocks above, in ReaderRtArg order.
     // Their base is derived from the block bases, so adding a scalar or widening a block keeps it right.
     static constexpr uint32_t accessor_base =
-        get_compile_time_arg_val(kOutChunksBase) + get_compile_time_arg_val(kNumForward) * CHUNK_DESCRIPTOR_WORDS;
+        get_compile_time_arg_val(kOutDescriptorsBase) + get_compile_time_arg_val(kNumForward) * CHUNK_DESCRIPTOR_WORDS;
     static constexpr auto in_args = TensorAccessorArgs<accessor_base>();
     static constexpr auto indices_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
     static constexpr auto offsets_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();

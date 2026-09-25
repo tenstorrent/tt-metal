@@ -7,7 +7,7 @@
 // one hop to the chip across this cable. Tokens bound further go into that chip's fwd_section and are
 // sent on from there.
 //
-// The last hop is a two-chunk scatter write out of one entry: the token to its page and the metadata words
+// The last hop is a two-part scatter write out of one entry: the token to its page and the metadata words
 // behind it to the metadata page. A forward hop is a plain write.
 //
 // Entries are claimed and released in batches to amortise the counter signals and the source flush. The
@@ -44,16 +44,16 @@ volatile tt_l1_ptr dspf2d::FwdMetadata* entry_meta(uint32_t entry) {
 // The bytes a last-hop delivery carries: the token and the metadata words behind it.
 constexpr uint32_t TOKEN_PLUS_META_BYTES = ct.token_size_bytes + dspf2d::METADATA_WIRE_BYTES;
 
-// A token and its metadata leave as one fabric packet: a scatter write whose first chunk is the token and
-// whose second is the metadata words behind it. The chunks land on different pages but use one EDM slot,
-// one header and one credit, like a forward. The route is prebuilt, so only the addresses are written.
+// A token and its metadata leave as one fabric packet: a scatter write whose first scatter part is the token
+// and whose second scatter part is the metadata words behind it. The parts land on different pages but use
+// one EDM slot, one header and one credit, like a forward. The route is prebuilt, so only the addresses are written.
 void build_token_meta_header(volatile PACKET_HEADER_TYPE* hdr, uint64_t payload_addr, uint64_t meta_addr) {
-    // Chunk and payload sizes are 16-bit header fields; the total is the larger.
+    // Scatter part and payload sizes are 16-bit header fields; the total is the larger.
     static_assert(TOKEN_PLUS_META_BYTES <= 0xFFFFu, "a scatter payload size is a 16-bit field");
-    // Only the first chunk's size is given; the router takes the rest of the payload as the second chunk,
-    // sourced at payload base + token size. A NoC write whose source and destination differ modulo 16
-    // arrives shifted by a word.
-    static_assert(ct.token_size_bytes % 16u == 0u, "the second scatter chunk is sourced at payload base + token size");
+    // Only the first scatter part's size is given; the router takes the rest of the payload as the second
+    // scatter part, sourced at payload base + token size. A NoC write whose source and destination differ
+    // modulo 16 arrives shifted by a word.
+    static_assert(ct.token_size_bytes % 16u == 0u, "the second scatter part is sourced at payload base + token size");
     hdr->to_noc_unicast_scatter_write(
         tt::tt_fabric::NocUnicastScatterCommandHeader{
             {payload_addr, meta_addr}, {static_cast<uint16_t>(ct.token_size_bytes)}},

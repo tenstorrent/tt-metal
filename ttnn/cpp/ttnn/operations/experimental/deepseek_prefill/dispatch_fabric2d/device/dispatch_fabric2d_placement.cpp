@@ -112,7 +112,7 @@ StreamPlacements decide_device_placement(
     };
 
     // Nearest first, so a stream that already has its closest core keeps it, and any stream that has to
-    // move was further away anyway. Eth cores sit in a row with no workers, so the NOC_1 -y leg always
+    // move was further away anyway. Eth cores sit in a core row with no workers, so the NOC_1 -y leg always
     // costs a hop, and a worker in the eth core's column avoids the -x leg: the minimum is one hop, and
     // several streams can have it. Two eth cores can share a column, so even a nearest stream may find its
     // core taken and have to move.
