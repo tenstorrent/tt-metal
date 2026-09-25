@@ -1,0 +1,17 @@
+{
+ "metrics": {
+  "pcc_attention_L00": {
+   "t": "2026-09-25T23:30:50",
+   "value": 0.999987950904148
+  },
+  "rel_l2_attention_L00": {
+   "t": "2026-09-25T23:30:50",
+   "value": 0.005066196899861097
+  },
+  "rel_l2_prefix_rows_attention_L00": {
+   "t": "2026-09-25T23:30:50",
+   "value": 0.005075446795672178
+  }
+ },
+ "task": "C.sliding.attention"
+}
