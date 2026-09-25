@@ -5,6 +5,7 @@
 
 import argparse
 import json
+import math
 import os
 import random
 import struct
@@ -237,6 +238,23 @@ def _connect_layer_ack_channel(timeout_s: int):
         return None
     logger.info(f"[producer] connected LayerAck channel {shm_name}")
     return channel
+
+
+def _ack_layers_per_chunk(kv_table) -> int:
+    """Layer acks one chunk produces across all ranks.
+
+    NUM_ACK_LAYERS counts only what the model's own layers emit; DFlash acks the drafter's context K/V
+    past the verifier's last layer, so the runner emits more. Read the wider count off the published
+    table rather than re-deriving the drafter's depth here: a drafter config spans the same global layer
+    axis the acks are numbered on, and the table is the only thing this device-less process and the
+    runner both see.
+    """
+    if kv_table is None:
+        return NUM_ACK_LAYERS
+    dflash = [name for name in _config_names(kv_table) if name.startswith("dflash_")]
+    if not dflash:
+        return NUM_ACK_LAYERS
+    return kv_table.config(kv_table.config_id_of(dflash[0])).num_layers
 
 
 def _drain_layer_acks(ack_channel, expected: int, timeout_s: float = 600.0) -> int:
@@ -541,6 +559,8 @@ def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len:
         real_len = min(real_len, golden_cap)
     if ADAPTER.name == "minimax_m3":
         return _read_slot_kv_and_check_pcc_m3(table, device_map, slot_id, real_len, trace_dir)
+    if ADAPTER.name == "llama_3p1_8b":
+        return _read_slot_kv_and_check_pcc_llama(table, device_map, slot_id, real_len, trace_dir)
     if ADAPTER.name == "gpt_oss_d_p":
         return _read_slot_kv_and_check_pcc_gpt_oss(table, device_map, slot_id, real_len, trace_dir)
     return _read_slot_kv_and_check_pcc_mla(table, device_map, slot_id, real_len, trace_dir)
@@ -627,6 +647,105 @@ def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, r
     )
     if checked == 0:
         raise RuntimeError(f"slot {slot_id}: no local layers resolved against the device map (nothing verified)")
+    return mins
+
+
+def _read_llama_kv_slice(table, device_map, config_id, layer, slot_id, read_len, head_dim):
+    rows = []
+    expected_bytes = (head_dim // 32) * _BFP8_TILE_BYTES
+    for position in range(0, read_len, _KV_CHUNK_TOKENS):
+        location = table.lookup(layer, position, slot_id, config_id)
+        nodes = table.get_device_group(location.device_group_index).fabric_node_ids
+        if len(nodes) != 1 or location.size_bytes != expected_bytes:
+            raise ValueError(
+                f"invalid Llama GQA page ownership or size: config={config_id}, " f"layer={layer}, position={position}"
+            )
+        unique_id = _resolve_unique_id(nodes, device_map)
+        raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, location.noc_addr, location.size_bytes)
+        if len(raw) != location.size_bytes:
+            raise ValueError(f"incomplete KV page read: expected {location.size_bytes} bytes, got {len(raw)}")
+        rows.append(_decode_bfp8_chunk(raw, head_dim))
+    return torch.cat(rows, dim=0)[:read_len]
+
+
+def _read_slot_kv_and_check_pcc_llama(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
+    """Read every Llama layer/head from the published table and compare against its HF trace."""
+    from pathlib import Path
+
+    from safetensors import safe_open
+
+    from tests.ttnn.utils_for_testing import comp_pcc
+
+    mc = ADAPTER.model_config
+    n_kv, head_dim = mc.NUM_KEY_VALUE_HEADS, mc.HEAD_DIM
+    if real_len <= 0 or (NUM_LAYERS, n_kv, head_dim) != (32, 8, 128):
+        raise ValueError(
+            "Llama GQA verification requires a nonempty prefix, 32 layers, 8 KV heads and head dimension 128"
+        )
+
+    expected_names = [f"{kind}_h{head}" for kind in ("k", "v") for head in range(n_kv)]
+    if _config_names(table) != expected_names:
+        raise ValueError(f"Llama GQA table requires config order {expected_names}")
+    expected_bytes = (head_dim // 32) * _BFP8_TILE_BYTES
+    for config_id in range(2 * n_kv):
+        config = table.config(config_id)
+        geometry = (config.num_layers, config.num_slots, config.chunk_n_tokens, config.chunk_size_bytes)
+        if geometry != (NUM_LAYERS, 2, _KV_CHUNK_TOKENS, expected_bytes):
+            raise ValueError(f"Llama GQA config {config_id} has unsupported layer/slot/page geometry")
+        if not 0 <= slot_id < config.num_slots or real_len > config.max_sequence_length:
+            raise ValueError(f"Llama GQA request exceeds config {config_id} slot or sequence capacity")
+
+    from models.demos.common.prefill.runners.trace_utils import golden_key_frame
+
+    # HF uses a half split; Meta goldens already have the device's adjacent-pair order.
+    key_frame = golden_key_frame(trace_dir)
+    half = head_dim // 2
+    perm = torch.tensor([half * (index % 2) + index // 2 for index in range(head_dim)], dtype=torch.long)
+    read_len = math.ceil(real_len / _KV_CHUNK_TOKENS) * _KV_CHUNK_TOKENS
+    kv_dir = Path(trace_dir) / "kv_cache"
+    mins = {"k": 1.0, "v": 1.0}
+    for layer in range(NUM_LAYERS):
+        dev_k = torch.stack(
+            [_read_llama_kv_slice(table, device_map, head, layer, slot_id, read_len, head_dim) for head in range(n_kv)],
+            dim=0,
+        )[:, :real_len]
+        dev_v = torch.stack(
+            [
+                _read_llama_kv_slice(table, device_map, n_kv + head, layer, slot_id, read_len, head_dim)
+                for head in range(n_kv)
+            ],
+            dim=0,
+        )[:, :real_len]
+
+        with safe_open(str(kv_dir / f"layer_{layer}.safetensors"), framework="pt") as handle:
+            golden = [
+                handle.get_slice(f"{kind}_cache_layer_{layer}")[:, :, :real_len, :].float() for kind in ("key", "value")
+            ]
+        for tensor in golden:
+            if (
+                tensor.ndim != 4
+                or tuple(tensor.shape[:2]) != (1, n_kv)
+                or tensor.shape[2] < real_len
+                or tensor.shape[3] != head_dim
+            ):
+                raise ValueError(f"layer {layer}: golden GQA cache must have shape [1,{n_kv},>={real_len},{head_dim}]")
+        g_k = golden[0][0, :, :real_len, :]
+        if key_frame == "hf":
+            g_k = g_k[..., perm]
+        g_v = golden[1][0, :, :real_len, :]
+        if any(not torch.isfinite(tensor).all() for tensor in (g_k, g_v, dev_k, dev_v)):
+            raise ValueError(f"layer {layer}: GQA cache comparison contains nonfinite values")
+        pcc_k = float(comp_pcc(g_k, dev_k, 0.0)[1])
+        pcc_v = float(comp_pcc(g_v, dev_v, 0.0)[1])
+        if not math.isfinite(pcc_k) or not math.isfinite(pcc_v):
+            raise ValueError(f"layer {layer}: GQA cache comparison produced nonfinite PCC")
+        mins["k"], mins["v"] = min(mins["k"], pcc_k), min(mins["v"], pcc_v)
+        logger.info(f"  layer {layer:>2}: K={pcc_k:.5f} V={pcc_v:.5f}")
+
+    logger.info(
+        f"[producer] slot {slot_id} Llama KV PCC over [0,{real_len}) across {NUM_LAYERS}/{NUM_LAYERS} layers -> "
+        f"K={mins['k']:.5f} V={mins['v']:.5f} (min {min(mins.values()):.6f})"
+    )
     return mins
 
 
@@ -947,6 +1066,32 @@ def _write_pcc_verdict(
         json.dump(verdict, f)
 
 
+def _dflash_caches_are_local(kv_table, device_map: dict, *, slot_id: int) -> bool:
+    """Whether this host owns the DFlash drafter caches the table describes.
+
+    The drafter is built on ONE rank (the KV tail), so its caches live on ONE host, but every rank sees
+    its configs because the table is shared. ``read_dram_umd`` is local-PCIe only, so a rank elsewhere
+    would resolve a chip it cannot read and abort inside umd_dram_reader
+    (``TT_FATAL: it != uid_to_chip.end()``) rather than skip. Probing one config is enough: all of them
+    describe the same two caches on the same host.
+
+    The KVPE reader has the equivalent behaviour inline (``except KeyError: continue`` per layer); the
+    drafter needs it hoisted because its reader checks every (layer, head) as one unit.
+    """
+    from models.demos.deepseek_v3_d_p.tt.runners.kv_chunk_table import dflash_config_name
+
+    try:
+        config_id = kv_table.config_id_of(dflash_config_name("k", 0))
+        # Last row, not layer 0: the drafter's configs span the merged table's global layer axis and only
+        # its tail is populated. An unpopulated row reads back zeroed, and device_group_index 0 is a real
+        # group, so probing layer 0 would resolve some other cache's host and answer True anywhere.
+        loc = kv_table.lookup(kv_table.config(config_id).num_layers - 1, 0, slot_id, config_id)
+        _resolve_unique_id(kv_table.get_device_group(loc.device_group_index).fabric_node_ids, device_map)
+    except KeyError:
+        return False
+    return True
+
+
 def _verify_resident_slots(
     kv_table, stats: RunStats, threshold: float, slot_traces: dict, rank: int = 0, num_ranks: int = 1
 ) -> bool:
@@ -960,6 +1105,12 @@ def _verify_resident_slots(
 
     dflash_threshold = float(os.environ.get("PREFILL_DFLASH_PCC", "0.88"))
     check_dflash = any(name.startswith("dflash_") for name in _config_names(kv_table))
+    if check_dflash and not _dflash_caches_are_local(kv_table, device_map, slot_id=min(stats.resident, default=0)):
+        logger.info(
+            "[producer] drafter caches are not on this host; leaving the drafter PCC to the rank that "
+            "owns them (the KV-tail rank)."
+        )
+        check_dflash = False
     if check_dflash:
         from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_kv_validation import dflash_kv_table_pcc_check
 
@@ -992,6 +1143,7 @@ def _verify_resident_slots(
                 slot_id,
                 real_len,
                 read_config_slice=read_dflash_slice,
+                golden_dir=os.environ.get("PREFILL_DFLASH_GOLDEN_KV_DIR") or ADAPTER.dflash_golden_default,
                 threshold=dflash_threshold,
                 rope_convention="interleaved",
             )
@@ -1216,6 +1368,7 @@ def main() -> None:
             "channel (pure token feeder; the runner's migration self-test owns it)"
         )
 
+    ack_layers = _ack_layers_per_chunk(kv_table)
     slot_traces, slot_lengths, pools_by_trace = _resolve_slot_prompts(cfg)
     cfg.slot_lengths = slot_lengths
 
@@ -1237,7 +1390,7 @@ def main() -> None:
             push_chunk(0, cidx, cidx * CHUNK_SIZE, (cidx + 1) * CHUNK_SIZE)
         service.barrier()
         if ack_channel is not None:
-            _drain_layer_acks(ack_channel, NUM_ACK_LAYERS * warmup_chunks)
+            _drain_layer_acks(ack_channel, ack_layers * warmup_chunks)
         logger.info("[producer] warmup complete; starting the measured request")
 
     stats = run_schedule(cfg, push_fn=push_chunk)
@@ -1252,7 +1405,7 @@ def main() -> None:
         f"p99={_percentile(sorted_ms, 0.99):.1f}"
     )
 
-    _drain_layer_acks(ack_channel, NUM_ACK_LAYERS * stats.total_pushes)
+    _drain_layer_acks(ack_channel, ack_layers * stats.total_pushes)
 
     if world_size > 1:
         _mr_bcast_resident(mr_rank, stats.resident)

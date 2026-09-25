@@ -305,7 +305,13 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
         // counters are packed contiguously in memory, This can lead to resends of values but
         // this is safe for free running counters, which are enabled in this mode.
         size_t num_words_consumed_per_counter = tt::align(sizeof(uint32_t) * num_sender_channels, field_size);
-        this->router_buffer_clear_size_words = num_words_consumed_per_counter;
+        // Only the multi-TXQ (counter) form needs the wider clear. Keep the single-TXQ clear at one word:
+        // the wider clear at an unaligned address changes how many Ethernet commands UMD issues per
+        // remote write during bring-up, which shifts the Ethernet core UMD ends up using for all
+        // subsequent remote reads.
+        if (this->sender_txq_id != this->receiver_txq_id) {
+            this->router_buffer_clear_size_words = num_words_consumed_per_counter;
+        }
 
         next_l1_addr = tt::align(next_l1_addr, field_size);
 
@@ -1078,7 +1084,7 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     const bool vc0_is_terminal_or_source_only_after_trim =
         vc0_trim_fast_path_usable && vc0_trim_fast_path_info_->terminal_or_source_only;
     const bool base_enable_deadlock_avoidance =
-        fabric_context.need_deadlock_avoidance_support(control_plane, this->local_fabric_node_id, this->direction_);
+        !this->is_inter_mesh && fabric_context.need_deadlock_avoidance_support(control_plane, this->local_fabric_node_id, this->direction_);
     const bool final_enable_deadlock_avoidance =
         base_enable_deadlock_avoidance && !vc0_is_terminal_or_source_only_after_trim;
     const bool final_enable_first_level_ack_vc0 = final_enable_deadlock_avoidance;

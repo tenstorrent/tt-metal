@@ -31,14 +31,4 @@ GlobalSemaphore CreateGlobalSemaphore(
     std::optional<uint32_t> initial_value,
     BufferType buffer_type,
     uint64_t address);
-
-[[deprecated(
-    "Use CreateGlobalSemaphore(distributed::MeshDevice&, ...) instead. "
-    "CreateGlobalSemaphore(IDevice*, ...) will be removed after 2026-09-20.")]]
-GlobalSemaphore CreateGlobalSemaphore(
-    IDevice* device,
-    const CoreRangeSet& cores,
-    std::optional<uint32_t> initial_value,
-    BufferType buffer_type,
-    uint64_t address);
 }  // namespace tt::tt_metal::experimental

@@ -266,6 +266,9 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto eth_direction = control_plane.routing_direction_to_eth_direction(location.direction);
 
+    // Inter-mesh routers never enable deadlock avoidance, whichever direction (both ends must agree on
+    // Deadlock avoidance polarity, and the far end may be a plain Mesh rank). Intra-mesh keeps the existing policy.
+    const bool is_inter_mesh = (local_node.mesh_id != location.remote_node.mesh_id);
     // Express enablement is resolved once per router and reused below (the MUX guard, the
     // archetype, the injection-flag derivation); the query itself is a cached lazy derivation.
     const bool express_enabled = control_plane.express_routing_enabled(local_node.mesh_id);
@@ -443,7 +446,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         const bool local_can_use_speedy_vc0 =
             vc0_speedy_path_enabled(
                 actual_sender_channels_per_vc[0],
-                fabric_context.need_deadlock_avoidance_support(control_plane, local_node, eth_direction),
+                is_inter_mesh ? false : fabric_context.need_deadlock_avoidance_support(control_plane, local_node, eth_direction),
                 *local_vc0_fast_path_info) ||
             local_vc0_fast_path_info->terminal_only_nonforwarding;
         if (!local_can_use_speedy_vc0) {

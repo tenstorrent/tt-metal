@@ -31,6 +31,7 @@ from .utils import (
     convert_to_l1_view,
     format_elem_max,
     generate_face_matmul_data,
+    resolve_intervals,
 )
 
 __all__ = [
@@ -49,4 +50,5 @@ __all__ = [
     "convert_to_l1_view",
     "format_elem_max",
     "generate_face_matmul_data",
+    "resolve_intervals",
 ]

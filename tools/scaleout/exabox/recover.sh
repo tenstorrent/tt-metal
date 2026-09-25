@@ -14,37 +14,7 @@ set -eo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/utils/mpi_if_selection.sh"
 source "$SCRIPT_DIR/utils/host_utils.sh"
-
-# Tag each line with [hostname], adding [HH:MM:SS] only when the line has no
-# timestamp of its own so tool logs aren't stamped twice. Ranks prepend a bare
-# "[host] " prefix at the source; this keeps that host, adds the time, and passes
-# already fully-tagged lines through unchanged (idempotent under a second pass).
-tag_stream() {
-    local line host rest
-    local esc=$'\x1b'
-    local done_re='^\[[^][]*\]\[[0-9][0-9]:[0-9][0-9]:[0-9][0-9]\] '   # already [host][time]
-    local rank_re='^\[([^][]*)\] (.*)$'                                # rank's bare [host] prefix
-    local ts_re="^(${esc}\[[0-9;]*[a-zA-Z])*[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}"  # leading timestamp, ANSI-tolerant
-    local self="${HOSTNAME:-$(hostname)}"
-    while IFS= read -r line; do
-        if [[ "$line" =~ $done_re ]]; then
-            printf '%s\n' "$line"
-            continue
-        fi
-        if [[ "$line" =~ $rank_re ]]; then
-            host="${BASH_REMATCH[1]}"
-            rest="${BASH_REMATCH[2]}"
-        else
-            host="$self"
-            rest="$line"
-        fi
-        if [[ "$rest" =~ $ts_re ]]; then
-            printf '[%s] %s\n' "$host" "$rest"
-        else
-            printf '[%s][%(%H:%M:%S)T] %s\n' "$host" -1 "$rest"
-        fi
-    done
-}
+source "$SCRIPT_DIR/utils/log_utils.sh"
 
 # Function to display help
 show_help() {
@@ -83,6 +53,8 @@ Optional:
     --skip-version-check                     Skip the tt-smi/KMD/firmware version checks run on all hosts
                                             before recovery (see minimum versions in utils/host_utils.sh)
     --skip-mpi-stress-test                  Skip the MPI packet stress test run before recovery
+    --skip-cross-host-port-down             Skip quiescing cross-host Ethernet ports before each reset
+                                            (required for non-Blackhole systems)
     --no-send-traffic                       Disable --send-traffic in cluster validation
     --check                                 Dry run: verify MPI can reach all hosts via hostname, then exit
     --mpi-if <interface>                    Network interface for MPI TCP transport
@@ -119,6 +91,23 @@ Optional:
                                             In --use-docker mode regen runs inside the image on the first host.
                                             Regen is skipped automatically when only --factory-descriptor-path is
                                             in use (cabling+deployment are required inputs).
+    --skip-cluster-debug                    Do not collect a cluster debug snapshot after a failed attempt.
+                                            By default every failed attempt, whatever failed, runs
+                                            run_cluster_debug.sh over the hosts and writes each Galaxy's ETH
+                                            and QSFP state as one file per host plus one merged cluster file
+                                            (~2 min). Never affects the outcome. A host without the collector
+                                            installed is named and the snapshot skipped.
+    --cluster-debug-always                  Collect the snapshot after every attempt, passing or failing,
+                                            e.g. for a known-good baseline. Ignored with --skip-cluster-debug.
+    --cluster-debug-use-ipmi                Read the QSFP cages with ipmitool on each host instead of the
+                                            BMC API (\$TT_BMC_API_URL / \$TT_BMC_API_TOKEN, passed through).
+    --cluster-debug-tool <path>             The tt-bh-glx-cluster-debug executable for that snapshot; must be
+                                            visible at the same path on every host (default: \$TT_CLUSTER_DEBUG_TOOL,
+                                            else the one on PATH)
+    --cluster-debug-log-root <directory>    Where the dumps go: <directory>/<host>/<YYYY-MM-DD>/ per host,
+                                            and <directory>/cluster_<YYYY-MM-DD>_<HHMMSS>.jsonl merged
+                                            (default: $CLUSTER_DEBUG_LOG_ROOT_DEFAULT; if that is not
+                                            writable, <output>/cluster_debug_attempt_<N>/)
     --help                                  Display this help message and exit
 
 ================================================================================
@@ -144,7 +133,7 @@ EOF
 HOSTS=""
 CONFIG="4x32"
 DOCKER_IMAGE=""
-DOCKER_IMAGE_DEFAULT="ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.79.0-dev20260916-29-gb69781b4a13"
+DOCKER_IMAGE_DEFAULT="ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.80.0-dev20260922-17-g86b55b92d0d"
 NUM_ITERATIONS=5
 MAX_ATTEMPTS=1
 MAX_RETRAINS=5
@@ -154,6 +143,7 @@ SKIP_RESET=false
 SKIP_VALIDATION=false
 SKIP_VERSION_CHECK=false
 SKIP_MPI_STRESS_TEST=false
+SKIP_CROSS_HOST_PORT_DOWN=false
 SEND_TRAFFIC=true
 CHECK=false
 MPI_IF=""
@@ -164,6 +154,13 @@ RERUN_ON_RETRAIN=false
 VALIDATION_EXTRA_ARGS=()
 DOCKER_EXTRA_ARGS=()
 REGENERATE_ON_FAILURE=true
+SKIP_CLUSTER_DEBUG=false
+CLUSTER_DEBUG_ALWAYS=false
+CLUSTER_DEBUG_USE_IPMI=false
+CLUSTER_DEBUG_TOOL=""
+CLUSTER_DEBUG_TOOL_NAME="tt-bh-glx-cluster-debug"
+CLUSTER_DEBUG_LOG_ROOT_DEFAULT="/data/dcamp/cluster-debug/logs"
+CLUSTER_DEBUG_LOG_ROOT="$CLUSTER_DEBUG_LOG_ROOT_DEFAULT"
 
 # Minimum required tt-smi/KMD/firmware versions (TT_SMI_MIN_VERSION, KMD_MIN_VERSION,
 # FW_MIN_VERSION) and the check itself live in utils/host_utils.sh, shared with run_validation.sh.
@@ -294,6 +291,10 @@ while [[ $# -gt 0 ]]; do
             SKIP_MPI_STRESS_TEST=true
             shift
             ;;
+        --skip-cross-host-port-down)
+            SKIP_CROSS_HOST_PORT_DOWN=true
+            shift
+            ;;
         --no-send-traffic)
             SEND_TRAFFIC=false
             shift
@@ -375,12 +376,46 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             read -ra _extra <<< "$2"
+            for _a in "${_extra[@]}"; do
+                if [[ "$_a" == "--cross-host-port-down" || "$_a" == "--cross-host-port-down="* ]]; then
+                    echo "Error: --cross-host-port-down is not allowed in --validation-args; it is handled automatically before each reset (disable with --skip-cross-host-port-down)."
+                    exit 1
+                fi
+            done
             VALIDATION_EXTRA_ARGS+=("${_extra[@]}")
             shift 2
             ;;
         --no-regenerate-on-failure)
             REGENERATE_ON_FAILURE=false
             shift
+            ;;
+        --skip-cluster-debug)
+            SKIP_CLUSTER_DEBUG=true
+            shift
+            ;;
+        --cluster-debug-always)
+            CLUSTER_DEBUG_ALWAYS=true
+            shift
+            ;;
+        --cluster-debug-use-ipmi)
+            CLUSTER_DEBUG_USE_IPMI=true
+            shift
+            ;;
+        --cluster-debug-tool)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --cluster-debug-tool requires a non-empty value"
+                exit 1
+            fi
+            CLUSTER_DEBUG_TOOL="$2"
+            shift 2
+            ;;
+        --cluster-debug-log-root)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --cluster-debug-log-root requires a non-empty value"
+                exit 1
+            fi
+            CLUSTER_DEBUG_LOG_ROOT="$2"
+            shift 2
             ;;
         --help)
             show_help
@@ -513,6 +548,34 @@ for _darg in "${DOCKER_EXTRA_ARGS[@]}"; do
     DOCKER_ARG_FLAGS+=(--docker-arg "$_darg")
 done
 
+# Quiesce all expected cross-host Ethernet ports (from the FSD) before a reset. Mirrors the
+# run_cluster_validation launcher below (docker keyed on -n "$DOCKER_IMAGE"), just swapping the
+# validation args for --cross-host-port-down, which makes the binary port-down and exit.
+run_cross_host_port_down() {
+    if [[ -n "$DOCKER_IMAGE" ]]; then
+        ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
+            --empty-entrypoint \
+            --tag-host \
+            --mpi-interface "$MPI_IF" \
+            --volume /data/scaleout_configs \
+            "${DOCKER_ARG_FLAGS[@]}" \
+            "${MPI_EXTRA_ARGS[@]}" \
+            --host "$HOSTS" \
+            ./build/tools/scaleout/run_cluster_validation \
+            "${DESCRIPTOR_ARGS[@]}" \
+            --cross-host-port-down
+    else
+        local _bin_cmd
+        _bin_cmd=$(printf '%q ' ./build/tools/scaleout/run_cluster_validation \
+            "${DESCRIPTOR_ARGS[@]}" \
+            --cross-host-port-down)
+        mpirun --host "$HOSTS" \
+            --mca btl_tcp_if_include "$MPI_IF" \
+            "${MPI_EXTRA_ARGS[@]}" \
+            bash -c "set -o pipefail; h=\$(hostname); $_bin_cmd 2>&1 | while IFS= read -r l; do printf '[%s] %s\n' \"\$h\" \"\$l\"; done"
+    fi
+}
+
 # Print summary
 echo "=========================================="
 echo "Cluster recovery"
@@ -543,6 +606,7 @@ echo "Skip reset: $SKIP_RESET"
 echo "Skip validation: $SKIP_VALIDATION"
 echo "Skip version check: $SKIP_VERSION_CHECK"
 echo "Skip MPI stress test: $SKIP_MPI_STRESS_TEST"
+echo "Skip cross-host port down: $SKIP_CROSS_HOST_PORT_DOWN"
 echo "Output directory: $OUTPUT_DIR"
 echo "Log file: $LOG_FILE"
 echo "Invocation: ${EXABOX_RECOVER_HELPER:-direct}"
@@ -551,6 +615,13 @@ if [[ ${#VALIDATION_EXTRA_ARGS[@]} -gt 0 ]]; then
     echo "Extra validation args: ${VALIDATION_EXTRA_ARGS[*]}"
 fi
 echo "Regenerate on failure: $REGENERATE_ON_FAILURE"
+if [[ "$SKIP_CLUSTER_DEBUG" == true ]]; then
+    echo "Cluster debug snapshot: skipped"
+elif [[ "$CLUSTER_DEBUG_ALWAYS" == true ]]; then
+    echo "Cluster debug snapshot: every attempt, dumps under $CLUSTER_DEBUG_LOG_ROOT"
+else
+    echo "Cluster debug snapshot: every failed attempt, dumps under $CLUSTER_DEBUG_LOG_ROOT"
+fi
 echo "=========================================="
 echo ""
 
@@ -602,6 +673,46 @@ else
     echo "Skipping MPI stress test (--skip-mpi-stress-test)"
     echo ""
 fi
+
+# Every failed attempt gets the same snapshot: every ETH port and every QSFP cage of every
+# Galaxy, one file per host under the log root plus one merged cluster file beside them.
+# run_cluster_debug.sh looks for the cluster's factory descriptor itself unless recovery was
+# given one.
+collect_cluster_debug() {
+    local attempt="$1" validation_exit="$2"
+    # --per-host-root is the log tree; run_cluster_debug.sh falls back to <output> itself
+    # when a host cannot write there. --parallelize reads the four UBBs' cages at once,
+    # about two minutes per attempt instead of four; verified identical to the serial sweep.
+    local args=(
+        --hosts "$HOSTS"
+        --mpi-if "$MPI_IF"
+        --output "$OUTPUT_DIR/cluster_debug_attempt_${attempt}"
+        --cluster-name "recover_${CONFIG}"
+        --reason "recover.sh attempt ${attempt} of ${MAX_ATTEMPTS}, validation exit ${validation_exit}"
+        --per-host-root "$CLUSTER_DEBUG_LOG_ROOT"
+        --parallelize
+    )
+    [[ -n "$FACTORY_DESCRIPTOR_PATH" ]] && args+=(--factory-descriptor-path "$FACTORY_DESCRIPTOR_PATH")
+    [[ -n "$CLUSTER_DEBUG_TOOL" ]] && args+=(--tool "$CLUSTER_DEBUG_TOOL")
+    [[ "$CLUSTER_DEBUG_USE_IPMI" == true ]] && args+=(--use-ipmi)
+    [[ ${#MPI_EXTRA_ARGS[@]} -gt 0 ]] && args+=(--mpi-args "${MPI_EXTRA_ARGS[*]}")
+
+    echo ""
+    echo "Collecting a cluster debug snapshot for $([[ $validation_exit -eq 0 ]] && echo "passed" || echo "failed") attempt $attempt..."
+    # A failed snapshot is a warning; an interrupted one (Ctrl-C, or a TERM aimed at the
+    # collector) stops recovery here rather than rolling on to the next reset.
+    local debug_exit=0
+    "$SCRIPT_DIR/run_cluster_debug.sh" "${args[@]}" || debug_exit=$?
+    if [[ $debug_exit -eq 130 || $debug_exit -eq 143 ]]; then
+        echo "Cluster debug collection was interrupted; stopping recovery."
+        exit "$debug_exit"
+    elif [[ $debug_exit -eq 3 ]]; then
+        # run_cluster_debug.sh's "not installed" status: a setup gap, named above, not a failure.
+        echo "Cluster debug snapshot skipped: $CLUSTER_DEBUG_TOOL_NAME is not installed (see above); recovery continues"
+    elif [[ $debug_exit -ne 0 ]]; then
+        echo "Warning: cluster debug collection failed (see above); recovery continues"
+    fi
+}
 
 # Outer recovery loop: run the full reset + validation up to MAX_ATTEMPTS times, or until
 # validation succeeds. --num-iterations controls the inner validation loop; this controls how
@@ -669,34 +780,76 @@ echo "=========================================="
 # regenerate descriptors from evidence produced by the current (latest post-reset) attempt.
 rm -f "$UNRETRAINABLE_YAML"
 
-# Step 1: tt-smi reset
+# Step 0.9: bring down all expected cross-host Ethernet ports before the reset. This quiesces the
+# whole cross-host fabric (including links that failed to train) so the reset does not race an
+# active training walkdown. A failure runs a cleanup glx_reset and retries port-down once;
+# validation runs only if port-down and the following reset both succeed.
+PORT_DOWN_EXIT=0
 RESET_EXIT=0
-if [[ "$SKIP_RESET" == false ]]; then
-    echo "Running tt-smi -glx_reset..."
-    # Capture the status without tripping `set -e` (the `if` context suspends it) so a reset
-    # failure retries the attempt instead of aborting the whole script.
-    if run_glx_reset "$HOSTS"; then RESET_EXIT=0; else RESET_EXIT=$?; fi
-
-    if [[ $RESET_EXIT -ne 0 ]]; then
-        echo ""
-        echo "Reset failed on one or more hosts (exit code $RESET_EXIT)."
+if [[ "$SKIP_RESET" == false && "$SKIP_CROSS_HOST_PORT_DOWN" == false ]]; then
+    echo "Bringing down cross-host Ethernet ports before reset..."
+    if run_cross_host_port_down; then
+        echo "Cross-host Ethernet ports are down on all hosts."
     else
-        echo ""
-        echo "Sleeping ${SLEEP_DURATION}s..."
-        sleep "$SLEEP_DURATION"
+        PORT_DOWN_EXIT=$?
+        echo "WARNING: cross-host port down FAILED (exit code $PORT_DOWN_EXIT); running cleanup reset then retrying port down."
+        echo "Running tt-smi -glx_reset (cleanup after failed port down)..."
+        if run_glx_reset "$HOSTS"; then
+            RESET_EXIT=0
+            echo ""
+            echo "Sleeping ${SLEEP_DURATION}s..."
+            sleep "$SLEEP_DURATION"
+            echo "Retrying cross-host Ethernet port down..."
+            if run_cross_host_port_down; then
+                echo "Cross-host Ethernet ports are down on all hosts."
+                PORT_DOWN_EXIT=0
+            else
+                PORT_DOWN_EXIT=$?
+                echo "WARNING: retry cross-host port down FAILED (exit code $PORT_DOWN_EXIT); skipping validation."
+            fi
+        else
+            RESET_EXIT=$?
+            echo "Cleanup reset failed on one or more hosts (exit code $RESET_EXIT); skipping port-down retry and validation."
+        fi
+    fi
+    echo ""
+fi
+
+# Step 1: tt-smi reset after a successful (or skipped) port-down. Skipped when port-down
+# still failed after retry, or when the cleanup reset already failed.
+if [[ "$SKIP_RESET" == false ]]; then
+    if [[ $PORT_DOWN_EXIT -eq 0 && $RESET_EXIT -eq 0 ]]; then
+        echo "Running tt-smi -glx_reset..."
+        # Capture the status without tripping `set -e` (the `if` context suspends it) so a reset
+        # failure retries the attempt instead of aborting the whole script.
+        if run_glx_reset "$HOSTS"; then RESET_EXIT=0; else RESET_EXIT=$?; fi
+
+        if [[ $RESET_EXIT -ne 0 ]]; then
+            echo ""
+            echo "Reset failed on one or more hosts (exit code $RESET_EXIT)."
+        else
+            echo ""
+            echo "Sleeping ${SLEEP_DURATION}s..."
+            sleep "$SLEEP_DURATION"
+        fi
     fi
 else
     echo "Skipping tt-smi reset (--skip-reset)"
 fi
 
 # Step 2: Cluster validation
-# VALIDATION_EXIT carries the whole attempt's outcome: a failed reset short-circuits validation and
-# fails the attempt so the outer loop retries (or the script exits non-zero once attempts run out).
+# VALIDATION_EXIT carries the whole attempt's outcome: a failed port-down or reset
+# short-circuits validation and fails the attempt so the outer loop retries (or the
+# script exits non-zero once attempts run out).
 VALIDATION_EXIT=0
 if [[ $RESET_EXIT -ne 0 ]]; then
     echo ""
     echo "Skipping validation because reset failed on this attempt."
     VALIDATION_EXIT=$RESET_EXIT
+elif [[ $PORT_DOWN_EXIT -ne 0 ]]; then
+    echo ""
+    echo "Skipping validation because port down failed on this attempt."
+    VALIDATION_EXIT=$PORT_DOWN_EXIT
 elif [[ "$SKIP_VALIDATION" == false ]]; then
     VALIDATION_ARGS=("${DESCRIPTOR_ARGS[@]}")
     if [[ "$SEND_TRAFFIC" == true ]]; then
@@ -788,6 +941,11 @@ else
 fi
 
 # Outer-loop control: stop as soon as an attempt succeeds; otherwise retry until attempts exhausted.
+# The snapshot: after a failed attempt, or after every attempt with --cluster-debug-always.
+if [[ "$SKIP_CLUSTER_DEBUG" == false ]] \
+   && [[ $VALIDATION_EXIT -ne 0 || "$CLUSTER_DEBUG_ALWAYS" == true ]]; then
+    collect_cluster_debug "$ATTEMPT" "$VALIDATION_EXIT"
+fi
 if [[ $VALIDATION_EXIT -eq 0 ]]; then
     echo ""
     echo "Recovery succeeded on attempt $ATTEMPT of $MAX_ATTEMPTS."

@@ -5,9 +5,11 @@
 import torch
 import pytest
 import ttnn
+import math
 from tests.ttnn.utils_for_testing import assert_with_ulp, assert_with_pcc, assert_allclose
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     generate_bfloat16_bits,
+    generate_bfloat16_bits_in_range,
     to_tt_tensor,
     float_to_bf16_bits,
     bf16_bits_to_float,
@@ -44,8 +46,8 @@ Accuracy criteria
   leaky_relu, softshrink                    : ULP ≤ 1
       One multiply/add-sub on the non-identity branch.
   elu, celu                                 : ULP ≤ 1 (excluding a narrow band)
-      exp(x)-1 [or exp(x/alpha)-1] cancels near 0; already characterized via
-      allclose in test_elu.py / test_celu_21f.py and excluded the same way.
+      exp(x)-1 [or exp(x/alpha)-1] cancels near 0; characterized via
+      allclose in test_elu_celu_allclose below.
   softcap                                   : ULP ≤ 2 (post-FTZ) + PCC ≥ 0.9999
       tanh is a Sollya polynomial approximation. Blackhole only.
   rpow                                      : PCC ≥ 0.99 + allclose(atol=1e-2, rtol=0.1)
@@ -249,8 +251,8 @@ def test_softshrink_op(device, lambd):
 # elu, celu — ULP ≤ 1 (excluding a narrow cancellation band near 0)
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Characterized (default alpha=1.0) and covered via allclose in test_elu.py /
-# test_celu_21f.py. elu's band is in x directly (alpha only scales the output
+# Characterized (default alpha=1.0)
+# elu's band is in x directly (alpha only scales the output
 # after cancellation); celu's band is in x/alpha (it evaluates exp(x/alpha)-1),
 # so the celu mask below scales the band by alpha.
 _ELU_CANCELLATION_BAND = (-0.28515625, 1.1663108012064884e-38)
@@ -289,6 +291,39 @@ def test_celu_op(device, alpha):
     result = ttnn.to_torch(tt_result)
 
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1, allow_nonfinite=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# elu / celu — allclose over sub-ranges (including the cancellation band)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "ttnn_op, low, high, expected_atol, expected_rtol",
+    [
+        (ttnn.elu, -88.0, -0.28515625, 0, 0),
+        (ttnn.elu, -0.28515625, 1.1663108012064884e-38, 0, 0),
+        (ttnn.elu, 1.1663108012064884e-38, 1.6 * 10**38, 0, 0),
+        (ttnn.celu, -1.6 * 10**38, -0.28515625, 0, 0),
+        (ttnn.celu, -0.28515625, 1.1663108012064884e-38, 0, 0),
+        (ttnn.celu, 1.1663108012064884e-38, 1.6 * 10**38, 0, 0),
+    ],
+)
+def test_elu_celu_allclose(ttnn_op, low, high, expected_atol, expected_rtol, device):
+    """Allclose check for elu/celu over sub-ranges, including the narrow
+    cancellation band near 0 that the ULP sweep in test_elu_op/test_celu_op
+    excludes. All six sub-ranges are bit-exact on device (atol = rtol = 0)."""
+    input_tensor = generate_bfloat16_bits_in_range(low, high)
+
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    golden = golden_function(input_tensor, device=device)
+
+    tt_in = to_tt_tensor(input_tensor, device)
+
+    tt_result = ttnn_op(tt_in)
+    result = ttnn.to_torch(tt_result)
+
+    assert_allclose(expected_result=golden, actual_result=result, atol=expected_atol, rtol=expected_rtol)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -353,8 +388,6 @@ def test_rpow_op(device, exponent):
     tt_result = ttnn.rpow(tt_in, exponent)
     result = ttnn.to_torch(tt_result)
 
-    import math
-
     arg_magnitude = input_tensor.to(torch.float64).abs() * abs(math.log2(exponent))
     reliable = arg_magnitude < _RPOW_UNRELIABLE_ARG_MAGNITUDE
 
@@ -382,7 +415,7 @@ def test_rpow_op(device, exponent):
 
     finite = golden_finite & result_finite & reliable
     assert_with_pcc(golden[finite], result[finite], pcc=0.99)
-    assert_allclose(golden[finite], result[finite], atol=1e-2, rtol=0.1)
+    assert_allclose(expected_result=golden[finite], actual_result=result[finite], atol=1e-2, rtol=0.1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -183,14 +183,12 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
 
     // Extract program config
     bool legacy_reduction = false;
-    bool legacy_rsqrt = false;
     bool use_welford = false;
     std::visit(
         [&](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (std::is_same_v<ProgramConfigType, LayerNormDefaultProgramConfig>) {
                 legacy_reduction = program_config.legacy_reduction;
-                legacy_rsqrt = program_config.legacy_rsqrt;
                 use_welford = program_config.use_welford;
             }
         },
@@ -316,7 +314,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     uint32_t im6_t = block_size * 2;    // x=a+b reuse for x-E[x] computation plus a bit extra for buffering
     if (b) {
         im6_t = Wt_next_block_up;
-        in0_t = 2 * block_size;
+        // RM TILIZE_IN fills all of dfb_in before pre-add; shrinking in0_t would hang.
+        if (!input_is_row_major) {
+            in0_t = 2 * block_size;
+        }
     }
     uint32_t im5_t = 2 * block_size;  // for buffering to/from *gamma/+beta
     uint32_t im4_t = 8;               // 8 just in case, 4 would prob suffice
@@ -778,7 +779,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     } else {
         compute.compile_time_args.emplace("tile_width", tile_width);
         compute.compile_time_args.emplace("float32_reduction", static_cast<uint32_t>(float32_reduction));
-        compute.compile_time_args.emplace("legacy_rsqrt", static_cast<uint32_t>(legacy_rsqrt));
     }
 
     // FUSE_PRE_ADD reaches every compute kernel, not only the non-Welford ones: the Welford

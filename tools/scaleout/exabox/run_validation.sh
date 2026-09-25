@@ -4,37 +4,8 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/utils/mpi_if_selection.sh"
 source "$SCRIPT_DIR/utils/host_utils.sh"
-
-# Tag each line with [hostname], adding [HH:MM:SS] only when the line has no
-# timestamp of its own so tool logs aren't stamped twice. Ranks prepend a bare
-# "[host] " prefix at the source; this keeps that host, adds the time, and passes
-# already fully-tagged lines through unchanged (idempotent under a second pass).
-tag_stream() {
-    local line host rest
-    local esc=$'\x1b'
-    local done_re='^\[[^][]*\]\[[0-9][0-9]:[0-9][0-9]:[0-9][0-9]\] '   # already [host][time]
-    local rank_re='^\[([^][]*)\] (.*)$'                                # rank's bare [host] prefix
-    local ts_re="^(${esc}\[[0-9;]*[a-zA-Z])*[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}"  # leading timestamp, ANSI-tolerant
-    local self="${HOSTNAME:-$(hostname)}"
-    while IFS= read -r line; do
-        if [[ "$line" =~ $done_re ]]; then
-            printf '%s\n' "$line"
-            continue
-        fi
-        if [[ "$line" =~ $rank_re ]]; then
-            host="${BASH_REMATCH[1]}"
-            rest="${BASH_REMATCH[2]}"
-        else
-            host="$self"
-            rest="$line"
-        fi
-        if [[ "$rest" =~ $ts_re ]]; then
-            printf '[%s] %s\n' "$host" "$rest"
-        else
-            printf '[%s][%(%H:%M:%S)T] %s\n' "$host" -1 "$rest"
-        fi
-    done
-}
+# tag_stream: tags each line with [host][time] (see utils/log_utils.sh)
+source "$SCRIPT_DIR/utils/log_utils.sh"
 
 # Function to display help
 show_help() {
@@ -53,6 +24,8 @@ Optional:
                                             $DOCKER_IMAGE_DEFAULT
     --skip-version-check                     Skip the tt-smi/KMD/firmware version checks run on all hosts
                                             before validation (see minimum versions in utils/host_utils.sh)
+    --skip-cross-host-port-down               Skip quiescing cross-host Ethernet ports before each reset
+                                            (required for non-Blackhole systems)
     --cabling-descriptor-path <path>        Path to cabling descriptor file
                                             (default: /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto)
     --deployment-descriptor-path <path>     Path to deployment descriptor file
@@ -97,8 +70,9 @@ HOSTS=""
 DOCKER_IMAGE=""
 # Default image used when --image is omitted (or passed with no value). Bump to the current
 # last-known-good tag as needed (see tools/scaleout/exabox/README.md).
-DOCKER_IMAGE_DEFAULT="ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.79.0-dev20260903-20-gcc9c295fdf0"
+DOCKER_IMAGE_DEFAULT="ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.80.0-dev20260922-17-g86b55b92d0d"
 SKIP_VERSION_CHECK=false
+SKIP_CROSS_HOST_PORT_DOWN=false
 CABLING_DESCRIPTOR_PATH="/data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto"
 DEPLOYMENT_DESCRIPTOR_PATH="/data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto"
 ITERATIONS=50
@@ -139,6 +113,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --skip-version-check)
             SKIP_VERSION_CHECK=true
+            shift
+            ;;
+        --skip-cross-host-port-down)
+            SKIP_CROSS_HOST_PORT_DOWN=true
             shift
             ;;
         --cabling-descriptor-path)
@@ -217,6 +195,12 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             read -ra _extra <<< "$2"
+            for _a in "${_extra[@]}"; do
+                if [[ "$_a" == "--cross-host-port-down" || "$_a" == "--cross-host-port-down="* ]]; then
+                    echo "Error: --cross-host-port-down is not allowed in --validation-args; it is handled automatically before each reset (disable with --skip-cross-host-port-down)."
+                    exit 1
+                fi
+            done
             VALIDATION_EXTRA_ARGS+=("${_extra[@]}")
             shift 2
             ;;
@@ -276,6 +260,41 @@ fi
 if [[ -z "$OUTPUT_DIR" ]]; then
     OUTPUT_DIR="${HOSTS}-$(date +%Y%m%d_%H%M%S)"
 fi
+
+run_cross_host_port_down() {
+    if [[ -n "$FACTORY_DESCRIPTOR_PATH" ]]; then
+        local descriptor_args=(--factory-descriptor-path "$FACTORY_DESCRIPTOR_PATH")
+    else
+        local descriptor_args=(--cabling-descriptor-path "$CABLING_DESCRIPTOR_PATH" --deployment-descriptor-path "$DEPLOYMENT_DESCRIPTOR_PATH")
+    fi
+
+    local volume_args=()
+    for vol in "${EXTRA_VOLUMES[@]}"; do
+        volume_args+=(--volume "$vol")
+    done
+
+    if [[ $DOCKER_IMAGE == "none" ]]; then
+        local bin_cmd
+        bin_cmd=$(printf '%q ' ./build/tools/scaleout/run_cluster_validation \
+            "${descriptor_args[@]}" \
+            --cross-host-port-down)
+        mpirun --host "$HOSTS" \
+            --mca btl_tcp_if_include "$MPI_IF" \
+            "${MPI_EXTRA_ARGS[@]}" \
+            bash -c "set -o pipefail; h=\$(hostname); $bin_cmd 2>&1 | while IFS= read -r l; do printf '[%s] %s\n' \"\$h\" \"\$l\"; done"
+    else
+        ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
+            --empty-entrypoint \
+            --tag-host \
+            --mpi-interface "$MPI_IF" \
+            "${volume_args[@]}" \
+            "${MPI_EXTRA_ARGS[@]}" \
+            --host "$HOSTS" \
+            ./build/tools/scaleout/run_cluster_validation \
+            "${descriptor_args[@]}" \
+            --cross-host-port-down
+    fi
+}
 
 run_cluster_validation() {
     local validation_output_path="$1"
@@ -389,6 +408,28 @@ RESET_CMD
     return 0  # Success
 }
 
+# Reset every host, then retry any that failed the first glx_reset. Exit status is
+# the last mpirun status (0 even if some hosts still failed after retry), matching
+# the previous inline loop.
+reset_cluster_hosts() {
+    local output_file="$1"
+    local retry_output_file="$2"
+    local msg_prefix="$3"
+    local failed_hosts_str
+    failed_hosts_str=$(run_board_reset "$HOSTS" "$output_file" "$msg_prefix")
+    local mpi_exit=$?
+    if [[ $mpi_exit -ne 0 ]]; then
+        return "$mpi_exit"
+    fi
+    if [[ -n "$failed_hosts_str" ]]; then
+        echo ""
+        echo "Retrying reset for failed hosts: $failed_hosts_str"
+        run_board_reset "$failed_hosts_str" "$retry_output_file" "Retry: " > /dev/null
+        return $?
+    fi
+    return 0
+}
+
 
 # Route all output through tag_stream. The per-iteration tee blocks below also
 # pipe through tag_stream; those lines arrive here already tagged and pass through.
@@ -408,6 +449,7 @@ if [[ "${#MPI_EXTRA_ARGS[@]}" -gt 0 ]]; then
 fi
 echo "Number of iterations: $ITERATIONS"
 echo "Skip version check: $SKIP_VERSION_CHECK"
+echo "Skip cross-host port down: $SKIP_CROSS_HOST_PORT_DOWN"
 echo "Output directory: $OUTPUT_DIR"
 if [[ ${#VALIDATION_EXTRA_ARGS[@]} -gt 0 ]]; then
     echo "Extra validation args: ${VALIDATION_EXTRA_ARGS[*]}"
@@ -445,27 +487,58 @@ for ((i=1; i<=ITERATIONS; i++)); do
         echo "=========================================="
         echo ""
 
-        echo "Running tt-smi -glx_reset (this may take a few minutes)..."
+        PORT_DOWN_EXIT_CODE=0
+        MPI_EXIT_CODE=0
 
-        # Run initial reset and capture failures
-        RESET_OUTPUT_FILE="$OUTPUT_DIR/reset_output_iter_${i}_$$"
-        FAILED_HOSTS_STR=$(run_board_reset "$HOSTS" "$RESET_OUTPUT_FILE" "")
-        MPI_EXIT_CODE=$?
-
-        # Retry only failed hosts if any
-        if [[ -n "$FAILED_HOSTS_STR" ]]; then
+        if [[ "$SKIP_CROSS_HOST_PORT_DOWN" == false ]]; then
+            echo "Bringing down cross-host Ethernet ports before reset..."
+            run_cross_host_port_down
+            PORT_DOWN_EXIT_CODE=$?
+            if [[ $PORT_DOWN_EXIT_CODE -eq 0 ]]; then
+                echo "Cross-host Ethernet ports are down on all hosts."
+            else
+                echo "WARNING: cross-host port down FAILED (exit code $PORT_DOWN_EXIT_CODE); running cleanup reset then retrying port down."
+                echo "Running tt-smi -glx_reset (cleanup after failed port down)..."
+                reset_cluster_hosts \
+                    "$OUTPUT_DIR/reset_cleanup_iter_${i}_$$" \
+                    "$OUTPUT_DIR/reset_cleanup_retry_iter_${i}_$$" \
+                    ""
+                MPI_EXIT_CODE=$?
+                if [[ $MPI_EXIT_CODE -ne 0 ]]; then
+                    echo "Cleanup reset failed (exit code $MPI_EXIT_CODE); skipping port-down retry and validation."
+                else
+                    sleep 5
+                    echo "Retrying cross-host Ethernet port down..."
+                    run_cross_host_port_down
+                    PORT_DOWN_EXIT_CODE=$?
+                    if [[ $PORT_DOWN_EXIT_CODE -eq 0 ]]; then
+                        echo "Cross-host Ethernet ports are down on all hosts."
+                    else
+                        echo "WARNING: retry cross-host port down FAILED (exit code $PORT_DOWN_EXIT_CODE); skipping validation."
+                    fi
+                fi
+            fi
             echo ""
-            echo "Retrying reset for failed hosts: $FAILED_HOSTS_STR"
+        else
+            echo "Skipping cross-host Ethernet port down."
+        fi
 
-            RESET_RETRY_OUTPUT_FILE="$OUTPUT_DIR/reset_retry_output_iter_${i}_$$"
-
-            # Run retry and capture exit code (discard stdout)
-            run_board_reset "$FAILED_HOSTS_STR" "$RESET_RETRY_OUTPUT_FILE" "Retry: " > /dev/null
+        # Post-port-down reset only after a successful (or skipped) port-down.
+        if [[ $PORT_DOWN_EXIT_CODE -eq 0 && $MPI_EXIT_CODE -eq 0 ]]; then
+            echo "Running tt-smi -glx_reset (this may take a few minutes)..."
+            reset_cluster_hosts \
+                "$OUTPUT_DIR/reset_output_iter_${i}_$$" \
+                "$OUTPUT_DIR/reset_retry_output_iter_${i}_$$" \
+                ""
             MPI_EXIT_CODE=$?
         fi
 
-        # Only run validation if retry was successful (or no retry needed)
-        if [[ $MPI_EXIT_CODE -eq 0 ]]; then
+        # Only run validation if port-down and the following reset both succeeded.
+        if [[ $MPI_EXIT_CODE -ne 0 ]]; then
+            echo "Skipping validation because reset failed (exit code $MPI_EXIT_CODE)"
+        elif [[ $PORT_DOWN_EXIT_CODE -ne 0 ]]; then
+            echo "Skipping validation because port down failed (exit code $PORT_DOWN_EXIT_CODE)"
+        else
             sleep 5
 
             echo ""
@@ -479,8 +552,6 @@ for ((i=1; i<=ITERATIONS; i++)); do
             if [[ $VALIDATION_EXIT_CODE -ne 0 ]]; then
                 echo "ERROR: cluster validation FAILED (exit code $VALIDATION_EXIT_CODE)"
             fi
-        else
-            echo "Skipping validation due to mpirun failure"
         fi
 
         echo "Iteration $i completed at $(date)"

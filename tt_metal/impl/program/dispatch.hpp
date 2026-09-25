@@ -221,6 +221,14 @@ TraceNode create_trace_node(
     uint32_t num_workers,
     bool use_prefetcher_cache);
 
+// Serialize the same command fragments as write_program_command_sequence for reuse across devices.
+void pack_program_command_sequence(
+    const ProgramCommandSequence& program_command_sequence,
+    bool stall_first,
+    bool stall_before_program,
+    bool send_binary,
+    vector_aligned<uint32_t>& packed);
+
 void write_program_command_sequence(
     const ProgramCommandSequence& program_command_sequence,
     SystemMemoryManager& manager,
@@ -244,7 +252,8 @@ void reset_worker_dispatch_state_on_device(
     uint8_t cq_id,
     CoreCoord dispatch_core,
     const DispatchArray<uint32_t>& expected_num_workers_completed,
-    bool reset_launch_msg_state);
+    bool reset_launch_msg_state,
+    ttsl::Span<const vector_aligned<uint32_t>> setup_commands);
 
 void set_num_worker_sems_on_dispatch(
     SystemMemoryManager& manager,
@@ -266,11 +275,14 @@ void reset_expected_num_workers_completed_on_device(
 ExpectedNumWorkerUpdates get_expected_num_workers_completed_updates(
     uint32_t num_workers, uint32_t num_additional_workers);
 
-void set_core_go_message_mapping_on_device(
+// Immutable setup batches, each bounded by the device's maximum fetch size.
+std::vector<vector_aligned<uint32_t>> build_sub_device_setup_commands(
     Device* device,
+    uint8_t cq_id,
+    ttsl::Span<const uint32_t> workers_per_sub_device,
+    const vector_aligned<uint32_t>& go_signal_noc_data,
     const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
-    SystemMemoryManager& manager,
-    uint8_t cq_id);
+    bool reset_launch_msg_state);
 
 // ProgramImpl version - does not support CQs
 uint32_t program_base_addr_on_core(detail::ProgramImpl& program, IDevice* device, HalProgrammableCoreType core_type);

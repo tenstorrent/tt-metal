@@ -1644,6 +1644,10 @@ void validate_matmul_mcast2d_config(
             program_config.out_block_w,
             program_config.out_block_h,
             per_core_N);
+
+        const uint32_t B = program_config.fuse_batch ? 1u : get_batch_size(a_shape_padded);
+        operations::matmul::utilities::validate_block_sharded_output_batch(
+            true, B, program_config.per_core_M, per_core_N);
     }
 }
 
@@ -2607,6 +2611,9 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         per_core_N,
                         tile_width_ratio);
 
+                    const uint32_t B = program_config.fuse_batch ? 1u : get_batch_size(a_shape_padded);
+                    operations::matmul::utilities::validate_block_sharded_output_batch(true, B, per_core_M, per_core_N);
+
                     uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
                     uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
                     // The output CB is globally allocated against the output tensor on the factory's
@@ -2949,8 +2956,9 @@ MatmulDeviceOperation::tensor_return_value_t matmul(
     }
     operations::matmul::normalize_program_config(
         normalized_attributes.program_config.value(), input_tensors.at(0).device()->compute_with_storage_grid_size());
+    // validate requires optional_input_tensors.size() == 1; this path has no bias.
     return ttnn::device_operation::launch<MatmulDeviceOperation>(
-        normalized_attributes, {input_tensors, {}, {optional_output_tensor}});
+        normalized_attributes, {input_tensors, {std::nullopt}, {optional_output_tensor}});
 }
 
 }  // namespace ttnn::prim

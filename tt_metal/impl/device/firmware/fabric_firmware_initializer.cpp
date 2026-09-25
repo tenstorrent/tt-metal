@@ -11,6 +11,7 @@
 #include <optional>
 #include <string_view>
 
+#include <enchantum/enchantum.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -36,8 +37,7 @@ using tt::tt_fabric::chan_id_t;
 using tt::tt_fabric::EDMStatus;
 
 // Emule teleports cross-chip traffic at the fabric client-API shim and never runs the ERISC router,
-// so its launch/sync handshake would never complete — skip it (as for Mock). See tt-emule
-// docs/fabric-ccl-emulation.md.
+// so its launch/sync handshake would never complete — skip it (as for Mock).
 bool skip_fabric_fw_for_emule() {
     return MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Emule;
 }
@@ -307,6 +307,18 @@ void FabricFirmwareInitializer::init(
     }
 
     if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
+        // Reject fabric launch on a single-host mesh with fewer than 2 opened chips.
+        // Multi-host meshes with 1 local chip per rank are unaffected: peers live on other ranks.
+        const auto local_mesh_ids = control_plane_.get_local_mesh_id_bindings();
+        const size_t num_hosts = control_plane_.get_mesh_graph().get_host_ranks(local_mesh_ids.front()).size();
+        TT_FATAL(
+            devices_.size() > 1 || num_hosts > 1,
+            "Fabric config {} requires at least 2 participating chips, but the opened mesh has {} "
+            "local device(s) on a single host. Either open a larger mesh (e.g. a MeshShape with >= 2 "
+            "devices) or call SetFabricConfig(FabricConfig::DISABLED) before opening a 1-chip mesh.",
+            enchantum::to_string(fabric_config),
+            devices_.size());
+
         log_info(tt::LogMetal, "Initializing Fabric");
 
         // Remove the stale fabric debug manifest, if one exists
