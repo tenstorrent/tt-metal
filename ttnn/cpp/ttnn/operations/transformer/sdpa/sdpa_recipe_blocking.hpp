@@ -96,6 +96,9 @@ struct RecipeBlockingProblem {
     CoreCoord grid{1, 1};
     uint32_t max_cores_per_head_batch = 16;
     uint64_t l1_bytes = 0;  // unreserved L1 per core available to circular buffers
+    // Exp ring: the device's kernel config buffer (recipe_kernel_config_bytes); 0 = unknown (large). Small buffers
+    // size-optimize some exp ring recipe builds (exp_ring_recipe_size_optimized_for_config_buffer).
+    uint64_t kernel_config_bytes = 0;
     // Nonzero pins that dimension (a caller-provided chunk); zero lets the chooser pick.
     uint32_t fixed_q_tiles = 0;
     uint32_t fixed_k_tiles = 0;

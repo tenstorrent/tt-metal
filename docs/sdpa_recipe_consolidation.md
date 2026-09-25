@@ -100,6 +100,20 @@ source; the consolidation lands on `cglagovich/sdpa-recipes-consolidate`.
   a LoFi compute config and a one-tile-wide QK subblock is likely affected too (inferred from
   code, not reproduced).
 
+## Fixes after the DiT parity run (`cglagovich/sdpa-recipe-fixes-sizes-shortk` @ 351b534b, merged)
+
+- exp ring B/E overflowed the kernel config buffer at the **default** worker L1 (70656 B) even at
+  qualified geometries; earlier exp ring suites ran at `worker_l1_size=1344544` (~187 KB config
+  buffer) and missed it. BF16-dest B/E exp ring builds now use pack+unpack -Os when the buffer is
+  under 96 KiB; large-buffer builds are unchanged. Regression test:
+  `test_sdpa_recipe_exp_ring_config_buffer.py` (default L1).
+- Blocking cost model: per-core fill/drain and per-Q-chunk first-K/V fill terms; per-half subblock
+  penalties; dense B/E odd-Q penalty. Calibration pick/best geomean 1.032 -> 1.012. Blocking perf
+  auto/tuned geomean 0.886, worst 1.01 (was 1.20). h3 exp ring 4x32 FAST 1.10x -> 0.99x legacy.
+- Remaining: short-K dense recipes (LTX text / A2V cross) cost ~30 us more than legacy at any
+  blocking (1.35-1.41x); needs kernel/dataflow work. The exp ring K ranking at default L1 misranks
+  non-512 K (h3 B/E 1.09-1.23x vs K512).
+
 ## Ring / exp ring geometry notes
 
 - The single list of supported ring/exp geometry is `recipe_geometry_rejection`
