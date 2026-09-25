@@ -72,6 +72,12 @@ class Qwen36Router:
             preprocess=lambda t: t.to(torch.bfloat16).transpose(-2, -1).unsqueeze(0).unsqueeze(0),
         )
         self.compute_kernel_config = tpc.COMPUTE_HIFI2  # fp32 accumulate (see module docstring)
+        # Blackhole keeps the original linear -> softmax -> topk -> scatter router (_call_bh); the
+        # tuned decode matmul, the fused gate and the threshold routing below are Wormhole-only.
+        self._wh = not tpc.is_blackhole()
+        self.decode_gate = None
+        if not self._wh:
+            return
         # ttnn-auto picks a poor program for this skinny [S,H] x [H,E] decode matmul (measured
         # 24 us, and 64 us once the activation is in L1). The explicit small-grid 1D config —
         # one core per output N-tile — runs it in 14. Prefill (M > 1 tile) keeps ttnn-auto.
@@ -82,7 +88,6 @@ class Qwen36Router:
 
         # Fused decode gate: one height-sharded op at one token per core, replacing the single-core topk and its normalize tail.
         self.mesh_device = mesh_device
-        self.decode_gate = None
         # Zeroed scatter bases cached per seq_len: ttnn.zeros is a host upload, so per-forward it would break tracing; zeros_like is a device fill.
         self._scatter_base = {}
         if (
@@ -109,6 +114,8 @@ class Qwen36Router:
 
     def __call__(self, hidden_states):
         """hidden_states: [1,1,S,H] (replicated full hidden). Returns [1,1,S,E]."""
+        if not self._wh:
+            return self._call_bh(hidden_states)
         if self.decode_gate is not None and hidden_states.shape[-2] <= ttnn.TILE_SIZE:
             return self._dense_from_fused_gate(hidden_states)
         decode = hidden_states.shape[-2] <= ttnn.TILE_SIZE
@@ -143,6 +150,31 @@ class Qwen36Router:
             denom = ttnn.sum(dense_routing, dim=-1, keepdim=True)
             dense_routing = ttnn.div(dense_routing, denom)
             denom.deallocate(True)
+        return dense_routing
+
+    def _call_bh(self, hidden_states):
+        """Blackhole router, unchanged: linear -> softmax -> topk -> sum-normalize -> scatter."""
+        expert_scores = ttnn.linear(hidden_states, self.proj_weight, compute_kernel_config=self.compute_kernel_config)
+        router_probs = ttnn.softmax(expert_scores, dim=-1)
+        expert_scores.deallocate(True)
+
+        top_k_values, top_k_indices = ttnn.topk(router_probs, k=self.top_k, dim=-1)
+
+        # Sum-normalize the top-k weights so they sum to 1 per token (HF norm_topk_prob).
+        if self.norm_topk_prob:
+            top_k_sum = ttnn.sum(top_k_values, dim=-1, keepdim=True)
+            top_k_values = ttnn.div(top_k_values, top_k_sum)
+            top_k_sum.deallocate(True)
+
+        dense_routing = ttnn.scatter(
+            ttnn.zeros_like(router_probs),
+            dim=-1,
+            index=top_k_indices,
+            src=top_k_values,
+        )
+        router_probs.deallocate(True)
+        top_k_values.deallocate(True)
+        top_k_indices.deallocate(True)
         return dense_routing
 
     def _dense_from_fused_gate(self, hidden_states):
