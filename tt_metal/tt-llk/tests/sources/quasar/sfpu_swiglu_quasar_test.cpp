@@ -70,8 +70,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_MATH
 
-const bool is_int_fpu_en = false;
-
 #include "cfg_defines.h"
 #include "cmath_common.h"
 #include "experimental/ckernel_sfpu_swiglu.h"
@@ -104,7 +102,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     DataFormat src_format = static_cast<DataFormat>(formats.math);
-    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, is_int_fpu_en>(src_format, src_format);
+    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(src_format, src_format);
 
     if (!unpack_to_dest)
     {

@@ -14,69 +14,6 @@ using namespace ckernel::math;
 
 static DataFormatConfigSet data_format_config_set = DataFormatConfigSet::UNCONFIGURED;
 
-/**
- * @brief Sets up ALU formats for math destination register.
- *
- * @tparam EN_IMPLIED_MATH_FORMAT: If set to true, will imply math dest format from SrcA reg format
- * @tparam EN_FP32_MATH_FORMAT: Set to true to use math dest in Float32, otherwise default behaviour is Float16/Float16_b depending on input format exponent
- * width
- * @tparam EN_INT32_MATH_FORMAT: Set to true to use math dest in Int32, otherwise default behaviour is Float16/Float16_b depending on input format exponent
- * width
- * @param srcA_format: Input srcA format, used to set ALU configs if not implied math format, values = DataFormat enum, ex:
- * <Float16/Float16_b/Tf32/Int8/Int16/UInt8>
- * @param srcB_format: Input srcB format, used to set ALU configs if not implied math format, values = DataFormat enum, ex:
- * <Float16/Float16_b/Tf32/Int8/Int16/UInt8>
- */
-template <bool EN_IMPLIED_MATH_FORMAT, bool EN_FP32_MATH_FORMAT, bool EN_INT32_MATH_FORMAT>
-inline void _llk_math_srcAB_hw_configure_(DataFormat srcA_format, DataFormat srcB_format)
-{
-    // Turn on automatic Tensix-TRISC synchronization
-    // RT: This is turned on by default by HW, this should be removed
-    set_ttsync_enables<TRACK_ALL>(TRISC_ID);
-
-    static_assert(!(EN_FP32_MATH_FORMAT && EN_INT32_MATH_FORMAT), "Cannot have Int32 dest & Float32 dest at the same time");
-
-    // Set implied math dest format mode
-    cfg[DISABLE_IMPLIED_SRCA_FMT_SEC0_Base_ADDR32 + TRISC_ID] = !EN_IMPLIED_MATH_FORMAT;
-    cfg[DISABLE_IMPLIED_SRCB_FMT_SEC0_Base_ADDR32 + TRISC_ID] = !EN_IMPLIED_MATH_FORMAT;
-
-    std::uint8_t SRCA_FORMAT_MASKED = masked_data_format(to_underlying(srcA_format));
-    std::uint8_t SRCB_FORMAT_MASKED = masked_data_format(to_underlying(srcB_format));
-
-    alu_config_u alu_config;
-    for (std::uint32_t i = 0; i < NUM_WORDS_ALU_FORMAT; i++)
-    {
-        alu_config.val[i] = 0;
-    }
-
-    if constexpr (!EN_IMPLIED_MATH_FORMAT)
-    {
-        // Set ALU SrcA format since it is not implied
-        // If input format has exp_width == 5, the math dest set to Float16
-        // else input format has exp_width == 8, the math dest set to Float16_b
-        alu_config.f.ALU_FORMAT_SPEC_REG_SrcA_val      = SRCA_FORMAT_MASKED;
-        alu_config.f.ALU_FORMAT_SPEC_REG_SrcA_override = 0x1;
-        alu_config.f.ALU_FORMAT_SPEC_REG_SrcB_val      = SRCB_FORMAT_MASKED;
-        alu_config.f.ALU_FORMAT_SPEC_REG_SrcB_override = 0x1;
-
-        // RT: Since SrcA & SrcB need to match exponent widths, can set them the same for now
-        // Check with HW team if different mixes between Src registers are allowed
-        alu_config.f.ALU_FORMAT_SPEC_REG0_SrcA = SRCA_FORMAT_MASKED;
-        alu_config.f.ALU_FORMAT_SPEC_REG1_SrcB = SRCB_FORMAT_MASKED;
-    }
-
-    alu_config.f.ALU_ACC_CTRL_Fp32_enabled      = EN_FP32_MATH_FORMAT;
-    alu_config.f.ALU_ACC_CTRL_SFPU_Fp32_enabled = EN_FP32_MATH_FORMAT;
-    alu_config.f.ALU_ACC_CTRL_INT8_math_enabled = EN_INT32_MATH_FORMAT;
-
-    for (std::uint32_t i = 0; i < NUM_WORDS_ALU_FORMAT; i++)
-    {
-        cfg[ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32 + i] = alu_config.val[i];
-    }
-
-    data_format_config_set = DataFormatConfigSet::DEFAULT;
-}
-
 // Bitmask helper: maps a DataFormat enum value to its corresponding bit in a 64-bit set
 inline constexpr std::uint64_t df_bit(DataFormat df)
 {
@@ -145,16 +82,20 @@ inline void _configure_alu_formats_(DataFormat srcA_format, DataFormat srcB_form
     cfg[DISABLE_IMPLIED_SRCA_FMT_SEC0_Base_ADDR32 + TRISC_ID] = !EN_IMPLIED_MATH_FORMAT;
     cfg[DISABLE_IMPLIED_SRCB_FMT_SEC0_Base_ADDR32 + TRISC_ID] = !EN_IMPLIED_MATH_FORMAT;
 
-    alu_config_u alu_config         = {0};
-    std::uint8_t SRCA_FORMAT_MASKED = masked_data_format(to_underlying(srcA_format));
-    std::uint8_t SRCB_FORMAT_MASKED = masked_data_format(to_underlying(srcB_format));
+    alu_config_u alu_config = {0};
 
-    alu_config.f.ALU_FORMAT_SPEC_REG_SrcA_val      = SRCA_FORMAT_MASKED;
-    alu_config.f.ALU_FORMAT_SPEC_REG_SrcA_override = !EN_IMPLIED_MATH_FORMAT;
-    alu_config.f.ALU_FORMAT_SPEC_REG_SrcB_val      = SRCB_FORMAT_MASKED;
-    alu_config.f.ALU_FORMAT_SPEC_REG_SrcB_override = !EN_IMPLIED_MATH_FORMAT;
-    alu_config.f.ALU_FORMAT_SPEC_REG0_SrcA         = SRCA_FORMAT_MASKED;
-    alu_config.f.ALU_FORMAT_SPEC_REG1_SrcB         = SRCB_FORMAT_MASKED;
+    if constexpr (!EN_IMPLIED_MATH_FORMAT)
+    {
+        const std::uint8_t SRCA_FORMAT_MASKED = masked_data_format(to_underlying(srcA_format));
+        const std::uint8_t SRCB_FORMAT_MASKED = masked_data_format(to_underlying(srcB_format));
+
+        alu_config.f.ALU_FORMAT_SPEC_REG_SrcA_val      = SRCA_FORMAT_MASKED;
+        alu_config.f.ALU_FORMAT_SPEC_REG_SrcA_override = 0x1;
+        alu_config.f.ALU_FORMAT_SPEC_REG_SrcB_val      = SRCB_FORMAT_MASKED;
+        alu_config.f.ALU_FORMAT_SPEC_REG_SrcB_override = 0x1;
+        alu_config.f.ALU_FORMAT_SPEC_REG0_SrcA         = SRCA_FORMAT_MASKED;
+        alu_config.f.ALU_FORMAT_SPEC_REG1_SrcB         = SRCB_FORMAT_MASKED;
+    }
 
     alu_config.f.ALU_ACC_CTRL_Fp32_enabled      = EN_32BIT_DEST;
     alu_config.f.ALU_ACC_CTRL_SFPU_Fp32_enabled = EN_32BIT_DEST;
@@ -178,6 +119,29 @@ inline void _configure_alu_formats_(DataFormat srcA_format, DataFormat srcB_form
     {
         cfg[ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32 + i] = alu_config.val[i];
     }
+}
+
+/**
+ * @brief Configures math hardware by setting ALU formats
+ * @tparam EN_IMPLIED_MATH_FORMAT: If set to true, will imply math dest format
+ * from SrcA reg format
+ * @tparam EN_32BIT_DEST: Set to true to use math dest in 32bit mode (Float32/Int32)
+ * @param srcA_format: Input srcA format, used to set ALU configs if not implied math format
+ * values = Dataformat enum, ex: <Float16/Float16_b/Tf32/Int8/Int16/UInt8>
+ * @param srcB_format: Input srcB format, used to set ALU configs if not implied math format
+ * values = Dataformat enum, ex: <Float16/Float16_b/Tf32/Int8/Int16/UInt8>
+ */
+template <bool EN_IMPLIED_MATH_FORMAT, bool EN_32BIT_DEST>
+inline void _llk_math_srcAB_hw_configure_(DataFormat srcA_format, DataFormat srcB_format)
+{
+    // Turn on automatic Tensix-TRISC synchronization
+    // RT: This is turned on by default by HW, this should be removed
+    set_ttsync_enables<TRACK_ALL>(TRISC_ID);
+
+    const bool en_int32_dest_format = _is_src_fmt_int32_dest_compatible_(srcA_format) && _is_src_fmt_int32_dest_compatible_(srcB_format) && EN_32BIT_DEST;
+    _configure_alu_formats_<EN_IMPLIED_MATH_FORMAT, EN_32BIT_DEST>(srcA_format, srcB_format, en_int32_dest_format, DataFormat::Invalid);
+
+    data_format_config_set = DataFormatConfigSet::DEFAULT;
 }
 
 /**

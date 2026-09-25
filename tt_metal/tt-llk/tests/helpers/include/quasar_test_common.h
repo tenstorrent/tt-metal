@@ -23,30 +23,6 @@ inline void perf_math_clear_srca_per_face_then_srcb_once(std::uint32_t srca_per_
     _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(srcb_once_count);
 }
 
-template <bool implied_math_format, bool fp32_dest_acc_en>
-inline void configure_math_hardware_for_float32_int32_or_default(DataFormat math_format, DataFormat dest_format)
-{
-    if constexpr (fp32_dest_acc_en)
-    {
-        if (dest_format == DataFormat::Float32)
-        {
-            _llk_math_srcAB_hw_configure_<implied_math_format, true /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
-        }
-        else if (dest_format == DataFormat::Int32)
-        {
-            _llk_math_srcAB_hw_configure_<implied_math_format, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
-        }
-        else
-        {
-            _llk_math_srcAB_hw_configure_<implied_math_format, false /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
-        }
-    }
-    else
-    {
-        _llk_math_srcAB_hw_configure_<implied_math_format, false /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
-    }
-}
-
 template <ckernel::dest_dvalid_client thread>
 inline void set_up_fpu_to_pack_dest_dvalid_chain()
 {
