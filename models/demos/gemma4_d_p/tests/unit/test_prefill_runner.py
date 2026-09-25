@@ -142,7 +142,7 @@ def test_runtime_compile_and_replay_stage_all_slot_bounds(monkeypatch):
     monkeypatch.setattr(runtime, "make_chunk_input", lambda token_ids: object())
     monkeypatch.setattr(runtime, "_forward", lambda: SimpleNamespace(deallocate=lambda force: None))
     monkeypatch.setattr(runtime, "_check_cache", lambda cache: None)
-    for name in ("from_torch", "copy", "synchronize_device", "deallocate"):
+    for name in ("from_torch", "ReplicateTensorToMesh", "copy", "synchronize_device", "deallocate"):
         monkeypatch.setattr(runtime_module.ttnn, name, Mock())
     monkeypatch.setattr(runtime_module.ttnn, "reshape", lambda tensor, shape: tensor)
     replay = Mock()
