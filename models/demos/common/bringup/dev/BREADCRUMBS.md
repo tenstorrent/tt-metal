@@ -180,3 +180,10 @@ Drive this ledger with
 - Gemma R.3 (for the record): chunked != one-shot at PCC 0.99983 was MKL matmul results depending on the row count;
   per-expert token groups differ between chunked and one-shot, and routing flips amplified it. The reference agent
   pads each expert group to a multiple of 32 rows; chunked now matches one-shot bit for bit.
+
+## F13 (2026-09-25): chat-wrapped golden text
+- Gemma-4 26B-A4B-it predicted the raw book at 16-19% top-1 (ERNIE: 69-87%); HF itself degenerates on raw text
+  ("the age of times, it was the age of times") but answers and quotes Dickens correctly inside its chat template.
+  The owner chose chat-wrapped input: `text.chat_template: true` puts the book in one user turn (the template
+  supplies BOS) and truncates inside the turn. Worth a check at intake for any "-it" checkpoint: the goldens record
+  `text_top1_acc`, and a value far below ERNIE's is the signal.

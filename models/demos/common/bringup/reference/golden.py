@@ -131,15 +131,23 @@ def tokenizer(spec: Spec):
 
 
 def text_tokens(spec: Spec, n: int, tok=None) -> torch.Tensor:
-    """The first n tokens of the spec's long text (default: A Tale of Two Cities, shipped in the repo), BOS-prefixed."""
+    """The first n tokens of the spec's long text (default: A Tale of Two Cities, shipped in the repo), BOS-prefixed.
+
+    ``text.chat_template: true`` puts the text inside one user turn of the tokenizer's chat template (which then
+    supplies BOS), for instruction-tuned checkpoints that degenerate on raw text. The prompt is truncated to n tokens
+    inside the turn, as a long user message is in serving."""
     src = spec.get("text.source", "models/tt_transformers/tests/tale-of-two-cities.txt.bz2")
     path = Path(src) if Path(src).is_absolute() else CODE_ROOT / src
     opener = bz2.open if path.suffix == ".bz2" else open
     with opener(path, "rt", encoding="utf-8") as f:
         text = f.read()
     tok = tok or tokenizer(spec)
-    ids = tok(text, add_special_tokens=False)["input_ids"]
-    if spec.get("text.bos", True) and tok.bos_token_id is not None:
+    if spec.get("text.chat_template"):
+        text = tok.apply_chat_template([{"role": "user", "content": text}], tokenize=False)
+        ids = tok(text, add_special_tokens=False)["input_ids"]
+    else:
+        ids = tok(text, add_special_tokens=False)["input_ids"]
+    if not spec.get("text.chat_template") and spec.get("text.bos", True) and tok.bos_token_id is not None:
         ids = [tok.bos_token_id] + ids
     if len(ids) < n:
         raise ValueError(f"text has {len(ids)} tokens < {n}")
