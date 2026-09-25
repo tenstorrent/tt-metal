@@ -1,0 +1,84 @@
+# Model spec for the gated bring-up framework (models/demos/common/bringup).
+# Gemma-4 26B-A4B (text), chunked prefill on the 4x Blackhole p150b QuietBox. Same target and ladder as the ERNIE run.
+model: gemma4_a4b_d_p
+display_name: Gemma-4 26B-A4B
+hf_id: google/gemma-4-26B-A4B-it
+model_dir: models/demos/gemma4_a4b_d_p
+hooks: models.demos.gemma4_a4b_d_p.bringup.hooks
+num_layers: 30
+layers: all
+box:
+  name: Blackhole QuietBox, 4x p150b, mesh 1x4 (FABRIC_1D_RING)
+  chip: Blackhole p150b
+  mesh: [1, 4]
+  chip_dram_gb: 32
+  device_params: {fabric_config: FABRIC_1D_RING, l1_small_size: 24576}
+target: {seq: 56320, chunk: 5120, dtype: bf16}
+ladder:
+  - {name: s4096, seq: 4096, chunk: 2048, full_dumps: true}     # 2k->2k; chunk > sliding window (1024)
+  - {name: s16384, seq: 16384, chunk: 8192}                     # 8k->8k
+  - {name: last, seq: 56320, chunk: 5120, golden: s56320, prefix_from_golden: true}   # golden 50k prefix, device 50k->55k
+  - {name: s56320, seq: 56320, chunk: 5120}                     # all 11 chunks on device
+block_types:
+  sliding:                         # sliding-window attention (1024), 8 KV heads x 256, RoPE theta 1e4
+    layers: "0-4,6-10,12-16,18-22,24-28"
+    representative: 0
+  global:                          # full attention, 2 KV heads x 512, K = V, partial RoPE 0.25 theta 1e6
+    layers: [5, 11, 17, 23, 29]
+    representative: 5
+state:
+  kind: kv
+  tensors: [key, value]            # full-length per layer; global layers have V = K (attention_k_eq_v)
+  format: separate_k_v
+thresholds: {component: 0.99, block: 0.98, layer: 0.97, state: 0.97, final_hidden: 0.97, top5: 0.9}
+text: {source: models/tt_transformers/tests/tale-of-two-cities.txt.bz2, bos: true}
+hf: {parity_seq: 512}
+checkpoint:
+  expect:
+    "model.language_model.embed_tokens.weight": [262144, 2816]
+    "model.language_model.norm.weight": [2816]
+    "model.language_model.layers.0.self_attn.q_proj.weight": [4096, 2816]
+    "model.language_model.layers.0.self_attn.k_proj.weight": [2048, 2816]
+    "model.language_model.layers.0.self_attn.v_proj.weight": [2048, 2816]
+    "model.language_model.layers.5.self_attn.q_proj.weight": [8192, 2816]
+    "model.language_model.layers.5.self_attn.k_proj.weight": [1024, 2816]
+    "model.language_model.layers.*.self_attn.o_proj.weight": [2816, "*"]
+    "model.language_model.layers.*.mlp.gate_proj.weight": [2112, 2816]
+    "model.language_model.layers.*.experts.gate_up_proj": [128, "*", "*"]
+    "model.language_model.layers.*.experts.down_proj": [128, "*", "*"]
+    "model.language_model.layers.*.router.proj.weight": [128, 2816]
+  count:
+    "model.language_model.layers.*.self_attn.q_proj.weight": 30
+    "model.language_model.layers.*.self_attn.v_proj.weight": 25
+    "model.language_model.layers.*.experts.gate_up_proj": 30
+  config:
+    num_hidden_layers: 30
+    hidden_size: 2816
+    num_attention_heads: 16
+    num_key_value_heads: 8
+    num_global_key_value_heads: 2
+    head_dim: 256
+    global_head_dim: 512
+    sliding_window: 1024
+    num_experts: 128
+    top_k_experts: 8
+contract: {adapter: gemma4_a4b_d_p}
+agents:
+  model: null
+  timeout_s: 14400
+  read:
+    reference:
+      - /opt/venv/lib/python3.10/site-packages/transformers/models/gemma4/modeling_gemma4.py
+      - /opt/venv/lib/python3.10/site-packages/transformers/models/gemma4/configuration_gemma4.py
+      - models/demos/ernie45_d_p/reference/ernie_ref.py
+      - models/demos/common/bringup/selftest/fixture_model.py
+    plan:
+      - models/demos/gemma4/README.md
+      - models/demos/gemma4/tt
+      - models/demos/ernie45_d_p/SHARDING.md
+      - models/demos/ernie45_d_p/tt/moe_unified.py
+    implement:
+      - models/demos/gemma4/tt
+      - models/demos/ernie45_d_p/tt
+paths:
+  hf: /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/hf
