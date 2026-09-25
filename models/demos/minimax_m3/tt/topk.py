@@ -32,7 +32,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utils import rotated_chunk_real_counts
+from models.demos.common.prefill.chunk_layout import rotated_chunk_real_counts
 from models.demos.minimax_m3.utils.general_utils import cache_file_exists, get_cache_file_name
 
 

@@ -19,8 +19,8 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utils import rotate_chunk_tokens
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
+from models.demos.common.prefill.chunk_layout import rotate_chunk_tokens
 from models.demos.common.prefill.runners.migration import (
     is_per_host_storage,
     migration_table_path,

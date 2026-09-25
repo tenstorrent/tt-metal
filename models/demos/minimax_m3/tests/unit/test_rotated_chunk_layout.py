@@ -13,7 +13,11 @@ or the tokens are written / roped / MoE-masked at the wrong positions.
 
 import pytest
 
-from models.common.utils import rotate_chunk_tokens, rotated_chunk_positions, rotated_chunk_real_counts
+from models.demos.common.prefill.chunk_layout import (
+    rotate_chunk_tokens,
+    rotated_chunk_positions,
+    rotated_chunk_real_counts,
+)
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions, rotated_chip_real_token_counts
 
 
