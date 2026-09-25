@@ -134,6 +134,12 @@ findings:
       Routed experts are COMPOSED (router from linear/softmax/topk/gather/scatter; experts as dense-EP matmuls).
       Correct (PCC >= 0.9999), but it spends 16/6 more expert FLOPs than needed. Next step: ttnn.sparse_matmul.
   - tag: TTNN-GAP
+    title: unified_routed_expert_moe works (about 13x) but its EP dispatch needs a >1-chip dispatch group
+    text: >-
+      Fused expert kernel measured on real routing: 2.0 ms vs 26.9 ms dense-EP per 5k chunk per layer (PCC 0.9992).
+      Integration is blocked on 1x4: DeepSeek dispatch wires fabric neighbours on the dispatch axis (none for a 1-chip group)
+      and only supports cluster_axis 0; offset_cumsum was patched to skip its 1-device all_gather. See P3.1 and P3.2.
+  - tag: TTNN-GAP
     title: ttnn.scatter has no fp32 TILE path
     text: The dense routing matrix is scattered in bf16. Selection and renormalization stay fp32 (99.9% expert agreement).
   - tag: TTNN-GAP
