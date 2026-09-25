@@ -9,6 +9,8 @@
 set -uo pipefail
 PKG_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 TT_METAL_HOME=${TT_METAL_HOME:-$(cd "$PKG_DIR/../../../../.." && pwd)}
+export TT_METAL_HOME
+source "$PKG_DIR/matrix_common.sh"
 JOB=${JOB:?}; HOSTS=${HOSTS:?comma list, rank-0 host first}; STAGES=${STAGES:-16}; CACHED=${CACHED:?}
 ITERS=${ITERS:-3}; RESET=${RESET:-0}; USERS=${USERS:-0}; NEW=${NEW:-640,1600,3072,5120,6900,32768,51200}
 WORK=${WORK:-$TT_METAL_HOME/generated/m3_prefill_matrix}; mkdir -p "$WORK"
@@ -17,21 +19,19 @@ IFS=, read -r -a HOST_ARR <<< "$HOSTS"; R0=${HOST_ARR[0]}
 RANKS_PER_HOST=$(( STAGES / ${#HOST_ARR[@]} )); LAST=$((STAGES - 1))
 HOSTLIST=$(printf "%s:$RANKS_PER_HOST," "${HOST_ARR[@]}"); HOSTLIST=${HOSTLIST%,}
 [ $((RANKS_PER_HOST * ${#HOST_ARR[@]})) -eq "$STAGES" ] || { echo "STAGES=$STAGES not divisible over ${#HOST_ARR[@]} hosts"; exit 2; }
-ULIM="ulimit -u 2318132; ulimit -n 131072; ulimit -t unlimited;"   # a step on a host running ranks cannot even fork otherwise
-PENV="PREFILL_MODEL=minimax_m3 PREFILL_H2D_SERVICE_ID=ds_prefill PREFILL_SP=2 PREFILL_TP=4 PREFILL_NUM_LAYERS=60 PREFILL_CHUNK_SIZE=5120 PREFILL_NUM_USERS=1 TT_METAL_HOME=$TT_METAL_HOME PYTHONPATH=$TT_METAL_HOME"
-[ -n "${HF_MODEL:-}" ] && PENV="$PENV HF_MODEL=$HF_MODEL"; [ -n "${TT_CACHE_PATH:-}" ] && PENV="$PENV TT_CACHE_PATH=$TT_CACHE_PATH"
-[ -n "${PREFILL_TRACE_DIR:-}" ] && PENV="$PENV PREFILL_TRACE_DIR=$PREFILL_TRACE_DIR"
+ULIM="$MATRIX_ULIMITS;"
 log() { echo "[row C=$CACHED] $(date +%T) $*"; }
 
 # 1. shutdown a live runner (previous row)
 if [ -f "$WORK/last_runner_log" ] && ! grep -q '^EXIT=' "$(cat "$WORK/last_runner_log")"; then
   PREV=$(cat "$WORK/last_runner_log"); PREVCAP=$(grep -o 'capacity=[0-9]*' "$PREV" | head -1 | cut -d= -f2)
+  PREVMAN=$(grep -o 'manifest=[^ ]*' "$PREV" | head -1 | cut -d= -f2); PREVBIND=$(grep -o 'binding=[^ ]*' "$PREV" | head -1 | cut -d= -f2)
   log "shutting down live runner ($PREV)"
-  srun --jobid="$JOB" --overlap -N1 -n1 -w "$R0" bash -c "$ULIM cd $TT_METAL_HOME && source python_env/bin/activate && env $PENV PREFILL_MAX_SEQ_LEN=${PREVCAP:-56320} python3 $PKG_DIR/matrix_shutdown.py" 2>&1 | grep -v '^srun: '
+  srun --jobid="$JOB" --overlap -N1 -n1 -w "$R0" bash -c "$ULIM cd $TT_METAL_HOME && source python_env/bin/activate && env $(matrix_producer_env ${PREVCAP:-56320}) timeout 300 python3 $PKG_DIR/matrix_shutdown.py" 2>&1 | grep -v '^srun: '
   for i in $(seq 1 120); do grep -q '^EXIT=' "$PREV" && break; sleep 2; done
   if grep -q '^EXIT=' "$PREV"; then log "runner exited: $(grep '^EXIT=' "$PREV")"; else
-    log "runner did not exit in 240 s; killing on every host"
-    for h in "${HOST_ARR[@]}"; do srun --jobid="$JOB" --overlap -N1 -n1 -w "$h" bash -c "$ULIM pkill -9 -u \$USER -f '[p]refill_runner'; pkill -9 -u \$USER -f '[t]trun.py'; pkill -9 -u \$USER -f '[p]rterun'" 2>/dev/null; done
+    log "runner did not exit in 240 s; killing that runner's processes (manifest $PREVMAN) on every host"
+    matrix_kill_runner "$JOB" "$PREVMAN" "$PREVBIND" "${HOST_ARR[@]}"
     RESET=1; sleep 5
   fi
 fi
@@ -43,7 +43,7 @@ fi
 # 3. runner
 LOG=$WORK/runner${STAGES}_c${CACHED}_$(date +%H%M%S).log; echo "$LOG" > "$WORK/last_runner_log"
 log "launching runner -> $LOG"
-( srun --jobid="$JOB" --overlap -N1 -n1 -w "$R0" env STAGES="$STAGES" CACHED="$CACHED" USERS="${USERS:-1}" WORK="$WORK" HOSTS="$HOSTLIST" \
+( srun --jobid="$JOB" --overlap -N1 -n1 -w "$R0" env STAGES="$STAGES" CACHED="$CACHED" USERS="$(( USERS > 0 ? USERS : 1 ))" WORK="$WORK" HOSTS="$HOSTLIST" \
     TT_METAL_HOME="$TT_METAL_HOME" ${HF_MODEL:+HF_MODEL=$HF_MODEL} ${TT_CACHE_PATH:+TT_CACHE_PATH=$TT_CACHE_PATH} "$PKG_DIR/matrix_runner.sh" > "$LOG" 2>&1; echo "EXIT=$?" >> "$LOG" ) &
 n=0
 for i in $(seq 1 600); do
@@ -57,7 +57,7 @@ log "runner ready ($n/$STAGES)"
 PLOG=$WORK/producer${STAGES}_c${CACHED}_$(date +%H%M%S).log; echo "$PLOG" > "$WORK/last_producer_log"
 TIMING_DIR=$(cat "$WORK/last_timing_dir")
 log "producer -> $PLOG (out $OUT)"
-srun --jobid="$JOB" --overlap -N1 -n1 -w "$R0" bash -c "$ULIM cd $TT_METAL_HOME && source python_env/bin/activate && env $PENV PREFILL_MAX_SEQ_LEN=$((CACHED + 51200)) \
+srun --jobid="$JOB" --overlap -N1 -n1 -w "$R0" bash -c "$ULIM cd $TT_METAL_HOME && source python_env/bin/activate && env $(matrix_producer_env $((CACHED + 51200))) \
   python3 $PKG_DIR/matrix_producer.py --cached $CACHED --new '$NEW' --iters $ITERS --timing-dir '$TIMING_DIR' --out '$OUT' --last-rank $LAST \
   --label ${STAGES}stage ${USERS:+--users $USERS} ${REQS:+--reqs $REQS} ${SKIP_IDLE:+--skip-idle}" > "$PLOG" 2>&1; rc=$?; echo "EXIT=$rc" >> "$PLOG"
 log "producer exit=$rc"; grep -E '\[matrix\] (CELL|LOADED cached)' "$PLOG" | sed 's/.*\[matrix\]/[matrix]/'

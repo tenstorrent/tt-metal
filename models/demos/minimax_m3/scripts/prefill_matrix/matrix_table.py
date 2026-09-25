@@ -64,10 +64,10 @@ def main():
             news,
             lambda v: f"{v:.0f}",
         )
+    last = {}
+    for r in loaded:  # keep the LAST loaded measurement per cell if a cell was repeated; used by the tables and the CSV
+        last[(r["cached"], r["new"])] = r
     if loaded:
-        last = {}
-        for r in loaded:  # keep the last measurement per cell if repeated
-            last[(r["cached"], r["new"])] = r
         table(
             "LOADED pipeline: steady-state aggregate NEW tok/s (fill/drain excluded)",
             {k: r.get("steady_new_tps") for k, r in last.items() if r.get("steady_new_tps")},
@@ -124,7 +124,7 @@ def main():
             for c in cached:
                 for n in news:
                     m = med.get((c, n))
-                    lr = next((r for r in reversed(loaded) if (r["cached"], r["new"]) == (c, n)), None)
+                    lr = last.get((c, n))
                     w.writerow(
                         [c, n, f"{m:.1f}" if m else "", f"{n / (m / 1000):.0f}" if m else ""]
                         + (

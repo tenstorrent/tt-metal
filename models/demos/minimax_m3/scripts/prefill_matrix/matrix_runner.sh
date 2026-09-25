@@ -5,15 +5,16 @@
 # row's KV capacity (CACHED + MAX_NEW) and exec's run_pipeline_prefill.sh. Every rank appends one timing row per chunk
 # to $TIMING_DIR/rank<r>.csv (PREFILL_SYNC_PER_CHUNK=1) -- that is what matrix_producer.py measures from.
 set -uo pipefail
-ulimit -u 2318132 2>/dev/null; ulimit -n 131072 2>/dev/null; ulimit -t unlimited 2>/dev/null; ulimit -s unlimited 2>/dev/null
 PKG_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+source "$PKG_DIR/matrix_common.sh"; matrix_ulimits
 TT_METAL_HOME=${TT_METAL_HOME:-$(cd "$PKG_DIR/../../../../.." && pwd)}
 cd "$TT_METAL_HOME"
 export TT_METAL_HOME PYTHONPATH=$TT_METAL_HOME
 source python_env/bin/activate
 export HF_MODEL=${HF_MODEL:-/mnt/weka/model-weights/llm/minimax/MiniMax-M3} LOGURU_LEVEL=${LOGURU_LEVEL:-INFO}
 export TT_CACHE_PATH=${TT_CACHE_PATH:-/mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill}
-STAGES=${STAGES:-16}; CACHED=${CACHED:?set CACHED=<cached tokens, chunk multiple>}; USERS=${USERS:-1}
+STAGES=${STAGES:-16}; CACHED=${CACHED:?set CACHED=<cached tokens, chunk multiple>}
+USERS=${USERS:-1}; [ "$USERS" -ge 1 ] || USERS=1   # USERS=0 means idle-only measurement; the runner still needs slot 0
 MAX_NEW=${MAX_NEW:-51200}; CHUNK=${CHUNK:-5120}
 WORK=${WORK:?set WORK=<shared work dir>}; HOSTS=${HOSTS:?set HOSTS=<host:ranks,...>}
 STAMP=${STAMP:-$(date +%Y%m%d_%H%M%S)_s${STAGES}_c${CACHED}}
@@ -36,7 +37,7 @@ JSON
 case $STAGES in 16) TEMPLATE=$PKG_DIR/binding_16stage_quad.yaml.in;; 12) TEMPLATE=$PKG_DIR/binding_12stage_tri.yaml.in;; *) echo "STAGES must be 16 or 12"; exit 2;; esac
 BINDING=$WORK/binding_$STAMP.yaml
 sed -e "s#@MAX_SEQ_LEN@#$((CACHED + MAX_NEW))#" -e "s#@PKG_DIR@#$PKG_DIR#g" -e "s#@MANIFEST@#$MANIFEST#" -e "s#@TT_CACHE_PATH@#$TT_CACHE_PATH#" "$TEMPLATE" > "$BINDING"
-echo "[runner] $(date) launch_host=$(hostname -s) commit=$(git rev-parse --short HEAD) stages=$STAGES cached=$CACHED users=$USERS capacity=$((CACHED + MAX_NEW)) binding=$BINDING hosts=$HOSTS timing_dir=$TIMING_DIR"
+echo "[runner] $(date) launch_host=$(hostname -s) commit=$(git rev-parse --short HEAD) stages=$STAGES cached=$CACHED users=$USERS capacity=$((CACHED + MAX_NEW)) binding=$BINDING manifest=$MANIFEST hosts=$HOSTS timing_dir=$TIMING_DIR"
 cat "$MANIFEST"
 unset $(env | sed -n 's/^\(SLURM[^=]*\)=.*/\1/p')   # mpirun launches the remote ranks over ssh, not through Slurm
 export PRTE_MCA_ras="^slurm" PRTE_MCA_plm="^slurm"

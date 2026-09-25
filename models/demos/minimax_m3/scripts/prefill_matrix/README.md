@@ -92,5 +92,6 @@ Per-run artefacts in `WORK`: `runner*.log` (all ranks), `producer*.log`, `timing
 | `matrix_producer.py` | pushes chunks over H2D, measures from the ranks' timing CSVs, writes JSONL |
 | `matrix_shutdown.py` | sends the SHUTDOWN sentinel to a live runner |
 | `matrix_table.py` | tables / CSV from a results JSONL |
+| `matrix_common.sh` | shared helpers sourced by the shell scripts: ulimit raise, the producer/shutdown env, scoped runner kill |
 | `binding_16stage_quad.yaml.in`, `quad_bh_galaxy_16stage_2x4_z_chain.textproto` | 4-galaxy 16-stage topology |
 | `binding_12stage_tri.yaml.in`, `tri_bh_galaxy_12stage_2x4_z_chain.textproto` | 3-galaxy 12-stage fallback |

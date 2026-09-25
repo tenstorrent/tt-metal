@@ -71,6 +71,42 @@ def wait_for_chunk(timing_dir: str, rank: int, c: int, timeout_s: float, poll_s:
         time.sleep(poll_s)
 
 
+def steady_state(ends: dict, c0: int, c_end: int, stages: int, real_per_chunk: float, chunk: int):
+    """Steady-state throughput of a back-to-back chunk stream from the LAST rank's chunk end times.
+
+    ``ends`` maps chunk index -> wall-clock end time (s) for every chunk in [c0, c_end]. The first and last
+    ``stages`` chunks are dropped (pipeline fill / drain); the window is the time from the end of the chunk before
+    the first kept one to the end of the last kept one, so it spans exactly ``mid`` chunk periods. Returns None
+    when fewer than 4 chunks remain."""
+    lo, hi = c0 + stages, c_end - stages
+    mid = hi - lo + 1
+    if mid < 4:
+        return None
+    window = ends[hi] - ends[lo - 1]
+    periods = [ends[c] - ends[c - 1] for c in range(lo, hi + 1)]
+    return {
+        "mid_chunks": mid,
+        "window_s": window,
+        "steady_new_tps": mid * real_per_chunk / window,
+        "steady_processed_tps": mid * chunk / window,
+        "chunk_period_ms_median": statistics.median(periods) * 1000.0,
+    }
+
+
+def ttft_stats(req: dict, ends: dict) -> dict:
+    """Per-request TTFT under load (ms): push of the request's first chunk -> last-rank end of its last chunk.
+    Every request must have its last chunk in ``ends`` (the caller asserted the stream is complete)."""
+    missing = [k for k, r in req.items() if r["c_last"] not in ends]
+    assert not missing, f"{len(missing)} request(s) have no completion row: {missing[:4]}"
+    ttfts = sorted((ends[r["c_last"]] - r["t_push_first"]) * 1000.0 for r in req.values())
+    return {
+        "ttft_under_load_ms_median": statistics.median(ttfts),
+        "ttft_under_load_ms_p90": ttfts[int(0.9 * (len(ttfts) - 1))],
+        "ttft_under_load_ms_min": ttfts[0],
+        "ttft_under_load_ms_max": ttfts[-1],
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--cached", type=int, required=True, help="cached tokens C (chunk multiple)")
@@ -187,22 +223,7 @@ def main() -> int:
         R = users * reqs
         real_per_chunk = N / n_chunks
         wall = ends[c_end] - t_stream0
-        # steady state: drop the first and last `stages` chunks (fill / drain); window = end(last mid) - end(chunk before first mid)
-        lo, hi = c0 + stages, c_end - stages
-        mid = hi - lo + 1
-        steady = None
-        if mid >= 4:
-            window = ends[hi] - ends[lo - 1]
-            periods = [ends[c] - ends[c - 1] for c in range(lo, hi + 1)]
-            steady = {
-                "mid_chunks": mid,
-                "window_s": window,
-                "steady_new_tps": mid * real_per_chunk / window,
-                "steady_processed_tps": mid * chunk / window,
-                "chunk_period_ms_median": statistics.median(periods) * 1000.0,
-            }
-        ttfts = [(ends[r["c_last"]] - r["t_push_first"]) * 1000.0 for r in req.values() if r["c_last"] in ends]
-        ttfts.sort()
+        steady = steady_state(ends, c0, c_end, stages, real_per_chunk, chunk)
         out = {
             "mode": "loaded",
             "cached": C,
@@ -216,12 +237,9 @@ def main() -> int:
             "wall_s": wall,
             "aggregate_new_tps": R * N / wall,
             "aggregate_processed_tps": total_chunks * chunk / wall,
-            "ttft_under_load_ms_median": statistics.median(ttfts),
-            "ttft_under_load_ms_p90": ttfts[int(0.9 * (len(ttfts) - 1))],
-            "ttft_under_load_ms_min": ttfts[0],
-            "ttft_under_load_ms_max": ttfts[-1],
             "label": args.label,
         }
+        out.update(ttft_stats(req, ends))
         if steady:
             out.update(steady)
         return out
