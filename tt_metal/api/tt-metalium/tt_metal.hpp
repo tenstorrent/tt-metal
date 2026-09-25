@@ -173,7 +173,7 @@ void LaunchProgram(
     bool force_slow_dispatch = false);
 [[deprecated(
     "Use MeshCommandQueue synchronization (e.g. distributed::Finish) instead. This API will be removed after "
-    "2026-10-25.")]]
+    "2026-10-28.")]]
 void WaitProgramDone(IDevice* device, Program& program, bool read_device_profiler_results = true);
 
 /**
@@ -219,7 +219,7 @@ void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch 
  */
 [[deprecated(
     "distributed::EnqueueMeshWorkload writes runtime args as part of the launch. This API will be removed after "
-    "2026-10-25.")]]
+    "2026-10-28.")]]
 void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow_dispatch = false);
 
 // Configures a given device with a given program.
@@ -228,7 +228,7 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
 // - Takes the device out of reset
 [[deprecated(
     "Use distributed::EnqueueMeshWorkload, or experimental::ConfigureProgramWithoutLaunch to configure without "
-    "launching. This API will be removed after 2026-10-25.")]]
+    "launching. This API will be removed after 2026-10-28.")]]
 bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_slow_dispatch = false);
 
 /**
