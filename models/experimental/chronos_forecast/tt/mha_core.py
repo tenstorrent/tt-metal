@@ -102,6 +102,24 @@ class TtMhaCore:
         return (_weight(weights.wqkv), _weight(weights.wo), rms_w)
 
     @staticmethod
+    def _can_fuse_rope(cos, head_dim: int) -> bool:
+        """``ttnn.experimental.rotary_embedding`` needs batch-shared (1,1,S,Dh)
+        cos/sin and a rotate_half midpoint on a tile boundary."""
+        return cos.shape[0] == 1 and cos.shape[1] == 1 and (head_dim == 32 or head_dim % 64 == 0)
+
+    @staticmethod
+    def _fused_rope(x, cos, sin, memory_config):
+        """Rotate and deallocate ``x``; keeps x's logical seq length (the op
+        returns the tile-padded one, which SDPA would treat as real keys)."""
+        import ttnn
+
+        out = ttnn.experimental.rotary_embedding(x, cos, sin, memory_config=memory_config)
+        if tuple(out.shape) != tuple(x.shape):
+            out = ttnn.reshape(out, x.shape, x.padded_shape, skip_padding_fill=True)
+        ttnn.deallocate(x)
+        return out
+
+    @staticmethod
     def _rotate_half(x):
         import ttnn
 
@@ -149,7 +167,10 @@ class TtMhaCore:
             q, k, v = _split_head(0), _split_head(1), _split_head(2)
             ttnn.deallocate(xqkv)
         # 3. Optional RoPE on Q/K (V untouched).
-        if cos is not None and sin is not None:
+        if cos is not None and sin is not None and self._can_fuse_rope(cos, head_dim):
+            dram = ttnn.DRAM_MEMORY_CONFIG
+            q, k = self._fused_rope(q, cos, sin, dram), self._fused_rope(k, cos, sin, dram)
+        elif cos is not None and sin is not None:
             q_rot = ttnn.add(ttnn.mul(q, cos), ttnn.mul(self._rotate_half(q), sin))
             k_rot = ttnn.add(ttnn.mul(k, cos), ttnn.mul(self._rotate_half(k), sin))
             ttnn.deallocate(q)

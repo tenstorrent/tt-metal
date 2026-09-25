@@ -83,7 +83,7 @@ class TtEncoderBlock:
         return (_weight(weights.ff_wi), _weight(weights.ff_wo), rms_w)
 
     def forward_device(self, x, cos, sin, time_mask, group_mask, *, diagonal_group_attention: bool = False):
-        """Device (B,T,d) + cos/sin (B,1,T,Dh) + masks -> device (B,T,d); caller owns it."""
+        """Device (B,T,d) + cos/sin (1 or B,1,T,Dh) + masks -> device (B,T,d); caller owns it."""
         import ttnn
 
         ff_wi, ff_wo, ff_rms = self._ff

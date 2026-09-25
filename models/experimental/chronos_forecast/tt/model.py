@@ -191,7 +191,8 @@ class TtChronos:
         seq_len = full_mask.shape[-1]
         time_mask = torch.zeros(1, 1, seq_len, seq_len)
         group_mask = None if unique_groups else build_group_mask(group_ids, (full_mask > 0).float())
-        position_ids = torch.arange(seq_len).unsqueeze(0).expand(batch_size, -1)
+        # Every series uses positions 0..T-1, so one (1,T,Dh) cache broadcasts over the batch.
+        position_ids = torch.arange(seq_len).unsqueeze(0)
         inv_freq = self.weights.encoder.blocks[0].time.inv_freq
         cos, sin = build_rope_cache(position_ids, inv_freq)
         in_features = self._input_embed.in_features
@@ -393,7 +394,7 @@ class TtChronos:
 
         time_mask = torch.zeros(1, 1, seq_len, seq_len)
         group_time_mask = build_group_mask(group_ids, (full_mask > 0).float())
-        position_ids = torch.arange(seq_len).unsqueeze(0).expand(batch_size, -1)
+        position_ids = torch.arange(seq_len).unsqueeze(0)
         inv_freq = self.weights.encoder.blocks[0].time.inv_freq
         cos, sin = build_rope_cache(position_ids, inv_freq)
 
