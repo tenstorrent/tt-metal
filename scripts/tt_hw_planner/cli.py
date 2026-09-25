@@ -10218,6 +10218,7 @@ from .commands.op_synth import cmd_op_synth  # noqa: F401
 from .commands.emit_e2e import cmd_emit_e2e  # noqa: F401
 from .commands.optimize import cmd_optimize  # noqa: F401
 from .commands.optimize_dashboard import cmd_optimize_dashboard  # noqa: F401
+from .commands.publish_hf import cmd_publish_hf  # noqa: F401
 from .commands.auto_onboard import cmd_auto_onboard  # noqa: F401
 
 
@@ -11629,6 +11630,31 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--port", type=int, default=8798, help="port to serve on (default 8798; free port chosen if taken)"
     )
     pdash.set_defaults(func=cmd_optimize_dashboard)
+
+    pph = sub.add_parser(
+        "publish-hf",
+        help="Publish a tool-optimized model to Hugging Face (optimized code + a model card built from the run's metrics). Run commit-wins first.",
+    )
+    pph.add_argument(
+        "target",
+        nargs="?",
+        help="HF model_id of a planner demo, or a demo dir (default: newest run).",
+    )
+    pph.add_argument("--run", dest="run", help="explicit run id or run directory path")
+    pph.add_argument("--repo", required=True, help="target HF repo id, e.g. ashwaaaaa/<model>-tt")
+    pph.add_argument("--weights", help="base weights HF repo id to reference (pointer; not uploaded)")
+    pph.add_argument("--private", action="store_true", help="create the HF repo as private")
+    pph.add_argument(
+        "--card-only",
+        dest="card_only",
+        action="store_true",
+        help="publish only the model card + manifest (no model code upload)",
+    )
+    pph.add_argument(
+        "--dry-run", dest="dry_run", action="store_true", help="stage + preview the model card without pushing"
+    )
+    pph.add_argument("--token", help="HF token (default: env HF_TOKEN or the CLI login file)")
+    pph.set_defaults(func=cmd_publish_hf)
 
     pao = sub.add_parser(
         "auto-onboard",
