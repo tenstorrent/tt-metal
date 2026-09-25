@@ -67,6 +67,7 @@ from ...encoders.qwen3vl.loader_minimax_h3 import (
 )
 from ...encoders.qwen3vl.model_qwen3vl import create_rope_tensors, mrope_position_ids, vision_token_runs
 from ...encoders.qwen3vl.vision_qwen3vl import pad_patches_for_sp, vision_cu_seqlens
+from ...experimental.lora.h3_adapter_loader import load_h3_adapter_into
 from ...layers.audio_ops import weights_variant
 from ...models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
 from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
@@ -142,6 +143,8 @@ MINIMAX_H3_PIXEL_STD = _MINIMAX_H3_PIXEL_STD
 MINIMAX_H3_AUDIO_CONDITION_TIMESTEP = 1.0
 
 # Read from the two scheduler_config.json files, which hold nothing else.
+# A distillation adapter may be trained against a different video shift and says so in its own
+# card; `video_shift` and `audio_shift` on the pipeline carry that.
 VIDEO_SHIFT = 12.0
 AUDIO_SHIFT = 3.0
 
@@ -400,6 +403,10 @@ class MiniMaxH3Pipeline:
         topology: ttnn.Topology | None = None,
         coresident: bool | None = None,
         task: str = "t2va",
+        lora_path: str | os.PathLike | None = None,
+        lora_strength: float = 1.0,
+        video_shift: float | None = None,
+        audio_shift: float | None = None,
         audio_split_mode: str | None = None,
         audio_t_factor: int | None = None,
         audio_trace: bool | None = None,
@@ -414,6 +421,13 @@ class MiniMaxH3Pipeline:
     ) -> None:
         self.mesh_device = mesh_device
         self.weights_dir = Path(weights_dir)
+        # Registered onto the built transformer, never fused into the checkpoint, so the weight
+        # cache stays adapter-independent and one cached copy serves every adapter and strength.
+        self.lora_path = None if lora_path is None else Path(lora_path)
+        self.lora_strength = float(lora_strength)
+        self._lora_handle = None
+        self.video_shift = VIDEO_SHIFT if video_shift is None else float(video_shift)
+        self.audio_shift = AUDIO_SHIFT if audio_shift is None else float(audio_shift)
         supplied = (tp_axis, sp_axis, num_links, topology)
         preset = resolve_mesh_preset(tuple(mesh_device.shape), required=any(v is None for v in supplied))
         tp_axis = preset["tp_axis"] if tp_axis is None else tp_axis
@@ -595,6 +609,10 @@ class MiniMaxH3Pipeline:
         num_links: int | None = None,
         topology: ttnn.Topology | None = None,
         task: str = "t2va",
+        lora_path: str | os.PathLike | None = None,
+        lora_strength: float = 1.0,
+        video_shift: float | None = None,
+        audio_shift: float | None = None,
         audio_split_mode: str | None = None,
         audio_t_factor: int | None = None,
         audio_trace: bool | None = None,
@@ -629,6 +647,10 @@ class MiniMaxH3Pipeline:
             num_links=num_links,
             topology=topology,
             task=task,
+            lora_path=lora_path,
+            lora_strength=lora_strength,
+            video_shift=video_shift,
+            audio_shift=audio_shift,
             audio_split_mode=audio_split_mode,
             audio_trace=audio_trace,
             audio_t_factor=audio_t_factor,
@@ -1187,6 +1209,13 @@ class MiniMaxH3Pipeline:
             mesh_device=self.mesh_device,
             get_torch_state_dict=lambda: self._read_safetensors(self.transformer_subfolder),
         )
+        if self.lora_path is not None and self._lora_handle is None:
+            self._lora_handle = load_h3_adapter_into(
+                self._transformer,
+                str(self.lora_path),
+                scale=self.lora_strength,
+                name=self.lora_path.name,
+            )
         return self._transformer
 
     @property
@@ -1644,8 +1673,8 @@ class MiniMaxH3Pipeline:
         # Both schedules. Built here rather than after the layout because the keyframe step below needs
         # `scale_noise`, which takes its `t` at face value and works before `set_timesteps` -- but they
         # are set up fully so there is only one place that decides the schedule.
-        scheduler = MiniMaxH3Scheduler(shift=VIDEO_SHIFT)
-        audio_scheduler = MiniMaxH3Scheduler(shift=AUDIO_SHIFT)
+        scheduler = MiniMaxH3Scheduler(shift=self.video_shift)
+        audio_scheduler = MiniMaxH3Scheduler(shift=self.audio_shift)
         scheduler.set_timesteps(num_inference_steps)
         audio_scheduler.set_timesteps(num_inference_steps)
 
@@ -1777,8 +1806,8 @@ class MiniMaxH3Pipeline:
         with event_section(on_event, "encoder"):
             prompt_embeds, text_token_tags = self.encode_prompt(prompt, references=prepared)
 
-        scheduler = MiniMaxH3Scheduler(shift=VIDEO_SHIFT)
-        audio_scheduler = MiniMaxH3Scheduler(shift=AUDIO_SHIFT)
+        scheduler = MiniMaxH3Scheduler(shift=self.video_shift)
+        audio_scheduler = MiniMaxH3Scheduler(shift=self.audio_shift)
         scheduler.set_timesteps(num_inference_steps)
         audio_scheduler.set_timesteps(num_inference_steps)
 
