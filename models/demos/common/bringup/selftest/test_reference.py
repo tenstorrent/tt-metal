@@ -8,10 +8,12 @@ golden (read-only) to check the reader against a real golden when it is present 
 """
 
 
+import json
+
 import pytest
 
 from models.demos.common.bringup.core.spec import CODE_ROOT, Spec
-from models.demos.common.bringup.reference import check_hf, check_reference, generate_golden
+from models.demos.common.bringup.reference import check_hf, check_reference, generate_golden, prompt
 from models.demos.common.bringup.reference.golden import Golden, content_hash
 from models.demos.common.bringup.reference.interface import Step, validate_graph
 from models.demos.common.bringup.selftest.conftest import got
@@ -56,12 +58,20 @@ def test_validate_graph():
     assert any("overwrites" in e for e in errs) and any("'out'" in e for e in errs)
 
 
+def test_golden_needs_the_canonical_prompt(fx):
+    with pytest.raises(SystemExit, match="canonical prompt"):
+        generate_golden.main(["--spec", fx(), "--rung", "s256"])
+
+
 def test_golden_full_layers(fx):
     spec_path = fx()
+    prompt.build(Spec.load(spec_path))
     generate_golden.main(["--spec", spec_path, "--rung", "s256"])
     assert got()["golden_hash_ok"] == 1 and got()["golden_chunks"] == 4
     g = Golden.for_rung(Spec.load(spec_path), "s256")
     assert g.verify() and g.dumped_chunks == [0, 1, 2, 3] and g.layers == [0, 1, 2]
+    assert g.manifest["prompt_sha256"] == prompt.load(Spec.load(spec_path))["sha256"]
+    assert g.tokens().tolist() == prompt.load(Spec.load(spec_path))["token_ids"][:256]
     assert set(g.layer(2, 1)) == {"in", "attn_norm", "attn_out", "h_mid", "ffn_norm", "mlp_out", "out"}
     assert g.state(0)["key"].shape == (256, 64) and g.tokens().shape == (256,)
     assert set(g.model(3)) >= {"embed", "final_norm", "top32_ids", "top32_values", "logits_tail", "tokens"}
@@ -73,6 +83,7 @@ def test_golden_full_layers(fx):
 
 def test_golden_layer_subset_stores_run_starts_on_every_chunk(fx):
     spec_path = fx(layers=[0, 2])
+    prompt.build(Spec.load(spec_path))
     generate_golden.main(["--spec", spec_path, "--rung", "s512"])
     g = Golden.for_rung(Spec.load(spec_path), "s512")
     assert g.manifest["subset"] and g.manifest["run_starts"] == [0, 2] and g.dumped_chunks == [3]
@@ -101,18 +112,41 @@ def test_reader_reads_the_existing_ernie_golden():
     assert len(g.pinned_hash()) == 64 and not g.verify()  # made before content hashes existed
 
 
-def test_chat_template_text(fx):
-    from models.demos.common.bringup.reference.golden import text_tokens
+class ChatTok:
+    """Chat template "<T[G]>content"; one token per character (3), <T> = 7, G (generation prompt) = 8."""
 
-    class ChatTok:
-        bos_token_id = 1
+    bos_token_id = 1
 
-        def apply_chat_template(self, msgs, tokenize=False):
-            return "<U>" + msgs[0]["content"]
+    def apply_chat_template(self, msgs, tokenize=False, add_generation_prompt=False):
+        return "<T" + ("G" if add_generation_prompt else "") + ">" + msgs[0]["content"]
 
-        def __call__(self, text, add_special_tokens=False):
-            return {"input_ids": [7 if text.startswith("<U>") else 9] + [2] * 50}
+    def __call__(self, text, add_special_tokens=False):
+        ids = []
+        if text.startswith("<T"):
+            ids = [7] + ([8] if text[2] == "G" else [])
+            text = text[text.index(">") + 1 :]
+        return {"input_ids": ids + [3] * len(text)}
 
-    plain = text_tokens(Spec.load(fx()), 8, ChatTok())
-    chat = text_tokens(Spec.load(fx(text={"chat_template": True})), 8, ChatTok())
-    assert plain[:2].tolist() == [1, 9] and chat[:2].tolist() == [7, 2]  # the template supplies BOS itself
+
+@pytest.mark.parametrize("wrap,head", [("raw", [1, 3, 3]), ("user_turn", [7, 3, 3]), ("model_turn", [7, 8, 3])])
+def test_prompt_wraps(fx, wrap, head):
+    s = Spec.load(fx(text={"wrap": wrap, "request": "Rec"}))
+    ids, info = prompt.build_ids(s, ChatTok(), 16)
+    assert ids[:3] == head and len(ids) == 16 and info["wrap"] == wrap
+
+
+def test_prompt_file_is_built_once_and_pinned(fx):
+    s = Spec.load(fx(text={"wrap": "model_turn"}))
+    rec = prompt.build(s, ChatTok())
+    assert rec["n"] == 512 and prompt.load(s)["sha256"] == rec["sha256"]
+    assert prompt.tokens(s, 8).tolist() == rec["token_ids"][:8]
+    assert prompt.build(s, ChatTok())["sha256"] == rec["sha256"]  # rebuilding the same prompt is a no-op
+    s2 = Spec.load(fx(text={"wrap": "raw"}))
+    with pytest.raises(SystemExit, match="different prompt"):
+        prompt.build(s2, ChatTok())
+    p = prompt.prompt_path(s)
+    d = json.loads(p.read_text())
+    d["token_ids"][0] = 99
+    p.write_text(json.dumps(d))
+    with pytest.raises(ValueError, match="recorded hash"):
+        prompt.load(s)
