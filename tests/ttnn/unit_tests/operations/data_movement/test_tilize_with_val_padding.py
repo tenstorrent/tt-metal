@@ -978,7 +978,8 @@ def test_tilize_with_val_padding_width_sharded_to_width_sharded(device, pad_valu
     This shape selects TilizeWithValPaddingMultiCoreShardedFactory (see
     can_use_sharded_optimized_factory: WIDTH_SHARDED in and out, same layout, non-ND, no
     sub_core_grids, shapes equal except the padded height dim). That factory's reader
-    (reader_unary_pad_height_width_sharded) carries the SRC_SHARD / STAGE / PAD buffers; the other
+    (reader_unary_pad_height_width_sharded) carries the borrowed input shard (via LocalTensorAccessor),
+    the STAGE dataflow buffer, and the PAD Scratchpad; the other
     sharded tests in this file output ND_SHARDED and take the default factory instead
     (test_tilize_with_val_padding_program_cache_addr_change_sharded is the exception -- it also hits
     this factory, but only with the default pad_value). The incremental coverage here is the
