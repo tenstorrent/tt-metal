@@ -204,6 +204,13 @@ tasks:
     kind: attention
     layer: 0
     stateful: true
+  frozen:
+    at: '2026-09-25T23:25:32'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_attention.py: f0c0aaf81f6984054665fe3b46bab62cfae486bc47f395381cbda39c42746eb6
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
 - id: S.sliding.02
   title: 'sliding block with steps 1-2 on device (last: attention)'
   step: implement
