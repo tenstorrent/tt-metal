@@ -1738,15 +1738,17 @@ StepTimes time_ring_step(
 }
 }  // namespace
 
-// The ring step against what tt-train has: its two-pass forward and backward
-// on the contiguous layout with FIFO shifts, against the cyclic forward and
-// in-place backward on the zigzag layout with the direct (fused) shifts, at
-// block height 4 (the planner's choice for these shapes). Median of seven
-// after a warm-up. TTML_LOUDBOX_STEP_SHAPES="heads:kv:rows:d,..." replaces the
-// table.
+// The ring step, two-pass kernels against the cyclic ones, on the best ring
+// either can use: the direct (fused) shifts for both, and the two-pass side on
+// whichever layout is faster for it (both are timed). The cyclic side is the
+// cyclic forward and the in-place backward on zigzag at block height 4 (the
+// planner's choice for these shapes): what differs is the kernels and what a
+// single fused kernel allows (in-place Float32 accumulation, tall blocks).
+// Median of seven after a warm-up. TTML_LOUDBOX_STEP_SHAPES="heads:kv:rows:d,..."
+// replaces the table.
 TEST_F(LoudboxRingSDPATest, DISABLED_CompareWithTtTrain) {
     const uint32_t cp_size = ttml::autograd::ctx().get_parallelism_context().get_cp_size();
-    std::cout << "ring step on " << cp_size << " chips, tt-train's path against the cyclic one, median of seven (ms)\n";
+    std::cout << "ring step on " << cp_size << " chips, two-pass against cyclic, direct shifts, median of seven (ms)\n";
     using Kind = ttml::ops::distributed::RingBackwardKind;
     using Fwd = ttml::ops::distributed::RingForwardKind;
     std::vector<std::array<size_t, 4>> table = {
@@ -1771,20 +1773,28 @@ TEST_F(LoudboxRingSDPATest, DISABLED_CompareWithTtTrain) {
     for (const auto& cfg : table) {
         const size_t heads = cfg[0], kv_heads = cfg[1], rows = cfg[2], d = cfg[3];
         const size_t seq_len = rows * cp_size;
-        const auto base = time_ring_step(
+        const auto contig = time_ring_step(
             1, heads, kv_heads, seq_len, d, Kind::TwoPass, 1U, RingLayout::Contiguous, 7U, Fwd::TwoPass,
-            RingShiftTransport::Fifo);
+            RingShiftTransport::Direct);
+        const auto zigzag = time_ring_step(
+            1, heads, kv_heads, seq_len, d, Kind::TwoPass, 1U, RingLayout::Zigzag, 7U, Fwd::TwoPass,
+            RingShiftTransport::Direct);
         const auto cyc = time_ring_step(
             1, heads, kv_heads, seq_len, d, Kind::CyclicInPlace, 4U, RingLayout::Zigzag, 7U, Fwd::Cyclic,
             RingShiftTransport::Direct);
+        const auto step = [](const StepTimes& t) { return t.forward_ms + t.backward_ms; };
+        const bool zz = step(zigzag) <= step(contig);
+        const auto& base = zz ? zigzag : contig;
         std::cout << "  heads=" << heads << " kv_heads=" << kv_heads << " rows/chip=" << rows << " d=" << d << ":\n"
-                  << "    tt-train  forward " << base.forward_ms << " backward " << base.backward_ms << " step "
-                  << base.forward_ms + base.backward_ms << "\n"
-                  << "    cyclic    forward " << cyc.forward_ms << " backward " << cyc.backward_ms << " step "
-                  << cyc.forward_ms + cyc.backward_ms << "\n"
-                  << "    speed-up  forward " << base.forward_ms / cyc.forward_ms << "x backward "
-                  << base.backward_ms / cyc.backward_ms << "x step "
-                  << (base.forward_ms + base.backward_ms) / (cyc.forward_ms + cyc.backward_ms) << "x\n";
+                  << "    two-pass contiguous forward " << contig.forward_ms << " backward " << contig.backward_ms
+                  << " step " << step(contig) << "\n"
+                  << "    two-pass zigzag     forward " << zigzag.forward_ms << " backward " << zigzag.backward_ms
+                  << " step " << step(zigzag) << "\n"
+                  << "    cyclic zigzag       forward " << cyc.forward_ms << " backward " << cyc.backward_ms
+                  << " step " << step(cyc) << "\n"
+                  << "    speed-up vs two-pass " << (zz ? "zigzag" : "contiguous") << ": forward "
+                  << base.forward_ms / cyc.forward_ms << "x backward " << base.backward_ms / cyc.backward_ms
+                  << "x step " << step(base) / step(cyc) << "x\n";
     }
 }
 
