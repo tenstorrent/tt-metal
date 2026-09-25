@@ -44,7 +44,15 @@ DENSE_CASES = [
     ("ideogram4_d256", "dense", 8, 4096, 4096, 0, 256, (128, 256)),
     # LTX-2 audio D64 self-attention.
     ("ltx_audio_d64", "dense", 32, 1024, 1024, 0, 64, (256, 512)),
+    # Short-K cross attention (one K block per Q chunk): LTX-2 text (32 keys) and A2V (256 keys) cross at
+    # 4864 video rows (legacy tuned (192, 128) / (192, 256)), Wan 2.2 720p cross (512 text keys).
+    ("ltx_text_cross", "dense", 8, 4864, 32, 0, 128, (192, 128)),
+    ("ltx_a2v_cross", "dense", 8, 4864, 256, 0, 128, (192, 256)),
+    ("wan720_cross", "dense", 10, 9472, 512, 0, 128, (256, 512)),
 ]
+# Cases whose tuned chunks are the model's legacy SDPA config, run as-is (recipes take any tile-aligned
+# chunk; the old recipe helper would have mapped K128 to K512).
+LEGACY_TUNED = {"ltx_text_cross", "ltx_a2v_cross"}
 # name, heads, per-device rows, model-tuned (q, k)
 RING_CASES = [
     ("wan480_8x4", 10, 4096, (288, 512)),  # Wan (True, 8, 4) -> (288, 512)
@@ -119,7 +127,7 @@ def test_dense_blocking_perf(blocking_mesh, case, variant, record_property):
     options = recipe_kwargs(variant)
     grid = mesh.compute_with_storage_grid_size()
     auto_config = ttnn.SDPAProgramConfig(compute_with_storage_grid_size=grid)
-    q, k = old_recipe_chunks(*tuned)
+    q, k = tuned if name in LEGACY_TUNED else old_recipe_chunks(*tuned)
     tuned_config = ttnn.SDPAProgramConfig(compute_with_storage_grid_size=grid, q_chunk_size=q, k_chunk_size=k)
     if joint:
         resolved = T._sdpa_recipe_resolved_program_config(

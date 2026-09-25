@@ -57,6 +57,21 @@ source; the consolidation lands on `cglagovich/sdpa-recipes-consolidate`.
 | Blocking | 195 passed |
 | DiT model host / model smoke / Ideogram4+LTX | 113 / 58 / 36 passed (one stale LTX test rewritten) |
 
+## Task 7 status (`cglagovich/sdpa-dit-explicit-recipes`, validated on bh-38 @ a1e56fac)
+
+- Every denoiser SDPA call in `models/tt_dit` selects a recipe on Blackhole (default FAST via
+  `sdpa_precision_default`); Blackhole chunk tables removed; Wormhole keeps legacy configs.
+- Left on legacy: D512 VAEs (L1), encoders (causal / decode / windowed / cu_seqlens / FP32 inputs).
+- Parity harness (op level, DiT shapes, FAST vs tuned legacy HiFi2 / BF16 dest / exact exp):
+  speed geomean 0.74x over 34 denoiser cases; error 0.85-1.05x legacy. Slower than 1.03x:
+  LTX text cross 1.42x and A2V cross 1.50x (short-K chooser, being fixed), LTX V2A ring cross
+  1.12x, H3 exp ring 4x32 1.11x.
+- Speedup sources: joint shapes run the streaming recipe path instead of the legacy
+  non-streaming joint kernel; FAST's approximate exp vs legacy exact exp; op-selected chunks.
+  Ring (same legacy kernel for FAST) gains only from exp mode and chunks. Not yet decomposed.
+- Tests: host 140, smoke 58, parity 148 passed.
+- Open: Wormhole legacy path untested with these PRs; Galaxy meshes untested.
+
 ## Task 2 notes
 
 - Dense/joint bounds: Q chunk 32-1024 rows (recurrent-state arrays hold 32 tile
@@ -84,6 +99,20 @@ source; the consolidation lands on `cglagovich/sdpa-recipes-consolidate`.
   The legacy streaming kernel (`compute_streaming.hpp`) uses the same reinit, so legacy SDPA with
   a LoFi compute config and a one-tile-wide QK subblock is likely affected too (inferred from
   code, not reproduced).
+
+## Fixes after the DiT parity run (`cglagovich/sdpa-recipe-fixes-sizes-shortk` @ 351b534b, merged)
+
+- exp ring B/E overflowed the kernel config buffer at the **default** worker L1 (70656 B) even at
+  qualified geometries; earlier exp ring suites ran at `worker_l1_size=1344544` (~187 KB config
+  buffer) and missed it. BF16-dest B/E exp ring builds now use pack+unpack -Os when the buffer is
+  under 96 KiB; large-buffer builds are unchanged. Regression test:
+  `test_sdpa_recipe_exp_ring_config_buffer.py` (default L1).
+- Blocking cost model: per-core fill/drain and per-Q-chunk first-K/V fill terms; per-half subblock
+  penalties; dense B/E odd-Q penalty. Calibration pick/best geomean 1.032 -> 1.012. Blocking perf
+  auto/tuned geomean 0.886, worst 1.01 (was 1.20). h3 exp ring 4x32 FAST 1.10x -> 0.99x legacy.
+- Remaining: short-K dense recipes (LTX text / A2V cross) cost ~30 us more than legacy at any
+  blocking (1.35-1.41x); needs kernel/dataflow work. The exp ring K ranking at default L1 misranks
+  non-512 K (h3 B/E 1.09-1.23x vs K512).
 
 ## Ring / exp ring geometry notes
 
@@ -116,6 +145,8 @@ source; the consolidation lands on `cglagovich/sdpa-recipes-consolidate`.
 - 2026-09-24: contract is the A-E numerical implementation (user).
 - 2026-09-24: SDPA documents recommended dtypes/rounding and never prepares
   inputs; E callers own preparation (user).
+- 2026-09-25: DiT denoiser attention defaults to FAST (user). VAE attentions keep BALANCED
+  (legacy used FP32 dest; FAST there is ~3x legacy error on peaked softmax).
 - 2026-09-24: no implicit default flip for SDPA callers in general (too many callers); instead
   every SDPA-variant invocation under `models/tt_dit` selects a recipe explicitly (user).
 
