@@ -200,7 +200,6 @@ static uint32_t tracked_sub_device_mask = 0;
 static uint32_t fds_go_pending_mask = 0;
 static uint32_t fds_last_pushed_go_value = overlay::fds_signalling::idle_group_id;
 static uint32_t fds_last_go_push_timestamp = 0;
-static bool fds_go_pushed_since_last_drain = false;
 
 FORCE_INLINE
 void service_fds_go_wire() {
@@ -223,7 +222,6 @@ void service_fds_go_wire() {
     last_go_token = fds_last_pushed_go_value;
     last_fds_go_pending_mask = fds_go_pending_mask;
     fds_last_go_push_timestamp = get_timestamp_32b();
-    fds_go_pushed_since_last_drain = true;
 }
 
 // Adds each tracked sub-device's newly arrived FDS dones to its worker completion semaphore, and stops
@@ -289,22 +287,6 @@ void service_fds_signalling() {
     service_fds_go_wire();
 }
 
-// Parks the direct-path output at idle before auto dispatch takes control.
-FORCE_INLINE
-void reset_fds_go_wire() {
-    overlay::fds_signalling::dispatch_write_go_direct(overlay::fds_signalling::idle_group_id);
-    const uint32_t go_clear_start = get_timestamp_32b();
-    while (get_timestamp_32b() - go_clear_start < overlay::fds_signalling::init_go_park_hold_cycles) {
-#if DEVICE_PRINT_DISPATCH_ENABLED
-        device_print_dispatcher.execute();
-#endif
-    }
-    fds_last_pushed_go_value = overlay::fds_signalling::idle_group_id;
-    last_go_token = overlay::fds_signalling::idle_group_id;
-    fds_last_go_push_timestamp = 0;
-    fds_go_pushed_since_last_drain = false;
-}
-
 FORCE_INLINE
 void init_fds_signalling() {
     const uint32_t previous_auto_dispatch_cycle_count =
@@ -317,7 +299,6 @@ void init_fds_signalling() {
         overlay::fds_signalling::dispatch_config_group(
             group_id, overlay::fds_signalling::all_worker_lanes_mask, overlay::fds_signalling::dispatch_done_threshold);
     }
-    reset_fds_go_wire();
     // A previous run that left the pacing count at 0 with auto dispatch enabled releases queued entries only every
     // 2^32 cycles, so draining its queue at init would take up to one more than the number of queued entries,
     // multiplied by 2^32 cycles. We always write a nonzero pacing count before enabling auto dispatch. This assert
@@ -330,6 +311,12 @@ void init_fds_signalling() {
         overlay::fds_signalling::dispatch_auto_dispatch_pacing_cycle_count);
     overlay::fds_signalling::dispatch_config_auto_dispatch_outbox(TT_FDS_DISPATCH_DISPATCH_TO_TENSIX_REG_ADDR);
     overlay::fds_signalling::dispatch_enable_auto_dispatch();
+    // Worker filters capture only on a change, so a first go that repeats the group a previous run left on the
+    // wire would be missed. Queue idle ahead of it; the pacing holds idle long enough for every worker to capture.
+    overlay::fds_signalling::dispatch_write_go(overlay::fds_signalling::idle_group_id);
+    fds_last_pushed_go_value = overlay::fds_signalling::idle_group_id;
+    last_go_token = overlay::fds_signalling::idle_group_id;
+    fds_last_go_push_timestamp = get_timestamp_32b();
     WAYPOINT("FACD");
 }
 
@@ -339,10 +326,6 @@ void drain_fds_go_wire() {
     while (fds_go_pending_mask != 0 || fds_last_pushed_go_value != overlay::fds_signalling::idle_group_id) {
         service_fds_go_wire();
     }
-    if (!fds_go_pushed_since_last_drain) {
-        overlay::fds_signalling::dispatch_disable_auto_dispatch();
-        return;
-    }
     const uint32_t drain_cycles = overlay::auto_dispatch_drain_cycles(
         overlay::dispatch_auto_dispatch_queue_depth,
         overlay::fds_signalling::dispatch_auto_dispatch_pacing_cycle_count);
@@ -351,7 +334,6 @@ void drain_fds_go_wire() {
         overlay::fds_signalling::wait_cycles(drain_cycles - elapsed_cycles);
     }
     overlay::fds_signalling::dispatch_disable_auto_dispatch();
-    fds_go_pushed_since_last_drain = false;
 }
 
 #else
