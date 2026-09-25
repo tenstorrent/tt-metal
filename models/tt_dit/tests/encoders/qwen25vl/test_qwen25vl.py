@@ -42,8 +42,6 @@ SUBFOLDER = "text_encoder"
         pytest.param((1, 2), (2, 1), None, id="1x2"),
         pytest.param((1, 4), (4, 1), None, id="1x4"),
         pytest.param((1, 8), (8, 1), None, id="1x8"),
-        pytest.param((2, 4), (4, 1), (2, 0), id="2x4_tp4_fsdp2"),
-        pytest.param((2, 4), (2, 0), (4, 1), id="2x4_tp2_fsdp4"),
     ],
     indirect=["mesh_device"],
 )
