@@ -78,5 +78,36 @@
   "reason": [],
   "started": "2026-09-25T21:01:48",
   "status": "PASS"
+ },
+ "F5": {
+  "attempts": 2,
+  "duration_s": 26.7,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-25T21:08:25"
+   },
+   {
+    "status": "FAIL",
+    "t": "2026-09-25T21:09:04"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-25T21:09:43"
+   }
+  ],
+  "last_run": "2026-09-25T21:09:43",
+  "log": "/localdev/dnijemcevic/bringup/bringup_framework/runs/default/logs/F5.log",
+  "metrics": {
+   "known_issue_errors": 0,
+   "proposed_entries": 0,
+   "repo_map_errors": 0,
+   "selftest_failed": 0,
+   "selftest_passed": 77
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-25T21:09:16",
+  "status": "PASS"
  }
 }

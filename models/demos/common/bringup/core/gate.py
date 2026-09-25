@@ -234,7 +234,10 @@ def run_gate(
         return GateResult(tid, "BLOCKED", lines=[f"  deps not PASS: {blocked}"])
 
     now = lambda: time.strftime("%Y-%m-%dT%H:%M:%S")  # noqa: E731
-    pre = [f"  {e}" for e in freeze.verify(spec.repo, task) + device_policy_errors(task)]
+    unfrozen = []
+    if record and task.get("tests") and not task.get("frozen"):  # freeze's own validation runs use record=False
+        unfrozen = ["tests declared but not frozen (run: freeze <id>)"]
+    pre = [f"  {e}" for e in unfrozen + freeze.verify(spec.repo, task) + device_policy_errors(task)]
     if pre:
         res = GateResult(tid, "FAIL", lines=pre)
         if record:
