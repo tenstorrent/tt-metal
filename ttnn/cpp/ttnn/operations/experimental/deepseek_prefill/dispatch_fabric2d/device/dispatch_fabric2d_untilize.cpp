@@ -33,7 +33,7 @@ constexpr const char* kKernelDir =
     "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch_fabric2d/device/kernels/";
 
 // Picks the spare cores for the pool. The streams take turns, each taking the nearest free core in the
-// row under it, so every stream gets one untilizer before any gets a second. This keeps the untilizers'
+// core row under it, so every stream gets one untilizer before any gets a second. This keeps the untilizers'
 // traffic near the columns the streams already use.
 std::vector<tt::tt_metal::CoreCoord> decide_untilizer_cores(
     const CoreRangeSet& allowed_cores,
@@ -45,7 +45,7 @@ std::vector<tt::tt_metal::CoreCoord> decide_untilizer_cores(
     // At most one core per tile row; an extra core would do no work.
     const std::size_t want = std::min<std::size_t>(UNTILIZERS_PER_LINK * num_links, num_tile_rows);
 
-    // A moved stream can sit a row lower than the rest; the pool goes under all of them.
+    // A moved stream can sit a core row lower than the rest; the pool goes under all of them.
     std::size_t lowest_stream_row = 0;
     std::vector<std::size_t> stream_cols;
     for (const auto& [stream, placement] : streams) {
@@ -62,7 +62,7 @@ std::vector<tt::tt_metal::CoreCoord> decide_untilizer_cores(
             below.push_back(core);
         }
     }
-    // Refused: on the streams' row, the pool's DRAM traffic would share the NoC row the streams already
+    // Refused: on the streams' core row, the pool's DRAM traffic would share the NoC row the streams already
     // fill and slow them down.
     TT_FATAL(
         !below.empty(),
@@ -93,7 +93,7 @@ std::vector<tt::tt_metal::CoreCoord> decide_untilizer_cores(
             }
         }
         if (!progressed) {
-            break;  // the row is exhausted
+            break;  // the core row is exhausted
         }
     }
     if (pool.size() < want) {

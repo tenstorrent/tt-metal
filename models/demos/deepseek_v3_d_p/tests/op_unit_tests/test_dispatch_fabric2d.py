@@ -60,8 +60,8 @@ def _reference_dispatch(indices, table, offs, x, capacity, G, H, seq, topk, emb)
     while its counter still advances: page numbers must match the offsets table, which counts every
     routed token.
 
-    Returns payload[g][dst_row], metadata[g][dst_row] and, per (g, dst_row, page), the source row that
-    wrote it, so a caller can compare only the pages a given source contributed.
+    Returns payload[g][dst_pos], metadata[g][dst_pos] and, per (g, dst_pos, page), the source position
+    that wrote it, so a caller can compare only the pages a given source contributed.
     """
     payload = torch.zeros(G, H, capacity, emb, dtype=torch.bfloat16)
     meta = torch.full((G, H, capacity, 3), -1, dtype=torch.int32)
@@ -428,7 +428,7 @@ class _Fixture:
 
     def reference(self):
         """The pages the op must place for this draw: (payload, metadata, and each page's
-        source row, -1 for a page no token lands on).
+        source position, -1 for a page no token lands on).
 
         Computed once and reused. The replay walks every (token, pick) pair in Python, and the
         multi-launch tests compare several launches against the same draw.

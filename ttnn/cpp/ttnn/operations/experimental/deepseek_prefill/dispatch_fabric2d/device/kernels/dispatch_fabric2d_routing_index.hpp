@@ -39,7 +39,7 @@ struct Scratch {
     volatile tt_l1_ptr uint32_t* expert_bucket;   // the same domain, as a bucket or BUCKET_NOT_HERE
     volatile tt_l1_ptr uint32_t* first_page;      // extent x experts_per_chip: each bucket's first output page
     volatile tt_l1_ptr uint32_t* chip_experts;    // extent x experts_per_chip, ascending global expert id
-    volatile tt_l1_ptr uint32_t* row_fill;        // extent, while the chip -> experts inverse is built
+    volatile tt_l1_ptr uint32_t* pos_fill;        // extent, while the chip -> experts inverse is built
     volatile tt_l1_ptr uint32_t* bucket_start;    // extent x experts_per_chip + 1, exclusive prefix sums with a total
     volatile tt_l1_ptr uint32_t* records;         // 3 words per kept (token, topk index)
     volatile tt_l1_ptr uint32_t* padding;         // [real_token_count, pad_side], when one was supplied
@@ -81,7 +81,7 @@ inline Scratch layout_scratch() {
     c.expert_bucket = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kBlkExpertBucket));
     c.first_page = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kBlkFirstPage));
     c.chip_experts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kBlkChipExperts));
-    c.row_fill = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kBlkRowFill));
+    c.pos_fill = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kBlkPosFill));
     c.bucket_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kBlkBucketStart));
     c.records = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kBlkRecords));
     c.padding = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kBlkPadding));

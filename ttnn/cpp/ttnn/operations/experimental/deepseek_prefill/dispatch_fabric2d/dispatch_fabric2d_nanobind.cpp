@@ -76,7 +76,7 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
             memory_config         interleaved.
             subdevice_id          must contain the worker core nearest each ethernet core the op sends on,
                                   one per link direction (2 * num_links cores). A TILE input also needs at
-                                  least one core in the row under those.
+                                  least one core in the core row under those.
 
         Not checked: every tensor must be in DRAM, expert_offsets must be replicated along cluster_axis,
         the last column of expert_dispatch_table must be -1, and padded tokens must route to no expert.

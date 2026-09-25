@@ -58,12 +58,12 @@ void read_indices(const Scratch& c) {
     noc_async_read_barrier();
 }
 
-// Tokens that origin_row sends to expert e. Every chip on the axis computes the same value from the replicated
-// table, so a chip can size a chunk it neither writes nor receives. Offsets are absolute buffer positions, so
-// the last origin row closes against counts + region_offsets.
-uint32_t run_len(const Scratch& c, uint32_t origin_row, uint32_t e) {
-    const uint32_t at = c.offsets[origin_row * ct.num_routed_experts + e];
-    const uint32_t routed = (origin_row + 1 < ct.extent) ? c.offsets[(origin_row + 1) * ct.num_routed_experts + e] - at
+// run_len: tokens origin_pos sends to expert e after the capacity drop. Every chip on the axis computes the
+// same value from the replicated table, so a chip can size a chunk it neither writes nor receives. Offsets are
+// absolute buffer positions, so the last origin position closes against counts + region_offsets.
+uint32_t run_len(const Scratch& c, uint32_t origin_pos, uint32_t e) {
+    const uint32_t at = c.offsets[origin_pos * ct.num_routed_experts + e];
+    const uint32_t routed = (origin_pos + 1 < ct.extent) ? c.offsets[(origin_pos + 1) * ct.num_routed_experts + e] - at
                                                          : c.counts[e] + c.region_offsets[e] - at;
     // The origin drops tokens past the expert's capacity and does not send them.
     return routing_index::kept_count(at, routed);
@@ -76,32 +76,33 @@ void build_expert_buckets(const Scratch& c) {
     for (uint32_t i = 0; i < ct.extent * ct.experts_per_chip; i++) {
         c.chip_experts[i] = 0;
     }
-    for (uint32_t r = 0; r < ct.extent; r++) {
-        c.row_fill[r] = 0;
+    for (uint32_t pos = 0; pos < ct.extent; pos++) {
+        c.pos_fill[pos] = 0;
     }
     // Includes the table's sentinel column, so a padded token's lookup resolves to BUCKET_NOT_HERE.
     //
-    // The host checks the table's width but not its values. The guard keeps a bad row from writing into the
-    // next row's buckets or past the block. A skipped entry leaves a chip_experts bucket at expert 0; that
-    // bucket is sized run_len(my_row, 0), fills nothing, and each of its pages becomes a duplicate write of
+    // The host checks the table's width but not its values. The guard keeps a bad position from writing into
+    // the next position's buckets or past the block. A skipped entry leaves a chip_experts bucket at expert 0; that
+    // bucket is sized run_len(my_pos, 0), fills nothing, and each of its pages becomes a duplicate write of
     // token 0 to page 0 (see merge_routing_index), unless the double-counted run pushes the total past
     // max_records, in which case the clamp in size_buckets applies (see there).
     for (uint32_t e = 0; e <= ct.num_routed_experts; e++) {
-        const int32_t row = c.table[e];
-        if (row < 0 || (uint32_t)row >= ct.extent || c.row_fill[(uint32_t)row] >= ct.experts_per_chip) {
+        const int32_t table_pos = c.table[e];
+        if (table_pos < 0 || (uint32_t)table_pos >= ct.extent ||
+            c.pos_fill[(uint32_t)table_pos] >= ct.experts_per_chip) {
             c.expert_bucket[e] = dspf2d::BUCKET_NOT_HERE;
             continue;
         }
-        const uint32_t r = (uint32_t)row;
-        const uint32_t j = c.row_fill[r];
-        c.row_fill[r] = j + 1u;
-        const uint32_t bucket = r * ct.experts_per_chip + j;
+        const uint32_t pos = (uint32_t)table_pos;
+        const uint32_t j = c.pos_fill[pos];
+        c.pos_fill[pos] = j + 1u;
+        const uint32_t bucket = pos * ct.experts_per_chip + j;
         c.chip_experts[bucket] = e;
         c.expert_bucket[e] = bucket;
     }
-    for (uint32_t r = 0; r < ct.extent; r++) {
+    for (uint32_t pos = 0; pos < ct.extent; pos++) {
         // Chunk groups are sized as experts_per_chip chunks, so every chip must host exactly that many.
-        ASSERT(c.row_fill[r] == ct.experts_per_chip);
+        ASSERT(c.pos_fill[pos] == ct.experts_per_chip);
     }
 }
 
@@ -117,9 +118,9 @@ void size_buckets(const Scratch& c) {
     uint32_t at = 0;
     for (uint32_t b = 0; b < n_buckets; b++) {
         const uint32_t e = c.chip_experts[b];
-        c.first_page[b] = c.offsets[ct.my_row * ct.num_routed_experts + e];
+        c.first_page[b] = c.offsets[ct.my_pos * ct.num_routed_experts + e];
         c.bucket_start[b] = at;
-        const uint32_t n = run_len(c, ct.my_row, e);
+        const uint32_t n = run_len(c, ct.my_pos, e);
         at = (at + n > max_records) ? max_records : at + n;
     }
     c.bucket_start[n_buckets] = at;
@@ -213,14 +214,16 @@ struct TokenQueue {
     }
 };
 
-uint32_t chunk_len(const Scratch& c, uint32_t origin_row, uint32_t e, uint32_t idx, uint32_t count) {
-    const uint32_t n = run_len(c, origin_row, e);
+// chunk: one stream's slice of the run for one (origin, expert); a descriptor expands into experts_per_chip
+// chunks, one per expert on the destination.
+uint32_t chunk_len(const Scratch& c, uint32_t origin_pos, uint32_t e, uint32_t idx, uint32_t count) {
+    const uint32_t n = run_len(c, origin_pos, e);
     return slice_begin(n, idx + 1, count) - slice_begin(n, idx, count);
 }
 
 // Page offset of each chunk of a descriptor list within a stream's fwd_section. The section holds only pages,
 // so a chunk starts at the sum of the lengths before it. Both chips of a section run this over the same list;
-// the host function validate_chunk_agreement guarantees that.
+// the host function validate_descriptor_agreement guarantees that.
 uint32_t chunk_starts(const Scratch& c, uint32_t block_base, volatile tt_l1_ptr uint32_t* start) {
     uint32_t at = 0;
     for (uint32_t d = 0; d < ct.num_forward; d++) {
@@ -264,12 +267,12 @@ void own_phase(
     for (uint32_t a = 0; a < ct.num_own; a++) {
         const uint32_t base = ct.assignment_base + a * dspf2d::ASSIGNMENT_WORDS;
         const uint32_t dst_chip = kernel_compile_time_args[base + 0];
-        const uint32_t dst_row = kernel_compile_time_args[base + 1];
+        const uint32_t dst_pos = kernel_compile_time_args[base + 1];
         const uint32_t split_idx = kernel_compile_time_args[base + 2];
         const uint32_t split_count = kernel_compile_time_args[base + 3];
         const bool direct = (dst_chip == ct.downstream_chip_id);
         for (uint32_t j = 0; j < ct.experts_per_chip; j++) {
-            const uint32_t b = dst_row * ct.experts_per_chip + j;
+            const uint32_t b = dst_pos * ct.experts_per_chip + j;
             const uint32_t first_record = c.bucket_start[b];
             const uint32_t n = c.bucket_start[b + 1u] - first_record;
             const uint32_t from = slice_begin(n, split_idx, split_count);
@@ -312,21 +315,21 @@ void own_phase(
 // downstream chip is their destination.
 template <typename FwdAcc>
 uint32_t forward_phase(
-    const Scratch& c, TokenQueue& queue, const FwdAcc& fwd_acc, uint32_t my_fwd_section, uint32_t downstream_row) {
+    const Scratch& c, TokenQueue& queue, const FwdAcc& fwd_acc, uint32_t my_fwd_section, uint32_t downstream_pos) {
     uint32_t consumed = 0;  // pages taken out of this stream's section, which is what end_stream gives back
-    // Arriving chunks, in the order upstream wrote them.
+    // Arriving descriptors, in the order upstream wrote them.
     uint32_t out_d = ct.num_own - 1;  // own assignments occupy the first num_own - 1 outgoing descriptors
     for (uint32_t d = 0; d < ct.num_forward; d++) {
-        const uint32_t base = ct.in_chunks_base + d * dspf2d::CHUNK_DESCRIPTOR_WORDS;
+        const uint32_t base = ct.in_descriptors_base + d * dspf2d::CHUNK_DESCRIPTOR_WORDS;
         const uint32_t origin = kernel_compile_time_args[base + 0];
-        const uint32_t dst_row = kernel_compile_time_args[base + 1];
+        const uint32_t dst_pos = kernel_compile_time_args[base + 1];
         const uint32_t idx = kernel_compile_time_args[base + 2];
         const uint32_t cnt = kernel_compile_time_args[base + 3];
-        const bool continues = (dst_row != downstream_row);
-        const uint32_t dst_chip = kernel_compile_time_args[ct.ring_chip_ids_base + dst_row];
+        const bool continues = (dst_pos != downstream_pos);
+        const uint32_t dst_chip = kernel_compile_time_args[ct.ring_chip_ids_base + dst_pos];
         const uint32_t this_out_d = continues ? out_d++ : 0;
         for (uint32_t j = 0; j < ct.experts_per_chip; j++) {
-            const uint32_t e = c.chip_experts[dst_row * ct.experts_per_chip + j];
+            const uint32_t e = c.chip_experts[dst_pos * ct.experts_per_chip + j];
             const uint32_t len = chunk_len(c, origin, e, idx, cnt);
             consumed += len;
             const uint32_t in_base = c.in_start[d * ct.experts_per_chip + j];
@@ -361,7 +364,7 @@ uint32_t forward_phase(
 
                 for (uint32_t i = 0; i < n; i++) {
                     volatile tt_l1_ptr dspf2d::FwdMetadata* fwd_meta = entry_meta(claimed[i]);
-                    // Every page of (origin, dst_row) shares one destination, so whether this hop is the
+                    // Every page of (origin, dst_pos) shares one destination, so whether this hop is the
                     // last comes from the descriptor. fwd_meta is only checked: an unwritten one reads as
                     // chip 0, which is also a valid chip id.
                     ASSERT(fwd_meta->dst_chip == (uint64_t)dst_chip);
@@ -414,7 +417,7 @@ void local_phase(
         pending = 0;
     };
     for (uint32_t j = 0; j < ct.experts_per_chip; j++) {
-        const uint32_t b = ct.my_row * ct.experts_per_chip + j;
+        const uint32_t b = ct.my_pos * ct.experts_per_chip + j;
         const uint32_t first_record = c.bucket_start[b];
         const uint32_t n = c.bucket_start[b + 1u] - first_record;
         const uint32_t from = slice_begin(n, ct.stream, 2 * ct.num_links);
@@ -485,18 +488,18 @@ void kernel_main() {
     const uint32_t my_fwd_section = ct.stream * ct.fwd_pages_per_stream;
 
     // The downstream chip's position on the axis. A page bound for it is delivered, not forwarded.
-    uint32_t downstream_row = 0;
-    for (uint32_t r = 0; r < ct.extent; r++) {
-        if (kernel_compile_time_args[ct.ring_chip_ids_base + r] == ct.downstream_chip_id) {
-            downstream_row = r;
+    uint32_t downstream_pos = 0;
+    for (uint32_t pos = 0; pos < ct.extent; pos++) {
+        if (kernel_compile_time_args[ct.ring_chip_ids_base + pos] == ct.downstream_chip_id) {
+            downstream_pos = pos;
         }
     }
 
     TokenQueue queue;
     {
         DeviceZoneScopedN("dspf2d_starts");
-        chunk_starts(c, ct.in_chunks_base, c.in_start);
-        chunk_starts(c, ct.out_chunks_base, c.out_start);
+        chunk_starts(c, ct.in_descriptors_base, c.in_start);
+        chunk_starts(c, ct.out_descriptors_base, c.out_start);
     }
     wait_for_untilize();  // the own phase is the first thing that reads a token
     {
@@ -507,7 +510,7 @@ void kernel_main() {
     uint32_t consumed = 0;  // pages this stream took out of its fwd_section
     {
         DeviceZoneScopedN("dspf2d_forward");
-        consumed = forward_phase(c, queue, fwd_acc, my_fwd_section, downstream_row);
+        consumed = forward_phase(c, queue, fwd_acc, my_fwd_section, downstream_pos);
         queue.flush_publish();
     }
     // Local tokens go last because they never leave the chip, while earlier pages have chips downstream waiting.
