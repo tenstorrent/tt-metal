@@ -1161,8 +1161,8 @@ void kernel_main() {
                         const uint32_t nk = (qWt - k0 < kOutGroup) ? qWt - k0 : kOutGroup;
                         tile_regs_acquire();
                         broadcast_row0_to_dst(kInvReg, cb_sum_plain, a);
-                        recip_tile_init</* legacy_compat */ false>();
-                        recip_tile</* legacy_compat */ false>(kInvReg);
+                        recip_tile_init();
+                        recip_tile(kInvReg);
                         reconfig_data_format_srca(cb_scores, cb_out_seed);
                         copy_init(cb_out_seed);
                         for (uint32_t i = 0; i < kOutGroup; ++i) {
