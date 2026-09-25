@@ -22,10 +22,10 @@ from models.demos.deepseek_v3_d_p.utils.perf_utils import adjust_margin_for_ddr_
 _WORKER = "models/demos/deepseek_v3_d_p/tests/perf/test_prefill_combine_fabric2d.py::test_combine_fabric2d_perf_worker"
 _K_FILTER = "fabric2d-torus-xy-8x4-2link"
 
-# To be measured on 8x4 with the worker's synthetic routing, `PRODUCTION_ROUTING` in
-# op_unit_tests/test_combine_fabric2d.py; until then 0 fails the gate. Re-measure if the routing changes.
+# Measured with the worker's synthetic routing, `PRODUCTION_ROUTING` in op_unit_tests/test_combine_fabric2d.py:
+# mean of 5 captures, 1.2% spread. Re-measure if that changes.
 _EXPECTED_NS: dict[str, int] = {
-    "CombineFabric2dDeviceOperation": 0,
+    "CombineFabric2dDeviceOperation": 9_888_566,
 }
 
 
