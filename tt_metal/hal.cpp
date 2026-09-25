@@ -27,11 +27,6 @@ std::string get_arch_name() {
     return tt::get_string_lowercase(arch_enum);
 }
 
-uint32_t get_l1_size() {
-    return tt::tt_metal::MetalContext::instance().hal().get_dev_size(
-        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
-}
-
 uint32_t get_dram_alignment() { return tt::tt_metal::MetalContext::instance().hal().get_alignment(HalMemType::DRAM); }
 
 uint32_t get_l1_alignment() { return tt::tt_metal::MetalContext::instance().hal().get_alignment(HalMemType::L1); }

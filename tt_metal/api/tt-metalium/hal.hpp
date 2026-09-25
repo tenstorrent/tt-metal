@@ -26,13 +26,6 @@ tt::ARCH get_arch();
 std::string get_arch_name();
 
 /**
- * @brief Uses the hardware abstraction layer to inform client of architecture specific L1 Size
- *
- * @return Size in bytes of the L1 SRAM buffer associated with the currently present architecture.
- */
-uint32_t get_l1_size();
-
-/**
  * @brief Uses the hardware abstraction layer to inform client of architecture specific DRAM alignment.
  *
  * @return Alignment requirement in bytes

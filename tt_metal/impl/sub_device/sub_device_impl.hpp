@@ -11,6 +11,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt_stl/span.hpp>
 #include "context/metal_env_impl.hpp"
+#include "llrt/hal_types.hpp"
 
 namespace tt::tt_metal {
 
