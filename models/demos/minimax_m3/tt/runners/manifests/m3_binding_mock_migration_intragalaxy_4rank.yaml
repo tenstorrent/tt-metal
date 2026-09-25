@@ -23,7 +23,7 @@ global_env:
   PREFILL_MAX_SEQ_LEN: "10240"
   PREFILL_H2D_SERVICE_ID: "m3_prefill"
   PREFILL_NUM_USERS: "2"
-  PREFILL_TRACE_DIR: "/data/philei/models/minimax-m3-prefill-cache/golden/longbook_10240"
+  PREFILL_TRACE_DIR: "/mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill/golden/longbook_10240"
   # Only 12B of metadata transits the queue; the default 64KB clashes with the MoE FFN L1 allocation.
   PREFILL_PP_D2D_FIFO_BYTES: "32768"
 

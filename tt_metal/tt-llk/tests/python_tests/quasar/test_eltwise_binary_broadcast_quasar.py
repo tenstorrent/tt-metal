@@ -86,7 +86,8 @@ def binary_broadcast_implied_math_formats(format, *, is_perf=False):
 
 
 def binary_broadcast_math_fidelities(format, mathop):
-    if format.input_format == DataFormat.Int8:
+    # Int8 is an exact integer op. Float16_b is full precision at LoFi.
+    if format.input_format in (DataFormat.Int8, DataFormat.Float16_b):
         return [MathFidelity.LoFi]
     return get_valid_math_fidelities(format, mathop)
 

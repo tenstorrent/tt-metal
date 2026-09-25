@@ -136,9 +136,10 @@ class IndependentMatmulStimuliConfig(StimuliConfig):
 
 
 def matmul_math_fidelities(format, *, is_perf=False):
-    # Integer matmul is LoFi-only on Quasar. MX is already full precision at LoFi,
-    # so perf skips the extra HiFi phases.
-    if format.input_format == DataFormat.Int8 or (
+    # Int8 has no mantissa phases. Float16_b's 7-bit mantissa occupies the high 8
+    # bits of the TF32 source, so the HiFi low-3 phases add nothing. MX is already
+    # full precision at LoFi, so perf skips the extra HiFi phases.
+    if format.input_format in (DataFormat.Int8, DataFormat.Float16_b) or (
         is_perf and format.input_format.is_mx_format()
     ):
         return [MathFidelity.LoFi]
