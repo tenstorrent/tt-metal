@@ -9,6 +9,7 @@
 #include "api/compute/tilize.h"
 #include "api/compute/pack_untilize.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/debug/assert.h"
 
 constexpr uint32_t NUM_TILES_IN_TILIZED_CHUNK = 32;
 
@@ -99,17 +100,17 @@ FORCE_INLINE void pack_block_tiles_into_rows(uint32_t cb_in, uint32_t cb_out, ui
     constexpr uint32_t cb_scratch = get_compile_time_arg_val(11);
     constexpr bool partial_row = get_compile_time_arg_val(12) != 0;
 
-    if (num_valid_tiles == NUM_TILES_IN_TILIZED_CHUNK) {
-        tilize_full_chunk(cb_in, cb_out);
-        return;
-    }
-
     if constexpr (partial_row) {
-        tilize_full_chunk(cb_in, cb_scratch);
-        copy_valid_tiles(cb_scratch, cb_out, num_valid_tiles);
+        if (num_valid_tiles != NUM_TILES_IN_TILIZED_CHUNK) {
+            tilize_full_chunk(cb_in, cb_scratch);
+            copy_valid_tiles(cb_scratch, cb_out, num_valid_tiles);
+            return;
+        }
     } else {
-        (void)cb_scratch;
+        // Row length is a multiple of 32 here, so every chunk is full.
+        ASSERT(num_valid_tiles == NUM_TILES_IN_TILIZED_CHUNK);
     }
+    tilize_full_chunk(cb_in, cb_out);
 }
 
 FORCE_INLINE void mul(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out) {
