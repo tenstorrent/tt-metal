@@ -85,7 +85,7 @@ class EthCore(ABC):
         self.context = context
         self._heartbeat_sample: int | None = None
         self._heartbeat_deadline: float | None = None
-        self._heartbeat_error: InvalidHeartbeatSignature | None = None
+        self.heartbeat_result: bool | None = None
 
     @abstractmethod
     def port_status_to_string(self, port_status: int) -> str | None:
@@ -108,46 +108,40 @@ class EthCore(ABC):
             raise InvalidHeartbeatSignature(f"Invalid heartbeat signature: 0x{value:08X}")
         return value
 
-    def start_heartbeat_check(self) -> None:
-        """Save a first sample and start this core's observation window."""
-        self._heartbeat_error = None
+    def poll_heartbeat(self) -> None:
+        """Take one sample. Leave heartbeat_result as None while the check is pending."""
         try:
-            self._heartbeat_sample = self.read_heartbeat()
+            read_data = self.read_heartbeat()
         except InvalidHeartbeatSignature as error:
-            # Report this core's invalid sample in get_results; keep checking other cores.
-            self._heartbeat_error = error
-        self._heartbeat_deadline = monotonic() + HEARTBEAT_TIMEOUT_SECONDS
-
-    def check_for_heartbeat(self) -> bool:
-        """Compare with the saved sample. The caller starts all cores before waiting."""
-        if self._heartbeat_deadline is None:
-            self.start_heartbeat_check()
-        assert self._heartbeat_deadline is not None
-        try:
-            if self._heartbeat_error is not None:
-                raise self._heartbeat_error
-            previous_data = self._heartbeat_sample
-            # Always take a fresh sample, even if other cores consumed this core's wait time.
-            while True:
-                read_data = self.read_heartbeat()
-                if previous_data is not None and read_data is not None and read_data != previous_data:
-                    return True
-                previous_data = read_data
-                remaining = self._heartbeat_deadline - monotonic()
-                if remaining <= 0:
-                    break
-                sleep(min(HEARTBEAT_POLL_INTERVAL_SECONDS, remaining))
-        except InvalidHeartbeatSignature as error:
+            # Fail only this core. An exception that reaches RunChecks skips the rest of the device.
             log_check_location(self.location, False, str(error))
-            return False
-        log_check_location(self.location, False, "No heartbeat detected")
-        return False
+            self.heartbeat_result = False
+            return
+
+        now = monotonic()
+        if self._heartbeat_deadline is None:
+            # Bound the wait for a first valid sample, including cores that keep reading zero.
+            self._heartbeat_deadline = now + HEARTBEAT_TIMEOUT_SECONDS
+        if read_data is not None:
+            if self._heartbeat_sample is None:
+                self._heartbeat_sample = read_data
+                # A late first valid sample needs a full window to prove progress.
+                self._heartbeat_deadline = now + HEARTBEAT_TIMEOUT_SECONDS
+            elif read_data != self._heartbeat_sample:
+                self.heartbeat_result = True
+                return
+
+        # Zero is not a baseline. It must not restart the deadline or erase a valid sample.
+        # Read before checking the deadline, since other cores can delay this poll.
+        if now >= self._heartbeat_deadline:
+            log_check_location(self.location, False, "No heartbeat detected")
+            self.heartbeat_result = False
 
     def get_results(self) -> EthCoreCheckData:
         """Get and log all ethernet core status results."""
         output = EthCoreCheckData()
         # HEARTBEAT
-        output.heartbeat = self.check_for_heartbeat()
+        output.heartbeat = self.heartbeat_result
 
         # PORT STATUS
         if self.eth_core_definitions.port_status is not None:
@@ -279,22 +273,35 @@ def get_eth_core(device: Device, location: OnChipCoordinate, context: Context) -
 def run(args, context: Context):
     run_checks = get_run_checks(args, context)
     BLOCK_TYPES_TO_CHECK = ["active_eth"]
-    eth_cores: dict[OnChipCoordinate, EthCore] = {}
+    eth_cores: dict[OnChipCoordinate, EthCore | None] = {}
 
-    def start_heartbeat_check(location: OnChipCoordinate) -> None:
-        eth_core = get_eth_core(location.device, location, context)
-        if eth_core is not None:
-            eth_core.start_heartbeat_check()
-            eth_cores[location] = eth_core
+    def poll_heartbeat(location: OnChipCoordinate) -> None:
+        nonlocal has_pending_cores
+        if location not in eth_cores:
+            eth_cores[location] = get_eth_core(location.device, location, context)
+        eth_core = eth_cores[location]
+        if eth_core is not None and eth_core.heartbeat_result is None:
+            eth_core.poll_heartbeat()
+            if eth_core.heartbeat_result is None:
+                has_pending_cores = True
 
-    # Start every observation window before waiting on any core. Device reads stay
-    # serial; waits overlap without concurrent access to the shared Exalens context.
-    # Keep both passes in RunChecks so read failures retain its device-skip behavior.
-    run_checks.run_per_block_check(start_heartbeat_check, block_filter=BLOCK_TYPES_TO_CHECK)
-    return run_checks.run_per_block_check(
-        lambda location: eth_cores[location].get_results() if location in eth_cores else None,
-        block_filter=BLOCK_TYPES_TO_CHECK,
-    )
+    def get_results(location: OnChipCoordinate) -> EthCoreCheckData | None:
+        eth_core = eth_cores.get(location)
+        # A device read error can prevent a core from completing its heartbeat check.
+        if eth_core is not None and eth_core.heartbeat_result is not None:
+            return eth_core.get_results()
+        return None
+
+    # Sample every pending core before sleeping. Both the wait for a valid sample
+    # and the wait for progress overlap across cores. Device reads stay serial.
+    # Use RunChecks on every pass to retain its device-skip behavior for read errors.
+    while True:
+        has_pending_cores = False
+        run_checks.run_per_block_check(poll_heartbeat, block_filter=BLOCK_TYPES_TO_CHECK)
+        if not has_pending_cores:
+            break
+        sleep(HEARTBEAT_POLL_INTERVAL_SECONDS)
+    return run_checks.run_per_block_check(get_results, block_filter=BLOCK_TYPES_TO_CHECK)
 
 
 if __name__ == "__main__":
