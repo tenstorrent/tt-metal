@@ -829,10 +829,11 @@ class Qwen36Model:
         padded = prompt_ids + [0] * (T_pad - T)
         from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
-        if not tpc.wh_9b_n300(self.args):
+        if tpc.is_blackhole():
             # Blackhole executes the pre-migration statements verbatim (see e83017ce0ec):
-            # full-logits readback here, argmax on host. return_token is never passed. T3K/N150
-            # land here too now -- confirmed not needed on T3K (Wormhole gating audit, item 11).
+            # full-logits readback here, argmax on host. return_token is never passed there.
+            # Every Wormhole mesh takes the on-device path below: _argmax_device is arch-neutral
+            # (ttnn.argmax, no TopK width limit) and the host readback is 485 KB/token over PCIe.
             logits = self.prefill_tp(torch.tensor([padded], dtype=torch.long), valid_len=T)
             nxt = int(torch.argmax(logits).item())
             out = [nxt]

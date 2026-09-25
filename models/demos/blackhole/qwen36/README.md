@@ -348,13 +348,15 @@ token; TPS is decode tokens/s. Both models measured in one session on one build.
 | 16,384 | 4.04 s | 22.50 | 4.44 s | 16.41 |
 | 32,768 | 8.84 s | 21.82 | 10.35 s | 16.42 |
 | 65,536 | 20.97 s | 21.73 | 26.75 s | 15.29 |
-| 103,351 | 39.64 s | 20.61 | 54.43 s | 14.32 |
+| 103,351 | 39.57 s | 20.92 | 54.39 s | 14.33 |
+| 262,144 | 165.94 s | 17.91 | 256.64 s | 11.55 |
 
 Decode is close to flat across the whole range — the 9B loses 11% from 128 to 103k (23.06 -> 20.61)
 and the 27B 16% (16.96 -> 14.32). TTFT is near-linear in ISL.
 
-256k is not in this sweep; the previously recorded figures were 125.43 s / 18.15 TPS (9B) and
-156.97 s / 11.79 TPS (27B), from an earlier run on a different build — re-measure before quoting.
+The 256k row is the checkpoint maximum (`max_position_embeddings` 262,144). Earlier records had
+125.43 s / 18.15 TPS (9B) and 156.97 s / 11.79 TPS (27B): TPS is close, but those TTFTs were far
+lower than measured here, so treat the older numbers as superseded.
 
 ### Accuracy
 
@@ -428,6 +430,7 @@ Both arms ran back to back on one build; `plain` is the same demo under `QWEN36_
 | 16,384 | 3.44/7 -> 4.44 | 16.41 | 36.49 | 2.22x | 4.44 s | 5.14 s | +0.70 s |
 | 32,768 | 2.75/7 -> 3.75 | 16.42 | 31.51 | 1.92x | 10.35 s | 11.56 s | +1.21 s |
 | 65,536 | 2.25/7 -> 3.25 | 15.29 | 26.13 | 1.71x | 26.75 s | 28.85 s | +2.10 s |
+| 262,144 | 2.53/7 -> 3.53 | 11.55 | 16.24 | 1.41x | 256.64 s | 272.73 s | +16.09 s |
 TPS is decode tokens/s, batch 1 greedy, warm trace replay.
 **The speedup decays with context**, 2.77x at ISL 128 down to 1.71x at 64k, tracking acceptance
 (4.27/7 -> 2.25/7). Quote the row you are actually serving rather than the headline. Plain decode
