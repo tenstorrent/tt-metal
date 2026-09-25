@@ -110,3 +110,18 @@ Workflow for any agent picking up a step:
 - Correction: the isolated P3.1 probe timed dense-EP experts at 27 ms per layer, but in the model the dense-EP MoE cost about 2.4 s
   per 5k chunk. The measured TTFT win (3.3x) is far larger than the 20-25% predicted from the probe.
 - Chunk time is now 0.44 s at 5k context and grows to 1.45 s at 50k: attention is now the dominant, context-dependent cost.
+
+## P3.3 (2026-09-25): device-time breakdown of one 50k->55k chunk. PASS
+- Tracy host capture (`--profile`) crashed on this box ("tracy-capture exited with code 1"), so the breakdown uses the device
+  profiler directly: `tt/common.signpost()` (with `enable_section_profiling`) syncs, calls ReadDeviceProfiler and charges
+  `get_latest_programs_perf_data()` durations to the section that just ended, per chip. Needs `TT_METAL_DEVICE_PROFILER=1
+  TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1` (without the last two the perf data is empty).
+- Result (sum over 28 layers, slowest chip per section): wall 1570 ms = device 1570 ms, so the chunk is fully device-bound.
+  SDPA 1328 ms (84.6%) | MoE router+dispatch+combine 100 ms | routed experts 54 ms | shared 28 ms | all_reduce 20 ms |
+  qkv/rope/kv/o_proj 20 ms | norms/adds 19 ms | dense layer 0: 2 ms. Chips are balanced to within 0.2%; experts vary
+  50.3-51.2 ms with routed rows (chip 1 fewest, 7,404 per layer; chip 3 most, 7,942).
+- SDPA efficiency: about 4 x 5 heads x 5120 x 53,760 keys x 128 = 0.70 TFLOP per layer per chip, so about 14.9 TFLOPS per chip.
+  That is far below Blackhole matmul rates. Suspects: HiFi4 + fp32 accumulate in the SDPA compute config, 256/256 q/k chunks,
+  exact exp. This is the next TTFT lever. Not yet measured.
+- Per-phase per-chip data lives in `results/P3.3_profile.json` + `results/P3.3_routing.json`; the dashboard section
+  "Where the time goes" renders them (Kimi-artifact style: to-scale timeline, phase list, 1x4 chip grid with per-chip ms).
