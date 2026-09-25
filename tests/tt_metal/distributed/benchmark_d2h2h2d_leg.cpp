@@ -82,6 +82,9 @@ void init_counters(benchmark::State& state) {
     state.counters["starved_credit_pct"] = 0;
     state.counters["starved_empty_pct"] = 0;
     state.counters["puts_per_frame"] = 0;
+    state.counters["credit_puts_per_frame"] = 0;
+    state.counters["done_puts_per_frame"] = 0;
+    state.counters["msgs_per_frame"] = 0;
     for (const char* p : {"d2h_issue_", "d2h_stall_", "h2h_put_credit_", "h2d_publish_drained_"}) {
         set_latency_counters(state, LatencySummary{}, 0, p);
     }
@@ -116,6 +119,8 @@ struct RankReport {
     double starved_credit_pct = 0.0;
     double starved_empty_pct = 0.0;
     double puts_per_frame = 0.0;
+    double credit_puts_per_frame = 0.0;
+    double done_puts_per_frame = 0.0;
 };
 
 class D2H2H2DFixture : public benchmark::Fixture {
@@ -371,8 +376,12 @@ BENCHMARK_DEFINE_F(D2H2H2DFixture, Volume)(benchmark::State& state) {
                     100.0 * static_cast<double>(ps.starved_empty) / static_cast<double>(ps.starved);
             }
             if (msgs_ != 0) {
-                local.puts_per_frame = static_cast<double>(ps.posts + ps.trailer_puts + ps.credit_puts) /
-                                       static_cast<double>(msgs_);
+                // Operations, not frames: ps.posts counts frames, so a coalesced run of K
+                // is one payload_put. This is the number the message-rate work targets.
+                local.puts_per_frame =
+                    static_cast<double>(ps.payload_puts + ps.trailer_puts) / static_cast<double>(msgs_);
+                local.credit_puts_per_frame = static_cast<double>(ps.credit_puts) / static_cast<double>(msgs_);
+                local.done_puts_per_frame = static_cast<double>(ps.done_puts) / static_cast<double>(msgs_);
             }
         }
         if (timing) {
@@ -461,6 +470,11 @@ BENCHMARK_DEFINE_F(D2H2H2DFixture, Volume)(benchmark::State& state) {
         state.counters["starved_credit_pct"] = tx.starved_credit_pct;
         state.counters["starved_empty_pct"] = tx.starved_empty_pct;
         state.counters["puts_per_frame"] = tx.puts_per_frame;
+        // Credits flow the other way, so they are the RECEIVER's puts on the same wire.
+        state.counters["credit_puts_per_frame"] = rx.credit_puts_per_frame;
+        state.counters["done_puts_per_frame"] = rx.done_puts_per_frame;
+        state.counters["msgs_per_frame"] =
+            tx.puts_per_frame + rx.credit_puts_per_frame + rx.done_puts_per_frame;
         set_latency_counters(state, tx.d2h_issue, tx.d2h_samples, "d2h_issue_");
         set_latency_counters(state, tx.d2h_stall, tx.d2h_samples, "d2h_stall_");
         set_latency_counters(state, tx.h2h_put_credit, tx.h2h_samples, "h2h_put_credit_");
