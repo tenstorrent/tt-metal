@@ -122,6 +122,7 @@ from .packing_ref2va import (
 from .policy import (
     MINIMAX_H3_DEFAULT_ASPECT_RATIO,
     MINIMAX_H3_DURATIONS_S,
+    MINIMAX_H3_MAX_KEYFRAME_TOKENS,
     MINIMAX_H3_MAX_TEXT_TOKENS,
     MINIMAX_H3_SERVED_REFERENCE_RESIZE_MODE,
     served_canvases,
@@ -233,7 +234,7 @@ class SeqLen(NamedTuple):
 class MiniMaxH3ArenaCaps:
     """Fixed per-deployment row capacities of the device arenas; a request exceeding one raises."""
 
-    prompt: int = 5120
+    prompt: int = MINIMAX_H3_MAX_TEXT_TOKENS + MINIMAX_H3_MAX_KEYFRAME_TOKENS
     video_rows: int = 111712
     audio_rows: int = 1216
     condition_video_rows: int = 2112

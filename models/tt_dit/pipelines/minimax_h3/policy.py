@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
 
 from PIL import Image
@@ -30,8 +31,18 @@ MINIMAX_H3_DEFAULT_DURATION_S = 5
 # Served denoising step count.
 MINIMAX_H3_NUM_INFERENCE_STEPS = 50
 
-# Text token budget: 5120 prompt arena rows - 2112 for two max-canvas keyframe blocks.
-MINIMAX_H3_MAX_TEXT_TOKENS = 3008
+# fl2va keyframe rows in the prompt arena, fixed by the checkpoint. Per keyframe: "<Picture i>: "
+# label (6 tokens), <|vision_start|>, one <|image_pad|> per merged 32x32 patch, <|vision_end|>.
+# The largest canvas resolve_canvas_size can produce is 576x1856 (a 1:4 keyframe snaps above the
+# area cap) = 18*58 = 1044 patches -> 1052 rows/keyframe; two keyframes = 2104 -> 2112 tile-aligned.
+MINIMAX_H3_MAX_KEYFRAME_TOKENS = 2112
+
+# Longest prompt a t2va/fl2va deployment accepts; the prompt arena cap is derived from it. The
+# default 3008 fills a 5120-row prompt arena (5120 - 2112), the arena the shipped bucket ladder was
+# sized around; the model itself imposes no prompt limit. Must be a multiple of TILE_SIZE so the
+# derived cap stays tile-aligned, and the caps sum must still fit the top rung (3680 with the
+# default ladder).
+MINIMAX_H3_MAX_TEXT_TOKENS = int(os.environ.get("MINIMAX_H3_MAX_TEXT_TOKENS", 3008))
 
 # Served ref2va image resize mode; other modes are rejected on the request path.
 MINIMAX_H3_SERVED_REFERENCE_RESIZE_MODE = "match"
