@@ -301,7 +301,7 @@ class Function:
         backward_fn = make_backward_closure(ctx, outputs_tuple, input_tensors, cls)
 
         # Register the backward node
-        node_id = auto_context.add_backward_node(backward_fn, links)
+        node_id = auto_context.add_backward_node(backward_fn, links, autograd_outputs)
 
         # Set the node on all output tensors
         if node_id is not None:
@@ -315,7 +315,7 @@ class Function:
                 # Other outputs get dummy nodes that depend on first output
                 dummy_links = get_links([outputs_tuple[0]])
                 for output in outputs_tuple[1:]:
-                    dummy_node = auto_context.add_backward_node(lambda: None, dummy_links)
+                    dummy_node = auto_context.add_backward_node(lambda: None, dummy_links, [output])
                     output.set_node(dummy_node)
 
         return outputs

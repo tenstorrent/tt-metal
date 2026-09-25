@@ -60,7 +60,22 @@ void py_module(nb::module_& m) {
         py_graph.def(nb::init<>());
         py_graph.def("get_edges", &Graph::get_edges, "Get graph edges");
         py_graph.def("get_graph_nodes", &Graph::get_graph_nodes, "Get graph nodes");
-        py_graph.def("add_node", &Graph::add_node, "Add graph node");
+        py_graph.def(
+            "add_node",
+            [](Graph& self,
+               GradFunction grad_function,
+               const std::vector<NodeId>& links,
+               std::optional<nb::list> outputs_obj) {
+                std::vector<TensorPtr> outputs;
+                if (outputs_obj.has_value() && nb::len(*outputs_obj) > 0) {
+                    outputs = nb::cast<std::vector<TensorPtr>>(*outputs_obj);
+                }
+                return self.add_node(std::move(grad_function), links, outputs);
+            },
+            nb::arg("grad_function"),
+            nb::arg("links"),
+            nb::arg("outputs") = nb::none(),
+            "Add graph node");
     }
 
     {
@@ -230,16 +245,24 @@ void py_module(nb::module_& m) {
             "Restore the RNG generator state");
         py_auto_context.def(
             "add_backward_node",
-            [](AutoContext& self, GradFunction grad_function, std::optional<nb::list> links_obj) {
+            [](AutoContext& self,
+               GradFunction grad_function,
+               std::optional<nb::list> links_obj,
+               std::optional<nb::list> outputs_obj) {
                 // Handle empty list case where nanobind can't infer element type
                 std::vector<NodeId> links;
                 if (links_obj.has_value() && nb::len(*links_obj) > 0) {
                     links = nb::cast<std::vector<NodeId>>(*links_obj);
                 }
-                return self.add_backward_node(std::move(grad_function), links);
+                std::vector<TensorPtr> outputs;
+                if (outputs_obj.has_value() && nb::len(*outputs_obj) > 0) {
+                    outputs = nb::cast<std::vector<TensorPtr>>(*outputs_obj);
+                }
+                return self.add_backward_node(std::move(grad_function), links, outputs);
             },
             nb::arg("grad_function"),
             nb::arg("links"),
+            nb::arg("outputs") = nb::none(),
             "Add backward graph node");
         py_auto_context.def("reset_graph", &AutoContext::reset_graph, "Reset graph");
         py_auto_context.def("set_gradient_mode", &AutoContext::set_gradient_mode, nb::arg("mode"), "Set gradient mode");

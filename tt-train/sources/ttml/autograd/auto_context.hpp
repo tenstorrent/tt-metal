@@ -88,7 +88,8 @@ public:
 
     [[nodiscard]] uint32_t get_seed() const;
 
-    std::optional<NodeId> add_backward_node(GradFunction&& grad_function, std::span<NodeId> links);
+    std::optional<NodeId> add_backward_node(
+        GradFunction&& grad_function, std::span<NodeId> links, std::span<const std::shared_ptr<Tensor>> outputs = {});
 
     void reset_graph();
 
