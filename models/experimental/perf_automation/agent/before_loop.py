@@ -504,10 +504,11 @@ def before_loop(
         except Exception as exc:
             print(f"      WARN --box {box}: {exc}; using auto-detected single-chip env", file=sys.stderr, flush=True)
     stages.done(f"{env['card']} ({env['arch']}), {env['worker_cores']} cores")
-    from .probes import note_board
+    from .probes import note_board, prepare_device_reset
 
     chips = max(physical_chips, int(env.get("mesh_chips") or env.get("device_count") or 0))
     note_board(str(env.get("card") or ""), chips, box=str(box or ""))
+    prepare_device_reset(box=str(box or ""))  # a Galaxy's reset needs a host tool; install it now if absent
 
     devices = str(config.get("devices") or "single")
     # VISIBILITY IS RESTRICTED ONLY WITH THE DESCRIPTOR THAT MAKES IT LEGAL, AND OTHERWISE NOT AT ALL.

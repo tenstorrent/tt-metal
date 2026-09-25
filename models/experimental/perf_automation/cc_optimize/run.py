@@ -3326,21 +3326,17 @@ def _reset_devices(devices: str) -> str:
     tt_smi = tt_smi_bin()
     if not Path(tt_smi).is_file():
         return "device reset SKIPPED (tt-smi not found)"
+    chips = _reset_chip_list(devices) if d not in ("all", "") else ""
     try:
         import agent.probes as _pr  # galaxy-aware reset invocations (single source of truth)
 
-        if _pr._GALAXY_HOST is None and not os.environ.get("TT_HW_PLANNER_GALAXY"):
-            try:
-                _pr.note_board(tt_smi=tt_smi)  # one-time galaxy capability probe (cheap on plain boards)
-            except Exception:  # noqa: BLE001
-                pass
-        arg_sets = _pr._reset_arg_sets()
+        _pr.ensure_board_noted(tt_smi=tt_smi)  # one-time galaxy capability probe (cheap on plain boards)
+        arg_sets = _pr.reset_commands(chips)
     except Exception:  # noqa: BLE001
-        arg_sets = [["-r"]]
-    chips = _reset_chip_list(devices) if d not in ("all", "") else ""
+        arg_sets = [["-r", chips]] if chips else [["-r"]]
     last = "no reset ran"
     for args in arg_sets:
-        cmd = [tt_smi, "-r", chips] if (chips and args and args[0] == "-r") else [tt_smi, *args]
+        cmd = [tt_smi, *args]
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=420)
             last = "tt-smi %s rc=%d" % (" ".join(cmd[1:]), r.returncode)
@@ -6852,19 +6848,10 @@ def _print_optimize_stop(pipe, exc) -> None:
 
 
 def _stamp_run_id() -> str:
-    """One id for this optimize run, set once and inherited by every child.
-
-    The recovery counters are scoped to it: "resets have stopped working" is a fact about THIS run
-    against THIS board, and carrying it into the next run is what turned a limit into a latch (run 39
-    left reset_fails=34 in a (model, task)-keyed file that survived the board being fixed and a host
-    reboot). Set here rather than in the CLI so every entry point -- supervisor restarts included --
-    lands in the same run, and never overwritten, so a restart does not silently get a fresh budget.
-    """
-    cur = str(os.environ.get("PERF_MCP_RUN_ID") or "").strip()
-    if not cur:
-        cur = "%d_%d" % (int(time.time()), os.getpid())
-        os.environ["PERF_MCP_RUN_ID"] = cur
-    return cur
+    """One id for this optimize run, set once and inherited by every child -- device_recovery.stamp_run,
+    the one implementation every stage shares. Called here rather than in the CLI so every entry point
+    -- supervisor restarts included -- lands in the same run."""
+    return _dr().stamp_run()
 
 
 def _stamp_model_root(demo_dir) -> str:

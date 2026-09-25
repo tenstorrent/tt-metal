@@ -33,7 +33,7 @@ _THP = Path(__file__).resolve().parent
 _REPO = _THP.parents[1]
 sys.path.insert(0, str(_REPO))
 
-from scripts.tt_hw_planner.commands.emit_e2e import _run_deterministic_gates  # noqa: E402
+from scripts.tt_hw_planner.commands.emit_e2e import _recover_if_wedged, _run_deterministic_gates  # noqa: E402
 from scripts.tt_hw_planner.pcc_targets import E2E_PCC  # noqa: E402
 
 try:
@@ -83,6 +83,9 @@ def _run_probe(demo_dir: Path) -> dict:
             except Exception:  # noqa: BLE001
                 break
     tail = (r.stderr or r.stdout or "")[-400:]
+    _rst = _recover_if_wedged((r.stdout or "") + "\n" + (r.stderr or ""))
+    if _rst:
+        tail = "%s [%s]" % (tail, _rst)
     return {"trace_ready": False, "static_blockers": [{"rung": "probe", "guidance": "no probe output: %s" % tail}]}
 
 

@@ -202,43 +202,61 @@ def _scope_grounding_gate(demo_dir: Path, reference_config=_SCOPE_SENTINEL):
     )
 
 
-def _reset_device() -> str:
-    """Reset the device, widening the requested chips to WHOLE BOARDS.
-
-    TT_HW_PLANNER_RESET_CHIPS lets an operator name chips directly, and naming one chip of a p300c
-    (`-r 3`) half-resets the board: the untouched ASIC's clock arbiter is left inconsistent and the
-    next device-open wedges. Widen through the shared recovery primitive, falling back to every chip
-    rather than narrowing when the topology is unknown."""
-    chips = os.environ.get("TT_HW_PLANNER_RESET_CHIPS", "0,1,2,3")
+def _recovery():
+    """(probes, device_recovery) from the shared recovery package, or None when it cannot be imported."""
     try:
-        import importlib.util as _ilu
+        from models.experimental.perf_automation.agent import device_recovery as _dr
+        from models.experimental.perf_automation.agent import probes as _pr
 
-        _p = (
-            Path(__file__).resolve().parents[3]
-            / "models"
-            / "experimental"
-            / "perf_automation"
-            / "agent"
-            / "device_recovery.py"
-        )
-        _spec = _ilu.spec_from_file_location("tt_device_recovery", str(_p))
-        _dr = _ilu.module_from_spec(_spec)
-        _spec.loader.exec_module(_dr)
-        widened = _dr.expand_spec(chips)
-        if widened and widened != "all":
-            chips = widened
+        return _pr, _dr
     except Exception:  # noqa: BLE001
-        pass
-    from models.experimental.perf_automation.agent.probes import tt_smi_bin
+        return None
 
-    tt_smi = tt_smi_bin()
-    if not Path(tt_smi).exists():
+
+def _reset_device(error_text: str = "") -> str:
+    """Recover a wedged device through the SHARED recovery (agent.probes._device_reset) and say
+    whether it came back.
+
+    This used to issue its own `tt-smi -r 0,1,2,3`: a plain `-r` does not reset a Galaxy, the chip
+    list ignored the chip the failure named, and the by-path load meant to widen it to whole boards
+    raised on the module's relative import, so the widening never ran. The shared path picks the
+    target from `error_text`, widens to whole boards, uses the host's reset (galaxy-tray on a
+    Galaxy), verifies the device answers, and counts failures against one run-wide limit.
+    TT_HW_PLANNER_RESET_CHIPS still names an operator's preferred target."""
+    rec = _recovery()
+    if rec is None:
+        return "device reset SKIPPED (shared device recovery could not be imported)"
+    _pr, _dr = rec
+    if not Path(_pr.tt_smi_bin()).exists():
         return "device reset SKIPPED (tt-smi not found)"
     try:
-        r = subprocess.run([tt_smi, "-r", chips], capture_output=True, text=True, timeout=420)
-        return "device reset (tt-smi -r %s) rc=%d" % (chips, r.returncode)
+        ok = _pr._device_reset(error_text=error_text, config_target=os.environ.get("TT_HW_PLANNER_RESET_CHIPS", ""))
     except Exception as e:  # noqa: BLE001
         return "device reset FAILED (%s) — a hard boot may be required" % e
+    if ok:
+        return "device recovery: board answering after recovery (verified)"
+    if _dr.recovery_exhausted():
+        return "device recovery EXHAUSTED (resets keep failing) — reset the board by hand or reboot the host"
+    return "device reset did NOT bring the board back — a hard boot may be required"
+
+
+def _recover_if_wedged(text: str) -> Optional[str]:
+    """Reset when a failure's OWN output carries a dead-board signature; None when it does not.
+
+    A hang is not the only way a board wedges: once a run dies mid-collective, every later run fails
+    at device-open within seconds ("NOC0 is hung on PCIe device ID 9"), which never reaches a
+    timeout. Without this, each round failed identically on the same chip and nothing reset it."""
+    rec = _recovery()
+    if rec is None or not rec[1].is_dead_board(text or ""):
+        return None
+    return _reset_device(error_text=text)
+
+
+def _as_text(out) -> str:
+    """A subprocess stream as text (TimeoutExpired carries bytes, or None)."""
+    if isinstance(out, bytes):
+        return out.decode(errors="ignore")
+    return out or ""
 
 
 def _verbose() -> bool:
@@ -1395,8 +1413,11 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
         if proc.returncode != 0:
             tail = "\n".join(pytest_out.splitlines()[-15:])
             reasons.append(f"G2/G3: tests/e2e did not pass (pytest rc={proc.returncode}); tail:\n{tail}")
-    except subprocess.TimeoutExpired:
-        _rst = _reset_device()
+            _rst = _recover_if_wedged(pytest_out + "\n" + (proc.stderr or ""))
+            if _rst:
+                reasons.append(f"G2/G3: the device reported a wedge during tests/e2e — {_rst}")
+    except subprocess.TimeoutExpired as _te:
+        _rst = _reset_device(error_text=_as_text(_te.stdout) + "\n" + _as_text(_te.stderr))
         reasons.append(
             f"G2/G3: tests/e2e exceeded {hang_timeout}s with no verdict (likely device/fabric hang) — {_rst}"
         )
@@ -1534,7 +1555,7 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
                 pass
 
             if timed_out:
-                _rst = _reset_device()
+                _rst = _reset_device(error_text=_as_text(stdout) + "\n" + _as_text(stderr))
                 reasons.append(
                     f"G6 trace: trace-capture probe hung >{g6_hang}s "
                     f"(subprocess group killed, {_rst}); fix-loop should treat as failure and iterate"
@@ -1557,6 +1578,10 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
                         + (_b or _cap or "capture failed")
                         + " (set E2E_ALLOW_NO_TRACE=1 to waive for a genuinely non-traceable model)"
                     )
+                if tr is None or not tr.get("trace_ready"):
+                    _rst = _recover_if_wedged(_as_text(stdout) + "\n" + _as_text(stderr))
+                    if _rst:
+                        reasons.append(f"G6 trace: the device reported a wedge during the trace-capture probe — {_rst}")
 
     try:
         from ..trace_gate import build_fix_directive, evaluate_trace_gate, overflow_fix_loop, record_trace_verdict
@@ -1809,6 +1834,13 @@ def cmd_emit_e2e(args) -> int:
     if _tf:
         print("error: " + _tf)
         return 1
+    _rec = _recovery()
+    if _rec is not None:
+        _rec[1].stamp_run()  # scope the device-reset budget to THIS run (see device_recovery.stamp_run)
+        try:  # while the board is healthy: know the host kind and make sure its reset can run
+            _rec[0].prepare_device_reset(box=str(getattr(args, "box", "") or ""))
+        except Exception:  # noqa: BLE001 -- reset preparation must never stop the run
+            pass
     return _emit_e2e_phase_a(args)
 
 
@@ -1839,6 +1871,10 @@ def _run_emit_e2e_cc(*, model_id, demo_dir, pcc, timeout_s, agent_bin, max_round
         "PYTHONPATH": str(repo_root),
         "PATH": f"{repo_root / 'python_env' / 'bin'}{_os.pathsep}/usr/bin:/bin",
     }
+    # The gate resets the device from the MCP server's own process; without the run stamp it would
+    # count its failures under a different run than this one (see device_recovery.stamp_run).
+    if _os.environ.get("PERF_MCP_RUN_ID"):
+        mcp_env["PERF_MCP_RUN_ID"] = _os.environ["PERF_MCP_RUN_ID"]
     cfg = cc_harness.build_mcp_config(pybin, server_path, mcp_env, "e2e-mcp")
     cfg_path = thp_dir / f".e2e_mcp_config_{re.sub(r'[^A-Za-z0-9._-]', '_', model_id)}.json"
     cfg_path.write_text(_json.dumps(cfg, indent=2))

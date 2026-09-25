@@ -24,6 +24,9 @@ import pytest as _pytest
 @_pytest.fixture(autouse=True)
 def _no_live_agent_calls(monkeypatch):
     monkeypatch.setenv("PERF_MCP_NO_AGENT_CLASSIFY", "1")
+    # Nor may a test install system packages (pkgtools.ensure_system_tool): the Galaxy reset path
+    # installs its host tool when it is missing, and a test must never run apt-get on the machine.
+    monkeypatch.setenv("TT_HW_PLANNER_NO_SYSTEM_INSTALL", "1")
     yield
 
 

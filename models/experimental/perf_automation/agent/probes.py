@@ -839,12 +839,15 @@ def _galaxy_capability_probe(tt_smi: str) -> bool | None:
     return None
 
 
-def note_board(card: str = "", device_count: int = 0, box: str = "", tt_smi: str | None = None) -> None:
+def note_board(
+    card: str = "", device_count: int = 0, box: str = "", tt_smi: str | None = None, probe: bool = True
+) -> None:
     """Record, at healthy STARTUP, whether this host is a Galaxy — a Galaxy needs `-glx_reset`, a plain
     board needs `-r`, and a WEDGED board can't be re-probed at reset time so the decision must be made
     now. Order of trust: explicit env override -> tt-smi galaxy-tray capability probe (authoritative,
     survives the mesh rewiring) -> cheap hints (box/board name says 'galaxy', or >=32 chips) as a
-    last-ditch fallback when the probe couldn't run."""
+    last-ditch fallback when the probe couldn't run. `probe=False` skips the tt-smi probe, for a caller
+    that may be looking at a wedged board (see ensure_board_noted)."""
     global _GALAXY_HOST
     v = os.environ.get("TT_HW_PLANNER_GALAXY")
     if v is not None:
@@ -854,8 +857,7 @@ def note_board(card: str = "", device_count: int = 0, box: str = "", tt_smi: str
     if "galaxy" not in text and 0 < device_count < 32:
         _GALAXY_HOST = False
         return
-    smi = tt_smi or tt_smi_bin()
-    probed = _galaxy_capability_probe(smi)
+    probed = _galaxy_capability_probe(tt_smi or tt_smi_bin()) if probe else None
     if probed is not None:
         _GALAXY_HOST = probed
         return
@@ -895,6 +897,82 @@ def _reset_arg_sets() -> list[list[str]]:
     return [["-r"]]
 
 
+_SYSFS_TT_CLASS = "/sys/class/tenstorrent"
+
+
+def _sysfs_card_types() -> str:
+    """The card types the tenstorrent driver publishes per chip (e.g. "galaxy-wormhole"), space-joined.
+
+    A file read, so it answers while the board is wedged -- which the tt-smi galaxy probe does not:
+    on a wedged WH Galaxy (2026-09-25) `-glx_list_tray_to_device` failed with "Error in detecting
+    devices!", and a failed probe reads as "not a Galaxy"."""
+    try:
+        return " ".join(sorted({p.read_text().strip() for p in Path(_SYSFS_TT_CLASS).glob("*/tt_card_type")}))
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def ensure_board_noted(box: str = "", tt_smi: str | None = None) -> None:
+    """Make the Galaxy decision before a reset needs it, for callers that never ran note_board.
+
+    _reset_arg_sets() trusts _GALAXY_HOST, and only optimize's startup recorded it -- so a reset
+    issued from any other stage read None, treated a Galaxy as a plain board and sent `-r`, which
+    does not reset a Galaxy. This runs when a reset is ABOUT to happen, i.e. possibly on a wedged
+    board, so it decides from wedge-safe signals only -- the driver's card type and the
+    /dev/tenstorrent count -- and never the tt-smi probe, which fails on a wedged board."""
+    if _GALAXY_HOST is not None or os.environ.get("TT_HW_PLANNER_GALAXY") is not None:
+        return
+    try:
+        note_board(
+            card=_sysfs_card_types(), device_count=_enumerated_device_count(), box=box, tt_smi=tt_smi, probe=False
+        )
+    except Exception:  # noqa: BLE001 -- a detection that cannot run must never block the reset itself
+        pass
+
+
+def reset_commands(target: str = "") -> list[list[str]]:
+    """The tt-smi argument lists that reset `target` (a whole-board chip list, or ''/'all') on THIS host.
+
+    The ONE place a target becomes a command. A per-board `-r <chips>` only replaces the plain `-r`
+    entries of _reset_arg_sets(), so a Galaxy host still tries its galaxy-tray resets first -- a
+    chip-targeted `-r` on a Galaxy is exactly the reset that leaves it wedged."""
+    ensure_board_noted()
+    chips = "" if (target or "").strip().lower() in ("", "all") else target
+    arg_sets = _reset_arg_sets()
+    if any(args and args[0].startswith("-glx") for args in arg_sets):
+        _ensure_galaxy_reset_tool()
+    return [["-r", chips] if (chips and args and args[0] == "-r") else list(args) for args in arg_sets]
+
+
+# tt-smi's galaxy-tray reset drives the chassis BMC through this host tool. Absent, every `-glx_reset`
+# fails with "sudo: ipmitool: command not found" and a wedged Galaxy cannot be reset at all (2026-09-25).
+_GALAXY_RESET_TOOL = "ipmitool"
+
+
+def _ensure_galaxy_reset_tool() -> bool:
+    """Install the galaxy-tray reset's host dependency when it is missing -- like the tt-lang install."""
+    from .pkgtools import ensure_system_tool
+
+    if shutil.which(_GALAXY_RESET_TOOL):
+        return True
+    ok = ensure_system_tool(_GALAXY_RESET_TOOL)
+    print(
+        "  [device-reset] %s was missing (the galaxy-tray reset needs it): %s"
+        % (_GALAXY_RESET_TOOL, "installed" if ok else "could NOT be installed -- install it by hand"),
+        file=sys.stderr,
+        flush=True,
+    )
+    return ok
+
+
+def prepare_device_reset(box: str = "") -> None:
+    """At a stage's startup, while the board is healthy: decide the host kind and make sure its reset
+    can run, so the first wedge is not also the first time anyone learns the reset tool is missing."""
+    ensure_board_noted(box=box)
+    if _GALAXY_HOST:
+        _ensure_galaxy_reset_tool()
+
+
 def _device_reset(error_text: str = "", config_target: str = "") -> bool:
     """Reset the device and report whether it CAME BACK -- not merely whether tt-smi exited 0.
 
@@ -907,8 +985,7 @@ def _device_reset(error_text: str = "", config_target: str = "") -> bool:
 
     def _issue(target):
         tt_smi = tt_smi_bin()
-        arg_sets = [["-r", target]] if target and target != "all" else _reset_arg_sets()
-        for args in arg_sets:
+        for args in reset_commands(target):
             try:
                 proc = subprocess.run([tt_smi, *args], capture_output=True, text=True, timeout=300)
                 if proc.returncode == 0:

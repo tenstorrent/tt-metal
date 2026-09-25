@@ -33,6 +33,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from pathlib import Path
 
 # ONE state directory for every durable temp artifact -- see cc_optimize/tmpstate.py.
@@ -64,6 +65,12 @@ DEAD_BOARD_SIGS = (
     # the condition is known to the tool -- it just was not on this list, and a board in it fails
     # every retry identically until someone resets it by hand.
     "eth heartbeat",
+    # UMD's NOC hang check (tt_device_error.cpp, NocHangError): "NOC0 is hung on PCIe device ID 9."
+    # Raised at device-open while the NOC is unreachable, so every retry fails the same way within
+    # seconds. Seen 2026-09-25 on a WH Galaxy after an e2e run hung mid-collective: no signature
+    # matched, the temperature veto cancelled every reset (the ARC was still publishing), and each
+    # emit-e2e round failed on the same chip until it was stopped by hand.
+    "is hung on pcie device",
 )
 
 # THE KERNEL'S VERDICT that a reset cannot help. `tt-smi -r` talks to the card OVER PCIe and asks its
@@ -182,9 +189,10 @@ def dead_chip_from_error(text):
     """THE EVIDENCE: the chip id the runtime named in the failure, or None.
 
     tt-metal reports "Read 0xffffffff over PCIe ID 3" -- it says which chip died. Read the id
-    rather than infer it from a flag that describes intent.
+    rather than infer it from a flag that describes intent. UMD's NOC hang says "on PCIe device
+    ID 9", so "device" and "id" may both appear.
     """
-    m = re.search(r"pcie\s*(?:id|device)?\s*[:#]?\s*(\d+)", str(text or ""), re.I)
+    m = re.search(r"pcie\s*(?:device\s*)?(?:id)?\s*[:#]?\s*(\d+)", str(text or ""), re.I)
     if m:
         try:
             return int(m.group(1))
@@ -232,6 +240,25 @@ def _run_stamp() -> str:
     reads is transient and would condemn a working board.
     """
     return str(os.environ.get("PERF_MCP_RUN_ID") or "").strip()
+
+
+def stamp_run() -> str:
+    """One id for this run, set once and inherited by every child. Every entry point that can reset
+    a device calls this before its first device work.
+
+    The recovery counters are scoped to it: "resets have stopped working" is a fact about THIS run
+    against THIS board, and carrying it into the next run is what turned a limit into a latch (run 39
+    left reset_fails=34 in a (model, task)-keyed file that survived the board being fixed and a host
+    reboot). Only optimize used to stamp its run, so every other stage counted under the empty stamp:
+    on 2026-09-25 an emit-e2e run's three failed resets left reset_fails=3 there, and every later
+    emit-e2e refused to reset at all. Never overwritten, so a supervisor restart does not silently get
+    a fresh budget.
+    """
+    cur = _run_stamp()
+    if not cur:
+        cur = "%d_%d" % (int(time.time()), os.getpid())
+        os.environ["PERF_MCP_RUN_ID"] = cur
+    return cur
 
 
 class Counter:

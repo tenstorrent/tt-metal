@@ -35,8 +35,19 @@ class _FakeDR:
         return "2,3" if list(ids) == [3] else None
 
 
-def _reset_with(monkeypatch, *, rc, healthy, error_text=""):
-    calls = {}
+def _pin_host(monkeypatch, galaxy=False):
+    """The reset command depends on the host kind; pin it so no result depends on the test machine."""
+    from models.experimental.perf_automation.agent import probes as _pr
+
+    monkeypatch.delenv("TT_HW_PLANNER_RESET_ARGS", raising=False)
+    monkeypatch.delenv("TT_HW_PLANNER_GALAXY", raising=False)
+    monkeypatch.setenv("TT_HW_PLANNER_NO_SYSTEM_INSTALL", "1")  # never apt-get from a test
+    monkeypatch.setattr(_pr, "_GALAXY_HOST", galaxy, raising=False)
+    monkeypatch.setattr(_pr, "_enumerated_device_count", lambda: 4)
+
+
+def _reset_with(monkeypatch, *, rc, healthy, error_text="", galaxy=False):
+    calls = {"all": []}
 
     class _P:
         returncode = rc
@@ -45,8 +56,10 @@ def _reset_with(monkeypatch, *, rc, healthy, error_text=""):
 
     def _run(cmd, **kw):
         calls["cmd"] = list(cmd)
+        calls["all"].append(list(cmd))
         return _P()
 
+    _pin_host(monkeypatch, galaxy)
     monkeypatch.delenv("TT_PLANNER_NO_DEVICE_RESET", raising=False)
     monkeypatch.setattr(cli, "_DEVICE_RESET_COUNT", 0, raising=False)
     monkeypatch.setattr(cli, "_device_recovery", lambda: _FakeDR(healthy))
@@ -79,6 +92,7 @@ def test_reason_is_accepted_and_behaves_like_context(monkeypatch, capsys):
         stdout = ""
         stderr = ""
 
+    _pin_host(monkeypatch)
     monkeypatch.delenv("TT_PLANNER_NO_DEVICE_RESET", raising=False)
     monkeypatch.setattr(cli, "_DEVICE_RESET_COUNT", 0, raising=False)
     monkeypatch.setattr(cli, "_device_recovery", lambda: _FakeDR(True))
@@ -98,3 +112,18 @@ def test_the_chip_named_in_the_failure_selects_its_board(monkeypatch):
     )
     assert ok is True
     assert calls["cmd"][-1] == "2,3", calls
+
+
+def test_a_galaxy_is_reset_with_the_galaxy_reset_not_a_plain_r(monkeypatch):
+    """A plain `-r` does not reset a Galaxy (2026-09-25: chip 9 stayed wedged through every retry)."""
+    ok, calls = _reset_with(
+        monkeypatch, rc=0, healthy=True, galaxy=True, error_text="Read 0xffffffff over PCIe ID 3: board should be reset"
+    )
+    assert ok is True
+    assert calls["all"] == [["tt-smi", "-glx_reset_auto"]], calls
+
+
+def test_a_failed_galaxy_reset_falls_through_to_the_next_one(monkeypatch):
+    ok, calls = _reset_with(monkeypatch, rc=1, healthy=True, galaxy=True)
+    assert ok is False
+    assert [c[1] for c in calls["all"]] == ["-glx_reset_auto", "-glx_reset", "-r"], calls

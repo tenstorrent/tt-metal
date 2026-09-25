@@ -223,13 +223,22 @@ def test_the_run_id_is_forwarded_to_the_mcp_server():
     assert "PERF_MCP_RUN_ID" in src[i : i + 200], src[i : i + 200]
 
 
-def test_the_stamp_is_not_overwritten_on_a_restart():
+def test_the_stamp_is_not_overwritten_on_a_restart(dr, monkeypatch):
     """The supervisor restarts the child. A fresh stamp there would hand every restart a new budget,
     which is the latch's opposite failure: never stopping."""
+    monkeypatch.setenv("PERF_MCP_RUN_ID", "run-A")
+    assert dr.stamp_run() == "run-A"
+    monkeypatch.delenv("PERF_MCP_RUN_ID")
+    first = dr.stamp_run()
+    assert first and dr._run_stamp() == first
+    assert dr.stamp_run() == first
+
+
+def test_optimize_stamps_its_run_through_the_shared_stamp():
     src = (Path(__file__).resolve().parent.parent / "cc_optimize" / "run.py").read_text()
     i = src.index("def _stamp_run_id")
     body = src[i : src.index("\ndef ", i + 1)]
-    assert "if not cur:" in body, body[-400:]
+    assert "stamp_run()" in body, body[-400:]
 
 
 # ---------------------------------------------------------------- the kernel verdict is the REAL stop

@@ -7709,36 +7709,51 @@ def _run_tt_smi_reset(
     _dead = _dr.dead_chip_from_error(error_text)
     if _dead is not None:
         devices = _dr.expand_to_boards([_dead]) or devices
+    # The shared, host-aware command list: a Galaxy gets its galaxy-tray resets first, because a plain
+    # `-r` does not reset one. Falls back to the plain per-board reset only if that primitive can't load.
+    try:
+        from models.experimental.perf_automation.agent import probes as _pr
+
+        arg_sets = _pr.reset_commands(devices)
+    except Exception:  # noqa: BLE001
+        arg_sets = [["-r", devices]]
     label = f" [{context}]" if context else ""
     print()
     print("=" * 78)
-    print(f"  Auto device-reset{label}: tt-smi -r {devices} (timeout={timeout_s}s)")
+    print(f"  Auto device-reset{label}: tt-smi {' | '.join(' '.join(a) for a in arg_sets)} (timeout={timeout_s}s)")
     print("=" * 78)
-    try:
-        proc = _sp.run(
-            ["tt-smi", "-r", devices],
-            timeout=timeout_s,
-            capture_output=True,
-            text=True,
-        )
-    except _sp.TimeoutExpired:
-        print(f"  tt-smi -r timed out after {timeout_s}s", file=sys.stderr)
-        return False
-    except OSError as exc:
-        print(f"  failed to launch tt-smi: {exc}", file=sys.stderr)
+    proc, shown = None, ""
+    for args in arg_sets:
+        shown = " ".join(args)
+        try:
+            proc = _sp.run(
+                ["tt-smi", *args],
+                timeout=timeout_s,
+                capture_output=True,
+                text=True,
+            )
+        except _sp.TimeoutExpired:
+            print(f"  tt-smi {shown} timed out after {timeout_s}s", file=sys.stderr)
+            proc = None
+            continue
+        except OSError as exc:
+            print(f"  failed to launch tt-smi: {exc}", file=sys.stderr)
+            return False
+        tail = ((proc.stdout or "") + (proc.stderr or "")).strip()
+        if tail:
+            print(tail[-1200:])
+        if proc.returncode == 0:
+            break
+        print(f"  tt-smi {shown} exited rc={proc.returncode}", file=sys.stderr)
+    if proc is None:
         return False
     _DEVICE_RESET_COUNT += 1
-    tail = (proc.stdout or "") + (proc.stderr or "")
-    tail = tail.strip()
-    if tail:
-        print(tail[-1200:])
     if proc.returncode != 0:
-        print(f"  tt-smi -r exited rc={proc.returncode}", file=sys.stderr)
         return False
     if not _device_recovery().device_is_healthy():
-        print("  tt-smi -r exited 0 but the device is NOT answering; treating as a failed reset", file=sys.stderr)
+        print(f"  tt-smi {shown} exited 0 but the device is NOT answering; treating as a failed reset", file=sys.stderr)
         return False
-    print(f"  tt-smi -r completed cleanly (reset #{_DEVICE_RESET_COUNT}/{_DEVICE_RESET_MAX_PER_PROCESS})")
+    print(f"  tt-smi {shown} completed cleanly (reset #{_DEVICE_RESET_COUNT}/{_DEVICE_RESET_MAX_PER_PROCESS})")
     return True
 
 
