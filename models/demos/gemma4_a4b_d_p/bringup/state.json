@@ -214,7 +214,7 @@
  },
  "R.3": {
   "attempts": 0,
-  "duration_s": 147.9,
+  "duration_s": 140.5,
   "history": [
    {
     "status": "FAIL",
@@ -231,22 +231,26 @@
    {
     "status": "RESET",
     "t": "2026-09-25T22:13:28"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-25T22:17:07"
    }
   ],
-  "last_run": "2026-09-25T21:56:22",
+  "last_run": "2026-09-25T22:17:07",
   "log": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/logs/R.3.log",
   "metrics": {
    "boundaries_missing": 0,
    "graph_errors": 0,
    "graph_replay_maxabs": 0.0,
    "maxabs_hidden": 0.0,
-   "pcc_hidden": 1.0000000000000615,
-   "pcc_state_min": 0.9999999999997592
+   "pcc_hidden": 1.0000000000000455,
+   "pcc_state_min": 0.9999999999999029
   },
   "rc": 0,
   "reason": [],
-  "started": "2026-09-25T22:05:51",
-  "status": "TODO"
+  "started": "2026-09-25T22:14:47",
+  "status": "PASS"
  },
  "_run": {
   "branch": "dnijemcevic/ernie45_prefill",
