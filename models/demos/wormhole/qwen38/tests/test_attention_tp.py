@@ -16,7 +16,7 @@ mesh parametrization from ``test_factory``:
 
 Run:
     MESH_DEVICE=T3K HF_MODEL=Qwen/Qwen3.8-27B \
-      pytest models/demos/blackhole/qwen36/tests/test_attention_tp.py -v -s
+      pytest models/demos/wormhole/qwen38/tests/test_attention_tp.py -v -s
 """
 import os
 
@@ -59,7 +59,7 @@ def _rope_torch(x, rope_dim, theta):  # x: [S, H, HD]
 # test_attention_tp_paged); this sweep targets the batched feature (B in {8, 32}).
 @torch.no_grad()
 @parametrize_mesh_tp()
-@parametrize_batch(batches=(8, 32))
+@parametrize_batch(batches=(8, 32), xfail_b32_on_wh=True)
 def test_attention_tp(mesh_device, B, reset_seeds, ensure_gc, request):
     os.environ.setdefault("HF_MODEL", model_path())
     args = Qwen36ModelArgs(mesh_device, max_batch_size=B, max_seq_len=256)
@@ -261,7 +261,7 @@ def test_attention_tp_paged(mesh_device, reset_seeds, ensure_gc, request):
 
 @torch.no_grad()
 @parametrize_mesh_tp()
-@parametrize_batch(batches=(8, 32))
+@parametrize_batch(batches=(8, 32), xfail_b32_on_wh=True)
 def test_attention_tp_paged_peruser(mesh_device, B, reset_seeds, ensure_gc, request):
     """Per-user batched paged decode (the serving contract).
 

@@ -14,7 +14,7 @@ per-step). This test anchors that oracle to a real expected answer on the full m
 
 Run:
     MESH_DEVICE=T3K HF_MODEL=Qwen/Qwen3.8-27B \
-      pytest models/demos/blackhole/qwen36/tests/test_generate_tp.py -v -s
+      pytest models/demos/wormhole/qwen38/tests/test_generate_tp.py -v -s
 """
 import os
 

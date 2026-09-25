@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pytest configuration for the Qwen3.5/Qwen3.6 demo test suite.
+"""Pytest configuration for the Qwen3.8-27B demo test suite.
 
 Adds two CLI options:
 

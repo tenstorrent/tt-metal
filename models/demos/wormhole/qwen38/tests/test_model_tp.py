@@ -17,7 +17,7 @@ decode chain incl. the rope_tp seam) must match it.
 
 Run:
   MESH_DEVICE=T3K HF_MODEL=Qwen/Qwen3.8-27B \
-    pytest -svq models/demos/blackhole/qwen36/tests/test_model_tp.py
+    pytest -svq models/demos/wormhole/qwen38/tests/test_model_tp.py
 """
 import math
 

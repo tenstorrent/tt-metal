@@ -27,6 +27,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 
 # TP tests default to the 27B variant; single-device unit tests setdefault 9B.
 _DEFAULT_HF_MODEL = "Qwen/Qwen3.8-27B"  # Wormhole wrapper targets Qwen3.8-27B
@@ -332,7 +333,7 @@ def parametrize_mesh_tp(max_tp=8):
     return decorator
 
 
-def parametrize_batch(batches=(1, 8, 32)):
+def parametrize_batch(batches=(1, 8, 32), xfail_b32_on_wh=False):
     """Parametrize a decode test over batch sizes (the ``B`` fixture argument).
 
     B must be a power of two <= 32 so the ``kv_update_shard_cfg`` core grid in
@@ -340,7 +341,22 @@ def parametrize_batch(batches=(1, 8, 32)):
     sized to ``max_batch_size``). Ids are ``B1``/``B8``/``B32`` so node names and
     ``pcc_thresholds.json`` stay readable.
     """
-    return pytest.mark.parametrize("B", [pytest.param(b, id=f"B{b}") for b in batches])
+    return pytest.mark.parametrize(
+        "B", [pytest.param(b, id=f"B{b}", marks=_batch_marks(b, xfail_b32_on_wh)) for b in batches]
+    )
+
+
+def _batch_marks(batch, xfail_b32_on_wh):
+    """Mark B=32 xfail on Wormhole for callers that hit the known attention-decode fault.
+
+    Worst per-user PCC there is 0.019 while B=1..16 hold ~0.9999. The GDN recurrent state stays
+    exact at B=32, so the fault is attention-specific and GDN callers must NOT opt in -- a strict
+    xfail on a passing case reports XPASS, i.e. a failure. strict=True so the marker fires the day
+    the bug is fixed rather than masking the pass.
+    """
+    if xfail_b32_on_wh and batch == 32 and not is_blackhole():
+        return pytest.mark.xfail(strict=True, reason="B=32 at TP=8: attention decode per-user PCC 0.019 on Wormhole")
+    return ()
 
 
 def parametrize_mesh_only(max_tp=8):

@@ -9,7 +9,7 @@ so it is gathered with ConcatMeshToTensor(dim=3).
 
 Run:
     MESH_DEVICE=T3K HF_MODEL=Qwen/Qwen3.8-27B \
-        pytest models/demos/blackhole/qwen36/tests/test_mlp_tp.py -v -s
+        pytest models/demos/wormhole/qwen38/tests/test_mlp_tp.py -v -s
 """
 import os
 

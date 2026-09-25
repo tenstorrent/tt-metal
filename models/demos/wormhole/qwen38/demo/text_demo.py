@@ -1,14 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Qwen3.5/3.6 end-to-end text generation test on Blackhole (P150 / P150x4).
+"""Qwen3.8-27B end-to-end text generation test on Wormhole (T3K).
 
 A single parametrized test covering prefill + decode across ISLs from 128 up to 256k
 (single-user) and batched serving (B=8/B=32, multi-device TP) up to 64k.
 
-Run all:      pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s
-Run 128:      pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced_128"
-Run batched:  MESH_DEVICE=P150x4 pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "b8"
+Run all:      MESH_DEVICE=T3K pytest models/demos/wormhole/qwen38/demo/text_demo.py -v -s
+Run 128:      MESH_DEVICE=T3K pytest models/demos/wormhole/qwen38/demo/text_demo.py -v -s -k "traced_128 and not traced_128k"
+Run batched:  MESH_DEVICE=T3K pytest models/demos/wormhole/qwen38/demo/text_demo.py -v -s -k "b8"
 
 GDN prefill runs the fast fused path by DEFAULT — no env vars needed: chunk-parallel phase-split
 (PREP fanned across the grid + V-block SCAN), fp32 o output, fp32 state, and flat token-major q/k/v
@@ -66,7 +66,7 @@ DEVICE_PARAMS = [
     }
 ]
 
-SAMPLE_PROMPTS_DIR = "models/demos/blackhole/qwen36/demo/sample_prompts"
+SAMPLE_PROMPTS_DIR = "models/demos/wormhole/qwen38/demo/sample_prompts"
 SHARED_PROMPTS_DIR = "models/demos/llama3_70b_galaxy/demo/sample_prompts"
 
 
@@ -234,7 +234,7 @@ def _blocks_for(seqlen, max_generated_tokens):
         pytest.param(4096, 50, True, 8, 1, id="batched_4k_b8"),
         pytest.param(4096, 50, True, 32, 1, id="batched_4k_b32"),
         # B=8 long-context ladder. Paged KV scales as B x ISL (~1 GB/device at 8k to ~8 GB at
-        # 64k), within the P150x4 budget. Each user prefilled via prefill_chunked_peruser, then
+        # 64k), within the T3K budget. Each user prefilled via prefill_chunked_peruser, then
         # all 8 decode together in one B-wide trace; identical prompts decode identically.
         pytest.param(8192, 50, True, 8, 1, id="batched_8k_b8"),
         pytest.param(16384, 50, True, 8, 1, id="batched_16k_b8"),
@@ -257,7 +257,7 @@ def test_demo_text(
 
     device = mesh_device
     if batch > 1 and not _MULTI:
-        pytest.skip("batched decode is the TP (multi-device) path; run with MESH_DEVICE=P150x4 or P150x8")
+        pytest.skip("batched decode is the TP (multi-device) path; run with MESH_DEVICE=T3K")
     device.enable_program_cache()
     # Block budget → max_seq_len, KV cache, and RoPE table
     num_blocks = _blocks_for(seqlen, max_generated_tokens)

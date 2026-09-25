@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Qwen3.6 on-device sampling integration regressions.
+"""Qwen3.8-27B on-device sampling integration regressions.
 
 Run:
   MESH_DEVICE=T3K HF_MODEL=Qwen/Qwen3.8-27B \
-    pytest -svq models/demos/blackhole/qwen36/tests/test_sampling.py
+    pytest -svq models/demos/wormhole/qwen38/tests/test_sampling.py
 """
 
 from types import SimpleNamespace
@@ -67,7 +67,7 @@ def test_decode_only_unseeded_sampling_initializes_rng(mesh_device, reset_seeds,
     from the separate sampling-trace correctness issue.
     """
     if mesh_device.get_num_devices() == 1:
-        pytest.skip("Qwen3.6-27B sampling is the TP path; run with MESH_DEVICE=P150x4 or P150x8")
+        pytest.skip("Qwen3.8-27B sampling is the TP path; run with MESH_DEVICE=T3K")
     args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=128)
     args.sampling_dp = 1
 
