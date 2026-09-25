@@ -50,8 +50,7 @@ constexpr uint32_t UNTILIZERS_PER_LINK = 5;
 // Where the pool ended up relative to where it is designed to be.
 enum class UntilizerPoolFallback : uint8_t {
     kNone,          // all of it in the row under the streams
-    kNoRowBelow,    // the carve has no row under the streams; the pool shares their row
-    kRowTooNarrow,  // the row exists but has fewer spare cores than the pool wants
+    kRowTooNarrow,  // the row has fewer spare cores than the pool wants; the rest come from elsewhere
 };
 
 // The pool that turns a TILE input into staging: a bounded subset of the universe's spare cores, each
@@ -61,8 +60,8 @@ enum class UntilizerPoolFallback : uint8_t {
 // spread across the streams' columns. The streams sit in the row under the eth cores; an untilizer on
 // that same row puts its DRAM reads and staging writes on the NoC row the streams' own DRAM traffic
 // (forwarding pages, output pages, staging reads) already fills, and the row below is the closest one
-// that does not. A carve with no such row -- one row -- gets the pool drawn from whatever spare cores
-// it has, correct and slower, and the return value says so for the caller to report once per build.
+// that does not. A sub-device with no such row is refused. One where that row has too few spare cores
+// tops the pool up from elsewhere, and the return value says so for the caller to report once per build.
 //
 // These cores run nothing else, which is what lets the untilize circular buffers take most of their
 // L1 -- and it is why the pool is drawn from the universe rather than from the grid: on the model's
