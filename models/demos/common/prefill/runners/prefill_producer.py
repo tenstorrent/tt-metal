@@ -20,6 +20,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
+from models.demos.common.prefill.chunk_layout import rotate_chunk_tokens
 from models.demos.common.prefill.runners.migration import (
     is_per_host_storage,
     migration_table_path,
@@ -110,11 +111,14 @@ def _pack_metadata(slot_id: int, actual_start: int, actual_end: int) -> bytes:
     return struct.pack("<III", slot_id, actual_start, actual_end)
 
 
-def _chunk_to_host_array(chunk_token_ids):
+def _chunk_to_host_array(chunk_token_ids, actual_start=0):
+    # Same host-side reshuffle as the engine's H2D prefill connector: a chunk starting mid-slab (multi-turn
+    # resume) is rotated so each SP chip receives the tokens the KV writer places on it (identity when the
+    # start is chunk-aligned).
     sp = GLOBAL_MESH_SHAPE[0]
     chunk_local = CHUNK_SIZE // sp
     return (
-        torch.tensor(chunk_token_ids, dtype=torch.int64)
+        torch.tensor(rotate_chunk_tokens(list(chunk_token_ids), actual_start, sp), dtype=torch.int64)
         .reshape(sp, 1, chunk_local)
         .to(torch.uint32)
         .contiguous()
@@ -1374,7 +1378,7 @@ def main() -> None:
 
     def push_chunk(slot_id: int, chunk_idx: int, actual_start: int, actual_end: int) -> float:
         pool = pools_by_trace[slot_traces[slot_id]]
-        chunk_bytes = _chunk_to_host_array(pool[actual_start : actual_start + CHUNK_SIZE])
+        chunk_bytes = _chunk_to_host_array(pool[actual_start : actual_start + CHUNK_SIZE], actual_start)
         assert (
             chunk_bytes.nbytes == payload_bytes
         ), f"payload {chunk_bytes.nbytes}B != service-expected {payload_bytes}B"

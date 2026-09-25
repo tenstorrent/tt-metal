@@ -1827,3 +1827,35 @@ def test_indexer_score_rejects_partial_block_cyclic_args(device, expect_error):
     for kwargs in [{"block_cyclic_sp_axis": 0}, {"block_cyclic_chunk_local": 256}]:
         with expect_error(RuntimeError, "both be set or both unset"):
             ttnn.experimental.indexer_score_dsa(q_dev, k_dev, w_dev, chunk_start_idx=0, program_config=cfg, **kwargs)
+
+
+@pytest.mark.parametrize(
+    "k_chunk,kv_len",
+    [(1024, 1024 + 5 * 128), (1024, 1024 + 7 * 128), (1024, 1024 + 3 * 128)],
+    ids=["kc1024_5blk", "kc1024_7blk", "kc1024_3blk"],
+)
+def test_indexer_score_msa_block_pool_partial_last_band(device, k_chunk, kv_len):
+    """block_size pooling when kv_len leaves the LAST k-band partial with more than one block: each query row's
+    pooled run is shorter than the unit, and every row must still land at its own columns (the writer's per-row
+    NoC writes). The queries end at kv_len, so the partial band holds each query's diagonal / forced-local block
+    and its causal -inf tail -- exactly what a misplaced row would scramble."""
+    heads, num_groups, dim, sq, t = 4, 4, GLX_DIM, 256, 4096
+    scale = GLX_DIM**-0.5
+    chunk_start = kv_len - sq
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=k_chunk, head_group_size=0)
+    q, k, _ = make_inputs(heads, dim, sq, t)
+    out = run_msa(
+        q,
+        k,
+        chunk_start,
+        device,
+        scale=scale,
+        num_groups=num_groups,
+        block_size=BLOCK_POOL_BS,
+        program_config=cfg,
+        kv_len=kv_len,
+    )
+    w_scale = _msa_scale_w(heads, sq, scale)
+    ref = indexer_score_msa_ref(q, k[:, :, :kv_len, :], w_scale, chunk_start, num_groups, block_size=BLOCK_POOL_BS)
+    nb = kv_len // BLOCK_POOL_BS
+    assert_pooled_match(out[:, :, :, :nb], ref, num_groups, sq, nb, pcc_floor=0.995)
