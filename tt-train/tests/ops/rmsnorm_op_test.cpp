@@ -6,15 +6,134 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <array>
 #include <cassert>
+#include <cmath>
+#include <cstdint>
 #include <umd/device/cluster.hpp>
+#include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "metal/ops/rmsnorm_bw/device/rmsnorm_bw_device_operation.hpp"
+#include "metal/ops/rmsnorm_fw/device/rmsnorm_fw_device_operation.hpp"
 #include "ops/losses.hpp"
 #include "test_utils/random_data.hpp"
+
+namespace {
+
+constexpr uint32_t kCacheTestRows = 32U;
+constexpr uint32_t kCacheTestWidth = 64U;
+constexpr float kCacheTestEpsilon = 1.0e-3F;
+
+ttnn::Tensor make_cache_test_tensor(
+    const std::vector<float>& data,
+    const ttnn::Shape& shape,
+    ttnn::distributed::MeshDevice* device,
+    const tt::tt_metal::Alignment& alignment = {}) {
+    const auto layout = tt::tt_metal::TensorLayout(
+        ttnn::DataType::BFLOAT16, ttnn::PageConfig(ttnn::Layout::TILE), ttnn::DRAM_MEMORY_CONFIG, alignment);
+    return ttnn::Tensor::from_vector(data, tt::tt_metal::TensorSpec(shape, layout), device);
+}
+
+std::vector<float> make_cache_test_input(float offset) {
+    std::vector<float> data(kCacheTestRows * kCacheTestWidth);
+    for (uint32_t row = 0; row < kCacheTestRows; ++row) {
+        for (uint32_t col = 0; col < kCacheTestWidth; ++col) {
+            data[row * kCacheTestWidth + col] =
+                offset + 0.015625F * static_cast<float>((row * 7U + col * 3U) % 41U) - 0.25F;
+        }
+    }
+    return data;
+}
+
+std::vector<float> make_cache_test_gamma(float offset) {
+    std::vector<float> data(kCacheTestWidth);
+    for (uint32_t col = 0; col < kCacheTestWidth; ++col) {
+        data[col] = offset + 0.0078125F * static_cast<float>(col % 17U);
+    }
+    return data;
+}
+
+std::vector<float> make_cache_test_upstream_grad(float offset) {
+    std::vector<float> data(kCacheTestRows * kCacheTestWidth);
+    for (uint32_t row = 0; row < kCacheTestRows; ++row) {
+        for (uint32_t col = 0; col < kCacheTestWidth; ++col) {
+            data[row * kCacheTestWidth + col] = offset + 0.00390625F * static_cast<float>((row * 5U + col * 11U) % 29U);
+        }
+    }
+    return data;
+}
+
+std::vector<float> rms_reference(const std::vector<float>& input) {
+    std::vector<float> rms(kCacheTestRows);
+    for (uint32_t row = 0; row < kCacheTestRows; ++row) {
+        float square_sum = 0.0F;
+        for (uint32_t col = 0; col < kCacheTestWidth; ++col) {
+            const float value = input[row * kCacheTestWidth + col];
+            square_sum += value * value;
+        }
+        rms[row] = std::sqrt(square_sum / static_cast<float>(kCacheTestWidth) + kCacheTestEpsilon);
+    }
+    return rms;
+}
+
+void expect_forward_matches_reference(
+    const ttnn::Tensor& output,
+    const ttnn::Tensor& rms,
+    const std::vector<float>& input,
+    const std::vector<float>& gamma) {
+    const auto actual_output = ttml::core::to_vector<float>(output);
+    const auto actual_rms = ttml::core::to_vector<float>(rms);
+    const auto expected_rms = rms_reference(input);
+
+    ASSERT_EQ(actual_output.size(), input.size());
+    ASSERT_EQ(actual_rms.size(), expected_rms.size());
+    for (uint32_t row = 0; row < kCacheTestRows; ++row) {
+        EXPECT_NEAR(actual_rms[row], expected_rms[row], 3.0e-2F) << "row=" << row;
+        for (uint32_t col = 0; col < kCacheTestWidth; ++col) {
+            const size_t index = row * kCacheTestWidth + col;
+            const float expected = input[index] * gamma[col] / expected_rms[row];
+            EXPECT_NEAR(actual_output[index], expected, 4.0e-2F) << "row=" << row << ", col=" << col;
+        }
+    }
+}
+
+void expect_backward_matches_reference(
+    const ttnn::Tensor& da,
+    const ttnn::Tensor& dgamma_components,
+    const std::vector<float>& input,
+    const std::vector<float>& gamma,
+    const std::vector<float>& rms,
+    const std::vector<float>& upstream_grad) {
+    const auto actual_da = ttml::core::to_vector<float>(da);
+    const auto actual_dgamma = ttml::core::to_vector<float>(dgamma_components);
+
+    ASSERT_EQ(actual_da.size(), input.size());
+    ASSERT_EQ(actual_dgamma.size(), input.size());
+    for (uint32_t row = 0; row < kCacheTestRows; ++row) {
+        float dot = 0.0F;
+        for (uint32_t col = 0; col < kCacheTestWidth; ++col) {
+            const size_t index = row * kCacheTestWidth + col;
+            dot += upstream_grad[index] * gamma[col] * input[index];
+        }
+        dot /= static_cast<float>(kCacheTestWidth);
+
+        for (uint32_t col = 0; col < kCacheTestWidth; ++col) {
+            const size_t index = row * kCacheTestWidth + col;
+            const float expected_da =
+                upstream_grad[index] * gamma[col] / rms[row] - input[index] * dot / (rms[row] * rms[row] * rms[row]);
+            const float expected_dgamma = upstream_grad[index] * input[index] / rms[row];
+            EXPECT_NEAR(actual_da[index], expected_da, 5.0e-2F) << "row=" << row << ", col=" << col;
+            EXPECT_NEAR(actual_dgamma[index], expected_dgamma, 5.0e-2F) << "row=" << row << ", col=" << col;
+        }
+    }
+}
+
+}  // namespace
 
 class RMSNormOpTest : public ::testing::Test {
 protected:
@@ -27,6 +146,179 @@ protected:
         ttml::autograd::ctx().close_device();
     }
 };
+
+TEST_F(RMSNormOpTest, RMSNorm_ForwardProgramCacheSeparatesPaddingAndRebindsAddresses) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    device->enable_program_cache();
+
+    const ttnn::Shape input_shape({1U, 1U, kCacheTestRows, kCacheTestWidth});
+    const ttnn::Shape gamma_shape({1U, 1U, 1U, kCacheTestWidth});
+    const ttnn::Shape rms_shape({1U, 1U, kCacheTestRows, 1U});
+    const tt::tt_metal::Alignment overpadded_alignment({1U, 1U, 64U, 32U});
+    const std::vector<float> output_sentinel(input_shape.volume(), -7.0F);
+    const std::vector<float> rms_sentinel(rms_shape.volume(), -7.0F);
+
+    const auto standard_input_data = make_cache_test_input(0.5F);
+    const auto standard_gamma_data = make_cache_test_gamma(0.75F);
+    auto standard_input = make_cache_test_tensor(standard_input_data, input_shape, device);
+    auto standard_gamma = make_cache_test_tensor(standard_gamma_data, gamma_shape, device);
+    auto standard_output = make_cache_test_tensor(output_sentinel, input_shape, device);
+    auto standard_rms = make_cache_test_tensor(rms_sentinel, rms_shape, device);
+
+    const auto entries_before_standard = device->num_program_cache_entries();
+    const auto standard_result = ttnn::prim::ttml_rmsnorm_fw(
+        standard_input,
+        standard_gamma,
+        /*return_intermediates=*/true,
+        kCacheTestEpsilon,
+        standard_rms,
+        standard_output);
+    const auto entries_after_standard = device->num_program_cache_entries();
+    ASSERT_EQ(standard_result.size(), 2U);
+    EXPECT_GT(entries_after_standard, entries_before_standard)
+        << "the first RMSNorm forward call did not cache a program";
+    EXPECT_EQ(standard_result[0].buffer()->address(), standard_output.buffer()->address());
+    EXPECT_EQ(standard_result[1].buffer()->address(), standard_rms.buffer()->address());
+    expect_forward_matches_reference(standard_result[0], standard_result[1], standard_input_data, standard_gamma_data);
+
+    // The logical shapes and dtypes are unchanged, but the input/output/RMS tensors now have an extra
+    // physical tile row. RMSNorm compiles its work split from that padded geometry, so this must not hit
+    // the standard-layout program warmed above.
+    const auto padded_input_data = make_cache_test_input(0.25F);
+    const auto padded_gamma_data = make_cache_test_gamma(0.625F);
+    auto padded_input = make_cache_test_tensor(padded_input_data, input_shape, device, overpadded_alignment);
+    auto padded_gamma = make_cache_test_tensor(padded_gamma_data, gamma_shape, device);
+    auto padded_output = make_cache_test_tensor(output_sentinel, input_shape, device, overpadded_alignment);
+    auto padded_rms = make_cache_test_tensor(rms_sentinel, rms_shape, device, overpadded_alignment);
+
+    const auto entries_before_padded = device->num_program_cache_entries();
+    const auto padded_result = ttnn::prim::ttml_rmsnorm_fw(
+        padded_input,
+        padded_gamma,
+        /*return_intermediates=*/true,
+        kCacheTestEpsilon,
+        padded_rms,
+        padded_output);
+    const auto entries_after_padded = device->num_program_cache_entries();
+    ASSERT_EQ(padded_result.size(), 2U);
+    EXPECT_GT(entries_after_padded, entries_before_padded)
+        << "RMSNorm forward reused a program compiled for different padded geometry";
+    expect_forward_matches_reference(padded_result[0], padded_result[1], padded_input_data, padded_gamma_data);
+
+    // A third call has the same complete specs as the padded call but all-new buffers and values. It must
+    // reuse that program while rebinding all four runtime addresses.
+    const auto replay_input_data = make_cache_test_input(0.875F);
+    const auto replay_gamma_data = make_cache_test_gamma(0.9375F);
+    auto replay_input = make_cache_test_tensor(replay_input_data, input_shape, device, overpadded_alignment);
+    auto replay_gamma = make_cache_test_tensor(replay_gamma_data, gamma_shape, device);
+    auto replay_output = make_cache_test_tensor(output_sentinel, input_shape, device, overpadded_alignment);
+    auto replay_rms = make_cache_test_tensor(rms_sentinel, rms_shape, device, overpadded_alignment);
+    ASSERT_NE(replay_input.buffer()->address(), padded_input.buffer()->address());
+    ASSERT_NE(replay_gamma.buffer()->address(), padded_gamma.buffer()->address());
+    ASSERT_NE(replay_output.buffer()->address(), padded_output.buffer()->address());
+    ASSERT_NE(replay_rms.buffer()->address(), padded_rms.buffer()->address());
+
+    const auto entries_before_replay = device->num_program_cache_entries();
+    const auto replay_result = ttnn::prim::ttml_rmsnorm_fw(
+        replay_input,
+        replay_gamma,
+        /*return_intermediates=*/true,
+        kCacheTestEpsilon,
+        replay_rms,
+        replay_output);
+    const auto entries_after_replay = device->num_program_cache_entries();
+    ASSERT_EQ(replay_result.size(), 2U);
+    EXPECT_EQ(entries_after_replay, entries_before_replay)
+        << "same-spec RMSNorm forward replay should reuse its cached program";
+    expect_forward_matches_reference(replay_result[0], replay_result[1], replay_input_data, replay_gamma_data);
+}
+
+TEST_F(RMSNormOpTest, RMSNorm_BackwardProgramCacheSeparatesPaddingAndRebindsAddresses) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    device->enable_program_cache();
+
+    const ttnn::Shape input_shape({1U, 1U, kCacheTestRows, kCacheTestWidth});
+    const ttnn::Shape gamma_shape({1U, 1U, 1U, kCacheTestWidth});
+    const ttnn::Shape rms_shape({1U, 1U, kCacheTestRows, 1U});
+    const tt::tt_metal::Alignment overpadded_alignment({1U, 1U, 64U, 32U});
+    const std::vector<float> output_sentinel(input_shape.volume(), -7.0F);
+
+    const auto standard_input_data = make_cache_test_input(0.5F);
+    const auto standard_gamma_data = make_cache_test_gamma(0.75F);
+    const auto standard_rms_data = rms_reference(standard_input_data);
+    const auto standard_grad_data = make_cache_test_upstream_grad(0.125F);
+    auto standard_input = make_cache_test_tensor(standard_input_data, input_shape, device);
+    auto standard_gamma = make_cache_test_tensor(standard_gamma_data, gamma_shape, device);
+    auto standard_rms = make_cache_test_tensor(standard_rms_data, rms_shape, device);
+    auto standard_grad = make_cache_test_tensor(standard_grad_data, input_shape, device);
+    auto standard_da = make_cache_test_tensor(output_sentinel, input_shape, device);
+    auto standard_dgamma = make_cache_test_tensor(output_sentinel, input_shape, device);
+
+    const auto entries_before_standard = device->num_program_cache_entries();
+    const auto standard_result = ttnn::prim::ttml_rmsnorm_bw(
+        standard_input, standard_gamma, standard_rms, standard_grad, kCacheTestEpsilon, standard_da, standard_dgamma);
+    const auto entries_after_standard = device->num_program_cache_entries();
+    ASSERT_EQ(standard_result.size(), 2U);
+    EXPECT_GT(entries_after_standard, entries_before_standard)
+        << "the first RMSNorm backward call did not cache a program";
+    EXPECT_EQ(standard_result[0].buffer()->address(), standard_da.buffer()->address());
+    EXPECT_EQ(standard_result[1].buffer()->address(), standard_dgamma.buffer()->address());
+    expect_backward_matches_reference(
+        standard_result[0],
+        standard_result[1],
+        standard_input_data,
+        standard_gamma_data,
+        standard_rms_data,
+        standard_grad_data);
+
+    const auto padded_input_data = make_cache_test_input(0.25F);
+    const auto padded_gamma_data = make_cache_test_gamma(0.625F);
+    const auto padded_rms_data = rms_reference(padded_input_data);
+    const auto padded_grad_data = make_cache_test_upstream_grad(0.25F);
+    auto padded_input = make_cache_test_tensor(padded_input_data, input_shape, device, overpadded_alignment);
+    auto padded_gamma = make_cache_test_tensor(padded_gamma_data, gamma_shape, device);
+    auto padded_rms = make_cache_test_tensor(padded_rms_data, rms_shape, device, overpadded_alignment);
+    auto padded_grad = make_cache_test_tensor(padded_grad_data, input_shape, device, overpadded_alignment);
+    auto padded_da = make_cache_test_tensor(output_sentinel, input_shape, device, overpadded_alignment);
+    auto padded_dgamma = make_cache_test_tensor(output_sentinel, input_shape, device, overpadded_alignment);
+
+    const auto entries_before_padded = device->num_program_cache_entries();
+    const auto padded_result = ttnn::prim::ttml_rmsnorm_bw(
+        padded_input, padded_gamma, padded_rms, padded_grad, kCacheTestEpsilon, padded_da, padded_dgamma);
+    const auto entries_after_padded = device->num_program_cache_entries();
+    ASSERT_EQ(padded_result.size(), 2U);
+    EXPECT_GT(entries_after_padded, entries_before_padded)
+        << "RMSNorm backward reused a program compiled for different padded geometry";
+    expect_backward_matches_reference(
+        padded_result[0], padded_result[1], padded_input_data, padded_gamma_data, padded_rms_data, padded_grad_data);
+
+    const auto replay_input_data = make_cache_test_input(0.875F);
+    const auto replay_gamma_data = make_cache_test_gamma(0.9375F);
+    const auto replay_rms_data = rms_reference(replay_input_data);
+    const auto replay_grad_data = make_cache_test_upstream_grad(0.375F);
+    auto replay_input = make_cache_test_tensor(replay_input_data, input_shape, device, overpadded_alignment);
+    auto replay_gamma = make_cache_test_tensor(replay_gamma_data, gamma_shape, device);
+    auto replay_rms = make_cache_test_tensor(replay_rms_data, rms_shape, device, overpadded_alignment);
+    auto replay_grad = make_cache_test_tensor(replay_grad_data, input_shape, device, overpadded_alignment);
+    auto replay_da = make_cache_test_tensor(output_sentinel, input_shape, device, overpadded_alignment);
+    auto replay_dgamma = make_cache_test_tensor(output_sentinel, input_shape, device, overpadded_alignment);
+    ASSERT_NE(replay_input.buffer()->address(), padded_input.buffer()->address());
+    ASSERT_NE(replay_gamma.buffer()->address(), padded_gamma.buffer()->address());
+    ASSERT_NE(replay_rms.buffer()->address(), padded_rms.buffer()->address());
+    ASSERT_NE(replay_grad.buffer()->address(), padded_grad.buffer()->address());
+    ASSERT_NE(replay_da.buffer()->address(), padded_da.buffer()->address());
+    ASSERT_NE(replay_dgamma.buffer()->address(), padded_dgamma.buffer()->address());
+
+    const auto entries_before_replay = device->num_program_cache_entries();
+    const auto replay_result = ttnn::prim::ttml_rmsnorm_bw(
+        replay_input, replay_gamma, replay_rms, replay_grad, kCacheTestEpsilon, replay_da, replay_dgamma);
+    const auto entries_after_replay = device->num_program_cache_entries();
+    ASSERT_EQ(replay_result.size(), 2U);
+    EXPECT_EQ(entries_after_replay, entries_before_replay)
+        << "same-spec RMSNorm backward replay should reuse its cached program";
+    expect_backward_matches_reference(
+        replay_result[0], replay_result[1], replay_input_data, replay_gamma_data, replay_rms_data, replay_grad_data);
+}
 
 // ============================================================================
 // Section 1: RMSNorm Kernel vs PyTorch Reference Implementation
