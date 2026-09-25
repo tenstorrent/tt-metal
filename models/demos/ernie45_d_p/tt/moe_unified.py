@@ -155,11 +155,10 @@ class TtMoEUnified:
         ind = ttnn.reshape(ttnn.to_layout(idx2, ttnn.ROW_MAJOR_LAYOUT), (1, S, K))
         scores = ttnn.reshape(ttnn.to_layout(ttnn.typecast(wts, ttnn.bfloat16), ttnn.ROW_MAJOR_LAYOUT), (1, S, K))
         buf, meta = dispatch(ttnn.squeeze(x, dim=0), scores, ind, offsets, self.dispatch_table)
-        buf_t = ttnn.to_layout(
-            ttnn.squeeze(ttnn.squeeze(buf, dim=0), dim=0), ttnn.TILE_LAYOUT, dtype=self.routed.activations_dtype
-        )
-        ttnn.deallocate(buf)
-        out = self.routed(buf_t, counts, region_offsets)  # IN PLACE: `out` is `buf_t` (TILE input) -- do not free buf_t
+        # ROW_MAJOR bf16 buffer -> the op's fused fast path (tilize + bf8 pack inside the kernel, fresh output).
+        buf2 = ttnn.squeeze(ttnn.squeeze(buf, dim=0), dim=0)
+        out = self.routed(buf2, counts, region_offsets)
+        ttnn.deallocate(buf2)
         out = ttnn.unsqueeze(ttnn.unsqueeze(out, dim=0), dim=0)
         comb = combine(out, meta, counts, region_offsets, seq_len_per_chip=S)
         ttnn.deallocate(out)
