@@ -33,7 +33,8 @@ namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d {
 namespace {
 
 // The parts of L1 that have to sit at the same address on every chip, because a sender on one chip writes
-// them on another.
+// them on another. The signal header needs one fabric packet header (checked in compute_l1_layout) and the
+// drain sink one word; the gaps are slack.
 constexpr uint32_t PKT_HDR_SIGNAL_OFF = 0x0000;
 constexpr uint32_t DRAIN_SINK_OFF = 0x0400;
 constexpr uint32_t QUEUE_OFF = 0x1000;
@@ -88,9 +89,13 @@ L1Layout compute_l1_layout(
     l.drain_sink = base + DRAIN_SINK_OFF;
     l.queue = base + QUEUE_OFF;
     l.pkt_hdr_queue = l.queue + dspf2d::QUEUE_DEPTH * (token_bytes + dspf2d::FORWARDING_METADATA_SIZE);
+    const uint32_t hdr_bytes = static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
+    TT_FATAL(
+        PKT_HDR_SIGNAL_OFF + hdr_bytes <= DRAIN_SINK_OFF,
+        "dispatch_fabric2d: a {} B fabric packet header overlaps the drain sink",
+        hdr_bytes);
     // One header per entry, the same stride the sender indexes the pool with.
-    const uint32_t hdr_queue_bytes =
-        dspf2d::QUEUE_DEPTH * static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
+    const uint32_t hdr_queue_bytes = dspf2d::QUEUE_DEPTH * hdr_bytes;
     // 64-byte aligned: a DRAM read needs a 64-byte-aligned L1 destination on Blackhole, and DRAM reads
     // land directly in the scratch.
     l.scratch = (l.pkt_hdr_queue + hdr_queue_bytes + 63u) & ~63u;
@@ -355,8 +360,8 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
                                         own_count,
                                         static_cast<uint32_t>(work.size()) - own_count)
                                         .to_ct_word_arr(chip_ids, assignment_words, in_words, out_words);
-            for (uint32_t i = 0; i < dspf2d::ReaderRtArg::kCount; i++) {
-                tt::tt_metal::TensorAccessorArgs(dram[i]).append_to(rdr.compile_time_args);
+            for (tt::tt_metal::Buffer* buffer : dram) {
+                tt::tt_metal::TensorAccessorArgs(buffer).append_to(rdr.compile_time_args);
             }
             rdr.config = tt::tt_metal::DataMovementConfigDescriptor{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
@@ -366,8 +371,8 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
             // Buffer* so the framework records BufferBindings and rewrites them per dispatch: an address
             // describes an allocation, not a program, and a cached program must not carry a stale one.
             tt::tt_metal::KernelDescriptor::RTArgList rdr_rt;
-            for (uint32_t i = 0; i < dspf2d::ReaderRtArg::kCount; i++) {
-                rdr_rt.push_back(dram[i]);
+            for (tt::tt_metal::Buffer* buffer : dram) {
+                rdr_rt.push_back(buffer);
             }
             rdr.emplace_runtime_args(self.worker_logical, rdr_rt);
 

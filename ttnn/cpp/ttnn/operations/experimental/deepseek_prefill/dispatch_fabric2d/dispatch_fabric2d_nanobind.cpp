@@ -24,7 +24,7 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
         one hop at a time around the ring of chips on `cluster_axis`. Each chip on the way stores the token
         in a DRAM forwarding buffer and forwards it to the next chip.
 
-        Inputs. All are interleaved, and all except input_tensor are ROW_MAJOR:
+        Inputs. All are interleaved in DRAM, and all except input_tensor are ROW_MAJOR:
 
             input_tensor          tokens, BFLOAT16, ROW_MAJOR (one token per page) or TILE. A TILE input is
                                   untilized on device and needs emb_dim to be a multiple of 32.
@@ -44,10 +44,12 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
                                   (pad_side 0) only the first real_token_count tokens are routed; other
                                   sides are ignored.
 
-        Arguments:
+        Arguments. Everything from padding_config on is keyword-only:
 
             experts_per_chip      routed experts each chip hosts.
+            num_routed_experts    routed experts in the model.
             num_experts_per_tok   top-k, the experts each token picks.
+            metadata_len          words of metadata per token; must be 3.
             seq_len_per_chip      tokens per chip; must be > 0.
             max_dispatch_buffer_token_size
                                   token capacity of each chip's output buffer.
@@ -73,12 +75,13 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
             num_links             1 to 4, and the axis must have that many forwarding links.
             num_routed_experts    a multiple of 16.
             metadata_len          3.
-            memory_config         interleaved.
+            input tensors         interleaved in DRAM.
+            memory_config         interleaved DRAM.
             subdevice_id          must contain the worker core nearest each ethernet core the op sends on,
                                   one per link direction (2 * num_links cores). A TILE input also needs at
                                   least one core in the core row under those.
 
-        Not checked: every tensor must be in DRAM, expert_offsets must be replicated along cluster_axis,
+        Not checked: expert_offsets must be replicated along cluster_axis,
         the last column of expert_dispatch_table must be -1, and padded tokens must route to no expert.
         fp8 input and output are not supported. cluster_axis other than 0 is untested.
         )doc",
@@ -89,7 +92,8 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
         nb::arg("expert_dispatch_table"),
         nb::arg("expert_token_counts"),
         nb::arg("expert_region_offsets"),
-        nb::arg("padding_config") = std::nullopt,
+        nb::kw_only(),
+        nb::arg("padding_config") = nb::none(),
         nb::arg("experts_per_chip"),
         nb::arg("num_routed_experts"),
         nb::arg("num_experts_per_tok"),
@@ -100,7 +104,7 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
         nb::arg("num_links") = 1,
         nb::arg("topology"),
         nb::arg("memory_config"),
-        nb::arg("subdevice_id") = std::nullopt);
+        nb::arg("subdevice_id") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d::detail

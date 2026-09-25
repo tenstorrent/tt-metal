@@ -128,8 +128,8 @@ constexpr uint32_t FWD_EXTRA_BYTES = FORWARDING_METADATA_SIZE;
 constexpr uint32_t FWD_USED_BYTES = 4 * sizeof(uint32_t) + 3 * sizeof(uint64_t);
 
 // kBlkExpertBucket holds one word per global expert id: that expert's bucket index, or BUCKET_NOT_HERE
-// for an expert outside this dispatch group, so resolving a pick is one indexed load. The routing
-// pass tests `bucket >= num_buckets()`, which rejects the sentinel and any out-of-range index together.
+// for an expert outside this dispatch group, so resolving a pick is one indexed load. The routing pass
+// skips any bucket >= num_buckets(), which covers the sentinel.
 constexpr uint32_t BUCKET_NOT_HERE = 0xFFFFFFFFu;
 
 // Words per record in kBlkRecords: the token's index on this chip, its page on the destination, and its
@@ -221,14 +221,14 @@ constexpr uint32_t scratch_block_raw_bytes(const ScratchGeometry& g, uint32_t bl
     switch (block) {
         case kBlkIndices: return g.seq_len * g.indices_pad_stride;
         case kBlkOffsets: return 4u * g.extent * g.num_routed_experts;
-        case kBlkCounts: return 4u * g.num_routed_experts;
+        case kBlkCounts:
         case kBlkRegionOffsets: return 4u * g.num_routed_experts;
-        // A trailing sentinel column, so a padded token's unguarded lookup reads "not in this group".
-        case kBlkTable: return 4u * (g.num_routed_experts + 1u);
-        // Indexed like kBlkTable, sentinel column included.
+        // kBlkTable has a trailing sentinel column, so a padded token's lookup reads "not in this group".
+        // kBlkExpertBucket is indexed the same way, sentinel column included.
+        case kBlkTable:
         case kBlkExpertBucket: return 4u * (g.num_routed_experts + 1u);
         // Indexed by bucket; only this group's experts have one.
-        case kBlkFirstPage: return 4u * g.extent * g.experts_per_chip;
+        case kBlkFirstPage:
         case kBlkChipExperts: return 4u * g.extent * g.experts_per_chip;
         // One counter per position on the axis, used while the chip -> experts inverse is built. A separate
         // block because the blocks below are indexed by bucket.
@@ -240,7 +240,7 @@ constexpr uint32_t scratch_block_raw_bytes(const ScratchGeometry& g, uint32_t bl
             return 4u * g.seq_len * record_words() * g.topk;  // one per pick
         // Reserved even with no padding config, so the host and kernel lists never differ.
         case kBlkPadding: return PADDING_CONFIG_BYTES;
-        case kBlkInStart: return 4u * chunk_start_count(g);
+        case kBlkInStart:
         case kBlkOutStart: return 4u * chunk_start_count(g);
         case kBlkRisc: return 4u * INDEX_RISCS * index_risc_words(g.extent * g.experts_per_chip);
         default: return 0u;
