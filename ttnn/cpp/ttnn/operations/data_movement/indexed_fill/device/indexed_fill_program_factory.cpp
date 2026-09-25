@@ -236,12 +236,14 @@ ttnn::device_operation::ProgramArtifacts IndexedFillProgramFactory::create_progr
     // overrun by the 64B NOC read and adjacent staged pages are clobbered (wrong output, PCC ~0.5).
     // This bites when the last-dim row is smaller than the DRAM alignment, e.g. the permute
     // fallback for dim==rank-1 ROW_MAJOR, which feeds the dim=0 primitive a tiny (4-elem = 8B) row.
-    // input_a / input_b / output share the page (last) dim on this path, so a single aligned size
-    // applies; std::max keeps it correct even if alignments ever differ.
+    // std::max sizes the DFB slot and the reads, which may over-fetch safely. Writes must not exceed
+    // the output's own page stride (e.g. L1 output with a DRAM input_b), so they use its size below.
     const uint32_t generic_aligned_page_size = is_tile ? rounded_page_size
                                                         : static_cast<uint32_t>(std::max({input_a_buffer->aligned_page_size(),
                                                                                           input_b_buffer->aligned_page_size(),
                                                                                           output_buffer->aligned_page_size()}));
+    const uint32_t generic_write_page_size =
+        is_tile ? rounded_page_size : static_cast<uint32_t>(output_buffer->aligned_page_size());
 
     // Use shard geometry for the shard_local path, full aligned pages for the generic path.
     const uint32_t kernel_page_size =
@@ -506,7 +508,7 @@ ttnn::device_operation::ProgramArtifacts IndexedFillProgramFactory::create_progr
             AddRuntimeArgsForNode(
                 writer_run.runtime_arg_values,
                 core,
-                {{"page_size", kernel_page_size},
+                {{"page_size", generic_write_page_size},
                  {"outer_count", outer_count},
                  {"inner_count", inner_count},
                  {"outer_stride", outer_stride_a},  // outer stride in output
