@@ -327,25 +327,35 @@ public:
     uint32_t get_write_ptr() const { return get_write_ptr_impl() + L1_UNCACHED_OFFSET; }
     uint32_t get_read_ptr() const { return get_read_ptr_impl() + L1_UNCACHED_OFFSET; }
 
-    // after wait_front
+#ifdef COMPILE_FOR_TRISC
+    // Returns the LLKOperand pointing to the front (reading address) of the DFB
+    // Functionalities meant to be used with LLKOperand for LLK 2.0
+    //
+    // Parameters:
+    // - Operand: The LLKOperand type to return. (hint: use LLKOperandFrom<dfb::token>)
     template <typename Operand>
-    Operand front() const {
-#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_MATH)
+    [[nodiscard]] Operand front() const {
+#ifdef UCK_CHLKC_MATH
         return Operand{0};
 #else
         return Operand{(get_read_ptr_impl() >> (4 - cb_addr_shift)) - 1};
 #endif
     }
 
-    // after reserve_back
+    // Returns the LLKOperand pointing to the back (writing address) of the DFB
+    // Functionalities meant to be used with LLKOperand for LLK 2.0
+    //
+    // Parameters:
+    // - Operand: The LLKOperand type to return. (hint: use LLKOperandFrom<dfb::token>)
     template <typename Operand>
-    Operand back() const {
-#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_MATH)
+    [[nodiscard]] Operand back() const {
+#ifdef UCK_CHLKC_MATH
         return Operand{0};
 #else
         return Operand{(get_write_ptr_impl() >> (4 - cb_addr_shift)) - 1};
 #endif
     }
+#endif
 
 #ifndef ARCH_QUASAR
     // WH/BH only — mutate FIFO cursor state (rewind / jump / hold-wr style surgery).
