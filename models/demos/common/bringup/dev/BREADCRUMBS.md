@@ -228,3 +228,13 @@ Drive this ledger with
   The orchestrator was restarted before its needless second attempt did anything.
 - Gate commits now also stage the ledger's `__init__.py` and `results/block_graphs.json`; freeze commits stage the
   `__init__.py` files of the frozen tests' packages (they were left untracked).
+
+## F19 (2026-09-25): what counts as device access
+- Second false positive in a real run: a test-role agent ran a CPU-only golden analysis heredoc that imported the test
+  harness, and harness.py imports ttnn lazily inside a function; F18's import tracing flagged it and burned one of
+  the test role's attempts. Importing ttnn does not take the box; opening a device does. The check now flags python
+  whose own code opens a device (open_mesh_device, open_device, CreateDevice, ttnn.MeshDevice, synchronize_device, ...);
+  direct pytest stays flagged because that is how device tests run.
+- Operating rule (learned twice): stop the orchestrator before editing framework code. The path check diffs the tree,
+  so an edit made while an agent runs is charged to that agent, and the next brief tells it to revert the edit. Both
+  times the run was stopped before an agent acted on it.
