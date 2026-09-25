@@ -221,6 +221,14 @@ TraceNode create_trace_node(
     uint32_t num_workers,
     bool use_prefetcher_cache);
 
+// Serialize the same command fragments as write_program_command_sequence for reuse across devices.
+void pack_program_command_sequence(
+    const ProgramCommandSequence& program_command_sequence,
+    bool stall_first,
+    bool stall_before_program,
+    bool send_binary,
+    vector_aligned<uint32_t>& packed);
+
 void write_program_command_sequence(
     const ProgramCommandSequence& program_command_sequence,
     SystemMemoryManager& manager,

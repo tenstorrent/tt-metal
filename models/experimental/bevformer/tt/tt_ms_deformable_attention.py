@@ -235,6 +235,7 @@ class TTMSDeformableAttention:
 
     def forward(
         self,
+        *,
         query,
         value=None,
         identity=None,

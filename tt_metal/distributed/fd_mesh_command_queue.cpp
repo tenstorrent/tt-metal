@@ -1291,6 +1291,24 @@ void FDMeshCommandQueue::write_program_commands_to_devices(
     ProgramCommandSequence& program_cmd_seq,
     bool stall_first,
     bool stall_before_program) {
+    if (devices.size() > 1) {
+        const auto size = program_cmd_seq.get_one_shot_fetch_size(stall_first, stall_before_program, true);
+        if (size <= program_cmd_seq.ctx->dispatch_mem_map().max_prefetch_command_size()) {
+            // Every local device receives the same bytes. Pack the fragments once before the device copies.
+            static thread_local vector_aligned<uint32_t> packed;
+            program_dispatch::pack_program_command_sequence(
+                program_cmd_seq, stall_first, stall_before_program, true, packed);
+            for (auto* device : devices) {
+                auto& manager = device->sysmem_manager();
+                manager.issue_queue_reserve(size, id_);
+                manager.cq_write(packed.data(), size, manager.get_issue_queue_write_ptr(id_));
+                manager.issue_queue_push_back(size, id_);
+                manager.fetch_queue_reserve_back(id_);
+                manager.fetch_queue_write(size, id_);
+            }
+            return;
+        }
+    }
     for (auto* device : devices) {
         program_dispatch::write_program_command_sequence(
             program_cmd_seq, device->sysmem_manager(), id_, stall_first, stall_before_program);
