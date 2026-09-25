@@ -34,15 +34,27 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
                                   Pass offset_cumsum's all_global_dispatch_offsets, replicated along
                                   cluster_axis.
             expert_dispatch_table INT32, num_routed_experts + 1 columns: global expert id -> chip in the
-                                  dispatch group, or -1 when the expert is not in this group. The extra
-                                  last column must be -1; padded tokens look it up.
+                                  dispatch group, or -1 when the expert is not in this group. Padded
+                                  tokens look up the extra last column.
             expert_token_counts   INT32 or UINT32, (..., num_routed_experts): tokens per expert, summed over
                                   all source chips.
             expert_region_offsets INT32 or UINT32, (..., num_routed_experts): where each expert's region
                                   starts in the output buffer.
             padding_config        optional INT32 or UINT32 [real_token_count, pad_side]. With right padding
                                   (pad_side 0) only the first real_token_count tokens are routed; other
-                                  sides are ignored. Padded tokens must resolve to no expert.
+                                  sides are ignored.
+
+        Arguments:
+
+            experts_per_chip      routed experts each chip hosts.
+            num_experts_per_tok   top-k, the experts each token picks.
+            seq_len_per_chip      tokens per chip; must be > 0.
+            max_dispatch_buffer_token_size
+                                  token capacity of each chip's output buffer.
+            cluster_axis          mesh axis the ring of chips runs along. Default 0.
+            num_links             forwarding links per direction, 1 to 4. Default 1.
+            topology              fabric topology of cluster_axis.
+            memory_config         memory config of both outputs.
             subdevice_id          sub-device whose Tensix cores the op may use. Defaults to the first
                                   sub-device, which is the whole compute grid when no sub-device manager
                                   is loaded.
@@ -50,8 +62,9 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
         Returns [dispatched_buffer, metadata], both per device and ROW_MAJOR, in `memory_config`.
         dispatched_buffer is (1, 1, max_dispatch_buffer_token_size, emb_dim) BFLOAT16. metadata is
         (1, 1, max_dispatch_buffer_token_size, 3) INT32 and holds (source chip, token index, topk index) at
-        the same page as its token. A token past the buffer capacity is dropped but still counts toward its
-        expert's offsets.
+        the same page as its token. The source chip is the chip's linearized mesh index. A token past the
+        buffer capacity is dropped but still counts toward its expert's offsets, because page numbers must
+        match the offsets table, which counts every routed token.
 
         Checked constraints:
 
@@ -65,8 +78,9 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
                                   one per link direction (2 * num_links cores). A TILE input also needs at
                                   least one core in the row under those.
 
-        Not checked: every tensor must be in DRAM, and expert_offsets must be replicated along
-        cluster_axis. fp8 input and output are not supported. cluster_axis other than 0 is untested.
+        Not checked: every tensor must be in DRAM, expert_offsets must be replicated along cluster_axis,
+        the last column of expert_dispatch_table must be -1, and padded tokens must route to no expert.
+        fp8 input and output are not supported. cluster_axis other than 0 is untested.
         )doc",
         &dispatch_fabric2d,
         nb::arg("input_tensor"),

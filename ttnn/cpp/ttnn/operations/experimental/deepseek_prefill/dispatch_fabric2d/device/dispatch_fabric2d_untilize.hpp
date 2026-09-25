@@ -39,7 +39,8 @@ std::optional<UntilizePlan> plan_untilize(
     uint32_t sem_addr,
     tt::tt_metal::Buffer* staging);
 
-// Untilizers per link (two streams per link).
+// Untilizers per link (two streams per link). Raise it if the stream readers' dspf2d_wait_untilize profiler
+// zone is above zero.
 constexpr uint32_t UNTILIZERS_PER_LINK = 5;
 
 // Whether the whole pool fit in the row under the streams.

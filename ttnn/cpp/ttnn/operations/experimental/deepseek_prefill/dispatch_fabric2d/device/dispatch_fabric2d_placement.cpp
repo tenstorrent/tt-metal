@@ -128,8 +128,8 @@ StreamPlacements decide_device_placement(
     for (const StreamId stream : order) {
         const auto& candidate = candidates.at(stream);
         const auto at = std::find(allowed_cores.begin(), allowed_cores.end(), candidate.worker);
-        // Refused, not relocated: cores outside allowed_cores belong to other work on the chip, so a
-        // nearest core outside it means the caller's core set is wrong.
+        // Refused: cores outside allowed_cores belong to other work on the chip, so a nearest core
+        // outside it means the caller's core set is wrong.
         TT_FATAL(
             at != allowed_cores.end(),
             "dispatch_fabric2d {}: the worker nearest stream {}'s eth core is {}, which is outside the "

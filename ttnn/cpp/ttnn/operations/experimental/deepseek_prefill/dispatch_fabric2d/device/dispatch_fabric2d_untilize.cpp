@@ -62,8 +62,8 @@ std::vector<tt::tt_metal::CoreCoord> decide_untilizer_cores(
             below.push_back(core);
         }
     }
-    // Refused, not run on the streams' row: the pool's DRAM traffic there would share the NoC row the
-    // streams already fill and slow them down.
+    // Refused: on the streams' row, the pool's DRAM traffic would share the NoC row the streams already
+    // fill and slow them down.
     TT_FATAL(
         !below.empty(),
         "dispatch_fabric2d: a TILE input needs its sub-device to include row {}, the row under the streams "

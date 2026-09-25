@@ -8,7 +8,8 @@
 // arguments are built from, and the scratch layout. Host-only declarations sit behind KERNEL_BUILD.
 //
 // A stream is one link direction, served by a reader and a sender on one core. The reader passes tokens
-// to the sender through the TokenQueue, an L1 queue whose entries each hold one token and its fwd_meta.
+// to the sender through the TokenQueue, an L1 queue whose entries each hold one token and its fwd_meta
+// (FwdMetadata: routing data for the next hop).
 
 #include <cstddef>
 #include <cstdint>
@@ -29,7 +30,7 @@ struct L1Layout {
     uint32_t drain_sink;
     uint32_t queue;          // queue_depth tokens, filled by the reader and drained by the sender
     uint32_t pkt_hdr_queue;  // one prebuilt packet header per entry
-    // The reader's scratch: its copy of the control tensors and its routing index. No other chip
+    // The reader's scratch: its copy of the routing tables and its routing index. No other chip
     // addresses it, so it goes last.
     uint32_t scratch;
 };
@@ -119,15 +120,15 @@ struct FwdMetadata {
     uint64_t this_addr;  // the address this hop writes to
 };
 
-// Bytes of fwd_meta a forward hop sends: all of it, so a forwarded packet fills exactly one forwarding
-// page and its length stays a multiple of 64 B.
+// Bytes of fwd_meta a forward hop sends: all of it, so a forwarded packet fills exactly one fwd_section
+// page, the unit the next hop reads back, and its length stays a multiple of the 64 B DRAM alignment.
 constexpr uint32_t FWD_EXTRA_BYTES = FORWARDING_METADATA_SIZE;
 
 // Bytes of fwd_meta the next hop reads. Used only by the static_asserts below, which pin the layout.
 constexpr uint32_t FWD_USED_BYTES = 4 * sizeof(uint32_t) + 3 * sizeof(uint64_t);
 
 // kBlkExpertBucket holds one word per global expert id: that expert's bucket index, or BUCKET_NOT_HERE
-// for an expert outside this dispatch group, so resolving a top-k choice is one indexed load. The routing
+// for an expert outside this dispatch group, so resolving a pick is one indexed load. The routing
 // pass tests `bucket >= num_buckets()`, which rejects the sentinel and any out-of-range index together.
 constexpr uint32_t BUCKET_NOT_HERE = 0xFFFFFFFFu;
 
@@ -176,6 +177,8 @@ static_assert(sizeof(ChunkDescriptor) == 4 * CHUNK_DESCRIPTOR_WORDS, "one uint32
 // One ordered list of blocks, sized only here. The host reserves the sum and the kernel lays out the
 // offsets from the same list. A mismatch overruns into the global semaphores, and the kernel's ASSERT
 // against that compiles in only when the watcher is enabled.
+//
+// Each kBlk* member indexes a block of the reader's L1 scratch; these are not circular buffers.
 enum ScratchBlock : uint32_t {
     kBlkIndices,
     kBlkOffsets,
@@ -191,7 +194,7 @@ enum ScratchBlock : uint32_t {
     kBlkPadding,
     kBlkInStart,
     kBlkOutStart,
-    // Per routing-index RISC: routed choices per bucket over its token slice, plus its next_page and
+    // Per routing-index RISC: routed picks per bucket over its token slice, plus its next_page and
     // next_record cursors. The later RISCs and the reader read its counts after the exchange; the cursors
     // are private to the RISC.
     kBlkRisc,
@@ -234,7 +237,7 @@ constexpr uint32_t scratch_block_raw_bytes(const ScratchGeometry& g, uint32_t bl
         // bucket_start[b + 1].
         case kBlkBucketStart: return 4u * (g.extent * g.experts_per_chip + 1u);
         case kBlkRecords:
-            return 4u * g.seq_len * record_words() * g.topk;  // one per (token, top-k choice)
+            return 4u * g.seq_len * record_words() * g.topk;  // one per pick
         // Reserved even with no padding config, so the host and kernel lists never differ.
         case kBlkPadding: return PADDING_CONFIG_BYTES;
         case kBlkInStart: return 4u * chunk_start_count(g);

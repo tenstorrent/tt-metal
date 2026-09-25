@@ -19,7 +19,7 @@ using routing_index::ct;
 using routing_index::Scratch;
 
 // Every source chip's row of the offsets table, the two tensors that close the last row, and the dispatch
-// table. A few kB, read into L1 once.
+// table. A few kB, read into scratch once.
 void read_control_tables(const Scratch& c) {
     const auto offsets_acc = TensorAccessor(
         dspf2d::ReaderCtArgs::offsets_args, get_arg_val<uint32_t>(dspf2d::ReaderRtArg::kExpertOffsetsAddr));
@@ -84,7 +84,8 @@ void build_expert_buckets(const Scratch& c) {
     // The host checks the table's width but not its values. The guard keeps a bad row from writing into the
     // next row's buckets or past the block. A skipped entry leaves a chip_experts bucket at expert 0; that
     // bucket is sized run_len(my_row, 0), fills nothing, and each of its pages becomes a duplicate write of
-    // token 0 to page 0 (see merge_routing_index).
+    // token 0 to page 0 (see merge_routing_index), unless the double-counted run pushes the total past
+    // max_records, in which case the clamp in size_buckets applies (see there).
     for (uint32_t e = 0; e <= ct.num_routed_experts; e++) {
         const int32_t row = c.table[e];
         if (row < 0 || (uint32_t)row >= ct.extent || c.row_fill[(uint32_t)row] >= ct.experts_per_chip) {
@@ -111,7 +112,7 @@ void size_buckets(const Scratch& c) {
     const uint32_t n_buckets = ct.extent * ct.experts_per_chip;
     // The block holds one record per (token, topk index). The clamp keeps an offsets table inconsistent with
     // the input from overrunning L1; a consistent table never reaches it. If it does fire, this chip sends
-    // fewer pages than the downstream chips' chunk_len expects, and they wait forever.
+    // fewer pages than the downstream chips' chunk_len expects, and they hang.
     const uint32_t max_records = ct.seq_len * ct.topk;
     uint32_t at = 0;
     for (uint32_t b = 0; b < n_buckets; b++) {
@@ -153,7 +154,7 @@ void merge_routing_index(const Scratch& c) {
 // With a TILE input, `in_acc` addresses a staging buffer that the untilize cores write, so no token may be
 // read until every tile row has landed. The wait sits just before the first token read so that untilize
 // runs in parallel with the routing index build. If this zone is not near zero, untilize is the critical
-// path and needs more cores.
+// path and needs more untilizer cores (UNTILIZERS_PER_LINK).
 void wait_for_untilize() {
     if constexpr (ct.untilize_tile_rows > 0) {
         DeviceZoneScopedN("dspf2d_wait_untilize");
@@ -255,9 +256,11 @@ void own_phase(
     const MetaAcc& meta_acc,
     const FwdAcc& fwd_acc,
     uint32_t my_fwd_section) {
-    // Own assignments, furthest first. The nearest is the neighbour chip: one hop, straight into its output.
-    // Anything further goes into the neighbour's fwd_section. Own assignment a is outgoing descriptor a,
-    // because dispatch_fabric2d_assignments.cpp emits both lists furthest-first.
+    // Own assignments, furthest first. The nearest is the downstream chip: one hop, straight into its output.
+    // Anything further goes into the downstream chip's fwd_section. Own assignment a is outgoing descriptor a,
+    // because dispatch_fabric2d_assignments.cpp emits both lists furthest-first. The last own assignment is
+    // the downstream chip, written directly with no outgoing descriptor, so forward_phase's descriptors start
+    // at num_own - 1.
     for (uint32_t a = 0; a < ct.num_own; a++) {
         const uint32_t base = ct.assignment_base + a * dspf2d::ASSIGNMENT_WORDS;
         const uint32_t dst_chip = kernel_compile_time_args[base + 0];
@@ -295,7 +298,7 @@ void own_phase(
                     fwd_meta->this_addr = fwd_meta->final_payload_addr;
                 } else {
                     // A chunk's last page forces the downstream signal; without it the downstream reader
-                    // waits forever for the chunk to finish.
+                    // hangs waiting for the chunk to finish.
                     fwd_meta->cmd = (i + 1 == to) ? dspf2d::CMD_FORWARD_END : dspf2d::CMD_FORWARD;
                     fwd_meta->this_addr = fwd_acc.get_noc_addr(my_fwd_section + out_base + (i - from));
                 }
@@ -306,7 +309,7 @@ void own_phase(
 }
 
 // Pages this stream forwards: read from its fwd_section and sent one hop further, or delivered if the
-// neighbour chip is their destination.
+// downstream chip is their destination.
 template <typename FwdAcc>
 uint32_t forward_phase(
     const Scratch& c, TokenQueue& queue, const FwdAcc& fwd_acc, uint32_t my_fwd_section, uint32_t downstream_row) {
@@ -382,20 +385,21 @@ uint32_t forward_phase(
 // writes through queue entries used as scratch, which are never published so the sender does not send them.
 // Each stream takes its own slice of every bucket; the slices cover each token exactly once.
 //
-// ct.batch reads are kept in flight. Scratch is claimed only as tokens need it. Scratch never becomes
+// ct.batch reads are kept in flight. Entries are claimed only as tokens need them. They never become
 // ready, so claim_entry's flush frees nothing here; progress relies on the sender draining what earlier
 // phases published, while this phase holds at most ct.batch entries.
 template <typename InAcc, typename OutAcc, typename MetaAcc>
 void local_phase(
     const Scratch& c, TokenQueue& queue, const InAcc& in_acc, const OutAcc& out_acc, const MetaAcc& meta_acc) {
-    // Every earlier phase ended with flush_publish, so release_unready returns exactly this phase's scratch.
+    // Every earlier phase ended with flush_publish, so release_unready returns exactly this phase's entries.
     ASSERT(queue.claimed == queue.ready);
-    // held <= ct.batch: an entry is claimed only when every held one is pending, and a batch is written out
-    // at ct.batch pending. Each batch reuses held_entries from index 0, safe after write_batch's flush.
+    // held <= ct.batch: a new entry is claimed only when every entry already held has a pending token, and a
+    // batch is written out at ct.batch pending. Each batch reuses held_entries from index 0, safe after
+    // write_batch's flush.
     static_assert(ct.batch <= dspf2d::BATCH, "these arrays are sized by BATCH");
     uint32_t held_entries[dspf2d::BATCH];
     uint32_t pages[dspf2d::BATCH];
-    uint32_t held = 0;     // held entries claimed, for the whole phase
+    uint32_t held = 0;     // entries this phase has claimed and keeps until it ends
     uint32_t pending = 0;  // tokens read into held_entries[0..pending) and not yet written
     // Wait for the batch's reads, write each token and its metadata to their pages, wait for departure.
     const auto write_batch = [&]() {
@@ -416,7 +420,7 @@ void local_phase(
         const uint32_t from = slice_begin(n, ct.stream, 2 * ct.num_links);
         const uint32_t to = slice_begin(n, ct.stream + 1, 2 * ct.num_links);
         for (uint32_t i = from; i < to; i++) {
-            if (pending == held) {  // no held entry left for this token
+            if (pending == held) {  // every held entry has a pending token, so claim one more
                 held_entries[held] = queue.claim_entry();
                 entry_meta(held_entries[held])->pad = 0;  // goes to the metadata page; stays zero for the phase
                 held++;
@@ -480,7 +484,7 @@ void kernel_main() {
         TensorAccessor(dspf2d::ReaderCtArgs::fwd_args, get_arg_val<uint32_t>(dspf2d::ReaderRtArg::kFwdAddr));
     const uint32_t my_fwd_section = ct.stream * ct.fwd_pages_per_stream;
 
-    // The neighbour chip's position on the axis. A page bound for it is delivered, not forwarded.
+    // The downstream chip's position on the axis. A page bound for it is delivered, not forwarded.
     uint32_t downstream_row = 0;
     for (uint32_t r = 0; r < ct.extent; r++) {
         if (kernel_compile_time_args[ct.ring_chip_ids_base + r] == ct.downstream_chip_id) {

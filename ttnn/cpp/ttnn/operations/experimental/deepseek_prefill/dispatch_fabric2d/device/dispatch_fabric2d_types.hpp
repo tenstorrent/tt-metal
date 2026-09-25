@@ -18,7 +18,8 @@ struct DispatchFabric2dParams {
     uint32_t num_routed_experts = 8;
     uint32_t num_experts_per_tok = 2;
     uint32_t metadata_len = 3;
-    // Token capacity of a chip's dispatch buffer. A token past it is dropped but still advances its expert's count.
+    // Token capacity of a chip's dispatch buffer. A token past it is dropped but still advances its expert's
+    // count, because page numbers must match the offsets table, which counts every routed token.
     uint32_t max_dispatch_buffer_token_size = 64;
     uint32_t seq_len_per_chip = 640;
     uint32_t axis = 0;

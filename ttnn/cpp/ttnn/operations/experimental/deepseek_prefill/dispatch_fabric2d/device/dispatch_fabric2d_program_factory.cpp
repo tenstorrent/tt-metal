@@ -91,8 +91,8 @@ L1Layout compute_l1_layout(
     // One header per entry, the same stride the sender indexes the pool with.
     const uint32_t hdr_queue_bytes =
         dspf2d::QUEUE_DEPTH * static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
-    // 64-byte aligned: a DRAM read needs a 64-byte-aligned L1 destination on Blackhole, and the
-    // scratch is read straight out of DRAM.
+    // 64-byte aligned: a DRAM read needs a 64-byte-aligned L1 destination on Blackhole, and DRAM reads
+    // land directly in the scratch.
     l.scratch = (l.pkt_hdr_queue + hdr_queue_bytes + 63u) & ~63u;
     const uint32_t end = l.scratch + scratch_bytes;
     TT_FATAL(
@@ -195,11 +195,11 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
         "dispatch_fabric2d: metadata page is {} B but the last hop writes {} B into it",
         meta_bytes,
         dspf2d::METADATA_WIRE_BYTES);
-    // A forwarded packet (token plus routing tail) is the largest packet the op sends. The fabric does
+    // A forwarded packet (token plus fwd_meta) is the largest packet the op sends. The fabric does
     // not reject a larger payload: the bytes past its max overwrite the next channel slot.
     TT_FATAL(
         token_bytes + dspf2d::FWD_EXTRA_BYTES <= tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
-        "dispatch_fabric2d: token page {} B + {} B routing tail exceeds the fabric max payload {}. Increase "
+        "dispatch_fabric2d: token page {} B + {} B forwarding metadata exceeds the fabric max payload {}. Increase "
         "max_packet_payload_size_bytes in FabricRouterConfig.",
         token_bytes,
         dspf2d::FWD_EXTRA_BYTES,
@@ -218,7 +218,7 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
     validate_chunk_agreement(extent, args.num_links);
     const auto placement = decide_placement(mesh, args.axis, args.num_links, args.worker_core_range_set);
     const auto sems = allocate_stream_semaphores(mesh, args.worker_core_range_set);
-    // A page is a token plus its routing tail, so one fabric write carries both.
+    // A page is a token plus its fwd_meta, so one fabric write carries both.
     const uint32_t fwd_pages = fwd_pages_per_stream(
         extent, args.num_links, args.seq_len_per_chip, args.num_experts_per_tok, args.experts_per_chip);
     const OwnedBuffer fwd = allocate_buffer(
@@ -373,7 +373,8 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
 
             // The core's three compute RISCs build three of the four slices of the routing index. They take
             // the reader's compile-time args unchanged because they run the reader's code over the same
-            // scratch layout. No runtime args: nothing they touch is an allocation.
+            // scratch layout, so this builds one TRISC binary per stream core: the args carry per-core words.
+            // No runtime args: nothing they touch is an allocation.
             tt::tt_metal::KernelDescriptor index_kernel;
             index_kernel.kernel_source =
                 "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch_fabric2d/device/kernels/compute/"

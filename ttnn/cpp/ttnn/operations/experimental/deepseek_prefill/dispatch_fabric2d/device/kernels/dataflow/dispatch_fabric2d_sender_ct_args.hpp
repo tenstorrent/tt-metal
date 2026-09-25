@@ -40,12 +40,12 @@ struct SenderCtArgs {
     uint32_t downstream_mesh_id;
     uint32_t queue_addr;
     uint32_t pkt_hdr_queue_addr;
-    uint32_t pkt_hdr_signal_addr;
+    uint32_t pkt_hdr_signal_addr;  // signal_downstream's header, reused by drain_fabric
     uint32_t drain_sink_addr;
     uint32_t batch;
     uint32_t filled_addr;
     uint32_t freed_addr;
-    uint32_t downstream_noc_x;
+    uint32_t downstream_noc_x;  // the downstream stream core
     uint32_t downstream_noc_y;
     uint32_t fwd_sem_addr;
 
