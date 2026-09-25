@@ -49,14 +49,28 @@ constexpr uint64_t done_offset(uint32_t core, uint32_t peer) {
     return kDoneArrayOffset + (static_cast<uint64_t>(core) * kMaxCreditPeers + peer) * kCreditLineBytes;
 }
 
+// One 8-byte guard per (core, slot), CONTIGUOUS. The device still writes a guard into each
+// page's trailer, but the h2h hop publishes here instead: a run of K slots then arms in one
+// put rather than K, which is what takes puts-per-frame from 2 to 2/K. A put coalesces only
+// when its DESTINATION bytes are adjacent, so the relocation is the mechanism, not a tidy-up.
+constexpr uint32_t kMaxRingSlots = 64;
+constexpr uint64_t kGuardArrayOffset = kDoneArrayOffset + kDoneArrayBytes;
+constexpr uint64_t kGuardArrayBytes =
+    static_cast<uint64_t>(kProvisionedCores) * kMaxRingSlots * sizeof(uint64_t);
+
+constexpr uint64_t guard_offset(uint32_t core, uint32_t slot) {
+    return kGuardArrayOffset + (static_cast<uint64_t>(core) * kMaxRingSlots + slot) * sizeof(uint64_t);
+}
+
 // Arenas interleaved per core (TX = D2H FIFO, RX = H2D ring) so a run pins a PREFIX:
 // pinned_bytes_for(cores) covers only cores in use. Both are overlaid by RingAlias.
 constexpr uint64_t kArenaBytes = 1536ull * 1024ull;  // one Tensix L1
 constexpr uint64_t kArenasPerCore = 2;
 constexpr uint64_t kArenaStride = kArenaBytes * kArenasPerCore;
 
-// 2 MiB-aligned so the block below it can be resized without shifting every arena.
-constexpr uint64_t kArenaArrayOffset = align_up(kDoneArrayOffset + kDoneArrayBytes, kAlign2M);
+// 2 MiB-aligned so the block below it can be resized without shifting every arena -- the
+// guard array was added under it and the arenas did not move.
+constexpr uint64_t kArenaArrayOffset = align_up(kGuardArrayOffset + kGuardArrayBytes, kAlign2M);
 
 constexpr uint64_t tx_arena_offset(uint32_t core) {
     return kArenaArrayOffset + static_cast<uint64_t>(core) * kArenaStride;
@@ -86,7 +100,9 @@ constexpr uint64_t pinned_bytes_for(uint32_t cores) {
 // The header. Two parties disagreeing on geometry compute different offsets for one core
 // and each reads bytes that are legitimately idle, so the constants are published.
 constexpr uint64_t kRegionMagic = 0x543648'4F535456ull;  // "T6HOSTV"
-constexpr uint32_t kRegionVersion = 6;
+// 7 added the compact guard array; a v6 peer publishes guards in the page tail and a v7
+// reader polls the array, so the two would never see each other's frames.
+constexpr uint32_t kRegionVersion = 7;
 
 struct RegionHeader {
     uint64_t magic;
