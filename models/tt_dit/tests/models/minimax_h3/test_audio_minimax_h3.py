@@ -39,6 +39,7 @@ from ....parallel.config import ParallelFactor
 from ....parallel.manager import CCLManager
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import resolve_mesh_preset
 from ....utils.check import assert_quality
+from ....utils.test import create_fabric_router_config
 from .common import build_audio_decoder, load_config, psnr, weights_subdir
 
 # The vocoder needs extra L1 scratch, as the LTX audio tests do.
@@ -285,7 +286,11 @@ def test_encode(mesh_device, num_latent_frames, split_mode):
 
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
 def test_encode_pad_to_max_then_trim(mesh_device):
-    """Pad-to-604-hops-then-trim equals the direct encode (the invariance `encode_references` relies on)."""
+    """Pad-to-604-hops-then-trim equals the direct encode (the invariance `encode_references` relies on).
+
+    Only with `valid_samples`: without it the pad is not re-zeroed between convs and the last ~26 latents
+    differ (PCC 99.66% -- the torch reference measures the same), because each conv's bias leaks into it.
+    """
     from ....pipelines.minimax_h3.references import MINIMAX_H3_MAX_REFERENCE_AUDIO_LATENTS, pad_waveform_to_max_duration
 
     reference, config = _build_reference()
@@ -297,7 +302,7 @@ def test_encode_pad_to_max_then_trim(mesh_device):
     tt_encoder.load_torch_state_dict(convert_minimax_h3_audio_state_dict(dict(reference.state_dict())), strict=False)
 
     direct_mean, direct_logs = tt_encoder(waveform)
-    padded_mean, padded_logs = tt_encoder(pad_waveform_to_max_duration(waveform))
+    padded_mean, padded_logs = tt_encoder(pad_waveform_to_max_duration(waveform), valid_samples=waveform.shape[-1])
 
     assert padded_mean.shape[2] == MINIMAX_H3_MAX_REFERENCE_AUDIO_LATENTS
     assert_quality(direct_mean, padded_mean[:, :, :num_latents], pcc=0.9999)
@@ -485,27 +490,21 @@ def test_audio_decode_traced(mesh_device):
     assert psnr_db > 60.0, f"traced output diverges from untraced: PSNR {psnr_db:.2f} dB"
 
 
+# The 8 KB router payload, as the pipeline's galaxy meshes carry: the encoder's last conv (conv_out) halo-exchanges
+# 2048-channel fp32 rows -- 8192 B each -- and under the default 4352 B payload those halo rows arrive as garbage
+# (no error), which corrupted every shard-boundary latent of the T-sharded encode (16 dB against unsharded).
+_FABRIC_1D_8K = {
+    "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+    "fabric_router_config": create_fabric_router_config(8192),
+    "require_exact_physical_num_devices": True,
+    "l1_small_size": 65536,
+}
+
 MESH = [
-    pytest.param(
-        (4, 8),
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "require_exact_physical_num_devices": True,
-            "l1_small_size": 65536,
-        },
-        id="mesh4x8",
-    ),
+    pytest.param((4, 8), _FABRIC_1D_8K, id="mesh4x8"),
     # One Galaxy opened as a 32-wide line: the length of the quad Galaxy's inter-host axis, so the
     # opt-in factor 32 is exercised on a single machine.
-    pytest.param(
-        (1, 32),
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "require_exact_physical_num_devices": True,
-            "l1_small_size": 65536,
-        },
-        id="mesh1x32",
-    ),
+    pytest.param((1, 32), _FABRIC_1D_8K, id="mesh1x32"),
 ]
 # (t_factor, mesh_axis) per mesh shape. The factor must equal the length of the axis it shards: factor=2
 # or 4 on an 8-wide axis dies in `_partition_t` ("height begin index aligned to tiles"), because the

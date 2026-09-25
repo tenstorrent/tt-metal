@@ -103,6 +103,8 @@ def test_ref2va_reference_encode(mesh_device, num_images, num_videos, num_audios
         _dram_line(mesh_device, f"after {ballast_gib:g} GiB ballast")
 
     embeds, tags = pipeline.encode_prompt(PROMPT, references=prepared)
+    # encode_prompt returns the device tensor, replicated on every device; check one replica on host.
+    embeds = ttnn.to_torch(ttnn.get_device_tensors(embeds)[0])
 
     _dram_line(mesh_device, "after encode")
     del ballast
@@ -119,7 +121,9 @@ def test_ref2va_reference_encode(mesh_device, num_images, num_videos, num_audios
         f"references={num_images}img+{num_videos}vid+{num_audios}aud"
     )
     assert embeds.ndim == 3 and embeds.shape[-1] == 5120, f"unexpected embeds shape {tuple(embeds.shape)}"
-    assert embeds.shape[1] == tags.shape[0]
+    # ref2va pads the presentation up to its ladder bucket; the tags cover the real rows only.
+    assert embeds.shape[1] >= tags.shape[0], f"embeds seq {embeds.shape[1]} shorter than tags {tags.shape[0]}"
+    embeds = embeds[:, : tags.shape[0]]
     assert torch.isfinite(embeds).all(), "prompt embeds contain NaN or Inf"
     assert vision_tags >= expected_image_tokens, (
         f"presentation is missing image vision rows: {vision_tags} video-tagged tokens < "

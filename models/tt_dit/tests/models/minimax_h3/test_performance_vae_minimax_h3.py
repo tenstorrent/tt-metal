@@ -471,9 +471,9 @@ def test_encode_stage(mesh_device, case):
             torch.manual_seed(3)
             reference.waveform = torch.randn(2, ENCODE_STAGE_AUDIO_SAMPLES) * 0.1
 
-            def encode_audio(waveform):
+            def encode_audio(waveform, valid_samples):
                 mark = time.perf_counter()
-                out = audio_encoder(waveform)[0]
+                out = audio_encoder(waveform, valid_samples=valid_samples)[0]
                 audio_seconds["audio_encode"] += time.perf_counter() - mark
                 return out
 

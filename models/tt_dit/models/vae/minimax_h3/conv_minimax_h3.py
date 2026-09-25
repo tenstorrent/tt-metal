@@ -83,6 +83,12 @@ register_conv3d_configs(_H3_BLOCKING_ENTRIES)
 # short-circuits to _FP32_BLOCKINGS when the weights are fp32 -- so for an fp32 encoder the
 # registration above is silently ignored. Seed the fp32 table as well. `setdefault`, so a
 # swept value that lands in conv3d.py itself wins over these entries.
+#
+# The table was swept in bf16, and fp32 doubles every CB. The one blocking that no longer fits is b1_res0's
+# 3-tap conv: (32, 256, 3, 16, 2) statically allocates 1647616 B against the 1572864 B L1 (TT_THROW at
+# program build), so the fp32 video encode -- ref2va video references -- could not run. Halving C_out_block
+# fits; every other fp32 3-tap and 1-tap encoder key was checked and fits as swept.
+_FP32_BLOCKINGS.setdefault((128, 256, (3, 3, 3)), (32, 128, 3, 16, 2))
 for _key, _blocking in _H3_BLOCKING_ENTRIES.items():
     _FP32_BLOCKINGS.setdefault(_key, _blocking)
 

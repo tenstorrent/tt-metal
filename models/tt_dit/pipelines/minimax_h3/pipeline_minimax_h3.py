@@ -1774,7 +1774,9 @@ class MiniMaxH3Pipeline:
                 prepared,
                 encode_clip=(lambda pixels: vae.encode_clip(pixels)) if has_visual else None,
                 encode_video=(lambda pixels: vae.encode(pixels)) if has_video else None,
-                encode_audio=(lambda waveform: audio_encoder(waveform)[0]) if has_audio else None,
+                encode_audio=(lambda waveform, valid_samples: audio_encoder(waveform, valid_samples=valid_samples)[0])
+                if has_audio
+                else None,
                 latents_mean=self.vae_config.latents_mean,
                 latents_std=self.vae_config.latents_std,
                 audio_latents_mean=self.audio_config["latents_mean"],

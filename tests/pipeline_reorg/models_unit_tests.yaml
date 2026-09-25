@@ -1571,6 +1571,67 @@
   team: models
   budget_type: unit
 
+- name: TT-DiT MiniMax-H3 component unit tests
+  cmd: |
+    export HF_HUB_OFFLINE=1
+    export HF_HOME=/mnt/models/huggingface
+    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
+    # TODO(ci): stage the MiniMax-H3 diffusers snapshot at this path (~145 GB; transformer_ref/ is ref2va-only and
+    # not needed yet), and confirm the exabox bh_sc1 worker pods mount /mnt/weka (setup-multihost-job only checks /mnt/models):
+    #   hf download MiniMaxAI/MiniMax-H3 --revision 42ed227ee7df40d41602854ae760620d6eb651fe \
+    #     --local-dir /mnt/weka/model-weights/video/MiniMaxAI/MiniMax-H3 \
+    #     --exclude "FL2VA/*" --exclude "Ref2VA/*" --exclude "transformer_ref/*" \
+    #     --exclude "assets/*" --exclude "docs/*" --exclude "scripts/*"
+    #   (one --exclude per pattern: extra bare patterns are read as FILENAMES and downloaded instead.)
+    export MINIMAX_H3_MODEL_PATH=/mnt/weka/model-weights/video/MiniMaxAI/MiniMax-H3
+    # Every real-weight case skips (not fails) when the snapshot is missing, so a missing mount would
+    # turn this leg green while testing nothing. Fail loudly instead.
+    for part in transformer text_encoder vae audio_vae; do
+      [ -f "$MINIMAX_H3_MODEL_PATH/$part/config.json" ] || { echo "missing $MINIMAX_H3_MODEL_PATH/$part"; exit 1; }
+    done
+    export TT_MESH_ID=0
+    export TT_MESH_HOST_RANK=0
+    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/ltx/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
+    # One bh_sc1 leg runs every MiniMax-H3 component on the 4x8 galaxy (TP=4 axis 0, SP=8 axis 1, ring).
+    # Run all, accumulate failures, fail the leg if any component failed.
+    rc=0
+    run() { mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" python3 -m pytest -rs --timeout 1800 "$@" || rc=1; }
+    T=models/tt_dit/tests/models/minimax_h3
+    # Host-side layout, scheduler, conditioning and reference-preparation golden tests first (seconds each),
+    # so a slow device test can never starve them out of the leg timeout.
+    run $T/test_packing_minimax_h3.py $T/test_scheduler_minimax_h3.py $T/test_conditioning_minimax_h3.py
+    run $T/test_references_minimax_h3.py
+    run $T/test_pipeline_minimax_h3.py -k "resolve_audio_t_shard or requested_audio_t_factor"
+    run $T/test_stitch_device_minimax_h3.py
+    # DiT: random-weight attention / token refiner / block / 2-layer model at small shapes, plus the
+    # 2-layer real-weights case at the production 768p 5 s shape (checked against the torch reference).
+    run "$T/test_transformer_minimax_h3.py::test_minimax_h3_attention[blackhole-small_s1024-4x8sp1tp0nl2_ring_is_fsdp0]" \
+        "$T/test_transformer_minimax_h3.py::test_minimax_h3_token_refiner[blackhole-l512-4x8sp1tp0nl2_ring_is_fsdp0]" \
+        "$T/test_transformer_minimax_h3.py::test_minimax_h3_transformer_block[blackhole-small_s2048-4x8sp1tp0nl2_ring_is_fsdp0]" \
+        "$T/test_transformer_minimax_h3.py::test_minimax_h3_transformer[blackhole-small_s2048-4x8sp1tp0nl2_ring_is_fsdp0]" \
+        "$T/test_transformer_minimax_h3.py::test_minimax_h3_transformer[blackhole-unaligned_s2112-4x8sp1tp0nl2_ring_is_fsdp0]" \
+        "$T/test_transformer_minimax_h3.py::test_minimax_h3_transformer[blackhole-prod_768p_5s_real_weights-4x8sp1tp0nl2_ring_is_fsdp0]"
+    # Conditioner: text path, and the SP-sharded vision tower through the full prompt encode (noise keyframe).
+    # TODO(ci): test_vision_conditioner_minimax_h3.py gates condition on ~/h3_t2va_artifacts/t2va.mp4 and skip
+    # without it -- add them once CI stages reference media (same open question as the ref2va e2e leg).
+    run $T/test_text_encoder_minimax_h3.py
+    run $T/test_pipeline_encode_vision_smoke.py -k "one_keyframe and 4x8"
+    # Heavier last: video VAE (single-device blocks + 4x8 data-parallel) and audio VAE (single-device + 4x8 T-parallel).
+    # TODO(ci): the full 36-layer decoder may belong in e2e once measured.
+    run $T/test_vae_minimax_h3.py -k "not full_36_layers"
+    run $T/test_vae_parallel_minimax_h3.py
+    run $T/test_audio_minimax_h3.py -k "not mesh1x32"
+    exit $rc
+  model: minimax-h3
+  model_family: MiniMax
+  skus:
+    bh_sc1:
+      timeout: 120 # measured on bh-glx-120-b03u08: 108 min cold ~/.cache/tt-dit, 50 min warm
+      tier: 1
+  owner_id: TODO # TODO(ci): Slack user ID of the MiniMax-H3 owner
+  team: models
+  budget_type: unit
+
 # ----------------------------------------------------------------------------
 # WAN 2.2 single-galaxy multihost tests (bh_sc1 / exabox-multihost-ci-sc1)
 # ----------------------------------------------------------------------------

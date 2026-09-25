@@ -337,6 +337,7 @@ def _prepare_tt_inputs(
         prompt_windows=prompt_windows,
         condition_video_1BKC=cond_arena(video_cond, kv_cap),
         condition_audio_1BKC=cond_arena(audio_cond, ka_cap),
+        prompt_cap=l_cap,
     )
     tt = dict(
         video_1BVC=bf16_tensor(pad_stream(video_input, v_cap).unsqueeze(0), device=mesh_device),

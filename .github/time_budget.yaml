@@ -366,7 +366,7 @@ models:
     bh_p150: 27
     bh_quietbox_2: 434
     bh_galaxy: 78
-    bh_sc1: 335
+    bh_sc1: 370  # +35 for the MiniMax-H3 T2VA e2e leg
     bh_sc4: 160
   e2e_tier2:
     wh_llmbox_perf: 270
@@ -391,7 +391,7 @@ models:
     bh_p150: 20
     bh_quietbox_2: 502  # +15 for test_decode_bucketing's own 1800 s budget (#55790)
     bh_galaxy: 75
-    bh_sc1: 370
+    bh_sc1: 490  # +120 for the MiniMax-H3 component unit leg
     bh_sc4: 50
   unit_tier2:
     wh_llmbox: 114

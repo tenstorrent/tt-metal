@@ -1793,6 +1793,48 @@
   team: models
   budget_type: e2e
 
+- name: TT-DiT MiniMax-H3 T2VA e2e tests
+  cmd: |
+    export HF_HUB_OFFLINE=1
+    export HF_HOME=/mnt/models/huggingface
+    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
+    # TODO(ci): stage the MiniMax-H3 diffusers snapshot at this path (see the unit leg) and confirm the exabox
+    # bh_sc1 worker pods mount /mnt/weka.
+    export MINIMAX_H3_MODEL_PATH=/mnt/weka/model-weights/video/MiniMaxAI/MiniMax-H3
+    for part in transformer text_encoder vae audio_vae; do
+      [ -f "$MINIMAX_H3_MODEL_PATH/$part/config.json" ] || { echo "missing $MINIMAX_H3_MODEL_PATH/$part"; exit 1; }
+    done
+    export TT_MESH_ID=0
+    export TT_MESH_HOST_RANK=0
+    export TT_METAL_SHM_TRACKING_DISABLED=1
+    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/ltx/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
+    fail=0
+    run() { mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" python3 -m pytest -rs "$@" || fail=1; }
+    # Production working point: 16:9 1344x768, 124 frames @ 24 fps, 50 steps, 4x8 ring (TP=4 / SP=8).
+    # Perf: warm generation, per-stage timings logged. TODO(ci): it asserts generation sanity only --
+    # add a perf target (like Wan/Flux) before relying on it to catch regressions.
+    run --timeout 3000 models/tt_dit/tests/models/minimax_h3/test_performance_minimax_h3.py::test_t2va_performance \
+      -k "4x8 and 16x9_5s"
+    # Quality: frame/audio sanity, A/V sync, VAE seam check, CLIP gate, artifact write.
+    # RUN_VBENCH=0: the VBench gate needs its own interpreter at ~/vbench_env and SKIPS the whole test without
+    # one, which the exabox pods do not have. TODO(ci): move VBench to the vbench_bundle export/evaluate flow
+    # the LTX Fast T2V leg uses. (The CLIP gate importorskips open_clip before generating, so a runner
+    # without it would also report SKIPPED rather than pass.)
+    export RUN_VBENCH=0
+    run --timeout 3000 models/tt_dit/tests/models/minimax_h3/test_pipeline_minimax_h3.py::test_t2va_end_to_end \
+      -k "4x8 and 16x9_5s"
+    exit $fail
+  model: minimax-h3-t2va
+  model_family: MiniMax
+  skus:
+    bh_sc1:
+      timeout: 35 # measured on bh-glx-120-b03u08: 21 min cold ~/.cache/tt-dit, 12 min warm
+      tier: 1
+      release_ready: false
+  owner_id: TODO # TODO(ci): Slack user ID of the MiniMax-H3 owner
+  team: models
+  budget_type: e2e
+
 # ── DeepSeek V3 (Wormhole Galaxy / TG) ──
 - name: DeepSeek-V3 decode stress e2e tests (Galaxy)
   cmd: |
