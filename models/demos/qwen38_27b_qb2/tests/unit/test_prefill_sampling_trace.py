@@ -1,23 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Check the real prefill sampling guard without importing TTNN or opening devices."""
+"""Check the real prefill sampling guard without opening devices."""
 
-import ast
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
-
-def load_sample_prefill(ops):
-    source = Path(__file__).resolve().parents[2] / "tt/generator.py"
-    tree = ast.parse(source.read_text())
-    generator = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "Qwen38Generator")
-    method = next(
-        node for node in generator.body if isinstance(node, ast.FunctionDef) and node.name == "sample_prefill"
-    )
-    namespace = {"ttnn": ops}
-    exec(compile(ast.Module(body=[method], type_ignores=[]), str(source), "exec"), namespace)
-    return namespace["sample_prefill"]
+from models.demos.qwen38_27b_qb2.tt import generator
 
 
 class PrefillSamplingTraceTests(unittest.TestCase):
@@ -48,7 +37,10 @@ class PrefillSamplingTraceTests(unittest.TestCase):
 
         self.gen._release_traces = release
         self.gen._sampling_step = sample
-        self.sample = load_sample_prefill(SimpleNamespace(concat=concat, pad=pad))
+        ttnn_patch = patch.object(generator, "ttnn", SimpleNamespace(concat=concat, pad=pad))
+        ttnn_patch.start()
+        self.addCleanup(ttnn_patch.stop)
+        self.sample = generator.Qwen38Generator.sample_prefill
 
     @staticmethod
     def logits(count, *, dtype="bfloat16"):
