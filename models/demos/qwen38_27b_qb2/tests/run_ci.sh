@@ -9,6 +9,7 @@ results="$PWD/generated/test_reports/qwen38_27b_qb2"
 mkdir -p "$results"
 work=$(mktemp -d)
 server_pid=
+server_log=
 stop_server() {
     if [ -z "$server_pid" ]; then return; fi
     kill -- -"$server_pid" 2>/dev/null || true
@@ -19,6 +20,43 @@ stop_server() {
     kill -KILL -- -"$server_pid" 2>/dev/null || true
     wait "$server_pid" 2>/dev/null || true
     server_pid=
+}
+
+write_server_diagnostics() {
+    local output="$results/server-diagnostics.txt"
+    {
+        if kill -0 "$server_pid" 2>/dev/null; then
+            echo "server_process=running"
+        else
+            echo "server_process=exited"
+        fi
+        python - "$server_log" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+print(f"server_log_present={path.is_file()}")
+if not path.is_file():
+    raise SystemExit
+
+interesting = re.compile(
+    r"Traceback|\b(?:ERROR|CRITICAL|FATAL)\b|(?:Exception|Error|AssertionError|RuntimeError|ValueError|"
+    r"EngineCore|engine core|worker.*died|signal|SIG[A-Z]+|out of memory|OOM|Killed)",
+    re.IGNORECASE,
+)
+quoted = re.compile(r"(['\"])(?:(?!\1).)*\1")
+long_sequence = re.compile(r"(?<!\w)(?:-?\d+[\s,]+){4,}-?\d+(?!\w)")
+kept = []
+for raw in path.read_text(errors="replace").splitlines():
+    if not interesting.search(raw):
+        continue
+    line = quoted.sub(r"\1<redacted>\1", raw)
+    line = long_sequence.sub("<numeric-sequence-redacted>", line)
+    kept.append(line[:1000])
+print("\n".join(kept[-300:]) if kept else "no_matching_diagnostic_lines")
+PY
+    } > "$output"
 }
 trap stop_server EXIT
 trap 'exit 143' TERM
@@ -79,7 +117,8 @@ evaluate() {
 }
 evaluate --prepare-only --server-capacity 16 --output-dir "$results/gpqa"
 tt_config='{"tt":{"fabric_config":"FABRIC_1D_RING","fabric_max_packet_payload_size_bytes":8192,"l1_small_size":24576,"sample_on_device_mode":"all","trace_mode":"decode_only","trace_region_size":134217728}}'
-for capacity in 1 8 16; do
+read -r -a capacities <<< "${QWEN_CI_CAPACITIES:-1 8 16}"
+for capacity in "${capacities[@]}"; do
     echo "Starting Qwen3.8 server capacity=$capacity"
     setsid python -u -m vllm.entrypoints.openai.api_server \
         --model "$MODEL_WEIGHTS_DIR" --served-model-name Qwen/Qwen3.8-27B \
@@ -91,6 +130,7 @@ for capacity in 1 8 16; do
         --reasoning-parser qwen3 --tool-call-parser qwen3_coder --enable-auto-tool-choice \
         --additional-config "$tt_config" > "$work/server_$capacity.log" 2>&1 &
     server_pid=$!
+    server_log="$work/server_$capacity.log"
     wait_started=$SECONDS
     while ! curl --max-time 2 -fsS http://127.0.0.1:8000/health >/dev/null 2>&1; do
         kill -0 "$server_pid"
@@ -103,13 +143,18 @@ for capacity in 1 8 16; do
     evaluate --mode performance --server-capacity "$capacity" --performance-input-lengths 128 1024 \
         --output-dir "$results/capacity_$capacity"
     if [ "$capacity" = 16 ]; then
-        evaluate --mode gpqa --server-capacity 16 --output-dir "$results/gpqa"
+        if ! evaluate --mode gpqa --server-capacity 16 --output-dir "$results/gpqa"; then
+            write_server_diagnostics
+            exit 1
+        fi
         if ! kill -0 "$server_pid" 2>/dev/null || \
             ! curl --max-time 10 -fsS http://127.0.0.1:8000/health >/dev/null; then
             echo "Qwen3.8 server became unavailable after GPQA" >&2
+            write_server_diagnostics
             exit 1
         fi
         pushd "$work/plugin"
+        api_status=0
         python -m pytest --confcutdir=. \
             tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_same_seeds_reproduce_across_batches \
             tests/tt/test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch \
@@ -117,8 +162,12 @@ for capacity in 1 8 16; do
             tests/tt/test_tt_penalties.py::TestFrequencyPenalty::test_frequency_penalty_mixed_batch \
             'tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[5-1]' \
             --tt-server-url http://127.0.0.1:8000 --tt-model-name Qwen/Qwen3.8-27B \
-            --tt-max-num-seqs 16 --junitxml "$results/api.xml"
+            --tt-max-num-seqs 16 --junitxml "$results/api.xml" || api_status=$?
         popd
+        if [ "$api_status" -ne 0 ]; then
+            write_server_diagnostics
+            exit "$api_status"
+        fi
     fi
     stop_server
 done

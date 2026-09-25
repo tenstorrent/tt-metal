@@ -34,6 +34,14 @@ on:
         type: string
         # Switch back to main once vllm-tt-plugin#116 has merged.
         default: yieldthought/llama31-qb2-serving
+      use-artifacts-from-run:
+        description: Existing workflow run whose build artifacts should be reused
+        type: string
+        default: ""
+      qwen-debug-capacity-16-only:
+        description: Run only the capacity-16 Qwen phase while diagnosing CI
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -53,6 +61,7 @@ jobs:
       MODEL: ${{ inputs.model || 'all' }}
       TIER: ${{ inputs.tier || 'all' }}
       VLLM_TT_PLUGIN_REF: ${{ inputs.vllm-tt-plugin-ref || 'yieldthought/llama31-qb2-serving' }}
+      QWEN_DEBUG_CAPACITY_16_ONLY: ${{ inputs.qwen-debug-capacity-16-only || false }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -79,7 +88,12 @@ jobs:
           selected=$(jq -c --arg model "$MODEL" --arg tier "$TIER" --arg plugin_ref "$VLLM_TT_PLUGIN_REF" '
             [.[] | select(($model == "all" or .model == $model) and
                           ($tier == "all" or (.tier | tostring) == $tier))
-                 | .cmd = ("export VLLM_TT_PLUGIN_REF=" + ($plugin_ref | @sh) + "\n" + .cmd)]
+                 | .cmd = ("export VLLM_TT_PLUGIN_REF=" + ($plugin_ref | @sh) + "\n"
+                           + (if .model == "qwen38-27b-qb2" and env.QWEN_DEBUG_CAPACITY_16_ONLY == "true"
+                              then "export QWEN_CI_CAPACITIES=16\n"
+                              else ""
+                              end)
+                           + .cmd)]
           ' <<< "$MATRIX")
           if [ "$selected" = '[]' ]; then
             echo "::error::No tests match model=$MODEL, sku=$SKU, tier=$TIER"
@@ -97,6 +111,7 @@ jobs:
       build-type: Release
       build-inplace-wheel: true
       platform: Ubuntu 22.04
+      use-artifacts-from-run: ${{ inputs.use-artifacts-from-run || '' }}
 
   model-tests:
     needs: [build-artifact, select-tests]
