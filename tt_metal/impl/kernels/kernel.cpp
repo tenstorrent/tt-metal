@@ -340,7 +340,7 @@ void Kernel::process_tensor_binding_handles(const std::function<void(
                                                 uint32_t cta_offset,
                                                 uint32_t addr_crta_offset,
                                                 uint32_t num_runtime_field_crta_words,
-                                                const std::optional<LLKMetadata>&)>& callback) const {
+                                                const LLKMetadata&)>& callback) const {
     for (const auto& handle : this->tensor_binding_handles_) {
         callback(
             handle.accessor_name,
@@ -591,16 +591,18 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(it->first);
         hasher.update(static_cast<uint64_t>(it->second));
     }
-    auto hash_llk_metadata = [&hasher](const std::optional<LLKMetadata>& metadata) {
+    auto hash_llk_fields = [&hasher](const LLKMetadata& metadata) {
+        hasher.update(static_cast<uint64_t>(metadata.format));
+        hasher.update(static_cast<uint64_t>(metadata.tile.get_height()));
+        hasher.update(static_cast<uint64_t>(metadata.tile.get_width()));
+        hasher.update(static_cast<uint64_t>(metadata.tile.get_face_shape()[0]));
+        hasher.update(static_cast<uint64_t>(metadata.tile.get_num_faces()));
+    };
+    auto hash_llk_metadata = [&hasher, &hash_llk_fields](const std::optional<LLKMetadata>& metadata) {
         hasher.update(static_cast<uint64_t>(metadata.has_value()));
-        if (!metadata.has_value()) {
-            return;
+        if (metadata.has_value()) {
+            hash_llk_fields(*metadata);
         }
-        hasher.update(static_cast<uint64_t>(metadata->format));
-        hasher.update(static_cast<uint64_t>(metadata->tile.get_height()));
-        hasher.update(static_cast<uint64_t>(metadata->tile.get_width()));
-        hasher.update(static_cast<uint64_t>(metadata->tile.get_face_shape()[0]));
-        hasher.update(static_cast<uint64_t>(metadata->tile.get_num_faces()));
     };
     for (const auto& it : sorted_iters(this->dataflow_buffer_binding_handles_)) {
         hasher.update(it->first);
@@ -629,7 +631,7 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(static_cast<uint64_t>(handle.cta_offset));
         hasher.update(static_cast<uint64_t>(handle.addr_crta_offset));
         hasher.update(static_cast<uint64_t>(handle.num_runtime_field_crta_words));
-        hash_llk_metadata(handle.llk_metadata);
+        hash_llk_fields(handle.llk_metadata);
     }
     // Scratchpad binding handles: like tensor bindings, stored in order and emitted by genfiles in
     // the same order. Hash accessor_name + size_bytes + addr_crta_word — the accessor's compile-time

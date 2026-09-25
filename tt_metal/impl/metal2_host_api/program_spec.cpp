@@ -24,7 +24,6 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tt_align.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>
@@ -1188,50 +1187,12 @@ void ValidatePrefetcherPipeSpec(const ProgramSpec& spec, const CollectedSpecData
     }
 }
 
-// Face layout lives on the tile. JIT checks it again in compute_num_faces_rc_dims, which counts face
-// columns in FACE_WIDTH units. Quasar mock and Emule return from ProgramImpl::compile before that,
-// so reject a tile whose face grid does not fit those columns here.
-template <typename Id>
-void ValidateTileFaceGrid(std::string_view kind, const Id& unique_id, const std::optional<Tile>& tile_metadata) {
-    if (!tile_metadata.has_value()) {
-        return;
-    }
-    const Tile& tile = *tile_metadata;
-    const uint32_t face_r_dim = tile.get_face_shape()[0];
-    const uint32_t num_faces = tile.get_num_faces();
-    const uint32_t tile_r_dim = tile.get_height();
-    const uint32_t tile_c_dim = tile.get_width();
-    TT_FATAL(
-        tile_c_dim % constants::FACE_WIDTH == 0,
-        "{} '{}': tile width ({}) must be a multiple of FACE_WIDTH ({})",
-        kind,
-        unique_id,
-        tile_c_dim,
-        constants::FACE_WIDTH);
-    const uint32_t tile_c_faces = tile_c_dim / constants::FACE_WIDTH;
-    TT_FATAL(tile_c_faces > 0, "{} '{}': tile width ({}) must include at least one face", kind, unique_id, tile_c_dim);
-    const uint32_t num_faces_c_dim = std::min(tile_c_faces, num_faces);
-    TT_FATAL(
-        num_faces % num_faces_c_dim == 0,
-        "{} '{}': num_faces ({}) must be divisible by num_faces_c_dim ({})",
-        kind,
-        unique_id,
-        num_faces,
-        num_faces_c_dim);
-    const uint32_t num_faces_r_dim = num_faces / num_faces_c_dim;
-    TT_FATAL(
-        num_faces_r_dim * face_r_dim <= tile_r_dim,
-        "{} '{}': face grid (num_faces_r_dim={} * face_r_dim={} = {} rows) exceeds tile height ({})",
-        kind,
-        unique_id,
-        num_faces_r_dim,
-        face_r_dim,
-        num_faces_r_dim * face_r_dim,
-        tile_r_dim);
-}
-
 std::optional<LLKMetadata> LLKMetadataFromDfb(const DataflowBufferSpec& spec) {
     if (!spec.data_format_metadata.has_value()) {
+        TT_FATAL(
+            !spec.tile_format_metadata.has_value(),
+            "DFB '{}' need to have a configured data_format_metadata for it's tile_format_metadata to be respected",
+            spec.unique_id);
         return std::nullopt;
     }
     const Tile tile = spec.tile_format_metadata.value_or(Tile{});
@@ -1240,6 +1201,11 @@ std::optional<LLKMetadata> LLKMetadataFromDfb(const DataflowBufferSpec& spec) {
 
 std::optional<LLKMetadata> LLKMetadataFromScratchpad(const ScratchpadSpec& spec) {
     if (!spec.data_format_metadata.has_value()) {
+        TT_FATAL(
+            !spec.tile_format_metadata.has_value(),
+            "Scratchpad '{}' need to have a configured data_format_metadata for it's tile_format_metadata to be "
+            "respected",
+            spec.unique_id);
         return std::nullopt;
     }
     const Tile tile = spec.tile_format_metadata.value_or(Tile{});
@@ -2316,7 +2282,6 @@ void ValidateProgramSpec(
                 dfb.data_format_metadata.value(),
                 arch);
         }
-        ValidateTileFaceGrid("DFB", dfb.unique_id, dfb.tile_format_metadata);
     }
 
     for (const auto& scratchpad : spec.scratchpads) {
@@ -2334,7 +2299,6 @@ void ValidateProgramSpec(
                 scratchpad.data_format_metadata.value(),
                 arch);
         }
-        ValidateTileFaceGrid("ScratchpadSpec", scratchpad.unique_id, scratchpad.tile_format_metadata);
     }
 
     //////////////////////////////////

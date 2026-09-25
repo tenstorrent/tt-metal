@@ -234,15 +234,13 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         LLKMetadata metadata;
     };
     vector<TaEntry> ta_entries;
-    settings.process_tensor_binding_handles([&ta_entries](
-                                                const string& name,
-                                                uint32_t cta_offset,
-                                                uint32_t addr_crta_offset,
-                                                uint32_t /*num_rt_words*/,
-                                                const std::optional<LLKMetadata>& metadata) {
-        TT_FATAL(metadata.has_value(), "Tensor binding '{}' is missing LLK metadata", name);
-        ta_entries.push_back({name, cta_offset, addr_crta_offset, *metadata});
-    });
+    settings.process_tensor_binding_handles(
+        [&ta_entries](
+            const string& name,
+            uint32_t cta_offset,
+            uint32_t addr_crta_offset,
+            uint32_t /*num_rt_words*/,
+            const LLKMetadata& metadata) { ta_entries.push_back({name, cta_offset, addr_crta_offset, metadata}); });
 
     // Get the scratchpad bindings from the settings callback.
     // Like tensor bindings, these come from a std::vector in user-specified order, so no sort is needed

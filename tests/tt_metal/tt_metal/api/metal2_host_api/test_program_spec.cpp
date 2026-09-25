@@ -1780,24 +1780,6 @@ TEST_F(ProgramSpecTestQuasar, ScratchpadTileWithoutFormatFails) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("no data_format_metadata")));
 }
 
-TEST_F(ProgramSpecTestQuasar, ScratchpadFaceGridDoesNotFitTileFails) {
-    ProgramSpec spec = MakeMinimalValidProgramSpec();
-    spec.scratchpads = {ScratchpadSpec{
-        .unique_id = ScratchpadSpecName{"scratch_0"},
-        .size_per_node = 1024,
-        .data_format_metadata = tt::DataFormat::Float16_b,
-        // 8x8 faces tile a 16x16 tile, but CB columns are counted in FACE_WIDTH (16) units, so the
-        // derived row grid is taller than the tile.
-        .tile_format_metadata = Tile({16, 16}, {8, 8}),
-    }};
-    spec.kernels[1].scratchpad_bindings = {
-        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "pad"}};
-
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("face grid")));
-}
-
 TEST_F(ProgramSpecTestQuasar, CPU_TensorBindingOnComputeKernelIsAccepted) {
     // A tensor binding on a compute kernel is legal: the kernel constructs a LocalTensorAccessor
     // (NOC-free) from the binding token rather than a TensorAccessor. ValidateProgramSpec accepts it;
@@ -2148,33 +2130,6 @@ TEST_F(ProgramSpecTestQuasar, CPU_DataFormatNotSupportedOnTargetArchitectureFail
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("DFB 'dfb' has data format")));
-}
-
-TEST_F(ProgramSpecTestQuasar, DFBFaceGridDoesNotFitTileFails) {
-    NodeCoord node{0, 0};
-
-    ProgramSpec spec;
-    spec.name = "test_program";
-
-    auto producer = MakeMinimalGen2DMKernel("producer");
-    auto consumer = MakeMinimalGen2ComputeKernel("consumer");
-    auto dfb = MakeMinimalDFB("dfb");
-    dfb.data_format_metadata = tt::DataFormat::Float16_b;
-    // 8x8 faces tile a 16x16 tile, but CB columns are counted in FACE_WIDTH (16) units, so the
-    // derived row grid is taller than the tile.
-    dfb.tile_format_metadata = Tile({16, 16}, {8, 8});
-
-    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
-    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
-
-    spec.kernels = {producer, consumer};
-    spec.dataflow_buffers = {dfb};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
-
-    // Checked at spec build: Quasar mock compile() returns before CB descriptor generation.
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("face grid")));
 }
 
 TEST_F(ProgramSpecTestQuasar, DFBCustomTileCompiles) {
