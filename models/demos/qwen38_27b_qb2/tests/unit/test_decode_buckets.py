@@ -65,14 +65,14 @@ class DecodeBucketsTests(unittest.TestCase):
         )
         return SimpleNamespace(layers=[state], batch_size=batch, capacity=1024, num_pages=100)
 
-    def run_decode(self, model, cache, slots):
+    def run_decode(self, model, cache, slots, *, include_rope=True):
         b = cache.batch_size
         return model.decode(
             torch.arange(32).reshape(1, 1, 1, 32),
             torch.arange(b, dtype=torch.int32) + 20,
             cache=cache,
             page_table=torch.arange(b * 2).reshape(b, 2),
-            rope_indices=torch.arange(b, dtype=torch.int32) + 20,
+            rope_indices=torch.arange(b, dtype=torch.int32) + 20 if include_rope else None,
             active_slots=slots,
         )
 
@@ -105,6 +105,14 @@ class DecodeBucketsTests(unittest.TestCase):
             expected[list(slots)] += 1
             self.assertTrue(torch.equal(cache.layers[0].conv, expected))
         self.assertEqual([call[0] for call in model.calls], [1, 8, 16, 1, 16, 8])
+
+    def test_default_rope_indices_keep_padded_rows_in_range(self):
+        model, cache = self.make_model(), self.cache()
+        slots = (2, 9)
+        self.run_decode(model, cache, slots, include_rope=False)
+        _, positions, _, rope = model.calls[-1]
+        self.assertEqual(positions.tolist(), [22, 29, -1, -1, -1, -1, -1, -1])
+        self.assertEqual(rope.tolist(), [22, 29, 0, 0, 0, 0, 0, 0])
 
     def test_rejects_invalid_slots_and_capacity(self):
         for slots in ((), (0, 0), (-1,), (16,)):

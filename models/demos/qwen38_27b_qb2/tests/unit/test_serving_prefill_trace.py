@@ -2,27 +2,37 @@
 # SPDX-License-Identifier: Apache-2.0
 """Exercise actual serving prefill methods with CPU tensors and fake TTNN effects."""
 
-import ast
+import importlib
 import unittest
 import weakref
 from collections import Counter
-from pathlib import Path
+from functools import wraps
 from types import MethodType, SimpleNamespace
+from unittest.mock import patch
 
 import torch
 
 
 def load_methods(filename, class_name, names, ops):
-    source = Path(__file__).resolve().parents[2] / "tt" / filename
-    tree = ast.parse(source.read_text())
-    cls = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == class_name)
-    methods = [node for node in cls.body if isinstance(node, ast.FunctionDef) and node.name in names]
-    found = {node.name for node in methods}
-    if found != set(names):
-        raise AssertionError(f"Missing methods: {set(names) - found}")
-    namespace = {"ttnn": ops, "torch": torch}
-    exec(compile(ast.Module(body=methods, type_ignores=[]), str(source), "exec"), namespace)
-    return namespace
+    module_name = f"models.demos.qwen38_27b_qb2.tt.{filename.removesuffix('.py')}"
+    module = importlib.import_module(module_name)
+    cls = getattr(module, class_name)
+    missing = set(names) - set(vars(cls))
+    if missing:
+        raise AssertionError(f"Missing methods: {missing}")
+
+    def bind_ops(method):
+        if ops is None:
+            return method
+
+        @wraps(method)
+        def invoke(*args, **kwargs):
+            with patch.object(module, "ttnn", ops):
+                return method(*args, **kwargs)
+
+        return invoke
+
+    return {name: bind_ops(getattr(cls, name)) for name in names}
 
 
 class FakeLogits:
