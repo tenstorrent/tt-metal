@@ -6,19 +6,30 @@ from __future__ import annotations
 
 import os
 import shutil
-from typing import TYPE_CHECKING
 
+import pytest
 import torch
 from loguru import logger
-
-if TYPE_CHECKING:
-    import pytest
 
 
 def pytest_configure(config: pytest.Config) -> None:
     """Register the log-start plugin only when output capture is disabled."""
     if config.option.capture == "no":
         config.pluginmanager.register(_LogStartPlugin(), "tt_dit_logstart")
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):  # noqa: ARG001
+    """Print the traceback at failure time, before fixture teardown.
+
+    On a multi-rank mesh, one rank's failure strands the others in collectives and
+    `close_mesh_device`'s own cross-rank barrier then never completes, so the
+    post-teardown FAILURES section is unreachable exactly when it is needed.
+    """
+    outcome = yield
+    report = outcome.get_result()
+    if report.failed and report.when in ("setup", "call"):
+        logger.error(f"{item.nodeid} failed in {report.when} (traceback before teardown):\n{report.longreprtext}")
 
 
 class _LogStartPlugin:
