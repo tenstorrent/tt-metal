@@ -261,3 +261,27 @@ def test_files_committed_by_someone_else_during_a_step_are_not_the_agents(orch, 
     o.run_agent = run_agent_while_someone_commits
     assert o.run() == DONE
     assert all(not r["problems"] for r in o.led.state()["C.1"]["agent_runs"])
+
+
+def test_a_failing_reference_stops_for_a_person_and_never_reaches_the_ttnn_debugger(orch):
+    task = {
+        "id": "R.2",
+        "title": "reference",
+        "step": "reference",
+        "paths": ["src"],
+        "gate": {"cmd": f"{PY} tests/check.py", "metrics": {"pcc_out": ">= 0.99"}},
+    }
+    o = orch([task], {})
+    assert o.run() == STOPPED
+    calls = orch.calls()
+    assert calls == [f"R.2.reference.{n}.md bringup-engineer" for n in (1, 2, 3)]
+    assert "waiting for a person" in o.led.state()["R.2"]["reason"][0]
+
+
+def test_policy_from_the_spec(orch, sandbox):
+    sandbox.write_spec(agents={"policy": {"reference": {"attempts": 1}, "implement": {"escalate": "stop"}}})
+    o = orch([impl_task()], {})
+    assert o.policy({}, "reference")["attempts"] == 1
+    assert o.policy({}, "implement")["escalate"] == "stop"
+    assert o.policy({"device": True}, "fix")["escalate"] == "debugger"
+    assert o.policy({}, "fix")["escalate"] == "stop"  # a CPU gate's failure never goes to the TTNN debugger
