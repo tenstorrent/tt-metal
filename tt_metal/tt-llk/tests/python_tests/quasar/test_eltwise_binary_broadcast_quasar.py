@@ -96,20 +96,14 @@ def binary_broadcast_dest_sync_modes(*, is_perf=False):
     return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
 
 
-# Reverted broadcast math uses `face_r_dim >> 3` as the MOP inner loop. A face
-# shorter than one ELW instruction (8 rows) programs inner loop 0 and hangs.
+# face_r_dim < 8 programs broadcast MOP inner loop 0 and the test hangs.
 _BROADCAST_MATH_ROWS = 8
 
 
 def skip_if_quasar_binary_broadcast_unsupported(
     tile_dimensions, math_fidelity, acc_to_dest
 ) -> None:
-    """Skip broadcast cases the reverted full-tile kernels cannot run.
-
-    Tiny-tile broadcast math/unpack was reverted. Until that returns:
-    face_r_dim < 8 hangs, every other non-32x32 tile reads or packs the wrong
-    faces, and acc_to_dest only matches hardware when it equals "not LoFi".
-    """
+    """Skip broadcast cases the reverted full-tile kernels cannot run. See #57902."""
     tile_shape = construct_tile_shape(tile_dimensions)
     if tile_shape.face_r_dim < _BROADCAST_MATH_ROWS:
         pytest.skip(

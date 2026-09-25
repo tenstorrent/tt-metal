@@ -73,8 +73,7 @@ def eltwise_binary_implied_math_formats(formats, *, is_perf=False):
     return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
 
 
-# Quasar FPU eltwise binary steps 8 dest rows per instruction. A tile with
-# faces * face_r_dim < 8 programs MOP_OUTER_LOOP = 0 and hangs.
+# faces * face_r_dim < 8 programs MOP_OUTER_LOOP = 0 and the test hangs.
 ELTWISE_MATH_ROWS = 8
 
 
