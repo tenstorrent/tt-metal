@@ -130,7 +130,7 @@ def to_host_streams(mesh_device, tt_streams):
 
 @pytest.mark.parametrize("layer_idx", [0, 2, 3], ids=["swa-layer0-hash", "csa-layer2-hash", "hca-layer3-topk"])
 @pytest.mark.parametrize("mesh_device, device_params", _MESH_CONFIGS, indirect=["mesh_device", "device_params"])
-def test_v4_block_vs_reference_layer(mesh_device, device_params, layer_idx):
+def test_v4_block_vs_reference_layer(mesh_device, device_params, layer_idx, tmp_path):
     cfg = _cfg()
     layer = init_reference_layer(cfg, layer_idx)
     rot = DeepseekV4RotaryEmbedding(cfg)
@@ -158,8 +158,18 @@ def test_v4_block_vs_reference_layer(mesh_device, device_params, layer_idx):
         rotary_emb=rot,
         seq_len_per_chip=_SEQ // sp,
         num_routed_experts=_EXPERTS,
+        weight_cache_path=tmp_path,  # the projection weights go through the .tensorbin cache (written here)
     )
     block.alloc_states(1, _SEQ, _SEQ)
+    cached = sorted(f.name.split("_dtype_")[0] for f in tmp_path.glob("layer_*.tensorbin"))
+    logger.info(f"layer {layer_idx} weight cache files: {cached}")
+    expect = {f"layer_{layer_idx}.attn.{n}" for n in ("wq_a", "wq_b", "wkv", "wo_a", "wo_b")}
+    if block.kind != "sliding_attention":
+        expect |= {f"layer_{layer_idx}.compressor.{n}" for n in ("wkv", "wgate")}
+    if block.kind == "compressed_sparse_attention":
+        expect |= {f"layer_{layer_idx}.indexer.compressor.{n}" for n in ("wkv", "wgate")}
+        expect |= {f"layer_{layer_idx}.indexer.{n}" for n in ("wq_b", "w_proj")}
+    assert expect <= set(cached), sorted(expect - set(cached))
     acks = []
     out = block(
         to_device_streams(mesh_device, streams),

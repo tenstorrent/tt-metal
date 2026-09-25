@@ -36,11 +36,25 @@ HC = 4
 
 
 def build_attention(
-    mesh_device, cfg, layer_idx: int, w: dict, rotary_emb, *, sp_axis=0, tp_axis=1, topology=ttnn.Topology.Linear
+    mesh_device,
+    cfg,
+    layer_idx: int,
+    w: dict,
+    rotary_emb,
+    *,
+    sp_axis=0,
+    tp_axis=1,
+    topology=ttnn.Topology.Linear,
+    weight_cache_path=None,
 ):
-    """The layer's attention module from reference-named weights."""
+    """The layer's attention module from reference-named weights. ``weight_cache_path`` (the runner's per-mesh
+    .tensorbin dir) caches the projection weights under ``layer_{idx}.attn.*`` / ``.compressor.*`` / ``.indexer.*``."""
     kind = layer_kinds(cfg)[layer_idx]
     mesh = dict(sp_axis=sp_axis, tp_axis=tp_axis, topology=topology)
+
+    def cached(name):
+        return dict(weight_cache_path=weight_cache_path, cache_name_prefix=f"layer_{layer_idx}.{name}")
+
     common = dict(
         q_a_proj_weight=w["self_attn.q_a_proj.weight"],
         q_a_norm_weight=w["self_attn.q_a_norm.weight"],
@@ -59,6 +73,7 @@ def build_attention(
         rms_norm_eps=cfg.rms_norm_eps,
         **mesh,
     )
+    common.update(cached("attn"))
     if kind == SLIDING:
         return TtSWA(mesh_device, compressor=None, rope_layer_type="main", **common)
     if kind == HCA:
@@ -74,6 +89,7 @@ def build_attention(
             rotary_emb=rotary_emb,
             rms_norm_eps=cfg.rms_norm_eps,
             **mesh,
+            **cached("compressor"),
         )
         return TtHCA(mesh_device, compressor=comp, rope_layer_type="compress", **common)
     assert kind == CSA, kind
@@ -90,6 +106,7 @@ def build_attention(
         rotary_emb=rotary_emb,
         rms_norm_eps=cfg.rms_norm_eps,
         **mesh,
+        **cached("compressor"),
     )
     icomp = TtCSACompressor(
         mesh_device,
@@ -103,6 +120,7 @@ def build_attention(
         rotary_emb=rotary_emb,
         rms_norm_eps=cfg.rms_norm_eps,
         **mesh,
+        **cached("indexer.compressor"),
     )
     indexer = TtCSAIndexer(
         mesh_device,
@@ -114,6 +132,7 @@ def build_attention(
         rope_head_dim=cfg.qk_rope_head_dim,
         topk=cfg.index_topk,
         **mesh,
+        **cached("indexer"),
     )
     return TtCSA(mesh_device, compressor=comp, indexer=indexer, **common)
 
@@ -167,7 +186,15 @@ class TtV4PrefillBlock(LightweightModule):
             cache_name_prefix=f"layer_{layer_idx}.input_norm",
         )
         self.attn = build_attention(
-            mesh_device, cfg, layer_idx, w, rotary_emb, sp_axis=sp_axis, tp_axis=tp_axis, topology=topology
+            mesh_device,
+            cfg,
+            layer_idx,
+            w,
+            rotary_emb,
+            sp_axis=sp_axis,
+            tp_axis=tp_axis,
+            topology=topology,
+            weight_cache_path=weight_cache_path,
         )
         self.states: dict = {}
         if self.kv_only:

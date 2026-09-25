@@ -7,6 +7,8 @@ Mirrors ``DeepseekV4Attention`` in ``reference/deepseek_v4/modeling_deepseek_v4.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import torch
 
 import ttnn
@@ -45,18 +47,45 @@ class _TtHCABase(LightweightModule):
             hidden = torch.nn.functional.pad(hidden, (0, 0, 0, pad))
         return hidden, seq_len_actual
 
-    def _to_tt_linear_weight(self, weight: torch.Tensor, tp_shard_dim: int | None = None):
+    def _to_tt_linear_weight(self, weight: torch.Tensor, tp_shard_dim: int | None = None, cache_name=None):
         torch_weight = weight.detach().transpose(-2, -1).contiguous().unsqueeze(0).unsqueeze(0)
         return self._from_torch(
-            torch_weight, mesh_mapper=self._mesh_mapper(tp_dim=tp_shard_dim), dtype=self.weights_dtype
+            torch_weight,
+            mesh_mapper=self._mesh_mapper(tp_dim=tp_shard_dim),
+            dtype=self.weights_dtype,
+            cache_name=cache_name,
         )
 
-    def _from_torch(self, x: torch.Tensor, mesh_mapper=None, dtype=None, layout=ttnn.TILE_LAYOUT, on_device=True):
+    def _cache_file(self, cache_name):
+        """``<weight_cache_path>/<cache_name_prefix>.<cache_name>`` when the module was given a cache dir (the
+        runner's ``$PREFILL_TTNN_CACHE/.../{sp}x{tp}``), else None. ``ttnn.as_tensor`` appends dtype/layout."""
+        path = getattr(self, "weight_cache_path", None)
+        prefix = getattr(self, "cache_name_prefix", None)
+        if cache_name is None or path is None or prefix is None:
+            return None
+        return str(Path(path) / f"{prefix}.{cache_name}")
+
+    def _from_torch(
+        self, x: torch.Tensor, mesh_mapper=None, dtype=None, layout=ttnn.TILE_LAYOUT, on_device=True, cache_name=None
+    ):
         """Replicated across the mesh unless a mapper is given. ``on_device=False`` leaves it on host, which
-        is what ``copy_host_to_device_tensor`` takes as its source."""
+        is what ``copy_host_to_device_tensor`` takes as its source. ``cache_name`` routes a weight through
+        ``ttnn.as_tensor`` with a .tensorbin cache file (written on the first load, read after), so the
+        checkpoint dequant + tilize is paid once per (mesh, dtype)."""
         if self.is_mesh and mesh_mapper is None:
             mesh_mapper = ttnn.ReplicateTensorToMesh(self.device)
         tiled = on_device and layout == ttnn.TILE_LAYOUT
+        cache_file = self._cache_file(cache_name) if on_device else None
+        if cache_file is not None:
+            return ttnn.as_tensor(
+                x,
+                device=self.device,
+                dtype=dtype or self.dtype,
+                layout=layout,
+                memory_config=self.memory_config if tiled else None,
+                mesh_mapper=mesh_mapper,
+                cache_file_name=cache_file,
+            )
         return ttnn.from_torch(
             x,
             device=self.device if on_device else None,
@@ -161,11 +190,14 @@ class TtHCACompressor(_TtHCABase):
         dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat8_b,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        weight_cache_path=None,
+        cache_name_prefix=None,
     ):
         self.device = device
         self.dtype = dtype
         self.weights_dtype = weights_dtype
         self.memory_config = memory_config
+        self.weight_cache_path, self.cache_name_prefix = weight_cache_path, cache_name_prefix
         self.head_dim = int(head_dim)
         self.compress_rate = int(compress_rate)
         self.rope_head_dim = int(rope_head_dim)
@@ -180,8 +212,8 @@ class TtHCACompressor(_TtHCABase):
         self.tt_ccl = get_tt_ccl(device) if (self.is_mesh and (self.sp_factor > 1 or self.tp_factor > 1)) else None
         self.ccl_num_links = 2 if is_blackhole() else 1
 
-        self.wkv = self._to_tt_linear_weight(kv_proj_weight, tp_shard_dim=2)
-        self.wgate = self._to_tt_linear_weight(gate_proj_weight, tp_shard_dim=2)
+        self.wkv = self._to_tt_linear_weight(kv_proj_weight, tp_shard_dim=2, cache_name="wkv")
+        self.wgate = self._to_tt_linear_weight(gate_proj_weight, tp_shard_dim=2, cache_name="wgate")
         self.position_bias = self._from_torch(position_bias.detach().reshape(1, 1, self.compress_rate, self.head_dim))
         self.kv_norm_weight = self._from_torch(kv_norm_weight.detach().reshape(1, 1, 1, self.head_dim))
         self.trans_mat = self._from_torch(get_rot_transformation_mat())
@@ -434,11 +466,14 @@ class TtHCA(_TtHCABase):
         weights_dtype=ttnn.bfloat8_b,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         rope_layer_type: str = "compress",
+        weight_cache_path=None,
+        cache_name_prefix=None,
     ):
         self.device = device
         self.dtype = dtype
         self.weights_dtype = weights_dtype
         self.memory_config = memory_config
+        self.weight_cache_path, self.cache_name_prefix = weight_cache_path, cache_name_prefix
         self.rope_layer_type = str(rope_layer_type)
         self.num_heads = int(num_heads)
         self.head_dim = int(head_dim)
@@ -462,11 +497,11 @@ class TtHCA(_TtHCABase):
         sinks_host = sinks.detach().reshape(1, self.num_heads, 1, 1) / self.scaling
         self.sinks_sdpa = self._from_torch(sinks_host, mesh_mapper=self._mesh_mapper(tp_dim=1))
 
-        self.wq_a = self._to_tt_linear_weight(q_a_proj_weight, tp_shard_dim=2)
-        self.wq_b = self._to_tt_linear_weight(q_b_proj_weight, tp_shard_dim=3)
+        self.wq_a = self._to_tt_linear_weight(q_a_proj_weight, tp_shard_dim=2, cache_name="wq_a")
+        self.wq_b = self._to_tt_linear_weight(q_b_proj_weight, tp_shard_dim=3, cache_name="wq_b")
         self.q_a_norm_weight = self._from_torch(q_a_norm_weight.detach().reshape(1, 1, 1, -1))
         self.q_b_norm_weight = self._from_torch(torch.ones(1, 1, 1, self.head_dim))
-        self.wkv = self._to_tt_linear_weight(kv_proj_weight, tp_shard_dim=2)
+        self.wkv = self._to_tt_linear_weight(kv_proj_weight, tp_shard_dim=2, cache_name="wkv")
         self.kv_norm_weight = self._from_torch(kv_norm_weight.detach().reshape(1, 1, 1, self.head_dim))
 
         # o_a_proj is block-diagonal over o_groups. Groups partition the heads, so a TP chip owns whole
@@ -475,8 +510,10 @@ class TtHCA(_TtHCABase):
         self.o_groups = int(o_groups)
         in_per_group = self.num_heads * self.head_dim // self.o_groups
         o_a_grouped = o_a_proj_weight.detach().view(self.o_groups, -1, in_per_group).transpose(1, 2).unsqueeze(0)
-        self.wo_a = self._from_torch(o_a_grouped, mesh_mapper=self._mesh_mapper(tp_dim=1), dtype=self.weights_dtype)
-        self.wo_b = self._to_tt_linear_weight(o_b_proj_weight, tp_shard_dim=2)
+        self.wo_a = self._from_torch(
+            o_a_grouped, mesh_mapper=self._mesh_mapper(tp_dim=1), dtype=self.weights_dtype, cache_name="wo_a"
+        )
+        self.wo_b = self._to_tt_linear_weight(o_b_proj_weight, tp_shard_dim=2, cache_name="wo_b")
 
         self.trans_mat = self._from_torch(get_rot_transformation_mat())
         # Everything below comes from alloc_state, which every caller has to run before forward.

@@ -238,8 +238,11 @@ class TtCSAIndexer(_TtHCABase):
         dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat8_b,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        weight_cache_path=None,
+        cache_name_prefix=None,
     ):
         self.device, self.dtype, self.weights_dtype, self.memory_config = device, dtype, weights_dtype, memory_config
+        self.weight_cache_path, self.cache_name_prefix = weight_cache_path, cache_name_prefix
         self.compressor = compressor
         self.n_heads, self.head_dim, self.rope_head_dim, self.topk = (
             int(n_heads),
@@ -256,8 +259,8 @@ class TtCSAIndexer(_TtHCABase):
         self.ccl_num_links = compressor.ccl_num_links
         self.fp32 = compressor.fp32
         self.trans_mat = compressor.trans_mat
-        self.wq_b = self._to_tt_linear_weight(q_b_proj_weight, tp_shard_dim=3)  # heads split over TP
-        self.w_proj = self._to_tt_linear_weight(weights_proj_weight, tp_shard_dim=2)  # partial sums over TP
+        self.wq_b = self._to_tt_linear_weight(q_b_proj_weight, tp_shard_dim=3, cache_name="wq_b")  # heads over TP
+        self.w_proj = self._to_tt_linear_weight(weights_proj_weight, tp_shard_dim=2, cache_name="w_proj")  # TP partials
         # chip c picks its own heads out of the TP-replicated weights row: a one-hot [H, H] sharded on columns
         self.head_sel = self._from_torch(
             torch.eye(self.n_heads).view(1, 1, self.n_heads, self.n_heads), mesh_mapper=self._mesh_mapper(tp_dim=3)
