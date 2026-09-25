@@ -31,7 +31,8 @@ public:
         experimental::streaming_profiler::RecordType::TimestampedData>;
     explicit ZoneCsvConsumer(const std::string& path);
     void operator()(const Batch& batch);
-    // Call only after the consumer can no longer receive batches.
+    // Appends the rows received since the previous call, after the header on the first; runs at every capture's end,
+    // so a process that captures more than once gets every capture in the one file. Call only between captures.
     void write_csv();
 
 private:
@@ -40,7 +41,7 @@ private:
         uint32_t chip = 0;
         uint16_t core_x = 0, core_y = 0;
         uint16_t logical_x = 0, logical_y = 0;
-        uint8_t risc = 0;
+        uint8_t processor = 0;
         uint32_t timer_id = 0;
         uint64_t timestamp = 0;
         uint64_t data = 0;
@@ -57,6 +58,7 @@ private:
 
     std::string path_;
     FILE* f_ = nullptr;
+    bool header_written_ = false;
     std::vector<Row> rows_;
     double freq_mhz_ = 0.0;
     uint64_t dropped_ = 0;

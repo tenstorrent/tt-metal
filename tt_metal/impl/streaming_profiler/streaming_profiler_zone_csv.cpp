@@ -68,18 +68,14 @@ ZoneCsvConsumer::Row ZoneCsvConsumer::row_for(const api::Core& core) {
     r.core_y = static_cast<uint16_t>(core.physical.y);
     r.logical_x = static_cast<uint16_t>(core.logical.x);
     r.logical_y = static_cast<uint16_t>(core.logical.y);
-    r.risc = static_cast<uint8_t>(core.risc);
+    r.processor = static_cast<uint8_t>(core.processor);
     return r;
 }
 
 void ZoneCsvConsumer::operator()(const Batch& batch) {
     dropped_ += batch.dropped_bytes();
-    if (freq_mhz_ == 0.0) {
-        if (!batch.zones().empty()) {
-            freq_mhz_ = batch.zones().front().frequency_ghz() * 1000.0;
-        } else if (!batch.timestamped_data().empty()) {
-            freq_mhz_ = batch.timestamped_data().begin()->frequency_ghz() * 1000.0;
-        }
+    if (freq_mhz_ == 0.0 && !batch.zones().empty()) {
+        freq_mhz_ = batch.zones().front().frequency_ghz() * 1000.0;
     }
     for (const api::Zone& z : batch.zones()) {
         // Both rows emitted: the classic reader pairs ZONE_START with ZONE_END itself.
@@ -114,14 +110,17 @@ void ZoneCsvConsumer::operator()(const Batch& batch) {
 
 void ZoneCsvConsumer::write_csv() {
     FILE* const f = f_;
-    // core_x/core_y are the NoC 0 coordinate, as in the device profiler log this file mirrors, so a reader of that
-    // log needs no special case; the logical coordinate rides in two trailing columns.
-    std::fprintf(f, "ARCH: blackhole, CHIP_FREQ[MHz]: %.0f, Max Compute Cores: 0\n", freq_mhz_);
-    std::fprintf(
-        f,
-        "PCIe slot, core_x, core_y, RISC processor type, timer_id, "
-        "time[cycles since reset], data, run host ID, trace id, trace id counter, "
-        "zone name, type, source line, source file, meta data, logical_x, logical_y\n");
+    if (!header_written_) {
+        // core_x/core_y are the NoC 0 coordinate, as in the device profiler log this file mirrors, so a reader of
+        // that log needs no special case; the logical coordinate rides in two trailing columns.
+        std::fprintf(f, "ARCH: blackhole, CHIP_FREQ[MHz]: %.0f, Max Compute Cores: 0\n", freq_mhz_);
+        std::fprintf(
+            f,
+            "PCIe slot, core_x, core_y, RISC processor type, timer_id, "
+            "time[cycles since reset], data, run host ID, trace id, trace id counter, "
+            "zone name, type, source line, source file, meta data, logical_x, logical_y\n");
+        header_written_ = true;
+    }
     // The PID, not a constant: two hand-concatenated captures then carry different ids and the reader's
     // multi-run warning still fires.
     const uint32_t run_id = static_cast<uint32_t>(::getpid());
@@ -132,7 +131,7 @@ void ZoneCsvConsumer::write_csv() {
             r.chip,
             r.core_x,
             r.core_y,
-            r.risc < kRiscNames.size() ? kRiscNames[r.risc] : "UNKNOWN",
+            r.processor < kProcessorNames.size() ? kProcessorNames[r.processor] : "UNKNOWN",
             r.timer_id,
             static_cast<unsigned long long>(r.timestamp),
             static_cast<unsigned long long>(r.data),
@@ -144,7 +143,7 @@ void ZoneCsvConsumer::write_csv() {
             r.logical_x,
             r.logical_y);
     }
-    std::fclose(f);
+    std::fflush(f);
     std::fprintf(
         stderr,
         "[streaming profiler zone-csv] wrote %zu row(s) to %s (dropped records: %llu, events with no payload: %llu)\n",
@@ -152,6 +151,9 @@ void ZoneCsvConsumer::write_csv() {
         path_.c_str(),
         static_cast<unsigned long long>(dropped_),
         static_cast<unsigned long long>(empty_payloads_));
+    rows_.clear();
+    dropped_ = 0;
+    empty_payloads_ = 0;
 }
 
 }  // namespace tt::tt_metal::streaming_profiler
