@@ -1125,23 +1125,26 @@ class TtHCA(_TtHCABase):
             pair = self._ring_window_index[int(a)] = (idx([0, 0, a, 0]), idx([1, 1, a + 2 * sw, self.head_dim]))
         return ttnn.slice(slab, pair[0], pair[1], slice_dim=2, num_devices=rows // (2 * sw))
 
-    def _export_ring(self, export, slab, prev_carry, kv_actual_before: int, real_len: int):
-        """Write the last 128 REAL tokens' K rows (tokens [E-128, E), E = kv_actual_before + real_len) into rows
-        [0, 128) of the unified cache in ring order (row = token % 128)."""
-        cache, batch_idx = export
+    def _ring_rows(self, slab, prev_carry, kv_actual_before: int, real_len: int):
+        """The last 128 REAL tokens' K rows (tokens [E-128, E), E = kv_actual_before + real_len) in ring order
+        (row = token % 128), as a [1, 1, 128, head_dim] TILE tensor in the module dtype."""
         sw = self.sliding_window
         k_prev = int(kv_actual_before) % sw
         if real_len >= sw:
             rows = int(slab.shape[2])
             a = min(((real_len - sw) // sw) * sw, rows - 2 * sw)  # 256-row window containing slab rows [r-128, r)
             assert 0 <= a and a + 2 * sw <= rows and a <= real_len - sw and real_len <= a + 2 * sw
-            ring = ttnn.matmul(
+            return ttnn.matmul(
                 self._ring_select(real_len, a, k_prev), self._slab_window(slab, a), memory_config=self.memory_config
             )
-        else:
-            head = ttnn.slice(slab, [0, 0, 0, 0], [1, 1, sw, self.head_dim])
-            x = ttnn.concat([prev_carry, head], dim=2)  # [1, 1, 256, head_dim]
-            ring = ttnn.matmul(self._ring_merge_matrix(real_len, k_prev), x, memory_config=self.memory_config)
+        head = ttnn.slice(slab, [0, 0, 0, 0], [1, 1, sw, self.head_dim])
+        x = ttnn.concat([prev_carry, head], dim=2)  # [1, 1, 256, head_dim]
+        return ttnn.matmul(self._ring_merge_matrix(real_len, k_prev), x, memory_config=self.memory_config)
+
+    def _export_ring(self, export, slab, prev_carry, kv_actual_before: int, real_len: int):
+        """Write the window ring into rows [0, 128) of a TILE unified cache (HCA / SWA kinds)."""
+        cache, batch_idx = export
+        ring = self._ring_rows(slab, prev_carry, kv_actual_before, real_len)
         if ring.dtype != cache.dtype:
             ring = ttnn.typecast(ring, cache.dtype)
         ttnn.kv_cache.fill_cache_for_user_(cache, ring, int(batch_idx), update_idx=0)

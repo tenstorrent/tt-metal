@@ -442,7 +442,42 @@ class TtCSA(TtHCA):
         state.sliding_carry = next_carry
         return self._o_proj(attn)
 
+    # ---- export into the contract's unified caches (M5b) -------------------------------------------------------
+    def _write_rm(self, cache, block_tile, batch_idx: int, row: int):
+        """Write ``block_tile`` [1, 1, H, W] (TILE, module dtype) at unified row ``row`` of batch ``batch_idx`` of a
+        bf16 ROW_MAJOR ND-sharded cache, identically on every chip. ``update_padded_kv_cache`` derives a per-chip
+        offset from ``kv_actual_global`` and the chip's SP coordinate; with ``kv_actual_global = r * sp`` and
+        ``r % piece == 0`` every chip lands on local row ``r`` (the writer kernel's slab arithmetic), so the block is
+        cut into ``piece``-row pieces, the largest of 128 / 64 / 32 that divides both ``row`` and ``H`` (128 for the
+        engine's 5120-token chunks: 1280 entries per chunk)."""
+        H, W = int(block_tile.shape[2]), int(block_tile.shape[3])
+        assert row % ttnn.TILE_SIZE == 0 and H % ttnn.TILE_SIZE == 0, (row, H)
+        assert row + H <= int(cache.shape[2]), f"unified cache too small: rows [{row}, {row + H}) into {cache.shape[2]}"
+        piece = 128
+        while row % piece or H % piece:
+            piece //= 2
+        src = block_tile if block_tile.dtype == cache.dtype else ttnn.typecast(block_tile, cache.dtype)
+        rm = ttnn.to_layout(src, ttnn.ROW_MAJOR_LAYOUT)
+        for j in range(H // piece):
+            part = rm if H == piece else ttnn.slice(rm, [0, 0, j * piece, 0], [1, 1, (j + 1) * piece, W])
+            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                cache,
+                part,
+                slot_idx=int(batch_idx),
+                layer_idx=0,
+                num_layers=1,
+                kv_actual_global=(row + j * piece) * self.sp_factor,
+                cluster_axis=self.sp_axis,
+            )
+
     def _export_csa(self, export, entries, keys, slab, state, real_len):
-        """Plan M5b: entries -> csa_unified rows 128+ (bf16 ROW_MAJOR, update_padded_kv_cache in 128-row pieces),
-        keys -> csa_index_k (bfp8 tiles), ring -> csa_unified rows [0, 128)."""
-        raise NotImplementedError("CSA unified-cache export lands with M5b")
+        """``export = (csa_unified, csa_index_k, batch_idx)``: this chunk's entries -> unified rows
+        ``128 + entry_count ..`` (bf16 ROW_MAJOR), its index keys -> the key cache (bfp8 tiles) at ``entry_count``,
+        and the window ring -> unified rows [0, 128)."""
+        unified, index_k, batch_idx = export
+        row = self.sliding_window + int(state.entry_count)
+        self._write_rm(unified, entries, batch_idx, row)
+        k = keys if keys.dtype == index_k.dtype else ttnn.typecast(keys, index_k.dtype)
+        ttnn.kv_cache.fill_cache_for_user_(index_k, k, int(batch_idx), update_idx=int(state.entry_count))
+        ring = self._ring_rows(slab, state.sliding_carry, state.kv_actual, real_len)
+        self._write_rm(unified, ring, batch_idx, 0)

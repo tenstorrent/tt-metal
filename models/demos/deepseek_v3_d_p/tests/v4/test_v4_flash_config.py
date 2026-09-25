@@ -102,8 +102,22 @@ def test_adapter_is_registered_lazy_and_describes_m1(expect_error):
         kv_only_last_layer=False,
         weight_cache_path=None,
     )
-    with expect_error(NotImplementedError, "M2..M6"):
-        adapter.build_runtime(mesh_device=None, hf_config=cfg, params=params)
+    # build_runtime needs a mesh device and the checkpoint; the runtime contract itself is checked device-free here
+    from models.demos.deepseek_v3_d_p.tt.v4.runtime import TtV4PrefillRuntimeConfig
+
+    rc = TtV4PrefillRuntimeConfig(
+        chunk_size=5120,
+        max_seq_len=10240,
+        first_layer_idx=0,
+        num_layers=43,
+        is_first_rank=True,
+        is_last_rank=True,
+        num_users=1,
+        mesh_shape=(8, 4),
+    )
+    assert (rc.sp_factor, rc.tp_factor) == (8, 4) and rc.kv_only_last_layer
+    with expect_error(TypeError, "missing"):
+        adapter.build_runtime(mesh_device=None, hf_config=cfg)  # params is required
 
 
 # ---------------------------------------------------------------------------------------------------------------

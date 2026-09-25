@@ -78,10 +78,43 @@ class DeepSeekV4FlashAdapter(PrefillModelAdapter):
         return caches
 
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):
-        raise NotImplementedError(
-            "DeepSeek-V4-Flash prefill runtime is not built yet: the mHC block, the CSA/SWA attention paths and "
-            "the V4 transformer/runtime land per tt-blaze docs/plans/deepseek_v4_flash_prefill_ttnn_plan.md (M2..M6). "
-            "Config, layer schedule and KV caches (M1) are available."
+        """The pure-ttnn V4 runtime over this rank's layer slice, weights from the checkpoint (``PREFILL_HF_MODEL``,
+        dequantised per layer through ``tt/v4/weights``) or from the .tensorbin cache once it exists."""
+        from models.demos.deepseek_v3_d_p.tt.v4.runtime import TtV4PrefillRuntime, TtV4PrefillRuntimeConfig
+        from models.demos.deepseek_v3_d_p.tt.v4.weights import hf_names
+
+        model_dir = os.environ.get("PREFILL_HF_MODEL", self.hf_model_default)
+        weight_map = hf_names.read_weight_map(model_dir)
+
+        def layer_weights(layer_idx: int) -> dict:
+            w = hf_names.layer_torch_dict(model_dir, layer_idx, weight_map=weight_map)
+            w.pop("__kind__", None)
+            w["__experts__"] = [e for _, e in hf_names.iter_layer_experts(model_dir, layer_idx, weight_map=weight_map)]
+            return w
+
+        top = hf_names.top_level_torch_dict(model_dir, weight_map=weight_map)
+        cfg = TtV4PrefillRuntimeConfig(
+            chunk_size=params.chunk_size,
+            max_seq_len=params.max_seq_len,
+            first_layer_idx=params.first_layer_idx,
+            num_layers=params.num_layers,
+            is_first_rank=params.is_first_rank,
+            is_last_rank=params.is_last_rank,
+            num_users=params.num_users,
+            mesh_shape=tuple(params.mesh_shape),
+            sp_axis=params.sp_axis,
+            tp_axis=params.tp_axis,
+            kv_only_last_layer=params.kv_only_last_layer,
+            weight_cache_path=params.weight_cache_path,
+        )
+        return TtV4PrefillRuntime(
+            mesh_device,
+            hf_config,
+            cfg,
+            layer_weights=layer_weights,
+            top_level_weights=top,
+            num_links=params.num_links,
+            dispatch_buffer_capacity_factor=params.capacity_factor,
         )
 
     # --- test metadata ---

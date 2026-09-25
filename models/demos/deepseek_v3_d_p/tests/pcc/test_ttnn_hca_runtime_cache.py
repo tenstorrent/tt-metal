@@ -24,6 +24,8 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 imp
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import deepseek_v4_flash_hf_config
 from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import TtHCA
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
+from models.demos.deepseek_v3_d_p.tt.v4.attention import csa_math as C
+from models.demos.deepseek_v3_d_p.tt.v4.attention.csa import TtCSA
 from models.demos.deepseek_v3_d_p.tt.v4.attention.swa import TtSWA
 from models.demos.deepseek_v3_d_p.tt.v4.kv_cache import allocate_v4_flash_kv_caches
 
@@ -60,8 +62,11 @@ def _init_ref(ref):
         ref.kv_norm.weight.uniform_(0.5, 1.5)
         ref.sinks.normal_(0.0, 1.0)
         if ref.compressor is not None:
-            ref.compressor.position_bias.normal_(0.0, 0.02)
+            ref.compressor.position_bias.normal_(0.0, 0.5 if hasattr(ref.compressor, "indexer") else 0.02)
             ref.compressor.kv_norm.weight.uniform_(0.5, 1.5)
+            if hasattr(ref.compressor, "indexer"):
+                ref.compressor.indexer.position_bias.normal_(0.0, 0.5)
+                ref.compressor.indexer.kv_norm.weight.uniform_(0.5, 1.5)
     return ref
 
 
@@ -99,7 +104,8 @@ def _ring_golden(k_rows, total, sw=128):
     return ring
 
 
-def _drive(mesh_device, sp_axis, tp_axis, module, cache, batch_idx, hidden, chunk_size, iters_valid):
+def _drive(mesh_device, sp_axis, tp_axis, module, export_tensors, batch_idx, hidden, chunk_size, iters_valid):
+    export_tensors = export_tensors if isinstance(export_tensors, tuple) else (export_tensors,)
     state = module.alloc_state(sum(iters_valid), chunk_tokens=chunk_size)
     kv_actual = 0
     for valid in iters_valid:
@@ -112,7 +118,7 @@ def _drive(mesh_device, sp_axis, tp_axis, module, cache, batch_idx, hidden, chun
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=_mapper(mesh_device, sp_axis, tp_axis),
         )
-        module(x, seq_len_actual=valid, state=state, export=(cache, batch_idx))
+        module(x, seq_len_actual=valid, state=state, export=(*export_tensors, batch_idx))
         kv_actual += valid
     return state
 
@@ -200,3 +206,54 @@ def test_unified_cache_export(mesh_device, device_params, sp_axis, tp_axis, name
         logger.info(f"{name} SWA slot {slot} layer {kr} (batch {b}): ring PCC {pcc_r:.6f}")
         worst_r = min(worst_r, pcc_r)
     assert worst_r >= _RING_PCC, f"SWA ring PCC {worst_r:.6f} < {_RING_PCC}"
+
+    # ---- CSA layers 2, 4: entries (bf16 ROW_MAJOR unified cache), index keys (bfp8 tiles), ring
+    ref_csa = _init_ref(DeepseekV4Attention(cfg, layer_idx=2).eval())
+    tt_csa = TtCSA.from_reference(mesh_device, ref_csa, cfg, sp_axis=sp_axis, tp_axis=tp_axis)
+    for (slot, kr), hidden in hiddens.items():
+        b = slot * 2 + kr
+        state = _drive(
+            mesh_device,
+            sp_axis,
+            tp_axis,
+            tt_csa,
+            (caches.csa_unified, caches.csa_index_k),
+            b,
+            hidden,
+            chunk_size,
+            iters_valid,
+        )
+        assert state.entry_count == sum(v // 4 for v in iters_valid)
+    unified = _read_replicated(mesh_device, caches.csa_unified).float()
+    index_k = _read_replicated(mesh_device, caches.csa_index_k).float()
+    worst_e, worst_k, worst_r = 1.0, 1.0, 1.0
+    for (slot, kr), hidden in hiddens.items():
+        b = slot * 2 + kr
+        n_entries = sum(v // 4 for v in iters_valid)  # exactly what the chunked reference emits
+        with torch.no_grad():
+            q_res = torch.zeros(1, total, cfg.q_lora_rank)
+            pos = torch.arange(total).unsqueeze(0)
+            ref_entries, _ = ref_csa.compressor(hidden, q_res, pos, None, 2)  # single-shot: total // 4 entries
+            idx = ref_csa.compressor.indexer
+            keys_ref, _ = C.compress_chunk(
+                idx.kv_proj(hidden)[0],
+                idx.gate_proj(hidden)[0],
+                idx.position_bias,
+                idx.kv_norm.weight,
+                idx.kv_norm.variance_epsilon,
+                idx.rotary_emb,
+                C.empty_prior(idx.head_dim),
+                0,
+            )
+        n_cmp = min(n_entries, ref_entries.shape[2])
+        _, pcc_e = comp_pcc(ref_entries[0, 0, :n_cmp].float(), unified[b, 0, 128 : 128 + n_cmp])
+        _, pcc_k = comp_pcc(keys_ref[:n_cmp].float(), index_k[b, 0, :n_cmp])
+        ring_ref = _ring_golden(_ref_k_rows(ref_csa, rot, hidden, "compress"), total)
+        _, pcc_r = comp_pcc(ring_ref, unified[b, 0, :128])
+        logger.info(
+            f"{name} CSA slot {slot} layer {(2, 4)[kr]} (batch {b}): entries PCC {pcc_e:.6f} ({n_cmp}), index keys PCC {pcc_k:.6f}, ring PCC {pcc_r:.6f}"
+        )
+        worst_e, worst_k, worst_r = min(worst_e, pcc_e), min(worst_k, pcc_k), min(worst_r, pcc_r)
+    assert worst_e >= _ENTRY_PCC, f"CSA entries PCC {worst_e:.6f} < {_ENTRY_PCC}"
+    assert worst_k >= _ENTRY_PCC, f"CSA index keys PCC {worst_k:.6f} < {_ENTRY_PCC}"
+    assert worst_r >= _RING_PCC, f"CSA ring PCC {worst_r:.6f} < {_RING_PCC}"
