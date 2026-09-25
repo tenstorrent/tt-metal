@@ -163,6 +163,33 @@ def test_v4_block_perf(mesh_device, device_params, layer_idx):
         f"{med[1]:.1f} ms; chunk1 issue {med[2]:.1f} / total {med[3]:.1f} ms  (A {block._islands[0].num_segments} seg"
         f"{'' if block._islands[1] is None else f', B {block._islands[1].num_segments} seg'})"
     )
+    # the engine's LayerAck path adds a synchronize_device after the attention of every layer: its cost on the islands path
+    acks = []
+
+    def run_ack(start):
+        return block(
+            streams,
+            slot=0,
+            caches=caches,
+            actual_start=start,
+            actual_end=start + _CHUNK,
+            input_ids=input_ids,
+            on_layer_complete=acks.append,
+        )
+
+    rows = []
+    for it in range(_ITERS):
+        block.reset_slot(0)
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        run_ack(0)
+        run_ack(_CHUNK)
+        ttnn.synchronize_device(mesh_device)
+        rows.append((time.perf_counter() - t0) * 1e3 / 2)
+    logger.info(
+        f"[v4 perf] layer {layer_idx} ({block.kind}) ISLANDS + per-layer ack sync: {sorted(rows)[len(rows) // 2]:.1f} ms per chunk"
+        f" (median of {_ITERS}, two chunks each)"
+    )
 
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         logger.warning("[v4 perf] realtime profiler inactive -- device time not measured")
@@ -180,3 +207,14 @@ def test_v4_block_perf(mesh_device, device_params, layer_idx):
         for rid, e in top:
             names = sorted({s.rsplit("/", 1)[-1] for s in e["kernel_sources"]})
             logger.info(f"    {e['duration_ns'] / 1e6:7.3f} ms  {names}")
+        # histogram by kernel signature: which op families make up the program COUNT (the host-dispatch cost)
+        hist = {}
+        for e in per_program.values():
+            sig = ",".join(sorted({s.rsplit("/", 1)[-1] for s in e["kernel_sources"]}))
+            n, t = hist.get(sig, (0, 0.0))
+            hist[sig] = (n + 1, t + e["duration_ns"] / 1e6)
+        logger.info(
+            f"[v4 perf] layer {layer_idx} ({block.kind}) {tag}: program histogram (count, total ms) top 15 by count"
+        )
+        for sig, (n, t) in sorted(hist.items(), key=lambda kv: -kv[1][0])[:15]:
+            logger.info(f"    {n:4d} x {t:7.2f} ms  {sig[:150]}")
