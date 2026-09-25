@@ -49,7 +49,6 @@ from helpers.sfpu_domains import exclude_undefined, for_op_pipeline
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
 from helpers.ulp import (
     _ULP_PROXY_DTYPES,
-    INTEGER_FORMATS,
     MAX_MEANINGFUL_ULP,
     ULP_FORMATS,
     has_ulp_gate,
@@ -101,11 +100,11 @@ def _integer_only_ops() -> set:
 # Every format that is neither ULP-gateable nor integer, so the audit arms cover the whole
 # enum between them. The MX int formats matter here: DataFormat.is_integer() is False for
 # MxInt8/MxInt4/MxInt2 -- they are classified by the separate is_mx_int_format() -- so
-# INTEGER_FORMATS does not reach them, and without this row they would have sat in neither
-# arm. Widening INTEGER_FORMATS instead would route them through
+# is_integer() does not reach them, and without this row they would have sat in neither
+# arm. Widening is_integer() instead would route them through
 # _mxint_block_aware_compare in test_an_integer_format_still_works_on_the_default_gate.
 BLOCK_FORMATS_WITHOUT_ULP = sorted(
-    (f for f in DataFormat if not has_ulp_gate(f) and f not in INTEGER_FORMATS),
+    (f for f in DataFormat if not has_ulp_gate(f) and not f.is_integer()),
     key=lambda f: f.name,
 )
 
@@ -1161,6 +1160,31 @@ def test_a_numeric_alias_for_a_boolean_enum_is_refused(tmp_path, alias):
     ``Yes``: a typo in a key dimension would select a contract instead of failing."""
     with _refuses("is not a ApproximationMode"):
         _table(tmp_path, f"Abs:\n  - {{approx: {alias}, max_ulp: 1}}\n")
+
+
+def test_a_duplicate_field_inside_a_row_is_refused(tmp_path):
+    """The same silent last-wins rule applies inside a row, where it would swap the key
+    a budget is filed under."""
+    with _refuses("duplicate entry for 'out'"):
+        _table(tmp_path, "Abs:\n  - {out: Float16_b, out: Float32, max_ulp: 1}\n")
+
+
+def test_anchors_and_merge_keys_load_and_may_override(tmp_path):
+    """The table shares rows through anchors, and a ``<<`` merge that overrides a field
+    is not a duplicate."""
+    table = _table(
+        tmp_path,
+        """\
+        Abs:
+          - &base {out: Float16_b, max_ulp: 2}
+        Neg:
+          - *base
+          - {<<: *base, out: Float32, max_ulp: 5}
+        """,
+    )
+    neg = table[MathOperation.Neg]
+    assert neg[BudgetKey(output_format=DataFormat.Float16_b)].max_ulp == 2
+    assert neg[BudgetKey(output_format=DataFormat.Float32)].max_ulp == 5
 
 
 def test_a_quoted_and_an_unquoted_no_mean_the_same_thing(tmp_path):

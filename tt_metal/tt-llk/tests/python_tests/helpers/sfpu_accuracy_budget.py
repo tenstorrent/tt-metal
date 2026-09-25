@@ -34,13 +34,14 @@ from dataclasses import dataclass, fields
 from enum import Enum
 from itertools import product
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, Type, TypeVar
+
+import yaml
 
 from .chip_architecture import ChipArchitecture
 from .format_config import DataFormat
 from .llk_params import ApproximationMode, DestAccumulation, MathOperation
 from .ulp import MANTISSA_BITS_FOR_ULP, MAX_MEANINGFUL_ULP, has_ulp_gate, ulp_dtype
-from .yaml_table import enum_member, load_yaml_table
 
 #: The architecture every unkeyed budget was measured on. Anywhere else an op resolves
 #: to the tolerance metric until the sweep has been re-run there.
@@ -209,6 +210,8 @@ class BudgetKey:
         return f"BudgetKey({', '.join(set_fields)})" if set_fields else "DEFAULT"
 
 
+E = TypeVar("E", bound=Enum)
+
 #: Matches every variant of an op. The right key for a budget that does not yet vary.
 DEFAULT = BudgetKey()
 
@@ -236,6 +239,70 @@ _KEY_FIELDS: Dict[str, str] = {
 _CONTRACT_FIELDS = frozenset({"metric", "max_ulp", "near_zero_atol", "atol", "rtol"})
 
 
+def _enum_member(enum_cls: Type[E], value: Any, where: str) -> E:
+    """One YAML scalar as an enum member, by name or by value.
+
+    By name *and* by value because YAML 1.1 reads a bare ``No`` as ``False``, and
+    ``ApproximationMode.No`` is spelled ``False`` too, so the quoted and bare spellings
+    must land on the same member. By value only when the scalar has the member value's
+    own type: ``True == 1`` in Python, so ``ApproximationMode(1)`` and even
+    ``ApproximationMode(1.0)`` would otherwise resolve to ``Yes``.
+    """
+    try:
+        if isinstance(value, str) and value in enum_cls.__members__:
+            return enum_cls[value]
+        member = enum_cls(value)
+        if type(member.value) is not type(value):
+            raise ValueError(value)
+        return member
+    except (KeyError, ValueError):
+        raise ValueError(
+            f"{where}: {value!r} is not a {enum_cls.__name__}; expected one of "
+            f"{', '.join(m.name for m in enum_cls)}"
+        ) from None
+
+
+def _refuse_duplicate_keys(node: yaml.Node, where: str) -> None:
+    """PyYAML keeps the last of two identical mapping keys without a word, so a
+    copy-pasted op name would drop the earlier op's whole table. Checked on the node
+    tree the standard ``SafeLoader`` composes, before it constructs anything. ``<<``
+    merge keys are skipped: overriding a merged field is what they are for."""
+    if isinstance(node, yaml.MappingNode):
+        seen = set()
+        for key, value in node.value:
+            if key.tag == "tag:yaml.org,2002:merge":
+                continue
+            if key.value in seen:
+                raise ValueError(
+                    f"{where}: duplicate entry for {key.value!r}. YAML keeps only the "
+                    "last, so the earlier one would vanish with nothing to catch it."
+                )
+            seen.add(key.value)
+            _refuse_duplicate_keys(value, where)
+    elif isinstance(node, yaml.SequenceNode):
+        for item in node.value:
+            _refuse_duplicate_keys(item, where)
+
+
+def _read_yaml(path: Path) -> Dict[str, Any]:
+    """*path* through PyYAML's ``SafeLoader``, refusing duplicate keys."""
+    with open(path, encoding="utf-8") as handle:
+        loader = yaml.SafeLoader(handle)
+        try:
+            node = loader.get_single_node()
+            if node is None:
+                return {}
+            _refuse_duplicate_keys(node, path.name)
+            loaded = loader.construct_document(node)
+        finally:
+            loader.dispose()
+    if not isinstance(loaded, dict):
+        raise ValueError(
+            f"{path.name}: expected a mapping at the top level, got {type(loaded).__name__}"
+        )
+    return loaded
+
+
 def _row_to_entry(
     where: str, row: Dict[str, Any]
 ) -> Tuple[BudgetKey, AccuracyContract]:
@@ -244,13 +311,13 @@ def _row_to_entry(
         raise ValueError(f"{where}: unknown field(s) {sorted(unknown)}")
     key = BudgetKey(
         **{
-            field: enum_member(_BUDGET_KEY_TYPES[field], row[short], where)
+            field: _enum_member(_BUDGET_KEY_TYPES[field], row[short], where)
             for short, field in _KEY_FIELDS.items()
             if short in row
         }
     )
     contract = {field: row[field] for field in _CONTRACT_FIELDS if field in row}
-    metric = enum_member(Metric, contract.pop("metric", "ulp"), where)
+    metric = _enum_member(Metric, contract.pop("metric", "ulp"), where)
     # AccuracyContract.__post_init__ owns the rest of the validation, so a row that is
     # half-converted between the two metrics is refused there rather than here.
     return key, AccuracyContract(metric=metric, **contract)
@@ -260,7 +327,7 @@ def _load_table(path: Path = _TABLE_PATH) -> Dict[MathOperation, _BudgetTable]:
     """The YAML table as the registry the resolver walks. Every failure is the author's,
     so each one names the op it came from."""
     table: Dict[MathOperation, _BudgetTable] = {}
-    for op_name, rows in load_yaml_table(path).items():
+    for op_name, rows in _read_yaml(path).items():
         where = f"{path.name}: {op_name}"
         try:
             op = MathOperation[op_name]
