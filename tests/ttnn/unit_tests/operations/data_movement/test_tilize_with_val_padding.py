@@ -975,13 +975,15 @@ def test_tilize_with_val_padding_block_per_node_cb_size(device, input_shape, pad
 def test_tilize_with_val_padding_width_sharded_to_width_sharded(device, pad_value):
     """WIDTH_SHARDED (legacy) input -> WIDTH_SHARDED (legacy) output, with height padding.
 
-    This is the only config that selects TilizeWithValPaddingMultiCoreShardedFactory (see
+    This shape selects TilizeWithValPaddingMultiCoreShardedFactory (see
     can_use_sharded_optimized_factory: WIDTH_SHARDED in and out, same layout, non-ND, no
     sub_core_grids, shapes equal except the padded height dim). That factory's reader
-    (reader_unary_pad_height_width_sharded) carries the SRC_SHARD / STAGE / PAD buffers; every other
-    sharded test in this file outputs ND_SHARDED and takes the default factory instead. Height
-    padding (H_out > H_in) exercises the PAD buffer's fill/broadcast path, and pad_value == 0.0
-    covers the zero-fill store loop.
+    (reader_unary_pad_height_width_sharded) carries the SRC_SHARD / STAGE / PAD buffers; the other
+    sharded tests in this file output ND_SHARDED and take the default factory instead
+    (test_tilize_with_val_padding_program_cache_addr_change_sharded is the exception -- it also hits
+    this factory, but only with the default pad_value). The incremental coverage here is the
+    pad-value axis: height padding (H_out > H_in) exercises the PAD buffer's fill/broadcast path, and
+    pad_value == 0.0 covers the zero-fill store loop.
     """
     torch.manual_seed(0)
     num_cores = 2
