@@ -30,6 +30,88 @@
 #define ETH_RISC_WALL_CLOCK_1 0x21F4
 #define ETH_RISC_WALL_CLOCK_1_AT 0x21F8
 
+#ifdef ARCH_BLACKHOLE
+//////////////////////////////
+// eth_ctrl PTP timer A: CFR counts refclk ticks from power-on, 64NS is the PTP time in ns; reading a counter's LO
+// half latches its HI half.
+#define ETH_PTP_TIMER_REGS_START 0xFFB98800
+#define ETH_PTP_TIMER_CTRL 0x00  // [0] timer_en
+#define ETH_PTP_TIMER_FUTURE_CFR_LO 0x04
+#define ETH_PTP_TIMER_FUTURE_CFR_HI 0x08
+#define ETH_PTP_TIMER_FUTURE_PTI 0x0C  // [23:0] per-tick increment, 8 integer ns bits . 16 fractional
+#define ETH_PTP_TIMER_FUTURE_TIMESTAMP_LO 0x10
+#define ETH_PTP_TIMER_FUTURE_TIMESTAMP_HI 0x14
+#define ETH_PTP_TIMER_UPDATE_PTI 0x20        // [0]
+#define ETH_PTP_TIMER_UPDATE_TIMESTAMP 0x24  // [0]
+#define ETH_PTP_TIMER_SYNC_OFFSET1 0x30      // [7:0] ns the SYNC timers run ahead of the main timer
+#define ETH_PTP_TIMER_UPDATE_STAT 0x40
+#define ETH_PTP_TIMER_PTI_STAT 0x44  // [23:0] per-tick increment in use
+#define ETH_PTP_TIMER_CFR_LO 0x50
+#define ETH_PTP_TIMER_CFR_HI 0x54
+#define ETH_PTP_TIMER_32S_32NS_LO 0x58
+#define ETH_PTP_TIMER_32S_32NS_HI 0x5C
+#define ETH_PTP_TIMER_64NS_LO 0x60
+#define ETH_PTP_TIMER_64NS_HI 0x64
+#define ETH_PTP_TIMER_SYNC_32S_32NS_LO 0x68
+#define ETH_PTP_TIMER_SYNC_32S_32NS_HI 0x6C
+#define ETH_PTP_TIMER_SYNC_64NS_LO 0x70
+#define ETH_PTP_TIMER_SYNC_64NS_HI 0x74
+
+//////////////////////////////
+// eth_ctrl TX header table: entry i at ETH_TXPKT_CFG_REGS_START + i * ETH_TXPKT_CFG_REGS_SIZE, for 0 <= i < 10
+#define ETH_TXPKT_CFG_REGS_START 0xFFB98200
+#define ETH_TXPKT_CFG_REGS_SIZE 0x80
+#define ETH_TXPKT_CFG_INSERT_CTL 0x00
+#define ETH_TXPKT_CFG_CUSTOM_HDR 0x04
+#define ETH_TXPKT_CFG_MAC_SA_LO 0x10
+#define ETH_TXPKT_CFG_MAC_SA_HI 0x14
+#define ETH_TXPKT_CFG_MAC_DA_LO 0x18
+#define ETH_TXPKT_CFG_MAC_DA_HI 0x1C
+#define ETH_TXPKT_CFG_ETHERTYPE 0x20
+#define ETH_TXPKT_CFG_VLAN1 0x24
+#define ETH_TXPKT_CFG_VLAN2 0x28
+
+//////////////////////////////
+// RX classifier: TCAM flow lookup and flow table (row 64 of the flow table is the NO_MATCH_* registers)
+#define ETH_RX_CLASSIFIER_REGS_START 0xFFB9C000
+#define ETH_RX_CLASSIFIER_TCAM_ROW_MAPPING 0xC00  // + 4 * row
+#define ETH_RX_CLASSIFIER_NO_MATCH_ACTIONS 0xD04
+#define ETH_RX_CLASSIFIER_TCAM_ROW_UPDATE 0xD40
+#define ETH_RX_CLASSIFIER_TCAM_TUPLE_TYPE_WRITE 0xD80
+#define ETH_RX_CLASSIFIER_TCAM_SA_WRITE 0xD90  // 4 words
+#define ETH_RX_CLASSIFIER_TCAM_DA_WRITE 0xDA0  // 4 words
+#define ETH_RX_CLASSIFIER_TCAM_NON_IP_ADDR_FLAGS_WRITE 0xDB0
+#define ETH_RX_CLASSIFIER_TCAM_ETHERTYPE_WRITE 0xDC0
+#define ETH_RX_CLASSIFIER_TCAM_PRIORITY_WRITE 0xDC4
+#define ETH_RX_CLASSIFIER_TCAM_UPDATE 0xDF0
+#define ETH_RX_CLASSIFIER_FTABLE_LABELS 0xE80
+#define ETH_RX_CLASSIFIER_FTABLE_ACTIONS 0xE84
+#define ETH_RX_CLASSIFIER_FTABLE_VLAN 0xE88
+#define ETH_RX_CLASSIFIER_FTABLE_SW_METADATA 0xE8C
+#define ETH_RX_CLASSIFIER_FTABLE_UPDATE 0xEA0
+
+//////////////////////////////
+// RX classifier timestamp handling: the RX timestamp FIFO
+#define ETH_RX_TH_REGS_START 0xFFB9D800
+#define ETH_RX_TH_TS_LOW 0x00
+#define ETH_RX_TH_TS_HIGH 0x04
+#define ETH_RX_TH_TS_LABEL 0x08
+#define ETH_RX_TH_STATUS 0x10
+
+//////////////////////////////
+// MAC (Rianta RSm410)
+#define ETH_MAC_REGS_START 0xFFBA0000
+#define ETH_MAC_TX_CFG 0x2200
+#define ETH_MAC_TX_DELAY 0x2218  // [15:0] added to every TX timestamp
+#define ETH_MAC_TX_INT 0x2288    // write 1 to clear
+#define ETH_MAC_TX_INT_RAW 0x2290
+#define ETH_MAC_TS_FIFO_FULL_THRESH 0x2300
+#define ETH_MAC_TS_FIFO_0 0x2E00  // TX timestamp FIFO, 4 words per entry; reading word 0 pops; empty reads 0xFFFFFFFF
+#define ETH_MAC_TS_FIFO_1 0x2E04
+#define ETH_MAC_TS_FIFO_2 0x2E08
+#define ETH_MAC_TS_FIFO_3 0x2E0C
+#endif
+
 //////////////////////////////
 // TX queue 0/1 controllers
 #define ETH_TXQ0_REGS_START 0xFFB90000
@@ -90,5 +172,11 @@
     0x64  // Minimal packet size (in 16-byte words); padding added (and dropped at destination) for smaller packets
 #define ETH_TXQ_RESEND_CNT 0x68                // Number of resend start events
 #define ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD 0x6C  // Number of packets to accept before previous ones sent
+#ifdef ARCH_BLACKHOLE
+#define ETH_TXQ_TXPKT_CFG_SEL_SW 0x80  // TX header table entry for each kind of software-issued packet
+#define ETH_TXQ_TIMESTAMP 0x90         // timestamp command and in-frame timestamp offset
+#define ETH_TXQ_RX_TIMESTAMP_LO 0x94   // two-step timestamp tag, returned in the MAC's TX timestamp FIFO
+#define ETH_TXQ_RX_TIMESTAMP_HI 0x98
+#endif
 
 #endif
