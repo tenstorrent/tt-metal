@@ -1,5 +1,5 @@
 {
-  "last_scan_date": "2026-09-24",
+  "last_scan_date": "2026-09-25",
   "scanned_run_ids": [
     "30227858718",
     "30387358745",
@@ -85,7 +85,9 @@
     "20839307530",
     "35970162562",
     "35962547130",
-    "35969197075"
+    "35969197075",
+    "35925347922",
+    "36065668718"
   ],
   "workflows_sampled": [
     "merge-gate.yaml",
@@ -126,7 +128,9 @@
     "pipeline-select-profiler.yaml",
     "t3000-tests.yaml",
     "galaxy-profiler-tests.yaml",
-    "t3000-profiler-tests.yaml"
+    "t3000-profiler-tests.yaml",
+    "t3000-dispatch-tests.yaml",
+    "galaxy-tests.yaml"
   ],
   "in_flight_prs": [
     {
@@ -829,26 +833,23 @@
       "last_state": "success"
     },
     {
-      "branch": "silencer/register-no-reset-default-device-marker",
-      "title": "[silencer] Register no_reset_default_device pytest marker",
-      "pattern": "PytestUnknownMarkWarning: Unknown pytest.mark.no_reset_default_device - is this a typo? -- marker consumed by root conftest.py's autouse reset_default_device fixture (conftest.py:903) but never registered in pytest.ini; fires on every collection of test_device_perf.py::test_device_perf_* (4 of 6 sampled jobs in run 35969197075)",
-      "source_run_id": "35969197075",
+      "branch": "silencer/demote-active-ethernet-dispatch-exit-log",
+      "title": "[silencer] Demote active ethernet dispatch exit-signal log to debug",
+      "pattern": "log_info in RiscFirmwareInitializer::reset_cores() (risc_firmware_initializer.cpp:489) fires once per active-eth-core-still-running on every device init; 3344x in a single test-execution job (galaxy-tests run 36065668718, job 107859090771 Galaxy unit/distributed integration tests [wh_galaxy], last-5000-line tail sample) -- accounted for 3344 of 3430 total info/Metal lines in that sample",
+      "source_run_id": "36065668718",
       "source_job_ids": [
-        "107539492240",
-        "107539492251",
-        "107539492253",
-        "107539492274"
+        "107859090771"
       ],
-      "source_workflow": "models-t1-device-perf-tests.yaml",
+      "source_workflow": "galaxy-tests.yaml",
       "category": 6,
-      "validation_workflow_dispatched": "models-t1-device-perf-tests",
-      "dispatched": "2026-09-24",
+      "validation_workflow_dispatched": "galaxy-tests",
+      "dispatched": "2026-09-25",
       "status": "open-pr",
       "reported": false,
       "nonterminal_reported": false,
-      "note": "PR opened this run: registered no_reset_default_device in pytest.ini's markers list (Python-only change, no build needed). Dispatched models-t1-device-perf-tests for validation; awaiting run outcome next scan. Validation should re-grep test-execution logs of a job collecting models/tt_transformers/tests/test_device_perf.py for PytestUnknownMarkWarning/no_reset_default_device.",
+      "note": "PR opened this run (log_info -> log_debug, host C++ only). Dispatched galaxy-tests for validation. Awaiting run outcome next scan -- re-grep that run test-execution logs for \"active ethernet dispatch core\" at info severity (should be absent at default verbosity).",
       "pr": null
     }
   ],
-  "backlog_cursor": "Phase A this run (2026-09-24): no in-flight validations pending reconciliation (all prior entries already reported/terminal). Phase B: sampled models-t1-device-perf-tests.yaml (fresh run 35969197075, failure overall -- unrelated model device-perf failures) across 6 jobs (107539492240/251/253/260/274/290). Histogram: info/UMD 154, info/Metal 107, info/Distributed 24, info/Fabric 24, info/Device 21, info/BuildKernels 20, warning/UMD 10, warning/Always 9, critical/Always 1 (no new severity classes; UMD/hwloc warning already known as vendored tt-umd issue, not tracked here). Diagnostic channel: found PytestUnknownMarkWarning for no_reset_default_device fired in every job that collects models/tt_transformers/tests/test_device_perf.py (4 of 6 sampled jobs) -- root conftest.py's autouse reset_default_device fixture (conftest.py:903) genuinely consumes this marker but it was never added to pytest.ini's markers list. Opened PR registering it (this run's one target-producing action) and dispatched models-t1-device-perf-tests for validation. Also reconfirmed the existing -Wdeprecated-declarations copy_dest_value warning at llk_math_eltwise_binary_sfpu_macros.h:55 (4x in job 107539492240) -- already tracked via PRs #56360/#56969, no new action. Next run: reconcile this PR's dispatched validation outcome first (Phase A), then continue Phase B scan; consider rotating to single-card-profiler-tests.yaml (0 runs previously) or re-sampling pr-gate.yaml test-execution steps."
+  "backlog_cursor": "Phase A this run (2026-09-25): resolved/dropped one stale in-flight entry (silencer/register-no-reset-default-device-marker) -- no matching open [silencer] PR found via search_pull_requests (likely PR creation never landed last run); dropped per protocol, no comment posted. Phase B: rotated to the two tracked workflows never previously sampled -- t3000-dispatch-tests.yaml (only recent completed runs are on feature branches, none on main; sampled run 35925347922, jobs 107405646513 test-execution + 107399219637 build-artifact -- reconfirmed known copy_dest_values -Wdeprecated-declarations warning at llk_math_eltwise_binary_sfpu_macros.h:55, already tracked via PRs #56360/#56969, no new action) and galaxy-tests.yaml (sampled run 36065668718, job 107859090771 Galaxy unit/distributed integration tests [wh_galaxy], failure overall -- unrelated to this fix). Histogram: info/Metal 3430 (3344 of which is the single active-ethernet-dispatch-exit message), warning/Always 272, critical/Always 257, warning/UMD 240, info/UMD 229, info/Distributed 64, info/Fabric 64, info/BuildKernels 32, info/Device 31, warning/Op 26 (no new severity classes). Selected the active-ethernet-dispatch-exit info log as this run one target -- demoted to log_debug in risc_firmware_initializer.cpp, matching the file own convention for adjacent per-core init messages. Opened PR and dispatched galaxy-tests for validation (this run one target-producing action). Next run: reconcile this PR dispatched validation outcome first (Phase A), then continue Phase B; consider rotating to single-card-profiler-tests.yaml (still 0 completed runs found on any branch in a shallow search) or re-sampling t3000-tests.yaml / pr-gate.yaml test-execution steps for category 2/3/5/6 candidates."
 }
