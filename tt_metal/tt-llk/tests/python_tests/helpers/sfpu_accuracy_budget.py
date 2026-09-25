@@ -527,14 +527,17 @@ def usable_budget_ceiling(output_format: DataFormat) -> float:
     about 35%, before it. A bound that admits either is not a gate.
 
     The real bound is the ``rtol`` half of the ``isclose`` this replaces, itself a step
-    budget at large magnitude: about 419,430 steps for fp32, 51 for fp16, 6 for bf16.
-    ``passed_test`` warns on the same line at runtime; no row here may cross it.
+    budget at large magnitude, rounded *up* to a whole step because a budget is one:
+    419,431 steps for fp32, 52 for fp16, 7 for bf16. So a bf16 cell measuring 7 enrols
+    at 7 -- 5.5% relative error at the top of a binade against the 5% rtol, and tighter
+    than the tolerance gate everywhere below it. ``passed_test`` warns on the same line
+    at runtime; no row here may cross it.
     """
     from .utils import tolerances
 
     dtype = ulp_dtype(output_format)
     by_rtol = tolerances[output_format].rtol * (1 << MANTISSA_BITS_FOR_ULP[dtype])
-    return min(by_rtol, float(MAX_MEANINGFUL_ULP[dtype]))
+    return float(math.ceil(min(by_rtol, float(MAX_MEANINGFUL_ULP[dtype]))))
 
 
 def validate_registry() -> None:

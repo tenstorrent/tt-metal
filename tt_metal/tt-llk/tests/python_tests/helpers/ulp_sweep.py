@@ -323,7 +323,7 @@ def _verdict(measured: int, out_fmt: str) -> Tuple[str, int]:
     ``("ulp", budget)`` while a step budget is still *stronger* than the tolerance it
     replaces, and ``("tolerance", budget)`` once it is not -- the budget either way, so
     the row's comment can name the number that actually crossed the line. The bound is the table's
-    own ``usable_budget_ceiling``: ~419,430 steps for fp32, 51 for fp16, 6 for bf16, 25
+    own ``usable_budget_ceiling``: 419,431 steps for fp32, 52 for fp16, 7 for bf16, 26
     for Bfp8_b. Decided per cell and before collapsing, because it depends on the output
     format and collapsing may drop it.
 
@@ -348,10 +348,18 @@ def _verdict(measured: int, out_fmt: str) -> Tuple[str, int]:
         # Enrolling the second number would gate nothing and hide the first.
         return ("block", measured)
     budget = 0 if measured == 0 else math.ceil(measured * EMIT_HEADROOM)
-    if budget > usable_budget_ceiling(DataFormat[out_fmt]):
-        # The *budget* is what crosses the line, not the measurement: with 1.1x headroom
-        # a measured 6 becomes a budget of 7, past bf16's 6.4. Writing "max 6 ULP, past
-        # this output's usable ceiling" then made a checkable claim that is false.
+    ceiling = usable_budget_ceiling(DataFormat[out_fmt])
+    if budget > ceiling:
+        if measured <= ceiling:
+            # The kernel meets the gate; only the headroom does not. Exp measures 7 on
+            # a bf16 output whose ceiling is 7, and 1.1x made that 8 -- refusing the
+            # only step gate Exp could have on bf16 over rounding. Cap at the ceiling:
+            # a budget sitting exactly on it is still stronger than the tolerance it
+            # replaces, and zero slack means any drift fails, which is what a gate is
+            # for. 15 cells on the 2026-09-25 sweep: Exp, and one ReciprocalCompat.
+            return ("ulp", int(ceiling))
+        # The *budget* is what crosses the line, not the measurement, so the row's
+        # comment names both and the claim stays checkable.
         return ("tolerance", budget)
     return ("ulp", budget)
 
