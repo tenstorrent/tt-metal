@@ -1,0 +1,18 @@
+{
+  "context": {
+    "arch": "blackhole",
+    "cluster_type": "p300",
+    "fabric_config": "FABRIC_2D",
+    "num_devices": 2
+  },
+  "phases": {
+    "cold": {
+      "artifacts_after": 48,
+      "artifacts_before": 0
+    },
+    "hot": {
+      "artifacts_after": 48,
+      "artifacts_before": 48
+    }
+  }
+}

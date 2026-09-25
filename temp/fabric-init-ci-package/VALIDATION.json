@@ -1,0 +1,32 @@
+{
+  "local_tests_passed": 42,
+  "runner_unit_tests": 31,
+  "simulated_cli_tests": 3,
+  "integration_tests": 8,
+  "syntax_checks": [
+    "Python AST",
+    "JSON",
+    "YAML syntax and duplicate keys"
+  ],
+  "not_performed": [
+    "C++ compile/link",
+    "real Tracy capture/export",
+    "Galaxy execution",
+    "GitHub Actions semantic validation",
+    "patch application to real checkout"
+  ],
+  "test_results": [
+    {
+      "suite": "tests/tt_metal/tt_fabric/fabric_init_perf",
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": "test_absolute_floor (test_runner.ComparisonTests.test_absolute_floor) ... ok\ntest_disallow_partial_device_visibility (test_runner.ComparisonTests.test_disallow_partial_device_visibility) ... ok\ntest_environment_ccache_unset_not_zero (test_runner.ComparisonTests.test_environment_ccache_unset_not_zero) ... ok\ntest_exact_boundary_passes (test_runner.ComparisonTests.test_exact_boundary_passes) ... ok\ntest_improvement_passes (test_runner.ComparisonTests.test_improvement_passes) ... ok\ntest_insufficient_repeats_rejected (test_runner.ComparisonTests.test_insufficient_repeats_rejected) ... ok\ntest_nan_rejected (test_runner.ComparisonTests.test_nan_rejected) ... ok\ntest_regression (test_runner.ComparisonTests.test_regression) ... ok\ntest_reports_written (test_runner.ComparisonTests.test_reports_written) ... ok\ntest_unapproved_baseline_rejected (test_runner.ComparisonTests.test_unapproved_baseline_rejected) ... ok\ntest_unmeasured_enforcement_fails (test_runner.ComparisonTests.test_unmeasured_enforcement_fails) ... ok\ntest_unmeasured_report (test_runner.ComparisonTests.test_unmeasured_report) ... ok\ntest_wrong_identity_fails_even_report (test_runner.ComparisonTests.test_wrong_identity_fails_even_report) ... ok\ntest_zero_baseline_rejected (test_runner.ComparisonTests.test_zero_baseline_rejected) ... ok\ntest_aggregated_csv_rejected (test_runner.ExtractTests.test_aggregated_csv_rejected) ... ok\ntest_csv_round_trip (test_runner.ExtractTests.test_csv_round_trip) ... ok\ntest_duplicate_zone_fails (test_runner.ExtractTests.test_duplicate_zone_fails) ... ok\ntest_missing_hot_marker_fails (test_runner.ExtractTests.test_missing_hot_marker_fails) ... ok\ntest_missing_zone_fails (test_runner.ExtractTests.test_missing_zone_fails) ... ok\ntest_other_thread_fails (test_runner.ExtractTests.test_other_thread_fails) ... ok\ntest_overlapping_callsite_scopes_fail (test_runner.ExtractTests.test_overlapping_callsite_scopes_fail) ... ok\ntest_parent_can_include_dispatch_gap (test_runner.ExtractTests.test_parent_can_include_dispatch_gap) ... ok\ntest_valid_inclusive_durations (test_runner.ExtractTests.test_valid_inclusive_durations) ... ok\ntest_wrong_phase_boundary_fails (test_runner.ExtractTests.test_wrong_phase_boundary_fails) ... ok\ntest_cache_not_warm_fails (test_runner.MetadataTests.test_cache_not_warm_fails) ... ok\ntest_cold_artifacts_fails (test_runner.MetadataTests.test_cold_artifacts_fails) ... ok\ntest_cold_did_not_compile_fails (test_runner.MetadataTests.test_cold_did_not_compile_fails) ... ok\ntest_debug_build_fails (test_runner.MetadataTests.test_debug_build_fails) ... ok\ntest_incomplete_teardown_fails (test_runner.MetadataTests.test_incomplete_teardown_fails) ... ok\ntest_physical_device_change_fails (test_runner.MetadataTests.test_physical_device_change_fails) ... ok\ntest_valid_audit (test_runner.MetadataTests.test_valid_audit) ... ok\ntest_missing_zone_is_measurement_error (test_cli_simulated.SimulatedCLITests.test_missing_zone_is_measurement_error) ... Expected exactly two occurrences of routing\nok\ntest_success_reports_and_candidate (test_cli_simulated.SimulatedCLITests.test_success_reports_and_candidate) ... ok\ntest_timeout_writes_error_and_cleans_child (test_cli_simulated.SimulatedCLITests.test_timeout_writes_error_and_cleans_child) ... Command '['/tmp/tmpk4ls4rc6/build/test/tt_metal/tt_fabric/fabric_init_benchmark', '--output', '/tmp/tmpk4ls4rc6/results/audit/metadata.json', '--arch', 'blackhole', '--devices', '32', '--audit']' timed out after 1 seconds\nok\n\n----------------------------------------------------------------------\nRan 34 tests in 1.722s\n\nOK\n"
+    },
+    {
+      "suite": "integration",
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": "test_artifact_suffix (test_integration.IntegrationTests.test_artifact_suffix) ... ok\ntest_build_preserves_existing_environment (test_integration.IntegrationTests.test_build_preserves_existing_environment) ... ok\ntest_build_with_new_environment (test_integration.IntegrationTests.test_build_with_new_environment) ... ok\ntest_current_array_executable_style (test_integration.IntegrationTests.test_current_array_executable_style) ... ok\ntest_duplicate_anchor_refused (test_integration.IntegrationTests.test_duplicate_anchor_refused) ... ok\ntest_missing_anchor_refused (test_integration.IntegrationTests.test_missing_anchor_refused) ... ok\ntest_parent_wiring (test_integration.IntegrationTests.test_parent_wiring) ... ok\ntest_perf_nested_workflow (test_integration.IntegrationTests.test_perf_nested_workflow) ... ok\n\n----------------------------------------------------------------------\nRan 8 tests in 0.050s\n\nOK\n"
+    }
+  ]
+}

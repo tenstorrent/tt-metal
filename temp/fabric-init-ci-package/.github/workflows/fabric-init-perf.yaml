@@ -1,0 +1,53 @@
+# Standalone manual entry point for initial hardware smoke testing.
+# apply_integration.py also wires this suite under existing fabric-perf-tests.
+name: "(TM-Fabric) Fabric Init Perf"
+on:
+  workflow_dispatch:
+    inputs:
+      enabled-skus:
+        description: "Comma-separated fabric-init hardware configurations"
+        type: string
+        default: wh_galaxy_perf,bh_galaxy_perf
+      baseline-mode:
+        type: choice
+        description: "Start in report mode; enforce only after approved baselines"
+        options: [report, enforce]
+        default: report
+      pairs:
+        description: "Independent cold/hot pairs per hardware job (plus one cache audit)"
+        type: number
+        default: 3
+permissions:
+  contents: read
+  packages: write
+  actions: read
+concurrency:
+  group: fabric-init-perf-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+  build-artifact:
+    needs: check-harbor
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      build-type: Release
+      platform: Ubuntu 22.04
+      build-inplace-wheel: true
+      skip-tt-train: true
+      tracy: true
+      tracy-debug-categories: fabric-init
+  fabric-init-tests:
+    name: Fabric Init Tests
+    needs: build-artifact
+    uses: ./.github/workflows/fabric-init-perf-impl.yaml
+    secrets: inherit
+    with:
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      enabled-skus: ${{ inputs.enabled-skus }}
+      baseline-mode: ${{ inputs.baseline-mode }}
+      pairs: ${{ inputs.pairs }}

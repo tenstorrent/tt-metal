@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "measurement_contract": "fabric-init-v1-same-process-inclusive-five-zones",
+  "zones": {
+    "bringup": "DeviceManager::initialize_fabric_and_dispatch_fw",
+    "init": "FabricFirmwareInitializer::init",
+    "routing_tables": "write_routing_tables_to_all_chips",
+    "build_compile_configure": "compile_and_configure_fabric",
+    "configure": "FabricFirmwareInitializer::configure"
+  },
+  "hardware": {
+    "wh_galaxy_perf": {"name": "Wormhole Galaxy", "arch": "wormhole_b0", "devices": 32, "fabric_mode": "FABRIC_2D"},
+    "bh_galaxy_perf": {"name": "Blackhole Galaxy", "arch": "blackhole", "devices": 32, "fabric_mode": "FABRIC_2D"}
+  }
+}

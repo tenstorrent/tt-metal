@@ -1,0 +1,62 @@
+# Synthetic receiver-backpressure test. NOT a cyclic-routing deadlock test.
+# With the companion patch: 992-byte control drains; 1008-byte traffic is blocked.
+# Coordinates are [mesh_id, [row, column]], not physical chip IDs.
+Tests:
+  - name: Debug2DControl
+    sync: true
+    benchmark_mode: true
+    enable_channel_trimming: false
+    fabric_setup:
+      topology: Mesh
+      num_links: 1
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 992
+      num_packets: 1000000
+    senders:
+      - device: [0, [0, 0]]
+        patterns:
+          - destination:
+              device: [0, [1, 1]]
+      - device: [0, [0, 1]]
+        patterns:
+          - destination:
+              device: [0, [1, 0]]
+      - device: [0, [1, 1]]
+        patterns:
+          - destination:
+              device: [0, [0, 0]]
+      - device: [0, [1, 0]]
+        patterns:
+          - destination:
+              device: [0, [0, 1]]
+  - name: Debug2DHang
+    sync: true
+    benchmark_mode: true
+    enable_channel_trimming: false
+    fabric_setup:
+      topology: Mesh
+      num_links: 1
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1008
+      num_packets: 1000000
+    senders:
+      - device: [0, [0, 0]]
+        patterns:
+          - destination:
+              device: [0, [1, 1]]
+      - device: [0, [0, 1]]
+        patterns:
+          - destination:
+              device: [0, [1, 0]]
+      - device: [0, [1, 1]]
+        patterns:
+          - destination:
+              device: [0, [0, 0]]
+      - device: [0, [1, 0]]
+        patterns:
+          - destination:
+              device: [0, [0, 1]]

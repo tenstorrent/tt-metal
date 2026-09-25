@@ -1,0 +1,133 @@
+name: "[internal] Fabric Init Tests"
+
+on:
+  workflow_call:
+    inputs:
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      docker-image:
+        required: true
+        type: string
+      enabled-skus:
+        type: string
+        default: wh_galaxy_perf,bh_galaxy_perf
+      baseline-mode:
+        type: string
+        default: report
+      pairs:
+        type: number
+        default: 3
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  matrix:
+    name: Select hardware
+    runs-on: ubuntu-slim
+    outputs:
+      hardware: ${{ steps.matrix.outputs.hardware }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - run: pip3 install PyYAML
+      - id: matrix
+        env:
+          ENABLED_SKUS: ${{ inputs.enabled-skus }}
+          BASELINE_MODE: ${{ inputs.baseline-mode }}
+          PAIRS: ${{ inputs.pairs }}
+        run: |
+          python3 - <<'PY'
+          import json, os, yaml
+          from pathlib import Path
+          cfg = json.loads(Path('tests/tt_metal/tt_fabric/fabric_init_perf/config.json').read_text())
+          skus = yaml.safe_load(Path('.github/sku_config.yaml').read_text())
+          selected = [s.strip() for s in os.environ['ENABLED_SKUS'].split(',') if s.strip()]
+          if not selected or len(set(selected)) != len(selected):
+              raise SystemExit('Select at least one unique fabric-init SKU')
+          if os.environ['BASELINE_MODE'] not in ('report', 'enforce'):
+              raise SystemExit('baseline-mode must be report or enforce')
+          pairs = int(os.environ['PAIRS'])
+          if pairs < 1 or (os.environ['BASELINE_MODE'] == 'enforce' and pairs < 3):
+              raise SystemExit('Need >=1 pair for report; >=3 for enforcement')
+          matrix = []
+          for sku in selected:
+              spec = cfg['hardware'][sku]
+              matrix.append(dict(sku=sku, name=spec['name'], arch=spec['arch'], runs_on=skus[sku]['runs_on']))
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              print('hardware=' + json.dumps(matrix, separators=(',', ':')), file=f)
+          PY
+  hardware:
+    needs: matrix
+    name: ${{ matrix.hardware.name }} — cold + hot
+    strategy:
+      fail-fast: false
+      matrix:
+        hardware: ${{ fromJson(needs.matrix.outputs.hardware) }}
+    runs-on: ${{ matrix.hardware.runs_on }}
+    timeout-minutes: 100
+    container:
+      image: ${{ inputs.docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        TT_METAL_RUNTIME_ROOT: /work
+        PYTHONPATH: /work
+        ARCH_NAME: ${{ matrix.hardware.arch }}
+        TT_METAL_DEVICE_PROFILER: "0"
+        TT_METAL_STREAMING_PROFILER: "0"
+        TRACY_NO_INVARIANT_CHECK: "1"
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          path: docker-job
+          submodules: recursive
+        timeout-minutes: 20
+      - uses: ./docker-job/.github/actions/setup-job
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+        timeout-minutes: 10
+      - name: Audit cache behavior and measure cold/hot initialization
+        env:
+          HARDWARE: ${{ matrix.hardware.sku }}
+          BASELINE_MODE: ${{ inputs.baseline-mode }}
+          PAIRS: ${{ inputs.pairs }}
+          FABRIC_INIT_BUILD_ARTIFACT: ${{ inputs.build-artifact-name }}
+          FABRIC_INIT_DOCKER_IMAGE: ${{ inputs.docker-image }}
+        run: |
+          python3 tests/tt_metal/tt_fabric/fabric_init_perf/run.py \
+            --hardware "$HARDWARE" --mode "$BASELINE_MODE" --pairs "$PAIRS" \
+            --output "generated/fabric-init/$HARDWARE"
+      - name: Publish comparison summary
+        if: always()
+        env:
+          HARDWARE: ${{ matrix.hardware.sku }}
+        run: |
+          report="generated/fabric-init/$HARDWARE/summary.md"
+          if [[ -f "$report" ]]; then cat "$report" >> "$GITHUB_STEP_SUMMARY"; fi
+      - name: Upload traces, logs, timings, and baseline candidate
+        if: always()
+        uses: ./docker-job/.github/actions/upload-artifact-with-job-uuid
+        with:
+          prefix: fabric-init-${{ matrix.hardware.sku }}
+          path: |
+            /work/generated/fabric-init/${{ matrix.hardware.sku }}/**/*.tracy
+            /work/generated/fabric-init/${{ matrix.hardware.sku }}/**/*.json
+            /work/generated/fabric-init/${{ matrix.hardware.sku }}/**/*.log
+            /work/generated/fabric-init/${{ matrix.hardware.sku }}/**/*.csv
+            /work/generated/fabric-init/${{ matrix.hardware.sku }}/*.md
+            /work/generated/fabric-init/${{ matrix.hardware.sku }}/*.xml
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
