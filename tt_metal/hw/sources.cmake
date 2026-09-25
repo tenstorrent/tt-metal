@@ -431,4 +431,5 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/eltwise_unary/softplus_bw_tt_poly_bf16.h
     inc/api/compute/eltwise_unary/softshrink_bw_tt_poly_bf16.h
     inc/api/compute/eltwise_unary/softsign_bw_tt_poly_bf16.h
+    inc/api/compute/eltwise_unary/tanhshrink_bw_tt_poly_bf16.h
 )
