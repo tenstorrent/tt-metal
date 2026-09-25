@@ -35,7 +35,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
     // This should allocate a DRAM buffer on the device
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup

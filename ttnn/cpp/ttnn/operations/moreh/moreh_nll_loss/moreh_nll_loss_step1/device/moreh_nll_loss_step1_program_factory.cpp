@@ -86,7 +86,7 @@ ttnn::device_operation::ProgramArtifacts MorehNllLossStep1DeviceOperation::Facto
     // copy TILE per core
     uint32_t units_to_divide = target.physical_volume() / H / W * (Ht * Wt);
 
-    tt::tt_metal::IDevice* device = target.device();
+    tt::tt_metal::distributed::MeshDevice* device = target.device();
     auto grid = device->compute_with_storage_grid_size();
     uint32_t core_h = grid.y;
 

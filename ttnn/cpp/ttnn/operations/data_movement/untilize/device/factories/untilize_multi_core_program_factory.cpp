@@ -55,7 +55,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
     tt::DataFormat output_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_data_format);
 
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
     Buffer* src0_buffer = a.buffer();
     TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
 

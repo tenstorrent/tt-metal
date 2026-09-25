@@ -228,7 +228,7 @@ tt::tt_metal::TensorSpec GridSampleOperation::compute_output_specs(
                 const uint32_t total_grid_points = grid_padded_shape[1] * grid_padded_shape[2];  // H * W
 
                 // Get device compute grid for sharding
-                tt::tt_metal::IDevice* device = input_tensor.device();
+                tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
                 const auto compute_grid_size = device->compute_with_storage_grid_size();
 
                 // Split grid points across available cores

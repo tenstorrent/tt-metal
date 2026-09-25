@@ -31,7 +31,7 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
     const auto& input_tensor = tensor_args.input;
     const auto& start_tensor = tensor_args.start_tensor.value();
     const auto& end_tensor = tensor_args.end_tensor.value();
-    tt::tt_metal::IDevice* device = input_tensor.device();
+    tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
 
     uint32_t num_unpadded_tiles = output.physical_volume() / TILE_HW;
 

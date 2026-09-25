@@ -33,7 +33,7 @@ UpdateCacheDynamicArgs compute_update_cache_dynamic_args(
     TT_FATAL(operation_attributes.compute_kernel_config.has_value(), "Compute kernel config is required");
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config.value();
 
-    tt::tt_metal::IDevice* device = input_tensor.device();
+    tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
 
     // Mirror the shape/dtype-derived geometry and work-split from create_program_artifacts exactly so
     // the per-core cache_start_id values, the two op-wide offsets, and the core ordering are identical
@@ -145,7 +145,7 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
     tt::DataFormat input_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     std::uint32_t input_single_tile_size = tt::tile_size(input_data_format);
 
-    tt::tt_metal::IDevice* device = input_tensor.device();
+    tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);

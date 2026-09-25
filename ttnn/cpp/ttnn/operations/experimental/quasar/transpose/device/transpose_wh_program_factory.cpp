@@ -64,7 +64,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
     log_debug(tt::LogOp, "row_major: {}", row_major);
     log_debug(tt::LogOp, "src0_cb_data_format: {}", src0_cb_data_format);
 
-    IDevice* device = input_tensor.device();
+    MeshDevice* device = input_tensor.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t num_cores_x = compute_with_storage_grid_size.x;
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;

@@ -54,7 +54,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCRMProgramFactory::create_pro
     log_debug(tt::LogOp, "transpose_hc_rm");
     log_debug(tt::LogOp, "cb_data_format: {}", cb_data_format);
 
-    IDevice* device = input_tensor.device();
+    MeshDevice* device = input_tensor.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t num_cores_x = compute_with_storage_grid_size.x;
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;

@@ -23,7 +23,7 @@ namespace ttnn::prim::qsr {
 ttnn::device_operation::ProgramArtifacts SliceRmStrideProgramFactory::create_program_artifacts(
     const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
     const auto& input_tensor = tensor_args.input;
-    tt::tt_metal::IDevice* device = input_tensor.device();
+    tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
 
     const auto& input_shape = input_tensor.padded_shape();
     const auto& output_shape = output.padded_shape();

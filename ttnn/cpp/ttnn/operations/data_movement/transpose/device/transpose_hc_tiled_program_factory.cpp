@@ -47,7 +47,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledProgramFactory::create_
     log_debug(tt::LogOp, "dfb_data_format: {}", dfb_data_format);
     log_debug(tt::LogOp, "single_tile_size: {}", single_tile_size);
 
-    IDevice* device = input_tensor.device();
+    MeshDevice* device = input_tensor.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =

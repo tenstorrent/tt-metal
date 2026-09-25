@@ -200,7 +200,7 @@ ttnn::device_operation::CachedProgram<AllToAllAsyncProgram::shared_variables_t> 
     const auto& semaphore = operation_attributes.semaphore;
 
     tt::tt_metal::Program program{};
-    IDevice* device = tensor_args.input_tensor.device();
+    MeshDevice* device = tensor_args.input_tensor.device();
 
     // Basic configuration
     const bool enable_async_output = false;

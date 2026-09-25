@@ -75,7 +75,7 @@ ttnn::device_operation::ProgramArtifacts ReshardSameHeightFactory<local_is_outpu
             remote_cores,
             remote_buffer_type,
             remote_core_type,
-            device,
+            *device,
             element_size);  // local_core_idx -> runtime args[]
 
     // Split work across each kernel along tensor height since this is the best way to split work evenly

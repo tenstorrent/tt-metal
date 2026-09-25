@@ -24,7 +24,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHIntFactory:
     const auto& input = tensor_args.input;
     const DeviceComputeKernelConfig& compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    IDevice* device{input.device()};
+    MeshDevice* device{input.device()};
 
     const auto dfb_data_format{datatype_to_dataformat_converter(output.dtype())};
     const auto& shape{input.padded_shape()};

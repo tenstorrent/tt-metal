@@ -56,7 +56,7 @@ ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_progr
     uint32_t stick_size = (row_major) ? page_shape[1] * input_tensor.element_size() : tt::tile_size(cb_data_format);
 
     Buffer* src0_buffer = input_tensor.buffer();
-    IDevice* device = input_tensor.device();
+    MeshDevice* device = input_tensor.device();
 
     uint32_t num_tensor_pages = input_tensor.physical_volume() / page_size;
 

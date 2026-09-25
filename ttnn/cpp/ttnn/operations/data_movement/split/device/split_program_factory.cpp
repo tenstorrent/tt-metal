@@ -24,7 +24,7 @@ ttnn::device_operation::ProgramArtifacts SplitProgramFactory::create_program_art
     const uint32_t num_chunks = static_cast<uint32_t>(operation_attributes.num_splits);
 
     auto input_shape = input_tensor.padded_shape();
-    IDevice* device = input_tensor.device();
+    MeshDevice* device = input_tensor.device();
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
 
     uint32_t single_tile_size = tt::tile_size(cb_data_format);

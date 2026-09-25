@@ -77,7 +77,7 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaFusedQKProgramFacto
     const uint32_t head_dim_t =
         operation_attributes.row_major_QK ? 1 : q_shard_spec->shape[1] / tt::constants::TILE_WIDTH;
 
-    tt::tt_metal::IDevice* device = tensor_args.q_input.device();
+    tt::tt_metal::distributed::MeshDevice* device = tensor_args.q_input.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);

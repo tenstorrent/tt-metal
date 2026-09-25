@@ -62,7 +62,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     const CoreCoord& unpadded_grid_start,
     uint32_t num_cores_x_unpadded,
     uint32_t num_cores_y_unpadded) {
-    tt::tt_metal::IDevice* device = input_tensor.device();
+    tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
 
     auto input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();

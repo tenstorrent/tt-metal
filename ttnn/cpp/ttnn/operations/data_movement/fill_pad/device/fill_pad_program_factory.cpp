@@ -64,7 +64,7 @@ ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_a
         input_tensor.dtype());
 
     const ttnn::PadValue& fill_value = operation_attributes.fill_value;
-    tt::tt_metal::IDevice* device = input_tensor.device();
+    tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
 
     const tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     TT_FATAL(input_tensor.buffer() != nullptr, "Input buffer should be allocated on device!");

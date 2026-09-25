@@ -80,7 +80,7 @@ inline std::vector<ShardedHeightPerCoreArgs> get_pad_runtime_args_rm_sharded(
     uint32_t shard_height_padded,
     uint32_t shard_height_unpadded,
     const std::vector<CoreCoord>& unpadded_cores) {
-    tt::tt_metal::IDevice* device = input_tensor.device();
+    tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
 
     auto input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();
@@ -255,7 +255,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
     tt::DataFormat dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat dst_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
 
     // input shard spec
     auto shard_spec_unpadded = a.shard_spec().value();

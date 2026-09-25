@@ -204,7 +204,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
         is_block_sharded,
         transpose_mcast,
         remote_read,
-        device,
+        *device,
         num_cores_x,
         is_in_tiled,
         UNTILIZE_BLOCK_SIZE);

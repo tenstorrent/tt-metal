@@ -69,7 +69,7 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
     // Flag for whether or not sin/cos vary per head. If false, they will be broadcasted across heads.
     const bool freq_per_head = cos.padded_shape()[1] == n_heads;
 
-    tt_metal::IDevice* device = tensor_args.input_tensor.device();
+    tt_metal::distributed::MeshDevice* device = tensor_args.input_tensor.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);

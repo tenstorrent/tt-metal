@@ -47,7 +47,7 @@ ttnn::device_operation::ProgramArtifacts BcastMultiCoreWProgramFactory::create_p
 
     const std::uint32_t bnc1 = (bN * bC == 1) ? 1 : 0;
 
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
 
     const tt::DataFormat src0_cb_data_format = datatype_to_dataformat_converter(a.dtype());
     const tt::DataFormat src1_cb_data_format = datatype_to_dataformat_converter(b.dtype());

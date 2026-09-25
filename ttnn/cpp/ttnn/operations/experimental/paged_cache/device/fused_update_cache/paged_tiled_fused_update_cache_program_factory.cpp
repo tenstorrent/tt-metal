@@ -27,9 +27,9 @@ using namespace tt;
 namespace CMAKE_UNIQUE_NAMESPACE_TILED {
 
 bool enable_fp32_dest_acc(
-    const tt_metal::IDevice* device, const ttnn::DeviceComputeKernelConfig& compute_kernel_config) {
+    const tt_metal::distributed::MeshDevice& device, const ttnn::DeviceComputeKernelConfig& compute_kernel_config) {
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+        get_compute_kernel_config_args(device.arch(), compute_kernel_config);
 
     return fp32_dest_acc_en;
 }
@@ -100,7 +100,7 @@ PagedTiledFusedUpdateCacheProgramFactory::compute_tiled_fused_offsets(
     const auto& input_tensor1 = tensor_args.input_tensor1;
     const auto& input_tensor2 = tensor_args.input_tensor2;
     const bool fp32_dest_acc_en = CMAKE_UNIQUE_NAMESPACE_TILED::enable_fp32_dest_acc(
-        input_tensor1.device(), operation_attributes.compute_kernel_config);
+        *input_tensor1.device(), operation_attributes.compute_kernel_config);
 
     const uint32_t Wt = cache_tensor1.padded_shape()[-1] / TILE_WIDTH;
     const uint32_t Wbytes = fp32_dest_acc_en ? cache_tensor1.padded_shape()[-1] * sizeof(float)
@@ -141,7 +141,7 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
     const auto& update_idxs_tensor = tensor_args.update_idxs_tensor;
     const auto& page_table = tensor_args.page_table;
 
-    tt_metal::IDevice* device = input_tensor1.device();
+    tt_metal::distributed::MeshDevice* device = input_tensor1.device();
 
     tt::DataFormat cache_dfb_data_format = tt_metal::datatype_to_dataformat_converter(cache_tensor1.dtype());
     uint32_t cache_single_tile_size = tt::tile_size(cache_dfb_data_format);
@@ -149,7 +149,7 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
     tt::DataFormat input_dfb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor1.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_dfb_data_format);
 
-    bool fp32_dest_acc_en = enable_fp32_dest_acc(device, operation_attributes.compute_kernel_config);
+    bool fp32_dest_acc_en = enable_fp32_dest_acc(*device, operation_attributes.compute_kernel_config);
 
     tt::DataFormat interm_dfb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     uint32_t interm_single_tile_size = tt::tile_size(interm_dfb_data_format);

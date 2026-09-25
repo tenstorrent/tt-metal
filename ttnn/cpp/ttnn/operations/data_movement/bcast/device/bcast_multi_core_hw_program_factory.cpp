@@ -51,7 +51,7 @@ ttnn::device_operation::ProgramArtifacts BcastMultiCoreHWProgramFactory::create_
 
     const std::uint32_t bnc1 = (bN * bC == 1) ? 1 : 0;
 
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
 
     std::optional<ShardSpec> shard_spec = std::nullopt;
     const bool src0_sharded = a.memory_config().is_sharded();

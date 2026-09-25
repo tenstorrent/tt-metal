@@ -103,7 +103,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
     const auto& input_mesh = a.mesh_tensor();
     const auto& output_mesh = output.mesh_tensor();
 
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
     auto grid_size = device->compute_with_storage_grid_size();
 
     uint32_t num_tile_rows = NC * Ht;
@@ -436,7 +436,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
     const auto& input_mesh = a.mesh_tensor();
     const auto& output_mesh = output.mesh_tensor();
 
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
 
     uint32_t block_size = 1;
     uint32_t writer_block_size = 1;

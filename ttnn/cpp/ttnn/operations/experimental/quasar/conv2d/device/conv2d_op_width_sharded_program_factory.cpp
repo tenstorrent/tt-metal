@@ -122,7 +122,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
     const auto enable_weights_double_buffer = operation_attributes.enable_weights_double_buffer;
     const auto config_tensors_in_dram = operation_attributes.config_tensors_in_dram;
 
-    tt::tt_metal::IDevice* device = a.device();
+    tt::tt_metal::distributed::MeshDevice* device = a.device();
     TT_FATAL(a.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Conv activation should be in row major layout");
     TT_FATAL(a.memory_config().is_sharded(), "Conv activation must be sharded.");
     TT_FATAL(output_channels <= b.padded_shape()[3], "Invalid weight shape. Incorrect weight tensor.");

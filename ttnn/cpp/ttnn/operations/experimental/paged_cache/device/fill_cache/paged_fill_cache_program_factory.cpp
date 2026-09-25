@@ -83,7 +83,7 @@ std::vector<tt_metal::CoreCoord> compute_paged_fill_cache_cores(
     const uint32_t input_seq_len_t = input_seq_len / TILE_HEIGHT;
     const uint32_t num_blocks_of_work = input_batch * num_heads * input_seq_len_t;
 
-    tt_metal::IDevice* device = input_tensor.device();
+    tt_metal::distributed::MeshDevice* device = input_tensor.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t num_cores_x = compute_with_storage_grid_size.x;
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;
@@ -199,7 +199,7 @@ ttnn::device_operation::ProgramArtifacts build_paged_fill_cache_artifacts(
         valid_seq_len_stick_size_B = valid_seq_len_tensor->element_size();
     }
 
-    tt_metal::IDevice* device = input_tensor.device();
+    tt_metal::distributed::MeshDevice* device = input_tensor.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
 
