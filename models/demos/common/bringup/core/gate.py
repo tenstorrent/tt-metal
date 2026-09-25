@@ -160,6 +160,32 @@ def _tracked(repo: Path, p: str) -> bool:
     return subprocess.run(["git", "ls-files", "--error-unmatch", p], cwd=repo, capture_output=True).returncode == 0
 
 
+def _files_under(repo: Path, paths: list[str]) -> list[str]:
+    out = []
+    for p in paths:
+        full = repo / p
+        if full.is_dir():
+            out += [
+                str(f.relative_to(repo))
+                for f in sorted(full.rglob("*"))
+                if f.is_file() and "__pycache__" not in f.parts
+            ]
+        elif full.is_file():
+            out.append(p)
+    return out
+
+
+def format_paths(repo: Path, paths: list[str]) -> None:
+    """Run the repo's pre-commit hooks (black, EOF fixer, ...) on the files now, so that what a gate tests and
+    what freeze hashes is byte-identical to what the commit stores. No-op without a pre-commit config."""
+    files = _files_under(repo, paths)
+    if not files or not (repo / ".pre-commit-config.yaml").exists() or not shutil.which("pre-commit"):
+        return
+    for _ in range(2):  # hooks that modify files exit 1; the second pass settles
+        if subprocess.run(["pre-commit", "run", "--files", *files], cwd=repo, capture_output=True).returncode == 0:
+            return
+
+
 def git_commit(spec: Spec, paths: list[str], subject: str, body: str) -> str | None:
     """Commit only the given paths, so work in progress elsewhere in the tree never leaks into a gate commit."""
     repo = spec.repo
@@ -169,10 +195,12 @@ def git_commit(spec: Spec, paths: list[str], subject: str, body: str) -> str | N
     trailer = spec.get("commit_trailer", DEFAULT_TRAILER)
     msg = f"{subject}\n\n{body}\n" + (f"\n{trailer}\n" if trailer else "")
     commit = ["git", "commit", "-q", "-m", msg, "--", *paths]
-    # pre-commit hooks may rewrite files (black, EOF fixer): re-stage and retry once.
-    if subprocess.run(commit, cwd=repo).returncode != 0:
+    # pre-commit hooks may still rewrite files (black, EOF fixer): re-stage and retry once.
+    if subprocess.run(commit, cwd=repo, capture_output=True).returncode != 0:
         subprocess.run(["git", "add", "-A", "--", *paths], cwd=repo, check=True)
-        subprocess.run(commit, cwd=repo, check=True)
+        r = subprocess.run(commit, cwd=repo, capture_output=True, text=True)
+        if r.returncode != 0:
+            raise RuntimeError(f"git commit failed:\n{r.stdout}\n{r.stderr}")
     return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=repo, text=True).strip()
 
 
@@ -182,7 +210,7 @@ def commit_subject(spec: Spec, task: dict) -> str:
 
 def task_commit(spec: Spec, tid: str) -> str:
     return subprocess.run(
-        ["git", "log", "-1", "--format=%h", "--fixed-strings", f"--grep=[{spec.tag}][{tid}]"],
+        ["git", "log", "-1", "--format=%h", "--fixed-strings", f"--grep=[{spec.tag}][{tid}] "],
         cwd=spec.repo,
         capture_output=True,
         text=True,
@@ -213,6 +241,8 @@ def run_gate(
             ledger.update(tid, status="FAIL", last_run=now(), reason=pre, history_add={"t": now(), "status": "FAIL"})
         return res
 
+    if commit:
+        format_paths(spec.repo, task.get("paths", []))
     M.reset(tid, ledger.results_dir)
     if record:
         ledger.update(tid, status="RUNNING", started=now())

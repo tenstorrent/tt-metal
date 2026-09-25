@@ -25,3 +25,20 @@ Drive this ledger with
 - Gotcha: the ledger `.lock` showed up as untracked after a commit; the ledger writes a `.gitignore` for it.
 - Selftest gate: `selftest/test_core.py` (31 tests, temp git repos, no device). The selftest conftest records
   `selftest_passed` / `selftest_failed`, so an empty collection cannot pass.
+
+## F2 (2026-09-25): freeze, runs
+- `freeze <id>`: formats the task's `tests` with the repo's pre-commit hooks first, then runs the gate twice without
+  touching state: `BRINGUP_IMPL=reference` must PASS and `BRINGUP_IMPL=stub` (zeros) must FAIL. Then it hashes the
+  files into the task's `frozen` block and commits them as `[<tag>][<id>][freeze]`. `stub_check: false` skips the two
+  runs for tests that do not wrap a module (goldens, plan).
+- Why format first: F1's gate commit showed black reformatting five files inside `git commit`. A hash taken before
+  that would never match again. For the same reason `gate --commit` formats the task's `paths` before running, so the
+  tested bytes are the committed bytes.
+- `task_commit` greps `[<tag>][<id>] ` with a trailing space, so it finds the gate commit and skips freeze commits.
+- Runs: `init-run <name>` stores `_run` (name, branch) in state.json. The resume point is the first unpassed task
+  in dependency order (FAIL, HANG and STOPPED resume at themselves). `rerun --from X` resets X and its downstream closure.
+  `fork --from X --name B` adds a git worktree on branch `bringup/<model>/B` at X's gate commit under
+  `$ART/<model>/runs/B/worktree`, writes a spec copy that points at it with the same `$ART` (goldens and weight caches
+  shared by path), and resets the downstream verdicts in the fork. The main checkout never switches branch.
+- `compare --other <spec>`: per task, status, attempts, debugger attempts, wall time, changed agent definitions
+  (blob hashes from `agent_hashes`), metric deltas.
