@@ -36,7 +36,7 @@ def _caches(first, count, num_users=1, *, kvpe=True, kda=True):
     if kvpe and schedule.num_mla_layers:
         kvpe_cache = SimpleNamespace(storage=_tensor(0x1000, (num_users * schedule.num_mla_layers, 1, 7040, 576)))
     kda_states = None
-    ids = schedule.kda_layer_ids_local()
+    ids = schedule.rank_kda_layer_ids()
     if kda and ids:
         kda_states = SimpleNamespace(
             layer_ids=ids,

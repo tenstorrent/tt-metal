@@ -17,9 +17,9 @@ contract (`k3_disagg_contract.md`, tt-blaze #3634): one version of both states s
 `max_sequence_length = 8 * W`) because decode keeps 8 versions and every window aliases the one
 prefill state (`kda_position` in `utils/kv_cache_utils.py`). The KV Manager needs this: it requires
 equal `chunk_n_tokens` on both sides and walks one position range for every config of a layer, so
-both states must fill the same window. The runtime declares the three caches as migration stages in this order
-(`TtKimiK3Runtime.kv_migration_stages`), numbered in compacted slot space; the adapter maps configs
-back to layers with `cache_kind` / `cache_layer_rows`.
+both states must fill the same window. The runtime declares the three caches as migration stages in
+this order (`TtKimiK3Runtime.kv_migration_stages`), numbered in compacted slot space; the adapter
+maps configs back to layers with `cache_kind` / `cache_layer_rows`.
 
 ## Native form and contract form
 

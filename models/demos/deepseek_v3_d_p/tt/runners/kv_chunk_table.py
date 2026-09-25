@@ -140,9 +140,10 @@ def build_and_serialize_kv_chunk_table(
     inference server's SET_TABLE. Returns the path on success.
 
     ``kda`` (Kimi-K3 only): a :class:`KdaTableSpec` describing the KDA state slabs. It adds configs "1"
-    (recurrent) and "2" (convolution) after the kvpe config, on the contract's synthetic position axis (strides 96 / 64 over
-    ``KDA_VERSIONS`` aliased windows, see ``kda_position``) and published on the model's layer axis via its own
-    ``layer_rows``; ``layer_rows`` (the kvpe map) is honoured on the merged path as well.
+    (recurrent) and "2" (convolution) after the kvpe config, on the contract's synthetic position axis
+    (strides 96 / 64 over ``KDA_VERSIONS`` aliased windows, see ``kda_position``) and published on the
+    model's layer axis via its own ``layer_rows``; ``layer_rows`` (the kvpe map) is honoured on the merged
+    path as well.
 
     Chunked prefill stores KV positions block-cyclic across the SP shards, so the table maps each
     natural position to its true storage chip + offset. The migration worker copies the chunks the
@@ -309,7 +310,7 @@ def _build_and_serialize_merged_kv_chunk_table(
     dflash_stage_of = {}
     dflash_staged = None
     # Kimi-K3 KDA state slabs: config name -> (kind, KdaTableSpec). Named after the block-cyclic caches
-    # so kvpe keeps id 0; segment-addressed, so they never enter the block-cyclic bookkeeping below.
+    # so kvpe keeps id 0; on the synthetic KDA axis, so they never enter the block-cyclic bookkeeping below.
     kda_configs = {}
     for kind, payload in caches:
         if kind in ("kvpe", "index"):  # block-cyclic MLA caches -> populate_kv_chunk_address_table_block_cyclic
