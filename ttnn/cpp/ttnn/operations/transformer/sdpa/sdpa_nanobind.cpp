@@ -16,7 +16,6 @@
 
 #include "sdpa.hpp"
 #include "sdpa_recipe.hpp"
-#include "sdpa_recipe_blocking_nanobind.hpp"
 #include "sparse_sdpa.hpp"
 #include "sparse_sdpa_msa.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
@@ -331,7 +330,6 @@ void bind_sdpa(nb::module_& mod) {
             return recipe::recipe_compute_program(
                 recipe::resolve_precision_policy(recipe::select_recipe(precision, kv_type)), grid, k_chunks);
         });
-    bind_sdpa_recipe_blocking(mod);
     ttnn::bind_function<"prepare_sdpa_input", "ttnn.transformer.">(
         mod,
         R"doc(Prepare an original BF16 tensor for LOW_PRECISION attention, without mutating it.

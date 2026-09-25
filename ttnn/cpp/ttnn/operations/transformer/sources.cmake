@@ -53,7 +53,6 @@ set(TTNN_OP_TRANSFORMER_NANOBIND_SRCS
     attention_softmax/attention_softmax_nanobind.cpp
     concatenate_heads/concatenate_heads_nanobind.cpp
     sdpa/sdpa_nanobind.cpp
-    sdpa/sdpa_recipe_blocking_nanobind.cpp
     sdpa_decode/sdpa_decode_nanobind.cpp
     split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_nanobind.cpp
     gated_delta_attn/gated_delta_attn_nanobind.cpp
