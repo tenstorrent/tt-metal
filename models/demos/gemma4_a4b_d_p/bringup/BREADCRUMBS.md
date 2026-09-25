@@ -138,3 +138,17 @@ Append-only log, one section per task attempt: what was done, decisions and why,
   QKV and o_proj use HiFi2 + fp32 acc. Hidden states still go to the host between steps.
 - Gotcha: tt-probe saves its scripts under tests/ttnn/unit_tests/operations/<name>/probes (outside the allowed paths). I deleted them.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_attention.py`
+
+## S.sliding.02 test (attempt 1): swap attn_norm + attention into the sliding block
+- Reviewed the rendered swap test (layer 0, golden s4096 chunk 1, start 2048). The gated metric stays `pcc_swap_out` >= 0.98.
+- Gap: block-out PCC misses stateful attention bugs. CPU (block out PCC / rel L2 whole / first 1024 rows): reference 0.999996 / 0.0027 / 0.0033;
+  no KV prefix 0.99897 / 0.045 / 0.064; zeroed prefix 0.99890 / 0.047 / 0.066; RoPE from 0 0.99776 / 0.067 / 0.094 (all pass 0.98);
+  1% noise on attn 0.99998 / 0.0071; zero stub 0.604.
+- Added asserted extra checks (informational metrics `rel_l2_swap_out`, `rel_l2_prefix_rows_swap_out`, `rel_l2_swap_<step output>`,
+  `rel_l2_prefix_rows_swap_attn_out`): each swapped step's own output PCC >= 0.99 and rel L2 <= 0.03; attn_out rel L2 over the first
+  `sliding_window` rows <= 0.03; block out rel L2 <= 0.02 (whole chunk and first window rows); finite outputs; chunk start > 0.
+- Decision: block-out limit 0.02, not swap 1's 0.01. The device run scores 0.0074 (attn_out 0.0052 grows through router flips, router PCC 0.99969),
+  and a faster SDPA preset later would leave no margin. The bugs still score more than 2x over the limit.
+- Verified: BRINGUP_IMPL=reference PASS (rel 0.0027); stub FAIL (pcc 0.604). Device gate PASS: pcc_swap_out 0.999973, block out rel 0.0074 / 0.0062,
+  attn_norm 0.999996 / 0.0031, attention 0.999988 / 0.0052 / first rows 0.0052.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_02_attention.py`
