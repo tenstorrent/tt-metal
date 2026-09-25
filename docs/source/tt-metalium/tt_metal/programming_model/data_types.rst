@@ -3,21 +3,7 @@
 Supported Data Types
 =====================
 
-Metalium has two distinct type systems, and "is this data type supported" depends on which one you mean:
-
-* ``tt::tt_metal::DataType`` (``tt_metal/api/tt-metalium/tensor/tensor_types.hpp``) — the type a ``Tensor`` is created with. This is the type most host-side/ttnn code interacts with.
-* ``tt::DataFormat`` (``tt_metal/api/tt-metalium/tt_backend_api_types.hpp``) — the type a circular buffer, kernel unpacker/packer, or the Tensix compute engine operates on. Its own doc comment describes it as "the union of all data formats supported by Tensix hardware of all generations," with per-architecture legality checked at runtime, not by the enum itself.
-
-Every ``DataType`` maps to exactly one ``DataFormat`` (see below), but the reverse is not true: most ``DataFormat`` values have no corresponding ``DataType`` and can only be reached by working directly with circular buffers and kernels, below the Tensor abstraction.
-
-.. note::
-
-   ``Buffer`` and ``MeshBuffer`` (the device-resident and multi-device memory allocations underneath a Tensor) are untyped — they carry no ``DataType`` or ``DataFormat`` at all, just raw bytes at a given size. Type only enters the picture once a ``Tensor`` is layered on top, or once a kernel's circular buffer is configured with a ``DataFormat``.
-
-Tensor Data Types
-------------------
-
-This is the practical reference for "what dtype can my tensor be." Support here means two things at once: the Tensix compute engine must support the underlying ``DataFormat`` on that architecture (via ``tt::is_data_format_supported``), *and* the ttnn/tensor code path you're using must have actually implemented that dtype end-to-end (padding, tilize/untilize, the specific op, etc.). The table below only reflects the first condition — hardware/enum-level legality — since op-by-op coverage changes too often to keep accurate here. ``FP8_E4M3`` is called out explicitly below as an example of the gap between the two.
+Reference for ``tt::tt_metal::DataType`` — the dtype a ``Tensor`` is created with, and what's actually usable per architecture.
 
 .. list-table:: ``tt::tt_metal::DataType`` → ``tt::DataFormat`` and hardware compute support
     :widths: 15 15 12 12 12 34
@@ -96,7 +82,27 @@ This is the practical reference for "what dtype can my tensor be." Support here 
       - —
       - Not a representable tensor value. Used as a sentinel default in op-attribute structs (e.g. ``output_dtype == DataType::INVALID`` meaning "inherit the input tensor's dtype") — see ``tt::tt_metal::datatype_to_dataformat_converter``, which throws if called with any value other than the ones in this table.
 
+.. note::
+
+   "Supported" above means the Tensix compute engine supports the underlying ``DataFormat`` on that architecture (via ``tt::is_data_format_supported``). It does **not** mean every ttnn op has implemented that dtype end-to-end (padding, tilize/untilize, etc.) — ``FP8_E4M3`` above is a concrete example of that gap. Op-by-op dtype coverage changes too often to track accurately here.
+
 New ``DataType`` values are appended after ``INVALID`` rather than inserted in logical order, to keep previously-serialized tensor values stable — see the numbering of ``INVALID = 10`` followed by later additions in ``tensor_types.hpp``.
+
+Background: DataType vs. DataFormat
+-------------------------------------
+
+Metalium has two distinct type systems, and "is this data type supported" depends on which one you mean:
+
+* ``tt::tt_metal::DataType`` (``tt_metal/api/tt-metalium/tensor/tensor_types.hpp``) — the table above. The type most host-side/ttnn code interacts with.
+* ``tt::DataFormat`` (``tt_metal/api/tt-metalium/tt_backend_api_types.hpp``) — the type a circular buffer, kernel unpacker/packer, or the Tensix compute engine operates on directly. Its own doc comment describes it as "the union of all data formats supported by Tensix hardware of all generations," with per-architecture legality checked at runtime, not by the enum itself.
+
+Every ``DataType`` maps to exactly one ``DataFormat`` (the "Maps to ``DataFormat``" column above), but the reverse is not true: most ``DataFormat`` values have no corresponding ``DataType`` and can only be reached by working directly with circular buffers and kernels, below the Tensor abstraction. See :ref:`Runtime Data Formats <runtime_data_formats>` below for the full picture.
+
+.. note::
+
+   ``Buffer`` and ``MeshBuffer`` (the device-resident and multi-device memory allocations underneath a Tensor) are untyped — they carry no ``DataType`` or ``DataFormat`` at all, just raw bytes at a given size. Type only enters the picture once a ``Tensor`` is layered on top, or once a kernel's circular buffer is configured with a ``DataFormat``.
+
+.. _runtime_data_formats:
 
 Runtime Data Formats
 ---------------------
