@@ -316,7 +316,7 @@ class TestConfig:
             case ChipArchitecture.WORMHOLE:
                 TestConfig.ARCH_NON_COMPUTE = "-mcpu=tt-wh"
                 TestConfig.ARCH_COMPUTE = "-mcpu=tt-wh-tensix"
-                TestConfig.ARCH_DEFINE = "-DARCH_WORMHOLE"
+                TestConfig.ARCH_DEFINE = "-DARCH_WORMHOLE -DLLK_TEST"
                 TestConfig.ARCH_LLK_ROOT = "tt_llk_wormhole_b0"
                 TestConfig.ARCH = ChipArchitecture.WORMHOLE
                 TestConfig.DATA_FORMAT_ENUM = WORMHOLE_DATA_FORMAT_ENUM_VALUES
@@ -324,7 +324,7 @@ class TestConfig:
             case ChipArchitecture.BLACKHOLE:
                 TestConfig.ARCH_NON_COMPUTE = "-mcpu=tt-bh"
                 TestConfig.ARCH_COMPUTE = "-mcpu=tt-bh-tensix"
-                TestConfig.ARCH_DEFINE = "-DARCH_BLACKHOLE"
+                TestConfig.ARCH_DEFINE = "-DARCH_BLACKHOLE -DLLK_TEST"
                 TestConfig.ARCH_LLK_ROOT = "tt_llk_blackhole"
                 TestConfig.ARCH = ChipArchitecture.BLACKHOLE
                 TestConfig.DATA_FORMAT_ENUM = BLACKHOLE_DATA_FORMAT_ENUM_VALUES
@@ -332,7 +332,7 @@ class TestConfig:
             case ChipArchitecture.QUASAR:
                 TestConfig.ARCH_NON_COMPUTE = "-mcpu=tt-qsr32"
                 TestConfig.ARCH_COMPUTE = "-mcpu=tt-qsr32-tensix"
-                TestConfig.ARCH_DEFINE = "-DARCH_QUASAR"
+                TestConfig.ARCH_DEFINE = "-DARCH_QUASAR -DLLK_TEST"
                 TestConfig.ARCH_LLK_ROOT = "tt_llk_quasar"
                 TestConfig.ARCH = ChipArchitecture.QUASAR
                 TestConfig.DATA_FORMAT_ENUM = QUASAR_DATA_FORMAT_ENUM_VALUES

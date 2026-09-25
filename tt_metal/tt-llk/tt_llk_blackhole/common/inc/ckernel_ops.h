@@ -4,12 +4,17 @@
 
 #pragma once
 
-#if __riscv_xtttensixbh || __clang__
+#if __riscv_xtttensixbh || (__clang__ && defined(COMPILE_FOR_TRISC) && defined(ARCH_BLACKHOLE))
 #define TTI_INSN(ENCODING)    void(({ __asm__ __volatile__(".ttinsn %0" : : "n"((ENCODING))); }))
 #define TT_INSN(ENCODING)     void(::ckernel::instrn_buffer[0] = (ENCODING))
 #else
 #define TTI_INSN(ENCODING) void((void(ENCODING), ({ __asm__ __volatile__(".error \"TTI_INSN in non-tensix code\""); })))
+#if defined(ARCH_BLACKHOLE) && defined(COMPILE_FOR_BRISC) && defined(LLK_TEST)
+// The llk test infra uses brisc to poke insns, keep that working
+#define TT_INSN(ENCODING) void(::ckernel::instrn_buffer[0] = (ENCODING))
+#else
 #define TT_INSN(ENCODING)  void((void(ENCODING), ({ __asm__ __volatile__(".error \"TT_INSN in non-tensix code\""); })))
+#endif
 #endif
 
 #define TT_OP(opcode, params) ((opcode << 24) + params)
