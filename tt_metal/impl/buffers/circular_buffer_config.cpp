@@ -30,6 +30,14 @@ void validate_unpack_face_geometry(uint32_t face_r_dim, uint32_t num_faces) {
     TT_FATAL(num_faces > 0, "num_faces must be > 0");
 }
 
+std::map<uint8_t, tt::DataFormat> to_data_format_spec(const std::map<uint8_t, tt::tt_metal::DataType>& data_type_spec) {
+    std::map<uint8_t, tt::DataFormat> data_format_spec;
+    for (const auto& [idx, dtype] : data_type_spec) {
+        data_format_spec[idx] = tt::tt_metal::datatype_to_dataformat_converter(dtype);
+    }
+    return data_format_spec;
+}
+
 }  // namespace
 
 namespace tt::tt_metal {
@@ -42,13 +50,7 @@ CircularBufferConfig::CircularBufferConfig(
 }
 
 CircularBufferConfig::CircularBufferConfig(uint32_t total_size, const std::map<uint8_t, DataType>& data_type_spec) :
-    total_size_(total_size), globally_allocated_address_(std::nullopt) {
-    std::map<uint8_t, tt::DataFormat> data_format_spec;
-    for (const auto& [idx, dtype] : data_type_spec) {
-        data_format_spec[idx] = datatype_to_dataformat_converter(dtype);
-    }
-    this->set_config(data_format_spec);
-}
+    CircularBufferConfig(total_size, to_data_format_spec(data_type_spec)) {}
 
 // User is expected to use the builder here.
 CircularBufferConfig::CircularBufferConfig(uint32_t total_size) :
@@ -61,6 +63,10 @@ CircularBufferConfig::CircularBufferConfig(
     this->set_globally_allocated_address(buffer);
     this->set_config(data_format_spec);
 }
+
+CircularBufferConfig::CircularBufferConfig(
+    uint32_t total_size, const std::map<uint8_t, DataType>& data_type_spec, const Buffer& buffer) :
+    CircularBufferConfig(total_size, to_data_format_spec(data_type_spec), buffer) {}
 
 CircularBufferConfig::CircularBufferConfig(const CBDescriptor& descriptor) : total_size_(descriptor.total_size) {
     TT_FATAL(
@@ -330,6 +336,10 @@ CircularBufferConfig::Builder::Builder(CircularBufferConfig& parent, uint8_t buf
 const CircularBufferConfig::Builder& CircularBufferConfig::Builder::set_data_format(tt::DataFormat data_format) const {
     parent_.data_formats_[buffer_index_] = data_format;
     return *this;
+}
+
+const CircularBufferConfig::Builder& CircularBufferConfig::Builder::set_data_format(DataType data_type) const {
+    return set_data_format(datatype_to_dataformat_converter(data_type));
 }
 
 const CircularBufferConfig::Builder& CircularBufferConfig::Builder::set_total_size(uint32_t total_size) const {
