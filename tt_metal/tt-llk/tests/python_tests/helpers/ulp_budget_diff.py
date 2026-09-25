@@ -25,6 +25,7 @@ cannot drift.
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import re
 import sys
@@ -78,12 +79,18 @@ class Row:
 
 @dataclass(frozen=True)
 class Change:
-    """One cell that differs between two revisions of the table."""
+    """One resolved cell whose gate differs between two revisions of the table.
+
+    *cell* names the row that decides the cell after the change (or before it, for a
+    cell nothing covers any more), and *variants* is how many query variants that row
+    decides differently than the base did -- the sweep's collapsed rows govern several.
+    """
 
     cell: Cell
-    kind: str  # raised | ungated | removed | tightened | gated | added | provenance
+    kind: str  # raised | floor_widened | ungated | removed | tightened | gated | added
     before: Optional[Row]
     after: Optional[Row]
+    variants: int = 1
 
     #: The kinds that weaken a gate. Everything else is neutral or an improvement.
     REGRESSIONS = frozenset({"raised", "ungated", "removed", "floor_widened"})
@@ -190,29 +197,101 @@ def parse_table(text: str) -> Dict[Cell, Row]:
     return rows
 
 
-def compare(base: Dict[Cell, Row], head: Dict[Cell, Row]) -> List[Change]:
-    """Every cell whose gate differs, strongest change first."""
-    changes: List[Change] = []
-    for cell in sorted(set(base) | set(head), key=lambda c: (c[0], c[1])):
-        was, now = base.get(cell), head.get(cell)
-        if was is None:
-            changes.append(Change(cell, "added", None, now))
-        elif now is None:
-            # Only a loss if it was gating; dropping a tolerance row gates nothing.
-            changes.append(Change(cell, "removed" if was.gated else "added", was, None))
-        elif was.gated and not now.gated:
-            changes.append(Change(cell, "ungated", was, now))
-        elif not was.gated and now.gated:
-            changes.append(Change(cell, "gated", was, now))
-        elif was.gated and now.gated and now.max_ulp > was.max_ulp:
-            changes.append(Change(cell, "raised", was, now))
-        elif now.gated and now.floor > was.floor:
+def _resolve(
+    table: Dict[Cell, Row], op: str, key: Tuple[Tuple[str, str], ...]
+) -> Optional[Row]:
+    """The most specific row of *op* covering *key*, by the registry's own rule."""
+    asked = dict(key)
+    best: Optional[Row] = None
+    for (row_op, row_key), row in table.items():
+        if row_op != op:
+            continue
+        if any(asked.get(k) != v for k, v in row_key):
+            continue
+        if best is None or len(row_key) > len(best.key):
+            best = row
+    return best
+
+
+def _variants(base: Dict[Cell, Row], head: Dict[Cell, Row], op: str):
+    """Every query the registry could be asked about *op*, as far as either table can
+    tell them apart: each key dimension takes every value some row pins, or is left
+    unset -- an unset query dimension matches only a wildcard, as in the registry."""
+    values: Dict[str, set] = {k: set() for k in KEY_FIELDS}
+    for table in (base, head):
+        for (row_op, key), _ in table.items():
+            if row_op == op:
+                for k, v in key:
+                    values[k].add(v)
+    axes = [sorted(values[k]) + [None] for k in KEY_FIELDS]
+    for combo in itertools.product(*axes):
+        yield tuple((k, v) for k, v in zip(KEY_FIELDS, combo) if v is not None)
+
+
+def _classify(was: Optional[Row], now: Optional[Row]) -> Optional[str]:
+    """How the gate one variant resolves to has changed, or ``None`` if it has not."""
+    gated_before = was is not None and was.gated
+    gated_after = now is not None and now.gated
+    if gated_before and not gated_after:
+        # Only a loss if it was gating; a tolerance cell that loses its row gates
+        # exactly as it did.
+        return "removed" if now is None else "ungated"
+    if not gated_before and gated_after:
+        return "gated"
+    if gated_before and gated_after:
+        if now.max_ulp > was.max_ulp:
+            return "raised"
+        if now.floor > was.floor:
             # Checked before `tightened`, because the two can move opposite ways: a
             # smaller `max_ulp` with a wider floor rescues more lanes than it fails,
             # and reporting only the budget would call that an improvement.
-            changes.append(Change(cell, "floor_widened", was, now))
-        elif was.gated and now.gated and now.max_ulp < was.max_ulp:
-            changes.append(Change(cell, "tightened", was, now))
+            return "floor_widened"
+        if now.max_ulp < was.max_ulp:
+            return "tightened"
+        return None
+    # Neither side gates. A new tolerance row is worth a line; a vanished one is not.
+    return "added" if was is None and now is not None else None
+
+
+def compare(base: Dict[Cell, Row], head: Dict[Cell, Row]) -> List[Change]:
+    """Every cell whose *resolved* gate differs, strongest change first.
+
+    Resolved, not row by row: the registry answers a query with its most specific
+    matching row, so the table's shape is not the gate. A row the sweep collapses over
+    `approx` still governs both approx values, and deleting it is no loss while a
+    broader row gives the same budget -- a row diff reported 16 "removed" regressions
+    on exactly that. And the reverse hole was worse: a new `{in: Float32, max_ulp:
+    1000}` under a `max_ulp: 2` default loosens every Float32 cell without any row
+    being "raised", so a row diff called it an improvement.
+
+    Variants that the same pair of rows decides the same way collapse into one
+    ``Change``, so the report stays one line per row rather than one per query.
+    """
+    grouped: Dict[Tuple, Change] = {}
+    for op in sorted({c[0] for c in base} | {c[0] for c in head}):
+        for key in _variants(base, head, op):
+            was, now = _resolve(base, op, key), _resolve(head, op, key)
+            kind = _classify(was, now)
+            if kind is None:
+                continue
+            deciding = now if now is not None else was
+            # Grouped by the deciding row and the budgets on each side, not by the
+            # base row: a collapsed row replacing N keyed rows of one budget is one
+            # line marked xN, not N lines saying the same thing.
+            ident = (
+                op,
+                kind,
+                deciding.key,
+                (was.max_ulp, was.floor) if was else None,
+                (now.max_ulp, now.floor) if now else None,
+            )
+            found = grouped.get(ident)
+            if found is None:
+                grouped[ident] = Change((op, deciding.key), kind, was, now)
+            else:
+                grouped[ident] = Change(
+                    found.cell, kind, was, now, variants=found.variants + 1
+                )
     order = {
         "raised": 0,
         "floor_widened": 1,
@@ -222,8 +301,12 @@ def compare(base: Dict[Cell, Row], head: Dict[Cell, Row]) -> List[Change]:
         "gated": 5,
         "added": 6,
     }
-    changes.sort(key=lambda c: (order[c.kind], c.cell))
-    return changes
+    return sorted(grouped.values(), key=lambda c: (order[c.kind], c.cell))
+
+
+def _describe(c: Change) -> str:
+    row = c.after or c.before
+    return row.describe() + (f" ×{c.variants}" if c.variants > 1 else "")
 
 
 def _budget(row: Optional[Row]) -> str:
@@ -240,7 +323,7 @@ _KIND_TEXT = {
     "raised": "budget raised",
     "floor_widened": "near-zero floor widened",
     "ungated": "gating lost (now tolerance)",
-    "removed": "row removed",
+    "removed": "gate lost (no row covers it)",
     "tightened": "budget tightened",
     "gated": "newly gated",
     "added": "new row",
@@ -265,10 +348,9 @@ def render_budget_diff(changes: List[Change], label_hint: str) -> str:
             "| --- | --- | --- | --- | --- |",
         ]
         for c in regressions[:_MAX_ROWS]:
-            row = c.after or c.before
             mark = "yes" if c.remeasured else "**no**"
             out.append(
-                f"| `{row.describe()}` | {_KIND_TEXT[c.kind]} | {_budget(c.before)} | "
+                f"| `{_describe(c)}` | {_KIND_TEXT[c.kind]} | {_budget(c.before)} | "
                 f"{_budget(c.after)} | {mark} |"
             )
         if len(regressions) > _MAX_ROWS:
@@ -290,9 +372,8 @@ def render_budget_diff(changes: List[Change], label_hint: str) -> str:
             "| --- | --- | --- | --- |",
         ]
         for c in improvements[:_MAX_ROWS]:
-            row = c.after or c.before
             out.append(
-                f"| `{row.describe()}` | {_KIND_TEXT[c.kind]} | {_budget(c.before)} | "
+                f"| `{_describe(c)}` | {_KIND_TEXT[c.kind]} | {_budget(c.before)} | "
                 f"{_budget(c.after)} |"
             )
         if len(improvements) > _MAX_ROWS:
@@ -327,22 +408,6 @@ def _measured_cells(rows: Iterable[dict]) -> Dict[Cell, int]:
         cell: Cell = (row["op"], key)
         worst[cell] = max(worst.get(cell, 0), int(row["max"]))
     return worst
-
-
-def _resolve(
-    table: Dict[Cell, Row], op: str, key: Tuple[Tuple[str, str], ...]
-) -> Optional[Row]:
-    """The most specific row of *op* covering *key*, by the registry's own rule."""
-    asked = dict(key)
-    best: Optional[Row] = None
-    for (row_op, row_key), row in table.items():
-        if row_op != op:
-            continue
-        if any(asked.get(k) != v for k, v in row_key):
-            continue
-        if best is None or len(row_key) > len(best.key):
-            best = row
-    return best
 
 
 def render_headroom(

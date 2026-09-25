@@ -93,7 +93,7 @@ def test_deleting_a_gated_row_is_a_regression_and_a_tolerance_row_is_not():
     )
     kinds = _kinds(_BASE, head)
     assert kinds[(("in", "Float16_b"), ("out", "Float16_b"))] == "removed"
-    assert kinds[(("in", "Bfp8_b"), ("out", "Bfp8_b"))] == "added"  # not a loss
+    assert (("in", "Bfp8_b"), ("out", "Bfp8_b")) not in kinds  # gates as it did
 
 
 def test_tightening_and_newly_gating_are_not_regressions():
@@ -106,7 +106,45 @@ def test_tightening_and_newly_gating_are_not_regressions():
     )
     changes = compare(parse_table(_BASE), parse_table(head))
     assert not any(c.is_regression for c in changes)
-    assert {c.kind for c in changes} == {"tightened", "gated", "added"}
+    assert {c.kind for c in changes} == {"tightened", "gated"}
+
+
+def test_a_row_the_sweep_collapses_is_not_a_loss_while_its_cells_keep_their_budget():
+    """The emitter drops a key dimension when both values measure alike, so a
+    re-emit deletes `approx`-keyed rows and writes one without. Nothing any query
+    resolves to has changed, and a row diff reported 16 of these as regressions."""
+    base = _head(
+        '{in: Float16_b, out: Float32, approx: "No", dest: "Yes", max_ulp: 36018}  # a',
+        '{in: Float16_b, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 36018}  # b',
+    )
+    same = _head('{in: Float16_b, out: Float32, dest: "Yes", max_ulp: 36018}  # c')
+    changes = compare(parse_table(base), parse_table(same))
+    assert not any(c.is_regression for c in changes)
+    # The one honest difference: a query that leaves `approx` unset matched neither
+    # keyed row before and matches the collapsed one now, so that variant is newly gated.
+    assert [(c.kind, c.variants) for c in changes] == [("gated", 1)]
+    # ...and a raise through the collapsed row is one change covering both variants,
+    # re-measured because the deciding row's comment is new.
+    raised = _head('{in: Float16_b, out: Float32, dest: "Yes", max_ulp: 36030}  # c')
+    (change,) = [
+        c for c in compare(parse_table(base), parse_table(raised)) if c.is_regression
+    ]
+    assert change.kind == "raised" and change.variants == 2 and change.remeasured
+
+
+def test_a_more_specific_row_that_loosens_a_cell_is_a_raise_not_an_addition():
+    """The hole a row diff cannot see: no existing row changes, yet every Float32
+    query now resolves to 1000 steps instead of 2. Demoting the same cells to
+    tolerance through a new row is the same hole, and the loosest gate of all."""
+    base = _head("{max_ulp: 2}  # exact")
+    loosened = _head("{max_ulp: 2}  # exact", "{in: Float32, max_ulp: 1000}  # wide")
+    changes = compare(parse_table(base), parse_table(loosened))
+    assert [c.kind for c in changes] == ["raised"]
+    assert changes[0].cell == ("Abs", (("in", "Float32"),))
+    demoted = _head("{max_ulp: 2}  # exact", "{in: Float32, metric: tolerance}  # off")
+    assert [c.kind for c in compare(parse_table(base), parse_table(demoted))] == [
+        "ungated"
+    ]
 
 
 def test_an_unchanged_table_reports_nothing():
