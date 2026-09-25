@@ -216,7 +216,7 @@ RingSemaphores allocate_ring_semaphores(ttnn::MeshDevice* mesh, uint32_t num_lin
             sems.unt_freed.push_back(make());
         }
     }
-    tt::tt_metal::distributed::Synchronize(mesh, std::nullopt, {});
+    tt::tt_metal::distributed::Synchronize(*mesh, std::nullopt, {});
     return sems;
 }
 

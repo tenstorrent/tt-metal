@@ -2117,14 +2117,6 @@ void MeshDevice::replay_mesh_trace(MeshCommandQueue& cq, const MeshTraceId& trac
     TT_FATAL(cq.device() == this, "MeshCommandQueue belongs to a different MeshDevice");
     pimpl_->replay_mesh_trace(static_cast<uint8_t>(cq.id()), trace_id, blocking);
 }
-MeshTraceId MeshDevice::begin_mesh_trace(uint8_t cq_id) { return pimpl_->begin_mesh_trace(cq_id); }
-void MeshDevice::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
-    pimpl_->begin_mesh_trace(cq_id, trace_id);
-}
-void MeshDevice::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) { pimpl_->end_mesh_trace(cq_id, trace_id); }
-void MeshDevice::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking) {
-    pimpl_->replay_mesh_trace(cq_id, trace_id, blocking);
-}
 void MeshDevice::release_mesh_trace(const MeshTraceId& trace_id) { pimpl_->release_mesh_trace(trace_id); }
 std::shared_ptr<MeshTraceBuffer> MeshDevice::get_mesh_trace(const MeshTraceId& trace_id) {
     return pimpl_->get_mesh_trace(trace_id);

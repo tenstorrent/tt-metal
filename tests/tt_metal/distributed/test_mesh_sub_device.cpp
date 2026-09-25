@@ -354,15 +354,15 @@ TEST_F(MeshSubDeviceMultiCQTraceTestSuite, SubDeviceSwitchingWhileOtherCQReplays
     auto& trace_cq = mesh_device_->mesh_command_queue(1);
     EnqueueMeshWorkload(trace_cq, delay_mesh_workload, true);
 
-    auto trace_id = BeginTraceCapture(mesh_device_.get(), 1);
+    auto trace_id = mesh_device_->begin_mesh_trace(trace_cq);
     for (uint32_t i = 0; i < k_workloads_in_trace; i++) {
         EnqueueMeshWorkload(trace_cq, delay_mesh_workload, false);
     }
-    mesh_device_->end_mesh_trace(1, trace_id);
+    mesh_device_->end_mesh_trace(trace_cq, trace_id);
 
     // Repeat to exercise both newly built and cached manager setup commands while CQ1 is busy.
     for (uint32_t i = 0; i < 3; ++i) {
-        mesh_device_->replay_mesh_trace(1, trace_id, false);
+        mesh_device_->replay_mesh_trace(trace_cq, trace_id, false);
         mesh_device_->load_sub_device_manager(sub_device_manager_1);
         Finish(mesh_device_->mesh_command_queue(0));
         Finish(trace_cq);

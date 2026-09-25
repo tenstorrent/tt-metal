@@ -173,21 +173,6 @@ void Synchronize(
     }
 }
 
-void Synchronize(MeshDevice* device, std::optional<uint8_t> cq_id, ttsl::Span<const SubDeviceId> sub_device_ids) {
-    if (!device->is_initialized()) {
-        return;
-    }
-    if (cq_id.has_value()) {
-        Synchronize(*device, device->mesh_command_queue(cq_id), sub_device_ids);
-    } else {
-        Synchronize(*device, std::nullopt, sub_device_ids);
-    }
-}
-
-MeshTraceId BeginTraceCapture(MeshDevice* device, uint8_t cq_id) {
-    return device->begin_mesh_trace(device->mesh_command_queue(cq_id));
-}
-
 void Finish(MeshCommandQueue& mesh_cq, ttsl::Span<const SubDeviceId> sub_device_ids) {
     mesh_cq.finish(sub_device_ids);
 }

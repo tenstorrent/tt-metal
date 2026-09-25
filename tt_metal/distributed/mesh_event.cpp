@@ -18,9 +18,6 @@ MeshEventImpl::MeshEventImpl(
 MeshEvent::MeshEvent(uint32_t id, MeshCommandQueue& cq, const MeshCoordinateRange& device_range) :
     MeshEvent(MeshEventImpl(id, cq.device(), cq.id(), device_range)) {}
 
-MeshEvent::MeshEvent(uint32_t id, MeshDevice* device, uint32_t mesh_cq_id, const MeshCoordinateRange& device_range) :
-    MeshEvent(MeshEventImpl(id, device, mesh_cq_id, device_range)) {}
-
 MeshEvent::MeshEvent(MeshEventImpl impl) : impl_(std::make_unique<MeshEventImpl>(std::move(impl))) {}
 
 MeshEvent::MeshEvent(const MeshEvent& other) :

@@ -19,10 +19,6 @@ class MeshEventImpl;
 class MeshEvent {
 public:
     MeshEvent(uint32_t id, MeshCommandQueue& cq, const MeshCoordinateRange& device_range);
-    [[deprecated(
-        "Use MeshEvent(uint32_t, MeshCommandQueue&, const MeshCoordinateRange&) instead. MeshEvent(uint32_t, "
-        "MeshDevice*, uint32_t, const MeshCoordinateRange&) will be removed after September 9th, 2026.")]]
-    MeshEvent(uint32_t id, MeshDevice* device, uint32_t mesh_cq_id, const MeshCoordinateRange& device_range);
     explicit MeshEvent(MeshEventImpl impl);
 
     MeshEvent(const MeshEvent& other);

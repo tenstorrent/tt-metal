@@ -441,9 +441,9 @@
 //     write_junk_to_buffer(command_queue, *output);
 
 //     // Now enable Metal Trace and run program again for capture.
-//     // uint32_t tid = BeginTraceCapture(device_, command_queue.id());
+//     // uint32_t tid = device_->begin_mesh_trace(command_queue);
 //     EnqueueProgram(command_queue, simple_program, false);
-//     // device_->end_mesh_trace(command_queue.id(), tid);
+//     // device_->end_mesh_trace(command_queue, tid);
 
 //     // Verify trace output during replay matches expected output from original capture.
 //     // LightMetalCompareToGolden(command_queue, *output, eager_output_data.data());
@@ -488,10 +488,10 @@
 //     write_junk_to_buffer(command_queue, *output);
 
 //     // Now enable Metal Trace and run program again for capture.
-//     // uint32_t tid = BeginTraceCapture(device_, command_queue.id());
+//     // uint32_t tid = device_->begin_mesh_trace(command_queue);
 //     EnqueueProgram(command_queue, op0, false);
 //     EnqueueProgram(command_queue, op1, false);
-//     // device_->end_mesh_trace(command_queue.id(), tid);
+//     // device_->end_mesh_trace(command_queue, tid);
 
 //     // Verify trace output during replay matches expected output from original capture.
 //     // LightMetalCompareToGolden(command_queue, *output, eager_output_data.data());
