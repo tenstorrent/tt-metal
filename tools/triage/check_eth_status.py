@@ -30,8 +30,11 @@ script_config = ScriptConfig(
     depends=["run_checks"],
 )
 
-# UMD v0.9.9 uses 50 ms. Its former 5 ms limit rejected some running ETH cores.
+# UMD v0.9.9 allows 50 ms for progress. Its former 5 ms limit rejected some running ETH cores.
 # https://github.com/tenstorrent/tt-umd/blob/v0.9.9/device/api/umd/device/utils/timeouts.hpp
+# Allow one window for a first valid sample, then another for progress.
+# A late first valid sample can use both windows: 50 + 50 = 100 ms.
+# The waits overlap across cores. Reads and scheduling can extend the elapsed time.
 HEARTBEAT_TIMEOUT_SECONDS = 0.05
 # Local polling interval, not the firmware update period. Avoid a busy read loop.
 HEARTBEAT_POLL_INTERVAL_SECONDS = 0.001
