@@ -37,7 +37,7 @@ struct ReaderRtArg {
 
 struct ReaderCtArgs {
     enum Idx : uint32_t {
-        kNumL1Slots,
+        kQueueDepth,
         kBatch,
         kTokenSizeBytes,
         kForwardingMetadataSize,
@@ -53,23 +53,23 @@ struct ReaderCtArgs {
         kStream,
         kMaxDispatchBufTokens,
         kIndicesPadStride,
-        kRingAddr,
+        kQueueAddr,
         kControlAddr,
         kFilledAddr,
         kFreedAddr,
         kFwdSemAddr,
         kFwdPagesPerStream,
         kNumOwn,
-        kNumRelay,
+        kNumForward,
         kUntilizeSemAddr,
-        kUntilizeStripes,
+        kUntilizeTileRows,
         kHasPaddingConfig,
         // Blocks appended after the scalars, in this order. Kept as base indices so a later field can be
         // added without renumbering anything the kernel already reads.
         kRingChipIdsBase,
         kAssignmentBase,
         // (origin_row, dst_row, split_idx, split_count) per descriptor. `in` is what this stream reads
-        // out of its own region; `out` is what it writes into the downstream chip's. They are different
+        // out of its own section; `out` is what it writes into the downstream chip's. They are different
         // lists, and validate_chunk_agreement proves `out` here equals `in` on the downstream chip -- in
         // identity and order -- which is what lets a writer place a chunk from its own list alone.
         kInChunksBase,
@@ -77,7 +77,7 @@ struct ReaderCtArgs {
         kCount,
     };
 
-    uint32_t num_l1_slots;
+    uint32_t queue_depth;
     uint32_t batch;
     uint32_t token_size_bytes;
     uint32_t forwarding_metadata_size;
@@ -96,18 +96,18 @@ struct ReaderCtArgs {
     // One 64-byte pad per token: a DRAM read needs a 64-byte-aligned L1 destination on Blackhole, and a
     // packed topk*2-byte record would put every token after the first at a wrong address.
     uint32_t indices_pad_stride;
-    uint32_t ring_addr;
+    uint32_t queue_addr;
     uint32_t control_addr;
     uint32_t filled_addr;
     uint32_t freed_addr;
     uint32_t fwd_sem_addr;
     uint32_t fwd_pages_per_stream;
     uint32_t num_own;
-    uint32_t num_relay;
+    uint32_t num_forward;
     // A TILE input reaches this reader through a staging buffer the untilizer pool fills. Zero
-    // stripes is the row-major path: the input accessor already points at the tokens.
+    // tile rows is the row-major path: the input accessor already points at the tokens.
     uint32_t untilize_sem_addr;
-    uint32_t untilize_stripes;
+    uint32_t untilize_tile_rows;
     // Read the two padding words and bound the routing pass at the real token count.
     uint32_t has_padding_config;
     uint32_t ring_chip_ids_base;
@@ -125,8 +125,8 @@ struct ReaderCtArgs {
         const op::L1Layout& l1,
         const op::KernelPlan& plan,
         uint32_t own_count,
-        uint32_t relay_count) :
-        num_l1_slots(NUM_L1_SLOTS),
+        uint32_t forward_count) :
+        queue_depth(QUEUE_DEPTH),
         batch(BATCH),
         token_size_bytes(token_bytes),
         forwarding_metadata_size(FORWARDING_METADATA_SIZE),
@@ -142,21 +142,21 @@ struct ReaderCtArgs {
         stream(plan.stream),
         max_dispatch_buf_tokens(args.max_dispatch_buffer_token_size),
         indices_pad_stride(META_PAD_STRIDE * ((args.num_experts_per_tok * 2 + META_PAD_STRIDE - 1) / META_PAD_STRIDE)),
-        ring_addr(l1.ring),
+        queue_addr(l1.queue),
         control_addr(l1.control),
-        filled_addr(plan.ring_filled_addr),
-        freed_addr(plan.ring_freed_addr),
+        filled_addr(plan.queue_filled_addr),
+        freed_addr(plan.queue_freed_addr),
         fwd_sem_addr(plan.fwd_arrived_addr),
         fwd_pages_per_stream(plan.fwd_pages_per_stream),
         num_own(own_count),
-        num_relay(relay_count),
+        num_forward(forward_count),
         untilize_sem_addr(plan.untilize_sem_addr),
-        untilize_stripes(plan.untilize_stripes),
+        untilize_tile_rows(plan.untilize_tile_rows),
         has_padding_config(args.has_padding_config ? 1u : 0u),
         ring_chip_ids_base(kCount),
         assignment_base(kCount + args.device->shape()[args.axis]),
         in_chunks_base(assignment_base + own_count * ASSIGNMENT_WORDS),
-        out_chunks_base(in_chunks_base + relay_count * ASSIGNMENT_WORDS) {}
+        out_chunks_base(in_chunks_base + forward_count * ASSIGNMENT_WORDS) {}
 
     // Scalars, then ring_chip_ids, then the assignments, then the two chunk-descriptor blocks. The
     // base indices above are what the kernel walks these with, so they are computed from the same
@@ -168,7 +168,7 @@ struct ReaderCtArgs {
         const std::vector<uint32_t>& out_chunks) const {
         constexpr uint32_t kUnset = 0xDEADBEEFu;
         std::vector<uint32_t> w(kCount, kUnset);
-        w[kNumL1Slots] = num_l1_slots;
+        w[kQueueDepth] = queue_depth;
         w[kBatch] = batch;
         w[kTokenSizeBytes] = token_size_bytes;
         w[kForwardingMetadataSize] = forwarding_metadata_size;
@@ -184,16 +184,16 @@ struct ReaderCtArgs {
         w[kStream] = stream;
         w[kMaxDispatchBufTokens] = max_dispatch_buf_tokens;
         w[kIndicesPadStride] = indices_pad_stride;
-        w[kRingAddr] = ring_addr;
+        w[kQueueAddr] = queue_addr;
         w[kControlAddr] = control_addr;
         w[kFilledAddr] = filled_addr;
         w[kFreedAddr] = freed_addr;
         w[kFwdSemAddr] = fwd_sem_addr;
         w[kFwdPagesPerStream] = fwd_pages_per_stream;
         w[kNumOwn] = num_own;
-        w[kNumRelay] = num_relay;
+        w[kNumForward] = num_forward;
         w[kUntilizeSemAddr] = untilize_sem_addr;
-        w[kUntilizeStripes] = untilize_stripes;
+        w[kUntilizeTileRows] = untilize_tile_rows;
         w[kHasPaddingConfig] = has_padding_config;
         w[kRingChipIdsBase] = ring_chip_ids_base;
         w[kAssignmentBase] = assignment_base;
@@ -210,11 +210,11 @@ struct ReaderCtArgs {
             extent,
             num_own * ASSIGNMENT_WORDS);
         TT_FATAL(
-            in_chunks.size() == num_relay * ASSIGNMENT_WORDS && out_chunks.size() == num_relay * ASSIGNMENT_WORDS,
+            in_chunks.size() == num_forward * ASSIGNMENT_WORDS && out_chunks.size() == num_forward * ASSIGNMENT_WORDS,
             "dispatch_fabric2d: chunk descriptor blocks are {}/{} words but the kernel indexes {} each",
             in_chunks.size(),
             out_chunks.size(),
-            num_relay * ASSIGNMENT_WORDS);
+            num_forward * ASSIGNMENT_WORDS);
         w.insert(w.end(), ring_chip_ids.begin(), ring_chip_ids.end());
         w.insert(w.end(), assignment_words.begin(), assignment_words.end());
         w.insert(w.end(), in_chunks.begin(), in_chunks.end());
@@ -223,7 +223,7 @@ struct ReaderCtArgs {
     }
 #else
     constexpr ReaderCtArgs() :
-        num_l1_slots(get_compile_time_arg_val(kNumL1Slots)),
+        queue_depth(get_compile_time_arg_val(kQueueDepth)),
         batch(get_compile_time_arg_val(kBatch)),
         token_size_bytes(get_compile_time_arg_val(kTokenSizeBytes)),
         forwarding_metadata_size(get_compile_time_arg_val(kForwardingMetadataSize)),
@@ -239,16 +239,16 @@ struct ReaderCtArgs {
         stream(get_compile_time_arg_val(kStream)),
         max_dispatch_buf_tokens(get_compile_time_arg_val(kMaxDispatchBufTokens)),
         indices_pad_stride(get_compile_time_arg_val(kIndicesPadStride)),
-        ring_addr(get_compile_time_arg_val(kRingAddr)),
+        queue_addr(get_compile_time_arg_val(kQueueAddr)),
         control_addr(get_compile_time_arg_val(kControlAddr)),
         filled_addr(get_compile_time_arg_val(kFilledAddr)),
         freed_addr(get_compile_time_arg_val(kFreedAddr)),
         fwd_sem_addr(get_compile_time_arg_val(kFwdSemAddr)),
         fwd_pages_per_stream(get_compile_time_arg_val(kFwdPagesPerStream)),
         num_own(get_compile_time_arg_val(kNumOwn)),
-        num_relay(get_compile_time_arg_val(kNumRelay)),
+        num_forward(get_compile_time_arg_val(kNumForward)),
         untilize_sem_addr(get_compile_time_arg_val(kUntilizeSemAddr)),
-        untilize_stripes(get_compile_time_arg_val(kUntilizeStripes)),
+        untilize_tile_rows(get_compile_time_arg_val(kUntilizeTileRows)),
         has_padding_config(get_compile_time_arg_val(kHasPaddingConfig)),
         ring_chip_ids_base(get_compile_time_arg_val(kRingChipIdsBase)),
         assignment_base(get_compile_time_arg_val(kAssignmentBase)),
@@ -256,14 +256,14 @@ struct ReaderCtArgs {
         out_chunks_base(get_compile_time_arg_val(kOutChunksBase)) {}
 #endif
 
-    constexpr uint32_t slot_stride() const { return token_size_bytes + forwarding_metadata_size; }
+    constexpr uint32_t entry_stride() const { return token_size_bytes + forwarding_metadata_size; }
 
 #ifdef KERNEL_BUILD
     // TensorAccessorArgs are chained on by the program factory after every block above, in
     // ReaderRtArg order. Derived from the block bases, so adding a scalar or widening a block cannot
     // silently shift them.
     static constexpr uint32_t accessor_base =
-        get_compile_time_arg_val(kOutChunksBase) + get_compile_time_arg_val(kNumRelay) * ASSIGNMENT_WORDS;
+        get_compile_time_arg_val(kOutChunksBase) + get_compile_time_arg_val(kNumForward) * ASSIGNMENT_WORDS;
     static constexpr auto in_args = TensorAccessorArgs<accessor_base>();
     static constexpr auto indices_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
     static constexpr auto offsets_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();

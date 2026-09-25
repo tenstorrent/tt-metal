@@ -22,7 +22,7 @@ void validate_coverage(const std::map<StreamId, std::vector<Assignment>>& per_st
     std::map<uint32_t, uint32_t> split_count;
     for (const auto& [stream, list] : per_stream) {
         for (const auto& a : list) {
-            if (a.is_relay) {
+            if (a.is_forward) {
                 continue;
             }
             TT_FATAL(
@@ -69,14 +69,14 @@ void validate_coverage(const std::map<StreamId, std::vector<Assignment>>& per_st
 // destination is 1 and the furthest origin is -(m - 1). Offsets are the same on every chip, so this takes
 // only the extent.
 //
-// The order is the order the upstream chip writes the chunks, which the forwarder must match: the region
+// The order is the order the upstream chip writes the chunks, which the forwarder must match: the section
 // is dense and holds no per-chunk addresses, so a chunk is found only by walking those before it. Upstream
 // emits its own destinations furthest first (the whole origin == -1 group) before any chunk it is itself
-// relaying, so origins run outwards from -1.
+// forwarding, so origins run outwards from -1.
 std::vector<std::pair<int32_t, int32_t>> chunks_in_forwarder_ref_frame(uint32_t ring_extent) {
     const int32_t m = static_cast<int32_t>(ring_extent / 2);
     std::vector<std::pair<int32_t, int32_t>> chunks;
-    chunks.reserve(relay_chunks_per_stream(ring_extent));
+    chunks.reserve(forward_chunks_per_stream(ring_extent));
     for (int32_t origin = -1; origin > -m; origin--) {
         for (int32_t dst = origin + m; dst >= 1; dst--) {
             chunks.emplace_back(origin, dst);
@@ -126,7 +126,7 @@ uint32_t fwd_pages_per_stream(
         pages += (origins - 1) * div_up(per_pair, num_links);
         pages += div_up(per_pair, sc);
     }
-    return pages + relay_chunks_per_stream(ring_extent) * experts_per_chip;
+    return pages + forward_chunks_per_stream(ring_extent) * experts_per_chip;
 }
 
 std::vector<dspf2d::ChunkDescriptor> outgoing_chunks(
@@ -220,9 +220,9 @@ std::map<StreamId, std::vector<Assignment>> generate_assignments(
                     .split_count = split_count});
             };
 
-            // Furthest destination first, and all own assignments before any relay. Emission order is
-            // what the downstream chip walks its region by, and upstream emits its own destinations
-            // before anything it relays; the own phase is also the slack a relay has between the
+            // Furthest destination first, and all own assignments before any forward. Emission order is
+            // what the downstream chip walks its section by, and upstream emits its own destinations
+            // before anything it forwards; the own phase is also the slack a forward has between the
             // upstream chunk being written and this stream consuming it.
             for (uint32_t j = 1; j <= m; j++) {
                 const uint32_t distance = m - j + 1;
@@ -232,17 +232,17 @@ std::map<StreamId, std::vector<Assignment>> generate_assignments(
                     own(distance, link, num_links);
                 }
             }
-            const uint32_t relays = relay_chunks_per_stream(extent);
-            for (uint32_t c = 0; c < relays; c++) {
-                list.push_back(Assignment{.is_relay = true});
+            const uint32_t forwards = forward_chunks_per_stream(extent);
+            for (uint32_t c = 0; c < forwards; c++) {
+                list.push_back(Assignment{.is_forward = true});
             }
             TT_FATAL(
-                list.size() == m + relays,
-                "dispatch_fabric2d: stream {} got {} work items, expected {} own + {} relay",
+                list.size() == m + forwards,
+                "dispatch_fabric2d: stream {} got {} work items, expected {} own + {} forward",
                 stream,
                 list.size(),
                 m,
-                relays);
+                forwards);
         }
     }
     validate_coverage(per_stream, extent);

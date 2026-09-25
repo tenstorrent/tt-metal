@@ -4,7 +4,7 @@
 
 #pragma once
 
-// The prologue of a stream core: the routing index, built by its four RISCs at once. Included by the
+// The routing index of a stream core: the routing index, built by its four RISCs at once. Included by the
 // reader (a dataflow kernel) and by the compute kernel that runs on the three TRISCs, so nothing here
 // touches the NoC; everything is L1 loads and stores and program semaphores.
 //
@@ -12,10 +12,10 @@
 // expert as it walks the picks in token order, dropping a pick whose counter has passed the expert's
 // capacity while still advancing the counter. Replaying that walk exactly is what keeps the output
 // byte-identical to production, and every later page depends on every earlier one -- so the walk
-// cannot be shortcut, but it can be composed: a lane holding a contiguous slice of the tokens knows
+// cannot be shortcut, but it can be composed: a RISC holding a contiguous slice of the tokens knows
 // each pick's position within its bucket up to a per-bucket offset, and that offset is the count of
-// picks the earlier slices routed to the same bucket. One count pass, one exchange of bucket_slots()
-// counts per lane through L1, one fill pass. Every lane writes disjoint, token-ordered runs, and
+// picks the earlier slices routed to the same bucket. One count pass, one exchange of num_buckets()
+// counts per RISC through L1, one fill pass. Every RISC writes disjoint, token-ordered runs, and
 // together they are exactly what one sequential walk over all tokens would write, so the phases that
 // consume the index need not know it was built in slices.
 //
@@ -23,7 +23,7 @@
 // capacity), the inputs the routing-setup ops already hold, so an op there could emit it once per
 // chip for the stream cores to DMA. That costs a launch, a per-chip DRAM output, and a second op that
 // has to agree byte for byte with production's allocator. Replaying it here costs nothing outside
-// this op and stays inside the same trace; the four-lane split brings it under the untilize pool,
+// this op and stays inside the same trace; the four-RISC split brings it under the untilize pool,
 // which is the point at which it stops being the exposed part of the launch.
 
 #include <cstdint>
@@ -34,39 +34,39 @@
 #include "noc/noc_parameters.h"
 #include "dataflow/dispatch_fabric2d_reader_ct_args.hpp"
 
-namespace dspf2d::prologue {
+namespace dspf2d::routing_index {
 
 // The reader's compile-time arguments, which the compute kernel is built from verbatim so that every
-// lane carves the same control region from the same constants.
+// RISC lays out the same scratch from the same constants.
 inline constexpr dspf2d::ReaderCtArgs ct{};
 
-constexpr uint32_t LANES = PROLOGUE_LANES;
+constexpr uint32_t RISCS = INDEX_RISCS;
 
-// The stream core's L1 working set, carved out of the control region in one fixed order from the
+// The stream core's L1 working set, laid out in the scratch in one fixed order from the
 // compile-time arguments alone: every chip lays it out identically, and so do the four RISCs of one
-// core, each of which carves it for itself. `indices` comes first because it is the only part read
+// core, each of which lays it out for itself. `indices` comes first because it is the only part read
 // straight from DRAM per token, and its records must stay 64-byte aligned.
 struct Control {
-    volatile tt_l1_ptr uint16_t* indices;       // seq_len records, each padded to indices_pad_stride
-    volatile tt_l1_ptr uint32_t* offsets;       // extent x num_routed_experts: every source chip's row
-    volatile tt_l1_ptr uint32_t* counts;        // num_routed_experts, summed over source chips
-    volatile tt_l1_ptr uint32_t* region;        // num_routed_experts
-    volatile tt_l1_ptr int32_t* table;          // num_routed_experts (+1 sentinel), expert -> chip in group
-    volatile tt_l1_ptr uint32_t* expert_slot;   // the same domain, as a bucket slot or ES_NOT_HERE
-    volatile tt_l1_ptr uint32_t* first_page;    // extent x experts_per_chip: each bucket's first output page
-    volatile tt_l1_ptr uint32_t* chip_experts;  // extent x experts_per_chip, ascending global expert id
-    volatile tt_l1_ptr uint32_t* row_fill;      // extent, while the chip -> experts inverse is built
-    volatile tt_l1_ptr uint32_t* bucket_start;  // extent x experts_per_chip + 1, exclusive prefix sums with a total
-    volatile tt_l1_ptr uint32_t* entries;       // 3 words per surviving (token, top-k slot)
-    volatile tt_l1_ptr uint32_t* padding;       // [real_token_count, pad_side], when one was supplied
-    volatile tt_l1_ptr uint32_t* in_start;      // page offset of each chunk this stream reads
-    volatile tt_l1_ptr uint32_t* out_start;     // page offset of each chunk it writes downstream
-    volatile tt_l1_ptr uint32_t* lane;          // PROLOGUE_LANES x prologue_lane_words
+    volatile tt_l1_ptr uint16_t* indices;         // seq_len records, each padded to indices_pad_stride
+    volatile tt_l1_ptr uint32_t* offsets;         // extent x num_routed_experts: every source chip's row
+    volatile tt_l1_ptr uint32_t* counts;          // num_routed_experts, summed over source chips
+    volatile tt_l1_ptr uint32_t* region_offsets;  // num_routed_experts
+    volatile tt_l1_ptr int32_t* table;            // num_routed_experts (+1 sentinel), expert -> chip in group
+    volatile tt_l1_ptr uint32_t* expert_bucket;   // the same domain, as a bucket or BUCKET_NOT_HERE
+    volatile tt_l1_ptr uint32_t* first_page;      // extent x experts_per_chip: each bucket's first output page
+    volatile tt_l1_ptr uint32_t* chip_experts;    // extent x experts_per_chip, ascending global expert id
+    volatile tt_l1_ptr uint32_t* row_fill;        // extent, while the chip -> experts inverse is built
+    volatile tt_l1_ptr uint32_t* bucket_start;    // extent x experts_per_chip + 1, exclusive prefix sums with a total
+    volatile tt_l1_ptr uint32_t* entries;         // 3 words per surviving (token, top-k slot)
+    volatile tt_l1_ptr uint32_t* padding;         // [real_token_count, pad_side], when one was supplied
+    volatile tt_l1_ptr uint32_t* in_start;        // page offset of each chunk this stream reads
+    volatile tt_l1_ptr uint32_t* out_start;       // page offset of each chunk it writes downstream
+    volatile tt_l1_ptr uint32_t* risc;            // INDEX_RISCS x index_risc_words
     uint32_t end;
 };
 
-// The geometry the control region is sized from. The host builds the same struct and reserves
-// control_region_bytes of it; carve_control below walks the same block list in the same order, so the
+// The geometry the scratch is sized from. The host builds the same struct and reserves
+// scratch_bytes of it; layout_scratch below walks the same block list in the same order, so the
 // two cannot drift apart.
 inline dspf2d::ControlGeometry control_geometry() {
     dspf2d::ControlGeometry g;
@@ -76,11 +76,11 @@ inline dspf2d::ControlGeometry control_geometry() {
     g.num_routed_experts = ct.num_routed_experts;
     g.experts_per_chip = ct.experts_per_chip;
     g.topk = ct.topk;
-    g.num_relay = ct.num_relay;
+    g.num_forward = ct.num_forward;
     return g;
 }
 
-inline Control carve_control() {
+inline Control layout_scratch() {
     const dspf2d::ControlGeometry g = control_geometry();
     uint32_t a = ct.control_addr;
     const auto take = [&](uint32_t block) {
@@ -93,9 +93,9 @@ inline Control carve_control() {
     c.indices = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(take(dspf2d::kCbIndices));
     c.offsets = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbOffsets));
     c.counts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbCounts));
-    c.region = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbRegion));
+    c.region_offsets = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbRegionOffsets));
     c.table = reinterpret_cast<volatile tt_l1_ptr int32_t*>(take(dspf2d::kCbTable));
-    c.expert_slot = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbExpertSlot));
+    c.expert_bucket = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbExpertBucket));
     c.first_page = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbFirstPage));
     c.chip_experts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbChipExperts));
     c.row_fill = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbRowFill));
@@ -104,11 +104,11 @@ inline Control carve_control() {
     c.padding = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbPadding));
     c.in_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbInStart));
     c.out_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbOutStart));
-    c.lane = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbLane));
+    c.risc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbRisc));
     c.end = a;
-    // The host reserved exactly this, from the same list. A carve that outgrew the reservation would
+    // The host reserved exactly this, from the same list. A layout that outgrew the reservation would
     // run into the global semaphores, so say so here rather than corrupting them.
-    ASSERT(c.end - ct.control_addr == dspf2d::control_region_bytes(g));
+    ASSERT(c.end - ct.control_addr == dspf2d::scratch_bytes(g));
     return c;
 }
 
@@ -118,7 +118,7 @@ inline Control carve_control() {
 //
 // This cannot desynchronise the ring. Every chunk length comes from the offsets table, never from how
 // far this loop ran, and supplying the config asserts that padded tokens are sentinel-marked -- their
-// picks resolve to ES_NOT_HERE and contribute no page. Skipping them is skipping no-ops.
+// picks resolve to BUCKET_NOT_HERE and contribute no page. Skipping them is skipping no-ops.
 inline uint32_t routed_token_count(const Control& c) {
     if constexpr (ct.has_padding_config) {
         const uint32_t real = c.padding[0];
@@ -134,16 +134,16 @@ inline uint32_t routed_token_count(const Control& c) {
 // host, and integer arithmetic makes consecutive slices meet exactly whatever the count turns out to be.
 constexpr uint32_t slice_begin(uint32_t n, uint32_t idx, uint32_t count) { return (n * idx) / count; }
 
-// Lane w's slice of the tokens: contiguous, in token order, the slices tiling [0, tokens).
-constexpr uint32_t slice_lo(uint32_t tokens, uint32_t lane) { return slice_begin(tokens, lane, LANES); }
-constexpr uint32_t slice_hi(uint32_t tokens, uint32_t lane) { return slice_begin(tokens, lane + 1u, LANES); }
+// RISC w's slice of the tokens: contiguous, in token order, the slices tiling [0, tokens).
+constexpr uint32_t slice_lo(uint32_t tokens, uint32_t risc) { return slice_begin(tokens, risc, RISCS); }
+constexpr uint32_t slice_hi(uint32_t tokens, uint32_t risc) { return slice_begin(tokens, risc + 1u, RISCS); }
 
-constexpr uint32_t bucket_slots() { return ct.extent * ct.experts_per_chip; }
+constexpr uint32_t num_buckets() { return ct.extent * ct.experts_per_chip; }
 
 // How many of `routed` picks at a bucket whose first page is `first_page` survive capacity: pages are
-// handed out in order and dropped once past it, so the survivors are the first `room` picks. The one
+// handed out in order and dropped once past it, so the kept are the first `room` picks. The one
 // rule that makes the replay byte-identical to production, spelled once.
-constexpr uint32_t survivors_of(uint32_t first_page, uint32_t routed) {
+constexpr uint32_t kept_count(uint32_t first_page, uint32_t routed) {
     const uint32_t room = ct.max_dispatch_buf_tokens > first_page ? ct.max_dispatch_buf_tokens - first_page : 0u;
     return routed < room ? routed : room;
 }
@@ -155,25 +155,25 @@ inline const T* frozen(volatile tt_l1_ptr T* p) {
     return reinterpret_cast<const T*>(reinterpret_cast<uint32_t>(p));
 }
 
-// One lane's scratch in kCbLane. Field order and prologue_lane_words are one layout; the assert
+// One RISC's scratch in kCbRisc. Field order and index_risc_words are one layout; the assert
 // below is what ties them.
-struct Lane {
-    volatile tt_l1_ptr uint32_t* cnt;         // routed picks per bucket in my slice, survivors or not
+struct Risc {
+    volatile tt_l1_ptr uint32_t* cnt;         // routed picks per bucket in my slice, kept or not
     volatile tt_l1_ptr uint32_t* next_page;   // running page counter for the fill pass
     volatile tt_l1_ptr uint32_t* next_entry;  // entry cursor per bucket for the fill pass
 };
-static_assert(dspf2d::prologue_lane_words(1u) == 3u, "Lane has three per-bucket arrays");
+static_assert(dspf2d::index_risc_words(1u) == 3u, "Risc has three per-bucket arrays");
 
-inline Lane lane_view(const Control& c, uint32_t lane) {
-    const uint32_t n = bucket_slots();
-    volatile tt_l1_ptr uint32_t* base = c.lane + lane * dspf2d::prologue_lane_words(n);
-    return Lane{base, base + n, base + 2u * n};
+inline Risc risc_view(const Control& c, uint32_t risc) {
+    const uint32_t n = num_buckets();
+    volatile tt_l1_ptr uint32_t* base = c.risc + risc * dspf2d::index_risc_words(n);
+    return Risc{base, base + n, base + 2u * n};
 }
 
-// Program semaphores: the runtime writes their initial value on every launch, so no lane can take a
+// Program semaphores: the runtime writes their initial value on every launch, so no RISC can take a
 // stale word for a signal. They sit in the launch's kernel-config region, whose base the dataflow
 // firmware resolves into sem_l1_base. The TRISC firmware on this architecture does not carry that
-// symbol, so a compute lane reads the same launch message the firmware did; BRISC advances the read
+// symbol, so a compute RISC reads the same launch message the firmware did; BRISC advances the read
 // pointer only after every RISC of the core has finished, so it names this launch for the whole run.
 inline uint32_t semaphore_base() {
 #if defined(COMPILE_FOR_TRISC)
@@ -215,80 +215,80 @@ inline void wait_at_least(uint32_t id, uint32_t value) {
     WAYPOINT("PLD");
 }
 
-inline void wait_all_lanes(uint32_t value) {
-    for (uint32_t lane = 0; lane < LANES; lane++) {
-        wait_at_least(dspf2d::prologue_lane_sem(lane), value);
+inline void wait_all_riscs(uint32_t value) {
+    for (uint32_t risc = 0; risc < RISCS; risc++) {
+        wait_at_least(dspf2d::index_risc_sem(risc), value);
     }
 }
 
 // Pass 1: how many picks my slice routes to each bucket, counting the ones capacity will drop as well,
 // because the allocator counter they advance is what positions everything after them.
-inline void count_pass(const Control& c, const Lane& me, uint32_t t0, uint32_t t1) {
-    const uint32_t n = bucket_slots();
+inline void count_pass(const Control& c, const Risc& me, uint32_t t0, uint32_t t1) {
+    const uint32_t n = num_buckets();
     for (uint32_t b = 0; b < n; b++) {
         me.cnt[b] = 0u;
     }
-    const uint32_t* es = frozen(c.expert_slot);
+    const uint32_t* es = frozen(c.expert_bucket);
     uint32_t idx_addr = reinterpret_cast<uint32_t>(c.indices) + t0 * ct.indices_pad_stride;
     for (uint32_t t = t0; t < t1; t++, idx_addr += ct.indices_pad_stride) {
         const uint16_t* idx = reinterpret_cast<const uint16_t*>(idx_addr);
         static_assert(ct.topk <= 8, "the unroll count is the top-k bound");
 #pragma GCC unroll 8
         for (uint32_t k = 0; k < ct.topk; k++) {
-            const uint32_t slot = es[idx[k]];
-            // A word past the table (an index the host never validated) could name any slot; a
-            // counter outside this lane's block is somebody else's state.
-            if (slot >= n) {
-                continue;  // ES_NOT_HERE, or an expert id the table does not resolve
+            const uint32_t bucket = es[idx[k]];
+            // A word past the table (an index the host never validated) could name any bucket; a
+            // counter outside this RISC's block is somebody else's state.
+            if (bucket >= n) {
+                continue;  // BUCKET_NOT_HERE, or an expert id the table does not resolve
             }
-            me.cnt[slot] = me.cnt[slot] + 1u;
+            me.cnt[bucket] = me.cnt[bucket] + 1u;
         }
     }
 }
 
 // Between the passes: where my slice's pages and entries start in every bucket, from the counts of the
 // slices before mine.
-inline void place_slice(const Control& c, const Lane& me, uint32_t lane) {
-    const uint32_t n = bucket_slots();
+inline void place_slice(const Control& c, const Risc& me, uint32_t risc) {
+    const uint32_t n = num_buckets();
     for (uint32_t b = 0; b < n; b++) {
         uint32_t before = 0;
-        for (uint32_t v = 0; v < lane; v++) {
-            before += lane_view(c, v).cnt[b];
+        for (uint32_t v = 0; v < risc; v++) {
+            before += risc_view(c, v).cnt[b];
         }
         const uint32_t first_page = c.first_page[b];
         me.next_page[b] = first_page + before;
-        me.next_entry[b] = c.bucket_start[b] + survivors_of(first_page, before);
+        me.next_entry[b] = c.bucket_start[b] + kept_count(first_page, before);
     }
 }
 
 // Pass 2: the walk over my slice, from the positions place_slice gave me. The same per-pick rule as
-// production, with the cursors per lane.
-inline void fill_pass(const Control& c, const Lane& me, uint32_t t0, uint32_t t1) {
+// production, with the cursors per RISC.
+inline void fill_pass(const Control& c, const Risc& me, uint32_t t0, uint32_t t1) {
     const uint32_t cap = ct.max_dispatch_buf_tokens;
-    const uint32_t n = bucket_slots();
-    const uint32_t* es = frozen(c.expert_slot);
+    const uint32_t n = num_buckets();
+    const uint32_t* es = frozen(c.expert_bucket);
     uint32_t idx_addr = reinterpret_cast<uint32_t>(c.indices) + t0 * ct.indices_pad_stride;
     for (uint32_t t = t0; t < t1; t++, idx_addr += ct.indices_pad_stride) {
         const uint16_t* idx = reinterpret_cast<const uint16_t*>(idx_addr);
 #pragma GCC unroll 8
         for (uint32_t k = 0; k < ct.topk; k++) {
-            const uint32_t slot = es[idx[k]];
-            if (slot >= n) {
-                continue;  // as in count_pass: never index another lane's block
+            const uint32_t bucket = es[idx[k]];
+            if (bucket >= n) {
+                continue;  // as in count_pass: never index another RISC's block
             }
-            const uint32_t page = me.next_page[slot];
-            me.next_page[slot] = page + 1u;
+            const uint32_t page = me.next_page[bucket];
+            me.next_page[bucket] = page + 1u;
             if (page >= cap) {
                 continue;  // dropped for want of capacity, with the counter already advanced
             }
-            const uint32_t at = me.next_entry[slot];
+            const uint32_t at = me.next_entry[bucket];
             // The bucket was sized from the offsets table, which the same routing produced. A table
             // that disagrees would otherwise write over the next bucket, and the ASSERT that reports
             // the disagreement is compiled out on this hardware.
-            if (at >= c.bucket_start[slot + 1u]) {
+            if (at >= c.bucket_start[bucket + 1u]) {
                 continue;
             }
-            me.next_entry[slot] = at + 1u;
+            me.next_entry[bucket] = at + 1u;
             volatile tt_l1_ptr uint32_t* ent = c.entries + at * dspf2d::entry_words();
             ent[0] = t;
             ent[1] = page;
@@ -297,28 +297,28 @@ inline void fill_pass(const Control& c, const Lane& me, uint32_t t0, uint32_t t1
     }
 }
 
-// The whole of one lane's share: wait for the tables, count, exchange, fill, report.
-inline void run_lane(const Control& c, uint32_t lane) {
+// The whole of one RISC's share: wait for the tables, count, exchange, fill, report.
+inline void run_risc(const Control& c, uint32_t risc) {
     wait_at_least(dspf2d::kSemTablesReady, 1u);
     const uint32_t tokens = routed_token_count(c);
-    const Lane me = lane_view(c, lane);
-    count_pass(c, me, slice_lo(tokens, lane), slice_hi(tokens, lane));
-    signal(dspf2d::prologue_lane_sem(lane), dspf2d::kLaneCounted);
-    wait_all_lanes(dspf2d::kLaneCounted);
-    place_slice(c, me, lane);
-    fill_pass(c, me, slice_lo(tokens, lane), slice_hi(tokens, lane));
-    signal(dspf2d::prologue_lane_sem(lane), dspf2d::kLaneFilled);
+    const Risc me = risc_view(c, risc);
+    count_pass(c, me, slice_lo(tokens, risc), slice_hi(tokens, risc));
+    signal(dspf2d::index_risc_sem(risc), dspf2d::kRiscCounted);
+    wait_all_riscs(dspf2d::kRiscCounted);
+    place_slice(c, me, risc);
+    fill_pass(c, me, slice_lo(tokens, risc), slice_hi(tokens, risc));
+    signal(dspf2d::index_risc_sem(risc), dspf2d::kRiscFilled);
 }
 
-// The reader's side, in the one order that is correct: the tables the lanes read with plain loads
-// are complete before the signal that releases them, and this RISC runs its own lane in between.
-// The caller waits for the other lanes' fills (wait_all_lanes(kLaneFilled)) before it reads anything
+// The reader's side, in the one order that is correct: the tables the RISCs read with plain loads
+// are complete before the signal that releases them, and this RISC runs its own RISC in between.
+// The caller waits for the other RISCs' fills (wait_all_riscs(kRiscFilled)) before it reads anything
 // they wrote.
 template <typename BuildTables>
-inline void reader_prologue(const Control& c, BuildTables&& build_tables) {
+inline void reader_routing_index(const Control& c, BuildTables&& build_tables) {
     build_tables();
     signal(dspf2d::kSemTablesReady, 1u);
-    run_lane(c, dspf2d::kLaneReader);
+    run_risc(c, dspf2d::kRiscReader);
 }
 
-}  // namespace dspf2d::prologue
+}  // namespace dspf2d::routing_index
