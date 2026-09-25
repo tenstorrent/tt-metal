@@ -170,6 +170,7 @@ python3 "${TTRUN_PY}" \
   --mpi-args "--bind-to none --tag-output --allow-run-as-root --wdir ${TT_METAL_HOME} --output-filename ${RANKLOGS}/runner -x PATH -x LD_LIBRARY_PATH" \
   bash -lc "cd '${TT_METAL_HOME}'; \
     export PYTHONPATH=${CHILD_PYTHONPATH}; \
+    export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0; \
     export PYTHONUNBUFFERED=1; \
     export PREFILL_MANIFEST='${MANIFEST}'; \
     export PREFILL_SYNC_PER_CHUNK=1; \
@@ -215,6 +216,7 @@ set +e
   -x PATH -x LD_LIBRARY_PATH \
   bash -lc "cd '${TT_METAL_HOME}'; \
     export PYTHONPATH=${CHILD_PYTHONPATH}; \
+    export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0; \
     export PYTHONUNBUFFERED=1; \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
     export PREFILL_NUM_USERS=${PRODUCER_USERS}; \
