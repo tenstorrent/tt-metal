@@ -293,9 +293,17 @@ void kernel_main() {
         if constexpr (get_batch_from_reader) {
             // Check whether this batch is valid
             bool is_batch_valid = false;
+#ifdef ARCH_QUASAR
+            // Quasar has no BRISC->compute mailbox (ckernel::ThreadId::BriscThreadId does not exist), so
+            // the reader-driven batch-skip handoff is not wired here. Treat every batch as valid: invalid
+            // batch slots are just padding, so processing them is correct (only wasteful) for the valid
+            // slots. Matches the existing !ARCH_QUASAR guard on the DM/reader side of this handoff.
+            is_batch_valid = true;
+#else
             UNPACK(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
             MATH(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
             PACK(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
+#endif
             if (!is_batch_valid) {
                 continue;
             }

@@ -1046,6 +1046,15 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     if (in0_noc == tt::tt_metal::NOC::NOC_1) {
         std::swap(start_core_noc, end_core_noc);
     }
+    // Quasar is single-NOC / non-torus: the mcast rectangle MUST stay ascending [min..max]. in0_noc resolves
+    // to NOC_1 on Quasar, so the WH/BH swap above degenerates it to [max..min] -> NoC "multicast invalid
+    // range" and the in0 sender hangs (waypoint NMWW). Re-normalize to ascending on Quasar. (recipe §11)
+    if (device->arch() == tt::ARCH::QUASAR) {
+        const CoreCoord lo{std::min(start_core_noc.x, end_core_noc.x), std::min(start_core_noc.y, end_core_noc.y)};
+        const CoreCoord hi{std::max(start_core_noc.x, end_core_noc.x), std::max(start_core_noc.y, end_core_noc.y)};
+        start_core_noc = lo;
+        end_core_noc = hi;
+    }
 
     const auto& cores = corerange_to_cores(all_cores, std::nullopt, row_major);
     for (uint32_t i = 0; i < num_cores; ++i) {
@@ -2004,6 +2013,15 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     CoreCoord end_core_noc = top_left_core_physical;
     if (in1_noc == tt::tt_metal::NOC::NOC_0) {
         std::swap(start_core_noc, end_core_noc);
+    }
+    // Quasar single-NOC / non-torus: mcast rectangle MUST be ascending [min..max]. in1_noc resolves to NOC_1
+    // on Quasar so the swap above does NOT fire and the rectangle stays [max..min] (start=bottom_right) ->
+    // "multicast invalid range". Re-normalize to ascending on Quasar. (recipe §11)
+    if (device->arch() == tt::ARCH::QUASAR) {
+        const CoreCoord lo{std::min(start_core_noc.x, end_core_noc.x), std::min(start_core_noc.y, end_core_noc.y)};
+        const CoreCoord hi{std::max(start_core_noc.x, end_core_noc.x), std::max(start_core_noc.y, end_core_noc.y)};
+        start_core_noc = lo;
+        end_core_noc = hi;
     }
 
     const auto& cores = corerange_to_cores(all_cores, std::nullopt, row_major);
@@ -3752,10 +3770,28 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     ////////////////////////////////////////////////////////////////////////////
     //                      Kernels
     ////////////////////////////////////////////////////////////////////////////
-    const auto in0_sender_hw_config =
-        DataMovementGen1Config{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc};
-    const auto in1_sender_hw_config =
-        DataMovementGen1Config{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc};
+    // Quasar (Gen2) requires a DataMovementGen2Config on the KernelSpec; the explicit processor/noc has no
+    // Gen2 equivalent (the framework places the kernel / picks the NOC). Emit a Gen2 config on Quasar;
+    // WH/BH keep the explicit Gen1 placement. Mirrors the sharded-LN / untilize Gen1->Gen2 ports.
+    const bool is_quasar_mm = device->arch() == tt::ARCH::QUASAR;
+    // These matmul in0/in1 DM kernels manage DFB credits EXPLICITLY (reserve_back/push_back on the
+    // sender/receiver, TRISC pop on the compute consumer). On Quasar a bare DataMovementGen2Config leaves
+    // implicit-sync ON for their DFBs, so the implicit final-credit reconciliation adds one extra ACK on top
+    // of the explicit pops -> in0 tile counter underflow (posted=64 acked=65). Opt out, matching the sibling
+    // matmul factories (matmul_multicore_program_factory / matmul_multicore_reuse_optimized_program_factory
+    // both pass disable_dfb_implicit_sync_for_all=true). ARCH-guarded: WH/BH keep the Gen1 config unchanged.
+    const tt::tt_metal::experimental::DataMovementHardwareConfig in0_sender_hw_config =
+        is_quasar_mm
+            ? tt::tt_metal::experimental::DataMovementHardwareConfig{tt::tt_metal::experimental::DataMovementGen2Config{
+                  .disable_dfb_implicit_sync_for_all = true}}
+            : tt::tt_metal::experimental::DataMovementHardwareConfig{
+                  DataMovementGen1Config{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}};
+    const tt::tt_metal::experimental::DataMovementHardwareConfig in1_sender_hw_config =
+        is_quasar_mm
+            ? tt::tt_metal::experimental::DataMovementHardwareConfig{tt::tt_metal::experimental::DataMovementGen2Config{
+                  .disable_dfb_implicit_sync_for_all = true}}
+            : tt::tt_metal::experimental::DataMovementHardwareConfig{
+                  DataMovementGen1Config{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc}};
 
     Group<KernelSpec> kernels;
 
@@ -4307,6 +4343,15 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     CoreCoord end_core_noc = bottom_right_core_physical;
     if (in0_noc == tt::tt_metal::NOC::NOC_1) {
         std::swap(start_core_noc, end_core_noc);
+    }
+    // Quasar is single-NOC / non-torus: the mcast rectangle MUST stay ascending [min..max]. in0_noc resolves
+    // to NOC_1 on Quasar, so the WH/BH swap above degenerates it to [max..min] -> NoC "multicast invalid
+    // range" (e.g. 9-5-2-2) and the in0 sender hangs (waypoint NMWW). Re-normalize to ascending. (recipe §11)
+    if (device->arch() == tt::ARCH::QUASAR) {
+        const CoreCoord lo{std::min(start_core_noc.x, end_core_noc.x), std::min(start_core_noc.y, end_core_noc.y)};
+        const CoreCoord hi{std::max(start_core_noc.x, end_core_noc.x), std::max(start_core_noc.y, end_core_noc.y)};
+        start_core_noc = lo;
+        end_core_noc = hi;
     }
 
     KernelRunArgs in0_sender_run_args{.kernel = IN0_SENDER};
@@ -5414,6 +5459,15 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
     CoreCoord end_core_noc = top_left_core_physical;
     if (in1_noc == tt::tt_metal::NOC::NOC_0) {
         std::swap(start_core_noc, end_core_noc);
+    }
+    // Quasar single-NOC / non-torus: mcast rectangle MUST be ascending [min..max]. in1_noc resolves to NOC_1
+    // on Quasar so the swap above does NOT fire and the rectangle stays [max..min] (start=bottom_right) ->
+    // "multicast invalid range". Re-normalize to ascending. (recipe §11)
+    if (device->arch() == tt::ARCH::QUASAR) {
+        const CoreCoord lo{std::min(start_core_noc.x, end_core_noc.x), std::min(start_core_noc.y, end_core_noc.y)};
+        const CoreCoord hi{std::max(start_core_noc.x, end_core_noc.x), std::max(start_core_noc.y, end_core_noc.y)};
+        start_core_noc = lo;
+        end_core_noc = hi;
     }
 
     KernelRunArgs in0_sender_run_args{.kernel = IN0_SENDER};

@@ -14,8 +14,13 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
+#ifndef ARCH_QUASAR
+// Compute(TRISC)-only headers (pull ckernel_addrmod.h -> ckernel_trisc_id.h, which #errors without
+// COMPILE_FOR_TRISC on a DM build); needed only for the batch-valid mailbox handoff, which has no Quasar
+// equivalent. Guard out on Quasar.
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#endif
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
@@ -60,9 +65,12 @@ void kernel_main() {
             const auto is_batch_valid = receiver_sem.value() == VALID;
 
             // We need to pass the value to compute cores regardless of the value of is_batch_valid
+#ifndef ARCH_QUASAR
+            // No BRISC->compute mailbox on Quasar; the compute kernel treats every batch as valid there.
             ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, static_cast<uint32_t>(is_batch_valid));
             ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, static_cast<uint32_t>(is_batch_valid));
             ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, static_cast<uint32_t>(is_batch_valid));
+#endif
 
             // Skip sending the input tensor for this batch as it is not valid.
             if (!is_batch_valid) {

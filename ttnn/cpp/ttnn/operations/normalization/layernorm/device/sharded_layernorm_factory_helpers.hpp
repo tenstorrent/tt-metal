@@ -349,7 +349,8 @@ void add_kernel_and_work_unit_specs(
     const WorkerDistribution& workers,
     const GridParams& grid,
     const SpecConfig& config,
-    uint32_t writer_num_varargs);
+    uint32_t writer_num_varargs,
+    tt::ARCH arch);
 
 //////////////////////////////////////////////////////////////////////////////
 // Runtime argument building

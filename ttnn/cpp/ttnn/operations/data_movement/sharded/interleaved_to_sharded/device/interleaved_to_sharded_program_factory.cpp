@@ -200,7 +200,14 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
         reader.source =
             "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
             "reader_unary_sharded_blocks_interleaved_start_id_metal2.cpp";
-        reader.compile_time_args = {{"num_readers", all_cores.num_cores()}};
+        // tile_bytes: the bound `in` DFB's data-format tile size. Passed as a CTA (not read on-device via
+        // get_tile_size()) because the device-side get_tile_size() is not arch-portable to Quasar -- it
+        // indexes a DFB-descriptor slot whose validity on a Quasar DM kernel is not guaranteed, so a stale
+        // value would give the reader a wrong per-tile read size / L1 stride and a stray NOC write. The `in`
+        // DFB is IN_DFB when converting formats else OUT_DFB, so its tile size is input/output_unit_size
+        // respectively. Mirrors the Gen2-native experimental/quasar interleaved_to_sharded reader.
+        reader.compile_time_args = {
+            {"num_readers", all_cores.num_cores()}, {"tile_bytes", convert_df ? input_unit_size : output_unit_size}};
         reader.runtime_arg_schema.runtime_arg_names = {
             "block_height_tiles",
             "block_width_tiles",

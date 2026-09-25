@@ -221,7 +221,9 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
              {"sin_Ht", sin_seq_len_t},
              {"rotary_Ht", rotary_seq_len_t}},
         .runtime_arg_schema = {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end"}},
-        .hw_config = create_reader_datamovement_config(device->arch())};
+        // This reader manages its DFBs with explicit reserve/push; leaving the implicit-sync ISR on would
+        // double-bump the Gen2 tile counter (posted vs acked mismatch), so disable it (Quasar-only flag).
+        .hw_config = create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true)};
 
     KernelSpec writer_spec{
         .unique_id = WRITER,
@@ -235,7 +237,9 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
         .compile_time_args =
             {{"n_heads", n_heads}, {"Wt", head_dim_t}, {"Ht", seq_len_t}, {"rotary_Ht", rotary_seq_len_t}},
         .runtime_arg_schema = {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end"}},
-        .hw_config = create_writer_datamovement_config(device->arch())};
+        // This writer explicitly wait_front/pop_front's OUT_DFB; leaving the implicit-sync ISR on would
+        // double-bump the Gen2 tile counter (acked = posted + 2 seen on craq-sim), so disable it.
+        .hw_config = create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true)};
 
     KernelSpec compute_spec{
         .unique_id = COMPUTE,

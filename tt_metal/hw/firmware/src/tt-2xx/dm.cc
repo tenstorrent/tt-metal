@@ -376,8 +376,13 @@ extern "C" uint32_t _start1() {
                                           launch_msg_address->kernel_config.local_cb_offset);
                 start_subordinate_kernel_run_early(enables);
 
-                // DM0 needs to setup DFBs to program implicit synchronization regardless of whether it runs a kernel or not.
-                uint32_t num_local_dfbs = launch_msg_address->kernel_config.local_cb_mask;
+                // DM0 needs to setup DFBs to program implicit synchronization regardless of whether it runs a kernel or
+                // not. But a TRULY idle core (enables == 0) is parked on a stale, previously-consumed launch message:
+                // its local_cb_mask/local_cb_offset point at a freed L1 region left by an earlier program, so walking
+                // DFB config off them faults (UNALIGNED_LOAD on the blank kernel). Gate the count on enables so the
+                // num_dfbs==0 early-returns in setup_dfb_* fire (they also disarm the tile ISR). Mirrors WH/BH's
+                // enables guard in brisc.cc.
+                uint32_t num_local_dfbs = enables ? launch_msg_address->kernel_config.local_cb_mask : 0;
                 // Kick DM1 to run remapper config in parallel with DM0's ISR setup.
                 start_dm1_dfb_init();
                 WAYPOINT("R");
@@ -438,7 +443,9 @@ extern "C" uint32_t _start1() {
 
         uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base +
                                                                 launch_msg->kernel_config.local_cb_offset);
-        uint32_t num_local_dfbs = launch_msg->kernel_config.local_cb_mask;
+        // Idle core (enables == 0): stale launch message -> stale local_cb_mask/offset. Treat as zero DFBs so
+        // setup_dfb_remapper's num_dfbs==0 early-return fires instead of dereferencing the freed L1 region.
+        uint32_t num_local_dfbs = launch_msg->kernel_config.enables ? launch_msg->kernel_config.local_cb_mask : 0;
 
         if (hartid == 1) {
             setup_dfb_remapper(dfb_l1_base, num_local_dfbs);

@@ -221,8 +221,9 @@ std::vector<CoreCoord> get_optimal_dram_to_physical_worker_assignment(
     // For WH and BH, worker cores are placed to the right of the DRAM Controller.
     // Need to shift down if the row is a non-tensix row (0 or 6 on WH and 0 or 1 on BH)
     TT_ASSERT(
-        arch == ARCH::WORMHOLE_B0 or arch == ARCH::BLACKHOLE,
-        "Only Wormhole and Blackhole are supported to get optimal worker placement for interfacing with DRAM");
+        arch == ARCH::WORMHOLE_B0 or arch == ARCH::BLACKHOLE or arch == ARCH::QUASAR,
+        "Only Wormhole, Blackhole and Quasar are supported to get optimal worker placement for interfacing "
+        "with DRAM");
     for (int i = 0; i < num_dram_banks; ++i) {
         auto dram_core = dram_phy_coords[i];
         uint32_t dram_core_y;
@@ -274,6 +275,13 @@ std::vector<CoreCoord> get_optimal_dram_to_physical_worker_assignment(
             }
         }
         reassign_dram_interface_cores_for_blackhole(non_worker_cols, dram_interface_workers, full_grid_size_x);
+        return dram_interface_workers;
+    }
+    if (arch == ARCH::QUASAR) {
+        // Quasar: no harvesting-aware reassignment is defined yet. Use the generic placement computed above
+        // (one worker adjacent to each DRAM controller, no non-tensix-row/harvesting shift). This unblocks
+        // DRAM-sharded ops (e.g. the DRAM-sharded matmul) from throwing on Quasar; the exact optimal
+        // placement may need Quasar-specific tuning and validation on real hardware.
         return dram_interface_workers;
     }
     TT_THROW("Invalid Arch Name specified");
