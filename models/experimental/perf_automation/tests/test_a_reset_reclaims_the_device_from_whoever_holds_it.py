@@ -82,8 +82,14 @@ def test_a_host_without_fuser_still_recovers():
     """This runs when the board is already in trouble. A reclaim that raises would turn a
     recoverable wedge into a dead run, so every step degrades to 'reaped fewer than there were'."""
     src = (_PA / "agent" / "device_recovery.py").read_text()
-    i = src.index("def reap_device_holders(")
-    body = src[i : i + 2000]
-    assert body.count("except Exception") >= 2, "the scan or the kill can raise into the caller"
+
+    def _body(name):
+        i = src.index("def %s(" % name)
+        return src[i : src.index("\ndef ", i + 1)]
+
+    # The scan is device_holders() (shared with the agent runners' leftover wait); the kill is here.
+    assert "except Exception" in _body("device_holders"), "the scan can raise into the caller"
+    assert "except Exception" in _body("reap_device_holders"), "the kill can raise into the caller"
+    assert "device_holders()" in _body("reap_device_holders"), "the reaper no longer uses the shared scan"
     # And it must actually run here, on a host that has no device at all.
     assert isinstance(_dr().reap_device_holders(), list)

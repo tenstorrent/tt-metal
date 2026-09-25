@@ -542,6 +542,23 @@ def board_needs_reset() -> bool:
     return _board_needs_reset()
 
 
+def device_holders() -> set:
+    """Pids holding /dev/tenstorrent open, except this process and its ancestors. Best-effort: no
+    `fuser` or an unreadable node yields fewer holders, never an exception. The one scan both the
+    reaper below and the agent runners' leftover wait (cc_harness) use."""
+    import glob as _glob
+    import subprocess as _sp
+
+    holders = set()
+    for node in _glob.glob("/dev/tenstorrent/*"):
+        try:
+            r = _sp.run(["fuser", node], capture_output=True, text=True, timeout=30)
+            holders.update(int(t) for t in (r.stdout + " " + r.stderr).split() if t.strip().isdigit())
+        except Exception:  # noqa: BLE001
+            pass
+    return holders - _protected_pids()
+
+
 def reap_device_holders() -> list:
     """SIGKILL every process holding /dev/tenstorrent except this one and its ancestors.
 
@@ -552,20 +569,10 @@ def reap_device_holders() -> list:
     runs on the recovery path, where the board is already in trouble; a reclaim that can raise would
     turn a recoverable wedge into a dead run.
     """
-    import glob as _glob
     import signal as _signal
-    import subprocess as _sp
 
-    protected = _protected_pids()
-    holders = set()
-    for node in _glob.glob("/dev/tenstorrent/*"):
-        try:
-            r = _sp.run(["fuser", node], capture_output=True, text=True, timeout=30)
-            holders.update(int(t) for t in (r.stdout + " " + r.stderr).split() if t.strip().isdigit())
-        except Exception:  # noqa: BLE001
-            pass
     killed = []
-    for pid in sorted(holders - protected):
+    for pid in sorted(device_holders()):
         try:
             os.kill(pid, _signal.SIGKILL)
             killed.append(pid)

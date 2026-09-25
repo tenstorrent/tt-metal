@@ -2122,10 +2122,14 @@ def _run_agent(*, prompt: str, agent_bin: str, agent_model: str, timeout_s: int,
         except Exception:
             log_fh = None
     _cap = _agent_mem_cap_bytes()
+    from ..cc_harness import tag_agent_env, wait_for_agent_device_work
+
+    agent_env, agent_tag = tag_agent_env()  # so its device runs can be told apart once it exits
     try:
         proc = subprocess.Popen(
             cmd,
             cwd=str(Path.cwd()),
+            env=agent_env,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -2183,6 +2187,7 @@ def _run_agent(*, prompt: str, agent_bin: str, agent_model: str, timeout_s: int,
                 log_fh.close()
             except Exception:
                 pass
+    wait_for_agent_device_work(agent_tag)  # the next phase's gate would otherwise reap it mid-run
     return (0 if rc == 0 else 1), final_text
 
 

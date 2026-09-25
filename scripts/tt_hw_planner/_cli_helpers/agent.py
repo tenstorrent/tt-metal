@@ -166,6 +166,7 @@ def _invoke_agent(
         _snapshot_deliverable_state,
         _summarize_stream_json_event,
     )
+    from ..cc_harness import tag_agent_env, wait_for_agent_device_work
     import builtins as _bi
     import subprocess
     import threading
@@ -258,10 +259,12 @@ def _invoke_agent(
         )
         log_fh = None
 
+    agent_env, agent_tag = tag_agent_env()  # so its device runs can be told apart once it exits
     if prompt_via_stdin:
         proc = subprocess.Popen(
             cmd,
             cwd=str(cwd),
+            env=agent_env,
             start_new_session=True,
             stdin=subprocess.PIPE,
             stdout=log_fh if log_fh else subprocess.DEVNULL,
@@ -286,6 +289,7 @@ def _invoke_agent(
         proc = subprocess.Popen(
             cmd,
             cwd=str(cwd),
+            env=agent_env,
             start_new_session=True,
             stdin=subprocess.DEVNULL,
             stdout=log_fh if log_fh else subprocess.DEVNULL,
@@ -367,6 +371,7 @@ def _invoke_agent(
                             print(f"  [auto:{provider}] result: {first}")
                         elif rc != 0:
                             print(f"  [auto:{provider}] non-zero exit ({rc}); see log for details")
+                wait_for_agent_device_work(agent_tag)  # before the caller's next device step reaps it
                 return rc
 
             elapsed = int(time.monotonic() - start)

@@ -200,6 +200,79 @@ def _kill_agent_tree(proc: subprocess.Popen) -> None:
             continue
 
 
+# AN AGENT'S TURN ENDING IS NOT ITS DEVICE WORK ENDING. An agent regularly launches a long device run
+# detached (`nohup pytest ... &`), says "I'll check back", and ends its turn -- and `claude -p` exits at
+# the end of a turn. The run keeps going as an orphan, and the runner then moved straight on: the next
+# gate, or a device reclaim, killed it mid-run. On a WH Galaxy (2026-09-25) that threw away an
+# 18-minute e2e forward, and the night before a run killed mid-collective wedged the board.
+#
+# The Bash tool runs each command in its own session and a detached process is reparented to init, so
+# neither the session nor the parent says whose it is. The ENVIRONMENT does: every process the agent
+# starts inherits it. So each agent launch is tagged with a unique value of AGENT_RUN_ENV, and after the
+# agent exits the runner waits while any /dev/tenstorrent holder still carries that tag.
+AGENT_RUN_ENV = "TT_HW_PLANNER_AGENT_RUN"
+# Upper bound on that wait, per agent exit. A leftover still running past it is left to the existing
+# reclaim paths, exactly as before this wait existed. TT_HW_PLANNER_AGENT_LEFTOVER_WAIT_S overrides it.
+_DEFAULT_LEFTOVER_WAIT_S = 3600
+_LEFTOVER_POLL_S = 30
+
+
+def tag_agent_env(env: dict | None = None) -> tuple[dict, str]:
+    """(env with a fresh AGENT_RUN_ENV tag, the tag): pass the env to the agent, the tag to
+    wait_for_agent_device_work once it exits. `env` defaults to this process's environment."""
+    tag = "%d_%d" % (os.getpid(), time.time_ns())
+    return {**(os.environ if env is None else env), AGENT_RUN_ENV: tag}, tag
+
+
+def _carries_tag(pid: int, tag: str) -> bool:
+    try:
+        with open("/proc/%d/environ" % pid, "rb") as fh:
+            return ("%s=%s" % (AGENT_RUN_ENV, tag)).encode() in fh.read().split(b"\0")
+    except OSError:
+        return False
+
+
+def _leftover_wait_s() -> int:
+    try:
+        return int(os.environ.get("TT_HW_PLANNER_AGENT_LEFTOVER_WAIT_S", str(_DEFAULT_LEFTOVER_WAIT_S)))
+    except ValueError:
+        return _DEFAULT_LEFTOVER_WAIT_S
+
+
+def wait_for_agent_device_work(tag: str, timeout_s: int | None = None, poll_s: float = _LEFTOVER_POLL_S) -> list:
+    """Block while a device holder started by the agent tagged `tag` is still running.
+
+    Returns the pids still running when the wait gave up ([] once they all finished). Best-effort and
+    never raises: if the holder scan is unavailable the wait is skipped, which is the old behaviour."""
+    try:
+        from models.experimental.perf_automation.agent.device_recovery import device_holders
+    except Exception:  # noqa: BLE001
+        return []
+    limit = _leftover_wait_s() if timeout_s is None else timeout_s
+    deadline = time.monotonic() + max(0, limit)
+    announced = False
+    while True:
+        try:
+            left = sorted(p for p in device_holders() if _carries_tag(p, tag))
+        except Exception:  # noqa: BLE001 -- a scan that cannot run must not stop the runner
+            return []
+        if not left:
+            if announced:
+                print("  · the agent's device run(s) finished; continuing", flush=True)
+            return []
+        if time.monotonic() >= deadline:
+            print(f"  · agent device run(s) {left} still running after {limit}s; continuing without them", flush=True)
+            return left
+        if not announced:
+            print(
+                f"  · the agent ended its turn with device run(s) {left} still going; waiting for them "
+                f"(up to {limit}s) so they are not killed mid-run",
+                flush=True,
+            )
+            announced = True
+        time.sleep(poll_s)
+
+
 def run_cc_loop(
     *,
     prompt: str,
@@ -286,10 +359,11 @@ def run_cc_loop(
                 "stream-json",
                 "--verbose",
             ], {}
+        _round_env, _round_tag = tag_agent_env({**env, **_agent_env} if _agent_env else env)
         proc = subprocess.Popen(
             _argv,
             cwd=str(cwd),
-            env=({**env, **_agent_env} if _agent_env else env),
+            env=_round_env,
             start_new_session=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -333,6 +407,7 @@ def run_cc_loop(
             proc.wait(timeout=timeout_s)
             pump.join(timeout=5)
             consecutive_timeouts = 0
+            wait_for_agent_device_work(_round_tag)  # before the next gate can reap or collide with it
         except subprocess.TimeoutExpired:
             _kill_agent_tree(proc)
             pump.join(timeout=5)
