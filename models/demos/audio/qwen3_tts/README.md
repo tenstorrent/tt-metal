@@ -723,11 +723,16 @@ SKUs, but only the eight files whose coverage differs at 0.6B. The tokenizer, th
 both codec halves and the streaming logic are identical at both sizes and run in the 1.7B leg,
 and there is no 0.6B VoiceDesign.
 
-Timeouts assume each CI job starts with an empty kernel cache, and are the cold time plus 25%:
-27 min for the 1.7B leg and 14 for the 0.6B leg, on both SKUs. Measured by replaying each
-leg's CI command with the watcher on, on one N150: 21.1 min cold and 9.4 warm for 1.7B, 10.7
-cold and 4.4 warm for 0.6B. Blackhole is assumed similar. A first run that downloads the
-checkpoints into the shared cache takes longer.
+Timeouts assume each CI job starts with an empty kernel cache, and are the cold time plus 20%,
+measured by replaying each leg's CI command with the watcher on:
+
+| leg | N150 cold | `wh_n150` | Blackhole cold | `bh_p150` |
+|---|---|---|---|---|
+| 1.7B | 21.1 min | 26 | 15.6 min | 19 |
+| 0.6B | 10.7 min | 13 | 8.7 min | 11 |
+
+The Blackhole numbers come from one chip of a P300 standing in for the P150. A first run that
+downloads the checkpoints into the shared cache takes longer.
 
 The end-to-end leg is deliberately absent. It lands with the first change that produces a
 waveform, together with its own `e2e_tier3` budget; registering one before then would either

@@ -395,10 +395,10 @@ models:
     wh_llmbox: 90
     wh_galaxy: 80
     wh_llmbox_perf: 58
-    wh_n150: 116 # Qwen3-TTS unit tests: +27 the 1.7B leg, +14 the 0.6B leg (was 75 without them)
+    wh_n150: 114 # Qwen3-TTS unit tests: +26 the 1.7B leg, +13 the 0.6B leg (was 75 without them)
     wh_n150_civ2: 12
     wh_n300: 33
-    bh_p150: 61 # Qwen3-TTS unit tests: +27 the 1.7B leg, +14 the 0.6B leg (was 20 without them)
+    bh_p150: 50 # Qwen3-TTS unit tests: +19 the 1.7B leg, +11 the 0.6B leg (was 20 without them)
     bh_p300: 30
     bh_quietbox_2: 21
   integration:
