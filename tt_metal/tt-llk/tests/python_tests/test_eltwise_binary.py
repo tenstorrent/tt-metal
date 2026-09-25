@@ -163,9 +163,6 @@ def get_eltwise_binary_acc_to_dest(input_dimensions, tile_dimensions):
 
 
 def get_eltwise_binary_perf_acc_to_dest(input_dimensions, tile_dimensions):
-    """Exclude the BH narrow-row accumulation shape that faults under perf loops."""
-    if tuple(tile_dimensions) == (1, 32) and input_dimensions[0] == 1:
-        return [False]
     return get_eltwise_binary_acc_to_dest(input_dimensions, tile_dimensions)
 
 
@@ -799,6 +796,14 @@ def get_dest_reuse_output_candidates(dest_acc, dest_sync, formats, tile_dimensio
     )
 
 
+def _doubled_tall_wide(dimensions):
+    """Tall and wide matrices with twice the tile count of one output."""
+    return [
+        [dimensions[0] * 2, dimensions[1]],
+        [dimensions[0], dimensions[1] * 2],
+    ]
+
+
 def get_dest_reuse_input_dimensions(dest_acc, dest_sync, formats, tile_dimensions):
     """Inputs with at least two tiles per destination-reuse accumulation."""
     tile_rows, tile_cols = tile_dimensions
@@ -808,12 +813,7 @@ def get_dest_reuse_input_dimensions(dest_acc, dest_sync, formats, tile_dimension
         dest_sync,
         construct_tile_shape(tuple(tile_dimensions)),
     ):
-        dimensions.extend(
-            [
-                [output_dimensions[0] * 2, output_dimensions[1]],
-                [output_dimensions[0], output_dimensions[1] * 2],
-            ]
-        )
+        dimensions.extend(_doubled_tall_wide(output_dimensions))
     return _unique_dimensions(dimensions)
 
 
@@ -871,10 +871,7 @@ def get_dest_reuse_perf_input_dimensions(dest_acc, dest_sync, formats, tile_dime
         [
             dimensions
             for output in perf_outputs
-            for dimensions in (
-                [output[0] * 2, output[1]],
-                [output[0], output[1] * 2],
-            )
+            for dimensions in _doubled_tall_wide(output)
         ]
     )
 

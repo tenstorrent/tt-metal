@@ -39,13 +39,13 @@ inline void perf_binary_source_handshakes(
                 {
                     if constexpr (Produce)
                     {
-                        _perf_unpack_loop_set_valid<false, true>(1);
-                        _perf_unpack_loop_set_valid<true, false>(num_faces_c);
+                        _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(1);
+                        _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(num_faces_c);
                     }
                     else
                     {
-                        _perf_math_loop_clear_valid<true, false>(num_faces_c);
-                        _perf_math_loop_clear_valid<false, true>(1);
+                        _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(num_faces_c);
+                        _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(1);
                     }
                 }
             }
@@ -54,13 +54,13 @@ inline void perf_binary_source_handshakes(
                 // Scalar B remains valid while all A faces are consumed.
                 if constexpr (Produce)
                 {
-                    _perf_unpack_loop_set_valid<false, true>(1);
-                    _perf_unpack_loop_set_valid<true, false>(num_faces);
+                    _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(1);
+                    _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(num_faces);
                 }
                 else
                 {
-                    _perf_math_loop_clear_valid<true, false>(num_faces);
-                    _perf_math_loop_clear_valid<false, true>(1);
+                    _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(num_faces);
+                    _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(1);
                 }
             }
             else
@@ -68,11 +68,11 @@ inline void perf_binary_source_handshakes(
                 // NONE and ROW load and clear both sources once per face.
                 if constexpr (Produce)
                 {
-                    _perf_unpack_loop_set_valid<true, true>(num_faces);
+                    _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(num_faces);
                 }
                 else
                 {
-                    _perf_math_loop_clear_valid<true, true>(num_faces);
+                    _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(num_faces);
                 }
             }
         }
@@ -229,7 +229,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             dest_sync,
                             is_fp32_dest_acc_en,
                             MATH_FIDELITY,
-                            EltwiseBinaryReuseDestType::NONE>(tensor_shape, tile, false);
+                            EltwiseBinaryReuseDestType::NONE>(tensor_shape, tile, false /* clear_fp32_dst_acc */);
                     }
 
                     _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY, REUSE_DEST_TYPE>(tensor_shape, ACCUMULATE_TO_DEST);
@@ -241,7 +241,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 (tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                                 "Block tile index exceeds maximum destination tiles");
                             _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BROADCAST_TYPE, dest_sync, is_fp32_dest_acc_en, MATH_FIDELITY, REUSE_DEST_TYPE>(
-                                tensor_shape, tile, false);
+                                tensor_shape, tile, false /* clear_fp32_dst_acc */);
                         }
                     }
 
@@ -287,7 +287,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         for (std::uint32_t accumulation = 0; accumulation < tiles_per_accumulation; ++accumulation)
                         {
                             _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BROADCAST_TYPE, dest_sync, is_fp32_dest_acc_en, MATH_FIDELITY, REUSE_DEST_TYPE>(
-                                tensor_shape, tile, false);
+                                tensor_shape, tile, false /* clear_fp32_dst_acc */);
                         }
                     }
                     if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
