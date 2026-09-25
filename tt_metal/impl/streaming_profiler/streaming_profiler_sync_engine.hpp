@@ -144,7 +144,6 @@ struct AnchorAudit {
     // ANCHOR_HIST).
     void add_drainer_audit(const ClockSample& s);
     uint64_t drainer_unbracketed = 0;  // anchors the drainer dropped: their read found no refclk update
-    double drainer_worst_ns = 0.0, drainer_worst_r = 0.0;  // the worst of the anchors the drainer checked itself
 };
 
 // A device's refclk onto the root chip's: root_refclk = scale * dev_refclk + shift.

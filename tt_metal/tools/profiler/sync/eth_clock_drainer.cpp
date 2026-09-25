@@ -261,9 +261,8 @@ struct Audit {
     };
     Outbox* outbox = nullptr;
     int32_t tile_offset = 0;
-    uint32_t head = 0, tail = 0, audited = 0, unbracketed = 0;
-    int64_t err_sum = 0;
-    uint64_t err_sumsq = 0, worst_r = 0;
+    uint32_t head = 0, tail = 0, unbracketed = 0;
+    uint64_t worst_r = 0;
     int32_t worst = 0;
     kp::SyncLocalPoint prev{};
     bool have_prev = false;
@@ -282,7 +281,7 @@ struct Audit {
     }
     void raw(const volatile tt_l1_ptr Pending& a) {
         outbox->add(
-            1u << 16 | kp::kSyncKindAnchor << 8,
+            kp::kSyncKindAnchor << 8,
             0,
             0,
             (static_cast<uint64_t>(a.w_hi) << 32) | a.w_lo,
@@ -337,9 +336,6 @@ struct Audit {
                 continue;
             }
             bins()[b]++;
-            audited++;
-            err_sum += ns16;
-            err_sumsq += static_cast<uint64_t>(static_cast<int64_t>(ns16) * ns16);
             if ((ns16 < 0 ? -ns16 : ns16) > (worst < 0 ? -worst : worst)) {
                 worst = ns16;
                 worst_r = ar;
@@ -348,7 +344,7 @@ struct Audit {
         prev = p;
         have_prev = true;
     }
-    // To the host at stop: every nonzero run of six bins, then the summary and the worst's refclk.
+    // To the host at stop: every nonzero run of six bins, then the worst with its refclk.
     void send() {
         while (head != tail) {
             raw(pending(head++));
@@ -370,12 +366,7 @@ struct Audit {
             }
         }
         outbox->add(
-            kp::kSyncKindAnchorHist << 8,
-            kp::kSyncAnchorHistSummary,
-            static_cast<uint64_t>(err_sum),
-            err_sumsq,
-            (static_cast<uint64_t>(static_cast<uint32_t>(worst)) << 32) | audited);
-        outbox->add(kp::kSyncKindAnchorHist << 8, kp::kSyncAnchorHistWorstAt, worst_r, unbracketed, 0);
+            kp::kSyncKindAnchorHist << 8, kp::kSyncAnchorHistWorst, worst_r, unbracketed, static_cast<uint32_t>(worst));
         outbox->flush();
     }
 };

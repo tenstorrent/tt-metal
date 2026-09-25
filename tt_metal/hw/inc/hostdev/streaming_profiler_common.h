@@ -167,14 +167,14 @@ static_assert(SYNC_REF_HI < kSyncRecordWords);
 // from bit 24 the slope the offsets are against. LINK: a round's 1588 stamp average in kLinkSyncStampUnitsPerNs per
 // ns. ANCHOR: the drainer's (wall, refclk) pair at a refclk update, taken independently of the pusher's samples;
 // value and round unused. ANCHOR_HIST: the drainer's own audit of its anchors against the pusher's points, sent at
-// stop: bin records (round the first bin, value, wall and ref six counts), then the summary (round
-// kSyncAnchorHistSummary: value the sum and wall the sum of squares of the errors in 1/16 ns, ref_lo the count,
-// ref_hi the worst in 1/16 ns, signed) and the worst's refclk (round kSyncAnchorHistWorstAt, value).
+// stop: bin records (round the first bin, value, wall and ref six counts), then the worst (round
+// kSyncAnchorHistWorst: value its refclk, wall the anchors whose read found no refclk update, ref_lo the worst error
+// in 1/16 ns, signed).
 static constexpr std::uint32_t kSyncKindLocal = 0, kSyncKindLink = 1, kSyncKindAnchor = 2, kSyncKindAnchorHist = 3;
 static constexpr std::uint32_t kSyncLocalPoint = 0, kSyncLocalClose = 1;
 static constexpr std::uint32_t kSyncLocalPoints = 3;
 static constexpr std::uint32_t kSyncAnchorHistBins = 512;  // 1/16 ns each over +-16 ns
-static constexpr std::uint32_t kSyncAnchorHistSummary = 0xFFFFFFFFu, kSyncAnchorHistWorstAt = 0xFFFFFFFEu;
+static constexpr std::uint32_t kSyncAnchorHistWorst = 0xFFFFFFFFu;
 struct SyncLocalPoint {
     std::uint64_t r, w8;
     std::uint32_t k8;

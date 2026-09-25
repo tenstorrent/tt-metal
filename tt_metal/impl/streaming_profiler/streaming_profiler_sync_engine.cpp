@@ -452,19 +452,14 @@ void AnchorAudit::settle(const LocalClockModel& m, bool final) {
 }
 
 void AnchorAudit::add_drainer_audit(const ClockSample& s) {
-    constexpr double kUnitsPerNs = 16.0;  // the drainer's bins and sums are in 1/16 ns
-    if (s.round == kernel_profiler::kSyncAnchorHistSummary) {
-        const double w = static_cast<int32_t>(static_cast<uint32_t>(s.ref >> 32)) / kUnitsPerNs;
-        err.sum += static_cast<int64_t>(s.value) / kUnitsPerNs;
-        err.sumsq += static_cast<double>(s.ts) / (kUnitsPerNs * kUnitsPerNs);
-        if (std::abs(w) > std::abs(drainer_worst_ns)) {
-            drainer_worst_ns = w;
+    if (s.round == kernel_profiler::kSyncAnchorHistWorst) {
+        const double w =
+            static_cast<int32_t>(static_cast<uint32_t>(s.ref)) / static_cast<double>(ErrorHistogram::kBinsPerNs);
+        if (std::abs(w) > std::abs(worst_ns)) {
+            worst_ns = w;
+            worst_r = static_cast<double>(s.value);
         }
         err.worst = std::max(err.worst, std::abs(w));
-        return;
-    }
-    if (s.round == kernel_profiler::kSyncAnchorHistWorstAt) {
-        drainer_worst_r = static_cast<double>(s.value);
         drainer_unbracketed += s.ts;
         return;
     }
@@ -478,8 +473,11 @@ void AnchorAudit::add_drainer_audit(const ClockSample& s) {
     for (uint32_t j = 0; j < 6; j++) {
         const int b = static_cast<int>(s.round + j) - static_cast<int>(kernel_profiler::kSyncAnchorHistBins / 2) +
                       ErrorHistogram::kRangeNs * ErrorHistogram::kBinsPerNs;
-        err.bins[b] += counts[j];
-        err.n += counts[j];
+        const double ns = ErrorHistogram::ns_of(b), c = counts[j];
+        err.bins[b] += c;
+        err.n += c;
+        err.sum += c * ns;
+        err.sumsq += c * ns * ns;
     }
 }
 
@@ -1210,8 +1208,9 @@ void SyncEngine::publish_error_plots() {
     }
 }
 
-// The drainer's anchors against each chip's model, and per link what a record of either chip is off the other's:
-// the link and map term of each round with both models' errors, the chips' clocks being independent processes.
+// The drainer's anchors against each chip's model, and pooled over the links what a record of one chip is off one of a
+// linked chip: the link and map term of each round with both models' errors, the chips' clocks being independent
+// processes.
 void SyncEngine::log_audit() const {
     const auto parts = [](const ErrorHistogram& h) {
         return fmt::format(
@@ -1235,7 +1234,7 @@ void SyncEngine::log_audit() const {
             "refclk {:.0f}; {} before the model, {} past it, {} dropped for a read with no refclk update",
             ctx_.devices[dev].chip_id,
             parts(a.err),
-            std::abs(a.drainer_worst_ns) > std::abs(a.worst_ns) ? a.drainer_worst_r : a.worst_r,
+            a.worst_r,
             a.before_model,
             a.past_model,
             a.drainer_unbracketed);
@@ -1258,18 +1257,6 @@ void SyncEngine::log_audit() const {
             lh.add(p.value);
         }
         const ErrorHistogram total = lh.convolve(eb, 1).convolve(ea, -1);
-        log_info(
-            tt::LogMetal,
-            "[streaming profiler] sync audit chip {} vs chip {} eth({},{}): a record of one against one of the other, "
-            "|err| p50 {:.2f}, p99 {:.2f}, p99.9 {:.2f} ns, mean {:+.2f} ns",
-            L.chip_b,
-            L.chip_a,
-            L.eth_a.x,
-            L.eth_a.y,
-            total.abs_quantile(0.5),
-            total.abs_quantile(0.99),
-            total.abs_quantile(0.999),
-            total.mean());
         for (int b = 0; b < ErrorHistogram::kBins; b++) {
             pooled.bins[b] += total.bins[b];
         }
