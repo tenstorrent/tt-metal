@@ -25,6 +25,15 @@ std::shared_ptr<distributed::MeshBuffer> allocate_device_buffer(
 
 HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec);
 
+struct LocalHostShards {
+    std::vector<distributed::MeshCoordinate> coords;
+    size_t size_bytes = 0;
+};
+
+// Host presence does not imply destination ownership on a mesh shared by multiple processes.
+LocalHostShards select_local_host_shards(
+    const DistributedHostBuffer& host_buffer, const distributed::MeshDevice& mesh_device);
+
 // Converts logical data into physical data based on tensor spec
 // - Logical data: Flat container of row major data corresponding to some ND logical shape
 // - Physical data: Flat container of physical data corresponding to tensor spec. It takes into account:

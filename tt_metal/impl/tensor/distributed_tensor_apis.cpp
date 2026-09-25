@@ -302,21 +302,8 @@ std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
     const auto& distributed_host_buffer = host_tensor.buffer();
 
     auto* mesh_device = mesh_buffer->device();
-    const auto& view = mesh_device->get_view();
-    std::vector<distributed::MeshCoordinate> local_coords;
-    local_coords.reserve(distributed_host_buffer.shard_coords().size());
-    size_t total_size = 0;
-    for (const auto& coord : distributed_host_buffer.shard_coords()) {
-        // A complete host tensor can also hold shards for destinations owned by another process.
-        if (!view.impl().is_local(coord)) {
-            continue;
-        }
-        auto buf = distributed_host_buffer.get_shard(coord);
-        if (buf) {
-            local_coords.push_back(coord);
-            total_size += buf->view_bytes().size();
-        }
-    }
+    const auto [local_coords, total_size] =
+        tensor_impl::select_local_host_shards(distributed_host_buffer, *mesh_device);
 
     const bool use_pinned =
         ::tt::tt_metal::CMAKE_UNIQUE_NAMESPACE::should_use_pinned_write_path(*cq.device(), total_size);

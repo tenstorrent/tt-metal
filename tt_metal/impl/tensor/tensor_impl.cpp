@@ -8,12 +8,30 @@
 #include <tt-metalium/float8.hpp>
 
 #include "tensor_impl.hpp"
+#include "tt_metal/distributed/mesh_device_view_impl.hpp"
 
 #include <vector>
 
 #include <tt_stl/span.hpp>
 
 namespace tt::tt_metal::tensor_impl {
+
+LocalHostShards select_local_host_shards(
+    const DistributedHostBuffer& host_buffer, const distributed::MeshDevice& mesh_device) {
+    LocalHostShards local;
+    local.coords.reserve(host_buffer.shard_coords().size());
+    const auto& view = mesh_device.get_view();
+    for (const auto& coord : host_buffer.shard_coords()) {
+        if (!view.impl().is_local(coord)) {
+            continue;
+        }
+        if (auto shard = host_buffer.get_shard(coord)) {
+            local.coords.push_back(coord);
+            local.size_bytes += shard->view_bytes().size();
+        }
+    }
+    return local;
+}
 
 // ======================================================================================
 //                           Data reader, writer, and initializers

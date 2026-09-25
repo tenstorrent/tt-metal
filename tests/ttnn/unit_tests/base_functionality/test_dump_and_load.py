@@ -5,10 +5,45 @@
 import pytest
 
 import pathlib
+import struct
 
 import torch
 
 import ttnn
+
+
+@pytest.mark.parametrize("malformation", ["header-size", "shard-buffer"])
+def test_load_malformed_tensor_raises_typed_error(tmp_path, expect_error, malformation):
+    file_name = tmp_path / "malformed.tensorbin"
+    expected = torch.full((32, 32), 11, dtype=torch.bfloat16)
+    tensor = ttnn.from_torch(expected, layout=ttnn.TILE_LAYOUT)
+    ttnn.dump_tensor(file_name, tensor, mode=ttnn.DumpTensorMode.LOCAL)
+    original = file_name.read_bytes()
+    data = bytearray(original)
+    if malformation == "header-size":
+        data[:8] = len(data).to_bytes(8, byteorder="little")
+    else:
+        # tensor.fbs: Tensor.shards is field 2; TensorShard.buffer_type is field 0.
+        # NONE is structurally valid FlatBuffers data but cannot represent a tensor shard.
+        def field(table, index):
+            vtable = table - struct.unpack_from("<i", data, table)[0]
+            return table + struct.unpack_from("<H", data, vtable + 4 + index * 2)[0]
+
+        root = 8 + struct.unpack_from("<I", data, 8)[0]
+        shards_field = field(root, 2)
+        shards = shards_field + struct.unpack_from("<I", data, shards_field)[0]
+        first_shard = shards + 4 + struct.unpack_from("<I", data, shards + 4)[0]
+        buffer_type = field(first_shard, 0)
+        assert data[buffer_type] == 1
+        data[buffer_type] = 0
+    file_name.write_bytes(data)
+
+    diagnostic = "truncated or corrupt" if malformation == "header-size" else "Only InlineFileStorage"
+    with expect_error(ttnn.MalformedTensorError, diagnostic):
+        ttnn.load_tensor(file_name)
+
+    file_name.write_bytes(original)
+    torch.testing.assert_close(ttnn.to_torch(ttnn.load_tensor(file_name)), expected, rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("height", [1024])

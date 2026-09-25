@@ -84,7 +84,9 @@ Tensor load_tensor_flatbuffer(const std::string& file_name, tt::tt_metal::distri
     struct stat file_stat{};
     TT_FATAL(fstat(fd, &file_stat) == 0, "Failed to get file stats for \"{}\"", file_name);
     size_t file_size = file_stat.st_size;
-    TT_FATAL(file_size >= sizeof(uint64_t), "Tensor file \"{}\" is too small to be valid", file_name);
+    if (file_size < sizeof(uint64_t)) {
+        throw MalformedTensorError(fmt::format("Tensor file \"{}\" is too small to be valid", file_name));
+    }
 
     // Mmap the file to read tensor data lazily.
     void* mmap_addr = mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
@@ -96,31 +98,32 @@ Tensor load_tensor_flatbuffer(const std::string& file_name, tt::tt_metal::distri
     auto* file_data = static_cast<std::byte*>(mmap_addr);
     uint64_t header_size = 0;
     std::memcpy(&header_size, file_data, sizeof(header_size));
-    TT_FATAL(
-        sizeof(header_size) + header_size <= file_size,
-        "Tensor file \"{}\" is truncated or corrupt (header_size={}, file_size={})",
-        file_name,
-        header_size,
-        file_size);
+    if (header_size > file_size - sizeof(header_size)) {
+        throw MalformedTensorError(fmt::format(
+            "Tensor file \"{}\" is truncated or corrupt (header_size={}, file_size={})",
+            file_name,
+            header_size,
+            file_size));
+    }
 
     const auto* header_start = reinterpret_cast<const std::uint8_t*>(file_data) + sizeof(header_size);
-    TT_FATAL(
-        header_size < flatbuffers::Verifier::Options().max_size,
-        "Tensor header size is too large; this most likely indicates data corruption.");
+    if (header_size >= flatbuffers::Verifier::Options().max_size) {
+        throw MalformedTensorError("Tensor header size is too large; this most likely indicates data corruption.");
+    }
     flatbuffers::Verifier verifier(header_start, header_size);
-    TT_FATAL(
-        ttnn::flatbuffer::VerifyTensorBuffer(verifier),
-        "Cannot validate tensor data; this most likely indicates data corruption.");
+    if (!ttnn::flatbuffer::VerifyTensorBuffer(verifier)) {
+        throw MalformedTensorError("Cannot validate tensor data; this most likely indicates data corruption.");
+    }
     const auto* fb_tensor = ttnn::flatbuffer::GetTensor(header_start);
 
     const uint64_t data_offset = sizeof(header_size) + header_size;
     const uint64_t data_size = file_size - data_offset;
 
     std::byte* data_region = file_data + data_offset;
-    TT_FATAL(
-        (reinterpret_cast<uintptr_t>(data_region) & (kMinTensorDataAlignment - 1)) == 0,
-        "Tensor data pointer must be {}-byte aligned!",
-        kMinTensorDataAlignment);
+    if ((reinterpret_cast<uintptr_t>(data_region) & (kMinTensorDataAlignment - 1)) != 0) {
+        throw MalformedTensorError(
+            fmt::format("Tensor data pointer must be {}-byte aligned!", kMinTensorDataAlignment));
+    }
 
     Tensor tensor = ttnn::from_flatbuffer(fb_tensor, ttsl::Span<std::byte>(data_region, data_size), memory_pin);
     if (device != nullptr) {

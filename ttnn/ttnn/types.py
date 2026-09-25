@@ -19,6 +19,7 @@ bfloat8_b = DataType.BFLOAT8_B
 bfloat4_b = DataType.BFLOAT4_B
 fp8_e4m3 = DataType.FP8_E4M3
 DumpTensorMode = ttnn._ttnn.tensor.DumpTensorMode
+MalformedTensorError = ttnn._ttnn.tensor.MalformedTensorError
 
 BufferType = ttnn._ttnn.tensor.BufferType
 TensorMemoryLayout = ttnn._ttnn.tensor.TensorMemoryLayout

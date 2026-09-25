@@ -13,6 +13,7 @@
 #include <flatbuffers/flatbuffers.h>
 
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/serialization.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -131,23 +132,29 @@ flatbuffers::Offset<ttnn::flatbuffer::TensorTopology> to_flatbuffer(
 }
 
 tt::tt_metal::TensorTopology from_flatbuffer(const ttnn::flatbuffer::TensorTopology* fb_topology) {
-    TT_FATAL(fb_topology != nullptr, "tt::tt_metal::TensorTopology flatbuffer pointer must not be null");
+    if (fb_topology == nullptr) {
+        throw MalformedTensorError("tt::tt_metal::TensorTopology flatbuffer pointer must not be null");
+    }
 
     const auto* fb_dist_shape = fb_topology->distribution_shape();
-    TT_FATAL(fb_dist_shape != nullptr, "distribution_shape is required in tt::tt_metal::TensorTopology");
+    if (fb_dist_shape == nullptr) {
+        throw MalformedTensorError("distribution_shape is required in tt::tt_metal::TensorTopology");
+    }
     auto dist_shape = from_flatbuffer(fb_dist_shape);
 
     ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements;
     if (const auto* fb_placements = fb_topology->placements()) {
         placements.reserve(fb_placements->size());
         for (const auto* p : *fb_placements) {
-            TT_FATAL(p != nullptr, "MeshMapperPlacement element must not be null");
+            if (p == nullptr) {
+                throw MalformedTensorError("MeshMapperPlacement element must not be null");
+            }
             if (p->type() == ttnn::flatbuffer::MeshMapperPlacementType::Replicate) {
                 placements.emplace_back(tt::tt_metal::distributed::MeshMapperConfig::Replicate{});
             } else if (p->type() == ttnn::flatbuffer::MeshMapperPlacementType::Shard) {
                 placements.emplace_back(tt::tt_metal::distributed::MeshMapperConfig::Shard{.dim = p->tensor_dim()});
             } else {
-                TT_THROW("Unknown MeshMapperPlacementType");
+                throw MalformedTensorError("Unknown MeshMapperPlacementType");
             }
         }
     }
@@ -156,7 +163,9 @@ tt::tt_metal::TensorTopology from_flatbuffer(const ttnn::flatbuffer::TensorTopol
     if (const auto* fb_coords = fb_topology->mesh_coords()) {
         mesh_coords.reserve(fb_coords->size());
         for (const auto* c : *fb_coords) {
-            TT_FATAL(c != nullptr, "MeshCoordinate element must not be null");
+            if (c == nullptr) {
+                throw MalformedTensorError("MeshCoordinate element must not be null");
+            }
             mesh_coords.push_back(from_flatbuffer(c));
         }
     }
@@ -268,7 +277,9 @@ Tensor from_flatbuffer(
     auto spec = ttnn::from_flatbuffer(fb_tensor->tensor_spec());
 
     const auto* mesh_shape = fb_tensor->mesh_shape();
-    TT_FATAL(mesh_shape != nullptr, "Mesh shape is required for tensor");
+    if (mesh_shape == nullptr) {
+        throw MalformedTensorError("Mesh shape is required for tensor");
+    }
     const tt::tt_metal::distributed::MeshShape ttnn_mesh_shape = from_flatbuffer(mesh_shape);
 
     // File shards are host-local. Loading them must not initialize MetalContext or acquire device locks.
@@ -281,7 +292,9 @@ Tensor from_flatbuffer(
         const auto* shard = fb_tensor->shards()->Get(i);
 
         const auto* inline_storage = shard->buffer_as<ttnn::flatbuffer::InlineFileStorage>();
-        TT_FATAL(inline_storage != nullptr, "Only InlineFileStorage is supported in flatbuffer deserialization");
+        if (inline_storage == nullptr) {
+            throw MalformedTensorError("Only InlineFileStorage is supported in flatbuffer deserialization");
+        }
 
         const uint64_t offset = inline_storage->offset();
         const uint64_t size = inline_storage->size();
@@ -289,7 +302,9 @@ Tensor from_flatbuffer(
         tt::tt_metal::HostBuffer host_buffer = create_host_buffer_from_bytes(
             size, spec, ttsl::Span<std::byte>(tensor_data.data() + offset, size), memory_pin);
 
-        TT_FATAL(shard->mesh_coordinate() != nullptr, "Mesh coordinate is required for each shard");
+        if (shard->mesh_coordinate() == nullptr) {
+            throw MalformedTensorError("Mesh coordinate is required for each shard");
+        }
         const auto coord = from_flatbuffer(shard->mesh_coordinate());
         distributed_buffer.emplace_shard(
             coord, [host_buffer = std::move(host_buffer)]() mutable { return std::move(host_buffer); });

@@ -107,13 +107,15 @@
   team: ttnn
   budget_type: e2e
 
-# Two ranks co-own one 1x2 mesh. Each rank uploads a complete host tensor, which also holds the other rank's shard.
+# Full and offset distributions exercise uniform and nonuniform uploads with remote host shards.
 - id: bh-galaxy-complete-host-tensor-dual-rank
-  name: BH Galaxy complete host tensor upload on a dual-rank 1x2 mesh
-  cmd: tt-run --mesh-graph-descriptor tests/ttnn/distributed/config/bh_1x2_dual_rank_mesh_graph_descriptor.textproto --hosts "$(hostname)" --mpi-args "--allow-run-as-root --tag-output" pytest -x tests/ttnn/distributed/test_complete_host_tensor_dual_rank.py
+  name: BH Galaxy complete host tensor uploads on dual-rank meshes
+  cmd: >-
+    tt-run --mesh-graph-descriptor tests/ttnn/distributed/config/bh_1x2_dual_rank_mesh_graph_descriptor.textproto --hosts "$(hostname)" --mpi-args "--allow-run-as-root --tag-output" pytest -x tests/ttnn/distributed/test_complete_host_tensor_dual_rank.py
+    && tt-run --mesh-graph-descriptor tests/ttnn/distributed/config/bh_1x4_dual_rank_mesh_graph_descriptor.textproto --hosts "$(hostname)" --mpi-args "--allow-run-as-root --tag-output" pytest -x tests/ttnn/distributed/test_complete_host_tensor_nonuniform_dual_rank.py
   skus:
     bh_galaxy:
-      timeout: 10
+      timeout: 15
   owner_id: U088DBNUKGR # Evan Smal
   team: ttnn
   budget_type: e2e

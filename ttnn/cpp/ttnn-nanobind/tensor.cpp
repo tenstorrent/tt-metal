@@ -189,6 +189,7 @@ void tensor_mem_config_module_types(nb::module_& m_tensor) {
 }
 
 void tensor_mem_config_module(nb::module_& m_tensor) {
+    nb::exception<MalformedTensorError>(m_tensor, "MalformedTensorError", PyExc_RuntimeError);
     nb::enum_<DumpTensorMode>(m_tensor, "DumpTensorMode")
         .value("DISTRIBUTED_GATHER", DumpTensorMode::DISTRIBUTED_GATHER)
         .value("LOCAL", DumpTensorMode::LOCAL);

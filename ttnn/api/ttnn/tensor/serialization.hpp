@@ -8,9 +8,16 @@
 
 #include <cstdint>
 #include <string>
+#include <stdexcept>
 #include <unordered_map>
 
 namespace ttnn {
+
+// Invalid file contents are recoverable by cache callers. I/O and device failures remain separate errors.
+class MalformedTensorError : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
 
 enum class DumpTensorMode : std::uint8_t {
     DISTRIBUTED_GATHER = 0,

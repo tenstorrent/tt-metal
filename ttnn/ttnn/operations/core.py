@@ -762,6 +762,10 @@ def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.MeshDevice 
 
     Returns:
         ttnn.Tensor: the loaded tensor.
+
+    Raises:
+        MalformedTensorError: If file validation detects malformed tensor data.
+            This is a subclass of RuntimeError. I/O and device errors propagate separately.
     """
     file_name = pathlib.Path(file_name)
     _validate_file_extension(file_name)
