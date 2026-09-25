@@ -27,16 +27,18 @@ namespace ckernel::sfpu {
 //     2^-|a - b|    by exp2's bfloat16 body   for a bfloat16 destination
 //     log2(1 + t)   = log1p(t) * log2(e)
 // No new polynomial: log1p sees exactly the same (0, 1] argument range as it does in
-// logaddexp, so its existing coefficient set applies unchanged. A variant with log2(e)
-// folded into its own fit was simulated against torch.logaddexp2 over 262144 pairs from
-// U(-200, 200) and was indistinguishable from this form at every percentile measured; the
-// dominant error is the cancellation in max + correction, not the extra multiply.
+// logaddexp, so the same log1p applies, calculate_log1p_fp32 for fp32 and
+// _sfpu_logaddexp_log1p_unit_bf16_ for bfloat16, with the coefficients logaddexp's init
+// loads. A variant with log2(e) folded into its own fit was simulated against
+// torch.logaddexp2 over 262144 pairs from U(-200, 200) and was indistinguishable from this
+// form at every percentile measured; the dominant error is the cancellation in
+// max + correction, not the extra multiply.
 //
-// Written with at most three live vFloat values, for the same register-spill reason
-// documented in ckernel_sfpu_logaddexp.h.
+// The two inputs are dead once max(a, b) and the gap are known, for the same
+// register-spill reason documented in ckernel_sfpu_logaddexp.h.
 //
-// Equal infinities and NaN operands are handled by _sfpu_logaddexp_max_ and
-// _sfpu_logaddexp_gap_ in ckernel_sfpu_logaddexp.h, shared with logaddexp.
+// Equal infinities and NaN operands are handled by _sfpu_logaddexp_max_gap_ in
+// ckernel_sfpu_logaddexp.h, shared with logaddexp.
 //
 // APPROXIMATION_MODE is accepted and ignored, as in log1p_init: the exponential below is
 // chosen by the destination precision instead, and is never the approximate body, which is
@@ -51,22 +53,21 @@ inline void calculate_sfpu_logaddexp2(const uint dst_index_in0, const uint dst_i
         sfpi::vFloat a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
-        sfpi::vFloat result = _sfpu_logaddexp_max_(a, b);
-        a = _sfpu_logaddexp_gap_(a, b);
-        // The exponential follows the destination precision, as in logaddexp. For bfloat16,
-        // _sfpu_exp2_bf16_ is what exp2 uses for a bfloat16 result: logaddexp's exp_21f
-        // taken in base 2, so the ln 2 multiply drops out. Neither the approximate body nor
-        // an unguarded exponential is usable, for the reasons given in logaddexp; here the
-        // approximate body's 255/256 at zero lands on the correction term whose exact value
-        // at |a - b| = 0 is 1.
+        sfpi::vFloat result;
+        a = _sfpu_logaddexp_max_gap_(a, b, result);
+        // The exponential follows the destination precision, as in logaddexp. For fp32 it is
+        // the guarded exponential, for the reason given there. For bfloat16, _sfpu_exp2_bf16_
+        // is what exp2 uses for a bfloat16 result: logaddexp's exp_21f taken in base 2, so the
+        // ln 2 multiply drops out, and like logaddexp's it rounds 2^0 to exactly 1. The
+        // approximate body is not usable: its 255/256 at zero lands on the correction term
+        // whose exact value at |a - b| = 0 is 1.
         if constexpr (is_fp32_dest_acc_en) {
             b = _sfpu_exp_fp32_accurate_(a * -LN_TWO);
+            result = result + calculate_log1p_fp32<true>(b) * LOG2_E;
         } else {
             b = _sfpu_exp2_bf16_(-a);
-        }
-        result = result + calculate_log1p_fp32<is_fp32_dest_acc_en>(b) * LOG2_E;
+            result = result + _sfpu_logaddexp_log1p_unit_bf16_(b) * LOG2_E;
 
-        if constexpr (!is_fp32_dest_acc_en) {
             // Rounded as in logaddexp: SFPSTORE would truncate, and the hardware rounds a tie
             // away from zero rather than to even.
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
@@ -77,17 +78,17 @@ inline void calculate_sfpu_logaddexp2(const uint dst_index_in0, const uint dst_i
     }
 }
 
-// Identical to logaddexp's init, and for the same reason: log1p reads its polynomial
-// coefficients from the program constant registers and an SFPU helper called from
-// another op's kernel does not carry its own initialisation. The coefficient set differs
-// by destination precision, which is why this init is templated.
+// Identical to logaddexp's init, and for the same reason: the log1p correction reads its
+// polynomial coefficients from the program constant registers and an SFPU helper called
+// from another op's kernel does not carry its own initialisation. The coefficient set
+// differs by destination precision, which is why this init is templated.
 //
 // The base conversion lives in the kernel above, not here, so these constants stay
-// exactly the ones log1p expects.
+// exactly the ones the log1p correction expects.
 template <bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_logaddexp2_init() {
     // Identical setup to logaddexp: both need the log1p coefficients and nothing else. This
-    // forwards instead of repeating the call so the two cannot drift apart.
+    // forwards instead of repeating the setup so the two cannot drift apart.
     calculate_sfpu_logaddexp_init<is_fp32_dest_acc_en>();
 }
 
