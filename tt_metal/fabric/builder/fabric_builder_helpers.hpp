@@ -55,7 +55,7 @@ inline RoutingDirection eth_direction_to_routing_direction(eth_chan_directions d
 // the slot a producer is placed into and the producer named by that slot cannot drift apart.
 //
 // Precondition (checked by the wrappers, not here): producer != facing and both in [E, Z].
-constexpr inline size_t direction_compact_index(eth_chan_directions producer, eth_chan_directions facing) {
+constexpr size_t direction_compact_index(eth_chan_directions producer, eth_chan_directions facing) {
     const size_t p = static_cast<size_t>(producer);
     const size_t f = static_cast<size_t>(facing);
     return p < f ? p : p - 1;
@@ -63,7 +63,7 @@ constexpr inline size_t direction_compact_index(eth_chan_directions producer, et
 
 // Inverse of direction_compact_index: the direction at `compact` among facing's non-self
 // directions, in enum order.
-constexpr inline eth_chan_directions direction_from_compact_index(eth_chan_directions facing, size_t compact) {
+constexpr eth_chan_directions direction_from_compact_index(eth_chan_directions facing, size_t compact) {
     const size_t f = static_cast<size_t>(facing);
     return static_cast<eth_chan_directions>(compact < f ? compact : compact + 1);
 }
