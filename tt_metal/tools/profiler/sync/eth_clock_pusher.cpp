@@ -120,20 +120,25 @@ struct Model {
     uint32_t den = 8;    // REFDIV * postdiv0
     uint32_t k8 = 0;     // wall ticks per refclk tick in eighths
     // The open window: its first sample, the sums past it of the samples' refclk and of their residues against the
-    // slope, (w8 - w0) - k8 * (r - r0), its count, and the count that closes it.
+    // slope, (w8 - w0) - k8 * (r - r0), its count, and the count that closes it. Between windows r0 and w0 are the
+    // last window's first sample.
     uint64_t r0 = 0, w0 = 0;
     uint32_t sr = 0;
     int32_t se = 0;
     uint32_t cnt = 0, size = 1;
-    // The samples not yet in a window or sent, in this RISC's local memory: a read's round trip is ~2 samples, so
-    // kWin holds several reads' worth.
+    // The samples not yet in a window or sent, as low words: each is widened against r0 and w0, which trail it by at
+    // most a window. A read's round trip is ~2 samples, so kWin holds several reads' worth.
     static constexpr uint32_t kWin = 32;
-    uint64_t win_r[kWin] = {}, win_w8[kWin] = {};
+    uint32_t win_r[kWin] = {}, win_w8[kWin] = {};
     uint32_t win_n = 0;  // samples pushed; sample i is at i & (kWin - 1)
     uint32_t done = 0;   // samples before this one are in a window or sent
 };
 
-inline __attribute__((always_inline)) void win_push(Model& m, uint64_t r, uint64_t w8) {
+inline uint64_t widen(uint64_t ref, uint32_t lo) {
+    return ref + static_cast<uint64_t>(static_cast<int64_t>(static_cast<int32_t>(lo - static_cast<uint32_t>(ref))));
+}
+
+FORCE_INLINE void win_push(Model& m, uint32_t r, uint32_t w8) {
     if (m.win_n - m.done >= Model::kWin) {
         m.done = m.win_n - Model::kWin + 1;
     }
@@ -157,16 +162,16 @@ __attribute__((noinline)) void close_window(Model& m, uint32_t role) {
     m.size = m.size < (1u << 23) ? m.size * 2u : m.size;
 }
 
-inline __attribute__((always_inline)) void add(Model& m, uint64_t r, uint64_t w8) {
+FORCE_INLINE void add(Model& m, uint32_t r, uint32_t w8) {
     if (m.cnt == 0) {
-        m.r0 = r;
-        m.w0 = w8;
+        m.r0 = widen(m.r0, r);
+        m.w0 = widen(m.w0, w8);
         m.sr = 0;
         m.se = 0;
     }
-    const uint32_t dr = static_cast<uint32_t>(r - m.r0);
+    const uint32_t dr = r - static_cast<uint32_t>(m.r0);
     m.sr += dr;
-    m.se += static_cast<int32_t>(static_cast<uint32_t>(w8 - m.w0) - m.k8 * dr);
+    m.se += static_cast<int32_t>(w8 - static_cast<uint32_t>(m.w0) - m.k8 * dr);
     if (++m.cnt == m.size || dr >= kPointTicks) {
         close_window(m, kp::kSyncLocalPoint);
     }
@@ -174,7 +179,8 @@ inline __attribute__((always_inline)) void add(Model& m, uint64_t r, uint64_t w8
 
 // A sample alone as a point: k8 0 tells the host it is a single reading.
 inline void write_sample(const Model& m, uint32_t i) {
-    pack::add(m.win_r[i & (Model::kWin - 1)], m.win_w8[i & (Model::kWin - 1)], 0, false, m.k8);
+    pack::add(
+        widen(m.r0, m.win_r[i & (Model::kWin - 1)]), widen(m.w0, m.win_w8[i & (Model::kWin - 1)]), 0, false, m.k8);
 }
 
 // A completed read of PLL0 CNTL_1: `issued` and `completed` are the sample counts when it was issued and when its
@@ -201,9 +207,13 @@ __attribute__((noinline)) void on_read(Model& m, uint32_t cntl1, uint32_t issued
 }  // namespace model
 
 // The reads of PLL0 CNTL_1 on NoC 0, one in flight. The destination sits at the register's offset modulo 64 B.
+// The command buffer holds the whole read from the setup on, so a read is one store to NOC_CMD_CTRL; it lands over
+// kNone, which CNTL_1 never reads as (FBDIV 0xFFFF), so its completion is the destination changing.
 namespace pll {
 constexpr uint32_t kCntl1 = ARC_PLL0_BASE + ARC_PLL_CNTL_1;
 constexpr uint32_t kDst = kPllAddr + (kCntl1 & 63u);
+constexpr uint32_t kNone = 0xFFFFFFFFu;
+inline volatile tt_l1_ptr uint32_t* dst() { return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDst); }
 inline uint64_t src(uint32_t reg) { return get_noc_addr(kArcXy & 0xFFFFu, kArcXy >> 16, reg, 0); }
 // A blocking read for the setup, which gives up rather than hang the core.
 inline bool read(uint32_t reg, uint32_t& v) {
@@ -221,14 +231,20 @@ struct Poll {
     uint32_t issued = 0;
     bool out = false;
 };
-inline __attribute__((always_inline)) void step(Poll& p, model::Model& m) {
+FORCE_INLINE void step(Poll& p, model::Model& m) {
     if (!p.out) {
-        noc_async_read(src(kCntl1), kDst, 4, 0);
+        NOC_CMD_BUF_WRITE_REG(0, read_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+        noc_reads_num_issued[0]++;
         p.issued = m.win_n;
         p.out = true;
-    } else if (ncrisc_noc_reads_flushed(0)) {
+        return;
+    }
+    invalidate_l1_cache();
+    const uint32_t v = *dst();
+    if (v != kNone) {
+        *dst() = kNone;
         p.out = false;
-        model::on_read(m, *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDst), p.issued, m.win_n);
+        model::on_read(m, v, p.issued, m.win_n);
     }
 }
 // REFDIV * postdiv0 from PLL0, and the CNTL_1 the first line opens with; false if the divider does not divide eight
@@ -247,26 +263,16 @@ bool setup(model::Model& m) {
     }
     m.cntl1 = c1;
     m.k8 = ((c1 >> 16) * 8u) / m.den;
+    noc_async_read_one_packet_set_state(src(kCntl1), 4, 0, 0);
+    NOC_CMD_BUF_WRITE_REG(0, read_cmd_buf, NOC_RET_ADDR_LO, kDst);
+    NOC_CMD_BUF_WRITE_REG(0, read_cmd_buf, NOC_TARG_ADDR_LO, kCntl1);
+    *dst() = kNone;
     return true;
 }
 }  // namespace pll
 
-// Both clocks' high words and the low words they were last seen at.
-struct Carry {
-    uint32_t r_hi, w_hi, prev_r_lo, prev_w_lo;
-};
-// A caught advance: the new count and the wall of its place, in eighths, go to the model.
-inline __attribute__((always_inline)) void sample(model::Model& m, Carry& c, uint32_t r_lo, uint32_t w, uint32_t pos8) {
-    c.r_hi += r_lo < c.prev_r_lo;
-    c.w_hi += w < c.prev_w_lo;
-    c.prev_r_lo = r_lo;
-    c.prev_w_lo = w;
-    model::win_push(
-        m, (static_cast<uint64_t>(c.r_hi) << 32) | r_lo, (((static_cast<uint64_t>(c.w_hi) << 32) | w) << 3) + pos8);
-}
-
-// The sampler. A pass is kBlocks + 2 blocks of [refclk, refclk, wall, refclk] in one asm block: the load unit takes
-// four loads in four consecutive cycles and idles two, and each block's check of the block before it sits in those two
+// The sampler. A pass is 22 blocks of [refclk, refclk, wall, refclk], unrolled: the load unit takes four loads in
+// four consecutive cycles and idles two, and each block's check of the block before it sits in those two
 // (measured: sixteen such blocks take 96 cycles, as sixteen without the checks do, and a check one block behind its
 // value never waits for it). The refclk reads run unbroken for longer than an advance period at any AICLK, so a pass
 // catches the first advance after it starts whatever its phase, and no phase of the loop against the advances can
@@ -279,233 +285,54 @@ inline __attribute__((always_inline)) void sample(model::Model& m, Carry& c, uin
 // it without bias; the pairs' widths are measured before the go word from the catches' share of each, the reads placed
 // from the one a cycle before the wall read.
 namespace sampler {
-constexpr uint32_t kBlocks = 20;
-inline __attribute__((always_inline)) uint32_t pass(uint32_t (&w)[3], uint32_t (&o)[4]) {
+// clang-format off
+// One block, set S: its four reads, then the check of the two blocks before it, catching at hit K.
+#define SAMPLER_READS(S) \
+    "lw %[" S "_1], 0(%[cfr])\n\t" \
+    "lw %[" S "_2], 0(%[cfr])\n\t" \
+    "lw %[" S "_0], 0(%[wall])\n\t" \
+    "lw %[" S "_3], 0(%[cfr])\n\t"
+#define SAMPLER_BLOCK(S, PREV, PREV2, K) SAMPLER_READS(S) "bne %[" PREV "_3], %[" PREV2 "_3], .Lh%=_" K "\n\tnop\n\t"
+#define SAMPLER_B0(K) SAMPLER_BLOCK("s1", "s0", "s2", K)
+#define SAMPLER_B1(K) SAMPLER_BLOCK("s2", "s1", "s0", K)
+#define SAMPLER_B2(K) SAMPLER_BLOCK("s0", "s2", "s1", K)
+#define SAMPLER_HIT(K, ST, T) ".Lh%=_" K ":\n\tli %[st], " ST "\n\tj .Lt%=_" T "\n\t"
+// The catching block's wall reads and those either side (A before, C after), and its refclk reads from the one before.
+#define SAMPLER_TAIL(T, A, B, C)    \
+    ".Lt%=_" T ":\n\t"             \
+    "mv %[a], %[" A "_0]\n\t"      \
+    "mv %[b], %[" B "_0]\n\t"      \
+    "mv %[c], %[" C "_0]\n\t"      \
+    "mv %[o0], %[" A "_3]\n\t"     \
+    "mv %[o1], %[" B "_1]\n\t"     \
+    "mv %[o2], %[" B "_2]\n\t"     \
+    "mv %[o3], %[" B "_3]\n\t"
+// clang-format on
+// The pass is asm: compiled from C, the same blocks placed every sample 0.15 ns off with the same calibration, and
+// one added nop made the compiler spill in every block.
+FORCE_INLINE uint32_t pass(uint32_t (&w)[3], uint32_t (&o)[4]) {
     uint32_t st, w0, w1, w2, o0, o1, o2, o3, x0, x1, x2, x3, x4, x5, x6, x7, x8, x9, x10, x11;
     asm volatile(
         ".option push\n\t"
         ".option norvc\n\t"
         "csrrsi zero, 0x7c0, 2\n\t"
-        "lw %[s2_1], 0(%[cfr])\n\t"
-        "lw %[s2_2], 0(%[cfr])\n\t"
-        "lw %[s2_0], 0(%[wall])\n\t"
-        "lw %[s2_3], 0(%[cfr])\n\t"
-        "nop\n\t"
-        "nop\n\t"
-        "lw %[s0_1], 0(%[cfr])\n\t"
-        "lw %[s0_2], 0(%[cfr])\n\t"
-        "lw %[s0_0], 0(%[wall])\n\t"
-        "lw %[s0_3], 0(%[cfr])\n\t"
-        "nop\n\t"
-        "nop\n\t"
-        "lw %[s1_1], 0(%[cfr])\n\t"
-        "lw %[s1_2], 0(%[cfr])\n\t"
-        "lw %[s1_0], 0(%[wall])\n\t"
-        "lw %[s1_3], 0(%[cfr])\n\t"
-        "bne %[s0_3], %[s2_3], .Lh%=_0\n\t"
-        "nop\n\t"
-        "lw %[s2_1], 0(%[cfr])\n\t"
-        "lw %[s2_2], 0(%[cfr])\n\t"
-        "lw %[s2_0], 0(%[wall])\n\t"
-        "lw %[s2_3], 0(%[cfr])\n\t"
-        "bne %[s1_3], %[s0_3], .Lh%=_1\n\t"
-        "nop\n\t"
-        "lw %[s0_1], 0(%[cfr])\n\t"
-        "lw %[s0_2], 0(%[cfr])\n\t"
-        "lw %[s0_0], 0(%[wall])\n\t"
-        "lw %[s0_3], 0(%[cfr])\n\t"
-        "bne %[s2_3], %[s1_3], .Lh%=_2\n\t"
-        "nop\n\t"
-        "lw %[s1_1], 0(%[cfr])\n\t"
-        "lw %[s1_2], 0(%[cfr])\n\t"
-        "lw %[s1_0], 0(%[wall])\n\t"
-        "lw %[s1_3], 0(%[cfr])\n\t"
-        "bne %[s0_3], %[s2_3], .Lh%=_3\n\t"
-        "nop\n\t"
-        "lw %[s2_1], 0(%[cfr])\n\t"
-        "lw %[s2_2], 0(%[cfr])\n\t"
-        "lw %[s2_0], 0(%[wall])\n\t"
-        "lw %[s2_3], 0(%[cfr])\n\t"
-        "bne %[s1_3], %[s0_3], .Lh%=_4\n\t"
-        "nop\n\t"
-        "lw %[s0_1], 0(%[cfr])\n\t"
-        "lw %[s0_2], 0(%[cfr])\n\t"
-        "lw %[s0_0], 0(%[wall])\n\t"
-        "lw %[s0_3], 0(%[cfr])\n\t"
-        "bne %[s2_3], %[s1_3], .Lh%=_5\n\t"
-        "nop\n\t"
-        "lw %[s1_1], 0(%[cfr])\n\t"
-        "lw %[s1_2], 0(%[cfr])\n\t"
-        "lw %[s1_0], 0(%[wall])\n\t"
-        "lw %[s1_3], 0(%[cfr])\n\t"
-        "bne %[s0_3], %[s2_3], .Lh%=_6\n\t"
-        "nop\n\t"
-        "lw %[s2_1], 0(%[cfr])\n\t"
-        "lw %[s2_2], 0(%[cfr])\n\t"
-        "lw %[s2_0], 0(%[wall])\n\t"
-        "lw %[s2_3], 0(%[cfr])\n\t"
-        "bne %[s1_3], %[s0_3], .Lh%=_7\n\t"
-        "nop\n\t"
-        "lw %[s0_1], 0(%[cfr])\n\t"
-        "lw %[s0_2], 0(%[cfr])\n\t"
-        "lw %[s0_0], 0(%[wall])\n\t"
-        "lw %[s0_3], 0(%[cfr])\n\t"
-        "bne %[s2_3], %[s1_3], .Lh%=_8\n\t"
-        "nop\n\t"
-        "lw %[s1_1], 0(%[cfr])\n\t"
-        "lw %[s1_2], 0(%[cfr])\n\t"
-        "lw %[s1_0], 0(%[wall])\n\t"
-        "lw %[s1_3], 0(%[cfr])\n\t"
-        "bne %[s0_3], %[s2_3], .Lh%=_9\n\t"
-        "nop\n\t"
-        "lw %[s2_1], 0(%[cfr])\n\t"
-        "lw %[s2_2], 0(%[cfr])\n\t"
-        "lw %[s2_0], 0(%[wall])\n\t"
-        "lw %[s2_3], 0(%[cfr])\n\t"
-        "bne %[s1_3], %[s0_3], .Lh%=_10\n\t"
-        "nop\n\t"
-        "lw %[s0_1], 0(%[cfr])\n\t"
-        "lw %[s0_2], 0(%[cfr])\n\t"
-        "lw %[s0_0], 0(%[wall])\n\t"
-        "lw %[s0_3], 0(%[cfr])\n\t"
-        "bne %[s2_3], %[s1_3], .Lh%=_11\n\t"
-        "nop\n\t"
-        "lw %[s1_1], 0(%[cfr])\n\t"
-        "lw %[s1_2], 0(%[cfr])\n\t"
-        "lw %[s1_0], 0(%[wall])\n\t"
-        "lw %[s1_3], 0(%[cfr])\n\t"
-        "bne %[s0_3], %[s2_3], .Lh%=_12\n\t"
-        "nop\n\t"
-        "lw %[s2_1], 0(%[cfr])\n\t"
-        "lw %[s2_2], 0(%[cfr])\n\t"
-        "lw %[s2_0], 0(%[wall])\n\t"
-        "lw %[s2_3], 0(%[cfr])\n\t"
-        "bne %[s1_3], %[s0_3], .Lh%=_13\n\t"
-        "nop\n\t"
-        "lw %[s0_1], 0(%[cfr])\n\t"
-        "lw %[s0_2], 0(%[cfr])\n\t"
-        "lw %[s0_0], 0(%[wall])\n\t"
-        "lw %[s0_3], 0(%[cfr])\n\t"
-        "bne %[s2_3], %[s1_3], .Lh%=_14\n\t"
-        "nop\n\t"
-        "lw %[s1_1], 0(%[cfr])\n\t"
-        "lw %[s1_2], 0(%[cfr])\n\t"
-        "lw %[s1_0], 0(%[wall])\n\t"
-        "lw %[s1_3], 0(%[cfr])\n\t"
-        "bne %[s0_3], %[s2_3], .Lh%=_15\n\t"
-        "nop\n\t"
-        "lw %[s2_1], 0(%[cfr])\n\t"
-        "lw %[s2_2], 0(%[cfr])\n\t"
-        "lw %[s2_0], 0(%[wall])\n\t"
-        "lw %[s2_3], 0(%[cfr])\n\t"
-        "bne %[s1_3], %[s0_3], .Lh%=_16\n\t"
-        "nop\n\t"
-        "lw %[s0_1], 0(%[cfr])\n\t"
-        "lw %[s0_2], 0(%[cfr])\n\t"
-        "lw %[s0_0], 0(%[wall])\n\t"
-        "lw %[s0_3], 0(%[cfr])\n\t"
-        "bne %[s2_3], %[s1_3], .Lh%=_17\n\t"
-        "nop\n\t"
-        "lw %[s1_1], 0(%[cfr])\n\t"
-        "lw %[s1_2], 0(%[cfr])\n\t"
-        "lw %[s1_0], 0(%[wall])\n\t"
-        "lw %[s1_3], 0(%[cfr])\n\t"
-        "bne %[s0_3], %[s2_3], .Lh%=_18\n\t"
-        "nop\n\t"
-        "lw %[s2_1], 0(%[cfr])\n\t"
-        "lw %[s2_2], 0(%[cfr])\n\t"
-        "lw %[s2_0], 0(%[wall])\n\t"
-        "lw %[s2_3], 0(%[cfr])\n\t"
-        "bne %[s1_3], %[s0_3], .Lh%=_19\n\t"
-        "nop\n\t"
+        SAMPLER_READS("s2") "nop\n\tnop\n\t"
+        SAMPLER_READS("s0") "nop\n\tnop\n\t"
+        SAMPLER_B0("0") SAMPLER_B1("1") SAMPLER_B2("2") SAMPLER_B0("3") SAMPLER_B1("4") SAMPLER_B2("5")
+        SAMPLER_B0("6") SAMPLER_B1("7") SAMPLER_B2("8") SAMPLER_B0("9") SAMPLER_B1("10") SAMPLER_B2("11")
+        SAMPLER_B0("12") SAMPLER_B1("13") SAMPLER_B2("14") SAMPLER_B0("15") SAMPLER_B1("16") SAMPLER_B2("17")
+        SAMPLER_B0("18") SAMPLER_B1("19")
         "li %[st], 0\n\t"
         "j .Le%=\n\t"
-        ".Lh%=_0:\n\t"
-        "li %[st], 1\n\t"
-        "j .Lt%=_0\n\t"
-        ".Lh%=_1:\n\t"
-        "li %[st], 2\n\t"
-        "j .Lt%=_1\n\t"
-        ".Lh%=_2:\n\t"
-        "li %[st], 3\n\t"
-        "j .Lt%=_2\n\t"
-        ".Lh%=_3:\n\t"
-        "li %[st], 4\n\t"
-        "j .Lt%=_0\n\t"
-        ".Lh%=_4:\n\t"
-        "li %[st], 5\n\t"
-        "j .Lt%=_1\n\t"
-        ".Lh%=_5:\n\t"
-        "li %[st], 6\n\t"
-        "j .Lt%=_2\n\t"
-        ".Lh%=_6:\n\t"
-        "li %[st], 7\n\t"
-        "j .Lt%=_0\n\t"
-        ".Lh%=_7:\n\t"
-        "li %[st], 8\n\t"
-        "j .Lt%=_1\n\t"
-        ".Lh%=_8:\n\t"
-        "li %[st], 9\n\t"
-        "j .Lt%=_2\n\t"
-        ".Lh%=_9:\n\t"
-        "li %[st], 10\n\t"
-        "j .Lt%=_0\n\t"
-        ".Lh%=_10:\n\t"
-        "li %[st], 11\n\t"
-        "j .Lt%=_1\n\t"
-        ".Lh%=_11:\n\t"
-        "li %[st], 12\n\t"
-        "j .Lt%=_2\n\t"
-        ".Lh%=_12:\n\t"
-        "li %[st], 13\n\t"
-        "j .Lt%=_0\n\t"
-        ".Lh%=_13:\n\t"
-        "li %[st], 14\n\t"
-        "j .Lt%=_1\n\t"
-        ".Lh%=_14:\n\t"
-        "li %[st], 15\n\t"
-        "j .Lt%=_2\n\t"
-        ".Lh%=_15:\n\t"
-        "li %[st], 16\n\t"
-        "j .Lt%=_0\n\t"
-        ".Lh%=_16:\n\t"
-        "li %[st], 17\n\t"
-        "j .Lt%=_1\n\t"
-        ".Lh%=_17:\n\t"
-        "li %[st], 18\n\t"
-        "j .Lt%=_2\n\t"
-        ".Lh%=_18:\n\t"
-        "li %[st], 19\n\t"
-        "j .Lt%=_0\n\t"
-        ".Lh%=_19:\n\t"
-        "li %[st], 20\n\t"
-        "j .Lt%=_1\n\t"
-        ".Lt%=_0:\n\t"
-        "mv %[a], %[s2_0]\n\t"
-        "mv %[b], %[s0_0]\n\t"
-        "mv %[c], %[s1_0]\n\t"
-        "mv %[o0], %[s2_3]\n\t"
-        "mv %[o1], %[s0_1]\n\t"
-        "mv %[o2], %[s0_2]\n\t"
-        "mv %[o3], %[s0_3]\n\t"
-        "j .Le%=\n\t"
-        ".Lt%=_1:\n\t"
-        "mv %[a], %[s0_0]\n\t"
-        "mv %[b], %[s1_0]\n\t"
-        "mv %[c], %[s2_0]\n\t"
-        "mv %[o0], %[s0_3]\n\t"
-        "mv %[o1], %[s1_1]\n\t"
-        "mv %[o2], %[s1_2]\n\t"
-        "mv %[o3], %[s1_3]\n\t"
-        "j .Le%=\n\t"
-        ".Lt%=_2:\n\t"
-        "mv %[a], %[s1_0]\n\t"
-        "mv %[b], %[s2_0]\n\t"
-        "mv %[c], %[s0_0]\n\t"
-        "mv %[o0], %[s1_3]\n\t"
-        "mv %[o1], %[s2_1]\n\t"
-        "mv %[o2], %[s2_2]\n\t"
-        "mv %[o3], %[s2_3]\n\t"
+        SAMPLER_HIT("0", "1", "0") SAMPLER_HIT("1", "2", "1") SAMPLER_HIT("2", "3", "2") SAMPLER_HIT("3", "4", "0")
+        SAMPLER_HIT("4", "5", "1") SAMPLER_HIT("5", "6", "2") SAMPLER_HIT("6", "7", "0") SAMPLER_HIT("7", "8", "1")
+        SAMPLER_HIT("8", "9", "2") SAMPLER_HIT("9", "10", "0") SAMPLER_HIT("10", "11", "1")
+        SAMPLER_HIT("11", "12", "2") SAMPLER_HIT("12", "13", "0") SAMPLER_HIT("13", "14", "1")
+        SAMPLER_HIT("14", "15", "2") SAMPLER_HIT("15", "16", "0") SAMPLER_HIT("16", "17", "1")
+        SAMPLER_HIT("17", "18", "2") SAMPLER_HIT("18", "19", "0") SAMPLER_HIT("19", "20", "1")
+        SAMPLER_TAIL("0", "s2", "s0", "s1") "j .Le%=\n\t"
+        SAMPLER_TAIL("1", "s0", "s1", "s2") "j .Le%=\n\t"
+        SAMPLER_TAIL("2", "s1", "s2", "s0")
         ".Le%=:\n\t"
         "csrrci zero, 0x7c0, 2\n\t"
         ".option pop\n\t"
@@ -541,8 +368,10 @@ inline __attribute__((always_inline)) uint32_t pass(uint32_t (&w)[3], uint32_t (
     return st;
 }
 __attribute__((noinline)) uint32_t pass_out_of_line(uint32_t (&w)[3], uint32_t (&o)[4]) { return pass(w, o); }
-inline __attribute__((always_inline)) void pad(uint32_t& walk) {
-    walk = walk * 1103515245u + 12345u;
+FORCE_INLINE void pad(uint32_t& walk) {
+    walk ^= walk << 13;
+    walk ^= walk >> 17;
+    walk ^= walk << 5;
     const uint32_t n = ((walk >> 16) * 6u) >> 16;
     asm volatile(
         ".option push\n\t"
@@ -571,7 +400,7 @@ struct Catch {
     uint32_t r, w, pos8, pair;
 };
 template <uint32_t (*Pass)(uint32_t (&)[3], uint32_t (&)[4])>
-inline __attribute__((always_inline)) bool take(uint32_t& walk, Catch& c, const Table& t) {
+FORCE_INLINE bool take(uint32_t& walk, Catch& c, const Table& t) {
     uint32_t w[3], o[4];
     pad(walk);
     if (Pass(w, o) == 0 || w[1] - w[0] != t.period || w[2] - w[1] != t.period) {
@@ -660,17 +489,15 @@ void kernel_main() {
         invalidate_l1_cache();
     }
 
-    // Both clocks' high words are carried from the low words' wraps, which at this rate no sweep can hide (86 s and
-    // 3.2 s periods).
     const eth_ptp::Instant start = eth_ptp::read_instant();
-    Carry carry{
-        static_cast<uint32_t>(start.refclk >> 32), start.wall_hi, static_cast<uint32_t>(start.refclk), start.wall_lo};
+    m.r0 = start.refclk;
+    m.w0 = start.wall() << 3;
     pll::Poll poll;
     uint32_t iter = 0, walk = start.wall_lo | 1u;
     while (true) {
         sampler::Catch c;
         if (sampler::take<sampler::pass>(walk, c, table)) {
-            sample(m, carry, c.r, c.w, c.pos8);
+            model::win_push(m, c.r, (c.w << 3) + c.pos8);
         }
         pll::step(poll, m);
         if ((++iter & 255u) != 0u) {
