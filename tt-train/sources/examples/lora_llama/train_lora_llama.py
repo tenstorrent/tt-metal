@@ -391,7 +391,7 @@ def main():
         else:
             loss = ttml.ops.loss.cross_entropy_loss(logits, tt_y, ttml.ops.ReduceType.MEAN)
 
-        if use_ddp:
+        if use_ddp or use_tp:
             loss_val = float(get_loss_over_devices(loss))
         else:
             loss_val = float(loss.get_value().item())
@@ -406,8 +406,7 @@ def main():
 
         autograd_ctx.reset_graph()
 
-        if use_ddp:
-            ttml.sync_gradients(model.parameters())
+        ttml.sync_gradients(model.parameters())
 
         optimizer.step()
         step_ms = (time.perf_counter() - t0) * 1000

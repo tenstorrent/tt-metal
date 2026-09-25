@@ -143,24 +143,28 @@ class LoraColumnParallelLinear(AbstractModuleBase):
             self.bias.tensor.set_requires_grad(config.is_bias_trainable)
 
         self.lora_A = Parameter(_create_lora_A(self.in_features, config.rank))
+        if self.sequence_parallel:
+            mark_sequence_parallel(self.lora_A)
         lora_B_mapper = ttml.mesh().axis_mapper(self.axis_name, tdim=2)
         self.lora_B = Parameter(_create_lora_B(config.rank, self.out_features, mapper=lora_B_mapper))
 
     def forward(self, x):
         bias_t = self.bias.tensor if self.bias is not None else None
+        lora_input = x
         x = column_parallel_input(x, self.cluster_axis, self.sequence_parallel)
         base = ttml.ops.linear.linear(x, self.weight.tensor, bias_t)
         if self.gather_output:
             base = ttml.ops.distributed.all_gather(
                 base, 3, self.cluster_axis, ttml.ops.distributed.GradOutputType.REPLICATED
             )
-        # lora_A is replicated so it operates on the full input; lora_B is
-        # column-sharded, producing a sharded update that must be gathered
-        # whenever the base path is gathered.
-        lora_input = x
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
-            lora_input = ttml.ops.dropout.dropout(x, self.dropout_prob)
+            lora_input = ttml.ops.dropout.dropout(
+                lora_input, self.dropout_prob, use_per_device_seed=self.sequence_parallel
+            )
         h = ttml.ops.linear.linear(lora_input, self.lora_A.tensor, None)
+        h = column_parallel_input(h, self.cluster_axis, self.sequence_parallel)
+        # lora_B is column-sharded, producing a sharded update that must be gathered
+        # whenever the base path is gathered.
         lora_update = ttml.ops.linear.linear(h, self.lora_B.tensor, None)
         if self.gather_output:
             lora_update = ttml.ops.distributed.all_gather(

@@ -15,7 +15,7 @@ import ttnn
 import ttml
 from ttml.models import EmbeddingPlacement, WeightTyingType
 from ttml.models.llama import Llama, LlamaConfig
-from ttml.modules import LoraConfig, LoraModel
+from ttml.modules import LoraColumnParallelLinear, LoraConfig, LoraModel
 from ttml.parallel import TPStrategy, is_sequence_parallel
 from bf16_ulp import assert_within_bf16_ulp
 
@@ -158,24 +158,40 @@ class TestMatchesTensorParallel:
             for optimizer in optimizers:
                 optimizer.step()
 
-    def test_lora(self):
-        """The adapters reuse the base layers' collectives, so SP needs no LoRA-specific math."""
+    @pytest.mark.parametrize("dropout", [0.0, 0.1])
+    def test_lora(self, dropout):
         tp_model, sp_model = paired_models()
         lora = LoraConfig(
-            rank=8, target_modules=["qkv_linear", "out_linear", "w_gate_up", "w2"], trainable_modules=["_norm", "ln_fc"]
+            rank=8,
+            target_modules=["qkv_linear", "out_linear", "w_gate_up", "w2"],
+            trainable_modules=["_norm", "ln_fc"],
+            lora_dropout=dropout,
         )
         wrapped = []
         for model in (tp_model, sp_model):
             np.random.seed(0)  # lora_A is drawn from numpy's global RNG
             wrapped.append(LoraModel(model, lora))
         tp_lora, sp_lora = wrapped
-        ids, mask = token_ids(1, SEQ_LEN, seed=9), causal_mask(SEQ_LEN)
-        for model in (tp_lora, sp_lora):
-            backward(model, ids, mask)
+        optimizers = [adamw(model) for model in wrapped]
+        for step in range(2):
+            ids, mask = token_ids(1, SEQ_LEN, seed=step), causal_mask(SEQ_LEN)
+            for model, optimizer in zip(wrapped, optimizers):
+                optimizer.zero_grad()
+                backward(model, ids, mask)
+            ttml.sync_gradients(sp_lora.parameters())
+            if step == 0:
+                for optimizer in optimizers:
+                    optimizer.step()
 
-        ttml.sync_gradients(sp_lora.parameters())
-
-        assert_same_grads(sp_lora, tp_lora)
+        for model in wrapped:
+            column = [(n, m) for n, m in model.named_modules() if isinstance(m, LoraColumnParallelLinear)]
+            assert len(column) == 2 * N_LAYERS  # qkv_linear and w_gate_up per block
+            for name, module in column:
+                grads = per_rank(module.lora_A.tensor.get_grad_tensor())
+                assert np.abs(grads).max() > 0, f"{name}: a zero gradient would prove nothing"
+                np.testing.assert_array_equal(grads[:, 0], grads[:, 1], err_msg=f"{name}: tp ranks disagree")
+        if dropout == 0.0:  # SP draws a mask per sequence shard, so with dropout the two sample different masks
+            assert_same_grads(sp_lora, tp_lora)
 
     def test_marks_the_parameters_of_the_sequence_sharded_region(self):
         """Exactly the norm gains and the row-parallel bias see a per-rank slice of the sequence."""
