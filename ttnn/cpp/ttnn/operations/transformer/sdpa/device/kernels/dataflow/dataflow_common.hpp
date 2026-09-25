@@ -1078,12 +1078,18 @@ void generate_noncausal_padded_mask(Noc noc, uint32_t Sq_chunk_t, uint32_t Sk_ch
     cb.push_back(mask_size_tiles);
 }
 
+// Default progress policy for reads with no background work.
+struct NoReadProgress {
+    void operator()() const {}
+};
+
 // Issue noc.async_read for a (num_rows x cols) tile block. tile_id starts at base_tile_id,
 // advances by ++ per col and by row_stride per row (i.e., tile_id += row_stride - cols after each
 // inner col loop). dst starts at dst_addr + dst_row_origin * outer_stride, advances by
 // inner_stride per col and outer_stride per row. No barrier - caller must noc.async_read_barrier().
 // barrier_threshold > 0 fires a partial barrier every barrier_threshold tiles.
-template <typename ReaderType>
+// Optional progress policy runs before each read. The default is a compile-time no-op.
+template <typename ReaderType, typename ReadProgress = NoReadProgress>
 inline void issue_block_reads(
     const ReaderType& reader,
     uint32_t base_tile_id,
@@ -1095,7 +1101,8 @@ inline void issue_block_reads(
     uint32_t outer_stride,
     uint32_t inner_stride,
     uint32_t barrier_threshold,
-    uint32_t& barrier_count) {
+    uint32_t& barrier_count,
+    ReadProgress read_progress = {}) {
     uint32_t tile_id = base_tile_id;
     uint32_t tile_bytes;
     if constexpr (has_get_aligned_page_size_v<ReaderType>) {
@@ -1107,6 +1114,7 @@ inline void issue_block_reads(
     for (uint32_t r = 0; r < num_rows; ++r) {
         uint32_t dst = dst_addr + (dst_row_origin + r) * outer_stride;
         for (uint32_t col = 0; col < cols; ++col) {
+            read_progress();
             noc.async_read(reader, CoreLocalMem<uint32_t>(dst), tile_bytes, {.page_id = tile_id}, {});
             ++tile_id;
             dst += inner_stride;
@@ -1230,6 +1238,7 @@ struct CatAddrGenerator {
     // (first tensor / gap / second tensor / tail); each valid segment hoists id_of once.
     // end_seq_tile is unused: bounds come from first_shape/second_shape; signature kept for
     // API symmetry with PaddedAddrGenerator (fetch_block dispatches generically).
+    template <typename ReadProgress = NoReadProgress>
     void issue_reads(
         const Slice& slice,
         uint32_t /*end_seq_tile*/,
@@ -1237,7 +1246,8 @@ struct CatAddrGenerator {
         uint32_t dst_addr,
         uint32_t outer_stride,
         uint32_t inner_stride,
-        uint32_t barrier_threshold) const {
+        uint32_t barrier_threshold,
+        ReadProgress read_progress = {}) const {
         const uint32_t d2_start = slice.d2_start;
         const uint32_t d2_end = slice.d2_end;
         const uint32_t cols = slice.get_d3_size();
@@ -1260,7 +1270,8 @@ struct CatAddrGenerator {
                 outer_stride,
                 inner_stride,
                 barrier_threshold,
-                barrier_count);
+                barrier_count,
+                read_progress);
         }
         // Segment 1: gap (zero-fill).
         const uint32_t s1_start = std::max(d2_start, first_end);
@@ -1291,7 +1302,8 @@ struct CatAddrGenerator {
                 outer_stride,
                 inner_stride,
                 barrier_threshold,
-                barrier_count);
+                barrier_count,
+                read_progress);
         }
         // Segment 3: tail (zero-fill).
         const uint32_t s3_start = std::max(d2_start, second_end);
@@ -1375,6 +1387,7 @@ struct PaddedAddrGenerator {
     // Issue async NoC reads for a slice to L1. No barrier — caller must issue a
     // read barrier. Splits valid rows from the padded tail at loop level (no
     // in_bounds branch in the hot path); valid rows advance tile_id by arithmetic only.
+    template <typename ReadProgress = NoReadProgress>
     void issue_reads(
         const Slice& slice,
         uint32_t end_seq_tile,
@@ -1382,7 +1395,8 @@ struct PaddedAddrGenerator {
         uint32_t dst_addr,
         uint32_t outer_stride,
         uint32_t inner_stride,
-        uint32_t barrier_threshold) const {
+        uint32_t barrier_threshold,
+        ReadProgress read_progress = {}) const {
         const uint32_t d2_start = slice.d2_start;
         const uint32_t rows = slice.get_d2_size();
         const uint32_t cols = slice.get_d3_size();
@@ -1403,7 +1417,8 @@ struct PaddedAddrGenerator {
             outer_stride,
             inner_stride,
             barrier_threshold,
-            barrier_count);
+            barrier_count,
+            read_progress);
         // Padded tail: zero-fill.
         zero_fill_block(
             reader,
@@ -1483,7 +1498,7 @@ PaddedAddrGenerator(const ReaderType&, TensorShapeType) -> PaddedAddrGenerator<R
 // noinline: reader (NCRISC) has 3+ call sites and the issue_reads body is large enough that
 // inlining at every site overflows the TENSIX kernel-config ringbuffer. Function-call
 // overhead is negligible next to the per-block NoC reads.
-template <typename CatAddrGeneratorType>
+template <typename CatAddrGeneratorType, typename ReadProgress = NoReadProgress>
 __attribute__((noinline)) void fetch_block(
     const CatAddrGeneratorType& cat_addr_generator,
     const Slice& src_slice,
@@ -1492,7 +1507,8 @@ __attribute__((noinline)) void fetch_block(
     const uint32_t dst_addr,
     const uint32_t tile_bytes,
     const bool transpose,
-    const uint32_t barrier_threshold = 0) {
+    const uint32_t barrier_threshold = 0,
+    ReadProgress read_progress = {}) {
     Noc noc;
     const uint32_t src_rows = src_slice.get_d2_size();
     const uint32_t src_cols = src_slice.get_d3_size();
@@ -1500,7 +1516,14 @@ __attribute__((noinline)) void fetch_block(
     const uint32_t inner_ptr_stride = transpose ? tile_bytes * src_rows : tile_bytes;
 
     cat_addr_generator.issue_reads(
-        src_slice, end_seq_tile, dst_cb_id, dst_addr, outer_ptr_stride, inner_ptr_stride, barrier_threshold);
+        src_slice,
+        end_seq_tile,
+        dst_cb_id,
+        dst_addr,
+        outer_ptr_stride,
+        inner_ptr_stride,
+        barrier_threshold,
+        read_progress);
     // issue_reads internally emits noc.async_read (NOC) AND zero_fill_block → async_write_zeros
     // (iDMA on Quasar). NOC reads and async_write_zeros use the same completion path on WH/BH
     // but different paths on Quasar. Issue both — second is a no-op on WH/BH.
