@@ -1739,31 +1739,32 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         Call immediately before mesh close; continuing inference after this terminal release is
         unsupported because the startup capture is intentionally not rebuilt mid-process.
         """
-        for row in list(getattr(self, "_sessions", {})):
-            try:
-                self.release_request(row)
-            except BaseException as cleanup_error:
-                logger.error(f"failed to detach active request {row} during persistent release: {cleanup_error}")
+        try:
+            for row in list(getattr(self, "_sessions", {})):
+                try:
+                    self.release_request(row)
+                except BaseException as cleanup_error:
+                    logger.error(f"failed to detach active request {row} during persistent release: {cleanup_error}")
 
-        adapter = getattr(self, "_persistent_adapter", None)
-        self._persistent_adapter = None
-        if adapter is None:
-            return
-
-        attr = "_upfront_traced_denoise_controller"
-        controller = getattr(adapter, attr, None)
-        if controller is not None:
-            try:
-                controller.release()
-            except BaseException as cleanup_error:
-                logger.error(f"failed to release persistent serving controller {attr}: {cleanup_error}")
-            finally:
-                delattr(adapter, attr)
-        if hasattr(adapter, "reset"):
-            try:
-                adapter.reset()
-            except BaseException as cleanup_error:
-                logger.error(f"failed to release persistent serving adapter: {cleanup_error}")
+            adapter = getattr(self, "_persistent_adapter", None)
+            self._persistent_adapter = None
+            if adapter is not None:
+                attr = "_upfront_traced_denoise_controller"
+                controller = getattr(adapter, attr, None)
+                if controller is not None:
+                    try:
+                        controller.release()
+                    except BaseException as cleanup_error:
+                        logger.error(f"failed to release persistent serving controller {attr}: {cleanup_error}")
+                    finally:
+                        delattr(adapter, attr)
+                if hasattr(adapter, "reset"):
+                    try:
+                        adapter.reset()
+                    except BaseException as cleanup_error:
+                        logger.error(f"failed to release persistent serving adapter: {cleanup_error}")
+        finally:
+            super().release_persistent_capture()
 
     def __del__(self):
         """Release DiffusionGemma-owned traces before inherited model/mesh teardown."""

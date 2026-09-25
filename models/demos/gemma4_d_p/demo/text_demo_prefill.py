@@ -36,8 +36,8 @@ LAYER_PERF_CONTEXT_LENGTHS = (262144,)
 TRACE_REGION_SIZE = int(os.environ.get("GEMMA4_PREFILL_TRACE_REGION_SIZE", 256_000_000))
 
 
-def _model_path():
-    return os.getenv("HF_MODEL") or os.getenv("GEMMA4_MODEL_PATH", "google/gemma-4-31B-it")
+def _hf_model_id():
+    return os.getenv("HF_MODEL")
 
 
 def _load_full_weights():
@@ -49,43 +49,18 @@ def _load_full_weights():
 
 
 def _mesh_config(mesh_device):
-    tp = mesh_device.shape[1]
-    return MeshConfig(mesh_device.shape)
+    return MeshConfig(mesh_device)
 
 
 # ── Prefill inputs ────────────────────────────────────────────────────────────
 
 
-def _host_tensor(mesh_device, torch_tensor, dtype, layout, mesh_config=None, seq_dim=-2):
-    """Host-resident ttnn tensor, replicated across the mesh.
-
-    Kept on host (``device=None``) so it can be pushed into the same device buffer
-    before every trace replay, matching ``Generator._capture_trace_prefill``.
-
-    With a context-parallel ``mesh_config``, the sequence dimension is sharded
-    across the CP axis instead of replicated, so each rank receives only the tokens
-    it owns. The scatter is free here — it is just a different mesh mapper at
-    staging time, with no collective involved.
-
-    ``seq_dim`` is which axis of ``torch_tensor`` holds the sequence: -2 for 4D
-    hidden states ``[1, 1, S, H]``, but **-1** for a 2D token-id tensor ``[1, S]``,
-    where -2 is the size-1 batch dim and sharding it would be wrong.
-    """
-    return ttnn.from_torch(
-        torch_tensor,
-        device=None,
-        dtype=dtype,
-        layout=layout,
-        mesh_mapper=_cp_or_replicate_mapper(mesh_device, mesh_config, seq_dim=seq_dim),
-    )
-
-
-def _cp_or_replicate_mapper(mesh_device, mesh_config, seq_dim=-2):
+def _cp_or_replicate_mapper(mesh_config, seq_dim=-2):
     """Create a CP sharding mapper for ``seq_dim``, or a replication mapper."""
-    from models.demos.gemma4_d_p.tt.ccl import cp_degree
+    mesh_device = mesh_config.device
 
-    if mesh_config is not None and cp_degree(mesh_config) > 1:
-        shard_dims = (seq_dim, None) if mesh_config.sp_axis == 0 else (None, seq_dim)
+    if mesh_config is not None and mesh_config.cp_degree > 1:
+        shard_dims = (seq_dim, None) if mesh_config.cp_axis == 0 else (None, seq_dim)
         return ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=shard_dims)
     return ttnn.ReplicateTensorToMesh(mesh_device)
 
@@ -98,7 +73,7 @@ _TOKEN_TEXT_CACHE = pathlib.Path("models/ttt_compat/demo/context_cache")
 
 
 @functools.lru_cache(maxsize=None)
-def _text_token_stream(model_path):
+def _text_token_stream(hf_model_id):
     """The source text tokenized once per process, as ``[1, n]`` int32 ids.
 
     No chat template: it would append a question after the context, so a 32k and a 128k
@@ -117,18 +92,18 @@ def _text_token_stream(model_path):
         text = resp.text
         _TOKEN_TEXT_CACHE.mkdir(parents=True, exist_ok=True)
         cache_file.write_text(text)
-    tokenizer = AutoTokenizer.from_pretrained(model_path)
+    tokenizer = AutoTokenizer.from_pretrained(hf_model_id)
     return torch.tensor(tokenizer.encode(text), dtype=torch.int32).unsqueeze(0)
 
 
-def _get_prefill_tokens(model_path, context_len, vocab_size, source="text"):
+def _get_prefill_tokens(hf_model_id, context_len, vocab_size, source="text"):
     """Return prefix-consistent token IDs from text or a fixed-seed random stream."""
     if source == "random":
         gen = torch.Generator().manual_seed(0)
         return torch.randint(0, vocab_size, (1, context_len), dtype=torch.int32, generator=gen)
     assert source == "text", f"unknown token source {source!r}, expected 'text' or 'random'"
 
-    ids = _text_token_stream(model_path)
+    ids = _text_token_stream(hf_model_id)
     if ids.shape[-1] < context_len:
         ids = ids.repeat(1, -(-context_len // ids.shape[-1]))
     ids = ids[:, :context_len].clone()
@@ -136,35 +111,35 @@ def _get_prefill_tokens(model_path, context_len, vocab_size, source="text"):
     return ids
 
 
-def _cp_gather_torch(tensor, mesh_device, mesh_config):
+def _cp_gather_torch(tensor, mesh_config):
     """Read a CP-sharded mesh tensor back to one torch tensor, in position order.
 
     The output of a CP prefill is sharded along the sequence axis and replicated
     across TP (the TP all-reduce leaves every column identical), so take one device
     per CP row and concatenate along the sequence. Device tensors come back in the
-    mesh's row-major order, so CP row r at column 0 is index ``r * num_cols``.
+    mesh's row-major order; the CP axis determines the stride between ranks.
 
     Falls back to device 0 alone when CP is off, matching ``_first_device_torch``.
     """
-    from models.demos.gemma4_d_p.tt.ccl import cp_degree
+    mesh_device = mesh_config.device
 
     shards = ttnn.get_device_tensors(tensor)
-    cp = cp_degree(mesh_config) if mesh_config is not None else 1
+    cp = mesh_config.cp_degree if mesh_config is not None else 1
     if cp <= 1:
         return ttnn.to_torch(shards[0]).float()
 
-    num_cols = mesh_device.shape[1]
-    rows = [ttnn.to_torch(shards[r * num_cols]).float() for r in range(cp)]
+    cp_stride = mesh_config.tp_degree if mesh_config.cp_axis == 0 else 1
+    rows = [ttnn.to_torch(shards[r * cp_stride]).float() for r in range(cp)]
     return torch.cat(rows, dim=-2)
 
 
 # ── Eager / traced execution ──────────────────────────────────────────────────
 
 
-def _hf_text_config(model_path):
+def _hf_text_config(hf_model_id):
     from transformers import AutoConfig
 
-    config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    config = AutoConfig.from_pretrained(hf_model_id, trust_remote_code=True)
     text_config = getattr(config, "text_config", config)
     text_config._attn_implementation = "eager"
     return text_config
@@ -173,28 +148,27 @@ def _hf_text_config(model_path):
 # ── The prefill model under test ────────────────────────────────────────────
 
 
-def _build_prefill_model(mesh_device, model_path, chunk_size, context_len=None):
+def _build_prefill_model(mesh_config, hf_model_id, chunk_size, context_len=None):
     """Create a CP prefill model with ring caches for one or more chunks."""
-    mesh_config = _mesh_config(mesh_device)
-    if mesh_config.prefill.sp <= 1:
+    if mesh_config.cp_degree <= 1:
         raise ValueError("This demo requires context parallel prefill")
-    tp = mesh_device.shape[1]
     context_len = context_len or chunk_size
     max_seq_len = int(os.environ.get("GEMMA4_MAX_SEQ_LEN", context_len))
 
-    hf_config = Gemma4ModelArgs.load_hf_config(model_path)
+    hf_config = Gemma4ModelArgs.load_hf_config(hf_model_id)
     num_layers = Gemma4ModelArgs.from_hf_config(hf_config).num_hidden_layers
 
-    logger.info(f"Creating Gemma4 ({num_layers} layers, TP={tp}, max_seq_len={max_seq_len})...")
+    logger.info(
+        f"Creating Gemma4 ({num_layers} layers, CP={mesh_config.cp_degree}, TP={mesh_config.tp_degree}, max_seq_len={max_seq_len})..."
+    )
     t0 = time.time()
     model_args, model, kv_cache, _state_dict = create_tt_model(
-        mesh_device=mesh_device,
+        mesh_config=mesh_config,
         max_batch_size=1,
         max_seq_len=max_seq_len,
         dtype=MODEL_DTYPE,
         force_rebuild=_load_full_weights(),
-        model_path=model_path,
-        mesh_config=mesh_config,
+        hf_model_id=hf_model_id,
         prefill_chunk_size=chunk_size,
     )
     logger.info(f"Model ready in {time.time() - t0:.1f}s")
@@ -215,10 +189,9 @@ def test_prefill_long_context_traced(
     mesh_device, context_len, chunk_size, readback_all, token_source, reset_seeds, request
 ):
     """Measure all prefill chunks using one replayed ring-attention trace."""
-    from models.demos.gemma4_d_p.tt.ccl import cp_degree
 
     mesh_config = _mesh_config(mesh_device)
-    cp = cp_degree(mesh_config)
+    cp = mesh_config.cp_degree
     if cp <= 1:
         pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={cp}")
     if chunk_size < GEMMA4_SLIDING_WINDOW_TOKENS * cp:
@@ -230,88 +203,77 @@ def test_prefill_long_context_traced(
     if context_len % chunk_size != 0:
         pytest.skip(f"context_len={context_len} is not a whole number of {chunk_size}-token chunks")
 
-    model_path = _model_path()
+    hf_model_id = _hf_model_id()
     n_chunks = context_len // chunk_size
     model_args, model, kv_cache = _build_prefill_model(
-        mesh_device=mesh_device,
-        model_path=model_path,
+        mesh_config=mesh_config,
+        hf_model_id=hf_model_id,
         chunk_size=chunk_size,
         context_len=context_len,
     )
-    tokens_all = _get_prefill_tokens(model_path, context_len, model_args.vocab_size, token_source)
 
-    rope_local_seq = chunk_size // cp
-    host_input = _host_tensor(
-        mesh_device,
+    tokens_all = _get_prefill_tokens(hf_model_id, context_len, model_args.vocab_size, token_source)
+
+    host_input_tokens = ttnn.from_torch(
         tokens_all[:, :chunk_size].contiguous(),
-        ttnn.uint32,
-        ttnn.ROW_MAJOR_LAYOUT,
-        mesh_config=mesh_config,
-        seq_dim=-1,
+        device=None,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=_cp_or_replicate_mapper(mesh_config, seq_dim=-1),
     )
-    device_input = ttnn.to_device(host_input, device=mesh_device)
+    device_input_tokens = ttnn.to_device(host_input_tokens, device=mesh_device)
     device_positions = ttnn.to_device(
-        _host_tensor(
-            mesh_device,
+        ttnn.from_torch(
             torch.arange(0, chunk_size, dtype=torch.int32).unsqueeze(0),
-            ttnn.uint32,
-            ttnn.ROW_MAJOR_LAYOUT,
-            mesh_config=mesh_config,
-            seq_dim=-1,
+            device=None,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=_cp_or_replicate_mapper(mesh_config, seq_dim=-1),
         ),
         device=mesh_device,
     )
+
     model.set_prefill_rope_positions(device_positions)
-    model._ring_metadata_external = True
+    model._prefill_metadata_external = True
 
     stage_breakdown = {"tokens": 0.0, "metadata": 0.0, "rope": 0.0}
 
     def _stage(chunk_idx):
         """Host-side refresh of everything that varies per chunk. Never inside a trace."""
+
         chunk_start = chunk_idx * chunk_size
+
         _t = time.time()
-        staged = _host_tensor(
-            mesh_device,
+        staged = ttnn.from_torch(
             tokens_all[:, chunk_start : chunk_start + chunk_size].contiguous(),
-            ttnn.uint32,
-            ttnn.ROW_MAJOR_LAYOUT,
-            mesh_config=mesh_config,
-            seq_dim=-1,
+            device=None,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=_cp_or_replicate_mapper(mesh_config, seq_dim=-1),
         )
-        ttnn.copy_host_to_device_tensor(staged, device_input)
+        ttnn.copy_host_to_device_tensor(staged, device_input_tokens)
         stage_breakdown["tokens"] += time.time() - _t
+
         _t = time.time()
-        model.ccl_manager.set_ring_metadata(slot_idx=0, kv_actual_global=chunk_start)
+        model.prefill_metadata.update(slot_idx=0, kv_actual_global=chunk_start)
         stage_breakdown["metadata"] += time.time() - _t
+
+        # Update absolute token positions across CP ranks.
         _t = time.time()
-        # REQUIRED for liveness, not an optimization. Ring attention's global semaphores
-        # persist across replays, and back-to-back replays deadlock without this: 256k
-        # runs hung at chunk 54 and 59 of 64 (deep ring depth, no error, all threads in
-        # futex_wait). readback_all hides it because _cp_gather_torch issues an eager
-        # ttnn.all_gather between every replay, which drains the state this restores.
-        # Costs ~4ms/chunk. Belongs in the op — either resetting its own semaphores or
-        # having the reset captured inside the trace — rather than in every caller.
-        for _sem in model.ccl_manager.ring_attention_ccl_semaphore_handles:
-            ttnn.reset_global_semaphore_value(_sem, 0)
-        # Under CP the prefill RoPE cache is chunk-major per rank, so the local slice
-        # advances by the per-rank slab, matching _get_rope_mats' start_pos // cp.
-        # Absolute global positions for this chunk, CP-sharded the same way tokens are.
-        # Contiguous sharding of [chunk_start, chunk_start+chunk) hands rank r exactly the
-        # rows chunk-major CP assigns it, so the gather inside the trace lands correctly.
-        pos_host = _host_tensor(
-            mesh_device,
+        pos_host = ttnn.from_torch(
             torch.arange(chunk_start, chunk_start + chunk_size, dtype=torch.int32).unsqueeze(0),
-            ttnn.uint32,
-            ttnn.ROW_MAJOR_LAYOUT,
-            mesh_config=mesh_config,
-            seq_dim=-1,
+            device=None,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=_cp_or_replicate_mapper(mesh_config, seq_dim=-1),
         )
         ttnn.copy_host_to_device_tensor(pos_host, device_positions)
         stage_breakdown["rope"] += time.time() - _t
+
         return chunk_start
 
     def _forward(chunk_start):
-        embeds = model.transform_and_embed_prefill_inputs_device(device_input)
+        embeds = model.transform_and_embed_prefill_inputs_device(device_input_tokens)
         return model(hidden_states=embeds, chunk_start_idx=chunk_start, user_id=0)
 
     # ── Compile the graph that will be captured ──────────────────────
@@ -351,7 +313,7 @@ def test_prefill_long_context_traced(
             # for finiteness instead of only the last.
             if readback_all or chunk_idx == n_chunks - 1:
                 t_rb = time.time()
-                hidden = _cp_gather_torch(out, mesh_device, mesh_config)
+                hidden = _cp_gather_torch(out, mesh_config)
                 assert torch.isfinite(hidden).all(), f"chunk {chunk_idx} produced non-finite output"
                 readback_s += time.time() - t_rb
             # Report per-chunk latency and cumulative device and wall time.
@@ -420,11 +382,10 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
     Inputs are token embeddings, so this is an isolated-layer benchmark.
     """
     from models.demos.gemma4_d_p.tt.attention.global_kv_cache import pack_global_rope_device, pack_sliding_rope_device
-    from models.demos.gemma4_d_p.tt.attention.ring_prefill import PackedRingKVCache
-    from models.demos.gemma4_d_p.tt.ccl import cp_degree
+    from models.demos.gemma4_d_p.tt.attention.ring_prefill import GlobalRingKVCache
 
     mesh_config = _mesh_config(mesh_device)
-    cp = cp_degree(mesh_config)
+    cp = mesh_config.cp_degree
     if cp <= 1:
         pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={cp}")
     if chunk_size < GEMMA4_SLIDING_WINDOW_TOKENS * cp:
@@ -442,15 +403,15 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
     layer_types = ["global", "local"] if layer_type == "both" else [layer_type]
     model_layer_types = {"global": "full_attention", "local": "sliding_attention"}
 
-    model_path = _model_path()
-    text_config = _hf_text_config(model_path)
+    hf_model_id = _hf_model_id()
+    text_config = _hf_text_config(hf_model_id)
     model_args, model, _ = _build_prefill_model(
-        mesh_device=mesh_device,
-        model_path=model_path,
+        mesh_config=mesh_config,
+        hf_model_id=hf_model_id,
         chunk_size=chunk_size,
         context_len=context_len,
     )
-    tokens_all = _get_prefill_tokens(model_path, context_len, model_args.vocab_size)
+    tokens_all = _get_prefill_tokens(hf_model_id, context_len, model_args.vocab_size)
 
     layer_idxs = {lt: find_layer_idx(text_config, model_layer_types[lt]) for lt in layer_types}
     type_desc = ", ".join(f"{lt}=layer{layer_idxs[lt]}" for lt in layer_types)
@@ -460,52 +421,45 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
         f"types=({type_desc})"
     )
 
-    host_input = _host_tensor(
-        mesh_device,
+    host_input_tokens = ttnn.from_torch(
         tokens_all[:, :chunk_size].contiguous(),
-        ttnn.uint32,
-        ttnn.ROW_MAJOR_LAYOUT,
-        mesh_config=mesh_config,
-        seq_dim=-1,
+        device=None,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=_cp_or_replicate_mapper(mesh_config, seq_dim=-1),
     )
-    device_input = ttnn.to_device(host_input, device=mesh_device)
+    device_input_tokens = ttnn.to_device(host_input_tokens, device=mesh_device)
     device_positions = ttnn.to_device(
-        _host_tensor(
-            mesh_device,
+        ttnn.from_torch(
             torch.arange(0, chunk_size, dtype=torch.int32).unsqueeze(0),
-            ttnn.uint32,
-            ttnn.ROW_MAJOR_LAYOUT,
-            mesh_config=mesh_config,
-            seq_dim=-1,
+            device=None,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=_cp_or_replicate_mapper(mesh_config, seq_dim=-1),
         ),
         device=mesh_device,
     )
     model.set_prefill_rope_positions(device_positions)
-    model._ring_metadata_external = True
+    model._prefill_metadata_external = True
 
     def _stage(idx):
         """Refresh tokens, ring metadata, semaphores, and RoPE positions before replay."""
         chunk_start = idx * chunk_size
-        staged = _host_tensor(
-            mesh_device,
+        staged = ttnn.from_torch(
             tokens_all[:, chunk_start : chunk_start + chunk_size].contiguous(),
-            ttnn.uint32,
-            ttnn.ROW_MAJOR_LAYOUT,
-            mesh_config=mesh_config,
-            seq_dim=-1,
+            device=None,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=_cp_or_replicate_mapper(mesh_config, seq_dim=-1),
         )
-        ttnn.copy_host_to_device_tensor(staged, device_input)
-        model.ccl_manager.set_ring_metadata(slot_idx=0, kv_actual_global=chunk_start)
-        # Reset persistent semaphores before each replay.
-        for semaphore in model.ccl_manager.ring_attention_ccl_semaphore_handles:
-            ttnn.reset_global_semaphore_value(semaphore, 0)
-        pos_host = _host_tensor(
-            mesh_device,
+        ttnn.copy_host_to_device_tensor(staged, device_input_tokens)
+        model.prefill_metadata.update(slot_idx=0, kv_actual_global=chunk_start)
+        pos_host = ttnn.from_torch(
             torch.arange(chunk_start, chunk_start + chunk_size, dtype=torch.int32).unsqueeze(0),
-            ttnn.uint32,
-            ttnn.ROW_MAJOR_LAYOUT,
-            mesh_config=mesh_config,
-            seq_dim=-1,
+            device=None,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=_cp_or_replicate_mapper(mesh_config, seq_dim=-1),
         )
         ttnn.copy_host_to_device_tensor(pos_host, device_positions)
         return chunk_start
@@ -524,13 +478,14 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
         pack_rope = pack_global_rope_device if lt == "global" else pack_sliding_rope_device
 
         def forward(chunk_start):
-            embeds = model.transform_and_embed_prefill_inputs_device(device_input)
+            embeds = model.transform_and_embed_prefill_inputs_device(device_input_tokens)
             cos = ttnn.unsqueeze_to_4D(ttnn.embedding(model._rope_prefill_positions, cos_2d, layout=ttnn.TILE_LAYOUT))
             sin = ttnn.unsqueeze_to_4D(ttnn.embedding(model._rope_prefill_positions, sin_2d, layout=ttnn.TILE_LAYOUT))
             packed_rope = (*pack_rope(cos, sin), model._packed_global_rope_trans_mat)
             return layer(
                 hidden_states=embeds,
                 rope_mats=(cos, sin),
+                prefill_metadata=model.prefill_metadata,
                 chunk_start_idx=chunk_start,
                 packed_global_rope=packed_rope if lt == "global" else None,
                 packed_sliding_rope=packed_rope if lt == "local" else None,
@@ -564,7 +519,7 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
         """Initialize the ring-cache tensors in place, preserving captured addresses."""
         for lt in layer_types:
             cache = model.layers[layer_idxs[lt]].self_attn.ring_kv_cache
-            tensors = (cache.kv,) if isinstance(cache, PackedRingKVCache) else cache
+            tensors = (cache.kv,) if isinstance(cache, GlobalRingKVCache) else (cache.k, cache.v)
             for tensor in tensors:
                 host = ttnn.from_torch(
                     0.1 * torch.randn(list(tensor.shape), dtype=torch.float32),
@@ -613,7 +568,7 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
                     f"tok_s={chunk_size / measured_s:.0f} signposts={sp_start},{sp_stop}"
                 )
 
-        hidden = _cp_gather_torch(outs[layer_types[-1]], mesh_device, mesh_config)
+        hidden = _cp_gather_torch(outs[layer_types[-1]], mesh_config)
     finally:
         for tid in traces.values():
             ttnn.release_trace(mesh_device, tid)

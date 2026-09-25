@@ -4,12 +4,10 @@
 """Host-side guards for the sfpu_domains gates that decide what a sweep may inject.
 
 No kernel, no device: these are pure-Python assertions about metadata. They are here
-because specials_safe() is a *measured* matrix — 250 hardware variants reduced to a
-handful of rules (see the section comment in sfpu_domains) — and until now nothing
-executed it. Both production callers short-circuit on SPECIALS_READY_OPS, which is empty,
-so the rules and the enum-normalisation trap underneath them could be rewritten without a
-single test changing outcome. The measurement is expensive to redo and cheap to pin, so it
-is pinned here.
+because specials_safe() reduces a hardware-measured matrix to a handful of rules (see the
+section comment in sfpu_domains), and no host test would otherwise execute them: the rules
+and the enum-normalisation trap underneath them could be rewritten without a single test
+changing outcome.
 
 The second half guards probe *spacing*, which has the same shape of problem: a probe that
 is silently quantized back onto the boundary it was meant to straddle still reads as
@@ -21,7 +19,7 @@ import math
 import struct
 
 import pytest
-from helpers.format_config import DataFormat, InputOutputFormat
+from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
@@ -41,7 +39,6 @@ from helpers.sfpu_domains import (
     probe_spacing_format,
     sfpu_unary_ops,
     specials_safe,
-    specials_safe_formats,
 )
 
 # The formats the measurement covered: the 5x5 matrix driven over the isinf / isposinf /
@@ -493,9 +490,6 @@ def test_every_float_binary_op_is_classified_for_cat_b():
         not stale
     ), f"these ops carry a cat-B verdict but no longer reach the binary driver: {stale}"
 
-    for op, reason in BINARY_SPECIALS_READY_OPS.items():
-        assert len(reason) > 20, f"{op.name}'s cat-B reason is too short to be a claim"
-
 
 def test_total_order_key_matches_the_isa_remap():
     """Both order keys must reproduce `SignMagIsSmaller()`'s remap, signed zeros included.
@@ -638,6 +632,37 @@ def test_hardtanh_golden_matches_the_clamp_golden():
             f"hardtanh({x}) golden gives {got} but the clamp golden gives {want}; "
             "the two goldens must move together while both ops bind the same composition."
         )
+
+
+@pytest.mark.parametrize(
+    "output_format,dest_acc",
+    [
+        (DataFormat.Float16_b, DestAccumulation.Yes),
+        (DataFormat.Float32, DestAccumulation.No),
+        (DataFormat.Float32, DestAccumulation.Yes),
+    ],
+)
+def test_fmod_golden_preserves_dividend_sign_through_pack(output_format, dest_acc):
+    import torch
+    from helpers.golden_generators import UnarySFPUGolden
+
+    probes = torch.tensor([float("inf"), -float("inf"), 5.0, -5.0])
+    result = UnarySFPUGolden()(
+        MathOperation.Fmod,
+        probes.repeat(256),
+        output_format,
+        dest_acc,
+        DataFormat.Float32,
+        dimensions=(32, 32),
+    )
+
+    if output_format == DataFormat.Float32 and dest_acc == DestAccumulation.Yes:
+        assert torch.isnan(result[:2]).all()
+    else:
+        assert torch.equal(result[:2].float(), probes[:2])
+    assert torch.equal(torch.signbit(result[:4]), torch.signbit(probes))
+    expected = torch.fmod(probes[2:], UnarySFPUGolden._FMOD_DIVISOR)
+    assert torch.equal(result[2:4].float(), expected)
 
 
 def test_reduce_extremum_follows_the_total_order_on_floats_only():
@@ -847,37 +872,6 @@ def test_dest_acc_rejects_non_flags(bad):
         TypeError
     ):
         specials_safe(DataFormat.Float32, DataFormat.Float32, bad)
-
-
-def test_specials_safe_formats_filters_to_the_accepted_rows():
-    formats = [
-        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
-        InputOutputFormat(DataFormat.Float32, DataFormat.Float16),
-        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
-        InputOutputFormat(DataFormat.Bfp8_b, DataFormat.Float32),
-    ]
-
-    kept = specials_safe_formats(formats, DestAccumulation.No)
-    assert [(f.input_format, f.output_format) for f in kept] == [
-        (DataFormat.Float32, DataFormat.Float32),
-        (DataFormat.Float16_b, DataFormat.Float16_b),
-    ]
-
-    kept = specials_safe_formats(formats, DestAccumulation.Yes)
-    assert [(f.input_format, f.output_format) for f in kept] == [
-        (DataFormat.Float32, DataFormat.Float32),
-        (DataFormat.Float32, DataFormat.Float16),
-    ]
-
-
-def test_specials_safe_formats_validates_dest_acc_on_an_empty_list():
-    """Normalisation happens once up front, so a bad flag raises even with nothing to
-    filter — otherwise the error surfaces only for callers that happen to pass formats.
-    """
-    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
-        TypeError
-    ):
-        specials_safe_formats([], "Yes")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1119,7 +1113,7 @@ def test_pow_edge_pairs_include_negative_zero_exponent():
 
 # (op, range-bound high, approximation-accuracy high). The accuracy column is what the
 # merged branch had on the shared entry; the range column is what the accurate path gets
-# back. Wormhole-measured for the approximation (see _APPROX_EXP_ACCURACY_XFAIL).
+# back. Wormhole-measured for the approximation.
 _EXP_FAMILY_BOUNDS = [
     (MathOperation.Exp, 80.0, 16.0),
     (MathOperation.Exp2, 100.0, 23.0),

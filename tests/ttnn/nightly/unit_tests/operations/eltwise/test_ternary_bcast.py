@@ -134,7 +134,7 @@ def test_ttnn_addc_ops_row_col_mixed_bcast(a_shape, b_shape, c_shape, value, ttn
                 result,
             )
 
-    assert_with_ulp(golden, result, ulp_threshold=10, allow_nonfinite=True)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=10, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize(
@@ -156,7 +156,7 @@ def test_ttnn_lerp_tts_scalar_weight(c_shape, t_shape, weight, device):
     ttnn_result = ttnn.lerp(input_tensor1, input_tensor2, weight)
     result = ttnn.to_torch(ttnn_result)
 
-    assert_with_ulp(golden, result, ulp_threshold=10)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=10)
 
 
 @pytest.mark.parametrize(
@@ -191,7 +191,7 @@ def test_ttnn_lerp_ttt_row_col_mixed_bcast(input_shape, end_shape, weight_shape,
     ttnn_result = ttnn.lerp(input_tensor1, input_tensor2, input_tensor3)
     result = ttnn.to_torch(ttnn_result)
 
-    assert_with_ulp(golden, result, ulp_threshold=10)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=10)
 
 
 # --------------------------------------------------------------------------------------------------

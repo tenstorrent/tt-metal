@@ -14,12 +14,12 @@ from transformers import AutoTokenizer
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.llama3_70b_galaxy.demo.demo_common import load_inputs_advanced
+from models.demos.llama3_70b_galaxy.tests.unit_tests.qwen_test_utils import DECODE_FABRIC_CONFIG as _FABRIC_CONFIG
 from models.demos.llama3_70b_galaxy.tt.generator import Generator, SamplingParams
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations
 
 # Qwen-specific imports
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
-from models.demos.llama3_70b_galaxy.tests.unit_tests.qwen_test_utils import DECODE_FABRIC_CONFIG as _FABRIC_CONFIG
 from models.demos.utils.device_sku import get_current_device_sku_name
 from models.demos.utils.llm_demo_utils import verify_accuracy, verify_perf
 from models.demos.utils.model_targets import resolve_accuracy_targets, resolve_perf_targets
@@ -768,8 +768,9 @@ def test_qwen_demo_text(
 
         profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
 
-        # when doing repeating batches, set kv-caches to zero, to avoid context leaking
-        if batch_idx != 0:
+        # Clear repeated-request KV state, warming the reset program before the
+        # first trace so later resets cannot allocate behind a live trace.
+        if repeat_batches > 1:
             model.switch_mode("prefill")
             for layer in model.layers:
                 k_cache, v_cache = layer.attention.layer_past
@@ -948,7 +949,7 @@ def test_qwen_demo_text(
                     tt_out_logits_saved_iter_0 = tt_out_logits_saved
             except Exception as e:
                 logger.error(f"Error during decoding: {str(e)}")
-                break
+                raise
 
             if iteration == 0:  # First iteration will account the compile time
                 profiler.end(f"compile_decode", iteration=batch_idx)

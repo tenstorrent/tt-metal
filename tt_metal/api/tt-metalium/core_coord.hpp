@@ -14,6 +14,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <tuple>
 #include <vector>
 
 // UMD: re-exports tt_xy_pair, aliased as CoreCoord in this header.
@@ -88,6 +89,11 @@ public:
     CoreIterator begin() const;
 
     CoreIterator end() const;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("start_x", "start_y", "end_x", "end_y");
+    auto attribute_values() const {
+        return std::forward_as_tuple(start_coord.x, start_coord.y, end_coord.x, end_coord.y);
+    }
 };
 
 constexpr bool operator==(const CoreRange& a, const CoreRange& b) {
@@ -148,6 +154,9 @@ public:
     bool contains(const CoreRangeSet& other) const;
 
     const std::vector<CoreRange>& ranges() const;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("ranges");
+    auto attribute_values() const { return std::forward_as_tuple(this->ranges()); }
 
     std::string str() const;
 

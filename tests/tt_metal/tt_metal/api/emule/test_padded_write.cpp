@@ -23,7 +23,7 @@ using namespace tt::tt_metal;
 namespace tt::tt_metal {
 
 TEST_F(UnitMeshFixture, Tensor_Padding_Violation_SanityCheck) {
-    GTEST_SKIP() << "Temporarily disabled. See SANITIZER_CHECKS.md for details.";
+    GTEST_SKIP() << "Temporarily disabled pending the emule OOB-sanitizer fix.";
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
     CoreCoord logical_core = {0, 0};
@@ -74,7 +74,7 @@ TEST_F(UnitMeshFixture, Tensor_Padding_Violation_SanityCheck) {
 
     // 3. The emulator should intercept the illegal write inside l1_ptr
     EXPECT_DEATH(
-        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
+        LaunchProgram(this->device(), std::move(program)),
         ".*Tensor Padding Violation: Attempted to write to a padded memory region at address 0x.*");
 }
 

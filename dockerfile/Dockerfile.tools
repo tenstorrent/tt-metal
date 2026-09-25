@@ -27,6 +27,12 @@ ARG DOXYGEN_SHA256=a56f885d37e3aae08a99f638d17bbb381224c03a878d9e2dda4f9fa4baf1d
 ARG CLANGBUILDANALYZER_VERSION=1.6.0
 ARG CLANGBUILDANALYZER_SHA256=868a8d34ecb9b65da4e5874342062a12c081ce4385c7ddd6ce7d557a0c5c292d
 
+# IWYU links against Clang's internals, so the release and the LLVM major
+# version are a matched pair: 0.24 is the clang-20 release.
+ARG IWYU_VERSION=0.24
+ARG IWYU_SHA256=897b4c864a983f493c8efef4a1a9a2d429fd7ead1011f7a41743ed7b6dbe8c2e
+ARG IWYU_LLVM_MAJOR=20
+
 ARG GDB_VERSION=14.2
 ARG GDB_SHA256=2d4dd8061d8ded12b6c63f55e45344881e8226105f4d2a9b234040efa5ce7772
 
@@ -203,6 +209,43 @@ LABEL org.opencontainers.image.description="ClangBuildAnalyzer - Clang build tim
 LABEL org.opencontainers.image.licenses="Unlicense"
 LABEL org.opencontainers.image.version="${CLANGBUILDANALYZER_VERSION}"
 COPY --from=clangbuildanalyzer-builder /install/ /install/
+
+#############################################################
+# include-what-you-use - requires the matching Clang to build and to run
+# Outputs: /install/bin/include-what-you-use, /install/lib/clang/<major>/include
+#############################################################
+
+FROM ubuntu:22.04 AS iwyu-builder
+ARG IWYU_VERSION
+ARG IWYU_SHA256
+ARG IWYU_LLVM_MAJOR
+
+ENV DEBIAN_FRONTEND=noninteractive
+# Enforce strict error handling: exit on error, unset vars, pipe failures
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget gnupg ca-certificates cmake build-essential \
+    && wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | apt-key add - \
+    && echo "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-${IWYU_LLVM_MAJOR} main" \
+       > /etc/apt/sources.list.d/llvm-${IWYU_LLVM_MAJOR}.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    clang-${IWYU_LLVM_MAJOR} libclang-${IWYU_LLVM_MAJOR}-dev llvm-${IWYU_LLVM_MAJOR}-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY dockerfile/scripts/install-iwyu.sh /tmp/install-iwyu.sh
+RUN IWYU_VERSION=${IWYU_VERSION} \
+    IWYU_SHA256=${IWYU_SHA256} \
+    IWYU_LLVM_MAJOR=${IWYU_LLVM_MAJOR} \
+    INSTALL_PREFIX=/install \
+    /bin/bash /tmp/install-iwyu.sh
+
+FROM scratch AS iwyu
+ARG IWYU_VERSION
+LABEL org.opencontainers.image.source="https://github.com/include-what-you-use/include-what-you-use"
+LABEL org.opencontainers.image.description="include-what-you-use - include analysis for C/C++"
+LABEL org.opencontainers.image.licenses="NCSA"
+LABEL org.opencontainers.image.version="${IWYU_VERSION}"
+COPY --from=iwyu-builder /install/ /install/
 
 #############################################################
 # GDB - requires configure/make to build

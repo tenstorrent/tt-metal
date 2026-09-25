@@ -33,7 +33,7 @@ constexpr uint32_t MODE_SHARD_LOCAL_SHARDED_B = 3;
 const KernelSpecName IF_READER{"if_reader"};
 const KernelSpecName IF_WRITER{"if_writer"};
 const DFBSpecName IF_DATA_DFB{"if_data"};
-const DFBSpecName IF_BATCH_DFB{"if_batch"};
+const ScratchpadSpecName IF_BATCH_SCRATCH{"if_batch"};
 const TensorParamName IF_BATCH_IDS{"if_batch_ids"};
 const TensorParamName IF_INPUT_A{"if_input_a"};
 const TensorParamName IF_INPUT_B{"if_input_b"};
@@ -165,16 +165,21 @@ ttnn::device_operation::ProgramArtifacts IndexedFillProgramFactory::create_progr
     // Native HEIGHT_SHARDED and shard-local WIDTH/BLOCK_SHARDED paths are designed around
     // dim=0 (one shard per batch). For dim != 0 the shard grid does not align with the
     // target dimension, so always use the generic 2D-stride path instead.
-    const bool is_native = (dim == 0) && ttnn::operations::data_movement::indexed_fill::is_native_indexed_fill_sharding(
-                                             input_a.tensor_spec(),
-                                             input_b.tensor_spec(),
-                                             batch_ids.tensor_spec(),
-                                             operation_attributes.output_mem_config);
+    //
+    // Use output.memory_config() (the actual allocated output's config, already resolved by
+    // compute_output_specs()/resolve_output_memory_config()) rather than
+    // operation_attributes.output_mem_config, which may be a shard_spec-less MemoryConfig.
+    // validate_on_program_cache_miss() resolves the same way, so this keeps path selection here
+    // consistent with the preconditions checked there.
+    const bool is_dim_0 = (dim == 0);
 
-    const bool is_shard_local =
-        (dim == 0) && !is_native &&
-        ttnn::operations::data_movement::indexed_fill::is_shard_local_indexed_fill(
-            input_a.tensor_spec(), input_b.tensor_spec(), operation_attributes.output_mem_config);
+    const bool is_native =
+        is_dim_0 && ttnn::operations::data_movement::indexed_fill::is_native_indexed_fill_sharding(
+                        input_a.tensor_spec(), input_b.tensor_spec(), batch_ids.tensor_spec(), output.memory_config());
+
+    const bool is_shard_local = is_dim_0 && !is_native &&
+                                ttnn::operations::data_movement::indexed_fill::is_shard_local_indexed_fill(
+                                    input_a.tensor_spec(), input_b.tensor_spec(), output.memory_config());
 
     const bool b_same_sharded =
         is_shard_local && input_b.is_sharded() && input_b.memory_config().shard_spec().has_value() &&
@@ -286,17 +291,15 @@ ttnn::device_operation::ProgramArtifacts IndexedFillProgramFactory::create_progr
     }
     spec.dataflow_buffers.push_back(data_dfb);
 
-    // Batch DFB: staging buffer for the `b` uint32 batch ids. Touched only by the reader,
-    // which fills it (reserve_back / push_back) and reads the staged indices straight back
-    // through a raw SRAM pointer (get_write_ptr) rather than a FIFO consume. It is therefore a
-    // single-ended buffer, so bind the reader as both PRODUCER and CONSUMER (self-loop). The
-    // data format is inert here (the buffer is filled/read by raw byte access at a byte page
-    // size), so the value set for it is cosmetic.
-    spec.dataflow_buffers.push_back(DataflowBufferSpec{
-        .unique_id = IF_BATCH_DFB,
-        .entry_size = batch_page_size,
-        .num_entries = 2,
-        .data_format_metadata = dfb_data_format,
+    // Batch scratchpad: staging buffer for the `b` uint32 batch ids. Touched only by the reader,
+    // which fills it and reads the staged indices straight back through a raw SRAM pointer. It was
+    // formerly a self-loop DFB (reader bound PRODUCER + CONSUMER): a single DM kernel filled and
+    // drained it, so the FIFO synchronized nothing — a shape Quasar rejects. Converted to a private
+    // Scratchpad. Sized to one aligned batch page: the reader stages b uint32 ids once and reads
+    // back [0, b); the former DFB's second (double-buffer) entry synchronized nothing here.
+    spec.scratchpads.push_back(ScratchpadSpec{
+        .unique_id = IF_BATCH_SCRATCH,
+        .size_per_node = batch_page_size,  // one aligned page holds all b uint32 ids
     });
 
     const auto arch = input_a.device()->arch();
@@ -313,14 +316,10 @@ ttnn::device_operation::ProgramArtifacts IndexedFillProgramFactory::create_progr
             {
                 DFBBinding{
                     .dfb_spec_name = IF_DATA_DFB, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER},
-                DFBBinding{
-                    .dfb_spec_name = IF_BATCH_DFB,
-                    .accessor_name = "batch",
-                    .endpoint_type = DFBEndpointType::PRODUCER},
-                DFBBinding{
-                    .dfb_spec_name = IF_BATCH_DFB,
-                    .accessor_name = "batch",
-                    .endpoint_type = DFBEndpointType::CONSUMER},
+            },
+        .scratchpad_bindings =
+            {
+                ScratchpadBinding{.scratchpad_spec_name = IF_BATCH_SCRATCH, .accessor_name = "batch"},
             },
         .tensor_bindings =
             {
@@ -395,15 +394,22 @@ ttnn::device_operation::ProgramArtifacts IndexedFillProgramFactory::create_progr
 
     const uint32_t shard_n_x = is_shard_local ? all_cores.bounding_box().grid_size().x : 0;
 
-    // Precompute per-column offsets for the shard-local path: only shard_n_x unique cx values
-    // exist, but the loop runs over all n_x * n_y cores. Avoids redundant recomputation for
-    // every core in the same column.
+    // WIDTH_SHARDED shards span the whole grid linearly (generate_shard_spec_all_cores divides
+    // width by the full core count, not just the row width), so a WIDTH_SHARDED core's
+    // shard/column index is its row-major position `i`, not `i % shard_n_x` (that formula only
+    // holds for BLOCK_SHARDED, where the same shard_n_x columns repeat on every row).
+    const bool is_width_sharded_local =
+        is_shard_local && input_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+
+    // BLOCK_SHARDED has shard_n_x unique cx values (repeated per row); WIDTH_SHARDED has one
+    // unique cx per core (num_cores_total).
+    const uint32_t num_col_offsets = is_width_sharded_local ? num_cores_total : shard_n_x;
     std::vector<ShardColOffsets> col_offsets;
-    if (is_shard_local && shard_n_x > 0) {
+    if (is_shard_local && num_col_offsets > 0) {
         const auto& shard_spec_pre = *input_a.memory_config().shard_spec();
-        col_offsets.resize(shard_n_x);
-        for (uint32_t cx = 0; cx < shard_n_x; ++cx) {
-            col_offsets[cx] = compute_shard_col_offsets(input_a, shard_spec_pre, cx, is_tile);
+        col_offsets.resize(num_col_offsets);
+        for (uint32_t c = 0; c < num_col_offsets; ++c) {
+            col_offsets[c] = compute_shard_col_offsets(input_a, shard_spec_pre, c, is_tile);
         }
     }
 
@@ -435,10 +441,12 @@ ttnn::device_operation::ProgramArtifacts IndexedFillProgramFactory::create_progr
             AddRuntimeArgsForNode(writer_run.runtime_arg_values, core, {{"batch_size_in_pages", local_batch_size}});
 
         } else if (is_shard_local) {
-            // Shard row/col for BLOCK_SHARDED: indices within the shard grid bounding box.
+            // BLOCK_SHARDED: shard_row owns a batch slice (total_batches_per_core = B / n_y);
+            // cx = i % shard_n_x repeats every row. WIDTH_SHARDED: every core sees the full
+            // batch range (batch_offset_a = 0) and cx is the core's own linear index `i`.
             const uint32_t shard_row = (shard_n_x > 0) ? (i / shard_n_x) : 0;
-            const uint32_t cx = (shard_n_x > 0) ? (i % shard_n_x) : 0;
-            const uint32_t batch_offset_a = shard_row * total_batches_per_core;
+            const uint32_t cx = is_width_sharded_local ? i : ((shard_n_x > 0) ? (i % shard_n_x) : 0);
+            const uint32_t batch_offset_a = is_width_sharded_local ? 0u : shard_row * total_batches_per_core;
 
             // Column-offset state for the INTERLEAVED_B read path (precomputed above).
             const auto& col = col_offsets[cx];

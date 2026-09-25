@@ -12,17 +12,17 @@ void kernel_main() {
     constexpr auto dfb_in0 = dfb::in0;
     DataflowBuffer dfb_in0_obj(dfb_in0);
     constexpr auto dfb_out0 = dfb::out0;
-    DataflowBuffer dfb_out0_obj(dfb_out0);
+    const DataflowBuffer dfb_out0_obj(dfb_out0);
     constexpr auto dfb_exps = dfb::exps;
-    DataflowBuffer dfb_exps_obj(dfb_exps);
+    const DataflowBuffer dfb_exps_obj(dfb_exps);
     constexpr auto dfb_recipsumexps = dfb::recip_sum_exps;
     DataflowBuffer dfb_recipsumexps_obj(dfb_recipsumexps);
     constexpr auto dfb_add = dfb::add;
-    DataflowBuffer dfb_add_obj(dfb_add);
+    const DataflowBuffer dfb_add_obj(dfb_add);
     constexpr auto dfb_max = dfb::max;
     DataflowBuffer dfb_max_obj(dfb_max);
     constexpr auto dfb_tmp = dfb::tmp;
-    DataflowBuffer dfb_tmp_obj(dfb_tmp);
+    const DataflowBuffer dfb_tmp_obj(dfb_tmp);
 
     constexpr std::uint32_t onetile = 1;
     constexpr int dst0 = 0;
@@ -30,8 +30,8 @@ void kernel_main() {
 
     // Plain uint32_t (not constexpr) to match legacy get_compile_time_arg_val typing and avoid
     // force-unrolling the per-dim_size loops (see moreh_softmax_w_large.cpp for the LTO/addrmod rationale).
-    std::uint32_t N = get_arg(args::N);
-    std::uint32_t dim_size = get_arg(args::dim_size);
+    const std::uint32_t N = get_arg(args::N);
+    const std::uint32_t dim_size = get_arg(args::dim_size);
 
     compute_kernel_hw_startup(dfb_in0, dfb_exps, dfb_out0);
 

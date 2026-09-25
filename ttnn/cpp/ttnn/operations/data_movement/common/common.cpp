@@ -12,11 +12,110 @@
 
 #include <numeric>
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
+#include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
 
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::operations::data_movement {
+
+bool is_nd_sharded_memory_config(const tt::tt_metal::MemoryConfig& mem_config) {
+    return mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::ND_SHARDED ||
+           (mem_config.nd_shard_spec().has_value() && !mem_config.shard_spec().has_value());
+}
+
+bool is_functionally_same_memory_config(
+    const tt::tt_metal::MemoryConfig& config_a, const tt::tt_metal::MemoryConfig& config_b) {
+    if (config_a == config_b) {
+        return true;  // same provenance, or interleaved: operator== is already exact
+    }
+    if (config_a.memory_layout() != config_b.memory_layout() || config_a.buffer_type() != config_b.buffer_type()) {
+        return false;
+    }
+    // The allocation flags change allocator semantics, so they are part of a layout's identity.
+    namespace per_core_allocation = tt::tt_metal::experimental::per_core_allocation;
+    namespace range_lockstep_allocation = tt::tt_metal::experimental::range_lockstep_allocation;
+    if (per_core_allocation::is_per_core_allocation(config_a) !=
+            per_core_allocation::is_per_core_allocation(config_b) ||
+        range_lockstep_allocation::is_range_lockstep_allocation(config_a) !=
+            range_lockstep_allocation::is_range_lockstep_allocation(config_b)) {
+        return false;
+    }
+    // A genuinely ND layout is only described by its nd_shard_spec, which operator== already
+    // compared, so there is nothing left to relax. Not relaxed either: an ND-sharded *request*
+    // against a tensor whose ND spec normalized to 2D, which differs by memory_layout() above and
+    // so still reshards even though the distribution matches. Normalizing that equivalence is a
+    // wider change than a no-op gate warrants.
+    if (is_nd_sharded_memory_config(config_a) || is_nd_sharded_memory_config(config_b)) {
+        return false;
+    }
+    // Buffer creation follows the nd spec, so disagreeing nd specs allocate differently even when
+    // the 2D specs match. Only the one-sided case (no shadow spec yet) is relaxed.
+    if (config_a.nd_shard_spec().has_value() && config_b.nd_shard_spec().has_value() &&
+        config_a.nd_shard_spec() != config_b.nd_shard_spec()) {
+        return false;
+    }
+    // Layout-only sharded configs (no shard_spec) are deliberately not equal: reshape leaves those
+    // to its auto-derive path rather than treating them as a no-op.
+    return config_a.shard_spec().has_value() && config_a.shard_spec() == config_b.shard_spec();
+}
+
+tt::tt_metal::MemoryConfig drop_normalized_nd_shard_spec(const tt::tt_metal::MemoryConfig& mem_config) {
+    if (!mem_config.shard_spec().has_value() || !mem_config.nd_shard_spec().has_value()) {
+        return mem_config;
+    }
+    namespace per_core_allocation = tt::tt_metal::experimental::per_core_allocation;
+    namespace range_lockstep_allocation = tt::tt_metal::experimental::range_lockstep_allocation;
+    const bool per_core = per_core_allocation::is_per_core_allocation(mem_config);
+    const bool range_lockstep = range_lockstep_allocation::is_range_lockstep_allocation(mem_config);
+    tt::tt_metal::MemoryConfig stripped{mem_config.memory_layout(), mem_config.buffer_type(), mem_config.shard_spec()};
+    // Mutually exclusive by construction, so at most one of these runs. Both require an L1 sharded
+    // config, which `stripped` still is.
+    if (per_core) {
+        per_core_allocation::set_per_core_allocation(stripped, true);
+    } else if (range_lockstep) {
+        range_lockstep_allocation::set_range_lockstep_allocation(stripped, true);
+    }
+    return stripped;
+}
+
+tt::tt_metal::MemoryConfig derive_nd_shard_spec_for_reshaped_output(
+    const tt::tt_metal::MemoryConfig& src_cfg,
+    const ttnn::Shape& src_padded_shape,
+    const ttnn::Shape& out_padded_shape,
+    bool is_tiled) {
+    const auto& src_nd = src_cfg.nd_shard_spec().value();
+    const uint32_t rank = out_padded_shape.rank();
+    // A shard spec's rank may legally be lower than its tensor's (BufferDistributionSpec only
+    // requires shard rank <= tensor rank), so align the shard shape to the source tensor rank
+    // first, then adapt both the shard and the padded shape to the output rank. Bailing on a rank
+    // mismatch instead would carry a stale-rank shard spec onto the output and re-trip the rank
+    // abort this path exists to avoid.
+    const ttnn::Shape src_shard_at_src_rank =
+        squeeze_or_unsqueeze_shape_to_ND(src_nd.shard_shape, src_padded_shape.rank());
+    const ttnn::Shape src_shard = squeeze_or_unsqueeze_shape_to_ND(src_shard_at_src_rank, rank);
+    const ttnn::Shape src_padded = squeeze_or_unsqueeze_shape_to_ND(src_padded_shape, rank);
+    ttsl::SmallVector<uint32_t> new_shard(rank);
+    for (uint32_t d = 0; d < rank; ++d) {
+        const uint32_t src_dim = src_padded[d] == 0 ? 1 : src_padded[d];
+        const uint32_t shard_d = src_shard[d] == 0 ? 1 : src_shard[d];
+        const uint32_t num_shards = (src_dim + shard_d - 1) / shard_d;  // per-dim shard count on the source
+        const uint32_t out_dim = out_padded_shape[d] == 0 ? 1 : out_padded_shape[d];
+        new_shard[d] = (out_dim + num_shards - 1) / num_shards;  // ceil-divide the output dim across those shards
+    }
+    if (is_tiled && rank >= 2) {
+        // Tiled shard shapes must be tile multiples on the inner two dims: round up, then clamp to
+        // the padded dim. A dim too small for that many tile-aligned shards (e.g. 64 fits two
+        // 32-tall shards, not four) lands on fewer cores; that is inherent, not a bug.
+        const uint32_t th = tt::constants::TILE_HEIGHT;
+        const uint32_t tw = tt::constants::TILE_WIDTH;
+        new_shard[rank - 1] = std::min(((new_shard[rank - 1] + tw - 1) / tw) * tw, out_padded_shape[rank - 1]);
+        new_shard[rank - 2] = std::min(((new_shard[rank - 2] + th - 1) / th) * th, out_padded_shape[rank - 2]);
+    }
+    return tt::tt_metal::MemoryConfig{src_cfg.buffer_type(), src_nd.with_shard_shape(ttnn::Shape(new_shard))};
+}
 
 ttnn::Shape squeeze_shape_to_ND(const ttnn::Shape& shape, const uint32_t n) {
     if (shape.rank() <= n) {
@@ -488,11 +587,24 @@ uint32_t get_pending_l1_output_reservation(
     // busiest bank holds ceil(num_pages / num_banks) of them. Reserving the average
     // (total_bytes / num_banks) underestimates whenever num_pages is not a multiple of
     // num_banks, which can still leave the CBs overlapping the output on the fullest bank.
-    const uint64_t alignment = input_tensor_a.device()->allocator()->get_alignment(tt::tt_metal::BufferType::L1);
-    const uint64_t aligned_page_bytes = tt::align(static_cast<uint64_t>(page_bytes), alignment);
+    const auto& allocator = *input_tensor_a.device()->allocator();
+    const uint64_t page_alignment = allocator.get_alignment(tt::tt_metal::BufferType::L1);
+    const uint64_t aligned_page_bytes = tt::align(static_cast<uint64_t>(page_bytes), page_alignment);
     const uint64_t num_pages = tt::div_up(static_cast<uint64_t>(total_bytes), static_cast<uint64_t>(page_bytes));
     const uint64_t pages_on_fullest_bank = tt::div_up(num_pages, static_cast<uint64_t>(num_banks));
-    return static_cast<uint32_t>(pages_on_fullest_bank * aligned_page_bytes);
+    const uint64_t bytes_on_fullest_bank = pages_on_fullest_bank * aligned_page_bytes;
+
+    // That per-bank size is what the bank manager asks its free list for, but the L1 free lists are
+    // built with the DRAM alignment as both their block alignment and their minimum allocation
+    // (BankManager::init_allocators is handed dram_alignment_bytes so L1<->DRAM transfers stay
+    // aligned), so the allocation that actually lowers lowest_occupied_compute_l1_address is that
+    // size rounded up once more. Reserve what the allocator will take, not what the pages add up
+    // to, or a decision made within that last granule of the budget is more permissive than the
+    // program factory it predicts. (Under the opt-in HYBRID allocator mode the per-page rounding is
+    // also the DRAM alignment; tile pages and tile-width row-major pages are multiples of it, so
+    // that mode is not accounted for separately here.)
+    const uint64_t allocation_granule = allocator.get_alignment(tt::tt_metal::BufferType::DRAM);
+    return static_cast<uint32_t>(tt::align(std::max(bytes_on_fullest_bank, allocation_granule), allocation_granule));
 }
 
 bool is_enough_space(

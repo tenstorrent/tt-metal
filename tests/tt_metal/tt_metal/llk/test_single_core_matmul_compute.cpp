@@ -27,8 +27,6 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/constants.hpp>
-#include "impl/dataflow_buffer/dataflow_buffer.hpp"
-#include "impl/host_api/temp_quasar_api.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -46,10 +44,6 @@
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-
-namespace tt::tt_metal {
-class IDevice;
-}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
@@ -686,10 +680,6 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
 
-    tt_metal::Program program = tt_metal::CreateProgram();
-    workload.add_program(device_range, std::move(program));
-    auto& program_ = workload.get_programs().at(device_range);
-
     auto input0_dram_buffer = distributed::MeshBuffer::create(
         distributed::ReplicatedBufferConfig{.size = in0_total_size_bytes},
         {.page_size = in0_total_size_bytes, .buffer_type = tt::tt_metal::BufferType::DRAM},
@@ -706,167 +696,154 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         mesh_device.get());
     const std::uint32_t out_dram_addr = output_dram_buffer->address();
 
-    std::uint32_t in0_id = 0;
-    std::uint32_t in1_id = 0;
-    std::uint32_t out_id = 0;
-    std::uint32_t partials_id = 0;
+    // Metal 2.0: one dataflow-buffer + kernel-spec path for every architecture. Only the hardware
+    // config differs (Gen1 = Wormhole/Blackhole, Gen2 = Quasar)
+    const experimental::DFBSpecName IN0_DFB{"in0_dfb"};
+    const experimental::DFBSpecName IN1_DFB{"in1_dfb"};
+    const experimental::DFBSpecName OUT_DFB{"out_dfb"};
+    const experimental::DFBSpecName PARTIALS_DFB{"partials_dfb"};
+    const experimental::KernelSpecName READER{"reader"};
+    const experimental::KernelSpecName WRITER{"writer"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
+    const experimental::NodeCoord node{core.x, core.y};
 
-    if (is_quasar) {
-        auto make_dfb = [&](std::uint32_t entry_size,
-                            std::uint32_t num_entries,
-                            std::uint16_t producer_mask,
-                            std::uint16_t consumer_mask,
-                            tt::DataFormat fmt) {
-            return tt_metal::experimental::dfb::CreateDataflowBuffer(
-                program_,
-                core,
-                tt_metal::experimental::dfb::DataflowBufferConfig{
-                    .entry_size = entry_size,
-                    .num_entries = num_entries,
-                    .producer_risc_mask = producer_mask,
-                    .num_producers = 1,
-                    .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-                    .consumer_risc_mask = consumer_mask,
-                    .num_consumers = 1,
-                    .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-                    .enable_producer_implicit_sync = false,
-                    .enable_consumer_implicit_sync = false,
-                    .data_format = fmt});
-        };
+    const experimental::DataflowBufferSpec in0_dfb_spec{
+        .unique_id = IN0_DFB,
+        .entry_size = static_cast<std::uint32_t>(in0_tile_size),
+        .num_entries = M * K,
+        .data_format_metadata = in0_fmt,
+    };
+    const experimental::DataflowBufferSpec in1_dfb_spec{
+        .unique_id = IN1_DFB,
+        .entry_size = static_cast<std::uint32_t>(in1_tile_size),
+        .num_entries = K * N,
+        .data_format_metadata = in1_fmt,
+    };
+    const experimental::DataflowBufferSpec out_dfb_spec{
+        .unique_id = OUT_DFB,
+        .entry_size = static_cast<std::uint32_t>(out_tile_size),
+        .num_entries = M * N,
+        .data_format_metadata = out_fmt,
+    };
+    const experimental::DataflowBufferSpec partials_dfb_spec{
+        .unique_id = PARTIALS_DFB,
+        .entry_size = static_cast<std::uint32_t>(partials_tile_size),
+        .num_entries = M * N,
+        .data_format_metadata = out_fmt,
+    };
 
-        const std::set<DataMovementProcessor> dm_processors =
-            tt_metal::experimental::quasar::GetAvailableDataMovementProcessors(
-                program_, CoreRangeSet(CoreRange(core, core)), 2, HalProgrammableCoreType::TENSIX);
-        TT_FATAL(
-            dm_processors.size() == 2,
-            "blocked_matmul needs 2 free data movement processors for the reader and writer, got {}",
-            dm_processors.size());
-        auto dm_it = dm_processors.begin();
-        const uint16_t kReaderRiscMask = 1 << static_cast<uint32_t>(*dm_it++);  // reader is created first
-        const uint16_t kWriterRiscMask = 1 << static_cast<uint32_t>(*dm_it);    // writer is created second
-        constexpr uint16_t kComputeRiscMask = 0x100;                            // Tensix risc 0
-
-        in0_id = make_dfb(in0_tile_size, M * K, kReaderRiscMask, kComputeRiscMask, in0_fmt);
-        in1_id = make_dfb(in1_tile_size, K * N, kReaderRiscMask, kComputeRiscMask, in1_fmt);
-        out_id = make_dfb(out_tile_size, M * N, kComputeRiscMask, kWriterRiscMask, out_fmt);
-        partials_id = tt_metal::experimental::dfb::CreateDataflowBuffer(
-            program_,
-            core,
-            tt_metal::experimental::dfb::DataflowBufferConfig{
-                .entry_size = partials_tile_size,
-                .num_entries = M * N,
-                .num_producers = 1,
-                .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-                .num_consumers = 1,
-                .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-                .enable_producer_implicit_sync = false,
-                .enable_consumer_implicit_sync = false,
-                .data_format = out_fmt,
-                .tensix_scope = tt_metal::experimental::dfb::TensixScope::INTRA});
-    } else {
-        const std::uint32_t in0_cb_index = 0;
-        const std::uint32_t in1_cb_index = 1;
-        const std::uint32_t out_cb_index = 16;
-        const std::uint32_t partials_cb_index = 24;
-
-        tt_metal::CircularBufferConfig l1_input0_cb_config =
-            tt_metal::CircularBufferConfig(in0_block_size_bytes, {{in0_cb_index, in0_fmt}})
-                .set_page_size(in0_cb_index, in0_tile_size);
-        tt_metal::CreateCircularBuffer(program_, core, l1_input0_cb_config);
-
-        tt_metal::CircularBufferConfig l1_input1_cb_config =
-            tt_metal::CircularBufferConfig(in1_block_size_bytes, {{in1_cb_index, in1_fmt}})
-                .set_page_size(in1_cb_index, in1_tile_size);
-        tt_metal::CreateCircularBuffer(program_, core, l1_input1_cb_config);
-
-        tt_metal::CircularBufferConfig l1_output_cb_config =
-            tt_metal::CircularBufferConfig(out_byte_size, {{out_cb_index, out_fmt}})
-                .set_page_size(out_cb_index, out_tile_size);
-        tt_metal::CreateCircularBuffer(program_, core, l1_output_cb_config);
-
-        tt_metal::CircularBufferConfig l1_partials_cb_config =
-            tt_metal::CircularBufferConfig(out_byte_size, {{partials_cb_index, out_fmt}})
-                .set_page_size(partials_cb_index, partials_tile_size);
-        tt_metal::CreateCircularBuffer(program_, core, l1_partials_cb_config);
-
-        in0_id = in0_cb_index;
-        in1_id = in1_cb_index;
-        out_id = out_cb_index;
-        partials_id = partials_cb_index;
-    }
-
-    std::map<std::string, std::string> compute_defines;
+    experimental::KernelSpec::CompilerOptions::Defines compute_defines;
     if (cfg.packer_l1_acc) {
-        compute_defines["PACKER_L1_ACC"] = "1";
+        compute_defines.emplace("PACKER_L1_ACC", "1");
     }
 
-    std::vector<std::uint32_t> compute_compile_args = {
-        in0_id, in1_id, out_id, partials_id, M * K, K * N, M * N, M, N, K, num_blocks};
-
-    KernelHandle reader_kernel;
-    KernelHandle writer_kernel;
-    KernelHandle compute_kernel;
-
+    experimental::DataMovementHardwareConfig reader_hw_config;
+    experimental::DataMovementHardwareConfig writer_hw_config;
+    experimental::ComputeHardwareConfig compute_hw_config;
     if (is_quasar) {
-        reader_kernel = tt_metal::experimental::quasar::CreateKernel(
-            program_,
-            "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/reader_binary_blocked.cpp",
-            core,
-            tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                .num_threads_per_cluster = 1, .compile_args = {in0_id, in1_id}});
-
-        writer_kernel = tt_metal::experimental::quasar::CreateKernel(
-            program_,
-            "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/writer_unary.cpp",
-            core,
-            tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                .num_threads_per_cluster = 1, .compile_args = {out_id}});
-
-        compute_kernel = tt_metal::experimental::quasar::CreateKernel(
-            program_,
-            "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/multi_block_compute.cpp",
-            core,
-            tt_metal::experimental::quasar::QuasarComputeConfig{
-                .num_threads_per_cluster = 1,
-                .compile_args = compute_compile_args,
-                .defines = compute_defines});
-
-        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
-            program_, in0_id, reader_kernel, compute_kernel);
-        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
-            program_, in1_id, reader_kernel, compute_kernel);
-        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
-            program_, out_id, compute_kernel, writer_kernel);
-        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
-            program_, partials_id, compute_kernel, compute_kernel);
+        reader_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        writer_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        compute_hw_config = experimental::ComputeGen2Config{.enable_32_bit_dest = cfg.fp32_dest_acc_en};
     } else {
-        reader_kernel = tt_metal::CreateKernel(
-            program_,
-            "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/reader_binary_blocked.cpp",
-            core,
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_1,
-                .noc = tt_metal::NOC::RISCV_1_default,
-                .compile_args = {in0_id, in1_id}});
-
-        writer_kernel = tt_metal::CreateKernel(
-            program_,
-            "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/writer_unary.cpp",
-            core,
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = tt_metal::NOC::RISCV_0_default,
-                .compile_args = {out_id}});
-
-        compute_kernel = tt_metal::CreateKernel(
-            program_,
-            "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/multi_block_compute.cpp",
-            core,
-            tt_metal::ComputeConfig{
-                .fp32_dest_acc_en = cfg.fp32_dest_acc_en,
-                .compile_args = compute_compile_args,
-                .defines = compute_defines});
+        reader_hw_config = experimental::DataMovementGen1Config{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
+        writer_hw_config = experimental::DataMovementGen1Config{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
+        compute_hw_config = experimental::ComputeGen1Config{.enable_32_bit_dest = cfg.fp32_dest_acc_en};
     }
+
+    const experimental::KernelSpec reader_spec{
+        .unique_id = READER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/reader_binary_blocked_2_0.cpp",
+        .num_threads = 1,
+        .dfb_bindings = {experimental::ProducerOf(IN0_DFB, "in0"), experimental::ProducerOf(IN1_DFB, "in1")},
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {"src0_addr",
+                  "src0_dram_bank_id",
+                  "src1_addr",
+                  "src1_dram_bank_id",
+                  "num_blocks",
+                  "in0_block_tile_cnt",
+                  "in1_block_tile_cnt",
+                  "in0_block_size_bytes",
+                  "in1_block_size_bytes"}},
+        .hw_config = reader_hw_config,
+    };
+
+    const experimental::KernelSpec writer_spec{
+        .unique_id = WRITER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp",
+        .num_threads = 1,
+        .dfb_bindings = {experimental::ConsumerOf(OUT_DFB, "in")},
+        .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
+        .hw_config = writer_hw_config,
+    };
+
+    const experimental::KernelSpec compute_spec{
+        .unique_id = COMPUTE,
+        .source = "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/multi_block_compute.cpp",
+        .num_threads = 1,
+        .compiler_options = {.defines = compute_defines},
+        .dfb_bindings =
+            {{
+                 .dfb_spec_name = IN0_DFB,
+                 .accessor_name = "in0",
+                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             },
+             {
+                 .dfb_spec_name = IN1_DFB,
+                 .accessor_name = "in1",
+                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             },
+             {
+                 .dfb_spec_name = OUT_DFB,
+                 .accessor_name = "out",
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             },
+             // Partials is compute-only scratch (spill/reload, or the L1-acc accumulator), so
+             // compute is both its producer and its consumer.
+             {
+                 .dfb_spec_name = PARTIALS_DFB,
+                 .accessor_name = "partials",
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             },
+             {
+                 .dfb_spec_name = PARTIALS_DFB,
+                 .accessor_name = "partials",
+                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             }},
+        .compile_time_args =
+            {{"in0_block_num_tiles", M * K},
+             {"in1_block_num_tiles", K * N},
+             {"out_block_num_tiles", M * N},
+             {"out_r", M},
+             {"out_c", N},
+             {"in0_k", K},
+             {"num_blocks", num_blocks}},
+        .hw_config = compute_hw_config,
+    };
+
+    const experimental::WorkUnitSpec wu{
+        .name = "main",
+        .kernels = {READER, WRITER, COMPUTE},
+        .target_nodes = node,
+    };
+
+    const experimental::ProgramSpec spec{
+        .name = "blocked_matmul",
+        .kernels = {reader_spec, writer_spec, compute_spec},
+        .dataflow_buffers = {in0_dfb_spec, in1_dfb_spec, out_dfb_spec, partials_dfb_spec},
+        .work_units = {wu},
+    };
+
+    workload.add_program(device_range, experimental::MakeProgramFromSpec(*mesh_device, spec));
+    auto& program_ = workload.get_programs().at(device_range);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Stimulus Generation
@@ -914,30 +891,29 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     distributed::EnqueueWriteMeshBuffer(cq, input0_dram_buffer, in0_stim.packed, /*blocking=*/true);
     distributed::EnqueueWriteMeshBuffer(cq, input1_dram_buffer, in1_stim.packed, /*blocking=*/true);
 
-    tt_metal::SetRuntimeArgs(
-        program_,
-        reader_kernel,
-        core,
-        {
-            (std::uint32_t)in0_dram_addr,
-            (std::uint32_t)0,
-            (std::uint32_t)in1_dram_addr,
-            (std::uint32_t)0,
-            (std::uint32_t)num_blocks,
-            (std::uint32_t)(M * K),  // in0_block_tile_cnt
-            (std::uint32_t)(K * N),  // in1_block_tile_cnt
-            (std::uint32_t)in0_block_size_bytes,
-            (std::uint32_t)in1_block_size_bytes,
-        });
-    tt_metal::SetRuntimeArgs(
-        program_,
-        writer_kernel,
-        core,
-        {
-            (std::uint32_t)out_dram_addr,
-            (std::uint32_t)0,
-            (std::uint32_t)(M * N),
-        });
+    experimental::ProgramRunArgs run_args;
+    run_args.kernel_run_args = {
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = READER,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"src0_addr", in0_dram_addr},
+                 {"src0_dram_bank_id", 0u},
+                 {"src1_addr", in1_dram_addr},
+                 {"src1_dram_bank_id", 0u},
+                 {"num_blocks", num_blocks},
+                 {"in0_block_tile_cnt", M * K},
+                 {"in1_block_tile_cnt", K * N},
+                 {"in0_block_size_bytes", static_cast<std::uint32_t>(in0_block_size_bytes)},
+                 {"in1_block_size_bytes", static_cast<std::uint32_t>(in1_block_size_bytes)}}),
+        },
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = WRITER,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node, {{"dst_addr", out_dram_addr}, {"bank_id", 0u}, {"num_tiles", M * N}}),
+        },
+    };
+    experimental::SetProgramRunArgs(program_, run_args);
 
     auto blocking = is_quasar;
     distributed::EnqueueMeshWorkload(cq, workload, blocking);
@@ -1213,21 +1189,33 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixTestSingleCoreComputeMatmulNo
 }
 
 TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleTileComputeMatmul) {
+    if (arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "single_tile_matmul test is not supported on Quasar";
+    }
     for (auto& device : this->devices_) {
         ASSERT_TRUE(unit_tests::compute::matmul::single_tile_matmul(device));
     }
 }
 TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleBlockSingleTileComputeMatmul) {
+    if (arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "single_block_matmul test is not supported on Quasar";
+    }
     for (auto& device : this->devices_) {
         ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(device, 1, 1, 1));
     }
 }
 TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleBlockSingleTileAccumulationComputeMatmul) {
+    if (arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "single_block_matmul test is not supported on Quasar";
+    }
     for (auto& device : this->devices_) {
         ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(device, 1, 2, 1));
     }
 }
 TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleBlockSingleTileNoAccumulationComputeMatmul) {
+    if (arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "single_block_matmul test is not supported on Quasar";
+    }
     for (auto& device : this->devices_) {
         ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(device, 2, 1, 2));
     }

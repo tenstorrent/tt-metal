@@ -15,6 +15,7 @@ from models.common.utility_functions import torch_random
 TEST_PADDING_VALUE = -42
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [32, 64, 41, 37])
 @pytest.mark.parametrize("w", [32, 64, 31, 63])
@@ -233,4 +234,4 @@ def test_sum_fp32_fast_and_approximate_mode(device, input_shape, dim, fast_and_a
     if fast_and_approximate_mode or device.arch() == ttnn.device.Arch.QUASAR:
         assert_allclose(torch_output_tensor, output_tensor, rtol=1e-2, atol=1e-2)
     else:
-        assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=2)
+        assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=2)

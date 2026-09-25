@@ -45,20 +45,19 @@ namespace m2 = experimental;
 TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
     using DataT = std::uint32_t;
 
-    if (this->device().arch() == ARCH::QUASAR) {
-        GTEST_SKIP() << "Quasar read_tile_value / get_tile_address on DFB is under debug; run on WH/BH";
-    }
-    if (MetalContext::instance().rtoptions().get_simulator_enabled()) {
-        GTEST_SKIP() << "Skipping DataflowBufferReadTileValue for tt-sim until GH#50135 is resolved";
-    }
-
     constexpr uint32_t num_producers = 1;
     constexpr uint32_t num_consumers = 1;
     constexpr uint32_t entry_size = 1024;
     constexpr uint32_t num_entries = 2;
 
     constexpr uint32_t num_results_per_thread = 7;
-    constexpr uint32_t num_trisc_threads = 3;
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t tensix_idx = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    const uint32_t compute_class = static_cast<uint32_t>(HalProcessorClassType::COMPUTE);
+    const uint32_t num_trisc_threads = hal.get_processor_class_num_fw_binaries(tensix_idx, compute_class);
+    constexpr std::array<const char*, 4> trisc_slot_names = {"UNPACK", "MATH", "PACK", "ISOLATE_SFPU"};
+    ASSERT_GE(num_trisc_threads, 3u);
+    ASSERT_LE(num_trisc_threads, trisc_slot_names.size());
 
     // Tile 0 / tile 1 scalars at element offsets 0 and 1 within each entry.
     constexpr DataT tile0_val0 = 0xA5A5A5A5u;
@@ -72,14 +71,8 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
     // Per thread: {tile0[0], tile0[1], tile1[0], tile1[1], get_tile_address(1)[0],
     //             read_tile_value<uint16_t>(1)[0], read_tile_value<uint16_t>(1)[1]}
     const std::vector<DataT> expected_per_thread = {
-        tile0_val0,
-        tile0_val1,
-        tile1_val0,
-        tile1_val1,
-        tile1_val0,
-        tile1_val0_lo,
-        tile1_val0_hi};
-    // UNPACK, MATH, and PACK each write expected_per_thread to a distinct L1 slot.
+        tile0_val0, tile0_val1, tile1_val0, tile1_val1, tile1_val0, tile1_val0_lo, tile1_val0_hi};
+    // Each participating TRISC writes expected_per_thread to a distinct L1 slot.
     std::vector<DataT> expected_scalar_reads;
     expected_scalar_reads.reserve(num_results_per_thread * num_trisc_threads);
     for (uint32_t thread = 0; thread < num_trisc_threads; ++thread) {
@@ -105,6 +98,16 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
         .data_format_metadata = DataFormat::Float16_b,
     };
 
+    m2::DataMovementHardwareConfig producer_hw;
+    m2::ComputeHardwareConfig consumer_hw;
+    if (this->device().arch() == ARCH::QUASAR) {
+        producer_hw = m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for = {DFB}};
+        consumer_hw = m2::ComputeGen2Config{};
+    } else {
+        producer_hw = m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0};
+        consumer_hw = m2::ComputeGen1Config{};
+    }
+
     m2::KernelSpec producer{
         .unique_id = PRODUCER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp",
@@ -122,7 +125,7 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
                 {"num_producers", num_producers},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}},
-        .hw_config = m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0},
+        .hw_config = producer_hw,
     };
 
     m2::KernelSpec consumer{
@@ -136,7 +139,7 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
               .access_pattern = m2::DFBAccessPattern::STRIDED}},
         .compile_time_args = {{"num_entries_per_consumer", num_entries}},
         .runtime_arg_schema = {.runtime_arg_names = {"result_l1_addr"}},
-        .hw_config = m2::ComputeGen1Config{},
+        .hw_config = consumer_hw,
     };
 
     m2::WorkUnitSpec wu{.name = "wu", .kernels = {PRODUCER, CONSUMER}, .target_nodes = node};
@@ -152,9 +155,7 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
     Program program = m2::MakeProgramFromSpec(this->device(), spec);
 
     const uint32_t result_size_bytes = static_cast<uint32_t>(expected_scalar_reads.size() * sizeof(DataT));
-    const uint32_t l1_alignment = this->device().allocator()->get_alignment(BufferType::L1);
-    const uint32_t aligned_result_size = (result_size_bytes + l1_alignment - 1) / l1_alignment * l1_alignment;
-    const uint32_t result_l1_addr = static_cast<uint32_t>(this->device().l1_size_per_core()) - aligned_result_size;
+    const uint32_t result_l1_addr = top_of_l1_scratch_addr(this->device(), result_size_bytes);
 
     m2::ProgramRunArgs params;
     params.kernel_run_args = {
@@ -179,10 +180,11 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
     input[words_per_entry + 1] = tile1_val1;
     slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
 
-    std::vector<DataT> result_init(expected_scalar_reads.size(), 0u);
+    constexpr DataT result_sentinel = 0xDEADBEEFu;
+    std::vector<DataT> result_init(expected_scalar_reads.size(), result_sentinel);
     slow_dispatch::WriteToL1(this->device(), CoreCoord(0, 0), result_l1_addr, result_init);
 
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
 
     tt_driver_atomics::mfence();
     std::vector<DataT> scalar_results;
@@ -190,10 +192,8 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
     ASSERT_EQ(scalar_results.size(), expected_scalar_reads.size());
     for (uint32_t thread = 0; thread < num_trisc_threads; ++thread) {
         const auto begin = scalar_results.begin() + thread * num_results_per_thread;
-        EXPECT_EQ(
-            std::vector<DataT>(begin, begin + num_results_per_thread),
-            expected_per_thread)
-            << "TRISC thread slot " << thread;
+        EXPECT_EQ(std::vector<DataT>(begin, begin + num_results_per_thread), expected_per_thread)
+            << "TRISC thread slot " << thread << " (" << trisc_slot_names[thread] << ")";
     }
 }
 
@@ -249,16 +249,12 @@ inline uint32_t expected_strided_ring_span_bytes(
 }
 
 inline ExtentRecord expected_strided_extent(
-    uint32_t entry_size,
-    uint32_t num_entries,
-    uint32_t num_producers,
-    uint32_t num_consumers,
-    bool is_producer) {
+    uint32_t entry_size, uint32_t num_entries, uint32_t num_producers, uint32_t num_consumers, bool is_producer) {
     const auto layout = compute_strided_layout(num_entries, entry_size, num_producers, num_consumers, is_producer);
     const uint32_t total_bytes = num_entries * entry_size;
     const uint32_t num_endpoint_threads = is_producer ? num_producers : num_consumers;
-    const uint32_t ring_span_bytes = expected_strided_ring_span_bytes(
-        entry_size, layout.ring_bytes, layout.num_tcs_on_risc, num_endpoint_threads);
+    const uint32_t ring_span_bytes =
+        expected_strided_ring_span_bytes(entry_size, layout.ring_bytes, layout.num_tcs_on_risc, num_endpoint_threads);
     return ExtentRecord{
         entry_size,
         entry_size * layout.stride_in_entries,
@@ -273,11 +269,7 @@ inline ExtentRecord expected_strided_extent(
 
 // ALL consumer (cap=ALL): capacity/stride follow num_producers; TC counts match DMTensix ALL.
 inline ExtentRecord expected_all_extent(
-    uint32_t entry_size,
-    uint32_t num_entries,
-    uint32_t num_producers,
-    uint32_t num_consumers,
-    bool is_producer) {
+    uint32_t entry_size, uint32_t num_entries, uint32_t num_producers, uint32_t num_consumers, bool is_producer) {
     (void)num_consumers;
     const uint32_t capacity = num_entries / num_producers;
     const uint32_t stride_in_entries = 1;
@@ -327,12 +319,6 @@ inline void expect_wh_bh_aliases(const ExtentRecord& rec) {
     EXPECT_EQ(rec[RingSpanBytes], rec[TotalSizeBytes]);
     EXPECT_EQ(rec[RingSpanNumEntries], rec[TotalNumEntries]);
     EXPECT_EQ(rec[StrideSize], rec[EntrySize]);
-}
-
-inline uint32_t allocate_l1_result_region(distributed::MeshDevice& mesh_device, uint32_t bytes) {
-    const uint32_t alignment = mesh_device.allocator()->get_alignment(BufferType::L1);
-    const uint32_t aligned = (bytes + alignment - 1u) / alignment * alignment;
-    return static_cast<uint32_t>(mesh_device.l1_size_per_core()) - aligned;
 }
 
 inline ExtentRecord read_extent_record(distributed::MeshDevice& mesh_device, CoreCoord core, uint32_t l1_addr) {
@@ -452,11 +438,10 @@ void run_extent_probe(distributed::MeshDevice& mesh_device, const ExtentProbePar
 
     Program program = m2::MakeProgramFromSpec(mesh_device, spec);
 
-    const uint32_t producer_records =
-        params.num_producers * params.producer.num_tc_snapshots;
+    const uint32_t producer_records = params.num_producers * params.producer.num_tc_snapshots;
     const uint32_t consumer_records = params.consumer.num_tc_snapshots;
     const uint32_t producer_result_l1 =
-        allocate_l1_result_region(mesh_device, (producer_records + consumer_records) * extent_record_bytes);
+        top_of_l1_scratch_addr(mesh_device, (producer_records + consumer_records) * extent_record_bytes);
     const uint32_t consumer_result_l1 = producer_result_l1 + producer_records * extent_record_bytes;
 
     m2::ProgramRunArgs run_args;
@@ -472,7 +457,7 @@ void run_extent_probe(distributed::MeshDevice& mesh_device, const ExtentProbePar
     };
     m2::SetProgramRunArgs(program, run_args);
 
-    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(mesh_device, std::move(program));
     tt_driver_atomics::mfence();
 
     const CoreCoord core{0, 0};

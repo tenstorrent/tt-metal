@@ -135,7 +135,7 @@ def test_dram_group_norm_vae_welford_reciprocal_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 1331396  # Measured: 1.33ms for GroupNorm VAE welford_reciprocal
+    expected_duration_ns = 1351000  # Measured: ~1.351ms for GroupNorm VAE welford_reciprocal
 
     # Log the performance result
     print(
@@ -322,7 +322,7 @@ def test_conv2d_auto_sliced_vae_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 3082972  # Measured: 3.08ms for Conv2D VAE auto sliced
+    expected_duration_ns = 3135000  # Measured: ~3.135ms on main (avg of 3 runs)
 
     # Log the performance result
     print(

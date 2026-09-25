@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <unistd.h>
 #include <cstdint>
 
 #include "risc_common.h"
@@ -26,32 +25,32 @@
 #endif
 
 // Per-processor kernel thread info for Quasar (set from kernel_config before kernel runs)
-thread_local uint32_t num_sw_threads __attribute__((used));
-thread_local uint32_t my_thread_id __attribute__((used));
+thread_local std::uint32_t num_sw_threads __attribute__((used));
+thread_local std::uint32_t my_thread_id __attribute__((used));
 
 extern "C" [[gnu::section(".start")]]
-uint32_t _start() {
+std::uint32_t _start() {
     // Enable GPREL optimizations.
     // asm("0: .reloc 0b, R_RISCV_NONE, __global_pointer$");
 #if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
     mark_stack_usage();
     wait_for_go_message();
 #ifdef KERNEL_RUN_TIME
-    uint64_t end_time = c_tensix_core::read_wall_clock() + KERNEL_RUN_TIME;
-    while (c_tensix_core::read_wall_clock() < end_time);
+    std::uint64_t end_time = get_timestamp() + KERNEL_RUN_TIME;
+    while (get_timestamp() < end_time);
 #endif
 #else
     // Raw read: hw_thread_idx has not been filled yet, and do_thread_crt1() below zeroes the .tbss
     // it lives in, so caching it any earlier would just be discarded.
-    uint32_t hartid = internal_::read_hw_thread_idx();
+    std::uint32_t hartid = internal_::read_hw_thread_idx();
 
     // Obtain launch message from mailbox and derive thread 0 (lowest hartid with same kernel).
-    uint32_t launch_idx = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
+    std::uint32_t launch_idx = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
     launch_msg_t tt_l1_ptr* launch_msg = &(*GET_MAILBOX_ADDRESS_DEV(launch))[launch_idx];
-    uint32_t my_kt = launch_msg->kernel_config.kernel_text_offset[hartid];
-    uint32_t thread_0_hartid = hartid;
+    std::uint32_t my_kt = launch_msg->kernel_config.kernel_text_offset[hartid];
+    std::uint32_t thread_0_hartid = hartid;
     if (launch_msg->kernel_config.enables & (1u << hartid)) {
-        for (uint32_t j = 2; j < MaxDMProcessorsPerCoreType; j++) {
+        for (std::uint32_t j = 2; j < MaxDMProcessorsPerCoreType; j++) {
             if ((launch_msg->kernel_config.enables & (1u << j)) &&
                 launch_msg->kernel_config.kernel_text_offset[j] == my_kt) {
                 thread_0_hartid = j;
@@ -60,9 +59,9 @@ uint32_t _start() {
         }
     }
 
-    extern uint32_t __tdata_lma[];
-    extern uint32_t __ldm_tdata_start[];
-    extern uint32_t __ldm_tdata_end[];
+    extern std::uint32_t __tdata_lma[];
+    extern std::uint32_t __ldm_tdata_start[];
+    extern std::uint32_t __ldm_tdata_end[];
 
     // Materialize __tdata_lma's address exactly once. The two references below (do_crt1 in the
     // thread-0 branch and do_thread_crt1) otherwise emit two R_RISCV_HI20 relocations for
@@ -72,7 +71,7 @@ uint32_t _start() {
     // relocation ... has no matching R_RISCV_LO12". The asm barrier makes the pointer opaque so the
     // compiler keeps a single materialization (one HI20) and reuses the register/spill instead of
     // re-emitting a lui/addi pair.
-    uint32_t* tdata_lma = __tdata_lma;
+    std::uint32_t* tdata_lma = __tdata_lma;
     asm volatile("" : "+r"(tdata_lma));
 
     if (hartid == thread_0_hartid) {
@@ -88,9 +87,6 @@ uint32_t _start() {
     while ((*GET_MAILBOX_ADDRESS_DEV(shared_globals_ready))[thread_0_hartid] != SHARED_GLOBALS_READY_GO) {
     }
 
-    if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
-        overlay_cmd_buff_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
-    }
 #ifdef ALIGN_LOCAL_CBS_TO_REMOTE_CBS
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #endif
