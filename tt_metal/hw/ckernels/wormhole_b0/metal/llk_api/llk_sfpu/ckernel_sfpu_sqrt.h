@@ -9,6 +9,7 @@
 #include "ckernel_defs.h"
 #include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_rsqrt_compat.h"
+#include "sanitizer/api.h"
 #include "sfpi.h"
 
 using namespace sfpi;
@@ -141,6 +142,12 @@ template <
     bool FAST_APPROX,
     bool legacy_compat = false>
 inline void calculate_sqrt() {
+    SAN_HOOK(execute<OperationSfpuSqrt>(
+        StateVal<OperationSfpuSqrt::ApproxMode>(APPROXIMATION_MODE),
+        StateVal<OperationSfpuSqrt::LegacyCompat>(legacy_compat),
+        StateDiscard<int>(ITERATIONS),
+        StateDiscard<bool>(fp32_dest_acc_en),
+        StateDiscard<bool>(FAST_APPROX)));
     if constexpr (legacy_compat) {
         _calculate_sqrt_compat_<APPROXIMATION_MODE, ITERATIONS, fp32_dest_acc_en>(ITERATIONS);
     } else {
@@ -150,6 +157,9 @@ inline void calculate_sqrt() {
 
 template <bool APPROXIMATION_MODE, bool legacy_compat = false>
 void sqrt_init() {
+    SAN_HOOK(init<OperationSfpuSqrt>(
+        StateVal<OperationSfpuSqrt::ApproxMode>(APPROXIMATION_MODE),
+        StateVal<OperationSfpuSqrt::LegacyCompat>(legacy_compat)));
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (!legacy_compat) {
         if constexpr (APPROXIMATION_MODE) {

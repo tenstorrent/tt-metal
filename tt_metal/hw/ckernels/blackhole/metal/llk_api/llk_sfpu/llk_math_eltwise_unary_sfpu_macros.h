@@ -9,6 +9,7 @@
 #include "llk_assert.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
+#include "sfpu_san.h"
 #include "sanitizer/api.h"
 
 /*
@@ -21,13 +22,14 @@
 
 namespace ckernel {
 
-template <DstSync DST_SYNC>
+template <DstSync DST_SYNC, SfpuType SFPU_OP>
 inline __attribute__((always_inline)) void _sfpu_check_(
     std::uint32_t dst_index, [[maybe_unused]] VectorMode vector_mode) {
-    SAN_HOOK(unsupported());
+    if constexpr (!sfpu_operation<SFPU_OP>::modelled) {
+        SAN_HOOK(unsupported());
+    }
     LLK_ASSERT(
-        (dst_index < get_dest_max_tiles_rt<DST_SYNC, DstTileShape::Tile32x32>()),
-        "dst_index exceeds max dest tiles");
+        (dst_index < get_dest_max_tiles_rt<DST_SYNC, DstTileShape::Tile32x32>()), "dst_index exceeds max dest tiles");
 }
 
 }  // namespace ckernel
@@ -40,15 +42,19 @@ inline __attribute__((always_inline)) void _sfpu_check_(
  * Macro hygiene: DST_IDX and VECTOR_MODE are evaluated by both the check and
  * params call. Keep call sites to identifiers/literals, not side effects.
  */
-#define SFPU_UNARY_CALL(DST_SYNC, DST_ACCUM, FN, TEMPLATES, DST_IDX, VECTOR_MODE, ...) \
-    (::ckernel::_sfpu_check_<DST_SYNC>(DST_IDX, VECTOR_MODE),               \
-     _llk_math_eltwise_unary_sfpu_params_(                                             \
-         ::ckernel::sfpu::FN<_SFPU_EXPAND TEMPLATES>, DST_IDX, VECTOR_MODE, ##__VA_ARGS__))
+#define SFPU_UNARY_CALL(DST_SYNC, DST_ACCUM, FN, TEMPLATES, DST_IDX, VECTOR_MODE, ...)              \
+    do {                                                                                            \
+        ::ckernel::_sfpu_check_<DST_SYNC, ::ckernel::sfpu::FN##_san_tag::op>(DST_IDX, VECTOR_MODE); \
+        _llk_math_eltwise_unary_sfpu_params_(                                                       \
+            ::ckernel::sfpu::FN<_SFPU_EXPAND TEMPLATES>, DST_IDX, VECTOR_MODE, ##__VA_ARGS__);      \
+    } while (false)
 
 // Non-templated functor in `ckernel::sfpu`.
-#define SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC, DST_ACCUM, FN, DST_IDX, VECTOR_MODE, ...) \
-    (::ckernel::_sfpu_check_<DST_SYNC>(DST_IDX, VECTOR_MODE),                     \
-     _llk_math_eltwise_unary_sfpu_params_(::ckernel::sfpu::FN, DST_IDX, VECTOR_MODE, ##__VA_ARGS__))
+#define SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC, DST_ACCUM, FN, DST_IDX, VECTOR_MODE, ...)            \
+    do {                                                                                                \
+        ::ckernel::_sfpu_check_<DST_SYNC, ::ckernel::sfpu::FN##_san_tag::op>(DST_IDX, VECTOR_MODE);     \
+        _llk_math_eltwise_unary_sfpu_params_(::ckernel::sfpu::FN, DST_IDX, VECTOR_MODE, ##__VA_ARGS__); \
+    } while (false)
 
 /*
  * SFPU init macros (3 total)

@@ -53,6 +53,7 @@ inline __attribute__((always_inline)) void _sfpu_check_(std::uint32_t dst_index,
 // Init with an optional non-templated init function.
 //   SFPU_UNARY_INIT(abs);                                       // no init function
 //   SFPU_UNARY_INIT(greater_than_zero, sfpu::init_zero_comp);  // non-templated init function
+
 #define SFPU_UNARY_INIT_1(OP) ::ckernel::llk_math_eltwise_unary_sfpu_init<::ckernel::SfpuType::OP>()
 #define SFPU_UNARY_INIT_2(OP, INIT_FN) ::ckernel::llk_math_eltwise_unary_sfpu_init<::ckernel::SfpuType::OP>(INIT_FN)
 #define SFPU_UNARY_INIT_PICK(_1, _2, NAME, ...) NAME
