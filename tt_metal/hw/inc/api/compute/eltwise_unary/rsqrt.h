@@ -45,4 +45,46 @@ ALWI void rsqrt_tile(uint32_t idst) {
         VectorMode::RC));
 }
 
+#if !defined(TT_POLY_LLK_DISABLE) && (defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE))
+#define TT_POLY_RSQRT_BF16_ROUTE_ACTIVE 1
+#else
+#define TT_POLY_RSQRT_BF16_ROUTE_ACTIVE 0
+#endif
+
+/** Internal BF16 typed-compiler route; public callers retain the stock entry point. */
+template <bool legacy_compat = false, bool FAST_APPROX = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void rsqrt_tt_poly_bf16_tile(uint32_t idst) {
+#if !TT_POLY_RSQRT_BF16_ROUTE_ACTIVE
+    rsqrt_tile<legacy_compat, FAST_APPROX, is_fp32_dest_acc_en>(idst);
+#else
+    if constexpr (is_fp32_dest_acc_en) {
+        rsqrt_tile<legacy_compat, FAST_APPROX, is_fp32_dest_acc_en>(idst);
+    } else {
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            calculate_rsqrt_tt_poly_bf16,
+            (8 /* ITERATIONS */),
+            idst,
+            VectorMode::RC));
+    }
+#endif
+}
+
+/** Initialize the internal BF16 typed-compiler route. */
+template <bool legacy_compat = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void rsqrt_tt_poly_bf16_tile_init() {
+#if !TT_POLY_RSQRT_BF16_ROUTE_ACTIVE
+    rsqrt_tile_init<legacy_compat>();
+#else
+    if constexpr (is_fp32_dest_acc_en) {
+        rsqrt_tile_init<legacy_compat>();
+    } else {
+        MATH(SFPU_UNARY_INIT_FN(rsqrt, sfpu::init_rsqrt_tt_poly_bf16, (APPROX, legacy_compat)));
+    }
+#endif
+}
+
+#undef TT_POLY_RSQRT_BF16_ROUTE_ACTIVE
+
 }  // namespace ckernel

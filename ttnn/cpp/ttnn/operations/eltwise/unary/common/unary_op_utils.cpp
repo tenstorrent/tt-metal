@@ -805,6 +805,14 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("mish_tile<{1}u>({0});", idst, (uint32_t)param0)};
         }
         case UnaryOpType::RSQRT: {
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16 && params.size() == 1 && param0_raw == 0) {
+                return {
+                    "rsqrt_tt_poly_bf16_tile_init<false>();",
+                    fmt::format("rsqrt_tt_poly_bf16_tile<false,false>({});", idst)};
+            }
+#endif
+
             return {"rsqrt_tile_init<false>();", fmt::format("rsqrt_tile<false, {1}>({0});", idst, param0_raw)};
         }
         case UnaryOpType::SQRT: {
@@ -1019,8 +1027,20 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             return {"lez_tile_init();", fmt::format("        lez_tile({});", idst)};
 
         case UnaryOpType::SQRT: return {"sqrt_tile_init();", fmt::format("sqrt_tile({});", idst)};
-        case UnaryOpType::RSQRT: return {"rsqrt_tile_init();", fmt::format("rsqrt_tile({});", idst)};
-        case UnaryOpType::CBRT: return {"cbrt_tile_init();", fmt::format("cbrt_tile({});", idst)};
+        case UnaryOpType::RSQRT:
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16) {
+                return {"rsqrt_tt_poly_bf16_tile_init();", fmt::format("rsqrt_tt_poly_bf16_tile({});", idst)};
+            }
+#endif
+            return {"rsqrt_tile_init();", fmt::format("rsqrt_tile({});", idst)};
+        case UnaryOpType::CBRT:
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16) {
+                return {"cbrt_tt_poly_bf16_tile_init();", fmt::format("cbrt_tt_poly_bf16_tile({});", idst)};
+            }
+#endif
+            return {"cbrt_tile_init();", fmt::format("cbrt_tile({});", idst)};
         case UnaryOpType::EXP2:
 #if !defined(TT_POLY_LLK_DISABLE)
             if (input_dtype == DataType::BFLOAT16) {

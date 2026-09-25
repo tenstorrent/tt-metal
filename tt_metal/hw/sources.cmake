@@ -368,8 +368,10 @@ set(HW_JIT_API_HEADERS
     toolchain/erisc-b0-memory.ld
     toolchain/erisc-b0-kernel.ld
     ckernels/common/llk_sfpu/ckernel_sfpu_acosh_bf16.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_cbrt_bf16.h
     ckernels/common/llk_sfpu/ckernel_sfpu_expm1_bf16.h
     ckernels/common/llk_sfpu/ckernel_sfpu_relu_bf16.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_rsqrt_bf16.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_abs_exp_correction.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_abs_exp_correction_core.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_asymptotic_exp.inc
@@ -397,6 +399,8 @@ set(HW_JIT_API_HEADERS
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_horner.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_min_max.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_mirrored_terminals.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_newton_root.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_newton_root_core.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_polynomial_dst_tile.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_polynomial_dual_tile.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_polynomial_single_tile.inc

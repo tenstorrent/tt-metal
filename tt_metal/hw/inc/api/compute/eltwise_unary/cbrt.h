@@ -42,4 +42,46 @@ ALWI void cbrt_tile(uint32_t idst) {
  */
 ALWI void cbrt_tile_init() { MATH(SFPU_UNARY_INIT_FN(cbrt, sfpu::cube_root_init, (APPROX))); }
 
+#if !defined(TT_POLY_LLK_DISABLE) && (defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE))
+#define TT_POLY_CBRT_BF16_ROUTE_ACTIVE 1
+#else
+#define TT_POLY_CBRT_BF16_ROUTE_ACTIVE 0
+#endif
+
+/** Internal BF16 typed-compiler route; public callers retain the stock entry point. */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void cbrt_tt_poly_bf16_tile(uint32_t idst) {
+#if !TT_POLY_CBRT_BF16_ROUTE_ACTIVE
+    cbrt_tile<is_fp32_dest_acc_en>(idst);
+#else
+    if constexpr (is_fp32_dest_acc_en) {
+        cbrt_tile<is_fp32_dest_acc_en>(idst);
+    } else {
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            calculate_cbrt_tt_poly_bf16,
+            (8 /* ITERATIONS */),
+            idst,
+            VectorMode::RC));
+    }
+#endif
+}
+
+/** Initialize the internal BF16 typed-compiler route. */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void cbrt_tt_poly_bf16_tile_init() {
+#if !TT_POLY_CBRT_BF16_ROUTE_ACTIVE
+    cbrt_tile_init();
+#else
+    if constexpr (is_fp32_dest_acc_en) {
+        cbrt_tile_init();
+    } else {
+        MATH(SFPU_UNARY_INIT_FN(cbrt, sfpu::init_cbrt_tt_poly_bf16, (APPROX)));
+    }
+#endif
+}
+
+#undef TT_POLY_CBRT_BF16_ROUTE_ACTIVE
+
 }  // namespace ckernel
