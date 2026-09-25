@@ -1,9 +1,9 @@
 {
  "last_run": {
-  "run_id": "36079942303",
-  "timestamp": "2026-09-25T01:03:00Z"
+  "run_id": "36103953460",
+  "timestamp": "2026-09-25T06:44:00Z"
  },
- "run_id": "36079942303",
+ "run_id": "36103953460",
  "open_prs": {
   "52106": {
    "issue": 51660,
@@ -335,6 +335,11 @@
    "branch": "repo-assist/fix-issue-57715-transpose-bfp8-identity-typecast",
    "title": "fix(ttnn): resolve identity transpose before bfloat8_b typecast",
    "status": "opened this run; moves identity-transpose check above bfloat8_b typecast in transpose_impl (transpose.cpp), matches issue's own suggested fix; added test_transpose_identity_bfloat8_b regression test mirroring test_transpose_wh_bfp4; clang-format clean, py_compile clean; CI triggered via pr-gate.yaml, outcome unknown yet, check next run; Docker unavailable in sandbox so unverified by build/execution"
+  },
+  "57732_dram_width_sharded": {
+   "issue": 57732,
+   "branch": "repo-assist/fix-issue-57732-dram-width-sharded-narrow-block",
+   "status": "opened this run; clamps unclamped first DRAM-bank read in 2D-mcast width-shard walker (both DramWidthShardWalker helper + duplicated inline copy) to per_core_N, matching decode-path factory's existing guard; added regression test; CI triggered via pr-gate.yaml, outcome unknown yet, check next run"
   }
  },
  "issues_labeled": [
@@ -551,7 +556,8 @@
    "note": "no existing open PR referenced #57512 (search_pull_requests 0 hits before fix)"
   },
   "57715": "verified 0 open PRs reference #57715 before opening fix this run",
-  "57724": "has open fix PR #57726 (reporter mtairum's own), no duplicate needed"
+  "57724": "has open fix PR #57726 (reporter mtairum's own), no duplicate needed",
+  "57732": "no existing PR found (search_pull_requests 0 hits, closed_by_pull_requests total_count 0 on issue itself) before opening fix PR"
  },
  "dropped_fix_targets": {
   "51845": "maintainer jasondavies rejected both proposed remedies 2026-08-05 -- do not attempt fix",
@@ -1171,7 +1177,7 @@
   }
  },
  "backlog_cursor": {
-  "task1_task2_latest": "2026-09-25: reviewed newest ~50 open issues (down to #57685); labeled 7 fresh unlabeled 2026-09-24/25 issues (57815 feature, 57813 ci-bug, 57810 bug, 57807 infra-ci, 57806 performance monitoring, 57800/57798 bug) plus 9 fresh AI-static-analysis defect-catalog issues from ijankowskiTT (57685-57694 range, excl 57690 already labeled) as bug. Investigated+commented on #57798 (MeshBuffer::deallocate use-after-free when MeshDevice outlives ReleaseOwnership) -- verified root cause fully against current tt_metal/distributed/mesh_device_impl.hpp, mesh_buffer.cpp, tt_metal.cpp; discussed both of reporter's suggested fixes, deferred actual fix to maintainer (no HW access for teardown-ordering validation). Checked #57750 (Kimi-K2.7 NFS->Weka paths) -- already has open PR #57805 from reporter (kgrujcic-tt) with full CI evidence, no duplicate needed. Continue from #57685-and-below range next run.",
+  "task1_task2_latest": "2026-09-25 (run 36103953460): reviewed newest ~30 open issues (down to #57732); found and fixed issue #57732 (2D-mcast matmul DRAM width-sharded narrow-block silent garbage output) -- exceptionally well-documented community report with exact line numbers, root cause, and one-line fix; independently re-verified against current matmul_multicore_reuse_mcast_2d_program_factory.cpp before applying (line numbers in the issue were stale vs current main, but the bug pattern and fix were confirmed present at both the DramWidthShardWalker class and inline duplicate). Opened fix PR + regression test + issue comment. Continue backlog from #57732-and-below next run.",
   "task6_latest": "2026-09-25: nudged 3 never-previously-touched author-blocked stale PRs (no update since 2026-09-02, 3+ weeks): #51129 (digamma fix, PR Gate Status failing), #51155 (snake_beta Cody-Waite, unresolved CHANGES_REQUESTED from mateusznowakTT), #52315 (softmax numeric_stable default, mergeable_state behind, no reviews). 3-action cap reached."
  },
  "labeled_issues": {
@@ -1706,7 +1712,7 @@
    "note": "verified 0 merged PRs, 0 issues, exactly 1 PR authored (this one)"
   }
  },
- "task8_last_update": "2026-09-25T01:03:00Z",
+ "task8_last_update": "2026-09-25T06:44:00Z",
  "ci_pattern_note": "2026-09-20: PR #56195 shows RTL Sim CI failure with details_url=github.com/tenstorrernt (typo domain) -- same broken-placeholder pattern already seen on #55434/#51868, treating as infra noise not a code defect until a real job log can be fetched.",
  "lessons_learned": [
   "2026-09-21: PR #56817 case study -- a prior Repo Assist 'root cause' diagnosis (sign-magnitude vs two's-complement for Int32 SFPABS) was WRONG despite citing DeepWiki/ISA docs, and was only caught by a maintainer's real on-device measurement. Always weight a contributor's device-measured counter-evidence over a prior confident-sounding root-cause comment, even one from Repo Assist itself; re-verify the ISA claim from scratch rather than trusting the earlier chain of reasoning.",
