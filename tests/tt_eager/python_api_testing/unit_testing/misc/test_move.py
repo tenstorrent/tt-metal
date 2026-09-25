@@ -162,8 +162,9 @@ def test_move_op_overlap_narrow_core_range(device):
     run_move_op(0, [1, 1, 160, 32], ttnn.TILE_LAYOUT, ttnn.bfloat16, mem_config, mem_config, device)
 
 
-def test_move_op_overlap_row_major_unaligned_page_size(device):
+@pytest.mark.parametrize("buffer_type", [ttnn.BufferType.L1, ttnn.BufferType.DRAM], ids=["L1", "DRAM"])
+def test_move_op_overlap_row_major_unaligned_page_size(device, buffer_type):
     # Regression: a row-major page_size that's 16 mod 32 (24 bf16 elements = 48 B) disagreed with
-    # the CB's 16-byte-aligned total size, overrunning the CB.
-    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+    # the CB's 16-byte-aligned total size, overrunning the CB. DRAM also takes the overlap path here.
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type)
     run_move_op(0, [1, 1, 64, 24], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, mem_config, mem_config, device)
