@@ -374,6 +374,7 @@ set(HW_JIT_API_HEADERS
     ckernels/common/llk_sfpu/ckernel_sfpu_rsqrt_bf16.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_abs_exp_correction.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_abs_exp_correction_core.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_abs_value.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_asymptotic_exp.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_asymptotic_factor.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_cascade_dense.h

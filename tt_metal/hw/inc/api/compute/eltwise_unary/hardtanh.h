@@ -63,4 +63,93 @@ ALWI void hardtanh_tile_init() { MATH(SFPU_UNARY_INIT(hardtanh)); }
 ALWI void hardtanh_tile_init_pack() { PACK(SFPU_UNARY_INIT(hardtanh)); }
 #endif  // !ARCH_QUASAR
 
+#if !defined(TT_POLY_LLK_DISABLE) &&                                                                                 \
+    ((defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)) && defined(TT_METAL_SFPU_SINGLE_TILE_DST) &&                \
+     TT_METAL_SFPU_SINGLE_TILE_DST == 1 && defined(TT_POLY_BF16_UNARY_CONTEXT) && TT_POLY_BF16_UNARY_CONTEXT == 1 && \
+     defined(SFPU_OP_PROGRAM_INIT_0))
+#define TT_POLY_HARDTANH_BF16_ROUTE_ACTIVE 1
+#else
+#define TT_POLY_HARDTANH_BF16_ROUTE_ACTIVE 0
+#endif
+
+/** Internal BF16 typed-compiler route; public callers retain the stock entry point. */
+ALWI void hardtanh_tt_poly_bf16_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
+#if !TT_POLY_HARDTANH_BF16_ROUTE_ACTIVE
+    hardtanh_tile(idst, param0, param1);
+#else
+    if constexpr (DST_ACCUM_MODE) {
+        hardtanh_tile(idst, param0, param1);
+    } else {
+        if (param0 != 0xbf800000u || param1 != 0x3f800000u) {
+            hardtanh_tile_init();
+            hardtanh_tile(idst, param0, param1);
+#if !TT_POLY_HARDTANH_BF16_ROUTE_ACTIVE
+            hardtanh_tile_init();
+#else
+            if constexpr (DST_ACCUM_MODE) {
+                hardtanh_tile_init();
+            } else {
+                hardtanh_tile_init();
+                MATH(sfpu::init_hardtanh_tt_poly_bf16());
+            }
+#endif
+            return;
+        }
+        if (idst != 0) {
+            hardtanh_tile_init();
+            hardtanh_tile(idst, param0, param1);
+#if !TT_POLY_HARDTANH_BF16_ROUTE_ACTIVE
+            hardtanh_tile_init();
+#else
+            if constexpr (DST_ACCUM_MODE) {
+                hardtanh_tile_init();
+            } else {
+                hardtanh_tile_init();
+                MATH(sfpu::init_hardtanh_tt_poly_bf16());
+            }
+#endif
+            return;
+        }
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_hardtanh_tt_poly_bf16,
+            (32 /* ITERATIONS */),
+            idst,
+            VectorMode::None));
+    }
+#endif
+}
+
+/** Initialize the internal BF16 typed-compiler route. */
+ALWI void hardtanh_tt_poly_bf16_tile_init() {
+#if !TT_POLY_HARDTANH_BF16_ROUTE_ACTIVE
+    hardtanh_tile_init();
+#else
+    if constexpr (DST_ACCUM_MODE) {
+        hardtanh_tile_init();
+    }
+#endif
+}
+
+/** Initialize the selected single-tile program once, before its tile loop. */
+ALWI void hardtanh_tt_poly_bf16_program_init() {
+#if TT_POLY_HARDTANH_BF16_ROUTE_ACTIVE
+    if constexpr (!(DST_ACCUM_MODE)) {
+#if !TT_POLY_HARDTANH_BF16_ROUTE_ACTIVE
+        hardtanh_tile_init();
+#else
+        if constexpr (DST_ACCUM_MODE) {
+            hardtanh_tile_init();
+        } else {
+            hardtanh_tile_init();
+            MATH(sfpu::init_hardtanh_tt_poly_bf16());
+        }
+#endif
+    }
+#endif
+}
+
+#undef TT_POLY_HARDTANH_BF16_ROUTE_ACTIVE
+
 }  // namespace ckernel
