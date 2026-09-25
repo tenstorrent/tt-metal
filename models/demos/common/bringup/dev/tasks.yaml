@@ -79,3 +79,12 @@ tasks:
     gate:
       cmd: python -m models.demos.common.bringup.knowledge.check
       metrics: {known_issue_errors: "== 0", repo_map_errors: "== 0"}
+  - id: F9
+    title: Fixes from the first model's intake (ladder order, scripted R.1, gate before agent, per-role reads)
+    step: framework
+    deps: [F8]
+    paths: [models/demos/common/bringup/core, models/demos/common/bringup/plan, models/demos/common/bringup/intake,
+            models/demos/common/bringup/orchestrator.py, models/demos/common/bringup/selftest]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/
+      metrics: {selftest_passed: ">= 97", selftest_failed: "== 0"}
