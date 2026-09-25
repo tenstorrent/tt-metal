@@ -367,6 +367,7 @@ set(HW_JIT_API_HEADERS
     toolchain/erisc-b0-app-sections.ld
     toolchain/erisc-b0-memory.ld
     toolchain/erisc-b0-kernel.ld
+    ckernels/common/llk_sfpu/ckernel_sfpu_expm1_bf16.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_abs_exp_correction.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_abs_exp_correction_core.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_asymptotic_exp.inc
@@ -378,6 +379,10 @@ set(HW_JIT_API_HEADERS
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_domain_prepare.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_domain_symmetric_constant.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_encoded_domain_finalize.inc
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_exp2.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_exp2_paired.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_factored_cw_expm1.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_factored_cw_expm1_core.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_finite_reciprocal.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_gradient_finalization_owner.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_gradient_finalize.inc

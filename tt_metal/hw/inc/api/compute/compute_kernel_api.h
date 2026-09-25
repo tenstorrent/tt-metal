@@ -1179,4 +1179,120 @@ ALWI void clear_compute_special_value_flags() { MATH((llk_math_clear_compute_spe
 
 #endif
 
+#if !defined(TT_POLY_LLK_DISABLE) &&                                                                                 \
+    ((defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)) && defined(TT_METAL_SFPU_SINGLE_TILE_DST) &&                \
+     TT_METAL_SFPU_SINGLE_TILE_DST == 1 && defined(TT_POLY_BF16_UNARY_CONTEXT) && TT_POLY_BF16_UNARY_CONTEXT == 1 && \
+     defined(SFPU_OP_PROGRAM_INIT_0))
+#define TT_POLY_EXP2_BF16_ROUTE_ACTIVE 1
+#else
+#define TT_POLY_EXP2_BF16_ROUTE_ACTIVE 0
+#endif
+
+/** Internal BF16 typed-compiler route; public callers retain the stock entry point. */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void exp2_tt_poly_bf16_tile(uint32_t idst) {
+#if !TT_POLY_EXP2_BF16_ROUTE_ACTIVE
+    exp2_tile<is_fp32_dest_acc_en>(idst);
+#else
+    if constexpr (is_fp32_dest_acc_en) {
+        exp2_tile<is_fp32_dest_acc_en>(idst);
+    } else {
+        if (idst != 0) {
+            exp2_tile_init<is_fp32_dest_acc_en>();
+            exp2_tile<is_fp32_dest_acc_en>(idst);
+#if !TT_POLY_EXP2_BF16_ROUTE_ACTIVE
+            exp2_tile_init<is_fp32_dest_acc_en>();
+#else
+            if constexpr (is_fp32_dest_acc_en) {
+                exp2_tile_init<is_fp32_dest_acc_en>();
+            } else {
+                MATH(SFPU_UNARY_INIT_FN(
+                    exp2, sfpu::init_exp2_tt_poly_bf16, (true /*APPROXIMATE*/, is_fp32_dest_acc_en)));
+            }
+#endif
+            return;
+        }
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            calculate_exp2_tt_poly_bf16,
+            (32 /* ITERATIONS */),
+            idst,
+            VectorMode::None));
+    }
+#endif
+}
+
+/** Initialize the internal BF16 typed-compiler route. */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void exp2_tt_poly_bf16_tile_init() {
+#if !TT_POLY_EXP2_BF16_ROUTE_ACTIVE
+    exp2_tile_init<is_fp32_dest_acc_en>();
+#else
+    if constexpr (is_fp32_dest_acc_en) {
+        exp2_tile_init<is_fp32_dest_acc_en>();
+    }
+#endif
+}
+
+/** Initialize the selected single-tile program once, before its tile loop. */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void exp2_tt_poly_bf16_program_init() {
+#if TT_POLY_EXP2_BF16_ROUTE_ACTIVE
+    if constexpr (!(is_fp32_dest_acc_en)) {
+#if !TT_POLY_EXP2_BF16_ROUTE_ACTIVE
+        exp2_tile_init<is_fp32_dest_acc_en>();
+#else
+        if constexpr (is_fp32_dest_acc_en) {
+            exp2_tile_init<is_fp32_dest_acc_en>();
+        } else {
+            MATH(SFPU_UNARY_INIT_FN(exp2, sfpu::init_exp2_tt_poly_bf16, (true /*APPROXIMATE*/, is_fp32_dest_acc_en)));
+        }
+#endif
+    }
+#endif
+}
+
+#undef TT_POLY_EXP2_BF16_ROUTE_ACTIVE
+
+#if !defined(TT_POLY_LLK_DISABLE) && ((defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)) && \
+                                      defined(TT_METAL_SFPU_SINGLE_TILE_DST) && TT_METAL_SFPU_SINGLE_TILE_DST == 1)
+#define TT_POLY_EXPM1_BF16_ROUTE_ACTIVE 1
+#else
+#define TT_POLY_EXPM1_BF16_ROUTE_ACTIVE 0
+#endif
+
+/** Internal BF16 typed-compiler route; public callers retain the stock entry point. */
+template <bool approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void expm1_tt_poly_bf16_tile(uint32_t idst) {
+#if !TT_POLY_EXPM1_BF16_ROUTE_ACTIVE
+    expm1_tile<approx, is_fp32_dest_acc_en>(idst);
+#else
+    if constexpr (is_fp32_dest_acc_en) {
+        expm1_tile<approx, is_fp32_dest_acc_en>(idst);
+    } else {
+        if (idst != 0) {
+            expm1_tile_init<approx, is_fp32_dest_acc_en>();
+            expm1_tile<approx, is_fp32_dest_acc_en>(idst);
+            return;
+        }
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            calculate_expm1_tt_poly_bf16,
+            (32 /* ITERATIONS */),
+            idst,
+            VectorMode::None));
+    }
+#endif
+}
+
+/** Initialize the internal BF16 typed-compiler route. */
+template <bool approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void expm1_tt_poly_bf16_tile_init() {
+    expm1_tile_init<approx, is_fp32_dest_acc_en>();
+}
+
+#undef TT_POLY_EXPM1_BF16_ROUTE_ACTIVE
+
 }  // namespace ckernel

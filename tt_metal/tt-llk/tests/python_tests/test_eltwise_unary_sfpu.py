@@ -1248,6 +1248,7 @@ def eltwise_unary_sfpu(
     shift_amount=None,
     relu_min_int_threshold=None,
     twos_complement=False,
+    extra_templates=(),
 ):
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
@@ -1310,6 +1311,7 @@ def eltwise_unary_sfpu(
             FAST_MODE(fast_mode),
             CLAMP_NEGATIVE(True),
             MATH_OP(mathop=mathop),
+            *extra_templates,
             # Only emitted when swept: sfpu_operations.h keys off #ifdef, and every other
             # unary test has to keep compiling without the macro.
             *([] if shift_amount is None else [SFPU_SHIFT_AMOUNT(shift_amount)]),
@@ -1458,3 +1460,44 @@ def test_exponential_clamp_negative(clamp_negative: bool):
     assert torch.all(
         is_valid
     ), f"Test failed: {(~is_valid).sum()} elements outside tolerance (atol={atol}, rtol={rtol})"
+
+
+from helpers.test_variant_parameters import TemplateParameter
+
+
+class _TTPolyGeneratedBF16(TemplateParameter):
+    def __init__(self, op, initialize, replace_init, iterations, vector_mode):
+        self.op = op
+        self.initialize = initialize
+        self.replace_init = replace_init
+        self.iterations = iterations
+        self.vector_mode = vector_mode
+
+    def convert_to_cpp(self) -> str:
+        result = f'#define TT_POLY_LLK_TEST_HEADER "llk_sfpu/ckernel_sfpu_{self.op}.h"\n'
+        if self.initialize:
+            result += f'#define TT_POLY_LLK_TEST_INIT init_{self.op}_tt_poly_bf16\n'
+        if self.replace_init:
+            result += '#define TT_POLY_LLK_TEST_REPLACE_INIT\n'
+        return result + (
+            f'#define TT_POLY_LLK_TEST_CALC calculate_{self.op}_tt_poly_bf16\n'
+            f'#define TT_POLY_LLK_TEST_ITERATIONS {self.iterations}\n'
+            f'#define TT_POLY_LLK_TEST_VECTOR_MODE {self.vector_mode}\n'
+        )
+
+
+@pytest.mark.parametrize("mathop,op,initialize,replace_init,iterations,vector_mode", [
+    (MathOperation.Exp2, "exp2", True, True, 32, "None"),
+    (MathOperation.Expm1, "expm1", False, False, 32, "None"),
+])
+def test_tt_poly_generated_bf16_llk(mathop, op, initialize, replace_init, iterations, vector_mode):
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        DestAccumulation.No,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        [32, 32],
+        extra_templates=(_TTPolyGeneratedBF16(op, initialize, replace_init, iterations, vector_mode),),
+    )
