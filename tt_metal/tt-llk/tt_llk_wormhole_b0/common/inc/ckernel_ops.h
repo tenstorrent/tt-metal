@@ -5,12 +5,11 @@
 #pragma once
 
 #if __riscv_xtttensixwh || (__clang__ && defined(ARCH_WORMHOLE) && defined(COMPILE_FOR_TRISC))
-#define TTI_INSN(ENCODING)    void(({ __asm__ __volatile__(".ttinsn %0" : : "n"((ENCODING))); }))
+#define TTI_INSN(ENCODING)    ({ __asm__ __volatile__(".ttinsn %0" : : "n"((ENCODING))); })
 #define TT_INSN(ENCODING)     void(::ckernel::instrn_buffer[0] = (ENCODING))
 #elif defined(ARCH_WORMHOLE) && defined(LLK_TEST)
-// The llk test infra compiles this on brisc to (unreachable?) code.
-// So icky.
-#define TTI_INSN(ENCODING) void((void(ENCODING), ({ __asm__ __volatile__(".warning \"TTI_INSN in non-tensix code\""); }) /*, __builtin_trap()*/))
+// The llk test infra compiles this on brisc and somehow executes it. So icky.
+#define TTI_INSN(ENCODING) void((void(ENCODING), ({ __asm__ __volatile__(".word (3 & (%0 >> 30)) | (0xfffffffc & (%0 << 2))" : :"n"((ENCODING)));})
 #define TT_INSN(ENCODING)  void((void(ENCODING), ({ __asm__ __volatile__(".error \"TT_INSN in non-tensix code\""); })))
 #else
 #define TTI_INSN(ENCODING) void((void(ENCODING), ({ __asm__ __volatile__(".error \"TTI_INSN in non-tensix code\""); })))
