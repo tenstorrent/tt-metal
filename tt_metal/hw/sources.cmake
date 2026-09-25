@@ -398,6 +398,7 @@ set(HW_JIT_API_HEADERS
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_gradient_finalization_owner.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_gradient_finalize.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_horner.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_log2.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_min_max.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_mirrored_terminals.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_newton_root.h

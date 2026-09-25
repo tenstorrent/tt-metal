@@ -302,7 +302,13 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("log_with_base_tile_init<{}u>();", (uint32_t)param0),
                 fmt::format("log_with_base_tile<{1}u>({0}, 0x3ede5bd9u);", idst, (uint32_t)param0)};
 
-        case UnaryOpType::LOG2:  // log2[x] = log[x]*1.4426950408889634f; FP32@U32 0x3fb8aa3b; FP16@U16 0x3dc5;
+        case UnaryOpType::LOG2:
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16 && params.size() == 1 && param0 == 0.0f) {
+                return {"log2_tt_poly_bf16_tile_init();", fmt::format("log2_tt_poly_bf16_tile({});", idst)};
+            }
+#endif
+            // log2[x] = log[x]*1.4426950408889634f; FP32@U32 0x3fb8aa3b; FP16@U16 0x3dc5;
             return {
                 fmt::format("log_with_base_tile_init<{}u>();", (uint32_t)param0),
                 fmt::format("log_with_base_tile<{1}u, true>({0}, 0x3fb8aa3bu);", idst, (uint32_t)param0)};
@@ -948,7 +954,13 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::LOG10:
             // log10[x] = log[x]/log[10] = log[x]*0.4342944819032518; FP32@U32 0x3ede5bd9; FP16@U16 0x36f3;
             return {"log_with_base_tile_init();", fmt::format("log_with_base_tile({}, 0x3ede5bd9u);", idst)};
-        case UnaryOpType::LOG2:  // log2[x] = log[x]*1.4426950408889634f; FP32@U32 0x3fb8aa3b; FP16@U16 0x3dc5;
+        case UnaryOpType::LOG2:
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16) {
+                return {"log2_tt_poly_bf16_tile_init();", fmt::format("log2_tt_poly_bf16_tile({});", idst)};
+            }
+#endif
+            // log2[x] = log[x]*1.4426950408889634f; FP32@U32 0x3fb8aa3b; FP16@U16 0x3dc5;
             return {
                 "log_with_base_tile_init();", fmt::format("log_with_base_tile<false, true>({}, 0x3fb8aa3bu);", idst)};
         case UnaryOpType::ABS:
