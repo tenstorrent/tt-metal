@@ -86,8 +86,11 @@ Tensor load_tensor_flatbuffer(const std::string& file_name, tt::tt_metal::distri
     size_t file_size = file_stat.st_size;
     TT_FATAL(file_size >= sizeof(uint64_t), "Tensor file \"{}\" is too small to be valid", file_name);
 
-    // Mmap the file to read tensor data lazily.
-    void* mmap_addr = mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    // Mmap the file to read tensor data lazily. The mapping is MAP_SHARED because uploads pin it read-only for device
+    // DMA: a long-term pin of a MAP_PRIVATE mapping makes the kernel copy every page into anonymous memory first
+    // (copy-on-write unshare), which is slower than the upload itself and doubles resident memory. The mapping is
+    // PROT_READ and never written through, so the two flags are otherwise indistinguishable.
+    void* mmap_addr = mmap(nullptr, file_size, PROT_READ, MAP_SHARED, fd, 0);
     TT_FATAL(mmap_addr != MAP_FAILED, "Failed to mmap file \"{}\": {}", file_name, strerror(errno));
 
     std::shared_ptr<void> mmap_ptr(mmap_addr, [file_size](void* addr) { munmap(addr, file_size); });
