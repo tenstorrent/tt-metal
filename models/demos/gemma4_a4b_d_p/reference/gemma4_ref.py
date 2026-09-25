@@ -214,9 +214,16 @@ def dense_routing(tw: torch.Tensor, ti: torch.Tensor, num_experts: int) -> torch
     return r.scatter_(1, ti, tw)
 
 
+EXPERT_ROW_BLOCK = 32  # per-expert GEMM rows are padded to a multiple of this (see experts_forward)
+
+
 def experts_forward(x: torch.Tensor, routing: torch.Tensor, gate_up: torch.Tensor, down: torch.Tensor) -> torch.Tensor:
     """sum over selected experts of routing[t, e] * expert_e(x[t]); tokens grouped per expert, experts in id order
-    (the HF accumulation order). gate_up: [E, 2I, H] (gate rows first); down: [E, H, I]."""
+    (the HF accumulation order). gate_up: [E, 2I, H] (gate rows first); down: [E, H, I].
+
+    Each group is zero-padded to a multiple of EXPERT_ROW_BLOCK rows: MKL sgemm picks M-dependent kernels for small
+    or odd M, so without padding a token's expert output depends on how many other tokens chose that expert, and
+    chunked prefill stops matching one-shot (MoE routing flips then amplify it)."""
     out = torch.zeros_like(x)
     tok_all, exp_all = (routing != 0).nonzero(as_tuple=True)
     order = torch.argsort(exp_all, stable=True)
@@ -226,8 +233,12 @@ def experts_forward(x: torch.Tensor, routing: torch.Tensor, gate_up: torch.Tenso
     for e, n in zip(experts.tolist(), counts.tolist()):
         tok = tok_all[off : off + n]
         off += n
-        g, u = F.linear(x[tok], gate_up[e]).chunk(2, dim=-1)
-        y = F.linear(gelu_tanh(g) * u, down[e])
+        xe = x[tok]
+        pad = -n % EXPERT_ROW_BLOCK
+        if pad:
+            xe = torch.cat([xe, xe.new_zeros(pad, xe.shape[1])])
+        g, u = F.linear(xe, gate_up[e]).chunk(2, dim=-1)
+        y = F.linear(gelu_tanh(g) * u, down[e])[:n]
         out.index_add_(0, tok, y * routing[tok, e, None])
     return out
 
