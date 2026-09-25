@@ -1,4 +1,31 @@
 {
+ "B.1": {
+  "attempts": 1,
+  "duration_s": 9.4,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-25T22:54:33"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-25T22:56:59"
+   }
+  ],
+  "last_run": "2026-09-25T22:56:59",
+  "log": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/logs/B.1.log",
+  "metrics": {
+   "all_gather_maxabs": 0.0,
+   "all_reduce_rel_err_axis1": 0.004175365436822176,
+   "chips": 4,
+   "mesh_cols": 4,
+   "mesh_rows": 1
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-25T22:56:49",
+  "status": "PASS"
+ },
  "G.s16384": {
   "attempts": 0,
   "duration_s": 368.6,
