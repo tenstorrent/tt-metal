@@ -5,7 +5,7 @@
 # Test for eltwise binary operations with reuse_dest on Quasar.
 import pytest
 import torch
-from helpers.constraints import get_perf_math_operations
+from helpers.constraints import get_perf_math_operations, get_valid_math_fidelities
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     EltwiseBinaryGolden,
@@ -89,24 +89,6 @@ def reuse_dest_mathops(formats, *, is_perf=False):
     return supported_mathops
 
 
-def reuse_dest_math_fidelities(mathop, formats):
-    # Add/sub ignore fidelity. Float16_b and Int8 are full precision at LoFi.
-    if mathop in [
-        MathOperation.Elwadd,
-        MathOperation.Elwsub,
-    ] or formats.input_format in (
-        DataFormat.Int8,
-        DataFormat.Float16_b,
-    ):
-        return [MathFidelity.LoFi]
-    return [
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ]
-
-
 def reuse_dest_implied_math_format(formats, *, is_perf=False):
     use_mx = formats.input_format.is_mx_format() or formats.output_format.is_mx_format()
     if is_perf or use_mx:
@@ -158,7 +140,7 @@ def valid_output_dimensions(formats, dest_sync_mode, input_dimensions) -> list:
 @parametrize(
     formats=REUSE_DEST_FORMATS,
     mathop=lambda formats: reuse_dest_mathops(formats, is_perf=False),
-    math_fidelity=reuse_dest_math_fidelities,
+    math_fidelity=lambda formats, mathop: get_valid_math_fidelities(formats, mathop),
     reuse_dest_type=[
         EltwiseBinaryReuseDestType.DEST_TO_SRCA,
         EltwiseBinaryReuseDestType.DEST_TO_SRCB,

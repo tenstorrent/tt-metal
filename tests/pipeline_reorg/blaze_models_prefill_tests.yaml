@@ -1522,6 +1522,36 @@
   sp_config: sc1
 
 
+# One SC1 allocation checks the KV table and all layers of one active slot at PCC >= 0.99.
+# Use the first 32K tokens of the saved 128K reference; the model retains two cache slots.
+- name: "(Llama-3.1-8B) prefill KV table and runner accuracy 32k, SC1"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    export PREFILL_MAX_SEQ_LEN=32768
+    export PREFILL_PRODUCER_NUM_USERS=1
+    export PREFILL_PRODUCER_SLOT_TRACES=/mnt/models/llama-3.1-8b-prefill-cache/golden/llama31_8b_kv_131072_32L
+    exec bash models/demos/llama_3p1_8b_d_p/scripts/ci/run_prefill_acceptance.sh
+  test_type: llama31_prefill_runner
+  test_tags: [llama31, runner, kv_cache]
+  test_group: disagg_prefill
+  skus:
+    bh_sc1:
+      # Table, standard launcher, reference validation,
+      # container setup and cold kernel compilation. These are bounds, not performance claims.
+      timeout: 30
+      tier: 2
+      release_ready: false
+  owner_id: U053W15B6JF # Djordje Ivanovic
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+
 # ===== Disaggregated prefill, SC4 -- keep these adjacent; the first two share one launcher =============
 
 # 4-galaxy (SC4) disaggregated prefill: a 4-rank background runner opens the mesh, loads Kimi-2.7,
