@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Streaming profiler record contract, the internal side. The decode kernels write the public records
-// (experimental::streaming_profiler::Zone / Event / TimestampedData, 48-byte values) straight into per-kind buffers
+// (experimental::streaming_profiler::Zone / Event / TimestampedData, 56-byte values) straight into per-kind buffers
 // that a batch's spans cover, and payload elements into a per-batch arena:
 //  - A zone arrives as one record with start and duration; consumers never see an unpaired half.
 //  - Zones are emitted at close, so per lane they arrive in end order: a nested child precedes its parent and
@@ -14,13 +14,11 @@
 //    the zone-meta registry (llrt/zone_meta.hpp); an unnamed id is a bug.
 #pragma once
 
-#include <algorithm>
 #include <array>
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <span>
+#include <string>
 #include <vector>
 
 #include <tt-metalium/experimental/streaming_profiler.hpp>
@@ -30,8 +28,9 @@
 namespace tt::tt_metal::streaming_profiler {
 
 using ConsumerHandle = uint64_t;
-// Indexed by Core::risc; the order is tracy::RiscType's.
-inline constexpr std::array<const char*, 5> kRiscNames = {"BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2"};
+// Indexed by Core::processor.
+inline constexpr std::array<const char*, 7> kProcessorNames = {
+    "BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2", "ERISC_0", "ERISC_1"};
 
 // Immutable once the receiver starts. Zone names are not here: they arrive per ELF as binaries JIT-load, so
 // the process-wide site table publishes them as ELFs load (init_site_registry).
@@ -39,34 +38,41 @@ struct CaptureContext {
     struct Device {
         std::vector<experimental::streaming_profiler::Core> lanes;  // index by the record's lane
         std::vector<uint32_t> core_xy;  // core index -> packed NoC (y << 16) | x, the identity a frame carries
+        uint32_t chip_id = 0;
+        // Per core, in `core_xy` order: the pusher's wall tick minus that core's, from the chip's tile clocks measured
+        // at boot. Every tile keeps its own wall clock on the one AICLK, so each is one integer for the capture; the
+        // pusher's own is 0.
+        std::vector<int64_t> tile_offset;
+        int64_t drainer_offset = 0;  // eth wall tick minus the drainer's: its anchors into the pusher's wall domain
     };
     std::vector<Device> devices;
+    // A link of the sync: the sender on device index dev_a, the receiver on dev_b, each end's eth core as the decoder
+    // numbers it (core_a, core_b) and as it is placed (eth_a, eth_b). The sync engine pairs the two ends' LINK
+    // records by round.
+    struct Link {
+        uint32_t dev_a = 0, dev_b = 0;
+        uint32_t chip_a = 0, chip_b = 0;
+        uint32_t core_a = 0, core_b = 0;
+        CoreCoord eth_a, eth_b;
+    };
+    std::vector<Link> links;
+    uint32_t root_dev = 0;  // index into `devices`: the chip the host probe reads and every link path leads to
+    std::string d2d_csv_path;  // TT_METAL_STREAMING_PROFILER_D2D_CSV; empty = no sync diagnostics
 };
 
-// The host<->device clock relation of one chip as the device layer measured it.
-struct DeviceClock {
-    uint32_t chip_id = 0;
-    double frequency_ghz = 0.0;  // device ticks per nanosecond
-    uint64_t anchor_ticks = 0;
-    int64_t anchor_host_ns = 0;  // std::chrono::steady_clock at `anchor_ticks`, in nanoseconds since its epoch
-};
-
-// What the decoder writes into every record of a lane besides the packet's own words (Record's coordinate, chip,
-// RISC, frequency and offset fields), in the record's byte layout.
-inline profiler::SpscRecConsts record_consts(const experimental::streaming_profiler::Core& core, const DeviceClock& k) {
-    const auto hz = static_cast<uint32_t>(
-        std::clamp<int64_t>(std::llround(k.frequency_ghz * 1e9), 1, std::numeric_limits<uint32_t>::max()));
-    // The offset is taken against the frequency as the record rounds it, so the anchor itself converts exactly.
-    const int64_t offset =
-        std::llround(static_cast<double>(k.anchor_host_ns) * (hz * 1e-9)) - static_cast<int64_t>(k.anchor_ticks);
+// What the decoder writes into every record of a lane besides the packet's own words (Record's coordinate, chip and
+// processor fields, and its host_time_ slot), in the record's byte layout. `offset` takes the lane's ticks into the
+// pusher's wall domain (its core's CaptureContext::Device::tile_offset); the service reads it from the slot at release
+// and writes the record's host time over it.
+inline profiler::SpscRecConsts record_consts(const experimental::streaming_profiler::Core& core, int64_t offset) {
     return profiler::SpscRecConsts{
         .coords =
             {static_cast<uint32_t>(core.logical.x & 0xFFFFu) | (static_cast<uint32_t>(core.logical.y & 0xFFFFu) << 16),
              static_cast<uint32_t>(core.physical.x & 0xFFFFu) |
                  (static_cast<uint32_t>(core.physical.y & 0xFFFFu) << 16)},
         .tail = {
-            (core.chip_id & 0xFFFFu) | (static_cast<uint32_t>(core.risc) << 16),
-            hz,
+            (core.chip_id & 0xFFFFu) | (static_cast<uint32_t>(core.processor) << 16),
+            0u,
             static_cast<uint32_t>(static_cast<uint64_t>(offset)),
             static_cast<uint32_t>(static_cast<uint64_t>(offset) >> 32)}};
 }

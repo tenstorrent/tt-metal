@@ -8,6 +8,7 @@
 // wall-clock latch race.
 
 #include <algorithm>
+#include <limits>
 #include <cstdint>
 #include <cstring>
 
@@ -141,6 +142,9 @@ struct StreamDecoder {
     struct Produced {
         uint32_t zones, events;
         uint32_t data_bytes;
+        // The newest record end the frame decoded, in the chip's eth wall domain (a worker lane's tick plus its
+        // tile offset); INT64_MIN when it decoded none. What the sync's cover is compared against before delivery.
+        int64_t newest_ticks;
     };
     Produced decode_frame(const uint32_t* frame, uint32_t frame_words, Out out);
 
@@ -176,6 +180,7 @@ inline StreamDecoder::Produced StreamDecoder::decode_frame(const uint32_t* frame
     uint64_t pt_off = 0;
     uint64_t zm = 0, sz = 0, oreg = 0, rc = 0, fixes = 0;
     uint64_t lane_ts = 0;
+    uint64_t frame_ts = 0;
     uint8_t* lane_rec = nullptr;
     bool lane_rec_zone = false;
     // A run's first record against the lane's last, then the run's last becomes the lane's; a single record passes
@@ -431,6 +436,7 @@ inline StreamDecoder::Produced StreamDecoder::decode_frame(const uint32_t* frame
             i += got;
         }
         L.last_ts = lane_ts;
+        frame_ts = std::max(frame_ts, lane_ts);
         L.last_rec = lane_rec;
         L.last_rec_zone = lane_rec_zone ? 1u : 0u;
         L.last_rec_seq = seq;
@@ -444,10 +450,18 @@ inline StreamDecoder::Produced StreamDecoder::decode_frame(const uint32_t* frame
     stats.order_regressions += oreg;
     stats.epoch_fixes += fixes;
     stall_zones += sz;
+    int64_t newest_ticks = std::numeric_limits<int64_t>::min();
+    if (frame_ts != 0) {
+        const uint32_t* tail = lane_consts[core * kSpscNRiscDecode].tail;
+        const int64_t offset =
+            static_cast<int64_t>(static_cast<uint64_t>(tail[2]) | (static_cast<uint64_t>(tail[3]) << 32));
+        newest_ticks = static_cast<int64_t>(frame_ts) + offset;
+    }
     return Produced{
         static_cast<uint32_t>(zoff / kSpscRecBytes),
         static_cast<uint32_t>(static_cast<uint32_t>(pt_off) / kSpscRecBytes),
-        static_cast<uint32_t>(pt_off >> 32)};
+        static_cast<uint32_t>(pt_off >> 32),
+        newest_ticks};
 }
 
 }  // namespace tt::tt_metal::streaming_profiler

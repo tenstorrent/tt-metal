@@ -20,6 +20,7 @@
 
 #include "hostdev/profiler_zone_id.h"
 #include "impl/streaming_profiler/streaming_profiler_consumer.hpp"
+#include "impl/streaming_profiler/streaming_profiler_sync_devices.hpp"
 #include "impl/streaming_profiler/streaming_profiler_service.hpp"
 #include "llrt/zone_meta.hpp"
 
@@ -117,5 +118,18 @@ void UnregisterCallback(CallbackHandle handle) {
 }
 
 bool IsActive() { return internal::service().is_active(); }
+
+host_clock::time_point host_clock::now() noexcept { return from_tsc(internal::tsc_now()); }
+
+int64_t host_clock::tsc(time_point t) noexcept { return internal::tsc_of_units(t.time_since_epoch().count()); }
+
+host_clock::time_point host_clock::from_tsc(int64_t ticks) noexcept {
+    return time_point(duration(internal::units_of_tsc(ticks)));
+}
+
+std::chrono::steady_clock::time_point steady_time(host_clock::time_point t) noexcept {
+    return std::chrono::steady_clock::time_point(
+        std::chrono::nanoseconds(internal::steady_mono_ns(host_clock::tsc(t))));
+}
 
 }  // namespace tt::tt_metal::experimental::streaming_profiler

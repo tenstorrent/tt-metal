@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <span>
@@ -27,6 +28,7 @@
 #include <tt_stl/tt_pause.hpp>
 
 #include "impl/streaming_profiler/streaming_profiler_consumer.hpp"
+#include "impl/streaming_profiler/streaming_profiler_tile_clocks.hpp"
 
 namespace tt::llrt {
 class RunTimeOptions;
@@ -166,6 +168,7 @@ struct ProducerStream {
     const std::atomic<uint64_t>* walked = nullptr;  // bytes, absolute
     uint32_t dev = 0;                               // index into capture_context().devices
     std::span<const std::atomic<uint64_t>> marks;   // frame boundaries, one per kMarkBytes of `fifo`
+    bool sync = false;  // the eth drainer's sync socket: the sync's records raw, for the sync engine alone
 };
 
 // One capture's streams and what a consumer needs to decode them. Valid from attach_producer() until
@@ -175,7 +178,6 @@ public:
     virtual ~Producer() = default;
     virtual std::span<const ProducerStream> streams() const = 0;
     virtual const CaptureContext& capture_context() const = 0;
-    virtual const DeviceClock& clock(uint32_t dev) const = 0;
     // The device's write position in a stream, in bytes; callable from any consumer thread.
     virtual uint64_t live_head(uint32_t stream) const = 0;
     // A consumer's totals for one of streams(): the frame bytes it never read and its decoder's counters, delivered
@@ -189,27 +191,37 @@ using BatchCallback = std::function<void(
     const experimental::streaming_profiler::Batch<experimental::streaming_profiler::RecordType::All>&,
     uint64_t capture)>;
 
+class SyncEngine;
+
 class Service {
 public:
     Service();
     Service(const Service&) = delete;
     Service& operator=(const Service&) = delete;
 
-    // The callback runs on the consumer's own thread, one call at a time, for every attached producer. Not from
-    // inside a consumer callback.
+    // The callback runs on the consumer's own thread, one call at a time, for every attached producer, with every
+    // record placed on the host clock: a batch waits until the sync engine's covers reach its newest record. Not
+    // from inside a consumer callback.
     ConsumerHandle add_consumer(std::string name, BatchCallback cb);
     // Returns once the callback can no longer run.
     void remove_consumer(ConsumerHandle handle);
 
-    // Returns once every consumer reads the producer's queues, so nothing published afterwards is missed.
+    // Returns once the sync engine and every consumer read the producer's queues, so nothing published afterwards
+    // is missed. The engine attaches first, so its covers exist before any consumer parks a batch on them.
     void attach_producer(Producer& producer);
-    // Returns once every consumer has drained the producer's queues and released its readers. Detaching the last
-    // producer writes the file sinks.
+    // Returns once the engine and every consumer have drained the producer's queues and released its readers: the
+    // engine first, so its final publish makes every cover final before the consumers flush what they parked.
+    // Detaching the last producer writes the file sinks.
     void detach_producer(Producer& producer);
     bool is_active() const;
 
     // The Tracy sink and the CSV writers rtoptions select; subsequent calls do nothing.
     void register_builtin_consumers(const tt::llrt::RunTimeOptions& rtoptions);
+    // A chip's tile clocks, measured once before its fabric and dispatch firmware; read at every bring-up after.
+    void set_tile_clocks(uint32_t chip, TileClocks clocks);
+    const TileClocks* tile_clocks(uint32_t chip) const;
+    // The device<->device sync engine, owner of the clock map.
+    SyncEngine& sync();
 
     // A producer calls this once after a pass that published. A reader takes wake_token() before checking the queues
     // and, finding nothing, wait_wake()s on it, so a bump between the two returns at once: wait() returns without
@@ -228,13 +240,27 @@ public:
     }
 
 private:
+    // Attach and detach requests to a reader thread, in order; the thread acks each through pending_acks_.
+    struct ControlQueue {
+        std::atomic<bool> pending{false};
+        std::mutex mu;
+        std::vector<std::pair<Producer*, bool>> items;  // (producer, attach)
+    };
     struct Consumer;
     struct AttachedStream;
     struct Attached;
+    struct Parked;
+    class StreamWalker;
+    class ConsumerLoop;
+    class SyncLoop;
     void consumer_thread(Consumer& c);
-    void post_control(Consumer& c, Producer* producer, bool attach);
+    // The sync engine's thread: the eth pushers' streams decoded for their clock samples, nothing delivered.
+    void sync_thread();
+    void post_control(ControlQueue& q, Producer* producer, bool attach);
     void wait_acks(std::unique_lock<std::mutex>& lk);
     static void warn_missed(const Consumer& c);
+    // A reader of one of a producer's streams, positioned at the ingest's walk.
+    static void open_stream(AttachedStream& s, const CaptureContext& ctx, const ProducerStream& ps, uint32_t index);
 
     // Serializes add/remove/attach/detach against each other; never taken by a consumer thread.
     std::mutex topology_mu_;
@@ -247,9 +273,14 @@ private:
     std::vector<std::unique_ptr<Consumer>> consumers_;
     std::vector<Producer*> producers_;
     std::vector<std::function<void()>> file_sinks_;
+    std::unique_ptr<SyncEngine> sync_;
+    ControlQueue sync_control_;
+    std::thread sync_thread_;  // started at the first attach
     std::unique_ptr<TracySink> tracy_;
     ConsumerHandle next_handle_ = 1;
     std::once_flag builtins_once_;
+    mutable std::mutex tile_clocks_mu_;
+    std::map<uint32_t, TileClocks> tile_clocks_;
 };
 
 // The process's Service. Subscriptions outlive every device and context, so it is never destroyed.
