@@ -519,6 +519,13 @@ class MigrationDriver:
             }
             if ft_dir:
                 ft_path = os.path.join(ft_dir, f"slot{int(src)}_end{int(real_len)}.pt")
+                # the runner publishes the row AFTER the chunk's acks (the acks fire inside prefill_chunk, the row is pulled
+                # once it returns): round 1 of launch 9 missed the file by 33 ms. Give it a few seconds.
+                t_wait = time.perf_counter()
+                while not os.path.exists(ft_path) and time.perf_counter() - t_wait < float(
+                    os.environ.get("PREFILL_FIRST_TOKEN_WAIT_S", "5")
+                ):
+                    time.sleep(0.02)
                 if os.path.exists(ft_path):
                     import torch
 
