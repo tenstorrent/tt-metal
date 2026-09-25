@@ -356,4 +356,142 @@ ALWI void sinh_tile(uint32_t idst) {
         VectorMode::RC));
 }
 
+#if !defined(TT_POLY_LLK_DISABLE) && ((defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)) && \
+                                      defined(TT_METAL_SFPU_SINGLE_TILE_DST) && TT_METAL_SFPU_SINGLE_TILE_DST == 1)
+#define TT_POLY_ACOS_BF16_ROUTE_ACTIVE 1
+#else
+#define TT_POLY_ACOS_BF16_ROUTE_ACTIVE 0
+#endif
+
+/** Internal BF16 typed-compiler route; public callers retain the stock entry point. */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void acos_tt_poly_bf16_tile(uint32_t idst) {
+#if !TT_POLY_ACOS_BF16_ROUTE_ACTIVE
+    acos_tile<is_fp32_dest_acc_en>(idst);
+#else
+    if constexpr (is_fp32_dest_acc_en) {
+        acos_tile<is_fp32_dest_acc_en>(idst);
+    } else {
+        if (idst != 0) {
+            acos_tile_init<is_fp32_dest_acc_en>();
+            acos_tile<is_fp32_dest_acc_en>(idst);
+            return;
+        }
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            calculate_acos_tt_poly_bf16,
+            (32 /* ITERATIONS */),
+            idst,
+            VectorMode::None));
+    }
+#endif
+}
+
+/** Initialize the internal BF16 typed-compiler route. */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void acos_tt_poly_bf16_tile_init() {
+    acos_tile_init<is_fp32_dest_acc_en>();
+}
+
+#undef TT_POLY_ACOS_BF16_ROUTE_ACTIVE
+
+#if !defined(TT_POLY_LLK_DISABLE) &&                                                                                 \
+    ((defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)) && defined(TT_METAL_SFPU_SINGLE_TILE_DST) &&                \
+     TT_METAL_SFPU_SINGLE_TILE_DST == 1 && defined(TT_POLY_BF16_UNARY_CONTEXT) && TT_POLY_BF16_UNARY_CONTEXT == 1 && \
+     defined(SFPU_OP_PROGRAM_INIT_0))
+#define TT_POLY_ACOSH_BF16_ROUTE_ACTIVE 1
+#else
+#define TT_POLY_ACOSH_BF16_ROUTE_ACTIVE 0
+#endif
+
+/** Internal BF16 typed-compiler route; public callers retain the stock entry point. */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void acosh_tt_poly_bf16_tile(uint32_t idst) {
+#if !TT_POLY_ACOSH_BF16_ROUTE_ACTIVE
+    acosh_tile<is_fp32_dest_acc_en>(idst);
+#else
+    if constexpr (!(is_fp32_dest_acc_en)) {
+        acosh_tile<is_fp32_dest_acc_en>(idst);
+    } else {
+        if (idst != 0) {
+            acosh_tile_init<is_fp32_dest_acc_en>();
+            acosh_tile<is_fp32_dest_acc_en>(idst);
+            return;
+        }
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            calculate_acosh_tt_poly_bf16,
+            (32 /* ITERATIONS */),
+            idst,
+            VectorMode::None));
+    }
+#endif
+}
+
+/** Initialize the internal BF16 typed-compiler route. */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void acosh_tt_poly_bf16_tile_init() {
+#if !TT_POLY_ACOSH_BF16_ROUTE_ACTIVE
+    acosh_tile_init<is_fp32_dest_acc_en>();
+#else
+    if constexpr (!(is_fp32_dest_acc_en)) {
+        acosh_tile_init<is_fp32_dest_acc_en>();
+    }
+#endif
+}
+
+/** Initialize the selected single-tile program once, before its tile loop. */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void acosh_tt_poly_bf16_program_init() {
+#if TT_POLY_ACOSH_BF16_ROUTE_ACTIVE
+    if constexpr (!(!(is_fp32_dest_acc_en))) {
+        MATH(sfpu::init_acosh_tt_poly_bf16());
+    }
+#endif
+}
+
+#undef TT_POLY_ACOSH_BF16_ROUTE_ACTIVE
+
+#if !defined(TT_POLY_LLK_DISABLE) && ((defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)) && \
+                                      defined(TT_METAL_SFPU_SINGLE_TILE_DST) && TT_METAL_SFPU_SINGLE_TILE_DST == 1)
+#define TT_POLY_ATANH_BF16_ROUTE_ACTIVE 1
+#else
+#define TT_POLY_ATANH_BF16_ROUTE_ACTIVE 0
+#endif
+
+/** Internal BF16 typed-compiler route; public callers retain the stock entry point. */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void atanh_tt_poly_bf16_tile(uint32_t idst) {
+#if !TT_POLY_ATANH_BF16_ROUTE_ACTIVE
+    atanh_tile<is_fp32_dest_acc_en>(idst);
+#else
+    if constexpr (is_fp32_dest_acc_en) {
+        atanh_tile<is_fp32_dest_acc_en>(idst);
+    } else {
+        if (idst != 0) {
+            atanh_tile_init<is_fp32_dest_acc_en>();
+            atanh_tile<is_fp32_dest_acc_en>(idst);
+            return;
+        }
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            calculate_atanh_tt_poly_bf16,
+            (32 /* ITERATIONS */),
+            idst,
+            VectorMode::None));
+    }
+#endif
+}
+
+/** Initialize the internal BF16 typed-compiler route. */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void atanh_tt_poly_bf16_tile_init() {
+    atanh_tile_init<is_fp32_dest_acc_en>();
+}
+
+#undef TT_POLY_ATANH_BF16_ROUTE_ACTIVE
+
 }  // namespace ckernel

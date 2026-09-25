@@ -1206,3 +1206,51 @@ void init_atanh() {
 }
 
 }  // namespace ckernel::sfpu
+
+#if !defined(TT_POLY_LLK_DISABLE)
+#include "ckernel_sfpu_acos_bf16.h"
+#endif
+
+namespace ckernel::sfpu {
+
+#if !defined(TT_POLY_LLK_DISABLE)
+template <int ITERATIONS = 8>
+inline void calculate_acos_tt_poly_bf16() {
+    ckernel::sfpu::ttpoly::calculate_sqrt_factored<ttpoly_generated::AcosBf16Config, ITERATIONS>();
+}
+#endif
+
+}  // namespace ckernel::sfpu
+
+#if !defined(TT_POLY_LLK_DISABLE)
+#include "ckernel_sfpu_acosh_bf16.h"
+#endif
+
+namespace ckernel::sfpu {
+
+#if !defined(TT_POLY_LLK_DISABLE)
+template <int ITERATIONS = 8>
+inline void calculate_acosh_tt_poly_bf16() {
+    ckernel::sfpu::ttpoly::calculate_core_bridge_rational<ttpoly_generated::AcoshBf16Config, ITERATIONS>();
+}
+inline void init_acosh_tt_poly_bf16() {
+    ckernel::sfpu::ttpoly::init_core_bridge_rational<ttpoly_generated::AcoshBf16Config>();
+}
+#endif
+
+}  // namespace ckernel::sfpu
+
+#if !defined(TT_POLY_LLK_DISABLE)
+#include "ckernel_sfpu_atanh_bf16.h"
+#endif
+
+namespace ckernel::sfpu {
+
+#if !defined(TT_POLY_LLK_DISABLE)
+template <int ITERATIONS = 8>
+inline void calculate_atanh_tt_poly_bf16() {
+    ckernel::sfpu::ttpoly::calculate_rational_parity<ttpoly_generated::AtanhBf16Config, ITERATIONS>();
+}
+#endif
+
+}  // namespace ckernel::sfpu
