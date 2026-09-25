@@ -113,11 +113,28 @@ def device_policy_errors(task: dict) -> list[str]:
     errs = [f"gate calls pytest directly: {' '.join(p)!r}" for p in progs if _is_direct_pytest(p)]
     if task.get("device"):
         for p in progs:
-            if Path(p[0]).name.startswith("python") and not _is_direct_pytest(p):
-                errs.append(f"device gate runs '{' '.join(p[:2])}' directly; use {' or '.join(SAFE_RUNNERS)}")
+            if Path(p[0]).name.startswith("python") and not _is_direct_pytest(p) and _python_touches_device(p):
+                errs.append(
+                    f"device gate runs '{' '.join(p[:3])}' on device code directly; use {' or '.join(SAFE_RUNNERS)}"
+                )
         if not any(p[0] in SAFE_RUNNERS for p in progs):
             errs.append(f"device gate does not use {' or '.join(SAFE_RUNNERS)}")
     return errs
+
+
+def _python_touches_device(words: list[str]) -> bool:
+    """True if a python command runs code that imports ttnn (or cannot be resolved, to stay safe)."""
+    if "-c" in words:
+        return "ttnn" in " ".join(words)
+    if "-m" in words:
+        mod = words[words.index("-m") + 1] if words.index("-m") + 1 < len(words) else ""
+        base = CODE_ROOT / Path(*mod.split("."))
+        f = base.with_suffix(".py") if base.with_suffix(".py").exists() else base / "__main__.py"
+    else:
+        f = next((CODE_ROOT / w for w in words[1:] if w.endswith(".py")), None)
+    if f is None or not f.exists():
+        return True
+    return bool(re.search(r"^\s*(import ttnn|from ttnn)", f.read_text(errors="replace"), re.M))
 
 
 def _uses_safe_runner(cmd: str) -> bool:
