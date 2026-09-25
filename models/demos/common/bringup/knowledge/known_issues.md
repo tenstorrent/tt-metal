@@ -28,6 +28,7 @@ person moves the entry into its section at the next approval point.
 - **Tracy host capture crashes.** Symptom: "tracy-capture exited with code 1" under `--profile`. Cause: unknown, this box. Fix: device profiler with `TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1` and `testing/profiler.py`. Found: ernie45_d_p P3.3.
 - **Pre-commit rewrites files at commit.** Symptom: a hash taken before `git commit` never matches again. Cause: black and the EOF fixer run inside the commit. Fix: format with pre-commit before hashing or testing (freeze and `gate --commit` do). Found: bringup_framework F1.
 - **autoflake removes imports at commit.** Symptom: NameError after committing. Cause: an import unused at commit time is stripped. Fix: commit the import together with its use. Found: ernie45_d_p P2.9.
+- **Templated YAML fails check-yaml.** Symptom: a gate commit silently did not land; the pre-commit check-yaml hook failed. Cause: a template with `$placeholders` in a `.yaml` file is not valid YAML. Fix: name templates `*.tmpl`. Found: bringup_framework F6.
 - **Concurrent gates.** Symptom: verdicts overwritten, unrelated files in a gate commit. Cause: unlocked state writes; `git add -A` of the tree. Fix: the ledger lock and scoped commits (framework does both). Found: ernie45_d_p P2.x.
 
 ## Serving contract
