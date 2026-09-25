@@ -12,6 +12,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cunpack_common.h"
+#include "llk_assert.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
@@ -229,6 +230,7 @@ inline void _llk_unpack_AB_custom_mm_run_(
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 
     // We can issue mop only once for up to 256 kt_dim
+    LLK_ASSERT(kt_dim >= 2 && kt_dim <= 256 && kt_dim % 2 == 0, "kt_dim must be an even number from 2 to 256");
     TT_MOP(0, (kt_dim / 2) - 1, 0);
 
     t6_semaphore_get(semaphore::UNPACK_SYNC);

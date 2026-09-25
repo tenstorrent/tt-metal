@@ -46,7 +46,7 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init(
     std::uint32_t in1_cb_id,
     std::uint32_t out_cb_id,
     const std::uint32_t transpose = 0,
-    std::uint32_t kt_dim = 1,
+    std::uint32_t kt_dim = 2,
     std::uint32_t nt_dim = 1) {
     // Intentionally swap in0 and in1 as operation specific hw_configures are deprecated
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(in1_cb_id, in0_cb_id)));
@@ -66,7 +66,7 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init_short(
     std::uint32_t in1_cb_id,
     std::uint32_t out_cb_id,
     const std::uint32_t transpose = 0,
-    std::uint32_t kt_dim = 1,
+    std::uint32_t kt_dim = 2,
     std::uint32_t nt_dim = 1) {
     UNPACK((llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init(in0_cb_id, in1_cb_id, transpose, nt_dim)));
     MATH((llk_math_sdpa_custom_mm_reuse_dest_srcb_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose, kt_dim)));

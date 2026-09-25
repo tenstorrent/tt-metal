@@ -54,8 +54,9 @@ tiled MatmulGolden, using an M/K-invariant, N-varying stimulus so the check is
 robust to the K pairing/split the op performs internally while still exercising a
 real per-column dot product (distinct V columns), not just a constant fill.
 
-No Blackhole card is available in this environment; this is validated by a clean
-Blackhole compile plus the ttsim numeric result on the derivable region.
+The asserted region now passes on a Blackhole p100a (both fidelities). The caveats
+above about the bottom face-row band and the full 2D face permutation still stand --
+those lanes remain unasserted.
 """
 
 import torch
@@ -98,7 +99,7 @@ FACE0_TOP_ROWS = 8
 DEFINED_LANES = FACE0_TOP_ROWS * FACE_DIM  # 128
 
 
-def _run(math_fidelity, formats, dest_acc):
+def _run(math_fidelity, formats, dest_acc, defaulted_dims=False):
     torch.manual_seed(0)
 
     torch_format = format_dict[formats.output_format]
@@ -158,7 +159,9 @@ def _run(math_fidelity, formats, dest_acc):
         formats,
         templates=[
             MATH_FIDELITY(math_fidelity),
-            SDPA_CUSTOM_MM_REUSE_DEST(kt_dim=KT_DIM, nt_dim=NT_DIM),
+            SDPA_CUSTOM_MM_REUSE_DEST(
+                kt_dim=KT_DIM, nt_dim=NT_DIM, defaulted_dims=defaulted_dims
+            ),
         ],
         runtimes=[],
         variant_stimuli=StimuliConfig(
@@ -197,4 +200,31 @@ def test_sdpa_custom_mm_reuse_dest_srcb(math_fidelity, formats, dest_acc):
     assert passed_test(golden, device, formats.output_format), (
         "sdpa_custom_mm_reuse_dest_srcb did not reproduce the tiled P@V golden on the "
         "defined (top 8 rows of face 0) output lanes"
+    )
+
+
+@parametrize(
+    math_fidelity=[MathFidelity.LoFi],
+    formats=FORMATS,
+    dest_acc=[DestAccumulation.No],
+)
+def test_sdpa_custom_mm_reuse_dest_srcb_defaulted_dims(
+    math_fidelity, formats, dest_acc
+):
+    """The op's default kt_dim/nt_dim must themselves be a legal configuration.
+
+    Same computation as the test above, but the kernel omits the trailing dim
+    arguments at both the unpack and math LLK entry points and takes the header
+    defaults. ``kt_dim`` reaches the collapsed unpack MOP as ``(kt_dim / 2) - 1``,
+    an unsigned expression, so a default below 2 does not produce a smaller loop
+    count -- it wraps, and the assembled word stops being a MOP at all. KT_DIM/NT_DIM
+    here are the values the defaults are expected to supply, so the golden is the
+    same one the explicit-argument test uses.
+    """
+    golden, device = _run(math_fidelity, formats, dest_acc, defaulted_dims=True)
+
+    assert passed_test(golden, device, formats.output_format), (
+        "sdpa_custom_mm_reuse_dest_srcb run with defaulted dims did not reproduce the "
+        f"tiled P@V golden it produces when kt_dim={KT_DIM}/nt_dim={NT_DIM} are passed "
+        "explicitly"
     )
