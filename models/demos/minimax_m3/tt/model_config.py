@@ -18,6 +18,24 @@ from transformers import AutoConfig, AutoTokenizer
 import ttnn
 from models.demos.minimax_m3.utils.weight_conversion import convert_hf_qkv_to_meta_format_partial
 
+# Default locations of the MiniMax-M3 checkpoint and its tilized weight cache on the exabox weka filesystem.
+# The weights dir is read-only (root-owned), so the cache cannot live under the checkpoint as it used to on
+# NFS: TT_CACHE_PATH, else this cache root if it exists on the host, else the checkpoint dir (legacy layout).
+M3_DEFAULT_WEIGHTS_DIR = "/mnt/weka/model-weights/llm/minimax/MiniMax-M3"
+M3_DEFAULT_CACHE_ROOT = "/mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill"
+M3_DEFAULT_GOLDEN_DIR = M3_DEFAULT_CACHE_ROOT + "/golden"
+
+
+def default_weight_cache_root(model_path) -> Path:
+    """Root under which ``tensor_cache_bfp8_{MeshShape}`` dirs live: ``TT_CACHE_PATH`` > ``M3_DEFAULT_CACHE_ROOT``
+    (when that directory exists) > the checkpoint dir itself (the legacy NFS layout)."""
+    cache_dir = os.getenv("TT_CACHE_PATH")
+    if cache_dir:
+        return Path(cache_dir)
+    if os.path.isdir(M3_DEFAULT_CACHE_ROOT):
+        return Path(M3_DEFAULT_CACHE_ROOT)
+    return Path(model_path)
+
 
 class ModelArgs:
     """MiniMax-M3 ModelArgs compatible with tt_transformers create_tt_model interface"""
@@ -211,11 +229,7 @@ class ModelArgs:
 
     def weight_cache_path(self, dtype):
         """Return weight cache path for the model"""
-        cache_dir = os.getenv("TT_CACHE_PATH")
-        if cache_dir:
-            cache_dir = Path(cache_dir)  # If we specify a TT_CACHE_PATH, use that for the cache
-        else:
-            cache_dir = Path(self.model_path)  # Use same directory as model
+        cache_dir = default_weight_cache_root(self.model_path)
         logger.info(f"Cache directory: {cache_dir}")
         dtype_str = {ttnn.bfloat16: "bf16", ttnn.bfloat8_b: "bfp8"}[dtype]
         cache_path = cache_dir / f"tensor_cache_{dtype_str}_{self.mesh_device.shape}"

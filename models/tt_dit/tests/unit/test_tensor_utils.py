@@ -37,23 +37,32 @@ def test_full(mesh_device: ttnn.MeshDevice) -> None:
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
-def test_arange(mesh_device: ttnn.MeshDevice) -> None:
-    dtype = ttnn.bfloat16
-    start, end, step = 10, 20, 2
-
+@pytest.mark.parametrize(
+    ("dtype", "torch_dtype", "start", "end", "step"),
+    [
+        (ttnn.bfloat16, torch.bfloat16, 10, 20, 2),
+        # start - step is negative: the offset has to be applied without a negative scalar,
+        # which an unsigned tensor cannot encode.
+        (ttnn.uint32, torch.int64, 0, 77, 1),
+        (ttnn.int32, torch.int32, 0, 8, 1),
+    ],
+)
+def test_arange(
+    mesh_device: ttnn.MeshDevice, dtype: ttnn.DataType, torch_dtype: torch.dtype, start: int, end: int, step: int
+) -> None:
     arange = Tracer(
         lambda: tensor.arange(start, end, step, dtype=dtype, device=mesh_device),
         device=mesh_device,
     )
 
     result = arange()
-    ref = torch.arange(start, end, step, dtype=torch.bfloat16)
+    ref = torch.arange(start, end, step, dtype=torch_dtype)
 
     assert result.dtype == dtype
     assert tuple(result.shape) == tuple(ref.shape)
 
-    result_torch = tensor.to_torch(result)
-    assert torch.allclose(result_torch, ref, atol=0, rtol=0)
+    result_torch = tensor.to_torch(result).to(torch_dtype)
+    assert torch.equal(result_torch, ref)
 
 
 @pytest.mark.parametrize(

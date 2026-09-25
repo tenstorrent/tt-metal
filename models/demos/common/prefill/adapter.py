@@ -82,6 +82,9 @@ class PrefillRunParams:
     # feature never breaks existing PrefillRunParams constructors (which need not pass it); the runner
     # derives it from the model capability (supports_dflash) + PREFILL_DFLASH + a drafter checkpoint.
     dflash_enabled: bool = False
+    # Drafter checkpoint the runner resolved (DFLASH_HF_MODEL, else the adapter's own default). Carried
+    # rather than re-read from the env downstream so one resolution decides which drafter gets built.
+    dflash_checkpoint_path: str = ""
 
     @property
     def sp_factor(self) -> int:
@@ -131,6 +134,11 @@ class PrefillModelAdapter(ABC):
     pipeline_activation_emb_tp_sharded: bool = True
     # Whether this model ships a DFlash speculative drafter the prefill runner can build during prefill
     supports_dflash: bool = False
+    # The drafter checkpoint trained against THIS verifier, and the context-KV golden for it. A drafter has
+    # exactly one parent (tt_prefill_runtime asserts the match), so both belong to the model. Empty when the
+    # model declares no drafter of its own; DFLASH_HF_MODEL / PREFILL_DFLASH_GOLDEN_KV_DIR override.
+    dflash_model_default: str = ""
+    dflash_golden_default: str = ""
 
     def pipeline_activation_planes(self, boundary_layer_idx: int) -> int:
         """Planes on dim 1 of the D2D payload at a rank boundary placed before `boundary_layer_idx`.
@@ -292,6 +300,7 @@ class PrefillModelAdapter(ABC):
 DEFAULT_MODEL = "kimi_k2_7"
 
 ADAPTER_PATHS = {
+    "llama_3p1_8b": "models.demos.llama_3p1_8b_d_p.tt.runners.adapters.llama_3p1_8b:Llama31PrefillAdapter",
     # DeepSeek-V3.2-Exp: DSA, still test-only (config + sparse-MLA reference parity; serving not wired).
     "deepseek_v32": "models.demos.deepseek_v3_d_p.tt.runners.adapters.sparse_mla:DeepSeekV32Adapter",
     "deepseek_v3_d_p": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v3:DeepSeekV3Adapter",

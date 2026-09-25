@@ -5,7 +5,8 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -40,6 +41,16 @@ PipelineEventCallback = Callable[[PipelineEvent], None]
 
 def null_callback(_event: PipelineEvent) -> None:
     pass
+
+
+@contextmanager
+def event_section(on_event: PipelineEventCallback, name: str) -> Iterator[None]:
+    """Fire `SectionStart` / `SectionEnd` around a stage. `SectionEnd` always runs, even on raise."""
+    on_event(SectionStart(name))
+    try:
+        yield
+    finally:
+        on_event(SectionEnd(name))
 
 
 def profiler_event_callback(profiler: BenchmarkProfiler, iteration: int) -> PipelineEventCallback:

@@ -14,6 +14,7 @@ from helpers.golden_generators import (
     quantize_mx_tensor_chunked,
 )
 from helpers.llk_params import (
+    BlocksCalculationAlgorithm,
     DestAccumulation,
     DestSync,
     ImpliedMathFormat,
@@ -23,7 +24,8 @@ from helpers.llk_params import (
 )
 from helpers.param_config import (
     generate_perf_input_dimensions,
-    generate_unary_input_dimensions,
+    generate_reduced_input_dimensions,
+    get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
     runtime,
@@ -39,9 +41,11 @@ from helpers.test_variant_parameters import (
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
+    NUM_BLOCKS,
     NUM_FACES,
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
+    NUM_TILES_IN_BLOCK,
     RELU_CONFIG,
     TEST_FACE_DIMS,
     TILE_COUNT,
@@ -158,7 +162,7 @@ def generate_qsr_pack_combinations(
                                 dest_acc, dest_sync, tile_shape
                             )
                             if is_perf
-                            else generate_unary_input_dimensions(
+                            else generate_reduced_input_dimensions(
                                 dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
                             )
                         )
@@ -187,6 +191,8 @@ PACK_FORMATS = input_output_formats(
         DataFormat.Int8,
         DataFormat.UInt8,
         DataFormat.Int16,
+        DataFormat.MxFp8R,
+        DataFormat.MxFp8P,
         DataFormat.MxFp4,
         DataFormat.MxInt8,
         DataFormat.MxInt4,
@@ -233,6 +239,15 @@ def test_pack_quasar(
 
     num_faces = tile_shape.total_num_faces()
 
+    num_blocks, tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        dest_sync_mode,
+        dest_acc,
+        formats,
+        input_dimensions,
+        tile_dimensions,
+        BlocksCalculationAlgorithm.Standard,
+    )
+
     # Same method as test_pack.py for original ReLu testing and threshold tolerance issue
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
@@ -277,8 +292,9 @@ def test_pack_quasar(
             tile_shape=tile_shape,
         )
 
+        # THCON_PACKER<n>_RELU_THRESHOLD has to be a +ve number, so use the mean magnitude
         tensor_average = (
-            torch.mean(golden_tensor).item()
+            torch.mean(torch.abs(golden_tensor)).item()
             if not formats.output_format.is_integer()
             else 0.0
         )
@@ -309,6 +325,8 @@ def test_pack_quasar(
             TEST_FACE_DIMS(tile_shape.face_r_dim),
             NUM_FACES(num_faces),
             TILE_COUNT(tile_cnt_A),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(tiles_in_block),
             RELU_CONFIG(relu_config),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
             NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),

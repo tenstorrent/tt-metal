@@ -1,0 +1,182 @@
+# This file defines the test matrix for the Galaxy multi-user isolation suite,
+# run by galaxy-multi-user-isolation-tests-impl.yaml inside "Galaxy tests".
+#
+# Each entry is one isolation scenario on one Galaxy: the runner splits the box into
+# num_containers docker-compose containers of chips_per_container chips each, runs
+# `cmd` inside every container at once, and fails if any container fails. The impl
+# reads scenario, num_containers, chips_per_container, container_prefix and
+# mesh_descriptor from the entry; {test_path} and {test_args} are substituted into
+# cmd by prepare_test_matrix.py.
+#
+# For max allowed timeout refer to .github/time_budget.yaml (gtm.e2e).
+
+- name: Multi-user isolation single (32x1) wormhole_b0
+  # One pytest per container, 32 containers, each holding 1 chip(s).
+  cmd: pytest -v {test_path} {test_args}
+  scenario: single
+  num_containers: 32
+  chips_per_container: 1
+  container_prefix: chip
+  mesh_descriptor: n150_mesh_graph_descriptor.textproto
+  test_path: tests/ttnn/unit_tests/operations/eltwise/test_fill.py
+  test_args: "-k test_fill"
+  skus:
+    wh_galaxy:
+      timeout: 45
+  owner_id: U08FBKRKTB8 # sott0n (co-owner: changh95, U08EFCGHPTR)
+  team: gtm
+  budget_type: e2e
+
+- name: Multi-user isolation tp2 (16x2) wormhole_b0
+  # One pytest per container, 16 containers, each holding 2 chip(s).
+  cmd: pytest -v {test_path} {test_args}
+  scenario: tp2
+  num_containers: 16
+  chips_per_container: 2
+  container_prefix: tp2
+  mesh_descriptor: n300_mesh_graph_descriptor.textproto
+  test_path: tests/ttnn/unit_tests/operations/transformers/test_paged_cache_mask.py
+  test_args: ""
+  skus:
+    wh_galaxy:
+      timeout: 45
+  owner_id: U08FBKRKTB8 # sott0n (co-owner: changh95, U08EFCGHPTR)
+  team: gtm
+  budget_type: e2e
+
+- name: Multi-user isolation tray (4x8) wormhole_b0
+  # One pytest per container, 4 containers, each holding 8 chip(s).
+  cmd: pytest -v {test_path} {test_args}
+  scenario: tray
+  num_containers: 4
+  chips_per_container: 8
+  container_prefix: tray
+  mesh_descriptor: t3k_mesh_graph_descriptor.textproto
+  test_path: tests/nightly/t3000/ccl/test_all_gather.py
+  test_args: "-k 'not fabric_ring'"
+  skus:
+    wh_galaxy:
+      timeout: 45
+  owner_id: U08FBKRKTB8 # sott0n (co-owner: changh95, U08EFCGHPTR)
+  team: gtm
+  budget_type: e2e
+
+- name: Multi-user isolation single (32x1) blackhole
+  # One pytest per container, 32 containers, each holding 1 chip(s).
+  cmd: pytest -v {test_path} {test_args}
+  scenario: single
+  num_containers: 32
+  chips_per_container: 1
+  container_prefix: bh_chip
+  mesh_descriptor: p150_mesh_graph_descriptor.textproto
+  test_path: tests/ttnn/unit_tests/operations/eltwise/test_fill.py
+  test_args: "-k test_fill"
+  skus:
+    bh_galaxy:
+      timeout: 45
+  owner_id: U08FBKRKTB8 # sott0n (co-owner: changh95, U08EFCGHPTR)
+  team: gtm
+  budget_type: e2e
+
+- name: Multi-user isolation tp2 (16x2) blackhole
+  # One pytest per container, 16 containers, each holding 2 chip(s).
+  cmd: pytest -v {test_path} {test_args}
+  scenario: tp2
+  num_containers: 16
+  chips_per_container: 2
+  container_prefix: bh_tp2
+  mesh_descriptor: p150_x2_mesh_graph_descriptor.textproto
+  test_path: tests/ttnn/unit_tests/operations/transformers/test_paged_cache_mask.py
+  test_args: ""
+  skus:
+    bh_galaxy:
+      timeout: 45
+  owner_id: U08FBKRKTB8 # sott0n (co-owner: changh95, U08EFCGHPTR)
+  team: gtm
+  budget_type: e2e
+
+- name: Multi-user isolation tray (4x8) blackhole
+  # One pytest per container, 4 containers, each holding 8 chip(s).
+  cmd: pytest -v {test_path} {test_args}
+  scenario: tray
+  num_containers: 4
+  chips_per_container: 8
+  container_prefix: bh_tray
+  mesh_descriptor: p150_x8_mesh_graph_descriptor.textproto
+  test_path: tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_all_gather_nightly.py
+  test_args: "-k 'non-trace and not ring and not broken and linear_2D and bfloat_8 and not DRAM'"
+  skus:
+    bh_galaxy:
+      timeout: 45
+  owner_id: U08FBKRKTB8 # sott0n (co-owner: changh95, U08EFCGHPTR)
+  team: gtm
+  budget_type: e2e
+
+# ETH isolation reset scenarios (#42536). Implemented and working, but held until
+# the hardware is stable: BH tray_reset reproducibly drops tray 2's eth link. The
+# impl already handles scenario tray_reset / asic_reset and repeat_count; uncomment
+# to re-enable.
+# - name: Multi-user isolation tray_reset (4x8) wormhole_b0
+#   cmd: pytest -v {test_path} {test_args}
+#   scenario: tray_reset
+#   repeat_count: 2
+#   num_containers: 4
+#   chips_per_container: 8
+#   container_prefix: tray_reset
+#   mesh_descriptor: t3k_mesh_graph_descriptor.textproto
+#   test_path: tests/nightly/t3000/ccl/test_all_gather.py
+#   test_args: "-k 'not fabric_ring'"
+#   skus:
+#     wh_galaxy:
+#       timeout: 60
+#   owner_id: U08FBKRKTB8 # sott0n (co-owner: changh95, U08EFCGHPTR)
+#   team: gtm
+#   budget_type: e2e
+# - name: Multi-user isolation tray_reset (4x8) blackhole
+#   cmd: pytest -v {test_path} {test_args}
+#   scenario: tray_reset
+#   repeat_count: 400
+#   num_containers: 4
+#   chips_per_container: 8
+#   container_prefix: bh_tray_reset
+#   mesh_descriptor: p150_x8_mesh_graph_descriptor.textproto
+#   test_path: tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_all_gather_nightly.py
+#   test_args: "-k 'non-trace and not ring and not broken and linear_2D and bfloat_8 and not DRAM'"
+#   skus:
+#     bh_galaxy:
+#       timeout: 60
+#   owner_id: U08FBKRKTB8 # sott0n (co-owner: changh95, U08EFCGHPTR)
+#   team: gtm
+#   budget_type: e2e
+# - name: Multi-user isolation asic_reset (32x1) wormhole_b0
+#   cmd: pytest -v {test_path} {test_args}
+#   scenario: asic_reset
+#   repeat_count: 1500
+#   num_containers: 32
+#   chips_per_container: 1
+#   container_prefix: chip_reset
+#   mesh_descriptor: n150_mesh_graph_descriptor.textproto
+#   test_path: tests/ttnn/unit_tests/operations/eltwise/test_fill.py
+#   test_args: "-k test_fill"
+#   skus:
+#     wh_galaxy:
+#       timeout: 60
+#   owner_id: U08FBKRKTB8 # sott0n (co-owner: changh95, U08EFCGHPTR)
+#   team: gtm
+#   budget_type: e2e
+# - name: Multi-user isolation asic_reset (32x1) blackhole
+#   cmd: pytest -v {test_path} {test_args}
+#   scenario: asic_reset
+#   repeat_count: 1500
+#   num_containers: 32
+#   chips_per_container: 1
+#   container_prefix: bh_chip_reset
+#   mesh_descriptor: p150_mesh_graph_descriptor.textproto
+#   test_path: tests/ttnn/unit_tests/operations/eltwise/test_fill.py
+#   test_args: "-k test_fill"
+#   skus:
+#     bh_galaxy:
+#       timeout: 60
+#   owner_id: U08FBKRKTB8 # sott0n (co-owner: changh95, U08EFCGHPTR)
+#   team: gtm
+#   budget_type: e2e

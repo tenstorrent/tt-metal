@@ -31,7 +31,7 @@ Run (after weights are present on disk):
   source python_env/bin/activate
   # Real bf16 weights + the tilized per-tensor cache both live here (the cache dir is derived from
   # HF_MODEL, so a complete cache means the ~869GB bf16 source is never read):
-  export HF_MODEL=/mnt/models/MiniMaxAI/MiniMax-M3-ref
+  export HF_MODEL=/mnt/weka/model-weights/llm/minimax/MiniMax-M3
   export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
   # chunked over the 10240-token golden (two 5120 chunks, no pad tail), 5 timed iterations:
   PREFILL_CHUNKED=1 PREFILL_TPS_ITERS=5 \

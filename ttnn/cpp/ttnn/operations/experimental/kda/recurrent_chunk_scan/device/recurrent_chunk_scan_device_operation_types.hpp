@@ -42,6 +42,7 @@ struct RecurrentChunkScanInputs {
     // already replicated across SP. Required for SP recurrence.
     std::optional<Tensor> tail_entry_states;
     Tensor actual_start;
+    std::optional<Tensor> actual_end;
 };
 
 }  // namespace ttnn::experimental::prim
