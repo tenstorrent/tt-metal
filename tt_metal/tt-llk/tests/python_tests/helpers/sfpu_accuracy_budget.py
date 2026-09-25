@@ -41,7 +41,7 @@ import yaml
 from .chip_architecture import ChipArchitecture
 from .format_config import DataFormat
 from .llk_params import ApproximationMode, DestAccumulation, MathOperation
-from .ulp import has_ulp_gate
+from .ulp import MANTISSA_BITS_FOR_ULP, MAX_MEANINGFUL_ULP, has_ulp_gate, ulp_dtype
 
 #: The architecture every unkeyed budget was measured on. Anywhere else an op resolves
 #: to the tolerance metric until the sweep has been re-run there.
@@ -147,6 +147,7 @@ TOLERANCE_CONTRACT = AccuracyContract(metric=Metric.TOLERANCE)
 #: asserts the two stay in step.
 _BUDGET_KEY_TYPES: Dict[str, type] = {
     "approx_mode": ApproximationMode,
+    "input_format": DataFormat,
     "output_format": DataFormat,
     "dest_acc": DestAccumulation,
     "arch": ChipArchitecture,
@@ -164,6 +165,7 @@ class BudgetKey:
     """
 
     approx_mode: Optional[ApproximationMode] = None
+    input_format: Optional[DataFormat] = None
     output_format: Optional[DataFormat] = None
     dest_acc: Optional[DestAccumulation] = None
     arch: Optional[ChipArchitecture] = None
@@ -223,6 +225,7 @@ _TABLE_PATH = Path(__file__).with_name("sfpu_accuracy_budget.yaml")
 
 #: YAML row field -> :class:`BudgetKey` field. The short spellings keep a row on one line.
 _KEY_FIELDS: Dict[str, str] = {
+    "in": "input_format",
     "out": "output_format",
     "approx": "approx_mode",
     "dest": "dest_acc",
@@ -385,6 +388,7 @@ def accuracy_contract(
     *,
     output_format: DataFormat,
     arch: ChipArchitecture,
+    input_format: Optional[DataFormat] = None,
     approx_mode: Optional[ApproximationMode] = None,
     dest_acc: Optional[DestAccumulation] = None,
 ) -> AccuracyContract:
@@ -399,6 +403,7 @@ def accuracy_contract(
     # dest_acc -- fails on every op, not only once its op is enrolled.
     query = BudgetKey(
         approx_mode=approx_mode,
+        input_format=input_format,
         output_format=output_format,
         dest_acc=dest_acc,
         arch=arch,
@@ -428,6 +433,26 @@ def accuracy_contract(
     return resolve_contract(tolerance_rows, query, label=op.name)
 
 
+def usable_budget_ceiling(output_format: DataFormat) -> float:
+    """The largest budget that is still *stronger* than the gate it replaces.
+
+    ``MAX_MEANINGFUL_ULP`` is the wrong bound: ``2**mantissa_bits`` is roughly 100%
+    relative error, so it admits budgets that gate nothing -- and since ``passed_test``
+    returns on the ULP verdict and skips both ``isclose`` and PCC, such a budget *is* the
+    whole gate. Measured, approximate tanh on an fp32 output reached 2,949,120 steps,
+    about 35% relative error, on an op bounded in (-1, 1).
+
+    The real bound is the ``rtol`` half of the ``isclose`` this replaces, itself a step
+    budget at large magnitude: about 419,430 steps for fp32, 51 for fp16, 6 for bf16.
+    ``passed_test`` warns on the same line at runtime; no row here may cross it.
+    """
+    from .utils import tolerances
+
+    dtype = ulp_dtype(output_format)
+    by_rtol = tolerances[output_format].rtol * (1 << MANTISSA_BITS_FOR_ULP[dtype])
+    return min(by_rtol, float(MAX_MEANINGFUL_ULP[dtype]))
+
+
 def validate_registry() -> None:
     """Raise if any op can resolve ambiguously, for any variant a driver may ask about.
 
@@ -436,18 +461,27 @@ def validate_registry() -> None:
     ``None`` is included on the axes a caller may leave unset, since an unset query
     dimension matches only a wildcard.
     """
+    # The *input* axis comes from the table, not from the enum: a format no row pins
+    # reproduces the `None` iteration exactly, since an unset key matches any value.
+    input_formats = sorted(
+        {key.input_format for table in _SFPU_ACCURACY_BUDGET.values() for key in table}
+        - {None},
+        key=lambda fmt: fmt.name,
+    ) + [None]
     variants = product(
         [*ApproximationMode, None],
+        input_formats,
         DataFormat,
         [*DestAccumulation, None],
         ChipArchitecture,
     )
-    for op, (approx_mode, output_format, dest_acc, arch) in product(
+    for op, (approx_mode, input_format, output_format, dest_acc, arch) in product(
         _SFPU_ACCURACY_BUDGET, variants
     ):
         accuracy_contract(
             op,
             output_format=output_format,
+            input_format=input_format,
             approx_mode=approx_mode,
             dest_acc=dest_acc,
             arch=arch,

@@ -9,6 +9,19 @@ from typing import List, Optional, Tuple
 import torch
 from helpers.device_io import read_from_device, write_to_device
 from helpers.llk_params import DataFormat, PartialFace, format_dict, format_tile_sizes
+from helpers.pack import (
+    pack_bfp8_b,
+    pack_bfp16,
+    pack_fp8_e4m3,
+    pack_fp16,
+    pack_fp32,
+    pack_int8,
+    pack_int16,
+    pack_int32,
+    pack_uint8,
+    pack_uint16,
+    pack_uint32,
+)
 from helpers.stimuli_generator import (
     StimuliSpec,
     default_spec_for_format,
@@ -22,6 +35,20 @@ from helpers.tile_constants import (
 from helpers.tile_shape import TileShape, construct_tile_shape
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.unpack import unpack_res_tiles
+
+L1_PACKERS = {
+    DataFormat.Float16: pack_fp16,
+    DataFormat.Float16_b: pack_bfp16,
+    DataFormat.Float32: pack_fp32,
+    DataFormat.Bfp8_b: pack_bfp8_b,
+    DataFormat.Int32: pack_int32,
+    DataFormat.UInt32: pack_uint32,
+    DataFormat.Int16: pack_int16,
+    DataFormat.UInt16: pack_uint16,
+    DataFormat.Fp8_e4m3: pack_fp8_e4m3,
+    DataFormat.Int8: pack_int8,
+    DataFormat.UInt8: pack_uint8,
+}
 
 
 class BfdResource(Enum):
@@ -49,7 +76,7 @@ class Operand:
     is_output: bool = False
     _raw_data: Optional[torch.Tensor] = None
     _master_golden: Optional[torch.Tensor] = None
-    const_value: Optional[float] = None
+    intervals: Optional[List[Tuple[float, float]]] = None
     l1_golden: Optional[torch.Tensor] = None
     tile_count: int = field(init=False)
     tile_count_x: int = field(init=False)
@@ -88,8 +115,15 @@ class Operand:
         faces_needed = self.tile_count * self.tile_shape.total_num_faces()
         faces_data = []
 
-        if self.const_value is not None:
-            spec = StimuliSpec.constant(self.const_value)
+        if self.intervals is not None:
+            if (
+                len(self.intervals) == 1
+                and self.intervals[0][0] == self.intervals[0][1]
+                and not self.data_format.is_integer()
+            ):
+                spec = StimuliSpec.constant(self.intervals[0][0])
+            else:
+                spec = StimuliSpec.uniform(intervals=self.intervals)
         else:
             spec = default_spec_for_format(self.data_format)
 
@@ -141,35 +175,7 @@ class Operand:
         Returns:
             List of (address, packed_data) tuples, one per tile.
         """
-        from helpers.pack import (
-            pack_bfp8_b,
-            pack_bfp16,
-            pack_fp8_e4m3,
-            pack_fp16,
-            pack_fp32,
-            pack_int8,
-            pack_int16,
-            pack_int32,
-            pack_uint8,
-            pack_uint16,
-            pack_uint32,
-        )
-
-        packers = {
-            DataFormat.Float16: pack_fp16,
-            DataFormat.Float16_b: pack_bfp16,
-            DataFormat.Float32: pack_fp32,
-            DataFormat.Bfp8_b: pack_bfp8_b,
-            DataFormat.Int32: pack_int32,
-            DataFormat.UInt32: pack_uint32,
-            DataFormat.Int16: pack_int16,
-            DataFormat.UInt16: pack_uint16,
-            DataFormat.Fp8_e4m3: pack_fp8_e4m3,
-            DataFormat.Int8: pack_int8,
-            DataFormat.UInt8: pack_uint8,
-        }
-
-        pack_function = packers.get(self.data_format)
+        pack_function = L1_PACKERS.get(self.data_format)
         if not pack_function:
             raise ValueError(f"Unsupported data format: {self.data_format.name}")
 
@@ -248,7 +254,7 @@ class OperandRegistry:
         name: str,
         dimensions: Tuple[int, int],
         data_format: DataFormat,
-        const_value: Optional[float] = None,
+        intervals: Optional[List[Tuple[float, float]]] = None,
         tile_dims: Optional[Tuple[int, int]] = None,
     ) -> Operand:
         if name in self.operands:
@@ -275,7 +281,7 @@ class OperandRegistry:
             dimensions=dimensions,
             data_format=data_format,
             is_output=False,
-            const_value=const_value,
+            intervals=intervals,
             tile_shape=tile_shape,
         )
         self.operands[name] = operand

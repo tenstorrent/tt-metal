@@ -148,7 +148,7 @@ protected:
                 requested_mesh_shape);
         }
 
-        init_max_cbs();
+        init_max_dfbs();
 
         // Use ethernet dispatch for more than 1 CQ on T3K/N300
         auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
@@ -186,10 +186,10 @@ protected:
         }
     }
 
-    void init_max_cbs() { max_cbs_ = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers(); }
+    void init_max_dfbs() { max_dfbs_ = tt::tt_metal::MetalContext::instance().hal().get_num_dataflow_buffers(); }
 
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_;
-    uint32_t max_cbs_{};
+    uint32_t max_dfbs_{};
 
     Config config_;
 };
@@ -218,7 +218,7 @@ protected:
                 *config_.mesh_shape);
         }
 
-        init_max_cbs();
+        init_max_dfbs();
 
         // Use ethernet dispatch for more than 1 CQ on T3K/N300
         auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();

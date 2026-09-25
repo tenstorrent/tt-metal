@@ -102,7 +102,7 @@ inline void _llk_math_eltwise_binary_mop_config_(const ckernel::TensorShape& ten
         (reuse_dest != EltwiseBinaryReuseDestType::NONE) ? tensor_shape.face_r_dim : (tensor_shape.total_num_faces() * tensor_shape.face_r_dim);
     constexpr bool high_fidelity = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
     static_assert(!(high_fidelity && ELTWISE_BINARY_TYPE != EltwiseBinaryType::ELWMUL), "Math fidelity larger than LoFi only works with Eltwise MUL");
-    // For reuse_dest + Elwmul we need dest accumulation (dest = old_dest + srcA*srcB) ; LoFi alone sets EN_DST_ACC=0.
+    // HiFi phases accumulate partial products, including with dest reuse; overwrite mode handles the first phase separately.
     const std::uint32_t EN_DST_ACC = acc_to_dest ? 1u : (high_fidelity ? 1u : 0u);
 
     constexpr std::uint8_t addrmod_fid    = high_fidelity ? ADDR_MOD_2 : ADDR_MOD_0;
@@ -118,6 +118,11 @@ inline void _llk_math_eltwise_binary_mop_config_(const ckernel::TensorShape& ten
 
     if (high_fidelity)
     {
+        if (!acc_to_dest)
+        {
+            temp.set_start_op(eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_NONE, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2>(0));
+            temp.set_inner_loop_len(MOP_INNER_LOOP - 1);
+        }
         const std::uint32_t eltwise_binary_op_clr_fidelity =
             eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_NONE, p_elwise::SRCB_NO_BCAST, ADDR_MOD_0>(EN_DST_ACC);
         temp.set_last_inner_loop_instr(eltwise_binary_op_clr_fidelity); // clear math fidelity

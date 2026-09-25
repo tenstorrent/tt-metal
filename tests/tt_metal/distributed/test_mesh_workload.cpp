@@ -122,9 +122,9 @@ void verify_cb_config(
     MeshWorkload& workload,
     std::vector<CBConfig>& golden_cb_config,
     CoreRangeSet& crs) {
-    uint32_t max_cbs = MetalContext::instance().hal().get_arch_num_circular_buffers();
-    std::vector<uint32_t> cb_config_vector;
-    uint32_t cb_config_buffer_size = max_cbs * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+    uint32_t max_dfbs = MetalContext::instance().hal().get_num_dataflow_buffers();
+    std::vector<uint32_t> dfb_config_vector;
+    uint32_t dfb_config_buffer_size = max_dfbs * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
     for (const auto& [device_range, _] : workload.get_programs()) {
         for (const auto& coord : device_range) {
@@ -139,18 +139,18 @@ void verify_cb_config(
                         device,
                         core_coord,
                         workload.get_cb_base_addr(mesh_device, core_coord, CoreType::WORKER),
-                        cb_config_buffer_size,
-                        cb_config_vector);
+                        dfb_config_buffer_size,
+                        dfb_config_vector);
 
                     uint32_t cb_addr = l1_unreserved_base;
                     for (const auto& config : golden_cb_config) {
                         const uint32_t index = config.cb_id * sizeof(uint32_t);
                         const uint32_t cb_num_pages = config.num_pages;
                         const uint32_t cb_size = cb_num_pages * config.page_size;
-                        const bool addr_match = cb_config_vector.at(index) == cb_addr;
-                        const bool size_match = cb_config_vector.at(index + 1) == cb_size;
-                        const bool num_pages_match = cb_config_vector.at(index + 2) == cb_num_pages;
-                        const bool page_size_match = cb_config_vector.at(index + 3) == config.page_size;
+                        const bool addr_match = dfb_config_vector.at(index) == cb_addr;
+                        const bool size_match = dfb_config_vector.at(index + 1) == cb_size;
+                        const bool num_pages_match = dfb_config_vector.at(index + 2) == cb_num_pages;
+                        const bool page_size_match = dfb_config_vector.at(index + 3) == config.page_size;
                         EXPECT_TRUE(addr_match);
                         EXPECT_TRUE(size_match);
                         EXPECT_TRUE(num_pages_match);

@@ -40,10 +40,10 @@ indexes:
 
 operands:
   - {name: x, dims: [64, 64], format: Float16_b}  # c_0
-  - {name: input_mask, dims: [32, 64], format: Float32, const_value: 1.0}  # c_28: DRAM masks use gb_dtype too.
-  - {name: scaler, dims: [32, 32], format: Float16_b, const_value: 0.015625}  # c_2: 1/sqrt(64*64)
-  - {name: scaler_global, dims: [32, 32], format: Float16_b, const_value: 1.0}  # c_4
-  - {name: eps, dims: [32, 32], format: Float16_b, const_value: 1.0e-5}  # c_3
+  - {name: input_mask, dims: [32, 64], format: Float32, stimuli: 1.0}  # c_28: DRAM masks use gb_dtype too.
+  - {name: scaler, dims: [32, 32], format: Float16_b, stimuli: 0.015625}  # c_2: 1/sqrt(64*64)
+  - {name: scaler_global, dims: [32, 32], format: Float16_b, stimuli: 1.0}  # c_4
+  - {name: eps, dims: [32, 32], format: Float16_b, stimuli: 1.0e-5}  # c_3
   - {name: gamma, dims: [32, 64], format: Float32}  # c_5
   - {name: beta, dims: [32, 64], format: Float32}  # c_6
   - {name: masked, dims: [64, 64], format: Float16_b}  # c_24

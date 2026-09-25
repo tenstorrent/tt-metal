@@ -108,10 +108,19 @@ float get_nan();
 float get_inf();
 
 /**
- * @brief Uses the hardware abstraction layer to get the maximum number of circular buffers per core.
+ * @brief Uses the hardware abstraction layer to get the maximum number of dataflow buffers per core.
  *
- * @return Maximum number of circular buffers
+ * @return Maximum number of dataflow buffers
  */
+uint32_t get_num_dataflow_buffers();
+
+/**
+ * @brief Uses the hardware abstraction layer to get the maximum number of dataflow buffers per core.
+ *
+ * @deprecated Use get_num_dataflow_buffers(). This API will be removed after 2026-10-23.
+ * @return Maximum number of dataflow buffers
+ */
+[[deprecated("Use get_num_dataflow_buffers(). This API will be removed after 2026-10-23.")]]
 uint32_t get_arch_num_circular_buffers();
 
 }  // namespace tt::tt_metal::hal

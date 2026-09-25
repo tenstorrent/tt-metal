@@ -43,6 +43,7 @@ These models use the [weekly Agentic Research pipeline](#agentic-research-model-
 | Model implementation | System | Tier | Weekly coverage |
 |----------------------|--------|------|-----------------|
 | Llama3.1-8B QB2 TP4 | BH QuietBox 2 | 3 | Decoder PCC and trace replay; scored IFEval serving |
+| Gemma4 31B QB2 TP4 | BH QuietBox 2 | 3 | Decoder PCC, trace and API tests; GPQA 10/198 subset; fixed-length serving performance |
 
 ## Daily Model Pipelines
 
@@ -266,10 +267,18 @@ communications, readback, and CPU validation.
 
 For a manual run, select **Run workflow** in GitHub Actions. Choose `model`, `sku`,
 and `tier`, or leave them at `all`. Use `vllm-tt-plugin-ref` to select a plugin
-branch or tag. It temporarily defaults to `yieldthought/llama31-qb2-serving`
-for both manual and scheduled runs, until [vllm-tt-plugin #116](https://github.com/tenstorrent/vllm-tt-plugin/pull/116)
-merges. A selection with no matching tests fails before the build starts. The
+branch or tag. Both manual and scheduled runs default to `main`. A selection with no matching tests fails before the build starts. The
 Saturday schedule becomes active after the workflow is merged to the default branch.
+
+Gemma4 31B QB2 uses Tier 3. Its weekly command runs two real-weight decoder comparisons (full and sliding
+attention), twelve client/adapter checks, five representative API checks,
+**10 of 198 GPQA Diamond questions**
+(seed 42, 32768 output tokens), and fixed-length 128-input/128-output performance on separate
+one-slot and 32-slot servers. The default benchmark also offers 1024-token inputs; weekly CI selects
+the shorter shapes to fit the existing timeout. Performance records label server capacity independently of request concurrency. The subset
+and smaller output budget bound CI runtime; they do not reproduce the separately
+reported full-dataset benchmark. The command saves actual request counts, raw
+responses, scoring inputs and timing definitions.
 
 To add a model:
 
@@ -277,8 +286,13 @@ To add a model:
 2. For each SKU, set `tier` and `timeout` in minutes.
 3. Set the total budget under `models.agentic_research_tier<N>.<sku>` in
    `time_budget.yaml`. The sum of test timeouts for that tier and SKU must fit
-   the budget. The initial QB2 Tier 3 budget is **12 minutes**, including setup,
-   model tests, serving, and reporting. The [10-minute validation run](https://github.com/tenstorrent/tt-metal/actions/runs/34480800119)
+   the budget. The QB2 Tier 3 total is **52 minutes**: 12 for Llama3.1-8B
+   and 40 for Gemma4 31B, including setup, model tests, serving, and reporting.
+   Gemma allows up to 20 minutes for each server startup within its total allowance;
+   periodic metadata snapshots distinguish slow loading from stopped progress.
+   Gemma's allowance covers the measured 15½-minute CI setup/checks, about 5½ minutes
+   for GPQA, the remaining performance/reporting work, and runner variance.
+   The initial Llama allowance came from the following measurement. The [10-minute validation run](https://github.com/tenstorrent/tt-metal/actions/runs/34480800119)
    passed all 24 model tests and completed 54 of 56 serving requests before its
    timeout; the budget includes room for completion and runner variance.
 4. Add any new model or SKU to the workflow's manual choices. Add the required

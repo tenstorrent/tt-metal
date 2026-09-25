@@ -22,7 +22,7 @@ using namespace ckernel::unpacker;
 // in1 tile shape: [32, 32]
 // rt_dim: 1
 // ct_dim: any integer from 1 to 16
-// kt_dim: even number from 2 to 256 (inclusive)
+// kt_dim: any integer from 1 to 256 (inclusive)
 // fidelity: LoFi only
 // throttle: not supported
 
@@ -99,8 +99,8 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, con
             TTI_NOP;
         });
 
-    // Mop is configured to always cover two iterations of the inner (kt) dim loop, allowing us to
-    // cover up to 256 kt_dim (max supported by this API) with max mop iterations (128)
+    // Mop is configured to cover pairs of inner (kt) iterations. An odd tail
+    // replays one recorded inner iteration directly.
     // To usefully issue up to 128 mop iterations we're limited to only using 0s in zmask
     // (not using SKIP_A/B instructions) since iterations beyond 32 always use 0s for zmask
     //
@@ -212,8 +212,8 @@ inline void _llk_unpack_AB_custom_mm_run_(
     const std::uint32_t address_b,
     const std::uint32_t block_increment,
     const std::uint32_t inner_increment,
-    const std::uint32_t kt_dim)
-{
+    const std::uint32_t kt_dim,
+    const std::uint32_t ct_dim) {
     // Program SrcB address once, its updated using counters for up to 256 kt_dim
     cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b;
     // Program SrcA address once, its updated using CFGSHIFTMASK
@@ -228,8 +228,29 @@ inline void _llk_unpack_AB_custom_mm_run_(
 
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 
-    // We can issue mop only once for up to 256 kt_dim
-    TT_MOP(0, (kt_dim / 2) - 1, 0);
+    constexpr std::uint32_t mop_template_0 = 0;
+    constexpr std::uint32_t no_skip_zmask = 0;
+    constexpr std::uint32_t replay_buffer_size = 32;
+    constexpr std::uint32_t full_unpack_instruction_count = 5;
+    constexpr std::uint32_t reuse_instruction_count = 3;
+
+    const std::uint32_t kt_pairs = kt_dim / 2;
+    if (kt_pairs > 0) {
+        TT_MOP(mop_template_0, kt_pairs - 1, no_skip_zmask);
+    }
+    if (kt_dim % 2 != 0) {
+        const std::uint32_t first_half_tiles = (ct_dim + 1) / 2;
+        const std::uint32_t second_half_tiles = ct_dim / 2;
+        // Both tunings occupy five instructions for the full unpack. Post1's first instruction is a padding NOP,
+        // while post0's last instruction is a hazard NOP.
+        const std::uint32_t first_half_instruction_count =
+            full_unpack_instruction_count + (first_half_tiles - 1) * reuse_instruction_count;
+        lltt::replay(0, first_half_instruction_count);
+        if (second_half_tiles > 0) {
+            const std::uint32_t second_half_instruction_count = second_half_tiles * reuse_instruction_count;
+            lltt::replay(replay_buffer_size - second_half_instruction_count, second_half_instruction_count);
+        }
+    }
 
     t6_semaphore_get(semaphore::UNPACK_SYNC);
 
@@ -251,8 +272,7 @@ inline void _llk_unpack_AB_custom_mm_(
     const std::uint32_t tile_size_a,
     const std::uint32_t tile_size_b,
     const std::uint32_t kt_dim,
-    const std::uint32_t ct_dim = 1)
-{
+    const std::uint32_t ct_dim) {
     volatile std::uint32_t* cfg = get_cfg_pointer();
 
     const std::uint32_t block_increment = read_transposed ? kt_dim * tile_size_a : tile_size_a;
@@ -272,5 +292,5 @@ inline void _llk_unpack_AB_custom_mm_(
         TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC);
     }
 
-    _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim);
+    _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim, ct_dim);
 }

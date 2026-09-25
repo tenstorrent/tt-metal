@@ -59,7 +59,7 @@ protected:
 
         this->DetectDispatchMode();
         this->arch_ = tt::tt_metal::MetalContext::instance().get_cluster().arch();
-        init_max_cbs();
+        init_max_dfbs();
     }
 
     void TearDown() override {
@@ -404,7 +404,7 @@ protected:
 
         this->DetectDispatchMode();
         this->arch_ = tt::tt_metal::MetalContext::instance().get_cluster().arch();
-        init_max_cbs();
+        init_max_dfbs();
     }
 
     static void ReleaseSharedDevices() {
