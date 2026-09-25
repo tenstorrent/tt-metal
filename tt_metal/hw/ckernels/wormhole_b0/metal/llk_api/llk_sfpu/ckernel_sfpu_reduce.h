@@ -158,22 +158,21 @@ inline void load_face_data(std::uint32_t face_addr, std::uint32_t column_offset)
 /**
  * @brief Integer divide-by-32 for column AVG, rounding toward zero
  * @tparam INSTRUCTION_MODE The load/store mode the column path runs under.
- * @tparam is_signed_int True for signed Int32, which is loaded with INT32_2S_COMP so LREG0 holds a
- *         two's-complement sum; false for the unsigned formats (UInt32, UInt16), whose sum is an
- *         unsigned 32-bit value.
+ * @tparam is_signed_int True for signed Int32, whose LREG0 holds a two's-complement sum; false for the
+ *         unsigned formats (UInt32, UInt16), whose sum is an unsigned 32-bit value.
  *
  * Wormhole B0 only has a logical right shift, so the signed path takes the magnitude, shifts it and
  * restores the sign, while the unsigned path shifts directly. The arm must follow the data's
- * signedness, not the load mode: UInt32 also loads with INT32, and treating an unsigned column sum
- * with bit 31 set as negative returns a wrong, negated average (tt-metal#57509).
+ * signedness, not the load mode: Int32 and UInt32 both load with INT32, and treating an unsigned
+ * column sum with bit 31 set as negative returns a wrong, negated average (tt-metal#57509).
  */
 template <InstrModLoadStore INSTRUCTION_MODE, bool is_signed_int>
 inline void perform_int_average() {
-    // Signed integer AVG is loaded with INT32_2S_COMP, and nothing else is: the signed arm needs a
-    // two's-complement sum, and the unsigned arm would misread one as a huge magnitude.
+    // Both arms operate on the raw DEST word. INT32_2S_COMP would reinterpret a two's-complement
+    // operand as sign-magnitude on load and store, turning every negative average into its magnitude.
     static_assert(
-        is_signed_int == (INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP),
-        "Integer AVG: the data is signed exactly when it is loaded with INT32_2S_COMP");
+        INSTRUCTION_MODE != InstrModLoadStore::INT32_2S_COMP,
+        "Integer AVG operates on raw two's-complement or unsigned words; do not load it with INT32_2S_COMP");
 
     if constexpr (is_signed_int) {
         // Two's-complement signed divide-by-32 (round toward zero): shift the magnitude, then negate
@@ -1678,17 +1677,15 @@ inline void init_reduce(std::uint32_t block_ct_dim = 1) {
         is_supported_reduce_format(format),
         "Unsupported data format. Supported formats: Int32, UInt32, UInt16, Float32, Float16_b");
 
-    // Int32 DEST representation per reduction: SUM and MAX/MIN are two's-complement; AVG is sign-magnitude.
-    // SUM loads with plain INT32 so the word reaches SFPIADD (a two's-complement adder) unchanged;
+    // Int32 DEST holds two's-complement for every reduction.
+    // SUM and AVG load with plain INT32 so the word reaches SFPIADD (a two's-complement adder) unchanged;
     // INT32_2S_COMP applies SignMagToTwosComp on load and would corrupt two's-complement negatives.
     // Int32 MAX/MIN dispatch to init_reduce_max_min_int32_signed below (plain INT32 load + a software
     // signed compare-and-swap, correct over the full range including INT32_MIN), so they do not use
-    // INSTRUCTION_MODE here. AVG keeps INT32_2S_COMP; its operands sit in DEST as sign-magnitude and its
-    // divide-by-32 step assumes that mode.
-    constexpr InstrModLoadStore INSTRUCTION_MODE =
-        (format == DataFormat::Int32 && pool_type == PoolType::AVG) ? InstrModLoadStore::INT32_2S_COMP
-        : (format == DataFormat::Float16_b)                         ? InstrModLoadStore::DEFAULT
-                                            : GetSfpLoadStoreInstrMod<format, is_fp32_dest_accum_en>();
+    // INSTRUCTION_MODE here.
+    constexpr InstrModLoadStore INSTRUCTION_MODE = (format == DataFormat::Float16_b)
+                                                       ? InstrModLoadStore::DEFAULT
+                                                       : GetSfpLoadStoreInstrMod<format, is_fp32_dest_accum_en>();
 
     // Garbage high bits need to be cleared when loading UInt16 data from a 32-bit (fp32) dest word.
     constexpr bool clear_high_bits = (is_fp32_dest_accum_en && format == DataFormat::UInt16);
@@ -1766,8 +1763,7 @@ inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block
         is_supported_reduce_format(format),
         "Unsupported data format. Supported formats: Int32, UInt32, UInt16, Float32, Float16_b");
 
-    // Int32 load/store mode per reduction. DEST encoding is two's-complement for SUM and MAX/MIN, and
-    // sign-magnitude for AVG.
+    // Int32 load/store mode per reduction. DEST holds two's-complement Int32 for every reduction.
     //   SUM (two's-complement): plain INT32 so SFPIADD (a two's-complement adder) gets the word unchanged;
     //        INT32_2S_COMP applies SignMagToTwosComp on load and would corrupt negatives.
     //   MAX/MIN (two's-complement): plain INT32 (bits preserved), feeding the software signed
@@ -1775,23 +1771,21 @@ inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block
     //        including INT32_MIN. This applies to BOTH the column reduce and the row reduce, so a
     //        multi-axis reduce (e.g. ttir.max dim=[1,2]) that chains column-then-row over the same DEST
     //        stays consistent (both axes leave/consume plain two's-complement).
-    //   AVG (sign-magnitude): INT32_2S_COMP, which perform_int_average's divide-by-32 step assumes.
-    constexpr bool int32_avg = (format == DataFormat::Int32 && pool_type == PoolType::AVG);
+    //   AVG (two's-complement): plain INT32, like SUM, so the column sum and perform_int_average's
+    //        divide-by-32 see the word unchanged.
     constexpr bool int32_max_min =
         (format == DataFormat::Int32 && (pool_type == PoolType::MAX || pool_type == PoolType::MIN));
     // Int32 MAX/MIN (both column and row) use a dedicated two's-complement compare-and-swap path that
-    // loads with plain INT32 (see the per-reduction note above). Only AVG uses INT32_2S_COMP.
+    // loads with plain INT32 (see the per-reduction note above).
     constexpr bool int32_max_min_col = int32_max_min && (reduce_dim == ReduceDim::REDUCE_COL);
     constexpr bool int32_max_min_row = int32_max_min && (reduce_dim == ReduceDim::REDUCE_ROW);
     constexpr InstrModLoadStore INSTRUCTION_MODE = int32_max_min ? InstrModLoadStore::INT32
-                                                   : int32_avg   ? InstrModLoadStore::INT32_2S_COMP
                                                    : (format == DataFormat::Float16_b)
                                                        ? InstrModLoadStore::DEFAULT
                                                        : GetSfpLoadStoreInstrMod<format, is_fp32_dest_accum_en>();
 
-    // Signedness of the data. UInt32 (and UInt16 in a 32-bit dest) share INT32 with Int32 SUM/MAX/MIN, while
-    // Int32 AVG, the only consumer of this flag, is forced to INT32_2S_COMP; the static_assert in
-    // perform_int_average cross-checks the two.
+    // Signedness of the data, which INSTRUCTION_MODE does not carry: Int32, UInt32 and UInt16 in a 32-bit
+    // dest all load with INT32. Only the integer column AVG divide consumes it.
     constexpr bool is_signed_int = (format == DataFormat::Int32);
 
     // Garbage high bits need to be cleared when loading UInt16 data from a 32-bit (fp32) dest word

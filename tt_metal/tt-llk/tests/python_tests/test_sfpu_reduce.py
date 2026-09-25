@@ -107,13 +107,16 @@ def use_int32_twos_complement(
     unchanged. Sign-magnitude stimuli would hide the SUM bug where ``INT32_2S_COMP`` corrupts
     negatives, so SUM operands are two's-complement too (for both row and column SUM).
 
-    AVG is excluded: it still loads with ``INT32_2S_COMP`` (its divide-by-32 step assumes that
-    mode), so sign-magnitude remains the right encoding for it.
+    AVG loads with plain ``INT32`` too on Wormhole, where its divide-by-32 works on the two's-complement
+    sum, so it is two's-complement there. Blackhole's AVG still loads with ``INT32_2S_COMP`` and so keeps
+    sign-magnitude stimuli.
     """
     if formats.input_format != DataFormat.Int32:
         return False
     if reduce_pool == ReducePool.Sum:
         return True
+    if reduce_pool == ReducePool.Average:
+        return TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
     if reduce_pool in (ReducePool.Max, ReducePool.Min):
         # Both column and row MAX/MIN take two's-complement (row MAX now matches the column path so
         # the chained multi-axis reduce is consistent).
@@ -949,8 +952,7 @@ _UINT32_AVERAGE_BANDS = {
 def _run_integer_column_average(grid: torch.Tensor, data_format: DataFormat):
     """Single-tile integer column AVG on device; returns row 0 of the result (the averages) as int64.
 
-    Int32 AVG loads with INT32_2S_COMP, which converts sign-magnitude L1 words to two's-complement, so
-    its stimuli stay sign-magnitude (use_int32_twos_complement); the unsigned formats have no sign
+    The Int32 stimulus encoding follows use_int32_twos_complement; the unsigned formats have no sign
     encoding to pick.
     """
     formats = InputOutputFormat(data_format, data_format)
@@ -1083,8 +1085,7 @@ def test_uint32_reduce_column_average_bit31(band):
 # Signed Int32 column AVG, compared exactly. The divide-by-32 rounds toward zero: the magnitude is
 # shifted and the sign restored. The sweep above keeps every column sum within +-32000, so it never
 # reaches the ends of the range or pins the rounding direction on every remainder; these bands do.
-# Sums are two's-complement in DEST, so a column can sum to exactly INT32_MIN even though no single
-# sign-magnitude L1 element can hold it.
+# Sums are two's-complement in DEST, so a column can sum to exactly INT32_MIN.
 # =============================================================================
 
 _INT32_COLUMN_SUM_BANDS = {
@@ -1117,7 +1118,7 @@ def test_int32_reduce_column_average_exact(band):
 
     column_sums = torch.tensor(_INT32_COLUMN_SUM_BANDS[band], dtype=torch.int64)
     # Every row holds floor(sum / 32) and row 0 also carries the remainder in [0, 31], so the column
-    # sums to exactly the target and every element fits in sign-magnitude Int32.
+    # sums to exactly the target and every element fits in Int32 in either encoding.
     base = torch.div(column_sums, TILE_DIM, rounding_mode="floor")
     grid = base.repeat(TILE_DIM, 1).clone()
     grid[0, :] += column_sums - TILE_DIM * base
