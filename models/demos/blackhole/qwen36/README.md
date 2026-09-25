@@ -48,6 +48,15 @@ state) layers and **Gated Full Attention** (paged KV cache) layers. The 9B has
 32 layers (24 DeltaNet + 8 full-attention). Qwen3.5 uses zero-centered RMSNorm
 everywhere and **partial** RoPE (only a fraction of each head is rotated).
 
+## Speculative decoding (Qwen3.6-27B-DFlash)
+
+Qwen3.6-27B supports DFlash speculative decoding with the block-diffusion drafter
+`z-lab/Qwen3.6-27B-DFlash`, on a Wormhole T3K. The ttnn drafter and the device target live in
+[tt/dflash/](tt/dflash/); the host reference (drafter, HF target) and the backend-agnostic
+speculative loop live in [reference/dflash/](reference/dflash/); the end-to-end demo is
+[demo/dflash_demo.py](demo/dflash_demo.py). See [README-DFLASH.md](README-DFLASH.md) for the
+architecture, run commands, tests, PCC and performance.
+
 ## Environment setup
 
 Before running **any** test, export the two environment variables that select

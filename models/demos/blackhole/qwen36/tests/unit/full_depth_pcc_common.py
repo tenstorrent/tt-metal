@@ -101,8 +101,12 @@ def _build_prompt(tokenizer, length):
     return ids[:, :length].to(torch.long)
 
 
-def hf_reference(ckpt_dir, token_ids, decode_steps=0):
-    """HF prefill plus greedy decode. Returned teacher tokens let TT replay the same inputs."""
+def hf_reference(ckpt_dir, token_ids, decode_steps=0, all_positions=False):
+    """HF prefill plus greedy decode. Returned teacher tokens let TT replay the same inputs.
+
+    ``all_positions=True`` returns the prefill logits of every prompt position, ``[T, vocab]``,
+    instead of only the last.
+    """
     from transformers.models.qwen3_5 import Qwen3_5ForCausalLM, Qwen3_5TextConfig
 
     ref_dtype = getattr(torch, os.environ.get("QWEN36_FULL_DEPTH_REF_DTYPE", "bfloat16"))
@@ -117,11 +121,11 @@ def hf_reference(ckpt_dir, token_ids, decode_steps=0):
 
     with torch.no_grad():
         out = hf_model(token_ids, use_cache=True)
-        prefill_logits = out.logits[0, -1].float()
+        prefill_logits = out.logits[0].float() if all_positions else out.logits[0, -1].float()
         cache = out.past_key_values
 
         decode_logits, teacher_tokens = [], []
-        tok = int(prefill_logits.argmax())
+        tok = int(out.logits[0, -1].argmax())
         for _ in range(decode_steps):
             teacher_tokens.append(tok)
             out = hf_model(torch.tensor([[tok]], dtype=torch.long), past_key_values=cache, use_cache=True)
