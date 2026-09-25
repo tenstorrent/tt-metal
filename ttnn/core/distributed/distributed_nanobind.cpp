@@ -653,7 +653,19 @@ void py_module(nb::module_& mod) {
     auto py_mesh_device_view = static_cast<nb::class_<MeshDeviceView>>(mod.attr("MeshDeviceView"));
     py_mesh_device_view.def("shape", &MeshDeviceView::shape, nb::rv_policy::reference_internal)
         .def("num_devices", &MeshDeviceView::num_devices)
-        .def("is_local", &MeshDeviceView::is_local, nb::arg("coord"));
+        .def("is_local", &MeshDeviceView::is_local, nb::arg("coord"))
+        .def(
+            "get_local_mesh_coord_range",
+            &MeshDeviceView::get_local_mesh_coord_range,
+            R"doc(
+            Returns the bounding box of the coordinates of the devices that this process owns.
+
+            The range is the smallest box that holds every local coordinate. If the local
+            devices do not form a box, the range also holds coordinates of remote devices.
+
+            Raises:
+                RuntimeError: If no device in the view is local.
+            )doc");
 
     auto py_tensor_to_mesh = static_cast<nb::class_<TensorToMesh>>(mod.attr("CppTensorToMesh"));
     py_tensor_to_mesh.def(
