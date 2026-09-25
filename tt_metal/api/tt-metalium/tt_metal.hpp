@@ -95,6 +95,9 @@ IDevice* GetActiveDevice(ChipId device_id);
  * host_buffer | Buffer on host to copy data from                | Span<const uint8_t> &   | Host buffer size must match
  * buffer               | Yes      |
  */
+[[deprecated(
+    "Use distributed::WriteShard or distributed::EnqueueWriteMeshBuffer instead. This API will be removed after "
+    "2026-10-30.")]]
 void WriteToBuffer(Buffer& buffer, ttsl::Span<const uint8_t> host_buffer);
 /**
  * Copies data from a host buffer into the specified buffer
@@ -108,6 +111,9 @@ void WriteToBuffer(Buffer& buffer, ttsl::Span<const uint8_t> host_buffer);
  * buffer               | Yes      |
  */
 template <typename DType>
+[[deprecated(
+    "Use distributed::WriteShard or distributed::EnqueueWriteMeshBuffer instead. This API will be removed after "
+    "2026-10-30.")]]
 void WriteToBuffer(Buffer& buffer, const std::vector<DType>& host_buffer) {
     WriteToBuffer(
         buffer,
@@ -115,10 +121,16 @@ void WriteToBuffer(Buffer& buffer, const std::vector<DType>& host_buffer) {
             reinterpret_cast<const uint8_t*>(host_buffer.data()), host_buffer.size() * sizeof(DType)));
 }
 template <typename DType>
+[[deprecated(
+    "Use distributed::WriteShard or distributed::EnqueueWriteMeshBuffer instead. This API will be removed after "
+    "2026-10-30.")]]
 void WriteToBuffer(const std::shared_ptr<Buffer>& buffer, const std::vector<DType>& host_buffer) {
     WriteToBuffer(*buffer, host_buffer);
 }
 
+[[deprecated(
+    "Use distributed::ReadShard or distributed::EnqueueReadMeshBuffer instead. This API will be removed after "
+    "2026-10-30.")]]
 void ReadFromBuffer(Buffer& buffer, uint8_t* host_buffer);
 /**
  * Copies data from a buffer into a host buffer
@@ -131,6 +143,9 @@ void ReadFromBuffer(Buffer& buffer, uint8_t* host_buffer);
  * host_buffer | Buffer on host to copy data into                | std::vector<DType> &    | | Yes      | |
  */
 template <typename DType>
+[[deprecated(
+    "Use distributed::ReadShard or distributed::EnqueueReadMeshBuffer instead. This API will be removed after "
+    "2026-10-30.")]]
 void ReadFromBuffer(Buffer& buffer, std::vector<DType>& host_buffer) {
     auto buffer_size = buffer.size();
     TT_FATAL(buffer_size % sizeof(DType) == 0, "Buffer size is not divisible by dtype size");
@@ -138,6 +153,9 @@ void ReadFromBuffer(Buffer& buffer, std::vector<DType>& host_buffer) {
     ReadFromBuffer(buffer, reinterpret_cast<uint8_t*>(host_buffer.data()));
 }
 template <typename DType>
+[[deprecated(
+    "Use distributed::ReadShard or distributed::EnqueueReadMeshBuffer instead. This API will be removed after "
+    "2026-10-30.")]]
 void ReadFromBuffer(const std::shared_ptr<Buffer>& buffer, std::vector<DType>& host_buffer) {
     ReadFromBuffer(*buffer, host_buffer);
 }
@@ -255,6 +273,9 @@ uint32_t EncodePerDeviceProgramID(uint32_t base_program_id, uint32_t device_id, 
  * | host_buffer  | Buffer on host to copy data from                       | std::span<const uint8_t> | Host buffer must be fully fit DRAM buffer | Yes      |
  */
 // clang-format on
+[[deprecated(
+    "Use a MeshBuffer with distributed::WriteShard or distributed::EnqueueWriteMeshBuffer instead. "
+    "WriteToDeviceDRAMChannel will be removed after 2026-10-30.")]]
 bool WriteToDeviceDRAMChannel(
     IDevice* device, int dram_channel, uint32_t address, std::span<const uint8_t> host_buffer);
 /**
@@ -271,6 +292,9 @@ bool WriteToDeviceDRAMChannel(
  * | [DRAM_UNRESERVED_BASE, dram_size)         | Yes      | | host_buffer  | Buffer on host to copy data from |
  * std::vector<uint32_t> | Host buffer must be fully fit DRAM buffer | Yes      |
  */
+[[deprecated(
+    "Use a MeshBuffer with distributed::WriteShard or distributed::EnqueueWriteMeshBuffer instead. "
+    "WriteToDeviceDRAMChannel will be removed after 2026-10-30.")]]
 bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t address, std::vector<uint32_t>& host_buffer);
 
 // clang-format off
@@ -287,6 +311,9 @@ bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t addres
  * | host_buffer  | Buffer on host to copy data into                             | std::span<uint8_t>    |                                | Yes      |
  */
 // clang-format on
+[[deprecated(
+    "Use a MeshBuffer with distributed::ReadShard or distributed::EnqueueReadMeshBuffer instead. "
+    "ReadFromDeviceDRAMChannel will be removed after 2026-10-30.")]]
 bool ReadFromDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t address, std::span<uint8_t> host_buffer);
 
 /**
@@ -304,6 +331,9 @@ bool ReadFromDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t addre
  * device in bytes                  | uint32_t              |                                | Yes      | | host_buffer
  * | Buffer on host to copy data into                             | std::vector<uint32_t> | | Yes      |
  */
+[[deprecated(
+    "Use a MeshBuffer with distributed::ReadShard or distributed::EnqueueReadMeshBuffer instead. "
+    "ReadFromDeviceDRAMChannel will be removed after 2026-10-30.")]]
 bool ReadFromDeviceDRAMChannel(
     IDevice* device, int dram_channel, uint32_t address, uint32_t size, std::vector<uint32_t>& host_buffer);
 

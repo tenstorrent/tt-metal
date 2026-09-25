@@ -21,10 +21,12 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 
@@ -665,7 +667,6 @@ TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
     // Tensor: 8 pages × 1024 bytes (BFLOAT16, ROW_MAJOR, shape {8, 512} → page = row = 1024 B)
     constexpr uint32_t num_pages = 8;
     constexpr uint32_t page_size = 1024;
-    constexpr uint32_t total_bytes = num_pages * page_size;
     constexpr uint32_t num_dfb_entries = 4;
 
     const NodeCoord node{0, 0};
@@ -749,11 +750,13 @@ TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
     // -------------------------------------------------------
     // Fill input tensor with known data
     // -------------------------------------------------------
-    std::vector<uint32_t> input_data(total_bytes / sizeof(uint32_t));
+    std::vector<bfloat16> input_data(tensor_spec.logical_shape().volume());
     for (size_t i = 0; i < input_data.size(); i++) {
-        input_data[i] = static_cast<uint32_t>(i);
+        input_data[i] = bfloat16(static_cast<float>(i));
     }
-    detail::WriteToBuffer(*input_tensor.mesh_buffer().get_reference_buffer(), input_data);
+    auto& cq = mesh_device->mesh_command_queue();
+    auto input_host = HostTensor::from_vector(input_data, tensor_spec);
+    cq.enqueue_write_tensor(input_host, input_tensor);
 
     // -------------------------------------------------------
     // Dispatch
@@ -763,8 +766,7 @@ TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
     // -------------------------------------------------------
     // Verify
     // -------------------------------------------------------
-    std::vector<uint32_t> output_data;
-    detail::ReadFromBuffer(*output_tensor.mesh_buffer().get_reference_buffer(), output_data);
+    auto output_data = cq.enqueue_read_tensor(output_tensor).to_vector<bfloat16>();
 
     ASSERT_EQ(output_data.size(), input_data.size());
     EXPECT_EQ(output_data, input_data);

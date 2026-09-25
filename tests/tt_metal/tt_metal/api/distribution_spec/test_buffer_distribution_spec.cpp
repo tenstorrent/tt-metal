@@ -6,6 +6,7 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "dispatch/system_memory_manager.hpp"
 #include "allocator/allocator.hpp"
+#include "dispatch/host_device_transfer.hpp"
 
 #include "tt_metal/test_utils/stimulus.hpp"
 
@@ -331,7 +332,7 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
         Finish(mesh_device_->mesh_command_queue());
     } else {
         log_info(tt::LogTest, "Writing with: WriteToBuffer (equivalent to SDMeshCommandQueue enqueue_write_shards)");
-        tt::tt_metal::detail::WriteToBuffer(*shard_view, src);
+        tt::tt_metal::slow_dispatch::WriteToBuffer(*shard_view, src);
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(local_device->id());
     }
 
@@ -398,7 +399,7 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
         Finish(mesh_device_->mesh_command_queue());
     } else {
         log_info(tt::LogTest, "Reading with: ReadFromBuffer (equivalent to SDMeshCommandQueue enqueue_read_shards)");
-        tt::tt_metal::detail::ReadFromBuffer(*shard_view, dst);
+        tt::tt_metal::slow_dispatch::ReadFromBuffer(*shard_view, dst);
     }
 
     // Validate read results are correct

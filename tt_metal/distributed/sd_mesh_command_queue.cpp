@@ -7,6 +7,7 @@
 #include <mutex>
 #include "sd_mesh_command_queue.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/dispatch/host_device_transfer.hpp"
 #include "tt_metal/impl/threading/thread_pool.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"
 #include <mesh_device.hpp>
@@ -134,7 +135,7 @@ bool SDMeshCommandQueue::write_shard_to_device(
     if (logical_core_filter != nullptr) {
         tt::tt_metal::experimental::core_subset_write::WriteToBuffer(*shard_view, payload, *logical_core_filter);
     } else {
-        tt::tt_metal::detail::WriteToBuffer(*shard_view, payload);
+        tt::tt_metal::slow_dispatch::WriteToBuffer(*shard_view, payload);
     }
     return false;  // Slow dispatch doesn't support pinned memory
 }
@@ -165,7 +166,7 @@ void SDMeshCommandQueue::read_shard_from_device(
         return;
     }
 
-    tt::tt_metal::detail::ReadFromBuffer(*shard_view, static_cast<uint8_t*>(dst));
+    tt::tt_metal::slow_dispatch::ReadFromBuffer(*shard_view, static_cast<uint8_t*>(dst));
 }
 
 void SDMeshCommandQueue::submit_memcpy_request(
