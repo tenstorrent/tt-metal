@@ -21,6 +21,25 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
             !attrs.output_mem_config.is_sharded(),
             "SDPA output_heads_concat writes the [B, 1, Sq, NQH*vDH] layout and needs an interleaved output");
     }
+    if (attrs.pack_gqa_heads) {
+        const auto& q_shape = tensors.q.logical_shape();
+        const auto& k_shape = tensors.k.logical_shape();
+        TT_FATAL(
+            !attrs.is_causal && !tensors.attn_mask.has_value() && !attrs.chunk_start_idx.has_value() &&
+                !attrs.chunk_start_idx_tensor.has_value() && !tensors.page_table.has_value() &&
+                !attrs.sliding_window_size.has_value() && !tensors.attention_sink.has_value() && !attrs.is_windowed &&
+                !attrs.use_mla,
+            "SDPA pack_gqa_heads supports non-causal, unmasked, unchunked, non-windowed, non-MLA attention only");
+        TT_FATAL(
+            tensors.v.has_value() && tensors.v->logical_shape()[1] == k_shape[1] && q_shape[1] % k_shape[1] == 0,
+            "SDPA pack_gqa_heads needs NQH ({}) to be a multiple of NKH ({}) and NVH == NKH",
+            q_shape[1],
+            k_shape[1]);
+        TT_FATAL(
+            q_shape[2] % tt::constants::TILE_HEIGHT == 0 && tensors.q.padded_shape()[2] == q_shape[2],
+            "SDPA pack_gqa_heads needs an unpadded, tile-aligned Q sequence length (got {})",
+            q_shape[2]);
+    }
     const bool use_mla = attrs.use_mla;
 
     // Common validations for both modes
@@ -659,7 +678,8 @@ Tensor sdpa(
     uint32_t windowed_q_token_offset,
     const std::optional<Tensor>& windowed_q_token_offset_tensor,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
-    bool output_heads_concat) {
+    bool output_heads_concat,
+    bool pack_gqa_heads) {
     using OperationType = ttnn::prim::SDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -678,6 +698,7 @@ Tensor sdpa(
             .paged_cache_geometry =
                 paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
             .output_heads_concat = output_heads_concat,
+            .pack_gqa_heads = pack_gqa_heads,
         },
         OperationType::tensor_args_t{
             .q = input_tensor_q,

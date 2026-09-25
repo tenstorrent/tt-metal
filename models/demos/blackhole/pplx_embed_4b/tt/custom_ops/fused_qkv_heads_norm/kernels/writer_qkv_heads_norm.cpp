@@ -86,16 +86,15 @@ void kernel_main() {
     constexpr uint32_t kv_parts = (q_split == 1) ? 2 : 1;
     constexpr uint32_t unit_tiles = sub_q_tiles + kv_parts * group_kv_tiles;
     constexpr uint32_t kv_tiles = kv_parts * group_kv_tiles;
+    // Unit index -> (sub, group, s_tile, batch), decomposed once here and then advanced as rotating counters,
+    // so the loop has no divides or modulos.
+    uint32_t sub = work_unit_start % q_split;  // which Q half (0 also carries K, 1 carries V)
+    uint32_t group = (work_unit_start / q_split) % head_groups;
+    uint32_t s_tile = (work_unit_start / q_split / head_groups) % seq_tiles;
+    uint32_t batch = work_unit_start / q_split / head_groups / seq_tiles;
     for (uint32_t w = 0; w < num_work_units; ++w) {
-        const uint32_t work_unit = work_unit_start + w;
-        const uint32_t sub = work_unit % q_split;
-        const uint32_t rest = work_unit / q_split;
-        const uint32_t block = rest / head_groups;
-        const uint32_t group = rest - block * head_groups;
         const bool has_k = (q_split == 1) || sub == 0;
         const bool has_v = (q_split == 1) || sub == 1;
-        const uint32_t s_tile = block % seq_tiles;
-        const uint32_t batch = block / seq_tiles;
         const uint32_t q_head_start = group * q_heads_per_group + sub * sub_q_heads;
         const uint32_t kv_head_start = group * heads_per_group;
 
@@ -153,6 +152,16 @@ void kernel_main() {
             cb.pop_front(kv_tiles);
         } else {
             cb.pop_front(unit_tiles);
+        }
+        if (++sub == q_split) {
+            sub = 0;
+            if (++group == head_groups) {
+                group = 0;
+                if (++s_tile == seq_tiles) {
+                    s_tile = 0;
+                    ++batch;
+                }
+            }
         }
     }
 }

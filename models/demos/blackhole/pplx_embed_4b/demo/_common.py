@@ -471,8 +471,34 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
     # Standalone at the model's config (LoFi, fp32 acc off = streaming kernel, exp approx, bfp8
     # Q/K/V in L1): q512/k256 79.1 us -> q256/k256 55.0 us (-30%); q256/k512 71.5, q128/k128 72.2,
     # 12x10 grids slower (67.6). e2e 23.3 -> 22.4 ms (-3.9%, chip 4). Opt out: QWEN_SDPA_BS1_Q256=0.
+    # bs1: the fused heads op takes its layer-independent inputs (cos/sin, rotation tile, scaler, eps) from a per-core
+    # L1 shard aliased to its CBs and reads gamma after the first unit, so compute starts its first unit ~6 us sooner:
+    # 46.5 -> ~41 us/op standalone (median of 12), bit-identical. Opt out: QWEN_FUSED_RESIDENT_CONSTS=0.
+    if batch_size == 1:
+        os.environ.setdefault("QWEN_FUSED_RESIDENT_CONSTS", "1")
+        # compute v3: every norm / RoPE phase runs once per unit over its 4 Q + 1 K heads instead of once per head
+        # (9 phase set-ups per unit instead of 45), bit-identical to v1. Heads op 41.7 -> 28.7 us in-model; e2e
+        # 16.474 -> 16.135 ms (3 alternating A/B pairs, chip 0). Opt out: QWEN_FUSED_COMPUTE_V3=0.
+        os.environ.setdefault("QWEN_FUSED_COMPUTE_V3", "1")
+        # Both norms keep their 10x8 block-shard output and QKV / FF1 / FF3 read it as a block-sharded in0 (in0_block_w
+        # 8, the shard width), so the ShardedToInterleaved after each norm (72 per forward) goes away. Standalone
+        # QKV 51.7 -> 49.6 us, FF1+FF3 152.7 -> 148.1 us (with the S2I). Opt out: QWEN_BS1_NORM_SHARDED_OUT=0.
+        os.environ.setdefault("QWEN_BS1_NORM_SHARDED_OUT", "1")
     if batch_size == 1 and os.getenv("QWEN_SDPA_BS1_Q256", "1") == "1":
         os.environ.setdefault("QWEN_SDPA_Q_CHUNK", "256")
+        # bs1 GQA packing (SDPA pack_gqa_heads): each KV head's K/V streams once down one 8-core chain instead
+        # of once per Q head, and one 512-token K chunk then beats two of 256. SDPA 49.7 -> 35.9 us/call in-model;
+        # e2e 17.19 -> 16.70 ms (-2.8%, 3 alternating 30-it A/B pairs, chip 0); fixed-512 STS-B 0.8121 -> 0.8133.
+        # Opt out: QWEN_SDPA_GQA_PACK=0 (k 256 then; packed with k 256 is bit-identical to unpacked).
+        if os.getenv("QWEN_SDPA_GQA_PACK", "1") == "1":
+            os.environ.setdefault("QWEN_SDPA_GQA_PACK", "1")
+            os.environ.setdefault("QWEN_SDPA_K_CHUNK", "512")
+            # Packed calls on 88 cores: q192 gives each KV head 11 chunks of its 64 packed row tiles (the last one 4
+            # tiles), one per core of one 11-core grid row, so the K/V row multicast stays; 6 row tiles per core
+            # instead of 8. Standalone 40.2 -> 36.6 us. q160 on 104 cores (heads span two rows, unicast chains)
+            # 44.0 and q128/q64 on 120 cores 53-59 us are slower. Opt out: QWEN_SDPA_GQA_PACK_Q_CHUNK=0.
+            os.environ.setdefault("QWEN_SDPA_GQA_PACK_Q_CHUNK", "192")
+            os.environ.setdefault("QWEN_SDPA_GQA_PACK_GRID", "11,8")
         os.environ.setdefault("QWEN_SDPA_K_CHUNK", "256")
     # bs1 legacy 2D-multicast matmul blocks (8x8 grid, DRAM width-sharded bfp4 weights), from a
     # standalone in0_block_w x out_subblock sweep at M=512 on the model's operand placement:
@@ -484,7 +510,7 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
     # they do not divide (shorter warm-up seq_lens). Opt out: QWEN_LEGACY_BS1_BLOCKS=0.
     # bs1 legacy 2D-multicast matmuls on 12x8 = 96 cores instead of 8x8 = 64. The DRAM width-sharded
     # bfp4 weights live in 8 banks; the 2D factory's per-column bank walk used to hand a column a
-    # whole bank stripe, so any grid wider than 8 columns computed garbage.
+    # whole bank stripe, so any grid wider than 8 columns computed garbage (NEGATIVE_RESULTS §16/§39).
     # With the capped walk every wide grid is bit-identical to 8x8. Standalone, traced, M=512:
     # QKV 67.5 -> 49.8 us, WO 48.7 -> 40.1, FF1/FF3 110.9 -> 79.5 each, FF2 101.8 -> 78.8
     # (about -112 us/layer). per_core_N 7 needs a 2x1 subblock (the derived 1x1 is slower than 8x8).

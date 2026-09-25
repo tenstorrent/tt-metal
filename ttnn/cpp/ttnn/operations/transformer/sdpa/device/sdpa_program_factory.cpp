@@ -291,7 +291,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const auto& q_shape = input_tensor_q.logical_shape();
     const auto& k_shape = input_tensor_k.logical_shape();
     const auto& v_shape = input_tensor_v.logical_shape();
-    const uint32_t B = q_shape[0], NQH = q_shape[1], Sq = q_shape[2], DH = q_shape[3];
+    const uint32_t B = q_shape[0], DH = q_shape[3];
     // Geometry overrides for an HMA-shared paged buffer (see PagedCacheGeometryOverride): when
     // the paged K/V cache was allocated for a different layer's view, the reader must address it
     // with this call's num_kv_heads / block_size (Q already drives head_dim via DHt) rather than
@@ -303,6 +303,11 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const uint32_t NKH = kv_geo.nkh;
     const uint32_t NVH = kv_geo.nvh;
     const uint32_t effective_kv_block_size = kv_geo.block_size;
+    // pack_gqa_heads: Q [B, NQH, Sq, d] is scheduled as [B, NKH, gqa_pack * Sq, d] (identical memory for a
+    // tile-aligned, unpadded Sq), so the per-head K/V chains cover a whole GQA group. Only the concatenated
+    // output layout needs the true head and sequence length (writer defines below).
+    const uint32_t gqa_pack = operation_attributes.pack_gqa_heads ? q_shape[1] / NKH : 1;
+    const uint32_t NQH = q_shape[1] / gqa_pack, Sq = q_shape[2] * gqa_pack;
 
     // In flash mla prefill, we have to support the case where NKH != NVH
     // We are calling op with the following shapes:
@@ -758,6 +763,11 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     defines_map["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     if (operation_attributes.output_heads_concat) {
         defines_map["OUT_HEADS_CONCAT"] = "1";  // writer lays the output out as [B, 1, Sq, NQH*vDH]
+        if (gqa_pack > 1) {
+            // packed row r of packed head g is row r % Sqt of query head g * gqa_pack + r / Sqt
+            defines_map["GQA_PACK"] = std::to_string(gqa_pack);
+            defines_map["GQA_PACK_SQT"] = std::to_string(q_shape[2] / TILE_HEIGHT);
+        }
     }
     log_debug(tt::LogOp, "use_zigzag_balancing: {}", use_zigzag_balancing);
 
