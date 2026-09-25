@@ -518,7 +518,7 @@ def assert_matches_reference(
 
     assert_accurate(
         expected_output,
-        natural_output,
+        natural_output[:, : expected_output.shape[1]],
         name=f"{label} output",
         pcc_threshold=pcc_threshold,
         rmse_threshold=0.05,
