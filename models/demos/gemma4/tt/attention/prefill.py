@@ -297,6 +297,35 @@ def _ring_fill_page_table(page_table, chunk_offset, modulo, block_size):
     return ttnn.roll(ring, -(shift // int(block_size)), -1)
 
 
+def _restore_resumed_fill_padding(fill, valid_seq_len, chunk_offset, modulo, tail, tail_end):
+    """Give a resumed fill's padding rows the K/V the ring already holds in their slots.
+
+    ``paged_fill_cache`` writes whole tiles, so rows ``[valid_seq_len, tile end)``
+    overwrite the slots of positions ``modulo`` earlier. When the ring equals the
+    window those positions are still being attended. A resumed chunk shorter than
+    the ring does not contain them, but the previous chunk's sliding ``tail``
+    (positions ``[tail_end - rows, tail_end)``) does. A chunk that reaches the
+    ring is repaired by ``_merge_bounded_boundary_fill`` instead. Returns ``fill``
+    when nothing needs restoring; otherwise deallocates it and returns a new tensor.
+    """
+    v = int(valid_seq_len)
+    rows = int(fill.shape[-2])
+    if not chunk_offset or tail is None or tail_end is None or v >= rows or v >= int(modulo):
+        return fill
+    first = int(chunk_offset) + v - int(modulo)
+    tail_start = int(tail_end) - int(tail.shape[-2])
+    if first < tail_start:
+        # Older than the tail: with ring headroom these slots are outside the window.
+        return fill
+    b, h, _, d = (int(fill.shape[i]) for i in range(4))
+    head = ttnn.slice(fill, [0, 0, 0, 0], [b, h, v, d])
+    # Not deallocated: the slice may share storage with the tail, which the sliding SDPA still reads.
+    wrapped = ttnn.slice(tail, [0, 0, first - tail_start, 0], [b, h, first - tail_start + rows - v, d])
+    out = ttnn.concat([head, wrapped], dim=2)
+    fill.deallocate(True)
+    return out
+
+
 def flush_deferred_bounded_fills(layers):
     """Merge + ``paged_fill_cache`` for stashed bounded ring fills.
 
@@ -406,6 +435,7 @@ def _prefill_forward_single(
     chunk_start_idx=None,
     chunk_page_table=None,
     sliding_tail_in=None,
+    sliding_tail_end=None,
 ):
     """Single-user prefill — matches arg/gemma4_optimizations.
 
@@ -558,6 +588,15 @@ def _prefill_forward_single(
                         else:
                             k_stash = ttnn.clone(tt_k)
                             v_stash = ttnn.clone(tt_v)
+                        if sliding_tail_in is not None:
+                            k_tail_src, v_tail_src = sliding_tail_in
+                            modulo = int(config.cache_position_modulo)
+                            k_stash = _restore_resumed_fill_padding(
+                                k_stash, v, chunk_offset, modulo, k_tail_src, sliding_tail_end
+                            )
+                            v_stash = _restore_resumed_fill_padding(
+                                v_stash, v, chunk_offset, modulo, v_tail_src, sliding_tail_end
+                            )
                         config._deferred_bounded_fill = {
                             "k_cache": k_cache,
                             "v_cache": v_cache,
@@ -930,6 +969,7 @@ def prefill_forward(
     chunk_start_idx=None,
     chunk_page_table=None,
     sliding_tail_in=None,
+    sliding_tail_end=None,
 ):
     """
     Multi-token prefill attention, fully on device.
@@ -946,6 +986,8 @@ def prefill_forward(
             blocks (used for the offset ``paged_fill_cache``). None => single chunk.
         sliding_tail_in: previous chunk's last ``sliding_window`` K/V for
             sliding-window layers under generator chunking (None otherwise).
+        sliding_tail_end: absolute position one past the last row of
+            ``sliding_tail_in`` (None when unknown).
 
     Returns ``(tt_out, kept_kv, sliding_tail_out)``; the batched path returns
     ``sliding_tail_out=None`` (it does not chunk the sequence).
@@ -968,6 +1010,7 @@ def prefill_forward(
             chunk_start_idx=chunk_start_idx,
             chunk_page_table=chunk_page_table,
             sliding_tail_in=sliding_tail_in,
+            sliding_tail_end=sliding_tail_end,
         )
 
     tp = mesh_config.tp if mesh_config else 1
