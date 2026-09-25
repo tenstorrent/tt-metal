@@ -16,6 +16,34 @@ from models.tt_transformers.tt.model_config import ModelArgs
 # l1_small_size the GDN prefill depthwise ttnn.conv1d requires.
 GDN_CONV1D_L1_SMALL_SIZE = 24576
 
+# Past this prompt length, batched spec reseed's bf16 near-ties lose acceptance.
+EAGER_RESEED_PROMPT_LEN = 131072
+
+# ttnn.topk tile width, and the widest power-of-two width that stays fast.
+SPEC_TOPK_ALIGN = 32
+SPEC_TOPK_CHUNK = 32768
+
+# Wormhole vision-tower prefill matmul chunks. None means do not chunk.
+VISION_MM_TUNING = {
+    "patch_embed": dict(in0_l1=False, chunk=5504, in0_block_w=6, fidelity="hifi2", out_l1=False),
+    "qkv": dict(in0_l1=False, chunk=1536, in0_block_w=18, fidelity="hifi2", out_l1=False),
+    "wo": dict(in0_l1=False, chunk=4096, in0_block_w=24, fidelity="lofi", out_l1=False),
+    "mlp_fc1": dict(in0_l1=False, chunk=3072, in0_block_w=6, fidelity="hifi2_fp16", out_l1=False),
+    "mlp_fc2": dict(in0_l1=False, chunk=1536, in0_block_w=4, fidelity="hifi2_fp16", out_l1=True),
+    "merger_fc1": dict(in0_l1=False, chunk=None, in0_block_w=None, fidelity="hifi2_fp16", out_l1=False),
+    "merger_fc2": dict(in0_l1=False, chunk=None, in0_block_w=None, fidelity="hifi2_fp16", out_l1=False),
+}
+
+VISION_MM_TUNING_BY_DEVICE = {
+    "T3K": {
+        "patch_embed": dict(grid_x=8, in0_block_w=6),
+        "qkv": dict(chunk=768, grid_x=8, in0_l1=True, out_l1=True),
+        "wo": dict(chunk=3072, fidelity="hifi2", out_l1=True),
+        "mlp_fc1": dict(chunk=1536, in0_block_w=18, in0_l1=True, out_l1=True),
+        "merger_fc2": dict(chunk=1376, in0_block_w=9, out_l1=True),
+    },
+}
+
 
 class Qwen36ModelArgs(ModelArgs):
     """Tuning is gated in tp_common.py."""

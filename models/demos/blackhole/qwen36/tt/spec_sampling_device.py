@@ -9,12 +9,7 @@ import math
 import torch
 
 import ttnn
-
-# ttnn.topk wants a tile-aligned width; ask for a multiple of 32 and slice back.
-_TOPK_ALIGN = 32
-
-# ttnn.topk is only fast at power-of-two widths <= 32768, so the row is chunked and merged on host.
-_CHUNK = 32768
+from models.demos.blackhole.qwen36.tt.model_config import SPEC_TOPK_ALIGN, SPEC_TOPK_CHUNK
 
 # Pad fill. Below any real logit, so padding never enters a chunk's top-k.
 _NEG = -1e30
@@ -25,14 +20,14 @@ def topk_support(logits_dev, top_k, rows):
     assert top_k > 0, "device support needs top_k > 0"
     vocab = int(logits_dev.shape[-1])
     top_k = min(top_k, vocab)  # dist() clamps the same way, so the two supports agree
-    n = min(-(-top_k // _TOPK_ALIGN) * _TOPK_ALIGN, vocab)
-    chunks = -(-vocab // _CHUNK)
-    assert _CHUNK >= n, f"chunk {_CHUNK} must hold {n} entries for the merge to be exact"
+    n = min(-(-top_k // SPEC_TOPK_ALIGN) * SPEC_TOPK_ALIGN, vocab)
+    chunks = -(-vocab // SPEC_TOPK_CHUNK)
+    assert SPEC_TOPK_CHUNK >= n, f"chunk {SPEC_TOPK_CHUNK} must hold {n} entries for the merge to be exact"
     # Logical shape, not volume(): that returns the tile-padded row count and oversizes the reshape.
     r_in = math.prod(int(d) for d in logits_dev.shape) // vocab
 
-    padded = ttnn.pad(logits_dev, [(0, 0), (0, 0), (0, 0), (0, chunks * _CHUNK - vocab)], value=_NEG)
-    split = ttnn.reshape(padded, (1, 1, r_in * chunks, _CHUNK))
+    padded = ttnn.pad(logits_dev, [(0, 0), (0, 0), (0, 0), (0, chunks * SPEC_TOPK_CHUNK - vocab)], value=_NEG)
+    split = ttnn.reshape(padded, (1, 1, r_in * chunks, SPEC_TOPK_CHUNK))
     vals, idx = ttnn.topk(split, n, dim=-1)
     # One replica is the whole answer: the trace replicates the logits across the mesh.
     c_idx = ttnn.to_torch(ttnn.get_device_tensors(idx)[0]).reshape(-1, chunks, n)[:rows].long()
@@ -41,7 +36,7 @@ def topk_support(logits_dev, top_k, rows):
         ttnn.deallocate(t)
 
     # Chunk-local ids -> vocabulary ids, then one host merge.
-    c_idx = c_idx + torch.arange(chunks).view(1, chunks, 1) * _CHUNK
+    c_idx = c_idx + torch.arange(chunks).view(1, chunks, 1) * SPEC_TOPK_CHUNK
     flat_v, flat_i = c_vals.reshape(rows, -1), c_idx.reshape(rows, -1)
     h_vals, order = torch.topk(flat_v, top_k, dim=-1)
     h_idx = flat_i.gather(-1, order)

@@ -11,10 +11,8 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.blackhole.qwen36.tt.spec_sampling import SpecSampler, SpecSamplingParams  # noqa: F401
-
-# Prompt length above which the reseed goes back to the per-slot loop; see generate().
-EAGER_RESEED_PROMPT_LEN = 131072
+from models.demos.blackhole.qwen36.tt.model_config import EAGER_RESEED_PROMPT_LEN
+from models.demos.blackhole.qwen36.tt.spec_sampling import SpecSampler
 
 
 class SpeculativeDecoder:
