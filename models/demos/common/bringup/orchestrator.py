@@ -148,14 +148,47 @@ def parse_stream(log: Path) -> dict:
     return info
 
 
+def _module_imports_ttnn(mod: str, repo: Path) -> bool:
+    base = repo / Path(*mod.split("."))
+    f = base.with_suffix(".py") if base.with_suffix(".py").exists() else base / "__init__.py"
+    return f.exists() and bool(re.search(r"^\s*(import ttnn|from ttnn)", f.read_text(errors="replace"), re.M))
+
+
+def code_imports_ttnn(code: str, repo: Path) -> bool:
+    """True if Python source actually imports ttnn, directly or through a repo module that imports it.
+    Parsed, so a script that only writes text containing "import ttnn" into a file is not flagged."""
+    import ast
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return bool(re.search(r"^\s*(import ttnn|from ttnn)", code, re.M))
+    for node in ast.walk(tree):
+        names = []
+        if isinstance(node, ast.Import):
+            names = [a.name for a in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            names = [node.module]
+        for n in names:
+            if n == "ttnn" or n.startswith("ttnn.") or _module_imports_ttnn(n, repo):
+                return True
+    return False
+
+
+_HEREDOC = re.compile(r"<<-?\s*['\"]?(\w+)['\"]?[^\n]*\n(.*?)\n\1\b", re.S)
+
+
 def command_violations(commands: list[str], repo: Path) -> list[str]:
-    """Commands that reach the device without the safe runners: any direct pytest, or python on code that imports ttnn."""
+    """Commands that reach the device without the safe runners: any direct pytest, or python running code that
+    imports ttnn (a script file, -c code, or a heredoc)."""
     out = []
     for cmd in commands:
+        heredocs = [m.group(2) for m in _HEREDOC.finditer(cmd)]
+        first_line = cmd.split("\n", 1)[0]
         try:
-            segs = _segments(cmd)
+            segs = _segments(first_line)
         except ValueError:
-            segs = [cmd.split()]
+            segs = [first_line.split()]
         for words in segs:
             w = _program(words)
             if not w:
@@ -163,15 +196,18 @@ def command_violations(commands: list[str], repo: Path) -> list[str]:
             if _is_direct_pytest(w):
                 out.append(f"direct pytest: {cmd[:120]!r}")
             elif Path(w[0]).name.startswith("python"):
-                target = next((x for x in w[1:] if x.endswith(".py")), None)
-                inline = "-c" in w and "ttnn" in " ".join(w)
-                heredoc = "<<" in cmd and "import ttnn" in cmd
-                imports_ttnn = False
-                if target and (repo / target).exists():
-                    imports_ttnn = bool(
-                        re.search(r"^\s*(import ttnn|from ttnn)", (repo / target).read_text(errors="replace"), re.M)
-                    )
-                if inline or heredoc or imports_ttnn:
+                if "-c" in w:
+                    code = w[w.index("-c") + 1] if w.index("-c") + 1 < len(w) else ""
+                    touches = code_imports_ttnn(code, repo)
+                elif "-m" in w:
+                    mod = w[w.index("-m") + 1] if w.index("-m") + 1 < len(w) else ""
+                    touches = _module_imports_ttnn(mod, repo) and mod.split(".")[0] != "pip"
+                elif any(x.endswith(".py") for x in w[1:]):
+                    f = repo / next(x for x in w[1:] if x.endswith(".py"))
+                    touches = f.exists() and code_imports_ttnn(f.read_text(errors="replace"), repo)
+                else:  # python - <<EOF
+                    touches = any(code_imports_ttnn(h, repo) for h in heredocs)
+                if touches:
                     out.append(f"python on device code without a safe runner: {cmd[:120]!r}")
     return sorted(set(out))
 
