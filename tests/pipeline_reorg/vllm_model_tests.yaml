@@ -193,6 +193,45 @@
   team: models
   budget_type: vllm
 
+# dFlash on the plugin's speculative contract: vLLM schedules the drafts and
+# the plugin verifies and accepts them, so every step streams. Server flags
+# match "Gemma4-31B dFlash tp=8" apart from the class and --speculative-config.
+- name: "Gemma4-31B dFlash contract tp=8"
+  model: google/gemma-4-31B-it
+  coherence-test: true
+  server-timeout: 25
+  benchmark-timeout: 5
+  chunked-prefill-test-timeout: 10
+  mesh-device: P150x8
+  arch: arch-blackhole
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
+  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 2048 --long_prefill_token_threshold 2048 --async-scheduling --speculative-config.method custom_class --speculative-config.model vllm_tt_plugin.model_owned_drafter --speculative-config.num_speculative_tokens 5"
+  # conc-1 at the CLIENT: this class also speculates only while one request is
+  # live (see the leg above). --temperature 0 because a speculating server
+  # answers any other temperature with HTTP 400, and `vllm bench serve` no
+  # longer sends greedy unless asked.
+  additional-benchmark-args: "--max-concurrency 1 --num-prompts 8 --temperature 0"
+  # The split-prefill tests make the drafter bootstrap from taps captured over
+  # several prefill chunks, and from prefills that shared a step. The 100-token
+  # benchmark prompts at concurrency 1 are never split.
+  chunked-prefill-budget: 2048
+  # GEMMA4_CONTRACT_ASYNC=1: the class declares async decode only with it.
+  # GEMMA4_SPEC_RING_HEADROOM_BLOCKS=16: 262144 turns bounded sliding KV on,
+  #   and an exact 1024-position ring has no room for the K + 1 verify rows, so
+  #   the class stops speculating near position 1018. 16 blocks make it 2048.
+  # GEMMA4_CHUNKED_PREFILL_TRACE=0: the impl exports 1 for 31B, and a traced
+  #   prefill chunk skips the hook that captures the drafter taps.
+  extra-env: "TT_MODEL_CLASS_OVERRIDES=Gemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashContractForCausalLM,Gemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashContractForCausalLM,Gemma4UnifiedForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashContractForCausalLM,TTGemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashContractForCausalLM,TTGemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashContractForCausalLM GEMMA4_DFLASH_VERIFY=5 GEMMA4_DFLASH_SHARD_ARGMAX=1 GEMMA4_PAGE_BLOCK_SIZE=64 GEMMA4_CONTRACT_ASYNC=1 GEMMA4_SPEC_RING_HEADROOM_BLOCKS=16 GEMMA4_CHUNKED_PREFILL_TRACE=0"
+  multimodal: false
+  skus:
+    bh_loudbox:
+      timeout: 55
+      tier: 2
+  owner_id: U09LTAPEU2U # Viktor Pus
+  co-owner-2-id: U088413NP0Q # Ashai Reddy
+  team: models
+  budget_type: vllm
+
 - name: "Gemma4-12B MTP tp=8"
   model: google/gemma-4-12B-it
   coherence-test: true
