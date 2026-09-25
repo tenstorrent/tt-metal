@@ -99,13 +99,17 @@ PYTHONPATH=. pytest \
   --timeout=3600
 ```
 
-Trace-replay performance test—the approximately 2.7 s benchmark:
+Trace-replay performance test—the approximately 2.7 s benchmark(0.26 now):
 
 ```bash
 PYTHONPATH=. pytest \
   models/experimental/chronos_forecast/tests/perf/test_paper_forward_trace.py \
   -s \
   --timeout=3600
+```
+
+```
+pytest -s "models/experimental/chronos_forecast/tests/perf/test_paper_forward_trace.py" -k "performance_l1 and not groups"
 ```
 
 The FEV benchmark is separate and is not part of these pytest commands:
