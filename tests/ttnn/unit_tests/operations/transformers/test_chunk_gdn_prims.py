@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Part-level tests for the phased GDN prims
 
-ttnn.transformer.chunk_gdn_prep produces the seven per-(head,chunk) fp32 intermediates
-{v_beta, kd, q_decay, intra, k_dec_t, dl, t_inv}; ttnn.transformer.chunk_gdn_scan consumes them
-plus the initial state and carries the recurrence. Each prim is asserted against torch formulas
+chunk_gdn_prep produces the seven per-(head,chunk) fp32 intermediates
+{v_beta, kd, q_decay, intra, k_dec_t, dl, t_inv}; chunk_gdn_scan consumes them plus the initial
+state and carries the recurrence. Both are bound privately (ttnn._ttnn.operations.transformer, not
+registered as ttnn.transformer operations): they are test surfaces of the public op's phased path. Each prim is asserted against torch formulas
 inlined from models/experimental/gated_attention_gated_deltanet/torch_functional/
 delta_rule_ops.py:170-238 (tests must not import models/), and the composition prep->scan is
 asserted BIT-IDENTICAL to the public op on the phased path — the seven intermediates are rounded
@@ -18,6 +19,8 @@ import torch.nn.functional as F
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+
+_t = ttnn._ttnn.operations.transformer  # the prims are not registered as ttnn.transformer operations
 
 pytestmark = pytest.mark.skipif(not is_blackhole(), reason="the phased chunk_gated_delta_rule prims are Blackhole-only")
 
@@ -143,7 +146,7 @@ def test_prep_outputs_vs_torch(device, bh, nc):
     scale = KDIM**-0.5
     q, k, v, g, beta, _ = _make_inputs(bh, nc, seed=20260820, scale=scale)
 
-    outs = ttnn.transformer.chunk_gdn_prep(
+    outs = _t.chunk_gdn_prep(
         _dev(device, q, ttnn.bfloat16),
         _dev(device, k, ttnn.bfloat16),
         _dev(device, v, ttnn.bfloat16),
@@ -197,7 +200,7 @@ def test_scan_vs_torch(device):
     seven = _prep_reference(q.float(), k.float(), v.float(), g, beta)
 
     dev_seven = [_dev(device, t, ttnn.float32) for t in seven]
-    o_d, fs_d = ttnn.transformer.chunk_gdn_scan(
+    o_d, fs_d = _t.chunk_gdn_scan(
         *dev_seven,
         initial_state=_dev(device, s0, ttnn.float32),
         chunk_size=CHUNK,
@@ -274,7 +277,7 @@ def test_composition_bit_exact(device):
     def headvec_major(x):
         return x.permute(0, 2, 1).reshape(BH, NC, CHUNK, 1).contiguous()
 
-    prep = ttnn.transformer.chunk_gdn_prep(
+    prep = _t.chunk_gdn_prep(
         _dev(device, head_major(q), ttnn.bfloat16),
         _dev(device, head_major(k), ttnn.bfloat16),
         _dev(device, head_major(v), ttnn.bfloat16),
@@ -283,7 +286,7 @@ def test_composition_bit_exact(device):
         *const_tiles,
         chunk_size=CHUNK,
     )
-    o_pr_d, fs_pr_d = ttnn.transformer.chunk_gdn_scan(
+    o_pr_d, fs_pr_d = _t.chunk_gdn_scan(
         *prep,
         initial_state=_dev(device, s0.reshape(BH, KDIM, VDIM), ttnn.float32),
         chunk_size=CHUNK,

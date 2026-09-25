@@ -405,9 +405,11 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 scalar in tile position [0,0]).
         )doc";
 
-    ttnn::bind_function<"chunk_gdn_prep", "ttnn.transformer.">(
-        mod,
-        prep_doc,
+    // Plain mod.def, without bind_function's __ttnn_operation__ marker: the two prims stay at
+    // ttnn._ttnn.operations.transformer (like the geometry helpers above) instead of being registered
+    // as public ttnn.transformer operations — their signatures follow the implementation.
+    mod.def(
+        "chunk_gdn_prep",
         &chunk_gdn_prep_launch,
         nb::arg("q").noconvert(),
         nb::arg("k").noconvert(),
@@ -428,7 +430,9 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("scale") = 1.0f,
         nb::arg("qk_flat") = false,
         nb::arg("Hk") = 0,
-        nb::arg("prep_serial") = false);
+        nb::arg("prep_serial") = false,
+        nb::call_guard<nb::gil_scoped_release>(),
+        prep_doc);
 
     const auto* scan_doc =
         R"doc(
@@ -465,9 +469,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 (o is fp32 — see the factory's compute_output_specs, which is authoritative).
         )doc";
 
-    ttnn::bind_function<"chunk_gdn_scan", "ttnn.transformer.">(
-        mod,
-        scan_doc,
+    mod.def(  // private, as chunk_gdn_prep above
+        "chunk_gdn_scan",
         &chunk_gdn_scan_launch,
         nb::arg("v_beta").noconvert(),
         nb::arg("kd").noconvert(),
@@ -483,7 +486,9 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("use_mcast") = true,
-        nb::arg("force_serial") = false);
+        nb::arg("force_serial") = false,
+        nb::call_guard<nb::gil_scoped_release>(),
+        scan_doc);
 }
 
 }  // namespace ttnn::operations::transformer
