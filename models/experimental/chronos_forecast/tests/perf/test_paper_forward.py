@@ -1,15 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Paper-shape perf: 1024 series, context 2048, 64-step forecast, one chip.
+"""
+Benchmark results for Chronos-2 paper-shape forward(Directly pulled from reseach paper)
 
-A10G bar from Chronos-2 (arXiv:2510.15821): 300 series/s on the 120M model,
-which is 1024/300 ≈ 3.41 s of wall clock. This times ``TtChronos.forward``
-after one warmup and does not fail when the device is slower than that bar.
-
-Weights are the local ``amazon/chronos-2`` checkpoint when it is present.
-Until then the test builds a randomly initialized reference model with the
-published 120M geometry (d_model=768, 12 layers, 12 heads, d_kv=64).
+Benchmark against: A10G NVIDIA in paper
+Curr: single p150 on PCIE gen4, swap out later
 """
 
 from __future__ import annotations
