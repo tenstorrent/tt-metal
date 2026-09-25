@@ -863,8 +863,7 @@ KDA_VERSIONS = 8  # decode's per-user state ring (speculative-decode versions)
 def kda_window(geometry) -> int:
     """Positions per version: the least window both states fill evenly at a stride of whole tiles."""
     return (
-        math.lcm(geometry.recurrent_segments_per_layer, geometry.convolution_segments_per_layer)
-        * KDA_POSITION_QUANTUM
+        math.lcm(geometry.recurrent_segments_per_layer, geometry.convolution_segments_per_layer) * KDA_POSITION_QUANTUM
     )
 
 
@@ -900,11 +899,8 @@ def populate_kv_chunk_address_table_kda(
 
     The KDA analogue of the block-cyclic and dflash walks, differing in three ways:
 
-      * **No token axis.** A KDA layer's state is a fixed set of segments, placed on the contract's
-        synthetic axis: global segment ``i`` at ``v * kda_window + i * chunk_n_tokens`` for every version
-        window ``v`` (see ``kda_position``), strides 96 recurrent / 64 convolution and a 36864-position
-        window at 96 heads. All ``KDA_VERSIONS`` windows alias the same bytes, so a migration request
-        for any decode version resolves to this rank's one state.
+      * **No token axis.** A KDA layer's state is a fixed set of segments, each set at
+        ``kda_position(geometry, kind, i, v)`` for every version window ``v`` (see the constants above).
       * **TP shards heads, SP replicates.** Column ``g // H_local`` is the only column holding global
         head ``g``, and every SP row of that column holds the same bytes, so a device group is one TP
         column spanning all SP rows -- the worker reads any member as a replica. (The MLA cache is the
@@ -930,6 +926,7 @@ def populate_kv_chunk_address_table_kda(
         geometry.recurrent_shards_per_layer if kind == "kda_recurrent" else geometry.convolution_shards_per_layer
     )
     stride = kda_chunk_n_tokens(geometry, kind)
+    window = kda_window(geometry)
     assert (
         config.chunk_n_tokens == stride
     ), f"KDA {kind} config has chunk_n_tokens {config.chunk_n_tokens}; the contract stride is {stride}"
@@ -977,10 +974,8 @@ def populate_kv_chunk_address_table_kda(
                         location.noc_addr = ((shard % num_banks) << 32) | (base + (shard // num_banks) * segment_bytes)
                         location.size_bytes = segment_bytes
                         location.device_group_index = group_idx
-                        for version in range(KDA_VERSIONS):
-                            lookup_table.set(
-                                row, kda_position(geometry, kind, segment, version), slot, location, config_id
-                            )
+                        for version in range(KDA_VERSIONS):  # kda_position(), inlined: 17M calls at 32 users
+                            lookup_table.set(row, version * window + segment * stride, slot, location, config_id)
     return lookup_table
 
 
