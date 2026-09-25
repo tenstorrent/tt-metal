@@ -110,6 +110,20 @@ def activation_global_spec(chunk_size: int, hidden_size: int, planes: int = 1) -
     )
 
 
+def indexer_indices_global_spec(per_chip_shape, mesh_shape) -> ttnn.TensorSpec:
+    """Global spec of the GLM-5.2 top-k indices carried across a pipeline boundary: uint32 ROW_MAJOR
+    DRAM, laid out so a [Shard(2), Shard(3)] mapper over an (sp, tp) mesh hands every chip exactly its
+    own per-chip [1, 1, rows, k] tensor."""
+    _, _, rows, k = per_chip_shape
+    sp, tp = mesh_shape
+    return ttnn.TensorSpec(
+        shape=ttnn.Shape([1, 1, sp * rows, tp * k]),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        buffer_type=ttnn.BufferType.DRAM,
+    )
+
+
 def resolve_trace_dir(path) -> Path:
     path = Path(path)
     if (path / "metadata.json").exists():

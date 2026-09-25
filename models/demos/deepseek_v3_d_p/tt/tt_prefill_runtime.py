@@ -170,6 +170,8 @@ class TtPrefillRuntime:
         self._trace_metadata_msg = None
         self._trace_d2h_service = None
         self._trace_output = None
+        self._trace_indices_in = None
+        self._trace_indices_out = None
         self._trace_captured = False
         self._kv_cache = None
         self._trace_request_id = 0
@@ -392,6 +394,50 @@ class TtPrefillRuntime:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
+    @property
+    def receives_indexer_indices(self) -> bool:
+        """True when this rank's first layer is a GLM-5.2 ``shared`` layer, so each chunk also needs the
+        upstream rank's top-k indices (passed to prefill_chunk as indexer_indices)."""
+        return getattr(self.model, "receives_indexer_indices", False)
+
+    @property
+    def forwards_indexer_indices(self) -> bool:
+        """True when the next rank starts on a GLM-5.2 ``shared`` layer, so each chunk's
+        outbound_indexer_indices must be sent downstream with the activation."""
+        return getattr(self.model, "forwards_indexer_indices", False)
+
+    def indexer_indices_shape(self) -> tuple:
+        """Per-chip shape of the top-k indices carried across a pipeline boundary."""
+        return self.model.indexer_indices_shape()
+
+    def make_placeholder_indices(self) -> ttnn.Tensor:
+        """Allocate zero top-k indices matching what the index D2D socket delivers: uint32 ROW_MAJOR,
+        DRAM, replicated, shape indexer_indices_shape(). Position 0 is always a valid key, so a warm
+        pass seeded with it reads in-bounds."""
+        return ttnn.from_torch(
+            torch.zeros(self.indexer_indices_shape(), dtype=torch.int64),
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+    @staticmethod
+    def _seed_kwargs(indices: Optional[ttnn.Tensor]) -> dict:
+        """Forward kwargs carrying upstream top-k indices; empty when there are none, so a model whose
+        forward has no seed_indexer_indices parameter is called exactly as before."""
+        return {} if indices is None else {"seed_indexer_indices": indices}
+
+    @property
+    def outbound_indexer_indices(self) -> Optional[ttnn.Tensor]:
+        """The last chunk's last ``full`` layer top-k indices to send downstream, or None when the next
+        rank does not start on a ``shared`` layer. On the traced path this is the captured buffer the
+        replay refreshes; it must not be deallocated by the caller."""
+        if not self.forwards_indexer_indices:
+            return None
+        return self._trace_indices_out if self.config.use_trace else self.model.last_indexer_indices
+
     def make_chunk_input(self, token_ids: list[int]) -> ttnn.Tensor:
         """Build one chunk's device input for `prefill_chunk`. First-rank input is
         SP-sharded token IDs; a non-first pipeline rank instead gets a placeholder
@@ -442,7 +488,14 @@ class TtPrefillRuntime:
             prev_sink = self._layer_completion_sink
             self._layer_completion_sink = lambda *_args, **_kwargs: None
             try:
-                self.prefill_chunk(tt_input, kv_caches, slot_id=0, actual_start=0, actual_end=chunk)
+                self.prefill_chunk(
+                    tt_input,
+                    kv_caches,
+                    slot_id=0,
+                    actual_start=0,
+                    actual_end=chunk,
+                    indexer_indices=self.make_placeholder_indices() if self.receives_indexer_indices else None,
+                )
                 ttnn.synchronize_device(self.mesh_device)
             finally:
                 self._layer_completion_sink = prev_sink
@@ -495,6 +548,7 @@ class TtPrefillRuntime:
         ttnn.synchronize_device(self.mesh_device)
         # Non-last rank: the persistent output activation the replay refreshes each chunk.
         self._trace_output = out if not self.config.is_last_rank else None
+        self._trace_indices_out = getattr(self.model, "last_indexer_indices", None)
         self._trace_captured = True
         logger.info(
             f"[trace] captured {self.config.num_layers}-layer chunk forward = {controller.num_segments} segments, "
@@ -579,6 +633,7 @@ class TtPrefillRuntime:
             actual_end=None,
             cache_user_id=0,
             metadata=self._trace_metadata,
+            **self._seed_kwargs(self._trace_indices_in),
         )
 
     def _prepare_trace(self, kv_caches: MlaKvCaches) -> None:
@@ -589,6 +644,7 @@ class TtPrefillRuntime:
         # Persistent input at a stable (captured) address; seeded with zeros, overwritten per chunk. On a
         # non-first rank make_chunk_input yields a placeholder hidden-state activation (the D2D-received one).
         self._trace_input = self.make_chunk_input([0] * chunk)
+        self._trace_indices_in = self.make_placeholder_indices() if self.receives_indexer_indices else None
         # Per-element metadata: (slot_id, actual_start, actual_end), seeded for chunk 0.
         # ChunkMetadata, not a bare tuple: Mistral needs a 4th field (the llama4 query-scale buffer)
         # whose lifetime matches these scalars. None elsewhere, and fields 0-2 are unchanged.
@@ -623,6 +679,7 @@ class TtPrefillRuntime:
         request_id: int = 0,
         d2h_service=None,
         metadata_msg: Optional[ttnn.Tensor] = None,
+        indexer_indices: Optional[ttnn.Tensor] = None,
     ) -> Optional[ttnn.Tensor]:
         """Prefill ONE chunk into user `slot_id`'s slice of the engine-owned `kv_caches`.
 
@@ -670,6 +727,9 @@ class TtPrefillRuntime:
                 it is REQUIRED and carries (slot_id, actual_start, actual_end): its words are copied
                 on-device into the persistent buffers the capture reads, replacing the host round trip. On
                 the eager path it is the ack record sent per layer, required only when d2h_service is set.
+            indexer_indices: the upstream rank's last ``full`` layer top-k indices, required exactly when
+                receives_indexer_indices (this rank starts on a GLM-5.2 ``shared`` layer). Deallocated here.
+                When forwards_indexer_indices, read outbound_indexer_indices after this call.
         """
         # Not gated on self.compiled: compile() warms up by calling prefill_chunk() once before
         # marking the runtime compiled. The model must exist, though.
@@ -693,6 +753,10 @@ class TtPrefillRuntime:
             # valid prefix, and the indexer bounds kv_len / top-k by the populated prefix instead. That uniformity
             # matters — the inference server sizes the cache without knowing which model it is talking to.
 
+        assert (indexer_indices is not None) == self.receives_indexer_indices, (
+            f"indexer_indices must be passed exactly when this rank starts on a shared indexer layer "
+            f"(receives_indexer_indices={self.receives_indexer_indices})"
+        )
         if self.config.use_trace:
             # Traced path: update the persistent input + per-element metadata IN PLACE, then replay the
             # captured segmented forward. The metadata (slot_id, actual_start, actual_end) drives every
@@ -725,6 +789,9 @@ class TtPrefillRuntime:
                 "on-device (the traced serving loop always carries it; the eager warm-up passes host ints)"
             )
             ttnn.copy(input_tensor, self._trace_input)
+            if indexer_indices is not None:
+                ttnn.copy(indexer_indices, self._trace_indices_in)
+                ttnn.deallocate(indexer_indices)
             # The three scalars come off the device from metadata_msg -- on this path the host is
             # not told the chunk offset at all (slot_id/actual_start/actual_end arrive None), which
             # is the point of consuming them on-device.
@@ -785,8 +852,11 @@ class TtPrefillRuntime:
             actual_end=actual_end,
             cache_user_id=slot_id,
             index_kv_cache=kv_caches.index,
+            **self._seed_kwargs(indexer_indices),
         )
         ttnn.deallocate(model_input)
+        if indexer_indices is not None and indexer_indices is not getattr(self.model, "last_indexer_indices", None):
+            ttnn.deallocate(indexer_indices)
 
         if self.config.dflash_enabled:
             if self.config.is_last_rank:

@@ -2010,6 +2010,15 @@ class ttMLA:
         heads_local = self.num_heads // self.tp_factor
         return self.tp_factor > 1 and (heads_local < 32 or heads_local % 32 != 0)
 
+    def indexer_indices_shape(self) -> tuple:
+        """Per-chip shape of the uint32 ROW_MAJOR top-k indices a ``full`` layer returns for the
+        ``shared`` layers after it: [1, 1, chunk rows on this chip, top-k capacity]. The rows are
+        split over TP as well when the indexer emits TP-sequence-sharded indices."""
+        rows = self.active_seq_len // self.sp_factor
+        if self._needs_head_to_seq_reshard:
+            rows //= self.tp_factor
+        return (1, 1, rows, min(self.config.index_topk, self.max_seq_len))
+
     def _sparse_mla(
         self,
         q: ttnn.Tensor,
