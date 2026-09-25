@@ -753,7 +753,8 @@ class TtCSA(TtHCA):
     # forward == prepare_chunk (eager scalar pushes) -> forward_pre (island) -> glue_chunk (eager: cache/slab/mask writes)
     #         -> forward_attn (island, all shapes chunk-invariant) -> epilogue_chunk (eager: exports, counters).
     def traceable(self) -> bool:
-        return self.sparse_path and self.fused_indexer
+        # PREFILL_CSA_ISLANDS=0: keep the fused scorer but run the attention eagerly (A/B switch, DS4F-0262 attribution)
+        return self.sparse_path and self.fused_indexer and os.environ.get("PREFILL_CSA_ISLANDS", "1") == "1"
 
     def trace_ready(self, state) -> bool:
         """The islands run the sparse path: only once the context holds a full window and top-k worth of entries."""
