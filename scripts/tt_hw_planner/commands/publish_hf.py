@@ -356,14 +356,51 @@ def _run_container(args, state: dict, slug: str, demo_dir, commit: str | None) -
     import subprocess
     import tempfile
 
-    checkout = _checkout_of(Path(demo_dir))
+    def _has_submodules(root: Path) -> bool:
+        return (Path(root) / "tt_metal/third_party/umd/CMakeLists.txt").is_file()
+
+    # Choose a BUILDABLE source checkout: it must hold the demo AND have initialised submodules (the
+    # image builds tt-metal from source). The main checkout qualifies after commit-wins; an ephemeral
+    # /tmp optimize worktree usually does not (submodules uninitialised) — prefer main over it.
+    cand_roots: list[Path] = []
+    try:
+        cand_roots.append(_repo_root())
+    except Exception:
+        pass
+    cand_roots.append(_checkout_of(Path(demo_dir)))
+    mr = (state.get("model") or {}).get("root")
+    if mr:
+        cand_roots.append(_checkout_of(Path(mr)))
+    checkout = None
+    for c in cand_roots:
+        c = Path(c)
+        if (c / "models" / "demos" / slug).is_dir() and _has_submodules(c):
+            checkout = c
+            break
+    if checkout is None:  # relax the submodule requirement; the build will report if it matters
+        for c in cand_roots:
+            if (Path(c) / "models" / "demos" / slug).is_dir():
+                checkout = Path(c)
+                break
+    if checkout is None:
+        checkout = _checkout_of(Path(demo_dir))
+    demo_dir = checkout / "models" / "demos" / slug
+
     ttm = getattr(args, "tt_model_bin", None) or "tt-model"
     out = getattr(args, "out", None) or str(Path.home() / "tt-model-builds")
     extra = getattr(args, "extra_models_dir", None) or f"models/demos/{slug}/vllm_bundle"
 
     # Make every model publishable this way: ensure the vLLM adapter bundle exists (scaffold it from
     # the model's own HF arch when missing). Stock arches are servable as-is; novel arches get a stub.
+    # Detect the HF arch from the demo; fall back to the run's model_root (which keeps the captured
+    # config.json even when the committed demo does not), then to an explicit --hf-arch override.
     arch_det, mtype = _detect_arch_and_type(Path(demo_dir))
+    if not arch_det:
+        mr = (state.get("model") or {}).get("root")
+        if mr and Path(mr).is_dir():
+            arch_det, mtype = _detect_arch_and_type(Path(mr))
+    if not arch_det and getattr(args, "hf_arch", None):
+        arch_det, mtype = args.hf_arch, None
     if arch_det and not getattr(args, "no_scaffold", False):
         created, is_stub, bpath = _scaffold_vllm_bundle(
             checkout, extra, arch_det, mtype, getattr(args, "weights", None), slug
