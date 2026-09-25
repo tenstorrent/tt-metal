@@ -146,6 +146,9 @@ class MiniMaxH3TransformerBlock(Module):
         self.use_fused_agmm = ccl_manager.topology == ttnn.Topology.Ring and self.tp_factor > 1
         # MINIMAX_H3_ADALN_GATHER=matmul: one-hot matmul instead of ttnn.embedding for the six modulation gathers.
         self._adaln_gather = os.environ.get("MINIMAX_H3_ADALN_GATHER", "embedding")
+        # MINIMAX_H3_FOLD_NORM_WEIGHT=1: multiply the norms' static weight into the (1 + scale) table rows instead
+        # of into the per-token weight (same bf16 products, two full-sequence multiplies fewer per block).
+        self._fold_norm_weight = os.environ.get("MINIMAX_H3_FOLD_NORM_WEIGHT") == "1"
         self._eye_tables: dict[int, ttnn.Tensor] = {}
         # ff1 packs gate and up together for the fused SwiGLU, so its per-device N is 2 * ffn_dim / tp.
         self._ff1_kn = (hidden_size, 2 * ffn_dim // self.tp_factor)
@@ -215,6 +218,9 @@ class MiniMaxH3TransformerBlock(Module):
             # gather would cost one over the whole packed sequence, per scale, per block.
             if p in (_SCALE_MSA, _SCALE_MLP):
                 table = ttnn.add(table, 1.0)
+                if self._fold_norm_weight:
+                    norm = self.norm1 if p == _SCALE_MSA else self.norm2
+                    table = ttnn.multiply(table, norm.weight.data)
             # ttnn.embedding wants a 2D [num_embeddings, embedding_dim] weight.
             table = ttnn.to_layout(table, ttnn.ROW_MAJOR_LAYOUT)
             table = ttnn.reshape(table, (rows, self.hidden_local))
@@ -278,6 +284,7 @@ class MiniMaxH3TransformerBlock(Module):
             spatial_1BND,
             dynamic_weight=modulation(_SCALE_MSA),
             dynamic_bias=modulation(_SHIFT_MSA),
+            dynamic_weight_includes_static=self._fold_norm_weight,
         )
         # The gated residual is fused into to_out's matmul epilogue, so `attn` returns
         # `residual + attn_out * gate` directly rather than the block adding it afterwards.
@@ -296,6 +303,7 @@ class MiniMaxH3TransformerBlock(Module):
             spatial_1BND,
             dynamic_weight=modulation(_SCALE_MLP),
             dynamic_bias=modulation(_SHIFT_MLP),
+            dynamic_weight_includes_static=self._fold_norm_weight,
         )
         # ff1 gathers the TP-fractured input inside its matmul (all_gather_minimal_matmul_async) when
         # parallel_config is passed; ff2 is row-parallel and reduce-scatters back to TP-fractured.

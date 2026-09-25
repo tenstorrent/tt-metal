@@ -210,6 +210,7 @@ class DistributedRMSNorm(Module):
         dynamic_weight=None,
         dynamic_bias=None,
         per_head_norm=False,
+        dynamic_weight_includes_static=False,
     ) -> ttnn.Tensor:
         # per_head_norm selects the normalization semantics when the activation is
         # head-split (num_heads_per_device > 1):
@@ -233,7 +234,11 @@ class DistributedRMSNorm(Module):
         # elementwise scale op the caller would otherwise need. RMSNorm has no bias term.
         weight = self.weight.data if self.weight is not None else None
         if dynamic_weight is not None:
-            weight = dynamic_weight if weight is None else ttnn.multiply(weight, dynamic_weight)
+            # A caller that already folded the static weight into its per-token weight skips the full-size multiply.
+            if weight is None or dynamic_weight_includes_static:
+                weight = dynamic_weight
+            else:
+                weight = ttnn.multiply(weight, dynamic_weight)
         weight_key = tuple(weight.shape) if weight is not None else None
 
         # dynamic_bias is the additive half of an adaLN modulation (the `shift`), folded into the same
