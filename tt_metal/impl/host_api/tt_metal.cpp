@@ -974,8 +974,8 @@ GlobalSemaphore CreateGlobalSemaphore(
 }
 
 void AssignGlobalBufferToProgram(const std::shared_ptr<Buffer>& buffer, Program& program) {
-    const MetalContext& metal_ctx = MetalContext::instance(program.impl().get_context_id());
-    detail::DispatchStateCheck(metal_ctx.rtoptions().get_fast_dispatch());
+    MetalContext& metal_ctx = MetalContext::instance(program.impl().get_context_id());
+    metal_ctx.device_manager()->check_dispatch_mode(metal_ctx.rtoptions().get_fast_dispatch());
     program.impl().add_buffer(buffer);
 }
 
