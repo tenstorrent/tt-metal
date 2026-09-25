@@ -106,11 +106,7 @@ def test_transformer(
     num_layers = config["num_layers"] - skip_layers
     num_single_layers = config["num_single_layers"] - skip_single_layers
 
-    # Load the reference in the checkpoint's own dtype. Without torch_dtype, diffusers upcasts the
-    # 32B transformer to fp32, which is 120 GiB of host RAM and the largest allocation in this CI
-    # leg; on a QB2 host that load is what gets OOM-killed (#57727). Overriding the layer counts
-    # makes diffusers build only the blocks under test (the leading ones, as before), so the pruned
-    # variants materialize ~1 GB instead of the full model and the unused checkpoint keys are skipped.
+    # Load the reference in the checkpoint's own dtype and only the blocks under test to save on memory.
     torch_model = diffusers.Flux2Transformer2DModel.from_pretrained(
         model_name,
         subfolder="transformer",
@@ -226,8 +222,6 @@ def test_transformer(
     )
 
     logger.info("running Torch model...")
-    # The reference runs in bf16 (see the load above); it casts timestep and guidance to the
-    # activation dtype itself, so only the two input streams need converting.
     with torch.no_grad():
         torch_output = torch_model.forward(
             hidden_states=spatial.to(torch.bfloat16),
