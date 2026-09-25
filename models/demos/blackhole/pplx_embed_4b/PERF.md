@@ -65,9 +65,15 @@ which gates the synchronous aggregate.
 
 ## Where the time goes now
 
-Device-profiled bs32 (365 ms of kernels at the nominal clock; sustained e2e 446 ms): matmuls 65%, SwiGLU
-product 13%, fused add+RMSNorm 8%, SDPA 8%, fused heads op 6%. bs1 (16.6 ms of kernels, 509 ops): matmuls
-60%, SwiGLU product 14%, SDPA 11%, fused heads op 10%.
+Share of device kernel time per batch (Tracy, signposted trace replay, one P150); per-op tables and the
+reproduction commands are in [docs/baseline.md](docs/baseline.md).
+
+| Batch | Matmul | SDPA | Fused heads | Norm + residual | SwiGLU product | Matmul + SDPA | Kernel sum |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 60.4% | 10.6% | 9.6% | 6.6% | 11.3% | 71.1% | 16.6 ms |
+| 8 | 77.6% | 7.7% | 6.0% | 8.7% | 0.0% | 85.3% | 106.6 ms |
+| 16 | 77.6% | 8.4% | 5.7% | 8.1% | 0.0% | 86.0% | 199.8 ms |
+| 32 | 64.8% | 8.0% | 5.7% | 8.0% | 13.4% | 72.8% | 365.3 ms |
 
 ## Reproduce
 

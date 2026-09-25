@@ -101,7 +101,8 @@ measurement on Blackhole P150): 45.773 / 190.065 / 375.817 / 726.944 ms — the 
 ### Optimization history
 
 Every landing from the baseline to the numbers above, with its mechanism and measured effect, is in
-[PERF.md](PERF.md). Most of the early wins were inherited configuration constants that did not fit the
+[PERF.md](PERF.md); the per-op reference numbers and how to reproduce them are in
+[docs/baseline.md](docs/baseline.md). Most of the early wins were inherited configuration constants that did not fit the
 4B shapes; re-check them before reusing this config on another model in the family.
 
 - **L1 path (bs=1, ISL≤512):** activations stay resident in L1, so the residual stream never
