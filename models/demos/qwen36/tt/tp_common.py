@@ -131,11 +131,20 @@ _PREFILL_TUNING = {
 }
 
 
+_FROZEN_TP4 = _PREFILL_TUNING[("bh", 4)]
+
+
 def prefill_tuning(num_devices):
-    """Prefill matmul tuning for this arch + TP; unknown combos fall back to the frozen BH TP=4
-    values (the historical behavior for an unknown TP)."""
+    """Prefill matmul tuning for this arch + TP.
+
+    An unlisted combo must not cross the arch axis: in0_block_w_cap is an L1 budget, and the
+    Blackhole value of 4 overflows Wormhole L1 on an 8x8 grid (see the note on the table above).
+    Wormhole therefore falls back to its own TP=8 row; Blackhole keeps the frozen TP=4 values."""
     arch = "bh" if is_blackhole() else "wh"
-    return _PREFILL_TUNING.get((arch, num_devices)) or _PREFILL_TUNING[("bh", 4)]
+    tuning = _PREFILL_TUNING.get((arch, num_devices))
+    if tuning is not None:
+        return tuning
+    return _FROZEN_TP4 if arch == "bh" else _PREFILL_TUNING[("wh", 8)]
 
 
 def prefill_l1_output_ok():
@@ -301,7 +310,7 @@ def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activati
     tuning: a `_PREFILL_TUNING` entry (see `prefill_tuning`); None = the frozen TP=4 behavior."""
     if grid_size is None:
         grid_size = prefill_grid_default()
-    tuning = tuning or _PREFILL_TUNING[4]
+    tuning = tuning or _FROZEN_TP4
     per_core_M = max(1, math.ceil(m / TILE_SIZE / grid_size[1]))
     per_core_N = max(1, math.ceil(n / TILE_SIZE / grid_size[0]))
 
@@ -377,7 +386,7 @@ def create_prefill_mlp_matmul_program_config(m, k, n, fused_activation=None, max
     is replaced by "take the width, clamped to PREFILL_MAX_COLS_PORTABLE" -- measured device time at
     TP=8 falls monotonically with column count, so trading cores for a wider subblock loses."""
     grid = prefill_grid_default()
-    tuning = tuning or _PREFILL_TUNING[4]
+    tuning = tuning or _FROZEN_TP4
     limit = max_cols or grid[0]
     if tuning["widest_cols"]:
         # Cap the width at PREFILL_MAX_COLS_PORTABLE (harvested parts expose 11, not 12) and never
@@ -623,8 +632,7 @@ def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, 
     interm, out_buf = _mmrs_prefill_shared_bufs(tt_ccl, M, N, nd, dtype)
     x4 = ttnn.reshape(x, (1, 1, M, K_local))
     # RS-bound: on BH 2 ethernet links parallelize the fp32 cross-device reduce (P150x4 max;
-    # traced_8k win) and grid (8,8) leaves rows 8-9 for the 2 RS worker rows. A WH T3K has 1 usable
-    # link and only 8 rows total, so it runs the matmul on (8,7) and puts the single RS row at 7.
+    # traced_8k win). Grid geometry per mmrs_prefill_grid_default() -- it owns the row budget.
     _grid_default, _rs_default = mmrs_prefill_grid_default(tt_ccl.mesh_device)
     grid = grid or _grid_default
     rs_offset = rs_offset or _rs_default

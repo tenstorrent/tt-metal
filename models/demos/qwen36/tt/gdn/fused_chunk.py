@@ -40,24 +40,18 @@ _FUSED_CHUNK_SIZE = 32
 def fused_chunk_enabled():
     """Route GDN prefill through the fused ttnn.transformer.chunk_gated_delta_rule op (fast path).
 
-    On by default on Blackhole AND Wormhole. The op's own correctness gate
+    Selects the PREFILL chunk kernel only; decode is recurrent
+    (recurrent_gated_delta_rule_decode_ttnn) and never reaches either chunk adapter.
+
+    On by default on Blackhole and Wormhole. The op's own gate
     (tests/ttnn/unit_tests/operations/transformers/test_chunk_gated_delta_rule.py) is still
-    skipif(not is_blackhole()), but that marker is validation scope, not a hardware constraint --
-    measured on a T3K (8x8 grid, TP=8) with the gate relaxed:
-      * all 42 test_chunk_vs_recurrent_reference cases pass, including this model's per-device
-        shape (2 k-heads / 6 v-heads / K=V=128) at T=32/128/256, PCC o=0.999996 state=0.999997;
-      * test_scan_mcast_bit_exact passes (tp4, k_ne_v, nc1, small_v) -- the zero-tolerance gate
-        that would catch a multicast/semaphore race;
-      * the only failures are chunk_size=64 / Ct=2, which exceed the kernel-config program-size
-        limit (73376 > 70656). The model runs at _FUSED_CHUNK_SIZE=32, so Ct=2 is never selected.
-    At model level on T3K the fused path matches or beats the seq adapter (batched GDN prefill
-    B=2 1.00000 vs 0.99999; prefill-vs-decode T=128 0.99997 vs 0.99898) and test_model_tp is
-    unchanged at 13/14. End to end it is worth ~2.2x on TTFT: 1.23s -> 0.57s at ISL 128.
+    skipif(not is_blackhole()); that marker bounds where the op is exercised, not where it runs.
+    chunk_size=64 gives Ct=2, which exceeds the kernel-config program-size limit (73376 > 70656),
+    so _FUSED_CHUNK_SIZE must stay at 32.
 
     QWEN36_GDN_FUSED=0 forces the composite chunk_gated_delta_rule_seq_adapter instead, which
     models/experimental/gated_attention_gated_deltanet validates on Wormhole -- the documented
-    fallback if the fused op ever regresses on an arch.
-    Decode always uses the seq adapter (valid_len set); see tp.py."""
+    fallback if the fused op ever regresses on an arch."""
     env = os.getenv("QWEN36_GDN_FUSED")
     if env is not None:
         return env != "0"

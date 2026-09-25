@@ -6,6 +6,6 @@ The vLLM TT plugin registers TTQwen3_5ForConditionalGeneration against this old 
 (vllm_tt_plugin/platform.py). Keep this re-export until the plugin points at the shared core.
 """
 
-from models.demos.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM
+from models.demos.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM, TT_Qwen3_5ProcessingInfo
 
-__all__ = ["Qwen36ForCausalLM"]
+__all__ = ["Qwen36ForCausalLM", "TT_Qwen3_5ProcessingInfo"]
