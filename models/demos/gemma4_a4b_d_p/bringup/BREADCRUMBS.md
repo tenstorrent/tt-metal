@@ -183,3 +183,36 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Verified: BRINGUP_IMPL=reference PASS (pcc 0.999996, block rel 0.0027); stub FAIL (all checks). Device gate PASS: pcc_swap_out 0.999973,
   block out rel 0.0074 / 0.0060, attn_norm 0.0031 (iso 0.0020), attention 0.0052 / 0.0052, post_attn_norm 0.0052 (iso 0.0019, ratio [0.9958, 1.0024]).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_03_post_attn_norm.py`
+
+## C.sliding.attn_residual test (attempt 1)
+- Reviewed the rendered test (layer 0, golden [2048, 2816]: h_mid = in + attn_post_norm). The gated metric stays `pcc_attn_residual_L00` >= 0.99.
+- Gap: PCC misses scale bugs and bad rows. On CPU vs golden (PCC / rel L2 / per-token norm ratio): reference 0.999997 / 0.0023 / [0.9958, 1.0041];
+  bf16 add 0.999996 / 0.0028 / [0.9945, 1.0060]; `2 * (a + b)` 0.999997 / 1.0 / 2.0; row 0 zeroed 0.9998 / 0.020 / min 0; last 32 rows zeroed
+  0.993 / 0.118; attn_post_norm only 0.979 / 0.205; `in` only 0.18.
+- Decision: same asserted extras as the norm tests: rel L2 <= 0.03, per-token norm ratio in [0.97, 1.03], finite, element count matches
+  (informational metrics `rel_l2_attn_residual_L00`, `row_norm_ratio_{min,max}_attn_residual_L00`).
+- Verified: BRINGUP_IMPL=reference PASS (pcc 0.999997, rel 0.0023); BRINGUP_IMPL=stub FAIL (pcc 0.0). The device gate fails for now with
+  `NotImplementedError: implement step: no device module for attn_residual yet`.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_attn_residual.py`
+
+## C.sliding.attn_residual test (attempt 2)
+- Attempt 1 failed the step because of a direct `python` call on device code, not because of the test. The test file is unchanged from attempt 1.
+- Checked again with the safe runner only: BRINGUP_IMPL=reference PASS (pcc 0.999997, rel L2 0.0023, ratio [0.9958, 1.0041]);
+  BRINGUP_IMPL=stub FAIL (pcc 0.0). The device gate fails as expected with `NotImplementedError: implement step: no device module for attn_residual yet`.
+- Gotcha: run CPU-only exploration (e.g. mutation scoring) inside the test or through `scripts/tt-probe.sh`, never with `python -`, even with no device use.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_attn_residual.py`
+
+## C.sliding.attn_residual test (run1 brief, attempt 1)
+- The test file already had the review from the earlier attempts (rel L2 <= 0.03, per-token norm ratio in [0.97, 1.03], finite, element count). I left it unchanged.
+- Re-checked with the safe runner only: BRINGUP_IMPL=reference PASS (pcc 0.999997, rel L2 0.002281, ratio [0.9958, 1.0041]); BRINGUP_IMPL=stub
+  FAIL (pcc 0.0). The device gate fails as expected until the implement step: `NotImplementedError: implement step: no device module for attn_residual yet`.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_attn_residual.py`
+
+## C.sliding.attn_residual implement (run1, attempt 1)
+- Added `tt/residual.py:TtResidualAdd` (`ttnn.add` of two replicated [1, 1, S, H] bf16 TILE tensors, DRAM; optional scalar multiply for
+  the later `ffn_residual` with `layer_scalar`). No collective: both operands are replicated.
+- hooks.py: `_RESIDUAL_STEPS = {"attn_residual"}`, `_residual_host_fn` (host a, b -> device -> add -> chip 0 copy to host);
+  `device_component` returns it for residual steps; `attn_residual` added to `DEVICE_STEPS["sliding"]`, so `HybridDeviceModel` (ladder) swaps it too.
+- Gate PASS: pcc_attn_residual_L00 0.999996, rel L2 0.00282, per-token norm ratio [0.9947, 1.0060] (matches the bf16-add estimate in the test review).
+- Gotcha: the log shows a `FAIL pcc=0.000000` line first; that is the precompile collect pass (stubbed ops), the real pass line follows.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_attn_residual.py`

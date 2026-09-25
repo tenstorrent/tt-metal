@@ -27,7 +27,10 @@ def hf_layers(model):
 
 
 # Device steps swapped in so far, per block type. Every other step runs on the CPU reference.
-DEVICE_STEPS = {"sliding": {"attn_norm", "attention", "post_attn_norm"}, "global": set()}
+DEVICE_STEPS = {"sliding": {"attn_norm", "attention", "post_attn_norm", "attn_residual"}, "global": set()}
+
+# Residual steps: h_mid = in + attn_post_norm (replicated, no collective).
+_RESIDUAL_STEPS = {"attn_residual"}
 
 # Norm steps -> checkpoint weight name (under model.language_model.layers.<i>.).
 _NORM_WEIGHTS = {
@@ -58,6 +61,26 @@ def _host_fn(mesh, module):
         ttnn.deallocate(xd)
         ttnn.deallocate(yd)
         return y.to(x.dtype)
+
+    return fn
+
+
+def _residual_host_fn(mesh):
+    """fn(ctx, a_host [S, H], b_host [S, H]) -> host [S, H] via TtResidualAdd."""
+    import ttnn
+    from models.demos.gemma4_a4b_d_p.tt.residual import TtResidualAdd
+    from models.demos.gemma4_a4b_d_p.tt.rms_norm import replicated_to_host, to_device_replicated
+
+    module = TtResidualAdd(mesh)
+
+    def fn(ctx, a, b):
+        ad = to_device_replicated(mesh, a)
+        bd = to_device_replicated(mesh, b)
+        yd = module(ad, bd)
+        y = replicated_to_host(yd)
+        for t in (ad, bd, yd):
+            ttnn.deallocate(t)
+        return y.to(a.dtype)
 
     return fn
 
@@ -101,6 +124,8 @@ def _attention_host_fn(mesh, module, cfg, cache_of):
 def device_component(mesh, spec, layer, step):
     if step in _NORM_WEIGHTS:
         return _host_fn(mesh, _norm_module(mesh, spec, layer, step))
+    if step in _RESIDUAL_STEPS:
+        return _residual_host_fn(mesh)
     if step == "attention":
         from models.demos.gemma4_a4b_d_p.tt.attention import TtKVCacheSliding
 
@@ -171,6 +196,7 @@ class HybridDeviceModel:
         for i in self.ref.layer_ids:
             steps = DEVICE_STEPS.get(spec.block_type_of(i), ())
             ov = {s: _host_fn(mesh, _norm_module(mesh, spec, i, s, loader)) for s in steps if s in _NORM_WEIGHTS}
+            ov.update({s: _residual_host_fn(mesh) for s in steps if s in _RESIDUAL_STEPS})
             if "attention" in steps:
                 module, _ = _attention_module(mesh, spec, i, loader, self.cfg)
                 ov["attention"] = _attention_host_fn(mesh, module, self.cfg, lambda ctx: ctx.extra["dev_cache"])
