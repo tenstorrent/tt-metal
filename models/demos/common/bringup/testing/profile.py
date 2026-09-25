@@ -1,0 +1,108 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+"""Performance review, measurement half: warm per-section, per-chip device time of one long chunk.
+
+Runs the last chunk of the profile rung (spec ``perf.rung``, default the last rung with ``prefix_from_golden``) after
+loading the golden state prefix: once to compile, once unsynced for the real wall time, once with section profiling.
+Writes ``<results>/<task>_profile.json`` (read by the dashboard and by the opportunity list) and records
+chunk_wall_ms, device_ms_total, device_ms_<phase>, device_ms_chip<c>, host_overhead_ms, profiled_programs.
+"""
+
+from __future__ import annotations
+
+import json
+import time
+from collections import defaultdict
+
+from models.demos.common.bringup.core import metrics
+from models.demos.common.bringup.reference.golden import Golden
+from models.demos.common.bringup.testing import profiler
+
+
+def profile_rung(s) -> str:
+    name = s.get("perf.rung")
+    if name:
+        return name
+    cands = [r["name"] for r in s.data["ladder"] if r.get("prefix_from_golden")]
+    return cands[-1] if cands else s.data["ladder"][-1]["name"]
+
+
+def run_profile(s, mesh, rung_name: str | None = None) -> dict:
+    rung_name = rung_name or profile_rung(s)
+    rung = s.rung(rung_name)
+    g = Golden.for_rung(s, rung_name)
+    layers = [i for i in s.layers() if i in g.layers]
+    chunk = rung["chunk"]
+    start = rung["seq"] - chunk
+    model = s.hooks().device_model(mesh, s, layers, lm_head=False)
+    state = model.new_state(rung["seq"])
+    for i in layers:
+        state.load_prefix(i, g.state(i), start)
+    tokens = g.tokens()[start:]
+    starts = {i for k, i in enumerate(layers) if k == 0 or layers[k - 1] != i - 1}
+
+    def run():
+        h = None
+        for i in layers:
+            if i in starts:
+                if h is not None:
+                    model.free(h)
+                h = model.embed(tokens) if i == 0 else model.from_host(g.layer(g.n_chunks - 1, i)["in"].float())
+            h2 = model.layer(i, h, start, state)
+            model.free(h)
+            h = h2
+        model.sync()
+        model.free(h)
+
+    run()  # compile and fill the program cache: performance is measured warm only
+    t0 = time.time()
+    run()
+    wall = time.time() - t0
+
+    profiler.enable(mesh)
+    run()
+    profiler.signpost("end")
+    prof = profiler.result()
+    profiler.disable()
+
+    total = sum(prof["kernel_ns"].values())
+    assert total > 0, f"device profiler returned no durations; set {profiler.PROFILER_ENV}"
+    phases = defaultdict(float)
+    for sec, ns in prof["kernel_ns"].items():
+        phases[profiler.phase_of(sec)] += ns
+    for ph, ns in phases.items():
+        metrics.record(f"device_ms_{ph}", round(ns / 1e6, 2))
+    per_chip = defaultdict(float)
+    for d in prof["kernel_ns_dev"].values():
+        for c, ns in d.items():
+            per_chip[c] += ns
+    for c, ns in sorted(per_chip.items()):
+        metrics.record(f"device_ms_chip{c}", round(ns / 1e6, 2))
+    metrics.record("chunk_wall_ms", round(wall * 1e3, 1))
+    metrics.record("device_ms_total", round(total / 1e6, 2))
+    metrics.record("host_overhead_ms", round(wall * 1e3 - total / 1e6, 1))
+    metrics.record("profiled_programs", sum(prof["programs"].values()))
+
+    out = {
+        "rung": rung_name,
+        "chunk": [start, rung["seq"]],
+        "layers": layers,
+        "wall_ms": wall * 1e3,
+        "device_ms": {ph: ns / 1e6 for ph, ns in sorted(phases.items(), key=lambda x: -x[1])},
+        "sections_ms": {k: v / 1e6 for k, v in sorted(prof["kernel_ns"].items(), key=lambda x: -x[1])},
+        "sections_ms_per_chip": {k: {str(c): v / 1e6 for c, v in d.items()} for k, d in prof["kernel_ns_dev"].items()},
+        "programs": prof["programs"],
+        "settings": getattr(model, "perf_settings", lambda: {})(),
+    }
+    path = metrics.results_dir() / f"{metrics.task_id()}_profile.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(out, indent=1) + "\n")
+    s.profiles_dir.mkdir(parents=True, exist_ok=True)
+    (s.profiles_dir / f"{metrics.task_id()}_{time.strftime('%Y%m%dT%H%M%S')}.json").write_text(
+        json.dumps(out, indent=1)
+    )
+    print(f"chunk [{start},{rung['seq']}): wall {wall * 1e3:.0f} ms, device {total / 1e6:.0f} ms")
+    for sec, ms in list(out["sections_ms"].items())[:15]:
+        print(f"  {sec:40s} {ms:9.1f} ms {100 * ms * 1e6 / total:5.1f}%")
+    return out
