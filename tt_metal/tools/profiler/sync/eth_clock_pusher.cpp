@@ -60,7 +60,8 @@ inline volatile tt_l1_ptr kp::SyncRecord* rec(uint32_t i) {
     return reinterpret_cast<volatile tt_l1_ptr kp::SyncRecord*>(kSyncRingAddr) + i % kp::kSyncRingRecords;
 }
 inline void emit(uint32_t meta, uint32_t round, uint64_t value, uint64_t wall, uint32_t ref_lo, uint32_t ref_hi) {
-    if (g_tail - ctrl()->sync_head >= kp::kSyncRingRecords) {
+    if (g_tail - *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kCtrlAddr + offsetof(kp::SyncCoreCtrl, sync_head)) >=
+        kp::kSyncRingRecords) {
         g_dropped++;
         return;
     }
@@ -71,24 +72,29 @@ inline void emit(uint32_t meta, uint32_t round, uint64_t value, uint64_t wall, u
     r->value_hi = static_cast<uint32_t>(value >> 32);
     r->wall_lo = static_cast<uint32_t>(wall);
     r->wall_hi = static_cast<uint32_t>(wall >> 32);
-    r->ref_lo = ref_lo;
-    r->ref_hi = ref_hi;
+    r->ref[0] = ref_lo;
+    r->ref[1] = ref_hi;
     asm volatile("fence" ::: "memory");
-    ctrl()->sync_tail = ++g_tail;
+    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kCtrlAddr + offsetof(kp::SyncCoreCtrl, sync_tail)) = ++g_tail;
 }
 }  // namespace sync
 
 // Points go out kSyncLocalPoints to a LOCAL record (hostdev/streaming_profiler_sync.h): the first whole, the rest as
 // a refclk step and an offset from the record's slope; a point whose step or offset does not fit starts the next one.
 namespace pack {
-static uint32_t g_n = 0, g_d[kp::kSyncLocalPoints - 1] = {};
-static kp::SyncLocalMeta g_meta{};
+// The meta and step words are built from their fields' units (the word of the field set to 1), not by bit-field
+// stores: every value here fits its field, and a store would still truncate it, at a few instructions per point.
+constexpr uint32_t kMetaCount1 = kp::word_of(kp::SyncLocalMeta{.count = 1});
+constexpr uint32_t kMetaClose1 = kp::word_of(kp::SyncLocalMeta{.close = 1});
+constexpr uint32_t kMetaLocal = kp::word_of(kp::SyncLocalMeta{.kind = kp::kSyncKindLocal});
+constexpr uint32_t kStepRefclk1 = kp::word_of(kp::SyncLocalStep{.refclk = 1});
+constexpr uint32_t kStepWallOff1 = kp::word_of(kp::SyncLocalStep{.wall_off = 1});
+static uint32_t g_n = 0, g_meta = 0, g_steps[kp::kSyncLocalPoints - 1] = {};
 static kp::SyncLocalRound g_round{};
 static uint64_t g_r0 = 0, g_w0 = 0;
 inline void flush() {
     if (g_n != 0) {
-        g_meta.count = g_n;
-        sync::emit(kp::word_of(g_meta), kp::word_of(g_round), g_r0, g_w0, g_d[0], g_d[1]);
+        sync::emit(g_meta | g_n * kMetaCount1, kp::word_of(g_round), g_r0, g_w0, g_steps[0], g_steps[1]);
         g_n = 0;
     }
 }
@@ -99,9 +105,9 @@ __attribute__((noinline)) void add(uint64_t r, uint64_t w8, uint32_t k8, bool cl
             const int32_t off =
                 static_cast<int32_t>(static_cast<uint32_t>(w8) - static_cast<uint32_t>(g_w0) - g_round.slope * dr);
             if (off >= -32768 && off <= 32767) {
-                g_d[g_n - 1] = kp::word_of(kp::SyncLocalStep{.refclk = dr, .wall_off = off});
+                g_steps[g_n - 1] = dr * kStepRefclk1 | static_cast<uint32_t>(off) * kStepWallOff1;
                 g_round.k8[g_n] = static_cast<uint8_t>(k8);
-                g_meta.close |= static_cast<uint32_t>(close) << g_n;
+                g_meta |= (close * kMetaClose1) << g_n;
                 if (++g_n == kp::kSyncLocalPoints) {
                     flush();
                 }
@@ -112,9 +118,10 @@ __attribute__((noinline)) void add(uint64_t r, uint64_t w8, uint32_t k8, bool cl
     }
     g_r0 = r;
     g_w0 = w8;
-    g_round = kp::SyncLocalRound{.k8 = {static_cast<uint8_t>(k8)}, .slope = static_cast<uint8_t>(slope)};
-    g_meta = kp::SyncLocalMeta{.close = close, .kind = kp::kSyncKindLocal};
-    g_d[0] = g_d[1] = 0;
+    g_round.k8[0] = static_cast<uint8_t>(k8);
+    g_round.slope = static_cast<uint8_t>(slope);
+    g_meta = kMetaLocal | close * kMetaClose1;
+    g_steps[0] = g_steps[1] = 0;
     g_n = 1;
 }
 }  // namespace pack

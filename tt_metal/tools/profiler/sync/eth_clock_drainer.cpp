@@ -232,8 +232,8 @@ struct Outbox {
         r->value_hi = static_cast<uint32_t>(v >> 32);
         r->wall_lo = static_cast<uint32_t>(w);
         r->wall_hi = static_cast<uint32_t>(w >> 32);
-        r->ref_lo = static_cast<uint32_t>(ref);
-        r->ref_hi = static_cast<uint32_t>(ref >> 32);
+        r->ref[0] = static_cast<uint32_t>(ref);
+        r->ref[1] = static_cast<uint32_t>(ref >> 32);
         if (++n == kAnchorRecords) {
             flush();
         }

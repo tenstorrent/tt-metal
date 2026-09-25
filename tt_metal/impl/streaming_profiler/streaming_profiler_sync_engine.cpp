@@ -549,7 +549,7 @@ void SyncEngine::on_clock(uint32_t dev, uint32_t core, const kernel_profiler::Sy
         .role = meta.role,
         .value = word64(rec.value_lo, rec.value_hi),
         .ts = word64(rec.wall_lo, rec.wall_hi),
-        .ref = word64(rec.ref_lo, rec.ref_hi)};
+        .ref = word64(rec.ref[0], rec.ref[1])};
     if (kind == kp::kSyncKindAnchor) {
         audit_[dev].pending.push_back(AnchorAudit::Pending{
             static_cast<int64_t>(s.ref), static_cast<int64_t>(s.ts) + ctx_.devices[dev].drainer_offset});

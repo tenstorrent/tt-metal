@@ -14,7 +14,7 @@
 namespace kernel_profiler {
 
 template <typename T>
-constexpr std::uint32_t word_of(T v) {
+constexpr std::uint32_t word_of(const T& v) {
     static_assert(sizeof(T) == sizeof(std::uint32_t));
     return __builtin_bit_cast(std::uint32_t, v);
 }
@@ -31,19 +31,19 @@ constexpr std::uint32_t kEthRefclkHz = 50'000'000u;  // the Ethernet tile's refe
 // SPSC_PREFIX_HEAD_0, then the records, padded to SPSC_SPAN_WIRE_CTRL_WORDS so the ingest's frame walk accepts the
 // frame. The sync engine reads that socket itself; these are never profiler records. By kind:
 //   LOCAL (the pusher): up to kSyncLocalPoints points of the chip's clock model. value and wall hold the first point's
-//     refclk and wall (in eighths of a tick), ref_lo and ref_hi the later points as SyncLocalSteps.
+//     refclk and wall (in eighths of a tick), ref the later points as SyncLocalSteps.
 //   LINK (the link ends): value is a round's 1588 stamp average in kLinkSyncStampUnitsPerNs per ns.
 //   ANCHOR (the drainer): its (wall, refclk) pair at a refclk update, in wall and ref.
 //   ANCHOR_HIST (the drainer, at stop): its audit of its anchors against the pusher's points. Bin records hold the
 //     first bin in round and six counts in the words from value_lo on; then one record with round
 //     kSyncAnchorHistWorst holds the worst anchor's refclk in value, the anchors whose read found no refclk update in
-//     wall, and the worst error in 1/16 ns, signed, in ref_lo.
+//     wall, and the worst error in 1/16 ns, signed, in ref[0].
 struct SyncRecord {
     std::uint32_t meta;   // SyncMeta; SyncLocalMeta in a LOCAL record
     std::uint32_t round;  // SyncLocalRound in a LOCAL record
     std::uint32_t value_lo, value_hi;
     std::uint32_t wall_lo, wall_hi;
-    std::uint32_t ref_lo, ref_hi;
+    std::uint32_t ref[2];  // low word first
 };
 constexpr std::uint32_t kSyncRecordWords = sizeof(SyncRecord) / sizeof(std::uint32_t);
 
@@ -86,16 +86,17 @@ struct SyncLocalPoint {
 template <typename Record>
 inline std::uint32_t sync_local_unpack(const Record& rec, SyncLocalPoint* out) {
     const auto meta = word_as<SyncLocalMeta>(rec.meta);
-    const auto round = word_as<SyncLocalRound>(rec.round);
-    const std::uint32_t steps[kSyncLocalPoints - 1] = {rec.ref_lo, rec.ref_hi};
+    // Read in place: a bit_cast into a struct holding an array goes through the stack.
+    const volatile SyncLocalRound& round = reinterpret_cast<const volatile SyncLocalRound&>(rec.round);
+    const std::uint32_t slope = round.slope;
     const std::uint64_t r0 = (static_cast<std::uint64_t>(rec.value_hi) << 32) | rec.value_lo;
     const std::uint64_t w0 = (static_cast<std::uint64_t>(rec.wall_hi) << 32) | rec.wall_lo;
     for (std::uint32_t i = 0; i < meta.count; i++) {
         std::uint64_t r = r0, w = w0;
         if (i != 0) {
-            const auto s = word_as<SyncLocalStep>(steps[i - 1]);
+            const auto s = word_as<SyncLocalStep>(rec.ref[i - 1]);
             r += s.refclk;
-            w += static_cast<std::uint64_t>(round.slope) * s.refclk +
+            w += static_cast<std::uint64_t>(slope) * s.refclk +
                  static_cast<std::uint64_t>(static_cast<std::int64_t>(s.wall_off));
         }
         out[i] = SyncLocalPoint{r, w, round.k8[i], ((meta.close >> i) & 1u) != 0};
@@ -173,8 +174,7 @@ struct TileNetTable {
 struct TileNetScratch {
     std::uint32_t landing[16];  // where the tile's reads of its partners land
     TileNetTable table;
-    std::uint32_t hist_median[kTileNetBins];
-    std::uint32_t hist_rtt[kTileNetBins];
+    std::uint32_t hist[2 * kTileNetBins];  // the counts of the median's samples, then of the round trips
 };
 
 }  // namespace kernel_profiler

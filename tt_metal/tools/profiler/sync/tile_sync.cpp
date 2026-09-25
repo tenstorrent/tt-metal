@@ -49,8 +49,8 @@ void kernel_main() {
     const uint32_t n = get_arg_val<uint32_t>(3);
     volatile tt_l1_ptr kp::TileNetScratch* s = reinterpret_cast<volatile tt_l1_ptr kp::TileNetScratch*>(scratch);
     volatile tt_l1_ptr kp::TileNetTable& tab = s->table;
-    volatile tt_l1_ptr uint32_t* hist_d = s->hist_median;
-    volatile tt_l1_ptr uint32_t* hist_r = s->hist_rtt;
+    volatile tt_l1_ptr uint32_t* hist_d = s->hist;
+    volatile tt_l1_ptr uint32_t* hist_r = s->hist + kp::kTileNetBins;
     volatile uint32_t* const wall = reinterpret_cast<volatile uint32_t*>(tile_read::kWallLo);
 #if defined(COMPILE_FOR_DRISC)
     experimental::drisc_set_stream_mode_all();
@@ -65,9 +65,8 @@ void kernel_main() {
     if (go == kp::kTileNetGoMeasure) {
         for (uint32_t k = 0; k < n; k++) {
             const uint32_t w = get_arg_val<uint32_t>(4 + k);
-            for (uint32_t b = 0; b < kp::kTileNetBins; b++) {
+            for (uint32_t b = 0; b < 2 * kp::kTileNetBins; b++) {
                 hist_d[b] = 0;
-                hist_r[b] = 0;
             }
             // The windows are centred on the medians of a short warm-up: the first brackets run cold and land wide.
             const uint32_t noc = w >> 31, coord = tile_read::coord(w & 0x7FFFFFFFu);
