@@ -15,6 +15,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -416,6 +417,23 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             .initial_value = 0});
     }
 
+    // Overlapped, the data-movement kernels can time where combine's tail goes; see
+    // combine_fabric2d_tail_probe.hpp. It only compiles in under the device profiler.
+    // TT_CMBF2D_IDLE=1 is a measurement mode: combine's data-movement kernels exit at once and only the
+    // collector runs, so the routed expert is timed as overlapped but with no combine traffic beside it.
+    static const bool idle =
+        std::getenv("TT_CMBF2D_IDLE") != nullptr && std::string(std::getenv("TT_CMBF2D_IDLE")) == "1";
+    const auto add_tail_probe = [&](tt::tt_metal::KernelDescriptor& kernel) {
+        if (idle && sems.waits_for_routed_expert) {
+            kernel.defines.emplace_back("CMBF2D_IDLE", "1");
+        }
+        if (sems.waits_for_routed_expert) {
+            const uint32_t passes = args.hybrid_token_threshold > 0 ? 2 : 1;
+            kernel.defines.emplace_back("CMBF2D_TAIL_READY_SEM", std::to_string(sems.ready()));
+            kernel.defines.emplace_back("CMBF2D_TAIL_FINAL_STEP", std::to_string(passes * args.experts_per_chip));
+        }
+    };
+
     for (const auto& [stream, self] : placement.at(coord).streams) {
         KernelPlan plan = chip_plan;
         plan.stream = stream;
@@ -435,6 +453,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             // NOC_1 routes -Y first, so worker (eth row + 1) -> eth core is a single hop.
             .noc = tt::tt_metal::NOC::NOC_1,
         };
+        add_tail_probe(snd);
         auto snd_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
         desc.kernels.push_back(std::move(snd));
 
@@ -446,6 +465,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         rdr.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
         rdr.core_ranges = CoreRangeSet(CoreRange(self.worker_logical));
         rdr.defines.emplace_back("TILE", dispatched_is_tiled(tensor_args) ? "1" : "0");
+        add_tail_probe(rdr);
         rdr.compile_time_args =
             hyb_cmbf2d::ReaderCtArgs(
                 args, tensor_args, coord, self, work, l1, plan, untilizers_for_stream(groups, stream, sems, l1))
@@ -522,6 +542,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                 .noc = tt::tt_metal::NOC::NOC_0,
             };
             hyb_cmbf2d::UntilizerRtArgManager(dram).setup_rt_args(kernel, groups[g][j].logical);
+            add_tail_probe(kernel);
             desc.kernels.push_back(std::move(kernel));
 
             tt::tt_metal::KernelDescriptor untilize;
@@ -546,19 +567,17 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     if (sems.waits_for_routed_expert) {
         const auto& collector = placement.at(coord).collector.value();
 
-        // The cores that read routed-expert output and so wait on `ready`: the untilizers when it is tiled,
-        // otherwise the readers, which then read it straight from DRAM.
+        // The cores that read routed-expert output and so wait on `ready` -- the untilizers when it is tiled,
+        // otherwise the readers, which then read it straight from DRAM -- and the stream cores in any case: the
+        // tail probe reads `ready` there to tell when the routed expert is done.
         std::vector<CoreCoord> waiting;
-        if (sems.has_untilizers()) {
-            for (const auto& group : groups) {
-                for (const auto& untilizer : group) {
-                    waiting.push_back(untilizer.worker_virtual);
-                }
+        for (const auto& group : groups) {
+            for (const auto& untilizer : group) {
+                waiting.push_back(untilizer.worker_virtual);
             }
-        } else {
-            for (const auto& [stream, self] : placement.at(coord).streams) {
-                waiting.push_back(self.worker_virtual);
-            }
+        }
+        for (const auto& [stream, self] : placement.at(coord).streams) {
+            waiting.push_back(self.worker_virtual);
         }
         const uint32_t passes = args.hybrid_token_threshold > 0 ? 2 : 1;
         auto* dev = args.device;

@@ -27,6 +27,7 @@
 #include "combine_fabric2d_untilizer_ct_args.hpp"
 #include "combine_fabric2d_untilizer_rt_args.hpp"
 #include "combine_fabric2d_group_walk.hpp"
+#include "combine_fabric2d_tail_probe.hpp"
 
 constexpr hyb_cmbf2d::UntilizerCtArgs ct{};
 
@@ -119,7 +120,9 @@ struct Ring {
     // Hand the batch over once its rows really exist. The slot is not reclaimed here: that waits until the
     // ring is full, which is what lets the next batch be built while the consumers work through this one.
     void publish() {
-        cb_out.wait_front((produced - popped + 1) * hyb_cmbf2d::UNT_BATCH_ROWS);
+        hyb_cmbf2d::tail_probe::timed(hyb_cmbf2d::tail_probe::UNT, [&] {
+            cb_out.wait_front((produced - popped + 1) * hyb_cmbf2d::UNT_BATCH_ROWS);
+        });
         for (uint32_t c = 0; c < ct.num_consumers; c++) {
             noc_semaphore_inc(consumer_noc(c, get_semaphore(ct.produced_sem)), 1);
         }
@@ -150,11 +153,17 @@ void kernel_main() {
     // The compute kernel cannot read the control tensors, so it is told how many batches to expect before
     // the first one arrives. Pushed once and never popped.
     uint32_t mine = 0;
+#ifndef CMBF2D_IDLE
     walk_my_batches(ctl, [](uint32_t) {}, [&](uint32_t, const hyb_cmbf2d::GroupWalk&) { mine++; });
+#endif
     CircularBuffer cb_batches(hyb_cmbf2d::UNT_CB_BATCHES);
     cb_batches.reserve_back(1);
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_batches.get_write_ptr()) = mine;
     cb_batches.push_back(1);
+#ifdef CMBF2D_IDLE
+    // Measurement mode: zero batches announced, so the compute kernel exits at once.
+    return;
+#endif
 
     // Overlapped with the routed expert, a step's tile-rows are its output: wait until it reports them written.
     // Only here, not in the counting walk above, which must finish before any expert is ready.
@@ -162,17 +171,21 @@ void kernel_main() {
         if constexpr (ct.ready_sem != hyb_cmbf2d::NO_READY_GATE) {
             const uint32_t local =
                 hyb_cmbf2d::local_at_step(ctl, ct.my_dg_index, ct.experts_per_chip, ct.expert_threshold, step);
-            hyb_cmbf2d::wait_for_ready(
-                ct.ready_sem,
-                hyb_cmbf2d::ready_target(ctl, ct.my_dg_index, ct.experts_per_chip, ct.expert_threshold, local));
+            hyb_cmbf2d::tail_probe::timed(hyb_cmbf2d::tail_probe::READY, [&] {
+                hyb_cmbf2d::wait_for_ready(
+                    ct.ready_sem,
+                    hyb_cmbf2d::ready_target(ctl, ct.my_dg_index, ct.experts_per_chip, ct.expert_threshold, local));
+            });
         }
     };
 
     Ring ring;
     walk_my_batches(ctl, wait_for_expert, [&](uint32_t b, const hyb_cmbf2d::GroupWalk& walk) {
-        while (ring.full()) {
-            ring.reclaim_one();
-        }
+        hyb_cmbf2d::tail_probe::timed(hyb_cmbf2d::tail_probe::RING, [&] {
+            while (ring.full()) {
+                ring.reclaim_one();
+            }
+        });
         // The whole tile-row, a block of tiles at a time so the input window stays small. Whole because that
         // is the least an untilize can do, even when the walk wants only part of it.
         CircularBuffer cb_in(hyb_cmbf2d::UNT_CB_IN);
@@ -191,7 +204,10 @@ void kernel_main() {
 
     // Every consumer has released every batch, so all of their `freed` bumps have landed; the counts are
     // program semaphores and are re-initialised at the next launch.
-    while (ring.popped < ring.produced) {
-        ring.reclaim_one();
-    }
+    hyb_cmbf2d::tail_probe::timed(hyb_cmbf2d::tail_probe::RING, [&] {
+        while (ring.popped < ring.produced) {
+            ring.reclaim_one();
+        }
+    });
+    hyb_cmbf2d::tail_probe::report();
 }
