@@ -1,11 +1,11 @@
 name: "Update agentic workflows"
 description: >-
-  Recompiles a gh-aw workflow's lock file from its source markdown
-  (.github/scripts/utils/update_agentic_workflows.py) and, if the compiled
+  Installs the gh-aw CLI version pinned in .github/aw/actions-lock.json,
+  recompiles a gh-aw workflow's lock file from its source markdown
+  (.github/scripts/utils/update_agentic_workflows.py), and, if the compiled
   output changed, commits it back onto the current branch as
-  github-actions[bot]. The caller must already have the gh-aw CLI installed
-  and on PATH, and must have checked out a branch this job can push to
-  (contents: write).
+  github-actions[bot]. The caller must have checked out a branch this job
+  can push to (contents: write).
 
 inputs:
   workflow-name:
@@ -17,6 +17,18 @@ inputs:
 runs:
   using: "composite"
   steps:
+    - name: Install gh-aw CLI
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        VERSION=$(python3 -c "
+        import json
+        entries = json.load(open('.github/aw/actions-lock.json'))['entries']
+        print(next(e['version'] for e in entries.values() if e['repo'] == 'github/gh-aw-actions/setup'))
+        ")
+        gh extension install github/gh-aw --pin "$VERSION"
+
     - name: Compile workflow
       id: compile
       shell: bash
