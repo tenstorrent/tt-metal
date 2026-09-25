@@ -62,8 +62,9 @@ VARIANTS = [
     pytest.param(ttnn.SDPAPrecision.LOW_PRECISION, ttnn.bfloat8_b, id="low_bfp8"),
 ]
 VARIANT_LIST = [(p.id, *p.values) for p in VARIANTS]
-ABS_BOUND = {"default": 1.0, "fast": 3.0, "accurate": 1.0, "low_bfp8": 3.0}
-MARGIN = {"default": 0.25, "fast": 1.0, "accurate": 0.25, "low_bfp8": 1.5}  # percentage points over legacy
+# The default recipe is FAST (sdpa_precision_default), so "default" uses FAST's gates.
+ABS_BOUND = {"default": 3.0, "fast": 3.0, "accurate": 1.0, "low_bfp8": 3.0}
+MARGIN = {"default": 1.0, "fast": 1.0, "accurate": 0.25, "low_bfp8": 1.5}  # percentage points over legacy
 
 LINE_1D = {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
 

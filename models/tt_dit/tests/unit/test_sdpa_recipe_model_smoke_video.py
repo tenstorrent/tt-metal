@@ -37,7 +37,8 @@ LINE_1D = {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
 # name -> (sdpa_precision, sdpa_kv_dtype, absolute L2 bound %, margin over legacy L2 vs torch in % points)
 VARIANTS = {
     "legacy": (LEGACY, None, None, None),  # the module's legacy SDPA config (tests/unit/sdpa_legacy.py)
-    "default": (None, None, 1.0, 0.25),  # the module's default recipe (sdpa_precision_default)
+    # The default recipe is FAST (sdpa_precision_default), so "default" uses FAST's gates.
+    "default": (None, None, 3.0, 0.5),  # the module's default recipe (sdpa_precision_default)
     "FAST": (P.FAST, None, 3.0, 0.5),
     "ACCURATE": (P.ACCURATE, None, 1.0, 0.5),
     # bfp8 K/V storage adds its own quantization error on top of the recipe; allow 1 point over legacy.
