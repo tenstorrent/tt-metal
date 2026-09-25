@@ -79,9 +79,8 @@ static __attribute__((noinline, noclone)) void pack_multitile(const std::uint32_
 /**
  * @brief Compute the packed L1 footprint (in bytes) of a tile for a given format and datum count.
  *
- * Returns the real packed byte size, correcting SCALE_DATUM_SIZE's one-byte-per-datum result for the
- * sub-byte BFP payloads (Bfp4 = 2 datums/byte, Bfp2 = 4 datums/byte) and adding the per-16-datum
- * exponent byte that all BFP formats store alongside their mantissas.
+ * Thin alias for @ref TILE_SIZE_BYTES. Shares the mantissa and exponent-byte sizing with the
+ * unpack side, which adds L1-word alignment on top and returns words rather than bytes.
  *
  * @param pack_dst_format: Destination (L1) data format.
  * @param datum_count: Number of datums in the tile.
@@ -89,28 +88,7 @@ static __attribute__((noinline, noclone)) void pack_multitile(const std::uint32_
  */
 inline std::uint32_t _llk_pack_output_size_bytes_(const std::uint32_t pack_dst_format, const std::uint32_t datum_count)
 {
-    std::uint32_t packed_tile_size_bytes = SCALE_DATUM_SIZE(pack_dst_format, datum_count);
-
-    // SCALE_DATUM_SIZE keeps one-byte-per-datum compatibility for the sub-byte
-    // BFP payload formats. Pack address programming needs the real packed L1
-    // footprint instead: Bfp4 payload is 2 datums/byte, Bfp2 is 4 datums/byte,
-    // and all BFP formats also store one exponent byte per 16 datums
-    // alongside the mantissas.
-    if (pack_dst_format == to_underlying(DataFormat::Bfp4) || pack_dst_format == to_underlying(DataFormat::Bfp4_b))
-    {
-        packed_tile_size_bytes /= 2;
-    }
-    else if (pack_dst_format == to_underlying(DataFormat::Bfp2) || pack_dst_format == to_underlying(DataFormat::Bfp2_b))
-    {
-        packed_tile_size_bytes /= 4;
-    }
-
-    if (IS_BFP_FORMAT(pack_dst_format))
-    {
-        packed_tile_size_bytes += datum_count / 16;
-    }
-
-    return packed_tile_size_bytes;
+    return TILE_SIZE_BYTES(pack_dst_format, datum_count);
 }
 
 /**

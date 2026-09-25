@@ -27,16 +27,34 @@
 /**
  * Configure the unpacker hardware for operands A and B.
  *
- * Face geometry (face_r_dim, num_faces) and tile size for both operands are
- * derived from the CB metadata associated with each operand id. This is the
- * primary entry point: callers no longer need to thread face geometry through
- * the API, since per-CB face geometry is recorded in the CB descriptor at
- * program creation time.
+ * Face geometry (face_r_dim, num_faces) for both operands is derived from the CB
+ * metadata associated with each operand id; the LLK sizes the tile itself from
+ * that geometry. This is the primary entry point: callers no longer need to thread
+ * face geometry through the API, since per-CB face geometry is recorded in the CB
+ * descriptor at program creation time.
  *
  * @tparam is_fp32_dest_acc_en   Enable FP32 accumulation in the destination register.
  * @param  unpA_operand          Operand index for unpack source A (In0).
  * @param  unpB_operand          Operand index for unpack source B (In1).
  */
+/**
+ * @brief Assert that an operand's CB page size matches the tile size derived from its geometry.
+ *
+ * @param operand_id: Operand index into the CB interface.
+ * @param unpack_src_format: Source data format of the operand in L1.
+ * @param face_r_dim: Rows per face.
+ * @param num_faces: Number of faces in the tile.
+ */
+inline void assert_cb_page_size_matches_tile_size(
+    [[maybe_unused]] const std::uint32_t operand_id,
+    [[maybe_unused]] const std::uint32_t unpack_src_format,
+    [[maybe_unused]] const std::uint32_t face_r_dim,
+    [[maybe_unused]] const std::uint32_t num_faces) {
+    LLK_ASSERT(
+        get_local_cb_interface(operand_id).fifo_page_size == _llk_unpack_tile_size_(unpack_src_format, face_r_dim, num_faces),
+        "CB page size must equal the tile size derived from its src format and face geometry");
+}
+
 template <bool is_fp32_dest_acc_en>
 inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std::uint32_t unpB_operand) {
     // In0 -> unpA
@@ -51,10 +69,10 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
     const uint32_t unpB_num_faces = get_operand_num_faces(unpB_operand_id);
     const uint32_t unpB_face_r_dim = get_operand_face_r_dim(unpB_operand_id);
 
-    // Currently, there is a constraint that tile size is equal to the fifo page size
-    // TODO NC: tile size should be computed in the LLK instead, as the part of #34495
-    const uint32_t unpA_tile_size = get_local_cb_interface(unpA_operand_id).fifo_page_size;
-    const uint32_t unpB_tile_size = get_local_cb_interface(unpB_operand_id).fifo_page_size;
+    // The LLK derives the per-tile L1 stride from src format + face geometry. The CB page size the host
+    // recorded must agree with it, otherwise tile-to-tile addressing walks the wrong stride.
+    assert_cb_page_size_matches_tile_size(unpA_operand_id, unpack_src_format[unpA_operand_id], unpA_face_r_dim, unpA_num_faces);
+    assert_cb_page_size_matches_tile_size(unpB_operand_id, unpack_src_format[unpB_operand_id], unpB_face_r_dim, unpB_num_faces);
 
     SAN_HOOK(configure(
         StateVal<Operand<Exu::Unpack>::DestWidth32>(is_fp32_dest_acc_en),
@@ -65,9 +83,7 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
         StateVal<Operand<Exu::Unpack>::FaceHeightA>(unpA_face_r_dim),
         StateVal<Operand<Exu::Unpack>::FaceHeightB>(unpB_face_r_dim),
         StateVal<Operand<Exu::Unpack>::NumFacesA>(unpA_num_faces),
-        StateVal<Operand<Exu::Unpack>::NumFacesB>(unpB_num_faces),
-        StateDiscard<std::uint32_t>(unpA_tile_size),
-        StateDiscard<std::uint32_t>(unpB_tile_size)));
+        StateVal<Operand<Exu::Unpack>::NumFacesB>(unpB_num_faces)));
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         unpack_src_format[unpA_operand_id],
         unpack_src_format[unpB_operand_id],
@@ -76,9 +92,7 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
         unpA_face_r_dim,
         unpB_face_r_dim,
         unpA_num_faces,
-        unpB_num_faces,
-        unpA_tile_size,
-        unpB_tile_size);
+        unpB_num_faces);
 }
 
 /**
@@ -122,7 +136,8 @@ inline bool should_reconfigure_cbs(std::uint32_t old_operand, std::uint32_t new_
 /**
  * Reconfigure the srcA unpacker for a new operand's data format.
  *
- * Face geometry (face_r_dim, num_faces) and tile size are derived from the new operand's CB metadata.
+ * Face geometry (face_r_dim, num_faces) is derived from the new operand's CB metadata;
+ * the LLK sizes the tile itself from that geometry.
  *
  * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
  * @tparam dim_stride_target   Dimension/stride programming target for the unpacker.
@@ -136,23 +151,23 @@ inline void llk_unpack_reconfig_data_format_srca(const std::uint32_t srca_new_op
     const std::uint32_t num_faces = get_operand_num_faces(srca_operand_id);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(srca_operand_id);
 
-    // Currently, there is a constraint that tile size is equal to the fifo page size
-    // TODO NC: tile size should be computed in the LLK instead, as the part of #34495
-    const std::uint32_t tile_size = get_local_cb_interface(srca_operand_id).fifo_page_size;
+    // The LLK re-derives the per-tile L1 stride from the new src format + face geometry; the CB page size
+    // the host recorded must agree with it.
+    assert_cb_page_size_matches_tile_size(srca_operand_id, unpack_src_format[srca_operand_id], face_r_dim, num_faces);
     SAN_HOOK(reconfigure(
         StateVal<Operand<Exu::Unpack>::InputFormatA>(unpack_src_format[srca_operand_id]),
         StateVal<Operand<Exu::Unpack>::OutputFormatA>(unpack_dst_format[srca_operand_id]),
-        StateDiscard<std::uint32_t>(tile_size),
         StateDiscard<std::uint32_t>(face_r_dim),
         StateDiscard<std::uint32_t>(num_faces)));
     _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, dim_stride_target, skip_int8>(
-        unpack_src_format[srca_operand_id], unpack_dst_format[srca_operand_id], tile_size, face_r_dim, num_faces);
+        unpack_src_format[srca_operand_id], unpack_dst_format[srca_operand_id], face_r_dim, num_faces);
 }
 
 /**
  * Reconfigure the srcB unpacker for a new operand's data format.
  *
- * Face geometry (face_r_dim, num_faces) and tile size are derived from the new operand's CB metadata.
+ * Face geometry (face_r_dim, num_faces) is derived from the new operand's CB metadata;
+ * the LLK sizes the tile itself from that geometry.
  *
  * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
  * @tparam dim_stride_target   Dimension/stride programming target for the unpacker.
@@ -166,17 +181,16 @@ inline void llk_unpack_reconfig_data_format_srcb(const std::uint32_t srcb_new_op
     const std::uint32_t num_faces = get_operand_num_faces(srcb_operand_id);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(srcb_operand_id);
 
-    // Currently, there is a constraint that tile size is equal to the fifo page size
-    // TODO NC: tile size should be computed in the LLK instead, as the part of #34495
-    const std::uint32_t tile_size = get_local_cb_interface(srcb_operand_id).fifo_page_size;
+    // The LLK re-derives the per-tile L1 stride from the new src format + face geometry; the CB page size
+    // the host recorded must agree with it.
+    assert_cb_page_size_matches_tile_size(srcb_operand_id, unpack_src_format[srcb_operand_id], face_r_dim, num_faces);
     SAN_HOOK(reconfigure(
         StateVal<Operand<Exu::Unpack>::InputFormatB>(unpack_src_format[srcb_operand_id]),
         StateVal<Operand<Exu::Unpack>::OutputFormatB>(unpack_dst_format[srcb_operand_id]),
-        StateDiscard<std::uint32_t>(tile_size),
         StateDiscard<std::uint32_t>(face_r_dim),
         StateDiscard<std::uint32_t>(num_faces)));
     _llk_unpack_reconfig_data_format_srcb_impl_<is_fp32_dest_acc_en, dim_stride_target, skip_int8>(
-        unpack_src_format[srcb_operand_id], unpack_dst_format[srcb_operand_id], tile_size, face_r_dim, num_faces);
+        unpack_src_format[srcb_operand_id], unpack_dst_format[srcb_operand_id], face_r_dim, num_faces);
 }
 
 /**
@@ -293,9 +307,9 @@ inline void llk_unpack_reconfig_tile_shape_srca(const std::uint32_t srca_new_ope
     const std::uint32_t srca_operand_id = get_operand_id(srca_new_operand);
     const std::uint32_t num_faces = get_operand_num_faces(srca_operand_id);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(srca_operand_id);
-    // A tile-shape change is a tile-size (CB page size) change too; refresh the tile-size GPR alongside geometry.
-    const std::uint32_t tile_size = get_local_cb_interface(srca_operand_id).fifo_page_size;
-    _llk_unpack_reconfig_tile_shape_srca_(tile_size, face_r_dim, num_faces);
+    // A tile-shape change is a tile-size change too; the LLK refreshes the tile-size GPR alongside geometry.
+    assert_cb_page_size_matches_tile_size(srca_operand_id, unpack_src_format[srca_operand_id], face_r_dim, num_faces);
+    _llk_unpack_reconfig_tile_shape_srca_(unpack_src_format[srca_operand_id], face_r_dim, num_faces);
 }
 
 /**
@@ -330,9 +344,9 @@ inline void llk_unpack_reconfig_tile_shape_srcb(const std::uint32_t srcb_new_ope
     const std::uint32_t srcb_operand_id = get_operand_id(srcb_new_operand);
     const std::uint32_t num_faces = get_operand_num_faces(srcb_operand_id);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(srcb_operand_id);
-    // A tile-shape change is a tile-size (CB page size) change too; refresh the tile-size GPR alongside geometry.
-    const std::uint32_t tile_size = get_local_cb_interface(srcb_operand_id).fifo_page_size;
-    _llk_unpack_reconfig_tile_shape_srcb_(tile_size, face_r_dim, num_faces);
+    // A tile-shape change is a tile-size change too; the LLK refreshes the tile-size GPR alongside geometry.
+    assert_cb_page_size_matches_tile_size(srcb_operand_id, unpack_src_format[srcb_operand_id], face_r_dim, num_faces);
+    _llk_unpack_reconfig_tile_shape_srcb_(unpack_src_format[srcb_operand_id], face_r_dim, num_faces);
 }
 
 /**

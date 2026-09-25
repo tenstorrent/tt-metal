@@ -88,7 +88,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // has a known SrcA to read back, buffer_A[2] the key region so ACC_TO_DEST accumulates onto
             // something the test picked rather than onto whatever DEST held.
             _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false /* to_from_int8 */>(
-                ID_FORMAT, ID_FORMAT, params.TILE_SIZE_UNPACK_A);
+                ID_FORMAT, ID_FORMAT);
             _llk_unpack_A_init_<BroadcastType::NONE, false /* acc_to_dest */, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
                 0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, tensor_shape, ID_FORMAT, ID_FORMAT);
             _llk_unpack_A_<BroadcastType::NONE, false /* acc_to_dest */, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
@@ -100,7 +100,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
 
             _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false /* to_from_int8 */>(
-                formats.unpack_A_src, formats.unpack_A_dst, params.TILE_SIZE_UNPACK_A);
+                formats.unpack_A_src, formats.unpack_A_dst);
 
             if constexpr (GMG_MODE == MODE_GATE && GMG_SIGMOID)
             {
@@ -137,7 +137,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // RUN starts from a DEST image the test builds, so every tile comes in raw under the
             // uint16 config.
             _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false /* to_from_int8 */>(
-                ID_FORMAT, ID_FORMAT, params.TILE_SIZE_UNPACK_A);
+                ID_FORMAT, ID_FORMAT);
             _llk_unpack_A_init_<BroadcastType::NONE, false /* acc_to_dest */, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
                 0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, tensor_shape, ID_FORMAT, ID_FORMAT);
             for (std::uint32_t tile = 0; tile < NUM_DEST_TILES; ++tile)

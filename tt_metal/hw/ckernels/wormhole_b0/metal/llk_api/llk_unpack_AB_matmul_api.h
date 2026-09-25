@@ -91,8 +91,22 @@ inline void llk_unpack_AB_matmul(
 
     std::uint32_t base_address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;
     std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
-    std::uint32_t tile_size_a = get_local_cb_interface(operandA_id).fifo_page_size;
-    std::uint32_t tile_size_b = get_local_cb_interface(operandB_id).fifo_page_size;
+
+    const ckernel::TensorShape tensor_shape_a = get_operand_tensor_shape(operandA_id);
+    const ckernel::TensorShape tensor_shape_b = get_operand_tensor_shape(operandB_id);
+
+    // The LLK derives the per-tile L1 stride from src format + tile shape. The CB page size the host
+    // recorded must agree with it, otherwise tile-to-tile addressing walks the wrong stride.
+    LLK_ASSERT(
+        get_local_cb_interface(operandA_id).fifo_page_size ==
+            _llk_unpack_tile_size_(
+                unpack_src_format[operandA_id], tensor_shape_a.face_r_dim, tensor_shape_a.total_num_faces()),
+        "operand A CB page size must equal the tile size derived from its src format and tile shape");
+    LLK_ASSERT(
+        get_local_cb_interface(operandB_id).fifo_page_size ==
+            _llk_unpack_tile_size_(
+                unpack_src_format[operandB_id], tensor_shape_b.face_r_dim, tensor_shape_b.total_num_faces()),
+        "operand B CB page size must equal the tile size derived from its src format and tile shape");
 
     LLK_ASSERT_BLOCK(are_unpackers_AB_configured_correctly(
         unpack_src_format[operandB_id],
@@ -127,8 +141,10 @@ inline void llk_unpack_AB_matmul(
         base_address_b,
         tile_index_a,
         tile_index_b,
-        tile_size_a,
-        tile_size_b,
+        unpack_src_format[operandA_id],
+        unpack_src_format[operandB_id],
+        tensor_shape_a,
+        tensor_shape_b,
         partial_face_a,
         partial_face_b,
         ct_dim,
