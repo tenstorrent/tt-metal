@@ -28,6 +28,7 @@
 // page regardless, so this only sets how finely that reader can pipeline within a chunk.
 constexpr uint32_t FWD_SIGNAL_EVERY = 32;
 constexpr dspf2d::SenderCtArgs ct{};
+static_assert(ct.batch <= ct.queue_depth / 2, "the sender must be able to drain one batch while the next is read");
 
 // One prebuilt header per queue entry. The route is constant, so only the write address changes per
 // token. A single shared header could be rewritten while a previous non-blocking send still reads it.

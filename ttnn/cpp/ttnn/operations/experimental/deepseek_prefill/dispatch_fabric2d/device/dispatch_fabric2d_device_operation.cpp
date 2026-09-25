@@ -74,6 +74,7 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
         args.num_links >= 1 && args.num_links <= 4,
         "dispatch_fabric2d: num_links must be between 1 and 4 (got {})",
         args.num_links);
+    TT_FATAL(args.seq_len_per_chip > 0, "dispatch_fabric2d: seq_len_per_chip must be positive");
     TT_FATAL(!args.output_mem_config.is_sharded(), "dispatch_fabric2d: output memory config must be interleaved");
 
     const uint32_t extent = axis_extent(args);
@@ -96,7 +97,7 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
         "around one; run it on a topology that wraps that axis (e.g. {} or FABRIC_2D_TORUS_XY), not a line or "
         "mesh.",
         args.axis,
-        args.axis == 0 ? "FABRIC_2D_TORUS_Y" : "FABRIC_2D_TORUS_X");
+        torus_for_axis(args.axis));
 
     // A chip that forwards a chunk sizes it from the source chip's row, so every chip needs all rows.
     validate_control_tensor(tensor_args.expert_offsets_tensor, args.num_routed_experts, "expert_offsets");
