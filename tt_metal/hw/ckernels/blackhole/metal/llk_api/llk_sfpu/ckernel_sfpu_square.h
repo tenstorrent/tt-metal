@@ -12,6 +12,10 @@
 namespace ckernel::sfpu {
 
 inline void square_init() {
+    // The paired store walks dest through ADDR_MOD_6, which advances by the two rows
+    // the loop just wrote (one sfpi row is two dest counter steps), so the loop body
+    // needs no separate increment.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
 
     sfpi::vConstIntPrgm0 = 1;
@@ -44,8 +48,7 @@ inline void calculate_square() {
             r1 = sfpi::as<sfpi::vFloat>(bits1);
         }
         sfpi::dst_reg[0] = r0;
-        sfpi::dst_reg[1] = r1;
-        sfpi::dst_reg += 2;
+        sfpi::dst_reg[1].mode(ADDR_MOD_6) = r1;
     }
 }
 
