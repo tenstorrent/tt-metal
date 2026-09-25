@@ -61,7 +61,24 @@ public:
         buf_.assign(static_cast<size_t>(cores) * cap_, T{});
         head_.assign(cores, 0);
         count_.assign(cores, 0);
+        live_[0] = 0;
+        live_[1] = 0;
     }
+    // Cores holding at least one entry. A sweep over all of them costs 64 visits per pass
+    // whether two cores have work or none do, and a pass runs several times per frame.
+    template <typename F>
+    void for_each_live(F&& f) const {
+        for (uint32_t w = 0; w < 2; ++w) {
+            // Snapshotted, so f() popping a core's last entry cannot disturb this walk.
+            uint64_t m = live_[w];
+            while (m != 0) {
+                const uint32_t b = static_cast<uint32_t>(__builtin_ctzll(m));
+                m &= m - 1;
+                f(w * 64 + b);
+            }
+        }
+    }
+    bool any_live() const { return (live_[0] | live_[1]) != 0; }
     bool empty(uint32_t c) const { return count_[c] == 0; }
     uint32_t size(uint32_t c) const { return count_[c]; }
     T& front(uint32_t c) { return buf_[static_cast<size_t>(c) * cap_ + head_[c]]; }
@@ -73,13 +90,17 @@ public:
             return false;
         }
         buf_[static_cast<size_t>(c) * cap_ + ((head_[c] + count_[c]) & mask_)] = v;
-        ++count_[c];
+        if (++count_[c] == 1) {
+            live_[c >> 6] |= 1ull << (c & 63);
+        }
         return true;
     }
     void pop_front(uint32_t c) {
         if (count_[c] != 0) {
             head_[c] = (head_[c] + 1) & mask_;
-            --count_[c];
+            if (--count_[c] == 0) {
+                live_[c >> 6] &= ~(1ull << (c & 63));
+            }
         }
     }
 
@@ -89,6 +110,8 @@ private:
     std::vector<T, ttsl::aligned_allocator<T, 64>> buf_;
     std::vector<uint32_t, ttsl::aligned_allocator<uint32_t, 64>> head_;
     std::vector<uint32_t, ttsl::aligned_allocator<uint32_t, 64>> count_;
+    // One bit per core; kProvisionedCores is 128, so two words cover every layout.
+    uint64_t live_[2] = {0, 0};
     uint32_t cap_ = 0;    // allocation stride, a power of two
     uint32_t mask_ = 0;   // cap_ - 1
     uint32_t limit_ = 0;  // the protocol bound this was asked for
@@ -445,18 +468,18 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
 
     // A flush can now span several passes, so the epoch -- not the pass boundary -- is what
     // says these bytes are on the peer. test() is still required: it returns the request slot.
-    for (uint32_t c = 0; c < im.cfg.cores; ++c) {
+    im.tx_payload.for_each_live([&](uint32_t c) {
         while (!im.tx_payload.empty(c) && im.flush_epoch[im.tx_payload.front(c).host] > im.tx_payload.front(c).epoch &&
                im.win->test(im.tx_payload.front(c).op)) {
             (void)im.tx_trailer.push_back(c, im.tx_payload.front(c));
             im.tx_payload.pop_front(c);
         }
-    }
+    });
 
     // Publish the guard, now that the payload under it is visible. The trailer is one 64 B
     // line at the slot's tail, so nothing can observe an armed guard over stale bytes.
-    for (uint32_t c = 0; c < im.cfg.cores; ++c) {
-        while (!im.tx_trailer.empty(c)) {
+    im.tx_trailer.for_each_live([&](uint32_t c) {
+        while (!im.broken && !im.tx_trailer.empty(c)) {
             Impl::InFlight f = im.tx_trailer.front(c);
             const uint64_t tail = im.cfg.page_bytes - kFrameTrailerBytes;
             if (const std::string e = im.win->put(
@@ -466,8 +489,10 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
                     rx_slot_offset(f.dest_core, f.slot, im.cfg.page_bytes, im.cfg.rx_data_offset) + tail,
                     f.op);
                 !e.empty()) {
+                // fail() sets broken, which the loop condition above and the check below
+                // both read -- a lambda body cannot break out of the sweep.
                 im.fail("h2h: " + e);
-                break;
+                return;
             }
             // Re-stamped: retirement below waits on the TRAILER's flush, not the payload's.
             f.epoch = im.flush_epoch[f.host];
@@ -477,14 +502,14 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
             im.tx_trailer.pop_front(c);
             ++progress;
         }
-    }
+    });
     if (im.broken) {
         return progress;
     }
 
     // Retire on the TRAILER's completion: the frame is not delivered until the guard is out,
     // and the D2H page behind it must outlive both puts. Front only, per core.
-    for (uint32_t c = 0; c < im.cfg.cores; ++c) {
+    im.tx_flight.for_each_live([&](uint32_t c) {
         while (!im.tx_flight.empty(c) && im.flush_epoch[im.tx_flight.front(c).host] > im.tx_flight.front(c).epoch &&
                im.win->test(im.tx_flight.front(c).op)) {
             im.tx_flight.pop_front(c);
@@ -494,7 +519,7 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
             }
             ++progress;
         }
-    }
+    });
 
     // Start what the window allows, round-robin across cores. A gated core is SKIPPED,
     // never broken on: that is the whole point of the per-core queues.
