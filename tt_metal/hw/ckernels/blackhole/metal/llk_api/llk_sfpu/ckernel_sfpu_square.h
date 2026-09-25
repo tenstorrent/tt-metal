@@ -13,8 +13,7 @@ namespace ckernel::sfpu {
 
 inline void square_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
-    // L12/L13/L14 survive dest faces. calculate_square() runs once per face, so
-    // locals would be reloaded four times; these programmed constants load once.
+
     sfpi::vConstIntPrgm0 = 1;
     sfpi::vConstIntPrgm1 = 0x7fff;
     sfpi::vConstIntPrgm2 = 0xffff0000;
@@ -24,8 +23,6 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATI
 inline void calculate_square() {
     static_assert(ITERATIONS % 2 == 0, "calculate_square() processes dest rows in pairs.");
 
-    // Two dest rows in flight; RNE is inlined line-by-line so the independent
-    // chains can overlap. as<vUInt>(vConstIntPrgmN) is a type view of L12–L14.
 #pragma GCC unroll 4
     for (int d = 0; d < ITERATIONS; d += 2) {
         sfpi::vFloat v0 = sfpi::dst_reg[0];
