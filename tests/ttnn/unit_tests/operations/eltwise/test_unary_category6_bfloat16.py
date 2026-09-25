@@ -10,6 +10,7 @@ from tests.ttnn.utils_for_testing import assert_with_ulp, assert_with_pcc
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     generate_bfloat16_bits,
     generate_bfloat16_zero_band,
+    assert_bfloat16_finite_pure_ulp,
     generate_bfloat16_bits_in_range,
     to_tt_tensor,
     bf16_bits_to_float,
@@ -574,6 +575,15 @@ def test_selu_op(device, scale, alpha):
         raw_zero_band, zero_band = generate_bfloat16_zero_band()
         raw_result = ttnn.to_torch(ttnn.selu(to_tt_tensor(raw_zero_band, device), scale=scale, alpha=alpha))
         assert torch.all(raw_result[zero_band] == 0)
+        assert_bfloat16_finite_pure_ulp(
+            raw_zero_band,
+            raw_result,
+            lambda x: scale * torch.where(x > 0, x, alpha * torch.expm1(x)),
+            (
+                ("below", -10.0, False, "constant", -1.7578125),
+                ("above", 10.0, False, "affine", (1.0507010221481323, 0.0)),
+            ),
+        )
 
 
 # Above this |x|, reciprocal(x) underflows and is flushed to zero before the

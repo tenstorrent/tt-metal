@@ -10,6 +10,7 @@ from tests.ttnn.utils_for_testing import assert_with_ulp, assert_with_pcc, asser
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     generate_bfloat16_bits,
     generate_bfloat16_zero_band,
+    assert_bfloat16_finite_pure_ulp,
     generate_bfloat16_bits_in_range,
     to_tt_tensor,
     float_to_bf16_bits,
@@ -280,6 +281,12 @@ def test_elu_op(device, alpha):
         raw_zero_band, zero_band = generate_bfloat16_zero_band()
         raw_result = ttnn.to_torch(ttnn.elu(to_tt_tensor(raw_zero_band, device), alpha=alpha))
         assert torch.all(raw_result[zero_band] == 0)
+        assert_bfloat16_finite_pure_ulp(
+            raw_zero_band,
+            raw_result,
+            lambda x: torch.nn.functional.elu(x, alpha=alpha),
+            (("below", -10.0, False, "constant", -1.0), ("above", 10.0, False, "identity", None)),
+        )
 
 
 @pytest.mark.parametrize("alpha", [1.0, 0.5, 2.0, 0.1])
@@ -302,6 +309,12 @@ def test_celu_op(device, alpha):
         raw_zero_band, zero_band = generate_bfloat16_zero_band()
         raw_result = ttnn.to_torch(ttnn.celu(to_tt_tensor(raw_zero_band, device), alpha=alpha))
         assert torch.all(raw_result[zero_band] == 0)
+        assert_bfloat16_finite_pure_ulp(
+            raw_zero_band,
+            raw_result,
+            lambda x: torch.nn.functional.celu(x, alpha=alpha),
+            (("below", -6.25, True, "constant", -1.0), ("above", 10.0, False, "identity", None)),
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
