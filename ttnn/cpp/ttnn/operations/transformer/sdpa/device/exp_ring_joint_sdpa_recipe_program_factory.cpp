@@ -9,6 +9,8 @@
 
 #include <optional>
 
+#include <tt-metalium/constants.hpp>
+
 namespace ttnn::prim {
 
 namespace {
@@ -40,10 +42,15 @@ public:
             fp32_dest_acc_en == policy_->fp32_destination,
             "Named exp ring recipe expects fp32_dest_acc_en={} from its compute config",
             policy_->fp32_destination);
+        k_chunk_tiles_ = args.get_k_chunk_size() / tt::constants::TILE_HEIGHT;
+        has_logical_n_tensor_ = tensor_args.has_logical_n_tensor();
     }
 
     // Recipe matmul subblocks are fixed by the recipe schedule: (FP32 ? 1 : 2) x 4.
     std::optional<uint32_t> fixed_subblock_h() const override { return policy_->fp32_destination ? 1u : 2u; }
+
+    // The dense recipe's host rule (SDPA_RECIPE_QK_W / SDPA_RECIPE_PV_W come from the same helper).
+    uint32_t fixed_subblock_w(uint32_t tiles) const override { return exp_recipes::recipe_subblock_width(tiles); }
 
     bool replace_cbs(
         tt::tt_metal::ProgramDescriptor& desc,
@@ -56,8 +63,22 @@ public:
         // exp_ring::kRecipe{K,V}WriterAliasCb). Q is single-slot: recipes run pass-outer, so each pass's Q
         // chunk is read once, stays resident across its ring iterations and is popped before the next pass
         // reads its own; the recipe's second Q slot would be dead L1.
-        auto recipe_program = exp_recipes::recipe_compute_program(*policy_, sdpa_grid, 1, Sq_chunk_t);
+        auto recipe_program = exp_recipes::recipe_compute_program(*policy_, sdpa_grid, 1, Sq_chunk_t, k_chunk_tiles_, DHt);
         desc.cbs = std::move(recipe_program.cbs);
+        if (has_logical_n_tensor_) {
+            // The reader publishes the live logical_n (read from DRAM) to compute here; the exp-ring c_13 is
+            // the recipe's second denominator. UInt32, as read_tile_value indexes by the CB format.
+            constexpr uint32_t kDerivedPageBytes = 64;
+            desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+                .total_size = kDerivedPageBytes,
+                .core_ranges = sdpa_grid,
+                .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(exp_ring_cbs::kRecipeDerivedCb),
+                    .data_format = tt::DataFormat::UInt32,
+                    .page_size = kDerivedPageBytes,
+                }}},
+            });
+        }
         for (auto& cb : desc.cbs) {
             auto& format = cb.format_descriptors.front();
             if (format.buffer_index == 0) {
@@ -81,10 +102,11 @@ public:
     void check_l1(uint64_t cb_bytes, uint64_t usable_l1, uint32_t q_chunk_size) const override {
         TT_FATAL(
             cb_bytes <= usable_l1,
-            "Named exp ring SDPA recipe needs {} B of L1 per core at Q{}/K512 but only {} B are usable; use a "
-            "smaller q_chunk_size",
+            "Named exp ring SDPA recipe needs {} B of L1 per core at Q{}/K{} but only {} B are usable; use a "
+            "smaller q_chunk_size or k_chunk_size",
             cb_bytes,
             q_chunk_size,
+            k_chunk_tiles_ * tt::constants::TILE_HEIGHT,
             usable_l1);
     }
 
@@ -94,6 +116,8 @@ public:
 
 private:
     std::optional<exp_recipes::PrecisionPolicy> policy_;
+    uint32_t k_chunk_tiles_ = 0;
+    bool has_logical_n_tensor_ = false;
     std::optional<tt::tt_metal::KernelDescriptor::ConfigDescriptor> compute_config_;
 };
 

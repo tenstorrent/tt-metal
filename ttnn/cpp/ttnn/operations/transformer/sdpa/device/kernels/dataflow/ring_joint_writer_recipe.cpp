@@ -13,6 +13,8 @@
 
 struct RingJointWriterPolicy {
     static constexpr bool kResidentRingState = true;
+    // Common runtime arg 0: the internal state tensor (state_backing below).
+    static constexpr uint32_t kCommonArgCount = 1;
 #ifdef SDPA_RECIPE_FP32
     static constexpr bool kFp32State = true;
 #else

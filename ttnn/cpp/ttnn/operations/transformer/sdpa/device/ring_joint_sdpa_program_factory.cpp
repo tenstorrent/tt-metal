@@ -1343,7 +1343,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
     if (fixed_subblock_h) {
         qk_out_subblock_h = *fixed_subblock_h;
-        qk_out_subblock_w = ComputeVariant::kFixedSubblockW;
+        qk_out_subblock_w = variant.fixed_subblock_w(Sk_chunk_t);
     }
 
     // A fixed compute schedule ends an odd Q chunk with a partial row group.
@@ -1399,7 +1399,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         /*max_subblock_w=*/kt_inplace_v ? 1u : UINT32_MAX);
     if (fixed_subblock_h) {
         out_out_subblock_h = *fixed_subblock_h;
-        out_out_subblock_w = std::min<uint32_t>(ComputeVariant::kFixedSubblockW, vDHt);
+        out_out_subblock_w = variant.fixed_subblock_w(vDHt);
     }
     // Streaming compute may widen the QKT@V row group beyond the host matmul subblock
     // height for odd Q chunks. The writer must drain cb_out with the same row-group

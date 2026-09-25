@@ -67,6 +67,9 @@ public:
         return fp32_dest_acc_en ? 1u : 2u;
     }
 
+    // The dense recipe's host rule (SDPA_RECIPE_QK_W / SDPA_RECIPE_PV_W come from the same helper).
+    uint32_t fixed_subblock_w(uint32_t tiles) const override { return ring_recipes::recipe_subblock_width(tiles); }
+
     bool resident_ring_state() const override { return true; }
 
     uint32_t first_dataflow_cb_index() const override { return kFirstDataflowCb; }

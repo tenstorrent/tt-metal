@@ -160,7 +160,9 @@ def test_exp_ring_choice(name, heads, local, ring, variant):
     choice = choose("exp_ring", variant, heads, local, local, l1=PIPELINE_L1, ring_size=ring)
     assert choice is not None, name
     q, k, gx, gy, _cost, passes, _preferred, minimum = choice
-    assert supported("exp_ring", variant, q, k) and k == 512 and minimum <= PIPELINE_L1
+    # FAST keeps the legacy exp ring kernels (K512 only); B-E take any supported K in the search range.
+    assert supported("exp_ring", variant, q, k) and minimum <= PIPELINE_L1
+    assert k == 512 if variant == "A" else 256 <= k <= 512
     cols = gx - 1
     chunks = math.ceil(local / q)
     assert gy == GRID[1] and 3 <= cols <= GRID[0] - 1 and chunks % cols == 0

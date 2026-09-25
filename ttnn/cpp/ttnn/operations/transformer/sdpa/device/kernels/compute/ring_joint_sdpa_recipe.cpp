@@ -5,8 +5,9 @@
 // Ring joint SDPA compute for the named precision recipes B/C/D/E (FAST keeps ring_joint_sdpa.cpp).
 // Every active ring contribution continues one recurrent state (streaming/recipe_ring.hpp); only the last
 // active contribution normalizes. Compile-time and runtime arguments share the ring-joint layout built by
-// RingJointSDPARecipeMeshWorkloadFactory. Causal/balanced, sliding-window, chunked, KV-pad rotation,
-// attention-sink and device-tensor logical lengths are rejected on the host.
+// RingJointSDPARecipeMeshWorkloadFactory. Causal/balanced, sliding-window, chunked, KV-pad rotation and
+// attention sinks are rejected on the host. Device-tensor logical lengths arrive from the reader through
+// cb_kv_pad_derived. Any tile-aligned Q/K chunk and head dim (subblock widths: SDPA_RECIPE_QK_W/PV_W).
 
 #include <cstdint>
 
@@ -19,7 +20,10 @@
 // BF16 ring recipes do not fit the kernel config buffer at O2 on all three TRISCs.
 // Size-optimize only the pack thread: unpack/math at O2 recover most of the O2 speed
 // (Q256/K512 on 1x2: E_bfp4 2.08 -> 1.52 ms, B 2.11 -> 1.87 ms, legacy 1.53 ms).
-#if defined(WATCHER_ENABLED) || (!defined(SDPA_RECIPE_FP32) && defined(TRISC_PACK))
+// Outside the qualified geometries (SDPA_RECIPE_GENERIC_GEOMETRY, e.g. LOW_PRECISION BFP8 at Q96/K160/D96)
+// pack is size-optimized for every recipe and unpack too: pack alone leaves the program ~300 B over.
+#if defined(WATCHER_ENABLED) || ((!defined(SDPA_RECIPE_FP32) || defined(SDPA_RECIPE_GENERIC_GEOMETRY)) && defined(TRISC_PACK)) || \
+    (defined(SDPA_RECIPE_GENERIC_GEOMETRY) && defined(TRISC_UNPACK))
 #pragma GCC optimize("Os")
 #else
 #pragma GCC optimize("O2")
@@ -41,6 +45,9 @@
 #include "streaming/recipe_ring.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_indexer.hpp"
 #include "cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_rank_mapping.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
+
+namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
 void kernel_main() {
     constexpr uint32_t DHt = get_compile_time_arg_val(3);
@@ -52,11 +59,11 @@ void kernel_main() {
     constexpr uint32_t num_joint_k_chunks = get_compile_time_arg_val(17);
     constexpr uint32_t ring_size = get_compile_time_arg_val(19);
     constexpr uint32_t scale_fp32 = get_compile_time_arg_val(32);
-    constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(34);
-    constexpr uint32_t joint_l_partial_col = get_compile_time_arg_val(35);
+    constexpr uint32_t global_n_partial_col_ct = get_compile_time_arg_val(34);
+    constexpr uint32_t joint_l_partial_col_ct = get_compile_time_arg_val(35);
     // Slot 52: sharded joint (one L/P shard arrives per ring iteration). Slot 53: logical joint tiles.
     constexpr bool joint_is_sharded = get_compile_time_arg_val(52) == 1;
-    constexpr uint32_t logical_lt = get_compile_time_arg_val(53);
+    constexpr uint32_t logical_lt_ct = get_compile_time_arg_val(53);
     // Slots 54-57: transport-to-tensor rank mapping.
     constexpr bool full_mesh_rank_mapping = get_compile_time_arg_val(54) == 1;
     constexpr auto snake_orientation = static_cast<ttnn::ccl::snake_ring::Orientation>(get_compile_time_arg_val(55));
@@ -65,10 +72,11 @@ void kernel_main() {
     static_assert(
         get_compile_time_arg_val(36) == 0 && get_compile_time_arg_val(37) == 0 && get_compile_time_arg_val(39) == 0 &&
             get_compile_time_arg_val(41) == 0 && get_compile_time_arg_val(49) == 0 &&
-            get_compile_time_arg_val(50) == 0 && get_compile_time_arg_val(51) == 0 &&
-            get_compile_time_arg_val(59) == 0 && get_compile_time_arg_val(60) == 0,
-        "Named ring recipes reject causal/balanced, chunked, KV-pad rotation, sinks, sliding windows and "
-        "device-tensor lengths");
+            get_compile_time_arg_val(50) == 0 && get_compile_time_arg_val(51) == 0,
+        "Named ring recipes reject causal/balanced, chunked, KV-pad rotation, sinks and sliding windows");
+    // Slots 59-60: logical_n / logical_l arrive as device tensors; the compile-time values are placeholders.
+    constexpr bool has_logical_n_tensor = get_compile_time_arg_val(59) == 1;
+    constexpr bool has_logical_l_tensor = get_compile_time_arg_val(60) == 1;
 
     constexpr bool has_joint_k = num_joint_k_chunks > 0;
     constexpr bool has_gathered_joint_k = joint_is_sharded && has_joint_k;
@@ -82,9 +90,9 @@ void kernel_main() {
     const uint32_t ring_index_runtime = get_arg_val<uint32_t>(argidx++);
     const uint32_t forward_writes_expected = get_arg_val<uint32_t>(argidx++);
     const uint32_t backward_writes_expected = get_arg_val<uint32_t>(argidx++);
-    const uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
+    uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
     argidx += 4;  // KV-pad Q mapping (rotation is rejected)
-    const uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
+    uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
 
     RingSDPAOpIndexer fused_op_indexer(
         ring_size_runtime, ring_index_runtime, forward_writes_expected, backward_writes_expected);
@@ -101,6 +109,28 @@ void kernel_main() {
     constexpr uint32_t cb_max_B = get_compile_time_arg_val(cb_arg_offset + 19);
     constexpr uint32_t cb_sum_A = get_compile_time_arg_val(cb_arg_offset + 20);
     constexpr uint32_t cb_sum_B = get_compile_time_arg_val(cb_arg_offset + 21);
+    constexpr uint32_t cb_kv_pad_derived = get_compile_time_arg_val(cb_arg_offset + 23);
+
+    // Live lengths (and the ring work mask re-derived from them) from the reader, which read the device
+    // tensors; compute cannot NoC-read DRAM. Must precede compute_kernel_hw_startup: read_tile_value
+    // rendezvouses UNPACK -> MATH/PACK through the mailboxes.
+    uint32_t global_n_partial_col = global_n_partial_col_ct;
+    uint32_t joint_l_partial_col = joint_l_partial_col_ct;
+    uint32_t logical_lt = logical_lt_ct;
+    if constexpr (has_logical_n_tensor || has_logical_l_tensor) {
+        CircularBuffer derived(cb_kv_pad_derived);
+        derived.wait_front(1);
+        logical_nt = ckernel::read_tile_value(cb_kv_pad_derived, 0, ring_joint::kDerivedLogicalNt);
+        active_ring_iter_mask = ckernel::read_tile_value(cb_kv_pad_derived, 0, ring_joint::kDerivedActiveRingIterMask);
+        if constexpr (has_logical_n_tensor) {
+            global_n_partial_col = ckernel::read_tile_value(cb_kv_pad_derived, 0, ring_joint::kDerivedGlobalNPartialCol);
+        }
+        if constexpr (has_logical_l_tensor) {
+            logical_lt = ckernel::read_tile_value(cb_kv_pad_derived, 0, ring_joint::kDerivedLogicalLt);
+            joint_l_partial_col = ckernel::read_tile_value(cb_kv_pad_derived, 0, ring_joint::kDerivedJointLPartialCol);
+        }
+        derived.pop_front(1);
+    }
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_qk_im);
     matmul_init(cb_q_in, cb_k_in);

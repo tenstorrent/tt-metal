@@ -25,11 +25,11 @@ kernels.
 | # | Task | Status |
 | --- | --- | --- |
 | 1 | Contract + input recommendations docs | done (5cffae00) |
-| 2 | Generic kernel geometry: any tile-aligned Q/K/D within L1; Q256/K512/D128 fast path unchanged | dense + joint done and validated (sweep of 25 geometries x 7 variants x 3 regimes green on bh-38; frozen digests unchanged; ring 897 / exp 131 unchanged); ring/exp geometry in progress (`cglagovich/sdpa-recipe-ring-geometry`) |
+| 2 | Generic kernel geometry: any tile-aligned Q/K/D within L1; Q256/K512/D128 fast path unchanged | dense + joint done and validated (sweep of 25 geometries x 7 variants x 3 regimes green on bh-38; frozen digests unchanged; ring 897 / exp 131 unchanged); ring/exp geometry done (`cglagovich/sdpa-recipe-ring-geometry` @ cfd70ad9, merged): any tile-aligned Q 32-1024/K/D within L1 for B-E; 98 prior-qualified ring/exp digests unchanged |
 | 3 | Op-selected blocking and grid; `program_config` becomes an optional override | done (`cglagovich/sdpa-recipe-auto-blocking` @ 4ad8b204, merged); device checks green; auto/tuned trace time geomean 0.89 over 67 DiT cases (worst 1.10, H3 exp ring A) |
 | 4 | Recipe-owned program factories for ring and exp ring (no `#ifdef` forks in legacy kernels) | done (`cglagovich/sdpa-recipe-ring-factories` @ 4b65adf7, merged); legacy kernels byte-identical in 204/206 configs, ring/exp/continuation/mesh green, perf unchanged |
 | 5 | FAST on the shared recipe loop (bit-identical to A's frozen digests) | planned |
-| 6 | DiT gaps: masks, device-tensor logical lengths, exp ring geometry | masks done (`cglagovich/sdpa-recipe-masks` @ f365ffc8, merged; 131 mask tests, unmasked digests unchanged); lengths/exp geometry after task 4 |
+| 6 | DiT gaps: masks, device-tensor logical lengths, exp ring geometry | masks done (`cglagovich/sdpa-recipe-masks` @ f365ffc8, merged); device-tensor `logical_n`/`logical_l` (ring) and `logical_n` (exp ring) done with ring geometry; exp ring geometry done |
 | 7 | No global default flip (user, 2026-09-24): every SDPA-variant call in `models/tt_dit` passes an explicit recipe; drop its compute configs and chunk tuning tables; per-model accuracy/speed parity gates vs its legacy setup | in progress |
 | 8 | Restack into reviewable PRs | planned |
 
@@ -84,6 +84,15 @@ source; the consolidation lands on `cglagovich/sdpa-recipes-consolidate`.
   The legacy streaming kernel (`compute_streaming.hpp`) uses the same reinit, so legacy SDPA with
   a LoFi compute config and a one-tile-wide QK subblock is likely affected too (inferred from
   code, not reproduced).
+
+## Ring / exp ring geometry notes
+
+- The single list of supported ring/exp geometry is `recipe_geometry_rejection`
+  (`validate_recipe_geometry` for the op, the blocking chooser for auto chunks).
+- FAST (A) keeps the legacy ring kernels and their qualified set (Q 128-320, K 256/384/512,
+  D 64/128/256; exp K512/D128).
+- Fixed: the ring recipe writer read `logical_n` from the state-tensor common arg (hang with
+  device-tensor lengths); the exp ring writer used the reduce-scaler CB for the length.
 
 ## Task 6 notes (masks)
 

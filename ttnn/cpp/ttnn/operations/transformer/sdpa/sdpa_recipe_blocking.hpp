@@ -34,7 +34,7 @@ enum class RecipeOp : uint8_t { Dense, Joint, Ring, ExpRing };
 // filtered by `recipe_geometry_rejection`; this range only bounds the search to where the cost
 // model is fitted: Q from 128 rows and K from 256 to 512 rows (shorter only when the whole
 // sequence is shorter). Smaller blocks are overhead-dominated and K > 512 is not yet measured;
-// a caller may still pass any supported chunk explicitly.
+// a caller may still pass any supported chunk explicitly (any tile-aligned geometry for B-E).
 inline constexpr uint32_t kRecipeSearchMinQTiles = 4;
 inline constexpr uint32_t kRecipeSearchMaxQTiles = 32;
 inline constexpr uint32_t kRecipeSearchMinKTiles = 8;
@@ -44,6 +44,10 @@ inline constexpr uint32_t kRecipeSearchMaxKTiles = 16;
 // This is shape support only; L1 fit is `recipe_l1_bytes`.
 std::optional<std::string> recipe_geometry_rejection(
     RecipeOp op, const PrecisionPolicy& policy, uint32_t q_tiles, uint32_t k_tiles, uint32_t d_tiles);
+
+// TT_FATAL unless the chunk sizes and head dim are tile-aligned and recipe_geometry_rejection accepts them.
+void validate_recipe_geometry(
+    RecipeOp op, const PrecisionPolicy& policy, uint32_t q_chunk_size, uint32_t k_chunk_size, uint32_t head_dim);
 
 inline bool recipe_geometry_supported(
     RecipeOp op, const PrecisionPolicy& policy, uint32_t q_tiles, uint32_t k_tiles, uint32_t d_tiles) {

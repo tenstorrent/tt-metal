@@ -333,9 +333,12 @@ void kernel_main() {
     uint32_t logical_nt = logical_nt_ct;
     [[maybe_unused]] uint32_t global_n_partial_col_live = global_n_partial_col;
     if constexpr (has_logical_n_tensor) {
-        // Borrow cb_mask_in's L1 as read scratch: this runs before the mask tiles are generated into it.
+        // Borrow cb_mask_in's L1 as read scratch: this runs before the mask tiles are generated into it. A policy
+        // without mask tiles (the recipes) has no mask CB and c_3 holds its reduce scaler, generated above; it
+        // borrows cb_out instead, which no output has reached yet.
+        constexpr uint32_t length_scratch_cb = Policy::kGeneratesMaskTiles ? cb_mask_in : cb_out;
         logical_n = trace_metadata::read_metadata_scalar_u32(
-            noc, logical_n_args, get_common_arg_val<uint32_t>(0), CircularBuffer(cb_mask_in).get_write_ptr());
+            noc, logical_n_args, get_common_arg_val<uint32_t>(0), CircularBuffer(length_scratch_cb).get_write_ptr());
         ASSERT(logical_n >= 1);
         logical_nt = ring_joint::tiles_for(logical_n);
         global_n_partial_col_live = ring_joint::tile_partial_col(logical_n);
