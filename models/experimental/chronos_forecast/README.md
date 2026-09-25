@@ -27,7 +27,7 @@ Chronos-1 tokenizer only:
 PYTHONPATH=. python models/experimental/chronos_forecast/demo/demo.py --tokenizer-only --context-length 16
 ```
 
-## Single-chip TTNN trace
+## TTNN trace
 
 The fixed paper benchmark (`batch=1024`, context `2048`, forecast `64`) has a
 device-resident path and an address-stable TTNN trace runner. It keeps the
@@ -51,6 +51,59 @@ PYTHONPATH=. pytest \
   models/experimental/chronos_forecast/tests/perf/test_paper_forward_trace.py \
   -s
 ```
+
+## Data parallel (4, 8, 16, 32 chips)
+
+Opening `TtChronos` on a mesh device runs it data parallel, with no chip-to-chip
+traffic:
+
+- Weights are copied to every chip.
+- `upload_inputs` splits the series along dim 0, and `postprocess_output`
+  concatenates the per-chip outputs.
+- Time attention stays within a series, and group attention stays within a
+  group, so each chip runs the single-chip model on its share.
+- Unique-group batches are padded with dummy series to a multiple of the chip
+  count.
+- Grouped batches are packed into whole blocks with the block count padded to a
+  multiple of the chip count, so no group spans two chips.
+
+The PCC, accuracy and trace tests are parametrized over `1`, `4`, `(1, 8)`,
+`(2, 8)` and `(4, 8)`. Shapes larger than the machine are skipped.
+
+```bash
+PYTHONPATH=. pytest -s \
+  models/experimental/chronos_forecast/tests/pcc/test_paper_shape_pcc.py \
+  models/experimental/chronos_forecast/tests/pcc/test_trace.py
+PYTHONPATH=. pytest -s \
+  models/experimental/chronos_forecast/tests/perf/test_paper_forward_trace.py \
+  -k data_parallel
+```
+
+`TtChronosTraceRunner.stream(items, prepare)` prepares batch i+1 on the host
+while replay i runs, for back-to-back batches.
+
+Paper shape (1024 series, performance precision, L1-resident, unique groups) on
+p150a cards:
+
+| Chips | Series per chip | Replay | Serial end-to-end | Streamed per batch | Streamed series/s |
+|---|---|---|---|---|---|
+| 1 | 1024 | 260 ms | 322 ms | 311 ms | 3,290 |
+| 4 | 256 | 69 ms | 113 ms | 97 ms | 10,570 |
+
+On 4 chips, replay is 3.77× faster than one chip (94% scaling efficiency). With
+groups of 4, replay is 106 ms (3.61×) and a streamed batch takes 129 ms. The
+remaining host cost is serial readback (about 20 ms) and upload (about 9 ms).
+Per-chip replay times from single-chip runs put 8, 16 and 32 chips at about
+32, 16 and 9 ms, so from 16 chips up the host limits throughput unless readback
+also overlaps the replay.
+
+Blackhole Galaxy bring-up:
+
+- Run the commands above there. The perf report prints the worker grid.
+- The L1 chunk budgets (`_L1_CHUNK_TOKENS_*` in `tt/program_configs.py`) were
+  measured on the p150a's 11x10 grid. `TtChronos` logs a warning on any other
+  grid; if you see it, re-measure the budgets on one chip with
+  `sweeps/sweep_l1_chunk.py`.
 
 
 ## tests/meanings
