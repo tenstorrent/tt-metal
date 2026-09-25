@@ -1,39 +1,21 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Exercise real adapter seed decisions without importing TTNN or opening devices."""
+"""Exercise real adapter seed decisions without opening devices."""
 
-import ast
 import os
-import secrets
 import unittest
 from collections import Counter
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import torch
 
-ROOT = Path(__file__).resolve().parents[2]
-
-
-def load_definition(filename, name, *, method=None):
-    """Load the unchanged definition from source, excluding hardware imports."""
-    path = ROOT / "tt" / filename
-    tree = ast.parse(path.read_text(), filename=str(path))
-    node = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == name)
-    if method is not None:
-        node = next(node for node in node.body if isinstance(node, ast.FunctionDef) and node.name == method)
-    namespace = dict(torch=torch, os=os, secrets=secrets)
-    exec(compile(ast.Module(body=[node], type_ignores=[]), str(path), "exec"), namespace)
-    return namespace[method or name]
-
-
-Adapter = load_definition("generator_vllm.py", "Qwen38ForCausalLM")
-set_batch_sampling_params = load_definition("generator.py", "Qwen38Generator", method="set_batch_sampling_params")
+from models.demos.qwen38_27b_qb2.tt.generator import Qwen38Generator
+from models.demos.qwen38_27b_qb2.tt.generator_vllm import Qwen38ForCausalLM as Adapter
 
 
 class FakeGenerator:
-    set_batch_sampling_params = set_batch_sampling_params
+    set_batch_sampling_params = Qwen38Generator.set_batch_sampling_params
 
     def __init__(self):
         self.cache = object()
