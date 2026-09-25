@@ -103,6 +103,11 @@ class TtCSACompressor(TtHCACompressor):
             ),
             self._scalar_buffer(ttnn.uint32, shape=(1, 1), layout=ttnn.ROW_MAJOR_LAYOUT),
         )
+        T = S // C.TILE  # tiles of rows in the chunk; a rate-4 group never crosses a tile
+
+        def tiled(mat, batch):  # one [32, 32] 0/1 matrix per tile, batched for ttnn.matmul over [1, batch, 32, W]
+            return self._f32(mat.expand(batch, C.TILE, C.TILE).contiguous().view(1, batch, C.TILE, C.TILE))
+
         self._pool_consts = {
             "G": self._f32(C.group_sum_matrix(S, rate).view(1, 1, n, S)),
             "Sh": self._f32(C.shift_matrix(n).view(1, 1, n, n)),
@@ -110,6 +115,19 @@ class TtCSACompressor(TtHCACompressor):
             "P0": self._f32(C.first_window_matrix(n).view(1, 1, n, C.TILE)),
             "BIAS": self._f32(C.bias_rows(self._bias_host, S).view(1, 1, S, 2 * W)),
             "rows": S,
+            "T": T,
+            # per-group softmax max (DS4F-0272): within-tile shifts / selectors, batched per tile and for the 1-tile prior
+            "P1": tiled(C.tile_shift_matrix(1), T),
+            "P2": tiled(C.tile_shift_matrix(2), T),
+            "Q": tiled(C.group_first_matrix(rate), T),
+            "P1p": tiled(C.tile_shift_matrix(1), 1),
+            "P2p": tiled(C.tile_shift_matrix(2), 1),
+            "Qp": tiled(C.group_first_matrix(rate), 1),
+            "P4": tiled(C.tile_shift_matrix(rate), T),  # rows r >= rate take row r - rate ... via the transpose below
+            "P4T": tiled(C.tile_shift_matrix(rate).t(), T),
+            "Rprev": tiled(C.prev_tile_matrix(rate), T),
+            "Rnext": tiled(C.next_tile_matrix(rate), T),
+            "B0": tiled(C.row0_broadcast_matrix(), 1),
         }
         self._prior_index = {}
 
@@ -186,6 +204,56 @@ class TtCSACompressor(TtHCACompressor):
             )
         return ttnn.slice(x, pair[0], pair[1], slice_dim=2, num_devices=S // C.TILE)
 
+    def _stabilised_exp(self, g_a, g_b, pg, K, S: int, W: int):
+        """Softmax numerators with a PER-GROUP max (DS4F-0272). Entry j pools window j's b rows, window j-1's a rows
+        (the prior's last window for j = 0); its constant M_j is the max over exactly those rows, so no member's exponent
+        underflows. The previous code subtracted one per-channel max over the whole 5120-token chunk: softmax-invariant on
+        paper, but every group more than ~87 below the chunk max had exp -> 0 in fp32 and the entry became 0/0 (layer 40
+        on ordinary text at 41k tokens; the blaze ring and the torch reference, which take per-window softmaxes, are fine).
+
+        All in fp32 TILE layout: the chunk is viewed as [1, T, 32, W] tiles; a rate-4 group never crosses a tile, so the
+        group max is two within-tile shift-and-max steps + a group-first selector (0/1 matmuls, exact). The previous
+        window's a-max needs one tile-granular shift (tile 0's predecessor is the prior block). Every exponent argument
+        is clamped to <= 0: members have g - M <= 0 by construction, and the clamp stops the rows that are NOT members
+        of the group they are shifted against (the last window's a rows, the unselected prior rows -- both multiplied
+        by 0 downstream) from producing inf, which 0 * inf would turn into NaN."""
+        T, tile = K["T"], C.TILE
+        mm = self._mm
+
+        def group_max(X, P1, P2, Q):  # every row -> the max of its rate-row group
+            m1 = ttnn.maximum(X, mm(P1, X))
+            m = ttnn.maximum(m1, mm(P2, m1))
+            return mm(Q, m)
+
+        Xb = ttnn.reshape(g_b, [1, T, tile, W])
+        Xa = ttnn.reshape(g_a, [1, T, tile, W])
+        mb = group_max(Xb, K["P1"], K["P2"], K["Q"])
+        ma = group_max(Xa, K["P1"], K["P2"], K["Q"])
+        mp = group_max(pg, K["P1p"], K["P2p"], K["Qp"])  # [1, 1, 32, W]; rows 28..31 = the prior's selected window
+        prev_tiles = ttnn.concat(
+            [mp, ttnn.slice(ma, [0, 0, 0, 0], [1, T - 1, tile, W])], dim=1
+        )  # tile t-1 (t=0: prior)
+        # a-max of the previous window at every row: rows >= rate from the same tile (row r - rate), rows < rate from the
+        # previous tile's last group
+        ma_prev = ttnn.add(mm(K["P4T"], ma), mm(K["Rprev"], prev_tiles))
+        M_b = ttnn.maximum(mb, ma_prev)  # M_j on every row of window j
+        # a rows of window i pool into entry i+1: M at row r + rate; the last group of each tile reads the next tile's
+        # first group (the last tile: itself -- those rows are unused)
+        next_tiles = ttnn.concat(
+            [ttnn.slice(M_b, [0, 1, 0, 0], [1, T, tile, W]), ttnn.slice(M_b, [0, T - 1, 0, 0], [1, T, tile, W])], dim=1
+        )
+        M_a = ttnn.add(mm(K["P4"], M_b), mm(K["Rnext"], next_tiles))
+        M_p = mm(K["B0"], ttnn.slice(M_b, [0, 0, 0, 0], [1, 1, tile, W]))  # entry 0's constant on every prior row
+        lo = -3.0e38
+
+        def stab(g, M):
+            return ttnn.exp(ttnn.clamp(ttnn.subtract(g, M), lo, 0.0))
+
+        E_b = ttnn.reshape(stab(Xb, M_b), [1, 1, S, W])
+        E_a = ttnn.reshape(stab(Xa, M_a), [1, 1, S, W])
+        E_p = stab(pg, M_p)
+        return E_a, E_b, E_p
+
     def forward(
         self, hidden_states, seq_len_actual: int, first_window_position: int, prior: tuple, need_mask: bool = True
     ):
@@ -205,12 +273,7 @@ class TtCSACompressor(TtHCACompressor):
         kv_a, kv_b = ttnn.slice(kv, [0, 0, 0, 0], [1, 1, S, W]), ttnn.slice(kv, [0, 0, 0, W], [1, 1, S, 2 * W])
         g_a, g_b = ttnn.slice(gate, [0, 0, 0, 0], [1, 1, S, W]), ttnn.slice(gate, [0, 0, 0, W], [1, 1, S, 2 * W])
         pk, pg = prior
-        # one per-channel constant for the whole chunk (softmax-invariant, keeps exp in range)
-        M = ttnn.maximum(
-            ttnn.maximum(ttnn.max(g_a, dim=2, keepdim=True), ttnn.max(g_b, dim=2, keepdim=True)),
-            ttnn.max(pg, dim=2, keepdim=True),
-        )
-        E_a, E_b, E_p = ttnn.exp(ttnn.subtract(g_a, M)), ttnn.exp(ttnn.subtract(g_b, M)), ttnn.exp(ttnn.subtract(pg, M))
+        E_a, E_b, E_p = self._stabilised_exp(g_a, g_b, pg, K, S, W)
         den_b, num_b = self._mm(K["G"], E_b), self._mm(K["G"], ttnn.multiply(E_b, kv_b))
         den_a, num_a = self._mm(K["G"], E_a), self._mm(K["G"], ttnn.multiply(E_a, kv_a))
         den_a = ttnn.add(self._mm(K["Sh"], den_a), self._mm(K["P0"], self._mm(K["Sel"], E_p)))

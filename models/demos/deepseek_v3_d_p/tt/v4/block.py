@@ -391,9 +391,14 @@ class TtV4PrefillBlock(LightweightModule):
             self.attn.glue_chunk(state, outs, real_len, export)
             a2 = A2.replay()
             y = a2[0]
+            if getattr(on_layer_hidden, "detail", False):  # DS4F-0272 probe: island outputs before the epilogue writes
+                on_layer_hidden(f"{self.layer_idx}:A1.outs", list(outs))
+                on_layer_hidden(f"{self.layer_idx}:A2.rest", list(a2[1:]))
             self.attn.epilogue_chunk(state, outs, a2, export, real_len)
         else:
             y = self.attn(h, seq_len_actual=real_len, state=state, export=self._export_target(caches, slot))
+        if getattr(on_layer_hidden, "detail", False):
+            on_layer_hidden(f"{self.layer_idx}:attn.y", [y])
         if on_layer_complete is not None:
             on_layer_complete(self.layer_idx)  # the runtime decides when (and whether) to drain the device first
         if self.kv_only:
@@ -471,6 +476,8 @@ class TtV4PrefillBlock(LightweightModule):
         state.fresh = False  # the attention below writes this slot's state
         y = self.attn(h, seq_len_actual=real_len, state=state, export=self._export_target(caches, slot))
         ttnn.deallocate(h)
+        if getattr(on_layer_hidden, "detail", False):  # DS4F-0272 probe
+            on_layer_hidden(f"{self.layer_idx}:attn.y", [y])
         if on_layer_complete is not None:
             on_layer_complete(self.layer_idx)  # the runtime drains the device before the ack fires (per layer or chunk)
         if self.kv_only:
@@ -485,6 +492,8 @@ class TtV4PrefillBlock(LightweightModule):
         # actual_start=0: this block's chunk is laid out contiguously from SP row 0 (no block-cyclic rotation)
         moe_out, _ = self.moe(h3, input_ids=input_ids if self.hash_layer else None, actual_isl=real_len, actual_start=0)
         moe_out = ttnn.reshape(moe_out, [1, 1, S_l, D_l])
+        if getattr(on_layer_hidden, "detail", False):
+            on_layer_hidden(f"{self.layer_idx}:moe.out", [moe_out])
         streams = self.ffn_hc.mix(streams, moe_out, post, comb)
         ttnn.deallocate(moe_out)
         if on_layer_hidden is not None:

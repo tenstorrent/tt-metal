@@ -159,6 +159,7 @@ class TtV4PrefillRuntime:
         )
         logger.info(f"[v4 runtime] trace islands captured: {len(self.model.layers)} layers, {segs} trace segments")
         self._log_dram("after capture_trace")
+        self._log_state_addresses()
 
     def _log_dram(self, tag: str) -> None:
         """Per-bank DRAM occupancy (the chunk-10240 43-layer run OOMed at 4.026 of 4.071 GB per bank, DS4F-0260)."""
@@ -171,6 +172,25 @@ class TtV4PrefillRuntime:
             )
         except Exception as e:  # informational only
             logger.info(f"[v4 runtime] DRAM {tag}: memory view unavailable ({type(e).__name__})")
+
+    def _log_state_addresses(self) -> None:
+        """PREFILL_DRAM_ADDR_DUMP=1 (DS4F-0272): bank-local DRAM address + shape of every per-slot attention state tensor
+        (CSA compressed_kv / index_k / slab_rm / score_mask, HCA compressed_kv / tail, sliding_carry) after the lazies exist,
+        so a failure that starts at a fixed row can be checked against an address boundary (2^31, 2^32)."""
+        if os.environ.get("PREFILL_DRAM_ADDR_DUMP", "0") != "1":
+            return
+        names = ("compressed_kv", "index_k", "slab_rm", "score_mask", "sliding_carry", "tail")
+        for layer in getattr(self.model, "layers", []):
+            for slot, st in sorted(getattr(layer, "states", {}).items()):
+                parts = []
+                for n in names:
+                    t = getattr(st, n, None)
+                    if isinstance(t, ttnn.Tensor):
+                        try:
+                            parts.append(f"{n}@{int(t.buffer_address()):#x} {tuple(t.padded_shape)} {t.dtype}")
+                        except Exception as e:  # informational only
+                            parts.append(f"{n}: address unavailable ({type(e).__name__})")
+                logger.info(f"[v4 addr] layer {layer.layer_idx} slot {slot}: " + "; ".join(parts))
 
     def release_trace(self) -> None:
         """The engine's shutdown hook (prefill_runner calls ``runtime.release_trace`` before ``close_mesh_device``):
@@ -351,6 +371,9 @@ class TtV4PrefillRuntime:
             ts = list(streams) if isinstance(streams, (list, tuple)) else [streams]
             parts = []
             for si, t in enumerate(ts):
+                if not isinstance(t, ttnn.Tensor):
+                    parts.append(f"s{si}: {type(t).__name__}")
+                    continue
                 mx, bad_chips, n_bad_total, first = 0.0, 0, 0, None
                 for ci, d in enumerate(ttnn.get_device_tensors(t)):
                     x = ttnn.to_torch(d).float().reshape(-1, t.shape[-1])
@@ -370,6 +393,8 @@ class TtV4PrefillRuntime:
                 parts.append(s)
             logger.info(f"[v4 probe] chunk @{actual_start} layer {layer_idx}: " + " | ".join(parts))
 
+        # PREFILL_HIDDEN_PROBE_DETAIL=1: the block also reports the attention output (and the island outputs) per layer
+        hook.detail = os.environ.get("PREFILL_HIDDEN_PROBE_DETAIL", "0") == "1"
         return hook
 
     _pending_ack = None  # lag1: (MeshEvent, [layer ids], chunk start) of the last issued, not yet acked chunk

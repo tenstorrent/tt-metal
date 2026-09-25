@@ -109,17 +109,24 @@ def _one_chip(mesh_device, t):
     )
 
 
+@pytest.mark.parametrize("spike", [False, True], ids=["smooth", "spike"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, sp_axis, tp_axis", _MESH_CONFIGS, indirect=["mesh_device", "device_params"]
 )
-def test_csa_compressor_entries(mesh_device, device_params, sp_axis, tp_axis):
-    """Two chunks through the compressor alone: the second chunk's window 0 takes the first chunk's last Ca rows."""
+def test_csa_compressor_entries(mesh_device, device_params, sp_axis, tp_axis, spike):
+    """Two chunks through the compressor alone: the second chunk's window 0 takes the first chunk's last Ca rows.
+
+    ``spike``: three tokens scaled x100 so their gate scores sit far above the rest of the chunk (DS4F-0272: the
+    real layer 40 does this on ordinary text). The pooling softmax must be stabilised PER GROUP -- one per-channel max
+    over the whole chunk underflows every other group's exp to 0 in fp32 and the entries become 0/0."""
     torch.manual_seed(_SEED)
     cfg = deepseek_v4_flash_hf_config(num_hidden_layers=4)
     ref = _ref_layer(cfg)
     sp = mesh_device.shape[sp_axis]
     S1, S2 = 1024, 1024
     hidden = torch.randn(1, S1 + S2, cfg.hidden_size)
+    if spike:
+        hidden[0, [37, 1201, 1700]] *= 100.0
     q_res = torch.randn(1, S1 + S2, cfg.q_lora_rank)
     from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 import DeepseekV4CSACache
 
@@ -144,8 +151,9 @@ def test_csa_compressor_entries(mesh_device, device_params, sp_axis, tp_axis):
         got.append(_one_chip(mesh_device, entries)[0, 0].float())
         assert tuple(mask_block.shape) == (1, 1, S1 // sp, cap)
     got = torch.cat(got, 0)
+    assert torch.isfinite(got).all(), f"non-finite entries: {(~torch.isfinite(got)).sum().item()} values"
     ok, pcc = comp_pcc(all_entries.float(), got, _COMPRESSOR_PCC)
-    logger.info(f"CSA compressor entries PCC {pcc} (two chunks of {S1})")
+    logger.info(f"CSA compressor entries PCC {pcc} (two chunks of {S1}, spike={spike})")
     assert ok, pcc
 
 

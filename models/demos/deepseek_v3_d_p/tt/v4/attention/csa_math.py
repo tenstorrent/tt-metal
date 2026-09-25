@@ -57,6 +57,52 @@ def first_window_matrix(n: int) -> torch.Tensor:
     return P0
 
 
+def tile_shift_matrix(k: int) -> torch.Tensor:
+    """[32, 32] with (P @ X)[r] = X[r + k] for r + k < 32, else 0: shift rows UP by k inside one tile."""
+    P = torch.zeros(TILE, TILE)
+    for r in range(TILE - k):
+        P[r, r + k] = 1.0
+    return P
+
+
+def group_first_matrix(rate: int = RATE) -> torch.Tensor:
+    """[32, 32] with (Q @ X)[r] = X[rate * (r // rate)]: every row takes its group's FIRST row."""
+    Q = torch.zeros(TILE, TILE)
+    for r in range(TILE):
+        Q[r, rate * (r // rate)] = 1.0
+    return Q
+
+
+def prev_tile_matrix(rate: int = RATE) -> torch.Tensor:
+    """[32, 32] with (R @ Y)[r] = Y[32 - rate + r] for r < rate (the previous tile's LAST group), else 0."""
+    R = torch.zeros(TILE, TILE)
+    for r in range(rate):
+        R[r, TILE - rate + r] = 1.0
+    return R
+
+
+def next_tile_matrix(rate: int = RATE) -> torch.Tensor:
+    """[32, 32] with (R @ Y)[r] = Y[r - (32 - rate)] for r >= 32 - rate (the next tile's FIRST group), else 0."""
+    R = torch.zeros(TILE, TILE)
+    for r in range(TILE - rate, TILE):
+        R[r, r - (TILE - rate)] = 1.0
+    return R
+
+
+def row0_broadcast_matrix() -> torch.Tensor:
+    """[32, 32] with (B @ X)[r] = X[0] for every r."""
+    B = torch.zeros(TILE, TILE)
+    B[:, 0] = 1.0
+    return B
+
+
+def group_max_rows(x: torch.Tensor, rate: int = RATE) -> torch.Tensor:
+    """Host mirror of the device's per-group max: ``x [rows, W]`` -> the same shape, every row holding the max of its
+    ``rate``-row group (rows are grouped from row 0; ``rows % rate == 0``)."""
+    rows, W = x.shape
+    return x.view(rows // rate, rate, W).max(1).values.repeat_interleave(rate, 0)
+
+
 def bias_rows(position_bias: torch.Tensor, S: int) -> torch.Tensor:
     """[S, 2W]: row s carries position_bias[s % rate]."""
     return position_bias.float().repeat(S // position_bias.shape[0], 1)
@@ -77,8 +123,22 @@ def pool_entries(kv: torch.Tensor, gate: torch.Tensor, position_bias: torch.Tens
     kv_a, kv_b = kv[:, :W], kv[:, W:]
     g_a, g_b = gate[:, :W], gate[:, W:]
     pk, pg = prior
-    M = torch.maximum(torch.maximum(g_a.max(0).values, g_b.max(0).values), pg.max(0).values)  # [W]
-    E_a, E_b, E_p = torch.exp(g_a - M), torch.exp(g_b - M), torch.exp(pg - M)
+    # Softmax stabilisation PER GROUP (DS4F-0272). Entry j pools the b-series rows of window j, the a-series rows of window
+    # j-1 (the prior's last window for j = 0); its constant M_j = max over exactly those rows. A single per-channel max over
+    # the whole chunk (the previous code) is softmax-invariant on paper but underflows exp to 0 in fp32 for every group
+    # sitting more than ~87 below the chunk-wide max -> 0/0 entries; the real DeepSeek-V4-Flash layer 40 does that on
+    # ordinary text at 41k tokens. The min(., 0) guard keeps rows that are NOT members of the group they are shifted
+    # against (the last window's a rows, the unselected prior rows) from overflowing; members always have g - M <= 0.
+    mb = group_max_rows(g_b, rate)  # row r: max of the b rows of r's window
+    ma = group_max_rows(g_a, rate)  # row r: max of the a rows of r's window
+    mp = group_max_rows(pg, rate)[TILE - rate :]  # the prior's last window (the rows Sel picks), [rate, W]
+    ma_prev = torch.cat([mp, ma[:-rate]], 0)  # row r: a-max of the PREVIOUS window (window -1 = the prior)
+    M_b = torch.maximum(mb, ma_prev)  # M_j on every row of window j
+    M_a = torch.cat([M_b[rate:], M_b[-rate:]], 0)  # a rows of window i pool into entry i+1 (the last window: unused)
+    M_p = M_b[0:1].expand(TILE, W)  # the prior block belongs to entry 0
+    E_a = torch.exp(torch.clamp(g_a - M_a, max=0.0))
+    E_b = torch.exp(torch.clamp(g_b - M_b, max=0.0))
+    E_p = torch.exp(torch.clamp(pg - M_p, max=0.0))
     G, Sh, Sel, P0 = group_sum_matrix(S, rate), shift_matrix(n), prior_select_matrix(rate), first_window_matrix(n)
     den_b, num_b = G @ E_b, G @ (E_b * kv_b)
     den_a_win, num_a_win = G @ E_a, G @ (E_a * kv_a)
