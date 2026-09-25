@@ -46,6 +46,10 @@ void SubtractAtTargetDeviceOperation::validate_on_program_cache_miss(
     check_tensor(tensor_args.input, "input", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
     check_tensor(tensor_args.target, "target", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::UINT32);
 
+    auto* device = tensor_args.input.device();
+    TT_FATAL(device != nullptr, "SubtractAtTarget: input must be on a (mesh) device");
+    TT_FATAL(tensor_args.target.device() == device, "SubtractAtTarget: target must be on the same device as input");
+
     TT_FATAL(
         tensor_args.input.logical_shape().rank() == 4U,
         "SubtractAtTarget: input must be rank 4, got rank {}",
@@ -74,12 +78,15 @@ void SubtractAtTargetDeviceOperation::validate_on_program_cache_miss(
         target_pages,
         input_nc_pages);
 
-    TT_FATAL(args.local_V > 0U, "SubtractAtTarget: local_V must be > 0");
+    const uint32_t logical_width = tensor_args.input.logical_shape()[-1];
+    TT_FATAL(
+        args.local_V == logical_width,
+        "SubtractAtTarget: local_V ({}) must equal input logical width ({})",
+        args.local_V,
+        logical_width);
 
+    const auto mesh_shape = device->shape();
     if (args.cluster_axis.has_value()) {
-        auto* device = tensor_args.input.device();
-        TT_FATAL(device != nullptr, "SubtractAtTarget: input must be on a (mesh) device");
-        const auto mesh_shape = device->shape();
         TT_FATAL(
             *args.cluster_axis < mesh_shape.dims(),
             "SubtractAtTarget: cluster_axis ({}) is out of range for mesh shape with {} dim(s)",
@@ -87,12 +94,25 @@ void SubtractAtTargetDeviceOperation::validate_on_program_cache_miss(
             mesh_shape.dims());
     }
 
+    const uint64_t shard_count =
+        args.cluster_axis.has_value() ? mesh_shape[*args.cluster_axis] : mesh_shape.mesh_size();
+    const uint64_t final_last_v =
+        static_cast<uint64_t>(args.first_v) + shard_count * static_cast<uint64_t>(args.local_V);
+    TT_FATAL(
+        final_last_v <= std::numeric_limits<uint32_t>::max(),
+        "SubtractAtTarget: shard windows overflow uint32_t (first_v={}, local_V={}, shard_count={})",
+        args.first_v,
+        args.local_V,
+        shard_count);
+
     if (tensor_args.preallocated_output.has_value()) {
-        check_tensor(
-            tensor_args.preallocated_output.value(),
-            "preallocated_output",
-            tt::tt_metal::Layout::TILE,
-            tt::tt_metal::DataType::BFLOAT16);
+        const auto& output = tensor_args.preallocated_output.value();
+        check_tensor(output, "preallocated_output", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
+        TT_FATAL(
+            output.device() == device, "SubtractAtTarget: preallocated_output must be on the same device as input");
+        TT_FATAL(
+            output.tensor_spec() == tensor_args.input.tensor_spec(),
+            "SubtractAtTarget: preallocated_output tensor spec must exactly match the input tensor spec");
     }
 }
 

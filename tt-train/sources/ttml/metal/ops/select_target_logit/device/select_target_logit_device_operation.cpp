@@ -46,6 +46,10 @@ void SelectTargetLogitDeviceOperation::validate_on_program_cache_miss(
     check_tensor(tensor_args.logit, "logit", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
     check_tensor(tensor_args.target, "target", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::UINT32);
 
+    auto* device = tensor_args.logit.device();
+    TT_FATAL(device != nullptr, "SelectTargetLogit: logit must be on a (mesh) device");
+    TT_FATAL(tensor_args.target.device() == device, "SelectTargetLogit: target must be on the same device as logit");
+
     TT_FATAL(
         tensor_args.logit.logical_shape().rank() == 4U,
         "SelectTargetLogit: logit must be rank 4, got rank {}",
@@ -74,18 +78,32 @@ void SelectTargetLogitDeviceOperation::validate_on_program_cache_miss(
         target_pages,
         logit_nc_pages);
 
-    TT_FATAL(args.local_V > 0U, "SelectTargetLogit: local_V must be > 0");
+    const uint32_t logical_width = tensor_args.logit.logical_shape()[-1];
+    TT_FATAL(
+        args.local_V == logical_width,
+        "SelectTargetLogit: local_V ({}) must equal logit logical width ({})",
+        args.local_V,
+        logical_width);
 
+    const auto mesh_shape = device->shape();
     if (args.cluster_axis.has_value()) {
-        auto* device = tensor_args.logit.device();
-        TT_FATAL(device != nullptr, "SelectTargetLogit: logit must be on a (mesh) device");
-        const auto mesh_shape = device->shape();
         TT_FATAL(
             *args.cluster_axis < mesh_shape.dims(),
             "SelectTargetLogit: cluster_axis ({}) is out of range for mesh shape with {} dim(s)",
             *args.cluster_axis,
             mesh_shape.dims());
     }
+
+    const uint64_t shard_count =
+        args.cluster_axis.has_value() ? mesh_shape[*args.cluster_axis] : mesh_shape.mesh_size();
+    const uint64_t final_last_v =
+        static_cast<uint64_t>(args.first_v) + shard_count * static_cast<uint64_t>(args.local_V);
+    TT_FATAL(
+        final_last_v <= std::numeric_limits<uint32_t>::max(),
+        "SelectTargetLogit: shard windows overflow uint32_t (first_v={}, local_V={}, shard_count={})",
+        args.first_v,
+        args.local_V,
+        shard_count);
 
     if (tensor_args.preallocated_output.has_value()) {
         const auto& out = tensor_args.preallocated_output.value();
@@ -106,6 +124,17 @@ void SelectTargetLogitDeviceOperation::validate_on_program_cache_miss(
             out.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
             "SelectTargetLogit: 'preallocated_output' must use INTERLEAVED memory layout, got '{}'",
             enchantum::to_string(out.memory_config().memory_layout()));
+        TT_FATAL(out.device() == device, "SelectTargetLogit: preallocated_output must be on the same device as logit");
+
+        auto expected_shape = tensor_args.logit.logical_shape();
+        expected_shape[-1] = 1U;
+        const auto expected_spec = tt::tt_metal::TensorSpec(
+            expected_shape,
+            tt::tt_metal::TensorLayout(
+                tensor_args.logit.dtype(), tt::tt_metal::Layout::TILE, tensor_args.logit.memory_config()));
+        TT_FATAL(
+            out.tensor_spec() == expected_spec,
+            "SelectTargetLogit: preallocated_output tensor spec must exactly match the derived output spec");
     }
 }
 

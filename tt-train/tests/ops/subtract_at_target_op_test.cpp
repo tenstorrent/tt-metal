@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <random>
 
@@ -12,6 +13,7 @@
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "metal/ops/subtract_at_target/device/subtract_at_target_device_operation.hpp"
 
 class SubtractAtTargetTest : public ::testing::Test {
 public:
@@ -157,6 +159,36 @@ TEST_F(SubtractAtTargetTest, BatchedPartialVocabShard) {
 
     ASSERT_EQ(result_xt.shape(), expected_xt.shape());
     EXPECT_TRUE(xt::allclose(result_xt, expected_xt, /*rtol=*/3e-2F, /*atol=*/1e-2F));
+}
+
+TEST_F(SubtractAtTargetTest, ValidatesPreallocatedOutputAndShardWindowOnCacheHit) {
+    using namespace ttml;
+
+    constexpr uint32_t N = 2U;
+    constexpr uint32_t S = 3U;
+    constexpr uint32_t V = 33U;
+    std::mt19937 gen(11);
+    auto input_t = make_random_4d(N, S, V, -1.F, 1.F, gen);
+    xt::xarray<uint32_t> target_t = {{0U, 16U, 32U}, {32U, 1U, 17U}};
+
+    auto input_dev = core::from_xtensor(input_t, &autograd::ctx().get_device());
+    auto target_dev = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
+        target_t, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
+
+    auto preallocated = ttnn::create_device_tensor(input_dev.tensor_spec(), input_dev.device());
+    auto result = ttnn::prim::ttml_subtract_at_target(input_dev, target_dev, V, std::nullopt, 0U, preallocated);
+    EXPECT_EQ(result.buffer()->address(), preallocated.buffer()->address());
+
+    // All calls below share the valid call's program hash. Validation must still reject bad
+    // runtime-only attributes and a too-small output before dispatching a cached program.
+    const auto undersized_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape({1U, 1U, S, V}),
+        tt::tt_metal::TensorLayout(ttnn::DataType::BFLOAT16, ttnn::Layout::TILE, input_dev.memory_config()));
+    auto undersized = ttnn::create_device_tensor(undersized_spec, input_dev.device());
+    EXPECT_ANY_THROW(ttnn::prim::ttml_subtract_at_target(input_dev, target_dev, V, std::nullopt, 0U, undersized));
+    EXPECT_ANY_THROW(ttnn::prim::ttml_subtract_at_target(input_dev, target_dev, V - 1U, std::nullopt, 0U));
+    EXPECT_ANY_THROW(ttnn::prim::ttml_subtract_at_target(
+        input_dev, target_dev, V, std::nullopt, std::numeric_limits<uint32_t>::max() - V + 1U));
 }
 
 TEST_F(SubtractAtTargetTest, CustomSubtractValue) {
