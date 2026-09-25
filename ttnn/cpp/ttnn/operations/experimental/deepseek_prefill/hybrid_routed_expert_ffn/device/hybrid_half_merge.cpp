@@ -24,10 +24,10 @@ using tt::tt_metal::SemaphoreDescriptor;
 
 // Both halves' semaphores live in ONE id space and the two passes reuse it.
 //
-// They can, because the passes are strictly ordered: pass A is finished everywhere before pass B
-// begins anywhere, so no id is ever live for both. The pass barrier is what makes that true, and
-// it also has to zero the shared ids -- pass A leaves them at arbitrary values and pass B's
-// waits assume they start at zero.
+// They can, because the passes are strictly ordered: the first is finished everywhere before the
+// second begins anywhere, so no id is ever live for both. The pass barrier is what makes that true,
+// and it also has to zero the shared ids -- the first pass leaves them at arbitrary values and the
+// second's waits assume they start at zero.
 //
 // The barrier's own semaphore is therefore the one id that must NOT be reused, so it sits above
 // both halves' blocks and is never reset.
@@ -87,7 +87,7 @@ uint32_t overlay_circular_buffers(
     ProgramDescriptor& out) {
     const uint32_t alignment = tt::tt_metal::hal::get_l1_alignment();
 
-    // Pass A off: its buffers are never touched, so they are not placed and no arena is needed.
+    // Fused pass off: its buffers are never touched, so they are not placed and no arena is needed.
     // Every remaining CB is the unified half's and is allocated the ordinary way.
     if (!run_fused_pass) {
         for (auto& cb : unified.cbs) {
@@ -320,7 +320,7 @@ KernelDescriptor merge_kernel(
             args.resize(barrier_base, 0);
             // Coordinator, not just master CORE: both data-movement kernels run this body, and a
             // second one entering the master block would re-zero the shared semaphores after
-            // pass B had already started on them.
+            // the second pass had already started on them.
             args.push_back(static_cast<uint32_t>(is_coordinator_kernel && core == barrier.master_logical));
             args.push_back(barrier.master_noc_x);
             args.push_back(barrier.master_noc_y);
@@ -359,7 +359,7 @@ tt::tt_metal::ProgramDescriptor merge_halves(
     MergeReport& report) {
     TT_FATAL(
         !run_fused_pass || l1_arena != nullptr,
-        "pass A runs, so both halves' circular buffers need the shared L1 arena to be laid over");
+        "the fused pass runs, so both halves' circular buffers need the shared L1 arena to be laid over");
 
     ProgramDescriptor merged;
     report.barrier_semaphore_id = merge_semaphores(fused, unified, merged);
