@@ -125,12 +125,13 @@ def _run_trace_perf(mesh_device, precision_name, l1_resident, group_size, batch)
     assert result.quantile_preds.shape == expected_shape
     replay_median = statistics.median(trace_times)
     e2e_median = statistics.median(e2e_times)
+    grid = mesh_device.compute_with_storage_grid_size()
     stage_medians = {name: statistics.median(times) for name, times in stages.items()}
     stage_lines = "".join(f"\n  stage_{name + '_s:':17s} {value:.6f}" for name, value in stage_medians.items())
     print(
         "\n[TRACE PERF] Chronos paper shape"
         f"\n  weights:              {weight_source}"
-        f"\n  chips:                {model.num_devices}"
+        f"\n  chips:                {model.num_devices} (worker grid {grid.x}x{grid.y})"
         f"\n  precision:            {precision_name}"
         f"\n  batch:                {batch} ({batch // model.num_devices} per chip)"
         f"\n  l1_chunk_tokens:      {l1_chunk_tokens}"

@@ -17,6 +17,7 @@ from dataclasses import dataclass
 
 import torch
 from einops import rearrange
+from loguru import logger
 
 from models.experimental.chronos_forecast.tt.encoder import TtEncoder, TtEncoderWeights
 from models.experimental.chronos_forecast.tt.group_attention import build_group_mask, pack_group_blocks
@@ -26,7 +27,7 @@ from models.experimental.chronos_forecast.tt.model_preprocessing import (
     prepare_patched_context,
     prepare_patched_future,
 )
-from models.experimental.chronos_forecast.tt.program_configs import TtChronosPrecision
+from models.experimental.chronos_forecast.tt.program_configs import L1_CHUNK_GRID, TtChronosPrecision
 from models.experimental.chronos_forecast.tt.residual_block import (
     TtResidualBlock,
     TtResidualBlockWeights,
@@ -153,6 +154,13 @@ class TtChronos:
         self.config = config
         self.precision = precision or TtChronosPrecision()
         self.l1_chunk_tokens = l1_chunk_tokens
+        if l1_chunk_tokens is not None:
+            grid = device.compute_with_storage_grid_size()
+            if (grid.x, grid.y) != L1_CHUNK_GRID:
+                logger.warning(
+                    f"L1 chunk budgets were measured on a {L1_CHUNK_GRID[0]}x{L1_CHUNK_GRID[1]} worker grid, "
+                    f"this device has {grid.x}x{grid.y}; re-measure with sweeps/sweep_l1_chunk.py"
+                )
         self._input_embed = TtResidualBlock(device, weights.input_embed)
         self._encoder = TtEncoder(device, weights.encoder, self.precision)
         self._output_embed = TtResidualBlock(device, weights.output_embed)

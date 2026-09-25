@@ -70,6 +70,8 @@ class TtChronosPrecision:
 # 48 / 64 series of 160 padded tokens; the next step up clashes with matmul circular buffers.
 _L1_CHUNK_TOKENS_BF16 = 48 * 160
 _L1_CHUNK_TOKENS_BF8 = 64 * 160
+# (x, y) worker grid of the P150 the chunk budgets were measured on.
+L1_CHUNK_GRID = (11, 10)
 
 
 def compute_kernel_config(math_fidelity=None, *, fp32_dest_acc_en: bool = False, packer_l1_acc: bool = True):
