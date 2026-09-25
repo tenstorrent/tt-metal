@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstring>
 #include <functional>
 #include <string>
 #include <vector>
@@ -82,6 +83,11 @@ public:
     bool empty(uint32_t c) const { return count_[c] == 0; }
     uint32_t size(uint32_t c) const { return count_[c]; }
     T& front(uint32_t c) { return buf_[static_cast<size_t>(c) * cap_ + head_[c]]; }
+    // i-th from the front. Coalescing has to look past the head to measure how long a
+    // contiguous run is before it issues anything.
+    const T& at(uint32_t c, uint32_t i) const {
+        return buf_[static_cast<size_t>(c) * cap_ + ((head_[c] + i) & mask_)];
+    }
     // False means full. Every caller checks its own bound first; this is the backstop that
     // turns a protocol bug into a dropped frame rather than an overwrite.
     bool push_back(uint32_t c, const T& v) {
@@ -140,7 +146,8 @@ struct H2HSocket::Impl {
         // the guard, so everything needed to publish it has to survive until then.
         uint32_t host = 0;
         uint32_t dest_core = 0;
-        uint32_t slot = 0;
+        uint32_t slot = 0;   // first slot of the run
+        uint32_t count = 1;  // frames in the run; one put covers all of them
         uint64_t src_off = 0;
         // The flush count this put was issued under. A flush may now span several passes,
         // so the pass boundary no longer proves visibility -- this does.
@@ -214,6 +221,10 @@ struct H2HSocket::Impl {
     // Bumped only AFTER a flush returns, so epoch < flush_epoch[h] means that put's bytes
     // are on the peer. Nothing else can say so once flushes are withheld.
     std::vector<uint64_t> flush_epoch;
+    // The guard array is contiguous on the TARGET, but the sources are page tails at stride
+    // page_bytes. Gathered here so one put arms a run; indexed by (dest_core, slot), which
+    // is unique while that slot is outstanding, and an Rput reads its origin after returning.
+    std::vector<uint64_t> guard_stage;
 
     void mark_pending(uint32_t host, uint64_t bytes) {
         if (pending[host] == 0) {
@@ -297,9 +308,11 @@ struct H2HSocket::Impl {
         return load_acquire(w);
     }
 
-    volatile uint64_t* trailer_guard(uint32_t core, uint32_t slot) const {
-        uint8_t* const page = cfg.region_base + rx_slot_offset(core, slot, cfg.page_bytes, cfg.rx_data_offset);
-        return reinterpret_cast<volatile uint64_t*>(page + cfg.page_bytes - kFrameTrailerBytes);
+    // The compact array, not the page tail. The device still writes a guard into the trailer
+    // and it rides along in the payload put, but nothing reads it: a run of K slots is armed
+    // by one contiguous put here, and the harvest scans K adjacent words instead of K pages.
+    volatile uint64_t* rx_guard(uint32_t core, uint32_t slot) const {
+        return reinterpret_cast<volatile uint64_t*>(cfg.region_base + guard_offset(core, slot));
     }
     const FrameTrailer* trailer(uint32_t core, uint32_t slot) const {
         uint8_t* const page = cfg.region_base + rx_slot_offset(core, slot, cfg.page_bytes, cfg.rx_data_offset);
@@ -331,7 +344,7 @@ std::unique_ptr<H2HSocket> H2HSocket::create(const Config& cfg, std::string& err
               std::to_string(kMaxHosts);
         return nullptr;
     }
-    // Not just non-zero: the payload put is page_bytes - kFrameTrailerBytes, which wraps
+    // Not just non-zero: the trailer has to fit inside the page, and a smaller page wraps
     // below that and would ask MPI for a nearly 2^64 transfer.
     if (cfg.page_bytes != 0 && cfg.page_bytes <= kFrameTrailerBytes) {
         err = "H2HSocket: page_bytes " + std::to_string(cfg.page_bytes) + " leaves no room for the " +
@@ -367,7 +380,14 @@ std::unique_ptr<H2HSocket> H2HSocket::create(const Config& cfg, std::string& err
         err = "H2HSocket: ring_pages must be at least 1";
         return nullptr;
     }
-    // The same offsets are a local load in trailer_guard() and a remote displacement in the
+    // ring_pages indexes the guard array as well as the ring, and guard_offset() strides by
+    // kMaxRingSlots: past it a core's guards would land in the next core's entries.
+    if (cfg.ring_pages > kMaxRingSlots) {
+        err = fmt::format("H2HSocket: ring_pages {} exceeds the guard array's {} slots per core",
+                          cfg.ring_pages, kMaxRingSlots);
+        return nullptr;
+    }
+    // The same offsets are a local load in rx_guard() and a remote displacement in the
     // peer's window, so a short region is an out-of-bounds read here and an invalid RMA there.
     if (const uint64_t need = pinned_bytes_for(cfg.cores); cfg.region_bytes < need) {
         err = fmt::format(
@@ -420,6 +440,7 @@ std::unique_ptr<H2HSocket> H2HSocket::create(const Config& cfg, std::string& err
     im.pending.assign(cfg.topo.num, 0);
     im.first_pending.assign(cfg.topo.num, std::chrono::steady_clock::time_point{});
     im.flush_epoch.assign(cfg.topo.num, 0);
+    im.guard_stage.assign(static_cast<size_t>(cfg.cores) * cfg.ring_pages, 0);
     // Capped at a quarter of what can be outstanding: holding more than the rings can hold
     // would stall waiting for bytes that cannot arrive until we publish the ones we have.
     const uint64_t in_flight_cap =
@@ -481,12 +502,20 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
     im.tx_trailer.for_each_live([&](uint32_t c) {
         while (!im.broken && !im.tx_trailer.empty(c)) {
             Impl::InFlight f = im.tx_trailer.front(c);
+            // Gather the run's guards out of the page tails they ride in, so one put arms
+            // the whole run. Staged by (dest_core, slot), which is unique while outstanding.
             const uint64_t tail = im.cfg.page_bytes - kFrameTrailerBytes;
+            const size_t stage = static_cast<size_t>(f.dest_core) * im.cfg.ring_pages + f.slot;
+            for (uint32_t k = 0; k < f.count; ++k) {
+                const uint8_t* const src =
+                    im.cfg.region_base + f.src_off + static_cast<uint64_t>(k) * im.cfg.page_bytes + tail;
+                std::memcpy(&im.guard_stage[stage + k], src, sizeof(uint64_t));
+            }
             if (const std::string e = im.win->put(
-                    im.cfg.region_base + f.src_off + tail,
-                    kFrameTrailerBytes,
+                    &im.guard_stage[stage],
+                    static_cast<uint64_t>(f.count) * sizeof(uint64_t),
                     f.host,
-                    rx_slot_offset(f.dest_core, f.slot, im.cfg.page_bytes, im.cfg.rx_data_offset) + tail,
+                    guard_offset(f.dest_core, f.slot),
                     f.op);
                 !e.empty()) {
                 // fail() sets broken, which the loop condition above and the check below
@@ -496,7 +525,7 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
             }
             // Re-stamped: retirement below waits on the TRAILER's flush, not the payload's.
             f.epoch = im.flush_epoch[f.host];
-            im.mark_pending(f.host, kFrameTrailerBytes);
+            im.mark_pending(f.host, static_cast<uint64_t>(f.count) * sizeof(uint64_t));
             ++im.stats.trailer_puts;
             (void)im.tx_flight.push_back(c, f);
             im.tx_trailer.pop_front(c);
@@ -512,12 +541,13 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
     im.tx_flight.for_each_live([&](uint32_t c) {
         while (!im.tx_flight.empty(c) && im.flush_epoch[im.tx_flight.front(c).host] > im.tx_flight.front(c).epoch &&
                im.win->test(im.tx_flight.front(c).op)) {
+            const uint32_t n = im.tx_flight.front(c).count;
             im.tx_flight.pop_front(c);
-            --im.in_flight;
+            im.in_flight -= n;
             if (retire) {
-                retire(c, 1);
+                retire(c, n);
             }
-            ++progress;
+            progress += n;
         }
     });
 
@@ -560,16 +590,33 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
         }
 
         const uint32_t slot = static_cast<uint32_t>(im.posted_at(dest_core, host) % im.cfg.ring_pages);
+        // How many queued frames form ONE contiguous transfer. Slots are adjacent at both
+        // ends, so a run that shares a destination, advances by one slot and one source page,
+        // and neither wraps nor outruns the credit gate, is a single put of run x page_bytes.
+        const uint64_t credit_room = im.cfg.ring_pages - (im.posted_at(dest_core, host) - im.credit_seen(dest_core, host));
+        uint32_t run = 1;
+        while (run < im.tx_queue.size(c) && run < credit_room && slot + run < im.cfg.ring_pages) {
+            const SendTask& n = im.tx_queue.at(c, run);
+            if (tt_uva_target_host(n.dst, im.cfg.topo) != host || tt_uva_t6_core(n.dst) != dest_core ||
+                !tt_uva_selector_is_t6(n.dst) || n.page_bytes != t.page_bytes ||
+                n.page_offset != t.page_offset + static_cast<uint64_t>(run) * t.page_bytes) {
+                break;
+            }
+            ++run;
+        }
+
         Impl::InFlight f;
         f.host = host;
         f.dest_core = dest_core;
         f.slot = slot;
+        f.count = run;
         f.src_off = t.page_offset;
-        // Payload WITHOUT the trailer: one put carrying both lets the peer's ordinary load
-        // see an armed guard before the bytes under it, which MPI nowhere forbids.
+        // The WHOLE page, trailer included: the guard the device armed in that trailer is
+        // now inert, because the peer polls the compact array instead. The ordering hazard
+        // that split this put is handled by arming the array entries in a later pass.
         if (const std::string e = im.win->put(
                 im.cfg.region_base + t.page_offset,
-                t.page_bytes - kFrameTrailerBytes,
+                static_cast<uint64_t>(run) * t.page_bytes,
                 host,
                 rx_slot_offset(dest_core, slot, im.cfg.page_bytes, im.cfg.rx_data_offset),
                 f.op);
@@ -581,15 +628,17 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
             // Keyed by the sequence this put IS, which is posted_at before the increment.
             im.put_at_of(dest_core, host, im.posted_at(dest_core, host)) = std::chrono::steady_clock::now();
         }
-        im.posted_at(dest_core, host)++;
+        im.posted_at(dest_core, host) += run;
         f.epoch = im.flush_epoch[host];
-        im.mark_pending(host, t.page_bytes - kFrameTrailerBytes);
+        im.mark_pending(host, static_cast<uint64_t>(run) * t.page_bytes);
         (void)im.tx_payload.push_back(t.core, f);
-        ++im.in_flight;
-        ++im.stats.posts;
-        im.tx_queue.pop_front(c);
-        --im.tx_queued;
-        ++progress;
+        im.in_flight += run;
+        im.stats.posts += run;
+        for (uint32_t k = 0; k < run; ++k) {
+            im.tx_queue.pop_front(c);
+        }
+        im.tx_queued -= run;
+        progress += run;
     }
     im.rr = im.cfg.cores != 0 ? (im.rr + 1) % im.cfg.cores : 0;
     // Both failure paths above land here; neither should go on to flush or harvest.
@@ -624,7 +673,7 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
                 break;
             }
             const uint32_t slot = im.next_slot[c];
-            volatile uint64_t* const guard = im.trailer_guard(c, slot);
+            volatile uint64_t* const guard = im.rx_guard(c, slot);
             const uint64_t g = load_acquire(guard);
             if (!tt_uva_frame_armed(g)) {
                 break;
@@ -687,7 +736,7 @@ void H2HSocket::consumed(uint32_t core, uint32_t pages) {
 
         // The H2D leg has reported this page drained, so the device is done reading it.
         // Still before the credit: a credit lets the peer re-arm the slot.
-        store_release(im.trailer_guard(core, d.slot), 0);
+        store_release(im.rx_guard(core, d.slot), 0);
 
         const uint32_t host = tt_uva_t6_selector_host(d.origin, im.cfg.topo.chips_per_host);
         const uint32_t src_core = tt_uva_t6_selector_core(d.origin);
