@@ -670,10 +670,10 @@ def _read_slot_kv_and_check_pcc_v4(table, device_map: dict, slot_id: int, real_l
     for config_id, g in enumerate(plan):
         all_of_kind = layers_of_kind(cfg, g.kind)  # kind-rank -> global layer over the WHOLE model
         rate = kc.CSA_RATE if g.kind == "compressed_sparse_attention" else kc.HCA_RATE
-        for kind_rank, layer in enumerate(all_of_kind):
+        for layer in all_of_kind:  # the table's layer axis is the GLOBAL decoder id (DS4F-0249)
             if layer >= NUM_LAYERS:
                 break
-            loc0 = table.lookup(kind_rank, 0, slot_id, config_id)
+            loc0 = table.lookup(layer, 0, slot_id, config_id)
             try:
                 _resolve_unique_id(table.get_device_group(loc0.device_group_index).fabric_node_ids, device_map)
             except KeyError:
@@ -682,7 +682,7 @@ def _read_slot_kv_and_check_pcc_v4(table, device_map: dict, slot_id: int, real_l
             extent = g.extent(MAX_SEQ_LEN)
             rows = []
             for pos in range(0, extent, kc.CHUNK_N_TOKENS):
-                loc = table.lookup(kind_rank, pos, slot_id, config_id)
+                loc = table.lookup(layer, pos, slot_id, config_id)
                 uid = _resolve_unique_id(table.get_device_group(loc.device_group_index).fabric_node_ids, device_map)
                 raw = ttnn.experimental.disaggregation.read_dram_umd(uid, loc.noc_addr, loc.size_bytes)
                 rows.append(_decode_kv_chunk(bytes(raw), g.width))

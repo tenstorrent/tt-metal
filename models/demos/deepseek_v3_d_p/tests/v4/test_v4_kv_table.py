@@ -125,3 +125,38 @@ def test_populate_group_merges_two_stages_into_one_config(monkeypatch):
     stage2 = [s for s in t.sets if s[1] == 2]
     assert stage2[0][4] == (0 << 32) | 0x900 and stage2[0][6] == 1 and stage2[0][5] == spec.chunk_size_bytes
     assert [s[2] for s in stage2] == [0, 32, 64, 96, 128, 160]
+
+
+def test_populate_group_writes_global_layer_rows(monkeypatch, expect_error):
+    """DS4F-0249: the table's layer axis is the GLOBAL decoder id. A stage holding kind-ranks 1..2 of HCA (global
+    layers 5, 7 of [3, 5, 7, 9]) writes rows 5 and 7; rows 3 and 9 (other stages) and the CSA/SWA layers stay absent."""
+    import types
+
+    fake_ttnn = types.SimpleNamespace(
+        experimental=types.SimpleNamespace(
+            disaggregation=types.SimpleNamespace(KvCacheLocation=lambda: types.SimpleNamespace())
+        )
+    )
+    monkeypatch.setitem(__import__("sys").modules, "ttnn", fake_ttnn)
+    spec = kc.spec("hca_unified")
+    stages = [
+        {"first_layer": 1, "count": 2, "base_addr": 0x100, "num_banks": 8, "host_tag": 1, "fnids": [["a0", "a1"]]},
+    ]
+    t = _FakeTable()
+    kt.populate_group(t, 1, spec=spec, rows=64, num_slots=1, stages=stages, all_layers_of_kind=[3, 5, 7, 9])
+    assert sorted({s[1] for s in t.sets}) == [5, 7]
+    assert len(t.sets) == 2 * (64 // 32)
+    # the tensor's storage order is unchanged: kind-rank 1 (global 5) is the first batch of this stage's tensor
+    first = [s for s in t.sets if s[1] == 5 and s[2] == 0][0]
+    assert first[4] == (0 << 32) | 0x100
+    # the legacy dense path still numbers rows first_layer + local
+    addrs = list(
+        kt.walk_linear(num_slots=1, num_layers=2, rows=32, num_banks=8, base_addr=0, chunk_size_bytes=8, first_layer=4)
+    )
+    assert [a.layer for a in addrs] == [4, 5]
+    with expect_error(ValueError, "layer_ids"):
+        list(
+            kt.walk_linear(
+                num_slots=1, num_layers=2, rows=32, num_banks=8, base_addr=0, chunk_size_bytes=8, layer_ids=[7]
+            )
+        )

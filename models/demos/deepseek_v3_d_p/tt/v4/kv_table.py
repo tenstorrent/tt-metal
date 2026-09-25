@@ -22,7 +22,7 @@ and ``build_*`` functions wrap it in the ttnn table API.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterator
+from typing import Iterator, Sequence
 
 from models.demos.deepseek_v3_d_p.tt.v4.kv_contract import CHUNK_N_TOKENS, CONTRACT, KvGroupSpec
 
@@ -50,28 +50,33 @@ def walk_linear(
     chunk_size_bytes: int,
     first_layer: int = 0,
     extent: int | None = None,
+    layer_ids: Sequence[int] | None = None,
 ) -> Iterator[ChunkAddr]:
     """Every (slot, layer, 32-row chunk) of one group tensor, in storage order. ``rows`` is the tensor's ALLOCATED
     row count (a multiple of 32; it fixes the addresses); only chunks whose position is below ``extent`` (default
-    ``rows``) are emitted -- the writers' headroom rows are never migrated. ``first_layer`` offsets the table's
-    layer index (a PP stage's first kind-rank); the tensor's own batch index is ``slot * num_layers + local_layer``."""
+    ``rows``) are emitted -- the writers' headroom rows are never migrated. The tensor's own batch index is
+    ``slot * num_layers + local_layer``; the TABLE's layer index is ``layer_ids[local_layer]`` -- the GLOBAL decoder id
+    (DS4F-0249: the decode side's ``build_kv_table`` indexes every config's rows by the global layer id and leaves
+    other kinds' rows absent, so the prefill table must too). ``first_layer`` is the legacy dense offset, used only
+    when ``layer_ids`` is None."""
     if rows % CHUNK_N_TOKENS:
         raise ValueError(f"rows {rows} must be a multiple of {CHUNK_N_TOKENS}")
     extent = rows if extent is None else int(extent)
     if extent % CHUNK_N_TOKENS or extent > rows:
         raise ValueError(f"extent {extent} must be a multiple of {CHUNK_N_TOKENS} and <= rows {rows}")
+    if layer_ids is not None and len(layer_ids) != int(num_layers):
+        raise ValueError(f"layer_ids has {len(layer_ids)} entries for {num_layers} layers")
     chunks_per_layer = rows // CHUNK_N_TOKENS
     flat = 0
     for slot in range(int(num_slots)):
         for local_layer in range(int(num_layers)):
+            table_layer = int(layer_ids[local_layer]) if layer_ids is not None else int(first_layer) + local_layer
             for c in range(chunks_per_layer):
                 bank = flat % num_banks
                 offset = int(base_addr) + (flat // num_banks) * int(chunk_size_bytes)
                 position = c * CHUNK_N_TOKENS
                 if position < extent:
-                    yield ChunkAddr(
-                        layer=int(first_layer) + local_layer, position=position, slot=slot, bank=bank, offset=offset
-                    )
+                    yield ChunkAddr(layer=table_layer, position=position, slot=slot, bank=bank, offset=offset)
                 flat += 1
 
 
@@ -99,16 +104,28 @@ def group_table_config(spec: KvGroupSpec, *, max_seq_len: int, num_layers_total:
 
 
 def populate_group(
-    table, config_id: int, *, spec: KvGroupSpec, rows: int, num_slots: int, stages: list, extent: int | None = None
+    table,
+    config_id: int,
+    *,
+    spec: KvGroupSpec,
+    rows: int,
+    num_slots: int,
+    stages: list,
+    extent: int | None = None,
+    all_layers_of_kind: Sequence[int] | None = None,
 ) -> None:
     """Fill config ``config_id`` from per-stage descriptors ``{first_layer, count, base_addr, num_banks, host_tag,
     fnids}`` (``allgather_kv_stage_layout`` output, with the layer fields in KIND-RANK units). One device group
-    per stage = every chip of the stage (the rows are replicated)."""
+    per stage = every chip of the stage (the rows are replicated). ``all_layers_of_kind`` (the kind's GLOBAL layer
+    ids, model-wide, kind-rank order) maps each stage's kind-rank slice to the table's global layer rows
+    (DS4F-0249); without it the legacy dense kind-rank rows are written."""
     import ttnn
 
     for st in stages:
         if int(st["count"]) == 0:
             continue
+        first, count = int(st["first_layer"]), int(st["count"])
+        layer_ids = None if all_layers_of_kind is None else [int(x) for x in all_layers_of_kind[first : first + count]]
         fnids = [fid for row in st["fnids"] for fid in row]
         group_idx = table.add_device_group(fnids)
         host_name = f"host-{st['host_tag']:08x}"
@@ -121,8 +138,9 @@ def populate_group(
             num_banks=int(st["num_banks"]),
             base_addr=int(st["base_addr"]),
             chunk_size_bytes=spec.chunk_size_bytes,
-            first_layer=int(st["first_layer"]),
+            first_layer=first,
             extent=extent,
+            layer_ids=layer_ids,
         ):
             loc = ttnn.experimental.disaggregation.KvCacheLocation()
             loc.noc_addr = a.noc_addr
@@ -172,12 +190,12 @@ def build_v4_kv_chunk_table(
     specs = [g for g in CONTRACT if include_pending or not g.pending]
     all_of_kind = {g.name: layers_of_kind(hf_config, g.kind) for g in specs}
     configs, plan = [], []
+    n_model_layers = int(hf_config.num_hidden_layers)  # every config's layer axis is the GLOBAL decoder id (DS4F-0249)
     for g in specs:
-        n_total = len(all_of_kind[g.name])
-        if n_total == 0:
+        if not all_of_kind[g.name]:
             continue
         configs.append(
-            group_table_config(g, max_seq_len=geom.max_seq_len, num_layers_total=n_total, num_slots=num_slots)
+            group_table_config(g, max_seq_len=geom.max_seq_len, num_layers_total=n_model_layers, num_slots=num_slots)
         )
         plan.append(g)
     table = ttnn.experimental.disaggregation.KvChunkAddressTable(configs)
@@ -195,5 +213,6 @@ def build_v4_kv_chunk_table(
             num_slots=num_slots,
             stages=stages,
             extent=geom.extent(g.name),
+            all_layers_of_kind=all_of_kind[g.name],
         )
     return serialize_prebuilt_kv_chunk_table(table=table, path=path)

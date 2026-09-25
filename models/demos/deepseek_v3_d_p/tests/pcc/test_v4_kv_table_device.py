@@ -144,11 +144,10 @@ def test_kv_chunk_table_reads_back_every_config(mesh_device, device_params, tmp_
         extent = geom.extent(g.name)
         for slot in range(_USERS):
             for local, gidx in enumerate(layers):
-                kind_rank = layers_of_kind(cfg, g.kind).index(gidx)
                 batch = slot * len(layers) + local
                 rows = []
                 for pos in range(0, extent, kc.CHUNK_N_TOKENS):
-                    loc = table.lookup(kind_rank, pos, slot, config_id)
+                    loc = table.lookup(gidx, pos, slot, config_id)  # the TABLE's layer axis: global id (DS4F-0249)
                     uid = _resolve_unique_id(table.get_device_group(loc.device_group_index).fabric_node_ids, device_map)
                     raw = ttnn.experimental.disaggregation.read_dram_umd(uid, loc.noc_addr, loc.size_bytes)
                     assert len(raw) == g.chunk_size_bytes, (g.name, len(raw), g.chunk_size_bytes)
