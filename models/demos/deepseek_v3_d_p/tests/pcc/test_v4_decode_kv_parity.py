@@ -181,6 +181,8 @@ def test_prefill_kv_matches_decode_seed(mesh_device, device_params):
                 ].clone(),  # ring row r = token p with p % window == r, p in [n_tok-window, n_tok)
                 "entries": unified[window : window + n_entries].clone(),
                 "index_keys": None if keys is None else keys[:n_entries].clone(),  # stored convention (H128-rotated)
+                # contract config 4 (g2-lite step 3 / HANDOVER): rows 0..3 main Ca [kv_a | gate_a + ape], rows 4..7 indexer Ca
+                "pending": None if getattr(run_and_export, "pending", None) is None else run_and_export.pending.clone(),
             },
             os.environ["V4_KV_EXPORT_DUMP"],
         )
