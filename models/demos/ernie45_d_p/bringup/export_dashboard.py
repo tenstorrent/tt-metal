@@ -33,6 +33,245 @@ TRAILS = [
 ]
 
 
+# One 50k->55k chunk, phase by phase (sections from tests/perf/test_profile_chunk.py signposts).
+# pat: local | ring (all_reduce over the 4 chips). cell(c) -> what chip c holds. ms are summed over the 28 layers.
+PROFILE_STEPS = [
+    (
+        "other.attn_norm",
+        "Input RMSNorm",
+        "attn",
+        "other",
+        "local",
+        "Every chip normalizes the same replicated chunk.",
+        "[5120, 2560]",
+        "[5120, 2560]",
+        lambda c: ("tokens 51200-56319", "full width"),
+    ),
+    (
+        "attn.qkv",
+        "Q/K/V projection (fused)",
+        "attn",
+        "compute",
+        "local",
+        "One matmul per chip into its own heads: 5 query heads plus its single KV head, 896 outputs per token.",
+        "[5120, 2560] x [2560, 896]",
+        "[5120, 896]",
+        lambda c: (f"Q heads {5 * c}-{5 * c + 4}", f"KV head {c}"),
+    ),
+    (
+        "attn.rope",
+        "Interleaved RoPE at offset 51200",
+        "attn",
+        "compute",
+        "local",
+        "Rotary embedding for absolute positions 51200-56319, applied to this chip's 5 Q heads and 1 K head.",
+        "[1, 5, 5120, 128] + [1, 1, 5120, 128]",
+        "same",
+        lambda c: (f"Q heads {5 * c}-{5 * c + 4}", f"K head {c}"),
+    ),
+    (
+        "attn.kv_write",
+        "Write new K/V into the cache",
+        "attn",
+        "memory",
+        "local",
+        "The chunk's K and V (head c) land at positions 51200-56319 of this chip's cache (bf16 attention cache).",
+        "[1, 1, 5120, 128] x 2",
+        "cache[51200:56320]",
+        lambda c: (f"KV head {c}", "positions 51200-56319"),
+    ),
+    (
+        "attn.sdpa",
+        "Chunked causal attention (SDPA)",
+        "attn",
+        "compute",
+        "local",
+        "Each chip scores its 5 query heads for 5,120 new tokens against all 56,320 keys of its KV head "
+        "(51,200 cached + the causal part of the chunk), then takes the weighted sum of values.",
+        "Q [5, 5120, 128] vs K/V [1, 56320, 128]",
+        "[5, 5120, 128]",
+        lambda c: (f"Q heads {5 * c}-{5 * c + 4}", f"vs KV head {c}, 56k keys"),
+    ),
+    (
+        "attn.o_proj",
+        "Output projection (partial sum)",
+        "attn",
+        "compute",
+        "local",
+        "Heads are concatenated and projected with this chip's 640 rows of Wo, giving a partial sum over heads.",
+        "[5120, 640] x [640, 2560]",
+        "[5120, 2560] partial",
+        lambda c: ("Wo rows", f"{640 * c}-{640 * c + 639}"),
+    ),
+    (
+        "attn.all_reduce",
+        "All-reduce attention output",
+        "attn",
+        "comm",
+        "ring",
+        "The four partial sums are added across the ring so every chip holds the full attention output.",
+        "[5120, 2560] partial",
+        "[5120, 2560] replicated",
+        lambda c: ("partial sum", "-> full"),
+    ),
+    (
+        "other.residual",
+        "Residual adds + post-attention RMSNorm",
+        "other",
+        "other",
+        "local",
+        "Two residual adds per layer and the post-attention norm, on replicated activations.",
+        "[5120, 2560]",
+        "[5120, 2560]",
+        lambda c: ("tokens 51200-56319", "full width"),
+    ),
+    (
+        "moe.router",
+        "Router (softmax, bias-corrected top-6)",
+        "moe",
+        "other",
+        "local",
+        "Every chip computes the same routing in fp32: 64 expert scores, top-6 chosen with the bias, weights renormalized.",
+        "[5120, 2560] x [2560, 64]",
+        "top-6 ids + weights [5120, 6]",
+        lambda c: ("all 64 experts", "same routing"),
+    ),
+    (
+        "moe.dispatch",
+        "Dispatch (local regroup)",
+        "moe",
+        "memory",
+        "local",
+        "Count tokens per expert, then copy each (token, expert) pair routed to this chip's 16 experts into that "
+        "expert's contiguous block. No token leaves its chip.",
+        "[5120, 2560] + top-6 ids",
+        "expert blocks",
+        lambda c: (f"experts {16 * c}-{16 * c + 15}", "{rows} rows"),
+    ),
+    (
+        "moe.experts",
+        "Routed experts (fused FFN)",
+        "moe",
+        "compute",
+        "local",
+        "unified_routed_expert_moe runs all 16 local experts in one program, each over just its own tokens (SwiGLU, FFN 1536).",
+        "per expert [n, 2560] x [2560, 1536] x2, x [1536, 2560]",
+        "expert blocks (same shape)",
+        lambda c: (f"experts {16 * c}-{16 * c + 15}", "{rows} rows"),
+    ),
+    (
+        "moe.combine_reduce",
+        "Combine + weighted top-6 sum",
+        "moe",
+        "memory",
+        "local",
+        "Results go back under their token and choice; each token's local expert outputs are weighted and summed. "
+        "Choices owned by other chips stay zero.",
+        "expert blocks",
+        "[5120, 2560] partial (local experts)",
+        lambda c: (f"experts {16 * c}-{16 * c + 15}", "-> per token"),
+    ),
+    (
+        "moe.shared",
+        "Shared experts (tensor-parallel)",
+        "moe",
+        "compute",
+        "local",
+        "The two shared experts (FFN 3072) are split 4 ways: gate/up by output columns, down by input rows.",
+        "[5120, 2560] x [2560, 768] x2, x [768, 2560]",
+        "[5120, 2560] partial",
+        lambda c: ("shared FFN cols", f"{768 * c}-{768 * c + 767}"),
+    ),
+    (
+        "moe.all_reduce",
+        "All-reduce MoE output",
+        "moe",
+        "comm",
+        "ring",
+        "Routed partial + shared partial are added locally, then one all-reduce sums the four chips.",
+        "[5120, 2560] partial",
+        "[5120, 2560] replicated",
+        lambda c: ("partial sum", "-> full"),
+    ),
+    (
+        "dense_mlp",
+        "Dense SwiGLU (layer 0 only)",
+        "moe",
+        "compute",
+        "local",
+        "Layer 0 has a dense MLP (FFN 12288) split 4 ways, followed by an all-reduce.",
+        "[5120, 2560] x [2560, 3072] x2, x [3072, 2560]",
+        "[5120, 2560] partial",
+        lambda c: ("MLP cols", f"{3072 * c}-{3072 * c + 3071}"),
+    ),
+    (
+        "model.other.embed",
+        "Embedding lookup",
+        "other",
+        "other",
+        "local",
+        "Replicated embedding table lookup for the chunk's 5,120 tokens.",
+        "5120 ids",
+        "[5120, 2560]",
+        lambda c: ("full table", "103k x 2560"),
+    ),
+    (
+        "model.other.final_norm",
+        "Final RMSNorm",
+        "other",
+        "other",
+        "local",
+        "Final norm of the last layer's output.",
+        "[5120, 2560]",
+        "[5120, 2560]",
+        lambda c: ("tokens 51200-56319", "full width"),
+    ),
+]
+
+
+def load_profile() -> dict | None:
+    prof_p, rout_p = M.RESULTS_DIR / "P3.3_profile.json", M.RESULTS_DIR / "P3.3_routing.json"
+    if not prof_p.exists():
+        return None
+    prof = json.loads(prof_p.read_text())
+    rout = json.loads(rout_p.read_text()) if rout_p.exists() else {}
+    rows = {int(k): v for k, v in rout.get("routed_rows_per_chip_total", {}).items()}
+    steps = []
+    for key, name, part, bound, pat, what, inp, out, cell in PROFILE_STEPS:
+        if key not in prof["sections_ms"]:
+            continue
+        pc = prof["sections_ms_per_chip"].get(key, {})
+        cells = []
+        for c in range(4):
+            a, b = cell(c)
+            r = f"{round(rows[c] / 27):,}" if c in rows else "?"
+            cells.append([a, b.replace("{rows}", r + " avg")])
+        steps.append(
+            dict(
+                key=key,
+                name=name,
+                part=part,
+                bound=bound,
+                pat=pat,
+                what=what,
+                inp=inp,
+                out=out,
+                cells=cells,
+                ms=round(prof["sections_ms"][key], 2),
+                per_chip=[round(pc.get(str(c), 0.0), 2) for c in range(4)],
+                programs=prof["programs"].get(key, 0),
+            )
+        )
+    return {
+        "wall_ms": round(prof["wall_ms"], 1),
+        "steps": steps,
+        "routing": rout,
+        "note": "Device kernel time per phase, summed over the 28 layers of one 5,120-token chunk at positions "
+        "51,200-56,319 (golden 50k KV prefix loaded). Per chip = that chip's own programs; the bar uses the "
+        "slowest chip per phase. Measured with the device profiler (P3.3).",
+    }
+
+
 def git(*args) -> str:
     return subprocess.run(["git", *args], cwd=REPO, capture_output=True, text=True).stdout.strip()
 
@@ -109,6 +348,7 @@ def main():
         "plan": plan(cfg),
         "trails": trails,
         "findings": findings,
+        "profile": load_profile(),
         "timing": [
             {
                 "task": tid,
