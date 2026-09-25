@@ -155,33 +155,6 @@ footer{color:var(--muted);font-size:12px}
     </div>
   </section>
 
-  <section aria-labelledby="s-prof" id="prof-sec">
-    <div class="sec-head"><h2 id="s-prof">Where the time goes: one 50k→55k chunk</h2><span class="tl-total" id="p-total"></span></div>
-    <p class="sub" id="p-note" style="margin:0;font-size:13px"></p>
-    <div class="pbar" id="p-bar"></div>
-    <div class="pparts" id="p-parts"></div>
-    <div class="legend">
-      <span><span class="sw" style="background:var(--b-compute)"></span>matmul / attention maths</span>
-      <span><span class="sw" style="background:var(--b-memory)"></span>data movement on the chip</span>
-      <span><span class="sw" style="background:var(--b-comm)"></span>chip-to-chip (all-reduce)</span>
-      <span><span class="sw" style="background:var(--b-other)"></span>norms, adds, router, embed</span>
-    </div>
-    <div class="pmain">
-      <nav class="psteps" id="p-steps" aria-label="Phases of the chunk"></nav>
-      <article class="pdetail" aria-live="polite">
-        <div class="pd-head"><h3 id="pd-name" style="font-size:17px"></h3><span class="bpill" id="pd-pill"></span><span class="pd-ms" id="pd-ms"></span></div>
-        <div class="pd-body">
-          <figure><div class="svg-wrap"><svg id="p-grid" viewBox="0 0 470 250" width="100%" role="img" aria-label=""></svg></div><figcaption id="pd-cap"></figcaption></figure>
-          <div style="display:grid;gap:10px">
-            <p id="pd-what" style="margin:0;font-size:13.5px;max-width:62ch"></p>
-            <dl class="pkv"><dt>One chip reads</dt><dd id="pd-in"></dd><dt>One chip writes</dt><dd id="pd-out"></dd><dt>Programs</dt><dd id="pd-progs"></dd></dl>
-            <div class="pnav"><button type="button" id="p-prev">← Previous phase</button><button type="button" id="p-next">Next phase →</button></div>
-          </div>
-        </div>
-      </article>
-    </div>
-  </section>
-
   <section aria-labelledby="s-ladder">
     <div class="sec-head"><h2 id="s-ladder">Gate ladder</h2><p>Each task has a gate command and metric thresholds. Click a row for details.</p></div>
     <div class="tbl-wrap"><table id="ladder"><thead><tr><th>Task</th><th>Status</th><th>What</th><th>Gate metric (worst)</th><th>Commit</th><th>Run</th></tr></thead><tbody></tbody></table></div>
@@ -225,6 +198,33 @@ footer{color:var(--muted);font-size:12px}
     <div class="legend" id="mem-legend"></div>
     <div class="chips4" id="chips"></div>
     <div class="sub" style="font-size:13px" id="shard-notes"></div>
+  </section>
+
+  <section aria-labelledby="s-prof" id="prof-sec">
+    <div class="sec-head"><h2 id="s-prof">Where the time goes: one 50k→55k chunk</h2><span class="tl-total" id="p-total"></span></div>
+    <p class="sub" id="p-note" style="margin:0;font-size:13px"></p>
+    <div class="pbar" id="p-bar"></div>
+    <div class="pparts" id="p-parts"></div>
+    <div class="legend">
+      <span><span class="sw" style="background:var(--b-compute)"></span>matmul / attention maths</span>
+      <span><span class="sw" style="background:var(--b-memory)"></span>data movement on the chip</span>
+      <span><span class="sw" style="background:var(--b-comm)"></span>chip-to-chip (all-reduce)</span>
+      <span><span class="sw" style="background:var(--b-other)"></span>norms, adds, router, embed</span>
+    </div>
+    <div class="pmain">
+      <nav class="psteps" id="p-steps" aria-label="Phases of the chunk"></nav>
+      <article class="pdetail" aria-live="polite">
+        <div class="pd-head"><h3 id="pd-name" style="font-size:17px"></h3><span class="bpill" id="pd-pill"></span><span class="pd-ms" id="pd-ms"></span></div>
+        <div class="pd-body">
+          <figure><div class="svg-wrap"><svg id="p-grid" viewBox="0 0 470 250" width="100%" role="img" aria-label=""></svg></div><figcaption id="pd-cap"></figcaption></figure>
+          <div style="display:grid;gap:10px">
+            <p id="pd-what" style="margin:0;font-size:13.5px;max-width:62ch"></p>
+            <dl class="pkv"><dt>One chip reads</dt><dd id="pd-in"></dd><dt>One chip writes</dt><dd id="pd-out"></dd><dt>Programs</dt><dd id="pd-progs"></dd></dl>
+            <div class="pnav"><button type="button" id="p-prev">← Previous phase</button><button type="button" id="p-next">Next phase →</button></div>
+          </div>
+        </div>
+      </article>
+    </div>
   </section>
 
   <section aria-labelledby="s-pcc">
