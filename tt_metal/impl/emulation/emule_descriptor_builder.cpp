@@ -9,6 +9,7 @@
 
 #include "emule_descriptor_builder.hpp"
 
+#include <filesystem>
 #include <set>
 #include <string>
 #include <tuple>
@@ -167,8 +168,7 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
     const auto& hw = MetalContext::instance().hal();
     auto& metal_context = MetalContext::instance(impl.get_context_id());
     const auto& rtoptions = MetalEnvAccessor(metal_context.get_env()).impl().get_rtoptions();
-    const bool quasar_four_row =
-        metal_context.get_cluster().arch() == tt::ARCH::QUASAR && rtoptions.get_quasar_four_row();
+    const bool is_quasar = metal_context.get_cluster().arch() == tt::ARCH::QUASAR;
 
     EmuleProgramDescriptor pd;
     pd.config.context_id = static_cast<uint32_t>(impl.get_context_id().get());
@@ -215,8 +215,10 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 }
             });
             k.process_defines([&kd](const std::string& dk, const std::string& dv) { kd.defines[dk] = dv; });
-            if (quasar_four_row) {
-                kd.defines["MATH_ROWS"] = "4";
+            if (is_quasar) {
+                const auto arch_dir = std::filesystem::path(rtoptions.get_root_dir()) /
+                                      "tt_metal/tt-llk/tt_llk_quasar/arch" / rtoptions.get_quasar_arch();
+                kd.include_paths.push_back(arch_dir.string());
             }
             kd.is_compute = (k.get_kernel_processor_class() == HalProcessorClassType::COMPUTE);
             {

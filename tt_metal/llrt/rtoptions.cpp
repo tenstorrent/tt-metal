@@ -58,6 +58,7 @@ enum class EnvVarID {
     TT_METAL_EMULE_MODE,                      // Enable emulated mode (SWEmuleChip with real memory I/O)
     TT_METAL_VISIBLE_DEVICES,                 // Comma-separated list of visible device IDs
     ARCH_NAME,                                // Architecture name (simulation mode)
+    CHIP_ARCH,                                // LLK architecture variant
     TT_MESH_GRAPH_DESC_PATH,                  // Custom fabric mesh graph descriptor
     TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH,  // Factory System Descriptor (FSD) path
     TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE,  // Core grid override
@@ -120,7 +121,6 @@ enum class EnvVarID {
     TT_METAL_DRAM_BACKED_CQ,                            // Store command queues in device DRAM
     TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES,            // Simulator tensor preload bypasses FD CQ copies
     TT_METAL_QUASAR_NOC_API_VERSION,                    // Quasar NOC API version
-    TT_METAL_QUASAR_FOUR_ROW,                           // Build the Quasar four-row FPU variant
     TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES,  // Override Blackhole DRAM programmable cores
     TT_METAL_MEASURE_DFB_INIT_TIME,  // Temporary DFB init rdcycle instrumentation (deprecate once device profiler
                                      // covers this).
@@ -558,6 +558,18 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: Hardware-detected architecture
         // Usage: export ARCH_NAME=wormhole_b0
         case EnvVarID::ARCH_NAME: this->arch_name = std::string(value); break;
+        case EnvVarID::CHIP_ARCH: {
+            std::string arch(value);
+            std::transform(arch.begin(), arch.end(), arch.begin(), [](unsigned char c) { return std::tolower(c); });
+            if (arch.empty() || arch == "blackhole" || arch == "wormhole" || arch == "wormhole_b0") {
+                break;
+            }
+            const auto config =
+                std::filesystem::path(get_root_dir()) / "tt_metal/tt-llk/tt_llk_quasar/arch" / arch / "arch_config.h";
+            TT_FATAL(std::filesystem::is_regular_file(config), "Missing architecture config: {}", config.string());
+            this->quasar_arch = arch;
+            break;
+        }
 
         // TT_MESH_GRAPH_DESC_PATH
         // Custom fabric mesh graph descriptor path.
@@ -916,12 +928,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
                 "Invalid NOC API version: {}",
                 this->quasar_noc_api_version);
             break;
-
-        // TT_METAL_QUASAR_FOUR_ROW
-        // Select the Quasar four-row FPU LLK variant.
-        // Default: false (use the standard eight-row Quasar LLKs)
-        // Usage: export TT_METAL_QUASAR_FOUR_ROW=1
-        case EnvVarID::TT_METAL_QUASAR_FOUR_ROW: this->quasar_four_row = is_env_enabled(value); break;
 
         // TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES
         // Controls Blackhole DRAM programmable cores in the HAL:

@@ -294,10 +294,11 @@ public:
 
     std::vector<std::string> includes(const Params& params) const override {
         std::vector<std::string> includes;
-        // Upper bound: 10 common includes, at most 2 from the core type switch, plus the firmware dir.
-        includes.reserve(13);
+        // Upper bound: 11 common includes, at most 2 from the core type switch, plus the firmware dir.
+        includes.reserve(14);
 
         // Common includes for all core types
+        includes.push_back("tt_metal/tt-llk/tt_llk_quasar/arch/" + params.rtoptions.get_quasar_arch());
         includes.push_back("tt_metal/hw/ckernels/quasar/metal/common");
         includes.push_back("tt_metal/hw/ckernels/quasar/metal/llk_io");
         includes.push_back("tt_metal/hw/inc/internal");
@@ -377,10 +378,6 @@ public:
             }
         } else {
             defines.push_back("NOC_API_V" + std::to_string(params.rtoptions.get_quasar_noc_api_version()));
-        }
-        // FPU width is independent of the NoC API, so it applies to both branches above.
-        if (params.rtoptions.get_quasar_four_row()) {
-            defines.push_back("MATH_ROWS=4");
         }
         return defines;
     }

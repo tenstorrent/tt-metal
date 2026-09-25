@@ -413,8 +413,8 @@ class RunTimeOptions {
     // NOC API version for Quasar
     uint32_t quasar_noc_api_version = 2;
 
-    // Use the four-row FPU LLK variant on Quasar
-    bool quasar_four_row = false;
+    // Quasar LLK variant selected by CHIP_ARCH.
+    std::string quasar_arch = "quasar";
 
     // To be used for NUMA node based thread binding
     bool numa_based_affinity = false;
@@ -689,7 +689,7 @@ public:
             get_enable_2_erisc_mode(),
             get_disable_fabric_2_erisc_mode(),
             get_eth_ptp_trace(),
-            get_quasar_four_row());
+            get_quasar_arch());
         for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
             compile_hash_str += "_";
             compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
@@ -987,7 +987,7 @@ public:
     bool get_simulator_direct_tensor_writes() const { return simulator_direct_tensor_writes; }
 
     uint32_t get_quasar_noc_api_version() const { return quasar_noc_api_version; }
-    bool get_quasar_four_row() const { return quasar_four_row; }
+    const std::string& get_quasar_arch() const { return quasar_arch; }
 
     std::optional<uint32_t> get_fabric_router_sync_timeout_ms() const { return fabric_router_sync_timeout_ms; }
 

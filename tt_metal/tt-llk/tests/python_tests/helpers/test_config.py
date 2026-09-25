@@ -126,7 +126,6 @@ class TestConfig:
     ARCH_DEFINE: ClassVar[str]
     ARCH_LLK_ROOT: ClassVar[str]
     ARCH: ClassVar[str]
-    ARCH_SPECIFIC_OPTIONS: ClassVar[str] = ""
     CHIP_ARCH: ClassVar[ChipArchitecture]
     DATA_FORMAT_ENUM: ClassVar[dict]
 
@@ -312,7 +311,6 @@ class TestConfig:
     @staticmethod
     def setup_arch():
         TestConfig.CHIP_ARCH = get_chip_architecture()
-        TestConfig.ARCH_SPECIFIC_OPTIONS = ""
         match TestConfig.CHIP_ARCH:
             case ChipArchitecture.WORMHOLE:
                 TestConfig.ARCH_NON_COMPUTE = "-mcpu=tt-wh"
@@ -334,8 +332,6 @@ class TestConfig:
                 TestConfig.ARCH_NON_COMPUTE = "-mcpu=tt-qsr32"
                 TestConfig.ARCH_COMPUTE = "-mcpu=tt-qsr32-tensix"
                 TestConfig.ARCH_DEFINE = "-DARCH_QUASAR"
-                math_rows = 4 if is_4row_arch() else 8
-                TestConfig.ARCH_SPECIFIC_OPTIONS = f"-DMATH_ROWS={math_rows}"
                 TestConfig.ARCH_LLK_ROOT = "tt_llk_quasar"
                 TestConfig.ARCH = ChipArchitecture.QUASAR
                 TestConfig.DATA_FORMAT_ENUM = QUASAR_DATA_FORMAT_ENUM_VALUES
@@ -400,11 +396,18 @@ class TestConfig:
             (TestConfig.TOOL_PATH / "riscv-tt-elf-gcov-tool").absolute()
         )
 
-        TestConfig.SHARED_DIR = TestConfig.ARTEFACTS_DIR / "shared"
+        shared_suffix = (
+            f"-{os.environ['CHIP_ARCH']}"
+            if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR
+            else ""
+        )
+        TestConfig.SHARED_DIR = TestConfig.ARTEFACTS_DIR / f"shared{shared_suffix}"
         TestConfig.SHARED_OBJ_DIR = TestConfig.SHARED_DIR / "obj"
         TestConfig.SHARED_ELF_DIR = TestConfig.SHARED_DIR / "elf"
         # Profiler builds need separate shared artefacts (trisc.cpp compiles differently with -DLLK_PROFILER)
-        TestConfig.PROFILER_SHARED_DIR = TestConfig.ARTEFACTS_DIR / "shared-profiler"
+        TestConfig.PROFILER_SHARED_DIR = (
+            TestConfig.ARTEFACTS_DIR / f"shared-profiler{shared_suffix}"
+        )
         TestConfig.PROFILER_SHARED_OBJ_DIR = TestConfig.PROFILER_SHARED_DIR / "obj"
         TestConfig.PROFILER_SHARED_ELF_DIR = TestConfig.PROFILER_SHARED_DIR / "elf"
         TestConfig.COVERAGE_INFO_DIR = TestConfig.ARTEFACTS_DIR / "coverage_info"
@@ -553,7 +556,13 @@ class TestConfig:
             f"{'-DSPEED_OF_LIGHT' if TestConfig.SPEED_OF_LIGHT else ''}"
         )
         TestConfig.INCLUDES = (
-            [
+            # Variant headers override shared defaults; missing headers fall through.
+            (
+                [f"-I../tt_llk_quasar/arch/{os.environ['CHIP_ARCH']}"]
+                if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR
+                else []
+            )
+            + [
                 "-Isfpi/include",
                 # Relative to tests/ (compile cwd), not pytest's cwd.
                 *[
@@ -1755,7 +1764,6 @@ class TestConfig:
                 compile_command = TestConfig._argv(
                     [TestConfig.GXX],
                     TestConfig.ARCH_COMPUTE,
-                    TestConfig.ARCH_SPECIFIC_OPTIONS,
                     TestConfig.OPTIONS_ALL,
                     [f"-I{TestConfig.TESTS_WORKING_DIR}"],
                     src_include_prepend,

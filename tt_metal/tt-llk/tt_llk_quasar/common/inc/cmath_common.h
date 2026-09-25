@@ -12,7 +12,7 @@ namespace ckernel::math
 {
 
 // Number of rows for MATH functions
-constexpr static std::uint32_t ELTWISE_MATH_ROWS = MATH_ROWS; // 8 for quasar, 4 for quasar automotive
+constexpr static std::uint32_t ELTWISE_MATH_ROWS = arch::fpu_rows;
 static_assert(ELTWISE_MATH_ROWS == 4 || ELTWISE_MATH_ROWS == 8, "FPU MOV helpers support 4-row and 8-row FPUs");
 
 template <std::uint32_t NUM_ROWS>
@@ -30,7 +30,7 @@ constexpr auto fpu_row_offsets()
     return rows;
 }
 
-constexpr static std::uint32_t FPU_MOV_ROWS = (ELTWISE_MATH_ROWS == 8) ? p_mov_src_to_dest::MOV_8_ROWS : p_mov_src_to_dest::MOV_4_ROWS;
+constexpr static std::uint32_t FPU_MOV_ROWS = arch::mov_fpu_rows;
 static_assert(FPU_MOV_ROWS == (ELTWISE_MATH_ROWS == 8 ? p_movd2a::MOV_8_ROWS : p_movd2a::MOV_4_ROWS));
 static_assert(FPU_MOV_ROWS == (ELTWISE_MATH_ROWS == 8 ? p_movd2b::MOV_8_ROWS : p_movd2b::MOV_4_ROWS));
 static_assert(FPU_MOV_ROWS == (ELTWISE_MATH_ROWS == 8 ? p_movb2a::MOV_8_ROWS : p_movb2a::MOV_4_ROWS));

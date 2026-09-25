@@ -5,6 +5,7 @@
 
 #include <cstdint>
 
+#include "arch_config.h"
 #include "cfg_defines.h"
 #include "ckernel.h"
 #include "ckernel_addrmod.h"

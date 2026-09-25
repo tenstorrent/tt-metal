@@ -110,6 +110,7 @@ def emitted(tmp_path_factory):
             # TRISC id and the firmware guard that keeps host-only headers out.
             "-DCOMPILE_FOR_TRISC=0",
             "-DTENSIX_FIRMWARE",
+            f"-I{_QUASAR_LLK / 'arch/quasar'}",
             f"-I{_QUASAR_LLK / 'common/inc'}",
             f"-I{_QUASAR_LLK / 'common/inc/sfpu'}",
             f"-I{_QUASAR_LLK / 'llk_lib'}",

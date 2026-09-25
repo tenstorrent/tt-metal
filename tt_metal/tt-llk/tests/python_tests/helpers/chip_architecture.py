@@ -3,6 +3,7 @@
 
 import os
 from enum import Enum
+from pathlib import Path
 
 
 class ChipArchitecture(Enum):
@@ -28,17 +29,16 @@ class ChipArchitecture(Enum):
     def from_string(cls, arch_str):
         arch_lower = arch_str.lower()
         enum_value = cls._get_string_to_enum_map().get(arch_lower)
-        if enum_value is None:
-            raise ValueError(f"Unknown architecture: {arch_str}")
-        return enum_value
-
-
-def _env_flag_enabled(name):
-    return os.getenv(name, "").strip().lower() in ("1", "true")
+        if enum_value is not None:
+            return enum_value
+        arch_root = Path(__file__).resolve().parents[3] / "tt_llk_quasar/arch"
+        if (arch_root / arch_lower / "arch_config.h").is_file():
+            return cls.QUASAR
+        raise ValueError(f"Unknown architecture: {arch_str}")
 
 
 def is_4row_arch():
-    return _env_flag_enabled("TT_METAL_QUASAR_FOUR_ROW")
+    return os.getenv("CHIP_ARCH", "").lower() == "quasar_4row"
 
 
 # Cache for chip architecture
@@ -59,8 +59,9 @@ def get_chip_architecture():
         chip_architecture = str(context.devices[0]._arch)
 
     _cached_chip_architecture = ChipArchitecture.from_string(chip_architecture)
-    # Always write the LLK name back. Several CLIs take --arch $CHIP_ARCH and
-    # only accept wormhole|blackhole|quasar; leaving wormhole_b0 in the
-    # environment is what produces "invalid choice: 'wormhole_b0'".
-    os.environ["CHIP_ARCH"] = _cached_chip_architecture.value
+    os.environ["CHIP_ARCH"] = (
+        chip_architecture.lower()
+        if _cached_chip_architecture == ChipArchitecture.QUASAR
+        else _cached_chip_architecture.value
+    )
     return _cached_chip_architecture
