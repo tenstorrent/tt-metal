@@ -317,3 +317,24 @@ tasks:
     notes: >-
       Tracy host capture crashed (tracy-capture exit 1) on this box, so the breakdown uses the device profiler directly
       (ttnn.get_latest_programs_perf_data per section). Device time is the max over the 4 chips per section.
+
+  - id: P3.4
+    title: "SDPA config A (HiFi2, fp32 acc off -> streaming kernel, approx exp, q256/k512): speed + 55k accuracy"
+    phase: P3
+    paths: [models/demos/ernie45_d_p/tt, models/demos/ernie45_d_p/tests]
+    deps: [P3.3, P2.14]
+    gate:
+      cmd: >-
+        export ERNIE_SDPA_CFG=A &&
+        TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
+        TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=6000
+        scripts/run_safe_pytest.sh --no-precompile models/demos/ernie45_d_p/tests/perf/test_profile_chunk.py -s &&
+        scripts/run_safe_pytest.sh --run-all models/demos/ernie45_d_p/tests/test_model_chunked.py -k s56320
+      metrics:
+        device_ms_attention_sdpa: "> 0"
+        pcc_final_hidden: ">= 0.97"
+        pcc_kv_min: ">= 0.97"
+        top5_overlap: ">= 0.9"
+    notes: >-
+      Compare device_ms_attention_sdpa and chunk_wall_ms with P3.3 (base: HiFi4 + fp32 acc, 1328 ms / 1570 ms) and the
+      accuracy with P2.14 (final 0.9965, KV 0.9926, top-1 95.7%).
