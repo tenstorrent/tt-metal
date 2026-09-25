@@ -914,6 +914,95 @@
   team: models
   budget_type: unit
 
+- name: Qwen3-TTS unit tests
+  cmd: |
+    export TT_METAL_WATCHER=30
+    export HF_HUB_OFFLINE=0 HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
+    export HF_MODEL=Qwen/Qwen3-TTS-12Hz-1.7B-Base TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-TTS-12Hz-1.7B-Base
+    # Checkpoint layout and text front-end on host, then the speaker encoder, talker, code
+    # predictor, codec, the end-to-end pipeline and eight full generations on device. A first
+    # run also pays a 3.6 GB checkpoint download into the shared cache, which the timeouts
+    # below do not include.
+    pytest --timeout 300 models/demos/audio/qwen3_tts/tests/test_checkpoint_loading.py
+    pytest --timeout 300 models/demos/audio/qwen3_tts/tests/test_tokenizer.py
+    pytest --timeout 300 models/demos/audio/qwen3_tts/tests/test_sampling.py
+    pytest --timeout 600 models/demos/audio/qwen3_tts/tests/pcc/test_speaker_pcc.py
+    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_talker_pcc.py
+    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_code_predictor_pcc.py
+    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_codec_pcc.py
+    # The codec's other half. It runs in fp32 and its convolutions are long (a 2 s clip is
+    # 48000 samples at 64 channels), so it pays a larger cold kernel build than the rest.
+    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_codec_encoder_pcc.py
+    # The cached, traced decode paths against the uncached graphs above them.
+    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_decode_pcc.py
+    # Voice cloning, both modes: the two encoders, the in-context prompt and the decode
+    # loop, then the voice-alone prompt that uses the speaker encoder by itself. Base only,
+    # so it runs on the ambient checkpoint.
+    pytest --timeout 1200 models/demos/audio/qwen3_tts/tests/pcc/test_clone_pcc.py
+    # The pipeline tests need the CustomVoice checkpoint, a second 4.3 GB download on
+    # a cold cache; Base carries the speaker encoder, CustomVoice the nine speakers.
+    pytest --timeout 1200 models/demos/audio/qwen3_tts/tests/pcc/test_pipeline.py
+    # VoiceDesign, the third release: a voice described in a sentence rather than recorded
+    # or named. Its architecture is Base's, so this covers the prompt and nothing else, but
+    # it is a third 3.8 GB download on a cold cache.
+    pytest --timeout 1200 models/demos/audio/qwen3_tts/tests/pcc/test_voice_design_pcc.py
+    # Whether utterances stop. Eight full generations on CustomVoice, eight seeds of one
+    # sentence, because at one seed this measurement means nothing: it is the only
+    # test here that catches a change which leaves every per-position number intact and
+    # still makes the model run past the end of its text.
+    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_generation_stops.py
+    # Streaming text input, the second regime: one token per frame instead of all of it in
+    # the prompt. Mostly host assembly, which is where that regime can go wrong.
+    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_streaming_pcc.py
+  model: qwen3-tts-1.7b-base
+  model_family: Qwen3-TTS
+  skus:
+    # Timeouts are the cold-kernel-cache time plus 20%, from this command replayed with the
+    # watcher on: 21.1 min on one N150, 15.6 on one Blackhole chip (a P300 standing in).
+    wh_n150:
+      timeout: 26
+      tier: 3
+    # Blackhole single-chip. Bring-up runs on Blackhole, so this leg is the one that
+    # exercises the dev architecture. P150 rather than P300 or QuietBox 2: the model is
+    # single-device at batch 1, and P150 uses the standard cloud-mlperf cache mount, while
+    # P300 runs LFC mode and would need its own wget.
+    bh_p150:
+      timeout: 19
+      tier: 3
+  owner_id: U09LNK7BT1Q # Andrija Cicovic
+  team: models
+  budget_type: unit
+
+- name: Qwen3-TTS 0.6B unit tests
+  cmd: |
+    export TT_METAL_WATCHER=30
+    export HF_HUB_OFFLINE=0 HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
+    export HF_MODEL=Qwen/Qwen3-TTS-12Hz-0.6B-Base TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-TTS-12Hz-0.6B-Base
+    # The files whose coverage differs at 0.6B. The tokenizer, the sampler, both codec halves
+    # and the streaming logic are identical at both sizes and run in the 1.7B leg; there is no
+    # 0.6B VoiceDesign. Timeouts: cold time plus 20%, 10.7 min on one N150 and 8.7 on one
+    # Blackhole chip, watcher on.
+    pytest --timeout 300 models/demos/audio/qwen3_tts/tests/test_checkpoint_loading.py
+    pytest --timeout 600 models/demos/audio/qwen3_tts/tests/pcc/test_speaker_pcc.py
+    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_talker_pcc.py
+    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_code_predictor_pcc.py
+    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_decode_pcc.py
+    pytest --timeout 1200 models/demos/audio/qwen3_tts/tests/pcc/test_clone_pcc.py
+    pytest --timeout 1200 models/demos/audio/qwen3_tts/tests/pcc/test_pipeline.py
+    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_generation_stops.py
+  model: qwen3-tts-0.6b-base
+  model_family: Qwen3-TTS
+  skus:
+    wh_n150:
+      timeout: 13
+      tier: 3
+    bh_p150:
+      timeout: 11
+      tier: 3
+  owner_id: U09LNK7BT1Q # Andrija Cicovic
+  team: models
+  budget_type: unit
+
 - name: QwQ-32B unit tests
   cmd: |
     export TT_METAL_WATCHER=30
