@@ -67,15 +67,23 @@ _BINARY_BROADCAST_BASE_FORMATS = [
     DataFormat.Float16_b,
     DataFormat.Float16,
 ]
+_BINARY_BROADCAST_EXPLICIT_FORMATS = [
+    InputOutputFormat(DataFormat.Int8, DataFormat.Int32),
+    InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+]
 BINARY_BROADCAST_FORMATS = (
     input_output_formats(_BINARY_BROADCAST_BASE_FORMATS)
-    + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
+    + _BINARY_BROADCAST_EXPLICIT_FORMATS
     + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
 )
-BINARY_BROADCAST_PERF_FORMATS = input_output_formats(
-    _BINARY_BROADCAST_BASE_FORMATS,
-    same=True,
-) + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
+BINARY_BROADCAST_PERF_FORMATS = (
+    input_output_formats(
+        _BINARY_BROADCAST_BASE_FORMATS,
+        same=True,
+    )
+    + _BINARY_BROADCAST_EXPLICIT_FORMATS
+    + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
+)
 
 BROADCAST_TYPES = [
     BroadcastType.Column,

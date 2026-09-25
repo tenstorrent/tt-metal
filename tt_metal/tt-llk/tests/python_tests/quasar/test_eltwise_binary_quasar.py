@@ -54,11 +54,11 @@ from helpers.utils import passed_test
 
 
 def eltwise_binary_dest_acc(formats):
-    return (
-        [DestAccumulation.Yes]
-        if formats.input_format == DataFormat.Int8
-        else [DestAccumulation.No]
-    )
+    # Quasar pack cannot upcast to a 32-bit L1 format, so Int32 and Float32
+    # outputs accumulate in a 32-bit dest.
+    if formats.output_format.is_32_bit():
+        return [DestAccumulation.Yes]
+    return [DestAccumulation.No]
 
 
 def eltwise_binary_dest_sync_modes(*, is_perf=False):
@@ -139,7 +139,10 @@ ELTWISE_FORMATS = (
             DataFormat.Float16,
         ],
     )
-    + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
+    + [
+        InputOutputFormat(DataFormat.Int8, DataFormat.Int32),
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+    ]
     + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
 )
 
