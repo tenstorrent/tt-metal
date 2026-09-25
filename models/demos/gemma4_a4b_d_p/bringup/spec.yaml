@@ -31,7 +31,10 @@ state:
   tensors: [key, value]            # full-length per layer; global layers have V = K (attention_k_eq_v)
   format: separate_k_v
 thresholds: {component: 0.99, block: 0.98, layer: 0.97, state: 0.97, final_hidden: 0.97, top5: 0.9}
-text: {source: models/tt_transformers/tests/tale-of-two-cities.txt.bz2, chat_template: true}   # -it checkpoint: book inside one user turn
+text:                              # canonical prompt (built once at R.1): -it checkpoint, so the book is the model turn
+  source: models/tt_transformers/tests/tale-of-two-cities.txt.bz2
+  wrap: model_turn
+  request: "Recite the Project Gutenberg text of A Tale of Two Cities by Charles Dickens, from the start."
 hf: {parity_seq: 512}
 checkpoint:
   expect:
