@@ -38,7 +38,7 @@ constexpr uint32_t small_dest_write_slots = 8;
 // Non-clean dest staging uses a multi-slot L1 ring. Cap slots by per-core L1 budget so
 // wide odd destinations (e.g. bf16 width 100001 from #50191) still fit.
 uint32_t choose_num_dest_write_slots(
-    IDevice* device,
+    const MeshDevice& device,
     bool pages_noc_aligned,
     bool can_use_dual_kernel,
     uint32_t scratch_size0,
@@ -51,10 +51,10 @@ uint32_t choose_num_dest_write_slots(
     // tensors already allocated in L1 (vadv2 regression). DFBs grow upward from the
     // base; L1 tensors are allocated downward from the top. The ceiling is the lowest
     // occupied L1 address — or the full core size when nothing is live.
-    const uint32_t l1_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
-    const std::optional<DeviceAddr> lowest_occupied = device->lowest_occupied_compute_l1_address();
+    const uint32_t l1_base = device.allocator()->get_base_allocator_addr(HalMemType::L1);
+    const std::optional<DeviceAddr> lowest_occupied = device.lowest_occupied_compute_l1_address();
     const uint32_t l1_ceiling =
-        lowest_occupied.has_value() ? static_cast<uint32_t>(lowest_occupied.value()) : device->l1_size_per_core();
+        lowest_occupied.has_value() ? static_cast<uint32_t>(lowest_occupied.value()) : device.l1_size_per_core();
     TT_FATAL(l1_ceiling > l1_base, "L1 ceiling ({}) must exceed base ({})", l1_ceiling, l1_base);
     const uint32_t l1_available = l1_ceiling - l1_base;
 
@@ -83,7 +83,7 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewRMProgramFactory::create_pro
 
     // get datum size
     const uint32_t data_size = input.element_size();
-    IDevice* device = input.device();
+    MeshDevice* device = input.device();
     // Multi device pre-computation
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -127,7 +127,7 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewRMProgramFactory::create_pro
     const bool can_use_dual_kernel = pages_divisible && (dest_noc_aligned || !dst_buffer->is_dram());
 
     const uint32_t num_dest_write_slots = choose_num_dest_write_slots(
-        device, pages_noc_aligned, can_use_dual_kernel, scratch_size0, dest_slot_size_bytes);
+        *device, pages_noc_aligned, can_use_dual_kernel, scratch_size0, dest_slot_size_bytes);
     const uint32_t scratch_size1 = dest_slot_size_bytes * num_dest_write_slots;
 
     const uint32_t write_alignment =

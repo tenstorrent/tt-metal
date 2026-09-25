@@ -73,7 +73,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     uint32_t shard_height_unpadded,
     uint32_t shard_height_padded,
     uint32_t num_padded_sticks) {
-    tt::tt_metal::IDevice* device = input_tensor.device();
+    tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
 
     auto input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();
@@ -223,7 +223,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmShardedProgramFactory::create_pr
     using namespace ttnn::prim::slice_metal2;
 
     const auto& input = tensor_args.input;
-    tt::tt_metal::IDevice* device = input.device();
+    tt::tt_metal::distributed::MeshDevice* device = input.device();
 
     uint32_t num_padded_sticks = input.physical_volume() / input.padded_shape()[-1];
     [[maybe_unused]] uint32_t num_unpadded_sticks = output.physical_volume() / output.padded_shape()[-1];

@@ -59,7 +59,7 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreInterleavedProgramFact
     const tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
 
     const auto& output_shape = output.padded_shape();
-    IDevice* const device = output.device();
+    MeshDevice* const device = output.device();
 
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const std::uint32_t num_cores_y = compute_with_storage_grid_size.y;

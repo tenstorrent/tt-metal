@@ -63,7 +63,7 @@ using dram_sharded_helpers::move_common_entries;
 using dram_sharded_helpers::validate_num_workers_per_dram_bank;
 
 static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec(
-    tt::tt_metal::IDevice* device,
+    tt::tt_metal::distributed::MeshDevice& device,
     const CoreRangeSet& input_all_storage_cores,
     const CoreRangeSet& output_all_storage_cores,
     ComputeHardwareConfig compute_hw,
@@ -111,19 +111,19 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
 
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
     uint32_t num_mcast_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
 
     CoreCoord top_left_core = {(std::size_t)start_core_x, (std::size_t)start_core_y};
     CoreCoord bottom_right_core = {
         (std::size_t)start_core_x + compute_with_storage_grid_size.x - 1,
         (std::size_t)start_core_y + compute_with_storage_grid_size.y - 1};
-    auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-    auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+    auto top_left_core_physical = device.worker_core_from_logical_core(top_left_core);
+    auto bottom_right_core_physical = device.worker_core_from_logical_core(bottom_right_core);
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
-    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device.arch());
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
 
     CoreCoord start_core_noc = top_left_core_physical;
     CoreCoord end_core_noc = bottom_right_core_physical;
@@ -133,7 +133,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
 
     validate_num_workers_per_dram_bank(workers_per_bank);
     TT_FATAL(
-        workers_per_bank == 1 || device->arch() == tt::ARCH::BLACKHOLE,
+        workers_per_bank == 1 || device.arch() == tt::ARCH::BLACKHOLE,
         "Multiple workers per DRAM bank are currently supported only on Blackhole");
     TT_FATAL(
         workers_per_bank == 1 || in1_noc == tt::tt_metal::NOC::NOC_0,
@@ -420,9 +420,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
 
     const uint32_t num_compute_cores = all_cores_in_rect_grid.num_cores();
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device->arch(), num_compute_cores, mm_kernel_defines);
+        device.arch(), num_compute_cores, mm_kernel_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device->arch(), num_compute_cores, mm_kernel_defines, throttle_level);
+        device.arch(), num_compute_cores, mm_kernel_defines, throttle_level);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Build DataflowBufferSpecs
@@ -551,11 +551,11 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     });
     in0_mcast_sender_noc_x.reserve(mcast_senders_coords.size());
     for (auto core : mcast_senders_coords) {
-        in0_mcast_sender_noc_x.push_back((std::uint32_t)device->worker_core_from_logical_core(core).x);
+        in0_mcast_sender_noc_x.push_back((std::uint32_t)device.worker_core_from_logical_core(core).x);
     }
     in0_mcast_sender_noc_y.reserve(mcast_senders_coords.size());
     for (auto core : mcast_senders_coords) {
-        in0_mcast_sender_noc_y.push_back((std::uint32_t)device->worker_core_from_logical_core(core).y);
+        in0_mcast_sender_noc_y.push_back((std::uint32_t)device.worker_core_from_logical_core(core).y);
     }
 
     AdvancedKernelRunArgs::Varargs in0_sender_noc_varargs;
@@ -629,11 +629,11 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     std::vector<CoreCoord> output_coords = corerange_to_cores(output_all_storage_cores, std::nullopt, true);
     output_noc_x.reserve(output_coords.size());
     for (auto core : output_coords) {
-        output_noc_x.push_back((std::uint32_t)device->worker_core_from_logical_core(core).x);
+        output_noc_x.push_back((std::uint32_t)device.worker_core_from_logical_core(core).x);
     }
     output_noc_y.reserve(output_coords.size());
     for (auto core : output_coords) {
-        output_noc_y.push_back((std::uint32_t)device->worker_core_from_logical_core(core).y);
+        output_noc_y.push_back((std::uint32_t)device.worker_core_from_logical_core(core).y);
     }
 
     uint32_t num_cores_written_back = (N + per_core_N_storage - 1) / per_core_N_storage;
@@ -1208,7 +1208,7 @@ MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_program_artifacts
 
     const bool row_broadcast_bias = operations::matmul::utilities::fused_matmul_bias_row_broadcastable(bias);
 
-    tt::tt_metal::IDevice* device = a.device();
+    tt::tt_metal::distributed::MeshDevice* device = a.device();
 
     TT_FATAL(
         a.shard_spec().has_value() && output.shard_spec().has_value(), "Both input A and output must have shard specs");
@@ -1283,7 +1283,7 @@ MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_program_artifacts
     const auto& output_mesh = output.mesh_tensor();
 
     return reuse_dram_sharded_optimized_helpers::create_program_dram_sharded_spec(
-        device,
+        *device,
         input_all_cores_storage,
         output_all_cores_storage,
         ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config),

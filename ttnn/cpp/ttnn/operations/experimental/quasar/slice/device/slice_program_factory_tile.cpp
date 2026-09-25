@@ -22,7 +22,7 @@ namespace ttnn::prim::qsr {
 ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program_artifacts(
     const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
     const auto& input = tensor_args.input;
-    tt::tt_metal::IDevice* device = input.device();
+    tt::tt_metal::distributed::MeshDevice* device = input.device();
 
     uint32_t num_unpadded_tiles = output.physical_volume() / TILE_HW;
 

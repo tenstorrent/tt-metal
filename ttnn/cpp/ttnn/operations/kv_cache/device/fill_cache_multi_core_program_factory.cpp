@@ -40,7 +40,7 @@ std::vector<std::pair<CoreCoord, std::uint32_t>> compute_fill_cache_start_ids(
     std::uint32_t cache_CHtWt = cache_tensor.padded_shape()[1] * cache_HtWt;
     std::uint32_t update_idxt = update_idx / TILE_HEIGHT;
     std::uint32_t start_idx = (batch_idx * cache_CHtWt) + (update_idxt * Wt);
-    tt::tt_metal::IDevice* device = input_tensor.device();
+    tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     std::uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -124,7 +124,7 @@ ttnn::device_operation::ProgramArtifacts FillCacheMultiCoreProgramFactory::creat
     // batch_idx/update_idx-dependent cache_start_id lives in compute_fill_cache_start_ids, shared
     // with override_runtime_arguments.
     std::uint32_t Wt = cache_tensor.padded_shape()[-1] / TILE_WIDTH;
-    tt::tt_metal::IDevice* device = input_tensor.device();
+    tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     std::uint32_t num_cores_x = compute_with_storage_grid_size.x;

@@ -64,7 +64,7 @@ ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_
     const auto& a_shape = a.logical_shape();
     uint32_t num_pages = get_num_pages(output);
 
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const auto& sub_core_grids = operation_attributes.sub_core_grids;

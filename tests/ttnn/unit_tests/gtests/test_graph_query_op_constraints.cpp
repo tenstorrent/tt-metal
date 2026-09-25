@@ -59,10 +59,6 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <llrt/tt_cluster.hpp>
 
-namespace tt::tt_metal {
-class IDevice;
-}  // namespace tt::tt_metal
-
 namespace ttnn::operations::binary::test {
 
 namespace detail {

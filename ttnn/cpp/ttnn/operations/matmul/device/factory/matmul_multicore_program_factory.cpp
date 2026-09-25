@@ -62,7 +62,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
     uint32_t in1_single_tile_size = tt::tile_size(in1_data_format);
     uint32_t output_single_tile_size = tt::tile_size(output_data_format);
 
-    tt::tt_metal::IDevice* device = &a.mutable_device();
+    tt::tt_metal::distributed::MeshDevice& device = a.mutable_device();
     TT_FATAL(operation_attributes.compute_kernel_config.has_value(), "Compute kernel config should have been provided");
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config.value();
 
@@ -79,7 +79,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
             "from device compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() should invoke "
             "ttnn::operations::matmul::normalize_program_config() on the program config first. This will become "
             "a hard error in a future release.");
-        auto device_grid = device->compute_with_storage_grid_size();
+        auto device_grid = device.compute_with_storage_grid_size();
         pc.allowed_worker_cores =
             CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(device_grid.x - 1, device_grid.y - 1)));
     }
@@ -187,8 +187,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
                 // per kernel rather than duplicated per core.
                 .common_runtime_arg_names = {"Mt", "Kt", "Nt", "MtKt", "KtNt", "batch", "bcast_B", "MtNt"},
             },
-        .hw_config =
-            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_reader_datamovement_config(device.arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     KernelSpec writer{
@@ -213,8 +212,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
             {
                 .runtime_arg_names = {"num_pages", "start_id"},
             },
-        .hw_config =
-            ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_writer_datamovement_config(device.arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // Per-node runtime args for reader and writer
@@ -256,12 +254,12 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
     const auto throttle_level = ttnn::get_throttle_level(operation_attributes.compute_kernel_config);
     std::map<std::string, std::string> mm_kernel_defines;
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device->arch(), num_cores, mm_kernel_defines);
+        device.arch(), num_cores, mm_kernel_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device->arch(), num_cores, mm_kernel_defines, throttle_level);
+        device.arch(), num_cores, mm_kernel_defines, throttle_level);
 
     // Compute kernel(s) — one per core group with different tile counts.
-    auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config);
+    auto compute_hw = ttnn::to_compute_hardware_config(device.arch(), compute_kernel_config);
     unpack_modes(compute_hw) = {
         {IN0_DFB, tt::tt_metal::UnpackMode::UnpackToSrc},
         {IN1_DFB, tt::tt_metal::UnpackMode::UnpackToSrc},

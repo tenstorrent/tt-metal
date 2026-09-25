@@ -99,7 +99,7 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreDefaultProgra
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
 
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const auto& sub_core_grids = operation_attributes.sub_core_grids;

@@ -72,7 +72,7 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     const auto& input_tensor_v = tensor_args.v.value_or(input_tensor_k);
 
     // ========== Device ==========
-    IDevice* device = input_tensor_q.device();
+    MeshDevice* device = input_tensor_q.device();
 
     // ========== Feature Flags ==========
     const bool is_paged_attention = page_table_tensor.has_value();

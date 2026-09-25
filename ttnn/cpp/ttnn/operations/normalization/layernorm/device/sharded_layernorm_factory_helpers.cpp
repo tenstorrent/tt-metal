@@ -1545,28 +1545,28 @@ namespace {
 
 // The multicast range this sender covers, plus its own position within the grid.
 std::vector<uint32_t> reader_sender_named_values(
-    const CoreCoord& core, const RuntimeArgsContext& ctx, IDevice* device) {
+    const CoreCoord& core, const RuntimeArgsContext& ctx, const MeshDevice& device) {
     CoreCoord mcast_start, mcast_end;
     if (ctx.grid.mcast_1d) {
         CoreCoord top_left = {(std::size_t)ctx.core_ranges.start_core.x, (std::size_t)ctx.core_ranges.start_core.y};
         CoreCoord bottom_right = {
             (std::size_t)ctx.core_ranges.start_core.x + ctx.grid.grid_size.x - 1,
             (std::size_t)ctx.core_ranges.start_core.y + ctx.grid.grid_size.y - 1};
-        mcast_start = device->worker_core_from_logical_core(top_left);
-        mcast_end = device->worker_core_from_logical_core(bottom_right);
+        mcast_start = device.worker_core_from_logical_core(top_left);
+        mcast_end = device.worker_core_from_logical_core(bottom_right);
     } else {
         if (ctx.grid.row_wise) {
             CoreCoord left_plus_one = {(std::size_t)ctx.core_ranges.start_core.x + 1, (std::size_t)core.y};
             CoreCoord right = {
                 (std::size_t)ctx.core_ranges.start_core.x + ctx.grid.grid_size.x - 1, (std::size_t)core.y};
-            mcast_start = device->worker_core_from_logical_core(left_plus_one);
-            mcast_end = device->worker_core_from_logical_core(right);
+            mcast_start = device.worker_core_from_logical_core(left_plus_one);
+            mcast_end = device.worker_core_from_logical_core(right);
         } else {
             CoreCoord top_plus_one = {(std::size_t)core.x, (std::size_t)ctx.core_ranges.start_core.y + 1};
             CoreCoord bottom = {
                 (std::size_t)core.x, (std::size_t)ctx.core_ranges.start_core.y + ctx.grid.grid_size.y - 1};
-            mcast_start = device->worker_core_from_logical_core(top_plus_one);
-            mcast_end = device->worker_core_from_logical_core(bottom);
+            mcast_start = device.worker_core_from_logical_core(top_plus_one);
+            mcast_end = device.worker_core_from_logical_core(bottom);
         }
     }
     if (ctx.reader_noc == NOC::NOC_1) {
@@ -1670,7 +1670,7 @@ RunArgsAndWriterVarargs build_run_args(
     const std::vector<CoreCoord>& cores,
     const RuntimeArgsContext& ctx,
     const SpecConfig& config,
-    IDevice* device,
+    const MeshDevice& device,
     const Tensor& input,
     const std::optional<Tensor>& residual,
     const std::optional<Tensor>& gamma,

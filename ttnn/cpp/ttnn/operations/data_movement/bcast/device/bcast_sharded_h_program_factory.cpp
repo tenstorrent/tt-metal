@@ -37,7 +37,7 @@ ttnn::device_operation::ProgramArtifacts BcastShardedHProgramFactory::create_pro
     const auto& bshape = b.padded_shape();
     const std::uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1;
 
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
 
     const auto shard_spec = a.shard_spec().value();
     const auto all_cores = shard_spec.grid;

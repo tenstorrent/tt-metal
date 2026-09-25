@@ -50,7 +50,7 @@ ttnn::device_operation::ProgramArtifacts NLPCreateQKVHeadsDecodeShardedProgramFa
     const TensorParamName V_OUT_TENSOR{"v_out_tensor"};
     const TensorParamName BATCH_OFFSET_TENSOR{"batch_offset_tensor"};
 
-    IDevice* device = input_tensor.device();
+    MeshDevice* device = input_tensor.device();
 
     tt::DataFormat data_format = datatype_to_dataformat_converter(input_tensor.dtype());
 

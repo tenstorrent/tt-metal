@@ -27,7 +27,7 @@ struct LayerNormMultiCoreProgramFactory {
         const std::optional<CoreRangeSet>& core_range_set = std::nullopt);
 
     // Returns the core range non-sharded LayerNorm distributes its tile rows over by default
-    static CoreRangeSet default_core_range(tt::tt_metal::IDevice* device);
+    static CoreRangeSet default_core_range(const tt::tt_metal::distributed::MeshDevice& device);
 };
 
 struct LayerNormShardedProgramFactory {

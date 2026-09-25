@@ -130,7 +130,7 @@ ttnn::device_operation::ProgramArtifacts JointSDPADeviceOperation::JointSDPAProg
     log_debug(tt::LogOp, "cat_Sqt: {}", cat_Sqt);
     log_debug(tt::LogOp, "cat_Skt: {}", cat_Skt);
 
-    IDevice* device = input_tensor_q.device();
+    MeshDevice* device = input_tensor_q.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), args.compute_kernel_config);

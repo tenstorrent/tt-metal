@@ -79,7 +79,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherWelfordProgramFact
     const auto& input_mesh = a.mesh_tensor();
     const auto& output_mesh = output.mesh_tensor();
 
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
     auto grid_size = device->compute_with_storage_grid_size();
 
     TT_FATAL(!is_rmsnorm, "rms_norm is not compatible with welford, please disable welford flag to use rms norm");

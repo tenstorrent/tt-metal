@@ -39,7 +39,7 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewRMMetalV2ProgramFactory::cre
     const auto& sub_core_grid = operation_attributes.sub_core_grid;
 
     const uint32_t data_size = input.element_size();
-    IDevice* device = input.device();
+    MeshDevice* device = input.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     CoreRange default_cores({0, 0}, {compute_with_storage_grid_size.x - 1, compute_with_storage_grid_size.y - 1});
     CoreRangeSet total_cores = sub_core_grid.has_value() ? sub_core_grid.value() : CoreRangeSet(default_cores);

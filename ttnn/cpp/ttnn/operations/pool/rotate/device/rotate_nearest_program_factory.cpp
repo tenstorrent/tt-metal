@@ -44,7 +44,7 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
 
     const auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     const auto output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-    tt::tt_metal::IDevice* const device = output_tensor.device();
+    tt::tt_metal::distributed::MeshDevice* const device = output_tensor.device();
 
     const auto& input_shape = input_tensor.padded_shape();
     const uint32_t input_batch = input_shape[0];

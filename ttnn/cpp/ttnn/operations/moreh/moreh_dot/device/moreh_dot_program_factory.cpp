@@ -43,7 +43,7 @@ ttnn::device_operation::ProgramArtifacts MorehDotOperation::ProgramFactory::crea
     uint32_t mask_h = (pad_h == 0) ? (tt::constants::TILE_HEIGHT) : (pad_h);
     uint32_t mask_w = (pad_w == 0) ? (tt::constants::TILE_WIDTH) : (pad_w);
 
-    IDevice* device = input_a.device();
+    MeshDevice* device = input_a.device();
 
     const uint32_t in0_t = 2;   // a
     const uint32_t in1_t = 2;   // b

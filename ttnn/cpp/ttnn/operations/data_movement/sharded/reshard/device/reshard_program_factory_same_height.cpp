@@ -79,7 +79,7 @@ ttnn::device_operation::ProgramArtifacts ReshardSameHeightFactory<local_is_outpu
             remote_cores,
             remote_buffer_type,
             remote_core_type,
-            device,
+            *device,
             element_size);  // local_core_idx -> runtime args[]
 
     // Plain copies of the structured-binding results, so the run-args lambda below can capture them.

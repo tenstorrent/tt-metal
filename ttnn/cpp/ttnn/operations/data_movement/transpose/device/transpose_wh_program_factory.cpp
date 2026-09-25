@@ -50,7 +50,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
     tt::DataFormat dst_dfb_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
     uint32_t dst_single_tile_size = tt::tile_size(dst_dfb_data_format);
 
-    IDevice* device = input_tensor.device();
+    MeshDevice* device = input_tensor.device();
 
     bool fp32_dest_acc_en = src0_dfb_data_format == tt::DataFormat::Float32 ||
                             src0_dfb_data_format == tt::DataFormat::Int32 ||

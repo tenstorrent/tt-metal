@@ -121,7 +121,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
-    tt_metal::IDevice* device = &a.mutable_device();
+    tt_metal::distributed::MeshDevice& device = a.mutable_device();
 
     // Fast path aliases I/O CBs onto the tensors; CBs are L1-only.
     const bool use_width_sharding = reduce_h_use_width_sharding(a, output);
@@ -170,7 +170,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
         use_sfpu_reduce_path(a.dtype(), operation_attributes.math_op, operation_attributes.use_sfpu_reduce);
     const bool use_fpu_negate = operation_attributes.negate && !is_sfpu_reduce;
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
     // One output tile column per (nc, slice, wt) of the (N, C, num_h_slices, W) result.
     auto num_cols = NC * num_h_slices * Wt;
     uint32_t num_cores;
@@ -369,9 +369,9 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
         // calculation.
         const uint64_t per_cb_bytes = negate_cb_tiles * dst_single_tile_size;
         const uint64_t negate_cb_bytes = 2ull * per_cb_bytes;
-        const auto lowest_address = device->lowest_occupied_compute_l1_address();
-        uint64_t max_l1_space = lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();
-        const uint64_t base_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+        const auto lowest_address = device.lowest_occupied_compute_l1_address();
+        uint64_t max_l1_space = lowest_address.has_value() ? lowest_address.value() : device.l1_size_per_core();
+        const uint64_t base_addr = device.allocator()->get_base_allocator_addr(HalMemType::L1);
         TT_FATAL(
             max_l1_space > base_addr,
             "Negate H reduce: L1 base allocator address {} >= lowest occupied address {}; no room for buffers",
@@ -547,7 +547,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
         .compile_time_args = std::move(reader_ct_args),
         .runtime_arg_schema =
             {.runtime_arg_names = std::move(reader_rta_names), .common_runtime_arg_names = {"scaler_bits"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(device.arch()),
     });
 
     // ---- Writer kernel ----
@@ -594,7 +594,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
         .tensor_bindings = std::move(writer_tensor_bindings),
         .compile_time_args = std::move(writer_ct_args),
         .runtime_arg_schema = {.runtime_arg_names = std::move(writer_rta_names)},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(device.arch()),
     });
 
     // ---- Compute kernels (one per core group) ----
@@ -604,7 +604,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     // would otherwise carry the caller's math_approx_mode into sfpu_precision_mode, silently
     // changing SFPU precision. (Unlike the other three factories, this one *does* forward
     // dst_full_sync_en, so double_buffer_dest keeps the helper's inverted value.)
-    auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config);
+    auto compute_hw = ttnn::to_compute_hardware_config(device.arch(), operation_attributes.compute_kernel_config);
     // std::visit rather than a Gen1-only get_if: to_compute_hardware_config yields a
     // ComputeGen2Config on Quasar, and the fields set below exist on both generations. The
     // explicit-unpack-mode requirement in particular is enforced generation-agnostically, so a

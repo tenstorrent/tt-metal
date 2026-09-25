@@ -184,7 +184,7 @@ ttnn::device_operation::ProgramArtifacts RunningStatistics::RunningStatisticsPro
     const auto& running_mean_tensor = tensor_args.running_mean;
     const auto& running_var_tensor = tensor_args.running_var;
 
-    IDevice* device = &batch_mean_tensor.mutable_device();
+    tt::tt_metal::distributed::MeshDevice& device = batch_mean_tensor.mutable_device();
 
     const bool running_mean_has_value = running_mean_tensor.has_value();
     const bool running_var_has_value = running_var_tensor.has_value();
@@ -218,7 +218,7 @@ ttnn::device_operation::ProgramArtifacts RunningStatistics::RunningStatisticsPro
     const bool needs_var_typecast = running_var_has_value && stat_format_needs_typecast;
 
     // we parallelize the computation across the output tiles
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto all_device_cores = NodeRangeSet(NodeRange({0, 0}, {num_cores_x - 1, num_cores_y - 1}));
@@ -294,7 +294,7 @@ ttnn::device_operation::ProgramArtifacts RunningStatistics::RunningStatisticsPro
         .compile_time_args = {{"fill_momentum_fp32", static_cast<uint32_t>(any_float32)}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"momentum", "start_tile_id", "num_tiles", "HtWt", "n_stride", "c_stride", "N", "C"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(device.arch()),
     };
 
     // WRITER KERNEL
@@ -370,7 +370,7 @@ ttnn::device_operation::ProgramArtifacts RunningStatistics::RunningStatisticsPro
             {{"old_stat_is_fp32", static_cast<uint32_t>(running_stat_data_format == DataFormat::Float32)}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"start_tile_id", "num_tiles", "HtWt", "n_stride", "c_stride", "N", "C"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(device.arch()),
     };
 
     // COMPUTE KERNEL
@@ -476,7 +476,7 @@ ttnn::device_operation::ProgramArtifacts RunningStatistics::RunningStatisticsPro
     }
 
     auto compute_hw_config =
-        ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config);
+        ttnn::to_compute_hardware_config(device.arch(), operation_attributes.compute_kernel_config);
     if (fp32_dest_acc_en) {
         // Re-key of the legacy unpack_to_dest_mode vector, which was indexed by CB id. The
         // writer-facing stat buffers are producer-only for this kernel, so they get no entry. An

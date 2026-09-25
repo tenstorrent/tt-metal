@@ -59,7 +59,7 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create_program_artifact
     ////////////////////////////////////////////////////////////////////////////
     const NodeCoord node = {0, 0};
 
-    IDevice* device = output_grad.device();
+    MeshDevice* device = output_grad.device();
     auto arch = device->arch();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(arch, compute_kernel_config);

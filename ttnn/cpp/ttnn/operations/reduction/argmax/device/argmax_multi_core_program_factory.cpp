@@ -30,7 +30,7 @@ using namespace tt::tt_metal::experimental;
  * If a sub_core_grids is provided, it will be used to distribute the work evenly across the cores.
  * Otherwise, we distribute to maximum of two core groups, with each core group getting a minimum of
  * `min_red_dim_units_per_core` elements to process, except where the reduction dim runs out.
- * @param device Pointer to the device
+ * @param device The mesh device
  * @param red_dim_units Total units in the reduction dimension
  * @param min_red_dim_units_per_core Minimum units per core (for alignment)
  * @param sub_core_grids Optional core grid specification
@@ -43,7 +43,7 @@ using namespace tt::tt_metal::experimental;
  *         - red_dim_units1: Same, for the second group
  */
 static inline std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> distribute_work_to_cores(
-    const tt::tt_metal::IDevice* device,
+    const tt::tt_metal::distributed::MeshDevice& device,
     const uint32_t red_dim_units,
     const uint32_t min_red_dim_units_per_core,
     const std::optional<CoreRangeSet>& sub_core_grids) {
@@ -80,7 +80,7 @@ static inline std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uin
         }
     } else {
         // We pick as many cores as possible, but each core will read a multiple of min_red_dim_units_per_core
-        const auto core_grid = device->compute_with_storage_grid_size();
+        const auto core_grid = device.compute_with_storage_grid_size();
         uint32_t num_total_cores;
         std::tie(num_total_cores, all_cores, cores0, cores1, red_dim_units0, red_dim_units1) =
             tt::tt_metal::split_work_to_cores(core_grid, tt::div_up(red_dim_units, min_red_dim_units_per_core));
@@ -205,7 +205,7 @@ ttnn::device_operation::ProgramArtifacts ArgMaxMultiCoreProgramFactory::create_p
     // Last dimension in output i.e. the dim left after reduction
     const auto output_last_dim = reduce_all or keepdim or (rank < 2) ? 1 : input_shape[rank - 2];
 
-    const tt::tt_metal::IDevice* device = &output.mutable_device();
+    const tt::tt_metal::distributed::MeshDevice& device = output.mutable_device();
 
     const auto src_is_dram = input.mesh_buffer().device_local_config().buffer_type == tt::tt_metal::BufferType::DRAM;
 
@@ -225,7 +225,7 @@ ttnn::device_operation::ProgramArtifacts ArgMaxMultiCoreProgramFactory::create_p
     const bool split_eligible = split_supported && (enable_secondary_dm != false);
     auto effective_core_grids = sub_core_grids;
     if (split_eligible && not sub_core_grids.has_value()) {
-        const auto grid = device->compute_with_storage_grid_size();
+        const auto grid = device.compute_with_storage_grid_size();
         const uint32_t max_cores =
             std::min<uint32_t>(tt::div_up(red_dim_units, min_red_dim_units_per_core), grid.x * grid.y);
         // The scan is bandwidth bound, so count bytes; the constant was calibrated on 2-byte elements.
@@ -252,7 +252,7 @@ ttnn::device_operation::ProgramArtifacts ArgMaxMultiCoreProgramFactory::create_p
     validate_reduce_op_program_grid(
         "Argmax multicore",
         all_cores,
-        device->compute_with_storage_grid_size(),
+        device.compute_with_storage_grid_size(),
         sub_core_grids.has_value() ? &sub_core_grids.value() : nullptr,
         true,
         {});
@@ -272,7 +272,7 @@ ttnn::device_operation::ProgramArtifacts ArgMaxMultiCoreProgramFactory::create_p
 
     // Only src is duplicated. Charge it against the region the DFBs actually get, with each one
     // rounded to the DRAM alignment.
-    const uint32_t dfb_alignment = device->allocator()->get_alignment(tt::tt_metal::BufferType::DRAM);
+    const uint32_t dfb_alignment = device.allocator()->get_alignment(tt::tt_metal::BufferType::DRAM);
     const auto dfb_alloc_size = [dfb_alignment](uint64_t n) {
         return tt::align(n, static_cast<uint64_t>(dfb_alignment));
     };
@@ -281,10 +281,10 @@ ttnn::device_operation::ProgramArtifacts ArgMaxMultiCoreProgramFactory::create_p
     // A core belongs to one src group, so charge the larger.
     const uint64_t dual_src_dfb_bytes =
         std::max(dfb_alloc_size(2ull * src_dfb_entry_size0), dfb_alloc_size(2ull * src_dfb_entry_size1));
-    const auto lowest_occupied_l1 = device->lowest_occupied_compute_l1_address();
+    const auto lowest_occupied_l1 = device.lowest_occupied_compute_l1_address();
     const uint64_t dfb_region_end =
-        lowest_occupied_l1.has_value() ? lowest_occupied_l1.value() : device->l1_size_per_core();
-    const uint64_t dfb_region_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+        lowest_occupied_l1.has_value() ? lowest_occupied_l1.value() : device.l1_size_per_core();
+    const uint64_t dfb_region_base = device.allocator()->get_base_allocator_addr(HalMemType::L1);
     const uint64_t l1_available = dfb_region_end > dfb_region_base ? dfb_region_end - dfb_region_base : 0;
 
     // Split the inner (j) loop across both DM processors; reduce_all is excluded, it needs a merge not a partition.
@@ -354,16 +354,16 @@ ttnn::device_operation::ProgramArtifacts ArgMaxMultiCoreProgramFactory::create_p
     // Get physical coordinates of the reduce core that collates the intermediate outputs
     const uint32_t reduce_core_id = 0;  // We can do perf optimization by tuning this in the future
     const auto cores = corerange_to_cores(all_cores, num_total_cores, true);
-    const auto reduce_core = device->worker_core_from_logical_core(cores.at(reduce_core_id));
+    const auto reduce_core = device.worker_core_from_logical_core(cores.at(reduce_core_id));
 
     // Get first and last core's coordinates for the at max two groups of cores in all_cores
     const auto group0 = all_cores.ranges().at(0);
     const auto group1 = all_cores.size() > 1 ? all_cores.ranges().at(1) : CoreRange(CoreCoord(0, 0), CoreCoord(0, 0));
 
-    const auto start_core0 = device->worker_core_from_logical_core(group0.start_coord);
-    const auto end_core0 = device->worker_core_from_logical_core(group0.end_coord);
-    const auto start_core1 = device->worker_core_from_logical_core(group1.start_coord);
-    const auto end_core1 = device->worker_core_from_logical_core(group1.end_coord);
+    const auto start_core0 = device.worker_core_from_logical_core(group0.start_coord);
+    const auto end_core0 = device.worker_core_from_logical_core(group0.end_coord);
+    const auto start_core1 = device.worker_core_from_logical_core(group1.start_coord);
+    const auto end_core1 = device.worker_core_from_logical_core(group1.end_coord);
 
     const auto num_cores_range0 = group0.size();
     const auto num_cores_range1 = all_cores.size() > 1 ? group1.size() : 0;

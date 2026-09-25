@@ -43,7 +43,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
     const auto tile = input_tensor.tensor_spec().tile();
     const uint32_t tile_hw = tile.get_tile_hw();
 
-    IDevice* device = input_tensor.device();
+    MeshDevice* device = input_tensor.device();
 
     bool fp32_dest_acc_en = src0_dfb_data_format == tt::DataFormat::Float32;
 

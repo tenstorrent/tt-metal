@@ -48,7 +48,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreBlockProgramFactory::c
 
     const auto& input_shape = a.padded_shape();
 
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
     // Match uwu's proven block_interleaved factory: the split and the per-core RTA loop MUST use the
     // same CoreRangeSet basis, otherwise cliff cores get block sizes that don't match the compute

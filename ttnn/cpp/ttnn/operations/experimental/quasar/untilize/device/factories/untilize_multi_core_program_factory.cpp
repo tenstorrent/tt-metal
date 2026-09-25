@@ -44,7 +44,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
     Buffer* src0_buffer = a.buffer();
 
     uint32_t tensor_width = a.padded_shape()[-1];
