@@ -18,52 +18,52 @@ Reference for ``tt::tt_metal::DataType`` — the dtype a ``Tensor`` is created w
       - Yes
       - Yes
       - Yes
-      -
+      - 1 sign + 8 exponent + 7 mantissa bits (Google bfloat16). Not IEEE 754 — same exponent range as ``FLOAT32`` with a truncated mantissa.
     * - ``FLOAT32``
       - Yes
       - Yes
       - Yes
-      -
+      - IEEE 754 binary32: 1 sign + 8 exponent + 23 mantissa bits.
     * - ``BFLOAT8_B``
       - Yes
       - Yes
       - No
-      - Block-floating-point; see :ref:`ttnn.DataType` in the ttnn tensor docs for the block-float layout and tile-width caveats.
+      - Block-floating-point: one shared 8-bit exponent per tile face, with a per-element 1 sign + 7-bit mantissa (6 stored bits plus an explicit hidden bit).
     * - ``BFLOAT4_B``
       - Yes
       - Yes
       - No
-      - Block-floating-point, same caveats as ``BFLOAT8_B`` with coarser mantissa.
+      - Block-floating-point: one shared 8-bit exponent per tile face, with a per-element 1 sign + 3-bit mantissa — coarser than ``BFLOAT8_B``.
     * - ``UINT32``
       - Yes
       - Yes
       - No
-      -
+      - Unsigned 32-bit integer.
     * - ``UINT16``
       - Yes
       - Yes
       - No
-      -
+      - Unsigned 16-bit integer.
     * - ``UINT8``
       - Yes
       - Yes
       - Yes
-      -
+      - Unsigned 8-bit integer.
     * - ``INT32``
       - Yes
       - Yes
       - Yes
-      -
+      - Signed 32-bit integer, two's complement.
     * - ``INT8``
       - Yes
       - Yes
       - Yes
-      -
+      - Signed 8-bit integer, two's complement.
     * - ``FP8_E4M3``
       - No
       - Yes
       - Yes
-      -  Hardware/enum-legal on Blackhole and Quasar, but as of this writing the ``DataType`` is only wired up for one op path (the DeepSeek V3 prefill combine/dispatch ops), row-major layout only — check op support before opting in rather than assuming general elementwise support.
+      - 1 sign + 4 exponent + 3 mantissa bits (the "E4M3" name). Hardware/enum-legal on Blackhole and Quasar, but as of this writing the ``DataType`` is only wired up for one op path (the DeepSeek V3 prefill combine/dispatch ops), row-major layout only — check op support before opting in rather than assuming general elementwise support.
     * - ``INVALID``
       - —
       - —
