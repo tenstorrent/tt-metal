@@ -101,9 +101,10 @@ def test_profile_last_chunk(mesh_device, cfg, loader, record):
     metrics.record(record.task, "profiled_programs", sum(v[1] for v in cats.values()))
     d = REPO / "models/demos/ernie45_d_p/bringup/results"  # committed with the gate: feeds the dashboard
     d.mkdir(parents=True, exist_ok=True)
-    (d / "P3.3_profile.json").write_text(
+    (d / f"{record.task}_profile.json").write_text(
         json.dumps(
             {
+                "sdpa": __import__("models.demos.ernie45_d_p.tt.attention", fromlist=["x"]).sdpa_settings(),
                 "wall_ms": wall * 1e3,
                 "device_ms": out,
                 "sections_ms": {k: v / 1e6 for k, v in prof["kernel_ns"].items()},
