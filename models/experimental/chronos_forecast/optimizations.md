@@ -11,3 +11,5 @@
 sweep_matul.py
 sweep_sdpa.py
 sweep_l1_chunk.py
+
+(make sure to add more stuff for this later)

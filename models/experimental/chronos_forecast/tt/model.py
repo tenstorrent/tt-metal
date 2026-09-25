@@ -472,6 +472,7 @@ class TtChronos:
         """Host-orchestrated forward. Returns quantile preds (B, Q, O*P) host float."""
         cfg = self.config
         batch_size = context.shape[0]
+
         hidden, loc_scale, _ = self.encode(
             context,
             context_mask,
@@ -481,7 +482,11 @@ class TtChronos:
             num_output_patches,
         )
         forecast_embeds = hidden[:, -num_output_patches:]
+
+        # final prediction head
         out = self._output_embed.forward(forecast_embeds)
+
+        # rearrange output
         quantile_preds = rearrange(
             out,
             "b n (q p) -> b q (n p)",

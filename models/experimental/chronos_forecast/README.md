@@ -13,10 +13,6 @@ Pinned Chronos-2 copy: commit `10afa9ebe016e514f9d7dc1aa873f66af57e116b`. See [r
 
 
 
-## Weights
-
-Real Chronos-2 weights are **not** committed, only testing for model shape right now will change when real infra
-
 ## Demo
 
 Single `Chronos2Model.forward` (CPU):
