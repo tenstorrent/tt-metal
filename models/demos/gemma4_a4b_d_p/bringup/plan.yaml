@@ -1,0 +1,60 @@
+# Gemma-4 26B-A4B text prefill on the 1x4 Blackhole mesh (4x p150b, 32 GB each). Reasoning in plan.md.
+# TP=4 for attention and the dense MLP, EP=4 (32 experts per chip) for the routed experts, residual replicated.
+headroom_frac: 0.15
+users: 1
+placements:
+  # --- vision tower: text-only bring-up
+  - {pattern: "model.vision_tower.*", placement: skip, why: text only}
+  - {pattern: "model.embed_vision.*", placement: skip, why: text only}
+
+  # --- embedding (tied with the LM head; the vocab-sharded LM-head copy is under extra_gb_per_chip)
+  - {pattern: "model.language_model.embed_tokens.weight", placement: replicate, dtype: bf16, group: embedding}
+  - {pattern: "model.language_model.norm.weight", placement: replicate, dtype: bf16, group: norms and scalars}
+
+  # --- global-layer K projection: 2 KV heads on 4 chips, chip c holds head c//2 (512 of 1024 rows).
+  #     The schema has no "split by 2", so count it replicated (over-estimates by 5.8 MB per layer).
+  - {pattern: "model.language_model.layers.5.self_attn.k_proj.weight", placement: replicate, dtype: bf16, group: attention (global k_proj)}
+  - {pattern: "model.language_model.layers.11.self_attn.k_proj.weight", placement: replicate, dtype: bf16, group: attention (global k_proj)}
+  - {pattern: "model.language_model.layers.17.self_attn.k_proj.weight", placement: replicate, dtype: bf16, group: attention (global k_proj)}
+  - {pattern: "model.language_model.layers.23.self_attn.k_proj.weight", placement: replicate, dtype: bf16, group: attention (global k_proj)}
+  - {pattern: "model.language_model.layers.29.self_attn.k_proj.weight", placement: replicate, dtype: bf16, group: attention (global k_proj)}
+  - {pattern: "model.language_model.layers.*.self_attn.k_proj.weight", placement: shard, dtype: bf16, group: attention}
+
+  # --- attention (TP by head): Q/K/V column-parallel, O row-parallel
+  - {pattern: "model.language_model.layers.*.self_attn.q_proj.weight", placement: shard, dtype: bf16, group: attention}
+  - {pattern: "model.language_model.layers.*.self_attn.v_proj.weight", placement: shard, dtype: bf16, group: attention}
+  - {pattern: "model.language_model.layers.*.self_attn.o_proj.weight", placement: shard, dtype: bf16, group: attention}
+  - {pattern: "model.language_model.layers.*.self_attn.q_norm.weight", placement: replicate, dtype: bf16, group: norms and scalars}
+  - {pattern: "model.language_model.layers.*.self_attn.k_norm.weight", placement: replicate, dtype: bf16, group: norms and scalars}
+
+  # --- dense MLP (2112, gelu_tanh): gate/up column-parallel, down row-parallel (padded 528 -> 544 per chip on device)
+  - {pattern: "model.language_model.layers.*.mlp.*", placement: shard, dtype: bf16, group: dense mlp}
+
+  # --- router: replicated so every chip computes the same routing; fp32 for stable top-8 near ties
+  - {pattern: "model.language_model.layers.*.router.*", placement: replicate, dtype: fp32, group: router}
+
+  # --- routed experts: expert-parallel, experts 32c .. 32c+31 on chip c
+  - {pattern: "model.language_model.layers.*.experts.*", placement: expert, dtype: bf16, group: routed experts}
+
+  # --- per-layer norms and the layer scalar
+  - {pattern: "model.language_model.layers.*layernorm*.weight", placement: replicate, dtype: bf16, group: norms and scalars}
+  - {pattern: "model.language_model.layers.*.layer_scalar", placement: replicate, dtype: bf16, group: norms and scalars}
+
+state:
+  # Full-length K and V per layer (the prefill contract migrates the whole cache; no window truncation).
+  - {layers: "0-4,6-10,12-16,18-22,24-28", what: KV sliding, heads_per_chip: 2, head_dim: 256, tensors: 2, dtype: bf16, kv_heads: 8}
+  # Global: 2 KV heads, chip c holds head c//2 (each head on 2 chips). K and V stored separately (V != K).
+  - {layers: [5, 11, 17, 23, 29], what: KV global, heads_per_chip: 1, head_dim: 512, tensors: 2, dtype: bf16, kv_heads: 2}
+
+extra_gb_per_chip:
+  # Tied LM head as a separate transposed, vocab-sharded copy: 262144 x 2816 bf16 / 4.
+  lm_head vocab-sharded copy: 0.37
+  # Second KV copy in the engine's contract format (bfp8), as on ERNIE: 3.46 GB bf16 state * 1088/2048.
+  contract KV copy (bfp8): 1.84
+  # RoPE tables (sliding 256, global 512) for 56320 positions, dispatch tables, program cache slack.
+  rope tables and misc: 0.25
+
+# Peak transient for a 5120-token chunk: MoE dispatch + combine buffers (top-8 worst case 8*S rows x 2816 bf16,
+# about 0.23 GB each), expert intermediates (<= 8*S x 1408 bf16, 0.12 GB), residual copies and norms
+# (29 MB each), Q/K/V/SDPA (global 4 q heads x 512 x 5120 plus tail), CCL buffers; x2 for fragmentation.
+activations_gb_per_chip: 3.0

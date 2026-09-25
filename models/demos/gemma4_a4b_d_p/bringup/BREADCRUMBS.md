@@ -41,3 +41,22 @@ Append-only log, one section per task attempt: what was done, decisions and why,
   accuracy on the text 78.3% / 55.8% / 45.8% for both. The fall with position is the model's own (header, then the
   novel recited from memory). The framework now requires hf.parity_seq > sliding window at spec validation; this
   spec keeps 512 for run1 (changing R.2 would reset the goldens), with this check as the evidence.
+
+## PL.1 plan (attempt 1)
+- Wrote `plan.yaml`, `plan.md` and `components.yaml` (14 steps x 2 block types + embed/final_norm/lm_head). tasks.yaml unchanged.
+- Scheme: residual replicated; attention TP=4 by head (sliding: 4 Q + 2 KV heads per chip; global: 4 Q heads + KV head
+  c//2, so each of the 2 global KV heads lives on 2 chips); dense MLP TP=4 (528 per chip, padded to 544); experts EP=4
+  (32 per chip, bf16); router replicated in fp32; embedding replicated; tied LM head as a vocab-sharded copy (extra).
+- 3 all_reduces per layer (o_proj, MLP, experts): post_mlp_norm and post_moe_norm are separate nonlinear norms,
+  so the MLP and MoE partials cannot share one all_reduce as ERNIE's routed and shared outputs do.
+- State: full-length K and V (contract), sliding 2x256 per chip, global 1x512 per chip (`kv_heads: 2` in the entry); plus
+  a bfp8 contract-copy estimate (1.84 GiB) as on ERNIE.
+- Gate numbers: 21.52 GiB per chip of a 27.20 GiB budget, experts 10.63 GiB. Using bfp8 experts would free 4.6 GiB.
+- Global k_proj layers are listed by explicit layer index and counted as replicated. The schema has no divide-by-2
+  placement, so this over-counts by about 6 MB per layer.
+- Gotcha: `unified_routed_expert_moe` has no GeGLU activation (see the known_issues proposal). The experts component is
+  planned as dispatch plus per-expert matmul with apply_geglu; a fused GeluTanh activation is a perf follow-up.
+- Sliding SDPA: chunked SDPA takes no `sliding_window_size`. The plan is to concatenate the previous 1024 K/V (read from the
+  cache) with the chunk and run causal `scaled_dot_product_attention(sliding_window_size=1024)`, as in gemma4/tt/attention/prefill.py.
+- All metrics pass except plan_approved (needs a person's approval in approvals.yaml).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup.plan.check_plan`
