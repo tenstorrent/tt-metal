@@ -4,11 +4,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import math
 import re
 import warnings
-from collections.abc import Container, Hashable, Mapping, Sequence
+from collections.abc import Container, Hashable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 
 import torch
@@ -700,13 +701,6 @@ class TransformerEncoder(Module):
 
         top_k_on_device = top_k is not None and top_k <= MAX_DEVICE_TOP_K and not return_logits
 
-        if guide is None and not top_k_on_device and torch.get_num_threads() > 1:
-            warnings.warn(
-                f"sampling the whole vocabulary on {torch.get_num_threads()} torch threads leads to "
-                "poor performance; call torch.set_num_threads(1)",
-                stacklevel=2,
-            )
-
         if traced:
             trace = self._get_decode_trace(
                 batch_size=batch_size,
@@ -809,8 +803,9 @@ class TransformerEncoder(Module):
                 picked = _sample(torch.softmax(values / temperature, 1), top_k=device_top_k.top_k, top_p=top_p)
                 torch_new_tokens = torch.gather(indices, 1, picked.long()).to(torch.uint32)
             else:
-                torch_prob = torch.softmax(torch_output / temperature, 1)
-                torch_new_tokens = _sample(torch_prob, top_k=top_k, top_p=top_p)
+                with _single_torch_thread():
+                    torch_prob = torch.softmax(torch_output / temperature, 1)
+                    torch_new_tokens = _sample(torch_prob, top_k=top_k, top_p=top_p)
 
             tokens = torch.cat([tokens, torch_new_tokens.to(tokens.dtype)], dim=1)
 
@@ -1660,3 +1655,14 @@ def _num_to_corerange(x: int) -> ttnn.CoreRange:
         ttnn.CoreCoord(0, 0),
         ttnn.CoreCoord(num_x - 1, num_y - 1),
     )
+
+
+@contextlib.contextmanager
+def _single_torch_thread() -> Iterator[None]:
+    """Runs the block on one Torch thread."""
+    num_threads = torch.get_num_threads()
+    torch.set_num_threads(1)
+    try:
+        yield
+    finally:
+        torch.set_num_threads(num_threads)
