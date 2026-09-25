@@ -3652,9 +3652,7 @@ TEST(CyclicSdpaBwTimingTest, DISABLED_CompareBackwardWithTtTrain) {
             // Where the cyclic side's time goes: forming D alone, and the op
             // with D given.
             const auto form_d = [&]() {
-                const auto dO32 = ttnn::typecast(grad_output, ttnn::DataType::FLOAT32);
-                const auto O32 = ttnn::typecast(ours_o, ttnn::DataType::FLOAT32);
-                return ttml::ttnn_fixed::sum_ttnn(ttnn::multiply(dO32, O32), 3, true);
+                return ttml::ttnn_fixed::sum_ttnn(ttnn::multiply(grad_output, ours_o, ttnn::DataType::FLOAT32), 3, true);
             };
             const auto D = form_d();
             const auto t_d = time_it([&]() {
