@@ -43,19 +43,19 @@ std::optional<UntilizePlan> plan_untilize(
 // zone is above zero.
 constexpr uint32_t UNTILIZERS_PER_LINK = 5;
 
-// Whether the whole pool fit in the row under the streams.
+// Whether the whole pool fit in the core row under the streams.
 enum class UntilizerPoolFallback : uint8_t {
-    kNone,          // all of it in the row under the streams
-    kRowTooNarrow,  // the row has fewer spare cores than the pool wants; the rest come from elsewhere
+    kNone,          // all of it in the core row under the streams
+    kRowTooNarrow,  // the core row has fewer spare cores than the pool wants; the rest come from elsewhere
 };
 
 // Adds the pool that untilizes a TILE input into staging: spare cores, each running a reader,
 // pack_untilize and a writer over its round-robin share of the tile rows.
 //
-// UNTILIZERS_PER_LINK per link, at most one per tile row, in the row directly under the streams and
-// spread across the streams' columns. The streams' own row already carries their DRAM traffic
-// (fwd_section pages, output pages, staging reads); the row below is the closest one that does not. A
-// sub-device without that row is refused. If that row has too few spare cores, the rest of the pool
+// UNTILIZERS_PER_LINK per link, at most one per tile row, in the core row directly under the streams and
+// spread across the streams' columns. The streams' own core row already carries their DRAM traffic
+// (fwd_section pages, output pages, staging reads); the core row below is the closest one that does not.
+// A sub-device without that core row is refused. If that core row has too few spare cores, the rest of the pool
 // comes from other spare cores, and the return value says so, so the caller can warn once per build.
 //
 // Nothing else runs on these cores, so the untilize circular buffers can take most of their L1.

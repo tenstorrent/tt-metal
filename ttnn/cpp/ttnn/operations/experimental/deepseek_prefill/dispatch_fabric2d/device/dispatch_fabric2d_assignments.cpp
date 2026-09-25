@@ -31,17 +31,17 @@ void validate_coverage(const std::map<StreamId, std::vector<Assignment>>& per_st
                 a.split_idx,
                 a.split_count);
             TT_FATAL(
-                claimed[a.dst_row].insert(a.split_idx).second,
-                "dispatch_fabric2d: two streams both claim share {} of {} for row {}",
+                claimed[a.dst_pos].insert(a.split_idx).second,
+                "dispatch_fabric2d: two streams both claim share {} of {} for position {}",
                 a.split_idx,
                 a.split_count,
-                a.dst_row);
-            auto& want = split_count[a.dst_row];
+                a.dst_pos);
+            auto& want = split_count[a.dst_pos];
             TT_FATAL(
                 want == 0 || want == a.split_count,
-                "dispatch_fabric2d: row {} is split {} ways by one stream and {} ways by another; the shares "
+                "dispatch_fabric2d: position {} is split {} ways by one stream and {} ways by another; the shares "
                 "would not tile what this chip owes it",
-                a.dst_row,
+                a.dst_pos,
                 want,
                 a.split_count);
             want = a.split_count;
@@ -52,59 +52,59 @@ void validate_coverage(const std::map<StreamId, std::vector<Assignment>>& per_st
         "dispatch_fabric2d: streams cover {} of the {} remote chips on the dispatch axis",
         claimed.size(),
         ring_extent - 1);
-    for (const auto& [row, shares] : claimed) {
+    for (const auto& [pos, shares] : claimed) {
         TT_FATAL(
-            shares.size() == split_count.at(row),
-            "dispatch_fabric2d: row {} has {} of its {} shares claimed, so part of what this chip owes it "
+            shares.size() == split_count.at(pos),
+            "dispatch_fabric2d: position {} has {} of its {} shares claimed, so part of what this chip owes it "
             "would never be sent",
-            row,
+            pos,
             shares.size(),
-            split_count.at(row));
+            split_count.at(pos));
     }
 }
 
-// Every chunk a chip forwards, as (origin, destination) hop offsets from that chip along the stream's
-// direction: origins upstream are negative, destinations downstream are positive. A chunk addressed to the
+// Every descriptor a chip forwards, as (origin, destination) hop offsets from that chip along the stream's
+// direction: origins upstream are negative, destinations downstream are positive. A descriptor addressed to the
 // forwarding chip itself is delivered, not forwarded, so the nearest destination is 1 and the furthest
 // origin is -(m - 1). The offsets are the same on every chip, so this takes only the extent.
 //
-// The order is the order the upstream chip writes the chunks (see validate_chunk_agreement). Upstream
-// writes its own destinations furthest first (the origin == -1 group) before any chunk it forwards, so
+// The order is the order the upstream chip writes the descriptors (see validate_descriptor_agreement). Upstream
+// writes its own destinations furthest first (the origin == -1 group) before any descriptor it forwards, so
 // origins run outwards from -1.
-std::vector<std::pair<int32_t, int32_t>> chunks_in_forwarder_ref_frame(uint32_t ring_extent) {
+std::vector<std::pair<int32_t, int32_t>> descriptors_in_forwarder_ref_frame(uint32_t ring_extent) {
     const int32_t m = static_cast<int32_t>(ring_extent / 2);
-    std::vector<std::pair<int32_t, int32_t>> chunks;
-    chunks.reserve(forward_chunks_per_stream(ring_extent));
+    std::vector<std::pair<int32_t, int32_t>> descriptors;
+    descriptors.reserve(forward_descriptors_per_stream(ring_extent));
     for (int32_t origin = -1; origin > -m; origin--) {
         for (int32_t dst = origin + m; dst >= 1; dst--) {
-            chunks.emplace_back(origin, dst);
+            descriptors.emplace_back(origin, dst);
         }
     }
-    return chunks;
+    return descriptors;
 }
 
 }  // namespace
 
-std::vector<dspf2d::ChunkDescriptor> forwarding_chunks(
-    StreamId stream, uint32_t my_row, uint32_t ring_extent, uint32_t num_links) {
+std::vector<dspf2d::ChunkDescriptor> forwarding_descriptors(
+    StreamId stream, uint32_t my_pos, uint32_t ring_extent, uint32_t num_links) {
     const bool is_cw = (stream % 2) == 0;
     const uint32_t link = stream / 2;
     const uint32_t m = ring_extent / 2;
     const int32_t travel = is_cw ? 1 : -1;
     const int32_t extent = static_cast<int32_t>(ring_extent);
 
-    std::vector<dspf2d::ChunkDescriptor> chunks;
-    for (const auto& [origin, dst] : chunks_in_forwarder_ref_frame(ring_extent)) {
-        // A counter-clockwise stream mirrors the offsets through 0; adding this chip's row then gives a
+    std::vector<dspf2d::ChunkDescriptor> descriptors;
+    for (const auto& [origin, dst] : descriptors_in_forwarder_ref_frame(ring_extent)) {
+        // A counter-clockwise stream mirrors the offsets through 0; adding this chip's position then gives a
         // position on the dispatch axis.
         const uint32_t distance = static_cast<uint32_t>(dst - origin);
-        chunks.push_back(dspf2d::ChunkDescriptor{
-            .origin_row = static_cast<uint32_t>((static_cast<int32_t>(my_row) + travel * origin + extent) % extent),
-            .dst_row = static_cast<uint32_t>((static_cast<int32_t>(my_row) + travel * dst + extent) % extent),
+        descriptors.push_back(dspf2d::ChunkDescriptor{
+            .origin_pos = static_cast<uint32_t>((static_cast<int32_t>(my_pos) + travel * origin + extent) % extent),
+            .dst_pos = static_cast<uint32_t>((static_cast<int32_t>(my_pos) + travel * dst + extent) % extent),
             .split_idx = distance == m ? stream : link,
             .split_count = distance == m ? stream_count(num_links) : num_links});
     }
-    return chunks;
+    return descriptors;
 }
 
 uint32_t fwd_pages_per_stream(
@@ -124,71 +124,71 @@ uint32_t fwd_pages_per_stream(
         pages += (origins - 1) * div_up(per_pair, num_links);
         pages += div_up(per_pair, sc);
     }
-    return pages + forward_chunks_per_stream(ring_extent) * experts_per_chip;
+    return pages + forward_descriptors_per_stream(ring_extent) * experts_per_chip;
 }
 
-std::vector<dspf2d::ChunkDescriptor> outgoing_chunks(
-    StreamId stream, uint32_t my_row, uint32_t ring_extent, uint32_t num_links) {
+std::vector<dspf2d::ChunkDescriptor> outgoing_descriptors(
+    StreamId stream, uint32_t my_pos, uint32_t ring_extent, uint32_t num_links) {
     const bool is_cw = (stream % 2) == 0;
     const uint32_t link = stream / 2;
     const uint32_t m = ring_extent / 2;
     const int32_t travel = is_cw ? 1 : -1;
     const int32_t extent = static_cast<int32_t>(ring_extent);
-    const auto row_at = [&](int32_t offset) {
-        return static_cast<uint32_t>((static_cast<int32_t>(my_row) + travel * offset + extent) % extent);
+    const auto pos_at = [&](int32_t offset) {
+        return static_cast<uint32_t>((static_cast<int32_t>(my_pos) + travel * offset + extent) % extent);
     };
-    const uint32_t nbr_row = row_at(1);
+    const uint32_t downstream_pos = pos_at(1);
 
-    std::vector<dspf2d::ChunkDescriptor> chunks;
+    std::vector<dspf2d::ChunkDescriptor> descriptors;
     for (uint32_t d = m; d >= 2; d--) {
-        chunks.push_back(dspf2d::ChunkDescriptor{
-            .origin_row = my_row,
-            .dst_row = row_at(static_cast<int32_t>(d)),
+        descriptors.push_back(dspf2d::ChunkDescriptor{
+            .origin_pos = my_pos,
+            .dst_pos = pos_at(static_cast<int32_t>(d)),
             .split_idx = d == m ? stream : link,
             .split_count = d == m ? stream_count(num_links) : num_links});
     }
-    for (const auto& chunk : forwarding_chunks(stream, my_row, ring_extent, num_links)) {
-        if (chunk.dst_row != nbr_row) {
-            chunks.push_back(chunk);
+    for (const auto& descriptor : forwarding_descriptors(stream, my_pos, ring_extent, num_links)) {
+        if (descriptor.dst_pos != downstream_pos) {
+            descriptors.push_back(descriptor);
         }
     }
-    return chunks;
+    return descriptors;
 }
 
-void validate_chunk_agreement(uint32_t ring_extent, uint32_t num_links) {
-    for (uint32_t row = 0; row < ring_extent; row++) {
+void validate_descriptor_agreement(uint32_t ring_extent, uint32_t num_links) {
+    for (uint32_t pos = 0; pos < ring_extent; pos++) {
         for (uint32_t stream = 0; stream < stream_count(num_links); stream++) {
             const int32_t travel = (stream % 2) == 0 ? 1 : -1;
-            const uint32_t nbr_row = static_cast<uint32_t>(
-                (static_cast<int32_t>(row) + travel + static_cast<int32_t>(ring_extent)) %
+            const uint32_t downstream_pos = static_cast<uint32_t>(
+                (static_cast<int32_t>(pos) + travel + static_cast<int32_t>(ring_extent)) %
                 static_cast<int32_t>(ring_extent));
-            const auto written = outgoing_chunks(stream, row, ring_extent, num_links);
-            const auto expected = forwarding_chunks(stream, nbr_row, ring_extent, num_links);
+            const auto written = outgoing_descriptors(stream, pos, ring_extent, num_links);
+            const auto expected = forwarding_descriptors(stream, downstream_pos, ring_extent, num_links);
             TT_FATAL(
                 written.size() == expected.size(),
-                "dispatch_fabric2d: row {} stream {} writes {} chunks into row {}, which reads {}",
-                row,
+                "dispatch_fabric2d: position {} stream {} writes {} descriptors into position {}, which reads {}",
+                pos,
                 stream,
                 written.size(),
-                nbr_row,
+                downstream_pos,
                 expected.size());
             for (size_t i = 0; i < written.size(); i++) {
                 TT_FATAL(
-                    written[i].origin_row == expected[i].origin_row && written[i].dst_row == expected[i].dst_row &&
+                    written[i].origin_pos == expected[i].origin_pos && written[i].dst_pos == expected[i].dst_pos &&
                         written[i].split_idx == expected[i].split_idx &&
                         written[i].split_count == expected[i].split_count,
-                    "dispatch_fabric2d: row {} stream {} writes chunk {} as (origin {}, dst {}, share {}/{}) but "
-                    "row {} reads it as (origin {}, dst {}, share {}/{})",
-                    row,
+                    "dispatch_fabric2d: position {} stream {} writes descriptor {} as (origin {}, dst {}, share {}/{}) "
+                    "but position {} reads it as (origin {}, dst {}, share {}/{})",
+                    pos,
                     stream,
                     i,
-                    written[i].origin_row,
-                    written[i].dst_row,
+                    written[i].origin_pos,
+                    written[i].dst_pos,
                     written[i].split_idx,
                     written[i].split_count,
-                    nbr_row,
-                    expected[i].origin_row,
-                    expected[i].dst_row,
+                    downstream_pos,
+                    expected[i].origin_pos,
+                    expected[i].dst_pos,
                     expected[i].split_idx,
                     expected[i].split_count);
             }
@@ -197,11 +197,11 @@ void validate_chunk_agreement(uint32_t ring_extent, uint32_t num_links) {
 }
 
 std::map<StreamId, std::vector<Assignment>> generate_assignments(
-    const std::vector<uint32_t>& ring_chip_ids, uint32_t my_row, uint32_t num_links) {
+    const std::vector<uint32_t>& ring_chip_ids, uint32_t my_pos, uint32_t num_links) {
     const uint32_t extent = static_cast<uint32_t>(ring_chip_ids.size());
     const uint32_t m = own_assignments_per_stream(extent);
     TT_FATAL(extent >= 4 && extent % 2 == 0, "dispatch_fabric2d: axis extent {} must be even and at least 4", extent);
-    TT_FATAL(my_row < extent, "dispatch_fabric2d: row {} is outside a {}-chip axis", my_row, extent);
+    TT_FATAL(my_pos < extent, "dispatch_fabric2d: position {} is outside a {}-chip axis", my_pos, extent);
 
     std::map<StreamId, std::vector<Assignment>> per_stream;
     for (uint32_t link = 0; link < num_links; link++) {
@@ -210,15 +210,15 @@ std::map<StreamId, std::vector<Assignment>> generate_assignments(
             auto& list = per_stream[stream];
 
             auto own = [&](uint32_t distance, uint32_t split_idx, uint32_t split_count) {
-                const uint32_t row = (my_row + (is_cw ? distance : extent - distance)) % extent;
+                const uint32_t pos = (my_pos + (is_cw ? distance : extent - distance)) % extent;
                 list.push_back(Assignment{
-                    .dst_chip_id = ring_chip_ids[row],
-                    .dst_row = row,
+                    .dst_chip_id = ring_chip_ids[pos],
+                    .dst_pos = pos,
                     .split_idx = split_idx,
                     .split_count = split_count});
             };
 
-            // Furthest destination first, the order outgoing_chunks writes them into the downstream fwd_section.
+            // Furthest destination first, the order outgoing_descriptors writes them into the downstream fwd_section.
             for (uint32_t j = 1; j <= m; j++) {
                 const uint32_t distance = m - j + 1;
                 if (distance == m) {
@@ -227,7 +227,7 @@ std::map<StreamId, std::vector<Assignment>> generate_assignments(
                     own(distance, link, num_links);
                 }
             }
-            const uint32_t forwards = forward_chunks_per_stream(extent);
+            const uint32_t forwards = forward_descriptors_per_stream(extent);
             for (uint32_t c = 0; c < forwards; c++) {
                 list.push_back(Assignment{.is_forward = true});
             }

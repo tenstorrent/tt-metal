@@ -55,10 +55,10 @@ bool input_is_tiled(const DispatchFabric2dInputs& t) { return t.input_tensor.lay
 std::vector<uint32_t> ring_chip_ids(ttnn::MeshDevice* mesh, const ttnn::MeshCoordinate& coord, uint32_t axis) {
     const uint32_t extent = static_cast<uint32_t>(mesh->shape()[static_cast<int32_t>(axis)]);
     std::vector<uint32_t> ids(extent);
-    for (uint32_t row = 0; row < extent; row++) {
+    for (uint32_t pos = 0; pos < extent; pos++) {
         ttnn::MeshCoordinate c = coord;
-        c[static_cast<int32_t>(axis)] = row;
-        ids[row] = static_cast<uint32_t>(mesh->get_fabric_node_id(c).chip_id);
+        c[static_cast<int32_t>(axis)] = pos;
+        ids[pos] = static_cast<uint32_t>(mesh->get_fabric_node_id(c).chip_id);
     }
     return ids;
 }
@@ -75,7 +75,7 @@ dspf2d::ScratchGeometry scratch_geometry(const DispatchFabric2dParams& args, uin
         .num_routed_experts = args.num_routed_experts,
         .experts_per_chip = args.experts_per_chip,
         .topk = args.num_experts_per_tok,
-        .num_forward = forward_chunks_per_stream(extent)};
+        .num_forward = forward_descriptors_per_stream(extent)};
 }
 
 L1Layout compute_l1_layout(
@@ -215,7 +215,7 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
             token_bytes);
     }
 
-    validate_chunk_agreement(extent, args.num_links);
+    validate_descriptor_agreement(extent, args.num_links);
     const auto placement = decide_placement(mesh, args.axis, args.num_links, args.worker_core_range_set);
     const auto sems = allocate_stream_semaphores(mesh, args.worker_core_range_set);
     // A page is a token plus its fwd_meta, so one fabric write carries both.
@@ -273,12 +273,12 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
     // where the wait compiles out.
     const uint32_t untilize_tile_rows = untilize.has_value() ? untilize->num_tile_rows : 0u;
 
-    // Chips whose untilizer pool did not fit in the row under the streams; reported once per build.
+    // Chips whose untilizer pool did not fit in the core row under the streams; reported once per build.
     uint32_t narrow_pools = 0;
     for (const auto& coord : ttnn::MeshCoordinateRange(mesh->shape())) {
-        const uint32_t row = static_cast<uint32_t>(coord[static_cast<int32_t>(args.axis)]);
+        const uint32_t pos = static_cast<uint32_t>(coord[static_cast<int32_t>(args.axis)]);
         const auto chip_ids = ring_chip_ids(mesh, coord, args.axis);
-        const auto work_by_stream = generate_assignments(chip_ids, row, args.num_links);
+        const auto work_by_stream = generate_assignments(chip_ids, pos, args.num_links);
         const uint32_t linearized = ccl::common::get_linearized_index(coord, mesh->get_view());
 
         tt::tt_metal::ProgramDescriptor desc;
@@ -305,7 +305,7 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
             snd.compile_time_args = dspf2d::SenderCtArgs(token_bytes, self, downstream, l1, plan).to_ct_word_arr();
             snd.config = tt::tt_metal::DataMovementConfigDescriptor{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-                // NOC_1 routes -Y first, so a worker one row from its eth core reaches it in a single hop.
+                // NOC_1 routes -Y first, so a worker one core row from its eth core reaches it in a single hop.
                 .noc = tt::tt_metal::NOC::NOC_1,
             };
             auto snd_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
@@ -319,7 +319,7 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
                 }
                 own_count++;
                 assignment_words.push_back(a.dst_chip_id);
-                assignment_words.push_back(a.dst_row);
+                assignment_words.push_back(a.dst_pos);
                 assignment_words.push_back(a.split_idx);
                 assignment_words.push_back(a.split_count);
             }
@@ -328,15 +328,15 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
                 std::vector<uint32_t> w;
                 w.reserve(cs.size() * dspf2d::CHUNK_DESCRIPTOR_WORDS);
                 for (const auto& d : cs) {
-                    w.push_back(d.origin_row);
-                    w.push_back(d.dst_row);
+                    w.push_back(d.origin_pos);
+                    w.push_back(d.dst_pos);
                     w.push_back(d.split_idx);
                     w.push_back(d.split_count);
                 }
                 return w;
             };
-            const auto in_words = to_words(forwarding_chunks(stream, row, extent, args.num_links));
-            const auto out_words = to_words(outgoing_chunks(stream, row, extent, args.num_links));
+            const auto in_words = to_words(forwarding_descriptors(stream, pos, extent, args.num_links));
+            const auto out_words = to_words(outgoing_descriptors(stream, pos, extent, args.num_links));
 
             tt::tt_metal::KernelDescriptor rdr;
             rdr.kernel_source =
@@ -348,7 +348,7 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
                                         args,
                                         token_bytes,
                                         linearized,
-                                        row,
+                                        pos,
                                         static_cast<uint32_t>(self.downstream_node.chip_id),
                                         l1,
                                         plan,
