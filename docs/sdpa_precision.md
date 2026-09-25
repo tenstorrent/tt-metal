@@ -46,8 +46,10 @@ noncausal attention (dense optionally with an additive `attn_mask`), and:
 - Q `[B, Hq, Q, D]`, K/V `[B, Hkv, K, D]` with any tile-aligned head dim D,
   positive dimensions and `Hq` divisible by `Hkv` (including grouped-query attention);
 - arbitrary positive sequence lengths; any tile-aligned Q chunk from 32 to 1024
-  rows and any tile-aligned K chunk, bounded only by L1 (see
-  [Q blocking](#q-blocking) and [K blocking](#k-blocking));
+  rows and any tile-aligned K chunk, bounded only by L1, for dense, joint, ring and
+  exp ring (see [Q blocking](#q-blocking) and [K blocking](#k-blocking)). FAST on
+  ring and exp ring runs the legacy ring kernels and keeps their limits (Q 128-320
+  in 32-row steps, K256/K384/K512, D64/D128/D256; exp ring K512/D128);
 - standard 32x32 tiles, minimal sequence tile padding, interleaved DRAM
   inputs/output, and no padding in the other dimensions;
 - BF16 Q, BF16 KV for A-D, matching BF16/BFP8/BFP4 KV for E;
@@ -79,9 +81,13 @@ arrays hold 32 tile rows). COMPENSATED and LOW_PRECISION pair query tile rows in
 their compensated state and end an odd chunk with a single-row group. Builds
 outside the previously qualified geometries (Q128-Q320, K256/K384/K512,
 D64/D128/D256) and odd BF16 chunks size-optimize the pack thread to fit the kernel
-config buffer. The host rejects a layout that exceeds unreserved L1 before
+config buffer. Ring recipes accept the same chunks: at an odd tile count the BF16
+maxima plane of the raw state checkpoint is half a transfer page and its last page
+is moved partially. The host rejects a layout that exceeds unreserved L1 before
 dispatch; for example at K512/D128, Q384 fits only some recipes and Q512/Q1024 fit
-none (Q1024 is exercised at K128/D64).
+none (Q1024 is exercised at K128/D64). Ring adds its own buffers to the recipe
+layout and falls back to a single-slot Q buffer when the double-buffered layout
+exceeds L1.
 
 Q256 remains the frozen, bit-for-bit qualified geometry. Other Q chunks keep
 each recipe's arithmetic but are **not bit-identical** to Q256: Phase 2
@@ -94,9 +100,9 @@ determinism, FP64 L2 no worse than Q256, and a bounded difference from Q256.
 
 ## K blocking
 
-`k_chunk_size` may be any multiple of 32 for dense and joint recipes. The QK and PV
-subblock widths are the largest of 4, 2 and 1 that divide the K chunk and head dim.
-K blocking sets the online-softmax update cadence, the PV partial
+`k_chunk_size` may be any multiple of 32 for dense, joint, ring and exp ring
+recipes. The QK and PV subblock widths are the largest of 4, 2 and 1 that divide the
+K chunk and head dim. K blocking sets the online-softmax update cadence, the PV partial
 grouping and which K chunks COMPENSATED/LOW_PRECISION pair, so K256/K384 are
 qualified on accuracy relative to K512 rather than bitwise. C/D are essentially
 K-invariant. COMPENSATED at K256 keeps less of its long-context advantage: on
@@ -146,6 +152,56 @@ Zero-filling K/V alone would incorrectly increase the denominator. This mask is
 compiled out for aligned K lengths; valid-score arithmetic, CB depths and the
 softmax-state lifetime remain unchanged. The same handling covers sub-tile tails
 in dense and joint attention. Preparation clears padding before quantization.
+
+## Ring attention
+
+`ring_joint_scaled_dot_product_attention` accepts the same recipe arguments.
+The existing ring reader, active-step scheduler and CCL transport are reused.
+Primary/joint KV may be replicated or sequence-sharded as supported by the
+existing ring API; prepare E inputs **before** caching or communication.
+
+B/C/D/E execute the shared streaming recipe with one recurrent state across all
+active ring contributions. Releasing Q no longer implies final normalization.
+Single-Q workers retain state in L1; multi-Q workers checkpoint raw tile bytes
+to an internal DRAM buffer. C/D retain FP32 numerator/denominator; B/E retain
+both BF16 components, unfinished local groups and global chunk parity. Only the
+last active contribution normalizes. A retains the existing ring streaming loop.
+
+Current ring scope is Blackhole, noncausal D64/D128/D256, K256/K384/K512 with Q128/Q192/Q256/Q320, batch/GQA, scalar
+logical lengths, and the existing `rear` joint strategy. Physical local primary
+Q/KV sequence extents must be tile-aligned; `logical_n` masks a possibly
+sub-tile global KV tail. Q shorter than local KV requires `is_cross=True`.
+Two connected devices are qualified, including unequal worker chains, skipped
+shards and replicated/sharded joint inputs. Larger ring topologies are not yet
+qualified. Causal/balanced, indexed/paged/chunked-cache, sliding-window, sink,
+MLA and device-tensor logical lengths remain legacy-only and reject explicit recipes.
+The third returned tensor is internal scratch, **not a supported LSE result**.
+
+## Exp ring attention
+
+`exp_ring_joint_scaled_dot_product_attention` (fused K/V all-gather over the fabric MUX) accepts the
+same `precision` and `inputs_prepared` arguments. FAST (A) keeps the existing exp-ring compute with
+the recipe's HiFi2/approximate-exponential configuration. B/C/D/E replace it with the shared streaming
+recipe: each core keeps one recurrent state resident in L1 across every active ring iteration,
+releases Q and normalizes only on the last KV chunk of the last active iteration, and masks key tails
+(local shard padding, the global `logical_n` tail and the joint tail) from valid-row counts. The
+existing reader's chunk skipping, phase-alignment chunks and MUX forwarding are reused unchanged.
+The recipe owns CB indices 0-16; the MUX-writer K/V aliases move to 19/20 and Q is single-slot,
+so B/E_bf16/C/D fit Q256/K512 in the pipeline's L1.
+
+Rows with several head-segments (passes, up to three) run **pass-outer, ring-inner** in recipe
+mode: each pass reads its Q chunk once, keeps one recurrent state across the whole ring, normalizes
+on its last active ring iteration and releases Q before the next pass. The reader, MUX writers and
+compute all replay the ring sequence per pass, so the per-link forwarding counts, mcast credits,
+split-head dedup relays and phase-alignment pairs stay matched on every device. Recipe L1 does not
+grow with the pass count, and the legacy streamed-Q fallback never applies. The legacy (no
+`precision`) loop order is unchanged.
+
+Current exp-ring recipe scope is Blackhole, D128, K512, Q128-Q320 in 32-row steps (as L1 allows),
+scalar `logical_n`, the
+default scale and up to three head-segments per core row. Multi-pass programs run pass-outer,
+ring-inner, keeping one resident recurrent state and Q chunk per pass; FAST at three passes keeps the
+legacy exp-ring L1 layout, which does not fit Q256/K512.
 
 ## Examples
 
@@ -204,12 +260,23 @@ caller responsibilities, not an implicit host scan.
 - `sdpa_numerics.cpp`: conflicts and legacy defaults.
 - `sdpa_recipe.cpp`: eligibility, grid/chain assignment, CB formats/capacities,
   and ordinary cached program descriptors.
+- `sdpa_recipe_blocking.cpp`: the supported ring / exp-ring recipe geometry (`recipe_geometry_rejection`).
 - `compute/sdpa_recipe.cpp`: recipe specialization; A reuses the existing
   streaming implementation. B/C/D/E share `streaming/recipe_streaming.hpp`.
 - `streaming/recipe_sfpu.hpp`, `compensated_sfpu.hpp`, `compensated_group.hpp`:
   selected exponential and state arithmetic. `fp32_state.hpp` is shared by
   attention and its independent component tests, not a separate test implementation.
 - `sdpa_input_preparation.cpp`, `compute/prepare_*`: explicit device preparation.
+- Ring and exp ring: B-E dispatch to `RingJointSDPARecipeProgramFactory` /
+  `ExpRingJointSDPARecipeProgramFactory` (`*_recipe_program_factory.cpp`), selected
+  by `select_program_factory`; precision unset and FAST keep the legacy factories.
+  Both share one program builder through a `ComputeVariant`
+  (`*_program_builder.hpp`: kernel sources, fixed CB indices, subblocks, L1 fit).
+  The recipe compute kernels are `compute/ring_joint_sdpa_recipe.cpp` and
+  `compute/exp_ring_joint_sdpa_recipe.cpp`; the readers/writers are thin
+  `*_recipe.cpp` policies over the shared transport bodies
+  `dataflow/{ring_joint,exp_ring_joint}_{reader,writer}_impl.hpp`. The legacy
+  ring kernels and factories contain no recipe code.
 - `tests/.../sdpa/recipe_accuracy_baseline.json`: compact frozen input/output
   digests and metrics, with source hashes; no experimental kernels or media.
 
