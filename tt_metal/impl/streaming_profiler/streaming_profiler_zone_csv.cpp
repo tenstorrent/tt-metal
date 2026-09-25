@@ -87,7 +87,7 @@ void ZoneCsvConsumer::operator()(const Batch& batch) {
             temp_global_, "Z,%.*s,%u,%u,%u,%u,%u,%u,%u,%lld,%lld,,%llu,%llu\n", static_cast<int>(z.site().name.size()),
             z.site().name.data(), static_cast<unsigned>(c.chip_id), static_cast<unsigned>(c.physical.x),
             static_cast<unsigned>(c.physical.y), static_cast<unsigned>(c.logical.x), static_cast<unsigned>(c.logical.y),
-            static_cast<unsigned>(c.risc), static_cast<unsigned>(z.runtime_id()),
+            static_cast<unsigned>(c.processor), static_cast<unsigned>(z.runtime_id()),
             static_cast<long long>(z.start_time().time_since_epoch().count()),
             static_cast<long long>(z.end_time().time_since_epoch().count()),
             static_cast<unsigned long long>(z.start_timestamp()), static_cast<unsigned long long>(z.end_timestamp()));
@@ -99,7 +99,7 @@ void ZoneCsvConsumer::operator()(const Batch& batch) {
             temp_global_, "D,%.*s,%u,%u,%u,%u,%u,%u,%u,%lld,,", static_cast<int>(d.site().name.size()),
             d.site().name.data(), static_cast<unsigned>(c.chip_id), static_cast<unsigned>(c.physical.x),
             static_cast<unsigned>(c.physical.y), static_cast<unsigned>(c.logical.x), static_cast<unsigned>(c.logical.y),
-            static_cast<unsigned>(c.risc), static_cast<unsigned>(d.runtime_id()),
+            static_cast<unsigned>(c.processor), static_cast<unsigned>(d.runtime_id()),
             static_cast<long long>(d.time().time_since_epoch().count()));
         for (size_t i = 0; i < p.size(); i++) {
             std::fprintf(temp_global_, i == 0 ? "%llu" : ";%llu", static_cast<unsigned long long>(p[i]));
