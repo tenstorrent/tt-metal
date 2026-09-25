@@ -129,27 +129,33 @@ def mesh_device(request, device_params):
         ttnn.set_fabric_config(fabric_config)
 
     updated_device_params.setdefault("mesh_shape", mesh_shape)
-    mesh_device = ttnn.open_mesh_device(**updated_device_params)
+    try:
+        mesh_device = ttnn.open_mesh_device(**updated_device_params)
 
-    # MPI_Init_thread (triggered by open_mesh_device in multi-host configs) sets OpenMP threads to 1,
-    # torch inherits this setting, which makes CPU-side reference model computations extremely slow.
-    # We restore a reasonable thread count for torch.
-    if requested_system_name.upper() in ("DUAL", "QUAD"):
-        num_torch_threads = max(1, os.cpu_count())
-        logger.info(f"Restoring torch num_threads to {num_torch_threads}")
-        torch.set_num_threads(num_torch_threads)
+        # MPI_Init_thread (triggered by open_mesh_device in multi-host configs) sets OpenMP threads to 1,
+        # torch inherits this setting, which makes CPU-side reference model computations extremely slow.
+        # We restore a reasonable thread count for torch.
+        if requested_system_name.upper() in ("DUAL", "QUAD"):
+            num_torch_threads = max(1, os.cpu_count())
+            logger.info(f"Restoring torch num_threads to {num_torch_threads}")
+            torch.set_num_threads(num_torch_threads)
 
-    logger.debug(f"Mesh device with {mesh_device.get_num_devices()} devices is created with shape {mesh_device.shape}")
-    yield mesh_device
+        logger.debug(
+            f"Mesh device with {mesh_device.get_num_devices()} devices is created with shape {mesh_device.shape}"
+        )
+        yield mesh_device
 
-    for submesh in mesh_device.get_submeshes():
-        ttnn.close_mesh_device(submesh)
+        for submesh in mesh_device.get_submeshes():
+            ttnn.close_mesh_device(submesh)
 
-    ttnn.close_mesh_device(mesh_device)
-    if fabric_config:
-        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+        ttnn.close_mesh_device(mesh_device)
 
-    del mesh_device
+        del mesh_device
+    finally:
+        # The fabric config is process-wide, so an exception from open_mesh_device would otherwise leave
+        # it set and every later single-device test fails with "FABRIC_1D requires at least 2 chips".
+        if fabric_config:
+            ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
 @pytest.fixture(scope="session")

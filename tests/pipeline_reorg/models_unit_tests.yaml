@@ -2095,7 +2095,10 @@
 
 - name: DeepSeek-V3 unit tests (Galaxy)
   cmd: |
-    unset TT_METAL_WATCHER  # tests self-skip under watcher: #36312, #36314
+    export TT_METAL_WATCHER=30
+    # Without an explicit MGD, single-host auto-discovery folds the galaxy into a 1D [32,1] SystemMesh
+    # and the MESH_DEVICE=TG (4,8) request throws "Requested mesh is too big and is not rotatable".
+    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.textproto"
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
     export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
     export MESH_DEVICE=TG
@@ -2112,7 +2115,10 @@
 
 - name: DeepSeek-V3 module tests (Galaxy)
   cmd: |
-    unset TT_METAL_WATCHER  # tests self-skip under watcher: #36312, #36314
+    export TT_METAL_WATCHER=30
+    # Without an explicit MGD, single-host auto-discovery folds the galaxy into a 1D [32,1] SystemMesh
+    # and the MESH_DEVICE=TG (4,8) request throws "Requested mesh is too big and is not rotatable".
+    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.textproto"
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
     export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
     export MESH_DEVICE=TG
