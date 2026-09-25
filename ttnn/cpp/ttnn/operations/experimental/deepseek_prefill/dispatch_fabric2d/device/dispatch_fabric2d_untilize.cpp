@@ -157,7 +157,6 @@ UntilizerPoolFallback add_untilizer_pool(
     const UntilizePlan& plan) {
     UntilizerPoolFallback fallback = UntilizerPoolFallback::kNone;
     const auto pool = decide_untilizer_cores(allowed_cores, streams, plan.num_tile_rows, &fallback);
-    TT_FATAL(!pool.empty(), "dispatch_fabric2d: a TILE input needs at least one core beside the streams");
     const uint32_t pool_size = static_cast<uint32_t>(pool.size());
     const CoreRangeSet pool_cores(ttsl::Span<const tt::tt_metal::CoreCoord>(pool.data(), pool_size));
 

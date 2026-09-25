@@ -93,9 +93,10 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         ttnn::ccl::is_axis_wrap_wired(*args.device, args.axis),
         "dispatch_fabric2d: axis {} has no closing link, so it is not a ring. This op sends single hops "
-        "around one; run it on a topology that wraps that axis (e.g. FABRIC_2D_TORUS_Y or _TORUS_XY), not "
-        "a line or mesh.",
-        args.axis);
+        "around one; run it on a topology that wraps that axis (e.g. {} or FABRIC_2D_TORUS_XY), not a line or "
+        "mesh.",
+        args.axis,
+        args.axis == 0 ? "FABRIC_2D_TORUS_Y" : "FABRIC_2D_TORUS_X");
 
     // A chip that forwards a chunk sizes it from the source chip's row, so every chip needs all rows.
     validate_control_tensor(tensor_args.expert_offsets_tensor, args.num_routed_experts, "expert_offsets");
