@@ -122,7 +122,7 @@ cxxopts::Options create_validation_options() {
         cxxopts::value<bool>()->default_value("false"))(
         "cross-host-port-down",
         "Bring down all cross-host Ethernet ports (from golden connectivity) and exit; requires "
-        "--cabling-descriptor/--deployment-descriptor or --fsd-path",
+        "--cabling-descriptor-path/--deployment-descriptor-path or --factory-descriptor-path",
         cxxopts::value<bool>()->default_value("false"))("h,help", "Print usage information");
 
     return options;
@@ -386,8 +386,8 @@ int main(int argc, char* argv[]) {
     if (input_args.cross_host_port_down) {
         TT_FATAL(
             input_args.cabling_descriptor_path.has_value() || input_args.fsd_path.has_value(),
-            "--cross-host-port-down requires a golden reference: pass --cabling-descriptor (with "
-            "--deployment-descriptor for multi-host) or --fsd-path");
+            "--cross-host-port-down requires a golden reference: pass --cabling-descriptor-path (with "
+            "--deployment-descriptor-path for multi-host) or --factory-descriptor-path");
         auto fsd_proto = get_factory_system_descriptor(
             input_args.cabling_descriptor_path,
             input_args.deployment_descriptor_path,

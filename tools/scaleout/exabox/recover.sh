@@ -377,7 +377,7 @@ while [[ $# -gt 0 ]]; do
             fi
             read -ra _extra <<< "$2"
             for _a in "${_extra[@]}"; do
-                if [[ "$_a" == "--cross-host-port-down" ]]; then
+                if [[ "$_a" == "--cross-host-port-down" || "$_a" == "--cross-host-port-down="* ]]; then
                     echo "Error: --cross-host-port-down is not allowed in --validation-args; it is handled automatically before each reset (disable with --skip-cross-host-port-down)."
                     exit 1
                 fi
