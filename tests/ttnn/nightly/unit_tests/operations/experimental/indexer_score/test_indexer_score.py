@@ -49,7 +49,7 @@ GLX_CASES = [("glm5", 8)]
 GLX_IDS = [c[0] for c in GLX_CASES]
 
 
-def indexer_score_dsa_ref(q, k, w, chunk_start):
+def indexer_score_dsa_ref(q, k, w, chunk_start, key_compression_ratio=1):
     """DeepSeek-V3.2 / GLM-5 DSA reference: sum_h relu(q.kT) * w over ALL Hi heads into one plane
     -> [b, 1, sq, t]. Per-head fp32 accumulation (a full [Hi,Sq,T] tensor is many GB at GLX sizes).
     """
@@ -59,7 +59,10 @@ def indexer_score_dsa_ref(q, k, w, chunk_start):
     score = torch.zeros(b, sq, t)
     for h in range(hi):
         score += torch.relu(q[:, h] @ k[:, 0].transpose(-2, -1)) * w[:, 0, :, h : h + 1]
-    future = torch.arange(t).unsqueeze(0) > chunk_start + torch.arange(sq).unsqueeze(1)
+    valid_threshold = torch.div(
+        chunk_start + torch.arange(sq) + 1, key_compression_ratio, rounding_mode="floor"
+    ).unsqueeze(1)
+    future = torch.arange(t).unsqueeze(0) >= valid_threshold
     return score.masked_fill(future, float("-inf")).unsqueeze(1)
 
 
@@ -133,6 +136,7 @@ def run_dsa(
     q_dtype=ttnn.bfloat16,
     k_dtype=ttnn.bfloat16,
     compute_kernel_config=None,
+    key_compression_ratio=1,
 ):
     """Run indexer_score_dsa (relu + learned gates + head-sum) and return the bf16 score as torch.
 
@@ -144,6 +148,7 @@ def run_dsa(
         to_device(k, device, dtype=k_dtype),
         to_device(w, device),
         chunk_start_idx=chunk_start,
+        key_compression_ratio=key_compression_ratio,
         **_extra_kwargs(program_config, compute_kernel_config),
     )
     return ttnn.to_torch(out)
@@ -295,6 +300,17 @@ def _run_and_check(device, heads, dim, sq, t, chunk_start, q_chunk, k_chunk, hea
     q, k, w = make_inputs(heads, dim, sq, t)
     out = run_dsa(q, k, w, chunk_start, device, program_config=cfg)
     ref = indexer_score_dsa_ref(q, k, w, chunk_start)
+    assert_indexer_match(out, ref, sq, t, check_neg=True)
+
+
+def test_indexer_score_dsa_compressed_key_ratio4(device):
+    """Query positions stay in token units while K/output are compressed rows."""
+    heads, dim, sq, t = 8, 128, 64, 64
+    chunk_start = 96  # two q tiles exercise ratio-4 residues 24 then 0 in compressed-key tiles
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=64, head_group_size=0)
+    q, k, w = make_inputs(heads, dim, sq, t)
+    out = run_dsa(q, k, w, chunk_start, device, program_config=cfg, key_compression_ratio=4)
+    ref = indexer_score_dsa_ref(q, k, w, chunk_start, key_compression_ratio=4)
     assert_indexer_match(out, ref, sq, t, check_neg=True)
 
 
@@ -1827,3 +1843,53 @@ def test_indexer_score_rejects_partial_block_cyclic_args(device, expect_error):
     for kwargs in [{"block_cyclic_sp_axis": 0}, {"block_cyclic_chunk_local": 256}]:
         with expect_error(RuntimeError, "both be set or both unset"):
             ttnn.experimental.indexer_score_dsa(q_dev, k_dev, w_dev, chunk_start_idx=0, program_config=cfg, **kwargs)
+
+
+@pytest.mark.parametrize("mesh_device", [(4, 1)], ids=["sp4"], indirect=True)
+def test_indexer_score_compressed_key_ratio4_block_cyclic(mesh_device):
+    """Compressed keys retain block-cyclic layout while queries stay in token space."""
+    sp, ratio, heads = 4, 4, 8
+    query_chunk, query_local = 512, 128
+    key_chunk, total_keys = query_chunk // ratio, 256
+    history_tokens = (total_keys - key_chunk) * ratio
+    q_g, k_nat, w_g = _global_inputs(heads, query_chunk, total_keys, seed=91)
+    k_bc = _to_slab(k_nat, sp, key_chunk)
+    mesh_shape = tuple(mesh_device.shape)
+    shard = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(2, None))
+    q_dev = _to_mesh(mesh_device, q_g, ttnn.bfloat16, shard)
+    w_dev = _to_mesh(mesh_device, w_g, ttnn.bfloat16, shard)
+    k_dev = _to_mesh(mesh_device, k_bc, ttnn.bfloat8_b, ttnn.ReplicateTensorToMesh(mesh_device))
+
+    out = ttnn.experimental.indexer_score_dsa(
+        q_dev,
+        k_dev,
+        w_dev,
+        chunk_start_idx=history_tokens,
+        key_compression_ratio=ratio,
+        seq_shard_axes=[0],
+        block_cyclic_sp_axis=0,
+        block_cyclic_chunk_local=query_local,
+        program_config=ttnn.IndexerScoreProgramConfig(
+            q_chunk_size=64,
+            k_chunk_size=64,
+            head_group_size=0,
+        ),
+    )
+    out_t = ttnn.to_torch(
+        out,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=(2, 1)),
+    )
+    refs = []
+    for rank in range(sp):
+        rows = slice(rank * query_local, (rank + 1) * query_local)
+        refs.append(
+            indexer_score_dsa_ref(
+                q_g[:, :, rows],
+                k_nat,
+                w_g[:, :, rows],
+                history_tokens + rank * query_local,
+                key_compression_ratio=ratio,
+            )
+        )
+    ref = torch.cat(refs, dim=2)
+    assert_indexer_match(out_t, ref, query_chunk, total_keys, check_neg=True)
