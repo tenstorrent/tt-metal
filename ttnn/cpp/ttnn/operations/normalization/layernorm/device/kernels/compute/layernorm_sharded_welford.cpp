@@ -460,9 +460,9 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
     if constexpr (welford_fp32_alias) {
         // On the fused pre-add path this kernel is the producer of the alias: it reserves, pushes
-        // and waits it above, then reads it by tile index through the loop. Release it here. The
+        // and waits it above, then reads it by tile index through the loop. Pop it here. The
         // alias is only ever pushed on that path; without a pre-add the reader fills the intake
-        // buffer and the alias index is never fronted, so there is nothing to release.
+        // buffer and nothing waits the alias index, so there is nothing to pop.
         dfb_x_welford.pop_front(num_tiles_per_block);
     }
 #endif

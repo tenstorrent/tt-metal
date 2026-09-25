@@ -305,14 +305,12 @@ void kernel_main() {
     dfb_im_obj.push_back(num_tiles_per_block);
 
     dfb_xmm_obj.pop_front(num_tiles_per_block);
-#ifdef FUSE_GAMMA
-    // Only the gamma stage below reads these tiles back, and it pops them, so the wait belongs
-    // with the gamma stage. Without gamma nothing in this kernel reads dfb_im again.
-    dfb_im_obj.wait_front(num_tiles_per_block);
-#endif
 
 #ifdef FUSE_GAMMA
     {
+        // The intermediate tiles were packed and pushed above. Wait for them before the loop
+        // below reads them back by tile index. The gamma stage is their only reader and pops them.
+        dfb_im_obj.wait_front(num_tiles_per_block);
         reconfig_data_format(dfb_im, dfb_gamma);
         if constexpr (!do_beta) {
             pack_reconfig_data_format(dfb_out);

@@ -464,11 +464,11 @@ void kernel_main() {
             }
         }
         if (!use_two_stage_reduce || is_second_stage_reader) {
-            // This kernel reads this buffer back for the rsqrt. Under two-stage reduction the
-            // reader kernel also waits it, as a handshake before signalling the second-stage
-            // reader, and releases it there. The second-stage reader is the one that gathers it
-            // over the NOC. Exactly one release may happen, so pop here in the case the reader
-            // does not cover.
+            // This kernel reads dfb_ex2 back for the rsqrt above. Under two-stage reduction the
+            // receiver kernel also waits dfb_ex2, as its first-stage reduce buffer, and pops it on
+            // the cores that are not the second-stage reader, because the second-stage reader is
+            // the one that gathers dfb_ex2 over the NOC. Exactly one pop may happen, so this
+            // condition is the complement of the receiver kernel's.
             dfb_ex2.pop_front(static_cast<uint16_t>(num_tiles_per_allgather_worker));
         }
     }
@@ -526,14 +526,12 @@ void kernel_main() {
     dfb_im.push_back(num_tiles_per_block);
 
     dfb_xmm.pop_front(num_tiles_per_block);
-#if defined(FUSE_GAMMA) || defined(FUSE_BETA)
-    // Only the gamma and beta stages below read these tiles back; with neither of them this buffer
-    // is the output and its consumer is the writer kernel, so there is nothing to wait for here.
-    dfb_im.wait_front(num_tiles_per_block);
-#endif
 
 #ifdef FUSE_GAMMA
     {
+        // The intermediate tiles were packed and pushed above. Wait for them before the loop
+        // below reads them back by tile index.
+        dfb_im.wait_front(num_tiles_per_block);
         reconfig_data_format(dfb_im_id, dfb_gamma_id);
         if constexpr (!do_beta) {
             pack_reconfig_data_format(dfb_out_id);
@@ -571,16 +569,14 @@ void kernel_main() {
         }
         dfb_outgamma.push_back(num_tiles_per_block);
         dfb_im.pop_front(num_tiles_per_block);
-#ifdef FUSE_BETA
-        // The beta stage reads these tiles back through its fusion alias; without beta this buffer
-        // is the output and the writer kernel consumes it.
-        dfb_outgamma.wait_front(num_tiles_per_block);
-#endif
     }
 #endif
 
 #ifdef FUSE_BETA
     {
+        // The fusion buffer carries the gamma stage's output when gamma is fused, and this kernel's
+        // own intermediate tiles when it is not. Wait for them here in either case.
+        dfb_fusion.wait_front(num_tiles_per_block);
         reconfig_data_format(dfb_fusion_id, dfb_beta_id);
         pack_reconfig_data_format(dfb_out_id);
         add_bcast_rows_init(dfb_fusion_id, dfb_beta_id);
