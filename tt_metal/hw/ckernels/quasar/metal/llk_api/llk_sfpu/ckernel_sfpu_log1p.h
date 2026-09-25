@@ -125,6 +125,14 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat a) {
     }
     v_endif;
 
+    // a == -0.0 takes the same u = a + 1.0f = +1.0f route as a == +0.0f above (the sign is lost
+    // at that first addition), so both zeros compute the identical polynomial result +0.0 here.
+    // IEEE 754 requires log1p(+-0) = +-0, so override with the input itself for exact zero. Uses
+    // abs(a) rather than a bare a == 0.0f because SFPSETCC is unspecified for -0.0 (VectorUnit.md),
+    // the same reason ckernel_sfpu_heaviside.h reads the magnitude for its own zero check.
+    v_if(sfpi::abs(a) == 0.0f) { r = a; }
+    v_endif;
+
     return r;
 }
 
