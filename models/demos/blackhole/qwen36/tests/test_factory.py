@@ -227,14 +227,7 @@ def compare_tensors(tt_tensor, torch_tensor, pcc_threshold=0.99):
     return passing, pcc
 
 
-# --------------------------------------------------------------------------- #
-# Near-tie discriminator (argmax comparisons)
-# --------------------------------------------------------------------------- #
-# Mirrors gemma4's GEMMA4_SPEC_NEAR_TIE_GAP contract: when two paths pick different
-# tokens, that is only acceptable where the REFERENCE distribution is a near-tie. A
-# flip at a confident token is a real bug, not kernel noise. Bare argmax-equality
-# asserts are too strict to be useful and bare PCC floors are too loose to catch
-# anything, so token comparisons should go through this.
+# Argmax drift is allowed only where the reference top1-top2 gap is a near-tie.
 NEAR_TIE_GAP = float(os.environ.get("QWEN36_NEAR_TIE_GAP", 2.0))
 
 
@@ -245,11 +238,7 @@ def top2_gap(logits_row):
 
 
 def assert_argmaxes_match_except_near_ties(ref_logits, got_logits, context, near_tie_gap=None):
-    """Allow argmax drift only where the reference distribution is a near-tie.
-
-    ref_logits/got_logits: sequences of per-position logit rows. Logs PCC + top-2 gap for
-    every position and fails listing only the confident divergences.
-    """
+    """Fail only on argmax flips where the reference top1-top2 gap is confident."""
     from loguru import logger
 
     gap_limit = NEAR_TIE_GAP if near_tie_gap is None else near_tie_gap
@@ -283,29 +272,8 @@ def get_pcc_threshold(request, default=0.99):
     return table.get(func, default)
 
 
-# --------------------------------------------------------------------------- #
-# Test-side scope gate
-# --------------------------------------------------------------------------- #
 def validated_on_wormhole():
-    """True on any Wormhole device (N150 / N300 / T3K); False on Blackhole.
-
-    Scope for TEST-ORACLE fixes in this suite -- changes to what a test measures or compares
-    against, not to a threshold. Two such fixes live behind this gate:
-
-      * ``test_model.py``'s vision row padding (2048-multiple -> the tower's real 128 alignment).
-        The old form left unmasked pad rows that every real query summed ``exp(0)`` over, an error
-        that compounded over 27 blocks, and it fed row counts the matmul/SDPA grids were never
-        swept at.
-      * ``test_model_tp.py``'s batched decode chain (self-fed -> teacher-forced from the B=1
-        oracle). Self-feeding let a row that flipped one argmax be scored against its OWN
-        continuation, which showed up as PCC ~0.52-0.65 at decode1 against a 0.97 gate -- a harness
-        artifact read as a model bug.
-
-    Both are correctness fixes rather than tuning, so they apply across Wormhole regardless of
-    model or mesh. Blackhole is excluded only because these oracles were not re-measured there and
-    it takes different fused paths; widen once someone does. For scoping a PERFORMANCE change,
-    use ``tp_common.wh_9b_n300`` instead -- that is a much narrower claim.
-    """
+    """True on Wormhole. Gates test-oracle fixes that were not re-measured on Blackhole."""
     from models.common.utility_functions import is_blackhole
 
     return not is_blackhole()

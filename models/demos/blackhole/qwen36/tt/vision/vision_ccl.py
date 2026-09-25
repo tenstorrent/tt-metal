@@ -2,19 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""CCL helper for the vision tower's replicated-activation mode.
-
-The tower's normal TP contract keeps activations FRACTURED along dim=3, restored after each
-row-parallel projection by ``tt_all_reduce(dim=3)`` (a reduce_scatter on T3K/QB2). That requires
-``dim`` to split into a whole number of TILES per device — and unlike ``hidden_dim`` (which
-``VisionModelArgs`` pads to ``tile_size * num_devices``), ``dim`` comes straight from the HF config.
-Qwen3.6-27B's vision dim 1152 is 36 tiles: 9 per device at TP=4, but 4.5 at TP=8, and a tile cannot
-be split across devices.
-
-So at TP=8 the tower switches to replicated activations (``args.vision_replicated_acts``): the
-row-parallel out-projections all-reduce to a full-width replicated tensor instead of
-reduce-scattering to a fractured one. Weights stay sharded, so no TP compute is given up — the
-tower is not run redundantly. The cost is that an all-reduce moves more data than a reduce_scatter.
+"""All-reduce to a replicated full-width activation when dim does not split into whole tiles.
+Weights stay sharded; used when vision_replicated_acts is set.
 """
 
 import os
@@ -28,11 +17,7 @@ _VISION_CCL_TUNED_DEVICES = ("N300", "T3K")
 
 
 def vision_ccl_tuning(device_name=None):
-    """``(chunks_per_sync, num_workers_per_link)`` for vision-tower collectives.
-
-    ``(10, 4)`` on Wormhole N300/T3K; ``(10, 2)`` elsewhere. ``QWEN36_VISION_CCL=0`` forces
-    untuned; ``QWEN36_VISION_CCL=cps,wpl`` overrides on any arch.
-    """
+    """(chunks_per_sync, num_workers_per_link) for vision-tower collectives."""
     override = os.environ.get("QWEN36_VISION_CCL")
     if override == "0":
         return _VISION_CCL_UNTUNED
@@ -50,12 +35,7 @@ def vision_ccl_kwargs(device_name=None):
 
 
 def all_reduce_replicated(x, tt_ccl, topology, memory_config=ttnn.DRAM_MEMORY_CONFIG, ccl_kwargs=None):
-    """Sum per-device partials, leaving the FULL-width result replicated on every device.
-
-    Gathers along dim 0 rather than dim 3: stacking the partials on the batch axis carries no
-    tile-divisibility requirement, whereas splitting dim 3 is exactly what is impossible here.
-    ``x`` is [1, 1, S, dim] (a partial sum of the full dim); the result is [1, 1, S, dim].
-    """
+    """Sum partials to a replicated full-width result; gather on dim 0, not dim 3."""
     assert x.shape[0] == 1, f"all_reduce_replicated expects a leading dim of 1, got {tuple(x.shape)}"
     gathered = ttnn.experimental.all_gather_async(
         x,

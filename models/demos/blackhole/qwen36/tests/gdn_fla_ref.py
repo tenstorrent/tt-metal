@@ -1,21 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Shared FLA-naive ground-truth reference + input/PCC helpers for the fused GDN kernels.
-
-The PCC oracle for both the single-token decode kernel and the multi-token verify kernel
-is FLA's ``naive_recurrent_gated_delta_rule`` (the recurrent gated-delta-rule math, the exact
-form the vLLM ``fused_sigmoid_gating_delta_rule_update`` implements). We import the real
-function from the flash-linear-attention checkout when available (set ``FLA_REPO`` or drop it
-at the default path) and otherwise fall back to a vendored byte-for-byte copy so the tests run
-anywhere.
-
-Contract note (must match the device kernels):
-  * FLA naive does NOT L2-normalize q/k and does NOT sigmoid beta — those are the layer's job
-    (in FLA, ``use_qk_l2norm_in_kernel`` / ``use_beta_sigmoid_in_kernel``). Our device op does the
-    L2-norm + query scale internally, so to compare against naive we L2-normalize q/k here
-    (``l2norm_fla``) and pass beta already in (0,1) and g already as log-decay (g<0, decay=exp(g)).
-  * scale defaults to Dk**-0.5, applied to q AFTER the L2-norm (matches gdn/tp.py and FLA).
-"""
+"""FLA-naive GDN reference. Device op L2-norms q/k internally, so normalize here and pass beta in (0, 1).
+g is log-decay (g<0). Falls back to a vendored naive copy when the FLA checkout is not importable."""
 import os
 import sys
 
@@ -23,8 +9,7 @@ import torch
 
 
 def _load_fla_naive():
-    """Import fla.ops.gated_delta_rule.naive.naive_recurrent_gated_delta_rule (real FLA), trying
-    an installed package, then FLA_REPO / known checkout paths, then a vendored fallback."""
+    """Import FLA naive_recurrent_gated_delta_rule, else a vendored fallback."""
     try:
         from fla.ops.gated_delta_rule.naive import naive_recurrent_gated_delta_rule
 
@@ -52,9 +37,7 @@ def _load_fla_naive():
 def _vendored_naive_recurrent_gated_delta_rule(
     q, k, v, beta, g, scale=None, initial_state=None, output_final_state=False
 ):
-    """Vendored byte-for-byte copy of FLA's naive_recurrent_gated_delta_rule
-    (flash-linear-attention/fla/ops/gated_delta_rule/naive.py, MIT license, © Songlin Yang et al.).
-    Used only when the real FLA checkout is not importable."""
+    """Vendored copy of FLA naive_recurrent_gated_delta_rule, used only when FLA is not importable."""
     q, k, v, beta, g = map(lambda x: x.transpose(1, 2).contiguous().to(torch.float32), [q, k, v, beta, g])
     B, H, T, K, V = *k.shape, v.shape[-1]
     o = torch.zeros(B, H, T, V).to(v)
@@ -84,12 +67,7 @@ naive_recurrent_gated_delta_rule = _load_fla_naive()
 
 
 def naive_recurrent_per_token_state(q, k, v, beta, g, scale=None, initial_state=None):
-    """FLA-naive recurrence that ALSO returns the state after every token — the ground truth for
-    the multi-token verify kernel's per-token state fan-out (mirrors FLA gdn2's per-token store).
-
-    Returns o [B,T,H,V], states [B,T,H,K,V] (state AFTER absorbing token t), final_state == states[:,-1].
-    Same math as naive_recurrent_gated_delta_rule; q/k are expected already L2-normalized (see module note).
-    """
+    """FLA-naive recurrence returning per-token states; q/k must already be L2-normalized."""
     qt, kt, vt, bt, gt = map(lambda x: x.transpose(1, 2).contiguous().to(torch.float32), [q, k, v, beta, g])
     B, H, T, K, V = *kt.shape, vt.shape[-1]
     if scale is None:
@@ -112,17 +90,12 @@ def naive_recurrent_per_token_state(q, k, v, beta, g, scale=None, initial_state=
 
 
 def l2norm_fla(x, eps=1e-6):
-    """FLA in-kernel L2-norm: x / sqrt(sum(x^2) + eps) over the last dim. Matches l2_norm_ttnn
-    (rms_norm(x, eps/K) * K**-0.5) used by recurrent_gated_delta_rule_decode_ttnn."""
+    """FLA L2-norm over the last dim; matches the device op's rms_norm form."""
     return x / torch.sqrt(x.pow(2).sum(-1, keepdim=True) + eps)
 
 
 def make_gdn_inputs(T, H=32, Dk=128, Dv=128, B=1, seed=0, g_scale=2.0):
-    """Post-conv, post-GQA-expand GDN recurrence inputs at real Qwen3.6-27B dims.
-
-    q/k/v [B,T,H,D]; beta [B,T,H] in (0,1) (sigmoid range); g [B,T,H] negative log-decay
-    (decay = exp(g) in (0,1)). Convention matches test_gdn_chunk_recurrent_parity.py.
-    """
+    """Post-conv GDN inputs at Qwen3.6-27B dims: beta in (0, 1), g negative log-decay."""
     gen = torch.Generator().manual_seed(seed)
     q = torch.randn(B, T, H, Dk, generator=gen, dtype=torch.float32)
     k = torch.randn(B, T, H, Dk, generator=gen, dtype=torch.float32)

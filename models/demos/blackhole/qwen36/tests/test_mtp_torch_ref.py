@@ -1,16 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""CPU-only guard on the MTP torch reference (tests/mtp_torch_ref.py).
-
-The acceptance oracle in mtp_cpu_check.py draws its conclusions from two code paths that must
-agree: the batched causal ``forward_sequence`` (used for the warmed-prefix KV and the depth-1
-sweep) and the incremental ``forward_step`` (used for the autoregressive draft chain). If they
-disagree, every number the oracle prints is suspect — so pin them here.
-
-Random weights at toy dims: no checkpoint, no device, runs in well under a second.
-
-    pytest models/demos/blackhole/qwen36/tests/test_mtp_torch_ref.py -v
-"""
+"""CPU guard: MTP forward_sequence and forward_step must agree.
+Random toy weights; no checkpoint and no device."""
 import pytest
 import torch
 
@@ -69,9 +60,7 @@ def test_dims_derived_from_state_dict():
 @torch.no_grad()
 @pytest.mark.parametrize("chain_postnorm", (False, True))
 def test_incremental_matches_sequence(chain_postnorm):
-    """Stepping slot-by-slot with a growing K/V cache == one causal pass over all slots.
-
-    Under both chain contracts (V0 raw block output, V3 mtp.norm output)."""
+    """Slot-by-slot cache growth must match one causal pass, under both chain contracts."""
     head = _head(chain_postnorm)
     S = 7
     g = torch.Generator().manual_seed(1)
@@ -92,12 +81,7 @@ def test_incremental_matches_sequence(chain_postnorm):
 @torch.no_grad()
 @pytest.mark.parametrize("chain_postnorm", (False, True))
 def test_step_from_warm_prefix_matches_sequence(chain_postnorm):
-    """The oracle's chain pattern: take a warmed prefix cache from forward_sequence, then step.
-
-    Stepping slot P from the prefix cache [0..P-1] must equal row P of a full sequence pass, which
-    is what makes 'warm the drafter over the prompt, then draft' a faithful simulation. Under both
-    chain contracts (V0 raw block output, V3 mtp.norm output).
-    """
+    """Stepping slot P from prefix cache [0..P-1] must equal row P of a full sequence pass."""
     head = _head(chain_postnorm)
     S, P = 9, 6
     g = torch.Generator().manual_seed(2)
@@ -134,15 +118,7 @@ def test_causal_mask_is_strictly_causal():
 
 @torch.no_grad()
 def test_rope_only_sees_relative_position():
-    """RoPE rotates q and k alike, so only the OFFSET between a slot and its cache matters.
-
-    Two consequences the oracle depends on:
-      * a slot with no prefix (attending only to itself) is position-invariant;
-      * the same (hidden, token) against the same prefix at a different offset is NOT.
-
-    This is why a uniform shift of every MTP slot index is harmless, and why only the
-    (hidden, token) PAIRING — not the absolute position — is at stake in the alignment question.
-    """
+    """Only the offset between a slot and its cache matters; a uniform index shift is harmless."""
     head = _head()
     g = torch.Generator().manual_seed(4)
     hidden = torch.randn(3, DIM, generator=g)

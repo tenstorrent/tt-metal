@@ -1,36 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""The MTP drafter's shard-argmax greedy pick must equal the gathered argmax, bit for bit.
-
-``tp_common.greedy_pick`` has two forms of the same reduction:
-
-* gathered — the LM head all-gathers its vocab-sharded logits to a replicated row, then one
-  ``ttnn.argmax`` over it. Costs a 1.47 ms fp32 vocab all-gather per drafter leg on T3K/27B.
-* shard    — the logits stay vocab-sharded; each device reduces its own shard and the mesh combines
-  8 (max value, shard-local index) scalars into the same global id.
-
-The drafter runs the shard form (Qwen36MTP.shard_argmax, default on for a mesh), so the two MUST
-agree exactly: a drafter that picks a different id drafts a different token, and a chained K-leg
-window compounds that. This pins the agreement on the rows where a combine can plausibly go wrong,
-rather than only on random data where the winner is unique by luck:
-
-* the winner in the FIRST and the LAST shard (offset arithmetic, and the last shard's tail)
-* an EXACT tie ACROSS shards -> must resolve to the lowest global id, which is what a
-  first-occurrence argmax over the concatenated row returns
-* an EXACT tie WITHIN one shard -> lowest local index
-* an ALL-NEGATIVE row -> the tile-padding columns of the gathered 8-wide scalar rows are the trap:
-  if a reduce saw them as 0 they would beat every real logit and the combine would return
-  ``vocab_size`` (or 0 from the min), so this case is what proves the padding is masked.
-
-It also asserts every device agrees on the id: the traced draft chain writes the pick into each
-device's own ``tok`` buffer and embeds it locally, so a per-replica disagreement would desync the
-mesh rather than merely pick badly.
-
-No checkpoint is loaded — the pick's cost and correctness depend on the shape, not the weights.
-
-Run:
-    MESH_DEVICE=T3K pytest models/demos/blackhole/qwen36/tests/test_shard_argmax_tp.py -v -s
-"""
+"""Shard-argmax greedy pick must equal the gathered argmax on every device.
+Pins first/last shard, cross-shard ties, in-shard ties, and all-negative rows so padding cannot win."""
 import pytest
 import torch
 

@@ -46,13 +46,7 @@ _DRAM = ttnn.DRAM_MEMORY_CONFIG
 
 
 def _seq_out_dtype(out_dtype=None):
-    """Relayout dtype for the kernel's [BH, L, V] output, arch-aware when not given.
-
-    fp32 is BH*L*V*4 = 33,554,432 B at L=2048. Blackhole absorbs that; Wormhole (80 cores vs 140,
-    64 interleave banks vs 80) does not, and long-context prefill dies with "Out of Memory: Not
-    enough space to allocate 33554432 B". bf16 halves it and costs nothing measurable
-    (logit PCC 0.9998-1.0000).
-    """
+    """None -> fp32 on Blackhole; bf16 on Wormhole, where fp32 output does not fit L1."""
     if out_dtype is not None:
         return out_dtype
     from models.common.utility_functions import is_blackhole
@@ -428,9 +422,7 @@ def chunk_gated_delta_rule_seq(
     Returns (output [BH,T,V], final_state [BH,K,V]) float32.
     valid_len: zero q/k/v/beta/g past valid_len (padding); identity state updates preserve recurrent state.
     out_dtype: dtype of the L1-resident [BH, L, V] output relayout. fp32 is BH*L*V*4 =
-        33,554,432 B at L=2048 -- fine on Blackhole, but it does not fit Wormhole's smaller L1
-        beside the live prefill set. bfloat16 halves it at no measurable accuracy cost
-        (logit PCC 0.9998-1.0000).
+        too large for Wormhole L1 beside the prefill working set; use bfloat16 there.
     """
     # Preprocessing matmuls: HiFi4 (matches block-inverse fidelity).
     _hifi_cfg = ttnn.WormholeComputeKernelConfig(

@@ -24,9 +24,9 @@ from .patch_merger import PatchMerger
 from .vision_block import VisionBlock
 from .vision_model_config import VisionModelArgs
 
-try:  # transformers >= the release that split these helpers out of the model class
+try:
     from transformers.vision_utils import get_vision_bilinear_indices_and_weights as _bilinear_corners_hf
-except ImportError:  # pragma: no cover - older transformers keeps the math inside the model
+except ImportError:  # pragma: no cover
     _bilinear_corners_hf = None
 
 
@@ -194,9 +194,7 @@ class DropInVisionTransformer(torch.nn.Module):
         state_dict_prefix = model_args.get_state_dict_prefix("VisionTransformer")
         state_dict = {f"{state_dict_prefix}.{k}": v for k, v in state_dict.items()}
 
-        # A caller passing random/synthetic weights MUST pass its own weight_cache_path: the ttnn
-        # weight cache is keyed by name only, so writing random tensors under the checkpoint's
-        # cache dir poisons it for every later run that loads the same names.
+        # Synthetic weights must use their own weight_cache_path; the cache is keyed by name only.
         cache_root = model_args.weight_cache_path(dtype) if weight_cache_path is None else weight_cache_path
 
         # Initialize TT model
@@ -208,9 +206,6 @@ class DropInVisionTransformer(torch.nn.Module):
             tt_ccl=tt_ccl,
         )
 
-        # Patch embedding + interpolated positional embedding on device. Both used to run as host
-        # torch on the HF reference module, once per image: an nn.Conv3d over [n_patches, 1536] and
-        # four [n_patches, 1152] gathers. QWEN36_HOST_VISION_EMBED=1 keeps the old host path.
         self.tt_embed = None
         if os.environ.get("QWEN36_HOST_VISION_EMBED", "0") != "1":
             if _bilinear_corners_hf is None:
@@ -224,11 +219,7 @@ class DropInVisionTransformer(torch.nn.Module):
                 )
 
     def _bilinear_corners(self, grid_thw):
-        """[4, n_patches] corner indices and weights into the positional-embedding table.
-
-        Pure index arithmetic over the grid — vectorized per image, so it stays on host; only the
-        gathers it feeds were worth moving to the device.
-        """
+        """[4, n_patches] corner indices and weights into the positional-embedding table."""
         vcfg = self.model_args.hf_config.vision_config
         return _bilinear_corners_hf(
             grid_thw,
@@ -270,18 +261,7 @@ class DropInVisionTransformer(torch.nn.Module):
             # 1. Calculate total unpadded sequence length
             grid_thw = grid_thw.unsqueeze(0)
             unpadded_seq_len = grid_thw.prod(dim=1).sum().item()
-            # Pad the row count up to what this tower actually requires, which is 128:
-            # `VisionAttention.forward_prefill` asserts `seq_len % 128 == 0`, and every matmul
-            # `chunk` is derived as a DIVISOR of the row count, so nothing here needs more.
-            #
-            # This used to round to 2048, citing `tt_transformers.tt.attention::forward_prefill` --
-            # a file this tower never calls, it has its own attention. The cost was not just wasted
-            # rows: SDPA runs `is_causal=False` with NO attn_mask, so the pad rows are unmasked keys
-            # and every real query summed `exp(0)` over each of them, inflating its softmax
-            # denominator. Tightening this removes work AND moves the tower closer to the reference.
-            #
-            # `-(-n // m) * m` is ceil-align. The old `(n // m) + 1` form over-padded exact
-            # multiples -- 4096 -> 6144, i.e. 1.5x the rows and 2.25x the SDPA, for nothing.
+            # Pad to 128: VisionAttention requires seq_len % 128 == 0.
             seq_len = -(-unpadded_seq_len // 128) * 128
 
             # 2. Use preprocessing function from reference/functional to get indices and embeddings
@@ -292,7 +272,6 @@ class DropInVisionTransformer(torch.nn.Module):
                 spatial_merge_size=self.model_args.hf_config.vision_config.spatial_merge_size,
             )
 
-            # 3. Patch embedding + interpolated positional embedding (device by default).
             tt_input = None
             if self.tt_embed is not None:
                 idx, wts = self._bilinear_corners(grid_thw)
@@ -302,15 +281,7 @@ class DropInVisionTransformer(torch.nn.Module):
                 pos_embeds = self.reference_model.fast_pos_embed_interpolate(grid_thw)
                 patch_input = patch_input + pos_embeds
 
-            # 4. Prepare rotational embeddings (cos, sin) and upload them ONCE, already in the shape
-            # `rotary_embedding_llama` wants: bf16, rows padded to seq_len and the head dim padded to
-            # `padded_head_dim`, both with the identity rotation (cos=1, sin=0).
-            #
-            # All three of those used to happen on device, and the head-dim pad happened inside
-            # `VisionAttention.forward_prefill` -- i.e. 27 times per image on identical tensors. Doing
-            # it here costs nothing extra on the wire: bf16 at the padded extent (12288x96 = 2.36 MB)
-            # is SMALLER than fp32 at the real one (11008x72 = 3.17 MB), and it removes, per image,
-            # 2 TilizeWithValPadding + 2 Typecast + 2 Pad, plus 2 FillPad per block.
+            # Upload cos/sin once, padded to seq_len and padded_head_dim (identity on the pad).
             cos_orig, sin_orig = position_embeddings
             cos_orig, sin_orig = convert_rope_style_hf_to_meta(cos_orig, sin_orig)
             mesh = self.model_args.mesh_device
@@ -343,8 +314,7 @@ class DropInVisionTransformer(torch.nn.Module):
                 rot_mats=rot_mats,  # Use rot_mats generated in this forward pass
             )
 
-            # deallocate device tensors that are not needed by decode. `rot_mats` IS `[cos, sin]`,
-            # so freeing both by name and by index was a double free.
+            # rot_mats is [cos, sin]; do not deallocate it separately.
             ttnn.deallocate(tt_input)
             ttnn.deallocate(cos)
             ttnn.deallocate(sin)

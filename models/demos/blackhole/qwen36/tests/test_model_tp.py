@@ -460,8 +460,7 @@ def test_model_tp_prefill_paged_slots_long(mesh_device, T, traced, reset_seeds, 
     vocab = args.vocab_size
     prompts = [torch.randint(0, vocab, (T,)).tolist() for _ in range(B)]
     oracle_pf, oracle_rec, oracle_dec = [], [], [[] for _ in range(B)]
-    # Token actually fed at each oracle decode step, replayed into the batched path below so both
-    # sides consume IDENTICAL tokens. Without this each path follows its OWN argmax, and a single
+    # Replay the oracle's tokens so both paths consume the same ids.
     oracle_fed = [[] for _ in range(B)]
     for u in range(B):
         lg = omodel.prefill_traced_chunked(torch.tensor([prompts[u]], dtype=torch.long), opt, actual_len=T)
@@ -522,8 +521,7 @@ def test_model_tp_prefill_paged_slots_long(mesh_device, T, traced, reset_seeds, 
     ]
     batched_dec = [[] for _ in range(B)]
     pos = list(prompt_lens)
-    # TEACHER-FORCED from the oracle's chain (oracle_fed above), matching what
-    # test_model_tp_decode_batched and test_model_tp_prefill_paged_slots already do.
+    # Teacher-forced from the oracle chain so later PCCs measure the model, not token divergence.
     _tf = validated_on_wormhole()
     _fed = None if _tf else [int(torch.argmax(batched_pf[u])) for u in range(B)]
     for s in range(N_DEC):
@@ -731,10 +729,7 @@ def test_model_tp_prefill_chunked_batched(mesh_device, B, seqlen, reset_seeds, e
     batch with diverging decode positions). Per-user prefill logits, post-prefill GDN recurrent
     state, and a few decode steps must all match the B=1 reference.
 
-    Decode inputs are teacher-forced from the oracle's own argmax chain (as in
-    test_model_tp_decode_batched) -- see the comment at the batched decode loop for why letting each
-    stack pick its own next token makes the later per-step PCCs measure token divergence rather than
-    the model.
+    Decode inputs are teacher-forced from the oracle argmax chain.
     """
     import gc
 
@@ -819,11 +814,9 @@ def test_model_tp_prefill_chunked_batched(mesh_device, B, seqlen, reset_seeds, e
     ]
     batched_dec = [[] for _ in range(B)]
     pos = list(prompt_lens)
-    # TEACHER-FORCED from the oracle chain, matching test_model_tp_decode_batched. Letting each
-    # stack feed its own argmax makes the per-step PCC meaningless: the prompts are random tokens
+    # Teacher-forced from the oracle chain so per-step PCC is not token divergence.
     tok_divergence = []  # (user, step, oracle_tok, batched_tok) — reported, not fatal
-    # SCOPED to Wormhole (test_factory.validated_on_wormhole) -- every WH mesh and both models.
-    # Teacher forcing CHANGES WHAT THIS TEST MEASURES, but self-feeding is not a usable baseline:
+    # Teacher forcing is scoped to Wormhole via validated_on_wormhole.
     _tf = validated_on_wormhole()
     _fed = None if _tf else [int(torch.argmax(batched_pf[u])) for u in range(B)]
     for s in range(N_DEC):

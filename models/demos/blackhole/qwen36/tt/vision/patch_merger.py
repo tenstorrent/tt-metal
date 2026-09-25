@@ -82,9 +82,7 @@ class PatchMerger(LightweightModule):
             args.get_state_dict_prefix(self.__class__.__name__) if state_dict_prefix is None else state_dict_prefix
         )
 
-        # Norm: gather fractured input back to replicated hidden_size and run local LayerNorm.
-        # Mirrors the LLM's DistributedNorm just before LMHead. With replicated tower activations
-        # there is nothing to gather and this runs as a plain local LayerNorm.
+        # Replicated activations skip the gather and run a local LayerNorm.
         self.norm = DistributedLayerNorm(
             device=mesh_device,
             dim=self.hidden_size,
@@ -170,8 +168,6 @@ class PatchMerger(LightweightModule):
         rows = x_norm.shape[-2]
         mlp_local = self.mlp_size // self.tp
 
-        # Both merger matmuls go through `vision_mm_plan`, which leaves them on auto at TP=2 and
-        # gives merger_fc2 a 2D config at TP=8, where the per-device N is 8x narrower.
         fc1_plan = self.args.vision_mm_plan(
             "merger_fc1",
             rows=rows,

@@ -590,21 +590,7 @@ def fused_recurrent_gated_delta_rule_ttnn(
     output_per_token_state=False,
     high_precision=True,
 ):
-    """Fused recurrent gated delta rule via the C++ ``ttnn.transformer.fused_recurrent_gated_delta_rule``
-    op. Collapses the per-token recurrence (decay -> k.S -> delta -> outer -> q.S) into ONE device
-    dispatch per call instead of the ~13-op Python composite.
-
-    Drop-in for ``recurrent_gated_delta_rule_decode_ttnn`` (T=1 single-token decode) and the base for
-    the multi-token speculative verify (T=K+1): with ``output_per_token_state=True`` it also returns the
-    recurrent state AFTER every token, for slot-based acceptance (mirrors FLA gdn2's per-token store).
-
-    q/k/v: [B, T, H, D] (H already GQA-expanded to the value-head count); beta/g: [B, T, H]
-    (beta post-sigmoid, g log-space decay). L2-norm over K + query scale are applied here to match
-    the FLA / composite contract; the op applies exp(g) and the recurrence.
-
-    Returns (o [B, T, H, V], state): state is [B, T, H, K, V] if output_per_token_state else the
-    final state [B, H, K, V] (fp32).
-    """
+    """Fused recurrent gated delta rule. Returns (o [B, T, H, V], final or per-token state)."""
     Kd = q.shape[-1]
     if scale is None:
         scale = Kd**-0.5

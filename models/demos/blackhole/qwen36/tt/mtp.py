@@ -1,34 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Qwen3.5/3.6 MTP (multi-token prediction) head — the speculative-decode drafter.
-
-Every Qwen3.5/3.6 checkpoint ships a single-layer MTP head (the ``mtp.*`` tensors) that
-reuses the main model's token embedding and LM head. Structure (mirrors DeepSeek-V3 MTP2D):
-
-    h'  = fc( concat[ enorm(embed(token)), hnorm(hidden) ] )     # fuse token + hidden
-    h'' = DecoderLayer(h')                                        # 1 full-attention layer
-    logits = LMHead( norm(h'') )                                  # shared head
-
-``enorm``  = mtp.pre_fc_norm_embedding, ``hnorm`` = mtp.pre_fc_norm_hidden,
-``fc``     = mtp.fc (eh_proj, [dim, 2*dim]), ``DecoderLayer`` = mtp.layers.0 (reuses the
-qwen36 full-attention decoder layer verbatim), ``norm`` = mtp.norm. The head maintains its
-OWN paged KV cache (mtp.layers.0.self_attn has its own k/v_proj), separate from the base.
-
-forward_decode returns ``(logits, next_hidden)``: ``next_hidden`` is fed back as ``hidden`` for the
-next chained draft step (EAGLE-style K>1). WHAT it is follows the spec feed contract the parent
-model selects (Qwen36Model.spec_feed_rows, env QWEN36_SPEC_POSTNORM):
-
-* V3 (default; QWEN36_SPEC_POSTNORM unset or 1): the base feeds the OUTPUT of its final norm
-  (fractured to dim/tp), and the chain feeds back the OUTPUT of mtp.norm, re-fractured to dim/tp —
-  so the drafter's hnorm sees the same kind of tensor at every step.
-* V0 (QWEN36_SPEC_POSTNORM=0): the base feeds its residual stream BEFORE the final norm, and the
-  chain feeds back the decoder-block output BEFORE mtp.norm.
-
-Shapes and dtypes are identical in both contracts.
-
-This module is torch-free: every buffer is filled on device (ttnn.zeros) and every host->device
-staging tensor is built straight from python ints/floats via ttnn.Tensor, which is bit-identical to
-the from_torch + ReplicateTensorToMesh path it replaces (verified including tile padding).
+"""Qwen3.5/3.6 single-layer MTP drafter for speculative decode.
+Reuses the parent embedding and LM head, and keeps its own paged KV cache.
 """
 
 import os
@@ -41,7 +14,7 @@ from models.tt_transformers.tt.common import Mode
 
 
 class Qwen36MTP:
-    """Single-layer MTP drafter head. Reuses the parent model's embedding + LM head."""
+    """Single-layer MTP drafter. Reuses the parent embedding and LM head."""
 
     def __init__(self, mesh_device, args, state_dict, parent, tensor_cache_path=None, tt_ccl=None):
         self.args = args
@@ -50,27 +23,15 @@ class Qwen36MTP:
         self.num_devices = getattr(args, "num_devices", 1)
         self.tt_ccl = tt_ccl
 
-        # Shared (no new weights): the main embedding + LM head + final-norm reuse.
         self.embd = parent.embd
         self._lm_head = parent._lm_head
         self.lm_head_weight = parent.lm_head_weight
-        # Feed contract, decided by the parent (see module docstring). V3 makes forward_decode chain
-        # mtp.norm's output instead of the raw block output.
+        # V3 chains mtp.norm's output; V0 chains the raw block output.
         self.spec_postnorm = bool(getattr(parent, "spec_postnorm", False))
 
-        # Shard-argmax greedy pick: keep the drafter's logits vocab-sharded and reduce 8 scalars
-        # across the mesh instead of all-gathering the whole fp32 vocab row (that gather was 1.47 ms
-        # of a ~3.4 ms drafter leg on T3K/27B; a traced leg is 3986 -> 2684 us). Byte-identical to
-        # the gathered argmax, and measured to leave the drafted ids and the acceptance rate
-        # unchanged -- see tp_common.greedy_pick. Needs an evenly fractured head; env escape hatch
-        # Scoped to T3K (tpc.wh_t3k), the config it was measured and gated on.
+        # T3K shard-argmax: vocab-sharded logits, even fracture only; same id as the gathered argmax.
         self.shard_argmax = tpc.wh_t3k(args) and args.vocab_size % self.num_devices == 0
-        # QWEN36_MTP_HIPREC_DRAFT=1: A/B harness for the drafter's LM-head precision. Turns OFF the
-        # bfp4 head AND the shard-argmax together, which lands on the original gathered-argmax path.
-        # BOTH must go: a bf16 head with shard_argmax on is an unsupported pairing that HANGS on the
-        # second generate() (_lm_head(gather=False) returns sharded logits the traced draft window
-        # never exercises). Slower by the 1.47 ms/leg vocab gather -- this is for measuring
-        # ACCEPTANCE, not speed.
+        # QWEN36_MTP_HIPREC_DRAFT=1: bf16 gathered argmax. Do not pair a bf16 head with shard_argmax (hangs).
         self._hiprec_draft = os.environ.get("QWEN36_MTP_HIPREC_DRAFT", "0") == "1"
         if self._hiprec_draft:
             self.shard_argmax = False
@@ -83,8 +44,6 @@ class Qwen36MTP:
 
         mtp_cache = (tensor_cache_path / "mtp") if tensor_cache_path is not None else None
 
-        # Two pre-fc norms + the post-block norm, keyed under "mtp." (mtp.pre_fc_norm_embedding,
-        # mtp.pre_fc_norm_hidden, mtp.norm). Built exactly like Qwen36DecoderLayer._make_norm.
         self.pre_fc_norm_embedding = self._make_norm(state_dict, "pre_fc_norm_embedding", mtp_cache, "attn")
         self.pre_fc_norm_hidden = self._make_norm(state_dict, "pre_fc_norm_hidden", mtp_cache, "attn")
         self.head_norm = self._make_norm(state_dict, "norm", mtp_cache, "lm_head")
@@ -92,33 +51,7 @@ class Qwen36MTP:
         # fc (eh_proj): torch weight [dim, 2*dim] -> concat(token_emb, hidden)[..,2*dim] -> hidden.
         fc_w = state_dict["mtp.fc.weight"]
         assert fc_w.shape == (args.dim, 2 * args.dim), f"unexpected mtp.fc shape {tuple(fc_w.shape)}"
-        # A DRAFTER-ONLY bfloat4_b copy of the LM head (T3K). That matmul is
-        # 943 us -- 54% of a traced drafter leg -- and it is weight-streaming bound at ~60% of DRAM
-        # peak, so config tuning cannot move it (auto is optimal; in0 in L1 costs +1577 us) and the
-        # only lever left is bytes: bfp4 halves the 169 MB read. The base/verify head is untouched,
-        # so losslessness is unaffected by construction -- the drafter only PROPOSES and every
-        # proposal is still checked against the bf16 base argmax. What it can cost is ACCEPTANCE,
-        # which is why this is opt-in and measured rather than assumed: it only pays if the drafted
-        # tokens survive verification at nearly the old rate.
-        #
-        # MEASURED on T3K/27B, and acceptance does NOT suffer:
-        #   traced drafter leg   2513.2 -> 2108.4 us   (-16.1%, the LM head 943 -> ~540)
-        #   demo ISL 128, K=6    45.84 -> 47.26 tok/s  (+3.1%, 2 reps: 47.23 / 47.28)
-        #   acceptance           4.00/6 -> 4.10/6      (UP, or level within 10-iteration sampling)
-        #   spec lossless        unchanged -- same divergence point, same near-tie flip, 2.69/3
-        # Costs ~89 MB/device for the second copy (the bf16 base/verify head stays).
-        # CROSS-VERIFIED across 8 prompts (QWEN36_MTP_HIPREC_DRAFT=1, K=11, ISL 128, T3K/27B).
-        # The note above was signed off on ONE prompt at 10 iterations, and acceptance turned out to
-        # vary 2.6x by prompt (2.08-5.38 /11), so the cheap head deserved checking where acceptance
-        # is WORST, not where it is best. Accepted drafts per prompt, bfp4 vs bf16+gathered-argmax:
-        #   condiment 5.38/5.38   hello 4.44/4.44   mayonnaise 2.08/1.88   yellow+blue 4.64/4.67
-        #   room-temp 2.79/2.79   joke  2.90/2.65   good-at    4.19/3.85   2+2        2.11/2.82
-        #   MEAN      3.57/3.56  -> -0.01, i.e. nil
-        # bf16 is WORSE on three of the eight, which is impossible if precision were helping -- the
-        # scatter is near-tie coin flips (and partly the argmax path, which the A/B also swaps).
-        # Cost side: bf16 averages 33.82 vs 36.58 tok/s, the vocab gather coming back for nothing.
-        # So bfp4 is free, and ~0.78 accepted-per-depth is the DRAFTER's ceiling, not a precision
-        # artefact -- raising acceptance needs a better MTP head, not a cheaper/dearer dtype.
+        # Drafter-only bfp4 LM head. The base/verify head stays bf16, so verify losslessness is unchanged.
         self._lm_head_bfp4 = None
         if self.shard_argmax and not self._hiprec_draft and "output.weight" in state_dict:
             self._lm_head_bfp4 = ttnn.as_tensor(
@@ -161,9 +94,7 @@ class Qwen36MTP:
                 cache_file_name=(str(mtp_cache / "fc") if mtp_cache is not None else None),
             )
 
-        # Reuse the full-attention decoder layer for mtp.layers.0. Remap the checkpoint keys to a
-        # full-attention layer index L so is_full_attention_layer(L) is True and the substate loader
-        # finds layers.{L}.self_attn.* / .mlp.* / .{input,post_attention}_layernorm.
+        # Remap mtp.layers.0.* onto a full-attention layer index so the decoder loader finds its keys.
         L = next((i for i, t in enumerate(args.attention_type_list) if t == "full_attention"), None)
         assert (
             L is not None
@@ -174,39 +105,22 @@ class Qwen36MTP:
         mtp_layer_sd = {
             prefix + k[len("mtp.layers.0.") :]: v for k, v in state_dict.items() if k.startswith("mtp.layers.0.")
         }
-        # Dedicated cache root (.../mtp/) so the reused layer's sharded weights never collide with
-        # the real layer L's cache.
+        # Dedicated cache root so the reused layer's weights never collide with the real layer L.
         self.decoder = Qwen36DecoderLayer(
             mesh_device, args, mtp_layer_sd, layer_num=L, tensor_cache_path=mtp_cache, tt_ccl=tt_ccl
         )
         # KV accessor for allocate_kv_caches / rollback.
         self.attention = self.decoder.attention
-        # Drafter-only decode SDPA width. The shared decode program config leaves
-        # max_cores_per_head_batch at ttnn's default of 16, which at B=1 and 1 local KV head puts 16
-        # of the grid's 110 cores on the KV reduction. The drafter is exactly the shape that hurts:
-        # every one of the K draft steps is a B=1 decode that rescans the WHOLE prompt-length KV, so
-        # its SDPA is reduction-bound and scales with the core count. 64 is the ceiling the kernel
-        # allows (tree reduction is capped at MAX_TREE_REDUCTION_ROUNDS=6 rounds = 2^6 cores/head).
-        #
-        # Set on the MTP's own TPAttention instance only, so the base model's 16 full-attention
-        # layers keep the config they have. The batched reseed (B=K+1 rows through this same
-        # instance) is unaffected: at B=11 both 16 and 64 resolve to min(110, max*B)/B = 10
-        # cores/head. It DOES change the drafter's reduction order, so bf16 near-ties can round the
-        # other way and a different token gets drafted — which only shifts acceptance, never
-        # correctness: every draft is arbitrated by the base model's verify.
+        # Drafter-only. 64 is the kernel core ceiling; a different reduction order can change drafts, not verify.
         self.attention.decode_sdpa_max_cores = 64
-        # Traced draft window (init_draft_window / capture_draft_window / draft_leg).
         self._dw = None
         self._rw = None
-        # Width of the cos/sin this drafter's attention expects. Under permuted full-width RoPE
-        # (wh_9b_n300) the permutation is folded into the drafter's own q/k at load time, so it needs
-        # the widened tables -- exactly like every other consumer on this branch. rope_permuted is
-        # off elsewhere, where this collapses to rope_head_dim and nothing changes.
+        # Permuted full-width RoPE needs the widened tables; otherwise this is rope_head_dim.
         self._rope_full_head_dim = parent.rope.full_head_dim
         self.rope_width = parent.rope.rope_width
 
     def _make_norm(self, state_dict, weight_key, cache, ag_key):
-        """RMSNorm (zero-centered) wrapped in DistributedNorm under TP; plain RMSNorm otherwise."""
+        """Zero-centered RMSNorm; DistributedNorm under TP."""
         norm = RMSNorm(
             device=self.device,
             dim=self.args.dim,
@@ -234,79 +148,40 @@ class Qwen36MTP:
         return norm
 
     def _fuse(self, token_emb, hidden_states, mode):
-        """enorm(token_emb) ⊕ hnorm(hidden) -> fc -> fractured hidden [1,1,B|S,dim/tp]."""
-        # DECODE gather-then-norm needs a norm_config for the all-gather's (sharded) output memcfg;
-        # PREFILL takes the distributed-norm branch and works with the default (None).
-        # The pre-fc norms must GATHER their fractured input to full dim (the concat + fc need it),
-        # like the model's final norm. Use the "lm_head" norm config (the gather-and-norm path proven
-        # in decode by _final_norm_decode), NOT "attn" (which assumes the fused in-proj gathers).
-        # The pre-fc norms must GATHER their fractured input to full dim (concat + fc need it), like
-        # the model's final norm — use the "lm_head" gather-then-norm config (proven in decode by
-        # _final_norm_decode), not "attn" (which assumes the fused in-proj gathers).
+        """Concat enorm(token) and hnorm(hidden), then fc, to fractured [1, 1, *, dim/tp]."""
+        # DECODE gather-then-norm needs a norm_config; pre-fc norms gather to full dim via the lm_head config.
+        # Do not fuse the two pre-fc gathers into one row-stacked gather.
         nc = None
         if self.num_devices > 1 and mode == Mode.DECODE:
             nc = dict(self.args.get_norm_config("lm_head", Mode.DECODE))
             nc["output_mem_config"] = ttnn.DRAM_MEMORY_CONFIG
-        # NEGATIVE, do not retry: the two gathers these norms do (46 + 42 us, the biggest non-matmul
-        # cost in the prologue) look like one gather of the two inputs ROW-STACKED, since all_gather
-        # on dim 3 gathers each row independently. Both forms were built and measured on T3K/27B:
-        # a sharded-output gather is rejected outright (the 2-row stack is physical height 2, and
-        # the norm's width-shard spec requires tile-sized shards), and the DRAM-output form works
-        # and is bit-identical (same drafted ids) but costs +90 us/leg -- the interleaved gather is
-        # slower than the sharded one, and the stack/slice/reshard needed to split the rows back out
-        # adds five ops. Two cheap gathers beat one awkward one here.
         e = self.pre_fc_norm_embedding(token_emb, mode=mode, norm_config=nc)  # -> full [1,1,*,dim]
         h = self.pre_fc_norm_hidden(hidden_states, mode=mode, norm_config=nc)  # -> full [1,1,*,dim]
-        # L1 for the fc's in0 (640 KB at 27B/TP=8): the tt-perf-report hint "place input 0 in L1"
-        # is worth -2.1 us here (72.5 -> 70.4). It is NOT worth taking on the LM head, where the same
-        # move costs +1577 us (962 -> 2539) -- see tp_common.fc_decode_program_config.
+        # L1 for the fc in0 when the decode program config is set. Do not do this for the LM head.
         cat_mc = ttnn.L1_MEMORY_CONFIG if self._fc_decode_pc is not None else None
         cat = ttnn.concat([e, h], dim=-1, **({"memory_config": cat_mc} if cat_mc else {}))  # [1,1,*,2*dim]
         ttnn.deallocate(e)
         ttnn.deallocate(h)
         kw = dict(compute_kernel_config=self._fc_compute_cfg) if self._fc_compute_cfg is not None else {}
-        # Swept program config for the 1-tile-tall form (every draft leg, and the batched reseed at
-        # B<=32). It is per_core_M=1 + fuse_batch, so anything taller -- prefill -- must keep auto or
-        # work_split trips. 2.3x on this matmul; see tp_common.fc_decode_program_config.
+        # per_core_M=1 config; taller than 32 rows must not use it or work_split trips.
         _m = int(cat.shape[-2])
         if self._fc_decode_pc is not None and _m <= 32:
             kw["program_config"] = self._fc_decode_pc
         elif _m >= 512:
-            # PREFILL shape. fc_decode_program_config's 42-arm sweep tuned M=32 ONLY, and this call
-            # fell through to ttnn's auto config, which MEASURED at 24 of 64 cores / 2.4% DRAM /
-            # 41.2% FLOPs in the drafter warm -- the worst-utilised matmul in the chunk. Auto is not
-            # finding the 2D split: at M=2048 there are 64 M-tiles to spread, where the decode shape
-            # had one (which is why its optimum is 10 cores and does not carry over).
-            #
-            # SWEPT at 2048x10240x640, trace-replay timing, PCC 1.000000 on every arm
-            # (tests/perf/test_fc_prefill_sweep.py):
-            #     auto (was shipping)  898.2 us      2D grid=8x5  1018.7 (+13.4%)
-            #     2D full grid         853.2 (-5.0%) 2D grid=4x8  1017.6 (+13.3%)
-            #     2D grid=8x8 halved   863.2 (-3.9%) 2D grid=8x4  1208.1 (+34.5%)
-            #     2D grid=5x8          874.8 (-2.6%) 2D grid=8x2  1962.3 (+118.5%)
-            # Monotonic in core count, so this takes the device's real grid rather than a literal.
-            #
-            # M>=512 because only 2048 was swept; the small tail buckets keep auto rather than run an
-            # unmeasured config. try/except because the helper's blocking has shape preconditions and
-            # a warm that TT_FATALs is far worse than one that is 5% slow.
+            # Prefill matmul config for M>=512 only; smaller buckets stay on auto. Fall back to auto on error.
             try:
                 _g = self.device.compute_with_storage_grid_size()
                 kw["program_config"] = tpc.create_prefill_matmul_program_config(
                     _m, cat.shape[-1], self.fc.shape[-1], grid_size=(_g.x, _g.y)
                 )
             except Exception:
-                pass  # auto, exactly as before
+                pass  # auto
         fused = ttnn.linear(cat, self.fc, memory_config=ttnn.DRAM_MEMORY_CONFIG, **kw)  # [1,1,*,dim/tp]
         ttnn.deallocate(cat)
         return fused
 
     def _argmax_last(self, logits):
-        """Greedy pick over the vocab dim for ONE row -> [1,1,1] uint32 ROW_MAJOR.
-
-        Takes the shard-combine path when forward_decode left the logits vocab-sharded (the default
-        on a mesh), the plain untilize+argmax when they were gathered. Both live in
-        tp_common.greedy_pick, which documents why they return the same id.
-        """
+        """Greedy pick for one row; shard-combine or untilize+argmax, same id either way."""
         return tpc.greedy_pick(
             logits,
             self.mesh_device,
@@ -315,19 +190,6 @@ class Qwen36MTP:
             shard_offsets=self._argmax_offsets if self.shard_argmax else None,
             vocab_size=self.args.vocab_size,
         )
-
-    # ── traced draft window ──────────────────────────────────────────────────
-    # A draft chain is K sequential legs, and MEASURED on T3K/27B each eager leg costs ~19 ms of
-    # HOST time (rope build + uploads ~1.8, the ~40-op forward ~14, argmax ~3) against 0.5 ms of
-    # device time -- the whole chain drains in 2.8 ms. So the chain is dispatch-bound, not silicon-
-    # bound, and the fix is to stop walking python per leg: capture ONE trace per window index and
-    # replay it.
-    #
-    # Everything that varies rides persistent buffers: `pos`/`cos`/`sin` are staged ONCE per
-    # iteration for the whole window (one host upload each), and each leg's trace slices its own
-    # row at a STATIC offset. The chain itself never touches the host -- each trace ends by copying
-    # its own argmax id and next hidden into the `tok`/`h` buffers the next leg reads, so a leg is
-    # exactly one execute_trace. Only the K ids are read back, once, at the end.
 
     def init_draft_window(self, w_max, hidden_dim_frac, hidden_dtype, page_table):
         """Allocate the window buffers. Must run before any trace is captured."""
@@ -354,12 +216,7 @@ class Qwen36MTP:
         }
 
     def stage_draft_window(self, start_pos, width, rope_delta=0):
-        """Upload pos/cos/sin for drafter positions [start_pos, start_pos+width). Once per iteration.
-
-        cos/sin come from the SAME rot_mats_decode the eager leg called, just for the whole window in
-        one call instead of once per leg, so a traced chain drafts exactly what the eager one did.
-        It hands back device tensors, so they are copied straight into the persistent buffers.
-        """
+        """Stage the whole window's rope once; same rot_mats_decode the eager path uses."""
         from models.demos.blackhole.qwen36.tt.attention.rope_tp import rot_mats_decode
 
         dw = self._dw
@@ -397,8 +254,7 @@ class Qwen36MTP:
         return idx
 
     def compile_draft_window(self):
-        """Compile every leg's programs EAGERLY. Must precede ANY trace capture: a program that
-        first compiles while a trace is parked writes its kernel binaries over that trace."""
+        """Compile every leg before any trace capture; a later compile clobbers a parked trace."""
         dw = self._dw
         if dw["traces"] or dw["compiled"]:
             return
@@ -426,7 +282,6 @@ class Qwen36MTP:
         return tr["idx"]
 
     def seed_draft_window(self, tok_tt, hidden):
-        """Load the chain's first token + anchor hidden into the window buffers (device copies)."""
         ttnn.copy(tok_tt, self._dw["tok"])
         ttnn.copy(hidden, self._dw["h"])
 
@@ -436,13 +291,6 @@ class Qwen36MTP:
         for tr in self._dw["traces"].values():
             ttnn.release_trace(self.device, tr["id"])
         self._dw["traces"] = {}
-
-    # ── traced reseed ────────────────────────────────────────────────────────
-    # The batched reseed is ONE fixed-shape B=T forward, and MEASURED it costs ~35 ms of host to
-    # enqueue against 0.8 ms of device -- the same dispatch-bound shape the draft chain had, made
-    # worse by alias_kv_write issuing a per-row paged_update_cache pair. Everything that varies (the
-    # tokens, their positions, the per-row page table, the RoPE rows) is data, and the row count is
-    # fixed with padding rows aimed at the scratch block, so one trace covers every iteration.
 
     def init_reseed_window(self, T, num_blocks):
         if self._rw is not None:
@@ -467,10 +315,7 @@ class Qwen36MTP:
         }
 
     def stage_reseed_window(self, tok, pos, pt, cos_tt, sin_tt):
-        """Refresh the reseed inputs. ``tok``/``pos``/``pt`` are FLAT row-major python int lists, so
-        their host tensors are built straight from ints; ``cos_tt``/``sin_tt`` are already ON DEVICE
-        (gathered off the resident rope table by _rope_tp_cos_sin_decode_rows) and are copied
-        device-to-device, so no rope value crosses the bus. The caller owns them."""
+        """Stage flat host int lists and on-device cos/sin into the persistent reseed buffers."""
         rw = self._rw
         T, nb = rw["T"], rw["num_blocks"]
         rm = ttnn.ROW_MAJOR_LAYOUT
@@ -498,8 +343,7 @@ class Qwen36MTP:
         ttnn.deallocate(h_next)
 
     def compile_reseed_window(self, vhidden):
-        """Compile the reseed programs eagerly, before ANY capture. Its KV writes land wherever the
-        staged (zero) page table points -- stage the scratch block everywhere first."""
+        """Compile before any capture; stage the scratch block first so throwaway KV misses the sequence."""
         if self._rw["compiled"] or self._rw["id"] is not None:
             return
         self._reseed_body(vhidden)
@@ -535,32 +379,9 @@ class Qwen36MTP:
         need_logits=True,
         alias_kv_write=False,
     ):
-        """One MTP draft step, or ONE batched KV-maintenance step over B rows.
-
-        hidden_states : [1,1,B,dim/tp] fractured — the base's drafter feed for the row
-                        (Qwen36Model.spec_feed_rows: pre-final-norm residual under V0, fractured
-                        final-norm output under V3), or the previous MTP step's next_hidden when
-                        chaining.
-        token_ids     : [B,1] uint32 device — the token at the position just before what we predict.
-        position_idxs : [B] int32 device — KV write index into the MTP cache (base cur_pos + step).
-        cos, sin      : partial-RoPE tables for position_idxs (+ rope_delta).
-        page_table    : [B, blocks] int32 for the MTP layer's own paged KV cache.
-        alias_kv_write: the B rows belong to ONE sequence at consecutive positions (the batched
-                        reseed), so their KV writes share physical blocks and must go row by row —
-                        see TPAttention.forward_decode.
-
-        Returns (logits, next_hidden), both fractured [1,1,B,dim/tp]. With need_logits=True,
-        next_hidden is the chain value: the decoder-block output before mtp.norm (V0) or mtp.norm's
-        output re-fractured to dim/tp (V3). With need_logits=False the head norm is skipped and
-        next_hidden is ALWAYS the raw block output regardless of contract: that path exists for KV
-        maintenance only (reseed / catch-up) and every caller discards the returned hidden, so it is
-        not a valid chain value under V3.
-        """
+        """One draft or reseed step. alias_kv_write is one sequence; need_logits=False is not a V3 chain value."""
         mode = Mode.DECODE
-        # T3K takes tpc.decode_embed rather than self.embd: at the drafter's B=1 the plain call's
-        # internal TilizeWithValPadding runs on ONE core (55.6 us for a [1,1,1,dim/tp] row, the
-        # leg's largest data-movement op). decode_embed splits it; bit-identical either way.
-        # Every other config keeps the plain call, so nothing about 9B/N300 changes here.
+        # T3K: decode_embed splits the B=1 tilize. Bit-identical; other configs keep embd.
         tok_emb = (
             tpc.decode_embed(self.embd, token_ids, self.args) if tpc.wh_t3k(self.args) else self.embd(token_ids)
         )  # [B,1,dim/tp]
@@ -580,9 +401,6 @@ class Qwen36MTP:
         ttnn.deallocate(fused)
 
         if not need_logits:
-            # KV-maintenance step (reseed / catch-up): the caller only needs the drafter's KV written
-            # at this slot and throws the logits away, so skip the head norm AND the 151k-vocab LM
-            # head (plus its vocab all-gather) entirely. ~half the MTP steps per spec iteration.
             return None, next_hidden
 
         hnc = None
@@ -591,10 +409,7 @@ class Qwen36MTP:
             hnc["output_mem_config"] = ttnn.DRAM_MEMORY_CONFIG
         normed = self.head_norm(next_hidden, mode=mode, norm_config=hnc)  # -> full [1,1,B,dim]
         if self.spec_postnorm:
-            # V3 chain: the next step is fused from mtp.norm's output, not the raw block output. The
-            # DECODE head norm gathers to the full dim (replicated), so slice each device's own
-            # dim/tp span back out — the inverse of that all-gather — to restore the fractured
-            # [1,1,B,dim/tp] every consumer expects. `normed` itself stays alive for the LM head.
+            # V3: chain mtp.norm's output, re-fractured to dim/tp. `normed` stays for the LM head.
             ttnn.deallocate(next_hidden)
             if self.num_devices > 1:
                 next_hidden = ttnn.mesh_partition(normed, dim=3, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -603,12 +418,7 @@ class Qwen36MTP:
         if sharded_lm_head or getattr(self, "_ondev_argmax", False):
             logits = ttnn.linear(normed, self.lm_head_weight)  # vocab-sharded shard
         else:
-            # fp32 for the DRAFTER only (the shared base/verify call keeps its default bf16 output —
-            # losslessness is defined by the base argmax). The drafter's argmax consumes these
-            # directly, so bf16 ties that used to discard a good draft are broken correctly.
-            #
-            # gather=False under shard_argmax: _argmax_last reduces the shards itself, so the fp32
-            # vocab all-gather is skipped entirely. The matmul is unchanged either way.
+            # Drafter logits are fp32; base/verify stays bf16. shard_argmax skips the vocab all-gather.
             if self._lm_head_bfp4 is not None and self.shard_argmax:
                 logits = ttnn.linear(
                     normed,
@@ -616,24 +426,8 @@ class Qwen36MTP:
                     dtype=ttnn.float32,
                     compute_kernel_config=ttnn.init_device_compute_kernel_config(
                         self.device.arch(),
-                        math_fidelity=ttnn.MathFidelity.LoFi,  # LoFi matches the bfp4 weight
-                        # fp32 dest accumulation STAYS ON. It is not a perf choice: the drafter's
-                        # argmax consumes these logits directly, and at lower precision exact ties
-                        # throw good drafts away (4.7-5.5% of rejections at 8k/32k, see
-                        # model.py::_lm_head). MEASURED here, turning it off is only -2.1% on its
-                        # own and moves the logits (PCC 0.9992463) -- not worth an acceptance risk.
-                        #
-                        # packer_l1_acc was off only because that was the combination originally
-                        # measured. SWEPT in isolation at the real shape
-                        # ([1,1,32,5120] bf16 x [5120,31040] bfp4 -> fp32, the vocab shard at TP=8;
-                        # tests/perf/test_lm_head_sweep.py), 20 timed iterations per arm:
-                        #     fp32acc=T packer=F   576.0 us  155.2 GB/s   <- was shipping
-                        #     fp32acc=F packer=F   564.0 us  158.5 GB/s   -2.1%, PCC 0.9992463
-                        #     fp32acc=T packer=T   553.1 us  161.6 GB/s   -4.0%, output UNCHANGED
-                        #     fp32acc=F packer=T   536.5 us  166.6 GB/s   -6.9%, PCC 0.9999405
-                        # Taking the third: -4.0% on the drafter's single largest op (38% of a
-                        # 1428.9 us leg) with the output identical, so acceptance cannot move.
-                        packer_l1_acc=True,
+                        math_fidelity=ttnn.MathFidelity.LoFi,  # matches the bfp4 weight
+                        packer_l1_acc=True,  # output unchanged; fp32 dest accumulation stays on
                     ),
                 )
             else:
@@ -642,16 +436,7 @@ class Qwen36MTP:
         return logits, next_hidden
 
     def forward_prefill(self, hidden_states, token_ids, cos, sin, page_table, chunk_page_table=None, chunk_start_idx=0):
-        """Warm the MTP paged KV cache over the prompt (one forward, all positions).
-
-        hidden_states : [1,1,S,dim/tp] fractured — the base's per-position drafter feed
-                        (Qwen36Model.spec_feed_rows: pre-final-norm under V0, fractured final-norm
-                        output under V3).
-        token_ids     : [1,S] uint32 device — MTP input tokens for the prompt.
-        page_table / chunk_page_table : the MTP layer's own paged KV page table.
-        Returns the fractured decoder-block output [1,1,S,dim/tp] (raw, before mtp.norm, under both
-        contracts — only the KV write matters here; callers free it).
-        """
+        """Warm MTP paged KV over the prompt. Returns the raw block output; only the KV write matters."""
         S = token_ids.shape[-1]
         tok_emb = self.embd(token_ids)  # [1,S,dim/tp]
         tok_emb = ttnn.reshape(tok_emb, (1, 1, S, tok_emb.shape[-1]))

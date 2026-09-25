@@ -1,28 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Full-depth PREFILL logits PCC vs the HuggingFace reference.
-
-The whole prompt through **every** layer of the real checkpoint via
-``prefill_paged`` — the trusted non-traced path the rest of the prefill suite is
-validated against — compared with ``Qwen3_5ForCausalLM``'s logits at the same
-position. ``tests/test_prefill.py`` (one directory up) checks the masked-bucket and
-chunk-outer prefill paths against ``prefill_paged``; this checks ``prefill_paged``
-itself against the reference implementation, at full depth.
-
-One test, both checkpoints: ``HF_MODEL`` picks the model and ``MESH_DEVICE`` the
-mesh, so the same function covers Qwen3.5-9B (32 layers) and Qwen3.6-27B (64
-layers). See ``full_depth_pcc_common.py`` for the harness, the measured PCCs, and
-the env knobs.
-
-Run:
-  # 9B
-  HF_MODEL=Qwen/Qwen3.5-9B MESH_DEVICE=P150 \
-    pytest models/demos/blackhole/qwen36/tests/unit/test_prefill.py -v -s
-
-  # 27B
-  HF_MODEL=Qwen/Qwen3.6-27B MESH_DEVICE=P150x4 \
-    pytest models/demos/blackhole/qwen36/tests/unit/test_prefill.py -v -s
-"""
+"""Full-depth prefill logits vs HuggingFace via prefill_paged.
+The masked-bucket and chunk-outer paths are checked against prefill_paged elsewhere."""
 
 import torch
 from loguru import logger

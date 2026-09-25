@@ -21,8 +21,7 @@ class MLPWeights:
     w_gate_up: ttnn.Tensor = None  # TP prefill: tile-pair-interleaved packed [gate|up] for fused-swiglu AGMM
 
 
-# WORMHOLE MLP prefill: one K pass for gate/up/down.
-# The unfused arm needed halve_out_block=True because the full per_core_N-wide CB (gate AND up live
+# fp32 dest acc off so one K pass fits the full per-core-N CB.
 _CKC_MLP_KPASS1 = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False, packer_l1_acc=True
 )
@@ -61,7 +60,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
 
     if tp > 1:
         # TP: w1/w3 column-parallel (shard out dim), w2 row-parallel (shard in dim).
-        # down_proj (w2) stays bfloat8_b -- an explicit ACCURACY choice (see the non-TP loader's
+        # down_proj (w2) stays bfloat8_b.
         from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
         # w1/w3 DRAM-WIDTH_SHARDED for decode (M=1 tile, ~+10% tok/s); w2 interleaved.
@@ -74,8 +73,6 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
             and not getattr(args, "mlp_1d_decode", False)
         )
 
-        # gate/up dtype, SCOPED to wh_9b_n300. Everything else keeps bfloat4_b.
-        # HF parity (unit/test_prefill, test_decode): prefill 0.991320 -> 0.998400,
         _gu_dtype = ttnn.bfloat8_b if (args is not None and tpc.wh_9b_n300(args)) else ttnn.bfloat4_b
         # Dtype in the cache key: else a flipped gate reuses the other's cache.
         _gu_tag = ".bfp8" if _gu_dtype == ttnn.bfloat8_b else ""
@@ -167,8 +164,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
             cache_file_name=(tensor_cache_path / f"mlp.{name}.weight") if tensor_cache_path else None,
         )
 
-    # Single-device (tp == 1) path. gate/up stay bfloat4_b: tpc.wh_9b_n300 requires
-    # device_name == "N300" (2 devices), so the TP branch's gate never applies.
+    # Single-device path: wh_9b_n300 requires N300, so gate/up stay bfloat4_b.
     return MLPWeights(
         w1=load("gate_proj", ttnn.bfloat4_b),
         w2=load("down_proj", ttnn.bfloat8_b),
@@ -211,8 +207,6 @@ class Qwen36MLP:
         self.compute_kernel_config_decode = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=True
         )
-        # WH-only, gate/up decode matmuls ONLY (not down): MEASURED (N300, M=32 K=4096 N=6144,
-        # test_mlp_decode_matmul_sweep.py, 3 independent runs each) fp32_dest_acc_en=False beats
         self.compute_kernel_config_gateup_decode = (
             ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False, packer_l1_acc=False
@@ -258,8 +252,7 @@ class Qwen36MLP:
 
         mc = ttnn.DRAM_MEMORY_CONFIG
         _silu_fused = False
-        # 27B-on-Wormhole prefill matmul blocking (gate/up AND down; see both call sites below).
-        # Hoisted out of the gate/up branch because the down-proj block reads it too, and that block
+        # Hoisted: the down-proj block reads this too.
         _mlp_full_grid = args.dim > 4096 and not tpc.is_blackhole() and x.shape[-2] <= tpc.PREFILL_FULL_GRID_MAX_M
         # Prefill: x is K-sharded (ff_norm skipped AG); fused AG + [gate|up] + SwiGLU
         _fused_gu = self._fuse_gateup_agmm and x.shape[-2] > ttnn.TILE_SIZE and w.w_gate_up is not None
@@ -317,15 +310,10 @@ class Qwen36MLP:
             _gw = getattr(args, "decode_grid_w", 8)
             # TP-selected prefill tuning; absent (single-device 9B) => frozen TP=4 behavior.
             _pt = getattr(args, "prefill_tuning", None)
-            # This elif (inside _forward_tp, so TP>1) is reached only when the fused
-            # unavailable (see _fused_gu above)
             _kpass1 = not tpc.is_blackhole()
             _half = not _kpass1
-            # WORMHOLE ONLY: with _CKC_MLP_KPASS1's fp32_dest_acc_en=False the output-subblock ceiling
-            # is DST_TILES (8), not DST_TILES_FP32_ACC (4)
+            # fp32 dest acc off raises the subblock ceiling to DST_TILES.
             _sub_cap = tpc.DST_TILES if _kpass1 else None
-            # MODEL-GATED (27B on Wormhole). The 27B's per-device gate/up width is 2176 = 68 tiles,
-            # whose only divisors <=8 are 1/2/4, so _best_prefill_cols (which maximises the output
             if _mlp_full_grid:
                 pc_gate = tpc.create_prefill_mlp_matmul_program_config_full_grid(
                     seq, args.dim, w.w1.shape[-1], fused_activation=ttnn.UnaryOpType.SILU, out_subblock_h=1
@@ -355,11 +343,8 @@ class Qwen36MLP:
                 )
             if _kpass1:
                 ckc = _CKC_MLP_KPASS1
-            # MODEL-GATED (27B on Wormhole): gate/up outputs, and so the SwiGLU product, stay in L1.
-            # The dead-end note further down was measured at 9B/N300 shapes and does NOT carry here:
             _gu_mc = ttnn.L1_MEMORY_CONFIG if _mlp_full_grid else ttnn.DRAM_MEMORY_CONFIG
-            # FLOOR THE OUTPUT AT bf8 IF in0 EVER GOES BELOW IT. Inert today (in0 is bf16 or bf8),
-            # but ttnn.linear defaults its output dtype to in0's, and that inheritance is a trap:
+            # ttnn.linear defaults output dtype to in0; floor at bf8 if in0 is narrower.
             _gu_dt = {"dtype": ttnn.bfloat8_b} if x.dtype == ttnn.bfloat4_b else {}
             w1_out = ttnn.linear(
                 x, w.w1, compute_kernel_config=ckc, program_config=pc_gate, memory_config=_gu_mc, **_gu_dt
@@ -381,8 +366,7 @@ class Qwen36MLP:
         if not _fused_gu:
             mc_out = ttnn.L1_MEMORY_CONFIG if x.shape[-2] <= ttnn.TILE_SIZE else mc
             if _mlp_full_grid:
-                mc_out = ttnn.L1_MEMORY_CONFIG  # see _gu_mc above for why this is safe on the 27B
-            # `hidden` in L1 on WH prefill does NOT work:
+                mc_out = ttnn.L1_MEMORY_CONFIG
             _hidden_dt = {"dtype": ttnn.bfloat8_b} if (_prefill_tuned and not tpc.is_blackhole()) else {}
             # Standalone silu only on DRAM-sharded decode path (SILU not fused there).
             if _silu_fused:
@@ -415,7 +399,6 @@ class Qwen36MLP:
                     max_subblock_hw=tpc.DST_TILES if ckc is _CKC_MLP_KPASS1 else None,
                 )
         # down-proj OUTPUT in L1 for the tuned prefill path (DRAM input `hidden` + L1 output = the
-        # validated sweep outL1 config; tt_all_reduce already consumes an L1 partial) — but only while
         mc_w2_out = (
             tpc.prefill_out_memory_config(x.shape[-2], w.w2.shape[-1])
             if (x.shape[-2] <= ttnn.TILE_SIZE or _prefill_tuned)
@@ -425,7 +408,6 @@ class Qwen36MLP:
         ttnn.deallocate(hidden)
 
         # tt_all_reduce on (1,4) mesh reduce-scatters to hidden dim (dim=3).
-        # Prefill passes tuned chunks_per_sync / num_workers_per_link (see tp_common
         _ccl_kw = {}
         if x.shape[-2] > ttnn.TILE_SIZE:
             _cps, _wpl = tpc.prefill_ccl_tuning()

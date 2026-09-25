@@ -45,14 +45,10 @@ class Qwen36RoPESetup:
 
     def __init__(self, device, args):
         self.device = device
-        self.head_dim = args.rope_head_dim  # 64 -- the FREQUENCY dim (drives inv_freq), always
+        self.head_dim = args.rope_head_dim  # frequency dim; drives inv_freq
         self.max_seq_len = args.max_seq_len
         self.theta = args.rope_theta
-        # Permuted-head_dim full-width RoPE (attention/rope_tp.py's rope_channel_perm): every
-        # cos/sin this class hands out becomes head_dim wide in permuted channel order instead of
-        # rope_head_dim wide in HF order. The frequencies are unchanged -- the extra channels are
-        # cos=1/sin=0 identity slots -- so only the WIDTH of what leaves here differs. Consumers use
-        # self.rope_width rather than self.head_dim wherever they mean "width of a cos/sin row".
+        # Permuted RoPE widens cos/sin to head_dim; consumers use rope_width, not head_dim.
         self.full_head_dim = args.head_dim if getattr(args, "rope_permuted_enabled", False) else None
         self.rope_width = self.full_head_dim or self.head_dim
 
@@ -149,8 +145,6 @@ class Qwen36RoPESetup:
 
         Returns tensors on HOST (no device= arg) for fast DMA to pre-allocated device buffers.
         Shape: [1, 1, rope_width] — must match _trace_cos/_trace_sin device buffer shapes.
-        (rope_width is rope_head_dim, or head_dim under permuted full-width RoPE; the only caller is
-        the Blackhole branch of prepare_decode_inputs_host, where the permutation is always off.)
         Layout: TILE_LAYOUT — must match device buffer layout for copy compatibility.
 
         `pos` is the ROPE position (= KV position + rope_delta for a multimodal request); the
@@ -200,10 +194,10 @@ class Qwen36RoPESetup:
             spatial_merge_size=self.spatial_merge_size,
         )  # position_ids [3, B, S], deltas [B, 1]
         cos, sin = get_rot_mats(self.inv_freq, position_ids, self.mrope_section, self.attention_scaling)
-        # get_rot_mats returns [B, S, rope_head_dim]; B==1 here (single-sequence prefill).
+        # get_rot_mats is [B, S, rope_head_dim]; B==1 for single-sequence prefill.
         if self.full_head_dim:
             cos, sin = to_full_width_rot_mats(cos, sin, self.full_head_dim, self.head_dim, self.device)
-        self._req_cos = cos[0].to(torch.bfloat16)  # [S, rope_width]
+        self._req_cos = cos[0].to(torch.bfloat16)
         self._req_sin = sin[0].to(torch.bfloat16)
         self.rope_delta = int(deltas[0, 0].item())
         return self.rope_delta
@@ -212,11 +206,6 @@ class Qwen36RoPESetup:
         """Grow the per-request M-RoPE table to >= `length` positions with text-continuation rows
         (post-prompt positions have t==h==w, advancing as rope_pos = seq_idx + rope_delta). Used so
         the masked-bucket padding past the real prompt still has cos/sin.
-
-        Grows GEOMETRICALLY (at least double) rather than to exactly `length`. Every call
-        reallocates and copies the whole table, and the callers extend by a chunk at a time, so
-        exact growth makes a long generation quadratic in host memcpy; doubling amortizes it to
-        linear. Capped at max_seq_len, past which no position can be requested anyway.
         """
         cur = self._req_cos.shape[0]
         if length <= cur:
@@ -232,8 +221,7 @@ class Qwen36RoPESetup:
 
     @property
     def mrope_staged(self):
-        """True when build_request_rope staged a per-sequence M-RoPE table (multimodal request),
-        so the absolute 1D tables cannot serve this prefill."""
+        """True when a per-sequence M-RoPE table is staged, so 1D tables cannot serve this prefill."""
         return self._req_cos is not None
 
     def prefill_cos_sin_torch(self, start, length):
@@ -254,15 +242,7 @@ class Qwen36RoPESetup:
         return cos_t.to(torch.bfloat16), sin_t.to(torch.bfloat16)
 
     def ensure_prefill_tables(self, n_rows):
-        """Grow the resident cos/sin tables to n_rows NOW, outside any traced region.
-
-        _rope_dev_tables grows by from_torch -- a host write. A caller that slices per chunk inside
-        a trace-replay loop must warm past its last position first, or that write lands mid-loop.
-        Mirrors how the decode rope path sizes to max_seq_len up front. Same args as the slice
-        below, so both hit one cache entry. Blackhole never builds them (get_prefill_rot_mats keeps
-        its host path there). Not gated on a staged M-RoPE table: these are the absolute tables, so
-        skipping the warm-up would only leave the growth to land inside a later capture.
-        """
+        """Grow resident cos/sin tables to n_rows outside any traced region (host write)."""
         if is_blackhole():
             return
         from models.demos.blackhole.qwen36.tt.attention.rope_tp import _rope_dev_tables
@@ -270,18 +250,7 @@ class Qwen36RoPESetup:
         _rope_dev_tables(self.device, self.head_dim, int(n_rows), self.theta, full_head_dim=self.full_head_dim)
 
     def get_prefill_rot_mats(self, start, length):
-        """ttnn cos/sin [1, length, head_dim] (replicated) for SEQUENCE positions [start, start+length).
-
-        Text-only: the positions are the contiguous range [start, start+length), a slice of the
-        cos/sin tables already resident on device, so the rotation never touches host trig. The
-        tables are ROW_MAJOR, so the slice has no tile-alignment constraint (any start/length
-        works) and they grow on demand.
-
-        The M-RoPE branch below is a DIFFERENT ALGORITHM, not a fallback for this one: a
-        multimodal token's rotation comes from its 3D (t,h,w) position, which an absolute 1D table
-        structurally cannot represent, so it uses the per-request table staged by
-        build_request_rope(). It is unreachable for text-only inference.
-        """
+        """Device cos/sin for [start, start+length); M-RoPE uses the staged per-request table."""
         if self._req_cos is None and not is_blackhole():
             from models.demos.blackhole.qwen36.tt.attention.rope_tp import _rope_dev_tables
 
@@ -290,8 +259,8 @@ class Qwen36RoPESetup:
             )
 
             def _slice(tbl):
-                r = ttnn.slice(tbl, [start, 0], [start + length, self.rope_width])  # ROW_MAJOR
-                r = ttnn.reshape(r, (1, length, self.rope_width))  # metadata-only while ROW_MAJOR
+                r = ttnn.slice(tbl, [start, 0], [start + length, self.rope_width])
+                r = ttnn.reshape(r, (1, length, self.rope_width))
                 return ttnn.to_layout(r, ttnn.TILE_LAYOUT)
 
             return _slice(tbl_cos), _slice(tbl_sin)

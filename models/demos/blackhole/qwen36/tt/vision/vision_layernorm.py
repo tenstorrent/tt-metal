@@ -25,9 +25,6 @@ class LayerNorm(LightweightModule):
         super().__init__()
         self.device = device
         self.eps = eps
-        # fp32 dest accumulation for the SHARDED forward path. Defaults OFF so every config keeps
-        # the previously shipped behavior; the caller opts in (vision_block gates it on
-        # tp_common.wh_9b_n300_vision). See the sharded branch in forward() for why it matters.
         self.sharded_fp32_acc = sharded_fp32_acc
 
         torch_weight = (
@@ -97,21 +94,8 @@ class LayerNorm(LightweightModule):
                 memory_config=self.sharded_output_config,
                 compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                     math_fidelity=ttnn.MathFidelity.HiFi4,
-                    # Also gated: WormholeComputeKernelConfig defaults math_approx_mode to TRUE, so
-                    # hardcoding False here would change behavior on every un-gated config too.
-                    # The interleaved branch below uses False; match it only where the gate is on.
+                    # WormholeComputeKernelConfig defaults math_approx_mode to True.
                     math_approx_mode=not self.sharded_fp32_acc,
-                    # SCOPED via self.sharded_fp32_acc, which vision_block gates on
-                    # tp_common.wh_9b_n300_vision (Wormhole 9B on N300 only). Off everywhere else,
-                    # which preserves the previously shipped behavior on Blackhole / the 27B /
-                    # N150 / T3K.
-                    #
-                    # Same reason as the interleaved branch below: the tower's outlier activations
-                    # (absmax 354 vs rms 0.65) swamp a bf16 running sum over 1152 channels. This
-                    # branch is currently unused in qwen36 (nothing passes in_sharded=True) and so
-                    # had drifted without the flag; wiring it keeps the two paths numerically
-                    # equivalent on the gated config, so enabling sharding later cannot silently
-                    # give back the +0.005 PCC the interleaved branch calls non-optional.
                     fp32_dest_acc_en=self.sharded_fp32_acc,
                     packer_l1_acc=False,
                 ),
@@ -131,16 +115,10 @@ class LayerNorm(LightweightModule):
                 compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                     math_fidelity=ttnn.MathFidelity.HiFi4,
                     math_approx_mode=False,
-                    # fp32 accumulation is not optional here: from block 9 the vision tower's hidden
-                    # states carry massive activations (9B: absmax 354 against an rms of 0.65), and
-                    # this norm reduces the mean and the variance over all 1152 of them. In a bf16
-                    # dest the outlier swamps the running sum and the ordinary channels stop
-                    # contributing. Worth +0.005 PCC at full depth on the 9B with real weights.
                     fp32_dest_acc_en=True,
                     packer_l1_acc=False,
                 ),
-                # The consuming matmul may want its input 0 in L1 and cannot move it itself, so
-                # write it where asked (None keeps ttnn's default).
+                # Caller places input 0; a matmul cannot move its own input.
                 memory_config=memory_config,
             )
             return x

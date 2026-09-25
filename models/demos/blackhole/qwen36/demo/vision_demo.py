@@ -47,8 +47,7 @@ from models.tt_transformers.tt.generator import Generator
 # Multi-device (TP) is selected via MESH_DEVICE (e.g. P150x4). On a single device the mesh is
 # (1,1) and the model runs its validated single-device path; on a multi-device mesh it needs
 # FABRIC_1D for the TP collectives. The vision splice buffers are allocated on whichever mesh.
-# Wormhole meshes listed explicitly, mirroring text_demo.py. The 27B needs T3K (1,8); the 9B
-# fits an N300 (1,2). Anything unlisted falls back to single device.
+# 27B needs T3K (1,8); 9B fits N300 (1,2). Unlisted names fall back to a single device.
 _MESH_SHAPE = {
     "P150": (1, 1),
     "P150x4": (1, 4),
@@ -142,18 +141,7 @@ def _sample(vec, generated):
     return int(torch.multinomial(probs, 1).item())
 
 
-# --------------------------------------------------------------------------- #
-# Output content checks
-# --------------------------------------------------------------------------- #
-# Generating fluent, non-repeating text proves the LLM half works; it does NOT prove the image ever
-# reached it. A broken vision path produces confident prose about the wrong thing — e.g. a bad
-# patch-embed had the model call Qwen's beach photo "a corrupted or improperly rendered image file"
-# while the suite still reported 5/5 PASSED on the length/degeneracy asserts alone.
-#
-# So assert on CONTENT: each prompt needs some minimum number of terms that only a model actually
-# seeing the input could produce, and must avoid the phrases that characterize a garbage-embedding
-# answer. Kept deliberately loose (any-of with a threshold, not exact match) so ordinary wording
-# drift does not fail the run, while "wrong subject entirely" does.
+# Content checks: fluent text does not prove the image was seen.
 _EXPECTED_CONTENT = {
     # Qwen demo.jpeg: a woman sitting on a beach at sunset with her dog.
     "vision_demo.json": {"any_of": ("beach", "dog", "woman", "sand", "sunset", "shore", "ocean", "sea"), "min_hits": 2},
@@ -577,8 +565,7 @@ def _run_tp_vision_generation(model, tokenizer, token_ids, vision_inputs, max_ge
     nxt = _sample(lt.reshape(-1, vocab)[0], [])
     generated = [nxt]
 
-    # On-device per-shard argmax+max for default greedy (same path as text_demo._run_tp_generation).
-    # Skips the vocab all-gather + full-row D2H. TEMP/rep-pen/no-repeat stay on the host _sample path.
+    # On-device greedy only; temperature, repetition penalty, and no-repeat stay on host _sample.
     _greedy = _TEMP <= 0 and _REP_PEN == 1.0 and _NO_REPEAT == 0
     model._ondev_argmax = _greedy
     _check = os.environ.get("QWEN36_CHECK_ONDEV_ARGMAX") == "1"
@@ -616,7 +603,7 @@ def _run_tp_vision_generation(model, tokenizer, token_ids, vision_inputs, max_ge
         return d * _per_shard + int(idxs[d].item())
 
     def _host_tok(sharded_logits):
-        # Same logits as the device pick: concat shards, fp32 argmax. Matches the old host path.
+        # Same logits as the device pick: concat shards, fp32 argmax.
         full = ttnn.to_torch(sharded_logits, mesh_composer=_vocab_comp).reshape(-1)[:vocab]
         return int(full.float().argmax())
 

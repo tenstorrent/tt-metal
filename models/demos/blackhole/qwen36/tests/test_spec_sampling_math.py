@@ -1,18 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""CPU-only math regressions for exact speculative sampling (``tt/spec_sampling.py``).
-
-No ttnn, no device: this pins the host-side distribution math and the losslessness of
-rejection sampling against the drafter's greedy (deterministic, delta-proposal) drafts.
-
-Run:
-  pytest -q -p no:cacheprovider models/demos/blackhole/qwen36/tests/test_spec_sampling_math.py
-
-The statistical tests are seeded end to end (fixed logits generator + fixed sampler seed),
-so they are deterministic — the total-variation bounds below are headroom over the
-sampling noise of the fixed draw, not flake budget.
-"""
+"""CPU regressions for exact speculative sampling.
+Seeded end to end; the total-variation bounds are headroom over that fixed draw."""
 
 import pytest
 import torch
@@ -107,14 +97,7 @@ def test_dist_matches_reference(vocab, params):
 
 
 def test_dist_top_p_prefix_fast_path():
-    """A peaked 248k row: top-p is exact from the 2048-prefix, no full sort.
-
-    The scale matters here. iid N(0, 3^2) logits over a 248k vocabulary are much flatter
-    than a real LM head — their 0.95 support is ~22k tokens, so the prefix genuinely
-    cannot cover it (that row is checked for exactness by the parametrized test above,
-    via the fallback). Scale 5 gives a realistically peaked row (p_max ~ 0.22, 0.95
-    support ~430 tokens), which is what the prefix path is built for.
-    """
+    """A peaked 248k row: top-p is exact from the 2048-prefix, without a full sort."""
     vocab = 248320
     logits = torch.randn(vocab, generator=torch.Generator().manual_seed(7)) * 5
     sampler = SpecSampler(SpecSamplingParams(1.0, 0, 0.95, seed=0), vocab)
@@ -162,12 +145,7 @@ def test_accept_lossless_single_position(params):
 
 
 def test_accept_lossless_chain():
-    """K=3 chained argmax drafts: every position stays exact, conditioned on reaching it.
-
-    The parameter set is truncated (top_k=8/top_p=0.95) on purpose: with an untruncated
-    64-token softmax the acceptance chain leaves only ~1-2k samples on the bonus row, and
-    the multinomial noise floor there (~0.05 TV) already exceeds the bounds asserted here.
-    """
+    """K=3 chained drafts stay exact. Truncated top-k/top-p keeps enough samples on the bonus row."""
     vocab, num_samples = 64, 60000
     logits = torch.randn(4, vocab, generator=torch.Generator().manual_seed(3)) * 2
     drafts = [int(logits[j].argmax()) for j in range(3)]
@@ -264,18 +242,12 @@ def test_params_validation():
 
 # --------------------------------------------------------------------------- presence penalty
 
-# The output set the presence-penalty tests below penalize: 10 fixed ids, none of which is the
-# draft token, so a variant can swap one for the draft to watch its target probability collapse.
+# Penalized ids exclude the draft token so a variant can swap one in and watch its probability collapse.
 _PP_BASE = [3, 5, 7, 11, 13, 17, 19, 23, 29, 31]
 
 
 def _pp_chain_logits(vocab):
-    """Two correlated target rows + a bonus row, for the presence-penalty chain check.
-
-    Row 1 is a perturbation of row 0, so row 0's draft is a HIGH-probability token in row 1 as
-    well — which is exactly the case the penalty exists for, and the only case where forgetting
-    ``drafts[:j]`` on row 1 is observable.
-    """
+    """Row 1 is a perturbation of row 0, so dropping drafts[:j] from its penalty is observable."""
     gen = torch.Generator().manual_seed(0)
     logits = torch.randn(3, vocab, generator=gen) * 0.5
     logits[1] = logits[0] + 0.5 * torch.randn(vocab, generator=gen)
@@ -298,11 +270,9 @@ def test_presence_penalty_dist_matches_reference(presence):
     untouched = logits.clone()
     got = _dense_of(sampler, logits, penalize)
     assert torch.allclose(got, want, atol=1e-6, rtol=1e-5)
-    # A float32 row is the CALLER's (the verify block is read back once and its rows handed out as
-    # views), so the penalty must land on a copy.
+    # The caller owns the float32 row, so the penalty must land on a copy.
     assert torch.equal(logits, untouched), "dist() mutated the caller's logits row"
-    # This seed's penalized set overlaps the target's support, so the penalty is not a no-op here —
-    # otherwise the reference above would agree even with `penalize` ignored.
+    # This seed's penalized set overlaps the support, so ignoring penalize would fail.
     unpenalized = _dense_of(sampler, logits)
     assert _tv(got, unpenalized) > 0.02, "penalized set must reach the support, or the test is vacuous"
 
@@ -313,12 +283,7 @@ def test_presence_penalty_dist_matches_reference(presence):
 
 @pytest.mark.parametrize("draft_penalized", [False, True], ids=["draft_not_in_set", "draft_in_set"])
 def test_presence_penalty_accept_lossless(draft_penalized):
-    """The emitted token is distributed exactly as the PENALIZED target row.
-
-    Rejection sampling is lossless w.r.t. whatever ``p`` the accept test uses, so with the penalty
-    applied to the verify rows the emitted token must follow ``dist(logits[0], penalize_base)`` —
-    including when the penalty is what pushed the draft out of the support (``draft_in_set``).
-    """
+    """The emitted token follows the penalized target row, including when the penalty drops the draft."""
     vocab, num_samples, presence = 64, 40000, 1.5
     params = (0.7, 8, 0.8)
     logits = _pp_chain_logits(vocab)[:2]  # one draft, so T == 2: the target row + the bonus row
@@ -345,13 +310,7 @@ def test_presence_penalty_accept_lossless(draft_penalized):
 
 
 def test_presence_penalty_accept_chain_penalizes_drafts():
-    """Verify row 1 is penalized on ``penalize_base ∪ drafts[:1]``, not just on ``penalize_base``.
-
-    Conditioned on reaching it (draft 0 accepted), the position-1 token must follow
-    ``dist(logits[1], penalize_base ∪ {drafts[0]})``. Row 1 here gives ``drafts[0]`` ~0.2 of its
-    unpenalized mass, so dropping that extra id from the set moves the row by TV ~0.2 — an order of
-    magnitude past the bound below.
-    """
+    """Row 1 is penalized on penalize_base plus drafts[:1], not penalize_base alone."""
     vocab, num_samples, presence = 64, 40000, 1.5
     logits = _pp_chain_logits(vocab)
     drafts = [int(logits[0].argmax()), int(logits[1].argmax())]

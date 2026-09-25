@@ -113,8 +113,7 @@ class VisionAttention(LightweightModule):
         self.model_config = configuration.get_model_config()
         self.ccl_topology = configuration.ccl_topology()
         self.is_multichip = configuration.is_multichip
-        # True when TP cannot split `dim` into whole tiles per device, so activations stay replicated
-        # and the out-projection all-reduces instead of reduce-scattering (see vision_ccl).
+        # Replicated when TP cannot split dim into whole tiles; the out-projection all-reduces.
         self.replicated_acts = getattr(configuration, "vision_replicated_acts", False)
         self.activation_dtype = self.decoders_optimizations.get_tensor_dtype(
             decoder_id=layer_num, tensor=TensorGroup.ACTIVATION
@@ -122,19 +121,8 @@ class VisionAttention(LightweightModule):
         self.kv_cache_dtype = self.decoders_optimizations.get_tensor_dtype(
             decoder_id=layer_num, tensor=TensorGroup.KV_CACHE
         )
-        # The out-projection writes straight into the residual stream, so unlike the LLM's attention
-        # it must NOT fall back to bfloat8_b. From block 9 on, this tower's hidden states carry
-        # MASSIVE ACTIVATIONS -- on the 9B, absmax 354 against an rms of 0.65 -- and a bfloat8_b tile
-        # shares one exponent across 16 channels, so the outlier's group gets a quantization step of
-        # ~2.8 and every ordinary channel sitting in that group rounds to zero. That is a property of
-        # the trained weights, which is why the config-init reference in tests/test_vision_tower_pcc.py
-        # cannot see it: measured at full depth against the fp32 HF reference with REAL weights,
-        # 0.96875 -> 0.98412 (9B/N300), for +0.6 ms on a 790 ms tower.
-        # A preset that sets ACTIVATION explicitly still wins.
+        # Do not use bfloat8_b here; outlier activations quantize away the other channels.
         self.attn_out_dtype = self.activation_dtype or ttnn.bfloat16
-        # NOTE: qkv/wo/SDPA fidelity deliberately no longer comes from `decoders_optimizations`
-        # (LI_QKV_PREFILL / LI_O_PREFILL / SDPA_PREFILL), whose `accuracy` preset is HiFi4 -- worthless
-        # on bfloat8_b operands and half the throughput. `vision_mm_plan` / `vision_sdpa_plan` pick it.
 
         layer_name = configuration.get_state_dict_prefix(self.__class__.__name__, layer_num)
         if configuration.dummy_weights or (weight_cache_path is None):
@@ -254,9 +242,7 @@ class VisionAttention(LightweightModule):
         )
 
         if f"{wo_str}.bias" in self.state_dict:
-            # The bias must match how the block output is distributed: fractured along dim=3 (each
-            # device gets dim/TP contiguous channels) after a reduce_scatter, or replicated when the
-            # out-projection all-reduces to full width instead (see vision_ccl).
+            # Bias matches the output: fractured after reduce_scatter, else replicated.
             self.wo_bias_prefill = ttnn.as_tensor(
                 self.state_dict[f"{wo_str}.bias"],
                 device=self.mesh_device,
@@ -272,8 +258,7 @@ class VisionAttention(LightweightModule):
         self.scale = self.head_dim**-0.5
 
     def qkv_plan(self, seq_len: int, in0_dtype=ttnn.bfloat16):
-        """The qkv matmul's plan. `VisionBlock` reads `.in0_memory_config` off it so the norm that
-        produces qkv's input writes it where that is faster."""
+        """QKV matmul plan; VisionBlock uses in0_memory_config for the norm output."""
         return self.configuration.vision_mm_plan(
             "qkv",
             rows=seq_len,
@@ -298,8 +283,7 @@ class VisionAttention(LightweightModule):
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
 
         # ---- QKV matmul (column / head sharded) -----------------------------------
-        # The bias goes INSIDE the matmul: this projection is column-parallel so its output is final
-        # (no collective to double-count it), and folding it removes a ~0.95 ms/block elementwise add.
+        # Column-parallel: fold the bias in so a collective cannot double-count it.
         qkv_plan = self.qkv_plan(seq_len, in0_dtype=x_11SH.dtype)
         if qkv_plan.chunk != seq_len:
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // qkv_plan.chunk, qkv_plan.chunk, -1])
@@ -341,9 +325,7 @@ class VisionAttention(LightweightModule):
         if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:
             q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
 
-        # Gate on the TENSOR, not on the config: `DropInVisionTransformer` already uploads cos/sin at
-        # `padded_head_dim`, so this is a no-op there. It used to fire on every block -- 27 identical
-        # pads per image, 2 FillPad ops each. Kept for callers that pass rot_mats at the real head_dim.
+        # Pad only when rot_mats are still at the real head dim.
         if rot_mats[0].shape[-1] != self.padded_head_dim:
             pad_dim = lambda x, v: ttnn.pad(
                 x, (x.shape[0], x.shape[1], x.shape[2], self.padded_head_dim), (0, 0, 0, 0), v
@@ -376,9 +358,6 @@ class VisionAttention(LightweightModule):
         q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=ttnn.bfloat8_b)
         ttnn.deallocate(q_heads_1QSD)
 
-        # K matches Q and V unless the plan says otherwise. `kv_cache_dtype` used to decide this,
-        # which left K in bf16 -- and this cast a 213 us/block no-op -- in a tower that has no KV
-        # cache at all. Cast only when it actually changes the dtype.
         if k_heads_1KSD.dtype != sdpa_plan.k_dtype:
             k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=sdpa_plan.k_dtype)
             ttnn.deallocate(k_heads_1KSD)
@@ -412,8 +391,7 @@ class VisionAttention(LightweightModule):
         )
         ttnn.deallocate(attn_output_1QSD)
 
-        # The bias is NOT folded in here: this projection is row-parallel, so the matmul output is a
-        # partial sum and the collective below would add the bias once per device.
+        # Row-parallel: do not fold the bias in; the collective would add it once per device.
         wo_plan = self.configuration.vision_mm_plan(
             "wo",
             rows=seq_len,
@@ -440,9 +418,7 @@ class VisionAttention(LightweightModule):
         if wo_plan.chunk != seq_len:
             output_partial = ttnn.reshape(output_partial, [1, 1, seq_len, -1])
 
-        # On T3K/QB2 `tt_all_reduce(dim=3)` is implemented as a reduce_scatter, so the result is
-        # fractured along dim=3 -- exactly the block I/O contract that the LLM uses. When dim cannot
-        # be split into whole tiles per device, all-reduce to a replicated full-width tensor instead.
+        # reduce_scatter when fractured; all-reduce to full width when dim is not tile-divisible.
         if self.replicated_acts:
             output_frac = all_reduce_replicated(
                 output_partial,

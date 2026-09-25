@@ -27,29 +27,19 @@ class ModelOptimizations:
 
 
 class VisionMatmulPlan(NamedTuple):
-    """One vision-tower prefill matmul's configuration, from `VisionModelArgs.vision_mm_plan`.
-
-    ``chunk`` is the rows per matmul batch element: the caller reshapes
-    ``[1, 1, rows, K] -> [1, rows/chunk, chunk, K]`` first (metadata-only on a TILE tensor) and back
-    afterwards. ``program_config`` is None when nothing legal fits, i.e. run on ttnn's auto config.
-    """
+    """One vision-tower prefill matmul plan; program_config is None on the auto fallback."""
 
     chunk: int
     program_config: Any
     compute_kernel_config: Any
     memory_config: Any
-    fidelity: str  # which compute_kernel_config_* was chosen, for reports and perf tests
-    # Where this matmul wants input 0. A matmul cannot relocate its own input, so the caller hands
-    # this to whoever PRODUCES it (the LayerNorm, for qkv and mlp_fc1).
+    fidelity: str
+    # Matmul cannot move input 0; the producer writes in0_memory_config.
     in0_memory_config: Any = None
 
 
 class VisionSdpaPlan(NamedTuple):
-    """The vision tower's SDPA configuration, from `VisionModelArgs.vision_sdpa_plan`.
-
-    ``k_dtype`` is what K should be cast to before the call; the caller must skip the cast when K is
-    already that dtype (the tower's was a BF16 -> BF16 no-op costing 213 us/block).
-    """
+    """SDPA config; skip the K cast when it already matches k_dtype."""
 
     compute_kernel_config: Any
     program_config: Any
@@ -58,51 +48,36 @@ class VisionSdpaPlan(NamedTuple):
 
 
 _L1_PER_CORE = 1499136  # MEM_L1_SIZE, wormhole/dev_mem_map.h
-# Per-core L1 that a matmul's own CBs and buffers cannot have. Three things, not one:
-#   - the l1_small_size the demo opens with,
+# Per-core L1 a matmul's CBs and buffers must not use.
 _L1_RESERVE = 32 * 1024
 
-# Per-device override, same keying as `_VISION_MM_TUNING_BY_DEVICE` (`ModelArgs.device_name`).
-# N300: 128 KB. The 32 KB default is invisible at the 11008-row demo grid this table was swept on,
+# Per-device override, keyed like `_VISION_MM_TUNING_BY_DEVICE`.
 _L1_RESERVE_BY_DEVICE = {"N300": 128 * 1024}
 
-# Per-family matmul tuning, from tests/perf/test_sweep_vision_matmuls.py.
-# WORMHOLE B0 ONLY -- gated by `self.vision_mm_tuned`.
+# Wormhole only; gated by vision_mm_tuned.
 _VISION_MM_TUNING = {
-    # patch_embed's DRAM output is deliberate: L1 was worth only -58 us once per image, and its
-    # consumers are elementwise ops plus a pad that would inherit L1 unvalidated.
     "patch_embed": dict(in0_l1=False, chunk=5504, in0_block_w=6, fidelity="hifi2", out_l1=False),
     "qkv": dict(in0_l1=False, chunk=1536, in0_block_w=18, fidelity="hifi2", out_l1=False),
     "wo": dict(in0_l1=False, chunk=4096, in0_block_w=24, fidelity="lofi", out_l1=False),
     "mlp_fc1": dict(in0_l1=False, chunk=3072, in0_block_w=6, fidelity="hifi2_fp16", out_l1=False),
     "mlp_fc2": dict(in0_l1=False, chunk=1536, in0_block_w=4, fidelity="hifi2_fp16", out_l1=True),
-    # The merger matmuls stay on auto: they already run at ~60% of the FLOP ceiling, and a forced
-    # config measured slower in-model on both meshes.
     "merger_fc1": dict(in0_l1=False, chunk=None, in0_block_w=None, fidelity="hifi2_fp16", out_l1=False),
     "merger_fc2": dict(in0_l1=False, chunk=None, in0_block_w=None, fidelity="hifi2_fp16", out_l1=False),
 }
 
-# Overrides keyed on `ModelArgs.device_name`, applied on top of the table above, which was swept on
-# Qwen3.5-9B / N300 / TP=2. At TP=8 every per-device N is ~4x narrower, which frees the L1 that lets
 _VISION_MM_TUNING_BY_DEVICE = {
     "T3K": {
         "patch_embed": dict(grid_x=8, in0_block_w=6),
         "qkv": dict(chunk=768, grid_x=8, in0_l1=True, out_l1=True),
         "wo": dict(chunk=3072, fidelity="hifi2", out_l1=True),
         "mlp_fc1": dict(chunk=1536, in0_block_w=18, in0_l1=True, out_l1=True),
-        # merger_fc1 is NOT overridden: the isolated sweep liked a 2D config (654 -> 555 us) but
-        # in-model it measured 559 against auto's 531, and the tower is the number that ships.
         "merger_fc2": dict(chunk=1376, in0_block_w=9, out_l1=True),
     },
 }
 
-# qkv and wo are the only families whose PRE-sweep fidelity came from `decoders_optimizations`
-# (HiFi4 under this model's preset)
 _UNTUNED_FIDELITY_OP = {"qkv": OpGroup.LI_QKV_PREFILL, "wo": OpGroup.LI_O_PREFILL}
 _FIDELITY_NAMES = ("lofi", "hifi2", "hifi2_na", "hifi2_fp16", "hifi2_nol1acc", "hifi4", "hifi4_fp16", "hifi4_fp32")
 
-# SDPA tuning, from tests/perf/test_sweep_vision_sdpa.py. Wormhole-only, same gate as the matmuls.
-# The tower's SDPA is its largest single op. Two things were wrong:
 _VISION_SDPA_TUNING = dict(fidelity="hifi2", k_bf8b=True, q_chunk=128, k_chunk=512, exp_approx=False)
 
 _TILE_BYTES = {
@@ -118,12 +93,7 @@ def _divisors(n, hi=None):
 
 
 def _grid_extent(tiles, max_extent):
-    """Grid extent along one axis.
-
-    A divisor of the tile count wastes no per-core work (a zero-waste 6-wide grid beat a ragged
-    8-wide one at N=36 tiles), but a *small* divisor is worse than a ragged full-width grid
-    (N=68: 8 beat 4) -- so only take the divisor when it keeps most of the axis.
-    """
+    """Largest divisor of the tile count that keeps most of the axis, else the full extent."""
     divs = _divisors(tiles, max_extent)
     best = max(divs) if divs else 1
     return best if best >= math.ceil(0.75 * max_extent) else max_extent
@@ -165,13 +135,8 @@ class VisionModelArgs(ModelArgs):
             self.model_name
         )  # todo)) implement finer grained control similar to tt_transformers'
 
-        # The matmul tuning is Wormhole-only (see `_VISION_MM_TUNING`). Off-arch, `vision_mm_plan`
-        # returns the untuned plan instead: ttnn's auto config, DRAM in/out, pre-sweep fidelity.
-        # `QWEN36_VISION_MM_TUNING=0` forces that path, so it can be exercised on any arch.
         self.vision_mm_tuned = is_wormhole_b0() and os.environ.get("QWEN36_VISION_MM_TUNING", "1") != "0"
-        # CCL workers (10, 4) were swept on Wormhole N300 / T3K only. Blackhole keeps (10, 2).
         self.vision_ccl_kwargs = _vision_ccl_kwargs(self.device_name)
-        # Per-core L1 the plan may not spend (see _L1_RESERVE / _L1_RESERVE_BY_DEVICE).
         self._l1_reserve = _L1_RESERVE_BY_DEVICE.get(self.device_name, _L1_RESERVE)
         if not self.vision_mm_tuned:
             logger.info(
@@ -179,7 +144,6 @@ class VisionModelArgs(ModelArgs):
                 f"(re-sweep with tests/perf/test_sweep_vision_matmuls.py to tune it)"
             )
 
-        # One plan per (family, rows): the tower rebuilds them 27 times per image otherwise.
         self._vision_mm_plans = {}
         self._vision_sdpa_plans = {}
 
@@ -190,8 +154,7 @@ class VisionModelArgs(ModelArgs):
         assert self.n_heads % tp == 0, f"vision n_heads ({self.n_heads}) must be divisible by TP={tp}"
         assert self.qkv_size % tp == 0, f"vision qkv_size ({self.qkv_size}) must be divisible by TP={tp}"
         assert self.dim % tp == 0, f"vision dim ({self.dim}) must be divisible by TP={tp}"
-        # Can the block I/O contract keep activations FRACTURED along dim=3? Only if dim splits into
-        # a whole number of TILES per device:
+        # Replicate activations unless dim splits into a whole number of tiles per device.
         self.vision_replicated_acts = (self.dim // tp) % self.tile_size != 0
         if self.vision_replicated_acts:
             logger.info(
@@ -209,8 +172,6 @@ class VisionModelArgs(ModelArgs):
         assert mlp_size % tp == 0, f"vision merger mlp_size ({mlp_size}) must be divisible by TP={tp}"
         assert out_hidden_size % tp == 0, f"vision out_hidden_size ({out_hidden_size}) must be divisible by TP={tp}"
 
-    # ------------------------------------------------------------------ prefill matmul planning
-
     def vision_mm_plan(
         self,
         family: str,
@@ -224,24 +185,7 @@ class VisionModelArgs(ModelArgs):
         fused_activation=None,
         in0_already_l1: bool = False,
     ) -> VisionMatmulPlan:
-        """2D-mcast plan for one vision-tower matmul, sized from its ACTUAL per-device shape.
-
-        Args:
-            family: key into ``_VISION_MM_TUNING`` (``qkv``, ``wo``, ``mlp_fc1``, ...).
-            rows: total activation rows (the padded sequence length; the merged patch count for the
-                merger). k, n: per-device contraction and output widths.
-            in0_dtype, in1_dtype, out_dtype: needed to size the circular buffers.
-            fused_activation: ``ttnn.UnaryWithParam`` to fold in. Pass it HERE, not as
-                ``ttnn.linear(activation=...)``: with no explicit core grid that kwarg runs as a
-                separate ``unary_chain`` op (matmul.cpp) -- 1.2 ms/block for the MLP's GELU.
-            in0_already_l1: set when the PRODUCER already writes in0 into L1 (mlp_fc2 reads mlp_fc1's
-                L1 output). in0 residency is not this matmul's choice then, but it still spends the L1
-                the output placement is budgeted against.
-
-        Everything is checked against the L1 budget; if nothing legal fits the plan falls back to
-        ttnn's auto config and an unchunked activation, which is what the tower did before tuning.
-        Off Wormhole (`vision_mm_tuned=False`) that fallback is all this returns.
-        """
+        """2D matmul plan; fold fused_activation here, not via linear(activation=)."""
         cache_key = (family, rows, k, n, in0_dtype, in1_dtype, out_dtype, repr(fused_activation), in0_already_l1)
         cached = self._vision_mm_plans.get(cache_key)
         if cached is not None:
@@ -274,16 +218,14 @@ class VisionModelArgs(ModelArgs):
             return auto
 
         tile = self.tile_size
-        # NOT AN ASSERT. The 2D plan below divides all three extents by the tile size (k_t, n_t, m_t)
-        # and needs `chunk` to divide `rows` exactly, so a non-tile-aligned shape simply cannot take
+        # Not an assert: a non-tile-aligned shape cannot use the 2D plan.
         if rows % tile or k % tile or n % tile:
             logger.debug(f"vision {family}: {rows}x{k}x{n} not tile-aligned -> ttnn auto config")
             return auto
         k_t, n_t = k // tile, n // tile
         grid = self.mesh_device.compute_with_storage_grid_size()
 
-        # Largest legal chunk at or below the swept cap (`None` == do not chunk at all). Must divide
-        # `rows` so the reshape is exact.
+        # Largest chunk at or below the cap that divides rows; None means do not chunk.
         chunk_cap = tune["chunk"] or rows
         chunk = max(c * tile for c in _divisors(rows // tile, max(1, chunk_cap // tile)))
         m_t = chunk // tile
@@ -293,7 +235,6 @@ class VisionModelArgs(ModelArgs):
         per_core_m, per_core_n = math.ceil(m_t / gy), math.ceil(n_t / gx)
         cap = 4 if ckc.fp32_dest_acc_en else 8  # DST capacity; fp32 accumulate halves it
 
-        # Widest legal `out_subblock_w` first -- that, not the largest h*w area, won at every family.
         subblocks = sorted(
             ((h, w) for h in _divisors(per_core_m) for w in _divisors(per_core_n) if h * w <= cap),
             key=lambda hw: (-hw[1], -hw[0] * hw[1]),
@@ -305,8 +246,7 @@ class VisionModelArgs(ModelArgs):
             in0 = per_core_m * in0_block_w * _TILE_BYTES[in0_dtype] * 2
             in1 = in0_block_w * per_core_n * _TILE_BYTES[in1_dtype] * 2
             out = per_core_m * per_core_n * _TILE_BYTES[out_dtype]
-            # The intermediate CB ALIASES the output CB when their formats match (bfloat16 out, no
-            # fp32 accumulate). Counting it twice cost the 27B's mlp_fc2 its L1 output, 298 -> 493 us.
+            # Intermediate CB aliases the output CB for bf16 without fp32 accumulate.
             if ckc.fp32_dest_acc_en:
                 interm = per_core_m * per_core_n * 4096
             elif out_dtype is ttnn.bfloat16:
@@ -315,8 +255,7 @@ class VisionModelArgs(ModelArgs):
                 interm = per_core_m * per_core_n * _TILE_BYTES[out_dtype]
             return in0 + in1 + out + interm
 
-        # in0_block_w must divide K_tiles; take the largest at or below the cap that fits L1. A prime
-        # K_tiles (27B/TP=8 has one) has no divisor below the cap but 1 -- take the whole K instead.
+        # Largest in0_block_w that divides K and fits L1; if only 1 divides, use all of K.
         candidates = _divisors(k_t, tune["in0_block_w"])
         if candidates == [1] and k_t > 1:
             candidates = [k_t]
@@ -329,9 +268,7 @@ class VisionModelArgs(ModelArgs):
             logger.info(f"vision {family}: {rows}x{k}x{n} has no L1-legal 2D config, leaving it on auto")
             return auto
 
-        # in0 and the output share whatever the CBs leave; claim in0 first (the table only asks for it
-        # where it beat the output), then give the output the rest. An L1-interleaved buffer is paged
-        # across the grid, so its per-core cost is total/num_cores.
+        # Spend leftover L1 on in0 first, then the output; L1 buffers are paged across the grid.
         free_l1 = (_L1_PER_CORE - self._l1_reserve - cb_bytes(in0_block_w)) * grid.x * grid.y
         in0_bytes = rows * k * _TILE_BYTES[in0_dtype] // (tile * tile)
         in0_cfg = dram
@@ -374,13 +311,7 @@ class VisionModelArgs(ModelArgs):
         return plan
 
     def vision_sdpa_plan(self, seq_len: int, kv_cache_dtype) -> VisionSdpaPlan:
-        """Compute-kernel + program config for the tower's SDPA (see `_VISION_SDPA_TUNING`).
-
-        Args:
-            seq_len: padded sequence length, for the untuned path's program config.
-            kv_cache_dtype: what the caller would otherwise cast K to. Returned unchanged off-arch,
-                so the untuned tower keeps the exact op graph it had before this tuning.
-        """
+        """SDPA kernel config; off-arch, k_dtype stays the caller's kv_cache_dtype."""
         cached = self._vision_sdpa_plans.get((seq_len, kv_cache_dtype))
         if cached is not None:
             return cached
@@ -426,9 +357,7 @@ class VisionModelArgs(ModelArgs):
 
         The vision blocks consume tensors fractured along the hidden dim
         (dim=3 of the 4D tensor), so we shard at load time across cluster
-        axis 1 — unless the tower runs with replicated activations
-        (``vision_replicated_acts``, when TP cannot split dim into whole
-        tiles), in which case every device gets the full hidden dim.
+        axis 1, or replicate when dim does not split into whole tiles.
         """
 
         x_1BSH = x_bsh.unsqueeze(0)

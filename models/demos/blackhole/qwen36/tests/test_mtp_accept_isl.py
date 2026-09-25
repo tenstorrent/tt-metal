@@ -1,27 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Acceptance-vs-prompt-length sweep for MTP speculative decode (scratch investigation).
-
-Question: the demo shows accept 2.77/3 at ISL 128 but 2.16/3 at ISL 4k. Is that a bug in the
-MULTI-CHUNK MTP warm (prompts > 2048 take more than one `_warm_mtp_chunk` call) or a genuine
-length effect?
-
-Isolation: hold CONTENT STRUCTURE fixed and vary only the length.
-  * "rep128": the shared 128-token prompt repeated and clipped to the target length. Identical
-    structure at every length, so any acceptance step at the 2048 chunk boundary is the warm path,
-    not the text.
-  * "long4k": prefixes of the demo's real 4k prompt file (same text, different truncation) — a
-    realistic-content control for the same boundary.
-
-A CLIFF between 2048 (one chunk) and 2176/2304 (two chunks) => multi-chunk warm bug.
-A smooth decline with no boundary feature => genuine length/content effect.
-
-Run: MESH_DEVICE=T3K (or P150x4) pytest models/demos/blackhole/qwen36/tests/test_mtp_accept_isl.py -v -s
-Override the sweep with QWEN36_ISL_SWEEP="rep128:512,rep128:2048,long4k:3968". An entry may carry a
-per-case draft length as a third field, "src:plen:K" (e.g. "frank:3968:6"); without it the decoder's
-default K applies. QWEN36_ISL_NUM_BLOCKS overrides NUM_BLOCKS (the KV / max_seq_len budget).
-"""
+"""Acceptance vs prompt length for MTP speculative decode.
+A cliff at the 2048 chunk boundary means the multi-chunk warm is wrong; a smooth decline is a length effect."""
 
 import os
 
@@ -35,14 +16,10 @@ from models.demos.blackhole.qwen36.demo.text_demo import _MESH_SHAPE, _MULTI, BL
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 
 MAX_NEW = 128
-# 96 blocks x 64 = 6144 tokens: covers the 4096-row prefill bucket a 3968-token prompt uses (the
-# MTP warm writes the whole tail bucket) plus MAX_NEW of decode. Matches the multiple-of-32 the
-# demo's spec path rounds to. QWEN36_ISL_NUM_BLOCKS raises it for longer sweep entries.
+# 96 blocks cover the 4096-row prefill bucket a 3968-token prompt uses, plus decode.
 NUM_BLOCKS = int(os.environ.get("QWEN36_ISL_NUM_BLOCKS", 96))
 
-# long4k is the demo's OWN "ISL 4k" prompt file, which is only 2642 tokens — so the demo's 2.16/3
-# "at 4k" was measured at 2642 tokens, i.e. exactly two warm chunks. Sweep it up to its own length
-# (no repeat) so the 2048 boundary is crossed on the demo's real text.
+# long4k is the demo prompt file (2642 tokens, two warm chunks), swept only up to its own length.
 _DEFAULT_SWEEP = (
     [("rep128", n) for n in (128, 512, 1024, 1536, 2048, 2176, 2304, 2560, 3072, 3968)]
     + [("long4k", n) for n in (128, 1024, 2048, 2176, 2560, 2642)]
@@ -71,14 +48,7 @@ def _repeat_clip(ids, target):
     return ids
 
 
-# --------------------------------------------------------------------------------------------- #
-# Positive control: is the per-chunk MTP warm actually doing anything at chunk_start > 0?
-#
-# A no-op / mis-addressed warm for chunks after the first is indistinguishable from a working one
-# by acceptance alone unless you can turn it off. `_warm_mtp_chunk` is wrapped (never edited) so a
-# given chunk's warm can be skipped; if skipping the TAIL warm leaves acceptance unchanged, the
-# tail warm was writing nothing useful (bug). If acceptance collapses, it is load-bearing.
-# --------------------------------------------------------------------------------------------- #
+# Skipping a later warm chunk distinguishes a no-op tail warm from one that is load-bearing.
 _ABLATIONS = ("baseline", "skip_chunk0", "skip_tail", "skip_all")
 
 
@@ -137,8 +107,7 @@ def test_mtp_accept_vs_isl(mesh_device):
     sources = {"rep128": base128, "long4k": long4k}
 
     def _build(src, plen):
-        # "frank": the demo's long-context corpus rebuilt AT each length (prefix + context prefix +
-        # the same instruction suffix), so structure is identical and only the context length moves.
+        # frank rebuilds the demo long-context corpus at each length, so only context length moves.
         if src == "frank":
             ids = _get_prompt(8192, tokenizer, max_prompt_len=plen)
             assert ids.shape[1] == plen, f"frank prompt is {ids.shape[1]} tokens, wanted {plen}"
@@ -194,12 +163,7 @@ def test_mtp_accept_vs_isl(mesh_device):
 @pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 def test_mtp_warm_chunk_ablation(mesh_device):
-    """Turn individual MTP warm chunks off and watch acceptance, on MULTI-CHUNK prompts.
-
-    Expected if the multi-chunk warm is healthy: skipping the TAIL warm (the slots nearest the
-    frontier, which the first drafts attend most) costs a lot; skipping only chunk 0 costs little.
-    A tail skip that costs NOTHING would mean the chunk>0 warm was never writing usable KV.
-    """
+    """Skip individual MTP warm chunks. A tail skip that costs nothing means chunk>0 wrote no usable KV."""
     if not _MULTI:
         pytest.skip("spec decode is the TP path; run with MESH_DEVICE=T3K (or P150x4)")
     from transformers import AutoTokenizer
@@ -214,9 +178,7 @@ def test_mtp_warm_chunk_ablation(mesh_device):
     tokenizer = AutoTokenizer.from_pretrained(model.args.CKPT_DIR, trust_remote_code=True)
     long4k = _get_prompt(4096, tokenizer)
     base128 = _get_prompt(128, tokenizer)
-    # The prompt must be NON-repetitive (rep128 stores the same content in the first chunk and the
-    # tail, so dropping either loses nothing) and NOT at the 3.000 ceiling (long4k@2560 is), or the
-    # ablation cannot see a difference even when the warm is working.
+    # The prompt must be non-repetitive and below the 3.000 accept ceiling or the ablation cannot move.
     cases = [("long4k", 2642), ("frank", 3968), ("rep128", 3968)]
 
     def _build(src, plen):
@@ -259,14 +221,7 @@ class _StopAfterWarm(Exception):
 @pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 def test_mtp_warm_kv_map(mesh_device):
-    """Where does each MTP warm chunk's KV actually land?
-
-    Freeze generate() after the last `_warm_mtp_chunk` (stub `_warm_mtp_last` to raise) and read the
-    drafter's paged K cache block by block. A healthy multi-chunk warm leaves every block up to
-    (T-2)//BLOCK_SIZE non-zero. Blocks that stay at the allocation's zeros mark slots the warm never
-    wrote — and blocks that are non-zero past the prompt mark the bucket-padding junk.
-    The base model's own K cache is printed alongside as the reference profile.
-    """
+    """Read the drafter K cache after the last warm. Zero blocks were never written."""
     if not _MULTI:
         pytest.skip("spec decode is the TP path; run with MESH_DEVICE=T3K (or P150x4)")
     from transformers import AutoTokenizer

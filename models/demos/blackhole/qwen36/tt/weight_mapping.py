@@ -45,12 +45,7 @@ def remap_qwen36_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, to
         # Filter out vision encoder weights (check original key — no prefix stripping yet)
         if "visual" in key or key.startswith("model.visual"):
             continue
-        # NOTE: mtp.* (multi-token prediction head) weights are NOT filtered — they are the
-        # speculative-decode drafter. They have no model./language_model. prefix and do not
-        # start with "layers." so they fall through to the catch-all pass-through below
-        # unchanged (the DeltaNet special-casing is guarded by "layers."). See load_mtp_tensors:
-        # AutoModelForCausalLM (BF16 path) drops mtp.* before we see them, so load_state_dict
-        # reads them directly from safetensors and merges them into this dict.
+        # mtp.* is not filtered; it has no model. prefix and is not "layers.", so it passes through.
 
         # Strip the language-model prefix. Two checkpoint sources produce different
         # prefixes for the same internal weights:
@@ -146,14 +141,7 @@ def is_fp8_checkpoint(model_path) -> bool:
 
 
 def load_mtp_tensors(model_path) -> Dict[str, torch.Tensor]:
-    """Read the MTP head tensors (mtp.*) directly from the checkpoint safetensors.
-
-    AutoModelForCausalLM (the BF16 load path) drops mtp.* via
-    ``_keys_to_ignore_on_load_unexpected = [r"^mtp.*"]`` BEFORE remap_qwen36_state_dict ever
-    sees them, so the spec-decode drafter weights must be read straight from the safetensors.
-    Returns the 15 mtp.* tensors keyed verbatim (mtp.fc.weight, mtp.pre_fc_norm_embedding.weight,
-    mtp.pre_fc_norm_hidden.weight, mtp.norm.weight, mtp.layers.0.*).
-    """
+    """Read mtp.* from the checkpoint safetensors; AutoModelForCausalLM drops them before remap."""
     from safetensors import safe_open
 
     model_path = Path(model_path)
@@ -167,7 +155,6 @@ def load_mtp_tensors(model_path) -> Dict[str, torch.Tensor]:
                 file_to_keys.setdefault(filename, []).append(key)
         files = file_to_keys
     else:
-        # Single-file checkpoint: scan the one safetensors for mtp.* keys.
         files = {"model.safetensors": None}
 
     tensors: Dict[str, torch.Tensor] = {}
@@ -250,8 +237,7 @@ def load_qwen36_state_dict_fp8(model_path) -> Dict[str, torch.Tensor]:
     for key, tensor in dequantized.items():
         if "visual" in key:
             continue
-        # mtp.* is KEPT (spec-decode drafter). It has no prefix to strip and is not embed/lm_head,
-        # so it passes through the else branch below verbatim, matching the BF16 key scheme.
+        # mtp.* is kept: no prefix to strip, so it passes through the else branch.
         short = key
         for prefix in ("model.language_model.", "model."):
             if short.startswith(prefix):

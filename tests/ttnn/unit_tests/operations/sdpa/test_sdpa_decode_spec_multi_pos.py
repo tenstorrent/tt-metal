@@ -1,51 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for ``spec_multi_pos_tiles`` on
-``ttnn.transformer.paged_scaled_dot_product_attention_decode``.
-
-Speculative-decode verify calls paged SDPA decode with T pseudo-users whose page tables
-are identical (they all alias ONE KV cache) and whose ``cur_pos`` values are consecutive.
-The program factory partitions cores per batch row, so those T rows each stream the whole
-KV cache out of DRAM — T times the traffic for one cache. ``spec_multi_pos_tiles=Tg`` folds
-Tg candidates onto a single batch row (PNHt == Tg, candidate j owning row-tile j) so that
-row's KV is scanned once; the per-candidate causal bound moves from the scan range into a
-per-row-tile mask.
-
-With B batch rows the T = B*Tg candidates are split into B *groups* of Tg: Q is
-``[1, B, Tg*32, DH]``, the page table has B (aliased) rows, and ``cur_pos`` carries B*Tg
-bounds with batch b owning ``[b*Tg, (b+1)*Tg)``. B > 1 exists because every Q-shaped CB
-scales with Tg, so L1 caps cores-per-head by Tg: Tg=4 fits 64 cores/head but Tg=7 only 4.
-Two groups of 4 therefore cover 8 candidates while keeping the whole grid busy — each group
-scans the KV once on its own reduction group. The B == 1 sweep below is the Tg == T special
-case; the group sweep at the bottom of the file covers B == 2.
-
-The property under test is that the two forms are numerically the same computation:
-
-* reference  — today's mode, B == T rows, ``q`` ``[1, T, 32, DH]``, T identical page-table
-  rows, ``cur_pos = [p, p+1, ..., p+T-1]``
-* spec       — the *same Q bytes* viewed as ``[1, 1, T*32, DH]``, one page-table row, the
-  same ``cur_pos`` vector, ``spec_multi_pos_tiles=T``
-
-Both are also checked against an fp32 torch reference that applies each candidate's causal
-bound independently.
-
-How tightly the two device paths can be expected to agree depends on whether flash decode
-sums its bf16 partial results in the same order:
-
-* matched reduction tree, bounds inside one k-chunk -> **bit-identical**
-  (``test_spec_multi_pos_is_bit_exact``)
-* matched tree, bounds straddling a chunk boundary  -> spec scans one extra (fully masked,
-  zero-contribution) chunk, which redistributes chunks across cores -> PCC >= 0.999
-* deliberately mismatched tree (``max_cores_per_head_batch=64``, where spec mode gets all 64
-  cores on its single row and the reference gets ~27 per row) -> PCC >= 0.999, and spec must
-  be no less accurate than the reference against fp32
-  (``test_spec_multi_pos_wide_reduction_split``)
-
-``p`` is swept over tile-alignment edges (``p % 32`` in {0, 1, 30, 31}) and over k-chunk
-boundaries, including cases where the T bounds straddle a chunk boundary so that TWO chunks
-carry a mask instead of one.
-"""
+"""spec_multi_pos_tiles folds Tg candidates onto one batch row so that row's KV is scanned once.
+Matched reduction trees are bit-identical inside one k-chunk; a straddling bound only agrees to bf16 partial sums."""
 
 import pytest
 import torch
@@ -53,8 +10,7 @@ import torch
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
-# One module-scoped device: the KV caches below are up to 32k tokens and every case
-# reuses the same two programs per (T, seq_len).
+# One module-scoped device; every case reuses the same programs per (T, seq_len).
 pytestmark = pytest.mark.use_module_device
 
 BLOCK_SIZE = 64
@@ -64,28 +20,12 @@ NUM_Q_HEADS = 6  # valid q heads per candidate; rows 6..31 of each Q tile are pa
 TILE = 32
 SCALE = 1.0 / (HEAD_DIM**0.5)
 
-# Spec mode makes every Q-shaped CB T times larger (PNHt == T), so the (k_chunk_size,
-# cores-per-head) budget shrinks sharply as T grows. These are the largest points that fit
-# Blackhole L1 (1,461,248 B of CB space per core) at head_dim=256 — see the explicit L1
-# guard in the program factory, which reports the numbers when a config does not fit.
-#
-#   T=4,  chunk=128, 64 cores/head -> 1,310,720 B
-#   T=7,  chunk=64,   4 cores/head -> 1,329,152 B
-#   T=11, chunk=32,   1 core /head -> 1,447,936 B
-#
-# The sweep below uses core counts chosen so the reference (B == T rows spread over the same
-# grid) lands on the SAME cores-per-head as spec mode (B == 1). With an identical reduction
-# tree the two paths agree bit-for-bit, which isolates the mode from flash-decode's bf16
-# partial-sum ordering. ``test_spec_multi_pos_wide_reduction_split`` covers the other case,
-# where the trees deliberately differ.
+# Spec mode grows Q-shaped CBs with T. Core counts below match the reference reduction tree.
 SPEC_CONFIG = {
     4: {"max_cores": 16, "k_chunk_size": 128},
     7: {"max_cores": 4, "k_chunk_size": 64},
     11: {"max_cores": 1, "k_chunk_size": 32},
 }
-
-
-# ── Helpers ────────────────────────────────────────────────────────────────
 
 
 def _build_kv(seq_len, seed):
@@ -147,14 +87,11 @@ def _build_inputs(device, T, p, seq_len, seed):
 
     k, v = _build_kv(seq_len, seed)
     g = torch.Generator().manual_seed(seed + 1)
-    # Shuffled blocks: the two calls must resolve the same physical blocks through the
-    # page table, not through a coincidentally identity mapping.
+    # Shuffled blocks: both calls must use the page table, not an identity mapping.
     page_row = torch.randperm(num_blocks, generator=g).to(torch.int32)
     paged_k, paged_v = _paged_layout(k, v, page_row)
 
-    # Q: one 32-row tile per candidate, rows 0..NUM_Q_HEADS-1 valid, the rest zero padding.
-    # [1, T, 32, DH] and [1, 1, T*32, DH] are byte-identical once tilized, which is exactly
-    # the equivalence the mode relies on.
+    # [1, T, 32, DH] and [1, 1, T*32, DH] are the same bytes once tilized.
     q_heads = torch.randn(T, NUM_Q_HEADS, HEAD_DIM, generator=g).bfloat16().float()
     q_batched = torch.zeros(1, T, TILE, HEAD_DIM)
     q_batched[0, :, :NUM_Q_HEADS, :] = q_heads
@@ -210,15 +147,7 @@ def _run_spec(device, inp, T, program_config):
 
 
 def _straddles_chunk_boundary(T, p):
-    """True when the T bounds span two k-chunks.
-
-    This matters for how tightly the two paths can be expected to agree. Spec mode scans up
-    to the LARGEST bound, so when the bounds straddle a boundary it scans one chunk more than
-    the reference rows whose own bound sits in the lower chunk. That extra chunk is fully
-    masked and contributes exactly zero, but it changes the chunk count, hence the
-    chunk-to-core distribution, hence the order in which flash decode sums its bf16 partial
-    results — so bit-equality is not available for these cases even with matched core counts.
-    """
+    """True when the T bounds span two k-chunks, so bit-equality is not available."""
     chunk = SPEC_CONFIG[T]["k_chunk_size"]
     return (p // chunk) != ((p + T - 1) // chunk)
 
@@ -234,47 +163,33 @@ def _check(device, T, p, seq_len, seed=0, program_config=None, pcc_ref_vs_spec=N
     torch_ref = _torch_reference(inp["q_heads"], inp["k"], inp["v"], inp["cur_pos"])
     where = f"T={T}, p={p}, seq_len={seq_len}"
 
-    # 1) The two device paths must agree. With a matched reduction tree and bounds inside one
-    #    k-chunk they come out bit-identical; when the bounds straddle a chunk boundary the
-    #    chunk counts differ and only bf16 partial-sum accuracy is available (see
-    #    _straddles_chunk_boundary).
+    # Matched tree and one k-chunk: bit-identical. A straddling bound only has bf16 partial-sum agreement.
     eq, msg = comp_pcc(ref, spec, pcc=pcc_ref_vs_spec)
     assert eq, f"spec vs batched ({where}): {msg}"
     assert torch.allclose(
         ref, spec, rtol=2e-2, atol=2e-2
     ), f"spec vs batched ({where}): max abs diff {(ref - spec).abs().max().item():.5f}"
 
-    # 2) Both must match a plain fp32 reference that applies each candidate's bound
-    #    independently — this is what catches an off-by-one or a dropped per-row bound.
+    # Both must match an fp32 reference that applies each candidate's bound independently.
     eq, msg = comp_pcc(torch_ref, spec, pcc=0.99)
     assert eq, f"spec vs torch ({where}): {msg}"
     eq, msg = comp_pcc(torch_ref, ref, pcc=0.99)
     assert eq, f"batched vs torch ({where}): {msg}"
 
 
-# ── Equivalence sweep ──────────────────────────────────────────────────────
-#
-# ``p`` walks tile-alignment edges (p % 32 in {0, 1, 30, 31}) and k-chunk edges. The chunk
-# width differs per T (see SPEC_CONFIG: 128 for T=4, 64 for T=7, 32 for T=11), so each p
-# lands on a different point of each T's chunk grid — which is the intent: between them the
-# cases cover "bound is the last position of a chunk" (one masked chunk), "bounds straddle a
-# chunk boundary" (two masked chunks, possibly on two different cores) and "bounds sit well
-# inside a chunk".
+# p walks tile edges and k-chunk edges, including bounds that straddle a chunk.
 
 
 @pytest.mark.parametrize("T", [4, 7, 11], ids=["T4", "T7", "T11"])
 @pytest.mark.parametrize(
     "seq_len, p",
     [
-        # 2k context, tile-alignment edges (p % 32 in {0, 1, 30, 31})
         (2048, 1024),  # p % 32 == 0,  p % 128 == 0
         (2048, 1025),  # p % 32 == 1
         (2048, 1054),  # p % 32 == 30
         (2048, 1055),  # p % 32 == 31
-        # chunk-boundary edges
         (2048, 1023),  # last position of a 128-chunk: bounds start a fresh chunk
         (2048, 1021),  # bounds straddle a 128-chunk boundary -> TWO masked chunks
-        # 8k context
         (8192, 4095),  # last position of a chunk
         (8192, 4093),  # straddles a chunk boundary
         (8192, 5000),
@@ -300,10 +215,7 @@ def test_spec_multi_pos_matches_batched(device, T, seq_len, p):
 @pytest.mark.parametrize("T", [4, 7, 11], ids=["T4", "T7", "T11"])
 @pytest.mark.parametrize("seq_len, p", [(2048, 1024), (8192, 5000)], ids=["s2k", "s8k"])
 def test_spec_multi_pos_is_bit_exact(device, T, seq_len, p):
-    """The sharpest form of the claim. With the reduction tree matched (SPEC_CONFIG) and the
-    T bounds inside a single k-chunk, folding the candidates onto one batch row is not merely
-    numerically close to the B == T form — it produces the identical bits.
-    """
+    """Matched reduction tree and bounds inside one k-chunk: the two forms are the same bits."""
     torch.manual_seed(5)
     assert not _straddles_chunk_boundary(T, p)
     inp = _build_inputs(device, T, p, seq_len, seed=23)
@@ -326,13 +238,7 @@ def test_spec_multi_pos_long_context(device, T, p):
 
 @pytest.mark.parametrize("p", [30000, 32639], ids=["p30000", "p32639_straddle"])
 def test_spec_multi_pos_long_context_single_core(device, p):
-    """T=11 at 32k. Only 1 core/head fits L1 at T=11 (see SPEC_CONFIG), so this run
-    accumulates ~1000 chunks of bf16 flash-decode state serially on one core. That costs
-    absolute accuracy — but it costs the LEGACY path exactly as much: at this config both
-    paths land at ~0.988 PCC against fp32, while the same context with a legacy-friendly
-    config (8 cores/head, 128-wide chunks) reaches 0.9996. So the assertion here is the
-    equivalence itself, checked against the batched reference rather than against torch.
-    """
+    """T=11 at 32k fits one core/head. Compare to the batched reference, not to a higher-core torch PCC."""
     torch.manual_seed(2)
     T = 11
     inp = _build_inputs(device, T, p, seq_len=32768, seed=17)
@@ -346,12 +252,7 @@ def test_spec_multi_pos_long_context_single_core(device, p):
 
 @pytest.mark.parametrize("seq_len, p", [(2048, 1024), (8192, 5000), (32768, 30000)], ids=["s2k", "s8k", "s32k"])
 def test_spec_multi_pos_wide_reduction_split(device, seq_len, p):
-    """``max_cores_per_head_batch=64``: spec mode (B == 1) gets all 64 cores on its single
-    row, while the reference spreads the same grid over B == T rows and gets ~27 — so the two
-    runs sum their partial softmax results in a different order. They are no longer
-    bit-identical, but neither is more accurate than the other, which is the claim that
-    matters: folding the candidates onto one row costs nothing numerically.
-    """
+    """64 cores/head splits the reduction differently. Spec must be no less accurate than the reference."""
     torch.manual_seed(3)
     T = 4
     inp = _build_inputs(device, T, p, seq_len, seed=19)
@@ -388,17 +289,10 @@ def test_spec_multi_pos_first_block(device):
 
 
 def test_spec_multi_pos_dynamic_chunk(device):
-    """``k_chunk_size=0``: the k-chunk is picked in-kernel from cur_pos and capped at 4 tiles
-    in spec mode. The reference (PNHt == 1) is not capped and picks 8 tiles, so the two paths
-    split the flash reduction differently and only agree to bf16 partial-sum accuracy — hence
-    the looser bound here than in the matched-split sweep above. Both are still held to the
-    fp32 torch reference at the usual 0.99."""
+    """k_chunk_size=0 picks different chunk widths, so only bf16 partial-sum agreement is required."""
     torch.manual_seed(3)
     pc = _program_config(device, max_cores=64, k_chunk_size=0)
     _check(device, T=4, p=1024, seq_len=2048, seed=13, program_config=pc, pcc_ref_vs_spec=0.999)
-
-
-# ── Validation ─────────────────────────────────────────────────────────────
 
 
 def _minimal_spec_args(device, T=4, seq_len=512, p=100):
@@ -407,8 +301,7 @@ def _minimal_spec_args(device, T=4, seq_len=512, p=100):
 
 
 def test_rejects_page_table_batch_mismatch(device, expect_error):
-    """The page table gives one row per batch GROUP, so its row count must equal Q's batch
-    dim. A B=T page table against a single-row Q is the legacy form, not a 1-group spec call."""
+    """Page-table rows must equal Q batch groups. A B=T table against one Q row is the legacy form."""
     T = 4
     inp, pc = _minimal_spec_args(device, T=T)
     page_table = inp["page_row"].unsqueeze(0).repeat(T, 1).contiguous()
@@ -490,28 +383,13 @@ def test_legacy_path_unaffected(device):
     assert eq, f"legacy path regressed: {msg}"
 
 
-# ── Batch groups (B >= 1) ──────────────────────────────────────────────────
-#
-# Everything above runs B == 1: one batch row carrying all T candidates. That row's CBs all
-# scale with T, so L1 caps how many cores can reduce it (Tg=4 -> 64 cores/head, Tg=7 -> 4),
-# and a single group cannot fill the grid past its own cap. B groups of Tg lift that: batch b
-# owns cur_pos[b*Tg : (b+1)*Tg] and gets its own reduction group of cores, so B=2, Tg=4 runs 8
-# candidates across ~2x the cores that one 8-tile row could ever use.
-#
-# The reference is unchanged — the legacy B == B*Tg pseudo-user call. The claim is the same
-# one the B == 1 sweep makes, now per group: candidate b*Tg+j must come out exactly as legacy
-# batch row b*Tg+j did.
+# B groups of Tg: each group has its own reduction cores. The reference stays the legacy B*Tg call.
 
 GROUP_CHUNK = 128  # k_chunk_size for the group sweep: 4 tiles, the spec-mode dynamic cap
 
 
 def _cores_per_head(device, batch, max_cores):
-    """The program factory's core split, mirrored (see 'Core Allocation' in the factory).
-
-    Bit-equality between the spec call (B rows) and the legacy reference (B*Tg rows) is only
-    available when both land on the same cores-per-head, since that fixes the flash-decode
-    reduction tree and hence the order the bf16 partial results are summed.
-    """
+    """Bit-equality needs both calls on the same cores-per-head, which fixes the reduction tree."""
     grid = device.compute_with_storage_grid_size()
     available = grid.x * grid.y
     return max(1, min(available, max_cores * batch) // batch)
@@ -521,8 +399,7 @@ def _run_spec_groups(device, inp, B, Tg, program_config):
     """Spec mode with B groups: the same Q bytes as [1, B, Tg*32, DH], B aliased page rows."""
     T = B * Tg
     assert inp["cur_pos"].numel() == T
-    # [1, T, 32, DH] -> [1, B, Tg*32, DH] is a pure reshape, so the tilized bytes are
-    # identical to the reference's Q — candidate b*Tg+j lands on batch b, row-tile j.
+    # [1, T, 32, DH] to [1, B, Tg*32, DH] is a reshape; tilized bytes match the reference Q.
     q_spec = inp["q_batched"].reshape(1, B, Tg * TILE, HEAD_DIM)
     page_table = inp["page_row"].unsqueeze(0).repeat(B, 1).contiguous()
     out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
@@ -541,13 +418,7 @@ def _run_spec_groups(device, inp, B, Tg, program_config):
 
 
 def _group_straddles(B, Tg, p, chunk):
-    """True when some group's Tg bounds span two k-chunks.
-
-    Spec mode scans to the group's LARGEST bound, so a straddling group scans one chunk more
-    than the reference rows whose own bound sits in the lower chunk. That chunk is fully
-    masked and contributes zero, but it changes the chunk count and hence the chunk-to-core
-    distribution — so bit-equality is off the table even with a matched tree.
-    """
+    """True when some group's bounds span two k-chunks, so bit-equality is off."""
     return any((p + b * Tg) // chunk != (p + (b + 1) * Tg - 1) // chunk for b in range(B))
 
 
@@ -571,9 +442,7 @@ def _check_groups(device, B, Tg, p, seq_len, max_cores, seed=0, k_chunk_size=GRO
         ref, spec, rtol=2e-2, atol=2e-2
     ), f"spec groups vs batched ({where}): max abs diff {(ref - spec).abs().max().item():.5f}"
 
-    # The fp32 check is what catches a group picking up the wrong slice of cur_pos: a
-    # candidate given its neighbour group's bound still matches the device reference's shape
-    # and magnitude, but not the independently-bounded softmax.
+    # The fp32 check catches a group that used the wrong slice of cur_pos.
     eq, msg = comp_pcc(torch_ref, spec, pcc=0.99)
     assert eq, f"spec groups vs torch ({where}): {msg}"
     eq, msg = comp_pcc(torch_ref, ref, pcc=0.99)
@@ -583,19 +452,15 @@ def _check_groups(device, B, Tg, p, seq_len, max_cores, seed=0, k_chunk_size=GRO
 @pytest.mark.parametrize(
     "seq_len, p",
     [
-        # 2k, tile-alignment edges (p % 32 in {0, 1, 30, 31})
         (2048, 1024),  # p % 32 == 0; both groups sit inside chunk 8
         (2048, 1025),  # p % 32 == 1
         (2048, 1054),  # p % 32 == 30; the groups' bounds cross a TILE edge
         (2048, 1055),  # p % 32 == 31
-        # chunk-boundary edges. The interesting new case for groups is the pair where the two
-        # groups do not agree on how far to scan:
+        # Chunk edges where the two groups do not scan the same distance:
         (2048, 1020),  # group 0 ends at 1023 (8 chunks), group 1 at 1027 (9) -> scan ranges differ
         (2048, 1021),  # group 0 straddles the boundary (TWO masked chunks), group 1 has one
-        # 8k
         (8192, 4095),  # group 0 straddles at the top of chunk 31
         (8192, 5000),
-        # 32k — the regime the mode exists for
         (32768, 30000),
         (32768, 32700),  # last chunk of the cache
     ],
@@ -613,14 +478,7 @@ def _check_groups(device, B, Tg, p, seq_len, max_cores, seed=0, k_chunk_size=GRO
     ],
 )
 def test_spec_multi_pos_groups_matches_batched(device, seq_len, p):
-    """B=2 groups of Tg=4 (8 candidates) at 55 cores/head — the full-grid config: each of the
-    two batch rows gets its own ~55-core reduction group, so all ~110 cores are active and the
-    KV is read twice for 8 candidates instead of eight times.
-
-    The reference (B=8 rows) is capped by its own row count to ~13 cores/head, so the two
-    reduction trees deliberately differ here and only bf16 partial-sum accuracy is available.
-    ``test_spec_multi_pos_groups_is_bit_exact`` pins the matched-tree case.
-    """
+    """B=2, Tg=4 at full grid. Reduction trees differ, so only bf16 partial-sum agreement."""
     _check_groups(device, B=2, Tg=4, p=p, seq_len=seq_len, max_cores=55, seed=31)
 
 
@@ -630,18 +488,13 @@ def test_spec_multi_pos_groups_matches_batched(device, seq_len, p):
     ids=["s2k", "s2k_straddle", "s8k"],
 )
 def test_spec_multi_pos_groups_16_cores(device, seq_len, p):
-    """The same claim at a much narrower split (16 cores/head), where each core carries many
-    more chunks and the two masked chunks are far more likely to land on the same core."""
+    """Same claim at 16 cores/head, where masked chunks are more likely to share a core."""
     _check_groups(device, B=2, Tg=4, p=p, seq_len=seq_len, max_cores=16, seed=37)
 
 
 @pytest.mark.parametrize("seq_len, p", [(2048, 1024), (8192, 5000), (32768, 30000)], ids=["s2k", "s8k", "s32k"])
 def test_spec_multi_pos_groups_is_bit_exact(device, seq_len, p):
-    """The sharpest form of the grouped claim. ``max_cores_per_head_batch=8`` puts the B=2 spec
-    call and the B=8 reference on the same cores-per-head (both are capped by max_cores, not by
-    the grid), so the reduction trees match; with no group straddling a chunk boundary the two
-    forms are not merely close but identical bit-for-bit.
-    """
+    """max_cores_per_head_batch=8 matches the trees; without a straddling group the bits match."""
     B, Tg, max_cores = 2, 4, 8
     T = B * Tg
     if _cores_per_head(device, B, max_cores) != _cores_per_head(device, T, max_cores):
@@ -660,34 +513,21 @@ def test_spec_multi_pos_groups_is_bit_exact(device, seq_len, p):
 
 
 def test_spec_multi_pos_groups_dynamic_chunk(device):
-    """``k_chunk_size=0`` with the two groups on OPPOSITE sides of a dynamic-chunk step.
-
-    The in-kernel chunk size is derived from the position — nearest power of two of
-    ``cur_pos/32 + 1``, capped at 4 tiles in spec mode. Group 0's bounds top out at 63
-    (2 tiles) and group 1's at 67 (4 tiles), so the two groups run *different* chunk sizes in
-    the same program. Reader, writer and compute each derive it independently from their own
-    group's max bound, so this is the case that catches one of them reading the wrong group.
-    """
+    """k_chunk_size=0 with the two groups on opposite sides of a dynamic-chunk step."""
     B, Tg, p = 2, 4, 60
     assert (p + Tg - 1) // 32 + 1 == 2 and (p + 2 * Tg - 1) // 32 + 1 == 3  # 2 tiles vs 4 (pow2)
-    # The reference (PNHt == 1) is not capped at 4 tiles, so it picks its own sizes and the
-    # two paths split the reduction differently — bf16 partial-sum accuracy only.
+    # The reference is not capped at 4 tiles, so the reduction split differs.
     _check_groups(device, B=B, Tg=Tg, p=p, seq_len=512, max_cores=16, seed=47, k_chunk_size=0, pcc=0.999)
 
 
 def test_spec_multi_pos_groups_first_block(device):
-    """Both groups' bounds inside the very first tiles — the mask cuts inside column-tile 0
-    for group 0 and column-tile 0/1 for group 1, in the same chunk."""
+    """Both groups' bounds cut inside the first tiles of the same chunk."""
     _check_groups(device, B=2, Tg=4, p=5, seq_len=512, max_cores=16, seed=53)
 
 
 @pytest.mark.parametrize("B, Tg", [(4, 2), (2, 7)], ids=["B4_Tg2", "B2_Tg7"])
 def test_spec_multi_pos_group_shapes(device, B, Tg):
-    """Other (B, Tg) splits of the same candidate count. B=4/Tg=2 is the narrow-row extreme
-    (8 candidates, four 2-tile rows); B=2/Tg=7 is 14 candidates on rows too tall to fit many
-    cores, which is exactly why the mode gained groups. Both are capped to 4 cores/head so
-    the 7-tile rows fit L1.
-    """
+    """Other (B, Tg) splits of the same candidate count, capped so the tall rows fit L1."""
     _check_groups(device, B=B, Tg=Tg, p=1024, seq_len=2048, max_cores=4, seed=59, k_chunk_size=64)
 
 
@@ -720,16 +560,7 @@ def test_spec_multi_pos_group_shapes(device, B, Tg):
 )
 @pytest.mark.parametrize("k_chunk_size", [0, 128], ids=["B3_Tg4_dyn_chunk", "B3_Tg4_chunk128"])
 def test_spec_groups_b3_tg4_full_grid(device, seq_len, p, k_chunk_size):
-    """B=3 groups of Tg=4 (12 candidates) at 36 cores/head — the T=12 full-grid config the model
-    uses (``_SPEC_SDPA_L1_FIT[12]``): three ~36-core reduction groups, 108 of ~110 cores active,
-    the KV read three times for 12 candidates instead of twelve. Same Tg=4 CB footprint as the
-    B=2 config; the only new thing is a third group and a reduction tree at the 6-round cap.
-
-    Run once with the in-kernel dynamic chunk (what the model passes) and once at the fixed
-    4-tile chunk. The reference (B=12 rows) is capped by its own row count to ~9 cores/head, so
-    the reduction trees differ and only bf16 partial-sum accuracy is available (pcc pinned
-    explicitly: the default's ``_group_straddles`` cannot be evaluated at ``k_chunk_size=0``).
-    """
+    """B=3, Tg=4 at 36 cores/head. Trees differ, so only bf16 partial-sum agreement."""
     _check_groups(device, B=3, Tg=4, p=p, seq_len=seq_len, max_cores=36, seed=67, k_chunk_size=k_chunk_size, pcc=0.999)
 
 

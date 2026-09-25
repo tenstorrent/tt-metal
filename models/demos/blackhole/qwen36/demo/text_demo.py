@@ -14,16 +14,6 @@ GDN prefill runs the fast fused path by DEFAULT — no env vars needed: chunk-pa
 (PREP fanned across the grid + V-block SCAN), fp32 o output, fp32 state, and flat token-major q/k/v
 with in-kernel L2-norm (eliminates the head-split relayouts + host l2_norm — the bulk of the
 preprocessing cost).
-
-Single-user TP decode runs MTP SPECULATIVE DECODE by DEFAULT (draft K tokens with the built-in MTP
-head, verify them in one traced chunk forward, commit the accepted prefix). It is lossless — it
-reproduces the plain greedy trajectory (tests/test_spec_lossless.py, tests/test_spec_determinism.py)
-— needs an MTP head and pure greedy sampling, and falls back to plain decode when either is missing.
-The sibling port it came from measured ~73 tok/s at ISL 128 against ~28 plain on ITS config; this
-branch's own numbers are not measured yet, so run QWEN36_SPEC=0 as the A/B baseline before quoting
-any. Two knobs, both for benchmarking/debug:
-  QWEN36_SPEC=0           opt out -- plain single-token decode (the baseline to compare against).
-  QWEN36_SPEC_DRAFT_LEN   override K (default: 10 up to a 4k prompt, 6 above it).
 """
 
 import hashlib
@@ -51,9 +41,7 @@ _MESH_SHAPE = {
     "P150": (1, 1),
     "P150x4": (1, 4),
     "P150x8": (1, 8),
-    # Wormhole: N300 is the 2-chip mesh the 9B needs (one N150 cannot hold it:
-    # ~12GB DRAM/chip vs BH P150's ~32GB). Listing these matters: the old dict
-    # fell through to (1,4) for any WH name, wrong shape and _MULTI flipped on.
+    # N300 is the 2-chip mesh the 9B needs; one N150 cannot hold it.
     "N150": (1, 1),
     "N300": (1, 2),
     "N150x4": (1, 4),
@@ -336,8 +324,6 @@ def test_demo_text(
         logger.info(f"[TP {model.num_devices}-dev] ttft={perf['ttft_s']:.2f}s decode={perf['decode_tok_s']:.2f} tok/s")
         logger.info(f"[TP] GENERATED: {text!r}")
         assert len(generated) == max_generated_tokens, f"{len(generated)} != {max_generated_tokens}"
-        # The degeneracy assert below was commented out; _assert_output_quality supersedes it with
-        # checks that also catch fluent-looking loops, which len(set(...)) > 1 never did.
         _assert_output_quality(text, len(generated), seqlen)
         # Perf JSON for CI target check (validate_perf_targets.py)
         _save_tp_benchmark(perf, model, seqlen=seqlen, prompt_len=actual_len, num_generated=len(generated))
@@ -402,63 +388,13 @@ def _should_use_chunked_trace(model):
 
 
 def _run_tp_spec_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks, sampling=None):
-    """MTP speculative decode: the default single-user TP decode path (QWEN36_SPEC=0 opts out).
-    draft -> traced verify -> slot commit via SpeculativeDecoder. Returns (tokens, perf_dict) shaped
-    like _run_tp_generation so the caller prints/saves it unchanged. Lossless: reproduces the
-    plain-decode greedy trajectory exactly.
-
-    The verify shape (fully-batched GDN, hybrid decode-SDPA) and the reseed shape are no longer
-    configurable from here — they are the code's own defaults, in gdn/tp.py and spec_decode.py.
-    """
+    """MTP speculative decode via SpeculativeDecoder. Returns (tokens, perf_dict)."""
     from models.demos.blackhole.qwen36.tt.spec_decode import SpeculativeDecoder
 
     T = token_ids.shape[1]
-    # Draft width. K is chosen so that T=K+1 is a layout the fused verify SDPA (spec_multi_pos_tiles)
-    # supports: it splits the T candidates into L1-fitting groups of 4 and reads KV once per group
-    # rather than once per candidate. K=7 -> T=8 = 2 groups x 4. Other K values fall back to the
-    # legacy B=T pseudo-user verify, which reads KV T times and rounds differently from plain decode
-    # at near ties, so they are avoided -- which is why the alternative below is 11 (T=12), not 9.
-    # WORMHOLE: was capped at (6, 6) because the K=11 -> T=12 split needs the fused multi-pos verify
-    # SDPA, and TPAttention._SPEC_SDPA_L1_FIT was Blackhole-only. That table now has a WH arm
-    # (_SPEC_SDPA_L1_FIT_WH: same Tg=4 splits, cores-per-head rescaled to the 64-core grid), so the
-    # cap is lifted and Wormhole takes the same policy as Blackhole. The old cap's own note said the
-    # loss at K=11 was "a cost problem, not a drafter quality problem" -- that reading was right.
-    #
-    # MEASURED on T3K/27B at ISL 128 (traced_128, this build, fused SDPA on). The whole K curve,
-    # so nobody has to sweep it again:
-    #     K= 6  accept 4.10/6   5.10 committed/iter  ttft 4.62s  47.49 tok/s   <- the old cap
-    #     K= 7  accept 4.10/7   5.10 committed/iter  ttft 4.73s  45.78 tok/s
-    #     K=11  accept 6.14/11  7.14 committed/iter  ttft 5.15s  54.46 tok/s   <- the peak ON THIS PROMPT
-    #     K=15  accept 6.14/15  7.14 committed/iter  ttft 5.66s  48.11 tok/s
-    #     K=19  accept 6.14/19  7.14 committed/iter  ttft 6.24s  41.89 tok/s
-    #
-    # THE DRAFTER SATURATES AT 6.14 ACCEPTED. Read the accept column, not tok/s: it pins at 6.14
-    # from K=11 on, so every draft slot past 11 costs a drafter leg and commits nothing -- which is
-    # the whole of the decline at 15 and 19. Raising K further cannot help without a better drafter;
-    # _SPEC_SDPA_L1_FIT_WH carries T=16/20 entries that DO fit L1, and they are still the wrong policy.
-    #
-    # ...BUT THAT CURVE IS ONE PROMPT, AND K=11 DOES NOT GENERALISE. Acceptance varies 3.2x BY PROMPT
-    # at a fixed ISL (1.79-5.70 of 11 over the eight prompts in tests/test_mtp_accept_prompts.py), and
-    # this file's ISL-128 prompt is at the very top of that range. Re-measured over the whole set,
-    # same build, K fixed per run (tok/s per prompt):
-    #             condiment hello mayo yel+blu room joke good-at 2+2 | MEAN
-    #     K=11        21.64  50.71 37.64  35.20 37.56 34.97  36.30 50.60 | 38.08
-    #     K= 7        25.66  55.39 42.88  39.05 38.96 38.91  40.49 48.67 | 41.25
-    # K=7 wins 7 of 8 prompts and +8.3% on the mean; only 2+2 (the highest-acceptance prompt) prefers
-    # K=11. So K=7 is the policy at EVERY ISL, and the ISL branch is gone with it.
-    #
-    # THE COST, STATED PLAINLY: on this demo's own ISL-128 prompt K=7 is 46.99 vs K=11's 55.96 tok/s
-    # (-16%), because that prompt is one of the two where the long chain pays. The demo's headline
-    # number drops accordingly; the typical-prompt number rises. Chosen deliberately: the mean over a
-    # prompt SET is the honest expectation, one favourable prompt is not.
-    # A per-request adaptive K would take both (the controller would sit at ~7 on the set and ~10 on
-    # this prompt) -- deliberately NOT implemented here.
-    #
-    # >4k was already 7 and re-confirmed on this build: at 8k K=11 accepts 2.79/11 -- IDENTICAL to
-    # K=7's 2.79/7 -- for 28.34 vs 33.90 tok/s; at 16k, 3.08/11 vs 2.89/7 for 29.83 vs 34.47.
+    # K=7 so T=8 fits fused verify SDPA groups of 4; other K use a verify that rounds differently.
     _k = 7
-    # QWEN36_SPEC_DRAFT_LEN, when set, overrides this (draft_len=None defers to the env in
-    # SpeculativeDecoder, whose own library default stays 3).
+    # None defers K to QWEN36_SPEC_DRAFT_LEN (SpeculativeDecoder library default is 3).
     draft_len = None if os.environ.get("QWEN36_SPEC_DRAFT_LEN") else _k
     logger.info(
         f"[TP SPEC] T={T} -> K={draft_len if draft_len is not None else os.environ['QWEN36_SPEC_DRAFT_LEN']}"
@@ -477,26 +413,10 @@ def _run_tp_spec_generation(model, tokenizer, token_ids, max_generated_tokens, n
     profiler.start("compile_prefill")
     profiler.end("compile_prefill")
 
-    # Spec decode's verify advances GDN with the fused recurrent op, so plain decode on this model
-    # has to use it too or greedy near-ties flip between the two paths. Model-scoped and explicit.
+    # Verify uses fused GDN; plain decode must too or greedy near-ties diverge.
     model.set_gdn_fused_decode(True)
 
-    # Warmup (compile prefill/verify/decode/MTP programs; results discarded).
-    #
-    # The decoder is REUSED for the timed run below, and the KV cache is deliberately NOT freed in
-    # between. MEASURED TTFT split at ISL 128 (K=11): prefill+MTP-warm+seed 1.16s, verify-trace
-    # capture 3.02s, commit-trace capture 1.02s, draft-window capture 0.31s -- so trace capture is
-    # 79% of a 5.51s TTFT and the verify capture alone is 55%. SpeculativeDecoder guards that one
-    # behind self._vfy_captured, i.e. it is per-DECODER, so a fresh decoder per request pays it
-    # again every time. A serving loop holds one decoder across requests and pays it once; building
-    # a new one here made the demo report a cost production would not see.
-    #
-    # WHY THE KV CACHE MUST STAY ALLOCATED: a captured metal trace bakes buffer addresses, so
-    # free_kv_caches() + allocate_kv_caches() between the two runs would leave the verify trace
-    # pointing at freed memory -- silent corruption, not an error. Keeping it allocated is safe
-    # because generate() re-prefills from scratch: prefill re-zeroes the GDN recurrent + conv state
-    # at chunk_start==0 and rewrites KV for positions 0..T-1, and decode only ever reads positions
-    # it has written. Anything the warmup left beyond T is never read.
+    # Do not free the KV cache before the timed run: the captured trace bakes buffer addresses.
     model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=1)
     signpost("compile_decode")
     profiler.start("compile_decode")
@@ -504,7 +424,6 @@ def _run_tp_spec_generation(model, tokenizer, token_ids, max_generated_tokens, n
     dec.generate(prompt_ids, min(6, max_generated_tokens))
     profiler.end("compile_decode")
 
-    # Timed run. generate() records dec.prefill_time (TTFT) and dec.decode_time (spec loop) internally.
     signpost("inference_prefill")
     profiler.start("inference_prefill")
     generated = dec.generate(prompt_ids, max_generated_tokens)
@@ -527,25 +446,19 @@ def _run_tp_spec_generation(model, tokenizer, token_ids, max_generated_tokens, n
 
 def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks):
     """TP generation: traced chunk-outer prefill + paged decode. Returns (tokens, perf_dict)."""
-    # MTP speculative decode is the DEFAULT (~2.6x at ISL 128, lossless); QWEN36_SPEC=0 opts out for
-    # a plain-decode baseline. It needs an MTP head and pure greedy sampling, and falls through to
-    # plain decode when either is missing.
     _spec_req = os.environ.get("QWEN36_SPEC", "1") != "0"
     if _spec_req:
         _temp = float(os.environ.get("QWEN35_TEMP", "0") or 0)
         _rep = float(os.environ.get("QWEN35_REP_PENALTY", "1.0") or 1.0)
         _nr = int(os.environ.get("QWEN35_NO_REPEAT_NGRAM", "0") or 0)
-        # Permuted RoPE (9B/N300 only) shards decode cos/sin on rope_k_shard_cfg -- one user per
-        # core -- which the spec reseed's multi-row window overflows. Only the 27B is prepared.
+        # Permuted RoPE overflows the spec reseed window; only non-permuted models are prepared.
         _permuted_rope = getattr(model.args, "rope_permuted_enabled", False)
         _spec_ok = model.mtp is not None and not _permuted_rope and _nr == 0
         if _spec_ok and _temp == 0 and _rep == 1.0:
             logger.info("[TP] MTP speculative decode, greedy (default path; QWEN36_SPEC=0 opts out)")
             return _run_tp_spec_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks)
         if _spec_ok and _temp > 0:
-            # temperature > 0 switches acceptance to exact speculative rejection sampling
-            # (tt/spec_sampling.py): lossless in DISTRIBUTION rather than token-for-token, and it
-            # turns on the [T, vocab] verify-logits readback the greedy path avoids.
+            # temperature > 0 uses rejection sampling and reads back full verify logits.
             _sp = SpecSamplingParams(
                 temperature=_temp,
                 top_k=int(os.environ.get("QWEN35_TOP_K", "0") or 0),
@@ -973,8 +886,7 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
     #            all-gather; measured slower overall than "shard" — kept for comparison.
     #   "host"  - legacy: full [B,1,vocab] logits to host, then torch.argmax. Baseline.
     _mode = os.environ.get("QWEN36_BATCHED_DECODE_MODE", "shard")
-    # Both "shard" and "sample" ask ttnn_decode_forward for on_device_logits, which asserts on
-    # model.sampling -- so BOTH must fall back, not just "sample". model.sampling is None whenever
+    # shard and sample both request on_device_logits, which asserts unless model.sampling is set.
     if _mode in ("shard", "sample") and model.sampling is None:
         _mode = "host"
     if _mode == "shard":
@@ -1295,8 +1207,7 @@ def _log_results(perf, prompt_len, num_generated, text):
     logger.info("=" * 70)
 
 
-# Expected content terms per source book, keyed by the Gutenberg epub id in the entry's context URL
-# so this cannot desync from eval_frankenstein_long.json.
+# Content terms keyed by Gutenberg epub id so they stay aligned with eval_frankenstein_long.json.
 _CONTEXT_TERMS = {
     "84": (
         (
@@ -1345,21 +1256,7 @@ def _context_terms(entry_idx):
 
 
 def _assert_output_quality(text, num_generated, seqlen=None):
-    """Reject output that is present but degenerate.
-
-    ``len(set(tokens)) > 1`` only catches a single token repeated forever; a broken numerics path
-    more often emits fluent-looking loops or one word at high frequency, which passes that check.
-    These are content checks with no semantic expectation, so they are safe across prompts:
-
-      * non-empty after stripping,
-      * no single token taking more than 60% of the output,
-      * no 8-gram repeated more than 10 times (a catastrophic loop repeats a phrase dozens of
-        times; the bound is loose so structured output with recurring phrasing still passes).
-
-    For the Frankenstein long-context configs the prompt asks for a summary of a specific text, so
-    when enough tokens were generated to have gotten past any <think> preamble, require at least one
-    term from that text. Gated on length so a short budget spent thinking cannot fail the run.
-    """
+    """Reject degenerate output: empty text, a dominant token, or a repeated 8-gram."""
     stripped = text.strip()
     assert stripped, f"generated {num_generated} tokens but the decoded text is empty/whitespace"
 
