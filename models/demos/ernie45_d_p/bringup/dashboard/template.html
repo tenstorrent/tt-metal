@@ -9,6 +9,8 @@
   --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100; --s5:#e87ba4; --s6:#008300;
   --good:#0ca30c; --warn:#fab219; --serious:#ec835a; --crit:#d03b3b;
   --dev-fill:#e3f1e3; --dev-line:#0a8a0a;
+  --b-compute:#2a78d6; --b-compute-soft:#dde9f9; --b-memory:#138a61; --b-memory-soft:#d9f0e7;
+  --b-comm:#c4561f; --b-comm-soft:#f8e3d8; --b-other:#7c7b75; --b-other-soft:#ecebe6;
   --f-display:"IBM Plex Sans Condensed","Arial Narrow",system-ui,sans-serif;
   --f-body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
   --f-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
@@ -20,6 +22,8 @@
     --accent:#e0915a; --accent-soft:#3a2a1f;
     --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181; --s6:#008300;
     --dev-fill:#15301a; --dev-line:#39c039;
+    --b-compute:#6ea6ec; --b-compute-soft:#1b2a40; --b-memory:#3cc595; --b-memory-soft:#14302a;
+    --b-comm:#ec8a5a; --b-comm-soft:#3a2418; --b-other:#8f8e87; --b-other-soft:#262624;
   }
 }
 :root[data-theme="dark"]{
@@ -28,6 +32,8 @@
   --accent:#e0915a; --accent-soft:#3a2a1f;
   --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181; --s6:#008300;
   --dev-fill:#15301a; --dev-line:#39c039;
+  --b-compute:#6ea6ec; --b-compute-soft:#1b2a40; --b-memory:#3cc595; --b-memory-soft:#14302a;
+  --b-comm:#ec8a5a; --b-comm-soft:#3a2418; --b-other:#8f8e87; --b-other-soft:#262624;
 }
 *{box-sizing:border-box}
 body{background:var(--bg);color:var(--ink);font:14px/1.5 var(--f-body);margin:0}
@@ -91,6 +97,39 @@ svg text{font-family:var(--f-body)}
 #tip{position:fixed;pointer-events:none;background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:6px 9px;font:12px/1.4 var(--f-mono);box-shadow:0 4px 14px rgb(0 0 0/.12);z-index:10}
 .empty{color:var(--muted);font-size:13px;padding:24px 0;text-align:center;border:1px dashed var(--line);border-radius:8px}
 footer{color:var(--muted);font-size:12px}
+.tl-total{font:600 26px/1 var(--f-display);font-variant-numeric:tabular-nums}
+.pbar{display:flex;height:34px;border-radius:6px;overflow:hidden;border:1px solid var(--line)}
+.pseg{border:0;padding:0;margin:0;cursor:pointer;min-width:3px;border-right:1px solid var(--surface)}
+.pseg:last-child{border-right:0}
+.pseg[aria-current="true"]{outline:3px solid var(--ink);outline-offset:-3px;position:relative;z-index:1}
+.pseg:focus-visible{outline:3px solid var(--ink);outline-offset:-3px}
+.pparts{display:flex;font:500 12px/1.3 var(--f-mono);color:var(--muted);font-variant-numeric:tabular-nums}
+.pparts span{border-left:1px solid var(--line);padding-left:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.pmain{display:grid;grid-template-columns:minmax(240px,330px) minmax(0,1fr);gap:18px;align-items:start}
+@media (max-width:900px){.pmain{grid-template-columns:minmax(0,1fr)}}
+.psteps{display:flex;flex-direction:column;gap:2px;max-height:620px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:6px;background:var(--bg)}
+@media (max-width:900px){.psteps{max-height:none}}
+.pgrp{font:500 11px/1 var(--f-mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding:10px 8px 4px}
+.pstep{display:grid;grid-template-columns:22px 1fr auto;gap:8px;align-items:baseline;width:100%;text-align:left;background:none;border:0;border-radius:6px;padding:7px 8px;cursor:pointer;color:var(--ink);font:inherit;font-size:13px}
+.pstep:hover{background:var(--surface2)}
+.pstep[aria-current="true"]{background:var(--surface2);box-shadow:inset 3px 0 0 var(--ink)}
+.pstep:focus-visible{outline:2px solid var(--ink);outline-offset:1px}
+.pstep .n{font:12px var(--f-mono);color:var(--muted)}
+.pstep .ms{font:12px var(--f-mono);font-variant-numeric:tabular-nums;display:flex;align-items:center;gap:6px;white-space:nowrap}
+.pdetail{display:flex;flex-direction:column;gap:14px;min-width:0}
+.pd-head{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:baseline}
+.bpill{font:600 11px/1 var(--f-mono);letter-spacing:.06em;text-transform:uppercase;padding:4px 8px;border-radius:999px}
+.pd-ms{font:600 20px/1 var(--f-display);font-variant-numeric:tabular-nums;margin-left:auto}
+.pd-body{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:18px;align-items:start}
+@media (max-width:700px){.pd-body{grid-template-columns:minmax(0,1fr)}}
+.pd-body figure{margin:0;display:grid;gap:6px}
+.pd-body figcaption{font-size:12.5px;color:var(--muted)}
+.pkv{display:grid;grid-template-columns:auto 1fr;gap:5px 12px;font-size:13px}
+.pkv dt{color:var(--muted)} .pkv dd{margin:0;font:12px var(--f-mono);overflow-wrap:anywhere}
+.pnav{display:flex;gap:8px}
+.pnav button{font:inherit;font-size:13px;border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:6px;padding:5px 12px;cursor:pointer}
+.pnav button:hover{background:var(--surface2)}
+.pnav button:focus-visible{outline:2px solid var(--ink);outline-offset:1px}
 @media (prefers-reduced-motion:no-preference){tr.task td{transition:background .12s}}
 </style>
 
@@ -113,6 +152,33 @@ footer{color:var(--muted);font-size:12px}
         <span class="eyebrow" style="color:var(--muted)">Ready to run (all deps PASS)</span>
         <div class="next" id="next"></div>
       </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-prof" id="prof-sec">
+    <div class="sec-head"><h2 id="s-prof">Where the time goes: one 50k→55k chunk</h2><span class="tl-total" id="p-total"></span></div>
+    <p class="sub" id="p-note" style="margin:0;font-size:13px"></p>
+    <div class="pbar" id="p-bar"></div>
+    <div class="pparts" id="p-parts"></div>
+    <div class="legend">
+      <span><span class="sw" style="background:var(--b-compute)"></span>matmul / attention maths</span>
+      <span><span class="sw" style="background:var(--b-memory)"></span>data movement on the chip</span>
+      <span><span class="sw" style="background:var(--b-comm)"></span>chip-to-chip (all-reduce)</span>
+      <span><span class="sw" style="background:var(--b-other)"></span>norms, adds, router, embed</span>
+    </div>
+    <div class="pmain">
+      <nav class="psteps" id="p-steps" aria-label="Phases of the chunk"></nav>
+      <article class="pdetail" aria-live="polite">
+        <div class="pd-head"><h3 id="pd-name" style="font-size:17px"></h3><span class="bpill" id="pd-pill"></span><span class="pd-ms" id="pd-ms"></span></div>
+        <div class="pd-body">
+          <figure><div class="svg-wrap"><svg id="p-grid" viewBox="0 0 470 250" width="100%" role="img" aria-label=""></svg></div><figcaption id="pd-cap"></figcaption></figure>
+          <div style="display:grid;gap:10px">
+            <p id="pd-what" style="margin:0;font-size:13.5px;max-width:62ch"></p>
+            <dl class="pkv"><dt>One chip reads</dt><dd id="pd-in"></dd><dt>One chip writes</dt><dd id="pd-out"></dd><dt>Programs</dt><dd id="pd-progs"></dd></dl>
+            <div class="pnav"><button type="button" id="p-prev">← Previous phase</button><button type="button" id="p-next">Next phase →</button></div>
+          </div>
+        </div>
+      </article>
     </div>
   </section>
 
@@ -392,7 +458,77 @@ function timing(){
       const med = rest.length ? rest[Math.floor(rest.length / 2)] : v[0];
       return `<tr><td>${esc(t.label)}</td><td class="num">${v.length}</td><td class="num">${v[0].toFixed(2)} s</td><td class="num">${med.toFixed(2)} s</td><td class="num">${v.reduce((a, b) => a + b, 0).toFixed(1)} s</td></tr>`; }).join("") + "</tbody>";
 }
-function render(){ header(); ladder(); dag(); ops(); findings(); timing(); sharding(); pccChart();
+
+function profile(){
+  const P = D.profile, secEl = $("#prof-sec");
+  if (!P){ secEl.hidden = true; return; }
+  const S = P.steps, BN = {compute:"maths", memory:"on-chip data movement", comm:"chip-to-chip", other:"norms / adds / misc"};
+  const PARTS = {attn:"Attention", moe:"MoE / MLP", other:"Other"};
+  const total = S.reduce((a, s) => a + s.ms, 0);
+  $("#p-total").textContent = `${(total / 1e3).toFixed(2)} s device · ${(P.wall_ms / 1e3).toFixed(2)} s wall`;
+  $("#p-note").textContent = P.note;
+  const order = [...S].sort((a, b) => b.ms - a.ms);
+  const bar = $("#p-bar");
+  bar.innerHTML = order.map(s => `<button type="button" class="pseg" data-k="${s.key}" style="flex-grow:${s.ms};background:var(--b-${s.bound})" title="${esc(s.name)} · ${s.ms.toFixed(1)} ms" aria-label="${esc(s.name)}, ${s.ms.toFixed(1)} milliseconds"></button>`).join("");
+  $("#p-parts").innerHTML = ["attn", "moe", "other"].map(p => { const ms = S.filter(s => s.part === p).reduce((a, s) => a + s.ms, 0);
+    return `<span style="flex-grow:${ms}">${PARTS[p]} ${ms.toFixed(0)} ms (${(100 * ms / total).toFixed(1)}%)</span>`; }).join("");
+  let html = "", last = null;
+  S.forEach((s, i) => { if (s.part !== last){ html += `<div class="pgrp">${PARTS[s.part]}</div>`; last = s.part; }
+    html += `<button type="button" class="pstep" data-i="${i}"><span class="n">${i + 1}</span><span>${esc(s.name)}</span><span class="ms"><span class="dot" style="background:var(--b-${s.bound})"></span>${s.ms >= 100 ? s.ms.toFixed(0) : s.ms.toFixed(1)} ms</span></button>`; });
+  $("#p-steps").innerHTML = html;
+  let cur = S.findIndex(s => s.key === "attn.sdpa"); if (cur < 0) cur = 0;
+  const NS = "http://www.w3.org/2000/svg";
+  function node(tag, attrs, text){ const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (text != null) e.textContent = text; return e; }
+  function draw(s){
+    const svg = $("#p-grid"); svg.innerHTML = "";
+    const ink = css("--ink"), muted = css("--muted"), tone = css(`--b-${s.bound}`), soft = css(`--b-${s.bound}-soft`), comm = css("--b-comm");
+    const x0 = 10, y0 = 34, w = 106, h = 150, gx = 12, mx = Math.max(...s.per_chip, 1e-9);
+    const defs = node("defs", {}); const mk = node("marker", {id:"pah", viewBox:"0 0 10 10", refX:"9", refY:"5", markerWidth:"6", markerHeight:"6", orient:"auto-start-reverse"});
+    mk.appendChild(node("path", {d:"M0,0L10,5L0,10z", fill:comm})); defs.appendChild(mk); svg.appendChild(defs);
+    svg.appendChild(node("text", {x:x0, y:16, "font-size":"12", fill:muted, "font-family":"IBM Plex Mono, monospace"}, "mesh 1×4 · one Blackhole p150b per column"));
+    for (let c = 0; c < 4; c++){
+      const x = x0 + c * (w + gx), cell = s.cells[c], ms = s.per_chip[c];
+      svg.appendChild(node("rect", {x, y:y0, width:w, height:h, rx:"7", fill:soft, stroke:tone, "stroke-width":"1.4"}));
+      svg.appendChild(node("text", {x:x + 8, y:y0 + 17, "font-size":"11", fill:muted, "font-family":"IBM Plex Mono, monospace"}, `chip ${c}`));
+      svg.appendChild(node("text", {x:x + w / 2, y:y0 + 44, "text-anchor":"middle", "font-size":"11.5", fill:ink, "font-family":"IBM Plex Sans, sans-serif"}, cell[0]));
+      svg.appendChild(node("text", {x:x + w / 2, y:y0 + 61, "text-anchor":"middle", "font-size":"11", fill:ink, opacity:"0.75", "font-family":"IBM Plex Sans, sans-serif"}, cell[1]));
+      const bh = 58 * ms / mx, by = y0 + h - 14 - bh;
+      svg.appendChild(node("rect", {x:x + 18, y:y0 + h - 72, width:w - 36, height:58, rx:"3", fill:css("--surface"), opacity:"0.7"}));
+      svg.appendChild(node("rect", {x:x + 18, y:by, width:w - 36, height:Math.max(bh, 1), rx:"3", fill:tone}));
+      svg.appendChild(node("text", {x:x + w / 2, y:y0 + h - 78, "text-anchor":"middle", "font-size":"12", "font-weight":"600", fill:ink, "font-family":"IBM Plex Mono, monospace"}, `${ms >= 100 ? ms.toFixed(0) : ms.toFixed(1)} ms`));
+    }
+    const yb = y0 + h + 22;
+    if (s.pat === "ring"){
+      const xa = x0 + 20, xb = x0 + 3 * (w + gx) + w - 20;
+      svg.appendChild(node("path", {d:`M${xa},${y0 + h + 6} V${yb} H${xb} V${y0 + h + 6}`, fill:"none", stroke:comm, "stroke-width":"2", "marker-start":"url(#pah)", "marker-end":"url(#pah)"}));
+      for (let c = 1; c < 4; c++){ const xx = x0 + c * (w + gx) - gx / 2;
+        svg.appendChild(node("path", {d:`M${xx - 8},${y0 + h / 2} H${xx + 8}`, stroke:comm, "stroke-width":"2", "marker-start":"url(#pah)", "marker-end":"url(#pah)"})); }
+    }
+    const spread = Math.max(...s.per_chip) - Math.min(...s.per_chip);
+    const msg = s.pat === "ring" ? "traffic: all-reduce around the 4-chip ring" : "no chip-to-chip traffic: every chip works on its own data";
+    svg.appendChild(node("text", {x:x0, y:yb + 22, "font-size":"12", fill:s.pat === "ring" ? comm : muted, "font-family":"IBM Plex Sans, sans-serif"}, `${msg} · spread ${spread.toFixed(1)} ms (${(100 * spread / mx).toFixed(1)}%)`));
+    svg.setAttribute("aria-label", `${s.name}: per chip ${s.per_chip.map(v => v.toFixed(1)).join(", ")} ms; ${msg}`);
+    return msg;
+  }
+  function select(i){
+    cur = Math.max(0, Math.min(S.length - 1, i)); const s = S[cur];
+    bar.querySelectorAll(".pseg").forEach(b => b.setAttribute("aria-current", b.dataset.k === s.key ? "true" : "false"));
+    $("#p-steps").querySelectorAll(".pstep").forEach(b => b.setAttribute("aria-current", +b.dataset.i === cur ? "true" : "false"));
+    $("#pd-name").textContent = `${cur + 1}. ${s.name}`;
+    const pill = $("#pd-pill"); pill.textContent = BN[s.bound]; pill.style.background = `var(--b-${s.bound}-soft)`; pill.style.color = `var(--b-${s.bound})`;
+    $("#pd-ms").textContent = `${s.ms.toFixed(1)} ms · ${(100 * s.ms / total).toFixed(1)}%`;
+    $("#pd-what").textContent = s.what; $("#pd-in").textContent = s.inp; $("#pd-out").textContent = s.out;
+    $("#pd-progs").textContent = `${s.programs} device programs (all layers, all chips)`;
+    const msg = draw(s);
+    $("#pd-cap").textContent = `What each chip holds during this phase, and its measured device time summed over the 28 layers. ${msg.charAt(0).toUpperCase() + msg.slice(1)}.`;
+  }
+  bar.querySelectorAll(".pseg").forEach(b => b.addEventListener("click", () => select(S.findIndex(s => s.key === b.dataset.k))));
+  $("#p-steps").querySelectorAll(".pstep").forEach(b => b.addEventListener("click", () => select(+b.dataset.i)));
+  $("#p-prev").onclick = () => select(cur - 1); $("#p-next").onclick = () => select(cur + 1);
+  secEl.onkeydown = e => { if (e.key === "ArrowRight"){ select(cur + 1); e.preventDefault(); } if (e.key === "ArrowLeft"){ select(cur - 1); e.preventDefault(); } };
+  select(cur);
+}
+function render(){ header(); profile(); ladder(); dag(); ops(); findings(); timing(); sharding(); pccChart();
   $("#foot").textContent = `Generated from models/demos/ernie45_d_p/bringup (tasks.yaml, state.json, results/, components.yaml) by export_dashboard.py.`; }
 if (D) render();
 matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => D && render());

@@ -299,3 +299,21 @@ tasks:
         pcc_routed_*: ">= 0.99"
         pcc_moe_*: ">= 0.99"
         speedup_*: "> 0"
+
+  - id: P3.3
+    title: Device-profile one 50k->55k chunk - breakdown attention vs experts vs other
+    phase: P3
+    paths: [models/demos/ernie45_d_p/tt, models/demos/ernie45_d_p/tests]
+    deps: [P3.2, P2.13]
+    gate:
+      cmd: >-
+        TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
+        TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=6000
+        scripts/run_safe_pytest.sh --no-precompile models/demos/ernie45_d_p/tests/perf/test_profile_chunk.py -s
+      metrics:
+        device_ms_total: "> 0"
+        profiled_programs: "> 100"
+        chunk_wall_ms: "> 0"
+    notes: >-
+      Tracy host capture crashed (tracy-capture exit 1) on this box, so the breakdown uses the device profiler directly
+      (ttnn.get_latest_programs_perf_data per section). Device time is the max over the 4 chips per section.
