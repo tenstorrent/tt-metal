@@ -4,7 +4,7 @@
 
     python -m models.demos.deepseek_v3_d_p.tt.runners.kda_state_readback \
         --table /path/kv_chunk_table.pb --device-map /path/device_map[.rank0 ...] \
-        --real-len 56320 [--golden DIR] [--num-layers 93] [--slot 0] [--pcc 0.99] [--json out.json]
+        --real-len 56320 [--golden DIR] [--num-layers 93] [--slot 0] [--pcc 0.9] [--json out.json]
 
 Walks configs 1 (recurrent) and 2 (convolution) by model layer, reads every segment of every layer this
 host can reach with ``read_dram_umd`` (a UMD read is local-PCIe only, so run once per host of a
@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -72,6 +73,11 @@ def pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     y = y - y.mean()
     denominator = x.norm() * y.norm()
     return float((x @ y) / denominator) if denominator > 0 else float("nan")
+
+
+def _worse(a: float, b: float) -> float:
+    """min() that keeps NaN: an undefined PCC must not vanish behind a finite score."""
+    return float("nan") if math.isnan(a) or math.isnan(b) else min(a, b)
 
 
 def read_layer(table, config_id: int, kind: str, layer: int, slot: int, geometry, device_map):
@@ -148,14 +154,13 @@ def main(argv=None) -> int:
                 golden = golden.transpose(-1, -2)  # golden is [heads, v, k]; the device stores [k, v]
             score = pcc(state, golden)
             results.append({"config": config_id, "kind": kind, "layer": layer, "status": "ok", "pcc": score})
-            worst[kind] = min(worst.get(kind, 1.0), score)
+            worst[kind] = _worse(worst.get(kind, 1.0), score)
             logger.info(f"config {config_id} {kind:16s} layer {layer:3d}: pcc {score:.6f}")
 
     checked = [r for r in results if r["status"] == "ok"]
     skipped = [r for r in results if r["status"] != "ok"]
-    logger.info(
-        f"checked {len(checked)} layer states, skipped {len(skipped)} ({', '.join(sorted({r['status'] for r in skipped})) or 'none'})"
-    )
+    reasons = ", ".join(sorted({r["status"] for r in skipped})) or "none"
+    logger.info(f"checked {len(checked)} layer states, skipped {len(skipped)} ({reasons})")
     for kind, score in worst.items():
         logger.info(f"min pcc {kind}: {score:.6f}")
     if args.json:
@@ -166,11 +171,10 @@ def main(argv=None) -> int:
     if not checked:
         logger.error("no KDA layer was reachable from this host")
         return 2
-    failed = [r for r in checked if r["pcc"] < args.pcc]
+    failed = [r for r in checked if not r["pcc"] >= args.pcc]  # NaN fails the bar too
     if failed:
-        logger.error(
-            f"{len(failed)} layer state(s) below {args.pcc}: {[(r['kind'], r['layer'], round(r['pcc'], 4)) for r in failed]}"
-        )
+        shown = [(r["kind"], r["layer"], round(r["pcc"], 4)) for r in failed]
+        logger.error(f"{len(failed)} layer state(s) below {args.pcc}: {shown}")
         return 1
     logger.success(f"KDA state read-back PASS: {len(checked)} layer states >= {args.pcc}")
     return 0
