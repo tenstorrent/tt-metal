@@ -84,8 +84,8 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     ChipId src_phys = cp.get_physical_chip_id_from_fabric_node_id(src);
     ChipId dst_phys = cp.get_physical_chip_id_from_fabric_node_id(dst);
 
-    tt::tt_metal::IDevice* src_dev = tt::tt_metal::detail::GetActiveDevice(src_phys);
-    tt::tt_metal::IDevice* dst_dev = tt::tt_metal::detail::GetActiveDevice(dst_phys);
+    tt::tt_metal::IDevice* src_dev = fixture->get_mesh_device()->get_device(src_phys);
+    tt::tt_metal::IDevice* dst_dev = fixture->get_mesh_device()->get_device(dst_phys);
     if (!src_dev || !dst_dev) {
         ADD_FAILURE() << "Failed to find devices: src=" << src_phys << " dst=" << dst_phys;
         return;
