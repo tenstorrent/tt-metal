@@ -12,7 +12,7 @@
  },
  "G.s4096": {
   "attempts": 0,
-  "duration_s": 116.4,
+  "duration_s": 110.0,
   "history": [
    {
     "status": "PASS",
@@ -21,21 +21,25 @@
    {
     "status": "RESET",
     "t": "2026-09-25T22:04:39"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-25T22:18:59"
    }
   ],
-  "last_run": "2026-09-25T21:58:21",
+  "last_run": "2026-09-25T22:18:59",
   "log": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/logs/G.s4096.log",
   "metrics": {
-   "cpu_seconds": 105.1,
+   "cpu_seconds": 99.0,
    "golden_chunks": 2,
    "golden_hash_ok": 1,
    "golden_layers": 30,
-   "text_top5_acc_last_chunk": 0.2960429787635803
+   "text_top5_acc_last_chunk": 0.7039570212364197
   },
   "rc": 0,
   "reason": [],
-  "started": "2026-09-25T21:56:25",
-  "status": "TODO"
+  "started": "2026-09-25T22:17:09",
+  "status": "PASS"
  },
  "G.s56320": {
   "attempts": 0,
