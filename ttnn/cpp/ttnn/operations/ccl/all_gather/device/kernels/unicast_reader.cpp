@@ -9,6 +9,7 @@
 #include "api/core_local_mem.h"
 
 #include <cstdint>
+#include "tools/profiler/kernel_profiler.hpp"  // TEMP
 #include <utility>
 
 #include "unicast_common.hpp"
@@ -73,7 +74,9 @@ void kernel_main() {
     if constexpr (do_init_barrier) {
         if (num_iters > 0) {
             auto* barrier_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem);
+            DeviceTimestampedData("AG-BRW", 0);  // TEMP
             noc_semaphore_wait_min(barrier_ptr, 1);
+            DeviceTimestampedData("AG-BRV", 0);  // TEMP
             noc_semaphore_set(barrier_ptr, 0);
         }
     }
@@ -111,7 +114,9 @@ void kernel_main() {
             it.init(stripe, start, count);
             for (uint32_t chunks_read = 0; chunks_read < count;) {
                 const uint32_t batch = std::min(outputs_per_cb_page, count - chunks_read);
+                DeviceTimestampedData("AG-RCW", base_chunk + chunks_read + batch);  // TEMP: wait begins
                 noc_semaphore_wait_min(data_valid_ptr, base_chunk + chunks_read + batch);
+                DeviceTimestampedData("AG-RCV", base_chunk + chunks_read + batch);  // TEMP: count seen
 
                 cb.reserve_back(1);
                 uint32_t l1_write_addr = cb.get_write_ptr();
@@ -139,6 +144,8 @@ void kernel_main() {
     ///////////////////////////////////////////////////
 
     // Completion: wait for every chunk upstream delivers (relayed + sink), then reset for reuse.
+    DeviceTimestampedData("AG-FNW", total_chunks);  // TEMP
     noc_semaphore_wait_min(data_valid_ptr, total_chunks);
+    DeviceTimestampedData("AG-FIN", total_chunks);  // TEMP
     noc_semaphore_set(data_valid_ptr, 0);
 }

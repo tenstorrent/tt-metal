@@ -24,6 +24,50 @@
 
 namespace tt::tt_fabric {
 
+// TEMP: a worker's packet header as it enters a fabric connection, for the global-timeline CCL check. Only headers
+// that touch a semaphore: w0 its NoC address, w1 type << 56 | edm x << 48 | edm y << 40 | value, w2 the route
+// (2D: destination node id << 32 | mcast active; 1D: the hop fields), w3 the 2D multicast extents.
+FORCE_INLINE void temp_stamp_fabric_header(uint32_t hdr, uint32_t edm_x, uint32_t edm_y) {
+#if defined(PROFILE_KERNEL) && defined(PROFILE_STREAMING) && !defined(DISPATCH_KERNEL) && \
+    !defined(STREAMING_PROFILER_RELAY_KERNEL) && (defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC))
+    const volatile tt_l1_ptr uint8_t* b = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(hdr);
+    const auto u32 = [&](uint32_t off) { return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hdr + off); };
+    const auto u64 = [&](uint32_t off) { return (uint64_t(u32(off + 4)) << 32) | u32(off); };
+    const uint32_t type = b[42];
+    uint64_t sem = 0;
+    uint32_t val = 0;
+    if (type == NOC_UNICAST_ATOMIC_INC) {
+        sem = u64(0), val = u32(8);
+    } else if (type == NOC_FUSED_UNICAST_ATOMIC_INC) {
+        sem = u64(8), val = u32(16);
+    } else if (type == NOC_UNICAST_INLINE_WRITE) {
+        sem = u64(0), val = u32(8);
+    } else if (type == NOC_MULTICAST_ATOMIC_INC) {
+        sem = (uint64_t(u32(8)) << 32) | u32(0), val = u32(4);
+    } else if (type == NOC_UNICAST_SCATTER_WRITE) {
+        const uint32_t n = b[38], enc = b[39];
+        if (n == 0 || ((enc >> (2 * (n - 1))) & 3) < CHUNK_ENCODING_SEMINC_NO_FLUSH) {
+            return;
+        }
+        sem = u64(8 * (n - 1));
+        val = n - 1 < NOC_SCATTER_WRITE_MAX_CHUNKS - 1 ? *reinterpret_cast<volatile tt_l1_ptr uint16_t*>(hdr + 32 + 2 * (n - 1)) : 0;
+    } else {
+        return;
+    }
+    const uint64_t w1 = (uint64_t(type) << 56) | (uint64_t(edm_x & 0xFF) << 48) | (uint64_t(edm_y & 0xFF) << 40) | val;
+    uint64_t route = 0, mcast = 0;
+    if constexpr (std::is_same_v<PACKET_HEADER_TYPE, HybridMeshPacketHeader>) {
+        const volatile tt_l1_ptr HybridMeshPacketHeader* h = reinterpret_cast<volatile tt_l1_ptr HybridMeshPacketHeader*>(hdr);
+        route = (uint64_t(h->dst_start_node_id) << 32) | h->is_mcast_active;
+        mcast = h->mcast_params_64;
+    } else {
+        route = u32(44);
+    }
+    TT_ZONE_DEFINE_ID(temp_fab_hash, "FSND");
+    kernel_profiler::time_stamped_data(temp_fab_hash, sem, w1, route, mcast);
+#endif
+}
+
 template <bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, uint8_t EDM_NUM_BUFFER_SLOTS = 0, uint8_t VC_ID = 0>
 struct WorkerToFabricEdmSenderBase;
 
@@ -357,6 +401,7 @@ struct WorkerToFabricEdmSenderBase {
         uint8_t noc = get_fabric_worker_noc()) {
         ASSERT(tt::tt_fabric::is_valid(
             *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(header_source_l1_addr))));
+        temp_stamp_fabric_header(header_source_l1_addr, this->edm_noc_x, this->edm_noc_y);
 
         const uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr(noc);
         send_chunk_from_address<EDM_IO_BLOCKING_MODE::NON_BLOCKING, posted>(
@@ -392,6 +437,7 @@ struct WorkerToFabricEdmSenderBase {
         uint8_t noc = get_fabric_worker_noc()) {
         ASSERT(tt::tt_fabric::is_valid(
             *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(header_source_l1_addr))));
+        temp_stamp_fabric_header(header_source_l1_addr, this->edm_noc_x, this->edm_noc_y);
 
         const uint32_t slot_l1_addr = this->current_buffer_slot_l1_addr();
         this->issue_payload_to_current_slot_stateful<posted>(
@@ -406,6 +452,7 @@ struct WorkerToFabricEdmSenderBase {
         ASSERT(packet_size_bytes <= this->buffer_size_bytes);
         ASSERT(tt::tt_fabric::is_valid(
             *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_source_l1_addr))));
+        temp_stamp_fabric_header(packet_source_l1_addr, this->edm_noc_x, this->edm_noc_y);
 
         const uint32_t slot_l1_addr = this->current_buffer_slot_l1_addr();
         ncrisc_noc_write_with_state<noc_mode, /*posted=*/posted, /*update_counter=*/true, /*one_packet=*/false>(
@@ -422,6 +469,7 @@ struct WorkerToFabricEdmSenderBase {
         ASSERT(packet_size_bytes <= this->buffer_size_bytes);
         ASSERT(tt::tt_fabric::is_valid(
             *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_source_l1_addr))));
+        temp_stamp_fabric_header(packet_source_l1_addr, this->edm_noc_x, this->edm_noc_y);
 
         const uint32_t slot_l1_addr = this->current_buffer_slot_l1_addr();
         noc_async_write_one_packet_with_trid_with_state</*update_counter=*/true, posted>(
@@ -779,6 +827,7 @@ private:
         ASSERT(size_bytes <= this->buffer_size_bytes);
         ASSERT(tt::tt_fabric::is_valid(
             *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address))));
+        temp_stamp_fabric_header(source_address, this->edm_noc_x, this->edm_noc_y);
         send_chunk_from_address<blocking_mode, posted>(source_address, 1, size_bytes, buffer_address, noc);
         post_send_payload_increment_pointers(noc);
     }

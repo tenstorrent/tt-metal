@@ -23,6 +23,19 @@
 #include "api/tensor/tensor_accessor.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "internal/debug/sanitize.h"
+
+// TEMP: semaphore stamps for the global-timeline CCL check (worker data-movement RISCs only)
+#if defined(PROFILE_KERNEL) && defined(PROFILE_STREAMING) && !defined(DISPATCH_KERNEL) && \
+    !defined(STREAMING_PROFILER_RELAY_KERNEL) && (defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC))
+#define TEMP_SYNC_ON
+#define TEMP_SYNC_STAMP(name, ...)                                    \
+    {                                                                 \
+        TT_ZONE_DEFINE_ID(temp_sync_hash, name);                      \
+        kernel_profiler::time_stamped_data(temp_sync_hash, __VA_ARGS__); \
+    }
+#else
+#define TEMP_SYNC_STAMP(name, ...)
+#endif
 #include "api/debug/assert.h"
 
 #if !defined(KERNEL_BUILD)
@@ -1526,6 +1539,7 @@ FORCE_INLINE uintptr_t get_semaphore(uint32_t semaphore_id) {
 inline void noc_semaphore_set_remote(
     std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, uint8_t noc = noc_index) {
     WAYPOINT("NSSW");
+    TEMP_SYNC_STAMP("SSETR", dst_noc_addr, uint64_t(*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_local_l1_addr)));
 
     constexpr uint32_t size_bytes = 4;
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size_bytes);
@@ -1584,6 +1598,33 @@ inline void noc_semaphore_set_remote(
  * | linked                 | Whether the transaction is linked                                        | bool     | true or false                              | False    |
  * | noc                    | Which NOC to use for the transaction                                     | uint8_t  | 0 or 1                                     | False    |
  */
+// TEMP: a command buffer's atomic or 4-byte write, read back just before its send request
+#ifdef TEMP_SYNC_ON
+inline __attribute__((noinline)) void temp_stamp_cmdbuf(uint32_t noc, uint32_t cmd_buf) {
+    const uint32_t ctrl = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_CTRL);
+    if (ctrl & NOC_CMD_AT) {
+        const uint64_t dst =
+            (uint64_t(NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE)) << NOC_ADDR_COORD_SHIFT) |
+            NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_TARG_ADDR_LO);
+        TEMP_SYNC_STAMP(
+            "CINC", dst, uint64_t(NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_AT_DATA)), uint64_t(ctrl) | uint64_t(noc) << 32);
+    } else if (NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_AT_LEN_BE) == 4) {
+        const uint64_t dst =
+            (uint64_t(NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_RET_ADDR_COORDINATE)) << NOC_ADDR_COORD_SHIFT) |
+            NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_RET_ADDR_LO);
+        const uint32_t src = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_TARG_ADDR_LO);
+        TEMP_SYNC_STAMP(
+            "CSET",
+            dst,
+            uint64_t(*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src)),
+            uint64_t(ctrl) | uint64_t(noc) << 32);
+    }
+}
+#define TEMP_STAMP_CMDBUF(noc, cmd_buf) temp_stamp_cmdbuf(noc, cmd_buf)
+#else
+#define TEMP_STAMP_CMDBUF(noc, cmd_buf)
+#endif
+
 // clang-format on
 inline void noc_semaphore_set_multicast(
     uint32_t src_local_l1_addr,
@@ -1593,6 +1634,11 @@ inline void noc_semaphore_set_multicast(
     uint8_t noc = noc_index,
     uint8_t vc = NOC_MULTICAST_WRITE_VC) {
     WAYPOINT("NSNW");
+    TEMP_SYNC_STAMP(
+        "CSET",
+        dst_noc_addr_multicast,
+        uint64_t(*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_local_l1_addr)),
+        uint64_t(NOC_CMD_BRCST_PACKET) | uint64_t(noc) << 32);
 
     constexpr uint32_t size_bytes = 4;
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size_bytes);
@@ -1658,6 +1704,11 @@ inline void noc_semaphore_set_multicast_loopback_src(
     bool linked = false,
     uint8_t noc = noc_index) {
     WAYPOINT("NSLW");
+    TEMP_SYNC_STAMP(
+        "CSET",
+        dst_noc_addr_multicast,
+        uint64_t(*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_local_l1_addr)),
+        uint64_t(NOC_CMD_BRCST_PACKET | NOC_CMD_BRCST_SRC_INCLUDE) | uint64_t(noc) << 32);
 
     constexpr uint32_t size_bytes = 4;
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size_bytes);
@@ -1952,12 +2003,14 @@ void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
     RECORD_NOC_EVENT(NocEventType::SEMAPHORE_WAIT, false, -1);
 
     WAYPOINT("NSW");
+    TEMP_SYNC_STAMP("SW0", (uint64_t(reinterpret_cast<uint32_t>(sem_addr)) << 32) | val);
     {
         SYNC_WAIT("SYNC-SEM-WAIT", reinterpret_cast<uintptr_t>(sem_addr));
         do {
             invalidate_l1_cache();
         } while ((*sem_addr) != val);
     }
+    TEMP_SYNC_STAMP("SW1", (uint64_t(reinterpret_cast<uint32_t>(sem_addr)) << 32) | val, uint64_t(*sem_addr));
     WAYPOINT("NSD");
 }
 
@@ -1981,12 +2034,14 @@ void noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val)
     RECORD_NOC_EVENT(NocEventType::SEMAPHORE_WAIT, false, -1);
 
     WAYPOINT("NSMW");
+    TEMP_SYNC_STAMP("SM0", (uint64_t(reinterpret_cast<uint32_t>(sem_addr)) << 32) | val);
     {
         SYNC_WAIT("SYNC-SEM-WAIT", reinterpret_cast<uintptr_t>(sem_addr));
         do {
             invalidate_l1_cache();
         } while ((*sem_addr) < val);
     }
+    TEMP_SYNC_STAMP("SM1", (uint64_t(reinterpret_cast<uint32_t>(sem_addr)) << 32) | val, uint64_t(*sem_addr));
     WAYPOINT("NSMD");
 }
 
@@ -2012,6 +2067,7 @@ void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
 
     // set semaphore value to val
     (*sem_addr) = val;
+    TEMP_SYNC_STAMP("SSET", (uint64_t(reinterpret_cast<uint32_t>(sem_addr)) << 32) | val);
 }
 
 // clang-format off
@@ -2282,6 +2338,7 @@ FORCE_INLINE void noc_semaphore_inc(
     SYNC_SIGNAL_NOC_ADDR("SYNC-SEM-SET-REMOTE", addr, noc_id);
 
     WAYPOINT("NSIW");
+    TEMP_SYNC_STAMP("SINC", addr, uint64_t(incr), uint64_t(NOC_CMD_AT) | uint64_t(noc_id) << 32);
     DEBUG_SANITIZE_NOC_ADDR(noc_id, addr, 4);
     DEBUG_INSERT_DELAY(TransactionAtomic);
     noc_fast_atomic_increment<noc_mode>(
@@ -2327,6 +2384,7 @@ FORCE_INLINE void noc_semaphore_inc_multicast(
     SYNC_SIGNAL_NOC_ADDR("SYNC-SEM-SET-REMOTE", addr, noc_id);
 
     WAYPOINT("NIMW");
+    TEMP_SYNC_STAMP("CINC", addr, uint64_t(incr), uint64_t(NOC_CMD_BRCST_PACKET | NOC_CMD_AT) | uint64_t(noc_id) << 32);
     DEBUG_SANITIZE_NOC_MULTI_ADDR(noc_id, addr, 4);
     DEBUG_INSERT_DELAY(TransactionAtomic);
     noc_fast_multicast_atomic_increment<noc_mode>(
