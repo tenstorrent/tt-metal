@@ -140,3 +140,33 @@ def tp_mesh():
 
     _close_device_mesh_quietly()
     _restore_mgd_path(previous_mgd)
+
+
+# ---------------------------------------------------------------------------
+# Shared [1, 2] FSDP mesh
+# ---------------------------------------------------------------------------
+
+FSDP_MESH_SHAPE = (1, 2)  # same shape as TP_MESH_SHAPE, so _MGD_FOR_ARCH_AND_SHAPE serves both
+
+
+@pytest.fixture(scope="module")
+def fsdp_mesh():
+    """A ``[1, 2]`` mesh with axes ``("dp", "fsdp")``, per requesting module.
+
+    ``"fsdp"`` is the axis ``ttml.fsdp.fully_shard`` shards across by default. FSDP does not consult the
+    ParallelismContext, so none is installed here and this fixture is usable in a session before or after
+    ``tp_mesh`` modules. Module-scoped for the same reason as ``tp_mesh``; skips if the mesh cannot be opened.
+    """
+    previous_mgd = _ensure_mgd_path(FSDP_MESH_SHAPE)
+    _close_device_mesh_quietly()
+    try:
+        ttml.open_device_mesh(ttml.Mesh(FSDP_MESH_SHAPE, ("dp", "fsdp")))
+    except Exception as e:  # noqa: BLE001
+        _close_device_mesh_quietly()
+        _restore_mgd_path(previous_mgd)
+        pytest.skip(f"needs a [{FSDP_MESH_SHAPE[0]}, {FSDP_MESH_SHAPE[1]}] 'fsdp' mesh: {e}")
+
+    yield ttml.mesh()
+
+    _close_device_mesh_quietly()
+    _restore_mgd_path(previous_mgd)
