@@ -124,7 +124,7 @@ def test_binary_logical_xor_ttnn(input_shapes, device):
     golden_function = ttnn.get_golden_function(ttnn.logical_xor)
     golden_tensor = golden_function(in_data1, in_data2)
 
-    assert torch.equal(output_tensor, golden_tensor)
+    assert_equal(golden_tensor.float(), output_tensor.float())
 
 
 @pytest.mark.parametrize(
