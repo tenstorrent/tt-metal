@@ -26,7 +26,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc, is_blackhole
 from models.demos.blackhole.qwen36.tests.test_factory import (
     get_pcc_threshold,
     model_path,
@@ -35,6 +35,7 @@ from models.demos.blackhole.qwen36.tests.test_factory import (
 )
 from models.demos.blackhole.qwen36.tt.attention.rope_tp import (
     apply_partial_rope_decode,
+    apply_partial_rope_decode_bh,
     apply_partial_rope_prefill,
     rot_mats_decode,
     rot_mats_prefill,
@@ -127,11 +128,16 @@ def test_partial_rope_decode(mesh_device, reset_seeds, ensure_gc, request):
         use_height_and_width_as_shard_shape=True,
     )
     cos_tt, sin_tt = rot_mats_decode(mesh_device, rope_dim, 256, theta, positions)
-    cos_s, sin_s = shard_rope_tables_decode(cos_tt, sin_tt, head_mc)
-    q_sh = ttnn.to_memory_config(replicate_to_device(mesh_device, q), head_mc)
-    k_sh = ttnn.to_memory_config(replicate_to_device(mesh_device, k), head_mc)
-    q_tt = apply_partial_rope_decode(q_sh, cos_s, sin_s, NH, B, rope_dim)
-    k_tt = apply_partial_rope_decode(k_sh, cos_s, sin_s, NKV, B, rope_dim)
+    if is_blackhole():
+        # Blackhole decode attention runs the interleaved rope (apply_partial_rope_decode_bh).
+        q_tt = apply_partial_rope_decode_bh(replicate_to_device(mesh_device, q), cos_tt, sin_tt, NH, B, rope_dim)
+        k_tt = apply_partial_rope_decode_bh(replicate_to_device(mesh_device, k), cos_tt, sin_tt, NKV, B, rope_dim)
+    else:
+        cos_s, sin_s = shard_rope_tables_decode(cos_tt, sin_tt, head_mc)
+        q_sh = ttnn.to_memory_config(replicate_to_device(mesh_device, q), head_mc)
+        k_sh = ttnn.to_memory_config(replicate_to_device(mesh_device, k), head_mc)
+        q_tt = apply_partial_rope_decode(q_sh, cos_s, sin_s, NH, B, rope_dim)
+        k_tt = apply_partial_rope_decode(k_sh, cos_s, sin_s, NKV, B, rope_dim)
     q_out, k_out = _read0(mesh_device, q_tt), _read0(mesh_device, k_tt)
 
     # ---- torch reference (per-user positions, heads in dim 2 -> unsqueeze_dim=2) ----

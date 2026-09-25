@@ -6,6 +6,7 @@ fractured-hidden layout the dense MLP produces.
 """
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.blackhole.qwen36.tt.moe.experts import Qwen36Experts
 from models.demos.blackhole.qwen36.tt.moe.router import Qwen36Router
 from models.demos.blackhole.qwen36.tt.moe.shared import Qwen36SharedExpert
@@ -38,16 +39,20 @@ class Qwen36MoE:
 
     def forward(self, x, mode="decode"):
         # Stage decode x in L1 once (three consumers read it); the LAYOUT matters too -- they need an interleaved in0, so test the memory layout, not just the buffer type.
+        # Wormhole-only, like the reduce-scatter fold below; Blackhole passes x through unchanged.
+        wh = not is_blackhole()
         x_mc = x.memory_config()
-        if mode == "decode" and (
-            x_mc.buffer_type != ttnn.BufferType.L1 or x_mc.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
+        if (
+            wh
+            and mode == "decode"
+            and (x_mc.buffer_type != ttnn.BufferType.L1 or x_mc.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED)
         ):
             x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
 
         # Both branches produce a row-parallel partial over the SAME full hidden dim, and
         # reduce-scatter is linear, so RS(routed + shared) == RS(routed) + RS(shared). Summing
         # first costs one collective instead of two. Single-device has no collective to fold.
-        fold = self.shared is not None and self.num_devices > 1
+        fold = wh and self.shared is not None and self.num_devices > 1
 
         dense_routing = self.router(x)
         out = self.experts(x, dense_routing, mode=mode, reduce=not fold)

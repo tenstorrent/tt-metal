@@ -53,6 +53,10 @@ class Qwen36SharedExpert:
         )
 
     def forward(self, x, reduce=True):
+        if tpc.is_blackhole():
+            gate = ttnn.sigmoid(ttnn.linear(x, self.gate_weight))  # [1,1,S,1] replicated
+            shared_out = self.mlp.forward(x)  # fractured hidden on TP, full on single device
+            return ttnn.mul(shared_out, gate)
         # Same ttnn-auto problem as the router matmul (see router.py): this [S,H] x [H,1] gate
         # measured 21 us on the auto program and 8 on the explicit single-core 1D config.
         decode = x.shape[-2] <= ttnn.TILE_SIZE

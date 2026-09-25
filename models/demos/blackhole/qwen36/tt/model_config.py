@@ -157,8 +157,11 @@ class Qwen36ModelArgs(ModelArgs):
         self.gdn_conv_channel_chunks = chunks
         self.gdn_z_dim_tp = self.gdn_z_dim // tp
         self.gdn_qkvz_dim_tp = (self.gdn_qkv_dim + self.gdn_z_dim) // tp
-        # Width of the fused [qkv|z|a|b] in-projection; a/b get a whole TILE each so their slices stay tile-aligned.
-        self.gdn_qkvzab_dim_tp = self.gdn_qkvz_dim_tp + 2 * tpc.TILE_SIZE
+        # Width of the fused [qkv|z|a|b] in-projection; on Wormhole a/b get a whole TILE each so their
+        # slices stay tile-aligned, Blackhole keeps the bare 2*nv_tp packing (see gdn/tp.py _project_qkvzab).
+        self.gdn_qkvzab_dim_tp = self.gdn_qkvz_dim_tp + (
+            2 * self.gdn_nv_tp if tpc.is_blackhole() else 2 * tpc.TILE_SIZE
+        )
         self.gdn_value_dim_tp = self.gdn_value_dim // tp
         self.gdn_key_dim_tp = self.gdn_key_dim // tp
         self.attn_out_dim_tp = (self.n_heads * self.head_dim) // tp
