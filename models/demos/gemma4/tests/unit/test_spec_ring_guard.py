@@ -163,3 +163,27 @@ def test_the_check_is_on_the_ring_not_on_the_env_var(monkeypatch, expect_error):
     monkeypatch.setenv(SPEC_RING_HEADROOM_ENV, "32")
     with expect_error(ValueError, "power of two"):
         _reserve_spec_ring_headroom(WINDOW, SHIPPED_WIDTH, "Gemma4DFlash")
+
+
+def test_every_real_speculating_class_gets_sized():
+    """The three shipped speculating classes, by their real _SPEC_N.
+
+    The fakes above pin the arithmetic; this pins the wiring. A new serving
+    class that forgets ``_SPEC_N``, or one whose K changes, silently falls back
+    to the exact-window ring -- which is the #57701 defect, and is invisible
+    until someone reads generated text past the ring.
+    """
+    from models.demos.gemma4.tt.generator_vllm import (
+        Gemma4DFlashContractForCausalLM,
+        Gemma4DFlashForCausalLM,
+        Gemma4MTPForCausalLM,
+    )
+
+    for cls in (Gemma4DFlashForCausalLM, Gemma4DFlashContractForCausalLM, Gemma4MTPForCausalLM):
+        os.environ.pop(SPEC_RING_HEADROOM_ENV, None)
+        assert int(cls._SPEC_N) > 1, f"{cls.__name__} must declare a verify width"
+        _auto_size_spec_ring(cls, _cfg(), bounded_sliding=True)
+        ring = bounded_ring_modulo(WINDOW)
+        assert ring - WINDOW >= cls._SPEC_N - 1, f"{cls.__name__}: ring {ring} cannot hold its drafts"
+        # and the guard agrees, including for the rail that declines at the wrap
+        _reserve_spec_ring_headroom(WINDOW, cls._SPEC_N, cls.__name__, declines_at_wrap=cls._SPEC_DECLINES_AT_RING_WRAP)
