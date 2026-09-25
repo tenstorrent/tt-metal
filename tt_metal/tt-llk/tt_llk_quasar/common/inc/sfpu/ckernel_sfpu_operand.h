@@ -14,6 +14,8 @@ namespace ckernel::sfpu
 namespace detail
 {
 
+inline constexpr sfpi::UnpackSrcS srcs_reg {};
+
 template <SfpuReg REG>
 sfpi_inline auto sfpu_operand_access(int index)
 {
@@ -25,9 +27,8 @@ sfpi_inline auto sfpu_operand_access(int index)
     else
     {
         // SFPI's SrcS builtins select the register file (SFP_SRCSREG_BASE is 0); never add
-        // SFPU_SRCS_BASE_ADDR here. The returned proxy owns its address, not this local.
-        sfpi::UnpackSrcS srcs;
-        return srcs[index];
+        // SFPU_SRCS_BASE_ADDR here.
+        return srcs_reg[index];
     }
 }
 

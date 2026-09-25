@@ -151,9 +151,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_bfd_alloc.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_sfpu.h"
+#include "llk_sfpu/ckernel_sfpu_exp.h"
 #include "llk_srcs.h"
 #include "params.h"
-#include "sfpu/ckernel_sfpu_exp.h"
 
 using namespace ckernel;
 using namespace ckernel::math;
