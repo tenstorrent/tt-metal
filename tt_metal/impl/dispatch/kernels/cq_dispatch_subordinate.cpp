@@ -170,9 +170,8 @@ extern "C" {
 // These variables are used by triage to help report dispatcher state.
 volatile uint32_t last_wait_count = 0;
 #ifdef FDS_SIGNALLING
-// Last value pushed to the auto dispatch queue, not the value currently on the wire.
+// Last go token pushed to the auto dispatch queue, not the value currently on the wire.
 volatile uint32_t last_go_token = 0;
-volatile uint32_t last_fds_go_pending_mask = 0;
 volatile uint32_t last_fds_tracked_sub_device_mask = 0;
 #endif
 volatile uint32_t last_wait_stream = 0;
@@ -197,30 +196,23 @@ static std::array<uint32_t, max_num_worker_sems> workers_per_sub_device = {0};
 static std::array<uint32_t, max_num_worker_sems> expected_worker_completion_count = {0};
 static std::array<uint32_t, max_num_worker_sems> collected_worker_completion_count = {0};
 static uint32_t tracked_sub_device_mask = 0;
-static uint32_t fds_go_pending_mask = 0;
-static uint32_t fds_last_pushed_go_value = overlay::fds_signalling::idle_group_id;
 static uint32_t fds_last_go_push_timestamp = 0;
 
 FORCE_INLINE
-void service_fds_go_wire() {
-    if (fds_go_pending_mask == 0 && fds_last_pushed_go_value == overlay::fds_signalling::idle_group_id) {
-        return;
+void push_auto_dispatch_entry(uint32_t value) {
+    while (overlay::fds_signalling::dispatch_read_auto_dispatch_fifo_full() != 0) {
     }
-    if (overlay::fds_signalling::dispatch_read_auto_dispatch_fifo_full() != 0) {
-        return;
-    }
-    if (fds_last_pushed_go_value != overlay::fds_signalling::idle_group_id) {
-        overlay::fds_signalling::dispatch_write_go(overlay::fds_signalling::idle_group_id);
-        fds_last_pushed_go_value = overlay::fds_signalling::idle_group_id;
-    } else {
-        const uint32_t sub_device_index = __builtin_ctz(fds_go_pending_mask);
-        const uint32_t go_token = overlay::fds_signalling::go_group_for_sub_device(sub_device_index);
-        overlay::fds_signalling::dispatch_write_go(go_token);
-        fds_last_pushed_go_value = go_token;
-        fds_go_pending_mask &= ~(1U << sub_device_index);
-    }
-    last_go_token = fds_last_pushed_go_value;
-    last_fds_go_pending_mask = fds_go_pending_mask;
+    overlay::fds_signalling::dispatch_write_go(value);
+}
+
+// Queues the sub-device's go followed by idle, so the wire always returns to idle and a repeat of the
+// same group is seen as a new go.
+FORCE_INLINE
+void send_fds_go(uint32_t sub_device_index) {
+    const uint32_t go_token = overlay::fds_signalling::go_group_for_sub_device(sub_device_index);
+    push_auto_dispatch_entry(go_token);
+    push_auto_dispatch_entry(overlay::fds_signalling::idle_group_id);
+    last_go_token = go_token;
     fds_last_go_push_timestamp = get_timestamp_32b();
 }
 
@@ -279,14 +271,6 @@ void begin_worker_completion_tracking(uint32_t sub_device_index) {
     WAYPOINT("FCLD");
 }
 
-// Advances both halves of the protocol: credits completions that landed, and moves the go wire on.
-// Called from every loop that can block, so a queued go is never held behind an unrelated stall.
-FORCE_INLINE
-void service_fds_signalling() {
-    collect_worker_completions();
-    service_fds_go_wire();
-}
-
 FORCE_INLINE
 void init_fds_signalling() {
     const uint32_t previous_auto_dispatch_cycle_count =
@@ -314,18 +298,14 @@ void init_fds_signalling() {
     // Worker filters capture only on a change, so a first go that repeats the group a previous run left on the
     // wire would be missed. Queue idle ahead of it; the pacing holds idle long enough for every worker to capture.
     overlay::fds_signalling::dispatch_write_go(overlay::fds_signalling::idle_group_id);
-    fds_last_pushed_go_value = overlay::fds_signalling::idle_group_id;
     last_go_token = overlay::fds_signalling::idle_group_id;
     fds_last_go_push_timestamp = get_timestamp_32b();
     WAYPOINT("FACD");
 }
 
-// Runs the wire down to idle. Preconditions differ per site, so each caller states its own.
+// Waits until every queued entry has reached the wire, which then holds idle since every go is followed by one.
 FORCE_INLINE
 void drain_fds_go_wire() {
-    while (fds_go_pending_mask != 0 || fds_last_pushed_go_value != overlay::fds_signalling::idle_group_id) {
-        service_fds_go_wire();
-    }
     const uint32_t drain_cycles = overlay::auto_dispatch_drain_cycles(
         overlay::dispatch_auto_dispatch_queue_depth,
         overlay::fds_signalling::dispatch_auto_dispatch_pacing_cycle_count);
@@ -337,7 +317,6 @@ void drain_fds_go_wire() {
 }
 
 #else
-FORCE_INLINE void service_fds_signalling() {}
 FORCE_INLINE void collect_worker_completions() {}
 FORCE_INLINE void begin_worker_completion_tracking(uint32_t) {}
 FORCE_INLINE void init_fds_signalling() {}
@@ -447,7 +426,7 @@ void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
 #else
     while (stream_wrap_gt(wait_count, *worker_sem)) {
 #endif
-        service_fds_signalling();
+        collect_worker_completions();
         if (rt_profiler_enabled) {
             record_realtime_timestamp(rt_profiler_msg, false);
         }
@@ -496,7 +475,7 @@ FORCE_INLINE void cb_acquire_pages_dispatch_s(uint32_t n) {
     while (wrap_gt(num_pages_acquired + n, *sem_addr)) {
         invalidate_l1_cache();
         update_worker_completion_count_on_dispatch_d();
-        service_fds_signalling();
+        collect_worker_completions();
 #if DEVICE_PRINT_DISPATCH_ENABLED
         device_print_dispatcher.execute();
 #endif
@@ -568,9 +547,7 @@ FORCE_INLINE void wait_for_workers_and_send_go_signal(
     if (use_fds_go) {
         DPRINT("DISPATCH_S: go FDS\n");
         begin_worker_completion_tracking(/*sub_device_index=*/multicast_go_offset);
-        fds_go_pending_mask |= 1U << multicast_go_offset;
-        last_fds_go_pending_mask = fds_go_pending_mask;
-        service_fds_go_wire();
+        send_fds_go(/*sub_device_index=*/multicast_go_offset);
     } else if (multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET) {
         DPRINT("DISPATCH_S: go NOC\n");
         // The wait precedes NOC state programming so DEVICE_PRINT cannot clobber the state before the write.
@@ -635,7 +612,7 @@ void process_go_signal_mcast_cmd() {
         invalidate_l1_cache();
         // Update dispatch_d with the latest num_workers
         update_worker_completion_count_on_dispatch_d();
-        service_fds_signalling();
+        collect_worker_completions();
 #if DEVICE_PRINT_DISPATCH_ENABLED
         device_print_dispatcher.execute();
 #endif
@@ -763,7 +740,6 @@ void set_num_worker_sems() {
 #ifdef FDS_SIGNALLING
     // The worker-semaphore count is about to change, so no round may be open against the old count.
     ASSERT(tracked_sub_device_mask == 0);
-    ASSERT(fds_go_pending_mask == 0);
 #endif
     num_worker_sems = load_aligned<uint32_t>(&cmd->set_num_worker_sems.num_worker_sems);
     ASSERT(num_worker_sems <= max_num_worker_sems);
@@ -889,7 +865,7 @@ void kernel_main() {
         device_print_dispatcher.execute();
 #endif
         cb_acquire_pages_dispatch_s<my_noc_xy, my_dispatch_cb_sem_id>(1);
-        service_fds_signalling();
+        collect_worker_completions();
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
         // Upstream relays this command by NoC write, which does not snoop, so the header must be dropped before
         // it is read cached. CPU reads past this window carry their own invalidate; payload handed to
