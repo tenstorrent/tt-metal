@@ -4,9 +4,11 @@
 
 #include "tt_metal/distributed/hd_socket_descriptor.hpp"
 #include "tt_metal/distributed/named_shm.hpp"
+#include "tt_metal/distributed/shm_resource_tracker.hpp"
 #include "hd_socket_descriptor_generated.h"
 
 #include <tt_stl/assert.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_env_impl.hpp"
@@ -16,9 +18,10 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
-#include <filesystem>
 #include <fstream>
+#include <optional>
 #include <thread>
+#include <utility>
 
 namespace tt::tt_metal::distributed {
 
@@ -32,6 +35,8 @@ void HDSocketDescriptor::populate_from_owner(
     socket_type = type;
     shm_name = shm.name();
     shm_size = shm.size();
+    // Both halves of the owner identity name the process that created the shm.
+    owner_start_time = ShmResourceTracker::process_start_time(ShmResourceTracker::pid_from_shm_name(shm_name));
     data_offset = 0;
     fifo_size = fifo_size_arg;
     config_buffer_address = config_buffer_address_arg;
@@ -84,7 +89,8 @@ void HDSocketDescriptor::write_to_file(const std::string& path) const {
         pcie_alignment,
         bytes_acked_device_offset,
         connector_state_offset,
-        fb_mesh_coord);
+        fb_mesh_coord,
+        owner_start_time);
     builder.Finish(fb_desc);
 
     std::string tmp_path = path + ".tmp";
@@ -101,9 +107,13 @@ void HDSocketDescriptor::write_to_file(const std::string& path) const {
         std::strerror(errno));
 }
 
-HDSocketDescriptor HDSocketDescriptor::read_from_file(const std::string& path) {
+namespace {
+
+std::optional<HDSocketDescriptor> read_if_present(const std::string& path) {
     std::ifstream ifs(path, std::ios::binary | std::ios::ate);
-    TT_FATAL(ifs.is_open(), "Failed to open descriptor file for reading: {}", path);
+    if (!ifs.is_open()) {
+        return std::nullopt;
+    }
 
     auto pos = ifs.tellg();
     TT_FATAL(pos > 0, "Descriptor file is empty or unreadable: {}", path);
@@ -138,14 +148,50 @@ HDSocketDescriptor HDSocketDescriptor::read_from_file(const std::string& path) {
     if (const auto* mc = fb->mesh_coord()) {
         desc.mesh_coord.assign(mc->begin(), mc->end());
     }
+    desc.owner_start_time = fb->owner_start_time();
 
     return desc;
+}
+
+}  // namespace
+
+HDSocketDescriptor HDSocketDescriptor::read_from_file(const std::string& path) {
+    auto desc = read_if_present(path);
+    TT_FATAL(desc.has_value(), "Failed to open descriptor file for reading: {}", path);
+    return std::move(*desc);
+}
+
+bool HDSocketDescriptor::owner_alive() const {
+    const pid_t owner_pid = ShmResourceTracker::pid_from_shm_name(shm_name);
+    if (owner_pid <= 0) {
+        return true;
+    }
+    return ShmResourceTracker::is_process_alive(owner_pid, owner_start_time);
 }
 
 HDSocketDescriptor HDSocketDescriptor::wait_and_read(
     const std::string& descriptor_path, const std::string& expected_type, uint32_t timeout_ms) {
     auto start_time = std::chrono::high_resolution_clock::now();
-    while (!std::filesystem::exists(descriptor_path)) {
+    bool logged_dead_owner = false;
+    while (true) {
+        if (auto desc = read_if_present(descriptor_path)) {
+            if (desc->owner_alive()) {
+                TT_FATAL(
+                    desc->socket_type == expected_type,
+                    "Descriptor type mismatch: expected '{}', got '{}'",
+                    expected_type,
+                    desc->socket_type);
+                return std::move(*desc);
+            }
+            if (!logged_dead_owner) {
+                log_warning(
+                    LogMetal,
+                    "Descriptor {} was exported by a process that is no longer alive; waiting for a live owner "
+                    "to publish it",
+                    descriptor_path);
+                logged_dead_owner = true;
+            }
+        }
         auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                               std::chrono::high_resolution_clock::now() - start_time)
                               .count();
@@ -154,13 +200,6 @@ HDSocketDescriptor HDSocketDescriptor::wait_and_read(
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    auto desc = read_from_file(descriptor_path);
-    TT_FATAL(
-        desc.socket_type == expected_type,
-        "Descriptor type mismatch: expected '{}', got '{}'",
-        expected_type,
-        desc.socket_type);
-    return desc;
 }
 
 }  // namespace tt::tt_metal::distributed

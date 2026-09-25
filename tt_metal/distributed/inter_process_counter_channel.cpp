@@ -5,6 +5,7 @@
 #include <internal/service/inter_process_counter_channel.hpp>
 
 #include "inter_process_counter_layout.hpp"
+#include "shm_resource_tracker.hpp"
 
 #include <tt-logger/tt-logger.hpp>
 
@@ -32,6 +33,11 @@ std::string posix_errno_str() { return std::strerror(errno); }
 
 [[noreturn]] void throw_posix(const std::string& op, const std::string& detail) {
     throw std::runtime_error("InterProcessCounterChannel: " + op + " failed (" + detail + "): " + posix_errno_str());
+}
+
+bool is_fully_sized(int fd) {
+    struct stat st{};
+    return ::fstat(fd, &st) == 0 && st.st_size >= static_cast<off_t>(sizeof(InterProcessCounterSegment));
 }
 
 }  // namespace
@@ -94,13 +100,21 @@ InterProcessCounterChannel::InterProcessCounterChannel(const std::string& shm_na
     // connector's `had_clean_prior_shutdown()` returns true — there
     // was no predecessor to have exited uncleanly.
     seg_->prior_clean_shutdown = 1;
+
+    // Stamp the owner's identity so a connector can tell this live
+    // segment from one left behind by a crashed predecessor.
+    const pid_t self = ::getpid();
+    seg_->owner_pid = static_cast<uint32_t>(self);
+    seg_->owner_start_time = ShmResourceTracker::process_start_time(self);
 }
 
 // =============================================================================
 // Connector-side factory.
 //
-// Polls shm_open until the owner has exported the segment or
-// connect_timeout_ms elapses. On attach, reads
+// Polls shm_open until a LIVE owner has exported the segment or
+// connect_timeout_ms elapses. A segment whose stamped owner is dead
+// is what a crashed owner left behind; its successor re-creates it,
+// so until then it counts as "not exported yet". On attach, reads
 // prior_clean_shutdown and resets it to 0 (so this connector's own
 // dtor write is the only bit the NEXT connector sees).
 // =============================================================================
@@ -112,15 +126,52 @@ std::unique_ptr<InterProcessCounterChannel> InterProcessCounterChannel::connect(
     }
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(connect_timeout_ms);
     int fd = -1;
+    InterProcessCounterSegment* seg = nullptr;
+    bool logged_dead_owner = false;
     while (true) {
         fd = ::shm_open(shm_name.c_str(), O_RDWR, 0);
-        if (fd != -1) {
-            break;
-        }
-        if (errno != ENOENT) {
+        if (fd == -1 && errno != ENOENT) {
             // Anything other than "not found yet" is fatal — bad
             // permissions, EMFILE, etc.
             throw_posix("shm_open(O_RDWR)", shm_name);
+        }
+        if (fd != -1 && !is_fully_sized(fd)) {
+            // Owner is between create and ftruncate: not exported yet.
+            ::close(fd);
+            fd = -1;
+        }
+        if (fd != -1) {
+            void* mapped = ::mmap(
+                nullptr,
+                sizeof(InterProcessCounterSegment),
+                PROT_READ | PROT_WRITE,
+                MAP_SHARED,
+                fd,
+                /*offset=*/0);
+            if (mapped == MAP_FAILED) {
+                const int saved = errno;
+                ::close(fd);
+                errno = saved;
+                throw_posix("mmap", shm_name);
+            }
+            seg = static_cast<InterProcessCounterSegment*>(mapped);
+            // owner_pid == 0: created by an owner predating the stamp; nothing to check.
+            if (seg->owner_pid == 0 ||
+                ShmResourceTracker::is_process_alive(static_cast<pid_t>(seg->owner_pid), seg->owner_start_time)) {
+                break;
+            }
+            ::munmap(seg, sizeof(InterProcessCounterSegment));
+            ::close(fd);
+            seg = nullptr;
+            fd = -1;
+            if (!logged_dead_owner) {
+                log_warning(
+                    LogMetal,
+                    "InterProcessCounterChannel::connect: {} was created by a process that is no longer alive; "
+                    "waiting for a live owner to export it",
+                    shm_name);
+                logged_dead_owner = true;
+            }
         }
         if (std::chrono::steady_clock::now() >= deadline) {
             throw std::runtime_error(
@@ -129,21 +180,6 @@ std::unique_ptr<InterProcessCounterChannel> InterProcessCounterChannel::connect(
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
-
-    void* mapped = ::mmap(
-        nullptr,
-        sizeof(InterProcessCounterSegment),
-        PROT_READ | PROT_WRITE,
-        MAP_SHARED,
-        fd,
-        /*offset=*/0);
-    if (mapped == MAP_FAILED) {
-        const int saved = errno;
-        ::close(fd);
-        errno = saved;
-        throw_posix("mmap", shm_name);
-    }
-    auto* seg = static_cast<InterProcessCounterSegment*>(mapped);
 
     // Read prior_clean_shutdown ONCE — this is our snapshot of the
     // predecessor's exit. Clear it so the next connector's snapshot

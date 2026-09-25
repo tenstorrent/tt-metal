@@ -69,6 +69,13 @@ public:
     // Blocks up to `connect_timeout_ms` waiting for /dev/shm/<…> to
     // appear; throws std::runtime_error on timeout.
     //
+    // A segment whose stamped owner process is no longer alive counts
+    // as not exported: it is what a crashed owner left behind, and the
+    // owner's successor unlinks and re-creates it. Owner liveness is
+    // checked with kill(2) and /proc, so the connector must share the
+    // owner's pid namespace (same pod with shareProcessNamespace, or
+    // hostPID).
+    //
     // At attach time, atomically reads `prior_clean_shutdown` and
     // resets it to 0 (so the value reported by
     // `had_clean_prior_shutdown()` reflects strictly the IMMEDIATELY

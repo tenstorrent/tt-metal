@@ -64,12 +64,26 @@ struct H2DStreamServiceDescriptor {
     void write_to_file(const std::string& path) const;
 
     /**
+     * @brief Deserialize a service descriptor file that already exists.
+     * @param path Full path to the descriptor file.
+     * @return Populated descriptor. Throws if the version stamp does not match.
+     */
+    static H2DStreamServiceDescriptor read_from_file(const std::string& path);
+
+    /**
      * @brief Wait for a service descriptor file to appear and deserialize it.
+     *
+     * A file whose owner is no longer alive (see owner_alive()) is treated as not yet published;
+     * the wait continues until a live owner's descriptor is present or the timeout elapses.
+     *
      * @param path Full path to the descriptor file.
      * @param timeout_ms Max wait time in milliseconds.
      * @return Populated descriptor. Throws if the version stamp does not match.
      */
     static H2DStreamServiceDescriptor wait_and_read(const std::string& path, uint32_t timeout_ms = 10000);
+
+    // All per-coord sockets are exported by one owner process, so the first entry speaks for the file.
+    bool owner_alive() const { return per_coord_entries.empty() || per_coord_entries.front().second.owner_alive(); }
 };
 
 inline std::string descriptor_path_for_service(const std::string& service_id) {

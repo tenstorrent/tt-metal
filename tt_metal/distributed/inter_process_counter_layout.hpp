@@ -37,7 +37,14 @@
 //   `producer_counter` and `consumer_cursor` sit on separate cache
 //   lines so producer writes and connector writes don't false-share.
 //   `prior_clean_shutdown` is cold (read at attach, written at clean
-//   shutdown) so it packs onto the consumer's line at no cost.
+//   shutdown) so it packs onto the consumer's line at no cost, as do
+//   the owner-identity fields (written once at creation).
+//
+// Owner identity:
+//   `owner_pid` / `owner_start_time` name the process instance that
+//   created the segment. A connector that finds a segment whose owner
+//   is gone treats it as not yet exported — it is what a crashed owner
+//   leaves behind, and the owner's successor re-creates it.
 
 #pragma once
 
@@ -84,6 +91,19 @@ struct InterProcessCounterSegment {
     // (read once / written once) — packs onto consumer_cursor's line
     // at no hot-path cost.
     uint32_t prior_clean_shutdown;
+
+    // Identity of the owner process, stamped once by the owner ctor:
+    // its pid and /proc/<pid>/stat start time (0 when unavailable). A
+    // reused pid gets a new start time, so the pair names exactly one
+    // process instance. 0 / 0 from owners predating these fields; the
+    // connector then skips the liveness check.
+    uint32_t owner_pid;
+    uint64_t owner_start_time;
 };
+
+static_assert(
+    sizeof(InterProcessCounterSegment) == 2 * kInterProcessCounterCacheLine,
+    "InterProcessCounterSegment must stay two cache lines: the owner ftruncates the segment to sizeof, "
+    "and connectors built against older layouts mmap that same size");
 
 }  // namespace tt::tt_metal::distributed

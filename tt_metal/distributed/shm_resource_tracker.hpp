@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <mutex>
 #include <set>
 #include <string>
@@ -25,6 +26,11 @@ namespace tt::tt_metal::distributed {
  *
  * A manifest file /dev/shm/tt_socket_manifest_<pid> is maintained so that the
  * stale cleanup can discover descriptor files (whose names don't embed a PID).
+ *
+ * The owner-identity helpers below are the same liveness rule the stale scan
+ * uses, exposed so connectors can apply it to a descriptor or segment they are
+ * about to attach to: a file left behind by a dead owner is "not published yet",
+ * not a socket. They never construct the tracker instance.
  */
 class ShmResourceTracker {
 public:
@@ -46,12 +52,27 @@ public:
 
     static void cleanup_stale_resources();
 
+    // PID embedded in a NamedShm name ("/tt_{prefix}_{pid}_{random}_{counter}", with or
+    // without the leading '/'). 0 when the name does not follow that pattern.
+    static pid_t pid_from_shm_name(const std::string& shm_name);
+
+    // kill(pid, 0): true if the process exists (or we lack permission to signal it).
+    static bool is_pid_alive(pid_t pid);
+
+    // Process start time in clock ticks since boot (/proc/<pid>/stat field 22), which
+    // together with the pid identifies one process instance: a reused pid gets a new
+    // start time. 0 when it cannot be read (not Linux, process gone, procfs missing).
+    static uint64_t process_start_time(pid_t pid);
+
+    // is_pid_alive() refined by start time. `start_time == 0` (unknown, e.g. a descriptor
+    // written before the stamp existed) falls back to the pid check alone.
+    static bool is_process_alive(pid_t pid, uint64_t start_time);
+
 private:
     ShmResourceTracker();
 
     void flush_manifest();
     static std::string manifest_path_for_pid(pid_t pid);
-    static bool is_pid_alive(pid_t pid);
 
     std::mutex mutex_;
     std::set<std::string> shm_names_;
