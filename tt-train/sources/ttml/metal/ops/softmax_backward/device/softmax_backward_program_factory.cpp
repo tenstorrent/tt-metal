@@ -108,7 +108,7 @@ static constexpr uint64_t memory_estimator(
     uint32_t output_tile_size,
     uint32_t reduction_tile_size) {
     const uint64_t row_buffer_bytes = static_cast<uint64_t>(width_tiles) * (2U * input_tile_size + output_tile_size);
-    const uint64_t scratch_bytes = input_tile_size + 2U * reduction_tile_size;
+    const uint64_t scratch_bytes = 3U * reduction_tile_size;
     return buffering_multiplier * row_buffer_bytes + scratch_bytes;  // src0, src1, out; ones, sum, partial
 }
 
@@ -253,8 +253,8 @@ SoftmaxBackwardFactory::cached_program_t SoftmaxBackwardFactory::create(
     auto c_in1_config = CircularBufferConfig(block_cb_size_in0, {{src1_cb_index, input_data_format}})
                             .set_page_size(src1_cb_index, input_tile_size);
     CreateCircularBuffer(program, worker_cores, c_in1_config);
-    auto c_scaler_config = CircularBufferConfig(input_tile_size, {{ones_cb_index, input_data_format}})
-                               .set_page_size(ones_cb_index, input_tile_size);
+    auto c_scaler_config = CircularBufferConfig(intermed_tile_size, {{ones_cb_index, intermed_data_format}})
+                               .set_page_size(ones_cb_index, intermed_tile_size);
     CreateCircularBuffer(program, worker_cores, c_scaler_config);
     auto c_out_config = CircularBufferConfig(block_cb_size_out, {{out_cb_index, output_data_format}})
                             .set_page_size(out_cb_index, output_tile_size);
