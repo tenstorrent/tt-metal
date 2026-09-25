@@ -2,19 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Sender kernel (writer RISC, NOC_1). Owns the ONE fabric sender connection its eth channel allows (the
-// L1 connection table is indexed by eth channel and the EDM stores a single worker_xy per channel, so a
-// second core on the same channel would just hang) and drains the L1 queue the reader on this same core
-// fills. Every send is a single hop to the chip across this cable; tokens bound further are written into
-// the next chip's forwarding buffer and re-sent from there.
+// Sender kernel (writer RISC, NOC_1). Drains the TokenQueue that the reader on this core fills, through
+// the fabric sender connection of this core's eth channel; a channel allows one sender core. Each send is
+// one hop to the chip across this cable. Tokens bound further go into that chip's fwd_section and are
+// sent on from there.
 //
-// Where this differs from the combine sender: dispatch lands a token in TWO tensors at one page index, so
-// the last hop is a two-chunk scatter write out of one entry -- the token to its page and the metadata
-// bytes behind it to the metadata page, one packet. A forward hop is a plain write.
+// The last hop is a two-chunk scatter write out of one entry: the token to its page and the metadata words
+// behind it to the metadata page. A forward hop is a plain write.
 //
-// Entries are claimed and released in batches, amortising the two counter signals and the source flush. The
-// flush matters because the queue is reused: a payload send reads L1 asynchronously, so an entry cannot go
-// back to the reader until that read has drained.
+// Entries are claimed and released in batches to amortise the counter signals and the source flush. The
+// flush is needed because a payload send reads L1 asynchronously, so an entry cannot go back to the
+// reader until that read has finished.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -31,10 +29,8 @@
 constexpr uint32_t FWD_SIGNAL_EVERY = 32;
 constexpr dspf2d::SenderCtArgs ct{};
 
-// One prebuilt header per queue entry. Every send is a single hop, so the route is constant for the whole
-// run and only the write address varies per token. Per entry rather than one shared header because
-// setting the next write's address would otherwise mutate a header a previous non-blocking send may
-// still be reading, and that payload would land wherever the torn header pointed.
+// One prebuilt header per queue entry. The route is constant, so only the write address changes per
+// token. A single shared header could be rewritten while a previous non-blocking send still reads it.
 volatile PACKET_HEADER_TYPE* entry_hdr(uint32_t entry) {
     return reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct.pkt_hdr_queue_addr + entry * sizeof(PACKET_HEADER_TYPE));
 }
@@ -44,24 +40,18 @@ volatile tt_l1_ptr dspf2d::FwdMetadata* entry_meta(uint32_t entry) {
         ct.queue_addr + entry * ct.entry_stride() + ct.token_size_bytes);
 }
 
-// The bytes a terminal delivery carries: the token and, right behind it, the metadata words for the
-// same page index.
+// The bytes a last-hop delivery carries: the token and the metadata words behind it.
 constexpr uint32_t TOKEN_PLUS_META_BYTES = ct.token_size_bytes + dspf2d::METADATA_WIRE_BYTES;
 
-// A token and its metadata land on the chip across this cable as ONE fabric packet: a scatter write
-// whose first chunk is the token and whose second is the metadata bytes behind it in the payload. The
-// two chunks land at unrelated addresses -- the payload page and the metadata page -- but leave here
-// as one payload: one EDM slot, one header and one credit round trip per delivery, the same as a
-// forward. `fabric_unicast_noc_scatter_write` in linear/api.h is these same steps with the route set
-// on every call; here the route is constant for the run and prebuilt, so the header write is
-// address-only.
+// A token and its metadata leave as one fabric packet: a scatter write whose first chunk is the token and
+// whose second is the metadata words behind it. The chunks land on different pages but use one EDM slot,
+// one header and one credit, like a forward. The route is prebuilt, so only the addresses are written.
 void build_token_meta_header(volatile PACKET_HEADER_TYPE* hdr, uint64_t payload_addr, uint64_t meta_addr) {
-    // Chunk and payload sizes are 16-bit header fields; the total is the larger and overflows first.
+    // Chunk and payload sizes are 16-bit header fields; the total is the larger.
     static_assert(TOKEN_PLUS_META_BYTES <= 0xFFFFu, "a scatter payload size is a 16-bit field");
-    // Only the first chunk's size is spelled; the second is the remainder of the payload, and the
-    // router reads it from the payload base plus the first size. A NoC write whose source disagrees
-    // with its destination modulo 16 arrives rotated by a word: (src, token, slot) reads back as
-    // (junk, src, token).
+    // Only the first chunk's size is given; the router takes the rest of the payload as the second chunk,
+    // sourced at payload base + token size. A NoC write whose source and destination differ modulo 16
+    // arrives shifted by a word.
     static_assert(ct.token_size_bytes % 16u == 0u, "the second scatter chunk is sourced at payload base + token size");
     hdr->to_noc_unicast_scatter_write(
         tt::tt_fabric::NocUnicastScatterCommandHeader{
@@ -69,10 +59,9 @@ void build_token_meta_header(volatile PACKET_HEADER_TYPE* hdr, uint64_t payload_
         TOKEN_PLUS_META_BYTES);
 }
 
-// The last hop. `src` is a queue entry, whose tail begins with the metadata words (FwdMetadata pins them
-// at offset 0), so the whole payload is already laid out in L1 and goes out as it is. The order is
-// load-bearing -- the header is built BEFORE waiting for an EDM slot, because reversing the two costs
-// about 8% of the bandwidth.
+// The last hop. `src` is a queue entry whose fwd_meta starts with the metadata words, so the payload is
+// already laid out in L1. The header is built before waiting for a free EDM slot so that building it
+// overlaps the wait.
 template <typename FabricSender>
 void send_token_with_inline_meta(
     FabricSender& fabric, uint64_t payload_addr, uint64_t meta_addr, uint32_t src, volatile PACKET_HEADER_TYPE* hdr) {
@@ -87,7 +76,7 @@ void prebuild_routes() {
         fabric_set_unicast_route(
             (volatile tt::tt_fabric::HybridMeshPacketHeader*)entry_hdr(entry), ct.peer_chip_id, ct.peer_mesh_id);
     }
-    // Shares the drain's scratch header: the drain only runs once the send loop is done with it.
+    // signal_downstream sends from the drain header during the send loop; drain_fabric reuses it after.
     fabric_set_unicast_route(
         reinterpret_cast<volatile tt::tt_fabric::HybridMeshPacketHeader*>(ct.pkt_hdr_drain_addr),
         ct.peer_chip_id,
@@ -106,13 +95,13 @@ uint32_t wait_for_filled(uint32_t sent) {
     }
 }
 
-// Tell the downstream reader how far its section is filled. A chunk's last page always forces a signal: it
-// is the boundary that reader switches on, so leaving it uncounted strands the whole axis.
+// Tell the downstream reader how many pages of its fwd_section have arrived. A chunk's last page always
+// triggers a signal, because the downstream reader waits for it before moving to the next chunk.
 template <typename FabricSender>
 void signal_downstream(FabricSender& fabric, uint32_t count) {
     volatile PACKET_HEADER_TYPE* hdr_signal = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct.pkt_hdr_drain_addr);
-    // Header-only atomic inc, NOT the fused write+inc: that is documented to hang Blackhole when the
-    // payload destination is DRAM, and the forwarding buffer is DRAM.
+    // A header-only atomic inc. The fused write + inc hangs Blackhole when the payload destination is
+    // DRAM, and the fwd_section is in DRAM.
     hdr_signal->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
         get_noc_addr(ct.fwd_sem_noc_x, ct.fwd_sem_noc_y, ct.fwd_sem_addr), /*val=*/count, /*flush=*/true});
     fabric.wait_for_empty_write_slot();
@@ -130,9 +119,9 @@ uint64_t send_entry(FabricSender& fabric, uint32_t entry, uint32_t& fwd_since_si
     const uint32_t entry_base = ct.queue_addr + entry * ct.entry_stride();
     volatile PACKET_HEADER_TYPE* hdr = entry_hdr(entry);
     if (cmd == dspf2d::CMD_FORWARD || cmd == dspf2d::CMD_FORWARD_END) {
-        // One write: token plus the prefix of the tail the next hop needs, landing in its forwarding page.
+        // One write of the token and its whole fwd_meta into a forwarding page on the next chip.
         const uint32_t payload_bytes = ct.token_size_bytes + dspf2d::FWD_EXTRA_BYTES;
-        // Header first, THEN wait for the slot -- see send_token_with_inline_meta.
+        // Header first, then wait for the EDM slot, as in send_token_with_inline_meta.
         hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{metadata->this_addr}, payload_bytes);
         fabric.wait_for_empty_write_slot();
         fabric.send_payload_without_header_non_blocking_from_address(entry_base, payload_bytes);
@@ -144,11 +133,8 @@ uint64_t send_entry(FabricSender& fabric, uint32_t entry, uint32_t& fwd_since_si
             fwd_since_signal = 0;
         }
     } else {
-        // Last hop: the token to its page and the three metadata words to the same page index of the
-        // metadata tensor, in one packet. Both addresses were computed on the chip the token started
-        // from and travelled with it, so this hop needs no address generator of its own. The metadata
-        // words sit at the very start of the entry's tail, right behind the token, which is what lets the
-        // packet be sent straight out of the entry.
+        // Last hop. Both addresses were computed on the token's source chip and came with it, so this hop
+        // needs no address generator.
         send_token_with_inline_meta(fabric, metadata->final_payload_addr, metadata->final_meta_addr, entry_base, hdr);
     }
     return cmd;
@@ -159,9 +145,8 @@ template <typename FabricSender>
 uint32_t pump_stream(FabricSender& fabric) {
     const uint64_t my_freed_noc = get_noc_addr(ct.freed_addr);
     uint32_t sent = 0;
-    // The stream's length is not known here: it is this chip's own tokens plus everything the reader
-    // re-forwards for other chips, which depends on chunk sizes decided upstream. The reader terminates
-    // the stream with a CMD_END entry instead, and this loop batches over whatever it has published.
+    // The stream length is not known here because it includes the tokens the reader forwards for other
+    // chips. The reader ends the stream with a CMD_END entry.
     bool end_of_stream = false;
     uint32_t fwd_since_signal = 0;
     while (!end_of_stream) {
@@ -184,18 +169,17 @@ uint32_t pump_stream(FabricSender& fabric) {
     return sent - 1;  // the CMD_END entry carried no payload
 }
 
-// Delivery barrier. Program completion says nothing about whether our packets reached the DESTINATION
-// chip, so without this the host could read an output whose last tokens are still in flight.
+// Delivery barrier. Program completion does not mean our packets reached the destination chip, so
+// without this the host could read an output while its last tokens are still in flight.
 //
-// The worker's free-slot count is D = num_buffers_per_channel deep and satisfies
-// free = D - (packets_written - credits_returned), and a credit is only produced by the far end. So
-// writing D-1 more packets and then obtaining one further free slot forces credits_returned >= sent:
-// every payload packet has reached the destination chip. It does NOT prove the destination DRAM write
-// retired -- the far eRISC may ack on write issue.
+// With D = num_buffers_per_channel, the free EDM slot count is D - (packets_written - credits_returned),
+// and only the far end returns credits. Writing D-1 more packets and then waiting for one more free EDM slot
+// therefore means every payload packet has reached the destination chip. It does not prove the
+// destination DRAM write has finished: the far eRISC may acknowledge when it issues the write.
 //
-// The fillers are header-only atomic incs of value ZERO aimed at a drain sink on the peer chip: real
-// fabric packets (there is no NOP send type) that change nothing. Reaching a free slot cannot deadlock,
-// since the reverse direction is a different eth channel.
+// The filler packets are header-only atomic incs of 0 to a drain sink on the peer chip, because the
+// fabric has no no-op packet. Waiting for a free slot cannot deadlock: the reverse direction uses
+// another eth channel.
 template <typename FabricSender>
 void drain_fabric(FabricSender& fabric) {
     volatile PACKET_HEADER_TYPE* hdr_drain = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct.pkt_hdr_drain_addr);
@@ -227,13 +211,13 @@ void kernel_main() {
     noc_async_writes_flushed();
     fabric_connections.close();
 
-    // Both queue counters back to zero for the next launch, which starts its own counts at zero. Safe here
-    // and only here: the reader's last act was publishing the CMD_END entry this kernel has just drained,
-    // so nothing is still reading or signalling either of them.
+    // Reset both queue counters for the next launch, which counts from zero. This is safe only here: the
+    // reader's last act was publishing the CMD_END entry drained above, so nothing still reads or signals
+    // either counter.
     //
-    // `freed` is signalled by a NoC atomic, which completes on the atomic response and so is not covered by
-    // noc_async_writes_flushed above. Without this the reset can be overtaken and the launch end with
-    // freed == processed, leaving the next launch to evaluate claimed - freed as a negative wrap.
+    // `freed` is incremented by NoC atomics, which noc_async_writes_flushed does not wait for. Without the
+    // barrier an increment can land after the reset, and the next launch computes the reader's
+    // `claimed - *freed` as a negative wrap.
     noc_async_atomic_barrier();
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.filled_addr), 0);
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.freed_addr), 0);

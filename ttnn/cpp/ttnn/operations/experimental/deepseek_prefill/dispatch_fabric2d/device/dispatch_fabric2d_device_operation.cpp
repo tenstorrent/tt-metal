@@ -15,6 +15,8 @@ namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d {
 
 namespace {
 
+// A page index computed on one chip addresses the same page on another chip. That holds only while every
+// chip's copy of a buffer starts at the same address, which interleaved allocation on a uniform mesh gives.
 void validate_interleaved(const ttnn::Tensor& t, const char* name) {
     TT_FATAL(t.buffer() != nullptr, "dispatch_fabric2d: {} has no device buffer", name);
     TT_FATAL(
@@ -32,8 +34,6 @@ void validate_interleaved_row_major(const ttnn::Tensor& t, const char* name) {
     validate_interleaved(t, name);
 }
 
-// Page indices computed on one chip name pages on another, which only holds while every chip's copy of a
-// buffer starts at the same address. Interleaved allocation on a uniform mesh gives that.
 void validate_control_tensor(const ttnn::Tensor& t, uint32_t num_routed_experts, const char* name) {
     validate_interleaved_row_major(t, name);
     TT_FATAL(
@@ -63,9 +63,8 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
         "dispatch_fabric2d: axis {} is out of range for a {} mesh",
         args.axis,
         args.device->shape());
-    // read_control_tables lands row r of the offsets table at `control + r * num_routed_experts`
-    // words, and a DRAM read needs a 64-byte-aligned L1 destination on Blackhole. Every row after
-    // the first is misaligned unless the row is a whole number of 64-byte lines.
+    // A DRAM read needs a 64-byte-aligned L1 destination, and the reader stores the offsets table rows
+    // back to back.
     TT_FATAL(
         args.num_routed_experts % 16 == 0,
         "dispatch_fabric2d: num_routed_experts must be a multiple of 16 (got {}); a row of the offsets "
@@ -84,12 +83,11 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
         "diametrically opposite chip across both directions",
         args.axis,
         extent);
-    // The reader resolves a pick through a per-expert word that is either a bucket index or the
-    // BUCKET_NOT_HERE sentinel, and it tells the two apart by magnitude alone.
+    // The reader tells a bucket index from the BUCKET_NOT_HERE sentinel by value alone.
     TT_FATAL(
         static_cast<uint64_t>(extent) * args.experts_per_chip < dspf2d::BUCKET_NOT_HERE,
-        "dispatch_fabric2d: this dispatch group has {} x {} experts, but a bucket index has to stay "
-        "below the BUCKET_NOT_HERE sentinel the routing pass tests against",
+        "dispatch_fabric2d: this dispatch group has {} x {} experts, but a bucket index must stay below the "
+        "BUCKET_NOT_HERE sentinel",
         extent,
         args.experts_per_chip);
     TT_FATAL(
@@ -99,20 +97,18 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
         "a line or mesh.",
         args.axis);
 
-    // The forward sizes a chunk from the counts of a chip that is neither its origin nor its destination,
-    // so it needs every source chip's boundaries, not just its own. offset_cumsum's fourth output is
-    // that table; the single-row form the production op takes is not enough.
+    // A chip that forwards a chunk sizes it from the source chip's row, so every chip needs all rows.
     validate_control_tensor(tensor_args.expert_offsets_tensor, args.num_routed_experts, "expert_offsets");
     TT_FATAL(
         tensor_args.expert_offsets_tensor.logical_shape()[-2] == static_cast<int32_t>(extent),
         "dispatch_fabric2d: expert_offsets second-to-last dim is {}, expected {}. It must be the all-rows "
-        "table (offset_cumsum's all_global_dispatch_offsets), REPLICATED along axis {}",
+        "table (offset_cumsum's all_global_dispatch_offsets), replicated along axis {}",
         tensor_args.expert_offsets_tensor.logical_shape()[-2],
         extent,
         args.axis);
 
-    // Identical across the dispatch group, so they arrive with a single row; they close the last
-    // origin's chunk, which expert_offsets alone cannot.
+    // One row each, identical across the dispatch group. Together they give the end of the last source
+    // chip's chunk, which expert_offsets has no row for.
     validate_control_tensor(tensor_args.expert_token_counts, args.num_routed_experts, "expert_token_counts");
     validate_control_tensor(tensor_args.expert_region_offsets, args.num_routed_experts, "expert_region_offsets");
 
@@ -130,7 +126,7 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
             pc.logical_volume());
     }
 
-    // A padded token's unguarded lookup lands on a trailing sentinel column that maps to -1.
+    // Padded tokens look up the extra -1 column, so the kernel needs no bounds check.
     validate_interleaved_row_major(tensor_args.expert_dispatch_table_tensor, "expert_dispatch_table");
     TT_FATAL(
         tensor_args.expert_dispatch_table_tensor.dtype() == tt::tt_metal::DataType::INT32,
@@ -140,8 +136,7 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
         tensor_args.expert_dispatch_table_tensor.logical_shape()[-1] >=
             static_cast<int32_t>(args.num_routed_experts) + 1,
         "dispatch_fabric2d: expert_dispatch_table last dim is {}, expected num_routed_experts + 1 = {}. The "
-        "extra column is a -1 sentinel: a padded token's expert id indexes it, so the lookup resolves to "
-        "'not in this group' without a bounds check on the hot path.",
+        "extra column is a -1 sentinel for padded tokens.",
         tensor_args.expert_dispatch_table_tensor.logical_shape()[-1],
         args.num_routed_experts + 1);
 
@@ -149,8 +144,7 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
     validate_interleaved(input, "input_tensor");
     TT_FATAL(
         input.dtype() == tt::tt_metal::DataType::BFLOAT16,
-        "dispatch_fabric2d: input must be BFLOAT16, got {}. The fp8-scaled path appends per-block scales "
-        "to the metadata, which does not fit the routing tail this op carries",
+        "dispatch_fabric2d: input must be BFLOAT16, got {}",
         input.dtype());
     TT_FATAL(
         input.layout() == tt::tt_metal::Layout::ROW_MAJOR || input.layout() == tt::tt_metal::Layout::TILE,
@@ -160,21 +154,19 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
         const uint32_t hidden = static_cast<uint32_t>(input.logical_shape()[-1]);
         TT_FATAL(
             hidden % tt::constants::TILE_WIDTH == 0,
-            "dispatch_fabric2d: a TILE input needs emb_dim ({}) to be a multiple of {}. The untilizer "
-            "reads whole tile columns and its row stride is the token page, so a partial tile column "
-            "would drop values and misalign every tile row after the first",
+            "dispatch_fabric2d: a TILE input needs emb_dim ({}) to be a multiple of {}",
             hidden,
             tt::constants::TILE_WIDTH);
     }
 
-    // Both the stream cores and, under TILE, the untilizer pool come out of this set.
+    // The stream cores and, for a TILE input, the untilizers all come from this set.
     TT_FATAL(
         args.worker_core_range_set.num_cores() >=
             stream_count(args.num_links) + (input.layout() == tt::tt_metal::Layout::TILE ? 1u : 0u),
-        "dispatch_fabric2d: the op was given {} worker cores but needs {} streams{}",
+        "dispatch_fabric2d: the op was given {} worker cores but needs {}{}",
         args.worker_core_range_set.num_cores(),
         stream_count(args.num_links),
-        input.layout() == tt::tt_metal::Layout::TILE ? " plus at least one untilizer" : "");
+        input.layout() == tt::tt_metal::Layout::TILE ? " plus at least one for the untilizer" : "");
 
     const auto& indices = tensor_args.indices_tensor;
     validate_interleaved_row_major(indices, "indices_tensor");
@@ -195,8 +187,7 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(
         args.metadata_len == 3,
-        "dispatch_fabric2d: metadata_len must be 3 (src chip, token index, top-k slot); got {}. A longer "
-        "tail is the fp8-scaled layout, which this op does not carry",
+        "dispatch_fabric2d: metadata_len must be 3 (source chip, token index, topk index); got {}",
         args.metadata_len);
     TT_FATAL(args.experts_per_chip > 0, "dispatch_fabric2d: experts_per_chip must be non-zero");
     TT_FATAL(
@@ -208,8 +199,7 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
 
 void DispatchFabric2dDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    // A hit that skipped this answered a caller whose tensors broke the op's preconditions with wrong
-    // data instead of an error. Runs once per dispatch, which for a traced op is once per capture.
+    // Tensors can change between launches that share a cached program, so check them every time.
     validate_on_program_cache_miss(args, tensor_args);
 }
 
@@ -232,8 +222,7 @@ DispatchFabric2dDeviceOperation::topology_return_value_t DispatchFabric2dDeviceO
     using Shard = tt::tt_metal::distributed::MeshMapperConfig::Shard;
     const auto& input_topology = tensor_args.input_tensor.tensor_topology();
 
-    // Both outputs are per-device: a chip's dispatch buffer holds what every source chip sent to the
-    // experts IT hosts, which is unique to it on every mesh axis.
+    // A chip's outputs hold the tokens for the experts it hosts, so they differ on every mesh axis.
     ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements;
     for (size_t i = 0; i < input_topology.distribution_shape().dims(); i++) {
         placements.push_back(Shard{static_cast<int>(i)});

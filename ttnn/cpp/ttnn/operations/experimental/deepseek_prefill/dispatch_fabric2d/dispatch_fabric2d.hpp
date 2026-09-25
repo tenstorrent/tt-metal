@@ -16,8 +16,7 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d {
 
-// Allocates and returns {dispatched_buffer, metadata}, both per-device and ROW_MAJOR. Same job as
-// `dispatch` over a different transport. See the nanobind docstring for what each tensor carries.
+// Returns {dispatched_buffer, metadata}, both per-device and ROW_MAJOR.
 std::array<ttnn::Tensor, 2> dispatch_fabric2d(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& indices_tensor,

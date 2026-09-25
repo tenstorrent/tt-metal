@@ -4,13 +4,11 @@
 
 #pragma once
 
-// The reader kernel's compile-time and runtime arguments. Host and kernel index the SAME enums by name
-// rather than counting positions, so the two cannot drift.
+// The reader kernel's compile-time and runtime arguments. Host and kernel index the same enums by name,
+// so the argument order cannot drift between them.
 //
-// Buffer addresses are RUNTIME args, never compile-time: an address describes an allocation, not a
-// program, so held compile-time it survives into every program-cache hit and a hit dispatched against
-// reallocated buffers reads and writes at the previous call's addresses. TensorAccessor args stay
-// compile-time -- those describe the tensor, not the allocation.
+// Buffer addresses are runtime args because a program-cache hit may run against reallocated buffers.
+// TensorAccessor args describe the tensor and stay compile-time.
 
 #include "dispatch_fabric2d_kernel_interface.hpp"
 
@@ -68,10 +66,10 @@ struct ReaderCtArgs {
         // added without renumbering anything the kernel already reads.
         kRingChipIdsBase,
         kAssignmentBase,
-        // (origin_row, dst_row, split_idx, split_count) per descriptor. `in` is what this stream reads
-        // out of its own section; `out` is what it writes into the downstream chip's. They are different
-        // lists, and validate_chunk_agreement proves `out` here equals `in` on the downstream chip -- in
-        // identity and order -- which is what lets a writer place a chunk from its own list alone.
+        // (origin_row, dst_row, split_idx, split_count) per descriptor. `in` lists what this stream reads
+        // from its own fwd_section, `out` what it writes into the downstream chip's. The host's
+        // validate_chunk_agreement checks that `out` here matches `in` on the downstream chip in content
+        // and order, so a writer can place a chunk from its own list alone.
         kInChunksBase,
         kOutChunksBase,
         kCount,
@@ -88,7 +86,7 @@ struct ReaderCtArgs {
     uint32_t extent;
     uint32_t my_row;
     uint32_t nbr_chip_id;
-    // Metadata field 0 is the source chip as the production op names it, so this op has to agree.
+    // Written as metadata field 0, the source chip.
     uint32_t linearized_coord;
     uint32_t num_links;
     uint32_t stream;
@@ -158,9 +156,8 @@ struct ReaderCtArgs {
         in_chunks_base(assignment_base + own_count * ASSIGNMENT_WORDS),
         out_chunks_base(in_chunks_base + forward_count * ASSIGNMENT_WORDS) {}
 
-    // Scalars, then ring_chip_ids, then the assignments, then the two chunk-descriptor blocks. The
-    // base indices above are what the kernel walks these with, so they are computed from the same
-    // expressions.
+    // Scalars, then ring_chip_ids, the assignments and the two chunk-descriptor blocks, at the base
+    // indices set in the constructor.
     std::vector<uint32_t> to_ct_word_arr(
         const std::vector<uint32_t>& ring_chip_ids,
         const std::vector<uint32_t>& assignment_words,
@@ -259,9 +256,8 @@ struct ReaderCtArgs {
     constexpr uint32_t entry_stride() const { return token_size_bytes + forwarding_metadata_size; }
 
 #ifdef KERNEL_BUILD
-    // TensorAccessorArgs are chained on by the program factory after every block above, in
-    // ReaderRtArg order. Derived from the block bases, so adding a scalar or widening a block cannot
-    // silently shift them.
+    // The program factory appends the TensorAccessorArgs after the blocks above, in ReaderRtArg order.
+    // Their base is derived from the block bases, so adding a scalar or widening a block keeps it right.
     static constexpr uint32_t accessor_base =
         get_compile_time_arg_val(kOutChunksBase) + get_compile_time_arg_val(kNumForward) * ASSIGNMENT_WORDS;
     static constexpr auto in_args = TensorAccessorArgs<accessor_base>();
