@@ -96,3 +96,14 @@ tasks:
     gate:
       cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/
       metrics: {selftest_passed: ">= 97", selftest_failed: "== 0"}
+  - id: F11
+    title: Path check ignores files others committed during a step; resume resets interrupted tasks
+    step: framework
+    deps: [F10]
+    paths: [models/demos/common/bringup/orchestrator.py, models/demos/common/bringup/selftest/test_orchestrator.py,
+            models/demos/common/bringup/knowledge]
+    gate:
+      cmd: >-
+        scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/ &&
+        python -m models.demos.common.bringup.knowledge.check
+      metrics: {selftest_passed: ">= 98", selftest_failed: "== 0", known_issue_errors: "== 0"}
