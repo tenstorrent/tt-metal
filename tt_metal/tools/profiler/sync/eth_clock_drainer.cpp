@@ -219,43 +219,14 @@ inline uint32_t pack_linked_frame(uint32_t xy, uint32_t prof_l1) {
     }
     return finish_frame(frame, xy, off);
 }
-#endif
 
-void kernel_main() {
-#if defined(PROFILE_KERNEL)
-    volatile tt_l1_ptr uint32_t* done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kCtrlAddr);
-    volatile tt_l1_ptr uint32_t* hb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kCtrlAddr + 4);
-    volatile tt_l1_ptr uint32_t* go = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kCtrlAddr + 8);
-    volatile tt_l1_ptr uint32_t* stop = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kCtrlAddr + 64);
-    *done = 0;
-    *hb = 0;
-    *go = 0;
-    *stop = 0;
-
-    // The eth cores whose frames this core ships: rt args [0] = n, then (xy, profiler L1 base) per core; the pusher
-    // first, then the active eth cores (whose link ends' records ship too).
-    const uint32_t n_linked_arg = get_arg_val<uint32_t>(0);
-    const uint32_t n_linked = n_linked_arg < kMaxLinked ? n_linked_arg : kMaxLinked;
-    uint32_t linked_xy[kMaxLinked];
-    uint32_t linked_l1[kMaxLinked];
-    const int32_t tile_offset = static_cast<int32_t>(get_arg_val<uint32_t>(1 + 2 * n_linked_arg));
-    for (uint32_t i = 0; i < n_linked; i++) {
-        linked_xy[i] = get_arg_val<uint32_t>(1 + 2 * i);
-        linked_l1[i] = get_arg_val<uint32_t>(2 + 2 * i);
-    }
-    const uint32_t px = kPusherXy & 0xFFFFu, py = kPusherXy >> 16;
-
-    SocketSenderInterface sender = create_sender_socket_interface(kSocketConfigAddr);
-    set_sender_socket_page_size(sender, kPageBytes);
-    SocketSenderInterface sync_sender = create_sender_socket_interface(kSyncCfgAddr);
-    set_sender_socket_page_size(sync_sender, kPageBytes);
-    noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC);
-
-    // Records of this core's own, eight to a frame: anchors the host checks itself, and the audit at stop.
-    uint32_t outs = 0;
-    const auto out = [&](uint32_t meta, uint32_t rnd, uint64_t v, uint64_t w, uint64_t ref) __attribute__((noinline)) {
+// Records of this core's own, eight to a frame: anchors the host checks itself, and the audit at stop.
+struct Outbox {
+    uint32_t n = 0;
+    SocketSenderInterface* sync = nullptr;
+    __attribute__((noinline)) void add(uint32_t meta, uint32_t rnd, uint64_t v, uint64_t w, uint64_t ref) {
         volatile tt_l1_ptr uint32_t* r =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kAnchorScratch + outs * kRecordBytes);
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kAnchorScratch + n * kRecordBytes);
         r[kp::SYNC_META] = meta;
         r[kp::SYNC_ROUND] = rnd;
         r[kp::SYNC_VALUE_LO] = static_cast<uint32_t>(v);
@@ -264,101 +235,108 @@ void kernel_main() {
         r[kp::SYNC_WALL_HI] = static_cast<uint32_t>(w >> 32);
         r[kp::SYNC_REF_LO] = static_cast<uint32_t>(ref);
         r[kp::SYNC_REF_HI] = static_cast<uint32_t>(ref >> 32);
-        if (++outs == kAnchorRecords) {
-            ship(
-                sync_sender,
-                pack_sync_frame(
-                    kPusherXy,
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kAnchorScratch),
-                    0,
-                    outs,
-                    kAnchorRecords));
-            outs = 0;
+        if (++n == kAnchorRecords) {
+            flush();
         }
-    };
-    const auto flush_out = [&]() {
-        if (outs != 0) {
+    }
+    void flush() {
+        if (n != 0) {
             ship(
-                sync_sender,
+                *sync,
                 pack_sync_frame(
-                    kPusherXy,
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kAnchorScratch),
-                    0,
-                    outs,
-                    kAnchorRecords));
-            outs = 0;
+                    kPusherXy, reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kAnchorScratch), 0, n, kAnchorRecords));
+            n = 0;
         }
-    };
+    }
+};
 
-    // Anchors: this core's own (wall, refclk) pair at a refclk update, once per poll, independent of the pusher's
-    // samples. Each waits for the pusher's next point; between two centroids at one FBDIV its distance from their chord
-    // (the host's line there too) goes into the histogram in 1/16 ns, the wall moved into the pusher's wall domain by
-    // this core's tile offset. Any other anchor, and one off by more than the histogram's range, goes to the host as
-    // it is; an anchor whose read found no refclk update is not one.
+// Anchors: this core's own (wall, refclk) pair at a refclk update, once per poll, independent of the pusher's samples.
+// Each waits for the pusher's next point; between two centroids at one FBDIV its distance from their chord (the host's
+// line there too) goes into the histogram in 1/16 ns, the wall moved into the pusher's wall domain by this core's tile
+// offset. Any other anchor, and one off by more than the histogram's range, goes to the host as it is; an anchor whose
+// read found no refclk update is not one.
+struct Audit {
     struct Pending {
         uint32_t r_lo, r_hi, w_lo, w_hi;
     };
-    volatile tt_l1_ptr Pending* pending = reinterpret_cast<volatile tt_l1_ptr Pending*>(kPendingScratch);
-    volatile tt_l1_ptr uint32_t* bins = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kBinScratch);
-    for (uint32_t b = 0; b < kp::kSyncAnchorHistBins; b++) {
-        bins[b] = 0;
-    }
-    uint32_t pend_head = 0, pend_tail = 0, audited = 0, unbracketed = 0;
+    Outbox* outbox = nullptr;
+    int32_t tile_offset = 0;
+    uint32_t head = 0, tail = 0, audited = 0, unbracketed = 0;
     int64_t err_sum = 0;
     uint64_t err_sumsq = 0, worst_r = 0;
     int32_t worst = 0;
     kp::SyncLocalPoint prev{};
     bool have_prev = false;
-    const auto raw_anchor = [&](const volatile tt_l1_ptr Pending& a) {
-        out(1u << 16 | kp::kSyncKindAnchor << 8,
+
+    static volatile tt_l1_ptr Pending& pending(uint32_t i) {
+        return reinterpret_cast<volatile tt_l1_ptr Pending*>(kPendingScratch)[i % kPendingAnchors];
+    }
+    static volatile tt_l1_ptr uint32_t* bins() { return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kBinScratch); }
+
+    void start(Outbox& o, int32_t offset) {
+        outbox = &o;
+        tile_offset = offset;
+        for (uint32_t b = 0; b < kp::kSyncAnchorHistBins; b++) {
+            bins()[b] = 0;
+        }
+    }
+    void raw(const volatile tt_l1_ptr Pending& a) {
+        outbox->add(
+            1u << 16 | kp::kSyncKindAnchor << 8,
             0,
             0,
             (static_cast<uint64_t>(a.w_hi) << 32) | a.w_lo,
             (static_cast<uint64_t>(a.r_hi) << 32) | a.r_lo);
-    };
-    const auto anchor = [&]() __attribute__((noinline)) {
+    }
+    __attribute__((noinline)) void anchor() {
         const eth_ptp::Instant t = eth_ptp::read_bracketed();
         if (t.spins == 0) {
             unbracketed++;
             return;
         }
-        if (pend_tail - pend_head == kPendingAnchors) {
-            raw_anchor(pending[pend_head++ % kPendingAnchors]);
+        if (tail - head == kPendingAnchors) {
+            raw(pending(head++));
         }
-        volatile tt_l1_ptr Pending& a = pending[pend_tail++ % kPendingAnchors];
+        volatile tt_l1_ptr Pending& a = pending(tail++);
         a.r_lo = static_cast<uint32_t>(t.refclk);
         a.r_hi = static_cast<uint32_t>(t.refclk >> 32);
         a.w_lo = t.wall_lo;
         a.w_hi = t.wall_hi;
-    };
-    const auto point = [&](const kp::SyncLocalPoint& p) __attribute__((noinline)) {
-        while (pend_head != pend_tail) {
-            const volatile tt_l1_ptr Pending& a = pending[pend_head % kPendingAnchors];
+    }
+    // The chord's residue term is a 32-bit product and quotient: consecutive points at one FBDIV are under 2^16 refclk
+    // ticks apart and their residue from the slope is a few eighths; anything else ships raw.
+    __attribute__((noinline)) void point(const kp::SyncLocalPoint& p) {
+        while (head != tail) {
+            const volatile tt_l1_ptr Pending& a = pending(head);
             const uint64_t ar = (static_cast<uint64_t>(a.r_hi) << 32) | a.r_lo;
             if (ar > p.r) {
                 break;
             }
-            pend_head++;
+            head++;
             if (!have_prev || ar < prev.r || prev.k8 == 0 || prev.k8 != p.k8) {
-                raw_anchor(a);
+                raw(a);
                 continue;
             }
             const uint32_t dr = static_cast<uint32_t>(p.r - prev.r);
             const uint32_t x = static_cast<uint32_t>(ar - prev.r);
             const int32_t e =
                 static_cast<int32_t>(static_cast<uint32_t>(p.w8) - static_cast<uint32_t>(prev.w8) - p.k8 * dr);
+            if (dr == 0 || dr >= (1u << 16) || e >= (1 << 15) || e <= -(1 << 15)) {
+                raw(a);
+                continue;
+            }
             const uint32_t line = static_cast<uint32_t>(prev.w8) + p.k8 * x +
-                                  static_cast<uint32_t>(static_cast<int32_t>((static_cast<int64_t>(e) * x) / dr));
+                                  static_cast<uint32_t>(e * static_cast<int32_t>(x) / static_cast<int32_t>(dr));
             const int32_t err8 = static_cast<int32_t>((a.w_lo + static_cast<uint32_t>(tile_offset)) * 8u - line);
             const int32_t q = err8 * 320;
             const int32_t k = static_cast<int32_t>(p.k8);
             const int32_t ns16 = q >= 0 ? q / k : -((-q + k - 1) / k);
             const int32_t b = ns16 + static_cast<int32_t>(kp::kSyncAnchorHistBins / 2);
             if (b < 0 || b >= static_cast<int32_t>(kp::kSyncAnchorHistBins)) {
-                raw_anchor(a);
+                raw(a);
                 continue;
             }
-            bins[b]++;
+            bins()[b]++;
             audited++;
             err_sum += ns16;
             err_sumsq += static_cast<uint64_t>(static_cast<int64_t>(ns16) * ns16);
@@ -369,40 +347,69 @@ void kernel_main() {
         }
         prev = p;
         have_prev = true;
-    };
-    // The audit to the host at stop: every nonzero run of six bins, then the summary and the worst's refclk.
-    const auto send_audit = [&]() {
-        while (pend_head != pend_tail) {
-            raw_anchor(pending[pend_head++ % kPendingAnchors]);
+    }
+    // To the host at stop: every nonzero run of six bins, then the summary and the worst's refclk.
+    void send() {
+        while (head != tail) {
+            raw(pending(head++));
         }
         for (uint32_t b = 0; b < kp::kSyncAnchorHistBins; b += 6) {
             uint32_t c[6] = {};
             uint32_t any = 0;
             for (uint32_t j = 0; j < 6 && b + j < kp::kSyncAnchorHistBins; j++) {
-                c[j] = bins[b + j];
+                c[j] = bins()[b + j];
                 any |= c[j];
             }
             if (any != 0) {
-                out(kp::kSyncKindAnchorHist << 8,
+                outbox->add(
+                    kp::kSyncKindAnchorHist << 8,
                     b,
                     (static_cast<uint64_t>(c[1]) << 32) | c[0],
                     (static_cast<uint64_t>(c[3]) << 32) | c[2],
                     (static_cast<uint64_t>(c[5]) << 32) | c[4]);
             }
         }
-        out(kp::kSyncKindAnchorHist << 8,
+        outbox->add(
+            kp::kSyncKindAnchorHist << 8,
             kp::kSyncAnchorHistSummary,
             static_cast<uint64_t>(err_sum),
             err_sumsq,
             (static_cast<uint64_t>(static_cast<uint32_t>(worst)) << 32) | audited);
-        out(kp::kSyncKindAnchorHist << 8, kp::kSyncAnchorHistWorstAt, worst_r, unbracketed, 0);
-        flush_out();
-    };
+        outbox->add(kp::kSyncKindAnchorHist << 8, kp::kSyncAnchorHistWorstAt, worst_r, unbracketed, 0);
+        outbox->flush();
+    }
+};
+
+// The chip's eth cores this core ships: rt args [0] = n, then (xy, profiler L1 base) per core, the pusher first, then
+// the active eth cores (whose link ends' records ship too), then this core's tile offset.
+struct Drainer {
+    SocketSenderInterface sender, sync_sender;
+    uint32_t n_linked = 0;
+    uint32_t linked_xy[kMaxLinked] = {}, linked_l1[kMaxLinked] = {}, link_cursor[kMaxLinked] = {};
+    uint32_t head = 0;  // the pusher's records consumed
+    Outbox outbox;
+    Audit audit;
+
+    void start() {
+        const uint32_t n_linked_arg = get_arg_val<uint32_t>(0);
+        n_linked = n_linked_arg < kMaxLinked ? n_linked_arg : kMaxLinked;
+        for (uint32_t i = 0; i < n_linked; i++) {
+            linked_xy[i] = get_arg_val<uint32_t>(1 + 2 * i);
+            linked_l1[i] = get_arg_val<uint32_t>(2 + 2 * i);
+        }
+        sender = create_sender_socket_interface(kSocketConfigAddr);
+        set_sender_socket_page_size(sender, kPageBytes);
+        sync_sender = create_sender_socket_interface(kSyncCfgAddr);
+        set_sender_socket_page_size(sync_sender, kPageBytes);
+        noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC);
+        outbox.sync = &sync_sender;
+        audit.start(outbox, static_cast<int32_t>(get_arg_val<uint32_t>(1 + 2 * n_linked_arg)));
+    }
 
     // The pusher's records [head, tail): the tail from its control block, the records from its ring, the consumed
     // count written back so it knows how far it may overwrite. One frame per call, or everything with `all`.
-    uint32_t head = 0;
-    const auto drain_pusher = [&](bool all) __attribute__((noinline)) {
+    __attribute__((noinline)) void drain_pusher(bool all) {
+        const uint32_t px = kPusherXy & 0xFFFFu, py = kPusherXy >> 16;
         volatile tt_l1_ptr uint32_t* pctl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kPusherCtrlScratch);
         for (;;) {
             noc_async_read(get_noc_addr(px, py, kPusherCtrl), kPusherCtrlScratch, 64);
@@ -434,7 +441,7 @@ void kernel_main() {
                     kp::SyncLocalPoint pts[kp::kSyncLocalPoints];
                     const uint32_t np = kp::sync_local_unpack(rec, pts);
                     for (uint32_t j = 0; j < np; j++) {
-                        point(pts[j]);
+                        audit.point(pts[j]);
                     }
                 }
             }
@@ -452,14 +459,14 @@ void kernel_main() {
                 return;
             }
         }
-    };
-    uint32_t link_cursor[kMaxLinked] = {};
-    // Linked core i's link-end records [cursor, tail), the tail from the control vector pack_linked_frame just
-    // read. The end never waits for this core, so a tail more than a ring ahead means the oldest are gone. A round's
-    // two records land back to back, so a run reaching into the ring's last two slots re-reads the tail after the
-    // image and drops what the end may have overwritten meanwhile.
-    constexpr uint32_t kTailBlock = (kp::SPSC_LINK_SYNC_TAIL * 4u) & ~63u;
-    const auto ship_link_sync = [&](uint32_t i) {
+    }
+
+    // Linked core i's link-end records [cursor, tail), the tail from the control vector pack_linked_frame just read.
+    // The end never waits for this core, so a tail more than a ring ahead means the oldest are gone. A round's two
+    // records land back to back, so a run reaching into the ring's last two slots re-reads the tail after the image
+    // and drops what the end may have overwritten meanwhile.
+    void ship_link_sync(uint32_t i) {
+        constexpr uint32_t kTailBlock = (kp::SPSC_LINK_SYNC_TAIL * 4u) & ~63u;
         if (kLinkRingAddr == 0) {
             return;
         }
@@ -492,8 +499,9 @@ void kernel_main() {
                     kp::kLinkSyncRingRecords));
         }
         link_cursor[i] = tail;
-    };
-    const auto sweep = [&]() __attribute__((noinline)) {
+    }
+
+    __attribute__((noinline)) void sweep() {
         for (uint32_t i = 0; i < n_linked; i++) {
             const uint32_t bytes = pack_linked_frame(linked_xy[i], linked_l1[i]);
             if (bytes != 0) {
@@ -503,8 +511,23 @@ void kernel_main() {
                 ship_link_sync(i);
             }
         }
-    };
+    }
+};
+#endif
 
+void kernel_main() {
+#if defined(PROFILE_KERNEL)
+    volatile tt_l1_ptr uint32_t* done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kCtrlAddr);
+    volatile tt_l1_ptr uint32_t* hb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kCtrlAddr + 4);
+    volatile tt_l1_ptr uint32_t* go = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kCtrlAddr + 8);
+    volatile tt_l1_ptr uint32_t* stop = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kCtrlAddr + 64);
+    *done = 0;
+    *hb = 0;
+    *go = 0;
+    *stop = 0;
+
+    Drainer d;
+    d.start();
     // Shipping waits for the host's go word, written once the receiver's ingest threads drain these sockets.
     while (*go == 0u && *stop == 0u) {
         (*hb)++;
@@ -514,31 +537,31 @@ void kernel_main() {
     while (true) {
         (*hb)++;
         invalidate_l1_cache();
-        drain_pusher(false);
+        d.drain_pusher(false);
         const uint32_t now = eth_ptp::rd(eth_ptp::kWallClockLo);
         if (now - last_sweep >= kSweepCycles) {
             last_sweep = now;
-            sweep();
+            d.sweep();
         }
         // Teardown: the relay stop word, written by the host at quiesce once the pusher has stopped, so its tail
         // is final.
         if (*stop != 0u) {
             break;
         }
-        anchor();
+        d.audit.anchor();
         for (uint32_t d = 0; d < kPollCycles; d++) {
             asm volatile("nop");
         }
     }
-    drain_pusher(true);
-    send_audit();
-    sweep();
+    d.drain_pusher(true);
+    d.audit.send();
+    d.sweep();
     *done = kp::kRelayDrainedWord;
-    socket_barrier(sender);
-    socket_barrier(sync_sender);
+    socket_barrier(d.sender);
+    socket_barrier(d.sync_sender);
     noc_async_writes_flushed();
-    update_socket_config(sender);
-    update_socket_config(sync_sender);
+    update_socket_config(d.sender);
+    update_socket_config(d.sync_sender);
     *done = kp::kRelayDoneWord;
 #endif
 }
