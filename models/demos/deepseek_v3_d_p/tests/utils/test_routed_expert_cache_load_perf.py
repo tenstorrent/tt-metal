@@ -100,7 +100,8 @@ def test_routed_expert_cache_load_perf(mesh_device, device_params, layer_idx):
     assert tuple(expert.gate_projs[0].shape) == (KimiK27Config.EMB_SIZE, KimiK27Config.MOE_INTERMEDIATE_SIZE)
 
     warm = times[1:] or times
-    nbytes = sum(f.stat().st_size for f in cache_dir.glob(f"{prefix}.*.tensorbin"))
+    loaded = cache_dir.glob(f"{prefix}.*_dtype_{DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE.name}_*.tensorbin")
+    nbytes = sum(f.stat().st_size for f in loaded)
     logger.info(
         f"{prefix}: {nbytes / 2**30:.2f} GiB | cold={times[0] * 1000:.1f} ms | warm n={len(warm)} "
         f"median={statistics.median(warm) * 1000:.1f} ms ({nbytes / 1e9 / statistics.median(warm):.2f} GB/s)"
