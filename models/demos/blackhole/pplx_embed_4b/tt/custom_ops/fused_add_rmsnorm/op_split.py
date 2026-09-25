@@ -42,9 +42,13 @@ def fused_add_rmsnorm_split(
     sum_dtype: ttnn.DataType | None = None,
     out_dtype: ttnn.DataType | None = None,
     memory_config: ttnn.MemoryConfig | None = None,
+    out_memory_config: ttnn.MemoryConfig | None = None,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    """``memory_config`` places the residual sum, ``out_memory_config`` (default: the same) the normalised output."""
     if memory_config is None:
         memory_config = a.memory_config()
+    if out_memory_config is None:
+        out_memory_config = memory_config
     device = a.device()
     shape = list(a.padded_shape)
     W = shape[-1]
@@ -80,7 +84,9 @@ def fused_add_rmsnorm_split(
         virt.append((int(v.x), int(v.y)))
 
     sum_tensor = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), sum_dtype, ttnn.TILE_LAYOUT, device, memory_config)
-    out_tensor = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), out_dtype, ttnn.TILE_LAYOUT, device, memory_config)
+    out_tensor = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(shape), out_dtype, ttnn.TILE_LAYOUT, device, out_memory_config
+    )
 
     def cb(index, tiles, dtype):
         ts = _TILE_BYTES[dtype]

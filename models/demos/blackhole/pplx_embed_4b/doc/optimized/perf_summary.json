@@ -345,5 +345,39 @@
       "bs1_bucketed_eval_accuracy_tt": 0.8169
     },
     "note": "e2e means from Avg tokens/s at ISL 512; cold/sustained are the mean of two sustained_run.sh rounds per arm"
+  },
+  "batched_add_norm_l1_20260925": {
+    "host": "8x p150b host; bs8 / bs16 / bs32 on chips 0 / 1 / 2 run concurrently (clocks settle ~40-60 MHz lower than a single-chip run)",
+    "fused_add_norm_us_per_call_bs32": {
+      "baseline": 434.9,
+      "norm_out_l1_copy_kept": 365.9,
+      "b_and_out_l1_copy_skipped": 255.0
+    },
+    "sustained_run_3_alternating_rounds_mean": {
+      "bs8": {
+        "cold_off": 108.2,
+        "cold_on": 102.7,
+        "sustained_off": 121.0,
+        "sustained_on": 117.0
+      },
+      "bs16": {
+        "cold_off": 202.8,
+        "cold_on": 194.6,
+        "sustained_off": 239.6,
+        "sustained_on": 232.7
+      },
+      "bs32": {
+        "cold_off": 396.4,
+        "cold_on": 382.8,
+        "sustained_off": 458.5,
+        "sustained_on": 447.5
+      }
+    },
+    "stsb_batched": {
+      "bs8": 0.8123,
+      "bs16": 0.814,
+      "bs32": 0.8159
+    },
+    "note": "off = QWEN_BATCHED_L1_INTERMEDIATES=0; the post-attention sum is in L1 at bs8/16 only (does not fit at bs32)"
   }
 }

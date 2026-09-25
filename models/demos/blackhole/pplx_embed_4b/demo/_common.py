@@ -467,6 +467,19 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
             "QWEN_WEIGHT_INTERLEAVED_K2560_N9728",
         ):
             os.environ.setdefault(k, "1")
+    # Batched ISL 512: the fused add+RMSNorm's short-lived operands live in L1 interleaved instead of DRAM: its b
+    # (the WO / FF2 outputs) and both norms' outputs (read by QKV / FF1+FF3), and at bs8 / bs16 the post-attention
+    # residual sum (add 2's a, alive across the MLP only). The decoder's copy of the attention output to DRAM is
+    # skipped (tt/decoder_fusion.py). The op is DRAM-bound, so this halves its DRAM traffic: 434.9 -> 255.0 us per
+    # call at bs32 (with the copy gone). bs16 sustained_run.sh, 3 alternating rounds (without the sum): cold /
+    # sustained 202.8 / 230.7 -> 195.4 / 224.7 ms. The post-attention sum does not fit at bs32 (72 KB/core short,
+    # also with FF2's output in DRAM); the post-MLP sum crosses SDPA and stays in DRAM. Opt out:
+    # QWEN_BATCHED_L1_INTERMEDIATES=0.
+    if batch_size in (8, 16, 32) and seq_len == 512 and os.getenv("QWEN_BATCHED_L1_INTERMEDIATES", "1") == "1":
+        for k in ("TT_PREFILL_WO_L1", "TT_PREFILL_FF2_L1", "QWEN_FUSED_ADD_NORM_OUT_L1"):
+            os.environ.setdefault(k, "1")
+        if batch_size in (8, 16):
+            os.environ.setdefault("QWEN_FUSED_ADD_NORM_SUM1_L1", "1")
     # bs1 SDPA: q_chunk 256 doubles the work units (32 -> 64) so the 8x8 grid is full; k stays 256.
     # Standalone at the model's config (LoFi, fp32 acc off = streaming kernel, exp approx, bfp8
     # Q/K/V in L1): q512/k256 79.1 us -> q256/k256 55.0 us (-30%); q256/k512 71.5, q128/k128 72.2,

@@ -964,3 +964,43 @@ sizes the op streams from DRAM and that share is small. The kernel is now `compu
 the bs1 default only. Resident heads-op constants (`QWEN_FUSED_RESIDENT_CONSTS=1`) also stay bs1-only: at bs8 and bs16
 the per-core shards clash with the heads op's static CBs (`TT_THROW: Statically allocated circular buffers ... clash
 with L1 buffers`) on the first warm-up forward.
+
+## 54. bs16 fused add+RMSNorm: what bounds it, and why L1 interleaved beat a resident-sharded rewrite (2026-09-25)
+
+8× p150b host; standalone numbers are traced wall time per call at the bs16 shape ([8192 × 2560] bfp8, R = 5,
+120 cores, 11 waves), median of 5.
+
+**Ablation (scratch kernels with compile-time skips, not in the repo).** Full op 241 µs; data movement only (no
+compute) 231; read + write only (no compute, no partial exchange) 231; compute + exchange only (no DRAM traffic) 97;
+read only 140, write only 169 (same bytes: writes are the slower direction, 265 vs 319 GB/s); handshakes only 25.
+Double-buffering the streaming CBs and dropping the per-wave write barrier: 240-242 (no change). Dropping the partial
+exchange made it slower (263): likely the exchange keeps each 5-core row group in lock step, which DRAM prefers
+(not verified). Reference streaming ops on the same tensors: `ttnn.add` 390 GB/s, `ttnn.clone` 393 GB/s; the op's data
+movement runs at 386 GB/s and the full op at 370. So the op is DRAM-bound at ~95% of what streaming ops reach here;
+compute (97 µs) hides under the traffic. Only fewer bytes help.
+
+**L1 placement.** b (WO / FF2 outputs) and the norm output are short-lived, so unlike the residual stream (§2) they
+never share L1 with SDPA's CBs, and they fit at bs16 (186 KB/core) and bs32 (372 KB/core). With both in L1 interleaved
+the op fell to 365.9 µs/call at bs32 (434.9 before), but end to end the gain vanished: the stock decoder moves the
+attention output to the residual's DRAM config before the post-attention add (`decoder.py`, a workaround for the stock
+`ttnn.add`), which became 36 L1 → DRAM copies (7.2 ms at bs32). The fused path reads b from anywhere, so the move is
+skipped there: 36 copies → 0, op 255.0 µs/call, bs32 replay 370.5 → 357.4 ms. `minimal_matmul` addresses every in0 /
+in1 / output tile through `TensorAccessor`, so it takes L1 (interleaved or sharded) inputs and outputs unchanged.
+
+**Resident-sharded rewrite: correct, no faster.** The op's schedule (unit u = row · R + k on core u mod 120, wave
+u div 120) is round-robin ND sharding with one unit per shard, so b and the output can be resident in that layout,
+read and packed in place through CBs aliased to the core's shards (`cb_descriptor_from_sharded_tensor` works on ND
+tensors). Built and verified bit-identical in every placement combination (and in STS-B), but it needed a ttnn view
+relaxation for ND-sharded row regroups ([1, 8, 1024, W] ↔ [1, 1, 8192, W]), and QKV reading the unit-sharded in0 was
+5-9% slower at its best block config (bs16 570 → 601 µs, bs32 1084 → 1165) while WO / FF2 / FF1+FF3 were neutral.
+Against L1 interleaved, same chip, sustained_run.sh at bs16: cold 195.4 vs 196.6, sustained 224.7 vs 225.4 ms. Both
+remove the same DRAM traffic; residency only adds the NoC reads / writes of b and the output, which the DRAM-bound op
+did not miss. Dropped (tools kept: `perf_tools/bench_batched_mm_sharded_io.py`, `sweep_qkv_sharded_in0.py`; the sweep
+also found bs32 QKV with in0 in DRAM ~5% faster at M16 K16 N4 sb1×4 than the shipped 8/8/8, not yet A/B'd in-model).
+
+**Residual sums.** The post-attention sum (add 2's a) lives across the MLP only and fits at bs8 / bs16 (landed); at bs32
+it is 72 KB/core short, also with FF2's output back in DRAM. The post-MLP sum is the next layer's input: the decoder
+asserts it sits in the residual's config, and it would have to share L1 with SDPA (~66 KB/core free, §40), so it stays
+in DRAM. One resident-mode bs16 run hung in warm-up (killed after 30 min) while a device profile ran on another chip;
+it did not recur in later runs. Profiles taken while other jobs ran on the host came out broken (device-only report,
+or "End marker found without a corresponding start marker"); profile with the host otherwise idle.
