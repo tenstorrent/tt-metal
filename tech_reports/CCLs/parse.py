@@ -101,6 +101,7 @@ CSV_FIELDS = [
     "num_pages",
     "shape",
     "iters",
+    "calls",
     "us",
     "ideal_us",
 ]
@@ -109,32 +110,40 @@ CSV_FIELDS = [
 # ------------------------------------------------------------------- parsing
 
 
-def measure(seg, iters, n):
-    """Mean per-iteration duration and roofline ideal, both in ns.
+def measure(seg, iters, n, calls):
+    """Mean per-call duration and roofline ideal, both in ns.
 
     One ttnn call is not always one kernel: all_reduce runs as reduce_scatter
     then all_gather. Rows of the stages interleave across devices, so a stage is
     identified by its position among one device's rows. Each stage's max over
     devices is its time, and the stages sum.
 
+    A trace of several back-to-back calls drops its first call, which starts
+    cold, so the rest measure calls that start with the devices already in step.
+
     PM IDEAL is the op's own roofline model. Ops without one report 1, so the
     ideal is dropped if any kernel in the call lacks a model.
     """
-    if len(seg) % (iters * n):
+    if len(seg) % (iters * n * calls):
         return None, None
     rows = len(seg) // iters
+    stages = rows // (n * calls)
+    first = 1 if calls > 1 else 0
     totals, ideals = [], []
     for i in range(iters):
         it = seg.iloc[i * rows : (i + 1) * rows]
-        stage = it.groupby(DEVICE_COL).cumcount()
-        totals.append(it[DURATION_COL].astype(float).groupby(stage).max().sum())
+        k = it.groupby(DEVICE_COL).cumcount()
+        by_stage = [k // stages, k % stages]
+        totals.extend(it[DURATION_COL].astype(float).groupby(by_stage).max().groupby(level=0).sum().iloc[first:])
         if IDEAL_COL in it.columns:
             # 1 ns is the default for an op with no performance model
-            per_stage = it[IDEAL_COL].map(_num).groupby(stage).max()
-            ideals.append(per_stage.sum() if (per_stage > 1).all() else None)
+            per_stage = it[IDEAL_COL].map(_num).groupby(by_stage).max()
+            ok = (per_stage > 1).groupby(level=0).all()
+            per_call = per_stage.groupby(level=0).sum().where(ok)
+            ideals.extend(per_call.iloc[first:])
 
     mean_dur = sum(totals) / len(totals)
-    mean_ideal = sum(ideals) / len(ideals) if ideals and all(i is not None for i in ideals) else None
+    mean_ideal = sum(ideals) / len(ideals) if ideals and all(pd.notna(i) for i in ideals) else None
     return mean_dur, mean_ideal
 
 
@@ -173,7 +182,7 @@ def main():
         w.writeheader()
         for cfg, a, b in zip(cfgs, starts, stops):
             seg = df.iloc[a + 1 : b]
-            dur, ideal = measure(seg, cfg["iters"], cfg["n"])
+            dur, ideal = measure(seg, cfg["iters"], cfg["n"], cfg.get("calls", 1))
             if dur is None:
                 continue
             links = attr_topo = None
@@ -204,6 +213,7 @@ def main():
                     "num_pages": cfg["num_pages"],
                     "shape": cfg["shape"],
                     "iters": cfg["iters"],
+                    "calls": cfg.get("calls", 1),
                     "us": f"{dur / 1000.0:.3f}",
                     "ideal_us": "" if ideal is None else f"{ideal / 1000.0:.3f}",
                 }

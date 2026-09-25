@@ -5,8 +5,9 @@
 #   ./run_bench.sh [loudbox|galaxy] [check]
 #
 # Sweeps line at 2, 4 and 8 devices and ring where the axis closes, over DRAM,
-# into data/runs/<timestamp>/. Then rebuilds the reports in results/ and the
-# figures in images/ from every run kept there. `check` runs correctness only.
+# into data/runs/<timestamp>/, then times back-to-back calls at the smallest
+# sizes into a second run. Then rebuilds the reports in results/ and the figures
+# in images/ from every run kept there. `check` runs correctness only.
 #
 # Every other setting is an environment variable read by the test. Defaults
 # live at the top of the test file. To sweep something else, set it here:
@@ -47,33 +48,41 @@ if [ "${2:-}" = "check" ]; then
     exit $?
 fi
 
-RUN_DIR="${REPORT_DIR}/data/runs/$(date +%Y%m%d_%H%M%S)"
-LOG="${RUN_DIR}/bench.log"
-mkdir -p "${RUN_DIR}"
-printf -- '--- run %s\n    log: %s   (tail -f to follow)\n' "${RUN_DIR}" "${LOG}"
+# One pytest pass into its own run directory, then parse it. Arguments are
+# NAME=value settings for this pass only.
+bench() {
+    RUN_DIR="${REPORT_DIR}/data/runs/$(date +%Y%m%d_%H%M%S)"
+    LOG="${RUN_DIR}/bench.log"
+    mkdir -p "${RUN_DIR}"
+    printf -- '--- run %s\n    log: %s   (tail -f to follow)\n' "${RUN_DIR}" "${LOG}"
 
-# The parser pairs profiler signposts with this file in order, so a stale one
-# from an earlier run would break the pairing.
-rm -f "${CONFIGS}"
-python -m tracy -o "${RUN_DIR}/profiler" -r -p -v -m pytest "${TEST}" -k test_perf > "${LOG}" 2>&1
-# `python -m tracy` exits 0 even when pytest fails, so read its summary line.
-if grep -qE '^=+ .*[0-9]+ (failed|error)' "${LOG}"; then
-    printf -- '\npytest reported failures. Last 40 lines of %s:\n\n' "${LOG}"
-    tail -40 "${LOG}"
-    exit 1
-fi
-# A run where every cell skipped leaves nothing to parse.
-if [ ! -s "${CONFIGS}" ]; then
-    printf -- '\nno measurements recorded. Last 40 lines of %s:\n\n' "${LOG}"
-    tail -40 "${LOG}"
-    exit 1
-fi
-mv "${CONFIGS}" "${RUN_DIR}/configs.jsonl"
+    # The parser pairs profiler signposts with this file in order, so a stale one
+    # from an earlier run would break the pairing.
+    rm -f "${CONFIGS}"
+    env "$@" python -m tracy -o "${RUN_DIR}/profiler" -r -p -v -m pytest "${TEST}" -k test_perf > "${LOG}" 2>&1
+    # `python -m tracy` exits 0 even when pytest fails, so read its summary line.
+    if grep -qE '^=+ .*[0-9]+ (failed|error)' "${LOG}"; then
+        printf -- '\npytest reported failures. Last 40 lines of %s:\n\n' "${LOG}"
+        tail -40 "${LOG}"
+        exit 1
+    fi
+    # A run where every cell skipped leaves nothing to parse.
+    if [ ! -s "${CONFIGS}" ]; then
+        printf -- '\nno measurements recorded. Last 40 lines of %s:\n\n' "${LOG}"
+        tail -40 "${LOG}"
+        exit 1
+    fi
+    mv "${CONFIGS}" "${RUN_DIR}/configs.jsonl"
 
-python "${REPORT_DIR}/parse.py" "${RUN_DIR}" || exit 1
-# The ops CSV is enough to re-parse. The rest is hundreds of MB.
-rm -rf "${RUN_DIR}/profiler/.logs"
-find "${RUN_DIR}/profiler" \( -name profile_log_device.csv -o -name '*.tracy' \) -delete
+    python "${REPORT_DIR}/parse.py" "${RUN_DIR}" || exit 1
+    # The ops CSV is enough to re-parse. The rest is hundreds of MB.
+    rm -rf "${RUN_DIR}/profiler/.logs"
+    find "${RUN_DIR}/profiler" \( -name profile_log_device.csv -o -name '*.tracy' \) -delete
+}
+
+bench
+# Time is all fixed latency at the smallest sizes, so time back-to-back calls there.
+bench CCL_CALLS=8 CCL_MEMORY=dram CCL_MAX_BYTES=16384
 
 python "${REPORT_DIR}/report.py" || exit 1
 printf -- '\nreports in %s/results, figures in %s/images\n' "${REPORT_DIR}" "${REPORT_DIR}"

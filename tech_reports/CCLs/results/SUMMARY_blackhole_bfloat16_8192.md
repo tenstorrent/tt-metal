@@ -4,7 +4,7 @@
 arch          blackhole  line rate 25.0 GB/s per link per direction
 dtype         bfloat16  (2048 B pages)
 packet        8192 B
-runs          20260923_214401, 20260923_215610
+runs          20260923_214401, 20260923_215610, 20260925_171304
 ```
 
 Byte targets follow nccl-tests (`-b 1K -e 16G -f 2`), rounded to whole tiles.
@@ -32,7 +32,20 @@ Each (op, n) shows one configuration, the first measured of ring over line
 and DRAM over L1. Ring needs a wraparound link, so it exists only at the
 device count that closes the axis.
 
+Under each op, `kernel_time` models one call from the device count `N` and the
+size of each device's input tensor. The first two terms are the startup latency,
+fitted over lines to the back-to-back calls at the smallest sizes. A ring keeps
+the line's constant, with its own cost per hop from its one device count. The
+last term divides the bytes through the busiest link by the peak rate they reach
+at the largest device count. The range is the typical and worst miss against
+every size at that device count.
+
 ## all_reduce
+
+```
+line: kernel_time ≈ 4.36 us + 4.37 us * (N-1) + 2(N-1)/N * input_bytes / 43.5 GB/s, within 3%-12%
+ring: kernel_time ≈ 4.36 us + 3.93 us * N/2 + 2(N-1)/N * input_bytes / 86.3 GB/s, within 8%-30%
+```
 
 | n | config | target (B) | size (B) | count | pages | time (us) | algbw (GB/s) | busbw (GB/s) | linkbw (GB/s) | line rate (%) | roofline (%) |
 |--:|--|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
@@ -114,6 +127,11 @@ device count that closes the axis.
 
 ## all_to_all
 
+```
+line: kernel_time ≈ 1.75 us + 1.39 us * (N-1) + ⌊N/2⌋⌈N/2⌉/N * input_bytes / 33.0 GB/s, within 6%-21%
+ring: kernel_time ≈ 1.75 us + 2.19 us * N/2 + ⌊N/2⌋⌈N/2⌉/N * input_bytes / 68.0 GB/s, within 1%-14%
+```
+
 | n | config | target (B) | size (B) | count | pages | time (us) | algbw (GB/s) | busbw (GB/s) | linkbw (GB/s) | line rate (%) | roofline (%) |
 |--:|--|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
 | 2 | line dram | 1024 | | | | | | | | | |
@@ -194,6 +212,11 @@ device count that closes the axis.
 
 ## all_gather
 
+```
+line: kernel_time ≈ 3.66 us + 1.29 us * (N-1) + (N-1) * input_bytes / 48.1 GB/s, within 3%-11%
+ring: kernel_time ≈ 3.66 us + 1.57 us * N/2 + (N-1) * input_bytes / 94.5 GB/s, within 10%-22%
+```
+
 | n | config | target (B) | size (B) | count | pages | time (us) | algbw (GB/s) | busbw (GB/s) | linkbw (GB/s) | line rate (%) | roofline (%) |
 |--:|--|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
 | 2 | line dram | 1024 | | | | | | | | | |
@@ -273,6 +296,11 @@ device count that closes the axis.
 | 8 | ring dram | 17179869184 | 17179869184 | 8589934592 | 8388608 | 159027.16 | 108.03 | 94.53 | 23.63 | 94.5 | 94.5 |
 
 ## reduce_scatter
+
+```
+line: kernel_time ≈ 1.27 us + 3.03 us * (N-1) + (N-1)/N * input_bytes / 39.8 GB/s, within 2%-13%
+ring: kernel_time ≈ 1.27 us + 2.15 us * N/2 + (N-1)/N * input_bytes / 81.5 GB/s, within 9%-43%
+```
 
 | n | config | target (B) | size (B) | count | pages | time (us) | algbw (GB/s) | busbw (GB/s) | linkbw (GB/s) | line rate (%) | roofline (%) |
 |--:|--|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|

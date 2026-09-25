@@ -101,7 +101,12 @@ LINE_RATE = _env("CCL_LINE_RATE", LINE_RATE_GBPS.get(ARCH), float)
 
 OPS = _env("CCL_OPS", ["all_gather", "all_reduce", "reduce_scatter", "all_to_all"], _list)
 
-BYTE_TARGETS = [1 << k for k in range(10, 35)]  # 1 KiB .. 16 GiB
+# Size range, as nccl-tests -b and -e
+MIN_BYTES = _env("CCL_MIN_BYTES", 1 << 10, int)
+MAX_BYTES = _env("CCL_MAX_BYTES", 1 << 34, int)
+BYTE_TARGETS = [1 << k for k in range(10, 35) if MIN_BYTES <= 1 << k <= MAX_BYTES]
+# Back-to-back calls per trace. Above 1, the first starts cold and is not counted.
+CALLS = _env("CCL_CALLS", 1, int)
 ITERS = _env("CCL_ITERS", 20, int)
 ITERS_LARGE = _env("CCL_ITERS_LARGE", 5, int)
 LARGE_BYTES = 1 << 30  # fewer iterations above this
@@ -238,6 +243,7 @@ def banner():
         f"  arch          {ARCH}  (line rate {LINE_RATE} GB/s per link per direction)\n"
         f"  iters         {ITERS}, {ITERS_LARGE} above {LARGE_BYTES} B\n"
         f"  targets       {BYTE_TARGETS[0]} .. {BYTE_TARGETS[-1]} B, x2\n"
+        f"  calls         {CALLS} per trace\n"
         "=================================================\n"
     )
 
@@ -280,6 +286,7 @@ def test_perf(mesh_device, device_params, topology, memory, op, submesh_shape, t
     iters = ITERS_LARGE if p["bytes"] > LARGE_BYTES else ITERS
 
     out = tt_in = trace_id = None
+    outs = []
     capturing = False
     try:
         # Uninitialised on-device allocation. from_torch builds the tensor on the
@@ -299,7 +306,7 @@ def test_perf(mesh_device, device_params, topology, memory, op, submesh_shape, t
 
         trace_id = ttnn.begin_trace_capture(submesh, cq_id=0)
         capturing = True
-        out = run_op(op, tt_in, mem)
+        outs = [run_op(op, tt_in, mem) for _ in range(CALLS)]
         ttnn.end_trace_capture(submesh, trace_id, cq_id=0)
         capturing = False
         ttnn.synchronize_device(submesh)
@@ -335,6 +342,7 @@ def test_perf(mesh_device, device_params, topology, memory, op, submesh_shape, t
                         "page_size": TILE_BYTES,
                         "shape": p["dev_shape"],
                         "iters": iters,
+                        "calls": CALLS,
                     }
                 )
                 + "\n"
@@ -354,7 +362,7 @@ def test_perf(mesh_device, device_params, topology, memory, op, submesh_shape, t
                 print("end_trace_capture failed; device may be unusable")
         if trace_id is not None:
             ttnn.release_trace(submesh, trace_id)
-        for t in (out, tt_in):
+        for t in (out, tt_in, *outs):
             if t is not None:
                 t.deallocate()
 

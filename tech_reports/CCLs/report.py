@@ -9,7 +9,8 @@
 A cell measured by several runs keeps its latest measurement. Per machine, that
 is arch, dtype and packet, this writes:
 
-    results/SUMMARY_<machine>.md     one curve per (op, n): ring over line, DRAM over L1
+    results/SUMMARY_<machine>.md     one curve per (op, n): ring over line, DRAM over L1,
+                                     under a kernel_time model per op
     results/FULL_<machine>.md        a section per (topology, memory)
     images/bw_<machine>_n<n>.png     DRAM, a panel per topology
     images/memcfg_<machine>_n<n>.png where an op was measured in both L1 and DRAM
@@ -19,6 +20,7 @@ import math
 from pathlib import Path
 
 import matplotlib
+import numpy as np
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -37,7 +39,8 @@ MEMORIES = ["dram", "l1"]
 # Mesh shape and cluster axis stay in cells.csv but out of the reports: readers
 # compare device counts.
 MACHINE = ["arch", "dtype", "packet"]
-CELL = MACHINE + ["topology", "memory", "op", "n", "target_bytes"]
+# A cell timed back to back (`calls` > 1) is kept apart from one timed a call at a time.
+CELL = MACHINE + ["topology", "memory", "op", "n", "target_bytes", "calls"]
 
 # Okabe-Ito, chosen for hue separation under color-vision deficiency.
 PALETTE = [("#0072B2", "o"), ("#D55E00", "s"), ("#009E73", "^"), ("#CC79A7", "D")]
@@ -48,6 +51,8 @@ def load():
     if not paths:
         raise SystemExit(f"no runs/*/cells.csv in {DATA_DIR}. Run run_bench.sh first.")
     df = pd.concat([pd.read_csv(p) for p in paths], ignore_index=True)
+    # Runs from before `calls` was recorded traced one call.
+    df["calls"] = df.get("calls", pd.Series(1, index=df.index)).fillna(1).astype(int)
     # Run names are timestamps, so sorting by them puts the latest measurement last.
     df = df.sort_values("run").drop_duplicates(CELL, keep="last")
     return add_metrics(fill_links(df))
@@ -151,16 +156,15 @@ def _fmt(v, spec):
     return "" if pd.isna(v) else format(v, spec)
 
 
-def op_tables(g, level, with_config=False):
+def op_tables(g, level, with_config=False, intro=None, targets=BYTE_TARGETS):
     out = []
     config_head, config_rule = ("config | ", "--|") if with_config else ("", "")
     for op in OP_ORDER:
         per_op = g[g["op"] == op]
         if per_op.empty:
             continue
+        out += [f"{level} {op}", ""] + (intro or {}).get(op, [])
         out += [
-            f"{level} {op}",
-            "",
             f"| n | {config_head}target (B) | size (B) | count | pages | time (us) | "
             "algbw (GB/s) | busbw (GB/s) | linkbw (GB/s) | line rate (%) | roofline (%) |",
             f"|--:|{config_rule}--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|",
@@ -171,7 +175,7 @@ def op_tables(g, level, with_config=False):
                 r = per_n.iloc[0]
                 config = f"{r['topology']} {r['memory']} | "
             cells = per_n.set_index("target_bytes")
-            for target in BYTE_TARGETS:
+            for target in targets:
                 if target not in cells.index:
                     out.append(f"| {n} | {config}{target} | | | | | | | | | |")
                     continue
@@ -191,15 +195,21 @@ def links(g):
     return ", ".join(map(str, seen)) or "?"
 
 
-def raw_report(g):
-    out = header("CCL benchmark, all configurations", g)
+def raw_report(one, back_to_back):
+    out = header("CCL benchmark, all configurations", pd.concat([one, back_to_back]))
     for topology in TOPOLOGIES:
         for memory in MEMORIES:
-            sec = g[(g["topology"] == topology) & (g["memory"] == memory)]
-            if sec.empty:
-                continue
-            out += [f"## {topology}, {memory.upper()}", "", f"links per direction: {links(sec)}", ""]
-            out += op_tables(sec, "###")
+            for g in (one, back_to_back):
+                sec = g[(g["topology"] == topology) & (g["memory"] == memory)]
+                if sec.empty:
+                    continue
+                title, targets = f"## {topology}, {memory.upper()}", BYTE_TARGETS
+                if sec["calls"].iloc[0] > 1:
+                    # Timed only at the smallest sizes, so list just those.
+                    title += f", {sec['calls'].iloc[0]} calls back to back"
+                    targets = sorted(sec["target_bytes"].unique())
+                out += [title, "", f"links per direction: {links(sec)}", ""]
+                out += op_tables(sec, "###", targets=targets)
     return out
 
 
@@ -214,15 +224,68 @@ def best(g):
     return pd.concat(picked)
 
 
-def best_report(g):
-    out = header("CCL benchmark, best configuration", g)
+def best_report(one, back_to_back):
+    out = header("CCL benchmark, best configuration", pd.concat([one, back_to_back]))
     out += [
         "Each (op, n) shows one configuration, the first measured of ring over line",
         "and DRAM over L1. Ring needs a wraparound link, so it exists only at the",
         "device count that closes the axis.",
         "",
+        "Under each op, `kernel_time` models one call from the device count `N` and the",
+        "size of each device's input tensor. The first two terms are the startup latency,",
+        "fitted over lines to the back-to-back calls at the smallest sizes. A ring keeps",
+        "the line's constant, with its own cost per hop from its one device count. The",
+        "last term divides the bytes through the busiest link by the peak rate they reach",
+        "at the largest device count. The range is the typical and worst miss against",
+        "every size at that device count.",
+        "",
     ]
-    return out + op_tables(best(g), "##", with_config=True)
+    return out + op_tables(best(one), "##", with_config=True, intro=model(one, back_to_back))
+
+
+def hops(topology, n):
+    return n - 1 if topology == "line" else n // 2
+
+
+# Bytes through the busiest link as a multiple of each device's input tensor
+LINK_BYTES = {
+    "all_gather": "(N-1)",
+    "reduce_scatter": "(N-1)/N",
+    "all_reduce": "2(N-1)/N",
+    "all_to_all": "⌊N/2⌋⌈N/2⌉/N",
+}
+HOPS = {"line": "(N-1)", "ring": "N/2"}
+
+
+def model(one, back_to_back):
+    """Per op, the kernel_time formula for each topology, as lines of markdown."""
+    lines = {}
+    for op, per_op in back_to_back.groupby("op"):
+        smallest = per_op.loc[per_op.groupby(["topology", "n"])["bytes"].idxmin()]
+        line = smallest[smallest["topology"] == "line"]
+        if line["n"].nunique() < 2:
+            continue
+        per_hop, base = np.polyfit([hops("line", n) for n in line["n"]], line["us"], 1)
+        costs = {"line": per_hop}
+        for _, r in smallest[smallest["topology"] == "ring"].iterrows():
+            costs["ring"] = (r["us"] - base) / hops("ring", r["n"])
+        formulas = []
+        for topology, cost in costs.items():
+            curve = one[(one["op"] == op) & (one["topology"] == topology) & (one["memory"] == "dram")]
+            if curve.empty:
+                continue
+            curve = curve[curve["n"] == curve["n"].max()]
+            n = curve["n"].iloc[0]
+            link_bytes = curve["bytes"] * link_factor(op, n)
+            rate = (link_bytes / curve["us"]).max()  # bytes per us
+            miss = ((base + cost * hops(topology, n) + link_bytes / rate) / curve["us"] - 1).abs()
+            formulas.append(
+                f"{topology}: kernel_time ≈ {base:.2f} us + {cost:.2f} us * {HOPS[topology]}"
+                f" + {LINK_BYTES[op]} * input_bytes / {rate / 1e3:.1f} GB/s,"
+                f" within {miss.median():.0%}-{miss.max():.0%}"
+            )
+        lines[op] = ["```"] + formulas + ["```", ""]
+    return lines
 
 
 # ----------------------------------------------------------------- figures
@@ -355,7 +418,11 @@ def main():
     style = {op: PALETTE[i % len(PALETTE)] for i, op in enumerate(sorted(df["op"].unique()))}
     for machine, g in df.groupby(MACHINE):
         g = g.sort_values("bytes")
-        for kind, lines in (("SUMMARY", best_report(g)), ("FULL", raw_report(g))):
+        # Bandwidth comes from one call at a time, startup latency from calls back to back.
+        back_to_back, g = g[g["calls"] > 1], g[g["calls"] == 1]
+        if g.empty:
+            continue
+        for kind, lines in (("SUMMARY", best_report(g, back_to_back)), ("FULL", raw_report(g, back_to_back))):
             dest = RESULTS_DIR / f"{kind}_{stem(machine)}.md"
             dest.write_text("\n".join(lines).rstrip() + "\n")
             print(f"wrote {dest}")
