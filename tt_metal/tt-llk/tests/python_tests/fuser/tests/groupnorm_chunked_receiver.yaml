@@ -33,11 +33,11 @@ indexes:
 
 operands:
   - {name: x, dims: [128, 64], format: Float32}  # c_0, both chunks
-  - {name: input_mask, dims: [32, 64], format: Float16_b, const_value: 1.0}  # c_28
-  - {name: scaler, dims: [32, 32], format: Float32, const_value: 0.011048543456039806}  # c_2: 1/sqrt(128*64), NOT 1/sqrt(chunk size)
-  - {name: mean, dims: [32, 32], format: Float32, const_value: 0.0}  # received c_15
-  - {name: variance, dims: [32, 32], format: Float32, const_value: 1.0}  # received c_14
-  - {name: eps, dims: [32, 32], format: Float16_b, const_value: 1.0e-5}  # c_3
+  - {name: input_mask, dims: [32, 64], format: Float16_b, stimuli: 1.0}  # c_28
+  - {name: scaler, dims: [32, 32], format: Float32, stimuli: 0.011048543456039806}  # c_2: 1/sqrt(128*64), NOT 1/sqrt(chunk size)
+  - {name: mean, dims: [32, 32], format: Float32, stimuli: 0.0}  # received c_15
+  - {name: variance, dims: [32, 32], format: Float32, stimuli: 1.0}  # received c_14
+  - {name: eps, dims: [32, 32], format: Float16_b, stimuli: 1.0e-5}  # c_3
   - {name: masked_0, dims: [64, 64], format: Float32}  # c_24
   - {name: masked_1, dims: [64, 64], format: Float32}
   - {name: mean_partial_0, dims: [32, 32], format: Float32}  # c_8
