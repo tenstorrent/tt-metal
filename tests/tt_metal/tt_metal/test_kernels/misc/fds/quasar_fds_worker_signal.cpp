@@ -31,6 +31,6 @@ void kernel_main() {
     fds_kernel::finish(status, l1_address, kNumSlots, go_received ? kComplete : kTimeout);
 
     if (go_received) {
-        overlay::FdsNeo::fds_done(/*ad_enable=*/false, group_id);
+        overlay::FdsNeo::fds_done(group_id);
     }
 }

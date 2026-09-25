@@ -43,7 +43,7 @@ void kernel_main() {
     if (result == kComplete) {
         // The engine rewrites the identical value early in this window; with no change on the
         // wire, nothing may be captured.
-        overlay::FdsNeo::fds_done(/*ad_enable=*/false, kTokenCleared);
+        overlay::FdsNeo::fds_done(kTokenCleared);
         observed = fds_kernel::lane_nonzero(go_inst, silence_iterations);
         if (observed != 0) {
             result = kRecapturedWithoutChange;
@@ -61,7 +61,7 @@ void kernel_main() {
 
     if (result == kComplete) {
         // The engine now sends the value through zero: a real change, which must be captured.
-        overlay::FdsNeo::fds_done(/*ad_enable=*/false, kTokenChecked);
+        overlay::FdsNeo::fds_done(kTokenChecked);
         if (!fds_kernel::wait_de_status(go_inst, group_id, poll_iterations)) {
             result = kTimeoutRecapture;
         }
