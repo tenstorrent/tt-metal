@@ -50,11 +50,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
 
         _llk_unpack_binary_broadcast_operands_init_<BROADCAST_TYPE>(
-<<<<<<< HEAD
             ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(), tiles_in_block);
-=======
-            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(), TILE_CNT);
->>>>>>> 87d000fc5b8 (Refactor math hw config)
         PROFILER_SYNC();
     }
     {
