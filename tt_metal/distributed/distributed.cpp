@@ -18,6 +18,7 @@
 #include "impl/internal/service/service_core_manager_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
+#include "impl/program/slow_dispatch.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include "llrt/tt_cluster.hpp"
 
@@ -108,7 +109,7 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
                             svc.impl().mark_launched(device->id(), core);  // launch-once
                         }
                     }
-                    tt::tt_metal::detail::LaunchProgram(device, program, false, true);
+                    tt::tt_metal::slow_dispatch::LaunchProgram(*device, program, /*force_slow_dispatch=*/true);
                 }
             }
             return;

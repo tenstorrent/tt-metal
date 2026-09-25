@@ -54,6 +54,7 @@
 #include "distributed/mesh_device_impl.hpp"
 #include "llrt/hal.hpp"
 #include "program/program_impl.hpp"
+#include "program/slow_dispatch.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/dispatch/data_collector.hpp"
@@ -750,10 +751,10 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
                 realtime_profiler_program, realtime_profiler_push_kernel_path, realtime_profiler_core, ncrisc_config);
 
             realtime_profiler_program.impl().compile(device, /*force_slow_dispatch=*/true);
-            ::tt::tt_metal::detail::WriteRuntimeArgsToDevice(
-                device, realtime_profiler_program, /*force_slow_dispatch=*/true);
-            ::tt::tt_metal::detail::LaunchProgram(
-                device, realtime_profiler_program, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
+            ::tt::tt_metal::slow_dispatch::WriteRuntimeArgsToDevice(
+                *device, realtime_profiler_program, /*force_slow_dispatch=*/true);
+            ::tt::tt_metal::slow_dispatch::LaunchProgram(
+                *device, realtime_profiler_program, /*force_slow_dispatch=*/true);
 
             // realtime_profiler_msg_t is outside mailboxes_t, so LaunchProgram's writes do
             // not race with config_buffer_addr; ordering this write here is intentional.

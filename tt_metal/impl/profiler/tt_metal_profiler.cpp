@@ -54,6 +54,7 @@
 #include "profiler_state_manager.hpp"
 #include "program.hpp"
 #include "program/program_impl.hpp"
+#include "program/slow_dispatch.hpp"
 #include "kernels/kernel.hpp"
 #include "device/device_manager.hpp"
 #include "rtoptions.hpp"
@@ -159,8 +160,7 @@ void syncDeviceHost(distributed::MeshDevice* mesh_device, IDevice* device, CoreC
             .defines = kernel_defines});
 
     // Using MeshDevice APIs if the current device is managed by MeshDevice
-    tt_metal::detail::LaunchProgram(
-        device, sync_program, false /* wait_until_cores_done */, /* force_slow_dispatch */ true);
+    tt_metal::slow_dispatch::LaunchProgram(*device, sync_program, /*force_slow_dispatch=*/true);
 
     std::filesystem::path output_dir = std::filesystem::path(get_profiler_logs_dir());
     std::filesystem::path log_path = output_dir / "sync_device_info.csv";
@@ -189,7 +189,7 @@ void syncDeviceHost(distributed::MeshDevice* mesh_device, IDevice* device, CoreC
         MetalContext::instance().get_cluster().write_reg(&sinceStart, tt_cxy_pair(device_id, core), control_addr);
         writeTimes[i] = (TracyGetCpuTime() - writeStart);
     }
-    tt_metal::detail::WaitProgramDone(device, sync_program, false);
+    tt_metal::slow_dispatch::WaitProgramDone(*device, sync_program);
     std::vector<CoreCoord> cores = {core};
     profiler_state_manager->device_profiler_map.at(device_id).readResults(
         mesh_device, device, cores, ProfilerReadState::NORMAL, ProfilerDataBufferSource::L1);
@@ -432,13 +432,11 @@ void syncDeviceDevice(ChipId device_id_sender, ChipId device_id_receiver) {
             log_error(tt::LogMetal, "Failed compile: {}", e.what());
             throw e;
         }
-        tt_metal::detail::LaunchProgram(
-            device_sender, program_sender, false /* wait_until_cores_done */, true /* force_slow_dispatch */);
-        tt_metal::detail::LaunchProgram(
-            device_receiver, program_receiver, false /* wait_until_cores_done */, true /* force_slow_dispatch */);
+        tt_metal::slow_dispatch::LaunchProgram(*device_sender, program_sender, /*force_slow_dispatch=*/true);
+        tt_metal::slow_dispatch::LaunchProgram(*device_receiver, program_receiver, /*force_slow_dispatch=*/true);
 
-        tt_metal::detail::WaitProgramDone(device_sender, program_sender, false);
-        tt_metal::detail::WaitProgramDone(device_receiver, program_receiver, false);
+        tt_metal::slow_dispatch::WaitProgramDone(*device_sender, program_sender);
+        tt_metal::slow_dispatch::WaitProgramDone(*device_receiver, program_receiver);
 
         CoreCoord sender_core = {eth_sender_core.x, eth_sender_core.y};
         std::vector<CoreCoord> sender_cores = {

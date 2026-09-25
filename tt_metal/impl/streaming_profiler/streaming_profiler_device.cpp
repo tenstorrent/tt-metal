@@ -30,6 +30,7 @@
 #include "context/metal_context.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/kernels/kernel.hpp"  // DramConfig (a DRISC kernel is not in the public headers yet)
+#include "impl/program/slow_dispatch.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "hostdev/streaming_profiler_common.h"
 
@@ -529,9 +530,9 @@ bool Devices::launch_relay(
         }
         SetRuntimeArgs(*program, relay_id, relay.logical, rt);
 
-        detail::CompileProgram(ctx.device, *program, /*force_slow_dispatch=*/true);
-        detail::WriteRuntimeArgsToDevice(ctx.device, *program, /*force_slow_dispatch=*/true);
-        detail::LaunchProgram(ctx.device, *program, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
+        program->impl().compile(ctx.device, /*force_slow_dispatch=*/true);
+        slow_dispatch::WriteRuntimeArgsToDevice(*ctx.device, *program, /*force_slow_dispatch=*/true);
+        slow_dispatch::LaunchProgram(*ctx.device, *program, /*force_slow_dispatch=*/true);
 
         if (!relay_heartbeat_advanced(cluster, chip, relay.virt, relay_noc_addr(l1_.done) + 4, d)) {
             return false;

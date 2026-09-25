@@ -1146,7 +1146,7 @@ TEST_F(PrefetcherPipeFixture, ProgramSpec_AssignsDistinctSlotsPerAccessor) {
     EXPECT_EQ(per_core.at(CoreCoord(0, 0))[0].pipe, &pipe0.impl());
     EXPECT_EQ(per_core.at(CoreCoord(0, 1))[0].pipe, &pipe1.impl());
 
-    detail::CompileProgram(mesh_device.get(), program);
+    program.impl().compile(mesh_device.get());
     program.impl().finalize_offsets(mesh_device.get());
 
     const auto& hal = MetalContext::instance().hal();
@@ -1192,7 +1192,7 @@ TEST_F(PrefetcherPipeFixture, ProgramRunArgs_AddressStableAcrossRebuild) {
 
     {
         Program program = make_sender_program(*mesh_device, pipe, {.entry_size = 256});
-        detail::CompileProgram(mesh_device.get(), program);
+        program.impl().compile(mesh_device.get());
         program.impl().finalize_offsets(mesh_device.get());
     }
     {

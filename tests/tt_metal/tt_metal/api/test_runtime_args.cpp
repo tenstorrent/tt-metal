@@ -494,7 +494,6 @@ TEST_F(MeshDeviceFixture, TensixLegallyModifyRTArgsDataMovement) {
         CoreRange second_core_range(CoreCoord(3, 3), CoreCoord(5, 5));
         CoreRangeSet core_range_set(std::vector{first_core_range, second_core_range});
         auto& cq = mesh_device->mesh_command_queue();
-        auto* device = mesh_device->get_devices()[0];
         auto workload = unit_tests::runtime_args::initialize_program_data_movement_rta(mesh_device, core_range_set, 2);
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -514,7 +513,6 @@ TEST_F(MeshDeviceFixture, TensixLegallyModifyRTArgsDataMovement) {
         experimental::SetProgramRunArgs(
             program, unit_tests::runtime_args::make_data_movement_program_run_args(core_to_rt_args));
 
-        detail::WriteRuntimeArgsToDevice(device, program);
         distributed::EnqueueMeshWorkload(cq, workload, false);
         distributed::Finish(cq);
         unit_tests::runtime_args::verify_results(false, mesh_device, workload, core_to_rt_args);
@@ -528,7 +526,6 @@ TEST_F(MeshDeviceFixture, TensixLegallyModifyRTArgsDataMovement) {
         }
         experimental::SetProgramRunArgs(
             program, unit_tests::runtime_args::make_data_movement_program_run_args(core_to_rt_args));
-        detail::WriteRuntimeArgsToDevice(device, program);
         distributed::EnqueueMeshWorkload(cq, workload, false);
         distributed::Finish(cq);
         unit_tests::runtime_args::verify_results(false, mesh_device, workload, core_to_rt_args);
@@ -540,7 +537,6 @@ TEST_F(MeshDeviceFixture, TensixLegallyModifyRTArgsDataMovement) {
         std::vector<uint32_t> common_runtime_args = {0x30303030, 0x60606060, 0x90909090, 1234};
         experimental::SetProgramRunArgs(
             program2, unit_tests::runtime_args::make_data_movement_program_run_args({}, common_runtime_args));
-        detail::WriteRuntimeArgsToDevice(device, program2);
         distributed::EnqueueMeshWorkload(cq, workload2, false);
         distributed::Finish(cq);
         unit_tests::runtime_args::verify_results(false, mesh_device, workload2, core_to_rt_args, common_runtime_args);
@@ -750,7 +746,6 @@ TEST_F(MeshDeviceFixture, TensixIllegallyModifyRTArgs) {
         auto& cq = mesh_device->mesh_command_queue();
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        auto* device = mesh_device->get_devices()[0];
         // First run the program with the initial runtime args
         CoreRange first_core_range(CoreCoord(0, 0), CoreCoord(1, 1));
         CoreRange second_core_range(CoreCoord(3, 3), CoreCoord(5, 5));
@@ -771,7 +766,6 @@ TEST_F(MeshDeviceFixture, TensixIllegallyModifyRTArgs) {
         }
         experimental::SetProgramRunArgs(
             program, unit_tests::runtime_args::make_data_movement_program_run_args(core_to_rt_args));
-        detail::WriteRuntimeArgsToDevice(device, program);
         distributed::EnqueueMeshWorkload(cq, workload, false);
         distributed::Finish(cq);
         unit_tests::runtime_args::verify_results(false, mesh_device, workload, core_to_rt_args);

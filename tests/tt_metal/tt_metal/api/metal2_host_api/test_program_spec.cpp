@@ -5370,7 +5370,7 @@ void kernel_main() {
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
     IDevice* device = mesh_device_->get_devices()[0];
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+    EXPECT_NO_THROW(program.impl().compile(device));
 }
 
 // Out-of-range index in a constant expression, asserts on: must still fail the build. Constant
