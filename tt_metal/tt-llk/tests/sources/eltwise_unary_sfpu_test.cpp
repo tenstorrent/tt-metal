@@ -53,6 +53,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_math_wrappers.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpu_operations.h"
+#ifdef TT_POLY_LLK_TEST_HEADER
+#include TT_POLY_LLK_TEST_HEADER
+#endif
 
 using namespace ckernel;
 using namespace ckernel::sfpu;
@@ -70,6 +73,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
 
+#ifndef TT_POLY_LLK_TEST_REPLACE_INIT
     test_utils::call_unary_sfpu_operation_init<
         SFPU_UNARY_OPERATION,
         APPROX_MODE,
@@ -78,6 +82,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         FAST_MODE,
         false /* STABLE_SORT */,
         CLAMP_NEGATIVE>();
+#endif
+#ifdef TT_POLY_LLK_TEST_INIT
+    ckernel::sfpu::TT_POLY_LLK_TEST_INIT<>();
+#endif
 
     LLK_ASSERT(
         (params.NUM_TILES_IN_BLOCK <= get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
@@ -94,6 +102,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // calculation of sfpu operation on dest
             // calling sfpu function from ckernel
             // this part is where parametrization of operation takes part
+#ifdef TT_POLY_LLK_TEST_CALC
+            SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en,
+                TT_POLY_LLK_TEST_CALC, (TT_POLY_LLK_TEST_ITERATIONS),
+                block_tile, VectorMode::TT_POLY_LLK_TEST_VECTOR_MODE);
+#else
             test_utils::call_unary_sfpu_operation<
                 DST_SYNC,
                 is_fp32_dest_acc_en,
@@ -104,6 +117,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 FAST_MODE,
                 false /* STABLE_SORT */,
                 CLAMP_NEGATIVE>(block_tile, formats.math);
+#endif
         }
 
         _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
