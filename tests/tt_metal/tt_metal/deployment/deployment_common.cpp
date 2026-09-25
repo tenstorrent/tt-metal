@@ -30,7 +30,7 @@ std::string pci_bdf_for_device_id(uint32_t device_id) {
     return id_to_bdf[device_id];
 }
 
-std::string trim_copy(std::string s) {
+static std::string trim_copy(std::string s) {
     while (!s.empty() && std::isspace(s.front())) {
         s.erase(s.begin());
     }
