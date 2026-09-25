@@ -4,12 +4,24 @@
 
 #include "softmax_device_operation.hpp"
 
+#include <algorithm>
 #include <enchantum/enchantum.hpp>
 
 #include "softmax_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::ops::softmax::device {
+
+namespace {
+
+bool is_canonical_tile(const tt::tt_metal::Tile& tile) {
+    const auto canonical = tt::tt_metal::Tile{};
+    return tile.get_tile_shape() == canonical.get_tile_shape() && tile.get_face_shape() == canonical.get_face_shape() &&
+           tile.get_num_faces() == canonical.get_num_faces() && !tile.get_transpose_within_face() &&
+           !tile.get_transpose_of_faces();
+}
+
+}  // namespace
 
 void SoftmaxDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
@@ -44,17 +56,43 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
             "Tensor '{}' must use INTERLEAVED memory layout, but got '{}'",
             name,
             enchantum::to_string(tensor.memory_config().memory_layout()));
+
+        TT_FATAL(
+            tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            "Tensor '{}' must be stored in DRAM, but got '{}'",
+            name,
+            enchantum::to_string(tensor.buffer()->buffer_type()));
+
+        TT_FATAL(is_canonical_tile(tensor.tensor_spec().tile()), "Tensor '{}' must use the canonical 32x32 tile", name);
     };
 
     const auto& input_tensor = tensor_args.input;
     const auto& preallocated_output_tensor = tensor_args.preallocated_output;
     check_tensor(input_tensor, "Input", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
+    TT_FATAL(input_tensor.logical_shape().rank() == 4, "Softmax operation requires a rank-4 input tensor");
+    const auto& logical_shape = input_tensor.logical_shape();
+    const auto& padded_shape = input_tensor.padded_shape();
+    const auto tile_width = tt::tt_metal::Tile{}.get_width();
+    const auto minimum_padded_width = ((logical_shape[-1] + tile_width - 1U) / tile_width) * tile_width;
+    TT_FATAL(
+        padded_shape[0] == logical_shape[0] && padded_shape[1] == logical_shape[1] &&
+            padded_shape[-1] == minimum_padded_width,
+        "Softmax only supports padding in the height dimension (logical shape {}, padded shape {})",
+        logical_shape,
+        padded_shape);
     if (preallocated_output_tensor.has_value()) {
+        const auto& output_tensor = preallocated_output_tensor.value();
         check_tensor(
-            preallocated_output_tensor.value(),
-            "Preallocated Output",
-            tt::tt_metal::Layout::TILE,
-            tt::tt_metal::DataType::BFLOAT16);
+            output_tensor, "Preallocated Output", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
+        TT_FATAL(
+            output_tensor.tensor_spec() == input_tensor.tensor_spec(),
+            "Preallocated softmax output must have the same tensor spec as the input");
+        TT_FATAL(
+            output_tensor.device() == input_tensor.device(),
+            "Preallocated softmax output must be on the same device as the input");
+        TT_FATAL(
+            std::ranges::equal(output_tensor.device_storage().get_coords(), input_tensor.device_storage().get_coords()),
+            "Preallocated softmax output must cover the same device coordinates as the input");
     }
 
     // Validate the dimension argument
@@ -76,11 +114,7 @@ SoftmaxDeviceOperation::spec_return_value_t SoftmaxDeviceOperation::compute_outp
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
     }
-    auto input_logical_shape = tensor_args.input.logical_shape();
-    return tt::tt_metal::TensorSpec(
-        ttnn::Shape(input_logical_shape),
-        tt::tt_metal::TensorLayout(
-            tensor_args.input.dtype(), tt::tt_metal::Layout::TILE, tensor_args.input.memory_config()));
+    return tensor_args.input.tensor_spec();
 }
 
 SoftmaxDeviceOperation::tensor_return_value_t SoftmaxDeviceOperation::create_output_tensors(
@@ -96,14 +130,6 @@ SoftmaxDeviceOperation::tensor_return_value_t SoftmaxDeviceOperation::create_out
     }
 
     return output_tensor;
-}
-
-ttsl::hash::hash_t SoftmaxDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
-    const auto& input_logical_shape = input_tensor.logical_shape();
-    return tt::tt_metal::operation::hash_operation<SoftmaxDeviceOperation>(
-        args, input_tensor.dtype(), input_logical_shape);
 }
 
 }  // namespace ttml::metal::ops::softmax::device

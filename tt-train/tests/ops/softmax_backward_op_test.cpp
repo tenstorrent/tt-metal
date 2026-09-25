@@ -2,10 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <array>
 #include <optional>
+#include <stdexcept>
+#include <string>
 #include <string_view>
 #include <tt-metalium/core_coord.hpp>
 #include <umd/device/cluster.hpp>
@@ -15,12 +18,46 @@
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "metal/ops/softmax_backward/device/softmax_backward_device_operation.hpp"
 #include "test_utils/random_data.hpp"
 #include "tt-metalium/bfloat16.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace {
+
+class ProgramCacheGuard {
+public:
+    explicit ProgramCacheGuard(ttnn::distributed::MeshDevice* device) : device_(device) {
+        device_->set_program_cache_misses_allowed(true);
+        device_->disable_and_clear_program_cache();
+        device_->enable_program_cache();
+    }
+
+    ~ProgramCacheGuard() {
+        device_->set_program_cache_misses_allowed(true);
+        device_->disable_and_clear_program_cache();
+    }
+
+private:
+    ttnn::distributed::MeshDevice* device_;
+};
+
+template <typename Adapter, typename Attributes, typename TensorArgs>
+void expect_validation_failure_on_miss_and_hit(
+    const Attributes& attributes, const TensorArgs& tensor_args, std::string_view diagnostic) {
+    EXPECT_THAT(
+        ([&] { Adapter::validate_on_program_cache_miss(attributes, tensor_args); }),
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(std::string(diagnostic))));
+    EXPECT_THAT(
+        ([&] { Adapter::validate_on_program_cache_hit(attributes, tensor_args); }),
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(std::string(diagnostic))));
+}
+
+using SoftmaxBackwardOp = ttml::metal::ops::softmax_backward::device::SoftmaxBackwardDeviceOperation;
+using SoftmaxBackwardAdapter = ttnn::device_operation::MeshDeviceOperationAdapter<SoftmaxBackwardOp>;
 
 struct SoftmaxBackwardCase {
     const char* name;
@@ -133,6 +170,14 @@ void run_softmax_backward_case(
         << ", rtol=" << test_case.rtol;
 }
 
+ttnn::Tensor make_overpadded_tensor(
+    const xt::xarray<float>& host_tensor, ttnn::distributed::MeshDevice* device, const ttnn::Shape& padded_shape) {
+    auto bf16_host = to_bf16_xtensor(host_tensor);
+    auto row_major =
+        ttml::core::from_xtensor<bfloat16, ttnn::DataType::BFLOAT16>(bf16_host, device, ttnn::Layout::ROW_MAJOR);
+    return ttnn::tilize_with_val_padding(row_major, padded_shape, 0.0F);
+}
+
 }  // namespace
 
 class SoftmaxBackwardOpTest : public ::testing::Test {
@@ -152,6 +197,112 @@ protected:
 };
 
 ttnn::distributed::MeshDevice* SoftmaxBackwardOpTest::s_device = nullptr;
+
+TEST_F(SoftmaxBackwardOpTest, PreservesOverpaddedSpecAndRejectsPhysicalMismatch) {
+    constexpr SoftmaxBackwardCase test_case{
+        .name = "overpadded_h",
+        .n = 1,
+        .c = 2,
+        .h = 59,
+        .w = 64,
+        .dim = 3,
+        .atol = 2e-2F,
+        .rtol = 2e-2F,
+        .grad_min = -2.0F,
+        .grad_max = 2.0F,
+    };
+    const auto shape = std::array<std::size_t, 4>{test_case.n, test_case.c, test_case.h, test_case.w};
+    const auto logits = ttml::test_utils::make_uniform_xarray<float>(shape, -3.0F, 3.0F, 72U);
+    const auto grad = ttml::test_utils::make_uniform_xarray<float>(shape, -2.0F, 2.0F, 73U);
+    const auto y = xt_softmax(logits);
+    const auto padded_shape = ttnn::Shape({1, 2, 96, 64});
+    auto y_overpadded = make_overpadded_tensor(y, s_device, padded_shape);
+    auto grad_overpadded = make_overpadded_tensor(grad, s_device, padded_shape);
+
+    const SoftmaxBackwardOp::operation_attributes_t attributes{.dim = 3, .sub_core_grids = std::nullopt};
+    const SoftmaxBackwardOp::tensor_args_t tensor_args{
+        .softmax_output = y_overpadded, .upstream_grad = grad_overpadded};
+    ASSERT_EQ(SoftmaxBackwardOp::compute_output_specs(attributes, tensor_args), y_overpadded.tensor_spec());
+
+    auto result = ttml::metal::softmax_backward(y_overpadded, grad_overpadded, 3);
+    EXPECT_EQ(result.tensor_spec(), y_overpadded.tensor_spec());
+    const auto expected =
+        reference_softmax_backward(ttml::core::to_xtensor(y_overpadded), ttml::core::to_xtensor(grad_overpadded), 3);
+    EXPECT_TRUE(xt::allclose(ttml::core::to_xtensor(result), expected, test_case.rtol, test_case.atol));
+
+    auto default_grad = to_device_tensor(grad, s_device, ttnn::DataType::BFLOAT16);
+    expect_validation_failure_on_miss_and_hit<SoftmaxBackwardAdapter>(
+        attributes,
+        SoftmaxBackwardOp::tensor_args_t{.softmax_output = y_overpadded, .upstream_grad = default_grad},
+        "Softmax output and upstream gradient tensors must have the same padded shape");
+
+    const auto custom_tile_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape({1, 1, 32, 64}),
+        tt::tt_metal::TensorLayout(
+            ttnn::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE, tt::tt_metal::Tile({16, 32})),
+            ttnn::DRAM_MEMORY_CONFIG));
+    auto custom_tile_y = ttnn::create_device_tensor(custom_tile_spec, s_device);
+    auto custom_tile_grad = ttnn::create_device_tensor(custom_tile_spec, s_device);
+    expect_validation_failure_on_miss_and_hit<SoftmaxBackwardAdapter>(
+        attributes,
+        SoftmaxBackwardOp::tensor_args_t{.softmax_output = custom_tile_y, .upstream_grad = custom_tile_grad},
+        "Softmax backward requires the canonical 32x32 tile");
+
+    const auto transposed_tile_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape({1, 1, 32, 64}),
+        tt::tt_metal::TensorLayout(
+            ttnn::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE, tt::tt_metal::Tile({32, 32}, /*transpose_tile=*/true)),
+            ttnn::DRAM_MEMORY_CONFIG));
+    auto transposed_tile_y = ttnn::create_device_tensor(transposed_tile_spec, s_device);
+    auto transposed_tile_grad = ttnn::create_device_tensor(transposed_tile_spec, s_device);
+    expect_validation_failure_on_miss_and_hit<SoftmaxBackwardAdapter>(
+        attributes,
+        SoftmaxBackwardOp::tensor_args_t{.softmax_output = transposed_tile_y, .upstream_grad = transposed_tile_grad},
+        "Softmax backward requires the canonical 32x32 tile");
+}
+
+TEST_F(SoftmaxBackwardOpTest, ReusesProgramForFreshAddressesWithSameSpec) {
+    const auto shape = std::array<std::size_t, 4>{1U, 1U, 32U, 64U};
+    const auto logits_first = ttml::test_utils::make_uniform_xarray<float>(shape, -2.0F, 2.0F, 74U);
+    const auto grad_first_host = ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, 75U);
+    const auto logits_second = ttml::test_utils::make_uniform_xarray<float>(shape, -2.0F, 2.0F, 76U);
+    const auto grad_second_host = ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, 77U);
+    const auto y_first_host = xt_softmax(logits_first);
+    const auto y_second_host = xt_softmax(logits_second);
+
+    auto y_first = to_device_tensor(y_first_host, s_device, ttnn::DataType::BFLOAT16);
+    auto grad_first = to_device_tensor(grad_first_host, s_device, ttnn::DataType::BFLOAT16);
+    auto y_second = to_device_tensor(y_second_host, s_device, ttnn::DataType::BFLOAT16);
+    auto grad_second = to_device_tensor(grad_second_host, s_device, ttnn::DataType::BFLOAT16);
+
+    ASSERT_EQ(y_first.tensor_spec(), y_second.tensor_spec());
+    ASSERT_EQ(grad_first.tensor_spec(), grad_second.tensor_spec());
+    ASSERT_NE(y_first.buffer()->address(), y_second.buffer()->address());
+    ASSERT_NE(grad_first.buffer()->address(), grad_second.buffer()->address());
+
+    ProgramCacheGuard cache_guard(s_device);
+    ASSERT_EQ(s_device->num_program_cache_entries(), 0U);
+
+    const auto entries_before_first = s_device->num_program_cache_entries();
+    auto first = ttml::metal::softmax_backward(y_first, grad_first, 3);
+    const auto entries_after_first = s_device->num_program_cache_entries();
+    ASSERT_GT(entries_after_first, entries_before_first);
+    const auto expected_first =
+        reference_softmax_backward(ttml::core::to_xtensor(y_first), ttml::core::to_xtensor(grad_first), 3);
+    EXPECT_TRUE(xt::allclose(ttml::core::to_xtensor(first), expected_first, 2e-2F, 2e-2F));
+
+    const auto entries_before_hit = s_device->num_program_cache_entries();
+    s_device->set_program_cache_misses_allowed(false);
+    auto second = ttml::metal::softmax_backward(y_second, grad_second, 3);
+    s_device->set_program_cache_misses_allowed(true);
+    EXPECT_EQ(s_device->num_program_cache_entries(), entries_before_hit);
+    EXPECT_NE(first.buffer()->address(), second.buffer()->address());
+    const auto expected_second =
+        reference_softmax_backward(ttml::core::to_xtensor(y_second), ttml::core::to_xtensor(grad_second), 3);
+    EXPECT_TRUE(xt::allclose(ttml::core::to_xtensor(second), expected_second, 2e-2F, 2e-2F));
+}
 
 class SoftmaxBackwardOpTypedTest : public SoftmaxBackwardOpTest, public ::testing::WithParamInterface<DTypeParam> {};
 
