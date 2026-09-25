@@ -168,14 +168,14 @@ def test_direct_device_commands_fail_the_attempt(orch):
 
 
 def test_command_violations(sandbox):
-    (sandbox.repo / "dev.py").write_text("import ttnn\n")
+    (sandbox.repo / "dev.py").write_text("import ttnn\nd = ttnn.open_mesh_device()\n")
     (sandbox.repo / "cpu.py").write_text("import torch\n")
     bad = command_violations(
         [
             "python -m pytest x",
             "PYTHONPATH=. python dev.py",
-            "python - <<EOF\nimport ttnn\nEOF",
-            "python -c 'import ttnn'",
+            "python - <<EOF\nimport ttnn\nttnn.open_device(0)\nEOF",
+            "pytest t.py",
         ],
         sandbox.repo,
     )
@@ -292,11 +292,14 @@ def test_policy_from_the_spec(orch, sandbox):
     assert o.policy({}, "fix")["escalate"] == "stop"  # a CPU gate's failure never goes to the TTNN debugger
 
 
-def test_editing_a_file_that_mentions_ttnn_is_not_device_access(sandbox):
+def test_only_code_that_opens_a_device_needs_the_safe_runner(sandbox):
     edit = "cd /r; python - <<'EOF'\np='hooks.py'\ns=open(p).read()\ns+='import ttnn\\n'\nopen(p,'w').write(s)\nEOF"
-    run = "python - <<'EOF'\nimport ttnn\nd = ttnn.open_mesh_device()\nEOF"
-    (sandbox.repo / "devmod.py").write_text("import ttnn\n")
-    indirect = "python - <<'EOF'\nimport devmod\nEOF"
-    assert command_violations([edit], sandbox.repo) == []
-    assert len(command_violations([run], sandbox.repo)) == 1
-    assert len(command_violations([indirect], sandbox.repo)) == 1
+    analysis = (
+        "python - <<'EOF'\nimport ttnn\nfrom models.demos.common.bringup.testing.harness import spec\nprint(1)\nEOF"
+    )
+    opens = "python - <<'EOF'\nimport ttnn\nd = ttnn.open_mesh_device(ttnn.MeshShape(1, 4))\nEOF"
+    (sandbox.repo / "dev.py").write_text("import ttnn\nmesh = ttnn.open_mesh_device()\n")
+    assert command_violations([edit, analysis], sandbox.repo) == []
+    assert len(command_violations([opens], sandbox.repo)) == 1
+    assert len(command_violations(["PYTHONPATH=. python dev.py"], sandbox.repo)) == 1
+    assert len(command_violations(["python -c 'import ttnn; ttnn.open_device(0)'"], sandbox.repo)) == 1
