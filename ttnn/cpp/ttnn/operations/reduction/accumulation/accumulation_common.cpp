@@ -99,8 +99,7 @@ Tensor accumulation_invoke(
 
     if (input_rank == 0 || input_tensor.logical_volume() == 0) {
         if (!optional_out.has_value()) {
-            return ttnn::clone(
-                input_tensor, /*dtype=*/std::nullopt, memory_config, /*compute_kernel_config=*/std::nullopt);
+            return ttnn::clone(input_tensor, dtype, memory_config, /*compute_kernel_config=*/std::nullopt);
         }
 
         Tensor& preallocated_tensor = optional_out.value();

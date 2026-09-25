@@ -63,6 +63,11 @@ ttnn::device_operation::ProgramArtifacts MorehMeanOperation::MorehMeanNCFactory:
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
+    // The intermed0 buffer carries the running sum across the reduced dim. Widen it to Float32 when
+    // fp32 accumulation is requested, otherwise the partial sum is rounded back to the narrow output
+    // format after every input tile and the flag buys no accuracy (mirrors the H/W factories).
+    const auto intermed0_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : cb_data_format;
+
     // ---- Program-scope resource names (drive the generated dfb:: / tensor:: tokens) ----
     // Declared function-local: the three moreh_mean factory .cpp files land in the same
     // unity-build translation unit, so no anonymous-namespace constants are introduced.
@@ -102,9 +107,9 @@ ttnn::device_operation::ProgramArtifacts MorehMeanOperation::MorehMeanNCFactory:
     });
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = INTERMED0_DFB,
-        .entry_size = tile_size(cb_data_format),
+        .entry_size = tile_size(intermed0_data_format),
         .num_entries = 1,
-        .data_format_metadata = cb_data_format,
+        .data_format_metadata = intermed0_data_format,
     });
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = OUT_DFB,
@@ -165,10 +170,13 @@ ttnn::device_operation::ProgramArtifacts MorehMeanOperation::MorehMeanNCFactory:
     if (fp32_dest_acc_en) {
         compute_defines.emplace("FP32_DEST_ACC_EN", "1");
     }
-    // No unpack_modes entry: this factory never widens the intermediate DFB to Float32, so no DFB the
-    // compute kernel consumes carries a 32-bit format. Legacy left unpack_to_dest_mode all-Default,
-    // which is exactly an empty table.
     auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config);
+    if (fp32_dest_acc_en) {
+        // intermed0 is widened to Float32 above and the compute kernel consumes it with a 32-bit dest
+        // register, so the unpack must preserve fp32 rather than downgrade to Tf32 (mirrors the H
+        // factory). TODO(#52269): Quasar unpack_modes are copied from Gen1 and not yet optimized.
+        unpack_modes(compute_hw) = ComputeUnpackModes{{INTERMED0_DFB, UnpackMode::UnpackToDest}};
+    }
 
     auto make_compute = [&](const KernelSpecName& unique_id, uint32_t units_per_core) {
         return KernelSpec{

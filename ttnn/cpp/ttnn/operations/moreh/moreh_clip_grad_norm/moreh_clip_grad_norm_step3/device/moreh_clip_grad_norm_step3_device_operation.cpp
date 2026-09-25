@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_clip_grad_norm_step3_device_operation.hpp"
+#include <tt_stl/assert.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
@@ -13,8 +14,24 @@ namespace ttnn::operations::moreh::moreh_clip_grad_norm_step3 {
 void MorehClipGradNormStep3Operation::validate_inputs(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     auto input_tensors = tensor_args.inputs;
+    const auto& first_input = input_tensors.at(0);
     for (const auto& input : input_tensors) {
         ttnn::operations::check_tensor(input, "moreh_clip_grad_norm_step3", "input");
+        // The reader/writer TensorAccessor compile-time args are derived from inputs[0] alone
+        // (see moreh_clip_grad_norm_step3_program_factory.cpp), while each core is handed a
+        // different gradient's address at runtime. Enforce that every input shares inputs[0]'s
+        // buffer type, memory layout and shard spec so those accessors decode every address.
+        TT_FATAL(
+            input.memory_config().buffer_type() == first_input.memory_config().buffer_type(),
+            "moreh_clip_grad_norm_step3: all inputs must share the same buffer type.");
+        TT_FATAL(
+            input.memory_config().memory_layout() == first_input.memory_config().memory_layout(),
+            "moreh_clip_grad_norm_step3: all inputs must share the same memory layout.");
+        if (first_input.is_sharded()) {
+            TT_FATAL(
+                input.shard_spec() == first_input.shard_spec(),
+                "moreh_clip_grad_norm_step3: all sharded inputs must share the same shard spec.");
+        }
     }
 
     ttnn::operations::check_tensor(tensor_args.clip_coef_clamped, "moreh_clip_grad_norm_step3", "clip_coef_clamped");
