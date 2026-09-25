@@ -41,7 +41,8 @@ using namespace leg_bench;
 
 namespace {
 
-constexpr int kDeviceId = 0;
+// Overridden by TT_LEG_DEVICE_ID; see leg_device_id(). Chips differ in PCIe width.
+const int kDeviceId = leg_device_id();
 
 const std::vector<int64_t> kPageSizes = {16384};
 const std::vector<int64_t> kCores = {1, 2, 4, 8, 16, 32, 64};

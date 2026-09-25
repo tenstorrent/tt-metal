@@ -40,7 +40,8 @@ using namespace leg_bench;
 
 namespace {
 
-constexpr int kDeviceId = 0;
+// Overridden by TT_LEG_DEVICE_ID; see leg_device_id(). Chips differ in PCIe width.
+const int kDeviceId = leg_device_id();
 
 // `cores` must stay a single element: the region maps once per process.
 const std::vector<int64_t> kPageSizes = {16384};
