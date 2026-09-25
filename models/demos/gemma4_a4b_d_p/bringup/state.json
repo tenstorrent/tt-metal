@@ -1,4 +1,15 @@
 {
+ "G.s16384": {
+  "attempts": 0,
+  "history": [
+   {
+    "status": "RESET",
+    "t": "2026-09-25T22:04:39"
+   }
+  ],
+  "started": "2026-09-25T21:58:23",
+  "status": "TODO"
+ },
  "G.s4096": {
   "attempts": 0,
   "duration_s": 116.4,
@@ -6,6 +17,10 @@
    {
     "status": "PASS",
     "t": "2026-09-25T21:58:21"
+   },
+   {
+    "status": "RESET",
+    "t": "2026-09-25T22:04:39"
    }
   ],
   "last_run": "2026-09-25T21:58:21",
@@ -20,18 +35,34 @@
   "rc": 0,
   "reason": [],
   "started": "2026-09-25T21:56:25",
-  "status": "PASS"
+  "status": "TODO"
+ },
+ "G.s56320": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "PL.0": {
+  "attempts": 0,
+  "status": "TODO"
  },
  "R.1": {
   "attempts": 0,
-  "duration_s": 1.4,
+  "duration_s": 1.5,
   "history": [
    {
     "status": "PASS",
     "t": "2026-09-25T21:30:28"
+   },
+   {
+    "status": "RESET",
+    "t": "2026-09-25T22:04:39"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-25T22:04:46"
    }
   ],
-  "last_run": "2026-09-25T21:30:28",
+  "last_run": "2026-09-25T22:04:46",
   "log": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/logs/R.1.log",
   "metrics": {
    "checkpoint_tensors": 1013,
@@ -43,7 +74,7 @@
   },
   "rc": 0,
   "reason": [],
-  "started": "2026-09-25T21:30:27",
+  "started": "2026-09-25T22:04:44",
   "status": "PASS"
  },
  "R.2": {
@@ -96,7 +127,7 @@
     "t": "2026-09-25T21:35:51"
    }
   ],
-  "attempts": 1,
+  "attempts": 0,
   "duration_s": 54.3,
   "history": [
    {
@@ -110,6 +141,10 @@
    {
     "status": "PASS",
     "t": "2026-09-25T21:39:01"
+   },
+   {
+    "status": "RESET",
+    "t": "2026-09-25T22:04:39"
    }
   ],
   "last_run": "2026-09-25T21:39:01",
@@ -153,10 +188,10 @@
   "rc": 0,
   "reason": [],
   "started": "2026-09-25T21:38:07",
-  "status": "PASS"
+  "status": "TODO"
  },
  "R.3": {
-  "attempts": 1,
+  "attempts": 0,
   "duration_s": 147.9,
   "history": [
    {
@@ -166,6 +201,10 @@
    {
     "status": "PASS",
     "t": "2026-09-25T21:56:22"
+   },
+   {
+    "status": "RESET",
+    "t": "2026-09-25T22:04:39"
    }
   ],
   "last_run": "2026-09-25T21:56:22",
@@ -181,7 +220,7 @@
   "rc": 0,
   "reason": [],
   "started": "2026-09-25T21:53:54",
-  "status": "PASS"
+  "status": "TODO"
  },
  "_run": {
   "branch": "dnijemcevic/ernie45_prefill",

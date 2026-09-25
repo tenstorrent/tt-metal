@@ -1,7 +1,7 @@
 intake:
   by: dnijemcevic
-  at: '2026-09-25T21:26:13'
+  at: '2026-09-25T22:04:33'
   files:
-    models/demos/gemma4_a4b_d_p/bringup/spec.yaml: 469f041d2fa16bce69d75d3a26583b16449ca25587fcebc0f360656debd15620
-  note: 'owner''s instruction: proceed with bringing up Gemma-4 26B-A4B on this box
-    and the framework; target and ladder as the ERNIE run (chosen by Claude)'
+    models/demos/gemma4_a4b_d_p/bringup/spec.yaml: 12d0d1f08dd0a81e411f63f05046c36edc6c7ede69b103a08c83773467012cdc
+  note: owner chose chat-wrapped book text (2026-09-25); target and ladder as the
+    ERNIE run
