@@ -9,6 +9,7 @@ import time
 import pytest
 import torch
 
+from models.experimental.chronos_forecast.tests.mesh_params import MULTI_CHIP_MESHES
 from models.experimental.chronos_forecast.tests.perf.test_paper_forward import (
     A10G_SERIES_PER_S,
     A10G_WALL_S,
@@ -23,6 +24,26 @@ from models.experimental.chronos_forecast.tests.perf.test_paper_forward import (
 REPLAY_ITERS = 20
 STAGE_ITERS = 10
 
+# Scaling baselines: one p150a, performance precision, L1-resident; keyed by (group_size, batch).
+SINGLE_CHIP_REPLAY_S = {
+    (None, BATCH): 0.2602,
+    (None, BATCH // 4): 0.0665,
+    (None, BATCH // 8): 0.0322,
+    (None, BATCH // 16): 0.0162,
+    (None, BATCH // 32): 0.00907,
+    (4, BATCH): 0.3833,
+}
+SINGLE_CHIP_E2E_S = {
+    (None, BATCH): 0.3211,
+    (None, BATCH // 4): 0.0862,
+    (None, BATCH // 8): 0.0447,
+    (None, BATCH // 16): 0.0246,
+    (None, BATCH // 32): 0.0128,
+    (4, BATCH): 0.4627,
+}
+
+TRACE_DEVICE_PARAMS = [{"trace_region_size": 200_000_000, "num_command_queues": 2}]
+
 
 def _percentile(values, fraction):
     ordered = sorted(values)
@@ -35,37 +56,12 @@ def _timed(fn):
     return result, time.perf_counter() - start
 
 
-@pytest.mark.timeout(3600)
-@pytest.mark.parametrize(
-    "precision_name, l1_resident, group_size, batch",
-    [
-        pytest.param("default", False, None, BATCH, id="default_dram"),
-        pytest.param("default", True, None, BATCH, id="default_l1"),
-        pytest.param("performance", True, None, BATCH, id="performance_l1"),
-        pytest.param("default", False, 4, BATCH, id="default_dram_groups_of_4"),
-        pytest.param("performance", True, 4, BATCH, id="performance_l1_groups_of_4"),
-        # Single-chip runs at the per-chip batch of 4 / 8 / 16 / 32-chip data parallel.
-        pytest.param("performance", True, None, BATCH // 4, id="performance_l1_b256"),
-        pytest.param("performance", True, None, BATCH // 8, id="performance_l1_b128"),
-        pytest.param("performance", True, None, BATCH // 16, id="performance_l1_b64"),
-        pytest.param("performance", True, None, BATCH // 32, id="performance_l1_b32"),
-    ],
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"trace_region_size": 200_000_000, "num_command_queues": 2}],
-    indirect=True,
-)
-@pytest.mark.parametrize("mesh_device", [1], indirect=True)
-def test_paper_forward_trace_perf(mesh_device, precision_name, l1_resident, group_size, batch):
+def _run_trace_perf(mesh_device, precision_name, l1_resident, group_size, batch) -> dict[str, float]:
     ttnn = pytest.importorskip("ttnn")
 
     from models.experimental.chronos_forecast.tt.model import TtChronos
     from models.experimental.chronos_forecast.tt.program_configs import TtChronosPrecision
     from models.experimental.chronos_forecast.tt.trace_runner import TtChronosTraceRunner
-
-    if mesh_device.get_num_devices() != 1:
-        pytest.skip("single-chip bring-up only (one chip)")
 
     precision = TtChronosPrecision.performance() if precision_name == "performance" else TtChronosPrecision()
     l1_chunk_tokens = precision.l1_chunk_tokens() if l1_resident else None
@@ -128,8 +124,9 @@ def test_paper_forward_trace_perf(mesh_device, precision_name, l1_resident, grou
     print(
         "\n[TRACE PERF] Chronos paper shape"
         f"\n  weights:              {weight_source}"
+        f"\n  chips:                {model.num_devices}"
         f"\n  precision:            {precision_name}"
-        f"\n  batch:                {batch}"
+        f"\n  batch:                {batch} ({batch // model.num_devices} per chip)"
         f"\n  l1_chunk_tokens:      {l1_chunk_tokens}"
         f"\n  group_size:           {group_size or 'unique'} (block {prepared.group_block})"
         f"\n  host_preprocess_s:    {preprocess_s:.6f}"
@@ -143,3 +140,47 @@ def test_paper_forward_trace_perf(mesh_device, precision_name, l1_resident, grou
         f"\n  a10g_wall_s:          {A10G_WALL_S:.3f}"
         f"\n  a10g_series_per_s:    {A10G_SERIES_PER_S:.0f}"
     )
+    return {"replay": replay_median, "e2e": e2e_median}
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize(
+    "precision_name, l1_resident, group_size, batch",
+    [
+        pytest.param("default", False, None, BATCH, id="default_dram"),
+        pytest.param("default", True, None, BATCH, id="default_l1"),
+        pytest.param("performance", True, None, BATCH, id="performance_l1"),
+        pytest.param("default", False, 4, BATCH, id="default_dram_groups_of_4"),
+        pytest.param("performance", True, 4, BATCH, id="performance_l1_groups_of_4"),
+        # Single-chip runs at the per-chip batch of 4 / 8 / 16 / 32-chip data parallel.
+        pytest.param("performance", True, None, BATCH // 4, id="performance_l1_b256"),
+        pytest.param("performance", True, None, BATCH // 8, id="performance_l1_b128"),
+        pytest.param("performance", True, None, BATCH // 16, id="performance_l1_b64"),
+        pytest.param("performance", True, None, BATCH // 32, id="performance_l1_b32"),
+    ],
+)
+@pytest.mark.parametrize("device_params", TRACE_DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+def test_paper_forward_trace_perf(mesh_device, precision_name, l1_resident, group_size, batch):
+    _run_trace_perf(mesh_device, precision_name, l1_resident, group_size, batch)
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize("group_size", [pytest.param(None, id="unique"), pytest.param(4, id="groups_of_4")])
+@pytest.mark.parametrize("device_params", TRACE_DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize("mesh_device", MULTI_CHIP_MESHES, indirect=True)
+def test_paper_forward_trace_data_parallel(mesh_device, group_size):
+    """Full paper batch split across the mesh; scaling is against one p150a.
+
+    Speedup is against one chip running the full batch; "same per-chip batch" compares
+    with one chip running only this chip's share (1.0 means no data-parallel overhead).
+    """
+    stats = _run_trace_perf(mesh_device, "performance", True, group_size, BATCH)
+    chips = mesh_device.get_num_devices()
+    for name, baseline in (("replay", SINGLE_CHIP_REPLAY_S), ("e2e", SINGLE_CHIP_E2E_S)):
+        speedup = baseline[(group_size, BATCH)] / stats[name]
+        line = f"  {name + '_speedup:':21s} {speedup:.2f}x (efficiency {speedup / chips:.1%})"
+        per_chip = baseline.get((group_size, BATCH // chips))
+        if per_chip is not None:
+            line += f", vs one chip at the same per-chip batch {per_chip / stats[name]:.1%}"
+        print(line)

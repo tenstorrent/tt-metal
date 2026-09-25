@@ -6,6 +6,7 @@
 Exercises the tile-aligned (d_model=768, head_dim=64) fast paths that the dummy
 checkpoint cannot reach: folded-batch matmuls, fused RoPE, SDPA configs, and the
 opt-in reduced-precision modes (gated on quantile accuracy against held-out data).
+Multi-chip meshes run data parallel (batch split along dim 0).
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ import math
 import pytest
 import torch
 
+from models.experimental.chronos_forecast.tests.mesh_params import DATA_PARALLEL_MESHES, MULTI_CHIP_MESHES
 from models.experimental.chronos_forecast.tests.perf.test_paper_forward import (
     _QUANTILES,
     CONTEXT,
@@ -94,20 +96,19 @@ def _run_device(model, context, group_ids):
         # Non-uniform blocks with dummy series; the L1 case slices the block mask per chunk.
         pytest.param(100, "mixed", False, id="b100_mixed_groups"),
         pytest.param(100, "mixed", True, id="b100_mixed_groups_l1"),
-        # A 128-series block exceeds one L1 chunk, so it runs from DRAM.
+        # A 128-series block exceeds one L1 chunk, so it runs from DRAM (on one chip).
         pytest.param(100, 33, True, id="b100_groups_of_33_l1_falls_back"),
+        # Not a multiple of 4 or 8 chips: padded with dummy series.
+        pytest.param(62, 1, True, id="b62_unique_groups_l1"),
     ],
 )
-@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+@pytest.mark.parametrize("mesh_device", DATA_PARALLEL_MESHES, indirect=True)
 def test_device_resident_paper_context_pcc(mesh_device, batch, groups, l1_resident):
     pytest.importorskip("ttnn")
     from tests.ttnn.utils_for_testing import assert_with_pcc
 
     from models.experimental.chronos_forecast.tt.model import TtChronos
     from models.experimental.chronos_forecast.tt.program_configs import TtChronosPrecision
-
-    if mesh_device.get_num_devices() != 1:
-        pytest.skip("single-chip bring-up only (one chip)")
 
     reference, weight_source = _load_reference()
     l1_chunk_tokens = TtChronosPrecision().l1_chunk_tokens() if l1_resident else None
@@ -131,7 +132,7 @@ def test_device_resident_paper_context_pcc(mesh_device, batch, groups, l1_reside
     _, pcc = assert_with_pcc(expected.float(), got, pcc=0.95)
     mae_n = (expected_n - got_n).abs().mean().item()
     print(
-        f"\n[PCC] {weight_source} batch={batch} groups={groups} l1={l1_resident} "
+        f"\n[PCC] {weight_source} chips={model.num_devices} batch={batch} groups={groups} l1={l1_resident} "
         f"pcc_norm={pcc_n} pcc={pcc} mae_norm={mae_n:.5f}"
     )
 
@@ -160,14 +161,23 @@ _MAX_REL_WQL_INCREASE = 0.01
 )
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 def test_precision_quantile_accuracy(mesh_device, precision_name, group_size, l1_resident):
+    _check_quantile_accuracy(mesh_device, precision_name, group_size, l1_resident)
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("group_size", [pytest.param(1, id="unique"), pytest.param(4, id="groups_of_4")])
+@pytest.mark.parametrize("mesh_device", MULTI_CHIP_MESHES, indirect=True)
+def test_data_parallel_quantile_accuracy(mesh_device, group_size):
+    """Data parallel changes only the per-chip batch, so check the shipped performance L1 mode."""
+    _check_quantile_accuracy(mesh_device, "performance", group_size, True)
+
+
+def _check_quantile_accuracy(mesh_device, precision_name, group_size, l1_resident):
     pytest.importorskip("ttnn")
     from tests.ttnn.utils_for_testing import assert_with_pcc
 
     from models.experimental.chronos_forecast.tt.model import TtChronos
     from models.experimental.chronos_forecast.tt.program_configs import TtChronosPrecision
-
-    if mesh_device.get_num_devices() != 1:
-        pytest.skip("single-chip bring-up only (one chip)")
 
     if precision_name == "default":
         precision = TtChronosPrecision()
@@ -194,7 +204,7 @@ def test_precision_quantile_accuracy(mesh_device, precision_name, group_size, l1
     wql_ref, wql_tt = _wql(expected, target), _wql(got, target)
     rel = (wql_tt - wql_ref) / wql_ref
     print(
-        f"\n[WQL] precision={precision_name} group_size={group_size} l1={l1_resident} "
+        f"\n[WQL] chips={model.num_devices} precision={precision_name} group_size={group_size} l1={l1_resident} "
         f"wql_ref={wql_ref:.5f} wql_tt={wql_tt:.5f} rel={rel:+.4%} pcc_norm={pcc_n:.6f}"
     )
     assert rel <= _MAX_REL_WQL_INCREASE, f"WQL {wql_tt:.5f} is {rel:.2%} above the reference {wql_ref:.5f}"

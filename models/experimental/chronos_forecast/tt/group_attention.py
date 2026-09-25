@@ -111,7 +111,11 @@ def _first_fit_decreasing(sizes: list[int], capacity: int) -> list[list[int]]:
 
 
 def pack_group_blocks(
-    group_ids: torch.Tensor, dtype: torch.dtype = torch.float32, *, preferred_block: int = 128
+    group_ids: torch.Tensor,
+    dtype: torch.dtype = torch.float32,
+    *,
+    preferred_block: int = 128,
+    num_blocks_multiple: int = 1,
 ) -> GroupBlockPacking:
     """Pack groups into tile-aligned blocks so group attention runs per block.
 
@@ -121,6 +125,10 @@ def pack_group_blocks(
     one that needs the fewest dummy series; dummies attend only to themselves.
     Ties go to the largest block up to ``preferred_block``: SDPA over many
     32-long sequences is overhead-bound (B=1024 x T=133: 11.0 ms at 32 vs 4.8 ms at 128).
+
+    The block count is padded with all-dummy blocks to a multiple of
+    ``num_blocks_multiple`` (the chip count), so a dim-0 split gives every chip
+    the same number of whole blocks.
     """
     batch = group_ids.shape[0]
     _, group_of_series, counts = torch.unique(group_ids, return_inverse=True, return_counts=True)
@@ -131,7 +139,8 @@ def pack_group_blocks(
 
     def rank(block: int, bins: list) -> tuple:
         over = block > preferred_block
-        return len(bins) * block, over, block if over else -block
+        num_blocks = -(-len(bins) // num_blocks_multiple) * num_blocks_multiple
+        return num_blocks * block, over, block if over else -block
 
     best = None
     block = smallest
@@ -143,6 +152,7 @@ def pack_group_blocks(
             break
         block = min(2 * block, largest)
     block, bins = best
+    bins = bins + [[] for _ in range(-len(bins) % num_blocks_multiple)]
 
     members = [torch.nonzero(group_of_series == g).flatten() for g in by_size.tolist()]
     rows = torch.zeros(len(bins) * block, dtype=torch.long)

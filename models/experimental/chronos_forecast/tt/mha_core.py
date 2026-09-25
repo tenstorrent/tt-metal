@@ -32,7 +32,7 @@ class TtMhaWeights:
     eps: float = 1e-6
 
 
-def maybe_upload_mask(device, mask_host: torch.Tensor, seq_len: int):
+def maybe_upload_mask(device, mask_host: torch.Tensor, seq_len: int, *, mesh_mapper=None):
     """Upload an SDPA mask, or return None when it can be skipped.
 
     An all-zero mask is the identity, and the masked SDPA kernel loses a
@@ -40,7 +40,8 @@ def maybe_upload_mask(device, mask_host: torch.Tensor, seq_len: int):
     so zero masks are skipped when ``seq_len < 32``. Nonzero masks are always
     uploaded (correctness first), as are zero masks at production lengths
     where the masked path is the validated one. Callers must guard
-    ``ttnn.deallocate`` against None.
+    ``ttnn.deallocate`` against None. ``mesh_mapper`` splits or copies the
+    mask across a mesh device.
     """
     import ttnn
 
@@ -51,6 +52,7 @@ def maybe_upload_mask(device, mask_host: torch.Tensor, seq_len: int):
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
         )
     return None
 

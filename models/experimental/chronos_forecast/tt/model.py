@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Single-chip TTNN Chronos2Model (input embed -> encoder -> output embed).
+"""TTNN Chronos2Model (input embed -> encoder -> output embed), single chip or data parallel on a mesh.
 
 reference : models/experimental/chronos_forecast/reference/chronos2/model.py
     embeds = input_embed(patches) + REG + future_embeds  # host concat
@@ -66,7 +66,8 @@ class TtChronosPreparedInputs:
     num_output_patches: int
     unique_groups: bool
     # Grouped series are packed into ``group_block``-series blocks (see
-    # ``pack_group_blocks``); ``output_rows`` maps each input series to its packed row.
+    # ``pack_group_blocks``) and unique series are padded to a multiple of the chip
+    # count; ``output_rows`` maps each input series to its packed row.
     group_block: int | None = None
     output_rows: torch.Tensor | None = None
 
@@ -82,7 +83,7 @@ class TtChronosDeviceInputs:
     time_mask: object | None
     group_mask: object | None
     reg_token: object | None
-    batch_size: int
+    batch_size: int  # series per chip; the batch is split along dim 0 across a mesh
     num_context_patches: int
     num_output_patches: int
     unique_groups: bool
@@ -142,8 +143,12 @@ class TtChronos:
         """``l1_chunk_tokens`` (e.g. ``precision.l1_chunk_tokens()``) runs the encoder
         L1-resident on chunks of ``l1_chunk_tokens // padded_T`` series (rounded down
         to whole group blocks); ``None``, or a group block larger than a chunk,
-        keeps activations in DRAM."""
+        keeps activations in DRAM.
+
+        On a mesh device the model runs data parallel: weights are copied to every
+        chip and the device-resident path splits the batch along dim 0."""
         self.device = device
+        self.num_devices = device.get_num_devices() if hasattr(device, "get_num_devices") else 1
         self.weights = weights
         self.config = config
         self.precision = precision or TtChronosPrecision()
@@ -166,6 +171,49 @@ class TtChronos:
         if self.l1_chunk_tokens is None:
             return None
         return max(1, self.l1_chunk_tokens // padded_seq_len)
+
+    def _mesh_mapper(self, *, split_batch: bool):
+        """Split along dim 0 or copy to every chip; ``None`` on one chip."""
+        if self.num_devices == 1:
+            return None
+        import ttnn
+
+        if split_batch:
+            return ttnn.shard_tensor_to_mesh_mapper(self.device, 0)
+        return ttnn.replicate_tensor_to_mesh_mapper(self.device)
+
+    def host_input(self, tensor: torch.Tensor, *, split_batch: bool, device=None):
+        """bf16 tiled input, split over the mesh batch or copied to every chip.
+
+        ``device=None`` keeps it on host, for ``copy_host_to_device_tensor`` trace refreshes.
+        """
+        import ttnn
+
+        tensor = tensor.detach().to(torch.bfloat16)
+        mapper = self._mesh_mapper(split_batch=split_batch)
+        if mapper is None:
+            host = ttnn.from_torch(tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        else:
+            # Tilizing inside from_torch with a mesh mapper is ~15x slower than splitting row-major first.
+            host = ttnn.to_layout(ttnn.from_torch(tensor, dtype=ttnn.bfloat16, mesh_mapper=mapper), ttnn.TILE_LAYOUT)
+        if device is None:
+            return host
+        return ttnn.to_device(host, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    @staticmethod
+    def group_mask_is_split(prepared: TtChronosPreparedInputs) -> bool:
+        """A uniform block mask broadcasts on every chip; a per-block mask follows its series."""
+        return prepared.group_mask is not None and prepared.group_mask.shape[0] > 1
+
+    def _time_major_group_mask(self, mask: torch.Tensor, seq_len: int) -> torch.Tensor:
+        """(blocks,1,G,G) -> (T*blocks,1,G,G), time-major over each chip's contiguous blocks.
+
+        Matches the (T*B/G, G, d) reshape after the batch/time flip, and splits along
+        dim 0 so each chip gets the rows for its own blocks.
+        """
+        blocks, _, g, _ = mask.shape
+        per_chip = mask.reshape(self.num_devices, 1, blocks // self.num_devices, g, g)
+        return per_chip.expand(-1, seq_len, -1, -1, -1).reshape(-1, 1, g, g)
 
     def prepare_inputs(
         self,
@@ -220,13 +268,28 @@ class TtChronos:
             l1_series_chunk = self._l1_series_chunk(-(-seq_len // 32) * 32)
             if l1_series_chunk is not None:
                 preferred_block = min(preferred_block, max(32, l1_series_chunk // 32 * 32))
-            packing = pack_group_blocks(group_ids, preferred_block=preferred_block)
+            if self.num_devices > 1:
+                preferred_block = min(preferred_block, max(32, batch_size // self.num_devices // 32 * 32))
+            # Whole blocks per chip, so no group spans two chips.
+            packing = pack_group_blocks(
+                group_ids, preferred_block=preferred_block, num_blocks_multiple=self.num_devices
+            )
             patched_context = patched_context[packing.rows]
             patched_future = patched_future[packing.rows]
             batch_size = packing.rows.numel()
             group_block, output_rows = packing.block, packing.output_rows
             # SDPA batch is (time, block) after the batch/time flip; one mask broadcasts when blocks match.
-            group_mask = packing.mask[:1] if packing.is_uniform() else packing.mask.repeat(seq_len, 1, 1, 1)
+            group_mask = (
+                packing.mask[:1] if packing.is_uniform() else self._time_major_group_mask(packing.mask, seq_len)
+            )
+        elif batch_size % self.num_devices:
+            # Pad with copies of series 0 so every chip gets the same number of series.
+            pad = self.num_devices - batch_size % self.num_devices
+            rows = torch.cat([torch.arange(batch_size), torch.zeros(pad, dtype=torch.long)])
+            patched_context = patched_context[rows]
+            patched_future = patched_future[rows]
+            output_rows = torch.arange(batch_size)
+            batch_size += pad
         reg_token = None
         if cfg.use_reg_token:
             reg_token = (
@@ -257,39 +320,52 @@ class TtChronos:
         )
 
     def upload_inputs(self, prepared: TtChronosPreparedInputs) -> TtChronosDeviceInputs:
-        """Upload prepared tensors once; returned tensors may be reused by a trace."""
+        """Upload prepared tensors once; returned tensors may be reused by a trace.
+
+        On a mesh, per-series tensors are split along dim 0 and shared tensors are
+        copied to every chip.
+        """
         import ttnn
 
-        def upload(tensor: torch.Tensor):
-            return ttnn.from_torch(
-                tensor.detach().to(torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+        def upload(tensor: torch.Tensor, *, split_batch: bool):
+            return self.host_input(tensor, split_batch=split_batch, device=self.device)
 
-        batch_size = prepared.patched_context.shape[0]
+        rows = prepared.patched_context.shape[0]
+        if rows % self.num_devices:
+            raise ValueError(
+                f"{rows} prepared series do not split over {self.num_devices} chips; "
+                "use prepare_inputs from a model on the same mesh"
+            )
         seq_len = (
             prepared.num_context_patches + (1 if prepared.reg_token is not None else 0) + prepared.num_output_patches
         )
         return TtChronosDeviceInputs(
-            patched_context=upload(prepared.patched_context),
-            patched_future=upload(prepared.patched_future),
-            cos=ttnn.unsqueeze(upload(prepared.cos), 1),
-            sin=ttnn.unsqueeze(upload(prepared.sin), 1),
+            patched_context=upload(prepared.patched_context, split_batch=True),
+            patched_future=upload(prepared.patched_future, split_batch=True),
+            cos=ttnn.unsqueeze(upload(prepared.cos, split_batch=False), 1),
+            sin=ttnn.unsqueeze(upload(prepared.sin, split_batch=False), 1),
             time_mask=(
                 None
                 if not bool((prepared.time_mask != 0).any())
-                else maybe_upload_mask(self.device, prepared.time_mask, seq_len=seq_len)
+                else maybe_upload_mask(
+                    self.device,
+                    prepared.time_mask,
+                    seq_len=seq_len,
+                    mesh_mapper=self._mesh_mapper(split_batch=False),
+                )
             ),
             group_mask=(
                 None
                 if prepared.unique_groups
-                else maybe_upload_mask(self.device, prepared.group_mask, seq_len=prepared.group_block)
+                else maybe_upload_mask(
+                    self.device,
+                    prepared.group_mask,
+                    seq_len=prepared.group_block,
+                    mesh_mapper=self._mesh_mapper(split_batch=self.group_mask_is_split(prepared)),
+                )
             ),
-            reg_token=upload(prepared.reg_token) if prepared.reg_token is not None else None,
-            batch_size=batch_size,
+            reg_token=upload(prepared.reg_token, split_batch=True) if prepared.reg_token is not None else None,
+            batch_size=rows // self.num_devices,
             num_context_patches=prepared.num_context_patches,
             num_output_patches=prepared.num_output_patches,
             unique_groups=prepared.unique_groups,
@@ -351,11 +427,14 @@ class TtChronos:
     ) -> torch.Tensor:
         """Download and unscale the device output into `(B, Q, horizon)`.
 
-        Pass ``prepared.output_rows`` so grouped (packed) batches come back in input order.
+        Pass ``prepared.output_rows`` so grouped (packed) or padded batches come back in input order.
         """
         import ttnn
 
-        out = ttnn.to_torch(output_device).float()
+        composer = None
+        if self.num_devices > 1:
+            composer = ttnn.concat_mesh_to_tensor_composer(self.device, len(output_device.shape) - 3)
+        out = ttnn.to_torch(output_device, mesh_composer=composer).float()
         if out.dim() == 4 and out.shape[0] == 1:
             out = out.squeeze(0)
         if output_rows is not None:
@@ -408,6 +487,10 @@ class TtChronos:
         num_output_patches: int = 1,
     ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor], int]:
         """Host-orchestrated encode. Returns (hidden (B,L,d) host float, loc_scale, num_context_patches)."""
+        if self.num_devices > 1:
+            raise NotImplementedError(
+                "the host-orchestrated path is single-chip; use prepare_inputs/upload_inputs/forward_device on a mesh"
+            )
         cfg = self.config
         batch_size = context.shape[0]
 

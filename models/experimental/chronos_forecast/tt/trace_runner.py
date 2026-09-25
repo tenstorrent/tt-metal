@@ -44,15 +44,9 @@ class TtChronosTraceRunner:
             ttnn.synchronize_device(self.device)
             ttnn.deallocate(output)
 
-    @staticmethod
-    def _host_tensor(tensor: torch.Tensor):
-        import ttnn
-
-        return ttnn.from_torch(
-            tensor.detach().to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-        )
+    def _host_tensor(self, tensor: torch.Tensor, *, split_batch: bool = True):
+        """Host tensor laid out like its device input, so refreshes land on the right chips."""
+        return self.model.host_input(tensor, split_batch=split_batch)
 
     def capture(self):
         import ttnn
@@ -110,7 +104,7 @@ class TtChronosTraceRunner:
         )
         if not prepared.unique_groups:
             ttnn.copy_host_to_device_tensor(
-                self._host_tensor(prepared.group_mask),
+                self._host_tensor(prepared.group_mask, split_batch=self.model.group_mask_is_split(prepared)),
                 self.inputs.group_mask,
                 cq_id=target_cq,
             )
