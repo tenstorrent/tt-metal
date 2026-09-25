@@ -37,26 +37,9 @@ struct RdmaWindow::Impl {
     uint8_t* base = nullptr;
     uint64_t bytes = 0;
 
-    // Slot 0 is reserved so Op::id == 0 can mean "none".
-    std::vector<MPI_Request> reqs{MPI_REQUEST_NULL};
-    std::vector<uint32_t> free_slots;
-
     uint64_t words[kWordSlots] = {};
     uint32_t next_word = 0;
 
-    uint32_t acquire() {
-        if (!free_slots.empty()) {
-            const uint32_t s = free_slots.back();
-            free_slots.pop_back();
-            return s;
-        }
-        reqs.push_back(MPI_REQUEST_NULL);
-        return static_cast<uint32_t>(reqs.size() - 1);
-    }
-    void release(uint32_t slot) {
-        reqs[slot] = MPI_REQUEST_NULL;
-        free_slots.push_back(slot);
-    }
 };
 
 RdmaWindow::RdmaWindow() : impl_(std::make_unique<Impl>()) {}
@@ -172,10 +155,16 @@ RdmaWindow::~RdmaWindow() {
     MPI_Win_free(&im.win);
 }
 
+// MPI_Put, not MPI_Rput. osc/ucx backs an Rput's request with a ucp_worker_flush that takes
+// a reference on the endpoint, and that refcount is a uint8_t: past 255 outstanding, UCX
+// aborts the process outright (flush.c:614, `refcount < UINT8_MAX`). Batching is the whole
+// strategy here, so that ceiling is not one to live under.
+//
+// Nothing is lost. The request only ever told the caller a put had completed LOCALLY; what
+// licenses reuse is the flush epoch, which proves REMOTE completion and therefore implies it.
 std::string RdmaWindow::put(const void* src, uint64_t bytes, uint32_t peer_rank, uint64_t target_offset, Op& op) {
-    Impl& im = *impl_;
-    const uint32_t slot = im.acquire();
-    const int rc = MPI_Rput(
+    op = Op{};
+    const int rc = MPI_Put(
         src,
         static_cast<int>(bytes),
         MPI_BYTE,
@@ -183,15 +172,8 @@ std::string RdmaWindow::put(const void* src, uint64_t bytes, uint32_t peer_rank,
         static_cast<MPI_Aint>(target_offset),
         static_cast<int>(bytes),
         MPI_BYTE,
-        im.win,
-        &im.reqs[slot]);
-    if (rc != MPI_SUCCESS) {
-        im.release(slot);
-        op = Op{};
-        return mpi_error_text("MPI_Rput", rc);
-    }
-    op.id = slot;
-    return {};
+        impl_->win);
+    return rc == MPI_SUCCESS ? std::string{} : mpi_error_text("MPI_Put", rc);
 }
 
 // Fire and forget: a credit is an absolute count, so a lost or duplicated one is a no-op
@@ -225,20 +207,9 @@ std::string RdmaWindow::put_word(uint64_t value, uint32_t peer_rank, uint64_t ta
     return {};
 }
 
-bool RdmaWindow::test(Op& op) {
-    Impl& im = *impl_;
-    if (!op.valid() || op.id >= im.reqs.size()) {
-        return true;
-    }
-    int done = 0;
-    MPI_Test(&im.reqs[op.id], &done, MPI_STATUS_IGNORE);
-    if (done != 0) {
-        im.release(op.id);
-        op = Op{};
-        return true;
-    }
-    return false;
-}
+// Always complete: with MPI_Put there is no request to poll, and the caller gates on the
+// flush epoch instead. Kept so call sites need not change shape.
+bool RdmaWindow::test(Op&) { return true; }
 
 std::string RdmaWindow::flush(uint32_t peer_rank) {
     const int rc = MPI_Win_flush(static_cast<int>(peer_rank), impl_->win);
