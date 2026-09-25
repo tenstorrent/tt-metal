@@ -3,7 +3,7 @@
 This directory implements Tenstorrent inference for the hybrid
 **Gated DeltaNet + Gated Full Attention** Qwen3.5/3.6 family. A single code path serves four
 checkpoints. Everything runs on **Blackhole** (P150); the sparse-MoE **Qwen3.6-35B-A3B**
-additionally runs on **Wormhole** (n150x4):
+additionally runs on a **Wormhole LoudBox** (4 × n300), as a `(1, 4)` mesh (`N150x4`):
 
 | Model            | `HF_MODEL`             | Arch      | Mesh / `MESH_DEVICE` | Parallelism            |
 | ---------------- | ---------------------- | --------- | -------------------- | ---------------------- |
@@ -12,19 +12,22 @@ additionally runs on **Wormhole** (n150x4):
 | Qwen3.6-27B      | `Qwen/Qwen3.6-27B`     | Blackhole | P150x4 — `P150x4`    | 4-way tensor parallel  |
 | Qwen3.6-27B      | `Qwen/Qwen3.6-27B`     | Blackhole | P150x8 — `P150x8`    | 8-way tensor parallel  |
 | Qwen3.6-35B-A3B  | `Qwen/Qwen3.6-35B-A3B` | Blackhole | P150x4 — `P150x4`    | 4-way TP + sparse MoE  |
-| Qwen3.6-35B-A3B  | `Qwen/Qwen3.6-35B-A3B` | Wormhole  | n150x4 — `N150x4`    | 4-way TP + sparse MoE  |
+| Qwen3.6-35B-A3B  | `Qwen/Qwen3.6-35B-A3B` | Wormhole  | WH LoudBox — `N150x4` | 4-way TP + sparse MoE |
 
 The same `(1, 4)` TP code path serves `P150x4` and `N150x4` — what differs is hardware geometry,
 and every grid-, bank- and link-shaped constant is now derived from the mesh device rather than
-hardcoded. See [Running on Wormhole (n150x4)](#running-on-wormhole-n150x4).
+hardcoded. See [Running on the Wormhole LoudBox](#running-on-the-wormhole-loudbox).
 
 > **Wormhole is for the 35B-A3B only.** The 9B / 27B checkpoints remain Blackhole-only: their
 > program configs and memory budgets were tuned for a P150 (32 GB, 11x10 grid) and neither has
-> been brought up on a Wormhole n150 (12 GB, 8x8). `demo/text_demo.py` skips them on Wormhole
-> rather than running something unvalidated. **No Blackhole behaviour changes** — every derived
-> constant reproduces the value it replaced on a P150 (`agmm_grid` → grid `(8,9)`, 2 links,
-> 4 workers; `mmrs_prefill_grid` → grid `(8,8)`, RS offset `(0,8)`; GDN conv chunks 2 for the MoE
-> and 1 for the dense checkpoints; 8 DRAM banks).
+> been brought up on a Wormhole chip (12 GB, 8x8). `demo/text_demo.py` skips them on Wormhole
+> rather than running something unvalidated.
+>
+> **Blackhole runs the same code as before Wormhole support was added.** Every Wormhole-specific
+> change is behind an `is_blackhole()` check, and the device-derived constants reproduce the P150
+> values they replaced (`agmm_grid` → grid `(8,9)`, 2 links, 4 workers; GDN conv chunks 2 for the
+> MoE and 1 for the dense checkpoints; 8 DRAM banks). The one intentional exception is
+> `tp_common.pad_and_free`, a use-after-free fix that applies to both arches (see below).
 
 The **35B-A3B** is the sparse Mixture-of-Experts member of the family (`qwen3_5_moe`:
 256 routed experts, top-8, plus a gated shared expert on every layer). Every layer's
@@ -102,9 +105,8 @@ export MESH_DEVICE=N150x4
 
 `HF_MODEL` is the single source of truth for the checkpoint — it may be a Hugging
 Face hub id (resolved via `snapshot_download`) or a local checkpoint directory.
-`MESH_DEVICE` selects the mesh shape. Blackhole and Wormhole names for the same
-shape are interchangeable: `P150`/`N150` → `(1,1)`, `N300` → `(1,2)`,
-`P150x4`/`N150x4` → `(1,4)`, `P150x8`/`T3K` → `(1,8)`.
+`MESH_DEVICE` selects the mesh shape for `demo/text_demo.py` and the `*_tp` tests:
+`P150` → `(1,1)`, `P150x4` / `N150x4` → `(1,4)`, `P150x8` → `(1,8)`.
 
 Optional flags:
 
@@ -113,14 +115,22 @@ Optional flags:
 export QWEN_SDPA_BF8=1
 ```
 
-## Running on Wormhole (n150x4)
+## Running on the Wormhole LoudBox
 
-`MESH_DEVICE=N150x4` runs the **Qwen3.6-35B-A3B** on a `(1, 4)` Wormhole mesh through the same TP
-code path as `P150x4`. No other checkpoint in this directory is supported on Wormhole. Five
-hardware properties differ, and each one is read off the mesh device at config time instead of
-being hardcoded:
+A Wormhole LoudBox holds four n300 cards (8 Wormhole chips). `MESH_DEVICE=N150x4` opens four of
+those chips as a `(1, 4)` mesh and runs the **Qwen3.6-35B-A3B** through the same TP code path as
+`P150x4`. No other checkpoint in this directory is supported on Wormhole.
 
-| Property                  | BH P150 | WH N150 | Where it is read                              |
+```bash
+export HF_MODEL=Qwen/Qwen3.6-35B-A3B
+export MESH_DEVICE=N150x4
+pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced_128 and not 128k" --timeout=5000
+```
+
+Five hardware properties differ from a P150, and each one is read off the mesh device at config
+time instead of being hardcoded:
+
+| Property                  | BH P150 | WH chip | Where it is read                              |
 | ------------------------- | ------- | ------- | --------------------------------------------- |
 | Tensix worker grid        | 11 × 10 | 8 × 8   | `tp_common.worker_grid`                       |
 | Ethernet links per TP hop | 2       | 1       | `tp_common.ccl_num_links`                     |
@@ -128,92 +138,99 @@ being hardcoded:
 | DRAM per device           | 32 GB   | 12 GB   | budget only — see below                       |
 | L1 per core               | 1536 KB | 1464 KB | `tp_common.prefill_l1_output_ok`              |
 
-The consequences, all handled in code:
+### What differs on Wormhole
 
-- **Fused all-gather + matmul — enabled here, unlike PR #54572.** That PR disables this fusion on
-  Wormhole (`mlp_gateup_agmm_enabled` -> `is_blackhole()`), reporting that forcing the grid height
-  to 8 makes `all_gather_minimal_matmul_async` build overlapping in0/in1 sender/receiver core
-  ranges (it derives them from `grid_size.y-1/-2/-3`) and die with
-  `local_noc0_in_use and local_noc1_in_use`. The height used here is `gy - 1` = **7**, not 8, which
-  leaves the op's mux row free and avoids that overlap — measured working on a (1,4) WH mesh at
-  op-level PCC 0.99997, with `test_mlp_tp_prefill` passing with the swiglu fusion live. Worth
-  feeding back: that PR estimates the fusion hides ~2.5 ms of a 21.7 ms single-layer GDN prefill.
 - **Fused all-gather + matmul.** `all_gather_matmul_prefill` / `all_gather_swiglu_prefill` place
   their `2 × num_links` fabric mux cores on the *last row* of the worker grid, and assert
   `ceil(grid.x / workers_per_link) == num_links`. `tp_common.agmm_grid` derives the grid height
-  (9 on BH, 7 on WH) and the worker count (4 on BH's 2 links, 8 on WH's 1) from the device.
-  Measured on WH at M=128, K=2048, N=1024: PCC 0.99997.
+  (9 on BH, 7 on WH) and the worker count (4 on BH's 2 links, 8 on WH's 1) from the device. PR
+  #54572 disables this fusion on Wormhole because a grid height of 8 makes the op build
+  overlapping sender/receiver core ranges; the height here is `gy - 1` = 7, which leaves the mux
+  row free. Measured on WH at M=128, K=2048, N=1024: PCC 0.99997.
 - **Shared-GDN Wormhole compat layer** (`tt/wh_compat.py` + `tt/chunk_seq_wh.py`, taken from
   PR #54572). The chunk-seq kernels in `models/experimental/gated_attention_gated_deltanet` were
   tuned for Blackhole's much larger total L1; on Wormhole their activations collide with the
   kernel's circular buffers. The compat layer sends chunk-seq activations to DRAM and switches the
   `[BH, L, V]` output relayout to bf16 (33.5 MB -> 16.8 MB at L=2048). Both overrides delegate to
-  upstream whenever `is_blackhole()`, so Blackhole is bit-for-bit unchanged. **Without this the GDN
-  prefill does not complete on Wormhole**; with it, `test_gdn_tp_prefill` passes at PCC 0.99996.
-- **Fused matmul + reduce-scatter is Blackhole-only.** `matmul_reduce_scatter_prefill`
-  (`matmul_reduce_scatter_async`, the GDN out-projection) *enqueues but never completes* on a WH
-  N150x4 — the 1-link Linear hop asks for 8 RS workers per direction (18 cores) and no split of
-  the 8x8 grid between the matmul and those cores lets it finish; the host spins in the readback
-  indefinitely. GDN prefill therefore takes the **unfused** arm on Wormhole (`ttnn.linear` +
-  `tt_all_reduce`, the arm the out-sharded config already uses), measured at PCC 0.99999 in 2.8 s
-  against the fused op's hang on the identical shape. Blackhole keeps the fusion untouched — see
-  `tp_common.mmrs_prefill_supported`. This costs Wormhole the matmul/RS overlap, so GDN-layer TTFT
-  will be somewhat worse there than a naive scaling from Blackhole would suggest.
-- **L1-resident prefill outputs.** Keeping a tuned prefill matmul's `[seq, N]` output
-  in L1 is a Blackhole-only win; on WH the same program config's circular buffers
-  plus that output overflow L1 (the MLP down-projection trips it even on the 27B).
-  Those outputs go to DRAM on WH — program configs are unchanged.
-- **GDN depthwise conv chunking.** The prefill `ttnn.conv1d` is height-sharded, so
-  per-core L1 scales with `channels / chunks / num_cores`. The chunk count is scaled
-  by the core-count ratio against the BH reference (110 cores), giving 4 chunks for
-  the MoE checkpoint on WH versus 2 on BH. The split is exact (depthwise is
-  per-channel-independent), so it is a placement change only.
+  upstream whenever `is_blackhole()`. Without this the GDN prefill does not complete on Wormhole.
+- **Fused matmul + reduce-scatter is Blackhole-only.** `matmul_reduce_scatter_async` (the GDN
+  out-projection) *enqueues but never completes* on the `(1, 4)` WH mesh: the 1-link Linear hop
+  asks for 8 RS workers per direction (18 cores) and no split of the 8x8 grid lets it finish.
+  GDN prefill takes the **unfused** arm on Wormhole (`ttnn.linear` + `tt_all_reduce`); see
+  `tp_common.mmrs_prefill_supported`.
+- **L1-resident prefill outputs.** Keeping a tuned prefill matmul's `[seq, N]` output in L1 is a
+  Blackhole-only win; on WH the same program config's circular buffers plus that output overflow
+  L1. Those outputs go to DRAM on WH — program configs are unchanged.
+- **GDN depthwise conv chunking.** The prefill `ttnn.conv1d` is height-sharded, so per-core L1
+  scales with `channels / chunks / num_cores`. The chunk count is scaled by the core-count ratio
+  against the BH reference (110 cores): 4 chunks for the MoE checkpoint on WH versus 2 on BH. The
+  split is exact (depthwise is per-channel-independent).
+- **MoE prefill** (`tt/moe/prefill.py::_process_prefill_chunk_wh`). The routed-expert
+  `sparse_matmul`s were 82% of WH prefill device time. The WH path runs both expert matmuls per
+  (32-token tile, expert) pair gated by the same tile mask, where Blackhole's down_proj computes
+  every local expert over the whole chunk. It also uses the decode-swept block widths
+  (`in0_block_w = K/2`, `per_core_n = 2`), applies the routing weights on the 512-wide
+  intermediate before down_proj, and writes bfloat8_b matmul outputs. Measured on the first 4
+  layers at T=2048: 926 -> 234 ms of prefill; MoE prefill PCC moves by -0.00025.
+- **Decode.** The WH decode path keeps the attention head tensors height-sharded from the QKV
+  head split through SDPA, uses a local fork of the GDN recurrent step
+  (`tt/gdn/recurrent_decode_wh.py`, taken only when its `[B,H,K,V]` intermediate fits L1, i.e.
+  up to B=8), and uses the fused `generalized_moe_gate` router with tuned sparse-matmul configs.
 
 ### Memory budget
 
-A Wormhole n150 has **12 GB of DRAM per device** against a P150's 32 GB, and that,
-not compute, is the binding constraint for the 35B-A3B. With the shipped dtypes
-(routed-expert gate/up `bfloat4_b`, down `bfloat8_b`, everything else `bfloat8_b`)
-and expert-parallel sharding of 256 experts over 4 devices, the weights come to
-roughly **6–7 GB per device**, leaving ~5 GB for the 1 GiB trace region, the paged
-KV cache, the GDN recurrent/conv state and activations.
+Each Wormhole chip has **12 GB of DRAM** against a P150's 32 GB, and that, not compute, is the
+binding constraint for the 35B-A3B. With the shipped dtypes (routed-expert gate/up `bfloat4_b`,
+down `bfloat8_b`, everything else `bfloat8_b`) and expert-parallel sharding of 256 experts over
+4 devices, the weights come to roughly **6–7 GB per device**, leaving ~5 GB for the 1 GiB trace
+region, the paged KV cache, the GDN recurrent/conv state and activations. The KV cache is
+~5.4 KB per token per device (10 full-attention layers × 1 local KV head × 256 head-dim × K and V
+in bf8), and the GDN state adds ~15 MB per batch row.
 
-That is comfortable for short and medium ISLs at batch 1, and it is the reason the
-long-context and large-batch corners of `demo/text_demo.py` (the 128k/256k ISLs, and
-the `batched_*_b8` / `b32` ladder past ~8k) are **not expected to fit on n150x4** —
-they were sized against the P150x4's 32 GB. Run them only with a reduced block
-budget. The KV cache alone is ~5.4 KB per token per device (10 full-attention layers
-× 1 local KV head × 256 head-dim × K and V in bf8), and the GDN state adds ~15 MB per
-batch row.
+Batch-1 prefill fits up to and including the `traced_128k` case (a 103,351-token prompt, see
+below). The `traced_256k` ISL and the `batched_*_b8` / `b32` cases past 128 tokens have not been
+run on this mesh; they were sized for the P150x4's 32 GB.
 
-### What was validated on Wormhole
+### Validated results
 
-**End-to-end, with the real checkpoint.** `Qwen/Qwen3.6-35B-A3B` on a `(1, 4)` Wormhole mesh:
+Measured on the Wormhole LoudBox, `MESH_DEVICE=N150x4`, `HF_MODEL=Qwen/Qwen3.6-35B-A3B`, traced,
+model load 12–18 s from a warm weight cache:
 
 ```bash
-MESH_DEVICE=N150x4 HF_MODEL=Qwen/Qwen3.6-35B-A3B \
-    pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s \
-           -k "traced_128 and not 128k" --timeout=5000
+pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s --timeout=5000 \
+    -k "traced_128 or traced_4k or traced_8k or traced_64k or traced_128k or batched_128_b8 or batched_128_b32"
 ```
 
-| Case | TTFT | Decode / user | Aggregate | Result |
-| ---- | ---- | ------------- | --------- | ------ |
-| `traced_128` | 0.67 s | 25.48 tok/s | — | PASSED |
-| `traced_4k` | 12.6 s | 25.25 tok/s | — | PASSED |
-| `determinism_128` | — | — | — | PASSED (two runs, identical output) |
-| `batched_128_b8` | — | 20.13 tok/s | 161.1 tok/s | PASSED |
-| `batched_128_b32` | 45.2 s | 9.31 tok/s | 298.0 tok/s | PASSED |
+| Case | Prompt tokens | TTFT | Decode | Result |
+| ---- | ------------- | ---- | ------ | ------ |
+| `traced_128`      | 128     | 0.47 s   | 25.46 tok/s | PASSED |
+| `traced_4k`       | 2,642   | 3.00 s   | 25.27 tok/s | PASSED |
+| `traced_8k`       | 8,192   | 7.86 s   | 24.99 tok/s | PASSED |
+| `traced_64k`      | 65,536  | 71.24 s  | 23.13 tok/s | PASSED |
+| `traced_128k`     | 103,351 | 120.89 s | 21.51 tok/s | PASSED |
+| `batched_128_b8`  | 128 × 8  | 16.69 s | 20.12 tok/s/user (161.0 aggregate) | PASSED |
+| `batched_128_b32` | 128 × 32 | 7.59 s  | 9.37 tok/s/user (299.9 aggregate)  | PASSED |
 
-Model load 30-32 s from a warm bf8 cache; generated text is fluent and on-topic (the test's
-non-degeneracy gate passes). The 40-layer model's weights fit the 4 x 12 GB budget with the 1 GiB
-trace region resident.
+`traced_4k` uses a 2,642-token prompt, and `traced_128k` runs the whole Frankenstein text, which
+is 103,351 tokens (its KV block budget is sized for 128k). The generated text is coherent and
+on-topic in every case (the test's non-degeneracy gate passes).
 
-Decode is the tuned path. Prefill TTFT still scales at roughly 3 ms/token at long ISL: the fused
-matmul + reduce-scatter is off here (it hangs on Wormhole, see `tp_common.mmrs_prefill_supported`),
-and the `wh_9b_n300` prefill passes from PR #54572 were swept on an N300 at TP=2 with dim<=4096, so
-they need re-measuring for this (1,4) MoE config rather than copying.
+Component PCC suite on the same mesh with the 35B-A3B checkpoint — `test_moe_tp.py`,
+`test_rope_tp.py`, `test_attention_tp.py`, `test_gdn_tp.py`, and `test_model_tp.py`'s
+`test_model_tp_contract` / `test_model_tp_long_prefill` / `test_model_tp_long_prefill_traced` —
+all pass (`test_mlp_tp` skips on a MoE checkpoint, which has no dense MLP):
 
-**Component tests**, same mesh, same real checkpoint:
+| Case | PCC vs reference |
+| ---- | ---------------- |
+| MoE decode (torch)                         | 0.98747 |
+| MoE decode, batch 8 (torch)                | 0.98884 |
+| MoE prefill, seq 32 / 256 / 512 (torch)    | 0.98949 / 0.99016 / 0.98999 |
+| Model contract, prefill logits (8 layers)  | 0.99845 |
+| Long prefill T=2304, chunked vs single-pass | 0.99745 |
+| Traced vs eager chunked prefill, T=4096 / 4352 | 0.99823 / 0.99928 |
+
+Full component suites, same mesh and checkpoint, measured **before** the MoE prefill change above
+(not re-run since, except the PCC cases in the table):
 
 | Suite | Result |
 | ----- | ------ |
@@ -224,6 +241,7 @@ they need re-measuring for this (1,4) MoE config rather than copying.
 | `test_generate_tp.py`, `test_sampling.py` | 1/1 each |
 | `test_decode_bucketing.py` | 16/17 (the remaining one imports vLLM) |
 | `test_model_tp.py` | 13/14 |
+| `demo/text_demo.py` `determinism_128` | PASSED (two runs, identical output) |
 
 The one `test_model_tp` failure is `prefill_paged_slots_long[eager-2chunks_plus_tail]`: for one
 user of eight, first-step decode logits land at PCC 0.96 against the B=1 chunk-outer reference.
@@ -238,8 +256,15 @@ state round-trip are both bit-exact for that user.
 > tensor's own storage and the next L1 allocation clobbered it. On WH at B=32 this
 > dropped attention PCC to 0.09; on BH the larger L1 happens not to recycle the block
 > before the read, so it was latent. `tp_common.pad_and_free` frees the source only
-> when the pad really allocated.
+> when the pad really allocated, and is used on both arches.
 
+### Known limitations on Wormhole
+
+- **MoE prefill still does redundant work.** TTFT is about 1.0–1.2 ms per token. The WH expert
+  path still streams each expert's weights once per 32-token tile and runs swiglu over
+  zero-filled expanded tensors; grouping tokens by expert before the matmuls is the next step.
+- **No fused matmul + reduce-scatter** in GDN prefill (it hangs on this mesh, see above).
+- **Untested corners:** `traced_256k`, and batched cases with prompts longer than 128 tokens.
 
 ## End-to-end demo test (`demo/text_demo.py`)
 
@@ -329,8 +354,8 @@ pytest models/demos/blackhole/qwen36/tests/test_weight_mapping.py -v -s
 The `*_tp` tests exercise the multi-device TP path and default to the 27B
 checkpoint. They must run on the `(1,4)` mesh with `FABRIC_1D` (the
 `parametrize_mesh_tp` helper wires this from `MESH_DEVICE`; it also accepts
-`N150x4`, which is how the shared TP surface was exercised on Wormhole — see
-[What was validated on Wormhole](#what-was-validated-on-wormhole)). PCC thresholds
+`N150x4`, the Wormhole LoudBox mesh — see
+[Validated results](#validated-results)). PCC thresholds
 are in `tests/pcc_thresholds.json`.
 
 | Test                  | Validates                                                            |
