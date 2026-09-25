@@ -67,7 +67,6 @@ def _encoder(hf_config: transformers.PretrainedConfig, mesh_device: ttnn.MeshDev
 @MESH
 @DEVICE_PARAMS
 def test_decode(*, mesh_device: ttnn.MeshDevice) -> None:
-    torch.set_num_threads(1)
     torch.manual_seed(0)
     max_length = PROMPT_LENGTH + NUM_STEPS
 

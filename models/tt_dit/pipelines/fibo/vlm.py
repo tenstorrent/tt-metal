@@ -152,24 +152,18 @@ class Vlm:
         return encoded["input_ids"]
 
     def _generate(self, tokens: torch.Tensor, *, max_length: int, traced: bool) -> GenerationOutput:
-        # Sampling runs one small torch op per token on the host, which more threads only slow down.
-        num_threads = torch.get_num_threads()
-        torch.set_num_threads(1)
-        try:
-            return self._encoder.generate(
-                tokens,
-                mask=None,
-                max_length=max_length,
-                cache_length=self._cache_length,
-                prefill_length=self._prompt_length,
-                eos_tokens=self._eos_tokens,
-                top_k=self._top_k,
-                top_p=_TOP_P,
-                temperature=_TEMPERATURE,
-                traced=traced,
-            )
-        finally:
-            torch.set_num_threads(num_threads)
+        return self._encoder.generate(
+            tokens,
+            mask=None,
+            max_length=max_length,
+            cache_length=self._cache_length,
+            prefill_length=self._prompt_length,
+            eos_tokens=self._eos_tokens,
+            top_k=self._top_k,
+            top_p=_TOP_P,
+            temperature=_TEMPERATURE,
+            traced=traced,
+        )
 
 
 def clean(text: str) -> dict[str, Any] | None:

@@ -156,7 +156,6 @@ def test_prefill(*, mesh_device: ttnn.MeshDevice, sp_axis: int | None, architect
 
     The masked run also passes the plain-range positions explicitly, which must not change anything.
     """
-    torch.set_num_threads(1)
     reference = _reference_model(architecture)
     model = _encoder(architecture, reference, mesh_device, sp_axis=sp_axis)
     tokens, mask = _prompt(masked=masked)
@@ -206,7 +205,6 @@ def test_generate(*, mesh_device: ttnn.MeshDevice, architecture: str, masked: bo
 
     `guide` feeds the reference tokens back in, so every step's logits line up with the reference's.
     """
-    torch.set_num_threads(1)
     reference = _reference_model(architecture)
     model = _encoder(architecture, reference, mesh_device, sp_axis=None)
     tokens, mask = _prompt(masked=masked)

@@ -44,7 +44,6 @@ TRACE_REGION_SIZE = 16_000_000
     ],
 )
 def test_generation(*, mesh_device: ttnn.MeshDevice, skip_layers: int, masked: bool) -> None:
-    torch.set_num_threads(1)
     torch.manual_seed(0)
 
     tp_axis = 1
@@ -169,7 +168,6 @@ def test_generation(*, mesh_device: ttnn.MeshDevice, skip_layers: int, masked: b
     [pytest.param(False, id="untraced"), pytest.param(True, id="traced")],
 )
 def test_guided_generation(*, mesh_device: ttnn.MeshDevice, skip_layers: int, masked: bool, traced: bool) -> None:
-    torch.set_num_threads(1)
     torch.manual_seed(0)
 
     tp_axis = 1

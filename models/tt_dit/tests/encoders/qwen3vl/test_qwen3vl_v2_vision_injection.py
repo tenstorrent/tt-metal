@@ -202,7 +202,6 @@ def test_generation_after_image_matches_reference(*, mesh_device: ttnn.MeshDevic
         expected = hidden[:, SEQ - 1 : SEQ + EXTRA - 1] @ reference.embed_tokens.weight.T
 
     logger.info("running ttnn model...")
-    torch.set_num_threads(1)
     out = encoder.generate(
         ids,
         mask=None,

@@ -649,13 +649,6 @@ class TransformerEncoder(Module):
         # slightly simpler approach and start generation after the longest input, which is also what
         # the transformers library does.
 
-        if torch.get_num_threads() > 1:
-            warnings.warn(
-                f"torch runs on {torch.get_num_threads()} threads which leads to poor performance; "
-                "call torch.set_num_threads(1)",
-                stacklevel=2,
-            )
-
         if self.final_linear is None:
             msg = "generation needs the language-model head"
             raise ValueError(msg)
@@ -706,6 +699,13 @@ class TransformerEncoder(Module):
         logits = [] if return_logits else None
 
         top_k_on_device = top_k is not None and top_k <= MAX_DEVICE_TOP_K and not return_logits
+
+        if guide is None and not top_k_on_device and torch.get_num_threads() > 1:
+            warnings.warn(
+                f"sampling the whole vocabulary on {torch.get_num_threads()} torch threads leads to "
+                "poor performance; call torch.set_num_threads(1)",
+                stacklevel=2,
+            )
 
         if traced:
             trace = self._get_decode_trace(
