@@ -127,7 +127,7 @@ between `start`/`stop` signposts, both FSDP settings.
 
 ```bash
 scripts/run_safe_pytest.sh --profile \
-  "'models/tt_dit/tests/models/minimax_h3/test_performance_minimax_h3.py::test_minimax_h3_transformer_block_perf[wormhole_b0-sp_sim1-15s_768p-4x8sp1tp0nl4_ring_is_fsdp1]'" \
+  "'models/tt_dit/tests/models/minimax_h3/test_transformer_minimax_h3.py::test_minimax_h3_transformer_block_perf[wormhole_b0-sp_sim1-test_prompt_text_tokens-15s_768p-4x8sp1tp0nl4_ring_is_fsdp1]'" \
   -s --timeout 3600
 python models/tt_dit/tests/models/minimax_h3/tools/project_block_perf.py fsdp1=<csv> fsdp0=<csv>
 ```
@@ -425,7 +425,7 @@ export TT_MM_SWIGLU_LUT_SILU=1        # LUT-sigmoid SwiGLU epilogue in every fus
 
 # one block, per-op device profile (2-3 min; prints "SAFE_PYTEST: PROFILER CSV: <csv>")
 scripts/run_safe_pytest.sh --profile \
-  "'models/tt_dit/tests/models/minimax_h3/test_performance_minimax_h3.py::test_minimax_h3_transformer_block_perf[wormhole_b0-sp_sim1-15s_768p-4x8sp1tp0nl4_ring_is_fsdp1]'" \
+  "'models/tt_dit/tests/models/minimax_h3/test_transformer_minimax_h3.py::test_minimax_h3_transformer_block_perf[wormhole_b0-sp_sim1-test_prompt_text_tokens-15s_768p-4x8sp1tp0nl4_ring_is_fsdp1]'" \
   -s --timeout 3600
 python models/tt_dit/tests/models/minimax_h3/tools/transformer_roofline.py --dump --figs block_stacked,block_ops,block_other \
   --profile-csv <csv> --out-dir transformer_roofline_out/all_on
@@ -784,7 +784,7 @@ recurrence, and 4.7% faster. The VBench setup gaps moved to `../MiniMaxH3.md`.
 3. **M-keyed tuning tables and the pipeline disagreed on the per-device length** — *fixed in
    `a07012d7d8a`*. Every 768P table now keys on **4736 / 9184 / 13664** rows/device (5 s / 10 s /
    15 s), which is what the pipeline packs and logs on every run (`packed sequence ... rows/device`).
-   `test_performance_minimax_h3.py::_packed_sizes` counts audio in rows (two per latent,
+   `test_transformer_minimax_h3.py::_packed_sizes` counts audio in rows (two per latent,
    `packing.py:261`) and uses the gate's 39-token prompt, and both the length and the padding go
    through `packing.py` helpers (`packed_sequence_length`, `padded_sequence_length`) that the pipeline
    itself uses, so the two cannot diverge again. `get_matmul_config`/`get_agmm_config` fall back to a

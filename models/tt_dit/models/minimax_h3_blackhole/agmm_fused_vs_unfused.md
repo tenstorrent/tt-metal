@@ -78,7 +78,7 @@ ring devices, one traced execution per combo, as on Wormhole.
 ## Block profile (step 1)
 
 `scripts/run_safe_pytest.sh --profile` on
-`test_minimax_h3_transformer_block_perf[blackhole-sp_sim1-15s_768p-4x8sp1tp0nl2_ring_is_fsdp0]`, second iteration
+`test_minimax_h3_transformer_block_perf[blackhole-sp_sim1-test_prompt_text_tokens-15s_768p-4x8sp1tp0nl2_ring_is_fsdp0]`, second iteration
 between the `start` / `stop` signposts, then `transformer_roofline.py --arch bh --profile-csv ... --dump`. Full
 dump: `generated/agmm_h3_sweep/roofline_block_bh_M13664.txt`; figures in `transformer_roofline_out_bh/`.
 

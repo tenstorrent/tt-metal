@@ -162,7 +162,7 @@ MM_SWEEP_PROFILER_DUMP_EVERY=100000 python -m pytest models/tt_dit/utils/sweep_m
   -k "13664_3584_5376_8x7_mm_mmrs_nobias and wh_4x8_ring" -s --timeout 14400
 # block profile
 scripts/run_safe_pytest.sh --profile \
-  "'models/tt_dit/tests/models/minimax_h3/test_performance_minimax_h3.py::test_minimax_h3_transformer_block_perf[wormhole_b0-sp_sim1-15s_768p-4x8sp1tp0nl4_ring_is_fsdp1]'" \
+  "'models/tt_dit/tests/models/minimax_h3/test_transformer_minimax_h3.py::test_minimax_h3_transformer_block_perf[wormhole_b0-sp_sim1-test_prompt_text_tokens-15s_768p-4x8sp1tp0nl4_ring_is_fsdp1]'" \
   -s --timeout 3600
 ```
 

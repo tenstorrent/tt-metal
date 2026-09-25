@@ -275,7 +275,7 @@ path inside the same API. A 2x4 / 4x2 variant is a follow-up once fp32 dest off 
    --perf-counter-multipass ... --fidelity HiFi2 --iters 2`, then `tools/tensix_perf_counters.py generated/profiler/.logs/profile_log_device.csv`.
 4. **Mesh** — `transformer_op_mesh_bench.py --op ff1`, `--op to_qkv`, `--op ff2 --fused --mm-grid 8x7 --blocks 6,7,8,2,2
    --window 2`, each under `timeout 600`, new and baseline back to back; no hang, numerics identical (§0).
-5. **Block** — `scripts/run_safe_pytest.sh --profile "test_performance_minimax_h3.py::test_minimax_h3_transformer_block_perf[wormhole_b0-sp_sim1-15s_768p-4x8sp1tp0nl4_ring_is_fsdp1]" -o timeout=1500`
+5. **Block** — `scripts/run_safe_pytest.sh --profile "test_transformer_minimax_h3.py::test_minimax_h3_transformer_block_perf[wormhole_b0-sp_sim1-test_prompt_text_tokens-15s_768p-4x8sp1tp0nl4_ring_is_fsdp1]" -o timeout=1500`
    (and `_fsdp0`), new and baseline back to back, compared with `tools/block_profile_stats.py compare`: numbers in §0.
    The 10-step pipeline A/B was not run.
 

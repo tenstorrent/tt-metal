@@ -62,7 +62,7 @@ Wormhole row is skipped on this machine by its mark.
 
 ```bash
 scripts/run_safe_pytest.sh --profile \
-  "'models/tt_dit/tests/models/minimax_h3/test_performance_minimax_h3.py::test_minimax_h3_transformer_block_perf[blackhole-sp_sim1-15s_768p-4x8sp1tp0nl2_ring_is_fsdp0]'" \
+  "'models/tt_dit/tests/models/minimax_h3/test_transformer_minimax_h3.py::test_minimax_h3_transformer_block_perf[blackhole-sp_sim1-test_prompt_text_tokens-15s_768p-4x8sp1tp0nl2_ring_is_fsdp0]'" \
   -s --timeout 3600
 # it prints generated/profiler/reports/<ts>/ops_perf_results_<ts>.csv
 python models/tt_dit/tests/models/minimax_h3/tools/transformer_roofline.py --arch bh \

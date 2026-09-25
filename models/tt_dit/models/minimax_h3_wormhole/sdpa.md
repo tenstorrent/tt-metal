@@ -222,7 +222,7 @@ gathered K/V from DRAM instead of the fabric — kernel work across reader, writ
 | exp, 2 links | q512 / k128, 2 passes | 56 | 20.26 ms |
 | exp, 4 links | q512 / k128, 2 passes | 56 | 20.33 ms (no change vs 2 links: the K/V gather is not on the critical path) |
 
-#### In the block (`test_minimax_h3_transformer_block_perf[wormhole_b0-sp_sim4-15s_768p-…_is_fsdp1]`)
+#### In the block (`test_minimax_h3_transformer_block_perf[wormhole_b0-sp_sim4-test_prompt_text_tokens-15s_768p-…_is_fsdp1]`)
 
 | SDPA variant | SDPA row | block device-only |
 |---|---|---|
@@ -498,7 +498,7 @@ TT_EXP_SDPA_Q_GROUPS=2 scripts/run_safe_pytest.sh --profile "'${UT}[wormhole_b0-
 scripts/run_safe_pytest.sh "tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_create_perf_table[minimax_h3_15s_768p_pad14336]" -s --timeout 3600
 # in-block A/B at the simulated shard: exp (passes 3 or 4) vs normal
 MINIMAX_H3_EXP_RING_SDPA=1 MINIMAX_H3_EXP_RING_MAX_PASSES=4 scripts/run_safe_pytest.sh --profile \
-  "'models/tt_dit/tests/models/minimax_h3/test_performance_minimax_h3.py::test_minimax_h3_transformer_block_perf[wormhole_b0-sp_sim4-15s_768p-4x8sp1tp0nl4_ring_is_fsdp1]'" -s --timeout 3600
+  "'models/tt_dit/tests/models/minimax_h3/test_transformer_minimax_h3.py::test_minimax_h3_transformer_block_perf[wormhole_b0-sp_sim4-test_prompt_text_tokens-15s_768p-4x8sp1tp0nl4_ring_is_fsdp1]'" -s --timeout 3600
 MINIMAX_H3_EXP_RING_SDPA=0 scripts/run_safe_pytest.sh --profile "'…same node id…'" -s --timeout 3600
 ```
 
