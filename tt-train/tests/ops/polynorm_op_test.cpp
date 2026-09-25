@@ -20,7 +20,9 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "metal/ops/polynorm_bw/device/polynorm_bw_device_operation.hpp"
 #include "metal/ops/polynorm_bw/polynorm_bw.hpp"
+#include "metal/ops/polynorm_fw/device/polynorm_fw_device_operation.hpp"
 #include "ops/losses.hpp"
 #include "test_utils/random_data.hpp"
 
@@ -396,6 +398,44 @@ TEST_F(PolyNormOpTest, PolyNorm_FusedForwardRejectsNonTileAlignedChannels) {
         },
         std::runtime_error);
     autograd::ctx().reset_graph();
+}
+
+TEST_F(PolyNormOpTest, PolyNorm_RawForwardRejectsUnsafeContracts) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    const auto data = make_case_data({1, 1, 64, 32});
+    const auto input = core::from_xtensor(data.input, device);
+    const auto weight = core::from_xtensor(data.weight, device);
+    const auto bias = core::from_xtensor(data.bias, device);
+
+    // The writer derives both page count and page IDs from input. An undersized output must be rejected before
+    // dispatch rather than receiving two tile writes into its one-tile allocation.
+    const auto undersized_output = core::zeros(ttnn::Shape({1U, 1U, 32U, 32U}), device);
+    EXPECT_ANY_THROW((void)ttnn::prim::ttml_polynorm3_fw(input, weight, bias, 1e-5F, undersized_output));
+
+    // Raw callers bypass the high-level wrapper's channel-alignment check. The primitive must enforce it because the
+    // reduction consumes all physical lanes and has no last-tile mask.
+    const auto tail_data = make_case_data({1, 1, 2, 100});
+    const auto tail_input = core::from_xtensor(tail_data.input, device);
+    EXPECT_ANY_THROW((void)ttnn::prim::ttml_polynorm3_fw(tail_input, weight, bias));
+}
+
+TEST_F(PolyNormOpTest, PolyNorm_RawBackwardRejectsUnsafeContracts) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    const auto data = make_case_data({1, 1, 32, 64});
+    const auto input = core::from_xtensor(data.input, device);
+    const auto weight = core::from_xtensor(data.weight, device);
+
+    // The reader applies input-derived page IDs to dL_dout. A narrower gradient would otherwise be read out of bounds.
+    const auto undersized_dL_dout = core::zeros(ttnn::Shape({1U, 1U, 32U, 32U}), device);
+    EXPECT_ANY_THROW((void)ttnn::prim::ttml_polynorm3_bw(input, undersized_dL_dout, weight));
+
+    const auto dL_dout = core::zeros(input.logical_shape(), device);
+    const auto dL_dx = core::zeros(input.logical_shape(), device);
+    // The writer emits four FP32 tiles per input tile-row, represented by a final dimension of 128.
+    const auto undersized_partials = core::zeros(ttnn::Shape({1U, 1U, 32U, 96U}), device, ttnn::DataType::FLOAT32);
+    EXPECT_ANY_THROW((void)ttnn::prim::ttml_polynorm3_bw(input, dL_dout, weight, 1e-5F, dL_dx, undersized_partials));
 }
 
 TEST_F(PolyNormOpTest, NIGHTLY_PolyNorm_Compare_NanoLlama3LikeChannelShape) {
