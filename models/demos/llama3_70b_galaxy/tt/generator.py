@@ -1790,6 +1790,7 @@ class Generator(WarmupForwardMixin):
         # Same reasoning as the prefill capture: everything allocated inside the capture window
         # belongs to the trace being recorded and must stay allocated for replay, so scope it
         # rather than let the trace-allocation tracker report it as a survivor.
+        self.model.validate_decode_global_cb()
         with trace_allocation_tracker.corruptible_allocation_scope(self.mesh_device):
             trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
             tt_out_tok = self.model.ttnn_decode_forward(
@@ -1803,6 +1804,7 @@ class Generator(WarmupForwardMixin):
             )
 
             ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        self.model.record_global_cb_traces(("decode", on_device_logits), (trace_id,))
         logger.info("Done Capturing Decode Trace")
 
         return trace_id, tt_out_tok, tokens_tt, current_pos_tt, rope_idxs_tt, page_table_tt
@@ -1819,6 +1821,7 @@ class Generator(WarmupForwardMixin):
         """
         Executes the trace for the decode_forward method but does not read back outputs.
         """
+        self.model.validate_decode_global_cb()
         ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
 
         return tt_out_trace
@@ -1961,7 +1964,8 @@ class Generator(WarmupForwardMixin):
         # Advance seeds after parameter copies so seeded sampling observes
         # one ordered params/seed state for this token.
         seed_manager.get_new_values(active_seed_slots)
-        return self.model.sampling.sample(
+        self.model.validate_decode_global_cb()
+        result = self.model.sampling.sample(
             logits=tt_logits,
             tt_out_tok=tt_out_tok,
             enable_trace=enable_trace,
@@ -1969,6 +1973,9 @@ class Generator(WarmupForwardMixin):
             # Leaving it inline here would allocate behind the live decode trace (#52176).
             skip_precompile=True,
         )
+        if enable_trace:
+            self.model.record_global_cb_traces("sampling", sampling_module.trace_ids)
+        return result
 
     def read_decode_output(self, tt_out, async_read=True):
         if not async_read:

@@ -181,7 +181,7 @@ std::optional<DeviceAddr> SubDeviceManagerTracker::lowest_occupied_compute_l1_ad
     // Global bank id needs to look up a bank from the compute grid (not the storage grid)
     // Since banks are lockstep in an allocator it doesn't matter if the actual core matches or not
     const auto& global_allocator = default_sub_device_manager_->allocator(SubDeviceId{0});
-    auto found_addr = global_allocator->get_lowest_occupied_l1_address(global_bank_id);
+    auto found_addr = global_allocator->get_lowest_occupied_l1_address(global_bank_id, /*include_suspended=*/false);
     if (found_addr.has_value()) {
         lowest_addr = std::min(lowest_addr, *found_addr);
     }
@@ -200,7 +200,7 @@ std::optional<DeviceAddr> SubDeviceManagerTracker::lowest_occupied_compute_l1_ad
             const auto& cores =
                 this->get_active_sub_device_manager()->sub_device(sub_device_id).cores(HalProgrammableCoreType::TENSIX);
             auto bank_id = allocator->get_bank_ids_from_logical_core(BufferType::L1, cores.ranges()[0].start_coord)[0];
-            found_addr = allocator->get_lowest_occupied_l1_address(bank_id);
+            found_addr = allocator->get_lowest_occupied_l1_address(bank_id, /*include_suspended=*/false);
             if (found_addr.has_value()) {
                 lowest_addr = std::min(lowest_addr, *found_addr);
             }

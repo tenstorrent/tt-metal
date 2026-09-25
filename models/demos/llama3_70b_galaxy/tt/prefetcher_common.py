@@ -5,6 +5,7 @@ import ttnn
 import torch
 from loguru import logger
 from models.common.lightweightmodule import LightweightModule
+from models.demos.llama3_70b_galaxy.tt.global_cb_trace import GlobalCBTraceState
 
 from models.demos.llama3_70b_galaxy.tt.model_config import (
     get_core_ranges,
@@ -36,6 +37,7 @@ class TtLlamaPrefetcherSetup(LightweightModule):
         mesh_sub_device_manager_id_decode=None,
         save_tensor_addresses=False,
         is_qwen=False,
+        global_cb_trace_state=None,
     ):
         """
         - sub devices
@@ -47,6 +49,9 @@ class TtLlamaPrefetcherSetup(LightweightModule):
         self.mesh_device = mesh_device
         self.n_tensors = n_tensors
         self.n_layers = n_layers
+        self.global_cb_trace_state = (
+            global_cb_trace_state if global_cb_trace_state is not None else GlobalCBTraceState()
+        )
 
         ###### Set up GlobalCB ######
         # Blackhole galaxy has 8 DRAM banks and a 12x10 tensix grid (vs Wormhole's 12 banks / 7x10),
@@ -113,10 +118,6 @@ class TtLlamaPrefetcherSetup(LightweightModule):
             # L1 layout) keeps the original 728.
             self.global_cb_size = (656 if self.is_blackhole else 728) * 1088
             self.sender_receiver_mapping = list(zip(self.all_sender_cores, self.all_receiver_cores))
-            # self.global_circular_buffer = ttnn.create_global_circular_buffer(
-            #     self.mesh_device, self.sender_receiver_mapping, self.global_cb_size
-            # )
-            # logger.info(f"GlobalCB size {self.global_cb_size}")
             self.global_circular_buffer = None  # Global CB will only be allocated before decode runs
             self.prefetcher_sub_device = ttnn.SubDevice([self.sender_core_range_set])
             self.worker_sub_device = ttnn.SubDevice([self.worker_cores_range_set])
@@ -136,11 +137,18 @@ class TtLlamaPrefetcherSetup(LightweightModule):
 
     def create_global_cb(self):
         if not hasattr(self, "global_circular_buffer") or self.global_circular_buffer is None:
-            self.global_circular_buffer = ttnn.create_global_circular_buffer(
-                self.mesh_device,
-                self.sender_receiver_mapping,
-                self.global_cb_size,
-            )
+            global_cb = self.global_cb_trace_state.global_cb
+            if global_cb is None:
+                global_cb = ttnn.create_global_circular_buffer(
+                    self.mesh_device,
+                    self.sender_receiver_mapping,
+                    self.global_cb_size,
+                )
+            global_cb.resume()
+            # Do not publish or exempt a reconstruction until both addresses and
+            # the complete configuration match all registered decode/sampling traces.
+            self.global_cb_trace_state.restore(global_cb)
+            self.global_circular_buffer = global_cb
 
     def insert_tensor(self, tensor: ttnn.Tensor):
         self.tensors.append(tensor)

@@ -14,6 +14,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/mesh_trace_id.hpp>
 
 namespace tt::tt_metal {
 
@@ -61,6 +62,19 @@ public:
     const CoreRangeSet& receiver_cores() const;
     DeviceAddr buffer_address() const;
     DeviceAddr config_address() const;
+    // Drain device work and lend contents to program-local static CBs while keeping
+    // both addresses reserved against ordinary allocation. Contents become invalid.
+    // Only worker-sender L1 GCBs with a lockstep allocator are supported. The caller
+    // must stop all uses of this GCB until resume() restores its configuration.
+    void suspend();
+    // Drain borrowed work, restore configuration/counters, and reactivate the same
+    // allocations. GCB data is scratch and is not restored. Copies share this state.
+    void resume();
+    bool is_suspended() const;
+    // Acknowledge the data and configuration allocations for only this trace under the active
+    // sub-device manager. The caller must first verify that the complete capture-time layout
+    // has been restored. Other traces retain their allocation checks. No-op if tracking is off.
+    void acknowledge_restored_trace(const distributed::MeshTraceId& trace_id) const;
     uint32_t size() const;
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping() const;
 

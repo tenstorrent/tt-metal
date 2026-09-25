@@ -685,6 +685,8 @@
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_decoder_prefill.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_model_prefill.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/test_llama_model.py -k quick
+    python3 -m unittest models.demos.llama3_70b_galaxy.tests.unit_tests.test_global_cb_trace_state
+    TT_METAL_TRACE_ALLOC_TRACKING=1 TT_METAL_TRACE_ALLOC_TRACEBACKS=1 TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE=0 pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_global_cb_trace_lifecycle.py
   model: llama3.3-70b-galaxy
   skus:
     wh_galaxy_perf:
