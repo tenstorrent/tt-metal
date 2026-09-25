@@ -17,6 +17,11 @@ on:
         required: false
         type: string
         default: "all"
+      run-pvc-benchmark:
+        required: false
+        type: boolean
+        default: false
+        description: "Run only the read-only PowerStore PVC benchmark"
       platform:
         required: false
         type: choice
@@ -46,6 +51,7 @@ on:
 
 jobs:
   validate-test-type:
+    if: ${{ inputs.run-pvc-benchmark != true }}
     # Fail fast on a bad selection before spending a build on it. Emits the
     # normalized selection (empty/"all" -> "all") consumed by the impl filter.
     runs-on: ubuntu-slim
@@ -72,11 +78,12 @@ jobs:
 
   check-harbor:
     needs: validate-test-type
+    if: ${{ inputs.run-pvc-benchmark != true }}
     uses: ./.github/workflows/check-harbor.yaml
 
   build-artifact:
     needs: [validate-test-type, check-harbor]
-    if: ${{ !cancelled() && needs.validate-test-type.result == 'success' }}
+    if: ${{ inputs.run-pvc-benchmark != true && !cancelled() && needs.validate-test-type.result == 'success' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -92,6 +99,7 @@ jobs:
   Kimi-Weka-Storage-Comparison:
     name: Kimi Weka Storage Comparison (${{ matrix.sku }})
     needs: [build-artifact]
+    if: ${{ inputs.run-pvc-benchmark != true }}
     permissions:
       contents: read
     container:
@@ -197,8 +205,40 @@ jobs:
             time dd if="$sample" of=/dev/null bs=4M count=16 status=none
           '
 
+  PowerStore-PVC-Benchmark:
+    name: PowerStore PVC Benchmark
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run-pvc-benchmark == true }}
+    runs-on: exabox-multihost-ci-sc1
+    steps:
+      - name: Inspect current PVC
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d /ci
+          echo "=== /ci filesystem ==="
+          df -hT /ci
+          findmnt -T /ci -o TARGET,SOURCE,FSTYPE,OPTIONS
+          echo "=== /ci usage ==="
+          du -sh /ci
+          echo "=== /ci file count ==="
+          find -L /ci -type f -readable -print 2>/dev/null | wc -l
+
+      - name: Benchmark existing PVC files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t samples < <(
+            find -L /ci -type f -readable -print 2>/dev/null |
+            sort |
+            head -n 16
+          )
+          ((${#samples[@]} > 0))
+          printf 'Reading %d existing files from /ci\n' "${#samples[@]}"
+          /usr/bin/time -p cat "${samples[@]}" > /dev/null
+
   Galaxy-Blaze-models-prefill:
     needs: [validate-test-type, check-harbor, build-artifact]
+    if: ${{ inputs.run-pvc-benchmark != true }}
     permissions:
       id-token: write
       contents: read
@@ -217,6 +257,7 @@ jobs:
 
   Galaxy-Blaze-models-prefill-SDPA-Perf-tests:
     needs: [validate-test-type, check-harbor, build-artifact]
+    if: ${{ inputs.run-pvc-benchmark != true }}
     permissions:
       id-token: write
       contents: read
@@ -236,6 +277,7 @@ jobs:
 
   Galaxy-Blaze-models-prefill-sc4:
     needs: [validate-test-type, check-harbor, build-artifact]
+    if: ${{ inputs.run-pvc-benchmark != true }}
     # 4-galaxy (SC4) disaggregated-prefill runner+producer KV-PCC leg. Its own impl
     # invocation because the impl filters the matrix by sp_config, and this is the only
     # sc4 entry (the sc1 job's enabled-skus + sp_config filters already exclude it).
@@ -261,6 +303,7 @@ jobs:
 
   Galaxy-Blaze-models-prefill-sc1-runner:
     needs: [validate-test-type, check-harbor, build-artifact]
+    if: ${{ inputs.run-pvc-benchmark != true }}
     permissions:
       id-token: write
       contents: read
@@ -280,7 +323,7 @@ jobs:
   prefill-scaling-summary:
     name: ${{ matrix.title }}
     needs: [Galaxy-Blaze-models-prefill-sc4, Galaxy-Blaze-models-prefill-sc1-runner]
-    if: ${{ !cancelled() }}
+    if: ${{ inputs.run-pvc-benchmark != true && !cancelled() }}
     runs-on: ubuntu-latest
     # Reads the checkout and this run's own artifacts; it writes nothing.
     permissions:
@@ -333,7 +376,7 @@ jobs:
     # Reports on a run that failed — the case the summary exists for — but not
     # on one that was cancelled: an aborted run has no outcome to summarize, and
     # asking for one spends an LLM call to say it stopped early.
-    if: ${{ !cancelled() }}
+    if: ${{ inputs.run-pvc-benchmark != true && !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
