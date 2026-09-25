@@ -13,7 +13,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdlib>
-#include <deque>
+#include <vector>
 #include <functional>
 #include <memory>
 #include <cstdio>
@@ -40,6 +40,7 @@ using Fu2Fn = bench::Fu2Function<void()>;
 struct SmallCapture {
     std::uint64_t a = 1;
     std::uint64_t b = 2;
+    std::uint64_t value() const { return a; }
 };
 static_assert(sizeof(SmallCapture) <= kInlineBytes);
 
@@ -49,11 +50,13 @@ struct BoundaryCapture {
     std::uint64_t a = 1;
     std::uint64_t b = 2;
     std::uint64_t c = 3;
+    std::uint64_t value() const { return a; }
 };
 static_assert(sizeof(BoundaryCapture) == 24);
 
 struct LargeCapture {
     std::uint64_t data[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+    std::uint64_t value() const { return data[0]; }
 };
 static_assert(sizeof(LargeCapture) > kInlineBytes);
 
@@ -146,24 +149,52 @@ void BM_MoveAssign(benchmark::State& state) {
     state.counters["allocs/iter"] = static_cast<double>(take_allocations()) / static_cast<double>(iterations);
 }
 
-// --- 5: queue throughput, mirroring the ThreadPool job path ------------------------------------
+// --- 5: ring-buffer job path, as tt::tt_metal::ThreadPool actually implements it ---------------
+//
+// INFORMATIONAL, not decisive. Read the heap rows; treat the inline rows as indicative only.
+//
+// Even with the barriers below, the compiler can still see the callable type here, which it cannot
+// do behind ThreadPool::push in another TU. A cross-TU probe measured std::function at 9.75 ns/job
+// against ~5 ns here, so the inline numbers understate the cost of a genuinely erased call, and
+// they understate it unevenly -- whichever type the optimiser sees through benefits most. The heap
+// rows are sturdier, since an allocation cannot be optimised away.
 
-// tt::tt_metal::ThreadPool::enqueue takes std::function<void()>&& today; this models that hot path
-// as enqueue-many then drain-many through a container.
+// thread_pool.cpp:129-186 is a statically allocated ring buffer of 65536 slots, each permanently
+// holding a std::function<void()>. A job therefore costs two move-assignments into already-live
+// objects -- into the slot on push, out of it on pop -- and allocates nothing per job.
+//
+// An earlier version of this scenario used std::deque<Fn> with emplace_back/pop_front. That
+// measured construct-in-place plus deque block allocation, an operation the ThreadPool never
+// performs, and never exercised move-assignment at all.
 template <typename Fn, typename Capture>
-void BM_QueueThroughput(benchmark::State& state) {
+void BM_RingBufferJobPath(benchmark::State& state) {
     const std::size_t batch = static_cast<std::size_t>(state.range(0));
+
+    // Pre-allocated slots, live for the whole run, exactly like the ring buffer.
+    constexpr std::size_t kSlots = 2048;
+    std::vector<Fn> slots(kSlots);
+
     take_allocations();
     std::size_t iterations = 0;
-    std::deque<Fn> queue;
     for (auto _ : state) {
         for (std::size_t i = 0; i < batch; ++i) {
             Capture cap{};
-            queue.emplace_back([cap]() mutable { g_sink += cap.a; });
-        }
-        while (!queue.empty()) {
-            queue.front()();
-            queue.pop_front();
+            benchmark::DoNotOptimize(cap);
+            // push: move-assign the job into its slot.
+            Fn* slot = &slots[i % kSlots];
+            benchmark::DoNotOptimize(slot);
+            *slot = Fn{[cap]() mutable { g_sink += cap.value(); }};
+            // Keep the stored callable opaque. Without a memory clobber the compiler devirtualises
+            // the invocation and deletes the whole push/pop/call -- std::function collapsed to
+            // three instructions and measured ~3x faster than it really is. ThreadPool::push takes
+            // its argument across a TU boundary with the type erased, so that optimisation is not
+            // available to it. DoNotOptimize on the pointer alone is not enough; the clobber is.
+            benchmark::ClobberMemory();
+            // pop: move-assign out into the worker's local, then invoke.
+            Fn task = std::move(*slot);
+            benchmark::DoNotOptimize(task);
+            benchmark::ClobberMemory();
+            task();
         }
         benchmark::ClobberMemory();
         ++iterations;
@@ -172,8 +203,7 @@ void BM_QueueThroughput(benchmark::State& state) {
     state.SetItemsProcessed(static_cast<std::int64_t>(iterations * batch));
 }
 
-// Reported once at startup: object size drives how many entries fit in a deque block, which is
-// visible in the queue-throughput allocation counts.
+// Reported once at startup.
 struct SizeReport {
     SizeReport() {
         std::printf(
@@ -223,8 +253,14 @@ BENCHMARK(BM_MoveOnlyCapture_Std);
 BENCHMARK_TEMPLATE(BM_MoveOnlyCapture, ZooFn);
 BENCHMARK_TEMPLATE(BM_MoveOnlyCapture, Fu2Fn);
 
-BENCHMARK_TEMPLATE(BM_QueueThroughput, StdFn, SmallCapture)->Arg(1024);
-BENCHMARK_TEMPLATE(BM_QueueThroughput, ZooFn, SmallCapture)->Arg(1024);
-BENCHMARK_TEMPLATE(BM_QueueThroughput, Fu2Fn, SmallCapture)->Arg(1024);
+// Real enqueue sites in tt_metal/impl/profiler capture from [this] (8 B) up to
+// [&a, &b, &c, &d, i] (~36 B), so the heap path is the common case at the shipped capacity, not
+// the exception. Both are measured.
+BENCHMARK_TEMPLATE(BM_RingBufferJobPath, StdFn, SmallCapture)->Arg(1024);
+BENCHMARK_TEMPLATE(BM_RingBufferJobPath, ZooFn, SmallCapture)->Arg(1024);
+BENCHMARK_TEMPLATE(BM_RingBufferJobPath, Fu2Fn, SmallCapture)->Arg(1024);
+BENCHMARK_TEMPLATE(BM_RingBufferJobPath, StdFn, LargeCapture)->Arg(1024);
+BENCHMARK_TEMPLATE(BM_RingBufferJobPath, ZooFn, LargeCapture)->Arg(1024);
+BENCHMARK_TEMPLATE(BM_RingBufferJobPath, Fu2Fn, LargeCapture)->Arg(1024);
 
 BENCHMARK_MAIN();
