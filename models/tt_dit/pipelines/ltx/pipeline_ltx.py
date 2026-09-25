@@ -1078,6 +1078,7 @@ class LTXPipeline:
             max_pos=self.positional_embedding_max_pos,
             mesh_device=self.mesh_device,
             parallel_config=self.parallel_config,
+            fps=self.fps,
         )
         a_cos, a_sin = prepare_audio_rope(
             audio_N,

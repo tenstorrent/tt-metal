@@ -17,9 +17,15 @@ end-to-end behaviour at the served shape (153 frames @ 25 fps) is exercised by
 a future edit would silently break while every device test stayed green.
 """
 
-import pytest
+import ast
+import inspect
 
+import pytest
+import torch
+
+from ....models.transformers.ltx import rope_ltx
 from ....models.transformers.ltx.rope_ltx import prepare_av_cross_pe, prepare_video_rope
+from ....pipelines.ltx import pipeline_ltx, pipeline_ltx_distilled
 from ....pipelines.ltx.pipeline_ltx import LTXPipeline
 from ....utils.patchifiers import AudioLatentShape, VideoPixelShape
 
@@ -95,6 +101,72 @@ def test_served_shape_is_a_legal_frame_count():
     assert 153 / 25 == pytest.approx(6.12)
 
 
+@pytest.mark.parametrize("module", [pipeline_ltx, pipeline_ltx_distilled])
+def test_pipelines_pass_fps_to_video_rope(module):
+    """Every ``prepare_video_rope`` call site must bind ``fps``.
+
+    The keyword defaults to 24.0, so omitting it type-checks, runs, and produces video
+    self-attention temporal positions at a different rate from the audio length and A/V
+    cross-PE -- exactly the desync found in review. The signature test above cannot catch
+    an omission at the caller, so this walks each pipeline's AST instead.
+    """
+    tree = ast.parse(inspect.getsource(module))
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and (getattr(node.func, "id", None) == "prepare_video_rope" or getattr(node.func, "attr", None) == "prepare_video_rope")
+    ]
+    assert calls, f"{module.__name__} no longer calls prepare_video_rope; update or remove this test"
+    for call in calls:
+        fps_kw = [kw for kw in call.keywords if kw.arg == "fps"]
+        assert fps_kw, (
+            f"{module.__name__}:{call.lineno}: prepare_video_rope called without fps, "
+            "so video RoPE silently falls back to 24"
+        )
+
+
+def test_video_rope_output_tracks_fps(monkeypatch):
+    """The host-side RoPE math must actually respond to ``fps``.
+
+    Runs ``prepare_video_rope`` with the device upload stubbed out (the cos/sin values are
+    computed entirely on host; only the final shard-to-mesh needs hardware), and asserts
+    24 vs 25 fps yield different temporal frequencies while the default matches 24.
+    """
+    monkeypatch.setattr(rope_ltx, "bf16_tensor_2dshard", lambda t, device=None, shard_mapping=None: t)
+
+    class _Axis:
+        factor = 1
+        mesh_axis = 0
+
+    class _ParallelConfig:
+        sequence_parallel = _Axis()
+        tensor_parallel = _Axis()
+
+    def rope(**kwargs):
+        return prepare_video_rope(
+            20,  # latent frames for the served 153-frame shape: (153 - 1) // 8 + 1
+            2,
+            2,
+            inner_dim=4096,
+            num_attention_heads=32,
+            theta=10000.0,
+            max_pos=[20, 2048, 2048],
+            mesh_device=None,
+            parallel_config=_ParallelConfig(),
+            **kwargs,
+        )
+
+    cos_24, sin_24 = rope(fps=24.0)
+    cos_25, sin_25 = rope(fps=25.0)
+    cos_default, sin_default = rope()
+
+    assert not torch.equal(cos_24, cos_25) or not torch.equal(sin_24, sin_25), (
+        "fps had no effect on video RoPE cos/sin"
+    )
+    assert torch.equal(cos_default, cos_24) and torch.equal(sin_default, sin_24)
+
+
 @pytest.mark.parametrize("fn", [prepare_video_rope, prepare_av_cross_pe])
 def test_rope_builders_still_take_fps(fn):
     """Guard the cross-PE / rope rate plumbing against silent removal.
@@ -109,8 +181,6 @@ def test_rope_builders_still_take_fps(fn):
     but still useful on CPU: the keyword remains part of the contract, so a refactor that
     drops it fails here instead of silently reinstating a fixed 24 fps.
     """
-    import inspect
-
     params = inspect.signature(fn).parameters
     assert "fps" in params, f"{fn.__name__} lost its fps parameter"
     assert params["fps"].kind is inspect.Parameter.KEYWORD_ONLY, (
