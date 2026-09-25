@@ -239,6 +239,30 @@ def _wrap_sdpa_bidirectional(original_fn, concat_out=False):
             )
         return pack_cfgs[key]
 
+    # bs1 calls that carry the serving pad mask stay unpacked on the model's grid, and their mask CB
+    # (q_chunk x k_chunk) on top of the 512-token K/V chunks now shipped at bs1 overflows L1 by 17 KB next to the
+    # resident bs1 tensors (program clash at 1431040). A 256-token K chunk fits; QWEN_SDPA_MASKED_K_CHUNK=0 opts out.
+    masked_k_chunk = int(os.getenv("QWEN_SDPA_MASKED_K_CHUNK", "256"))
+    masked_cfgs = {}
+
+    def masked_program_config(pc):
+        if pc is None or not masked_k_chunk or pc.k_chunk_size <= masked_k_chunk:
+            return pc
+        key = (
+            pc.q_chunk_size,
+            pc.exp_approx_mode,
+            pc.compute_with_storage_grid_size.x,
+            pc.compute_with_storage_grid_size.y,
+        )
+        if key not in masked_cfgs:
+            masked_cfgs[key] = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=pc.compute_with_storage_grid_size,
+                q_chunk_size=pc.q_chunk_size,
+                k_chunk_size=masked_k_chunk,
+                exp_approx_mode=pc.exp_approx_mode,
+            )
+        return masked_cfgs[key]
+
     @functools.wraps(original_fn)
     def wrapper(*args, **kwargs):
         if not causal:
@@ -247,6 +271,8 @@ def _wrap_sdpa_bidirectional(original_fn, concat_out=False):
                 kwargs["attn_mask"] = _PAD_ATTN_MASK
         q = args[0] if args else kwargs.get("input_tensor_q")
         k = args[1] if len(args) > 1 else kwargs.get("input_tensor_k")
+        if kwargs.get("attn_mask") is not None and q is not None and int(q.shape[0]) == 1:
+            kwargs["program_config"] = masked_program_config(kwargs.get("program_config"))
         if (
             gqa_pack
             and not causal
