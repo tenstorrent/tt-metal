@@ -262,3 +262,99 @@ def test_csa_chunked_prefill(mesh_device, device_params, sp_axis, tp_axis, name,
         kv_actual += valid
     assert state.kv_actual == total and state.entry_count == sum(v // 4 for v in iters_valid)
     assert min(pccs) >= _BLOCK_PCC, f"worst chunk PCC {min(pccs):.6f} < {_BLOCK_PCC}"
+
+
+_TRACE_PARAMS = {
+    "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+    "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+    "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+    "trace_region_size": 256 * 1024 * 1024,
+}
+_MESH_ISLANDS = [
+    pytest.param((2, 4), _TRACE_PARAMS, 0, 1, id="fabric2d-mesh-2x4-trace"),
+    pytest.param((8, 4), _TRACE_PARAMS, 0, 1, id="fabric2d-mesh-8x4-trace"),
+]
+
+
+def _idx_sets(mesh_device, idx, sp_axis, tp_axis, topk):
+    """[S, topk] host indices of a TP-replicated, SP-sharded uint32 [1,1,S_l,topk] tensor -> list of Python sets."""
+    dims = [0, 0]
+    dims[sp_axis], dims[tp_axis] = 2, 3
+    t = ttnn.to_torch(
+        idx, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=tuple(dims))
+    )[0, 0, :, :topk]
+    return [set(r.tolist()) for r in t]
+
+
+@pytest.mark.timeout(0)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, sp_axis, tp_axis", _MESH_ISLANDS, indirect=["mesh_device", "device_params"]
+)
+def test_csa_islands_pinpoint(mesh_device, device_params, sp_axis, tp_axis):
+    """DS4F-0262 pinpoint at the first TRACED chunk (chunk 1), same weights and inputs, two module instances:
+    (1) the static scorer (traced form) vs the eager fused scorer on the SAME state -> selected-set Jaccard per query row;
+    (2) the phase decomposition run EAGERLY (prepare/forward_pre/glue/forward_attn) vs the eager forward -> y PCC;
+    (3) forward_attn captured as a TraceIsland and replayed -> y PCC vs the eager forward. Whichever stage first drops
+    below 0.999 (Jaccard 0.9) carries the defect."""
+    from models.demos.deepseek_v3_d_p.tt.v4.trace_island import TraceIsland
+
+    sp = mesh_device.shape[sp_axis]
+    chunk = 5120 if sp == 8 else 2048  # chunk 1 must take the sparse/traced path: kv_actual >= topk * rate = 2048
+    torch.manual_seed(_SEED)
+    cfg = deepseek_v4_flash_hf_config(num_hidden_layers=4)
+    ref = _ref_layer(cfg)
+    hidden = torch.randn(1, 2 * chunk, cfg.hidden_size)
+    h0 = _to_device(mesh_device, hidden[:, :chunk].unsqueeze(1), sp_axis, tp_axis)
+    h1 = _to_device(mesh_device, hidden[:, chunk:].unsqueeze(1), sp_axis, tp_axis)
+    # eager reference: two chunks through forward
+    tt_e = TtCSA.from_reference(mesh_device, ref, cfg, sp_axis=sp_axis, tp_axis=tp_axis, sparse_path=True)
+    st_e = tt_e.alloc_state(2 * chunk, chunk_tokens=chunk)
+    y0 = tt_e(h0, seq_len_actual=chunk, state=st_e)
+    ttnn.deallocate(y0)
+    y1_e = tt_e(h1, seq_len_actual=chunk, state=st_e)
+    assert tt_e.last_path == "A", tt_e.last_path
+    y1_e_host = _to_host(mesh_device, y1_e, sp_axis, tp_axis).float()
+    # islands instance: chunk 0 eager, chunk 1 through the phases
+    tt_i = TtCSA.from_reference(mesh_device, ref, cfg, sp_axis=sp_axis, tp_axis=tp_axis, sparse_path=True)
+    assert tt_i.traceable(), "needs PREFILL_CSA_SPARSE=1 and the fused indexer"
+    st_i = tt_i.alloc_state(2 * chunk, chunk_tokens=chunk)
+    y0 = tt_i(h0, seq_len_actual=chunk, state=st_i)
+    ttnn.deallocate(y0)
+    assert tt_i.trace_ready(st_i)
+    tt_i.prepare_chunk(st_i, chunk)
+    outs = tt_i.forward_pre(h1, st_i, chunk)
+    tt_i.glue_chunk(st_i, outs, chunk, None)
+    q, q_latent, sliding_kv_g, _nc, entries, keys, cos, sin = outs[:8]
+    rate = tt_i.compressor.compress_rate
+    n_new = chunk // rate
+    idx_static = tt_i.indexer.select_indices_static(q_latent, h1, cos, sin, st_i.index_k, st_i.score_mask)
+    idx_fused = tt_i.indexer.select_indices_fused(q_latent, h1, cos, sin, st_i.index_k, st_i.entry_count, n_new, n_new)
+    topk = tt_i.indexer.topk
+    ss, sf = _idx_sets(mesh_device, idx_static, sp_axis, tp_axis, topk), _idx_sets(
+        mesh_device, idx_fused, sp_axis, tp_axis, topk
+    )
+    jac = [len(a & b) / max(1, len(a | b)) for a, b in zip(ss, sf)]
+    jac_mean, jac_min = sum(jac) / len(jac), min(jac)
+    worst_rows = sorted(range(len(jac)), key=lambda i: jac[i])[:5]
+    logger.info(
+        f"[pinpoint] scorer static vs fused (chunk 1, {tuple(mesh_device.shape)}, chunk {chunk}): Jaccard mean {jac_mean:.4f} "
+        f"min {jac_min:.4f}; worst rows {worst_rows}; static max idx {max(max(r) for r in ss)} fused max idx {max(max(r) for r in sf)}"
+    )
+    a2 = tt_i.forward_attn(h1, outs, st_i, chunk)
+    y1_p_host = _to_host(mesh_device, a2[0], sp_axis, tp_axis).float()
+    _, pcc_phase = comp_pcc(y1_e_host, y1_p_host)
+    logger.info(f"[pinpoint] phases (eager) vs forward: y PCC {pcc_phase:.6f}")
+    for t in a2:
+        ttnn.deallocate(t)
+    A2 = TraceIsland(mesh_device, lambda: tt_i.forward_attn(h1, outs, st_i, chunk), [], name="pinpoint.A2")
+    cap = A2.capture()
+    y1_c_host = _to_host(mesh_device, cap[0], sp_axis, tp_axis).float()
+    _, pcc_cap = comp_pcc(y1_e_host, y1_c_host)
+    A2.replay()
+    ttnn.synchronize_device(mesh_device)
+    y1_r_host = _to_host(mesh_device, cap[0], sp_axis, tp_axis).float()
+    _, pcc_rep = comp_pcc(y1_e_host, y1_r_host)
+    logger.info(f"[pinpoint] A2 captured vs forward: y PCC {pcc_cap:.6f}; replayed: {pcc_rep:.6f}")
+    A2.release()
+    assert jac_mean >= 0.9, (jac_mean, jac_min)
+    assert pcc_phase >= 0.999 and pcc_cap >= 0.999 and pcc_rep >= 0.999, (pcc_phase, pcc_cap, pcc_rep)
