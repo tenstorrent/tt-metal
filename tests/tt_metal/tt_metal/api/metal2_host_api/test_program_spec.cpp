@@ -2570,10 +2570,10 @@ TEST_F(ProgramSpecTestQuasar, CPU_ValidUnpackToDestModeSucceeds) {
 
 TEST_F(ProgramSpecTestQuasar, CPU_UnpackToDestModePlacedAtDfbIdSlot) {
     // Regression test for the unpack_to_dest_mode sizing bug: the JIT consumer
-    // iterates hal::get_arch_num_circular_buffers() slots, so BuildUnpackToDestModeVector
+    // iterates hal::get_num_dataflow_buffers() slots, so BuildUnpackToDestModeVector
     // must size the vector to that count and place each user-supplied mode at slot dfb_id.
     // Pre-fix code sized the vector to the number of DFBs, which produced silent
-    // OOB reads downstream when num_dfbs < max_cbs.
+    // OOB reads downstream when num_dfbs < max_dfbs.
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -2604,7 +2604,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_UnpackToDestModePlacedAtDfbIdSlot) {
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     // Inspect the constructed compute kernel's QuasarComputeConfig:
-    //  - vector must be sized to max_cbs (so JIT's iteration up to max_cbs is in-bounds)
+    //  - vector must be sized to max_dfbs (so JIT's iteration up to max_dfbs is in-bounds)
     //  - the user-supplied mode must land at slot dfb_id (not at iteration order)
     //  - other slots stay Default
     const auto& impl = program.impl();
@@ -2612,7 +2612,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_UnpackToDestModePlacedAtDfbIdSlot) {
     const auto built_config_variant = consumer_kernel->config();
     const auto& built_config = std::get<experimental::quasar::QuasarComputeConfig>(built_config_variant);
 
-    EXPECT_EQ(built_config.unpack_to_dest_mode.size(), tt::tt_metal::hal::get_arch_num_circular_buffers());
+    EXPECT_EQ(built_config.unpack_to_dest_mode.size(), tt::tt_metal::hal::get_num_dataflow_buffers());
     EXPECT_EQ(built_config.unpack_to_dest_mode[impl.get_dfb_handle("dfb_1")], UnpackToDestMode::UnpackToDestFp32);
     EXPECT_EQ(built_config.unpack_to_dest_mode[impl.get_dfb_handle("dfb_0")], UnpackToDestMode::Default);
 }
@@ -3398,10 +3398,10 @@ TEST_F(ProgramSpecTestGen1, CPU_MinimalValidProgramSpecSucceeds) {
 }
 
 // Device slots are per-core: a ProgramSpec may declare more DFBs than
-// get_arch_num_circular_buffers() when each core hosts at most one. This is the Metal 2.0
+// get_num_dataflow_buffers() when each core hosts at most one. This is the Metal 2.0
 // path that issue #51409 needs — previously ValidateProgramSpec rejected on total count.
 TEST_F(ProgramSpecTestGen1, CPU_DisjointNodeDFBsExceedSlotCountSucceeds) {
-    const uint32_t max_slots = tt::tt_metal::hal::get_arch_num_circular_buffers();
+    const uint32_t max_slots = tt::tt_metal::hal::get_num_dataflow_buffers();
     const uint32_t num_dfbs = max_slots + 1;
     constexpr uint32_t grid_x = 8;  // WH mock worker grid width
     ASSERT_GE(grid_x * 9u, num_dfbs) << "mock WH grid too small for this packing check";
@@ -3444,7 +3444,7 @@ TEST_F(ProgramSpecTestGen1, CPU_TooManyDFBsOnSameNodeFails) {
     auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
     auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
 
-    const uint32_t too_many = tt::tt_metal::hal::get_arch_num_circular_buffers() + 1;
+    const uint32_t too_many = tt::tt_metal::hal::get_num_dataflow_buffers() + 1;
     for (uint32_t i = 0; i < too_many; ++i) {
         const std::string name = "dfb_" + std::to_string(i);
         auto dfb = MakeMinimalDFB(name);
