@@ -11395,11 +11395,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         type=int,
         default=1,
         help=(
-            "Emit the pipeline for this DECODE BATCH size B (independent concurrent streams that fill the "
-            "matmul tile rows). Default 1. B>1 instructs the builder to thread a batch dimension through the "
-            "decode step, the KV-cache ([B,h,C,d]), the collectives and the vocoder, and the PCC gate "
-            "validates across B streams. Batching raises AGGREGATE throughput (fills the 32-row tile), not "
-            "per-token latency; the model must be an autoregressive decode that can carry a batch axis."
+            "Emit the pipeline for this batch size B (independent samples per call, filling the matmul "
+            "tile rows). Default 1. B>1 instructs the builder to thread a leading batch axis through the "
+            "whole path, and the e2e gate ENFORCES it: the tests run with the batch set to B and must report "
+            "driving B samples, each checked against its own golden. Batching raises AGGREGATE throughput "
+            "(fills the 32-row tile), not per-sample latency."
         ),
     )
     pe2e.add_argument(

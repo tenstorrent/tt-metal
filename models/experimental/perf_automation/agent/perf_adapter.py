@@ -262,6 +262,27 @@ def resolve_batch(pipeline, requested: int = 0) -> int:
     return 1
 
 
+# THE BATCH, BOTH WAYS, NAMED ONCE. The tool sends the batch it wants in BATCH_ENV and a test reports
+# the batch it actually drove as `<BATCH_REPORT>=<n>` on its output. Both spellings were typed
+# separately at every site that used them, which is how a gate came to accept a test that drove 4
+# samples on a `--batch 32` request: nothing read the report back against the request.
+BATCH_ENV = "TT_PERF_BATCH"
+BATCH_REPORT = "PERF_BATCH_STREAMS"
+
+
+def batch_report_line(batch: int) -> str:
+    """The line a test prints to report the batch it actually drove."""
+    return "%s=%d" % (BATCH_REPORT, int(batch))
+
+
+def parse_batch_report(text: str) -> "int | None":
+    """The batch a run reported driving (its last report wins), or None if it reported none."""
+    import re
+
+    found = re.findall(r"%s=(\d+)" % re.escape(BATCH_REPORT), text or "")
+    return int(found[-1]) if found else None
+
+
 class PipelineDecodeAdapter:
     """Generic PerfAdapter over any pipeline exposing the decode contract above.
 

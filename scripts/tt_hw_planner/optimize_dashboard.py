@@ -244,9 +244,11 @@ def _load_attempts(dirs: list, slug: str | None) -> list:
 def _parse_batch(run_dir: Path) -> int | None:
     """The resolved batch / concurrent-user count for the perf run.
 
-    The perf harness prints ``PERF_BATCH_STREAMS=<n>`` to its profile log at runtime (the batch it
-    actually ran, after resolve_batch). Surfacing it lets the dashboard show the batch on top and
+    The perf harness reports the batch it actually ran (perf_adapter.batch_report_line, after
+    resolve_batch) in its profile log. Surfacing it lets the dashboard show the batch on top and
     label throughput as per-user. Reads the newest profile log; returns None if not found."""
+    from models.experimental.perf_automation.agent.perf_adapter import parse_batch_report
+
     prof = run_dir / "profiles"
     if not prof.is_dir():
         return None
@@ -256,9 +258,9 @@ def _parse_batch(run_dir: Path) -> int | None:
             txt = lg.read_text(errors="replace")
         except Exception:
             continue
-        m = re.findall(r"PERF_BATCH_STREAMS=(\d+)", txt)
-        if m:
-            return int(m[-1])
+        served = parse_batch_report(txt)
+        if served is not None:
+            return served
     return None
 
 

@@ -1285,8 +1285,36 @@ def _signal_quality_gate(demo_dir: Path):
     )
 
 
-def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
-    """Model-agnostic gate runner: G1 native, G2/G3 (run tests/e2e), G4 demo/ structure. Returns (ok, reasons)."""
+# How the `--batch` request reaches the gate's own process (e2e_mcp reads it back by this name).
+E2E_MCP_BATCH_ENV = "E2E_MCP_BATCH"
+
+
+def _batch_gate_reason(requested: int, test_output: str) -> Optional[str]:
+    """None when the e2e tests reported driving exactly the `requested` batch, else why not.
+
+    `--batch` used to reach only the builder's prompt; the gate ran whatever batch the tests typed.
+    A T3K Qwen-Image-Edit gate asked for 32 hard-coded 4, passed on 4 samples, and was reported as a
+    batch-32 PASS -- the 32-sample result, 20/32 at the PCC bar, lived only in a README. So the gate
+    now hands the tests the batch (perf_adapter.BATCH_ENV) and reads back what they say they drove."""
+    from models.experimental.perf_automation.agent.perf_adapter import BATCH_ENV, batch_report_line, parse_batch_report
+
+    served = parse_batch_report(test_output)
+    if served == requested:
+        return None
+    how = (
+        f"read the batch from ${BATCH_ENV} (the gate sets it to {requested}) and print "
+        f"`{batch_report_line(requested)}` with the batch actually driven"
+    )
+    if served is None:
+        return f"G3 batch: --batch {requested} was requested but tests/e2e never reported the batch it drove; {how}"
+    return f"G3 batch: --batch {requested} was requested but tests/e2e drove {served} samples; {how}"
+
+
+def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int, batch: int = 1):
+    """Model-agnostic gate runner: G1 native, G2/G3 (run tests/e2e), G4 demo/ structure. Returns (ok, reasons).
+
+    batch > 1 is the emit-e2e `--batch` request: the tests are run with it and must report driving it
+    (see _batch_gate_reason). The default 1 leaves the tests' own batch unchecked, as before."""
     reasons = []
     e2e_dir = demo_dir / "tests" / "e2e"
     test_files = sorted(e2e_dir.glob("test_*.py")) if e2e_dir.is_dir() else []
@@ -1397,6 +1425,11 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
     gate_env = dict(os.environ)
     gate_env["PYTHONPATH"] = str(demo_repo_root) + os.pathsep + gate_env.get("PYTHONPATH", "")
     gate_env["TT_METAL_HOME"] = str(demo_repo_root)
+    batch = int(batch or 1)
+    if batch > 1:
+        from models.experimental.perf_automation.agent.perf_adapter import BATCH_ENV
+
+        gate_env[BATCH_ENV] = str(batch)
     pytest_out = ""
     hang_timeout = min(int(timeout_s), int(os.environ.get("E2E_GATE_HANG_TIMEOUT", "2700")))
     gate_tests = [f for f in test_files if "perf" not in f.name] or test_files
@@ -1416,6 +1449,10 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
             _rst = _recover_if_wedged(pytest_out + "\n" + (proc.stderr or ""))
             if _rst:
                 reasons.append(f"G2/G3: the device reported a wedge during tests/e2e — {_rst}")
+        if batch > 1:
+            _batch_reason = _batch_gate_reason(batch, pytest_out)
+            if _batch_reason:
+                reasons.append(_batch_reason)
     except subprocess.TimeoutExpired as _te:
         _rst = _reset_device(error_text=_as_text(_te.stdout) + "\n" + _as_text(_te.stderr))
         reasons.append(
@@ -1844,10 +1881,11 @@ def cmd_emit_e2e(args) -> int:
     return _emit_e2e_phase_a(args)
 
 
-def _run_emit_e2e_cc(*, model_id, demo_dir, pcc, timeout_s, agent_bin, max_rounds) -> int:
+def _run_emit_e2e_cc(*, model_id, demo_dir, pcc, timeout_s, agent_bin, max_rounds, batch=1) -> int:
     """emit-e2e cc engine: after the builder runs, drive the fix loop through the shared cc harness
     against the e2e_mcp deterministic gate (which REUSES the same G1–G4 `_run_deterministic_gates` the
-    legacy loop uses). The gate is the sole stop authority. Returns 0 iff the gate reports can_stop."""
+    legacy loop uses). The gate is the sole stop authority. Returns 0 iff the gate reports can_stop.
+    `batch` is the `--batch` request, which the gate enforces (see _batch_gate_reason)."""
     import json as _json
     import os as _os
 
@@ -1863,6 +1901,7 @@ def _run_emit_e2e_cc(*, model_id, demo_dir, pcc, timeout_s, agent_bin, max_round
         "E2E_MCP_DEMO_DIR": str(demo_dir),
         "E2E_MCP_PCC": str(pcc),
         "E2E_MCP_TIMEOUT": str(timeout_s),
+        E2E_MCP_BATCH_ENV: str(int(batch or 1)),
         "E2E_MODEL_ID": model_id,
         "E2E_ALL_TASKS": _os.environ.get("E2E_ALL_TASKS", "0"),
         "E2E_REQUIRE_TRACE": _os.environ.get("E2E_REQUIRE_TRACE", "1"),
@@ -2092,6 +2131,7 @@ def _emit_e2e_phase_a(args) -> int:
         timeout_s=timeout_s,
         agent_bin=agent_bin,
         max_rounds=max_grade_rounds,
+        batch=_batch_size,
     )
 
 
@@ -2743,12 +2783,26 @@ def _batch_prompt_block(batch: int, *, heads: Optional[list] = None) -> str:
         if autoregressive is not False
         else _BATCH_INDEPENDENT_AXIS.format(batch=batch)
     )
+    from models.experimental.perf_automation.agent.perf_adapter import BATCH_ENV, BATCH_REPORT, batch_report_line
+
+    gate_contract = _BATCH_GATE_CONTRACT.format(
+        batch=batch, batch_env=BATCH_ENV, report=batch_report_line(batch), report_n="%s=<B>" % BATCH_REPORT
+    )
     return f"""
 BATCH = {batch}. Emit the pipeline to process {batch} INDEPENDENT samples per call, not one. A single
 sample wastes 31/32 of a 32-row matmul tile, so filling it with {batch} real samples raises AGGREGATE
 throughput ~{batch}x; per-sample latency is unchanged. Thread a leading batch dimension B={batch}
 through the WHOLE path and verify it end to end:
-{axis_note}{_BATCH_COMMON_RULES.format(batch=batch)}"""
+{axis_note}{_BATCH_COMMON_RULES.format(batch=batch)}{gate_contract}"""
+
+
+# What the gate ENFORCES about the batch (see _batch_gate_reason), stated to the builder up front so it
+# does not learn it from a failed round. Kept apart from _BATCH_COMMON_RULES so that block's placeholders
+# are unchanged for its existing callers.
+_BATCH_GATE_CONTRACT = """THE GATE ENFORCES THE BATCH. It runs tests/e2e with ${batch_env}={batch} and fails unless the tests
+print `{report_n}` with the batch they actually drove, equal to {batch}. So the e2e tests take B from
+${batch_env} -- never a number typed into the test -- and print `{report}` once B is known.
+"""
 
 
 def _build_agent_prompt(

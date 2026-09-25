@@ -33,7 +33,11 @@ _THP = Path(__file__).resolve().parent
 _REPO = _THP.parents[1]
 sys.path.insert(0, str(_REPO))
 
-from scripts.tt_hw_planner.commands.emit_e2e import _recover_if_wedged, _run_deterministic_gates  # noqa: E402
+from scripts.tt_hw_planner.commands.emit_e2e import (  # noqa: E402
+    E2E_MCP_BATCH_ENV,
+    _recover_if_wedged,
+    _run_deterministic_gates,
+)
 from scripts.tt_hw_planner.pcc_targets import E2E_PCC  # noqa: E402
 
 try:
@@ -62,6 +66,7 @@ except Exception:  # noqa: BLE001 -- a server that cannot report progress must s
 _DEMO_DIR = os.environ.get("E2E_MCP_DEMO_DIR", "")
 _PCC = float(os.environ.get("E2E_MCP_PCC", str(E2E_PCC)))
 _TIMEOUT = int(os.environ.get("E2E_MCP_TIMEOUT", "1800"))
+_BATCH = int(os.environ.get(E2E_MCP_BATCH_ENV, "1") or "1")  # the emit-e2e --batch request
 
 
 def _run_probe(demo_dir: Path) -> dict:
@@ -104,7 +109,7 @@ def termination_check() -> dict:
 
     os.environ.pop("E2E_REQUIRE_ON_DEVICE", None)
 
-    ok, reasons = _run_deterministic_gates(demo, _PCC, _TIMEOUT)
+    ok, reasons = _run_deterministic_gates(demo, _PCC, _TIMEOUT, batch=_BATCH)
     if not ok:
         return {
             "can_stop": False,
