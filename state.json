@@ -1,9 +1,9 @@
 {
  "last_run": {
-  "run_id": "36135896637",
-  "timestamp": "2026-09-25T12:42:00Z"
+  "run_id": "36173690034",
+  "timestamp": "2026-09-25T18:35:00Z"
  },
- "run_id": "36135896637",
+ "run_id": "36173690034",
  "open_prs": {
   "52106": {
    "issue": 51660,
@@ -327,6 +327,16 @@
   "57844": {
    "issue": 57732,
    "status": "previously opened (2026-09-25 06:44 run, DRAM width-sharded matmul fix); no comments/reviews yet"
+  },
+  "57919_verify_changed_tests": {
+   "issue": 57919,
+   "branch": "repo-assist/fix-issue-57919-verify-changed-tests-tt-train-build",
+   "status": "opened this run; sets skip-tt-train: false on build-default/build-profiler in verify-changed-tests.yaml; CI triggered, outcome unknown yet, check next run"
+  },
+  "57848_log1p_zero": {
+   "issue": 57848,
+   "branch": "repo-assist/fix-issue-57848-log1p-negative-zero-sign",
+   "status": "opened this run; log1p(-0.0) sign fix on WH/BH/Quasar, follows the #57554 pattern; CI triggered, outcome unknown yet, check next run"
   }
  },
  "issues_labeled": [
@@ -1164,9 +1174,9 @@
   }
  },
  "backlog_cursor": {
-  "task1_task2_latest": "2026-09-25 (run 36135896637): reviewed newest ~50 open issues (down through #57625); labeled 13 fresh unlabeled issues (10 ijankowskiTT AI-static-analysis defect-catalog issues #57674-#57684 as bug, plus #57873/#57854/#57836). Investigated and fixed #57867 (ttnn.addcmul_bw overflows to inf, applies value after grad*tensorN instead of before, unlike sibling addcdiv_bw in same file) -- verified root cause line-by-line against current ternary_backward.cpp, confirmed no existing PR, opened fix PR + regression test + issue comment. Continue backlog from #57625-and-below next run.",
+  "task1_task2_latest": "2026-09-25 (run 36173690034): reviewed newest ~50 open issues (down through #57896-and-below unlabeled). Labeled 6 fresh unlabeled issues: #57923/#57920/#57919/#57896/#57894/#57653. Investigated and fixed #57919 (verify-changed-tests skip-tt-train build gap) and #57848 (log1p(-0.0) sign loss, following #57554 pattern) -- both verified against current source, no existing PRs found, opened ready-for-review fix PRs + regression tests + issue comments. Reviewed #57894/#57896 (Quasar/firmware hardware workarounds already authored by their TT-engineer assignees) -- left alone, too risky without HW access to push blind. Continue backlog below #57653 next run.",
   "task6_latest": "2026-09-25: nudged 3 never-previously-touched author-blocked stale PRs (no update since 2026-09-02, 3+ weeks): #51129 (digamma fix, PR Gate Status failing), #51155 (snake_beta Cody-Waite, unresolved CHANGES_REQUESTED from mateusznowakTT), #52315 (softmax numeric_stable default, mergeable_state behind, no reviews). 3-action cap reached.",
-  "task7_latest": "2026-09-25: checked 5 candidate authors from last-24h issues (mooire733, Yusaku-062255, alexxony, brnorris03, adrian-pascual-bernal) via search_issues/search_pull_requests -- all have prior repo history (4, unknown/likely some, 1, 2, and 29 merged PRs respectively); none qualified as new contributor. No welcomes posted this run."
+  "task7_latest": "2026-09-25 (this run): checked 2 candidate recent-issue authors (bvdyvncqr5-commits, kmabeeTT) via search_issues -- both have prior merged PRs (disqualified). No welcomes posted."
  },
  "labeled_issues": {
   "54827": {
@@ -1524,7 +1534,25 @@
   "57684": "bug",
   "57873": "bug",
   "57854": "infra-ci",
-  "57836": "performance monitoring"
+  "57836": "performance monitoring",
+  "57923": {
+   "date": "2026-09-25T18:35:00Z"
+  },
+  "57920": {
+   "date": "2026-09-25T18:35:00Z"
+  },
+  "57919": {
+   "date": "2026-09-25T18:35:00Z"
+  },
+  "57896": {
+   "date": "2026-09-25T18:35:00Z"
+  },
+  "57894": {
+   "date": "2026-09-25T18:35:00Z"
+  },
+  "57653": {
+   "date": "2026-09-25T18:35:00Z"
+  }
  },
  "issues_commented": {
   "53922": {
@@ -1613,9 +1641,22 @@
   "57798": {
    "date": "2026-09-25",
    "note": "confirmed MeshBuffer::deallocate use-after-free root cause line-by-line against current mesh_device_impl.hpp/mesh_buffer.cpp/tt_metal.cpp; discussed both suggested fixes, deferred to maintainer (no HW access)"
+  },
+  "57919": {
+   "date": "2026-09-25T18:35:00Z",
+   "note": "confirmed skip-tt-train build-wiring gap against current build-artifact.yaml/verify-changed-tests.yaml; linked fix PR"
+  },
+  "57848": {
+   "date": "2026-09-25T18:35:00Z",
+   "note": "confirmed log1p(-0.0) sign-loss root cause against current ckernel_sfpu_log1p.h; linked fix PR following #57554 pattern"
   }
  },
  "run_history": [
+  {
+   "run_id": "36173690034",
+   "date": "2026-09-25T18:35:00Z",
+   "summary": "Task1: labeled 6 fresh unlabeled issues (#57923 performance monitoring, #57920 feature-request, #57919 ci-bug, #57896 bug, #57894 feature, #57653 infra-ci). Task2/3: investigated #57919 ([tt-train] verify-changed-tests build gap) -- confirmed against current build-artifact.yaml/verify-changed-tests.yaml that skip-tt-train defaults true and neither build-default nor build-profiler override it (unlike every other CI workflow); opened fix PR setting skip-tt-train: false on both jobs, with issue comment. Investigated #57848 (ttnn.log1p(-0.0) returns +0.0 instead of -0.0) -- traced the sign loss to calculate_log1p_fp32's first statement (u = a + 1.0f) against current ckernel_sfpu_log1p.h on WH/BH/Quasar, confirmed no existing PR, opened fix following the same v_if-override pattern as the already-merged #57554 (log/log2/log10 signed-zero fix), added a copysign-based regression test since assert_with_ulp treats +-0.0 as equal, posted issue comment. Reviewed #57894/#57896 (Quasar hardware workarounds already authored/assigned to TT engineers kstevensTT) -- left to assignees, both are explicitly-marked 'local workaround' diffs needing real Quasar/Gen2 hardware validation. Task7: checked 2 candidate recent issue authors (bvdyvncqr5-commits, kmabeeTT) -- both disqualified by existing merged-PR history via search_issues. Task8: rewrote monthly summary #55015 (had regrown to ~144KB via duplicated Run-History blocks across at least 4 copies, the same recurring pattern flagged in past runs) -- trimmed to a single canonical copy (~12KB), refreshed Suggested Actions with the 2 new PRs, kept a trimmed 5-entry Run History. Task5/Task6 skipped this cycle: Task5 was fully done last run (36135896637, ~31 PRs all green except known infra-noise) with no new maintainer activity signal to re-check; Task6 last ran this same day (36079942303, <3-day cadence, no re-nudge due)."
+  },
   {
    "run_id": "36135896637",
    "date": "2026-09-25T12:42:00Z",
