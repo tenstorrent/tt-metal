@@ -437,6 +437,25 @@ def _run_id() -> str:
     return tag if attempt == "1" else f"{tag}-{attempt}"
 
 
+VALID_PIPELINES = ("pr", "nightly", "baseline")
+
+
+def _pipeline(event: str) -> str:
+    """Which pipeline produced this run: ``pr``, ``nightly`` or ``baseline``.
+
+    Read from PIPELINE when the workflow says so; otherwise inferred from the
+    GitHub event, which can only tell a PR from everything else.
+    """
+    explicit = os.environ.get("PIPELINE", "").strip()
+    if explicit:
+        if explicit not in VALID_PIPELINES:
+            raise ValueError(
+                f"PIPELINE must be one of {VALID_PIPELINES}, got {explicit!r}"
+            )
+        return explicit
+    return "pr" if event == "pull_request" else "nightly"
+
+
 def _ci_provenance() -> dict:
     """Run-context provenance for a published Parquet batch, read from the CI
     environment (best-effort defaults when run off-CI)."""
@@ -447,7 +466,7 @@ def _ci_provenance() -> dict:
         "run_id": _run_id(),
         "timestamp": datetime.now(timezone.utc).isoformat(),
         # Lowercase, as the warehouse's RUNS.PIPELINE stores them.
-        "pipeline": "pr" if event == "pull_request" else "nightly",
+        "pipeline": _pipeline(event),
         "pr_number": os.environ.get("PR_NUMBER") or None,
     }
 
@@ -747,6 +766,39 @@ def assert_zones_dont_overlap(profiler_data: ProfilerData) -> None:
         prev = row
 
 
+RUN_TYPE_PRESETS = {
+    "ALL_ISOLATION_MODES": ("UNPACK_ISOLATE", "MATH_ISOLATE", "PACK_ISOLATE"),
+    "ALL_MODES": ("L1_TO_L1", "UNPACK_ISOLATE", "MATH_ISOLATE", "PACK_ISOLATE"),
+}
+
+
+def _expand_run_types(text):
+    """Run-type names from a comma list; presets expand, unknown names are an error."""
+    names = set()
+    for item in (n.strip() for n in text.split(",")):
+        if not item:
+            continue
+        if item in RUN_TYPE_PRESETS:
+            names.update(RUN_TYPE_PRESETS[item])
+        elif item in PerfRunType.__members__:
+            names.add(item)
+        else:
+            raise ValueError(
+                f"LLK_PERF_RUN_TYPES: unknown run type {item!r}; use a PerfRunType "
+                f"name or one of {sorted(RUN_TYPE_PRESETS)}"
+            )
+    return names
+
+
+def _selected_run_types(run_types):
+    """LLK_PERF_RUN_TYPES narrows what a run measures. Empty means all of them."""
+    wanted = os.environ.get("LLK_PERF_RUN_TYPES", "").strip()
+    if not wanted:
+        return list(run_types)
+    names = _expand_run_types(wanted)
+    return [rt for rt in run_types if rt.name in names]
+
+
 class PerfConfig(TestConfig):
     # === STATIC VARIABLES ===
     TEST_COUNTER: ClassVar[int] = 0
@@ -782,7 +834,7 @@ class PerfConfig(TestConfig):
                 runtimes.copy(),
                 run_type,
             )
-            for run_type in run_types
+            for run_type in _selected_run_types(run_types)
         ]
 
         super().__init__(
@@ -929,6 +981,9 @@ class PerfConfig(TestConfig):
             )
 
     def run(self, perf_report: PerfReport, run_count=1):
+        if not self.run_configs:
+            pytest.skip("LLK_PERF_RUN_TYPES selects none of this test's run types")
+
         results = []
         counter_results_list = []
         code_sizes = {}
