@@ -38,13 +38,10 @@ class Qwen38ForCausalLM:
             raise ValueError("Serving dimensions exceed the validated model contract")
         if os.getenv("QWEN_DECODE_BUCKETS", "0") == "1" and max_batch_size not in (1, 8, 16):
             raise ValueError("Bucketed decode requires max_num_seqs of 1, 8, or 16; capacity above 16 is unsupported")
-        layer_indices = os.environ.get("QWEN_VLLM_TEST_LAYERS")
-        indices = [int(i) for i in layer_indices.split(",")] if layer_indices else None
         root = Path(__file__).parents[1]
         generator = build_generator(
             root,
             mesh_device,
-            layer_indices=indices,
             precision_config=root / "config/precision.json",
         )
         logger.info("Qwen3.8 vLLM precision: {}", generator.model.precision)
@@ -58,11 +55,7 @@ class Qwen38ForCausalLM:
         self._sampling_key = None
         self._decode_bound = False
         self._last_device_sampling = None
-        self.prefill_diagnostics = os.getenv("QWEN_PREFILL_DIAGNOSTICS", "0") == "1"
         self.prefill_startup_warmup = os.getenv("QWEN_PREFILL_STARTUP_WARMUP", "0") == "1"
-        if os.getenv("QWEN_EXPERIMENT_CHUNKED_PREFILL", "0") == "1":
-            # Local protocol experiment only; CI must also pin a compatible plugin.
-            self.model_capabilities = {**self.model_capabilities, "supports_chunked_prefill_device_sampling": True}
 
     # vLLM inspects this protocol before selecting the TT loader. Execution is
     # through the TT plugin's prefill/decode APIs, never the GPU forward API.
@@ -205,10 +198,6 @@ class Qwen38ForCausalLM:
         empty_slots=None,
         **kwargs,
     ):
-        diagnostic = getattr(self, "prefill_diagnostics", False)
-        if diagnostic:
-            started = time.perf_counter()
-            counters_before = self.generator.counters.copy()
         self._cache(kv_cache)
         ends = torch.as_tensor(prompt_lens).reshape(-1).tolist()
         starts = [0] * len(ends) if start_pos is None else torch.as_tensor(start_pos).reshape(-1).tolist()
@@ -243,21 +232,6 @@ class Qwen38ForCausalLM:
                 )
             result = torch.cat([self.generator._host_logits(x).reshape(1, 1, -1) for x in outputs], dim=0)
         self._decode_bound = False
-        if diagnostic:
-            logger.debug(
-                "Qwen3.8 prefill diagnostic: {}",
-                json.dumps(
-                    dict(
-                        start=started,
-                        end=time.perf_counter(),
-                        starts=starts,
-                        ends=ends,
-                        slots=slots,
-                        device_sampling=device_sampling,
-                        counters=dict(self.generator.counters - counters_before),
-                    )
-                ),
-            )
         # HF declares M-RoPE; text-only positions have zero spatial offset.
         return result, torch.zeros(len(ends), dtype=torch.int64)
 

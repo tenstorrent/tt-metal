@@ -456,17 +456,6 @@ class Qwen38TPDecoder(Qwen38Decoder):
 
     def _linear(self, x, name, activation=None, keep_sharded=False):
         if (
-            self.policy.get("flatten_prefill_batch", False)
-            and len(x.shape) == 3
-            and x.shape[0] > 1
-            and x.shape[1] > 1
-            and x.shape[1] % 32 == 0
-        ):
-            batch, length, width = x.shape
-            packed = ttnn.reshape(x, [1, batch * length, width])
-            output = self._linear(packed, name, activation=activation, keep_sharded=keep_sharded)
-            return ttnn.reshape(output, [batch, length, output.shape[-1]])
-        if (
             self.policy.get("fused_input", False)
             and x.shape[-1] == 5120 // self.TP
             and self._role(name) in ("attention", "gate", "up")
@@ -704,42 +693,6 @@ class Qwen38TPDecoder(Qwen38Decoder):
             return super()._norm(x, name)
         shape = list(x.shape)
         if self.policy.get("prefill_replicated_norm", False):
-            if (
-                self.policy.get("prefill_row_parallel_norm", False)
-                and len(shape) == 3
-                and shape[1] > 1
-                and shape[1] % 32 == 0
-                and shape[0] * shape[1] % (32 * self.TP) == 0
-            ):
-                rows = shape[0] * shape[1]
-                local = ttnn.experimental.all_to_all_async_generic(
-                    ttnn.reshape(x, [1, 1, rows, shape[-1]]),
-                    in_dim=3,
-                    out_dim=2,
-                    topology=self.topology,
-                    cluster_axis=1,
-                    num_links=self.policy["num_links"],
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-                local = ttnn.reshape(local, [1, rows // self.TP, 5120])
-                local_weight = self.weights[name + ".weight"]
-                try:
-                    self.weights[name + ".weight"] = self.weights[name + ".replicated_weight"]
-                    normalized = super()._norm(local, name)
-                finally:
-                    self.weights[name + ".weight"] = local_weight
-                gathered = ttnn.experimental.all_gather_async(
-                    ttnn.reshape(normalized, [1, 1, rows // self.TP, 5120]),
-                    dim=2,
-                    cluster_axis=1,
-                    mesh_device=self.device,
-                    topology=self.topology,
-                    num_links=self.policy["num_links"],
-                    multi_device_global_semaphore=self.ccl.get_and_cycle_ag_semaphore_handles(1),
-                    barrier_semaphore=self.ccl.get_and_cycle_barrier_semaphore_handle(1),
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-                return ttnn.reshape(gathered, [*shape[:-1], 5120])
             full = self._gather(ttnn.reshape(x, [1, *shape]))
             full = ttnn.reshape(full, [*shape[:-1], 5120])
             local_weight = self.weights[name + ".weight"]
