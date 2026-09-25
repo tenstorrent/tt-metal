@@ -34,7 +34,7 @@
 //     last LO read; only the latter pairs with LO.
 //
 // Measured on p150 links over 0.5 m passive DAC: one way inside the stamps 33-35 ns, a receiver's turnaround
-// ~350 ns; 256 exchanges averaged per side dither the 20 ns tick to ~0.4 ns per round.
+// ~350 ns; 96 exchanges averaged per side dither the 20 ns tick to ~0.6 ns per round.
 //
 // One end of a link, its configuration compile-time so the per-frame path has no loads (the ERISC runs no dynamic
 // init, so the blocks are statics or members):

@@ -46,10 +46,11 @@ using LinkRule = RxStampRule<kLinkTcamRow, kLinkLabel>;
 // every fabric flow through it, which the channels' buffers do not absorb (a full ring of unicasts lost 9.5 % to
 // 1.3 us holds). The link relation is a line in the refclk domain, so the stamps average to the same offset however
 // they are spread. Every stamp is quantised to the timer's 20 ns
-// tick and a round's mean gains from its frames sitting at different phases of it, so frame j is issued
-// (j * kFramePhaseStep mod 256) / 256 of an update period past a refclk update: the ERISC sees the refclk move every
-// four ticks, each move on a tick edge, so the comb covers four ticks, hence each tick, exactly in the refclk domain
-// whatever AICLK does, and the mean's rounding noise falls to ~0.4 ns per round. A frame carries its own egress stamp
+// tick and a round's mean gains from its frames sitting at different phases of it, so the link's trip k (frame j of
+// round r is trip r * kTripsPerRound + j) is issued (k * kFramePhaseStep mod kCombPhases) / kCombPhases of an update
+// period past a refclk update: the ERISC sees the refclk move every four ticks, each move on a tick edge, so the comb
+// covers four ticks, hence each tick, exactly in the refclk domain whatever AICLK does, and the mean's rounding noise
+// falls to ~0.6 ns per round. A frame carries its own egress stamp
 // (TxQueue::arm_in_frame), so each side pairs the peer's egress stamp, read from a frame it received, with its own
 // ingress stamp of that frame and averages the pairs (HwRound): a round counts if any frame produced both, the peer's
 // timer ran, and the peer's PTP offset (carried in every frame, to put its stamps in its refclk domain) held for the
@@ -60,7 +61,7 @@ using LinkRule = RxStampRule<kLinkTcamRow, kLinkLabel>;
 // issues a burst only once every frame of the last one has been echoed, and the receiver echoes a burst only once all
 // its frames are in. Each end takes a burst's stamps when all its frames are in and nothing of the other end's can be
 // in flight towards it, so the FIFO holds exactly those stamps, in the frames' order (take_stamps).
-constexpr uint32_t kTripsPerRound = 256;
+constexpr uint32_t kTripsPerRound = 96;
 constexpr uint32_t kBurstFrames = 4;
 constexpr uint32_t kBurstsPerRound = kTripsPerRound / kBurstFrames;
 // A frame's payload: the sync word (bytes_sent the frame's key, receiver_ack the key an echo answers, reserved_2 the
@@ -75,7 +76,8 @@ constexpr uint32_t kPilotOffset = 0;
 constexpr uint32_t kSlotsOffset = kFrameBytes;
 constexpr uint32_t kSlotsBytes = kBurstFrames * kFrameBytes;
 constexpr uint32_t kCtlOffset = kernel_profiler::kLinkSyncCtlOffset;
-constexpr uint32_t kFramePhaseStep = 157;  // odd, so the 256 phases are a permutation
+constexpr uint32_t kCombPhases = 256;
+constexpr uint32_t kFramePhaseStep = 157;  // odd, so the kCombPhases phases are a permutation
 // Polls for a hand-off on a queue the fabric may be loading (our frames wait behind its at the MAC), after which the
 // frame is left for a later step: ~6 us, a bound on a step's hold.
 constexpr uint32_t kHandoffSpins = 256;
@@ -104,9 +106,10 @@ FORCE_INLINE volatile eth_channel_sync_t* pilot(uint32_t base) {
 constexpr uint32_t kTripMask = 0x1FF;
 constexpr uint32_t frame_key(uint32_t round, uint32_t j) { return (round << 9) | (j + 1); }
 static_assert(kTripsPerRound <= kTripMask);
-// Frame j's place in an update period, in wall cycles, p16 being wall cycles per update times 16.
-FORCE_INLINE uint32_t frame_phase_cycles(uint32_t j, uint32_t p16) {
-    return (((j * kFramePhaseStep) & (kTripsPerRound - 1)) * p16) >> 12;
+// Trip k's place in an update period, in wall cycles, p16 being wall cycles per update times 16.
+FORCE_INLINE uint32_t frame_phase_cycles(uint32_t k, uint32_t p16) {
+    static_assert(kCombPhases * 16 == 1u << 12);
+    return (((k * kFramePhaseStep) & (kCombPhases - 1)) * p16) >> 12;
 }
 // The next refclk update the ERISC sees, from reads back to back: its count and the wall read between the two refclk
 // reads that differ. False if none came within the spins (a dead refclk).
@@ -388,9 +391,10 @@ struct Grid {
     }
     // Wall cycles per refclk tick, x16.
     uint32_t c16() const { return p16 >> 2; }
-    // Trip j under an arming of its own: false if the queue did not take the frame in time, which leaves it for a
-    // later step. A gap of 2^27 cycles or more since the last update (a pause) keeps the period it had.
-    __attribute__((noinline)) bool send(const LinkHeaderRow& header, uint32_t base, uint32_t j, StopDiag& diag) {
+    // Frame j of round `round` under an arming of its own: false if the queue did not take the frame in time, which
+    // leaves it for a later step. A gap of 2^27 cycles or more since the last update (a pause) keeps the period it had.
+    __attribute__((noinline)) bool send(
+        const LinkHeaderRow& header, uint32_t base, uint32_t round, uint32_t j, StopDiag& diag) {
         Anchor at;
         if (!arm_burst(header, base, at, diag)) {
             return false;
@@ -406,7 +410,7 @@ struct Grid {
         } else {
             w = rd(kWallClockLo);
         }
-        pacer.until(w + kLeadCycles + frame_phase_cycles(j, p16));
+        pacer.until(w + kLeadCycles + frame_phase_cycles(round * kTripsPerRound + j, p16));
         const bool went = issue(slot(base, j));
         finish_burst(at, went ? 1u : 0u, diag);
         return went;
@@ -576,7 +580,7 @@ private:
     }
     __attribute__((noinline)) void send_next() {
         const uint32_t w = rd(kWallClockLo);
-        out_sent += grid.send(header, slot_base, out_j0 + out_sent, diag);
+        out_sent += grid.send(header, slot_base, round, out_j0 + out_sent, diag);
         diag.note_hold(rd(kWallClockLo) - w);
     }
     // A slot, once all the last burst's echoes are in: its pairs (egress stamps from the echoes themselves, ingress
@@ -681,7 +685,7 @@ private:
     }
     __attribute__((noinline)) void echo() {
         const uint32_t w = rd(kWallClockLo);
-        echoed += grid.send(header, slot_base, echo_j0 + echoed, diag);
+        echoed += grid.send(header, slot_base, round, echo_j0 + echoed, diag);
         if (echoed == kBurstFrames) {
             taken = 0;
             echoed = 0;

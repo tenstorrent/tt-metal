@@ -241,7 +241,8 @@ private:
     static constexpr double kRefclkPerStampUnit = 1.0 / (kernel_profiler::kLinkSyncStampUnitsPerNs * kNsPerRefclk);
     // The link solve's window in the sender chip's refclk, re-solved as each round completes so the live solution
     // ends at the newest round. Two chips' crystals hold a line to ~0.4 ns over this long (measured on the 8-chip
-    // runs); the ~25 rounds inside average the stamps' 0.3 ns to under 0.1 ns, and a longer window measured no better.
+    // runs); the ~25 rounds inside average a round's ~0.6 ns of stamp noise to ~0.12 ns, and a longer window measured
+    // no better.
     static constexpr double kLinkWindowTicks = 12'500'000.0;  // 250 ms
     static constexpr size_t kMinSolveRounds = 8;
     static constexpr size_t kPendingMax = 4096;
