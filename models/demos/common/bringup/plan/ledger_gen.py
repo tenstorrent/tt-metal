@@ -70,12 +70,13 @@ def generate(spec, ref=None, early: bool = False) -> dict:
 
     add(
         "R.1",
-        "Checkpoint has every tensor the spec expects; intake approved",
+        "Checkpoint has every tensor the spec expects; intake approved; canonical prompt built",
         "intake",
         [],
-        f"{PY}.intake.check_checkpoint",
+        f"{PY}.intake.check_checkpoint && {PY}.reference.prompt",
         {
             "intake_approved": "== 1",
+            "prompt_hash_ok": "== 1",
             "missing_tensors": "== 0",
             "shape_mismatches": "== 0",
             "count_mismatches": "== 0",
