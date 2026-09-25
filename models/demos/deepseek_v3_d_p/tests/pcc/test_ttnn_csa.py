@@ -461,5 +461,7 @@ def test_csa_islands_pinpoint(mesh_device, device_params, sp_axis, tp_axis):
     A1.release()
     a1_worst = min(rep_rep.values())
     assert jac_mean >= 0.9, (jac_mean, jac_min)
-    assert pcc_phase >= 0.999 and pcc_cap >= 0.999 and pcc_rep >= 0.999, (pcc_phase, pcc_cap, pcc_rep)
+    # NOTE: a trace capture records without executing, so the output read right after capture() is whatever the buffer
+    # held (0.0008 on 2x4, coincidentally the earlier eager result on 8x4) -- only the REPLAY comparisons are meaningful.
+    assert pcc_phase >= 0.999 and pcc_rep >= 0.999, (pcc_phase, pcc_cap, pcc_rep)
     assert a1_worst >= 0.999, rep_rep
