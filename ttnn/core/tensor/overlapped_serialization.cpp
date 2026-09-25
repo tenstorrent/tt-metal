@@ -83,7 +83,9 @@ std::vector<OverlappedTensorView> load_overlapped_tensors(
     size_t file_size = file_stat.st_size;
     TT_FATAL(file_size >= sizeof(uint64_t), "File \"{}\" is too small to be valid", file_name);
 
-    void* mmap_addr = mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    // MAP_SHARED, not MAP_PRIVATE, for the reason given in load_tensor_flatbuffer (serialization.cpp): uploads pin
+    // this mapping read-only, and pinning a private mapping copies every page first.
+    void* mmap_addr = mmap(nullptr, file_size, PROT_READ, MAP_SHARED, fd, 0);
     TT_FATAL(mmap_addr != MAP_FAILED, "Failed to mmap file \"{}\": {}", file_name, strerror(errno));
 
     std::shared_ptr<void> mmap_ptr(mmap_addr, [file_size](void* addr) { munmap(addr, file_size); });
