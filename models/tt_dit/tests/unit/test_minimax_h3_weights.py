@@ -4,6 +4,13 @@
 
 """Host-only tests for the MiniMax-H3 weights resolver: precedence, cache selection, download gating."""
 
+"""
+Written by human: this test was written to freeze behavior of the weights resolver when it was first
+implementend; but the behavior/implementation was not well thought out or designed.
+
+This test file deserves as much thought as the thought that went into the actual weight resolver,
+aka NONE! Feel free to modify the weight resolution behavior and nuke this file in the future.
+"""
 from pathlib import Path
 
 import pytest
