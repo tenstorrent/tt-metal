@@ -71,3 +71,22 @@ inline void sigmoid_init() {
 
 }  // namespace sfpu
 }  // namespace ckernel
+
+#if !defined(TT_POLY_LLK_DISABLE)
+#include "ckernel_sfpu_sigmoid_bf16.h"
+#endif
+
+namespace ckernel::sfpu {
+
+#if !defined(TT_POLY_LLK_DISABLE)
+template <int ITERATIONS = 8>
+inline void calculate_sigmoid_tt_poly_bf16() {
+    ckernel::sfpu::ttpoly::calculate_exp2_reciprocal<ttpoly_generated::SigmoidBf16Config, ITERATIONS>();
+}
+template <auto...>
+inline void init_sigmoid_tt_poly_bf16() {
+    ckernel::sfpu::ttpoly::init_exp2_reciprocal<ttpoly_generated::SigmoidBf16Config>();
+}
+#endif
+
+}  // namespace ckernel::sfpu
