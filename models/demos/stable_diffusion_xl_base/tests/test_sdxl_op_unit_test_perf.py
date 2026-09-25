@@ -135,7 +135,7 @@ def test_dram_group_norm_vae_two_pass_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 1351000  # Wormhole DRAM GroupNorm VAE baseline, recalibrated in #56193.
+    expected_duration_ns = 1319491  # Wormhole DRAM GroupNorm VAE baseline, recalibrated in #56292.
 
     # Log the performance result
     print(
@@ -172,7 +172,7 @@ def test_block_sharded_group_norm_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 74907  # Measured: ~74.9μs for GroupNorm SDXL block sharded
+    expected_duration_ns = 68875  # Measured: ~68.9μs for GroupNorm SDXL block sharded
 
     # Log the performance result
     print(
@@ -209,7 +209,7 @@ def test_block_sharded_group_norm_negative_mask_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 549179  # Measured: ~549μs for GroupNorm SDXL negative mask
+    expected_duration_ns = 460175  # Measured: ~460μs for GroupNorm SDXL negative mask
 
     # Log the performance result
     print(
@@ -246,7 +246,7 @@ def test_ff_matmul_with_gelu_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 238419  # Measured: 238μs for FF Matmul SDXL with GELU
+    expected_duration_ns = 235541  # Measured: ~235.5μs for FF Matmul SDXL with GELU
 
     # Log the performance result
     print(
@@ -283,9 +283,7 @@ def test_conv2d_block_sharded_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = (
-        993500  # Updated 2026-07-09: ~3% faster (~0.9935ms) after CircularBuffer->DataflowBuffer kernel port
-    )
+    expected_duration_ns = 994294  # Measured: ~0.9943ms for Conv2D SDXL block sharded
 
     # Log the performance result
     print(
@@ -322,7 +320,7 @@ def test_conv2d_auto_sliced_vae_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 3082972  # Measured: 3.08ms for Conv2D VAE auto sliced
+    expected_duration_ns = 3135000  # Measured: ~3.135ms on main (avg of 3 runs)
 
     # Log the performance result
     print(

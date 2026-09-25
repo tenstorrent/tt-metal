@@ -154,7 +154,6 @@ void kernel_main() {
     constexpr auto num_subblocks_w = get_arg(args::num_subblocks_w);
     constexpr auto num_tiles_per_block = get_arg(args::num_tiles_per_block);
     constexpr bool FLOAT32_DTYPE = get_arg(args::float32_dtype) == 1;
-    constexpr bool LEGACY_RSQRT = get_arg(args::legacy_rsqrt) == 1;
     constexpr auto num_blocks_second_stage = get_arg(args::num_blocks_second_stage);
     constexpr auto tile_width = get_arg(args::tile_width);
     constexpr auto last_tile_w = get_arg(args::last_tile_w);
@@ -235,12 +234,17 @@ void kernel_main() {
     DataflowBuffer dfb_ex_external(dfb_ex_external_id);
     DataflowBuffer dfb_ex_global(dfb_ex_global_id);
     DataflowBuffer dfb_transpose(dfb_transpose_id);
-    DataflowBuffer dfb_fusion(dfb_fusion_id);
     DataflowBuffer dfb_out(dfb_out_id);
 
     DataflowBuffer dfb_im(dfb_im_id);
     constexpr uint32_t dfb_outgamma_id = do_beta ? dfb_fusion_id : dfb_out_id;
     DataflowBuffer dfb_outgamma(dfb_outgamma_id);
+    // Beta reads gamma's fusion output when gamma ran. Without gamma,
+    // fusion is never packed, so beta reads dfb_im. fusion aliases xmm,
+    // which the scale loop still reads, so do not pack the normalized
+    // result into fusion.
+    constexpr uint32_t dfb_beta_src_id = do_gamma ? dfb_fusion_id : dfb_im_id;
+    DataflowBuffer dfb_beta_src(dfb_beta_src_id);
 #ifdef FUSE_PRE_ADD
     constexpr uint32_t dfb_in_id = dfb_x;
 #else
@@ -719,9 +723,10 @@ void kernel_main() {
     // ---------------------------------------------------------------------------
 #ifdef FUSE_BETA
     {
-        reconfig_data_format(dfb_fusion_id, dfb_beta_id);
+        dfb_beta_src.wait_front(num_tiles_per_block);
+        reconfig_data_format(dfb_beta_src_id, dfb_beta_id);
         pack_reconfig_data_format(dfb_out_id);
-        add_bcast_rows_init(dfb_fusion_id, dfb_beta_id);
+        add_bcast_rows_init(dfb_beta_src_id, dfb_beta_id);
         dfb_beta.wait_front(block_wt);
         index_h_offset = 0;
         dfb_out.reserve_back(num_tiles_per_block);
@@ -731,7 +736,7 @@ void kernel_main() {
                 tile_regs_acquire();
                 for (uint32_t w = 0; w < subblock_wt; w++) {
                     index = w + index_subblock_w_offset;
-                    add_tiles_bcast_rows(dfb_fusion_id, dfb_beta_id, index + index_h_offset, index, w);
+                    add_tiles_bcast_rows(dfb_beta_src_id, dfb_beta_id, index + index_h_offset, index, w);
                 }
                 tile_regs_commit();
                 tile_regs_wait();
@@ -744,7 +749,7 @@ void kernel_main() {
             index_h_offset += block_wt;
         }
         dfb_out.push_back(num_tiles_per_block);
-        dfb_fusion.pop_front(num_tiles_per_block);
+        dfb_beta_src.pop_front(num_tiles_per_block);
         dfb_out.wait_front(num_tiles_per_block);
     }
 #endif

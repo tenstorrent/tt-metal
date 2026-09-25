@@ -196,7 +196,9 @@ bool groupnorm_legacy_rm_input_fits_l1(
         return false;
     }
 
-    // num_out_blocks: -1 means use the factory's power-of-two heuristic.
+    // num_out_blocks: -1 means use the shared memory-based power-of-two heuristic.
+    // Do not apply the factories' BF16 accuracy override here: retaining the larger,
+    // unsplit per-out-block CBs keeps this L1-fit estimate conservative.
     uint32_t num_out_blocks;
     if (num_out_blocks_arg < 0) {
         num_out_blocks = groupnorm_heuristic_num_out_blocks(per_batch_hw * W, num_virtual_cols * num_virtual_rows);

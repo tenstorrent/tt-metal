@@ -2,7 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from helpers.constraints import get_perf_math_operations
+from helpers.constraints import (
+    get_perf_math_operations,
+    get_valid_math_fidelities,
+)
 from helpers.llk_params import (
     PERF_LOOP_FACTOR_QUASAR,
     PERF_RUN_TYPES_QUASAR,
@@ -12,7 +15,6 @@ from quasar.test_eltwise_binary_quasar import (
     ELTWISE_FORMATS,
     eltwise_binary_dest_sync_dest_acc,
     eltwise_binary_implied_math_formats,
-    eltwise_binary_math_fidelities,
 )
 from quasar.test_eltwise_binary_quasar import test_eltwise_binary as run_eltwise_binary
 from quasar.test_eltwise_binary_quasar import (
@@ -25,7 +27,7 @@ from quasar.test_eltwise_binary_quasar import (
 @parametrize(
     formats=ELTWISE_FORMATS,
     mathop=get_perf_math_operations,
-    math_fidelity=eltwise_binary_math_fidelities,
+    math_fidelity=lambda formats, mathop: get_valid_math_fidelities(formats, mathop),
     implied_math_format=lambda formats: eltwise_binary_implied_math_formats(
         formats, is_perf=True
     ),

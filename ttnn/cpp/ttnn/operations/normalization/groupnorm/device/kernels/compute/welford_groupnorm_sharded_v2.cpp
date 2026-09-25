@@ -377,8 +377,8 @@ void kernel_main() {
             add_tiles(dfb_ex_global_id, dfb_eps_id, g * stats_tiles_per_group + 1, 0, dst0);
 
             // 1/[sqrt(Var + eps)]
-            rsqrt_tile_init<true>();
-            rsqrt_tile<true>(dst0);
+            rsqrt_tile_init();
+            rsqrt_tile(dst0);
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(dst0, dfb_ex2pe_id);

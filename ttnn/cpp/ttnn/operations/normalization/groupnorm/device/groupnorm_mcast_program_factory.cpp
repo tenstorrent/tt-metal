@@ -60,6 +60,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     uint32_t num_out_blocks = program_config.num_out_blocks;
     bool use_welford = operation_attributes.use_welford;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(a.device()->arch(), compute_kernel_config);
 
     if (gamma.has_value()) {
         TT_FATAL(gamma.value().layout() == Layout::ROW_MAJOR, "Gamma tensor must have ROW_MAJOR layout");
@@ -173,7 +175,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
 
     // -1 sentinel from GroupNormMultiCoreProgramConfig means "auto select".
     // Any other value is taken as an explicit user choice and validated below.
-    if (num_out_blocks == static_cast<uint32_t>(-1)) {
+    const bool auto_num_out_blocks = num_out_blocks == static_cast<uint32_t>(-1);
+    if (auto_num_out_blocks) {
         num_out_blocks =
             groupnorm_heuristic_num_out_blocks(shape[1] * shape[2] * shape[3], num_virtual_cols * num_virtual_rows);
     }
@@ -188,6 +191,10 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     uint32_t subblock_wt = get_max_subblock(block_wt, 8);
     uint32_t num_subblocks_w = block_wt / subblock_wt;
     const uint32_t block_wt_last = geometry.last_block_width_tiles;
+
+    if (auto_num_out_blocks && !use_welford && !fp32_dest_acc_en) {
+        num_out_blocks = groupnorm_bf16_num_out_blocks(num_out_blocks, block_ht_group_1, block_wt);
+    }
 
     TT_FATAL(
         block_ht_group_1 > 0,
@@ -223,8 +230,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         num_out_blocks = block_ht_group_1;
     }
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
     const bool use_sfpu_local_combine =
         groupnorm_use_sfpu_local_combine(use_welford, device->arch(), fp32_dest_acc_en, tile_width);
 

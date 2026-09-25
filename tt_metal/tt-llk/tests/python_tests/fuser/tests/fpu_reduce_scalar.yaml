@@ -15,6 +15,7 @@ operands:
 operations:
   - math:
       - type: "Fpu"
+        block_size: [64, 128]
         in0: "input_A"
         in1: "input_B"
         operation: "Reduce"
@@ -22,7 +23,7 @@ operations:
         reduce_pool: "SUM"
         unpacker: "ReduceUnpacker"
         math_fidelity: "HiFi2"
-    block_size: [64, 128]
     pack:
       - output: "reduce_scalar_out"
+        block_size: [64, 128]
         packer: "Packer"

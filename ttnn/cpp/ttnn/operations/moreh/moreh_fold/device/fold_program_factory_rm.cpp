@@ -246,7 +246,10 @@ ttnn::device_operation::ProgramArtifacts MorehFoldOperation::MultiCore::create_p
         AddRuntimeArgsForNode(
             writer_kra.runtime_arg_values,
             core,
-            {{"output_cb_page_size", aligned_output_cb_page_size},
+            // The writer's NoC write length must be the tensor's real row size, not the 32-byte-rounded
+            // DFB entry size: the rounded value is only valid as a CB page size (set at line ~119 above),
+            // and using it here spills the rounding padding past the real row on every page.
+            {{"output_cb_page_size", output_cb_page_size},
              {"start_id", start_id},
              {"num_units_per_core", num_units_per_core}});
 
