@@ -782,46 +782,74 @@ rm -f "$UNRETRAINABLE_YAML"
 
 # Step 0.9: bring down all expected cross-host Ethernet ports before the reset. This quiesces the
 # whole cross-host fabric (including links that failed to train) so the reset does not race an
-# active training walkdown. A failure here is non-fatal: warn and proceed with the reset anyway.
+# active training walkdown. A failure runs a cleanup glx_reset and retries port-down once;
+# validation runs only if port-down and the following reset both succeed.
+PORT_DOWN_EXIT=0
+RESET_EXIT=0
 if [[ "$SKIP_RESET" == false && "$SKIP_CROSS_HOST_PORT_DOWN" == false ]]; then
     echo "Bringing down cross-host Ethernet ports before reset..."
     if run_cross_host_port_down; then
         echo "Cross-host Ethernet ports are down on all hosts."
     else
-        PD_EC=$?
-        echo "WARNING: cross-host port down FAILED (exit code $PD_EC); continuing with reset."
+        PORT_DOWN_EXIT=$?
+        echo "WARNING: cross-host port down FAILED (exit code $PORT_DOWN_EXIT); running cleanup reset then retrying port down."
+        echo "Running tt-smi -glx_reset (cleanup after failed port down)..."
+        if run_glx_reset "$HOSTS"; then
+            RESET_EXIT=0
+            echo ""
+            echo "Sleeping ${SLEEP_DURATION}s..."
+            sleep "$SLEEP_DURATION"
+            echo "Retrying cross-host Ethernet port down..."
+            if run_cross_host_port_down; then
+                echo "Cross-host Ethernet ports are down on all hosts."
+                PORT_DOWN_EXIT=0
+            else
+                PORT_DOWN_EXIT=$?
+                echo "WARNING: retry cross-host port down FAILED (exit code $PORT_DOWN_EXIT); skipping validation."
+            fi
+        else
+            RESET_EXIT=$?
+            echo "Cleanup reset failed on one or more hosts (exit code $RESET_EXIT); skipping port-down retry and validation."
+        fi
     fi
     echo ""
 fi
 
-# Step 1: tt-smi reset
-RESET_EXIT=0
+# Step 1: tt-smi reset after a successful (or skipped) port-down. Skipped when port-down
+# still failed after retry, or when the cleanup reset already failed.
 if [[ "$SKIP_RESET" == false ]]; then
-    echo "Running tt-smi -glx_reset..."
-    # Capture the status without tripping `set -e` (the `if` context suspends it) so a reset
-    # failure retries the attempt instead of aborting the whole script.
-    if run_glx_reset "$HOSTS"; then RESET_EXIT=0; else RESET_EXIT=$?; fi
+    if [[ $PORT_DOWN_EXIT -eq 0 && $RESET_EXIT -eq 0 ]]; then
+        echo "Running tt-smi -glx_reset..."
+        # Capture the status without tripping `set -e` (the `if` context suspends it) so a reset
+        # failure retries the attempt instead of aborting the whole script.
+        if run_glx_reset "$HOSTS"; then RESET_EXIT=0; else RESET_EXIT=$?; fi
 
-    if [[ $RESET_EXIT -ne 0 ]]; then
-        echo ""
-        echo "Reset failed on one or more hosts (exit code $RESET_EXIT)."
-    else
-        echo ""
-        echo "Sleeping ${SLEEP_DURATION}s..."
-        sleep "$SLEEP_DURATION"
+        if [[ $RESET_EXIT -ne 0 ]]; then
+            echo ""
+            echo "Reset failed on one or more hosts (exit code $RESET_EXIT)."
+        else
+            echo ""
+            echo "Sleeping ${SLEEP_DURATION}s..."
+            sleep "$SLEEP_DURATION"
+        fi
     fi
 else
     echo "Skipping tt-smi reset (--skip-reset)"
 fi
 
 # Step 2: Cluster validation
-# VALIDATION_EXIT carries the whole attempt's outcome: a failed reset short-circuits validation and
-# fails the attempt so the outer loop retries (or the script exits non-zero once attempts run out).
+# VALIDATION_EXIT carries the whole attempt's outcome: a failed port-down or reset
+# short-circuits validation and fails the attempt so the outer loop retries (or the
+# script exits non-zero once attempts run out).
 VALIDATION_EXIT=0
 if [[ $RESET_EXIT -ne 0 ]]; then
     echo ""
     echo "Skipping validation because reset failed on this attempt."
     VALIDATION_EXIT=$RESET_EXIT
+elif [[ $PORT_DOWN_EXIT -ne 0 ]]; then
+    echo ""
+    echo "Skipping validation because port down failed on this attempt."
+    VALIDATION_EXIT=$PORT_DOWN_EXIT
 elif [[ "$SKIP_VALIDATION" == false ]]; then
     VALIDATION_ARGS=("${DESCRIPTOR_ARGS[@]}")
     if [[ "$SEND_TRAFFIC" == true ]]; then

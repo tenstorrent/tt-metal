@@ -408,6 +408,28 @@ RESET_CMD
     return 0  # Success
 }
 
+# Reset every host, then retry any that failed the first glx_reset. Exit status is
+# the last mpirun status (0 even if some hosts still failed after retry), matching
+# the previous inline loop.
+reset_cluster_hosts() {
+    local output_file="$1"
+    local retry_output_file="$2"
+    local msg_prefix="$3"
+    local failed_hosts_str
+    failed_hosts_str=$(run_board_reset "$HOSTS" "$output_file" "$msg_prefix")
+    local mpi_exit=$?
+    if [[ $mpi_exit -ne 0 ]]; then
+        return "$mpi_exit"
+    fi
+    if [[ -n "$failed_hosts_str" ]]; then
+        echo ""
+        echo "Retrying reset for failed hosts: $failed_hosts_str"
+        run_board_reset "$failed_hosts_str" "$retry_output_file" "Retry: " > /dev/null
+        return $?
+    fi
+    return 0
+}
+
 
 # Route all output through tag_stream. The per-iteration tee blocks below also
 # pipe through tag_stream; those lines arrive here already tagged and pass through.
@@ -465,41 +487,58 @@ for ((i=1; i<=ITERATIONS; i++)); do
         echo "=========================================="
         echo ""
 
+        PORT_DOWN_EXIT_CODE=0
+        MPI_EXIT_CODE=0
+
         if [[ "$SKIP_CROSS_HOST_PORT_DOWN" == false ]]; then
             echo "Bringing down cross-host Ethernet ports before reset..."
             run_cross_host_port_down
             PORT_DOWN_EXIT_CODE=$?
-            if [[ $PORT_DOWN_EXIT_CODE -ne 0 ]]; then
-                echo "WARNING: cross-host port down FAILED (exit code $PORT_DOWN_EXIT_CODE); continuing with Galaxy reset."
-            else
+            if [[ $PORT_DOWN_EXIT_CODE -eq 0 ]]; then
                 echo "Cross-host Ethernet ports are down on all hosts."
+            else
+                echo "WARNING: cross-host port down FAILED (exit code $PORT_DOWN_EXIT_CODE); running cleanup reset then retrying port down."
+                echo "Running tt-smi -glx_reset (cleanup after failed port down)..."
+                reset_cluster_hosts \
+                    "$OUTPUT_DIR/reset_cleanup_iter_${i}_$$" \
+                    "$OUTPUT_DIR/reset_cleanup_retry_iter_${i}_$$" \
+                    ""
+                MPI_EXIT_CODE=$?
+                if [[ $MPI_EXIT_CODE -ne 0 ]]; then
+                    echo "Cleanup reset failed (exit code $MPI_EXIT_CODE); skipping port-down retry and validation."
+                else
+                    sleep 5
+                    echo "Retrying cross-host Ethernet port down..."
+                    run_cross_host_port_down
+                    PORT_DOWN_EXIT_CODE=$?
+                    if [[ $PORT_DOWN_EXIT_CODE -eq 0 ]]; then
+                        echo "Cross-host Ethernet ports are down on all hosts."
+                    else
+                        echo "WARNING: retry cross-host port down FAILED (exit code $PORT_DOWN_EXIT_CODE); skipping validation."
+                    fi
+                fi
             fi
             echo ""
         else
             echo "Skipping cross-host Ethernet port down."
         fi
 
-        echo "Running tt-smi -glx_reset (this may take a few minutes)..."
-
-        # Run initial reset and capture failures
-        RESET_OUTPUT_FILE="$OUTPUT_DIR/reset_output_iter_${i}_$$"
-        FAILED_HOSTS_STR=$(run_board_reset "$HOSTS" "$RESET_OUTPUT_FILE" "")
-        MPI_EXIT_CODE=$?
-
-        # Retry only failed hosts if any
-        if [[ -n "$FAILED_HOSTS_STR" ]]; then
-            echo ""
-            echo "Retrying reset for failed hosts: $FAILED_HOSTS_STR"
-
-            RESET_RETRY_OUTPUT_FILE="$OUTPUT_DIR/reset_retry_output_iter_${i}_$$"
-
-            # Run retry and capture exit code (discard stdout)
-            run_board_reset "$FAILED_HOSTS_STR" "$RESET_RETRY_OUTPUT_FILE" "Retry: " > /dev/null
+        # Post-port-down reset only after a successful (or skipped) port-down.
+        if [[ $PORT_DOWN_EXIT_CODE -eq 0 && $MPI_EXIT_CODE -eq 0 ]]; then
+            echo "Running tt-smi -glx_reset (this may take a few minutes)..."
+            reset_cluster_hosts \
+                "$OUTPUT_DIR/reset_output_iter_${i}_$$" \
+                "$OUTPUT_DIR/reset_retry_output_iter_${i}_$$" \
+                ""
             MPI_EXIT_CODE=$?
         fi
 
-        # Only run validation if retry was successful (or no retry needed)
-        if [[ $MPI_EXIT_CODE -eq 0 ]]; then
+        # Only run validation if port-down and the following reset both succeeded.
+        if [[ $MPI_EXIT_CODE -ne 0 ]]; then
+            echo "Skipping validation because reset failed (exit code $MPI_EXIT_CODE)"
+        elif [[ $PORT_DOWN_EXIT_CODE -ne 0 ]]; then
+            echo "Skipping validation because port down failed (exit code $PORT_DOWN_EXIT_CODE)"
+        else
             sleep 5
 
             echo ""
@@ -513,8 +552,6 @@ for ((i=1; i<=ITERATIONS; i++)); do
             if [[ $VALIDATION_EXIT_CODE -ne 0 ]]; then
                 echo "ERROR: cluster validation FAILED (exit code $VALIDATION_EXIT_CODE)"
             fi
-        else
-            echo "Skipping validation due to mpirun failure"
         fi
 
         echo "Iteration $i completed at $(date)"
