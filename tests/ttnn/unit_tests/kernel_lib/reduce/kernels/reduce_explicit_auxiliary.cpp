@@ -14,7 +14,7 @@ constexpr uint32_t cb_auxiliary = 1;
 constexpr uint32_t num_tiles = get_compile_time_arg_val(0);
 constexpr uint32_t words_per_tile = 3;
 
-// Physical pattern of one auxiliary tile; values match TILE_TYPE in test_reduce_explicit_modes.py.
+// Physical pattern of one auxiliary tile; values match TILE_TYPE in reduce_explicit_modes.py.
 enum class TileType : uint32_t { FirstRow = 0, FirstColumn = 1, FirstRowPerFaceRow = 2, Zero = 3 };
 
 template <DataFormat data_format, uint32_t face_rows, uint32_t faces_per_row>
