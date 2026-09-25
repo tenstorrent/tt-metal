@@ -51,15 +51,20 @@ class TtEncoderBlockWeights:
 class TtEncoderBlock:
     """TTNN encoder block. Weights move host -> device once in ``__init__``."""
 
-    def __init__(self, device, weights: TtEncoderBlockWeights):
+    def __init__(
+        self, device, weights: TtEncoderBlockWeights, precision: program_configs.TtChronosPrecision | None = None
+    ):
         self.device = device
         self.weights = weights
-        self.time_core = TtMhaCore(device, weights.time.to_mha())
-        self.group_core = TtMhaCore(device, weights.group.to_mha(), enable_diagonal_v_path=True)
-        self._ff = self._move_ff_weights_to_device(device, weights)
+        self.precision = precision or program_configs.TtChronosPrecision()
+        self.time_core = TtMhaCore(device, weights.time.to_mha(), precision=self.precision)
+        self.group_core = TtMhaCore(
+            device, weights.group.to_mha(), enable_diagonal_v_path=True, precision=self.precision
+        )
+        self._ff = self._move_ff_weights_to_device(device, weights, self.precision.weight_dtype())
 
     @staticmethod
-    def _move_ff_weights_to_device(device, weights: TtEncoderBlockWeights):
+    def _move_ff_weights_to_device(device, weights: TtEncoderBlockWeights, weight_dtype):
         import ttnn
 
         def _weight(out_in: torch.Tensor):
@@ -67,7 +72,7 @@ class TtEncoderBlock:
             t = out_in.detach().to(torch.float32).t().contiguous()
             return ttnn.from_torch(
                 t,
-                dtype=ttnn.bfloat16,
+                dtype=weight_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -104,10 +109,17 @@ class TtEncoderBlock:
             x = self._residual_add(x, back)
 
         # Sublayer 3: feedforward (inline) + residual
+        ff_fidelity = self.precision.ff_math_fidelity()
         n = ttnn.rms_norm(x, epsilon=self.weights.ff_eps, weight=ff_rms)
-        h = program_configs.linear(n, ff_wi, activation="relu")
+        h = program_configs.linear(
+            n,
+            ff_wi,
+            activation="relu",
+            math_fidelity=ff_fidelity,
+            dtype=self.precision.ff_hidden_dtype(),
+        )
         ttnn.deallocate(n)
-        m = program_configs.linear(h, ff_wo)
+        m = program_configs.linear(h, ff_wo, math_fidelity=ff_fidelity, dtype=self.precision.sublayer_out_dtype())
         ttnn.deallocate(h)
         x = self._residual_add(x, m)
         return x

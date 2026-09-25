@@ -20,5 +20,9 @@ supports Chronos-2 trained quantile levels and all-valid contexts. The current
 v1 model does not support masked/padded context patches, so unsupported fev
 tasks fail instead of silently changing the benchmark.
 
+Pass `"precision":"performance"` in `-k` to run the reduced-precision encoder
+(bf8 weights and activations, LoFi FF matmuls; see `TtChronosPrecision` in
+`tt/program_configs.py`). The default keeps bf16 activations and weights.
+
 The first run includes kernel compilation. `inference_time_s` from a subsequent
 run with a warm kernel cache is the steady-state number.

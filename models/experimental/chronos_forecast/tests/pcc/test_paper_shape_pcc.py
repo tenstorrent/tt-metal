@@ -4,17 +4,22 @@
 """Device-resident forward at the paper context length vs the PyTorch reference.
 
 Exercises the tile-aligned (d_model=768, head_dim=64) fast paths that the dummy
-checkpoint cannot reach, starting with the folded-batch matmul program configs.
+checkpoint cannot reach: folded-batch matmuls, fused RoPE, SDPA configs, and the
+opt-in reduced-precision modes (gated on quantile accuracy against held-out data).
 """
 
 from __future__ import annotations
+
+import math
 
 import pytest
 import torch
 
 from models.experimental.chronos_forecast.tests.perf.test_paper_forward import (
+    _QUANTILES,
     CONTEXT,
     NUM_OUTPUT_PATCHES,
+    PREDICTION_LENGTH,
     _load_reference,
 )
 
@@ -22,6 +27,25 @@ from models.experimental.chronos_forecast.tests.perf.test_paper_forward import (
 def _normalized(preds: torch.Tensor, loc_scale) -> torch.Tensor:
     loc, scale = loc_scale
     return torch.asinh((preds.float() - loc[:, None, :]) / scale[:, None, :])
+
+
+def _seasonal_series(batch: int, length: int) -> torch.Tensor:
+    """Forecastable series: level + trend + one seasonality + noise."""
+    t = torch.arange(length, dtype=torch.float32)
+    period = torch.randint(12, 200, (batch, 1)).float()
+    phase = 2 * math.pi * torch.rand(batch, 1)
+    amplitude = 1.0 + 3.0 * torch.rand(batch, 1)
+    trend = 1e-3 * torch.randn(batch, 1) * t
+    level = 5.0 * torch.randn(batch, 1)
+    return level + trend + amplitude * torch.sin(2 * math.pi * t / period + phase) + 0.3 * torch.randn(batch, length)
+
+
+def _wql(preds: torch.Tensor, target: torch.Tensor) -> float:
+    """Weighted quantile loss (mean over quantiles), as in fev-bench / the Chronos papers."""
+    q = torch.tensor(_QUANTILES, dtype=torch.float32)[None, :, None]
+    err = target[:, None, :] - preds.float()
+    pinball = torch.maximum(q * err, (q - 1) * err)
+    return (2 * pinball.sum(dim=(0, 2)) / target.abs().sum()).mean().item()
 
 
 def _run_device(model, context, group_ids):
@@ -82,3 +106,63 @@ def test_device_resident_paper_context_pcc(mesh_device, batch, group_size):
         f"\n[PCC] {weight_source} batch={batch} group_size={group_size} "
         f"pcc_norm={pcc_n} pcc={pcc} mae_norm={mae_n:.5f}"
     )
+
+
+# Relative WQL increase allowed over the PyTorch reference on the same held-out window.
+_MAX_REL_WQL_INCREASE = 0.01
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize(
+    "precision_name, group_size",
+    [
+        pytest.param("default", 1, id="default"),
+        pytest.param("default", 4, id="default_groups_of_4"),
+        pytest.param("bf8_attention", 1, id="bf8_attention"),
+        pytest.param("bf8_weights", 1, id="bf8_weights"),
+        pytest.param("bf8_ff_hidden", 1, id="bf8_ff_hidden"),
+        pytest.param("bf8_sublayer_out", 1, id="bf8_sublayer_out"),
+        pytest.param("lofi_ff", 1, id="lofi_ff"),
+        pytest.param("performance", 1, id="performance"),
+        pytest.param("performance", 4, id="performance_groups_of_4"),
+    ],
+)
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+def test_precision_quantile_accuracy(mesh_device, precision_name, group_size):
+    pytest.importorskip("ttnn")
+    from tests.ttnn.utils_for_testing import assert_with_pcc
+
+    from models.experimental.chronos_forecast.tt.model import TtChronos
+    from models.experimental.chronos_forecast.tt.program_configs import TtChronosPrecision
+
+    if mesh_device.get_num_devices() != 1:
+        pytest.skip("single-chip bring-up only (one chip)")
+
+    if precision_name == "default":
+        precision = TtChronosPrecision()
+    elif precision_name == "performance":
+        precision = TtChronosPrecision.performance()
+    else:
+        precision = TtChronosPrecision(**{precision_name: True})
+    reference, weight_source = _load_reference()
+    if weight_source != "checkpoint":
+        pytest.skip("quantile accuracy is only meaningful with the real checkpoint")
+    model = TtChronos.from_torch_model(mesh_device, reference, precision)
+
+    batch = 256
+    torch.manual_seed(0)
+    series = _seasonal_series(batch, CONTEXT + PREDICTION_LENGTH)
+    context, target = series[:, :CONTEXT], series[:, CONTEXT:]
+    group_ids = torch.arange(batch, dtype=torch.long) // group_size
+    with torch.no_grad():
+        expected = reference(context=context, group_ids=group_ids, num_output_patches=NUM_OUTPUT_PATCHES).quantile_preds
+
+    got, loc_scale = _run_device(model, context, group_ids)
+    _, pcc_n = assert_with_pcc(_normalized(expected, loc_scale), _normalized(got, loc_scale), pcc=0.99)
+    wql_ref, wql_tt = _wql(expected, target), _wql(got, target)
+    rel = (wql_tt - wql_ref) / wql_ref
+    print(
+        f"\n[WQL] precision={precision_name} group_size={group_size} "
+        f"wql_ref={wql_ref:.5f} wql_tt={wql_tt:.5f} rel={rel:+.4%} pcc_norm={pcc_n:.6f}"
+    )
+    assert rel <= _MAX_REL_WQL_INCREASE, f"WQL {wql_tt:.5f} is {rel:.2%} above the reference {wql_ref:.5f}"

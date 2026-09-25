@@ -16,6 +16,7 @@ from chronos.base import BaseChronosPipeline
 from chronos.chronos2.preprocess import PreparedInput, from_data_frame
 from models.experimental.chronos_forecast.reference.chronos2.model import Chronos2Model as ReferenceModel
 from models.experimental.chronos_forecast.tt.model import TtChronos
+from models.experimental.chronos_forecast.tt.program_configs import TtChronosPrecision
 
 
 class Chronos2TTModel(fev.ForecastingModel):
@@ -29,8 +30,11 @@ class Chronos2TTModel(fev.ForecastingModel):
         batch_size: int = 100,
         cross_learning: bool = True,
         as_univariate: bool = False,
+        precision: str = "default",
     ):
         super().__init__()
+        if precision not in ("default", "performance"):
+            raise ValueError(f"precision must be 'default' or 'performance', got {precision!r}")
         self.model_path = str(Path(model_path).resolve())
         self.batch_size = batch_size
         self.cross_learning = cross_learning
@@ -40,7 +44,8 @@ class Chronos2TTModel(fev.ForecastingModel):
         reference = ReferenceModel.from_pretrained(self.model_path).eval()
         self._quantile_levels = list(reference.chronos_config.quantiles)
         self._output_patch_size = int(reference.chronos_config.output_patch_size)
-        self._model = TtChronos.from_torch_model(self._mesh_device, reference)
+        tt_precision = TtChronosPrecision.performance() if precision == "performance" else TtChronosPrecision()
+        self._model = TtChronos.from_torch_model(self._mesh_device, reference, tt_precision)
         self._closed = False
         atexit.register(self.close)
 

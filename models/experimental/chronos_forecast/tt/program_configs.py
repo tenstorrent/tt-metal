@@ -12,12 +12,53 @@ the whole compute grid.
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 
 TILE = 32
 # in0 + in1 double-buffered, plus the output block, in bf16 tiles (2 KiB each).
 _L1_TILE_BUDGET = 560
 _MAX_IN0_BLOCK_W = 12
 _MAX_OUT_BLOCK_H = 16
+
+
+@dataclass(frozen=True)
+class TtChronosPrecision:
+    """Opt-in reduced precision for the encoder. The default is bf16 with HiFi2 matmuls."""
+
+    bf8_weights: bool = False  # encoder attention + FF weights stored as bfloat8_b
+    bf8_attention: bool = False  # Q/K/V (RoPE and SDPA inputs) as bfloat8_b
+    bf8_ff_hidden: bool = False  # relu(x @ Wi) stored as bfloat8_b
+    bf8_sublayer_out: bool = False  # attention / FF outputs added to the (bf16) residual stream
+    lofi_ff: bool = False  # FF-up/down matmuls at LoFi
+
+    @classmethod
+    def performance(cls) -> "TtChronosPrecision":
+        return cls(bf8_weights=True, bf8_attention=True, bf8_ff_hidden=True, bf8_sublayer_out=True, lofi_ff=True)
+
+    def weight_dtype(self):
+        import ttnn
+
+        return ttnn.bfloat8_b if self.bf8_weights else ttnn.bfloat16
+
+    def attention_dtype(self):
+        import ttnn
+
+        return ttnn.bfloat8_b if self.bf8_attention else None
+
+    def ff_hidden_dtype(self):
+        import ttnn
+
+        return ttnn.bfloat8_b if self.bf8_ff_hidden else None
+
+    def sublayer_out_dtype(self):
+        import ttnn
+
+        return ttnn.bfloat8_b if self.bf8_sublayer_out else ttnn.bfloat16
+
+    def ff_math_fidelity(self):
+        import ttnn
+
+        return ttnn.MathFidelity.LoFi if self.lofi_ff else None
 
 
 def compute_kernel_config(math_fidelity=None, *, fp32_dest_acc_en: bool = False, packer_l1_acc: bool = True):

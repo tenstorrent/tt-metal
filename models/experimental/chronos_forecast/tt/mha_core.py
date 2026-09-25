@@ -58,10 +58,19 @@ def maybe_upload_mask(device, mask_host: torch.Tensor, seq_len: int):
 class TtMhaCore:
     """TTNN MHA core. Weights move host -> device once in ``__init__``."""
 
-    def __init__(self, device, weights: TtMhaWeights, *, enable_diagonal_v_path: bool = False):
+    def __init__(
+        self,
+        device,
+        weights: TtMhaWeights,
+        *,
+        enable_diagonal_v_path: bool = False,
+        precision: program_configs.TtChronosPrecision | None = None,
+    ):
         self.device = device
         self.weights = weights
-        self._tt = self._move_weights_to_device(device, weights)
+        self.precision = precision or program_configs.TtChronosPrecision()
+        weight_dtype = self.precision.weight_dtype()
+        self._tt = self._move_weights_to_device(device, weights, weight_dtype)
         self._diagonal_vo_weight = None
         if enable_diagonal_v_path:
             import ttnn
@@ -71,14 +80,14 @@ class TtMhaCore:
             o_weight = weights.wo.detach().to(torch.float32).t()
             self._diagonal_vo_weight = ttnn.from_torch(
                 (v_weight @ o_weight).contiguous(),
-                dtype=ttnn.bfloat16,
+                dtype=weight_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
     @staticmethod
-    def _move_weights_to_device(device, weights: TtMhaWeights):
+    def _move_weights_to_device(device, weights: TtMhaWeights, weight_dtype):
         import ttnn
 
         def _weight(out_in: torch.Tensor):
@@ -86,7 +95,7 @@ class TtMhaCore:
             t = out_in.detach().to(torch.float32).t().contiguous()
             return ttnn.from_torch(
                 t,
-                dtype=ttnn.bfloat16,
+                dtype=weight_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -144,7 +153,7 @@ class TtMhaCore:
         # 1. RMSNorm (T5-style: no mean subtraction, no bias).
         x_norm = ttnn.rms_norm(x, epsilon=self.weights.eps, weight=rms_w)
         # 2. Fused QKV + head split. transpose_key=False: SDPA needs K as [B,H,S,Dh].
-        xqkv = program_configs.linear(x_norm, wqkv)
+        xqkv = program_configs.linear(x_norm, wqkv, dtype=self.precision.attention_dtype())
         ttnn.deallocate(x_norm)
         if head_dim % 32 == 0:
             q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
@@ -222,7 +231,7 @@ class TtMhaCore:
             merged = ttnn.reshape(ctx_t, (batch, seq, num_heads * head_dim))
             ttnn.deallocate(ctx_t)
         ttnn.deallocate(ctx)
-        out = program_configs.linear(merged, wo)
+        out = program_configs.linear(merged, wo, dtype=self.precision.sublayer_out_dtype())
         ttnn.deallocate(merged)
         return out
 
@@ -240,7 +249,7 @@ class TtMhaCore:
             raise RuntimeError("diagonal group path was not enabled for this MHA core")
         _wqkv, _wo, rms_w = self._tt
         x_norm = ttnn.rms_norm(x, epsilon=self.weights.eps, weight=rms_w)
-        out = program_configs.linear(x_norm, self._diagonal_vo_weight)
+        out = program_configs.linear(x_norm, self._diagonal_vo_weight, dtype=self.precision.sublayer_out_dtype())
         ttnn.deallocate(x_norm)
         return out
 

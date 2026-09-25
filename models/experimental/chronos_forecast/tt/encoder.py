@@ -16,6 +16,7 @@ import torch
 
 from models.experimental.chronos_forecast.tt.encoder_block import TtEncoderBlock, TtEncoderBlockWeights
 from models.experimental.chronos_forecast.tt.mha_core import maybe_upload_mask
+from models.experimental.chronos_forecast.tt.program_configs import TtChronosPrecision
 
 
 @dataclass(frozen=True)
@@ -40,10 +41,10 @@ class TtEncoderWeights:
 class TtEncoder:
     """TTNN encoder. Weights move host -> device once in ``__init__``."""
 
-    def __init__(self, device, weights: TtEncoderWeights):
+    def __init__(self, device, weights: TtEncoderWeights, precision: TtChronosPrecision | None = None):
         self.device = device
         self.weights = weights
-        self.blocks = [TtEncoderBlock(device, w) for w in weights.blocks]
+        self.blocks = [TtEncoderBlock(device, w, precision) for w in weights.blocks]
         self._final_norm = self._move_final_norm_to_device(device, weights)
 
     @staticmethod

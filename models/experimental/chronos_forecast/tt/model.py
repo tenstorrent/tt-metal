@@ -26,6 +26,7 @@ from models.experimental.chronos_forecast.tt.model_preprocessing import (
     prepare_patched_context,
     prepare_patched_future,
 )
+from models.experimental.chronos_forecast.tt.program_configs import TtChronosPrecision
 from models.experimental.chronos_forecast.tt.residual_block import (
     TtResidualBlock,
     TtResidualBlockWeights,
@@ -124,19 +125,26 @@ def tt_chronos_config_from_torch_model(model) -> TtChronosConfig:
 class TtChronos:
     """Device Chronos-2 model. Weights move host -> device once in ``__init__``."""
 
-    def __init__(self, device, weights: TtChronosWeights, config: TtChronosConfig):
+    def __init__(
+        self,
+        device,
+        weights: TtChronosWeights,
+        config: TtChronosConfig,
+        precision: TtChronosPrecision | None = None,
+    ):
         self.device = device
         self.weights = weights
         self.config = config
+        self.precision = precision or TtChronosPrecision()
         self._input_embed = TtResidualBlock(device, weights.input_embed)
-        self._encoder = TtEncoder(device, weights.encoder)
+        self._encoder = TtEncoder(device, weights.encoder, self.precision)
         self._output_embed = TtResidualBlock(device, weights.output_embed)
 
     @classmethod
-    def from_torch_model(cls, device, model) -> "TtChronos":
+    def from_torch_model(cls, device, model, precision: TtChronosPrecision | None = None) -> "TtChronos":
         """Build from a reference ``Chronos2Model`` (weights + geometry)."""
         weights = TtChronosWeights.from_torch_model(model)
-        return cls(device, weights, tt_chronos_config_from_torch_model(model))
+        return cls(device, weights, tt_chronos_config_from_torch_model(model), precision)
 
     def prepare_inputs(
         self,
