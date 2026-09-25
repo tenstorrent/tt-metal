@@ -199,15 +199,12 @@
 #
 # The 2048-position ring allocates a KV shape no other leg caches, so the first
 # run on a fresh cache needs mlperf-write-access.
-#
-# No chunked-prefill-budget: prompts that share scheduler chunks give wrong
-# answers on every Gemma4 class, the ordinary one included.
-# https://github.com/tenstorrent/tt-metal/issues/57873
 - name: "Gemma4-31B dFlash contract tp=8"
   model: google/gemma-4-31B-it
   coherence-test: true
   server-timeout: 25
   benchmark-timeout: 5
+  chunked-prefill-test-timeout: 10
   mesh-device: P150x8
   arch: arch-blackhole
   tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
@@ -217,6 +214,10 @@
   # answers any other temperature with HTTP 400, and `vllm bench serve` no
   # longer sends greedy unless asked.
   additional-benchmark-args: "--max-concurrency 1 --num-prompts 8 --temperature 0"
+  # The split-prefill tests make the drafter bootstrap from taps captured over
+  # several prefill chunks, and after prefills that shared a step. The 100-token
+  # benchmark prompts at concurrency 1 are never split.
+  chunked-prefill-budget: 2048
   # GEMMA4_CONTRACT_ASYNC=1: the class declares async decode only with it.
   # GEMMA4_SPEC_RING_HEADROOM_BLOCKS=16: 262144 turns bounded sliding KV on,
   #   and an exact 1024-position ring has no room for the K + 1 verify rows, so
@@ -227,7 +228,7 @@
   multimodal: false
   skus:
     bh_loudbox:
-      timeout: 45
+      timeout: 55
       tier: 2
   owner_id: U09LTAPEU2U # Viktor Pus
   co-owner-2-id: U088413NP0Q # Ashai Reddy
