@@ -16,7 +16,6 @@ Tests pin the manifest's hash in their frozen block; a regenerated or edited gol
 
 from __future__ import annotations
 
-import bz2
 import hashlib
 import json
 import os
@@ -27,7 +26,7 @@ import torch
 from safetensors.torch import load_file
 
 from models.demos.common.bringup.core.freeze import sha256_file
-from models.demos.common.bringup.core.spec import CODE_ROOT, Spec
+from models.demos.common.bringup.core.spec import Spec
 
 TOPK = 32
 LOGITS_TAIL = 32
@@ -131,27 +130,10 @@ def tokenizer(spec: Spec):
 
 
 def text_tokens(spec: Spec, n: int, tok=None) -> torch.Tensor:
-    """The first n tokens of the spec's long text (default: A Tale of Two Cities, shipped in the repo), BOS-prefixed.
+    """The first n tokens of the model's canonical prompt (reference/prompt.py). Every step uses this."""
+    from models.demos.common.bringup.reference import prompt
 
-    ``text.chat_template: true`` puts the text inside one user turn of the tokenizer's chat template (which then
-    supplies BOS), for instruction-tuned checkpoints that degenerate on raw text. The prompt is truncated to n tokens
-    inside the turn, as a long user message is in serving."""
-    src = spec.get("text.source", "models/tt_transformers/tests/tale-of-two-cities.txt.bz2")
-    path = Path(src) if Path(src).is_absolute() else CODE_ROOT / src
-    opener = bz2.open if path.suffix == ".bz2" else open
-    with opener(path, "rt", encoding="utf-8") as f:
-        text = f.read()
-    tok = tok or tokenizer(spec)
-    if spec.get("text.chat_template"):
-        text = tok.apply_chat_template([{"role": "user", "content": text}], tokenize=False)
-        ids = tok(text, add_special_tokens=False)["input_ids"]
-    else:
-        ids = tok(text, add_special_tokens=False)["input_ids"]
-    if not spec.get("text.chat_template") and spec.get("text.bos", True) and tok.bos_token_id is not None:
-        ids = [tok.bos_token_id] + ids
-    if len(ids) < n:
-        raise ValueError(f"text has {len(ids)} tokens < {n}")
-    return torch.tensor(ids[:n], dtype=torch.int64)
+    return prompt.tokens(spec, n, tok)
 
 
 def store_dtype(t: torch.Tensor, keep_fp32: tuple[str, ...], name: str) -> torch.Tensor:

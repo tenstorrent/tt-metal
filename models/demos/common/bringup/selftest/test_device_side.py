@@ -10,7 +10,7 @@ import pytest
 
 from models.demos.common.bringup.core.runs import IMPL_ENV
 from models.demos.common.bringup.core.spec import Spec
-from models.demos.common.bringup.reference import generate_golden
+from models.demos.common.bringup.reference import generate_golden, prompt
 from models.demos.common.bringup.selftest import fixture_model
 from models.demos.common.bringup.selftest.conftest import got
 from models.demos.common.bringup.testing.component import run_component_test, run_swap_test
@@ -25,6 +25,7 @@ def gspec(fx, monkeypatch):
     def make(**over):
         p = fx(**over)
         monkeypatch.setenv("BRINGUP_SPEC", p)
+        prompt.build(Spec.load(p))
         generate_golden.main(["--spec", p, "--rung", "s256"])
         generate_golden.main(["--spec", p, "--rung", "s512"])
         return Spec.load(p)
