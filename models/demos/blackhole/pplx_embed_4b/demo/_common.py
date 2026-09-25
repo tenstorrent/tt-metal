@@ -480,6 +480,10 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
         # (9 phase set-ups per unit instead of 45), bit-identical to v1. Heads op 41.7 -> 28.7 us in-model; e2e
         # 16.474 -> 16.135 ms (3 alternating A/B pairs, chip 0). Opt out: QWEN_FUSED_COMPUTE_V3=0.
         os.environ.setdefault("QWEN_FUSED_COMPUTE_V3", "1")
+        # Both norms keep their 10x8 block-shard output and QKV / FF1 / FF3 read it as a block-sharded in0 (in0_block_w
+        # 8, the shard width), so the ShardedToInterleaved after each norm (72 per forward) goes away. Standalone
+        # QKV 51.7 -> 49.6 us, FF1+FF3 152.7 -> 148.1 us (with the S2I). Opt out: QWEN_BS1_NORM_SHARDED_OUT=0.
+        os.environ.setdefault("QWEN_BS1_NORM_SHARDED_OUT", "1")
     if batch_size == 1 and os.getenv("QWEN_SDPA_BS1_Q256", "1") == "1":
         os.environ.setdefault("QWEN_SDPA_Q_CHUNK", "256")
         # bs1 GQA packing (SDPA pack_gqa_heads): each KV head's K/V streams once down one 8-core chain instead

@@ -104,10 +104,60 @@ def _forward_resid_sharded(layer, orig_forward, model_args, has_next_layer, x, a
         return orig_add(a, b, **a_kwargs)
 
     ttnn.add = add_wrapper
+    if os.getenv("QWEN_BS1_NORM_SHARDED_OUT", "0") != "1":
+        try:
+            return orig_forward(x, *args, **kwargs)
+        finally:
+            ttnn.add = orig_add
+    # QWEN_BS1_NORM_SHARDED_OUT=1: both norms keep their 10x8 block-shard output and QKV / FF1 / FF3 read it as a
+    # block-sharded in0 (the 2D factory takes its in0 senders from the shard grid, so 10 shard columns feed the
+    # 12-column matmul), dropping the S2I after each norm.
+    orig_linear = ttnn.linear
+    norms = [n for n in (getattr(layer, "attention_norm", None), getattr(layer, "ff_norm", None)) if n is not None]
+
+    def linear_wrapper(a, b, *l_args, **l_kwargs):
+        pc = l_kwargs.get("program_config")
+        if isinstance(pc, ttnn.MatmulMultiCoreReuseMultiCastProgramConfig) and a.is_sharded():
+            l_kwargs["program_config"] = _block_sharded_in0_config(pc, a)
+        return orig_linear(a, b, *l_args, **l_kwargs)
+
+    for n in norms:
+        n.keep_sharded_out = True
+    ttnn.linear = linear_wrapper
     try:
         return orig_forward(x, *args, **kwargs)
     finally:
         ttnn.add = orig_add
+        ttnn.linear = orig_linear
+        for n in norms:
+            n.keep_sharded_out = False
+
+
+_SHARDED_IN0_CFGS = {}
+
+
+def _block_sharded_in0_config(pc, a):
+    """The legacy 2D config with a block-sharded in0: in0_block_w must divide the shard width (the model's 10
+    does not divide the norm's 8-tile shard: largest divisor <= 8) and the factory requires fuse_batch."""
+    shard_w = a.memory_config().shard_spec.shape[1] // 32
+    key = (id(pc), shard_w)
+    if key not in _SHARDED_IN0_CFGS:
+        bw = next(d for d in range(min(pc.in0_block_w, shard_w, 8), 0, -1) if shard_w % d == 0)
+        _SHARDED_IN0_CFGS[key] = (
+            pc,
+            ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=pc.compute_with_storage_grid_size,
+                in0_block_w=bw,
+                out_subblock_h=pc.out_subblock_h,
+                out_subblock_w=pc.out_subblock_w,
+                per_core_M=pc.per_core_M,
+                per_core_N=pc.per_core_N,
+                transpose_mcast=pc.transpose_mcast,
+                fused_activation=pc.fused_activation,
+                fuse_batch=True,
+            ),
+        )
+    return _SHARDED_IN0_CFGS[key][1]
 
 
 def _wrap_layer(layer, ff_consts, next_attn_consts, stash, is_first=False, verify=(False, 0, None), model_args=None):

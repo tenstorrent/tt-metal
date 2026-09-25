@@ -869,7 +869,13 @@ measured neutral alone. Fixed to cover every layer (I2S 36 → 1, bs1 −0.07 ms
 Standalone (chip 3, L1 bfp8 [512×2560]): add → I2S → sharded LN → S2I 28.9 µs as one traced chain; add with
 block-sharded output 13.2 µs (vs 10.5 + 8.7), chain 25.3 µs; add with one sharded and one interleaved input
 11.3 µs, bit-identical. The sharded LN cannot write an interleaved output (`TT_FATAL` in its validation), so the
-S2I before each matmul stays (the 12×8 matmul grid cannot take the 10×8 shard either). Both landed as bs1
+S2I before each matmul stays (the 12×8 matmul grid cannot take the 10×8 shard either).
+*Correction (09-25):* it can. With a block-sharded in0 the 2D multicast factory sizes its in0 senders from the
+shard grid's width, not the compute grid's (`matmul_multicore_reuse_mcast_2d_program_factory.cpp`), so the 10 shard
+columns multicast their K slices across all 12 compute columns; the validation only needs shard height = per_core_M,
+in0_block_w | shard width (8, not the model's 10), ROW_MAJOR and fuse_batch. Standalone QKV 51.7 → 49.6 µs and
+FF1+FF3 152.7 → 148.1 µs against S2I + interleaved (`perf_tools/bench_bs1_norm_shard_mm.py`); landed as
+`QWEN_BS1_NORM_SHARDED_OUT=1` (POSITIVE_RESULTS). The claim above was never tested. Both landed as bs1
 defaults; the neutral-alone item is kept because it is free with the concat change and removes 72 ops.
 
 ## 51. bs1 fused heads op (head split + Q/K RMSNorm + RoPE): what bounds it, and what the fixes ran into (2026-09-24)
