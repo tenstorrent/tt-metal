@@ -55,6 +55,9 @@ _SEQ_LEN_PER_CHIP = 640
 _CAPACITY_FACTOR = 8
 _HIDDEN_DIM = 2048
 _PERF_RUNS = 3
+# `-hot` cases: this share of each chip's tokens picks, as its first expert, the hot expert of the chip
+# token_index % ring points at -- one per chip, in its LAST local slot, so it is walked last.
+_HOT_SHARE = 0.4
 # Measured programs per configuration in the speedup test; the median is reported.
 _SPEEDUP_ITERS = 5
 # Kernel directories that tell the three programs apart in the real-time profiler's records.
@@ -77,7 +80,7 @@ def _mesh_params():
     params = []
     for mesh, fabric_cfg in _MESHES.items():
         topo = "ring" if fabric_cfg == ttnn.FabricConfig.FABRIC_2D_TORUS_Y else f"mesh-{mesh[0]}x{mesh[1]}"
-        for threshold_id in ("t0", "tmedian"):
+        for threshold_id in ("t0", "tmedian", "tmedian-hot"):
             params.append(
                 pytest.param(
                     mesh,
@@ -94,6 +97,21 @@ def _int_tensor(torch_tensor, mesh_device, mesh_mapper, dtype=ttnn.int32):
     return ttnn.from_torch(
         torch_tensor, mesh_mapper=mesh_mapper, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=dtype
     )
+
+
+def _add_hot_experts(indices, idx_table, experts_per_chip):
+    """Route _HOT_SHARE of every origin chip's tokens to one expert per destination chip, its last local slot,
+    in place. The token's other picks stay distinct from it."""
+    chips, seq, topk = indices.shape
+    hot = idx_table[0, :, experts_per_chip - 1]
+    for origin in range(chips):
+        for t in range(int(seq * _HOT_SHARE)):
+            expert = int(hot[t % chips])
+            row = indices[origin, t]
+            clash = (row == expert).nonzero()
+            if len(clash):
+                row[clash[0, 0]] = row[0]
+            row[0] = expert
 
 
 def _build_case(mesh_device, device_params, threshold_id):
@@ -134,6 +152,13 @@ def _build_case(mesh_device, device_params, threshold_id):
         max_dispatched_tokens_per_expert,
         num_dispatch_groups=num_dispatch_groups,
     )
+    idx_table = ExpertMapping.create_global_expert_idx_table(
+        experts_per_chip=experts_per_chip,
+        dispatch_group_size=dispatch_group_size,
+        num_dispatch_groups=num_dispatch_groups,
+    )
+    if threshold_id.endswith("-hot"):
+        _add_hot_experts(indices, idx_table, experts_per_chip)
     expert_dispatch_table = ExpertMapping.create_dispatch_table(
         num_routed_experts=num_routed_experts,
         dispatch_group_size=dispatch_group_size,
@@ -163,6 +188,9 @@ def _build_case(mesh_device, device_params, threshold_id):
     )(x, weights, indices, expert_offsets)
 
     counts = expert_token_counts.flatten()
+    if threshold_id.endswith("-hot"):
+        hot = idx_table[0, :, experts_per_chip - 1].tolist()
+        logger.info(f"hot experts (last local slot per chip): {hot}, counts {[int(counts[e]) for e in hot]}")
     if threshold_id == "t0":
         threshold = 0
     else:
@@ -192,11 +220,6 @@ def _build_case(mesh_device, device_params, threshold_id):
         mesh_device,
         ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(None, 0)),
         dtype=ttnn.uint32,
-    )
-    idx_table = ExpertMapping.create_global_expert_idx_table(
-        experts_per_chip=experts_per_chip,
-        dispatch_group_size=dispatch_group_size,
-        num_dispatch_groups=num_dispatch_groups,
     )
     tt_idx_slice = _int_tensor(idx_table, mesh_device, ep_mapper, dtype=ttnn.uint32)
     tt_idx_slice = ttnn.squeeze(ttnn.squeeze(tt_idx_slice, 0), 0)
