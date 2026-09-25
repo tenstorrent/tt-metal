@@ -337,6 +337,12 @@ void kernel_main() {
         uint32_t prev_nq = static_cast<uint32_t>(-1);
         uint32_t per_head_q_iter = 0;
         uint32_t mask_batch_offset = 0;
+#ifdef REUSE_KV
+        // K/V reuse: a Q chunk with the same (batch, K head) as the previous one on this core finds K and V still
+        // at the front of their CBs (compute keeps them), so they are not read or pushed again. Host-gated to
+        // non-causal, one K chunk, no mask, no chains.
+        uint32_t reuse_prev_nb = static_cast<uint32_t>(-1), reuse_prev_k_head = static_cast<uint32_t>(-1);
+#endif
         for (uint32_t global_q_iter = 0; global_q_iter < global_q_count; ++global_q_iter) {
             const auto decoded =
                 decompose_global_q_index(global_q_start + global_q_iter, q_num_chunks, NQH, use_zigzag_balancing);
@@ -466,6 +472,13 @@ void kernel_main() {
 
             const uint32_t k_head = nq / q_heads_per_k;
             const uint32_t v_head = nq / q_heads_per_v;
+#ifdef REUSE_KV
+            const bool reuse_kv_unit = nb == reuse_prev_nb && k_head == reuse_prev_k_head;
+            reuse_prev_nb = nb;
+            reuse_prev_k_head = k_head;
+#else
+            constexpr bool reuse_kv_unit = false;
+#endif
 
             // Chain forwarding conditions are loop-invariant — compute once
             bool should_forward = false;
@@ -487,7 +500,9 @@ void kernel_main() {
                 // K: either read locally (injector or not participant) or receive from previous core
                 uint32_t cb_k_start_address = 0;
 
-                if (should_receive) {
+                if (reuse_kv_unit) {
+                    // K still at the front of cb_k (REUSE_KV)
+                } else if (should_receive) {
                     // Receive forwarded K chunk from previous core
                     cb_k.reserve_back(k_chunk_tiles);
                     cb_k_start_address = cb_k.get_write_ptr();
@@ -679,7 +694,9 @@ void kernel_main() {
                 // V: either read locally (injector or not participant) or receive from previous core
                 uint32_t cb_v_start_address = 0;
 
-                if (should_receive) {
+                if (reuse_kv_unit) {
+                    // V still at the front of cb_v (REUSE_KV)
+                } else if (should_receive) {
                     // Receive forwarded V chunk from previous core
                     cb_v.reserve_back(v_chunk_tiles);
                     cb_v_start_address = cb_v.get_write_ptr();

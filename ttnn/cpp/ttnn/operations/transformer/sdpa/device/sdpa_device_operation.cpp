@@ -21,6 +21,14 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
             !attrs.output_mem_config.is_sharded(),
             "SDPA output_heads_concat writes the [B, 1, Sq, NQH*vDH] layout and needs an interleaved output");
     }
+    if (attrs.reuse_kv) {
+        TT_FATAL(
+            !attrs.is_causal && !tensors.attn_mask.has_value() && !attrs.chunk_start_idx.has_value() &&
+                !attrs.chunk_start_idx_tensor.has_value() && !tensors.page_table.has_value() &&
+                !attrs.sliding_window_size.has_value() && !tensors.attention_sink.has_value() && !attrs.is_windowed &&
+                !attrs.use_mla,
+            "SDPA reuse_kv supports non-causal, unmasked, unchunked, non-windowed, non-MLA attention only");
+    }
     if (attrs.pack_gqa_heads) {
         const auto& q_shape = tensors.q.logical_shape();
         const auto& k_shape = tensors.k.logical_shape();
@@ -679,7 +687,8 @@ Tensor sdpa(
     const std::optional<Tensor>& windowed_q_token_offset_tensor,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
     bool output_heads_concat,
-    bool pack_gqa_heads) {
+    bool pack_gqa_heads,
+    bool reuse_kv) {
     using OperationType = ttnn::prim::SDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -699,6 +708,7 @@ Tensor sdpa(
                 paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
             .output_heads_concat = output_heads_concat,
             .pack_gqa_heads = pack_gqa_heads,
+            .reuse_kv = reuse_kv,
         },
         OperationType::tensor_args_t{
             .q = input_tensor_q,
