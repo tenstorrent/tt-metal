@@ -59,3 +59,26 @@ Drive this ledger with
   `pinned_hash()` falls back to the manifest file's sha256).
 - Tests run the generic scripts on `selftest/fixture_model.py`: a synthetic 3-layer, 1-head fixture with an
   independent one-shot "HF" twin and a byte-level tokenizer. It is a unit-test fixture, not a model bring-up.
+
+## F4 (2026-09-25): device-side test helpers
+- `testing/harness.py`: `BRINGUP_IMPL` = device | reference | stub picks the module under test; `mesh_parametrize`
+  uses the spec's mesh and `box.device_params` (or the `device_params` hook), and opens no device under reference or
+  stub, so freezing a test does not hold the box. Comparisons: `pcc`, `match` (integer outputs), `topk_overlap`.
+- Device hooks a model provides: `device_component(mesh, spec, layer, step)` -> fn(ctx, *host inputs), with the golden
+  state prefix in `ctx.extra`; `device_model(mesh, spec, layers)` with embed / from_host / layer / final_norm / to_host
+  / logits / free / sync and a state with load_prefix / to_torch.
+- `testing/component.py`: the component test (one step, golden in, golden out) and the swap test (the block of the
+  representative layer with the listed steps on device, the rest on the CPU reference; per-boundary trail recorded).
+  Both read the component rung's last dumped chunk, so stateful steps always see a non-empty prefix.
+- `testing/ladder.py`: stacks device layers over a rung. Non-contiguous subsets restart each contiguous run from the
+  golden block input. Final hidden and top-k only when the stack ends at the model's last layer.
+- `testing/contract.py`: engine-path contract test. Adds the two checks the ERNIE run missed: the engine's uint32
+  [sp, 1, chunk/sp] input with a padded tail (`contract.pad_token`, default 0xFFFFFFFF), and ack timing, checked
+  model-agnostically: the blocks a layer ack covers are read at ack time and must be byte-identical after a full sync.
+  Note: `prefill_producer` itself pads with real pool tokens; 0xFFFFFFFF follows the tt-d-gen audit of the Blaze engine.
+- `testing/profiler.py` + `profile.py`: the Tracy-free section profiler from ERNIE, now generic (`signpost("L{i}.phase.op")`),
+  and a warm profile of the last chunk of the profile rung, written to `results/<task>_profile.json`.
+- `testing/templates.py`: component and swap test templates rendered into `<model_dir>/tests/bringup/`; never overwrites.
+- Generic pytest entry points in `tests/` (ladder, contract, profile) take the spec from `BRINGUP_SPEC`.
+- Selftests use fake device hooks in `selftest/fixture_model.py` (reference + deterministic noise). Real device runs
+  start with the first model.
