@@ -2944,13 +2944,13 @@ fused::OperationArguments fused_attributes(
     return fused::OperationArguments{
         .experts_per_chip = op.experts_per_chip,
         .m_tiles = op.m_tiles,
-        // Pass A owns the low band of token counts, on the whole rectangle.
+        // The fused pass owns the low band of token counts, on the whole rectangle.
         .grid_x = kGridX,
         .grid_y = kGridY,
         .origin_y = kOriginY,
         // x is the shared dispatched buffer, so each expert's rows start at its region offset.
         .read_x_at_offset = true,
-        // Pass A owns the low band: every expert at or below the threshold.
+        // The fused pass owns the low band: every expert at or below the threshold.
         .min_active_tokens = 0,
         .max_active_tokens = op.hybrid_token_threshold,
         .activation = op.activation,
@@ -2978,7 +2978,7 @@ fused::TensorArguments fused_inputs(const HybridRoutedExpertFfnInputs& t) {
 }
 
 unified::UnifiedRoutedExpertFfnParams unified_attributes(const HybridRoutedExpertFfnParams& op) {
-    // Pass B owns everything above the threshold. With no threshold the fused pass does not run,
+    // The unified pass owns everything above the threshold. With no threshold the fused pass does not run,
     // so the band is left wide open rather than starting at 1 -- that keeps the program identical
     // to what the unified op alone would build, which is what the port is graded against.
     const bool fused_pass_runs = op.hybrid_token_threshold > 0;
@@ -3062,7 +3062,7 @@ tt::tt_metal::ProgramDescriptor create_hybrid_program_descriptor(
     //
     // The halves are NOT placed side by side: a program holds at most one kernel per processor
     // per core and both want all 88, so their bodies are compiled into one binary per RISC-V and
-    // run in sequence, pass A then a grid-wide barrier then pass B. Each half therefore sees the
+    // run in sequence, the unified pass then a grid-wide barrier then the fused pass. Each half therefore sees the
     // whole grid, exactly as it does when the two ops are dispatched back to back.
     const bool run_fused_pass = op.hybrid_token_threshold > 0;
 
@@ -3084,7 +3084,7 @@ tt::tt_metal::ProgramDescriptor create_hybrid_program_descriptor(
     // to one: the fold has to see them separately to pair their kernels by processor class and to
     // join each pair's argument lists behind the right base.
     tt::tt_metal::ProgramDescriptor fused_descriptor;
-    TT_FATAL(l1_arena != nullptr, "pass A runs, so both halves' circular buffers need an L1 arena to share");
+    TT_FATAL(l1_arena != nullptr, "the fused pass runs, so both halves' circular buffers need an L1 arena to share");
     fused::append_to_descriptor(
         fused_descriptor,
         fused_attributes(op, t, static_cast<uint32_t>(l1_arena->aligned_size_per_bank())),
