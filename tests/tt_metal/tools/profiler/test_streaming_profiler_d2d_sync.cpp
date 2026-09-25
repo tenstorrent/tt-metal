@@ -35,7 +35,7 @@ using namespace tt::tt_metal;
 using namespace tt::tt_metal::streaming_profiler;
 namespace api = tt::tt_metal::experimental::streaming_profiler;
 
-// The sync's record kinds and roles (hostdev/streaming_profiler_common.h).
+// The sync's record kinds and roles (hostdev/streaming_profiler_sync.h).
 constexpr uint32_t kLocal = kernel_profiler::kSyncKindLocal, kLink = kernel_profiler::kSyncKindLink;
 constexpr uint32_t kT0 = kernel_profiler::kSyncRoleT0, kT1 = kernel_profiler::kSyncRoleT1;
 constexpr uint32_t kT1B = kernel_profiler::kSyncRoleT1B, kT2 = kernel_profiler::kSyncRoleT2;
@@ -82,15 +82,13 @@ double host_ns(double tau) { return kHostBase + tau * 1e9; }
 void feed(
     SyncEngine& sync, uint32_t dev, uint32_t lane, uint32_t kind, uint32_t round, uint32_t role, double rc, double w) {
     const auto value = static_cast<uint64_t>(std::llround(rc)), wall = static_cast<uint64_t>(std::llround(w));
-    const uint32_t rec[kernel_profiler::kSyncRecordWords] = {
-        (kind << 8) | role,
-        round,
-        static_cast<uint32_t>(value),
-        static_cast<uint32_t>(value >> 32),
-        static_cast<uint32_t>(wall),
-        static_cast<uint32_t>(wall >> 32),
-        0,
-        0};
+    const kernel_profiler::SyncRecord rec{
+        .meta = kernel_profiler::word_of(kernel_profiler::SyncMeta{.role = role, .kind = kind}),
+        .round = round,
+        .value_lo = static_cast<uint32_t>(value),
+        .value_hi = static_cast<uint32_t>(value >> 32),
+        .wall_lo = static_cast<uint32_t>(wall),
+        .wall_hi = static_cast<uint32_t>(wall >> 32)};
     sync.on_clock(dev, lane / profiler::kSpscNRiscDecode, rec);
 }
 

@@ -27,11 +27,11 @@
 constexpr uint32_t kSocketConfigAddr = get_compile_time_arg_val(0);  // PROFILER socket: the eth cores' frames
 constexpr uint32_t kSyncCfgAddr = get_compile_time_arg_val(1);       // SYNC socket: the pusher's and link ends' records
 constexpr uint32_t kStageAddr = get_compile_time_arg_val(2);         // one frame slot in this core's L1
-constexpr uint32_t kCtrlAddr = get_compile_time_arg_val(3);          // done +0, heartbeat +4, go +8, stop +64
+constexpr uint32_t kCtrlAddr = get_compile_time_arg_val(3);          // a kernel_profiler::SyncCoreCtrl, stop 64 B on
 constexpr uint32_t kScratchAddr = get_compile_time_arg_val(4);       // images read over the NoC
 constexpr uint32_t kPusherXy = get_compile_time_arg_val(5);          // y << 16 | x of the pusher
-constexpr uint32_t kPusherCtrl = get_compile_time_arg_val(6);  // the pusher's control block: sync tail +12, head +16
-constexpr uint32_t kPusherSyncRing = get_compile_time_arg_val(7);  // the pusher's sync ring, kSyncRingRecords records
+constexpr uint32_t kPusherCtrl = get_compile_time_arg_val(6);        // the pusher's kernel_profiler::SyncCoreCtrl
+constexpr uint32_t kPusherSyncRing = get_compile_time_arg_val(7);    // the pusher's sync ring, kSyncRingRecords records
 constexpr uint32_t kLinkRingAddr =
     get_compile_time_arg_val(8);  // the link ends' sync ring, one address on every active eth core; 0 = none
 
@@ -48,7 +48,7 @@ constexpr uint32_t kPageWords = kp::SPSC_SPAN_PAGE_WORDS;
 constexpr uint32_t kPageBytes = kPageWords * 4u;
 constexpr uint32_t kLenWord = 1;
 constexpr uint32_t kMaxLinked = 16;  // BH has 14 eth cores
-constexpr uint32_t kRecordBytes = kp::kSyncRecordWords * 4u;
+constexpr uint32_t kRecordBytes = sizeof(kp::SyncRecord);
 constexpr uint32_t kSweepCycles = 1u << 20;  // ~1 ms of this core's wall clock between frame sweeps
 constexpr uint32_t kPollCycles = 4096;       // ~3 us between reads of the pusher's tail
 // Scratch: a control vector image, two ring images, a link end's record ring image, a slice of the pusher's sync
@@ -225,16 +225,15 @@ struct Outbox {
     uint32_t n = 0;
     SocketSenderInterface* sync = nullptr;
     __attribute__((noinline)) void add(uint32_t meta, uint32_t rnd, uint64_t v, uint64_t w, uint64_t ref) {
-        volatile tt_l1_ptr uint32_t* r =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kAnchorScratch + n * kRecordBytes);
-        r[kp::SYNC_META] = meta;
-        r[kp::SYNC_ROUND] = rnd;
-        r[kp::SYNC_VALUE_LO] = static_cast<uint32_t>(v);
-        r[kp::SYNC_VALUE_HI] = static_cast<uint32_t>(v >> 32);
-        r[kp::SYNC_WALL_LO] = static_cast<uint32_t>(w);
-        r[kp::SYNC_WALL_HI] = static_cast<uint32_t>(w >> 32);
-        r[kp::SYNC_REF_LO] = static_cast<uint32_t>(ref);
-        r[kp::SYNC_REF_HI] = static_cast<uint32_t>(ref >> 32);
+        volatile tt_l1_ptr kp::SyncRecord* r = reinterpret_cast<volatile tt_l1_ptr kp::SyncRecord*>(kAnchorScratch) + n;
+        r->meta = meta;
+        r->round = rnd;
+        r->value_lo = static_cast<uint32_t>(v);
+        r->value_hi = static_cast<uint32_t>(v >> 32);
+        r->wall_lo = static_cast<uint32_t>(w);
+        r->wall_hi = static_cast<uint32_t>(w >> 32);
+        r->ref_lo = static_cast<uint32_t>(ref);
+        r->ref_hi = static_cast<uint32_t>(ref >> 32);
         if (++n == kAnchorRecords) {
             flush();
         }
@@ -281,7 +280,7 @@ struct Audit {
     }
     void raw(const volatile tt_l1_ptr Pending& a) {
         outbox->add(
-            kp::kSyncKindAnchor << 8,
+            kp::word_of(kp::SyncMeta{.kind = kp::kSyncKindAnchor}),
             0,
             0,
             (static_cast<uint64_t>(a.w_hi) << 32) | a.w_lo,
@@ -358,7 +357,7 @@ struct Audit {
             }
             if (any != 0) {
                 outbox->add(
-                    kp::kSyncKindAnchorHist << 8,
+                    kp::word_of(kp::SyncMeta{.kind = kp::kSyncKindAnchorHist}),
                     b,
                     (static_cast<uint64_t>(c[1]) << 32) | c[0],
                     (static_cast<uint64_t>(c[3]) << 32) | c[2],
@@ -366,7 +365,11 @@ struct Audit {
             }
         }
         outbox->add(
-            kp::kSyncKindAnchorHist << 8, kp::kSyncAnchorHistWorst, worst_r, unbracketed, static_cast<uint32_t>(worst));
+            kp::word_of(kp::SyncMeta{.kind = kp::kSyncKindAnchorHist}),
+            kp::kSyncAnchorHistWorst,
+            worst_r,
+            unbracketed,
+            static_cast<uint32_t>(worst));
         outbox->flush();
     }
 };
@@ -402,11 +405,12 @@ struct Drainer {
     // sweep and at stop): a frame pads to 24 words, so one of a single record is four times its size.
     __attribute__((noinline)) void drain_pusher(bool all) {
         const uint32_t px = kPusherXy & 0xFFFFu, py = kPusherXy >> 16;
-        volatile tt_l1_ptr uint32_t* pctl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kPusherCtrlScratch);
+        volatile tt_l1_ptr kp::SyncCoreCtrl* pctl =
+            reinterpret_cast<volatile tt_l1_ptr kp::SyncCoreCtrl*>(kPusherCtrlScratch);
         for (;;) {
             noc_async_read(get_noc_addr(px, py, kPusherCtrl), kPusherCtrlScratch, 64);
             noc_async_read_barrier();
-            const uint32_t tail = pctl[3];
+            const uint32_t tail = pctl->sync_tail;
             if (tail == head || (!all && tail - head < kp::kSyncFrameRecords)) {
                 return;
             }
@@ -427,9 +431,9 @@ struct Drainer {
             }
             noc_async_read_barrier();
             for (uint32_t i = 0; i < n; i++) {
-                const volatile tt_l1_ptr uint32_t* rec =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kSliceScratch + i * kRecordBytes);
-                if (((rec[kp::SYNC_META] >> 8) & 0xFFu) == kp::kSyncKindLocal) {
+                const volatile tt_l1_ptr kp::SyncRecord& rec =
+                    reinterpret_cast<const volatile tt_l1_ptr kp::SyncRecord*>(kSliceScratch)[i];
+                if (kp::word_as<kp::SyncMeta>(rec.meta).kind == kp::kSyncKindLocal) {
                     kp::SyncLocalPoint pts[kp::kSyncLocalPoints];
                     const uint32_t np = kp::sync_local_unpack(rec, pts);
                     for (uint32_t j = 0; j < np; j++) {
@@ -446,7 +450,7 @@ struct Drainer {
                     n,
                     kp::kSyncFrameRecords));
             head += n;
-            noc_inline_dw_write(get_noc_addr(px, py, kPusherCtrl + 16), head, 0xF);
+            noc_inline_dw_write(get_noc_addr(px, py, kPusherCtrl + offsetof(kp::SyncCoreCtrl, sync_head)), head, 0xF);
         }
     }
 
@@ -506,10 +510,12 @@ struct Drainer {
 
 void kernel_main() {
 #if defined(PROFILE_KERNEL)
-    volatile tt_l1_ptr uint32_t* done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kCtrlAddr);
-    volatile tt_l1_ptr uint32_t* hb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kCtrlAddr + 4);
-    volatile tt_l1_ptr uint32_t* go = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kCtrlAddr + 8);
-    volatile tt_l1_ptr uint32_t* stop = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kCtrlAddr + 64);
+    volatile tt_l1_ptr kp::SyncCoreCtrl* ctrl = reinterpret_cast<volatile tt_l1_ptr kp::SyncCoreCtrl*>(kCtrlAddr);
+    volatile tt_l1_ptr uint32_t* done = &ctrl->done;
+    volatile tt_l1_ptr uint32_t* hb = &ctrl->heartbeat;
+    volatile tt_l1_ptr uint32_t* go = &ctrl->go;
+    volatile tt_l1_ptr uint32_t* stop =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kCtrlAddr + kp::kRelayCtrlWordStride);
     *done = 0;
     *hb = 0;
     *go = 0;

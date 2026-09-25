@@ -17,14 +17,17 @@
 #include "internal/tt-1xx/blackhole/arc_pll_regs.h"
 
 constexpr uint32_t kPointTicks = get_compile_time_arg_val(0);  // refclk between the open segment's points (50/us)
-constexpr uint32_t kCtrlAddr =
-    get_compile_time_arg_val(1);  // done +0, heartbeat +4, go +8, sync tail +12, head +16, drops +20, stop +64
-constexpr uint32_t kPllAddr = get_compile_time_arg_val(2);       // a 64 B-aligned L1 scratch for the PLL reads
+constexpr uint32_t kCtrlAddr = get_compile_time_arg_val(1);    // a kernel_profiler::SyncCoreCtrl, the stop word 64 B on
+constexpr uint32_t kPllAddr = get_compile_time_arg_val(2);     // a 64 B-aligned L1 scratch for the PLL reads
 constexpr uint32_t kSyncRingAddr = get_compile_time_arg_val(3);  // this core's instants, kSyncRingRecords of them
 constexpr uint32_t kArcXy = get_compile_time_arg_val(4);         // the ARC tile, x | y << 16
 
 namespace kp = kernel_profiler;
 namespace eth_ptp = tt::tt_metal::eth_ptp;
+
+inline volatile tt_l1_ptr kp::SyncCoreCtrl* ctrl() {
+    return reinterpret_cast<volatile tt_l1_ptr kp::SyncCoreCtrl*>(kCtrlAddr);
+}
 
 #if defined(PROFILE_KERNEL)
 
@@ -53,38 +56,39 @@ namespace eth_ptp = tt::tt_metal::eth_ptp;
 // dropped and counted; this loop never waits for the drainer.
 namespace sync {
 static uint32_t g_tail = 0, g_dropped = 0;
-inline volatile tt_l1_ptr uint32_t* rec(uint32_t i) {
-    return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-        kSyncRingAddr + (i % kp::kSyncRingRecords) * kp::kSyncRecordWords * 4u);
+inline volatile tt_l1_ptr kp::SyncRecord* rec(uint32_t i) {
+    return reinterpret_cast<volatile tt_l1_ptr kp::SyncRecord*>(kSyncRingAddr) + i % kp::kSyncRingRecords;
 }
 inline void emit(uint32_t meta, uint32_t round, uint64_t value, uint64_t wall, uint32_t ref_lo, uint32_t ref_hi) {
-    const uint32_t head = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kCtrlAddr + 16);
-    if (g_tail - head >= kp::kSyncRingRecords) {
+    if (g_tail - ctrl()->sync_head >= kp::kSyncRingRecords) {
         g_dropped++;
         return;
     }
-    volatile tt_l1_ptr uint32_t* r = rec(g_tail);
-    r[kp::SYNC_META] = meta;
-    r[kp::SYNC_ROUND] = round;
-    r[kp::SYNC_VALUE_LO] = static_cast<uint32_t>(value);
-    r[kp::SYNC_VALUE_HI] = static_cast<uint32_t>(value >> 32);
-    r[kp::SYNC_WALL_LO] = static_cast<uint32_t>(wall);
-    r[kp::SYNC_WALL_HI] = static_cast<uint32_t>(wall >> 32);
-    r[kp::SYNC_REF_LO] = ref_lo;
-    r[kp::SYNC_REF_HI] = ref_hi;
+    volatile tt_l1_ptr kp::SyncRecord* r = rec(g_tail);
+    r->meta = meta;
+    r->round = round;
+    r->value_lo = static_cast<uint32_t>(value);
+    r->value_hi = static_cast<uint32_t>(value >> 32);
+    r->wall_lo = static_cast<uint32_t>(wall);
+    r->wall_hi = static_cast<uint32_t>(wall >> 32);
+    r->ref_lo = ref_lo;
+    r->ref_hi = ref_hi;
     asm volatile("fence" ::: "memory");
-    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kCtrlAddr + 12) = ++g_tail;
+    ctrl()->sync_tail = ++g_tail;
 }
 }  // namespace sync
 
-// Points go out kSyncLocalPoints to a LOCAL record (hostdev/streaming_profiler_common.h): the first whole, the rest as
+// Points go out kSyncLocalPoints to a LOCAL record (hostdev/streaming_profiler_sync.h): the first whole, the rest as
 // a refclk step and an offset from the record's slope; a point whose step or offset does not fit starts the next one.
 namespace pack {
-static uint32_t g_n = 0, g_meta = 0, g_round = 0, g_d[kp::kSyncLocalPoints - 1] = {};
+static uint32_t g_n = 0, g_d[kp::kSyncLocalPoints - 1] = {};
+static kp::SyncLocalMeta g_meta{};
+static kp::SyncLocalRound g_round{};
 static uint64_t g_r0 = 0, g_w0 = 0;
 inline void flush() {
     if (g_n != 0) {
-        sync::emit(g_meta | g_n, g_round, g_r0, g_w0, g_d[0], g_d[1]);
+        g_meta.count = g_n;
+        sync::emit(kp::word_of(g_meta), kp::word_of(g_round), g_r0, g_w0, g_d[0], g_d[1]);
         g_n = 0;
     }
 }
@@ -93,11 +97,11 @@ __attribute__((noinline)) void add(uint64_t r, uint64_t w8, uint32_t k8, bool cl
         if (r - g_r0 <= 0xFFFFu) {
             const uint32_t dr = static_cast<uint32_t>(r - g_r0);
             const int32_t off =
-                static_cast<int32_t>(static_cast<uint32_t>(w8) - static_cast<uint32_t>(g_w0) - (g_round >> 24) * dr);
+                static_cast<int32_t>(static_cast<uint32_t>(w8) - static_cast<uint32_t>(g_w0) - g_round.slope * dr);
             if (off >= -32768 && off <= 32767) {
-                g_d[g_n - 1] = dr | (static_cast<uint32_t>(off) << 16);
-                g_round |= k8 << (8 * g_n);
-                g_meta |= static_cast<uint32_t>(close) << (2 + g_n);
+                g_d[g_n - 1] = kp::word_of(kp::SyncLocalStep{.refclk = dr, .wall_off = off});
+                g_round.k8[g_n] = static_cast<uint8_t>(k8);
+                g_meta.close |= static_cast<uint32_t>(close) << g_n;
                 if (++g_n == kp::kSyncLocalPoints) {
                     flush();
                 }
@@ -108,8 +112,8 @@ __attribute__((noinline)) void add(uint64_t r, uint64_t w8, uint32_t k8, bool cl
     }
     g_r0 = r;
     g_w0 = w8;
-    g_round = k8 | (slope << 24);
-    g_meta = (kp::kSyncKindLocal << 8) | (static_cast<uint32_t>(close) << 2);
+    g_round = kp::SyncLocalRound{.k8 = {static_cast<uint8_t>(k8)}, .slope = static_cast<uint8_t>(slope)};
+    g_meta = kp::SyncLocalMeta{.close = close, .kind = kp::kSyncKindLocal};
     g_d[0] = g_d[1] = 0;
     g_n = 1;
 }
@@ -151,16 +155,11 @@ FORCE_INLINE void win_push(Model& m, uint32_t r, uint32_t w8) {
 }
 
 // The open window's centroid as a point, tagged with k8 and the count behind it.
-__attribute__((noinline)) void close_window(Model& m, uint32_t role) {
+__attribute__((noinline)) void close_window(Model& m, bool close) {
     const uint32_t dr = (m.sr + m.cnt / 2u) / m.cnt;
     const int32_t half = static_cast<int32_t>(m.cnt / 2u);
     const int32_t e = (m.se + (m.se < 0 ? -half : half)) / static_cast<int32_t>(m.cnt);
-    pack::add(
-        m.r0 + dr,
-        m.w0 + static_cast<uint64_t>(m.k8) * dr + static_cast<int64_t>(e),
-        m.k8,
-        role == kp::kSyncLocalClose,
-        m.k8);
+    pack::add(m.r0 + dr, m.w0 + static_cast<uint64_t>(m.k8) * dr + static_cast<int64_t>(e), m.k8, close, m.k8);
     m.cnt = 0;
     m.size = m.size < (1u << 23) ? m.size * 2u : m.size;
 }
@@ -176,7 +175,7 @@ FORCE_INLINE void add(Model& m, uint32_t r, uint32_t w8) {
     m.sr += dr;
     m.se += static_cast<int32_t>(w8 - static_cast<uint32_t>(m.w0) - m.k8 * dr);
     if (++m.cnt == m.size || dr >= kPointTicks) {
-        close_window(m, kp::kSyncLocalPoint);
+        close_window(m, false);
     }
 }
 
@@ -197,7 +196,7 @@ __attribute__((noinline)) void on_read(Model& m, uint32_t cntl1, uint32_t issued
         return;
     }
     if (m.cnt != 0) {
-        close_window(m, kp::kSyncLocalClose);
+        close_window(m, true);
     }
     for (uint32_t i = m.done; static_cast<int32_t>(completed - i) > 0; i++) {
         write_sample(m, i);
@@ -469,15 +468,14 @@ Table calibrate(volatile tt_l1_ptr uint32_t* go, volatile tt_l1_ptr uint32_t* st
 
 void kernel_main() {
 #if defined(PROFILE_KERNEL)
-    volatile tt_l1_ptr uint32_t* done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kCtrlAddr);
-    volatile tt_l1_ptr uint32_t* hb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kCtrlAddr + 4);
-    volatile tt_l1_ptr uint32_t* go = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kCtrlAddr + 8);
-    volatile tt_l1_ptr uint32_t* stop = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kCtrlAddr + 64);
-    volatile tt_l1_ptr uint32_t* dropped =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kCtrlAddr + kp::kPusherDroppedOffset);
+    volatile tt_l1_ptr uint32_t* done = &ctrl()->done;
+    volatile tt_l1_ptr uint32_t* hb = &ctrl()->heartbeat;
+    volatile tt_l1_ptr uint32_t* go = &ctrl()->go;
+    volatile tt_l1_ptr uint32_t* stop =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kCtrlAddr + kp::kRelayCtrlWordStride);
     *done = 0;
-    dropped[0] = 0;
-    dropped[1] = 0;
+    ctrl()->dropped_pll = 0;
+    ctrl()->dropped_sync = 0;
     *hb = 0;
     *go = 0;
     *stop = 0;
@@ -517,11 +515,11 @@ void kernel_main() {
         }
     }
     if (m.cnt != 0) {
-        model::close_window(m, kp::kSyncLocalPoint);
+        model::close_window(m, false);
     }
     pack::flush();
-    dropped[0] = m.lost;
-    dropped[1] = sync::g_dropped;
+    ctrl()->dropped_pll = m.lost;
+    ctrl()->dropped_sync = sync::g_dropped;
     *done = kp::kRelayDoneWord;
 #endif
 }

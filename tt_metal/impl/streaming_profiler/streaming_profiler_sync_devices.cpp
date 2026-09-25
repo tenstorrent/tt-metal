@@ -53,6 +53,9 @@ constexpr uint32_t kBurstReads = 1000;
 // Reads within this much of the burst's tightest round trip carry the least queueing on either leg.
 constexpr double kRttSlackNs = 50.0;
 constexpr size_t kWindowBursts = 10;
+constexpr uint32_t kLinkCtl = offsetof(kernel_profiler::LinkSyncL1, ctl);
+constexpr uint32_t kLinkDone = offsetof(kernel_profiler::LinkSyncL1, done);
+constexpr uint32_t kLinkDiag = offsetof(kernel_profiler::LinkSyncL1, diag);
 
 }  // namespace
 
@@ -573,9 +576,10 @@ void SyncDevices::plan_links() {
 
 bool SyncDevices::launch_link_ends(const CaptureContext::Link& L, uint32_t link_l1, ResidentSync& out) {
     auto& cluster = MetalContext::instance(context_id_).get_cluster();
-    const uint32_t zero[2] = {0, 0};  // stop + done, clear before launch
-    cluster.write_core(zero, sizeof(zero), tt_cxy_pair(L.chip_a, out.virt_a), out.stop_a);
-    cluster.write_core(zero, sizeof(zero), tt_cxy_pair(L.chip_b, out.virt_b), out.stop_b);
+    const uint32_t zero[2] = {0, 0};
+    static_assert(kLinkDone == kLinkCtl + sizeof(uint32_t));
+    cluster.write_core(zero, sizeof(zero), tt_cxy_pair(L.chip_a, out.virt_a), link_l1 + kLinkCtl);
+    cluster.write_core(zero, sizeof(zero), tt_cxy_pair(L.chip_b, out.virt_b), link_l1 + kLinkCtl);
     auto ps = std::make_unique<Program>(CreateProgram());
     auto pr = std::make_unique<Program>(CreateProgram());
     const auto kid_s = CreateKernel(
@@ -618,7 +622,6 @@ void SyncDevices::launch_links() {
     // The link's L1 is the top of the active eth core's UNRESERVED region, the same place whether a resident kernel
     // or a router runs the end (the routers' config leaves it clear).
     const uint32_t link_l1 = aeth_unreserved_ + aeth_unres_size_ - kernel_profiler::kLinkSyncL1Bytes;
-    const uint32_t stop_addr = link_l1 + kernel_profiler::kLinkSyncCtlOffset;
     for (const CaptureContext::Link& L : links_) {
         ResidentSync r{
             .dev_a = devices_[L.dev_a].d.device,
@@ -627,8 +630,7 @@ void SyncDevices::launch_links() {
             .virt_b = cluster.get_virtual_coordinate_from_logical_coordinates(L.chip_b, L.eth_b, CoreType::ETH),
             .chip_a = L.chip_a,
             .chip_b = L.chip_b,
-            .stop_a = stop_addr,
-            .stop_b = stop_addr};
+            .link_l1 = link_l1};
         // With fabric the routers on this link run the two ends (fabric_erisc_router.cpp, LINK_SYNC_ROLE): nothing
         // to launch, the sender waits for the run word, and their diagnostics are read where the resident kernels
         // leave theirs.
@@ -651,49 +653,42 @@ void SyncDevices::launch_links() {
     // Every planned end is in place (launched here, or a router that has been waiting): let the senders go.
     for (const ResidentSync& r : link_syncs_) {
         cluster.write_core(
-            &kernel_profiler::kLinkSyncCtlRun, sizeof(uint32_t), tt_cxy_pair(r.chip_a, r.virt_a), r.stop_a);
+            &kernel_profiler::kLinkSyncCtlRun, sizeof(uint32_t), tt_cxy_pair(r.chip_a, r.virt_a), r.link_l1 + kLinkCtl);
     }
 }
 
 namespace {
 
-// What each end leaves past its control word (eth_ptp::StopDiag): the timer word (0 no hardware path, 1 ran, 2 never
-// acknowledged its rate, in which case that end emitted no hardware stamps), then rounds not recorded, frames left for
-// a later step (the queue was busy at their phase), bursts whose ingress stamps did not match their frames, and frames
-// that came in without an egress stamp.
-struct StopDiag {
-    uint32_t timer, drop[4];
-};
-static_assert(sizeof(StopDiag) == 5 * sizeof(uint32_t));
+using kernel_profiler::LinkSyncDiag;
 
-StopDiag read_stop_diag(tt::Cluster& cluster, uint32_t chip, const CoreCoord& virt, uint32_t ctl) {
-    StopDiag d{};
-    cluster.read_core(&d, sizeof(d), tt_cxy_pair(chip, virt), ctl + 8);
+LinkSyncDiag read_link_diag(tt::Cluster& cluster, uint32_t chip, const CoreCoord& virt, uint32_t link_l1) {
+    LinkSyncDiag d{};
+    cluster.read_core(&d, sizeof(d), tt_cxy_pair(chip, virt), link_l1 + kLinkDiag);
     return d;
 }
 
-void log_link_diag(uint32_t chip_a, uint32_t chip_b, const StopDiag& da, const StopDiag& db) {
+void log_link_diag(uint32_t chip_a, uint32_t chip_b, const LinkSyncDiag& da, const LinkSyncDiag& db) {
     for (const auto& [chip, name, d] : {std::tuple{chip_a, "sender", &da}, std::tuple{chip_b, "receiver", &db}}) {
-        if (d->drop[0] != 0 || d->drop[2] != 0 || d->drop[3] != 0) {
+        if (d->rounds_lost != 0 || d->bursts_mismatched != 0 || d->frames_unstamped != 0) {
             log_warning(
                 tt::LogMetal,
                 "[streaming profiler] link sync chip {} {}: left out: {} rounds not recorded, {} bursts whose ingress "
                 "stamps did not match their frames, {} frames without an egress stamp",
                 chip,
                 name,
-                d->drop[0],
-                d->drop[2],
-                d->drop[3]);
+                d->rounds_lost,
+                d->bursts_mismatched,
+                d->frames_unstamped);
         }
-        if (d->drop[1] != 0) {
+        if (d->frames_retried != 0) {
             log_info(
                 tt::LogMetal,
                 "[streaming profiler] link sync chip {} {}: {} frames retried at a later step (queue busy)",
                 chip,
                 name,
-                d->drop[1]);
+                d->frames_retried);
         }
-        if (d->timer == 2) {
+        if (d->timer == kernel_profiler::kLinkSyncTimerNoRate) {
             log_warning(
                 tt::LogMetal,
                 "[streaming profiler] link sync chip {}: the 1588 timer never acknowledged its rate; this end sent no "
@@ -730,18 +725,24 @@ void SyncDevices::stop_links(tt::Cluster& cluster) {
         // Sender first: its current round still completes off the live receiver, then it stops between rounds; a
         // resident sender exits, a router-hosted one goes quiet.
         cluster.write_core(
-            &kernel_profiler::kLinkSyncCtlStop, sizeof(uint32_t), tt_cxy_pair(r.chip_a, r.virt_a), r.stop_a);
+            &kernel_profiler::kLinkSyncCtlStop,
+            sizeof(uint32_t),
+            tt_cxy_pair(r.chip_a, r.virt_a),
+            r.link_l1 + kLinkCtl);
         if (resident) {
-            poll_done(r.chip_a, r.virt_a, r.stop_a + 4, "sender");
+            poll_done(r.chip_a, r.virt_a, r.link_l1 + kLinkDone, "sender");
         }
-        const StopDiag da = read_stop_diag(cluster, r.chip_a, r.virt_a, r.stop_a);
+        const LinkSyncDiag da = read_link_diag(cluster, r.chip_a, r.virt_a, r.link_l1);
         // Now the receiver sees no further frame; a resident one exits on its stop word.
         if (resident) {
             cluster.write_core(
-                &kernel_profiler::kLinkSyncCtlStop, sizeof(uint32_t), tt_cxy_pair(r.chip_b, r.virt_b), r.stop_b);
-            poll_done(r.chip_b, r.virt_b, r.stop_b + 4, "receiver");
+                &kernel_profiler::kLinkSyncCtlStop,
+                sizeof(uint32_t),
+                tt_cxy_pair(r.chip_b, r.virt_b),
+                r.link_l1 + kLinkCtl);
+            poll_done(r.chip_b, r.virt_b, r.link_l1 + kLinkDone, "receiver");
         }
-        log_link_diag(r.chip_a, r.chip_b, da, read_stop_diag(cluster, r.chip_b, r.virt_b, r.stop_b));
+        log_link_diag(r.chip_a, r.chip_b, da, read_link_diag(cluster, r.chip_b, r.virt_b, r.link_l1));
     }
     link_syncs_.clear();
 }

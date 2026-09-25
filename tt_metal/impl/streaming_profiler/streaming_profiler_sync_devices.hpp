@@ -26,6 +26,7 @@
 #include "impl/streaming_profiler/streaming_profiler_consumer.hpp"
 #include "impl/streaming_profiler/streaming_profiler_sync_engine.hpp"
 #include "hostdev/streaming_profiler_common.h"
+#include "hostdev/streaming_profiler_sync.h"
 
 namespace tt {
 class Cluster;
@@ -115,7 +116,7 @@ private:
 };
 
 // Which eth links of a chip pair carry the device-to-device link sync and which end of each sends. The device side
-// is tools/profiler/sync/eth_ptp_link.hpp on the constants of hostdev/streaming_profiler_common.h; without fabric
+// is tools/profiler/sync/eth_ptp_link.hpp on the layouts of hostdev/streaming_profiler_sync.h; without fabric
 // the profiler runs the ends as resident kernels, with fabric the routers on the chosen links run them
 // (fabric_erisc_router.cpp, LINK_SYNC_ROLE).
 namespace link_sync {
@@ -211,7 +212,7 @@ private:
         IDevice* dev_b = nullptr;
         CoreCoord virt_a, virt_b;
         uint32_t chip_a = 0, chip_b = 0;
-        uint32_t stop_a = 0, stop_b = 0;
+        uint32_t link_l1 = 0;  // the kernel_profiler::LinkSyncL1, at the same address on both ends
     };
     void stop_links(tt::Cluster& cluster);
     // The two resident kernels of a link, compiled before either launches; false with the link skipped if one does

@@ -11,7 +11,7 @@
 
 #include <cstdint>
 
-#include "hostdev/streaming_profiler_common.h"
+#include "hostdev/streaming_profiler_sync.h"
 #include "internal/ethernet/tt_eth_ss_regs.h"
 #include "internal/risc_attribs.h"
 

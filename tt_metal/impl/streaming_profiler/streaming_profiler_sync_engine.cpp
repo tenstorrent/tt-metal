@@ -522,10 +522,11 @@ void SyncEngine::on_attach(const CaptureContext& ctx) {
     }
 }
 
-void SyncEngine::on_clock(uint32_t dev, uint32_t core, const uint32_t* rec) {
+void SyncEngine::on_clock(uint32_t dev, uint32_t core, const kernel_profiler::SyncRecord& rec) {
     namespace kp = kernel_profiler;
     TT_FATAL(dev < local_.size(), "streaming profiler: a sync record names device {} of {}", dev, local_.size());
-    const uint32_t kind = (rec[kp::SYNC_META] >> 8) & 0xFFu;
+    const auto meta = kp::word_as<kp::SyncMeta>(rec.meta);
+    const uint32_t kind = meta.kind;
     if (kind == kp::kSyncKindLocal) {
         kp::SyncLocalPoint pts[kp::kSyncLocalPoints];
         const uint32_t n = kp::sync_local_unpack(rec, pts);
@@ -539,16 +540,16 @@ void SyncEngine::on_clock(uint32_t dev, uint32_t core, const uint32_t* rec) {
         }
         return;
     }
-    const auto word64 = [&](uint32_t lo, uint32_t hi) { return (static_cast<uint64_t>(rec[hi]) << 32) | rec[lo]; };
+    const auto word64 = [](uint32_t lo, uint32_t hi) { return (static_cast<uint64_t>(hi) << 32) | lo; };
     const ClockSample s{
         .dev = dev,
         .core = core,
         .kind = kind,
-        .round = rec[kp::SYNC_ROUND],
-        .role = rec[kp::SYNC_META] & 0xFFu,
-        .value = word64(kp::SYNC_VALUE_LO, kp::SYNC_VALUE_HI),
-        .ts = word64(kp::SYNC_WALL_LO, kp::SYNC_WALL_HI),
-        .ref = word64(kp::SYNC_REF_LO, kp::SYNC_REF_HI)};
+        .round = rec.round,
+        .role = meta.role,
+        .value = word64(rec.value_lo, rec.value_hi),
+        .ts = word64(rec.wall_lo, rec.wall_hi),
+        .ref = word64(rec.ref_lo, rec.ref_hi)};
     if (kind == kp::kSyncKindAnchor) {
         audit_[dev].pending.push_back(AnchorAudit::Pending{
             static_cast<int64_t>(s.ref), static_cast<int64_t>(s.ts) + ctx_.devices[dev].drainer_offset});

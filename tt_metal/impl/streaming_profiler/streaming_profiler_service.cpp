@@ -592,8 +592,8 @@ private:
     const std::atomic<bool>* stop_;
 };
 
-// The sync engine's thread: the eth pushers' sync streams, whose frames carry the sync's records raw
-// (hostdev/streaming_profiler_common.h, kSyncRecordWords), read here into the engine. Attached before and detached
+// The sync engine's thread: the eth drainers' sync streams, whose frames carry the sync's records raw
+// (hostdev/streaming_profiler_sync.h, SyncRecord), read here into the engine. Attached before and detached
 // before any consumer, so the covers the consumers wait for exist first and are final when they flush.
 class Service::SyncLoop : public StreamWalker {
 public:
@@ -633,7 +633,8 @@ private:
                 n,
                 frame_words_[i]);
             for (uint32_t r = 0; r < n; r++) {
-                service_.sync_->on_clock(dev, core->second, f + kp::SPSC_SPAN_PREFIX_WORDS + r * kp::kSyncRecordWords);
+                service_.sync_->on_clock(
+                    dev, core->second, reinterpret_cast<const kp::SyncRecord*>(f + kp::SPSC_SPAN_PREFIX_WORDS)[r]);
             }
             p += size_t{frame_words_[i]} * 4;
         }

@@ -20,13 +20,13 @@
 #include <string>
 #include <unordered_set>
 
-#include "hostdev/streaming_profiler_common.h"
+#include "hostdev/streaming_profiler_sync.h"
 #include "impl/streaming_profiler/streaming_profiler_consumer.hpp"
 #include "impl/streaming_profiler/streaming_profiler_decode.hpp"
 
 namespace tt::tt_metal::streaming_profiler {
 
-// A LINK, ANCHOR or ANCHOR_HIST record of the sync stream (hostdev/streaming_profiler_common.h, kSyncRecordWords)
+// A LINK, ANCHOR or ANCHOR_HIST record of the sync stream (hostdev/streaming_profiler_sync.h, SyncRecord)
 // split into its fields: the device and roster core that wrote it, its kind and role, the round a link stamp names,
 // the reading, and the wall clock at it.
 struct ClockSample {
@@ -140,7 +140,7 @@ struct AnchorAudit {
 
     // Checks every pending anchor the model is final past; `final` checks the rest up to its frontier.
     void settle(const LocalClockModel& m, bool final);
-    // One record of the drainer's own audit of the anchors it did not send (hostdev/streaming_profiler_common.h,
+    // One record of the drainer's own audit of the anchors it did not send (hostdev/streaming_profiler_sync.h,
     // ANCHOR_HIST).
     void add_drainer_audit(const ClockSample& s);
     uint64_t drainer_unbracketed = 0;  // anchors the drainer dropped: their read found no refclk update
@@ -363,8 +363,8 @@ class SyncEngine {
 public:
     explicit SyncEngine(uint32_t series_nodes = ClockMap::kSeriesNodes) : map_(series_nodes), series_(map_) {}
     void on_attach(const CaptureContext& ctx);
-    // One sync record (kSyncRecordWords words) from roster core `core` of device index `dev`.
-    void on_clock(uint32_t dev, uint32_t core, const uint32_t* rec);
+    // One sync record from roster core `core` of device index `dev`.
+    void on_clock(uint32_t dev, uint32_t core, const kernel_profiler::SyncRecord& rec);
     void on_capture_end(const CaptureContext& ctx);
     // The clock map the service places records with: this engine writes its chip series, the host probe its
     // host series.

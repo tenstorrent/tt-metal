@@ -373,7 +373,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
     this->max_l1_loading_size =
         tt::tt_metal::hal::get_erisc_l1_unreserved_size() + tt::tt_metal::hal::get_erisc_l1_unreserved_base();
     if (tt::tt_metal::streaming_profiler::link_sync::enabled()) {
-        // The streaming profiler's link sync owns the top of the region (hostdev/streaming_profiler_common.h).
+        // The streaming profiler's link sync owns the top of the region (hostdev/streaming_profiler_sync.h).
         this->max_l1_loading_size -= kernel_profiler::kLinkSyncL1Bytes;
     }
     auto buffer_region_start = (buffer_address + buffer_alignment) & ~(buffer_alignment - 1);  // Align

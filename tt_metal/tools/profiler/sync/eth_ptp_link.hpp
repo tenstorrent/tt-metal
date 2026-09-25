@@ -4,14 +4,16 @@
 
 // The streaming profiler's link half on the tile's 1588 hardware (internal/ethernet/eth_ptp.hpp): the session every
 // sync kernel opens, how a round's frames are exchanged and its stamps accumulated and reported, and the sync
-// records the two ends leave in their mailbox for the pusher (hostdev/streaming_profiler_common.h).
+// records the two ends leave in their link L1 for the drainer (hostdev/streaming_profiler_sync.h).
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <type_traits>
 
 #include "hostdev/streaming_profiler_common.h"
+#include "hostdev/streaming_profiler_sync.h"
 
 namespace tt::tt_metal::eth_ptp {
 
@@ -69,14 +71,12 @@ constexpr uint32_t kBurstsPerRound = kTripsPerRound / kBurstFrames;
 // timer flag. Frames of 16 to 128 bytes hand off in the same time.
 constexpr uint32_t kFrameBytes = 96;
 constexpr uint32_t kWordSync = 4, kWordOffsetLo = 8, kWordOffsetHi = 9, kWordTimerOk = 10;
-// The L1 both ends own, the same addresses on both (kernel_profiler::kLinkSyncL1Bytes): the frame slots, then the
-// control and diagnostic words.
-constexpr uint32_t kSlotsBytes = kBurstFrames * kFrameBytes;
-constexpr uint32_t kCtlOffset = kernel_profiler::kLinkSyncCtlOffset;
+// The L1 both ends own, the same addresses on both, is a kernel_profiler::LinkSyncL1: the frame slots first.
+using LinkL1 = kernel_profiler::LinkSyncL1;
 constexpr uint32_t kCombPhases = 256;
 constexpr uint32_t kFramePhaseStep = 157;  // odd, so the kCombPhases phases are a permutation
-// The control word at the diagnostics' base, the host's: rounds are issued only while it reads kCtlRun, and a
-// resident kernel exits on kCtlStop. Set once the profiler's consumer and trackers are up, so no round predates
+// The host's control word (LinkSyncL1::ctl): rounds are issued only while it reads kCtlRun, and a resident kernel
+// exits on kCtlStop. Set once the profiler's consumer and trackers are up, so no round predates
 // the clock coverage that places it.
 constexpr uint32_t kCtlRun = kernel_profiler::kLinkSyncCtlRun, kCtlStop = kernel_profiler::kLinkSyncCtlStop;
 constexpr uint32_t kHwUnitsPerNs = kernel_profiler::kLinkSyncStampUnitsPerNs;
@@ -85,7 +85,7 @@ static_assert(kTripsPerRound % kBurstFrames == 0 && kBurstFrames >= 2 && (kFrame
 static_assert(kFrameBytes % 16 == 0 && 4 * (kWordTimerOk + 1) <= kFrameBytes);
 static_assert(
     kFrameStampField + 10 <= 4 * kWordSync && 4 * kWordSync + sizeof(eth_channel_sync_t) <= 4 * kWordOffsetLo);
-static_assert(kSlotsBytes <= kCtlOffset);
+static_assert(offsetof(LinkL1, slots) == 0 && kBurstFrames * kFrameBytes == sizeof(LinkL1::slots));
 
 // Frame j of a round rides in slot j % kBurstFrames, the same L1 address on both ends, so the receiver's echo lands
 // on the frame it answers. The sync word carries the round and the trip: bytes_sent in the frame, which the receiver
@@ -178,24 +178,7 @@ FORCE_INLINE void carry_offset(volatile uint32_t* w, const PtpTimer& timer) {
     w[kFrameStampHiWord + 1] = 0;
 }
 
-// What each end leaves past its control word for the host (streaming_profiler_sync_devices.cpp reads it back): +8
-// the timer word (1 ran, 2 never acknowledged its rate), then the counts: +12 rounds not recorded, +16 frames left for
-// a later step (the queue was busy at their phase), +20 bursts whose ingress stamps did not match their frames, +24
-// frames that came in without an egress stamp.
-struct StopDiag {
-    static constexpr uint32_t kWords = 5;
-    uint32_t timer = 0;
-    uint32_t drop[4] = {};
-    FORCE_INLINE void note_round(bool recorded) { drop[0] += !recorded; }
-    void write(uint32_t stop_addr) const {
-        volatile tt_l1_ptr uint32_t* w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stop_addr + 8);
-        w[0] = timer;
-        for (uint32_t i = 0; i < 4; i++) {
-            w[1 + i] = drop[i];
-        }
-    }
-};
-static_assert(kCtlOffset + 8 + 4 * StopDiag::kWords <= kernel_profiler::kLinkSyncRingOffset);
+using Diag = kernel_profiler::LinkSyncDiag;
 
 // One side's hardware round: the peer's egress stamps, read from the frames it sent this side, paired with their
 // ingress stamps here, and the peer's PTP offset they came with.
@@ -217,10 +200,10 @@ struct HwRound {
         peer_seen = true;
         return frame_stamp(w);
     }
-    __attribute__((noinline)) void pair(const uint64_t* tx_ts, const uint64_t* rx_ts, StopDiag& diag) {
+    __attribute__((noinline)) void pair(const uint64_t* tx_ts, const uint64_t* rx_ts, Diag& diag) {
         for (uint32_t m = 0; m < kBurstFrames; m++) {
             if (tx_ts[m] == 0) {
-                diag.drop[3]++;
+                diag.frames_unstamped++;
                 continue;
             }
             tx.add(tx_ts[m]);
@@ -234,7 +217,7 @@ struct HwRound {
 // frame, unless a frame came in twice (a Go-back-N resend is stamped on its way in, then dropped as a duplicate) or
 // the FIFO filled. Only this pops it, so a fill since the last take still shows as full. Any other count leaves the
 // burst out and empties the FIFO.
-__attribute__((noinline)) inline bool take_stamps(uint64_t* rx, StopDiag& diag) {
+__attribute__((noinline)) inline bool take_stamps(uint64_t* rx, Diag& diag) {
     constexpr RxStampFifo fifo{};
     bool ok = fifo.holds_exactly(kBurstFrames);
     for (uint32_t i = 0; ok && i < kBurstFrames; i++) {
@@ -244,7 +227,7 @@ __attribute__((noinline)) inline bool take_stamps(uint64_t* rx, StopDiag& diag) 
     }
     if (!ok) {
         fifo.flush();
-        diag.drop[2]++;
+        diag.bursts_mismatched++;
     }
     return ok;
 }
@@ -286,7 +269,7 @@ struct Grid {
     uint32_t c16() const { return p16 >> 2; }
     // Frame j of round `round`: false if the queue was busy at its phase, which leaves it for a later step. A gap of
     // 2^27 cycles or more since the last update (a pause) keeps the period it had.
-    __attribute__((noinline)) bool send(uint32_t base, uint32_t round, uint32_t j, StopDiag& diag) {
+    __attribute__((noinline)) bool send(uint32_t base, uint32_t round, uint32_t j, Diag& diag) {
         uint32_t w = 0, r = 0;
         if (next_refclk_update(w, r)) {
             const uint32_t cycles = w - edge_wall, updates = (r - edge_refclk) / 4u;
@@ -300,37 +283,38 @@ struct Grid {
         }
         pacer.until(w + kLeadCycles + frame_phase_cycles(round * kTripsPerRound + j, p16));
         const bool went = issue(frame_at(base, j));
-        diag.drop[1] += !went;
+        diag.frames_retried += !went;
         return went;
     }
 };
 
 // The records: one per stamp average, this core's refclk-domain reading with the round's number and the stamp's role,
 // so the host pairs the two ends by identity and fits refclk against refclk: DVFS on either chip's wall clock cannot
-// enter the link solve. They go to the ring at the end of this core's link L1 (hostdev kLinkSyncRingOffset), its count
-// published in this core's profiler control vector for the pusher's sweep.
+// enter the link solve. They go to the ring in this core's link L1 (LinkSyncL1::ring), its count published in this
+// core's profiler control vector for the drainer's sweep.
 namespace link {
 constexpr uint32_t kRoleT0 = kernel_profiler::kSyncRoleT0;
 constexpr uint32_t kRoleT1 = kernel_profiler::kSyncRoleT1;
 constexpr uint32_t kRoleT1B = kernel_profiler::kSyncRoleT1B;
 constexpr uint32_t kRoleT2 = kernel_profiler::kSyncRoleT2;
 struct Ring {
-    uint32_t base = 0, n = 0;
+    volatile kernel_profiler::SyncRecord* recs = nullptr;
+    uint32_t n = 0;
     volatile uint32_t* tail = nullptr;
-    void open(uint32_t l1) {
-        base = l1 + kernel_profiler::kLinkSyncRingOffset;
+    void open(volatile LinkL1* l1) {
+        recs = l1->ring;
         n = 0;
         tail = reinterpret_cast<volatile uint32_t*>(GET_MAILBOX_ADDRESS_DEV(profiler.control_vector)) +
                kernel_profiler::SPSC_LINK_SYNC_TAIL;
         *tail = 0;
     }
     void record_hw(uint64_t value, uint32_t round, uint32_t role) {
-        volatile uint32_t* r = reinterpret_cast<volatile uint32_t*>(
-            base + (n % kernel_profiler::kLinkSyncRingRecords) * kernel_profiler::kSyncRecordWords * 4);
-        r[kernel_profiler::SYNC_META] = (kernel_profiler::kSyncKindLink << 8) | role;
-        r[kernel_profiler::SYNC_ROUND] = round;
-        r[kernel_profiler::SYNC_VALUE_LO] = static_cast<uint32_t>(value);
-        r[kernel_profiler::SYNC_VALUE_HI] = static_cast<uint32_t>(value >> 32);
+        volatile kernel_profiler::SyncRecord& r = recs[n % kernel_profiler::kLinkSyncRingRecords];
+        r.meta =
+            kernel_profiler::word_of(kernel_profiler::SyncMeta{.role = role, .kind = kernel_profiler::kSyncKindLink});
+        r.round = round;
+        r.value_lo = static_cast<uint32_t>(value);
+        r.value_hi = static_cast<uint32_t>(value >> 32);
         asm volatile("fence" ::: "memory");
         *tail = ++n;
     }
@@ -357,16 +341,18 @@ struct EndBase {
     PtpTimer timer;
     LinkHeaderRow header;
     LinkRule rule;
-    uint32_t slot_base = 0, diag_addr = 0, round = 0;
+    volatile LinkL1* l1 = nullptr;
+    uint32_t slot_base = 0, round = 0;
     bool started = false;
     Grid grid;
-    StopDiag diag;
+    Diag diag{};
     HwRound rnd;
     link::Ring ring;
 
-    void open(uint32_t l1) {
-        slot_base = l1;
-        clear_slots(l1);
+    void open(uint32_t link_l1) {
+        l1 = reinterpret_cast<volatile LinkL1*>(link_l1);
+        slot_base = link_l1;
+        clear_slots(link_l1);
         timer.start();
         rule.install();
         header.install();
@@ -380,16 +366,20 @@ struct EndBase {
     }
 
 protected:
-    void begin(uint32_t l1, uint32_t ctl) {
-        diag_addr = ctl;
+    void begin() {
         ring.open(l1);
         grid.start();
     }
     // Rewritten at every round's close, so a host that cannot stop this end (a router) still reads the current
     // figures.
     __attribute__((noinline)) void write_diag() {
-        diag.timer = timer.ok ? 1u : 2u;
-        diag.write(diag_addr);
+        diag.timer = timer.ok ? kernel_profiler::kLinkSyncTimerRan : kernel_profiler::kLinkSyncTimerNoRate;
+        volatile Diag& d = l1->diag;
+        d.timer = diag.timer;
+        d.rounds_lost = diag.rounds_lost;
+        d.frames_retried = diag.frames_retried;
+        d.bursts_mismatched = diag.bursts_mismatched;
+        d.frames_unstamped = diag.frames_unstamped;
     }
     __attribute__((noinline)) void close_round(uint32_t tx_role, uint32_t rx_role) {
         const bool recorded = timer.ok && rnd.usable();
@@ -397,7 +387,7 @@ protected:
             ring.record_hw(rnd.tx.q(rnd.peer_offset_64), round, tx_role);
             ring.record_hw(rnd.rx.q(timer.offset_64), round, rx_role);
         }
-        diag.note_round(recorded);
+        diag.rounds_lost += !recorded;
         write_diag();
     }
 };
@@ -415,8 +405,8 @@ struct SenderLink : EndBase {
     // The burst in flight, from trip out_j0: out_sent of its frames issued, their echoes awaited once all are.
     uint32_t out_j0 = 0, out_sent = 0, next_j = 0;
 
-    void start(uint32_t l1, uint32_t ctl) {
-        begin(l1, ctl);
+    void start() {
+        begin();
         burst_ticks = kPaceTicks / kBurstsPerRound;
         out_sent = kBurstFrames;
         const Instant now = read_instant();
@@ -439,7 +429,7 @@ struct SenderLink : EndBase {
         if constexpr (DataCache) {
             invalidate_l1_cache();
         }
-        if (rd(diag_addr) != kCtlRun) {
+        if (l1->ctl != kCtlRun) {
             // A round in progress closes at the next burst rather than spanning the pause.
             bursts -= bursts % kBurstsPerRound;
             const Instant now = read_instant();
@@ -516,7 +506,7 @@ struct ReceiverLink : EndBase {
     uint32_t echo_j0 = 0, taken = 0, echoed = 0;
     uint64_t tx[kBurstFrames] = {};
 
-    void start(uint32_t l1, uint32_t ctl) { begin(l1, ctl); }
+    void start() { begin(); }
     // Each frame is read and echoed at the step that finds it, the burst's ingress stamps taken with its last frame,
     // before that frame's echo: the sender issues nothing more until every echo is in. An echo the queue did not take
     // goes at the next step.
@@ -625,7 +615,7 @@ struct HostedEnd {
     static inline LinkEnd<Sender, DataCache> end;
     __attribute__((noipa)) static void start_body(uint32_t l1) {
         end.open(l1);
-        end.start(l1, l1 + kCtlOffset);
+        end.start();
     }
     __attribute__((noipa)) static void step_body(uint32_t) { end.step(); }
     __attribute__((noipa)) static void stop_body(uint32_t) { end.stop(); }

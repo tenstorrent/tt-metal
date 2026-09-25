@@ -44,6 +44,7 @@
 #include "impl/streaming_profiler/streaming_profiler_sync_devices.hpp"
 #include "impl/streaming_profiler/streaming_profiler_tile_clocks.hpp"
 #include "hostdev/streaming_profiler_common.h"
+#include "hostdev/streaming_profiler_sync.h"
 
 namespace tt::tt_metal::streaming_profiler {
 
@@ -230,7 +231,7 @@ void Devices::carve_eth_l1(const Hal& hal, uint32_t& aeth_unreserved, uint32_t& 
             eth_l1_.pll = eth_l1_.scratch - kEthPllBytes;
             eth_l1_.sync_ring = eth_l1_.pll - kEthSyncRingBytes;
             eth_l1_.link_ring = aeth_ok_ ? aeth_unreserved + aeth_unres_size - kernel_profiler::kLinkSyncL1Bytes +
-                                               kernel_profiler::kLinkSyncRingOffset
+                                               offsetof(kernel_profiler::LinkSyncL1, ring)
                                          : 0u;
             eth_ok_ = eth_l1_.sync_ring >= ebase;
         }
@@ -919,12 +920,15 @@ void Devices::stop_device(uint32_t device_index, const DeviceCtx& ctx, const Rel
     // The pusher first: its ring's tail is final once it is done, and the drainer ships the rest before it stops.
     if (ctx.pusher && ctx.pusher->program) {
         stop_drainer(device_index, ctx, *ctx.pusher, "idle-eth pusher", on_state);
+        static_assert(
+            offsetof(kernel_profiler::SyncCoreCtrl, dropped_sync) ==
+            offsetof(kernel_profiler::SyncCoreCtrl, dropped_pll) + sizeof(uint32_t));
         uint32_t dropped[2] = {};
         cluster.read_core(
             dropped,
             sizeof(dropped),
             tt_cxy_pair(ctx.chip_id, ctx.pusher->core.virt),
-            ctx.pusher->state_addr + kernel_profiler::kPusherDroppedOffset);
+            ctx.pusher->state_addr + offsetof(kernel_profiler::SyncCoreCtrl, dropped_pll));
         if (dropped[0] != 0 || dropped[1] != 0) {
             log_warning(
                 tt::LogMetal,

@@ -69,8 +69,8 @@ enum SpscControlBuffer {
     // the BroadcastRing. 8 slots so SPSC_CONTROL_END stays inside the 64-word vector.
     SPSC_STALL_COUNT_0 = 2 * PROFILER_SPSC_MAX_RISC + 2,
     SPSC_STALL_COUNT_MAX = 8,
-    // On an active eth core hosting a link end: the tail of its sync ring (kLinkSyncRingOffset), records written.
-    // Here rather than in the link L1 so the pusher's per-sweep read of this vector already carries it.
+    // On an active eth core hosting a link end: the records written to its sync ring (streaming_profiler_sync.h,
+    // LinkSyncL1::ring). Here rather than in the link L1 so the drainer's per-sweep read of this vector carries it.
     SPSC_LINK_SYNC_TAIL = SPSC_STALL_COUNT_0 + SPSC_STALL_COUNT_MAX,
     SPSC_CONTROL_END = SPSC_LINK_SYNC_TAIL + 1,  // first unused word; grow the layout here
 };
@@ -102,114 +102,6 @@ static constexpr std::uint32_t kRelayDoneMask = 0xFFFF0000u;
 // Each relay control word owns a 64 B pad, so the words that share it (the sync rendezvous triple behind
 // the stop word, the heartbeat behind done) travel in one host write.
 static constexpr std::uint32_t kRelayCtrlWordStride = 64;
-// In the clock pusher's control block, two words written as it exits: the samples it dropped waiting on a PLL read,
-// then the clock instants its sync ring had no room for.
-static constexpr std::uint32_t kPusherDroppedOffset = 20;
-
-// Tile clock network scratch: the first 64 B take the landing word of the reads, the table follows at kTileNetTable,
-// two histograms of kTileNetBins uint32 counts (offsets, then round trips) at kTileNetHist.
-//   [TILE_NET_GO]        host-written: kTileNetGoMeasure when this tile's turn comes, kTileNetGoExit to release it
-//   [TILE_NET_READY]     the host's nonce once the tile is up, its inverse once every partner is written
-//   [TILE_NET_OUT_0 ..)  per partner: the median of 2 * (partner wall - bracket midpoint) in the clocks' low words,
-//                        the spread between its quartiles, the median round trip (int32 ticks), then the coarse
-//                        whole-clock difference partner - this tile (int64, low word first)
-enum TileNetTable : std::uint32_t {
-    TILE_NET_GO = 0,
-    TILE_NET_READY = 1,
-    TILE_NET_OUT_0 = 2,
-    TILE_NET_OUT_WORDS = 5,
-};
-static constexpr std::uint32_t kTileNetGoMeasure = 1;
-static constexpr std::uint32_t kTileNetGoExit = 2;
-static constexpr std::uint32_t kTileNetTable = 64;
-static constexpr std::uint32_t kTileNetMaxPartners = 40;
-static constexpr std::uint32_t kTileNetHist =
-    kTileNetTable + 4 * (TILE_NET_OUT_0 + TILE_NET_OUT_WORDS * kTileNetMaxPartners);
-static constexpr std::uint32_t kTileNetBins = 128;
-static constexpr std::uint32_t kTileNetScratchBytes = kTileNetHist + 2 * 4 * kTileNetBins;
-
-// The device-to-device link sync's contract between the host, its resident kernels and the fabric routers: the eth
-// tile's refclk, the unit a round's stamp averages are reported in, the L1 the two ends own at the top of the active
-// eth core's unreserved region with the control word inside it (done at +4, diagnostics from +8), and the round
-// period in refclk ticks.
-static constexpr std::uint32_t kEthRefclkHz = 50'000'000u;
-static constexpr std::uint32_t kLinkSyncStampUnitsPerNs = 64;
-static constexpr std::uint32_t kLinkSyncL1Bytes = 800;
-static constexpr std::uint32_t kLinkSyncCtlOffset = 480;
-static constexpr std::uint32_t kLinkSyncCtlRun = 1, kLinkSyncCtlStop = 2;
-static constexpr std::uint32_t kLinkSyncPaceTicks = 500'000;  // a round every 10 ms
-
-// The sync's records, 8 words: [SYNC_META] kind << 8 | role; [SYNC_ROUND]; the reading and the wall clock at it as
-// two words each; a link record also carries the refclk read with that wall clock. A link end writes a round's two
-// stamp averages into the ring at the end of its link L1 (kLinkSyncRingRecords slots) and publishes the count in its
-// control vector (SPSC_LINK_SYNC_TAIL); it never waits for a reader, so a pusher a whole ring behind loses the oldest.
-// The pusher reads every linked core's control vector each sweep regardless, reads the ring when the tail moved, keeps
-// its own clock model's points in a ring of kSyncRingRecords in its L1, and ships them all on its sync socket as sync
-// frames: the SPSC frame prefix (w0, payload words, the source core's XY) with the record count at SPSC_PREFIX_HEAD_0,
-// then the records, the payload padded to SPSC_SPAN_WIRE_CTRL_WORDS at least so the ingest's frame walk accepts it.
-// Never a profiler record: the sync engine reads its socket itself.
-static constexpr std::uint32_t kSyncRecordWords = 8;
-enum SyncRecordWord : std::uint32_t {
-    SYNC_META = 0,
-    SYNC_ROUND,
-    SYNC_VALUE_LO,
-    SYNC_VALUE_HI,
-    SYNC_WALL_LO,
-    SYNC_WALL_HI,
-    SYNC_REF_LO,  // anchor records: the refclk read together with the wall clock above
-    SYNC_REF_HI,
-};
-static_assert(SYNC_REF_HI < kSyncRecordWords);
-// LOCAL: up to kSyncLocalPoints points of the chip's clock model (refclk, wall in eighths of a tick): the first whole
-// in value and wall, each later one in a REF word as its refclk past the first (low 16 bits) and its wall's offset in
-// eighths (high 16 bits, signed) from the first's plus the record's slope times that refclk step. META low bits: the
-// count, then one close bit per point from bit 2; round: each point's k8 in a byte (0 for a single sample), the byte
-// from bit 24 the slope the offsets are against. LINK: a round's 1588 stamp average in kLinkSyncStampUnitsPerNs per
-// ns. ANCHOR: the drainer's (wall, refclk) pair at a refclk update, taken independently of the pusher's samples;
-// value and round unused. ANCHOR_HIST: the drainer's own audit of its anchors against the pusher's points, sent at
-// stop: bin records (round the first bin, value, wall and ref six counts), then the worst (round
-// kSyncAnchorHistWorst: value its refclk, wall the anchors whose read found no refclk update, ref_lo the worst error
-// in 1/16 ns, signed).
-static constexpr std::uint32_t kSyncKindLocal = 0, kSyncKindLink = 1, kSyncKindAnchor = 2, kSyncKindAnchorHist = 3;
-static constexpr std::uint32_t kSyncLocalPoint = 0, kSyncLocalClose = 1;
-static constexpr std::uint32_t kSyncLocalPoints = 3;
-static constexpr std::uint32_t kSyncAnchorHistBins = 512;  // 1/16 ns each over +-16 ns
-static constexpr std::uint32_t kSyncAnchorHistWorst = 0xFFFFFFFFu;
-struct SyncLocalPoint {
-    std::uint64_t r, w8;
-    std::uint32_t k8;
-    bool close;
-};
-// The points of a LOCAL record, in order; returns how many.
-template <typename Word>
-inline std::uint32_t sync_local_unpack(const Word* rec, SyncLocalPoint* out) {
-    const std::uint32_t meta = rec[SYNC_META], round = rec[SYNC_ROUND];
-    const std::uint32_t n = meta & 3u;
-    const std::uint64_t r0 = (static_cast<std::uint64_t>(rec[SYNC_VALUE_HI]) << 32) | rec[SYNC_VALUE_LO];
-    const std::uint64_t w0 = (static_cast<std::uint64_t>(rec[SYNC_WALL_HI]) << 32) | rec[SYNC_WALL_LO];
-    const std::uint32_t slope = round >> 24;
-    for (std::uint32_t i = 0; i < n; i++) {
-        std::uint64_t r = r0, w = w0;
-        if (i != 0) {
-            const std::uint32_t d = rec[SYNC_REF_LO + i - 1];
-            const std::uint32_t dr = d & 0xFFFFu;
-            r += dr;
-            w += static_cast<std::uint64_t>(slope) * dr +
-                 static_cast<std::uint64_t>(static_cast<std::int64_t>(static_cast<std::int16_t>(d >> 16)));
-        }
-        out[i] = SyncLocalPoint{r, w, (round >> (8 * i)) & 0xFFu, ((meta >> (2 + i)) & 1u) != 0};
-    }
-    return n;
-}
-static constexpr std::uint32_t kSyncRoleT0 = 0, kSyncRoleT1 = 1, kSyncRoleT1B = 2, kSyncRoleT2 = 3;
-static constexpr std::uint32_t kLinkSyncRingOffset = 544;
-static constexpr std::uint32_t kLinkSyncRingRecords = 8;
-// The pusher's records: a firmware FBDIV walk sends a few per ~1.25 us step.
-static constexpr std::uint32_t kSyncRingRecords = 512;
-static constexpr std::uint32_t kSyncRingBytes = kSyncRingRecords * kSyncRecordWords * 4;
-static constexpr std::uint32_t kSyncFrameRecords = 32;  // records per sync frame at most
-static_assert(kLinkSyncRingOffset + kLinkSyncRingRecords * kSyncRecordWords * 4 <= kLinkSyncL1Bytes);
-static_assert(kLinkSyncRingRecords <= kSyncFrameRecords);
 
 // STICKY_META (SPSC/drainer backend, legacy / synthetic bench path only): an 8B context packet whose high
 // word carries (core_x, core_y, risc) + this type and whose low word is a 32-bit host-side ID. The host

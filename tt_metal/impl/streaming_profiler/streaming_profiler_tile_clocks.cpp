@@ -25,6 +25,7 @@
 
 #include "context/metal_context.hpp"
 #include "hostdev/streaming_profiler_common.h"
+#include "hostdev/streaming_profiler_sync.h"
 #include "impl/kernels/kernel.hpp"
 #include "impl/streaming_profiler/streaming_profiler_service.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
@@ -135,7 +136,7 @@ std::vector<Node> enumerate_nodes(IDevice* device, ContextId ctx) {
     const auto ring_space = [&](HalProgrammableCoreType t) {
         TT_FATAL(
             hal.get_dev_size(t, HalL1MemAddrType::PROFILER) >=
-                kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE + kernel_profiler::kTileNetScratchBytes,
+                kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE + sizeof(kernel_profiler::TileNetScratch),
             "streaming profiler: a profiler L1 region cannot hold the tile clock scratch");
         return static_cast<uint32_t>(hal.get_dev_addr(t, HalL1MemAddrType::PROFILER)) +
                kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE;
@@ -294,7 +295,9 @@ std::vector<Reading> read_network(
             case kKinds: break;
         }
     }
-    const auto table_of = [&](uint32_t s) { return nodes[s].host_scratch + kernel_profiler::kTileNetTable; };
+    const auto table_of = [&](uint32_t s) {
+        return nodes[s].host_scratch + offsetof(kernel_profiler::TileNetScratch, table);
+    };
     // Fast dispatch's go signal reaches every core of the grid, and a host-launched kernel leaves its launch slot
     // valid on exit, so the slots go back to the firmware's initial message once the kernels have exited.
     const auto& hal = MetalContext::instance(ctx).hal();
@@ -348,12 +351,14 @@ std::vector<Reading> read_network(
         for (uint32_t s : initiators) {
             const uint32_t n = args[s][3];
             const tt_cxy_pair core(chip, nodes[s].virt);
-            std::vector<uint32_t> t(kernel_profiler::TILE_NET_OUT_0 + kernel_profiler::TILE_NET_OUT_WORDS * n, 0);
+            kernel_profiler::TileNetTable t{};
+            const auto table_bytes = static_cast<uint32_t>(
+                offsetof(kernel_profiler::TileNetTable, partner) + n * sizeof(kernel_profiler::TileNetPartner));
             const auto await = [&](uint32_t ready, const char* what) {
                 const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
                 for (;;) {
-                    cluster.read_core(t.data(), static_cast<uint32_t>(t.size() * sizeof(uint32_t)), core, table_of(s));
-                    if (t[kernel_profiler::TILE_NET_READY] == ready) {
+                    cluster.read_core(&t, table_bytes, core, table_of(s));
+                    if (t.ready == ready) {
                         return;
                     }
                     TT_FATAL(
@@ -371,12 +376,12 @@ std::vector<Reading> read_network(
             cluster.write_core(&go, sizeof(go), core, table_of(s));
             await(~nonce, "finish its tile clock reads");
             for (uint32_t m = 0; m < n; m++) {
-                const uint32_t w = kernel_profiler::TILE_NET_OUT_0 + kernel_profiler::TILE_NET_OUT_WORDS * m;
+                const kernel_profiler::TileNetPartner& p = t.partner[m];
                 Reading& r = *dest[s][m];
-                r.median2 = static_cast<int32_t>(t[w]);
-                r.spread2 = static_cast<int32_t>(t[w + 1]);
-                r.rtt = static_cast<int32_t>(t[w + 2]);
-                r.coarse = static_cast<int64_t>((uint64_t{t[w + 4]} << 32) | t[w + 3]);
+                r.median2 = p.median2;
+                r.spread2 = p.spread2;
+                r.rtt = p.rtt;
+                r.coarse = static_cast<int64_t>((uint64_t{p.coarse_hi} << 32) | p.coarse_lo);
             }
         }
     } catch (...) {

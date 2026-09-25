@@ -18,15 +18,14 @@ static constexpr uint32_t kHandshake = eth_l1_mem::address_map::ERISC_L1_UNRESER
 
 void kernel_main() {
     const uint32_t link_l1 = get_arg_val<uint32_t>(0);
-    const uint32_t ctl = link_l1 + eth_ptp::kCtlOffset;
+    volatile eth_ptp::LinkL1* l1 = reinterpret_cast<volatile eth_ptp::LinkL1*>(link_l1);
     g_link.open(link_l1);
     eth_wait_for_bytes(16);
     eth_receiver_channel_done(0);
-    g_link.start(link_l1, ctl);
-    volatile tt_l1_ptr uint32_t* c = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctl);
-    while (*c != eth_ptp::kCtlStop) {
+    g_link.start();
+    while (l1->ctl != eth_ptp::kCtlStop) {
         g_link.step();
     }
     g_link.stop();
-    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctl + 4) = 1;
+    l1->done = 1;
 }
