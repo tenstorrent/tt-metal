@@ -418,21 +418,21 @@ def test_demo_text_accuracy(mesh_device, max_generated_tokens, monkeypatch):
 
     if model.num_devices > 1:
         _, perf = _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks, token_acc)
-        profiler = perf["profiler"]
-        ttft, decode_tok_s = perf["ttft_s"], perf["decode_tok_s"]
     else:
         # Single device (the 9B dev checkpoint) has no phase profiler, so it reports no benchmark
         # JSON; the CI legs that feed the dashboard are all TP. No _warmup_prefill: the reference
         # prompt is always < PREFILL_CHUNK, so the masked-bucket path compiles in capture — the
         # same condition under which test_demo_text skips it.
         _run_traced_generation(model, tokenizer, device, token_ids, max_generated_tokens, num_blocks, token_acc)
-        profiler = None
+        perf = None
 
     top1, top5 = (100 * value for value in token_acc.compute_accuracy())
     logger.info(f"Top-1 token accuracy: {top1:.2f}%  Top-5 token accuracy: {top5:.2f}%")
 
-    if profiler is not None:
-        _save_accuracy_benchmark(profiler, model, top1, top5, prompt_len, max_generated_tokens, ttft, decode_tok_s)
+    if perf is not None:
+        # seq_len for the target lookup is the reference's prompt length, which is what the
+        # accuracy entry in model_targets.yaml is keyed on.
+        _save_tp_benchmark(perf, model, prompt_len, prompt_len, max_generated_tokens, accuracy=(top1, top5))
 
     # get_accuracy_thresholds resolves the centralized targets and raises when none match, so a
     # renamed checkpoint or a relabelled SKU fails here instead of leaving the gate a no-op. It
@@ -445,37 +445,6 @@ def test_demo_text_accuracy(mesh_device, max_generated_tokens, monkeypatch):
     # verify_accuracy only warns; gate on it here so a regression fails the case outside CI too.
     assert top1 >= min_top1, f"top-1 token accuracy {top1:.2f}% below target {min_top1}%"
     assert top5 >= min_top5, f"top-5 token accuracy {top5:.2f}% below target {min_top5}%"
-
-
-def _save_accuracy_benchmark(profiler, model, top1, top5, prompt_len, num_generated, ttft, decode_tok_s):
-    """Emit the CI benchmark JSON for an accuracy run (no-op outside CI).
-
-    The perf numbers are real: teacher forcing changes which token id is written into the decode
-    input buffer, not the device work per step, and the bookkeeping happens outside the timed
-    window. They are simply not gated — ``validate_perf_targets._is_accuracy_run`` classifies a
-    run by the top1/top5 measurement names below and then skips the perf block — and they are
-    measured at the reference's prompt length, which no perf entry covers.
-    """
-    measurements = {
-        "prefill_t/s": (prompt_len / ttft) if ttft > 0 else 0.0,
-        "prefill_time_to_token": ttft,
-        "decode_t/s": decode_tok_s,
-        "decode_t/s/u": decode_tok_s,
-    }
-    benchmark_data = create_benchmark_data(profiler, measurements, {"inference_prefill": 0, "inference_decode": 1}, {})
-    for name, value in (("top1_token_accuracy", top1), ("top5_token_accuracy", top5)):
-        benchmark_data.add_measurement(profiler, 0, "inference_decode", name, value)
-    benchmark_data.save_partial_run_json(
-        profiler,
-        run_type="demo_accuracy",
-        ml_model_name=model.args.base_model_name,
-        ml_model_type="llm",
-        device_name=determine_device_name(model.mesh_device),
-        num_layers=model.args.n_layers,
-        batch_size=1,
-        input_sequence_length=prompt_len,
-        output_sequence_length=num_generated,
-    )
 
 
 def _should_use_chunked_trace(model):
@@ -1188,8 +1157,15 @@ def _run_paged_generation(model, tokenizer, device, token_ids, max_generated_tok
     return generated, {"ttft": ttft, "avg_decode_s": avg_decode, "decode_steps": len(decode_times)}
 
 
-def _save_tp_benchmark(perf, model, seqlen, prompt_len, num_generated):
-    """Emit CI benchmark JSON (no-op outside CI; uses nominal ``seqlen`` for target lookup)."""
+def _save_tp_benchmark(perf, model, seqlen, prompt_len, num_generated, accuracy=None):
+    """Emit CI benchmark JSON (no-op outside CI; uses nominal ``seqlen`` for target lookup).
+
+    ``accuracy`` is the (top-1, top-5) pair from a teacher-forcing run. Its perf numbers are
+    real — teacher forcing changes which token id is written into the decode input buffer, not
+    the device work per step, and the bookkeeping happens outside the timed window — they are
+    just never gated: ``validate_perf_targets._is_accuracy_run`` classifies a run by the
+    top1/top5 measurement names and then skips the perf block.
+    """
     profiler = perf["profiler"]
     ttft_s = perf["ttft_s"]
     decode_tok_s = perf["decode_tok_s"]
@@ -1202,9 +1178,12 @@ def _save_tp_benchmark(perf, model, seqlen, prompt_len, num_generated):
         "decode_t/s/u": decode_tok_s,
     }
     benchmark_data = create_benchmark_data(profiler, measurements, {"inference_prefill": 0, "inference_decode": 1}, {})
+    if accuracy is not None:
+        for name, value in zip(("top1_token_accuracy", "top5_token_accuracy"), accuracy):
+            benchmark_data.add_measurement(profiler, 0, "inference_decode", name, value)
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type="demo",
+        run_type="demo_accuracy" if accuracy is not None else "demo",
         ml_model_name=model.args.base_model_name,
         ml_model_type="llm",
         device_name=determine_device_name(model.mesh_device),
