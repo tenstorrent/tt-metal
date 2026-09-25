@@ -126,6 +126,15 @@ def create_rope_caches(mesh_config, hf_config, max_seq_len, prefill_chunk_size=N
     return caches_4d, caches_2d
 
 
+def prefill_chunk_geometry_error(prefill_chunk_size, cp_degree, max_seq_len):
+    """Reason this chunk geometry is unusable, or None. The ring SDPA validates the rest at compile."""
+    if max_seq_len <= 0 or prefill_chunk_size <= 0:
+        return "sequence and chunk lengths must be positive"
+    if prefill_chunk_size % (cp_degree * ttnn.TILE_SIZE) or max_seq_len % prefill_chunk_size:
+        return "prefill chunks must divide max_seq_len and contain whole CP-local tiles"
+    return None
+
+
 class Gemma4Model:
     """Galaxy prefill model with ring-cache outputs for disaggregation."""
 
@@ -149,12 +158,9 @@ class Gemma4Model:
         ), "Expected a multimodal Gemma4 state_dict with model.language_model.* keys"
         mesh_device = mesh_config.device
 
-        if max_seq_len <= 0 or prefill_chunk_size <= 0:
-            raise ValueError("sequence and chunk lengths must be positive")
-        if max_seq_len % prefill_chunk_size or prefill_chunk_size % (mesh_config.cp_degree * ttnn.TILE_SIZE):
-            raise ValueError("prefill chunks must divide max_seq_len and contain whole CP-local tiles")
-        if prefill_chunk_size < 1024 * mesh_config.cp_degree:
-            raise ValueError("prefill chunk size must cover the sliding window on each CP rank")
+        geometry_error = prefill_chunk_geometry_error(prefill_chunk_size, mesh_config.cp_degree, max_seq_len)
+        if geometry_error:
+            raise ValueError(geometry_error)
 
         self.mesh_device = mesh_device
         self.hf_config = hf_config

@@ -4,20 +4,21 @@
 
 #include "untilize_with_unpadding_multi_core_block_interleaved_program_factory.hpp"
 
-#include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
@@ -29,21 +30,39 @@ using ttnn::operations::data_movement::BlockDirection;
 using ttnn::operations::data_movement::BlockPlan;
 using ttnn::operations::data_movement::buffer_set_for_core;
 using ttnn::operations::data_movement::make_block_plan;
-using ttnn::operations::data_movement::push_buffer_set;
+
+// Spec names are prefixed per factory: all five factory .cpp files land in one unity-build
+// translation unit, where every anonymous namespace merges into a single scope.
+const KernelSpecName BI_READER_FULL{"bi_reader_full"};
+const KernelSpecName BI_WRITER_FULL{"bi_writer_full"};
+const KernelSpecName BI_READER_CLIFFROW{"bi_reader_cliffrow"};
+const KernelSpecName BI_WRITER_CLIFFROW{"bi_writer_cliffrow"};
+const KernelSpecName BI_COMPUTE_FULL{"bi_compute_full"};
+const KernelSpecName BI_COMPUTE_CLIFF_COL_ROW{"bi_compute_cliff_col_row"};
+const KernelSpecName BI_COMPUTE_CLIFF_ROW{"bi_compute_cliff_row"};
+const KernelSpecName BI_COMPUTE_CLIFF_COL{"bi_compute_cliff_col"};
+const DFBSpecName BI_IN_FULL{"bi_in_full"};
+const DFBSpecName BI_OUT_FULL{"bi_out_full"};
+const DFBSpecName BI_IN_CLIFFROW{"bi_in_cliffrow"};
+const DFBSpecName BI_OUT_CLIFFROW{"bi_out_cliffrow"};
+const TensorParamName BI_INPUT{"bi_input"};
+const TensorParamName BI_OUTPUT{"bi_output"};
 
 }  // namespace
 
-tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts
+UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_program_artifacts(
     const UntilizeWithUnpaddingParams& operation_attributes, const Tensor& input, Tensor& output) {
     const auto& a = input;
     bool fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
 
-    ProgramDescriptor desc;
+    const auto& input_mesh_tensor = input.mesh_tensor();
+    const auto& output_mesh_tensor = output.mesh_tensor();
 
-    tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    tt::DataFormat input_dfb_data_format = datatype_to_dataformat_converter(a.dtype());
+    uint32_t input_single_tile_size = tt::tile_size(input_dfb_data_format);
+    tt::DataFormat output_dfb_data_format = datatype_to_dataformat_converter(output.dtype());
+    uint32_t output_single_tile_size = tt::tile_size(output_dfb_data_format);
 
     const auto& input_shape = a.padded_shape();
     const auto& output_shape = output.padded_shape();
@@ -93,30 +112,38 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreBlockInterleavedPr
         el_size = a.element_size();
     }
 
-    // One buffer set per block width, each on its own disjoint cores. This replaces the legacy
+    // One buffer pair per block width, each on its own disjoint cores. This replaces the legacy
     // layout of one (input, output) index pair re-used at two different sizes across four regions.
-    for (const BlockBufferSet* set : {&full_set, &cliffrow_set}) {
-        if (set->empty()) {
-            continue;
-        }
+    // The sizing rules are the shared `push_buffer_set` helper's, reproduced here because that
+    // helper emits into the legacy descriptor API and so cannot be called from a spec factory; an
+    // untilize set has no staging buffer, so only the input and output pair is emitted.
+    Group<DataflowBufferSpec> dataflow_buffers;
+    auto push_buffer_pair = [&](const BlockBufferSet& set, const DFBSpecName& in_name, const DFBSpecName& out_name) {
         TT_FATAL(
-            set->block_tiles > 0,
+            set.block_tiles > 0,
             "Buffer set on cores {} has a zero block width; its buffers would be empty",
-            set->core_ranges.str());
-        push_buffer_set(
-            desc,
-            *set,
-            input_single_tile_size,
-            output_single_tile_size,
-            input_cb_data_format,
-            output_cb_data_format,
-            /*dram_alignment=*/0,
-            TILE_HEIGHT);
+            set.core_ranges.str());
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = in_name,
+            .entry_size = input_single_tile_size,
+            .num_entries = set.block_tiles,
+            .data_format_metadata = input_dfb_data_format,
+        });
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = out_name,
+            .entry_size = output_single_tile_size,
+            .num_entries = set.block_tiles,
+            .data_format_metadata = output_dfb_data_format,
+        });
+    };
+    if (!full_set.empty()) {
+        push_buffer_pair(full_set, BI_IN_FULL, BI_OUT_FULL);
+    }
+    if (!cliffrow_set.empty()) {
+        push_buffer_pair(cliffrow_set, BI_IN_CLIFFROW, BI_OUT_CLIFFROW);
     }
 
-    Buffer* src0_buffer = a.buffer();
-    Buffer* dst_buffer = output.buffer();
-    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
 
     // reader
 
@@ -133,102 +160,196 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreBlockInterleavedPr
     uint32_t total_num_rows = output.logical_shape()[-2];
 
     // One reader and one writer per buffer set, each over that set's cores and bound to that set's
-    // indices. A set's cores are exactly the cores whose block width its buffers are sized for, so
+    // buffers. A set's cores are exactly the cores whose block width its buffers are sized for, so
     // every writer instance's contiguous walk from `get_read_ptr()` stays inside a buffer that is an
     // exact multiple of the block it drains.
-    auto make_reader_kernel = [&](const BlockBufferSet& set) {
-        std::vector<uint32_t> reader_compile_time_args = {
-            num_tiles_2d, third_dim, total_tiles_per_row, set.input_index};
-        TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
-        KernelDescriptor reader_desc;
-        reader_desc.kernel_source =
-            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_wh_multicore.cpp";
-        reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        reader_desc.core_ranges = set.core_ranges;
-        reader_desc.compile_time_args = std::move(reader_compile_time_args);
-        reader_desc.config = ReaderConfigDescriptor{};
-        return reader_desc;
+    auto make_reader_kernel = [&](const KernelSpecName& unique_id, const DFBSpecName& in_name) {
+        return KernelSpec{
+            .unique_id = unique_id,
+            .source =
+                "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+                "reader_unary_interleaved_wh_multicore_metal2.cpp",
+            .dfb_bindings = {DFBBinding{
+                .dfb_spec_name = in_name,
+                .accessor_name = "in",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            }},
+            .tensor_bindings = {TensorBinding{
+                .tensor_parameter_name = BI_INPUT,
+                .accessor_name = "src",
+            }},
+            .compile_time_args =
+                {{"num_tiles_per_2d", num_tiles_2d},
+                 {"third_dim", third_dim},
+                 {"total_tiles_per_row", total_tiles_per_row}},
+            .runtime_arg_schema =
+                {.runtime_arg_names = {"start_id", "single_block_size_row_arg", "single_block_size_col_arg"}},
+            .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        };
     };
 
-    auto make_writer_kernel = [&](const BlockBufferSet& set) {
-        std::vector<uint32_t> writer_ct_args = {
-            total_num_rows, third_dim, TILE_HEIGHT, unpadded_row_size_bytes, set.output_index};
-        TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
-        KernelDescriptor writer_desc;
-        writer_desc.kernel_source =
-            "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
-            "writer_unary_stick_layout_wh_multicore.cpp";
-        writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        writer_desc.core_ranges = set.core_ranges;
-        writer_desc.compile_time_args = std::move(writer_ct_args);
-        writer_desc.config = WriterConfigDescriptor{};
-        return writer_desc;
+    auto make_writer_kernel = [&](const KernelSpecName& unique_id, const DFBSpecName& out_name) {
+        return KernelSpec{
+            .unique_id = unique_id,
+            .source =
+                "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
+                "writer_unary_stick_layout_wh_multicore_metal2.cpp",
+            .dfb_bindings = {DFBBinding{
+                .dfb_spec_name = out_name,
+                .accessor_name = "out",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            }},
+            .tensor_bindings = {TensorBinding{
+                .tensor_parameter_name = BI_OUTPUT,
+                .accessor_name = "dst",
+            }},
+            .compile_time_args =
+                {{"total_num_rows", total_num_rows},
+                 {"third_dim", third_dim},
+                 {"tile_height", (uint32_t)TILE_HEIGHT},
+                 {"unpadded_X_size", unpadded_row_size_bytes}},
+            .runtime_arg_schema =
+                {.runtime_arg_names =
+                     {"width_size",
+                      "start_row_id",
+                      "start_column_id",
+                      "single_block_size_row_arg",
+                      "single_block_size_col_arg",
+                      "sub_block_width_size",
+                      "single_sub_block_size_row_arg"}},
+            .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        };
     };
-
-    KernelDescriptor full_reader_desc = make_reader_kernel(full_set);
-    KernelDescriptor full_writer_desc = make_writer_kernel(full_set);
-    KernelDescriptor cliffrow_reader_desc = make_reader_kernel(cliffrow_set);
-    KernelDescriptor cliffrow_writer_desc = make_writer_kernel(cliffrow_set);
 
     // compute
     uint32_t single_sub_block_size_wh = single_block_size * single_block_size / single_sub_block_size;
     uint32_t single_sub_block_size_cliff_col_wh =
         single_block_size_cliff_col * single_block_size / single_sub_block_size;
-    KernelDescriptor::Defines compute_kernel_defines;
-    if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32 ||
-        input_cb_data_format == tt::DataFormat::Float32) {
-        compute_kernel_defines.emplace_back("DST_ACCUM_MODE", "1");
+    KernelSpec::CompilerOptions::Defines compute_kernel_defines;
+    if (input_dfb_data_format == tt::DataFormat::Int32 || input_dfb_data_format == tt::DataFormat::UInt32 ||
+        input_dfb_data_format == tt::DataFormat::Float32) {
+        compute_kernel_defines.emplace("DST_ACCUM_MODE", "1");
     }
 
     const std::string compute_kernel_path(
-        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp");
+        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh_metal2.cpp");
+
+    Group<KernelSpec> kernels;
+    Group<WorkUnitSpec> work_units;
 
     // The compute kernel stays split per region -- each region has its own block *count* -- but each
     // instance binds the buffer set matching its cores' block *width*. The region's block-width CTA
-    // (the second one) must equal that set's `block_tiles`, since it is the page count the kernel
-    // waits on and pops; the assertion below keeps the two from drifting apart.
-    auto push_compute =
-        [&](const CoreRangeSet& cr, const BlockBufferSet& set, uint32_t block_size_col, uint32_t block_size_row) {
-            TT_FATAL(
-                block_size_row == set.block_tiles,
-                "Compute on cores {} expects a block width of {} tiles but its buffers hold {}",
-                cr.str(),
-                block_size_row,
-                set.block_tiles);
-            // fp32 unpack is marked for exactly the buffer this kernel reads. Marking both sets'
-            // indices would set it on `cliffrow_set.input_index` even when that set is empty -- an
-            // operand with no CB on any core -- and would do so in the full-set kernels too.
-            std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
-                NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-            if (fp32_dest_acc_en) {
-                unpack_to_dest_mode[set.input_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
-            }
+    // must equal that set's `block_tiles`, since it is the entry count the kernel waits on and pops;
+    // the assertion below keeps the two from drifting apart.
+    auto push_compute = [&](const KernelSpecName& unique_id,
+                            const CoreRangeSet& cr,
+                            const BlockBufferSet& set,
+                            const DFBSpecName& in_name,
+                            const DFBSpecName& out_name,
+                            const KernelSpecName& reader_id,
+                            const KernelSpecName& writer_id,
+                            uint32_t block_size_col,
+                            uint32_t block_size_row) {
+        TT_FATAL(
+            block_size_row == set.block_tiles,
+            "Compute on cores {} expects a block width of {} tiles but its buffers hold {}",
+            cr.str(),
+            block_size_row,
+            set.block_tiles);
+        // fp32 unpack is marked for exactly the buffer this kernel reads. Marking both sets'
+        // buffers would set it on the cliffrow set's input even when that set is empty -- a
+        // buffer that exists on no core -- and would do so in the full-set kernels too.
+        ComputeGen1Config compute_hw_config{.enable_32_bit_dest = fp32_dest_acc_en};
+        if (fp32_dest_acc_en) {
+            compute_hw_config.unpack_modes = {{in_name, UnpackMode::UnpackToDest}};
+        }
 
-            KernelDescriptor compute_desc;
-            compute_desc.kernel_source = compute_kernel_path;
-            compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-            compute_desc.core_ranges = cr;
-            compute_desc.compile_time_args = {
-                block_size_col, block_size_row, third_dim, set.input_index, set.output_index};
-            compute_desc.defines = compute_kernel_defines;
-            compute_desc.config = ComputeConfigDescriptor{
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
-            };
-            desc.kernels.push_back(std::move(compute_desc));
-        };
+        kernels.push_back(KernelSpec{
+            .unique_id = unique_id,
+            .source = compute_kernel_path,
+            .compiler_options =
+                {
+                    .defines = compute_kernel_defines,
+                    .opt_level = KernelBuildOptLevel::O3,
+                },
+            .dfb_bindings =
+                {DFBBinding{
+                     .dfb_spec_name = in_name,
+                     .accessor_name = "src",
+                     .endpoint_type = DFBEndpointType::CONSUMER,
+                 },
+                 DFBBinding{
+                     .dfb_spec_name = out_name,
+                     .accessor_name = "out",
+                     .endpoint_type = DFBEndpointType::PRODUCER,
+                 }},
+            .compile_time_args =
+                {{"block_size_col", block_size_col}, {"block_size_row", block_size_row}, {"third_dim", third_dim}},
+            .hw_config = compute_hw_config,
+        });
+        work_units.push_back(WorkUnitSpec{
+            .name = std::string(unique_id.get()),
+            .kernels = {reader_id, writer_id, unique_id},
+            .target_nodes = cr,
+        });
+    };
+
+    if (!full_set.empty()) {
+        kernels.push_back(make_reader_kernel(BI_READER_FULL, BI_IN_FULL));
+        kernels.push_back(make_writer_kernel(BI_WRITER_FULL, BI_OUT_FULL));
+    }
+    if (!cliffrow_set.empty()) {
+        kernels.push_back(make_reader_kernel(BI_READER_CLIFFROW, BI_IN_CLIFFROW));
+        kernels.push_back(make_writer_kernel(BI_WRITER_CLIFFROW, BI_OUT_CLIFFROW));
+    }
 
     if (!core_range.empty()) {
-        push_compute(core_range, full_set, single_sub_block_size_wh, single_sub_block_size);
+        push_compute(
+            BI_COMPUTE_FULL,
+            core_range,
+            full_set,
+            BI_IN_FULL,
+            BI_OUT_FULL,
+            BI_READER_FULL,
+            BI_WRITER_FULL,
+            single_sub_block_size_wh,
+            single_sub_block_size);
     }
     if (has_cliff_col && has_cliff_row) {
-        push_compute(cliff_col_row_core_range, cliffrow_set, single_block_size_cliff_col, single_block_size_cliff_row);
+        push_compute(
+            BI_COMPUTE_CLIFF_COL_ROW,
+            cliff_col_row_core_range,
+            cliffrow_set,
+            BI_IN_CLIFFROW,
+            BI_OUT_CLIFFROW,
+            BI_READER_CLIFFROW,
+            BI_WRITER_CLIFFROW,
+            single_block_size_cliff_col,
+            single_block_size_cliff_row);
     }
     if (has_cliff_row) {
-        push_compute(cliff_row_core_range, cliffrow_set, single_block_size, single_block_size_cliff_row);
+        push_compute(
+            BI_COMPUTE_CLIFF_ROW,
+            cliff_row_core_range,
+            cliffrow_set,
+            BI_IN_CLIFFROW,
+            BI_OUT_CLIFFROW,
+            BI_READER_CLIFFROW,
+            BI_WRITER_CLIFFROW,
+            single_block_size,
+            single_block_size_cliff_row);
     }
     if (has_cliff_col) {
-        push_compute(cliff_col_core_range, full_set, single_sub_block_size_cliff_col_wh, single_sub_block_size);
+        push_compute(
+            BI_COMPUTE_CLIFF_COL,
+            cliff_col_core_range,
+            full_set,
+            BI_IN_FULL,
+            BI_OUT_FULL,
+            BI_READER_FULL,
+            BI_WRITER_FULL,
+            single_sub_block_size_cliff_col_wh,
+            single_sub_block_size);
     }
 
     // RUNTIME ARGS
@@ -245,6 +366,11 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreBlockInterleavedPr
         total_row_cores++;
     }
     uint32_t cores_col_count = 1;
+
+    KernelRunArgs full_reader_run_args{.kernel = BI_READER_FULL};
+    KernelRunArgs full_writer_run_args{.kernel = BI_WRITER_FULL};
+    KernelRunArgs cliffrow_reader_run_args{.kernel = BI_READER_CLIFFROW};
+    KernelRunArgs cliffrow_writer_run_args{.kernel = BI_WRITER_CLIFFROW};
 
     for (uint32_t i = 0; i < ncores; ++i) {
         const auto& core = cores[i];
@@ -278,8 +404,8 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreBlockInterleavedPr
         // inside its buffer.
         const BlockBufferSet& set = buffer_set_for_core(plan, core);
         const bool is_cliff_row_core = (&set == &cliffrow_set);
-        KernelDescriptor& reader_desc = is_cliff_row_core ? cliffrow_reader_desc : full_reader_desc;
-        KernelDescriptor& writer_desc = is_cliff_row_core ? cliffrow_writer_desc : full_writer_desc;
+        KernelRunArgs& reader_run_args = is_cliff_row_core ? cliffrow_reader_run_args : full_reader_run_args;
+        KernelRunArgs& writer_run_args = is_cliff_row_core ? cliffrow_writer_run_args : full_writer_run_args;
         TT_FATAL(
             single_sub_block_size_row_arg == set.block_tiles,
             "Core {} is fed a sub-block of {} tiles but the buffers on it hold {}. The work split "
@@ -288,23 +414,26 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreBlockInterleavedPr
             single_sub_block_size_row_arg,
             set.block_tiles);
 
-        // reader runtime args — the Buffer* slot auto-registers as a BufferBinding. This factory
-        // defines no override_runtime_arguments, so `resolve_bindings` walks every kernel's bindings
-        // and both pairs refresh their addresses on a cache hit on their own.
-        reader_desc.emplace_runtime_args(
-            core, {src0_buffer, tile_start_id, single_block_size_row_arg, single_block_size_col_arg});
+        // reader runtime args — the input tensor's base address rides on its TensorBinding, which
+        // the framework refreshes on every dispatch.
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values,
+            core,
+            {{"start_id", tile_start_id},
+             {"single_block_size_row_arg", single_block_size_row_arg},
+             {"single_block_size_col_arg", single_block_size_col_arg}});
 
         //  writer runtime args
-        writer_desc.emplace_runtime_args(
+        AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values,
             core,
-            {dst_buffer,
-             TILE_WIDTH * el_size * single_block_size_row_arg,
-             start_row_id,
-             start_column_id,
-             single_block_size_row_arg,
-             single_block_size_col_arg,
-             TILE_WIDTH * el_size * single_sub_block_size_row_arg,
-             single_sub_block_size_row_arg});
+            {{"width_size", TILE_WIDTH * el_size * single_block_size_row_arg},
+             {"start_row_id", start_row_id},
+             {"start_column_id", start_column_id},
+             {"single_block_size_row_arg", single_block_size_row_arg},
+             {"single_block_size_col_arg", single_block_size_col_arg},
+             {"sub_block_width_size", TILE_WIDTH * el_size * single_sub_block_size_row_arg},
+             {"single_sub_block_size_row_arg", single_sub_block_size_row_arg}});
 
         uint32_t end_column_id = start_column_id + (single_block_size_row_arg * TILE_WIDTH * el_size);
         start_column_id = end_column_id % padded_row_size_bytes;
@@ -320,18 +449,34 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreBlockInterleavedPr
         }
     }
 
-    // Insert each non-empty set's reader+writer at the beginning, so the dataflow kernels precede
-    // the compute kernels, in full-then-cliffrow order.
-    if (!cliffrow_set.empty()) {
-        desc.kernels.insert(desc.kernels.begin(), std::move(cliffrow_writer_desc));
-        desc.kernels.insert(desc.kernels.begin(), std::move(cliffrow_reader_desc));
-    }
-    if (!full_set.empty()) {
-        desc.kernels.insert(desc.kernels.begin(), std::move(full_writer_desc));
-        desc.kernels.insert(desc.kernels.begin(), std::move(full_reader_desc));
-    }
+    ProgramSpec spec{
+        .name = "untilize_with_unpadding_multi_core_block_interleaved",
+        .kernels = std::move(kernels),
+        .dataflow_buffers = std::move(dataflow_buffers),
+        .tensor_parameters =
+            {TensorParameter{.unique_id = BI_INPUT, .spec = input_mesh_tensor.tensor_spec()},
+             TensorParameter{.unique_id = BI_OUTPUT, .spec = output_mesh_tensor.tensor_spec()}},
+        .work_units = std::move(work_units),
+    };
 
-    return desc;
+    ProgramRunArgs run_args;
+    if (!full_set.empty()) {
+        run_args.kernel_run_args.push_back(std::move(full_reader_run_args));
+        run_args.kernel_run_args.push_back(std::move(full_writer_run_args));
+    }
+    if (!cliffrow_set.empty()) {
+        run_args.kernel_run_args.push_back(std::move(cliffrow_reader_run_args));
+        run_args.kernel_run_args.push_back(std::move(cliffrow_writer_run_args));
+    }
+    run_args.tensor_args = {
+        {BI_INPUT, input_mesh_tensor},
+        {BI_OUTPUT, output_mesh_tensor},
+    };
+
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+    };
 }
 
 }  // namespace ttnn::prim
