@@ -142,7 +142,8 @@ def test_ledger_generator(fx):
     s = Spec.load(fx())
     out = generate(s, Reference())
     ids = [t["id"] for t in out["tasks"]]
-    assert ids[:5] == ["R.1", "R.2", "R.3", "G.s256", "G.s512"]
+    assert ids[:7] == ["R.1", "R.2", "R.3", "G.s256", "G.s512", "B.1", "PL.0"]
+    assert [t["id"] for t in generate(s, early=True)["tasks"]] == ids[:7]
     assert [i for i in ids if i.startswith("C.")] == [f"C.blk.{st.name}" for st in Reference().block_graph(0)]
     assert [i for i in ids if i.startswith("S.")] == [f"S.blk.{n:02d}" for n in range(1, 7)]
     assert ids[-6:] == ["L.s256", "L.s512", "L.last", "K.1", "X.1", "X.2"]
