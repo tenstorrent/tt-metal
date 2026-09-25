@@ -85,7 +85,6 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
     };
     const auto summary_format = tt::tt_metal::datatype_to_dataformat_converter(in.a.dtype());
     const uint32_t segmented_affine_tiles = key_matrix_tiles + state_matrix_tiles;
-    const uint32_t segmented_state_tiles = state_matrix_tiles;
     tt::tt_metal::experimental::Group<tt::tt_metal::experimental::DataflowBufferSpec> dataflow_buffers = {
         make_dfb(initial_a_dfb_name, key_matrix_tiles, summary_format),
         make_dfb(initial_b_dfb_name, state_matrix_tiles, summary_format),
@@ -97,8 +96,8 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
         make_dfb(initial_state_dfb_name, state_matrix_tiles, tt::DataFormat::Float32),
         make_dfb(final_dfb_name, state_matrix_tiles, tt::DataFormat::Float32),
         make_dfb(tail_affine_dfb_name, segmented_affine_tiles, summary_format),
-        make_dfb(tail_entry_states_dfb_name, segmented_state_tiles, tt::DataFormat::Float32),
-        make_dfb(reset_b_dfb_name, segmented_state_tiles, tt::DataFormat::Float32),
+        make_dfb(tail_entry_states_dfb_name, state_matrix_tiles, tt::DataFormat::Float32),
+        make_dfb(reset_b_dfb_name, state_matrix_tiles, tt::DataFormat::Float32),
     };
     // Initial inputs/state and final output are one-shot transfers. TO_REMOTE stays single-slot because dataflow
     // releases the current block before the remote input that makes compute runnable.
@@ -288,6 +287,7 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
     };
 
     kda_factory_detail::bind_chronology(program_spec, program_run_args, in.actual_start, dataflow, compute);
+    kda_factory_detail::bind_actual_end(program_spec, program_run_args, in.actual_end, in.actual_start, dataflow);
     program_spec.kernels = {std::move(dataflow), std::move(compute)};
     return kda_factory_detail::chronology_workload(
         ttnn::device_operation::ProgramArtifacts{
