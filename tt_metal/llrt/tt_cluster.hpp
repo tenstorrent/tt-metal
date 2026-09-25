@@ -28,6 +28,7 @@
 #include <umd/device/cluster_descriptor.hpp>
 #include <umd/device/chip_helpers/sysmem_buffer.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/io_window_config.hpp>
 #include <umd/device/soc_descriptor.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
@@ -138,12 +139,25 @@ public:
         const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets, bool staggered_start = true) const;
     void assert_risc_reset_at_core(const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets) const;
 
+    // `ordering` is forwarded to UMD. Strict, the default, is what every caller had before this
+    // parameter existed. Bulk buffer data with no ordering requirement of its own should pass
+    // Relaxed; Strict serializes the transfer on the reconfigured-window path.
     void write_dram_vec(
-        const void* mem_ptr, uint32_t sz_in_bytes, ChipId device_id, int dram_view, uint64_t addr) const;
+        const void* mem_ptr,
+        uint32_t sz_in_bytes,
+        ChipId device_id,
+        int dram_view,
+        uint64_t addr,
+        tt::umd::IoOrdering ordering = tt::umd::IoOrdering::Strict) const;
     void read_dram_vec(void* mem_ptr, uint32_t sz_in_bytes, ChipId device_id, int dram_view, uint64_t addr) const;
 
     // Write to core. Accepts physical noc coordinates
-    void write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
+    void write_core(
+        const void* mem_ptr,
+        uint32_t sz_in_bytes,
+        tt_cxy_pair core,
+        uint64_t addr,
+        tt::umd::IoOrdering ordering = tt::umd::IoOrdering::Strict) const;
 
     // Access physical noc coordinates. Does write without effects of write combining
     void write_core_immediate(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
