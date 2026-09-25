@@ -119,6 +119,11 @@ ttnn::Tensor indexer_score_dsa(
 // has no TP sub-shard, so seq_shard_axes takes at most one axis ([sp]).
 // num_groups is required (no default): per-GQA-group selection is MSA's purpose, so the caller must state
 // the group count explicitly. It is placed before the defaulted optionals so the signature stays well-formed.
+// TRACE-SAFE metadata (classic factory; same contract as ring_indexer_score_dsa): 1-element uint32 DRAM tensors
+// the reader NoC-reads each dispatch, so a captured trace follows in-place rewrites. chunk_start_idx_tensor
+// replaces chunk_start_idx AND kv_len (derived = start + chunk extent, capped by valid_end_tensor);
+// cache_batch_idx_tensor (the USER id, recomposed user*index_cache_num_layers + index_cache_layer_idx)
+// replaces cache_batch_idx. Each tensor is mutually exclusive with the scalar(s) it replaces.
 ttnn::Tensor indexer_score_msa(
     const ttnn::Tensor& q,
     const ttnn::Tensor& k,
@@ -132,7 +137,12 @@ ttnn::Tensor indexer_score_msa(
     std::optional<uint32_t> kv_len = std::nullopt,
     const std::optional<std::vector<uint32_t>>& seq_shard_axes = std::nullopt,
     std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
-    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt);
+    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt,
+    const std::optional<ttnn::Tensor>& chunk_start_idx_tensor = std::nullopt,
+    const std::optional<ttnn::Tensor>& valid_end_tensor = std::nullopt,
+    const std::optional<ttnn::Tensor>& cache_batch_idx_tensor = std::nullopt,
+    uint32_t index_cache_num_layers = 1,
+    uint32_t index_cache_layer_idx = 0);
 
 // FUSED DSA (ttnn.experimental.ring_indexer_score_dsa): subsumes the SP all-gather. Instead of pre-gathering
 // K, the caller hands this chip's LOCAL K shard `k_local` [B,1,sll,D] (the all-gather input) plus a

@@ -449,13 +449,31 @@ void bind_sdpa(nb::module_& mod) {
             chunk_start_idx (int, optional): global position of query row 0. When set, enforces a token-level
                 causal mask on the diagonal block (the query's own block); toggling set/unset (None vs int)
 		selects a different cached program. Requires bf16 q; fp8 q with this set is rejected.
-            cluster_axis (int, optional): SP mesh axis used to derive the per-device chunk_start
-                (chunk_start_idx + rank*S) under sequence parallelism. Host-side only.
+            cluster_axis (int, optional): SP mesh axis used to derive the per-device chunk_start under sequence
+                parallelism: chunk_start_idx + rank*S for contiguous K/V; with a block-cyclic cache, the
+                rotation-exact start (the cache writer's rotation plus the boundary chip's slab straddle, the
+                same geometry as indexer_score_msa with seq_shard_axes=[cluster_axis]), so a mid-slab
+                chunk_start_idx is masked correctly on every chip. Causal block-cyclic with cluster_axis needs
+                it to be the striped SP axis and block_cyclic_chunk_local == q seq-len.
             block_cyclic_sp_axis (int, optional): when set (with block_cyclic_chunk_local), the K/V cache is
                 striped block-cyclic across SP on this mesh axis; the gather remaps each logical block id to its
                 physical block in-kernel (invP), so no host reorder is needed. sp is read from the mesh.
             block_cyclic_chunk_local (int, optional): per-shard chunk length (chunk_size_global / sp). Required
                 iff block_cyclic_sp_axis is set; cross-checked against q (must equal q_isl or tp*q_isl).
+            chunk_start_idx_tensor (ttnn.Tensor, optional): 1-element UINT32 ROW_MAJOR interleaved DRAM tensor
+                holding chunk_start_idx (rank 0's global start). Enables the causal mask like chunk_start_idx;
+                the reader NoC-reads it every dispatch and derives this device's start and rotation on device.
+                Mutually exclusive with chunk_start_idx. The trace-safe form: a host int is patched into the
+                launch per dispatch, and a trace replay never re-runs that patch.
+            cache_batch_idx_tensor (ttnn.Tensor, optional): 1-element UINT32 tensor (same rules) holding the USER
+                id; the kernels select K/V slot user * index_cache_num_layers + index_cache_layer_idx. Mutually
+                exclusive with cache_batch_idx.
+            index_cache_num_layers / index_cache_layer_idx (int): the layer fold of a user-major
+                [users*layers, n_kv, T, *] cache, used only with cache_batch_idx_tensor. Runtime (not hashed).
+
+            Trace: the op re-points to whichever metadata tensors a dispatch passes (cache hits included), but a
+            captured trace keeps the addresses it was captured with -- rewrite the SAME tensors in place (e.g.
+            ttnn.copy_host_to_device_tensor) between replays to retarget slot / depth.
 
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, dtype = q.
@@ -476,7 +494,11 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("chunk_start_idx") = nb::none(),
         nb::arg("cluster_axis") = nb::none(),
         nb::arg("block_cyclic_sp_axis") = nb::none(),
-        nb::arg("block_cyclic_chunk_local") = nb::none());
+        nb::arg("block_cyclic_chunk_local") = nb::none(),
+        nb::arg("chunk_start_idx_tensor") = nb::none(),
+        nb::arg("cache_batch_idx_tensor") = nb::none(),
+        nb::arg("index_cache_num_layers") = 1,
+        nb::arg("index_cache_layer_idx") = 0);
 
     const auto* const chunked_doc =
         R"doc(

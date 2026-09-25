@@ -28,6 +28,36 @@
 
 namespace ttnn::operations::experimental::indexer_score::program {
 
+namespace {
+// The reader's common block (indexer_common::reader order). Single source for create_at (miss) and
+// override_runtime_arguments (hit), so the cache-hit patch writes exactly what the miss built. Every buffer
+// address here -- q/k/w and the trace metadata tensors -- is re-read from the CURRENT tensors on every dispatch,
+// so a cache hit with freshly allocated metadata tensors re-points the reader instead of reading the tensors
+// of the dispatch that built the program. Fused-only slots stay zero. A zero metadata address is the reader's
+// "absent" signal (a live buffer is never at address 0).
+std::array<uint32_t, indexer_common::reader::Count> classic_reader_values(
+    const operation_attributes_t& args, const tensor_args_t& tensors, uint32_t device_index, uint32_t tp_index) {
+    const auto [k_batch_page_offset, kv_len_tiles] = persistent_cache_args(args, tensors.k);
+    const auto address_or_zero = [](const std::optional<Tensor>& t) {
+        return t.has_value() ? t->buffer()->address() : 0u;
+    };
+    std::array<uint32_t, indexer_common::reader::Count> values{};
+    values[indexer_common::reader::Q] = tensors.q.buffer()->address();
+    values[indexer_common::reader::K] = tensors.k.buffer()->address();
+    values[indexer_common::reader::W] = tensors.weights.buffer()->address();
+    values[indexer_common::reader::BatchOffset] = k_batch_page_offset;
+    values[indexer_common::reader::KvLength] = kv_len_tiles;
+    values[indexer_common::reader::ChunkMetadata] = address_or_zero(tensors.chunk_start_idx_tensor);
+    values[indexer_common::reader::DeviceIndex] = device_index;
+    values[indexer_common::reader::TpIndex] = tp_index;
+    values[indexer_common::reader::SlotMetadata] = address_or_zero(tensors.cache_batch_idx_tensor);
+    values[indexer_common::reader::NumLayers] = args.index_cache_num_layers;
+    values[indexer_common::reader::LayerIndex] = args.index_cache_layer_idx;
+    values[indexer_common::reader::ValidEnd] = address_or_zero(tensors.valid_end_tensor);
+    return values;
+}
+}  // namespace
+
 // Banded-product schedule: the work space (group_count q-row-groups x band_count k-bands) tiles onto a
 // rows_used x cols_used core rectangle -- groups -> rows (q/w mcast along a row), bands -> columns (k
 // mcast down a column). One cell = one QC x up-to-KC work unit. See indexer_score_work_split.hpp.
@@ -240,6 +270,29 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     // max(2*KC, .) keeps the QC<=2 double buffer and a whole multiple of QC*KC so a push never wraps mid-unit.
     make_cb(cb_acc_strip_arg, std::max(2u * KC, QC * KC), acc_fmt, acc_tile);
 
+    // Trace-safe metadata CBs, after the shared CbArg slots so their indices never shift. Chunk start: the
+    // reader lands the scalar and publishes the derived causal bounds, one mailbox per consumer (compute,
+    // writer). Slot: a dedicated landing page for the user id.
+    const bool has_meta = tensors.has_chunk_start_metadata();
+    const bool has_slot_meta = tensors.has_cache_slot_metadata();
+    uint32_t cb_meta_derived = 0, cb_meta_writer = 0, cb_meta_slot = 0;
+    const auto make_meta_cb = [&](uint32_t& slot) {
+        constexpr uint32_t meta_page_bytes = 64;
+        slot = next_cb_index++;
+        tt::tt_metal::CreateCircularBuffer(
+            program,
+            core_ranges,
+            tt::tt_metal::CircularBufferConfig(meta_page_bytes, {{slot, tt::DataFormat::UInt32}})
+                .set_page_size(slot, meta_page_bytes));
+    };
+    if (has_meta) {
+        make_meta_cb(cb_meta_derived);
+        make_meta_cb(cb_meta_writer);
+    }
+    if (has_slot_meta) {
+        make_meta_cb(cb_meta_slot);
+    }
+
     // Common args: 9 dims then the CB indices in CbArg order. chunk_t is NOT here (per-device runtime arg).
     std::vector<uint32_t> common_ct = {Hi, Sqt, Tt, Dt, QC, KC, HB, G, block_tiles};
     common_ct.insert(common_ct.end(), cb_id.begin(), cb_id.end());
@@ -294,24 +347,34 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     reader_ct.insert(reader_ct.end(), {0u, 0u, 0u, 0u});
     reader_ct.push_back(0u);  // partial all-gather readiness off (non-fused path)
     reader_ct.push_back(1u);  // unused physical SP size
-    // Chunk-start metadata is fused-ring only (validate rejects it here), but the SAME reader binary
-    // serves both factories, so the block must exist on this path too -- an absent compile arg is a hard
-    // build error in the kernel, not a default. Fixed width: flag, rt base, two CBs, Sq, rotation-exact
-    // flag, then a placeholder accessor. Pushed AFTER partial readiness AND after #55617's physical SP
-    // size, matching the reader's meta_ct_base.
-    reader_ct.push_back(0u);
-    // 6 zeros: rt base, two CBs, Sq, rotation-exact flag, key-stripe split. The split is only read on the
-    // metadata path (rejected here), so 0 is inert -- but the WIDTH must match the reader.
-    reader_ct.insert(reader_ct.end(), 6, 0u);
-    tt::tt_metal::TensorAccessorArgs(*q.buffer()).append_to(reader_ct);
-    // Cache-slot metadata, same discipline minus the presence flag: rt base, pages-per-slot, mailbox CB,
-    // cache extent, then a placeholder accessor.
-    reader_ct.insert(reader_ct.end(), 4, 0u);
-    tt::tt_metal::TensorAccessorArgs(*q.buffer()).append_to(reader_ct);
-    // Real-token end: rt base + placeholder accessor, no presence flag (metadata mode is one flag).
-    // This path rejects metadata mode, so 0 is inert -- but the WIDTH must match the reader.
-    reader_ct.push_back(0u);
-    tt::tt_metal::TensorAccessorArgs(*q.buffer()).append_to(reader_ct);
+    // Trace-safe metadata blocks. The SAME reader binary serves both factories and every block is fixed
+    // width (a placeholder q accessor when absent), pushed AFTER partial readiness and #55617's physical SP
+    // size, matching the reader's meta_ct_base. Chunk start: flag, rt base, two mailbox CBs, Sq,
+    // rotation-exact flag, key-stripe split, chunk extent, accessor.
+    reader_ct.push_back(has_meta ? 1u : 0u);
+    reader_ct.push_back(indexer_common::reader::ChunkMetadata);
+    reader_ct.push_back(cb_meta_derived);
+    reader_ct.push_back(cb_meta_writer);
+    reader_ct.push_back(has_meta ? Sq : 0u);
+    // Same predicate device_causal_geometry() uses, so the reader picks the host's causal branch.
+    reader_ct.push_back(has_meta && rotation_exact_sp_geometry(args) ? 1u : 0u);
+    reader_ct.push_back(has_meta ? args.key_stripe_split : 1u);
+    reader_ct.push_back(has_meta ? chunk_extent_for(args, q) / tt::constants::TILE_WIDTH : 0u);
+    tt::tt_metal::TensorAccessorArgs(has_meta ? *tensors.chunk_start_idx_tensor->buffer() : *q.buffer())
+        .append_to(reader_ct);
+    // Cache-slot select: rt base, k pages per slot, landing CB, slot count, accessor. Presence is the runtime
+    // address (0 = scalar path), so no flag. On this path k itself is the multi-slot cache.
+    reader_ct.push_back(indexer_common::reader::SlotMetadata);
+    reader_ct.push_back(has_slot_meta ? Tt * Dt : 0u);
+    reader_ct.push_back(cb_meta_slot);
+    reader_ct.push_back(has_slot_meta ? static_cast<uint32_t>(k.logical_shape()[0]) : 0u);
+    tt::tt_metal::TensorAccessorArgs(has_slot_meta ? *tensors.cache_batch_idx_tensor->buffer() : *q.buffer())
+        .append_to(reader_ct);
+    // Real-token end: rt base + accessor; presence is the runtime address (0 = uncapped).
+    const bool has_valid_end = tensors.has_valid_end_metadata();
+    reader_ct.push_back(indexer_common::reader::ValidEnd);
+    tt::tt_metal::TensorAccessorArgs(has_valid_end ? *tensors.valid_end_tensor->buffer() : *q.buffer())
+        .append_to(reader_ct);
 
     std::vector<uint32_t> writer_ct = common_ct;
     writer_ct.push_back(0u);                             // fused_ring off
@@ -324,8 +387,8 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     writer_ct.push_back(1u);  // unused logical key stripe count
     writer_ct.push_back(1u);  // unused physical SP size
     tt::tt_metal::TensorAccessorArgs(*out.buffer()).append_to(writer_ct);
-    writer_ct.push_back(0u);
-    writer_ct.push_back(0u);
+    writer_ct.push_back(has_meta ? 1u : 0u);  // causal bounds from the reader's mailbox
+    writer_ct.push_back(cb_meta_writer);
 
     std::vector<uint32_t> compute_ct = common_ct;
     compute_ct.push_back(qk_subblock_h);
@@ -341,8 +404,8 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     compute_ct.push_back(1u);                        // unused block-cyclic run width
     compute_ct.push_back(1u);                        // unused logical key stripe count
     compute_ct.push_back(1u);                        // unused physical SP size
-    compute_ct.push_back(0u);                        // trace-safe metadata off
-    compute_ct.push_back(0u);                        // metadata CB unused
+    compute_ct.push_back(has_meta ? 1u : 0u);        // causal bounds from the reader's mailbox
+    compute_ct.push_back(cb_meta_derived);
 
     const std::unordered_map<std::string, uint32_t> schedule_args{
         {"schedule_blocks", num_blocks},
@@ -378,11 +441,11 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
 
     // One core identity per kernel; geometry and multicast axes are shared.
     // Indexed-cache k page offset + valid kv_len, baked at miss and re-applied each dispatch (both hash-excluded).
-    const auto [k_batch_page_offset, kv_len_tiles] = persistent_cache_args(args, k);
-    std::vector<uint32_t> reader_values(indexer_common::reader::Count, 0u);
-    const std::array<uint32_t, 6> reader_prefix = {
-        q.buffer()->address(), k.buffer()->address(), w.buffer()->address(), 0u, k_batch_page_offset, kv_len_tiles};
-    std::copy(reader_prefix.begin(), reader_prefix.end(), reader_values.begin());
+    // On the metadata path the causal bounds below are placeholders (chunk_start_idx is inert); compute and
+    // the writer take the reader's derivation from their mailboxes instead.
+    const uint32_t kv_len_tiles = persistent_cache_args(args, k).kv_len_tiles;
+    const auto reader_common = classic_reader_values(args, tensors, device_index, tp_index);
+    std::vector<uint32_t> reader_values(reader_common.begin(), reader_common.end());
     append_multicast_axes(reader_values, phys);
     tt::tt_metal::SetCommonRuntimeArgs(program, reader_id, reader_values);
     tt::tt_metal::SetCommonRuntimeArgs(
@@ -435,25 +498,18 @@ void IndexerScoreProgramFactory::override_runtime_arguments(
     const operation_attributes_t& args,
     const tensor_args_t& tensors,
     tensor_return_value_t& out) {
-    // Re-apply all hash-excluded runtime values on a hit: buffer addresses, cache_batch_idx / kv_len, and
-    // chunk_start (per-coordinate, from the stored device_index).
+    // Re-apply all hash-excluded runtime values on a hit: buffer addresses (including the trace metadata
+    // tensors), cache_batch_idx / kv_len / the slot-recomposition layer terms, and chunk_start (per-coordinate,
+    // from the stored device_index).
     const uint32_t Sq = tensors.q.logical_shape()[2];
-    const auto [k_batch_page_offset, kv_len_tiles] = persistent_cache_args(args, tensors.k);
-    // Refresh the uniform reader block once per dispatch, then copy it to each program.
-    // Fused-only slots stay zero on the single-chip/unfused path.
-    const std::array<uint32_t, indexer_common::reader::Count> reader_values = {
-        tensors.q.buffer()->address(),
-        tensors.k.buffer()->address(),
-        tensors.weights.buffer()->address(),
-        0u,
-        k_batch_page_offset,
-        kv_len_tiles};
+    const uint32_t kv_len_tiles = persistent_cache_args(args, tensors.k).kv_len_tiles;
     const uint32_t out_address = out.buffer()->address();
     for (auto& [range, shared] : cached.shared_variables) {
         auto& program = cached.workload.get_programs().at(range);
         auto& reader_args = tt::tt_metal::GetCommonRuntimeArgs(program, shared.reader_kernel);
         auto& compute_args = tt::tt_metal::GetCommonRuntimeArgs(program, shared.compute_kernel);
         auto& writer_args = tt::tt_metal::GetCommonRuntimeArgs(program, shared.writer_kernel);
+        const auto reader_values = classic_reader_values(args, tensors, shared.device_index, shared.tp_index);
         const auto geom = device_causal_geometry(args, shared.device_index, shared.tp_index, Sq);
         const std::array<uint32_t, indexer_common::compute::Count> causal_values = {
             kv_len_tiles, geom.chunk_start_tiles, geom.straddle_q_tile, geom.straddle_jump_tiles};

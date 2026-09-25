@@ -412,6 +412,10 @@ ProgramDescriptor build_ring_program_descriptor(
     // Key-stripe split, so the reader can recover the UNSPLIT sp/chunk_local that
     // device_causal_geometry uses. Under KV dedup this is tp; 1 everywhere else.
     reader_ct.push_back(has_meta ? args.key_stripe_split : 1u);
+    // Chunk extent the derived kv_len adds to chunk_start: the global block-cyclic chunk (validate requires
+    // the layout on this path).
+    reader_ct.push_back(
+        has_meta ? args.block_cyclic->sp * args.block_cyclic->chunk_local / tt::constants::TILE_WIDTH : 0u);
     tt::tt_metal::TensorAccessorArgs(has_meta ? *tensors.chunk_start_idx_tensor->buffer() : *q.buffer())
         .append_to(reader_ct);
     // Cache-slot select, same fixed-width discipline as the block above (one kernel binary serves both

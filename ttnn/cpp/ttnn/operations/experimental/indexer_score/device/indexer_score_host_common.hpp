@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 #include <tt_stl/assert.hpp>           // TT_FATAL
@@ -150,6 +151,30 @@ inline uint32_t transport_to_tensor_rank(const operation_attributes_t& args, uin
     }
     return ttnn::ccl::snake_ring::row_major_index(
         transport_rank, args.fused_ring->mesh_rows, args.fused_ring->mesh_cols, args.fused_ring->snake_orientation);
+}
+
+// Largest linearized index of q's devices along the given mesh axis (0 on a single device). Used by the
+// host-side chunk_start deduction and the metadata chunk extent below.
+inline uint32_t max_linearized_rank(const Tensor& q, std::optional<uint32_t> axis) {
+    uint32_t max_rank = 0;
+    if (q.device_storage().get_coords().size() > 1) {
+        for (const auto& coord : q.device_storage().get_coords()) {
+            max_rank = std::max(max_rank, ttnn::ccl::get_linearized_index_from_physical_coord(q, coord, axis));
+        }
+    }
+    return max_rank;
+}
+
+// Keys (elements) one dispatch's query chunk spans across the seq ring: the global chunk for a block-cyclic
+// cache, seq_ring*Sq for a contiguous one. On the metadata path the reader derives kv_len as chunk_start +
+// this -- exactly the valid prefix a scalar caller passes once the chunk is written (history + chunk). The
+// seq ring is the TP axis for the identity SP=1 + TP sub-shard (stored as contiguous), else the SP axis.
+inline uint32_t chunk_extent_for(const operation_attributes_t& args, const Tensor& q) {
+    if (args.block_cyclic.has_value()) {
+        return args.block_cyclic->sp * args.block_cyclic->chunk_local;
+    }
+    const auto seq_axis = args.tp_axis().has_value() ? args.tp_axis() : args.sp_axis();
+    return (max_linearized_rank(q, seq_axis) + 1) * static_cast<uint32_t>(q.logical_shape()[2]);
 }
 
 // The two non-hashed runtime args derived from k's shape + the optionals. Single source for both create()

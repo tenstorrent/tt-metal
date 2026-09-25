@@ -55,7 +55,12 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
         cb_kack,           // writer->reader ack that its half of the block landed in cb_k_in/cb_v_in
         cb_neginf,         // causal mask: persistent all -inf tile (writer-built); masks full future key-tiles
         cb_vmask,          // causal mask: per-token partial-column "vertical" tile (reader-built) for the boundary
-        cb_count
+        cb_count,
+        // Trace-safe metadata landing pages (NoC-read scalars), one per reading kernel so the concurrent reads
+        // never share L1. Allocated only when a metadata tensor is present; explicit indices, so the trailing
+        // causal CBs being skipped does not shift them.
+        cb_meta_reader = cb_count,
+        cb_meta_writer,
     };
 
     tt::tt_metal::ProgramDescriptor desc;
@@ -146,9 +151,29 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     cb(16, 2, bf);                           // cb_kack : writer->reader ack (double-buffered)
     // Mask tiles are touched only under CAUSAL_MASK_ENABLED in the kernels, so skip their L1 when causal
     // masking is off. Safe to gate: these are the trailing CBs, so omitting them shifts no other buffer index.
-    if (attrs.causal_enabled()) {
+    const bool causal = causal_enabled(attrs, t);
+    if (causal) {
         cb(tile_bytes, 1, bf);  // cb_neginf : persistent all -inf mask tile
         cb(tile_bytes, 2, bf);  // cb_vmask : per-token partial-column mask tile
+    }
+    const bool meta_chunk_start = t.has_chunk_start_metadata();
+    const bool meta_slot = t.has_cache_slot_metadata();
+    const auto meta_cb = [&](uint32_t idx) {
+        constexpr uint32_t meta_page_bytes = 64;
+        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+            .total_size = meta_page_bytes,
+            .core_ranges = core_grid,
+            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(idx),
+                .data_format = tt::DataFormat::UInt32,
+                .page_size = meta_page_bytes}}},
+        });
+    };
+    if (meta_chunk_start || meta_slot) {
+        meta_cb(cb_meta_reader);
+    }
+    if (meta_slot) {
+        meta_cb(cb_meta_writer);
     }
 
     // Block-cyclic ("slab") cache: the invP remap is baked as compile-time args, so a natural-order cache folds
@@ -182,7 +207,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     }
     reader_ct.push_back(k_tile_bytes);                      // K is tiled: per-tile read size
     reader_ct.push_back(v_tile_bytes);                      // V is tiled: per-tile read size
-    reader_ct.push_back(attrs.causal_enabled() ? 1u : 0u);  // CAUSAL_MASK_ENABLED
+    reader_ct.push_back(causal ? 1u : 0u);                  // CAUSAL_MASK_ENABLED
     reader_ct.push_back(block_size);                        // block_size: for diag_block = p/bs, offset = p%bs
     reader_ct.push_back(cb_vmask);                          // reader builds the per-token partial-column tile
     reader_ct.insert(reader_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
@@ -193,6 +218,16 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     tt::tt_metal::TensorAccessorArgs(t.v.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(reader_ct, reader_crt);
     tt::tt_metal::TensorAccessorArgs(t.indices.buffer()).append_to(reader_ct, reader_crt);
+    // Trace-safe metadata: presence flags, landing CB, the rotation predicate the host geometry uses, then one
+    // accessor per metadata tensor (q as a placeholder when absent, so the layout is fixed-width).
+    reader_ct.push_back(meta_chunk_start ? 1u : 0u);
+    reader_ct.push_back(meta_slot ? 1u : 0u);
+    reader_ct.push_back(cb_meta_reader);
+    reader_ct.push_back(meta_chunk_start && rotation_exact_geometry(attrs) ? 1u : 0u);
+    tt::tt_metal::TensorAccessorArgs(meta_chunk_start ? t.chunk_start_idx_tensor->buffer() : t.q.buffer())
+        .append_to(reader_ct, reader_crt);
+    tt::tt_metal::TensorAccessorArgs(meta_slot ? t.cache_batch_idx_tensor->buffer() : t.q.buffer())
+        .append_to(reader_ct, reader_crt);
 
     // Writer builds persistent compute tiles, co-gathers K/V halves, and drains row-major output.
     const uint32_t row_bytes = vDHt * tt::constants::TILE_WIDTH * out_elem_bytes;
@@ -215,7 +250,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     }
     writer_ct.push_back(k_tile_bytes);
     writer_ct.push_back(v_tile_bytes);
-    writer_ct.push_back(attrs.causal_enabled() ? 1u : 0u);  // CAUSAL_MASK_ENABLED
+    writer_ct.push_back(causal ? 1u : 0u);                  // CAUSAL_MASK_ENABLED
     writer_ct.push_back(cb_neginf);                         // writer builds the persistent -inf mask tile
     writer_ct.insert(writer_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
     std::vector<uint32_t> writer_crt;
@@ -223,6 +258,10 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     tt::tt_metal::TensorAccessorArgs(t.k.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(writer_ct, writer_crt);
     tt::tt_metal::TensorAccessorArgs(t.v.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
+        .append_to(writer_ct, writer_crt);
+    writer_ct.push_back(meta_slot ? 1u : 0u);
+    writer_ct.push_back(cb_meta_writer);
+    tt::tt_metal::TensorAccessorArgs(meta_slot ? t.cache_batch_idx_tensor->buffer() : t.q.buffer())
         .append_to(writer_ct, writer_crt);
 
     std::vector<uint32_t> compute_ct = {
@@ -262,7 +301,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
         }
     }
     compute_ct.push_back(qsb);
-    compute_ct.push_back(attrs.causal_enabled() ? 1u : 0u);  // CAUSAL_MASK_ENABLED
+    compute_ct.push_back(causal ? 1u : 0u);                  // CAUSAL_MASK_ENABLED
     compute_ct.push_back(cb_neginf);                         // full -inf mask tile (future key-tiles)
     compute_ct.push_back(cb_vmask);                          // partial-column mask tile (boundary key-tile)
 
@@ -293,6 +332,13 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     auto* v_buf = t.v.buffer();
     auto* idx_buf = t.indices.buffer();
     auto* out_buf = output.buffer();
+    // Metadata tensors bind as Buffer* (address bindings) so a descriptor re-resolve re-points them; 0 = absent.
+    const auto meta_arg = [](const std::optional<Tensor>& m) -> std::variant<uint32_t, tt::tt_metal::Buffer*> {
+        if (m.has_value()) {
+            return m->buffer();
+        }
+        return 0u;
+    };
     for (uint32_t i = 0; i < num_cores; ++i) {
         tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
         uint32_t work_start = i * dyn.base_work + std::min(i, dyn.extra);
@@ -313,7 +359,17 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
         reader_rt[RArg::kReaderVGroupStride] = dyn.v_group_tile_stride;
         // Baked per-coordinate (one program per device, so each rank masks against its own global
         // position) and re-applied on cache hits.
-        reader_rt[RArg::kReaderChunkStart] = dyn.chunk_start_local;
+        reader_rt[RArg::kReaderChunkStart] = dyn.geometry.chunk_start;
+        reader_rt[RArg::kReaderStraddleQ] = dyn.geometry.straddle_q;
+        reader_rt[RArg::kReaderStraddleJump] = dyn.geometry.straddle_jump;
+        reader_rt[RArg::kReaderChunkStartMeta] = meta_arg(t.chunk_start_idx_tensor);
+        reader_rt[RArg::kReaderDeviceIndex] = dyn.device_index;
+        reader_rt[RArg::kReaderSlotMeta] = meta_arg(t.cache_batch_idx_tensor);
+        reader_rt[RArg::kReaderKSlotStride] = dyn.k_slot_tile_stride;
+        reader_rt[RArg::kReaderVSlotStride] = dyn.v_slot_tile_stride;
+        reader_rt[RArg::kReaderNumLayers] = attrs.index_cache_num_layers;
+        reader_rt[RArg::kReaderLayerIdx] = attrs.index_cache_layer_idx;
+        reader_rt[RArg::kReaderCacheSlots] = dyn.cache_slots;
         reader_desc.emplace_runtime_args(core, reader_rt);
 
         using WArg = SparseSDPAMsaOperation::WriterArg;
@@ -327,6 +383,12 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
         writer_rt[WArg::kWriterVBatchOffset] = dyn.v_batch_tile_offset;
         writer_rt[WArg::kWriterKGroupStride] = dyn.k_group_tile_stride;
         writer_rt[WArg::kWriterVGroupStride] = dyn.v_group_tile_stride;
+        writer_rt[WArg::kWriterSlotMeta] = meta_arg(t.cache_batch_idx_tensor);
+        writer_rt[WArg::kWriterKSlotStride] = dyn.k_slot_tile_stride;
+        writer_rt[WArg::kWriterVSlotStride] = dyn.v_slot_tile_stride;
+        writer_rt[WArg::kWriterNumLayers] = attrs.index_cache_num_layers;
+        writer_rt[WArg::kWriterLayerIdx] = attrs.index_cache_layer_idx;
+        writer_rt[WArg::kWriterCacheSlots] = dyn.cache_slots;
         writer_desc.emplace_runtime_args(core, writer_rt);
 
         using CArg = SparseSDPAMsaOperation::ComputeArg;

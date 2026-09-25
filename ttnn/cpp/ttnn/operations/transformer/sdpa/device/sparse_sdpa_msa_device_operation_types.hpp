@@ -25,10 +25,16 @@ struct SparseSDPAMsaParams {
     // Set -> enforce a token-level causal mask on the diagonal block (the query's own block, whose later tokens are
     // future). Unset -> no token-level causality; the op attends the full selected blocks.
     std::optional<uint32_t> chunk_start_idx = std::nullopt;
-    // SP mesh axis used to derive the per-device chunk_start (chunk_start_idx + rank*S); host-side only.
+    // SP mesh axis the query sequence is sharded over. Its rank selects the device's slab; with a block-cyclic
+    // layout it also makes the causal geometry rotation-exact (see block_cyclic_causal_geometry.hpp), exactly as
+    // indexer_score_msa's seq_shard_axes=[sp]. Host-side for chunk_start_idx; a compile-time flag on the
+    // metadata path.
     std::optional<uint32_t> cluster_axis = std::nullopt;
-    bool has_indexed_kv_cache() const { return cache_batch_idx.has_value(); }
-    bool causal_enabled() const { return chunk_start_idx.has_value(); }
+    // Layer fold for the trace-safe slot select (see SparseSDPAMsaInputs::cache_batch_idx_tensor): the slot is
+    // user_id * index_cache_num_layers + index_cache_layer_idx. Runtime, NOT hashed -- one program serves every
+    // user and layer, matching the indexer.
+    uint32_t index_cache_num_layers = 1;
+    uint32_t index_cache_layer_idx = 0;
     bool has_block_cyclic() const { return block_cyclic.has_value(); }
 };
 
@@ -37,6 +43,27 @@ struct SparseSDPAMsaInputs {
     Tensor k;        // [B,n_kv,T,d] TILE bf16|bfp8_b
     Tensor v;        // [B,n_kv,T,v_dim] TILE bf16|bfp8_b
     Tensor indices;  // [1,n_kv,S,TOPK] uint32 block ids; 0xFFFFFFFF is the sentinel
+    // TRACE-SAFE metadata: 1-element UINT32 row-major interleaved DRAM tensors the reader (and, for the slot, the
+    // writer) NoC-read on every dispatch. A host scalar is patched into the launch per dispatch and a trace replay
+    // never re-runs that patch, so a captured program would keep the capture-time slot / depth.
+    // chunk_start_idx_tensor: rank 0's global start (replaces chunk_start_idx; enables causal masking); each
+    // device derives its own start and rotation in-kernel.
+    std::optional<Tensor> chunk_start_idx_tensor = std::nullopt;
+    // cache_batch_idx_tensor: the USER id; the kernels recompose the K/V slot (replaces cache_batch_idx).
+    std::optional<Tensor> cache_batch_idx_tensor = std::nullopt;
+    bool has_chunk_start_metadata() const { return chunk_start_idx_tensor.has_value(); }
+    bool has_cache_slot_metadata() const { return cache_batch_idx_tensor.has_value(); }
 };
+
+// Causal masking is on when EITHER chunk-start form is supplied.
+inline bool causal_enabled(const SparseSDPAMsaParams& attrs, const SparseSDPAMsaInputs& t) {
+    return attrs.chunk_start_idx.has_value() || t.has_chunk_start_metadata();
+}
+// A cache slot is selected by EITHER the host scalar or the trace-safe tensor.
+inline bool selects_cache_slot(const SparseSDPAMsaParams& attrs, const SparseSDPAMsaInputs& t) {
+    return attrs.cache_batch_idx.has_value() || t.has_cache_slot_metadata();
+}
+// Rotation-exact block-cyclic geometry: the SP axis is named (the indexer's seq_shard_axes=[sp] predicate).
+inline bool rotation_exact_geometry(const SparseSDPAMsaParams& attrs) { return attrs.cluster_axis.has_value(); }
 
 }  // namespace ttnn::prim
