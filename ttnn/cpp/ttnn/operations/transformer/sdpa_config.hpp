@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <tt-metalium/base_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 
 namespace ttnn::operations::transformer {
@@ -18,6 +19,10 @@ struct SDPAProgramConfig {
     std::size_t k_chunk_size;
     std::optional<bool> exp_approx_mode;
     uint32_t max_cores_per_head_batch = 16;
+    // Per-phase matmul fidelity for the streaming SDPA kernels (QK^T and PV); nullopt uses the
+    // compute kernel config's fidelity.
+    std::optional<tt::tt_metal::MathFidelity> qk_math_fidelity;
+    std::optional<tt::tt_metal::MathFidelity> pv_math_fidelity;
 };
 
 // Paired geometry for an HMA-shared paged K/V cache (chunked prefill SDPA and

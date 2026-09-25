@@ -417,6 +417,10 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+    const auto qk_math_fidelity =
+        program_config.has_value() ? program_config->qk_math_fidelity.value_or(math_fidelity) : math_fidelity;
+    const auto pv_math_fidelity =
+        program_config.has_value() ? program_config->pv_math_fidelity.value_or(math_fidelity) : math_fidelity;
 
     auto* q_buffer = input_tensor_q.buffer();
     auto* k_buffer = input_tensor_k.buffer();
@@ -735,6 +739,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     defines_map["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines_map["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines_map["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    defines_map["QK_MATH_FIDELITY"] = std::to_string(static_cast<uint32_t>(qk_math_fidelity));
+    defines_map["PV_MATH_FIDELITY"] = std::to_string(static_cast<uint32_t>(pv_math_fidelity));
     if (operation_attributes.output_concat_heads) {
         defines_map["OUT_CONCAT_HEADS"] = "1";
     }

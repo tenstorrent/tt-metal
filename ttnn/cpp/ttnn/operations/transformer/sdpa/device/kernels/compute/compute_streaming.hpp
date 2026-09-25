@@ -23,6 +23,14 @@
 #include "api/dataflow/circular_buffer.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
+// Per-phase matmul fidelity (integer MathFidelity from the host); -1 falls back to MATH_FIDELITY.
+#ifndef QK_MATH_FIDELITY
+#define QK_MATH_FIDELITY -1
+#endif
+#ifndef PV_MATH_FIDELITY
+#define PV_MATH_FIDELITY -1
+#endif
+
 // reduce_trigger uses a packer->unpacker semaphore handshake to start the reduce early and skip the
 // input CB wait. Quasar has no such handshake, so it stays disabled there and the normal CB
 // synchronization is kept (see can_reduce_trigger below).
@@ -321,7 +329,7 @@ ALWI void pack_contiguous_rows(
  * noinline on Wormhole: keeps sdpa_inner_loop_step's frame off the TR0 stack to stay within budget
  * for the ring cases (it would otherwise overflow). WH-only to avoid the call overhead elsewhere.
  */
-template <bool transpose, uint32_t in1_stride, uint32_t out_num_cols>
+template <bool transpose, uint32_t in1_stride, uint32_t out_num_cols, int fidelity = -1>
 #if defined(ARCH_WORMHOLE)
 __attribute__((noinline))
 #endif
@@ -343,7 +351,7 @@ void blocked_matmul_and_pack(
     uint32_t in0_index = in0_index_start;
     uint32_t in1_index = in1_index_start;
     for (uint32_t inner = 0; inner < inner_dim; ++inner) {
-        matmul_block_no_mop(
+        matmul_block_no_mop<fidelity>(
             in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, matmul_stride);
         in0_index++;
         in1_index += in1_stride;
@@ -369,7 +377,7 @@ void blocked_matmul_and_pack(
  * Loops: outer walks columns in DST-sized batches; middle does one column (= one matmul chain) per
  * DST tile; inner accumulates that chain over inner_dim tiles. Each batch is packed out in one go.
  */
-template <uint32_t vDHt, uint32_t dst_size, uint32_t subblock_h>
+template <uint32_t vDHt, uint32_t dst_size, uint32_t subblock_h, int fidelity = -1>
 void inplace_v_matmul_pack_batched(
     uint32_t in0_cb,
     uint32_t in1_cb,
@@ -391,7 +399,7 @@ void inplace_v_matmul_pack_batched(
             uint32_t in0_index = in0_index_start;
             uint32_t in1_index = (vs0 + c) * KT_stride;
             for (uint32_t inner = 0; inner < inner_dim; ++inner) {
-                matmul_block_no_mop(
+                matmul_block_no_mop<fidelity>(
                     in0_cb, in1_cb, in0_index, in1_index, c * subblock_h, false, 1, subblock_h, KT_stride);
                 in0_index++;
                 in1_index++;
@@ -402,6 +410,19 @@ void inplace_v_matmul_pack_batched(
         configure_row_pack_width(out_cb, cols);
         pack_contiguous_rows_nocfg(out_cb, 0, subblock_h, vDHt, vs0, cols);
         tile_regs_release();
+    }
+}
+
+/**
+ * Re-enter the no-mop matmul for the PV phase after the QK^T phase's init. A different PV fidelity
+ * needs the full init (the replay image is recorded per fidelity); otherwise the addrmod-only reinit.
+ */
+ALWI void pv_mm_no_mop_reinit_short(
+    uint32_t in0_cb, uint32_t in1_cb, uint32_t ct_dim, uint32_t rt_dim, uint32_t kt_dim) {
+    if constexpr (PV_MATH_FIDELITY != QK_MATH_FIDELITY) {
+        mm_no_mop_init_short<PV_MATH_FIDELITY>(in0_cb, in1_cb, false, ct_dim, rt_dim, kt_dim);
+    } else {
+        mm_no_mop_reinit_short<PV_MATH_FIDELITY>(in0_cb, in1_cb, false, ct_dim, rt_dim, kt_dim);
     }
 }
 
@@ -1342,7 +1363,7 @@ static void sdpa_inner_loop_step(
 
         sdpa_maybe_pack_reconfig_data_format<cb_normalized_out, cb_qkt_im>();
         sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_kt_in, cb_identity_scale_in, cb_q_in>();
-        mm_no_mop_init_short(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
+        mm_no_mop_init_short<QK_MATH_FIDELITY>(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
         // Configure pack once before the kt loop for cb_qkt_im. Both sub_exp
         // and blocked_matmul_and_pack skip their internal configure (same cb+width).
         // sub_exp's configure_single_tile_pack(reduce_cb) clobbers the global to 1,
@@ -1398,11 +1419,12 @@ static void sdpa_inner_loop_step(
                     /*skip_pack_configure=*/true);
                 sdpa_maybe_pack_reconfig_data_format<cb_recip_scratch, cb_qkt_im>();
                 sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in>();
-                mm_no_mop_reinit_short(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
+                mm_no_mop_reinit_short<QK_MATH_FIDELITY>(
+                    cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
             }
             {
                 MaybeDeviceZoneScopedN(profiling_enabled, "Q@KT MM+Pack");
-                blocked_matmul_and_pack<true, KT_stride, KT_stride>(
+                blocked_matmul_and_pack<true, KT_stride, KT_stride, QK_MATH_FIDELITY>(
                     cb_q_in,
                     cb_kt_in,
                     cb_qkt_im,
@@ -1623,7 +1645,7 @@ static void sdpa_inner_loop_step(
                         // cb_qkt_im rows are laid out at KT_stride even when this kt_sub only consumes a
                         // narrower logical width. Keep unpack init on the physical stride; inner_dim below
                         // still limits how many V rows are multiplied.
-                        mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
+                        pv_mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, qktv_subblock_w, qktv_h, KT_stride);
                         configure_row_pack_width(out_cb, qktv_subblock_w);
                         if constexpr (qktv_first_group_reads_inplace_row) {
                             // UNPACK half of the rendezvous posted above.
@@ -1632,7 +1654,7 @@ static void sdpa_inner_loop_step(
                         }
                         for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                             const uint32_t qktv_in1_index = kt_sub * matmul_inner * vDHt + v_index_offset;
-                            blocked_matmul_and_pack<false, vDHt, vDHt>(
+                            blocked_matmul_and_pack<false, vDHt, vDHt, PV_MATH_FIDELITY>(
                                 cb_qkt_im,
                                 cb_v_in,
                                 out_cb,
@@ -1680,8 +1702,8 @@ static void sdpa_inner_loop_step(
                     MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
                     sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(
                         out_cb, out_cb);
-                    mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
-                    inplace_v_matmul_pack_batched<vDHt, dst_size, qktv_h>(
+                    pv_mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, qktv_subblock_w, qktv_h, KT_stride);
+                    inplace_v_matmul_pack_batched<vDHt, dst_size, qktv_h, PV_MATH_FIDELITY>(
                         cb_qkt_im,
                         cb_v_in,
                         out_cb,
@@ -1792,7 +1814,7 @@ static void sdpa_inner_loop_step(
                     out_cb, out_cb);
                 // See the q_subblock-0 V matmul above: active_Sk can be narrower than the physical
                 // cb_qkt_im row stride, but the unpacker is configured for the physical layout.
-                mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, cur_h, KT_stride);
+                pv_mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, qktv_subblock_w, cur_h, KT_stride);
                 // Configure once before v_subblock loop; skip inside.
                 configure_row_pack_width(out_cb, qktv_subblock_w);
                 for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
@@ -1802,7 +1824,7 @@ static void sdpa_inner_loop_step(
                     // path and kt_inplace_v is effectively false here. The ternary is kept symmetric
                     // with the q_subblock-0 site so the addressing forms stay paired.
                     const uint32_t qktv_in1_index = kt_inplace_v ? (v_subblock * KT_stride) : v_index_offset;
-                    blocked_matmul_and_pack<false, kt_inplace_v ? 1 : vDHt, vDHt>(
+                    blocked_matmul_and_pack<false, kt_inplace_v ? 1 : vDHt, vDHt, PV_MATH_FIDELITY>(
                         cb_qkt_im,
                         cb_v_in,
                         out_cb,

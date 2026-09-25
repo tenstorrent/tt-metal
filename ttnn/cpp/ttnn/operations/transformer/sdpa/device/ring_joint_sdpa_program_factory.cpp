@@ -1199,6 +1199,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(mesh_device->arch(), args.compute_kernel_config);
+    const auto qk_math_fidelity =
+        args.program_config.has_value() ? args.program_config->qk_math_fidelity.value_or(math_fidelity) : math_fidelity;
+    const auto pv_math_fidelity =
+        args.program_config.has_value() ? args.program_config->pv_math_fidelity.value_or(math_fidelity) : math_fidelity;
 
     CoreCoord grid_size = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
                                                           : mesh_device->compute_with_storage_grid_size();
@@ -1776,6 +1780,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    defines["QK_MATH_FIDELITY"] = std::to_string(static_cast<uint32_t>(qk_math_fidelity));
+    defines["PV_MATH_FIDELITY"] = std::to_string(static_cast<uint32_t>(pv_math_fidelity));
     defines["SLIDING_HALO_SLOT_COUNT"] =
         std::to_string(has_sliding_window ? gathered_padded_Nt / chunked_sliding_halo_layout.halo_tile_rows : 0);
 

@@ -313,11 +313,21 @@ class MiniMaxH3Attention(Module):
             grid = (
                 ttnn.CoreCoord(*self.sdpa_worker_grid) if ring else ttnn.CoreCoord(self.full_grid.x, self.full_grid.y)
             )
+            phase_fidelity = {}
+            if ring:
+                # Opt-in per-phase SDPA fidelity (QK^T / PV), denoise tuning knobs.
+                for field, var in (
+                    ("qk_math_fidelity", "MINIMAX_H3_SDPA_QK_FIDELITY"),
+                    ("pv_math_fidelity", "MINIMAX_H3_SDPA_PV_FIDELITY"),
+                ):
+                    if os.environ.get(var):
+                        phase_fidelity[field] = getattr(ttnn.MathFidelity, os.environ[var])
             self._sdpa_program_configs[key] = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=grid,
                 q_chunk_size=q_chunk,
                 k_chunk_size=k_chunk,
                 exp_approx_mode=False,  # NOTE: False is more correct
+                **phase_fidelity,
             )
         return self._sdpa_program_configs[key]
 
