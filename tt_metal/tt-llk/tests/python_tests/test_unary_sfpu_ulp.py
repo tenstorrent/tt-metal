@@ -256,12 +256,12 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
         dest_acc=dest_acc,
         arch=get_chip_architecture(),
     )
-    if contract.metric != Metric.ULP and not ulp_sweep.EMIT:
-        # Gating: an op on the tolerance metric has no step budget to check. Emitting is
-        # the opposite case -- skipping on the table's current verdict would only ever
-        # re-measure what is already enrolled, and the whole point of the sweep is to
-        # decide enrolment from the measurement rather than the other way round.
-        pytest.skip(f"{mathop.name} is on the tolerance metric for this variant")
+    # A tolerance cell has no step budget to gate against, but it is measured all the
+    # same: its row records the worst lane the last sweep saw, and the nightly's
+    # headroom report fails the run when a new measurement exceeds it. Skipping these
+    # made a tolerance row sticky -- a demoted cell was never measured again, so
+    # neither a regression nor a recovery there could be seen.
+    gated = contract.metric == Metric.ULP
 
     try:
         golden, result, mask, overflowed, stats = measure(
@@ -288,11 +288,11 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
     # `max: 0`, so a variant that compared nothing would pass the gate and be recorded
     # as bit-exact.
     #
-    # A gating run *fails* on either, because a declared budget that cannot be measured
-    # is a gate that is not running. A measurement pass *skips*: it is deciding what is
-    # enrollable, and "this cell cannot be measured" is one of the answers. Failing
-    # instead would also stop the emitter writing anything at all, since it refuses to
-    # write from a session that had failures.
+    # A gating run *fails* on either for a gated cell, because a declared budget that
+    # cannot be measured is a gate that is not running. A measurement pass, or a
+    # tolerance cell, *skips*: there is no declared budget, and "this cell cannot be
+    # measured" is one of the answers. Failing the emitter would also stop it writing
+    # anything at all, since it refuses to write from a session that had failures.
     unmeasurable = None
     if lanes == 0:
         unmeasurable = "no lane a step count can describe"
@@ -302,7 +302,7 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
             "budget buys an overflow, and a step count cannot describe one."
         )
     if unmeasurable:
-        if ulp_sweep.EMIT:
+        if ulp_sweep.EMIT or not gated:
             pytest.skip(f"{cell}: not measurable -- {unmeasurable}")
         raise AssertionError(f"{cell}: {unmeasurable}")
 
@@ -317,6 +317,14 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
         # never reaches -- so an emit run under xdist, whose workers' `MEASURED` never
         # reach the controller, used to leave no record at all. Written here, the
         # JSONL is the one artefact that survives either mode.
+        _record_ulp_measurement(
+            ulp_distance(golden, result), mask=mask, output_data_format=out_fmt
+        )
+        return
+
+    if not gated:
+        # Measured, not gated. The row's "max N ULP" comment is the baseline the
+        # nightly's headroom report holds this against.
         _record_ulp_measurement(
             ulp_distance(golden, result), mask=mask, output_data_format=out_fmt
         )

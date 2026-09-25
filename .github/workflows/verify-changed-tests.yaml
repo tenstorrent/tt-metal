@@ -64,6 +64,9 @@ env:
   #                                  from ttsim_lib, so no static cmd is complete.
   #   llk_ttnop_tests.yaml           runs only through its specialized manual/weekly
   #                                  workflow, which supplies TTNOP setup and recovery.
+  #   llk_sfpu_accuracy_tests.yaml   runs only through llk-sfpu-accuracy-impl.yaml, which
+  #                                  supplies the LLK CI image, SFPI, the tt-llk working
+  #                                  directory and ULP_MEASURE_PATH.
   #
   # This is not an exemption: the legs still block the PR until an owner approves.
   UNSUPPORTED_YAMLS: >-
@@ -72,6 +75,7 @@ env:
     single_card_profiler_tests.yaml
     llk_ttsim_weekly.yaml
     llk_ttnop_tests.yaml
+    llk_sfpu_accuracy_tests.yaml
 
   # Yamls under tests/pipeline_reorg/ that legitimately hold no test matrix, so the
   # gate has nothing to prove for them. ttsim-skip-list.yaml is a per-arch mapping of
