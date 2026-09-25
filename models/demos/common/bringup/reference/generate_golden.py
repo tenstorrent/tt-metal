@@ -65,6 +65,11 @@ def main(argv=None):
     selected = spec.layers()
     starts = set(run_starts(selected))
     keep_fp32 = tuple(spec.get("golden.keep_fp32", []))
+    from models.demos.common.bringup.reference import prompt
+
+    prompt_rec = prompt.load(spec)
+    if prompt_rec is None:
+        raise SystemExit(f"no canonical prompt at {prompt.prompt_path(spec)}; the intake step (R.1) builds it")
     tokens = text_tokens(spec, seq)
     n_chunks = seq // chunk
     dumped = list(range(n_chunks)) if rung.get("full_dumps") else [n_chunks - 1]
@@ -145,7 +150,9 @@ def main(argv=None):
         "full_dumps": bool(rung.get("full_dumps")),
         "dumped_chunks": dumped,
         "compute_dtype": "float32",
-        "text": spec.get("text.source", "tale-of-two-cities"),
+        "text": prompt_rec["source"],
+        "prompt_wrap": prompt_rec["wrap"],
+        "prompt_sha256": prompt_rec["sha256"],
         "chunk_times_s": [round(t, 1) for t in chunk_times],
         "text_top1_acc": top1,
         "text_top5_acc": top5,
