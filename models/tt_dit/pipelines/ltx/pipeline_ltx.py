@@ -498,17 +498,17 @@ class LTXPipeline:
         self._prompt_a = StateTensor()
 
     def release_audio_submesh(self) -> None:
-        """Drop the pipeline's references to the audio decode submesh (LTX_AUDIO_SUBMESH).
+        """Release audio tensors and leave the shared queues safe for mesh teardown.
 
-        The submesh shares the parent mesh's command queue. ttnn forbids closing a
-        cq-sharing child while the parent is alive (close hangs) and forbids closing
-        the parent while the child is alive ("cq in use by child submesh"), so the
-        submesh's lifetime is bound to the parent: it is reclaimed when the parent mesh
-        closes at process teardown. This only frees the audio device tensors. No-op when
-        audio runs on the full mesh.
+        Call after ``release_traces``. Synchronizing the child waits for its work but
+        leaves both meshes' command queues marked in use; closing either mesh can
+        then fail the shared-queue ownership check. Quiescing the parent drains and
+        resets its queues and every child's queues, including semaphore-init writes.
+        Keep the owned child alive for the caller's normal child-before-parent close
+        order. No-op when audio runs on the full mesh.
         """
         if self._owned_audio_submesh is not None:
-            ttnn.synchronize_device(self._owned_audio_submesh)
+            self.mesh_device.quiesce_devices()
             # The adapter owns both mel-decoder + vocoder (exposed via the tt_mel_decoder /
             # tt_vocoder_with_bwe properties); dropping it frees the submesh-resident audio tensors.
             self._audio_adapter = None

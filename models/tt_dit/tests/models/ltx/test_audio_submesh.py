@@ -165,6 +165,48 @@ def pytest_generate_tests(metafunc):
 
 
 @pytest.mark.skip_post_commit
+@pytest.mark.skipif(os.environ.get("C03_LIFECYCLE", "0") != "1", reason="explicit C03 lifecycle regression")
+def test_audio_submesh_lifecycle(mesh_device, device_params, parent_topology, monkeypatch):
+    """Reproduce shared-CQ ownership at close without model weights or kernels.
+
+    Through the broker, run with C03_LIFECYCLE=1 and select galaxy or f07.
+    The mesh fixture closes the child before the parent after this test returns.
+    """
+    import ttnn
+    from models.tt_dit.parallel.config import DiTParallelConfig
+    from models.tt_dit.parallel.manager import CCLManager
+    from models.tt_dit.pipelines.ltx.pipeline_ltx import LTXPipeline
+
+    monkeypatch.setenv("LTX_AUDIO_SUBMESH", "1x4")
+    ccl_manager = CCLManager(mesh_device, num_links=2, topology=parent_topology)
+    pipeline = LTXPipeline(
+        mesh_device=mesh_device,
+        parallel_config=DiTParallelConfig.from_tuples(
+            cfg=(1, 0), tp=(mesh_device.shape[0], 0), sp=(mesh_device.shape[1], 1)
+        ),
+        ccl_manager=ccl_manager,
+        checkpoint_name=None,
+        traced=False,
+    )
+    child = pipeline._owned_audio_submesh
+    assert child is not None and tuple(child.shape) == (1, 4)
+    # Both CCLManager constructors initialized global semaphores through CQ0.
+    # Even after synchronization the old cleanup leaves both queues in use.
+    try:
+        pipeline.release_traces()
+    finally:
+        pipeline.release_audio_submesh()
+    pipeline.release_audio_submesh()  # Repeat cleanup, as an outer finalizer may do.
+    assert pipeline.audio_mesh_device is mesh_device
+    assert pipeline.audio_ccl_manager is pipeline.vae_ccl_manager
+
+    # Parent work may resume before the caller tears down the still-owned child.
+    semaphore = ttnn.create_global_semaphore(mesh_device, ccl_manager.ccl_cores, 0)
+    ttnn.synchronize_device(mesh_device)
+    del semaphore
+
+
+@pytest.mark.skip_post_commit
 @pytest.mark.skipif(
     "C03_INPUTS" not in os.environ and "C03_RESULTS" not in os.environ,
     reason="explicit audio-placement experiment; set C03_INPUTS and C03_RESULTS",
