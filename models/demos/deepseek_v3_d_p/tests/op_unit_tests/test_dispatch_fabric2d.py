@@ -5,20 +5,20 @@
 """Bring-up and correctness for dispatch_fabric2d.
 
 The op moves each token to the chips hosting the experts it was routed to, one fabric hop at a time,
-relaying through a DRAM forwarding buffer rather than leaving multi-hop routing to the fabric. It is a
-transport replacement for `dispatch` and must place every token on the same page that op would, so the
-gate is byte-exact equality against it rather than a correlation threshold.
+relaying through a DRAM forwarding buffer rather than leaving multi-hop routing to the fabric. Where
+each token lands is fully determined by the routing, so the gate is byte-exact equality against a
+torch reference rather than a correlation threshold.
 
 The routing metadata is derived by `get_gate_outputs` from the same indices the op is given, so the
 control tensors and the routing agree by construction -- which is what the reader's own prologue check
 relies on.
 
 Cases default to the production chunk: 5120 tokens over an 8-chip dispatch group, so
-seq_len_per_chip is 640. Two tests vary it on purpose -- the ragged-sequence case in
-`test_dispatch_fabric2d_refusals`, and `test_dispatch_fabric2d_padding_config`.
+seq_len_per_chip is 640. Two tests vary it on purpose --
+`test_dispatch_fabric2d_partial_last_tile` and `test_dispatch_fabric2d_padding_config`.
 
 The mesh axis comes from the shared table in `tests/pcc/mesh_configs.py`, so CI's hardware-class
-selection through `requires_mesh_topology` is consistent with `test_prefill_dispatch.py`.
+selection through `requires_mesh_topology` matches the model's other prefill tests.
 """
 
 import re
@@ -53,10 +53,10 @@ _PRODUCTION_MESH = [param for param in _MESH_CONFIGS if param.id == "fabric2d-to
 
 
 def _reference_dispatch(indices, table, offs, x, capacity, G, H, seq, topk, emb):
-    """What `dispatch` would place, per destination chip, from every source chip.
+    """The pages the op must place, per destination chip, from every source chip.
 
-    Replays the same per-expert allocator the production op uses, including the rule that a token past
-    capacity is dropped while its counter still advances -- every later token's page depends on it.
+    Replays the per-expert page allocator, including the rule that a token past capacity is dropped
+    while its counter still advances -- every later token's page depends on it.
 
     Returns payload[g][dst_row], metadata[g][dst_row] and, per (g, dst_row, page), the source row that
     wrote it, so a caller can compare only the pages a given source contributed.
@@ -166,7 +166,7 @@ def test_dispatch_fabric2d(mesh_device, device_params, num_links, capacity_div, 
     seq_len_per_chip = SEQ_LEN_PER_CHIP
     num_routed_experts, num_experts_per_tok, emb_dim = 256, 8, 256
     experts_per_chip = num_routed_experts // G // H
-    # Capacity the production op would use: every source chip's tokens for one expert, tile-aligned.
+    # Roomy capacity holds every source chip's tokens for one expert; the divisor shrinks it.
     max_dispatch_buffer_token_size = max(1, H * seq_len_per_chip * num_experts_per_tok // capacity_div)
 
     logger.info(
@@ -303,8 +303,9 @@ class _Fixture:
     """One in-group routing draw at the production chunk, on device in both input layouts, plus its
     torch reference.
 
-    Shared by the tests below that care about how the op is CALLED rather than about the routing: the
-    matrix above is where the routing axes live.
+    Shared by the tests below that care about how the op is CALLED rather than about the routing.
+    Routing coverage (in-group vs production draws, roomy vs tight capacity) lives in
+    test_dispatch_fabric2d's parametrization.
     """
 
     # emb_dim 512 is 16 tiles wide, so the untilizer packs TWO column blocks per stripe. At 256 it is
@@ -355,11 +356,14 @@ class _Fixture:
         )
 
     def rebuild(self):
-        """Re-derive everything routing decides, so a test may edit `indices` and stay self-consistent.
+        """Bring every routing input back in line with `indices`. Call it after editing `indices`.
 
-        The offsets table comes from the same draw the op is handed, which is the whole reason the op
-        can size a chunk it neither wrote nor receives; building one from a stale draw would not fail a
-        shape check, it would deadlock an axis.
+        Recomputes the expert offsets, counts and region tables from `indices`, uploads them together
+        with `indices` itself, and clears the cached `reference()`.
+
+        The op trusts the offsets table to match the indices: it is how every chip on the axis, relays
+        included, sizes the chunks it waits for and forwards. A table from a stale draw has the right
+        shape, so nothing rejects it, and the op then places the wrong pages.
         """
         G, H = self.G, self.H
         offs = torch.zeros(G, H, self.num_routed_experts, dtype=torch.int32)
@@ -384,7 +388,7 @@ class _Fixture:
         self._reference = None
 
     def padding_config(self, real_tokens, pad_side=0):
-        """The [real_token_count, pad_side] tensor `dispatch` takes, replicated to every device."""
+        """The [real_token_count, pad_side] padding_config tensor, replicated to every device."""
         return ttnn.from_torch(
             torch.tensor([[real_tokens, pad_side]], dtype=torch.int32),
             mesh_mapper=ttnn.ShardTensor2dMesh(
@@ -419,12 +423,15 @@ class _Fixture:
         )
 
     def reference(self):
-        """Cached, because the multi-launch tests check several launches of one draw and the replay is
-        a sequential walk over every (token, pick) pair.
+        """The pages the op must place for this draw: (payload, metadata, and each page's
+        source row, -1 for a page no token lands on).
 
-        `rebuild()` is the ONLY invalidation point. It covers everything a test may edit -- `indices`,
-        and the offsets it re-derives from them. `x`, `capacity` and `emb_dim` are fixed for a
-        fixture's lifetime, which is what `tt_x` living in `__init__` already assumes.
+        Computed once and reused. The replay walks every (token, pick) pair in Python, and the
+        multi-launch tests compare several launches against the same draw.
+
+        The cache is cleared only by `rebuild()`, so after editing `indices` a test must call it or it
+        is checked against the old draw. Nothing else needs clearing: `x`, `capacity` and `emb_dim`
+        never change after `__init__`.
         """
         if self._reference is None:
             self._reference = _reference_dispatch(
@@ -442,7 +449,7 @@ class _Fixture:
         return self._reference
 
     def check(self, payload, metadata, label):
-        """Every page any chip sourced, byte-exact against what `dispatch` would have placed."""
+        """Every page any chip sourced, byte-exact against `reference()`."""
         ref_payload, ref_meta, src_of = self.reference()
         got_payload = ttnn.get_device_tensors(payload)
         got_meta = ttnn.get_device_tensors(metadata)
@@ -479,15 +486,19 @@ def _sub_device_manager(mesh_device, sub_devices):
         mesh_device.remove_sub_device_manager(manager)
 
 
-def _moe_grid_split(mesh_device):
-    """The model's carve: dispatch gets the first row of the Tensix grid, the shared expert the rest.
+def _moe_grid_split(mesh_device, dispatch_rows=1):
+    """The model's split: dispatch gets the first `dispatch_rows` rows of the grid, the shared expert
+    the rest.
 
     `tt_moe.py` splits rows [0, dispatch_sd_rows) against the remainder, with `dispatch_sd_rows`
     currently 1, so the two ops run on disjoint cores and overlap on chip.
     """
     grid = mesh_device.compute_with_storage_grid_size()
-    dispatch = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, 0))})
-    shared = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    last = dispatch_rows - 1
+    dispatch = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, last))})
+    shared = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, dispatch_rows), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
+    )
     return dispatch, shared
 
 
@@ -509,56 +520,50 @@ def _leading_row_cores(width):
 )
 @pytest.mark.timeout(900)
 def test_dispatch_fabric2d_subdevice(mesh_device, device_params, num_links, capfd, expect_error):
-    """A TILE input on the model's two-sub-device split: every core the op takes must be in row 0.
+    """The op only uses cores of the sub-device it is given.
 
-    Byte-exactness is the same gate the matrix applies. What is new is confinement -- the stream cores
-    AND the untilizer pool a TILE input needs all have to come out of the dispatch row, because the
-    shared expert holds the rest of the grid at the same time.
+    The grid is split as the model splits it: dispatch gets the top rows, the shared expert gets the
+    rest. The op is run four times, each time given a different sub-device:
 
-    The negative case is what actually proves it. Handed the SHARED sub-device instead, the op must
-    refuse and name a core in row 0: that message is the placement telling us where it wanted to put a
-    stream, and it can only say y=0 if row 0 is where the streams go. Confinement of the pool follows,
-    since it is drawn from the spare cores of the same carve -- and on a one-row carve that is the
-    documented fallback, so this test is also the coverage for it: the op has to report the fallback
-    once, and the report is expected here rather than a failure.
+    1. Rows 0 and 1 with a TILE input, so the untilizers need row 1 too: must succeed, byte-exact,
+       with every untilizer in row 1 -- no warning that some spilled elsewhere.
+    2. Row 0 only, the model's split today, with a ROW_MAJOR input: must succeed, byte-exact.
+    3. Everything but row 0: must refuse, and the error must name a row-0 core. That shows the op
+       wants row 0 for its streams, so runs 1 and 2 were not a fluke.
+    4. Part of row 0: must refuse. An op that ignored its sub-device would take the whole grid and
+       succeed, so the refusal shows the argument is actually read.
     """
     cfg = extract_mesh_config(mesh_device)
     # Tight capacity: this test's subject is core confinement, not the allocator, and a roomy buffer at
     # this token width costs a gigabyte of host reference for nothing.
     fx = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, capacity_div=8)
     streams = 2 * num_links
-    dispatch_cores, shared_cores = _moe_grid_split(mesh_device)
-    n_cores = sum((r.end.x - r.start.x + 1) * (r.end.y - r.start.y + 1) for r in dispatch_cores.ranges())
-    pool = n_cores - streams
-    assert pool > 0, "no core left for an untilizer; the TILE path cannot run"
-    # More stripes than there are cores to take them, so a core takes several and the round-robin
-    # stride stops being indistinguishable from one.
-    stripes = fx.seq_len_per_chip // 32
-    assert stripes > pool, f"{stripes} stripes over {pool} cores does not exercise the round robin"
-    logger.info(f"dispatch sub-device: {n_cores} cores in row 0, {streams} streams, {pool} untilizers")
+    untilizers = 5 * num_links
+    grid_x = mesh_device.compute_with_storage_grid_size().x
+    assert grid_x >= untilizers, f"row 1 has {grid_x} cores, fewer than the {untilizers} untilizers want"
 
-    with _sub_device_manager(mesh_device, [dispatch_cores, shared_cores]) as (dispatch_sd, shared_sd):
+    with _sub_device_manager(mesh_device, list(_moe_grid_split(mesh_device, dispatch_rows=2))) as (dispatch_sd, _):
         payload, metadata = fx.run(cfg.sp_axis, num_links, layout=ttnn.TILE_LAYOUT, subdevice_id=dispatch_sd)
-        fx.check(payload, metadata, f"tile on the dispatch sub-device, {stripes} stripes over {pool} untilizers")
+        fx.check(payload, metadata, f"tile on rows 0-1, {untilizers} untilizers")
         out = capfd.readouterr().out
-        assert (
-            "untilizer pool is not in the row under the streams" in out
-        ), "a one-row carve has to report its pool fallback once per build; nothing was reported"
+        assert "too few spare cores for the untilizer pool" not in out, "row 1 has room; the pool spilled anyway"
+
+    with _sub_device_manager(mesh_device, list(_moe_grid_split(mesh_device))) as (dispatch_sd, shared_sd):
+        payload, metadata = fx.run(cfg.sp_axis, num_links, subdevice_id=dispatch_sd)
+        fx.check(payload, metadata, "row-major on row 0")
 
         with expect_error(RuntimeError, "is outside the") as refusal:
-            fx.run(cfg.sp_axis, num_links, layout=ttnn.TILE_LAYOUT, subdevice_id=shared_sd)
+            fx.run(cfg.sp_axis, num_links, subdevice_id=shared_sd)
         message = str(refusal.value)
         # The core it names is the one the eth-nearest placement wanted. CoreCoord formats as x-y, so
         # a trailing -0 is row 0 -- which is the whole claim this test exists to make.
         assert re.search(r"eth core is \d+-0,", message), message
 
-    # A carve identical to the default cannot show that the argument was used at all. This one is a
-    # strict subset of the same row, and the op refuses it -- naming a row-0 core it wanted and could
-    # not have -- which it could only do having read the sub-device. It also records the real
-    # constraint: the eth-nearest workers are spread along the row, so dispatch needs ALL of it.
+    # The eth-nearest workers are spread along row 0, so dispatch needs all of it; the error naming
+    # the row-0 core it wanted is only possible if the op read this sub-device.
     with _sub_device_manager(mesh_device, [_leading_row_cores(streams + 2)]) as (narrow_sd,):
         with expect_error(RuntimeError, f"outside the {streams + 2} cores") as refusal:
-            fx.run(cfg.sp_axis, num_links, layout=ttnn.TILE_LAYOUT, subdevice_id=narrow_sd)
+            fx.run(cfg.sp_axis, num_links, subdevice_id=narrow_sd)
         message = str(refusal.value)
         assert re.search(r"eth core is \d+-0,", message), message
 
@@ -575,19 +580,19 @@ def test_dispatch_fabric2d_subdevice(mesh_device, device_params, num_links, capf
 @pytest.mark.parametrize("emb_dim", [2880, 7168], ids=lambda e: f"emb{e}")
 @pytest.mark.timeout(1800)
 def test_dispatch_fabric2d_relaunch(mesh_device, device_params, num_links, emb_dim):
-    """Both layouts and repeat launches against ONE device, which the matrix cannot reach.
+    """Four launches on one device, alternating layouts, to catch state leaking from one launch into
+    the next.
 
-    Every case of the matrix gets a fresh `mesh_device` fixture, so it never exercises two things
-    that only go wrong when state survives a launch:
+    Each case of test_dispatch_fabric2d gets a fresh device, so it cannot catch either of these:
 
-    - The program cache. A TILE input and a ROW_MAJOR one build DIFFERENT programs -- one has an
-      untilizer pool and reads tokens out of a staging buffer, the other has neither -- so the layout
-      has to reach the cache key. If it did not, whichever ran second would silently get the first
-      one's program and read tokens from the wrong buffer. Alternating catches it in both directions.
-    - The untilize counter. The stream readers zero it at end of stream, so a second TILE launch
-      starts from whatever the first left. A leak there does NOT hang: the wait passes immediately
-      and the stream cores read the staging buffer the previous launch filled. That is invisible
-      unless the launches carry different values, which is why each one here has its own draw.
+    - Program cache. TILE and ROW_MAJOR inputs build different programs: only TILE has untilizer
+      cores and reads tokens from a staging buffer. If the layout were missing from the cache key,
+      the second layout would reuse the first one's program and read tokens from the wrong place.
+      Running row-major, tile, tile, row-major catches that in both directions.
+    - Untilize counter. Nothing resets it between launches except the stream readers zeroing it at
+      the end of each launch. If they fail to, the next TILE launch does not hang: its wait passes
+      at once and it reads the previous launch's staging buffer. Each launch therefore uses a new
+      random draw, so stale data shows up as wrong pages.
     """
     cfg = extract_mesh_config(mesh_device)
     plan = [
@@ -614,11 +619,8 @@ def test_dispatch_fabric2d_relaunch(mesh_device, device_params, num_links, emb_d
         fx.check(payload, metadata, f"{label}, emb {emb_dim}")
         if entries_after_first is None:
             entries_after_first = mesh_device.num_program_cache_entries()
-    # Two programs for four launches, as a DELTA over whatever the cache already held: the row-major
-    # launch built the first, the TILE one adds exactly one more, and the two repeats add none. Wrong
-    # bytes would catch a layout missing from the cache key; only the counter catches the opposite -- a
-    # key so specific that every launch rebuilds, which a correctness gate cannot see and which is what
-    # kills prefill perf.
+    # Only the first TILE launch may add a program; the repeats must hit the cache. A key that is too
+    # specific rebuilds on every launch and still passes the byte-exact checks, but costs prefill perf.
     assert mesh_device.num_program_cache_entries() == entries_after_first + 1, (
         f"four launches over two layouts should add one program to the {entries_after_first} the first "
         f"built, got {mesh_device.num_program_cache_entries()}"
@@ -631,85 +633,19 @@ def test_dispatch_fabric2d_relaunch(mesh_device, device_params, num_links, emb_d
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.timeout(900)
-def test_dispatch_fabric2d_refusals(mesh_device, device_params, num_links, expect_error):
-    """The op's edge conditions are refused, rather than silently doing something else.
+def test_dispatch_fabric2d_partial_last_tile(mesh_device, device_params, num_links):
+    """A seq_len_per_chip that is not a multiple of 32 dispatches byte-exact in both layouts.
 
-    Each refusal stands in for a write that would land somewhere it should not, or a production
-    `dispatch` feature this transport cannot carry: an emb_dim that is not a multiple of 32 leaves the
-    untilizer reading tile columns that are not there; a sub-device with no core to spare has nowhere
-    to put a pool; a token wider than the fabric payload admits would run past its channel slot; and
-    an fp8 input or a longer metadata tail would need scales this op has no room for on the wire.
-
-    One edge condition is CARRIED rather than refused -- a ragged sequence -- and it is checked here
-    beside the refusals because that is the boundary it sits on.
+    660 tokens is twenty full 32-row tiles plus a last tile holding only 20 real rows. The TILE path
+    untilizes that last tile whole, padding rows included; staging has room for them and the routing
+    pass stops at seq_len_per_chip, so they must never become pages. ROW_MAJOR has no padding rows,
+    which makes this the one case where the two layouts could disagree on how many tokens exist.
     """
     cfg = extract_mesh_config(mesh_device)
-    streams = 2 * num_links
-
-    # 500 columns is fifteen whole tile columns and a ragged sixteenth, which the untilizer cannot
-    # read: it takes whole tile columns and packs rows at a stride the writer does not use. Accepted
-    # as ROW_MAJOR, which is what makes the refusal a property of the untilizer rather than the shape.
-    ragged_emb = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, emb_dim=500, capacity_div=8)
-    with expect_error(RuntimeError, "multiple of 32"):
-        ragged_emb.run(cfg.sp_axis, num_links, layout=ttnn.TILE_LAYOUT)
-    payload, metadata = ragged_emb.run(cfg.sp_axis, num_links)
-    ragged_emb.check(payload, metadata, "row-major with a ragged emb")
-
-    # A ragged SEQUENCE is carried, not refused: 660 tokens is twenty whole stripes and a twenty-first
-    # the packer fills with the tile's padding rows, which staging has room for and the routing pass
-    # never reaches. This is the one place the two input layouts could disagree about how many tokens
-    # exist.
-    ragged_seq = _Fixture(
-        mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, seq_len_per_chip=660, capacity_div=8
-    )
+    fx = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, seq_len_per_chip=660, capacity_div=8)
     for layout, label in ((ttnn.ROW_MAJOR_LAYOUT, "row-major"), (ttnn.TILE_LAYOUT, "tile")):
-        payload, metadata = ragged_seq.run(cfg.sp_axis, num_links, layout=layout)
-        ragged_seq.check(payload, metadata, f"{label} with a ragged sequence")
-
-    fx = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, capacity_div=8)
-    with _sub_device_manager(mesh_device, [_leading_row_cores(streams)]) as (exact_sd,):
-        # Exactly enough cores for the streams, so the pool would have to come from somewhere else.
-        # Refused in validation, before the placement gets a chance to object to the carve itself.
-        with expect_error(RuntimeError, "plus at least one untilizer"):
-            fx.run(cfg.sp_axis, num_links, layout=ttnn.TILE_LAYOUT, subdevice_id=exact_sd)
-
-    # One token wider than the fabric payload admits with its 64-byte tail: 7168 columns is exactly the
-    # cap the tests configure, so 7200 is the first refusal. Without it the forward's payload would run
-    # past its channel slot onto the next packet, which no kernel check can see.
-    too_wide = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, emb_dim=7200, capacity_div=64)
-    with expect_error(RuntimeError, "exceeds the fabric max payload"):
-        too_wide.run(cfg.sp_axis, num_links)
-
-    # The two production `dispatch` paths this transport does not carry, called directly because the
-    # fixture only ever builds the supported shape. Both are documented limitations of the op; these
-    # are the tests that will fail the day someone implements either.
-    def raw(input_tensor, metadata_len):
-        return ttnn.experimental.deepseek_prefill.dispatch_fabric2d(
-            input_tensor,
-            fx.tt_idx,
-            fx.tt_offs,
-            fx.tt_table,
-            fx.tt_counts,
-            fx.tt_region,
-            experts_per_chip=fx.experts_per_chip,
-            num_routed_experts=fx.num_routed_experts,
-            num_experts_per_tok=fx.topk,
-            metadata_len=metadata_len,
-            max_dispatch_buffer_token_size=fx.capacity,
-            seq_len_per_chip=fx.seq_len_per_chip,
-            cluster_axis=cfg.sp_axis,
-            num_links=num_links,
-            topology=ttnn.Topology.Ring,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-    # A non-BFLOAT16 input is the fp8-scaled path's shape, whose per-block scales would have to ride
-    # the 64-byte routing tail on every hop.
-    with expect_error(RuntimeError, "must be BFLOAT16"):
-        raw(fx._shard(fx.x.to(torch.float32), (0, 1), ttnn.float32), 3)
-    # A longer tail is that same fp8-scaled layout, by the other name.
-    with expect_error(RuntimeError, "metadata_len must be 3"):
-        raw(fx.tt_x[ttnn.ROW_MAJOR_LAYOUT], 4)
+        payload, metadata = fx.run(cfg.sp_axis, num_links, layout=layout)
+        fx.check(payload, metadata, f"{label}, 660 tokens per chip")
 
 
 @pytest.mark.parametrize(
@@ -718,22 +654,16 @@ def test_dispatch_fabric2d_refusals(mesh_device, device_params, num_links, expec
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.timeout(900)
-def test_dispatch_fabric2d_untilizers_under_the_streams(mesh_device, device_params, num_links, capfd):
-    """The whole grid, with more stripes than the pool: the pool sits in the row under the streams.
+def test_dispatch_fabric2d_unaligned_emb_dim(mesh_device, device_params, num_links):
+    """An emb_dim that is not a multiple of 32 dispatches byte-exact from a ROW_MAJOR input.
 
-    The placement a TILE input is designed for is only reachable with a second row in the carve, and
-    the sub-device test runs on the model's one-row carve. 640 tokens is 20 stripes over 5 * num_links
-    untilizers, and the op must NOT report a fallback -- that report is the one-row carve's, and it
-    must stay off here or the sub-device test's assertion on it means nothing.
+    Every other case uses a tile-aligned emb_dim. TILE inputs cannot have this shape (the untilizer
+    reads whole tile columns), but ROW_MAJOR tokens are plain pages and should not care.
     """
     cfg = extract_mesh_config(mesh_device)
-    fx = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, seed=37, capacity_div=8)
-    payload, metadata = fx.run(cfg.sp_axis, num_links, layout=ttnn.TILE_LAYOUT)
-    fx.check(payload, metadata, f"{fx.seq_len_per_chip // 32} stripes over {5 * num_links} untilizers")
-    out = capfd.readouterr().out
-    assert (
-        "untilizer pool is not in the row under the streams" not in out
-    ), "the whole grid has a row under the streams; the pool fell back anyway"
+    fx = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, emb_dim=500, capacity_div=8)
+    payload, metadata = fx.run(cfg.sp_axis, num_links)
+    fx.check(payload, metadata, "row-major, emb_dim 500")
 
 
 @pytest.mark.parametrize(
@@ -743,19 +673,15 @@ def test_dispatch_fabric2d_untilizers_under_the_streams(mesh_device, device_para
 )
 @pytest.mark.timeout(900)
 def test_dispatch_fabric2d_back_to_back(mesh_device, device_params, num_links):
-    """Launches with NOTHING between them, which is the only way the arrival counter's reset is tested.
+    """Four launches queued with no host sync between them, as in a traced replay.
 
-    Every other test reads its outputs before launching again, and that read is a host synchronisation
-    -- so the launches never overlap and the reset is never contended. Here four launches are queued
-    and only then read, which lets a chip that finishes early start sending into a neighbour still
-    retiring the previous one. That is exactly the skew a traced replay has, since a trace carries no
-    host syncs at all.
+    Every other test reads outputs between launches, so launches never overlap. Here a chip that
+    finishes early can start sending into a neighbour still finishing the previous launch, racing the
+    reset of the arrival counter:
 
-    The failure this guards is a hang, not wrong data: an increment that lands while the downstream is
-    clearing the counter used to be thrown away, and its relay then waited for pages the counter said
-    had never arrived. The launches alternate between two draws so a counter left standing HIGH is
-    caught too -- a relay reading before arrival would hand back the other draw's pages, which a
-    single repeated draw could not tell apart.
+    - An increment lost to the reset hangs the relay waiting for it.
+    - A counter left too high lets the relay read pages before they arrive. Alternating two draws
+      makes those stale pages differ from the expected ones.
     """
     cfg = extract_mesh_config(mesh_device)
     a = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, seed=31, capacity_div=8)
@@ -779,16 +705,15 @@ def test_dispatch_fabric2d_back_to_back(mesh_device, device_params, num_links):
 @pytest.mark.parametrize("real", [320, 3], ids=lambda r: f"real{r}")
 @pytest.mark.timeout(900)
 def test_dispatch_fabric2d_padding_config(mesh_device, device_params, num_links, real):
-    """A padding_config shortens the routing pass without changing a single page.
+    """A padding_config makes the routing pass stop early without changing any output page.
 
-    The contract it carries is the one `dispatch` relies on: with right padding the padded tokens sit
-    at the high indices and are sentinel-marked, so they resolve to no expert and contribute nothing.
-    Here the tail is routed entirely OUT of this dispatch group, which is what a sentinel-marked token
-    looks like from inside it -- so bounding the pass at the real count and not bounding it must land
-    identical bytes, and the reference (which always walks every token) is the third opinion.
+    Tokens past `real` are routed to another dispatch group, so this group sees them as padding: they
+    produce no pages. The op is run three times and each must match the reference, which walks every
+    token:
 
-    The left-padding case is the same call with pad_side 1, which both ops ignore, so it has to come
-    back identical too -- a config that silently took effect on the wrong side would corrupt the tail.
+    - No padding_config.
+    - Right padding (pad_side 0): the pass stops at `real`.
+    - Left padding (pad_side 1): ignored, so the whole sequence is walked.
     """
     cfg = extract_mesh_config(mesh_device)
     fx = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, capacity_div=8)

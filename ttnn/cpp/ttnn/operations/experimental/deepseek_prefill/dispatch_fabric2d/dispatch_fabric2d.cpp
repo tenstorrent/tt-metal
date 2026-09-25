@@ -44,9 +44,7 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
 
     // Every core this op may occupy: the caller's carve, exactly as for the sibling `dispatch`. The
     // streams take the row under their eth cores and a TILE input's untilizer pool wants the row under
-    // that, so a carve that gives the op two rows gets the placement the tiled input is designed for;
-    // a one-row carve -- the model's while the shared expert holds the rest of the grid -- runs
-    // correctly with the pool on the streams' row, and the program factory says so once per build.
+    // that, so a TILE input needs a carve of at least two rows and a one-row carve refuses it.
     // Defaulting to the first sub-device means no sub-device manager loaded gives the whole grid,
     // which is what a standalone caller wants and what a test gets.
     auto* mesh_device = input_tensor.device();
