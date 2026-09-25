@@ -31,6 +31,7 @@ from models.demos.deepseek_v3_d_p.tt.v4.attention.swa import TtSWA
 from models.demos.deepseek_v3_d_p.tt.v4.hyper_connection import TtHyperConnection
 from models.demos.deepseek_v3_d_p.tt.v4.layer_kinds import CSA, HCA, SLIDING, layer_kinds
 from models.demos.deepseek_v3_d_p.tt.v4.moe import build_v4_moe, is_hash_layer
+from models.demos.deepseek_v3_d_p.tt.v4.trace_island import TraceIsland, copy_into
 
 HC = 4
 
@@ -197,6 +198,7 @@ class TtV4PrefillBlock(LightweightModule):
             weight_cache_path=weight_cache_path,
         )
         self.states: dict = {}
+        self._islands = None  # (A, B, S_in, y_buf, ids_buf) once enable_trace_islands ran
         if self.kv_only:
             self.ffn_hc = self.post_norm = self.moe = None
             return
@@ -257,6 +259,82 @@ class TtV4PrefillBlock(LightweightModule):
             self.attn.indexer.compressor.reset_prior(st.prior_i)
         st.fresh = True
 
+    # ---- trace islands (DS4F-0246/0247) --------------------------------------------------------------------------
+    def enable_trace_islands(self, streams: list, input_ids=None) -> None:
+        """Capture the position-independent slices of this block as traces, ONCE, after an eager warm-up has compiled
+        their programs. ``streams`` are live activations of the shape every chunk uses (their contents do not matter);
+        ``input_ids`` a device ids tensor of the gate's layout for a hash-routed layer (``None`` otherwise).
+        Island A = attn_hc + input_norm -> (post, comb, h). Island B = attn_hc.mix + ffn_hc + post_norm + MoE +
+        ffn_hc.mix -> streams (absent on a kv_only layer). Inputs: the block-owned persistent copies S_in of the four
+        streams, y_buf for the attention output, ids_buf for the hash gate; B also reads A's persistent outputs."""
+        assert self._islands is None, "islands already enabled"
+        S_in = [ttnn.clone(t) for t in streams]  # persistent input copies, same shape/dtype/layout as every chunk
+
+        def island_a(*s):
+            post, comb, x = self.attn_hc(list(s))
+            h = self.input_norm(x)
+            ttnn.deallocate(x)
+            return post, comb, h
+
+        A = TraceIsland(self.mesh_device, island_a, S_in, name=f"layer{self.layer_idx}.A")
+        post, comb, h = A.capture()
+        if self.kv_only:
+            self._islands = (A, None, S_in, None, None)
+            return
+        y_buf = ttnn.clone(h)  # the attention output has h's shape
+        ids_buf = None
+        if self.hash_layer:
+            assert isinstance(input_ids, ttnn.Tensor), "a hash-routed layer's islands need the device ids tensor"
+            ids_buf = ttnn.clone(input_ids)
+        S_l, D_l = streams[0].shape[2], streams[0].shape[3]
+        chunk_tokens = S_l * self.mesh_device.shape[self.sp_axis]
+
+        def island_b(*inputs):
+            s = list(inputs[:HC])
+            y = inputs[HC]
+            streams2 = self.attn_hc.mix(s, y, post, comb)
+            post2, comb2, x = self.ffn_hc(streams2)
+            h2 = self.post_norm(x)
+            ttnn.deallocate(x)
+            h3 = ttnn.reshape(h2, [1, S_l, D_l])
+            moe_out, _ = self.moe(h3, input_ids=ids_buf, actual_isl=chunk_tokens, actual_start=0)
+            moe_out = ttnn.reshape(moe_out, [1, 1, S_l, D_l])
+            out = self.ffn_hc.mix(streams2, moe_out, post2, comb2)
+            ttnn.deallocate(moe_out)
+            for t in streams2:
+                ttnn.deallocate(t)
+            return out
+
+        B = TraceIsland(self.mesh_device, island_b, S_in + [y_buf], moe=self.moe, name=f"layer{self.layer_idx}.B")
+        B.capture()
+        self._islands = (A, B, S_in, y_buf, ids_buf)
+
+    def islands_enabled(self) -> bool:
+        return self._islands is not None
+
+    def _forward_traced(self, streams, *, slot, caches, real_len, input_ids, on_layer_complete, on_layer_hidden):
+        A, B, S_in, y_buf, ids_buf = self._islands
+        state = self.states[slot]
+        for dst, src in zip(S_in, streams):
+            copy_into(dst, src)
+        post, comb, h = A.replay()
+        state.fresh = False
+        y = self.attn(h, seq_len_actual=real_len, state=state, export=self._export_target(caches, slot))
+        if on_layer_complete is not None:
+            ttnn.synchronize_device(self.mesh_device)
+            on_layer_complete(self.layer_idx)
+        if self.kv_only:
+            ttnn.deallocate(y)
+            return None
+        copy_into(y_buf, y)
+        ttnn.deallocate(y)  # nothing eager may outlive the replay below
+        if ids_buf is not None:
+            copy_into(ids_buf, input_ids)
+        out = list(B.replay())
+        if on_layer_hidden is not None:
+            on_layer_hidden(self.layer_idx, out)
+        return out
+
     def _export_target(self, caches, slot: int):
         """(unified cache tensor, batch index) of this layer for ``slot``; None when the kind has no export yet."""
         if caches is None:
@@ -294,6 +372,19 @@ class TtV4PrefillBlock(LightweightModule):
         ), f"slot {slot}: state at {state.kv_actual}, chunk starts at {actual_start}"
         real_len = int(actual_end) - int(actual_start)
         S_l, D_l = streams[0].shape[2], streams[0].shape[3]
+        if self._islands is not None and real_len == S_l * self.mesh_device.shape[self.sp_axis]:
+            # full chunk: the captured islands' MoE padding config (actual_isl = chunk) and the hash gate's device ids
+            # buffer hold; a ragged FINAL chunk (real_len < chunk) runs the eager path below
+            if not self.hash_layer or isinstance(input_ids, ttnn.Tensor):
+                return self._forward_traced(
+                    streams,
+                    slot=slot,
+                    caches=caches,
+                    real_len=real_len,
+                    input_ids=input_ids,
+                    on_layer_complete=on_layer_complete,
+                    on_layer_hidden=on_layer_hidden,
+                )
 
         post, comb, x = self.attn_hc(streams)
         h = self.input_norm(x)

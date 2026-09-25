@@ -36,7 +36,10 @@ class TtV4PrefillRuntimeConfig:
     tp_axis: int = 1
     kv_only_last_layer: bool = True
     weight_cache_path: Optional[Path] = None
-    use_trace: bool = False  # eager only in this milestone; the runner reads the flag on pipeline ranks
+    # Trace islands (tt/v4/trace_island.py): the mHC sites, norms and MoE of every layer captured once and replayed per
+    # chunk; the attention core stays eager. Needs the mesh opened with a trace region (PREFILL_USE_TRACE=1 ->
+    # PREFILL_TRACE_REGION_SIZE, 256 MB default). The runner calls capture_trace() after the D2D endpoints exist.
+    use_trace: bool = False
 
     @property
     def sp_factor(self) -> int:
@@ -112,9 +115,33 @@ class TtV4PrefillRuntime:
             layer.reset_slot(0)
         ttnn.synchronize_device(self.mesh_device)
         self._compiled = True
+        self._trace_captured = False
         logger.info(
             f"[v4 runtime] compiled: layers {c.first_layer_idx}..{c.first_layer_idx + c.num_layers - 1}, chunk {c.chunk_size}, max_seq {c.max_seq_len}, users {c.num_users}"
         )
+
+    def capture_trace(self, kv_caches=None) -> None:
+        """use_trace: capture every layer's islands ONCE (after compile's eager warm-up). Idempotent; a no-op when
+        use_trace is off. The engine calls this after its D2D endpoints and ack channels are wired (their L1 must be
+        allocated before anything is captured -- same rule as the MLA runtime)."""
+        c = self.config
+        if not c.use_trace or getattr(self, "_trace_captured", False):
+            return
+        assert self._compiled, "capture_trace needs compile() first (the islands' programs must exist)"
+        x = self.make_chunk_input([0] * c.chunk_size)
+        self._pending_ids.pop(id(x), None)
+        ids = self._token_ids_view(x) if self._needs_token_ids else None
+        self.model.enable_trace_islands(x, input_ids=ids)
+        if ids is not None:
+            ttnn.deallocate(ids)
+        ttnn.deallocate(x)
+        ttnn.synchronize_device(self.mesh_device)
+        self._trace_captured = True
+        segs = sum(
+            (0 if layer._islands is None else sum(i.num_segments for i in layer._islands[:2] if i is not None))
+            for layer in self.model.layers
+        )
+        logger.info(f"[v4 runtime] trace islands captured: {len(self.model.layers)} layers, {segs} trace segments")
 
     def make_chunk_input(self, token_ids: list):
         c = self.config

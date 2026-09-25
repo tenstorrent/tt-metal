@@ -127,6 +127,22 @@ class TtV4PrefillTransformer(LightweightModule):
         for layer in self.layers:
             layer.alloc_states(num_users, max_seq_len, self.chunk_tokens)
 
+    def enable_trace_islands(self, x, input_ids=None) -> None:
+        """Capture every layer's trace islands (``TtV4PrefillBlock.enable_trace_islands``) after an eager warm-up
+        compiled their programs. ``x`` is a chunk input of the shape every chunk uses (the first rank's token ids
+        tensor, a placeholder activation otherwise); ``input_ids`` the device ids tensor for the hash-routed layers."""
+        streams = self._entry_streams(x)
+        for layer in self.layers:
+            layer.enable_trace_islands(streams, input_ids=input_ids if layer.hash_layer else None)
+        for t in streams:
+            ttnn.deallocate(t)
+
+    def _entry_streams(self, x) -> list:
+        if self.is_first_rank:
+            h = ttnn.unsqueeze_to_4D(self.embed(x))  # [1, 1, S_l, D_l]
+            return [h] + [ttnn.clone(h) for _ in range(HC - 1)]
+        return unpack_streams(x)
+
     def forward(
         self,
         x,
@@ -139,11 +155,7 @@ class TtV4PrefillTransformer(LightweightModule):
         on_layer_complete: Optional[Callable[[int], None]] = None,
         on_layer_hidden: Optional[Callable[[int, list], None]] = None,
     ):
-        if self.is_first_rank:
-            h = ttnn.unsqueeze_to_4D(self.embed(x))  # [1, 1, S_l, D_l]
-            streams = [h] + [ttnn.clone(h) for _ in range(HC - 1)]
-        else:
-            streams = unpack_streams(x)
+        streams = self._entry_streams(x)
         for layer in self.layers:
             streams = layer(
                 streams,

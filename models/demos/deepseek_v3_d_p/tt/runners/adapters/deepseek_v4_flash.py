@@ -106,6 +106,7 @@ class DeepSeekV4FlashAdapter(PrefillModelAdapter):
             tp_axis=params.tp_axis,
             kv_only_last_layer=params.kv_only_last_layer,
             weight_cache_path=params.weight_cache_path,
+            use_trace=bool(getattr(params, "use_trace", False)),
         )
         return TtV4PrefillRuntime(
             mesh_device,

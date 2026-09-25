@@ -37,6 +37,7 @@ _MESH_CONFIGS = [
         (2, 4),
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "trace_region_size": 256 * 1024 * 1024,  # the trace-islands variant captures ~10 MB per layer
             "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
         },
@@ -52,7 +53,8 @@ def _one_chip(mesh_device, t):
 
 
 @pytest.mark.parametrize("mesh_device, device_params", _MESH_CONFIGS, indirect=["mesh_device", "device_params"])
-def test_kv_chunk_table_reads_back_every_config(mesh_device, device_params, tmp_path):
+@pytest.mark.parametrize("use_trace", [False, True], ids=["eager", "trace-islands"])
+def test_kv_chunk_table_reads_back_every_config(mesh_device, device_params, tmp_path, use_trace):
     cfg = deepseek_v4_flash_hf_config(num_hidden_layers=4)  # SWA SWA CSA HCA
     cfg.n_routed_experts = _EXPERTS
     model = _init_model(cfg)
@@ -77,6 +79,7 @@ def test_kv_chunk_table_reads_back_every_config(mesh_device, device_params, tmp_
         num_users=_USERS,
         mesh_shape=(sp, tp),
         kv_only_last_layer=True,
+        use_trace=use_trace,
     )
     params = SimpleNamespace(
         max_seq_len=total,
@@ -97,6 +100,7 @@ def test_kv_chunk_table_reads_back_every_config(mesh_device, device_params, tmp_
         num_routed_experts=_EXPERTS,
     )
     rt.compile(caches)
+    rt.capture_trace(caches)  # no-op unless use_trace: every layer's mHC / norm / MoE islands become traces
     start = 0
     for k, n in enumerate(_CHUNKS):
         chunk_ids = ids[0, start : start + n].tolist()

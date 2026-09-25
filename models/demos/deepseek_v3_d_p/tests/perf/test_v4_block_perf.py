@@ -19,6 +19,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 import DeepseekV4RotaryEmbedding
 from models.demos.deepseek_v3_d_p.tests.pcc.test_v4_block import (
     _EXPERTS,
@@ -27,6 +28,7 @@ from models.demos.deepseek_v3_d_p.tests.pcc.test_v4_block import (
     init_reference_layer,
     reference_layer_weights,
     to_device_streams,
+    to_host_streams,
 )
 from models.demos.deepseek_v3_d_p.tt.v4.block import TtV4PrefillBlock
 from models.demos.deepseek_v3_d_p.tt.v4.kv_cache import allocate_v4_flash_kv_caches
@@ -36,9 +38,18 @@ _CHUNK = 5120
 _ITERS = int(os.environ.get("V4_PERF_ITERS", "3"))
 
 
+_MESH_CONFIGS_TRACE = [
+    pytest.param(
+        _MESH_CONFIGS[0].values[0],
+        {**_MESH_CONFIGS[0].values[1], "trace_region_size": 256 * 1024 * 1024},
+        id="fabric2d-mesh-2x4-trace",
+    ),
+]
+
+
 @pytest.mark.timeout(0)
 @pytest.mark.parametrize("layer_idx", [0, 2, 3], ids=["swa-layer0-hash", "csa-layer2-hash", "hca-layer3-topk"])
-@pytest.mark.parametrize("mesh_device, device_params", _MESH_CONFIGS, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize("mesh_device, device_params", _MESH_CONFIGS_TRACE, indirect=["mesh_device", "device_params"])
 def test_v4_block_perf(mesh_device, device_params, layer_idx):
     cfg = _cfg()
     layer = init_reference_layer(cfg, layer_idx)
@@ -69,7 +80,8 @@ def test_v4_block_perf(mesh_device, device_params, layer_idx):
     streams = to_device_streams(
         mesh_device, (torch.randn(1, _CHUNK, 4, cfg.hidden_size) * 1.5).to(torch.bfloat16).float()
     )
-    input_ids = torch.randint(0, cfg.vocab_size, (_CHUNK,))
+    # the hash gate's ids as a device tensor (what the runtime hands the block; also what the islands copy from)
+    input_ids = block.moe.gate._input_ids_to_device(torch.randint(0, cfg.vocab_size, (_CHUNK,)))
 
     def run(start):
         out = block(streams, slot=0, caches=caches, actual_start=start, actual_end=start + _CHUNK, input_ids=input_ids)
@@ -84,6 +96,15 @@ def test_v4_block_perf(mesh_device, device_params, layer_idx):
         t2 = time.perf_counter()
         for t in out:
             ttnn.deallocate(t)
+        return (t1 - t0) * 1e3, (t2 - t0) * 1e3
+
+    def timed_islands(start):  # island outputs are persistent: never deallocate them
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        run(start)
+        t1 = time.perf_counter()
+        ttnn.synchronize_device(mesh_device)
+        t2 = time.perf_counter()
         return (t1 - t0) * 1e3, (t2 - t0) * 1e3
 
     # warm-up: compile both chunk positions
@@ -108,6 +129,39 @@ def test_v4_block_perf(mesh_device, device_params, layer_idx):
     logger.info(
         f"[v4 perf] layer {layer_idx} ({block.kind}) MEDIAN of {_ITERS}: chunk0 issue {med[0]:.1f} / total {med[1]:.1f} ms; "
         f"chunk1 issue {med[2]:.1f} / total {med[3]:.1f} ms  (5120 tokens, 2x4, {_EXPERTS} experts)"
+    )
+
+    # ---- trace islands (mHC + norms + MoE captured once per layer; attention eager) --------------------------------
+    block.reset_slot(0)
+    out = run(0)
+    ttnn.synchronize_device(mesh_device)
+    ref = to_host_streams(mesh_device, out) if out is not None else None
+    if out is not None:
+        for t in out:
+            ttnn.deallocate(t)
+    block.reset_slot(0)
+    block.enable_trace_islands(streams, input_ids=input_ids if block.hash_layer else None)
+    block.reset_slot(0)
+    out = run(0)
+    ttnn.synchronize_device(mesh_device)
+    if ref is not None:
+        got = to_host_streams(mesh_device, out)
+        worst = min(comp_pcc(ref[0, :, h, :].float(), got[0, :, h, :].float())[1] for h in range(4))
+        logger.info(
+            f"[v4 perf] layer {layer_idx} ({block.kind}) islands vs eager (chunk 0, same state) PCC {worst:.6f}"
+        )
+        assert worst >= 0.999, worst
+    rows = []
+    for it in range(_ITERS):
+        block.reset_slot(0)
+        i0, w0 = timed_islands(0)
+        i1, w1 = timed_islands(_CHUNK)
+        rows.append((i0, w0, i1, w1))
+    med = [sorted(c)[len(c) // 2] for c in zip(*rows)]
+    logger.info(
+        f"[v4 perf] layer {layer_idx} ({block.kind}) ISLANDS MEDIAN of {_ITERS}: chunk0 issue {med[0]:.1f} / total "
+        f"{med[1]:.1f} ms; chunk1 issue {med[2]:.1f} / total {med[3]:.1f} ms  (A {block._islands[0].num_segments} seg"
+        f"{'' if block._islands[1] is None else f', B {block._islands[1].num_segments} seg'})"
     )
 
     if not ttnn.device.IsProgramRealtimeProfilerActive():
