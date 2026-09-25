@@ -364,8 +364,8 @@ struct HybridRoutedExpertFfnInputs {
     std::vector<Tensor> up_biases;
     std::vector<Tensor> down_biases;
 
-    // Per-core L1 scratch both halves' circular buffers are laid over. Required whenever pass A
-    // runs: the two halves' buffers sum to more L1 than a core has, and overlaying them -- safe
+    // Per-core L1 scratch both halves' circular buffers are laid over. Required whenever the fused
+    // pass runs: the two halves' buffers sum to more L1 than a core has, and overlaying them -- safe
     // because the passes are ordered, never concurrent -- is what lets both keep the whole grid.
     // Owned by the caller because the program keeps a raw pointer to it that must stay valid
     // across program-cache hits.
