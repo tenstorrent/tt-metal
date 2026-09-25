@@ -439,4 +439,32 @@ ALWI void topk_uint16_move_dest_tile_to_pack_half(uint32_t idst) {
     MATH((ckernel::sfpu::_topk_uint16_move_dest_tile_to_pack_half_(idst)));
 }
 
+// clang-format off
+/**
+ * Builds the transposed index tile for width position w/32 in DST, so a sort op needs no
+ * DM-generated index tile: in every column of tile row r the tile holds the index w + r, which is
+ * what transposing a generated index tile produces. Writes u16 datums in 16-bit DEST and [0|idx]
+ * INT32 words in 32-bit DEST, the formats the top-k network's index loads read. Must run on MATH
+ * while DST is acquired, after the value tiles' transposes; clobbers LREG1..2.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in the DST register buffer to fill                   | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | w               | The index of the tile's first column along the sorted dimension            | uint32_t | Multiple of 32; below 2^16 in 16-bit DEST             | True     |
+ */
+// clang-format on
+ALWI void topk_fill_index_tile(uint32_t idst, uint32_t w) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_topk_fill_index_tile,
+        (true /* APPROXIMATE */, DST_ACCUM_MODE),
+        0,
+        VectorMode::RC_custom,
+        idst,
+        w));
+}
+
 }  // namespace ckernel

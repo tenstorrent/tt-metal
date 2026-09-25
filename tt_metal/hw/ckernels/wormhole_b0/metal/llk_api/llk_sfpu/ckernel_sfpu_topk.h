@@ -98,6 +98,12 @@ inline void calculate_topk_stamp_tile_rank_range(std::uint32_t dst_tile_index, s
     _topk_stamp_tile_rank_range_<largest, TAG_BITS>(dst_tile_index, rank_base);
 }
 
+// Build one transposed index tile in DEST (see _topk_fill_index_tile_ in the LLK header).
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+inline void calculate_topk_fill_index_tile(std::uint32_t dst_tile_index, std::uint32_t w) {
+    _topk_fill_index_tile_<is_fp32_dest_acc_en>(dst_tile_index, w);
+}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void calculate_topk_canonicalize_negzero() {
     if constexpr (is_fp32_dest_acc_en && !TOPK_UINT16_IN_FP32_DEST) {
