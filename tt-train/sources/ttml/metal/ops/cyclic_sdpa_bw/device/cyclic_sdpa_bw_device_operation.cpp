@@ -9,6 +9,7 @@
 #include <enchantum/enchantum.hpp>
 
 #include "core/tt_tensor_utils.hpp"
+#include "ttnn/operations/full/full.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::ops::cyclic_sdpa_bw::device {
@@ -217,8 +218,13 @@ CyclicSDPABackwardDeviceOperation::tensor_return_value_t CyclicSDPABackwardDevic
         if (preallocated.has_value()) {
             return preallocated.value();
         }
-        return ttml::core::zeros(
-            ttnn::Shape(specs[i].logical_shape()), device, specs[i].data_type());
+        // Filled on the device: core::zeros builds the tensor on the host
+        // and writes it over PCIe, which at 7040 rows was 0.8 ms of a 1.8 ms
+        // call (the ring driver's device_zeros_like, for the same reason).
+        const auto& shape = specs[i].logical_shape();
+        return ttnn::moreh_full(
+            ttsl::SmallVector<uint32_t>(shape.cbegin(), shape.cend()), 0.0F, device, specs[i].data_type(),
+            ttnn::Layout::TILE, ttnn::DRAM_MEMORY_CONFIG);
     };
     auto grad_query = take(tensor_args.preallocated_grad_query, 0U);
     auto grad_key = take(tensor_args.preallocated_grad_key, 1U);

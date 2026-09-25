@@ -5,13 +5,16 @@
 #include "scaled_dot_product_attention.hpp"
 
 #include <cmath>
+#include <cstdlib>
 #include <stdexcept>
+#include <string_view>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "metal/common/const_utils.hpp"
 #include "metal/operations.hpp"
+#include "ops/distributed/ring_attention_sdpa.hpp"
 #include "ttnn_fixed/matmuls.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
@@ -252,6 +255,39 @@ autograd::TensorPtr scaled_dot_product_attention(
     if (mask.has_value() && mask.value()) {
         mask_tensor = mask.value()->get_value();
         mask_type = ttml::metal::AttentionMaskType::Arbitrary;
+    }
+
+    // TTML_SDPA=cyclic runs the causal case on one chip through the cyclic
+    // forward and backward instead (the ring driver's kernels, on the whole
+    // sequence), at the block height the ring's planner picks for it. Opt-in,
+    // for comparing training steps; everything else takes the path below.
+    static const bool use_cyclic = [] {
+        const char* env = std::getenv("TTML_SDPA");
+        return env != nullptr && std::string_view(env) == "cyclic";
+    }();
+    if (use_cyclic && !mask_tensor.has_value() && dropout_probability == 0.0F) {
+        const uint32_t Bt = ttml::ops::distributed::plan_rows_per_block_tiles(
+            query->get_value(), ttml::metal::ops::RingLayout::Contiguous);
+        auto [attn_output, log_sum_exp] =
+            ttml::metal::cyclic_sdpa_fw(query->get_value(), key->get_value(), value->get_value(), Bt);
+        auto out = ttml::autograd::create_tensor(attn_output);
+        ttml::autograd::GradFunction grad = [query, key, value, out, attn_output, log_sum_exp, Bt]() {
+            auto [dL_dQ, dL_dK, dL_dV] = ttml::metal::cyclic_sdpa_bw_from_forward(
+                query->get_value(),
+                key->get_value(),
+                value->get_value(),
+                out->get_grad(),
+                attn_output,
+                log_sum_exp,
+                Bt);
+            // The cyclic backward returns Float32; the gradients take the
+            // inputs' type, as in the ring driver.
+            query->add_grad(ttnn::typecast(dL_dQ, query->get_value().dtype()));
+            key->add_grad(ttnn::typecast(dL_dK, key->get_value().dtype()));
+            value->add_grad(ttnn::typecast(dL_dV, value->get_value().dtype()));
+        };
+        out->set_node(ttml::autograd::add_backward_node(std::move(grad), out, query, key, value));
+        return out;
     }
 
     // ========== Forward Pass using sdpa_fw kernel ==========
