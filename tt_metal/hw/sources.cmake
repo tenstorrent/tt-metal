@@ -408,7 +408,6 @@ set(HW_JIT_API_HEADERS
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_rational_segment_core.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_rational_squared_init.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_rational_squared_replay.inc
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_rational_squared_wh_replay.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_raw_class_policy.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_selected_core_total.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_selected_exp_pool_init.inc
@@ -431,4 +430,5 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/eltwise_unary/softplus_bw_tt_poly_bf16.h
     inc/api/compute/eltwise_unary/softshrink_bw_tt_poly_bf16.h
     inc/api/compute/eltwise_unary/softsign_bw_tt_poly_bf16.h
+    ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_tt_poly_rational_squared_wh_replay.inc
 )

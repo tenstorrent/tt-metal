@@ -144,15 +144,9 @@ constexpr std::array<float, LUT_SIZE> LUT_DATA = {
 #define TT_SPECIAL_POS_ZERO 5
 #define TT_SPECIAL_NEG_ZERO 5
 
-#include "../../../../common/llk_sfpu/ckernel_sfpu_tt_poly_rational_squared_wh_replay.inc"
 #include "../../../../common/llk_sfpu/ckernel_sfpu_tt_poly_rational_squared_replay.inc"
-#if defined(ARCH_BLACKHOLE)
 static_assert(kSquaredAbsDenominatorTtiReplay);
 inline void tile() { squared_abs_denominator_tti_replay_tile(); }
-#else
-static_assert(WH_SQUARED_ABS_DENOMINATOR_TTI_CANDIDATE == 1);
-inline void tile() { wh_squared_abs_denominator_replay_tile(); }
-#endif
 
 #include "../../../../common/llk_sfpu/ckernel_sfpu_tt_poly_gradient_finalize.inc"
 }  // namespace ttpoly_generated::SoftsignBwBf16Config_detail
