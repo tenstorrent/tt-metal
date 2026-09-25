@@ -394,6 +394,15 @@ ALWI void sdpa_later_batch_sfpu() {
         ckernel::sfpu::calculate_sdpa_later_batch<num_tiles, hold>, 0, VectorMode::RC_custom)));
 }
 
+// The approximate softmax exp builds 2^(x/ln2) with a linear mantissa. The row max puts the largest scores at x = 0,
+// where that error is below its octave mean, which flattens the weights; this constant moves x = 0 to the mean.
+ALWI void sdpa_center_softmax_exp() {
+    constexpr uint32_t bits = __builtin_bit_cast(uint32_t, 32555.818359375f);  // Schraudolph's 32500.818... + 55 / 256
+    PACK((TTI_SFPLOADI(0, 0xA, bits & 0xFFFF)));
+    PACK((TTI_SFPLOADI(0, 0x8, bits >> 16)));
+    PACK((TTI_SFPCONFIG(0, 13, 0)));
+}
+
 // Keep this out-of-line even on BH: repeated pack-width configuration sites
 // inflate SDPA streaming code size more than this call costs in measured cases.
 static __attribute__((noinline, noclone)) void configure_pack_width(uint32_t cb, uint32_t pack_width) {
@@ -1683,6 +1692,9 @@ static void sdpa_inner_loop_step(
     uint32_t kt_index_offset = 0;
 
     exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
+    if constexpr (sdpa_fp32_accumulator()) {
+        sdpa_center_softmax_exp();
+    }
 
     // Use KT_stride for cb_qkt_im layout to keep CB pointers aligned across iterations
     CircularBuffer(cb_qkt_im).reserve_back(Sq_chunk_t * KT_stride);
