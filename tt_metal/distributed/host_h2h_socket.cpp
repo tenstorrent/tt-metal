@@ -181,9 +181,10 @@ struct H2HSocket::Impl {
     // marginal rate that many bytes puts its cost near 10% of the transfer -- 55 frames at
     // 14 KB, 3 at 256 KB. Bytes rather than frames so one constant spans the whole sweep.
     static constexpr uint64_t kFlushWatermark = 768u * 1024u;
-    // A pass holds this back only while more is coming. Nothing queued means the batch is
-    // as large as it will get, so a lone frame still sees one flush, as it did before.
-    static constexpr auto kFlushDeadline = std::chrono::microseconds(50);
+    // Long enough to reach the watermark at the measured frame rate, not a latency bound:
+    // a lone frame is covered by the no-supply force, which fires the moment nothing is
+    // queued. This only catches a queue that has stopped moving for another reason.
+    static constexpr auto kFlushDeadline = std::chrono::microseconds(500);
 
     uint64_t watermark = kFlushWatermark;
     std::vector<std::chrono::steady_clock::time_point> first_pending;
@@ -577,12 +578,10 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
     // pass of a run that asked for none, and the split says which half of a pass to go after.
     const auto flush_t0 =
         im.cfg.collect_timing ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-    // Two ways the batch stops growing: no supply (nothing queued) or no room (every core
-    // credit-gated, so this pass posted nothing). Holding past either only delays the peer,
-    // whose credit cannot come back until we publish what it is waiting on.
-    const bool no_supply = im.tx_queued == 0;
-    const bool no_room = credit_blocked && im.stats.posts == posts_before;
-    im.flush_dirty(no_supply || no_room);
+    // No-supply only. Forcing on credit-gating as well was measured to defeat the watermark:
+    // holding a publish is itself what stops the peer crediting, so the gate fires, forces a
+    // flush of whatever little is pending, and the batch never grows. The deadline bounds it.
+    im.flush_dirty(im.tx_queued == 0);
     if (im.cfg.collect_timing) {
         im.stats.flush_ns += static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - flush_t0).count());
