@@ -40,7 +40,8 @@ namespace {
 const int kDeviceId = leg_device_id();
 
 // Both ranks build this identically, which is what keeps them on the same case list.
-const std::vector<int64_t> kPageSizes = {4096, 16384, 65536, 262144};
+// 14336 is the size the standard names; 16384 is the control it has always been measured at.
+const std::vector<int64_t> kPageSizes = {4096, 14336, 16384, 65536, 262144};
 const std::vector<int64_t> kCores = {1, 2, 4, 8, 16, 32, 64};
 // Was never an arg: the socket defaulted to kNumAliasRingSlots == 1, so a volume run paid a
 // full host-to-host credit round trip per frame. ring_pages x page must fit one arena.
