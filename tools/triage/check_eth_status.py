@@ -36,14 +36,6 @@ HEARTBEAT_TIMEOUT_SECONDS = 0.05
 # Local polling interval, not the firmware update period. Avoid a busy read loop.
 HEARTBEAT_POLL_INTERVAL_SECONDS = 0.001
 
-# Wormhole L1[0x1C]: bits 31:16 identify the firmware; bits 15:0 are its counter.
-# UMD names these BASE_FW_HEARTBEAT_SIGNATURE and FABRIC_HEARTBEAT_SIGNATURE:
-# https://github.com/tenstorrent/tt-umd/blob/v0.9.9/device/api/umd/device/firmware/erisc_firmware.hpp
-# RISC_POST_HEARTBEAT in tt_metal/hw/inc/api/dataflow/dataflow_api.h writes the fabric format.
-WORMHOLE_BASE_FW_HEARTBEAT_SIGNATURE = 0xABCD
-WORMHOLE_FABRIC_HEARTBEAT_SIGNATURE = 0xAABB
-WORMHOLE_HEARTBEAT_SIGNATURE_SHIFT = 16
-
 
 @dataclass
 class EthCoreDefinitions:
@@ -55,7 +47,6 @@ class EthCoreDefinitions:
     heartbeat: int
     mailbox: int | None
     mailbox_slots: int
-    heartbeat_signatures: tuple[int, ...] | None = None
 
 
 @dataclass
@@ -84,37 +75,52 @@ class EthCore(ABC):
     def __init__(self, location: OnChipCoordinate, context: Context):
         self.location = location
         self.context = context
+        self._heartbeat_sample: int = 0
+        self._heartbeat_deadline: float | None = None
 
     @abstractmethod
     def port_status_to_string(self, port_status: int) -> str | None:
         """Convert port status value to a readable string."""
         pass
 
-    def check_for_heartbeat(self) -> bool:
-        """Check that two valid heartbeat samples have different values.
+    @abstractmethod
+    def is_valid_heartbeat(self, value: int) -> bool:
+        """Check the heartbeat format for this architecture."""
+        pass
 
-        get_results calls this once per active ETH core during triage. The caller
-        checks cores in sequence, so the timeout cost adds up across stopped cores.
-        """
-        previous_data = None
-        deadline = monotonic() + HEARTBEAT_TIMEOUT_SECONDS
+    def start_heartbeat_check(self) -> None:
+        """Save a first sample and start this core's observation window."""
+        self._heartbeat_sample = read_word_from_device(
+            self.location, self.eth_core_definitions.heartbeat, context=self.context
+        )
+        self._heartbeat_deadline = monotonic() + HEARTBEAT_TIMEOUT_SECONDS
+
+    def check_for_heartbeat(self) -> bool:
+        """Compare with the saved sample. The caller starts all cores before waiting."""
+        if self._heartbeat_deadline is None:
+            self.start_heartbeat_check()
+        assert self._heartbeat_deadline is not None
+        previous_data: int | None = self._heartbeat_sample
+        if not self.is_valid_heartbeat(previous_data):
+            if previous_data != 0:
+                log_check_location(self.location, False, f"Invalid heartbeat signature: 0x{previous_data:08X}")
+                return False
+            previous_data = None
+
+        # Always take a fresh sample, even if other cores consumed this core's wait time.
         while True:
             read_data = read_word_from_device(self.location, self.eth_core_definitions.heartbeat, context=self.context)
-            signatures = self.eth_core_definitions.heartbeat_signatures
-            if signatures is not None and read_data == 0:
-                # Zero has no Wormhole signature. A later signed value is only a baseline.
-                previous_data = None
-            else:
-                if signatures is not None and read_data >> WORMHOLE_HEARTBEAT_SIGNATURE_SHIFT not in signatures:
+            if not self.is_valid_heartbeat(read_data):
+                if read_data != 0:
                     log_check_location(self.location, False, f"Invalid heartbeat signature: 0x{read_data:08X}")
                     return False
-                if previous_data is None:
-                    previous_data = read_data
-                    # Take the second sample before sleeping. It may already show progress.
-                    continue
-                if read_data != previous_data:
+                # Zero without the required signature cannot supply a baseline.
+                previous_data = None
+            else:
+                if previous_data is not None and read_data != previous_data:
                     return True
-            remaining = deadline - monotonic()
+                previous_data = read_data
+            remaining = self._heartbeat_deadline - monotonic()
             if remaining <= 0:
                 break
             sleep(min(HEARTBEAT_POLL_INTERVAL_SECONDS, remaining))
@@ -191,6 +197,14 @@ class EthCore(ABC):
 class WormholeEthCore(EthCore):
     """Wormhole-specific Ethernet core implementation."""
 
+    # L1[0x1C]: bits 31:16 identify the firmware; bits 15:0 are its counter.
+    # UMD 0.9.9 defines these C++ constants but does not export them to Python:
+    # https://github.com/tenstorrent/tt-umd/blob/v0.9.9/device/api/umd/device/firmware/erisc_firmware.hpp
+    # RISC_POST_HEARTBEAT in tt_metal/hw/inc/api/dataflow/dataflow_api.h writes the fabric format.
+    BASE_FW_HEARTBEAT_SIGNATURE = 0xABCD
+    FABRIC_HEARTBEAT_SIGNATURE = 0xAABB
+    HEARTBEAT_SIGNATURE_SHIFT = 16
+
     def __init__(self, location: OnChipCoordinate, context: Context):
         super().__init__(location, context)
         self.eth_core_definitions = EthCoreDefinitions(
@@ -200,7 +214,12 @@ class WormholeEthCore(EthCore):
             heartbeat=0x1C,
             mailbox=None,
             mailbox_slots=0,
-            heartbeat_signatures=(WORMHOLE_BASE_FW_HEARTBEAT_SIGNATURE, WORMHOLE_FABRIC_HEARTBEAT_SIGNATURE),
+        )
+
+    def is_valid_heartbeat(self, value: int) -> bool:
+        return value >> self.HEARTBEAT_SIGNATURE_SHIFT in (
+            self.BASE_FW_HEARTBEAT_SIGNATURE,
+            self.FABRIC_HEARTBEAT_SIGNATURE,
         )
 
     def port_status_to_string(self, port_status: int) -> str | None:
@@ -224,30 +243,46 @@ class BlackholeEthCore(EthCore):
             mailbox_slots=4,
         )
 
+    def is_valid_heartbeat(self, value: int) -> bool:
+        # Compare the full heartbeat[0] word. Do not apply the Wormhole signature format.
+        # https://github.com/tenstorrent/tt-umd/blob/v0.9.9/device/api/umd/device/types/blackhole_eth.hpp
+        return True
+
     def port_status_to_string(self, port_status: int) -> str | None:
         """Convert Blackhole port status to readable string."""
         status_map: dict[int, str | None] = {0: None, 1: "Up", 2: "Down", 3: "Unused"}
         return status_map.get(port_status, None)
 
 
-def get_eth_core_data(device: Device, location: OnChipCoordinate, context: Context) -> EthCoreCheckData | None:
-    """Create appropriate EthCore instance based on device type and get results."""
-    eth_core: EthCore
+def get_eth_core(device: Device, location: OnChipCoordinate, context: Context) -> EthCore | None:
+    """Create an Ethernet checker only for architectures with known register maps."""
     if device.is_wormhole():
-        eth_core = WormholeEthCore(location, context)
+        return WormholeEthCore(location, context)
     elif device.is_blackhole():
-        eth_core = BlackholeEthCore(location, context)
+        return BlackholeEthCore(location, context)
     else:
         utils.ERROR(f"Unsupported architecture for check_eth_status: {device._arch}")
         return None
-    return eth_core.get_results()
 
 
 def run(args, context: Context):
     run_checks = get_run_checks(args, context)
     BLOCK_TYPES_TO_CHECK = ["active_eth"]
+    eth_cores: dict[OnChipCoordinate, EthCore] = {}
+
+    def start_heartbeat_check(location: OnChipCoordinate) -> None:
+        eth_core = get_eth_core(location.device, location, context)
+        if eth_core is not None:
+            eth_core.start_heartbeat_check()
+            eth_cores[location] = eth_core
+
+    # Start every observation window before waiting on any core. Device reads stay
+    # serial; waits overlap without concurrent access to the shared Exalens context.
+    # Keep both passes in RunChecks so read failures retain its device-skip behavior.
+    run_checks.run_per_block_check(start_heartbeat_check, block_filter=BLOCK_TYPES_TO_CHECK)
     return run_checks.run_per_block_check(
-        lambda location: get_eth_core_data(location.device, location, context), block_filter=BLOCK_TYPES_TO_CHECK
+        lambda location: eth_cores[location].get_results() if location in eth_cores else None,
+        block_filter=BLOCK_TYPES_TO_CHECK,
     )
 
 
