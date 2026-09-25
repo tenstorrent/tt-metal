@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import gc
+import os
 import time
 from typing import Callable
 
@@ -17,17 +18,29 @@ from models.demos.ernie45_d_p.tt.attention import TtAttention, TtKVCache
 from models.demos.ernie45_d_p.tt.common import COMPUTE_HIFI2, cache_name, shard
 from models.demos.ernie45_d_p.tt.embedding import TtEmbedding
 from models.demos.ernie45_d_p.tt.moe import TtMoE
+from models.demos.ernie45_d_p.tt.moe_unified import TtMoEUnified
 from models.demos.ernie45_d_p.tt.ops import TtRMSNorm, TtRope, TtSwiGLU, all_reduce
 
 
+def moe_impl_default() -> str:
+    """ "unified" (fused unified_routed_expert_moe EP pipeline, P3.2) or "dense" (dense-EP composed experts, P2.9)."""
+    return os.environ.get("ERNIE_MOE_IMPL", "unified")
+
+
 class TtDecoderLayer:
-    def __init__(self, mesh, cfg: ErnieConfig, i: int, w: LayerWeights, rope: TtRope):
+    def __init__(self, mesh, cfg: ErnieConfig, i: int, w: LayerWeights, rope: TtRope, moe_impl: str | None = None):
         self.i = i
         self.attn_norm = TtRMSNorm(mesh, w.attn_norm, cfg.rms_norm_eps, f"L{i}.attn_norm")
         self.ffn_norm = TtRMSNorm(mesh, w.ffn_norm, cfg.rms_norm_eps, f"L{i}.ffn_norm")
         self.attn = TtAttention(mesh, cfg, i, w, rope)
         self.is_moe = w.is_moe
-        self.mlp = TtMoE(mesh, cfg, i, w) if w.is_moe else TtSwiGLU(mesh, w.w_gate, w.w_up, w.w_down, name=f"L{i}/mlp")
+        self.moe_impl = moe_impl or moe_impl_default()
+        if not w.is_moe:
+            self.mlp = TtSwiGLU(mesh, w.w_gate, w.w_up, w.w_down, name=f"L{i}/mlp")
+        elif self.moe_impl == "unified":
+            self.mlp = TtMoEUnified(mesh, cfg, i, w)
+        else:
+            self.mlp = TtMoE(mesh, cfg, i, w)
 
     def __call__(self, h, start: int, cache: TtKVCache, contract_kv=None):
         x = self.attn_norm(h)
