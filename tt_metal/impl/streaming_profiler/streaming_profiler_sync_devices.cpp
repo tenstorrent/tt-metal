@@ -769,19 +769,26 @@ void log_link_diag(uint32_t chip_a, uint32_t chip_b, const StopDiag& da, const S
         static_cast<int32_t>(da.timer & ~3u),
         static_cast<int32_t>(db.timer & ~3u));
     for (const auto& [chip, name, d] : {std::tuple{chip_a, "sender", &da}, std::tuple{chip_b, "receiver", &db}}) {
-        if (std::any_of(std::begin(d->drop), std::end(d->drop), [](uint32_t n) { return n != 0; })) {
-            log_info(
+        if (d->drop[0] != 0 || d->drop[3] != 0 || d->drop[4] != 0) {
+            log_warning(
                 tt::LogMetal,
-                "[streaming profiler] link sync chip {} {}: {} rounds not recorded; frames sent beside a keepalive or "
-                "resend {}, frames not handed off in time {}; bursts whose ingress stamps did not match their frames "
-                "{}; frames without an egress stamp {}",
+                "[streaming profiler] link sync chip {} {}: left out: {} rounds not recorded, {} bursts whose ingress "
+                "stamps did not match their frames, {} frames without an egress stamp",
                 chip,
                 name,
                 d->drop[0],
-                d->drop[1],
-                d->drop[2],
                 d->drop[3],
                 d->drop[4]);
+        }
+        if (d->drop[1] != 0 || d->drop[2] != 0) {
+            log_info(
+                tt::LogMetal,
+                "[streaming profiler] link sync chip {} {}: frames retried at a later step (queue busy) {}, frames "
+                "that went beside a keepalive or resend {}",
+                chip,
+                name,
+                d->drop[2],
+                d->drop[1]);
         }
         if ((d->timer & 3u) == 2) {
             log_warning(
