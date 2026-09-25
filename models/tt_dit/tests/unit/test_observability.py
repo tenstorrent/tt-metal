@@ -21,8 +21,9 @@ from ...utils.progress import Watchdog
 
 @pytest.fixture(autouse=True)
 def _fresh_ledger():
-    """The ledger is process-global; isolate each test."""
-    walltime._ledger = walltime._Ledger()
+    """The per-item and session ledgers are process-global; isolate each test."""
+    walltime._current = walltime._Ledger()
+    walltime._session = walltime._Ledger()
     yield
 
 
@@ -44,19 +45,25 @@ def test_anomalies_flag_only_cache_misses():
     assert "miss_tensor" in with_miss and "TT_DIT_CACHE_DIR unset" in with_miss
 
 
-def test_atexit_emits_under_pytest(capsys):
-    """Regression guard: the ledger must surface at teardown even though pytest is imported (the bug
-    was an unconditional `"pytest" in sys.modules` suppression that dropped it on the only LTX path)."""
-    assert "pytest" in sys.modules  # we ARE under pytest — the exact suppressed condition
+def test_atexit_quiet_under_pytest_emits_otherwise(capsys, monkeypatch):
+    """Under pytest the per-item and session blocks come from the conftest hooks, so the atexit
+    hook must stay quiet to avoid double-printing; it remains the emit path only for the
+    `python -m ...` entrypoints that have no such hook."""
+    assert "pytest" in sys.modules  # we ARE under pytest — the suppressed condition
     walltime.record("gen", "denoise", 1.0)
+    walltime._atexit()
+    assert "WALL-TIME LEDGER" not in capsys.readouterr().out
+
+    # Same accumulated ledger, but now a non-pytest process: the hook emits it.
+    monkeypatch.delitem(sys.modules, "pytest", raising=False)
     walltime._atexit()
     assert "WALL-TIME LEDGER" in capsys.readouterr().out
 
 
 def test_disabled_is_a_noop(monkeypatch):
-    monkeypatch.setattr(walltime, "_ENABLED", False)
+    monkeypatch.setenv("TT_WALLTIME", "0")
     walltime.record("gen", "denoise", 9.9)
-    assert not walltime._ledger.cats  # nothing recorded when disabled
+    assert not walltime._current.cats  # nothing recorded when disabled
 
 
 def test_watchdog_heartbeats_and_records_phase():
@@ -69,7 +76,7 @@ def test_watchdog_heartbeats_and_records_phase():
         logger.remove(sink)
     assert any("still working" in m for m in msgs), "watchdog emitted no heartbeat"
     assert any("done in" in m for m in msgs), "watchdog logged no completion"
-    assert "phase" in walltime._ledger.cats  # non-cache-load label is recorded on exit
+    assert "phase" in walltime._current.cats  # non-cache-load label is recorded on exit
 
 
 def test_dit_model_import_opts_in(monkeypatch):

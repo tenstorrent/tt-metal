@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import atexit
 import os
+import sys
 import threading
 import time
 from collections import OrderedDict
@@ -34,7 +35,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 _LOCK = threading.RLock()
-# Wall baseline: render() falls back to (now - import) when no explicit wall is handed in.
+# Wall baseline for entrypoints (``python -m ...``) that have no external duration
+# to hand us; pytest passes the per-item call duration instead (see conftest).
 _T_IMPORT = time.monotonic()
 
 
@@ -53,38 +55,36 @@ class _Ledger:
     misses: list = field(default_factory=list)
 
 
-# One process-global ledger, rendered once at teardown (see ``_atexit``).
-_ledger = _Ledger()
-
-
-# Read once at import: an instrumentation toggle should hold for a whole process, and record()
-# consults it on every span.
-_ENABLED = os.environ.get("TT_WALLTIME", "1") != "0"
+# ``_current`` is reset between pytest items; ``_session`` accumulates for the whole
+# process (and a multi-item session rollup). Outside pytest the two move together.
+_current = _Ledger()
+_session = _Ledger()
 
 
 def _enabled() -> bool:
-    return _ENABLED
+    return os.environ.get("TT_WALLTIME", "1") != "0"
 
 
 def record(
     category: str, label: str, seconds: float, *, cached: bool | None = None, count: int = 1, detail: str = ""
 ) -> None:
-    """Accumulate ``seconds`` into ``category``. ``cached`` tallies HIT (True) / MISS (False); a MISS
-    is also retained for the anomaly list."""
+    """Accumulate ``seconds`` into ``category`` for both the per-item and session ledgers.
+    ``cached`` tallies HIT (True) / MISS (False); a MISS is also retained for the anomaly list."""
     if not _enabled():
         return
     with _LOCK:
-        cat = _ledger.cats.get(category)
-        if cat is None:
-            cat = _Cat()
-            _ledger.cats[category] = cat
-        cat.seconds += seconds
-        cat.count += count
-        if cached is True:
-            cat.hits += 1
-        elif cached is False:
-            cat.misses += 1
-            _ledger.misses.append((label, seconds, detail))
+        for led in (_current, _session):
+            cat = led.cats.get(category)
+            if cat is None:
+                cat = _Cat()
+                led.cats[category] = cat
+            cat.seconds += seconds
+            cat.count += count
+            if cached is True:
+                cat.hits += 1
+            elif cached is False:
+                cat.misses += 1
+                led.misses.append((label, seconds, detail))
 
 
 @contextmanager
@@ -96,17 +96,23 @@ def timed(category: str, label: str, *, cached: bool | None = None):
         record(category, label, time.monotonic() - t0, cached=cached)
 
 
+def reset() -> None:
+    """Clear the per-item ledger (the session ledger keeps accumulating)."""
+    global _current
+    with _LOCK:
+        _current = _Ledger()
+
+
 def render(title: str, ledger: _Ledger | None = None, wall: float | None = None) -> str:
     """Render a ledger as a table reconciled to wall time.
 
-    ``wall`` is the true end-to-end wall for the scope (an explicit duration, or
+    ``wall`` is the true end-to-end wall for the scope (pytest call duration, or
     process time since import when omitted). The table lists each category's
     seconds and share of wall, then an ``untracked`` remainder (wall − tracked)
     and ``TOTAL (wall)`` so the breakdown always reconciles. Anomalies list every
-    cached=False weight load. Categories are assumed disjoint; a phase span that
-    nests a weight_load would double-count and clamp ``untracked`` to 0.
+    cached=False weight load.
     """
-    led = ledger if ledger is not None else _ledger
+    led = ledger if ledger is not None else _current
     with _LOCK:
         cats = list(led.cats.items())
         misses = list(led.misses)
@@ -143,19 +149,21 @@ def render(title: str, ledger: _Ledger | None = None, wall: float | None = None)
     return "\n".join(lines)
 
 
+def render_session(title: str, wall: float | None = None) -> str:
+    """Render the cumulative session ledger (every item since process start)."""
+    return render(title, _session, wall)
+
+
 def _atexit() -> None:
-    # The ledger surfaces once, at process teardown — under pytest (the tests wire no per-item hook) and
-    # the ``python -m ...`` entrypoints alike.
-    if not _enabled():
+    # pytest gets its per-item/session blocks from conftest hooks; only print here for the
+    # `python -m ...` entrypoints that have no such hook. PYTEST_CURRENT_TEST is cleared by
+    # session end (before this atexit runs), so detect pytest by its imported module instead.
+    if not _enabled() or "pytest" in sys.modules:
         return
     with _LOCK:
-        nonempty = bool(_ledger.cats)
-    if not nonempty:
-        return
-    try:
-        print(render("end of run", _ledger))  # noqa: T201
-    except (ValueError, OSError):
-        pass  # stdout may already be closed during interpreter shutdown
+        nonempty = bool(_session.cats)
+    if nonempty:
+        print(render("end of run", _session))  # noqa: T201
 
 
 atexit.register(_atexit)
