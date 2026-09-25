@@ -7,8 +7,8 @@ import math
 
 import pytest
 import torch
-
 import ttnn
+
 from tests.ttnn.utils_for_testing import assert_equal
 
 TTNN_TO_TORCH_DTYPE = {
@@ -990,3 +990,34 @@ def test_untilize_with_unpadding_block_per_node_cb_size(
             assert (
                 device.num_program_cache_entries() == entries
             ), "untilize_with_unpadding must reuse the cached program on a cache hit"
+
+
+@pytest.mark.parametrize(
+    "padded_width, out_width",
+    [
+        (1024, 512),
+        (1056, 1056),
+        (1056, 512),
+        (1056, 1050),
+        (1056, 500),
+        (4128, 2560),
+    ],
+)
+def test_untilize_with_unpadding_width_crop(device, padded_width, out_width):
+    torch.manual_seed(42)
+    height = 128
+    torch_input = torch.randn(1, height, padded_width, dtype=torch.bfloat16)
+
+    tile_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    untilized = ttnn.untilize_with_unpadding(
+        tile_tensor, [0, height - 1, out_width - 1], memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    # A bf16 tilize/untilize round trip is an identity, so this is exact.
+    assert_equal(ttnn.to_torch(untilized), torch_input[:, :, :out_width])
