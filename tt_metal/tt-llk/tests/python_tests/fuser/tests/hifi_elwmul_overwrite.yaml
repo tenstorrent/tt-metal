@@ -1,3 +1,5 @@
+supported_archs: [wormhole, quasar]
+
 operands:
   - {name: seed, dims: [32, 32], format: Float16_b}
   - {name: a, dims: [32, 32], format: Float16_b}
