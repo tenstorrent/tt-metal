@@ -405,6 +405,8 @@ set(HW_JIT_API_HEADERS
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_raw_class_policy.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_selected_core_total.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_selected_reciprocal_init.inc
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_simple_algebraic.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_simple_forward.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_sqrt_factored.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_sqrt_factored_core.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_target_special_policy.inc

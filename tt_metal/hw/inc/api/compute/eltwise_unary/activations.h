@@ -253,4 +253,49 @@ ALWI void hardsigmoid_tt_poly_bf16_program_init() {
 
 #undef TT_POLY_HARDSIGMOID_BF16_ROUTE_ACTIVE
 
+#if !defined(TT_POLY_LLK_DISABLE) && (defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE))
+#define TT_POLY_HARDSHRINK_BF16_ROUTE_ACTIVE 1
+#else
+#define TT_POLY_HARDSHRINK_BF16_ROUTE_ACTIVE 0
+#endif
+
+/** Internal BF16 typed-compiler route; public callers retain the stock entry point. */
+ALWI void hardshrink_tt_poly_bf16_tile(uint32_t idst, uint32_t param0) {
+#if !TT_POLY_HARDSHRINK_BF16_ROUTE_ACTIVE
+    hardshrink_tile(idst, param0);
+#else
+    if constexpr (DST_ACCUM_MODE) {
+        hardshrink_tile(idst, param0);
+    } else {
+        if (param0 != 0x3f000000u) {
+            hardshrink_tile(idst, param0);
+            return;
+        }
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_hardshrink_tt_poly_bf16,
+            (8 /* ITERATIONS */),
+            idst,
+            VectorMode::RC));
+    }
+#endif
+}
+
+/** Initialize the internal BF16 typed-compiler route. */
+ALWI void hardshrink_tt_poly_bf16_tile_init() {
+#if !TT_POLY_HARDSHRINK_BF16_ROUTE_ACTIVE
+    hardshrink_tile_init();
+#else
+    if constexpr (DST_ACCUM_MODE) {
+        hardshrink_tile_init();
+    } else {
+        hardshrink_tile_init();
+        MATH(sfpu::init_hardshrink_tt_poly_bf16());
+    }
+#endif
+}
+
+#undef TT_POLY_HARDSHRINK_BF16_ROUTE_ACTIVE
+
 }  // namespace ckernel
