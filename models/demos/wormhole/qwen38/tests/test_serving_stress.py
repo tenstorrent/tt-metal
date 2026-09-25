@@ -65,21 +65,21 @@ narrowing attempt was void is that the control silently failed to reproduce.
 WHY ISL < 2048 MATTERS
 ----------------------
 ``prefill_masked_bucket`` is the path every sub-2048 request takes, and it passes a real
-``valid_len`` down to the GDN. ``gdn/tp.py`` then selects the conv implementation::
+``valid_len`` down to the GDN, so these prompts keep the test on the EAGER masked-bucket
+prefill rather than a replayed trace. That is the scheduling shape that hung under serving.
 
-    if self._gdn_conv1d and valid_len is None:   # traced chunk path
-        conv, conv_new_state = self._conv1d_prefill(...)      # native depthwise conv1d
-    else:                                        # masked bucket path
-        conv, conv_new_state = _causal_conv1d_fir(...)        # MAC FIR -- the hang site
-
-So a masked-bucket prefill is both eager AND on the FIR conv. Keep the prompts under 2048 or
-this test stops exercising the code that hung.
+The conv arm it reaches is the NATIVE depthwise ``ttnn.conv1d``: ``gdn/tp.py`` admits a
+``valid_len`` whenever ``K-1 <= valid_len <= T`` on a single sequence, which every entry in
+``PROMPT_LENS`` satisfies. The MAC FIR is now reachable only with ``valid_len < K-1`` or a
+per-row ``valid_len`` list, so this test does NOT cover it; forcing the FIR needs a prompt
+shorter than the conv kernel or a batched prefill.
 
 FAILURE MODE
 ------------
 A regression here is a HANG or a device TT_FATAL, not a failed assertion -- so this test is
-only meaningful with a pytest timeout (the CI leg supplies one; ``--timeout`` locally). The
-assertions on finiteness exist to catch state corruption that stops short of a hang.
+only meaningful with a pytest timeout (``--timeout`` locally; no CI leg runs this file). The
+assertions on finiteness exist to catch state corruption that stops short of a hang, and they
+are weak: corrupted GDN state in bf16 is still finite. A pass is close to "did not hang".
 
 Run::
 
@@ -100,7 +100,7 @@ from models.demos.qwen36.tt.model import Qwen36Model
 from models.demos.wormhole.qwen38.tests.test_factory import model_path, parametrize_mesh_tp
 from models.tt_transformers.tt.common import copy_host_to_device
 
-# Sub-2048 so every prefill takes prefill_masked_bucket -> valid_len set -> FIR conv.
+# Sub-2048 so every prefill takes prefill_masked_bucket -> valid_len set -> eager, native conv1d.
 # Varied so slots do not all sit at the same position (mirrors real serving).
 PROMPT_LENS = [896, 960, 1024, 1088]
 DECODES_PER_CYCLE = 4  # traced decode steps between re-admissions
@@ -114,7 +114,7 @@ def test_trace_eager_alternation_stress(mesh_device, B, reset_seeds, ensure_gc):
     """Repeatedly alternate a captured batched decode trace with eager per-slot prefill.
 
     Each cycle: replay the decode trace DECODES_PER_CYCLE times, then re-admit SLOTS_PER_CYCLE
-    slots through prefill_paged_slots (eager, masked-bucket, FIR conv) while the other slots
+    slots through prefill_paged_slots (eager, masked-bucket, native conv1d) while the other slots
     stay live. That is the continuous-batching pattern that hung the benchmark.
     """
     os.environ.setdefault("HF_MODEL", model_path())
@@ -124,10 +124,15 @@ def test_trace_eager_alternation_stress(mesh_device, B, reset_seeds, ensure_gc):
     cycles = int(os.environ.get("QWEN36_STRESS_CYCLES", "6"))
     n_layers = int(os.environ.get("QWEN36_STRESS_LAYERS", "8"))
 
-    block_size, bpu = 64, 24  # 24 * 64 = 1536 tokens per user, covers the longest prompt + decode
+    # The masked prefill writes K/V across the FULL rounded-up bucket, not just the real prompt
+    # length (the contract is stated on prefill_paged_slots in generator_interface.py), so the page
+    # table has to span the bucket: 1088 rounds up to 2048, i.e. 32 blocks, not the 17 the prompt
+    # alone would need. Budgeting from the prompt lets the masked write run past the mapped blocks.
+    block_size = 64
+    bucket = Qwen36Model._mask_bucket_for(max(PROMPT_LENS))
+    bpu = -(-(bucket + cycles * DECODES_PER_CYCLE) // block_size)
     max_seq_len = block_size * bpu
     assert max(PROMPT_LENS) < 2048, "prompts must stay under the 2048 chunk so the masked path is used"
-    assert max(PROMPT_LENS) + cycles * DECODES_PER_CYCLE < max_seq_len, "prompt + decode must fit bpu blocks"
 
     model = Qwen36Model.from_pretrained(mesh_device, max_batch_size=B, max_seq_len=max_seq_len, n_layers=n_layers)
     args = model.args
