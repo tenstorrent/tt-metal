@@ -370,8 +370,8 @@ void kernel_main() {
         dfb_fused_attn_obj.pop_front(Wt);
         drain_dfb_pad(dfb_fused_attn, attn_pad);
     }
-#endif
-#endif
+#endif  // !CAUSAL_MASK
+#endif  // FUSED_SCALE_MASK
 #if defined(MASK_PADDED_DATA) && !defined(FUSED_SCALE_MASK)
     // The padding mask is a single tile pushed once by the reader and re-waited on the last column
     // tile of every row; pop it once here so the buffer is left balanced. Only the non-fused path
