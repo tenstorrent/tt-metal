@@ -42,6 +42,10 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "tools/profiler/sync/eth_ptp_link.hpp"
+
+static tt::tt_metal::eth_ptp::RouterHook<MY_ERISC_ID == 0 ? link_sync_role : 0u, ENABLE_RISC_CPU_DATA_CACHE> link_sync;
+
 using namespace tt::tt_fabric;
 
 // Type alias for cleaner access to 2D mesh routing constants
@@ -2618,6 +2622,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             if ((++fabric_heartbeat_counter & 0x3F) == 0) {
                 *fabric_heartbeat_ptr = 0xDCBA0000 | fabric_heartbeat_counter;
             }
+            if ((fabric_heartbeat_counter & 0xF) == 0) {
+                link_sync.step();
+            }
 
             if constexpr (enable_context_switch) {
                 // shouldn't do noc counter sync since we are not incrementing them
@@ -3772,6 +3779,7 @@ void kernel_main() {
     //        MAIN LOOP
     //////////////////////////////
     //////////////////////////////
+    link_sync.start(link_sync_addr);
     run_fabric_edm_main_loop<
         NUM_RECEIVER_CHANNELS,
         RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>,
@@ -3795,6 +3803,7 @@ void kernel_main() {
 #endif  // FABRIC_2D_VC2_SERVICED
         port_direction_table,
         local_sender_channel_free_slots_stream_ids);
+    link_sync.stop();
     WAYPOINT("LPDN");
     // make sure all the noc transactions are acked before re-init the noc counters
     teardown(

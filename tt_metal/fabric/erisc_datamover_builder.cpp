@@ -10,6 +10,7 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/device.hpp>
 #include "erisc_datamover_builder.hpp"
+#include "impl/streaming_profiler/streaming_profiler_sync_devices.hpp"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/code_profiling_types.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_trimming_types.hpp"
@@ -371,6 +372,11 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
     // Channel Allocations
     this->max_l1_loading_size =
         tt::tt_metal::hal::get_erisc_l1_unreserved_size() + tt::tt_metal::hal::get_erisc_l1_unreserved_base();
+    if (tt::tt_metal::streaming_profiler::link_sync::enabled()) {
+        // The streaming profiler's link sync owns the top of the region.
+        this->max_l1_loading_size =
+            tt::tt_metal::streaming_profiler::link_sync::l1_addr(tt::tt_metal::MetalContext::instance().hal());
+    }
     auto buffer_region_start = (buffer_address + buffer_alignment) & ~(buffer_alignment - 1);  // Align
     auto available_channel_buffering_space = max_l1_loading_size - buffer_region_start;
     this->available_buffer_memory_regions.emplace_back(buffer_region_start, available_channel_buffering_space);
@@ -876,6 +882,17 @@ void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(
         named_args["CODE_PROFILING_ENABLED_TIMERS"] = 0;
         named_args["CODE_PROFILING_BUFFER_ADDR"] = 0;
     }
+
+    namespace link_sync = tt::tt_metal::streaming_profiler::link_sync;
+    link_sync::Role role = link_sync::Role::None;
+    if (link_sync::enabled()) {
+        const auto chip = tt::tt_metal::MetalContext::instance().get_control_plane().get_physical_chip_id_from_fabric_node_id(
+            this->local_fabric_node_id);
+        role = link_sync::role_of(
+            tt::tt_metal::MetalContext::instance().get_cluster(), static_cast<uint32_t>(chip), this->my_eth_core_logical);
+    }
+    named_args["LINK_SYNC_ROLE"] = static_cast<uint32_t>(role);
+    named_args["LINK_SYNC_ADDR"] = link_sync::l1_addr(tt::tt_metal::MetalContext::instance().hal());
 }
 
 /*
