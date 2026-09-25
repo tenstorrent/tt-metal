@@ -278,8 +278,10 @@ To add a model:
 2. For each SKU, set `tier` and `timeout` in minutes.
 3. Set the total budget under `models.agentic_research_tier<N>.<sku>` in
    `time_budget.yaml`. The sum of test timeouts for that tier and SKU must fit
-   the budget. The QB2 Tier 3 total is **37 minutes**: 12 for Llama3.1-8B
-   and 25 for Gemma4 31B, including setup, model tests, serving, and reporting.
+   the budget. The QB2 Tier 3 total is **52 minutes**: 12 for Llama3.1-8B
+   and 40 for Gemma4 31B, including setup, model tests, serving, and reporting.
+   Gemma allows up to 20 minutes for each server startup within its total allowance;
+   periodic metadata snapshots distinguish slow loading from stopped progress.
    Gemma's allowance covers the measured 15½-minute CI setup/checks, about 5½ minutes
    for GPQA, the remaining performance/reporting work, and runner variance.
    The initial Llama allowance came from the following measurement. The [10-minute validation run](https://github.com/tenstorrent/tt-metal/actions/runs/34480800119)
