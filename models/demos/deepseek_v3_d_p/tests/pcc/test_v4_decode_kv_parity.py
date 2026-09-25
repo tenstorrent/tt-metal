@@ -163,6 +163,26 @@ def test_prefill_kv_matches_decode_seed(mesh_device, device_params):
     n_tok = (n_hist // (ratio * sp)) * (ratio * sp)
     n_entries = n_tok // ratio
     unified, keys = run_and_export(n_tok)
+    if os.environ.get("V4_KV_EXPORT_DUMP"):
+        # g2-lite step 2: hand the PREFILL's exported rows to the decode probe (harness DSV4_KV_SEED_FROM), which seeds its
+        # live caches from them instead of the host rollout and runs the decode step at cur_pos = n_tok - 1.
+        torch.save(
+            {
+                "layer_id": layer,
+                "attn_variant": seed["attn_variant"],
+                "n_tok": n_tok,
+                "window": window,
+                "ratio": ratio,
+                "hist_x": seed["hist_x"].clone(),
+                "ring_rows": unified[
+                    :window
+                ].clone(),  # ring row r = token p with p % window == r, p in [n_tok-window, n_tok)
+                "entries": unified[window : window + n_entries].clone(),
+                "index_keys": None if keys is None else keys[:n_entries].clone(),  # stored convention (H128-rotated)
+            },
+            os.environ["V4_KV_EXPORT_DUMP"],
+        )
+        logger.info(f"[parity] wrote the prefill export dump {os.environ['V4_KV_EXPORT_DUMP']} ({n_tok} tokens)")
     seed_entries = seed["kv_window_seed"][window : window + n_entries].float()
     valid = seed_entries.norm(dim=-1) > 0
     pcc_ent = _pcc(seed_entries[valid], unified[window : window + n_entries][valid])

@@ -23,7 +23,16 @@ _SINGLE_SHAPES = [1024, 4095]
 _CHUNKED = [("chunk1024-ragged", 1024, [1024, 1024, 300]), ("chunk5120-varying", 5120, [1024, 256, 5120])]
 _MESH_CONFIGS = [
     pytest.param((1, 1), {}, 0, 1, id="single-1x1"),
-    pytest.param((2, 1), {"fabric_config": ttnn.FabricConfig.FABRIC_1D}, 0, 1, id="sp2-2x1"),
+    pytest.param(
+        (2, 1),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        0,
+        1,
+        id="sp2-2x1",
+        # skip unless exactly 2 devices are visible (TT_VISIBLE_DEVICES=0,1): opening a [2,1] mesh out of 8 visible chips
+        # fails at fabric router sync (5 setup ERRORs in the 2x4 regression run of 2026-09-25)
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 1), topology="mesh-2x1"),
+    ),
     pytest.param(
         (2, 4),
         {
