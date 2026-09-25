@@ -29,7 +29,6 @@
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "tools/profiler/op_profiler.hpp"
-#include "tanh_bw/device/tanh_bw_device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/hal.hpp>
 #include <cstdint>
@@ -307,8 +306,13 @@ std::vector<std::optional<Tensor>> tanh_bw(
 
     DataType output_dtype = input.dtype();
     auto output_memory_config = output_mem_config.value_or(input.memory_config());
-    auto result_tensor = ttnn::operations::unary_backward::tanh_bw::launch_tanh_bw(
-        grad, input, output_dtype, output_memory_config, input_grad);
+    auto result_tensor = ttnn::operations::unary_backward::launch_unary_backward(
+        ttnn::operations::unary_backward::UnaryBackwardOpType::TANH_BW,
+        grad,
+        input,
+        output_dtype,
+        output_memory_config,
+        input_grad);
     grad_tensor.emplace_back(result_tensor);
     return grad_tensor;
 }
