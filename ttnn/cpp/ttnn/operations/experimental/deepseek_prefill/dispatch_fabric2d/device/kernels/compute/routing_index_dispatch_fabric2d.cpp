@@ -27,6 +27,6 @@ static_assert(dspf2d::INDEX_RISCS == 4u, "INDEX_RISCS must be the reader plus th
 static_assert(kRisc != dspf2d::kRiscReader && kRisc < dspf2d::INDEX_RISCS);
 
 void kernel_main() {
-    const dspf2d::routing_index::Control c = dspf2d::routing_index::layout_scratch();
+    const dspf2d::routing_index::Scratch c = dspf2d::routing_index::layout_scratch();
     dspf2d::routing_index::run_risc(c, kRisc);
 }

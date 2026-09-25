@@ -34,10 +34,10 @@ namespace {
 
 // The parts of L1 that have to sit at the same address on every chip, because a sender on one chip writes
 // them on another.
-constexpr uint32_t PKT_HDR_DRAIN_OFF = 0x0000;
+constexpr uint32_t PKT_HDR_SIGNAL_OFF = 0x0000;
 constexpr uint32_t DRAIN_SINK_OFF = 0x0400;
 constexpr uint32_t QUEUE_OFF = 0x1000;
-static_assert(PKT_HDR_DRAIN_OFF < DRAIN_SINK_OFF, "drain sink overlaps the drain packet header");
+static_assert(PKT_HDR_SIGNAL_OFF < DRAIN_SINK_OFF, "drain sink overlaps the signal packet header");
 static_assert(DRAIN_SINK_OFF < QUEUE_OFF, "drain sink overlaps the token queue");
 
 uint32_t ring_extent_of(const DispatchFabric2dParams& args) {
@@ -66,8 +66,8 @@ std::vector<uint32_t> ring_chip_ids(ttnn::MeshDevice* mesh, const ttnn::MeshCoor
 // The reader's scratch: its copy of the control tensors, the 64-byte-padded indices, and the routing index.
 // Sized for the worst case, every token routed to experts this chip sends. The block sizes come from the
 // kernel interface so the host and the kernel lay out the scratch the same way.
-dspf2d::ControlGeometry control_geometry(const DispatchFabric2dParams& args, uint32_t extent) {
-    return dspf2d::ControlGeometry{
+dspf2d::ScratchGeometry scratch_geometry(const DispatchFabric2dParams& args, uint32_t extent) {
+    return dspf2d::ScratchGeometry{
         .seq_len = args.seq_len_per_chip,
         .indices_pad_stride = dspf2d::META_PAD_STRIDE *
                               ((args.num_experts_per_tok * 2 + dspf2d::META_PAD_STRIDE - 1) / dspf2d::META_PAD_STRIDE),
@@ -79,12 +79,12 @@ dspf2d::ControlGeometry control_geometry(const DispatchFabric2dParams& args, uin
 }
 
 L1Layout compute_l1_layout(
-    ttnn::MeshDevice* mesh, uint32_t token_bytes, const dspf2d::ControlGeometry& g, uint32_t sem_floor) {
-    const uint32_t control_bytes = dspf2d::scratch_bytes(g);
+    ttnn::MeshDevice* mesh, uint32_t token_bytes, const dspf2d::ScratchGeometry& g, uint32_t sem_floor) {
+    const uint32_t scratch_bytes = dspf2d::scratch_bytes(g);
     const uint32_t base =
         static_cast<uint32_t>(mesh->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
     L1Layout l;
-    l.pkt_hdr_drain = base + PKT_HDR_DRAIN_OFF;
+    l.pkt_hdr_signal = base + PKT_HDR_SIGNAL_OFF;
     l.drain_sink = base + DRAIN_SINK_OFF;
     l.queue = base + QUEUE_OFF;
     l.pkt_hdr_queue = l.queue + dspf2d::QUEUE_DEPTH * (token_bytes + dspf2d::FORWARDING_METADATA_SIZE);
@@ -93,8 +93,8 @@ L1Layout compute_l1_layout(
         dspf2d::QUEUE_DEPTH * static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
     // 64-byte aligned: a DRAM read needs a 64-byte-aligned L1 destination on Blackhole, and the
     // scratch is read straight out of DRAM.
-    l.control = (l.pkt_hdr_queue + hdr_queue_bytes + 63u) & ~63u;
-    const uint32_t end = l.control + control_bytes;
+    l.scratch = (l.pkt_hdr_queue + hdr_queue_bytes + 63u) & ~63u;
+    const uint32_t end = l.scratch + scratch_bytes;
     TT_FATAL(
         end <= sem_floor,
         "dispatch_fabric2d: the L1 layout needs {} B, ending at 0x{:x}, but the global semaphores start at 0x{:x}. "
@@ -105,7 +105,7 @@ L1Layout compute_l1_layout(
         sem_floor,
         dspf2d::QUEUE_DEPTH * (token_bytes + dspf2d::FORWARDING_METADATA_SIZE),
         token_bytes,
-        control_bytes,
+        scratch_bytes,
         g.seq_len,
         g.num_routed_experts,
         g.extent,
@@ -124,7 +124,7 @@ L1Layout compute_l1_layout(
 // Nothing resets them between launches, so the kernels do it at the end of each run. `filled` and
 // `freed` are set to zero, and `untilized` too for a TILE input. `fwd_arrived` is lowered by the count
 // consumed, so a signal from the next launch that arrives early is kept.
-struct RingSemaphores {
+struct StreamSemaphores {
     tt::tt_metal::GlobalSemaphore filled;
     tt::tt_metal::GlobalSemaphore freed;
     tt::tt_metal::GlobalSemaphore fwd_arrived;
@@ -138,11 +138,11 @@ struct RingSemaphores {
     }
 };
 
-RingSemaphores allocate_ring_semaphores(ttnn::MeshDevice* mesh, const CoreRangeSet& allowed_cores) {
+StreamSemaphores allocate_stream_semaphores(ttnn::MeshDevice* mesh, const CoreRangeSet& allowed_cores) {
     const auto make = [&] {
         return ttnn::global_semaphore::create_global_semaphore(mesh, allowed_cores, 0, tt::tt_metal::BufferType::L1);
     };
-    RingSemaphores sems{make(), make(), make(), make()};
+    StreamSemaphores sems{make(), make(), make(), make()};
     tt::tt_metal::distributed::Synchronize(mesh, std::nullopt, {});
     return sems;
 }
@@ -150,14 +150,14 @@ RingSemaphores allocate_ring_semaphores(ttnn::MeshDevice* mesh, const CoreRangeS
 // A device buffer the op allocates for itself, never initialises and never reads back on the host. The
 // workload holds the owner so the buffer lives as long as the cached program; the kernels get its address
 // as a runtime argument the framework updates on each dispatch.
-struct OwnedScratch {
+struct OwnedBuffer {
     std::shared_ptr<ttnn::Tensor> owner;
     tt::tt_metal::Buffer* buffer = nullptr;
 };
 
 // Typed UINT32 so a page is exactly page_bytes, with no alignment rounding. Kernels address these buffers
 // by a page index they compute themselves, so a wider page would misplace every page after the first.
-OwnedScratch allocate_scratch(ttnn::MeshDevice* mesh, uint32_t num_pages, uint32_t page_bytes, std::string_view what) {
+OwnedBuffer allocate_buffer(ttnn::MeshDevice* mesh, uint32_t num_pages, uint32_t page_bytes, std::string_view what) {
     TT_FATAL(
         page_bytes % 64 == 0, "dispatch_fabric2d: {} page {} B must be 64-byte aligned for DRAM", what, page_bytes);
     const tt::tt_metal::TensorSpec spec(
@@ -166,17 +166,17 @@ OwnedScratch allocate_scratch(ttnn::MeshDevice* mesh, uint32_t num_pages, uint32
             tt::tt_metal::DataType::UINT32,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
             tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM}));
-    OwnedScratch scratch;
+    OwnedBuffer owned;
     // Throws if it does not fit in DRAM.
-    scratch.owner = std::make_shared<ttnn::Tensor>(create_device_tensor(spec, mesh));
-    scratch.buffer = scratch.owner->buffer();
+    owned.owner = std::make_shared<ttnn::Tensor>(create_device_tensor(spec, mesh));
+    owned.buffer = owned.owner->buffer();
     TT_FATAL(
-        scratch.buffer->aligned_page_size() == page_bytes,
+        owned.buffer->aligned_page_size() == page_bytes,
         "dispatch_fabric2d: {} page is {} B after alignment but the op addresses it as {} B",
         what,
-        scratch.buffer->aligned_page_size(),
+        owned.buffer->aligned_page_size(),
         page_bytes);
-    return scratch;
+    return owned;
 }
 
 }  // namespace
@@ -217,18 +217,18 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
 
     validate_chunk_agreement(extent, args.num_links);
     const auto placement = decide_placement(mesh, args.axis, args.num_links, args.worker_core_range_set);
-    const auto sems = allocate_ring_semaphores(mesh, args.worker_core_range_set);
+    const auto sems = allocate_stream_semaphores(mesh, args.worker_core_range_set);
     // A page is a token plus its routing tail, so one fabric write carries both.
     const uint32_t fwd_pages = fwd_pages_per_stream(
         extent, args.num_links, args.seq_len_per_chip, args.num_experts_per_tok, args.experts_per_chip);
-    const OwnedScratch fwd = allocate_scratch(
+    const OwnedBuffer fwd = allocate_buffer(
         mesh, fwd_pages * stream_count(args.num_links), token_bytes + dspf2d::FORWARDING_METADATA_SIZE, "forwarding");
     // Only for a TILE input: the untilized tokens, one row-major page each, so the stream cores address a
     // token by page index as they do for a row-major input. Rounded up to whole tile rows because the
     // untilizer packs all 32 rows of a tile; the extra pages hold padding rows and are never read.
     const uint32_t staging_pages =
         tt::round_up(args.seq_len_per_chip, static_cast<uint32_t>(tt::constants::TILE_HEIGHT));
-    const OwnedScratch staging = tiled ? allocate_scratch(mesh, staging_pages, token_bytes, "staging") : OwnedScratch{};
+    const OwnedBuffer staging = tiled ? allocate_buffer(mesh, staging_pages, token_bytes, "staging") : OwnedBuffer{};
     const auto untilize = plan_untilize(
         tensor_args.input_tensor,
         tensor_return_value[0],
@@ -236,7 +236,7 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
         token_bytes,
         static_cast<uint32_t>(sems.untilized.address()),
         staging.buffer);
-    const L1Layout l1 = compute_l1_layout(mesh, token_bytes, control_geometry(args, extent), sems.lowest_address());
+    const L1Layout l1 = compute_l1_layout(mesh, token_bytes, scratch_geometry(args, extent), sems.lowest_address());
 
     tt::tt_metal::Buffer* dram[dspf2d::ReaderRtArg::kCount] = {};
     // For a TILE input the stream cores read tokens from staging. The accessor arguments are built from
@@ -326,7 +326,7 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
 
             const auto to_words = [](const std::vector<dspf2d::ChunkDescriptor>& cs) {
                 std::vector<uint32_t> w;
-                w.reserve(cs.size() * dspf2d::ASSIGNMENT_WORDS);
+                w.reserve(cs.size() * dspf2d::CHUNK_DESCRIPTOR_WORDS);
                 for (const auto& d : cs) {
                     w.push_back(d.origin_row);
                     w.push_back(d.dst_row);

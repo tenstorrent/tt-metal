@@ -18,17 +18,17 @@ struct SenderCtArgs {
         kQueueDepth,
         kTokenSizeBytes,
         kForwardingMetadataSize,
-        kPeerChipId,
-        kPeerMeshId,
+        kDownstreamChipId,
+        kDownstreamMeshId,
         kQueueAddr,
         kPktHdrQueueAddr,
-        kPktHdrDrainAddr,
+        kPktHdrSignalAddr,
         kDrainSinkAddr,
         kBatch,
         kFilledAddr,
         kFreedAddr,
-        kFwdSemNocX,
-        kFwdSemNocY,
+        kDownstreamNocX,
+        kDownstreamNocY,
         kFwdSemAddr,
         kCount,
     };
@@ -36,17 +36,17 @@ struct SenderCtArgs {
     uint32_t queue_depth;
     uint32_t token_size_bytes;
     uint32_t forwarding_metadata_size;
-    uint32_t peer_chip_id;
-    uint32_t peer_mesh_id;
+    uint32_t downstream_chip_id;
+    uint32_t downstream_mesh_id;
     uint32_t queue_addr;
     uint32_t pkt_hdr_queue_addr;
-    uint32_t pkt_hdr_drain_addr;
+    uint32_t pkt_hdr_signal_addr;
     uint32_t drain_sink_addr;
     uint32_t batch;
     uint32_t filled_addr;
     uint32_t freed_addr;
-    uint32_t fwd_sem_noc_x;
-    uint32_t fwd_sem_noc_y;
+    uint32_t downstream_noc_x;
+    uint32_t downstream_noc_y;
     uint32_t fwd_sem_addr;
 
 #ifndef KERNEL_BUILD
@@ -61,17 +61,17 @@ struct SenderCtArgs {
         queue_depth(QUEUE_DEPTH),
         token_size_bytes(token_bytes),
         forwarding_metadata_size(FORWARDING_METADATA_SIZE),
-        peer_chip_id(static_cast<uint32_t>(self.downstream_node.chip_id)),
-        peer_mesh_id(*self.downstream_node.mesh_id),
+        downstream_chip_id(static_cast<uint32_t>(self.downstream_node.chip_id)),
+        downstream_mesh_id(*self.downstream_node.mesh_id),
         queue_addr(l1.queue),
         pkt_hdr_queue_addr(l1.pkt_hdr_queue),
-        pkt_hdr_drain_addr(l1.pkt_hdr_drain),
+        pkt_hdr_signal_addr(l1.pkt_hdr_signal),
         drain_sink_addr(l1.drain_sink),
         batch(BATCH),
         filled_addr(plan.queue_filled_addr),
         freed_addr(plan.queue_freed_addr),
-        fwd_sem_noc_x(static_cast<uint32_t>(downstream.worker_virtual.x)),
-        fwd_sem_noc_y(static_cast<uint32_t>(downstream.worker_virtual.y)),
+        downstream_noc_x(static_cast<uint32_t>(downstream.worker_virtual.x)),
+        downstream_noc_y(static_cast<uint32_t>(downstream.worker_virtual.y)),
         fwd_sem_addr(plan.fwd_arrived_addr) {}
 
     std::vector<uint32_t> to_ct_word_arr() const {
@@ -80,17 +80,17 @@ struct SenderCtArgs {
         w[kQueueDepth] = queue_depth;
         w[kTokenSizeBytes] = token_size_bytes;
         w[kForwardingMetadataSize] = forwarding_metadata_size;
-        w[kPeerChipId] = peer_chip_id;
-        w[kPeerMeshId] = peer_mesh_id;
+        w[kDownstreamChipId] = downstream_chip_id;
+        w[kDownstreamMeshId] = downstream_mesh_id;
         w[kQueueAddr] = queue_addr;
         w[kPktHdrQueueAddr] = pkt_hdr_queue_addr;
-        w[kPktHdrDrainAddr] = pkt_hdr_drain_addr;
+        w[kPktHdrSignalAddr] = pkt_hdr_signal_addr;
         w[kDrainSinkAddr] = drain_sink_addr;
         w[kBatch] = batch;
         w[kFilledAddr] = filled_addr;
         w[kFreedAddr] = freed_addr;
-        w[kFwdSemNocX] = fwd_sem_noc_x;
-        w[kFwdSemNocY] = fwd_sem_noc_y;
+        w[kDownstreamNocX] = downstream_noc_x;
+        w[kDownstreamNocY] = downstream_noc_y;
         w[kFwdSemAddr] = fwd_sem_addr;
         for (uint32_t i = 0; i < kCount; i++) {
             TT_FATAL(w[i] != kUnset, "dispatch_fabric2d: sender compile-time arg {} was never assigned", i);
@@ -102,17 +102,17 @@ struct SenderCtArgs {
         queue_depth(get_compile_time_arg_val(kQueueDepth)),
         token_size_bytes(get_compile_time_arg_val(kTokenSizeBytes)),
         forwarding_metadata_size(get_compile_time_arg_val(kForwardingMetadataSize)),
-        peer_chip_id(get_compile_time_arg_val(kPeerChipId)),
-        peer_mesh_id(get_compile_time_arg_val(kPeerMeshId)),
+        downstream_chip_id(get_compile_time_arg_val(kDownstreamChipId)),
+        downstream_mesh_id(get_compile_time_arg_val(kDownstreamMeshId)),
         queue_addr(get_compile_time_arg_val(kQueueAddr)),
         pkt_hdr_queue_addr(get_compile_time_arg_val(kPktHdrQueueAddr)),
-        pkt_hdr_drain_addr(get_compile_time_arg_val(kPktHdrDrainAddr)),
+        pkt_hdr_signal_addr(get_compile_time_arg_val(kPktHdrSignalAddr)),
         drain_sink_addr(get_compile_time_arg_val(kDrainSinkAddr)),
         batch(get_compile_time_arg_val(kBatch)),
         filled_addr(get_compile_time_arg_val(kFilledAddr)),
         freed_addr(get_compile_time_arg_val(kFreedAddr)),
-        fwd_sem_noc_x(get_compile_time_arg_val(kFwdSemNocX)),
-        fwd_sem_noc_y(get_compile_time_arg_val(kFwdSemNocY)),
+        downstream_noc_x(get_compile_time_arg_val(kDownstreamNocX)),
+        downstream_noc_y(get_compile_time_arg_val(kDownstreamNocY)),
         fwd_sem_addr(get_compile_time_arg_val(kFwdSemAddr)) {}
 #endif
 
