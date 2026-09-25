@@ -99,3 +99,20 @@ def test_reader_reads_the_existing_ernie_golden():
     st = g.state(0)
     assert set(st) == {"key", "value"} and st["key"].shape[-2:] == (4096, 128)
     assert len(g.pinned_hash()) == 64 and not g.verify()  # made before content hashes existed
+
+
+def test_chat_template_text(fx):
+    from models.demos.common.bringup.reference.golden import text_tokens
+
+    class ChatTok:
+        bos_token_id = 1
+
+        def apply_chat_template(self, msgs, tokenize=False):
+            return "<U>" + msgs[0]["content"]
+
+        def __call__(self, text, add_special_tokens=False):
+            return {"input_ids": [7 if text.startswith("<U>") else 9] + [2] * 50}
+
+    plain = text_tokens(Spec.load(fx()), 8, ChatTok())
+    chat = text_tokens(Spec.load(fx(text={"chat_template": True})), 8, ChatTok())
+    assert plain[:2].tolist() == [1, 9] and chat[:2].tolist() == [7, 2]  # the template supplies BOS itself
