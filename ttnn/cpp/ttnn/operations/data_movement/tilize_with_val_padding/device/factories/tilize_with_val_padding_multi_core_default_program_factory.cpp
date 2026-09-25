@@ -138,7 +138,8 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreDefaultFac
              {"aligned_page_size", aligned_page_size},
              {"size_of_valid_data_in_last_page_in_row", size_of_valid_data_in_last_page_in_row}},
         .runtime_arg_schema = {.runtime_arg_names = {"padded_X_size", "pad_value", "start_page_id", "n_block_reps"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config =
+            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     /** writer
@@ -155,7 +156,8 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreDefaultFac
         }},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config =
+            ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     /** compute
@@ -169,7 +171,15 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreDefaultFac
     if (fp32_llk_acc) {
         compute_gen1.unpack_modes = ComputeUnpackModes{{IN, UnpackMode::UnpackToDest}};
     }
-    ComputeHardwareConfig compute_hw{std::move(compute_gen1)};
+    // Gen2 (Quasar) config: a KernelSpec holds one generation and ValidateProgramSpec rejects a Gen1
+    // config on Quasar. Mirror the resolved Gen1 fields into a Gen2 config on Quasar; WH/BH keep Gen1.
+    ComputeHardwareConfig compute_hw = compute_gen1;
+    if (device->arch() == tt::ARCH::QUASAR) {
+        ComputeGen2Config compute_gen2;
+        compute_gen2.enable_32_bit_dest = compute_gen1.enable_32_bit_dest;
+        compute_gen2.unpack_modes = compute_gen1.unpack_modes;  // TODO(#52269): copied from Gen1
+        compute_hw = compute_gen2;
+    }
 
     // One KernelSpec per legacy compute KernelDescriptor: the per-group block count stays a CTA, so
     // the two groups keep their distinct specialization instead of collapsing onto a runtime arg.

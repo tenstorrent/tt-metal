@@ -180,7 +180,8 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingSingleCoreFactory::
                   "num_blocks_w_diff",
                   "block_row_size",
                   "block_row_leftover_size"}},
-        .hw_config = ttnn::create_reader_datamovement_config(a.device()->arch()),
+        .hw_config =
+            ttnn::create_reader_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     });
 
     // ---------------------------------------------------------------------
@@ -197,7 +198,8 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingSingleCoreFactory::
         }},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(a.device()->arch()),
+        .hw_config =
+            ttnn::create_writer_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     });
 
     // ---------------------------------------------------------------------
@@ -212,7 +214,15 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingSingleCoreFactory::
     if (fp32_llk_acc) {
         compute_gen1.unpack_modes = ComputeUnpackModes{{IN, UnpackMode::UnpackToDest}};
     }
-    ComputeHardwareConfig compute_hw{std::move(compute_gen1)};
+    // Gen2 (Quasar) config: a KernelSpec holds one generation and ValidateProgramSpec rejects a Gen1
+    // config on Quasar. Mirror the resolved Gen1 fields into a Gen2 config on Quasar; WH/BH keep Gen1.
+    ComputeHardwareConfig compute_hw = compute_gen1;
+    if (a.device()->arch() == tt::ARCH::QUASAR) {
+        ComputeGen2Config compute_gen2;
+        compute_gen2.enable_32_bit_dest = compute_gen1.enable_32_bit_dest;
+        compute_gen2.unpack_modes = compute_gen1.unpack_modes;  // TODO(#52269): copied from Gen1
+        compute_hw = compute_gen2;
+    }
 
     spec.kernels.push_back(KernelSpec{
         .unique_id = COMPUTE,

@@ -55,9 +55,8 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreShardedFac
     // ---------------------------------------------------------------------
     // Program-scope resource names (typed handles → generated dfb:: / tensor:: tokens)
     // ---------------------------------------------------------------------
-    const DFBSpecName SRC_SHARD{"src_shard"};  // legacy src0 buffer c_1: the input shard, borrowed
     const DFBSpecName STAGE{"stage"};          // legacy src1 buffer c_0: row-major staging for tilize
-    const DFBSpecName PAD{"pad"};              // legacy src2 buffer c_2: one row of pad value
+    const ScratchpadSpecName PAD{"pad"};       // legacy src2 buffer c_2: one row of pad value
     const DFBSpecName OUT_SHARD{"out_shard"};  // legacy output buffer c_16: the output shard, borrowed
     const KernelSpecName READER{"reader"};
     const KernelSpecName WRITER{"writer"};
@@ -69,12 +68,10 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreShardedFac
     spec.name = "tilize_with_val_padding_multi_core_sharded";
 
     // ---------------------------------------------------------------------
-    // Tensor parameters. These carry no kernel TensorBinding: the sharded kernels never build a
-    // TensorAccessor. They exist to back the two borrowed-memory DFBs below, whose L1 addresses are
-    // resolved per enqueue from the corresponding TensorArgument (which is also what patches them on
-    // a program-cache hit — the job the legacy descriptor buffer assignment did). Each is declared
-    // under the same condition that gated the legacy borrowed-buffer assignment, so a DFB that would
-    // not have borrowed keeps its own L1 allocation and pulls in no tensor plumbing.
+    // Tensor parameters. INPUT backs the reader's LocalTensorAccessor over this core's borrowed input
+    // shard (bound as a TensorBinding on the reader). OUTPUT backs the borrowed OUT_SHARD DFB, whose L1
+    // address is resolved per enqueue from the TensorArgument (also what patches it on a program-cache
+    // hit). Each is declared under the same condition that gated the legacy borrowed-buffer assignment.
     // ---------------------------------------------------------------------
     if (src_sharded) {
         spec.tensor_parameters.push_back(TensorParameter{.unique_id = INPUT, .spec = a.tensor_spec()});
@@ -87,24 +84,10 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreShardedFac
     // DataflowBufferSpecs (replaces the legacy c_1 / c_0 / c_2 / c_16 buffer descriptors)
     // ---------------------------------------------------------------------
     spec.dataflow_buffers = {
-        // Sharded input DFB — built on the input buffer's borrowed memory.
-        DataflowBufferSpec{
-            .unique_id = SRC_SHARD,
-            .entry_size = input_shard_width_bytes,
-            .num_entries = num_input_rows,
-            .data_format_metadata = input_dfb_data_format,
-            .borrowed_from = src_sharded ? std::optional<TensorParamName>{INPUT} : std::nullopt,
-        },
         DataflowBufferSpec{
             .unique_id = STAGE,
             .entry_size = input_single_tile_size,
             .num_entries = ntiles_per_batch * 2,
-            .data_format_metadata = input_dfb_data_format,
-        },
-        DataflowBufferSpec{
-            .unique_id = PAD,
-            .entry_size = input_shard_width_bytes,
-            .num_entries = 1,
             .data_format_metadata = input_dfb_data_format,
         },
         // Sharded output DFB — built on the output buffer's borrowed memory.
@@ -117,52 +100,45 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreShardedFac
         },
     };
 
+    // PAD is reader-private scratch (one row of the pad value), not a FIFO -- a Scratchpad rather than
+    // a (Gen2-unsupported) DM self-loop DFB.
+    spec.scratchpads.push_back(ScratchpadSpec{
+        .unique_id = PAD,
+        .size_per_node = input_shard_width_bytes,
+    });
+
     /** reader
      */
-    // SRC_SHARD and PAD are each touched by the reader alone — it reserves them and peeks a pointer,
-    // with no second kernel on the other end of the FIFO — so each is self-looped: the reader binds
-    // both the producer and the consumer endpoint. STAGE is a normal 1P+1C FIFO into the compute
-    // kernel.
+    // The input shard is read directly via a LocalTensorAccessor (INPUT TensorBinding, accessor "in0"):
+    // the reader takes its L1 base address and NOC-reads its own core, so there is no input DFB. PAD is
+    // reader-private scratch (a Scratchpad). STAGE is a normal 1P+1C FIFO into the compute kernel.
     spec.kernels.push_back(KernelSpec{
         .unique_id = READER,
         .source = "ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/"
                   "reader_unary_pad_height_width_sharded.cpp",
-        .dfb_bindings =
-            {DFBBinding{
-                 .dfb_spec_name = SRC_SHARD,
-                 .accessor_name = "in0",
-                 .endpoint_type = DFBEndpointType::PRODUCER,
-             },
-             DFBBinding{
-                 .dfb_spec_name = SRC_SHARD,
-                 .accessor_name = "in0",
-                 .endpoint_type = DFBEndpointType::CONSUMER,
-             },
-             DFBBinding{
-                 .dfb_spec_name = STAGE,
-                 .accessor_name = "in1",
-                 .endpoint_type = DFBEndpointType::PRODUCER,
-             },
-             DFBBinding{
-                 .dfb_spec_name = PAD,
-                 .accessor_name = "pad",
-                 .endpoint_type = DFBEndpointType::PRODUCER,
-             },
-             DFBBinding{
-                 .dfb_spec_name = PAD,
-                 .accessor_name = "pad",
-                 .endpoint_type = DFBEndpointType::CONSUMER,
-             }},
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = STAGE,
+            .accessor_name = "in1",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        }},
+        .scratchpad_bindings = {ScratchpadBinding{
+            .scratchpad_spec_name = PAD,
+            .accessor_name = "pad",
+        }},
+        .tensor_bindings = {TensorBinding{
+            .tensor_parameter_name = INPUT,
+            .accessor_name = "in0",
+        }},
         .runtime_arg_schema =
             {.runtime_arg_names =
-                 {"num_input_rows",
-                  "input_width_bytes",
+                 {"input_width_bytes",
                   "input_block_size",
                   "num_padded_tiles_per_batch",
                   "num_padded_rows",
                   "num_batches",
                   "packed_pad_value"}},
-        .hw_config = ttnn::create_reader_datamovement_config(a.device()->arch()),
+        .hw_config =
+            ttnn::create_reader_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     });
 
     /** writer
@@ -177,7 +153,8 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreShardedFac
             .endpoint_type = DFBEndpointType::CONSUMER,
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"num_units"}},
-        .hw_config = ttnn::create_writer_datamovement_config(a.device()->arch()),
+        .hw_config =
+            ttnn::create_writer_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     });
 
     /** compute
@@ -191,7 +168,15 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreShardedFac
     if (fp32_llk_acc) {
         compute_gen1.unpack_modes = ComputeUnpackModes{{STAGE, UnpackMode::UnpackToDest}};
     }
-    ComputeHardwareConfig compute_hw{std::move(compute_gen1)};
+    // Gen2 (Quasar) config: a KernelSpec holds one generation and ValidateProgramSpec rejects a Gen1
+    // config on Quasar. Mirror the resolved Gen1 fields into a Gen2 config on Quasar; WH/BH keep Gen1.
+    ComputeHardwareConfig compute_hw = compute_gen1;
+    if (a.device()->arch() == tt::ARCH::QUASAR) {
+        ComputeGen2Config compute_gen2;
+        compute_gen2.enable_32_bit_dest = compute_gen1.enable_32_bit_dest;
+        compute_gen2.unpack_modes = compute_gen1.unpack_modes;  // TODO(#52269): copied from Gen1
+        compute_hw = compute_gen2;
+    }
 
     spec.kernels.push_back(KernelSpec{
         .unique_id = COMPUTE,
@@ -231,8 +216,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreShardedFac
         AddRuntimeArgsForNode(
             reader_ra.runtime_arg_values,
             core,
-            {{"num_input_rows", num_input_rows},
-             {"input_width_bytes", input_shard_width_bytes},
+            {{"input_width_bytes", input_shard_width_bytes},
              {"input_block_size", (num_input_rows / num_batches) * input_shard_width_bytes},
              {"num_padded_tiles_per_batch", ntiles_per_batch},
              {"num_padded_rows", num_padded_rows},

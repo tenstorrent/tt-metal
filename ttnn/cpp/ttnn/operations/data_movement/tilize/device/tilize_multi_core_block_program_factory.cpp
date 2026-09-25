@@ -90,10 +90,10 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
     TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
 
     const DFBSpecName IN_FULL{"in_full"};
-    const DFBSpecName STAGING_FULL{"staging_full"};
+    const ScratchpadSpecName STAGING_FULL{"staging_full"};
     const DFBSpecName OUT_FULL{"out_full"};
     const DFBSpecName IN_CLIFFROW{"in_cliffrow"};
-    const DFBSpecName STAGING_CLIFFROW{"staging_cliffrow"};
+    const ScratchpadSpecName STAGING_CLIFFROW{"staging_cliffrow"};
     const DFBSpecName OUT_CLIFFROW{"out_cliffrow"};
     const TensorParamName INPUT{"input"};
     const TensorParamName OUTPUT{"output"};
@@ -120,7 +120,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
     const auto in_dfb_of = [&](const BlockBufferSet& set) -> const DFBSpecName& {
         return (&set == &cliffrow_set) ? IN_CLIFFROW : IN_FULL;
     };
-    const auto staging_dfb_of = [&](const BlockBufferSet& set) -> const DFBSpecName& {
+    const auto staging_scratch_of = [&](const BlockBufferSet& set) -> const ScratchpadSpecName& {
         return (&set == &cliffrow_set) ? STAGING_CLIFFROW : STAGING_FULL;
     };
     const auto out_dfb_of = [&](const BlockBufferSet& set) -> const DFBSpecName& {
@@ -145,11 +145,9 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
         // input buffer. One page holds the whole chunk; extra dram_alignment headroom aligns the L1 write.
         const uint32_t staging_entry_size =
             (input_single_tile_size / tile_height) * set->block_tiles + 2 * dram_alignment;
-        spec.dataflow_buffers.push_back(DataflowBufferSpec{
-            .unique_id = staging_dfb_of(*set),
-            .entry_size = staging_entry_size,
-            .num_entries = 1,
-            .data_format_metadata = input_data_format,
+        spec.scratchpads.push_back(ScratchpadSpec{
+            .unique_id = staging_scratch_of(*set),
+            .size_per_node = staging_entry_size,
         });
         spec.dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = in_dfb_of(*set),
@@ -188,30 +186,24 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
         total_num_rows = output.padded_shape()[-2];
     }
 
-    // One reader and one writer per buffer set, each over that set's cores and bound to that set's DFBs.
-    // A set's cores are exactly the cores whose block width its buffers are sized for, so every instance's
-    // raw block write lands in a buffer that is an exact multiple of it. `staging` is the reader's private
-    // alignment scratch -- one toucher, so it is self-looped (the reader bound both PRODUCER and CONSUMER).
+    // One reader and one writer per buffer set, each over that set's cores and bound to that set's
+    // buffers. A set's cores are exactly the cores whose block width its buffers are sized for, so every
+    // instance's raw block write lands in a buffer that is an exact multiple of it. `staging` is the
+    // reader's private alignment scratch -- one toucher, so it is a Scratchpad (a lone DM kernel filling
+    // and draining a buffer synchronizes nothing, and the DM self-loop shape is unsupported on Gen2).
     auto make_reader_spec = [&](const KernelSpecName& id, const BlockBufferSet& set) {
         return KernelSpec{
             .unique_id = id,
             .source = std::filesystem::path{READER_SRC},
-            .dfb_bindings =
-                {DFBBinding{
-                     .dfb_spec_name = in_dfb_of(set),
-                     .accessor_name = "in",
-                     .endpoint_type = DFBEndpointType::PRODUCER,
-                 },
-                 DFBBinding{
-                     .dfb_spec_name = staging_dfb_of(set),
-                     .accessor_name = "staging",
-                     .endpoint_type = DFBEndpointType::PRODUCER,
-                 },
-                 DFBBinding{
-                     .dfb_spec_name = staging_dfb_of(set),
-                     .accessor_name = "staging",
-                     .endpoint_type = DFBEndpointType::CONSUMER,
-                 }},
+            .dfb_bindings = {DFBBinding{
+                .dfb_spec_name = in_dfb_of(set),
+                .accessor_name = "in",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            }},
+            .scratchpad_bindings = {ScratchpadBinding{
+                .scratchpad_spec_name = staging_scratch_of(set),
+                .accessor_name = "staging",
+            }},
             .tensor_bindings = {TensorBinding{
                 .tensor_parameter_name = INPUT,
                 .accessor_name = "src",
@@ -237,7 +229,8 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
                          "sub_block_width_size",
                          "single_sub_block_size_row_arg"},
                 },
-            .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+            .hw_config =
+                ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
         };
     };
 
@@ -264,7 +257,8 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
                 {
                     .runtime_arg_names = {"start_id", "single_block_size_row_arg", "single_block_size_col_arg"},
                 },
-            .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+            .hw_config =
+                ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
         };
     };
 
@@ -305,6 +299,16 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
             compute_cfg.unpack_modes.insert({in_dfb_of(set), UnpackMode::UnpackToDest});
         }
 
+        // Gen2 (Quasar) config: a KernelSpec holds one generation and ValidateProgramSpec rejects a Gen1
+        // config on Quasar. Mirror the resolved Gen1 fields into a Gen2 config on Quasar; WH/BH keep Gen1.
+        ComputeHardwareConfig compute_hw = compute_cfg;
+        if (device->arch() == tt::ARCH::QUASAR) {
+            ComputeGen2Config compute_cfg_gen2;
+            compute_cfg_gen2.enable_32_bit_dest = compute_cfg.enable_32_bit_dest;
+            compute_cfg_gen2.unpack_modes = compute_cfg.unpack_modes;  // TODO(#52269): copied from Gen1
+            compute_hw = compute_cfg_gen2;
+        }
+
         const bool is_cliff_row_set = (&set == &cliffrow_set);
         spec.kernels.push_back(KernelSpec{
             .unique_id = id,
@@ -327,7 +331,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
                     {"block_size_row", block_size_row},
                     {"third_dim", third_dim},
                 },
-            .hw_config = std::move(compute_cfg),
+            .hw_config = std::move(compute_hw),
         });
         spec.work_units.push_back(WorkUnitSpec{
             .name = work_unit_name,
