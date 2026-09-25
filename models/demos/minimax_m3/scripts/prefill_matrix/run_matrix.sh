@@ -1,5 +1,7 @@
 #!/bin/bash
-# MiniMax-M3 pipeline-prefill PERF MATRIX: (new tokens) x (cached tokens) on a 16-stage quad-galaxy pipeline
+# MiniMax-M3 pipeline-prefill PERF MATRIX: (new tokens) x (cached tokens) on a 16-stage quad-galaxy pipeline.
+# Matrix values are Agent X dataset percentiles: new 640 (p25) / 1600 (p50) / 3072 (p75) / 51200 (p99) (+5120 = one
+# chunk, +32768); cached 61440 (p25) / 143360 (p50) / 312320 (p75) / 552960 (p90) (+0).
 # (4 hosts x 4 trays, [2,4] per stage). For each cell: idle-pipeline TTFT (single request) and, with USERS>0,
 # fully-loaded aggregate throughput (USERS users streaming back-to-back, fill/drain excluded) + TTFT under load.
 # Run from a LOGIN node inside a Slurm allocation that holds the 4 galaxies. See README.md.

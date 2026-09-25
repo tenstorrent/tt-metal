@@ -20,12 +20,25 @@ def load(path):
     return rows
 
 
+# Agent X dataset percentiles the default matrix values correspond to (see README).
+NEW_PCT = {640: "p25", 1600: "p50", 3072: "p75", 51200: "p99"}
+CACHED_PCT = {61440: "p25", 143360: "p50", 312320: "p75", 552960: "p90"}
+
+
+def _lbl(v, pct):
+    return f"{v} ({pct[v]})" if v in pct else str(v)
+
+
 def table(title, cells, cached, news, fmt):
-    print(f"\n{title}   rows: cached tokens, cols: new tokens")
-    print(f"{'cached':>8} |" + "".join(f"{n:>9}" for n in news))
-    print("-" * (10 + 9 * len(news)))
+    w = 12
+    print(f"\n{title}   rows: cached tokens, cols: new tokens (Agent X percentiles in parentheses)")
+    print(f"{'cached':>14} |" + "".join(f"{_lbl(n, NEW_PCT):>{w}}" for n in news))
+    print("-" * (16 + w * len(news)))
     for c in cached:
-        print(f"{c:>8} |" + "".join(f"{fmt(cells[(c, n)]):>9}" if (c, n) in cells else f"{'-':>9}" for n in news))
+        print(
+            f"{_lbl(c, CACHED_PCT):>14} |"
+            + "".join(f"{fmt(cells[(c, n)]):>{w}}" if (c, n) in cells else f"{'-':>{w}}" for n in news)
+        )
 
 
 def main():

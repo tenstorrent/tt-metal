@@ -5,10 +5,13 @@ Tracks prefill performance of the intra-/multi-galaxy pipeline runner over a fix
 
 | | values |
 |---|---|
-| new tokens (the request) | 640, 1600, 3072, 5120, 32768, 51200 |
-| cached tokens (prefix already in the KV cache) | 0, 61440, 143360, 312320, 552960 |
+| new tokens (the request) | 640 (p25), 1600 (p50), 3072 (p75), 5120 (one chunk), 32768, 51200 (p99) |
+| cached tokens (prefix already in the KV cache) | 0, 61440 (p25), 143360 (p50), 312320 (p75), 552960 (p90) |
 
-Cached counts are chunk multiples (chunk = 5120). Per cell the script measures:
+The values are percentiles of the **Agent X dataset** (`semianalysisai/cc-traces-weka-062126`):
+new-prefill tokens per request p25 / p50 / p75 / p99 and cached context p25 / p50 / p75 / p90,
+rounded to chunk multiples (chunk = 5120), plus 5120 (exactly one chunk) and 32768 as extra
+points. Per cell the script measures:
 
 * **Idle pipeline** — one request at a time, pipeline drained between requests: TTFT from the
   producer's push of the first chunk to the last rank finishing the last chunk, and
