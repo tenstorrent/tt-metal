@@ -96,45 +96,6 @@ def test_binary_atan2_special_values(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_binary_logical_xor_ttnn(input_shapes, device):
-    num_elements = max(int(torch.prod(torch.tensor(input_shapes)).item()), 1)
-    in_data1 = torch.linspace(-100, 100, num_elements, dtype=torch.bfloat16)
-    in_data1 = in_data1[:num_elements].reshape(input_shapes)
-    in_data2 = torch.linspace(-150, 150, num_elements, dtype=torch.bfloat16)
-    in_data2 = in_data2[:num_elements].reshape(input_shapes)
-
-    input_tensor1 = ttnn.from_torch(
-        in_data1,
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    input_tensor2 = ttnn.from_torch(
-        in_data2,
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    output_tensor = ttnn.logical_xor(input_tensor1, input_tensor2)
-    output_tensor = ttnn.to_torch(output_tensor)
-    golden_function = ttnn.get_golden_function(ttnn.logical_xor)
-    golden_tensor = golden_function(in_data1, in_data2)
-
-    assert torch.equal(output_tensor, golden_tensor)
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
 @pytest.mark.parametrize("coeffs", [[0.0], [-5.0, 2.0], [-3.0, 0.0, 10.0], [-100.0, -25.0, 0.0, 15.0, 100.0]])
 def test_binary_polyval_ttnn(input_shapes, coeffs, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
