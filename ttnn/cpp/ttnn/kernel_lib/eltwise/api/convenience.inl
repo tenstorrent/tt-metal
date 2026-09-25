@@ -41,6 +41,10 @@ template <InputSpec Input, OutputSpec Output>
 ALWI void typecast(IterationShape shape) {
     constexpr auto in_df = dfb_l1_format<Input.cb_id>();
     constexpr auto out_df = dfb_l1_format<Output.cb_id>();
+    static_assert(
+        in_df != static_cast<uint32_t>(DataFormat::UInt8) && out_df != static_cast<uint32_t>(DataFormat::UInt8),
+        "typecast(): a UInt8 circular buffer may carry either UINT8 or INT8; pass the formats explicitly with "
+        "unary<Typecast<in_df, out_df>, ...>");
     unary<Typecast<in_df, out_df>, Input, Output>(shape);
 }
 

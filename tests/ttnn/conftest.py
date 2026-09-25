@@ -4,7 +4,6 @@
 
 import os
 import copy
-import datetime
 import json
 import dataclasses
 import pprint
@@ -64,9 +63,13 @@ def pre_and_post(request):
 
     ttnn.graph.reset_comparison_records_data()
 
-    report_name = f"{request.node.nodeid}: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (UTC)"
-    with ttnn.manage_config("report_name", ttnn.CONFIG.report_name or report_name):
-        if ttnn.CONFIG.enable_logging and ttnn.CONFIG.report_name is not None:
+    # Every test gets a report_name so that report_path is defined: comparison mode records its global golden
+    # comparison only then (ttnn/ttnn/decorators.py). A report requested without a name already carries this exact
+    # name from the root ttnn_graph_report fixture, since derive_report_name is a pure function of the test id, so a
+    # config reload above that spelled report_name as null resolves to the same directory.
+    report_name = ttnn.CONFIG.report_name or ttnn.graph_report.derive_report_name(request.node.nodeid)
+    with ttnn.manage_config("report_name", report_name):
+        if ttnn.CONFIG.enable_logging:
             logger.debug(f"ttnn.CONFIG:\n{ttnn.CONFIG}")
             report_path = ttnn.CONFIG.report_path
             if report_path.exists():

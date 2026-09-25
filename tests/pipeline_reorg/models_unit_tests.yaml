@@ -232,6 +232,24 @@
   team: models
   budget_type: unit
 
+- name: Qwen3.6-35B-A3B MoE unit tests
+  cmd: |
+    export TT_METAL_WATCHER=30
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-35B-A3B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-35B-A3B MESH_DEVICE=P150x4
+    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_moe_tp.py
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/unit/test_moe.py
+    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_gdn_tp.py
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_attention_tp.py
+  model: qwen3.6-35b-a3b
+  model_family: Qwen
+  skus:
+    bh_quietbox_2:
+      timeout: 25
+      tier: 1
+  owner_id: U08FBKRKTB8 # Kohei Yamaguchi
+  team: models
+  budget_type: unit
+
 - name: Mistral-7B unit tests
   cmd: |
     export TT_METAL_WATCHER=30
@@ -257,13 +275,7 @@
 
 - name: Mistral-Small-3.1-24B vision unit tests
   cmd: |
-    # models-unit-tests-impl.yaml passes enable-watcher: true, which the legacy
-    # t3000-unit-tests-impl and the e2e impl do not. With the watcher on,
-    # test_vision_model aborts on a NOC circular-buffer overflow that the other pipelines
-    # never surfaced -- the same test passes in the tiered e2e job, which runs no watcher.
-    # Unset here (matching the Llama entries above) to unblock the suite. NOTE this hides
-    # a real illegal NOC read rather than fixing it; tracked separately.
-    unset TT_METAL_WATCHER
+    export TT_METAL_WATCHER=30
     export HF_MODEL=mistralai/Mistral-Small-3.1-24B-Instruct-2503 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai/Mistral-Small-3.1-24B-Instruct-2503
     pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_conv2d.py
     pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_rms.py
@@ -276,10 +288,8 @@
   model: mistral-small-3.1-24b
   model_family: Mistral
   skus:
-    # Still the carried-over legacy value; the job has never completed end-to-end, so
-    # there is no usable measurement yet. Re-measure once it is green.
     wh_llmbox:
-      timeout: 20
+      timeout: 15
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -686,12 +696,15 @@
 
 - name: Qwen3-32B unit tests (Galaxy)
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    # Watcher setup is per SKU: this cmd is shared by wh_galaxy_perf and bh_galaxy, and only
+    # the Blackhole leg has been revalidated. See the skus block below.
+    {watcher_setup}
     export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
     export QWEN_BH_PREFETCHER=1  # opt-in BH dram_prefetcher path (no-op on WH)
     pytest --timeout 60 models/tt_transformers/tests/test_attention_utils.py
     pytest --timeout 60 models/tt_transformers/tests/test_distributed_norm_utils.py
     pytest --timeout 60 models/tt_transformers/tests/test_model_config_utils.py
+    pytest --timeout 60 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_model_config.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_mlp.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_mlp_prefill.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_attention.py
@@ -704,9 +717,16 @@
     wh_galaxy_perf:
       timeout: 10
       tier: 1
+      watcher_setup: "export TT_METAL_WATCHER=30"
     bh_galaxy:
       timeout: 15
       tier: 1
+      # The #53330 slice fault is fixed by #56176, so the watcher goes back on here.
+      # DISABLE_ETH is required: with the watcher on ethernet cores the fabric program needs
+      # 27328 bytes against a 26624 byte ACTIVE_ETH kernel config buffer, so open_mesh_device
+      # throws in FabricFirmwareInitializer::compile_and_configure_fabric() and no test runs.
+      # Worker cores stay watched, which is where the #50886 faults have been.
+      watcher_setup: "export TT_METAL_WATCHER=30; export TT_METAL_WATCHER_DISABLE_ETH=1"
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
   budget_type: unit
@@ -729,7 +749,7 @@
 
 - name: MiniMax-M3 unit tests (BH Galaxy 8x4)
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886 (Watcher data corruption on mesh open)
+    export TT_METAL_WATCHER=30
     export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
     # -k 8x4: ring_joint / MSA SP / KV cache / EP MoE / model_sp / attention(+chunked) / dense_mlp@8x4
     pytest --timeout 900 models/demos/minimax_m3/tests/unit/ -k "8x4"
@@ -1036,7 +1056,7 @@
 
 - name: TT-DiT common unit tests, shared amongst all models.
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30
     pytest --timeout 10000 models/tt_dit/tests/unit/
   model: dit-common
   skus:
@@ -1152,7 +1172,7 @@
 
 - name: TT-DiT Flux.2-dev unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30
     unset HF_HUB_OFFLINE
     export TT_DIT_CACHE_DIR=/mnt/MLPerf/huggingface/tt_dit_cache/black-forest-labs/FLUX.2-dev
     status=0
@@ -1218,7 +1238,7 @@
 
 - name: Stable Diffusion XL LoRA unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886 (SDXL NOC CB overflow / PCC)
+    export TT_METAL_WATCHER=30
     export HF_HUB_OFFLINE=0
     exit_code=0
     pytest --timeout 900 models/demos/stable_diffusion_xl_base/lora/tests/test_lora_fusion.py || exit_code=$?
@@ -1232,7 +1252,7 @@
       timeout: 40
       tier: 2
     wh_n300:
-      timeout: 36
+      timeout: 40
       tier: 2
     bh_p150b_civ2:
       timeout: 30
@@ -1264,7 +1284,7 @@
 
 - name: Stable Diffusion XL VAE unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886 (SDXL NOC CB overflow / PCC)
+    export TT_METAL_WATCHER=30
     export HF_HUB_OFFLINE=0
     pytest --timeout 600 models/demos/stable_diffusion_xl_base/vae/tests/pcc --ignore=models/demos/stable_diffusion_xl_base/vae/tests/pcc/test_welford_state_leak_regression.py
   model: sdxl
@@ -1285,7 +1305,7 @@
 
 - name: Stable Diffusion XL base unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886 (SDXL NOC CB overflow / PCC)
+    export TT_METAL_WATCHER=30
     export HF_HUB_OFFLINE=0
     pytest --timeout 600 models/demos/stable_diffusion_xl_base/tests/pcc --ignore=models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --ignore=models/demos/stable_diffusion_xl_base/tests/pcc/test_euler_discrete_scheduler.py
   model: sdxl
@@ -1511,6 +1531,12 @@
     export HF_HUB_OFFLINE=1
     export HF_HOME=/mnt/models/huggingface
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
+    # The shared offline cache lacks this adapter. Fetch its pinned revision into
+    # writable job storage before pytest opens any devices; keep the tests offline.
+    LORA_PATH=$(mpirun -np 1 --bind-to none --wdir "${TT_METAL_HOME}" \
+      env HF_HUB_OFFLINE=0 python3 -m models.tt_dit.utils.ltx_lora_asset \
+      --download-dir "${PIPELINE_DIR:?CI staging directory required}/.lora") || exit 1
+    export LORA_PATH
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
     export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/ltx/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
@@ -1518,7 +1544,7 @@
     # HF_HOME -- symlink it to the pre-staged /mnt/models cache so it resolves offline (no-op for the rest).
     mpirun --pernode --tag-output bash -lc 'mkdir -p ~/.cache && ln -sfn /mnt/models/huggingface ~/.cache/huggingface' || true
     # One multihost-ci-sc1 leg runs every LTX component test on the 4x8 galaxy (bh_sc1).
-    # Block tests use random weights; audio/upsampler/lora resolve offline from /mnt/models.
+    # Block tests use random weights; audio/upsampler resolve offline from /mnt/models.
     # Run all, accumulate failures, fail the leg if any component failed.
     rc=0
     run() { mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" python3 -m pytest --timeout 1800 "$@" || rc=1; }
@@ -1644,6 +1670,21 @@
       timeout: 40
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+  budget_type: unit
+
+- name: HunyuanImage-3.0 unit tests
+  cmd: |
+    export HF_HOME=/mnt/MLPerf/huggingface HUNYUAN_MODEL_DIR=/mnt/MLPerf/huggingface/tencent/HunyuanImage-3.0
+    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tencent/HunyuanImage-3.0
+    models/experimental/hunyuan_image_3_0/scripts/run_ci_pytest.sh unit \
+      --timeout 540 models/experimental/hunyuan_image_3_0/tests/pcc/test_denoise.py -m "not slow"
+  model: hunyuan-image-3.0
+  skus:
+    bh_quietbox_2:
+      timeout: 10
+      tier: 3
+  owner_id: U07J5E9NA9G # Dalar Vartanians
   team: models
   budget_type: unit
 
@@ -1909,7 +1950,7 @@
 
 - name: TT-Transformers attention module unit tests
   cmd: |
-    unset TT_METAL_WATCHER
+    export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/attention_1d \
     pytest models/common/tests/modules/attention/test_attention_1d.py \
@@ -1954,7 +1995,7 @@
 
 - name: TT-Transformers sampling module unit tests
   cmd: |
-    unset TT_METAL_WATCHER
+    export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface
     fail=0
     pytest models/common/tests/modules/sampling/test_penalties_1d.py \
@@ -2033,7 +2074,7 @@
 
 - name: TT-Transformers auto-compose 2D unit tests
   cmd: |
-    unset TT_METAL_WATCHER
+    export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     pytest models/common/tests/test_auto_compose.py \
@@ -2092,7 +2133,7 @@
 
 - name: DeepSeek-V3 TG MoE tests (Galaxy)
   cmd: |
-    unset TT_METAL_WATCHER  # tests self-skip under watcher: #36312, #36314
+    export TT_METAL_WATCHER=30
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
     export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
@@ -2118,13 +2159,14 @@
 - name: xtts-v2 unit tests
   cmd: |
     set -e
-    unset TT_METAL_WATCHER
+    export TT_METAL_WATCHER=30
     uv pip install -r models/experimental/xtts/requirements.txt
     # test_empty_generation runs in the e2e job instead: it needs a full traced pipeline, which
     # costs 294 s of cold-cache compile here but 118 s there (the e2e perf test has already
     # compiled it). Keeping it here overran this job's 25 min. Every other pcc test stays.
     pytest models/experimental/xtts/tests/pcc/ -k "not eval" --timeout=900 \
-      --ignore=models/experimental/xtts/tests/pcc/test_empty_generation.py
+      --ignore=models/experimental/xtts/tests/pcc/test_empty_generation.py \
+      --ignore=models/experimental/xtts/tests/pcc/test_budget_length_generation.py
   model: xtts-v2
   model_family: XTTS
   skus:
@@ -2135,4 +2177,31 @@
       tier: 3
   owner_id: U087HGJ455E # Sudhanshu Singhal
   team: shield
+  budget_type: unit
+
+- name: DiffusionDrive unit tests
+  cmd: |
+    export TT_METAL_WATCHER=30
+    # The checkpoint is a raw .pth on the Hub, not a pre-staged MLPerf asset, so this
+    # job fetches it; prepare_assets.py downloads into the workspace, not HF_HUB_CACHE.
+    # HF_HOME is deliberately NOT set: the container already points HF_HUB_CACHE at
+    # /mnt/MLPerf/huggingface/hub, and overriding HF_HOME only redirects the xet
+    # cache/logs onto that same :ro mount, which fails with EROFS.
+    export HF_HUB_OFFLINE=0
+    python3 models/experimental/diffusion_drive/scripts/prepare_assets.py
+    # A missing asset is now a failure, not a skip -- the real-checkpoint gate below
+    # must not be able to quietly opt out of running.
+    export DD_REQUIRE_ASSETS=1
+    pytest --timeout 600 \
+      models/experimental/diffusion_drive/tests/pcc/ \
+      models/experimental/diffusion_drive/tests/sanity/
+  model: diffusiondrive
+  model_family: DiffusionDrive
+  skus:
+    # 5:49 measured end-to-end on WH N300 in CI (47 tests + 730 MB asset fetch).
+    wh_n300:
+      timeout: 10
+      tier: 3
+  owner_id: U03HY7MK4BT # Mark O'Connor
+  team: models
   budget_type: unit

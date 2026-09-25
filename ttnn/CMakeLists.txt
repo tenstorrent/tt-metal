@@ -25,7 +25,7 @@ add_library(ttnn_pch_lean STATIC)
 add_library(TTNN::PCHLean ALIAS ttnn_pch_lean)
 file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ttnn_pch_lean.cpp CONTENT "/*dummy ttnn lean pch file*/\n")
 target_sources(ttnn_pch_lean PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/ttnn_pch_lean.cpp)
-target_precompile_headers(ttnn_pch_lean REUSE_FROM TT::CommonPCH)
+tt_reuse_precompile_headers(ttnn_pch_lean TT::CommonPCH)
 target_link_libraries(
     ttnn_pch_lean
     PUBLIC

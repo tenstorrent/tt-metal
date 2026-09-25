@@ -147,6 +147,9 @@ TEST(QuasarAttAddressQsr1, WorkerMulticastEncodesTheRectangleStart) {
     static_assert(mcast.rectangle_count == 32);
     static_assert(mcast.start_address == 0x10000000040ull);
     static_assert(mcast.extent_xy == ((4u << 6) | 8u));
+    static_assert(mcast.end_address == (0x10000000040ull | (31ull << 24)));
+    static_assert(mcast.start_node_xy == QSR1.worker_endpoint_words[0]);
+    static_assert(mcast.end_node_xy == QSR1.worker_endpoint_words[31]);
     // Degenerate and out-of-map rectangles resolve to zero destinations.
     static_assert(noc_att::make_worker_multicast<QSR1>(9, 5, 2, 2, 0, 1).rectangle_count == 0);
     static_assert(noc_att::make_worker_multicast<QSR1>(2, 2, 10, 5, 0, 1).rectangle_count == 0);
@@ -176,15 +179,16 @@ TEST(QuasarAttAddressAether, WorkerAndDramEncodeThroughTheRemoteWindow) {
     static_assert(*Address::worker(0, 1, 0).encode<AETHER>() == 0x1000000000ull);
     // Logical DRAM bank 1 -> selector 3 (aether_utils configure_aether_dram).
     static_assert(*Address::dram(1, 0x2000).encode<AETHER>() == (0x1000000000ull | (3ull << 26) | 0x2000));
-    // The UMD-visible dispatch tile (1,2) -> tile selector 4.
-    static_assert(*Address::dispatch(1, 2, 0).encode<AETHER>() == (0x1000000000ull | (4ull << 26)));
+    // The UMD-visible dispatch tile (0,2) -> tile selector 4 (endpoint word 0x80).
+    static_assert(*Address::dispatch(0, 2, 0).encode<AETHER>() == (0x1000000000ull | (4ull << 26)));
 }
 
 TEST(QuasarAttAddressAether, OutOfMapIdentitiesAreRejected) {
     static_assert(!Address::worker(2, 1, 0).encode<AETHER>().has_value());
     static_assert(!Address::worker(0, 0, 0).encode<AETHER>().has_value());
     static_assert(!Address::dram(2, 0).encode<AETHER>().has_value());
-    static_assert(!Address::dispatch(0, 2, 0).encode<AETHER>().has_value());
+    static_assert(!Address::dispatch(1, 2, 0).encode<AETHER>().has_value());
+    static_assert(!Address::dispatch(2, 2, 0).encode<AETHER>().has_value());
 }
 
 TEST(QuasarAttAddressAether, SelfDetectionUsesThePatchedEntryZero) {
@@ -293,6 +297,10 @@ TEST(QuasarAttAddressAether, WorkerMulticastSpansTheRow) {
     static_assert(mcast.rectangle_count == 2);
     static_assert(mcast.start_address == 0x1000000080ull);
     static_assert(mcast.extent_xy == ((1u << 6) | 2u));
+    // Inline-write form: the end tile's operand (selector 1) and both tiles' endpoint words.
+    static_assert(mcast.end_address == (0x1000000080ull | (1ull << 26)));
+    static_assert(mcast.start_node_xy == 0x40);
+    static_assert(mcast.end_node_xy == 0x41);
 }
 
 }  // namespace

@@ -17,38 +17,32 @@
 void kernel_main() {
     Noc noc;
 
-    constexpr uint32_t B = get_compile_time_arg_val(0);     // batch size
-    constexpr uint32_t PNHt = get_compile_time_arg_val(1);  // padded number of heads in tiles
-    constexpr uint32_t St = get_compile_time_arg_val(2);    // full sequence length of kv cache in tiles
-    constexpr uint32_t DHt = get_compile_time_arg_val(3);   // head dim
-    constexpr uint32_t vDHt = get_compile_time_arg_val(4);  // head dim for V
-    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(5);  // number of tiles in seqlen of a k/v/mask chunk
-    constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(6);
-    constexpr uint32_t zero_scalar_packed = get_compile_time_arg_val(7);
-    constexpr uint32_t scale_val = get_compile_time_arg_val(8);
-    constexpr uint32_t num_cores_per_batch = get_compile_time_arg_val(9);           // num cores per batch
-    constexpr uint32_t num_cores = get_compile_time_arg_val(10);                    // num running cores in total
-    constexpr uint32_t reducer_semaphore_id = get_compile_time_arg_val(11);         // semaphore ID for reducer
+    constexpr uint32_t PNHt = get_compile_time_arg_val(0);        // padded number of heads in tiles
+    constexpr uint32_t St = get_compile_time_arg_val(1);          // full sequence length of kv cache in tiles
+    constexpr uint32_t vDHt = get_compile_time_arg_val(2);        // head dim for V
+    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(3);  // number of tiles in seqlen of a k/v/mask chunk
+    constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(4);
+    constexpr uint32_t num_cores_per_batch = get_compile_time_arg_val(5);           // num cores per batch
+    constexpr uint32_t num_cores = get_compile_time_arg_val(6);                     // num running cores in total
+    constexpr uint32_t reducer_semaphore_id = get_compile_time_arg_val(7);          // semaphore ID for reducer
     uint32_t reducer_semaphore_addr = get_semaphore(reducer_semaphore_id);          // semaphore for reducer
-    constexpr uint32_t output_semaphore_id = get_compile_time_arg_val(12);          // semaphore ID for sender
-    constexpr bool is_out_sharded = get_compile_time_arg_val(13);
-    constexpr uint32_t k_chunk_size = get_compile_time_arg_val(14);
-    constexpr uint32_t num_q_heads = get_compile_time_arg_val(15);
-    constexpr uint32_t num_kv_heads = get_compile_time_arg_val(16);
-    constexpr uint32_t num_cores_per_head = get_compile_time_arg_val(17);
-    constexpr uint32_t num_heads_per_core = get_compile_time_arg_val(18);
-    constexpr uint32_t num_reducer_cores = get_compile_time_arg_val(19);
-    constexpr uint32_t num_output_cores = get_compile_time_arg_val(20);
-    constexpr uint32_t ELEMENT_SIZE = get_compile_time_arg_val(21);
-    constexpr bool is_causal = get_compile_time_arg_val(22) == 1;
-    constexpr uint32_t max_dynamic_chunk_size = get_compile_time_arg_val(23);
-    constexpr uint32_t q_heads_parallel_factor = get_compile_time_arg_val(24);
-    constexpr uint32_t sliding_window_size = get_compile_time_arg_val(25);
-    constexpr uint32_t num_tree_reduction_rounds = get_compile_time_arg_val(26);
-    constexpr uint32_t original_block_size = get_compile_time_arg_val(27);
+    constexpr uint32_t output_semaphore_id = get_compile_time_arg_val(8);           // semaphore ID for sender
+    constexpr bool is_out_sharded = get_compile_time_arg_val(9);
+    constexpr uint32_t num_q_heads = get_compile_time_arg_val(10);
+    constexpr uint32_t num_kv_heads = get_compile_time_arg_val(11);
+    constexpr uint32_t num_cores_per_head = get_compile_time_arg_val(12);
+    constexpr uint32_t num_heads_per_core = get_compile_time_arg_val(13);
+    constexpr uint32_t num_reducer_cores = get_compile_time_arg_val(14);
+    constexpr uint32_t num_output_cores = get_compile_time_arg_val(15);
+    constexpr uint32_t ELEMENT_SIZE = get_compile_time_arg_val(16);
+    constexpr bool is_causal = get_compile_time_arg_val(17) == 1;
+    constexpr uint32_t max_dynamic_chunk_size = get_compile_time_arg_val(18);
+    constexpr uint32_t q_heads_parallel_factor = get_compile_time_arg_val(19);
+    constexpr uint32_t sliding_window_size = get_compile_time_arg_val(20);
+    constexpr uint32_t original_block_size = get_compile_time_arg_val(21);
     constexpr bool has_block_padding = original_block_size > 0 && original_block_size < 32;
 
-    constexpr auto out_args = TensorAccessorArgs<28>();
+    constexpr auto out_args = TensorAccessorArgs<22>();
 
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
@@ -72,23 +66,16 @@ void kernel_main() {
 
     uint32_t arg_idx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t worker_id_for_reduce = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t worker_id_for_output = get_arg_val<uint32_t>(arg_idx++);
-    const bool is_worker = get_arg_val<uint32_t>(arg_idx++) == 0;
     const bool do_output = get_arg_val<uint32_t>(arg_idx++) == 1;
     const uint32_t cur_head_group = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t cur_batch = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t core_num_in_reduce = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t core_num_in_output = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t cur_pos_arg = get_arg_val<uint32_t>(arg_idx++);
 
     // Tree reduction parameters
     const bool is_tree_root = get_arg_val<uint32_t>(arg_idx++) == 1;
     const uint32_t parent_core_in_group = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t send_at_round = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t num_children = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t my_active_rounds = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t reduction_group_base_idx = get_arg_val<uint32_t>(arg_idx++);
 
     // Semaphore encoding: each round uses a 4-bit field (nibble) in the semaphore value
     // Round 0: bits 0-3, Round 1: bits 4-7, Round 2: bits 8-11, etc.
@@ -150,7 +137,6 @@ void kernel_main() {
     auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end, window_start_unaligned, window_start_chunk] =
         get_workload_for_core(
             cur_pos,
-            cur_batch,
             core_num_in_reduce,
             num_cores_per_head,
             k_chunk_size_dynamic,
@@ -193,16 +179,7 @@ void kernel_main() {
     arg_idx += num_output_cores;
     tt_l1_ptr uint32_t* all_output_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx++));
 
-    uint32_t reduce_core_index = (cur_batch * num_cores_per_batch) / num_cores_per_head + cur_head_group;
-    uint32_t reduce_core_noc_x = all_reducer_noc_x[reduce_core_index];
-    uint32_t reduce_core_noc_y = all_reducer_noc_y[reduce_core_index];
-
     constexpr uint32_t out_chunk_tiles = PNHt * vDHt;
-    uint32_t num_cores_to_wait = num_cores_per_head - 1;
-    if (num_cores_per_head > k_num_chunks) {
-        num_cores_to_wait = k_num_chunks - 1;
-    }
-    uint32_t num_tiles_to_wait = (out_chunk_tiles + 2 * PNHt) * num_cores_to_wait;
 
     // generate and send scaler to compute
     // These helper functions respect tile size of CBs (ie. no need for special handling of tiny tiles)
@@ -215,10 +192,9 @@ void kernel_main() {
     generate_bcast_col_scalar(CircularBuffer(cb_col_identity), identity_scalar_packed);
 
     // Generate sliding window mask only if we have local data and need it
-    if (has_local_data && k_chunk_start == window_start_chunk && window_start_unaligned > 0) {
+    if (k_chunk_start == window_start_chunk && window_start_unaligned > 0) {
         // If this core processes the first chunk and we need to apply sliding window mask, generate it here
-        generate_sliding_window_mask<cb_sliding_window_mask_in, PNHt>(
-            k_num_chunks, Sk_chunk_t_dynamic, window_start_unaligned);
+        generate_sliding_window_mask<cb_sliding_window_mask_in, PNHt>(Sk_chunk_t_dynamic, window_start_unaligned);
     }
 
     // Generate block padding mask: rows [0, block_size) = 0, rows [block_size, 32) = -inf.

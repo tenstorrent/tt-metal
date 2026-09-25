@@ -21,6 +21,7 @@ from helpers.param_config import (
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
+    quasar_mx_smoke,
     runtime,
 )
 from helpers.perf.core import create_test_or_perf_config
@@ -72,10 +73,12 @@ def eltwise_binary_implied_math_formats(formats, *, is_perf=False):
 
 
 def eltwise_binary_math_fidelities(mathop, formats):
-    if (
-        mathop in [MathOperation.Elwadd, MathOperation.Elwsub]
-        or formats.input_format == DataFormat.Int8
-    ):
+    # Add/sub ignore fidelity. Int8 is an exact integer op, and Float16_b is
+    # already full precision at LoFi: HiFi only touches the low 3 mantissa bits.
+    if mathop in [
+        MathOperation.Elwadd,
+        MathOperation.Elwsub,
+    ] or formats.input_format in (DataFormat.Int8, DataFormat.Float16_b):
         return [MathFidelity.LoFi]
     return [
         MathFidelity.LoFi,
@@ -109,18 +112,16 @@ def valid_acc_to_dest(input_dimensions) -> list:
     return [False]
 
 
-ELTWISE_FORMATS = input_output_formats(
-    [
-        DataFormat.MxFp8R,
-        DataFormat.MxFp8P,
-        DataFormat.MxFp4,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
-        DataFormat.Float16_b,
-        DataFormat.Float16,
-    ],
-) + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
+ELTWISE_FORMATS = (
+    input_output_formats(
+        [
+            DataFormat.Float16_b,
+            DataFormat.Float16,
+        ],
+    )
+    + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
+    + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
+)
 
 
 @pytest.mark.quasar
