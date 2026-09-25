@@ -7,6 +7,7 @@ For every case in <input>/inputs.npz (or --cases): exact token match (padding 2 
 first mismatch position, determinism across repeats, and synchronized wall time.
 Usage: python tests/check_transcribe.py [--input /input] [--weights /weights] [--cases a,b] [--repeats 2]
 """
+
 import argparse
 import json
 import os
@@ -40,11 +41,14 @@ def main():
         names = [n for n in args.cases.split(",") if n in names]
 
     from transformers import ParakeetForTDT
+
     model = ParakeetForTDT.from_pretrained(args.weights, dtype=torch.float32).eval()
     pad = model.generation_config.pad_token_id
 
-    import ttnn
     import backend as be
+
+    import ttnn
+
     device = ttnn.open_device(device_id=0, **be.DEVICE_OPTIONS)
     all_ok = True
     try:
@@ -70,11 +74,17 @@ def main():
                 if r != o:
                     ok = False
                     k = next((i for i in range(min(len(r), len(o))) if r[i] != o[i]), min(len(r), len(o)))
-                    print(f"[mismatch] {n} row{b} at {k}: ref={r[max(0, k - 3):k + 4]} tt={o[max(0, k - 3):k + 4]} "
-                          f"len ref={len(r)} tt={len(o)}", flush=True)
+                    print(
+                        f"[mismatch] {n} row{b} at {k}: ref={r[max(0, k - 3):k + 4]} tt={o[max(0, k - 3):k + 4]} "
+                        f"len ref={len(r)} tt={len(o)}",
+                        flush=True,
+                    )
             all_ok &= ok and det
-            print(f"[case] {n} B={mel.shape[0]} T={mel.shape[1]} match={ok} deterministic={det} "
-                  f"shape tt={outs[0].shape} ref={ref.shape} times={[round(t, 3) for t in times]}", flush=True)
+            print(
+                f"[case] {n} B={mel.shape[0]} T={mel.shape[1]} match={ok} deterministic={det} "
+                f"shape tt={outs[0].shape} ref={ref.shape} times={[round(t, 3) for t in times]}",
+                flush=True,
+            )
         print(f"[summary] all_match={all_ok}", flush=True)
     finally:
         ttnn.close_device(device)

@@ -62,6 +62,7 @@ upload), and the LSTM gate nonlinearities run as one sigmoid and one tanh over t
 [1,B,4Hd] gate tensor before slicing (elementwise, so values are identical). Tokens were
 bit-identical to the previous path on all bringup cases (long 1.66 -> 1.54 ms per step).
 """
+
 import glob
 import json
 import math
@@ -107,16 +108,28 @@ class ParakeetConfig:
     def from_dict(cls, cfg, gen=None):
         e = cfg["encoder_config"]
         gen = gen or {}
-        return cls(hidden=e["hidden_size"], layers=e["num_hidden_layers"], heads=e["num_attention_heads"],
-                   ffn=e["intermediate_size"], conv_kernel=e["conv_kernel_size"], mel_bins=e["num_mel_bins"],
-                   sub_channels=e["subsampling_conv_channels"], sub_kernel=e["subsampling_conv_kernel_size"],
-                   sub_stride=e["subsampling_conv_stride"], sub_factor=e["subsampling_factor"],
-                   scale_input=bool(e.get("scale_input", False)), dec_hidden=cfg["decoder_hidden_size"],
-                   dec_layers=cfg["num_decoder_layers"], vocab=cfg["vocab_size"], blank=cfg["blank_token_id"],
-                   pad=gen.get("pad_token_id", cfg["pad_token_id"]), durations=list(cfg["durations"]),
-                   max_symbols=cfg.get("max_symbols_per_step", 10),
-                   start=gen.get("decoder_start_token_id", cfg["blank_token_id"]),
-                   eos=gen.get("eos_token_id", cfg.get("eos_token_id")))
+        return cls(
+            hidden=e["hidden_size"],
+            layers=e["num_hidden_layers"],
+            heads=e["num_attention_heads"],
+            ffn=e["intermediate_size"],
+            conv_kernel=e["conv_kernel_size"],
+            mel_bins=e["num_mel_bins"],
+            sub_channels=e["subsampling_conv_channels"],
+            sub_kernel=e["subsampling_conv_kernel_size"],
+            sub_stride=e["subsampling_conv_stride"],
+            sub_factor=e["subsampling_factor"],
+            scale_input=bool(e.get("scale_input", False)),
+            dec_hidden=cfg["decoder_hidden_size"],
+            dec_layers=cfg["num_decoder_layers"],
+            vocab=cfg["vocab_size"],
+            blank=cfg["blank_token_id"],
+            pad=gen.get("pad_token_id", cfg["pad_token_id"]),
+            durations=list(cfg["durations"]),
+            max_symbols=cfg.get("max_symbols_per_step", 10),
+            start=gen.get("decoder_start_token_id", cfg["blank_token_id"]),
+            eos=gen.get("eos_token_id", cfg.get("eos_token_id")),
+        )
 
     @property
     def n_sub_convs(self):
@@ -135,6 +148,7 @@ class ParakeetConfig:
 
 def _load_state_dict(weights_path):
     from safetensors.torch import load_file
+
     files = sorted(glob.glob(os.path.join(weights_path, "**", "*.safetensors"), recursive=True))
     if not files:
         raise FileNotFoundError(f"no safetensors under {weights_path}")
@@ -147,6 +161,7 @@ def _load_state_dict(weights_path):
 def rel_positional_encoding(length, hidden):
     """Relative sinusoid table for positions length-1 .. -(length-1): [2*length-1, hidden] fp32."""
     import torch
+
     pos = torch.arange(length - 1, -length, -1, dtype=torch.float32)
     inv_freq = 1.0 / (10000.0 ** (torch.arange(0, hidden, 2, dtype=torch.float32) / hidden))
     ang = pos[:, None] * inv_freq[None, :]
@@ -156,6 +171,7 @@ def rel_positional_encoding(length, hidden):
 def rne_drop_bits(t, bits):
     """fp32 torch tensor rounded to nearest-even with the low `bits` mantissa bits cleared (bits <= 0: unchanged)."""
     import torch
+
     t = t.contiguous().float()
     if bits <= 0:
         return t
@@ -173,14 +189,26 @@ def _parse_layers(s):
 
 
 class Backend:
-    def __init__(self, weights_path, config, device, precision, generation_config=None, act_dtype=None,
-                 use_trace=None, fast_decode=None, weight_round_bits=None, fp32_layers=None):
+    def __init__(
+        self,
+        weights_path,
+        config,
+        device,
+        precision,
+        generation_config=None,
+        act_dtype=None,
+        use_trace=None,
+        fast_decode=None,
+        weight_round_bits=None,
+        fp32_layers=None,
+    ):
         if precision not in SUPPORTED_PRECISIONS:
             raise ValueError(f"unsupported precision {precision!r}; supported: {SUPPORTED_PRECISIONS}")
         act = act_dtype or DEFAULT_ACT_DTYPE
         if act not in SUPPORTED_PRECISIONS:
             raise ValueError(f"unsupported act_dtype {act!r}; supported: {SUPPORTED_PRECISIONS}")
         import ttnn
+
         self.ttnn = ttnn
         fmt = {"bf16": ttnn.bfloat16, "fp32": ttnn.float32}
         self.cfg = ParakeetConfig.from_dict(config, generation_config)
@@ -199,24 +227,37 @@ class Backend:
         elif isinstance(fp32_layers, str):
             fp32_layers = _parse_layers(fp32_layers)
         self.fp32_layers = sorted({int(i) for i in fp32_layers if 0 <= int(i) < self.cfg.layers})
-        exceptions = ["subsampling conv2d/pointwise/linear weights fp32",
-                      "prediction network, encoder/decoder projector and joint head weights fp32",
-                      "encoder residual stream and LayerNorm params/I/O fp32",
-                      "attention scores and softmax fp32",
-                      "decoder LSTM cell/hidden state and joint logits fp32",
-                      "relative positional table computed fp32 on host"]
+        exceptions = [
+            "subsampling conv2d/pointwise/linear weights fp32",
+            "prediction network, encoder/decoder projector and joint head weights fp32",
+            "encoder residual stream and LayerNorm params/I/O fp32",
+            "attention scores and softmax fp32",
+            "decoder LSTM cell/hidden state and joint logits fp32",
+            "relative positional table computed fp32 on host",
+        ]
         if self.fp32_layers and precision != "fp32":
             exceptions.append(f"encoder layers {','.join(map(str, self.fp32_layers))} matmul weights fp32")
         if self.weight_round_bits:
-            exceptions.append(f"fp32 weights host-rounded to nearest-even, {23 - self.weight_round_bits} "
-                              "mantissa bits (device operand width)")
+            exceptions.append(
+                f"fp32 weights host-rounded to nearest-even, {23 - self.weight_round_bits} "
+                "mantissa bits (device operand width)"
+            )
         if act != precision:
             exceptions.insert(0, f"matmul activations {act}")
-        self.precision_policy = {"mode": precision, "weights": precision, "activations": act,
-                                 "accumulation": "fp32", "exceptions": exceptions}
+        self.precision_policy = {
+            "mode": precision,
+            "weights": precision,
+            "activations": act,
+            "accumulation": "fp32",
+            "exceptions": exceptions,
+        }
         self.compute_cfg = ttnn.init_device_compute_kernel_config(
-            device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False,
-            fp32_dest_acc_en=True, packer_l1_acc=True)
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
         if use_trace is None:
             use_trace = os.environ.get("PARAKEET_TRACE", "1") != "0"
         self.use_trace = bool(use_trace)
@@ -233,8 +274,13 @@ class Backend:
     # ------------------------------------------------------------------ weights
     def _dev(self, t, dtype, layout=None):
         ttnn = self.ttnn
-        return ttnn.from_torch(t.contiguous().float(), dtype=dtype, layout=layout or ttnn.TILE_LAYOUT,
-                               device=self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.from_torch(
+            t.contiguous().float(),
+            dtype=dtype,
+            layout=layout or ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     def _rw(self, t):
         """fp32 weight rounded to the device operand width (identity when weight_round_bits == 0)."""
@@ -261,6 +307,7 @@ class Backend:
 
     def _prepare_weights(self, sd):
         import torch
+
         c = self.cfg
         H, hd, D = c.heads, c.head_dim, c.hidden
         pre = "encoder.subsampling."
@@ -284,7 +331,7 @@ class Backend:
         self.sub_lin_w = self._sw(lw.reshape(D, C, F).permute(0, 2, 1).reshape(D, F * C).t())
         self.sub_lin_b = self._sw(sd[pre + "linear.bias"].reshape(1, -1))
 
-        scale = hd ** -0.5
+        scale = hd**-0.5
         self.blocks = []
         for i in range(c.layers):
             p = f"encoder.layers.{i}."
@@ -298,45 +345,53 @@ class Backend:
             bn_s = g("conv.norm.weight") / torch.sqrt(g("conv.norm.running_var") + c.bn_eps)
             bn_b = g("conv.norm.bias") - g("conv.norm.running_mean") * bn_s
             dw = g("conv.depthwise_conv.weight")[:, 0, :] * bn_s[:, None]  # [D, K]
-            self.blocks.append({
-                "ln_ff1": ln("norm_feed_forward1"),
-                "ff1_w1": w(g("feed_forward1.linear1.weight").t()),
-                "ff1_w2": w(0.5 * g("feed_forward1.linear2.weight").t()),
-                "ln_att": ln("norm_self_att"),
-                "wqkv": w(wqkv.t()),
-                "bias_u": self._a((g("self_attn.bias_u") * scale).reshape(1, H, 1, hd)),
-                "bias_v": self._a((g("self_attn.bias_v") * scale).reshape(1, H, 1, hd)),
-                "wpos": w(g("self_attn.relative_k_proj.weight").t()),
-                "wo": w(g("self_attn.o_proj.weight").t()),
-                "ln_conv": ln("norm_conv"),
-                "pw1": w(g("conv.pointwise_conv1.weight")[:, :, 0].t()),
-                "dw": [self._a(dw[:, k].reshape(1, 1, -1)) for k in range(c.conv_kernel)],
-                "dw_b": self._a(bn_b.reshape(1, 1, -1)),
-                "pw2": w(g("conv.pointwise_conv2.weight")[:, :, 0].t()),
-                "ln_ff2": ln("norm_feed_forward2"),
-                "ff2_w1": w(g("feed_forward2.linear1.weight").t()),
-                "ff2_w2": w(0.5 * g("feed_forward2.linear2.weight").t()),
-                "ln_out": ln("norm_out"),
-            })
+            self.blocks.append(
+                {
+                    "ln_ff1": ln("norm_feed_forward1"),
+                    "ff1_w1": w(g("feed_forward1.linear1.weight").t()),
+                    "ff1_w2": w(0.5 * g("feed_forward1.linear2.weight").t()),
+                    "ln_att": ln("norm_self_att"),
+                    "wqkv": w(wqkv.t()),
+                    "bias_u": self._a((g("self_attn.bias_u") * scale).reshape(1, H, 1, hd)),
+                    "bias_v": self._a((g("self_attn.bias_v") * scale).reshape(1, H, 1, hd)),
+                    "wpos": w(g("self_attn.relative_k_proj.weight").t()),
+                    "wo": w(g("self_attn.o_proj.weight").t()),
+                    "ln_conv": ln("norm_conv"),
+                    "pw1": w(g("conv.pointwise_conv1.weight")[:, :, 0].t()),
+                    "dw": [self._a(dw[:, k].reshape(1, 1, -1)) for k in range(c.conv_kernel)],
+                    "dw_b": self._a(bn_b.reshape(1, 1, -1)),
+                    "pw2": w(g("conv.pointwise_conv2.weight")[:, :, 0].t()),
+                    "ln_ff2": ln("norm_feed_forward2"),
+                    "ff2_w1": w(g("feed_forward2.linear1.weight").t()),
+                    "ff2_w2": w(0.5 * g("feed_forward2.linear2.weight").t()),
+                    "ln_out": ln("norm_out"),
+                }
+            )
 
     def _prepare_decoder(self, sd):
         import torch
+
         ttnn, c = self.ttnn, self.cfg
         Hd = c.dec_hidden
         # host fp32 copy: the per-step row lookup is an exact host gather + one upload (fast_decode off)
         self.dec_emb = sd["decoder.embedding.weight"].float().contiguous()
         # device fp32 row-major copy: exact per-step row slices (fast_decode on)
-        self.dec_emb_dev = self._dev(self.dec_emb, ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT) \
-            if self.fast_decode else None
+        self.dec_emb_dev = (
+            self._dev(self.dec_emb, ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT) if self.fast_decode else None
+        )
         self.lstm = []
         for l in range(c.dec_layers):
             w = torch.cat([sd[f"decoder.lstm.weight_ih_l{l}"], sd[f"decoder.lstm.weight_hh_l{l}"]], 1)
             b = sd[f"decoder.lstm.bias_ih_l{l}"] + sd[f"decoder.lstm.bias_hh_l{l}"]
             self.lstm.append((self._dw(w.t()), self._dw(b.reshape(1, -1))))
-        self.dec_proj = (self._dw(sd["decoder.decoder_projector.weight"].t()),
-                         self._dw(sd["decoder.decoder_projector.bias"].reshape(1, -1)))
-        self.enc_proj = (self._dw(sd["encoder_projector.weight"].t()),
-                         self._dw(sd["encoder_projector.bias"].reshape(1, -1)))
+        self.dec_proj = (
+            self._dw(sd["decoder.decoder_projector.weight"].t()),
+            self._dw(sd["decoder.decoder_projector.bias"].reshape(1, -1)),
+        )
+        self.enc_proj = (
+            self._dw(sd["encoder_projector.weight"].t()),
+            self._dw(sd["encoder_projector.bias"].reshape(1, -1)),
+        )
         # Joint head laid out as [tokens | pad | durations | pad] with tile-aligned regions;
         # padded columns get a very negative bias so they never win an argmax.
         V, ND = c.vocab, len(c.durations)
@@ -345,7 +400,7 @@ class Backend:
         W = torch.zeros(Hd, self.vpad + dpad)
         bias = torch.full((self.vpad + dpad,), -1e30)
         W[:, :V], bias[:V] = hw[:V].t(), hb[:V]
-        W[:, self.vpad:self.vpad + ND], bias[self.vpad:self.vpad + ND] = hw[V:].t(), hb[V:]
+        W[:, self.vpad : self.vpad + ND], bias[self.vpad : self.vpad + ND] = hw[V:].t(), hb[V:]
         self.head = (self._dw(W), self._dw(bias.reshape(1, -1)))
 
     # ------------------------------------------------------------------ cached per-length tensors
@@ -353,6 +408,7 @@ class Backend:
         """Relative table with a leading zero row: [1, 2*tp, D]."""
         if tp not in self._pos_cache:
             import torch
+
             pe = rel_positional_encoding(tp, self.cfg.hidden)
             pe = torch.cat([torch.zeros(1, pe.shape[1]), pe], 0)
             self._pos_cache[tp] = self._a(pe.unsqueeze(0))
@@ -363,6 +419,7 @@ class Backend:
         key = (tp, batch)
         if key not in self._shift_cache:
             import torch
+
             K = self.cfg.conv_kernel
             S = torch.zeros(K, tp, tp)
             t = torch.arange(tp)
@@ -376,8 +433,9 @@ class Backend:
     def _mask_values(self, lengths, tp):
         """Host torch (key_bias [B,1,1,tp] additive, tmask [B,tp,1] 0/1)."""
         import torch
+
         B = len(lengths)
-        valid = (np.arange(tp)[None, :] < np.asarray(lengths)[:, None])
+        valid = np.arange(tp)[None, :] < np.asarray(lengths)[:, None]
         key_bias = torch.from_numpy(np.where(valid, 0.0, -1e9).astype(np.float32)).reshape(B, 1, 1, tp)
         tmask = torch.from_numpy(valid.astype(np.float32)).reshape(B, tp, 1)
         return key_bias, tmask
@@ -389,8 +447,15 @@ class Backend:
 
     # ------------------------------------------------------------------ encoder pieces
     def _linear(self, x, w, bias=None, activation=None, dtype=None):
-        return self.ttnn.linear(x, w, bias=bias, activation=activation, compute_kernel_config=self.compute_cfg,
-                                memory_config=self.ttnn.DRAM_MEMORY_CONFIG, dtype=dtype)
+        return self.ttnn.linear(
+            x,
+            w,
+            bias=bias,
+            activation=activation,
+            compute_kernel_config=self.compute_cfg,
+            memory_config=self.ttnn.DRAM_MEMORY_CONFIG,
+            dtype=dtype,
+        )
 
     def _ln(self, x, wb):
         """LayerNorm over the last dim with centered (two-pass) variance; x and params fp32."""
@@ -414,22 +479,38 @@ class Backend:
         k = self.cfg.sub_kernel
         conv_cfg = ttnn.Conv2dConfig(weights_dtype=self.sub_wdtype, output_layout=ttnn.TILE_LAYOUT)
         out, (ho, wo) = ttnn.conv2d(
-            input_tensor=x, weight_tensor=w, bias_tensor=b, device=self.device, in_channels=cin,
-            out_channels=cout, batch_size=batch, input_height=h, input_width=wdt, kernel_size=(k, k),
-            stride=(self.cfg.sub_stride, self.cfg.sub_stride), padding=((k - 1) // 2, (k - 1) // 2),
-            groups=groups, conv_config=conv_cfg, compute_config=self.compute_cfg, dtype=self.adtype,
-            return_output_dim=True, return_weights_and_bias=False)
+            input_tensor=x,
+            weight_tensor=w,
+            bias_tensor=b,
+            device=self.device,
+            in_channels=cin,
+            out_channels=cout,
+            batch_size=batch,
+            input_height=h,
+            input_width=wdt,
+            kernel_size=(k, k),
+            stride=(self.cfg.sub_stride, self.cfg.sub_stride),
+            padding=((k - 1) // 2, (k - 1) // 2),
+            groups=groups,
+            conv_config=conv_cfg,
+            compute_config=self.compute_cfg,
+            dtype=self.adtype,
+            return_output_dim=True,
+            return_weights_and_bias=False,
+        )
         return out, ho, wo
 
     def _time_mask(self, lengths, t, width):
         """[B, t*width, 1] 0/1 mask (row index = time*width + w)."""
         import torch
+
         m = (np.arange(t)[None, :] < np.asarray(lengths)[:, None]).astype(np.float32)
         return self._a(torch.from_numpy(np.repeat(m, width, axis=1)).unsqueeze(-1))
 
     def _subsample(self, mel_pad, lengths):
         ttnn, c = self.ttnn, self.cfg
         import torch
+
         B, T, F = mel_pad.shape
         C = c.sub_channels
         x = torch.zeros(B, T, F, self.cin0)
@@ -526,9 +607,11 @@ class Backend:
         if tr is not None and tr["key"] == key:
             kb, tm = self._mask_values(lens, tp)
             ttnn.copy_host_to_device_tensor(
-                ttnn.from_torch(kb, dtype=tr["key_bias"].dtype, layout=ttnn.TILE_LAYOUT), tr["key_bias"])
+                ttnn.from_torch(kb, dtype=tr["key_bias"].dtype, layout=ttnn.TILE_LAYOUT), tr["key_bias"]
+            )
             ttnn.copy_host_to_device_tensor(
-                ttnn.from_torch(tm, dtype=tr["tmask"].dtype, layout=ttnn.TILE_LAYOUT), tr["tmask"])
+                ttnn.from_torch(tm, dtype=tr["tmask"].dtype, layout=ttnn.TILE_LAYOUT), tr["tmask"]
+            )
             ttnn.copy(x, tr["x"])
             ttnn.deallocate(x)
             ttnn.execute_trace(self.device, tr["id"], cq_id=0, blocking=False)
@@ -583,8 +666,13 @@ class Backend:
     # ------------------------------------------------------------------ TDT decode
     def _ids(self, vals):
         import torch
-        return self.ttnn.from_torch(torch.tensor(np.asarray(vals, dtype=np.int32)[None, :]), dtype=self.ttnn.uint32,
-                                    layout=self.ttnn.ROW_MAJOR_LAYOUT, device=self.device)
+
+        return self.ttnn.from_torch(
+            torch.tensor(np.asarray(vals, dtype=np.int32)[None, :]),
+            dtype=self.ttnn.uint32,
+            layout=self.ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+        )
 
     def _gather(self, table, rows):
         """Rows of a row-major [N, W] device table -> [1, len(rows), W] tile tensor."""
@@ -639,14 +727,17 @@ class Backend:
 
     def _masked(self, mask_np, new, old):
         import torch
-        m = self._dev(torch.from_numpy(np.repeat(mask_np.astype(np.float32)[None, :, None], new.shape[-1], 2)),
-                      new.dtype)
+
+        m = self._dev(
+            torch.from_numpy(np.repeat(mask_np.astype(np.float32)[None, :, None], new.shape[-1], 2)), new.dtype
+        )
         return self.ttnn.where(m, new, old)
 
     def transcribe(self, mel, mel_lengths):
         """Greedy TDT decode. Returns {"tokens": int64 [B, L]} (start token + one symbol per step,
         finished rows padded with pad_token_id), matching transformers generate().sequences."""
         import torch
+
         ttnn, c = self.ttnn, self.cfg
         x, lens, t_out = self.encode_device(mel, mel_lengths)
         B, tp = x.shape[0], x.shape[1]
@@ -683,7 +774,7 @@ class Backend:
             frames = frames + dur
             nt = np.where(finished, c.pad, tok)
             seqs.append(nt)
-            finished |= (frames >= valid)
+            finished |= frames >= valid
             if c.eos is not None:
                 finished |= nt == c.eos
             last = nt

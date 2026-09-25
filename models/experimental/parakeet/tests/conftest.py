@@ -6,6 +6,7 @@
 Device tests skip cleanly when ttnn is not importable or no TT device is present; CPU tests skip
 when the pinned checkpoint is not available.
 """
+
 import json
 import os
 import sys
@@ -52,6 +53,7 @@ def hf_config(weights_path):
 def reference(weights_path):
     pytest.importorskip("transformers")
     from reference import ParakeetReference
+
     return ParakeetReference(weights_path)
 
 
@@ -59,8 +61,10 @@ def reference(weights_path):
 def device():
     if _num_tt_devices() == 0:
         pytest.skip("no TT device available")
-    import ttnn
     from tt import DEVICE_OPTIONS
+
+    import ttnn
+
     dev = ttnn.open_device(device_id=0, **DEVICE_OPTIONS)
     yield dev
     ttnn.close_device(dev)
@@ -69,4 +73,5 @@ def device():
 @pytest.fixture(scope="session")
 def tt_model(weights_path, hf_config, device):
     from tt import create_backend
+
     return create_backend(weights_path, hf_config, device, precision="bf16")

@@ -15,6 +15,7 @@ x_hi is the operand at the device width (conv0 input: host RNE to 10 bits; later
 bf16 typecast), w_hi is host RNE to 9 bits, and the lo parts are the fp32 remainders (lo*lo is
 dropped). The bias is added once. The encoder blocks and the decoder are unchanged.
 """
+
 import types
 
 from .ttnn_parakeet import FP32_WEIGHT_DROP_BITS, _load_state_dict, rne_drop_bits
@@ -31,6 +32,7 @@ def split(t, bits):
 def enable(bk, weights_path):
     """Switch `bk` (a ttnn_parakeet.Backend) to hi/lo split subsampling; returns bk."""
     import torch
+
     ttnn, c = bk.ttnn, bk.cfg
     if bk.adtype != ttnn.float32:
         raise ValueError("split subsampling needs fp32 activations")
@@ -50,15 +52,18 @@ def enable(bk, weights_path):
     bk.ss_stages = []
     for dw, pw in zip(convs[1::2], convs[2::2]):
         wdw = host_pair(sd[pre + f"layers.{dw}.weight"]) + (
-            host(bk._rw(sd[pre + f"layers.{dw}.bias"].reshape(1, 1, 1, -1))),)
+            host(bk._rw(sd[pre + f"layers.{dw}.bias"].reshape(1, 1, 1, -1))),
+        )
         wpw = dev_pair(sd[pre + f"layers.{pw}.weight"][:, :, 0, 0].t()) + (
-            bk._sw(sd[pre + f"layers.{pw}.bias"].reshape(1, -1)),)
+            bk._sw(sd[pre + f"layers.{pw}.bias"].reshape(1, -1)),
+        )
         bk.ss_stages.append((wdw, wpw))
     lw = sd[pre + "linear.weight"]
     D, C = c.hidden, c.sub_channels
     F = lw.shape[1] // C
     bk.ss_lin = dev_pair(lw.reshape(D, C, F).permute(0, 2, 1).reshape(D, F * C).t()) + (
-        bk._sw(sd[pre + "linear.bias"].reshape(1, -1)),)
+        bk._sw(sd[pre + "linear.bias"].reshape(1, -1)),
+    )
     bk._subsample = types.MethodType(_subsample_split, bk)
     bk.sub_split = True
     bk.precision_policy["exceptions"].append("subsampling conv2d/linear run as 3-pass hi/lo operand splits")
@@ -74,8 +79,10 @@ def _act_split(bk, x):
 def _conv3(bk, xs, wts, batch, h, w, cin, cout, groups):
     (xh, xl), (wh, wl, b) = xs, wts
     y, ho, wo = bk._conv2d(xh, wh, b, batch, h, w, cin, cout, groups)
-    corr = bk.ttnn.add(bk._conv2d(xl, wh, None, batch, h, w, cin, cout, groups)[0],
-                       bk._conv2d(xh, wl, None, batch, h, w, cin, cout, groups)[0])
+    corr = bk.ttnn.add(
+        bk._conv2d(xl, wh, None, batch, h, w, cin, cout, groups)[0],
+        bk._conv2d(xh, wl, None, batch, h, w, cin, cout, groups)[0],
+    )
     return bk.ttnn.add(y, corr), ho, wo
 
 
@@ -91,6 +98,7 @@ def _subsample_split(self, mel_pad, lengths):
     """Same graph as Backend._subsample with every conv2d / linear replaced by its 3-pass split."""
     import numpy as np
     import torch
+
     ttnn, c = self.ttnn, self.cfg
     B, T, F = mel_pad.shape
     C = c.sub_channels

@@ -7,6 +7,7 @@ This is the same implementation the evaluation oracle uses (AutoProcessor / gene
 TT host CPU in FP32. It is the reference for the portable tests and the CPU baseline benchmark.
 The evaluation oracle itself runs on an A100 and may differ slightly (see docs/PRECISION.md).
 """
+
 import numpy as np
 
 
@@ -34,6 +35,7 @@ class ParakeetReference:
     def __init__(self, weights_path, threads=0):
         import torch
         from transformers import ParakeetForTDT
+
         if threads:
             torch.set_num_threads(threads)
         self.torch = torch

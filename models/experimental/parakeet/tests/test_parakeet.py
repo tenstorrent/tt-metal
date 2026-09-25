@@ -7,13 +7,14 @@ Run: pytest tests/test_parakeet.py [-m "not device"]
 Inputs: harness inputs.npz under PARAKEET_INPUT when present, otherwise deterministic synthetic mels
 (synthetic inputs only check numerics and determinism; token equality is checked on real inputs).
 """
+
 import os
 
 import numpy as np
 import pytest
+from reference import row_nrmse, strip_pad
 
 from conftest import INPUT
-from reference import row_nrmse, strip_pad
 
 NRMSE_GATE = 0.04  # contract encoder gate (per row, valid frames)
 
@@ -23,8 +24,9 @@ def _cases():
     if os.path.exists(path):
         data = np.load(path)
         names = [k[:-5] for k in data.keys() if k.endswith("__mel")]
-        return {n: (data[f"{n}__mel"].astype(np.float32), data[f"{n}__mel_lengths"].astype(np.int64))
-                for n in names}, True
+        return {
+            n: (data[f"{n}__mel"].astype(np.float32), data[f"{n}__mel_lengths"].astype(np.int64)) for n in names
+        }, True
     rng = np.random.default_rng(0)
     mel = rng.standard_normal((2, 300, 128)).astype(np.float32)
     lens = np.array([300, 181], dtype=np.int64)
@@ -38,9 +40,10 @@ CASES, REAL_INPUTS = _cases()
 # ------------------------------------------------------------------ CPU only
 def test_config_consistent(hf_config):
     from tt import ParakeetConfig
+
     c = ParakeetConfig.from_dict(hf_config)
     assert c.head_dim * c.heads == c.hidden
-    assert 2 ** c.n_sub_convs == c.sub_factor
+    assert 2**c.n_sub_convs == c.sub_factor
     assert c.blank == hf_config["blank_token_id"] and c.vocab == hf_config["vocab_size"]
     assert list(c.durations) == list(hf_config["durations"])
 
@@ -48,6 +51,7 @@ def test_config_consistent(hf_config):
 def test_sub_length_matches_torch_conv(hf_config):
     torch = pytest.importorskip("torch")
     from tt import ParakeetConfig
+
     c = ParakeetConfig.from_dict(hf_config)
     pad = (c.sub_kernel - 1) // 2
     conv = torch.nn.Conv1d(1, 1, c.sub_kernel, stride=c.sub_stride, padding=pad)
@@ -61,6 +65,7 @@ def test_sub_length_matches_torch_conv(hf_config):
 def test_rel_positional_encoding():
     pytest.importorskip("torch")
     from tt import rel_positional_encoding
+
     pe = rel_positional_encoding(5, 16).numpy()
     assert pe.shape == (9, 16)
     zero = pe[4]  # position 0 sits in the middle
@@ -70,6 +75,7 @@ def test_rel_positional_encoding():
 
 def test_unsupported_precision_fails(weights_path, hf_config):
     from tt import SUPPORTED_PRECISIONS, create_backend
+
     assert "bfp8_b" not in SUPPORTED_PRECISIONS
     with pytest.raises(ValueError):
         create_backend(weights_path, hf_config, device=None, precision="bfp8_b")
@@ -139,5 +145,5 @@ def test_batch_matches_single(tt_model):
     pad = tt_model.cfg.pad
     batched = tt_model.transcribe(mel, lens)["tokens"]
     for b in range(mel.shape[0]):
-        single = tt_model.transcribe(mel[b:b + 1], lens[b:b + 1])["tokens"]
+        single = tt_model.transcribe(mel[b : b + 1], lens[b : b + 1])["tokens"]
         assert strip_pad(batched[b], pad) == strip_pad(single[0], pad), f"row {b}"
