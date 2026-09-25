@@ -16,8 +16,8 @@ def expect_raise(name, fn):
         fn(); print("RESULT", name, "NO-RAISE")
     except Exception as e:
         msg = str(e).splitlines()
-        m = [l for l in msg if "TT_FATAL" in l or "TT_THROW" in l or "info:" in l or "error" in l.lower()]
-        print("RESULT", name, "RAISED", type(e).__name__, "|", (m[:2] if m else msg[:2]))
+        info = msg[msg.index("info:") + 1] if "info:" in msg and msg.index("info:") + 1 < len(msg) else msg[0]
+        print("RESULT", name, "RAISED", type(e).__name__, "|", info[:300])
 ''')
 
 CHECKS = {
@@ -55,5 +55,7 @@ sel = sys.argv[1:] or list(CHECKS)
 for name in sel:
     code = PRE + CHECKS[name] + "\nttnn.close_device(dev)\n"
     p = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=600)
+    if p.returncode < 0:
+        print(f"[{name}] crashed by signal {-p.returncode}; native frames:", *[l for l in p.stderr.splitlines() if "ttnn" in l.lower() or "sdpa" in l.lower()][:12], sep="\n    ")
     lines = [l for l in p.stdout.splitlines() if l.startswith("RESULT")]
     print(f"[{name}] rc={p.returncode}", *lines or ["(no RESULT)"] + p.stderr.strip().splitlines()[-3:], sep="\n    ", flush=True)

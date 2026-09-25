@@ -17,3 +17,18 @@ per-card locks/dirty flags (scripts/run_safe_pytest_card2.sh). No T3K: T3K 2x4 t
 - exp ring on 1x2 FABRIC_1D_RING hangs on BASE (fabric eth cores time out) -> ELF compare only.
 - watcher + fabric (1x2) fails on BASE: cq_dispatch idle_erisc.elf overflows under watcher -> watcher
   compare limited to single-chip dense/joint matrix configs.
+
+## HEAD (d640c711) results, 19:10-19:45 UTC
+- Test counts identical to BASE: unit 88p/4s, joint 48p/8s, chunked 36p, nightly-prefill subset 156p/6s,
+  ring joint 1x2 12p, dit legacy 6p, matrix 20/20 OK, watcher matrix 9/9 OK.
+- Bitwise: all 20 matrix outputs identical BASE vs HEAD.
+- ELF compare (all SHF_ALLOC sections, exact JIT key match): 1015 kernels SAME, 0 DIFF, no HEAD-only key
+  from a shared test (HEAD-only keys come from HEAD-only tests run later). Watcher build: all SAME.
+- Host checks: precision raises "qualified only on Blackhole"; inputs_prepared w/o precision rejected;
+  chunk 0 rejected for sdpa/joint; BUT chunked_scaled_dot_product_attention with chunk 0 -> SIGFPE
+  (BASE: TypeError). Fix on cglagovich/sdpa-wormhole-fixes.
+- exp ring on 1x2 ring: BASE hangs; HEAD fails fast "Requested link index 2 is out of bounds" (new
+  ring_size==2 link-offset routing in the legacy exp ring factory needs 2*num_links channels).
+- test_sdpa_numerics_compatibility::test_sdpa_legacy_defaults[explicit-lofi] HANGS on WH (HEAD).
+  Probe: legacy dense SDPA LoFi + q_chunk 256 hangs for any grid/k chunk; LoFi q128 fine; HiFi2/3 fine.
+  Checking BASE now.

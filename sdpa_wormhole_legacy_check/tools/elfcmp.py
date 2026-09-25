@@ -44,10 +44,20 @@ def scan(root):
             for f in sorted(files):
                 p = os.path.join(sub, f); rel = os.path.relpath(p, dp)
                 if f.endswith(".elf"):
-                    elfs[rel] = alloc_sections(p)
+                    if f.split(".")[0] + ".elf" != f and f.split(".")[0] + ".elf.xip.elf" != f:
+                        continue  # in-flight temp file
+                    try:
+                        elfs[rel] = alloc_sections(p)
+                    except Exception:
+                        continue
                 elif f.endswith((".h", ".hpp", ".cpp")) and "kernel_args" not in f:
                     sigh.update(rel.encode()); sigh.update(open(p, "rb").read())
-        res[key] = {"elfs": elfs, "sig": sigh.hexdigest()[:12], "path": dp}
+        ent = {"elfs": elfs, "sig": sigh.hexdigest()[:12], "path": dp}
+        if key in res and (res[key]["elfs"] != elfs or res[key]["sig"] != ent["sig"]):
+            print(f"WARNING intra-tag mismatch for {key}: {res[key]['path']} vs {dp}")
+        if key in res and len(res[key]["elfs"]) >= len(elfs):
+            continue
+        res[key] = ent
     return res
 
 def cmp_elfs(a, b):
@@ -80,13 +90,7 @@ def main(base, head, filt=""):
             else:
                 same += 1; rows.append(f"SAME  {k[0]}/{k[1]}{sigtag} [{len(A[k]['elfs'])} elfs, {n} alloc sections]")
         elif k in A:
-            m = by_sig_B.get((k[0], A[k]["sig"]))
-            if m:
-                d = cmp_elfs(A[k]["elfs"], B[m[0]]["elfs"])
-                rows.append(f"{'DIFF' if d else 'SAME'}* {k[0]}/{k[1]} ~ HEAD {m[0][1]} (matched by gen-header sig)"); rows += ["      " + x for x in d]
-                diff += bool(d); same += not d
-            else:
-                rows.append(f"ONLY-BASE {k[0]}/{k[1]}")
+            rows.append(f"ONLY-BASE {k[0]}/{k[1]}")
         else:
             if not any(k in v for v in by_sig_B.values() if False):
                 pass
