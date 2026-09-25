@@ -46,6 +46,10 @@ class SharedScalar:
 
 
 class _TtHCABase(LightweightModule):
+    _SHARED_DENSE_MASKS: dict = (
+        {}
+    )  # (device, chunk, cap, window, head_dim, dtype) -> (mask, mask_col, kv_pad, carry_cols)
+
     """Helpers shared by the compressor and the block. Subclasses must set ``device`` / ``dtype`` /
     ``weights_dtype`` / ``memory_config`` / ``rotary_emb`` and the mesh attributes before calling these."""
 
@@ -589,6 +593,15 @@ class TtHCA(_TtHCABase):
         carry, sw = self.sliding_window, self.sliding_window
         raw = carry + seq_global
         sk_pad = -(-(raw + cap) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        # The dense-path mask, kv pad and carry columns depend only on (chunk, cap, window, head_dim, dtype) and their
+        # per-chunk content only on the slot's counters, which every layer of a kind shares -> one set per (device, key)
+        # for all 21 CSA / 20 HCA layers (at chunk 10240 and 128k the CSA mask alone is 125 MB per layer; DS4F-0260: the
+        # 43-layer run hit 32.2 of 32.6 GB DRAM per chip). Each layer's forward re-writes the same columns (idempotent).
+        key = (id(self.device), int(seq_global), int(cap), int(carry), int(self.head_dim), str(self.dtype))
+        shared = _TtHCABase._SHARED_DENSE_MASKS.get(key)
+        if shared is not None:
+            self._mask, self._mask_col, self._kv_pad, self._carry_cols = shared
+            return
         sp_mapper = self._mesh_mapper(sp_dim=2)
 
         ic = self._from_torch(torch.arange(seq_global).float().view(1, 1, seq_global, 1), sp_mapper, dtype=ttnn.float32)
@@ -631,6 +644,7 @@ class TtHCA(_TtHCABase):
                 self.dtype,
             ),
         }
+        _TtHCABase._SHARED_DENSE_MASKS[key] = (self._mask, self._mask_col, self._kv_pad, self._carry_cols)
 
     def alloc_state(
         self, max_seq_len: int, batch: int = 1, chunk_tokens: int | None = None, slot: int = 0
