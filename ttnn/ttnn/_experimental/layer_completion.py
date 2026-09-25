@@ -3,10 +3,11 @@
 
 from ttnn._ttnn.layer_completion import (
     LayerCompletionQueue,
+    LayerCompletionQueueV2,
     LayerCompletionRouter,
 )
 
-__all__ = ["LayerCompletionQueue", "LayerCompletionRouter"]
+__all__ = ["LayerCompletionQueue", "LayerCompletionQueueV2", "LayerCompletionRouter"]
 
 # Test-only scheduler stand-in: registered only in TTNN_BUILD_TESTS builds, so it is absent from a
 # shipped wheel. Importing it must not take the production ring/router down with it.

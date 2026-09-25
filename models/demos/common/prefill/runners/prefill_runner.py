@@ -15,6 +15,11 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, PrefillRunParams, get_adapter
+from models.demos.common.prefill.runners.layer_completion_drainer import current_protocol
+from models.demos.common.prefill.runners.layer_completion_sink import (
+    build_layer_completion_sink,
+    build_layer_completion_sink_v2,
+)
 from models.demos.common.prefill.runners.migration import (
     is_per_host_storage,
     migration_file_export_enabled,
@@ -106,49 +111,22 @@ def _handle_sigterm(signum, frame):
     _shutdown = True
 
 
-LAYER_COMPLETION_PUSH_SPIN_TIMEOUT_S = float(os.environ.get("PREFILL_LAYER_COMPLETION_PUSH_TIMEOUT_S", 30.0))
-LAYER_COMPLETION_PUSH_SPIN_LOG_EVERY_S = 10.0
-LAYER_COMPLETION_PUSH_SPIN_SLEEP_S = 0.001
+# ---------------------------------------------------------------------------
+# Layer-completion routing
+# ---------------------------------------------------------------------------
 
+# The sink implementations (polymorphic LayerCompletionSink: v1 count protocol and v2 structured
+# protocol) and the shared full-ring backpressure policy live in layer_completion_sink.py.
 
-def build_layer_completion_sink(producer, *, source_rank, num_layers, ack_idx_of_layer=None):
-    """`num_layers` and `ack_idx_of_layer` are in ACK space; see the routing block in main().
-
-    The callback is handed a GLOBAL layer index, and `layer_idx` stays global in the pushed record
-    because the router addresses the KV stage with it. Only `seq` is translated.
-    """
-
-    def on_layer_complete(layer_idx: int, request_id: int) -> None:
-        ack_idx = layer_idx if ack_idx_of_layer is None else ack_idx_of_layer[layer_idx]
-        seq = request_id * num_layers + ack_idx
-        if producer.try_push(seq=seq, source_rank=source_rank, layer_idx=layer_idx, request_id=request_id):
-            return
-
-        start = time.monotonic()
-        next_log = start + LAYER_COMPLETION_PUSH_SPIN_LOG_EVERY_S
-        logger.warning(
-            f"[layer-completion] ring full (seq={seq}); spinning up to "
-            f"{LAYER_COMPLETION_PUSH_SPIN_TIMEOUT_S:.0f}s for router to drain"
-        )
-        while True:
-            if producer.try_push(seq=seq, source_rank=source_rank, layer_idx=layer_idx, request_id=request_id):
-                logger.info(f"[layer-completion] ring drained after {time.monotonic() - start:.1f}s; pushed seq={seq}")
-                return
-            if _shutdown:
-                raise RuntimeError(f"layer-completion ring full (seq={seq}); shutdown requested while spinning")
-            now = time.monotonic()
-            if now - start >= LAYER_COMPLETION_PUSH_SPIN_TIMEOUT_S:
-                logger.error(f"[layer-completion] gave up after {now - start:.1f}s spinning on full ring (seq={seq})")
-                raise RuntimeError(
-                    f"layer-completion ring full (seq={seq}); router not draining after "
-                    f"{LAYER_COMPLETION_PUSH_SPIN_TIMEOUT_S:.0f}s"
-                )
-            if now >= next_log:
-                logger.warning(f"[layer-completion] still spinning on full ring (seq={seq}) after {now - start:.0f}s")
-                next_log += LAYER_COMPLETION_PUSH_SPIN_LOG_EVERY_S
-            time.sleep(LAYER_COMPLETION_PUSH_SPIN_SLEEP_S)
-
-    return on_layer_complete
+# Completion protocol (issue #54632), selected once per job — never mixed within a run. Both
+# protocols use the SAME scheduler-facing shm name (/tt_prefill_layer_acks_<service_id>); the
+# protocol decides what the master router creates there:
+#   1 (default): a counter channel — the master reorders by seq and emits only a COUNT. The
+#       scheduler correlates ticks with its in-order chunk FIFO (per-request HoL blocking).
+#   2: a structured ring — every completion is self-describing (request/slot/position range/layer
+#       range); the master forwards as-arrived (no HoL). See layer_completion_sink.py.
+# Parsed and validated by the drainer, so the runner and the consumer cannot disagree.
+LAYER_COMPLETION_PROTOCOL = current_protocol()
 
 
 def _decode_metadata(metadata_msg) -> dict:
@@ -594,7 +572,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     # that the migration layer needs before it can report WORKER_READY to wait_ready() below.
     use_d2h = os.environ.get("PREFILL_LAYER_ACK_D2H", "0") == "1"
 
-    from ttnn._experimental.layer_completion import LayerCompletionQueue, LayerCompletionRouter
+    from ttnn._experimental.layer_completion import LayerCompletionQueue, LayerCompletionQueueV2, LayerCompletionRouter
 
     ring_base = os.environ.get("PREFILL_LAYER_COMPLETION_RING", "/tt_prefill_layer_completion_ring")
     ring_shm_name = f"{ring_base}_{rank}"
@@ -606,8 +584,9 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         world_size=num_ranks,
         master_rank=master_rank,
         ring_shm_name=ring_shm_name,
-        scheduler_channel_shm_name=ack_shm_name if rank == master_rank else "",
+        scheduler_shm_name=ack_shm_name if rank == master_rank else "",
         teardown_timeout_ms=30000,
+        protocol=LAYER_COMPLETION_PROTOCOL,
     )
     # ACK space, not layer space, and for BOTH transports below. Each derives a record's identity
     # from a plain dense counter -- LayerAckService from
@@ -616,10 +595,14 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     # next_expected_ by exactly 1 per drained record. So both must count records this rank actually
     # EMITS, not layers it holds. A hybrid stack acks only on KV-writing layers (`block.py` gates
     # the ack on `attention.writes_kv`), so a 24-layer Kimi-K3 rank emits 6 records per chunk
-    # against a configured 24: on the D2H transport four real chunks are then labelled as one and
-    # every layer_idx and request_id is fabricated, and on the host transport the global indices
-    # {3,7,11,...} leave seq 0 never sent, so nothing ever drains.
-    # Dense models have one ack per layer, so acks == layers and this is a no-op for them.
+    # against a configured 24: on the D2H transport four real chunks are then labelled as one, and
+    # on the host transport the global indices {3,7,11,...} leave seq 0 never sent, so nothing ever
+    # drains. Dense models have one ack per layer, so acks == layers and this is a no-op for them.
+    #
+    # `layer_idx` is the exception: it must stay GLOBAL on BOTH transports (the router addresses the
+    # KV stage with it). The host sink is handed the true index; D2H reconstructs it from
+    # `ack_layer_ids` below, and cross-checks the record's own {slot_id, actual_start, actual_end}
+    # to catch a dropped record rather than silently relabelling from there on.
     #
     # Derived here rather than taken from main(): this is a separate function and main()'s
     # `layer_split` is not in its scope. The migration block below reads the layer-space pair.
@@ -636,6 +619,16 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         ]
         ack_idx_of_layer = {layer: idx for idx, layer in enumerate(ack_layer_ids)}
     num_ack_layers = sum(acks_per_rank)
+    # This rank's ACK records as GLOBAL layer indices, in emission order. The D2H transport
+    # derives a record's position from a counter, so without this map its `layer_idx` would be
+    # an ACK index while the host transport puts the global layer in the same field -- the two
+    # transports would disagree on what that field means for every hybrid model. Empty for a
+    # dense model, where ack index already IS the global layer.
+    my_ack_layer_ids = (
+        []
+        if ack_layer_ids is None
+        else [layer for layer in ack_layer_ids if first_layer_idx <= layer < first_layer_idx + num_my_layers]
+    )
     # Distinct names: `first_layer_idx` / `num_my_layers` are rebound in LAYER space by the
     # migration block further down, and ack indices addressing a KV stage would be silently wrong
     # (6/12/18 instead of 24/48/72 on Kimi-K3).
@@ -657,6 +650,10 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             worker_cores=SYNC_WORKER_CORES,
             metadata_size_bytes=METADATA_SIZE_BYTES,
         )
+        # Both protocols are served from here: the D2H record already carries the chunk's
+        # {slot_id, actual_start, actual_end} (it IS the chunk's metadata tensor, forwarded by
+        # the device-side ack op), so under v2 LayerAckService emits that identity instead of
+        # discarding it, and under either protocol it uses it to detect a dropped record.
         layer_ack_service = ttnn.LayerAckService(
             d2h_service,
             ring_shm_name,
@@ -664,6 +661,8 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             num_layers=num_ack_layers,
             first_layer_idx=ack_first_idx,
             local_layers=ack_local_count,
+            ack_layer_ids=my_ack_layer_ids,
+            protocol=LAYER_COMPLETION_PROTOCOL,
         )
         if runtime.config.use_trace:
             runtime.set_d2h_ack_service(d2h_service)
@@ -671,26 +670,40 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             layer_ack_service.start()
         source_desc = "D2H device records"
     else:
+        # Host-callback transport. DELIBERATELY RETAINED alongside D2H, not a fallback:
+        #   * it is the only path MiniMax-M3 and GPT-OSS have (both raise NotImplementedError on
+        #     a d2h_service -- their ack seam is a plain callback in the Python forward loop, with
+        #     no device-side ack op to carry a record);
+        #   * it is the reference semantics for `layer_idx` and for the v2 span, since it is handed
+        #     the true global layer rather than reconstructing one from a counter;
+        #   * it needs no trace coupling (D2H must be registered via set_d2h_ack_service() before
+        #     capture_trace(), and its warm-up records drained afterwards).
+        # Its cost is a ttnn.synchronize_device per KV-writing layer when untraced (kv_ack.py) --
+        # which is what D2H buys back. Keep both until every prefill runtime has a device ack op.
         if getattr(runtime, "set_layer_completion_sink", None) is None:
             raise RuntimeError(
                 f"runtime {type(runtime).__name__} does not implement set_layer_completion_sink(sink), "
                 "which the layer-ack path requires at every rank count "
                 "(see docs/ADDING_A_PREFILL_MODEL.md)."
             )
-        producer = LayerCompletionQueue.connect(ring_shm_name, connect_timeout_ms=30000)
+        queue_cls = LayerCompletionQueueV2 if LAYER_COMPLETION_PROTOCOL == 2 else LayerCompletionQueue
+        sink_factory = build_layer_completion_sink_v2 if LAYER_COMPLETION_PROTOCOL == 2 else build_layer_completion_sink
+        producer = queue_cls.connect(ring_shm_name, connect_timeout_ms=30000)
         runtime.set_layer_completion_sink(
-            build_layer_completion_sink(
+            sink_factory(
                 producer,
                 source_rank=rank,
                 num_layers=num_ack_layers,
                 ack_idx_of_layer=ack_idx_of_layer,
+                is_shutdown=lambda: _shutdown,
             )
         )
         source_desc = "host on_layer_complete callback"
     logger.info(
-        f"[migration] layer-completion routing up: rank={rank}/{num_ranks} master={master_rank} "
+        f"[migration] layer-completion routing up (v{LAYER_COMPLETION_PROTOCOL}): "
+        f"rank={rank}/{num_ranks} master={master_rank} "
         f"ring={ring_shm_name} source={source_desc} "
-        + (f"(owns scheduler channel {ack_shm_name})" if rank == master_rank else "(subordinate -> master)")
+        + (f"(owns scheduler shm {ack_shm_name})" if rank == master_rank else "(subordinate -> master)")
     )
 
     migration_endpoint = None

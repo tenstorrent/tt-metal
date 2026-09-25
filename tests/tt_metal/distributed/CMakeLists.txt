@@ -19,6 +19,8 @@ set(DISTRIBUTED_UNIT_TEST_SOURCES
     test_mesh_trace.cpp
     test_thread_pool.cpp
     test_dispatch_context.cpp
+    test_layer_completion_ring.cpp
+    test_layer_completion_router.cpp
     utils.cpp
 )
 # MPI sub-context tests require the MPI distributed build (matches tt_metal/distributed USE_MPI).

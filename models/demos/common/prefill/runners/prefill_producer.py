@@ -19,6 +19,10 @@ from loguru import logger
 
 import ttnn
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
+from models.demos.common.prefill.runners.layer_completion_drainer import (
+    connect_layer_completion_channel,
+    drain_layer_completions,
+)
 from models.demos.common.prefill.runners.migration import (
     is_per_host_storage,
     migration_table_path,
@@ -225,39 +229,6 @@ def _read_device_map(timeout_s: int, rank: int | None = None, num_ranks: int = 1
     if len(files) > 1:
         logger.info(f"[producer] merged {len(files)} device maps: {len(device_map)} chips total")
     return device_map
-
-
-def _connect_layer_ack_channel(timeout_s: int):
-    service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
-    shm_name = f"/tt_prefill_layer_acks_{service_id}"
-    try:
-        channel = ttnn.InterProcessCounterChannel.connect(shm_name, connect_timeout_ms=timeout_s * 1000)
-    except Exception as e:
-        logger.warning(f"[producer] could not connect LayerAck channel {shm_name}: {e}; skipping ack wait.")
-        return None
-    logger.info(f"[producer] connected LayerAck channel {shm_name}")
-    return channel
-
-
-def _drain_layer_acks(ack_channel, expected: int, timeout_s: float = 600.0) -> int:
-    if ack_channel is None:
-        return 0
-    drained = 0
-    last_logged = -1
-    start = time.perf_counter()
-    while drained < expected:
-        drained += ack_channel.try_consume_all()
-        if drained != last_logged:
-            logger.info(f"[producer] layer acks {drained}/{expected}")
-            last_logged = drained
-        if drained >= expected:
-            break
-        if time.perf_counter() - start > timeout_s:
-            logger.warning(f"[producer] timed out at {drained}/{expected} acks after {timeout_s}s")
-            break
-        time.sleep(0.01)
-    logger.info(f"[producer] drained {drained}/{expected} layer acks in {(time.perf_counter() - start):.2f}s")
-    return drained
 
 
 def _decode_bfp8_chunk(raw: bytes, head_dim: int) -> torch.Tensor:
@@ -1202,8 +1173,10 @@ def main() -> None:
 
     kv_table = _read_kv_chunk_table(timeout_s) if cfg.verify else None
 
-    ack_channel = _connect_layer_ack_channel(timeout_s) if cfg.verify else None
-    if cfg.verify and ack_channel is None:
+    # If we're not performing golden trace PCC-validation, then don't consume these and allow loopback
+    # migration test in prefill_runner.py to consume acks and perform the testing of loopback migration
+    completion_channel = connect_layer_completion_channel(timeout_s) if cfg.verify else None
+    if cfg.verify and completion_channel is None:
         logger.error(
             "[producer] CHECK_PCC=1 but LayerAck channel missing — UMD read would race the runner's "
             "prefill (H2D push return ≠ layers done). The master rank always owns this channel, so "
@@ -1236,8 +1209,8 @@ def main() -> None:
         for cidx in range(warmup_chunks):
             push_chunk(0, cidx, cidx * CHUNK_SIZE, (cidx + 1) * CHUNK_SIZE)
         service.barrier()
-        if ack_channel is not None:
-            _drain_layer_acks(ack_channel, NUM_ACK_LAYERS * warmup_chunks)
+        if completion_channel is not None:
+            drain_layer_completions(completion_channel, NUM_ACK_LAYERS * warmup_chunks)
         logger.info("[producer] warmup complete; starting the measured request")
 
     stats = run_schedule(cfg, push_fn=push_chunk)
@@ -1252,7 +1225,10 @@ def main() -> None:
         f"p99={_percentile(sorted_ms, 0.99):.1f}"
     )
 
-    _drain_layer_acks(ack_channel, NUM_ACK_LAYERS * stats.total_pushes)
+    # Wait for the runner's per-layer completions: one per ACK layer per chunk, for every chunk
+    # pushed. A hybrid stack acks only on KV-writing layers, so this is NUM_ACK_LAYERS, not
+    # NUM_LAYERS (6, not 24, on a 24-layer Kimi-K3 rank).
+    drain_layer_completions(completion_channel, NUM_ACK_LAYERS * stats.total_pushes)
 
     if world_size > 1:
         _mr_bcast_resident(mr_rank, stats.resident)
