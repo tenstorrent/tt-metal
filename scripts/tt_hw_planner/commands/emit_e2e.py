@@ -1310,6 +1310,53 @@ def _batch_gate_reason(requested: int, test_output: str) -> Optional[str]:
     return f"G3 batch: --batch {requested} was requested but tests/e2e drove {served} samples; {how}"
 
 
+# The gate's hang wall. Absolute when the operator names one; otherwise proportional to the work
+# the gate was TOLD to do, because that is the thing this tool now varies.
+_GATE_WALL_ENV = "E2E_GATE_HANG_TIMEOUT"
+_GATE_WALL_PER_SAMPLE_S = 2700  # unchanged since 2026-07-04 -- what the wall has always been at B=1
+
+
+def _gate_wall_s(batch: int) -> int:
+    """Seconds the e2e gate may run before it is called a hang.
+
+    A FLAT WALL AND AN ENFORCED --batch CANNOT BOTH HOLD. The wall was added on 2026-07-04 to catch
+    a fabric wedge "in minutes not hours", and 2700 s was generous then because the gate ran at
+    whatever small batch the test happened to type. Since the gate began ENFORCING --batch, the work
+    behind that wall is set by the caller: Qwen-Image-Edit measures 16.06 s per scheduler step at
+    B=4 and 120 s at B=32, so the same 50-step schedule that finishes in ~15 min at B=4 needs
+    ~100 min at B=32. The flat wall then kills a HEALTHY run mid-gate and reports
+    "exceeded 2700s with no verdict (likely device/fabric hang)" -- a hardware verdict on hardware
+    that was fine, after hours of builder work.
+
+    So the default scales with the batch and the operator's own value stays absolute:
+
+      * E2E_GATE_HANG_TIMEOUT set -> exactly that, unscaled. Somebody who asks for a tight wall gets
+        one, and the meaning of the variable does not change under them.
+      * unset -> the per-sample budget times the batch. At B=1 that is 2700, bit-identical to every
+        run before this change.
+
+    The caller's own budget still bounds it (the min() at the call site), so this can only ever
+    tighten toward timeout_s, never exceed it.
+
+    NOT the end of it: a wall of any size cannot tell "hung" from "slow". agent.probes._execute
+    already solves that properly -- it kills only when the log has stopped growing AND the process
+    group has burned no CPU, keeping timeout_s as the absolute backstop. Moving this gate onto it
+    is the right fix; it is not done here because this gate's four tests stub subprocess.run and
+    the swap would break them, which is a change worth making on its own.
+    """
+    override = os.environ.get(_GATE_WALL_ENV)
+    if override:
+        try:
+            return int(override)
+        except ValueError:
+            pass
+    try:
+        b = max(1, int(batch or 1))
+    except (TypeError, ValueError):
+        b = 1
+    return _GATE_WALL_PER_SAMPLE_S * b
+
+
 def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int, batch: int = 1):
     """Model-agnostic gate runner: G1 native, G2/G3 (run tests/e2e), G4 demo/ structure. Returns (ok, reasons).
 
@@ -1431,7 +1478,7 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int, batch: 
 
         gate_env[BATCH_ENV] = str(batch)
     pytest_out = ""
-    hang_timeout = min(int(timeout_s), int(os.environ.get("E2E_GATE_HANG_TIMEOUT", "2700")))
+    hang_timeout = min(int(timeout_s), _gate_wall_s(batch))
     gate_tests = [f for f in test_files if "perf" not in f.name] or test_files
     try:
         proc = subprocess.run(
