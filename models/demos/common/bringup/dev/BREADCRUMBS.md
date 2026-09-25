@@ -104,3 +104,26 @@ Drive this ledger with
   ERNIE run and this build, `knowledge/check.py` format check. `plan/opportunities.py` ranks profiled sections by
   device ms and attaches matching repo-map rows and performance known issues; it never overwrites a list with picks.
 - `tests/test_box.py`: mesh opens, all_gather exact and all_reduce error per axis, DRAM per chip.
+
+## F6 (2026-09-25): orchestrator, agent definition, briefs, intake
+- `orchestrator.py run|resume`: one process runs the ledger in dependency order. Scripted steps (goldens, box, integrate,
+  perf) run their gate and hand a failure to a `fix` agent. Agent steps write a brief (`briefs/brief.md` + role text from
+  `briefs/roles.yaml`) and start a fresh `claude -p --output-format stream-json --agents <run>/agents.json --agent
+  bringup-engineer`. Tests are rendered, reviewed by the test role and frozen before the implement role starts. Three
+  failed attempts -> WIP commit `[<tag>][<id>][wip]` -> `ttnn-expert-debugger` (the repo's own agent) with the WIP sha,
+  logs and triage, three attempts -> STOPPED (exit 1). The plan waits for `approve plan` and X.2 waits for picks (exit 3).
+- The agent definition lives in `agents/bringup-engineer.md` and is passed with `--agents`, so nothing under `.claude/`
+  changes. Each agent run is recorded under the task: role, attempt, session id, model, problems, and the blob hashes
+  of the definition and brief templates (for `compare` after a fork).
+- After every agent run: the tree diff must stay inside the brief's allowed paths (snapshot of `git status` before and
+  after, content-hashed; generated/, probes and caches ignored), the stream-json Bash log must not reach the device except
+  through the safe runners (direct pytest, or python on a file / heredoc / -c importing ttnn), and known_issues.md must keep
+  its format. Any problem fails the attempt even if the gate passes.
+- `BRINGUP_AGENT_CMD` swaps the CLI; `selftest/mock_agent.py` is a scripted stand-in. 11 orchestrator tests cover pass,
+  retry with the previous failure in the brief, debugger hand-over and rescue, STOPPED and resume, plan approval, picks,
+  path and device-command violations.
+- `new --model --hf-id` scaffolds `models/demos/<model>/bringup/` (spec template, hooks skeleton, breadcrumbs).
+  `ledger_gen --early --write` writes R, G, B and PL.0; PL.0 runs `ledger_gen --extend` after R.3, when the block
+  graphs exist, and appends the C, S, L, K, X tasks.
+- `skill/bringup/SKILL.md`: the conversational intake. It is not installed under `.claude/skills/` (shared config); it
+  needs the owner's go-ahead to copy or link it there.
