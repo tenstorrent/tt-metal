@@ -84,6 +84,7 @@ public:
         // whether it was worth issuing. pending_max bounds any batching threshold we pick.
         uint64_t flushes = 0;
         uint64_t flushes_tiny = 0;    // covered less than one page: paid in full for nothing
+        uint64_t flushes_held = 0;    // withheld: below the watermark and more was coming
         uint64_t pending_sum = 0;     // bytes covered, summed over every flush
         uint64_t pending_max = 0;     // most bytes a single flush ever covered
         uint64_t flush_ns = 0;        // time inside flush_dirty(); zero unless collect_timing

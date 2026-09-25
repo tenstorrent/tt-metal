@@ -119,6 +119,9 @@ struct H2HSocket::Impl {
         uint32_t dest_core = 0;
         uint32_t slot = 0;
         uint64_t src_off = 0;
+        // The flush count this put was issued under. A flush may now span several passes,
+        // so the pass boundary no longer proves visibility -- this does.
+        uint64_t epoch = 0;
     };
     // 1 tx_queue per core. A shared tx_queue lets a core waiting on credit park every other
     // core's sends behind it, which is the stall the previous design fixed the same way.
@@ -174,11 +177,37 @@ struct H2HSocket::Impl {
         }
     }
 
+    // 768 KiB: a flush is a fixed ~7.2 us round trip, and at the measured 12.18 GB/s
+    // marginal rate that many bytes puts its cost near 10% of the transfer -- 55 frames at
+    // 14 KB, 3 at 256 KB. Bytes rather than frames so one constant spans the whole sweep.
+    static constexpr uint64_t kFlushWatermark = 768u * 1024u;
+    // A pass holds this back only while more is coming. Nothing queued means the batch is
+    // as large as it will get, so a lone frame still sees one flush, as it did before.
+    static constexpr auto kFlushDeadline = std::chrono::microseconds(50);
+
+    uint64_t watermark = kFlushWatermark;
+    std::vector<std::chrono::steady_clock::time_point> first_pending;
+    // Bumped only AFTER a flush returns, so epoch < flush_epoch[h] means that put's bytes
+    // are on the peer. Nothing else can say so once flushes are withheld.
+    std::vector<uint64_t> flush_epoch;
+
+    void mark_pending(uint32_t host, uint64_t bytes) {
+        if (pending[host] == 0) {
+            first_pending[host] = std::chrono::steady_clock::now();
+        }
+        pending[host] += bytes;
+    }
+
     // Payload and credit puts alike are flush_local only, so nothing is visible on the peer
-    // until this runs. Batched per peer: a flush is a round trip, so an idle one is latency.
-    void flush_dirty() {
+    // until this runs. force is passed when nothing more is queued, and on teardown.
+    void flush_dirty(bool force) {
+        const auto now = std::chrono::steady_clock::now();
         for (uint32_t h = 0; h < cfg.topo.num; ++h) {
             if (pending[h] == 0) {
+                continue;
+            }
+            if (!force && pending[h] < watermark && now - first_pending[h] < kFlushDeadline) {
+                ++stats.flushes_held;
                 continue;
             }
             ++stats.flushes;
@@ -191,6 +220,7 @@ struct H2HSocket::Impl {
             if (const std::string e = win->flush(h); !e.empty()) {
                 fail("h2h: " + e);
             }
+            ++flush_epoch[h];
         }
     }
 
@@ -364,6 +394,13 @@ std::unique_ptr<H2HSocket> H2HSocket::create(const Config& cfg, std::string& err
     im.tx_trailer.reset(cfg.cores, cfg.ring_pages);
     im.tx_flight.reset(cfg.cores, cfg.ring_pages);
     im.pending.assign(cfg.topo.num, 0);
+    im.first_pending.assign(cfg.topo.num, std::chrono::steady_clock::time_point{});
+    im.flush_epoch.assign(cfg.topo.num, 0);
+    // Capped at a quarter of what can be outstanding: holding more than the rings can hold
+    // would stall waiting for bytes that cannot arrive until we publish the ones we have.
+    const uint64_t in_flight_cap =
+        static_cast<uint64_t>(cfg.cores) * cfg.ring_pages * cfg.page_bytes;
+    im.watermark = std::min<uint64_t>(Impl::kFlushWatermark, std::max<uint64_t>(in_flight_cap / 4, 1));
     if (cfg.collect_timing) {
         // Sized by cfg.cores, not kProvisionedCores: a 4-core run should not carry 128.
         im.put_at.assign(per_peer * cfg.ring_pages, std::chrono::steady_clock::time_point{});
@@ -405,10 +442,11 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
     const uint64_t posts_before = im.stats.posts;
     bool credit_blocked = false;
 
-    // flush_dirty() ran at the end of last pass, so these are remotely visible -- that, not
-    // test(), is the license. test() is still required: it is what returns the request slot.
+    // A flush can now span several passes, so the epoch -- not the pass boundary -- is what
+    // says these bytes are on the peer. test() is still required: it returns the request slot.
     for (uint32_t c = 0; c < im.cfg.cores; ++c) {
-        while (!im.tx_payload.empty(c) && im.win->test(im.tx_payload.front(c).op)) {
+        while (!im.tx_payload.empty(c) && im.flush_epoch[im.tx_payload.front(c).host] > im.tx_payload.front(c).epoch &&
+               im.win->test(im.tx_payload.front(c).op)) {
             (void)im.tx_trailer.push_back(c, im.tx_payload.front(c));
             im.tx_payload.pop_front(c);
         }
@@ -430,7 +468,9 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
                 im.fail("h2h: " + e);
                 break;
             }
-            im.pending[f.host] += kFrameTrailerBytes;
+            // Re-stamped: retirement below waits on the TRAILER's flush, not the payload's.
+            f.epoch = im.flush_epoch[f.host];
+            im.mark_pending(f.host, kFrameTrailerBytes);
             ++im.stats.trailer_puts;
             (void)im.tx_flight.push_back(c, f);
             im.tx_trailer.pop_front(c);
@@ -444,7 +484,8 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
     // Retire on the TRAILER's completion: the frame is not delivered until the guard is out,
     // and the D2H page behind it must outlive both puts. Front only, per core.
     for (uint32_t c = 0; c < im.cfg.cores; ++c) {
-        while (!im.tx_flight.empty(c) && im.win->test(im.tx_flight.front(c).op)) {
+        while (!im.tx_flight.empty(c) && im.flush_epoch[im.tx_flight.front(c).host] > im.tx_flight.front(c).epoch &&
+               im.win->test(im.tx_flight.front(c).op)) {
             im.tx_flight.pop_front(c);
             --im.in_flight;
             if (retire) {
@@ -515,7 +556,8 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
             im.put_at_of(dest_core, host, im.posted_at(dest_core, host)) = std::chrono::steady_clock::now();
         }
         im.posted_at(dest_core, host)++;
-        im.pending[host] += t.page_bytes - kFrameTrailerBytes;
+        f.epoch = im.flush_epoch[host];
+        im.mark_pending(host, t.page_bytes - kFrameTrailerBytes);
         (void)im.tx_payload.push_back(t.core, f);
         ++im.in_flight;
         ++im.stats.posts;
@@ -535,7 +577,12 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
     // pass of a run that asked for none, and the split says which half of a pass to go after.
     const auto flush_t0 =
         im.cfg.collect_timing ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-    im.flush_dirty();
+    // Two ways the batch stops growing: no supply (nothing queued) or no room (every core
+    // credit-gated, so this pass posted nothing). Holding past either only delays the peer,
+    // whose credit cannot come back until we publish what it is waiting on.
+    const bool no_supply = im.tx_queued == 0;
+    const bool no_room = credit_blocked && im.stats.posts == posts_before;
+    im.flush_dirty(no_supply || no_room);
     if (im.cfg.collect_timing) {
         im.stats.flush_ns += static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - flush_t0).count());
@@ -645,7 +692,7 @@ void H2HSocket::consumed(uint32_t core, uint32_t pages) {
             im.fail("h2h: done: " + e);
             return;
         }
-        im.pending[host] += 2 * sizeof(uint64_t);
+        im.mark_pending(host, 2 * sizeof(uint64_t));
         im.stats.credit_puts += 2;
     }
     // More consumed than delivered means the two legs disagree about what was handed over.
@@ -674,7 +721,7 @@ uint64_t H2HSocket::credit_total(uint32_t core) const {
 }
 
 std::string H2HSocket::barrier() {
-    impl_->flush_dirty();
+    impl_->flush_dirty(true);
     return impl_->win->barrier();
 }
 bool H2HSocket::failed() const { return impl_->broken; }

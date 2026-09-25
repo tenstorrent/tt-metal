@@ -75,6 +75,7 @@ void init_counters(benchmark::State& state) {
     state.counters["pending_avg_kb"] = 0;
     state.counters["pending_max_kb"] = 0;
     state.counters["tiny_flush_pct"] = 0;
+    state.counters["held_pct"] = 0;
     state.counters["starved_credit_pct"] = 0;
     state.counters["starved_empty_pct"] = 0;
     state.counters["puts_per_frame"] = 0;
@@ -108,6 +109,7 @@ struct RankReport {
     double pending_avg_kb = 0.0;
     double pending_max_kb = 0.0;
     double tiny_flush_pct = 0.0;
+    double held_pct = 0.0;
     double starved_credit_pct = 0.0;
     double starved_empty_pct = 0.0;
     double puts_per_frame = 0.0;
@@ -356,6 +358,8 @@ BENCHMARK_DEFINE_F(D2H2H2DFixture, Volume)(benchmark::State& state) {
                     static_cast<double>(ps.pending_sum) / static_cast<double>(ps.flushes) / 1024.0;
                 local.tiny_flush_pct =
                     100.0 * static_cast<double>(ps.flushes_tiny) / static_cast<double>(ps.flushes);
+                local.held_pct = 100.0 * static_cast<double>(ps.flushes_held) /
+                                 static_cast<double>(ps.flushes + ps.flushes_held);
             }
             if (ps.starved != 0) {
                 local.starved_credit_pct =
@@ -450,6 +454,7 @@ BENCHMARK_DEFINE_F(D2H2H2DFixture, Volume)(benchmark::State& state) {
         state.counters["pending_avg_kb"] = tx.pending_avg_kb;
         state.counters["pending_max_kb"] = tx.pending_max_kb;
         state.counters["tiny_flush_pct"] = tx.tiny_flush_pct;
+        state.counters["held_pct"] = tx.held_pct;
         state.counters["starved_credit_pct"] = tx.starved_credit_pct;
         state.counters["starved_empty_pct"] = tx.starved_empty_pct;
         state.counters["puts_per_frame"] = tx.puts_per_frame;
