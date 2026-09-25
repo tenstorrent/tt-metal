@@ -142,7 +142,7 @@ public:
         tail_ = ring_buffer_;
     }
     // Push task to queue (writer).
-    void push(std::function<void()>&& task) {
+    void push(ttsl::move_only_function<void()>&& task) {
         // Stall condition: this push will update the tail (wptr)
         // to match the location of head (rptr). The current push can
         // thus overwrite data that's being read. Stall until head
@@ -154,7 +154,7 @@ public:
         tail_.store(tail_.load()->next);
     }
     // Pop task from queue (reader).
-    std::function<void()>&& pop() {
+    ttsl::move_only_function<void()>&& pop() {
         TaskQueue::Node* old_head = pop_head();
         return std::move(old_head->data);
     }
@@ -162,7 +162,7 @@ public:
 private:
     // Node object, representing a slot in the queue.
     struct Node {
-        std::function<void()> data;
+        ttsl::move_only_function<void()> data;
         Node* next = nullptr;
     };
     // Read and write pointers for managing the queue.
@@ -202,7 +202,7 @@ public:
         // Set the priority for this process to 0 (niceness value in linux)
         thread_binding::set_process_priority(0);
         worker = std::thread([this]() {
-            std::function<void()> task;  // Task container for this thread
+            ttsl::move_only_function<void()> task;  // Task container for this thread
             while (true) {
                 {
                     // Spin briefly so back-to-back tasks are picked up without entering the kernel,
@@ -257,7 +257,7 @@ public:
         worker.join();
     }
 
-    void enqueue(std::function<void()>&& f) {
+    void enqueue(ttsl::move_only_function<void()>&& f) {
         tasks_.push(std::move(f));  // Move the task directly into queue
         // Light-Weight counter increment to track the number of tasks in flight
         task_counter_.fetch_add(1, std::memory_order_relaxed);
@@ -330,7 +330,7 @@ public:
         }
     }
 
-    void enqueue(std::function<void()>&& f, std::optional<uint32_t> device_idx = std::nullopt) override {
+    void enqueue(ttsl::move_only_function<void()>&& f, std::optional<uint32_t> device_idx = std::nullopt) override {
         // If the user does not provide the Device ID tied to this task, determine the thread to use
         // based on the internally stored thread_idx. Tasks will get round-robined across threads,
         // when relying on the thread_idx.
@@ -373,7 +373,9 @@ private:
 class PassThroughThreadPool : public ThreadPool {
 public:
     PassThroughThreadPool() = default;
-    void enqueue(std::function<void()>&& f, std::optional<uint32_t> /*device_idx*/ = std::nullopt) override { f(); }
+    void enqueue(ttsl::move_only_function<void()>&& f, std::optional<uint32_t> /*device_idx*/ = std::nullopt) override {
+        f();
+    }
     void wait() override {}
 };
 

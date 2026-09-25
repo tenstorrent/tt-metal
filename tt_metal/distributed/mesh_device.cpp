@@ -526,7 +526,9 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
     return mesh_device;
 }
 
-void MeshDeviceImpl::enqueue_to_thread_pool(std::function<void()>&& f) { dispatch_thread_pool_->enqueue(std::move(f)); }
+void MeshDeviceImpl::enqueue_to_thread_pool(ttsl::move_only_function<void()>&& f) {
+    dispatch_thread_pool_->enqueue(std::move(f));
+}
 
 void MeshDeviceImpl::wait_for_thread_pool() { dispatch_thread_pool_->wait(); }
 
@@ -2219,7 +2221,9 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDevice::create_submeshes(const Mesh
 MeshCommandQueue& MeshDevice::mesh_command_queue(std::optional<uint8_t> cq_id) const {
     return pimpl_->mesh_command_queue(cq_id);
 }
-void MeshDevice::enqueue_to_thread_pool(std::function<void()>&& f) { pimpl_->enqueue_to_thread_pool(std::move(f)); }
+void MeshDevice::enqueue_to_thread_pool(ttsl::move_only_function<void()>&& f) {
+    pimpl_->enqueue_to_thread_pool(std::move(f));
+}
 void MeshDevice::wait_for_thread_pool() { pimpl_->wait_for_thread_pool(); }
 
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device) { return os << mesh_device.to_string(); }
