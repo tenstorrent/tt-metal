@@ -174,15 +174,60 @@ RESET_FAIL_LIMIT = int(
 )
 
 
+# WHERE THE FAILURE HAPPENED, FOR WHEN NOTHING IT SAYS IS RECOGNISED.
+#
+# DEAD_BOARD_SIGS is an allowlist of PROSE, and the runtime keeps inventing new prose. Four entries
+# above were each added by hand after a run had already been lost to the wording they match, and the
+# list was still one short every time:
+#
+#   "Timed out waiting for ETH heartbeat ... Stuck at 0xaabb0024"   -> added by hand
+#   "Firmware startup error on device N at core X over NOC0"        -> added by hand
+#   "NOC0 is hung on PCIe device ID 9."                             -> added by hand
+#   "Timeout waiting for Ethernet core service remote IO request."  -> NOT matched; 2026-09-25 the
+#       profiler died on it 18 times in a row, each attempt reporting "no ops_perf_results_*.csv",
+#       no reset was ever issued because this returned False, and the run spent its whole budget
+#       recording nothing.
+#
+# An allowlist cannot be completed by adding to it, so this asks a question that does not depend on
+# the wording: WHERE did the failure happen. A test whose SETUP raised a hard runtime fault never
+# reached its body -- and setup, for every test this tool runs, is bringing the device up. A board
+# that cannot be opened is dead whatever the runtime chose to call it.
+#
+# Deliberately conservative in three ways: it needs pytest's own setup-error report (so an ordinary
+# failure inside a test body can never reach it), it needs a HARD fault class (an ImportError or a
+# missing-file error at setup is a host problem and stays unmatched), and it only ever ADDS to the
+# allowlist -- every signature that matched before still matches first, unchanged.
+_SETUP_FAILURE_REPORT = "error at setup of"  # pytest's own report line; not our vocabulary
+_HARD_FAULT_RE = re.compile(r"\b(RuntimeError|TT_FATAL|TT_THROW|TT_ASSERT)\b", re.IGNORECASE)
+
+
+def is_device_bringup_failure(text) -> bool:
+    """Did this failure happen while the DEVICE was being brought up, whatever it was called?
+
+    Structural, not lexical: pytest reports a fixture failure as "ERROR at setup of <node>", and
+    the only thing a perf/PCC test does in setup is open the mesh. A hard runtime fault there means
+    the device did not come up, so the board needs recovery before any retry can differ.
+    """
+    s = str(text) or ""
+    if _SETUP_FAILURE_REPORT not in s.lower():
+        return False
+    return bool(_HARD_FAULT_RE.search(s))
+
+
 def is_dead_board(text) -> bool:
     """Is this the UNAMBIGUOUS 'the card stopped answering' signature?
 
     A PCIe read of 0xffffffff is all-ones: the bus reporting that nobody replied. There is nothing
     to disambiguate, so waiting for a second occurrence before acting only guarantees being down
     twice. Counters belong on flaky symptoms, not definitive ones.
+
+    A recognised signature answers first; a failure at device BRING-UP answers when none does --
+    see is_device_bringup_failure for why an allowlist of prose cannot be completed by extending it.
     """
     s = (str(text) or "").lower()
-    return any(sig in s for sig in DEAD_BOARD_SIGS)
+    if any(sig in s for sig in DEAD_BOARD_SIGS):
+        return True
+    return is_device_bringup_failure(text)
 
 
 def dead_chip_from_error(text):
