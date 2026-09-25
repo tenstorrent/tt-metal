@@ -1,0 +1,21 @@
+{
+ "metrics": {
+  "pcc_post_attn_norm_L00": {
+   "t": "2026-09-25T23:38:22",
+   "value": 0.99999605270493
+  },
+  "rel_l2_post_attn_norm_L00": {
+   "t": "2026-09-25T23:38:22",
+   "value": 0.0028928208630532026
+  },
+  "row_norm_ratio_max_post_attn_norm_L00": {
+   "t": "2026-09-25T23:38:22",
+   "value": 1.0052497386932373
+  },
+  "row_norm_ratio_min_post_attn_norm_L00": {
+   "t": "2026-09-25T23:38:22",
+   "value": 0.9941047430038452
+  }
+ },
+ "task": "C.sliding.post_attn_norm"
+}
