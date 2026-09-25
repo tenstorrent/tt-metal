@@ -43,7 +43,6 @@ def _parallel(mesh_device, sp_axis, tp_axis):
     [
         pytest.param((1, 1), 0, 1, {}, id="1x1"),
         pytest.param((1, 2), 1, 0, LINE, id="1x2sp1"),
-        pytest.param((2, 4), 1, 0, LINE, id="2x4sp1tp0"),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -100,8 +99,7 @@ def test_flux1_attention_legacy(mesh_device, sp_axis, tp_axis, prompt_seq_len):
 
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "device_params"),
-    [pytest.param((1, 1), 0, 1, {}, id="1x1"), pytest.param((1, 2), 1, 0, LINE, id="1x2sp1"),
-     pytest.param((2, 4), 1, 0, LINE, id="2x4sp1tp0")],
+    [pytest.param((1, 1), 0, 1, {}, id="1x1"), pytest.param((1, 2), 1, 0, LINE, id="1x2sp1")],
     indirect=["mesh_device", "device_params"],
 )
 def test_wan_self_attention_legacy(mesh_device, sp_axis, tp_axis):

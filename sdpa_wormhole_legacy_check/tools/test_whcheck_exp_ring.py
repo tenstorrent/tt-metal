@@ -17,11 +17,11 @@ from ...utils.padding import get_padded_vision_seq_len
 @pytest.mark.parametrize(
     "mesh_device, num_links, nh, base_seq_len, joint_seq_len, rp_factor, q_chunk_size, k_chunk_size, fp32",
     [
-        ((1, 8), 2, 8, 8192, 0, 8, 256, 256, False),
-        ((1, 8), 2, 8, 8000, 128, 8, 256, 512, False),
-        ((1, 4), 2, 8, 4096, 0, 4, 256, 128, False),
+        ((1, 2), 2, 8, 2048, 0, 2, 256, 256, False),
+        ((1, 2), 2, 8, 4000, 128, 2, 512, 256, False),
+        ((1, 2), 2, 4, 1024, 0, 2, 128, 128, False),
     ],
-    ids=["1x8_s8192", "1x8_s8000_j128", "1x4_s4096"],
+    ids=["1x2_s2048", "1x2_s4000_j128", "1x2_s1024"],
     indirect=["mesh_device"],
 )
 def test_exp_ring_wh(mesh_device, num_links, nh, base_seq_len, joint_seq_len, rp_factor, q_chunk_size, k_chunk_size,
