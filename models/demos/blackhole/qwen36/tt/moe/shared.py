@@ -21,11 +21,7 @@ class Qwen36SharedExpert:
     def __init__(self, mesh_device, mlp_state, tensor_cache_path=None, args=None, tt_ccl=None):
         shared_state = substate(mlp_state, "shared_expert")  # gate_proj/up_proj/down_proj .weight
         shared_cache = (tensor_cache_path / "shared_expert") if tensor_cache_path else None
-        # The shared expert reuses Qwen36MLP, whose TP matmul program configs / weight memcfgs are
-        # sized from ModelArgs.hidden_dim — which on a MoE config is the injected moe_intermediate_size
-        # stand-in, not shared_expert_intermediate_size. That is only correct while the two sizes are
-        # equal (they are on the shipped 35B-A3B: both 512). Fail fast if a checkpoint diverges them,
-        # rather than emitting an opaque program-config/weight-width mismatch at decode.
+        # The shared expert reuses Qwen36MLP, whose configs are sized from the injected moe_intermediate_size -- only valid while the two sizes match, so fail fast.
         if args is not None and getattr(args, "moe_shared_intermediate_size", None):
             assert args.moe_shared_intermediate_size == args.moe_intermediate_size, (
                 f"shared_expert_intermediate_size ({args.moe_shared_intermediate_size}) != "

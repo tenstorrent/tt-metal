@@ -57,11 +57,7 @@ class Qwen36ModelArgs(ModelArgs):
         )
         self.rope_head_dim = int(self.head_dim * self.partial_rotary_factor)
 
-        # M-RoPE (multimodal rotary). The 3 sections (T, H, W) sum to rope_head_dim // 2 and drive
-        # the interleaved-mrope cos/sin (modeling_qwen3_5.Qwen3_5RotaryEmbedding). For the "default"
-        # rope type Qwen3.5 uses, attention_scaling is 1.0 (so text cos/sin are unchanged). The
-        # spatial_merge_size + image/video token ids let the model derive the 3D position ids on
-        # host from input_ids + image_grid_thw (no dependency on mm_token_type_ids from the caller).
+        # M-RoPE: the T/H/W sections sum to rope_head_dim // 2; the 3D position ids are derived on host from input_ids.
         self.mrope_section = rope_params.get("mrope_section", [11, 11, 10])
         self.rope_attention_scaling = 1.0
         vision_config = getattr(self.hf_config, "vision_config", None)
@@ -86,14 +82,9 @@ class Qwen36ModelArgs(ModelArgs):
         self.linear_k_dim = self.linear_num_key_heads * self.linear_key_head_dim
         self.linear_v_dim = self.linear_num_value_heads * self.linear_value_head_dim
 
-        # ------------------------------------------------------------------
-        # MoE (Qwen3.5-MoE / Qwen3-Next sparse layers). All read from the parsed
-        # HF text config. Absent on the dense 9B/27B, where num_experts defaults
-        # to 0 → is_moe_layer() is False everywhere and the validated dense
-        # Qwen36MLP path is byte-for-byte unchanged. For the 35B-A3B every layer
-        # is MoE (decoder_sparse_step=1, mlp_only_layers=[]) with a gated shared
-        # expert; see tt/moe/.
-        # ------------------------------------------------------------------
+        # MoE (Qwen3.5-MoE / Qwen3-Next sparse layers), all read from the parsed HF text config.
+        # Absent on the dense 9B/27B, where num_experts defaults to 0 so is_moe_layer() is False
+        # everywhere and the dense Qwen36MLP path is unchanged. See tt/moe/.
         self.moe_num_experts = getattr(text_config, "num_experts", 0) or 0
         self.moe_top_k = getattr(text_config, "num_experts_per_tok", 0) or 0
         self.moe_intermediate_size = getattr(text_config, "moe_intermediate_size", 0) or 0
@@ -153,16 +144,7 @@ class Qwen36ModelArgs(ModelArgs):
         self.gdn_nk_tp = self.gdn_nk // tp
         self.gdn_nv_tp = self.gdn_nv // tp
         self.gdn_qkv_dim_tp = self.gdn_qkv_dim // tp
-        # Native depthwise conv1d (prefill) keeps all qkv_dim_tp channels resident per core (L1_FULL);
-        # the 35B-A3B channel count overflows L1 on BH. Split the conv over N channel chunks (exact —
-        # depthwise is per-channel-independent) so each call fits. 27B on BH (chunks=1) is unchanged.
-        #
-        # The conv is HEIGHT-sharded, so each core holds seq/num_cores rows x (C/chunks) channels:
-        # the per-core L1 footprint scales with C/chunks/num_cores. BH P150 (110 worker cores) needs
-        # 2 chunks for the 35B-A3B's C=2048 and 1 for the 27B; a WH N150 has only 64 cores (and
-        # slightly less L1 per core), so it holds ~1.7x more rows per core. Scale the chunk count by
-        # the core-count ratio and round up to a power of two — 4 for the MoE and 2 for the dense
-        # checkpoints on WH, unchanged on BH.
+        # Split the depthwise conv over channel chunks so each call fits L1; scaled by the core-count ratio, so Wormhole needs more.
         _bh_ref_chunks = 2 if self.moe_num_experts > 0 else 1
         _bh_ref_cores = 110  # BH P150 worker grid (11 x 10), the grid these chunk counts were set on
         _cores = self.worker_grid[0] * self.worker_grid[1]
@@ -175,15 +157,7 @@ class Qwen36ModelArgs(ModelArgs):
         self.gdn_conv_channel_chunks = chunks
         self.gdn_z_dim_tp = self.gdn_z_dim // tp
         self.gdn_qkvz_dim_tp = (self.gdn_qkv_dim + self.gdn_z_dim) // tp
-        # Per-device width of the [qkv|z|a|b] fused in-projection: folding the tiny a/b (decay/beta)
-        # projection into qkvz removes a whole decode matmul while keeping the (good) K=dim. Default
-        # (was QWEN36_GDN_FUSE_AB); gdn/tp.py fuses whenever the qkvz weight is DRAM-sharded.
-        # a and b get a WHOLE TILE of columns each, not their bare nv_tp (=8), so that both start
-        # on a 32-column boundary in the fused output. A slice whose start is tile-aligned is a
-        # cheap width truncation; one starting mid-tile (b at qkvz+8 under the old packing) forces
-        # an untilize -> slice -> tilize round trip every layer. The padding costs 48 extra output
-        # columns (3088 -> 3136, and 3104 -> 3136 after tile padding, so +1 tile of matmul N) and
-        # buys -3.0% on the GDN decode layer. See _project_qkvzab and load_gdn_weights_tp.
+        # Width of the fused [qkv|z|a|b] in-projection; a/b get a whole TILE each so their slices stay tile-aligned.
         self.gdn_qkvzab_dim_tp = self.gdn_qkvz_dim_tp + 2 * tpc.TILE_SIZE
         self.gdn_value_dim_tp = self.gdn_value_dim // tp
         self.gdn_key_dim_tp = self.gdn_key_dim // tp
@@ -225,13 +199,7 @@ class Qwen36ModelArgs(ModelArgs):
         self.mlp_w3_progcfg = _dram_progcfg(M, self.dim, self.hidden_dim // tp)
         self.mlp_w2_progcfg = _dram_progcfg(M, self.hidden_dim // tp, self.dim)
 
-        # 1D decode MLP matmuls (DEFAULT): small grids beat the ~80-core DRAM-sharded grid on the
-        # bandwidth-bound skinny (M<=1) decode matmuls. Interleaved weights.
-        # decode_grid_w = the device worker-grid width (11 on BH P150, 8 on WH). Shaping the 1D-mcast
-        # grid WIDE-first (up to this many cols) beats the old cols<=8 shaping by ~2% on this matmul —
-        # a wide-short grid shortens the in0 multicast column (test_mlp_matmul_sweep wide1d_* vs
-        # forced1d_*). Applied to gate/up ONLY (the swept, verified projections); the others below keep
-        # the legacy cols<=8 shaping (grid_w default) until their shapes are swept too.
+        # 1D decode MLP matmuls: small grids beat the DRAM-sharded one on these skinny matmuls; wide-first shaping applied to gate/up only.
         self.decode_grid_w = mesh_device.compute_with_storage_grid_size().x
         self.mlp_1d_decode = True
         # gate/up: num_cores=44 -> 11x4 on BH, the fastest measured config (wide1d_11x4c, 42.8us vs
@@ -259,10 +227,7 @@ class Qwen36ModelArgs(ModelArgs):
         self.attn_qkv_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
             M, self.dim, self.attn_qkv_fused_dim_tp, num_cores=64
         )
-        # gdn_qkvz: num_cores=44 -> 11x4 on BH, the fastest measured config (wide1d_11x4c, ~59us, +22%
-        # vs the old 8x5). On WH (decode_grid_w=8) this falls back to 8x6.
-        # 44 cores (11x4) on BH, fastest measured (~59us). On WH the full 8x8=64-core grid measured
-        # 150.4us vs 8x6's 156.5us (-3.9%, no accuracy cost), matching attn_qkv above. PR #54572.
+        # gdn_qkvz: the fastest measured core count per arch -- 44 (11x4) on Blackhole, the full grid on Wormhole.
         self.gdn_qkvz_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
             M,
             self.dim,
@@ -270,20 +235,11 @@ class Qwen36ModelArgs(ModelArgs):
             num_cores=44 if tpc.is_blackhole() else 64,
             grid_w=self.decode_grid_w,
         )
-        # Output projections (attn wo, GDN o_proj): already interleaved+auto (no weight relayout, not in
-        # the prefill AGMM fusion), so this just swaps ttnn-auto for a tuned ~32-core 1D decode grid.
-        # attn_wo: num_cores=33 -> 11x3 on BH, the fastest measured config (wide1d_11x3c, ~24us, +25%
-        # vs the old 8x4). On WH (decode_grid_w=8) this falls back to 8x5.
+        # Output projections: swap ttnn-auto for a tuned ~32-core 1D decode grid (33 = 11x3 on Blackhole).
         self.attn_wo_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
             M, self.attn_out_dim_tp, self.dim, num_cores=33, grid_w=self.decode_grid_w
         )
-        # gdn_out: num_cores=33 -> 11x3 on BH, the fastest measured config (wide1d_11x3c, ~24us, +25%
-        # vs the old 8x4; same 1536x5120 shape as attn_wo). 33 was never swept on Wormhole, where it
-        # merely falls back to 8x5; the full 8x8=64-core grid is faster there. SWEPT on n150x4
-        # (35B-A3B, traced decode, 3 rounds each -- every 64 run beat every 33 run):
-        #     cores  24      32      33(old) 40      48      56      64
-        #     ms     0.3043  0.3020  0.3021  0.3022  0.3020  0.3016  0.3013
-        # -0.13% end to end, PCC unchanged. Same treatment gdn_qkvz above already gets on WH.
+        # gdn_out: 33 (11x3) is the measured best on Blackhole; Wormhole was swept separately and prefers the full grid.
         self.gdn_out_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
             M,
             self.gdn_value_dim_tp,
@@ -296,10 +252,7 @@ class Qwen36ModelArgs(ModelArgs):
         self._prefill_grid = tpc.prefill_grid_default()
         self.prefill_tuning = tpc.prefill_tuning(tp)
         if self.moe_num_experts > 0:
-            # The dense TP=4 tuning picks in0_block_w = min(cap, k_tiles // grid), which the
-            # 35B-A3B's attention/GDN prefill K dims don't divide (Kt % in0_block_w != 0). Force
-            # the divisor path (largest divisor of k_tiles ≤ cap) so the block always divides;
-            # dense 9B/27B keep their tuned block.
+            # Force the divisor path so in0_block_w always divides k_tiles; the 35B-A3B prefill K dims do not fit the dense tuning.
             self.prefill_tuning = {**self.prefill_tuning, "in0_block_w_divisor": True}
         self.prefill_progcfg = lambda seq_len, k, n: tpc.create_prefill_matmul_program_config(
             seq_len, k, n, grid_size=self._prefill_grid, tuning=self.prefill_tuning
@@ -328,12 +281,7 @@ class Qwen36ModelArgs(ModelArgs):
         super()._set_hf_params(checkpoint_dir)
 
     def _set_params_from_dict(self, config):
-        # Qwen3.5-MoE checkpoints have NO dense `intermediate_size` (every layer is
-        # sparse MoE), but the base ModelArgs still requires it (or ffn_dim_multiplier)
-        # to derive the dense `hidden_dim`. That hidden_dim is vestigial here — MoE
-        # layers route through tt/moe, not the dense MLP memcfgs — so inject the
-        # per-expert intermediate as a tile-aligned stand-in purely to satisfy the
-        # base. The dense 9B/27B carry a real intermediate_size and are untouched.
+        # MoE checkpoints have no dense intermediate_size, so inject a tile-aligned stand-in purely to satisfy the base ModelArgs.
         if not config.get("intermediate_size") and config.get("moe_intermediate_size"):
             config = {**config, "intermediate_size": config["moe_intermediate_size"]}
         super()._set_params_from_dict(config)
@@ -416,24 +364,8 @@ class Qwen36ModelArgs(ModelArgs):
         if is_fp8_checkpoint(self.CKPT_DIR):
             return load_qwen36_state_dict_fp8(self.CKPT_DIR)
 
-        # Import the HF classes directly rather than going through AutoModelForCausalLM.
-        # Serving out-of-tree, vllm.transformers_utils.config registers vLLM's OWN
-        # Qwen3_5Config for model_type "qwen3_5" into transformers' AutoConfig
-        # (AutoConfig.register(..., exist_ok=True)), so AutoConfig hands back vLLM's class.
-        # transformers only unwraps a composite config to its text sub-config when
-        # `model_class.config_class == config.sub_configs["text_config"]` — an identity
-        # check that cannot hold across libraries — so the composite config would reach
-        # Qwen3_5ForCausalLM and fail on `config.vocab_size` (which lives one level down,
-        # in text_config). Naming the classes here keeps config and model from the same
-        # library, matching vision/vision_model_config.py::reference_vision_model.
-        #
-        # Qwen3_5TextConfig.from_pretrained picks the `text_config` sub-dict on composite
-        # (3.6 VLM) checkpoints via base_config_key, and reads a text-only (3.5) config.json
-        # as-is, so both checkpoint layouts land on the config Qwen3_5ForCausalLM expects.
-        # The 35B-A3B is a Qwen3.5-MoE checkpoint (model_type qwen3_5_moe): its sparse experts and
-        # gated shared expert live under the MoE config that the dense Qwen3_5TextConfig silently
-        # drops — that class would build a dense mlp.gate_proj and leave mlp.shared_expert/experts
-        # unloaded. Pick the MoE text class for MoE configs; the dense/vision path keeps Qwen3_5.
+        # Name the HF classes directly, NOT AutoModelForCausalLM: vLLM registers its own config for this model_type, and the
+        # composite-to-text unwrap cannot hold across libraries. MoE configs need the MoE text class or the experts load silently unwired.
         if self.moe_num_experts > 0:
             from transformers.models.qwen3_5_moe import Qwen3_5MoeForCausalLM as _HFForCausalLM
             from transformers.models.qwen3_5_moe import Qwen3_5MoeTextConfig as _HFTextConfig

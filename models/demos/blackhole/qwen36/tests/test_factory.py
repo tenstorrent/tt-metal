@@ -247,11 +247,7 @@ def get_pcc_threshold(request, default=0.99):
     return table.get(func, default)
 
 
-# --------------------------------------------------------------------------- #
-# Mesh / device helpers
-# --------------------------------------------------------------------------- #
-# MESH_DEVICE -> mesh shape. N150x4 is the Wormhole (1,4) mesh the Qwen3.6-35B-A3B runs on; the
-# P150* names are the pre-existing Blackhole set and are unchanged.
+# MESH_DEVICE -> mesh shape. N150x4 is the Wormhole (1,4) mesh; the P150* names are the pre-existing Blackhole set.
 _MESH_SHAPES = {
     "P150": (1, 1),
     "P150x4": (1, 4),
@@ -261,10 +257,7 @@ _MESH_SHAPES = {
 
 
 def _resolve_mesh_shape(max_tp=8):
-    # MESH_DEVICE wins outright. The device-count fallback is computed lazily (not as a
-    # ``dict.get`` default, which Python evaluates eagerly) so an explicit MESH_DEVICE never
-    # touches ttnn.get_device_ids() -- that call raises on clusters whose ClusterType lookup
-    # fails, which would otherwise break collection even for a fully-specified mesh.
+    # MESH_DEVICE wins outright; the fallback is computed lazily so an explicit mesh never calls get_device_ids(), which can raise at collection.
     shape = _MESH_SHAPES.get(os.environ.get("MESH_DEVICE"))
     if shape is not None:
         return shape

@@ -99,34 +99,6 @@ def prefill_l1_output_ok():
     return is_blackhole()
 
 
-# LoFi + no fp32 dest-acc, for the GDN in/out projections on Wormhole. Both take a BFLOAT8_B
-# weight, whose 8-bit mantissa already dominates the product's error, so HiFi2's ~2x math passes
-# buy precision the operands cannot represent (the same argument PR #54572 makes for the attention
-# prefill matmuls). MEASURED here by tests/perf/test_sweep_gdn_matmuls.py on n150x4 / 35B-A3B,
-# shuffled 3-pass min, drift probe within +-3.3%:
-#     in_proj_decode   M=1   K=2048 N=3088   57.0 -> 47.9us  -16.0%   per-op pcc 0.999838
-#     out_proj_decode  M=1   K=1024 N=2048   81.9 -> 62.6us  -23.6%   per-op pcc 0.999841
-#     in_proj_prefill  M=128 K=2048 N=3088  109.8 -> 97.8us  -11.0%   per-op pcc 0.999926
-# Per-op PCC is NOT the gate that matters: the GDN recurrent state accumulates error across every
-# decode step and all 30 GDN layers. test_gdn_tp is the acceptance gate.
-COMPUTE_HIFI2_NO_FP32_ACC = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.HiFi2,
-    math_approx_mode=True,
-    fp32_dest_acc_en=False,
-    packer_l1_acc=True,
-)
-
-# LoFi variant: MEASURED FASTER but REJECTED for the GDN projections -- see the model-level numbers
-# in gdn/tp.py where self.cfg is chosen. Kept because it is the right choice for a matmul whose
-# output does NOT feed the recurrent state.
-COMPUTE_LOFI_NO_FP32_ACC = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.LoFi,
-    math_approx_mode=True,
-    fp32_dest_acc_en=False,
-    packer_l1_acc=True,
-)
-
-
 # Grid helpers
 def prefill_grid_default():
     """BH P150: (8,10); WH: (8,8). y capped at 10 on BH (grid_x=10 breaks matmul)."""
@@ -137,26 +109,8 @@ def prefill_grid_default():
 # grid, but harvested P150s expose only 11, so tuning to 12 would not port. 11 x 10 = 110 cores.
 PREFILL_MAX_COLS_PORTABLE = 11
 
-# Why TP=8 wants different values (measured at S=2048, 27B, 1x8 Ring):
-#   * widest_cols -- `_best_prefill_cols` ranks candidate widths by (out_subblock_w, cols), i.e.
-#     subblock first. At TP=8 the halved N makes wide grids yield a small per_core_N and hence a
-#     narrow subblock, so that ranking retreats to fewer columns and leaves cores idle. Measured
-#     device time is monotonically decreasing in column count instead: attn_wo went 1944us @ 60
-#     cores -> 700us @ 110, and mlp_gate 2943us @ 60 -> 1935us @ 110. So take the width.
-#   * in0_block_w_divisor -- `min(cap, k_tiles // grid_x)` is a function of the per-device K, which
-#     halves. attn_wo/gdn_out go k_tiles 48 -> 24 and `24 // 11 = 2`, but in0_block_w only has to
-#     DIVIDE k_tiles, so a larger block is legal and much faster (attn_wo @ 11 cols, from the sweep:
-#     bw2 786us, bw4 719us, bw6 700us, bw8 705us).
-#
-# in0_block_w_cap is L1-BOUND, NOT just a legality bound. in0_block_w sizes the in0 circular
-# buffer, and `_wo_proj` / the MLP prefill arm write their OUTPUT to L1 (attention/tp.py:246,
-# mlp.py:284) -- so the CBs and a resident L1 output tensor compete for the same 1536 KB. Measured
-# on the real model: cap=8 overflows and test_model_tp_long_prefill dies with
-#   "Statically allocated circular buffers in program N clash with L1 buffers on core range
-#    [0-0 - 10-8]. L1 buffer allocated at 1314560 and static circular buffer region ends at 1372032"
-# from attention/tp.py:241. A standalone per-op sweep CANNOT see this: in isolation the only L1
-# tenant is the op under test, so it reports a win that the full model has no room for. Any future
-# raise of this cap must be validated by test_model_tp_long_prefill, not by the sweep alone.
+# TP=8 halves N and K, so it wants the widest grid and a larger in0_block_w. in0_block_w_cap is L1-BOUND, not just legality:
+# raising it kills test_model_tp_long_prefill with a CB/L1 clash, which a per-op sweep cannot see -- validate raises with that test.
 _PREFILL_TUNING = {
     4: dict(widest_cols=False, in0_block_w_divisor=False, in0_block_w_cap=4),
     8: dict(widest_cols=True, in0_block_w_divisor=True, in0_block_w_cap=4),
@@ -382,15 +336,8 @@ def _best_prefill_cols(n, max_cols):
     return best_cols
 
 
-# Sequence length up to which the 1D (mcast_in0, splits N) kernel beats the 2D prefill kernel.
-# The 2D kernel sets per_core_M = ceil(S/TILE/grid_y), so a short sequence lights only S/TILE rows:
-# at S=64 that is 2 rows = 16 of 64 cores. The 1D kernel splits N instead, so its core count does
-# not depend on S -- but it also gives every core the whole M, which stops paying once S grows.
-# Measured on N150x4 (2D -> best 1D, us):
-#   attn qkv (K=2048,N=2560)   S=64: 69.8 -> 38.8   S=128: 75.7 -> 65.2   S=256: 85.5 -> 119.1
-#   attn wo  (K=1024,N=2048)   S=64: 34.7 -> 23.1   S=128: 38.3 -> 38.9   S=256: 46.0 ->  68.3
-# Production's smallest prefill bucket is 128 (model._PREFILL_MASK_BUCKETS), so this covers it and
-# everything shorter; 256 and up keep the 2D kernel.
+# Sequence length up to which the 1D kernel beats the 2D prefill kernel: the 2D one lights only S/TILE core rows, while the 1D
+# splits N instead and so is S-independent -- but gives every core the whole M, which stops paying as S grows.
 PREFILL_MM_1D_MAX_SEQ = 128
 
 
@@ -484,6 +431,7 @@ def agmm_gather_buffer(tt_ccl, x, cluster_axis=1):
     cache[key][1] = idx ^ 1
     return pair[idx]
 
+
 def agmm_grid(mesh_device, cluster_axis=1):
     """(grid, num_links, num_workers_per_link) for the fused all-gather+matmul prefill ops.
 
@@ -502,13 +450,8 @@ def agmm_grid(mesh_device, cluster_axis=1):
     return grid, num_links, math.ceil(grid[0] / num_links)
 
 
-# Sequence length at/above which the FUSED all-gather+matmul beats a separate all-gather plus a
-# tuned 2D matmul, for the attention in-projection on N150x4 (measured, S -> AGMM vs unfused us):
-#   64: 169/120   256: 218/188   512: 344/308   768: 459/429   1024: 621/563   1536: 844/878   2048: 1118/1492
-# The fusion hides the gather behind the matmul, which only pays once the matmul is long enough to
-# hide it; below that its fixed setup (a 57-core program with an 8-buffer fabric channel) dominates.
-# Production prefill chunks at 2048 and keeps the fused path; short prompts and the tail chunk of a
-# long one fall below this and take the unfused path.
+# Sequence length at/above which the FUSED all-gather+matmul beats a separate gather plus matmul: the fusion hides the gather
+# behind the matmul, so it only pays once the matmul is long enough; below that its fixed setup dominates.
 AGMM_MIN_SEQ = 1536
 
 
