@@ -29,6 +29,7 @@ def _typecast_parameter(param, dtype) -> None:
 
 
 def apply_env_quant_config(model) -> None:
+    """`model` is the transformer or a single block (the block perf test)."""
     fidelity = os.environ.get("MINIMAX_H3_MM_FIDELITY")
     fp32_acc = os.environ.get("MINIMAX_H3_MM_FP32_ACC")
     bf8 = [name for name in os.environ.get("MINIMAX_H3_BF8_WEIGHTS", "").split(",") if name]
@@ -46,7 +47,7 @@ def apply_env_quant_config(model) -> None:
         )
     logger.info(f"minimax-h3 block precision override: fidelity={fidelity} fp32_acc={fp32_acc} bf8_weights={bf8}")
 
-    for block in model.transformer_blocks:
+    for block in getattr(model, "transformer_blocks", [model]):
         if compute_config is not None:
             block.mm_compute_kernel_config = compute_config
             block.attn.mm_compute_kernel_config = compute_config

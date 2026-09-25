@@ -42,6 +42,8 @@ at every duration.
 
 from __future__ import annotations
 
+import os
+
 import ttnn
 
 from ....utils.matmul import FusedMMRSConfig, register_fused_mmrs_configs
@@ -101,5 +103,23 @@ def register_mmrs_config(m: int, k: int, n: int) -> None:
     if not has_mmrs_config(m, k, n):
         msg = f"No fused MMRS blocking for (M, K, N) = ({m}, {k}, {n}); gate on has_mmrs_config first"
         raise ValueError(msg)
+    env = os.environ.get("MINIMAX_H3_MMRS_BLOCKING")
+    if env:
+        # Tuning override "gx,gy,Mb,Kb,Nb,sub_h,sub_w[,workers_per_link[,window]]" for every M.
+        v = [int(x) for x in env.split(",")]
+        cfg = FusedMMRSConfig(
+            ttnn.CoreCoord(v[0], v[1]),
+            v[2],
+            v[3],
+            v[4],
+            v[5],
+            v[6],
+            None,
+            1,
+            num_workers_per_link=v[7] if len(v) > 7 else None,
+            mm_window_blocks=v[8] if len(v) > 8 else 2,
+        )
+        register_fused_mmrs_configs({_DEVICE_GRID: {(m, _K, _N): cfg}})
+        return
     if m in _SWEPT_BLOCKINGS:
         register_fused_mmrs_configs({_DEVICE_GRID: {(m, _K, _N): _SWEPT_BLOCKINGS[m]}})

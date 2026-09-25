@@ -21,6 +21,10 @@ these shapes need an entry rather than falling back.
 
 from __future__ import annotations
 
+import os
+
+from ....utils.matmul import register_matmul_configs
+
 # M parallelizes over 12 cores when transposed (M > N) and 10 otherwise (the op reserves the mux axis).
 _TILE = 32
 _M_CORES_TRANSPOSED = 12
@@ -79,10 +83,30 @@ AGMM_BLOCK_SIZES: dict[tuple[int, int, int], tuple[int, int, int]] = {
 }
 
 
+def _env_agmm_block_size(k: int, n: int, m: int) -> tuple[int, int, int] | None:
+    """Tuning override MINIMAX_H3_AGMM_BLOCKS="K,N:Mb,Kb,Nb[,sub_h,sub_w];..." for the (K, N) linears listed.
+    A 5-value entry registers a 12x9 table hit (subblock included) and returns None so the table wins."""
+    for entry in os.environ.get("MINIMAX_H3_AGMM_BLOCKS", "").split(";"):
+        if ":" not in entry:
+            continue
+        shape, blocks = entry.split(":")
+        if tuple(int(v) for v in shape.split(",")) != (k, n):
+            continue
+        values = tuple(int(v) for v in blocks.split(","))
+        if len(values) == 3:
+            return values
+        register_matmul_configs({"12x9": {(m, k, n): (*values[:3], (values[3], values[4]))}})
+        return None
+    return "default"
+
+
 def agmm_block_size(k: int, n: int, m: int) -> tuple[int, int, int] | None:
     """Block sizes for an all-gather matmul of this `(K, N)` at sequence length `M`, or None to let
     the generic path decide. Uses the largest swept `per_core_M` that divides the runtime one.
     """
+    override = _env_agmm_block_size(k, n, m)
+    if override != "default":
+        return override
     per_core_m = _per_core_m(m, n)
     swept = [pcm for (kk, nn, pcm) in AGMM_BLOCK_SIZES if kk == k and nn == n]
     divisors = [pcm for pcm in swept if per_core_m % pcm == 0]

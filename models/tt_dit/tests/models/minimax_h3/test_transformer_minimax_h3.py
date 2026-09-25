@@ -26,6 +26,7 @@ from tracy import signpost
 import ttnn
 
 from ....models.transformers.minimax_h3.attention_minimax_h3 import MiniMaxH3Attention, prepare_rope_tables
+from ....models.transformers.minimax_h3.quant_config import apply_env_quant_config
 from ....models.transformers.minimax_h3.token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
 from ....models.transformers.minimax_h3.transformer_block_minimax_h3 import MiniMaxH3TransformerBlock
 from ....models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
@@ -1094,6 +1095,7 @@ def test_minimax_h3_transformer_block_perf(
         is_fsdp=is_fsdp,
     )
     tt_block.load_torch_state_dict(torch_block.state_dict())
+    apply_env_quant_config(tt_block)
     del torch_block
 
     tt_spatial = bf16_tensor_2dshard(
