@@ -244,7 +244,8 @@ bool WriteToDeviceDRAMChannel(
         "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!",
         device->allocator()->get_base_allocator_addr(HalMemType::DRAM));
     const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
-    metal_ctx.get_cluster().write_dram_vec(host_buffer.data(), host_buffer.size(), device->id(), dram_channel, address);
+    metal_ctx.get_cluster().write_dram_vec(
+        host_buffer.data(), host_buffer.size(), device->id(), dram_channel, address, tt::umd::IoOrdering::Relaxed);
     return true;
 }
 

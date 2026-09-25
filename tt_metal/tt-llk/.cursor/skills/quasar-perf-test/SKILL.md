@@ -108,8 +108,8 @@ Dest-full tall/wide is the unary throughput case. Skip dest index and SFPU
 
 **Matmul.** Use dest-full tall and wide output grids (`mt,nt` =
 `(1, max_tiles)` and `(max_tiles, 1)`) × `kt={1, 4}` so both `ct>=rt` and
-`ct<rt` addr_mod branches and unpack-heavy vs math-heavy K are covered. MX
-inputs are LoFi-only; Float16 / Float16_b still sweep LoFi–HiFi4.
+`ct<rt` addr_mod branches and unpack-heavy vs math-heavy K are covered. MX,
+Float16_b, and Int8 inputs are LoFi-only; Float16 still sweeps LoFi–HiFi4.
 
 **Check coverage** with `compare_test_and_perf.py --dir quasar`. Composite
 splits name `list` as the input matrix and `tuple` as `tile_dimensions`.

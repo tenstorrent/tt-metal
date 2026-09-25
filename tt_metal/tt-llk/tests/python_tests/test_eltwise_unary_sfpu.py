@@ -28,6 +28,7 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
 )
+from helpers.sfpu_accuracy_budget import accuracy_contract
 from helpers.sfpu_domains import (
     _UNARY_OPS_NOT_SWEPT,
     SHIFT_EDGE_AMOUNTS,
@@ -113,14 +114,6 @@ STANDARD_SWEEP_OPS = sorted(
     sfpu_unary_ops() - set(BROAD_SWEEP_OPS) - set(_UNARY_OPS_NOT_SWEPT),
     key=lambda op: op.name,
 )
-
-# Per-op (atol, rtol) overrides for coarse LUT/polynomial ops; others use the
-# per-format default in passed_test.
-CUSTOM_TOLERANCES = {
-    # Coarse 3-segment LUT: good PCC but abs error peaks ~0.12 near the knees.
-    MathOperation.SigmoidAppx: (0.13, 0.05),
-    MathOperation.GeluAppx: (0.13, 0.05),
-}
 
 BROAD_FORMATS = input_output_formats(
     [
@@ -373,8 +366,6 @@ def test_eltwise_unary_sfpu(
     else:
         _skip_bh_unless_fp32(formats, dest_acc)
 
-    custom_atol, custom_rtol = CUSTOM_TOLERANCES.get(mathop, (None, None))
-
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
         formats,
@@ -383,8 +374,6 @@ def test_eltwise_unary_sfpu(
         mathop,
         fast_mode,
         input_dimensions,
-        custom_atol=custom_atol,
-        custom_rtol=custom_rtol,
     )
 
 
@@ -526,8 +515,6 @@ def test_eltwise_unary_sfpu_edges(
             f"(no domain boundary, no op knee, specials not preserved)"
         )
 
-    custom_atol, custom_rtol = CUSTOM_TOLERANCES.get(mathop, (None, None))
-
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
         formats,
@@ -537,8 +524,6 @@ def test_eltwise_unary_sfpu_edges(
         FastMode.No,
         input_dimensions,
         spec_A=spec_A,
-        custom_atol=custom_atol,
-        custom_rtol=custom_rtol,
     )
 
 
@@ -1243,8 +1228,6 @@ def eltwise_unary_sfpu(
     fast_mode: FastMode,
     input_dimensions: list[int],
     spec_A=None,
-    custom_atol=None,
-    custom_rtol=None,
     shift_amount=None,
     relu_min_int_threshold=None,
     twos_complement=False,
@@ -1353,12 +1336,26 @@ def eltwise_unary_sfpu(
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
+    # The op's declared *tolerance*, resolved for this exact variant. This is where
+    # CUSTOM_TOLERANCES used to be read in the test bodies; keeping it in the driver
+    # means all eight call sites pick it up at once, and a change is a registry edit.
+    #
+    # Tolerance only, deliberately. A step budget measured over every value the format
+    # has -- which is what the nightly sweep measures -- is much wider than one measured
+    # over this driver's sampled domain, so enforcing it here would replace a gate that
+    # binds with one that does not. The budgets are enforced where they were measured.
+    contract = accuracy_contract(
+        mathop,
+        output_format=formats.output_format,
+        approx_mode=approx_mode,
+        dest_acc=dest_acc,
+        arch=TestConfig.CHIP_ARCH,
+    )
     assert passed_test(
         golden_tensor,
         res_tensor,
         formats.output_format,
-        custom_atol=custom_atol,
-        custom_rtol=custom_rtol,
+        **contract.tolerance_kwargs(),
     ), "Assert against golden failed"
 
 

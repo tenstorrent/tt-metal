@@ -2584,7 +2584,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CrossSubDevice_CoordinatedLivePeerN
 
     // A must resize before any receiver is enqueued. This would time out if
     // set_entry_size still contained an acked == sent barrier.
-    const auto device_id = mesh_device->get_devices()[0]->id();
+    const auto device_id = mesh_device->get_device_ids()[0];
     const auto physical_sender = mesh_device->worker_core_from_logical_core(sender_core);
     bool resized = false;
     for (uint32_t i = 0; i < 10000; ++i) {
