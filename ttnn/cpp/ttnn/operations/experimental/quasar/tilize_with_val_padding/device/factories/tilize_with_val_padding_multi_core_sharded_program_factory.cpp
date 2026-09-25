@@ -27,10 +27,8 @@ ProgramDescriptor TilizeWithValPaddingMultiCoreShardedFactory::create_descriptor
     bool src_sharded = a.memory_config().is_sharded();
     bool out_sharded = output.memory_config().is_sharded();
 
-    tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    uint32_t input_single_tile_size = tt::tt_metal::tile_size(a.dtype());
+    uint32_t output_single_tile_size = tt::tt_metal::tile_size(output.dtype());
 
     bool fp32_llk_acc = a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 ||
                         output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B;
@@ -68,7 +66,7 @@ ProgramDescriptor TilizeWithValPaddingMultiCoreShardedFactory::create_descriptor
         cb_src0.core_ranges = all_cores;
         cb_src0.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(src0_cb_index),
-            .data_format = input_cb_data_format,
+            .data_format = a.dtype(),
             .page_size = input_shard_width_bytes,
         });
         if (src_sharded) {
@@ -82,7 +80,7 @@ ProgramDescriptor TilizeWithValPaddingMultiCoreShardedFactory::create_descriptor
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(src1_cb_index),
-            .data_format = input_cb_data_format,
+            .data_format = a.dtype(),
             .page_size = input_single_tile_size,
         }}},
     });
@@ -92,7 +90,7 @@ ProgramDescriptor TilizeWithValPaddingMultiCoreShardedFactory::create_descriptor
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(src2_cb_index),
-            .data_format = input_cb_data_format,
+            .data_format = a.dtype(),
             .page_size = input_shard_width_bytes,
         }}},
     });
@@ -104,7 +102,7 @@ ProgramDescriptor TilizeWithValPaddingMultiCoreShardedFactory::create_descriptor
         cb_output.core_ranges = all_cores;
         cb_output.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(output_cb_index),
-            .data_format = output_cb_data_format,
+            .data_format = output.dtype(),
             .page_size = output_single_tile_size,
         });
         if (out_sharded) {

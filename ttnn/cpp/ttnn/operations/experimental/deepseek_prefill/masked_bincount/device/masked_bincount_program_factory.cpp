@@ -22,7 +22,6 @@ MaskedBincountProgramFactory::cached_program_t MaskedBincountProgramFactory::cre
 
     tt::tt_metal::Program program{};
 
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     tt::DataFormat output_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(tt::tt_metal::DataType::UINT32);
     uint32_t n_routed_experts = operation_attributes.n_routed_experts;
@@ -64,7 +63,7 @@ MaskedBincountProgramFactory::cached_program_t MaskedBincountProgramFactory::cre
     // CB 0: BRISC input pages (per-shard)
     uint32_t cb_in_brisc = tt::CBIndex::c_0;
     tt::tt_metal::CircularBufferConfig cb_in_brisc_config =
-        tt::tt_metal::CircularBufferConfig(max_tiles_brisc * input_page_size, {{cb_in_brisc, input_cb_data_format}})
+        tt::tt_metal::CircularBufferConfig(max_tiles_brisc * input_page_size, {{cb_in_brisc, input.dtype()}})
             .set_page_size(cb_in_brisc, input_page_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_in_brisc_config);
 
@@ -78,7 +77,7 @@ MaskedBincountProgramFactory::cached_program_t MaskedBincountProgramFactory::cre
     // CB 2: NCRISC input pages (per-shard)
     uint32_t cb_in_ncrisc = tt::CBIndex::c_2;
     tt::tt_metal::CircularBufferConfig cb_in_ncrisc_config =
-        tt::tt_metal::CircularBufferConfig(max_tiles_ncrisc * input_page_size, {{cb_in_ncrisc, input_cb_data_format}})
+        tt::tt_metal::CircularBufferConfig(max_tiles_ncrisc * input_page_size, {{cb_in_ncrisc, input.dtype()}})
             .set_page_size(cb_in_ncrisc, input_page_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_in_ncrisc_config);
 

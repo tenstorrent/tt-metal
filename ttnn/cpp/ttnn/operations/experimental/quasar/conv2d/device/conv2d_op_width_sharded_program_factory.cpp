@@ -133,8 +133,6 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
     uint32_t out_subblock_h_ntiles = block_config.out_subblock_h_ntiles;
     uint32_t out_subblock_w_ntiles = block_config.out_subblock_w_ntiles;
 
-    const tt::DataFormat tilized_act_df = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-
     auto packer_l1_acc = compute_kernel_config.packer_l1_acc;
 
     TT_FATAL(
@@ -687,7 +685,8 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
                 {"act_mcast_start_y", (uint32_t)act_mcast_start.y},
                 {"act_mcast_end_x", (uint32_t)act_mcast_end.x},
                 {"act_mcast_end_y", (uint32_t)act_mcast_end.y},
-                {"act_mcast_sender_size_bytes", (uint32_t)act_block_num_tiles * tt::tile_size(tilized_act_df)},
+                {"act_mcast_sender_size_bytes",
+                 (uint32_t)act_block_num_tiles * tt::tt_metal::tile_size(output.dtype())},
                 {"num_output_cores", (uint32_t)output_num_cores},
                 {"num_reader_cores", (uint32_t)all_reader_cores.size()},
             },

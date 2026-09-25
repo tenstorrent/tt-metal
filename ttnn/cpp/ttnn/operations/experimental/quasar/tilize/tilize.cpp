@@ -53,8 +53,7 @@ ttnn::Tensor tilize(
     bool use_multicore,
     bool use_low_perf,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
+    uint32_t input_single_tile_size = tt::tt_metal::tile_size(input_tensor.dtype());
     uint32_t output_single_tile_size =
         output_dtype.has_value() ? tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype.value()))
                                  : input_single_tile_size;

@@ -446,12 +446,12 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
         max_target_noc_addresses_per_packet,
         num_pages_per_packet);
     uint32_t cb_num_pages = 3 * num_tiles_to_write_per_packet;  // triple buffering
-    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     // CBs for transferring data between sender_reader and sender_writer
     uint32_t sender_cb_index = tt::CB::c_in0;
     tt::tt_metal::CircularBufferConfig cb_sender_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{sender_cb_index, df}})
+        tt::tt_metal::CircularBufferConfig(
+            cb_num_pages * l1_scratch_cb_page_size_bytes, {{sender_cb_index, input_tensor.dtype()}})
             .set_page_size(sender_cb_index, l1_scratch_cb_page_size_bytes);
     CreateCircularBuffer(program, sender_worker_core_range_set, cb_sender_config);
 

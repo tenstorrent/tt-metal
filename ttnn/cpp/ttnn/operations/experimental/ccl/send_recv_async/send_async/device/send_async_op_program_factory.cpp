@@ -127,12 +127,10 @@ SendAsyncMeshWorkloadFactory::create_at(
     uint32_t cb_num_pages = 2;
     uint32_t cb_page_size = fabric_max_payload_size;
 
-    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-
     auto src0_cb_index = tt::CBIndex::c_0;
 
     tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * cb_page_size, {{src0_cb_index, df}})
+        tt::tt_metal::CircularBufferConfig(cb_num_pages * cb_page_size, {{src0_cb_index, input_tensor.dtype()}})
             .set_page_size(src0_cb_index, cb_page_size);
 
     std::set<CoreRange> sender_core_ranges;

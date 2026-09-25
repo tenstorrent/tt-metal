@@ -29,8 +29,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreInterleavedProgram
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    uint32_t output_single_tile_size = tt::tt_metal::tile_size(output.dtype());
 
     const auto& input_shape = a.padded_shape();
     const auto& output_shape = output.padded_shape();
@@ -77,7 +76,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreInterleavedProgram
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = output_cb_index,
-            .data_format = output_cb_data_format,
+            .data_format = output.dtype(),
             .page_size = output_single_tile_size,
         }}},
     });

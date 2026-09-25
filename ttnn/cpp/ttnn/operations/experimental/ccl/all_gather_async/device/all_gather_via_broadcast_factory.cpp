@@ -113,13 +113,12 @@ tt::tt_metal::ProgramDescriptor build_descriptor_at(
 
     // L1 Scratch CB Creation
     uint32_t src0_cb_index = tt::CB::c_in0;
-    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = 3 * cb_page_size,
         .core_ranges = sender_worker_core_range,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(src0_cb_index),
-            .data_format = df,
+            .data_format = input_tensor.dtype(),
             .page_size = cb_page_size,
         }}},
     });

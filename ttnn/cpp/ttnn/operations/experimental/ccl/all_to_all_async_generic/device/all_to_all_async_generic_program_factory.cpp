@@ -651,10 +651,10 @@ AllToAllAsyncGenericProgram::create_at(
     // In particular, a one-page payload still needs multiple slots to avoid fully serializing both kernels.
     constexpr uint32_t cb_depth = 3;
     const uint32_t cb_size = cb_depth * number_pages_per_packet * page_size;
-    const tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_args.input_tensor.dtype());
 
-    auto cb_src0_config = tt::tt_metal::CircularBufferConfig(cb_size, {{tt::CB::c_in0, data_format}})
-                              .set_page_size(tt::CB::c_in0, number_pages_per_packet * page_size);
+    auto cb_src0_config =
+        tt::tt_metal::CircularBufferConfig(cb_size, {{tt::CB::c_in0, tensor_args.input_tensor.dtype()}})
+            .set_page_size(tt::CB::c_in0, number_pages_per_packet * page_size);
 
     CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
 

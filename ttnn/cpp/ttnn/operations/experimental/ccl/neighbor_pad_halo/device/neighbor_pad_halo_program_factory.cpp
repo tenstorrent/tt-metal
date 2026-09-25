@@ -127,9 +127,9 @@ NpHaloScatterSetup setup_interior_scatter(
 
     constexpr uint32_t sc_cb_id = tt::CBIndex::c_0;
     constexpr uint32_t sc_pages = 8;
-    tt::DataFormat sc_df = datatype_to_dataformat_converter(tensor_args.input_tensor.dtype());
     CircularBufferConfig sc_cb_cfg =
-        CircularBufferConfig(sc_pages * geom.page_size, {{sc_cb_id, sc_df}}).set_page_size(sc_cb_id, geom.page_size);
+        CircularBufferConfig(sc_pages * geom.page_size, {{sc_cb_id, tensor_args.input_tensor.dtype()}})
+            .set_page_size(sc_cb_id, geom.page_size);
     CreateCircularBuffer(program, scatter_cores, sc_cb_cfg);
 
     std::vector<uint32_t> sc_ct = {

@@ -361,27 +361,29 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     uint32_t num_tiles_to_write_per_packet = std::min(max_target_noc_addresses_per_packet, num_pages_per_packet);
     uint32_t tile_granularity = num_tiles_to_write_per_packet < 4 ? 4 * num_tiles_to_write_per_packet : 8;
     uint32_t cb_num_pages = 3 * tile_granularity;  // triple buffering
-    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     uint32_t input_cb_index = tt::CB::c_in0;
     tt::tt_metal::CircularBufferConfig cb_input_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{input_cb_index, df}})
+        tt::tt_metal::CircularBufferConfig(
+            cb_num_pages * l1_scratch_cb_page_size_bytes, {{input_cb_index, input_tensor.dtype()}})
             .set_page_size(input_cb_index, l1_scratch_cb_page_size_bytes);
     CreateCircularBuffer(program, sender_worker_core_range_set, cb_input_config);
     uint32_t intermediate_cb_index = tt::CB::c_in1;
     tt::tt_metal::CircularBufferConfig cb_intermediate_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{intermediate_cb_index, df}})
+        tt::tt_metal::CircularBufferConfig(
+            cb_num_pages * l1_scratch_cb_page_size_bytes, {{intermediate_cb_index, input_tensor.dtype()}})
             .set_page_size(intermediate_cb_index, l1_scratch_cb_page_size_bytes);
     CreateCircularBuffer(program, sender_worker_core_range_set, cb_intermediate_config);
     uint32_t reader_output_cb_index = tt::CB::c_in2;
     tt::tt_metal::CircularBufferConfig cb_reader_output_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{reader_output_cb_index, df}})
+        tt::tt_metal::CircularBufferConfig(
+            cb_num_pages * l1_scratch_cb_page_size_bytes, {{reader_output_cb_index, input_tensor.dtype()}})
             .set_page_size(reader_output_cb_index, l1_scratch_cb_page_size_bytes);
     CreateCircularBuffer(program, sender_worker_core_range_set, cb_reader_output_config);
     uint32_t compute_output_cb_index = tt::CB::c_in3;
     tt::tt_metal::CircularBufferConfig cb_compute_output_config =
         tt::tt_metal::CircularBufferConfig(
-            cb_num_pages * l1_scratch_cb_page_size_bytes, {{compute_output_cb_index, df}})
+            cb_num_pages * l1_scratch_cb_page_size_bytes, {{compute_output_cb_index, input_tensor.dtype()}})
             .set_page_size(compute_output_cb_index, l1_scratch_cb_page_size_bytes);
     CreateCircularBuffer(program, sender_worker_core_range_set, cb_compute_output_config);
 
@@ -396,17 +398,19 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
         // Temp CB needs double capacity for the in-place mul-then-repack pattern.
         tt::tt_metal::CircularBufferConfig cb_addcmul_temp_config =
             tt::tt_metal::CircularBufferConfig(
-                2 * cb_num_pages * l1_scratch_cb_page_size_bytes, {{addcmul_temp_cb_index, df}})
+                2 * cb_num_pages * l1_scratch_cb_page_size_bytes, {{addcmul_temp_cb_index, input_tensor.dtype()}})
                 .set_page_size(addcmul_temp_cb_index, l1_scratch_cb_page_size_bytes);
         CreateCircularBuffer(program, sender_worker_core_range_set, cb_addcmul_temp_config);
 
         tt::tt_metal::CircularBufferConfig cb_addcmul_a_config =
-            tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{addcmul_a_cb_index, df}})
+            tt::tt_metal::CircularBufferConfig(
+                cb_num_pages * l1_scratch_cb_page_size_bytes, {{addcmul_a_cb_index, input_tensor.dtype()}})
                 .set_page_size(addcmul_a_cb_index, l1_scratch_cb_page_size_bytes);
         CreateCircularBuffer(program, sender_worker_core_range_set, cb_addcmul_a_config);
 
         tt::tt_metal::CircularBufferConfig cb_addcmul_b_config =
-            tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{addcmul_b_cb_index, df}})
+            tt::tt_metal::CircularBufferConfig(
+                cb_num_pages * l1_scratch_cb_page_size_bytes, {{addcmul_b_cb_index, input_tensor.dtype()}})
                 .set_page_size(addcmul_b_cb_index, l1_scratch_cb_page_size_bytes);
         CreateCircularBuffer(program, sender_worker_core_range_set, cb_addcmul_b_config);
     }

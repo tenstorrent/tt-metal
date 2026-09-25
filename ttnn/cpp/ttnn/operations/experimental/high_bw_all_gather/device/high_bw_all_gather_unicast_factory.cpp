@@ -772,9 +772,9 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
 
     // Input and relay CB
     uint32_t cb0_id = tt::CB::c_in0;
-    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(cb_depth * cb_page_size, {{cb0_id, df}}).set_page_size(cb0_id, cb_page_size);
+        tt::tt_metal::CircularBufferConfig(cb_depth * cb_page_size, {{cb0_id, input_tensor.dtype()}})
+            .set_page_size(cb0_id, cb_page_size);
     CreateCircularBuffer(program, worker_core_range, cb_src0_config);
 
     // Metadata slot select only: a tiny UInt32 CB whose page base is the NoC landing slot for the

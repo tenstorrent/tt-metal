@@ -41,7 +41,6 @@ ProgramDescriptor EmbeddingBackwardDeviceOperation::create_descriptor(
     tt::DataFormat grad_cb_data_format = datatype_to_dataformat_converter(tensor_args.grad_tensor.dtype());
     uint32_t grad_single_tile_size = tt::tile_size(grad_cb_data_format);
 
-    tt::DataFormat index_cb_data_format = datatype_to_dataformat_converter(tensor_args.index_tensor.dtype());
     uint32_t index_single_page_size =
         INPUT_SIZE * index_element_size_bytes;  // Only need 32 at most at a time, which is less than full page size
     uint32_t index_page_size = index_tensor.padded_shape()[-1] * index_element_size_bytes;
@@ -49,8 +48,7 @@ ProgramDescriptor EmbeddingBackwardDeviceOperation::create_descriptor(
     tt::DataFormat mask_cb_data_format = tt::DataFormat::UInt8;
     uint32_t mask_single_page_size = INPUT_SIZE * 1;  // UInt8 is 1 byte per element
 
-    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(tensor_return_value.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    uint32_t output_single_tile_size = tt::tt_metal::tile_size(tensor_return_value.dtype());
 
     uint32_t embedding_dim = tensor_args.grad_tensor.padded_shape()[-1];
     uint32_t embedding_tiles = embedding_dim / TILE_WIDTH;
@@ -98,7 +96,7 @@ ProgramDescriptor EmbeddingBackwardDeviceOperation::create_descriptor(
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(CBIndex::c_1),
-            .data_format = index_cb_data_format,
+            .data_format = tensor_args.index_tensor.dtype(),
             .page_size = index_single_page_size,
         }}},
     });
@@ -109,7 +107,7 @@ ProgramDescriptor EmbeddingBackwardDeviceOperation::create_descriptor(
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(CBIndex::c_2),
-            .data_format = output_cb_data_format,
+            .data_format = tensor_return_value.dtype(),
             .page_size = output_single_tile_size,
         }}},
     });
@@ -142,7 +140,7 @@ ProgramDescriptor EmbeddingBackwardDeviceOperation::create_descriptor(
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(CBIndex::c_16),
-            .data_format = output_cb_data_format,
+            .data_format = tensor_return_value.dtype(),
             .page_size = output_single_tile_size,
         }}},
     });

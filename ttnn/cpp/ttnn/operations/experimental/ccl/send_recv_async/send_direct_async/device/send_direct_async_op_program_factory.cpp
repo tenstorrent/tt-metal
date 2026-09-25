@@ -133,8 +133,6 @@ ProgramDescriptor SendDirectAsyncProgramFactory::create_descriptor(
                                 ? static_cast<uint32_t>(num_banks * num_pages_per_packet * input_page_size)
                                 : fabric_max_payload_size;
 
-    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-
     std::set<CoreRange> sender_core_ranges;
     for (const auto& core : sender_core_coords) {
         sender_core_ranges.insert(CoreRange(core));
@@ -149,7 +147,7 @@ ProgramDescriptor SendDirectAsyncProgramFactory::create_descriptor(
         .core_ranges = sender_core_range_set,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = src0_cb_index,
-            .data_format = df,
+            .data_format = input_tensor.dtype(),
             .page_size = cb_page_size,
         }}},
     });

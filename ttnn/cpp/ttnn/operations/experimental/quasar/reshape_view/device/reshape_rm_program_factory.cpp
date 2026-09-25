@@ -77,7 +77,6 @@ ProgramDescriptor ReshapeViewRMProgramFactory::create_descriptor(
     const auto& sub_core_grid = operation_attributes.sub_core_grid;
 
     // get datum size
-    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
     const uint32_t data_size = input.element_size();
     IDevice* device = input.device();
     // Multi device pre-computation
@@ -145,7 +144,7 @@ ProgramDescriptor ReshapeViewRMProgramFactory::create_descriptor(
         .core_ranges = total_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = src0_cb_index,
-            .data_format = cb_data_format,
+            .data_format = input.dtype(),
             .page_size = cb_size0,
         }}},
     });
@@ -154,7 +153,7 @@ ProgramDescriptor ReshapeViewRMProgramFactory::create_descriptor(
         .core_ranges = total_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = src1_cb_index,
-            .data_format = cb_data_format,
+            .data_format = input.dtype(),
             .page_size = cb_size1,
         }}},
     });
@@ -190,7 +189,7 @@ ProgramDescriptor ReshapeViewRMProgramFactory::create_descriptor(
             .core_ranges = total_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = src2_cb_index,
-                .data_format = cb_data_format,
+                .data_format = input.dtype(),
                 .page_size = cb_size0,
             }}},
         });
@@ -199,7 +198,7 @@ ProgramDescriptor ReshapeViewRMProgramFactory::create_descriptor(
             .core_ranges = total_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = src3_cb_index,
-                .data_format = cb_data_format,
+                .data_format = input.dtype(),
                 .page_size = cb_size1,
             }}},
         });

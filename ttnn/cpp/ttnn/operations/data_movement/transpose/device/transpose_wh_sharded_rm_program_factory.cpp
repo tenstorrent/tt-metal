@@ -27,8 +27,7 @@ tt::tt_metal::ProgramDescriptor TransposeWHShardedRMProgramFactory::create_descr
 
     tt::DataFormat src0_cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
-    tt::DataFormat dst_cb_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
-    uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
+    uint32_t dst_single_tile_size = tt::tt_metal::tile_size(output_tensor.dtype());
 
     uint32_t W = input_tensor.logical_shape()[3], H = input_tensor.logical_shape()[2];
     uint32_t stick_size_bytes = W * input_tensor.element_size();
@@ -106,7 +105,7 @@ tt::tt_metal::ProgramDescriptor TransposeWHShardedRMProgramFactory::create_descr
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(output_cb_index),
-            .data_format = dst_cb_data_format,
+            .data_format = output_tensor.dtype(),
             .page_size = output_page_size,
         }}},
         .buffer = output_tensor.buffer(),
@@ -147,7 +146,7 @@ tt::tt_metal::ProgramDescriptor TransposeWHShardedRMProgramFactory::create_descr
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(im2_cb_index),
-                .data_format = dst_cb_data_format,
+                .data_format = output_tensor.dtype(),
                 .page_size = dst_single_tile_size,
             }}},
         });
@@ -160,7 +159,7 @@ tt::tt_metal::ProgramDescriptor TransposeWHShardedRMProgramFactory::create_descr
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(out_cb_index),
-                .data_format = dst_cb_data_format,
+                .data_format = output_tensor.dtype(),
                 .page_size = dst_single_tile_size,
             }}},
         });

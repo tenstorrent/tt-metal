@@ -102,7 +102,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_num_pages = 3 * num_pages_per_packet;  // triple buffering
     uint32_t src0_cb_index = tt::CB::c_in0;
-    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     uint32_t cb_total_size = cb_num_pages * l1_scratch_cb_page_size_bytes;
     uint32_t cb_page_size = l1_scratch_cb_page_size_bytes;
@@ -124,7 +123,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         .core_ranges = sender_worker_core_range,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(src0_cb_index),
-            .data_format = df,
+            .data_format = input_tensor.dtype(),
             .page_size = cb_page_size,
         }}},
     });

@@ -181,9 +181,8 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
         operation_attributes.use_noc1_only ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
 
     // For qkv heads fuse
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(operation_attributes.dtype);
 
-    const uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    const uint32_t single_tile_size = tt::tt_metal::tile_size(operation_attributes.dtype);
     const uint32_t head_tiles = operation_attributes.head_dim / tt::constants::TILE_WIDTH;
     const uint32_t head_size = head_tiles * single_tile_size;
 
@@ -207,9 +206,7 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
     // Create CBs for reader/writer for batch_offset
     uint32_t batch_offset_cb_index_reader = tt::CBIndex::c_15;
 
-    tt::DataFormat cb_batch_offset_data_format =
-        tt::tt_metal::datatype_to_dataformat_converter(batch_offset_tensor.dtype());
-    uint32_t single_batch_offset_tile_size = tt::tile_size(cb_batch_offset_data_format);
+    uint32_t single_batch_offset_tile_size = tt::tt_metal::tile_size(batch_offset_tensor.dtype());
     batch_offset_index_stick_size = batch_offset_tensor.buffer()->aligned_page_size();
 
     desc.cbs.push_back(CBDescriptor{
@@ -217,7 +214,7 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
         .core_ranges = output_tensor.memory_config().shard_spec()->grid,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(batch_offset_cb_index_reader),
-            .data_format = cb_batch_offset_data_format,
+            .data_format = batch_offset_tensor.dtype(),
             .page_size = 1,
         }}},
     });
@@ -346,15 +343,13 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_num_pages = input_tensor_num_pages;  // TODO: Reduce this to double-buffer packet-size?
     uint32_t src0_cb_index = tt::CBIndex::c_0;
-    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    tt::DataFormat output_df = tt::tt_metal::datatype_to_dataformat_converter(operation_attributes.dtype);
 
     desc.cbs.push_back(CBDescriptor{
         .total_size = cb_num_pages * l1_scratch_cb_page_size_bytes,
         .core_ranges = sender_worker_core_range,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(src0_cb_index),
-            .data_format = df,
+            .data_format = input_tensor.dtype(),
             .page_size = l1_scratch_cb_page_size_bytes,
         }}},
     });
@@ -478,7 +473,7 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
     }
 
     /* reduction cb */
-    uint32_t reduction_CB_single_tile_size = output_tensor.tensor_spec().tile().get_tile_size(df);
+    uint32_t reduction_CB_single_tile_size = output_tensor.tensor_spec().tile().get_tile_size(input_tensor.dtype());
     uint32_t reduction_CB_tiles = output_tensor_shard_num_pages * operation_attributes.ring_size;
     uint32_t reduction_CB_size = reduction_CB_tiles * reduction_CB_single_tile_size;
 
@@ -490,14 +485,14 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(reduction_cb_index),
-            .data_format = df,
+            .data_format = input_tensor.dtype(),
             .page_size = reduction_CB_single_tile_size,
         }}},
         .buffer = buffer_tensor.buffer(),
     });
 
     /* out cb */
-    uint32_t out_CB_single_tile_size = output_tensor.tensor_spec().tile().get_tile_size(output_df);
+    uint32_t out_CB_single_tile_size = output_tensor.tensor_spec().tile().get_tile_size(operation_attributes.dtype);
     uint32_t out_CB_tiles = output_tensor_shard_num_pages;
     uint32_t out_CB_size = out_CB_tiles * out_CB_single_tile_size;
 
@@ -507,7 +502,7 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
         .core_ranges = output_tensor_cores,  // TODO: This should be the output cores instead
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(out_cb_index),
-            .data_format = output_df,
+            .data_format = operation_attributes.dtype,
             .page_size = out_CB_single_tile_size,
         }}},
         .buffer = output_tensor.buffer(),  // TODO: Remove once new cb attached for output

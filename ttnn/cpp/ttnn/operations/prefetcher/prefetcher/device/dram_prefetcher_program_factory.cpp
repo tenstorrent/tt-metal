@@ -65,7 +65,6 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
     });
 
     /* Dataformats */
-    tt::DataFormat tensor_addrs_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_addrs.dtype());
     std::vector<tt::DataFormat> tensor_data_formats;
     tensor_data_formats.reserve(tensors.size());
     std::transform(tensors.begin(), tensors.end(), std::back_inserter(tensor_data_formats), [](const auto& t) {
@@ -172,7 +171,7 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
         .core_ranges = reader_core_range,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(tensor_addrs_cb_index),
-            .data_format = tensor_addrs_data_format,
+            .data_format = tensor_addrs.dtype(),
             .page_size = tensor_addrs_single_tile_size,
         }}},
         .buffer = tensor_addrs_buffer,

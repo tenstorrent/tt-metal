@@ -127,9 +127,9 @@ BroadcastProgramFactory::cached_program_t BroadcastProgramFactory::create_at(
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_num_pages = 3 * num_pages_per_packet;  // triple buffering
     uint32_t src0_cb_index = tt::CB::c_in0;
-    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{src0_cb_index, df}})
+        tt::tt_metal::CircularBufferConfig(
+            cb_num_pages * l1_scratch_cb_page_size_bytes, {{src0_cb_index, input_tensor.dtype()}})
             .set_page_size(src0_cb_index, l1_scratch_cb_page_size_bytes);
 
     uint32_t buffer_page_size = page_size;
@@ -141,9 +141,9 @@ BroadcastProgramFactory::cached_program_t BroadcastProgramFactory::create_at(
         }
 
         uint32_t num_rows_per_packet = (max_packet_size / buffer_page_size >= 2) ? 2 : 1;
-        cb_src0_config =
-            tt::tt_metal::CircularBufferConfig(3 * buffer_page_size * num_rows_per_packet, {{src0_cb_index, df}})
-                .set_page_size(src0_cb_index, buffer_page_size);
+        cb_src0_config = tt::tt_metal::CircularBufferConfig(
+                             3 * buffer_page_size * num_rows_per_packet, {{src0_cb_index, input_tensor.dtype()}})
+                             .set_page_size(src0_cb_index, buffer_page_size);
     }
     CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
 

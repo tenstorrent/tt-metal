@@ -106,7 +106,6 @@ KernelIds build_kernels_and_cbs(
     auto* dst_e4m3_buffer = output_e4m3.buffer();
     auto* dst_scale_buffer = output_scale.buffer();
 
-    const DataFormat input_df = datatype_to_dataformat_converter(input.dtype());
     const DataFormat fp32_df = DataFormat::Float32;
     const DataFormat fp8_df = DataFormat::Fp8_e4m3;
 
@@ -129,8 +128,9 @@ KernelIds build_kernels_and_cbs(
     // cb_in: input, one tile per page; tiles_per_block pages = one 128-wide block, double-buffered.
     // ROW_MAJOR input: the reader fills the block ([tile_h x 128]) contiguously across these pages.
     // TILE input: the reader reads the tiles_per_block tiles individually into these pages.
-    CircularBufferConfig cb_in_cfg = CircularBufferConfig(2 * tiles_per_block * in_tile_bytes, {{cb_in_idx, input_df}})
-                                         .set_page_size(cb_in_idx, in_tile_bytes);
+    CircularBufferConfig cb_in_cfg =
+        CircularBufferConfig(2 * tiles_per_block * in_tile_bytes, {{cb_in_idx, input.dtype()}})
+            .set_page_size(cb_in_idx, in_tile_bytes);
     CreateCircularBuffer(program, all_cores, cb_in_cfg);
 
     // cb_tile: input tiles in fp32. ROW_MAJOR: tilized input; TILE: copied input (already tiles).

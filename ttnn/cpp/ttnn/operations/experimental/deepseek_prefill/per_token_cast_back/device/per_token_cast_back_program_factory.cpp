@@ -120,7 +120,6 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
     const uint32_t TILE_BYTES = tile_h * tile_w * sizeof(float);
     const DataFormat fp8_df = DataFormat::Fp8_e4m3;
     const DataFormat fp32_df = DataFormat::Float32;
-    const DataFormat output_df = datatype_to_dataformat_converter(operation_attributes.output_dtype);
 
     auto* src_e4m3_buffer = input_e4m3.buffer();
     auto* src_scale_buffer = input_scale.buffer();
@@ -211,7 +210,7 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
     // cb_out: row-major output (bf16/fp32), one tile per page; tiles_per_block pages = one block,
     // double-buffered.
     CircularBufferConfig cb_out_cfg =
-        CircularBufferConfig(2 * tiles_per_block * out_tile_bytes, {{cb_out_idx, output_df}})
+        CircularBufferConfig(2 * tiles_per_block * out_tile_bytes, {{cb_out_idx, operation_attributes.output_dtype}})
             .set_page_size(cb_out_idx, out_tile_bytes);
     CreateCircularBuffer(program, all_cores, cb_out_cfg);
 
@@ -230,10 +229,9 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
         counts_aligned_page_bytes = counts_buffer->aligned_page_size();
         table_aligned_page_bytes = table_buffer->aligned_page_size();
 
-        const DataFormat idx_df = datatype_to_dataformat_converter(expert_token_counts->dtype());
         auto make_index_scratch_cb = [&](uint32_t cb_idx, uint32_t page_bytes) {
-            CircularBufferConfig cfg =
-                CircularBufferConfig(page_bytes, {{cb_idx, idx_df}}).set_page_size(cb_idx, page_bytes);
+            CircularBufferConfig cfg = CircularBufferConfig(page_bytes, {{cb_idx, expert_token_counts->dtype()}})
+                                           .set_page_size(cb_idx, page_bytes);
             CreateCircularBuffer(program, all_cores, cfg);
         };
 

@@ -69,7 +69,6 @@ NpHaloScatterMeshWorkloadFactory::cached_program_t NpHaloScatterMeshWorkloadFact
     const uint32_t Wp = Wd + 2 * pW;
 
     const uint32_t page_size = compact->aligned_page_size();
-    tt::DataFormat df = datatype_to_dataformat_converter(tensor_args.compact_buffer.dtype());
 
     // Every padded page is written once: interior (Hd*Wd) from x + border (2 H-sections pH*Wd + 2
     // W-sections Hp*pW) from compact, per frame.
@@ -89,7 +88,8 @@ NpHaloScatterMeshWorkloadFactory::cached_program_t NpHaloScatterMeshWorkloadFact
     constexpr uint32_t cb_id = tt::CBIndex::c_0;
     constexpr uint32_t cb_pages = 8;  // sticks per barrier batch (in-flight reads/writes)
     CircularBufferConfig cb_cfg =
-        CircularBufferConfig(cb_pages * page_size, {{cb_id, df}}).set_page_size(cb_id, page_size);
+        CircularBufferConfig(cb_pages * page_size, {{cb_id, tensor_args.compact_buffer.dtype()}})
+            .set_page_size(cb_id, page_size);
     CreateCircularBuffer(program, all_cores, cb_cfg);
 
     auto writer_cfg = WriterDataMovementConfig{};

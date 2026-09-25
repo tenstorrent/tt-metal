@@ -55,13 +55,11 @@ InsertProgramFactory::cached_program_t InsertProgramFactory::create(
     auto* counts_buffer = counts.buffer();
     auto* global_expert_idx_table_buffer = global_expert_idx_table.buffer();
 
-    const tt::DataFormat tile_data_format = tt::tt_metal::datatype_to_dataformat_converter(global_tensor.dtype());
-    const uint32_t single_tile_size = tt::tile_size(tile_data_format);
+    const uint32_t single_tile_size = tt::tt_metal::tile_size(global_tensor.dtype());
 
     const uint32_t start_page_size = start_buffer->aligned_page_size();
     const uint32_t counts_page_size = counts_buffer->aligned_page_size();
     const uint32_t global_expert_idx_table_page_size = global_expert_idx_table_buffer->aligned_page_size();
-    const tt::DataFormat idx_data_format = tt::tt_metal::datatype_to_dataformat_converter(start.dtype());
 
     // Multi-core implementation: every tensix core in the device's compute
     // grid participates. Cores are assigned a flat core_id in row-major order
@@ -90,35 +88,35 @@ InsertProgramFactory::cached_program_t InsertProgramFactory::create(
     // writer jitter. Each tile is ~1 KB for bfp8_b so 32 slots is ~32 KB of L1.
     constexpr uint32_t tile_buffering = 32;
     tt::tt_metal::CircularBufferConfig cb_tile_config =
-        tt::tt_metal::CircularBufferConfig(tile_buffering * single_tile_size, {{cb_tile, tile_data_format}})
+        tt::tt_metal::CircularBufferConfig(tile_buffering * single_tile_size, {{cb_tile, global_tensor.dtype()}})
             .set_page_size(cb_tile, single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_tile_config);
 
     tt::tt_metal::CircularBufferConfig cb_counts_reader_config =
-        tt::tt_metal::CircularBufferConfig(counts_page_size, {{cb_counts_scratch_reader, idx_data_format}})
+        tt::tt_metal::CircularBufferConfig(counts_page_size, {{cb_counts_scratch_reader, start.dtype()}})
             .set_page_size(cb_counts_scratch_reader, counts_page_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_counts_reader_config);
 
     tt::tt_metal::CircularBufferConfig cb_start_writer_config =
-        tt::tt_metal::CircularBufferConfig(start_page_size, {{cb_start_scratch_writer, idx_data_format}})
+        tt::tt_metal::CircularBufferConfig(start_page_size, {{cb_start_scratch_writer, start.dtype()}})
             .set_page_size(cb_start_scratch_writer, start_page_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_start_writer_config);
 
     tt::tt_metal::CircularBufferConfig cb_counts_writer_config =
-        tt::tt_metal::CircularBufferConfig(counts_page_size, {{cb_counts_scratch_writer, idx_data_format}})
+        tt::tt_metal::CircularBufferConfig(counts_page_size, {{cb_counts_scratch_writer, start.dtype()}})
             .set_page_size(cb_counts_scratch_writer, counts_page_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_counts_writer_config);
 
     // Per-core scratch for the global_expert_idx_table (one page each for reader / writer).
     tt::tt_metal::CircularBufferConfig cb_global_expert_idx_reader_config =
         tt::tt_metal::CircularBufferConfig(
-            global_expert_idx_table_page_size, {{cb_global_expert_idx_scratch_reader, idx_data_format}})
+            global_expert_idx_table_page_size, {{cb_global_expert_idx_scratch_reader, start.dtype()}})
             .set_page_size(cb_global_expert_idx_scratch_reader, global_expert_idx_table_page_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_global_expert_idx_reader_config);
 
     tt::tt_metal::CircularBufferConfig cb_global_expert_idx_writer_config =
         tt::tt_metal::CircularBufferConfig(
-            global_expert_idx_table_page_size, {{cb_global_expert_idx_scratch_writer, idx_data_format}})
+            global_expert_idx_table_page_size, {{cb_global_expert_idx_scratch_writer, start.dtype()}})
             .set_page_size(cb_global_expert_idx_scratch_writer, global_expert_idx_table_page_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_global_expert_idx_writer_config);
 

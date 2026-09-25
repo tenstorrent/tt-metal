@@ -42,8 +42,6 @@ tt::tt_metal::ProgramDescriptor receive_program_factory(
     // program!
     tt::tt_metal::ProgramDescriptor desc;
 
-    tt::DataFormat inter_dataformat = tt::tt_metal::datatype_to_dataformat_converter(intermediate_tensor.dtype());
-
     // CB for packet headers
     constexpr auto packet_header_cb_id = tt::CBIndex::c_0;
     constexpr auto buffering_factor = 2;  // this is in other fabric kernels
@@ -66,7 +64,7 @@ tt::tt_metal::ProgramDescriptor receive_program_factory(
         .core_ranges = all_cores,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(packet_cb_id),
-            .data_format = inter_dataformat,
+            .data_format = intermediate_tensor.dtype(),
             .page_size = packet_size_bytes,
         }}},
     });
@@ -79,7 +77,7 @@ tt::tt_metal::ProgramDescriptor receive_program_factory(
         .core_ranges = all_cores,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(receiver_cb_id),
-            .data_format = inter_dataformat,
+            .data_format = intermediate_tensor.dtype(),
             .page_size = output_page_size_bytes,
         }}},
     });

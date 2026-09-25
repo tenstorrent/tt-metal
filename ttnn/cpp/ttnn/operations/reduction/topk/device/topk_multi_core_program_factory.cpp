@@ -93,7 +93,6 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
 
     // Data format configuration for all circular buffers
     const tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    const tt::DataFormat value_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(value_tensor.dtype());
     tt::DataFormat index_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(index_tensor.dtype());
     const bool has_32bit_index =
         index_cb_data_format == tt::DataFormat::UInt32 || index_cb_data_format == tt::DataFormat::Int32;
@@ -144,7 +143,7 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     const auto first_core_range_set = CoreRangeSet(first_core_range);
 
     const std::uint32_t input_tile_size = tile_size(input_cb_data_format);
-    const std::uint32_t value_tile_size = tile_size(value_cb_data_format);
+    const std::uint32_t value_tile_size = tt::tt_metal::tile_size(value_tensor.dtype());
     const std::uint32_t index_tile_size = tile_size(index_cb_data_format);
     const std::uint32_t compute_tile_size = tile_size(compute_cb_data_format);
 
@@ -354,7 +353,7 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
         .core_ranges = final_cores_range_set,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<std::uint8_t>(values_cb_index),
-            .data_format = value_cb_data_format,
+            .data_format = value_tensor.dtype(),
             .page_size = value_tile_size,
         }}},
     });

@@ -65,10 +65,9 @@ ArgMaxNCProgramFactory::cached_program_t ArgMaxNCProgramFactory::create(
     // Indices live entirely in DST: the compute kernel materializes them as
     // uint32 via fill_tile_int<UInt32> rather than staging them through a CB.
     // The uint32 result is packed straight to the UInt32 output CB (no typecast).
-    const DataFormat output_data_format = datatype_to_dataformat_converter(output.dtype());
 
     const uint32_t input_tile_size = tile_size(input_data_format);
-    const uint32_t output_tile_size = tile_size(output_data_format);
+    const uint32_t output_tile_size = tt::tt_metal::tile_size(output.dtype());
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
@@ -102,7 +101,7 @@ ArgMaxNCProgramFactory::cached_program_t ArgMaxNCProgramFactory::create(
     CreateCircularBuffer(program, all_cores, src_cb_config);
 
     CircularBufferConfig out_cb_config =
-        CircularBufferConfig(output_cb_depth * output_tile_size, {{out_cb, output_data_format}})
+        CircularBufferConfig(output_cb_depth * output_tile_size, {{out_cb, output.dtype()}})
             .set_page_size(out_cb, output_tile_size);
     CreateCircularBuffer(program, all_cores, out_cb_config);
 

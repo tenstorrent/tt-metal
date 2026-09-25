@@ -203,9 +203,9 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
         (input_tensor_num_pages / operation_attributes.num_links) +
         1;  // We are dealing with small shapes, so assuming all pages for a worker can be fit into the CB
     uint32_t src0_cb_index = tt::CB::c_in0;
-    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{src0_cb_index, df}})
+        tt::tt_metal::CircularBufferConfig(
+            cb_num_pages * l1_scratch_cb_page_size_bytes, {{src0_cb_index, input_tensor.dtype()}})
             .set_page_size(src0_cb_index, l1_scratch_cb_page_size_bytes);
     CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
@@ -221,14 +221,16 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
 
     uint32_t q_output_cb_index = tt::CBIndex::c_16;
     tt::tt_metal::CircularBufferConfig cb_q_output_config =
-        tt::tt_metal::CircularBufferConfig(output_tensor.padded_shape()[-2] * row_size, {{q_output_cb_index, df}})
+        tt::tt_metal::CircularBufferConfig(
+            output_tensor.padded_shape()[-2] * row_size, {{q_output_cb_index, input_tensor.dtype()}})
             .set_page_size(q_output_cb_index, single_tile_size)
             .set_globally_allocated_address(*output_tensor.buffer());
     auto cb_q_output = tt::tt_metal::CreateCircularBuffer(program, q_cores, cb_q_output_config);
 
     uint32_t pre_tilize_cb_index = tt::CBIndex::c_17;
     tt::tt_metal::CircularBufferConfig cb_pre_tilize_config =
-        tt::tt_metal::CircularBufferConfig(output_tensor.padded_shape()[-2] * row_size, {{pre_tilize_cb_index, df}})
+        tt::tt_metal::CircularBufferConfig(
+            output_tensor.padded_shape()[-2] * row_size, {{pre_tilize_cb_index, input_tensor.dtype()}})
             .set_page_size(pre_tilize_cb_index, single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, q_cores, cb_pre_tilize_config);
 

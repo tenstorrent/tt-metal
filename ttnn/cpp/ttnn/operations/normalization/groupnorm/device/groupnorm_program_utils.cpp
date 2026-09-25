@@ -296,7 +296,6 @@ GroupNormShardedStaticCbSizes compute_sharded_gn_static_cb_sizes(
 
     // Data formats, mirroring groupnorm_sharded_program_factory.cpp. Note beta overrides gamma
     // when both are present -- they share one CB format there, so they must here too.
-    const tt::DataFormat in_data_format = datatype_to_dataformat_converter(input.dtype());
     const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(im_data_format);
     tt::DataFormat gamma_beta_cb_data_format = tt::DataFormat::Float16_b;
     if (gamma_dtype.has_value()) {
@@ -313,7 +312,7 @@ GroupNormShardedStaticCbSizes compute_sharded_gn_static_cb_sizes(
         negative_mask_dtype.has_value() ? datatype_to_dataformat_converter(negative_mask_dtype.value())
                                         : tt::DataFormat::Float16_b;
 
-    const uint32_t in_single_tile_size = tt::tile_size(in_data_format);
+    const uint32_t in_single_tile_size = tt::tt_metal::tile_size(input.dtype());
     const uint32_t single_tile_size = tt::tile_size(cb_data_format);
     const uint32_t gamma_beta_single_tile_size = tt::tile_size(gamma_beta_cb_data_format);
     const uint32_t in_mask_single_tile_size = tt::tile_size(in_mask_cb_data_format);
