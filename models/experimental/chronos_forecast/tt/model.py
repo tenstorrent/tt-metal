@@ -131,20 +131,35 @@ class TtChronos:
         weights: TtChronosWeights,
         config: TtChronosConfig,
         precision: TtChronosPrecision | None = None,
+        *,
+        l1_chunk_tokens: int | None = None,
     ):
+        """``l1_chunk_tokens`` (e.g. ``precision.l1_chunk_tokens()``) runs the encoder
+        L1-resident on chunks of ``l1_chunk_tokens // padded_T`` series when groups
+        are unique; other group layouts and ``None`` keep activations in DRAM."""
         self.device = device
         self.weights = weights
         self.config = config
         self.precision = precision or TtChronosPrecision()
+        self.l1_chunk_tokens = l1_chunk_tokens
         self._input_embed = TtResidualBlock(device, weights.input_embed)
         self._encoder = TtEncoder(device, weights.encoder, self.precision)
         self._output_embed = TtResidualBlock(device, weights.output_embed)
 
     @classmethod
-    def from_torch_model(cls, device, model, precision: TtChronosPrecision | None = None) -> "TtChronos":
+    def from_torch_model(
+        cls, device, model, precision: TtChronosPrecision | None = None, *, l1_chunk_tokens: int | None = None
+    ) -> "TtChronos":
         """Build from a reference ``Chronos2Model`` (weights + geometry)."""
         weights = TtChronosWeights.from_torch_model(model)
-        return cls(device, weights, tt_chronos_config_from_torch_model(model), precision)
+        return cls(
+            device, weights, tt_chronos_config_from_torch_model(model), precision, l1_chunk_tokens=l1_chunk_tokens
+        )
+
+    def _l1_series_chunk(self, padded_seq_len: int) -> int | None:
+        if self.l1_chunk_tokens is None:
+            return None
+        return max(1, self.l1_chunk_tokens // padded_seq_len)
 
     def prepare_inputs(
         self,
@@ -279,6 +294,7 @@ class TtChronos:
         ttnn.deallocate(context_embeds)
         ttnn.deallocate(future_embeds)
 
+        l1_series_chunk = self._l1_series_chunk(x.padded_shape[-2]) if inputs.unique_groups else None
         hidden = self._encoder.forward_device(
             x,
             inputs.cos,
@@ -286,6 +302,7 @@ class TtChronos:
             inputs.time_mask,
             inputs.group_mask,
             diagonal_group_attention=inputs.unique_groups,
+            l1_series_chunk=l1_series_chunk,
         )
         seq_len = hidden.shape[-2]
         forecast_embeds = ttnn.slice(

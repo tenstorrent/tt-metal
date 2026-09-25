@@ -87,19 +87,26 @@ class TtEncoderBlock:
         )
         return (_weight(weights.ff_wi), _weight(weights.ff_wo), rms_w)
 
-    def forward_device(self, x, cos, sin, time_mask, group_mask, *, diagonal_group_attention: bool = False):
-        """Device (B,T,d) + cos/sin (1 or B,1,T,Dh) + masks -> device (B,T,d); caller owns it."""
+    def forward_device(
+        self, x, cos, sin, time_mask, group_mask, *, diagonal_group_attention: bool = False, memory_config=None
+    ):
+        """Device (B,T,d) + cos/sin (1 or B,1,T,Dh) + masks -> device (B,T,d); caller owns it.
+
+        ``memory_config`` places the per-token path (time attention, diagonal
+        group attention, FF) intermediates; the default is DRAM.
+        """
         import ttnn
 
+        mem = ttnn.DRAM_MEMORY_CONFIG if memory_config is None else memory_config
         ff_wi, ff_wo, ff_rms = self._ff
 
         # Sublayer 1: time attention + residual
-        out = self.time_core(x, time_mask, cos, sin)
+        out = self.time_core(x, time_mask, cos, sin, memory_config=mem)
         x = self._residual_add(x, out)
 
         # Sublayer 2: group attention (batch-axis) + residual vs original layout
         if diagonal_group_attention:
-            x = self._residual_add(x, self.group_core.forward_diagonal_group(x))
+            x = self._residual_add(x, self.group_core.forward_diagonal_group(x, memory_config=mem))
         else:
             x_flip = ttnn.permute(x, (1, 0, 2))
             out = self.group_core(x_flip, group_mask)
@@ -110,16 +117,19 @@ class TtEncoderBlock:
 
         # Sublayer 3: feedforward (inline) + residual
         ff_fidelity = self.precision.ff_math_fidelity()
-        n = ttnn.rms_norm(x, epsilon=self.weights.ff_eps, weight=ff_rms)
+        n = ttnn.rms_norm(x, epsilon=self.weights.ff_eps, weight=ff_rms, memory_config=mem)
         h = program_configs.linear(
             n,
             ff_wi,
             activation="relu",
             math_fidelity=ff_fidelity,
             dtype=self.precision.ff_hidden_dtype(),
+            memory_config=mem,
         )
         ttnn.deallocate(n)
-        m = program_configs.linear(h, ff_wo, math_fidelity=ff_fidelity, dtype=self.precision.sublayer_out_dtype())
+        m = program_configs.linear(
+            h, ff_wo, math_fidelity=ff_fidelity, dtype=self.precision.sublayer_out_dtype(), memory_config=mem
+        )
         ttnn.deallocate(h)
         x = self._residual_add(x, m)
         return x

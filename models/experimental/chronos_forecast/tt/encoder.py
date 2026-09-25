@@ -59,10 +59,28 @@ class TtEncoder:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def forward_device(self, x, cos, sin, time_mask, group_mask, *, diagonal_group_attention: bool = False):
-        """Device (B,T,d) + cos/sin (1 or B,1,T,Dh) + masks -> device (B,T,d); caller owns it."""
+    def forward_device(
+        self,
+        x,
+        cos,
+        sin,
+        time_mask,
+        group_mask,
+        *,
+        diagonal_group_attention: bool = False,
+        l1_series_chunk: int | None = None,
+    ):
+        """Device (B,T,d) + cos/sin (1 or B,1,T,Dh) + masks -> device (B,T,d); caller owns it.
+
+        With ``l1_series_chunk`` (diagonal group attention only) the encoder runs
+        on chunks of that many series with every intermediate in L1.
+        """
         import ttnn
 
+        if l1_series_chunk is not None:
+            if not diagonal_group_attention:
+                raise ValueError("L1 series chunking needs diagonal group attention (series must be independent)")
+            return self._forward_l1_chunked(x, cos, sin, time_mask, l1_series_chunk)
         for block in self.blocks:
             x = block.forward_device(
                 x,
@@ -74,6 +92,39 @@ class TtEncoder:
             )
         x = ttnn.rms_norm(x, epsilon=self.weights.final_eps, weight=self._final_norm)
         return x
+
+    def _forward_l1_chunked(self, x, cos, sin, time_mask, series_chunk: int):
+        """Series are independent, so each chunk runs all blocks without leaving L1."""
+        import ttnn
+
+        l1 = ttnn.L1_MEMORY_CONFIG
+        shape = list(x.shape)
+        batch_dim = len(shape) - 3
+        cos_l1 = ttnn.to_memory_config(cos, l1)
+        sin_l1 = ttnn.to_memory_config(sin, l1)
+        chunks = []
+        for start in range(0, shape[batch_dim], series_chunk):
+            begin, end = [0] * len(shape), list(shape)
+            begin[batch_dim] = start
+            end[batch_dim] = min(start + series_chunk, shape[batch_dim])
+            h = ttnn.slice(x, begin, end, memory_config=l1)
+            for block in self.blocks:
+                h = block.forward_device(
+                    h, cos_l1, sin_l1, time_mask, None, diagonal_group_attention=True, memory_config=l1
+                )
+            out = ttnn.rms_norm(
+                h, epsilon=self.weights.final_eps, weight=self._final_norm, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            ttnn.deallocate(h)
+            chunks.append(out)
+        ttnn.deallocate(cos_l1)
+        ttnn.deallocate(sin_l1)
+        if len(chunks) == 1:
+            return chunks[0]
+        out = ttnn.concat(chunks, dim=batch_dim, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for chunk in chunks:
+            ttnn.deallocate(chunk)
+        return out
 
     def forward(
         self,

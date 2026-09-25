@@ -17,6 +17,8 @@ from dataclasses import dataclass
 TILE = 32
 # in0 + in1 double-buffered, plus the output block, in bf16 tiles (2 KiB each).
 _L1_TILE_BUDGET = 560
+# Smaller when activations live in L1, so circular buffers leave room for them.
+_L1_RESIDENT_TILE_BUDGET = 320
 _MAX_IN0_BLOCK_W = 12
 _MAX_OUT_BLOCK_H = 16
 
@@ -60,6 +62,15 @@ class TtChronosPrecision:
 
         return ttnn.MathFidelity.LoFi if self.lofi_ff else None
 
+    def l1_chunk_tokens(self) -> int:
+        """Largest L1-resident encoder chunk (series x tile-padded tokens) measured to fit a P150."""
+        return _L1_CHUNK_TOKENS_BF8 if self.bf8_attention and self.bf8_ff_hidden else _L1_CHUNK_TOKENS_BF16
+
+
+# 48 / 64 series of 160 padded tokens; the next step up clashes with matmul circular buffers.
+_L1_CHUNK_TOKENS_BF16 = 48 * 160
+_L1_CHUNK_TOKENS_BF8 = 64 * 160
+
 
 def compute_kernel_config(math_fidelity=None, *, fp32_dest_acc_en: bool = False, packer_l1_acc: bool = True):
     import ttnn
@@ -98,6 +109,7 @@ def fused_batch_matmul_config(
     *,
     fused_activation=None,
     fp32_dest_acc_en: bool = False,
+    cb_tile_budget: int = _L1_TILE_BUDGET,
 ):
     """2D mcast config with M split over grid rows and N over grid columns."""
     import ttnn
@@ -114,7 +126,7 @@ def fused_batch_matmul_config(
         if k_tiles % cand:
             continue
         tiles = 2 * out_block_h * cand + 2 * cand * out_block_w + out_block_h * out_block_w
-        if tiles <= _L1_TILE_BUDGET:
+        if tiles <= cb_tile_budget:
             in0_block_w = cand
             break
     sub_h, sub_w = _subblock(out_block_h, out_block_w, 4 if fp32_dest_acc_en else 8)
@@ -184,12 +196,14 @@ def linear(x, weight, *, bias=None, activation: str | None = None, memory_config
         )
     m_tiles = math.prod(x_shape[:-1]) // TILE
     grid = x.device().compute_with_storage_grid_size()
+    l1_resident = ttnn.BufferType.L1 in (x.memory_config().buffer_type, memory_config.buffer_type)
     program_config = fused_batch_matmul_config(
         (grid.x, grid.y),
         m_tiles,
         k // TILE,
         n // TILE,
         fused_activation=_fused_activation(activation),
+        cb_tile_budget=_L1_RESIDENT_TILE_BUDGET if l1_resident else _L1_TILE_BUDGET,
     )
     return ttnn.linear(
         x,

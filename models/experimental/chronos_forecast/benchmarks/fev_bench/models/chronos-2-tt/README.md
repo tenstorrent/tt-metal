@@ -23,6 +23,8 @@ tasks fail instead of silently changing the benchmark.
 Pass `"precision":"performance"` in `-k` to run the reduced-precision encoder
 (bf8 weights and activations, LoFi FF matmuls; see `TtChronosPrecision` in
 `tt/program_configs.py`). The default keeps bf16 activations and weights.
+Add `"l1_resident":true` to run the encoder on L1-resident series chunks; the
+chunk budget was measured at the paper context (2048 steps, 160 padded tokens).
 
 The first run includes kernel compilation. `inference_time_s` from a subsequent
 run with a warm kernel cache is the steady-state number.

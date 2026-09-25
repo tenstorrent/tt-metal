@@ -31,6 +31,7 @@ class Chronos2TTModel(fev.ForecastingModel):
         cross_learning: bool = True,
         as_univariate: bool = False,
         precision: str = "default",
+        l1_resident: bool = False,
     ):
         super().__init__()
         if precision not in ("default", "performance"):
@@ -45,7 +46,12 @@ class Chronos2TTModel(fev.ForecastingModel):
         self._quantile_levels = list(reference.chronos_config.quantiles)
         self._output_patch_size = int(reference.chronos_config.output_patch_size)
         tt_precision = TtChronosPrecision.performance() if precision == "performance" else TtChronosPrecision()
-        self._model = TtChronos.from_torch_model(self._mesh_device, reference, tt_precision)
+        self._model = TtChronos.from_torch_model(
+            self._mesh_device,
+            reference,
+            tt_precision,
+            l1_chunk_tokens=tt_precision.l1_chunk_tokens() if l1_resident else None,
+        )
         self._closed = False
         atexit.register(self.close)
 

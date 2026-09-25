@@ -9,6 +9,10 @@ Run under Tracy and summarize the signposted region:
         "models/experimental/chronos_forecast/tests/perf/test_device_forward_profile.py" -k default_dram
     tt-perf-report generated/profiler/reports/<ts>/ops_perf_results_<ts>.csv \
         --start-signpost chronos_device_forward_start --end-signpost chronos_device_forward_stop
+
+The ``*_l1`` variants dispatch ~3.5k ops per forward, which overflows the
+device profiler's marker buffers at batch 1024; run them without Tracy for
+the eager timing, or profile a smaller batch (per-chunk costs are identical).
 """
 
 from __future__ import annotations
@@ -29,14 +33,16 @@ from models.experimental.chronos_forecast.tests.perf.test_paper_forward import (
 
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize(
-    "precision_name",
+    "precision_name, l1_resident",
     [
-        pytest.param("default", id="default_dram"),
-        pytest.param("performance", id="performance_dram"),
+        pytest.param("default", False, id="default_dram"),
+        pytest.param("default", True, id="default_l1"),
+        pytest.param("performance", False, id="performance_dram"),
+        pytest.param("performance", True, id="performance_l1"),
     ],
 )
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
-def test_device_forward_profile(mesh_device, precision_name):
+def test_device_forward_profile(mesh_device, precision_name, l1_resident):
     ttnn = pytest.importorskip("ttnn")
 
     from models.experimental.chronos_forecast.tt.model import TtChronos
@@ -49,7 +55,8 @@ def test_device_forward_profile(mesh_device, precision_name):
 
     precision = TtChronosPrecision.performance() if precision_name == "performance" else TtChronosPrecision()
     reference, weight_source = _load_reference()
-    model = TtChronos.from_torch_model(mesh_device, reference, precision)
+    l1_chunk_tokens = precision.l1_chunk_tokens() if l1_resident else None
+    model = TtChronos.from_torch_model(mesh_device, reference, precision, l1_chunk_tokens=l1_chunk_tokens)
     torch.manual_seed(0)
     context = torch.randn(BATCH, CONTEXT)
     prepared = model.prepare_inputs(context=context, num_output_patches=NUM_OUTPUT_PATCHES)
@@ -81,6 +88,7 @@ def test_device_forward_profile(mesh_device, precision_name):
         "\n[DEVICE PROFILE] Chronos paper shape, device-resident forward"
         f"\n  weights:        {weight_source}"
         f"\n  precision:      {precision_name}"
+        f"\n  l1_chunk_tokens: {l1_chunk_tokens}"
         f"\n  unique_groups:  {prepared.unique_groups}"
         f"\n  eager_device_s: {device_s:.6f}"
     )

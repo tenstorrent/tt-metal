@@ -66,24 +66,29 @@ def _run_device(model, context, group_ids):
 
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize(
-    "batch, group_size",
+    "batch, group_size, l1_resident",
     [
-        pytest.param(64, 1, id="b64_unique_groups"),
-        pytest.param(64, 4, id="b64_groups_of_4"),
+        pytest.param(64, 1, False, id="b64_unique_groups"),
+        pytest.param(64, 4, False, id="b64_groups_of_4"),
+        # 48-series chunks: one full chunk plus a 16-series remainder.
+        pytest.param(64, 1, True, id="b64_unique_groups_l1"),
+        pytest.param(64, 4, True, id="b64_groups_of_4_l1_falls_back"),
     ],
 )
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
-def test_device_resident_paper_context_pcc(mesh_device, batch, group_size):
+def test_device_resident_paper_context_pcc(mesh_device, batch, group_size, l1_resident):
     pytest.importorskip("ttnn")
     from tests.ttnn.utils_for_testing import assert_with_pcc
 
     from models.experimental.chronos_forecast.tt.model import TtChronos
+    from models.experimental.chronos_forecast.tt.program_configs import TtChronosPrecision
 
     if mesh_device.get_num_devices() != 1:
         pytest.skip("single-chip bring-up only (one chip)")
 
     reference, weight_source = _load_reference()
-    model = TtChronos.from_torch_model(mesh_device, reference)
+    l1_chunk_tokens = TtChronosPrecision().l1_chunk_tokens() if l1_resident else None
+    model = TtChronos.from_torch_model(mesh_device, reference, l1_chunk_tokens=l1_chunk_tokens)
 
     torch.manual_seed(0)
     context = torch.cumsum(torch.randn(batch, CONTEXT), dim=-1) + 5.0 * torch.randn(batch, 1)
@@ -103,7 +108,7 @@ def test_device_resident_paper_context_pcc(mesh_device, batch, group_size):
     _, pcc = assert_with_pcc(expected.float(), got, pcc=0.95)
     mae_n = (expected_n - got_n).abs().mean().item()
     print(
-        f"\n[PCC] {weight_source} batch={batch} group_size={group_size} "
+        f"\n[PCC] {weight_source} batch={batch} group_size={group_size} l1={l1_resident} "
         f"pcc_norm={pcc_n} pcc={pcc} mae_norm={mae_n:.5f}"
     )
 
@@ -114,21 +119,23 @@ _MAX_REL_WQL_INCREASE = 0.01
 
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize(
-    "precision_name, group_size",
+    "precision_name, group_size, l1_resident",
     [
-        pytest.param("default", 1, id="default"),
-        pytest.param("default", 4, id="default_groups_of_4"),
-        pytest.param("bf8_attention", 1, id="bf8_attention"),
-        pytest.param("bf8_weights", 1, id="bf8_weights"),
-        pytest.param("bf8_ff_hidden", 1, id="bf8_ff_hidden"),
-        pytest.param("bf8_sublayer_out", 1, id="bf8_sublayer_out"),
-        pytest.param("lofi_ff", 1, id="lofi_ff"),
-        pytest.param("performance", 1, id="performance"),
-        pytest.param("performance", 4, id="performance_groups_of_4"),
+        pytest.param("default", 1, False, id="default"),
+        pytest.param("default", 4, False, id="default_groups_of_4"),
+        pytest.param("bf8_attention", 1, False, id="bf8_attention"),
+        pytest.param("bf8_weights", 1, False, id="bf8_weights"),
+        pytest.param("bf8_ff_hidden", 1, False, id="bf8_ff_hidden"),
+        pytest.param("bf8_sublayer_out", 1, False, id="bf8_sublayer_out"),
+        pytest.param("lofi_ff", 1, False, id="lofi_ff"),
+        pytest.param("performance", 1, False, id="performance"),
+        pytest.param("performance", 4, False, id="performance_groups_of_4"),
+        pytest.param("default", 1, True, id="default_l1"),
+        pytest.param("performance", 1, True, id="performance_l1"),
     ],
 )
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
-def test_precision_quantile_accuracy(mesh_device, precision_name, group_size):
+def test_precision_quantile_accuracy(mesh_device, precision_name, group_size, l1_resident):
     pytest.importorskip("ttnn")
     from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -147,7 +154,8 @@ def test_precision_quantile_accuracy(mesh_device, precision_name, group_size):
     reference, weight_source = _load_reference()
     if weight_source != "checkpoint":
         pytest.skip("quantile accuracy is only meaningful with the real checkpoint")
-    model = TtChronos.from_torch_model(mesh_device, reference, precision)
+    l1_chunk_tokens = precision.l1_chunk_tokens() if l1_resident else None
+    model = TtChronos.from_torch_model(mesh_device, reference, precision, l1_chunk_tokens=l1_chunk_tokens)
 
     batch = 256
     torch.manual_seed(0)
@@ -162,7 +170,7 @@ def test_precision_quantile_accuracy(mesh_device, precision_name, group_size):
     wql_ref, wql_tt = _wql(expected, target), _wql(got, target)
     rel = (wql_tt - wql_ref) / wql_ref
     print(
-        f"\n[WQL] precision={precision_name} group_size={group_size} "
+        f"\n[WQL] precision={precision_name} group_size={group_size} l1={l1_resident} "
         f"wql_ref={wql_ref:.5f} wql_tt={wql_tt:.5f} rel={rel:+.4%} pcc_norm={pcc_n:.6f}"
     )
     assert rel <= _MAX_REL_WQL_INCREASE, f"WQL {wql_tt:.5f} is {rel:.2%} above the reference {wql_ref:.5f}"

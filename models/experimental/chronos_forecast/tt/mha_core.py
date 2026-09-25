@@ -139,28 +139,30 @@ class TtMhaCore:
         x2 = ttnn.slice(x, (0, 0, 0, half), (b, h, s, last_dim))
         return ttnn.concat([ttnn.mul(x2, -1), x1], dim=-1)
 
-    def forward(self, x, mask=None, cos=None, sin=None):
+    def forward(self, x, mask=None, cos=None, sin=None, *, memory_config=None):
         """Device (B,S,d) + mask (or None) + cos/sin or None -> device (B,S,d).
 
         A None mask skips the SDPA mask path entirely; callers pass None for
         all-zero masks (v1 uses all-valid masks only). Borrowed inputs kept.
+        Intermediates and the output use ``memory_config`` (default DRAM).
         """
         import ttnn
 
+        mem = ttnn.DRAM_MEMORY_CONFIG if memory_config is None else memory_config
         wqkv, wo, rms_w = self._tt
         num_heads, head_dim = self.weights.num_heads, self.weights.head_dim
         batch, seq = x.shape[0], x.shape[1]
         # 1. RMSNorm (T5-style: no mean subtraction, no bias).
-        x_norm = ttnn.rms_norm(x, epsilon=self.weights.eps, weight=rms_w)
+        x_norm = ttnn.rms_norm(x, epsilon=self.weights.eps, weight=rms_w, memory_config=mem)
         # 2. Fused QKV + head split. transpose_key=False: SDPA needs K as [B,H,S,Dh].
-        xqkv = program_configs.linear(x_norm, wqkv, dtype=self.precision.attention_dtype())
+        xqkv = program_configs.linear(x_norm, wqkv, dtype=self.precision.attention_dtype(), memory_config=mem)
         ttnn.deallocate(x_norm)
         if head_dim % 32 == 0:
             q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
                 xqkv,
                 num_heads=num_heads,
                 transpose_key=False,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=mem,
             )
             ttnn.deallocate(xqkv)
         else:
@@ -177,8 +179,7 @@ class TtMhaCore:
             ttnn.deallocate(xqkv)
         # 3. Optional RoPE on Q/K (V untouched).
         if cos is not None and sin is not None and self._can_fuse_rope(cos, head_dim):
-            dram = ttnn.DRAM_MEMORY_CONFIG
-            q, k = self._fused_rope(q, cos, sin, dram), self._fused_rope(k, cos, sin, dram)
+            q, k = self._fused_rope(q, cos, sin, mem), self._fused_rope(k, cos, sin, mem)
         elif cos is not None and sin is not None:
             q_rot = ttnn.add(ttnn.mul(q, cos), ttnn.mul(self._rotate_half(q), sin))
             k_rot = ttnn.add(ttnn.mul(k, cos), ttnn.mul(self._rotate_half(k), sin))
@@ -212,7 +213,7 @@ class TtMhaCore:
             scale=1.0,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=mem,
         )
         ttnn.deallocate(q)
         ttnn.deallocate(k)
@@ -224,18 +225,18 @@ class TtMhaCore:
             ctx = ctx_unpadded
         # 7. Merge heads + output projection (no residual; caller adds it).
         if head_dim % 32 == 0:
-            merged = ttnn.transformer.concatenate_heads(ctx, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            merged = ttnn.transformer.concatenate_heads(ctx, memory_config=mem)
         else:
             # concatenate_heads also needs TILE-width heads; merge manually.
             ctx_t = ttnn.permute(ctx, (0, 2, 1, 3))
             merged = ttnn.reshape(ctx_t, (batch, seq, num_heads * head_dim))
             ttnn.deallocate(ctx_t)
         ttnn.deallocate(ctx)
-        out = program_configs.linear(merged, wo, dtype=self.precision.sublayer_out_dtype())
+        out = program_configs.linear(merged, wo, dtype=self.precision.sublayer_out_dtype(), memory_config=mem)
         ttnn.deallocate(merged)
         return out
 
-    def forward_diagonal_group(self, x):
+    def forward_diagonal_group(self, x, *, memory_config=None):
         """Exact group-attention specialization when every group has size one.
 
         Softmax over one allowed key is one, so Q/K, scores, masking, softmax,
@@ -247,9 +248,12 @@ class TtMhaCore:
 
         if self._diagonal_vo_weight is None:
             raise RuntimeError("diagonal group path was not enabled for this MHA core")
+        mem = ttnn.DRAM_MEMORY_CONFIG if memory_config is None else memory_config
         _wqkv, _wo, rms_w = self._tt
-        x_norm = ttnn.rms_norm(x, epsilon=self.weights.eps, weight=rms_w)
-        out = program_configs.linear(x_norm, self._diagonal_vo_weight, dtype=self.precision.sublayer_out_dtype())
+        x_norm = ttnn.rms_norm(x, epsilon=self.weights.eps, weight=rms_w, memory_config=mem)
+        out = program_configs.linear(
+            x_norm, self._diagonal_vo_weight, dtype=self.precision.sublayer_out_dtype(), memory_config=mem
+        )
         ttnn.deallocate(x_norm)
         return out
 

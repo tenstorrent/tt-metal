@@ -28,22 +28,33 @@ def _percentile(values, fraction):
 
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize(
+    "precision_name, l1_resident",
+    [
+        pytest.param("default", False, id="default_dram"),
+        pytest.param("default", True, id="default_l1"),
+        pytest.param("performance", True, id="performance_l1"),
+    ],
+)
+@pytest.mark.parametrize(
     "device_params",
-    [{"trace_region_size": 100_000_000, "num_command_queues": 2}],
+    [{"trace_region_size": 200_000_000, "num_command_queues": 2}],
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
-def test_paper_forward_trace_perf(mesh_device):
+def test_paper_forward_trace_perf(mesh_device, precision_name, l1_resident):
     ttnn = pytest.importorskip("ttnn")
 
     from models.experimental.chronos_forecast.tt.model import TtChronos
+    from models.experimental.chronos_forecast.tt.program_configs import TtChronosPrecision
     from models.experimental.chronos_forecast.tt.trace_runner import TtChronosTraceRunner
 
     if mesh_device.get_num_devices() != 1:
         pytest.skip("single-chip bring-up only (one chip)")
 
+    precision = TtChronosPrecision.performance() if precision_name == "performance" else TtChronosPrecision()
+    l1_chunk_tokens = precision.l1_chunk_tokens() if l1_resident else None
     reference, weight_source = _load_reference()
-    model = TtChronos.from_torch_model(mesh_device, reference)
+    model = TtChronos.from_torch_model(mesh_device, reference, precision, l1_chunk_tokens=l1_chunk_tokens)
     torch.manual_seed(0)
     context = torch.randn(BATCH, CONTEXT)
 
@@ -87,6 +98,8 @@ def test_paper_forward_trace_perf(mesh_device):
     print(
         "\n[TRACE PERF] Chronos paper shape"
         f"\n  weights:              {weight_source}"
+        f"\n  precision:            {precision_name}"
+        f"\n  l1_chunk_tokens:      {l1_chunk_tokens}"
         f"\n  host_preprocess_s:    {preprocess_s:.6f}"
         f"\n  replay_median_s:      {replay_median:.6f}"
         f"\n  replay_p95_s:         {replay_p95:.6f}"
