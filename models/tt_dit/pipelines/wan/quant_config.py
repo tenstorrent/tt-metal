@@ -36,18 +36,11 @@ class LinearQuantConfig:
 
 @dataclass(frozen=True)
 class SDPAQuantConfig:
-    """Precision config for ring SDPA (self-attention).
+    """Precision config for ring SDPA (self-attention)."""
 
-    On Blackhole the SDPA runs a named recipe: ``precision``/``kv_dtype`` replace the attention's
-    default recipe (``None`` keeps it) and the legacy fields below are not used. Off Blackhole the
-    legacy fields set the input cast and compute config.
-    """
-
-    input_dtype: ttnn.DataType | None = None  # None = no cast (legacy only)
-    math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2  # legacy only
-    fp32_dest_acc: bool = False  # legacy only
-    precision: ttnn.SDPAPrecision | None = None  # Blackhole recipe; None = WanAttention's default
-    kv_dtype: ttnn.DataType | None = None  # recipe KV storage (LOW_PRECISION only)
+    input_dtype: ttnn.DataType | None = None  # None = no cast
+    math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
+    fp32_dest_acc: bool = False
 
 
 @dataclass
@@ -108,9 +101,7 @@ class QuantConfig:
     def all_lofi() -> QuantConfig:
         """All compute LoFi, rest default."""
         lc = LinearQuantConfig(math_fidelity=ttnn.MathFidelity.LoFi)
-        # LoFi SDPA. On Blackhole: FAST, the cheapest recipe at least as accurate as legacy LoFi SDPA
-        # (LOW_PRECISION measured slower; test_sdpa_dit_recipe_parity.py, legacy_lofi).
-        sc = SDPAQuantConfig(math_fidelity=ttnn.MathFidelity.LoFi, precision=ttnn.SDPAPrecision.FAST)
+        sc = SDPAQuantConfig(math_fidelity=ttnn.MathFidelity.LoFi)
         return QuantConfig(
             self_attn_qkv=lc,
             self_attn_out=lc,
@@ -143,14 +134,10 @@ class QuantConfig:
             math_fidelity=ttnn.MathFidelity.LoFi,
             fp32_dest_acc=False,
         )
-        # BFP8 SDPA inputs, HiFi2. On Blackhole: FAST on BF16 inputs, the cheapest recipe at least as
-        # accurate as legacy BFP8-input SDPA (LOW_PRECISION with BFP8 KV is less accurate on peaked
-        # softmax; test_sdpa_dit_recipe_parity.py, legacy_bfp8).
         sc = SDPAQuantConfig(
             input_dtype=ttnn.bfloat8_b,
             math_fidelity=ttnn.MathFidelity.HiFi2,
             fp32_dest_acc=False,
-            precision=ttnn.SDPAPrecision.FAST,
         )
         return QuantConfig(
             self_attn_qkv=lc,
@@ -196,18 +183,6 @@ def _make_sdpa_compute_config(arch, sc: SDPAQuantConfig):
     )
 
 
-def _apply_sdpa_config(attention, sc: SDPAQuantConfig, arch) -> None:
-    """Named recipe on Blackhole (attention.sdpa_precision is set), legacy compute config otherwise."""
-    if attention.sdpa_precision is not None:
-        if sc.precision is not None:
-            attention.sdpa_precision = sc.precision
-            attention.sdpa_kv_dtype = sc.kv_dtype or ttnn.bfloat16
-        return
-    attention.sdpa_compute_kernel_config = _make_sdpa_compute_config(arch, sc)
-    if sc.input_dtype is not None:
-        attention._sdpa_input_dtype = sc.input_dtype
-
-
 def _apply_linear_config(linear, lc: LinearQuantConfig, arch, name: str) -> None:
     """Apply quantization + compute config to a single linear layer."""
     if lc.weight_dtype != ttnn.bfloat16 and linear.weight._data is not None:
@@ -243,8 +218,7 @@ def apply_quant_config(model, config: QuantConfig) -> None:
     - Cross-attn matmuls: block.attn2.mm_compute_kernel_config
     - Cross-attn output: block.attn2.to_out.compute_config
     - FFN: block.ff_compute_kernel_config
-    - Ring SDPA: block.attn1.sdpa_precision / sdpa_kv_dtype (Blackhole recipe), or
-      block.attn1.sdpa_compute_kernel_config (legacy, other architectures)
+    - Ring SDPA: block.attn1.sdpa_compute_kernel_config
     """
     arch = model.mesh_device.arch()
     n_blocks = len(model.blocks)
@@ -275,7 +249,9 @@ def apply_quant_config(model, config: QuantConfig) -> None:
         block.ff_compute_kernel_config = _make_linear_compute_config(arch, config.ffn_ff1)
 
         # Ring SDPA config (self-attention only)
-        _apply_sdpa_config(block.attn1, config.ring_sdpa, arch)
+        block.attn1.sdpa_compute_kernel_config = _make_sdpa_compute_config(arch, config.ring_sdpa)
+        if config.ring_sdpa.input_dtype is not None:
+            block.attn1._sdpa_input_dtype = config.ring_sdpa.input_dtype
 
     # Log summary
     weight_dtypes = set()
@@ -304,8 +280,7 @@ def apply_quant_config(model, config: QuantConfig) -> None:
     logger.info(f"  Weight dtypes: {weight_dtypes}")
     logger.info(f"  Math fidelities: {fidelities}")
     logger.info(
-        f"  Ring SDPA: recipe={config.ring_sdpa.precision}, kv_dtype={config.ring_sdpa.kv_dtype} (Blackhole); "
-        f"legacy input_dtype={config.ring_sdpa.input_dtype}, "
+        f"  Ring SDPA: input_dtype={config.ring_sdpa.input_dtype}, "
         f"fidelity={config.ring_sdpa.math_fidelity}, fp32_acc={config.ring_sdpa.fp32_dest_acc}"
     )
 

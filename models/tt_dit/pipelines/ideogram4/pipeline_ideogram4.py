@@ -263,21 +263,7 @@ class Ideogram4Pipeline(PipelineAPIMixin):
     sequentially, and CFG is blended on-device (cfg_blend) rather than across submeshes.
     """
 
-    def __init__(
-        self,
-        *,
-        device: ttnn.MeshDevice,
-        config: Ideogram4PipelineConfig,
-        sdpa_precision: ttnn.SDPAPrecision | None = None,
-        sdpa_kv_dtype: ttnn.DataType | None = None,
-    ) -> None:
-        """``sdpa_precision``/``sdpa_kv_dtype`` override the denoisers' named SDPA recipe (see
-        models/tt_dit/utils/sdpa_recipe.py); omit them for the default recipe (legacy SDPA off Blackhole)."""
-        # Fail before any device/weight work; the transformer constructor re-checks.
-        model_cfg = modeling_ideogram4.Ideogram4Config()
-        Ideogram4Transformer.validate_sdpa_recipe(
-            sdpa_precision, sdpa_kv_dtype, head_dim=model_cfg.emb_dim // model_cfg.num_heads
-        )
+    def __init__(self, *, device: ttnn.MeshDevice, config: Ideogram4PipelineConfig) -> None:
         self._config = config
         dit_pc = config.dit_parallel_config
         # Single full-mesh submesh (cfg-parallel factor 1): both the conditional and
@@ -374,8 +360,6 @@ class Ideogram4Pipeline(PipelineAPIMixin):
                 ccl_manager=ccl,
                 parallel_config=dit_pc,
                 padding_config=padding_config,
-                sdpa_precision=sdpa_precision,
-                sdpa_kv_dtype=sdpa_kv_dtype,
             )
             m.load_torch_state_dict(sd)
             del sd
@@ -430,8 +414,6 @@ class Ideogram4Pipeline(PipelineAPIMixin):
         qwen_repo: str = _DEFAULT_QWEN_REPO,
         topology: ttnn.Topology | None = None,
         num_links: int | None = None,
-        sdpa_precision: ttnn.SDPAPrecision | None = None,
-        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> Ideogram4Pipeline:
         config = Ideogram4PipelineConfig.default(
             mesh_shape=mesh_device.shape,
@@ -442,7 +424,7 @@ class Ideogram4Pipeline(PipelineAPIMixin):
             topology=topology,
             num_links=num_links,
         )
-        return cls(device=mesh_device, config=config, sdpa_precision=sdpa_precision, sdpa_kv_dtype=sdpa_kv_dtype)
+        return cls(device=mesh_device, config=config)
 
     @classmethod
     def from_pretrained(

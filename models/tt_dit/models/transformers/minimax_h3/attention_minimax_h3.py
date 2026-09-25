@@ -16,7 +16,6 @@ from ....layers.module import Module
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
-from ....utils import sdpa_recipe
 from ....utils.mochi import get_rot_transformation_mat
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
@@ -91,13 +90,6 @@ class MiniMaxH3Attention(Module):
         13664: (256, 512),
     }
 
-    # Named SDPA recipe of every SDPA call in this module on Blackhole. DiT models default to
-    # FAST (legacy streaming numerics with the approximate exponential; user decision
-    # 2026-09-25): at the models' shapes it is as accurate as the legacy HiFi2 / BF16-dest /
-    # exact-exp setup within a few percent and at least as fast. Pass sdpa_precision to opt
-    # up (e.g. BALANCED). See tests/ttnn/unit_tests/operations/sdpa/test_sdpa_dit_recipe_parity.py.
-    sdpa_precision_default = ttnn.SDPAPrecision.FAST
-
     def __init__(
         self,
         *,
@@ -111,25 +103,8 @@ class MiniMaxH3Attention(Module):
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
         is_sequence_parallel: bool = True,
-        sdpa_precision: ttnn.SDPAPrecision | None = None,
-        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
         super().__init__()
-
-        # Named SDPA recipe (sdpa_precision=None: sdpa_precision_default; see
-        # models/tt_dit/utils/sdpa_recipe.py); legacy off Blackhole only. Validated before anything
-        # touches the device.
-        blackhole = is_blackhole()
-        self.sdpa_precision = sdpa_recipe.resolve_precision(
-            sdpa_precision, self.sdpa_precision_default, blackhole=blackhole, model="MiniMaxH3Attention"
-        )
-        self.sdpa_kv_dtype = sdpa_recipe.validate_recipe_args(
-            self.sdpa_precision,
-            sdpa_kv_dtype,
-            head_dim=head_dim,
-            model="MiniMaxH3Attention",
-            is_blackhole=blackhole,
-        )
 
         # is_sequence_parallel=False means the sequence is *replicated* on the SP axis rather than
         # fractured across it, so attention runs locally with plain SDPA and no ring all-gather. The
@@ -214,28 +189,23 @@ class MiniMaxH3Attention(Module):
         # balances 14 local heads over 10 rows: segs=1 gives 2 passes of 10-tile chunks with 6 rows
         # idle on the second pass, while segs=2 gives 3 passes of 5-tile chunks on every core --
         # 15 Q tile-rows per core instead of 20 on the bottleneck cores.
-        self.exp_ring_max_passes = 3  # kMaxPasses in exp_ring_joint_sdpa_program_builder.cpp
+        self.exp_ring_max_passes = 3  # kMaxPasses in exp_ring_joint_sdpa_program_factory.cpp
         self.exp_ring_num_passes = math.ceil(self.n_local_heads / full_grid.y)
-        # Exp ring runs only under a recipe (Blackhole): the op chooses its blocking.
+        self.exp_ring_max_k_chunk = 512  # largest k worth trying; `_exp_sdpa_l1_bytes` picks down from here
         self.use_exp_ring_sdpa = (
             self.use_ring
-            and self.sdpa_precision is not None
+            and is_blackhole()
             and tp_factor == 4
             and parallel_config.sequence_parallel.factor == 32
             and self.exp_ring_num_passes <= self.exp_ring_max_passes
         )
         self._exp_sdpa_program_configs: dict[int, ttnn.SDPAProgramConfig | None] = {}
 
-        # Legacy SDPA compute config: every call off Blackhole, and windowed calls (which recipes do
-        # not support) everywhere. Recipes own their numerics.
-        self.legacy_sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
-        )
-        self.sdpa_compute_kernel_config = (
-            None if self.sdpa_precision is not None else self.legacy_sdpa_compute_kernel_config
         )
         self.mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -293,91 +263,188 @@ class MiniMaxH3Attention(Module):
     # ------------------------------------------------------------------ helpers
 
     def _sdpa_program_config(self, seq_local: int, *, ring: bool, windowed: bool = False) -> ttnn.SDPAProgramConfig:
-        """Ring (worker grid) or dense (full grid) SDPA config for a per-device sequence length.
+        """Ring SDPA chunk sizes for a given per-device sequence length.
 
-        Recipe (Blackhole): the grid only; SDPA chooses the chunks from the shape, recipe and L1 (the
-        per-length chunks measured for legacy ring SDPA on 4x8 Galaxy -- `measured_sdpa_chunk_sizes`
-        -- are not used). Legacy (non-Blackhole, or a `windowed` call, which recipes do not support):
-        the measured chunks, else up to (256, 512); `windowed` caps k at 256 so the on-device mask CB
-        fits in L1. See the sweep in
-        `tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_create_perf_table`.
+        Measured points come from the sweep in
+        `tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_create_perf_table`
+        (model configs `minimax_h3_{5s,10s,15s}_768p`) on 4x8 Blackhole Galaxy, TP=4 / SP=8. Anything
+        else falls back to the generic rule below.
+
+        The optimum depends on the *local* sequence length, which is why this is keyed on it rather
+        than on the mesh shape the way `WanAttention.sdpa_chunk_size_map` is. At long sequences there
+        is enough work that (256, 512) wins -- a larger k halves the ring's K-loop iterations. At 5s
+        there is too little work to fill 110 cores that way: 14 heads x ceil(4768/256) = 266 work items
+        over 110 cores rounds up to 3 per core and wastes ~19% of the slots, whereas q=320 gives 210
+        items, 2 per core and ~4.5% waste. That is worth more than the larger k.
+
+        L1 (1.57 MB) bounds the (q, k) product, and the bound is what makes k=384 interesting: k=1024
+        never fits, (320, 512) reaches 1.65 MB and does not either, but (320, 384) does -- combining
+        the good q with a k larger than 256. Neither chunk size has to be a power of two, only a
+        multiple of TILE, and restricting the search to {256, 512} misses this point entirely.
+
+        Padding is not the thing to tune. 4768 is 32 x 149 with 149 prime, so no sensible chunk size
+        divides it, yet at q=320 the Q padding is only 0.67%. Core slot efficiency dominates, and the
+        optimum in it is sharp rather than a plateau: at 5s q=288 measured 10.43 ms against q=320's
+        7.81 ms. Slot efficiency is a good candidate generator but not a predictor -- q=416 at 10s has
+        the best slot efficiency of any k=256 point there (97.6%) and measured the worst (28.39 ms).
+
+        `windowed` caps k at 256 so the on-device mask CB fits in L1.
         """
         key = (seq_local, ring, windowed)
         if key not in self._sdpa_program_configs:
+            tile = ttnn.TILE_SIZE
+            measured = self.measured_sdpa_chunk_sizes.get(seq_local)
+            if measured is not None:
+                q_chunk, k_chunk = measured
+            else:
+                q_chunk = max(tile, min(256, (seq_local // tile) * tile))
+                k_chunk = max(tile, min(512, (seq_local // tile) * tile))
+            if windowed:
+                k_chunk = min(k_chunk, 256)
             grid = (
                 ttnn.CoreCoord(*self.sdpa_worker_grid) if ring else ttnn.CoreCoord(self.full_grid.x, self.full_grid.y)
             )
-            if self.sdpa_precision is not None and not windowed:
-                self._sdpa_program_configs[key] = sdpa_recipe.recipe_config(grid)
-            else:
-                tile = ttnn.TILE_SIZE
-                measured = self.measured_sdpa_chunk_sizes.get(seq_local)
-                if measured is not None:
-                    q_chunk, k_chunk = measured
-                else:
-                    q_chunk = max(tile, min(256, (seq_local // tile) * tile))
-                    k_chunk = max(tile, min(512, (seq_local // tile) * tile))
-                if windowed:
-                    k_chunk = min(k_chunk, 256)
-                self._sdpa_program_configs[key] = ttnn.SDPAProgramConfig(
-                    compute_with_storage_grid_size=grid,
-                    q_chunk_size=q_chunk,
-                    k_chunk_size=k_chunk,
-                    exp_approx_mode=False,  # NOTE: False is more correct
-                )
+            self._sdpa_program_configs[key] = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=grid,
+                q_chunk_size=q_chunk,
+                k_chunk_size=k_chunk,
+                exp_approx_mode=False,  # NOTE: False is more correct
+            )
         return self._sdpa_program_configs[key]
 
-    def _attn_program_config(self, seq_local: int, *, ring: bool, windowed: bool = False) -> ttnn.SDPAProgramConfig:
-        """The ring/dense program config (kept as the call sites' entry point)."""
-        return self._sdpa_program_config(seq_local, ring=ring, windowed=windowed)
+    # One accumulator entry and one Q chunk per pass, in tiles of `_EXP_L1_TILE_BYTES`. Mirrors the
+    # CB table in exp_ring_joint_sdpa_program_factory.cpp; reproduces its measured 1,302,528 B at
+    # (224, 512) exactly. Nothing in the op validates this, so an oversized shape would only surface
+    # as a CB allocation failure at program build.
+    _EXP_L1_TILE_BYTES = 2048  # bf16 and Float16_b tiles are both 2 KiB
+    # CB space measured IN THE PIPELINE, not bare L1: the op's CBs must end below the lowest live
+    # L1 buffer (global semaphores etc. occupy the top of L1), which a 15s run measured at
+    # 1,504,000 with the CB region starting at 191,360. The factory checks the live value at build;
+    # this constant only has to be a safe lower bound so the k search picks a buildable shape.
+    _EXP_USABLE_L1_BYTES = 1_312_640
+    # DEST tiles from `get_dest_reg_count`: 1024 * 16 / (32 * 32), halved because dst_full_sync_en is
+    # off, not halved again because `sdpa_compute_kernel_config` has fp32_dest_acc_en off.
+    _EXP_DST_TILES = 8
+    # `determine_largest_subblock_size` in sdpa_subblock_utils.hpp, in its search order.
+    _EXP_SUBBLOCKS = (
+        (2, 4), (4, 2), (1, 8), (8, 1), (1, 7), (7, 1), (2, 3), (3, 2), (1, 6), (6, 1),
+        (1, 5), (5, 1), (2, 2), (1, 4), (4, 1), (1, 3), (3, 1), (1, 2), (2, 1), (1, 1),
+    )  # fmt: skip
 
-    def _sdpa_kwargs(self, *, windowed: bool = False) -> dict:
-        """Recipe kwargs, or (non-Blackhole, or a windowed call) the legacy compute config read at call time."""
-        if windowed:
-            # Named recipes do not support cu_window_seqlens: windowed SDPA (the token refiner's pad
-            # fence) stays on legacy SDPA with its HiFi2 / BF16-dest / exact-exp config.
-            return sdpa_recipe.sdpa_kwargs(None, self.legacy_sdpa_compute_kernel_config)
-        return sdpa_recipe.sdpa_kwargs(self.sdpa_precision, self.sdpa_compute_kernel_config)
+    def _exp_streaming_compute_enabled(self, sq_t: int, sk_t: int) -> bool:
+        """Whether the op picks its streaming compute path for a chunk shape.
+
+        Mirrors `use_streaming_compute` in exp_ring_joint_sdpa_program_factory.cpp. The exp compute
+        kernel `static_assert`s on it, so a shape the factory judges ineligible does not fall back --
+        it fails to build the kernel. The binding term in practice is `sk_t % (dst / h) == 0`: it
+        rejects k=320 at q=320 (h=1, so sk_t must be a multiple of 8, and 10 is not).
+        """
+        dst = self._EXP_DST_TILES
+        for h, w in self._EXP_SUBBLOCKS:
+            if h * w <= dst and sq_t % h == 0 and sk_t % w == 0:
+                return h <= 2 and sk_t % (dst // h) == 0 and sq_t // h > 1
+        return False
+
+    def _exp_sdpa_l1_bytes(self, sq_t: int, sk_t: int, p: int, resident_q: bool = True) -> int:
+        """L1 the exp op's circular buffers need for a (q, k, passes) shape, in tiles of head_dim.
+
+        `p` is the candidate's pass count (head-segment scheduling makes it per-candidate:
+        ceil(n_local_heads * segs / rows)). `resident_q=False` models the op's streamed-Q fallback:
+        when the resident total does not fit, the factory sizes c_0 to a single chunk and the reader
+        re-reads each pass's Q every ring iteration. The op selects the mode itself from this same
+        arithmetic; the model only needs it to know which (q, k) shapes are buildable.
+
+        The state FIFO holds `p + 1` entries; this MUST match the factory's `state_fifo_entries`.
+        """
+        dh_t = self.head_dim // ttnn.TILE_SIZE
+        fifo_entries = p + 1
+        tiles = (
+            (p if resident_q else 1) * sq_t * dh_t  # c_0 Q: one chunk per pass, or one when streamed
+            + 4 * sk_t * dh_t  # c_1/c_14 K and c_2/c_15 V, double buffered
+            + 7  # c_3 mask, scalars, reciprocal scratch
+            + 2 * fifo_entries * sq_t  # c_6 / c_11 state FIFO running max and sum
+            + fifo_entries * sq_t * dh_t  # c_7 state FIFO partial output
+            + sq_t  # c_17 stats out (c_10 is dead on this path and not allocated)
+            + 16  # c_16 streaming output ping-pong
+            + sq_t * sk_t  # c_24 qk intermediate
+            + 2 * sq_t * dh_t  # c_25/c_26 output scratch halves
+            + 4 * sq_t  # c_27-c_30 max/sum scratch halves
+            + sq_t  # c_31 exp max diff
+        )
+        return tiles * self._EXP_L1_TILE_BYTES
 
     def _exp_sdpa_program_config(self, seq_local: int) -> ttnn.SDPAProgramConfig | None:
-        """Exp ring SDPA config for a per-device sequence length, or None if it cannot use the op."""
+        """Exp ring SDPA config for a per-device sequence length, or None if it cannot use the op.
+
+        The op gives Q chunk `x` to core column `x`, so a head's chunks must fill its row exactly:
+        `ceil(seq_local / q_chunk)` has to equal the SDPA column count. That pins q_chunk to the
+        window `[seq_local / cols, seq_local / (cols - 1))` for a given width, and only a TILE
+        multiple will do, so a width is usable only if one lands there. `measured_sdpa_chunk_sizes`
+        therefore does not apply on this path -- though at the H3 10s shape the window happens to
+        give q=224, the value WanAttention measured anyway.
+
+        Widest usable grid wins, so try `full_grid.x - 1` columns first and step down. A narrower
+        grid frees no L1 whatsoever -- every CB is sized from (q_chunk, k_chunk, passes), never from
+        the column count -- so it is never worth taking while a wider one fits. It is only worth
+        taking when no wider width admits a q_chunk at all, and there the comparison is not against
+        a full-grid exp config but against no exp config at all: at 5s, 11 columns admit nothing
+        (96 -> 13 chunks, 128 -> 10) while 10 columns take q=128 with L1 to spare.
+
+        k_chunk is the one genuinely free variable, and the only one that buys L1 headroom, so take
+        the largest that both fits L1 and keeps the op on its streaming compute path -- the kernel
+        static_asserts on the latter, so an ineligible k fails the build rather than falling back.
+        A shape fits if either Q mode does: resident Q (all passes' chunks stay in L1, read once) or
+        the op's streamed-Q fallback (one chunk resident, re-read per pass per ring iteration).
+        That gives 512 at q=224 resident, and 384 at q=320 streamed -- where the k=256 that resident
+        Q would force measured far slower (small k doubles the per-chunk flash overhead; see
+        exp_more_heads_per_row.md §9).
+        """
         if not self.use_exp_ring_sdpa:
             return None
         if seq_local not in self._exp_sdpa_program_configs:
-            self._exp_sdpa_program_configs[seq_local] = self._build_recipe_exp_sdpa_program_config(seq_local)
+            self._exp_sdpa_program_configs[seq_local] = self._build_exp_sdpa_program_config(seq_local)
         return self._exp_sdpa_program_configs[seq_local]
 
-    # Recipe exp ring blocking (docs/sdpa_precision.md): Q 128-320 in 32-row steps (odd tile counts
-    # allowed -- recipes keep exp-ring state resident), K512 only, at most 3 passes.
-    _RECIPE_EXP_Q_RANGE = (128, 320)
-    _RECIPE_EXP_K_CHUNK = 512
-    _RECIPE_EXP_MAX_PASSES = 3
+    def _build_exp_sdpa_program_config(self, seq_local: int) -> ttnn.SDPAProgramConfig | None:
+        """Search (cols, segs_per_head, q_chunk, k_chunk) and take the lightest bottleneck load.
 
-    def _build_recipe_exp_sdpa_program_config(self, seq_local: int) -> ttnn.SDPAProgramConfig | None:
-        """Whether a recipe exp-ring shape exists (else None: ring joint SDPA), as an op-selected config.
-
-        The exp ring op gives Q chunk `x` to core column `x`, so a head's chunks (split over up to
-        three head-segments) must fill a core row exactly. Search (cols, segs_per_head) for a
-        tile-multiple q_chunk in 128..320 with at most 3 passes (ceil(n_local_heads * segs / rows));
-        the op then chooses the Q chunk and grid width itself (same row-filling, pass and Q-range
-        constraints, plus L1), and its host check rejects a shape that overflows L1. None (no recipe
-        shape) falls back to ring joint SDPA.
+        The per-core matmul work per ring iteration is passes * q_chunk Q rows against the full
+        K/V stream, so `passes * q_chunk` is the primary score: at 14 heads on 10 rows, segs=1
+        gives 2 passes x 320 = 640 rows while segs=2 gives 3 passes x 160 = 480. Larger k_chunk
+        is the tie-break (fewer per-chunk overheads), then wider grids.
         """
         tile = ttnn.TILE_SIZE
         rows = self.full_grid.y
-        q_lo, q_hi = self._RECIPE_EXP_Q_RANGE
-        max_passes = min(self.exp_ring_max_passes, self._RECIPE_EXP_MAX_PASSES)
+        best = None
         for cols in range(self.full_grid.x - 1, 1, -1):
             for segs in (1, 2, 3):
                 chunks = cols * segs
                 q_chunk = math.ceil(math.ceil(seq_local / chunks) / tile) * tile
-                if (
-                    math.ceil(seq_local / q_chunk) == chunks
-                    and q_lo <= q_chunk <= q_hi
-                    and math.ceil(self.n_local_heads * segs / rows) <= max_passes
-                ):
-                    return sdpa_recipe.recipe_config(self.full_grid)
-        return None
+                if math.ceil(seq_local / q_chunk) != chunks:
+                    continue  # this (cols, segs) admits no tile-multiple q_chunk
+                passes = math.ceil(self.n_local_heads * segs / rows)
+                if passes > self.exp_ring_max_passes:
+                    continue
+                for k_chunk in range(self.exp_ring_max_k_chunk, 0, -tile):
+                    sq_t, sk_t = q_chunk // tile, k_chunk // tile
+                    fits = (
+                        self._exp_sdpa_l1_bytes(sq_t, sk_t, passes) <= self._EXP_USABLE_L1_BYTES
+                        or self._exp_sdpa_l1_bytes(sq_t, sk_t, passes, resident_q=False) <= self._EXP_USABLE_L1_BYTES
+                    )
+                    if fits and self._exp_streaming_compute_enabled(sq_t, sk_t):
+                        score = (passes * q_chunk, -k_chunk, -cols)
+                        if best is None or score < best[0]:
+                            best = (score, cols, q_chunk, k_chunk)
+                        break
+        if best is None:
+            return None
+        _, cols, q_chunk, k_chunk = best
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(cols + 1, self.full_grid.y),
+            q_chunk_size=q_chunk,
+            k_chunk_size=k_chunk,
+            exp_approx_mode=False,  # NOTE: False is more correct
+        )
 
     # ------------------------------------------------------------------ forward
 
@@ -465,11 +532,6 @@ class MiniMaxH3Attention(Module):
         q_BHNE = self.norm_q(q_1BNF, **norm_kwargs)
         k_BHNE = self.norm_k(k_1BNF, **norm_kwargs)
         v_BHNE = create_heads(v_1BNF)
-        # LOW_PRECISION prepares Q/K/V after norm/RoPE and before the ring gathers K/V (the persistent
-        # buffers below then take the prepared KV dtype). Every other recipe and legacy: unchanged.
-        q_BHNE, k_BHNE, v_BHNE = sdpa_recipe.prepare_recipe_inputs(
-            self.sdpa_precision, self.sdpa_kv_dtype, q_BHNE, k_BHNE, v_BHNE
-        )
 
         # Sequence is fractured across SP, so attention must gather K/V around the ring.
         # The packed sequence is one attention document and logical_n masks the pad tail, so no mask.
@@ -491,7 +553,7 @@ class MiniMaxH3Attention(Module):
                 joint_strategy="rear",
                 logical_n=logical_n,
                 program_config=exp_program_config,
-                **self._sdpa_kwargs(),
+                compute_kernel_config=self.sdpa_compute_kernel_config,
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_exp_ring_ping_pong_semaphore(self.sp_mesh_axis),
                 num_links=self.ccl_manager.num_links,
@@ -518,8 +580,8 @@ class MiniMaxH3Attention(Module):
                 ),
                 joint_strategy="rear",
                 logical_n=logical_n,
-                program_config=self._attn_program_config(q_BHNE.shape[2], ring=True),
-                **self._sdpa_kwargs(),
+                program_config=self._sdpa_program_config(q_BHNE.shape[2], ring=True),
+                compute_kernel_config=self.sdpa_compute_kernel_config,
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.sp_mesh_axis),
                 num_links=self.ccl_manager.num_links,
@@ -537,10 +599,10 @@ class MiniMaxH3Attention(Module):
                 v_BHNE,
                 cu_window_seqlens=cu_window_seqlens,
                 is_causal=False,
-                program_config=self._attn_program_config(
+                program_config=self._sdpa_program_config(
                     q_BHNE.shape[2], ring=False, windowed=cu_window_seqlens is not None
                 ),
-                **self._sdpa_kwargs(windowed=cu_window_seqlens is not None),
+                compute_kernel_config=self.sdpa_compute_kernel_config,
             )
         spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE)
         spatial_1BND = ttnn.unsqueeze(spatial_1BND, 0)

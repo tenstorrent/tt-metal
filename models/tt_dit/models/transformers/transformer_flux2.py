@@ -53,8 +53,6 @@ class Flux2SingleTransformerBlock(Module):
         padding_config: PaddingConfig | None,
         is_fsdp: bool = False,
         shard_prompt: bool = False,
-        sdpa_precision: ttnn.SDPAPrecision | None = None,
-        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
         super().__init__()
 
@@ -79,8 +77,6 @@ class Flux2SingleTransformerBlock(Module):
             per_head_norm=True,
             is_fsdp=is_fsdp,
             shard_prompt=shard_prompt,
-            sdpa_precision=sdpa_precision,
-            sdpa_kv_dtype=sdpa_kv_dtype,
         )
 
         self.norm = DistributedLayerNorm(
@@ -216,8 +212,6 @@ class Flux2Transformer(Module):
         padding_config: PaddingConfig | None,
         is_fsdp: bool = False,
         shard_prompt: bool = False,
-        sdpa_precision: ttnn.SDPAPrecision | None = None,
-        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
         super().__init__()
 
@@ -255,8 +249,6 @@ class Flux2Transformer(Module):
                 mesh_device=device,
                 is_fsdp=is_fsdp,
                 shard_prompt=shard_prompt,
-                sdpa_precision=sdpa_precision,
-                sdpa_kv_dtype=sdpa_kv_dtype,
             )
             for i in range(num_layers)
         )
@@ -272,8 +264,6 @@ class Flux2Transformer(Module):
                 device=device,
                 is_fsdp=is_fsdp,
                 shard_prompt=shard_prompt,
-                sdpa_precision=sdpa_precision,
-                sdpa_kv_dtype=sdpa_kv_dtype,
             )
             for i in range(num_single_layers)
         )

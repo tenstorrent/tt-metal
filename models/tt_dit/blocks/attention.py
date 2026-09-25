@@ -9,19 +9,11 @@ from typing import TYPE_CHECKING
 import torch
 
 import ttnn
-from models.common.utility_functions import is_blackhole
 
 from ..layers.linear import ColParallelLinear
 from ..layers.module import Module, Parameter, UnregisteredModule
 from ..layers.normalization import RMSNorm
 from ..utils.padding import PaddingConfig, pad_weight_tensor
-from ..utils import sdpa_recipe
-from ..utils.sdpa_recipe import (
-    prepare_recipe_inputs,
-    recipe_config,
-    sdpa_kwargs,
-    validate_recipe_args,
-)
 from ..utils.substate import pop_substate
 
 if TYPE_CHECKING:
@@ -33,13 +25,6 @@ if TYPE_CHECKING:
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/attention_processor.py
 class Attention(Module):
-    # Named SDPA recipe of every SDPA call in this module on Blackhole. DiT models default to
-    # FAST (legacy streaming numerics with the approximate exponential; user decision
-    # 2026-09-25): at the models' shapes it is as accurate as the legacy HiFi2 / BF16-dest /
-    # exact-exp setup within a few percent and at least as fast. Pass sdpa_precision to opt
-    # up (e.g. BALANCED). See tests/ttnn/unit_tests/operations/sdpa/test_sdpa_dit_recipe_parity.py.
-    sdpa_precision_default = ttnn.SDPAPrecision.FAST
-
     def __init__(
         self,
         *,
@@ -60,20 +45,10 @@ class Attention(Module):
         k_chunk_size: int = 512,
         q_chunk_size: int = 128,
         is_fsdp: bool = False,
-        sdpa_precision: ttnn.SDPAPrecision | None = None,
-        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
         super().__init__()
 
         self.head_dim = head_dim
-        # Named SDPA recipe (sdpa_precision=None: sdpa_precision_default); legacy off Blackhole only.
-        blackhole = is_blackhole()
-        self.sdpa_precision = sdpa_recipe.resolve_precision(
-            sdpa_precision, self.sdpa_precision_default, blackhole=blackhole, model="Attention"
-        )
-        self.sdpa_kv_dtype = validate_recipe_args(
-            self.sdpa_precision, sdpa_kv_dtype, head_dim=head_dim, model="Attention", is_blackhole=blackhole
-        )
         self.pre_only = pre_only
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
@@ -97,23 +72,17 @@ class Attention(Module):
             self.mesh_device.compute_with_storage_grid_size().y - 1,
         )
 
-        if self.sdpa_precision is not None:
-            # The recipe owns the numerics; SDPA chooses the chunks for the grid.
-            self.sdpa_program_config = recipe_config(self.sdpa_worker_grid)
-            self.sdpa_compute_kernel_config = None
-        else:
-            # Legacy SDPA (non-Blackhole): the q/k chunk sizes apply only here.
-            self.sdpa_program_config = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=self.sdpa_worker_grid,
-                q_chunk_size=q_chunk_size,
-                k_chunk_size=k_chunk_size,
-                exp_approx_mode=False,  # NOTE: False is more correct
-            )
-            self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi2,
-                math_approx_mode=False,
-                fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
-            )
+        self.sdpa_program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=self.sdpa_worker_grid,
+            q_chunk_size=q_chunk_size,
+            k_chunk_size=k_chunk_size,
+            exp_approx_mode=False,  # NOTE: False is more correct
+        )
+        self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
+        )
 
         self.to_qkv = ColParallelLinear(query_dim, 3 * padded_inner_dim, mesh_axis=tp_axis, **common_args)
 
@@ -284,10 +253,6 @@ class Attention(Module):
             q = _apply_rope(q, spatial_rope)
             k = _apply_rope(k, spatial_rope)
 
-        if self.sdpa_precision is not None:
-            # LOW_PRECISION: prepare spatial inputs after norm/RoPE, before the ring all-gather.
-            q, k, v = prepare_recipe_inputs(self.sdpa_precision, self.sdpa_kv_dtype, q, k, v)
-
         if self.add_qkv_proj is not None:
             add_qkv = self.add_qkv_proj(prompt)
             add_q, add_k, add_v = ttnn.transformer.split_query_key_value_and_split_heads(
@@ -302,25 +267,11 @@ class Attention(Module):
 
             if self.context_head_factors is not None:
                 add_q = add_q * self.context_head_factors.data
-
-            if self.sdpa_precision is not None:
-                # LOW_PRECISION: prepare the joint inputs separately, after norm/RoPE/head scaling.
-                add_q, add_k, add_v = prepare_recipe_inputs(
-                    self.sdpa_precision, self.sdpa_kv_dtype, add_q, add_k, add_v
-                )
-        elif self.sdpa_precision is None:
+        else:
             shape = [1, self.n_local_heads, 0, self.head_dim]
             add_q = add_k = add_v = ttnn.zeros(shape, device=self.mesh_device, layout=q.layout, dtype=q.dtype)
-        else:
-            # Empty joint inputs must match the (prepared) spatial Q and KV dtypes.
-            shape = [1, self.n_local_heads, 0, self.head_dim]
-            add_q = ttnn.zeros(shape, device=self.mesh_device, layout=q.layout, dtype=q.dtype)
-            add_k = ttnn.zeros(shape, device=self.mesh_device, layout=k.layout, dtype=k.dtype)
-            add_v = ttnn.zeros(shape, device=self.mesh_device, layout=v.layout, dtype=v.dtype)
 
         if self.parallel_config.sequence_parallel.factor > 1:
-            # Recipe KV may be stored below BF16; the gather buffers must match (legacy: default BF16).
-            buffer_kwargs = {} if self.sdpa_precision is None else {"dtype": k.dtype}
             spatial, prompt, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 q,
                 k,
@@ -329,15 +280,15 @@ class Attention(Module):
                 add_k,
                 add_v,
                 persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
-                    k.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, **buffer_kwargs
+                    k.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
                 ),
                 persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
-                    v.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, **buffer_kwargs
+                    v.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
                 ),
                 joint_strategy="rear",
                 logical_n=spatial_sequence_length,
                 program_config=self.sdpa_program_config,
-                **self._sdpa_kwargs(),
+                compute_kernel_config=self.sdpa_compute_kernel_config,
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
                     self.parallel_config.sequence_parallel.mesh_axis
@@ -354,29 +305,17 @@ class Attention(Module):
                 spatial_sequence_length == spatial.shape[1]
             ), "spatial sequence must not be padded without sequence parallelism"
 
-            if self.sdpa_precision is not None and add_q.shape[2] == 0:
-                # Recipe joint segments need positive lengths: an empty joint is plain SDPA.
-                spatial = ttnn.transformer.scaled_dot_product_attention(
-                    q,
-                    k,
-                    v,
-                    is_causal=False,
-                    program_config=self.sdpa_program_config,
-                    **self._sdpa_kwargs(),
-                )
-                prompt = None
-            else:
-                spatial, prompt = ttnn.transformer.joint_scaled_dot_product_attention(
-                    q,
-                    k,
-                    v,
-                    add_q,
-                    add_k,
-                    add_v,
-                    joint_strategy="rear",
-                    program_config=self.sdpa_program_config,
-                    **self._sdpa_kwargs(),
-                )
+            spatial, prompt = ttnn.transformer.joint_scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                add_q,
+                add_k,
+                add_v,
+                joint_strategy="rear",
+                program_config=self.sdpa_program_config,
+                compute_kernel_config=self.sdpa_compute_kernel_config,
+            )
 
         spatial = ttnn.transformer.concatenate_heads(spatial)
         if prompt is not None:
@@ -395,10 +334,6 @@ class Attention(Module):
             prompt = self.to_add_out(prompt)
 
         return spatial, prompt
-
-    def _sdpa_kwargs(self) -> dict:
-        """Recipe kwargs, or (non-Blackhole) the legacy compute config read at call time."""
-        return sdpa_kwargs(self.sdpa_precision, self.sdpa_compute_kernel_config)
 
     @classmethod
     def spatial_sequence_padding_length(cls, *, length: int, sp_factor: int, k_chunk_size: int = 512) -> int:
