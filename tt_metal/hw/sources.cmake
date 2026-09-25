@@ -367,6 +367,7 @@ set(HW_JIT_API_HEADERS
     toolchain/erisc-b0-app-sections.ld
     toolchain/erisc-b0-memory.ld
     toolchain/erisc-b0-kernel.ld
+    ckernels/common/llk_sfpu/ckernel_sfpu_acosh_bf16.h
     ckernels/common/llk_sfpu/ckernel_sfpu_expm1_bf16.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_abs_exp_correction.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_abs_exp_correction_core.h
@@ -374,6 +375,8 @@ set(HW_JIT_API_HEADERS
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_asymptotic_factor.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_cascade_signed_abs.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_config_tile.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_core_bridge_exponent.inc
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_core_bridge_rational.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_domain_action_coordinate.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_domain_finalize.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_domain_prepare.inc
@@ -390,9 +393,17 @@ set(HW_JIT_API_HEADERS
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_min_max.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_mirrored_terminals.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_polynomial_dual_tile.inc
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_rational_dst_core.inc
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_rational_interleaved_core.inc
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_rational_parity.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_rational_parity_core.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_rational_scalar_tile.inc
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_rational_segment_core.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_raw_class_policy.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_selected_core_total.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_selected_reciprocal_init.inc
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_sqrt_factored.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_sqrt_factored_core.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_target_special_policy.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_tti_replay.h
     inc/api/compute/eltwise_unary/erf_bw_tt_poly_bf16.h

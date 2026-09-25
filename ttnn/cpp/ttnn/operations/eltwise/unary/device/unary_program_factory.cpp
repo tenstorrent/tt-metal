@@ -404,6 +404,8 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     }
 
     const bool math_approx_mode = false;
+
+    bool tt_poly_fp32_dest = operation_attributes.fp32_dest_acc_en;
     std::map<std::string, std::string> unary_defines = get_block_defines(ops_chain, "0", "0", input.dtype());
 #if !defined(TT_POLY_LLK_DISABLE)
     if (ops_chain.size() == 1 && input.dtype() == DataType::BFLOAT16 && output.dtype() == DataType::BFLOAT16 &&
@@ -436,6 +438,18 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
         (input.device()->arch() == tt::ARCH::BLACKHOLE || input.device()->arch() == tt::ARCH::WORMHOLE_B0)) {
         unary_defines["TT_POLY_BF16_UNARY_CONTEXT"] = "1";
         unary_defines["SFPU_OP_PROGRAM_INIT_0"] = "exp2_tt_poly_bf16_program_init();";
+    }
+#endif
+#if !defined(TT_POLY_LLK_DISABLE)
+    if (ops_chain.size() == 1 && input.dtype() == DataType::BFLOAT16 && output.dtype() == DataType::BFLOAT16 &&
+        !operation_attributes.fp32_dest_acc_en && !operation_attributes.preserve_fp32_precision &&
+        ops_chain[0].type() == UnaryOpType::ACOSH &&
+        (input.device()->arch() == tt::ARCH::BLACKHOLE || input.device()->arch() == tt::ARCH::WORMHOLE_B0)) {
+        tt_poly_fp32_dest = true;
+        unary_defines["TT_POLY_BF16_UNARY_CONTEXT"] = "1";
+        unary_defines["SFPU_OP_CHAIN_0_INIT_0"] = "acosh_tt_poly_bf16_tile_init();";
+        unary_defines["SFPU_OP_CHAIN_0_FUNC_0"] = "acosh_tt_poly_bf16_tile(0);";
+        unary_defines["SFPU_OP_PROGRAM_INIT_0"] = "acosh_tt_poly_bf16_program_init();";
     }
 #endif
     add_input_dtype_defines(input.dtype(), unary_defines);
@@ -540,7 +554,7 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     compute_desc.defines = {unary_defines.begin(), unary_defines.end()};
     compute_desc.config = ComputeConfigDescriptor{
         .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-        .fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en,
+        .fp32_dest_acc_en = tt_poly_fp32_dest,
         .unpack_to_dest_mode = {unpack_to_dest_mode.begin(), unpack_to_dest_mode.end()},
         .bfp8_pack_precise = operation_attributes.bfp8_pack_precise,
         .math_approx_mode = math_approx_mode,
