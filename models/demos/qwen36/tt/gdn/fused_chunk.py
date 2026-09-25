@@ -43,11 +43,10 @@ def fused_chunk_enabled():
     Selects the PREFILL chunk kernel only; decode is recurrent
     (recurrent_gated_delta_rule_decode_ttnn) and never reaches either chunk adapter.
 
-    On by default on Blackhole and Wormhole. The op's own gate
-    (tests/ttnn/unit_tests/operations/transformers/test_chunk_gated_delta_rule.py) is still
-    skipif(not is_blackhole()); that marker bounds where the op is exercised, not where it runs.
-    chunk_size=64 gives Ct=2, which exceeds the kernel-config program-size limit (73376 > 70656),
-    so _FUSED_CHUNK_SIZE must stay at 32.
+    On by default on Blackhole and Wormhole, and gated on both by
+    tests/ttnn/unit_tests/operations/transformers/test_chunk_gated_delta_rule.py. chunk_size=64
+    gives Ct=2, whose 73376-byte program exceeds the Wormhole kernel config buffer (70656), so
+    _FUSED_CHUNK_SIZE must stay at 32; that one parametrization is skipped off Blackhole.
 
     QWEN36_GDN_FUSED=0 forces the composite chunk_gated_delta_rule_seq_adapter instead, which
     models/experimental/gated_attention_gated_deltanet validates on Wormhole -- the documented
