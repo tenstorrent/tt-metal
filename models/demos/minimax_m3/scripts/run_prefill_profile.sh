@@ -57,7 +57,7 @@ set -uo pipefail
 # script is portable across checkouts and users instead of hard-coding one person's home.
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export TT_METAL_HOME="${TT_METAL_HOME:-$(cd "$_SCRIPT_DIR/../../../.." && pwd)}"
-export HF_MODEL="${HF_MODEL:-/mnt/models/MiniMaxAI/MiniMax-M3-ref}"
+export HF_MODEL="${HF_MODEL:-/mnt/weka/model-weights/llm/minimax/MiniMax-M3}"
 STAGES="${STAGES:-1}"
 STAGE="${STAGE:-0}"
 export M3_FABRIC="${M3_FABRIC:-1d}"

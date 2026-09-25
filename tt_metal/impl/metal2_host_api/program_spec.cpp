@@ -1728,8 +1728,8 @@ void ValidateProgramSpec(
     // indexes the packed config by device slot up to dfb::NUM_DFBS. Tile-counter exhaustion on
     // Gen2 is still checked later at enqueue.
     {
-        const uint32_t max_slots_per_core = hal.has_tile_counter_registers() ? static_cast<uint32_t>(::dfb::NUM_DFBS)
-                                                                             : hal.get_arch_num_circular_buffers();
+        const uint32_t max_slots_per_core =
+            hal.has_tile_counter_registers() ? static_cast<uint32_t>(::dfb::NUM_DFBS) : hal.get_num_dataflow_buffers();
 
         std::unordered_map<NodeCoord, uint32_t> dfbs_per_node;
         for (const auto& dfb : spec.dataflow_buffers) {
@@ -3218,7 +3218,6 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .enable_consumer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.consumers),
         .data_format = dfb_spec->data_format_metadata.value_or(tt::DataFormat::Invalid),
         .tile = dfb_spec->tile_format_metadata,
-        .unpack_face_geometry = dfb_spec->unpack_face_geometry_metadata,
         .tensix_scope = tensix_scope,
         // DFB borrowed memory mode is declared at program creation time.
         // The actual backing memory L1 address is attached at runtime: from the borrowed
@@ -3293,12 +3292,12 @@ DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
 //     index cb_id, where cb_id is the slot used by set_dfb_data_fmt_and_tile
 //     in buf_dataformat_arr (aka, dfb->id).
 //   - The unpack_mode for a DFB "d" needs to be at unpack_modes[d->id]
-//   - The vector must be at least max_cbs long, or the consumer gets angry
-//     (it iterates buf_formats up to max_cbs).
+//   - The vector must be at least max_dfbs long, or the consumer gets angry
+//     (it iterates buf_formats up to max_dfbs).
 //   - This is true on WH, BH, and Quasar. (Yes, Quasar too.)
 //
-// What is the max CBs / DFBs?
-//   - WH/BH: Hardcoded as max_cbs. Different number on WH vs. BH.
+// What is the max DFB slot count?
+//   - WH/BH: Hardcoded as max_dfbs. Different number on WH vs. BH.
 //   - Quasar has a variable cap, based on tile-counter registers.
 //     In actual practice, we'll run out LONG before we get the HAL-reported
 //     limit of 64.
@@ -3306,20 +3305,20 @@ DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
 
 std::vector<UnpackToDestMode> BuildUnpackToDestModeVector(
     const ComputeUnpackModes& user_modes, const DFBNameToSlotMap& dfb_name_to_slot, const Hal& hal) {
-    const uint32_t max_cbs = hal.get_arch_num_circular_buffers();
-    std::vector<UnpackToDestMode> unpack_modes(max_cbs, UnpackToDestMode::Default);
+    const uint32_t max_dfbs = hal.get_num_dataflow_buffers();
+    std::vector<UnpackToDestMode> unpack_modes(max_dfbs, UnpackToDestMode::Default);
     for (const auto& [dfb_name, mode] : user_modes) {
         // Indexed by device slot: this vector is consumed by the HLK alongside the CB-indexed data
         // formats, which set_dfb_data_fmt_and_tile also keys by slot.
         uint32_t dfb_slot = dfb_name_to_slot.at(dfb_name);
         // This TT_FATAL is unreachable, provided that validation wasn't skipped.
         TT_FATAL(
-            dfb_slot < max_cbs,
+            dfb_slot < max_dfbs,
             "Internal Error: DFB '{}' has device slot {} which exceeds the JIT data-format "
             "slot count ({}); compute kernels cannot reference DFBs past this limit",
             dfb_name,
             dfb_slot,
-            max_cbs);
+            max_dfbs);
         // Public UnpackMode -> internal UnpackToDestMode. UnpackToDest keeps full FP32 by
         // unpacking straight to Dest; UnpackToSrc is the SrcA/B path (the internal "Default").
         unpack_modes[dfb_slot] =

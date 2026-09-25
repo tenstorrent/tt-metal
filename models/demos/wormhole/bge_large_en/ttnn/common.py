@@ -40,7 +40,6 @@ layernorm_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
     block_w=dim_t__x,  # 1024 / 32 / 8 = 4
     inplace=True,
     legacy_reduction=True,
-    legacy_rsqrt=True,
 )
 
 ff1_matmul_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(

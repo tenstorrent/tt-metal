@@ -51,17 +51,32 @@ inline std::string_view sem_scope_enumerator(SemScope scope) {
     TT_THROW("unhandled SemScope value {}", static_cast<int>(scope));
 }
 
-// The generated semaphore section: one binding token per bound semaphore, in `namespace sem`.
-// The token carries the id and the mechanism the host picked, so the kernel gets its scope at
-// compile time.
+// The generated semaphore section: one constexpr binding token per bound semaphore, in
+// `namespace sem`. The token carries the id and the mechanism the host picked.
 inline void emit_semaphore_binding_tokens(std::ostream& os, const std::vector<SemBindingEntry>& entries) {
     os << "namespace sem {\n";
     for (const auto& entry : entries) {
-        os << "using " << entry.name << "_t = ::SemaphoreBindingToken<" << entry.id
-           << "u, ::SemScope::" << sem_scope_enumerator(entry.scope) << ">;\n";
-        os << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
+        os << "constexpr ::SemaphoreBindingToken " << entry.name << "{" << entry.id
+           << "u, ::SemScope::" << sem_scope_enumerator(entry.scope) << "};\n";
     }
     os << "}  // namespace sem\n";
+}
+
+// Emits the list of cached semaphores this kernel binds: each one's id and how many harts on
+// this core use it.
+inline void emit_cached_semaphore_list(std::ostream& os, const std::vector<SemBindingEntry>& entries) {
+    os << "namespace sem_internal {\n";
+    os << "constexpr ::sem_internal::CachedSemaphore kCachedSemaphores[] = {";
+    const char* sep = "";
+    for (const auto& entry : entries) {
+        if (entry.scope != SemScope::DM_LOCAL_CACHED) {
+            continue;
+        }
+        os << sep << "{" << entry.id << "u, " << entry.total_binder_harts << "u}";
+        sep = ", ";
+    }
+    os << "};\n";
+    os << "}  // namespace sem_internal\n";
 }
 
 // Metal 2.0: precomputed layout of a kernel's common runtime args (CRTA) buffer.

@@ -60,23 +60,48 @@ struct RingAttentionRankMapping {
     uint32_t mesh_cols = 0;
 };
 
-// Sparse cyclic predecessor exchange used by chunked GPT-OSS sliding attention.
-// Each device sends one local tile-row range to its logical next device and
-// receives the predecessor's corresponding range into compact output slot 0.
+// Sliding attention exchanges one or two predecessor tails into compact output slots.
 struct RingAttentionNeighborHaloConfig {
     uint32_t send_to_next_start_Ht;
     uint32_t send_to_next_count_Ht;
-    // A linear topology has no physical wrap link. The final device sends its
-    // predecessor tail back to device 0 over the backward fabric direction.
+    uint32_t send_second_start_Ht = 0;
+    // A linear topology has no physical wrap link, so a hop whose destination wraps
+    // the ring travels backward, unicast_hops devices, instead.
     bool send_backward = false;
     uint32_t unicast_hops = 1;
+    // Which cyclic predecessor this exchange ships from: 1 = the immediate neighbour. A halo wider than
+    // one Q slab is covered by several exchanges, each shipping one slab tail (tail_tile_rows) into its
+    // own block of the compact buffer, starting at tile row dest_row_base.
+    uint32_t hop = 1;
+    uint32_t tail_tile_rows = 0;  // 0 = halo_tile_rows (one-hop halo)
+    uint32_t dest_row_base = 0;
+    // Fabric link index this exchange starts from. A one-hop halo spreads over every link; with
+    // more hops, each hop uses one link and hops beyond the link count time-share (see below).
+    uint32_t link_base = 0;
+    // All hops of one halo deliver their ready-increment to ONE rendezvous worker core (hop 1's),
+    // and only hop 1 waits and signals the SDPA: one incrementer per semaphore, since concurrent
+    // Semaphore::up from two cores can lose an update. A one-hop halo expects one arrival.
+    uint32_t arrivals_expected = 1;
+    uint32_t rendezvous_noc_x = 0;
+    uint32_t rendezvous_noc_y = 0;
+    // A halo with more hops than fabric links time-shares a link. An ERISC exposes one worker
+    // sender channel per direction, and concurrent workers on it stall each other, but SEQUENTIAL
+    // reuse is the fabric's own protocol: close() persists the producer cursor and the next open()
+    // adopts it (edm_fabric_worker_adapters.hpp). So a later hop waits on this local semaphore,
+    // which its predecessor on the same link increments after closing its connection.
+    bool waits_for_predecessor = false;
+    bool signals_successor = false;
+    uint32_t chain_semaphore_id = 0;
+    uint32_t successor_noc_x = 0;
+    uint32_t successor_noc_y = 0;
 
-    // Trace-safe metadata path. send_to_next_start_Ht above is linear in the chunk index, so on the
-    // scalar path the host rewrites the halo page ranges every dispatch — something a captured trace
-    // never replays. When kv_actual_isl is set, the halo kernels read it on-device and recompute the
-    // start themselves, making one capture valid for every chunk. slot_id also selects the flattened
-    // cache batch on-device. The remaining fields are static inputs to those derivations;
-    // source_device selects which group.s tail is read.
+    // hop 1 is the exchange that waits for every hop's arrival and signals the SDPA.
+    bool collects_arrivals() const { return hop == 1; }
+    // A one-hop halo increments its own worker core, so it needs no rendezvous.
+    bool has_rendezvous() const { return arrivals_expected > 1; }
+    uint32_t tail_rows() const { return tail_tile_rows != 0 ? tail_tile_rows : halo_tile_rows; }
+
+    // Metadata supplies the source tails and cache slot during trace replay.
     const ttnn::Tensor* slot_id = nullptr;
     const ttnn::Tensor* kv_actual_isl = nullptr;
     uint32_t kv_cache_num_layers = 1;
@@ -109,19 +134,22 @@ constexpr uint32_t kInputBatchBaseFieldOffset = 5;
 // (input_Ht * input_Wt); the fused ring_joint_sdpa path patches it down to the logical_n-valid
 // slab prefix so the gather moves only kv_actual-sized data, not the whole oversized cache.
 constexpr uint32_t kValidPagesFieldOffset = 6;
-constexpr uint32_t kNeighborReaderRuntimeArgHeaderCount = 1;
-constexpr uint32_t kNeighborReaderTensorDescriptorFieldCount = 5;
-constexpr uint32_t kNeighborReaderMetadataTensorDescriptorFieldCount =
-    kNeighborReaderTensorDescriptorFieldCount + 1;
+constexpr uint32_t kNeighborReaderRuntimeArgHeaderCount = 2;
+constexpr uint32_t kNeighborReaderTensorDescriptorFieldCount = 8;
+constexpr uint32_t kNeighborReaderMetadataTensorDescriptorFieldCount = kNeighborReaderTensorDescriptorFieldCount + 1;
 constexpr uint32_t kNeighborReaderInputTileStartFieldOffset = 2;
 constexpr uint32_t kNeighborReaderInputTileEndFieldOffset = 3;
 constexpr uint32_t kNeighborReaderInputBatchBaseFieldOffset = 4;
+constexpr uint32_t kNeighborReaderFirstOriginFieldOffset = 5;
+constexpr uint32_t kNeighborReaderSecondOriginFieldOffset = 6;
+constexpr uint32_t kNeighborReaderHaloPagesFieldOffset = 7;
 
-constexpr uint32_t kNeighborWriterRuntimeArgHeaderCount = 3;
+constexpr uint32_t kNeighborWriterRuntimeArgHeaderCount = 4;
 constexpr uint32_t kNeighborWriterTensorDescriptorFieldCount = 5;
 constexpr uint32_t kNeighborWriterInputTileStartFieldOffset = 2;
 constexpr uint32_t kNeighborWriterInputTileEndFieldOffset = 3;
-constexpr uint32_t kNeighborWriterInputOriginPageFieldOffset = 4;
+// First destination page this hop writes in the compact buffer (see sliding_window_work_plan.hpp).
+constexpr uint32_t kNeighborWriterOutputOriginPageFieldOffset = 4;
 
 constexpr uint32_t kRingDirectionCount = 2;
 
