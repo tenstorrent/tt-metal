@@ -232,6 +232,14 @@ class WormholeEthCore(EthCore):
 class BlackholeEthCore(EthCore):
     """Blackhole-specific Ethernet core implementation."""
 
+    # L1[0x7CC70] is heartbeat[0]: a signature in bits 31:16 and counter in bits 15:0.
+    # The base firmware format is documented in blackhole/eth_fw_api.h::aerisc_context_switch.
+    # fabric_erisc_router.cpp writes 0xDCBA0000 | fabric_heartbeat_counter to this address.
+    # This differs from Wormhole's 0xAABB fabric signature; UMD does not export it to Python.
+    BASE_FW_HEARTBEAT_SIGNATURE = 0xABCD
+    FABRIC_HEARTBEAT_SIGNATURE = 0xDCBA
+    HEARTBEAT_SIGNATURE_SHIFT = 16
+
     def __init__(self, location: OnChipCoordinate, context: Context):
         super().__init__(location, context)
         self.eth_core_definitions = EthCoreDefinitions(
@@ -244,9 +252,10 @@ class BlackholeEthCore(EthCore):
         )
 
     def is_valid_heartbeat(self, value: int) -> bool:
-        # Compare the full heartbeat[0] word. Do not apply the Wormhole signature format.
-        # https://github.com/tenstorrent/tt-umd/blob/v0.9.9/device/api/umd/device/types/blackhole_eth.hpp
-        return True
+        return value >> self.HEARTBEAT_SIGNATURE_SHIFT in (
+            self.BASE_FW_HEARTBEAT_SIGNATURE,
+            self.FABRIC_HEARTBEAT_SIGNATURE,
+        )
 
     def port_status_to_string(self, port_status: int) -> str | None:
         """Convert Blackhole port status to readable string."""
