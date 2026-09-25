@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Fused prep→scan chunked Gated Delta Rule (ONE prim, ONE program, zero DRAM intermediates):
-// per head, a dedicated PRODUCER core runs the unchanged prep reader+compute and a writer that
-// NoC-writes the 7 computed intermediates (v_beta, kd, q_decay, intra, k_dec_t, dl, t_inv)
-// straight into its paired RECEIVER core's CBs via the shipped ready/valid handshake; the
-// receiver runs the unchanged scan compute+writer. NP >= 1 producers (QWEN_GDN_NP, default 1)
-// and NV=1 (full V) per head.
+// per head, NP PRODUCER cores run the unchanged prep reader+compute and a writer that NoC-writes
+// the 7 computed intermediates (v_beta, kd, q_decay, intra, k_dec_t, dl, t_inv) straight into the
+// CBs of the head's NV RECEIVER cores (each carrying a V-slice) through a credit/valid handshake;
+// the receivers run the unchanged scan compute+writer. NP and NV come from
+// ChunkGdnFusedProgramConfig::num_producers / num_receivers, or from the cost model when unset.
 // Takes prep's inputs, returns scan's outputs — the seven fp32 DRAM tensors of the phased
 // hand-off simply never exist. The phased prims (chunk_gdn_phased.hpp) stay in-tree as the
 // bit-exact reference: the DRAM round trip they perform is a byte copy, so fused == phased
@@ -140,8 +140,8 @@ FusedGeometryChoice choose_fused_geometry(
 // and producers in one row segment, leftover heads as column blocks). FATALs when the layout does
 // not fit, exactly as the factory would.
 struct FusedPlacement {
-    std::vector<CoreCoord> receivers;  // index h*NV + v (logical coordinates)
-    std::vector<CoreCoord> producers;  // index h*NP + j
+    std::vector<tt::tt_metal::CoreCoord> receivers;  // index h*NV + v (logical coordinates)
+    std::vector<tt::tt_metal::CoreCoord> producers;  // index h*NP + j
 };
 FusedPlacement fused_placement(
     uint32_t grid_x, uint32_t grid_y, uint32_t BH, uint32_t NV, uint32_t NP, uint32_t placement);

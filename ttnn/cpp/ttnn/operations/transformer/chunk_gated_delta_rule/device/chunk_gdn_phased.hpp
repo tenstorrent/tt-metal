@@ -31,7 +31,7 @@ struct ChunkGdnPrepParams {
     uint32_t chunk_size;
     uint32_t key_dim;
     uint32_t val_dim;
-    // OPT-A (QWEN_GDN_FLAT_QKV): when v_flat, `v` is the FLAT token-major tensor [B, T, HV*V] and the
+    // Flat v: when v_flat, `v` is the FLAT token-major tensor [B, T, HV*V] and the
     // prep reader tile-addresses head hv's chunk c directly out of it (no head-split/permute/pad
     // materialization on the host). HV is the value-head count (needed for the flat row stride).
     // Only the v INPUT read changes; the prep still WRITES head-major v_beta, so the scan and every

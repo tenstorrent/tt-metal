@@ -136,7 +136,7 @@ def chunk_gated_delta_rule_fused_adapter(
     beta = ttnn.reshape(beta, [B, T, Nv])
     g = ttnn.reshape(g, [B, T, Nv])
 
-    # Host L2-norm q/k (skipped when in-kernel norm via QWEN_GDN_QK_NORM / flat QKV — required for flat).
+    # Host L2-norm q/k; with flat QKV the prep kernel normalizes in-kernel instead (required for flat).
     if not flat_qkv_enabled():
         q = l2_norm_ttnn(q, dim=-1)
         k = l2_norm_ttnn(k, dim=-1)

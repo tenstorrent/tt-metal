@@ -64,7 +64,8 @@ void ChunkGdnFusedOperation::validate_on_program_cache_miss(
     TT_FATAL(attrs.val_dim % TILE_WIDTH == 0, "val_dim must be a multiple of 32");
     // Geometry: NP producers + NV receivers per head. Receivers of a head form a 1xNV row rectangle
     // (the multicast target), so the grid must hold BH such rectangles: BH <= (grid.x / NV) * grid.y.
-    // Producers have no placement constraint. NP=1 / NV=1 unless QWEN_GDN_NP / QWEN_GDN_NV opted in.
+    // Producers have no placement constraint. NP / NV come from ChunkGdnFusedProgramConfig::
+    // num_producers / num_receivers, or from the cost model when unset (chunk_gdn_fused below).
     TT_FATAL(attrs.np >= 1, "chunk_gdn_fused: np must be >= 1 (got {})", attrs.np);
     TT_FATAL(attrs.nv >= 1, "chunk_gdn_fused: nv must be >= 1 (got {})", attrs.nv);
     const uint32_t Vt = attrs.val_dim / TILE_WIDTH;
@@ -400,7 +401,8 @@ std::vector<Tensor> chunk_gdn_fused(
         "chunk_gdn_fused: num_receivers must be >= 1 (got {})",
         nv_pin);
     // The model fills whatever the config leaves free (both, one, or none) so the pair fits the grid.
-    const auto choice = choose_fused_geometry(grid0.x, grid0.y, BH, num_chunks, val_dim / TILE_WIDTH, nv_pin, np_pin);
+    const auto choice =
+        choose_fused_geometry(grid0.x, grid0.y, BH, num_chunks, val_dim / tt::constants::TILE_WIDTH, nv_pin, np_pin);
     TT_FATAL(
         choice.nv >= 1,
         "chunk_gdn_fused: no fused geometry fits BH={} on a {}x{} grid with num_receivers={} num_producers={} "

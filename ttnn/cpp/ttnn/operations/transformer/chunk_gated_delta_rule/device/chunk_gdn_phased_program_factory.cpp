@@ -141,8 +141,8 @@ struct ScanWorkDist {
 ScanWorkDist distribute_scan(CoreCoord grid, uint32_t BH, uint32_t Vt, bool force_serial) {
     const uint32_t ncores = grid.x * grid.y;
     TT_FATAL(BH <= ncores, "num_heads {} exceeds compute cores {}", BH, ncores);
-    // force_serial (QWEN_GDN_SCAN_SERIAL=1, hashed into ChunkGdnScanParams) pins NV=1 — full V on
-    // 1 core/head, the old layout — for perf A/B only.
+    // force_serial (ChunkGdnPhasedProgramConfig::scan_serial, hashed into ChunkGdnScanParams) pins
+    // NV=1 — full V on 1 core/head, the old layout — for perf A/B only.
     // Row-aligned placement: each head's NV v-block cores must form a 1xNV NoC RECTANGLE (the
     // shared-input multicast targets it), so the effective row width is padded down to a multiple
     // of NV — HPR = grid.x/NV heads per row, grid.x mod NV columns idle per used row. Feasibility

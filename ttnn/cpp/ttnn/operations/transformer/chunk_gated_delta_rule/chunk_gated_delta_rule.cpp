@@ -155,8 +155,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     const auto& vs = v_in.logical_shape();  // [B,T,HV,V]  (or flat [B,T,HV*V] under OPT-A)
     const uint32_t B = qs[0];
     const uint32_t T = qs[1];
-    // OPT-A (QWEN_GDN_FLAT_QKV): rank-3 q/k/v are FLAT token-major tensors — the adapter skipped the
-    // head-split relayout. Head counts can't be read off a flat width, so: HV comes from beta [B,T,HV];
+    // Flat q/k/v: rank-3 inputs are FLAT token-major tensors — the model adapter (fused_chunk.py) skips
+    // the head-split relayout. Head counts can't be read off a flat width, so: HV comes from beta [B,T,HV];
     // for the flat q/k path we assume per-head K==V (true for GDN: linear_key_head_dim==value_head_dim),
     // so K=V and H = q_flat_width / K. The prep reader tile-addresses q/k/v out of the flat grids.
     const bool flat_v = (vs.rank() == 3);
