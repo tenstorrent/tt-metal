@@ -158,5 +158,23 @@ FORCE_INLINE Instant read_bracketed() {
     }
     return t;
 }
+// The very next refclk update, waited for with no gap between reads: its count and the wall read just before the
+// refclk read that changed. It returns within one update (80 ns), where read_bracketed takes ~5 us, but its wall read
+// sits early in the bracket rather than centred, so it paces frames and does not sample the clock. False if no update
+// came within the spins (a dead refclk).
+FORCE_INLINE bool next_refclk_update(uint32_t& wall, uint32_t& refclk) {
+    uint32_t prev = kPtpCfrLo.read();
+    for (uint32_t spin = 0; spin < 1024; spin++) {
+        const uint32_t w = kWallClockLo.read();
+        const uint32_t r = kPtpCfrLo.read();
+        if (r != prev) {
+            wall = w;
+            refclk = r;
+            return true;
+        }
+        prev = r;
+    }
+    return false;
+}
 
 }  // namespace tt::tt_metal::eth_ptp

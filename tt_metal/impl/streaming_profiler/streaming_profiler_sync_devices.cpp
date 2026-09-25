@@ -657,23 +657,14 @@ void SyncDevices::launch_links() {
 
 namespace {
 
-// What each end leaves past its control word (eth_ptp::StopDiag): rounds, the timer word (0 no hardware path, 1 ran,
-// 2 never acknowledged its rate, in which case that end emitted no hardware stamps; the session's PTP offset in the
-// bits above, a tick multiple), wall cycles inside steps that sent or took frames, wall cycles and refclk ticks of the
-// run, the longest such step in wall cycles, then rounds not recorded, frames left for a later step (the queue was busy
-// at their phase), bursts whose ingress stamps did not match their frames, and frames that came in without an egress
-// stamp.
+// What each end leaves past its control word (eth_ptp::StopDiag): the timer word (0 no hardware path, 1 ran, 2 never
+// acknowledged its rate, in which case that end emitted no hardware stamps), then rounds not recorded, frames left for
+// a later step (the queue was busy at their phase), bursts whose ingress stamps did not match their frames, and frames
+// that came in without an egress stamp.
 struct StopDiag {
-    uint32_t rounds, timer, hold_lo, hold_hi, wall_lo, wall_hi, ref_lo, ref_hi, hold_max, drop[4];
-    double wall() const { return static_cast<double>((uint64_t{wall_hi} << 32) | wall_lo); }
-    double refclk() const { return static_cast<double>((uint64_t{ref_hi} << 32) | ref_lo); }
-    // The share of the core's time inside bursts, and the longest burst in us.
-    double hold_pct() const {
-        return wall() == 0.0 ? 0.0 : 100.0 * static_cast<double>((uint64_t{hold_hi} << 32) | hold_lo) / wall();
-    }
-    double longest_us() const { return wall() == 0.0 ? 0.0 : hold_max * (refclk() * 20.0 / wall()) / 1000.0; }
+    uint32_t timer, drop[4];
 };
-static_assert(sizeof(StopDiag) == 13 * sizeof(uint32_t));
+static_assert(sizeof(StopDiag) == 5 * sizeof(uint32_t));
 
 StopDiag read_stop_diag(tt::Cluster& cluster, uint32_t chip, const CoreCoord& virt, uint32_t ctl) {
     StopDiag d{};
@@ -682,26 +673,6 @@ StopDiag read_stop_diag(tt::Cluster& cluster, uint32_t chip, const CoreCoord& vi
 }
 
 void log_link_diag(uint32_t chip_a, uint32_t chip_b, const StopDiag& da, const StopDiag& db) {
-    log_info(
-        tt::LogMetal,
-        "[streaming profiler] link sync chip {} -> chip {}: {} rounds over {:.0f} ms; core time in link steps: "
-        "sender {:.2f} % (longest {:.2f} us), receiver {:.2f} % (longest {:.2f} us)",
-        chip_a,
-        chip_b,
-        da.rounds,
-        da.refclk() / 50'000.0,
-        da.hold_pct(),
-        da.longest_us(),
-        db.hold_pct(),
-        db.longest_us());
-    log_info(
-        tt::LogMetal,
-        "[streaming profiler] link sync chip {} -> chip {}: PTP offsets (PTP64NS minus 20 x CFR, low 32 bits) sender "
-        "{} ns, receiver {} ns",
-        chip_a,
-        chip_b,
-        static_cast<int32_t>(da.timer & ~3u),
-        static_cast<int32_t>(db.timer & ~3u));
     for (const auto& [chip, name, d] : {std::tuple{chip_a, "sender", &da}, std::tuple{chip_b, "receiver", &db}}) {
         if (d->drop[0] != 0 || d->drop[2] != 0 || d->drop[3] != 0) {
             log_warning(
@@ -722,7 +693,7 @@ void log_link_diag(uint32_t chip_a, uint32_t chip_b, const StopDiag& da, const S
                 name,
                 d->drop[1]);
         }
-        if ((d->timer & 3u) == 2) {
+        if (d->timer == 2) {
             log_warning(
                 tt::LogMetal,
                 "[streaming profiler] link sync chip {}: the 1588 timer never acknowledged its rate; this end sent no "

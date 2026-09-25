@@ -86,7 +86,6 @@ static_assert(kFrameBytes % 16 == 0 && 4 * (kWordTimerOk + 1) <= kFrameBytes);
 static_assert(
     kFrameStampField + 10 <= 4 * kWordSync && 4 * kWordSync + sizeof(eth_channel_sync_t) <= 4 * kWordOffsetLo);
 static_assert(kSlotsBytes <= kCtlOffset);
-static_assert(kCtlOffset + 8 + 13 * sizeof(uint32_t) <= kernel_profiler::kLinkSyncRingOffset);  // StopDiag::write
 
 // Frame j of a round rides in slot j % kBurstFrames, the same L1 address on both ends, so the receiver's echo lands
 // on the frame it answers. The sync word carries the round and the trip: bytes_sent in the frame, which the receiver
@@ -103,22 +102,6 @@ static_assert(kTripsPerRound <= kTripMask);
 FORCE_INLINE uint32_t frame_phase_cycles(uint32_t k, uint32_t p16) {
     static_assert(kCombPhases * 16 == 1u << 12);
     return (((k * kFramePhaseStep) & (kCombPhases - 1)) * p16) >> 12;
-}
-// The next refclk update the ERISC sees, from reads back to back: its count and the wall read between the two refclk
-// reads that differ. False if none came within the spins (a dead refclk).
-FORCE_INLINE bool next_update(uint32_t& wall, uint32_t& refclk) {
-    uint32_t prev = kPtpCfrLo.read();
-    for (uint32_t spin = 0; spin < 1024; spin++) {
-        const uint32_t w = kWallClockLo.read();
-        const uint32_t r = kPtpCfrLo.read();
-        if (r != prev) {
-            wall = w;
-            refclk = r;
-            return true;
-        }
-        prev = r;
-    }
-    return false;
 }
 
 // Waits to a wall-clock target with a delay loop calibrated once, so a frame sits at its cycle wherever its wait
@@ -195,46 +178,24 @@ FORCE_INLINE void carry_offset(volatile uint32_t* w, const PtpTimer& timer) {
     w[kFrameStampHiWord + 1] = 0;
 }
 
-// What each end leaves past its control word for the host's log (streaming_profiler_device.cpp reads it back): +8
-// rounds, +12 the timer word (1 ran, 2 never acknowledged its rate, the PTP offset in the bits above), +16 wall cycles
-// inside steps that sent or took frames and +24 wall cycles of the run (two words each), +32 refclk ticks of the run
-// (two words), +40 the longest such step in wall cycles, then the counts: +44 rounds not recorded, +48 frames left for
-// a later step (the queue was busy at their phase), +52 bursts whose ingress stamps did not match their frames, +56
+// What each end leaves past its control word for the host (streaming_profiler_sync_devices.cpp reads it back): +8
+// the timer word (1 ran, 2 never acknowledged its rate), then the counts: +12 rounds not recorded, +16 frames left for
+// a later step (the queue was busy at their phase), +20 bursts whose ingress stamps did not match their frames, +24
 // frames that came in without an egress stamp.
 struct StopDiag {
-    uint32_t rounds = 0, timer = 0;
-    uint64_t hold = 0, span_wall = 0, span_refclk = 0;
-    uint32_t hold_max = 0;
+    static constexpr uint32_t kWords = 5;
+    uint32_t timer = 0;
     uint32_t drop[4] = {};
-    FORCE_INLINE void note_hold(uint32_t cycles) {
-        hold += cycles;
-        hold_max = cycles > hold_max ? cycles : hold_max;
-    }
-    FORCE_INLINE void note_round(bool recorded) {
-        rounds++;
-        drop[0] += !recorded;
-    }
+    FORCE_INLINE void note_round(bool recorded) { drop[0] += !recorded; }
     void write(uint32_t stop_addr) const {
         volatile tt_l1_ptr uint32_t* w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stop_addr + 8);
-        const uint32_t words[13] = {
-            rounds,
-            timer,
-            static_cast<uint32_t>(hold),
-            static_cast<uint32_t>(hold >> 32),
-            static_cast<uint32_t>(span_wall),
-            static_cast<uint32_t>(span_wall >> 32),
-            static_cast<uint32_t>(span_refclk),
-            static_cast<uint32_t>(span_refclk >> 32),
-            hold_max,
-            drop[0],
-            drop[1],
-            drop[2],
-            drop[3]};
-        for (uint32_t i = 0; i < 13; i++) {
-            w[i] = words[i];
+        w[0] = timer;
+        for (uint32_t i = 0; i < 4; i++) {
+            w[1 + i] = drop[i];
         }
     }
 };
+static_assert(kCtlOffset + 8 + 4 * StopDiag::kWords <= kernel_profiler::kLinkSyncRingOffset);
 
 // One side's hardware round: the peer's egress stamps, read from the frames it sent this side, paired with their
 // ingress stamps here, and the peer's PTP offset they came with.
@@ -311,10 +272,10 @@ struct Grid {
     void start() {
         pacer.calibrate();
         uint32_t w0 = 0, r0 = 0, w1 = 0, r1 = 0;
-        if (next_update(w0, r0)) {
+        if (next_refclk_update(w0, r0)) {
             while (kPtpCfrLo.read() - r0 < 1000u) {
             }
-            if (next_update(w1, r1)) {
+            if (next_refclk_update(w1, r1)) {
                 p16 = ((w1 - w0) << 4) / ((r1 - r0) / 4u);
             }
         }
@@ -327,7 +288,7 @@ struct Grid {
     // 2^27 cycles or more since the last update (a pause) keeps the period it had.
     __attribute__((noinline)) bool send(uint32_t base, uint32_t round, uint32_t j, StopDiag& diag) {
         uint32_t w = 0, r = 0;
-        if (next_update(w, r)) {
+        if (next_refclk_update(w, r)) {
             const uint32_t cycles = w - edge_wall, updates = (r - edge_refclk) / 4u;
             if (updates != 0 && cycles < (1u << 27)) {
                 p16 = (cycles << 4) / updates;
@@ -398,7 +359,6 @@ struct EndBase {
     LinkRule rule;
     uint32_t slot_base = 0, diag_addr = 0, round = 0;
     bool started = false;
-    Instant start_at{};
     Grid grid;
     StopDiag diag;
     HwRound rnd;
@@ -423,16 +383,12 @@ protected:
     void begin(uint32_t l1, uint32_t ctl) {
         diag_addr = ctl;
         ring.open(l1);
-        start_at = read_instant();
         grid.start();
     }
     // Rewritten at every round's close, so a host that cannot stop this end (a router) still reads the current
-    // figures. The PTP offset rides in the timer word: a tick multiple, so its low two bits are free.
+    // figures.
     __attribute__((noinline)) void write_diag() {
-        const Instant now = read_instant();
-        diag.timer = (timer.ok ? 1u : 2u) | (static_cast<uint32_t>(timer.offset_64 >> 6) & ~3u);
-        diag.span_wall = now.wall() - start_at.wall();
-        diag.span_refclk = now.refclk - start_at.refclk;
+        diag.timer = timer.ok ? 1u : 2u;
         diag.write(diag_addr);
     }
     __attribute__((noinline)) void close_round(uint32_t tx_role, uint32_t rx_role) {
@@ -463,8 +419,9 @@ struct SenderLink : EndBase {
         begin(l1, ctl);
         burst_ticks = kPaceTicks / kBurstsPerRound;
         out_sent = kBurstFrames;
-        slot_cfr = start_at.refclk;
-        schedule(start_at);
+        const Instant now = read_instant();
+        slot_cfr = now.refclk;
+        schedule(now);
     }
     FORCE_INLINE void schedule(const Instant& now) {
         const int64_t ticks = static_cast<int64_t>(slot_cfr - now.refclk);
@@ -505,11 +462,7 @@ private:
         }
         return true;
     }
-    __attribute__((noinline)) void send_next() {
-        const uint32_t w = kWallClockLo.read();
-        out_sent += grid.send(slot_base, round, out_j0 + out_sent, diag);
-        diag.note_hold(kWallClockLo.read() - w);
-    }
+    __attribute__((noinline)) void send_next() { out_sent += grid.send(slot_base, round, out_j0 + out_sent, diag); }
     // A slot, once all the last burst's echoes are in: its pairs (egress stamps from the echoes themselves, ingress
     // stamps here), the round's records at a round boundary, then the next burst's frames, which the steps after it
     // send. A round is a count of bursts, not of slots: a burst whose steps outlast its slot delays the next, and the
@@ -552,7 +505,6 @@ private:
             slot_cfr = now.refclk;
         }
         schedule(now);
-        diag.note_hold(kWallClockLo.read() - now.wall_lo);
     }
 };
 
@@ -585,7 +537,6 @@ private:
     // key back and, once sent, this end's egress stamp. A burst's first frame names the round, the sender's; a new one
     // closes the previous. Its last frame takes the burst's ingress stamps and pairs them.
     __attribute__((noinline)) void take() {
-        const uint32_t w = kWallClockLo.read();
         const uint32_t f = frame_at(slot_base, taken);
         volatile eth_channel_sync_t* s = sync_word(f);
         if (taken == 0) {
@@ -610,16 +561,13 @@ private:
         s->receiver_ack = s->bytes_sent;
         s->bytes_sent = 0;
         taken++;
-        diag.note_hold(kWallClockLo.read() - w);
     }
     __attribute__((noinline)) void echo() {
-        const uint32_t w = kWallClockLo.read();
         echoed += grid.send(slot_base, round, echo_j0 + echoed, diag);
         if (echoed == kBurstFrames) {
             taken = 0;
             echoed = 0;
         }
-        diag.note_hold(kWallClockLo.read() - w);
     }
 };
 
