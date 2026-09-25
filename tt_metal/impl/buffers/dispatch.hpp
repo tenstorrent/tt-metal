@@ -110,9 +110,12 @@ struct ShardedBufferReadDispatchParams : BufferReadDispatchParams {
 
 // Returns true if pinned memory was used for the transfer
 // If logical_core_filter is non-null, only cores contained in the set are written (sharded buffers only).
+// `region` selects the sub-range of `buffer` to write; `src` points at the data for that region, not at
+// the start of a whole-buffer host image.
 bool write_to_device_buffer(
     const void* src,
     Buffer& buffer,
+    const BufferRegion& region,
     uint32_t cq_id,
     ttsl::Span<const uint32_t> expected_num_workers_completed,
     CoreType dispatch_core_type,
@@ -120,11 +123,19 @@ bool write_to_device_buffer(
     const std::shared_ptr<experimental::PinnedMemory>& pinned_memory = nullptr,
     const CoreRangeSet* logical_core_filter = nullptr);
 
+// `region` selects the sub-range of `buffer` to read; the destination pointer supplied later points at
+// the start of the region's data, not at a whole-buffer host image.
 ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
-    Buffer& buffer, uint32_t cq_id, ttsl::Span<const uint32_t> expected_num_workers_completed);
+    Buffer& buffer,
+    const BufferRegion& region,
+    uint32_t cq_id,
+    ttsl::Span<const uint32_t> expected_num_workers_completed);
 
 BufferReadDispatchParams initialize_interleaved_buf_read_dispatch_params(
-    Buffer& buffer, uint32_t cq_id, ttsl::Span<const uint32_t> expected_num_workers_completed);
+    Buffer& buffer,
+    const BufferRegion& region,
+    uint32_t cq_id,
+    ttsl::Span<const uint32_t> expected_num_workers_completed);
 
 void copy_sharded_buffer_from_core_to_completion_queue(
     uint32_t core_id,

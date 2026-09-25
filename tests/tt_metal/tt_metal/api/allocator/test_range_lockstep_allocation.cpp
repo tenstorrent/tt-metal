@@ -188,9 +188,10 @@ TEST_F(HybridAllocatorTest, ScopesDependenciesOnADirectBufferCreate) {
     EXPECT_TRUE(scoped->is_allocated());
 }
 
-// A sub-region view shares its parent's allocation, so the query must agree on both. view()
-// rebuilds BufferShardingArgs from the specs alone, which drops anything held outside them.
-TEST_F(HybridAllocatorTest, SurvivesASubRegionView) {
+// Sub-region transfers no longer build a derived Buffer, so there is no second object whose
+// BufferShardingArgs could disagree with the parent's. A partial region now reads the flag off the
+// one buffer that owns the allocation.
+TEST_F(HybridAllocatorTest, SurvivesASubRegionTransfer) {
     auto* device = this->devices_[0]->get_devices()[0];
     constexpr DeviceAddr kPages = 4;
     auto args = BufferShardingArgs(
@@ -202,10 +203,9 @@ TEST_F(HybridAllocatorTest, SurvivesASubRegionView) {
         BufferImpl::create(device, kPages * HYBRID_TEST_PAGE_SIZE, HYBRID_TEST_PAGE_SIZE, BufferType::L1, args);
     ASSERT_TRUE(range_lockstep::is_range_lockstep_allocation(*buffer));
 
-    auto view = buffer->impl().view(*buffer, BufferRegion(HYBRID_TEST_PAGE_SIZE, HYBRID_TEST_PAGE_SIZE));
-    ASSERT_NE(view, buffer) << "expected a real sub-region view, not the parent back";
-    EXPECT_TRUE(range_lockstep::is_range_lockstep_allocation(*view))
-        << "the view reports default lockstep while sharing a range lockstep allocation";
+    BufferRegion region(HYBRID_TEST_PAGE_SIZE, HYBRID_TEST_PAGE_SIZE);
+    EXPECT_NO_THROW(validate_buffer_region(*buffer, region));
+    EXPECT_TRUE(range_lockstep::is_range_lockstep_allocation(*buffer));
 }
 
 // Only the L1 branch of allocate_buffer reads the flag, so anywhere else it would be a no-op that

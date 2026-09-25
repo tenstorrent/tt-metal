@@ -830,7 +830,6 @@ bool FDMeshCommandQueue::write_shard_to_device(
 
     auto* device_buffer = buffer.get_device_buffer(device_coord);
     auto region_value = region.value_or(BufferRegion(0, device_buffer->size()));
-    auto shard_view = device_buffer->impl().view(*device_buffer, region_value);
 
 #if defined(TT_UMD_BUILD_SIMULATION)
     const tt_sim::DirectWriteGuard tt_sim_direct_write_guard{
@@ -838,7 +837,7 @@ bool FDMeshCommandQueue::write_shard_to_device(
         .cq_idle = !in_use_.load(std::memory_order_acquire),
         .rtoptions = &MetalContext::instance(mesh_device_->impl().get_context_id()).rtoptions(),
     };
-    if (tt_sim::try_direct_write(tt_sim_direct_write_guard, *shard_view, src, region_value, logical_core_filter)) {
+    if (tt_sim::try_direct_write(tt_sim_direct_write_guard, *device_buffer, src, region_value, logical_core_filter)) {
         return false;
     }
 #endif
@@ -847,7 +846,8 @@ bool FDMeshCommandQueue::write_shard_to_device(
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
     return buffer_dispatch::write_to_device_buffer(
         src,
-        *shard_view,
+        *device_buffer,
+        region_value,
         id_,
         expected_num_workers_completed_,
         this->dispatch_core_type(),
@@ -876,24 +876,23 @@ void FDMeshCommandQueue::read_shard_from_device(
     TT_FATAL(!trace_id_.has_value(), "Reads are not supported during trace capture.");
 
     auto* device_buffer = buffer.get_device_buffer(device_coord);
-    auto shard_view =
-        device_buffer->impl().view(*device_buffer, region.value_or(BufferRegion(0, device_buffer->size())));
+    auto region_value = region.value_or(BufferRegion(0, device_buffer->size()));
 
-    auto* device = shard_view->device();
+    auto* device = device_buffer->device();
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
     // Reading from device would clobber prefetcher cache, so reset it now
     this->reset_prefetcher_cache_manager();
 
-    if (is_sharded(shard_view->buffer_layout())) {
+    if (is_sharded(device_buffer->buffer_layout())) {
         auto dispatch_params = buffer_dispatch::initialize_sharded_buf_read_dispatch_params(
-            *shard_view, id_, expected_num_workers_completed_);
+            *device_buffer, region_value, id_, expected_num_workers_completed_);
         const auto& cores = dispatch_params.buffer_page_mapping->all_cores;
-        for (uint32_t core_id = 0; core_id < shard_view->num_cores(); ++core_id) {
+        for (uint32_t core_id = 0; core_id < device_buffer->num_cores(); ++core_id) {
             for (const auto& core_page_mapping : dispatch_params.buffer_page_mapping->core_page_mappings[core_id]) {
                 buffer_dispatch::copy_sharded_buffer_from_core_to_completion_queue(
                     core_id,
                     core_page_mapping,
-                    *shard_view,
+                    *device_buffer,
                     dispatch_params,
                     sub_device_ids,
                     cores[core_id],
@@ -902,22 +901,22 @@ void FDMeshCommandQueue::read_shard_from_device(
                     num_txns_per_device[device]++;
                     auto& read_descriptor_queue = this->get_read_descriptor_queue(device);
                     read_descriptor_queue.push(
-                        buffer_dispatch::generate_sharded_buffer_read_descriptor(dst, dispatch_params, *shard_view));
+                        buffer_dispatch::generate_sharded_buffer_read_descriptor(dst, dispatch_params, *device_buffer));
                 }
             }
         }
     } else {
         buffer_dispatch::BufferReadDispatchParams dispatch_params =
             buffer_dispatch::initialize_interleaved_buf_read_dispatch_params(
-                *shard_view, id_, expected_num_workers_completed_);
+                *device_buffer, region_value, id_, expected_num_workers_completed_);
 
         buffer_dispatch::copy_interleaved_buffer_to_completion_queue(
-            dispatch_params, *shard_view, sub_device_ids, this->dispatch_core_type(), dst, pinned_memory);
+            dispatch_params, *device_buffer, sub_device_ids, this->dispatch_core_type(), dst, pinned_memory);
         if ((dispatch_params.pages_per_txn > 0) && (dispatch_params.requires_completion_read)) {
             num_txns_per_device[device]++;
             auto& read_descriptor_queue = this->get_read_descriptor_queue(device);
             read_descriptor_queue.push(
-                buffer_dispatch::generate_interleaved_buffer_read_descriptor(dst, dispatch_params, *shard_view));
+                buffer_dispatch::generate_interleaved_buffer_read_descriptor(dst, dispatch_params, *device_buffer));
         }
     }
 }

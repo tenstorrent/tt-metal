@@ -97,6 +97,13 @@ IDevice* GetActiveDevice(ChipId device_id);
  */
 void WriteToBuffer(Buffer& buffer, ttsl::Span<const uint8_t> host_buffer);
 /**
+ * Copies data from a host buffer into a page-aligned sub-region of the specified buffer.
+ *
+ * `host_buffer` holds the data for `region` only -- it is not a whole-buffer image that the region
+ * offset indexes into. The region offset is applied on the device side.
+ */
+void WriteToBuffer(Buffer& buffer, ttsl::Span<const uint8_t> host_buffer, const BufferRegion& region);
+/**
  * Copies data from a host buffer into the specified buffer
  *
  * Return value: void
@@ -120,6 +127,13 @@ void WriteToBuffer(const std::shared_ptr<Buffer>& buffer, const std::vector<DTyp
 }
 
 void ReadFromBuffer(Buffer& buffer, uint8_t* host_buffer);
+/**
+ * Copies a page-aligned sub-region of the specified buffer into a host buffer.
+ *
+ * `host_buffer` receives the data for `region` only -- it is not a whole-buffer image that the region
+ * offset indexes into. The region offset is applied on the device side.
+ */
+void ReadFromBuffer(Buffer& buffer, uint8_t* host_buffer, const BufferRegion& region);
 /**
  * Copies data from a buffer into a host buffer
  *

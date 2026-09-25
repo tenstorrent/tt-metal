@@ -624,40 +624,24 @@ std::shared_ptr<Buffer> BufferImpl::create(
     return buffer;
 }
 
-std::shared_ptr<Buffer> BufferImpl::view(Buffer& self, const BufferRegion& region) {
-    TT_FATAL(region.offset % self.page_size() == 0, "Region offset must be a multiple of page size");
-    TT_FATAL(region.size % self.page_size() == 0, "Region size must be a multiple of page size");
-    TT_FATAL(region.offset + region.size <= self.size(), "Region must be within buffer");
+void validate_buffer_region(const Buffer& buffer, const BufferRegion& region) {
+    TT_FATAL(region.offset % buffer.page_size() == 0, "Region offset must be a multiple of page size");
+    TT_FATAL(region.size % buffer.page_size() == 0, "Region size must be a multiple of page size");
+    TT_FATAL(region.offset + region.size <= buffer.size(), "Region must be within buffer");
+    const bool whole_buffer = region.offset == 0 && region.size == buffer.size();
+    TT_FATAL(
+        whole_buffer || !buffer.impl().per_core_allocation_,
+        "Partial-region transfers are not supported for per-core allocated buffers");
+}
 
-    if (region.offset == 0 && region.size == self.size()) {
-        return self.shared_from_this();
+std::shared_ptr<const BufferPageMapping> get_buffer_page_mapping_for_region(
+    Buffer& buffer, const BufferRegion& region) {
+    TT_FATAL(is_sharded(buffer.buffer_layout()), "Buffer not sharded");
+    if (region.offset == 0 && region.size == buffer.size()) {
+        return buffer.get_buffer_page_mapping();
     }
-
-    TT_FATAL(!per_core_allocation_, "Buffer::view() with sub-regions is not supported for per-core allocated buffers");
-
-    // A view takes the parent's address rather than allocating, so the flag changes nothing about
-    // placement here. It is carried anyway so is_range_lockstep_allocation() agrees on a buffer and
-    // its views; the parent's specs come along unchanged, so the setter's guards still hold.
-    auto sharding_args = BufferShardingArgs(buffer_distribution_spec_, shard_spec_, buffer_layout_);
-    if (range_lockstep_allocation_) {
-        experimental::range_lockstep_allocation::set_range_lockstep_allocation(sharding_args, true);
-    }
-
-    auto buffer = BufferImpl::create(
-        device_, address_, region.size, page_size_, buffer_type_, sharding_args, bottom_up_, sub_device_id_);
-
-    std::shared_ptr<const BufferPageMapping> new_page_mapping;
-    if (is_sharded(buffer_layout_)) {
-        new_page_mapping =
-            std::make_shared<const BufferPageMapping>(self.get_buffer_page_mapping()->filter_by_host_range(
-                region.offset / self.page_size(), (region.offset + region.size) / self.page_size()));
-    }
-
-    buffer->impl().root_buffer_ = root_buffer(self);
-    buffer->impl().root_buffer_offset_ = root_buffer_offset_ + region.offset;
-    buffer->impl().buffer_page_mapping_ = new_page_mapping;
-
-    return buffer;
+    return std::make_shared<const BufferPageMapping>(buffer.get_buffer_page_mapping()->filter_by_host_range(
+        region.offset / buffer.page_size(), (region.offset + region.size) / buffer.page_size()));
 }
 
 Allocator* Buffer::allocator() const { return impl_->allocator_->view().get(); }
@@ -878,13 +862,6 @@ const std::shared_ptr<const BufferPageMapping>& Buffer::get_buffer_page_mapping(
         impl_->buffer_page_mapping_ = std::make_shared<const BufferPageMapping>(generate_buffer_page_mapping(*this));
     }
     return impl_->buffer_page_mapping_;
-}
-
-std::shared_ptr<Buffer> BufferImpl::root_buffer(Buffer& self) {
-    if (root_buffer_) {
-        return root_buffer_;
-    }
-    return self.shared_from_this();
 }
 
 const std::optional<BufferDistributionSpec>& Buffer::buffer_distribution_spec() const {

@@ -632,12 +632,15 @@ void print_page(
 using experimental::per_core_allocation::get_shard_base_address;
 
 void WriteToDeviceSharded(
-    Buffer& buffer, ttsl::Span<const uint8_t> host_buffer, const CoreRangeSet* logical_core_filter) {
+    Buffer& buffer,
+    ttsl::Span<const uint8_t> host_buffer,
+    const BufferRegion& region,
+    const CoreRangeSet* logical_core_filter) {
     TT_FATAL(
-        host_buffer.size() <= buffer.size(),
-        "Bounds-Error -- Attempting to write {} bytes to a {} byte buffer",
+        host_buffer.size() <= region.size,
+        "Bounds-Error -- Attempting to write {} bytes to a {} byte region",
         host_buffer.size(),
-        buffer.size());
+        region.size);
 
     uint32_t page_size = buffer.page_size();
     TT_ASSERT(page_size == 0 ? buffer.size() == 0 : buffer.size() % page_size == 0);
@@ -651,7 +654,8 @@ void WriteToDeviceSharded(
     const size_t aligned_bytes = alignment_req ? (page_size / alignment_req) * alignment_req : page_size;
     const size_t remainder_bytes = page_size - aligned_bytes;
     TT_ASSERT(buffer.aligned_page_size() >= page_size);  // Check that we don't write to the end of the buffer
-    const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
+    // Host page indices in this mapping are relative to the start of the region, matching `host_buffer`.
+    const auto& buffer_page_mapping = *get_buffer_page_mapping_for_region(buffer, region);
     const bool can_write_page_ranges = buffer.aligned_page_size() == page_size;
 
     auto write_pages = [&](uint32_t core_id, uint32_t device_page, uint32_t host_page, uint32_t num_pages) {
@@ -721,24 +725,27 @@ DeviceAddr CalculateAddressDeviceInterleavedContiguous(const Buffer& buffer, uin
     return addr;
 }
 
-void WriteToDeviceInterleavedContiguous(const Buffer& buffer, ttsl::Span<const uint8_t> host_buffer) {
+void WriteToDeviceInterleavedContiguous(
+    const Buffer& buffer, ttsl::Span<const uint8_t> host_buffer, const BufferRegion& region) {
     if (GraphTracker::instance().hook_write_to_device(&buffer)) {
         return;
     }
 
     size_t host_buffer_size_bytes = host_buffer.size();
     TT_FATAL(
-        host_buffer_size_bytes <= buffer.size(),
-        "Bounds-Error -- Attempting to write {} bytes to a {} byte buffer",
+        host_buffer_size_bytes <= region.size,
+        "Bounds-Error -- Attempting to write {} bytes to a {} byte region",
         host_buffer_size_bytes,
-        buffer.size());
+        region.size);
 
     size_t page_size = buffer.page_size();
-    size_t num_pages = buffer.num_pages();
+    // `host_buffer` holds the region's data only; the region offset is applied on the device side.
+    size_t first_page = region.offset / page_size;
+    size_t num_pages = region.size / page_size;
 
     auto* device = buffer.device();
     size_t num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
-    size_t bank_index = 0;
+    size_t bank_index = first_page % num_banks;
     size_t data_index = 0;
 
     const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
@@ -747,7 +754,7 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, ttsl::Span<const u
     const size_t aligned_bytes = alignment_req ? (page_size / alignment_req) * alignment_req : page_size;
     const size_t remainder_bytes = page_size - aligned_bytes;
     TT_ASSERT(buffer.aligned_page_size() >= page_size);  // Check that we don't write to the end of the buffer
-    for (size_t page_index = 0; page_index < num_pages; page_index++) {
+    for (size_t page_index = first_page; page_index < first_page + num_pages; page_index++) {
         const DeviceAddr address = CalculateAddressDeviceInterleavedContiguous(buffer, bank_index, page_index);
         auto write_chunk = [&](size_t offset, size_t size_in_bytes) {
             if (size_in_bytes == 0) {
@@ -773,8 +780,13 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, ttsl::Span<const u
     }
 }
 
-void WriteToDevice(Buffer& buffer, ttsl::Span<const uint8_t> host_buffer, const CoreRangeSet* logical_core_filter) {
+void WriteToDevice(
+    Buffer& buffer,
+    ttsl::Span<const uint8_t> host_buffer,
+    const BufferRegion& region,
+    const CoreRangeSet* logical_core_filter) {
     ZoneScoped;
+    validate_buffer_region(buffer, region);
     if (buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED) {
         if (logical_core_filter != nullptr) {
             TT_FATAL(
@@ -783,15 +795,15 @@ void WriteToDevice(Buffer& buffer, ttsl::Span<const uint8_t> host_buffer, const 
                 "per-core filtering)");
             return;
         }
-        WriteToDeviceInterleavedContiguous(buffer, host_buffer);
+        WriteToDeviceInterleavedContiguous(buffer, host_buffer, region);
     } else if (is_sharded(buffer.buffer_layout())) {
-        WriteToDeviceSharded(buffer, host_buffer, logical_core_filter);
+        WriteToDeviceSharded(buffer, host_buffer, region, logical_core_filter);
     } else {
         TT_ASSERT(false && "Unsupported buffer layout");
     }
 }
 
-void WriteToBuffer(Buffer& buffer, ttsl::Span<const uint8_t> host_buffer) {
+void WriteToBuffer(Buffer& buffer, ttsl::Span<const uint8_t> host_buffer, const BufferRegion& region) {
     if constexpr (emule::kEmuleAsanBuild) {
         emule::check_buffer_allocated(buffer, "WriteToBuffer");
     }
@@ -799,7 +811,7 @@ void WriteToBuffer(Buffer& buffer, ttsl::Span<const uint8_t> host_buffer) {
         case BufferType::DRAM:  // fallthrough
         case BufferType::L1:    // fallthrough
         case BufferType::L1_SMALL: {
-            WriteToDevice(buffer, host_buffer, /*logical_core_filter=*/nullptr);
+            WriteToDevice(buffer, host_buffer, region, /*logical_core_filter=*/nullptr);
         } break;
         case BufferType::SYSTEM_MEMORY: {
             TT_THROW("Writing to host memory is unsupported!");
@@ -808,22 +820,28 @@ void WriteToBuffer(Buffer& buffer, ttsl::Span<const uint8_t> host_buffer) {
     }
 }
 
-void ReadFromDeviceInterleavedContiguous(const Buffer& buffer, uint8_t* host_buffer) {
+void WriteToBuffer(Buffer& buffer, ttsl::Span<const uint8_t> host_buffer) {
+    WriteToBuffer(buffer, host_buffer, BufferRegion(0, buffer.size()));
+}
+
+void ReadFromDeviceInterleavedContiguous(const Buffer& buffer, uint8_t* host_buffer, const BufferRegion& region) {
     size_t page_size = buffer.page_size();
-    size_t num_pages = buffer.num_pages();
+    // `host_buffer` receives the region's data only; the region offset is applied on the device side.
+    size_t first_page = region.offset / page_size;
+    size_t num_pages = region.size / page_size;
 
     auto* device = buffer.device();
     size_t num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
 
     size_t host_idx = 0;
-    size_t bank_index = 0;
+    size_t bank_index = first_page % num_banks;
 
     const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
     const auto& cluster = metal_ctx.get_cluster();
     size_t aligned_page_size = tt::align(page_size, cluster.get_alignment_requirements(device->id(), page_size));
 
     std::vector<uint8_t> page(aligned_page_size);
-    for (size_t page_index = 0; page_index < num_pages; page_index++) {
+    for (size_t page_index = first_page; page_index < first_page + num_pages; page_index++) {
         const DeviceAddr address = CalculateAddressDeviceInterleavedContiguous(buffer, bank_index, page_index);
         switch (buffer.buffer_type()) {
             case BufferType::DRAM:
@@ -886,11 +904,12 @@ void read_pages_to_host_helper(
     }
 }
 
-void ReadFromDeviceSharded(Buffer& buffer, uint8_t* host_buffer) {
+void ReadFromDeviceSharded(Buffer& buffer, uint8_t* host_buffer, const BufferRegion& region) {
     auto* device = buffer.device();
 
     uint32_t page_size = buffer.page_size();
-    const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
+    // Host page indices in this mapping are relative to the start of the region, matching `host_buffer`.
+    const auto& buffer_page_mapping = *get_buffer_page_mapping_for_region(buffer, region);
 
     for (auto mapped_page : buffer_page_mapping) {
         auto core = buffer_page_mapping.all_cores[mapped_page.core_id];
@@ -900,12 +919,13 @@ void ReadFromDeviceSharded(Buffer& buffer, uint8_t* host_buffer) {
     }
 }
 
-void ReadFromDevice(Buffer& buffer, uint8_t* host_buffer) {
+void ReadFromDevice(Buffer& buffer, uint8_t* host_buffer, const BufferRegion& region) {
     ZoneScoped;
+    validate_buffer_region(buffer, region);
     if (buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED) {
-        ReadFromDeviceInterleavedContiguous(buffer, host_buffer);
+        ReadFromDeviceInterleavedContiguous(buffer, host_buffer, region);
     } else if (is_sharded(buffer.buffer_layout())) {
-        ReadFromDeviceSharded(buffer, host_buffer);
+        ReadFromDeviceSharded(buffer, host_buffer, region);
     } else {
         TT_ASSERT(false && "Unsupported buffer layout");
     }
@@ -916,6 +936,10 @@ void ReadFromBuffer(const std::shared_ptr<Buffer>& buffer, std::vector<uint32_t>
 }
 
 void ReadFromBuffer(Buffer& buffer, uint8_t* host_buffer) {
+    ReadFromBuffer(buffer, host_buffer, BufferRegion(0, buffer.size()));
+}
+
+void ReadFromBuffer(Buffer& buffer, uint8_t* host_buffer, const BufferRegion& region) {
     if constexpr (emule::kEmuleAsanBuild) {
         emule::check_buffer_allocated(buffer, "ReadFromBuffer");
     }
@@ -931,7 +955,7 @@ void ReadFromBuffer(Buffer& buffer, uint8_t* host_buffer) {
             } else {
                 metal_ctx.get_cluster().l1_barrier(device->id());
             }
-            ReadFromDevice(buffer, host_buffer);
+            ReadFromDevice(buffer, host_buffer, region);
         } break;
         case BufferType::SYSTEM_MEMORY: {
             TT_THROW("Reading from host memory is unsupported!");
@@ -1378,7 +1402,11 @@ void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch)
 
 namespace experimental::core_subset_write {
 
-void WriteToBuffer(Buffer& buffer, ttsl::Span<const uint8_t> host_buffer, const CoreRangeSet& logical_core_filter) {
+void WriteToBuffer(
+    Buffer& buffer,
+    ttsl::Span<const uint8_t> host_buffer,
+    const BufferRegion& region,
+    const CoreRangeSet& logical_core_filter) {
     if constexpr (emule::kEmuleAsanBuild) {
         emule::check_buffer_allocated(buffer, "WriteToBuffer (core_subset_write)");
     }
@@ -1386,13 +1414,17 @@ void WriteToBuffer(Buffer& buffer, ttsl::Span<const uint8_t> host_buffer, const 
         case BufferType::DRAM:  // fallthrough
         case BufferType::L1:    // fallthrough
         case BufferType::L1_SMALL: {
-            detail::WriteToDevice(buffer, host_buffer, &logical_core_filter);
+            detail::WriteToDevice(buffer, host_buffer, region, &logical_core_filter);
         } break;
         case BufferType::SYSTEM_MEMORY: {
             TT_THROW("Writing to host memory is unsupported!");
         } break;
         default: TT_THROW("Unsupported buffer type!");
     }
+}
+
+void WriteToBuffer(Buffer& buffer, ttsl::Span<const uint8_t> host_buffer, const CoreRangeSet& logical_core_filter) {
+    WriteToBuffer(buffer, host_buffer, BufferRegion(0, buffer.size()), logical_core_filter);
 }
 
 }  // namespace experimental::core_subset_write
