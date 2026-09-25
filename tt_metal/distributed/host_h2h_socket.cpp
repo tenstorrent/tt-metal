@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <string>
@@ -211,6 +212,16 @@ struct H2HSocket::Impl {
     // marginal rate that many bytes puts its cost near 10% of the transfer -- 55 frames at
     // 14 KB, 3 at 256 KB. Bytes rather than frames so one constant spans the whole sweep.
     static constexpr uint64_t kFlushWatermark = 768u * 1024u;
+    // Overridable so the right value can be swept without a rebuild: the measured wire rate
+    // moved 10.67 -> 10.04 GB/s when batches grew 1 MB -> 2.7 MB, so it is worth tuning.
+    static uint64_t watermark_bytes() {
+        if (const char* s = std::getenv("TT_H2H_FLUSH_KB"); s != nullptr && *s != '\0') {
+            if (const long v = std::atol(s); v > 0) {
+                return static_cast<uint64_t>(v) * 1024u;
+            }
+        }
+        return kFlushWatermark;
+    }
     // Long enough to reach the watermark at the measured frame rate, not a latency bound:
     // a lone frame is covered by the no-supply force, which fires the moment nothing is
     // queued. This only catches a queue that has stopped moving for another reason.
@@ -445,7 +456,7 @@ std::unique_ptr<H2HSocket> H2HSocket::create(const Config& cfg, std::string& err
     // would stall waiting for bytes that cannot arrive until we publish the ones we have.
     const uint64_t in_flight_cap =
         static_cast<uint64_t>(cfg.cores) * cfg.ring_pages * cfg.page_bytes;
-    im.watermark = std::min<uint64_t>(Impl::kFlushWatermark, std::max<uint64_t>(in_flight_cap / 4, 1));
+    im.watermark = std::min<uint64_t>(Impl::watermark_bytes(), std::max<uint64_t>(in_flight_cap / 4, 1));
     if (cfg.collect_timing) {
         // Sized by cfg.cores, not kProvisionedCores: a 4-core run should not carry 128.
         im.put_at.assign(per_peer * cfg.ring_pages, std::chrono::steady_clock::time_point{});
@@ -639,6 +650,11 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
         }
         im.tx_queued -= run;
         progress += run;
+        // A pass used to post everything queued before flush_dirty ran, so pending reached
+        // 2.7 MB against a 768 KiB mark. Stop here and let the flush go out at its size.
+        if (im.pending[host] >= im.watermark) {
+            break;
+        }
     }
     im.rr = im.cfg.cores != 0 ? (im.rr + 1) % im.cfg.cores : 0;
     // Both failure paths above land here; neither should go on to flush or harvest.
