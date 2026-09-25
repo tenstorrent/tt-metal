@@ -3047,7 +3047,7 @@ inline constexpr std::array<compact::CohortDescriptor, 2> kBlackhole32DeviceCoho
     compact::CohortDescriptor{kBlackhole32DeviceCohort1Device, kBlackhole32DeviceCohort1Entries}
 }};
 
-inline constexpr std::span<const compact::CohortDescriptor> blackhole_8_device_cohorts() noexcept { return kBlackhole8DeviceCohorts; }
-inline constexpr std::span<const compact::CohortDescriptor> blackhole_32_device_cohorts() noexcept { return kBlackhole32DeviceCohorts; }
+constexpr std::span<const compact::CohortDescriptor> blackhole_8_device_cohorts() noexcept { return kBlackhole8DeviceCohorts; }
+constexpr std::span<const compact::CohortDescriptor> blackhole_32_device_cohorts() noexcept { return kBlackhole32DeviceCohorts; }
 
 }  // namespace ttnn::experimental::all_gather_minimal_matmul_registry::generated

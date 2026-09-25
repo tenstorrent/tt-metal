@@ -147,10 +147,10 @@ struct EntryDescriptor {
 };
 struct CohortDescriptor {
     DeviceDescriptor device{};
-    std::span<const EntryDescriptor> entries{};
+    std::span<const EntryDescriptor> entries;
 };
 
-inline constexpr bool is_supported_device(const DeviceDescriptor& device) noexcept {
+constexpr bool is_supported_device(const DeviceDescriptor& device) noexcept {
     if (device.architecture != kBlackholeArchitecture || device.compute_grid_x == 0 || device.compute_grid_y == 0 ||
         static_cast<std::uint32_t>(device.mesh_rows) * device.mesh_cols != device.device_count) {
         return false;
@@ -159,7 +159,7 @@ inline constexpr bool is_supported_device(const DeviceDescriptor& device) noexce
     return std::find(supported_device_counts.begin(), supported_device_counts.end(), device.device_count) !=
            supported_device_counts.end();
 }
-inline constexpr bool validate_entries(
+constexpr bool validate_entries(
     const DeviceDescriptor& certified_device, std::span<const EntryDescriptor> entries) noexcept {
     if (!is_supported_device(certified_device) || entries.empty()) {
         return false;
@@ -174,7 +174,7 @@ inline constexpr bool validate_entries(
     }
     return true;
 }
-inline constexpr const EntryDescriptor* lookup_exact(
+constexpr const EntryDescriptor* lookup_exact(
     const KeyDescriptor& key, std::span<const EntryDescriptor> entries) noexcept {
     const auto candidate = std::lower_bound(
         entries.begin(), entries.end(), key, [](const EntryDescriptor& entry, const KeyDescriptor& requested) {

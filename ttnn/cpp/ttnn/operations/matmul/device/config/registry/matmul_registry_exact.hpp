@@ -77,7 +77,7 @@ struct ProgramConfigExactEntry {
 static_assert(std::is_trivially_copyable_v<ProgramConfigExactEntry>);
 static_assert(std::is_standard_layout_v<ProgramConfigExactEntry>);
 
-inline constexpr const ProgramConfigExactEntry* lookup_program_config_exact(
+constexpr const ProgramConfigExactEntry* lookup_program_config_exact(
     const KeyDescriptor& key, const std::span<const ProgramConfigExactEntry> entries) noexcept {
     // The generated table has tens of thousands of entries and validate_entries
     // enforces strict key ordering, so preserve logarithmic exact lookup rather
