@@ -756,7 +756,7 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
             }
             ::tt::tt_metal::slow_dispatch::WriteRuntimeArgsToDevice(
                 *device, realtime_profiler_program, /*force_slow_dispatch=*/true);
-            ::tt::tt_metal::slow_dispatch::LaunchProgram(
+            ::tt::tt_metal::slow_dispatch::LaunchProgramAsync(
                 *device, realtime_profiler_program, /*force_slow_dispatch=*/true);
 
             // realtime_profiler_msg_t is outside mailboxes_t, so LaunchProgram's writes do

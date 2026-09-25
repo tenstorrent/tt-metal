@@ -791,7 +791,7 @@ void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& 
         }
         ::tt::tt_metal::slow_dispatch::WriteRuntimeArgsToDevice(
             *devices_[d], *programs_[d], /*force_slow_dispatch=*/true);
-        ::tt::tt_metal::slow_dispatch::LaunchProgram(*devices_[d], *programs_[d], /*force_slow_dispatch=*/true);
+        ::tt::tt_metal::slow_dispatch::LaunchProgramAsync(*devices_[d], *programs_[d], /*force_slow_dispatch=*/true);
     }
 
     stop_requested_.store(false);

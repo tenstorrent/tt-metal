@@ -22,9 +22,9 @@ void WriteRuntimeArgsToDevice(IDevice& device, Program& program, bool force_slow
 
 // Compiles and configures `program`, writes its runtime args, and sends the go signal. Does not wait for completion,
 // use WaitProgramDone for that.
-void LaunchProgram(IDevice& device, Program& program, bool force_slow_dispatch);
+void LaunchProgramAsync(IDevice& device, Program& program, bool force_slow_dispatch);
 
-// Waits until all cores used by the program are idle.
+// Waits until all cores used by the program, i.e. the cores LaunchProgramAsync sends the go signal to, are idle.
 void WaitProgramDone(IDevice& device, const Program& program);
 
 }  // namespace tt::tt_metal::slow_dispatch

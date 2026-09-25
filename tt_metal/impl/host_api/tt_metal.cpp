@@ -961,9 +961,9 @@ void LaunchProgram(
 }
 
 void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done, bool force_slow_dispatch) {
-    slow_dispatch::LaunchProgram(*device, program, force_slow_dispatch);
+    slow_dispatch::LaunchProgramAsync(*device, program, force_slow_dispatch);
 #ifdef TT_METAL_USE_EMULE
-    // Emulated mode executes synchronously inside slow_dispatch::LaunchProgram.
+    // Emulated mode executes synchronously inside slow_dispatch::LaunchProgramAsync.
     if (MetalContext::instance(extract_context_id(device)).get_cluster().get_target_device_type() ==
         tt::TargetDevice::Emule) {
         return;

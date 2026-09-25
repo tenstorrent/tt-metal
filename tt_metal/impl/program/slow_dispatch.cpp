@@ -64,7 +64,7 @@ void ConfigureKernelGroup(
 // Returns true iff the program has kernels and every core it targets is a DRAM programmable core.
 // Such programs (e.g. the persistent tensor-prefetcher DRISC senders) are disjoint from the FD
 // worker grid and dispatch column, so launching them via slow dispatch does not perturb an active
-// FD session. Used to scope the force-slow-dispatch guard in LaunchProgram.
+// FD session. Used to scope the force-slow-dispatch guard in LaunchProgramAsync.
 bool program_targets_only_dram_cores(const Program& program, const Hal& hal) {
     const auto& logical_cores_used_in_program = program.impl().logical_cores();
     bool has_any_core = false;
@@ -347,7 +347,7 @@ void WaitProgramDone(IDevice& device, const Program& program) {
     llrt::internal_::wait_for_idle(metal_ctx, device.id(), program.impl().logical_cores());
 }
 
-void LaunchProgram(IDevice& device, Program& program, bool force_slow_dispatch) {
+void LaunchProgramAsync(IDevice& device, Program& program, bool force_slow_dispatch) {
     ZoneScoped;
     MetalContext& metal_ctx = MetalContext::instance(extract_context_id(&device));
     // Must be set by the user only when its safe to mix slow dispatch with fast dispatch (advanced feature).

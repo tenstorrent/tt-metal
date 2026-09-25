@@ -109,7 +109,7 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
                             svc.impl().mark_launched(device->id(), core);  // launch-once
                         }
                     }
-                    tt::tt_metal::slow_dispatch::LaunchProgram(*device, program, /*force_slow_dispatch=*/true);
+                    tt::tt_metal::slow_dispatch::LaunchProgramAsync(*device, program, /*force_slow_dispatch=*/true);
                 }
             }
             return;
