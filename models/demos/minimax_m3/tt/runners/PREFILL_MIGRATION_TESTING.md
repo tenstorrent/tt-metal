@@ -69,10 +69,10 @@ export MIG="$ENGINE/disaggregation/migration/build_RelWithDebInfo"
 #   longbook_5120  (5120 tok  -> 1 chunk)
 #   longbook_10240 (10240 tok -> 2 chunks)   <- what the manifests use
 #   longbook_56320 (55218 tok -> 11 chunks)  <- full length
-export GOLDEN=/data/philei/models/minimax-m3-prefill-cache/golden/longbook_10240
+export GOLDEN=/mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill/golden/longbook_10240
 ```
 
-The checkpoint (`/mnt/models/MiniMaxAI/MiniMax-M3-ref/`, config + tilized weight cache) comes from the
+The checkpoint (`/mnt/weka/model-weights/llm/minimax/MiniMax-M3/`, config + tilized weight cache) comes from the
 adapter default; override with `PREFILL_HF_MODEL` / `TT_CACHE_PATH` in the binding's `global_env`, not the
 shell. Shape constraints: `MAX_SEQ_LEN % CHUNK_SIZE == 0` and `CHUNK_SIZE % (SP*32) == 0`; 5120 satisfies
 both at SP=8.
