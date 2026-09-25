@@ -14,11 +14,25 @@ Local layers also apply the sliding window. Every chunk uses this path.
 from dataclasses import dataclass
 
 import ttnn
-from models.demos.gemma4_d_p.tt.ccl import cp_degree
 
 from .global_kv_cache import GLOBAL_HEAD_DIM, GLOBAL_PACKED_DIM, GLOBAL_ROTARY_DIM
 
 TILE_HEIGHT = 32
+
+
+@dataclass(frozen=True)
+class SlidingRingKVCache:
+    """Separate K and V cache tensors for sliding attention."""
+
+    k: ttnn.Tensor
+    v: ttnn.Tensor
+
+
+@dataclass(frozen=True)
+class GlobalRingKVCache:
+    """One physical global-attention cache with overlapping K and V views."""
+
+    kv: ttnn.Tensor
 
 
 def migration_ring_memory_config(mesh_device, row_dim):
@@ -69,15 +83,8 @@ def ring_cache_seq_len(max_seq_len, cp):
     return max_seq_len // cp
 
 
-def init_ring_kv_cache(
-    mesh_device,
-    mesh_config,
-    num_local_kv_heads,
-    head_dim,
-    max_seq_len,
-    num_layers=1,
-    num_users=1,
-    cache_dtype=ttnn.bfloat8_b,
+def init_sliding_ring_kv_cache(
+    mesh_config, num_local_kv_heads, head_dim, max_seq_len, num_layers=1, num_users=1, cache_dtype=ttnn.bfloat8_b
 ):
     """Contiguous CP-sharded K/V caches for the ring path.
 
@@ -92,7 +99,8 @@ def init_ring_kv_cache(
 
     bfloat8_b because ring_joint requires BFP8_B K/V (BF16 Q).
     """
-    cp = cp_degree(mesh_config)
+    mesh_device = mesh_config.device
+    cp = mesh_config.cp_degree
     seq_local = ring_cache_seq_len(max_seq_len, cp)
     shape = [num_users * num_layers, num_local_kv_heads, seq_local, head_dim]
 
@@ -100,76 +108,72 @@ def init_ring_kv_cache(
         # Every rank holds an identically shaped slab; content diverges on first write.
         return _allocate_migration_ring_cache(mesh_device, shape, cache_dtype, head_dim)
 
-    return [_zeros(), _zeros()]
+    return SlidingRingKVCache(k=_zeros(), v=_zeros())
 
 
-@dataclass(frozen=True)
-class PackedRingKVCache:
-    """One physical global-attention cache with overlapping K and V views."""
-
-    kv: ttnn.Tensor
-
-
-def init_packed_ring_kv_cache(
-    mesh_device,
-    mesh_config,
-    num_local_kv_heads,
-    max_seq_len,
-    num_layers=1,
-    num_users=1,
-    cache_dtype=ttnn.bfloat8_b,
+def init_global_ring_kv_cache(
+    mesh_config, num_local_kv_heads, max_seq_len, num_layers=1, num_users=1, cache_dtype=ttnn.bfloat8_b
 ):
     """Allocate the global [Krot128 | Vordered512] CP-sharded cache."""
-    cp = cp_degree(mesh_config)
+    mesh_device = mesh_config.device
+    cp = mesh_config.cp_degree
     seq_local = ring_cache_seq_len(max_seq_len, cp)
     shape = [num_users * num_layers, num_local_kv_heads, seq_local, GLOBAL_PACKED_DIM]
     cache = _allocate_migration_ring_cache(mesh_device, shape, cache_dtype, GLOBAL_PACKED_DIM)
-    return PackedRingKVCache(cache)
+    return GlobalRingKVCache(cache)
 
 
-def write_chunk_to_packed_ring_cache(
+def write_chunk_to_global_ring_cache(
     cache,
-    packed_kv,
+    chunk,
     mesh_config,
     kv_actual_global,
     layer_idx=0,
     num_layers=1,
     slot_idx=0,
-    ccl_manager=None,
+    prefill_metadata=None,
 ):
     """Append one packed global-attention chunk to its CP-local history."""
-    chunk = packed_kv if packed_kv.dtype == cache.dtype else ttnn.typecast(packed_kv, cache.dtype)
-    if ccl_manager is not None:
-        slot_t, kv_t = ccl_manager.get_ring_metadata()
+
+    original_chunk = chunk
+
+    if chunk.dtype != cache.dtype:
+        chunk = ttnn.typecast(chunk, cache.dtype)
+
+    if prefill_metadata is not None:
+        slot_idx_t = prefill_metadata.slot_idx
+        kv_actual_global_t = prefill_metadata.kv_actual_global
+
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-            cache,
-            chunk,
-            slot_t,
-            kv_t,
+            cache=cache,
+            input=chunk,
+            slot_idx=slot_idx_t,
             layer_idx=layer_idx,
             num_layers=num_layers,
-            cluster_axis=mesh_config.sp_axis,
+            kv_actual_global=kv_actual_global_t,
+            cluster_axis=mesh_config.cp_axis,
         )
     else:
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-            cache,
-            chunk,
+            cache=cache,
+            input=chunk,
             slot_idx=slot_idx,
             layer_idx=layer_idx,
             num_layers=num_layers,
             kv_actual_global=kv_actual_global,
-            cluster_axis=mesh_config.sp_axis,
+            cluster_axis=mesh_config.cp_axis,
         )
-    if chunk is not packed_kv:
+
+    if chunk is not original_chunk:
         chunk.deallocate(True)
 
 
-def ring_packed_prefill_attention(
+def global_ring_prefill_attention(
     tt_q,
     cache_kv,
-    mesh_device,
     mesh_config,
     ccl_manager,
+    prefill_metadata,
     num_local_kv_heads,
     max_seq_len,
     logical_n,
@@ -191,13 +195,13 @@ def ring_packed_prefill_attention(
         cache_shape[:-1] + (GLOBAL_PACKED_DIM,),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    out = ring_prefill_attention(
+    out = _ring_prefill_attention(
         tt_q,
         cache_k,
         cache_v,
-        mesh_device,
         mesh_config,
         ccl_manager,
+        prefill_metadata,
         num_local_kv_heads,
         GLOBAL_HEAD_DIM,
         max_seq_len,
@@ -214,7 +218,7 @@ def ring_packed_prefill_attention(
     return out
 
 
-def ring_prefill_program_config(mesh_device, ccl_manager, head_dim, q_chunk_size=64, k_chunk_size=128):
+def ring_prefill_program_config(mesh_device, ccl_manager, head_dim, q_chunk_size, k_chunk_size):
     """SDPA program config for the ring path.
 
     The compute grid must exclude the CCL column that ``ccl_core_grid_offset``
@@ -233,7 +237,7 @@ def ring_prefill_program_config(mesh_device, ccl_manager, head_dim, q_chunk_size
     )
 
 
-def write_chunk_to_ring_cache(
+def write_chunk_to_sliding_ring_cache(
     cache_k,
     cache_v,
     tt_k,
@@ -243,62 +247,100 @@ def write_chunk_to_ring_cache(
     layer_idx=0,
     num_layers=1,
     slot_idx=0,
-    ccl_manager=None,
+    prefill_metadata=None,
 ):
-    """Write this chunk's per-rank K/V into the CP-sharded cache.
+    """Append one sliding-attention chunk (K and V) to its CP-local history."""
 
-    ``kv_actual_global`` is the *global* prefix length already in the cache before
-    this chunk. The writer derives each rank's local row offset from it and from the
-    rank's own coordinate along ``cluster_axis``, injected as a runtime arg — which
-    is how one mesh-wide program writes a different offset per device. At a
-    chunk-aligned boundary that reduces to ``chunk_index * slab``.
-    """
     for cache, chunk in ((cache_k, tt_k), (cache_v, tt_v)):
-        # The writer requires cache.dtype == input.dtype, and the cache is BFP8_B
-        # because that is what ring_joint requires of K/V (with BF16 Q). The model
-        # carries K/V in bf16, so cast on the way in.
+        original_chunk = chunk
+
         if chunk.dtype != cache.dtype:
             chunk = ttnn.typecast(chunk, cache.dtype)
-        if ccl_manager is not None:
-            # Tensor form: the writer reads slot and prefix length on-device, so the write
-            # offset is not baked into runtime args and one captured trace serves every
-            # chunk. Same two tensors the ring read uses — they describe the chunk, not
-            # the layer, and the host refreshes them once per chunk.
-            slot_t, kv_t = ccl_manager.get_ring_metadata()
+
+        if prefill_metadata is not None:
+            slot_idx_t = prefill_metadata.slot_idx
+            kv_actual_global_t = prefill_metadata.kv_actual_global
+
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-                cache,
-                chunk,
-                slot_t,
-                kv_t,
+                cache=cache,
+                input=chunk,
+                slot_idx=slot_idx_t,
                 layer_idx=layer_idx,
                 num_layers=num_layers,
-                cluster_axis=mesh_config.sp_axis,
+                kv_actual_global=kv_actual_global_t,
+                cluster_axis=mesh_config.cp_axis,
             )
         else:
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-                cache,
-                chunk,
+                cache=cache,
+                input=chunk,
                 slot_idx=slot_idx,
                 layer_idx=layer_idx,
                 num_layers=num_layers,
                 kv_actual_global=kv_actual_global,
-                cluster_axis=mesh_config.sp_axis,
+                cluster_axis=mesh_config.cp_axis,
             )
 
+        if chunk is not original_chunk:
+            chunk.deallocate(True)
 
-def ring_prefill_attention(
+
+def sliding_ring_prefill_attention(
     tt_q,
     cache_k,
     cache_v,
-    mesh_device,
     mesh_config,
     ccl_manager,
+    prefill_metadata,
     num_local_kv_heads,
     head_dim,
     max_seq_len,
     logical_n,
     kv_actual_global,
-    sliding_window=None,
+    sliding_window_size=None,
+    scale=1.0,
+    compute_kernel_config=None,
+    program_config=None,
+    layer_idx=0,
+    num_layers=1,
+    slot_idx=0,
+):
+    """Attend sliding layers using separate K and V ring caches."""
+    return _ring_prefill_attention(
+        tt_q=tt_q,
+        cache_k=cache_k,
+        cache_v=cache_v,
+        mesh_config=mesh_config,
+        ccl_manager=ccl_manager,
+        prefill_metadata=prefill_metadata,
+        num_local_kv_heads=num_local_kv_heads,
+        head_dim=head_dim,
+        max_seq_len=max_seq_len,
+        logical_n=logical_n,
+        kv_actual_global=kv_actual_global,
+        sliding_window_size=sliding_window_size,
+        scale=scale,
+        compute_kernel_config=compute_kernel_config,
+        program_config=program_config,
+        layer_idx=layer_idx,
+        num_layers=num_layers,
+        slot_idx=slot_idx,
+    )
+
+
+def _ring_prefill_attention(
+    tt_q,
+    cache_k,
+    cache_v,
+    mesh_config,
+    ccl_manager,
+    prefill_metadata,
+    num_local_kv_heads,
+    head_dim,
+    max_seq_len,
+    logical_n,
+    kv_actual_global,
+    sliding_window_size=None,
     scale=1.0,
     compute_kernel_config=None,
     program_config=None,
@@ -315,18 +357,18 @@ def ring_prefill_attention(
     Returns ``[1, num_local_q_heads, q_local, head_dim]`` — this rank's rows only, so
     the output stays CP-sharded exactly like the input.
     """
+    mesh_device = mesh_config.device
     if program_config is None:
-        # Global (non-sliding) layers take a wider K chunk. ring_joint SDPA's
-        # `q in {64,128}` / `k == 128` allowlist lives inside `if (args.has_sliding_window())`
-        # -- it is a structural requirement of the halo, which dense layers do not have. Swept
-        # at 32k, per-chunk device time at ring depth 7: k=256 gives 197.8 ms against 201.2 at
-        # k=128. q stays 64: it is a true optimum, worse in both directions (214.8 ms at q=32,
-        # 221.7 at q=128), and q>=256 overflows L1.
-        _k_chunk = 128 if sliding_window else 256
-        program_config = ring_prefill_program_config(mesh_device, ccl_manager, head_dim, k_chunk_size=_k_chunk)
-    # Shared by every layer; the caller sets them once per chunk via set_ring_metadata.
-    metadata = ccl_manager.get_ring_metadata()
-    cp = cp_degree(mesh_config)
+        # Utilization testing identified these as the best-performing chunk sizes.
+        _q_chunk, _k_chunk = (128, 128) if sliding_window_size else (96, 256)
+        program_config = ring_prefill_program_config(
+            mesh_device,
+            ccl_manager,
+            head_dim,
+            q_chunk_size=_q_chunk,
+            k_chunk_size=_k_chunk,
+        )
+    cp = mesh_config.cp_degree
     cache_seq = ring_cache_seq_len(max_seq_len, cp)
 
     # Buffer size depends on the mode, and the two requirements are opposites.
@@ -339,9 +381,9 @@ def ring_prefill_attention(
     # buffer (gathered rows < cache_seq * ring), rejecting a full-capacity one with
     # "requires a compact halo buffer". Size it to the halo, which is the window
     # rounded up to whole k chunks.
-    if sliding_window:
+    if sliding_window_size:
         k_chunk = program_config.k_chunk_size
-        halo_tokens = -(-(sliding_window - 1) // k_chunk) * k_chunk
+        halo_tokens = -(-(sliding_window_size - 1) // k_chunk) * k_chunk
         gather_seq = max(halo_tokens, TILE_HEIGHT)
     else:
         gather_seq = cache_seq * cp
@@ -369,25 +411,17 @@ def ring_prefill_attention(
         dim=2,
         multi_device_global_semaphore=ccl_manager.ring_attention_ccl_semaphore_handles,
         num_links=ccl_manager.num_links,
-        cluster_axis=mesh_config.sp_axis,
+        cluster_axis=mesh_config.cp_axis,
         mesh_device=mesh_device,
         topology=ttnn.Topology.Linear,
         ccl_core_grid_offset=ttnn.CoreCoord(*ccl_manager.ring_attention_ccl_core_grid_offset),
         use_column_major_ccl=True,
         is_causal=True,
-        # Chunked prefill does not zigzag-balance the causal work.
         is_balanced=False,
-        # Per-chunk scalars as metadata tensors rather than Python ints. The readers load
-        # them on-device, so they stay out of the program's runtime args and a captured
-        # trace replays across chunks; the scalar form would freeze the capturing chunk's
-        # prefix length into every replay. The layer packing that kv_cache_batch_idx used
-        # to carry moves to kv_cache_num_layers/kv_cache_layer_idx, which the readers
-        # combine as slot_id[0]*num_layers + layer_idx — those are constant per layer, so
-        # they are safe to keep as host scalars.
-        slot_id=metadata[0],
-        kv_actual_isl_tensor=metadata[1],
+        slot_id=prefill_metadata.slot_idx,
+        kv_actual_isl_tensor=prefill_metadata.kv_actual_global,
         kv_cache_num_layers=num_layers,
         kv_cache_layer_idx=layer_idx,
-        sliding_window_size=sliding_window,
+        sliding_window_size=sliding_window_size,
     )
     return out

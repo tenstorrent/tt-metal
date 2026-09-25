@@ -121,14 +121,26 @@ _K2_7 = _MoEPerfCase(
 # so issuing dispatch ahead of the shared expert moves it. A midpoint that goes stale downward is
 # fixed by lowering it, never by widening the margin.
 #
-# Measured on a high-power 8x4 BH galaxy (nominal DDR), warm forward, run 33642820055: 8,369,824 ns
-# over the same 35 programs -- that count is what separates a real drop from a record window closing
-# early and under-reporting the sum. ONE sample, against the four-sample 0.44% spread that set the
-# margin below.
+# Re-centred 2026-09-16: device time came in at 6,867,644 ns, 15.4% below the old band's lower edge
+# (previous midpoint 8,369,824, run 33642820055). Per the rule above that is fixed by lowering the
+# midpoint, never by widening the margin. ONE sample, from the failing gate run itself, and the old
+# midpoint it replaces was itself a single sample.
+#
+# A 17.9% drop is far too large to be drift on a shape whose four-sample spread was 0.44%, so it is
+# a real change in the work -- this branch moves the routed expert onto ND-sharded weight placement,
+# which is exactly the kind of change that moves this number, and it is a SPEEDUP. What this sample
+# does NOT carry is the program count: 35 programs on both this branch and main is what separates a
+# real drop from a record window closing early and under-reporting the sum, so if a later run does
+# not reproduce ~6.87 ms, check the logged program count before re-cutting again and take the median
+# of several runs rather than re-lowering off one sample.
+#
+# Re-centred 2026-09-24 to the median of three runs at the new 34-program count (35 -> 34 landed on
+# main between efb4db0 and c87cf14): 6,435,718 (job 107502461878), 6,565,418 (job 107682321819),
+# 6,412,515 ns (job 107749492327); 2.4% spread. The previous midpoint had dropped below the band on all three.
 _K3 = _MoEPerfCase(
     label="kimi-k3",
     config=KimiK3Config,
-    expected_ns=8_369_824,
+    expected_ns=6_435_718,
     # 3% retained: K3 runs second on an already-warm device and four samples on the previous shape
     # spanned just 0.44% peak to peak, so 3% is already generous -- the midpoint is what goes stale
     # here, not the width. Sub-nominal DDR doubles it to 6% via adjust_margin_for_ddr_speed.

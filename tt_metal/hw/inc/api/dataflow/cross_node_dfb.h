@@ -24,8 +24,9 @@
 #include "api/core_local_mem.h"
 #include "api/remote_circular_buffer.h"
 
-// Credit helpers take Remote*CBInterface; CrossNode prefix layout matches for reinterpret_cast.
-static_assert(sizeof(CrossNodeSenderDFBInterface) == sizeof(RemoteSenderCBInterface));
+// Credit helpers take Remote*CBInterface; CrossNode prefix layout matches for reinterpret_cast
+// (CrossNode structs may carry trailing PrefetcherPipe-only fields).
+static_assert(sizeof(CrossNodeSenderDFBInterface) >= sizeof(RemoteSenderCBInterface));
 static_assert(
     offsetof(CrossNodeSenderDFBInterface, aligned_pages_sent_ptr) ==
     offsetof(RemoteSenderCBInterface, aligned_pages_sent_ptr));

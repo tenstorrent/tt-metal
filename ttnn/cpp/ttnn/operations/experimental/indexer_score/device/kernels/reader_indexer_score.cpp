@@ -12,6 +12,9 @@
 
 #include <tt-metalium/constants.hpp>
 
+#include "indexer_score_runtime_args.hpp"
+#include "indexer_schedule.hpp"
+
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
@@ -89,7 +92,11 @@ FORCE_INLINE constexpr uint32_t tensor_rank_from_transport_rank(uint32_t transpo
 // different hunks -- and reads an unrelated word as the metadata flag, so re-check it whenever main
 // grows the block-cyclic block.
 constexpr uint32_t meta_ct_base = bc_ct_base + 11;
-constexpr bool chunk_start_from_metadata = get_compile_time_arg_val(meta_ct_base) != 0;
+// THE metadata-mode selector for this kernel. One flag, not one per metadata argument: the host
+// validates the metadata tensors as a group (validate_metadata_mode), so inside this mode every
+// metadata read is legal. valid_end stays optional WITHIN the mode via its address (0 = uncapped),
+// which costs one runtime compare instead of a second program variant.
+constexpr bool metadata_mode = get_compile_time_arg_val(meta_ct_base) != 0;
 constexpr uint32_t meta_rt_base = get_compile_time_arg_val(meta_ct_base + 1);
 constexpr uint32_t cb_meta_derived = get_compile_time_arg_val(meta_ct_base + 2);
 constexpr uint32_t cb_meta_writer = get_compile_time_arg_val(meta_ct_base + 3);
@@ -109,14 +116,23 @@ constexpr auto meta_args = TensorAccessorArgs<meta_ct_base + 7>();
 // factories always push it (zero-filled, with a placeholder accessor, when off), so every index here is
 // valid unconditionally and no guarded-index trick is needed.
 constexpr uint32_t slot_ct_base = meta_args.next_compile_time_args_offset();
-constexpr bool cache_slot_from_metadata = get_compile_time_arg_val(slot_ct_base) != 0;
-constexpr uint32_t slot_rt_base = get_compile_time_arg_val(slot_ct_base + 1);      // RT slot of this block
-constexpr uint32_t slot_local_pages = get_compile_time_arg_val(slot_ct_base + 2);  // pages per cache slot
-constexpr uint32_t cb_meta_slot = get_compile_time_arg_val(slot_ct_base + 3);      // NoC landing slot
+// No presence flag: metadata mode is ONE flag (above), and the slot is optional WITHIN it -- the host
+// zeroes this block's common-arg address when there is no slot to select, so presence is a runtime
+// compare rather than a second program variant. Same discipline as valid_end.
+constexpr uint32_t slot_rt_base = get_compile_time_arg_val(slot_ct_base + 0);      // RT slot of this block
+constexpr uint32_t slot_local_pages = get_compile_time_arg_val(slot_ct_base + 1);  // pages per cache slot
+constexpr uint32_t cb_meta_slot = get_compile_time_arg_val(slot_ct_base + 2);      // NoC landing slot
 // Slot count of the local cache (k_local batch dim), so the on-device recomposition can be bounded the
 // same way the AG reader bounds the identical word. Shape-derived, hence already hashed.
-constexpr uint32_t slot_cache_extent = get_compile_time_arg_val(slot_ct_base + 4);
-constexpr auto slot_meta_args = TensorAccessorArgs<slot_ct_base + 5>();
+constexpr uint32_t slot_cache_extent = get_compile_time_arg_val(slot_ct_base + 3);
+constexpr auto slot_meta_args = TensorAccessorArgs<slot_ct_base + 4>();
+// Real-token end (actual_end), same fixed-width discipline again: both factories always push
+// flag + rt base + a placeholder accessor, so these indices are valid unconditionally. When present the
+// derived kv_len below is capped at ceil32(valid_end), which is exactly the scalar path's
+// min(end_pos, ceil32(actual_end)); absent, the bound stays the padded-window end.
+constexpr uint32_t vend_ct_base = slot_meta_args.next_compile_time_args_offset();
+constexpr uint32_t vend_rt_base = get_compile_time_arg_val(vend_ct_base);
+constexpr auto vend_args = TensorAccessorArgs<vend_ct_base + 1>();
 
 // Thin alias over the shared block-cyclic invP map (tt::block_cyclic, block_cyclic_remap.hpp): identity for
 // contiguous K, invP for the per-SP-shard block-cyclic layout. One name shared between the non-fused reader and
@@ -125,26 +141,13 @@ FORCE_INLINE uint32_t bc_ktile(uint32_t L) {
     return tt::block_cyclic::
         logical_to_physical_page<block_cyclic, bc_chunk_local, bc_sp, bc_shard_stride_gap, bc_slab_stride_gap>(L);
 }
-// Receiver rectangle / sender coords for one mcast direction (physical NoC), set per core on host.
+// Receiver rectangle / sender coordinates derived from the shared physical axes and core identity.
 struct McastDir {
     uint32_t role;            // McastRole: none (DRAM read), sender (read + mcast), receiver (wait for mcast)
     uint32_t xs, ys, xe, ye;  // receiver rectangle (sender excluded by default mcast opts)
     uint32_t sx, sy;          // sender physical coord (receivers signal it ready)
     uint32_t ndst;            // number of receivers
 };
-
-/** Unpack a McastDir from runtime args [base, base+8) in the host's push order. */
-inline McastDir read_mcast_dir(uint32_t base) {
-    return McastDir{
-        get_arg_val<uint32_t>(base + 0),
-        get_arg_val<uint32_t>(base + 1),
-        get_arg_val<uint32_t>(base + 2),
-        get_arg_val<uint32_t>(base + 3),
-        get_arg_val<uint32_t>(base + 4),
-        get_arg_val<uint32_t>(base + 5),
-        get_arg_val<uint32_t>(base + 6),
-        get_arg_val<uint32_t>(base + 7)};
-}
 
 /** Sender: data already at `addr` from DRAM; wait all receivers ready, mcast the block,
  *  then relay the valid flag into their recv semaphore. Mirrors chain_link. */
@@ -447,45 +450,30 @@ struct FusedRingGate {
     uint32_t sem_id[2];                      // the two direction semaphore ids
     KLocalAcc k_local_acc;                   // local SP shard cache (the all-gather INPUT; AG omits it from gathered)
     uint32_t local_batch_page_offset;        // selected slot in k_local; gathered k may be batch-1
-    uint32_t meta_addr;                      // trace-safe: DRAM address of the 1-element chunk_start_idx tensor
-    uint32_t meta_device_index;              // this device's SP-ring index (causal geometry input)
-    uint32_t meta_tp_index;                  // its TP sub-shard rank (0 when SP-only)
-    uint32_t slot_meta_addr;                 // trace-safe: DRAM address of the 1-element USER id tensor
-    uint32_t slot_num_layers;                // index-cache layers per user (recomposition stride)
-    uint32_t slot_layer_idx;                 // this layer's index within a user's slots
-    uint32_t perm_base;                      // rt slot of the band-visit permutation (one entry per band)
     uint32_t shard_dir[max_ring_size];       // shard -> direction semaphore index
     uint32_t shard_half_val[max_ring_size];  // shard -> midpoint-ready threshold
     uint32_t shard_val[max_ring_size];       // shard -> wait threshold
 
-    // recv has already consumed the fused block (waiting for the op signal) and advanced argidx; take the
-    // k_local addr from the next slot and leave argidx at the band-perm base.
+    // Metadata is common to every reader core; only the schedule lane is per-core.
     // `local_offset_override` is the reader-derived slot base on the metadata path (0 elsewhere); it
     // replaces the runtime argument, which a replay would have frozen at the captured slot.
-    FusedRingGate(const RingSDPAOpReceiver& recv, uint32_t& argidx, uint32_t local_offset_override = 0) :
+    // `slot_override_active` is passed explicitly rather than inferred from the override being non-zero:
+    // slot 0 is a legitimate slot whose offset is 0, and it must still replace the runtime argument.
+    FusedRingGate(
+        const RingSDPAOpReceiver& recv, uint32_t local_offset_override = 0, bool slot_override_active = false) :
         // TENSOR rank, not the transport rank: on a full-mesh ring the two differ by the snake mapping,
         // and both the slot recomposition and the causal geometry are defined over tensor ranks.
         ring_index(tensor_rank_from_transport_rank(recv.seq.ring_index)),
         ring_size(recv.seq.ring_size),
         tiles_per_shard(k_len_tiles / recv.seq.ring_size),
         sem_id{recv.signal_op_semaphore_ids[0], recv.signal_op_semaphore_ids[1]},
-        k_local_acc(TensorAccessor(kl_args, get_arg_val<uint32_t>(argidx++), k_tile_bytes)),
-        // Consumed UNCONDITIONALLY: the host pushes this slot on both paths (0 on the metadata one), so
-        // skipping it would shift perm_base. The metadata value is applied in the body below.
-        local_batch_page_offset(get_arg_val<uint32_t>(argidx++)),
-        meta_addr(get_arg_val<uint32_t>(argidx++)),
-        meta_device_index(get_arg_val<uint32_t>(argidx++)),
-        meta_tp_index(get_arg_val<uint32_t>(argidx++)),
-        // Cache-slot block: three more fixed slots, consumed unconditionally like the chunk-start block
-        // above, so band_perm_base stays a compile-time constant on every path.
-        slot_meta_addr(get_arg_val<uint32_t>(argidx++)),
-        slot_num_layers(get_arg_val<uint32_t>(argidx++)),
-        slot_layer_idx(get_arg_val<uint32_t>(argidx++)),
-        perm_base(argidx),
+        k_local_acc(
+            TensorAccessor(kl_args, get_common_arg_val<uint32_t>(indexer_common::reader::KLocal), k_tile_bytes)),
+        local_batch_page_offset(get_common_arg_val<uint32_t>(indexer_common::reader::LocalBatchOffset)),
         shard_dir{},
         shard_half_val{},
         shard_val{} {
-        if constexpr (cache_slot_from_metadata) {
+        if (slot_override_active) {
             local_batch_page_offset = local_offset_override;
         }
         RingIdSequencer s = recv.seq;  // fresh copy (received={0,0}); replay to index (dir,val) by shard id
@@ -510,9 +498,6 @@ struct FusedRingGate {
             }
         }
     }
-
-    // Physical K-tile start this column visits at iteration work_i.
-    uint32_t physical_start(uint32_t work_i) const { return get_arg_val<uint32_t>(perm_base + work_i); }
 
     void gate_shard(uint32_t physical_tile_start, uint32_t k_tiles_in_unit, uint32_t midpoint_tiles) const {
         const uint32_t shard = physical_tile_start / tiles_per_shard;
@@ -596,21 +581,76 @@ inline void read_k_chunk_streaming(
 }
 
 void kernel_main() {
-    const uint32_t q_addr = get_arg_val<uint32_t>(0);
-    const uint32_t k_addr = get_arg_val<uint32_t>(1);
-    const uint32_t w_addr = get_arg_val<uint32_t>(2);
+    constexpr uint32_t schedule_blocks = get_named_compile_time_arg_val("schedule_blocks");
+    constexpr uint32_t schedule_cols = get_named_compile_time_arg_val("schedule_cols");
+    constexpr uint32_t schedule_groups = get_named_compile_time_arg_val("schedule_groups");
+    constexpr uint32_t schedule_group_rows = get_named_compile_time_arg_val("schedule_group_rows");
+    constexpr uint32_t schedule_max_bands = get_named_compile_time_arg_val("schedule_max_bands");
+    constexpr uint32_t schedule_ring_size = get_named_compile_time_arg_val("schedule_ring_size");
+    constexpr uint32_t schedule_rotate = get_named_compile_time_arg_val("schedule_rotate");
+    constexpr uint32_t schedule_units = get_named_compile_time_arg_val("schedule_units");
+    const uint32_t q_addr = get_common_arg_val<uint32_t>(indexer_common::reader::Q);
+    const uint32_t k_addr = get_common_arg_val<uint32_t>(indexer_common::reader::K);
+    const uint32_t w_addr = get_common_arg_val<uint32_t>(indexer_common::reader::W);
     // Banded schedule: groups -> grid rows (q/w shared = q_dir mcast), k-bands -> columns (k shared = k_dir mcast).
-    const uint32_t row_group0 = get_arg_val<uint32_t>(3);
-    const uint32_t group_stride = get_arg_val<uint32_t>(4);
-    const uint32_t num_groups = get_arg_val<uint32_t>(5);
-    const uint32_t band0 = get_arg_val<uint32_t>(6);
-    const uint32_t num_bands = get_arg_val<uint32_t>(7);
-    const uint32_t max_bands = get_arg_val<uint32_t>(8);  // row's widest column; streaming pads q to this
-    const McastDir k_dir = read_mcast_dir(9);             // K column mcast: args [9, 17)
-    const McastDir q_dir = read_mcast_dir(17);            // Q/W row mcast: args [17, 25)
-    // Persistent-cache args (hash-excluded, re-applied each dispatch), after the mcast tuples.
-    const uint32_t k_batch_page_offset = get_arg_val<uint32_t>(25);  // indexed-cache page offset; 0 when not indexed
-    uint32_t kv_len_tiles = get_arg_val<uint32_t>(26);               // valid KV length in tiles (full when unset)
+    const uint32_t core_id = get_arg_val<uint32_t>(0);
+    constexpr uint32_t group_stride = schedule_group_rows;
+    constexpr uint32_t num_groups = schedule_groups;
+    const auto schedule = indexer_schedule::for_core<fused_ring_enabled>(
+        core_id,
+        group_stride,
+        {schedule_ring_size, schedule_units, 0, 0, schedule_blocks, schedule_cols, schedule_rotate});
+    const uint32_t row_group0 = schedule.row_group;
+    const uint32_t band0 = schedule.band_start;
+    const uint32_t num_bands = schedule.band_count;
+    constexpr uint32_t max_bands = schedule_max_bands;
+    constexpr uint32_t fused_common_base = indexer_common::reader::Count + fused_physical_sp;
+    constexpr uint32_t x_base =
+        fused_ring_enabled ? fused_common_base + indexer_rt::reader::FusedRingWidth : indexer_common::reader::Count;
+    constexpr uint32_t y_base = x_base + schedule_cols;
+    const uint32_t block = schedule.block;
+    const uint32_t col = schedule.col;
+    const uint32_t first_row = block * group_stride;
+    const uint32_t row = first_row + row_group0;
+    const auto x = [](uint32_t c) { return get_common_arg_val<uint32_t>(x_base + c); };
+    const auto y = [](uint32_t r) { return get_common_arg_val<uint32_t>(y_base + r); };
+    uint32_t xs = x(0), xe = xs;
+    for (uint32_t c = 1; c < schedule_cols; ++c) {
+        const uint32_t px = x(c);
+        xs = px < xs ? px : xs;
+        xe = px > xe ? px : xe;
+    }
+    uint32_t ys = y(first_row), ye = ys;
+    for (uint32_t r = first_row + 1; r < first_row + group_stride; ++r) {
+        const uint32_t py = y(r);
+        ys = py < ys ? py : ys;
+        ye = py > ye ? py : ye;
+    }
+    const uint32_t diag = row < schedule_cols ? row : schedule_cols - 1;
+    const McastDir k_dir{
+        k_mcast_on ? (row == first_row ? iscore::mcast_role_sender : iscore::mcast_role_receiver)
+                   : iscore::mcast_role_none,
+        x(col),
+        ys,
+        x(col),
+        ye,
+        x(col),
+        y(first_row),
+        group_stride - 1};
+    const McastDir q_dir{
+        q_mcast_on ? (col == diag ? iscore::mcast_role_sender : iscore::mcast_role_receiver) : iscore::mcast_role_none,
+        xs,
+        y(row),
+        xe,
+        y(row),
+        x(diag),
+        y(row),
+        schedule_cols - 1};
+    // Persistent-cache args remain common and are re-applied on every dispatch.
+    const uint32_t k_batch_page_offset = get_common_arg_val<uint32_t>(
+        indexer_common::reader::BatchOffset);  // indexed-cache page offset; 0 when not indexed
+    uint32_t kv_len_tiles =
+        get_common_arg_val<uint32_t>(indexer_common::reader::KvLength);  // valid KV length in tiles (full when unset)
 
     const auto q_acc = TensorAccessor(q_args, q_addr, q_tile_bytes);
     const auto k_acc = TensorAccessor(k_args, k_addr, k_tile_bytes);
@@ -623,7 +663,7 @@ void kernel_main() {
     static_assert(!fused_ring_enabled || fuse_single == 0, "fused ring is incompatible with fuse_single");
 
     // The gate exists only on the fused branch. Passing a pointer into one shared loop keeps all fused runtime
-    // argument reads behind if constexpr, so the regular binary never touches slots 27+.
+    // argument reads behind if constexpr, so the regular binary never touches the fused-only tail.
     const auto run = [&](const FusedRingGate* gate) {
         build_mask_tiles(noc);
         if constexpr (block_pool) {
@@ -639,6 +679,13 @@ void kernel_main() {
         shard_span.set_valid_k_len_tiles(kv_len_tiles);
         const uint32_t band_iters = stream_heads ? max_bands : num_bands;
         for (uint32_t phase = 0; phase < num_groups; ++phase) {
+            auto ring_schedule = indexer_ring_schedule::for_lane<
+                fused_physical_sp,
+                k_len_tiles,
+                k_tiles_per_unit,
+                schedule_blocks,
+                schedule_cols,
+                schedule_rotate>(band0);
             const uint32_t group = row_group0 + phase * group_stride;
             const uint32_t q_row_start = group * q_tiles_per_unit;
             if constexpr (fuse_single) {
@@ -655,7 +702,12 @@ void kernel_main() {
             }
             for (uint32_t band_i = 0; band_i < band_iters; ++band_i) {
                 if constexpr (fused_ring_enabled) {
-                    const uint32_t physical_start = gate->physical_start(band_i);
+                    uint32_t physical_start = 0;
+                    ring_schedule.next(
+                        [](uint32_t shard) {
+                            return get_common_arg_val<uint32_t>(indexer_common::reader::Count + shard);
+                        },
+                        physical_start);
                     shard_span.set(group, physical_start, gate->tiles_per_shard);
                     const uint32_t k_tiles_in_unit = shard_span.k_tiles();
                     // q/w were multicasted before this loop. Every row of this K-mcast column has
@@ -724,7 +776,7 @@ void kernel_main() {
         }
     };
 
-    if constexpr (fused_ring_enabled && chunk_start_from_metadata) {
+    if constexpr (fused_ring_enabled && metadata_mode) {
         // Derive causal values before the blocking ring receiver so compute can consume them independently.
         // The factory supplies meta_rt_base to keep this layout coupled to the runtime-argument builder.
         CircularBuffer cb_derived(cb_meta_derived);
@@ -733,7 +785,7 @@ void kernel_main() {
         // Lands at the page base, is consumed immediately, then the four derived words overwrite it -- so the
         // one CB serves as both the NoC landing slot and the reader->compute mailbox.
         const uint32_t chunk_start_idx = trace_metadata::read_metadata_scalar_u32(
-            noc, meta_args, get_arg_val<uint32_t>(meta_rt_base + 0), derived_l1);
+            noc, meta_args, get_common_arg_val<uint32_t>(meta_rt_base + 0), derived_l1);
         // Match the SCALAR host contract, which validate_chunk_start states explicitly: the chunk must
         // START inside the cache, but its causal window MAY end past the valid prefix and past T -- a
         // chunked prefill runs a fixed chunk size, so a final chunk pads its query window beyond what the
@@ -758,11 +810,30 @@ void kernel_main() {
             meta_rotation_exact != 0,
             geom_sp,
             geom_chunk_local_elems,
-            get_arg_val<uint32_t>(meta_rt_base + 1),  // device_index
-            get_arg_val<uint32_t>(meta_rt_base + 2),  // tp_index
+            get_common_arg_val<uint32_t>(meta_rt_base + 1),  // device_index
+            get_common_arg_val<uint32_t>(meta_rt_base + 2),  // tp_index
             meta_Sq);
         // Derive kv_len from the same position used for causal geometry.
-        const uint32_t derived_kv_len_tiles = chunk_start_idx / 32 + chunk_global_tiles;
+        uint32_t derived_kv_len_tiles = chunk_start_idx / 32 + chunk_global_tiles;
+        // Cap at the REAL token end when the host supplied it. Uncapped, this is the padded-window end, so
+        // on a partial chunk the score covers columns this request never wrote: harmless for real query
+        // rows (those keys sit at s > t and the causal edge masks them) but NOT for pad rows, whose top-k
+        // then differs from the scalar path's. Reading actual_end here reproduces the scalar bound exactly,
+        // and narrows the scored extent at the same time. ceil to the 32-row write grid, matching
+        // write_k's clamp and the scalar path's own rounding.
+        // 0 = no bound supplied (full chunk): the host zeroes this slot rather than compiling a second
+        // variant, so presence costs a compare here instead of a program hash split.
+        const uint32_t valid_end_addr = get_common_arg_val<uint32_t>(vend_rt_base);
+        if (valid_end_addr != 0) {
+            // derived_l1 is reused as the NoC landing slot: chunk_start_idx has already been consumed into
+            // a local above, and the four mailbox words are not written until below, so the page is free.
+            const uint32_t valid_end =
+                trace_metadata::read_metadata_scalar_u32(noc, vend_args, valid_end_addr, derived_l1);
+            const uint32_t valid_end_tiles = (valid_end + 31) / 32;
+            if (valid_end_tiles < derived_kv_len_tiles) {
+                derived_kv_len_tiles = valid_end_tiles;
+            }
+        }
         kv_len_tiles = derived_kv_len_tiles < k_len_tiles ? derived_kv_len_tiles : k_len_tiles;
 
         const IndexerScoreMetadataBounds bounds{
@@ -792,29 +863,34 @@ void kernel_main() {
     }
 
     if constexpr (fused_ring_enabled) {
-        // The receiver consumes the fused-arg block at slot 27 (ring/dir/sems plus the split-forwarding
-        // triple — this op runs with split forwarding disabled) and waits for the producer signal. The
-        // gate then consumes k_local and records the following band-permutation base.
-        uint32_t fused_argidx = 27;
-        RingSDPAOpReceiver fused_recv(/*wait_for_op_signal=*/true, fused_argidx);
+        // Ring/dir/semaphore fields are common arguments in the compact fused layout.
+        // The receiver waits for the producer signal before the gate consumes k_local;
+        // band visits come from the compact lane schedule.
+        uint32_t fused_argidx = fused_common_base;
+        RingSDPAOpReceiver fused_recv(
+            /*wait_for_op_signal=*/true, fused_argidx, [](uint32_t index) {
+                return get_common_arg_val<uint32_t>(index);
+            });
         // TRACE-SAFE slot select. cache_batch_idx is a host runtime arg the override re-patches per
         // dispatch, which a replay cannot do -- so a captured program would score every request against
         // the slot live at capture time (capture warms user 0). Recompose it here from the on-device user
-        // id, mirroring TtIndexer's host formula. The RT slots are still consumed by the gate so the
-        // band-permutation base is unaffected.
+        // id, mirroring TtIndexer's host formula.
         uint32_t local_slot_offset = 0;
-        if constexpr (cache_slot_from_metadata) {
+        // 0 = no slot to select (the deduped path hands the op a rebuilt batch-1 slab).
+        const uint32_t slot_addr = get_common_arg_val<uint32_t>(slot_rt_base + 0);
+        const bool slot_active = slot_addr != 0;
+        if (slot_active) {
             CircularBuffer cb_slot(cb_meta_slot);
             cb_slot.reserve_back(1);
-            const uint32_t user_id = trace_metadata::read_metadata_scalar_u32(
-                noc, slot_meta_args, get_arg_val<uint32_t>(slot_rt_base + 0), cb_slot.get_write_ptr());
-            const uint32_t num_layers = get_arg_val<uint32_t>(slot_rt_base + 1);
-            const uint32_t layer_idx = get_arg_val<uint32_t>(slot_rt_base + 2);
+            const uint32_t user_id =
+                trace_metadata::read_metadata_scalar_u32(noc, slot_meta_args, slot_addr, cb_slot.get_write_ptr());
+            const uint32_t num_layers = get_common_arg_val<uint32_t>(slot_rt_base + 1);
+            const uint32_t layer_idx = get_common_arg_val<uint32_t>(slot_rt_base + 2);
             local_slot_offset =
                 trace_metadata::bounded_cache_batch_idx(user_id, num_layers, layer_idx, slot_cache_extent) *
                 slot_local_pages;
         }
-        const FusedRingGate gate(fused_recv, fused_argidx, local_slot_offset);
+        const FusedRingGate gate(fused_recv, local_slot_offset, slot_active);
         run(&gate);
     } else {
         run(nullptr);

@@ -26,7 +26,7 @@ const KernelSpecName SH_W_READER{"reader"};
 const KernelSpecName SH_W_WRITER{"writer"};
 const DFBSpecName SH_W_IN_SHARD{"in_shard"};
 const DFBSpecName SH_W_OUT_SHARD{"out_shard"};
-const DFBSpecName SH_W_PAD{"pad"};
+const ScratchpadSpecName SH_W_PAD{"pad"};
 const TensorParamName SH_W_INPUT{"input"};
 const TensorParamName SH_W_OUTPUT{"output"};
 }  // namespace
@@ -67,7 +67,6 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
 
     tt::DataFormat input_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     tt::DataFormat output_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    tt::DataFormat pad_val_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     // Input shard DFB — borrows the input buffer's L1 memory; the framework re-points it from the
     // input TensorArgument on every dispatch. The reader only takes its base pointer (a raw peek,
@@ -96,11 +95,11 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
     };
 
     // Const buffer holding one stick of the pad value. Writer-only, no FIFO ops — self-loop.
-    DataflowBufferSpec pad_dfb{
+    // Writer-private pad-value scratch (formerly a sync-free self-loop DFB; Quasar rejects DM
+    // self-loops). Byte view: address-only use, and padded_stick_bytes need not be a multiple of 4.
+    ScratchpadSpec pad_scratch{
         .unique_id = SH_W_PAD,
-        .entry_size = padded_stick_bytes,
-        .num_entries = 1,
-        .data_format_metadata = pad_val_dfb_data_format,
+        .size_per_node = padded_stick_bytes,  // entry_size * num_entries (1)
     };
 
     // W front-pad offset: input_tensor_start is [N, C, H, W];
@@ -175,16 +174,10 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
                     .accessor_name = "out_shard",
                     .endpoint_type = DFBEndpointType::PRODUCER,
                 },
-                DFBBinding{
-                    .dfb_spec_name = SH_W_PAD,
-                    .accessor_name = "pad",
-                    .endpoint_type = DFBEndpointType::PRODUCER,
-                },
-                DFBBinding{
-                    .dfb_spec_name = SH_W_PAD,
-                    .accessor_name = "pad",
-                    .endpoint_type = DFBEndpointType::CONSUMER,
-                },
+            },
+        .scratchpad_bindings =
+            {
+                ScratchpadBinding{.scratchpad_spec_name = SH_W_PAD, .accessor_name = "pad"},
             },
         .compile_time_args =
             {
@@ -202,7 +195,8 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
     ProgramSpec spec{
         .name = "pad_rm_sharded_width_only",
         .kernels = {std::move(reader), std::move(writer)},
-        .dataflow_buffers = {std::move(in_shard_dfb), std::move(out_shard_dfb), std::move(pad_dfb)},
+        .dataflow_buffers = {std::move(in_shard_dfb), std::move(out_shard_dfb)},
+        .scratchpads = {std::move(pad_scratch)},
         .tensor_parameters =
             {
                 TensorParameter{.unique_id = SH_W_INPUT, .spec = input_mesh_tensor.tensor_spec()},

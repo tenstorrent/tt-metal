@@ -23,6 +23,12 @@
 
 #pragma once
 
+#if defined(__clang__)
+#define SAN_FUNC [[clang::minsize]]
+#else
+#define SAN_FUNC [[gnu::optimize("Os")]]
+#endif
+
 #ifndef LLK_SAN_ENABLE
 
 #if defined(LLK_SAN_SETTING_PEDANTIC)

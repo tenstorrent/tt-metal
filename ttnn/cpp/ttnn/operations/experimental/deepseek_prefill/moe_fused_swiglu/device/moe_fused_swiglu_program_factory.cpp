@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -324,6 +325,47 @@ std::vector<uint32_t> make_compute_ct(
     };
 }
 
+// A gate/up weight run is ONE NoC transaction only while it stays inside a single shard. The reader
+// and the writer walk each core's hidden slice in gu_chunk_w-wide chunks (read_weight_chunk in
+// kernels/moe_fused_swiglu_dataflow.hpp), so a shard width that does not tile that walk splits every
+// crossing chunk into two transactions -- correct, and half the coalescing an ND-sharded placement
+// exists to buy. Counted against the real walk rather than a divisibility rule, because hn_starts is
+// ragged whenever the hidden split is balanced.
+//
+// A warning, not a fatal: the width is the CALLER's, it is pinned to whatever grid the weights were
+// built for, and this op takes a core_grid per call -- a mismatch here is slow, never wrong.
+void warn_if_gate_up_shard_splits_runs(const geo::Blocking& blocking, uint32_t shard_w) {
+    if (shard_w == 0) {
+        return;
+    }
+    uint32_t split = 0;
+    uint32_t total = 0;
+    for (uint32_t x = 0; x < blocking.hgroups; ++x) {
+        for (uint32_t chunk = 0; chunk < blocking.gu_chunks; ++chunk) {
+            const uint32_t col0 = chunk * blocking.gu_chunk_w;
+            if (col0 >= blocking.hn_sizes[x]) {
+                continue;
+            }
+            const uint32_t width = std::min(blocking.gu_chunk_w, blocking.hn_sizes[x] - col0);
+            const uint32_t start = blocking.hn_starts[x] + col0;
+            ++total;
+            split += static_cast<uint32_t>(start / shard_w != (start + width - 1) / shard_w);
+        }
+    }
+    if (split != 0) {
+        log_warning(
+            tt::LogOp,
+            "moe_fused_swiglu: gate/up DRAM ND shard width {} tiles does not tile this grid's chunk "
+            "walk (hn_pad {}, chunk {} tiles): {} of {} weight reads per K-row cross a shard edge "
+            "and issue as two transactions",
+            shard_w,
+            blocking.hn_pad,
+            blocking.gu_chunk_w,
+            split,
+            total);
+    }
+}
+
 }  // namespace
 
 tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
@@ -436,9 +478,23 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
     const uint32_t wg = [&]() {
         const uint32_t gate_width = geo::nd_shard_n_tiles(tensor_arguments.w_gates[0]);
         const uint32_t up_width = geo::nd_shard_n_tiles(tensor_arguments.w_ups[0]);
-        return gate_width == up_width ? gate_width : 0u;
+        // Both tensors are read through ONE compile-time width, so widths that disagree leave no
+        // correct value to take: a run sized to either one crosses the other's real shard boundary
+        // and would issue a single transaction spanning two banks.
+        TT_FATAL(
+            gate_width == up_width,
+            "moe_fused_swiglu: w_gate and w_up must share a weight placement; DRAM ND shard widths "
+            "are {} and {} tiles",
+            gate_width,
+            up_width);
+        return gate_width;
     }();
+    // W_down carries no such check: its shard is deliberately WIDER than the ec slice one core
+    // reads, which costs nothing (a slice inside a shard is still one transaction) and keeps the
+    // shards-per-row count coprime with the bank count, which is what rotates a core's K-rows
+    // across all DRAM banks.
     const uint32_t wd = geo::nd_shard_n_tiles(tensor_arguments.w_downs[0]);
+    warn_if_gate_up_shard_splits_runs(blocking, wg);
     const uint32_t experts_per_chip = operation_arguments.experts_per_chip;
 
     auto reader_ct = make_reader_ct(
@@ -557,6 +613,43 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
         compute_descriptor.defines.emplace_back("SWIGLU_OAI", "1");
     }
 
+    // Tensor bindings are uniform across workers; keep only scheduling metadata per core.
+    KernelDescriptor::RTArgList reader_bindings;
+    reader_bindings.push_back(tensor_arguments.activations.buffer());
+    reader_bindings.push_back(tensor_arguments.counts.buffer());
+    reader_bindings.push_back(tensor_arguments.global_expert_idx_table.buffer());
+    reader_bindings.push_back(start_tensor.buffer());
+    KernelDescriptor::RTArgList writer_bindings;
+    writer_bindings.push_back(tensor_return_value.buffer());
+    for (const auto* weights : {&tensor_arguments.w_gates, &tensor_arguments.w_downs}) {
+        for (const auto& weight : *weights) {
+            reader_bindings.push_back(weight.buffer());
+        }
+    }
+    // The full-grid multicast table is identical on every worker. Send it once
+    // as common arguments instead of repeating it in every core's launch payload.
+    const auto h_mcast_args = rotating_mcast_args(device, NOC::NOC_0, 0, 0, hgroups - 1, kgroups - 1);
+    reader_bindings.append(h_mcast_args);
+    // Keep optional bias addresses last so the multicast offset is unconditional.
+    if (operation_arguments.fuse_bias) {
+        for (const auto* biases :
+             {&tensor_arguments.gate_biases, &tensor_arguments.up_biases, &tensor_arguments.down_biases}) {
+            for (const auto& bias : *biases) {
+                reader_bindings.push_back(bias.buffer());
+            }
+        }
+    }
+    for (const auto* weights : {&tensor_arguments.w_ups, &tensor_arguments.w_downs}) {
+        for (const auto& weight : *weights) {
+            writer_bindings.push_back(weight.buffer());
+        }
+    }
+    for (const auto arg : h_mcast_noc1_args) {
+        writer_bindings.push_back(arg);
+    }
+    reader_descriptor.emplace_common_runtime_args(reader_bindings);
+    writer_descriptor.emplace_common_runtime_args(writer_bindings);
+
     for (uint32_t y = 0; y < kgroups; ++y) {
         for (uint32_t x = 0; x < hgroups; ++x) {
             const CoreCoord core{x, y};
@@ -564,16 +657,8 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
             const uint32_t group_index = (y % blocking.mgroup_rows) * hgroups + x;
             KernelDescriptor::RTArgList reader_args;
             const auto x_mcast_args = rotating_mcast_args(device, NOC::NOC_0, 0, y, hgroups - 1, y);
-            const auto h_mcast_args = rotating_mcast_args(device, NOC::NOC_0, 0, 0, hgroups - 1, kgroups - 1);
             reader_args.reserve(
-                17 + 2 * kgroups + x_mcast_args.size() + h_mcast_args.size() +
-                h_group_rect_args[y / blocking.mgroup_rows].size() + 2u * experts_per_chip);
-            reader_args.push_back(0u);  // reserved runtime slot
-            reader_args.push_back(tensor_arguments.activations.buffer());
-            reader_args.push_back(tensor_arguments.w_gates[0].buffer());
-            reader_args.push_back(tensor_arguments.w_downs[0].buffer());
-            reader_args.push_back(tensor_arguments.counts.buffer());
-            reader_args.push_back(tensor_arguments.global_expert_idx_table.buffer());
+                10 + 2 * kgroups + x_mcast_args.size() + h_group_rect_args[y / blocking.mgroup_rows].size());
             reader_args.push_back(blocking.kr_sizes[y]);
             reader_args.push_back(blocking.kr_starts[y]);
             reader_args.push_back(blocking.hn_starts[x]);
@@ -584,44 +669,19 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
             reader_args.push_back(blocking.ec_group_starts[group_index]);
             reader_args.push_back(x);
             reader_args.push_back(y);
-            reader_args.push_back(start_tensor.buffer());
             for (uint32_t row = 0; row < kgroups; ++row) {
                 const auto [vx, vy] = virtual_core(device, x, row);
                 reader_args.push_back(vx);
                 reader_args.push_back(vy);
             }
             reader_args.append(x_mcast_args);
-            reader_args.append(h_mcast_args);
             for (const uint32_t arg : h_group_rect_args[y / blocking.mgroup_rows]) {
                 reader_args.push_back(arg);
-            }
-            // Per-expert weight bases, role-major, at the END of the list: every earlier offset the
-            // kernels derive from HGROUPS/KGROUPS stays where it was, so only one new constexpr
-            // offset per kernel tracks this table.
-            for (const auto& w_gate : tensor_arguments.w_gates) {
-                reader_args.push_back(w_gate.buffer());
-            }
-            for (const auto& w_down : tensor_arguments.w_downs) {
-                reader_args.push_back(w_down.buffer());
-            }
-            // Per-expert bias bases, role-major, after the weight table for the same reason it sits
-            // last: one new constexpr offset in the reader and nothing above it moves.
-            if (operation_arguments.fuse_bias) {
-                for (const auto* list :
-                     {&tensor_arguments.gate_biases, &tensor_arguments.up_biases, &tensor_arguments.down_biases}) {
-                    for (const auto& bias : *list) {
-                        reader_args.push_back(bias.buffer());
-                    }
-                }
             }
             reader_descriptor.emplace_runtime_args(core, reader_args);
 
             KernelDescriptor::RTArgList writer_args;
-            writer_args.reserve(17 + 2 * kgroups + 4 + 2u * experts_per_chip);
-            writer_args.push_back(0u);  // reserved runtime slot
-            writer_args.push_back(tensor_arguments.w_ups[0].buffer());
-            writer_args.push_back(tensor_return_value.buffer());
-            writer_args.push_back(tensor_arguments.w_downs[0].buffer());
+            writer_args.reserve(13 + 2 * kgroups);
             writer_args.push_back(blocking.kr_sizes[y]);
             writer_args.push_back(blocking.kr_starts[y]);
             writer_args.push_back(blocking.hn_starts[x]);
@@ -640,15 +700,6 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
                 const auto [vx, vy] = virtual_core(device, x, row);
                 writer_args.push_back(vx);
                 writer_args.push_back(vy);
-            }
-            for (uint32_t arg = 0; arg < 4; ++arg) {
-                writer_args.push_back(h_mcast_noc1_args[arg]);
-            }
-            for (const auto& w_up : tensor_arguments.w_ups) {
-                writer_args.push_back(w_up.buffer());
-            }
-            for (const auto& w_down : tensor_arguments.w_downs) {
-                writer_args.push_back(w_down.buffer());
             }
             writer_descriptor.emplace_runtime_args(core, writer_args);
 

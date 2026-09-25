@@ -74,6 +74,12 @@ inputs:
     description: Identity string written into each host's triage report dir when triage fires
     required: false
     default: ""
+  hang-report-test-id:
+    description: >-
+      Identity ('file::name') for the JUnit hang report, used on legs that are not pytest.
+      Empty writes no report unless the rank is inside a pytest test.
+    required: false
+    default: ""
 
 runs:
   using: "composite"
@@ -213,6 +219,7 @@ runs:
         TRIAGE_JOB_INFO_INPUT: ${{ inputs.triage-job-info }}
         TRIAGE_OUTPUT_DIR_INPUT: ${{ inputs.triage-output-dir }}
         HANG_DETECTION_TIMEOUT: ${{ inputs.hang-detection-timeout }}
+        HANG_REPORT_TEST_ID: ${{ inputs.hang-report-test-id }}
       run: |
         echo "Enabling detection of timeout on fast dispatch and automatically call tt-triage"
         if [ -z "${TRIAGE_OUTPUT_DIR:-}" ]; then
@@ -232,13 +239,14 @@ runs:
         fi
         echo "TT_TRIAGE_JOB_INFO=$TRIAGE_JOB_INFO | runner: ${RUNNER_NAME:-unknown} | run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}" >> "$GITHUB_ENV"
 
-        TRIAGE_CMD='D="${TRIAGE_OUTPUT_DIR:-/tmp/tt_triage}/$(hostname)"; mkdir -p "$D" || D=/tmp; if [ -e "$D/.tt_triage_already_ran" ]; then echo "[auto-triage] triage already ran on $(hostname); skipping (cards are not reset between tests, so a second triage is unreliable)" >&2; else touch "$D/.tt_triage_already_ran"; printf "%s\n" "${TT_TRIAGE_JOB_INFO:-unknown leg}" > "$D/job_info.txt"; /opt/venv/bin/python3 "${TT_METAL_HOME:-/home/user/tt-metal}/tools/tt-triage.py" --disable-progress --path="$D/debug_bus_signal_groups.json" --triage-summary-path="$D/triage_summary.txt" --llm-output-path="$D/triage_llm_output.txt" 2>&1 | tee "$D/triage_output.txt" 1>&2; fi'
+        TRIAGE_CMD='D="${TRIAGE_OUTPUT_DIR:-/tmp/tt_triage}/$(hostname)"; mkdir -p "$D" || D=/tmp; if [ -e "$D/.tt_triage_already_ran" ]; then echo "[auto-triage] triage already ran on $(hostname); skipping (cards are not reset between tests, so a second triage is unreliable)" >&2; else touch "$D/.tt_triage_already_ran"; printf "%s\n" "${TT_TRIAGE_JOB_INFO:-unknown leg}" > "$D/job_info.txt"; /opt/venv/bin/python3 "${TT_METAL_HOME:-/home/user/tt-metal}/.github/scripts/utils/hang_report.py" --test-id "${TT_HANG_TEST_ID:-}" --report-dir "${TRIAGE_OUTPUT_DIR:-/tmp/tt_triage}/test_reports" >&2 || true; /opt/venv/bin/python3 "${TT_METAL_HOME:-/home/user/tt-metal}/tools/tt-triage.py" --disable-progress --path="$D/debug_bus_signal_groups.json" --triage-summary-path="$D/triage_summary.txt" --llm-output-path="$D/triage_llm_output.txt" --sqlite-output-path="$D/triage_sqlite_output.sqlite" 2>&1 | tee "$D/triage_output.txt" 1>&2; /opt/venv/bin/python3 "${TT_METAL_HOME:-/home/user/tt-metal}/.github/scripts/utils/hang_report.py" --update --summary-path="$D/triage_summary.txt" --test-id "${TT_HANG_TEST_ID:-}" --report-dir "${TRIAGE_OUTPUT_DIR:-/tmp/tt_triage}/test_reports" >&2 || true; fi'
 
         {
           echo "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE=$TRIAGE_CMD"
           echo "TT_METAL_OPERATION_TIMEOUT_SECONDS=$HANG_DETECTION_TIMEOUT"
           echo "TT_TRIAGE_ENABLE_AGGREGATED_CALLSTACKS=1"
           echo "TT_RUN_DISABLED_TRIAGE_SCRIPTS_IN_CI=1"
+          echo "TT_HANG_TEST_ID=$HANG_REPORT_TEST_ID"
         } >> "$GITHUB_ENV"
 
         export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="$TRIAGE_CMD"

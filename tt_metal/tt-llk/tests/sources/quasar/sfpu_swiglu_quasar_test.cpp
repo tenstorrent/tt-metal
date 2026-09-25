@@ -35,7 +35,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     if (unpack_to_dest)
     {
         set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
-        _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*is_int_fpu_en*/>();
     }
     else
     {

@@ -19,7 +19,6 @@ namespace ttnn::experimental::prim {
 // These indices/arg-slots must track the factory's kernel push order and runtime-arg layout in
 // lockstep; override_runtime_arguments() re-applies the semaphore address at these positions.
 namespace ring_attention_all_gather_async_dynamic {
-inline constexpr uint32_t kNumSendersPerLink = 2;
 inline constexpr uint32_t kReaderForwardKernelIdx = 0;
 inline constexpr uint32_t kWriterForwardKernelIdx = 1;
 inline constexpr uint32_t kReaderBackwardKernelIdx = 2;
@@ -61,23 +60,17 @@ struct RingAttentionRankMapping {
     uint32_t mesh_cols = 0;
 };
 
-// Sparse cyclic predecessor exchange used by chunked GPT-OSS sliding attention.
-// Each device sends one local tile-row range to its logical next device and
-// receives the predecessor's corresponding range into compact output slot 0.
+// Sliding attention exchanges one or two predecessor tails into compact output slots.
 struct RingAttentionNeighborHaloConfig {
     uint32_t send_to_next_start_Ht;
     uint32_t send_to_next_count_Ht;
+    uint32_t send_second_start_Ht = 0;
     // A linear topology has no physical wrap link. The final device sends its
     // predecessor tail back to device 0 over the backward fabric direction.
     bool send_backward = false;
     uint32_t unicast_hops = 1;
 
-    // Trace-safe metadata path. send_to_next_start_Ht above is linear in the chunk index, so on the
-    // scalar path the host rewrites the halo page ranges every dispatch — something a captured trace
-    // never replays. When kv_actual_isl is set, the halo kernels read it on-device and recompute the
-    // start themselves, making one capture valid for every chunk. slot_id also selects the flattened
-    // cache batch on-device. The remaining fields are static inputs to those derivations;
-    // source_device selects which group.s tail is read.
+    // Metadata supplies the source tails and cache slot during trace replay.
     const ttnn::Tensor* slot_id = nullptr;
     const ttnn::Tensor* kv_actual_isl = nullptr;
     uint32_t kv_cache_num_layers = 1;
@@ -110,19 +103,21 @@ constexpr uint32_t kInputBatchBaseFieldOffset = 5;
 // (input_Ht * input_Wt); the fused ring_joint_sdpa path patches it down to the logical_n-valid
 // slab prefix so the gather moves only kv_actual-sized data, not the whole oversized cache.
 constexpr uint32_t kValidPagesFieldOffset = 6;
-constexpr uint32_t kNeighborReaderRuntimeArgHeaderCount = 1;
-constexpr uint32_t kNeighborReaderTensorDescriptorFieldCount = 5;
+constexpr uint32_t kNeighborReaderRuntimeArgHeaderCount = 2;
+constexpr uint32_t kNeighborReaderTensorDescriptorFieldCount = 8;
 constexpr uint32_t kNeighborReaderMetadataTensorDescriptorFieldCount =
     kNeighborReaderTensorDescriptorFieldCount + 1;
 constexpr uint32_t kNeighborReaderInputTileStartFieldOffset = 2;
 constexpr uint32_t kNeighborReaderInputTileEndFieldOffset = 3;
 constexpr uint32_t kNeighborReaderInputBatchBaseFieldOffset = 4;
+constexpr uint32_t kNeighborReaderFirstOriginFieldOffset = 5;
+constexpr uint32_t kNeighborReaderSecondOriginFieldOffset = 6;
+constexpr uint32_t kNeighborReaderHaloPagesFieldOffset = 7;
 
-constexpr uint32_t kNeighborWriterRuntimeArgHeaderCount = 3;
-constexpr uint32_t kNeighborWriterTensorDescriptorFieldCount = 5;
+constexpr uint32_t kNeighborWriterRuntimeArgHeaderCount = 4;
+constexpr uint32_t kNeighborWriterTensorDescriptorFieldCount = 4;
 constexpr uint32_t kNeighborWriterInputTileStartFieldOffset = 2;
 constexpr uint32_t kNeighborWriterInputTileEndFieldOffset = 3;
-constexpr uint32_t kNeighborWriterInputOriginPageFieldOffset = 4;
 
 constexpr uint32_t kRingDirectionCount = 2;
 
@@ -146,8 +141,6 @@ constexpr uint32_t kWriterBackwardKernelOffset = 3;
 // dispatch, or every layer gathers the slot of whichever layer took the cache miss.
 constexpr uint32_t kReaderAccessorWordsPerInput = 2;
 constexpr uint32_t kReaderMetadataSlotIdOffset = 0;
-constexpr uint32_t kReaderMetadataKvActualOffset = 1;
-constexpr uint32_t kReaderMetadataChunkLocalTilesOffset = 2;
 constexpr uint32_t kReaderMetadataNumLayersOffset = 3;
 constexpr uint32_t kReaderMetadataLayerIdxOffset = 4;
 

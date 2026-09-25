@@ -4,6 +4,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/internal/disaggregation/kv_chunk_address_table.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/internal/disaggregation/umd_dram_reader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/experimental/blaze/named_kernel_args.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/internal/reload_table.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/host_api/temp_quasar_api.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device_manager_tracker.cpp
@@ -170,12 +171,7 @@ if(TT_METAL_USE_EMULE)
     list(
         APPEND
         IMPL_SRC
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_deferred_mesh_dispatch.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_multi_rank_runtime.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emulated_program_runner.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_fiber_scheduler.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_descriptor_builder.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/emulation/host_sanitizers.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_asan_panic.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_sanitizers.cpp
     )
 endif()
