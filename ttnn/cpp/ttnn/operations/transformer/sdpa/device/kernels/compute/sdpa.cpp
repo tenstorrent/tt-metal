@@ -197,7 +197,12 @@ void kernel_main() {
             chunked_q_chunk_offset_phase_1,
             lw_mask,
             q_num_chunks,
-            use_zigzag_balancing);
+            use_zigzag_balancing,
+#ifdef REUSE_KV
+            NQH / NKH);
+#else
+            0);
+#endif
     } else {
         // Standard SDPA path (causal, masked, chunked, etc.)
         constexpr bool use_lightweight_causal_mask = is_causal && !use_provided_mask && (sliding_window_size == 0);

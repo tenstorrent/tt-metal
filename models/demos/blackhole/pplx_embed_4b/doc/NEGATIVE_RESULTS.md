@@ -955,3 +955,93 @@ concatenated `[1, 1, S, NQH·d]` output assumed it never did (host check `q_chun
 `write_block` take the head length and the chunk's first row in its head and move a wrapped row back one head length
 and right one head (`head_wrap_tile_offset`); the check is gone. Without the concat output the model needs the 4.6 µs
 concat op again, which cancels the gain.
+
+## 53. Heads-op compute v3 at bs8/16/32: bit-identical, but slower than v1 (2026-09-25)
+
+`QWEN_FUSED_COMPUTE_V3=1` at the batched sizes (heads op on 114 cores, DRAM activations), 8× p150b host, same-chip
+alternating A/B, 3 pairs × 20 iterations. STS-B through the batched path is unchanged (0.8123 / 0.8140 / 0.8159 at
+batch 8 / 16 / 32), so the op stays bit-identical, but every pair was slower on best-of-run:
+
+| batch | v1 best (ms) | v3 best (ms) | Δ |
+|---|---|---|--:|
+| 8 (chip 0) | 108.2 / 108.1 / 108.2 | 108.6 / 108.7 / 108.7 | +0.5 (+0.4%) |
+| 16 (chip 1) | 202.7 / 202.8 / 202.8 | 205.0 / 205.0 / 204.7 | +2.2 (+1.1%) |
+| 32 (chip 2) | 392.8 / 397.4 / 398.7 | 398.7 / 402.1 / 402.0 | +4.6 (+1.2%) |
+
+Not profiled. At bs1 the per-phase set-up it removes is a large share of a 64-core, L1-resident op; at the batched
+sizes the op streams from DRAM and that share is small. The kernel is now `compute_qkv_heads_norm_bs1.cpp` and stays
+the bs1 default only. Resident heads-op constants (`QWEN_FUSED_RESIDENT_CONSTS=1`) also stay bs1-only: at bs8 and bs16
+the per-core shards clash with the heads op's static CBs (`TT_THROW: Statically allocated circular buffers ... clash
+with L1 buffers`) on the first warm-up forward.
+
+## 54. bs16 fused add+RMSNorm: what bounds it, and why L1 interleaved beat a resident-sharded rewrite (2026-09-25)
+
+8× p150b host; standalone numbers are traced wall time per call at the bs16 shape ([8192 × 2560] bfp8, R = 5,
+120 cores, 11 waves), median of 5.
+
+**Ablation (scratch kernels with compile-time skips, not in the repo).** Full op 241 µs; data movement only (no
+compute) 231; read + write only (no compute, no partial exchange) 231; compute + exchange only (no DRAM traffic) 97;
+read only 140, write only 169 (same bytes: writes are the slower direction, 265 vs 319 GB/s); handshakes only 25.
+Double-buffering the streaming CBs and dropping the per-wave write barrier: 240-242 (no change). Dropping the partial
+exchange made it slower (263): likely the exchange keeps each 5-core row group in lock step, which DRAM prefers
+(not verified). Reference streaming ops on the same tensors: `ttnn.add` 390 GB/s, `ttnn.clone` 393 GB/s; the op's data
+movement runs at 386 GB/s and the full op at 370. So the op is DRAM-bound at ~95% of what streaming ops reach here;
+compute (97 µs) hides under the traffic. Only fewer bytes help.
+
+**L1 placement.** b (WO / FF2 outputs) and the norm output are short-lived, so unlike the residual stream (§2) they
+never share L1 with SDPA's CBs, and they fit at bs16 (186 KB/core) and bs32 (372 KB/core). With both in L1 interleaved
+the op fell to 365.9 µs/call at bs32 (434.9 before), but end to end the gain vanished: the stock decoder moves the
+attention output to the residual's DRAM config before the post-attention add (`decoder.py`, a workaround for the stock
+`ttnn.add`), which became 36 L1 → DRAM copies (7.2 ms at bs32). The fused path reads b from anywhere, so the move is
+skipped there: 36 copies → 0, op 255.0 µs/call, bs32 replay 370.5 → 357.4 ms. `minimal_matmul` addresses every in0 /
+in1 / output tile through `TensorAccessor`, so it takes L1 (interleaved or sharded) inputs and outputs unchanged.
+
+**Resident-sharded rewrite: correct, no faster.** The op's schedule (unit u = row · R + k on core u mod 120, wave
+u div 120) is round-robin ND sharding with one unit per shard, so b and the output can be resident in that layout,
+read and packed in place through CBs aliased to the core's shards (`cb_descriptor_from_sharded_tensor` works on ND
+tensors). Built and verified bit-identical in every placement combination (and in STS-B), but it needed a ttnn view
+relaxation for ND-sharded row regroups ([1, 8, 1024, W] ↔ [1, 1, 8192, W]), and QKV reading the unit-sharded in0 was
+5-9% slower at its best block config (bs16 570 → 601 µs, bs32 1084 → 1165) while WO / FF2 / FF1+FF3 were neutral.
+Against L1 interleaved, same chip, sustained_run.sh at bs16: cold 195.4 vs 196.6, sustained 224.7 vs 225.4 ms. Both
+remove the same DRAM traffic; residency only adds the NoC reads / writes of b and the output, which the DRAM-bound op
+did not miss. Dropped (tools kept: `perf_tools/bench_batched_mm_sharded_io.py`, `sweep_qkv_sharded_in0.py`; the sweep
+also found bs32 QKV with in0 in DRAM ~5% faster at M16 K16 N4 sb1×4 than the shipped 8/8/8, not yet A/B'd in-model).
+
+**Residual sums.** The post-attention sum (add 2's a) lives across the MLP only and fits at bs8 / bs16 (landed); at bs32
+it is 72 KB/core short, also with FF2's output back in DRAM. The post-MLP sum is the next layer's input: the decoder
+asserts it sits in the residual's config, and it would have to share L1 with SDPA (~66 KB/core free, §40), so it stays
+in DRAM. One resident-mode bs16 run hung in warm-up (killed after 30 min) while a device profile ran on another chip;
+it did not recur in later runs. Profiles taken while other jobs ran on the host came out broken (device-only report,
+or "End marker found without a corresponding start marker"); profile with the host otherwise idle.
+
+## 55. bs16 batched SDPA: contention, not compute; packing does not help; K/V reuse does (2026-09-25)
+
+8× p150b host, chip 0; standalone traced time per call at the bs16 config (Q [16, 32, 512, 128], K/V [16, 8, 512, 128]
+bfp8 in DRAM, non-causal, 12×10, q512 / k512, LoFi, streaming kernel, heads-concat output), `perf_tools/bench_sdpa_bs16_ablate.py`.
+
+**Roofline miss.** In-model 485 µs (511-515 standalone) against a ~230 µs estimate (DRAM 89 MB at ~390 GB/s, softmax exp
+on the SFPU ~178 µs, matmuls ~104 µs). The estimate assumed K/V read once per KV head; at q512 each Q head is one unit on
+one core, the K/V chains never form, and the 4 Q heads sharing a KV head each read it: 71 MB of K/V (17.8 unique), 142 MB
+per call.
+
+**Device-profiler kernel spans** (one call; zones enabled by flipping `call_step`'s profiling tag in
+`compute_streaming.hpp`, reverted): compute and reader average 346 µs per core, slowest core 482 µs; writer 278 / 379. The
+op ends with its slowest core, and 512 units on 120 cores leave 32 cores with 5 units (balanced: ~412 µs). The zone
+detail was truncated after ~7 steps per core (profiler buffer); the recorded part has softmax (subtract max + exp) as the
+largest compute zone per step, then Q@Kᵀ. Profile a run with 1-2 units per core for complete zones.
+
+**Core count barely matters.** 12×10 511, 8×10 512, 8×8 530, 12×8 473 µs (fewer cores faster): the time per unit grows
+with the number of active cores (66 µs at 64 cores, 79 at 96, ~102 at 120), i.e. contention on DRAM, not compute (32
+cores: ~60 µs per unit). `exp_approx_mode` has no effect (the streaming kernel always uses the approximate exp). Finer Q
+chunks made it worse (q256 697, q128 954 µs): each chunk re-reads K/V.
+
+**GQA packing (`pack_gqa_heads`, op supports B > 1) did not help:** 12×10 packed 647 µs (units cross packed-head
+boundaries, chains mix q counts, multicast turns off, unicast forwarding serializes), 8×8 packed = unpacked (530).
+
+**K/V reuse** (landed as SDPA `reuse_kv`, POSITIVE_RESULTS): the reader skips K/V for a unit with the same (batch, KV
+head) as the previous one on its core, compute keeps them when the next unit shares them, and no chains are built.
+Bit-identical to reuse off. 12×10 q512 512 → 425 µs; since finer chunks no longer re-read K/V, q256 382, **q128 355**,
+q96 364, q64 402; 11×10 / 12×9 / 12×8 at q128 373 / 370 / 390; packed + reuse q128 359. bs8: 247.5 → 233.9 (12×8 q128;
+less DRAM-bound), bs32: 911.6 → 620.5 (12×10 q128). In the model the cold gain matches the standalone one (bs16 −5.6 ms,
+bs32 −9.8 ms over 36 calls) but the sustained gain is a third of it: less waiting on DRAM means more power per
+iteration, and the power manager settles the clock 10-15 MHz lower.

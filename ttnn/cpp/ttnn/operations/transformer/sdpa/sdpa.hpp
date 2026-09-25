@@ -43,7 +43,10 @@ ttnn::Tensor scaled_dot_product_attention(
     /// Write the output in the [B, 1, Sq, NQH * vDH] layout (what concat_heads would produce), saving that pass.
     bool output_heads_concat = false,
     /// Schedule each GQA group's query heads as one head of NQH/NKH x Sq rows, so K/V is streamed once per KV head.
-    bool pack_gqa_heads = false);
+    bool pack_gqa_heads = false,
+    /// Keep K/V in the CBs across a core's consecutive Q chunks of the same (batch, KV head) instead of re-reading
+    /// them (single K chunk, non-causal, unmasked; the K/V chains between cores are not built).
+    bool reuse_kv = false);
 
 /// Chunked SDPA over paged K/V: one Q chunk per call, K/V in paged layout.
 /// Two overloads: legacy (chunk_start_idx as int) or flexible (chunk_start_idx_tensor on device).

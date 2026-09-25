@@ -62,6 +62,7 @@ Tensor sdpa(
     const std::optional<Tensor>& windowed_q_token_offset_tensor = std::nullopt,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry = std::nullopt,
     bool output_heads_concat = false,
-    bool pack_gqa_heads = false);
+    bool pack_gqa_heads = false,
+    bool reuse_kv = false);
 
 }  // namespace ttnn::prim
