@@ -164,6 +164,36 @@ def cmd_compare(a):
     return 0
 
 
+@command("approve", "record a person's approval of an approval point (intake, plan, perf) with file hashes")
+def cmd_approve(a):
+    from models.demos.common.bringup.plan.approvals import approve
+
+    spec, _ = load(a)
+    rec = approve(spec, a.task, note=a.note or "")
+    print(f"approved {a.task} by {rec['by']} at {rec['at']}: " + ", ".join(rec["files"]))
+    return 0
+
+
+@command("render-tests", "render the component and swap tests of every implement task that has none yet")
+def cmd_render_tests(a):
+    from models.demos.common.bringup.testing.templates import render_component_test, render_swap_test
+
+    spec, led = load(a)
+    n = 0
+    for t in led.tasks().values():
+        b = t.get("brief") or {}
+        if t.get("step") != "implement" or not b:
+            continue
+        if "swapped" in b:
+            p = render_swap_test(spec, b["block_type"], b["swapped"])
+        else:
+            p = render_component_test(spec, b["block_type"], b["step"])
+        n += 1
+        print(p.relative_to(spec.repo))
+    print(f"{n} tests present")
+    return 0
+
+
 def build_parser(extra=None) -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="python -m models.demos.common.bringup")
     ap.add_argument("command", choices=sorted(COMMANDS))
@@ -178,6 +208,7 @@ def build_parser(extra=None) -> argparse.ArgumentParser:
     ap.add_argument("--name", help="fork: new run name")
     ap.add_argument("--no-run", action="store_true", help="rerun: only reset the verdicts")
     ap.add_argument("--other", help="compare: the other run's spec")
+    ap.add_argument("--note", help="approve: note stored with the approval")
     for fn in extra or []:
         fn(ap)
     return ap

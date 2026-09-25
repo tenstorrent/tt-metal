@@ -39,3 +39,16 @@ tasks:
     gate:
       cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/
       metrics: {selftest_passed: ">= 60", selftest_failed: "== 0"}
+  - id: F5
+    title: Plan memory check from the checkpoint, components map, approvals, ledger generator, intake, knowledge, opportunities
+    step: framework
+    deps: [F4]
+    paths: [models/demos/common/bringup/plan, models/demos/common/bringup/intake, models/demos/common/bringup/knowledge,
+            models/demos/common/bringup/tests/test_box.py, models/demos/common/bringup/tests/test_ladder.py,
+            models/demos/common/bringup/__main__.py, models/demos/common/bringup/core,
+            models/demos/common/bringup/selftest/test_plan.py]
+    gate:
+      cmd: >-
+        scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/ &&
+        python -m models.demos.common.bringup.knowledge.check
+      metrics: {selftest_passed: ">= 77", selftest_failed: "== 0", known_issue_errors: "== 0", repo_map_errors: "== 0"}
