@@ -45,7 +45,7 @@ from loguru import logger
 import ttnn
 
 from ....utils.tensor import fast_device_to_host, float_to_uint8, local_device_to_torch
-from ....utils.yuv_d2h import fast_device_to_host_yuv
+from ....utils.yuv_d2h import fast_device_to_host_yuv, replicated_to_host_yuv
 from .encoder_minimax_h3 import MiniMaxH3Encoder3d
 
 DEFAULT_TILE_SIZE = 256
@@ -1256,40 +1256,16 @@ class MiniMaxH3Vae:
 
         Two things earn their keep here. The `clamp` is the reference's post-stitch `clamp(0, 1)`,
         moved to `[-1, 1]` by the `proj_out` fold and kept *after* the blend because clamping is the
-        one step in the chain that is not affine. The `mesh_partition` pair splits a canvas every
-        device already holds an identical copy of, so the DMA that follows runs across every PCIe
-        link instead of one -- the same repeat/partition trick `fast_device_to_host` uses to spread
-        a multi-host read.
+        one step in the chain that is not affine. `replicated_to_host_yuv` then slices each device's
+        slab straight out of a canvas every device already holds, so the DMA runs across every PCIe
+        link with no collective.
         """
         canvas = ttnn.clamp(canvas, min=-1.0, max=1.0)
         canvas = ttnn.typecast(canvas, ttnn.bfloat16)
         canvas = ttnn.to_layout(canvas, ttnn.ROW_MAJOR_LAYOUT)
 
-        mesh_rows, mesh_cols = tuple(self.mesh_device.shape)
         height, width = int(canvas.shape[-2]), int(canvas.shape[-1])
-        # 4:2:0 needs an even per-shard height and width; the pad is trimmed back off on host.
-        padded_height = -(-height // (2 * mesh_rows)) * (2 * mesh_rows)
-        padded_width = -(-width // (2 * mesh_cols)) * (2 * mesh_cols)
-        if (padded_height, padded_width) != (height, width):
-            unpadded = canvas
-            canvas = ttnn.pad(
-                unpadded,
-                [(0, 0), (0, 0), (0, 0), (0, padded_height - height), (0, padded_width - width)],
-                value=0.0,
-            )
-            ttnn.deallocate(unpadded)
-
-        canvas = ttnn.mesh_partition(canvas, dim=-2, cluster_axis=0)
-        canvas = ttnn.mesh_partition(canvas, dim=-1, cluster_axis=1)
-
-        planar = fast_device_to_host_yuv(
-            canvas,
-            self.mesh_device,
-            ccl_manager=self.ccl_manager,
-            use_persistent_buffer=False,
-            logical_h=height,
-            logical_w=width,
-        )
+        planar = replicated_to_host_yuv(canvas, self.mesh_device)
         return planar.reshape(planar.shape[0], height * 3 // 2, width)
 
     def decode_clip(self, z_BCTHW: torch.Tensor) -> torch.Tensor:
