@@ -226,7 +226,11 @@ def test_spec_subset_moves_the_representative_layer():
     [
         ({"block_types": {"dense": {"layers": [0, 1]}}}, "cover every layer"),
         ({"ladder": [{"name": "a", "seq": 100, "chunk": 30}]}, "not a multiple"),
-        ({"ladder": [{"name": "a", "seq": 64, "chunk": 32, "golden": "b"}]}, "must come earlier"),
+        ({"ladder": [{"name": "a", "seq": 64, "chunk": 32, "golden": "b"}]}, "does not exist"),
+        (
+            {"ladder": [{"name": "a", "seq": 64, "chunk": 32, "golden": "b"}, {"name": "b", "seq": 128, "chunk": 32}]},
+            "differ",
+        ),
         ({"layers": [7]}, "out of range"),
         ({"state": {"kind": "kv"}}, "state.tensors"),
         ({"box": {"mesh": [4]}}, "box.mesh"),

@@ -148,3 +148,13 @@ Drive this ledger with
   fails check-yaml at commit (the F6 commit did not land the first time).
 - Next: the first real use, Gemma-4 26B-A4B on the 1x4 Blackhole box (the owner's choice), ledger in
   `models/demos/gemma4_a4b_d_p/bringup/`.
+
+## F9 (2026-09-25): fixes from the Gemma-4 intake
+- A rung with `golden: X` no longer has to come after X in the ladder (ERNIE's order runs the cheap "last chunk after a
+  golden prefix" rung before the full rung); it must name a rung that owns its golden with the same seq/chunk.
+- R.1 is a scripted intake step (it was mapped to the reference role and would have started an agent) and also checks
+  that the intake approval matches the current spec (`intake_approved == 1`).
+- Agent steps try their gate once before starting an agent when their paths already exist (R.3 after R.2, swap tests
+  whose components already pass). The failed pre-check is handed to the agent as the previous attempt.
+- `agents.read.<role>` in the spec lists files every brief of that role names (for Gemma: the HF modeling code for the
+  reference role, `models/demos/gemma4/tt` for plan and implement).
