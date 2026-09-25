@@ -149,6 +149,12 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     const std::uint32_t compute_tile_size = tile_size(compute_cb_data_format);
 
     const auto& device = input_tensor.device();
+    // Generated index tiles: on Wormhole and Blackhole the local compute kernel builds each one in
+    // DEST from the lane id (topk_fill_index_tile), so the index CB is not created and the reader
+    // streams values only. Other architectures keep the DM generator, and a caller-supplied indices
+    // tensor is streamed through the CB as before.
+    const bool index_tiles_on_compute = !tensor_args.indices.has_value() && (device.arch() == tt::ARCH::WORMHOLE_B0 ||
+                                                                             device.arch() == tt::ARCH::BLACKHOLE);
 
     const auto input_shape = input_tensor.padded_shape();
     const std::uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
@@ -227,17 +233,20 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
         }}},
     });
 
-    // Input indices (double-buffered, generated on-demand or read from DRAM)
+    // Input indices (double-buffered, generated on-demand or read from DRAM); absent when the compute
+    // kernel builds the index tiles in DEST.
     constexpr std::uint32_t index_cb_index = tt::CBIndex::c_1;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = cb_in_units * index_tile_size,
-        .core_ranges = all_cores_range_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<std::uint8_t>(index_cb_index),
-            .data_format = index_cb_data_format,
-            .page_size = index_tile_size,
-        }}},
-    });
+    if (!index_tiles_on_compute) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = cb_in_units * index_tile_size,
+            .core_ranges = all_cores_range_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<std::uint8_t>(index_cb_index),
+                .data_format = index_cb_data_format,
+                .page_size = index_tile_size,
+            }}},
+        });
+    }
 
     // Gathered values (aggregation buffer for final core).
     // Uses compute_cb_data_format (bf16 when input is bfp8/bfp4): the local cores write
@@ -415,9 +424,10 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor).append_to(reader_local_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(input_indices_tensor).append_to(reader_local_compile_time_args);
-    const std::map<std::string, std::string> reader_specialization_defines_map = {
+    std::map<std::string, std::string> reader_specialization_defines_map = {
         {"GENERATE_INDICES", tensor_args.indices.has_value() ? "0" : "1"},
     };
+    reader_specialization_defines_map.emplace("INDEX_TILES_ON_COMPUTE", index_tiles_on_compute ? "1" : "0");
     KernelDescriptor::Defines reader_local_defines(
         reader_specialization_defines_map.begin(), reader_specialization_defines_map.end());
 
@@ -553,6 +563,7 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     compute_local_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_local_desc.core_ranges = local_cores_range_set;  // Runs on all local processing cores
     compute_local_desc.compile_time_args = compute_args;
+    compute_local_desc.defines.emplace_back("INDEX_TILES_ON_COMPUTE", index_tiles_on_compute ? "1" : "0");
     // 32-bit indices require the full-width DST registers (fp32 dest accumulation) so the index values
     // survive the transpose/sort datapath without truncation. Fused keys are 32-bit words and need
     // 32-bit DEST for the same reason (and for the exact bf16->fp32 value widening the fuse relies on).
@@ -644,6 +655,7 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
             core,
             KernelDescriptor::CoreRuntimeArgs{
                 static_cast<std::uint32_t>(ascending),  // Sort direction for bitonic properties
+                core_id * Wt_local,  // First width tile of this core's chunk (index tiles built in DEST)
             });
 
         core_id++;               // Advance to next width chunk

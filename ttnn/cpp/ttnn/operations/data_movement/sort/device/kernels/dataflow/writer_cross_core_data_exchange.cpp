@@ -51,6 +51,7 @@ void kernel_main() {
         // alongside values in TILE format, then pack_untilize's the result into
         // RM rows for the reader to drain. No need for an RM-specific index
         // generator here.
+#if !INDEX_TILES_ON_COMPUTE
         for (uint32_t w = 0; w < number_of_tiles_per_core; w++) {
             if (is_32_bit_data) {
                 dataflow_kernel_lib::generate_index_tile<uint32_t>(
@@ -60,6 +61,7 @@ void kernel_main() {
                     dfb::index_tensor, core_id * number_of_tiles_per_core + w);
             }
         }  // w loop
+#endif
 
 #ifdef IS_ROW_MAJOR
         {

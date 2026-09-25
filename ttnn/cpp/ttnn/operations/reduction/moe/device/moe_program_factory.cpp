@@ -138,15 +138,25 @@ ttnn::device_operation::ProgramArtifacts MoeProgramFactory::create_program_artif
         .data_format_metadata = scalar_df,
     });
 
+    // Index tiles: on Wormhole and Blackhole the compute kernel builds each one in DEST from the lane
+    // id (topk_fill_index_tile), so no index DFB exists and the reader generates nothing. Other
+    // architectures keep the reader's DM generator. Always defined for the kernels, as 0 or 1.
+    const tt::ARCH arch = input_tensor.device().arch();
+    const bool index_tiles_on_compute = arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE;
+    KernelSpec::CompilerOptions::Defines index_defines;
+    index_defines.insert({"INDEX_TILES_ON_COMPUTE", index_tiles_on_compute ? "1" : "0"});
+
     // TOP K DFBs
     // Two tiles are loaded in for topk_local_sort at a time, and we double buffer to avoid stalls, so allocate four
     // tiles of space. This buffer carries the indices that are created in the reader kernel.
-    dataflow_buffers.push_back(DataflowBufferSpec{
-        .unique_id = MOE_DFB_INDEX,
-        .entry_size = index_tile_size,
-        .num_entries = dfb_in_units,
-        .data_format_metadata = index_dfb_data_format,
-    });
+    if (!index_tiles_on_compute) {
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = MOE_DFB_INDEX,
+            .entry_size = index_tile_size,
+            .num_entries = dfb_in_units,
+            .data_format_metadata = index_dfb_data_format,
+        });
+    }
 
     // Single buffered dataflow buffer that holds the transposed input tiles.
     // The backing region is sized as Wt Float16_b tiles while an entry is one input-format tile, so
@@ -217,16 +227,12 @@ ttnn::device_operation::ProgramArtifacts MoeProgramFactory::create_program_artif
     KernelSpec reader{
         .unique_id = MOE_READER,
         .source = "ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/dataflow/reader_create_index_tensor.cpp",
+        .compiler_options = {.defines = index_defines},
         .dfb_bindings =
             {
                 DFBBinding{
                     .dfb_spec_name = MOE_DFB_INPUT,
                     .accessor_name = "input",
-                    .endpoint_type = DFBEndpointType::PRODUCER,
-                },
-                DFBBinding{
-                    .dfb_spec_name = MOE_DFB_INDEX,
-                    .accessor_name = "index",
                     .endpoint_type = DFBEndpointType::PRODUCER,
                 },
                 DFBBinding{
@@ -298,11 +304,6 @@ ttnn::device_operation::ProgramArtifacts MoeProgramFactory::create_program_artif
             .endpoint_type = DFBEndpointType::CONSUMER,
         },
         DFBBinding{
-            .dfb_spec_name = MOE_DFB_INDEX,
-            .accessor_name = "index",
-            .endpoint_type = DFBEndpointType::CONSUMER,
-        },
-        DFBBinding{
             .dfb_spec_name = MOE_DFB_OUT,
             .accessor_name = "out",
             .endpoint_type = DFBEndpointType::PRODUCER,
@@ -333,11 +334,19 @@ ttnn::device_operation::ProgramArtifacts MoeProgramFactory::create_program_artif
     bind_compute_scratch(MOE_DFB_CUR_SUM, "cur_sum");
     bind_compute_scratch(MOE_DFB_MASKED_INPUT, "masked_input");
 
+    if (!index_tiles_on_compute) {
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = MOE_DFB_INDEX,
+            .accessor_name = "index",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+    }
+
     KernelSpec compute{
         .unique_id = MOE_COMPUTE,
         .source = "ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/compute/moe.cpp",
         // A compute kernel is built at O3; the generic default is a level lower.
-        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+        .compiler_options = {.defines = index_defines, .opt_level = KernelBuildOptLevel::O3},
         .dfb_bindings = std::move(compute_dfb_bindings),
         .compile_time_args =
             {
@@ -350,6 +359,14 @@ ttnn::device_operation::ProgramArtifacts MoeProgramFactory::create_program_artif
             },
         .hw_config = ComputeHardwareConfig{},
     };
+
+    if (!index_tiles_on_compute) {
+        reader.dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = MOE_DFB_INDEX,
+            .accessor_name = "index",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+    }
 
     ProgramSpec spec{
         .name = "moe",

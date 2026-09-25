@@ -39,6 +39,8 @@ void prepare_uint16_fp32_dest_value_tiles_for_pack(uint32_t dst_tile_a, uint32_t
  * @param switch_dir If true, alternates the sorting direction for each tile pair to build a bitonic sequence.
  * @param ascending Initial sorting direction: true for ascending, false for descending.
  * @param end_phase Indicates the current phase of the bitonic sort (used by the local sort kernel).
+ * @param wt_base Global width tile of the first tile in this call (only read when the index tiles are
+ *        built in DEST, INDEX_TILES_ON_COMPUTE; index_dfb is then not consumed).
  *
  * The function assumes that the input and index buffers contain at least Wt tiles,
  * and that Wt is a multiple of 2. It reserves space in the output buffers, processes
@@ -59,7 +61,8 @@ FORCE_INLINE void sort_Wt_tiles_row_to_bitonic_sequence(
     const uint32_t Wt,
     const bool switch_dir,
     const bool ascending,
-    const int end_phase) {
+    const int end_phase,
+    const uint32_t wt_base = 0) {
     input_transposed_dfb.reserve_back(Wt);
     index_transposed_dfb.reserve_back(Wt);
 
@@ -68,7 +71,9 @@ FORCE_INLINE void sort_Wt_tiles_row_to_bitonic_sequence(
         tile_regs_acquire();
 
         input_dfb.wait_front(2);
+#if !INDEX_TILES_ON_COMPUTE
         index_dfb.wait_front(2);
+#endif
 
         // topk_local_sort sorts by columns - transpose input tiles for sorting
         reconfig_data_format_srca(input_dfb.get_id());
@@ -76,10 +81,17 @@ FORCE_INLINE void sort_Wt_tiles_row_to_bitonic_sequence(
         transpose_tile(input_dfb.get_id(), 0, 0);
         transpose_tile(input_dfb.get_id(), 1, 1);
 
+#if INDEX_TILES_ON_COMPUTE
+        // The index tile is a per-column constant, so its transpose is built in DEST directly;
+        // wt_base is this core's first width tile, so the indices are global.
+        ckernel::topk_fill_index_tile(2, (wt_base + wt) * 32);
+        ckernel::topk_fill_index_tile(3, (wt_base + wt + 1) * 32);
+#else
         reconfig_data_format_srca(index_dfb.get_id());
         transpose_init(index_dfb.get_id());
         transpose_tile(index_dfb.get_id(), 0, 2);
         transpose_tile(index_dfb.get_id(), 1, 3);
+#endif
 
         // llk_topk_sort -> inplace
         if constexpr (stable_sort) {
@@ -104,7 +116,9 @@ FORCE_INLINE void sort_Wt_tiles_row_to_bitonic_sequence(
         pack_tile(2, index_transposed_dfb.get_id());
         pack_tile(3, index_transposed_dfb.get_id());
         input_dfb.pop_front(2);
+#if !INDEX_TILES_ON_COMPUTE
         index_dfb.pop_front(2);
+#endif
 
         tile_regs_release();
 

@@ -42,11 +42,13 @@ void kernel_main() {
             noc.async_read(
                 s0, input_values_dfb, tile_bytes_input_values, {.page_id = tile_id_input_values}, {.offset_bytes = 0});
             tile_id_input_values++;
+#if !INDEX_TILES_ON_COMPUTE
             if constexpr (use_32bit_index) {
                 dataflow_kernel_lib::generate_index_tile<uint32_t>(dfb::index, j);
             } else {
                 dataflow_kernel_lib::generate_index_tile<uint16_t>(dfb::index, j);
             }
+#endif
             noc.async_read_barrier();
             input_values_dfb.push_back(onetile);
         }

@@ -129,7 +129,9 @@ void kernel_main() {
 
     // Dataflow buffer handles
     constexpr auto input_val_dfb_index = dfb::input;                  // Input values buffer
+#if !INDEX_TILES_ON_COMPUTE
     constexpr auto input_ind_dfb_index = dfb::index;                  // Input indices buffer
+#endif
     constexpr auto transposed_val_dfb_index = dfb::transposed_val;    // Transposed values buffer
     constexpr auto transposed_ind_dfb_index = dfb::transposed_ind;    // Transposed indices buffer
     constexpr auto result_prep_val_dfb_index = dfb::result_prep_val;  // Result preparation values buffer
@@ -153,12 +155,18 @@ void kernel_main() {
     constexpr bool network_stable = stable_sort && !rank_stamped;
 
     // Initialize kernel components
+#if INDEX_TILES_ON_COMPUTE
+    compute_kernel_hw_startup(input_val_dfb_index, transposed_ind_dfb_index, output_val_dfb_index);
+#else
     compute_kernel_hw_startup(input_val_dfb_index, input_ind_dfb_index, output_val_dfb_index);
+#endif
     ckernel::topk_tile_init<false, rank_stamped>();
     constexpr auto tie_order = ckernel::topk_tie_order_from_global_direction(largest != 0);
 
     DataflowBuffer input_val_dfb(input_val_dfb_index);
+#if !INDEX_TILES_ON_COMPUTE
     DataflowBuffer input_ind_dfb(input_ind_dfb_index);
+#endif
     DataflowBuffer transposed_val_dfb(transposed_val_dfb_index);
     DataflowBuffer transposed_ind_dfb(transposed_ind_dfb_index);
     DataflowBuffer result_prep_val_dfb(result_prep_val_dfb_index);
@@ -244,20 +252,33 @@ void kernel_main() {
 
         // Main processing loop: refactored into single loop to fit TRISC2 memory constraints
         uint32_t input_take = 2;  // First iteration processes 2 tiles, subsequent iterations process 1
+#if INDEX_TILES_ON_COMPUTE
+        uint32_t wt_pos = 0;  // Width position of the next index tile this kernel builds in DEST
+#endif
         for (uint32_t count = 1; count < Wt; count++) {
             // Transpose input tiles from WH to HW format and pack to intermediate buffers
 
             for (uint32_t i = 0; i < input_take; i++) {
                 input_val_dfb.wait_front(1);
+#if !INDEX_TILES_ON_COMPUTE
                 input_ind_dfb.wait_front(1);
+#endif
 
                 tile_regs_acquire();
                 read_cb_and_transpose(input_val_dfb_index, DST_VAL);  // Values: dest regs 0,1
+#if INDEX_TILES_ON_COMPUTE
+                // The index tile is a per-column constant, so its transpose is built in DEST directly.
+                ckernel::topk_fill_index_tile(DST_IND, wt_pos * 32);
+                wt_pos++;
+#else
                 read_cb_and_transpose(input_ind_dfb_index, DST_IND);  // Indices: dest regs 2,3
+#endif
                 tile_regs_commit();
 
                 input_val_dfb.pop_front(1);
+#if !INDEX_TILES_ON_COMPUTE
                 input_ind_dfb.pop_front(1);
+#endif
 
                 transposed_val_dfb.reserve_back(1);
                 transposed_ind_dfb.reserve_back(1);

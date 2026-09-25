@@ -122,8 +122,15 @@ void kernel_main() {
                             transpose_init(dfb::input_tensor);
 #endif
 
+                            // Stage 1 of the TILE path builds the index tiles in DEST (the pair's tile ids are
+                            // the global positions); nothing arrives through the index CB for it.
+                            const bool build_index_tiles =
+                                INDEX_TILES_ON_COMPUTE && (stage == 1 && sub == 1) && !is_row_major;
+
                             input_tensor_dfb.wait_front(2 * one_tile);
-                            index_tensor_dfb.wait_front(2 * one_tile);
+                            if (!build_index_tiles) {
+                                index_tensor_dfb.wait_front(2 * one_tile);
+                            }
 
                             tile_regs_acquire();
                             // For RM, tiles from tilize are always regular (non-transposed),
@@ -137,10 +144,15 @@ void kernel_main() {
                                 transpose_tile(dfb::input_tensor, 1, input_dest_end);
 
                                 // Process index tiles
-                                reconfig_data_format_srca(dfb::index_tensor);
-                                transpose_init(dfb::index_tensor);
-                                transpose_tile(dfb::index_tensor, 0, index_dest_start);
-                                transpose_tile(dfb::index_tensor, 1, index_dest_end);
+                                if (build_index_tiles) {
+                                    ckernel::topk_fill_index_tile(index_dest_start, i * 32);
+                                    ckernel::topk_fill_index_tile(index_dest_end, j * 32);
+                                } else {
+                                    reconfig_data_format_srca(dfb::index_tensor);
+                                    transpose_init(dfb::index_tensor);
+                                    transpose_tile(dfb::index_tensor, 0, index_dest_start);
+                                    transpose_tile(dfb::index_tensor, 1, index_dest_end);
+                                }
                             } else {
                                 // Intermediate step - tiles are already transposed
                                 // Process value tiles
@@ -201,7 +213,9 @@ void kernel_main() {
                             tile_regs_commit();
 
                             input_tensor_dfb.pop_front(2 * one_tile);
-                            index_tensor_dfb.pop_front(2 * one_tile);
+                            if (!build_index_tiles) {
+                                index_tensor_dfb.pop_front(2 * one_tile);
+                            }
 
                             // For RM: always transpose back so the packed tile is in
                             // regular (non-transposed) format, which pack_untilize_block

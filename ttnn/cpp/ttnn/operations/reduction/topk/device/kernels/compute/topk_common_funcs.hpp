@@ -34,10 +34,13 @@ void process_and_sort_tiles(
     std::uint32_t Wt,
     bool switch_dir,
     bool& ascending,
-    int end_phase) {
+    int end_phase,
+    std::uint32_t wt_base = 0) {
     static_assert(!(fused && stable_sort), "fused and comparator-stable modes are mutually exclusive");
     DataflowBuffer input_dfb(static_cast<uint16_t>(input_dfb_index));
+#if !INDEX_TILES_ON_COMPUTE
     DataflowBuffer index_dfb(static_cast<uint16_t>(index_dfb_index));
+#endif
     DataflowBuffer input_transposed_dfb(static_cast<uint16_t>(input_transposed_dfb_index));
     DataflowBuffer index_transposed_dfb(static_cast<uint16_t>(index_transposed_dfb_index));
 
@@ -52,7 +55,9 @@ void process_and_sort_tiles(
         // for the last iteration, we only need to wait for 1 tile if Wt is odd, otherwise we wait for 2 tiles
         std::uint32_t tiles_to_wait = ((Wt % 2 != 0) && (wt + 2 > Wt)) ? 1 : 2;
         input_dfb.wait_front(static_cast<uint16_t>(tiles_to_wait));
+#if !INDEX_TILES_ON_COMPUTE
         index_dfb.wait_front(static_cast<uint16_t>(tiles_to_wait));
+#endif
 
         tile_regs_acquire();
         reconfig_data_format_srca(input_dfb_index);
@@ -61,12 +66,21 @@ void process_and_sort_tiles(
         if (tiles_to_wait == 2) {
             transpose_tile(input_dfb_index, 1, 1);
         }
+#if INDEX_TILES_ON_COMPUTE
+        // The index tile is a per-column constant, so its transpose is built in DEST directly;
+        // wt_base is this core's first width tile, so the indices are global.
+        ckernel::topk_fill_index_tile(2, (wt_base + wt) * 32);
+        if (tiles_to_wait == 2) {
+            ckernel::topk_fill_index_tile(3, (wt_base + wt + 1) * 32);
+        }
+#else
         reconfig_data_format_srca(index_dfb_index);
         transpose_init(index_dfb_index);
         transpose_tile(index_dfb_index, 0, 2);
         if (tiles_to_wait == 2) {
             transpose_tile(index_dfb_index, 1, 3);
         }
+#endif
         if constexpr (fused) {
             // Pack the slab into [bf16|u16] keys once, with the GLOBAL polarity; DEST 2,3 are dead
             // afterwards and the network below runs unstable on the packed words.
@@ -83,7 +97,9 @@ void process_and_sort_tiles(
         tile_regs_commit();
 
         input_dfb.pop_front(static_cast<uint16_t>(tiles_to_wait));
+#if !INDEX_TILES_ON_COMPUTE
         index_dfb.pop_front(static_cast<uint16_t>(tiles_to_wait));
+#endif
 
         tile_regs_wait();
         // pack value (or packed-key) tiles into cb_intermed0
