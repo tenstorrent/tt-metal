@@ -61,8 +61,12 @@ def _read_reference(device, pipeline, path, transcript, x_vector=False):
     if pipeline is not None:
         pipeline.release()
     started = time.time()
-    reference = build_clone_reference(device, clip, transcript)
-    print(f"  VOICE: {reference.frames} frames, {reference.frames / 12.5:.1f} s in {time.time() - started:.1f} s")
+    reference = build_clone_reference(device, clip, transcript, x_vector_only=x_vector)
+    took = time.time() - started
+    if x_vector:
+        print(f"  VOICE: the clip's speaker vector alone (x-vector) in {took:.1f} s")
+    else:
+        print(f"  VOICE: {reference.frames} frames, {reference.frames / 12.5:.1f} s in {took:.1f} s")
     return clip, reference
 
 
