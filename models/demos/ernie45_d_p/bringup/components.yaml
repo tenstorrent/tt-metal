@@ -135,6 +135,12 @@ findings:
       offset_cumsum's all_gather and dispatch/combine's fabric-neighbour setup assumed more than one. Patched in ttnn host code
       (skip them on a 1-device axis; the kernels' existing no-fabric build is used). Cost: the kernel packs expert
       activations to bf8, so final-hidden PCC goes 0.9984 -> 0.9965 and top-1 97.7% -> 95.7% (top-5 stays 100%).
+  - tag: PERF
+    title: SDPA config A (HiFi2, fp32 acc off, approx exp, q256/k512) - 55k TTFT 10.9 s -> 4.4 s
+    text: >-
+      fp32_dest_acc_en=True disables SDPA's streaming kernel on Blackhole. With it off and HiFi2, the 50k->55k chunk's
+      SDPA drops 1328 -> 203 ms and the chunk 1570 -> 445 ms. Accuracy is unchanged (final 0.9963, KV 0.9918, top-5 100%).
+      Enabled with ERNIE_SDPA_CFG=A (P3.4). A cold first run compiles one SDPA program per chunk offset (about 1.5 s each).
   - tag: TTNN-GAP
     title: ttnn.scatter has no fp32 TILE path
     text: The dense routing matrix is scattered in bf16. Selection and renormalization stay fp32 (99.9% expert agreement).

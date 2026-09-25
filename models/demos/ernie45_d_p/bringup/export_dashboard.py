@@ -30,6 +30,7 @@ TRAILS = [
     ("P2.12", "pcc_layer_L", "TT 8k->8k"),
     ("P2.13", "pcc_layer_L", "TT 50k->55k (b)"),
     ("P2.14", "pcc_layer_L", "TT 55k@5k (a)"),
+    ("P3.4", "pcc_layer_L", "TT 55k@5k, SDPA cfg A"),
 ]
 
 
@@ -230,10 +231,14 @@ PROFILE_STEPS = [
 
 
 def load_profile() -> dict | None:
-    prof_p, rout_p = M.RESULTS_DIR / "P3.3_profile.json", M.RESULTS_DIR / "P3.3_routing.json"
-    if not prof_p.exists():
+    # Latest profiled configuration wins (P3.4 = SDPA config A); the P3.3 baseline is kept for comparison.
+    rout_p = M.RESULTS_DIR / "P3.3_routing.json"
+    prof_p = next((c for c in (M.RESULTS_DIR / f"{t}_profile.json" for t in ("P3.4", "P3.3")) if c.exists()), None)
+    if prof_p is None:
         return None
     prof = json.loads(prof_p.read_text())
+    base_p = M.RESULTS_DIR / "P3.3_profile.json"
+    base = json.loads(base_p.read_text()) if (base_p.exists() and base_p != prof_p) else None
     rout = json.loads(rout_p.read_text()) if rout_p.exists() else {}
     rows = {int(k): v for k, v in rout.get("routed_rows_per_chip_total", {}).items()}
     steps = []
@@ -262,13 +267,31 @@ def load_profile() -> dict | None:
                 programs=prof["programs"].get(key, 0),
             )
         )
+    sd = prof.get("sdpa") or {}
+    cfg = (
+        f"SDPA {sd.get('fidelity')}, fp32 acc {'on' if sd.get('fp32') else 'off'}, "
+        f"{'approx' if sd.get('exp_approx') else 'exact'} exp, q{sd.get('q')}/k{sd.get('k')}"
+        if sd
+        else "SDPA base config (HiFi4, fp32 acc on, exact exp, q256/k256)"
+    )
+    cmp = ""
+    if base:
+        cmp = (
+            f" Before (P3.3, HiFi4 + fp32 acc): chunk {base['wall_ms']:.0f} ms, SDPA {base['sections_ms'].get('attn.sdpa', 0):.0f} ms;"
+            f" now chunk {prof['wall_ms']:.0f} ms, SDPA {prof['sections_ms'].get('attn.sdpa', 0):.0f} ms."
+        )
+        for st in steps:
+            if st["key"] in base["sections_ms"]:
+                st["before_ms"] = round(base["sections_ms"][st["key"]], 2)
     return {
         "wall_ms": round(prof["wall_ms"], 1),
         "steps": steps,
         "routing": rout,
-        "note": "Device kernel time per phase, summed over the 28 layers of one 5,120-token chunk at positions "
-        "51,200-56,319 (golden 50k KV prefix loaded). Per chip = that chip's own programs; the bar uses the "
-        "slowest chip per phase. Measured with the device profiler (P3.3).",
+        "config": cfg,
+        "source": prof_p.name,
+        "note": f"{cfg} ({prof_p.stem}).{cmp} Device kernel time per phase, summed over the 28 layers of one 5,120-token "
+        "chunk at positions 51,200-56,319 (golden 50k KV prefix loaded). Per chip = that chip's own programs; the bar "
+        "uses the slowest chip per phase. Measured with the device profiler.",
     }
 
 
@@ -360,7 +383,7 @@ def main():
                 ),
             }
             for tid, _, label in TRAILS
-            if tid.startswith("P2") and M.load(tid)
+            if tid.startswith(("P2", "P3")) and M.load(tid)
         ],
         "box": {"name": "Blackhole QuietBox", "chips": "4x p150b", "mesh": "1x4 (FABRIC_1D_RING)"},
     }
