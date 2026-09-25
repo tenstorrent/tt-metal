@@ -1,0 +1,1 @@
+{"block": "sdpa", "variant": "sliding", "mesh": "1x4", "pcc": 0.99926, "passed": true, "note": "SP=1 composed: cache tail + front-padded Q + local windowed SDPA", "at": "2026-09-24T18:34:41"}

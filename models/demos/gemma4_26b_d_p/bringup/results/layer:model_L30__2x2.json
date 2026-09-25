@@ -1,0 +1,1 @@
+{"block": "layer:model_L30", "variant": null, "mesh": "2x2", "pcc": 0.9956331970426876, "passed": false, "note": "8192 tokens, 2x4096 chunks; top1 match; worst layer PCC 0.8947", "at": "2026-09-24T19:15:55"}

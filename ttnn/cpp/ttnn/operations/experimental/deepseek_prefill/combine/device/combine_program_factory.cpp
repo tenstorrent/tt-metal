@@ -170,8 +170,13 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
 
+    // A dispatch axis of extent 1 (e.g. EP over the columns of a 1xN mesh, where every token's experts on this
+    // column live on this chip) routes everything locally: no fabric neighbours, all directions off.
+    const bool single_chip_axis =
+        operation_attributes.axis.has_value() && mesh_view.shape()[operation_attributes.axis.value()] == 1;
     const auto [neighbors, directions] =
-        ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, operation_attributes.axis);
+        single_chip_axis ? std::pair<std::vector<ttnn::MeshCoordinate>, std::array<bool, 4>>{{}, {false, false, false, false}}
+                         : ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, operation_attributes.axis);
 
     // FABRIC_2D uses the portable RoutingPlaneConnectionManager (one connection per required physical
     // first-hop direction) for multi-hop combine-axis forwarding; FABRIC_1D keeps the legacy

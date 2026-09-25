@@ -24,7 +24,8 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         .value("Silu", RoutedExpertActivation::Silu)
         .value("SwiGluOai", RoutedExpertActivation::SwiGluOai)
         .value("SituGlu", RoutedExpertActivation::SituGlu)
-        .value("ClampedSiluGlu", RoutedExpertActivation::ClampedSiluGlu);
+        .value("ClampedSiluGlu", RoutedExpertActivation::ClampedSiluGlu)
+        .value("GeluTanh", RoutedExpertActivation::GeluTanh);
 
     // The worker rectangle this op fixes regardless of device grid. Exported so a hybrid forward can
     // pass moe_fused_swiglu the same grid -- that op defaults to the whole device instead -- without
@@ -61,8 +62,9 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional)
             activation (ttnn.RoutedExpertActivation, optional):
                 Silu (default, DeepSeek), SwiGluOai (clamped, MiniMax-M3 / gpt-oss),
-                SituGlu (tanh-capped, Kimi K3; Blackhole only), or ClampedSiluGlu
-                (silu(min(gate,10)) * clamp(up,+/-10), DeepSeek V4; Blackhole only).
+                SituGlu (tanh-capped, Kimi K3; Blackhole only), ClampedSiluGlu
+                (silu(min(gate,10)) * clamp(up,+/-10), DeepSeek V4; Blackhole only),
+                or GeluTanh (gelu_tanh(gate) * up, Gemma-4).
 
         Each per-expert FFN picks its chunk_M_tiles / per_core_M / num_chunks at
         RUNTIME from the device-resident token count, so there is no expected-token

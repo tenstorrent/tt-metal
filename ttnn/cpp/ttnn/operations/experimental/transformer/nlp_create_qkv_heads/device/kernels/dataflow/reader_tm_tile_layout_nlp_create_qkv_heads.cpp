@@ -26,7 +26,6 @@ void kernel_main() {
     constexpr uint32_t head_tiles = get_arg(args::head_tiles);
     constexpr uint32_t seq_tiles = get_arg(args::seq_tiles);
 
-    constexpr uint32_t onetile = 1;
     const auto s0 = TensorAccessor(tensor::input_q);
 
 #ifdef READ_FROM_INPUT_TENSOR_KV
@@ -63,63 +62,50 @@ void kernel_main() {
             }
         }
     } else {
+        // One head (head_tiles contiguous tiles of a row block) per DFB transaction: issue all of the
+        // head's reads, one barrier, push. The DFBs hold two heads, so the next head's reads overlap the
+        // writer draining the previous one (a per-tile barrier made this path NoC-latency bound).
+        const auto read_head = [&](const auto& src, uint32_t& tile_id, DataflowBuffer& dfb, uint32_t tile_bytes) {
+            dfb.reserve_back(head_tiles);
+            uint32_t l1_write_addr = dfb.get_write_ptr();
+            for (uint32_t i = 0; i < head_tiles; i++) {
+                noc.async_read(src, CoreLocalMem<uint32_t>(l1_write_addr), tile_bytes, {.page_id = tile_id}, {});
+                l1_write_addr += tile_bytes;
+                tile_id++;
+            }
+            noc.async_read_barrier();
+            dfb.push_back(head_tiles);
+        };
+        static_assert(q_num_tiles % head_tiles == 0 && kv_num_tiles % head_tiles == 0);
+#ifdef READ_FROM_INPUT_TENSOR_KV
+#define KV_SRC s1
+#define KV_TILE_ID in1_tensor_tile_id
+#else
+#define KV_SRC s0
+#define KV_TILE_ID in0_tensor_tile_id
+#endif
         for (uint32_t block = 0; block < num_blocks; block++) {
             // Q
-            for (uint32_t i = 0; i < q_num_tiles; i++) {
-                dfb_qv.reserve_back(onetile);
-                uint32_t l1_write_addr = dfb_qv.get_write_ptr();
-                noc.async_read(
-                    s0, CoreLocalMem<uint32_t>(l1_write_addr), tile_bytes_qv, {.page_id = in0_tensor_tile_id}, {});
-                noc.async_read_barrier();
-                dfb_qv.push_back(onetile);
-                in0_tensor_tile_id++;
+            for (uint32_t h = 0; h < q_num_tiles / head_tiles; h++) {
+                read_head(s0, in0_tensor_tile_id, dfb_qv, tile_bytes_qv);
             }
-
             // K
-            for (uint32_t i = 0; i < kv_num_tiles; i++) {
-                dfb_k.reserve_back(onetile);
-                uint32_t l1_write_addr = dfb_k.get_write_ptr();
-#ifdef READ_FROM_INPUT_TENSOR_KV
-                noc.async_read(
-                    s1, CoreLocalMem<uint32_t>(l1_write_addr), tile_bytes_k, {.page_id = in1_tensor_tile_id}, {});
-                in1_tensor_tile_id++;
-#else
-                noc.async_read(
-                    s0, CoreLocalMem<uint32_t>(l1_write_addr), tile_bytes_k, {.page_id = in0_tensor_tile_id}, {});
-                in0_tensor_tile_id++;
-#endif
-                noc.async_read_barrier();
-                dfb_k.push_back(onetile);
+            for (uint32_t h = 0; h < kv_num_tiles / head_tiles; h++) {
+                read_head(KV_SRC, KV_TILE_ID, dfb_k, tile_bytes_k);
             }
-
-            // V
 #ifdef KV_TIED
             // K and V come from the same columns (one projection, tied), so step back over the K tiles
             // just read instead of walking past them. The V loop below advances by the same count,
             // leaving the running id exactly one block width ahead, which is what the next block
-            // expects. Rewind whichever cursor the V loop actually reads from: rewinding the other one
-            // ties nothing and leaves it short by kv_num_tiles every block.
-#ifdef READ_FROM_INPUT_TENSOR_KV
-            in1_tensor_tile_id -= kv_num_tiles;
-#else
-            in0_tensor_tile_id -= kv_num_tiles;
+            // expects. Rewind whichever cursor the V loop actually reads from.
+            KV_TILE_ID -= kv_num_tiles;
 #endif
-#endif
-            for (uint32_t i = 0; i < kv_num_tiles; i++) {
-                dfb_qv.reserve_back(onetile);
-                uint32_t l1_write_addr = dfb_qv.get_write_ptr();
-#ifdef READ_FROM_INPUT_TENSOR_KV
-                noc.async_read(
-                    s1, CoreLocalMem<uint32_t>(l1_write_addr), tile_bytes_qv, {.page_id = in1_tensor_tile_id}, {});
-                in1_tensor_tile_id++;
-#else
-                noc.async_read(
-                    s0, CoreLocalMem<uint32_t>(l1_write_addr), tile_bytes_qv, {.page_id = in0_tensor_tile_id}, {});
-                in0_tensor_tile_id++;
-#endif
-                noc.async_read_barrier();
-                dfb_qv.push_back(onetile);
+            // V
+            for (uint32_t h = 0; h < kv_num_tiles / head_tiles; h++) {
+                read_head(KV_SRC, KV_TILE_ID, dfb_qv, tile_bytes_qv);
             }
         }
+#undef KV_SRC
+#undef KV_TILE_ID
     }
 }

@@ -1,0 +1,32 @@
+# Producer manifest: MiMo-V2 Gate 1 WITH KV PCC — 2 requests x 2 chunks into slots 0/1, then each slot's KV is read
+# back through the published KV chunk table (read_dram_umd) and PCC'd vs the HF golden trace.
+# Pair with mimo_v2_binding_2x2_mock.yaml.
+#   python -m models.demos.common.prefill.runners.prefill_producer --manifest <this file>
+transport:
+  sp: 2
+  tp: 2
+  h2d_service_id: mimo_v2_prefill
+  connect_timeout_s: 1800
+
+model:
+  variant: mimo_v2_d_p
+  num_layers: 6
+  max_seq_len: 16384
+  chunk_size: 4096
+
+workload:
+  num_users: 2
+  slot_prompts:
+    - /localdev/mstaletovic/mimo_golden/prompt8k
+    - /localdev/mstaletovic/mimo_golden/prompt8k
+  chunks: "2"
+  max_requests: 2
+  interleave: round_robin
+  check_pcc: true
+
+migration:
+  issue: false
+
+env:
+  PREFILL_MIGRATION_TABLE_PATH: /tmp/mimo_v2_prefill_kv_chunk_table.pb
+  PREFILL_MIGRATION_DEVICE_MAP_PATH: /tmp/mimo_v2_prefill_kv_device_map.json

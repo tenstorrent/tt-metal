@@ -1,0 +1,1 @@
+{"block": "layer:attention_full", "variant": null, "mesh": "1x4", "pcc": 0.99975, "passed": true, "note": "real weights L5, 2x4096 chunks vs torch ref", "at": "2026-09-24T18:46:01"}

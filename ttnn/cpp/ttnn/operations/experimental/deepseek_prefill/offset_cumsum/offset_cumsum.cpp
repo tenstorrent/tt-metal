@@ -23,7 +23,11 @@ std::array<ttnn::Tensor, 3> offset_cumsum(
 
     auto reshaped = ttnn::reshape(input_tensor, ttnn::Shape({1, n_routed_experts}));
 
-    auto gathered = ttnn::all_gather(
+    // A dispatch axis of extent 1 (e.g. a 1xN mesh) has nothing to gather: all_gather rejects
+    // num_devices == 1, and the single local histogram already is the gathered [1, E] tensor.
+    const auto* mesh_device = input_tensor.device();
+    const uint32_t axis_extent = mesh_device->shape()[cluster_axis];
+    auto gathered = axis_extent == 1 ? ttnn::to_memory_config(reshaped, memory_config) : ttnn::all_gather(
         reshaped,
         /*dim=*/0,
         /*cluster_axis=*/cluster_axis,

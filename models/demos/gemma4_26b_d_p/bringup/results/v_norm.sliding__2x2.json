@@ -1,0 +1,1 @@
+{"block": "v_norm", "variant": "sliding", "mesh": "2x2", "pcc": 0.99969, "passed": true, "note": "validated inside the attention layer test", "at": "2026-09-24T18:46:01"}

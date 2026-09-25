@@ -85,6 +85,19 @@
 #define FUSED_BINARY_ACT 1
 #endif
 
+// Unary gate activation for the non-fused-binary path: SiLU (default) or GELU-tanh (Gemma-4).
+#if defined(GATE_GELU_TANH) && defined(FUSED_BINARY_ACT)
+#error "GATE_GELU_TANH is a unary gate activation; it cannot combine with a fused binary activation"
+#endif
+#ifdef GATE_GELU_TANH
+#include "api/compute/eltwise_unary/gelu.h"
+#define GATE_ACT_INIT() gelu_tanh_tile_init()
+#define GATE_ACT_TILE(i) gelu_tanh_tile(i)
+#else
+#define GATE_ACT_INIT() silu_tile_init()
+#define GATE_ACT_TILE(i) silu_tile(i)
+#endif
+
 #ifdef SWIGLU_OAI
 // Computes (clamp(up,±L)+1) * clamp(gate,max=L) * sigmoid(alpha*clamp(gate,max=L)).
 // Default SwiGLUConfigGPTOSS (alpha=1.702, clamp_limit=7.0) matches M3's config.json.
@@ -651,7 +664,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
         partials_gu_cb.pop_front(out_subblock_num_tiles);
         // MATH-thread SFPU pass: apply silu to each dst tile before pack.
         for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
-            silu_tile(i);
+            GATE_ACT_TILE(i);
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -1010,7 +1023,7 @@ void kernel_main() {
     // vConstFloatPrgm0 = 2.0f, which nothing between here and the tile calls reprograms.
     BINARY_ACT_INIT();
 #else
-    silu_tile_init();
+    GATE_ACT_INIT();
 #endif
 
 

@@ -57,6 +57,8 @@ enum class RoutedExpertActivation : uint8_t {
     SituGlu = 2,
     // clamped SiLU-GLU: silu(min(gate,L)) * clamp(up,±L)  (DeepSeek V4)
     ClampedSiluGlu = 3,
+    // GELU-tanh GLU: gelu_tanh(gate) * up  (Gemma-4 MoE, gelu_pytorch_tanh)
+    GeluTanh = 4,
 };
 
 // Attributes (the constants known at host time).

@@ -1,0 +1,345 @@
+<title>Gemma-4 26B Prefill Bring-up</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --bg:#F2F4F1; --surface:#FFFFFF; --surface-2:#E9ECE8; --ink:#17211D; --muted:#5A6762; --line:#D3D9D4; --accent:#2F5D8A;
+  --s-todo:#B3BBB6; --s-reference:#9DB3D6; --s-ref_tested:#4A78C0; --s-ttnn_reuse:#2E9585; --s-ttnn_compose:#C99A1C;
+  --s-missing_op:#D2622A; --s-ttnn_pass:#2F9447; --s-ttnn_fail:#C33B35; --s-glue:#E1E5E1;
+  --node-ink:#FFFFFF; --edge:#9AA59F;
+  --f-ui:"Archivo",system-ui,-apple-system,"Segoe UI",sans-serif; --f-mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark; --bg:#0F1412; --surface:#171E1B; --surface-2:#1F2825; --ink:#E4EAE6; --muted:#93A19B; --line:#2C3833; --accent:#7FA8D6;
+    --s-todo:#56605B; --s-reference:#5D739A; --s-ref_tested:#3E68AE; --s-ttnn_reuse:#23806F; --s-ttnn_compose:#A98114;
+    --s-missing_op:#B9531F; --s-ttnn_pass:#2A8240; --s-ttnn_fail:#AE322D; --s-glue:#2A3430; --edge:#5B6862;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark; --bg:#0F1412; --surface:#171E1B; --surface-2:#1F2825; --ink:#E4EAE6; --muted:#93A19B; --line:#2C3833; --accent:#7FA8D6;
+  --s-todo:#56605B; --s-reference:#5D739A; --s-ref_tested:#3E68AE; --s-ttnn_reuse:#23806F; --s-ttnn_compose:#A98114;
+  --s-missing_op:#B9531F; --s-ttnn_pass:#2A8240; --s-ttnn_fail:#AE322D; --s-glue:#2A3430; --edge:#5B6862;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font:14px/1.5 var(--f-ui);margin:0}
+.wrap{max-width:1360px;margin:0 auto;padding-inline:20px;padding-block:20px 48px;display:flex;flex-direction:column;gap:20px}
+h1{font-size:22px;font-weight:700;letter-spacing:-.01em;margin:0;text-wrap:balance}
+h2{font-size:13px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:0 0 10px}
+.mono{font-family:var(--f-mono);font-size:12px}
+.muted{color:var(--muted)}
+header{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:8px 20px}
+header .sub{color:var(--muted);font-size:13px}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:14px 16px}
+/* phases */
+.phases{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px}
+.ph{display:flex;flex-direction:column;gap:4px;padding:8px 8px 10px;border-radius:6px;background:var(--surface-2);min-width:0}
+.ph .bar{height:4px;border-radius:2px;background:var(--s-todo)}
+.ph[data-st="done"] .bar{background:var(--s-ttnn_pass)}
+.ph[data-st="in_progress"] .bar{background:linear-gradient(90deg,var(--s-ttnn_compose) 50%,var(--s-todo) 50%)}
+.ph .n{font-family:var(--f-mono);font-size:11px;color:var(--muted)}
+.ph .t{font-size:12.5px;font-weight:600;line-height:1.25}
+.ph .note{font-size:11.5px;color:var(--muted);line-height:1.35}
+@media (max-width:900px){.phases{grid-template-columns:repeat(3,minmax(0,1fr))}}
+/* summary */
+.summary{display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center}
+.stack{display:flex;height:10px;border-radius:5px;overflow:hidden;flex:1 1 260px;min-width:200px;background:var(--surface-2)}
+.stack span{display:block;height:100%}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px}
+.lg{display:inline-flex;align-items:center;gap:6px;font-size:12.5px}
+.sw{width:10px;height:10px;border-radius:3px;display:inline-block;flex:none}
+.lg b{font-family:var(--f-mono);font-weight:500;font-variant-numeric:tabular-nums}
+/* model strip */
+.strip{display:grid;grid-template-columns:auto repeat(30,minmax(0,1fr)) auto;gap:3px;align-items:stretch}
+.cell{height:34px;border-radius:4px;display:flex;align-items:flex-end;justify-content:center;font-family:var(--f-mono);font-size:10px;padding-bottom:3px;color:var(--node-ink);cursor:pointer;border:0}
+.cell.sl{background:var(--s-ref_tested)} .cell.fl{background:var(--accent);height:34px;outline:2px solid var(--ink);outline-offset:-2px}
+.cell.io{background:var(--surface-2);color:var(--ink);padding-inline:6px;font-size:11px}
+.cell:focus-visible,.tab:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.strip-note{font-size:12px;color:var(--muted);margin-top:6px}
+@media (max-width:700px){.strip{grid-template-columns:repeat(16,minmax(0,1fr))}.cell.io{grid-column:span 16}}
+/* main */
+.main{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:16px;align-items:start}
+@media (max-width:1000px){.main{grid-template-columns:1fr}}
+.toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;margin-bottom:10px}
+.tabs{display:inline-flex;background:var(--surface-2);border-radius:6px;padding:2px}
+.tab{border:0;background:transparent;color:var(--muted);font:500 12.5px var(--f-ui);padding:5px 10px;border-radius:5px;cursor:pointer}
+.tab[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:0 0 0 1px var(--line)}
+.graph-box{overflow:auto;max-height:78vh;border-top:1px solid var(--line);padding-top:8px}
+svg text{font-family:var(--f-ui)}
+.gnode{cursor:pointer}
+.gnode rect{stroke:transparent;stroke-width:2}
+.gnode.sel rect{stroke:var(--ink)}
+.gnode:hover rect{filter:brightness(1.07)}
+.detail h3{margin:0 0 2px;font-size:16px;text-wrap:balance}
+.detail dl{display:grid;grid-template-columns:92px minmax(0,1fr);gap:6px 10px;margin:12px 0 0}
+.detail dt{color:var(--muted);font-size:12px}
+.detail dd{margin:0;font-size:13px;overflow-wrap:anywhere}
+.pill{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:2px 9px 2px 7px;font-size:12px;font-weight:600;color:var(--node-ink)}
+.chips{display:flex;flex-wrap:wrap;gap:4px}
+.chip{font-family:var(--f-mono);font-size:11px;background:var(--surface-2);border-radius:4px;padding:1px 6px}
+.gap{border-left:3px solid var(--s-missing_op);padding:6px 10px;background:var(--surface-2);border-radius:0 6px 6px 0;font-size:12.5px;margin-top:12px}
+table.dev{border-collapse:collapse;width:100%;font-size:12.5px}
+table.dev td,table.dev th{padding:4px 6px;border-bottom:1px solid var(--line);text-align:left}
+table.dev th{font-weight:600;color:var(--muted);font-size:11.5px}
+.num{font-family:var(--f-mono);font-variant-numeric:tabular-nums}
+/* layers + ops */
+.two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+@media (max-width:900px){.two{grid-template-columns:1fr}}
+.layer{padding:10px 0;border-bottom:1px solid var(--line)}
+.layer:last-child{border-bottom:0}
+.layer .hd{display:flex;justify-content:space-between;gap:10px;font-weight:600;font-size:13.5px;margin-bottom:6px}
+.bchips{display:flex;flex-wrap:wrap;gap:4px}
+.bchip{border:0;border-radius:4px;padding:3px 7px;font:500 11.5px var(--f-mono);color:var(--node-ink);cursor:pointer}
+.op{padding:10px 0;border-bottom:1px solid var(--line);display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 10px}
+.op:last-child{border-bottom:0}
+.op .k{font:500 10.5px var(--f-mono);text-transform:uppercase;letter-spacing:.04em;padding:2px 6px;border-radius:4px;background:var(--surface-2);align-self:start}
+.op .ti{font-weight:600;font-size:13px}
+.op .de{grid-column:2;font-size:12.5px;color:var(--muted)}
+.empty{padding:30px;text-align:center;color:var(--muted)}
+.log{font-size:12.5px;display:flex;flex-direction:column;gap:4px;max-height:220px;overflow:auto}
+.log .at{font-family:var(--f-mono);font-size:11px;color:var(--muted);margin-right:8px}
+@media (prefers-reduced-motion:no-preference){.gnode rect{transition:filter .15s}}
+</style>
+
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Gemma-4 26B-A4B · Disaggregated Chunked Prefill</h1>
+      <div class="sub">Blackhole QuietBox · meshes <span class="mono" id="meshes">2x2 · 1x4 · 4x1</span> (SP rows × TP cols, EP over all chips) · block-cyclic KV</div>
+    </div>
+    <div class="sub mono" id="updated">connecting…</div>
+  </header>
+
+  <section class="panel" aria-label="Phases">
+    <h2>Bring-up phases</h2>
+    <div class="phases" id="phases"></div>
+  </section>
+
+  <section class="panel" aria-label="Block status">
+    <h2>Block status</h2>
+    <div class="summary"><div class="stack" id="stack"></div><div class="legend" id="legend"></div></div>
+  </section>
+
+  <section class="panel" aria-label="Model stack">
+    <h2>Model stack · 30 decoder layers</h2>
+    <div class="strip" id="strip"></div>
+    <div class="strip-note">Pattern: 5 sliding-window (1024) layers, then 1 full-attention layer, repeated 5 times. Click a layer to open its graph.</div>
+  </section>
+
+  <div class="main">
+    <section class="panel" aria-label="Layer graph">
+      <div class="toolbar">
+        <h2 style="margin:0" id="gtitle">Decoder layer graph</h2>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <div class="tabs" role="group" aria-label="Layer type">
+            <button class="tab" id="t-sliding" aria-pressed="true">Sliding layer</button>
+            <button class="tab" id="t-full" aria-pressed="false">Full layer</button>
+          </div>
+          <div class="tabs" role="group" aria-label="Granularity">
+            <button class="tab" id="t-blocks" aria-pressed="true">Blocks</button>
+            <button class="tab" id="t-ops" aria-pressed="false">fx ops</button>
+          </div>
+        </div>
+      </div>
+      <div class="graph-box" id="graph"><div class="empty">Loading the fx graph…</div></div>
+    </section>
+    <aside class="panel detail" id="detail" aria-live="polite"><div class="empty">Select a block to see its torch reference, TTNN plan and device results.</div></aside>
+  </div>
+
+  <div class="two">
+    <section class="panel" aria-label="Layers"><h2>Layers</h2><div id="layers"></div></section>
+    <section class="panel" aria-label="Ops"><h2>Op gaps · generation targets</h2><div id="ops"></div></section>
+  </div>
+  <section class="panel" aria-label="Activity"><h2>Activity</h2><div class="log" id="log"><span class="muted">No activity recorded yet.</span></div></section>
+</div>
+
+<script>
+const STATUS = [
+  ["todo","Not started"],["reference","Torch ref"],["ref_tested","Torch tested"],["ttnn_reuse","TTNN reuse"],
+  ["ttnn_compose","TTNN composed"],["missing_op","Missing op"],["ttnn_pass","Device pass"],["ttnn_fail","Device fail"]];
+const LABEL = Object.fromEntries(STATUS);
+const S = {meta:null, blocks:{}, graphs:{}, ops:[], log:[], variant:"sliding", gran:"blocks", sel:null};
+const $ = id => document.getElementById(id);
+const col = st => `var(--s-${st||"todo"})`;
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+function renderPhases(){
+  const ph = S.meta?.phases || [];
+  $("phases").innerHTML = ph.map(p => `<div class="ph" data-st="${esc(p.status)}" title="${esc(p.note)}">
+    <div class="bar"></div><div class="n">phase ${p.n} · ${esc(p.status.replace("_"," "))}</div><div class="t">${esc(p.name)}</div>
+    ${p.note ? `<div class="note">${esc(p.note)}</div>`:""}</div>`).join("");
+  if (S.meta?.meshes) $("meshes").textContent = S.meta.meshes.join(" · ");
+  if (S.meta?.updated) $("updated").textContent = "updated " + S.meta.updated.replace("T"," ");
+}
+
+function renderSummary(){
+  const bs = Object.values(S.blocks), n = bs.length || 1;
+  const cnt = Object.fromEntries(STATUS.map(([k]) => [k, bs.filter(b => b.status === k).length]));
+  $("stack").innerHTML = STATUS.filter(([k]) => cnt[k]).map(([k,l]) => `<span style="width:${100*cnt[k]/n}%;background:${col(k)}" title="${l}: ${cnt[k]}"></span>`).join("");
+  $("legend").innerHTML = STATUS.map(([k,l]) => `<span class="lg"><span class="sw" style="background:${col(k)}"></span>${l} <b>${cnt[k]}</b></span>`).join("");
+}
+
+function renderStrip(){
+  const cells = [`<button class="cell io" data-blk="embed">emb</button>`];
+  for (let i = 0; i < 30; i++){
+    const full = i % 6 === 5;
+    cells.push(`<button class="cell ${full?"fl":"sl"}" data-var="${full?"full":"sliding"}" title="layer ${i}: ${full?"full attention, D=512, 2 KV heads":"sliding window 1024, D=256, 8 KV heads"}">${i}</button>`);
+  }
+  cells.push(`<button class="cell io" data-blk="lm_head">head</button>`);
+  $("strip").innerHTML = cells.join("");
+  $("strip").querySelectorAll("[data-var]").forEach(b => b.onclick = () => setVariant(b.dataset.var));
+  $("strip").querySelectorAll("[data-blk]").forEach(b => b.onclick = () => select(b.dataset.blk));
+}
+
+/* ---------- graph ---------- */
+function blockGraph(g){
+  // Collapse fx nodes into blocks; keep inputs/outputs as their own nodes.
+  const nodeBlock = {}, nodes = new Map();
+  for (const n of g.nodes){
+    let key = n.block || (n.op === "placeholder" ? "in:"+n.id : n.op === "output" ? "out" : null);
+    if (!key) continue;
+    nodeBlock[n.id] = key;
+    if (!nodes.has(key)) nodes.set(key, {id:key, block:n.block, label:n.block ? (S.blocks[n.block]?.name || n.block) : (n.op==="output"?"output":n.id), shape:null, ops:[]});
+    const B = nodes.get(key);
+    if (n.shape) B.shape = n.shape;
+    if (n.block) B.ops.push(n.kind);
+  }
+  const es = new Set();
+  for (const [s,d] of g.edges){ const a = nodeBlock[s], b = nodeBlock[d]; if (a && b && a !== b) es.add(a+"|"+b); }
+  return {nodes:[...nodes.values()], edges:[...es].map(e => e.split("|"))};
+}
+function opGraph(g){
+  return {nodes:g.nodes.map(n => ({id:n.id, block:n.block, label:n.op==="call_module" ? n.kind : n.kind, sub:n.id, shape:n.shape})), edges:g.edges};
+}
+function layout(G){
+  const preds = {}, succ = {};
+  G.nodes.forEach(n => {preds[n.id] = []; succ[n.id] = [];});
+  G.edges.forEach(([a,b]) => { if (preds[b] && succ[a]){ preds[b].push(a); succ[a].push(b);} });
+  const rank = {}, order = G.nodes.map(n => n.id);
+  order.forEach(id => { rank[id] = preds[id].length ? Math.max(...preds[id].map(p => (rank[p] ?? 0) + 1)) : 0; });
+  // Pull inputs down next to their first consumer so the prefix/cos/mask inputs don't all sit on row 0.
+  G.nodes.forEach(n => { if (!preds[n.id].length && succ[n.id].length) rank[n.id] = Math.max(0, Math.min(...succ[n.id].map(s => rank[s])) - 1); });
+  const rows = [];
+  order.forEach(id => (rows[rank[id]] ||= []).push(id));
+  const x = {};
+  rows.forEach((r, ri) => {
+    if (ri > 0) r.sort((a,b) => bary(a) - bary(b));
+    r.forEach((id, i) => x[id] = i - (r.length - 1) / 2);
+    function bary(id){ const p = preds[id].filter(q => x[q] !== undefined); return p.length ? p.reduce((s,q) => s + x[q], 0) / p.length : 0; }
+  });
+  return {rank, x, rows};
+}
+function renderGraph(){
+  const g = S.graphs[S.variant + "_layer"];
+  $("gtitle").textContent = (S.variant === "full" ? "Full-attention" : "Sliding-window") + " decoder layer" + (g ? ` · chunk ${g.chunk} after ${g.prefix} cached` : "");
+  if (!g){ $("graph").innerHTML = `<div class="empty">No fx graph in the store yet.</div>`; return; }
+  const G = S.gran === "blocks" ? blockGraph(g) : opGraph(g);
+  const L = layout(G);
+  const W = S.gran === "blocks" ? 196 : 150, H = S.gran === "blocks" ? 44 : 38, GX = 22, GY = S.gran === "blocks" ? 30 : 22;
+  const maxCols = Math.max(...L.rows.map(r => r.length));
+  const width = maxCols * (W + GX) + 40, height = L.rows.length * (H + GY) + 20;
+  const pos = {};
+  G.nodes.forEach(n => pos[n.id] = {x: width/2 + L.x[n.id] * (W + GX) - W/2, y: 10 + L.rank[n.id] * (H + GY)});
+  const edges = G.edges.filter(([a,b]) => pos[a] && pos[b]).map(([a,b]) => {
+    const p = pos[a], q = pos[b], x1 = p.x + W/2, y1 = p.y + H, x2 = q.x + W/2, y2 = q.y, my = (y1 + y2) / 2;
+    return `<path d="M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}" fill="none" stroke="var(--edge)" stroke-width="1.2" marker-end="url(#ah)"/>`;
+  }).join("");
+  const nodes = G.nodes.map(n => {
+    const p = pos[n.id], b = n.block && S.blocks[n.block], st = b ? b.status : null;
+    const fill = b ? col(st) : "var(--s-glue)", ink = b ? "var(--node-ink)" : "var(--ink)";
+    const shp = n.shape ? (Array.isArray(n.shape[0]) ? n.shape.map(s => "["+s.join(",")+"]").join(" ") : "["+n.shape.join(",")+"]") : "";
+    const label = String(n.label).length > 26 ? String(n.label).slice(0,25) + "…" : n.label;
+    return `<g class="gnode${n.block && n.block === S.sel ? " sel":""}" data-blk="${esc(n.block||"")}" tabindex="${n.block?0:-1}" role="${n.block?"button":"img"}" aria-label="${esc(n.label)}">
+      <rect x="${p.x}" y="${p.y}" width="${W}" height="${H}" rx="6" fill="${fill}"/>
+      <text x="${p.x+10}" y="${p.y+17}" font-size="12" font-weight="600" fill="${ink}">${esc(label)}</text>
+      <text x="${p.x+10}" y="${p.y+H-9}" font-size="10" fill="${ink}" opacity=".85" style="font-family:var(--f-mono)">${esc(shp.length > 30 ? shp.slice(0,29)+"…" : shp)}</text>
+      ${b && b.gap ? `<circle cx="${p.x+W-10}" cy="${p.y+10}" r="4.5" fill="var(--s-missing_op)" stroke="var(--surface)" stroke-width="1.5"/>`:""}
+    </g>`;
+  }).join("");
+  $("graph").innerHTML = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="fx graph">
+    <defs><marker id="ah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--edge)"/></marker></defs>
+    ${edges}${nodes}</svg>`;
+  $("graph").querySelectorAll(".gnode[data-blk]:not([data-blk=''])").forEach(el => {
+    el.onclick = () => select(el.dataset.blk);
+    el.onkeydown = e => { if (e.key === "Enter" || e.key === " "){ e.preventDefault(); select(el.dataset.blk);} };
+  });
+}
+
+function renderDetail(){
+  const b = S.blocks[S.sel];
+  if (!b){ $("detail").innerHTML = `<div class="empty">Select a block to see its torch reference, TTNN plan and device results.</div>`; return; }
+  const v = b.variants && Object.keys(b.variants).length ? Object.entries(b.variants).map(([k,x]) => `<div><span class="chip">${esc(k)}</span> ${esc(x)}</div>`).join("") : "";
+  const meshes = S.meta?.meshes || ["2x2","1x4","4x1"];
+  const dev = b.device || {};
+  const rows = meshes.flatMap(m => {
+    const keys = Object.keys(dev).filter(k => k === m || k.startsWith(m + ":"));
+    if (!keys.length) return [`<tr><td class="num">${m}</td><td class="muted">not run</td><td></td><td></td></tr>`];
+    return keys.map(k => { const r = dev[k]; return `<tr><td class="num">${esc(k)}</td><td><span class="sw" style="background:${col(r.passed?"ttnn_pass":"ttnn_fail")}"></span> ${r.passed?"pass":"fail"}</td><td class="num">${r.pcc!=null?Number(r.pcc).toFixed(5):""}</td><td class="muted mono">${esc((r.at||"").slice(5,16).replace("T"," "))}</td></tr>`; });
+  }).join("");
+  $("detail").innerHTML = `
+    <span class="pill" style="background:${col(b.status)}">${esc(LABEL[b.status]||b.status)}</span>
+    <h3 style="margin-top:8px">${esc(b.name)}</h3><div class="mono muted">${esc(b.id)} · ${esc(b.layer)}</div>
+    <dl>
+      <dt>Torch</dt><dd>${esc(b.torch_ref)}</dd>
+      <dt>TTNN plan</dt><dd>${esc(b.ttnn_plan)}</dd>
+      ${b.source?`<dt>Reuse from</dt><dd class="mono">${esc(b.source)}</dd>`:""}
+      ${b.parallel?`<dt>Parallelism</dt><dd>${esc(b.parallel)}</dd>`:""}
+      ${v?`<dt>Variants</dt><dd>${v}</dd>`:""}
+      ${b.ops?.length?`<dt>Ops</dt><dd class="chips">${b.ops.map(o=>`<span class="chip">${esc(o)}</span>`).join("")}</dd>`:""}
+    </dl>
+    ${b.gap?`<div class="gap"><b>Gap:</b> ${esc(b.gap)}</div>`:""}
+    <h2 style="margin-top:16px">Device results</h2>
+    <table class="dev"><thead><tr><th>Mesh</th><th>Result</th><th>PCC</th><th>When</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function renderLayers(){
+  const L = S.meta?.layers || [];
+  $("layers").innerHTML = L.length ? L.map(l => {
+    const bs = l.blocks.map(id => S.blocks[id]).filter(Boolean);
+    const done = bs.filter(b => b.status === "ttnn_pass").length;
+    const meshes = S.meta?.meshes || ["2x2","1x4","4x1"];
+    const dev = l.device || {};
+    const pills = meshes.map(m => { const r = dev[m]; const st = r ? (r.passed ? "ttnn_pass" : "ttnn_fail") : "todo";
+      return `<span class="lg" title="${esc(r ? (r.note || "") : "layer not run on " + m)}"><span class="sw" style="background:${col(st)}"></span><span class="mono">${m}</span>${r && r.pcc != null ? ` <b>${Number(r.pcc).toFixed(4)}</b>` : ""}</span>`; }).join("");
+    return `<div class="layer"><div class="hd"><span>${esc(l.name)}</span><span class="num muted">${done}/${bs.length} blocks on device</span></div>
+      <div class="legend" style="margin-bottom:6px">${pills}</div>
+      <div class="bchips">${bs.map(b => `<button class="bchip" style="background:${col(b.status)}" data-blk="${esc(b.id)}" ${l.variant?`data-var="${l.variant}"`:""} title="${esc(LABEL[b.status])}">${esc(b.id)}</button>`).join("")}</div></div>`;
+  }).join("") : `<div class="empty">No layer groups yet.</div>`;
+  $("layers").querySelectorAll(".bchip").forEach(el => el.onclick = () => { if (el.dataset.var) setVariant(el.dataset.var); select(el.dataset.blk); });
+}
+function renderOps(){
+  const opCol = {done:"ttnn_pass", todo:"missing_op", in_progress:"ttnn_compose", blocked:"ttnn_fail"};
+  $("ops").innerHTML = S.ops.length ? S.ops.map(o => `<div class="op">
+    <span class="k">${esc(o.kind.replace("_"," "))}</span><span class="ti"><span class="sw" style="background:${col(opCol[o.status]||"todo")}"></span> ${esc(o.title)} <span class="muted mono" style="font-weight:400">· ${esc(o.status)}</span></span>
+    <span class="de">${esc(o.detail)} ${(o.blocks||[]).map(b=>`<span class="chip">${esc(b)}</span>`).join(" ")}</span></div>`).join("") : `<div class="empty">No op gaps recorded.</div>`;
+}
+function renderLog(){
+  if (!S.log.length) return;
+  $("log").innerHTML = S.log.slice().reverse().map(e => `<div><span class="at">${esc((e.at||"").replace("T"," ").slice(5,16))}</span>${esc(e.msg)}</div>`).join("");
+}
+
+function setVariant(v){
+  S.variant = v;
+  $("t-sliding").setAttribute("aria-pressed", v === "sliding"); $("t-full").setAttribute("aria-pressed", v === "full");
+  renderGraph();
+}
+function select(id){ S.sel = id; renderGraph(); renderDetail(); }
+$("t-sliding").onclick = () => setVariant("sliding");
+$("t-full").onclick = () => setVariant("full");
+$("t-blocks").onclick = () => { S.gran = "blocks"; $("t-blocks").setAttribute("aria-pressed", true); $("t-ops").setAttribute("aria-pressed", false); renderGraph(); };
+$("t-ops").onclick = () => { S.gran = "ops"; $("t-ops").setAttribute("aria-pressed", true); $("t-blocks").setAttribute("aria-pressed", false); renderGraph(); };
+
+function renderAll(){ renderPhases(); renderSummary(); renderStrip(); renderGraph(); renderDetail(); renderLayers(); renderOps(); renderLog(); }
+renderAll();
+
+(async () => {
+  const db = await (window.claude?.use ? window.claude.use("db") : Promise.resolve(null));
+  if (!db){ $("updated").textContent = "live data unavailable in this view"; $("graph").innerHTML = `<div class="empty">Open this page on claude.ai to load the bring-up data.</div>`; return; }
+  const err = () => { $("updated").textContent = "live updates paused — reload to reconnect"; };
+  db.doc("meta/state").onSnapshot(s => { S.meta = s.exists ? s.data() : null; renderPhases(); renderLayers(); }, err);
+  db.collection("blocks").onSnapshot(q => { S.blocks = Object.fromEntries(q.docs.map(d => [d.id, d.data()])); renderSummary(); renderGraph(); renderDetail(); renderLayers(); }, err);
+  db.collection("graphs").onSnapshot(q => { S.graphs = Object.fromEntries(q.docs.map(d => [d.id, d.data()])); renderGraph(); }, err);
+  db.collection("ops").onSnapshot(q => { S.ops = q.docs.map(d => d.data()); renderOps(); }, err);
+  db.doc("log/events").onSnapshot(s => { S.log = s.exists ? (s.data().events || []) : []; renderLog(); }, err);
+})();
+</script>

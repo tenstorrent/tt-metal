@@ -287,8 +287,10 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interlea
     }
 
     // Dataflow buffers
-    // Four-tile capacity: quadruple buffering for the one-tile paths, one batched head transfer otherwise.
-    uint32_t dfb_num_tiles = 4;
+    // head_parallel: four-tile capacity for its batched transfers. Otherwise the reader and writer move one
+    // head (q_out_w_tiles tiles) per transaction, double-buffered so the next head's reads overlap the
+    // previous head's writes.
+    uint32_t dfb_num_tiles = split.head_parallel ? 4 : 2 * q_out_w_tiles;
 
     // TODO: Investigate perf allocating full in0_w_tiles with double buffer
     // uint32_t qv_num_tiles = in0_w_tiles * 2; // double buffer; this runs out of space for generic shapes

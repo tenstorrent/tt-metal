@@ -65,10 +65,15 @@ void RotaryEmbeddingLlamaDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL((trans_mat.layout() == Layout::TILE), "transformation matrix to rotary embedding must be tilized");
 
     uint32_t head_dim = input_tensor.logical_shape()[-1];
-    TT_FATAL(
-        head_dim <= 128 || operation_attributes.compute_kernel_config.fp32_dest_acc_en == false,
-        "If head_dim is > 128, fp32_dest_acc_en must be False");
-    TT_FATAL(head_dim <= 256, "Head dim must be less than 256");
+    // The interleaved compute kernel (kernels/compute/rotary_embedding_llama.cpp) processes the head row
+    // in DEST-sized blocks, so any head_dim works there. The sharded kernel still holds the whole row in
+    // DEST: 8 bf16 / 4 fp32 tiles.
+    if (input_tensor.is_sharded()) {
+        TT_FATAL(
+            head_dim <= 128 || operation_attributes.compute_kernel_config.fp32_dest_acc_en == false,
+            "If head_dim is > 128, fp32_dest_acc_en must be False");
+        TT_FATAL(head_dim <= 256, "Head dim must be less than 256");
+    }
 
     TT_FATAL(
         input_tensor.dtype() == cos.dtype() && cos.dtype() == sin.dtype() && sin.dtype() == trans_mat.dtype() &&

@@ -779,20 +779,26 @@ void kernel_main() {
         ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
             fused_op_receiver.seq.ring_index, mesh_rows, mesh_cols, snake_orientation);
     uint32_t half_sequence = num_q_chunks / 2;
-    // Sliding consumes local and halo ranges in one logical Q pass. Wait for every halo that
-    // the host work plan selected before starting that pass; this keeps the hot loop free of
-    // device-wide ring phases and makes Q/accumulator state single-lifetime.
-    if constexpr (has_sliding_window) {
-        // Sliding has a compact write plan (local slab + cyclic predecessor tails). Consume
-        // its signal so a cached program cannot observe the previous invocation's token.
-        const uint32_t synchronization_iters =
-            1 + fused_op_receiver.seq.expected[0] + fused_op_receiver.seq.expected[1];
-        // One signal per halo regardless of hop count: the collecting exchange waits for every hop's
-        // arrival before signalling (ring_attention_neighbor_halo_reader.cpp).
-        for (uint32_t ring_iter = 0; ring_iter < synchronization_iters; ++ring_iter) {
-            fused_op_receiver.get_next_ring_id_and_consume_one_signal();
+    // Sliding consumes local and halo ranges in one logical Q pass. The halo (predecessor tail)
+    // signals are consumed lazily, right before this core's first non-local K read: with a window
+    // no wider than a Q chunk only each slab's first Q chunk needs the halo, so the other Q chunks
+    // run while the neighbor exchange is still in flight (it was a fixed ~25 us stall on BH 2x2).
+    // Every signal is still consumed exactly once per invocation (at the end if no halo chunk was
+    // read), so a cached program cannot observe the previous invocation's token.
+    bool sliding_halo_synced = !has_sliding_window;
+    const auto sync_sliding_halo = [&]() {
+        if (!sliding_halo_synced) {
+            // Sliding has a compact write plan (local slab + cyclic predecessor tails).
+            const uint32_t synchronization_iters =
+                1 + fused_op_receiver.seq.expected[0] + fused_op_receiver.seq.expected[1];
+            // One signal per halo regardless of hop count: the collecting exchange waits for every hop's
+            // arrival before signalling (ring_attention_neighbor_halo_reader.cpp).
+            for (uint32_t ring_iter = 0; ring_iter < synchronization_iters; ++ring_iter) {
+                fused_op_receiver.get_next_ring_id_and_consume_one_signal();
+            }
+            sliding_halo_synced = true;
         }
-    }
+    };
     constexpr uint32_t sdpa_ring_iterations = has_sliding_window ? 1 : ring_size;
     for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
         const bool ring_iter_is_active = has_sliding_window || ((active_ring_iter_mask >> ring_iter) & 1u) != 0;
@@ -1056,6 +1062,11 @@ void kernel_main() {
                 const uint32_t kv_batch = indexed_kv_cache ? kv_cache_batch_idx : nb;
                 const uint32_t gathered_kv_batch = indexed_kv_cache ? 0 : nb;
                 const bool source_is_local = source_ring_id == ring_index;
+                if constexpr (has_sliding_window) {
+                    if (!source_is_local) {
+                        sync_sliding_halo();
+                    }
+                }
                 if (source_is_local) {
                     const uint32_t local_k_start_tile = source_k_chunk * Sk_chunk_t;
                     k_slice = Slice(kv_batch, nk, local_k_start_tile, local_k_start_tile + Sk_chunk_t, 0, DHt);
@@ -1321,4 +1332,6 @@ void kernel_main() {
             }
         }
     }
+    // Sliding: consume the halo signals even if this core never read a halo chunk.
+    sync_sliding_halo();
 }

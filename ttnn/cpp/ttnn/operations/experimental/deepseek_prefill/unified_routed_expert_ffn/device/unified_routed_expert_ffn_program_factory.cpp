@@ -1062,6 +1062,10 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // Clamped SiLU-GLU (DeepSeek V4), with limit=10.0 (ClampedSiluGluConfigDsV4) baked
         // into the kernel.
         compute_defines["CLAMPED_SILU_GLU"] = "1";
+    } else if (op.activation == RoutedExpertActivation::GeluTanh) {
+        // GELU-tanh GLU (Gemma-4): same gate-activation-then-multiply path as SiLU,
+        // with gelu_tanh_tile in place of silu_tile.
+        compute_defines["GATE_GELU_TANH"] = "1";
     }
     if (fuse_bias) {
         // FUSE_BIAS: add gate/up bias (broadcast across rows) before the fused binary

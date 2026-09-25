@@ -1,0 +1,1 @@
+{"block": "layer:ffn", "variant": null, "mesh": "2x2", "pcc": 0.9992456463674578, "passed": true, "note": "L5 4096 tokens; PCC of (out - r*scalar)", "at": "2026-09-24T18:51:14"}

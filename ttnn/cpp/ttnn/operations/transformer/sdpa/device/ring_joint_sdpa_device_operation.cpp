@@ -621,11 +621,12 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         const uint32_t window_size = args.sliding_window_size.value();
         const bool supported_q_chunk = q_chunk_size == 64 || q_chunk_size == 128;
         const bool supported_k_chunk = k_chunk_size == 128;
-        // These are the only ring sizes the chunked sliding halo is tested on. Extend the test matrix
-        // (and SlidingQWorkPlan::max_halo_hops) before widening this allowlist.
+        // Ring sizes the chunked sliding halo is tested on: SP4 production / SP8 test ring, plus SP1/SP2
+        // (QuietBox 1x4 / 2x2: models/demos/gemma4_26b_d_p and models/demos/mimo_v2_d_p attention tests).
+        // Extend the test matrix (and SlidingQWorkPlan::max_halo_hops) before widening this allowlist.
         TT_FATAL(
-            args.ring_size == 4 || args.ring_size == 8,
-            "Chunked sliding attention supports the SP4 production ring or SP8 test ring, got SP{}",
+            args.ring_size == 1 || args.ring_size == 2 || args.ring_size == 4 || args.ring_size == 8,
+            "Chunked sliding attention supports SP1/SP2/SP4/SP8 rings, got SP{}",
             args.ring_size);
         TT_FATAL(
             B == 1 || (B == 2 && args.ring_size == 8),
@@ -642,9 +643,12 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             "Chunked sliding attention requires Q heads to be a multiple of KV heads (GQA), got {}Q:{}K",
             NQH,
             NKH);
+        // V may be narrower than Q/K (MiMo-V2: qk 192, v 128); the sliding reader/compute/writer and the
+        // halo exchange are generic in vDHt (validated by models/demos/mimo_v2_d_p attention tests).
         TT_FATAL(
-            DH == tensor_args.v_head_dim(args.latent_v_head_dim),
-            "Chunked sliding attention requires matching Q/V head dimension, got Q={} V={}",
+            tensor_args.v_head_dim(args.latent_v_head_dim) <= DH &&
+                tensor_args.v_head_dim(args.latent_v_head_dim) % tt::constants::TILE_WIDTH == 0,
+            "Chunked sliding attention requires a tile-aligned V head dimension <= Q's, got Q={} V={}",
             DH,
             tensor_args.v_head_dim(args.latent_v_head_dim));
         TT_FATAL(

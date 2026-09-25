@@ -1,0 +1,9 @@
+# BH QuietBox (P150 x4) as a logical 1x4 mesh: the 4 chips form a physical ring, so the long axis wraps.
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 1, 4 ] dim_types: [ LINE, RING ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }

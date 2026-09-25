@@ -1,0 +1,1 @@
+{"block": "moe_experts", "variant": null, "mesh": "2x2", "pcc": 0.99903, "passed": true, "note": "validated inside the FFN sub-layer test (L0 0.99903, L5 0.99944)", "at": "2026-09-24T19:04:03"}

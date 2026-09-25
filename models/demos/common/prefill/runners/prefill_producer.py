@@ -563,6 +563,10 @@ def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len:
         return _read_slot_kv_and_check_pcc_llama(table, device_map, slot_id, real_len, trace_dir)
     if ADAPTER.name == "gpt_oss_d_p":
         return _read_slot_kv_and_check_pcc_gpt_oss(table, device_map, slot_id, real_len, trace_dir)
+    if ADAPTER.name == "gemma4_26b_d_p":
+        return _read_slot_kv_and_check_pcc_gemma4_26b(table, device_map, slot_id, real_len, trace_dir)
+    if ADAPTER.name == "mimo_v2_d_p":
+        return _read_slot_kv_and_check_pcc_mimo_v2(table, device_map, slot_id, real_len, trace_dir)
     return _read_slot_kv_and_check_pcc_mla(table, device_map, slot_id, real_len, trace_dir)
 
 
@@ -746,6 +750,82 @@ def _read_slot_kv_and_check_pcc_llama(table, device_map: dict, slot_id: int, rea
         f"[producer] slot {slot_id} Llama KV PCC over [0,{real_len}) across {NUM_LAYERS}/{NUM_LAYERS} layers -> "
         f"K={mins['k']:.5f} V={mins['v']:.5f} (min {min(mins.values()):.6f})"
     )
+    return mins
+
+
+def _read_slot_kv_and_check_pcc_gemma4_26b(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
+    """Gemma-4 26B-A4B: two KV geometries -> 20 configs (see gemma4_26b_d_p/tt/runners/kv_chunk_table.py). K is stored in
+    Meta-rope order, V raw. Golden: {trace_dir}/kv_cache/layer_N.safetensors (key/value_cache_layer_N, [1,nkv,S,D])."""
+    from pathlib import Path
+
+    from safetensors import safe_open
+
+    from models.demos.gemma4_26b_d_p.reference.config import Gemma4TextConfig
+    from models.demos.gemma4_26b_d_p.tt.runners.kv_chunk_table import BLK, config_specs
+    from tests.ttnn.utils_for_testing import comp_pcc
+
+    cfg = Gemma4TextConfig.from_json()
+    cid = {(t, kv, g): i for i, (_, t, kv, g) in enumerate(config_specs(cfg, GLOBAL_MESH_SHAPE[1]))}
+    read_len = (real_len + BLK - 1) // BLK * BLK
+    kv_dir = Path(trace_dir) / "kv_cache"
+    mins = {"k": 1.0, "v": 1.0}
+    for layer in range(NUM_LAYERS):
+        t = cfg.layer_types[layer]
+        n_kv, D = cfg.layer_kv_heads(layer), cfg.layer_head_dim(layer)
+        perm = torch.arange(D).view(2, D // 2).T.reshape(-1)
+        dev = {
+            kv: torch.stack([_read_kv_slice(table, device_map, cid[(t, kv, g)], layer, slot_id, read_len, D, _decode_bfp8_chunk) for g in range(n_kv)])[
+                :, :real_len
+            ]
+            for kv in ("k", "v")
+        }
+        with safe_open(str(kv_dir / f"layer_{layer}.safetensors"), framework="pt") as h:
+            g_k = h.get_tensor(f"key_cache_layer_{layer}").float()[0, :, :real_len][..., perm]
+            g_v = h.get_tensor(f"value_cache_layer_{layer}").float()[0, :, :real_len]
+        pk, pv = float(comp_pcc(g_k, dev["k"], 0.0)[1]), float(comp_pcc(g_v, dev["v"], 0.0)[1])
+        mins["k"], mins["v"] = min(mins["k"], pk), min(mins["v"], pv)
+        logger.info(f"  layer {layer:>2} ({t[:4]}, {n_kv}x{D}): K={pk:.5f} V={pv:.5f}")
+    logger.info(f"[producer] slot {slot_id} Gemma-4 KV PCC over [0,{real_len}) via the KV chunk table -> K={mins['k']:.5f} V={mins['v']:.5f}")
+    return mins
+
+
+def _read_slot_kv_and_check_pcc_mimo_v2(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
+    """MiMo-V2: two KV geometries (GA 4 heads, SWA 8 heads; K D=192 rope-rotated, V D=128) -> 24 configs (see
+    mimo_v2_d_p/tt/runners/kv_chunk_table.py). K is stored with each head's first 64 (rope) dims in the Meta
+    interleaved order. Golden: {trace_dir}/kv_cache/layer_N.safetensors (key/value_cache_layer_N, [1,nkv,S,D])."""
+    from pathlib import Path
+
+    from safetensors import safe_open
+
+    from models.demos.mimo_v2_d_p.reference.config import MiMoTextConfig
+    from models.demos.mimo_v2_d_p.tt.rope import rope_perm
+    from models.demos.mimo_v2_d_p.tt.runners.kv_chunk_table import BLK, config_specs
+    from tests.ttnn.utils_for_testing import comp_pcc
+
+    cfg = MiMoTextConfig.from_json()
+    types_present = {cfg.layer_type(l) for l in range(NUM_LAYERS)}
+    specs = [sp for sp in config_specs(cfg) if sp[1] in types_present]
+    cid = {(t, kv, g): i for i, (_, t, kv, g) in enumerate(specs)}
+    read_len = (real_len + BLK - 1) // BLK * BLK
+    kv_dir = Path(trace_dir) / "kv_cache"
+    mins = {"k": 1.0, "v": 1.0}
+    for layer in range(NUM_LAYERS):
+        spec = cfg.layer_attn(layer)
+        t = spec.kind
+        dims = {"k": spec.head_dim, "v": spec.v_head_dim}
+        dev = {
+            kv: torch.stack(
+                [_read_kv_slice(table, device_map, cid[(t, kv, g)], layer, slot_id, read_len, dims[kv], _decode_bfp8_chunk) for g in range(spec.n_kv)]
+            )[:, :real_len]
+            for kv in ("k", "v")
+        }
+        with safe_open(str(kv_dir / f"layer_{layer}.safetensors"), framework="pt") as h:
+            g_k = h.get_tensor(f"key_cache_layer_{layer}").float()[0, :, :real_len][..., rope_perm(spec.head_dim, spec.rope_dim)]
+            g_v = h.get_tensor(f"value_cache_layer_{layer}").float()[0, :, :real_len]
+        pk, pv = float(comp_pcc(g_k, dev["k"], 0.0)[1]), float(comp_pcc(g_v, dev["v"], 0.0)[1])
+        mins["k"], mins["v"] = min(mins["k"], pk), min(mins["v"], pv)
+        logger.info(f"  layer {layer:>2} ({t[:4]}, {spec.n_kv}x{spec.head_dim}/{spec.v_head_dim}): K={pk:.5f} V={pv:.5f}")
+    logger.info(f"[producer] slot {slot_id} MiMo-V2 KV PCC over [0,{real_len}) via the KV chunk table -> K={mins['k']:.5f} V={mins['v']:.5f}")
     return mins
 
 

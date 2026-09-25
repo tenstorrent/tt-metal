@@ -1,0 +1,1 @@
+{"block": "layer:attention_sliding", "variant": null, "mesh": "2x2", "pcc": 0.99969, "passed": true, "note": "real weights L0, 2x4096 chunks vs torch ref", "at": "2026-09-24T18:46:01"}

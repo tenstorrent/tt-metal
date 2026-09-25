@@ -1,0 +1,1 @@
+{"block": "layer:model_L6", "variant": null, "mesh": "4x1", "pcc": 0.9988528029271266, "passed": true, "note": "8192 tokens, 2x4096 chunks; top1 MISMATCH (not checked: softcap-saturated); worst layer PCC 0.9994", "at": "2026-09-24T19:10:44"}

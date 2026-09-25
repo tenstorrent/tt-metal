@@ -1,0 +1,1 @@
+{"block": "layer:chunking_aligned", "variant": null, "mesh": "4x1", "pcc": 0.9984509095325979, "passed": true, "note": "[(0, 0, 4096), (0, 4096, 8192)]", "at": "2026-09-24T22:32:18"}

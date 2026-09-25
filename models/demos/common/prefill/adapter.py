@@ -305,6 +305,8 @@ ADAPTER_PATHS = {
     "deepseek_v32": "models.demos.deepseek_v3_d_p.tt.runners.adapters.sparse_mla:DeepSeekV32Adapter",
     "deepseek_v3_d_p": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v3:DeepSeekV3Adapter",
     "gemma4_d_p": "models.demos.gemma4_d_p.tt.runners.adapters.gemma4:Gemma4PrefillAdapter",
+    # Gemma-4 26B-A4B: GQA sliding(8x256)/full(2x512, K=V) + 128e top-8 MoE with a parallel dense MLP.
+    "gemma4_26b_d_p": "models.demos.gemma4_26b_d_p.tt.runners.adapters.gemma4:Gemma4PrefillAdapter",
     # GLM-5.1: sparse-attention (DSA) variant with a full prefill serving runtime (adapters/glm_5_1.py).
     "glm_5_1": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_1:GLM51Adapter",
     "glm_5_2": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_2:GLM52Adapter",
@@ -316,6 +318,8 @@ ADAPTER_PATHS = {
     "minimax_m3": "models.demos.minimax_m3.tt.runners.adapters.minimax_m3:MiniMaxM3PrefillAdapter",
     # Mistral-Small-4-119B: dense MLA + MoE; config hand-built (transformers 5.x rope_parameters).
     "mistral_small_4": "models.demos.deepseek_v3_d_p.tt.runners.adapters.mistral_small_4:MistralSmall4Adapter",
+    # MiMo-V2.6-Flash: hybrid SWA(128, sinks)/GA GQA, qk 192 / v 128, partial rope + 256e top-8 sigmoid MoE.
+    "mimo_v2_d_p": "models.demos.mimo_v2_d_p.tt.runners.adapters.mimo_v2:MiMoV2PrefillAdapter",
 }
 
 _ADAPTER_INSTANCES: dict = {}

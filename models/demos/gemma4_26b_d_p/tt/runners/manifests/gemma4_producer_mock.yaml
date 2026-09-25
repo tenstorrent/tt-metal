@@ -1,0 +1,27 @@
+# Producer manifest: Gemma-4 Gate 1 (mock migration) on the QuietBox — 2 requests x 2 chunks into slots 0/1.
+# Pair with gemma4_binding_<mesh>_mock.yaml (transport.sp/tp must match the binding).
+#   python -m models.demos.common.prefill.runners.prefill_producer --manifest <this file>
+transport:
+  sp: 4
+  tp: 1
+  h2d_service_id: gemma4_prefill
+  connect_timeout_s: 1800
+
+model:
+  variant: gemma4_26b_d_p
+  num_layers: 30
+  max_seq_len: 32768
+  chunk_size: 4096
+
+workload:
+  num_users: 2
+  slot_prompts:
+    - /localdev/mstaletovic/gemma4_golden/prompt8k
+    - /localdev/mstaletovic/gemma4_golden/prompt8k
+  chunks: "2"
+  max_requests: 2
+  interleave: round_robin
+  check_pcc: false
+
+migration:
+  issue: false

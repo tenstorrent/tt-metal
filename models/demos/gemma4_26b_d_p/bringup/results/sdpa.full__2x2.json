@@ -1,0 +1,1 @@
+{"block": "sdpa", "variant": "full", "mesh": "2x2", "pcc": 0.99779, "passed": true, "note": "ring SDPA cache-backed, chunks 2x4k/3x4k/2x8k (min PCC)", "at": "2026-09-24T18:34:41"}

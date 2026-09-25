@@ -48,6 +48,7 @@ void kernel_main() {
     // Indexed RoPE supplies a per-core runtime head count; other callers keep a compile-time count.
     const auto n_heads = get_arg(args::n_heads);
     constexpr auto rotary_Ht = get_arg(args::rotary_Ht);
+    constexpr uint32_t dst_blk = DST_ACCUM_MODE ? 4 : 8;
     constexpr auto bulk_block_input = [](auto dfb_id) {
         return ckl::input(
             dfb_id,
@@ -122,12 +123,18 @@ void kernel_main() {
                 reconfig_data_format(cos_interm_dfb, trans_mat_dfb, sin_interm_dfb, in_dfb);
                 pack_reconfig_data_format(out_dfb, rotated_in_interm_dfb);
                 matmul_init(in_dfb, trans_mat_dfb);
-                ACQ();
-                for (uint32_t j = 0; j < Wt; ++j) {
-                    matmul_tiles(in_dfb, trans_mat_dfb, j, in1_index, j);
-                    pack_tile(j, rotated_in_interm_dfb, j);
+                // DEST holds 8 bf16 / 4 fp32 tiles (half-sync): walk the Wt-tile head row in DEST-sized blocks
+                // so head_dim > 256 (Wt > 8, e.g. Gemma-4 global layers D=512) stays in bounds. The eltwise
+                // chains below clamp their block_size to DEST on their own.
+                for (uint32_t j0 = 0; j0 < Wt; j0 += dst_blk) {
+                    const uint32_t j1 = (j0 + dst_blk < Wt) ? j0 + dst_blk : Wt;
+                    ACQ();
+                    for (uint32_t j = j0; j < j1; ++j) {
+                        matmul_tiles(in_dfb, trans_mat_dfb, j, in1_index, j - j0);
+                        pack_tile(j - j0, rotated_in_interm_dfb, j);
+                    }
+                    REL();
                 }
-                REL();
                 rotated_in_interm_dfb_obj.push_back(Wt);
                 reconfig_data_format(trans_mat_dfb, rotated_in_interm_dfb, in_dfb, sin_dfb);
                 pack_reconfig_data_format(rotated_in_interm_dfb, sin_interm_dfb);
