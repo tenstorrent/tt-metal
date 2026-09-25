@@ -150,6 +150,13 @@ tasks:
     kind: norm
     layer: 0
     stateful: false
+  frozen:
+    at: '2026-09-25T23:14:15'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_attn_norm.py: acb0428d9dfb433d0fc82af72dd150a6848e998f3a4d3a751fea394a103e5d6f
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
 - id: S.sliding.01
   title: 'sliding block with steps 1-1 on device (last: attn_norm)'
   step: implement
