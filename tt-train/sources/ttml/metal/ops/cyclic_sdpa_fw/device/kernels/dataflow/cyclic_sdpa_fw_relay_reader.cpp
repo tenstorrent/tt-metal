@@ -41,6 +41,14 @@ constexpr auto kMaskMode = ttml::metal::ops::cyclic_sdpa_bw::MaskMode::Dense;
 constexpr auto kMaskMode = ttml::metal::ops::cyclic_sdpa_bw::MaskMode::Causal;
 #endif
 
+// Under NoC event tracing the zones below are noise, and at a whole launch
+// they overflow the per-core marker buffer, which breaks the trace's zone
+// pairing; compiled out there, unchanged in an ordinary profiling build.
+#if defined(PROFILE_NOC_EVENTS)
+#undef DeviceZoneScopedN
+#define DeviceZoneScopedN(name)
+#endif
+
 void kernel_main() {
     uint32_t arg = 0;
     const uint32_t my_core = get_arg_val<uint32_t>(arg++);

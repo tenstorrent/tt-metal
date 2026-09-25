@@ -691,6 +691,14 @@ void transpose_key_block() {
 
 }  // namespace
 
+// Under NoC event tracing the zones below are noise, and at a whole launch
+// they overflow the per-core marker buffer, which breaks the trace's zone
+// pairing; compiled out there, unchanged in an ordinary profiling build.
+#if defined(PROFILE_NOC_EVENTS)
+#undef DeviceZoneScopedN
+#define DeviceZoneScopedN(name)
+#endif
+
 void kernel_main() {
     const uint32_t my_core = get_arg_val<uint32_t>(0);
     // Slices this group runs in sequence; see the relay reader. This kernel
