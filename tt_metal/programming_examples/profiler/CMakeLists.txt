@@ -17,9 +17,34 @@ CREATE_PGM_EXAMPLES_EXE("${PROFILER_EXAMPLES_SRCS}" "profiler")
 # looks for it, not under the profiler/ subdirectory CREATE_PGM_EXAMPLES_EXE uses.
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_streaming_profiler_zones)
 
+foreach(example pingpong_fabric multicast tile_offsets)
+    set(target test_streaming_profiler_${example})
+    add_executable(${target} ${CMAKE_CURRENT_SOURCE_DIR}/${target}/${target}.cpp)
+    target_link_libraries(
+        ${target}
+        PRIVATE
+            tt_metal
+            pthread
+    )
+    target_include_directories(
+        ${target}
+        PRIVATE
+            ${PROJECT_SOURCE_DIR}/tt_metal
+            ${PROJECT_SOURCE_DIR}/tt_metal/impl
+            ${PROJECT_SOURCE_DIR}/tt_metal/llrt
+            ${PROJECT_SOURCE_DIR}/tt_metal/api
+            ${PROJECT_SOURCE_DIR}/tt_metal/api/tt-metalium
+            ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
+            ${PROJECT_BINARY_DIR}/tt_metal/api
+    )
+endforeach()
+
 add_custom_target(
     profiler_examples
     DEPENDS
         ${PROGRAMMING_EXAMPLES_TEST_TARGETS}
         test_streaming_profiler_zones
+        test_streaming_profiler_pingpong_fabric
+        test_streaming_profiler_multicast
+        test_streaming_profiler_tile_offsets
 )

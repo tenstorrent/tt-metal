@@ -150,10 +150,15 @@ def _subscriber_totals(log: str) -> tuple[int, int, int]:
     return int(m.group(1)), int(m.group(2)), int(m.group(3))
 
 
+# The idle-eth clock pusher's kernel zone: its drainer ships the pusher's ring after the pusher has exited, so the
+# zone's close arrives like any worker lane's.
+PUSHER_KERNEL_ZONES = 1
+
+
 # 10 named zones per iteration per RISC, plus the one firmware wrapper zone each RISC opens per launch.
 def _expected_zones(gx: int, gy: int, iters: int) -> int:
     lanes = gx * gy * RISCS_PER_CORE
-    return lanes * ZONES_PER_ITER * iters + lanes
+    return lanes * ZONES_PER_ITER * iters + lanes + PUSHER_KERNEL_ZONES
 
 
 # Only the data-movement kernels emit the point-marker trio (_Event, _Data, _Iter) under --markers 1.
