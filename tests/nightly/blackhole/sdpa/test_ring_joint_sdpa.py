@@ -6235,6 +6235,56 @@ def test_ring_joint_attention_rotated_q_sink_accuracy_and_cache_reuse(q_chunk_si
 
 
 @pytest.mark.timeout(1200)
+@pytest.mark.parametrize("v_tiles", [16, 17], ids=["v512", "v544_tail"])
+def test_ring_mla_split_accumulation_cancellation(v_tiles):
+    """Cancellation across 256-row blocks, K640 and a final 32-row K tail.
+
+    Q reads only the non-V features, so opposite V blocks have matching logits.
+    Exactly representable K/V values keep BFP8 quantization from dominating cancellation.
+    V544 also exercises a full DST batch followed by one output-column tile.
+    """
+    d_v = v_tiles * 32
+    model = replace(
+        RING_MLA_CHUNKED_MODEL_CONFIGS["kimi_k3"],
+        nhq=8,
+        nhv=8,
+        d_q=576,
+        d_k=576,
+        d_v=d_v,
+        kv_dtype=ttnn.bfloat8_b,
+    )
+    chunk_size = 672 * MESH_CONFIG.sp_size
+    generator = torch.Generator().manual_seed(71)
+    q = torch.zeros(1, 8, chunk_size, 576)
+    q[..., d_v:] = torch.randn(1, 8, chunk_size, 576 - d_v, generator=generator) * 0.25
+    pattern = torch.randint(-16, 17, (1, 1, 256, 576), generator=generator).float() / 16
+    rows = torch.arange(chunk_size)
+    kv = pattern[:, :, rows % 256, :].clone()
+    signs = torch.where((rows // 256) % 2 == 0, 1.0, -1.0).view(1, 1, -1, 1)
+    kv[..., :d_v] = kv[..., :d_v] * signs + 0.03125
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG, reserve_llk_kernel_config=False)
+    try:
+        with mock.patch(f"{__name__}.fa_rand", side_effect=[q, kv]):
+            duration_ns, _ = profile_ring_joint_runtime_duration_ns(
+                runtime.mesh_device,
+                lambda: run_ring_joint_sdpa_chunked(
+                    MESH_CONFIG,
+                    model,
+                    chunk_size=chunk_size,
+                    total_seq=chunk_size,
+                    qk_configs=[(32, 640)],
+                    use_ring_mla=True,
+                    rmse_threshold=0.01,
+                    runtime=runtime,
+                    reserve_llk_kernel_config=False,
+                ),
+            )
+        logger.info(f"Cancellation V{d_v}, K640 + K32 tail: {duration_ns / 1e6:.3f} ms")
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
+
+
+@pytest.mark.timeout(1200)
 @pytest.mark.parametrize("q_chunk_size,k_chunk_size", [(32, 640), (64, 448)], ids=["q32", "q64_pack_unpack"])
 def test_ring_mla_rotated_q_accuracy_and_determinism(q_chunk_size, k_chunk_size):
     """Exercise shared-K rotation, accumulator handoffs, and cached replay against a CPU reference.
@@ -6819,8 +6869,8 @@ else:
     RING_MLA_CHUNKED_PERF_CHECK_CONFIGS = [
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
         # 4-device ring (QuietBox, 100 SDPA cores)
-        ("kimi50k", 32, 640, 4, 66.22),
-        ("kimi_k3", 32, 640, 4, 67.45),
+        ("kimi50k", 32, 640, 4, 69.53),
+        ("kimi_k3", 32, 640, 4, 70.73),
     ]
 
 
