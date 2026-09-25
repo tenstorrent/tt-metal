@@ -271,6 +271,32 @@ def _zero_extend_ring_fill(t, modulo):
     return out
 
 
+def _ring_fill_page_table(page_table, chunk_offset, modulo, block_size):
+    """Rotate a bounded ring page table so fill row 0 lands in slot ``chunk_offset % modulo``.
+
+    ``paged_fill_cache`` has no start offset: it writes row r to slot r % modulo,
+    while decode reads position p from slot p % modulo. A resumed chunk that
+    starts off the ring grid (a vLLM scheduler chunk resumed at a ragged offset)
+    would otherwise overwrite the ring from slot 0. Returns ``page_table`` itself
+    when no rotation is needed, else a new tensor that the caller deallocates.
+    """
+    shift = int(chunk_offset) % int(modulo)
+    if shift == 0:
+        return page_table
+    if shift % int(block_size) != 0:
+        raise ValueError(
+            f"bounded ring fill at chunk offset {chunk_offset} needs a rotation of {shift} slots, "
+            f"which is not a whole number of {block_size}-token blocks"
+        )
+    ring_blocks = int(modulo) // int(block_size)
+    rows = int(page_table.shape[0])
+    ring = page_table
+    if int(page_table.shape[-1]) != ring_blocks:
+        # Not deallocated: the slice may share storage with the persistent table.
+        ring = ttnn.slice(page_table, [0, 0], [rows, ring_blocks])
+    return ttnn.roll(ring, -(shift // int(block_size)), -1)
+
+
 def flush_deferred_bounded_fills(layers):
     """Merge + ``paged_fill_cache`` for stashed bounded ring fills.
 
@@ -320,15 +346,23 @@ def flush_deferred_bounded_fills(layers):
         v_fill = pending["v_fill"]
         k_merged = k_fill
         v_merged = v_fill
+        fill_page_table = pending["page_table"]
+        chunk_offset = pending.get("chunk_offset", 0)
         try:
             k_merged = _merge_bounded_boundary_fill(k_fill, pending["valid_seq_len"], pending["modulo"])
             v_merged = _merge_bounded_boundary_fill(v_fill, pending["valid_seq_len"], pending["modulo"])
-            k_merged = _zero_extend_ring_fill(k_merged, pending["modulo"])
-            v_merged = _zero_extend_ring_fill(v_merged, pending["modulo"])
+            # Zeroing the rest of the ring clears a previous occupant's KV; on a
+            # resumed chunk those slots hold this request's own in-window KV.
+            if chunk_offset == 0:
+                k_merged = _zero_extend_ring_fill(k_merged, pending["modulo"])
+                v_merged = _zero_extend_ring_fill(v_merged, pending["modulo"])
+            fill_page_table = _ring_fill_page_table(
+                pending["page_table"], chunk_offset, pending["modulo"], pending["block_size"]
+            )
             ttnn.experimental.paged_fill_cache(
                 pending["k_cache"],
                 k_merged,
-                pending["page_table"],
+                fill_page_table,
                 batch_idx=pending["user_id"],
                 block_size=pending["block_size"],
                 **pending["paged_modulo_kwargs"],
@@ -336,12 +370,14 @@ def flush_deferred_bounded_fills(layers):
             ttnn.experimental.paged_fill_cache(
                 pending["v_cache"],
                 v_merged,
-                pending["page_table"],
+                fill_page_table,
                 batch_idx=pending["user_id"],
                 block_size=pending["block_size"],
                 **pending["paged_modulo_kwargs"],
             )
         finally:
+            if fill_page_table is not pending["page_table"]:
+                fill_page_table.deallocate(True)
             seen = set()
             for t in (k_fill, v_fill, k_merged, v_merged):
                 if t is None or id(t) in seen:
@@ -533,6 +569,7 @@ def _prefill_forward_single(
                             "paged_modulo_kwargs": paged_modulo_kwargs,
                             "valid_seq_len": v,
                             "modulo": int(config.cache_position_modulo),
+                            "chunk_offset": chunk_offset or 0,
                         }
                 elif not is_chunked:
                     # Traced / single-chunk with get_last_token=-1: kernel-cap fill.
