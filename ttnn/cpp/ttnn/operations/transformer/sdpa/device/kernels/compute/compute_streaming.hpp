@@ -31,6 +31,7 @@
 #define PV_MATH_FIDELITY -1
 #endif
 // Kernel profiler zones (device-profiler builds); the ring-joint factory sets it from TT_SDPA_PROFILE_ZONES.
+// The joint and exp-ring factories do not emit it, so their zones stay off.
 #ifndef SDPA_PROFILE_ZONES
 #define SDPA_PROFILE_ZONES 0
 #endif
