@@ -30,23 +30,78 @@
 #include "api/compute/reduce.h"
 #include "api/compute/reduce_custom.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/compute/eltwise_binary_sfpu.h"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chunked_prefill_utils.hpp"
 #include "cpp/ttnn/kernel_lib/dest_helpers.hpp"
-#if defined(TRISC_MATH) || defined(TRISC_PACK)
+// ckernel_sfpu_sdpa.h has no Quasar implementation (raw WH/BH SFPI microcode for the fused
+// first-column softmax primitives). On Quasar, every helper below that used a fused primitive
+// is routed to generic SFPU tile ops instead (see the ARCH_QUASAR branches throughout this file).
+#if (defined(TRISC_MATH) || defined(TRISC_PACK)) && !defined(ARCH_QUASAR)
 #include "experimental/llk_sfpu/ckernel_sfpu_sdpa.h"
 #endif
+
+#ifdef ARCH_QUASAR
+// Operand of the LAST actual pack, so pack_reconfig_out() runs pack_init ONLY on a real operand change.
+// Reset to the sentinel at each kernel_main entry (reset_pack_operand_tracking()). Per-TRISC global; the
+// PACK thread's copy is what gates its pack_init.
+inline uint32_t g_last_pack_operand = 0xFFFFFFFFu;
+ALWI void reset_pack_operand_tracking() { g_last_pack_operand = 0xFFFFFFFFu; }
+#else
+ALWI void reset_pack_operand_tracking() {}
+#endif
+
+// Switch the packer output operand to `out_dfb`.
+//
+// Quasar packer quirk: `pack_reconfig_data_format(new)` only updates the pack DATA FORMAT, not the output
+// ring/address (api/compute/reconfig_data_format.h NOTE ARCH_QUASAR; Quasar `_llk_pack_reconfig_data_
+// format_` writes only THCON_PACKER<N>_REG0_IN_DATA_FORMAT). Re-pointing the pack dest requires
+// `pack_init` (→ `_llk_pack_mop_config_(buf_desc)` re-latches L1_Dest_addr). Without it the packer keeps
+// writing to the previous ring → the intended DFB is never written → all-zero output, no assert (this
+// caused sdpa's first emulator run to return an all-zero tensor).
+//
+// BUT `pack_init` is a FULL re-init: it also resets the packer's per-tile dest write pointer /
+// accumulation-section state. Calling it at a SAME-operand reconfig (e.g. mid-L1-accumulate, like
+// fma_block_merged_sum pass 2 reconfiguring dfb_sum after pass 1 already packed it) clobbers the
+// in-progress accumulation (bounded-wrong output). So `pack_init` must run ONLY on a genuine operand
+// change vs the last ACTUAL pack — tracked at runtime here (handles cross-helper carry and if-constexpr
+// branches without static per-site classification; runtime-tracking design from the sdpa_decode fork).
+// Requirement: every pack-operand switch goes through this wrapper; matmul_blocks / pack_tile inherit
+// the wrapper-set operand (they never call pack_init/pack_reconfig themselves).
+//
+// WH/BH do NOT need any of this (pack_reconfig alone re-targets correctly there; validated 13/13), so
+// everything is ARCH_QUASAR-gated to leave the validated WH path byte-identical.
+ALWI void pack_reconfig_out(uint32_t out_dfb) {
+    pack_reconfig_data_format(out_dfb);  // format always re-applied; same-operand safe
+#ifdef ARCH_QUASAR
+    if (out_dfb != g_last_pack_operand) {
+        pack_init(out_dfb);
+        g_last_pack_operand = out_dfb;
+    }
+#endif
+}
 
 ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t dfbid, uint32_t transpose = 0) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         transpose, true /*transpose within 16x16 face*/, dfbid)));
 
+#ifdef ARCH_QUASAR
+    // Quasar's llk_math_eltwise_unary_datacopy_init takes no PackMode param; its trailing template
+    // args are bools (unpack_to_dest, is_int_fpu_en, tilize).
+    MATH((llk_math_eltwise_unary_datacopy_init<
+          DataCopyType::A2D,
+          DST_ACCUM_MODE,
+          BroadcastType::NONE,
+          false /*unpack_to_dest*/,
+          false /*is_int_fpu_en*/>(dfbid)));
+#else
     MATH((llk_math_eltwise_unary_datacopy_init<
           DataCopyType::A2D,
           DST_ACCUM_MODE,
           BroadcastType::NONE,
           false,  // is_int_fpu_en
           PackMode::Default>(dfbid)));
+#endif
 }
 
 /**
@@ -185,7 +240,7 @@ void reduce_c(uint32_t out_dfb, uint32_t prev_dfb, bool do_eltwise_max = false) 
 
         tile_regs_commit();
         tile_regs_wait();
-        pack_reconfig_data_format(out_dfb);
+        pack_reconfig_out(out_dfb);
         for (uint32_t i = 0; i < dst_tiles; i++) {
             const uint32_t cur_max_dst_idx = i;
             pack_tile<true>(cur_max_dst_idx, out_dfb, (row_start_idx + i));
@@ -227,7 +282,7 @@ void reduce_c(uint32_t out_dfb, uint32_t prev_dfb, uint32_t cols, bool do_eltwis
     dfb_in0.wait_front(num_tiles);
     dfb_out.reserve_back(rows);
 
-    pack_reconfig_data_format(out_dfb);
+    pack_reconfig_out(out_dfb);
 
     binary_max_tile_init();
     constexpr uint32_t reduce_dst_idx = 0;
@@ -257,16 +312,11 @@ void reduce_c(uint32_t out_dfb, uint32_t prev_dfb, uint32_t cols, bool do_eltwis
     dfb_out.push_back(rows);
 }
 
-#ifdef TRISC_MATH
-template <bool legacy_compat = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+#if defined(TRISC_MATH) && !defined(ARCH_QUASAR)
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 void recip_tile_first_column(uint32_t idst) {
     SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_recip_first_column,
-        (legacy_compat, is_fp32_dest_acc_en),
-        idst,
-        VectorMode::C);
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_recip_first_column, (is_fp32_dest_acc_en), idst, VectorMode::C);
 }
 #endif
 
@@ -279,14 +329,23 @@ void recip_block_inplace(uint32_t in_dfb, uint32_t num_tiles) {
     // Postcondition: in_dfb has num_tiles produced
     reconfig_data_format_srca(in_dfb);
     copy_init(in_dfb);
+#ifdef ARCH_QUASAR
     recip_tile_init();
-    pack_reconfig_data_format(in_dfb);
+#else
+    // The first-column helper uses SFPI, not full-tile LOADMACRO/replay state.
+    MATH(SFPU_UNARY_INIT_FN(reciprocal, sfpu::sfpu_reciprocal_init, (APPROX)));
+#endif
+    pack_reconfig_out(in_dfb);
 
     dfb_in.wait_front(num_tiles);
     for (uint32_t i = 0; i < num_tiles; ++i) {
         tile_regs_acquire();
         copy_tile(in_dfb, i, 0);
-        MATH((recip_tile_first_column(0)));
+#ifdef ARCH_QUASAR
+        recip_tile(0);  // full-tile 1/x; only col 0 is consumed downstream
+#else
+        MATH((recip_tile_first_column(0)));  // WH/BH fused fast path
+#endif
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, in_dfb);
@@ -323,10 +382,16 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_dfb, uint32_t reduce_dfb, uin
     reconfig_data_format(in0_dfb, in1_dfb);
     sub_bcast_cols_init(in0_dfb, in1_dfb);
 
+#ifndef ARCH_QUASAR
     // The exponential function uses InputClamping::None for better performance. This version
     // produces incorrect outputs for inputs <~ -88, but those outputs are guaranteed to be negative.
     // Enable packer ReLU to zero any negative values produced by the exponential approximation.
     exp_tile_init<true /* approx */, scale_fp32, InputClamping::None>();
+#endif
+    // Quasar's exp only supports the default scale (1.0) and CLAMP_NEGATIVE=true (see the
+    // ARCH_QUASAR branch below, which applies scale_fp32 via a separate multiply before an
+    // unscaled exp). CLAMP_NEGATIVE matches the WH packer-ReLU-zeroes-negatives intent, so the
+    // ReLU config below stays shared for both archs (it's a no-op once inputs are already clamped).
     PACK((llk_pack_relu_config(ReluConfig::zero())));
 
     dfb_in0.wait_front(rows * cols);
@@ -346,12 +411,31 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_dfb, uint32_t reduce_dfb, uin
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t u = 0; u < granularity; u++) {
             tile_regs_acquire();
+#ifdef ARCH_QUASAR
+            // Quasar's exp only supports scale=1.0 (see exp_init's static_assert), so scale_fp32 is
+            // applied via a separate multiply pass across all tiles in this dst block, then an
+            // unscaled exp pass. sub_tiles_bcast_cols is an FPU op (separate pipeline, no state to
+            // reissue); mul and exp are both SFPU op families, so each family's _init is issued once,
+            // immediately before its own loop over j, rather than interleaved per-tile.
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                sub_tiles_bcast_cols(in0_dfb, in1_dfb, j, i, j);
+            }
+            binop_with_scalar_tile_init();
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                mul_unary_tile(j, scale_fp32);
+            }
+            exp_tile_init<true /* approx */>();
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                exp_tile<true /* approx */, false /* scale_en */>(j);
+            }
+#else
             for (uint32_t j = 0; j < dst_tiles; ++j) {
                 sub_tiles_bcast_cols(in0_dfb, in1_dfb, j, i, j);
                 constexpr int iterations = (vector_mode == VectorMode::RC) ? 32 /*ITER*/ : 8 /*ITER*/;
                 constexpr VectorMode vector_mode_exp = (vector_mode == VectorMode::RC) ? VectorMode::None : vector_mode;
                 exp_tile<true /* approx */, false /* scale_en */, InputClamping::None, iterations>(j, vector_mode_exp);
             }
+#endif
             tile_regs_commit();
 
             if constexpr (write_result_inplace) {
@@ -362,7 +446,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_dfb, uint32_t reduce_dfb, uin
             tile_regs_wait();
 
             if constexpr (write_result_inplace) {
-                pack_reconfig_data_format(in0_dfb);
+                pack_reconfig_out(in0_dfb);
                 for (uint32_t j = 0; j < dst_tiles; ++j) {
                     pack_tile(j, in0_dfb);
                 }
@@ -371,7 +455,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_dfb, uint32_t reduce_dfb, uin
             }
 
             if constexpr (do_reduce) {
-                pack_reconfig_data_format(reduce_dfb);
+                pack_reconfig_out(reduce_dfb);
                 // While we have results in DST, take advantage of L1 accumulation
                 // to reduce row x cols tiles to rows x 1 tiles.
                 if (u > 0) {
@@ -424,7 +508,7 @@ void mul_block_bcast_cols(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb) 
     constexpr uint32_t num_tiles = rows * cols;
 
     reconfig_data_format(in0_dfb, in1_dfb);
-    pack_reconfig_data_format(out_dfb);
+    pack_reconfig_out(out_dfb);
     mul_bcast_cols_init(in0_dfb, in1_dfb);
     dfb_in0.wait_front(num_tiles);
     dfb_in1.wait_front(rows);
@@ -512,7 +596,7 @@ void mul_block_bcast_cols_inplace(uint32_t in0_dfb, uint32_t in1_dfb) {
 
     reconfig_data_format(in0_dfb, in1_dfb);
     mul_bcast_cols_init(in0_dfb, in1_dfb);
-    pack_reconfig_data_format(in0_dfb);
+    pack_reconfig_out(in0_dfb);
     dfb_in0.wait_front(num_tiles);
     dfb_in1.wait_front(rows);
     for (uint32_t i = 0; i < rows; ++i) {
@@ -590,7 +674,7 @@ void add_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_tiles) {
     // Postcondition: in1_dfb has num_tiles consumed
 
     reconfig_data_format(in0_dfb, in1_dfb);
-    pack_reconfig_data_format(in0_dfb);
+    pack_reconfig_out(in0_dfb);
     add_init(in0_dfb, in1_dfb);
     dfb_in0.wait_front(num_tiles);
     dfb_in1.wait_front(num_tiles);
@@ -626,7 +710,7 @@ void mul_tiles_bcast_cols_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t n
 
     reconfig_data_format(in0_dfb, in1_dfb);
     mul_bcast_cols_init(in0_dfb, in1_dfb);
-    pack_reconfig_data_format(in0_dfb);
+    pack_reconfig_out(in0_dfb);
     dfb_in0.wait_front(num_tiles);
     dfb_in1.wait_front(num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {
@@ -669,7 +753,7 @@ void mul_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_tiles) {
     }
 }
 
-#if defined(TRISC_MATH) || defined(TRISC_PACK)
+#if (defined(TRISC_MATH) || defined(TRISC_PACK)) && !defined(ARCH_QUASAR)
 
 template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 void exp_tile_first_column(uint32_t idst) {
@@ -681,7 +765,7 @@ void exp_tile_first_column(uint32_t idst) {
         idst,
         VectorMode::C);
 }
-#endif  // defined(TRISC_MATH) || defined(TRISC_PACK)
+#endif  // (defined(TRISC_MATH) || defined(TRISC_PACK)) && !defined(ARCH_QUASAR)
 
 /**
  * out_dfb = exp((in0_dfb - in1_dfb) * scale_fp32)
@@ -696,19 +780,34 @@ void sub_exp_block(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_
     // Postcondition: in0_dfb and in1_dfb has num_tiles produced
 
     sub_init(in0_dfb, in1_dfb);
+#ifndef ARCH_QUASAR
     exp_tile_init<EXP_APPROX_MODE>();
+#endif
     dfb_in0.wait_front(num_tiles);
     dfb_in1.wait_front(num_tiles);
     dfb_out.reserve_back(num_tiles);
 
+#ifndef ARCH_QUASAR
     // Convert scale_fp32 to bf16 scale
     constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
+#endif
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         invalidate_l1_cache();
         tile_regs_acquire();
         sub_tiles(in0_dfb, in1_dfb, i, i, 0);
-        MATH((exp_tile_first_column<EXP_APPROX_MODE, scale_bf16>(0)));
+#ifdef ARCH_QUASAR
+        // No fused exp_tile_first_column on Quasar, and Quasar's exp only supports scale=1.0 (see
+        // exp_init's static_assert), so scale_fp32 (already fp32-encoded) is applied via a separate
+        // multiply before an unscaled exp. Full-tile exp is numerically safe; only column 0 is
+        // consumed downstream.
+        binop_with_scalar_tile_init();
+        mul_unary_tile(0, scale_fp32);
+        exp_tile_init<EXP_APPROX_MODE>();
+        exp_tile<EXP_APPROX_MODE, false /*scale_en*/>(0);
+#else
+        MATH((exp_tile_first_column<EXP_APPROX_MODE, scale_bf16>(0)));  // WH/BH fused fast path
+#endif
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, out_dfb);
@@ -717,7 +816,7 @@ void sub_exp_block(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_
     }
 }
 
-#ifdef TRISC_MATH
+#if defined(TRISC_MATH) && !defined(ARCH_QUASAR)
 template <VectorMode vector_mode = VectorMode::C, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 void fused_max_sub_exp_add_tile(uint32_t idst, int scale_bf16) {
     constexpr bool reuse_cur_max_tile = is_fp32_dest_acc_en && DST_SYNC_MODE == DstSync::SyncHalf;
@@ -773,18 +872,49 @@ void correction_block(
         worker_sum_dst < compute_kernel_lib::DEST_AUTO_LIMIT,
         "correction_block DST layout exceeds DEST capacity for this sync/accum mode");
 
+#ifndef ARCH_QUASAR
     // convert scale from fp32 to bf16
     constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
+#endif
 
     for (uint32_t i = 0; i < num_head_tiles; i++) {
         tile_regs_acquire();
         copy_init(dfb_worker_max);
+#ifndef ARCH_QUASAR
         exp_tile_init<EXP_APPROX_MODE>();
+#endif
         copy_tile(dfb_prev_max, i, dst_reg_0);
         copy_tile(dfb_worker_max, i, dst_reg_1);
         copy_tile(dfb_prev_sum, i, dst_reg_3);
         copy_tile(dfb_worker_sum, i, worker_sum_dst);
-        MATH((fused_max_sub_exp_add_tile<vector_mode>(0, scale_bf16)));
+#ifdef ARCH_QUASAR
+        // No fused max/sub/exp/add primitive on Quasar. Decompose into generic dst-to-dst SFPU
+        // ops: cur_max = max(prev_max, worker_max); exp_prev/exp_worker = exp((prev/worker_max -
+        // cur_max) * scale); cur_sum = exp_prev*prev_sum + exp_worker*worker_sum. Full-tile ops
+        // are numerically safe here; only column 0 is consumed downstream. Each op family's _init
+        // reprograms shared SFPU state (e.g. LREG polynomial constants), so it must be re-issued
+        // immediately before that family's calculate call, not hoisted above the other families.
+        binary_max_tile_init();
+        binary_max_tile(dst_reg_0, dst_reg_1, dst_reg_2);  // cur_max = max(prev_max, worker_max)
+        sub_binary_tile_init();
+        sub_binary_tile(dst_reg_0, dst_reg_2, dst_reg_0);  // dst_reg_0 = prev_max - cur_max
+        sub_binary_tile(dst_reg_1, dst_reg_2, dst_reg_1);  // dst_reg_1 = worker_max - cur_max
+        // Quasar's exp only supports scale=1.0 (see exp_init's static_assert), so scale_fp32
+        // (already fp32-encoded) is applied via a separate multiply before an unscaled exp.
+        binop_with_scalar_tile_init();
+        mul_unary_tile(dst_reg_0, scale_fp32);  // dst_reg_0 = (prev_max - cur_max) * scale
+        mul_unary_tile(dst_reg_1, scale_fp32);  // dst_reg_1 = (worker_max - cur_max) * scale
+        exp_tile_init<EXP_APPROX_MODE>();
+        exp_tile<EXP_APPROX_MODE, false /*scale_en*/>(dst_reg_0);  // dst_reg_0 = exp_prev
+        exp_tile<EXP_APPROX_MODE, false /*scale_en*/>(dst_reg_1);  // dst_reg_1 = exp_worker
+        mul_binary_tile_init();
+        mul_binary_tile(dst_reg_1, worker_sum_dst, worker_sum_dst);  // exp_worker * worker_sum
+        mul_binary_tile(dst_reg_0, dst_reg_3, dst_reg_3);            // exp_prev * prev_sum
+        add_binary_tile_init();
+        add_binary_tile(dst_reg_3, worker_sum_dst, dst_reg_3);  // cur_sum
+#else
+        MATH((fused_max_sub_exp_add_tile<vector_mode>(0, scale_bf16)));  // WH/BH fused fast path
+#endif
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(dst_reg_0, dfb_exp_max_diff);
@@ -833,6 +963,89 @@ void move_block(uint32_t in_dfb, uint32_t out_dfb, uint32_t num_tiles) {
     }
 }
 
+/**
+ * Merged online-softmax running-sum update, fused: sum = cur + prev * emd, on a single merged sum DFB
+ * (depth 3*num_tiles) that holds prev at the ring front [0, num_tiles) and cur behind it at
+ * [cur_offset, cur_offset + num_tiles), plus a separate exp_max_diff (emd) DFB.
+ *
+ * Why merged + re-based: the two sum blocks sit contiguously in the ring exactly as their producer
+ * (sub_exp_block_bcast_cols_inplace) left them — prev at the front, cur reserve_back'd right behind it.
+ * WH tile addressing is fifo_rd_ptr + page_size*idx with NO ring wrap, so the cur offset read is only
+ * valid while prev and cur are physically contiguous. This pass computes the running sum into a fresh
+ * reserved region, drops BOTH prev and cur, then move_block's the running sum down to the physical
+ * front — re-basing the ring so the next chunk starts at rd_ptr==0. Merging sum (not max) avoids the
+ * reduce_c prev==out in-place hazard.
+ *
+ * DECISION RULE (shared with the sdpa_decode fork's fma_block_merged_sum): a merged-sum fma uses the
+ * simpler 2-deep pop-both-repush-to-front form (computes all running[i] in DST, one cur scratch reg)
+ * when statistics_tiles + 1 <= dst_size (= fp32_dest_acc_en ? 4 : 8); otherwise it must use THIS
+ * 3-deep DST-frugal form. decode qualifies for 2-deep (bf16 dst_size=8, statistics_tiles=1); prefill
+ * does NOT (fp32 dst_size=4, Sq_chunk_t=4 => 5 > 4), so it uses this one.
+ *
+ * DST-frugal (unlike the sdpa_decode fork's fma, which holds num_tiles+1 DST tiles): prefill uses
+ * Sq_chunk_t (up to 8) statistics tiles and runs fp32_dest_acc_en on WH, where DST holds only 4 fp32
+ * tiles (sdpa_program_factory.cpp: dst_size = fp32?4:8). Holding num_tiles+1 tiles overflows DST and
+ * silently corrupts. So this does two single-tile passes with L1 accumulation instead:
+ *   pass 1: reserved_running[i] = cur[i]                     (copy)
+ *   pass 2: reserved_running[i] += prev[i] * bcast(emd[i])   (mul_bcast_cols + L1-acc pack)
+ * bcast_cols because prefill's prev/cur are FULL tiles (the final row reduction runs after the K loop),
+ * while emd is a column vector (max diff per row, column 0); a plain mul_tiles would pull emd's
+ * undefined columns 1..31 into the later matmul_reduce (catastrophic PCC).
+ *
+ * emd is read (num_tiles at the front) but NOT popped — the out-accumulator scaling that follows pops
+ * it. Each pass holds exactly ONE DST tile.
+ *
+ * Postcondition: `dfb_sum` holds num_tiles produced (the running sum) at the physical front; prev+cur
+ * consumed.
+ */
+void fma_block_merged_sum(uint32_t dfb_sum, uint32_t dfb_emd, uint32_t cur_offset, uint32_t num_tiles) {
+    DataflowBuffer d_sum(dfb_sum);
+    DataflowBuffer d_emd(dfb_emd);
+    d_sum.wait_front(cur_offset + num_tiles);  // prev@front [0,num_tiles) + cur@[cur_offset,+num_tiles)
+    d_emd.wait_front(num_tiles);
+
+    // Reserve the running-sum region behind cur (buffer depth is 3*num_tiles).
+    d_sum.reserve_back(num_tiles);
+
+    // Pass 1: reserved_running[i] = cur[i].
+    reconfig_data_format_srca(dfb_sum);
+    copy_init(dfb_sum);
+    pack_reconfig_out(dfb_sum);
+    PACK((llk_pack_reconfig_l1_acc(0)));
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        tile_regs_acquire();
+        copy_tile(dfb_sum, cur_offset + i, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile<true>(0, dfb_sum, i);  // out-of-order: reserved slot i
+        tile_regs_release();
+    }
+
+    // Pass 2: reserved_running[i] += prev[i] * bcast(emd[i])  (L1 accumulate onto pass-1 cur[i]).
+    reconfig_data_format(dfb_sum, dfb_emd);
+    pack_reconfig_out(dfb_sum);
+    PACK((llk_pack_reconfig_l1_acc(1)));
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        tile_regs_acquire();
+        mul_bcast_cols_init(dfb_sum, dfb_emd);
+        mul_tiles_bcast_cols(dfb_sum, dfb_emd, i, i, 0);  // dst[0] = prev[i] * bcast(emd[i])
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile<true>(0, dfb_sum, i);  // reserved slot i, accumulate
+        tile_regs_release();
+    }
+    PACK((llk_pack_reconfig_l1_acc(0)));
+
+    d_sum.push_back(num_tiles);               // running sum produced behind cur
+    d_sum.pop_front(cur_offset + num_tiles);  // drop the consumed prev AND cur blocks
+
+    // Re-base: move the running sum (now the ring front) down to the physical front [0,num_tiles) so
+    // the next chunk's producer appends [prev|cur] contiguously at rd_ptr==0 (no-wrap addressing).
+    reconfig_data_format_srca(dfb_sum);
+    pack_reconfig_out(dfb_sum);
+    move_block<true>(dfb_sum, dfb_sum, num_tiles);
+}
+
 void copy_block(uint32_t in_dfb, uint32_t out_dfb, uint32_t num_tiles) {
     DataflowBuffer dfb_in(in_dfb);
     DataflowBuffer dfb_out(out_dfb);
@@ -858,18 +1071,25 @@ void copy_block(uint32_t in_dfb, uint32_t out_dfb, uint32_t num_tiles) {
 
 void log_block(uint32_t in_dfb, uint32_t out_dfb, uint32_t num_tiles) {
     reconfig_data_format_srca(in_dfb);
-    pack_reconfig_data_format(out_dfb);
+    pack_reconfig_out(out_dfb);
     DataflowBuffer dfb_in(in_dfb);
     DataflowBuffer dfb_out(out_dfb);
     copy_init(in_dfb);
-    log_tile_init();
+    // log_tile SFPU is not wired up on Quasar; log_block is only used on the (untested) attention-sink
+    // path, so guard the log ops out there. On Quasar this degrades log_block to a plain copy — revisit
+    // when attention-sink is brought up on Quasar.
+#ifndef ARCH_QUASAR
+    MATH((log_tile_init()));
+#endif
     dfb_in.wait_front(num_tiles);
     dfb_out.reserve_back(num_tiles);
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         tile_regs_acquire();
         copy_tile(in_dfb, i, 0 /*dst*/);
-        log_tile(0);
+#ifndef ARCH_QUASAR
+        MATH((log_tile(0)));
+#endif
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, out_dfb);
@@ -893,8 +1113,13 @@ void sigmoid_sub(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_t 
     dfb_in1.wait_front(num_tiles);
     dfb_out.reserve_back(num_tiles);
     sub_init(in0_dfb, in1_dfb);
+#ifdef ARCH_QUASAR
+    // Quasar ships a generic accurate sigmoid SFPU op, so there's no need for the manual
+    // exp(-x)/add-1/reciprocal decomposition the WH/BH fused fast path uses below.
+    sigmoid_tile_init();
+#else
     exp_tile_init<false>();
-    // recip_tile_first_column<false>() calls the scalar sfpu_reciprocal_iter path, so initialize exactly
+    // recip_tile_first_column() calls the scalar sfpu_reciprocal_iter path, so initialize exactly
     // that SFPU state here. Blackhole needs vConstFloatPrgm0 = 2.0 for Newton-Raphson; Wormhole
     // needs vConstFloatPrgm0/1/2 loaded with reciprocal polynomial coefficients.
     // This init programs persistent SFPU constants, not per-tile data. It intentionally comes after
@@ -903,10 +1128,14 @@ void sigmoid_sub(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_t 
     // does not depend on vConstFloatPrgm* state from exp_tile_init. Conversely, that exp body also
     // does not clobber the reciprocal constants, so one reciprocal init before the tile loop is enough.
     MATH((ckernel::sfpu::sfpu_reciprocal_init<false>()));
+#endif
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         tile_regs_acquire();
         sub_tiles(in0_dfb, in1_dfb, i, i, 0);
+#ifdef ARCH_QUASAR
+        sigmoid_tile(0);  // full-tile accurate sigmoid(in0-in1); only col 0 is consumed downstream
+#else
         // exp_tile<false, true /*SCALE_EN*/>(0, (int)VectorMode::C, (uint16_t)0xBF80 /*bf16(-1.0) scale*/);
         MATH((exp_tile_first_column<false /*APPROX_MODE*/, (uint16_t)0xBF80 /*bf16(-1.0) scale*/>(0)));
         // add_unary_tile(0 /*dst_index*/, 0x3F800000); // Call the macro directly to get access to VectorMode argument
@@ -918,8 +1147,8 @@ void sigmoid_sub(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_t 
             0 /*dst_index*/,
             VectorMode::C,
             0x3F800000 /*scalar*/));
-        // recip_tile<false>(0, (int)VectorMode::C);
-        MATH((recip_tile_first_column<false>(0 /*dst_index*/)));
+        MATH((recip_tile_first_column(0 /*dst_index*/)));  // WH/BH fused fast path
+#endif
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, out_dfb);
@@ -928,7 +1157,7 @@ void sigmoid_sub(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_t 
     dfb_out.push_back(num_tiles);
 }
 
-#ifdef TRISC_MATH
+#if defined(TRISC_MATH) && !defined(ARCH_QUASAR)
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 void softplus_tile_first_column(uint32_t idst, uint beta, uint beta_reciprocal, uint threshold) {
     SFPU_UNARY_CALL(
@@ -970,7 +1199,12 @@ void logsigmoid_sub(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32
         //     const_20_fp32 /*threshold*/,
         //     (int)VectorMode::C)));
 
-        MATH((softplus_tile_first_column(0, const_1_fp32, const_1_fp32, const_20_fp32)));
+#ifdef ARCH_QUASAR
+        // Generic full-tile softplus; only col 0 is consumed downstream.
+        softplus_tile(0, const_1_fp32, const_1_fp32, const_20_fp32);
+#else
+        MATH((softplus_tile_first_column(0, const_1_fp32, const_1_fp32, const_20_fp32)));  // WH/BH fused fast path
+#endif
         // Negate the output of softplus
         negative_tile(0);
         tile_regs_commit();
@@ -1141,7 +1375,7 @@ void matmul_reduce(uint32_t in1_dfb, const uint32_t& out_dfb) {
     constexpr uint32_t output_num_tiles = M * N;
     constexpr uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
 
-    pack_reconfig_data_format(out_dfb);
+    pack_reconfig_out(out_dfb);
     dfb_in1.wait_front(N);
     dfb_out.wait_front(M);
 
@@ -1202,7 +1436,7 @@ void apply_padded_mask_lightweight_runtime(
     uint32_t start = num_cols - num_padded;
 
     reconfig_data_format_srca(neginf_dfb);
-    pack_reconfig_data_format(out_dfb);
+    pack_reconfig_out(out_dfb);
     copy_init(neginf_dfb);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
@@ -1234,7 +1468,7 @@ void apply_partial_mask_lightweight(
     uint32_t num_rows,
     uint32_t row_base = 0) {  // first out_dfb tile-row of this query band; nonzero when heads span >1 DEST band
     reconfig_data_format_srca(mask_dfb);
-    pack_reconfig_data_format(out_dfb);
+    pack_reconfig_out(out_dfb);
     copy_init(mask_dfb);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
@@ -1272,7 +1506,7 @@ void apply_causal_mask_lightweight(
     uint32_t straddle_col = 0,
     uint32_t straddle_jump = 0) {
     reconfig_data_format_srca(mask_dfb);
-    pack_reconfig_data_format(out_dfb);
+    pack_reconfig_out(out_dfb);
     copy_init(mask_dfb);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
@@ -1686,9 +1920,20 @@ void sdpa_inner_loop(
             }
         }  // If ring attention
 
-        // Set up ping pong buffers
+        // Set up ping pong buffers.
+        // STANDARD (no attention sink) merges the running-sum ping-pong into a single 3-deep DFB
+        // (dfb_sum_A, depth 3*Sq_chunk_t; its dfb_sum_B is dropped by the factory and aliased to
+        // dfb_sum_A). prev sits at the ring front [0,Sq_chunk_t); sub_exp_block_bcast_cols_inplace
+        // reserve_back's cur right behind it [Sq_chunk_t,2*Sq_chunk_t) (its out-of-order pack writes to
+        // the reserved region, so no producer offset is needed); fma_block_merged_sum reads
+        // prev@front + cur@offset and re-bases the running sum to the front (no ring rotation → no WH
+        // offset-read wrap). Arch-independent (runs on WH too) and on Quasar is what fits the op inside
+        // the 8 self-loop DFB budget. Merging sum (not max) avoids the reduce_c prev==out in-place
+        // hazard. JOINT/RING, the streaming path, and the attention-sink block keep two separate sum
+        // DFBs. Max stays a separate two-DFB ping-pong on every path.
+        constexpr bool merged_sum = (sdpa_type == STANDARD) && !use_attention_sink;
         uint32_t alias_prev_sum = dfb_sum_A;
-        uint32_t alias_cur_sum = dfb_sum_B;
+        uint32_t alias_cur_sum = merged_sum ? dfb_sum_A : dfb_sum_B;
         uint32_t alias_prev_max = dfb_max_A;
         uint32_t alias_cur_max = dfb_max_B;
         uint32_t alias_mm2_prev_out = dfb_out_im_A;
@@ -1761,8 +2006,13 @@ void sdpa_inner_loop(
              *
              * matmul_blocks internally waits on both inputs
              */
+            // QK = Q @ K^T via the matmul's native SrcA transpose (transpose=true), reading dfb_k_in
+            // directly. The srca-transpose LLK on the rebased base provides the SrcA transpose the Quasar
+            // matmul unpacker was missing, so the transpose-free kt-staging workaround is gone (WH always
+            // had SrcA transpose). matmul_blocks packs via pack_tile naming dfb_qk_im but does not itself
+            // reconfig the packer, so re-point it here first.
             reconfig_data_format(dfb_k_in, dfb_q_in);
-            pack_reconfig_data_format(dfb_qk_im);
+            pack_reconfig_out(dfb_qk_im);
             matmul_blocks(
                 dfb_q_in,
                 dfb_k_in,
@@ -1930,7 +2180,7 @@ void sdpa_inner_loop(
             // Reconfigure unpackers: srcA (context 0) = dfb_v_in, srcB (context 1) = dfb_qk_im (operands are swapped in
             // matmul)
             reconfig_data_format(dfb_v_in, dfb_qk_im);
-            pack_reconfig_data_format(alias_mm2_cur_out);
+            pack_reconfig_out(alias_mm2_cur_out);
 
             /* OUT_IM = QK @ V_CHUNK */
             matmul_blocks(
@@ -1957,31 +2207,52 @@ void sdpa_inner_loop(
                  * dfb_exp_max_diff = torch.exp((dfb_prev_max - dfb_cur_max) * scale)
                  * Scale is fused into exp again since max is the max of unscaled scores.
                  */
+                // sub_exp_block packs its EMD result via a bare pack_tile (no internal pack_reconfig_out),
+                // so the caller must select the pack output operand first. On Quasar the packer is
+                // sticky-dest: without this it stays latched to the previous op's output (the QK@V matmul)
+                // and EMD would be written to that ring instead of dfb_exp_max_diff. (The
+                // reconfig_data_format above only sets the UNPACKers.)
+                pack_reconfig_out(dfb_exp_max_diff);
                 sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, dfb_exp_max_diff, Sq_chunk_t);
                 DataflowBuffer(alias_prev_max).pop_front(Sq_chunk_t);
 
                 /**
-                 * dfb_prev_sum *= dfb_exp_max_diff
-                 * This is a bcast_cols since max_diff is a column vector and prev_sum is a partial
-                 * reduction, containing the sum of tiles in dim=-1 of QK.
+                 * dfb_cur_sum = dfb_cur_sum + dfb_prev_sum * dfb_exp_max_diff
+                 * bcast_cols since max_diff is a column vector and prev_sum is a partial reduction
+                 * (the sum of tiles in dim=-1 of QK), still full tiles here.
                  */
-                mul_tiles_bcast_cols_inplace(alias_prev_sum, dfb_exp_max_diff, Sq_chunk_t);
-
-                /* dfb_cur_sum += dfb_prev_sum */
-                add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
+                if constexpr (merged_sum) {
+                    // prev at ring front, cur behind at offset Sq_chunk_t in the single dfb_sum_A;
+                    // fused pass reads both and writes the running sum back as the single front block.
+                    fma_block_merged_sum(alias_prev_sum, dfb_exp_max_diff, Sq_chunk_t, Sq_chunk_t);
+                } else {
+                    mul_tiles_bcast_cols_inplace(alias_prev_sum, dfb_exp_max_diff, Sq_chunk_t);
+                    add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
+                }
 
                 /**
-                 * alias_mm2_cur_out += alias_mm2_prev_out * dfb_exp_max_diff
-                 * This uses L1 accumulation to accumulate onto mm2_cur_out.
+                 * alias_mm2_cur_out += alias_mm2_prev_out * dfb_exp_max_diff, as two non-accumulating
+                 * ops (the proven sdpa_decode flash form): scale prev in place, then add it into cur.
+                 * Do NOT use the fused pack_accumulate=true form here: it L1-accumulates onto the
+                 * already-pushed QK@V tiles in alias_mm2_cur_out WITHOUT a reserve_back, relying on the
+                 * packer dest landing on those tiles — which the Quasar sticky-dest packer (pack_init
+                 * re-latches L1_Dest_addr; WR-relative, no-wrap addressing) mis-targets → the prev-chunk
+                 * contribution is lost and compounds per chunk (multi-chunk PCC ~0.03). WH is unaffected
+                 * but this two-op form is arch-agnostic and validated on both.
                  */
-                mul_block_bcast_cols<Sq_chunk_t, vDHt, false, true>(
-                    alias_mm2_prev_out, dfb_exp_max_diff, alias_mm2_cur_out);
+                mul_block_bcast_cols<Sq_chunk_t, vDHt, true /*immediate_pop*/, false /*pack_accumulate*/>(
+                    alias_mm2_prev_out, dfb_exp_max_diff, alias_mm2_prev_out);
+                add_block_inplace<true>(alias_mm2_cur_out, alias_mm2_prev_out, out_chunk_tiles);
             }
 
-            // Swap DFB handles to prepare for next iteration
-            std::swap(alias_prev_sum, alias_cur_sum);
+            // Swap DFB handles to prepare for next iteration.
             std::swap(alias_mm2_prev_out, alias_mm2_cur_out);
             std::swap(alias_prev_max, alias_cur_max);
+            if constexpr (!merged_sum) {
+                // Separate sum DFBs: swap the ping-pong halves. Merged: fma_block_merged_sum already
+                // re-based the running sum to the front of the single dfb_sum_A, so there is no swap.
+                std::swap(alias_prev_sum, alias_cur_sum);
+            }
 
             processed_k_chunks++;
         }
@@ -2001,6 +2272,18 @@ void sdpa_inner_loop(
          * Shape of attention_sink: [Sq_chunk_t, 1] tiles
          * Each head has one sink logit value that is broadcast to all query positions in the chunk.
          * The reader kernel replicates the per-head value across all Sq_chunk_t positions.
+         *
+         * NOTE (Quasar bring-up): the attention-sink path below is NOT brought up on Quasar and is
+         * currently unverified there. Llama (the model driving this fork's bring-up) has no attention
+         * sinks, so nothing exercises this path today; it is a GPT-OSS-class feature. Two known gaps
+         * remain, to be resolved when a sink-using model is ported to this op:
+         *   1. Code size: with USE_ATTENTION_SINK=1 the compute kernel overflows the Quasar TRISC
+         *      instruction-memory region at -O3 (~32KB kernel vs ~24KB limit), so it does not even
+         *      load. Needs an Os/code-size fix for the sink path before it can run on craq-sim.
+         *   2. Packer retargeting: the bare-pack helpers in this block (e.g. the sub_exp_block below)
+         *      lack a preceding pack_reconfig_out to point the Quasar packer at their output DFB, the
+         *      same class of bug fixed in the flash loop. This is correct-by-audit but unverifiable
+         *      on craq-sim until gap (1) is resolved (and adding the reconfigs worsens the overflow).
          */
         if constexpr (use_attention_sink) {
             // Treat attention_sink as scores (already scaled)
@@ -2077,7 +2360,7 @@ void sdpa_inner_loop(
                 mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(alias_sub, alias_sig);
                 // dfb_out = dfb_prev_out - alias_sub
                 reconfig_data_format(dfb_prev_out, alias_sub);
-                pack_reconfig_data_format(dfb_out);
+                pack_reconfig_out(dfb_out);
                 sub_block(dfb_prev_out, alias_sub, dfb_out, out_chunk_tiles);
                 dfb_prev_out_obj.pop_front(out_chunk_tiles);
                 DataflowBuffer(alias_cur_out).pop_front(out_chunk_tiles);
@@ -2086,7 +2369,7 @@ void sdpa_inner_loop(
                 // alias_sig = sigmoid(dfb_lse_in - alias_cur_lse)
                 // alias_cur_lse = log(alias_sig)
                 // dfb_lse_out = dfb_lse_in - alias_cur_lse
-                pack_reconfig_data_format(alias_sig);
+                pack_reconfig_out(alias_sig);
                 reconfig_data_format(dfb_lse_in, alias_cur_lse);
                 logsigmoid_sub(dfb_lse_in, alias_cur_lse, alias_sig, Sq_chunk_t);
                 sub_block(dfb_lse_in, alias_sig, dfb_lse_out, Sq_chunk_t);
@@ -2094,10 +2377,10 @@ void sdpa_inner_loop(
                 DataflowBuffer(alias_cur_lse).pop_front(Sq_chunk_t);
                 dfb_lse_in_obj.pop_front(Sq_chunk_t);
             } else {
-                pack_reconfig_data_format(dfb_out);
+                pack_reconfig_out(dfb_out);
                 copy_block(alias_mm2_prev_out, dfb_out, out_chunk_tiles);
 
-                pack_reconfig_data_format(dfb_lse_out);
+                pack_reconfig_out(dfb_lse_out);
                 copy_block(alias_prev_max, dfb_lse_out, Sq_chunk_t);
             }
         } else {
@@ -2105,7 +2388,7 @@ void sdpa_inner_loop(
             recip_block_inplace(alias_prev_sum, Sq_chunk_t);
 
             /* dfb_out_accumulate_im *= dfb_cur_sum */
-            pack_reconfig_data_format(dfb_out);
+            pack_reconfig_out(dfb_out);
             mul_block_bcast_cols<Sq_chunk_t, vDHt, false, false>(alias_mm2_prev_out, alias_prev_sum, dfb_out);
 
             // free up dfb_prev_max after K chunks

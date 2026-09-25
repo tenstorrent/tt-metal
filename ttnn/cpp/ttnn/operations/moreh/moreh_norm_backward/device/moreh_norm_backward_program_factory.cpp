@@ -331,7 +331,11 @@ ProgramArtifacts MorehNormBackwardOperation::MorehNormBackwardProgramFactory::cr
             .compile_time_args =
                 {{"num_output_tiles", num_cols_per_core_group},
                  {"wt_need_bcast", need_bcast_dim[0]},
-                 {"ht_need_bcast", need_bcast_dim[1]}},
+                 // need_bcast_dim is sized from input_grad's LOGICAL rank (line ~109 above), so a
+                 // rank-1 input_grad (a supported case, e.g. dim=0 norm_backward on a 1-D tensor)
+                 // makes it a 1-element vector; there is no height dimension to broadcast in that
+                 // case, so treat it as "no broadcast needed" rather than reading out of bounds.
+                 {"ht_need_bcast", need_bcast_dim.size() > 1 ? need_bcast_dim[1] : 0}},
             .runtime_arg_schema =
                 {.runtime_arg_names =
                      {"num_input_tiles_per_core", "p", "p_is_negative", "p_minus_one", "p_minus_one_is_negative"}},
