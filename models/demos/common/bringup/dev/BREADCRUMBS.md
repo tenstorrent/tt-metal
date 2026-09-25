@@ -158,3 +158,9 @@ Drive this ledger with
   whose components already pass). The failed pre-check is handed to the agent as the previous attempt.
 - `agents.read.<role>` in the spec lists files every brief of that role names (for Gemma: the HF modeling code for the
   reference role, `models/demos/gemma4/tt` for plan and implement).
+
+## F10 (2026-09-25): brief and commit details
+- The reference-role brief now says what R.3 and the goldens step will hold the reference to (exact graph replay,
+  chunked == one-shot, a CPU run over the longest rung) and where to split the block into steps.
+- Gate commits also stage the model's `approvals.yaml` and `findings.yaml` when present.
+- Gemma-4 26B-A4B: R.1 passed (63d8dc763b8); the orchestrator runs from R.2 as run `run1`.
