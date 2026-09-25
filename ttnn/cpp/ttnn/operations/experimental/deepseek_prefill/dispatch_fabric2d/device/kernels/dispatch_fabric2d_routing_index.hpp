@@ -197,6 +197,12 @@ inline void wait_all_riscs(uint32_t value) {
     }
 }
 
+// A pick's bucket, or BUCKET_NOT_HERE. The host does not check expert ids, and an id past the sentinel
+// column would load a word from the next scratch block that can look like a valid bucket.
+inline uint32_t bucket_of(const uint32_t* es, uint32_t expert) {
+    return expert <= ct.num_routed_experts ? es[expert] : dspf2d::BUCKET_NOT_HERE;
+}
+
 // Pass 1: count my slice's picks per bucket, including those capacity will drop, since they still advance
 // the page counter.
 inline void count_pass(const Scratch& c, const Risc& me, uint32_t t0, uint32_t t1) {
@@ -211,11 +217,9 @@ inline void count_pass(const Scratch& c, const Risc& me, uint32_t t0, uint32_t t
         static_assert(ct.topk <= 8, "the unroll count is the top-k bound");
 #pragma GCC unroll 8
         for (uint32_t k = 0; k < ct.topk; k++) {
-            const uint32_t bucket = es[idx[k]];
-            // An index the host did not validate can read past the table and name any bucket. Skip it so
-            // this RISC never writes another RISC's counters.
+            const uint32_t bucket = bucket_of(es, idx[k]);
             if (bucket >= n) {
-                continue;  // BUCKET_NOT_HERE, or an expert id the table does not resolve
+                continue;  // BUCKET_NOT_HERE, or a corrupt table entry; never index past this RISC's counters
             }
             me.cnt[bucket] = me.cnt[bucket] + 1u;
         }
@@ -247,9 +251,9 @@ inline void fill_pass(const Scratch& c, const Risc& me, uint32_t t0, uint32_t t1
         const uint16_t* idx = reinterpret_cast<const uint16_t*>(idx_addr);
 #pragma GCC unroll 8
         for (uint32_t k = 0; k < ct.topk; k++) {
-            const uint32_t bucket = es[idx[k]];
+            const uint32_t bucket = bucket_of(es, idx[k]);
             if (bucket >= n) {
-                continue;  // as in count_pass: never index another RISC's block
+                continue;  // as in count_pass
             }
             const uint32_t page = me.next_page[bucket];
             me.next_page[bucket] = page + 1u;

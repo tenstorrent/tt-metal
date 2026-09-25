@@ -16,26 +16,28 @@ namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d {
 namespace {
 
 // A page index computed on one chip addresses the same page on another chip. That holds only while every
-// chip's copy of a buffer starts at the same address, which interleaved allocation on a uniform mesh gives.
-void validate_interleaved(const ttnn::Tensor& t, const char* name) {
+// chip's copy of a buffer starts at the same address, which interleaved DRAM allocation on a uniform mesh
+// gives.
+void validate_dram_interleaved(const ttnn::Tensor& t, const char* name) {
     TT_FATAL(t.buffer() != nullptr, "dispatch_fabric2d: {} has no device buffer", name);
     TT_FATAL(
-        t.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-        "dispatch_fabric2d: {} must be interleaved; a sender addresses it by page index on another chip",
+        t.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM &&
+            t.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
+        "dispatch_fabric2d: {} must be interleaved in DRAM; a sender addresses it by page index on another chip",
         name);
 }
 
-void validate_interleaved_row_major(const ttnn::Tensor& t, const char* name) {
+void validate_dram_row_major(const ttnn::Tensor& t, const char* name) {
     TT_FATAL(
         t.layout() == tt::tt_metal::Layout::ROW_MAJOR,
         "dispatch_fabric2d: {} must be ROW_MAJOR, got {}",
         name,
         t.layout());
-    validate_interleaved(t, name);
+    validate_dram_interleaved(t, name);
 }
 
 void validate_control_tensor(const ttnn::Tensor& t, uint32_t num_routed_experts, const char* name) {
-    validate_interleaved_row_major(t, name);
+    validate_dram_row_major(t, name);
     TT_FATAL(
         t.dtype() == tt::tt_metal::DataType::INT32 || t.dtype() == tt::tt_metal::DataType::UINT32,
         "dispatch_fabric2d: {} must be INT32 or UINT32, got {}",
@@ -75,7 +77,11 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
         "dispatch_fabric2d: num_links must be between 1 and 4 (got {})",
         args.num_links);
     TT_FATAL(args.seq_len_per_chip > 0, "dispatch_fabric2d: seq_len_per_chip must be positive");
-    TT_FATAL(!args.output_mem_config.is_sharded(), "dispatch_fabric2d: output memory config must be interleaved");
+    TT_FATAL(
+        args.output_mem_config.buffer_type() == tt::tt_metal::BufferType::DRAM &&
+            args.output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
+        "dispatch_fabric2d: output memory config must be interleaved DRAM; other chips write the outputs by "
+        "page index");
 
     const uint32_t extent = axis_extent(args);
     TT_FATAL(
@@ -116,7 +122,7 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
 
     if (tensor_args.padding_config.has_value()) {
         const auto& pc = *tensor_args.padding_config;
-        validate_interleaved_row_major(pc, "padding_config");
+        validate_dram_row_major(pc, "padding_config");
         TT_FATAL(
             pc.dtype() == tt::tt_metal::DataType::INT32 || pc.dtype() == tt::tt_metal::DataType::UINT32,
             "dispatch_fabric2d: padding_config must be INT32 or UINT32, got {}",
@@ -129,7 +135,7 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
     }
 
     // Padded tokens look up the extra -1 column, so the kernel needs no bounds check.
-    validate_interleaved_row_major(tensor_args.expert_dispatch_table_tensor, "expert_dispatch_table");
+    validate_dram_row_major(tensor_args.expert_dispatch_table_tensor, "expert_dispatch_table");
     TT_FATAL(
         tensor_args.expert_dispatch_table_tensor.dtype() == tt::tt_metal::DataType::INT32,
         "dispatch_fabric2d: expert_dispatch_table must be INT32, got {}",
@@ -143,7 +149,7 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
         args.num_routed_experts + 1);
 
     const auto& input = tensor_args.input_tensor;
-    validate_interleaved(input, "input_tensor");
+    validate_dram_interleaved(input, "input_tensor");
     TT_FATAL(
         input.dtype() == tt::tt_metal::DataType::BFLOAT16,
         "dispatch_fabric2d: input must be BFLOAT16, got {}",
@@ -171,7 +177,7 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
         input.layout() == tt::tt_metal::Layout::TILE ? " plus at least one for the untilizer" : "");
 
     const auto& indices = tensor_args.indices_tensor;
-    validate_interleaved_row_major(indices, "indices_tensor");
+    validate_dram_row_major(indices, "indices_tensor");
     TT_FATAL(
         indices.dtype() == tt::tt_metal::DataType::UINT16,
         "dispatch_fabric2d: indices must be UINT16, got {}",

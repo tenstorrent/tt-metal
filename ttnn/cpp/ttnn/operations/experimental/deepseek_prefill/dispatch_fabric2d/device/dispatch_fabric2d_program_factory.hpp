@@ -22,7 +22,7 @@ struct DispatchFabric2dProgramFactory {
     // One ProgramDescriptor per mesh coordinate: each chip's senders name their own downstream workers,
     // so compile-time args are coord-dependent and cannot be replicated.
     static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
-        const DispatchFabric2dParams& operation_attributes,
+        const DispatchFabric2dParams& args,
         const DispatchFabric2dInputs& tensor_args,
         tensor_return_value_t& tensor_return_value,
         const ttnn::MeshCoordinateRangeSet& tensor_coords);
