@@ -173,6 +173,23 @@ class QuantConfig:
         )
 
 
+def _all_bf8_lofi_sdpa_lofi() -> QuantConfig:
+    """`all_bf8_lofi` with the ring SDPA itself at LoFi (bf8 inputs, no fp32 accumulate).
+
+    The last precision step: the self-attention SDPA is ~28 % of the TI2V-5B denoise and is the
+    only compute `all_bf8_lofi` leaves at HiFi2. Measured option, not a default candidate
+    (added 2026-09-25); gate it on PCC, CLIP and a visual check before use.
+    """
+    base = QuantConfig.all_bf8_lofi()
+    base.ring_sdpa = SDPAQuantConfig(
+        input_dtype=ttnn.bfloat8_b, math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc=False
+    )
+    return base
+
+
+QuantConfig.all_bf8_lofi_sdpa_lofi = staticmethod(_all_bf8_lofi_sdpa_lofi)
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -360,7 +377,14 @@ def quant_config_from_env(var: str = QUANT_CONFIG_ENV) -> tuple[str, QuantConfig
         return None
     factory = getattr(QuantConfig, name, None) if not name.startswith("_") else None
     if factory is None or not callable(factory):
-        presets = ["default", "all_weights_bf8", "bf8_weights_sdpa_bf8", "all_lofi", "all_bf8_lofi"]
+        presets = [
+            "default",
+            "all_weights_bf8",
+            "bf8_weights_sdpa_bf8",
+            "all_lofi",
+            "all_bf8_lofi",
+            "all_bf8_lofi_sdpa_lofi",
+        ]
         msg = f"{var}={name!r} is not a QuantConfig preset; expected one of {presets}"
         raise ValueError(msg)
     return name, factory()
