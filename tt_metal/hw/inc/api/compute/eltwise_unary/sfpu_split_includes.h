@@ -243,3 +243,11 @@
 #if TT_POLY_BACKWARD_ELU_BW_INCLUDE
 #include "api/compute/eltwise_unary/elu_bw_tt_poly_bf16.h"
 #endif
+
+#if TT_POLY_FACTOR_HARDSIGMOID_BW_INCLUDE
+#include "api/compute/eltwise_unary/hardsigmoid_bw_tt_poly_bf16.h"
+#endif
+
+#if TT_POLY_BACKWARD_HARDSWISH_BW_INCLUDE
+#include "api/compute/eltwise_unary/hardswish_bw_tt_poly_bf16.h"
+#endif
