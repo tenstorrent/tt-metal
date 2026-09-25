@@ -35,7 +35,7 @@ from models.demos.deepseek_v3_d_p.tt.v4.block import TtV4PrefillBlock
 from models.demos.deepseek_v3_d_p.tt.v4.kv_cache import allocate_v4_flash_kv_caches
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
 
-_CHUNK = 5120
+_CHUNK = int(os.environ.get("V4_BLOCK_CHUNK", "5120"))  # V4_BLOCK_CHUNK=10240 checks the larger engine chunk
 _MESH_CONFIGS = [
     pytest.param(
         (2, 4),
