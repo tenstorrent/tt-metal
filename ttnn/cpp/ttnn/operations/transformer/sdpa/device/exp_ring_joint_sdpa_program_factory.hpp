@@ -25,27 +25,16 @@
 namespace ttnn::prim {
 
 // EXPERIMENT (TT_EXP_SDPA_MUX_BOTTOM_ROW): place the fabric MUX kernels on the BOTTOM ROW of the
-// user grid instead of the reserved right column. The SDPA grid then keeps every column and gives
-// up the bottom row to the MUX kernels; if the remaining row count is odd one more row idles so the
-// backward/forward direction split and the termination groups stay uniform (no kernel changes). On
-// a Blackhole 13x10 grid that is 13x8 (two rows given up); on the Wormhole 8x9 grid it is 8x8 = 64
-// SDPA cores, one more column than the reserved-column layout's 7x8 = 56. NOTE: the env var is not
-// part of the program-cache key — use one setting per process. Shared by the factory build, the
-// cache-hit patch, and validation so all three derive the same grid.
+// user grid instead of the reserved right column. The SDPA grid then becomes user_grid.x wide by
+// user_grid.y - 2 tall (the row count is kept even so the backward/forward direction split and the
+// termination groups stay uniform, requiring no kernel changes; the row between the workers and
+// the MUX row is idle). Probes whether MUX-kernel placement relative to the eth cores affects the
+// fabric all-gather rate. NOTE: the env var is not part of the program-cache key — use one setting
+// per process. Shared by the factory build, the cache-hit patch, and validation so all three
+// derive the same grid.
 inline bool exp_sdpa_mux_on_bottom_row() {
     static const bool enabled = std::getenv("TT_EXP_SDPA_MUX_BOTTOM_ROW") != nullptr;
     return enabled;
-}
-
-// SDPA worker grid for a user grid: drop the reserved MUX column (default) or the MUX row plus an
-// idle row when the remainder is odd (bottom-row placement). Single source of truth for the build
-// and the cache-hit runtime-arg patch.
-inline CoreCoord exp_sdpa_grid_for_user_grid(const CoreCoord& user_grid) {
-    if (!exp_sdpa_mux_on_bottom_row()) {
-        return CoreCoord{user_grid.x - 1, user_grid.y};
-    }
-    const uint32_t rows = user_grid.y - 1;
-    return CoreCoord{user_grid.x, rows - (rows % 2)};
 }
 
 // EXPERIMENT (TT_EXP_SDPA_MUX_TOP_CLUSTER): keep the reserved-column MUX placement (and therefore
@@ -57,22 +46,6 @@ inline bool exp_sdpa_mux_top_cluster() {
     static const bool enabled = std::getenv("TT_EXP_SDPA_MUX_TOP_CLUSTER") != nullptr;
     return enabled;
 }
-
-// EXPERIMENT (TT_EXP_SDPA_Q_GROUPS=G, G >= 1): sequential passes. Passes run pass-outer /
-// ring-inner so one Q chunk and one flash state are live per core (the scratch path) instead of one
-// per pass, and each head-segment's Q chunks are split into G groups of one chunk per column, walked
-// as extra passes; only group 0 forwards K/V over the fabric, later groups re-read the gathered K/V
-// from DRAM. This is what lets a shard whose per-core Q volume does not fit L1 (MiniMax-H3 15 s on a
-// Wormhole 7x8 grid) build at all. 0 / unset = the original lockstep schedule. NOTE: not part of the
-// program-cache key — one setting per process.
-inline uint32_t exp_sdpa_q_groups() {
-    static const uint32_t groups = [] {
-        const char* v = std::getenv("TT_EXP_SDPA_Q_GROUPS");
-        return v ? static_cast<uint32_t>(std::atoi(v)) : 0u;
-    }();
-    return groups;
-}
-inline bool exp_sdpa_sequential_passes() { return exp_sdpa_q_groups() >= 1; }
 
 // Single source of truth for the DYNAMIC (hash-excluded) global-semaphore address runtime args.
 //

@@ -1,7 +1,7 @@
 # MiniMax-H3 on Wormhole Galaxy: ff1 SwiGLU LUT silu — handoff (paused 2026-09-21)
 
 State of the ff1 SwiGLU epilogue work at the moment it was paused, 2026-09-21 ~23:20 on `UF-EV-B12-GWH02`, branch
-`jameslee/exp_ring_sdpa_wh` at `c9487436276` plus the working tree described below (committed as-is on 2026-09-23, still behind the opt-in define). Context and the
+`minimax_h3_wh_optimizations` at `c9487436276` plus the working tree described below (committed as-is on 2026-09-23, still behind the opt-in define). Context and the
 experiments that led here: [ff1.md](ff1.md) §3.2 (change B). Block-level context: [README.md](README.md).
 
 ## 1. What the tree does right now

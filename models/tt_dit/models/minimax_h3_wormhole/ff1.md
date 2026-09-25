@@ -2,7 +2,7 @@
 
 The first feed-forward linear of the transformer block, `ttnn.experimental.all_gather_minimal_matmul_async` (AGMM)
 with the fused SwiGLU epilogue, and the work done on it 2026-09-18 to 2026-09-21 on the 4x8 Wormhole Galaxy
-`UF-EV-B12-GWH02`, branch `jameslee/exp_ring_sdpa_wh`. This merges the ff1 handoff (2026-09-18, updated 09-19 and
+`UF-EV-B12-GWH02`, branch `minimax_h3_wh_optimizations`. This merges the ff1 handoff (2026-09-18, updated 09-19 and
 09-21) and the block write-up's ff1 section (2026-09-18) into one document ordered as baseline -> zone breakdown ->
 experiments per zone -> results, and adds two results measured on 2026-09-21 that had not been written down (the
 6-segment LUT silu and the fp32-dest-off epilogue regression). Block-level context: [README.md](README.md); the two

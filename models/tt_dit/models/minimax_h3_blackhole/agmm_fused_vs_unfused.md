@@ -24,7 +24,7 @@ Shapes (per device, `models/tt_dit/tests/models/minimax_h3/tools/minimax_h3_ops.
 
 ## Harness
 
-Host `g15blx02`: 32 x Blackhole (`1e52:b140`) as a 4x8 galaxy, tt-metal branch `jameslee/exp_ring_sdpa_wh` at
+Host `g15blx02`: 32 x Blackhole (`1e52:b140`) as a 4x8 galaxy, tt-metal branch `minimax_h3_wh_optimizations` at
 `60a16f57aba`, clean Release build with the Tracy profiler (2026-09-22). The device is shared through the
 `tt-device-mcp` broker: one job at a time, 1500 s hard cap per job, so every device step below ran as a broker job
 and the sweep cases were split into chunks of explicit combos (see "How the sweep was run").

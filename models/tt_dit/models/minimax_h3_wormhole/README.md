@@ -302,8 +302,8 @@ tuning them.
 
 ### Baseline re-measured, and run-to-run variance (2026-09-21)
 
-The same two profiles re-taken on this host at `d4fca5e3f23` + the working tree (the ff1 silu landing and the exp
-ring SDPA commits are in; nothing else of the block changed), six runs each, ~2 min per run. New report
+The same two profiles re-taken on this host at `d4fca5e3f23` + the working tree (the ff1 silu landing and the SDPA pack-4
+commit are in; nothing else of the block changed), six runs each, ~2 min per run. New report
 directories only; the 09-17 CSVs the table above came from are untouched (report `2026_09_17_21_33_20` fsdp1, `2026_09_17_21_35_04` fsdp0). Tool:
 `tools/block_profile_stats.py compare|runs|devices` (same signpost isolation and device merge as
 `project_block_perf.py`).
@@ -319,9 +319,8 @@ directories only; the 09-17 CSVs the table above came from are untouched (report
 | **device only** | **246.92** | **244.25** | **-2.67 (-1.1%)** | **233.41** | **230.82** | **-2.59 (-1.1%)** |
 | device + op gap | 250.80 | 249.24 | -1.56 | 238.46 | 238.16 | -0.31 |
 
-The two drops are the two landings since 09-17: the blocked pack at width 4 in the SDPA inner loop shared by the normal
-and exp ring ops ([sdpa.md](sdpa.md), inner-loop experiment A; the normal op the block runs went 192.9 -> 191.6 ms on
-the padded shard), and the bf16-grade silu in the ff1 epilogue ([ff1.md](ff1.md); -0.56 ms per call on the mesh bench). Projected over 50 layers the block is 12.21 s/step device-only (was 12.35).
+The two drops are the two landings since 09-17: the blocked pack at width 4 in the SDPA inner loop
+([sdpa.md](sdpa.md), inner-loop experiment A; the op went 192.9 -> 191.6 ms on the padded shard), and the bf16-grade silu in the ff1 epilogue ([ff1.md](ff1.md); -0.56 ms per call on the mesh bench). Projected over 50 layers the block is 12.21 s/step device-only (was 12.35).
 
 **Run-to-run, same host and commit** (6 runs per setting; sample std):
 
@@ -492,8 +491,7 @@ Figures: `transformer_roofline_out/all_on/block_{stacked,ops,other}_wh_M13664.pn
 1. Speed of light at HiFi2 is ~2.75x today's 15 s forward and ~3.7x the 5 s one; a realistic 70%-util target is
    ~6.5 s/fwd at 15 s (317 s, 21x RT) and ~1.1 s/fwd at 5 s (52 s, 10x RT).
 2. Ring SDPA is 71-80% of the FLOPs at 48% util. Chunk tuning is exhausted and the remaining ~2x on that op is
-   kernel work: the exp ring op bring-up, the 64-core layout and the inner-loop zones and experiments are in
-   [sdpa.md](sdpa.md).
+   kernel work: the inner-loop zones and experiments are in [sdpa.md](sdpa.md).
 3. The three AGMMs run at 46-58% of peak with the same 2x2 fp32 pipeline pace; ff1 adds a serialized SwiGLU
    epilogue, to_qkv a chunked writer, to_out an addcmul epilogue and operand waits on the relay:
    [ff1.md](ff1.md), [to_qkv.md](to_qkv.md), [to_out.md](to_out.md). ff2's plain matmul and its blocking sweep
@@ -511,7 +509,7 @@ the tooling. Numbers are per call, per device, at 15 s / 768P / 16:9.
 
 | op | share of block | baseline (09-17 block) | roofline | current | status | doc |
 |---|---|---|---|---|---|---|
-| ring joint SDPA | 70.7% | 174.56 ms | 83.0 ms | 172.16 ms | pack-4 landed; exp ring op brought up (193.7 vs normal 191.6 ms on the padded shard, not adopted); softmax half of the inner loop is the lever | [sdpa.md](sdpa.md) |
+| ring joint SDPA | 70.7% | 174.56 ms | 83.0 ms | 172.16 ms | pack-4 landed; softmax half of the inner loop is the lever | [sdpa.md](sdpa.md) |
 | ff1 AGMM (fused SwiGLU) | 6.4% | 15.7 ms | 8.03 ms | 15.29 ms | bf16 silu landed (-3.6%); K-loop MVMUL reorder landed 2026-09-23 (-0.35 ms per call on the mesh bench, [kloop_refill_reorder_handoff.md](kloop_refill_reorder_handoff.md)); fp32 dest off + 2x4 (-8%) and a 6-segment LUT silu (-9.2%) measured, both precision decisions, not landed | [ff1.md](ff1.md) |
 | to_qkv AGMM (chunks=3) | 4.2% | 10.4 ms | 6.03 ms | 10.30 ms | behaves like ff1; K-loop reorder landed 2026-09-23 (11.25 -> 11.03 ms per call, fp32 dest on); fp32 dest off + 4x2 -8.7% measured, not landed | [to_qkv.md](to_qkv.md) |
 | to_out AGMM (fused addcmul) | 2.1% | 5.3 ms (4.33 in the plain sweep) | 2.01 ms | 5.29 ms | delivery co-limited (relay waits 1.1 ms) + two-pass epilogue 0.7 ms; compute-side levers do not transfer | [to_out.md](to_out.md) |
@@ -663,9 +661,8 @@ One row per experiment, in the order they were numbered (12 was never allocated)
 | 4 | SDPA chunk sizes, small-q / large-k (q<=256, k>=512) | **done** | Hypothesis disproved. `(192, 640)` is feasible — the first k>512 point on this shape — but 13% slower than the shipped `(256, 512)`; larger q is more per-core efficient and shrinking q raises iters/core. Chunk tuning at 15 s is exhausted. L1 envelope calibrated as a by-product. [sdpa.md](sdpa.md) |
 | 5 | Re-profile the block with landed configs | **done** | 2026-09-24, this host, every optimization on (tree default + fp32 dest off + LUT SwiGLU): **246.92 -> 238.27 ms** device-only (-3.5%), 244.05 -> 235.34 device-busy union (-3.6%), ff1 at 66% of HiFi2 peak, block headroom 2.26x -> 2.18x. Table and per-op roofline in Part 2, *Roofline with every optimization on* |
 | 6 | Pipeline re-run: warm total, denoise, ms/fwd, CLIP | **done** | Same-host A/B: **-69.9 ms/fwd, -0.58%**, exactly the isolated-sweep prediction. CLIP **35.88** (min 34.69, bar 33.0) on the later run |
-| 7 | `use_exp_ring_sdpa` on Wormhole | **done** | Brought up (header-pool and reader fixes, even-row grid, 2 or 4 links, sequential passes for shards that do not fit L1); PCC 0.99975. 15 s shard (padded to 14336 rows): exp 206.7 ms on 56 cores -> 196.2 on 64 cores (bottom-row MUX) -> **193.7 ms** with the shared pack-4 inner loop, against the normal op's 192.9 -> **191.6 ms**: 1.1% behind, not adopted. [sdpa.md](sdpa.md) |
 | 8 | FSDP layout conversions | not started | **TODO** — tilize/untilize go 0.13 -> 3.13 ms under FSDP, a 23x blowup and a quarter of the whole FSDP cost spent on format round-trips rather than communication. Cheapest apparent win in the breakdown |
-| 9 | Ring SDPA kernel utilization | not started | **TODO** — 48% at the shipped chunk size, inherent to the kernel at this shape rather than a chunk-size miss. Note `PM FPU UTIL (%)` is the perf-model ideal divided by measured time (`tools/tracy/process_ops_logs.py`), not a hardware counter; the exp kernel shares the same inner loop, so the work remains in `compute_streaming.hpp`. Inner-loop zones and experiments in [sdpa.md](sdpa.md) |
+| 9 | Ring SDPA kernel utilization | not started | **TODO** — 48% at the shipped chunk size, inherent to the kernel at this shape rather than a chunk-size miss. Note `PM FPU UTIL (%)` is the perf-model ideal divided by measured time (`tools/tracy/process_ops_logs.py`), not a hardware counter; the work is in `compute_streaming.hpp`. Inner-loop zones and experiments in [sdpa.md](sdpa.md) |
 | 10 | `dit_fsdp: True` in `_PRESETS_WH` | not started | **TODO** — decision, not a measurement; costs 5.7% of the block, buys the headroom a 12 GB part needs |
 | 11 | Numerics of the landed blockings (the sweep never checked) | **done** | ff2 (8,7,10) pcc 1.0000000 vs torch, identical to (8,8,8) to one bf16 ulp; ff1 (8,7,10) pcc 0.9999843 on the real SwiGLU ring, = (8,3,14) to 6 dp. Both PASS |
 | 13 | TP/SP axes and factors at 15 s / 16:9 (`test_parallel_sweep_minimax_h3.py`) | **done** | Only three configurations exist on this mesh and the shipped TP4/SP8 is the fastest: TP8/SP4 is **+4.1%** ms/fwd (untuned blockings), TP1/SP32 **hangs deterministically** in its first forward. See *TP/SP parallel-configuration sweep* below |

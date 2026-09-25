@@ -2,7 +2,7 @@
 
 Status: plan, 2026-09-22; executed 2026-09-22/23, see "How it was actually run" at the end and the results in
 [`agmm_fused_vs_unfused.md`](agmm_fused_vs_unfused.md). Written for an agent starting cold on a 4x8 Blackhole galaxy, on branch
-`jameslee/exp_ring_sdpa_wh`. The Wormhole study this repeats is
+`minimax_h3_wh_optimizations`. The Wormhole study this repeats is
 [`../minimax_h3_wormhole/agmm_fused_vs_unfused.md`](../minimax_h3_wormhole/agmm_fused_vs_unfused.md); read its
 Question, Harness and Results sections first. The harness is the same code; the architectural differences are
 constants in the tools or values resolved from the device at run time. Results go in `agmm_fused_vs_unfused.md`
@@ -47,7 +47,7 @@ take `--arch bh` / the row's arch. Arch-independent by design, do not change: `L
 ### 0. Environment
 
 ```bash
-git fetch origin && git checkout jameslee/exp_ring_sdpa_wh   # build as usual; reinstall pinned packages if rebuilt
+git fetch origin && git checkout minimax_h3_wh_optimizations   # build as usual; reinstall pinned packages if rebuilt
 source python_env/bin/activate
 python -c "import ttnn; print(ttnn.get_arch_name())"          # must print: blackhole
 tt-smi                                                          # 32 chips, links up
@@ -78,7 +78,7 @@ bound formula, with the ops folded into "other (small ops)" listed as indented s
 `roofline_bh_M13664.png`, `block_stacked_bh_M13664.png`, `block_ops_bh_M13664.png`, `block_other_bh_M13664.png` (the
 "other (small ops)" group broken out per op), `time_bars_M13664.png`, `stacked_M13664.png`, `nstar_links.png`. Record the block table
 and the three AGMM rows in the results doc. Op codes match Wormhole for the 4x8 row except ff2 (fused MM+RS here, see "How it was actually run"; the exp ring SDPA
-is a 4x32 feature, `attention_minimax_h3.py:211`).
+is a 4x32 feature, `attention_minimax_h3.py:196`).
 
 ### 2. PCC gate for the shipped blockings, fused and separate
 

@@ -2,7 +2,7 @@
 
 The attention output projection, `ttnn.experimental.all_gather_minimal_matmul_async` with the fused addcmul epilogue
 (`out = residual + gate * (x @ w)`). Measured 2026-09-21 on the 4x8 Wormhole Galaxy `UF-EV-B12-GWH02`, branch
-`jameslee/exp_ring_sdpa_wh`, with the generic op tools written that day. Block-level context: [README.md](README.md);
+`minimax_h3_wh_optimizations`, with the generic op tools written that day. Block-level context: [README.md](README.md);
 the ff1 investigation this follows: [ff1.md](ff1.md). The one AGMM of the block whose K loop waits on operand
 delivery.
 
