@@ -912,7 +912,8 @@ SystemMemoryManager& Device::sysmem_manager() {
     // SystemMemoryManager handles mock devices internally with stubs
     // For mock devices, ensure lazy initialization if not already done
     if (!sysmem_manager_) {
-        sysmem_manager_ = std::make_unique<SystemMemoryManager>(context_->get_context_id(), this->id_, 1);
+        sysmem_manager_ =
+            std::make_unique<SystemMemoryManager>(context_->get_context_id(), this->id_, this->num_hw_cqs());
     }
     return *sysmem_manager_;
 }
