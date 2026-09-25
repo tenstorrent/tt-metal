@@ -30,6 +30,10 @@
 #ifndef PV_MATH_FIDELITY
 #define PV_MATH_FIDELITY -1
 #endif
+// Kernel profiler zones (device-profiler builds); the ring-joint factory sets it from TT_SDPA_PROFILE_ZONES.
+#ifndef SDPA_PROFILE_ZONES
+#define SDPA_PROFILE_ZONES 0
+#endif
 
 // reduce_trigger uses a packer->unpacker semaphore handshake to start the reduce early and skip the
 // input CB wait. Quasar has no such handshake, so it stays disabled there and the normal CB
@@ -2854,7 +2858,7 @@ void sdpa_ring_v2(
             step_kv_pad_rotation.logical_tile_count = logical_nt;
 
             sdpa_inner_loop_step<
-                false,  // profiling_enabled
+                SDPA_PROFILE_ZONES == 1,  // profiling_enabled
                 Sq_chunk_t,
                 Sk_chunk_t,
                 Skt,

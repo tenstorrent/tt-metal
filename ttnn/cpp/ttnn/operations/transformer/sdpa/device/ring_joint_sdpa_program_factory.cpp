@@ -23,6 +23,7 @@
 #include <map>
 #include <optional>
 #include <cmath>
+#include <cstdlib>
 #include <string>
 #include <deque>
 #include <limits>
@@ -1782,6 +1783,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     defines["QK_MATH_FIDELITY"] = std::to_string(static_cast<uint32_t>(qk_math_fidelity));
     defines["PV_MATH_FIDELITY"] = std::to_string(static_cast<uint32_t>(pv_math_fidelity));
+    if (std::getenv("TT_SDPA_PROFILE_ZONES") != nullptr) {
+        defines["SDPA_PROFILE_ZONES"] = "1";
+    }
     defines["SLIDING_HALO_SLOT_COUNT"] =
         std::to_string(has_sliding_window ? gathered_padded_Nt / chunked_sliding_halo_layout.halo_tile_rows : 0);
 
