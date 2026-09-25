@@ -219,7 +219,6 @@ std::pair<distributed::MeshSocket, distributed::MeshSocket> make_per_core_socket
 
 TEST_F(PerCoreAllocationTest, PerCoreSocketDataBufferPlacement) {
     auto md = this->devices_[0];
-    auto* device = md->get_devices()[0];
 
     const CoreCoord sender_core(0, 0);
     const CoreCoord receiver_core(0, 1);
@@ -233,7 +232,7 @@ TEST_F(PerCoreAllocationTest, PerCoreSocketDataBufferPlacement) {
     // The FIFO occupies L1 only on the receiver core, at a valid per-core address.
     auto pc_addr = per_core::get_per_core_address(*data_buffer, distributed::MeshCoordinate(0, 0), receiver_core);
     EXPECT_GT(pc_addr, 0u) << "Receiver per-core address should be above the L1 base";
-    EXPECT_LT(pc_addr, device->l1_size_per_core()) << "Receiver per-core address exceeds L1 size";
+    EXPECT_LT(pc_addr, md->l1_size_per_core()) << "Receiver per-core address exceeds L1 size";
 
     // A per-core buffer has no single lockstep address.
     EXPECT_EQ(data_buffer->address(), 0u);
@@ -346,7 +345,6 @@ TEST_F(PerCoreAllocationTest, H2DSocketPerCoreFifoBaseIsAPerCoreAddress) {
     if (auto reason = per_core_h2d_skip_reason(md)) {
         GTEST_SKIP() << *reason;
     }
-    auto* device = md->get_devices()[0];
 
     const uint32_t fifo_size = 4 * h2d_host_alignment();
     const distributed::MeshCoreCoord recv_core(distributed::MeshCoordinate(0, 0), CoreCoord(0, 1));
@@ -355,7 +353,7 @@ TEST_F(PerCoreAllocationTest, H2DSocketPerCoreFifoBaseIsAPerCoreAddress) {
     const auto desc = socket.populate_descriptor();
     EXPECT_GT(desc.aligned_data_buf_start, 0u)
         << "FIFO base is 0 — a per-core buffer has no lockstep address(), so the host would push to the L1 base";
-    EXPECT_LT(desc.aligned_data_buf_start, device->l1_size_per_core()) << "FIFO base exceeds L1 size";
+    EXPECT_LT(desc.aligned_data_buf_start, md->l1_size_per_core()) << "FIFO base exceeds L1 size";
     EXPECT_EQ(desc.aligned_data_buf_start % h2d_host_alignment(), 0u) << "FIFO base must stay PCIe-aligned";
     EXPECT_EQ(desc.fifo_size, fifo_size);
 }

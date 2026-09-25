@@ -21,6 +21,12 @@
 
 namespace tt::tt_metal::distributed {
 
+// Collective over a shared mesh: reject service endpoints before ranks enter different allocators.
+void validate_host_socket_allocation(MeshDevice& mesh_device, const MeshCoreCoord& endpoint);
+
+// Descriptor connectors have no MeshDevice and retain host I/O access.
+void validate_host_socket_access(const MeshDevice* mesh_device, const MeshCoreCoord& endpoint);
+
 struct SocketSenderSize {
     const uint32_t l1_alignment;
     const uint32_t md_size_bytes;
