@@ -425,9 +425,7 @@ def _compute_and_send(
     return t_start
 
 
-def _drain_and_log_e2e(
-    runtime, rank: int, d2d_out, first_compute_start, n_done: int, t0: float, idx_out=None
-) -> None:
+def _drain_and_log_e2e(runtime, rank: int, d2d_out, first_compute_start, n_done: int, t0: float, idx_out=None) -> None:
     if d2d_out is not None:
         d2d_out.wait_for_fabric_links()
     if idx_out is not None:
