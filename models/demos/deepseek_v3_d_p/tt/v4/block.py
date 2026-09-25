@@ -291,6 +291,11 @@ class TtV4PrefillBlock(LightweightModule):
             S_l = streams[0].shape[2]
             chunk_tokens = S_l * self.mesh_device.shape[self.sp_axis]
             for slot, state in self.states.items():
+                pre = getattr(self.attn, "precreate_constants", None)
+                if pre is not None:
+                    pre(
+                        state, S_l, chunk_tokens
+                    )  # lazily-built constants must exist before any capture (DS4F-0262 hazards)
                 self.attn.prepare_chunk(state, chunk_tokens)
                 warm = self.attn.forward_pre(h, state, chunk_tokens)
                 self.attn.glue_chunk(state, warm, chunk_tokens, None)

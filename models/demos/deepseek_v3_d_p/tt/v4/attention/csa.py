@@ -761,6 +761,18 @@ class TtCSA(TtHCA):
         rate = self.compressor.compress_rate
         return int(state.kv_actual) >= max(self.sliding_window, self.indexer.topk * rate)
 
+    def precreate_constants(self, state, seq_local: int, real_len: int) -> None:
+        """Allocate every lazily-built constant the eager glue / reset touches BEFORE any island is captured: a tensor
+        allocated after a capture can sit on addresses the captured trace's intermediates reuse, and a replay then
+        overwrites it (DS4F-0248 class). The zeros block (mask columns of the previous chunk), the rate-4 cut block, and
+        the -inf reset constant are the ones the glue and reset_slot create on first use."""
+        rate = self.compressor.compress_rate
+        self._score_mask(state, seq_local)
+        self.indexer._zeros_block_tile(seq_local, real_len // rate)
+        self.indexer._chunk_cut_mask_tile(seq_local, real_len // rate)
+        if self.__dict__.get("_neg_inf_mask_const") is None:
+            self._neg_inf_mask_const = self._from_torch(torch.full(tuple(state.score_mask.shape), float("-inf")))
+
     def prepare_chunk(self, state, real_len: int) -> None:
         """Eager, before the islands replay: push this chunk's position scalars into the persistent buffers the traced
         ops read (value-cached -> no host write happens inside a capture that follows a matching prepare)."""
