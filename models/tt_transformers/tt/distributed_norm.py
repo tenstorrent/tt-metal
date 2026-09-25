@@ -171,6 +171,19 @@ class DistributedNorm(LightweightModule):
                 # "input 0 currently in DEV_0_DRAM_INTERLEAVED" on every layer.
                 post_norm_mem_cfg = self.args.get_prefill_activation_mem_config(seq_len=seq_len_int)
                 x = ttnn.to_memory_config(x, bs_norm_cfg["sharded_input_mem_cfg"])
+                # keep_sharded_out (set by a model whose consumers read the block-shard layout, e.g. a 2D
+                # multicast matmul with a block-sharded in0): skip the trailing S2I.
+                if getattr(self, "keep_sharded_out", False):
+                    return self.norm(
+                        x,
+                        mode=mode,
+                        in_sharded=True,
+                        out_sharded=True,
+                        norm_config={
+                            "sharded_program_config": bs_norm_cfg["sharded_program_config"],
+                            "sharded_output_config": bs_norm_cfg["sharded_input_mem_cfg"],
+                        },
+                    )
                 x = self.norm(
                     x,
                     mode=mode,

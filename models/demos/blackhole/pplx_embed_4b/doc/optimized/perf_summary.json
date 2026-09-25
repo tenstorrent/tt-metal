@@ -310,5 +310,40 @@
       "bs1_bucketed_eval_accuracy_tt": 0.8161
     },
     "note": "e2e means from Avg tokens/s at ISL 512; cold/sustained are the mean of two sustained_run.sh rounds per arm"
+  },
+  "bs1_norm_sharded_out_20260925": {
+    "host": "8x p150b host, chip 0 (12x10 grid); on top of q192 SDPA",
+    "sharded_to_interleaved_calls": {
+      "before": 72,
+      "after": 0
+    },
+    "standalone_us": {
+      "qkv_s2i_plus_mm": 51.7,
+      "qkv_sharded_in0": 49.6,
+      "ff1_ff3_s2i_plus_mm": 152.7,
+      "ff1_ff3_sharded_in0": 148.1
+    },
+    "device_ms_one_traced_replay": {
+      "before": 15.652,
+      "after": 15.327,
+      "report": "2026_09_25_17_18_33"
+    },
+    "e2e_mean_ms_3x30_alternating": {
+      "before": 15.91,
+      "after": 15.74
+    },
+    "cold_best_ms": {
+      "before": 15.75,
+      "after": 15.6
+    },
+    "sustained_median_it15_29_ms": {
+      "before": 15.9,
+      "after": 15.75
+    },
+    "stsb": {
+      "fixed512_batch1": 0.8111,
+      "bs1_bucketed_eval_accuracy_tt": 0.8169
+    },
+    "note": "e2e means from Avg tokens/s at ISL 512; cold/sustained are the mean of two sustained_run.sh rounds per arm"
   }
 }
