@@ -226,3 +226,20 @@ Append-only log, one section per task attempt: what was done, decisions and why,
   block out rel 0.0079 / 0.0064, attention 0.0052 / 0.0052, post_attn_norm 0.0052 (iso 0.0019), attn_residual 0.0054 (iso 0.0017, ratio [0.9977, 1.0031]).
 - Block-out rel 0.0079 is within the 0.02 limit, but it creeps up with each added device step (0.0074 at swap 3). Watch the margin as more steps move to the device.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_04_attn_residual.py`
+
+## C.sliding.ffn_norm test (run1, attempt 1)
+- Replaced the one-line template body with the attn_norm/post_attn_norm norm checks: PCC >= 0.99 (gated), plus asserted rel L2 <= 0.03,
+  per-token output-norm ratio in [0.97, 1.03], finite output (informational metrics `rel_l2_ffn_norm_L00`, `row_norm_ratio_{min,max}_ffn_norm_L00`).
+- Scored mutations on this golden (h_mid -> ffn_norm, [2048, 2816], pre_feedforward_layernorm w in [0.011, 22.9]) once, inside the test under
+  BRINGUP_IMPL=reference, then removed the scoring code: reference PCC 0.999997 / rel 0.0024 / ratio [0.9975, 1.0024]; bf16 rel 0.0028; 1% noise 0.010;
+  `1 + w` PCC 0.966 (fails here); no weight PCC 0.838; sum instead of mean PCC ~1.0 but rel 0.98. PCC alone misses the sum bug, and the rel L2 check catches it.
+- Verified: BRINGUP_IMPL=reference PASS; BRINGUP_IMPL=stub FAIL (pcc 0.0). The device gate fails as expected until the implement step:
+  `NotImplementedError: implement step: no device module for ffn_norm yet`.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_ffn_norm.py`
+
+## C.sliding.ffn_norm implement (run1, attempt 1)
+- No new module: reused `tt/rms_norm.py:TtRMSNorm` (ttnn.rms_norm, HiFi4 + fp32 acc, TILE [1,1,1,H] bf16 gamma, plain `w`).
+- hooks.py: `_NORM_WEIGHTS["ffn_norm"] = "pre_feedforward_layernorm.weight"` (so `device_component` handles it), and `ffn_norm` added to
+  `DEVICE_STEPS["sliding"]`, so `HybridDeviceModel` (ladder) swaps it too.
+- Gate PASS: pcc_ffn_norm_L00 0.999996, rel L2 0.00294, per-token norm ratio [0.9953, 1.0015]. bf16 gamma is fine for w up to 22.9.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_ffn_norm.py`
