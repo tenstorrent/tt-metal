@@ -26,6 +26,8 @@ class Qwen38ForCausalLM:
         "supports_prefix_caching": False,
         "supports_async_decode": True,
         "supports_sample_on_device": True,
+        "max_device_top_k": 32,
+        "supports_device_penalties": False,
     }
 
     @classmethod

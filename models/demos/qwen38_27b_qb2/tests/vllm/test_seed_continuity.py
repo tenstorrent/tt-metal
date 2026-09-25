@@ -65,6 +65,10 @@ def params(seeds=(42, 99), top_k=(5, 1)):
 
 
 class SamplingModeTests(unittest.TestCase):
+    def test_plugin_contract_declares_device_sampling_limits(self):
+        self.assertEqual(Adapter.model_capabilities["max_device_top_k"], 32)
+        self.assertFalse(Adapter.model_capabilities["supports_device_penalties"])
+
     def test_explicit_all_mode_uses_existing_host_boundary(self):
         with patch.dict(os.environ, {"QWEN_VLLM_HOST_COMPATIBILITY": "all"}):
             adapter = Adapter(FakeGenerator(), 2, 262144)
