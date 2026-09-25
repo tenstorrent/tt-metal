@@ -16,6 +16,7 @@
 #include "modules/linear_module.hpp"
 #include "modules/multi_layer_perceptron.hpp"
 #include "optimizers/adamw.hpp"
+#include "optimizers/adamw_full_precision.hpp"
 #include "serialization/flatbuffer_file.hpp"
 #include "serialization/serialization.hpp"
 #include "test_utils/random_data.hpp"
@@ -166,7 +167,7 @@ protected:
     }
 
     static void train(
-        const ttml::serialization::NamedParameters& params, ttml::optimizers::AdamW& optimizer, int steps) {
+        const ttml::serialization::NamedParameters& params, ttml::optimizers::OptimizerBase& optimizer, int steps) {
         auto& gen = ttml::autograd::ctx().get_generator();
         auto* device = &ttml::autograd::ctx().get_device();
         for (int step = 0; step < steps; ++step) {
@@ -181,7 +182,9 @@ protected:
     }
 
     std::filesystem::path save(
-        const std::string& tag, const ttml::modules::ModuleBase& model, const ttml::optimizers::AdamW& optimizer) {
+        const std::string& tag,
+        const ttml::modules::ModuleBase& model,
+        const ttml::optimizers::OptimizerBase& optimizer) {
         ttml::serialization::FlatBufferFile file;
         ttml::serialization::write_module(file, "model", &model);
         ttml::serialization::write_optimizer(file, "optimizer", &optimizer);
@@ -257,4 +260,34 @@ TEST_F(CheckpointTrainingTest, CheckpointMatchesTrainedValuesAfterResume) {
 
     train(resumed_params, resumed_optimizer, 3);
     expect_checkpoint_matches(save("resumed", resumed_model, resumed_optimizer), resumed_params, resumed_optimizer);
+}
+
+// AdamWFullPrecision keeps its master weights and moments as fp32-native tensors. The checkpoint must store
+// them in fp32, bit for bit, not rounded down to the bf16 view.
+TEST_F(CheckpointTrainingTest, CheckpointKeepsFullPrecisionOptimizerState) {
+    ttml::modules::LinearLayer model(32, 64);
+    auto params = model.parameters();
+    ttml::optimizers::AdamWFullPrecisionConfig config;
+    config.lr = 1e-2F;
+    ttml::optimizers::AdamWFullPrecision optimizer(params, config);
+
+    train(params, optimizer, 3);
+    const auto path = save("only", model, optimizer);
+
+    ttml::serialization::FlatBufferFile file;
+    file.deserialize(path.string());
+    const auto state = optimizer.get_state_dict();
+    for (const auto* entry : {"master_weights", "exp_avg", "exp_avg_sq"}) {
+        const auto& tensors = std::get<ttml::serialization::NamedParameters>(state.at(entry));
+        ASSERT_FALSE(tensors.empty()) << entry;
+        for (const auto& [name, live] : tensors) {
+            const auto key = std::string("optimizer/") + entry + "/" + name + "/value";
+            ttnn::Tensor saved;
+            ttml::serialization::read_ttnn_tensor(file, key, saved);
+            EXPECT_EQ(saved.dtype(), ttnn::DataType::FLOAT32) << key;
+            const auto trained = ttml::core::to_xtensor(live->get_value(ttml::autograd::PreferredPrecision::FULL));
+            EXPECT_TRUE(xt::allclose(ttml::core::to_xtensor(saved), trained, 0.0, 0.0))
+                << key << " in the checkpoint does not match the trained value";
+        }
+    }
 }
