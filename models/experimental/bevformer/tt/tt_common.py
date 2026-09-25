@@ -122,6 +122,12 @@ class TtnnConv2D:
 
         self.linear_weight = None
         self.linear_bias = None
+        self.linear_activation = None
+        if self.dram_activation and self.is_pointwise and activation is not None:
+            assert (
+                activation.op_type == ttnn.UnaryOpType.RELU
+            ), f"only RELU is supported after the pointwise linear, got {activation.op_type}"
+            self.linear_activation = "relu"
         if not (self.dram_activation and self.is_pointwise):
             self._prepare_conv_weights()
         else:
@@ -163,19 +169,14 @@ class TtnnConv2D:
         x = ttnn.reshape(x, (1, 1, rows, x.shape[-1]))
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-        x = ttnn.linear(
+        return ttnn.linear(
             x,
             self.linear_weight,
             bias=self.linear_bias,
+            activation=self.linear_activation,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_config,
         )
-        if self.activation is not None:
-            assert (
-                self.activation.op_type == ttnn.UnaryOpType.RELU
-            ), f"only RELU is supported after the pointwise linear, got {self.activation.op_type}"
-            x = ttnn.relu(x)
-        return x
 
     def __call__(self, x):
         if self.dram_activation and self.is_pointwise:
