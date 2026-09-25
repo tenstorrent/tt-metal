@@ -170,3 +170,11 @@ tasks:
     gate:
       cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/
       metrics: {selftest_passed: ">= 109", selftest_failed: "== 0"}
+  - id: F19
+    title: An agent command needs the safe runner only if its own code opens a device
+    step: framework
+    deps: [F18]
+    paths: [models/demos/common/bringup/orchestrator.py, models/demos/common/bringup/selftest/test_orchestrator.py]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/
+      metrics: {selftest_passed: ">= 109", selftest_failed: "== 0"}
