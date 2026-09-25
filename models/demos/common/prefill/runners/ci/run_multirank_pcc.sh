@@ -48,7 +48,9 @@ case "${MODEL}" in
   kimi27)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/prefill_runner_kv}"
     MANIFEST="${MANIFEST_DIR}/kimi27.json"
-    PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}';"
+    GOLDEN_LEN=0
+    PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
+        export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/deepseek-ai/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-256000-last5120;"
     ;;
   glm53)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/glm53_prefill_runner_kv}"
@@ -82,6 +84,10 @@ case "${MODEL}" in
     ;;
 esac
 
+GOLDEN_LEN_ENV=""
+if [ "${GOLDEN_LEN}" -gt 0 ]; then
+  GOLDEN_LEN_ENV="export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN};"
+fi
 [ -f "${MGD}" ] || { echo "no mesh-graph descriptor for ${CONFIG} at ${MGD}" >&2; exit 2; }
 
 MAX_SEQ_LEN=$(manifest_env PREFILL_MAX_SEQ_LEN)
@@ -238,7 +244,7 @@ set +e
     export PREFILL_NUM_USERS=${PRODUCER_USERS}; \
     export PREFILL_PRODUCER_CHUNKS=${REAL_CHUNKS}; \
     export PREFILL_PRODUCER_WARMUP_CHUNKS=${WARMUP_CHUNKS}; \
-    export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN}; \
+    ${GOLDEN_LEN_ENV} \
     export PREFILL_MIGRATION_TABLE_PATH='${TABLE_PATH}'; \
     export PREFILL_PCC_SUMMARY_DIR='${PCC_DIR}'; \
     export PREFILL_PRODUCER_CHECK_PCC=1; \

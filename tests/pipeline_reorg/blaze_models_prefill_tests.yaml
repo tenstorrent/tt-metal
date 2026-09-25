@@ -1417,10 +1417,9 @@
 
 # 4-galaxy (SC4) disaggregated prefill: a 4-rank background runner opens the mesh, loads Kimi-2.7,
 # warmup-compiles, and publishes the merged KV chunk table to shared NFS; a device-less producer then
-# reads it back and PCCs it against the golden KV cache. The request runs to 250k so the per-chunk
-# timings cover depth, but only the 55k the golden trace spans is PCC'd -- the tail is timed, not
-# checked. A throwaway warmup request precedes the measured one, so first-chunk compile is not timed.
-- name: "(Kimi-K2.7-1T) disaggregated prefill KV accuracy 55k@5k + perf 250k@5k, SC4"
+# reads it back and PCCs it against the golden KV cache. A throwaway warmup request precedes the
+# measured one, so first-chunk compile is not timed.
+- name: "(Kimi-K2.7-1T) disaggregated prefill KV accuracy 256k tail@5k + perf 256k@5k, SC4"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -1531,7 +1530,7 @@
 
 
 
-- name: "(Kimi-K2.7-1T) disaggregated prefill KV accuracy 55k@5k + perf 250k@5k, SC1"
+- name: "(Kimi-K2.7-1T) disaggregated prefill KV accuracy 256k tail@5k + perf 256k@5k, SC1"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
