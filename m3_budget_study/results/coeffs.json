@@ -19,5 +19,5 @@
   },
   "stage_overhead_ms": 0.0,
   "stage_overhead_per_token_ms": 0.0007094355354532151,
-  "hop_ms": 0.0
+  "hop_ms": 8.45
 }
