@@ -477,6 +477,51 @@ jobs:
         # with the models chart in models/README.md
         python .github/scripts/utils/model-charts-sync.py
 
+  # Keeps test-command.lock.yml in sync with its source markdown so authors of the
+  # gh-aw `/test` command workflow don't have to remember to install the pinned
+  # gh-aw CLI and run `gh aw compile` by hand before merging.
+  update-agentic-workflows:
+    needs: [find-changed-files]
+    if: >-
+      ${{
+        github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        needs.find-changed-files.outputs.test-command-workflow-changed == 'true' &&
+        github.actor != 'github-actions[bot]'
+      }}
+    # github.actor != 'github-actions[bot]' above is a hard stop against an infinite
+    # loop: the commit this job pushes below triggers a new 'synchronize' run, and
+    # find-changed-files diffs against merge-base(main, HEAD), so
+    # test-command-workflow-changed stays true for the rest of the PR's life (same as
+    # e.g. cmake-changed today). Without this guard, that new run would see the flag
+    # true and try to recompile again. GitHub attributes github.actor to
+    # github-actions[bot] on the run triggered by our own GITHUB_TOKEN-authenticated
+    # push, so that run is skipped outright, before checkout even happens. As a second,
+    # independent layer, the compile step itself is idempotent (verified: recompiling
+    # unchanged source twice produces byte-identical output) and only commits when the
+    # lock file actually changed, so even without the actor guard this converges after
+    # one extra no-op run rather than looping.
+    runs-on: ubuntu-slim
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 5
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - name: Install gh-aw extension
+        # Must match the gh-aw version test-command.lock.yml was compiled with
+        # (v0.86.2) — see copilot-setup-steps.yml for the same pin.
+        uses: github/gh-aw-actions/setup-cli@6aab9e5b5c91c615506061f09bedd81a23babe3c # v0.86.2
+        with:
+          version: v0.86.2
+      - name: Recompile and commit test-command.lock.yml
+        uses: ./.github/actions/update-agentic-workflows
+        with:
+          workflow-name: test-command
+
   # Full clang-tidy scan (same checks enforced at merge gate).
   # force-scan=true → single full-scan job (avoids 4-way per-target split with high setup overhead).
   # Gated on run-clang-tidy so docs-only PRs and workflow-only PRs that cannot

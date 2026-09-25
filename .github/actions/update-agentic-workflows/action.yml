@@ -1,0 +1,38 @@
+name: "Update agentic workflows"
+description: >-
+  Recompiles a gh-aw workflow's lock file from its source markdown
+  (.github/scripts/utils/update_agentic_workflows.py) and, if the compiled
+  output changed, commits it back onto the current branch as
+  github-actions[bot]. The caller must already have the gh-aw CLI installed
+  and on PATH, and must have checked out a branch this job can push to
+  (contents: write).
+
+inputs:
+  workflow-name:
+    description: >-
+      Name of the gh-aw workflow to compile, e.g. "test-command" for
+      .github/workflows/test-command.md.
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Compile workflow
+      id: compile
+      shell: bash
+      run: |
+        python3 "${GITHUB_ACTION_PATH}/../../scripts/utils/update_agentic_workflows.py" \
+          --workflow "${{ inputs.workflow-name }}"
+
+    - name: Commit updated lock file
+      if: steps.compile.outputs.lock-file-changed == 'true'
+      shell: bash
+      env:
+        LOCK_FILE: ${{ steps.compile.outputs.lock-file }}
+        WORKFLOW_NAME: ${{ inputs.workflow-name }}
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git add "$LOCK_FILE"
+        git commit -m "Recompile ${WORKFLOW_NAME} agentic workflow lock file"
+        git push
