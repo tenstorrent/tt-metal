@@ -17,6 +17,10 @@ namespace {
 // Asserted at build time so a change to the backing type cannot quietly regress them.
 static_assert(!std::is_copy_constructible_v<move_only_function<void()>>, "must be move-only");
 static_assert(!std::is_copy_assignable_v<move_only_function<void()>>, "must be move-only");
+// A non-const lvalue is the case a greedy forwarding constructor would swallow.
+static_assert(
+    !std::is_constructible_v<move_only_function<void()>, move_only_function<void()>&>,
+    "must not be constructible from a non-const lvalue of itself");
 static_assert(std::is_nothrow_move_constructible_v<move_only_function<void()>>, "move must be noexcept");
 static_assert(
     sizeof(move_only_function<void()>) <= sizeof(std::function<void()>),

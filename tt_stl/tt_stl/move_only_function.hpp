@@ -31,7 +31,8 @@ template <typename R, typename... A>
 struct is_std_function<std::function<R(A...)>> : std::true_type {};
 
 // std::move_only_function yields an empty wrapper for a null pointer or an empty std::function;
-// the backing type stores them as ordinary engaged targets.
+// the backing type stores them as ordinary engaged targets. Only those two -- not a general
+// emptiness probe; a new source type needs a case here rather than falling through as engaged.
 template <typename T>
 bool is_empty_callable(const T& f) noexcept {
     using D = std::decay_t<T>;
@@ -54,7 +55,7 @@ bool is_empty_callable(const T& f) noexcept {
 // Requires RTTI. The implementation does not compile under -fno-rtti.
 //
 // This is a thin class rather than an alias because the backing type deviates from
-// std::move_only_function in five ways that would otherwise be inherited; each override below says
+// std::move_only_function in six ways that would otherwise be inherited; each override below says
 // which. Measured free: identical sizeof and within noise of the bare alias on the job path.
 //
 // TODO(#57444): becomes std::move_only_function once tt-metal moves to C++23. That is not
