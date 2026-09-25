@@ -5,15 +5,16 @@
 #pragma once
 
 #if __riscv_xtttensixqsr || (__clang__ && defined(ARCH_QUASAR) && defined(COMPILE_FOR_TRISC))
-#define TTI_INSN(ENCODING) ({ __asm__ __volatile__(".ttinsn %0" : : "n"(unsigned(ENCODING))); })
+#define TTI_INSN(ENCODING) ({ __asm__ __volatile__(".ttinsn %0" ::"n"(unsigned(ENCODING))); })
 #define TT_INSN(ENCODING)  void(::ckernel::instrn_buffer[0] = unsigned(ENCODING))
-#elif defined(ARCH_QUASAR) && defined(LLK_TEST)
+#elif defined(ARCH_QUASAR) && defined(LLK_BOOT_BRISC)
 // The llk test infra compiles this on brisc and somehow executes it. So icky.
-#define TTI_INSN(ENCODING) ({ __asm__ __volatile__(".word (3 & (%0 >> 30)) | (0xfffffffc & (%0 << 2))" : : "n"(unsigned(ENCODING))); })
+#define TTI_INSN(ENCODING) ({ __asm__ __volatile__(".word (3 & (%0 >> 30)) | (0xfffffffc & (%0 << 2))" ::"n"(unsigned(ENCODING))); })
 #define TT_INSN(ENCODING)  ({ __asm__ __volatile__(".error \"TT_INSN in non-tensix code\"" ::"X"(unsigned(ENCODING))); })
 #else
 // XXX
-#define TTI_INSN(ENCODING) ({ __asm__ __volatile__(".word (3 & (%0 >> 30)) | (0xfffffffc & (%0 << 2))" : : "n"(unsigned(ENCODING))); })
+#define TTI_INSN(ENCODING) ({ __asm__ __volatile__(".ttinsn %0" ::"n"(unsigned(ENCODING))); })
+// #define TTI_INSN(ENCODING) ({ __asm__ __volatile__(".word (3 & (%0 >> 30)) | (0xfffffffc & (%0 << 2))" ::"n"(unsigned(ENCODING))); })
 #define TT_INSN(ENCODING)  ({ __asm__ __volatile__(".error \"TT_INSN in non-tensix code\"" ::"X"(unsigned(ENCODING))); })
 #endif
 
