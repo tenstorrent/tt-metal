@@ -251,7 +251,7 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
     }
 
     // First device: full launch (compiles, finalizes, allocates CBs, dispatches)
-    tt_metal::slow_dispatch::LaunchProgram(*local_devices[0], program, /*force_slow_dispatch=*/false);
+    tt_metal::slow_dispatch::LaunchProgramAsync(*local_devices[0], program, /*force_slow_dispatch=*/false);
 
     // Remaining devices: dispatch pre-compiled binary only.
     // TODO: This loop can be parallelized with a inner thread loop

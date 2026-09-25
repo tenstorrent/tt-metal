@@ -171,7 +171,9 @@ void LaunchProgram(
     const std::shared_ptr<Program>& program,
     bool wait_until_cores_done = true,
     bool force_slow_dispatch = false);
-[[deprecated("Use distributed::EnqueueMeshWorkload instead. This API will be removed after 2026-10-25.")]]
+[[deprecated(
+    "Use MeshCommandQueue synchronization (e.g. distributed::Finish) instead. This API will be removed after "
+    "2026-10-25.")]]
 void WaitProgramDone(IDevice* device, Program& program, bool read_device_profiler_results = true);
 
 /**
@@ -215,14 +217,18 @@ void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch 
  * | program             | The program holding the runtime args                                   | const Program & | |
  * Yes      |
  */
-[[deprecated("Use distributed::EnqueueMeshWorkload instead. This API will be removed after 2026-10-25.")]]
+[[deprecated(
+    "distributed::EnqueueMeshWorkload writes runtime args as part of the launch. This API will be removed after "
+    "2026-10-25.")]]
 void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow_dispatch = false);
 
 // Configures a given device with a given program.
 // - Loads all kernel binaries into L1s of assigned Tensix cores
 // - Configures circular buffers (inits regs with buffer data)
 // - Takes the device out of reset
-[[deprecated("Use distributed::EnqueueMeshWorkload instead. This API will be removed after 2026-10-25.")]]
+[[deprecated(
+    "Use distributed::EnqueueMeshWorkload, or experimental::ConfigureProgramWithoutLaunch to configure without "
+    "launching. This API will be removed after 2026-10-25.")]]
 bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_slow_dispatch = false);
 
 /**

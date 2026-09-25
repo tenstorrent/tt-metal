@@ -71,7 +71,7 @@ TEST_F(MeshDeviceFixture, TensixConfigureProgramWithoutLaunchInstallsButDoesNotR
         EXPECT_EQ(again.launch_kernel_config(), cfg.launch_kernel_config());
 
         // The same program, launched for real, runs.
-        slow_dispatch::LaunchProgram(*device, program, /*force_slow_dispatch=*/false);
+        slow_dispatch::LaunchProgramAsync(*device, program, /*force_slow_dispatch=*/false);
         slow_dispatch::WaitProgramDone(*device, program);
         EXPECT_EQ(read_word(device, core, addr), MARKER) << "the same program launched normally writes the marker";
     }

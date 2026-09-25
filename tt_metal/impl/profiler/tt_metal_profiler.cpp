@@ -160,7 +160,7 @@ void syncDeviceHost(distributed::MeshDevice* mesh_device, IDevice* device, CoreC
             .defines = kernel_defines});
 
     // Using MeshDevice APIs if the current device is managed by MeshDevice
-    tt_metal::slow_dispatch::LaunchProgram(*device, sync_program, /*force_slow_dispatch=*/true);
+    tt_metal::slow_dispatch::LaunchProgramAsync(*device, sync_program, /*force_slow_dispatch=*/true);
 
     std::filesystem::path output_dir = std::filesystem::path(get_profiler_logs_dir());
     std::filesystem::path log_path = output_dir / "sync_device_info.csv";
@@ -432,8 +432,8 @@ void syncDeviceDevice(ChipId device_id_sender, ChipId device_id_receiver) {
             log_error(tt::LogMetal, "Failed compile: {}", e.what());
             throw e;
         }
-        tt_metal::slow_dispatch::LaunchProgram(*device_sender, program_sender, /*force_slow_dispatch=*/true);
-        tt_metal::slow_dispatch::LaunchProgram(*device_receiver, program_receiver, /*force_slow_dispatch=*/true);
+        tt_metal::slow_dispatch::LaunchProgramAsync(*device_sender, program_sender, /*force_slow_dispatch=*/true);
+        tt_metal::slow_dispatch::LaunchProgramAsync(*device_receiver, program_receiver, /*force_slow_dispatch=*/true);
 
         tt_metal::slow_dispatch::WaitProgramDone(*device_sender, program_sender);
         tt_metal::slow_dispatch::WaitProgramDone(*device_receiver, program_receiver);

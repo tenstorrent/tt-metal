@@ -241,7 +241,7 @@ TEST_F(ServiceCoreSdFixture, PersistentServiceMultiCycle) {
 
         prog.impl().compile(device, /*force_slow_dispatch=*/true);
         tt::tt_metal::slow_dispatch::WriteRuntimeArgsToDevice(*device, prog, /*force_slow_dispatch=*/true);
-        tt::tt_metal::slow_dispatch::LaunchProgram(*device, prog, /*force_slow_dispatch=*/true);
+        tt::tt_metal::slow_dispatch::LaunchProgramAsync(*device, prog, /*force_slow_dispatch=*/true);
 
         auto read_counter = [&]() -> uint32_t {
             uint32_t val = 0;

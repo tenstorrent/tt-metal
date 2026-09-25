@@ -535,7 +535,7 @@ bool Devices::launch_relay(
             program->impl().compile(ctx.device, /*force_slow_dispatch=*/true);
         }
         slow_dispatch::WriteRuntimeArgsToDevice(*ctx.device, *program, /*force_slow_dispatch=*/true);
-        slow_dispatch::LaunchProgram(*ctx.device, *program, /*force_slow_dispatch=*/true);
+        slow_dispatch::LaunchProgramAsync(*ctx.device, *program, /*force_slow_dispatch=*/true);
 
         if (!relay_heartbeat_advanced(cluster, chip, relay.virt, relay_noc_addr(l1_.done) + 4, d)) {
             return false;
