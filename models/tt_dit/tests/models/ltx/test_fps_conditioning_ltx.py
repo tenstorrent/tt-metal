@@ -115,7 +115,10 @@ def test_pipelines_pass_fps_to_video_rope(module):
         node
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
-        and (getattr(node.func, "id", None) == "prepare_video_rope" or getattr(node.func, "attr", None) == "prepare_video_rope")
+        and (
+            getattr(node.func, "id", None) == "prepare_video_rope"
+            or getattr(node.func, "attr", None) == "prepare_video_rope"
+        )
     ]
     assert calls, f"{module.__name__} no longer calls prepare_video_rope; update or remove this test"
     for call in calls:
