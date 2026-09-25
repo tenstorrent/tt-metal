@@ -104,6 +104,9 @@ Per forward: to_out 5.3 -> ~4.2 ms (epilogue + fp32 off) would be ~55 ms of the 
 
 ## 5. What is left
 
+Every lever, run or not, with the 2026-09-25 row-parallel (MM+RS) measurements and the evaluation protocol, is in
+[to_out_handoff.md](to_out_handoff.md).
+
 1. **The one-pass addcmul epilogue** (§3.3): ~0.35 ms, no numerical change, kernel work in `compute.cpp`.
 2. **A higher-bandwidth in0 path** (§3.1): in0 multicast or the strided AGMM; the only lever that reaches the 1.1 ms
    of waits, and the reason the relay-prefetch patch kept for ff1 can be retired for good.

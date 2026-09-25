@@ -196,9 +196,33 @@ FF2 = OpSpec(
     marker="D",
 )
 
+# to_out in row-parallel form (experiment, 2026-09-25): each device multiplies its own K_local = 1792 head
+# columns by a K-sharded [1792, 5376] weight and the ring reduce-scatters the [M, 5376] partial to [M, 1344],
+# with the gated residual applied after the reduce -- the ff2 shape of work, half the FLOPs. Same FLOPs as the
+# shipped AGMM form (M x 1792 x 5376 == M x 7168 x 1344) but 21 N tiles per core instead of 6, so each in0
+# byte feeds 3.5x the MACs. Bench-only: not in ALL_OPS, so the roofline figures and tables ignore it.
+TO_OUT_MMRS = OpSpec(
+    name="to_out_mmrs",
+    family="mm+rs",
+    model_call="to_out as RowParallelLinear(7168, 5376): minimal_matmul on K_local + reduce-scatter + addcmul",
+    K=1792,
+    K_local=1792,
+    N=5376,  # pre-reduce-scatter
+    N_out=1344,
+    fusion="MM + reduce-scatter + addcmul",
+    blocks=(6, 7, 8, 2, 2),  # ff2's fused entry as the seed: M 61 tiles/core on 7 rows, N 21/core on 8 columns
+    grid=(8, 9),
+    sweep_use_case="to_out_mmrs",
+    sweep_is_agmm=False,
+    op_code="MinimalMatmulStridedReduceScatterAsyncDeviceOperation",
+    measured_us_wh_15s=0.0,  # unmeasured; see the bench
+    color="#e87ba4",
+    marker="v",
+)
+
 AGMM_OPS = [TO_QKV, TO_OUT, FF1]
 ALL_OPS = [TO_QKV, TO_OUT, FF1, FF2]
-OPS_BY_NAME = {s.name: s for s in ALL_OPS}
+OPS_BY_NAME = {s.name: s for s in ALL_OPS} | {TO_OUT_MMRS.name: TO_OUT_MMRS}
 OP_FAMILIES = {"agmm": AGMM_OPS, "all": ALL_OPS}
 
 MEASURED_US_WH_15S = {s.name: s.measured_us_wh_15s for s in ALL_OPS}
