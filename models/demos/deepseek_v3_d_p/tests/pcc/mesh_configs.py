@@ -6,8 +6,7 @@
 Shared mesh configuration parameters for dispatch/combine PCC tests.
 
 Consumers import ALL_MESH_CONFIGS to avoid duplicating the same pytest.param entries; grep for the
-name to find them. Each filters by explicit `param.id` and asserts the count it expected, so adding a
-row here expands nobody else's matrix and a stale id fails at import rather than silently.
+name to find them.
 test_combine_subdevices.py pins the `fabric2d-mesh-4x2` ID.
 
 FabricConfig is the single source of truth. Consumers derive their cluster-axis CCL
