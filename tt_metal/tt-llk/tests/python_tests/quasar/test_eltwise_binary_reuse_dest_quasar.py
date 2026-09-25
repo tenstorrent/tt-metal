@@ -89,8 +89,15 @@ def reuse_dest_mathops(formats, *, is_perf=False):
     return supported_mathops
 
 
-def reuse_dest_math_fidelities(mathop):
-    if mathop in [MathOperation.Elwadd, MathOperation.Elwsub]:
+def reuse_dest_math_fidelities(mathop, formats):
+    # Add/sub ignore fidelity. Float16_b and Int8 are full precision at LoFi.
+    if mathop in [
+        MathOperation.Elwadd,
+        MathOperation.Elwsub,
+    ] or formats.input_format in (
+        DataFormat.Int8,
+        DataFormat.Float16_b,
+    ):
         return [MathFidelity.LoFi]
     return [
         MathFidelity.LoFi,
