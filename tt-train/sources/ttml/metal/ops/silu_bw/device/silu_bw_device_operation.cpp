@@ -13,7 +13,11 @@ namespace ttml::metal::ops::silu_bw::device {
 
 void SiLUBackwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
+    const auto& input_tensor = tensor_args.input;
+    const auto& dL_dout_tensor = tensor_args.dL_dout;
+    const auto& preallocated_da_tensor = tensor_args.preallocated_da;
+
+    auto check_tensor = [&input_tensor](const ttnn::Tensor& tensor, const std::string& name) {
         TT_FATAL(
             tensor.storage_type() == ttnn::StorageType::DEVICE,
             "SiLUBackward operation requires {} to be on Device. Input storage type: {}",
@@ -43,11 +47,27 @@ void SiLUBackwardDeviceOperation::validate_on_program_cache_miss(
             "memory layout: `{}`",
             name,
             enchantum::to_string(tensor.memory_config().memory_layout()));
-    };
 
-    const auto& input_tensor = tensor_args.input;
-    const auto& dL_dout_tensor = tensor_args.dL_dout;
-    const auto& preallocated_da_tensor = tensor_args.preallocated_da;
+        TT_FATAL(
+            tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            "SiLUBackward operation requires {} to be in DRAM. Buffer type: {}",
+            name,
+            enchantum::to_string(tensor.buffer()->buffer_type()));
+
+        TT_FATAL(
+            tensor.device() == input_tensor.device(),
+            "SiLUBackward operation requires {} to be on the same device as the input",
+            name);
+
+        const auto& tile = tensor.tensor_spec().tile();
+        const auto standard_tile = tt::tt_metal::Tile{};
+        TT_FATAL(
+            tile == standard_tile && !tile.get_transpose_within_face() && !tile.get_transpose_of_faces(),
+            "SiLUBackward operation requires {} to use a non-transposed {}x{} tile",
+            name,
+            tt::constants::TILE_HEIGHT,
+            tt::constants::TILE_WIDTH);
+    };
 
     check_tensor(input_tensor, "Input");
     check_tensor(dL_dout_tensor, "dL_dout");
