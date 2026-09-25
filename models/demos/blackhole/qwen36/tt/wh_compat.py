@@ -41,8 +41,6 @@ import models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet
 import ttnn
 from models.common.utility_functions import is_blackhole
 
-_FLAG = "_qwen36_wh_compat_applied"
-
 # Largest [B,H,K,V] state tensor this model will keep L1-resident on Wormhole. Mirrors
 # recurrent_decode_wh._OUTER_L1_BUDGET_BYTES, which gates the same tensor on the fork side.
 _STATE_L1_BUDGET_BYTES = 8 << 20
@@ -50,7 +48,7 @@ _STATE_L1_BUDGET_BYTES = 8 << 20
 
 def apply():
     """Install the Wormhole GDN adjustments on the shared module. Idempotent."""
-    if getattr(_shared, _FLAG, False):
+    if getattr(_shared, "_qwen36_wh_compat_applied", False):
         return
 
     # --- 1. chunk-seq activations: DRAM on Wormhole -------------------------------------- #
@@ -135,4 +133,4 @@ def apply():
 
     _shared_ops.fused_decay_and_write_ttnn = _fused_decay_and_write
 
-    setattr(_shared, _FLAG, True)
+    _shared._qwen36_wh_compat_applied = True

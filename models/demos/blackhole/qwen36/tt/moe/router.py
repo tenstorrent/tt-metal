@@ -23,29 +23,32 @@ _FUSED_GATE_TOPK = (4, 6, 8)
 
 
 # TTMoEGate's four persistent sharded L1 buffers are layer-INDEPENDENT, so share one set: per-layer copies reserve enough L1 to clash with the GDN prefill CBs.
-_GATE_BUF_NAMES = ("tt_bias", "tt_input_indices", "tt_output", "tt_output_indices")
 _SHARED_GATE_BUFS = {}
 
 
 def _share_gate_buffers(gate, mesh_device, config):
     """Point ``gate`` at the process-wide buffer set for its shape, freeing its own copies."""
+    # The four buffers and the two key attributes are named literally rather than reached through
+    # getattr/setattr over a name list: they are a fixed part of TTMoEGate's contract, so naming
+    # them keeps every use greppable and makes an upstream rename an AttributeError here instead of
+    # a silent None that would let two different shapes collide on one cache key.
     key = (
         id(mesh_device),
         config.num_experts,
         config.top_k,
         config.hidden_size,
-        getattr(gate, "_buffer_rows", None),
-        getattr(gate, "num_blocks", None),
+        gate._buffer_rows,
+        gate.num_blocks,
     )
     shared = _SHARED_GATE_BUFS.get(key)
     if shared is None:
-        _SHARED_GATE_BUFS[key] = {n: getattr(gate, n) for n in _GATE_BUF_NAMES}
+        _SHARED_GATE_BUFS[key] = (gate.tt_bias, gate.tt_input_indices, gate.tt_output, gate.tt_output_indices)
         return
-    for n in _GATE_BUF_NAMES:
-        own = getattr(gate, n)
-        setattr(gate, n, shared[n])
-        if own is not None:
-            ttnn.deallocate(own)
+    own = (gate.tt_bias, gate.tt_input_indices, gate.tt_output, gate.tt_output_indices)
+    gate.tt_bias, gate.tt_input_indices, gate.tt_output, gate.tt_output_indices = shared
+    for buf in own:
+        if buf is not None:
+            ttnn.deallocate(buf)
 
 
 class Qwen36Router:
