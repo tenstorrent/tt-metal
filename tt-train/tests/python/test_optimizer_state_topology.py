@@ -4,12 +4,6 @@
 
 """Optimizer state must carry its parameter's mesh topology, or TP checkpoints truncate it.
 
-ttnn allocates every op output fully replicated across the mesh, and ``core::zeros_like`` -- which
-allocates the AdamW/SGD moments -- is a creation op that never sees the parameter's placements. A moment
-of a TP-sharded parameter therefore reported ``[Replicate, Replicate]``; ``ttml.checkpointing`` gathers
-by the live topology, so it kept one device's shard and dropped the rest (386 of 518 AdamW moments in a
-Llama-8B TP=8 run), and on resume would have broadcast that shard to every TP rank.
-
 These tests pin the fix on a ``[1, 2]`` TP mesh: every moment reports its parameter's placements and
 distribution shape, and every moment record in a saved checkpoint has the parameter's full shape.
 """
