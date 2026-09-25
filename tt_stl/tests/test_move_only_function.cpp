@@ -119,8 +119,9 @@ TEST(MoveOnlyFunctionTest, CPU_NonNullFunctionPointerIsEngaged) {
 TEST(MoveOnlyFunctionTest, CPU_MovedFromIsEmpty) {
     move_only_function<int()> src{[]() { return 42; }};
     move_only_function<int()> dst{std::move(src)};
-    EXPECT_FALSE(static_cast<bool>(src));
-    EXPECT_TRUE(src == nullptr);
+    // Inspecting the moved-from source is the point of the test: its emptiness is the contract.
+    EXPECT_FALSE(static_cast<bool>(src));  // NOLINT(bugprone-use-after-move)
+    EXPECT_TRUE(src == nullptr);           // NOLINT(bugprone-use-after-move)
     EXPECT_TRUE(static_cast<bool>(dst));
 }
 
@@ -128,7 +129,7 @@ TEST(MoveOnlyFunctionTest, CPU_MoveAssignLeavesSourceEmpty) {
     move_only_function<int()> src{[]() { return 42; }};
     move_only_function<int()> dst;
     dst = std::move(src);
-    EXPECT_FALSE(static_cast<bool>(src));
+    EXPECT_FALSE(static_cast<bool>(src));  // NOLINT(bugprone-use-after-move)
     EXPECT_EQ(dst(), 42);
 }
 
