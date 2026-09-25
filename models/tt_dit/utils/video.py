@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from dataclasses import dataclass
 from fractions import Fraction
@@ -142,6 +143,23 @@ def _mux_audio(container, audio_stream, audio: Audio) -> None:
         container.mux(packet)
 
 
+def _x264_options() -> dict[str, str]:
+    """libx264 options for the exports. ``LTX_EXPORT_LOSSLESS=1`` (parity/testing only) encodes losslessly so the
+    decoded frames equal the pre-encode frames bit for bit and a comparison measures the pipeline, not the codec."""
+    if os.environ.get("LTX_EXPORT_LOSSLESS", "0") != "0":
+        return {"preset": "veryfast", "qp": "0"}
+    return {"preset": "veryfast", "crf": "23"}
+
+
+def _dump_audio_sidecar(output_path: str, audio: "Audio | None") -> None:
+    """Under ``LTX_EXPORT_LOSSLESS=1`` also write the raw waveform next to the mp4 (the AAC track is lossy)."""
+    if audio is None or os.environ.get("LTX_EXPORT_LOSSLESS", "0") == "0":
+        return
+    import numpy as np
+
+    np.save(output_path + ".audio.npy", audio.waveform.detach().float().cpu().numpy())
+
+
 def export_video_audio_yuv(yuv_planar, output_path: str, fps: int = 24, audio: Audio | None = None) -> None:
     """Export a pre-computed yuv420p planar video (+ optional audio) to MP4 — fast-path
     counterpart to :func:`export_video_audio`.
@@ -167,7 +185,7 @@ def export_video_audio_yuv(yuv_planar, output_path: str, fps: int = 24, audio: A
     stream.width = width
     stream.height = height
     stream.pix_fmt = "yuv420p"
-    stream.options = {"preset": "veryfast", "crf": "23"}
+    stream.options = _x264_options()
     stream.thread_type = "AUTO"
 
     audio_stream = _add_audio_stream(container, audio)
@@ -183,6 +201,7 @@ def export_video_audio_yuv(yuv_planar, output_path: str, fps: int = 24, audio: A
         _mux_audio(container, audio_stream, audio)
 
     container.close()
+    _dump_audio_sidecar(output_path, audio)
     logger.info(f"Saved: {output_path} ({t}f @ {fps}fps, yuv420p fast path)")
 
 
@@ -221,7 +240,7 @@ def export_video_audio(video_pixels: torch.Tensor, output_path: str, fps: int = 
     stream.pix_fmt = "yuv420p"
     # "veryfast" preset + multi-threaded encode is ~5-8x faster than libx264's
     # default "medium" single-threaded path, while crf 23 keeps the quality higher.
-    stream.options = {"preset": "veryfast", "crf": "23"}
+    stream.options = _x264_options()
     stream.thread_type = "AUTO"
 
     # Prepare audio stream if provided (must be added before any packet is muxed)
@@ -242,4 +261,5 @@ def export_video_audio(video_pixels: torch.Tensor, output_path: str, fps: int = 
         _mux_audio(container, audio_stream, audio)
 
     container.close()
+    _dump_audio_sidecar(output_path, audio)
     logger.info(f"Saved: {output_path} ({frames.shape[0]}f @ {fps}fps)")

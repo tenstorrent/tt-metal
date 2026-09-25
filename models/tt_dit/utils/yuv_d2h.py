@@ -414,6 +414,10 @@ def fast_device_to_host_yuv(
         print(f"  [yuv-d2h] after reshape to (C,h_per,w_per,T) per-shard: {list(tt_CHWT.shape)}")
 
     # 2. On-device YUV 4:2:0 -> 3 uint8 tensors.
+    # Match the float export, which clamps RGB to [0, 255] before ffmpeg converts it: the kernel converts first
+    # and clips [0, 255] after, so the VAE's out-of-range extremes would otherwise land outside the limited
+    # range (Y 0-255 instead of 16-235; measured ~3 Y levels RMS on 10 % of the pixels).
+    tt_CHWT = ttnn.clip(tt_CHWT, -1.0, 1.0)
     tt_Y, tt_Cb, tt_Cr = ttnn.experimental.rgb_to_yuv(tt_CHWT, coefficients=coefficients)
     if debug:
         print(f"  [yuv-d2h] yuv outputs per-shard:")
