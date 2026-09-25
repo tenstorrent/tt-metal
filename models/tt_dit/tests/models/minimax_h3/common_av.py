@@ -460,11 +460,12 @@ def temporal_seam_score(frames: np.ndarray, period: int) -> float:
 
 # ------------------------------------------------------------------ shared e2e gate scaffolding
 
-# Matched pair with the tier-6 bars (CLIP 37.37, imaging_quality 0.6896); imported by fl2va so it cannot drift.
+# This is our default testing prompt.
 CALIBRATED_FOX_PROMPT = (
-    "A red fox trots across a snowy field at dawn, its breath visible in the cold air."
+    "A red fox trots across a snowy field at dawn, its breath visible in the cold air. "  # <- NOTE THE SPACE HERE! DON'T DELETE IT, else it changes the token count!
     "The low sun throws long blue shadows behind it, and loose snow lifts from each footfall."
 )
+CALIBRATED_FOX_PROMPT_NUM_TOKENS = 39
 
 
 def weights_dir(*required_subdirs: str) -> Path:

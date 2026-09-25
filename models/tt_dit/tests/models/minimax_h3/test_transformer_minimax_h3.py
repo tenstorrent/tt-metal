@@ -58,6 +58,7 @@ from .common import (
     randomize_norm_weights,
     upload_rope,
 )
+from .common_av import CALIBRATED_FOX_PROMPT_NUM_TOKENS
 
 
 def logical_length_tensor(mesh_device: ttnn.MeshDevice, value: int) -> ttnn.Tensor:
@@ -987,18 +988,11 @@ def test_minimax_h3_transformer_block(
 # ---- production-geometry block device-perf (Tracy signposts) ----
 #
 # Run under `scripts/run_safe_pytest.sh --profile`, one duration at a time with `-k`.
-
 VAE_SPATIAL_DOWNSAMPLE = 16
-# The perf gate's prompt (`CALIBRATED_FOX_PROMPT`) tokenizes to 39. This used to be 512, which -- together
-# with audio being counted once per latent below -- put this harness at 4768 / 9216 / 13632 rows/device
-# against the pipeline's 4736 / 9184 / 13664, so every M-keyed table derived from it was keyed on lengths
-# the pipeline never runs. The exact count matters less than the bucket: padding is to `sp_factor * TILE`
-# = 256 rows, so at 15 s any prompt from 1 to 250 tokens gives the same rows/device.
-NUM_TEXT_TOKENS = 39
 PERF_ASPECT = (16, 9)
 
 
-def _packed_sizes(duration_s: float) -> dict:
+def _packed_sizes(duration_s: float, num_text_tokens: int) -> dict:
     """Token counts for `duration_s` seconds of 768P video, derived from the pipeline's own packing helpers."""
     height, width = resolve_canvas_size(*PERF_ASPECT)
     tokens_per_latent_frame = (height // VAE_SPATIAL_DOWNSAMPLE // PATCH_SIZE[1]) * (
@@ -1021,8 +1015,8 @@ def _packed_sizes(duration_s: float) -> dict:
         "num_video": num_video,
         "num_audio": num_audio,
         "num_audio_latents": num_audio_latents,
-        "num_text": NUM_TEXT_TOKENS,
-        "seq_len": packed_sequence_length(NUM_TEXT_TOKENS, num_audio_latents, num_video),
+        "num_text": num_text_tokens,
+        "seq_len": packed_sequence_length(num_text_tokens, num_audio_latents, num_video),
     }
 
 
@@ -1033,6 +1027,13 @@ def _packed_sizes(duration_s: float) -> dict:
         pytest.param(5.0, id="5s_768p"),
         pytest.param(10.0, id="10s_768p"),
         pytest.param(15.0, id="15s_768p"),
+    ],
+)
+@pytest.mark.parametrize(
+    "num_text_tokens",
+    [
+        pytest.param(CALIBRATED_FOX_PROMPT_NUM_TOKENS, id="test_prompt_text_tokens"),
+        pytest.param(512, id="512_text_tokens"),
     ],
 )
 @pytest.mark.parametrize(
@@ -1048,6 +1049,7 @@ def test_minimax_h3_transformer_block_perf(
     tp_axis: int,
     num_links: int,
     duration_s: float,
+    num_text_tokens: int,
     sp_simulate: int,
     is_fsdp: bool,
     topology: ttnn.Topology,
@@ -1064,7 +1066,7 @@ def test_minimax_h3_transformer_block_perf(
     sp_factor = tuple(mesh_device.shape)[sp_axis]
     tp_factor = tuple(mesh_device.shape)[tp_axis]
 
-    sizes = _packed_sizes(duration_s)
+    sizes = _packed_sizes(duration_s, num_text_tokens)
     seq_len = sizes["seq_len"]
     padded_len = padded_sequence_length(seq_len, sp_factor * SIM) // SIM
     logger.info(

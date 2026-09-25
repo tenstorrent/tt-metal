@@ -41,7 +41,7 @@ FPS = 24
 PROMPT = "a slow push-in through a quiet room as afternoon light moves across the floor"
 
 # Bars set below the minimum measured across the three ref2va cases; t2va's bars do NOT transfer.
-REF2VA_CLIP_THRESHOLD = 25.0  # min measured 29.05
+REF2VA_CLIP_THRESHOLD = 25.0
 REF2VA_VBENCH_THRESHOLDS = {
     "subject_consistency": 0.90,
     "background_consistency": 0.89,
