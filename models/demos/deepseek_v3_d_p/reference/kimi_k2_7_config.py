@@ -8,9 +8,8 @@ Kimi K2.7-Code Model Configuration (text tower only).
 Single source of truth for model dimension constants.
 Values from HuggingFace config.json for Kimi-K2.7-Code (``text_config``).
 
-Deliberately standalone rather than subclassing ``KimiK26Config``. The two generations agree on every
-dimension today, so inheritance would have been shorter -- but it would also mean an edit made for
-K2.6 silently moved K2.7, and it would hide which values K2.7 actually asserts.
+Deliberately standalone: every dimension is asserted here rather than inherited from another
+generation's config, so an edit made for a sibling model cannot silently move K2.7.
 """
 
 
@@ -21,12 +20,12 @@ class KimiK27Config:
     EMB_SIZE = 7168  # embedding dimension
     FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
     MOE_INTERMEDIATE_SIZE = 2048  # MoE FFN hidden dimension
-    # Routed-expert hybrid split. moe_fused_swiglu beat the composite at EVERY measured
-    # token count on the 7168x2048 routed-expert shape (1.02-1.81x across 0-5120 tokens),
-    # so there is no crossover to place a threshold at. A bound this far above any
-    # per-expert region leaves the composite an empty band, which TtRoutedExpert reads as
-    # 'fused owns the layer' and drops the composite dispatch entirely.
-    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 2**31 - 1
+    # Routed-expert hybrid split: experts with <= this many active tokens go to
+    # moe_fused_swiglu, the rest to unified_routed_expert_moe. The two ops cross ONCE on the
+    # 7168x2048 routed-expert shape, between 320 and 384: the composite's cost is flat inside an M
+    # chunk while the fused op's rises with the count. 320 is a 2.9% tie, 384 goes to the composite
+    # by 8.0%, and the composite holds the band outright from there -- 11% at 640, 22% at 768.
+    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 320
     INTERMEDIATE_SIZE = 18432  # Dense FFN hidden dimension
 
     # MoE configuration

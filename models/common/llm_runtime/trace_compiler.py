@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from loguru import logger
+from ttnn.tools import trace_allocation_tracker
 
 import ttnn
 from models.common.llm_runtime.program_compiler import (
@@ -315,7 +316,7 @@ class TraceCompiler:
                 # being recorded and must stay allocated for replay; recording N traces means capture
                 # N runs while 1..N-1 are live, which ordering cannot avoid. Acknowledge the window
                 # (no-op unless TT_METAL_TRACE_ALLOC_TRACKING=1), as tt_transformers' generator does.
-                with ttnn.corruptible_allocation_scope(self.mesh_device):
+                with trace_allocation_tracker.corruptible_allocation_scope(self.mesh_device):
                     trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
                     outputs = None
                     capture_ended = False

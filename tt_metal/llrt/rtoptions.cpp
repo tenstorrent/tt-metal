@@ -6,6 +6,7 @@
 #include "llrt/hal.hpp"  // Hal — needed for ParseAllFeatureEnv, ParseFeatureEnv, ParseFeatureRiscvMask
 
 #include <algorithm>
+#include <bit>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -128,6 +129,14 @@ enum class EnvVarID {
     // PROFILING & PERFORMANCE
     // ========================================
     TT_METAL_DEVICE_PROFILER,                      // Enable device profiling
+    TT_METAL_STREAMING_PROFILER,                   // Enable the streaming device profiler (excludes the DRAM one)
+    TT_METAL_STREAMING_PROFILER_TRACY,             // Enable Tracy output for the streaming profiler
+    TT_METAL_STREAMING_PROFILER_SYNC_EVENTS,       // Enable sync events profiling
+    TT_METAL_STREAMING_PROFILER_INLINE_ENABLED,    // Enable zone markers inlining
+    TT_METAL_STREAMING_PROFILER_DRAM_MB,           // Streaming profiler per-relay GDDR spool ring, MiB
+    TT_METAL_STREAMING_PROFILER_FIFO_MB,           // Streaming profiler host FIFO per D2H socket, MiB
+    TT_METAL_STREAMING_PROFILER_OPS_CSV,           // Streaming profiler ops CSV path
+    TT_METAL_STREAMING_PROFILER_ZONE_CSV,          // Streaming profiler zone CSV path
     TT_METAL_DEVICE_PROFILER_DISPATCH,             // Enable dispatch core profiling
     TT_METAL_PROFILER_SYNC,                        // Enable synchronous profiling
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS,           // Enable NoC events profiling
@@ -250,6 +259,8 @@ enum class EnvVarID {
     // JIT BUILD CONFIGURATION
     // ========================================
     TT_METAL_DISABLE_PRECOMPILED_FW,  // Disable use of pre-compiled firmware
+    TT_METAL_FW_SRC_BRISC,            // BRISC firmware feature variant to JIT-build
+    TT_METAL_FW_HEADER_BRISC,         // Header supplied by the selected BRISC firmware variant
     TT_METAL_BACKEND_DUMP_RUN_CMD,    // Dump JIT build commands to stdout
 
     // ========================================
@@ -320,6 +331,11 @@ bool equals_all(const std::string& token) { return to_lower_copy(trim_copy(token
 }  // namespace
 
 RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/kernels/") {
+    // TTNN may need these process-wide options while its Python module is being initialized, before a MetalContext
+    // (and therefore a RunTimeOptions instance) exists. It reads the same lazy snapshot through a native binding.
+    // Touch it here as well to guarantee that it is initialized no later than RunTimeOptions construction.
+    (void)get_trace_allocation_options();
+
 // Default assume package install path
 #ifdef TT_METAL_INSTALL_ROOT
     if (std::filesystem::is_directory(std::filesystem::path(TT_METAL_INSTALL_ROOT))) {
@@ -368,9 +384,6 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
         this->root_dir = p.string();
     }
 
-    trace_allocation_tracking_enabled_ = false;
-    trace_allocation_diagnostics_enabled_ = false;
-    trace_allocation_skip_program_cache_enabled_ = false;
     InitializeFromEnvVars();
 
     // Mock devices mirror real silicon of the same architecture: leave the 2-erisc default (and any
@@ -386,6 +399,43 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
     TT_FATAL(
         !(get_feature_enabled(RunTimeDebugFeatureDprint) && get_profiler_enabled()),
         "Cannot enable both debug printing and profiling");
+    // The DRAM (TT_METAL_DEVICE_PROFILER) and streaming (TT_METAL_STREAMING_PROFILER) device profilers are
+    // mutually exclusive modes: their device producers overlay the same L1 profiler region with different
+    // layouts, and their hosts would both drive it. Refuse here, at MetalContext construction, before any
+    // device is opened or any kernel is compiled.
+    TT_FATAL(
+        !(get_profiler_enabled() && get_streaming_profiler_enabled()),
+        "TT_METAL_DEVICE_PROFILER and TT_METAL_STREAMING_PROFILER are mutually exclusive: set exactly one of "
+        "them (DRAM profiler vs streaming profiler).");
+    TT_FATAL(
+        !(get_feature_enabled(RunTimeDebugFeatureDprint) && get_streaming_profiler_enabled()),
+        "Cannot enable both debug printing and the streaming profiler");
+}
+
+const RunTimeOptions::TraceAllocationOptions& RunTimeOptions::get_trace_allocation_options() {
+    // Unlike ordinary RunTimeOptions fields, these options may be queried by TTNN before MetalContext creates a
+    // RunTimeOptions instance. Keep their parsing owned by RunTimeOptions, but cache all related values in one
+    // process-wide snapshot so TTNN and Metal cannot observe different settings.
+    static const TraceAllocationOptions options = [] {
+        const bool tracking_enabled = is_env_enabled(std::getenv("TT_METAL_TRACE_ALLOC_TRACKING"));
+        return TraceAllocationOptions{
+            .tracking_enabled = tracking_enabled,
+            .diagnostics_enabled = tracking_enabled && is_env_enabled(std::getenv("TT_METAL_TRACE_ALLOC_TRACEBACKS")),
+            .skip_program_cache =
+                tracking_enabled && is_env_enabled(std::getenv("TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE")),
+        };
+    }();
+    return options;
+}
+
+bool RunTimeOptions::get_trace_allocation_tracking_enabled() { return get_trace_allocation_options().tracking_enabled; }
+
+bool RunTimeOptions::get_trace_allocation_diagnostics_enabled() {
+    return get_trace_allocation_options().diagnostics_enabled;
+}
+
+bool RunTimeOptions::get_trace_allocation_skip_program_cache_enabled() {
+    return get_trace_allocation_options().skip_program_cache;
 }
 
 void RunTimeOptions::set_root_dir(const std::string& root_dir) {
@@ -928,6 +978,91 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
                 this->profiler_enabled = true;
             }
 #endif
+            break;
+
+        // TT_METAL_STREAMING_PROFILER
+        // Boots the streaming profiler at MeshDevice bring-up. Records go to registered callbacks
+        // (RegisterCallback and the TT_METAL_STREAMING_PROFILER_*_CSV writers); add
+        // TT_METAL_STREAMING_PROFILER_TRACY=1 for the Tracy sink. Needs a Tracy-enabled build and
+        // TT_METAL_DEVICE_PROFILER off.
+
+        // Default: false
+        // Usage: export TT_METAL_STREAMING_PROFILER=1
+        case EnvVarID::TT_METAL_STREAMING_PROFILER:
+#if !defined(TRACY_ENABLE)
+            TT_FATAL(false, "TT_METAL_STREAMING_PROFILER requires a Tracy-enabled build of tt-metal.");
+#else
+            if (is_env_enabled(value)) {
+                this->streaming_profiler_enabled = true;
+            }
+#endif
+            break;
+
+        // TT_METAL_STREAMING_PROFILER_SYNC_EVENTS
+        // Enables profiling for synchronization events (cb reserve/wait/push/pop, semaphore set/wait).
+        // Requires TT_METAL_STREAMING_PROFILER to be enabled as well.
+        // Default: false
+        // Usage: export TT_METAL_STREAMING_PROFILER_SYNC_EVENTS=1
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_SYNC_EVENTS:
+            this->streaming_profiler_sync_events_enabled = is_env_enabled(value);
+            break;
+
+        // TT_METAL_STREAMING_PROFILER_INLINE_ENABLED
+        // This is enabled by default. Disabling inlining of kernel zone-marker emit path to
+        // reduce kernel size overhead from profiler instrumentation. This is useful for
+        // kernels with many zones that would otherwise exceed the kernel-config ring and fail to launch at all.
+        // Only works on the streaming profiler.
+        // Default: true
+        // Usage: export TT_METAL_STREAMING_PROFILER_INLINE_ENABLED=1
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_INLINE_ENABLED:
+            this->streaming_profiler_inline_enabled = is_env_enabled(value);
+            break;
+
+        // TT_METAL_STREAMING_PROFILER_TRACY
+        // Attaches the Tracy sink to the streaming profiler. Off by default.
+        // Default: false
+        // Usage: export TT_METAL_STREAMING_PROFILER_TRACY=1
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_TRACY:
+            this->streaming_profiler_tracy_enabled = is_env_enabled(value);
+            break;
+
+        // TT_METAL_STREAMING_PROFILER_DRAM_MB
+        // Per-relay device DRAM buffer, in MiB. Raise it to absorb more host-side backpressure on the device;
+        // 0 sends profiling data straight to the host. Capped at STREAMING_PROFILER_SPOOL_MB_MAX.
+        // Default: STREAMING_PROFILER_SPOOL_MB_DEFAULT
+        // Usage: export TT_METAL_STREAMING_PROFILER_DRAM_MB=256
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_DRAM_MB:
+            this->streaming_profiler_spool_mb =
+                std::min<unsigned long>(std::stoul(value), STREAMING_PROFILER_SPOOL_MB_MAX);
+            break;
+
+        // TT_METAL_STREAMING_PROFILER_FIFO_MB
+        // Host FIFO per D2H socket, in MiB. Raise it to let a slow callback fall further behind before it loses
+        // profiling data; it costs this much pinned host memory per relay. A power of two, at most
+        // STREAMING_PROFILER_FIFO_MB_MAX.
+        // Default: STREAMING_PROFILER_FIFO_MB_DEFAULT
+        // Usage: export TT_METAL_STREAMING_PROFILER_FIFO_MB=1024
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_FIFO_MB: {
+            const unsigned long mb = std::clamp<unsigned long>(std::stoul(value), 1, STREAMING_PROFILER_FIFO_MB_MAX);
+            TT_FATAL(std::has_single_bit(mb), "TT_METAL_STREAMING_PROFILER_FIFO_MB='{}' is not a power of two", value);
+            this->streaming_profiler_fifo_mb = mb;
+            break;
+        }
+
+        // TT_METAL_STREAMING_PROFILER_OPS_CSV
+        // Path for the per-op CSV consumer; empty leaves it unregistered.
+        // Default: "" (off)
+        // Usage: export TT_METAL_STREAMING_PROFILER_OPS_CSV=/tmp/ops.csv
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_OPS_CSV:
+            this->streaming_profiler_ops_csv_path = std::string(value);
+            break;
+
+        // TT_METAL_STREAMING_PROFILER_ZONE_CSV
+        // Path for the per-zone CSV consumer; empty leaves it unregistered.
+        // Default: "" (off)
+        // Usage: export TT_METAL_STREAMING_PROFILER_ZONE_CSV=/tmp/zones.csv
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_ZONE_CSV:
+            this->streaming_profiler_zone_csv_path = std::string(value);
             break;
 
         // TT_METAL_DEVICE_PROFILER_DISPATCH
@@ -1663,27 +1798,19 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
 
         // TT_METAL_LLK_SANITIZER_WARN
         // Usage: export TT_METAL_LLK_SANITIZER_WARN=1
-        case EnvVarID::TT_METAL_LLK_SANITIZER_WARN:
-            this->sanitizer_settings.warn = is_env_enabled(value);
-            break;
+        case EnvVarID::TT_METAL_LLK_SANITIZER_WARN: this->sanitizer_settings.warn = is_env_enabled(value); break;
 
         // TT_METAL_LLK_SANITIZER_ERROR
         // Usage: export TT_METAL_LLK_SANITIZER_ERROR=1
-        case EnvVarID::TT_METAL_LLK_SANITIZER_ERROR:
-            this->sanitizer_settings.error = is_env_enabled(value);
-            break;
+        case EnvVarID::TT_METAL_LLK_SANITIZER_ERROR: this->sanitizer_settings.error = is_env_enabled(value); break;
 
         // TT_METAL_LLK_SANITIZER_INFO
         // Usage: export TT_METAL_LLK_SANITIZER_INFO=1
-        case EnvVarID::TT_METAL_LLK_SANITIZER_INFO:
-            this->sanitizer_settings.info = is_env_enabled(value);
-            break;
+        case EnvVarID::TT_METAL_LLK_SANITIZER_INFO: this->sanitizer_settings.info = is_env_enabled(value); break;
 
         // TT_METAL_LLK_SANITIZER_FAULT
         // Usage: export TT_METAL_LLK_SANITIZER_FAULT=1
-        case EnvVarID::TT_METAL_LLK_SANITIZER_FAULT:
-            this->sanitizer_settings.fault = is_env_enabled(value);
-            break;
+        case EnvVarID::TT_METAL_LLK_SANITIZER_FAULT: this->sanitizer_settings.fault = is_env_enabled(value); break;
 
         // TT_METAL_LLK_SANITIZER_INTERNAL
         // Enables LLK developer internal mode.
@@ -1775,6 +1902,40 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_DISABLE_PRECOMPILED_FW=1
         case EnvVarID::TT_METAL_DISABLE_PRECOMPILED_FW: this->set_disable_precompiled_fw(is_env_enabled(value)); break;
 
+        // TT_METAL_FW_SRC_BRISC
+        // Select a BRISC firmware extension.
+        // A non-empty value also disables the precompiled firmware.
+        // Default: unset
+        // Usage: export TT_METAL_FW_SRC_BRISC=blaze
+        case EnvVarID::TT_METAL_FW_SRC_BRISC: {
+            if (value != nullptr && *value != '\0') {
+                const std::string variant = to_lower_copy(trim_copy(value));
+                TT_FATAL(
+                    variant == "blaze", "Unsupported TT_METAL_FW_SRC_BRISC value '{}'; supported values: blaze", value);
+                this->brisc_firmware_variant = BriscFirmwareVariant::Blaze;
+                this->set_disable_precompiled_fw(true);
+            }
+            break;
+        }
+
+        // TT_METAL_FW_HEADER_BRISC
+        // Absolute or working-directory-relative header supplied by the selected BRISC firmware variant.
+        // Default: unset
+        // Usage: export TT_METAL_FW_HEADER_BRISC=/path/to/blaze/firmware/runtime_reload.h
+        case EnvVarID::TT_METAL_FW_HEADER_BRISC: {
+            const std::string header = trim_copy(value);
+            if (!header.empty()) {
+                const auto path = std::filesystem::absolute(header).lexically_normal();
+                TT_FATAL(
+                    std::filesystem::is_regular_file(path),
+                    "TT_METAL_FW_HEADER_BRISC '{}' is not a file",
+                    path.string());
+                TT_FATAL(path.filename() == "runtime_reload.h", "TT_METAL_FW_HEADER_BRISC must name runtime_reload.h");
+                this->brisc_firmware_header = path.string();
+            }
+            break;
+        }
+
         // TT_METAL_DEVICE_PRINT_DISPATCH_STALL_US
         // Period in microseconds between dispatch_s DEVICE_PRINT stall-detection passes.
         // Default: 50
@@ -1803,18 +1964,11 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_ALLOCATOR_MODE_HYBRID=1
         case EnvVarID::TT_METAL_ALLOCATOR_MODE_HYBRID: this->allocator_mode_hybrid = is_env_enabled(value); break;
 
-        // Trace-allocation tracker settings are process-start options. Keep their
-        // cached values in RunTimeOptions so runtime hot paths never call getenv.
+        // These process-wide settings are parsed together by get_trace_allocation_options(). That snapshot may be
+        // initialized before this instance exists and is explicitly touched at the start of the constructor.
         case EnvVarID::TT_METAL_TRACE_ALLOC_TRACKING:
-            trace_allocation_tracking_enabled_ = std::strcmp(value, "1") == 0;
-            break;
         case EnvVarID::TT_METAL_TRACE_ALLOC_TRACEBACKS:
-            trace_allocation_diagnostics_enabled_ = trace_allocation_tracking_enabled_ && std::strcmp(value, "1") == 0;
-            break;
-        case EnvVarID::TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE:
-            trace_allocation_skip_program_cache_enabled_ =
-                trace_allocation_tracking_enabled_ && std::strcmp(value, "1") == 0;
-            break;
+        case EnvVarID::TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE: break;
 
         // TT_METAL_SHM_TRACKING_DISABLED
         // Disable shared memory tracking for tt-smi.
@@ -1839,6 +1993,12 @@ void RunTimeOptions::InitializeFromEnvVars() {
         if (value) {
             HandleEnvVar(id, value);
         }
+    }
+
+    if (this->brisc_firmware_variant == BriscFirmwareVariant::Blaze) {
+        TT_FATAL(!this->brisc_firmware_header.empty(), "TT_METAL_FW_SRC_BRISC=blaze requires TT_METAL_FW_HEADER_BRISC");
+    } else {
+        TT_FATAL(this->brisc_firmware_header.empty(), "TT_METAL_FW_HEADER_BRISC requires TT_METAL_FW_SRC_BRISC=blaze");
     }
 
     // Validate emulated mode configuration
@@ -2316,7 +2476,9 @@ std::string RunTimeOptions::get_watcher_hash() const {
 }
 
 std::string RunTimeOptions::get_sanitizer_hash() const {
-    auto optional_hash = [](const std::optional<bool>& optional) { return optional.has_value() ? std::to_string(*optional) : "nullopt"; };
+    auto optional_hash = [](const std::optional<bool>& optional) {
+        return optional.has_value() ? std::to_string(*optional) : "nullopt";
+    };
 
     const auto& san = get_sanitizer_settings();
     std::string hash_str;

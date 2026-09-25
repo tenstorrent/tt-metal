@@ -448,17 +448,6 @@ _OP_DOMAIN_REGISTRY: Dict[
             distribution=DistributionKind.LOG_UNIFORM, low=1e-4, high=100.0
         )
     ),
-    # rsqrt_compat (legacy reciprocal-root): domain x > 0. Keep the range a bit
-    # tighter than accurate rsqrt — the compat approximation loses accuracy at the
-    # extreme small-input end (rsqrt -> very large).
-    MathOperation.RsqrtCompat: OperandSpecs(
-        spec_A=StimuliSpec(
-            distribution=DistributionKind.LOG_UNIFORM, low=1e-2, high=100.0
-        )
-    ),
-    # reciprocal_compat (legacy exponent-difference reciprocal): same domain as the
-    # accurate Reciprocal -- everything except the pole, both signs.
-    MathOperation.ReciprocalCompat: _reciprocal_spec,
     # expm1_cw (component-wise expm1): same safe range as the standalone expm1.
     MathOperation.Expm1Cw: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
@@ -723,6 +712,9 @@ _OP_DOMAIN_REGISTRY: Dict[
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
     ),
     MathOperation.TopKRebuild: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
+    ),
+    MathOperation.TopKDefuse: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
     ),
     # ── FPU binary ────────────────────────────────────────────────────────────
@@ -1092,6 +1084,7 @@ _UNARY_OPS_NOT_SWEPT: Dict[MathOperation, str] = {
     MathOperation.TopKLocalSort: "perf-only; whole-op topk is covered by test_topk.py",
     MathOperation.TopKMerge: "perf-only; whole-op topk is covered by test_topk.py",
     MathOperation.TopKRebuild: "perf-only; whole-op topk is covered by test_topk.py",
+    MathOperation.TopKDefuse: "perf-only; whole-op topk is covered by test_topk.py",
 }
 
 
@@ -1111,7 +1104,6 @@ _SFPU_UNDEFINED_RANGES: Dict[
 ] = {
     # ── Unary: only spec_A has a hole ────────────────────────────────────────
     MathOperation.Reciprocal: {Operand.A: [(-1e-6, 1e-6)]},
-    MathOperation.ReciprocalCompat: {Operand.A: [(-1e-6, 1e-6)]},
     MathOperation.Log: {Operand.A: [(-float("inf"), 1e-6)]},
     MathOperation.Sqrt: {Operand.A: [(-float("inf"), 0.0)]},
     MathOperation.Atanh: {
@@ -1432,8 +1424,6 @@ _OP_SINGULARITIES: Dict[
     MathOperation.Sqrt: {Operand.A: ((0.0, _ABOVE),)},
     MathOperation.SqrtCustom: {Operand.A: ((0.0, _ABOVE),)},
     MathOperation.Rsqrt: {Operand.A: ((0.0, _ABOVE),)},
-    MathOperation.RsqrtCompat: {Operand.A: ((0.0, _ABOVE),)},
-    MathOperation.ReciprocalCompat: {Operand.A: ((0.0, _BOTH),)},
     # Inverse functions defined only on (-1, 1) or [-1, 1]: the interior is the defined
     # side, so -1 is probed upward and +1 downward.
     MathOperation.Atanh: {Operand.A: ((-1.0, _ABOVE), (1.0, _BELOW))},
@@ -1921,9 +1911,12 @@ SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
         # Divergences worth reading before trusting one of these: each is xfailed per combination
         # in the sweep rather than smoothed over in the golden.
         MathOperation.Reciprocal,  # 1/+/-0 = +/-inf, 1/+/-inf = +/-0; kernel gives +0 for NaN
-        MathOperation.Sqrt,  # sqrt(-inf) = NaN; kernel gives NaN for sqrt(-0), IEEE gives -0
-        MathOperation.Rsqrt,  # rsqrt(+/-0) = +/-inf; same -0 divergence as Sqrt
-        MathOperation.SqrtCustom,  # sqrt(-inf) gives -inf where IEEE gives NaN (issue #52930)
+        # The sqrt family passes the whole sweep since the signed-zero / -inf fixes. Zero signs
+        # are invisible to passed_test(), so test_sqrt_family_negative_zero_regression reads
+        # the raw bits. The scopes tagged on the entries are argued in the kernel headers.
+        MathOperation.Sqrt,  # sqrt(-inf) = NaN, sqrt(NaN) = NaN, sqrt(+/-0) = +/-0; !FAST_APPROX
+        MathOperation.Rsqrt,  # rsqrt(-inf) = NaN, rsqrt(+/-0) = +/-inf; !FAST_APPROX
+        MathOperation.SqrtCustom,  # as Sqrt, on the NEGATIVE_INFINITY_SAFE instantiation
         # These goldens have to route through torch: math.sin / cos / acos / asin / tan *raise*
         # on a non-finite input instead of returning NaN, so a `math.*` call in a unary golden
         # is the same trap.
@@ -1972,12 +1965,14 @@ SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
 #   enrolment depends on that.
 # * A zero's sign is invisible to passed_test(), which judges by torch.isclose, a both-NaN
 #   clause and PCC -- so a wrong zero sign can neither fail nor XPASS.
-# * Only a 32-bit input at dest_acc=Yes delivers a -0.0, which is what scopes Sqrt's and
-#   Rsqrt's xfails to unpack-to-dest.
+# * A real -0.0 reaches the LREG only at dest_acc=Yes with a 32-bit input; at dest_acc=No it
+#   arrives as +0. That unpack_to_dest split is why a signed-zero probe is only meaningful on
+#   one side of it: it scopes Sign's and Heaviside's xfails, and is the pipeline the sqrt
+#   family's regression test runs on.
 #
 # Log stays out: the kernel clamps a non-finite input to the format maximum and logs that, so
 # every special comes back finite where the golden gives inf or NaN. Kernel behaviour with no
-# ISA ruling, so the right outcome needs an owner -- as does RsqrtCompat(0).
+# ISA ruling, so the right outcome needs an owner.
 
 
 def _dest_acc_flag(dest_acc: Union[bool, Enum]) -> bool:

@@ -5,11 +5,11 @@
 import sys
 
 import ttnn
-from ttnn.operations.complex_binary_backward import (
-    _golden_function_complex_add,
-    _golden_function_complex_sub,
-    _golden_function_complex_mul,
-    _golden_function_complex_div,
+from ttnn.operations.golden_common import (
+    golden_compute_gradients,
+    golden_pack_complex_gradient,
+    golden_prepare_grad_inputs,
+    golden_select_optional_outputs,
 )
 
 
@@ -18,20 +18,32 @@ THIS_MODULE = sys.modules[__name__]
 __all__ = []
 
 
-def _golden_function_backward(torch_op, grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
+def _complex_binary_backward(torch_op, grad_tensor, input_tensor_a, input_tensor_b, *, op_kwargs=None):
+    """Compute a complex binary backward golden, packing each gradient as real|imag halves."""
+
+    op_kwargs = op_kwargs or {}
+    input_tensor_a, input_tensor_b = golden_prepare_grad_inputs(input_tensor_a, input_tensor_b)
+    output = torch_op(input_tensor_a, input_tensor_b, **op_kwargs)
+    gradients = golden_compute_gradients(output, (input_tensor_a, input_tensor_b), grad_tensor)
+    return [golden_pack_complex_gradient(gradient) for gradient in gradients]
+
+
+def _golden_function_backward(
+    torch_op, grad_tensor, input_tensor_a, input_tensor_b, alpha=1.0, *args, are_required_outputs=None, **kwargs
+):
     import torch
 
     if torch.is_complex(input_tensor_a):
-        if torch_op == torch.add:
-            alpha = kwargs.pop("alpha")
-            return _golden_function_complex_add(grad_tensor, input_tensor_a, input_tensor_b, alpha)
-        elif torch_op == torch.sub:
-            alpha = kwargs.pop("alpha")
-            return _golden_function_complex_sub(grad_tensor, input_tensor_a, input_tensor_b, alpha)
+        if torch_op == torch.add or torch_op == torch.sub:
+            return _complex_binary_backward(
+                torch_op, grad_tensor, input_tensor_a, input_tensor_b, op_kwargs={"alpha": alpha}
+            )
         elif torch_op == torch.mul:
-            return _golden_function_complex_mul(grad_tensor, input_tensor_a, input_tensor_b)
+            return _complex_binary_backward(torch_op, grad_tensor, input_tensor_a, input_tensor_b)
     elif torch_op == torch.add or torch_op == torch.sub or torch_op == torch.mul:
-        return _golden_function_backward_overload(torch_op, grad_tensor, input_tensor_a, input_tensor_b)
+        return _golden_function_backward_overload(
+            torch_op, grad_tensor, input_tensor_a, input_tensor_b, are_required_outputs=are_required_outputs
+        )
     if torch_op == "torch.squared_difference":
         pyt_y = torch.square(torch.sub(input_tensor_a, input_tensor_b))
     else:
@@ -43,7 +55,9 @@ def _golden_function_backward(torch_op, grad_tensor, input_tensor_a, input_tenso
     return golden_tensor
 
 
-def _golden_function_backward_overload(torch_op, grad_tensor, input_tensor_a, input_tensor_b=None, *args, **kwargs):
+def _golden_function_backward_overload(
+    torch_op, grad_tensor, input_tensor_a, input_tensor_b=None, *args, are_required_outputs=None, **kwargs
+):
     import torch
 
     if torch_op == torch.clone:
@@ -66,6 +80,8 @@ def _golden_function_backward_overload(torch_op, grad_tensor, input_tensor_a, in
     input_tensor_b.retain_grad()
     pyt_y.backward(gradient=grad_tensor)
     golden_tensor = [input_tensor_a.grad, input_tensor_b.grad]
+    if are_required_outputs is not None:
+        return golden_select_optional_outputs(golden_tensor, are_required_outputs)
     return golden_tensor
 
 
@@ -108,23 +124,21 @@ def _golden_function_backward_with_float(
 
 
 def _golden_function_backward_with_string(
-    torch_op, grad_tensor, input_tensor_a, input_tensor_b, value=None, *args, **kwargs
+    torch_op, grad_tensor, input_tensor_a, input_tensor_b, value=None, *args, are_required_outputs=None, **kwargs
 ):
     import torch
 
     if torch.is_complex(input_tensor_a):
         if torch_op == torch.div:
-            return _golden_function_complex_div(grad_tensor, input_tensor_a, input_tensor_b)
+            return _complex_binary_backward(torch.div, grad_tensor, input_tensor_a, input_tensor_b)
     if torch_op == "bias_gelu_bw":
         sum_result = torch.add(input_tensor_a, input_tensor_b)
         pyt_y = torch.nn.functional.gelu(sum_result, approximate=value)
         sum_result.retain_grad()
         pyt_y.backward(gradient=grad_tensor)
         if isinstance(input_tensor_b, (float, int)):
-            golden_tensor = [sum_result.grad]
-        else:
-            golden_tensor = [sum_result.grad, sum_result.grad]
-        return golden_tensor
+            return [sum_result.grad]
+        return [sum_result.grad, sum_result.grad]
     elif torch_op == torch.div:
         pyt_y = torch_op(input_tensor_a, input_tensor_b, rounding_mode=value)
     else:
@@ -132,12 +146,13 @@ def _golden_function_backward_with_string(
     if isinstance(input_tensor_b, (float, int)):
         input_tensor_a.retain_grad()
         pyt_y.backward(gradient=grad_tensor)
-        golden_tensor = [input_tensor_a.grad]
-        return golden_tensor
+        return [input_tensor_a.grad]
     input_tensor_a.retain_grad()
     input_tensor_b.retain_grad()
     pyt_y.backward(gradient=grad_tensor)
     golden_tensor = [input_tensor_a.grad, input_tensor_b.grad]
+    if are_required_outputs is not None:
+        return golden_select_optional_outputs(golden_tensor, are_required_outputs)
     return golden_tensor
 
 
@@ -316,22 +331,24 @@ def _golden_function(grad, a, b, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.max_bw, golden_function=_golden_function)
 
 
-def _golden_function(grad, a, b, value=None, *args, **kwargs):
+def _golden_function_bw(grad, a, b, *args, rounding_mode=None, are_required_outputs=None, **kwargs):
     import torch
 
-    return _golden_function_backward_with_string(torch.div, grad, a, b, value, *args, **kwargs)
+    return _golden_function_backward_with_string(
+        torch.div, grad, a, b, rounding_mode, are_required_outputs=are_required_outputs
+    )
 
 
-ttnn.attach_golden_function(ttnn.div_bw, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.div_bw, golden_function=_golden_function_bw)
 
 
-def _golden_function(grad, a, b, *args, **kwargs):
+def _golden_function_bw(grad, a, b, *args, **kwargs):
     import torch
 
     return _golden_function_backward(torch.mul, grad, a, b, *args, **kwargs)
 
 
-ttnn.attach_golden_function(ttnn.mul_bw, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.mul_bw, golden_function=_golden_function_bw)
 
 
 __all__ = []

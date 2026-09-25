@@ -63,7 +63,7 @@ way run_prefill_perf.sh does:
 
 Manual equivalent:
   cd $TT_METAL_HOME && source python_env/bin/activate && export PYTHONPATH=$TT_METAL_HOME
-  export HF_MODEL=/mnt/models/MiniMaxAI/MiniMax-M3-ref
+  export HF_MODEL=/mnt/weka/model-weights/llm/minimax/MiniMax-M3
   export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
   PROFILE_CACHE=25600 PREFILL_TRACE_DIR=<golden> \
     python3 -m tracy -v -r -p models/demos/minimax_m3/tests/perf/profile_prefill.py
@@ -97,9 +97,10 @@ from models.demos.minimax_m3.utils.fabric_env import ccl_topology_from_env, fabr
 
 
 def _raise_nproc_limit():
-    """tt-metal JIT-compiles device kernels in parallel and each `g++ -flto=auto` fans out to
-    `make -j<nproc>`; a low RLIMIT_NPROC makes clone3 fail mid-build ("posix_spawn: Operation not
-    permitted"). Raise the soft limit to the hard limit. Copied from galaxy_prefill_kv_pcc.py."""
+    """tt-metal JIT-compiles device kernels in parallel and each target spawns its own chain of
+    short-lived processes (g++, cc1plus/lto1, as, ld); a low RLIMIT_NPROC makes clone3 fail
+    mid-build ("posix_spawn: Operation not permitted"). Raise the soft limit to the hard limit.
+    Copied from galaxy_prefill_kv_pcc.py."""
     soft, hard = resource.getrlimit(resource.RLIMIT_NPROC)
     if soft != resource.RLIM_INFINITY and (hard == resource.RLIM_INFINITY or soft < hard):
         try:

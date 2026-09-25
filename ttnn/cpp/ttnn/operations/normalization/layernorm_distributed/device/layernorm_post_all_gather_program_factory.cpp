@@ -439,7 +439,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
              {"stats_tiles_cols", stats_tiles_cols},
              {"fp32_dtype", static_cast<uint32_t>(fp32_dest_acc_en)},
              {"float32_reduction", static_cast<uint32_t>(float32_reduction)},
-             {"legacy_rsqrt", static_cast<uint32_t>(program_config.legacy_rsqrt)},
              {"dfb_length", cb_length}},
         .runtime_arg_schema = {.runtime_arg_names = {"NCHt"}},
         .hw_config = ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config),

@@ -8,6 +8,7 @@ from collections import defaultdict
 
 import torch
 from loguru import logger
+from ttnn.tools import trace_allocation_tracker
 
 import ttnn
 from models.common.llama_models import (
@@ -110,17 +111,15 @@ def gather_batched_prefill_samples(
 DECODE_PAGE_TABLE_INPUT_IDX = 3
 
 
-def _mark_trace_buffers_corruptible(owner, value):
+def _maybe_acknowledge_trace_buffers_corruptible(owner, value):
     """Acknowledge opt-in trace I/O that another live trace may overwrite."""
     if not getattr(owner, "_tt_allow_decode_trace_buffer_reuse", False) or value is None:
         return
     if isinstance(value, (list, tuple)):
         for item in value:
-            _mark_trace_buffers_corruptible(owner, item)
+            _maybe_acknowledge_trace_buffers_corruptible(owner, item)
         return
-    mark_corruptible = getattr(ttnn, "mark_corruptible", None)
-    if mark_corruptible is not None:
-        mark_corruptible(value)
+    trace_allocation_tracker.acknowledge_corruptible(value)
 
 
 def max_prefill_chunk_size_cutoff(sequence_length, max_prefill_chunk_size):
@@ -766,7 +765,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         # the window instead. Acknowledgement, not elimination: it tells the checker the program is
         # prepared for these, it does not stop a replay writing them. Matches llama3_70b_galaxy.
         # No-op unless TT_METAL_TRACE_ALLOC_TRACKING=1.
-        with ttnn.corruptible_allocation_scope(mesh_device):
+        with trace_allocation_tracker.corruptible_allocation_scope(mesh_device):
             trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
             tt_out_trace = self._prefill_trace_forward(prepared, device_inputs)
             ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
@@ -830,7 +829,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         # count_tokens=False, because it actually executes, over dummy logits.
         # As with the prefill trace, these outputs are scratch shared with
         # other captured graphs and are consumed immediately after replay.
-        with ttnn.corruptible_allocation_scope(mesh_device):
+        with trace_allocation_tracker.corruptible_allocation_scope(mesh_device):
             trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
             logits = self.model[model_id]._apply_norm_and_lm_head(trace_input)
             tt_tokens, tt_log_probs = self.model[model_id].sampling.sample(logits, enable_trace=False)
@@ -2077,6 +2076,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         start_pos = torch.chunk(start_pos, self.data_parallel, 0)
         page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
 
+        supports_async_decode = self.model_capabilities.get("supports_async_decode", False)
+
         # vLLM under async scheduling supplies a one-step-stale last token at
         # reset steps (its host state lags device sampling). The device token
         # buffer holds the authoritative token sampled at the previous decode
@@ -2085,6 +2086,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         # decode submit (their last token came from prefill, not decode).
         if (
             on_device_sampling
+            and supports_async_decode
             and (reset_batch or mode_switched)
             and enable_trace
             and self.trace_inputs_decode[on_device_sampling]
@@ -2324,11 +2326,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             host_inputs = self.model[i].prepare_decode_inputs_host(
                 tokens[i], current_pos[i], page_table=user_page_table
             )
-
-            device_inputs.append(copy_host_to_device(host_inputs, mesh_device=self.model_args[i].mesh_device))
-            # Preserve main's opt-in annotation for models that deliberately overlap decode trace I/O
-            # (only qwen36 sets _tt_allow_decode_trace_buffer_reuse today).
-            _mark_trace_buffers_corruptible(self, device_inputs[i])
+            device_inputs_i = copy_host_to_device(host_inputs, mesh_device=self.model_args[i].mesh_device)
+            _maybe_acknowledge_trace_buffers_corruptible(self, device_inputs_i)
+            device_inputs.append(device_inputs_i)
 
         # Eager warmup stages this variant before the first capture, including
         # all sampling programs. Recording then consumes the staged inputs.
@@ -2371,7 +2371,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             # Same reasoning as _record_trace_prefill: whatever the model allocates inside the capture
             # window belongs to the trace being recorded, and recording lane/variant N necessarily runs
             # while 1..N-1 are live. Acknowledge the window rather than flag it.
-            with ttnn.corruptible_allocation_scope(self.model_args[i].mesh_device):
+            with trace_allocation_tracker.corruptible_allocation_scope(self.model_args[i].mesh_device):
                 trace_id = ttnn.begin_trace_capture(self.model_args[i].mesh_device, cq_id=0)
                 trace_ids[i] = trace_id
                 user_kv_cache = kv_cache[i] if kv_cache is not None else None
@@ -2397,7 +2397,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     )
                 )
                 ttnn.end_trace_capture(self.model_args[i].mesh_device, trace_id, cq_id=0)
-            _mark_trace_buffers_corruptible(self, tt_out_trace[-1])
+            _maybe_acknowledge_trace_buffers_corruptible(self, tt_out_trace[-1])
 
             if sampling_trace_enabled:
                 # NOTE: sampling trace can be keyed depending on sampling params,
@@ -3887,11 +3887,16 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 page_table = torch.cat([page_table, padding], dim=1)
             return page_table[:, :num_blocks]
 
-    ## Destructor
+    def release_persistent_capture(self) -> None:
+        """Release model-lifetime traces once, while the mesh is still open.
 
-    def __del__(self):
-        # Release all captured traces to prevent nanobind memory leaks
-        # Traces must be released before closing the mesh device
+        The plugin calls this on the model before it closes the mesh. An
+        override must chain to ``super()``: the destructor below runs only this
+        base method, because a destructor may fire after the mesh closed.
+        """
+        if getattr(self, "_generator_capture_released", False):
+            return
+        self._generator_capture_released = True
         try:
             # Release prefill traces
             if hasattr(self, "trace_id_prefill"):
@@ -3959,6 +3964,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                             pass  # Ignore errors during cleanup
         except Exception:
             pass  # Ignore any errors during trace cleanup
+
+    def __del__(self):
+        # Base traces only. Subclass releases need an open mesh and run through
+        # the plugin's release_persistent_capture call at shutdown.
+        Generator.release_persistent_capture(self)
 
         # Workaround for issue #19052
         if self.data_parallel > 1:

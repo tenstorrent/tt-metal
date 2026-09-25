@@ -1,6 +1,28 @@
 version: 1
 description: Centralized trace region sizes (bytes) for models CI.
 sizes:
+  gemma4-31b-qb2:
+    skus:
+      p300x2:
+        # Reserved budget, not measured trace bytes: 512 MiB for the 60-layer
+        # model + sampling traces, capacities 1/32. Validated in Actions 36122710663.
+        # Trace high-water bytes/margin were not recorded; measure before shrinking.
+        trace_region_size: 536870912
+  gemma4-31b-qb2-decoder:
+    skus:
+      p300x2:
+        # Reserved budget, not measured trace bytes: 32 MB for one decoder trace.
+        # Actions 36122710663 covers B2/S1025, full + sliding attention, changed
+        # tokens/positions/page maps. No measured high-water size or margin recorded.
+        trace_region_size: 32000000
+  llama3.1-8b-qb2:
+    skus:
+      p300x2:
+        trace_region_size: 268435456
+  llama3.1-8b-qb2-decoder:
+    skus:
+      p300x2:
+        trace_region_size: 16000000
   llama3.1-8b:
     aliases: ["Llama-3.1-8B", "meta-llama/Llama-3.1-8B-Instruct"]
     skus:

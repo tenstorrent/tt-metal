@@ -110,6 +110,26 @@ def _apply_ftz(result: torch.Tensor, data_format: DataFormat) -> torch.Tensor:
     ).to(result.dtype)
 
 
+def _flush_product_underflow(t1, t2, result, exponent_bias):
+    """Zero the products the FPU lane drops before it renormalises them.
+
+    The lane adds the two Src exponents and rebiases into Dest's range; a term
+    whose exponent is at or below zero there is flushed whole. That decision is
+    taken before the mantissa product can carry into the next binade, so it is
+    one binade coarser than "the result is subnormal in Dest".
+    """
+    a = t1.to(torch.float32).abs()
+    b = t2.to(torch.float32).abs()
+    live = (a > 0) & (b > 0)
+    ones = torch.ones_like(a)
+    exp_sum = torch.floor(torch.log2(torch.where(live, a, ones))) + torch.floor(
+        torch.log2(torch.where(live, b, ones))
+    )
+    return torch.where(
+        live & (exp_sum + exponent_bias <= 0), torch.zeros_like(result), result
+    )
+
+
 def _flush_subnormals_of_dtype(result: torch.Tensor) -> torch.Tensor:
     """Flush values that are subnormal in *result*'s own floating-point dtype to zero.
 
@@ -1636,7 +1656,11 @@ class BroadcastGolden:
         if broadcast_type not in self.broadcast_handlers:
             raise ValueError(f"Unsupported broadcast type: {broadcast_type}")
 
-        torch_format = format_dict[data_format]
+        # Hold the operand in its own format, not the output's. The hardware unpacks src_B from
+        # its L1 encoding and broadcasts that, so quantizing to the output format here rounds the
+        # value before any of it is picked: a Float16 operand into a bfloat16-backed output --
+        # every MX format among them -- loses three mantissa bits it never loses on the device.
+        torch_format = format_dict[input_format or data_format]
 
         # Convert input to tensor
         if isinstance(operand, torch.Tensor):
@@ -2332,8 +2356,6 @@ class UnarySFPUGolden:
             MathOperation.Sign: self._sign,
             MathOperation.TanhDerivative: self._tanh_derivative,
             MathOperation.TanhDerivativeLut: self._tanh_derivative_lut,
-            MathOperation.RsqrtCompat: self._rsqrt,
-            MathOperation.ReciprocalCompat: self._reciprocal,
             MathOperation.Expm1Cw: self._expm1,
             MathOperation.Hardmish: self._hardmish,
             MathOperation.Lgamma: self._lgamma,
@@ -2425,6 +2447,7 @@ class UnarySFPUGolden:
         unpack_to_srcs: bool = False,
         shift_amount: int = 3,
         relu_min_int_threshold: int = int(RELU_MIN_THRESHOLD),
+        tile_dimensions: tuple[int, int] = TILE_DIMENSIONS,
     ):
         self.data_format = data_format
         self.dst_format = data_format
@@ -2522,16 +2545,25 @@ class UnarySFPUGolden:
         )
 
         if not skip_tilize:
-            result = tilize_block(result, dimensions, input_format).flatten()
+            result = tilize_block(
+                result,
+                dimensions,
+                input_format,
+                tile_dimensions=tile_dimensions,
+            ).flatten()
             if whole_tensor_res is not None:
                 # Tilized as Float32 so this permutation does not round the accumulated
                 # values; the single Dest-format rounding is applied below, together with
                 # the element-wise path's.
                 whole_tensor_res = tilize_block(
-                    whole_tensor_res, dimensions, DataFormat.Float32
+                    whole_tensor_res,
+                    dimensions,
+                    DataFormat.Float32,
+                    tile_dimensions=tile_dimensions,
                 ).flatten()
 
-        start = ELEMENTS_PER_TILE * dest_idx
+        elements_per_tile = tile_dimensions[0] * tile_dimensions[1]
+        start = elements_per_tile * dest_idx
         elements_to_process = TILE_SIZE * iterations
 
         if start + elements_to_process > tensor.numel():
@@ -2576,13 +2608,15 @@ class UnarySFPUGolden:
         # Two casts, both NaN-sign preserving: the Dest write's own rounding, then the store
         # into `result`, whose dtype is not always the Dest dtype.
         op_rounded = cast_to_dest_dtype(op_tensor, op_dtype).float()
-        result[
-            ELEMENTS_PER_TILE * dest_idx : ELEMENTS_PER_TILE * dest_idx
-            + TILE_SIZE * iterations
-        ] = cast_to_dest_dtype(op_rounded, result.dtype)
+        result[window] = cast_to_dest_dtype(op_rounded, result.dtype)
 
         if not skip_tilize:
-            result = untilize_block(result, input_format, dimensions).flatten()
+            result = untilize_block(
+                result,
+                input_format,
+                dimensions,
+                tile_dimensions=tile_dimensions,
+            ).flatten()
 
         if self.data_format in (
             DataFormat.Bfp8_b,
@@ -2610,7 +2644,10 @@ class UnarySFPUGolden:
                 else result.float()
             )
             tilized = tilize_block(
-                result_t.flatten(), dimensions, DataFormat.Float16_b
+                result_t.flatten(),
+                dimensions,
+                DataFormat.Float16_b,
+                tile_dimensions=tile_dimensions,
             ).flatten()
             converter = (
                 _bfp4b_to_float16b
@@ -3142,15 +3179,22 @@ class UnarySFPUGolden:
         return 1.0 - t * t
 
     def _tanh_derivative_lut(self, x):
-        # The legacy kernel computes 1 - tanh(x)^2 from the raw 3-region SFPLUT rather than
-        # from an accurate tanh, so the golden models that same piecewise-linear LUT
-        # (breakpoints at 1.0 and 2.0). Validating it against an accurate tanh would fail by
-        # design.
+        # The legacy kernel computes 1 - tanh(x)^2 from the raw SFPLUT rather than from an
+        # accurate tanh, so the golden models that same piecewise-linear LUT. Validating it
+        # against an accurate tanh would fail by design.
+        # These six segments must match tanh_derivative_init's 6-entry SFPLUTFP32 table
+        # exactly (TABLE1 breakpoints). It is fitted for sech^2 and is not tanh_init's table.
         a = abs(x)
-        if a < 1.0:
-            t = 0.90625 * a
+        if a < 0.5:
+            t = 0.93701171875 * a
+        elif a < 1.0:
+            t = 0.5869140625 * a + 0.183837890625
+        elif a < 1.5:
+            t = 0.277099609375 * a + 0.49365234375
         elif a < 2.0:
-            t = 0.09375 * a + 0.8125
+            t = 0.11181640625 * a + 0.74169921875
+        elif a < 3.0:
+            t = 0.03070068359375 * a + 0.90625
         else:
             t = 1.0
         return 1.0 - t * t
@@ -3422,7 +3466,14 @@ class EltwiseBinaryGolden(FidelityMasking):
     _UNSET = object()
 
     def _compute_eltwise(
-        self, op, t1, t2, math_format_for_fidelity, math_fidelity, keep_float32=False
+        self,
+        op,
+        t1,
+        t2,
+        math_format_for_fidelity,
+        math_fidelity,
+        keep_float32=False,
+        exponent_bias=127,
     ):
         """Compute a single eltwise operation with fidelity masking.
 
@@ -3458,6 +3509,9 @@ class EltwiseBinaryGolden(FidelityMasking):
                     result += phase_result
         else:
             result = self.ops[op](t1, t2)
+
+        if op == MathOperation.Elwmul:
+            result = _flush_product_underflow(t1, t2, result, exponent_bias)
 
         return result
 
@@ -3610,6 +3664,7 @@ class EltwiseBinaryGolden(FidelityMasking):
                         math_format_for_fidelity,
                         math_fidelity,
                         keep_float32=True,
+                        exponent_bias=15 if hw_dest_dtype is torch.float16 else 127,
                     )
                     if block_acc is None:
                         block_acc = tile_result_f32.to(hw_dest_dtype)
@@ -3628,6 +3683,7 @@ class EltwiseBinaryGolden(FidelityMasking):
                 t2,
                 math_format_for_fidelity,
                 math_fidelity,
+                exponent_bias=15 if hw_dest_dtype is torch.float16 else 127,
             )
 
         # Quantize output to match what hardware packs back into L1.
@@ -3676,6 +3732,10 @@ class EltwiseBinaryGolden(FidelityMasking):
     def _mul(self, t1, t2):
         wide = self._wide_dtype(t1)
         return (t1.to(wide) * t2.to(wide)).to(t1.dtype)
+
+    def _copy_dest(self, t1, t2):
+        # Dest-to-Dest copy of the first operand; the second is unused.
+        return t1
 
     def _div(self, t1, t2):
         # Compute in float32 to match the SFPU divide path, with the final cast modelling the
@@ -3738,6 +3798,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 MathOperation.SfpuRsubInt32: self._rsub_int32,
                 MathOperation.SfpuMask: self._mask,
                 MathOperation.SfpuAtan2: self._atan2,
+                MathOperation.SfpuCopyDest: self._copy_dest,
                 MathOperation.SfpuMulInt32: self._mul_int32,
                 MathOperation.SfpuIsclose: self._isclose,
                 MathOperation.SfpuLogsigmoid: self._logsigmoid,
@@ -3769,6 +3830,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         dest_acc: DestAccumulation = None,
         output_format: DataFormat = None,
         collect_generated_nan: bool = False,
+        tile_dimensions: tuple[int, int] = TILE_DIMENSIONS,
     ):
         """*dest_acc* and *output_format* enable the Dest-width and pack-path modelling.
 
@@ -3806,7 +3868,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
             tensor = quantize_mx_tensor_chunked(tensor, input_format)
 
         total_elements = dimensions[0] * dimensions[1]
-        elements_per_tile = ELEMENTS_PER_TILE
+        elements_per_tile = tile_dimensions[0] * tile_dimensions[1]
         elements_per_row = 32
 
         num_tiles = total_elements // elements_per_tile
@@ -3816,6 +3878,11 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         dst_start = dst_idx * elements_per_tile
 
         if operation == MathOperation.SfpuAddTopRow:
+            if tile_dimensions != TILE_DIMENSIONS:
+                raise ValueError(
+                    "SfpuAddTopRow only supports 32x32 tile indexing, got "
+                    f"{tile_dimensions}"
+                )
             if collect_generated_nan:
                 raise ValueError(
                     "SfpuAddTopRow returns before the Dest modelling that produces the "
@@ -3834,7 +3901,12 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
             DataFormat.Bfp4_b,
             DataFormat.Bfp2_b,
         ):
-            result = tilize_block(tensor.flatten(), dimensions, data_format).flatten()
+            result = tilize_block(
+                tensor.flatten(),
+                dimensions,
+                data_format,
+                tile_dimensions=tile_dimensions,
+            ).flatten()
         else:
             result = tensor.flatten().clone()
 
@@ -3934,12 +4006,20 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
             DataFormat.Bfp4_b,
             DataFormat.Bfp2_b,
         ):
-            result = untilize_block(result, data_format, dimensions)
+            result = untilize_block(
+                result,
+                data_format,
+                dimensions,
+                tile_dimensions=tile_dimensions,
+            )
             # The same permutation, so the mask keeps pointing at the lanes it was recorded for.
             # 0.0 and 1.0 are exact in every format this branch runs for, so untilize_block's
             # format cast cannot lose a lane.
             generated_nan = untilize_block(
-                generated_nan.to(torch.float32), data_format, dimensions
+                generated_nan.to(torch.float32),
+                data_format,
+                dimensions,
+                tile_dimensions=tile_dimensions,
             ).flatten()
 
         if model_dest and not nan_survives_to_l1(data_format, output_format, dest_acc):
@@ -5045,10 +5125,7 @@ class SdpaSfpuGolden:
         x = input_2d.to(torch.float32).clone()
         out = x.clone()
 
-        if op in (SdpaOp.RecipLegacy, SdpaOp.RecipIter):
-            # Both are 1/x. RecipLegacy used to be 1/|x| -- _reciprocal_compat_ returns a
-            # magnitude, and the legacy branch of calculate_recip_first_column called it bare
-            # instead of through _reciprocal_compat_signed_, which restores the sign.
+        if op == SdpaOp.RecipIter:
             transformed = torch.reciprocal(x)
         elif op in (SdpaOp.ExpAccurate, SdpaOp.ExpPoly):
             # Both fold the scale, so the reference is exp(scale * x).
@@ -5069,10 +5146,16 @@ class SdpaSfpuGolden:
 class SdpaCorrectionGolden:
     """Golden for calculate_fused_max_sub_exp_add_tile in ckernel_sfpu_sdpa.h."""
 
-    def __call__(self, tiles, scale: float):
-        prev_max, worker_max, cur_max_seed, prev_sum, worker_sum = (
-            t.to(torch.float32) for t in tiles
-        )
+    def __call__(self, tiles, scale: float, reuse_cur_max_tile: bool = False):
+        if reuse_cur_max_tile:
+            prev_max, worker_max, worker_sum, prev_sum = (
+                t.to(torch.float32) for t in tiles
+            )
+            cur_max_seed = worker_sum
+        else:
+            prev_max, worker_max, cur_max_seed, prev_sum, worker_sum = (
+                t.to(torch.float32) for t in tiles
+            )
 
         cur_max = torch.maximum(prev_max, worker_max)
         exp_prev = torch.exp(scale * (prev_max - cur_max))
@@ -5090,6 +5173,9 @@ class SdpaCorrectionGolden:
 
         cols = torch.tensor(SdpaSfpuGolden.TRANSFORMED_COLS, dtype=torch.long)
         seeds = [prev_max, worker_max, cur_max_seed, prev_sum, worker_sum]
+        if reuse_cur_max_tile:
+            seeds = seeds[:4]
+            computed = computed[:4]
         out = []
         for seed, value in zip(seeds, computed):
             tile = seed.clone()

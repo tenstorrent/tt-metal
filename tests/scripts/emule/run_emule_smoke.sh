@@ -153,7 +153,7 @@ else
     # newer upstream test list needs that this list has not yet picked up.
     cmake --build "$BUILD_DIR" -j"$(nproc)" --target \
         unit_tests_api unit_tests_integration unit_tests_legacy \
-        unit_tests_data_movement unit_tests_per_core_allocation \
+        unit_tests_data_movement unit_tests_hybrid_allocator \
         unit_tests_ttnn ttnn
 fi
 

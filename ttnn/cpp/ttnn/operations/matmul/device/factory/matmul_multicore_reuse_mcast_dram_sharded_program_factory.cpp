@@ -260,6 +260,23 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
 
     uint32_t in0_shard_width_in_tiles = in0_tensor.shard_spec()->shape[1] / in0_tile.get_tile_shape()[1];
     uint32_t in2_block_tiles = per_core_M * in0_shard_width_in_tiles;
+    // The activation multicast is one semaphore-gated block per sender, so its cost is the block
+    // count K / in0_block_w. A block may be wider than a storage shard: the sender then gathers
+    // shards_per_block consecutive shards over the NoC before multicasting (see the in0 sender
+    // kernel), which takes the block count off the storage-core count.
+    uint32_t shards_per_block = 1;
+    if (in0_block_w > in0_shard_width_in_tiles) {
+        TT_FATAL(
+            in0_block_w % in0_shard_width_in_tiles == 0,
+            "in0_block_w ({}) wider than the in0 shard ({} tiles) must be a multiple of it",
+            in0_block_w,
+            in0_shard_width_in_tiles);
+        TT_FATAL(
+            per_core_M == 1,
+            "a multi-shard in0 block gathers one tile row per shard; per_core_M ({}) must be 1",
+            per_core_M);
+        shards_per_block = in0_block_w / in0_shard_width_in_tiles;
+    }
     uint32_t in0_sharded_num_entries = in2_block_tiles;
 
     uint32_t bias_num_entries = per_core_N_compute;
@@ -319,7 +336,13 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     uint32_t in0_num_subblocks = (per_core_M / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
 
-    uint32_t num_blocks_per_shard = num_blocks / input_all_storage_cores_vec.size();
+    TT_FATAL(
+        shards_per_block == 1 || num_blocks * shards_per_block == input_all_storage_cores_vec.size(),
+        "in0 block count {} x shards per block {} must cover the {} storage cores",
+        num_blocks,
+        shards_per_block,
+        input_all_storage_cores_vec.size());
+    uint32_t num_blocks_per_shard = shards_per_block > 1 ? 1 : num_blocks / input_all_storage_cores_vec.size();
     if (per_core_M > 1) {
         TT_FATAL(
             num_blocks_per_shard == 1,
@@ -336,6 +359,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     const DFBSpecName IN0_DFB{"in0"};
     const DFBSpecName IN1_DFB{"in1"};
     const DFBSpecName IN0_SHARDED_DFB{"in0_sharded"};
+    const DFBSpecName IN0_STAGE_DFB{"in0_stage"};
     const DFBSpecName BIAS_DFB{"bias"};
     const DFBSpecName OUT_DFB{"out"};
     const DFBSpecName INTERMED0_DFB{"intermed0"};
@@ -352,6 +376,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
 
     std::map<std::string, std::string> mm_kernel_defines;
     std::map<std::string, std::string> mm_kernel_in0_sender_define;
+    if (shards_per_block > 1) {
+        mm_kernel_in0_sender_define["IN0_MULTISHARD"] = "1";
+    }
     std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;
     if (bias.has_value()) {
         mm_kernel_defines["FUSE_BIAS"] = "1";
@@ -456,10 +483,22 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     }
 
     Group<DataflowBufferSpec> dataflow_buffers;
-    dataflow_buffers.reserve(bias.has_value() ? 7 : 6);
+    dataflow_buffers.reserve(8);
     dataflow_buffers.push_back(std::move(in0_dfb_spec));
     dataflow_buffers.push_back(std::move(in1_dfb_spec));
     dataflow_buffers.push_back(std::move(in0_sharded_dfb_spec));
+    if (shards_per_block > 1) {
+        // One block of scratch for a storage core that does no compute to assemble its multi-shard
+        // block in: its in0 slot lies inside the multicast rectangle and receives the other senders'
+        // blocks. The in0 sender kernel is its only toucher.
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = IN0_STAGE_DFB,
+            .entry_size = in0_single_tile_size,
+            .num_entries = in0_block_tiles,
+            .data_format_metadata = in0_data_format,
+            .tile_format_metadata = in0_tile,
+        });
+    }
     dataflow_buffers.push_back(std::move(out_dfb_spec));
     dataflow_buffers.push_back(std::move(intermed0_dfb_spec));
     dataflow_buffers.push_back(std::move(out_reshard_dfb_spec));
@@ -542,8 +581,11 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
             core,
             {{"worker_core_type", worker_core_type},
              {"sender_id", sender_id},
+             // The last K tile is padded by whoever sends the last block: the last storage core, or
+             // the first storage core of the last multi-shard block.
              {"is_last_ktile_padded",
-              (std::uint32_t)((core == input_all_storage_cores_vec.back()) and (in0_last_ktile_w > 0))}});
+              (std::uint32_t)((sender_id + shards_per_block == mcast_senders_coords.size()) and
+                              (in0_last_ktile_w > 0))}});
         in0_run_args.advanced_options.runtime_varargs[core] = in0_sender_noc_varargs;
         sender_id++;
     }
@@ -857,6 +899,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
                 {"in0_mcast_dest_noc_end_y", (std::uint32_t)end_core_noc.y},
                 {"num_blocks_per_shard", num_blocks_per_shard},
                 {"in0_block_w", in0_block_w},
+                {"shards_per_block", shards_per_block},
+                {"in0_shard_width_bytes", in0_shard_width_in_tiles * in0_single_tile_size},
             },
         .runtime_arg_schema =
             {
@@ -865,6 +909,20 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
         .hw_config = DataMovementGen1Config{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc},
         .advanced_options = {.num_runtime_varargs = num_in0_sender_varargs},
     };
+    if (shards_per_block > 1) {
+        // Sync-free one-toucher, like in0_sharded above: the sender only takes the scratch's base
+        // address, so it stands as both endpoints of its own buffer.
+        in0_sender.dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = IN0_STAGE_DFB,
+            .accessor_name = "in0_stage",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        in0_sender.dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = IN0_STAGE_DFB,
+            .accessor_name = "in0_stage",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+    }
 
     // in1 sender/writer kernel (writer - RISCV_0)
     KernelSpec in1_sender_writer{

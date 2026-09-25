@@ -66,7 +66,6 @@ class MiniMaxH3TransformerBlock(Module):
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
-        precomputed_adaln: bool = False,
     ) -> None:
         super().__init__()
 
@@ -124,22 +123,14 @@ class MiniMaxH3TransformerBlock(Module):
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
         )
-        # With precomputed modulation the projection never exists on device: the caller passes the
-        # six tables into `forward` instead, and this block's `adaln_proj.*` checkpoint keys are
-        # dropped in `_prepare_torch_state`. See `adaln_cache_minimax_h3`.
-        self.precomputed_adaln = precomputed_adaln
-        self.adaln_proj = (
-            None
-            if precomputed_adaln
-            else ColParallelLinear(
-                time_embed_dim,
-                NUM_MODULATION_PARAMS * hidden_size * MODALITY_NUM,
-                bias=True,
-                mesh_device=mesh_device,
-                mesh_axis=self.tp_mesh_axis,
-                fsdp_mesh_axis=fsdp_mesh_axis,
-                ccl_manager=ccl_manager,
-            )
+        self.adaln_proj = ColParallelLinear(
+            time_embed_dim,
+            NUM_MODULATION_PARAMS * hidden_size * MODALITY_NUM,
+            bias=True,
+            mesh_device=mesh_device,
+            mesh_axis=self.tp_mesh_axis,
+            fsdp_mesh_axis=fsdp_mesh_axis,
+            ccl_manager=ccl_manager,
         )
 
         self.mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -151,7 +142,7 @@ class MiniMaxH3TransformerBlock(Module):
         )
         self.use_fused_agmm = ccl_manager.topology == ttnn.Topology.Ring and self.tp_factor > 1
         # ff1 packs gate and up together for the fused SwiGLU, so its per-device N is 2 * ffn_dim / tp.
-        self.ff1_block_size = agmm_block_size(hidden_size, 2 * ffn_dim // self.tp_factor)
+        self._ff1_kn = (hidden_size, 2 * ffn_dim // self.tp_factor)
 
     # ------------------------------------------------------------------ weights
 
@@ -172,10 +163,6 @@ class MiniMaxH3TransformerBlock(Module):
 
         weight = state.pop("adaln_proj.linear.weight", None)
         bias = state.pop("adaln_proj.linear.bias", None)
-        if self.precomputed_adaln:
-            # Dropped: these are the 26 GB the precomputed table exists to keep off the
-            # device. The pops above already strip them from the state the loader checks.
-            return
         if weight is not None:
             state["adaln_proj.weight"] = _reorder_for_tp(weight)
         if bias is not None:
@@ -238,32 +225,22 @@ class MiniMaxH3TransformerBlock(Module):
     def forward(
         self,
         spatial_1BND: ttnn.Tensor,
-        N: int,
-        temb: ttnn.Tensor | None,
+        logical_n: ttnn.Tensor,
+        temb: ttnn.Tensor,
         adaln_indices: ttnn.Tensor,
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
-        modulation_tables: list[ttnn.Tensor] | None = None,
     ) -> ttnn.Tensor:
         """
         spatial_1BND: fractured N on SP, fractured hidden_size on TP
         temb: [1, 1, num_timesteps, time_embed_dim], replicated, float32
         adaln_indices: [1, 1, 1, N_local] integer row indices, fractured N on SP
         rope_cos/rope_sin: [1, 1, N_local, rotary_dim], fractured N on SP, replicated on TP
-        N: logical (unfractured) packed sequence length
+        logical_n: logical (unfractured) packed length as a [1, 1, 1, 1] uint32 device tensor.
 
         Returns the block output, fractured N on SP and hidden_size on TP.
         """
-        # Precomputed: the six tables come from the host-built cache, addressed by the same absolute
-        # `adaln_indices`, so nothing downstream changes. Otherwise project `temb` on device.
-        if modulation_tables is not None:
-            if len(modulation_tables) != NUM_MODULATION_PARAMS:
-                raise ValueError(f"expected {NUM_MODULATION_PARAMS} modulation tables, got {len(modulation_tables)}")
-            tables = modulation_tables
-        else:
-            if self.precomputed_adaln:
-                raise ValueError("block was built with precomputed_adaln but forward got no modulation_tables")
-            tables = self._modulation_tables(temb)
+        tables = self._modulation_tables(temb)
 
         # ttnn.embedding takes [batch, seq] indices; uint32 is the dtype it expects.
         indices = ttnn.reshape(adaln_indices, (1, adaln_indices.shape[-1]))
@@ -287,7 +264,7 @@ class MiniMaxH3TransformerBlock(Module):
         # `residual + attn_out * gate` directly rather than the block adding it afterwards.
         spatial_1BND = self.attn(
             normed,
-            N=N,
+            logical_n=logical_n,
             rope_cos=rope_cos,
             rope_sin=rope_sin,
             addcmul_residual=residual,
@@ -304,7 +281,7 @@ class MiniMaxH3TransformerBlock(Module):
         # ff1 gathers the TP-fractured input inside its matmul (all_gather_minimal_matmul_async) when
         # parallel_config is passed; ff2 is row-parallel and reduce-scatters back to TP-fractured.
         if not self.use_fused_agmm and self.tp_factor > 1:
-            normed = self.ccl_manager.all_gather_persistent_buffer(normed, dim=3, mesh_axis=self.tp_mesh_axis)
+            normed = self.ccl_manager.all_gather(normed, dim=3, mesh_axis=self.tp_mesh_axis, use_hyperparams=False)
         # ff2's reduce-scatter and the gated residual after it fuse into a single
         # minimal_matmul_strided_reduce_scatter_async, computing residual + ff2(...) * gate in one op.
         #
@@ -317,23 +294,34 @@ class MiniMaxH3TransformerBlock(Module):
         # Async only supports Ring topology"), so a line-cabled mesh has to take the unfused path
         # below. Gated here rather than left to fail, because the assert fires on the first denoise
         # step of the first request -- long after warmup reports the model loaded.
+        ff1_block_size = agmm_block_size(*self._ff1_kn, normed.padded_shape[-2])
         ff2_shape = (normed.shape[2], self.ffn_dim // self.tp_factor, self.hidden_size)
-        if self.tp_factor > 1 and self.ccl_manager.topology == ttnn.Topology.Ring and has_mmrs_config(*ff2_shape):
+        # The grid is what decides whether a swept blocking or a rule pick can be resolved at all,
+        # so it has to reach the gate: without it every tile-aligned M looked servable, and Wormhole
+        # took the fused path 50x per denoise step straight onto the warned fallback config.
+        core_grid = self.mesh_device.compute_with_storage_grid_size()
+        if (
+            self.tp_factor > 1
+            and self.ccl_manager.topology == ttnn.Topology.Ring
+            and has_mmrs_config(*ff2_shape, core_grid)
+        ):
             # M is only known here (it tracks the packed sequence length), so the blocking is
             # registered at the point of use rather than at construction. Idempotent and cheap.
-            register_mmrs_config(*ff2_shape)
+            register_mmrs_config(*ff2_shape, core_grid)
             return self.ff.forward_fused_addcmul(
                 normed,
                 residual,
                 modulation(_GATE_MLP),
                 compute_kernel_config=self.mm_compute_kernel_config,
                 parallel_config=self.parallel_config if self.use_fused_agmm else None,
-                default_block_size=self.ff1_block_size,
+                default_block_size=ff1_block_size,
+                force_transpose=False,
             )
         ff_out = self.ff(
             normed,
             compute_kernel_config=self.mm_compute_kernel_config,
             parallel_config=self.parallel_config if self.use_fused_agmm else None,
-            default_block_size=self.ff1_block_size,
+            default_block_size=ff1_block_size,
+            force_transpose=False,
         )
         return ttnn.addcmul(residual, ff_out, modulation(_GATE_MLP))

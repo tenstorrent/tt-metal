@@ -25,15 +25,15 @@ in the same file, sharing its module-level parametrize constants:
 
 ```
 tests/models/minimax_h3/
-├── test_transformer_minimax_h3.py    # attention, one block, token refiner, precomputed AdaLN, whole DiT
+├── test_transformer_minimax_h3.py    # attention, one block, token refiner, whole DiT, Tracy block device-perf
 ├── test_vae_minimax_h3.py            # convs/resnets, encoder, 36-layer ViT decoder, tiling  (SINGLE_DEVICE)
 ├── test_vae_parallel_minimax_h3.py   # H/W sharding, data-parallel independence, device stitch  (mesh)
 ├── test_audio_minimax_h3.py          # weight-norm conversion, decode (accurate defaults), encode, traced
-├── test_performance_minimax_h3.py    # per-block device time (pipeline latency lives in the pipeline tests)
+├── test_performance_minimax_h3.py    # t2va pipeline wall-clock (`BenchmarkProfiler`)
 ├── test_performance_vae_minimax_h3.py    # VAE perf, and the shared VAE test helpers others import
 ├── test_packing_minimax_h3.py        # host-only layout parity (t2va/fl2va)
 ├── test_references_minimax_h3.py     # ref2va host parity (prep/layout/presentation) + device encode gate
-├── test_pipeline{,_fl2va,_ref2va}_minimax_h3.py   # one e2e mode each (perf + quality), one process each
+├── test_pipeline{,_fl2va,_ref2va}_minimax_h3.py   # one e2e quality gate each (t2va wall-clock is in test_performance_minimax_h3.py; fl2va/ref2va still log stage times)
 └── tools/                            # not tests: perf projection, Tracy harnesses, VBench runner
 ```
 
@@ -44,7 +44,9 @@ golden digests are designed to stand in when the diffusers branch is absent, and
 ## Running the transformer tests with real weights
 
 `MINIMAX_H3_MODEL_PATH` points at a MiniMax-H3 diffusers snapshot (the transformer tests read its
-`transformer/` partition). Without it, the real-weights cases skip and the rest still run.
+`transformer/` partition). Without it, the real-weights cases skip and the rest still run -- or set
+`TT_DIT_ALLOW_HF_DOWNLOAD=1` to fetch the partition instead of skipping (see [Getting the
+weights](#getting-the-weights)).
 
 ```bash
 export MINIMAX_H3_MODEL_PATH=/path/to/MiniMax-H3-diffusers
@@ -95,7 +97,8 @@ Two conditioner facts that break naive assumptions:
 - **`rope_scaling.mrope_interleaved` is true.** The chunked and interleaved rotary layouts coincide
   exactly while all three M-RoPE axes share a position — i.e. for `t2va`, where the flag is a no-op.
   A vision run makes them diverge. `create_rope_tensors(..., interleaved=True)` and
-  `mrope_position_ids()` cover that; see `tests/encoders/qwen3vl/test_qwen3vl_mrope.py`.
+  `mrope_position_ids()` cover that; the gate is the `get_rope_index` comparison in
+  `tests/models/minimax_h3/test_vision_conditioner_minimax_h3.py`.
 
 FSDP is a placement choice, and the two consumers make it differently. The pipeline builds the
 encoder with `is_fsdp=True` (`pipeline_minimax_h3.py`), sharding the weights across the non-TP axis
@@ -191,13 +194,43 @@ uv pip install --python <venv>/bin/python --no-deps \
 environment that `ttnn` was built against. The pinned commit's dependencies are already satisfied by
 an environment that had any recent `diffusers` installed. Re-check `import ttnn` after installing.
 
+### Getting the weights
+
+The tests read a diffusers snapshot of [`MiniMaxAI/MiniMax-H3`](https://huggingface.co/MiniMaxAI/MiniMax-H3).
+Either point `MINIMAX_H3_MODEL_PATH` at one you already have, or let the resolver fetch it:
+
+```bash
+export TT_DIT_ALLOW_HF_DOWNLOAD=1      # opt in once; unset, a missing snapshot just skips
+```
+
+`resolve_weights_dir` (`pipelines/minimax_h3/weights_minimax_h3.py`) tries `MINIMAX_H3_MODEL_PATH`,
+then the HuggingFace cache, then a download -- the same order, and the same
+`TT_DIT_ALLOW_HF_DOWNLOAD=1` opt-in, as the lightx2v loader. With the variable unset an absent
+snapshot still skips rather than pulling 144 GB mid-run.
+
+Only the partitions a test asks for are fetched, so the download is incremental and the repo's
+top-level `FL2VA/` and `Ref2VA/` trees -- self-contained original-format bundles that duplicate the
+root partitions and are never read here -- are skipped:
+
+| Partition | Size | Needed by |
+| --- | --- | --- |
+| `text_encoder/` | 66.7 GB | everything (Qwen3-VL conditioner) |
+| `transformer/` | 66.3 GB | `t2va`, `fl2va` |
+| `transformer_ref/` | 66.3 GB | `ref2va` only |
+| `vae/` | 10.4 GB | everything |
+| `audio_vae/` | 0.6 GB | everything |
+| `tokenizer/`, `processor/`, `scheduler/`, `audio_scheduler/` | ~20 MB | always fetched |
+
+That is ~144 GB for `t2va` / `fl2va` and ~210 GB with `ref2va`, against 498 GB for the whole repo.
+Set `HF_TOKEN` for higher rate limits and faster downloads, and `HF_HOME` to move the cache off `~`.
+
 ## Running `t2va` end to end
 
 One command, prompt in and an mp4 with a soundtrack out, at the production working point
 (1344x768, 124 frames @ 24 fps, 50 scheduler steps -> 49 forwards):
 
 ```bash
-export MINIMAX_H3_MODEL_PATH=/path/to/MiniMax-H3-diffusers
+export MINIMAX_H3_MODEL_PATH=/path/to/MiniMax-H3-diffusers   # or TT_DIT_ALLOW_HF_DOWNLOAD=1
 export TT_DIT_CACHE_DIR=~/tt_dit_cache        # see the warning below
 scripts/run_safe_pytest.sh models/tt_dit/tests/models/minimax_h3/test_pipeline_minimax_h3.py
 ```
@@ -213,7 +246,7 @@ Same command shape, plus a keyframe. `image=` is `fl2va`, `last_image=` is `fl2v
 both together anchors each end of the clip:
 
 ```bash
-export MINIMAX_H3_MODEL_PATH=/path/to/MiniMax-H3-diffusers
+export MINIMAX_H3_MODEL_PATH=/path/to/MiniMax-H3-diffusers   # or TT_DIT_ALLOW_HF_DOWNLOAD=1
 export TT_DIT_CACHE_DIR=~/tt_dit_cache
 scripts/run_safe_pytest.sh models/tt_dit/tests/models/minimax_h3/test_pipeline_fl2va_minimax_h3.py
 ```
@@ -287,7 +320,7 @@ The video VAE tiles this canvas **4x7 = 28** ways (256px tiles, overlap 64), mat
 
 ### Meshes
 
-Measured warm (the MEASUREMENT block in `test_pipeline_minimax_h3.py`), 768P/15s, 362 frames,
+Measured warm (the MEASUREMENT block in `test_performance_minimax_h3.py`), 768P/15s, 362 frames,
 49 forwards:
 
 | | 4x8 Galaxy | 4x32 quad (traced) | speedup |
@@ -386,7 +419,7 @@ repeating.
 against 61.7 s in an earlier measurement), and the mp4 write and every weight load are excluded from the
 rows by design. `warmup()` must be given the **real prompt and the real keyframes** — every program in
 the 50-block stack is keyed on the padded packed length, so warming a different one warms nothing.
-`test_performance_minimax_h3.py` asserts the warm and measured lengths agree; for t2va the hazard is
+`run_warm_generation` asserts the warm and measured lengths agree; for t2va the hazard is
 masked only by luck, since 1 and 39 tokens both round up to 37888.
 
 ## Precision

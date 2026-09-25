@@ -13,59 +13,51 @@
 #include "compute_streaming.hpp"
 
 void kernel_main() {
-    constexpr uint32_t B = get_compile_time_arg_val(0);
-    constexpr uint32_t NQH = get_compile_time_arg_val(1);
-    constexpr uint32_t NKH = get_compile_time_arg_val(2);
-    constexpr uint32_t Skt = get_compile_time_arg_val(3);
-    constexpr uint32_t DHt = get_compile_time_arg_val(4);
-    constexpr uint32_t vDHt = get_compile_time_arg_val(5);
-    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(6);
-    constexpr uint32_t q_num_chunks = get_compile_time_arg_val(7);
-    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(8);
-    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(9);
+    constexpr uint32_t Skt = get_compile_time_arg_val(0);
+    constexpr uint32_t DHt = get_compile_time_arg_val(1);
+    constexpr uint32_t vDHt = get_compile_time_arg_val(2);
+    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(3);
+    constexpr uint32_t q_num_chunks = get_compile_time_arg_val(4);
+    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(5);
+    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(6);
 
-    constexpr uint32_t qk_in0_block_w = get_compile_time_arg_val(10);
-    constexpr uint32_t qk_subblock_w = get_compile_time_arg_val(11);
-    constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(12);
-    constexpr uint32_t qk_in0_num_subblocks = get_compile_time_arg_val(13);
-    constexpr uint32_t qk_in1_num_subblocks = get_compile_time_arg_val(14);
-    constexpr uint32_t qk_num_blocks = get_compile_time_arg_val(15);
-    constexpr uint32_t out_in0_block_w = get_compile_time_arg_val(16);
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(17);
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(18);
-    constexpr uint32_t out_in0_num_subblocks = get_compile_time_arg_val(19);
-    constexpr uint32_t out_in1_num_subblocks = get_compile_time_arg_val(20);
-    constexpr uint32_t out_num_blocks = get_compile_time_arg_val(21);
+    constexpr uint32_t qk_in0_block_w = get_compile_time_arg_val(7);
+    constexpr uint32_t qk_subblock_w = get_compile_time_arg_val(8);
+    constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(9);
+    constexpr uint32_t qk_in0_num_subblocks = get_compile_time_arg_val(10);
+    constexpr uint32_t qk_in1_num_subblocks = get_compile_time_arg_val(11);
+    constexpr uint32_t out_in0_block_w = get_compile_time_arg_val(12);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(13);
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(14);
+    constexpr uint32_t out_in0_num_subblocks = get_compile_time_arg_val(15);
+    constexpr uint32_t out_in1_num_subblocks = get_compile_time_arg_val(16);
 
-    constexpr uint32_t num_cores = get_compile_time_arg_val(22);
-
-    constexpr bool is_causal = get_compile_time_arg_val(23) == 1;
-    constexpr bool use_provided_mask = get_compile_time_arg_val(24) == 1;
-    constexpr bool use_padded_mask = get_compile_time_arg_val(25) == 1;
-    constexpr bool is_chunked = get_compile_time_arg_val(26) == 1;
-    constexpr uint32_t scale_fp32 = get_compile_time_arg_val(27);
-    constexpr uint32_t sliding_window_size = get_compile_time_arg_val(28);
-    constexpr bool use_attention_sink = get_compile_time_arg_val(29) == 1;
-    constexpr bool use_streaming_compute = get_compile_time_arg_val(30) == 1;
-    constexpr uint32_t valid_Skt = get_compile_time_arg_val(31);
-    constexpr uint32_t k_partial_col = get_compile_time_arg_val(32);
+    constexpr bool is_causal = get_compile_time_arg_val(17) == 1;
+    constexpr bool use_provided_mask = get_compile_time_arg_val(18) == 1;
+    constexpr bool use_padded_mask = get_compile_time_arg_val(19) == 1;
+    constexpr bool is_chunked = get_compile_time_arg_val(20) == 1;
+    constexpr uint32_t scale_fp32 = get_compile_time_arg_val(21);
+    constexpr uint32_t sliding_window_size = get_compile_time_arg_val(22);
+    constexpr bool use_attention_sink = get_compile_time_arg_val(23) == 1;
+    constexpr bool use_streaming_compute = get_compile_time_arg_val(24) == 1;
+    constexpr uint32_t valid_Skt = get_compile_time_arg_val(25);
+    constexpr uint32_t k_partial_col = get_compile_time_arg_val(26);
     // Zigzag remap flag drives the external remap_q_index call on the flat B*NQH*q_num_chunks range.
-    constexpr bool use_zigzag_balancing = get_compile_time_arg_val(33) == 1;
+    constexpr bool use_zigzag_balancing = get_compile_time_arg_val(27) == 1;
     // Windowed K-range narrowing: per-Q-chunk [k_lo, k_hi) arrives from the reader over a ctrl CB.
-    constexpr bool use_windowed_narrowing = get_compile_time_arg_val(34) == 1;
+    constexpr bool use_windowed_narrowing = get_compile_time_arg_val(28) == 1;
 
-    const uint32_t core_id = get_arg_val<uint32_t>(0);
-    const uint32_t num_phases = get_arg_val<uint32_t>(1);
-    const uint32_t use_chunk_start_idx_tensor = get_arg_val<uint32_t>(2);
-    uint32_t chunked_q_chunk_offset_phase_1 = get_arg_val<uint32_t>(3);
+    const uint32_t num_phases = get_arg_val<uint32_t>(0);
+    const uint32_t use_chunk_start_idx_tensor = get_arg_val<uint32_t>(1);
+    uint32_t chunked_q_chunk_offset_phase_1 = get_arg_val<uint32_t>(2);
     uint32_t chunked_q_chunk_offset_phase_2 = 0;
     if (num_phases == 2) {
-        chunked_q_chunk_offset_phase_2 = get_arg_val<uint32_t>(4);
+        chunked_q_chunk_offset_phase_2 = get_arg_val<uint32_t>(3);
     }
 
     // Global Q scheduling args follow phase_2 slot.
-    const uint32_t global_q_start = get_arg_val<uint32_t>(5);
-    const uint32_t global_q_count = get_arg_val<uint32_t>(6);
+    const uint32_t global_q_start = get_arg_val<uint32_t>(4);
+    const uint32_t global_q_count = get_arg_val<uint32_t>(5);
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
@@ -73,7 +65,7 @@ void kernel_main() {
     constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
-    constexpr uint32_t cb_arg_offset = 35;
+    constexpr uint32_t cb_arg_offset = 29;
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
@@ -251,13 +243,11 @@ void kernel_main() {
                 qk_subblock_h,
                 qk_in0_num_subblocks,
                 qk_in1_num_subblocks,
-                qk_num_blocks,
                 out_in0_block_w,
                 out_subblock_w,
                 out_subblock_h,
                 out_in0_num_subblocks,
                 out_in1_num_subblocks,
-                out_num_blocks,
                 /*iter_q_start=*/0,
                 /*iter_q_end=*/global_q_count,
                 q_num_chunks,

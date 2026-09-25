@@ -28,7 +28,8 @@ SFPI-GCC invocation is translated into an equivalent clang one:
     (mapped from -mcpu=tt-wh / tt-bh / tt-wh-tensix / ...)
   * SFPI-GCC-only flags dropped: -ftt-nttp -ftt-constinit -ftt-consteval
     -ftt-no-dyninit, -mno-tt-fix-whbhebreak, --param=min-pagesize=0,
-    -fno-tree-loop-distribute-patterns, -flto=auto, dep-file flags (-MMD/-MF)
+    -fno-tree-loop-distribute-patterns, every -flto* spelling, dep-file flags
+    (-MMD/-MF)
   * -std=c++17 -> -std=c++20 (the dropped -ftt-nttp/-ftt-constinit/
     -ftt-consteval backport C++20 features into SFPI's C++17 mode; tt-llk
     headers rely on them)
@@ -87,8 +88,6 @@ SFPI_GXX_RE = re.compile(r"riscv(32)?-tt-elf-g\+\+$")
 
 # Flags dropped verbatim (SFPI-GCC-only or irrelevant/harmful for parsing).
 DROP_EXACT = {
-    "-flto=auto",
-    "-flto",
     "--param=min-pagesize=0",
     "-fno-tree-loop-distribute-patterns",
     "-mno-tt-fix-whbhebreak",
@@ -102,6 +101,11 @@ DROP_EXACT = {
 DROP_PREFIX = (
     "-ftt-",  # SFPI-GCC extensions (-ftt-nttp, -ftt-constinit, ...)
     "-fdump-",  # GCC dump flags (TT_METAL_JIT_ANALYTICS / build-map modes)
+    # Every LTO spelling, matched by prefix so the build's choice can change without
+    # breaking lint again. clang's -flto= accepts only thin|full, so GCC's job-count
+    # and partitioning forms are hard errors ("unsupported argument '1'", "unknown
+    # argument: '-flto-partition=one'") rather than something clang-tidy can ignore.
+    "-flto",
 )
 # Flags that consume the NEXT argv element and are dropped with it.
 DROP_WITH_ARG = {"-MF", "-o"}
@@ -401,7 +405,8 @@ def self_test():
         "-O3",
         "-std=c++17",
         "-ftt-nttp",
-        "-flto=auto",
+        "-flto=1",
+        "-flto-partition=one",
         "-MMD",
         "-mcpu=tt-wh-tensix",
         "-I.",
@@ -425,7 +430,7 @@ def self_test():
     link_line = (
         "2026-01-01 00:00:02.000 | info     |    BuildKernels |     g++ link cmd: "
         f"cd {out_dir}/ && {gxx} -O3 -Wl,--just-symbols=/x/trisc1_weakened.elf -mcpu=tt-wh "
-        f"-flto=auto -T/x/kernel_trisc1.ld -Wl,--emit-relocs ._7_0_trisck.o /x/substitutes.o "
+        f"-flto=1 -flto-partition=one -T/x/kernel_trisc1.ld -Wl,--emit-relocs ._7_0_trisck.o /x/substitutes.o "
         f"-o {out_dir}/trisc1.elf (build.cpp:777)\n"
     )
     # Same line as tt-logger emits it with colour on: SGR escapes wrap the
@@ -472,8 +477,16 @@ def self_test():
     out = transform(entries[0]["arguments"], "clang++")
     assert "--target=riscv32-unknown-elf" in out and "-march=rv32im" in out
     assert "-std=c++20" in out and "-std=c++17" not in out
-    for banned in ("-ftt-nttp", "-flto=auto", "-MMD", "-MF", "-o", "-mcpu=tt-wh-tensix"):
+    for banned in ("-ftt-nttp", "-flto=1", "-flto-partition=one", "-MMD", "-MF", "-o", "-mcpu=tt-wh-tensix"):
         assert banned not in out, f"{banned} must be dropped"
+
+    # Every -flto spelling must be dropped, not just the one the build happens to pass
+    # today: clang errors out on GCC's job-count and partitioning forms, and logs
+    # captured before the build was pinned still carry -flto=auto.
+    for spelling in ("-flto", "-flto=auto", "-flto=1", "-flto-partition=one"):
+        got = transform([gxx, "-c", "-mcpu=tt-wh-tensix", spelling, "x.cc"], "clang++")
+        assert got is not None, f"transform rejected {spelling}"
+        assert spelling not in got, f"{spelling} must be dropped"
     assert '-DFULL_KERNEL_NAME="reduce_h/42"' in out, "defines must pass through verbatim"
 
     # SFPI headers must reach clang as system includes, in either -I spelling,

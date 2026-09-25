@@ -1,0 +1,255 @@
+# Weekly on Saturday. Budgets: models.agentic_research_tier<N> in .github/time_budget.yaml.
+- name: Llama 3.1-8B QB2 decoder and IFEval serving
+  cmd: |
+    set -euo pipefail
+
+    cd "${TT_METAL_HOME:?Set TT_METAL_HOME to the tt-metal checkout}"
+    model_dir=models/demos/llama31_8b_qb2
+    work="$PWD/generated/llama31_8b_qb2"
+    results="$PWD/generated/test_reports/llama31_8b_qb2"
+    mkdir -p "$work" "$results" generated/test_logs
+    export TT_LLAMA_TEXT_VER=llama31_8b_qb2 MESH_DEVICE=P300x2
+    export TT_METAL_CACHE="$work/tt-cache"
+    export LLAMA_MODEL_PATH
+    LLAMA_MODEL_PATH=$(python -c 'from models.demos.llama31_8b_qb2.tt.model import checkpoint_path; print(checkpoint_path())')
+
+    git clone --depth 1 --branch "${VLLM_TT_PLUGIN_REF:-main}" \
+        https://github.com/tenstorrent/vllm-tt-plugin.git "$work/vllm-tt-plugin"
+    unset VLLM_TT_PLUGIN_REF
+    pushd "$work/vllm-tt-plugin"
+    source docs/install-vllm-tt.sh
+    popd
+
+    python -m pytest "$model_dir/tests" \
+        --timeout 180 --junitxml "$results/decoder.xml"
+
+    # Keep the pinned scorer's dependencies separate from the serving runtime.
+    uv venv "$work/eval-env"
+    UV_TORCH_BACKEND=cpu uv pip install --python "$work/eval-env/bin/python" -r "$model_dir/tests/requirements-eval.txt"
+    export NLTK_DATA="$work/nltk"
+    "$work/eval-env/bin/python" -m nltk.downloader -d "$NLTK_DATA" punkt_tab
+    # Check the complete benchmark import path before starting the model server.
+    "$work/eval-env/bin/python" "$model_dir/tests/benchmark.py" --help >/dev/null
+
+    tt_config=$(python - <<'PY'
+    import json
+    from models.demos.utils.trace_region_sizes import resolve_trace_region_size
+    print(json.dumps({"tt": {
+        "sample_on_device_mode": "all",
+        "trace_region_size": resolve_trace_region_size("llama3.1-8b-qb2", "bh_quietbox_2"),
+        "l1_small_size": 16384,
+    }}))
+    PY
+    )
+    setsid python -u -m vllm.entrypoints.openai.api_server \
+        --model "$LLAMA_MODEL_PATH" --served-model-name meta-llama/Llama-3.1-8B-Instruct \
+        --host 127.0.0.1 --port 8000 --block-size 128 --max-num-seqs 32 \
+        --max-model-len 131072 --max-logprobs -1 --async-scheduling \
+        --additional-config "$tt_config" > generated/test_logs/llama31_8b_qb2_server.log 2>&1 &
+    server_pid=$!
+    trap 'kill -- -"$server_pid" 2>/dev/null || true; wait "$server_pid" 2>/dev/null || true' EXIT
+
+    for attempt in {1..120}; do
+        if curl -fsS http://127.0.0.1:8000/health >/dev/null 2>&1; then break; fi
+        kill -0 "$server_pid"
+        sleep 4
+    done
+    curl -fsS http://127.0.0.1:8000/health
+
+    status=0
+    HF_HUB_OFFLINE=0 HF_HUB_CACHE="$work/datasets" \
+        "$work/eval-env/bin/python" "$model_dir/tests/benchmark.py" --output-dir "$results" || status=$?
+    CI=true python -m models.demos.llama31_8b_qb2.tests.report "$results/summary.json"
+    exit "$status"
+  model: llama3.1-8b-qb2
+  model_family: Llama
+  skus:
+    bh_quietbox_2:
+      # Run 34480800119 reached 54/56 requests at 10 minutes after 24 passing tests.
+      # Allow the remaining requests, scoring/reporting, and ~15% runner variance.
+      timeout: 12
+      tier: 3
+  owner_id: U03HY7MK4BT # Mark O'Connor
+  team: models
+  budget_type: agentic_research
+
+- name: Gemma4 31B QB2 decoder, GPQA subset and serving
+  cmd: |
+    set -euo pipefail
+    umask 077
+    run_started=$SECONDS
+
+    cd "${TT_METAL_HOME:?Set TT_METAL_HOME to the tt-metal checkout}"
+    model_dir=models/demos/gemma4_31b_qb2
+    mkdir -p generated/test_logs generated/test_reports/gemma4_31b_qb2
+    work=$(mktemp -d)
+    results="$PWD/generated/test_reports/gemma4_31b_qb2"
+    mark_phase() {
+        printf 'Gemma CI phase=%s elapsed_seconds=%s\n' "$1" "$((SECONDS - run_started))" \
+            | tee -a "$results/phase-timings.log"
+    }
+    mark_phase setup
+    export HF_HOME="${HF_HOME:-/mnt/MLPerf/huggingface}" MESH_DEVICE=P300x2
+    export EXTRA_MODELS_DIR="$PWD/models/demos" TT_METAL_CACHE="$work/tt-cache"
+    # CI mounts the shared model cache read-only; evaluator caches must be local.
+    export HF_DATASETS_CACHE="$work/datasets" HF_MODULES_CACHE="$work/hf-modules"
+    # tt-metal#56613: large mmap-backed weights can hang the pinned DMA path.
+    export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0
+    export VLLM_DEBUG_LOG_API_SERVER_RESPONSE=false
+    unset HF_MODEL
+    export HF_MODEL
+    HF_MODEL=$(python -c 'from models.demos.gemma4_31b_qb2.tt.model import checkpoint_path; print(checkpoint_path())')
+
+    git clone --depth 1 --branch "${VLLM_TT_PLUGIN_REF:-main}" \
+        https://github.com/tenstorrent/vllm-tt-plugin.git "$work/vllm-tt-plugin"
+    git -C "$work/vllm-tt-plugin" rev-parse HEAD > "$results/plugin-revision.txt"
+    unset VLLM_TT_PLUGIN_REF
+    pushd "$work/vllm-tt-plugin"
+    source docs/install-vllm-tt.sh
+    uv pip install 'pytest>=8,<9'
+    popd
+
+    # Weekly smoke: both attention kinds beyond the sliding-window/page boundary,
+    # plus all inexpensive client and scheduler-input checks. Keep the full suite
+    # available for model changes and release validation.
+    mark_phase model_tests
+    python -m pytest "$model_dir/tests/test_benchmark.py" "$model_dir/tests/test_serving_inputs.py" \
+        "$model_dir/tests/test_decoder.py::test_prefill_and_live_decode_trace[1025-2-sliding]" \
+        "$model_dir/tests/test_decoder.py::test_prefill_and_live_decode_trace[1025-2-full]" \
+        "$model_dir/tests/test_chunked_prefill.py" \
+        --timeout 600 --junitxml "$results/decoder.xml"
+    mark_phase model_tests_complete
+
+    tt_config=$(python - <<'PY'
+    import json
+    from models.demos.utils.trace_region_sizes import resolve_trace_region_size
+    print(json.dumps({"tt": {
+        "sample_on_device_mode": "all",
+        "trace_region_size": resolve_trace_region_size("gemma4-31b-qb2", "bh_quietbox_2"),
+        "l1_small_size": 16384,
+    }}))
+    PY
+    )
+    server_pid=
+    startup_log=
+    capture_startup_status() {
+        if [ -n "$startup_log" ]; then
+            # Only fixed stage labels, a layer index and an exception flag are public.
+            python -m models.demos.gemma4_31b_qb2.tests.startup_status \
+                "$startup_log" "$results/server-startup_${server_capacity}.json" || true
+            startup_log=
+        fi
+    }
+    cleanup() {
+        capture_startup_status
+        if [ -z "$server_pid" ]; then return; fi
+        kill -- -"$server_pid" 2>/dev/null || true
+        for attempt in {1..30}; do
+            if ! kill -0 -- -"$server_pid" 2>/dev/null; then break; fi
+            sleep 1
+        done
+        kill -KILL -- -"$server_pid" 2>/dev/null || true
+        wait "$server_pid" 2>/dev/null || true
+        server_pid=
+    }
+    trap 'cleanup; rm -rf "$work"; mark_phase cleanup_complete' EXIT
+    trap 'exit 143' TERM
+    trap 'exit 130' INT
+    # Server crash dumps may contain token IDs even with request logging off.
+    # Keep diagnostics outside public artifacts and AI-summary input directories.
+    start_server() {
+        local capacity=$1
+        server_capacity=$capacity
+        startup_log="$work/server_${capacity}.log"
+        mark_phase "start_server_$capacity"
+        setsid python -u -m vllm.entrypoints.openai.api_server \
+            --model "$HF_MODEL" --served-model-name google/gemma-4-31B-it \
+            --hf-overrides '{"architectures":["TTGemma4QB2ForCausalLM"]}' \
+            --host 127.0.0.1 --port 8000 --block-size 128 --max-num-seqs "$capacity" \
+            --max-model-len 262144 --max-num-batched-tokens 8192 --max-logprobs -1 \
+            --async-scheduling --no-enable-prefix-caching --enable-chunked-prefill --override-generation-config '{"top_k":20}' \
+            --no-enable-log-requests --no-enable-log-outputs \
+            --reasoning-parser gemma4 --default-chat-template-kwargs '{"enable_thinking":true}' \
+            --additional-config "$tt_config" > "$work/server_${capacity}.log" 2>&1 &
+        server_pid=$!
+    }
+    wait_for_server() {
+        local wait_started=$SECONDS
+        for ((attempt = 0; SECONDS - wait_started < 1200; attempt++)); do
+            if curl --max-time 2 -fsS http://127.0.0.1:8000/health >/dev/null 2>&1; then break; fi
+            kill -0 "$server_pid"
+            if (( attempt % 15 == 0 )); then
+                printf 'Gemma startup capacity=%s elapsed_seconds=%s\n' "$server_capacity" "$((SECONDS - wait_started))"
+                python -m models.demos.gemma4_31b_qb2.tests.startup_status \
+                    "$startup_log" "$results/server-startup_${server_capacity}.json"
+                cat "$results/server-startup_${server_capacity}.json"
+            fi
+            sleep 4
+        done
+        capture_startup_status
+        curl --max-time 2 -fsS http://127.0.0.1:8000/health
+    }
+
+    run_benchmark() {
+        local status=0
+        # Dataset/scorer libraries may echo examples in diagnostics. Only the
+        # evaluator's metadata files are public; never print these private logs.
+        HF_HUB_OFFLINE=0 "$work/eval-env/bin/python" "$model_dir/tests/benchmark.py" "$@" \
+            > "$work/evaluator.log" 2>&1 || status=$?
+        if [ "$status" -ne 0 ]; then
+            echo "Benchmark failed (exit $status); see sanitized error.json in the test reports."
+        fi
+        return "$status"
+    }
+
+    # A true batch-one trace needs a one-slot server, not just one active request.
+    start_server 1
+    # Install the CPU evaluator while the server loads its weights.
+    uv venv --python 3.11 "$work/eval-env"
+    UV_TORCH_BACKEND=cpu uv pip install --python "$work/eval-env/bin/python" \
+        -r "$model_dir/tests/requirements-eval.txt"
+    mark_phase prepare_dataset
+    run_benchmark --prepare-only --output-dir "$results"
+    mark_phase dataset_ready
+
+    wait_for_server
+    mark_phase server_1_ready
+    # Weekly performance samples the headline 128/128 shapes to bound runtime.
+    # The benchmark defaults retain the broader 128- and 1024-token sweep.
+    run_benchmark --mode performance --server-capacity 1 --performance-input-lengths 128 --output-dir "$results/single-user"
+    CI=true python -m models.demos.gemma4_31b_qb2.tests.report "$results/single-user/summary.json"
+    mark_phase single_user_performance_complete
+    cleanup
+
+    start_server 32
+    wait_for_server
+    mark_phase server_32_ready
+
+    # Model-owned checks use the accepted 32-bit seed and top-k 1..32 domain.
+    # They cover page growth, slot isolation, host routing and default sampling.
+    python -m pytest "$model_dir/tests/test_api.py" \
+        --gemma-server-url http://127.0.0.1:8000 --junitxml "$results/api.xml"
+    mark_phase api_tests_complete
+
+    # Accuracy is ONLY the first 10/198 Diamond rows, one seed, at 32K output tokens.
+    # This bounds weekly runtime; use the separate full-set run for published quality.
+    mark_phase gpqa_and_performance
+    echo "GPQA coverage: 10/198 Diamond questions for CI regression within the time budget."
+    status=0
+    run_benchmark --server-capacity 32 --performance-input-lengths 128 --output-dir "$results" || status=$?
+    mark_phase "benchmark_exit_$status"
+    if [ -f "$results/summary.json" ]; then
+        CI=true python -m models.demos.gemma4_31b_qb2.tests.report "$results/summary.json"
+    fi
+    exit "$status"
+  model: gemma4-31b-qb2
+  model_family: Gemma
+  skus:
+    bh_quietbox_2:
+      # CI startup can exceed 12 minutes per server; allow both starts and evaluation.
+      # Each server has a 20-minute readiness deadline within this total allowance.
+      timeout: 40
+      tier: 3
+  owner_id: U03HY7MK4BT # Mark O'Connor
+  team: models
+  budget_type: agentic_research

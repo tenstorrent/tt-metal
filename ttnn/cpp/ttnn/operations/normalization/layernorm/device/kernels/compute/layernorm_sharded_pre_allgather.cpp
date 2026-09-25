@@ -96,11 +96,6 @@ void kernel_main() {
     uint32_t index_h_offset = 0;
     uint32_t index = 0;
 
-    uint32_t num_tiles_per_partial_result = 2;
-#ifdef RMSNORM
-    num_tiles_per_partial_result = 1;
-#endif
-
 // pre-add x + y
 #ifdef FUSE_PRE_ADD
     compute_kernel_hw_startup(dfb_in0, dfb_in1, dfb_in_id);
@@ -269,6 +264,10 @@ void kernel_main() {
     // global reduce, the combine destination <-- dfb_ex_external2_id, dfb_ex_partial2_id
 #ifdef IS_ALLGATHER_WORKER
     {
+        uint32_t num_tiles_per_partial_result = 2;
+#ifdef RMSNORM
+        num_tiles_per_partial_result = 1;
+#endif
         dfb_scaler_global.wait_front(1);
         reconfig_data_format(dfb_scaler_global_id, dfb_ex_external2_id);
         pack_reconfig_data_format(dfb_reduction_out);

@@ -18,14 +18,14 @@ class DeepSeekV4FlashConfig:
     FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
     MOE_INTERMEDIATE_SIZE = 2048  # MoE FFN hidden dimension
     # Routed-expert hybrid split: experts with <= this many active tokens go to
-    # moe_fused_swiglu, the rest to unified_routed_expert_moe. Measured crossover on the
-    # 4096x2048 routed-expert shape (1.04x at 768, 0.92x at 896); it is the last full M_BLOCK
-    # boundary before the fused op opens another block while the composite's chunk
-    # schedule stays flat, so the two costs cross just above it.
+    # moe_fused_swiglu, the rest to unified_routed_expert_moe. On the 4096x2048 routed-expert
+    # shape the fused op wins 64-128 by 25-37%, 192 and 256 are ties inside 0.7%, and the composite
+    # takes 320 onward by 6.7% and more. 256 is the top of that tie band, so the cut costs nothing
+    # either way inside it.
     # Not enabled: only Kimi K2.6/K2.7 and GLM 5.1/5.2 dispatch both routed-expert ops today.
     # The measured crossover is kept under _MEASURED so it is not re-derived; rename it back to
     # ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD to turn the split on, which is all the readers look for.
-    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 768
+    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 256
     HEAD_DIM = 512
 
     # MoE configuration
@@ -45,6 +45,7 @@ class DeepSeekV4FlashConfig:
 
     # Model architecture
     NUM_LAYERS = 43
+    NUM_DENSE_LAYERS = 0  # first_k_dense_replace - every layer is MoE
     NUM_HASH_LAYERS = 3
     VOCAB_SIZE = 129280
     SLIDING_WINDOW = 128
@@ -72,5 +73,9 @@ class DeepSeekV4FlashConfig:
     RMS_NORM_EPS = 1e-6
     ROUTE_SCALE = 1.5
     ROPE_THETA = 10000
+    ROUTED_EXPERT_ACTIVATION = "clamped_silu_glu"
+    SHARED_EXPERT_ACTIVATION = "clamped_silu_glu"
+    # Read at runtime by the shared expert only; the routed kernel bakes the same value at compile
+    # time (ClampedSiluGluConfigDsV4), so the two must stay equal.
     SWIGLU_LIMIT = 10.0
     MAX_POSITION_EMBEDDINGS = 1048576
