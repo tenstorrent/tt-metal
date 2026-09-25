@@ -31,6 +31,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <internal/program_launch.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/experimental/global_circular_buffer.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
@@ -785,7 +786,7 @@ void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& 
     for (uint32_t d = 0; d < devices_.size(); ++d) {
         programs_[d]->impl().compile(devices_[d], /*force_slow_dispatch=*/true);
         ::tt::tt_metal::detail::WriteRuntimeArgsToDevice(devices_[d], *programs_[d], /*force_slow_dispatch=*/true);
-        ::tt::tt_metal::detail::LaunchProgram(
+        ::tt::tt_metal::internal::LaunchProgram(
             devices_[d], *programs_[d], /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
     }
 

@@ -74,6 +74,7 @@
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <internal/service/service_core_manager.hpp>
+#include <internal/program_launch.hpp>
 
 #ifdef TT_METAL_USE_EMULE
 #include "emulated_program_runner.hpp"
@@ -428,7 +429,7 @@ void ConfigureProgramWithoutLaunch(IDevice* device, Program& program) {
 
     // Same prologue as LaunchProgram: compile, finalize offsets, write configs and binaries, then
     // runtime args (configure first: it allocates the scratchpads whose addresses become CRTAs).
-    detail::CompileProgram(device, program);
+    internal::CompileProgram(device, program);
     log_debug(tt::LogMetal, "ConfigureProgramWithoutLaunch[{}] compiled", device->id());
     program.impl().finalize_dataflow_buffer_configs();
     if (!program.impl().is_finalized()) {
@@ -971,6 +972,15 @@ void ReadShard(Buffer& buffer, uint8_t* host_buffer, const uint32_t& core_id) {
     }
 }
 
+}  // namespace detail
+
+namespace internal {
+
+void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch) {
+    ZoneScoped;
+    program.impl().compile(device, force_slow_dispatch);
+}
+
 void LaunchProgram(
     IDevice* device, const std::shared_ptr<Program>& program, bool wait_until_cores_done, bool force_slow_dispatch) {
     LaunchProgram(device, *program, wait_until_cores_done, force_slow_dispatch);
@@ -1016,7 +1026,7 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
             // programmable cores, which are disjoint from the FD worker grid and dispatch column. Launching
             // them via slow dispatch does not touch FD-owned cores or the FD pipeline, so it is safe to mix
             // with an active FD session regardless of profiler init state.
-            const bool dram_only = detail::program_targets_only_dram_cores(program, metal_ctx.hal());
+            const bool dram_only = program_targets_only_dram_cores(program, metal_ctx.hal());
             TT_ASSERT(
                 !(fd_active && rt_done) || service_active || dram_only,
                 "Cannot force slow dispatch while fast dispatch firmware is active and real-time profiler init has "
@@ -1097,6 +1107,10 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         detail::ReadDeviceProfilerResults(device);
     }
 }
+
+}  // namespace internal
+
+namespace detail {
 
 void WaitProgramDone(IDevice* device, Program& program, bool read_device_profiler_results) {
     auto& metal_ctx = MetalContext::instance(extract_context_id(device));
@@ -1368,11 +1382,6 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
             }
         }
     }
-}
-
-void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch) {
-    ZoneScoped;
-    program.impl().compile(device, force_slow_dispatch);
 }
 
 }  // namespace detail

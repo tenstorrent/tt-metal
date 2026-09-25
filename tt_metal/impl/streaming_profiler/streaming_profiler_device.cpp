@@ -18,6 +18,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <internal/program_launch.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/kernel_types.hpp>
 
@@ -529,9 +530,9 @@ bool Devices::launch_relay(
         }
         SetRuntimeArgs(*program, relay_id, relay.logical, rt);
 
-        detail::CompileProgram(ctx.device, *program, /*force_slow_dispatch=*/true);
+        internal::CompileProgram(ctx.device, *program, /*force_slow_dispatch=*/true);
         detail::WriteRuntimeArgsToDevice(ctx.device, *program, /*force_slow_dispatch=*/true);
-        detail::LaunchProgram(ctx.device, *program, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
+        internal::LaunchProgram(ctx.device, *program, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
 
         if (!relay_heartbeat_advanced(cluster, chip, relay.virt, relay_noc_addr(l1_.done) + 4, d)) {
             return false;

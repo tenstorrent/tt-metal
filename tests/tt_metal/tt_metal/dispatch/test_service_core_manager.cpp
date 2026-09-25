@@ -21,6 +21,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
+#include <internal/program_launch.hpp>
 #include <internal/service/service_core_manager.hpp>
 #include "impl/internal/service/service_core_manager_impl.hpp"
 #include <tt-metalium/mesh_buffer.hpp>
@@ -240,7 +241,7 @@ TEST_F(ServiceCoreSdFixture, PersistentServiceMultiCycle) {
 
         prog.impl().compile(device, /*force_slow_dispatch=*/true);
         tt::tt_metal::detail::WriteRuntimeArgsToDevice(device, prog, /*force_slow_dispatch=*/true);
-        tt::tt_metal::detail::LaunchProgram(
+        tt::tt_metal::internal::LaunchProgram(
             device, prog, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
 
         auto read_counter = [&]() -> uint32_t {

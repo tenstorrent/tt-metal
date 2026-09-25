@@ -17,6 +17,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <internal/program_launch.hpp>
 
 #include "device_fixture.hpp"
 
@@ -70,7 +71,7 @@ TEST_F(MeshDeviceFixture, TensixConfigureProgramWithoutLaunchInstallsButDoesNotR
         EXPECT_EQ(again.launch_kernel_config(), cfg.launch_kernel_config());
 
         // The same program, launched for real, runs.
-        detail::LaunchProgram(device, program);
+        internal::LaunchProgram(device, program);
         EXPECT_EQ(read_word(device, core, addr), MARKER) << "the same program launched normally writes the marker";
     }
 }

@@ -38,6 +38,7 @@
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt_metal.hpp>
+#include <internal/program_launch.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
@@ -752,7 +753,7 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
             realtime_profiler_program.impl().compile(device, /*force_slow_dispatch=*/true);
             ::tt::tt_metal::detail::WriteRuntimeArgsToDevice(
                 device, realtime_profiler_program, /*force_slow_dispatch=*/true);
-            ::tt::tt_metal::detail::LaunchProgram(
+            ::tt::tt_metal::internal::LaunchProgram(
                 device, realtime_profiler_program, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
 
             // realtime_profiler_msg_t is outside mailboxes_t, so LaunchProgram's writes do

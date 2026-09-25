@@ -367,7 +367,7 @@ bank and pumps them to the host FIFO over a D2H socket.
   profiler sets no modes — it checks the ones it needs, and turns capture off for a device whose relay core
   is some other view's endpoint, because firmware holds such an NIU in NOC2AXI where the relay's reads
   would never issue. §N+32/§N+34's bring-up hangs came from the flip launches this replaced.
-- **Launch.** `detail::LaunchProgram(..., force_slow_dispatch=true)`, outside the command queue: a
+- **Launch.** `internal::LaunchProgram(..., force_slow_dispatch=true)`, outside the command queue: a
   DRAM-only program touches no fast-dispatch resource, so it stays resident across every workload, while
   going through the CQ would deadlock the first `Finish()`.
 - **Reads on the NoC the writes do not use** (`kReadNoc = NOC_INDEX == 0 ? 1 : 0`), a static VC for PCIe

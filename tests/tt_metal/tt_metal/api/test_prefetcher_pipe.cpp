@@ -28,6 +28,7 @@
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <internal/program_launch.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -1146,7 +1147,7 @@ TEST_F(PrefetcherPipeFixture, ProgramSpec_AssignsDistinctSlotsPerAccessor) {
     EXPECT_EQ(per_core.at(CoreCoord(0, 0))[0].pipe, &pipe0.impl());
     EXPECT_EQ(per_core.at(CoreCoord(0, 1))[0].pipe, &pipe1.impl());
 
-    detail::CompileProgram(mesh_device.get(), program);
+    internal::CompileProgram(mesh_device.get(), program);
     program.impl().finalize_offsets(mesh_device.get());
 
     const auto& hal = MetalContext::instance().hal();
@@ -1192,7 +1193,7 @@ TEST_F(PrefetcherPipeFixture, ProgramRunArgs_AddressStableAcrossRebuild) {
 
     {
         Program program = make_sender_program(*mesh_device, pipe, {.entry_size = 256});
-        detail::CompileProgram(mesh_device.get(), program);
+        internal::CompileProgram(mesh_device.get(), program);
         program.impl().finalize_offsets(mesh_device.get());
     }
     {

@@ -14,6 +14,7 @@
 #include "mesh_workload_impl.hpp"
 #include "tt-metalium/program.hpp"
 #include "dispatch/system_memory_manager.hpp"
+#include <internal/program_launch.hpp>
 #include <internal/service/service_core_manager.hpp>
 #include "impl/internal/service/service_core_manager_impl.hpp"
 #include "impl/context/metal_context.hpp"
@@ -108,7 +109,7 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
                             svc.impl().mark_launched(device->id(), core);  // launch-once
                         }
                     }
-                    tt::tt_metal::detail::LaunchProgram(device, program, false, true);
+                    tt::tt_metal::internal::LaunchProgram(device, program, false, true);
                 }
             }
             return;
