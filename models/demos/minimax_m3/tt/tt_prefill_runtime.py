@@ -38,7 +38,8 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utils import block_cyclic_reorder, rotate_chunk_tokens
+from models.common.utils import block_cyclic_reorder
+from models.demos.common.prefill.chunk_layout import rotate_chunk_tokens
 
 
 @dataclass
