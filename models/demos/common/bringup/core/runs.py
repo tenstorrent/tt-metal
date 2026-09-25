@@ -69,9 +69,19 @@ def freeze_task(spec: Spec, ledger: Ledger, tid: str, files: list[str] | None = 
     record["files"] = F.hash_paths(spec.repo, files + list(task.get("freeze_extra") or []))
     ledger.update_task_def(tid, frozen=record)
     if commit:
+        # the packages the frozen tests live in (their __init__.py files) go with them
+        inits = sorted(
+            {
+                str(p.relative_to(spec.repo))
+                for f in files
+                for p in (spec.repo / f).parents
+                if (p / "__init__.py").exists() and p.is_relative_to(spec.model_dir)
+                for p in [p / "__init__.py"]
+            }
+        )
         git_commit(
             spec,
-            [str(ledger.tasks_path.relative_to(spec.repo)), *files],
+            [str(ledger.tasks_path.relative_to(spec.repo)), *files, *inits],
             f"[{spec.tag}][{tid}][freeze] {task['title']}",
             f"Tests frozen: reference={record.get('reference', 'n/a')} stub={record.get('stub', 'n/a')}\n"
             + "\n".join(f"  {k} {v[:12]}" for k, v in record["files"].items()),
