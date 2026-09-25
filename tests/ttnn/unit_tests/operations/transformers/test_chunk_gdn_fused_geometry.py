@@ -36,13 +36,14 @@ VT = 4  # V = 128 -> 4 tiles; invariant across the Qwen GDN family
 # Inlined Python oracle of the fused geometry. Kept self-contained on purpose:
 # it is an independent re-derivation of chunk_gdn_fused.cpp (choose_fused_geometry,
 # fused_row_local_feasible, fused_placement), so a bug has to be made twice to pass.
-# Cost-model constants: QB2, measured 2026-09-21 (wall-op and per-RISC device zones).
+# Cost-model constants: QB2, re-measured 2026-09-25 (Tracy device time, per-RISC zones) after the scan
+# folded its o and state adds into DST accumulation (the Horner WY inverse's producer item).
 # ---------------------------------------------------------------------------------------------
 _W_P_US = 34.0  # producer us per (head, chunk) item at >= 84 concurrent producers
-_W_P_LOW_US, _W_P_LOW_PRODUCERS, _W_P_HIGH_PRODUCERS = 26.0, 28, 84  # lighter load -> faster, linear
-_T_STEP_US = {1: 3.5, 2: 4.9, 4: 7.5}  # receiver period at V-slice width Vtl (tiles)
+_W_P_LOW_US, _W_P_LOW_PRODUCERS, _W_P_HIGH_PRODUCERS = 31.0, 28, 84  # lighter load -> faster, linear
+_T_STEP_US = {1: 2.4, 2: 2.9, 4: 5.0}  # receiver period at V-slice width Vtl (tiles); Vtl=1 is the hand-off floor
 _FILL_US = 65.0
-_PHASED_A_MS, _PHASED_B_MS, _PHASED_BH48_MS, _PHASED_LINEAR_TO_BH = 0.0358, 0.310, 2.475, 32
+_PHASED_A_MS, _PHASED_B_MS, _PHASED_BH48_MS, _PHASED_LINEAR_TO_BH = 0.0317, 0.277, 2.054, 32
 
 
 def _w_p_at(producers):
@@ -327,25 +328,31 @@ def test_infeasible_placement_raises(expect_error, grid, bh, nv, np_, placement,
 
 
 def test_phased_model_matches_measurements():
-    """T_phased reproduces the measured phased wall-op points (QB2, NC=64) within 5 %."""
-    for bh, meas in ((4, 453), (8, 593), (12, 706), (16, 883), (32, 1449), (48, 2475)):
+    """T_phased reproduces the measured phased device-time points (QB2, NC=64, prep + scan, 2026-09-25)
+    within 5 %."""
+    for bh, meas in ((4, 404), (8, 518), (12, 635), (16, 806), (32, 1292), (48, 2054)):
         t_ph = _t.chunk_gdn_fused_geometry(11, 10, bh, 64, VT)[4]
         assert abs(t_ph - meas) / meas < 0.05, (bh, t_ph, meas)
 
 
 def test_fused_model_matches_measurements():
-    """T_fused at the model's own picks reproduces the measured fused wall-op points (QB2, NC=64, wall
-    minus the 115 us of host glue) within 10 %."""
-    for bh, meas in ((4, 284), (8, 326), (12, 364), (16, 581), (32, 1178)):
+    """T_fused at the model's own picks reproduces the measured fused device-time points (QB2, NC=64,
+    2026-09-25: BH=4 and 8 at NV=2/NP=9, 12 at NV=2/NP=7, 16 at NV=1/NP=4, 32 at NV=1/NP=2) within 10 %."""
+    for bh, meas in ((4, 286), (8, 302), (12, 373), (16, 582), (32, 1104)):
         nv, np_, _, t_f, _, _ = _t.chunk_gdn_fused_geometry(11, 10, bh, 64, VT)
         assert abs(t_f - meas) / meas < 0.10, (bh, nv, np_, t_f, meas)
 
 
 def test_qb2_operating_points():
-    """The Qwen3.6-27B TP-4 shape (BH=12) on QB2 picks NV=2, NP=7 row-local, ~390 us vs phased ~706;
-    BH=64 needs >= 128 cores, so no fused geometry exists and the op must dispatch phased."""
+    """The Qwen3.6-27B TP-4 shape (BH=12) on QB2 picks NV=2, NP=7 row-local, ~376 us (producer-bound
+    with the Horner inverse) vs phased ~657; BH=48 no longer pays (2241 vs the phased 2054); BH=64 needs
+    >= 128 cores, so no fused geometry exists and the op must dispatch phased."""
     nv, np_, pl, t_f, t_ph, pays = _t.chunk_gdn_fused_geometry(11, 10, 12, 64, VT)
     assert (nv, np_, pl) == (2, 7, 1) and pays
-    assert 360 <= t_f <= 400 and 690 <= t_ph <= 745
+    assert 360 <= t_f <= 400 and 630 <= t_ph <= 690
+    nv, np_, _, _, _, pays = _t.chunk_gdn_fused_geometry(11, 10, 4, 64, VT)
+    assert (nv, np_) == (2, 9), (nv, np_)
+    _, _, _, _, _, pays48 = _t.chunk_gdn_fused_geometry(11, 10, 48, 64, VT)
+    assert not pays48
     nv, _, _, _, _, pays = _t.chunk_gdn_fused_geometry(11, 10, 64, 64, VT)
     assert nv == 0 and not pays

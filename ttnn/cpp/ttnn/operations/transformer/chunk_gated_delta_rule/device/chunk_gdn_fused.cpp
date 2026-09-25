@@ -156,29 +156,30 @@ ChunkGdnFusedOperation::tensor_return_value_t ChunkGdnFusedOperation::create_out
 }
 
 namespace {
-// QB2 constants, measured 2026-09-21: producer item under load, receiver step (period) per V-slice
-// width, pipeline fill, and the phased wall-op reference at NC=64.
+// QB2 constants, re-measured 2026-09-25 (Tracy device time, NC=64) after the scan folded its o and
+// state adds into DST accumulation: producer item under load, receiver step (period) per V-slice
+// width, pipeline fill, and the phased device-time reference.
 constexpr float kFillUs = 65.0f;
-// Producer item time depends on how many producers load the DRAM/NoC at once: 26 us with <= 28 of
-// them (BH=4), 34 us with >= 84 (BH=12); linear in between.
+// Producer item (Horner WY inverse): 31 us with <= 28 concurrent producers, 34 us with >= 84 (the
+// fused producer measures 33 at BH=12); linear in between. The SFPU inverse lowers it to ~26.5.
 float w_p_us(uint32_t producers) {
     const float f = std::min(1.0f, std::max(0.0f, (static_cast<float>(producers) - 28.0f) / 56.0f));
-    return 26.0f + 8.0f * f;
+    return 31.0f + 3.0f * f;
 }
 float t_step_us(uint32_t Vtl) {
     switch (Vtl) {
-        case 1: return 3.5f;    // receiver period with the scan-step DST batching: 3.43 compute
-        case 2: return 4.9f;    // 4.82 compute
-        case 4: return 7.5f;    // 7.44 compute
+        case 1: return 2.4f;    // compute 1.43; the depth-2 hand-off round trip (~2.4) is the period floor
+        case 2: return 2.9f;    // period 2.92 chain-bound, compute 2.8
+        case 4: return 5.0f;    // period 4.97 chain-bound, compute 4.83
         default: return -1.0f;  // unmeasured width
     }
 }
 float t_phased_us(uint32_t BH, uint32_t NC) {
-    // Measured wall-op at NC=64 (wall - 115 us glue): 4 -> 453, 8 -> 593, 12 -> 706, 16 -> 883,
-    // 32 -> 1449, 48 -> 2475. Linear 310 + 35.8*BH to BH=32, then interpolated to the DRAM-saturated
+    // Measured device time at NC=64 (prep + scan): 4 -> 404, 8 -> 518, 12 -> 635, 16 -> 806,
+    // 32 -> 1292, 48 -> 2054. Linear 277 + 31.7*BH to BH=32, then interpolated to the DRAM-saturated
     // BH=48 point.
-    const float t32 = 310.0f + 35.8f * 32.0f;
-    float t = (BH <= 32) ? (310.0f + 35.8f * BH) : (t32 + (2475.0f - t32) * (std::min<uint32_t>(BH, 48) - 32) / 16.0f);
+    const float t32 = 277.0f + 31.7f * 32.0f;
+    float t = (BH <= 32) ? (277.0f + 31.7f * BH) : (t32 + (2054.0f - t32) * (std::min<uint32_t>(BH, 48) - 32) / 16.0f);
     if (BH > 48) {
         t *= BH / 48.0f;
     }
