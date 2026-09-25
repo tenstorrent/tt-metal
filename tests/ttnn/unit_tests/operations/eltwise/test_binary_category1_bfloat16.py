@@ -7,47 +7,38 @@ import pytest
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_ulp, ulp_distance, flush_subnormal_values_to_zero
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
-    generate_bfloat16_binary_grid,
+    pairwise_inputs,
     flush_to_zero,
-    to_tt_tensor,
+    run_binary,
 )
 
 pytestmark = pytest.mark.use_module_device
 
 """
-Category 1: basic_binary_arithmetic
+Category 1: basic_binary_arithmetic + corresponding inplace op
 
- 1. ttnn.add              - Addition
- 2. ttnn.sub/ttnn.rsub    - Subtraction
- 3. ttnn.mul              - Multiplication
- 4. ttnn.divide           - Division
+    1. ttnn.add              - Addition
+    2. ttnn.sub              - Subtraction
+    3. ttnn.multiply         - Multiplication
+    4. ttnn.divide           - Division
+    5. ttnn.add_              - Addition inplace
+    6. ttnn.sub_              - Subtraction inplace
+    7. ttnn.multiply_         - Multiplication inplace
+    8. ttnn.divide_           - Division inplace
+    9. ttnn.rsub              - Subtraction (b - a)
+   10. ttnn.rsub_             - Subtraction inplace (b - a)
 """
 
 
-def _pairwise_inputs(include_spl_values=False, include_zero=False):
-    """Outer product of the 2048-value binary grid: A[i, j] = v[i], B[i, j] = v[j]."""
-    values = generate_bfloat16_binary_grid(include_spl_values=include_spl_values, include_zero=include_zero)
-    a, b = torch.meshgrid(values, values, indexing="ij")
-    return a.contiguous(), b.contiguous()
-
-
-@pytest.mark.parametrize("ttnn_op", [ttnn.add, ttnn.sub, ttnn.rsub])
+@pytest.mark.parametrize("ttnn_op", [ttnn.add, ttnn.sub, ttnn.rsub, ttnn.add_, ttnn.sub_, ttnn.rsub_])
 @pytest.mark.parametrize("fast_and_approximate_mode, ulp_threshold", [(True, 1), (False, 0)])
 def test_addlike_ops(device, ttnn_op, fast_and_approximate_mode, ulp_threshold):
     """Pairwise coverage of binary ops over the stratified bfloat16 grid.
     Values selected from the range between 3.3895e+38 and -3.3895e+38
     EX: FPU overflow: 3.3895 + 6.6201 = 1.0009e+39 → torch → max; FPU → +inf
     """
-    input_a, input_b = _pairwise_inputs(include_zero=True)
-
-    tt_a = to_tt_tensor(input_a, device)
-    tt_b = to_tt_tensor(input_b, device)
-
-    golden_function = ttnn.get_golden_function(ttnn_op)
-    golden = golden_function(input_a, input_b, device=device, fast_and_approximate_mode=fast_and_approximate_mode)
-
-    tt_result = ttnn_op(tt_a, tt_b, fast_and_approximate_mode=fast_and_approximate_mode)
-    result = ttnn.to_torch(tt_result)
+    input_a, input_b = pairwise_inputs(include_zero=True)
+    golden, result = run_binary(device, ttnn_op, input_a, input_b, fast_and_approximate_mode=fast_and_approximate_mode)
 
     # Device flushes subnormal sums to zero.
     result = flush_subnormal_values_to_zero(result)
@@ -79,24 +70,16 @@ def test_addlike_ops(device, ttnn_op, fast_and_approximate_mode, ulp_threshold):
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=ulp_threshold, allow_nonfinite=True)
 
 
+@pytest.mark.parametrize("ttnn_op", [ttnn.multiply, ttnn.multiply_])
 @pytest.mark.parametrize("fast_and_approximate_mode, ulp_threshold", [(True, 2), (False, 0)])
-def test_mul(device, fast_and_approximate_mode, ulp_threshold):
-    """Pairwise coverage of ttnn.mul over the stratified bfloat16 grid.
+def test_multiply(device, ttnn_op, fast_and_approximate_mode, ulp_threshold):
+    """Pairwise coverage of ttnn.multiply over the stratified bfloat16 grid.
     FPU: 2 ULP is accepted. ULP > 2 in the underflow band is masked
     (e.g. 2.342e-38 × 16.125 → 8 ULP). Overflow-to-zero: golden ±inf vs
     device +0 rewritten to match (2^{18} × 2^{127}).
     """
-    input_a, input_b = _pairwise_inputs(include_zero=True)
-    ttnn_op = ttnn.mul
-
-    tt_a = to_tt_tensor(input_a, device)
-    tt_b = to_tt_tensor(input_b, device)
-
-    golden_function = ttnn.get_golden_function(ttnn_op)
-    golden = golden_function(input_a, input_b, device=device, fast_and_approximate_mode=fast_and_approximate_mode)
-
-    tt_result = ttnn_op(tt_a, tt_b, fast_and_approximate_mode=fast_and_approximate_mode)
-    result = ttnn.to_torch(tt_result)
+    input_a, input_b = pairwise_inputs(include_zero=True)
+    golden, result = run_binary(device, ttnn_op, input_a, input_b, fast_and_approximate_mode=fast_and_approximate_mode)
 
     # SFPU mul flush includes min-normal 2^{-126} to 0.
     if not fast_and_approximate_mode:
@@ -134,25 +117,17 @@ def test_mul(device, fast_and_approximate_mode, ulp_threshold):
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=ulp_threshold, allow_nonfinite=True)
 
 
+@pytest.mark.parametrize("ttnn_op", [ttnn.divide, ttnn.divide_])
 @pytest.mark.parametrize("fast_and_approximate_mode, ulp_threshold", [(True, 2), (False, 0)])
-def test_div(device, fast_and_approximate_mode, ulp_threshold):
-    """Pairwise coverage of ttnn.div over the stratified bfloat16 grid.
+def test_divide(device, ttnn_op, fast_and_approximate_mode, ulp_threshold):
+    """Pairwise coverage of ttnn.divide over the stratified bfloat16 grid.
     FPU: 2 ULP is accepted. ULP > 2 in the underflow band is masked
     (e.g. 2.342e-38 / 0.06226 → 8 ULP). Device +0 vs golden finite/inf
     (recip flush / overflow-to-zero) is rewritten, as is FPU ±max vs
     torch ±inf when ea−eb = 128 (7.96875 / 2.342e-38).
     """
-    input_a, input_b = _pairwise_inputs(include_zero=False)
-    ttnn_op = ttnn.divide
-
-    tt_a = to_tt_tensor(input_a, device)
-    tt_b = to_tt_tensor(input_b, device)
-
-    golden_function = ttnn.get_golden_function(ttnn_op)
-    golden = golden_function(input_a, input_b, device=device, fast_and_approximate_mode=fast_and_approximate_mode)
-
-    tt_result = ttnn_op(tt_a, tt_b, fast_and_approximate_mode=fast_and_approximate_mode)
-    result = ttnn.to_torch(tt_result)
+    input_a, input_b = pairwise_inputs(include_zero=False)
+    golden, result = run_binary(device, ttnn_op, input_a, input_b, fast_and_approximate_mode=fast_and_approximate_mode)
 
     # SFPU div flush includes min-normal 2^{-126} to 0 (same as SFPU mul).
     if not fast_and_approximate_mode:

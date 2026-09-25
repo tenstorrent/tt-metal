@@ -228,6 +228,35 @@ def test_binary_sfpu_accuracy(device, dtype):
         assert_allclose(torch_output_tensor, output, rtol=0.005, atol=1e-3)  # Ensures > 99.5% accuracy
 
 
+@pytest.mark.parametrize("binary", [True, False], ids=["binary", "unary"])
+def test_pow_fp32_base_near_one(device, binary):
+    """log2's argument reduction must not cancel for bases within a few ULP of 1.0.
+
+    The reduction forms z = (m - 1) / (m + 1). Writing the numerator as m * recip - recip
+    subtracts two quantities that agree to ~24 bits when the base is near 1.0, and pow scales
+    whatever is left: that form measured 250 ULP at this exponent, against the 3 ULP this op
+    documents. Keeping the subtract separate is exact, m being inside [0.5, 2] by Sterbenz.
+
+    The reference is evaluated in float64 and rounded once, since computing it in float32 would
+    reproduce the very cancellation under test.
+    """
+    exponent = 1000.0
+    k = torch.arange(-32, 33, dtype=torch.float64)
+    bases = (1.0 + k[k != 0] * 2.0**-23).to(torch.float32).reshape(1, -1)
+    golden = torch.pow(bases.to(torch.float64), exponent).to(torch.float32)
+
+    a = ttnn.from_torch(bases, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    if binary:
+        b = ttnn.from_torch(
+            torch.full_like(bases, exponent), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+        )
+        output = ttnn.pow(a, b)
+    else:
+        output = ttnn.pow(a, exponent)
+
+    assert_with_ulp(expected_result=golden, actual_result=ttnn.to_torch(output), ulp_threshold=3)
+
+
 def test_special_input_fp32(device):
     a = torch.tensor(
         [[1.0, 0.999, 0.999, 0.999, 0.999, 0.234, 0.985, 1.456, 0.0, -1.0, 1.2, -5.3, 6.7, 9.8, -10.9, 5.999]],

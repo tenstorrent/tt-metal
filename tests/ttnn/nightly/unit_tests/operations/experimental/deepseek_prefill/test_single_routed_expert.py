@@ -66,6 +66,7 @@ def run_single_routed_expert(
     hidden_dim: int,
     active_tokens: int = None,
     x_row_major: bool = False,
+    weights_dram_sharded: bool = False,
     activation=None,
     weight_scale: float = 0.02,
     weights_dtype=ttnn.bfloat4_b,
@@ -231,6 +232,8 @@ def run_single_routed_expert(
         weights_dtype=weights_dtype,
         activation=activation,
     )
+    if weights_dram_sharded:
+        reshard_expert_weights_nd(tt_expert, device)
 
     # Run TTNN forward
     logger.debug("Running TTNN forward...")
@@ -256,6 +259,59 @@ def run_single_routed_expert(
     assert not torch.isinf(tt_output_active).any(), "Active output contains Inf"
 
     logger.debug("Test PASSED!")
+
+
+def dram_nd_shard_spec(mesh_device, n_dim: int) -> "ttnn.NdShardSpec":
+    """DRAM ND shard spec that lets the FFN fetch a whole per_core_N weight slice in ONE NoC
+    request instead of one per tile.
+
+    The WIDTH is not a free choice: the op rejects any shard whose width is not exactly its own
+    per_core_N, because a wider or narrower shard splits or straddles the slice and loses the
+    point. per_core_N = ceil(n_tiles / GRID_X) mirrors that split, so this is the one spec the op
+    accepts -- read GRID_X from the op rather than hardcoding it.
+
+    The HEIGHT stays at one tile-row. Shards distribute ROUND_ROBIN_1D, so a core's requests within
+    a K-block step by the shard grid's N extent and their COUNT decides how many DRAM banks the
+    block touches. A bank-pinned core saturates near 30 GB/s against ~370 GB/s rotating, so trading
+    request count for coverage loses.
+
+    n_tiles need not be a multiple of per_core_N: the last shard is partially valid and those
+    columns are dropped by the op's N-bounds guards.
+    """
+    grid_x = ttnn.UNIFIED_ROUTED_EXPERT_CORE_GRID.x
+    n_tiles = n_dim // ttnn.TILE_SIZE
+    per_core_n = (n_tiles + grid_x - 1) // grid_x
+    dram_grid = mesh_device.dram_grid_size()
+    return ttnn.NdShardSpec(
+        shard_shape=ttnn.Shape([ttnn.TILE_SIZE, per_core_n * ttnn.TILE_SIZE]),
+        grid=ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_grid.x - 1, dram_grid.y - 1))]
+        ),
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+
+def to_dram_nd_sharded(tensor, mesh_device):
+    """One weight tensor moved into the ND-sharded placement, its width taken from its own N."""
+    return ttnn.to_memory_config(
+        tensor,
+        ttnn.MemoryConfig(
+            buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=dram_nd_shard_spec(mesh_device, tensor.shape[-1])
+        ),
+    )
+
+
+def reshard_expert_weights_nd(tt_expert, mesh_device) -> None:
+    """Move a built TtRoutedExpert's weights to the ND-sharded placement, in place.
+
+    Done after construction rather than during it: the module builds interleaved and the op reads
+    the placement off the tensors themselves, so nothing about the module has to know. Every expert
+    is resharded -- the op requires all experts to share one memory config, since one program serves
+    them all from expert 0's accessor.
+    """
+    for projs in (tt_expert.gate_projs, tt_expert.up_projs, tt_expert.down_projs):
+        for i, w in enumerate(projs):
+            projs[i] = to_dram_nd_sharded(w, mesh_device)
 
 
 # Per-model dims as (id_prefix, config, extended_model), each run at its own (emb_dim,
@@ -309,7 +365,7 @@ _ISL_ALLOCATED_TOKENS = 5120
 _ISL_FUNCTIONAL_SWEEP = [251, 768, 3001]
 
 # Exhaustive sweep: the full range from empty to fully-packed
-_ISL_EXHAUSTIVE_SWEEP = [0, 128, 256, 512, 1024, 2048, 4096, 5120]
+_ISL_EXHAUSTIVE_SWEEP = [0, 128, 256, 512, 768, 1024, 2048, 4096, 5120]
 _ISL_EXHAUSTIVE_MODELS = ("kimi_k2_7", "glm_51")
 
 
@@ -364,6 +420,9 @@ def test_single_routed_expert_functional(
     _isl_params(_ISL_EXHAUSTIVE_SWEEP, only_models=_ISL_EXHAUSTIVE_MODELS),
 )
 @pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
+# DRAM ND-sharded weights let the FFN read a whole K-row weight slice in one NoC request instead
+# of one per tile. Both layouts are swept so the interleaved default stays covered.
+@pytest.mark.parametrize("weights_dram_sharded", [False, True], ids=["w_interleaved", "w_ndshard"])
 @pytest.mark.skipif(not is_blackhole(), reason="device-side count-aware sparsity is Blackhole-only")
 def test_single_routed_expert_isl_sweep(
     device,
@@ -372,6 +431,7 @@ def test_single_routed_expert_isl_sweep(
     emb_dim: int,
     hidden_dim: int,
     x_row_major: bool,
+    weights_dram_sharded: bool,
 ):
     run_single_routed_expert(
         device,
@@ -380,6 +440,7 @@ def test_single_routed_expert_isl_sweep(
         hidden_dim,
         active_tokens=active_tokens,
         x_row_major=x_row_major,
+        weights_dram_sharded=weights_dram_sharded,
     )
 
 

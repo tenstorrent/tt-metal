@@ -754,6 +754,21 @@ class LTXTransformerModel(Module):
             if self.has_audio:
                 pop_substate(state, "audio_prompt_adaln_single")
 
+    def weight_cache_subfolder(self) -> str:
+        """Cache subfolder naming this model's weight LAYOUT, not just its parallel config.
+
+        On a Ring topology the attention gate is fused into the QKV/Q projection
+        (``LTXAttention.fuse_gate``): ``to_qkv`` grows by one padded tile per device and the
+        separate gate tensor disappears, so the cached tensorbins have different shapes and a
+        different count than the Linear-topology layout. Both used to land under ``transformer/``
+        under an identical key, and the second topology to run died loading the first one's cache.
+
+        A ``transformer/`` cache written by a Ring run before this split is stale (nothing reads it any
+        more) and can be deleted; Ring now writes ``transformer_fusedgate/``.
+        """
+        fused = any(getattr(block.attn1, "fuse_gate", False) for block in self.transformer_blocks)
+        return "transformer_fusedgate" if fused else "transformer"
+
     def forward(
         self,
         # Video
@@ -1225,7 +1240,7 @@ class LTXTransformerCheckpoint:
         cache_module.load_model(
             model,
             model_name=self.cache_name(lora_specs, quant_tag),
-            subfolder="transformer",
+            subfolder=model.weight_cache_subfolder(),
             parallel_config=parallel_config,
             mesh_shape=mesh_shape,
             mesh_device=model.mesh_device,

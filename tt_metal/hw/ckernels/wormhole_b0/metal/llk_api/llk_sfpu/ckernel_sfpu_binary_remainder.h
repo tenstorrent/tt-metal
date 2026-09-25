@@ -116,7 +116,9 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
     sfpi::vFloat lo_biased = lo + MANTISSA_ALIGNMENT_OFFSET;
     sfpi::vFloat hi_sum = q1 * b1 + hi_biased;
 
-    sfpi::vUInt qb = (sfpi::exman(lo_biased) << CHUNK_BITS) + (sfpi::exman(hi_sum) << HIGH_CHUNK_SHIFT);
+    // These left shifts discard all sign/exponent bits, so raw encodings need no mantissa extraction.
+    sfpi::vUInt qb =
+        (sfpi::as<sfpi::vUInt>(lo_biased) << CHUNK_BITS) + (sfpi::as<sfpi::vUInt>(hi_sum) << HIGH_CHUNK_SHIFT);
 
     // Compute remainder from the retained numerator magnitude.
     sfpi::vInt r{a - qb};
@@ -155,7 +157,10 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
     mid += MANTISSA_ALIGNMENT_OFFSET;
     top += MANTISSA_ALIGNMENT_OFFSET;
 
-    sfpi::vInt tmp{sfpi::exman(low) + (sfpi::exman(mid) << CHUNK_BITS) + (sfpi::exman(top) << HIGH_CHUNK_SHIFT)};
+    // Only the unshifted low chunk needs mantissa extraction.
+    sfpi::vInt tmp{
+        sfpi::exman(low) + (sfpi::as<sfpi::vUInt>(mid) << CHUNK_BITS) +
+        (sfpi::as<sfpi::vUInt>(top) << HIGH_CHUNK_SHIFT)};
     // When q is zero, qb is also zero, so r=INT_MIN is the positive magnitude
     // 2**31. A negative residual with nonzero q instead needs a negative correction.
     if constexpr (numerator_can_be_int_min) {

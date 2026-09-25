@@ -10,7 +10,7 @@ Per host, once:
 - `bash build_metal.sh` and `bash create_venv.sh` in that clone.
 - The model's TTNN weight cache reachable at the adapter's default path, or
   `PREFILL_TTNN_CACHE` pointed elsewhere:
-  - kimi27: `/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill`
+  - kimi27: `/mnt/weka/model-cache/scratch/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill`
   - glm52: `/mnt/models/deepseek-prefill-cache/glm52_ttnn_cache`
 - Passwordless ssh between the hosts, both directions.
 
@@ -64,7 +64,7 @@ unlink a ring another rank is already using.
 
 ```bash
 python3 $TT_METAL_HOME/ttnn/ttnn/distributed/ttrun.py \
-  --mesh-graph-descriptor $TT_METAL_HOME/models/demos/common/prefill/runners/topology_configuration/ci/kimi27_sc4_mgd.textproto \
+  --mesh-graph-descriptor $TT_METAL_HOME/models/demos/common/prefill/runners/topology_configuration/ci/sc4_mgd.textproto \
   --hosts $HOSTS \
   --tcp-interface ens5f0np0 \
   --force-rediscovery \
@@ -75,7 +75,8 @@ python3 $TT_METAL_HOME/ttnn/ttnn/distributed/ttrun.py \
     exec python3 -m models.demos.common.prefill.runners.prefill_runner"
 ```
 
-For glm52, swap both paths to `glm52_sc4_mgd.textproto` and `glm52.json`.
+The mesh-graph descriptor is per-SKU, not per-model; `sc4_mgd.textproto` is shared
+across models. For glm52, swap the manifest path to `glm52.json`.
 
 The runner allocates, captures its trace, warms up, logs `setup complete,
 entering request loop`, and then blocks there until requests arrive. That idle

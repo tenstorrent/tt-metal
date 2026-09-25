@@ -60,7 +60,7 @@
 - name: "(all prefill gate models) MoE gate accuracy"
   fabric_profile: torus_xy
   cmd: |
-    export DEEPSEEK_V3_HF_MODEL=/mnt/models/DeepSeek-R1-0528-fp8-4236a6af/
+    export DEEPSEEK_V3_HF_MODEL=/mnt/models/blaze/deepseek-ai/DeepSeek-R1-0528/
     export DEEPSEEK_V3_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/CI
     export TT_DS_PREFILL_TTNN_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure
     export TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden/
@@ -160,14 +160,14 @@
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
-    export KIMI_K2_7_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized
-    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
+    export KIMI_K2_7_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K2.7-Code-dequantized
+    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
+    export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/deepseek-ai/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_kimi_prefill_block -k "torus-xy-8x4 and perf-random-5k and with_determinism and iter2 and not iter25 and not iter2000 and moe_gate_device and not pretrained" -vvv --tb=short --timeout=1800
-    '
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_chunked.py::test_kimi_prefill_block_chunked -k "torus-xy-8x4 and chunks2 and with_determinism and iter2" -vvv --tb=short --timeout=900'
   test_type: prefill_block_determinism
   test_tags: [kimi_k2_7, block, determinism]
   test_group: module
@@ -185,8 +185,8 @@
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
-    export KIMI_K2_7_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized
-    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
+    export KIMI_K2_7_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K2.7-Code-dequantized
+    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
@@ -211,9 +211,9 @@
   cmd: |
     export MESH_DEVICE=TG
     export LOGURU_LEVEL=INFO
-    export KIMI_K2_7_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized
-    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
-    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
+    export KIMI_K2_7_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K2.7-Code-dequantized
+    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
+    export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/deepseek-ai/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
       export OMP_NUM_THREADS=$(nproc)
@@ -245,9 +245,9 @@
   cmd: |
     export MESH_DEVICE=TG
     export LOGURU_LEVEL=INFO
-    export KIMI_K2_7_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized
-    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
-    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
+    export KIMI_K2_7_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K2.7-Code-dequantized
+    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
+    export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/deepseek-ai/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_padded -k "kimi_k2_7 and torus-xy-8x4 and L61 and mid15k and traced" -vvv --tb=short
@@ -283,16 +283,16 @@
     export MESH_DEVICE=TG
     export TT_METAL_SHM_TRACKING_DISABLED=1
     export LOGURU_LEVEL=ERROR
-    export KIMI_K2_7_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized
-    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
-    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
+    export KIMI_K2_7_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K2.7-Code-dequantized
+    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
+    export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/deepseek-ai/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "kimi_k2_7 and torus-xy-8x4 and L61 and preload0 and chunks_eleven and ten_iters and notrace" -xvs
     '
   test_type: kimi_chunked
-  test_tags: [kimi_k2_7, transformer]
+  test_tags: [kimi_k2_7, transformer, kimi_chunked_untraced_perf]
   test_group: module
   skus:
     bh_sc1_high_power:
@@ -324,9 +324,9 @@
   cmd: |
     export MESH_DEVICE=TG
     export LOGURU_LEVEL=INFO
-    export KIMI_K2_7_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized
-    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
-    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
+    export KIMI_K2_7_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K2.7-Code-dequantized
+    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
+    export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/deepseek-ai/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
       export OMP_NUM_THREADS=$(nproc)
@@ -351,12 +351,6 @@
 - name: "(Kimi-K2.7-1T, GLM-5.2-744B, Mistral-Small-4-119B) KV cache table accuracy"
   fabric_profile: torus_xy
   cmd: |
-    export DEEPSEEK_V3_HF_MODEL=/mnt/models/DeepSeek-R1-0528-fp8-4236a6af/
-    export DEEPSEEK_V3_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/CI
-    export TT_DS_PREFILL_TTNN_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure
-    export TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden/
-    export DEEPSEEK_V3_TRACE_DIR=/mnt/models/deepseek-prefill-cache
-
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
       export OMP_NUM_THREADS=$(nproc)
@@ -413,9 +407,9 @@
     export MESH_DEVICE=TG
     export PREFILL_MODEL=kimi_k2_7
     export PREFILL_FABRIC_MODE=2d_torus_xy
-    export PREFILL_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized
-    export PREFILL_TTNN_CACHE=/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
-    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
+    export PREFILL_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K2.7-Code-dequantized
+    export PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
+    export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/deepseek-ai/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
     export PREFILL_NUM_LAYERS=61
     export PREFILL_CI_PRODUCER_TIMEOUT_S=1800
     export PREFILL_CI_RUNNER_READY_TIMEOUT_S=1800
@@ -560,6 +554,153 @@
   sp_config: sc1
 
 
+- name: "(Kimi-K3-2.8T) golden-contract, layer-schedule, cache and KV-ack gates"
+  # Host-only: no mesh device, no fabric. These are the gates that make every K3 device PCC number
+  # interpretable -- under AttnRes, seal() clears running_sum, so decoder_output_layer_0 carries no
+  # embedding term and reading the trace as a plain residual makes every layer look ~0.45 PCC wrong.
+  # test_golden_contract pins that reading host-only at 0.99999 with a failing control beside each
+  # assertion. Needs /mnt/models for the checkpoint and trace; skips cleanly without them.
+  # Launched through mpirun like every other leg even though it needs one process and no device:
+  # this was the only bare `cmd` in the matrix, and it failed 4 runs out of 4 with
+  # "Executing the custom container implementation failed" 0 s into the step, before pytest ran.
+  # The runner's container hook drives the step through its host-execution path and does not
+  # handle the bare form. --pernode on sc1 is a single process, so the tests are unaffected.
+  cmd: |
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
+      export LOGURU_LEVEL=INFO
+      export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+      export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+      export KIMI_K3_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
+      export KIMI_K3_CKPT=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
+      python3 -m pytest -vvv --tb=short \
+        models/demos/deepseek_v3_d_p/tests/kimi_k3/test_golden_contract.py \
+        models/demos/deepseek_v3_d_p/tests/kimi_k3/test_layer_schedule.py \
+        models/demos/deepseek_v3_d_p/tests/kimi_k3/test_cache_contract.py \
+        models/demos/deepseek_v3_d_p/tests/kimi_k3/test_runtime_contract.py \
+        models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kda_golden.py \
+        models/demos/deepseek_v3_d_p/tests/test_kv_ack.py \
+        models/demos/deepseek_v3_d_p/tests/attn_res/model/test_attn_res_pipeline_split.py
+    '
+  test_type: k3_contracts
+  test_tags: [kimi_k3]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 10
+      tier: 2
+      release_ready: false
+  owner_id: U0ACLAM77PS  # Kosta Grujcic
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+
+- name: "(Kimi-K3-2.8T) prefill transformer accuracy L12, L24 vs golden trace"
+  # The fabric comes from the test's own device_params, not from fabric_profile: adding that key
+  # here would swap the mesh descriptor and change nothing else. The depth ladder scores
+  # decoder_output per layer against the 1M trace, which covers layers 0..24 of 93.
+  cmd: |
+    export LOGURU_LEVEL=INFO
+    export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+    export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+    export KIMI_K3_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
+    export KIMI_K3_CKPT=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
+    export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/kimi-k3-ttnn-cache
+    export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_transformer_depth.py -k "L12 or L24" -vvv --tb=short
+    '
+  test_type: k3_transformer_depth
+  test_tags: [kimi_k3, transformer]
+  test_group: module
+  skus:
+    bh_sc1:
+      # Measured 57 min for the pair on one galaxy (L12 17.5, L24 27.5, plus device open and weight
+      # load), against a 70:36 three-case ladder including L5. Headroom for a cold kernel JIT cache.
+      timeout: 70
+      tier: 2
+      release_ready: false
+  owner_id: U0ACLAM77PS  # Kosta Grujcic
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+
+- name: "(Kimi-K3-2.8T) chunked prefill accuracy L5, L24 55k@5k vs golden trace"
+  # What a single chunk cannot prove: that the KDA recurrent AND convolution carries survive a chunk
+  # boundary. The conv carry is the causal conv's 3-token history, so getting it wrong corrupts only
+  # the first three tokens of a chunk -- invisible to a per-chunk PCC over 5120 tokens.
+  cmd: |
+    export LOGURU_LEVEL=INFO
+    export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+    export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+    export KIMI_K3_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
+    export KIMI_K3_CKPT=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
+    export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/kimi-k3-ttnn-cache
+    export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_chunked_prefill.py -vvv --tb=short
+    '
+  test_type: k3_chunked_prefill
+  test_tags: [kimi_k3, transformer]
+  test_group: module
+  skus:
+    bh_sc1:
+      # Measured 74:32 for both cases on one galaxy. Eleven chunks each, so this is mostly real work.
+      timeout: 90
+      tier: 2
+      release_ready: false
+  owner_id: U0ACLAM77PS  # Kosta Grujcic
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+
+- name: "(Kimi-K3-2.8T) traced chunked prefill accuracy L24 55k@5k vs golden trace"
+  # The only K3 PCC gate on the CAPTURED-TRACE path rather than eager. A replay bakes in tensor
+  # addresses, so it can be fast and wrong, and K3 advances the KDA recurrent and convolution carries
+  # inside the captured region: capture costs chunk 0 two extra forwards, which is idempotent for KV
+  # but not for a recurrence, so the branch resets the carry after capture. Exactly the regression a
+  # CI leg should hold.
+  # This leg resolves its tensorbins through conftest's `weight_cache_path` fixture, which reads
+  # `variant.ttnn_cache_env` and nothing else -- it never consults `variant.ttnn_cache_default`, so
+  # unlike `kimi_k3/weights.py`'s `cache_root` it has no fallback to the share. Without the export
+  # below the fixture points at the checkpoint dir, and `check_cache_complete` fails the
+  # `.layer_N.complete` marker check on layer 0: the leg dies on `TTNN cache incomplete` a couple of
+  # minutes in, before it builds anything. Fast and loud, but a false negative on the model.
+  cmd: |
+    export LOGURU_LEVEL=INFO
+    export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+    export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+    export KIMI_K3_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
+    export KIMI_K3_CKPT=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
+    export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/kimi-k3-ttnn-cache
+    export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_k3_prefill_transformer_chunked -k "L24 and chunks_eleven and traced and iters1 and no_determinism" -vvv --tb=short
+    '
+  test_type: k3_transformer_traced
+  test_tags: [kimi_k3, transformer]
+  test_group: module
+  skus:
+    bh_sc1:
+      # 7:39 is the compute; the weight load dominates and is what this has to cover. On run
+      # 35488280449 the L24 load ran ~3m40s per MLA layer and had reached only layer 19 of 24 when
+      # the 20 min cap killed it, before the test body started -- six MLA layers is ~22 min on a
+      # cold TTNN cache. 45 = ~22 load + ~8 compute + device open, with room for a cold kernel JIT
+      # cache. Sized against measurement, not against the warm-cache number.
+      timeout: 45
+      tier: 2
+      release_ready: false
+  owner_id: U0ACLAM77PS  # Kosta Grujcic
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
 # ===== GLM-5.2-744B ====================================================================================
 
 - name: "(GLM-5.2-744B) sparse MLA accuracy + determinism, incl. chunked 5k@1k"
@@ -653,11 +794,7 @@
     export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      # BOTH axes pinned. main added tp_shard_kv (sp_only|tp_sharded) and this branch added use_trace
-      # (notrace|traced); a selector naming only one matches two cases and silently doubles the job.
-      # sp_only matches main's scope -- tp_sharded has no CI job on either side. notrace is the arm that
-      # also asserts per-layer PCC (impossible under capture); the traced arm is its own job below.
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked -k "glm52 and torus-xy-8x4 and L78 and warm_cache and sp_only and notrace" -xvs
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked -k "glm52 and torus-xy-8x4 and L78 and warm_cache and notrace" -xvs
     '
   test_type: glm_chunked_accuracy
   test_tags: [glm_5_2, transformer]
@@ -689,7 +826,7 @@
     export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked -k "glm52 and torus-xy-8x4 and L78 and warm_cache and sp_only and traced" -xvs
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked -k "glm52 and torus-xy-8x4 and L78 and warm_cache and traced" -xvs
     '
   test_type: glm_chunked_accuracy
   test_tags: [glm_5_2, transformer]
@@ -704,6 +841,57 @@
   budget_type: demo
   sp_config: sc1
 
+- name: "(GLM-5.2-744B) chunked prefill padded accuracy 15k@5k no-trace"
+  fabric_profile: torus_xy
+  cmd: |
+    export MESH_DEVICE=TG
+    export LOGURU_LEVEL=INFO
+    export GLM52_HF_MODEL=/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8
+    export TT_GLM52_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/glm52_ttnn_cache
+    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_padded -k "glm52 and torus-xy-8x4 and L78 and mid15k and notrace" -vvv --tb=short
+    '
+  test_type: glm_chunked_padded
+  test_tags: [glm_5_2, transformer]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 44
+      tier: 2
+      release_ready: false
+  owner_id: U07N3CUUN05  # Iva Potkonjak
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+- name: "(GLM-5.2-744B) chunked prefill padded accuracy 15k@5k traced"
+  fabric_profile: torus_xy
+  cmd: |
+    export MESH_DEVICE=TG
+    export LOGURU_LEVEL=INFO
+    export GLM52_HF_MODEL=/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8
+    export TT_GLM52_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/glm52_ttnn_cache
+    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_padded -k "glm52 and torus-xy-8x4 and L78 and mid15k and traced" -vvv --tb=short
+    '
+  test_type: glm_chunked_padded
+  test_tags: [glm_5_2, transformer]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 24
+      tier: 2
+      release_ready: false
+  owner_id: U07N3CUUN05  # Iva Potkonjak
+  team: models
+  budget_type: demo
+  sp_config: sc1
 
 - name: "(GLM-5.2-744B) chunked prefill perf code_debug 55k@5k"
   fabric_profile: torus_xy
@@ -716,10 +904,10 @@
     export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm52 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters and sp_only and notrace" -xvs
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm52 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters and notrace" -xvs
     '
   test_type: glm_chunked
-  test_tags: [glm_5_2, transformer]
+  test_tags: [glm_5_2, transformer, glm_chunked_untraced_perf]
   test_group: module
   skus:
     bh_sc1_high_power:
@@ -746,7 +934,7 @@
     export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm52 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters and sp_only and traced" -xvs
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm52 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters and traced" -xvs
     '
   test_type: glm_chunked
   test_tags: [glm_5_2, transformer]
@@ -997,7 +1185,7 @@
       timeout: 20
       tier: 2
       release_ready: false
-  owner_id: U08GEEEEC75 # ssalice
+  owner_id: U0AQ3FGS9MG # Alina Khan
   team: models
   budget_type: demo
   sp_config: sc1
@@ -1024,7 +1212,7 @@
       timeout: 44
       tier: 2
       release_ready: false
-  owner_id: U08GEEEEC75 # ssalice
+  owner_id: U0AQ3FGS9MG # Alina Khan
   team: models
   budget_type: demo
   sp_config: sc1
@@ -1051,7 +1239,7 @@
       timeout: 40
       tier: 2
       release_ready: false
-  owner_id: U08GEEEEC75 # ssalice
+  owner_id: U0AQ3FGS9MG # Alina Khan
   team: models
   budget_type: demo
   sp_config: sc1
@@ -1072,7 +1260,7 @@
       timeout: 20
       tier: 2
       release_ready: false
-  owner_id: U08GEEEEC75 # ssalice
+  owner_id: U0AQ3FGS9MG # Alina Khan
   team: models
   budget_type: demo
   sp_config: sc1
@@ -1099,7 +1287,7 @@
       timeout: 28
       tier: 2
       release_ready: false
-  owner_id: U08GEEEEC75 # ssalice
+  owner_id: U0AQ3FGS9MG # Alina Khan
   team: models
   budget_type: demo
   sp_config: sc1
@@ -1135,7 +1323,7 @@
       timeout: 52
       tier: 2
       release_ready: false
-  owner_id: U08GEEEEC75 # ssalice
+  owner_id: U0AQ3FGS9MG # Alina Khan
   team: models
   budget_type: demo
   sp_config: sc1
@@ -1167,7 +1355,7 @@
       timeout: 20
       tier: 2
       release_ready: false
-  owner_id: U08GEEEEC75 # ssalice
+  owner_id: U0AQ3FGS9MG # Alina Khan
   team: models
   budget_type: demo
   sp_config: sc1
@@ -1282,7 +1470,59 @@
   sp_config: sc1
 
 
-# ===== Disaggregated prefill, SC4 -- one launcher shared by both entries, keep them adjacent ===========
+# ===== Llama-3.1-8B ===================================================================================
+
+# Disaggregated-prefill model accuracy on one BH Galaxy. Timeouts include checkpoint I/O, CPU references,
+# device JIT and readbacks; these are scheduling budgets, not performance claims.
+- name: "(Llama-3.1-8B) prefill components and decoder accuracy"
+  fabric_profile: torus_xy
+  cmd: |
+    export LLAMA31_8B_CHECKPOINT=/mnt/models/meta-llama/Llama-3.1-8B-Instruct
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
+      export OMP_NUM_THREADS=16
+      python3 -m pytest --noconftest -v models/demos/llama_3p1_8b_d_p/tests/host
+      python3 -m pytest --timeout=600 -v models/demos/llama_3p1_8b_d_p/tests/unit
+    '
+  test_type: llama31_prefill_components
+  test_tags: [llama31, transformer]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 25
+      tier: 2
+      release_ready: false
+  owner_id: U053W15B6JF # Djordje Ivanovic
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+# Full 2K accuracy remains a required local check; restore its CI job before
+# project completion (see the model README).
+- name: "(Llama-3.1-8B) prefill book top-5 accuracy 2k, 4k"
+  fabric_profile: torus_xy
+  cmd: |
+    export LLAMA31_8B_CHECKPOINT=/mnt/models/meta-llama/Llama-3.1-8B-Instruct
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
+      export OMP_NUM_THREADS=16
+      python3 -m pytest --timeout=600 -v models/demos/llama_3p1_8b_d_p/tests/model/test_prefill_book_top5.py
+    '
+  test_type: llama31_prefill_book_top5
+  test_tags: [llama31, transformer]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 15
+      tier: 2
+      release_ready: false
+  owner_id: U053W15B6JF # Djordje Ivanovic
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+
+# ===== Disaggregated prefill, SC4 -- keep these adjacent; the first two share one launcher =============
 
 # 4-galaxy (SC4) disaggregated prefill: a 4-rank background runner opens the mesh, loads Kimi-2.7,
 # warmup-compiles, and publishes the merged KV chunk table to shared NFS; a device-less producer then
@@ -1347,6 +1587,33 @@
   sp_config: sc4
 
 
+# Separate launcher from the verifier legs above: the drafter path is not trace-captured, so this one runs
+# PREFILL_USE_TRACE=0 and its 250k timing is not comparable to theirs. PCC stops at 55k, where the golden does.
+- name: "(Kimi-K2.7-1T) DFlash drafter KV accuracy 55k@5k + perf 250k@5k, SC4"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_dflash_pcc.sh kimi27
+  test_type: prefill_runner_kv_pcc
+  test_tags: [kimi_k2_7, runner, kv_cache, dflash]
+  test_group: disagg_prefill
+  skus:
+    bh_sc4:
+      # 36 min warm. Sized off a cold host instead: the TTNN weight cache is NFS-mounted and the four
+      # ranks pull it concurrently, which stretches model construction ~6x.
+      timeout: 60
+      tier: 1
+      release_ready: true
+  owner_id: U09LK84G4TF # Nikola Milicevic
+  team: shield
+  budget_type: demo
+  sp_config: sc4
+
+
 
 - name: "(Kimi-K2.7-1T) disaggregated prefill KV accuracy 55k@5k + perf 250k@5k, SC1"
   cmd: |
@@ -1390,6 +1657,29 @@
   sp_config: sc1
 
 
+- name: "(Kimi-K2.7-1T) DFlash drafter KV accuracy 55k@5k + perf 250k@5k, SC1"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_dflash_pcc.sh kimi27 sc1
+  test_type: prefill_runner_kv_pcc
+  test_tags: [kimi_k2_7, runner, kv_cache, dflash]
+  test_group: disagg_prefill
+  skus:
+    bh_sc1:
+      # 25-50 min warm. Sized off a cold host instead: one rank builds all 61 layers out of the
+      # NFS-mounted TTNN weight cache, which runs ~16 s/layer warm and ~100 s/layer cold.
+      timeout: 120
+  owner_id: U09LK84G4TF # Nikola Milicevic
+  team: shield
+  budget_type: demo
+  sp_config: sc1
+
+
 # ===== Op-level, no model under test ===================================================================
 
 # Ring joint SDPA gates, over ModelConfig shape presets on random tensors (not model runs):
@@ -1397,6 +1687,78 @@
 #   ring_mla chunked     -> kimi50k and kimi_k3 for perf; kimi_k3 for accuracy and determinism
 # Uses real-time device program records, so it runs on the plain build without ENABLE_TRACY.
 # sp/tp are auto-selected by MeshConfig.detect() on Galaxy (sp=8, tp=4).
+
+# 4-galaxy (SC4) disaggregated prefill for Kimi-K3: all 93 layers as 24/24/24/21. Four ranks, not
+# two: ~717 MiB/chip/layer against 31.85 GiB/chip OOMs during weight load at 46/47 per rank, and
+# MLA's static CBs become unplaceable past ~36 layers on a rank (#54876). Every boundary is a
+# multiple of ATTN_RES_BLOCK_SIZE=12, or a rank inherits a partial sealed set and its local layer 0
+# seals a block that is not there; the adapter's layer_split_boundaries snaps the even split there,
+# so PREFILL_PP_LAYER_COUNTS is deliberately not pinned here.
+# Fabric comes from the manifest and the descriptor from run_multirank_pcc.sh, so this leg carries
+# no fabric_profile -- same as the Kimi-K2.7 and GLM-5.2 disagg legs beside it.
+# Own test_type per rung, unlike the Kimi-K2.7 and GLM-5.2 pairs that share prefill_runner_kv_pcc:
+# four galaxies is the scarcest resource in the pool, so this leg has to be dispatchable without
+# also claiming a single-galaxy one. The `runner` and `kv_cache` tags still select both rungs.
+- name: "(Kimi-K3-2.8T) disaggregated prefill KV accuracy 55k@5k, SC4"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3
+  test_type: k3_prefill_runner_93l
+  test_tags: [kimi_k3, runner, kv_cache]
+  test_group: disagg_prefill
+  skus:
+    bh_sc4:
+      # Weight load dominates and it is NFS-bandwidth-bound, not compute-bound: the TTNN cache is
+      # 1.5 TB of tensorbins on the models share and all four ranks stream their slice of it at once,
+      # so the phase runs at roughly line rate and its cost swings with whatever else is on the mount.
+      # Two measurements, both from test-step start to all four ranks serving: 42.6 min on run
+      # 34648535999, 65.9 min on run 34659612357 (rank 0 alone spent 54.2 min loading its 24 layers).
+      # After that comes the producer connect, 11 chunks of 5120, the KV read-back and a ~7 min mesh
+      # unwind. 45 min cut this off mid-bringup and 70 min cut it off six minutes after bringup.
+      # 100 was still too tight: run 34831600450 was killed at 106 min with the leg live. Doubled,
+      # matching the 2x pass #56135 applied to the rest of this pipeline. shield/demo bh_sc4 is a
+      # SUM over the team's legs on that SKU, not a per-leg cap: 40 (Kimi-K2.7) + 60 (GLM-5.2) + 200.
+      timeout: 200
+      tier: 1
+      release_ready: false
+  owner_id: U0ACLAM77PS  # Kosta Grujcic
+  team: shield
+  budget_type: demo
+  sp_config: sc4
+
+
+# Single-galaxy rung of the same launcher. 93 layers do not fit one galaxy, so the sc1 arm overrides
+# the manifest depth to 24 -- which ends on an MLA layer and is the deepest depth the golden's
+# decoder-output stream covers, making this a real accuracy gate rather than a smaller copy of sc4.
+- name: "(Kimi-K3-2.8T) disaggregated prefill KV accuracy 55k@5k, SC1"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    # Below the job timeout on purpose: at the script default of 3600 the wait outlives the leg,
+    # so a bringup that never finishes is reported as a job kill with no diagnostic.
+    export TABLE_WAIT_SECS=2400
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3 sc1
+  test_type: k3_prefill_runner_24l
+  test_tags: [kimi_k3, runner, kv_cache]
+  test_group: disagg_prefill
+  skus:
+    bh_sc1:
+      # 30 killed the leg at 38 min on run 34831600450, mid-bringup.
+      timeout: 60
+  owner_id: U0ACLAM77PS  # Kosta Grujcic
+  team: shield
+  budget_type: demo
+  sp_config: sc1
+
 - name: "Ring joint SDPA perf + ring MLA chunked 55k@5k perf, accuracy, determinism"
   # Run both perf checks unconditionally (so both report numbers) but fail the step if either
   # fails - the harness only propagates the last command's exit code, so aggregate it ourselves.

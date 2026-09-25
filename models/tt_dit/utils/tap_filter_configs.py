@@ -64,6 +64,58 @@ _FORMULATIONS: dict[DeviceKey, dict[ShapeKey, Any]] = {
         (16, 7, 1): "direct",
         (8, 12, 2): "direct",
         (8, 7, 1): "direct",
+        # LTX-2.3 audio vocoder + BWE (models/tt_dit/pipelines/ltx), swept 2026-09-16 on g15blx02 (BH galaxy,
+        # l1_small_size 32768 -- the size the LTX 4x8 mesh params open with) with
+        # tests/models/minimax_h3/tools/sweep_tap_filter_configs.py over the 6 s 1088x1920 clip's shapes, in fresh
+        # processes per group (the sweep exhausts a 32 KB L1_SMALL pool after ~6 shapes). Full-C wins at every
+        # width: the 128/64/32 chunks are 1.7-10x slower where they fit. Without these rows every fresh process
+        # probed all 13 shapes (~18 s of the first gen's audio decode).
+        (768, 12, 2): "direct",
+        (768, 7, 1): "direct",
+        (384, 12, 2): "direct",
+        (384, 7, 1): "direct",
+        (192, 12, 2): "direct",
+        (192, 7, 1): "direct",
+        (96, 12, 2): "direct",
+        (96, 7, 1): "direct",
+        (48, 12, 2): "direct",
+        (48, 7, 1): "direct",
+        (24, 12, 2): "direct",
+        (24, 7, 1): "direct",
+        (2, 43, 1): "direct",
+    },
+    # LTX-2.3 audio vocoder + BWE on the Blackhole 2x4 loudbox (chips report an 11x10 compute grid), swept
+    # 2026-09-17 on f07cs04 (l1_small_size 32768, the LTX 2x4 mesh param) with
+    # tests/models/minimax_h3/tools/sweep_tap_filter_configs.py --mesh 2x4 over the 6 s 1088x1920 clip's 23 shapes
+    # (the 2x4 T-sharding gives a different channel ladder than the galaxy), in 4 fresh processes of <= 6 shapes.
+    # Full-C wins at every width; the chunk widths do not fit or are slower. Without these rows every fresh
+    # process probed all 23 shapes (~3.5 min of the first gen's audio decode on the loudbox).
+    # No _SLICES rows for this grid yet: the sweep took one clip length per key and one of its counts did not
+    # hold at a longer length (test_every_table_row_runs_as_tabled); add them from a multi-length sweep.
+    ("blackhole", 11, 10): {
+        (768, 12, 2): "direct",
+        (768, 7, 1): "direct",
+        (384, 12, 2): "direct",
+        (384, 7, 1): "direct",
+        (256, 12, 2): "direct",
+        (256, 7, 1): "direct",
+        (192, 12, 2): "direct",
+        (192, 7, 1): "direct",
+        (128, 12, 2): "direct",
+        (128, 7, 1): "direct",
+        (96, 12, 2): "direct",
+        (96, 7, 1): "direct",
+        (64, 12, 2): "direct",
+        (64, 7, 1): "direct",
+        (48, 12, 2): "direct",
+        (48, 7, 1): "direct",
+        (32, 12, 2): "direct",
+        (32, 7, 1): "direct",
+        (24, 12, 2): "direct",
+        (24, 7, 1): "direct",
+        (16, 12, 2): "direct",
+        (16, 7, 1): "direct",
+        (2, 43, 1): "direct",
     },
 }
 _SLICES: dict[DeviceKey, dict[ShapeKey, tuple[int, int]]] = {
@@ -77,6 +129,8 @@ _SLICES: dict[DeviceKey, dict[ShapeKey, tuple[int, int]]] = {
         (16, 7, 1): (241200, 2),
         (8, 12, 2): (482400, 4),
         (8, 7, 1): (482400, 4),
+        # LTX vocoder, same 2026-09-16 sweep: the one LTX shape where an explicit count beat auto-slicing (30 %).
+        (24, 12, 2): (12160, 1),
     },
 }
 

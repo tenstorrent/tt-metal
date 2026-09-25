@@ -1,88 +1,39 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Sequence-parallel carry exchange for KDA causal convolution."""
-
-from __future__ import annotations
+"""Compact predecessor and replacement carry exchange, with fixed collective participation."""
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tt.kda.chronological_selections import ChronologicalSelections
 
 
 def exchange_convolution_carry(
     projected_qkv: ttnn.Tensor,
-    initial_carry: ttnn.Tensor,
     *,
     sequence_parallel_axis: int,
+    selections: ChronologicalSelections,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-    """Return partition entry carries and the replicated final stream carry.
+    """Return predecessor history and the replacement logical stream carry.
 
-    Both outputs have shape ``[B, history, Q_local + K_local + V_local]`` in
-    row-major DRAM. ``partition_carry`` differs by SP rank: rank zero receives
-    ``initial_carry`` and every later rank receives its predecessor tail.
-    ``final_carry`` is the global stream tail replicated across SP. Channels
-    remain sharded across TP.
+    Both outputs are BF16 row-major DRAM tensors shaped ``[1, 3, local_channels]``.
+    Predecessor history varies by SP rank; the final carry is replicated across
+    each SP line. Channels remain sharded across TP. The native convolution
+    selects the caller's initial history at the logical sequence start.
     """
-    batch, local_sequence, channels = projected_qkv.shape
-    history = initial_carry.shape[1]
-    mesh_device = projected_qkv.device()
-    mesh_shape = tuple(mesh_device.shape)
-    sp_size = mesh_shape[sequence_parallel_axis]
-
-    local_tail = ttnn.slice(
+    outgoing = selections.select_outgoing_history(projected_qkv)
+    gathered_outgoing_history = ttnn.all_gather(
+        outgoing, dim=1, cluster_axis=sequence_parallel_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    predecessor = selections.select_predecessor_history(gathered_outgoing_history)
+    # A split rank sends its head's history to its successor, but its physical
+    # tail supplies the final carry. Exchange physical tails separately so both
+    # sources remain available to the runtime selections.
+    batch, rows, width = projected_qkv.shape
+    physical_tail_history = ttnn.slice(
         projected_qkv,
-        (0, local_sequence - history, 0),
-        (batch, local_sequence, channels),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        (0, rows - outgoing.shape[1], 0),
+        (batch, rows, width),
     )
-    padded_tail = ttnn.pad(
-        local_tail,
-        ((0, 0), (0, ttnn.TILE_SIZE - history), (0, 0)),
-        value=0.0,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    tiled_tail = ttnn.to_layout(padded_tail, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    gathered_tails = ttnn.all_gather(
-        tiled_tail,
-        dim=1,
-        cluster_axis=sequence_parallel_axis,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    entry_carries = [initial_carry]
-    for rank in range(sp_size - 1):
-        tiled_rank_tail = ttnn.slice(
-            gathered_tails,
-            (0, rank * ttnn.TILE_SIZE, 0),
-            (batch, (rank + 1) * ttnn.TILE_SIZE, channels),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        rank_tail = ttnn.to_layout(tiled_rank_tail, ttnn.ROW_MAJOR_LAYOUT)
-        entry_carries.append(
-            ttnn.slice(
-                rank_tail,
-                (0, 0, 0),
-                (batch, history, channels),
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-        )
-    replicated_entries = ttnn.concat(entry_carries, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    partition_carry = ttnn.mesh_partition(
-        replicated_entries,
-        dim=1,
-        cluster_axis=sequence_parallel_axis,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    tiled_final_carry = ttnn.slice(
-        gathered_tails,
-        (0, (sp_size - 1) * ttnn.TILE_SIZE, 0),
-        (batch, sp_size * ttnn.TILE_SIZE, channels),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    final_row_major = ttnn.to_layout(tiled_final_carry, ttnn.ROW_MAJOR_LAYOUT)
-    final_carry = ttnn.slice(
-        final_row_major,
-        (0, 0, 0),
-        (batch, history, channels),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    return partition_carry, final_carry
+    broadcast_tail_histories = ttnn.all_broadcast(physical_tail_history, cluster_axis=sequence_parallel_axis)
+    candidates = ttnn.concat(broadcast_tail_histories, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    final_carry = selections.select_final_history(candidates)
+    return predecessor, final_carry

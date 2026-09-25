@@ -90,6 +90,11 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
     {"gtz", {{"SFPU_OP_CHAIN_0", "gtz_tile_init(); gtz_tile(0);"}}},
     {"gez", {{"SFPU_OP_CHAIN_0", "gez_tile_init(); gez_tile(0);"}}},
     {"lez", {{"SFPU_OP_CHAIN_0", "lez_tile_init(); lez_tile(0);"}}},
+    {"ceil", {{"SFPU_OP_CHAIN_0", "rounding_op_tile_init(); ceil_tile(0);"}}},
+    {"floor", {{"SFPU_OP_CHAIN_0", "rounding_op_tile_init(); floor_tile(0);"}}},
+    {"trunc", {{"SFPU_OP_CHAIN_0", "rounding_op_tile_init(); trunc_tile(0);"}}},
+    {"frac", {{"SFPU_OP_CHAIN_0", "rounding_op_tile_init(); frac_tile(0);"}}},
+    {"round", {{"SFPU_OP_CHAIN_0", "rounding_op_tile_init(); round_tile(0, 0 /* decimals */);"}}},
 };
 
 // Binary SFPU ops driven by `run_sfpu_binary_two_input_buffer`.
@@ -128,11 +133,17 @@ const map<std::string, std::map<std::string, std::string>> sfpu_binary_op_to_op_
      {{"SFPU_OP_INIT_0", "binary_max_int32_tile_init();"}, {"SFPU_OP_CHAIN_0", "binary_max_int32_tile(0, 1, 0);"}}},
     {"binary_min_int32",
      {{"SFPU_OP_INIT_0", "binary_min_int32_tile_init();"}, {"SFPU_OP_CHAIN_0", "binary_min_int32_tile(0, 1, 0);"}}},
+    {"copy_dest",
+     {{"SFPU_OP_INIT_0", "copy_dest_values_init();"},
+      {"SFPU_OP_CHAIN_0", "copy_dest_values<DataFormat::Float16_b>(1, 0);"}}},
+    {"copy_dest_int",
+     {{"SFPU_OP_INIT_0", "copy_dest_values_init();"},
+      {"SFPU_OP_CHAIN_0", "copy_dest_values<DataFormat::Int32>(1, 0);"}}},
 };
 
 bool is_int8_binary_sfpu_op(const std::string& op_name) {
     return (op_name == "add_int") or (op_name == "mul_int") or (op_name == "gt_int") or
-           (op_name == "binary_max_int32") or (op_name == "binary_min_int32");
+           (op_name == "binary_max_int32") or (op_name == "binary_min_int32") or (op_name == "copy_dest_int");
 }
 
 // Scalar golden for the unary SFPU ops, computed in float. Both the bf16 and
@@ -220,6 +231,22 @@ float sfpu_function(const std::string& op_name, float input) {
     if (op_name == "lez") {
         return bfloat16(static_cast<float>(input) <= 0.0f ? 1.0f : 0.0f);
     }
+    if (op_name == "ceil") {
+        return std::ceil(input);
+    }
+    if (op_name == "floor") {
+        return std::floor(input);
+    }
+    if (op_name == "trunc") {
+        return std::trunc(input);
+    }
+    if (op_name == "frac") {
+        return input - std::trunc(input);
+    }
+    if (op_name == "round") {
+        // Round-half-to-even (matches _round_even_). std::round is away-from-zero.
+        return std::nearbyint(input);
+    }
     TT_THROW("Unsupported op_name in test");
 }
 
@@ -244,6 +271,10 @@ bfloat16 sfpu_binary_function(const std::string& op_name, const bfloat16& lhs, c
     }
     if (op_name == "binary_min") {
         return bfloat16(std::min(static_cast<float>(lhs), static_cast<float>(rhs)));
+    }
+    if (op_name == "copy_dest") {
+        // copy_dest_values(1, 0) copies RHS onto DST[0].
+        return rhs;
     }
     TT_THROW("Unsupported binary op_name in test");
 }
@@ -284,6 +315,9 @@ int32_t get_binary_int_operation_result(const std::string& op_name, int lhs, int
     }
     if (op_name == "binary_min_int32") {
         return std::min(lhs, rhs);
+    }
+    if (op_name == "copy_dest_int") {
+        return static_cast<int32_t>(rhs);
     }
     TT_THROW("Unsupported int8 binary op_name in test");
 }
@@ -331,6 +365,13 @@ vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const std:
     if ((op_name == "relu_min") || (op_name == "relu_max")) {
         return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-2.0f, 10.0f, numel, seed);
     }
+    if ((op_name == "ceil") || (op_name == "floor") || (op_name == "trunc") || (op_name == "frac") ||
+        (op_name == "round")) {
+        // Half-integers distinguish floor/ceil from trunc and exercise round-half-to-even.
+        auto possible_values =
+            vector<bfloat16>({-2.5f, -1.5f, -0.5f, 0.0f, 0.5f, 1.5f, 2.5f, -2.0f, 2.0f, -0.25f, 3.75f});
+        return generate_packed_random_vector_from_vector<uint32_t, bfloat16>(possible_values, numel, seed);
+    }
     return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, numel, seed);
 }
 
@@ -367,7 +408,7 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_packed_sfpu_binary_inputs
             generate_packed_uniform_random_vector<uint32_t, bfloat16>(-5.0f, 5.0f, numel, seed),
             generate_packed_uniform_random_vector<uint32_t, bfloat16>(-5.0f, 5.0f, numel, seed + 1)};
     }
-    if (op_name == "binary_max" || op_name == "binary_min") {
+    if (op_name == "binary_max" || op_name == "binary_min" || op_name == "copy_dest") {
         auto lhs = generate_packed_uniform_random_vector<uint32_t, bfloat16>(-4.0f, 4.0f, numel, seed);
         auto rhs = generate_packed_uniform_random_vector<uint32_t, bfloat16>(-4.0f, 4.0f, numel, seed + 1);
         return {lhs, rhs};
@@ -422,8 +463,13 @@ std::pair<float, float> sfpu_tolerance(const std::string& op_name, bool fp32_des
 
 bool is_close_packed_sfpu_output(
     const std::vector<uint32_t>& vec_a, const std::vector<uint32_t>& vec_b, const std::string& op_name) {
-    if (is_int8_binary_sfpu_op(op_name) || op_name == "binary_max" || op_name == "binary_min") {
+    if (is_int8_binary_sfpu_op(op_name) || op_name == "binary_max" || op_name == "binary_min" ||
+        op_name == "copy_dest") {
         return vec_a == vec_b;
+    }
+    if (op_name == "ceil" || op_name == "floor" || op_name == "trunc" || op_name == "frac" || op_name == "round") {
+        return is_close_packed_vectors<bfloat16, uint32_t>(
+            vec_a, vec_b, [](const bfloat16& a, const bfloat16& b) { return a == b; });
     }
     if (op_name == "where") {
         // Matches the LLK pytest's torch.isclose(rtol=0.05, atol=0.05) for
@@ -926,6 +972,7 @@ bool run_sfpu_all_same_buffer(distributed::MeshDevice& mesh_device, const SfpuCo
     sfpu_defines["SFPU_OP_SOFTPLUS_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_CLAMP_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_ROUND_FAMILY_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_BINOP_WITH_SCALAR_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_UNARY_COMP_INCLUDE"] = "1";
@@ -1049,6 +1096,8 @@ bool run_sfpu_binary_two_input_buffer(distributed::MeshDevice& mesh_device, cons
             sfpu_defines["SFPU_OP_BINARY_MUL_INT_INCLUDE"] = "1";
         } else if (test_config.sfpu_op == "gt_int") {
             sfpu_defines["SFPU_OP_BINARY_GT_INT_INCLUDE"] = "1";
+        } else if (test_config.sfpu_op == "copy_dest_int") {
+            sfpu_defines["SFPU_OP_COPY_DEST_INCLUDE"] = "1";
         } else {
             sfpu_defines["SFPU_OP_BINARY_MAX_MIN_INCLUDE"] = "1";
         }
@@ -1056,6 +1105,8 @@ bool run_sfpu_binary_two_input_buffer(distributed::MeshDevice& mesh_device, cons
         sfpu_defines["SFPU_OP_BINARY_MAX_MIN_INCLUDE"] = "1";
     } else if (test_config.sfpu_op == "atan2") {
         sfpu_defines["SFPU_OP_BINARY_ATAN2_INCLUDE"] = "1";
+    } else if (test_config.sfpu_op == "copy_dest") {
+        sfpu_defines["SFPU_OP_COPY_DEST_INCLUDE"] = "1";
     } else {
         sfpu_defines["SFPU_OP_BINARY_DIV_INCLUDE"] = "1";
     }
@@ -1586,6 +1637,16 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "gtz"),
         std::make_tuple(1, "gez"),
         std::make_tuple(1, "lez"),
+        std::make_tuple(1, "ceil"),
+        std::make_tuple(4, "ceil"),
+        std::make_tuple(1, "floor"),
+        std::make_tuple(4, "floor"),
+        std::make_tuple(1, "trunc"),
+        std::make_tuple(4, "trunc"),
+        std::make_tuple(1, "frac"),
+        std::make_tuple(4, "frac"),
+        std::make_tuple(1, "round"),
+        std::make_tuple(4, "round"),
         std::make_tuple(4, "eqz"),
         std::make_tuple(4, "nez"),
         std::make_tuple(4, "ltz"),
@@ -1733,6 +1794,16 @@ INSTANTIATE_TEST_SUITE_P(
     SingleCoreSfpuCompute,
     SingleCoreSingleMeshDeviceSfpuParameterized32BitDestFixture,
     ::testing::Values(
+        std::make_tuple(1, "ceil"),
+        std::make_tuple(4, "ceil"),
+        std::make_tuple(1, "floor"),
+        std::make_tuple(4, "floor"),
+        std::make_tuple(1, "trunc"),
+        std::make_tuple(4, "trunc"),
+        std::make_tuple(1, "frac"),
+        std::make_tuple(4, "frac"),
+        std::make_tuple(1, "round"),
+        std::make_tuple(4, "round"),
         std::make_tuple(1, "negative"),
         std::make_tuple(4, "negative"),
         std::make_tuple(1, "softplus"),
@@ -1894,7 +1965,9 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "binary_max"),
         std::make_tuple(1, "binary_min"),
         std::make_tuple(1, "binary_max_int32"),
-        std::make_tuple(1, "binary_min_int32")),
+        std::make_tuple(1, "binary_min_int32"),
+        std::make_tuple(1, "copy_dest"),
+        std::make_tuple(1, "copy_dest_int")),
     [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });
