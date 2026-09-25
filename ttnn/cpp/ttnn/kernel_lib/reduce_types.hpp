@@ -15,22 +15,6 @@
  */
 enum class ReduceFp32Mode : std::uint8_t { Fast = 0, Accurate = 1 };
 
-namespace ttnn::kernel_lib {
-
-// Physical pattern written into one reduction auxiliary tile. These describe
-// only tile contents; they deliberately carry no reduction algorithm or policy
-// semantics.
-enum class ReduceAuxiliaryTileType : std::uint8_t {
-    FirstRow = 0,
-    FirstColumn = 1,
-    // ReduceTile's partial REDUCE_COL scaler encodes valid rows across row 0
-    // of each participating face row.
-    FirstRowPerFaceRow = 2,
-    Zero = 3,
-};
-
-}  // namespace ttnn::kernel_lib
-
 namespace compute_kernel_lib {
 
 /**

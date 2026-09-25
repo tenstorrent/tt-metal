@@ -7,7 +7,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include "llk_defs.h"
 #include <tt-metalium/constants.hpp>
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_types.hpp"
 
 namespace dataflow_kernel_lib {
 
@@ -84,42 +83,6 @@ FORCE_INLINE void prepare_reduce_scaler(
 template <uint32_t dfb_id, PoolType pool_type, ReduceDim reduce_dim, uint32_t reduce_factor = SUM_AND_MAX_REDUCE_FACTOR>
 FORCE_INLINE void calculate_and_prepare_reduce_scaler(
     uint32_t valid_reduce_dim_elements_in_tile = tt::constants::TILE_WIDTH);
-
-/**
- * @brief Fill and push one auxiliary tile read by compute_kernel_lib::reduce()
- *
- * Writes one tile of a physical pattern into the next free page of dfb_id. The
- * pattern carries no reduction semantics; the caller selects the tiles, and their
- * order, that the compute reduce() configuration expects:
- * - ReduceTile: [full scaler] or, with ReducePartialMode::Scaler, [full scaler, partial scaler].
- *   A full scaler is FirstRow with valid_elements equal to the tile width. A partial
- *   REDUCE_ROW scaler is FirstRow and a partial REDUCE_COL scaler is FirstRowPerFaceRow,
- *   with valid_elements set to the valid elements of the last reduce-dim tile.
- * - AccumulateViaAdd: [zero] or, with ReducePartialMode::Mask, [mask, zero]. The mask is
- *   FirstRow (REDUCE_ROW) or FirstColumn (REDUCE_COL) with value 1.0.
- *
- * Patterns:
- * - FirstRow: row 0 of the tile holds the value in its first valid_elements columns.
- * - FirstColumn: column 0 of the tile holds the value in its first valid_elements rows.
- * - FirstRowPerFaceRow: row 0 of every face in face row r holds the value in its first
- *   min(16, valid_elements - 16 * r) columns.
- * - Zero: every element is zero.
- *
- * A full FirstRow scaler initializes only the face rows consumed by reduction; its other
- * lanes are unspecified. Every other pattern clears the tile before filling it.
- * Data format and tile shape are deduced from the DataflowBuffer (Float16_b or Float32).
- *
- * @tparam dfb_id DataflowBuffer ID to write the tile to (must be constexpr)
- * @tparam tile_type Physical pattern of the tile
- * @tparam valid_elements Number of filled elements along the pattern's axis (ignored for Zero)
- * @tparam value_bits IEEE-754 float32 bit pattern of the fill value (ignored for Zero)
- */
-template <
-    uint32_t dfb_id,
-    ttnn::kernel_lib::ReduceAuxiliaryTileType tile_type,
-    uint32_t valid_elements = tt::constants::TILE_WIDTH,
-    uint32_t value_bits = 0x3F800000>
-FORCE_INLINE void prepare_reduce_auxiliary_tile();
 
 }  // namespace dataflow_kernel_lib
 
