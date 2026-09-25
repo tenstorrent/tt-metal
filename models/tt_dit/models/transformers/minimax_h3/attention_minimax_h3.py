@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+import os
 
 import torch
 
@@ -198,9 +199,18 @@ class MiniMaxH3Attention(Module):
         )
         self._exp_sdpa_program_configs: dict[int, ttnn.SDPAProgramConfig | None] = {}
 
+        # Opt-in tuning knobs for the ring path; unset means the measured defaults below.
+        sdpa_fidelity = ttnn.MathFidelity.HiFi2
+        self.sdpa_chunks_override: tuple[int, int] | None = None
+        if self.use_ring:
+            if os.environ.get("MINIMAX_H3_SDPA_FIDELITY"):
+                sdpa_fidelity = getattr(ttnn.MathFidelity, os.environ["MINIMAX_H3_SDPA_FIDELITY"])
+            if os.environ.get("MINIMAX_H3_SDPA_CHUNKS"):
+                q_chunk, k_chunk = (int(v) for v in os.environ["MINIMAX_H3_SDPA_CHUNKS"].split(","))
+                self.sdpa_chunks_override = (q_chunk, k_chunk)
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=sdpa_fidelity,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
         )
@@ -296,6 +306,8 @@ class MiniMaxH3Attention(Module):
             else:
                 q_chunk = max(tile, min(256, (seq_local // tile) * tile))
                 k_chunk = max(tile, min(512, (seq_local // tile) * tile))
+            if ring and self.sdpa_chunks_override is not None:
+                q_chunk, k_chunk = self.sdpa_chunks_override
             if windowed:
                 k_chunk = min(k_chunk, 256)
             grid = (
