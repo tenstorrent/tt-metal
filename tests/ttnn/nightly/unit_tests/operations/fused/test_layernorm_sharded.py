@@ -530,10 +530,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
 # Spans {legacy, welford} x {fp32, bf16} input x {bf16, fp32} ROW_MAJOR gamma/beta. FP32 requires
 # fp32_dest_acc_en=True. Input is TILE (welford requires TILE; ROW_MAJOR input hangs).
 # ---------------------------------------------------------------------------------------------
-@pytest.mark.parametrize("gamma_dtype", [ttnn.bfloat16, ttnn.float32], ids=["gb_bf16", "gb_fp32"])
-@pytest.mark.parametrize("use_welford", [True, False], ids=["welford", "legacy"])
-@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b], ids=["fp32", "bf16", "bf8"])
-def test_layernorm_block_sharded_all_config(device, dtype, use_welford, gamma_dtype):
+def run_layernorm_block_sharded(device, dtype, use_welford, gamma_dtype, has_weight=True, has_bias=True):
     torch.manual_seed(1234)
     g = device.compute_with_storage_grid_size()
     grid_size = [g.x, min(g.y, 8)]
@@ -543,8 +540,8 @@ def test_layernorm_block_sharded_all_config(device, dtype, use_welford, gamma_dt
     M, K = in0_shape[2] * batch, in0_shape[3]
 
     x = torch.rand(in0_shape, dtype=torch.float32) * 2 - 0.95
-    w = torch.rand(K, dtype=torch.float32) * 2 - 1
-    b = torch.rand(K, dtype=torch.float32) * 2 - 1.1
+    w = torch.rand(K, dtype=torch.float32) * 2 - 1 if has_weight else None
+    b = torch.rand(K, dtype=torch.float32) * 2 - 1.1 if has_bias else None
     ref = torch.nn.functional.layer_norm(x, (K,), weight=w, bias=b, eps=1e-2)
 
     xt = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -553,8 +550,16 @@ def test_layernorm_block_sharded_all_config(device, dtype, use_welford, gamma_dt
         xt, grid_size, shard_shape, ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.ShardOrientation.COL_MAJOR
     )
 
-    wt = ttnn.from_torch(w.reshape(1, 1, -1, 32), dtype=gamma_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    bt = ttnn.from_torch(b.reshape(1, 1, -1, 32), dtype=gamma_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    wt = (
+        ttnn.from_torch(w.reshape(1, 1, -1, 32), dtype=gamma_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        if has_weight
+        else None
+    )
+    bt = (
+        ttnn.from_torch(b.reshape(1, 1, -1, 32), dtype=gamma_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        if has_bias
+        else None
+    )
 
     cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=grid_size,
@@ -600,6 +605,9 @@ def test_layernorm_block_sharded_all_config(device, dtype, use_welford, gamma_dt
         pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.02, 0.045, 0.011
     elif dtype == ttnn.bfloat16:
         pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.006, 0.019, 0.003
+        if not (has_weight and has_bias):
+            # Without gamma/beta the output norm is smaller, so the relative Frobenius error is larger.
+            frobenius_threshold = 0.005
     else:
         pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.006, 0.013, 0.003
 
@@ -611,3 +619,20 @@ def test_layernorm_block_sharded_all_config(device, dtype, use_welford, gamma_dt
         atol=atol,
         frobenius_threshold=frobenius_threshold,
     )
+
+
+@pytest.mark.parametrize("gamma_dtype", [ttnn.bfloat16, ttnn.float32], ids=["gb_bf16", "gb_fp32"])
+@pytest.mark.parametrize("use_welford", [True, False], ids=["welford", "legacy"])
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b], ids=["fp32", "bf16", "bf8"])
+def test_layernorm_block_sharded_all_config(device, dtype, use_welford, gamma_dtype):
+    run_layernorm_block_sharded(device, dtype, use_welford, gamma_dtype)
+
+
+# Bias without weight used to add beta to stale L1 in the sharded Welford kernel.
+@pytest.mark.parametrize("gamma_dtype", [ttnn.bfloat16], ids=["gb_bf16"])
+@pytest.mark.parametrize("use_welford", [True], ids=["welford"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize("has_weight", [True, False])
+@pytest.mark.parametrize("has_bias", [True, False])
+def test_layernorm_block_sharded_optional_affine(device, dtype, use_welford, gamma_dtype, has_weight, has_bias):
+    run_layernorm_block_sharded(device, dtype, use_welford, gamma_dtype, has_weight=has_weight, has_bias=has_bias)

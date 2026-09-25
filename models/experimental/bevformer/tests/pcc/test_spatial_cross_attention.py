@@ -210,7 +210,6 @@ def test_spatial_cross_attention_forward(
         query=tt_bev_queries,
         reference_points_cam=tt_reference_points_cam,
         bev_mask=tt_bev_mask,
-        key=tt_camera_features,
         value=tt_camera_features,
     )
 

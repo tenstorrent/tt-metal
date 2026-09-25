@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 #include <algorithm>
+#include <optional>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -54,5 +55,19 @@ inline void bind_chronology(
     reader.tensor_bindings.push_back({name, "actual_start"});
     reader.dfb_bindings.push_back(ProducerOf(channel, "chronology_compute"));
     compute.dfb_bindings.push_back(ConsumerOf(channel, "chronology_compute"));
+}
+inline void bind_actual_end(
+    tt::tt_metal::experimental::ProgramSpec& spec,
+    tt::tt_metal::experimental::ProgramRunArgs& run,
+    const std::optional<Tensor>& actual_end,
+    const Tensor& actual_start,
+    tt::tt_metal::experimental::KernelSpec& reader) {
+    using namespace tt::tt_metal::experimental;
+    const TensorParamName name{"actual_end"};
+    const auto& tensor = (actual_end ? *actual_end : actual_start).mesh_tensor();
+    spec.tensor_parameters.push_back({.unique_id = name, .spec = tensor.tensor_spec()});
+    run.tensor_args.emplace(name, tensor);
+    reader.tensor_bindings.push_back({name, "actual_end"});
+    reader.compile_time_args.insert({"has_actual_end", uint32_t(actual_end.has_value())});
 }
 }  // namespace ttnn::experimental::prim::kda_factory_detail

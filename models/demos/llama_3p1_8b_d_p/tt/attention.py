@@ -16,7 +16,7 @@ from models.demos.llama_3p1_8b_d_p.tt.kv_cache import (
     _cache_memory_config,
     _validate_cache_tensor,
 )
-from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import DEFAULT_MAX_SEQ_LEN
+from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import DEFAULT_MAX_SEQ_LEN, DEFAULT_NUM_USERS
 from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import PREFILL_LAYOUT as layout
 from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import PrefillGeometry, validate_mesh
 
@@ -83,9 +83,22 @@ class FullCausalAttention:
     # case. Reserve one additional 32,768-byte Q buffer as a conservative scheduling margin.
     _SDPA_L1_BYTES = 1_273_856
 
-    def __init__(self, mesh_device, mesh_config, *, cache_dtype=ttnn.bfloat8_b, max_seq_len=DEFAULT_MAX_SEQ_LEN):
-        self.geometry = PrefillGeometry(max_seq_len)
+    def __init__(
+        self,
+        mesh_device,
+        mesh_config,
+        *,
+        cache_dtype=ttnn.bfloat8_b,
+        max_seq_len=DEFAULT_MAX_SEQ_LEN,
+        num_users=DEFAULT_NUM_USERS,
+    ):
+        self.geometry = PrefillGeometry(max_seq_len, num_users)
         self.max_seq_len = self.geometry.max_seq_len
+        self.num_users = self.geometry.num_users
+        # The current chunk's mask and query-validity column, reused across its layers (see _chunk_mask).
+        self._mask = None
+        self._query_valid = None
+        self._mask_key = None
         validate_mesh(mesh_device, mesh_config, "FullCausalAttention")
         if cache_dtype not in SUPPORTED_CACHE_DTYPES:
             raise ValueError(f"attention cache_dtype must be bfloat16 or bfloat8_b, got {cache_dtype}")
@@ -164,11 +177,17 @@ class FullCausalAttention:
         if not isinstance(kv_cache, LlamaKVCache):
             raise ValueError(f"kv_cache must be LlamaKVCache, got {type(kv_cache).__name__}")
         metadata = (kv_cache.num_users, kv_cache.num_layers, kv_cache.max_seq_len, kv_cache.sp)
-        expected = (layout.num_users, Model.NUM_LAYERS, self.max_seq_len, layout.sp)
+        expected = (self.num_users, Model.NUM_LAYERS, self.max_seq_len, layout.sp)
         if metadata != expected:
             raise ValueError(f"attention cache metadata must be {expected}, got {metadata}")
         for name, tensor in (("k", kv_cache.k), ("v", kv_cache.v)):
-            _validate_cache_tensor(name, tensor, self.mesh_device, max_seq_len=self.max_seq_len)
+            _validate_cache_tensor(
+                name,
+                tensor,
+                self.mesh_device,
+                max_seq_len=self.max_seq_len,
+                num_users=self.num_users,
+            )
             if tensor.dtype != self.cache_dtype:
                 raise ValueError(
                     f"attention cache {name} dtype must match constructor cache_dtype "
@@ -187,8 +206,8 @@ class FullCausalAttention:
             ("actual_end", actual_end),
         ):
             _validate_scalar(name, value)
-        if not 0 <= slot_idx < layout.num_users:
-            raise ValueError(f"slot_idx {slot_idx} out of range [0, {layout.num_users})")
+        if not 0 <= slot_idx < self.num_users:
+            raise ValueError(f"slot_idx {slot_idx} out of range [0, {self.num_users})")
         if not 0 <= layer_idx < Model.NUM_LAYERS:
             raise ValueError(f"layer_idx {layer_idx} out of range [0, {Model.NUM_LAYERS})")
         if actual_start < 0 or actual_start % ttnn.TILE_SIZE:
@@ -251,7 +270,46 @@ class FullCausalAttention:
                 f"largest={memory.largest_contiguous_bytes_free_per_bank}"
             )
 
+    def _reorder_natural(self, gathered, extent):
+        """Restore natural token order from the rank-major gathered buffer.
+
+        The buffer is already (rank, chunk, block, head_dim) once reshaped, and natural order is that
+        same view with rank and chunk swapped, so a fixed handful of shape ops replaces one slice per
+        256-token block plus a concat of the same arity. The per-block route cost 2.838 ms at an
+        8192-token extent against 0.128 ms here, and it grew with the extent while this does not --
+        at 32 layers x K and V that reorder was a large share of the per-chunk time.
+        tests/unit/test_prefix_reorder_probe.py grades both routes against ground truth at four
+        extents.
+        """
+        stride = self.max_seq_len // layout.sp
+        chunks = extent // layout.chunk_size
+        full = chunks * layout.local_sequence == stride
+        ranked = ttnn.reshape(gathered, (layout.sp, stride, Model.HEAD_DIM))
+        # A slice spanning every row is a no-op that hands back its input, so at a full prefix
+        # `active` IS the persistent gather buffer.
+        active = ranked
+        if not full:
+            rows = chunks * layout.local_sequence
+            active = ttnn.slice(ranked, [0, 0, 0], [layout.sp, rows, Model.HEAD_DIM])
+        split = ttnn.reshape(active, (layout.sp, chunks, layout.local_sequence, Model.HEAD_DIM))
+        chunk_major = ttnn.permute(split, (1, 0, 2, 3))
+        # Copy out before anything above can be freed. Every reshape here is a view, and a permute
+        # that only moves a unit-length dimension is a metadata swap, so without this the result can
+        # alias either the slice below or the persistent gather buffer. That reads as correct for the
+        # first few layers of a chunk and then silently returns whatever the allocator handed out
+        # next: SP rank 0 stays exact while the rest of the prefix decays. The copy moves the same
+        # bytes the concat it replaces did, so the dispatch win stands.
+        natural = ttnn.clone(ttnn.reshape(chunk_major, (1, 1, extent, Model.HEAD_DIM)))
+        if not full:
+            active.deallocate(True)
+        return natural
+
     def _gather_and_reorder(self, cache_tensor, output_tensor, *, batch_index, logical_n):
+        # Move only the chunks the prefix actually populates, not the whole allocation: a chunk-1 read
+        # of a 128K cache is 1/128th of the bytes. The active extent is excluded from the op's program
+        # hash, so every prefix length still shares ONE cached program. The reorder below then works
+        # on the active extent only, so neither the transfer nor the copy scales with capacity.
+        extent = self.geometry.gathered_prefix_extent(logical_n)
         gathered = ttnn.experimental.high_bw_all_gather(
             cache_tensor,
             dim=2,
@@ -259,20 +317,10 @@ class FullCausalAttention:
             cluster_axis=layout.sp_axis,
             num_links=1,
             input_batch_index=batch_index,
-            gathered_dim_size=self.max_seq_len,
+            gathered_dim_size=extent,
         )
-        blocks = [
-            ttnn.slice(
-                gathered,
-                [0, 0, block * layout.local_sequence, 0],
-                [1, 1, (block + 1) * layout.local_sequence, Model.HEAD_DIM],
-            )
-            for block in range(layout.sp * (self.max_seq_len // layout.chunk_size))
-        ]
-        natural = ttnn.concat([blocks[index] for index in self.geometry.gather_block_order], dim=2)
-        for block in blocks:
-            block.deallocate(True)
-        if logical_n < self.max_seq_len:
+        natural = self._reorder_natural(gathered, extent)
+        if logical_n < extent:
             prefix = ttnn.slice(natural, [0, 0, 0, 0], [1, 1, logical_n, Model.HEAD_DIM])
             natural.deallocate(True)
             natural = prefix
@@ -306,6 +354,51 @@ class FullCausalAttention:
             tensor.deallocate(True)
         return mask, query_valid_bf16
 
+    def _chunk_mask(self, *, actual_start, actual_end, logical_n):
+        """One chunk's mask, reused by every layer that attends over it.
+
+        The mask is a function of the chunk's position range alone -- not of the layer or of the cache
+        contents -- so the 32 layers of a chunk all want the same (local_q x prefix) tensor. Building it
+        per layer meant 32 sets of full-extent elementwise passes per chunk to recompute the same bits.
+
+        The key deliberately omits slot and layer. Both select which KV plane the gather reads; neither
+        appears in the mask, which is built from positions alone. Adding them would rebuild an identical
+        tensor 32 times a chunk. A stale hit is not possible: the key is set only after a successful
+        build, and _release_chunk_mask clears it before one starts.
+        """
+        key = (actual_start, actual_end, logical_n)
+        if self._mask_key != key:
+            self._release_chunk_mask()
+            self._mask, self._query_valid = self._build_mask(
+                actual_start=actual_start,
+                actual_end=actual_end,
+                logical_n=logical_n,
+            )
+            self._mask_key = key
+        return self._mask, self._query_valid
+
+    def _release_chunk_mask(self):
+        for tensor in (self._mask, self._query_valid):
+            if tensor is not None:
+                tensor.deallocate(True)
+        self._mask = None
+        self._query_valid = None
+        self._mask_key = None
+
+    def close(self):
+        """Release attention-owned allocations, after callers finish using returned outputs.
+
+        The persistent gather buffers and position tables live for as long as the object does, so a
+        caller that builds an attention and drops it -- a test, or a runtime that rebuilds for a new
+        capacity -- has to say when the device memory goes back. Idempotent.
+        """
+        self._release_chunk_mask()
+        for name in ("gathered_k", "gathered_v", "query_position_table", "key_positions"):
+            tensor = getattr(self, name)
+            if tensor is not None:
+                tensor.deallocate(True)
+                setattr(self, name, None)
+
     def __call__(self, q, kv_cache, *, slot_idx, layer_idx, actual_start, actual_end):
         self._validate_call(
             q,
@@ -329,7 +422,7 @@ class FullCausalAttention:
             batch_index=batch_index,
             logical_n=logical_n,
         )
-        mask, query_valid = self._build_mask(
+        mask, query_valid = self._chunk_mask(
             actual_start=actual_start,
             actual_end=actual_end,
             logical_n=logical_n,
@@ -347,7 +440,8 @@ class FullCausalAttention:
         )
         masked_output = ttnn.multiply(output, query_valid)
         output.deallocate(True)
-        for tensor in (natural_k, natural_v, mask, query_valid):
+        # mask/query_valid stay alive: they belong to the chunk, not to this call.
+        for tensor in (natural_k, natural_v):
             tensor.deallocate(True)
         return masked_output
 

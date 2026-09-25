@@ -92,7 +92,7 @@ jobs:
       image: ${{ inputs.prebuilt-image || inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         TT_METAL_HOME: /work
-        PYTHONPATH: /work
+        PYTHONPATH: ${{ inputs.prebuilt-image != '' && '/work:/work/ttnn:/work/tools' || '/work' }}
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ (contains(matrix.test-group.sku, 'bh_') || contains(matrix.test-group.sku, 'blackhole')) && 'blackhole' || (contains(matrix.test-group.sku, 'wh_') || contains(matrix.test-group.sku, 'wormhole')) && 'wormhole_b0' || '' }}
         LOGURU_LEVEL: INFO
@@ -178,6 +178,20 @@ jobs:
             .github/scripts/ccache_log_filter.sh /tmp/ccache.log >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
           fi
+
+      # Coverage: entries that run under the device profiler opt in via
+      # `upload_microbenchmarks: true` and emit CSVs under
+      # /work/generated/profiler/.logs. Distinct from the generic test_reports_
+      # artifact; downstream perf tooling ingests these. Mirrors the
+      # unconditional step in tm-fabric-tests-perf-impl.yaml, gated here because
+      # the sanity bucket is mostly non-profiler entries with nothing to upload.
+      - name: Upload microbenchmark report csvs
+        uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() && matrix.test-group.upload_microbenchmarks == true }}
+        with:
+          prefix: microbenchmark-report-csv-${{ matrix.test-group.name }}
+          path: /work/generated/profiler/.logs
 
       # Coverage: entries that emit fabric BW / latency CSVs opt in via
       # `upload_benchmarks: true`. On main, check for the generated files
