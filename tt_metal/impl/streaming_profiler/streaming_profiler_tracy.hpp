@@ -40,7 +40,7 @@ private:
     struct Lane {
         TracyTTCtx ctx = nullptr;
         uint32_t thread = 0;
-        uint32_t risc = 0;
+        uint32_t processor = 0;
     };
     // Each RISC's timeline row is created and named on first use.
     struct CoreEntry {
@@ -61,8 +61,8 @@ private:
     // A TSC tick as a GPU-context timestamp: nanoseconds from the contexts' origin.
     int64_t timeline_ns(int64_t tsc) const;
     Lane lane(const Core& core);
-    const void* srcloc(std::string_view name, uint32_t color, uint32_t risc);
-    const void* srcloc_slow(std::string_view name, uint32_t color, uint32_t risc);
+    const void* srcloc(std::string_view name, uint32_t color, uint32_t processor);
+    const void* srcloc_slow(std::string_view name, uint32_t color, uint32_t processor);
     void push_zone(const Core& core, std::string_view name, int64_t start_tsc, int64_t end_tsc, uint32_t color);
     void push_marker(
         const Core& core, std::string_view name, int64_t tsc, uint32_t runtime_id, std::span<const uint64_t> values);

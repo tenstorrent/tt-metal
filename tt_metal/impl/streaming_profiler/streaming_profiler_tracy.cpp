@@ -31,11 +31,11 @@ constexpr size_t kSrclocTableInitial = 1024;
 // By physical coordinate: an eth core's logical coordinate can equal a Tensix core's.
 uint64_t lane_key(const api::Core& core) {
     return (static_cast<uint64_t>(core.chip_id) << 32) | ((static_cast<uint64_t>(core.physical.x) & 0xFFFu) << 20) |
-           ((static_cast<uint64_t>(core.physical.y) & 0xFFFu) << 8) | (static_cast<uint64_t>(core.risc) & 0xFFu);
+           ((static_cast<uint64_t>(core.physical.y) & 0xFFFu) << 8) | (static_cast<uint64_t>(core.processor) & 0xFFu);
 }
 
-uint64_t srcloc_key(std::string_view name, uint32_t color, uint32_t risc) {
-    return (static_cast<uint64_t>(name.size()) << 32) | (static_cast<uint64_t>(color) << 3) | risc;
+uint64_t srcloc_key(std::string_view name, uint32_t color, uint32_t processor) {
+    return (static_cast<uint64_t>(name.size()) << 32) | (static_cast<uint64_t>(color) << 3) | processor;
 }
 
 size_t srcloc_hash(const char* name, uint64_t key) {
@@ -45,7 +45,7 @@ size_t srcloc_hash(const char* name, uint64_t key) {
 #if defined(TRACY_ENABLE)
 // Tracy's RiscType has one ERISC. The second takes a value of the 6-bit RISC field that no RiscType uses, which gives
 // its row a thread id of its own.
-constexpr tracy::RiscType kRisc[7] = {
+constexpr tracy::RiscType kTracyRisc[7] = {
     tracy::RiscType::BRISC,
     tracy::RiscType::NCRISC,
     tracy::RiscType::TRISC_0,
@@ -53,7 +53,7 @@ constexpr tracy::RiscType kRisc[7] = {
     tracy::RiscType::TRISC_2,
     tracy::RiscType::ERISC,
     static_cast<tracy::RiscType>(32 + static_cast<uint8_t>(tracy::RiscType::ERISC))};
-constexpr uint32_t kRiscColor[7] = {0xEE9A00u, 0x43CD80u, 0x6CA6CDu, 0x00E5EEu, 0x98F5FFu, 0xCDCD00u, 0xEEEE00u};
+constexpr uint32_t kProcessorColor[7] = {0xEE9A00u, 0x43CD80u, 0x6CA6CDu, 0x00E5EEu, 0x98F5FFu, 0xCDCD00u, 0xEEEE00u};
 #endif
 
 // Tracy's timer at construction; every context's cpuTime is expressed against it. Without Tracy there is no
@@ -142,7 +142,7 @@ TracySink::Lane TracySink::lane(const Core& core) {
         return lane_hit_;
     }
     Lane ln;
-    ln.risc = static_cast<uint32_t>(core.risc);
+    ln.processor = static_cast<uint32_t>(core.processor);
 #if defined(TRACY_ENABLE)
     auto [it, fresh] = cores_.try_emplace(key & ~uint64_t{0xFF});
     CoreEntry& ce = it->second;
@@ -155,39 +155,39 @@ TracySink::Lane TracySink::lane(const Core& core) {
         const std::string name = fmt::format(
             "Device: {}, {}Logical ({},{}) Physical ({},{})",
             core.chip_id,
-            core.risc >= api::Risc::ERISC0 ? "Ethernet " : "",
+            core.processor >= api::Processor::ERISC0 ? "Ethernet " : "",
             core.logical.x,
             core.logical.y,
             core.physical.x,
             core.physical.y);
         TracyTTContextNameLockfree(ce.ctx, name.c_str(), name.size());
     }
-    if ((ce.named & (1u << ln.risc)) == 0) {
+    if ((ce.named & (1u << ln.processor)) == 0) {
         // Same thread-id packing as the marker path (TTDeviceMarker::get_thread_id), so zones and markers share the
         // per-RISC row.
         tracy::TTDeviceMarker tm;
         tm.chip_id = core.chip_id;
         tm.core_x = core.logical.x;
         tm.core_y = core.logical.y;
-        tm.risc = kRisc[ln.risc];
-        ce.thread[ln.risc] = tm.get_thread_id();
-        tracy::SetThreadName(ce.thread[ln.risc], kRiscNames[ln.risc]);
-        ce.named |= static_cast<uint8_t>(1u << ln.risc);
+        tm.risc = kTracyRisc[ln.processor];
+        ce.thread[ln.processor] = tm.get_thread_id();
+        tracy::SetThreadName(ce.thread[ln.processor], kProcessorNames[ln.processor]);
+        ce.named |= static_cast<uint8_t>(1u << ln.processor);
     }
     ln.ctx = ce.ctx;
-    ln.thread = ce.thread[ln.risc];
+    ln.thread = ce.thread[ln.processor];
 #endif
     lane_key_ = key;
     lane_hit_ = ln;
     return ln;
 }
 
-const void* TracySink::srcloc(std::string_view name, uint32_t color, uint32_t risc) {
+const void* TracySink::srcloc(std::string_view name, uint32_t color, uint32_t processor) {
     static constexpr char kUnnamed[] = "";
     if (name.data() == nullptr) {
         name = kUnnamed;  // a null address would read as an empty table slot
     }
-    const uint64_t key = srcloc_key(name, color, risc);
+    const uint64_t key = srcloc_key(name, color, processor);
     const size_t mask = srcloc_table_.size() - 1;
     // Pointer identity, not text: the table is keyed by the name's address (a literal that never moves), so
     // the null-termination this check warns about does not apply.
@@ -198,21 +198,21 @@ const void* TracySink::srcloc(std::string_view name, uint32_t color, uint32_t ri
             return e.srcloc;
         }
         if (e.name == nullptr) {
-            return srcloc_slow(name, color, risc);
+            return srcloc_slow(name, color, processor);
         }
     }
 }
 
 const void* TracySink::srcloc_slow(
-    [[maybe_unused]] std::string_view name, [[maybe_unused]] uint32_t color, [[maybe_unused]] uint32_t risc) {
+    [[maybe_unused]] std::string_view name, [[maybe_unused]] uint32_t color, [[maybe_unused]] uint32_t processor) {
 #if defined(TRACY_ENABLE)
     // Pointer identity again -- see srcloc() above.
     const char* const name_ptr = name.data();  // NOLINT(bugprone-suspicious-stringview-data-usage)
-    const SrclocEntry entry{name_ptr, srcloc_key(name, color, risc), nullptr};
+    const SrclocEntry entry{name_ptr, srcloc_key(name, color, processor), nullptr};
     // Matches getMarkerColor (TracyTTDevice.hpp): explicit colour, then Tomato3 for PROFILER-keyword names, then
     // the per-RISC palette; colour 0 makes the GUI fall back to its own.
     if (color == 0) {
-        color = name.find("PROFILER") != std::string_view::npos ? 0xCD4F39u : kRiscColor[risc];
+        color = name.find("PROFILER") != std::string_view::npos ? 0xCD4F39u : kProcessorColor[processor];
     }
     const std::string skey = fmt::format("{}#{:08x}", name, color);
     auto it = srclocs_.find(skey);
@@ -260,7 +260,7 @@ void TracySink::push_zone(
     const Lane ln = lane(core);
     TracyTTPushZone(
         ln.ctx,
-        static_cast<const tracy::SourceLocationData*>(srcloc(name, color, ln.risc)),
+        static_cast<const tracy::SourceLocationData*>(srcloc(name, color, ln.processor)),
         ln.thread,
         static_cast<uint64_t>(s),
         static_cast<uint64_t>(e));
@@ -280,9 +280,9 @@ void TracySink::push_marker(
     marker.chip_id = core.chip_id;
     marker.core_x = core.logical.x;
     marker.core_y = core.logical.y;
-    marker.risc = kRisc[static_cast<uint32_t>(core.risc)];
+    marker.risc = kTracyRisc[static_cast<uint32_t>(core.processor)];
     // Tracy's fallback color asserts on a RiscType it does not know.
-    marker.color = kRiscColor[static_cast<uint32_t>(core.risc)];
+    marker.color = kProcessorColor[static_cast<uint32_t>(core.processor)];
     marker.timestamp = static_cast<uint64_t>(ts);
     marker.runtime_host_id = runtime_id;
     marker.marker_type = values.empty() ? tracy::TTDeviceMarkerType::EVENT : tracy::TTDeviceMarkerType::DATA;

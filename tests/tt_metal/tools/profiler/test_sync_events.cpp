@@ -27,7 +27,7 @@
 
 using namespace tt;
 using namespace tt::tt_metal;
-using Risc = tt::tt_metal::experimental::streaming_profiler::Risc;
+using Risc = tt::tt_metal::experimental::streaming_profiler::Processor;
 
 constexpr uint32_t DELAY_CYCLES = 10000;
 

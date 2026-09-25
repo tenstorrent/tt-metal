@@ -382,11 +382,13 @@ bool Devices::boot_device(
 
 Devices::Producer& Devices::enroll(
     DeviceCtx& ctx, const CoreCoords& core, CoreType type, uint64_t prof_l1, bool blocking) {
-    using experimental::streaming_profiler::Risc;
+    using experimental::streaming_profiler::Processor;
     // An eth core has two RISCs; its other lanes never carry a record.
-    constexpr std::array<Risc, kNRisc> kTensix = {Risc::BRISC, Risc::NCRISC, Risc::TRISC0, Risc::TRISC1, Risc::TRISC2};
-    constexpr std::array<Risc, kNRisc> kEth = {Risc::ERISC0, Risc::ERISC1, Risc::ERISC1, Risc::ERISC1, Risc::ERISC1};
-    const std::array<Risc, kNRisc>& risc = type == CoreType::ETH ? kEth : kTensix;
+    constexpr std::array<Processor, kNRisc> kTensix = {
+        Processor::BRISC, Processor::NCRISC, Processor::TRISC0, Processor::TRISC1, Processor::TRISC2};
+    constexpr std::array<Processor, kNRisc> kEth = {
+        Processor::ERISC0, Processor::ERISC1, Processor::ERISC1, Processor::ERISC1, Processor::ERISC1};
+    const std::array<Processor, kNRisc>& processor = type == CoreType::ETH ? kEth : kTensix;
     CaptureContext::Device& cap = ctx.out.ctx;
     cap.core_xy.push_back(packed_xy(core.virt));
     for (uint32_t r = 0; r < kNRisc; r++) {
@@ -394,7 +396,7 @@ Devices::Producer& Devices::enroll(
             .logical = core.logical,
             .physical = core.phys,
             .chip_id = static_cast<ChipId>(ctx.chip_id),
-            .risc = risc[r]});
+            .processor = processor[r]});
     }
     ctx.producers.push_back(Producer{core, prof_l1, blocking});
     return ctx.producers.back();

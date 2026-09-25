@@ -68,7 +68,7 @@ ZoneCsvConsumer::Row ZoneCsvConsumer::row_for(const api::Core& core) {
     r.core_y = static_cast<uint16_t>(core.physical.y);
     r.logical_x = static_cast<uint16_t>(core.logical.x);
     r.logical_y = static_cast<uint16_t>(core.logical.y);
-    r.risc = static_cast<uint8_t>(core.risc);
+    r.processor = static_cast<uint8_t>(core.processor);
     return r;
 }
 
@@ -160,7 +160,7 @@ void ZoneCsvConsumer::write_csv() {
             r.chip,
             r.core_x,
             r.core_y,
-            r.risc < kRiscNames.size() ? kRiscNames[r.risc] : "UNKNOWN",
+            r.processor < kProcessorNames.size() ? kProcessorNames[r.processor] : "UNKNOWN",
             r.timer_id,
             static_cast<unsigned long long>(r.timestamp),
             static_cast<unsigned long long>(r.data),

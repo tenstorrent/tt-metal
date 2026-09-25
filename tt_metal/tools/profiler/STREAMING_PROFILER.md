@@ -33,7 +33,7 @@ auto h = RegisterCallback("zone-sink", [](const Batch<RecordType::Zones>& b) {
         fmt::print("{}: {} ns on chip {} core ({},{}) {} (op {})\n",
             z.site().name,               // "compute"
             z.duration().count(), z.core().chip_id, z.core().logical.x, z.core().logical.y,
-            static_cast<int>(z.core().risc), z.runtime_id());
+            static_cast<int>(z.core().processor), z.runtime_id());
     }
 });
 // later: UnregisterCallback(h);

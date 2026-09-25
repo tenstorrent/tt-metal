@@ -109,7 +109,7 @@ int main() {
                     .logical = ec,
                     .physical = ec,
                     .chip_id = static_cast<uint32_t>(c),
-                    .risc = static_cast<api::Risc>(r)});
+                    .processor = static_cast<api::Processor>(r)});
             }
             d.core_xy.push_back(0);
         }

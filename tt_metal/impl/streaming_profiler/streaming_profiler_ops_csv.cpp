@@ -25,7 +25,7 @@ void OpsCsvConsumer::operator()(const Batch& batch) {
             continue;
         }
         const api::Core c = z.core();
-        const uint32_t risc = static_cast<uint32_t>(c.risc);
+        const uint32_t risc = static_cast<uint32_t>(c.processor);
         const uint32_t core_key = (static_cast<uint32_t>(c.logical.y) << 16) | static_cast<uint32_t>(c.logical.x);
         // The wrapper zone never self-nests, so the k-th one on a lane for a prog is execution k.
         uint32_t& completed = pair_count_[{c.chip_id, core_key, risc, z.runtime_id()}];

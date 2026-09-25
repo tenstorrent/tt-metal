@@ -40,7 +40,8 @@ class Service;
 
 namespace tt::tt_metal::experimental::streaming_profiler {
 
-enum class Risc : uint8_t { BRISC = 0, NCRISC = 1, TRISC0 = 2, TRISC1 = 3, TRISC2 = 4, ERISC0 = 5, ERISC1 = 6 };
+/** @brief The processor on a core that emitted a record. */
+enum class Processor : uint8_t { BRISC = 0, NCRISC = 1, TRISC0 = 2, TRISC1 = 3, TRISC2 = 4, ERISC0 = 5, ERISC1 = 6 };
 
 struct SourceLocation {
     std::string_view file;  // Valid for the lifetime of the process.
@@ -56,14 +57,14 @@ struct MarkerSite {
 /**
  * @brief The core a record came from.
  *
- * `logical` is the coordinate a program addresses it with, in the Ethernet cores' own logical space when `risc` is
+ * `logical` is the coordinate a program addresses it with, in the Ethernet cores' own logical space when `processor` is
  * ERISC0 or ERISC1; `physical` is its NoC 0 position on the die.
  */
 struct Core {
     CoreCoord logical;
     CoreCoord physical;
     ChipId chip_id = 0;
-    Risc risc = Risc::BRISC;
+    Processor processor = Processor::BRISC;
 };
 
 /** @brief Site name of a stall zone. */
@@ -172,7 +173,7 @@ public:
             .logical = CoreCoord(logical_x_, logical_y_),
             .physical = CoreCoord(physical_x_, physical_y_),
             .chip_id = chip_id_,
-            .risc = static_cast<Risc>(risc_)};
+            .processor = static_cast<Processor>(processor_)};
     }
     /** @brief Host runtime ID of the program. */
     uint32_t runtime_id() const { return runtime_id_; }
@@ -188,7 +189,7 @@ protected:
     uint32_t runtime_id_;
     uint16_t logical_x_, logical_y_, physical_x_, physical_y_;
     uint16_t chip_id_;
-    uint8_t risc_;
+    uint8_t processor_;
     uint32_t reserved_;
     // The record's instant (a zone's start) and a zone's end on host_clock, written by the service when the batch is
     // released to its consumer. Until then host_time_ holds the lane's tile offset, which takes its ticks into the

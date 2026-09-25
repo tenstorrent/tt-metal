@@ -342,7 +342,7 @@ struct StackWatch {
             if (d.site().name != "STACK-FREE" || d.payload().empty()) {
                 continue;
             }
-            const size_t r = static_cast<size_t>(d.core().risc);
+            const size_t r = static_cast<size_t>(d.core().processor);
             if (r < min_free.size()) {
                 const uint64_t v = d.payload().front();
                 const uint64_t free = v & 0xFFFFFFFFu, painted = v >> 32;
@@ -354,7 +354,7 @@ struct StackWatch {
         }
         for (const api::Event& e : b.events()) {
             if (e.site().name == "STACK-OVERFLOW") {
-                const size_t r = static_cast<size_t>(e.core().risc);
+                const size_t r = static_cast<size_t>(e.core().processor);
                 if (r < overflows.size()) {
                     overflows[r]++;
                 }

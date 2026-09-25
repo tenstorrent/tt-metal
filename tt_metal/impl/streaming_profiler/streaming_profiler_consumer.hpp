@@ -31,8 +31,8 @@
 namespace tt::tt_metal::streaming_profiler {
 
 using ConsumerHandle = uint64_t;
-// Indexed by Core::risc; the order is tracy::RiscType's.
-inline constexpr std::array<const char*, 7> kRiscNames = {
+// Indexed by Core::processor.
+inline constexpr std::array<const char*, 7> kProcessorNames = {
     "BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2", "ERISC_0", "ERISC_1"};
 
 // Immutable once the receiver starts. Zone names are not here: they arrive per ELF as binaries JIT-load, so
@@ -66,7 +66,7 @@ struct CaptureContext {
 };
 
 // What the decoder writes into every record of a lane besides the packet's own words (Record's coordinate, chip and
-// RISC fields, and its host_time_ slot), in the record's byte layout. `offset` takes the lane's ticks into the
+// processor fields, and its host_time_ slot), in the record's byte layout. `offset` takes the lane's ticks into the
 // pusher's wall domain (its core's CaptureContext::Device::tile_offset); the service reads it from the slot at release
 // and writes the record's host time over it.
 inline profiler::SpscRecConsts record_consts(const experimental::streaming_profiler::Core& core, int64_t offset) {
@@ -76,7 +76,7 @@ inline profiler::SpscRecConsts record_consts(const experimental::streaming_profi
              static_cast<uint32_t>(core.physical.x & 0xFFFFu) |
                  (static_cast<uint32_t>(core.physical.y & 0xFFFFu) << 16)},
         .tail = {
-            (core.chip_id & 0xFFFFu) | (static_cast<uint32_t>(core.risc) << 16),
+            (core.chip_id & 0xFFFFu) | (static_cast<uint32_t>(core.processor) << 16),
             0u,
             static_cast<uint32_t>(static_cast<uint64_t>(offset)),
             static_cast<uint32_t>(static_cast<uint64_t>(offset) >> 32)}};
