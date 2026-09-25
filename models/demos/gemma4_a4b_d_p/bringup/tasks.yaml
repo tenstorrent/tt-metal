@@ -94,7 +94,7 @@ tasks:
   device: true
 - id: PL.0
   title: 'Ledger: add the component, swap, ladder, contract and perf tasks from the block graphs'
-  step: plan
+  step: ledger
   deps:
   - R.3
   gate:
@@ -125,6 +125,7 @@ tasks:
   - models/demos/gemma4_a4b_d_p/bringup/components.yaml
   - models/demos/gemma4_a4b_d_p/bringup/approvals.yaml
   - models/demos/gemma4_a4b_d_p/bringup/results/plan_memory.json
+  approval: plan
 - id: C.sliding.attn_norm
   title: sliding attn_norm (norm) on device, layer 0
   step: implement
@@ -546,7 +547,10 @@ tasks:
   tests:
   - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_experts.py
   freeze_extra: *id002
-  paths: *id003
+  paths:
+  - models/demos/gemma4_a4b_d_p/tt
+  - models/demos/gemma4_a4b_d_p/bringup/hooks.py
+  - ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn
   brief:
     block_type: sliding
     step: experts
@@ -1210,7 +1214,10 @@ tasks:
   tests:
   - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_experts.py
   freeze_extra: *id002
-  paths: *id003
+  paths:
+  - models/demos/gemma4_a4b_d_p/tt
+  - models/demos/gemma4_a4b_d_p/bringup/hooks.py
+  - ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn
   brief:
     block_type: global
     step: experts
