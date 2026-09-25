@@ -33,11 +33,11 @@ from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....pipelines.minimax_h3.packing import (
     MINIMAX_H3_FPS,
-    align_num_frames,
     audio_latent_num_frames,
     resolve_canvas_size,
     video_latent_num_frames,
 )
+from ....pipelines.minimax_h3.policy import align_num_frames
 from ....utils.check import assert_quality
 from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, from_torch, local_device_to_torch
 from ....utils.test import skip_if_unsupported_num_links
