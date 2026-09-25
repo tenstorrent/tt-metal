@@ -49,7 +49,7 @@ def freeze_task(spec: Spec, ledger: Ledger, tid: str, files: list[str] | None = 
     the task's ``frozen`` block, and the files and the ledger are committed.
     """
     task = ledger.task(tid)
-    files = files or task.get("tests") or []
+    files = files or list(task.get("tests") or [])
     if not files:
         raise FreezeError(f"{tid}: nothing to freeze (no 'tests' in the task and no files given)")
     format_paths(spec.repo, files)
@@ -65,7 +65,8 @@ def freeze_task(spec: Spec, ledger: Ledger, tid: str, files: list[str] | None = 
             raise FreezeError(
                 f"{tid}: test passes with a zero stub, so it cannot catch a wrong module:\n{stub.summary()}"
             )
-    record["files"] = F.hash_paths(spec.repo, files)
+    # Pin the goldens the test reads too (their manifest carries the content hash): a regenerated golden fails the gate.
+    record["files"] = F.hash_paths(spec.repo, files + list(task.get("freeze_extra") or []))
     ledger.update_task_def(tid, frozen=record)
     if commit:
         git_commit(
