@@ -172,8 +172,6 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interlea
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    IDevice* device = input_tensor.device();
-    const tt::ARCH arch = device->arch();
 
     // Tensor parameters: the Q input, the optional separate KV input, and the three outputs.  The kernels
     // reach them through TensorAccessor(tensor::<name>); the base addresses ride the bindings.
@@ -230,7 +228,7 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interlea
                 {"seq_tiles", q_out_h_tiles},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_blocks", "in0_tensor_tile_id", "in1_tensor_tile_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
     // TODO: Q, K, V doesn't necessarily need to be the same output mem config
     KernelSpec writer{
@@ -277,7 +275,7 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interlea
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"num_blocks", "q_out_h_dim", "q_out_tensor_tile_id", "k_out_tensor_tile_id", "v_out_tensor_tile_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
     if (read_from_input_tensor_kv) {
         reader.tensor_bindings.push_back(TensorBinding{
@@ -317,7 +315,7 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interlea
         // mantissa). Mirrors the per-dtype promotion in eltwise unary/binary primitives.
         const bool fp32_dest_acc_en = input_tensor.dtype() == tt_metal::DataType::FLOAT32;
 
-        ComputeGen1Config compute_hw{.enable_32_bit_dest = fp32_dest_acc_en};
+        ComputeHardwareConfig compute_hw{.enable_32_bit_dest = fp32_dest_acc_en};
         if (fp32_dest_acc_en) {
             // The legacy descriptor left unpack_to_dest_mode empty (unpack to SrcA/B).  With a 32-bit dest
             // and a Float32 input buffer the mode has to be stated explicitly; this is the same mode.
@@ -664,9 +662,6 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Sharded:
     const bool read_from_input_tensor_kv = input_tensor_kv.has_value();
     auto& output = tensor_return_value;
 
-    IDevice* device = input_tensor.device();
-    const tt::ARCH arch = device->arch();
-
     tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     uint32_t single_tile_size = tt::tile_size(data_format);
@@ -769,8 +764,8 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Sharded:
                       "start_q_y",
                       "q_offset",
                       "num_x"}},
-            .hw_config = is_reader_instance ? ttnn::create_reader_datamovement_config(arch)
-                                            : ttnn::create_writer_datamovement_config(arch),
+            .hw_config = is_reader_instance ? ttnn::create_reader_datamovement_config()
+                                            : ttnn::create_writer_datamovement_config(),
             .advanced_options = {.num_runtime_varargs = num_varargs},
         };
         if (reads_kv_heads) {

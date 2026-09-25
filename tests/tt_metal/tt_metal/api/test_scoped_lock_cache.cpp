@@ -136,7 +136,7 @@ std::vector<uint32_t> run_dfb_scoped_lock_cache_test(distributed::MeshDevice& me
         .num_threads = static_cast<uint8_t>(p.num_producers),
         .dfb_bindings = {experimental::ProducerOf(DFB_NAME, "out")},
         .runtime_arg_schema = {.runtime_arg_names = rta_names},
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
     experimental::KernelSpec consumer_spec{
         .unique_id = CONSUMER,
@@ -149,7 +149,7 @@ std::vector<uint32_t> run_dfb_scoped_lock_cache_test(distributed::MeshDevice& me
             .access_pattern = consumer_pattern,
         }},
         .runtime_arg_schema = {.runtime_arg_names = rta_names},
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
 
     std::vector<experimental::SemaphoreSpec> semaphores;
@@ -480,7 +480,7 @@ std::vector<uint32_t> run_scoped_lock_cache_test(distributed::MeshDevice& mesh_d
         .num_threads = 1,
         .runtime_arg_schema =
             {.runtime_arg_names = {"mode", "region_base", "result_addr", "lock_off_lines", "lock_n_lines"}},
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
     kernel.compiler_options.defines = {{scoped_lock_cache_abstraction_define(p.abstraction), "1"}};
 

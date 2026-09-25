@@ -2576,7 +2576,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_UnpackToDestModePlacedAtDfbIdSlot) {
 // ============================================================================
 // Compute-config translation stability (defaults + inversion/enum)
 // ============================================================================
-// These tests pin the public ComputeGen{1,2}Config -> internal
+// These tests pin the public ComputeHardwareConfig -> internal
 // ComputeConfig / QuasarComputeConfig translation at the boundary where the
 // field rename is absorbed (MakeGen1ComputeConfig / MakeGen2ComputeConfig).
 //

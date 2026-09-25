@@ -239,7 +239,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreBlockInter
                          "sub_block_width_size",
                          "single_sub_block_size_row_arg"},
                 },
-            .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+            .hw_config = ttnn::create_reader_datamovement_config(),
         };
     };
 
@@ -266,7 +266,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreBlockInter
                 {
                     .runtime_arg_names = {"start_id", "single_block_size_row_arg", "single_block_size_col_arg"},
                 },
-            .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+            .hw_config = ttnn::create_writer_datamovement_config(),
         };
     };
 
@@ -304,7 +304,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreBlockInter
         // unpack_to_dest_mode[input_index]=UnpackToDestFp32 set when fp32 accumulation is on. Marking
         // only the bound set's input keeps the validator from rejecting an entry for a DFB the kernel
         // does not bind (the other set's input, which may not exist on any core).
-        ComputeGen1Config compute_cfg{.enable_32_bit_dest = fp32_llk_acc};
+        ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_llk_acc};
         if (fp32_llk_acc) {
             compute_cfg.unpack_modes.insert({in_dfb_of(set), UnpackMode::UnpackToDest});
         }

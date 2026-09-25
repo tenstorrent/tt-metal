@@ -281,9 +281,9 @@ static std::string int_to_hex(int value) {
 static Program make_writer_program(distributed::MeshDevice& mesh_device, const ConfigRegPrintTestConfig& config) {
     experimental::ComputeHardwareConfig hw_config;
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        hw_config = experimental::ComputeGen2Config{};
+        hw_config = experimental::ComputeHardwareConfig{};
     } else {
-        hw_config = experimental::ComputeGen1Config{};
+        hw_config = experimental::ComputeHardwareConfig{};
     }
 
     const experimental::KernelSpecName kKernel{"config_reg_writer"};

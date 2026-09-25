@@ -16,7 +16,7 @@ enum class A1Transform { Identity, Relu };
 
 static void run_a1_pipeline(distributed::MeshDevice& mesh_device, A1Transform transform) {
     if (mesh_device.arch() != ARCH::QUASAR) {
-        GTEST_SKIP() << "M2 path is Quasar-only (Gen2Config)";
+        GTEST_SKIP() << "M2 path is Quasar-only";
     }
 
     constexpr uint32_t entry_size = 2 * 32 * 32;  // bf16 tile = 2048 B
@@ -1040,7 +1040,7 @@ TEST_F(UnitMeshFixture, DMTest1xDFB_RingPressure_1Sx4S_2_0) {
 static void run_a1_threaded_pipeline(
     distributed::MeshDevice& mesh_device, uint32_t r, uint32_t c, uint32_t w, uint32_t total_tiles) {
     if (mesh_device.arch() != ARCH::QUASAR) {
-        GTEST_SKIP() << "M2 path is Quasar-only (Gen2Config)";
+        GTEST_SKIP() << "M2 path is Quasar-only";
     }
     ASSERT_EQ(total_tiles % r, 0u);
     ASSERT_EQ(total_tiles % c, 0u);

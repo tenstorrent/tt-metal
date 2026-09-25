@@ -35,11 +35,10 @@ using tt::tt_metal::MeshTensor;
 using tt::tt_metal::KernelBuildOptLevel;
 using tt::tt_metal::experimental::AddRuntimeArgsForNode;
 using tt::tt_metal::experimental::DataflowBufferSpec;
-using tt::tt_metal::experimental::DataMovementGen1Config;
+using tt::tt_metal::experimental::DataMovementHardwareConfig;
 using tt::tt_metal::experimental::DFBBinding;
 using tt::tt_metal::experimental::DFBEndpointType;
 using tt::tt_metal::experimental::DFBSpecName;
-using tt::tt_metal::experimental::double_buffer_dest;
 using tt::tt_metal::experimental::Group;
 using tt::tt_metal::experimental::KernelRunArgs;
 using tt::tt_metal::experimental::KernelSpec;
@@ -52,7 +51,6 @@ using tt::tt_metal::experimental::SemaphoreSpecName;
 using tt::tt_metal::experimental::TensorBinding;
 using tt::tt_metal::experimental::TensorParameter;
 using tt::tt_metal::experimental::TensorParamName;
-using tt::tt_metal::experimental::unpack_modes;
 using tt::tt_metal::experimental::WorkUnitSpec;
 
 namespace ttnn::prim {
@@ -3752,10 +3750,20 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     ////////////////////////////////////////////////////////////////////////////
     //                      Kernels
     ////////////////////////////////////////////////////////////////////////////
-    const auto in0_sender_hw_config =
-        DataMovementGen1Config{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc};
-    const auto in1_sender_hw_config =
-        DataMovementGen1Config{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc};
+    const auto in0_sender_hw_config = DataMovementHardwareConfig{
+        .config_1xx =
+            DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = in0_noc,
+            },
+    };
+    const auto in1_sender_hw_config = DataMovementHardwareConfig{
+        .config_1xx =
+            DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = in1_noc,
+            },
+    };
 
     Group<KernelSpec> kernels;
 
@@ -4074,12 +4082,12 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     {
         // The op resolves a TTNN ComputeKernelConfig, so translate that rather than building a Metal
         // config by hand.
-        auto compute_hw = ttnn::to_compute_hardware_config(device.arch(), compute_kernel_config);
+        auto compute_hw = ttnn::to_compute_hardware_config(compute_kernel_config);
         // The legacy factory resolves dst_full_sync_en but never passes it to either descriptor
         // builder, so the descriptor default applied and this op has always ignored the knob. The
         // TTNN helper reads the resolved config and would hand the caller's value back, which would
         // change behaviour, so pin the legacy-default result. Preserved deliberately, not a fix.
-        double_buffer_dest(compute_hw) = true;
+        compute_hw.double_buffer_dest = true;
 
         // When accumulating in fp32 with the K reduction split across blocks, the partials buffer
         // holds Float32 and is reloaded into DEST between blocks. Unless the reload's view is marked
@@ -4102,7 +4110,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
                 if (fmt != tt::DataFormat::Float32) {
                     return;
                 }
-                unpack_modes(compute_hw).emplace(
+                compute_hw.unpack_modes.emplace(
                     name,
                     (mark && name == marked) ? tt::tt_metal::UnpackMode::UnpackToDest
                                              : tt::tt_metal::UnpackMode::UnpackToSrc);
@@ -4923,10 +4931,20 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
     ////////////////////////////////////////////////////////////////////////////
     //                      Kernels
     ////////////////////////////////////////////////////////////////////////////
-    const auto in0_sender_hw_config =
-        DataMovementGen1Config{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc};
-    const auto in1_writer_hw_config =
-        DataMovementGen1Config{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc};
+    const auto in0_sender_hw_config = DataMovementHardwareConfig{
+        .config_1xx =
+            DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = in0_noc,
+            },
+    };
+    const auto in1_writer_hw_config = DataMovementHardwareConfig{
+        .config_1xx =
+            DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = in1_noc,
+            },
+    };
 
     Group<KernelSpec> kernels;
 
@@ -5206,12 +5224,12 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
 
     // ---- compute ----------------------------------------------------------
     {
-        auto compute_hw = ttnn::to_compute_hardware_config(device.arch(), compute_kernel_config);
+        auto compute_hw = ttnn::to_compute_hardware_config(compute_kernel_config);
         // The legacy factory resolves dst_full_sync_en but never passes it to either descriptor
         // builder, so the descriptor default applied and this op has always ignored the knob. Pin the
         // legacy-default result rather than letting the TTNN helper hand the caller's value back.
         // Preserved deliberately, not a fix.
-        double_buffer_dest(compute_hw) = true;
+        compute_hw.double_buffer_dest = true;
 
         // See create_program_mcast_in0_artifacts for why the fp32 partials reload needs UnpackToDest,
         // why the flag goes on the alias when bias is fused, and why every Float32 buffer this kernel
@@ -5223,7 +5241,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
                 if (fmt != tt::DataFormat::Float32) {
                     return;
                 }
-                unpack_modes(compute_hw).emplace(
+                compute_hw.unpack_modes.emplace(
                     name,
                     (mark && name == marked) ? tt::tt_metal::UnpackMode::UnpackToDest
                                              : tt::tt_metal::UnpackMode::UnpackToSrc);
