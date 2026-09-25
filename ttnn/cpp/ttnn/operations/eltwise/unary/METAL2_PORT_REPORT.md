@@ -77,6 +77,8 @@ Both became tensor bindings. None became RTA values.
 ### Open items
 
 - **Relaxations declared, per the analysis doc:** `{.dynamic_tensor_shape = true, .relax_logical_rank = true}` on both `input` and `output`, unconditionally. `match_page_size` and `match_padded_shape_only` are not set.
+  - `match_page_size` is declined because **the key does not pin the output slot's page size in full generality** — the input's page size is pinned (`padded_shape` is hashed on the `ROW_MAJOR` branch), but the output's is the alignment-padded logical width, and padded → logical is not injective once the input alignment is non-empty. See relaxation doc §2; this replaces the earlier "no shipped factory sets it" reasoning, which was precedent, not a reason.
+  - Declining it has a cost, recorded because no test can see it: it induces `dyn_page`, moving the accessor's `aligned_page_size` from a compile-time constant to a per-dispatch CRTA re-read from `buffer->aligned_page_size()`. Legacy kept the page size compile-time and made only the shape a runtime arg.
   - At analysis time this was the first shipped non-experimental factory to declare any `TensorSpecRelaxations`, and the first anywhere to set `relax_logical_rank`. No validation throw was seen.
   - That includes `test_unary_sharded_input_on_interleaved_path_cache_reuse`, which is regime row 5 of the doc: a sharded buffer on the live-accessor path.
 - All six of the relaxation doc's validity checks still hold on the post-port tree, with check 2 now reading the spec source. Check 6's "override re-applies the whole split" holds via `make_run_args`.
@@ -95,7 +97,11 @@ Both became tensor bindings. None became RTA values.
      - it is recorded here.
    - Alternatively, rule it out explicitly so the next such op stops at audit.
 2. **Recipe maintainers — validation forcing done without the `tt_metal/impl` scaffolding.** *(Tag: recipe / environment.)* See Friction, first entry. If the markers are required evidence, a maintainer or the invoker needs to apply the force in a session where the edit is permitted, then re-run.
-3. **Framework (Metal 2.0 host API): no gaps hit.** The first production use of `relax_logical_rank`, and relaxations on sharded and borrowed `TensorParameter`s, all validated without incident.
+3. **Framework (Metal 2.0 host API) — one hazard raised, no gaps hit in this port's own configurations.** The first production use of `relax_logical_rank`, and relaxations on sharded and borrowed `TensorParameter`s, all validated without incident.
+   - **Hazard: on a sharded slot, `dynamic_tensor_shape` assembles the accessor from two resolutions with only a rank check between them.** The static geometry (shard shape in pages, bank count, bank coordinates) is resolved once from the **spec** at `ProgramSpec` build time; the dynamic shape-in-pages words are emitted per dispatch from the **buffer** (`program_run_args.cpp`, `EmitBindingCrtaValues`). A `view` / `reshape` keeps its parent buffer's `sharding_args` under a fresh spec, so the two can diverge, and equal rank with different values passes silently. See relaxation doc §4 for the full mechanism.
+   - Not introduced by this port, and not unary-specific: it applies to any op declaring the flag on a sharded tensor. Unary is the first shipped factory to declare a relaxation, so it is the first op exposed.
+   - It needs only a cache **miss**, not two dispatches: on a miss the spec-side match compares the dispatched spec against itself, so nothing checks the buffer-side words.
+   - The relaxations header states the opposite guarantee ("REJECTED rather than silently mis-addressed"). That rejection is `tensorspecs_match_with_relaxation` over `shard_distribution_of`, which is spec-derived, and so does not cover a spec/buffer mix. **Owner decision: either extend the check to compare values, or narrow the header's guarantee.**
 4. **Kernel-lib / LLK:** none. `dfb::name` passed straight into `compute_kernel_hw_startup`, `copy_init`, `copy_tile`, `pack_tile`, and `compute_kernel_lib::input` / `output` in NTTP position. It compiled first time.
 5. **Removed pybind surface:** none.
 6. **Owner of `TensorSpec` / `TensorLayout` (tt_metal tensor), or the eltwise owner, to decide — hash cost of the sanctioned swap.** *(Tag: perf.)*
@@ -140,11 +146,11 @@ Both became tensor bindings. None became RTA values.
     - The pointer comment landed at the top of the legacy original. That comment is the only change to the original.
     - The fork's interface is `dfb::in`, `dfb::out`, and named RTA `num_tiles`. It expands `SFPU_OP_CHAIN_0` if defined.
     - It is covered by the `eltwise/unary/CMakeLists.txt` `GLOB_RECURSE` install rule, verified in `build_Release/ttnn/cpp/ttnn/operations/eltwise/unary/cmake_install.cmake`. 11 of 11 bound kernel sources have install rules.
-    - **Remaining legacy consumers (sunset list):**
+    - **Remaining legacy consumers (sunset list) — four binders plus one text reader:**
       - `examples/example` `SingleCore` (`single_core_program_factory.cpp:91`) and `MultiCore` (`multi_core_program_factory.cpp:89`)
       - `examples/example_multiple_return` `SingleCore` (`:80`)
-      - `tests/ttnn/unit_tests/gtests/test_generic_op.cpp:246`
-      - `tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential.py:1436`
+      - `tests/ttnn/unit_tests/gtests/test_generic_op.cpp:246` — a binder, not an `examples/` one
+      - `tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential.py:1436` — reads the file as text rather than binding it
   - The other 10 bound kernels were converted in place; they have no other binder.
 - **Carried-as-is plumbing, for a later cleanup pass (not port work):**
   - The unread compute CTA `input_data_format` (legacy trailing `cb_data_format`, `unary_program_factory.cpp` compute CTAs). No kernel reads it, and it only perturbs the kernel build key.
@@ -165,7 +171,7 @@ Both became tensor bindings. None became RTA values.
   - Sharded output specs drop input over-padding.
   - Only `op_chain[0]` selects the compute kernel, so the dedicated kernels would silently skip later chain ops.
 - **Test coverage notes.**
-  - No test exercises a TILE-sharded `view` / `reshape` input across two dispatches. That is the one decoupler between the Buffer and spec geometry sources (relaxation doc §2), and so the one input where the sanctioned hash swap could change cache splitting.
+  - No test exercises a TILE-sharded `view` / `reshape` input. That is the one decoupler between the Buffer and spec geometry sources (relaxation doc §2), and so the one input where the sanctioned hash swap could change cache splitting. It is also the input that would exercise the framework hazard in handoff 3 — but that one is a framework-side check to fix, not a test for this op to add, since a divergence there is mis-addressed rather than rejected however the op is keyed.
   - Regime row 5 of the relaxation doc (a sharded buffer on the accessor path) is covered only by `test_unary_sharded_input_on_interleaved_path_cache_reuse`.
 - **Quasar-uplift debt added:** none. There is no DM self-loop. `tmp0` is a compute self-loop, which is legal on Gen2. No token-form metadata sites were used.
 - **Hardware config, legacy → port (checked field by field):**
@@ -174,7 +180,9 @@ Both became tensor bindings. None became RTA values.
   |---|---|---|
   | reader | `ReaderConfigDescriptor{}` (RISCV_1 / NOC_0 / dedicated), O2 | `create_reader_datamovement_config(arch)`, O2 default |
   | writer | `WriterConfigDescriptor{}` (RISCV_0 / NOC_1 / dedicated), O2 | `create_writer_datamovement_config(arch)`, O2 default |
-  | compute | HiFi4, `math_approx_mode=false`, `fp32_dest_acc_en`, `bfp8_pack_precise`, `dst_full_sync_en` default false, `unpack_to_dest_mode[c_0,c_1] = Fp32 iff preserve`, O3 (resolved) | `fpu_math_fidelity=HiFi4`, `sfpu_precision_mode=Precise`, `enable_32_bit_dest=fp32_dest_acc_en`, `bfp_pack_precision_mode=bfp8_pack_precise?Precise:Approximate`, `double_buffer_dest=true` (default), `unpack_modes{in, tmp0 iff LOGIT} = UnpackToDest iff preserve, else explicit UnpackToSrc for a Float32 DFB under 32-bit Dest`, `opt_level=O3` explicit |
+  | compute | HiFi4, `math_approx_mode=false`, `fp32_dest_acc_en`, `bfp8_pack_precise`, `dst_full_sync_en` default false, `unpack_to_dest_mode[c_0,c_1] = Fp32 iff preserve`, O3 (resolved) | `fpu_math_fidelity=HiFi4`, `sfpu_precision_mode=Precise`, `enable_32_bit_dest=fp32_dest_acc_en`, `bfp_pack_precision_mode=bfp8_pack_precise?Precise:Approximate`, `double_buffer_dest=true` (default), `unpack_modes{in, tmp0 iff LOGIT} = UnpackToDest iff preserve && fp32_dest_acc_en, else explicit UnpackToSrc for a Float32 DFB under 32-bit Dest`, `opt_level=O3` explicit |
+
+  The compute row has the port's only condition legacy did not have: `UnpackToDest` also requires `fp32_dest_acc_en`. It cannot change behaviour, because `ttnn::unary` (`unary.cpp`) derives `fp32_dest_acc_en = preserve_fp32_precision || ...` and is `prim::unary`'s only caller, so `preserve ⟹ fp32_dest_acc_en` holds on every reachable path. The conjunction is there because Metal 2.0 validates the combination legacy ignored: `UnpackToDest` into a 16-bit Dest is a `TT_FATAL` for a 32-bit buffer format on any generation, and on Gen1 (Wormhole and Blackhole both) for a narrower one. Written as `iff preserve` alone, a future caller that breaks the derivation would crash; written as the conjunction, it degrades to legacy's silent `UnpackToSrc`.
 - **Self-audit summary** (op dir denominator: 38 `.cpp` / `.hpp` files):
 
   | check | result |

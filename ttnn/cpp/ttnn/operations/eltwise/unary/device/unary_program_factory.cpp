@@ -627,9 +627,13 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
     // Legacy set UnpackToDestFp32 on the input and temporary buffers under preserve_fp32_precision and
     // left them at Default otherwise. Metal 2.0 additionally requires an explicit entry for a consumed
     // Float32 buffer under a 32-bit Dest, where legacy silently defaulted; Default is UnpackToSrc.
+    //
+    // UnpackToDest also requires fp32_dest_acc_en since the validator rejects UnpackToDest into a
+    // 16-bit Dest. ttnn::unary already implies one from the other. A caller that breaks that gets
+    // legacy's silent UnpackToSrc instead of a TT_FATAL.
     ComputeUnpackModes unpack_modes;
     auto set_unpack_mode = [&](const DFBSpecName& dfb, DataFormat df) {
-        if (operation_attributes.preserve_fp32_precision) {
+        if (operation_attributes.preserve_fp32_precision && operation_attributes.fp32_dest_acc_en) {
             unpack_modes.emplace(dfb, UnpackMode::UnpackToDest);
         } else if (operation_attributes.fp32_dest_acc_en && df == DataFormat::Float32) {
             unpack_modes.emplace(dfb, UnpackMode::UnpackToSrc);
