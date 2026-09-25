@@ -93,15 +93,15 @@ class TtEncoderBlock:
         x = self._residual_add(x, out)
 
         # Sublayer 2: group attention (batch-axis) + residual vs original layout
-        x_flip = ttnn.permute(x, (1, 0, 2))
         if diagonal_group_attention:
-            out = self.group_core.forward_diagonal_group(x_flip)
+            x = self._residual_add(x, self.group_core.forward_diagonal_group(x))
         else:
+            x_flip = ttnn.permute(x, (1, 0, 2))
             out = self.group_core(x_flip, group_mask)
-        ttnn.deallocate(x_flip)
-        back = ttnn.permute(out, (1, 0, 2))
-        ttnn.deallocate(out)
-        x = self._residual_add(x, back)
+            ttnn.deallocate(x_flip)
+            back = ttnn.permute(out, (1, 0, 2))
+            ttnn.deallocate(out)
+            x = self._residual_add(x, back)
 
         # Sublayer 3: feedforward (inline) + residual
         n = ttnn.rms_norm(x, epsilon=self.weights.ff_eps, weight=ff_rms)

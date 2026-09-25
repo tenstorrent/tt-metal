@@ -62,14 +62,15 @@ class TtMhaCore:
         self.device = device
         self.weights = weights
         self._tt = self._move_weights_to_device(device, weights)
-        self._diagonal_v_weight = None
+        self._diagonal_vo_weight = None
         if enable_diagonal_v_path:
             import ttnn
 
             inner = weights.num_heads * weights.head_dim
-            v_weight = weights.wqkv[2 * inner : 3 * inner].detach().to(torch.float32).t().contiguous()
-            self._diagonal_v_weight = ttnn.from_torch(
-                v_weight,
+            v_weight = weights.wqkv[2 * inner : 3 * inner].detach().to(torch.float32).t()
+            o_weight = weights.wo.detach().to(torch.float32).t()
+            self._diagonal_vo_weight = ttnn.from_torch(
+                (v_weight @ o_weight).contiguous(),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
@@ -207,18 +208,18 @@ class TtMhaCore:
         """Exact group-attention specialization when every group has size one.
 
         Softmax over one allowed key is one, so Q/K, scores, masking, softmax,
-        head split, and head concat are unnecessary. The context is exactly V.
+        head split, and head concat are unnecessary. The context is exactly V,
+        so the sublayer is ``RMSNorm(x) @ (Wv @ Wo)``: per-token and therefore
+        layout-agnostic, (B,T,d) and (T,B,d) give the same result.
         """
         import ttnn
 
-        if self._diagonal_v_weight is None:
+        if self._diagonal_vo_weight is None:
             raise RuntimeError("diagonal group path was not enabled for this MHA core")
-        _wqkv, wo, rms_w = self._tt
+        _wqkv, _wo, rms_w = self._tt
         x_norm = ttnn.rms_norm(x, epsilon=self.weights.eps, weight=rms_w)
-        value = program_configs.linear(x_norm, self._diagonal_v_weight)
+        out = program_configs.linear(x_norm, self._diagonal_vo_weight)
         ttnn.deallocate(x_norm)
-        out = program_configs.linear(value, wo)
-        ttnn.deallocate(value)
         return out
 
     __call__ = forward
