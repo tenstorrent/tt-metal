@@ -47,11 +47,9 @@ using LinkRule = RxStampRule<kLinkTcamRow, kLinkLabel>;
 // 1.3 us holds). The link relation is a line in the refclk domain, so the stamps average to the same offset however
 // they are spread. Every stamp is quantised to the timer's 20 ns
 // tick and a round's mean gains from its frames sitting at different phases of it, so frame j is issued
-// (j * kFramePhaseStep mod 256) / 256 of a tick past its slot, the slots themselves on the refclk: an exact grid over
-// the tick whatever the cadence or AICLK, and the mean's rounding noise falls to ~0.4 ns per round. The pacer lands
-// a frame on a wall cycle, so the grid has as many distinct phases as the tick has cycles, and where that comb sits
-// against the timer's edge would otherwise be fixed for the session; each burst shifts it by a pseudo-random part of
-// a tick, so the comb's origin averages out over the round as its phases do. A frame carries its own egress stamp
+// (j * kFramePhaseStep mod 256) / 256 of an update period past a refclk update: the ERISC sees the refclk move every
+// four ticks, each move on a tick edge, so the comb covers four ticks, hence each tick, exactly in the refclk domain
+// whatever AICLK does, and the mean's rounding noise falls to ~0.4 ns per round. A frame carries its own egress stamp
 // (TxQueue::arm_in_frame), so each side pairs the peer's egress stamp, read from a frame it received, with its own
 // ingress stamp of that frame and averages the pairs (HwRound): a round counts if any frame produced both, the peer's
 // timer ran, and the peer's PTP offset (carried in every frame, to put its stamps in its refclk domain) held for the
@@ -106,9 +104,25 @@ FORCE_INLINE volatile eth_channel_sync_t* pilot(uint32_t base) {
 constexpr uint32_t kTripMask = 0x1FF;
 constexpr uint32_t frame_key(uint32_t round, uint32_t j) { return (round << 9) | (j + 1); }
 static_assert(kTripsPerRound <= kTripMask);
-// Frame j's phase of the stamp tick in wall cycles, c16 being wall cycles per refclk tick times 16.
-FORCE_INLINE uint32_t frame_phase_cycles(uint32_t j, uint32_t c16) {
-    return (((j * kFramePhaseStep) & (kTripsPerRound - 1)) * c16) >> 12;
+// Frame j's place in an update period, in wall cycles, p16 being wall cycles per update times 16.
+FORCE_INLINE uint32_t frame_phase_cycles(uint32_t j, uint32_t p16) {
+    return (((j * kFramePhaseStep) & (kTripsPerRound - 1)) * p16) >> 12;
+}
+// The next refclk update the ERISC sees, from reads back to back: its count and the wall read between the two refclk
+// reads that differ. False if none came within the spins (a dead refclk).
+FORCE_INLINE bool next_update(uint32_t& wall, uint32_t& refclk) {
+    uint32_t prev = rd(kPtpCfrLo);
+    for (uint32_t spin = 0; spin < 1024; spin++) {
+        const uint32_t w = rd(kWallClockLo);
+        const uint32_t r = rd(kPtpCfrLo);
+        if (r != prev) {
+            wall = w;
+            refclk = r;
+            return true;
+        }
+        prev = r;
+    }
+    return false;
 }
 
 // Waits to a wall-clock target with a delay loop calibrated once, so a frame sits at its cycle wherever its wait
@@ -349,69 +363,50 @@ __attribute__((noinline)) inline void finish_burst(const Anchor& at, uint32_t fr
     diag.drop[1] += txq.words_sent() - at.word > 2 * frames;
 }
 
-// The tick grid of an end's bursts, the receiver's echoes being a burst of its own. c16 is wall cycles per refclk
-// tick, x16: the frames' phases of the tick are spun in wall cycles, and a grid scaled by the wrong AICLK covers more
-// or less than the tick, which biases the stamps' rounding by stamp kind. AICLK is a PLL multiple of the refclk's
-// crystal in steps of an eighth (6.25 MHz, measured: every run's slope is on that grid to 1e-9), so a rough ratio
-// between two readings rounds to the exact value; one that rounds badly has a DVFS step inside it and the previous
-// value stands. 1.25 GHz until measured.
+// Each frame's place: a comb phase past the refclk update it waits for, the update period in wall cycles measured
+// from the update the end's previous frame waited for, over the updates between them, so it holds to a fraction of a
+// cycle and follows AICLK with no estimate of it. The comb starts kLeadCycles past the update, so no phase is closer to
+// it than a frame can be issued.
 struct Grid {
-    uint32_t c16 = 0;
-    uint32_t per_c16 = 0;  // 2^32 / c16: send() multiplies where it would divide
-    uint32_t walk = 0;     // the bursts' comb origins, a xorshift state
-    uint32_t origin = 0;   // this burst's comb origin, a wall cycle
+    static constexpr uint32_t kLeadCycles = 64;
+    uint32_t p16 = 0;                         // wall cycles per update, x16
+    uint32_t edge_wall = 0, edge_refclk = 0;  // the last update a frame waited for
     Pacer pacer;
-    void start(uint32_t seed) {
-        c16 = 400;
-        per_c16 = 0xFFFFFFFFu / 400;
+    // The first period from updates ~20 us apart.
+    void start() {
         pacer.calibrate();
-        walk = seed | 1u;
-    }
-    // Readings up to 2^24 wall cycles apart, so the ratio x256 stays in 32 bits.
-    FORCE_INLINE void rate(const Instant& a, const Instant& b) {
-        const uint64_t wall = b.wall() - a.wall();
-        if (a.refclk == 0 || b.refclk <= a.refclk || (wall >> 24) != 0) {
-            return;
+        uint32_t w0 = 0, r0 = 0, w1 = 0, r1 = 0;
+        if (next_update(w0, r0)) {
+            while (rd(kPtpCfrLo) - r0 < 1000u) {
+            }
+            if (next_update(w1, r1)) {
+                p16 = ((w1 - w0) << 4) / ((r1 - r0) / 4u);
+            }
         }
-        const uint32_t q8 = (static_cast<uint32_t>(wall) * 256u) /
-                            static_cast<uint32_t>(b.refclk - a.refclk);  // ratio x256: a grid step is 32
-        const uint32_t snapped = ((q8 + 16u) / 32u) * 32u;
-        if (q8 + 12u >= snapped && q8 <= snapped + 12u && (snapped >> 4) != c16) {
-            c16 = snapped >> 4;
-            per_c16 = 0xFFFFFFFFu / c16;
-        }
+        edge_wall = w1;
+        edge_refclk = r1;
     }
-    // A burst's comb origin, a pseudo-random part of a tick past now. walk's top 16 bits scale into [0, cycles per
-    // tick): one multiply, no division routine in a router's text.
-    FORCE_INLINE void begin() { origin = rd(kWallClockLo) + (((xorshift(walk) >> 16) * (c16 >> 4)) >> 16); }
-    // Trip j under an arming of its own, on the first wall cycle past the arming that is a whole number of ticks from
-    // the burst's origin plus the trip's phase: each frame of a burst goes at a step of its own, and the phases stay
-    // exact however far apart the steps fall. A burst whose steps span 2^26 cycles or more restarts its comb, which
-    // keeps the multiply's tick count within one of the exact one. False if the queue did not take the frame in time;
-    // it is left for a later step.
+    // Wall cycles per refclk tick, x16.
+    uint32_t c16() const { return p16 >> 2; }
+    // Trip j under an arming of its own: false if the queue did not take the frame in time, which leaves it for a
+    // later step. A gap of 2^27 cycles or more since the last update (a pause) keeps the period it had.
     __attribute__((noinline)) bool send(const LinkHeaderRow& header, uint32_t base, uint32_t j, StopDiag& diag) {
         Anchor at;
         if (!arm_burst(header, base, at, diag)) {
             return false;
         }
-        const uint32_t soon = rd(kWallClockLo) + 32;
-        if (soon - origin >= (1u << 26)) {
-            begin();
-        }
-        const uint32_t first = origin + frame_phase_cycles(j, c16);
-        uint32_t target = first;
-        const int32_t ahead = static_cast<int32_t>(soon - first);
-        if (ahead > 0) {
-            // floor(ahead * 16 / c16), or one under it, then the tick or two up to the first slot past soon
-            uint32_t k = static_cast<uint32_t>((static_cast<uint64_t>(ahead) * per_c16) >> 28);
-            for (uint32_t n = 0; n < 3; n++, k++) {
-                target = first + static_cast<uint32_t>((static_cast<uint64_t>(k) * c16) >> 4);
-                if (static_cast<int32_t>(target - soon) >= 0) {
-                    break;
-                }
+        uint32_t w = 0, r = 0;
+        if (next_update(w, r)) {
+            const uint32_t cycles = w - edge_wall, updates = (r - edge_refclk) / 4u;
+            if (updates != 0 && cycles < (1u << 27)) {
+                p16 = (cycles << 4) / updates;
             }
+            edge_wall = w;
+            edge_refclk = r;
+        } else {
+            w = rd(kWallClockLo);
         }
-        pacer.until(target);
+        pacer.until(w + kLeadCycles + frame_phase_cycles(j, p16));
         const bool went = issue(slot(base, j));
         finish_burst(at, went ? 1u : 0u, diag);
         return went;
@@ -491,8 +486,6 @@ private:
 };
 }  // namespace link
 
-constexpr uint32_t kRatioTicks = 1000;  // 20 us before a slot: read jitter of tens of cycles is under a tenth of a step
-
 // Both ends clear the slots before the handshake: a frame that lands before its receiver's start() is then kept, and
 // a burst whose frame was lost would hold the link for good.
 inline void clear_slots(uint32_t base) {
@@ -541,7 +534,7 @@ protected:
         diag_addr = ctl;
         ring.open(l1);
         start_at = read_instant();
-        grid.start(start_at.wall_lo);
+        grid.start();
     }
     // Rewritten at every round's close, so a host that cannot stop this end (a router) still reads the current
     // figures. The PTP offset rides in the timer word: a tick multiple, so its low two bits are free.
@@ -570,10 +563,9 @@ struct SenderLink : EndBase {
     uint32_t burst_ticks = 0;
     // The earliest refclk tick of the next burst, and the bursts issued: a round is kBurstsPerRound of them.
     uint64_t slot_cfr = 0, bursts = 0;
-    // The next slot and its ratio sample as wall cycles, set from the burst's own reading: an idle step then costs
-    // one wall-clock read where the refclk costs two, and nothing a stamp depends on is timed by it.
-    uint32_t slot_wall = 0, pre_wall = 0;
-    Instant pre{};
+    // The next slot as a wall cycle, set from the burst's own reading: an idle step then costs one wall-clock read
+    // where the refclk costs two, and nothing a stamp depends on is timed by it.
+    uint32_t slot_wall = 0;
     // The burst in flight, from trip out_j0: out_sent of its frames issued, their echoes awaited once all are.
     uint32_t out_j0 = 0, out_sent = 0, next_j = 0;
 
@@ -581,13 +573,12 @@ struct SenderLink : EndBase {
         begin(l1, ctl);
         burst_ticks = kPaceTicks / kBurstsPerRound;
         out_sent = kBurstFrames;
-        slot_cfr = start_at.refclk + kRatioTicks;
+        slot_cfr = start_at.refclk;
         schedule(start_at);
     }
     FORCE_INLINE void schedule(const Instant& now) {
         const int64_t ticks = static_cast<int64_t>(slot_cfr - now.refclk);
-        slot_wall = now.wall_lo + ((static_cast<uint32_t>(ticks < 0 ? 0 : ticks) * grid.c16) >> 4);
-        pre_wall = slot_wall - ((kRatioTicks * grid.c16) >> 4);
+        slot_wall = now.wall_lo + ((static_cast<uint32_t>(ticks < 0 ? 0 : ticks) * grid.c16()) >> 4);
     }
     FORCE_INLINE void step() {
         ring.poll();
@@ -597,22 +588,17 @@ struct SenderLink : EndBase {
         }
         const uint32_t w = rd(kWallClockLo);
         if (static_cast<int32_t>(w - slot_wall) < 0) {
-            if (pre.refclk == 0 && static_cast<int32_t>(w - pre_wall) >= 0) {
-                pre = read_instant();
-            }
             return;
         }
         if constexpr (DataCache) {
             invalidate_l1_cache();
         }
         if (rd(diag_addr) != kCtlRun) {
-            // Rounds resume on a fresh slot one ratio window ahead, so the first burst has its sample. A round in
-            // progress closes at the next burst rather than spanning the pause.
+            // A round in progress closes at the next burst rather than spanning the pause.
             bursts -= bursts % kBurstsPerRound;
             const Instant now = read_instant();
-            slot_cfr = now.refclk + kRatioTicks;
+            slot_cfr = now.refclk;
             schedule(now);
-            pre = Instant{};
             return;
         }
         if (started && !echoed()) {
@@ -638,12 +624,10 @@ private:
     // A slot, once all the last burst's echoes are in: its pairs (egress stamps from the echoes themselves, ingress
     // stamps here), the round's records at a round boundary, then the next burst's frames, which the steps after it
     // send. A round is a count of bursts, not of slots: a burst whose steps outlast its slot delays the next, and the
-    // round still holds all its trips, so its phases cover the tick exactly. The next slot is a slot on, or a ratio
-    // window past this burst when that is later.
+    // round still holds all its trips, so its phases cover the tick exactly. The next slot is a slot on, or now when
+    // that is later.
     __attribute__((noinline)) void burst() {
         const Instant now = read_instant();
-        grid.rate(pre, now);
-        pre = Instant{};
         if (started) {
             uint64_t tx[kBurstFrames], rx[kBurstFrames];
             for (uint32_t i = 0; i < kBurstFrames; i++) {
@@ -671,12 +655,11 @@ private:
             s->reserved_2 = round;
             s->bytes_sent = frame_key(round, out_j0 + i);
         }
-        grid.begin();
         out_sent = 0;
         bursts++;
         slot_cfr += burst_ticks;
-        if (static_cast<int64_t>(slot_cfr - now.refclk) < static_cast<int64_t>(kRatioTicks)) {
-            slot_cfr = now.refclk + kRatioTicks;
+        if (static_cast<int64_t>(slot_cfr - now.refclk) < 0) {
+            slot_cfr = now.refclk;
         }
         schedule(now);
         diag.note_hold(rd(kWallClockLo) - now.wall_lo);
@@ -690,7 +673,6 @@ struct ReceiverLink : EndBase {
     // those echoed.
     uint32_t echo_j0 = 0, taken = 0, echoed = 0;
     uint64_t tx[kBurstFrames] = {};
-    Instant last{};
 
     void start(uint32_t l1, uint32_t ctl) { begin(l1, ctl); }
     // Each frame is read and echoed at the step that finds it, the burst's ingress stamps taken with its last frame,
@@ -711,16 +693,12 @@ struct ReceiverLink : EndBase {
 
 private:
     // Frame `taken`: its egress stamp and the offset it carries, then its echo set up in the same slot, carrying its
-    // key back and, once sent, this end's egress stamp. A burst's first frame measures the AICLK ratio since the last
-    // and names the round, the sender's; a new one closes the previous. Its last frame takes the burst's ingress
-    // stamps and pairs them.
+    // key back and, once sent, this end's egress stamp. A burst's first frame names the round, the sender's; a new one
+    // closes the previous. Its last frame takes the burst's ingress stamps and pairs them.
     __attribute__((noinline)) void take() {
         const uint32_t w = rd(kWallClockLo);
         volatile eth_channel_sync_t* s = slot(slot_base, taken);
         if (taken == 0) {
-            const Instant now = read_instant();
-            grid.rate(last, now);
-            last = now;
             if (!started || s->reserved_2 != round) {
                 if (started) {
                     close_round(link::kRoleT0, link::kRoleT1);
@@ -730,7 +708,6 @@ private:
                 rnd.begin();
             }
             echo_j0 = (s->bytes_sent & kTripMask) - 1;
-            grid.begin();
         }
         tx[taken] = rnd.peer_frame(reinterpret_cast<volatile uint32_t*>(s));
         if (taken == kBurstFrames - 1) {
