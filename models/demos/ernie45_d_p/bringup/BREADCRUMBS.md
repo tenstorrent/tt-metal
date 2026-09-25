@@ -125,3 +125,15 @@ Workflow for any agent picking up a step:
   exact exp. This is the next TTFT lever. Not yet measured.
 - Per-phase per-chip data lives in `results/P3.3_profile.json` + `results/P3.3_routing.json`; the dashboard section
   "Where the time goes" renders them (Kimi-artifact style: to-scale timeline, phase list, 1x4 chip grid with per-chip ms).
+
+## P3.4 (2026-09-25): SDPA config A. PASS
+- `ERNIE_SDPA_CFG=A`: HiFi2, fp32_dest_acc_en=False, packer_l1_acc=False, exp_approx_mode=True, q256/k512, full grid
+  (presets and per-knob env overrides in `tt/attention.py:sdpa_settings`; the default is still "base" = HiFi4 + fp32).
+- Why it matters: fp32_dest_acc_en=True disables SDPA's streaming kernel on Blackhole (`sdpa_program_factory.cpp:75`),
+  and since #57180 (2026-09-23) exp_approx_mode=False really runs the accurate exp.
+- 50k->55k chunk: SDPA 1328 -> 203 ms (6.5x); chunk 1570 -> 445 ms (3.5x). SDPA is now 46%, MoE glue 22%, experts 12%.
+- 55k@5k TTFT (warm JIT cache): 10.9 s -> **4.4 s**. Accuracy unchanged in practice: final hidden 0.9965 -> 0.9963,
+  worst KV 0.9926 -> 0.9918, top-1 95.7% (same), top-5 100%.
+- Gotcha: the first-ever run with new SDPA kernels compiles one program per chunk offset (the scalar chunk_start is part of
+  the program), about 1.5 s per chunk. Cold 55k TTFT read 22 s. For serving, switch to `chunk_start_idx_tensor` (the
+  runtime-tensor form, trace-safe) so one program serves every offset.
