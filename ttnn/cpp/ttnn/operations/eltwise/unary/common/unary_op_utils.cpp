@@ -29,6 +29,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::TT_POLY_BACKWARD_SOFTPLUS_BW: return "TT_POLY_BACKWARD_SOFTPLUS_BW_INCLUDE";
         case UnaryOpType::TT_POLY_BACKWARD_LOG_SIGMOID_BW: return "TT_POLY_BACKWARD_LOG_SIGMOID_BW_INCLUDE";
         case UnaryOpType::TT_POLY_BACKWARD_SOFTSIGN_BW: return "TT_POLY_BACKWARD_SOFTSIGN_BW_INCLUDE";
+        case UnaryOpType::TT_POLY_BACKWARD_TANHSHRINK_BW: return "TT_POLY_BACKWARD_TANHSHRINK_BW_INCLUDE";
         case UnaryOpType::EXP: return "SFPU_OP_EXP_INCLUDE";
         case UnaryOpType::GELU:
         case UnaryOpType::GELU_TANH: return "SFPU_OP_GELU_INCLUDE";
@@ -841,6 +842,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             TT_THROW("Complete backward marker requires the selected binary factory");
         case UnaryOpType::TT_POLY_BACKWARD_LOG_SIGMOID_BW:
         case UnaryOpType::TT_POLY_BACKWARD_SOFTSIGN_BW:
+        case UnaryOpType::TT_POLY_BACKWARD_TANHSHRINK_BW:
             TT_THROW("Complete backward marker requires the selected binary factory");
         case UnaryOpType::BITWISE_NOT: return {"bitwise_not_tile_init();", fmt::format("bitwise_not_tile({});", idst)};
         case UnaryOpType::RECIP: return {"recip_tile_init<false>();", fmt::format("recip_tile<false>({});", idst)};
