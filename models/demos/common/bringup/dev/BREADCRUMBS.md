@@ -220,3 +220,11 @@ Drive this ledger with
 - Gemma PL.0 (ledger extension) had step "plan", so after its gate passed the orchestrator stopped for a plan
   approval before the plan agent had written anything. Now PL.0 is a scripted `ledger` step, PL.1 declares
   `approval: plan`, and only tasks with an `approval` field wait for a person.
+
+## F18 (2026-09-25): device-command check and package files
+- Gemma C.sliding.attn_norm attempt 1 passed its gate but was failed as "python on device code": the agent edited
+  hooks.py with a python heredoc whose text contained "import ttnn". The check now parses the code (heredoc, -c,
+  or script) with `ast` and flags only real imports of ttnn, directly or through a repo module that imports it.
+  The orchestrator was restarted before its needless second attempt did anything.
+- Gate commits now also stage the ledger's `__init__.py` and `results/block_graphs.json`; freeze commits stage the
+  `__init__.py` files of the frozen tests' packages (they were left untracked).

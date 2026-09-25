@@ -290,3 +290,13 @@ def test_policy_from_the_spec(orch, sandbox):
     assert o.policy({}, "implement")["escalate"] == "stop"
     assert o.policy({"device": True}, "fix")["escalate"] == "debugger"
     assert o.policy({}, "fix")["escalate"] == "stop"  # a CPU gate's failure never goes to the TTNN debugger
+
+
+def test_editing_a_file_that_mentions_ttnn_is_not_device_access(sandbox):
+    edit = "cd /r; python - <<'EOF'\np='hooks.py'\ns=open(p).read()\ns+='import ttnn\\n'\nopen(p,'w').write(s)\nEOF"
+    run = "python - <<'EOF'\nimport ttnn\nd = ttnn.open_mesh_device()\nEOF"
+    (sandbox.repo / "devmod.py").write_text("import ttnn\n")
+    indirect = "python - <<'EOF'\nimport devmod\nEOF"
+    assert command_violations([edit], sandbox.repo) == []
+    assert len(command_violations([run], sandbox.repo)) == 1
+    assert len(command_violations([indirect], sandbox.repo)) == 1
