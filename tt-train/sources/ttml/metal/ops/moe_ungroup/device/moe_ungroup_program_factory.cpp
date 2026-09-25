@@ -183,7 +183,8 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
     // Buffer pointers
     // -------------------------------------------------------------------------
     auto* expert_out_buf = args.expert_out.buffer();
-    auto* ungrouped_buf = output.buffer();
+    auto* ungrouped_buf = std::get<0>(output).buffer();
+    auto* status_buf = std::get<1>(output).buffer();
     auto* plan_buf = args.plan.buffer();
     auto* offsets_buf = args.offsets.buffer();
     auto* grouped_scores_buf = args.grouped_scores.buffer();
@@ -222,9 +223,11 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
         mcast_num_dests_incl_self,  // 15
         kCbCtrl,                    // 16
         Wt,                         // 17
+        attrs.t_cap,                // 18
     };
     tt::tt_metal::TensorAccessorArgs(expert_out_buf).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(offsets_buf).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(status_buf).append_to(reader_ct_args);
 
     auto reader_kernel_g1 = create_reader_kernel(program, worker_group_1, reader_ct_args, {}, kReaderKernelPath);
     tt::tt_metal::KernelHandle reader_kernel_g2{};
@@ -247,6 +250,7 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
         brisc_done_sem_id,     // 8
         brisc_release_sem_id,  // 9
         kL1_ALIGN,             // 10
+        attrs.t_cap,           // 11
     };
     tt::tt_metal::TensorAccessorArgs(ungrouped_buf).append_to(writer_ct_args);
     tt::tt_metal::TensorAccessorArgs(plan_buf).append_to(writer_ct_args);
@@ -291,7 +295,8 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
         std::vector<uint32_t> reader_rt = {
             expert_out_buf->address(),  // 0
             offsets_buf->address(),     // 1
-            worker_idx,                 // 2 my_core_idx
+            status_buf->address(),      // 2
+            worker_idx,                 // 3 my_core_idx
         };
         std::vector<uint32_t> writer_rt = {
             ungrouped_buf->address(),       // 0
@@ -327,7 +332,8 @@ void MoeUngroupProgramFactory::override_runtime_arguments(
     auto& sv = cached_program.shared_variables;
 
     auto* expert_out_buf = tensor_args.expert_out.buffer();
-    auto* ungrouped_buf = output.buffer();
+    auto* ungrouped_buf = std::get<0>(output).buffer();
+    auto* status_buf = std::get<1>(output).buffer();
     auto* plan_buf = tensor_args.plan.buffer();
     auto* offsets_buf = tensor_args.offsets.buffer();
     auto* grouped_scores_buf = tensor_args.grouped_scores.buffer();
@@ -339,6 +345,7 @@ void MoeUngroupProgramFactory::override_runtime_arguments(
         auto& reader_rt = GetRuntimeArgs(program, is_g1 ? sv.reader_kernel_g1 : sv.reader_kernel_g2)[core.x][core.y];
         reader_rt[0] = expert_out_buf->address();
         reader_rt[1] = offsets_buf->address();
+        reader_rt[2] = status_buf->address();
 
         auto& writer_rt = GetRuntimeArgs(program, is_g1 ? sv.writer_kernel_g1 : sv.writer_kernel_g2)[core.x][core.y];
         writer_rt[0] = ungrouped_buf->address();

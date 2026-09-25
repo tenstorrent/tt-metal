@@ -40,8 +40,9 @@ constexpr uint32_t num_total_cores = get_compile_time_arg_val(7);
 constexpr uint32_t brisc_done_sem_id = get_compile_time_arg_val(8);
 constexpr uint32_t brisc_release_sem_id = get_compile_time_arg_val(9);
 constexpr uint32_t l1_align = get_compile_time_arg_val(10);
+constexpr uint32_t t_cap = get_compile_time_arg_val(11);
 
-constexpr auto ungrouped_args = TensorAccessorArgs<11>();
+constexpr auto ungrouped_args = TensorAccessorArgs<12>();
 constexpr auto plan_args = TensorAccessorArgs<ungrouped_args.next_compile_time_args_offset()>();
 constexpr auto offsets_args = TensorAccessorArgs<plan_args.next_compile_time_args_offset()>();
 constexpr auto gs_args = TensorAccessorArgs<offsets_args.next_compile_time_args_offset()>();
@@ -143,14 +144,19 @@ void kernel_main() {
     // ---------------------------------------------------------------
     noc_async_read(offsets_addrgen.get_noc_addr(0), offsets_buf_addr, off_page_bytes);
     noc_async_read_barrier();
+    const uint32_t offsets_status =
+        ttml::metal::moe_ungroup::validate_offsets(offsets_buf, e_local, t_cap, tt::constants::TILE_HEIGHT);
 
     // ---------------------------------------------------------------
     // Per-expert loop.
     // ---------------------------------------------------------------
     for (uint32_t e = 0; e < e_local; ++e) {
-        auto slice = ttml::metal::moe_ungroup::expert_slice_for_core(
-            offsets_buf, e, tt::constants::TILE_HEIGHT, num_total_cores, my_core_idx);
-        uint32_t my_real_count = slice.my_count;
+        ttml::metal::moe_ungroup::ExpertCoreSlice slice{};
+        if (offsets_status == 0U) {
+            slice = ttml::metal::moe_ungroup::expert_slice_for_core(
+                offsets_buf, e, tt::constants::TILE_HEIGHT, num_total_cores, my_core_idx);
+        }
+        const uint32_t my_real_count = slice.my_count;
 
         for (uint32_t step = 0; step < my_real_count; ++step) {
             uint32_t tr_global = slice.my_start_tr_global + step;

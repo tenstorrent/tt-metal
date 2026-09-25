@@ -17,6 +17,18 @@ ttnn::Tensor moe_ungroup(
     uint32_t d,
     uint32_t b,
     uint32_t s) {
+    return std::get<0>(ttnn::prim::ttml_moe_ungroup(expert_out, plan, offsets, grouped_scores, e_local, d, b, s));
+}
+
+std::tuple<ttnn::Tensor, ttnn::Tensor> moe_ungroup_checked(
+    const ttnn::Tensor& expert_out,
+    const ttnn::Tensor& plan,
+    const ttnn::Tensor& offsets,
+    const ttnn::Tensor& grouped_scores,
+    uint32_t e_local,
+    uint32_t d,
+    uint32_t b,
+    uint32_t s) {
     return ttnn::prim::ttml_moe_ungroup(expert_out, plan, offsets, grouped_scores, e_local, d, b, s);
 }
 

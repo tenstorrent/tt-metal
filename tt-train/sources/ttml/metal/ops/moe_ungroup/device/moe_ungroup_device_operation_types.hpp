@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <tuple>
 
 #include "metal/ttnn_all_includes.hpp"
 
@@ -26,8 +27,8 @@ struct MoeUngroupTensorArgs {
     ttnn::Tensor grouped_scores;  // [1, 1, 1, T_cap]     ROW_MAJOR bf16
 };
 
-using MoeUngroupSpecReturn = tt::tt_metal::TensorSpec;
-using MoeUngroupTensorReturn = ttnn::Tensor;
+using MoeUngroupSpecReturn = std::tuple<tt::tt_metal::TensorSpec, tt::tt_metal::TensorSpec>;
+using MoeUngroupTensorReturn = std::tuple<ttnn::Tensor, ttnn::Tensor>;
 
 using operation_attributes_t = MoeUngroupAttributes;
 using tensor_args_t = MoeUngroupTensorArgs;

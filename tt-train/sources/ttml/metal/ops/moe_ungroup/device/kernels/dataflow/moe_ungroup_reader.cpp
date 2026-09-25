@@ -40,14 +40,16 @@ constexpr uint32_t mcast_num_dests_incl_self = get_compile_time_arg_val(15);
 constexpr uint32_t cb_id_ctrl = get_compile_time_arg_val(16);
 // ceil(h / TILE_WIDTH) — computed host-side in program factory.
 constexpr uint32_t Wt = get_compile_time_arg_val(17);
+constexpr uint32_t t_cap = get_compile_time_arg_val(18);
 
-constexpr auto expert_out_args = TensorAccessorArgs<18>();
+constexpr auto expert_out_args = TensorAccessorArgs<19>();
 constexpr auto offsets_args = TensorAccessorArgs<expert_out_args.next_compile_time_args_offset()>();
+constexpr auto status_args = TensorAccessorArgs<offsets_args.next_compile_time_args_offset()>();
 // The accessor chain must consume the host's CT-arg stream exactly; a host
 // built against a different arg table shifts every accessor base and can
 // silently parse page sizes as config words.
 static_assert(
-    offsets_args.next_compile_time_args_offset() == kernel_compile_time_args.size(),
+    status_args.next_compile_time_args_offset() == kernel_compile_time_args.size(),
     "moe_ungroup_reader: compile-time arg count differs from host emission — "
     "rebuild the ttml host library to match this kernel source");
 
@@ -95,10 +97,12 @@ inline void handshake_then_barrier_then_release(uint32_t my_core_idx) {
 void kernel_main() {
     const uint32_t expert_out_addr = get_arg_val<uint32_t>(0);
     const uint32_t offsets_addr = get_arg_val<uint32_t>(1);
-    const uint32_t my_core_idx = get_arg_val<uint32_t>(2);
+    const uint32_t status_addr = get_arg_val<uint32_t>(2);
+    const uint32_t my_core_idx = get_arg_val<uint32_t>(3);
 
     const auto expert_out_addrgen = TensorAccessor(expert_out_args, expert_out_addr, TILE_BYTES);
     const auto offsets_addrgen = TensorAccessor(offsets_args, offsets_addr);
+    const auto status_addrgen = TensorAccessor(status_args, status_addr);
 
     Noc noc;
 
@@ -119,20 +123,35 @@ void kernel_main() {
     noc_async_read_barrier();
     cb_push_back(cb_reader_scratch, 1U);
 
+    const uint32_t offsets_status =
+        ttml::metal::moe_ungroup::validate_offsets(offsets_l1, e_local, t_cap, tt::constants::TILE_HEIGHT);
+
     // Walk offsets ONCE to compute this core's per-expert work bounds and
     // publish the total block count (steps × num_chunks) to compute via
-    // cb_ctrl.
+    // cb_ctrl. Invalid descriptors publish zero work before any subtraction
+    // or offset-derived source access.
     uint32_t my_total_active_steps = 0U;
     for (uint32_t e = 0; e < e_local; ++e) {
-        auto slice = ttml::metal::moe_ungroup::expert_slice_for_core(
-            offsets_l1, e, tt::constants::TILE_HEIGHT, num_total_cores, my_core_idx);
-        tr_start_per_expert[e] = slice.my_start_tr_global;
-        my_real_count_per_expert[e] = slice.my_count;
-        my_total_active_steps += slice.my_count;
+        if (offsets_status == 0U) {
+            auto slice = ttml::metal::moe_ungroup::expert_slice_for_core(
+                offsets_l1, e, tt::constants::TILE_HEIGHT, num_total_cores, my_core_idx);
+            tr_start_per_expert[e] = slice.my_start_tr_global;
+            my_real_count_per_expert[e] = slice.my_count;
+            my_total_active_steps += slice.my_count;
+        } else {
+            tr_start_per_expert[e] = 0U;
+            my_real_count_per_expert[e] = 0U;
+        }
     }
     cb_reserve_back(cb_id_ctrl, 1U);
-    volatile tt_l1_ptr uint32_t* ctrl_l1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id_ctrl));
+    const uint32_t ctrl_addr = get_write_ptr(cb_id_ctrl);
+    volatile tt_l1_ptr uint32_t* ctrl_l1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctrl_addr);
     ctrl_l1[0] = my_total_active_steps * num_chunks;
+    if (my_core_idx == 0U) {
+        ctrl_l1[1] = offsets_status;
+        noc_async_write(ctrl_addr + sizeof(uint32_t), status_addrgen.get_noc_addr(0), sizeof(uint32_t));
+        noc_async_write_barrier();
+    }
     cb_push_back(cb_id_ctrl, 1U);
 
     for (uint32_t e = 0; e < e_local; ++e) {

@@ -5,8 +5,10 @@
 #pragma once
 
 #include <cstdint>
+#include <tuple>
 
 #include "metal/ttnn_all_includes.hpp"
+#include "moe_ungroup_status.hpp"
 
 namespace ttml::metal {
 
@@ -28,6 +30,8 @@ namespace ttml::metal {
 //
 // Output:
 //   ungrouped: [D, B, S, H]  ROW_MAJOR bf16 — dense per-token MoE output (per-device).
+// Invalid offsets fail closed: the output is zero and no offset-derived source
+// traffic is issued. Use moe_ungroup_checked() to observe the validation status.
 //
 // Algorithm:
 //   - Outer loop over experts e in 0..E_local. Within one expert, the input
@@ -44,6 +48,20 @@ namespace ttml::metal {
 // (t, k_slot) per active row), the writer just reads a 32-entry slice of
 // grouped_scores per tile-row — no metadata scan, no leids comparison.
 ttnn::Tensor moe_ungroup(
+    const ttnn::Tensor& expert_out,
+    const ttnn::Tensor& plan,
+    const ttnn::Tensor& offsets,
+    const ttnn::Tensor& grouped_scores,
+    uint32_t e_local,
+    uint32_t d,
+    uint32_t b,
+    uint32_t s);
+
+// Returns (ungrouped, offsets_status). offsets_status is a device-resident
+// [1,1,1,1] UINT32 bitmask composed from moe_ungroup_validation::kOffsets*.
+// Validation runs on
+// every launch, including program-cache hits, without synchronizing the host.
+std::tuple<ttnn::Tensor, ttnn::Tensor> moe_ungroup_checked(
     const ttnn::Tensor& expert_out,
     const ttnn::Tensor& plan,
     const ttnn::Tensor& offsets,

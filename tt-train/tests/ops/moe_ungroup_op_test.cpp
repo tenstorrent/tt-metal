@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <tt-metalium/constants.hpp>
@@ -222,6 +223,53 @@ TEST_F(MoeUngroupTest, GroupUngroupRoundTripLargerD) {
 
 TEST_F(MoeUngroupTest, GroupUngroupRoundTripLargerELocal) {
     check_group_ungroup_roundtrip(/*D=*/2, /*B=*/1, /*S=*/64, /*H=*/64, /*E=*/8, /*K=*/4);
+}
+
+TEST_F(MoeUngroupTest, InvalidOffsetsFailClosedAndReportStatusOnCacheHits) {
+    constexpr uint32_t D = 1, B = 1, S = 32, H = 32;
+    constexpr uint32_t ELocal = 2, TCap = 64;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    const auto expert_out = ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(
+        std::vector<float>(TCap * H, 1.0F), ttnn::Shape({1U, 1U, TCap, H}), device, ttnn::Layout::TILE);
+    const auto plan = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        std::vector<uint32_t>(TCap, kSentinel), ttnn::Shape({1U, 1U, 1U, TCap}), device, ttnn::Layout::ROW_MAJOR);
+    const auto grouped_scores = ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(
+        std::vector<float>(TCap, 0.0F), ttnn::Shape({1U, 1U, 1U, TCap}), device, ttnn::Layout::ROW_MAJOR);
+
+    struct Case {
+        std::array<uint32_t, ELocal + 1U> offsets;
+        uint32_t expected_status;
+    };
+    using namespace ttml::metal::moe_ungroup_validation;
+    const std::array<Case, 6U> cases = {{
+        {{{0U, 0U, 64U}}, 0U},
+        {{{32U, 32U, 64U}}, kOffsetsNonzeroStart},
+        {{{0U, 33U, 64U}}, kOffsetsMisaligned},
+        {{{0U, 64U, 32U}}, kOffsetsDecreasing},
+        {{{0U, 64U, 96U}}, kOffsetsExceedCapacity},
+        // Re-run the valid descriptor after malformed launches to prove the
+        // same cached program validates current device contents every time.
+        {{{0U, 0U, 64U}}, 0U},
+    }};
+
+    for (const auto& test_case : cases) {
+        const std::vector<uint32_t> offsets_host(test_case.offsets.begin(), test_case.offsets.end());
+        const auto offsets = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+            offsets_host, ttnn::Shape({1U, 1U, 1U, ELocal + 1U}), device, ttnn::Layout::ROW_MAJOR);
+
+        auto [output, status] =
+            ttml::metal::moe_ungroup_checked(expert_out, plan, offsets, grouped_scores, ELocal, D, B, S);
+        const auto status_host = ttml::core::to_vector<uint32_t>(status);
+        ASSERT_EQ(status_host.size(), 1U);
+        EXPECT_EQ(status_host[0], test_case.expected_status);
+
+        // The blocking read is also the completion boundary for malformed
+        // inputs; fail-closed launches must complete with deterministic zeros.
+        const auto output_host = ttml::core::to_vector<float>(output);
+        ASSERT_EQ(output_host.size(), D * B * S * H);
+        EXPECT_TRUE(std::all_of(output_host.begin(), output_host.end(), [](float value) { return value == 0.0F; }));
+    }
 }
 
 // NIGHTLY_ prefix keeps this off the per-PR run (CI filters out *NIGHTLY*),
