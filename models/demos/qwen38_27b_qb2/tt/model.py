@@ -502,9 +502,10 @@ class Qwen38Model:
         ids = ttnn.reshape(ids, [1, 1, 1, bucket])
         ids = ttnn.pad(ids, [(0, 0), (0, 0), (0, 0), (0, 32 - bucket)], value=0)
         packed_positions = ttnn.reshape(pack(ttnn.reshape(positions, [cache.batch_size, 1]), fill=-1), [bucket])
-        packed_rope = None
-        if rope_indices is not None:
-            packed_rope = ttnn.reshape(pack(ttnn.reshape(rope_indices, [cache.batch_size, 1])), [bucket])
+        # Positions use -1 to keep padded decode rows inactive, but -1 is not a
+        # valid RoPE table index after _decode_fixed converts it to uint32.
+        rope_source = positions if rope_indices is None else rope_indices
+        packed_rope = ttnn.reshape(pack(ttnn.reshape(rope_source, [cache.batch_size, 1]), fill=0), [bucket])
         packed_table = pack(page_table)
         resident = getattr(self, "_resident_decode_bucket", None)
         if resident is not None:

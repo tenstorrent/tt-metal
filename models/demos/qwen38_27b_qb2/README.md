@@ -35,7 +35,7 @@ Build tt-metal and activate its Python environment:
 ```bash
 ./build_metal.sh --enable-ccache
 source python_env/bin/activate
-export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH="$PWD:$PWD/ttnn:$PWD/tools${PYTHONPATH:+:$PYTHONPATH}"
 export MODEL_WEIGHTS_DIR=/path/to/Qwen3.8-27B/snapshot
 ```
 

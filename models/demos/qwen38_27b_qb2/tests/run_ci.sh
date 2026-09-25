@@ -33,7 +33,9 @@ git clone https://github.com/tenstorrent/vllm-tt-plugin.git "$work/plugin"
 plugin_ref="${VLLM_TT_PLUGIN_REF:-35090660433d5606957ded97f7130b5cc75f94f7}"
 # The shared workflow's former default predates request-lifecycle fixes needed
 # after concurrent evaluation. Keep manual overrides, but do not select it for Qwen.
-if [ "$plugin_ref" = "yieldthought/llama31-qb2-serving" ]; then
+legacy_plugin_ref=yieldthought/llama31-qb2-serving
+if [ "$plugin_ref" = "$legacy_plugin_ref" ]; then
+    echo "::warning::Ignoring stale VLLM_TT_PLUGIN_REF=$legacy_plugin_ref; using the pinned Qwen revision" >&2
     plugin_ref=35090660433d5606957ded97f7130b5cc75f94f7
 fi
 git -C "$work/plugin" checkout "$plugin_ref"
