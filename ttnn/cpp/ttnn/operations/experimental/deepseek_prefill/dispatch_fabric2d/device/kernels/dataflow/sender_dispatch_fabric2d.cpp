@@ -77,6 +77,7 @@ void prebuild_routes() {
             (volatile tt::tt_fabric::HybridMeshPacketHeader*)entry_hdr(entry), ct.peer_chip_id, ct.peer_mesh_id);
     }
     // signal_downstream sends from the drain header during the send loop; drain_fabric reuses it after.
+    // Setting the command fields later leaves this route in place.
     fabric_set_unicast_route(
         reinterpret_cast<volatile tt::tt_fabric::HybridMeshPacketHeader*>(ct.pkt_hdr_drain_addr),
         ct.peer_chip_id,
@@ -185,8 +186,6 @@ void drain_fabric(FabricSender& fabric) {
     volatile PACKET_HEADER_TYPE* hdr_drain = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct.pkt_hdr_drain_addr);
     hdr_drain->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
         get_noc_addr(ct.fwd_sem_noc_x, ct.fwd_sem_noc_y, ct.drain_sink_addr), /*val=*/0, /*flush=*/false});
-    fabric_set_unicast_route(
-        (volatile tt::tt_fabric::HybridMeshPacketHeader*)hdr_drain, ct.peer_chip_id, ct.peer_mesh_id);
     for (uint32_t d = 0; d + 1 < fabric.num_buffers_per_channel; d++) {
         fabric.wait_for_empty_write_slot();
         fabric.send_payload_flush_blocking_from_address((uint32_t)hdr_drain, sizeof(PACKET_HEADER_TYPE));
