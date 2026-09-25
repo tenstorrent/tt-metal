@@ -300,10 +300,9 @@ class TtV4PrefillBlock(LightweightModule):
                 warm = self.attn.forward_pre(h, state, chunk_tokens)
                 self.attn.glue_chunk(state, warm, chunk_tokens, None)
                 a2_warm = self.attn.forward_attn(h, warm, state, chunk_tokens)
-                for t in a2_warm:
-                    ttnn.deallocate(t)
-                for t in warm:
-                    ttnn.deallocate(t)
+                for t in list(a2_warm) + list(warm):
+                    if t is not None:  # the SWA phases carry None for entries / mask
+                        ttnn.deallocate(t)
                 self.attn.prepare_chunk(state, chunk_tokens)
                 A1 = TraceIsland(
                     self.mesh_device,
