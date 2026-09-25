@@ -94,7 +94,7 @@ def _wrap_create_qkv_heads_headsplit(original_fn):
     return wrapper
 
 
-def _wrap_create_qkv_heads_norm(original_fn, consts, rot=None, q_dtype=None, kv_dtype=None):
+def _wrap_create_qkv_heads_norm(original_fn, consts, rot=None, q_dtype=None, kv_dtype=None, norm_eps=None):
     """Route ``nlp_create_qkv_heads`` to the head-split + Q/K RMSNorm fused op.
 
     ``consts`` = (gamma_q_tiles, gamma_k_tiles, scaler, eps) built once per layer. The
@@ -110,6 +110,11 @@ def _wrap_create_qkv_heads_norm(original_fn, consts, rot=None, q_dtype=None, kv_
         rot_kwargs["q_dtype"] = q_dtype
     if kv_dtype is not None:
         rot_kwargs["kv_dtype"] = kv_dtype
+    # QWEN_FUSED_RESIDENT_CONSTS=1 (bs1 default): cos/sin, the rotation tile, scaler and eps come from a per-core L1
+    # shard shared by all layers (CBs alias it), and gamma is read after the first unit; the op falls back when a
+    # core's units span more than one seq tile.
+    if rot is not None and norm_eps is not None and os.getenv("QWEN_FUSED_RESIDENT_CONSTS", "0") == "1":
+        rot_kwargs.update(resident=True, norm_eps=norm_eps)
 
     @functools.wraps(original_fn)
     def wrapper(qkv_fused, *args, **kwargs):
@@ -209,6 +214,30 @@ def _wrap_sdpa_bidirectional(original_fn, concat_out=False):
     # bs1 as well (QWEN_SDPA_CONCAT_OUT_BS1=1): the q256 8x8 SDPA drains faster into [1, 1, S, H*d]
     # (standalone 57.3 -> 54.1 us) and the 4.6 us model-local concat op disappears.
     concat_out_bs1 = os.getenv("QWEN_SDPA_CONCAT_OUT_BS1", "1") == "1"
+    # bs1 (QWEN_SDPA_GQA_PACK=1): SDPA's pack_gqa_heads schedules the 4 Q heads sharing a KV head as one head
+    # of 4*S rows, so each KV head's K/V streams once down one 8-core chain instead of once per Q head.
+    # Unmasked non-causal calls only (the serving pad mask takes the unpacked call).
+    gqa_pack = os.getenv("QWEN_SDPA_GQA_PACK", "0") == "1"
+    # Packed calls take their own q chunk and grid (QWEN_SDPA_GQA_PACK_Q_CHUNK, QWEN_SDPA_GQA_PACK_GRID=x,y): at bs1,
+    # q192 on 11x8 gives each KV head 11 chunks of its 64 packed row tiles, one per core of one grid row (88 cores,
+    # 6 row tiles each vs 8 on 8x8). Unpacked calls keep the model's config.
+    pack_q_chunk = int(os.getenv("QWEN_SDPA_GQA_PACK_Q_CHUNK", "0"))
+    pack_grid = tuple(int(x) for x in os.getenv("QWEN_SDPA_GQA_PACK_GRID", "0,0").split(","))
+    pack_cfgs = {}
+
+    def packed_program_config(pc):
+        if pc is None or not pack_q_chunk:
+            return pc
+        key = (pc.k_chunk_size, pc.exp_approx_mode)
+        if key not in pack_cfgs:
+            grid = pc.compute_with_storage_grid_size
+            pack_cfgs[key] = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(*pack_grid) if pack_grid[0] else grid,
+                q_chunk_size=pack_q_chunk,
+                k_chunk_size=pc.k_chunk_size,
+                exp_approx_mode=pc.exp_approx_mode,
+            )
+        return pack_cfgs[key]
 
     @functools.wraps(original_fn)
     def wrapper(*args, **kwargs):
@@ -217,6 +246,20 @@ def _wrap_sdpa_bidirectional(original_fn, concat_out=False):
             if _PAD_ATTN_MASK is not None and kwargs.get("attn_mask") is None:
                 kwargs["attn_mask"] = _PAD_ATTN_MASK
         q = args[0] if args else kwargs.get("input_tensor_q")
+        k = args[1] if len(args) > 1 else kwargs.get("input_tensor_k")
+        if (
+            gqa_pack
+            and not causal
+            and kwargs.get("attn_mask") is None
+            and q is not None
+            and int(q.shape[0]) == 1
+            and int(q.shape[1]) > int(k.shape[1])
+            and int(q.shape[1]) % int(k.shape[1]) == 0
+            # the op needs a tile-aligned Q sequence to view the group's heads as one
+            and int(q.shape[2]) % 32 == 0
+        ):
+            kwargs["pack_gqa_heads"] = True
+            kwargs["program_config"] = packed_program_config(kwargs.get("program_config"))
         if concat_out and q is not None and (int(q.shape[0]) > 1 or concat_out_bs1):
             kwargs["output_heads_concat"] = True
             out = original_fn(*args, **kwargs)
@@ -237,6 +280,7 @@ class PplxBidirectionalAttention(Attention):
         # fused QKV activation replaces nlp_create_qkv_heads + q_norm + k_norm. Constants
         # (row-replicated gamma tiles, 1/head_dim scaler, eps) are built once per layer.
         self._fused_norm_consts = None
+        self._fused_norm_eps = None
         if os.getenv("QWEN_FUSED_HEADS_NORM", "0") == "1":
             names = (
                 "mesh_device",
@@ -256,6 +300,7 @@ class PplxBidirectionalAttention(Attention):
                 self._fused_norm_consts = make_norm_constants(
                     state_dict[qk], state_dict[kk], configuration.norm_eps, bound["mesh_device"]
                 )
+                self._fused_norm_eps = configuration.norm_eps
         # Ablation knob (DO NOT ENABLE): skipping the trained Q/K RMSNorm shaves
         # device time but collapses retrieval accuracy — the per-head Q/K norm is
         # load-bearing, not redundant. Kept gated/off as documentation of the
@@ -364,7 +409,7 @@ class PplxBidirectionalAttention(Attention):
                     ttnn.experimental.minimal_matmul = _wrap_matmul_out_bfp8(_saved_mm[0], self.wqkv)
                     ttnn.linear = _wrap_matmul_out_bfp8(_saved_mm[1], self.wqkv)
             ttnn.experimental.nlp_create_qkv_heads = _wrap_create_qkv_heads_norm(
-                original_create_heads, self._fused_norm_consts, rot, q_dtype, kv_dtype
+                original_create_heads, self._fused_norm_consts, rot, q_dtype, kv_dtype, self._fused_norm_eps
             )
             _saved_norms = (self.q_norm, self.k_norm)
             self.q_norm = lambda x, mode, norm_config: x

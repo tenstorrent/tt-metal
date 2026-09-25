@@ -862,10 +862,20 @@ buffer (`TT_THROW dataflow_buffer.cpp:2682`), so a big-page read layout could no
 | residual adds write the norm's 10×8 block-shard layout (`QWEN_BS1_RESID_SHARDED=1`) | 17.6 | 17.8 | the 72 I2S ops (2.4 µs + 0.6 µs gap each) become no-ops, but the 80-core sharded-output add gives most of it back: **neutral alone** |
 | both | **17.5** | **17.5** | −0.3 ms on the median (−1.7%); STS-B 0.8161 unchanged |
 
+*Correction (09-24, later):* only the even layers' I2S became no-ops (36 of 72): the wrapper's `supported(x, x)` gate
+rejected the sharded residual the previous layer handed over, so odd layers ran the stock adds. That is part of why the item
+measured neutral alone. Fixed to cover every layer (I2S 36 → 1, bs1 −0.07 ms e2e); see POSITIVE_RESULTS.
+
 Standalone (chip 3, L1 bfp8 [512×2560]): add → I2S → sharded LN → S2I 28.9 µs as one traced chain; add with
 block-sharded output 13.2 µs (vs 10.5 + 8.7), chain 25.3 µs; add with one sharded and one interleaved input
 11.3 µs, bit-identical. The sharded LN cannot write an interleaved output (`TT_FATAL` in its validation), so the
-S2I before each matmul stays (the 12×8 matmul grid cannot take the 10×8 shard either). Both landed as bs1
+S2I before each matmul stays (the 12×8 matmul grid cannot take the 10×8 shard either).
+*Correction (09-25):* it can. With a block-sharded in0 the 2D multicast factory sizes its in0 senders from the
+shard grid's width, not the compute grid's (`matmul_multicore_reuse_mcast_2d_program_factory.cpp`), so the 10 shard
+columns multicast their K slices across all 12 compute columns; the validation only needs shard height = per_core_M,
+in0_block_w | shard width (8, not the model's 10), ROW_MAJOR and fuse_batch. Standalone QKV 51.7 → 49.6 µs and
+FF1+FF3 152.7 → 148.1 µs against S2I + interleaved (`perf_tools/bench_bs1_norm_shard_mm.py`); landed as
+`QWEN_BS1_NORM_SHARDED_OUT=1` (POSITIVE_RESULTS). The claim above was never tested. Both landed as bs1
 defaults; the neutral-alone item is kept because it is free with the concat change and removes 72 ops.
 
 **Follow-up, same day — the residual item had only reached every other layer.** `_wrap_layer` ran the fused
@@ -876,3 +886,72 @@ iterations, best 17.3 / 17.4 (two runs), median 17.5, against 17.5 / 17.7 with t
 30-iteration run cold **17.3**, sustained 17.7; STS-B 0.8161. Lesson: when a wrapper chain has a capability
 check, an op that changes the residual's layout must be routed before it, and a per-op profile (op counts per
 layer) is the quickest way to see a change that lands on only half the layers.
+
+## 51. bs1 fused heads op (head split + Q/K RMSNorm + RoPE): what bounds it, and what the fixes ran into (2026-09-24)
+
+8× p150b host, chip 0; standalone numbers are device kernel time of the op at the bs1 shapes (64 cores, 2 units per
+core, a unit = 4 Q + 1 K head normalised + 1 V head copied), median of 12 calls.
+
+**Ablation (scratch kernels, not in the repo).** Full op 39.5 µs; compute only (reader/writer skip the unit tiles)
+36.6; data movement only (compute passes the CBs through) 11.3; handshakes only 8.5, of which 7.5 is the gamma read
+(64 cores reading the same 8 tiles; 1.0 without it). So the op is compute-bound: the unit traffic overlaps except for
+the first unit in and the last out (~3 µs). RoPE is 8.4 µs of compute (36.6 vs 28.2 norm-only). Compute also waits
+~5 µs for gamma at its first head (compute-only 36.5 → 31.1 without the gamma read).
+
+**Gamma in L1 interleaved instead of DRAM: nothing in the model.** Compute-only standalone 36.5 → 33.0, but the full
+op 41.5 → 40.9 standalone and 41.5 → 41.3 in-model: in the full op the gamma read competes with every core's unit
+reads, and where gamma lives does not change that. Per-core DRAM copies of gamma: 36.5 → 34.2 compute-only, not
+pursued. Reverted.
+
+**Compute v3 and the kernel-config buffer.** Batching the phases across heads first ran each phase over the Q heads
+and then the K head (two template instantiations): standalone 41.8 → 30.6 µs, bit-identical once every phase moved
+the CBs' full capacity (the first version sized the CBs for 4 heads, used 4 + 1 per unit, and the second unit's
+indexed accesses ran past the CB ends: Q PCC 0.79, K inf; it only showed in non-resident mode, where the static-CB
+neighbours differ). In the model it bought **nothing** (e2e 16.510 vs 16.511 ms): the compute binary grew 24.0 →
+34.9 KB, and with SDPA's ~39 KB next the two programs no longer fit Blackhole's 69 KB per-core kernel-config buffer
+(`bh_hal_tensix.cpp`), so the dispatcher could not stage SDPA while the heads op ran: +3 µs gap before the op and
++2 after it per layer ate the 7 µs saved. Runtime head counts and CB ids made the binary bigger (36.0 KB: the
+inlined LLK calls no longer constant-fold); `#pragma GCC optimize("Os")` made it 11.9 KB but the op slower than v1
+(44.6 µs). Running the unit's Q and K heads as one chunk (one instantiation, compile-time CB ids) gave 21.6 KB and
+29.6 µs standalone; in-model 28.7 µs, the gap before the op back to 0.34 µs (after it: 2.1 µs, still open).
+Lesson: on Blackhole a model-local kernel's binary size is part of its cost; check `TENSIX COMPUTE n MAX KERNEL
+SIZE` and the op-to-op latency around the op, not only its kernel time.
+
+## 52. bs1 SDPA on more than 64 cores: the unit count decides, and most of the op is fixed cost (2026-09-25)
+
+8× p150b host, chip 0; standalone `perf_tools/bench_sdpa_bs1_wide.py` (traced, Q/K/V bfp8 in L1, `pack_gqa_heads`,
+LoFi, exp approx, output unconcatenated so chunks may cross Q heads; each config checked against the 8×8 q256/k512
+output).
+
+**Why 120 cores does not come for free.** Packed, Q is 8 heads × 64 row tiles = 512 row tiles. The op gives each core a
+contiguous run of Q chunks and one K/V chain per head, and a core's time is set by its row tiles plus a per-chunk fixed
+cost. q256 on 8×8 is 64 chunks, one per core, 8 row tiles each, each grid row one head (row multicast of K/V).
+Candidates, standalone µs:
+
+| grid, q/k chunk | chunks | row tiles per busiest core | µs |
+|---|--:|--:|--:|
+| 8×8 q256/k512 (09-24 default) | 64 | 8 | 40.2 |
+| **11×8 q192/k512 (shipped)** | 88 (11 per head, last one 4 tiles) | 6 | **36.6** (33.6 on a second run) |
+| 11×8 q192/k256 | 88 | 6 | 37.3 |
+| 12×9 q160/k512 | 104 (13 per head) | 5 | 44.0 |
+| 12×10 q128/k512 | 128 | 8 (8 cores do 2 chunks) | 53.4 |
+| 12×10 q64/k256 | 256 | 6 (3 chunks) | 55.4 |
+
+- q128 on 120 cores cannot help: 128 chunks leave 8 cores with two, so the busiest core still has 8 row tiles.
+- q160 gives 5 row tiles per core but a head's 13 chunks span two grid rows, so the chain multicast (all-or-nothing:
+  same physical row, no gaps, uniform q counts) turns off for every head and K/V hops core to core down 13-core chains.
+- q64 re-streams K/V and pays the per-chunk cost three times per core.
+
+**Most of the op is fixed cost.** Fitting time = fixed + per-row × rows to q256 (8 rows, 40.2 µs) and q192 (6 rows,
+36.6 µs) gives ~26 µs fixed and ~1.8 µs per row tile: cutting rows by 25% bought 9% (16% on the second run). With
+one Q chunk and one K chunk per core nothing overlaps the K arrival (injector read of ~70 KB from L1-interleaved
+banks + multicast), the Q read, the V arrival and the output drain; only the subblock streaming inside the chunk does.
+The kernel already overlaps exp (SFPU, pack thread) with the matmuls (FPU, math thread), so the 64-core bound is
+~max(12 µs FPU, ~21 µs SFPU), not their sum. The remaining headroom is in that fixed part (a device-profiler zone
+split is the next measurement), not in the core count.
+
+**Shipping q192 needed a writer change.** A 6-tile chunk crosses the 16-tile Q heads of its group, and the
+concatenated `[1, 1, S, NQH·d]` output assumed it never did (host check `q_chunk | Sq`). `write_block_row_grouped` /
+`write_block` take the head length and the chunk's first row in its head and move a wrapped row back one head length
+and right one head (`head_wrap_tile_offset`); the check is gone. Without the concat output the model needs the 4.6 µs
+concat op again, which cancels the gain.

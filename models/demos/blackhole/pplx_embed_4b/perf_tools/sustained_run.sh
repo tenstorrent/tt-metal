@@ -2,8 +2,9 @@
 # sustained_run.sh <bs> <chip> <iters> <tag> "<ENV>" : one e2e run with tt-smi sampling; prints cold best, sustained median (last half) and clock/power
 BS=$1; CHIP=$2; IT=$3; TAG=$4; ENV_=$5; S=$(cd "$(dirname "$0")" && pwd); REPO=$(cd "$S/../../../../.." && pwd)
 cd "$REPO"; export TT_METAL_HOME=$PWD PYTHONPATH=$PWD HF_MODEL=perplexity-ai/pplx-embed-v1-4b MESH_DEVICE=P150
+SMI=./python_env/bin/tt-smi; [ -x $SMI ] || SMI=$(command -v tt-smi)
 D=/tmp/smi_$TAG; rm -rf $D; mkdir -p $D
-( while [ ! -f $D/STOP ]; do ts=$(date +%s.%N); env -u TT_VISIBLE_DEVICES timeout 20 ./python_env/bin/tt-smi -s --snapshot_no_tty > $D/$ts.json 2>/dev/null; sleep 0.3; done ) &
+( while [ ! -f $D/STOP ]; do ts=$(date +%s.%N); env -u TT_VISIBLE_DEVICES timeout 20 $SMI -s --snapshot_no_tty > $D/$ts.json 2>/dev/null; sleep 0.3; done ) &
 SP=$!
 env TT_VISIBLE_DEVICES=$CHIP $ENV_ timeout 2400 ./python_env/bin/python $S/e2e_run_fp.py $BS $IT > /tmp/sus_${TAG}.log 2>&1
 sleep 2; touch $D/STOP; wait $SP 2>/dev/null

@@ -102,6 +102,7 @@ inline void norm_head(uint32_t in_off, uint32_t out_off, uint32_t cb_gamma) {
     reconfig_data_format(cb_tmp, cb_gamma);
     pack_reconfig_data_format(cb_dst);
     mul_init(cb_tmp, cb_gamma);
+    cb_wait_front(cb_gamma, Wt);  // resident, never popped: only the first call waits (gamma read after unit 0)
     tmp.wait_front(Wt);
     CircularBuffer nrm(cb_norm);
     if constexpr (cb_dst == cb_norm) {
@@ -222,8 +223,6 @@ void kernel_main() {
 
     CircularBuffer in(cb_in), out(cb_out), qout(cb_qout), gq(cb_gq), gk(cb_gk), sc(cb_scaler), ep(cb_eps);
     compute_kernel_hw_startup(cb_in, cb_scaler, cb_out);
-    gq.wait_front(Wt);
-    gk.wait_front(Wt);
     sc.wait_front(1);
     ep.wait_front(1);
     if constexpr (fuse_rotary) {
@@ -231,8 +230,8 @@ void kernel_main() {
         ct.wait_front(1);
     }
 
+    uint32_t sub = work_unit_start % q_split;  // Q half of the current unit, advanced as a rotating counter
     for (uint32_t w = 0; w < num_work_units; ++w) {
-        const uint32_t sub = (q_split == 1) ? 0 : ((work_unit_start + w) % q_split);
         const bool has_k = (q_split == 1) || sub == 0;
         const bool has_v = (q_split == 1) || sub == 1;
         const uint32_t v_in_off = sub_q_tiles + (has_k ? group_kv_tiles : 0);
@@ -290,5 +289,8 @@ void kernel_main() {
         }
         out.push_back(out_tiles);
         in.pop_front(unit_tiles);
+        if (++sub == q_split) {
+            sub = 0;
+        }
     }
 }

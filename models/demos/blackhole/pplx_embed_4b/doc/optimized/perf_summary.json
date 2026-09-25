@@ -217,5 +217,133 @@
     "#57722 head-major output / in0 tile-id remap in minimal_matmul (~-10 ms bs32)",
     "device is harvested 120/130 cores, so absolute numbers are ~8% pessimistic vs a full P150"
   ],
-  "records": "doc/POSITIVE_RESULTS.md (landings), doc/NEGATIVE_RESULTS.md (rejected experiments with numbers), doc/PERF_GUIDE.md (how to run, measure, profile)"
+  "records": "doc/POSITIVE_RESULTS.md (landings), doc/NEGATIVE_RESULTS.md (rejected experiments with numbers), doc/PERF_GUIDE.md (how to run, measure, profile)",
+  "bs1_resid_sharded_every_layer_20260924": {
+    "host": "8x p150b host, chip 0 (12x10 grid); not the chip-4 host of e2e_ms / device_ms_one_traced_replay",
+    "device_ms_one_traced_replay": {
+      "before": 16.97,
+      "after": 16.798
+    },
+    "interleaved_to_sharded_calls": {
+      "before": 36,
+      "after": 1
+    },
+    "e2e_mean_ms_3x30_alternating": {
+      "before": 17.285,
+      "after": 17.218
+    },
+    "stsb_bs1_eval_accuracy_tt": 0.8161
+  },
+  "bs1_sdpa_gqa_pack_20260924": {
+    "host": "8x p150b host, chip 0 (12x10 grid); on top of bs1_resid_sharded_every_layer_20260924",
+    "sdpa_us_per_call_in_model": {
+      "before": 49.7,
+      "after": 35.9
+    },
+    "device_ms_one_traced_replay": {
+      "before": 16.911,
+      "after": 16.426
+    },
+    "e2e_mean_ms_3x30_alternating": {
+      "before": 17.189,
+      "after": 16.702
+    },
+    "stsb": {
+      "fixed512_batch1_before": 0.8121,
+      "fixed512_batch1_after": 0.8133,
+      "bs1_bucketed_eval_accuracy_tt": 0.8161
+    }
+  },
+  "bs1_heads_op_compute_v3_20260924": {
+    "host": "8x p150b host, chip 0 (12x10 grid); on top of the resident heads-op constants",
+    "heads_op_us_in_model": {
+      "v1": 41.7,
+      "v3": 28.7
+    },
+    "compute_binary_kb": {
+      "v1": 24.4,
+      "v3": 21.6
+    },
+    "e2e_mean_ms_3x30_alternating": {
+      "v1": 16.474,
+      "v3": 16.135
+    },
+    "cold_best_ms": {
+      "v1": 16.45,
+      "v3": 16.0
+    },
+    "sustained_median_it15_29_ms": {
+      "v1": 16.55,
+      "v3": 16.15
+    },
+    "note": "bit-identical to v1; cold/sustained are the mean of two sustained_run.sh rounds per arm"
+  },
+  "bs1_sdpa_q192_88_cores_20260925": {
+    "host": "8x p150b host, chip 0 (12x10 grid); on top of compute v3",
+    "sdpa_us_per_call_in_model": {
+      "q256_8x8": 35.9,
+      "q192_11x8": 29.3
+    },
+    "sdpa_us_standalone_concat_out": {
+      "q256_8x8": 41.6,
+      "q192_11x8": 33.8
+    },
+    "device_ms_one_traced_replay": {
+      "profile_20260924": 16.97,
+      "q192": 15.652,
+      "report": "2026_09_25_16_30_32"
+    },
+    "e2e_mean_ms_3x30_alternating": {
+      "q256": 16.15,
+      "q192": 15.88
+    },
+    "cold_best_ms": {
+      "q256": 16.0,
+      "q192": 15.75
+    },
+    "sustained_median_it15_29_ms": {
+      "q256": 16.1,
+      "q192": 15.9
+    },
+    "stsb": {
+      "fixed512_batch1": 0.814,
+      "bs1_bucketed_eval_accuracy_tt": 0.8161
+    },
+    "note": "e2e means from Avg tokens/s at ISL 512; cold/sustained are the mean of two sustained_run.sh rounds per arm"
+  },
+  "bs1_norm_sharded_out_20260925": {
+    "host": "8x p150b host, chip 0 (12x10 grid); on top of q192 SDPA",
+    "sharded_to_interleaved_calls": {
+      "before": 72,
+      "after": 0
+    },
+    "standalone_us": {
+      "qkv_s2i_plus_mm": 51.7,
+      "qkv_sharded_in0": 49.6,
+      "ff1_ff3_s2i_plus_mm": 152.7,
+      "ff1_ff3_sharded_in0": 148.1
+    },
+    "device_ms_one_traced_replay": {
+      "before": 15.652,
+      "after": 15.327,
+      "report": "2026_09_25_17_18_33"
+    },
+    "e2e_mean_ms_3x30_alternating": {
+      "before": 15.91,
+      "after": 15.74
+    },
+    "cold_best_ms": {
+      "before": 15.75,
+      "after": 15.6
+    },
+    "sustained_median_it15_29_ms": {
+      "before": 15.9,
+      "after": 15.75
+    },
+    "stsb": {
+      "fixed512_batch1": 0.8111,
+      "bs1_bucketed_eval_accuracy_tt": 0.8169
+    },
+    "note": "e2e means from Avg tokens/s at ISL 512; cold/sustained are the mean of two sustained_run.sh rounds per arm"
+  }
 }

@@ -1561,6 +1561,18 @@ void write_block(
     cb.pop_front(num_tiles);
 }
 
+// Heads-concat output ([B, 1, S, NH*cols]) of a chunk whose rows run through consecutive heads (pack_gqa_heads with a
+// q chunk that does not divide S): row `row` of the chunk is row (first_row_in_head + row) % head_rows of head
+// base + (first_row_in_head + row) / head_rows. Relative to the linear out_tile_id + row * row_stride, each head
+// wrap moves the tile id back head_rows rows and one head (cols tiles) right. Unsigned wraparound is intended.
+FORCE_INLINE uint32_t head_wrap_tile_offset(
+    uint32_t row, uint32_t cols, uint32_t row_stride, uint32_t head_rows, uint32_t first_row_in_head) {
+    if (head_rows == 0) {
+        return 0;
+    }
+    return ((first_row_in_head + row) / head_rows) * (cols - head_rows * row_stride);
+}
+
 template <typename TensorAccessorType>
 void write_block(
     Noc noc,
@@ -1572,7 +1584,9 @@ void write_block(
     const uint32_t out_tile_id,
     const uint32_t tile_bytes,
     const uint32_t barrier_threshold,
-    const uint32_t row_stride_tiles = 0) {  // tile-id distance between output rows; 0 = cols (dense rows)
+    const uint32_t row_stride_tiles = 0,  // tile-id distance between output rows; 0 = cols (dense rows)
+    const uint32_t head_rows = 0,         // see head_wrap_tile_offset; 0 = rows never wrap to another head
+    const uint32_t first_row_in_head = 0) {
     uint32_t barrier_count = 0;
     const uint32_t row_stride = row_stride_tiles ? row_stride_tiles : cols;
 
@@ -1581,8 +1595,10 @@ void write_block(
 
     uint32_t tile_offset = 0;
     for (uint32_t row = 0; row < rows; ++row) {
+        const uint32_t row_tile_id =
+            out_tile_id + row * row_stride + head_wrap_tile_offset(row, cols, row_stride, head_rows, first_row_in_head);
         for (uint32_t col = 0; col < cols; ++col) {
-            const uint32_t tile_id = out_tile_id + row * row_stride + col;
+            const uint32_t tile_id = row_tile_id + col;
             noc.async_write(cb, out_writer, tile_bytes, {.offset_bytes = tile_offset}, {.page_id = tile_id});
             tile_offset += tile_bytes;
 
@@ -1614,7 +1630,9 @@ void write_block_row_grouped(
     const uint32_t tile_bytes,
     const uint32_t sbh,
     const uint32_t barrier_threshold,
-    const uint32_t row_stride_tiles = 0) {  // tile-id distance between output rows; 0 = cols (dense rows)
+    const uint32_t row_stride_tiles = 0,  // tile-id distance between output rows; 0 = cols (dense rows)
+    const uint32_t head_rows = 0,         // see head_wrap_tile_offset; 0 = rows never wrap to another head
+    const uint32_t first_row_in_head = 0) {
     constexpr uint32_t default_trid = 0;
     const uint32_t row_stride = row_stride_tiles ? row_stride_tiles : cols;
     uint32_t barrier_count = 0;
@@ -1631,9 +1649,11 @@ void write_block_row_grouped(
         for (uint32_t r = 0; r < rows_this_group; ++r) {
             const uint32_t row = rg * sbh + r;
             if (row < write_rows) {
+                const uint32_t row_tile_id = out_tile_id + row * row_stride +
+                                             head_wrap_tile_offset(row, cols, row_stride, head_rows, first_row_in_head);
                 for (uint32_t col = 0; col < cols; ++col) {
                     uint32_t tile_offset = (r * cols + col) * tile_bytes;
-                    const uint32_t tile_id = out_tile_id + row * row_stride + col;
+                    const uint32_t tile_id = row_tile_id + col;
                     noc.async_write(cb, out_writer, tile_bytes, {.offset_bytes = tile_offset}, {.page_id = tile_id});
                     if (++barrier_count == barrier_threshold) {
                         noc.async_writes_flushed<NocOptions::TXN_ID>({.trid = default_trid});
