@@ -100,3 +100,41 @@ Append-only log, one section per task attempt: what was done, decisions and why,
   pcc_swap_out 0.999996, rel_l2_swap_out 0.0028, attn_norm pcc 0.999996 / rel 0.0031.
 - Note: the first "pcc=0.000000" lines in the output come from run_safe_pytest's precompile pass (comp_pcc stub); ignore them.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_01_attn_norm.py`
+
+## C.sliding.attention test (attempt 1)
+- Reviewed the rendered test. Golden: s4096 chunk 1 (start 2048), layer 0, `attn_norm` -> `attn_out` [2048, 2816] bf16, KV prefix
+  [0, 2048) from the golden state (`device_ctx.extra["state_prefix"]`, `prefix_len`). PCC mode is right; threshold stays at 0.99.
+- Gap: PCC barely sees stateful bugs. CPU (PCC / rel L2 whole / rel L2 first 1024 rows): reference 0.999998 / 0.0019 / 0.0019;
+  no prefix 0.9979 / 0.064 / 0.090; RoPE positions from 0 0.9959 / 0.091 / 0.128; no window 0.9872 / 0.16; window 992 0.99998 / 0.0065
+  (not caught, harmless); rotate-half swapped for interleaved rel 0.38; no v norm rel 16.8; `1 + w` in q/k norm PCC 0.876.
+  Error budget: bf16 everywhere 0.0028, bf16 + bfp8 q/k/v/o weights 0.0055, 1% noise 0.010.
+- Added asserted checks after the gated PCC: rel L2 <= 0.03 whole chunk and over the first `sliding_window` rows, plus finite output.
+  Recorded as informational metrics `rel_l2_attention_L00`, `rel_l2_prefix_rows_attention_L00`. The test inlines the harness pipeline
+  as the attn_norm test does. Also asserts the component chunk starts after 0.
+- Not covered here: the K/V the step writes into the state (the device fn returns only attn_out); the state metrics cover it.
+- Verified: BRINGUP_IMPL=reference PASS (pcc 0.999998, rel 0.0019 / 0.0019); BRINGUP_IMPL=stub FAIL (pcc 0.0). Device gate fails for
+  now with `NotImplementedError: implement step: no device module for attention yet`.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_attention.py`
+
+## C.sliding.attention implement (attempt 1)
+- New `tt/attention.py`:
+  - `TtSlidingAttention`, TP by head: chip c holds Q heads 4c..4c+3 and KV heads 2c, 2c+1. Fused per-chip QKV weight [2816, 2048] bf16
+    (ERNIE layout), `nlp_create_qkv_heads(4, 2)`. Per-head `rms_norm` (reshape to [1,1,h*S,256]) with q_norm / k_norm, unscaled for V,
+    HiFi4 + fp32 acc. `experimental.rotary_embedding` with host-built fp32->bf16 cos/sin tables for exactly [start, start+S).
+    `fill_cache(update_idx=start)` for K and V. SDPA runs over the square [prev-window tail | chunk]: the tail is `ttnn.slice` of the cache at
+    [start-hist, start) with hist = min(1024, start), and Q is front-padded with its own first hist rows (outputs dropped), as in
+    gemma4/tt/attention/prefill.py. `scaled_dot_product_attention(is_causal, sliding_window_size=1024, scale 1.0)`, q256/k128, full grid,
+    HiFi4 + fp32 acc. Then `nlp_concat_heads`, row-parallel o_proj ([1024, 2816] per chip) and `ttnn.all_reduce(cluster_axis=1)`.
+  - `TtKVCacheSliding`: full-length [1, 8, max_seq, 256] bf16 sharded by head (dim 1), with `load_prefix` and `to_torch`.
+- `hooks.py`: `DEVICE_STEPS["sliding"]` now has `attention`. `_attention_module` loads only the six self_attn tensors of a layer (not the
+  experts). `device_component("attention")` builds a fresh device cache from `ctx.extra` (`state_prefix`, `prefix_len`, `max_seq`) on
+  each call. In `HybridDeviceModel`, sliding layers keep K/V in a device `TtKVCacheSliding` held by `_HybridState.dev`.
+  `load_prefix` and `to_torch` go to the device cache for those layers and to the CPU state for the others. `layer()` passes the cache to
+  the override as `ctx.extra["dev_cache"]`. Global layers raise NotImplementedError from `_attention_module` and stay on the CPU.
+- Gate: pcc_attention_L00 0.999988, rel_l2 0.0051 (whole chunk) and 0.0051 (first 1024 rows). PASS.
+- tt-probe check of the hybrid `device_model` on layer 0, s4096 chunk 1: block out PCC 0.99997; the key/value state read back from the device
+  scores PCC 0.99999 against the golden (whole state and the new chunk).
+- Not done yet (perf): SDPA uses HiFi4 + fp32 acc, which turns off streaming SDPA (see known issues); ERNIE's preset A is the candidate.
+  QKV and o_proj use HiFi2 + fp32 acc. Hidden states still go to the host between steps.
+- Gotcha: tt-probe saves its scripts under tests/ttnn/unit_tests/operations/<name>/probes (outside the allowed paths). I deleted them.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_attention.py`
