@@ -1092,7 +1092,7 @@ public:
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
-    int conflict_cap_ = 1'000'000;  // mirrors kDefaultConflictCap; copied into Impl on start()
+    int conflict_cap_ = 300'000;  // mirrors kDefaultConflictCap; copied into Impl on start()
 };
 
 /**

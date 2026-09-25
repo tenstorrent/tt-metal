@@ -25,10 +25,13 @@
 namespace tt::tt_fabric::detail {
 
 // Every SAT solve is bounded by the same conflict cap -- one default all around; there is deliberately no
-// unlimited special case for the SAT placement solve. On budget exhaustion the caller grows candidate
-// columns and retries, and ultimately fails gracefully instead of hanging. Sized well above what feasible
-// instances (e.g. the revAB SC16 64-stage, ~seconds) need.
-static constexpr int kDefaultConflictCap = 1'000'000;
+// unlimited special case for the SAT placement solve. On budget exhaustion the caller advances the retry
+// ladder (drop soft objectives -> grow candidates -> inject fallbacks -> drop the host cap) instead of
+// hanging. Sized well above what healthy instances need (post-dedup placements solve in <1k conflicts;
+// revAB's full 64-mesh solve took 671) while keeping each FAILED ladder rung cheap: hard host-min packings
+// (e.g. a 48-stage ring into a 64-slot cluster) walk ~10 capped attempts, so the budget bounds the whole
+// walk at minutes, not tens of minutes.
+static constexpr int kDefaultConflictCap = 300'000;
 
 struct SatSearchBackend::Impl {
     TopologySatSolver solver;
