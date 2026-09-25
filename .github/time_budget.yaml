@@ -337,7 +337,7 @@ llk:
 
 models:
   agentic_research_tier3:
-    bh_quietbox_2: 12
+    bh_quietbox_2: 102
   merge_gate:
     wh_galaxy_merge_gate: 5
   sanity:
