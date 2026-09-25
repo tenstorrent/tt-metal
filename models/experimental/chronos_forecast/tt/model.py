@@ -19,7 +19,7 @@ import torch
 from einops import rearrange
 
 from models.experimental.chronos_forecast.tt.encoder import TtEncoder, TtEncoderWeights
-from models.experimental.chronos_forecast.tt.group_attention import build_group_mask
+from models.experimental.chronos_forecast.tt.group_attention import build_group_mask, pack_group_blocks
 from models.experimental.chronos_forecast.tt.mha_core import maybe_upload_mask
 from models.experimental.chronos_forecast.tt.model_preprocessing import (
     instance_norm_inverse,
@@ -65,6 +65,10 @@ class TtChronosPreparedInputs:
     num_context_patches: int
     num_output_patches: int
     unique_groups: bool
+    # Grouped series are packed into ``group_block``-series blocks (see
+    # ``pack_group_blocks``); ``output_rows`` maps each input series to its packed row.
+    group_block: int | None = None
+    output_rows: torch.Tensor | None = None
 
 
 @dataclass(frozen=True)
@@ -82,6 +86,7 @@ class TtChronosDeviceInputs:
     num_context_patches: int
     num_output_patches: int
     unique_groups: bool
+    group_block: int | None = None
 
 
 @dataclass(frozen=True)
@@ -135,8 +140,9 @@ class TtChronos:
         l1_chunk_tokens: int | None = None,
     ):
         """``l1_chunk_tokens`` (e.g. ``precision.l1_chunk_tokens()``) runs the encoder
-        L1-resident on chunks of ``l1_chunk_tokens // padded_T`` series when groups
-        are unique; other group layouts and ``None`` keep activations in DRAM."""
+        L1-resident on chunks of ``l1_chunk_tokens // padded_T`` series (rounded down
+        to whole group blocks); ``None``, or a group block larger than a chunk,
+        keeps activations in DRAM."""
         self.device = device
         self.weights = weights
         self.config = config
@@ -197,14 +203,7 @@ class TtChronos:
         if group_ids is None:
             group_ids = torch.arange(batch_size, dtype=torch.long)
         unique_groups = bool(torch.unique(group_ids).numel() == batch_size)
-        reg_token = None
         if cfg.use_reg_token:
-            reg_token = (
-                self.weights.shared_weight[self.weights.reg_token_id]
-                .reshape(1, 1, -1)
-                .expand(batch_size, -1, -1)
-                .contiguous()
-            )
             attention_mask = torch.cat([attention_mask, torch.ones(batch_size, 1, dtype=attention_mask.dtype)], dim=-1)
 
         future_mask = torch.ones(batch_size, num_output_patches, dtype=attention_mask.dtype)
@@ -213,7 +212,29 @@ class TtChronos:
             raise ValueError("TtChronos v1 supports all-valid masks only (got a masked position)")
         seq_len = full_mask.shape[-1]
         time_mask = torch.zeros(1, 1, seq_len, seq_len)
-        group_mask = None if unique_groups else build_group_mask(group_ids, (full_mask > 0).float())
+
+        group_mask, group_block, output_rows = None, None, None
+        if not unique_groups:
+            # All-valid masks make group attention block-diagonal over group-sorted series.
+            preferred_block = 128
+            l1_series_chunk = self._l1_series_chunk(-(-seq_len // 32) * 32)
+            if l1_series_chunk is not None:
+                preferred_block = min(preferred_block, max(32, l1_series_chunk // 32 * 32))
+            packing = pack_group_blocks(group_ids, preferred_block=preferred_block)
+            patched_context = patched_context[packing.rows]
+            patched_future = patched_future[packing.rows]
+            batch_size = packing.rows.numel()
+            group_block, output_rows = packing.block, packing.output_rows
+            # SDPA batch is (time, block) after the batch/time flip; one mask broadcasts when blocks match.
+            group_mask = packing.mask[:1] if packing.is_uniform() else packing.mask.repeat(seq_len, 1, 1, 1)
+        reg_token = None
+        if cfg.use_reg_token:
+            reg_token = (
+                self.weights.shared_weight[self.weights.reg_token_id]
+                .reshape(1, 1, -1)
+                .expand(batch_size, -1, -1)
+                .contiguous()
+            )
         # Every series uses positions 0..T-1, so one (1,T,Dh) cache broadcasts over the batch.
         position_ids = torch.arange(seq_len).unsqueeze(0)
         inv_freq = self.weights.encoder.blocks[0].time.inv_freq
@@ -231,6 +252,8 @@ class TtChronos:
             num_context_patches=num_context_patches,
             num_output_patches=num_output_patches,
             unique_groups=unique_groups,
+            group_block=group_block,
+            output_rows=output_rows,
         )
 
     def upload_inputs(self, prepared: TtChronosPreparedInputs) -> TtChronosDeviceInputs:
@@ -263,13 +286,14 @@ class TtChronos:
             group_mask=(
                 None
                 if prepared.unique_groups
-                else maybe_upload_mask(self.device, prepared.group_mask, seq_len=batch_size)
+                else maybe_upload_mask(self.device, prepared.group_mask, seq_len=prepared.group_block)
             ),
             reg_token=upload(prepared.reg_token) if prepared.reg_token is not None else None,
             batch_size=batch_size,
             num_context_patches=prepared.num_context_patches,
             num_output_patches=prepared.num_output_patches,
             unique_groups=prepared.unique_groups,
+            group_block=prepared.group_block,
         )
 
     def forward_device(self, inputs: TtChronosDeviceInputs):
@@ -294,7 +318,10 @@ class TtChronos:
         ttnn.deallocate(context_embeds)
         ttnn.deallocate(future_embeds)
 
-        l1_series_chunk = self._l1_series_chunk(x.padded_shape[-2]) if inputs.unique_groups else None
+        l1_series_chunk = self._l1_series_chunk(x.padded_shape[-2])
+        if l1_series_chunk is not None and inputs.group_block is not None:
+            # Chunks hold whole group blocks; a block larger than one chunk runs from DRAM.
+            l1_series_chunk = l1_series_chunk // inputs.group_block * inputs.group_block or None
         hidden = self._encoder.forward_device(
             x,
             inputs.cos,
@@ -302,6 +329,7 @@ class TtChronos:
             inputs.time_mask,
             inputs.group_mask,
             diagonal_group_attention=inputs.unique_groups,
+            group_block=inputs.group_block,
             l1_series_chunk=l1_series_chunk,
         )
         seq_len = hidden.shape[-2]
@@ -319,13 +347,19 @@ class TtChronos:
         loc_scale: tuple[torch.Tensor, torch.Tensor],
         *,
         num_output_patches: int,
+        output_rows: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Download and unscale the device output into `(B, Q, horizon)`."""
+        """Download and unscale the device output into `(B, Q, horizon)`.
+
+        Pass ``prepared.output_rows`` so grouped (packed) batches come back in input order.
+        """
         import ttnn
 
         out = ttnn.to_torch(output_device).float()
         if out.dim() == 4 and out.shape[0] == 1:
             out = out.squeeze(0)
+        if output_rows is not None:
+            out = out[output_rows]
         out = out[:, :num_output_patches, :]
         quantile_preds = rearrange(
             out,

@@ -48,6 +48,18 @@ def _wql(preds: torch.Tensor, target: torch.Tensor) -> float:
     return (2 * pinball.sum(dim=(0, 2)) / target.abs().sum()).mean().item()
 
 
+def _group_ids(batch: int, groups) -> torch.Tensor:
+    """``groups`` is a uniform group size, or "mixed" for shuffled groups of 1..7 series."""
+    if groups != "mixed":
+        return torch.arange(batch, dtype=torch.long) // groups
+    sizes, total = [], 0
+    while total < batch:
+        sizes.append(min(1 + len(sizes) % 7, batch - total))
+        total += sizes[-1]
+    group_ids = torch.repeat_interleave(torch.arange(len(sizes)), torch.tensor(sizes))
+    return group_ids[torch.randperm(batch, generator=torch.Generator().manual_seed(1))]
+
+
 def _run_device(model, context, group_ids):
     import ttnn
 
@@ -56,7 +68,12 @@ def _run_device(model, context, group_ids):
     output_device = None
     try:
         output_device = model.forward_device(inputs)
-        got = model.postprocess_output(output_device, prepared.loc_scale, num_output_patches=NUM_OUTPUT_PATCHES)
+        got = model.postprocess_output(
+            output_device,
+            prepared.loc_scale,
+            num_output_patches=NUM_OUTPUT_PATCHES,
+            output_rows=prepared.output_rows,
+        )
     finally:
         if output_device is not None:
             ttnn.deallocate(output_device)
@@ -66,17 +83,23 @@ def _run_device(model, context, group_ids):
 
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize(
-    "batch, group_size, l1_resident",
+    "batch, groups, l1_resident",
     [
         pytest.param(64, 1, False, id="b64_unique_groups"),
         pytest.param(64, 4, False, id="b64_groups_of_4"),
         # 48-series chunks: one full chunk plus a 16-series remainder.
         pytest.param(64, 1, True, id="b64_unique_groups_l1"),
-        pytest.param(64, 4, True, id="b64_groups_of_4_l1_falls_back"),
+        # Chunks round down to whole 32-series group blocks.
+        pytest.param(64, 4, True, id="b64_groups_of_4_l1"),
+        # Non-uniform blocks with dummy series; the L1 case slices the block mask per chunk.
+        pytest.param(100, "mixed", False, id="b100_mixed_groups"),
+        pytest.param(100, "mixed", True, id="b100_mixed_groups_l1"),
+        # A 128-series block exceeds one L1 chunk, so it runs from DRAM.
+        pytest.param(100, 33, True, id="b100_groups_of_33_l1_falls_back"),
     ],
 )
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
-def test_device_resident_paper_context_pcc(mesh_device, batch, group_size, l1_resident):
+def test_device_resident_paper_context_pcc(mesh_device, batch, groups, l1_resident):
     pytest.importorskip("ttnn")
     from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -92,7 +115,7 @@ def test_device_resident_paper_context_pcc(mesh_device, batch, group_size, l1_re
 
     torch.manual_seed(0)
     context = torch.cumsum(torch.randn(batch, CONTEXT), dim=-1) + 5.0 * torch.randn(batch, 1)
-    group_ids = torch.arange(batch, dtype=torch.long) // group_size
+    group_ids = _group_ids(batch, groups)
     with torch.no_grad():
         expected = reference(
             context=context,
@@ -108,7 +131,7 @@ def test_device_resident_paper_context_pcc(mesh_device, batch, group_size, l1_re
     _, pcc = assert_with_pcc(expected.float(), got, pcc=0.95)
     mae_n = (expected_n - got_n).abs().mean().item()
     print(
-        f"\n[PCC] {weight_source} batch={batch} group_size={group_size} l1={l1_resident} "
+        f"\n[PCC] {weight_source} batch={batch} groups={groups} l1={l1_resident} "
         f"pcc_norm={pcc_n} pcc={pcc} mae_norm={mae_n:.5f}"
     )
 
@@ -132,6 +155,7 @@ _MAX_REL_WQL_INCREASE = 0.01
         pytest.param("performance", 4, False, id="performance_groups_of_4"),
         pytest.param("default", 1, True, id="default_l1"),
         pytest.param("performance", 1, True, id="performance_l1"),
+        pytest.param("performance", 4, True, id="performance_l1_groups_of_4"),
     ],
 )
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)

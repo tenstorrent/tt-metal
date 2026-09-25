@@ -88,12 +88,23 @@ class TtEncoderBlock:
         return (_weight(weights.ff_wi), _weight(weights.ff_wo), rms_w)
 
     def forward_device(
-        self, x, cos, sin, time_mask, group_mask, *, diagonal_group_attention: bool = False, memory_config=None
+        self,
+        x,
+        cos,
+        sin,
+        time_mask,
+        group_mask,
+        *,
+        diagonal_group_attention: bool = False,
+        group_block: int | None = None,
+        memory_config=None,
     ):
         """Device (B,T,d) + cos/sin (1 or B,1,T,Dh) + masks -> device (B,T,d); caller owns it.
 
-        ``memory_config`` places the per-token path (time attention, diagonal
-        group attention, FF) intermediates; the default is DRAM.
+        ``group_block`` (series packed by ``pack_group_blocks``) runs group
+        attention per block of that many series with a (1 or T*B/block,1,block,block)
+        mask instead of a (T,1,B,B) one. ``memory_config`` places intermediates
+        (default DRAM).
         """
         import ttnn
 
@@ -108,10 +119,16 @@ class TtEncoderBlock:
         if diagonal_group_attention:
             x = self._residual_add(x, self.group_core.forward_diagonal_group(x, memory_config=mem))
         else:
-            x_flip = ttnn.permute(x, (1, 0, 2))
-            out = self.group_core(x_flip, group_mask)
+            x_flip = self._swap_leading_dims(x, mem)
+            flip_shape = x_flip.shape
+            if group_block is not None:
+                t, b, d = flip_shape
+                x_flip = ttnn.reshape(x_flip, (t * b // group_block, group_block, d))
+            out = self.group_core(x_flip, group_mask, memory_config=mem)
             ttnn.deallocate(x_flip)
-            back = ttnn.permute(out, (1, 0, 2))
+            if group_block is not None:
+                out = ttnn.reshape(out, flip_shape)
+            back = self._swap_leading_dims(out, mem)
             ttnn.deallocate(out)
             x = self._residual_add(x, back)
 
@@ -179,6 +196,21 @@ class TtEncoderBlock:
         host = host[:, :t, :]
         ttnn.deallocate(x)
         return host
+
+    @staticmethod
+    def _swap_leading_dims(x, mem):
+        """(A,B,d) -> (B,A,d). In DRAM a row-major round trip beats the tiled permute,
+        which reshuffles rows inside tiles (1024 x 133 x 768: 3.2 vs 6.2-7.9 ms); in L1 it does not."""
+        import ttnn
+
+        if mem.buffer_type != ttnn.BufferType.DRAM:
+            return ttnn.permute(x, (1, 0, 2), memory_config=mem)
+        rows = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, memory_config=mem)
+        swapped = ttnn.permute(rows, (1, 0, 2), memory_config=mem)
+        ttnn.deallocate(rows)
+        out = ttnn.to_layout(swapped, ttnn.TILE_LAYOUT, memory_config=mem)
+        ttnn.deallocate(swapped)
+        return out
 
     @staticmethod
     def _residual_add(x, out):

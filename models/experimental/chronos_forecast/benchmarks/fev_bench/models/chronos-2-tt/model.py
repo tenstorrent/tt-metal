@@ -126,6 +126,7 @@ class Chronos2TTModel(fev.ForecastingModel):
                     output_device,
                     prepared.loc_scale,
                     num_output_patches=num_output_patches,
+                    output_rows=prepared.output_rows,
                 )
             finally:
                 if output_device is not None:

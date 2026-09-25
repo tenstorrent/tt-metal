@@ -28,11 +28,13 @@ def _percentile(values, fraction):
 
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize(
-    "precision_name, l1_resident",
+    "precision_name, l1_resident, group_size",
     [
-        pytest.param("default", False, id="default_dram"),
-        pytest.param("default", True, id="default_l1"),
-        pytest.param("performance", True, id="performance_l1"),
+        pytest.param("default", False, None, id="default_dram"),
+        pytest.param("default", True, None, id="default_l1"),
+        pytest.param("performance", True, None, id="performance_l1"),
+        pytest.param("default", False, 4, id="default_dram_groups_of_4"),
+        pytest.param("performance", True, 4, id="performance_l1_groups_of_4"),
     ],
 )
 @pytest.mark.parametrize(
@@ -41,7 +43,7 @@ def _percentile(values, fraction):
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
-def test_paper_forward_trace_perf(mesh_device, precision_name, l1_resident):
+def test_paper_forward_trace_perf(mesh_device, precision_name, l1_resident, group_size):
     ttnn = pytest.importorskip("ttnn")
 
     from models.experimental.chronos_forecast.tt.model import TtChronos
@@ -57,9 +59,13 @@ def test_paper_forward_trace_perf(mesh_device, precision_name, l1_resident):
     model = TtChronos.from_torch_model(mesh_device, reference, precision, l1_chunk_tokens=l1_chunk_tokens)
     torch.manual_seed(0)
     context = torch.randn(BATCH, CONTEXT)
+    group_ids = None if group_size is None else torch.arange(BATCH) // group_size
+
+    def prepare():
+        return model.prepare_inputs(context=context, group_ids=group_ids, num_output_patches=NUM_OUTPUT_PATCHES)
 
     preprocess_start = time.perf_counter()
-    prepared = model.prepare_inputs(context=context, num_output_patches=NUM_OUTPUT_PATCHES)
+    prepared = prepare()
     preprocess_s = time.perf_counter() - preprocess_start
 
     runner = TtChronosTraceRunner(model, prepared)
@@ -80,7 +86,7 @@ def test_paper_forward_trace_perf(mesh_device, precision_name, l1_resident):
         result = None
         for index in range(20):
             start = time.perf_counter()
-            prepared_iteration = model.prepare_inputs(context=context, num_output_patches=NUM_OUTPUT_PATCHES)
+            prepared_iteration = prepare()
             result = runner.execute_pipelined(prepared_iteration, readback=True)
             duration = time.perf_counter() - start
             e2e_times.append(duration)
@@ -100,6 +106,7 @@ def test_paper_forward_trace_perf(mesh_device, precision_name, l1_resident):
         f"\n  weights:              {weight_source}"
         f"\n  precision:            {precision_name}"
         f"\n  l1_chunk_tokens:      {l1_chunk_tokens}"
+        f"\n  group_size:           {group_size or 'unique'} (block {prepared.group_block})"
         f"\n  host_preprocess_s:    {preprocess_s:.6f}"
         f"\n  replay_median_s:      {replay_median:.6f}"
         f"\n  replay_p95_s:         {replay_p95:.6f}"

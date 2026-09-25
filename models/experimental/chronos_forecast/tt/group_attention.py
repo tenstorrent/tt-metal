@@ -9,6 +9,7 @@ reference : models/experimental/chronos_forecast/reference/chronos2/layers.py
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import torch
@@ -65,6 +66,105 @@ def build_group_mask(
         group_time_mask = torch.einsum("qb,bt->qbt", group_mask, attention_mask)
         group_time_mask = rearrange(group_time_mask, "q b t -> t 1 q b")
         return ((1.0 - group_time_mask.float()) * torch.finfo(dtype).min).to(dtype)
+
+
+_TILE = 32
+
+
+@dataclass(frozen=True)
+class GroupBlockPacking:
+    """Series order for block-diagonal group attention.
+
+    ``rows[i]`` is the original series at packed position ``i`` (dummy slots
+    repeat a real series), ``output_rows[j]`` is the packed position of original
+    series ``j``, and every ``block``-series slice holds whole groups only.
+    ``mask`` is the (num_blocks, 1, block, block) additive mask of the packed order.
+    """
+
+    rows: torch.Tensor
+    output_rows: torch.Tensor
+    block: int
+    mask: torch.Tensor
+
+    @property
+    def num_blocks(self) -> int:
+        return self.mask.shape[0]
+
+    def is_uniform(self) -> bool:
+        return bool((self.mask == self.mask[:1]).all())
+
+
+def _first_fit_decreasing(sizes: list[int], capacity: int) -> list[list[int]]:
+    """Bins of group indices; ``sizes`` must already be sorted descending."""
+    bins: list[list[int]] = []
+    free: list[int] = []
+    for group, size in enumerate(sizes):
+        for b, room in enumerate(free):
+            if room >= size:
+                bins[b].append(group)
+                free[b] -= size
+                break
+        else:
+            bins.append([group])
+            free.append(capacity - size)
+    return bins
+
+
+def pack_group_blocks(
+    group_ids: torch.Tensor, dtype: torch.dtype = torch.float32, *, preferred_block: int = 128
+) -> GroupBlockPacking:
+    """Pack groups into tile-aligned blocks so group attention runs per block.
+
+    Group attention over B series is block-diagonal once series are sorted by
+    group, so it can run as B/block independent SDPAs of length ``block``
+    instead of one B x B masked SDPA. The block size (a multiple of 32) is the
+    one that needs the fewest dummy series; dummies attend only to themselves.
+    Ties go to the largest block up to ``preferred_block``: SDPA over many
+    32-long sequences is overhead-bound (B=1024 x T=133: 11.0 ms at 32 vs 4.8 ms at 128).
+    """
+    batch = group_ids.shape[0]
+    _, group_of_series, counts = torch.unique(group_ids, return_inverse=True, return_counts=True)
+    by_size = torch.argsort(counts, descending=True, stable=True)
+    sizes = counts[by_size].tolist()
+    smallest = _TILE * math.ceil(sizes[0] / _TILE)
+    largest = _TILE * math.ceil(batch / _TILE)
+
+    def rank(block: int, bins: list) -> tuple:
+        over = block > preferred_block
+        return len(bins) * block, over, block if over else -block
+
+    best = None
+    block = smallest
+    while True:
+        bins = _first_fit_decreasing(sizes, block)
+        if best is None or rank(block, bins) < rank(*best):
+            best = (block, bins)
+        if block >= largest:
+            break
+        block = min(2 * block, largest)
+    block, bins = best
+
+    members = [torch.nonzero(group_of_series == g).flatten() for g in by_size.tolist()]
+    rows = torch.zeros(len(bins) * block, dtype=torch.long)
+    packed_groups = torch.empty(len(bins) * block, dtype=torch.long)
+    output_rows = torch.empty(batch, dtype=torch.long)
+    next_dummy = len(sizes)
+    for i, b in enumerate(bins):
+        pos = i * block
+        for g in b:
+            n = members[g].numel()
+            rows[pos : pos + n] = members[g]
+            packed_groups[pos : pos + n] = g
+            output_rows[members[g]] = torch.arange(pos, pos + n)
+            pos += n
+        # Dummies repeat series 0 under fresh ids, so each attends only to itself.
+        pad = (i + 1) * block - pos
+        packed_groups[pos : pos + pad] = next_dummy + torch.arange(pad)
+        next_dummy += pad
+    packed_groups = packed_groups.reshape(len(bins), block)
+    same = packed_groups[:, :, None] == packed_groups[:, None, :]
+    mask = ((~same).to(dtype) * torch.finfo(dtype).min).unsqueeze(1)
+    return GroupBlockPacking(rows=rows, output_rows=output_rows, block=block, mask=mask)
 
 
 class TtGroupAttention:

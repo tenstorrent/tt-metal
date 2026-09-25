@@ -88,6 +88,15 @@ class TtChronosTraceRunner:
                 f"trace future shape changed: {tuple(prepared.patched_future.shape)} "
                 f"!= {tuple(self._prepared.patched_future.shape)}"
             )
+        same_groups = prepared.unique_groups == self._prepared.unique_groups and (
+            prepared.unique_groups
+            or (
+                prepared.group_block == self._prepared.group_block
+                and prepared.group_mask.shape == self._prepared.group_mask.shape
+            )
+        )
+        if not same_groups:
+            raise ValueError("trace group layout changed (unique groups, block size or mask shape)")
         target_cq = self.cq_id if cq_id is None else cq_id
         ttnn.copy_host_to_device_tensor(
             self._host_tensor(prepared.patched_context),
@@ -99,6 +108,12 @@ class TtChronosTraceRunner:
             self.inputs.patched_future,
             cq_id=target_cq,
         )
+        if not prepared.unique_groups:
+            ttnn.copy_host_to_device_tensor(
+                self._host_tensor(prepared.group_mask),
+                self.inputs.group_mask,
+                cq_id=target_cq,
+            )
         self._prepared = prepared
 
     def execute(
@@ -125,6 +140,7 @@ class TtChronosTraceRunner:
                 self._trace_output,
                 self._prepared.loc_scale,
                 num_output_patches=self._prepared.num_output_patches,
+                output_rows=self._prepared.output_rows,
             ),
             prepared=self._prepared,
         )
@@ -153,6 +169,7 @@ class TtChronosTraceRunner:
                 self._trace_output,
                 self._prepared.loc_scale,
                 num_output_patches=self._prepared.num_output_patches,
+                output_rows=self._prepared.output_rows,
             ),
             prepared=self._prepared,
         )

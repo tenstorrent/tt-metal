@@ -68,19 +68,23 @@ class TtEncoder:
         group_mask,
         *,
         diagonal_group_attention: bool = False,
+        group_block: int | None = None,
         l1_series_chunk: int | None = None,
     ):
         """Device (B,T,d) + cos/sin (1 or B,1,T,Dh) + masks -> device (B,T,d); caller owns it.
 
-        With ``l1_series_chunk`` (diagonal group attention only) the encoder runs
-        on chunks of that many series with every intermediate in L1.
+        With ``l1_series_chunk`` the encoder runs on chunks of that many series
+        with every intermediate in L1. Chunks must not split an attention group:
+        use diagonal group attention, or a multiple of ``group_block``.
         """
         import ttnn
 
         if l1_series_chunk is not None:
-            if not diagonal_group_attention:
-                raise ValueError("L1 series chunking needs diagonal group attention (series must be independent)")
-            return self._forward_l1_chunked(x, cos, sin, time_mask, l1_series_chunk)
+            if not diagonal_group_attention and (group_block is None or l1_series_chunk % group_block):
+                raise ValueError("L1 series chunks must hold whole attention groups")
+            return self._forward_l1_chunked(
+                x, cos, sin, time_mask, group_mask, l1_series_chunk, diagonal_group_attention, group_block
+            )
         for block in self.blocks:
             x = block.forward_device(
                 x,
@@ -89,17 +93,38 @@ class TtEncoder:
                 time_mask,
                 group_mask,
                 diagonal_group_attention=diagonal_group_attention,
+                group_block=group_block,
             )
         x = ttnn.rms_norm(x, epsilon=self.weights.final_eps, weight=self._final_norm)
         return x
 
-    def _forward_l1_chunked(self, x, cos, sin, time_mask, series_chunk: int):
-        """Series are independent, so each chunk runs all blocks without leaving L1."""
+    @staticmethod
+    def _chunk_group_mask(group_mask, seq_len: int, first_block: int, num_blocks: int):
+        """Rows of a (T*nb,1,S,S) time-major block mask for blocks [first, first+num); SDPA wants it in DRAM."""
+        import ttnn
+
+        if group_mask is None or group_mask.shape[0] == 1:
+            return group_mask
+        s = group_mask.shape[-1]
+        per_time = ttnn.reshape(group_mask, (seq_len, group_mask.shape[0] // seq_len, s, s))
+        part = ttnn.slice(
+            per_time,
+            (0, first_block, 0, 0),
+            (seq_len, first_block + num_blocks, s, s),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return ttnn.reshape(part, (seq_len * num_blocks, 1, s, s))
+
+    def _forward_l1_chunked(
+        self, x, cos, sin, time_mask, group_mask, series_chunk: int, diagonal: bool, group_block: int | None
+    ):
+        """Chunks never split a group, so each runs all blocks without leaving L1."""
         import ttnn
 
         l1 = ttnn.L1_MEMORY_CONFIG
         shape = list(x.shape)
         batch_dim = len(shape) - 3
+        seq_len = shape[-2]
         cos_l1 = ttnn.to_memory_config(cos, l1)
         sin_l1 = ttnn.to_memory_config(sin, l1)
         chunks = []
@@ -107,15 +132,29 @@ class TtEncoder:
             begin, end = [0] * len(shape), list(shape)
             begin[batch_dim] = start
             end[batch_dim] = min(start + series_chunk, shape[batch_dim])
+            chunk_mask = None
+            if not diagonal:
+                chunk_mask = self._chunk_group_mask(
+                    group_mask, seq_len, start // group_block, (end[batch_dim] - start) // group_block
+                )
             h = ttnn.slice(x, begin, end, memory_config=l1)
             for block in self.blocks:
                 h = block.forward_device(
-                    h, cos_l1, sin_l1, time_mask, None, diagonal_group_attention=True, memory_config=l1
+                    h,
+                    cos_l1,
+                    sin_l1,
+                    time_mask,
+                    chunk_mask,
+                    diagonal_group_attention=diagonal,
+                    group_block=group_block,
+                    memory_config=l1,
                 )
             out = ttnn.rms_norm(
                 h, epsilon=self.weights.final_eps, weight=self._final_norm, memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
             ttnn.deallocate(h)
+            if chunk_mask is not None and chunk_mask is not group_mask:
+                ttnn.deallocate(chunk_mask)
             chunks.append(out)
         ttnn.deallocate(cos_l1)
         ttnn.deallocate(sin_l1)
