@@ -2,11 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Trace-capture probe for the V4 prefill block (DS4F-0246 lever 1): can one 5120-token chunk of each layer kind be
-captured as a ttnn trace at a FIXED chunk index, and what does the replay cost? The eager block is host-dispatch
-bound (issue == wall, 571-780 programs per layer), so the replay time is the ceiling of the trace lever. The MoE's
-sub-device swaps go through SubDeviceTraceController (segmented capture, as the V3 engine does). Whatever op rejects
-the capture is the finding; the replay is compared with the eager output (same chunk, same state) for PCC."""
+"""Trace-capture probe for the V4 prefill block (DS4F-0246 lever 1, DS4F-0247): one 5120-token chunk of each layer kind
+captured as a ttnn trace at a FIXED chunk index, replayed and compared with the eager output (same chunk, same state).
+The eager block is host-dispatch bound (issue == wall, 571-780 programs per layer), so the replay time is what the trace
+lever buys: MEASURED 2x4 replay 28.5 / 58.7 / 30.6 ms vs eager 68.5 / 91.4 / 69.9 (SWA / CSA / HCA), PCC 1.0 / 0.9998 / 1.0.
+The MoE's sub-device swaps go through SubDeviceTraceController (segmented capture, as the V3 engine does). Gates: eager
+determinism 1.0, replay-vs-eager >= 0.999. V4_TRACE_KEEP_STATE=1 holds the pre-capture state tensors alive (the causal
+test that found the state-reassignment hazard); default 0."""
 
 import os
 import time
@@ -49,11 +51,6 @@ _MESH_CONFIGS = [
 
 
 @pytest.mark.timeout(0)
-@pytest.mark.xfail(
-    strict=False,
-    reason="DS4F-0247: the forward pushes per-chunk scalars / allocates on reset / uploads input_ids -- capture rejected "
-    "until prepare_chunk lands; passes (and reports replay time) once it does",
-)
 @pytest.mark.parametrize("layer_idx", [0, 2, 3], ids=["swa-layer0-hash", "csa-layer2-hash", "hca-layer3-topk"])
 @pytest.mark.parametrize("mesh_device, device_params", _MESH_CONFIGS, indirect=["mesh_device", "device_params"])
 def test_v4_block_trace_probe(mesh_device, device_params, layer_idx):
@@ -119,7 +116,7 @@ def test_v4_block_trace_probe(mesh_device, device_params, layer_idx):
     # masked at chunk 0 -> 1.0). Holding references keeps the addresses live; V4_TRACE_KEEP_STATE=0 shows the hazard.
     st = block.states[0]
     keep = [getattr(st, n) for n in ("sliding_carry", "tail", "prior_c", "prior_i") if getattr(st, n, None) is not None]
-    if os.environ.get("V4_TRACE_KEEP_STATE", "1") != "1":
+    if os.environ.get("V4_TRACE_KEEP_STATE", "0") != "1":
         keep = []
     try:
         controller.begin_capture()
