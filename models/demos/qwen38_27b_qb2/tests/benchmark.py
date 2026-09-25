@@ -171,7 +171,7 @@ async def run_gpqa(client, output_dir, task, cases):
 
 
 def performance_shapes(server_capacity, input_lengths):
-    return [(length, batch) for length in input_lengths for batch in (1, 8, 16) if batch <= server_capacity]
+    return [(length, server_capacity) for length in input_lengths]
 
 
 async def run_performance(client, output_dir, server_capacity, input_lengths):

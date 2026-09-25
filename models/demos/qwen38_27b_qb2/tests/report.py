@@ -13,29 +13,36 @@ from models.perf.benchmarking_utils import IS_CI_ENV, BenchmarkData, BenchmarkPr
 def report(summary):
     runs = []
     if "gpqa_result" in summary:
-        runs.append((summary["gpqa_result"], "GPQA Diamond, first 10/198", True))
+        runs.append(
+            (
+                summary["gpqa_result"],
+                "GPQA Diamond, first 10/198",
+                [("inference", "gpqa_accuracy", 100 * summary["gpqa_result"]["accuracy"])],
+            )
+        )
     runs.extend(
-        (row, f"Fixed-length text serving, server capacity {summary['server_capacity']}", False)
+        (
+            row,
+            f"Fixed-length text serving, server capacity {summary['server_capacity']}",
+            [
+                (
+                    "inference_prefill",
+                    "time_to_token",
+                    row["mean_ttft_ms"] / 1000 if row["mean_ttft_ms"] is not None else None,
+                ),
+                ("inference_decode", "tokens/s/user", row["mean_decode_tokens_per_s"]),
+                ("inference_decode", "tokens/s", row["aggregate_output_tokens_per_s"]),
+            ],
+        )
         for row in summary.get("performance_results", [])
     )
-    for index, (row, dataset, accuracy) in enumerate(runs):
+    for index, (row, dataset, metrics) in enumerate(runs):
         profiler = BenchmarkProfiler()
         for phase in ("run", "inference", "inference_prefill", "inference_decode"):
             start = summary["run_start"] if phase == "run" else row["measurement_start"]
             profiler.start_times[(0, phase)] = datetime.fromisoformat(start)
             profiler.end_times[(0, phase)] = datetime.fromisoformat(row["measurement_end"])
         benchmark = BenchmarkData()
-        metrics = [
-            (
-                "inference_prefill",
-                "time_to_token",
-                row["mean_ttft_ms"] / 1000 if row["mean_ttft_ms"] is not None else None,
-            ),
-            ("inference_decode", "tokens/s/user", row["mean_decode_tokens_per_s"]),
-            ("inference_decode", "tokens/s", row["aggregate_output_tokens_per_s"]),
-        ]
-        if accuracy:
-            metrics.append(("inference", "gpqa_accuracy", 100 * row["accuracy"]))
         for phase, name, value in metrics:
             if value is not None:
                 benchmark.add_measurement(profiler, 0, phase, name, value)
@@ -57,7 +64,7 @@ def report(summary):
                 "prompt_sha256": row.get("prompt_sha256"),
                 "input_sha256": summary["input_sha256"],
                 "requests": row["requests"],
-                "scope": summary["scope"] if accuracy else "warmed, greedy, ignored EOS",
+                "scope": summary["scope"] if "accuracy" in row else "warmed, greedy, ignored EOS",
             },
         )
 

@@ -30,7 +30,13 @@ export HF_DATASETS_CACHE="$work/datasets" HF_MODULES_CACHE="$work/hf-modules"
 export TT_METAL_CACHE="$work/tt-cache" TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0
 export TT_MESH_GRAPH_DESC_PATH="$PWD/tt_metal/fabric/mesh_graph_descriptors/p300_x2_mesh_graph_descriptor.textproto"
 git clone https://github.com/tenstorrent/vllm-tt-plugin.git "$work/plugin"
-git -C "$work/plugin" checkout "${VLLM_TT_PLUGIN_REF:-35090660433d5606957ded97f7130b5cc75f94f7}"
+plugin_ref="${VLLM_TT_PLUGIN_REF:-35090660433d5606957ded97f7130b5cc75f94f7}"
+# The shared workflow's former default predates request-lifecycle fixes needed
+# after concurrent evaluation. Keep manual overrides, but do not select it for Qwen.
+if [ "$plugin_ref" = "yieldthought/llama31-qb2-serving" ]; then
+    plugin_ref=35090660433d5606957ded97f7130b5cc75f94f7
+fi
+git -C "$work/plugin" checkout "$plugin_ref"
 git -C "$work/plugin" rev-parse HEAD > "$results/plugin-revision.txt"
 unset VLLM_TT_PLUGIN_REF
 pushd "$work/plugin"
@@ -96,6 +102,11 @@ for capacity in 1 8 16; do
         --output-dir "$results/capacity_$capacity"
     if [ "$capacity" = 16 ]; then
         evaluate --mode gpqa --server-capacity 16 --output-dir "$results/gpqa"
+        if ! kill -0 "$server_pid" 2>/dev/null || \
+            ! curl --max-time 10 -fsS http://127.0.0.1:8000/health >/dev/null; then
+            echo "Qwen3.8 server became unavailable after GPQA" >&2
+            exit 1
+        fi
         pushd "$work/plugin"
         python -m pytest --confcutdir=. \
             tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_same_seeds_reproduce_across_batches \
