@@ -122,11 +122,11 @@ T3K, real weights.
 
 | Test | Scope | PCC | Gate |
 | --- | --- | --- | --- |
-| `test_dflash_drafter_tp` | `fc` + `hidden_norm` tap projection | 0.99991 | 0.99 |
-| | one sliding-window layer / one full-attention layer | 0.99601 / 0.99599 | 0.99 |
-| | full 5-layer drafter / second step with carried context | 0.99421 / 0.99495 | 0.99 |
-| `test_dflash_verify_pcc` | prompt, positions 0-149 (two anchor buckets) | 0.9928 | 0.95 |
-| | verify block, positions 150-165 | 0.9552 | 0.95 |
+| `test_dflash_drafter_tp` | `fc` + `hidden_norm` tap projection | 0.99990 | 0.99 |
+| | one sliding-window layer / one full-attention layer | 0.99603 / 0.99600 | 0.99 |
+| | full 5-layer drafter / second step with carried context | 0.99426 / 0.99490 | 0.99 |
+| `test_dflash_verify_pcc` | prompt, positions 0-149 (two anchor buckets) | 0.9933 | 0.95 |
+| | verify block, positions 150-165 | 0.9595 | 0.95 |
 
 **Exception:** the verify test gates at 0.95, the full-depth decode test's gate, not the 0.98
 prefill gate. A few rows where the reference puts almost all probability on one token score low on
@@ -135,30 +135,31 @@ as one bucket from position 0, so they reflect the target's precision, not the v
 
 ## Performance
 
-T3K, batch 1, greedy, `demo/dflash_demo.py`, 100 new tokens (`spec_128_long`: 256). TTFT: call to
-first token. Decode TPS: rate after the first token. Production traced decode (`text_demo.py`,
-ISL 128) is 17.87 tok/s.
+T3K, batch 1, greedy, `demo/dflash_demo.py`, on `ign/qwen359b` `9072f487814`. TTFT: call to first
+token. Decode TPS: rate after the first token. "vs production" compares with production traced
+decode on the same build (`text_demo.py -k "traced_128 and not 128k"`, ISL 128, batch 1):
+16.52 tok/s.
 
-| ISL | TTFT | Decode TPS | vs production | Acceptance (tok/step) |
+| ISL (new tokens) | TTFT | Decode TPS | vs production | Acceptance (tok/step) |
 | --- | --- | --- | --- | --- |
-| 128 | 0.24 s | 18.44 | 1.03x | 4.95 |
-| 256 | 0.25 s | 13.37 | 0.75x | 4.40 |
-| 512 | 4.33 s | 16.24 | 0.91x | 4.12 |
-| 1k | 3.96 s | 14.91 | 0.83x | 4.30 |
-| 2k | 6.08 s | 16.83 | 0.94x | 5.21 |
-| 3k | 7.45 s | 9.54 | 0.53x | 4.95 |
-| 3968 | 8.22 s | 15.55 | 0.87x | 5.21 |
-| 8k | 11.88 s | 10.30 | 0.58x | 6.19 |
-| 16k | 16.20 s | 10.27 | 0.57x | 5.82 |
-| 24k | 22.57 s | 9.11 | 0.51x | 5.82 |
-| 32k | 31.65 s | 6.60 | 0.37x | 4.95 |
+| 128 (100) | 0.22 s | 26.88 | 1.63x | 5.82 |
+| 128 (256) | 0.22 s | 17.57 | 1.06x | 5.31 |
+| 512 (100) | 3.34 s | 16.03 | 0.97x | 3.54 |
+| 1k (100) | 3.95 s | 20.45 | 1.24x | 4.95 |
+| 2k (100) | 4.97 s | 18.30 | 1.11x | 5.21 |
+| 3k (100) | 4.92 s | 12.43 | 0.75x | 4.95 |
+| 4k (100) | 6.48 s | 15.42 | 0.93x | 4.95 |
 
+Single runs; expect up to ~15% run-to-run variation in decode TPS. Decode TPS tracks acceptance,
+which depends on the generated text. Compile and warm-up are excluded. ISL 32k hung the device in
+the target's GDN conv1d prefill in 2 of 4 runs (cause not identified); ISL 64k runs out of DRAM in
+the drafter's first step, which consumes the whole prompt's taps at once.
 
 ## Dependencies
 
 | Component | Version |
 | --- | --- |
-| tt-metal / TTNN | branch `ign/qwen_3.6_27B_dFLASH` (`v0.78.0-dev20260901`); no C++ changes |
+| tt-metal / TTNN | branch `ign/qwen_3.6_27B_dFLASH` on `ign/qwen359b` `9072f487814` (`v0.80.0-dev20260922`); no C++ changes |
 | Target checkpoint | `Qwen/Qwen3.6-27B` @ `6a9e13bd6fc8f0983b9b99948120bc37f49c13e9` |
 | Drafter checkpoint | `z-lab/Qwen3.6-27B-DFlash` @ `0919688658996800f86b895034249700e9481106` |
 | transformers / torch | 5.12.1 / 2.11.0+cpu |
