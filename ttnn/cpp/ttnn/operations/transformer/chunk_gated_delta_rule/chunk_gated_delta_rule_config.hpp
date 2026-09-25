@@ -1,12 +1,10 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Program configs for chunk_gated_delta_rule: WHICH device implementation runs and how it is laid
-// out on the chip. As with a matmul program config, the alternative you pass selects the program
-// (mono / phased / fused); std::nullopt at the op boundary lets the op choose — the fused path with
-// the cost model's geometry when one fits the grid and is predicted to beat phased, else phased.
-// Everything here is topology: the three paths compute bit-identical results for the same inputs
-// and the same compute_kernel_config, which alone owns the arithmetic (fidelity, fp32 accumulation).
+// Program configs for chunk_gated_delta_rule: selects the device implementation and how it is laid
+// out on the chip. The alternative you pass selects the program (mono / phased / fused);
+// A std::nullopt config lets the op choose (between phased and fused) based on a cost model.
+//
 
 #pragma once
 
