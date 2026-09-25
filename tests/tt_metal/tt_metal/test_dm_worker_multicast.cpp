@@ -11,6 +11,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "impl/context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -29,9 +30,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmWorkerMulticast) {
     if (std::getenv("TT_METAL_SIMULATOR") == nullptr) {
         GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
     }
-    auto mesh_device = devices_[0];
-    IDevice* dev = mesh_device->get_devices()[0];
-    const auto grid = mesh_device->compute_with_storage_grid_size();
+    const auto grid = this->device().compute_with_storage_grid_size();
     if (grid.x < 2) {
         GTEST_SKIP() << "needs >= 2 worker nodes in a row for a multicast rectangle (got " << grid.x << "x" << grid.y
                      << ")";
@@ -40,8 +39,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmWorkerMulticast) {
     const CoreCoord sender_logical{0, 0};
     const CoreCoord peer_logical{1, 0};
     const experimental::NodeCoord sender_node{0, 0};
-    const CoreCoord sender_noc = mesh_device->worker_core_from_logical_core(sender_logical);
-    const CoreCoord peer_noc = mesh_device->worker_core_from_logical_core(peer_logical);
+    const CoreCoord sender_noc = this->device().worker_core_from_logical_core(sender_logical);
+    const CoreCoord peer_noc = this->device().worker_core_from_logical_core(peer_logical);
 
     constexpr uint32_t size_bytes = 256;
     constexpr uint32_t num_words = size_bytes / sizeof(uint32_t);
@@ -56,16 +55,16 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmWorkerMulticast) {
         inputs[i] = 0x3C000000u | i;
     }
     std::vector<uint32_t> poison(num_words, 0xDEADBEEF);
-    tt_metal::detail::WriteToDeviceL1(dev, sender_logical, src_addr, inputs);
+    slow_dispatch::WriteToL1(this->device(), sender_logical, src_addr, inputs);
     for (const CoreCoord& core : {sender_logical, peer_logical}) {
-        tt_metal::detail::WriteToDeviceL1(dev, core, dst_addr_unicast_rect, poison);
-        tt_metal::detail::WriteToDeviceL1(dev, core, dst_addr_loopback_rect, poison);
+        slow_dispatch::WriteToL1(this->device(), core, dst_addr_unicast_rect, poison);
+        slow_dispatch::WriteToL1(this->device(), core, dst_addr_loopback_rect, poison);
     }
-    MetalContext::instance().get_cluster().l1_barrier(dev->id());
+    MetalContext::instance().get_cluster().l1_barrier(this->device().get_device_ids()[0]);
 
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = this->device().mesh_command_queue();
     distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(this->device().shape());
 
     const experimental::KernelSpecName SENDER{"worker_multicast_pair"};
     experimental::ProgramSpec spec{
@@ -94,7 +93,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmWorkerMulticast) {
             .target_nodes = sender_node,
         }},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
@@ -116,7 +115,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmWorkerMulticast) {
 
     auto check = [&](const CoreCoord& core, uint32_t addr, const std::vector<uint32_t>& expected, const char* what) {
         std::vector<uint32_t> out;
-        tt_metal::detail::ReadFromDeviceL1(dev, core, addr, size_bytes, out);
+        slow_dispatch::ReadFromL1(this->device(), core, addr, size_bytes, out);
         ASSERT_EQ(out.size(), expected.size());
         for (uint32_t i = 0; i < expected.size(); i++) {
             ASSERT_EQ(out[i], expected[i]) << what << " on logical core " << core.str() << " word " << i << ": got 0x"

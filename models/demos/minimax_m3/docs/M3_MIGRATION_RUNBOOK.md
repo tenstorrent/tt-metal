@@ -266,7 +266,7 @@ Same three terminals; the runner spans two Z-linked 4×4 sub-meshes (rank 0 = la
 
 ```bash
 # Terminal B needs 0.4 (Slurm detach) because it is 2 ranks on one host, and the sub-mesh weight cache:
-export PP_CACHE=/data/zbaczewski/m3_pp_cache
+export PP_CACHE=/mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill
 TT_CACHE_PATH=$PP_CACHE $RUN $M3/m3_binding_loopback_migration_intragalaxy_2rank.yaml $HOST:2
 
 # Terminal C
