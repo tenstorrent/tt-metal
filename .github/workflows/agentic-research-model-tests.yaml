@@ -12,6 +12,7 @@ on:
         options:
           - all
           - llama3.1-8b-qb2
+          - qwen38-27b-qb2
       sku:
         description: Hardware to test
         type: choice

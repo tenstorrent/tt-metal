@@ -53,3 +53,23 @@ Device test on Blackhole:
 ```bash
 pytest models/demos/qwen38_27b_qb2/tests/test_decode_conv.py
 ```
+
+### Agentic Research CI
+
+Select `qwen38-27b-qb2`, `bh_quietbox_2`, and tier `3` in the
+**Agentic Research Model Tests** workflow. Use vLLM TT plugin revision
+`35090660433d5606957ded97f7130b5cc75f94f7` for this integration.
+The workflow builds its own tt-metal artifacts from the selected branch.
+
+The test entry point is `tests/run_ci.sh`. It runs host tests, device convolution
+checks at batch sizes 8 and 16, and serving tests with capacities 1, 8, and 16.
+Fixed-length performance uses 128/128 and 1024/128 input/output tokens, a warmup,
+and two measured bursts per supported concurrency (1, 8, 16).
+At capacity 16 it also runs API tests and ten concurrent GPQA Diamond questions.
+The GPQA CI subset uses the first 10 of 198 questions, shuffle seed 42, a 32,768-token
+output budget, and a 9/10 acceptance threshold; it is not a full GPQA evaluation.
+Pinned evaluation dependencies and dataset revision are recorded by the harness.
+
+CI publishes timing and sanitized evaluation metadata, never GPQA questions or
+generated answers. Performance measurements are informational until a baseline
+is established. This workflow does not run SWE-bench or Terminal-Bench.
