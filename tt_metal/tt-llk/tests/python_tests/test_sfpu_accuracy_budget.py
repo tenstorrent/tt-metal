@@ -372,13 +372,16 @@ def test_a_ulp_row_that_names_its_arch_binds_there(arch, monkeypatch):
             )
 
 
-@pytest.mark.parametrize(
-    "op", [MathOperation.Exp, MathOperation.SigmoidAppx], ids=lambda o: o.name
-)
-def test_a_bad_query_is_refused_whether_or_not_the_op_is_enrolled(op):
+@pytest.mark.parametrize("enrolled", [False, True], ids=["unenrolled", "enrolled"])
+def test_a_bad_query_is_refused_whether_or_not_the_op_is_enrolled(enrolled):
     """Validation must not depend on the table's contents, or a miswired driver passes
-    until the day its op is enrolled."""
-    assert (op in _SFPU_ACCURACY_BUDGET) == (op is MathOperation.SigmoidAppx)
+    until the day its op is enrolled. The op is picked from the table, not named, so
+    enrolling more ops later does not change what this checks."""
+    op = next(
+        op
+        for op in sorted(MathOperation, key=lambda op: op.name)
+        if (op in _SFPU_ACCURACY_BUDGET) == enrolled
+    )
     with _refuses("BudgetKey.arch must be a"):
         accuracy_contract(op, output_format=DataFormat.Float32, arch="wormhole")
 
