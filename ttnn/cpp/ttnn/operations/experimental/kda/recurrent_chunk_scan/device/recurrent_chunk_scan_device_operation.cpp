@@ -46,6 +46,10 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
     using namespace kda_factory_detail;
     const std::string_view operation_name =
         attrs.mode == RecurrentChunkScanMode::RECURRENT ? "recurrent_chunk_scan" : "summarize_chunk_recurrence";
+    kda_factory_detail::check_actual_start(in.t_inv, in.actual_start, operation_name);
+    if (in.actual_end) {
+        kda_factory_detail::check_actual_start(in.actual_start, *in.actual_end, "recurrent_chunk_scan");
+    }
     check_protocol_tensor(in.v_beta, "v_beta", true, operation_name);
     check_protocol_tensor(in.kd, "kd", true, operation_name);
     check_protocol_tensor(in.q_decay, "q_decay", true, operation_name);
@@ -69,6 +73,13 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
     check_compute_config(attrs.compute_kernel_config, operation_name);
     TT_FATAL(attrs.batch_heads > 0, "{}: batch_heads must be positive", operation_name);
     TT_FATAL(attrs.num_chunks > 0, "{}: num_chunks must be positive", operation_name);
+    TT_FATAL(attrs.groups_per_head > 0, "{}: groups_per_head must be positive", operation_name);
+    TT_FATAL(
+        attrs.batch_heads % attrs.groups_per_head == 0,
+        "{}: groups_per_head {} must divide the folded leading dimension {}",
+        operation_name,
+        attrs.groups_per_head,
+        attrs.batch_heads);
     TT_FATAL(
         attrs.key_dim > 0 && attrs.value_dim > 0 && attrs.key_dim % tt::constants::TILE_WIDTH == 0 &&
             attrs.value_dim % tt::constants::TILE_WIDTH == 0,
@@ -89,12 +100,20 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
     check_shape(in.t_inv, Shape({BH, NC, chunk_size, chunk_size}), "t_inv", operation_name);
 
     if (attrs.mode == RecurrentChunkScanMode::RECURRENT) {
-        TT_FATAL(in.initial_state.has_value(), "{}: initial_state is required", operation_name);
-        check_protocol_tensor(*in.initial_state, "initial_state", false, operation_name);
-        check_same_device(in.v_beta, *in.initial_state, operation_name, "initial_state");
-        check_shape(*in.initial_state, Shape({BH, K, V}), "initial_state", operation_name);
+        TT_FATAL(in.group_entry_states.has_value(), "{}: group_entry_states is required", operation_name);
+        check_protocol_tensor(*in.group_entry_states, "group_entry_states", false, operation_name);
+        check_same_device(in.v_beta, *in.group_entry_states, operation_name, "group_entry_states");
+        check_shape(*in.group_entry_states, Shape({BH, K, V}), "group_entry_states", operation_name);
+        // The wrap needs no extra entry slot. The head seed is this chip's own entry
+        // state; the tail seed is the prefix's final carry, which every chip already
+        // derives identically from the gathered summaries.
+        TT_FATAL(in.tail_entry_states.has_value(), "{}: tail_entry_states is required", operation_name);
+        check_protocol_tensor(*in.tail_entry_states, "tail_entry_states", false, operation_name);
+        check_same_device(in.v_beta, *in.tail_entry_states, operation_name, "tail_entry_states");
+        check_shape(
+            *in.tail_entry_states, Shape({BH / attrs.groups_per_head, K, V}), "tail_entry_states", operation_name);
     } else {
-        TT_FATAL(!in.initial_state.has_value(), "{}: initial_state is not accepted", operation_name);
+        TT_FATAL(!in.group_entry_states.has_value(), "{}: group_entry_states is not accepted", operation_name);
         TT_FATAL(K == V, "{}: K must equal V", operation_name);
     }
 }
@@ -102,15 +121,23 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
 RecurrentChunkScanOperation::spec_return_value_t RecurrentChunkScanOperation::compute_output_specs(
     const operation_attributes_t& attrs, const tensor_args_t&) {
     const bool summary = attrs.mode == RecurrentChunkScanMode::SUMMARY;
-    const auto output_dtype = summary ? DataType::FLOAT32 : DataType::BFLOAT16;
+    const auto output_dtype = DataType::BFLOAT16;
     const auto output_layout = TensorLayout(output_dtype, PageConfig(Layout::TILE), attrs.output_mem_config);
-    const auto state_layout = TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config);
+    const auto state_layout = TensorLayout(
+        summary ? DataType::BFLOAT16 : DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config);
+    // Summary precision and structure are independent of actual_start. Only live
+    // head/tail slots are defined; unsplit execution defines the head pair.
     const auto first_shape =
         summary ? Shape({attrs.batch_heads, attrs.key_dim, attrs.value_dim})
                 : Shape({attrs.batch_heads, attrs.num_chunks, tt::constants::TILE_HEIGHT, attrs.value_dim});
-    return {
+    spec_return_value_t specs = {
         TensorSpec(first_shape, output_layout),
         TensorSpec(Shape({attrs.batch_heads, attrs.key_dim, attrs.value_dim}), state_layout)};
+    if (summary) {
+        specs.push_back(TensorSpec(first_shape, output_layout));
+        specs.push_back(TensorSpec(Shape({attrs.batch_heads, attrs.key_dim, attrs.value_dim}), state_layout));
+    }
+    return specs;
 }
 
 RecurrentChunkScanOperation::tensor_return_value_t RecurrentChunkScanOperation::create_output_tensors(
@@ -140,18 +167,26 @@ RecurrentChunkScanOperation::create_op_performance_model(
             .fpu_add_ops = instances * (2.0 * chunk * value_dim + key_dim * value_dim),
         };
     } else {
+        // The runtime scalar is not read back by the host. Bound the extra
+        // head transform by one split group per head. Restart seeds are
+        // assignments; only extracting the additional A = (A + B) - B adds work.
+        const double possible_split_heads = batch_heads / attrs.groups_per_head;
         work = {
             .fpu_matrix_flops = instances * (8.0 * chunk * key_dim * value_dim + 4.0 * chunk * chunk * value_dim),
             .fpu_multiply_ops = instances * 2.0 * key_dim * value_dim,
-            .fpu_add_ops =
-                instances * (2.0 * chunk * value_dim + 2.0 * key_dim * value_dim) + batch_heads * key_dim * value_dim,
+            .fpu_add_ops = instances * (2.0 * chunk * value_dim + 2.0 * key_dim * value_dim) +
+                           batch_heads * key_dim * value_dim + possible_split_heads * key_dim * value_dim,
         };
     }
     std::vector<const Tensor*> inputs = {
         &in.v_beta, &in.kd, &in.q_decay, &in.intra, &in.k_dec_t, &in.final_decay, &in.t_inv};
-    if (in.initial_state) {
-        inputs.push_back(&*in.initial_state);
+    if (in.group_entry_states) {
+        inputs.push_back(&*in.group_entry_states);
     }
+    if (in.tail_entry_states) {
+        inputs.push_back(&*in.tail_entry_states);
+    }
+
     return make_profiler_model(work, inputs, outputs, attrs.compute_kernel_config.math_fidelity);
 }
 
@@ -163,10 +198,15 @@ std::vector<Tensor> recurrent_chunk_scan(
     const Tensor& k_dec_t,
     const Tensor& final_decay,
     const Tensor& t_inv,
-    const std::optional<Tensor>& initial_state,
+    const std::optional<Tensor>& group_entry_states,
+    const std::optional<Tensor>& tail_entry_states,
     RecurrentChunkScanMode mode,
+    uint32_t groups_per_head,
     const MemoryConfig& output_mem_config,
-    const DeviceComputeKernelConfig& compute_kernel_config) {
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    const Tensor& actual_start,
+    uint32_t sequence_parallel_axis,
+    const std::optional<Tensor>& actual_end) {
     const auto& value_shape = v_beta.logical_shape();
     const auto& key_shape = kd.logical_shape();
     const std::string_view operation_name =
@@ -178,7 +218,9 @@ std::vector<Tensor> recurrent_chunk_scan(
             .num_chunks = value_shape[1],
             .key_dim = key_shape[3],
             .value_dim = value_shape[3],
+            .groups_per_head = groups_per_head,
             .mode = mode,
+            .sequence_parallel_axis = sequence_parallel_axis,
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config},
         RecurrentChunkScanInputs{
@@ -189,7 +231,10 @@ std::vector<Tensor> recurrent_chunk_scan(
             .k_dec_t = k_dec_t,
             .final_decay = final_decay,
             .t_inv = t_inv,
-            .initial_state = initial_state});
+            .group_entry_states = group_entry_states,
+            .tail_entry_states = tail_entry_states,
+            .actual_start = actual_start,
+            .actual_end = actual_end});
 }
 
 }  // namespace ttnn::experimental::prim

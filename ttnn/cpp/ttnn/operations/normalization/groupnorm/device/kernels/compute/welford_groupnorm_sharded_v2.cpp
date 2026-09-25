@@ -29,11 +29,14 @@ void kernel_main() {
 
     constexpr std::uint32_t block_h = get_compile_time_arg_val(7);
     constexpr std::uint32_t block_w = get_compile_time_arg_val(8);
-    constexpr std::uint32_t block_hw = get_compile_time_arg_val(9);
 
     constexpr std::uint32_t per_core_M = get_compile_time_arg_val(12);
     constexpr std::uint32_t per_core_N = get_compile_time_arg_val(13);
     constexpr std::uint32_t per_core_MN = get_compile_time_arg_val(14);
+
+    // Distance in tiles between the start of one batch and the start of the next batch within this
+    // core's shard.
+    constexpr std::uint32_t num_tiles_per_batch = get_compile_time_arg_val(18);
 
     constexpr std::uint32_t num_tiles_input_mask = get_compile_time_arg_val(19);
     constexpr std::uint32_t num_channels_per_group = get_compile_time_arg_val(24);
@@ -86,27 +89,16 @@ void kernel_main() {
     constexpr std::uint32_t dfb_out0_id = tt::CBIndex::c_16;
 #ifdef UNTILIZE_OUT
     constexpr std::uint32_t dfb_out_id = tt::CBIndex::c_30;
-#else
-    // Exactly one of gamma/beta writes through dfb_in_id; both-or-neither goes to dfb_out0_id.
-    constexpr bool only_one_of_gamma_beta = do_gamma != do_beta;
-    constexpr std::uint32_t dfb_out_id = only_one_of_gamma_beta ? dfb_in_id : dfb_out0_id;
-#endif
-
-#ifdef UNTILIZE_OUT
-    constexpr int dfb_outgamma_id = dfb_in_id;
-    constexpr int dfb_outbeta_id = do_gamma ? dfb_out_id : dfb_in_id;
-    constexpr int dfb_untilize_in_no_gamma_id = do_beta ? dfb_outbeta_id : dfb_out_id;
-    constexpr int dfb_untilize_in_id = (do_gamma and not do_beta) ? dfb_outgamma_id : dfb_untilize_in_no_gamma_id;
+    // dfb_in holds the whole tilized input and is never popped, so it cannot take the output;
+    // the final pack goes to c_30 and untilize reads from there.
+    constexpr int dfb_untilize_in_id = dfb_out_id;
     constexpr int dfb_untilize_out_id =
 #ifdef READER_REPACK
         dfb_repack_out_id;
 #else
         dfb_out0_id;
-#endif
-#else
-    constexpr int dfb_outgamma_id = do_beta ? dfb_in_id : dfb_out0_id;
-    constexpr int dfb_outbeta_id = dfb_out0_id;
-#endif
+#endif  // READER_REPACK
+#endif  // UNTILIZE_OUT
 
     DataflowBuffer dfb_beta(dfb_beta_id);
     DataflowBuffer dfb_eps(dfb_eps_id);
@@ -171,7 +163,7 @@ void kernel_main() {
     }
 
     for (std::uint32_t b = 0; b < num_batches; ++b) {
-        std::uint32_t tile_id = b * block_hw;
+        std::uint32_t tile_id = b * num_tiles_per_batch;
         dfb_ex_partial.reserve_back(2);
         if constexpr (welford_fp32_alias) {
             // The alias carries UnpackToDestFp32 while c_0 / c_1 stay Default; transpose_init only
@@ -315,7 +307,7 @@ void kernel_main() {
         dfb_ex2pe.wait_front(num_groups);
 
         // Start Final Val Calc
-        tile_id = b * block_hw;
+        tile_id = b * num_tiles_per_batch;
         for (std::uint32_t i = 0; i < block_h; ++i) {
             // This indicates the smallest group that is yet to be processed for this block
             // As we iterate over nt, some of the groups will be completed, and we will update

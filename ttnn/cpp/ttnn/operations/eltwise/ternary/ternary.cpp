@@ -6,6 +6,7 @@
 
 #include <utility>
 #include <variant>
+#include <cstdint>
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/binary_ng_utils.hpp"
@@ -22,40 +23,6 @@ using namespace ttnn::operations::ternary;
 namespace ttnn::operations::ternary {
 
 namespace ternary_utils {
-
-// where - ternary operator y = (predicate) ? value_true : value_false; elementwise
-// y = (predicate >= 0)*value_true + (predicate < 0)*value_false
-Tensor where_impl(
-    const Tensor& predicate,
-    const auto& value_true,
-    const auto& value_false,
-    const MemoryConfig& memory_config,
-    const std::optional<Tensor>& output) {
-    log_debug(tt::LogOp, "Where Composite");
-    using FusedActivations = ttsl::Span<const unary::EltwiseUnaryWithParam>;
-    constexpr auto dtype = std::nullopt;
-    const auto get_multiplied = [&](const Tensor& condition, const auto& value) -> Tensor {
-        return ttnn::multiply(
-            condition,
-            value,
-            dtype,
-            memory_config,
-            /* output */ std::nullopt,
-            /* post_activations */ FusedActivations{},
-            /* lhs_activations */ FusedActivations{},
-            /* rhs_activations */ FusedActivations{});
-    };
-
-    return ttnn::add(
-        get_multiplied(ttnn::gtz(predicate, memory_config), value_true),
-        get_multiplied(ttnn::lez(predicate, memory_config), value_false),
-        dtype,
-        memory_config,
-        output,
-        /* post_activations */ FusedActivations{},
-        /* lhs_activations */ FusedActivations{},
-        /* rhs_activations */ FusedActivations{});
-}
 
 inline bool have_same_shape(const Tensor& a, const Tensor& b) { return (a.logical_shape() == b.logical_shape()); }
 
@@ -144,14 +111,16 @@ Tensor invoke_impl(
         condition = ttnn::typecast(predicate, t_true.dtype(), std::nullopt, std::nullopt, sub_core_grids);
     }
 
-    if (is_invalid_bcast(broadcast_type)) {
-        return ternary_utils::where_impl(
-            condition,
-            t_true,
-            t_false,
-            ternary_utils::determine_memory_config(memory_config, predicate.memory_config()),
-            output);
-    }
+    // A composite of gtz, lez, two multiplies and an add stood here for this
+    // case. It never returned: every shape that reaches it is one the multiply
+    // inside it rejects too, so all it did was report the rejection from an op
+    // the caller did not write. Say which shapes and which op instead.
+    TT_FATAL(
+        !is_invalid_bcast(broadcast_type),
+        "ttnn.where: shapes {}, {} and {} do not broadcast in a pattern the ternary kernel supports",
+        condition.logical_shape(),
+        t_true.logical_shape(),
+        t_false.logical_shape());
 
     std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_true.dtype());
     log_debug(tt::LogOp, "Where LLK - TTT");
@@ -316,7 +285,7 @@ Tensor where(
 }
 
 template <typename T>
-    requires std::same_as<T, int32_t> || std::same_as<T, uint32_t>
+    requires std::same_as<T, std::int32_t> || std::same_as<T, std::uint32_t>
 Tensor where(
     const Tensor& predicate,
     const T& value_true,
@@ -327,17 +296,17 @@ Tensor where(
     return ttnn::where_tss(predicate, value_true, value_false, memory_config, output, sub_core_grids);
 }
 
-template Tensor where<int32_t>(
+template Tensor where<std::int32_t>(
     const Tensor&,
-    const int32_t&,
-    const int32_t&,
+    const std::int32_t&,
+    const std::int32_t&,
     const std::optional<MemoryConfig>&,
     const std::optional<Tensor>&,
     const std::optional<CoreRangeSet>&);
-template Tensor where<uint32_t>(
+template Tensor where<std::uint32_t>(
     const Tensor&,
-    const uint32_t&,
-    const uint32_t&,
+    const std::uint32_t&,
+    const std::uint32_t&,
     const std::optional<MemoryConfig>&,
     const std::optional<Tensor>&,
     const std::optional<CoreRangeSet>&);
@@ -379,7 +348,7 @@ Tensor addcmul(
         log_debug(tt::LogOp, "Addcmul Fallback - TTT");
         // Fall back to composite implementation for unsupported cases
         float value_f = std::visit([](auto&& v) { return static_cast<float>(v); }, value);
-        return _addcmul(input_a, input_b, input_c, value_f, memory_config);
+        return _addcmul(input_a, input_b, input_c, value_f, memory_config, output);
     }
 
     // Use LLK implementation - pass value as scalar parameter
@@ -418,7 +387,7 @@ Tensor addcdiv(
     if (is_invalid_bcast(broadcast_type) || is_any_input_block_format) {
         log_debug(tt::LogOp, "Addcdiv Fallback - TTT");
         // Fall back to composite implementation for unsupported cases
-        return _addcdiv(input_a, input_b, input_c, value, memory_config);
+        return _addcdiv(input_a, input_b, input_c, value, memory_config, output);
     }
 
     // Use LLK implementation - pass value as scalar parameter
@@ -441,6 +410,12 @@ Tensor lerp(
     float weight,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
+    // The LERP kernel has no unsigned path: a UINT32 dispatch compiles but returns zeros.
+    TT_FATAL(
+        input.dtype() != DataType::UINT32 && end.dtype() != DataType::UINT32,
+        "lerp does not support UINT32 inputs. Got input={}, end={}",
+        input.dtype(),
+        end.dtype());
     auto broadcast_type = get_broadcast_type(input.logical_shape(), end.logical_shape());
 
     bool is_any_input_block_format = is_block_float(input.dtype()) || is_block_float(end.dtype());
@@ -472,6 +447,13 @@ Tensor lerp(
     const Tensor& weight,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
+    // The LERP kernel has no unsigned path: a UINT32 dispatch compiles but returns zeros.
+    TT_FATAL(
+        input.dtype() != DataType::UINT32 && end.dtype() != DataType::UINT32 && weight.dtype() != DataType::UINT32,
+        "lerp does not support UINT32 inputs. Got input={}, end={}, weight={}",
+        input.dtype(),
+        end.dtype(),
+        weight.dtype());
     auto broadcast_type = get_broadcast_type(input.logical_shape(), end.logical_shape(), weight.logical_shape());
 
     bool is_any_input_block_format =

@@ -24,11 +24,26 @@ void bind_affine_exclusive_scan(nb::module_& mod) {
 
             index = batch_head * groups_per_head + group
 
-        The scan is exclusive: the first group receives ``initial_state``, and each
-        later group receives the state produced by all preceding groups:
+        The scan is exclusive: the first group receives ``initial_state``. On an
+        unsplit rank, each later group receives the state produced by all preceding
+        groups:
 
             entry[0] = initial_state
             entry[g] = A_{g-1} @ entry[g-1] + B_{g-1}
+
+        On the rank containing both the chronological beginning and end of the
+        sequence, the tail restarts from ``tail_entry_states`` after the intervening
+        ranks. For a group-aligned split, the first tail group receives this seed
+        directly. For a split inside a group, that group's entry still belongs to
+        the head; its tail summary is applied to the tail seed to produce the next
+        group's entry. The chunk scan handles the reset inside the split group.
+        Subsequent groups use ``tail_a`` and ``tail_b`` instead of the head summaries.
+
+        Optional ``actual_end`` is a replicated UINT32 row-major scalar, with
+        the same lifetime as ``actual_start``. It defines a nonempty 32-aligned
+        interval within physical capacity; omission uses the full capacity.
+        Bounds may change during trace replay. Padded group outputs are unspecified.
+        Bounds are caller preconditions and are not read back on the host.
 
         Args:
             a (ttnn.Tensor): Group multipliers ``[B*H*G, K, K]``. Must be a
@@ -41,6 +56,20 @@ void bind_affine_exclusive_scan(nb::module_& mod) {
                 each batch-head. Must be positive and divide the leading dimension.
 
         Keyword Args:
+            actual_start (ttnn.Tensor): Replicated UINT32 row-major scalar
+                containing the absolute position of the chunk's first token; pass [0]
+                for zero-offset execution. Its
+                value must be nonnegative and 32-aligned. Keep its address stable
+                and update its contents before replay of a captured trace.
+            sequence_parallel_axis (int, optional): Mesh axis partitioning the
+                sequence. Native mesh coordinates supply each device's rank.
+            local_rows (int): Positive, 32-aligned token rows per SP device. Summary tensor
+                shapes do not encode this sequence length.
+            tail_a, tail_b (ttnn.Tensor): Tail-segment affine summaries.
+                The kernel
+                derives the local split and chooses the live head/tail transforms.
+            tail_entry_states (ttnn.Tensor): FLOAT32 tail seed ``[B*H,K,V]``.
+                Ignored when the local sequence is unsplit; may alias initial_state.
             memory_config (ttnn.MemoryConfig, optional): Interleaved output memory
                 configuration. Defaults to DRAM.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):
@@ -62,8 +91,16 @@ void bind_affine_exclusive_scan(nb::module_& mod) {
         nb::arg("initial_state").noconvert(),
         nb::arg("groups_per_head"),
         nb::kw_only(),
+        nb::arg("actual_start").noconvert(),
+        nb::arg("local_rows"),
+        nb::arg("tail_a").noconvert(),
+        nb::arg("tail_b").noconvert(),
+        nb::arg("tail_entry_states").noconvert(),
+
         nb::arg("memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("sequence_parallel_axis") = 0,
+        nb::arg("actual_end") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::kda::affine_exclusive_scan::detail

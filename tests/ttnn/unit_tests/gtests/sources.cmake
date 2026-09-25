@@ -35,6 +35,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_agmm_registry.cpp
     test_matmul.cpp
     test_matmul_registry.cpp
+    test_sparse_matmul_fp32.cpp
     test_normalization.cpp
     test_reduction.cpp
     test_relational_int.cpp
@@ -45,6 +46,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_tanh_bw_ulp.cpp
     test_tanh_fw_ulp.cpp
     test_work_split_tilize.cpp
+    test_unary_program_hash.cpp
 )
 
 set(UNIT_TESTS_TTNN_CCL_SOURCES

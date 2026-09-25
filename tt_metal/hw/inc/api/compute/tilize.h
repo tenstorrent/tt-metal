@@ -58,8 +58,11 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_
           BroadcastType::NONE,
           false /*is_int_en*/,
           PackMode::Tilize>(icb)));
-#ifdef ARCH_BLACKHOLE
+#if defined(ARCH_BLACKHOLE)
     PACK((llk_pack_init<PackMode::Tilize, false /* zero_output */>(ocb, 1 /* num_tiles */, icb)));
+#elif defined(ARCH_WORMHOLE)
+    // WH: reprogram packer for OCB tile geometry; PackMode::Default matches tilize_block's pack execute (#52175).
+    PACK((llk_pack_init<PackMode::Default>(ocb)));
 #endif
 #else
     // TODO(SK) #42757: Quasar unpack tilize could issue block_ct_dim tiles per MOP invocation, but scheduling
@@ -126,8 +129,11 @@ ALWI void tilize_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t
     MATH((llk_math_reconfig_data_format_srca<is_fp32_dest_acc_en>(old_icb, new_icb)));
     UNPACK((llk_unpack_tilize_init(new_icb, block)));
 
-#ifdef ARCH_BLACKHOLE
+#if defined(ARCH_BLACKHOLE)
     PACK((llk_pack_init<PackMode::Tilize, false /* zero_output */>(ocb, 1 /* num_tiles */, new_icb)));
+#elif defined(ARCH_WORMHOLE)
+    // WH: reprogram packer for OCB tile geometry; PackMode::Default matches tilize_block's pack execute (#52175).
+    PACK((llk_pack_init<PackMode::Default>(ocb)));
 #endif
 }
 #endif  // !ARCH_QUASAR
@@ -222,6 +228,7 @@ ALWI void unpack_tilizeA_B_block(uint32_t icb0, uint32_t icb1, uint32_t block, u
 ALWI void tilize_uninit(uint32_t icb, uint32_t ocb) {
     UNPACK((llk_unpack_tilize_uninit(icb)));
 #ifdef ARCH_BLACKHOLE
+    // BH-only: restore packer from PackMode::Tilize (armed by tilize_init) to Default (#52175).
     PACK((llk_pack_init<PackMode::Default>(ocb)));
 #endif
 }
@@ -249,7 +256,8 @@ ALWI void tilize_uninit_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t ocb
     UNPACK((llk_unpack_reconfig_data_format_srca<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE>(old_icb, new_icb)));
     MATH((llk_math_reconfig_data_format_srca<is_fp32_dest_acc_en>(old_icb, new_icb)));
 #ifdef ARCH_BLACKHOLE
-    PACK((llk_pack_init(ocb)));
+    // BH-only: restore packer from PackMode::Tilize (armed by tilize_init_short_with_dt) to Default (#52175).
+    PACK((llk_pack_init<PackMode::Default>(ocb)));
 #endif
 }
 
@@ -508,11 +516,14 @@ ALWI void fast_tilize_block(
  *
  * | Field / Setting           | Scope      | Description                                           | Restored value / behavior                                                                  |
  * |---------------------------|------------|-------------------------------------------------------|--------------------------------------------------------------------------------------------|
- * | X-dim & base (ADCXX)      | UNP_A/B    | Face X-extent for address counters                    | face_r_dim * FACE_C_DIM elements, start at 0                                               |
- * | XY address counters       | UNP_A/B    | X/Y counters used by tilizeA_B y-stride pattern       | Counters reset to 0 (mask selects CH0/CH1 X/Y)                                             |
- * | ZW address counters       | UNP_A/B    | Z/W counters used for face/row stepping               | Counters reset to 0 for both unpackers                                                     |
  * | Out_data_format/config[0] | THCON_SEC0 | Unpack config[0]: out format, throttle, tilize, shift | out_data_format = unpack_dst_format; throttle_mode = 2; tileize_mode = 0; shift_amount = 0 |
- * | Tile_x_dim (cntx0)        | THCON_SEC0 | Tile X dimension per context for unpacker             | Restored to FACE_DIM_16x16 (16 | (16 << 16))                                               |
+ * | Tile_x_dim (cntx0)        | THCON_SEC0 | Tile X dimension per context for unpacker             | Wormhole: face_r_dim * FACE_C_DIM in both halfwords, from the operand's CB metadata. Blackhole: not written, its init never programs it |
+ * | ZW address counters       | UNP_A/B    | Z/W counters stepped by the tilize MOP                | Wormhole only: CH0/CH1 Z and W counters zeroed on both unpackers                           |
+ * | XY address counters       | UNP_A/B    | Y counters stepped by the tilizeA_B row pattern       | Blackhole only: CH0/CH1 Y counters zeroed on both unpackers                                |
+ * | SrcA Y stride (CH1)       | UNP0       | Per-row SrcA write stride used by the row-at-a-time tilize | Blackhole only: restored to the canonical stride for unpack_dst_format                 |
+ *
+ * x-start/x-end (ADCXX) and the unpacker MOP are not restored on either architecture: the next
+ * operation's init reprograms them.
  */
 // clang-format on
 ALWI void unpack_tilizeA_B_uninit(uint32_t icb) { UNPACK((llk_unpack_tilizeA_B_uninit(icb))); }

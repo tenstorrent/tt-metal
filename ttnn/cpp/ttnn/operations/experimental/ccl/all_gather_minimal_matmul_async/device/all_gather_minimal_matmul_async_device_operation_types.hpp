@@ -5,6 +5,7 @@
 #pragma once
 
 #include <bit>
+#include <utility>
 #include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -79,8 +80,8 @@ struct AllGatherMinimalMatmulAsyncParams {
         bool fuse_swiglu = false,
         std::vector<uint32_t> chunk_sizes = {}) :
         config(config),
-        fused_activation(fused_activation),
-        output_mem_config(output_mem_config),
+        fused_activation(std::move(fused_activation)),
+        output_mem_config(std::move(output_mem_config)),
         output_dtype(output_dtype),
         compute_kernel_config(compute_kernel_config),
         num_links(num_links),
