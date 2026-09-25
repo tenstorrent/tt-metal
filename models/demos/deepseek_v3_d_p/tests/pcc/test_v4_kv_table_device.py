@@ -21,6 +21,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import deep
 from models.demos.deepseek_v3_d_p.tests.pcc.test_v4_block import reference_layer_weights
 from models.demos.deepseek_v3_d_p.tests.pcc.test_v4_transformer import _init_model
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
+from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.tt.v4 import kv_contract as kc
 from models.demos.deepseek_v3_d_p.tt.v4.kv_cache import allocate_v4_flash_kv_caches
 from models.demos.deepseek_v3_d_p.tt.v4.layer_kinds import layers_of_kind
@@ -97,8 +98,16 @@ def test_kv_chunk_table_reads_back_every_config(mesh_device, device_params, tmp_
     )
     rt.compile(caches)
     start = 0
-    for n in _CHUNKS:
-        x = rt.make_chunk_input(ids[0, start : start + n].tolist())
+    for k, n in enumerate(_CHUNKS):
+        chunk_ids = ids[0, start : start + n].tolist()
+        if k % 2 == 0:
+            x = rt.make_chunk_input(chunk_ids)
+        else:
+            # request mode (DS4F-0245): the chunk arrives over the H2D socket as a device tensor and no host stash exists,
+            # so the runtime must read the ids back for the hash-routed MoE layers (0..2) -- exercised here without the engine
+            x = prepare_prefill_input_tensor(chunk_ids, mesh_device, sp, False, (sp, tp), 0)
+            assert rt._needs_token_ids
+            assert torch.equal(rt._token_ids_from_device(x), torch.tensor(chunk_ids, dtype=torch.int64))
         out = rt.prefill_chunk(x, caches, slot_id=0, actual_start=start, actual_end=start + n, request_id=0)
         assert out is None  # last (and only) rank: the caches are the output
         start += n
