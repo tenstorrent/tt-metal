@@ -444,3 +444,77 @@ def test_scan_mcast_bit_exact(
         o_rep, fs_rep = _run_op(device, tensors, const_tiles, s0, chunk, use_mcast=True)
         assert torch.equal(o_on, o_rep), f"multicast o not reproducible on repeat {rep + 1}: race"
         assert torch.equal(fs_on, fs_rep), f"multicast final_state not reproducible on repeat {rep + 1}: race"
+
+
+# The kernels run one arithmetic (HiFi4, fp32 destination accumulation, no approx) on every path;
+# compute_kernel_config may spell it out but may not change it. Knobs these kernels do not use
+# (packer_l1_acc) are accepted and ignored.
+_UNSUPPORTED_COMPUTE_CONFIGS = {
+    "HiFi2": dict(math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, math_approx_mode=False),
+    "fp16-dest": dict(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=False, math_approx_mode=False),
+    "approx": dict(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, math_approx_mode=True),
+}
+
+
+def _small_inputs(device):
+    torch.manual_seed(20260925)
+    B, T, Hk, Hv, D = 1, CHUNK, 2, 4, 128
+
+    def dev(t, dtype):
+        return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    q = dev(l2_norm(torch.randn(B, T, Hk, D), dim=-1).to(torch.bfloat16), ttnn.bfloat16)
+    k = dev(l2_norm(torch.randn(B, T, Hk, D), dim=-1).to(torch.bfloat16), ttnn.bfloat16)
+    v = dev(torch.randn(B, T, Hv, D).to(torch.bfloat16), ttnn.bfloat16)
+    g = dev(-torch.nn.functional.softplus(torch.randn(B, T, Hv)) * 0.5, ttnn.float32)
+    beta = dev(torch.sigmoid(torch.randn(B, T, Hv)), ttnn.float32)
+    return (q, k, v, g, beta), _const_tiles(device)
+
+
+def _run_with_compute_config(device, tensors, const_tiles, program_config, compute_kernel_config):
+    q, k, v, g, beta = tensors
+    eye, tril, ones, masks = const_tiles
+    o, fs = ttnn.transformer.chunk_gated_delta_rule(
+        q,
+        k,
+        v,
+        g,
+        beta,
+        output_final_state=True,
+        chunk_size=CHUNK,
+        eye=eye,
+        tril=tril,
+        ones=ones,
+        masks=masks,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+    )
+    o_t, fs_t = ttnn.to_torch(o), ttnn.to_torch(fs)
+    ttnn.deallocate(o)
+    ttnn.deallocate(fs)
+    return o_t, fs_t
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="chunk_gated_delta_rule is Blackhole-only")
+@pytest.mark.parametrize(
+    "make_program_config",
+    [ttnn.ChunkGdnMonoProgramConfig, ttnn.ChunkGdnPhasedProgramConfig, ttnn.ChunkGdnFusedProgramConfig],
+    ids=["mono", "phased", "fused"],
+)
+def test_compute_kernel_config_contract(device, expect_error, make_program_config):
+    """An explicit config equal to the supported arithmetic (plus an unused knob) is bit-identical to
+    passing none; any other fidelity / accumulation / approx setting is rejected on every path."""
+    tensors, const_tiles = _small_inputs(device)
+    pc = make_program_config()
+    o_ref, fs_ref = _run_with_compute_config(device, tensors, const_tiles, pc, None)
+
+    explicit = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, math_approx_mode=False, packer_l1_acc=True
+    )
+    o, fs = _run_with_compute_config(device, tensors, const_tiles, pc, explicit)
+    assert torch.equal(o, o_ref) and torch.equal(fs, fs_ref), "spelling out the default arithmetic changed the result"
+
+    for name, kwargs in _UNSUPPORTED_COMPUTE_CONFIGS.items():
+        with expect_error(RuntimeError, "HiFi4 with fp32 destination accumulation"):
+            _run_with_compute_config(device, tensors, const_tiles, pc, ttnn.WormholeComputeKernelConfig(**kwargs))
+            pytest.fail(f"{name} was accepted; the op must reject arithmetic other than the one it was validated at")

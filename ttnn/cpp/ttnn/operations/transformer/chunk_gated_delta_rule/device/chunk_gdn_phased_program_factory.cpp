@@ -13,6 +13,7 @@
 //         multicasts the head's shared V-independent inputs to its siblings (see distribute_scan).
 
 #include "chunk_gdn_phased.hpp"
+#include "chunk_gdn_compute_config.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -75,11 +76,6 @@ constexpr uint32_t scan_vnew = decayfac;  // 11: scan's v_new scratch
 }  // namespace pcb
 
 namespace {
-
-ComputeConfigDescriptor compute_cfg() {
-    return ComputeConfigDescriptor{
-        .math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = true, .math_approx_mode = false};
-}
 
 // Chunk-parallel work distribution for PREP: split `total` independent (head, chunk) work-items
 // as evenly as possible across the compute grid. Work-item wi in [0,total) maps directly to the
@@ -315,7 +311,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     compute_ct.push_back(f32_bits(attrs.scale));
     compute_ct.push_back(f32_bits(1e-6f));
     compute.compile_time_args = compute_ct;
-    compute.config = compute_cfg();
+    compute.config = gdn_compute_config(attrs.compute_kernel_config);
     compute.runtime_args.reserve(n_used);
 
     auto* q_buf = in.q.buffer();
@@ -541,7 +537,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute.core_ranges = cores;
     compute.compile_time_args = ct_args;
-    compute.config = compute_cfg();
+    compute.config = gdn_compute_config(attrs.compute_kernel_config);
     compute.runtime_args.reserve(n_used);
 
     auto* vb_buf = in.v_beta.buffer();

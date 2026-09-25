@@ -328,7 +328,9 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 laid out on the chip — the alternative you pass selects the path, its fields the
                 geometry (see each class). None: the fused path or the phased path depending on the cost model.
             memory_config (ttnn.MemoryConfig, optional).
-            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional).
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): every path runs HiFi4 with
+                fp32 destination accumulation and no approx mode; a config asking for other arithmetic
+                is rejected rather than applied.
             eye, tril, ones (ttnn.Tensor, optional): [1,1,C,C] fp32 TILE constant tiles (identity,
                 lower-triangular ones, all-ones). Caller-supplied. Traced callers MUST pass these;
                 if omitted they are built eagerly.
@@ -390,7 +392,7 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): default DRAM interleaved (the public
                 op's default).
             compute_kernel_config (optional): default HiFi4 + fp32 dest acc, no approx — built
-                by the same helper as the public op's default.
+                by the same helper as the public op's default; other arithmetic is rejected.
             v_flat (bool) / HV (int): OPT-A flat token-major v, chunk_gdn_phased.hpp:34-40.
             qk_norm (bool) / scale (float): OPT-B in-kernel q/k L2 norm with scale folded into
                 q's norm, chunk_gdn_phased.hpp:45-48.
@@ -459,7 +461,7 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): default DRAM interleaved (the public
                 op's default).
             compute_kernel_config (optional): default HiFi4 + fp32 dest acc, no approx — built
-                by the same helper as the public op's default.
+                by the same helper as the public op's default; other arithmetic is rejected.
             use_mcast (bool) / force_serial (bool): ChunkGdnPhasedProgramConfig.use_mcast /
                 scan_serial — the shared-input multicast (default True) and the one-core-per-head
                 NV=1 layout (default False; measurement only).

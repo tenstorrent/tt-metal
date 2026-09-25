@@ -45,6 +45,7 @@
 // bit; any difference is plumbing.
 
 #include "chunk_gdn_fused.hpp"
+#include "chunk_gdn_compute_config.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -107,13 +108,6 @@ constexpr uint32_t final_s = tt::CBIndex::c_27;
 constexpr uint32_t scr1 = tt::CBIndex::c_28;
 constexpr uint32_t s3 = tt::CBIndex::c_31;
 }  // namespace fcb
-
-namespace {
-ComputeConfigDescriptor fused_compute_cfg() {
-    return ComputeConfigDescriptor{
-        .math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = true, .math_approx_mode = false};
-}
-}  // namespace
 
 tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     const ChunkGdnFusedParams& attrs, const ChunkGdnFusedInputs& in, std::vector<Tensor>& outputs) {
@@ -340,7 +334,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     prep_compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
     prep_compute.core_ranges = prod_set;
     prep_compute.compile_time_args = prep_compute_ct;
-    prep_compute.config = fused_compute_cfg();
+    prep_compute.config = gdn_compute_config(attrs.compute_kernel_config);
     // Fused-only perf: hoisted WY-path reconfigs (see chunk_gdn_math.hpp kGdnHoistReconfig).
     prep_compute.defines = {{"GDN_HOIST_RECONFIG", "1"}};
     prep_compute.runtime_args.reserve(P);
@@ -374,7 +368,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     scan_compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
     scan_compute.core_ranges = rcv_set;
     scan_compute.compile_time_args = ct_scan;
-    scan_compute.config = fused_compute_cfg();
+    scan_compute.config = gdn_compute_config(attrs.compute_kernel_config);
     scan_compute.runtime_args.reserve(R);
 
     KernelDescriptor scan_writer;
