@@ -46,7 +46,7 @@ blocks, an upper bound that also contains the refiner, embeddings, `norm_out` an
 
 | # | proposal | attempted | ran 15 s? | steady e2e (s) | steady ms/fwd | ~block ms (derived) | CLIP mean / min | text enc load | DiT load | VAE dec load | audio dec load | other per-request |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 1 | TP4/SP8, FSDP off, adaLN resident (the plain flag flip) | analysed (probes A/C + arithmetic) | **no** -- DiT alone is 796 + 541 = 1337 MiB/bank, does not load | -- | -- | -- | -- | -- | -- | -- | -- | -- |
+| 1 | TP4/SP8, FSDP off, adaLN resident (the plain flag flip) | analysed (probes A/C + arithmetic) | **no** -- DiT alone is 796 + 541 = 1337 MiB/bank, does not load. Not rescued by #5-#7 either: matmul weights 796 + activation peak 258 = 1054 > 1021 with the adaLN and audio decoder at zero; adaLN sharded over SP=8 adds 68, tables 30, misc state 31 (~1150 total). Only bfp8_b matmul weights (796 -> 398) would fit, a numerics change | -- | -- | -- | -- | -- | -- | -- | -- | -- |
 | 2 | TP8/SP4, FSDP off, adaLN resident, nothing else changed | yes (run D) | **no** -- OOM in block 0 of forward 0: resident 726 MiB/bank, largest free block 17 MB | -- | -- | -- | -- | 3 | 7 | -- | 0 | -- |
 | 3 | TP8/SP4, FSDP off, **`adaln_tables`**: projection weights stay on host, one request-wide modulation table (default when the DiT is unsharded on Wormhole) | yes | **yes** (peak 728 MiB/bank, ~290 headroom) | **638.3** | **12130** | ~243 | 37.25 / 35.66 | 3 | 4 | 4 | 0 | adaLN table build 2.6 |
 | 4 | TP4/SP8, FSDP off, `adaln_tables` | yes (run G) | **no** -- DiT 805 MiB/bank loads, OOM on the first 392 MB K/V gather buffer | -- | -- | -- | -- | 3 | ~7 | -- | 0 | -- |
