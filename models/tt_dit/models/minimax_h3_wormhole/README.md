@@ -850,10 +850,30 @@ End to end at 50 steps with the warmup on (the same harness as the table above):
 denoise, 643.7 s total, CLIP 37.20 / min 35.40**, `coresident=False` in the record. That is 36 MiB/bank of
 nominal headroom at the peak and 18 MiB contiguous; a second sequence shape in the same process would eat
 it, so this configuration is serviceable for one working point and fragile beyond it. The tables mode
-(`adaln_tables`) runs the same point at 727.6 MiB/bank peak with ~290 of headroom. Note on the tables mode
-at 50 steps: its frames differ from this run at PCC 0.99971 (3-step runs were exactly equal), i.e. the
-147-row schedule projection is not bit-identical to the per-step 3-row one -- a per-step projection in
-`build_request_modulation` would restore exactness at ~2450 small matmuls per request.
+(`adaln_tables`) runs the same point at 727.6 MiB/bank peak with ~290 of headroom.
+
+**Timing matrix, 50 steps, same host, seed 0 (2026-09-24/25).** Steady ms/step is the pipeline's own
+breakdown over 48 steps, excluding the first (compile) step; "gap" is `run` minus the four stage timers,
+i.e. the per-request DiT reload that `coresident=False` pays between the encoder and the denoise.
+
+| config | steady ms/step | preamble | denoise | encoder | VAE | audio | total | gap (DiT reload) | CLIP |
+|---|---|---|---|---|---|---|---|---|---|
+| shipped TP4/SP8, FSDP on, resident adaLN | **12055** | 1.2 s | 593.7 s | 4.2 | 17.8 | 15.8 | **635.5 s** | 3.9 s | 37.65 |
+| TP8/SP4, FSDP on, resident adaLN | 12277 | 1.1 s | 604.5 s | 4.3 | 17.8 | 15.4 | 646.1 s | 4.0 s | 37.29 |
+| TP8/SP4, FSDP off, `adaln_tables` | 12130 | 3.6 s (tables 2.6) | 599.7 s | 4.2 | 17.2 | 14.8 | 640.1 s | 4.2 s | 37.25 |
+| TP8/SP4, FSDP off, resident adaLN, audio evicted | 12176 | 1.0 s | 599.5 s | 4.2 | 18.1 | 15.1 | 643.7 s | 6.8 s | 37.20 |
+
+Read at fixed TP8/SP4: FSDP costs 0.8% (resident) to 1.2% (tables) per step, in line with the 5.8%-of-block
+FSDP overhead partly hidden behind compute; the unsharded 8 GB/device DiT costs 3 s more per request to
+reload. Read at fixed FSDP-on: TP=8 costs 1.8% per step against the shipped TP=4 with untuned TP=8
+blockings. Net, the best FSDP-off configuration is 0.7% slower per request than the shipped preset.
+
+Output equality across the matrix: every 3-step pair within TP8/SP4 (FSDP on/off, tables/resident) is
+exactly equal, frames and audio. Over 49 forwards the TP8/SP4 runs differ from each other at PCC
+0.99971-0.99973 -- FSDP on vs off with the same resident adaLN path included -- so the small drift is not
+attributable to the tables' 147-row projection; whether it is run-to-run nondeterminism or a per-path
+effect that only shows past 2 forwards needs a repeated identical run, which has not been done. TP4 vs
+TP8 is the familiar 0.914 reduction-order regime.
 
 ### Open issues
 
