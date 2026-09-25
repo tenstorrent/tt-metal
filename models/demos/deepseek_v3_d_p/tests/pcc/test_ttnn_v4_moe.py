@@ -66,19 +66,30 @@ def _ref(cfg, layer_idx):
     return ref
 
 
+@pytest.mark.parametrize("x_scale", [1.0, 8.0], ids=["x1", "x8-clamp"])
 @pytest.mark.parametrize("layer_idx", [3, 0], ids=["topk-layer3", "hash-layer0"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, n_experts", _MESH_CONFIGS, indirect=["mesh_device", "device_params"]
 )
-def test_v4_moe(mesh_device, device_params, n_experts, layer_idx):
+def test_v4_moe(mesh_device, device_params, n_experts, layer_idx, x_scale):
     cfg = _cfg(n_experts)
     ref = _ref(cfg, layer_idx)
     sp, tp = mesh_device.shape
     seq_len_per_chip = 640  # the engine's 5120-token chunk over SP 8; the same per-chip load on 2x4
     total = sp * seq_len_per_chip
     torch.manual_seed(_SEED + 1)
-    x = torch.randn(sp, seq_len_per_chip, cfg.hidden_size).to(torch.bfloat16)
+    x = (torch.randn(sp, seq_len_per_chip, cfg.hidden_size) * x_scale).to(torch.bfloat16)
     input_ids = torch.randint(0, cfg.vocab_size, (total,))
+    # how much the reference's swiglu clamp bites at this scale (DS4F-0251: real deep layers reach 3e-4 .. 3e-3)
+    with torch.no_grad():
+        gu = torch.nn.functional.linear(x.view(total, -1).float(), ref.experts.gate_up_proj[0].float())
+        g, u = gu.chunk(2, dim=-1)
+        frac = ((g > cfg.swiglu_limit).float().mean() + (u.abs() > cfg.swiglu_limit).float().mean()).item() / 2
+    logger.info(
+        f"x_scale {x_scale}: fraction of expert-0 pre-activations beyond swiglu_limit {cfg.swiglu_limit}: {frac:.2e}"
+    )
+    if x_scale > 1 and frac < 1e-4:
+        pytest.skip(f"scale {x_scale} does not exercise the clamp (fraction {frac:.1e}); raise x_scale")
     with torch.no_grad():
         ref_bf = ref.to(torch.bfloat16)
         out_ref = ref_bf(x.view(1, total, cfg.hidden_size), input_ids=input_ids.view(1, total)).view(

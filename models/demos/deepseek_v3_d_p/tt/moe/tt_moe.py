@@ -216,6 +216,7 @@ class TtMoe(LightweightModule):
         score_func: str = "sigmoid",
         hash_table: Optional[torch.Tensor] = None,
         activation=None,
+        shared_expert_swiglu_limit: Optional[float] = None,
     ):
         """
         Initialize TtMoe module.
@@ -223,7 +224,8 @@ class TtMoe(LightweightModule):
         DeepSeek-V4 additions (defaults keep every other model byte-identical): ``score_func`` is the gate's scoring
         function ("sigmoid" | "sqrtsoftplus"); ``hash_table`` is the tid2eid table for the hash-routed layers
         (``gate_fallback_mode`` HASH_HOST / HASH_DEVICE; ``forward(input_ids=...)`` then supplies the token ids);
-        ``activation`` overrides the routed experts' fused activation (default ``RoutedExpertActivation.Silu``).
+        ``activation`` overrides the routed experts' fused activation (default ``RoutedExpertActivation.Silu``);
+        ``shared_expert_swiglu_limit`` clamps the shared expert's gate/up before silu(gate) * up (DeepSeek-V4: 10).
 
         Args:
             mesh_device: TTNN mesh device
@@ -508,6 +510,7 @@ class TtMoe(LightweightModule):
             weights_dtype=shared_expert_weights_dtype,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.shared_expert",
+            swiglu_limit=shared_expert_swiglu_limit,
             subdevice_id=self.shared_sd_id,
             subdevice_cores=self.shared_sd_cores,
         )

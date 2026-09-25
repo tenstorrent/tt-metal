@@ -18,7 +18,8 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
     // function bindings so it can serve as a default kwarg value.
     nb::enum_<RoutedExpertActivation>(mod, "RoutedExpertActivation")
         .value("Silu", RoutedExpertActivation::Silu)
-        .value("SwiGluOai", RoutedExpertActivation::SwiGluOai);
+        .value("SwiGluOai", RoutedExpertActivation::SwiGluOai)
+        .value("SiluClamped", RoutedExpertActivation::SiluClamped);
 
     ttnn::bind_function<"unified_routed_expert_ffn", "ttnn.experimental.deepseek_prefill.">(
         mod,

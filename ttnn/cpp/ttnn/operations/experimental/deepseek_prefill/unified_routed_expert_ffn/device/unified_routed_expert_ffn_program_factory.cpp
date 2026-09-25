@@ -840,6 +840,11 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // limit=7.0 (SwiGLUConfigGPTOSS) in the kernel.
         compute_defines["SWIGLU_OAI"] = "1";
     }
+    if (op.activation == RoutedExpertActivation::SiluClamped) {
+        // DeepSeek-V4 clamped SiLU (swiglu_limit 10): silu(clamp(gate,max=10)) * clamp(up,+-10) through the same
+        // fused binary SFPU op with SwiGLUConfigDeepSeekV4 (alpha 1, no +1). tt-blaze postmortem DS4F-0251.
+        compute_defines["SILU_CLAMPED"] = "1";
+    }
     if (fuse_bias) {
         // FUSE_BIAS: add gate/up bias (broadcast across rows) before the
         // SwiGLU-OAI activation and down bias after the down matmul (gpt-oss).

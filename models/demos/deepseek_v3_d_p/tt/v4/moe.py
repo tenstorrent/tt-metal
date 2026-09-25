@@ -6,8 +6,8 @@ experts / combine / shared expert are dimension-agnostic).
 V4 specifics: 256 routed experts, top-6, one shared expert of the same 2048 intermediate, a single expert group (the
 grouped top-k collapses to plain top-k), ``sqrtsoftplus`` scoring, route scale 1.5, and layers 0..2 hash-routed
 (``tid2eid[input_ids]`` picks the experts; the gate still scores them) -> ``GateComputeMode.HASH_DEVICE`` with the
-token ids passed per chunk. The routed experts run the fused ``Silu`` kernel; the reference's ``swiglu_limit`` clamp
-(gate <= 10, |up| <= 10) is NOT applied yet (plan M8 ``SiluClamped``; the deviation is measured by the MoE test).
+token ids passed per chunk. The routed experts run the fused ``SiluClamped`` kernel (the reference's ``swiglu_limit`` clamp;
+gate <= 10, |up| <= 10 -- plan M8 ``SiluClamped``) and the shared expert clamps its gate/up the same way.
 
 Weights come in the reference module's names (``tt/v4/weights/hf_names.py``): ``mlp.gate.weight``,
 ``mlp.gate.e_score_correction_bias`` (learned layers) / ``mlp.gate.tid2eid`` (hash layers), per-expert
@@ -98,6 +98,10 @@ def build_v4_moe(
         routed_expert_activations_dtype=ttnn.bfloat8_b,
         routed_expert_weights_dtype=routed_expert_weights_dtype,
         shared_expert_activations_dtype=ttnn.bfloat16,
+        # swiglu_limit (10): silu(clamp(gate, max=L)) * clamp(up, +-L) in the fused routed-expert kernel (SiluClamped,
+        # tt-blaze DS4F-0251: deep layers exceed the limit on real prompts). Falls back to plain Silu on a build without it.
+        activation=getattr(ttnn.RoutedExpertActivation, "SiluClamped", ttnn.RoutedExpertActivation.Silu),
+        shared_expert_swiglu_limit=float(cfg.swiglu_limit),
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         gate_weights={"weight": gate_weight, "e_score_correction_bias": gate_bias},
         gate_fallback_mode=GateComputeMode.HASH_DEVICE if hash_layer else GateComputeMode.DEVICE_FP32,

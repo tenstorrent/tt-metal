@@ -40,6 +40,16 @@ namespace ckernel::sfpu {
 struct SwiGLUConfigGPTOSS {
     static constexpr float alpha = 1.702f;
     static constexpr float clamp_limit = 7.0f;
+    static constexpr bool up_plus_one = true;  // swigluoai: (clamp(up) + 1) * ...
+};
+
+// DeepSeek-V4 clamped SwiGLU (config.json swiglu_limit = 10): silu(clamp(gate, max=L)) * clamp(up, +-L),
+// i.e. alpha = 1 and NO "+1" on up. The plain-SiLU routed-expert kernel dropped the clamp; a real-prompt
+// histogram (tt-blaze postmortem DS4F-0251) showed |pre-activations| up to 58 in the deep layers.
+struct SwiGLUConfigDeepSeekV4 {
+    static constexpr float alpha = 1.0f;
+    static constexpr float clamp_limit = 10.0f;
+    static constexpr bool up_plus_one = false;
 };
 
 //-----------------------------------------------------------------------------
@@ -86,8 +96,10 @@ inline void calculate_swiglu(const uint gate_tile_idx, const uint up_tile_idx, c
         v_if(up < -clamp_limit) { up = -clamp_limit; }
         v_endif;
 
-        // up = up + 1
-        up = up + 1.0f;
+        // up = up + 1 (swigluoai only; the DeepSeek-V4 clamped SiLU multiplies by the clamped up as is)
+        if constexpr (Config::up_plus_one) {
+            up = up + 1.0f;
+        }
 
         // sigmoid(alpha * gate)
         sfpi::vFloat alpha_gate = gate * alpha;

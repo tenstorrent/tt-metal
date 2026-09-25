@@ -38,6 +38,7 @@ enum class RoutedExpertActivation : uint8_t {
     Silu = 0,  // plain SiLU SwiGLU: silu(gate) * up                      (DeepSeek default)
     SwiGluOai =
         1,  // clamped swigluoai: (clamp(up,±L)+1)·clamp(gate,max=L)·σ(α·clamp(gate,max=L))  (MiniMax-M3 / gpt-oss)
+    SiluClamped = 2,  // DeepSeek-V4: silu(clamp(gate,max=10))·clamp(up,±10) (swiglu_limit; tt-blaze DS4F-0251)
 };
 
 // Attributes (the constants known at host time).

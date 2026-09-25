@@ -72,7 +72,7 @@
 #include "api/compute/bcast.h"
 #endif
 
-#ifdef SWIGLU_OAI
+#if defined(SWIGLU_OAI) || defined(SILU_CLAMPED)
 // SwiGLU-OAI (gpt-oss / MiniMax-M3) activation: reuse the proven binary SFPU op.
 // Computes (clamp(up,±L)+1) * clamp(gate,max=L) * sigmoid(alpha*clamp(gate,max=L)).
 // Default SwiGLUConfigGPTOSS (alpha=1.702, clamp_limit=7.0) matches M3's config.json.
@@ -81,6 +81,17 @@
 // above). It could later move to a shared kernel-include dir, but the path is valid
 // as-is (verified on Blackhole via test_swigluoai_routed_expert.py).
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/swiglu_sfpu.h"
+#if defined(TRISC_PACK) || defined(TRISC_MATH)
+namespace {
+// SILU_CLAMPED (DeepSeek-V4, swiglu_limit 10): silu(clamp(gate, max=10)) * clamp(up, +-10) -- the same fused
+// binary SFPU op with alpha = 1 and no "+1" on up (SwiGLUConfigDeepSeekV4). SWIGLU_OAI keeps the gpt-oss config.
+#ifdef SILU_CLAMPED
+using kSwigluConfig = ckernel::sfpu::SwiGLUConfigDeepSeekV4;
+#else
+using kSwigluConfig = ckernel::sfpu::SwiGLUConfigGPTOSS;
+#endif
+}  // namespace
+#endif
 #endif
 
 namespace {
@@ -485,7 +496,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
     PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
 
-#ifdef SWIGLU_OAI
+#if defined(SWIGLU_OAI) || defined(SILU_CLAMPED)
     // SwiGLU-OAI path: do NOT apply silu here and do NOT consume the partials.
     // Both partials_gu and partials_up are left pushed (bf16, full precision) so
     // swiglu_oai_activation_phase() in kernel_main can read raw gate AND raw up
@@ -535,7 +546,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
 #endif
 }
 
-#ifdef SWIGLU_OAI
+#if defined(SWIGLU_OAI) || defined(SILU_CLAMPED)
 // Dst-accumulator mode (fp32 dest accum on/off) from the host ComputeConfig,
 // passed via -DFP32_DEST_ACC_EN. Defaults to bf16 dst (0) if not passed.
 #ifndef FP32_DEST_ACC_EN
@@ -633,7 +644,7 @@ FORCE_INLINE void swiglu_oai_activation_phase(
         // Fused clamp + alpha-sigmoid + (up+1) multiply; result written in place to
         // dst[j] (out == gate slot, mirroring moe_gpt's swiglu(0,1,0)).
         for (uint32_t j = 0; j < c; ++j) {
-            MATH((ckernel::llk_math_eltwise_binary_sfpu_swiglu<kFp32DestAccEn>(j, c + j, j)));
+            MATH((ckernel::llk_math_eltwise_binary_sfpu_swiglu<kFp32DestAccEn, kSwigluConfig>(j, c + j, j)));
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -838,7 +849,7 @@ void kernel_main() {
     // gate-intermed write. silu_tile_init() configures the MATH-side SFPU
     // for silu; the pack then runs plain (no per-tile SFPU on the pack
     // thread). Same total compute, better pipelining.
-#ifdef SWIGLU_OAI
+#if defined(SWIGLU_OAI) || defined(SILU_CLAMPED)
     // SwiGLU-OAI uses the binary swiglu SFPU op (sigmoid/recip table init).
     MATH((ckernel::llk_math_eltwise_binary_sfpu_swiglu_init()));
 #else
@@ -899,7 +910,7 @@ void kernel_main() {
             cb_up_intermed,
             /*m_subblocks=*/re_m_valid);
 
-#ifdef SWIGLU_OAI
+#if defined(SWIGLU_OAI) || defined(SILU_CLAMPED)
         // Phase 3 (SwiGLU-OAI): fused clamp + alpha-sigmoid + (up+1) directly on
         // the raw bf16 gate/up accumulators -> cb_activated. Replaces both the
         // gate-silu pass (skipped above) and the plain multiply_phase. cb_in1_up is

@@ -30,7 +30,22 @@ COMPUTE_KERNEL_CONFIG_HIFI2 = ttnn.WormholeComputeKernelConfig(
 )
 
 
-def get_bh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int):
+_SILU = ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
+_NEG_BIG = -1.0e30  # "no lower bound" for a max-only clamp (bf16 saturates well before)
+
+
+def swiglu_clamp_activations(limit: float):
+    """Matmul activations under the reference's swiglu_limit (DeepSeek-V4: 10): NONE fused -- the gate must be
+    clamped BEFORE its SiLU and the matmul's fused-activation path rejects a two-scalar clamp
+    (``Unsupported UnaryOpType for fused activation: CLAMP_TSS``, matmul_utilities.hpp:332, hit on the galaxy).
+    Both clamps run afterwards as ``ttnn.hardtanh`` on the sub-device grid (see ``TtSharedExpert.forward``).
+    tt-blaze postmortem DS4F-0251."""
+    return (None, None)
+
+
+def get_bh_program_configs(
+    per_core_M: int, gate_n_tiles: int, down_n_tiles: int, *, gate_activation=_SILU, up_activation=None
+):
     """Program configs for the gate / up / down matmuls on Blackhole."""
     grid = ttnn.CoreCoord(11, 9)
     gate = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -42,7 +57,7 @@ def get_bh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int
         per_core_N=gate_n_tiles,
         fuse_batch=False,
         mcast_in0=False,
-        fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+        fused_activation=gate_activation,
     )
     up = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=grid,
@@ -53,6 +68,7 @@ def get_bh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int
         per_core_N=gate_n_tiles,
         fuse_batch=False,
         mcast_in0=False,
+        fused_activation=up_activation,
     )
     down = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=grid,
@@ -67,7 +83,9 @@ def get_bh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int
     return gate, up, down
 
 
-def get_wh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int):
+def get_wh_program_configs(
+    per_core_M: int, gate_n_tiles: int, down_n_tiles: int, *, gate_activation=_SILU, up_activation=None
+):
     """Program configs for the gate / up / down matmuls on Wormhole."""
     grid = ttnn.CoreCoord(8, 7)
     gate = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -79,7 +97,7 @@ def get_wh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int
         per_core_N=gate_n_tiles,
         fuse_batch=False,
         mcast_in0=False,
-        fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+        fused_activation=gate_activation,
     )
     up = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=grid,
@@ -90,6 +108,7 @@ def get_wh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int
         per_core_N=gate_n_tiles,
         fuse_batch=False,
         mcast_in0=False,
+        fused_activation=up_activation,
     )
     down = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=grid,
@@ -239,9 +258,13 @@ class TtSharedExpert(LightweightModule):
         cache_name_prefix: Optional[str] = None,
         subdevice_id: Optional[ttnn.SubDeviceId] = None,
         subdevice_cores: Optional[ttnn.CoreRangeSet] = None,
+        swiglu_limit: Optional[float] = None,
     ):
         """
         Initialize TtSharedExpert module.
+
+        ``swiglu_limit``: apply the reference's clamp (gate <= limit, |up| <= limit) before silu(gate) * up
+        (DeepSeek-V4 ``swiglu_limit`` = 10; None = plain SwiGLU).
 
         Args:
             mesh_device: TTNN mesh device
@@ -260,6 +283,7 @@ class TtSharedExpert(LightweightModule):
         self.mesh_device = mesh_device
         self.emb_dim = emb_dim
         self.hidden_dim = hidden_dim
+        self.swiglu_limit = None if swiglu_limit is None else float(swiglu_limit)
         self.num_devices = mesh_device.get_num_devices()
         self.num_links = num_links
         self.topology = topology
@@ -430,13 +454,18 @@ class TtSharedExpert(LightweightModule):
 
         gate_n_tiles = self.gate_proj.padded_shape[-1] // TILE
         down_n_tiles = self.down_proj.padded_shape[-1] // TILE
+        acts = (
+            {}
+            if self.swiglu_limit is None
+            else dict(zip(("gate_activation", "up_activation"), swiglu_clamp_activations(self.swiglu_limit)))
+        )
         if is_blackhole():
             gate_program_config, up_program_config, down_program_config = get_bh_program_configs(
-                per_core_M, gate_n_tiles, down_n_tiles
+                per_core_M, gate_n_tiles, down_n_tiles, **acts
             )
         else:
             gate_program_config, up_program_config, down_program_config = get_wh_program_configs(
-                per_core_M, gate_n_tiles, down_n_tiles
+                per_core_M, gate_n_tiles, down_n_tiles, **acts
             )
 
         # 1) Compute gate and up projections
@@ -455,6 +484,18 @@ class TtSharedExpert(LightweightModule):
             sub_device_id=self.subdevice_id,
         )
 
+        if self.swiglu_limit is not None:
+            # swiglu_limit: gate = silu(clamp(gate, max=L)), up = clamp(up, -L, L). hardtanh is a two-sided clamp
+            # that runs on the sub-device grid (ttnn.clamp does not take sub_core_grids); the gate matmul carried no
+            # fused SiLU in this mode.
+            L = self.swiglu_limit
+            g = ttnn.hardtanh(gate_out, min_val=_NEG_BIG, max_val=L, sub_core_grids=self.subdevice_cores)
+            ttnn.deallocate(gate_out)
+            gate_out = ttnn.silu(g, sub_core_grids=self.subdevice_cores)
+            ttnn.deallocate(g)
+            u = ttnn.hardtanh(up_out, min_val=-L, max_val=L, sub_core_grids=self.subdevice_cores)
+            ttnn.deallocate(up_out)
+            up_out = u
         # 2) Multiply gate and up projection
         ttnn.multiply_(gate_out, up_out, sub_core_grids=self.subdevice_cores)
         ttnn.deallocate(up_out)
