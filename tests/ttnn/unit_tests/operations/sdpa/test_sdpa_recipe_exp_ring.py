@@ -385,8 +385,8 @@ def test_recipe_exp_ring_rejection(exp_ring_mesh, case):
         "scale": r"default 1/sqrt\(head_dim\) scale",
         "prepared": "LOW_PRECISION requires inputs_prepared",
         "unprepared": "LOW_PRECISION requires inputs_prepared",
-        "q1056": "tile-aligned Q chunks from 32 to 1024 rows",
-        "k48": "tile-aligned K chunks",
+        "q1056": "Q chunk 1056 exceeds 1024 rows",
+        "k48": "tile-aligned Q/K chunks and head dims",
         "l1_q320": "needs .* B of L1 per core at Q320",
     }
     options.update(changes.get(case, {}))
