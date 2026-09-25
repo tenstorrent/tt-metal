@@ -1,0 +1,39 @@
+# DeepSeek-V4-Flash -- Gate 2 (transport): 1-rank runner on one galaxy with the REAL checkpoint (first 4 layers), a live
+# tt-llm-engine migration endpoint (loopback: dest endpoint == our own), the 4-layer real golden for the source PCC, and
+# `--verify-migration both` on the destination slot (dst bytes == src bytes, dst vs the golden through the V4 reader).
+# Runner: GATE2 driver script (PREFILL_NUM_USERS=2, PREFILL_MOCK_MIGRATION unset, PREFILL_MIGRATION_CLIENT_DIR + the
+# /mig_ep1_* queues). Drive with:
+#   python -m models.demos.common.prefill.runners.migration_driver --manifest <this file> --verify-migration both
+model:
+  variant: deepseek_v4_flash
+  num_layers: 4
+  max_seq_len: 10240
+  chunk_size: 5120
+transport:
+  sp: 8
+  tp: 4
+  h2d_service_id: dsv4_prefill
+  connect_timeout_s: 600
+workload:
+  num_users: 2            # src slot 0 -> dst slot 1
+  chunks: "2"
+  max_requests: 1
+  interleave: round_robin
+  check_pcc: true         # SOURCE slot vs the 4-layer real golden (V4 multi-config reader)
+  trace_dir: /mnt/tt-data/sdawle/dsv4_flash_traces/golden_4l_10k
+migration:
+  issue: true
+  dest_endpoint_id: 1     # == src endpoint id -> LOOPBACK
+  dst_slot_offset: 1
+  timeout_ms: 3600000
+  done_file: /tmp/migration_done.sentinel
+  client_dir: /home/ttuser/sdawle/tt-llm-engine/disaggregation/migration/build_RelWithDebInfo/python
+  cmd_queue: /mig_ep1_cmd
+  table_queue: /mig_ep1_table
+  resp_queue: /mig_ep1_resp
+env:
+  PREFILL_MIGRATION_TABLE_PATH: /tmp/dsv4_kv_table.pb
+  PREFILL_MIGRATION_DEVICE_MAP_PATH: /tmp/dsv4_kv_devmap.json
+  PREFILL_STANDALONE_CHUNKED_PCC: "0.97"
+  PREFILL_HF_MODEL: /mnt/tt-data/sdawle/models/DeepSeek-V4-Flash-0731
+  PREFILL_TTNN_CACHE: /mnt/tt-data/sdawle/dsv4_flash_ttnn_cache

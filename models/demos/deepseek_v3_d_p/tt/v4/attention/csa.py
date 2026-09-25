@@ -378,6 +378,11 @@ class TtCSA(TtHCA):
         super().__init__(device, compressor=compressor, **kwargs)
         self.indexer = indexer
         self.live_extent = bool(live_extent)  # DS4F-0252: attention over the live entries, not the capacity
+        # Live widths are rounded UP to a multiple of this many entries (DS4F-0255 follow-up): every distinct width is a
+        # distinct set of programs (indexer matmul / top-k / masks, dense SDPA), so 26 chunk indices x 21 layers at 128k
+        # is 546 program sets to compile and cache; 4096 entries (16k tokens) caps that at 9 widths for the price of
+        # scoring/attending at most 4095 masked entries more per chunk. 0 = exact (tile) widths.
+        self.live_quantum = int(os.environ.get("PREFILL_CSA_LIVE_QUANTUM", "4096"))
         # PATH A (plan section 3 / DS4F-0252): sparse_sdpa over [128 window rows | top-k entries] per query instead of
         # the dense masked SDPA over every live entry. Used once every query of a chunk sees >= topk entries (so no
         # sentinel is ever needed: the kernel wants sentinels as a contiguous tail); chunk 0 stays on path B.
@@ -479,9 +484,13 @@ class TtCSA(TtHCA):
         # allocated capacity -- the index keys, the compressor's causal block and the compressed rows are sliced
         # to cap_live (a tile multiple); the persistent mask follows inside _attention.
         cap = int(state.compressed_kv.shape[2])
-        cap_live = (
-            min(cap, -(-(state.entry_count + n_new) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE) if self.live_extent else cap
-        )
+        if self.live_extent:
+            cap_live = -(-(state.entry_count + n_new) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+            if self.live_quantum > 0:
+                cap_live = -(-cap_live // self.live_quantum) * self.live_quantum
+            cap_live = min(cap, cap_live)
+        else:
+            cap_live = cap
         if cap_live < cap:
             keys_live = ttnn.slice(state.index_k, [0, 0, 0, 0], [1, 1, cap_live, self.indexer.head_dim])
             block_live = ttnn.slice(mask_block, [0, 0, 0, 0], [1, 1, mask_block.shape[2], cap_live])
