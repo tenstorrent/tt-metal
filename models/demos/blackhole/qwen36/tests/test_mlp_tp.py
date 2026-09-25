@@ -40,10 +40,7 @@ def test_mlp_tp(mesh_device, reset_seeds, ensure_gc, request):
     nd = mesh_device.get_num_devices()
     logger.info(f"devices={nd} dim={args.dim} hidden_dim={args.hidden_dim}")
 
-    # Mirror of test_moe_tp's dense guard. On a sparse-MoE checkpoint (35B-A3B) EVERY layer's dense
-    # SwiGLU is replaced by the MoE block, so there is no `mlp.gate_proj.weight` and load_mlp_layer
-    # dies with a bare StopIteration. The dense MLP code this test covers is still exercised on that
-    # checkpoint — as the MoE shared expert, via test_moe_tp.
+    # On a sparse-MoE checkpoint every dense SwiGLU is replaced by the MoE block, so skip; test_moe_tp still covers this code as the shared expert.
     if args.moe_num_experts > 0:
         pytest.skip("MoE checkpoint has no dense MLP; same code runs as the shared expert (test_moe_tp)")
 

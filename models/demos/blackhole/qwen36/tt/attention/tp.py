@@ -35,10 +35,7 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
     # De-interleave [q,gate] per head → contiguous q/gate slices (avoids ~5.3ms relayout).
     qg_deint = fused_qkv
 
-    # TP > n_kv_heads (e.g. 27B's 4 KV heads on TP=8): there is no whole KV head per device, so
-    # pre-expand K/V to tp*head_dim rows where device d holds the head its GQA query group maps
-    # to (devices 2d, 2d+1 share head d at TP=8). The per-device slicing below is then uniform.
-    # No-op when tp <= n_kv_heads, so TP=4 weights stay bit-identical.
+    # When TP > n_kv_heads there is no whole KV head per device, so pre-expand K/V; a no-op when tp <= n_kv_heads.
     kv_rep = lambda w: tpc.replicate_kv_weight(w, args.n_kv_heads, args.num_devices, args.head_dim)
     k_proj, v_proj = kv_rep(state_dict["k_proj.weight"]), kv_rep(state_dict["v_proj.weight"])
 
@@ -171,11 +168,7 @@ class TPAttention:
                 self._col_proj(x, tw["wk"], self.args.attn_k_progcfg),
                 self._col_proj(x, tw["wv"], self.args.attn_v_progcfg),
             )
-        # Prefill: x is K-sharded (norm skipped its AG) -> gather back to full K, then the QKV matmul.
-        # Long chunks use the FUSED all-gather+matmul, which hides the gather behind the matmul; short
-        # ones don't run long enough to hide its setup, so they gather separately (tpc.AGMM_MIN_SEQ).
-        # Output stays DRAM: L1 clashes with a downstream matmul's CBs (verified; full-attn has more
-        # L1 pressure here).
+        # Prefill gathers x back to full K; long chunks use the FUSED all-gather+matmul, short ones gather separately. Output stays DRAM.
         if self._fuse_agmm and x.shape[-2] > tpc.TILE_SIZE:
             if x.shape[-2] >= tpc.AGMM_MIN_SEQ:
                 qkv = tpc.all_gather_matmul_prefill(
@@ -256,10 +249,7 @@ class TPAttention:
             )
         if not self._wo_sharded:
             if x.shape[-2] > tpc.TILE_SIZE:
-                # Prefill: FPU-tuned 2D config beats ttnn-auto's 1x1 stall; L1 output (gated stays DRAM)
-                # feeds the separate RS. max_cols = device width (11 on BH): wide grid (~10-wide) + the
-                # existing L1-out. See test_mlp_matmul_sweep_prefill.
-                # Short prefill: the 2D kernel is core-starved at this M (tpc.short_prefill_1d_progcfg).
+                # Prefill: FPU-tuned 2D config beats ttnn-auto; short prefill switches to 1D, where the 2D kernel is core-starved.
                 pc = tpc.short_prefill_1d_progcfg(
                     x.shape[-2],
                     weight.shape[-2],
@@ -367,10 +357,7 @@ class TPAttention:
         NH, NKV, HD = self.NH, self.NKV, self.HD
         _L1 = ttnn.L1_MEMORY_CONFIG
         if vp is None:
-            # Fused [q|k|v|gate] weight (_qkv sentinel vp=None): qg is already the contiguous [q|k|v]
-            # the decode head-split wants — feed it directly, no concat. kp is the gate. qkv must be
-            # L1 (tt-metal #16667: DRAM input zeros odd Q rows); one to_memory_config replaces the
-            # old 3-way concat (which had also served to land qkv in L1).
+            # Fused [q|k|v|gate] weight: qg is already the contiguous [q|k|v] the head-split wants. qkv MUST be L1 (tt-metal #16667 zeros odd Q rows from DRAM).
             qkv = ttnn.to_memory_config(qg, _L1)
             ttnn.deallocate(qg)
             gate_flat = kp
@@ -476,11 +463,7 @@ class TPAttention:
 
         q8, k8, v8 = q, k, v
         padded = max(32, ((S + 31) // 32) * 32)
-        # SDPA flash chunk: 128 for S>=2048, 64 below. (256 wins in ISOLATION at S=3072/4096
-        # -- test_sdpa_prefill_opt -- but in the full model its larger CBs clash with the resident
-        # attn-input L1 buffer during a single-pass prefill of S>2048 (prefill_tp/generate_tp;
-        # program.cpp "circular buffers ... clash with L1 buffers"). Production serving chunks
-        # prefill at <=2048, so this path never sees S>2048 and 256 has no reachable win.)
+        # SDPA flash chunk: 128 for S>=2048, 64 below. 256 wins in isolation but its CBs clash with the resident attn input in the full model.
         ch = min(128 if S >= 2048 else 64, padded)
         sdpa_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(8, 8), exp_approx_mode=False, q_chunk_size=ch, k_chunk_size=ch
@@ -535,10 +518,7 @@ class TPAttention:
 
     def forward_decode(self, x, cur_pos_tt, cos_tt, sin_tt, page_table=None):
         tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
-        # Active decode width, taken from the input (x is [1,1,B,dim_frac]). Normally == self.B.
-        # BUCKETED decode: a request feeds B<self.B users; every shape/reshape/rope/head-split and
-        # the KV-update shard config below run at this width, and the paged SDPA reads only these B
-        # users' pages via the width-B page_table. The B==self.B path is byte-identical to before.
+        # Active decode width from the input; under bucketed decode everything below runs at this width and SDPA reads only these B users' pages.
         B = x.shape[-2]
         _L1 = ttnn.L1_MEMORY_CONFIG  # keep decode head-prep + attn output L1-resident
         use_paged = self.use_paged and page_table is not None
@@ -564,15 +544,7 @@ class TPAttention:
         ttnn.deallocate(cos_s)
         ttnn.deallocate(sin_s)
 
-        # SDPA-decode grid: use the real device grid (11x10=110 cores on P150x4), not a
-        # hardcoded 64. cores_per_head = grid_total/B (sdpa_decode_program_factory.cpp), so a
-        # bigger grid gives each batch row more parallel cores for its KV-reduction. At SHORT
-        # context (~4k) the reduction is shallow enough that fixed per-core overhead dominates
-        # and this makes ~no difference (B=1: flat; B=8: ~3% worse, both within noise). At LONG
-        # context (~64k) the reduction is deep enough that the extra cores are a real win:
-        # SdpaDecodeDeviceOperation duration B=8: 1569.9us -> 1396.2us (-11%); B=1: 220.8us ->
-        # 215.5us (-2.4%, no regression). Using the full grid unconditionally since it never hurts
-        # and helps significantly at long context, where batched decode is otherwise slowest.
+        # SDPA-decode uses the real device grid, not a hardcoded 64: cores_per_head = grid/B, so the extra cores pay off at long context.
         _sdpa_grid = self.mesh.compute_with_storage_grid_size()
         sdpa_dec_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(_sdpa_grid.x, _sdpa_grid.y),
@@ -640,10 +612,7 @@ class TPAttention:
                 k_full = ttnn.concat(self.k_caches, dim=1)
                 v_full = ttnn.concat(self.v_caches, dim=1)
 
-            # Non-paged oracle path (test/generate_tp only): the full-cache SDPA-decode's static CBs
-            # grow with max_seq_len and, unbounded (k_chunk_size=0), overrun into the persistent CCL
-            # semaphore buffers at the top of L1. Bound the K-chunk to cap the CB footprint (the paged
-            # production path reads bounded blocks, so it keeps the auto config).
+            # Non-paged oracle path only: bound the K-chunk, or the full-cache SDPA's CBs grow with max_seq_len and overrun the CCL semaphores.
             nonpaged_sdpa_cfg = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(8, 8), exp_approx_mode=False, q_chunk_size=0, k_chunk_size=128
             )

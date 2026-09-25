@@ -86,19 +86,11 @@ def decode_forward(
     # Expert-parallel: each device owns num_experts/num_devices experts (weights sharded dim=1).
     num_experts = config.num_experts // num_devices if num_devices > 1 else config.num_experts
 
-    # Slice the replicated dense routing [1,1,S,E] into THIS device's contiguous expert columns
-    # [1,1,S,E/tp] (mesh_partition dim=3 along the 4-device cluster axis=1), matching the
-    # dim=1-sharded expert weights. nnz is then inferred (None): the selected experts split
-    # unevenly across devices, so a static count would deadlock the sparse_matmul mcast
-    # receivers (see gpt_oss #45943/#45052).
+    # Slice the replicated routing into this device's expert columns; nnz MUST stay None -- experts split unevenly and a static count deadlocks the mcast receivers.
     if num_devices > 1:
         routing_weights = ttnn.mesh_partition(routing_weights, dim=3, cluster_axis=1)
 
-    # sparse_matmul requires sparsity.logical_volume() == num_experts (one gate per expert, the
-    # sparse batch dim). Multi-user decode has routing [1,1,B,E] (B users on dim-2), so collapse
-    # the user dim to a per-expert union mask [1,1,1,E]: an expert is computed if ANY user routed
-    # to it, and each user's per-expert weight is applied later by the per-expert routing multiply
-    # — so every user still sees only its own top-k contribution. B==1 max is a no-op.
+    # sparse_matmul wants one gate per expert, so collapse the user dim to a union mask; each user's own weight is applied later.
     if batch_size > 1:
         sparsity_src = ttnn.max(routing_weights, dim=2, keepdim=True)  # [1,1,1,E]
         nnz = None
@@ -126,23 +118,10 @@ def decode_forward(
         memory_config=ttnn.L1_MEMORY_CONFIG,
         output_tile=output_tile,
         program_config=gate_up_config,
-        # bfloat8_b output: the expanded [1,E,S,N] result is written, zero-filled and re-read by
-        # swiglu in full, so its width is pure data movement. gate/up weights are already
-        # bfloat4_b, so bf16 here bought no accuracy -- measured -81 us across the two sparse
-        # matmuls' fills, the swiglu chain and the expert sum, for 2e-4 of decode PCC.
+        # bfloat8_b output: this expanded result is pure data movement, and the gate/up weights are already bfloat4_b, so bf16 buys no accuracy.
         dtype=ttnn.bfloat8_b,
     )
-    # sparse_matmul returns rank 6 here: a dense [1,1,B,H] in0 contributes 2 batch dims and the
-    # sparse [1,E,H,2I] weights another 2, so the result is [1,1,1,E,B,2I] -- EXPERT-major, with the
-    # B users on dim -2. Reshaping straight to (B,E,1,sm2) would reinterpret that as user-major and
-    # hand each expert's down_proj another user's activation (B=1 is unaffected, which is why the
-    # gpt_oss decode this path follows can reshape directly: it rejects B>1).
-    #
-    # Dropping the leading unit dims to [1,E,B,2I] is volume- AND order-preserving, and swiglu only
-    # splits the LAST dim, so it applies directly in this layout and already yields the [1,E,B,I]
-    # the sparse down_proj and the routing multiply below both want. The earlier
-    # permute-to-batch-major -> swiglu -> reshape -> transpose-back round trip reached the same
-    # layout but cost ~550 us of pure relayout per decode step.
+    # sparse_matmul returns rank 6, EXPERT-major: drop the leading unit dims to [1,E,B,2I] (order-preserving) -- reshaping to user-major would cross users' activations.
     up_gate = ttnn.reshape(up_gate, (1, num_experts, batch_size, up_gate.shape[-1]))
     down_input = apply_swiglu(up_gate)
     up_gate.deallocate(True)
@@ -154,11 +133,7 @@ def decode_forward(
         (1, num_experts, max(32, batch_size), intermediate_size),
     )
 
-    # Scale each expert's activations by that expert's per-user routing weight HERE, on the
-    # intermediate width, instead of after down_proj on the hidden width: down_proj is linear,
-    # so the result is identical for a quarter of the elementwise work, and working in the
-    # [1, E, S, *] layout removes the [1,E,S,H] -> [1,S,E,H] permute the output-side scaling
-    # needed. Matches how prefill.py applies routing.
+    # Apply routing HERE on the intermediate width: down_proj is linear, so it is identical work for a quarter of the elementwise cost.
     routing_per_expert = ttnn.permute(routing_weights, (0, 3, 2, 1))  # [1,1,S,E] -> [1,E,S,1]
     down_input = ttnn.mul(down_input, routing_per_expert)
     routing_per_expert.deallocate(True)

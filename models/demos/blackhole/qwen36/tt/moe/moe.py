@@ -37,13 +37,7 @@ class Qwen36MoE:
             self.shared = Qwen36SharedExpert(mesh_device, state_dict, tensor_cache_path, args=args, tt_ccl=tt_ccl)
 
     def forward(self, x, mode="decode"):
-        # The router matmul, the gate_up sparse_matmul and the shared expert all read x; in decode
-        # it is one 32-row tile, so stage it in L1 once here rather than letting each op stream it
-        # from DRAM (the shared MLP already made its own L1 copy). Prefill x is left in DRAM.
-        # The LAYOUT matters as much as the buffer: in decode the DistributedNorm hands us an L1
-        # WIDTH_SHARDED tensor, and the consumers below (the fused gate's matmul, the router /
-        # shared-gate mcast_in0 1D configs) all require an interleaved in0 -- so a buffer_type-only
-        # test would pass that width-shard straight through.
+        # Stage decode x in L1 once (three consumers read it); the LAYOUT matters too -- they need an interleaved in0, so test the memory layout, not just the buffer type.
         x_mc = x.memory_config()
         if mode == "decode" and (
             x_mc.buffer_type != ttnn.BufferType.L1 or x_mc.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED

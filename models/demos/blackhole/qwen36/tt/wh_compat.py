@@ -85,25 +85,16 @@ def apply():
     def _fused_decay_and_write(h, k_t, delta, decay_t, beta_t, device=None, apply_decay=True):
         """Wormhole: place the [B,H,K,V] state-write intermediates in DRAM when they miss L1.
 
-        Upstream keeps every one of them in L1 -- "Decode opt: keep state-write operands in L1
-        (tiny at B=1)" -- and there are FOUR of that shape: the k(x)delta outer product, its beta
-        scaling, the decayed h, and the sum. At B=1 each is 512 KB and L1 is the right call.
+        Upstream keeps all FOUR of that shape in L1 -- the k(x)delta outer product, its beta
+        scaling, the decayed h, and the sum -- which is right at B=1 and impossible at B=32, where
+        each is far larger than the free L1 per bank. This is the decode leg the WH fork
+        deliberately declines (wh_decode_fork_applies), so without this override B=32 had nowhere
+        to go: the fork refused it for exactly this reason and upstream then tried L1 anyway.
+        Blackhole spreads the same tensor over more banks of a larger L1 and keeps the upstream
+        function untouched.
 
-        At B=32 with the fp32 state each is [32,8,128,128] = 16,777,216 B. Wormhole interleaves
-        over 64 banks, so that is 262,144 B/bank against the 1,368,864 B a bank has -- and with the
-        model resident only ~186 KB/bank is free, so the very first one dies with
-
-            Out of Memory: Not enough space to allocate 16777216 B L1 buffer across 64 banks
-
-        This is the decode leg the WH fork deliberately declines (wh_decode_fork_applies), so
-        before this override B=32 decode had nowhere to go: the fork refused it for exactly this
-        reason and upstream then tried to do it in L1 anyway.
-
-        Blackhole spreads the same tensor over 80 banks of a larger L1 and never trips this, so it
-        keeps the upstream function untouched.
-
-        ONLY the memory configs change. The op sequence, dtypes and compute config are upstream's,
-        so the result is bit-identical -- DRAM vs L1 is placement, not arithmetic.
+        ONLY the memory configs change -- op sequence, dtypes and compute config are upstream's, so
+        the result is bit-identical. DRAM vs L1 is placement, not arithmetic.
         """
         if is_blackhole():
             return _orig_fused_decay_and_write(
