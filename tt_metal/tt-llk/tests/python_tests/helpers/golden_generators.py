@@ -2855,11 +2855,15 @@ class UnarySFPUGolden:
         # Domain restricted to [-1, 1] by the stimuli spec -- same caveat as _asin.
         return self._torch_unary(x, torch.acos)
 
+    # Through torch, not `math`: `math.cosh(3.4e38)` raises OverflowError, which made
+    # the full-range ULP sweep skip every Cosh/Sinh cell and never re-verify their
+    # enrolled budgets. torch returns inf, and the sweep masks lanes whose golden is
+    # past the output format's range, the same way it does for exp.
     def _sinh(self, x):
-        return math.sinh(x)
+        return self._torch_unary(x, torch.sinh)
 
     def _cosh(self, x):
-        return math.cosh(x)
+        return self._torch_unary(x, torch.cosh)
 
     def _square(self, x):
         # A finite input that overflows saturates, and handle_infinite_numbers picks inf or NaN
