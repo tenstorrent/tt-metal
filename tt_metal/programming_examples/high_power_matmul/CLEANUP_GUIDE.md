@@ -327,7 +327,10 @@ git remote add haris https://github.com/turkmanovic/tt-metal.git
 git fetch haris ncvetkovic/high_power_usage_workload
 git checkout -b repro 1dca802d332
 git submodule update --init --recursive        # tt-umd 38577fd
-git am < …/tt-metal-power-case.patch           # + tt-metal-blocked-matmul.patch for Fig. 2
+git am < …/tt-metal-power-case.patch           # always; gives exactly the tree of v0-powercase
+# then at most one of:
+git am < …/tt-metal-blocked-matmul.patch       #   Fig. 2 (blocking)
+git apply …/tt-metal-high-power-op.patch       #   cross-op, case 5, 24 grids (already includes blocking)
 ./build_metal.sh --build-programming-examples --build-type Release
 
 cd …/tt-ember && git checkout haris/n300-p100a-power-case-results
