@@ -111,7 +111,13 @@ class TtV4PrefillRuntime:
         c = self.config
         self.model.alloc_states(c.num_users, c.max_seq_len)
         x = self.make_chunk_input([0] * c.chunk_size)
-        self.prefill_chunk(x, kv_caches, slot_id=0, actual_start=0, actual_end=c.chunk_size, warmup=True)
+        # every chunk index: the CSA attention's live-extent programs differ per position (DS4F-0252), so warm them
+        # all here instead of paying a JIT inside the first request (~1-2 s per shape per layer kind)
+        for k in range(c.max_seq_len // c.chunk_size):
+            self._pending_ids[id(x)] = (x, torch.zeros(c.chunk_size, dtype=torch.int64))
+            self.prefill_chunk(
+                x, kv_caches, slot_id=0, actual_start=k * c.chunk_size, actual_end=(k + 1) * c.chunk_size, warmup=True
+            )
         for layer in self.model.layers:
             layer.reset_slot(0)
         ttnn.synchronize_device(self.mesh_device)

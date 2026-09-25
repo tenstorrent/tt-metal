@@ -689,9 +689,12 @@ def _read_slot_kv_and_check_pcc_v4(table, device_map: dict, slot_id: int, real_l
             dev = torch.cat(rows, 0).float()
             if g.name == "csa_index_k":
                 T = min(real_len // rate, golden[f"index_k_layer_{layer}"].shape[0])
-                _, pcc = comp_pcc(golden[f"index_k_layer_{layer}"][:T].float(), dev[:T])
+                # the golden holds the reference's PLAIN keys; the cache rows are stored Hadamard-rotated (DS4F-0254)
+                golden_ik = golden[f"index_k_layer_{layer}"][:T].float() @ kc.index_key_rotation()
+                _, pcc = comp_pcc(golden_ik, dev[:T])
                 logger.info(
-                    f"[producer] slot {slot_id} layer {layer:>2} {g.name}: index keys PCC {pcc:.5f} ({T} entries)"
+                    f"[producer] slot {slot_id} layer {layer:>2} {g.name}: index keys PCC {pcc:.5f} ({T} entries, "
+                    f"golden rotated by H128/sqrt(128))"
                 )
                 min_pcc = min(min_pcc, pcc)
             else:

@@ -344,10 +344,13 @@ class TtCSA(TtHCA):
     """CSA block = TtHCA's stems / window carry / sinks / dense SDPA / o-proj with the two-series compressor, the
     indexer's selection mask on the compressed columns, and tile-aligned entry writes (path B)."""
 
-    def __init__(self, device, *, compressor: TtCSACompressor, indexer: TtCSAIndexer, **kwargs):
+    def __init__(
+        self, device, *, compressor: TtCSACompressor, indexer: TtCSAIndexer, live_extent: bool = True, **kwargs
+    ):
         kwargs.setdefault("rope_layer_type", "compress")
         super().__init__(device, compressor=compressor, **kwargs)
         self.indexer = indexer
+        self.live_extent = bool(live_extent)  # DS4F-0252: attention over the live entries, not the capacity
 
     @staticmethod
     def prepare_input(hidden, sp_factor: int, compress_rate: int = ttnn.TILE_SIZE):
@@ -436,12 +439,25 @@ class TtCSA(TtHCA):
         ttnn.kv_cache.fill_cache_for_user_(state.compressed_kv, entries, 0, update_idx=state.entry_count)
         ttnn.kv_cache.fill_cache_for_user_(state.index_k, keys, 0, update_idx=state.entry_count)
 
-        mask_sel = self.indexer.select(q_latent, hidden_states, cos, sin, state.index_k, mask_block)
+        # LIVE EXTENT (DS4F-0252): attend the entries written so far (this chunk's included), not the whole
+        # allocated capacity -- the index keys, the compressor's causal block and the compressed rows are sliced
+        # to cap_live (a tile multiple); the persistent mask follows inside _attention.
+        cap = int(state.compressed_kv.shape[2])
+        cap_live = (
+            min(cap, -(-(state.entry_count + n_new) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE) if self.live_extent else cap
+        )
+        if cap_live < cap:
+            keys_live = ttnn.slice(state.index_k, [0, 0, 0, 0], [1, 1, cap_live, self.indexer.head_dim])
+            block_live = ttnn.slice(mask_block, [0, 0, 0, 0], [1, 1, mask_block.shape[2], cap_live])
+            comp_live = ttnn.slice(state.compressed_kv, [0, 0, 0, 0], [1, 1, cap_live, self.head_dim])
+        else:
+            keys_live, block_live, comp_live = state.index_k, mask_block, state.compressed_kv
+        mask_sel = self.indexer.select(q_latent, hidden_states, cos, sin, keys_live, block_live)
         self.debug_last_selection = mask_sel  # tests compare the selected sets with the reference block bias
         attn, next_carry, slab = self._attention(
             q,
             sliding_kv,
-            state.compressed_kv,
+            comp_live,
             mask_sel,
             cos,
             sin,
@@ -484,6 +500,16 @@ class TtCSA(TtHCA):
                 cluster_axis=self.sp_axis,
             )
 
+    def _h128_export(self):
+        """[1, 1, 128, 128] the contract's index-key rotation H128 / sqrt(128), built once, bf16 TILE, replicated."""
+        m = self.__dict__.get("_h128_dev")
+        if m is None:
+            from models.demos.deepseek_v3_d_p.tt.v4 import kv_contract as kc
+
+            r = kc.index_key_rotation()
+            m = self._h128_dev = self._from_torch(r.view(1, 1, *r.shape))
+        return m
+
     def _export_csa(self, export, entries, keys, slab, state, real_len):
         """``export = (csa_unified, csa_index_k, batch_idx)``: this chunk's entries -> unified rows
         ``128 + entry_count ..`` (bf16 ROW_MAJOR), its index keys -> the key cache (bfp8 tiles) at ``entry_count``,
@@ -491,7 +517,11 @@ class TtCSA(TtHCA):
         unified, index_k, batch_idx = export
         row = self.sliding_window + int(state.entry_count)
         self._write_rm(unified, entries, batch_idx, row)
-        k = keys if keys.dtype == index_k.dtype else ttnn.typecast(keys, index_k.dtype)
+        # The decode ring's indexer key cache holds k @ H128 / sqrt(128) (the Hadamard rotation its indexer applies to q and
+        # k -- tt-blaze DS4F-0209; the rollout in tests/blaze/fused_ops/dsv4_hca_layer/harness.py stores `_c @ _H128.T /
+        # sqrt(128)`), so the EXPORTED rows are rotated here; the prefill's own working keys stay plain (DS4F-0254).
+        k = ttnn.matmul(keys, self._h128_export(), memory_config=self.memory_config)
+        k = k if k.dtype == index_k.dtype else ttnn.typecast(k, index_k.dtype)
         ttnn.kv_cache.fill_cache_for_user_(index_k, k, int(batch_idx), update_idx=int(state.entry_count))
         ring = self._ring_rows(slab, state.sliding_carry, state.kv_actual, real_len)
         self._write_rm(unified, ring, batch_idx, 0)

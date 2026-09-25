@@ -135,7 +135,7 @@ def build_contract(window_dtype_tag: str | None = None) -> tuple[KvGroupSpec, ..
         ),
         KvGroupSpec(
             "csa_index_k", "compressed_sparse_attention", "bfp8_tile", INDEX_HEAD_DIM, write_headroom=CSA_CHUNK_ENTRIES
-        ),
+        ),  # rows are stored HADAMARD-ROTATED: k @ H128 / sqrt(128) -- see index_key_rotation() (DS4F-0254)
         KvGroupSpec("csa_pending", "compressed_sparse_attention", "bf16_rm", 2 * HEAD_DIM, pending=True),
         KvGroupSpec("hca_pending", "heavily_compressed_attention", "bf16_rm", 2 * HEAD_DIM, pending=True),
     )
@@ -174,3 +174,23 @@ def validate_contract(contract: tuple[KvGroupSpec, ...] = CONTRACT, max_seq_lens
             e = g.extent(s)
             if e <= 0 or e % CHUNK_N_TOKENS:
                 raise ValueError(f"{g.name}: extent {e} at max_seq_len {s} is not a multiple of {CHUNK_N_TOKENS}")
+
+
+# The decode ring's lightning indexer stores its keys rotated by the 128x128 Sylvester Hadamard, k @ H128 / sqrt(128)
+# (tt-blaze DS4F-0209: the rotation spreads each key's energy over the 128 lanes so bfp8 loses less; q gets the same
+# rotation, so scores are unchanged: H is orthogonal). The contract's ``csa_index_k`` rows carry THAT convention, so the
+# prefill export rotates its plain keys and any golden compare rotates the reference keys (DS4F-0254).
+INDEX_KEYS_HADAMARD_ROTATED = True
+
+
+def index_key_rotation():
+    """[INDEX_HEAD_DIM, INDEX_HEAD_DIM] float32 torch matrix R = H128 / sqrt(128); stored key = plain key @ R.
+    Symmetric and orthogonal (R @ R = I), so the same matrix un-rotates."""
+    import torch  # local: kv_contract stays importable as plain data without torch
+
+    n_log2 = INDEX_HEAD_DIM.bit_length() - 1
+    assert 1 << n_log2 == INDEX_HEAD_DIM, INDEX_HEAD_DIM
+    h = torch.tensor([[1.0]], dtype=torch.float32)
+    for _ in range(n_log2):
+        h = torch.cat([torch.cat([h, h], 1), torch.cat([h, -h], 1)], 0)
+    return h / (INDEX_HEAD_DIM**0.5)

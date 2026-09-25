@@ -847,16 +847,25 @@ class TtHCA(_TtHCABase):
         # Pad Sk to a multiple of 32 by hand: SDPA would pad it with zeros, and the mask reads its own pad
         # columns as "attend", which would pollute the softmax. The mask -infs the columns added here.
         parts = [carry, sliding_kv]
+        live = compressed_kv is not None and int(compressed_kv.shape[2]) < self._mask.shape[3] - self._mask_col - (
+            0 if self._kv_pad is None else int(self._kv_pad.shape[2])
+        )
         if compressed_kv is not None:
             parts.append(compressed_kv)
-        if self._kv_pad is not None:
+        if self._kv_pad is not None and not live:
             parts.append(self._kv_pad)
         kv = ttnn.concat(parts, dim=2)
 
         # Only the compressed columns move between chunks, and always over the same column range, so the
         # mask is built once and this overwrites that range in place. The offset is part of the program,
-        # but it never changes, so one program serves every chunk.
+        # but it never changes, so one program serves every chunk. LIVE EXTENT (DS4F-0252): when the caller
+        # passes fewer compressed rows than the capacity (a tile multiple, so no pad is needed), the mask is
+        # sliced to the same width -- one program per distinct width, compiled once, and the SDPA / masks cost
+        # what the position needs instead of what the max context would.
         mask = self._mask
+        if live:
+            width = self._mask_col + int(compressed_kv.shape[2])
+            mask = ttnn.slice(self._mask, [0, 0, 0, 0], [self._mask.shape[0], 1, self._mask.shape[2], width])
         rows = mask.shape[2]
         carry_cols = self._carry_cols[kv_actual == 0]
         ttnn.experimental.slice_write(
