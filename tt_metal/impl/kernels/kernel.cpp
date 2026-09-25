@@ -599,8 +599,8 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(static_cast<uint64_t>(metadata->format));
         hasher.update(static_cast<uint64_t>(metadata->tile.get_height()));
         hasher.update(static_cast<uint64_t>(metadata->tile.get_width()));
-        hasher.update(static_cast<uint64_t>(metadata->face_geometry.face_r_dim));
-        hasher.update(static_cast<uint64_t>(metadata->face_geometry.num_faces));
+        hasher.update(static_cast<uint64_t>(metadata->tile.get_face_shape()[0]));
+        hasher.update(static_cast<uint64_t>(metadata->tile.get_num_faces()));
     };
     for (const auto& it : sorted_iters(this->dataflow_buffer_binding_handles_)) {
         hasher.update(it->first);

@@ -8,7 +8,6 @@
 #include <optional>
 #include <string>
 
-#include <tt-metalium/face_geometry.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt_stl/strong_type.hpp>
@@ -75,18 +74,13 @@ struct ScratchpadSpec {
     // The data format is required if LLK metadata will be extracted from the device code
     std::optional<tt::DataFormat> data_format_metadata = std::nullopt;
 
-    // Optional; if unspecified, the default tile format (32x32) is assumed
-    std::optional<tt::tt_metal::Tile> tile_format_metadata = std::nullopt;
-
-    // Optional override for this scratchpad's tile face layout.
+    // Optional; if unspecified, the default tile format (32x32) is assumed.
     //
-    // A tile is physically stored as a grid of fixed-size sub-blocks called "faces". The compute
-    // engine normally infers how many faces a tile has, and how many rows each face holds, from
-    // `tile_format_metadata`. Set this field only when an entry does not occupy a full tile, so it
-    // holds fewer faces and/or shorter faces than the default; the compute engine then reads exactly
-    // that much data instead of a whole tile. `FaceGeometry` carries those two values (rows-per-face
-    // and number of faces).
-    std::optional<FaceGeometry> unpack_face_geometry_metadata = std::nullopt;
+    // A tile is physically stored as a grid of fixed-size sub-blocks called "faces", and the compute
+    // engine derives the face layout from this field. If an entry holds shorter, more numerous faces
+    // than the default layout for its tile shape, say so with the `Tile(tile_shape, face_shape)`
+    // constructor -- the compute engine then reads exactly that much data.
+    std::optional<tt::tt_metal::Tile> tile_format_metadata = std::nullopt;
 };
 
 }  // namespace tt::tt_metal::experimental

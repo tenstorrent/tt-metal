@@ -1780,61 +1780,15 @@ TEST_F(ProgramSpecTestQuasar, ScratchpadTileWithoutFormatFails) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("no data_format_metadata")));
 }
 
-TEST_F(ProgramSpecTestQuasar, ScratchpadFaceGeometryWithoutFormatFails) {
-    ProgramSpec spec = MakeMinimalValidProgramSpec();
-    spec.scratchpads = {ScratchpadSpec{
-        .unique_id = ScratchpadSpecName{"scratch_0"},
-        .size_per_node = 1024,
-        .unpack_face_geometry_metadata = FaceGeometry{.face_r_dim = 1, .num_faces = 4},
-    }};
-    spec.kernels[1].scratchpad_bindings = {
-        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "pad"}};
-
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("no data_format_metadata")));
-}
-
-TEST_F(ProgramSpecTestQuasar, ScratchpadInvalidFaceGeometryFails) {
-    ProgramSpec spec = MakeMinimalValidProgramSpec();
-    spec.scratchpads = {ScratchpadSpec{
-        .unique_id = ScratchpadSpecName{"scratch_0"},
-        .size_per_node = 1024,
-        .data_format_metadata = tt::DataFormat::Float16_b,
-        .unpack_face_geometry_metadata = FaceGeometry{.face_r_dim = 0},
-    }};
-    spec.kernels[1].scratchpad_bindings = {
-        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "pad"}};
-
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("face_r_dim == 0")));
-}
-
-TEST_F(ProgramSpecTestQuasar, ScratchpadZeroNumFacesFails) {
-    ProgramSpec spec = MakeMinimalValidProgramSpec();
-    spec.scratchpads = {ScratchpadSpec{
-        .unique_id = ScratchpadSpecName{"scratch_0"},
-        .size_per_node = 1024,
-        .data_format_metadata = tt::DataFormat::Float16_b,
-        .unpack_face_geometry_metadata = FaceGeometry{.num_faces = 0},
-    }};
-    spec.kernels[1].scratchpad_bindings = {
-        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "pad"}};
-
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("num_faces == 0")));
-}
-
 TEST_F(ProgramSpecTestQuasar, ScratchpadFaceGridDoesNotFitTileFails) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
     spec.scratchpads = {ScratchpadSpec{
         .unique_id = ScratchpadSpecName{"scratch_0"},
         .size_per_node = 1024,
         .data_format_metadata = tt::DataFormat::Float16_b,
-        .tile_format_metadata = Tile{{32, 32}},
-        .unpack_face_geometry_metadata = FaceGeometry{.face_r_dim = 9, .num_faces = 8},
+        // 8x8 faces tile a 16x16 tile, but CB columns are counted in FACE_WIDTH (16) units, so the
+        // derived row grid is taller than the tile.
+        .tile_format_metadata = Tile({16, 16}, {8, 8}),
     }};
     spec.kernels[1].scratchpad_bindings = {
         KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "pad"}};
@@ -2196,31 +2150,6 @@ TEST_F(ProgramSpecTestQuasar, CPU_DataFormatNotSupportedOnTargetArchitectureFail
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("DFB 'dfb' has data format")));
 }
 
-TEST_F(ProgramSpecTestQuasar, DFBInvalidFaceGeometryFails) {
-    NodeCoord node{0, 0};
-
-    ProgramSpec spec;
-    spec.name = "test_program";
-
-    auto producer = MakeMinimalGen2DMKernel("producer");
-    auto consumer = MakeMinimalGen2ComputeKernel("consumer");
-    auto dfb = MakeMinimalDFB("dfb");
-    dfb.data_format_metadata = tt::DataFormat::Float16_b;
-    dfb.unpack_face_geometry_metadata = FaceGeometry{.face_r_dim = 0};
-
-    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
-    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
-
-    spec.kernels = {producer, consumer};
-    spec.dataflow_buffers = {dfb};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
-
-    // Checked at spec build: Quasar mock compile() returns before CB descriptor generation.
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("face_r_dim must be > 0")));
-}
-
 TEST_F(ProgramSpecTestQuasar, DFBFaceGridDoesNotFitTileFails) {
     NodeCoord node{0, 0};
 
@@ -2231,8 +2160,9 @@ TEST_F(ProgramSpecTestQuasar, DFBFaceGridDoesNotFitTileFails) {
     auto consumer = MakeMinimalGen2ComputeKernel("consumer");
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
-    dfb.tile_format_metadata = Tile{{32, 32}};
-    dfb.unpack_face_geometry_metadata = FaceGeometry{.face_r_dim = 9, .num_faces = 8};
+    // 8x8 faces tile a 16x16 tile, but CB columns are counted in FACE_WIDTH (16) units, so the
+    // derived row grid is taller than the tile.
+    dfb.tile_format_metadata = Tile({16, 16}, {8, 8});
 
     producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
     consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
@@ -2247,19 +2177,9 @@ TEST_F(ProgramSpecTestQuasar, DFBFaceGridDoesNotFitTileFails) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("face grid")));
 }
 
-TEST_F(ProgramSpecTestQuasar, DFBFaceRowsAboveFaceHeightCompileWhenCBGeometryFits) {
+TEST_F(ProgramSpecTestQuasar, DFBCustomTileCompiles) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
-    spec.dataflow_buffers[0].unpack_face_geometry_metadata =
-        FaceGeometry{.face_r_dim = constants::TILE_HEIGHT, .num_faces = 1};
-
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
-    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
-}
-
-TEST_F(ProgramSpecTestQuasar, DFBFaceGeometryOverridesRequestedTileForCBValidation) {
-    ProgramSpec spec = MakeMinimalValidProgramSpec();
-    spec.dataflow_buffers[0].tile_format_metadata = Tile{{8, 16}};
-    spec.dataflow_buffers[0].unpack_face_geometry_metadata = FaceGeometry{.face_r_dim = 8, .num_faces = 2};
+    spec.dataflow_buffers[0].tile_format_metadata = Tile{{8, 32}};
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
     EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
@@ -2847,8 +2767,8 @@ TEST_F(ProgramSpecTestQuasar, CPU_ComputeGen2ConfigDefaultsMapToInternalDefaults
     const auto& built = std::get<experimental::quasar::QuasarComputeConfig>(built_variant);
     EXPECT_EQ(built.math_fidelity, MathFidelity::HiFi4);
     EXPECT_FALSE(built.fp32_dest_acc_en);
-    EXPECT_FALSE(built.dst_full_sync_en);      // double_buffer_dest defaults true -> !true
-    EXPECT_FALSE(built.math_approx_mode);      // sfpu_precision_mode defaults Precise
+    EXPECT_FALSE(built.dst_full_sync_en);  // double_buffer_dest defaults true -> !true
+    EXPECT_FALSE(built.math_approx_mode);  // sfpu_precision_mode defaults Precise
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_ComputeGen2ConfigInversionAndEnumMapToInternal) {
@@ -3240,7 +3160,6 @@ TEST(AggregateSpecTypes, ScratchpadSpecDesignatedInitializers) {
     EXPECT_EQ(pad.size_per_node, 1024u);
     EXPECT_FALSE(pad.data_format_metadata.has_value());
     EXPECT_FALSE(pad.tile_format_metadata.has_value());
-    EXPECT_FALSE(pad.unpack_face_geometry_metadata.has_value());
 
     ScratchpadSpec with_format{
         .unique_id = ScratchpadSpecName{"pad_fmt"},
@@ -3249,7 +3168,6 @@ TEST(AggregateSpecTypes, ScratchpadSpecDesignatedInitializers) {
     };
     EXPECT_EQ(with_format.data_format_metadata, tt::DataFormat::Float16_b);
     EXPECT_FALSE(with_format.tile_format_metadata.has_value());
-    EXPECT_FALSE(with_format.unpack_face_geometry_metadata.has_value());
 }
 
 TEST(AggregateSpecTypes, CPU_WorkUnitSpecDesignatedInitializers) {
@@ -5302,7 +5220,7 @@ void kernel_main() {
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
-TEST_F(LLKOperandInterop, ScratchpadFormatAndFaceGeometrySucceeds) {
+TEST_F(LLKOperandInterop, ScratchpadCustomFaceTileSucceeds) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
     spec.kernels[1].source = KernelSpec::SourceCode{R"(
@@ -5322,7 +5240,7 @@ void kernel_main() {
         .unique_id = ScratchpadSpecName{"pad"},
         .size_per_node = 1024,
         .data_format_metadata = tt::DataFormat::Float16_b,
-        .unpack_face_geometry_metadata = FaceGeometry{.face_r_dim = 1, .num_faces = 4},
+        .tile_format_metadata = Tile({2, 32}, {1, 16}),
     }};
     spec.kernels[1].scratchpad_bindings.push_back(
         KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
@@ -5354,7 +5272,7 @@ void kernel_main() {
 TEST_F(LLKOperandInterop, DFBFaceGeometryCompiles) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
-    spec.dataflow_buffers[0].unpack_face_geometry_metadata = FaceGeometry{.face_r_dim = 1, .num_faces = 4};
+    spec.dataflow_buffers[0].tile_format_metadata = Tile({2, 32}, {1, 16});
     spec.kernels[1].source = KernelSpec::SourceCode{R"(
 #include "api/llk_operand_from_tokens.h"
 void kernel_main() {
@@ -6256,9 +6174,7 @@ TEST_F(ProgramSpecTestGen1, CPU_CompilerIncludePathsForwardedToKernelConfig) {
 // bound to the same producer/consumer kernels in a single WorkUnit on a single node.
 namespace {
 ProgramSpec MakeAliasProgramSpec(
-    const NodeCoord& node,
-    const DataflowBufferSpec& dfb_a,
-    const DataflowBufferSpec& dfb_b) {
+    const NodeCoord& node, const DataflowBufferSpec& dfb_a, const DataflowBufferSpec& dfb_b) {
     ProgramSpec spec;
 
     KernelSpec producer = MakeMinimalGen2DMKernel("producer_kernel");
@@ -6289,8 +6205,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_AliasDFBFailsOnMismatchedTotalSize) {
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("different total sizes")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("different total sizes")));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_AliasDFBFailsOnAsymmetricDeclaration) {
@@ -6338,8 +6253,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_AliasDFBMatmulStyleSucceeds) {
     ProgramSpec spec;
     spec.kernels = {producer, consumer, other};
     spec.dataflow_buffers = {dfb_a, dfb_b};
-    spec.work_units = {
-        MakeMinimalWorkUnit("wu", node, {"producer_kernel", "consumer_kernel", "other_kernel"})};
+    spec.work_units = {MakeMinimalWorkUnit("wu", node, {"producer_kernel", "consumer_kernel", "other_kernel"})};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
@@ -6547,9 +6461,13 @@ void CheckAccessorsFollowTheHeldAlternative() {
     EXPECT_EQ(std::get<ToConfig>(config).fpu_math_fidelity, kAccessorFidelity);
 }
 
-TEST(ComputeHardwareConfigAccessors, CPU_Gen1DefaultsReadThrough) { CheckAccessorDefaultsReadThrough<ComputeGen1Config>(); }
+TEST(ComputeHardwareConfigAccessors, CPU_Gen1DefaultsReadThrough) {
+    CheckAccessorDefaultsReadThrough<ComputeGen1Config>();
+}
 
-TEST(ComputeHardwareConfigAccessors, CPU_Gen2DefaultsReadThrough) { CheckAccessorDefaultsReadThrough<ComputeGen2Config>(); }
+TEST(ComputeHardwareConfigAccessors, CPU_Gen2DefaultsReadThrough) {
+    CheckAccessorDefaultsReadThrough<ComputeGen2Config>();
+}
 
 TEST(ComputeHardwareConfigAccessors, CPU_Gen1WritesLandOnHeldAlternative) {
     CheckAccessorWritesLandOnHeldAlternative<ComputeGen1Config>();

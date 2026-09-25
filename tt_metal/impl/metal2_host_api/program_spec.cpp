@@ -1188,99 +1188,45 @@ void ValidatePrefetcherPipeSpec(const ProgramSpec& spec, const CollectedSpecData
     }
 }
 
-// Scratchpads do not pass through CB descriptor generation, so validate their LLK geometry here.
-// Their face_r_dim is capped at FACE_HEIGHT and measured against the requested tile.
+// Face layout lives on the tile. JIT checks it again in compute_num_faces_rc_dims, which counts face
+// columns in FACE_WIDTH units. Quasar mock and Emule return from ProgramImpl::compile before that,
+// so reject a tile whose face grid does not fit those columns here.
 template <typename Id>
-void ValidateLlkTileAndFaceGeometry(
-    std::string_view kind,
-    const Id& unique_id,
-    const std::optional<Tile>& tile,
-    const std::optional<FaceGeometry>& face) {
-    if (!face.has_value()) {
+void ValidateTileFaceGrid(std::string_view kind, const Id& unique_id, const std::optional<Tile>& tile_metadata) {
+    if (!tile_metadata.has_value()) {
         return;
     }
+    const Tile& tile = *tile_metadata;
+    const uint32_t face_r_dim = tile.get_face_shape()[0];
+    const uint32_t num_faces = tile.get_num_faces();
+    const uint32_t tile_r_dim = tile.get_height();
+    const uint32_t tile_c_dim = tile.get_width();
     TT_FATAL(
-        face->face_r_dim > 0,
-        "{} '{}' has unpack_face_geometry_metadata.face_r_dim == 0; face_r_dim must be > 0",
-        kind,
-        unique_id);
-    TT_FATAL(
-        face->face_r_dim <= constants::FACE_HEIGHT,
-        "{} '{}' has unpack_face_geometry_metadata.face_r_dim ({}) which must be <= FACE_HEIGHT ({})",
+        tile_c_dim % constants::FACE_WIDTH == 0,
+        "{} '{}': tile width ({}) must be a multiple of FACE_WIDTH ({})",
         kind,
         unique_id,
-        face->face_r_dim,
-        constants::FACE_HEIGHT);
+        tile_c_dim,
+        constants::FACE_WIDTH);
+    const uint32_t tile_c_faces = tile_c_dim / constants::FACE_WIDTH;
+    TT_FATAL(tile_c_faces > 0, "{} '{}': tile width ({}) must include at least one face", kind, unique_id, tile_c_dim);
+    const uint32_t num_faces_c_dim = std::min(tile_c_faces, num_faces);
     TT_FATAL(
-        face->num_faces > 0,
-        "{} '{}' has unpack_face_geometry_metadata.num_faces == 0; num_faces must be > 0",
-        kind,
-        unique_id);
-    const Tile resolved_tile = tile.value_or(Tile{});
-    const uint32_t num_faces_c_dim = std::min(resolved_tile.get_width() / constants::FACE_WIDTH, face->num_faces);
-    TT_FATAL(
-        face->num_faces % num_faces_c_dim == 0,
+        num_faces % num_faces_c_dim == 0,
         "{} '{}': num_faces ({}) must be divisible by num_faces_c_dim ({})",
         kind,
         unique_id,
-        face->num_faces,
+        num_faces,
         num_faces_c_dim);
-    const uint32_t num_faces_r_dim = face->num_faces / num_faces_c_dim;
+    const uint32_t num_faces_r_dim = num_faces / num_faces_c_dim;
     TT_FATAL(
-        num_faces_r_dim * face->face_r_dim <= resolved_tile.get_height(),
+        num_faces_r_dim * face_r_dim <= tile_r_dim,
         "{} '{}': face grid (num_faces_r_dim={} * face_r_dim={} = {} rows) exceeds tile height ({})",
         kind,
         unique_id,
         num_faces_r_dim,
-        face->face_r_dim,
-        num_faces_r_dim * face->face_r_dim,
-        resolved_tile.get_height());
-}
-
-// DFB unpack geometry is checked again in compute_num_faces_rc_dims when JIT runs. Quasar mock and
-// Emule return from ProgramImpl::compile before that, so reject the same illegal combos here.
-// The tile is the effective LLK tile: a representable face-geometry override replaces the requested tile,
-// matching set_cb_data_fmt_tile_and_face_geometry.
-void ValidateDfbUnpackFaceGeometry(const DataflowBufferSpec& dfb) {
-    const std::optional<FaceGeometry>& face = dfb.unpack_face_geometry_metadata;
-    if (!face.has_value()) {
-        return;
-    }
-    TT_FATAL(
-        face->face_r_dim > 0,
-        "DFB '{}' has unpack_face_geometry_metadata.face_r_dim == 0; face_r_dim must be > 0",
-        dfb.unique_id);
-    TT_FATAL(
-        face->num_faces > 0,
-        "DFB '{}' has unpack_face_geometry_metadata.num_faces == 0; num_faces must be > 0",
-        dfb.unique_id);
-
-    const Tile effective_tile = EffectiveLlkTile(dfb.tile_format_metadata, face);
-    const uint32_t tile_r_dim = effective_tile.get_height();
-    const uint32_t tile_c_dim = effective_tile.get_width();
-    TT_FATAL(
-        tile_c_dim % constants::FACE_WIDTH == 0,
-        "DFB '{}': tile width ({}) must be a multiple of FACE_WIDTH ({})",
-        dfb.unique_id,
-        tile_c_dim,
-        constants::FACE_WIDTH);
-    const uint32_t tile_c_faces = tile_c_dim / constants::FACE_WIDTH;
-    TT_FATAL(tile_c_faces > 0, "DFB '{}': tile width ({}) must include at least one face", dfb.unique_id, tile_c_dim);
-    const uint32_t num_faces_c_dim = std::min(tile_c_faces, face->num_faces);
-    TT_FATAL(
-        face->num_faces % num_faces_c_dim == 0,
-        "DFB '{}': num_faces ({}) must be divisible by num_faces_c_dim ({})",
-        dfb.unique_id,
-        face->num_faces,
-        num_faces_c_dim);
-    const uint32_t num_faces_r_dim = face->num_faces / num_faces_c_dim;
-    TT_FATAL(
-        num_faces_r_dim * face->face_r_dim <= tile_r_dim,
-        "DFB '{}': face grid (num_faces_r_dim={} * face_r_dim={} = {} rows) exceeds tile height ({})",
-        dfb.unique_id,
-        num_faces_r_dim,
-        face->face_r_dim,
-        num_faces_r_dim * face->face_r_dim,
+        face_r_dim,
+        num_faces_r_dim * face_r_dim,
         tile_r_dim);
 }
 
@@ -1288,30 +1234,20 @@ std::optional<LLKMetadata> LLKMetadataFromDfb(const DataflowBufferSpec& spec) {
     if (!spec.data_format_metadata.has_value()) {
         return std::nullopt;
     }
-    const Tile tile = EffectiveLlkTile(spec.tile_format_metadata, spec.unpack_face_geometry_metadata);
-    return LLKMetadata{
-        .format = *spec.data_format_metadata,
-        .tile = tile,
-        .face_geometry = spec.unpack_face_geometry_metadata.value_or(FaceGeometryFromTile(tile))};
+    const Tile tile = spec.tile_format_metadata.value_or(Tile{});
+    return LLKMetadata{.format = *spec.data_format_metadata, .tile = tile};
 }
 
 std::optional<LLKMetadata> LLKMetadataFromScratchpad(const ScratchpadSpec& spec) {
     if (!spec.data_format_metadata.has_value()) {
         return std::nullopt;
     }
-    const Tile tile = EffectiveLlkTile(spec.tile_format_metadata, spec.unpack_face_geometry_metadata);
-    return LLKMetadata{
-        .format = *spec.data_format_metadata,
-        .tile = tile,
-        .face_geometry = spec.unpack_face_geometry_metadata.value_or(FaceGeometryFromTile(tile))};
+    const Tile tile = spec.tile_format_metadata.value_or(Tile{});
+    return LLKMetadata{.format = *spec.data_format_metadata, .tile = tile};
 }
 
 LLKMetadata LLKMetadataFromTensorSpec(const TensorSpec& spec) {
-    const Tile& tile = spec.tile();
-    return LLKMetadata{
-        .format = datatype_to_dataformat_converter(spec.data_type()),
-        .tile = tile,
-        .face_geometry = FaceGeometryFromTile(tile)};
+    return LLKMetadata{.format = datatype_to_dataformat_converter(spec.data_type()), .tile = spec.tile()};
 }
 
 // ValidateProgramSpec: Semantic validation
@@ -2380,17 +2316,15 @@ void ValidateProgramSpec(
                 dfb.data_format_metadata.value(),
                 arch);
         }
-        ValidateDfbUnpackFaceGeometry(dfb);
+        ValidateTileFaceGrid("DFB", dfb.unique_id, dfb.tile_format_metadata);
     }
 
     for (const auto& scratchpad : spec.scratchpads) {
         const bool has_format = scratchpad.data_format_metadata.has_value();
-        const bool has_geometry =
-            scratchpad.tile_format_metadata.has_value() || scratchpad.unpack_face_geometry_metadata.has_value();
+        const bool has_tile = scratchpad.tile_format_metadata.has_value();
         TT_FATAL(
-            has_format || !has_geometry,
-            "ScratchpadSpec '{}' has tile_format_metadata or unpack_face_geometry_metadata but no "
-            "data_format_metadata",
+            has_format || !has_tile,
+            "ScratchpadSpec '{}' has tile_format_metadata but no data_format_metadata",
             scratchpad.unique_id);
         if (has_format) {
             TT_FATAL(
@@ -2400,11 +2334,7 @@ void ValidateProgramSpec(
                 scratchpad.data_format_metadata.value(),
                 arch);
         }
-        ValidateLlkTileAndFaceGeometry(
-            "ScratchpadSpec",
-            scratchpad.unique_id,
-            scratchpad.tile_format_metadata,
-            scratchpad.unpack_face_geometry_metadata);
+        ValidateTileFaceGrid("ScratchpadSpec", scratchpad.unique_id, scratchpad.tile_format_metadata);
     }
 
     //////////////////////////////////
@@ -3952,11 +3882,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
 
         // Make the local accessor name -> DFB device slot map for this kernel
         const tt::tt_metal::DataflowBufferBindingHandleMap dfb_handles = MakeDataflowBufferBindingHandles(
-            kernel_spec,
-            dfb_name_to_slot,
-            dfb_name_to_is_relay,
-            dfb_name_to_prefetcher_pipe_id,
-            collected.dfb_by_name);
+            kernel_spec, dfb_name_to_slot, dfb_name_to_is_relay, dfb_name_to_prefetcher_pipe_id, collected.dfb_by_name);
         const tt::tt_metal::SemaphoreBindingHandleMap semaphore_handles =
             MakeSemaphoreBindingHandles(kernel_spec, semaphore_binders, semaphore_name_to_id, semaphore_name_to_scope);
 

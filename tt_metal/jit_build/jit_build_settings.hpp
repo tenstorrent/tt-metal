@@ -194,7 +194,7 @@ public:
     //    slot for runtime accessor fields (currently: shape, for sharded TensorParameters with
     //    dynamic_tensor_shape=true). The binding occupies (1 + num_runtime_field_crta_words)
     //    CRTA words in total.
-    //  - llk_metadata: the operand's host format, tile, and face geometry, baked onto the binding token.
+    //  - llk_metadata: the operand's host format and tile, baked onto the binding token.
     // (The tensor_parameter_name is also part of TensorBindingHandle, but we don't need it for codegen.)
     virtual void process_tensor_binding_handles(const std::function<void(
                                                     const std::string& accessor_name,
@@ -208,7 +208,7 @@ public:
     //  - size_bytes: the scratchpad's per-node size, emitted as the binding token's compile-time size
     //  - addr_crta_word: word index, within the kernel's CRTA buffer, of the word holding the
     //    scratchpad's (framework-allocated) L1 base address
-    //  - llk_metadata: the operand's host format, tile, and face geometry, baked onto the binding token.
+    //  - llk_metadata: the operand's host format and tile, baked onto the binding token.
     virtual void process_scratchpad_binding_handles(const std::function<void(
                                                         const std::string& accessor_name,
                                                         uint32_t size_bytes,
