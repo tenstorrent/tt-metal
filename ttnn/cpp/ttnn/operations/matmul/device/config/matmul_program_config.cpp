@@ -1011,6 +1011,19 @@ std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
 }
 }  // namespace bmm_op_utils
 
+namespace {
+// Last auto-generated config, recorded for tests and benchmarks (see get_last_auto_program_config).
+thread_local std::optional<MatmulProgramConfig> last_auto_program_config;
+}  // namespace
+
+std::optional<MatmulProgramConfig> get_last_auto_program_config(bool reset) {
+    auto config = last_auto_program_config;
+    if (reset) {
+        last_auto_program_config.reset();
+    }
+    return config;
+}
+
 MatmulProgramConfig get_program_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -1034,6 +1047,7 @@ MatmulProgramConfig get_program_config(
         attributes.user_run_batched,
         attributes.output_dtype.value_or(input_tensor_a.dtype()));
     log_debug(tt::LogOp, "Auto generated program config: {}", config);
+    last_auto_program_config = config;
 
     // Sanity checks for matmul program configs
     std::visit(
