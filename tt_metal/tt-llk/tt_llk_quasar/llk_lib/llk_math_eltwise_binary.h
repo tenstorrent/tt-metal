@@ -298,6 +298,7 @@ inline void _llk_math_eltwise_binary_init_(const ckernel::TensorShape& tensor_sh
         addr_mod_t {}.set(ADDR_MOD_3);
     }
 
+    // Each dest tile uses its total face rows, but takes at least one full face.
     _set_tile_shape_idx_gpr_(find_max(FACE_R_DIM, tensor_shape.face_r_dim * tensor_shape.total_num_faces()));
 
     // Reset all counters
