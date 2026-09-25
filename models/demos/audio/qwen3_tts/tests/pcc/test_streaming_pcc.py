@@ -20,6 +20,7 @@ import torch
 from models.demos.audio.qwen3_tts import frontend, weights
 from models.demos.audio.qwen3_tts.tests.checkpoints import hidden_width, use_release
 from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_pipeline import (
+    REFERENCE_TAIL_IDS,
     ROLE_IDS,
     TAIL_IDS,
     CloneReference,
@@ -192,6 +193,36 @@ def test_a_clone_prompt_leaves_a_long_text_to_stream(tables):
         assert spare < 500, "the feed never finished"
     assert spare > 1, "a text this long must leave positions over"
     print(f"{reference.frames} reference frames, {spare} text positions left to stream")
+
+
+def test_a_long_text_streams_whole_and_then_closes_once(tables):
+    """Upstream's order when the text outlasts the clip: all of it, then one `tts_eos`, then pads.
+
+    `generate_icl_prompt` projects the transcript and the whole text, appends `tts_eos`, and
+    streams whatever lies past the codec track. Regression: `tts_eos` went in right after the
+    ids the prompt took, so decode saw it in the middle of the text and never at the end.
+    """
+    reference = _reference(tables, frames=8, words=2)
+    long_text = LONGER * 2
+    prompt, feed = build_streaming_clone_prefill(long_text, reference, "Auto", tables)
+
+    reference_ids = frontend.reference_text_ids(reference.text)[ROLE_IDS:-REFERENCE_TAIL_IDS]
+    upstream = tables.text(list(reference_ids) + list(frontend.encode(long_text)))
+    codec_track = torch.cat(
+        [tables.codec([weights.talker_config()["codec_bos_id"]]), tables.frames(reference.codes)], 1
+    )
+    codec_lens = codec_track.shape[1]
+    same = lambda a, b: torch.allclose(a, b, rtol=0, atol=1e-6)
+
+    head = STREAMING_PROMPT_AUTO - 1
+    assert same(prompt[:, head:] - codec_track, upstream[:, :codec_lens]), "the prompt carries no eos"
+    rest = upstream.shape[1] - codec_lens
+    streamed = torch.cat([feed.next() for _ in range(rest)], dim=1)
+    assert same(streamed, upstream[:, codec_lens:]), "the feed must carry the rest of the text, in order"
+    assert torch.equal(feed.next(), tables.tts_eos), "then one tts_eos"
+    for _ in range(3):
+        assert torch.equal(feed.next(), tables.tts_pad), "then pads"
+    assert feed.spent
 
 
 def test_the_clone_prompt_does_not_repeat_eos(tables):

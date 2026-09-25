@@ -499,7 +499,11 @@ def build_streaming_clone_prefill(text, reference, language="Auto", tables=None)
 
     # Transcript and text projected in one call, as upstream does: two calls show at 1e-7.
     ids = list(reference_ids) + feed.take_ids(codec_lens)
-    text_track = torch.cat([tables.text(ids), feed.take_eos()], dim=1)
+    text_track = tables.text(ids)
+    if not feed._ids():
+        # The text is all in hand, so it closes here. With text still waiting, `tts_eos` must
+        # follow the last of it instead, and the feed sends it when that comes.
+        text_track = torch.cat([text_track, feed.take_eos()], dim=1)
 
     if text_track.shape[1] > codec_lens:
         # A text longer than the clip: the surplus goes back rather than being projected again.
