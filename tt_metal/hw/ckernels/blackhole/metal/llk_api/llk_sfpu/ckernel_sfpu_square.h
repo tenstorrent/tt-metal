@@ -23,6 +23,14 @@ inline void square_init() {
     sfpi::vConstIntPrgm2 = 0xffff0000;
 }
 
+sfpi_inline sfpi::vFloat float32_to_bf16_rne_prgm(sfpi::vFloat in) {
+    sfpi::vUInt bits = sfpi::as<sfpi::vUInt>(in);
+    sfpi::vUInt lsb = (bits >> 16) & sfpi::as<sfpi::vUInt>(sfpi::vConstIntPrgm0);
+    bits = bits + sfpi::as<sfpi::vUInt>(sfpi::vConstIntPrgm1) + lsb;
+    bits = bits & sfpi::as<sfpi::vUInt>(sfpi::vConstIntPrgm2);
+    return sfpi::as<sfpi::vFloat>(bits);
+}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 inline void calculate_square() {
     static_assert(ITERATIONS % 2 == 0, "calculate_square() processes dest rows in pairs.");
@@ -34,18 +42,8 @@ inline void calculate_square() {
         sfpi::vFloat r0 = v0 * v0;
         sfpi::vFloat r1 = v1 * v1;
         if constexpr (!is_fp32_dest_acc_en) {
-            // SFPSTORE into a bf16 dest truncates; round to nearest-even first
-            // so square stays bit-exact with ttnn.mul(x, x).
-            sfpi::vUInt bits0 = sfpi::as<sfpi::vUInt>(r0);
-            sfpi::vUInt bits1 = sfpi::as<sfpi::vUInt>(r1);
-            sfpi::vUInt lsb0 = (bits0 >> 16) & sfpi::as<sfpi::vUInt>(sfpi::vConstIntPrgm0);
-            sfpi::vUInt lsb1 = (bits1 >> 16) & sfpi::as<sfpi::vUInt>(sfpi::vConstIntPrgm0);
-            bits0 = bits0 + sfpi::as<sfpi::vUInt>(sfpi::vConstIntPrgm1) + lsb0;
-            bits1 = bits1 + sfpi::as<sfpi::vUInt>(sfpi::vConstIntPrgm1) + lsb1;
-            bits0 = bits0 & sfpi::as<sfpi::vUInt>(sfpi::vConstIntPrgm2);
-            bits1 = bits1 & sfpi::as<sfpi::vUInt>(sfpi::vConstIntPrgm2);
-            r0 = sfpi::as<sfpi::vFloat>(bits0);
-            r1 = sfpi::as<sfpi::vFloat>(bits1);
+            r0 = float32_to_bf16_rne_prgm(r0);
+            r1 = float32_to_bf16_rne_prgm(r1);
         }
         sfpi::dst_reg[0] = r0;
         sfpi::dst_reg[1].mode(ADDR_MOD_6) = r1;
