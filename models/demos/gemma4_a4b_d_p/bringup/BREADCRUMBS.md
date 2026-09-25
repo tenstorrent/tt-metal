@@ -87,3 +87,16 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - The device output (bf16) is cast back to the input dtype, so the CPU steps downstream still see fp32.
 - Gate: pcc_attn_norm_L00 = 0.999996, rel_l2 0.0031, row-norm ratio [0.9972, 1.0006]. PASS.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_attn_norm.py`
+
+## S.sliding.01 test (attempt 1): swap attn_norm into the sliding block
+- Reviewed the rendered swap test (layer 0, golden s4096 chunk 1). The gated metric is still `pcc_swap_out` >= 0.98 (spec block threshold).
+- Gap: block-out PCC is weak for this swap. CPU numbers (block out PCC / rel L2): reference 0.999996 / 0.0027; `1 + w` 0.99959 / 0.0287;
+  no weight 0.9804 / 0.197 (passes 0.98); 5% noise on attn_norm 0.99988 / 0.0154; x2 and sum-instead-of-mean are identical to the
+  reference (the q/k/v norms absorb uniform scale, so they are harmless inside the block). Zero stub: 0.708.
+- Added asserted extra checks (recorded as informational metrics `rel_l2_swap_out`, `rel_l2_swap_attn_norm`): each swapped float step's
+  own output PCC >= component threshold (0.99) and rel L2 <= 0.03; block out rel L2 <= 0.01. The test now inlines `run_swap_test`
+  (it returns only a bool). The gated metric name and threshold are unchanged.
+- Verified: BRINGUP_IMPL=reference PASS (pcc 0.999996, rel 0.0027); BRINGUP_IMPL=stub FAIL (pcc 0.708). Device gate PASS:
+  pcc_swap_out 0.999996, rel_l2_swap_out 0.0028, attn_norm pcc 0.999996 / rel 0.0031.
+- Note: the first "pcc=0.000000" lines in the output come from run_safe_pytest's precompile pass (comp_pcc stub); ignore them.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_01_attn_norm.py`
