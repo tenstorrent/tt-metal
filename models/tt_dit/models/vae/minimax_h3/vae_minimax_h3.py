@@ -1267,19 +1267,28 @@ class MiniMaxH3Vae:
 
         mesh_rows, mesh_cols = tuple(self.mesh_device.shape)
         height, width = int(canvas.shape[-2]), int(canvas.shape[-1])
-        # `fast_device_to_host_yuv` reconstructs H and W as `per_shard * mesh_extent`, so an uneven
-        # split would silently assemble a canvas of the wrong size rather than fail.
-        assert height % mesh_rows == 0, f"canvas height {height} does not split over {mesh_rows} mesh rows"
-        assert width % mesh_cols == 0, f"canvas width {width} does not split over {mesh_cols} mesh columns"
-        assert (height // mesh_rows) % 2 == 0 and (
-            width // mesh_cols
-        ) % 2 == 0, "4:2:0 needs an even per-shard height and width"
+        # 4:2:0 needs an even per-shard height and width; the pad is trimmed back off on host.
+        padded_height = -(-height // (2 * mesh_rows)) * (2 * mesh_rows)
+        padded_width = -(-width // (2 * mesh_cols)) * (2 * mesh_cols)
+        if (padded_height, padded_width) != (height, width):
+            unpadded = canvas
+            canvas = ttnn.pad(
+                unpadded,
+                [(0, 0), (0, 0), (0, 0), (0, padded_height - height), (0, padded_width - width)],
+                value=0.0,
+            )
+            ttnn.deallocate(unpadded)
 
         canvas = ttnn.mesh_partition(canvas, dim=-2, cluster_axis=0)
         canvas = ttnn.mesh_partition(canvas, dim=-1, cluster_axis=1)
 
         planar = fast_device_to_host_yuv(
-            canvas, self.mesh_device, ccl_manager=self.ccl_manager, use_persistent_buffer=False
+            canvas,
+            self.mesh_device,
+            ccl_manager=self.ccl_manager,
+            use_persistent_buffer=False,
+            logical_h=height,
+            logical_w=width,
         )
         return planar.reshape(planar.shape[0], height * 3 // 2, width)
 
