@@ -139,8 +139,6 @@ public:
         const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets, bool staggered_start = true) const;
     void assert_risc_reset_at_core(const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets) const;
 
-    // Leave `ordering` unset for the ordering this target had before the static TLBs were
-    // removed: Relaxed for DRAM cores, Strict for everything else. Pass a value to override.
     void write_dram_vec(
         const void* mem_ptr,
         uint32_t sz_in_bytes,
