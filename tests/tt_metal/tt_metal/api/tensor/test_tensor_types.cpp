@@ -39,6 +39,29 @@ TEST(TensorTypesTileSizeTest, InvalidDataTypeThrows) {
     EXPECT_ANY_THROW((void)tt::tt_metal::tile_size(DataType::INVALID));
 }
 
+TEST(TensorTypesResolveDataFormatTest, DataTypeUsesPlainConverterAndDataFormatPassesThrough) {
+    constexpr DataType kDataTypes[] = {
+        DataType::BFLOAT16,
+        DataType::FLOAT32,
+        DataType::UINT32,
+        DataType::BFLOAT8_B,
+        DataType::BFLOAT4_B,
+        DataType::UINT8,
+        DataType::UINT16,
+        DataType::INT32,
+        DataType::FP8_E4M3,
+        DataType::INT8,
+    };
+    for (DataType dtype : kDataTypes) {
+        EXPECT_EQ(resolve_data_format(dtype), datatype_to_dataformat_converter(dtype))
+            << "DataType=" << static_cast<int>(dtype);
+    }
+    EXPECT_EQ(resolve_data_format(DataType::INT8), tt::DataFormat::Int8);
+    EXPECT_EQ(resolve_data_format(tt::DataFormat::UInt8), tt::DataFormat::UInt8);
+    EXPECT_EQ(resolve_data_format(tt::DataFormat::Lf8), tt::DataFormat::Lf8);
+    EXPECT_ANY_THROW((void)resolve_data_format(DataType::INVALID));
+}
+
 TEST(TensorTypesIsDataTypeSupportedTest, MatchesDataFormatSupport) {
     constexpr DataType kDataTypes[] = {
         DataType::BFLOAT16,

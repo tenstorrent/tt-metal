@@ -155,7 +155,7 @@ static inline ttsl::hash::hash_t hash_kernel_descriptor(const KernelDescriptor& 
 static inline ttsl::hash::hash_t hash_cb_format_descriptor(const CBFormatDescriptor& format_descriptor) {
     return ttsl::hash::hash_objects_with_default_seed(
         format_descriptor.buffer_index,
-        format_descriptor.data_format,
+        resolve_data_format(format_descriptor.data_format),
         format_descriptor.page_size,
         format_descriptor.tile,
         format_descriptor.face_geometry);

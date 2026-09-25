@@ -71,7 +71,7 @@ ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDe
     auto hash_cb_format_descriptor = [&](const CBFormatDescriptor& format_descriptor) -> size_t {
         return ttsl::hash::hash_objects_with_default_seed(
             format_descriptor.buffer_index,
-            format_descriptor.data_format,
+            resolve_data_format(format_descriptor.data_format),
             format_descriptor.page_size,
             format_descriptor.tile);
     };

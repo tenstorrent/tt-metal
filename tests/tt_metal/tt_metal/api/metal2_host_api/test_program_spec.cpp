@@ -42,6 +42,7 @@
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt_stl/reflection.hpp>
 #include "impl/host_api/temp_quasar_api.hpp"  // for QuasarComputeConfig
 #include <tt-metalium/core_coord.hpp>
@@ -2057,6 +2058,34 @@ TEST_F(ProgramSpecTestQuasar, CPU_DataFormatNotSupportedOnTargetArchitectureFail
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("DFB 'dfb' has data format")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_DataTypeFormatMetadataIsResolvedForValidation) {
+    NodeCoord node{0, 0};
+
+    auto make_spec = [&](std::variant<tt::DataFormat, DataType> format) {
+        ProgramSpec spec;
+        spec.name = "test_program";
+
+        auto producer = MakeMinimalGen2DMKernel("producer");
+        auto consumer = MakeMinimalGen2ComputeKernel("consumer");
+        auto dfb = MakeMinimalDFB("dfb");
+        dfb.data_format_metadata = format;
+
+        producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+        consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+
+        spec.kernels = {producer, consumer};
+        spec.dataflow_buffers = {dfb};
+        spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
+        return spec;
+    };
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, make_spec(DataType::BFLOAT16)));
+    // BFLOAT8_B resolves to Bfp8_b, which Quasar does not support.
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, make_spec(DataType::BFLOAT8_B)); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("DFB 'dfb' has data format")));
 }
 

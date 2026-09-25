@@ -383,7 +383,8 @@ MorehLayerNormBackwardInputGradOperation::MorehLayerNormBackwardInputGradFactory
                 std::any_of(compute_dfb_bindings.begin(), compute_dfb_bindings.end(), [&](const DFBBinding& binding) {
                     return binding.dfb_spec_name == dfb.unique_id && binding.endpoint_type == DFBEndpointType::CONSUMER;
                 });
-            if (consumed_by_compute && dfb.data_format_metadata == tt::DataFormat::Float32) {
+            if (consumed_by_compute && dfb.data_format_metadata.has_value() &&
+                tt::tt_metal::resolve_data_format(*dfb.data_format_metadata) == tt::DataFormat::Float32) {
                 modes.emplace(dfb.unique_id, tt::tt_metal::UnpackMode::UnpackToSrc);
             }
         }

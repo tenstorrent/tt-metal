@@ -18,6 +18,7 @@
 #include <tt-metalium/hal_types.hpp>  // HalMemType, for the borrowed-DFB per-bank sizing check
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>  // fmt::formatter<tt::DataFormat> for TT_FATAL messages
+#include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
@@ -1524,7 +1525,7 @@ void ValidateProgramSpec(
                 continue;  // Format unknown (deferred to the data_format-required check).
             }
 
-            const tt::DataFormat fmt = dfb_spec->data_format_metadata.value();
+            const tt::DataFormat fmt = resolve_data_format(dfb_spec->data_format_metadata.value());
             TT_FATAL(
                 !is_32bit_element_format(fmt),
                 "Compute kernel '{}' unpack_modes entry for DFB '{}' specifies UnpackToDest, but the DFB entries use a "
@@ -1563,7 +1564,7 @@ void ValidateProgramSpec(
                 }
 
                 // FP32 only for now
-                if (dfb_spec->data_format_metadata.value() != tt::DataFormat::Float32) {
+                if (resolve_data_format(dfb_spec->data_format_metadata.value()) != tt::DataFormat::Float32) {
                     continue;
                 }
                 TT_FATAL(
@@ -2245,11 +2246,12 @@ void ValidateProgramSpec(
     const tt::ARCH arch = hal.get_arch();
     for (const auto& dfb : spec.dataflow_buffers) {
         if (dfb.data_format_metadata.has_value()) {
+            const tt::DataFormat fmt = resolve_data_format(dfb.data_format_metadata.value());
             TT_FATAL(
-                tt::is_data_format_supported(dfb.data_format_metadata.value(), arch),
+                tt::is_data_format_supported(fmt, arch),
                 "DFB '{}' has data format '{}' which is not supported on architecture {}",
                 dfb.unique_id,
-                dfb.data_format_metadata.value(),
+                fmt,
                 arch);
         }
     }
@@ -3216,7 +3218,8 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .cap = consumer_access_pattern,
         .enable_producer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.producers),
         .enable_consumer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.consumers),
-        .data_format = dfb_spec->data_format_metadata.value_or(tt::DataFormat::Invalid),
+        .data_format = dfb_spec->data_format_metadata.has_value() ? resolve_data_format(*dfb_spec->data_format_metadata)
+                                                                  : tt::DataFormat::Invalid,
         .tile = dfb_spec->tile_format_metadata,
         .tensix_scope = tensix_scope,
         // DFB borrowed memory mode is declared at program creation time.
