@@ -126,7 +126,86 @@
   "rc": 0,
   "reason": [],
   "started": "2026-09-25T22:57:02",
-  "status": "PASS"
+  "status": "PASS",
+  "waiting": null
+ },
+ "PL.1": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "fd7a7e33a858a3f97b87ac71e58dc8f4ae92864a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "b49e1877a24a60c7f76a876f75941c16c1122b0c",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "13fbb6133f917b9befcfe477bd1f4e87cda8a337",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5[1m]",
+   "session_id": "347774d7-85f2-4654-b38d-1df8f620923e"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/briefs/PL.1.plan.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "fd7a7e33a858a3f97b87ac71e58dc8f4ae92864a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "b49e1877a24a60c7f76a876f75941c16c1122b0c",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "13fbb6133f917b9befcfe477bd1f4e87cda8a337",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/agents/PL.1.plan.1.jsonl",
+    "model": "claude-opus-5-5[1m]",
+    "problems": [],
+    "rc": 0,
+    "role": "plan",
+    "seconds": 294.5,
+    "session_id": "347774d7-85f2-4654-b38d-1df8f620923e",
+    "t": "2026-09-25T23:05:44"
+   }
+  ],
+  "attempts": 1,
+  "duration_s": 3.3,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-25T23:00:50"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-25T23:11:33"
+   }
+  ],
+  "last_run": "2026-09-25T23:11:33",
+  "log": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/logs/PL.1.log",
+  "metrics": {
+   "component_errors": 0,
+   "ledger_errors": 0,
+   "per_chip_budget_gb": 27.2,
+   "per_chip_total_gb": 21.52,
+   "plan_approved": 1,
+   "plan_errors": 0,
+   "plan_fits": 1,
+   "unplaced_tensors": 0
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-25T23:11:30",
+  "status": "PASS",
+  "waiting": "approve the plan in models/demos/gemma4_a4b_d_p/bringup (plan.yaml, plan.md, components.yaml, tasks.yaml), then: python -m models.demos.common.bringup approve plan --spec /localdev/dnijemcevic/tt-metal2/models/demos/gemma4_a4b_d_p/bringup/spec.yaml"
  },
  "R.1": {
   "attempts": 0,
