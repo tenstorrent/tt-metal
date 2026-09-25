@@ -81,6 +81,14 @@ MATH_FIDELITIES = [
     MathFidelity.HiFi4,
 ]
 
+
+def matmul_no_mop_math_fidelities(formats):
+    # Float16_b is full precision at LoFi; HiFi phases only touch mantissa bits it does not have.
+    if formats.input_format == DataFormat.Float16_b:
+        return [MathFidelity.LoFi]
+    return MATH_FIDELITIES
+
+
 # Plain (non-2x) formats out of Quasar's matmul set. MX formats are covered by the 2x test below,
 # which needs the MX golden machinery anyway.
 MATMUL_FORMATS = input_output_formats([DataFormat.Float16, DataFormat.Float16_b])
@@ -242,7 +250,7 @@ def _run_matmul_custom_no_mop(
 
 @pytest.mark.quasar
 @parametrize(
-    math_fidelity=MATH_FIDELITIES,
+    math_fidelity=matmul_no_mop_math_fidelities,
     formats=MATMUL_FORMATS,
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
     dimensions=runtime(

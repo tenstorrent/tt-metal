@@ -23,7 +23,7 @@ namespace ttnn::experimental::prim {
 // Shared inline helper — defined here so neither rebank_rm_factory.cpp nor
 // rebank_rm_device_operation.cpp redefines it in their anonymous namespaces
 // (Unity build concatenates all TUs; duplicate symbols → redefinition error).
-inline constexpr bool rebank_is_pow2(uint32_t n) { return n != 0u && (n & (n - 1u)) == 0u; }
+constexpr bool rebank_is_pow2(uint32_t n) { return n != 0u && (n & (n - 1u)) == 0u; }
 
 struct RebankRmParams {
     uint32_t chunk_size;  // target last-dim and output page size (in elements)

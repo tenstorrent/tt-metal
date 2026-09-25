@@ -11,7 +11,6 @@
 #endif
 #include "internal/tensix_functions.h"
 #include "internal/risc_attribs.h"
-#include "api/compile_time_args.h"
 #include "dev_mem_map.h"
 #include "hostdevcommon/kernel_structs.h"
 #include "hostdev/rta_constants.h"
@@ -216,6 +215,18 @@ void wait_for_go_message() {
         invalidate_l1_cache();
     }
 }
+
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+FORCE_INLINE
+void zero_semaphore_regions() {
+    // Discard before zeroing: a dirty line at boot could otherwise write back over the zeros.
+    invalidate_l2_cache_range(MEM_SEM_REGIONS_BASE, MEM_SEM_REGIONS_SIZE);
+    volatile uint32_t* sem_words = reinterpret_cast<volatile uint32_t*>(MEM_L1_UNCACHED_BASE + MEM_SEM_REGIONS_BASE);
+    for (uint32_t w = 0; w < MEM_SEM_REGIONS_SIZE / sizeof(uint32_t); w++) {
+        sem_words[w] = 0;
+    }
+}
+#endif  // ARCH_QUASAR && COMPILE_FOR_DM
 
 #if !defined(COMPILE_FOR_TRISC)
 #include "noc_address_backend.h"

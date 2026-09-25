@@ -332,7 +332,8 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
             chunk_capacity);
     }
 
-    if (args.has_sliding_window() && tensor_args.is_chunked()) {
+    if (args.has_sliding_window() && tensor_args.is_chunked() &&
+        (!kv_pad_rotation_active(args, tensor_args) || args.circular_kv_cache)) {
         const auto q_group_size = tensor_args.input_q.logical_shape()[2] * args.ring_size;
         // One complete group is enough: at logical_n == q_group_size device 0 clips its
         // window at token 0 and devices 1..R-1 consume predecessors within that group.
@@ -355,6 +356,17 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
                 "Chunked sliding KV-pad rotation requires the new Q chunk to fill exactly one ring group");
         }
     }
+    if (args.has_sliding_window() && kv_pad_rotation_active(args, tensor_args)) {
+        const uint32_t local = tensor_args.input_q.logical_shape()[2];
+        // Live metadata is checked against the halo capacity by every device consumer.
+        const bool needs_two =
+            args.has_kv_pad_rotation() &&
+            ring_joint::chunked_q_wraps(args.kv_actual_isl.value(), args.logical_n, local, args.ring_size);
+        const uint32_t halo = sliding_halo_token_count(args.sliding_window_size.value(), args.get_k_chunk_size());
+        TT_FATAL(
+            tensor_args.gathered_k.logical_shape()[2] >= halo * (needs_two ? 2 : 1),
+            "Sliding attention requires one predecessor-halo slot, or two when scalar Q wraps");
+    }
 }
 
 }  // namespace
@@ -372,7 +384,10 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto& ag = args.all_gather_operation_attributes;
     if (ag.full_mesh) {
         TT_FATAL(!ag.cluster_axis.has_value(), "Full-mesh RingJointSDPA must not carry a cluster axis");
-        TT_FATAL(ag.topology == ttnn::ccl::Topology::Ring, "Full-mesh RingJointSDPA requires Ring topology");
+        // Linear here is a full-mesh open path: same walk, no closing edge.
+        TT_FATAL(
+            ag.topology == ttnn::ccl::Topology::Ring || ag.topology == ttnn::ccl::Topology::Linear,
+            "Full-mesh RingJointSDPA requires Ring or Linear topology");
         TT_FATAL(!args.has_sliding_window(), "Full-mesh RingJointSDPA does not support sliding-window mode");
         TT_FATAL(
             ag.mesh_rows > 1 && ag.mesh_cols > 1 && ag.ring_size == ag.mesh_rows * ag.mesh_cols,
@@ -681,10 +696,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         // slab-major addressing and would read garbage from a wrapped cache.
         TT_FATAL(
             args.has_sliding_window() && is_chunked, "circular_kv_cache requires chunked sliding-window attention");
-        // Metadata first: on that path kv_actual_isl is read on-device (host value absent), so the
-        // rotation check below would otherwise mask the real reason. The metadata-path halo helper
-        // (compute_halo_tail_start_Ht, ring_attention_all_gather_metadata.hpp) derives the source slab
-        // without the circular wrap, so circular caches must stay off that path.
+        // Metadata halo addressing supports only unbounded caches.
         TT_FATAL(!tensor_args.has_metadata(), "circular_kv_cache does not support the trace-safe metadata path");
         TT_FATAL(
             has_kv_pad_rotation,
@@ -1295,8 +1307,12 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     uint32_t mesh_rows = 0;
     uint32_t mesh_cols = 0;
     std::optional<uint64_t> route_plan_hash;
+    // The caller asks for a full-mesh gather; the proved route decides whether it closes.
+    ttnn::ccl::Topology resolved_topology = topology;
     if (full_mesh) {
-        TT_FATAL(topology == ttnn::ccl::Topology::Ring, "ring_mla cluster_axis=None requires Ring topology");
+        TT_FATAL(
+            topology == ttnn::ccl::Topology::Ring || topology == ttnn::ccl::Topology::Linear,
+            "ring_mla cluster_axis=None requires Ring or Linear topology");
         TT_FATAL(
             ttnn::operations::ccl::common::has_row_major_mesh_coordinates(input_tensor_q) &&
                 ttnn::operations::ccl::common::has_row_major_mesh_coordinates(input_tensor_k) &&
@@ -1324,8 +1340,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
             ttnn::ccl::get_axis_topology(input_tensor_q, fabric_config, 0),
             ttnn::ccl::get_axis_topology(input_tensor_q, fabric_config, 1)};
         const auto route = ttnn::operations::ccl::common::resolve_mesh_ring_plan(
-            input_tensor_q, std::nullopt, num_links, axis_topology, true, "ring_mla");
-        TT_FATAL(route.has_value(), "ring_mla could not resolve a direct-neighbor full-mesh snake ring");
+            input_tensor_q, std::nullopt, num_links, axis_topology, true, "ring_mla", /*allow_open_path=*/true);
+        TT_FATAL(route.has_value(), "ring_mla could not resolve a direct-neighbor full-mesh route");
         TT_FATAL(
             route->plan.ring_size <= std::numeric_limits<uint32_t>::digits,
             "ring_mla supports at most {} full-mesh ranks, got {}",
@@ -1336,6 +1352,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         mesh_cols = route->plan.mesh_cols;
         route_plan_hash = route->plan.route_plan_hash;
         num_devices = route->plan.ring_size;
+        resolved_topology = route->topology;
     } else {
         TT_FATAL(
             *cluster_axis < mesh_shape.dims(),
@@ -1350,7 +1367,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         num_links,
         num_devices,
         persistent_output_buffer_k.memory_config(),
-        topology,
+        resolved_topology,
         multi_device_global_semaphore,
         subdevice_id,
         cluster_axis,

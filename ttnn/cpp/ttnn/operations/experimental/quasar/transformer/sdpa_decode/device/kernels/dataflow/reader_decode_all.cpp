@@ -335,14 +335,14 @@ void kernel_main() {
         const uint32_t mask_batch_offset = ((cur_batch / q_heads_parallel_factor) % Bmask) * PNHt * St;
         const uint32_t mask_chunk_offset = k_chunk_start * Sk_chunk_t_dynamic;
         uint32_t mask_start_tile_id = mask_batch_offset + mask_chunk_offset;
+        Semaphore k_mcast_sem(sem::k_mcast);
         // Setup multicast parameters for K streaming (vertical multicast)
         KMcastParams k_mcast_params = {
             .do_mcast = do_k_mcast,
             .mcast_x = mcast_x,
             .mcast_y0 = mcast_y0,
             .mcast_y1 = mcast_y1,
-            .num_dests = num_dests,
-            .mcast_sem_id = sem::k_mcast};
+            .num_dests = num_dests};
 
 #ifdef IS_PAGED_ATTENTION
         for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
@@ -368,7 +368,8 @@ void kernel_main() {
                 page_table_ptr_u16,
                 page_table_ptr_u32,
                 barrier_count,
-                k_mcast_params);
+                k_mcast_params,
+                &k_mcast_sem);
 
 #ifdef USE_ATTENTION_MASK
             mask_start_tile_id = read_mask_chunk<dfb::mask_in, mask_tile_bytes, barrier_threshold, PNHt>(
