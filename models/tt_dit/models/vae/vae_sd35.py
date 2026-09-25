@@ -319,6 +319,9 @@ class Attention(Module):
         k = self.reorder_for_attention(k, b, self.num_heads, head_dim)
         v = self.reorder_for_attention(v, b, self.num_heads, head_dim)
 
+        # Legacy SDPA (op defaults) on purpose: single-head attention with head dim 512, which the named
+        # SDPA recipes reject on Blackhole for L1 ("bytes <= available", sdpa_recipe.cpp
+        # check_recipe_l1_fit; test_sdpa_dit_recipe_parity.py::test_vae_*).
         x = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=False)
         x = ttnn.reshape(ttnn.permute(x, (0, 2, 1, 3)), (b, h, w, inner_dim))
 
