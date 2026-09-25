@@ -36,7 +36,8 @@ using namespace leg_bench;
 
 namespace {
 
-constexpr int kDeviceId = 0;
+// Overridden by TT_LEG_DEVICE_ID; see leg_device_id().
+const int kDeviceId = leg_device_id();
 
 // Both ranks build this identically, which is what keeps them on the same case list.
 const std::vector<int64_t> kPageSizes = {4096, 16384, 65536, 262144};

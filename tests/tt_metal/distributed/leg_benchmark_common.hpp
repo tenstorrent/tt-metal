@@ -5,6 +5,7 @@
 // mesh and the quiet reporter. Each file keeps only its own init_counters and fixture.
 #pragma once
 
+#include <cstdlib>
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -137,6 +138,16 @@ inline uint32_t pattern_word(uint32_t index) {
 inline std::shared_ptr<dist::MeshDevice> unit_mesh(int device_id) {
     static std::shared_ptr<dist::MeshDevice> mesh = dist::MeshDevice::create_unit_mesh(device_id);
     return mesh;
+}
+
+// Which chip this rank opens. Not a sweep axis -- the mesh is built once per process, so it
+// selects the chip for the whole run. PCIe topology differs per chip, so this is how a run
+// gets pointed at a better-connected one without a rebuild.
+inline int leg_device_id() {
+    if (const char* s = std::getenv("TT_LEG_DEVICE_ID"); s != nullptr && *s != '\0') {
+        return std::atoi(s);
+    }
+    return 0;
 }
 
 // The split keeps each rank to its own device: a unit mesh opened against the full world
