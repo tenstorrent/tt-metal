@@ -371,5 +371,95 @@ def test_csa_islands_pinpoint(mesh_device, device_params, sp_axis, tp_axis):
     _where(y1_e_host, y1_r_host, "A2 replayed vs forward")
     _where(y1_p_host, y1_r_host, "A2 replayed vs phases-eager")
     A2.release()
+    for t in outs:
+        ttnn.deallocate(t)
+
+    # (4) island A1 captured + replayed vs the eager forward_pre, on a THIRD instance at the same chunk-1 state
+    tt_a = TtCSA.from_reference(mesh_device, ref, cfg, sp_axis=sp_axis, tp_axis=tp_axis, sparse_path=True)
+    st_a = tt_a.alloc_state(2 * chunk, chunk_tokens=chunk)
+    y0 = tt_a(h0, seq_len_actual=chunk, state=st_a)
+    ttnn.deallocate(y0)
+    prior_snap = [ttnn.clone(t) for t in (st_a.prior_c + st_a.prior_i)]
+
+    def restore_priors():
+        for src, dst in zip(prior_snap, st_a.prior_c + st_a.prior_i):
+            ttnn.copy(src, dst)
+
+    names = [
+        "q",
+        "q_latent",
+        "sliding_kv",
+        "next_carry",
+        "entries",
+        "keys",
+        "cos",
+        "sin",
+        "kv_rm",
+        "entries_rm",
+        "carry_rm",
+    ]
+    tt_a.prepare_chunk(st_a, chunk)
+    outs_e = tt_a.forward_pre(h1, st_a, chunk)
+    host_e = [
+        ttnn.to_torch(
+            t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(2, 3))
+        ).float()
+        for t in outs_e
+    ]
+    prior_e = [
+        ttnn.to_torch(
+            t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(2, 3))
+        ).float()
+        for t in st_a.prior_c
+    ]
+    for t in outs_e:
+        ttnn.deallocate(t)
+    restore_priors()
+    tt_a.prepare_chunk(st_a, chunk)
+    A1 = TraceIsland(mesh_device, lambda hh: tt_a.forward_pre(hh, st_a, chunk), [h1], name="pinpoint.A1")
+    outs_c = A1.capture()
+    ttnn.synchronize_device(mesh_device)
+    host_c = [
+        ttnn.to_torch(
+            t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(2, 3))
+        ).float()
+        for t in outs_c
+    ]
+    prior_c = [
+        ttnn.to_torch(
+            t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(2, 3))
+        ).float()
+        for t in st_a.prior_c
+    ]
+    restore_priors()
+    A1.replay()
+    ttnn.synchronize_device(mesh_device)
+    host_r = [
+        ttnn.to_torch(
+            t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(2, 3))
+        ).float()
+        for t in outs_c
+    ]
+    prior_r = [
+        ttnn.to_torch(
+            t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(2, 3))
+        ).float()
+        for t in st_a.prior_c
+    ]
+    rep_cap = {n: comp_pcc(e, c)[1] for n, e, c in zip(names, host_e, host_c)}
+    rep_rep = {n: comp_pcc(e, r)[1] for n, e, r in zip(names, host_e, host_r)}
+    logger.info(
+        f"[pinpoint] A1 captured vs eager forward_pre: " + ", ".join(f"{n} {v:.6f}" for n, v in rep_cap.items())
+    )
+    logger.info(
+        f"[pinpoint] A1 replayed vs eager forward_pre: " + ", ".join(f"{n} {v:.6f}" for n, v in rep_rep.items())
+    )
+    logger.info(
+        f"[pinpoint] priors after A1 (kv, gate): captured vs eager {comp_pcc(prior_e[0], prior_c[0])[1]:.6f} / "
+        f"{comp_pcc(prior_e[1], prior_c[1])[1]:.6f}; replayed vs eager {comp_pcc(prior_e[0], prior_r[0])[1]:.6f} / {comp_pcc(prior_e[1], prior_r[1])[1]:.6f}"
+    )
+    A1.release()
+    a1_worst = min(rep_rep.values())
     assert jac_mean >= 0.9, (jac_mean, jac_min)
     assert pcc_phase >= 0.999 and pcc_cap >= 0.999 and pcc_rep >= 0.999, (pcc_phase, pcc_cap, pcc_rep)
+    assert a1_worst >= 0.999, rep_rep
