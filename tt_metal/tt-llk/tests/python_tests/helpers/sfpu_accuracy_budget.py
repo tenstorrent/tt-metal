@@ -365,6 +365,16 @@ def accuracy_contract(
     not transfer, so defaulting it would resolve an unknown chip straight against the
     :data:`MEASURED_ARCH` table.
     """
+    # Built before the enrolment fallback, so a miswired driver -- a string arch, a bool
+    # dest_acc -- fails on every op, not only once its op is enrolled.
+    query = BudgetKey(
+        approx_mode=approx_mode,
+        input_format=input_format,
+        output_format=output_format,
+        dest_acc=dest_acc,
+        arch=arch,
+    )
+
     # The variant just asked about, for --ulp-measure to tag its reading with. The
     # driver resolves a contract immediately before it compares, so this is the exact
     # key the comparison belongs to -- which a test id cannot always give: the dedicated
@@ -390,13 +400,6 @@ def accuracy_contract(
     table = _SFPU_ACCURACY_BUDGET.get(op)
     if table is None:
         return TOLERANCE_CONTRACT
-    query = BudgetKey(
-        approx_mode=approx_mode,
-        input_format=input_format,
-        output_format=output_format,
-        dest_acc=dest_acc,
-        arch=arch,
-    )
     found = _winner(table, query, op.name)
     if found is None:
         return TOLERANCE_CONTRACT
