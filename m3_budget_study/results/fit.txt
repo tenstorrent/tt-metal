@@ -1,0 +1,41 @@
+stage overhead o(W) = 0.000709 ms/token * W  (from S8 vs 5-sparse-layer sets):
+   W=2048 h=0: o=-0.01 ms  (fit 1.45)
+   W=2048 h=0: o=+1.16 ms  (fit 1.45)
+   W=2048 h=0: o=+8.95 ms  (fit 1.45)
+   W=2048 h=141312: o=+0.78 ms  (fit 1.45)
+   W=2048 h=141312: o=+1.78 ms  (fit 1.45)
+   W=2048 h=141312: o=+2.57 ms  (fit 1.45)
+   W=2048 h=548864: o=+0.17 ms  (fit 1.45)
+   W=2048 h=548864: o=+1.54 ms  (fit 1.45)
+   W=2048 h=548864: o=+2.46 ms  (fit 1.45)
+   W=8192 h=0: o=+3.86 ms  (fit 5.81)
+   W=8192 h=0: o=+5.76 ms  (fit 5.81)
+   W=8192 h=0: o=+6.23 ms  (fit 5.81)
+dense (D, 29 points): a=1.078  b=0.0004347  c=2.223e-08  d=0  e=0  p0=2944  R2=0.9999
+   worst: W=4096 h=0 n=4096  meas 10.2  pred 11.5  (+16.9%)
+   worst: W=2048 h=0 n=2048  meas 8.2  pred 7.4  (+12.7%)
+   worst: W=2048 h=0 n=1024  meas 8.2  pred 7.4  (+12.5%)
+   worst: W=2048 h=0 n=256  meas 8.2  pred 7.4  (+12.0%)
+   worst: W=4096 h=65536 n=4096  meas 27.8  pred 29.4  (+6.2%)
+sparse (S8, 29 points): a=2.02  b=0.001361  c=0  d=6.391e-06  e=0.0005055  p0=0  R2=0.9977
+   worst: W=2048 h=16384 n=2048  meas 45.4  pred 49.0  (+8.2%)
+   worst: W=2048 h=0 n=256  meas 44.2  pred 40.9  (+7.7%)
+   worst: W=2048 h=16384 n=256  meas 44.5  pred 41.8  (+6.4%)
+   worst: W=2048 h=141312 n=256  meas 46.4  pred 48.2  (+4.0%)
+   worst: W=8192 h=65536 n=8192  meas 142.8  pred 147.6  (+3.5%)
+S0 composition check: measured vs o(W) + 3 dense + 5 sparse from the fit
+   W=2048 h=0 n=256: S0 meas 35.7  pred 32.0  (+10.2%)
+   W=2048 h=0 n=1024: S0 meas 36.1  pred 34.0  (+5.9%)
+   W=2048 h=0 n=2048: S0 meas 37.9  pred 36.6  (+3.6%)
+   W=2048 h=141312 n=2048: S0 meas 66.3  pred 68.8  (-3.9%)
+   W=2048 h=548864 n=2048: S0 meas 157.4  pred 161.9  (-2.9%)
+   W=4096 h=0 n=4096: S0 meas 56.7  pred 59.8  (-5.4%)
+   W=5120 h=0 n=5120: S0 meas 67.0  pred 71.4  (-6.6%)
+   W=6144 h=0 n=6144: S0 meas 78.1  pred 83.0  (-6.4%)
+   W=8192 h=0 n=8192: S0 meas 103.0  pred 106.3  (-3.2%)
+   W=10240 h=0 n=10240: S0 meas 127.7  pred 129.5  (-1.5%)
+   dense W=4096 B=2: packed 13.9 vs plain 10.2 -> 1.207 ms/segment/layer
+   dense W=8192 B=4: packed 23.1 vs plain 19.4 -> 0.410 ms/segment/layer
+   sparse W=4096 B=2: packed 84.1 vs plain 81.8 -> 0.283 ms/segment/layer
+   sparse W=8192 B=4: packed 155.1 vs plain 146.8 -> 0.347 ms/segment/layer
+wrote m3_budget_study/results/coeffs.json

@@ -104,6 +104,21 @@ def main(runs, out):
         pred = ob * W + 3 * lm("dense", C["dense"]) + 5 * lm("sparse", C["sparse"])
         os_.append((s0 - pred) / s0)
         print(f"   W={W} h={h} n={n}: S0 meas {s0:.1f}  pred {pred:.1f}  ({(s0 - pred) / s0 * 100:+.1f}%)")
+    # Per-segment attention overhead of a packed forward: all-cold packed (E4 C1 / C8) vs plain E1 at the same W.
+    packed = {}
+    for r in csv.DictReader(open(runs)):
+        if r["status"] == "OK" and r["exp"] == "E4" and r["notes"].split()[0] in ("C1", "C8"):
+            packed[(r["layer_set"], int(r["W"]))] = (int(r["B"]), float(r["wall_ms_median"]))
+    for kind, ls in (("dense", "D"), ("sparse", "S8")):
+        est = []
+        for (l, W), (B, ms) in packed.items():
+            if l == ls and (ls, W, 0, W) in pts:
+                est.append(((ms - pts[(ls, W, 0, W)]) / ((B - 1) * LAYERS[ls]), B - 1))
+                print(
+                    f"   {kind} W={W} B={B}: packed {ms:.1f} vs plain {pts[(ls, W, 0, W)]:.1f} -> {est[-1][0]:.3f} ms/segment/layer"
+                )
+        # weighted by extra segments: the B=2 point leans on a single plain run
+        C[kind]["seg_a"] = float(np.average([e for e, _ in est], weights=[w for _, w in est])) if est else 0.0
     C["stage_overhead_ms"] = 0.0
     C["stage_overhead_per_token_ms"] = ob  # every stage in these runs embeds its own tokens
     C["hop_ms"] = 0.0
