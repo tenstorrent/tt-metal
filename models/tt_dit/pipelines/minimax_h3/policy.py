@@ -97,14 +97,7 @@ def validate_input(
 
 def validate_t2va(*, aspect_ratio: tuple[int, int], height: int | None, width: int | None) -> None:
     """`aspect_ratio` must be a published ratio unless an explicit canvas replaces it."""
-    if height is None:
-        if aspect_ratio not in MINIMAX_H3_ASPECT_RATIOS:
-            raise ValueError(
-                f"aspect_ratio {aspect_ratio} is not served for T2VA; supported: "
-                + ", ".join(f"{w}:{h}" for w, h in MINIMAX_H3_ASPECT_RATIOS)
-            )
-    else:
-        _validate_explicit_canvas(height, width)
+    _validate_canvas("T2VA", aspect_ratio, height, width)
 
 
 def validate_fl2va(
@@ -131,6 +124,21 @@ def validate_fl2va(
             raise ValueError(f"{name} is {keyframe_width}x{keyframe_height}; its aspect ratio must be from 1:4 to 4:1")
     if height is not None:
         _validate_explicit_canvas(height, width)
+
+
+def validate_ref2va(*, aspect_ratio: tuple[int, int], height: int | None, width: int | None) -> None:
+    """`aspect_ratio` must be a published ratio unless an explicit canvas replaces it."""
+    _validate_canvas("Ref2VA", aspect_ratio, height, width)
+
+
+def _validate_canvas(task: str, aspect_ratio: tuple[int, int], height: int | None, width: int | None) -> None:
+    if height is not None:
+        _validate_explicit_canvas(height, width)
+    elif aspect_ratio not in MINIMAX_H3_ASPECT_RATIOS:
+        raise ValueError(
+            f"aspect_ratio {aspect_ratio} is not served for {task}; supported: "
+            + ", ".join(f"{w}:{h}" for w, h in MINIMAX_H3_ASPECT_RATIOS)
+        )
 
 
 def _validate_explicit_canvas(height: int, width: int) -> None:
