@@ -37,13 +37,14 @@ CHUNK = 5 * 1024
 DISPATCH_GROUP_SIZE = 8
 SEQ_LEN_PER_CHIP = CHUNK // DISPATCH_GROUP_SIZE
 
-# The production Galaxy rows, both link counts. This op relays single hops around a ring, so it needs
-# an axis whose closing link is cabled and an extent of at least 4 -- which rules out the 2x1 and mesh
-# rows but not the TorusY Nx1 proxies `test_prefill_dispatch.py` also selects; those are left out only
-# because nothing has run this op on them yet.
-# One link halves stream_count, so the opposite chip's chunk is split two ways instead of four: the
-# split arithmetic and the region layout change shape, not just size.
-_MESH_IDS = ("fabric2d-torus-xy-8x4-1link", "fabric2d-torus-xy-8x4-2link")
+# The production Galaxy row and the 8x1 TorusY LoudBox proxy. This op relays single hops around a
+# ring, so it needs an axis whose closing link is cabled and an extent of at least 4 -- which rules
+# out the 2x1 and mesh rows. The proxy is one dispatch group on a single-axis ring, so it covers
+# neither cross-group routing nor the 2D torus.
+_MESH_IDS = (
+    "fabric2d-torus-xy-8x4-2link",
+    "fabric2d-torus-y-8x1-2link",
+)
 _MESH_CONFIGS = [param for param in ALL_MESH_CONFIGS if param.id in _MESH_IDS]
 assert len(_MESH_CONFIGS) == len(_MESH_IDS), "dispatch_fabric2d mesh configs missing from ALL_MESH_CONFIGS"
 
@@ -163,6 +164,8 @@ def test_dispatch_fabric2d(mesh_device, device_params, num_links, capacity_div, 
     cfg = extract_mesh_config(mesh_device)
     sp_axis, H, G = cfg.sp_axis, cfg.dispatch_group_size, cfg.num_dispatch_groups
     assert sp_axis == 0, "this op runs on the dispatch axis, which extract_mesh_config puts at 0"
+    if routing == "production" and G == 1:
+        pytest.skip("production routing sends most picks to other dispatch groups; this mesh has only one")
     seq_len_per_chip = SEQ_LEN_PER_CHIP
     num_routed_experts, num_experts_per_tok, emb_dim = 256, 8, 256
     experts_per_chip = num_routed_experts // G // H
