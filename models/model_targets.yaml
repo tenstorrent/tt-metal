@@ -6,6 +6,17 @@ description: Centralized perf/accuracy targets for models CI.
 # - TODO: explicit gap placeholder; excluded from normal target resolution and treated as missing/TODO by validator.
 # `prefill_time_to_first_token` values are in milliseconds (ms).
 targets:
+  qwen38-27b-qb2:
+    skus:
+      p300x2:
+        entries:
+          - status: active
+            perf: {}
+            accuracy:
+              # First 10/198 GPQA Diamond questions; require at least 9/10.
+              gpqa: 100
+              gpqa_tolerance: 0.1
+            team: models
   llama3.1-8b-qb2:
     skus:
       p300x2:

@@ -1,4 +1,15 @@
 # Weekly on Saturday. Budgets: models.agentic_research_tier<N> in .github/time_budget.yaml.
+- name: Qwen3.8 27B QB2 model, GPQA subset and serving
+  cmd: bash models/demos/qwen38_27b_qb2/tests/run_ci.sh
+  model: qwen38-27b-qb2
+  model_family: Qwen
+  skus:
+    bh_quietbox_2:
+      # Three server startups, ten GPQA questions, API checks and fixed-length bursts.
+      timeout: 90
+      tier: 3
+  team: models
+  budget_type: agentic_research
 - name: Llama 3.1-8B QB2 decoder and IFEval serving
   cmd: |
     set -euo pipefail
