@@ -4,6 +4,7 @@
 random weights, reduced expert count (64 -> 8 per chip on 2x4, the galaxy's per-chip load). Output streams PCC >=
 0.99. The reference applies swiglu_limit; the device MoE runs Silu without the clamp (plan M8)."""
 
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -24,7 +25,7 @@ from models.demos.deepseek_v3_d_p.tt.v4.moe import reference_moe_weights
 
 _SEED = 42
 _PCC = 0.99
-_EXPERTS = 64
+_EXPERTS = int(os.environ.get("V4_TEST_EXPERTS", "64"))  # 256 = the model's 8 experts per chip on 8x4
 _SEQ = 1024
 
 _MESH_CONFIGS = [
