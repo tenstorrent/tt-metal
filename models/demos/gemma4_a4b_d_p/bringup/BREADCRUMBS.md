@@ -171,3 +171,15 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Gate PASS: pcc_post_attn_norm_L00 0.999996, rel L2 0.0029, row-norm ratio [0.9941, 1.0052]. (The first "FAIL pcc=0.000000" line is the precompile pass.)
 - Hidden states still round-trip through the host between steps.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_post_attn_norm.py`
+
+## S.sliding.03 test (attempt 1): swap attn_norm + attention + post_attn_norm into the sliding block
+- Reviewed the rendered swap test (layer 0, golden s4096 chunk 1, start 2048). The gated metric stays `pcc_swap_out` >= 0.98.
+- Replaced the one-line template body with swap 2's checks (SWAPPED extended): step PCC >= 0.99 and rel L2 <= 0.03 per swapped step,
+  attention first-window rows rel L2 <= 0.03, block out rel L2 <= 0.02 (whole chunk and first window rows), finite outputs, chunk start > 0.
+- Added: for every swapped `norm` step, compare with the CPU norm run on the exact input the device step saw (rel L2 <= 0.03, per-token
+  norm ratio in [0.97, 1.03]; metrics `rel_l2_iso_swap_<out>`, `row_norm_ratio_{min,max}_swap_<out>`). Why: post_attn_norm's input is the
+  device attention output here, so a golden-based norm-ratio check would also count attention error. Scale bugs (`1 + w` rel 0.135, sum vs mean
+  0.98, from the component test) already fail the step rel L2 check against the golden.
+- Verified: BRINGUP_IMPL=reference PASS (pcc 0.999996, block rel 0.0027); stub FAIL (all checks). Device gate PASS: pcc_swap_out 0.999973,
+  block out rel 0.0074 / 0.0060, attn_norm 0.0031 (iso 0.0020), attention 0.0052 / 0.0052, post_attn_norm 0.0052 (iso 0.0019, ratio [0.9958, 1.0024]).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_03_post_attn_norm.py`
