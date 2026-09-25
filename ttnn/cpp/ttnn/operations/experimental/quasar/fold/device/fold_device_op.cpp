@@ -3,8 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fold_device_op.hpp"
+
+#include <fmt/core.h>
+
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/math.hpp>
 
 namespace ttnn::operations::experimental::quasar {
 
@@ -18,24 +24,41 @@ Fold::program_factory_t Fold::select_program_factory(
 
 void validate_fold(const std::vector<Tensor>& input_tensors, bool is_sharded, uint32_t stride_h, uint32_t stride_w) {
     const Tensor& input_tensor = input_tensors.at(0);
-
-    const auto& input_shape = input_tensor.padded_shape();
+    const auto& logical_shape = input_tensor.logical_shape();
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Fold: Expect input tensor to be stored on device.");
     TT_FATAL(input_tensor.buffer() != nullptr, "Fold: Expect input tensor to be allocated on a device buffer.");
+    // Guard before any modulo/div on stride; both sharded and unsharded branches SIGFPE on zero stride.
+    TT_FATAL(stride_h > 0 && stride_w > 0, "Fold: stride_h ({}) and stride_w ({}) must be > 0.", stride_h, stride_w);
     if (is_sharded) {
         TT_FATAL(
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
             "Fold: Only height-sharded input tensors are supported.");
-
         auto shard_shape = input_tensor.shard_spec().value().shape;
         TT_FATAL(
-            shard_shape[0] % (input_shape[2] * stride_h) == 0,
+            shard_shape[0] % (logical_shape[2] * stride_h) == 0,
             "Fold: Shard height must be divisible by input width times stride_h for proper folding operation.");
         TT_FATAL(input_tensor.layout() == Layout::ROW_MAJOR, "Fold: Expect sharded input tensor in row-major layout.");
     } else {
-        TT_FATAL(input_shape[1] % stride_h == 0, "Fold: Input height must be divisible by stride_h.");
-        TT_FATAL(input_shape[2] % stride_w == 0, "Fold: Input width must be divisible by stride_w.");
+        // Divisibility on logical (padded hides partial-tile W that the tile-native writer would OOB into).
+        TT_FATAL(
+            logical_shape[1] % stride_h == 0,
+            "Fold: logical H ({}) must be divisible by stride_h ({}).",
+            logical_shape[1],
+            stride_h);
+        TT_FATAL(
+            logical_shape[2] % stride_w == 0,
+            "Fold: logical W ({}) must be divisible by stride_w ({}).",
+            logical_shape[2],
+            stride_w);
+        // Composite falls back before prim, so this only reaches direct prim::qsr::fold callers.
+        if (input_tensor.layout() == tt::tt_metal::Layout::TILE) {
+            auto reason = tile_native_fold_rejection_reason(input_tensor, stride_h, stride_w);
+            TT_FATAL(
+                !reason.has_value(),
+                "Fold (TILE): tile-native gate refused: {}; untilize input to RM first.",
+                reason.value_or(""));
+        }
     }
 }
 
@@ -49,14 +72,15 @@ void Fold::validate_on_program_cache_hit(const operation_attributes_t& op_attr, 
 
 Fold::spec_return_value_t Fold::compute_output_specs(
     const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
+    // launch calls compute_output_specs before validate; unguarded input_shape / (stride_h * stride_w) SIGFPEs.
+    TT_FATAL(
+        op_attr.stride_h > 0 && op_attr.stride_w > 0,
+        "Fold: stride_h ({}) and stride_w ({}) must be > 0.",
+        op_attr.stride_h,
+        op_attr.stride_w);
     auto input_tensor = tensors.input_tensor;
     const ttnn::Shape& input_shape = input_tensor.logical_shape();
-    auto input_dtype = input_tensor.dtype();
-
-    tt::tt_metal::DataType output_dtype =
-        (input_dtype == tt::tt_metal::DataType::FLOAT32 || input_dtype == tt::tt_metal::DataType::UINT16)
-            ? input_dtype
-            : tt::tt_metal::DataType::BFLOAT16;
+    const tt::tt_metal::DataType output_dtype = fold_output_dtype(input_tensor.dtype());
 
     // we concatenate (stride_h sticks in H-dim) * (stride_w in W-dim) into 1 stick along C-dim
     ttnn::Shape output_shape(
@@ -77,18 +101,14 @@ Fold::spec_return_value_t Fold::compute_output_specs(
             tt::tt_metal::TensorLayout(
                 output_dtype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR), mem_config))};
     }
-    // Interleaved tensors (DRAM or L1)
+    // Interleaved DRAM keeps the folded 4D shape (both TILE and RM factories land RM).
     ttnn::Shape output_logical_shape = output_shape;
     if (input_tensor.memory_config().is_dram()) {
-        // DRAM path preserves 4D shape; for tiled inputs the caller reshapes afterward
-        output_logical_shape = ttnn::Shape({input_shape[0], input_shape[1], input_shape[2], input_shape[3]});
-        if (input_tensor.layout() == Layout::ROW_MAJOR) {
-            output_logical_shape = ttnn::Shape(
-                {input_shape[0],
-                 input_shape[1] / op_attr.stride_h,
-                 input_shape[2] / op_attr.stride_w,
-                 input_shape[3] * op_attr.stride_h * op_attr.stride_w});
-        }
+        output_logical_shape = ttnn::Shape(
+            {input_shape[0],
+             input_shape[1] / op_attr.stride_h,
+             input_shape[2] / op_attr.stride_w,
+             input_shape[3] * op_attr.stride_h * op_attr.stride_w});
     }
     return {tt::tt_metal::TensorSpec(
         output_logical_shape,
