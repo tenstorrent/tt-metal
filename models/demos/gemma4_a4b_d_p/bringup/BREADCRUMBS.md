@@ -243,3 +243,11 @@ Append-only log, one section per task attempt: what was done, decisions and why,
   `DEVICE_STEPS["sliding"]`, so `HybridDeviceModel` (ladder) swaps it too.
 - Gate PASS: pcc_ffn_norm_L00 0.999996, rel L2 0.00294, per-token norm ratio [0.9953, 1.0015]. bf16 gamma is fine for w up to 22.9.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_ffn_norm.py`
+
+## S.sliding.05 test (run1, attempt 1): swap attn_norm .. ffn_norm into the sliding block
+- Replaced the one-line template body with swap 4's checks, SWAPPED extended with `ffn_norm`. No new check was needed: ffn_norm is a `norm` step, so the existing
+  check against the CPU norm on the device step's own inputs already covers it (rel L2 <= 0.03, ratio in [0.97, 1.03]; catches `1 + w` and sum-instead-of-mean).
+  The gated metric stays `pcc_swap_out` >= 0.98.
+- Verified: BRINGUP_IMPL=reference PASS (pcc 0.999996, block rel 0.0027); stub FAIL (every check). Device gate PASS: pcc_swap_out 0.999969, block out rel
+  0.0079 / 0.0064 (same as swap 4), ffn_norm 0.0060 vs golden (iso 0.0019, ratio [0.9971, 1.0013]).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_05_ffn_norm.py`
