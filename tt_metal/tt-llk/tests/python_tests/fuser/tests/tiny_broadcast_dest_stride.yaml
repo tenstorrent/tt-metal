@@ -1,0 +1,21 @@
+operands:
+  - {name: a, dims: [16, 16], tile_dims: [16, 16], format: Float16_b, const_value: 3}
+  - {name: b, dims: [16, 16], tile_dims: [16, 16], format: Float16_b, const_value: 0}
+  - {name: out, dims: [16, 16], tile_dims: [16, 16], format: Float16_b}
+
+operations:
+  - dest_sync: SyncFull
+    math:
+      - type: Fpu
+        operation: Elwadd
+        unpacker: UnpackerAB
+        broadcast_type: SCALAR
+        in0: a
+        in1: b
+        block_size: [16, 16]
+        indexes: {in0: 0, in1: 0, dest: 1}
+    pack:
+      - output: out
+        packer: Packer
+        block_size: [16, 16]
+        indexes: {dest: 1, out: 0}
