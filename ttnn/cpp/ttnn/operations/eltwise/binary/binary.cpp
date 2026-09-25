@@ -5,6 +5,8 @@
 
 #include "binary.hpp"
 #include <cmath>
+#include <bit>
+#include <variant>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 
@@ -1175,7 +1177,31 @@ Tensor where_operation_with_scalar(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> condition_activations) {
+#if defined(TT_POLY_LLK_DISABLE)
+    TT_FATAL(condition_activations.empty(), "Disabled build requires the original public backward composition");
+#endif
+    if (!condition_activations.empty()) {
+        const auto* scalar = std::get_if<float>(&scalar_value);
+        TT_FATAL(
+            binary_op_type == BinaryOpType::WHERE_TTS && condition_activations.size() == 1 && scalar != nullptr &&
+                std::bit_cast<uint32_t>(*scalar) == 0 && condition.device() == true_false_tensor.device() &&
+                (condition.device()->arch() == tt::ARCH::BLACKHOLE ||
+                 condition.device()->arch() == tt::ARCH::WORMHOLE_B0) &&
+                condition.dtype() == DataType::BFLOAT16 && true_false_tensor.dtype() == DataType::BFLOAT16 &&
+                condition.layout() == Layout::TILE && true_false_tensor.layout() == Layout::TILE &&
+                !condition.is_sharded() && !true_false_tensor.is_sharded() &&
+                condition.logical_shape() == true_false_tensor.logical_shape() &&
+                condition.padded_shape() == true_false_tensor.padded_shape() &&
+                (!memory_config.has_value() || !memory_config->is_sharded()) &&
+                (!optional_output_tensor.has_value() ||
+                 (optional_output_tensor->dtype() == DataType::BFLOAT16 &&
+                  optional_output_tensor->layout() == Layout::TILE && !optional_output_tensor->is_sharded() &&
+                  optional_output_tensor->logical_shape() == condition.logical_shape() &&
+                  optional_output_tensor->padded_shape() == condition.padded_shape())),
+            "Condition preprocessing requires one unscaled BF16 TTS chain, +zero and equal interleaved tiled shapes");
+    }
     constexpr ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
     return ttnn::prim::binary_ng(
         condition,
@@ -1184,11 +1210,11 @@ Tensor where_operation_with_scalar(
         std::nullopt,
         memory_config,
         optional_output_tensor,
-        false,         // fast_and_approximate_mode
-        none,          // lhs_activations
-        none,          // rhs_activations
-        none,          // post_activations
-        scalar_value,  // scalar
+        false,                  // fast_and_approximate_mode
+        condition_activations,  // lhs_activations
+        none,                   // rhs_activations
+        none,                   // post_activations
+        scalar_value,           // scalar
         sub_core_grids,
         sub_device_id);
 }
@@ -1200,7 +1226,8 @@ template Tensor where_operation_with_scalar<BinaryOpType::WHERE_TST>(
     const std::optional<MemoryConfig>&,
     const std::optional<Tensor>&,
     const std::optional<CoreRangeSet>&,
-    const std::optional<tt::tt_metal::SubDeviceId>&);
+    const std::optional<tt::tt_metal::SubDeviceId>&,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>);
 template Tensor where_operation_with_scalar<BinaryOpType::WHERE_TTS>(
     const Tensor&,
     const Tensor&,
@@ -1208,7 +1235,8 @@ template Tensor where_operation_with_scalar<BinaryOpType::WHERE_TTS>(
     const std::optional<MemoryConfig>&,
     const std::optional<Tensor>&,
     const std::optional<CoreRangeSet>&,
-    const std::optional<tt::tt_metal::SubDeviceId>&);
+    const std::optional<tt::tt_metal::SubDeviceId>&,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>);
 
 }  // namespace ttnn::operations::binary
 

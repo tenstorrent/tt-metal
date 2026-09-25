@@ -123,6 +123,24 @@ std::vector<Tensor> hardtanh_bw(
     float min,
     float max,
     const std::optional<MemoryConfig>& output_mem_config) {
+#if !defined(TT_POLY_LLK_DISABLE)
+    // Selected factor identities: 8a2817dac01491af063a77516f3c855f67050c5e910e5dfd638f4a778d5334d8,
+    // 7e406481d4928e01dfca1e9be733d13546d207f64dd18b30a48836318ec43994
+    if (std::bit_cast<uint32_t>(min) == 0xbf800000u && std::bit_cast<uint32_t>(max) == 0x3f800000u &&
+        input.storage_type() == StorageType::DEVICE && grad.storage_type() == StorageType::DEVICE &&
+        input.device() == grad.device() &&
+        (input.device()->arch() == tt::ARCH::BLACKHOLE || input.device()->arch() == tt::ARCH::WORMHOLE_B0) &&
+        input.dtype() == DataType::BFLOAT16 && grad.dtype() == DataType::BFLOAT16 && input.layout() == Layout::TILE &&
+        grad.layout() == Layout::TILE && !input.is_sharded() && !grad.is_sharded() &&
+        input.logical_shape() == grad.logical_shape() && input.padded_shape() == grad.padded_shape() &&
+        (!output_mem_config.has_value() || !output_mem_config->is_sharded())) {
+        const std::vector<operations::unary::EltwiseUnaryWithParam> factor{
+            {operations::unary::UnaryOpType::TT_POLY_FACTOR_HARDTANH_BW}};
+        return {operations::binary::where_operation_with_scalar<operations::binary::BinaryOpType::WHERE_TTS>(
+            input, grad, 0.0f, output_mem_config, std::nullopt, std::nullopt, std::nullopt, factor)};
+    }
+#endif
+
     std::vector<Tensor> grad_tensor;
     Tensor grad_result = ttnn::where(
         ttnn::le(input, min, std::nullopt, output_mem_config),
@@ -751,6 +769,25 @@ std::vector<Tensor> square_bw(
 
 std::vector<Tensor> hardshrink_bw(
     const Tensor& grad, const Tensor& input_tensor, float lambd, const std::optional<MemoryConfig>& output_mem_config) {
+#if !defined(TT_POLY_LLK_DISABLE)
+    // Selected factor identities: fae8bfba199cbf8203c203e4334abffeedbbe3f6c72bc12deaf7b122e2c43a48,
+    // e125ed321915f8fd899b082c5442dd1b03e4b5f60d59baeb4737945cfe5718de
+    if (std::bit_cast<uint32_t>(lambd) == 0x3f000000u && input_tensor.storage_type() == StorageType::DEVICE &&
+        grad.storage_type() == StorageType::DEVICE && input_tensor.device() == grad.device() &&
+        (input_tensor.device()->arch() == tt::ARCH::BLACKHOLE ||
+         input_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0) &&
+        input_tensor.dtype() == DataType::BFLOAT16 && grad.dtype() == DataType::BFLOAT16 &&
+        input_tensor.layout() == Layout::TILE && grad.layout() == Layout::TILE && !input_tensor.is_sharded() &&
+        !grad.is_sharded() && input_tensor.logical_shape() == grad.logical_shape() &&
+        input_tensor.padded_shape() == grad.padded_shape() &&
+        (!output_mem_config.has_value() || !output_mem_config->is_sharded())) {
+        const std::vector<operations::unary::EltwiseUnaryWithParam> factor{
+            {operations::unary::UnaryOpType::TT_POLY_FACTOR_HARDSHRINK_BW}};
+        return {operations::binary::where_operation_with_scalar<operations::binary::BinaryOpType::WHERE_TTS>(
+            input_tensor, grad, 0.0f, output_mem_config, std::nullopt, std::nullopt, std::nullopt, factor)};
+    }
+#endif
+
     std::vector<Tensor> grad_tensor;
     Tensor hardshrink_result = ttnn::hardshrink(input_tensor, lambd, output_mem_config);
     Tensor result = where(ttnn::eqz(hardshrink_result, output_mem_config), 0.0f, grad, output_mem_config);
@@ -762,6 +799,25 @@ std::vector<Tensor> hardshrink_bw(
 //  result: torch.where(self < -lambd, grad, torch.where(self > lambd, grad, torch.tensor(0.0)))
 std::vector<Tensor> softshrink_bw(
     const Tensor& grad, const Tensor& input_tensor, float lambd, const std::optional<MemoryConfig>& output_mem_config) {
+#if !defined(TT_POLY_LLK_DISABLE)
+    // Selected factor identities: da460b67f7afae026ae6c2ca65e4022f2fa40f7109c0fc58e5b59839877cf654,
+    // d34216fb4074802152bc66f7c2bdaed9f38386a6533de3fc2f2f4cbdc0bf98dc
+    if (std::bit_cast<uint32_t>(lambd) == 0x3f000000u && input_tensor.storage_type() == StorageType::DEVICE &&
+        grad.storage_type() == StorageType::DEVICE && input_tensor.device() == grad.device() &&
+        (input_tensor.device()->arch() == tt::ARCH::BLACKHOLE ||
+         input_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0) &&
+        input_tensor.dtype() == DataType::BFLOAT16 && grad.dtype() == DataType::BFLOAT16 &&
+        input_tensor.layout() == Layout::TILE && grad.layout() == Layout::TILE && !input_tensor.is_sharded() &&
+        !grad.is_sharded() && input_tensor.logical_shape() == grad.logical_shape() &&
+        input_tensor.padded_shape() == grad.padded_shape() &&
+        (!output_mem_config.has_value() || !output_mem_config->is_sharded())) {
+        const std::vector<operations::unary::EltwiseUnaryWithParam> factor{
+            {operations::unary::UnaryOpType::TT_POLY_FACTOR_SOFTSHRINK_BW}};
+        return {operations::binary::where_operation_with_scalar<operations::binary::BinaryOpType::WHERE_TTS>(
+            input_tensor, grad, 0.0f, output_mem_config, std::nullopt, std::nullopt, std::nullopt, factor)};
+    }
+#endif
+
     std::vector<Tensor> grad_tensor;
     Tensor result = ttnn::where(
         ttnn::logical_or(

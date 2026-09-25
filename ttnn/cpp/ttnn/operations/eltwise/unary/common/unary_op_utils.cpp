@@ -23,6 +23,9 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::TT_POLY_BACKWARD_CELU_BW: return "TT_POLY_BACKWARD_CELU_BW_INCLUDE";
         case UnaryOpType::TT_POLY_BACKWARD_HARDSWISH_BW: return "TT_POLY_BACKWARD_HARDSWISH_BW_INCLUDE";
         case UnaryOpType::TT_POLY_FACTOR_HARDSIGMOID_BW: return "TT_POLY_FACTOR_HARDSIGMOID_BW_INCLUDE";
+        case UnaryOpType::TT_POLY_FACTOR_SOFTSHRINK_BW: return "TT_POLY_FACTOR_SOFTSHRINK_BW_INCLUDE";
+        case UnaryOpType::TT_POLY_FACTOR_HARDTANH_BW: return "TT_POLY_FACTOR_HARDTANH_BW_INCLUDE";
+        case UnaryOpType::TT_POLY_FACTOR_HARDSHRINK_BW: return "TT_POLY_FACTOR_HARDSHRINK_BW_INCLUDE";
         case UnaryOpType::EXP: return "SFPU_OP_EXP_INCLUDE";
         case UnaryOpType::GELU:
         case UnaryOpType::GELU_TANH: return "SFPU_OP_GELU_INCLUDE";
@@ -820,6 +823,17 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             TT_FATAL(input_dtype == DataType::BFLOAT16, "Selected factor requires BF16 input");
             return {
                 "hardsigmoid_bw_tt_poly_bf16_tile_init();", fmt::format("hardsigmoid_bw_tt_poly_bf16_tile({});", idst)};
+        case UnaryOpType::TT_POLY_FACTOR_SOFTSHRINK_BW:
+            TT_FATAL(input_dtype == DataType::BFLOAT16, "Selected factor requires BF16 input");
+            return {
+                "softshrink_bw_tt_poly_bf16_tile_init();", fmt::format("softshrink_bw_tt_poly_bf16_tile({});", idst)};
+        case UnaryOpType::TT_POLY_FACTOR_HARDTANH_BW:
+            TT_FATAL(input_dtype == DataType::BFLOAT16, "Selected factor requires BF16 input");
+            return {"hardtanh_bw_tt_poly_bf16_tile_init();", fmt::format("hardtanh_bw_tt_poly_bf16_tile({});", idst)};
+        case UnaryOpType::TT_POLY_FACTOR_HARDSHRINK_BW:
+            TT_FATAL(input_dtype == DataType::BFLOAT16, "Selected factor requires BF16 input");
+            return {
+                "hardshrink_bw_tt_poly_bf16_tile_init();", fmt::format("hardshrink_bw_tt_poly_bf16_tile({});", idst)};
         case UnaryOpType::BITWISE_NOT: return {"bitwise_not_tile_init();", fmt::format("bitwise_not_tile({});", idst)};
         case UnaryOpType::RECIP: return {"recip_tile_init<false>();", fmt::format("recip_tile<false>({});", idst)};
         case UnaryOpType::GELU: return {"gelu_tile_init();", fmt::format("gelu_tile({});", idst)};
