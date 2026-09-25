@@ -784,7 +784,6 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     // Must be >= kDoubleBufferingFactor * prefetch_packets * num_pages_per_packet for deadlock-free buffering
     // (see PREFETCH_PACKETS in ring_attention_all_gather_reader.cpp).
     const uint32_t cb_num_pages = kDoubleBufferingFactor * kPrefetchPackets * num_pages_per_packet;
-    const tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor[0].dtype());
 
     // CBs for transferring data between sender_reader and sender_writer
     uint32_t sender_forward_cb_index = tt::CB::c_in0;
@@ -793,7 +792,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         .core_ranges = sender_forward_core_ranges,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(sender_forward_cb_index),
-            .data_format = df,
+            .data_format = input_tensor[0].dtype(),
             .page_size = l1_scratch_cb_page_size_bytes,
         }}},
     });
@@ -804,7 +803,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         .core_ranges = sender_backward_core_ranges,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(sender_backward_cb_index),
-            .data_format = df,
+            .data_format = input_tensor[0].dtype(),
             .page_size = l1_scratch_cb_page_size_bytes,
         }}},
     });

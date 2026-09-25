@@ -38,10 +38,9 @@ uint32_t get_estimated_size_of_cbs(
     // bias   CB: per_core_N
     // Ignore optional intermediate CB because not needed when need to create a
     // program config.
-    tt::DataFormat in0_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_a.dtype());
-    tt::DataFormat in1_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_b.dtype());
-    uint32_t in0_single_tile_size = tt::tile_size(in0_data_format);  // use as estimate for output as well
-    uint32_t in1_single_tile_size = tt::tile_size(in1_data_format);
+    uint32_t in0_single_tile_size =
+        tt::tt_metal::tile_size(input_tensor_a.dtype());  // use as estimate for output as well
+    uint32_t in1_single_tile_size = tt::tt_metal::tile_size(input_tensor_b.dtype());
     uint32_t output_single_tile_size = in0_single_tile_size;
     uint32_t in2_block_tiles = 0;
     uint32_t in0_shard_width_in_tiles = 0;
@@ -75,8 +74,7 @@ uint32_t estimate_interm_tile_size(
         return tt::tile_size(tt::DataFormat::Float32);
     }
     uint32_t result = tt::tile_size(tt::DataFormat::Float16_b);  // packer l1 acc
-    tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_dtype);
-    uint32_t output_tile_size = tt::tile_size(output_data_format);
+    uint32_t output_tile_size = tt::tt_metal::tile_size(output_dtype);
     result = std::max(output_tile_size, result);
     return result;
 }

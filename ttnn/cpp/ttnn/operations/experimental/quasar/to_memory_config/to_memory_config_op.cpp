@@ -104,14 +104,13 @@ bool can_use_interleaved_to_sharded(
     uint32_t dst_alignment = device->allocator()->get_alignment(output_mem_config.buffer_type());
     uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
 
-    tt::DataFormat input_cb_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     tt::DataFormat output_cb_df = tt::tt_metal::datatype_to_dataformat_converter(resolved_dtype);
 
     uint32_t input_unit_size;
     uint32_t output_unit_size;
     uint32_t num_units_per_shard;
     if (input_tensor.layout() == Layout::TILE) {
-        input_unit_size = tt::tile_size(input_cb_df);
+        input_unit_size = tt::tt_metal::tile_size(input_tensor.dtype());
         output_unit_size = tt::tile_size(output_cb_df);
         num_units_per_shard = (shard_spec.shape[0] / input_tensor.tensor_spec().tile().get_height()) *
                               (shard_spec.shape[1] / input_tensor.tensor_spec().tile().get_width());

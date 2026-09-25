@@ -95,7 +95,6 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
     uint32_t stats_page_size;
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    tt::DataFormat stats_data_format = tt::tt_metal::datatype_to_dataformat_converter(stats.value().dtype());
     tt::DataFormat residual_data_format = in_data_format;
     if (b) {
         residual_data_format = tt::tt_metal::datatype_to_dataformat_converter(b.value().dtype());
@@ -106,7 +105,7 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
         output_page_size = output.buffer()->page_size();
     }
     if (stats.value().layout() == Layout::TILE) {
-        stats_page_size = stats.value().tensor_spec().tile().get_tile_size(stats_data_format);
+        stats_page_size = stats.value().tensor_spec().tile().get_tile_size(stats.value().dtype());
     } else {
         stats_page_size = stats.value().buffer()->page_size();
     }
@@ -182,7 +181,7 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
     uint32_t residual_single_tile_size = tt::tile_size(residual_data_format);
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
     uint32_t out_single_tile_size = tt::tile_size(out_data_format);
-    uint32_t stats_single_tile_size = tt::tile_size(stats_data_format);
+    uint32_t stats_single_tile_size = tt::tt_metal::tile_size(stats.value().dtype());
     uint32_t gamma_single_tile_size = tt::tile_size(gamma_cb_data_format);
     uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
 
@@ -451,7 +450,7 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
     // out
     uint32_t cb_to_allgather_writer = tt::CBIndex::c_7;
     tt::tt_metal::CircularBufferConfig cb_to_allgather_config =
-        tt::tt_metal::CircularBufferConfig(stats_single_tile_size, {{cb_to_allgather_writer, stats_data_format}})
+        tt::tt_metal::CircularBufferConfig(stats_single_tile_size, {{cb_to_allgather_writer, stats.value().dtype()}})
             .set_page_size(cb_to_allgather_writer, stats_single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_to_allgather_config);
 

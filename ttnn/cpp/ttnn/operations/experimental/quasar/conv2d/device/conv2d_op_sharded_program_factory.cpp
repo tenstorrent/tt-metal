@@ -646,8 +646,6 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     const bool skip_activation_mcast = skip_mcast.skip_activation_mcast;
     const bool skip_weights_mcast = skip_mcast.skip_weights_mcast;
 
-    const tt::DataFormat tilized_act_df = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-
     const auto& fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
     const auto& packer_l1_acc = compute_kernel_config.packer_l1_acc;
     auto& dst_full_sync_en = compute_kernel_config.dst_full_sync_en;
@@ -1159,7 +1157,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     const bool needs_act_block_zero_out =
         act_block_w_extra_align_scalars % 16 != 0 && tt::tt_metal::is_block_float(output.dtype());
 
-    const uint32_t tilized_act_tile_size = tt::tile_size(tilized_act_df);
+    const uint32_t tilized_act_tile_size = tt::tt_metal::tile_size(output.dtype());
 
     const bool packer_l1_acc_en = ttnn::prim::determine_packer_l1_acc(packer_l1_acc, has_bias, in0_num_blocks_w);
     const uint32_t batch = sliding_window_config.get_output_shape()[0];

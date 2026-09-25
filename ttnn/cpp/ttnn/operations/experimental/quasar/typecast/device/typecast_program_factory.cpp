@@ -26,8 +26,7 @@ tt::tt_metal::ProgramDescriptor TypecastProgramFactory::create_descriptor(
 
     tt::tt_metal::ProgramDescriptor desc;
 
-    const tt::DataFormat cb_data_format_input = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    const uint32_t single_tile_size_input = tt::tile_size(cb_data_format_input);
+    const uint32_t single_tile_size_input = tt::tt_metal::tile_size(input.dtype());
     const tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     const uint32_t single_tile_size_output = tt::tile_size(cb_data_format_output);
 
@@ -57,7 +56,7 @@ tt::tt_metal::ProgramDescriptor TypecastProgramFactory::create_descriptor(
         .core_ranges = all_cores,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = src0_cb_index,
-            .data_format = cb_data_format_input,
+            .data_format = input.dtype(),
             .page_size = input_page_size,
         }}},
     });
@@ -208,8 +207,7 @@ tt::tt_metal::ProgramDescriptor TypecastSubgridProgramFactory::create_descriptor
 
     tt::tt_metal::ProgramDescriptor desc;
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    uint32_t single_tile_size = tt::tt_metal::tile_size(input.dtype());
     tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t single_tile_size_output = tt::tile_size(cb_data_format_output);
 
@@ -240,7 +238,7 @@ tt::tt_metal::ProgramDescriptor TypecastSubgridProgramFactory::create_descriptor
         .core_ranges = all_cores,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = src0_cb_index,
-            .data_format = cb_data_format,
+            .data_format = input.dtype(),
             .page_size = single_tile_size,
         }}},
     });

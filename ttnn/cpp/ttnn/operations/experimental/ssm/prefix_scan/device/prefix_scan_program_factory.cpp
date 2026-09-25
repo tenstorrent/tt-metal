@@ -32,8 +32,7 @@ tt::tt_metal::ProgramDescriptor PrefixScanProgramFactory::create_descriptor(
     TT_FATAL(h_buffer != nullptr, "Input h_prev buffer should be allocated on device");
     TT_FATAL(output_buffer != nullptr, "Output buffer should be allocated on device");
 
-    const tt::DataFormat input_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    const uint32_t input_tile_size = tt::tile_size(input_format);
+    const uint32_t input_tile_size = tt::tt_metal::tile_size(a.dtype());
 
     const tt::DataFormat intermediary_format = tt::DataFormat::Float16_b;
     const uint32_t intermediary_row_size = tt::datum_size(intermediary_format) * TILE_WIDTH;
@@ -115,7 +114,7 @@ tt::tt_metal::ProgramDescriptor PrefixScanProgramFactory::create_descriptor(
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(cb_a_in_id),
-            .data_format = input_format,
+            .data_format = a.dtype(),
             .page_size = input_tile_size}}}});
 
     desc.cbs.push_back(CBDescriptor{
@@ -188,9 +187,7 @@ tt::tt_metal::ProgramDescriptor PrefixScanProgramFactory::create_descriptor(
         .total_size = total_tiles * input_tile_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(cb_out_id),
-            .data_format = input_format,
-            .page_size = input_tile_size}}},
+            .buffer_index = static_cast<uint8_t>(cb_out_id), .data_format = a.dtype(), .page_size = input_tile_size}}},
         .buffer = output_buffer});
 
     // Build kernels with per-core runtime args.

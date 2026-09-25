@@ -60,9 +60,6 @@ ProgramDescriptor UpsampleBilinearProgramFactory::create_descriptor(
     const Shape& output_shape = output.padded_shape();
     const uint32_t out_w = output_shape[2];
 
-    const tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(input.dtype());
-    const tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-
     TT_FATAL(in_channels % 32 == 0, "input channels should be divisible by 32");
     // NOTE: input is assumed to have channels last format: {N, H, W, C}, {N, 1, H * W, C}, {1, 1, N * H * W, C}
     // NOTE: Bfp8_b/TILE is not yet supported
@@ -107,7 +104,7 @@ ProgramDescriptor UpsampleBilinearProgramFactory::create_descriptor(
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(halo_cb_id),
-            .data_format = input_cb_data_format,
+            .data_format = input.dtype(),
             .page_size = in_cb_pagesize,
         }}},
         .buffer = halo_in.buffer(),
@@ -122,7 +119,7 @@ ProgramDescriptor UpsampleBilinearProgramFactory::create_descriptor(
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(tilize_reduce_cb_0),
-            .data_format = input_cb_data_format,
+            .data_format = input.dtype(),
             .page_size = in1_cb_pagesize,
             .face_geometry = FaceGeometry{.face_r_dim = 4, .num_faces = 2},
         }}},
@@ -135,14 +132,14 @@ ProgramDescriptor UpsampleBilinearProgramFactory::create_descriptor(
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(tilize_reduce_cb_1),
-            .data_format = input_cb_data_format,
+            .data_format = input.dtype(),
             .page_size = in_cb_pagesize,
             .face_geometry = FaceGeometry{.face_r_dim = 4, .num_faces = 2},
         }}},
     });
 
     // scalar intermediate CBs
-    const uint32_t in_scalar_cb_pagesize = tt::tile_size(input_cb_data_format);
+    const uint32_t in_scalar_cb_pagesize = tt::tt_metal::tile_size(input.dtype());
     const uint32_t in_scalar_cb_npages = 1 * buffering_factor;
 
     const uint32_t in_scalar_cb_id1 = next_cb_index++;
@@ -151,7 +148,7 @@ ProgramDescriptor UpsampleBilinearProgramFactory::create_descriptor(
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(in_scalar_cb_id1),
-            .data_format = input_cb_data_format,
+            .data_format = input.dtype(),
             .page_size = in_scalar_cb_pagesize,
         }}},
     });
@@ -162,7 +159,7 @@ ProgramDescriptor UpsampleBilinearProgramFactory::create_descriptor(
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(in_scalar_cb_id2),
-            .data_format = input_cb_data_format,
+            .data_format = input.dtype(),
             .page_size = in_scalar_cb_pagesize,
         }}},
     });
@@ -177,7 +174,7 @@ ProgramDescriptor UpsampleBilinearProgramFactory::create_descriptor(
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(out_cb_id),
-            .data_format = output_cb_data_format,
+            .data_format = output.dtype(),
             .page_size = out_cb_pagesize,
             .face_geometry = FaceGeometry{.face_r_dim = 1, .num_faces = 2},
         }}},

@@ -225,43 +225,44 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
     // Create buffers
     const uint32_t aligned_input_page_size_bytes = tt::round_up(input_page_size_bytes, l1_alignment);
-    tt::DataFormat input_dataformat = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_l.dtype());
 
     constexpr auto compute_cb_l = tt::CBIndex::c_0;
     tt::tt_metal::CircularBufferConfig cb_compute_l_config =
         tt::tt_metal::CircularBufferConfig(
-            1 * input_num_tiles * aligned_input_page_size_bytes, {{compute_cb_l, input_dataformat}})
+            1 * input_num_tiles * aligned_input_page_size_bytes, {{compute_cb_l, input_tensor_l.dtype()}})
             .set_page_size(compute_cb_l, aligned_input_page_size_bytes)
             .set_tile_dims(compute_cb_l, stats_tile);
 
     constexpr auto compute_cb_s = tt::CBIndex::c_1;
     tt::tt_metal::CircularBufferConfig cb_compute_s_config =
-        tt::tt_metal::CircularBufferConfig(1 * aligned_input_page_size_bytes, {{compute_cb_s, input_dataformat}})
+        tt::tt_metal::CircularBufferConfig(1 * aligned_input_page_size_bytes, {{compute_cb_s, input_tensor_l.dtype()}})
             .set_page_size(compute_cb_s, aligned_input_page_size_bytes)
             .set_tile_dims(compute_cb_s, stats_tile);
 
     constexpr auto compute_cb_m = tt::CBIndex::c_2;
     tt::tt_metal::CircularBufferConfig cb_compute_m_config =
-        tt::tt_metal::CircularBufferConfig(1 * aligned_input_page_size_bytes, {{compute_cb_m, input_dataformat}})
+        tt::tt_metal::CircularBufferConfig(1 * aligned_input_page_size_bytes, {{compute_cb_m, input_tensor_l.dtype()}})
             .set_page_size(compute_cb_m, aligned_input_page_size_bytes)
             .set_tile_dims(compute_cb_m, stats_tile);
 
     constexpr auto compute_cb_2_l = tt::CBIndex::c_3;
     tt::tt_metal::CircularBufferConfig cb_compute_2_l_config =
         tt::tt_metal::CircularBufferConfig(
-            1 * input_num_tiles * aligned_input_page_size_bytes, {{compute_cb_2_l, input_dataformat}})
+            1 * input_num_tiles * aligned_input_page_size_bytes, {{compute_cb_2_l, input_tensor_l.dtype()}})
             .set_page_size(compute_cb_2_l, aligned_input_page_size_bytes)
             .set_tile_dims(compute_cb_2_l, stats_tile);
 
     constexpr auto compute_cb_2_s = tt::CBIndex::c_4;
     tt::tt_metal::CircularBufferConfig cb_compute_2_s_config =
-        tt::tt_metal::CircularBufferConfig(1 * aligned_input_page_size_bytes, {{compute_cb_2_s, input_dataformat}})
+        tt::tt_metal::CircularBufferConfig(
+            1 * aligned_input_page_size_bytes, {{compute_cb_2_s, input_tensor_l.dtype()}})
             .set_page_size(compute_cb_2_s, aligned_input_page_size_bytes)
             .set_tile_dims(compute_cb_2_s, stats_tile);
 
     constexpr auto compute_cb_2_m = tt::CBIndex::c_5;
     tt::tt_metal::CircularBufferConfig cb_compute_2_m_config =
-        tt::tt_metal::CircularBufferConfig(1 * aligned_input_page_size_bytes, {{compute_cb_2_m, input_dataformat}})
+        tt::tt_metal::CircularBufferConfig(
+            1 * aligned_input_page_size_bytes, {{compute_cb_2_m, input_tensor_l.dtype()}})
             .set_page_size(compute_cb_2_m, aligned_input_page_size_bytes)
             .set_tile_dims(compute_cb_2_m, stats_tile);
 
@@ -292,7 +293,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
     constexpr auto packet_cb_id = tt::CBIndex::c_7;
     tt::tt_metal::CircularBufferConfig cb_packet_config =
-        tt::tt_metal::CircularBufferConfig(2 * total_pkt_size, {{packet_cb_id, input_dataformat}})
+        tt::tt_metal::CircularBufferConfig(2 * total_pkt_size, {{packet_cb_id, input_tensor_l.dtype()}})
             .set_page_size(packet_cb_id, total_pkt_size)
             .set_tile_dims(packet_cb_id, stats_tile);
 
@@ -300,40 +301,42 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     constexpr auto intermediate_cb_l = tt::CBIndex::c_8;
     const uint32_t intermediate_cb_l_size_bytes = input_num_tiles * aligned_input_page_size_bytes;
     tt::tt_metal::CircularBufferConfig cb_intermediate_l_config =
-        tt::tt_metal::CircularBufferConfig(intermediate_cb_l_size_bytes, {{intermediate_cb_l, input_dataformat}})
+        tt::tt_metal::CircularBufferConfig(intermediate_cb_l_size_bytes, {{intermediate_cb_l, input_tensor_l.dtype()}})
             .set_page_size(intermediate_cb_l, aligned_input_page_size_bytes)
             .set_tile_dims(intermediate_cb_l, stats_tile);
 
     constexpr auto intermediate_cb_s = tt::CBIndex::c_9;
     const uint32_t intermediate_cb_s_size_bytes = 1 * aligned_input_page_size_bytes;
     tt::tt_metal::CircularBufferConfig cb_intermediate_s_config =
-        tt::tt_metal::CircularBufferConfig(intermediate_cb_s_size_bytes, {{intermediate_cb_s, input_dataformat}})
+        tt::tt_metal::CircularBufferConfig(intermediate_cb_s_size_bytes, {{intermediate_cb_s, input_tensor_l.dtype()}})
             .set_page_size(intermediate_cb_s, aligned_input_page_size_bytes)
             .set_tile_dims(intermediate_cb_s, stats_tile);
 
     constexpr auto intermediate_cb_m = tt::CBIndex::c_10;
     const uint32_t intermediate_cb_m_size_bytes = 1 * aligned_input_page_size_bytes;
     tt::tt_metal::CircularBufferConfig cb_intermediate_m_config =
-        tt::tt_metal::CircularBufferConfig(intermediate_cb_m_size_bytes, {{intermediate_cb_m, input_dataformat}})
+        tt::tt_metal::CircularBufferConfig(intermediate_cb_m_size_bytes, {{intermediate_cb_m, input_tensor_l.dtype()}})
             .set_page_size(intermediate_cb_m, aligned_input_page_size_bytes)
             .set_tile_dims(intermediate_cb_m, stats_tile);
 
     constexpr auto compute_out_cb_l = tt::CBIndex::c_11;
     tt::tt_metal::CircularBufferConfig cb_compute_out_l_config =
         tt::tt_metal::CircularBufferConfig(
-            input_num_tiles * aligned_input_page_size_bytes, {{compute_out_cb_l, input_dataformat}})
+            input_num_tiles * aligned_input_page_size_bytes, {{compute_out_cb_l, input_tensor_l.dtype()}})
             .set_page_size(compute_out_cb_l, aligned_input_page_size_bytes)
             .set_tile_dims(compute_out_cb_l, stats_tile);
 
     constexpr auto compute_out_cb_s = tt::CBIndex::c_12;
     tt::tt_metal::CircularBufferConfig cb_compute_out_s_config =
-        tt::tt_metal::CircularBufferConfig(1 * aligned_input_page_size_bytes, {{compute_out_cb_s, input_dataformat}})
+        tt::tt_metal::CircularBufferConfig(
+            1 * aligned_input_page_size_bytes, {{compute_out_cb_s, input_tensor_l.dtype()}})
             .set_page_size(compute_out_cb_s, aligned_input_page_size_bytes)
             .set_tile_dims(compute_out_cb_s, stats_tile);
 
     constexpr auto compute_out_cb_m = tt::CBIndex::c_13;
     tt::tt_metal::CircularBufferConfig cb_compute_out_m_config =
-        tt::tt_metal::CircularBufferConfig(1 * aligned_input_page_size_bytes, {{compute_out_cb_m, input_dataformat}})
+        tt::tt_metal::CircularBufferConfig(
+            1 * aligned_input_page_size_bytes, {{compute_out_cb_m, input_tensor_l.dtype()}})
             .set_page_size(compute_out_cb_m, aligned_input_page_size_bytes)
             .set_tile_dims(compute_out_cb_m, stats_tile);
 
@@ -341,21 +344,21 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     constexpr auto cb_exp_num_pages = 1;
     tt::tt_metal::CircularBufferConfig cb_exp_max_diff_2_config =
         tt::tt_metal::CircularBufferConfig(
-            cb_exp_num_pages * aligned_input_page_size_bytes, {{cb_exp_max_diff_2, input_dataformat}})
+            cb_exp_num_pages * aligned_input_page_size_bytes, {{cb_exp_max_diff_2, input_tensor_l.dtype()}})
             .set_page_size(cb_exp_max_diff_2, aligned_input_page_size_bytes)
             .set_tile_dims(cb_exp_max_diff_2, stats_tile);
 
     constexpr auto cb_exp_max_diff = tt::CBIndex::c_15;
     tt::tt_metal::CircularBufferConfig cb_exp_max_diff_config =
         tt::tt_metal::CircularBufferConfig(
-            cb_exp_num_pages * aligned_input_page_size_bytes, {{cb_exp_max_diff, input_dataformat}})
+            cb_exp_num_pages * aligned_input_page_size_bytes, {{cb_exp_max_diff, input_tensor_l.dtype()}})
             .set_page_size(cb_exp_max_diff, aligned_input_page_size_bytes)
             .set_tile_dims(cb_exp_max_diff, stats_tile);
 
     constexpr auto cb_m_temp = tt::CBIndex::c_16;
     tt::tt_metal::CircularBufferConfig cb_m_temp_config =
         tt::tt_metal::CircularBufferConfig(
-            cb_exp_num_pages * aligned_input_page_size_bytes, {{cb_m_temp, input_dataformat}})
+            cb_exp_num_pages * aligned_input_page_size_bytes, {{cb_m_temp, input_tensor_l.dtype()}})
             .set_page_size(cb_m_temp, aligned_input_page_size_bytes)
             .set_tile_dims(cb_m_temp, stats_tile);
 
@@ -369,42 +372,42 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
     constexpr auto packet_cb_id_2 = tt::CBIndex::c_18;
     tt::tt_metal::CircularBufferConfig cb_packet_config_2 =
-        tt::tt_metal::CircularBufferConfig(total_pkt_size, {{packet_cb_id_2, input_dataformat}})
+        tt::tt_metal::CircularBufferConfig(total_pkt_size, {{packet_cb_id_2, input_tensor_l.dtype()}})
             .set_page_size(packet_cb_id_2, total_pkt_size)
             .set_tile_dims(packet_cb_id_2, stats_tile);
 
     constexpr auto cb_s_temp = tt::CBIndex::c_19;
     tt::tt_metal::CircularBufferConfig cb_s_temp_config =
         tt::tt_metal::CircularBufferConfig(
-            cb_exp_num_pages * aligned_input_page_size_bytes, {{cb_s_temp, input_dataformat}})
+            cb_exp_num_pages * aligned_input_page_size_bytes, {{cb_s_temp, input_tensor_l.dtype()}})
             .set_page_size(cb_s_temp, aligned_input_page_size_bytes)
             .set_tile_dims(cb_s_temp, stats_tile);
 
     constexpr auto cb_s1_temp = tt::CBIndex::c_20;
     tt::tt_metal::CircularBufferConfig cb_s1_temp_config =
         tt::tt_metal::CircularBufferConfig(
-            cb_exp_num_pages * aligned_input_page_size_bytes, {{cb_s1_temp, input_dataformat}})
+            cb_exp_num_pages * aligned_input_page_size_bytes, {{cb_s1_temp, input_tensor_l.dtype()}})
             .set_page_size(cb_s1_temp, aligned_input_page_size_bytes)
             .set_tile_dims(cb_s1_temp, stats_tile);
 
     constexpr auto cb_s2_temp = tt::CBIndex::c_21;
     tt::tt_metal::CircularBufferConfig cb_s2_temp_config =
         tt::tt_metal::CircularBufferConfig(
-            cb_exp_num_pages * aligned_input_page_size_bytes, {{cb_s2_temp, input_dataformat}})
+            cb_exp_num_pages * aligned_input_page_size_bytes, {{cb_s2_temp, input_tensor_l.dtype()}})
             .set_page_size(cb_s2_temp, aligned_input_page_size_bytes)
             .set_tile_dims(cb_s2_temp, stats_tile);
 
     constexpr auto cb_l1_temp = tt::CBIndex::c_22;
     tt::tt_metal::CircularBufferConfig cb_l1_temp_config =
         tt::tt_metal::CircularBufferConfig(
-            1 * input_num_tiles * aligned_input_page_size_bytes, {{cb_l1_temp, input_dataformat}})
+            1 * input_num_tiles * aligned_input_page_size_bytes, {{cb_l1_temp, input_tensor_l.dtype()}})
             .set_page_size(cb_l1_temp, aligned_input_page_size_bytes)
             .set_tile_dims(cb_l1_temp, stats_tile);
 
     constexpr auto cb_l2_temp = tt::CBIndex::c_23;
     tt::tt_metal::CircularBufferConfig cb_l2_temp_config =
         tt::tt_metal::CircularBufferConfig(
-            1 * input_num_tiles * aligned_input_page_size_bytes, {{cb_l2_temp, input_dataformat}})
+            1 * input_num_tiles * aligned_input_page_size_bytes, {{cb_l2_temp, input_tensor_l.dtype()}})
             .set_page_size(cb_l2_temp, aligned_input_page_size_bytes)
             .set_tile_dims(cb_l2_temp, stats_tile);
 

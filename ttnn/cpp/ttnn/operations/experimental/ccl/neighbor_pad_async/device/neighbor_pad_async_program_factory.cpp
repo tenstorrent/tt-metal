@@ -294,12 +294,12 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
 
     uint32_t num_sticks_to_write_per_packet = 1;
     uint32_t cb_num_pages = 2 * num_sticks_to_write_per_packet;  // double buffering
-    tt::DataFormat df = datatype_to_dataformat_converter(tensor_args.input_tensor.dtype());
 
     // CBs for transferring data between reader and writer
     uint32_t sender_cb_index = tt::CB::c_in0;
     CircularBufferConfig cb_sender_config =
-        CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{sender_cb_index, df}})
+        CircularBufferConfig(
+            cb_num_pages * l1_scratch_cb_page_size_bytes, {{sender_cb_index, tensor_args.input_tensor.dtype()}})
             .set_page_size(sender_cb_index, l1_scratch_cb_page_size_bytes);
     CreateCircularBuffer(program, worker_core_ranges, cb_sender_config);
 
@@ -319,7 +319,8 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
         uint32_t recv_buf_size = recv_total_sticks * page_size;
         if (recv_buf_size > 0) {
             CircularBufferConfig recv_cb_config =
-                CircularBufferConfig(recv_buf_size, {{recv_cb_index, df}}).set_page_size(recv_cb_index, page_size);
+                CircularBufferConfig(recv_buf_size, {{recv_cb_index, tensor_args.input_tensor.dtype()}})
+                    .set_page_size(recv_cb_index, page_size);
             CreateCircularBuffer(program, worker_core_ranges, recv_cb_config);
         }
     }

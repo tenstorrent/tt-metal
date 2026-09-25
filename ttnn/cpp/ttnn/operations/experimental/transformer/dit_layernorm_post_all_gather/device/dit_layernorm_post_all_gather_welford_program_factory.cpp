@@ -57,7 +57,6 @@ ProgramDescriptor PostAllGatherWelfordProgramFactory::create_descriptor(
 
     tt::DataFormat in_data_format = datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat stats_data_format = datatype_to_dataformat_converter(stats.dtype());
-    tt::DataFormat out_data_format = datatype_to_dataformat_converter(output.dtype());
     tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat gamma_cb_data_format =
         gamma.has_value() ? datatype_to_dataformat_converter(gamma.value().dtype()) : tt::DataFormat::Float16_b;
@@ -66,7 +65,7 @@ ProgramDescriptor PostAllGatherWelfordProgramFactory::create_descriptor(
     uint32_t in_single_tile_size = tt::tile_size(in_data_format);
     uint32_t stats_single_tile_size = tt::tile_size(stats_data_format);
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
-    uint32_t out_single_tile_size = tt::tile_size(out_data_format);
+    uint32_t out_single_tile_size = tt::tt_metal::tile_size(output.dtype());
     uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
     uint32_t gamma_single_tile_size = tt::tile_size(gamma_cb_data_format);
     uint32_t beta_single_tile_size = tt::tile_size(beta_cb_data_format);
@@ -364,7 +363,7 @@ ProgramDescriptor PostAllGatherWelfordProgramFactory::create_descriptor(
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_8),
-            .data_format = out_data_format,
+            .data_format = output.dtype(),
             .page_size = out_single_tile_size,
         }}},
     });

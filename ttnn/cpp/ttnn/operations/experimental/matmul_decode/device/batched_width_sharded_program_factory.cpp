@@ -27,16 +27,12 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
     const auto& input_tensor_b = tensor_args.input_tensor_b;
     auto& output_tensor = tensor_return_value;
 
-    const tt::DataFormat in0_data_format = datatype_to_dataformat_converter(input_tensor_a.dtype());
-    const tt::DataFormat in1_data_format = datatype_to_dataformat_converter(input_tensor_b.dtype());
-    const tt::DataFormat out_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
-
     const auto& inputA_tile = input_tensor_a.tensor_spec().tile();
     const auto& inputB_tile = input_tensor_b.tensor_spec().tile();
     const auto& output_tile = output_tensor.tensor_spec().tile();
-    const uint32_t in0_tile_size = inputA_tile.get_tile_size(in0_data_format);
-    const uint32_t in1_tile_size = inputB_tile.get_tile_size(in1_data_format);
-    const uint32_t out_tile_size = output_tile.get_tile_size(out_data_format);
+    const uint32_t in0_tile_size = inputA_tile.get_tile_size(input_tensor_a.dtype());
+    const uint32_t in1_tile_size = inputB_tile.get_tile_size(input_tensor_b.dtype());
+    const uint32_t out_tile_size = output_tile.get_tile_size(output_tensor.dtype());
 
     const TileDescriptor in0_tile_desc{inputA_tile};
     const TileDescriptor in1_tile_desc{inputB_tile};
@@ -157,7 +153,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
         .core_ranges = all_compute_cores_with_bbox,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = in0_cb_index,
-            .data_format = in0_data_format,
+            .data_format = input_tensor_a.dtype(),
             .page_size = in0_tile_size,
             .tile = in0_tile_desc,
         }}},
@@ -168,7 +164,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
         .core_ranges = inputB_core_range_set,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = in1_cb_index,
-            .data_format = in1_data_format,
+            .data_format = input_tensor_b.dtype(),
             .page_size = in1_tile_size,
             .tile = in1_tile_desc,
         }}},
@@ -179,7 +175,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
         .core_ranges = inputB_core_range_set,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = out_cb_index,
-            .data_format = out_data_format,
+            .data_format = output_tensor.dtype(),
             .page_size = out_tile_size,
             .tile = out_tile_desc,
         }}},
@@ -189,7 +185,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
         .core_ranges = inputB_core_range_set,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = full_in0_cb_index,
-            .data_format = in0_data_format,
+            .data_format = input_tensor_a.dtype(),
             .page_size = in0_tile_size,
             .tile = in0_tile_desc,
         }}},

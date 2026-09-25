@@ -206,8 +206,6 @@ SliceWriteRMInterleavedProgramFactory::cached_program_t SliceWriteRMInterleavedP
 
     tt::tt_metal::Buffer* src0_buffer = input.buffer();
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-
     uint32_t input_row_size_bytes = input_padded_shape[-1] * input.element_size();
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
@@ -248,7 +246,7 @@ SliceWriteRMInterleavedProgramFactory::cached_program_t SliceWriteRMInterleavedP
         num_read_per_barrier = num_input_pages_pad32 / num_sticks_per_core_read;
     }
     tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(num_read_per_barrier * 2 * cb_page_size, {{src0_cb_index, cb_data_format}})
+        tt::tt_metal::CircularBufferConfig(num_read_per_barrier * 2 * cb_page_size, {{src0_cb_index, input.dtype()}})
             .set_page_size(src0_cb_index, cb_page_size);
     tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 
@@ -260,7 +258,7 @@ SliceWriteRMInterleavedProgramFactory::cached_program_t SliceWriteRMInterleavedP
         tt::tt_metal::CircularBufferConfig cb_dst0_config =
             tt::tt_metal::CircularBufferConfig(
                 num_read_per_barrier * 2 * cb_page_size,
-                {{dst0_cb_index, cb_data_format}})  // input/output data_formats should be the same
+                {{dst0_cb_index, input.dtype()}})  // input/output data_formats should be the same
                 .set_page_size(dst0_cb_index, cb_page_size);
         tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_dst0_config);
     }

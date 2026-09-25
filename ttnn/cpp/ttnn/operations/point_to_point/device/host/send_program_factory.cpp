@@ -47,13 +47,12 @@ tt::tt_metal::ProgramDescriptor send_program_factory(
     constexpr auto sender_cb_id = tt::CBIndex::c_0;
     constexpr auto cb_num_pages = 2;
     const uint32_t aligned_input_page_size_bytes = tt::round_up(input_page_size_bytes, l1_alignment);
-    tt::DataFormat input_dataformat = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = cb_num_pages * aligned_input_page_size_bytes,
         .core_ranges = all_cores,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(sender_cb_id),
-            .data_format = input_dataformat,
+            .data_format = input_tensor.dtype(),
             .page_size = aligned_input_page_size_bytes,
         }}},
     });
@@ -80,7 +79,7 @@ tt::tt_metal::ProgramDescriptor send_program_factory(
         .core_ranges = all_cores,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(packet_cb_id),
-            .data_format = input_dataformat,
+            .data_format = input_tensor.dtype(),
             .page_size = packet_size_bytes,
         }}},
     });

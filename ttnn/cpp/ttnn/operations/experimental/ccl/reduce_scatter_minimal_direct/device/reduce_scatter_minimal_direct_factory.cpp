@@ -318,14 +318,15 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     const uint32_t parity_stride_tiles = arrivals_in_cb ? half_stride_tiles : 0u;
 
     const uint32_t cb_page_size = single_tile_bytes;
-    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     for (auto [cb_id, num_pages] : std::initializer_list<std::pair<uint32_t, uint32_t>>{
              {direct_cb_send_id, 2 * tile_granularity}, {direct_cb_out_id, 2 * tile_granularity}}) {
         desc.cbs.push_back(tt::tt_metal::CBDescriptor{
             .total_size = num_pages * cb_page_size,
             .core_ranges = worker_core_range,
             .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(cb_id), .data_format = df, .page_size = cb_page_size}}},
+                .buffer_index = static_cast<uint8_t>(cb_id),
+                .data_format = input_tensor.dtype(),
+                .page_size = cb_page_size}}},
         });
     }
 
@@ -345,7 +346,9 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         .total_size = cb_reduce_pages * cb_page_size,
         .core_ranges = worker_core_range,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(direct_cb_reduce_id), .data_format = df, .page_size = cb_page_size}}},
+            .buffer_index = static_cast<uint8_t>(direct_cb_reduce_id),
+            .data_format = input_tensor.dtype(),
+            .page_size = cb_page_size}}},
         .buffer = arrivals_in_cb ? staging.buffer() : nullptr,
     });
 

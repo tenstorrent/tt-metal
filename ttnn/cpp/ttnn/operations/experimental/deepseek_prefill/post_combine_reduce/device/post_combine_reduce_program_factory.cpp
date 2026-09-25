@@ -93,11 +93,7 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
 
     auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
 
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(combine_output.dtype());
-    tt::DataFormat weight_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(weights.dtype());
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_return_value.dtype());
-
-    uint32_t tile_size = tt::tile_size(input_cb_data_format);
+    uint32_t tile_size = tt::tt_metal::tile_size(combine_output.dtype());
 
     // c_0: Stream one expert at a time through c_0 to minimize L1 footprint.
     uint32_t combine_cb_size = emb_dim_cb_tiles * tile_size;
@@ -106,7 +102,7 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
         .core_ranges = core_range_set,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_0),
-            .data_format = input_cb_data_format,
+            .data_format = combine_output.dtype(),
             .page_size = tile_size,
         }}},
     });
@@ -118,7 +114,7 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
         .core_ranges = core_range_set,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_1),
-            .data_format = weight_cb_data_format,
+            .data_format = weights.dtype(),
             .page_size = tile_size,
         }}},
     });
@@ -136,10 +132,6 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
         const auto& indices = *indices_opt;
         const auto& expert_dispatch_table = *dispatch_table_opt;
 
-        tt::DataFormat indices_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(indices.dtype());
-        tt::DataFormat dispatch_table_cb_data_format =
-            tt::tt_metal::datatype_to_dataformat_converter(expert_dispatch_table.dtype());
-
         // c_2: Dispatch table scratch — loaded once by writer, read by compute.
         dispatch_table_num_pages = get_num_pages(expert_dispatch_table);
         dispatch_table_page_size_val = get_page_size(expert_dispatch_table);
@@ -150,7 +142,7 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
             .core_ranges = core_range_set,
             .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_2),
-                .data_format = dispatch_table_cb_data_format,
+                .data_format = expert_dispatch_table.dtype(),
                 .page_size = dispatch_table_aligned_page_size,
             }}},
         });
@@ -165,7 +157,7 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
             .core_ranges = core_range_set,
             .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_3),
-                .data_format = indices_cb_data_format,
+                .data_format = indices.dtype(),
                 .page_size = indices_aligned_page_size,
             }}},
         });
@@ -178,7 +170,7 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
         .core_ranges = core_range_set,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_16),
-            .data_format = output_cb_data_format,
+            .data_format = tensor_return_value.dtype(),
             .page_size = tile_size,
         }}},
     });
@@ -190,7 +182,7 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
         .core_ranges = core_range_set,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_17),
-            .data_format = output_cb_data_format,
+            .data_format = tensor_return_value.dtype(),
             .page_size = tile_size,
         }}},
     });

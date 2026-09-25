@@ -23,8 +23,7 @@ RotateHalfProgramFactory::cached_program_t RotateHalfProgramFactory::create(
 
     Tensor& output = tensor_return_value;
 
-    const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
-    const uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    const uint32_t single_tile_size = tt::tt_metal::tile_size(input.dtype());
 
     tt::DataFormat scalar_cb_data_format = tt::DataFormat::Float16_b;
     const uint32_t scalar_single_tile_size = tt::tile_size(scalar_cb_data_format);
@@ -37,7 +36,7 @@ RotateHalfProgramFactory::cached_program_t RotateHalfProgramFactory::create(
     const uint32_t src_mul_cb_index = 0;
     const uint32_t num_input_tiles = 2;
     CircularBufferConfig cb_src_mul_config =
-        CircularBufferConfig(num_input_tiles * single_tile_size, {{src_mul_cb_index, cb_data_format}})
+        CircularBufferConfig(num_input_tiles * single_tile_size, {{src_mul_cb_index, input.dtype()}})
             .set_page_size(src_mul_cb_index, single_tile_size);
     CreateCircularBuffer(program, core_range, cb_src_mul_config);
 
@@ -45,21 +44,21 @@ RotateHalfProgramFactory::cached_program_t RotateHalfProgramFactory::create(
     const uint32_t src_scalar_cb_index = 1;
     const uint32_t num_scalar_tiles = 1;
     CircularBufferConfig cb_src1_config =
-        CircularBufferConfig(num_scalar_tiles * scalar_single_tile_size, {{src_scalar_cb_index, cb_data_format}})
+        CircularBufferConfig(num_scalar_tiles * scalar_single_tile_size, {{src_scalar_cb_index, input.dtype()}})
             .set_page_size(src_scalar_cb_index, scalar_single_tile_size);
     CreateCircularBuffer(program, core_range, cb_src1_config);
 
     // Used for half of tensor that is not multiplied
     const uint32_t src_no_mul_cb_index = 2;
     CircularBufferConfig cb_src_no_mul_config =
-        CircularBufferConfig(num_input_tiles * single_tile_size, {{src_no_mul_cb_index, cb_data_format}})
+        CircularBufferConfig(num_input_tiles * single_tile_size, {{src_no_mul_cb_index, input.dtype()}})
             .set_page_size(src_no_mul_cb_index, single_tile_size);
     CreateCircularBuffer(program, core_range, cb_src_no_mul_config);
 
     const uint32_t output_mul_cb_index = tt::CBIndex::c_16;
     const uint32_t num_output_tiles = 2;
     CircularBufferConfig cb_output_config =
-        CircularBufferConfig(num_output_tiles * single_tile_size, {{output_mul_cb_index, cb_data_format}})
+        CircularBufferConfig(num_output_tiles * single_tile_size, {{output_mul_cb_index, input.dtype()}})
             .set_page_size(output_mul_cb_index, single_tile_size);
     CreateCircularBuffer(program, core_range, cb_output_config);
     const uint32_t output_no_mul_cb_index = src_no_mul_cb_index;
