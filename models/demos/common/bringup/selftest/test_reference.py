@@ -9,51 +9,14 @@ golden (read-only) to check the reader against a real golden when it is present 
 
 
 import pytest
-import yaml
 
-from models.demos.common.bringup.core import metrics as M
 from models.demos.common.bringup.core.spec import CODE_ROOT, Spec
 from models.demos.common.bringup.reference import check_hf, check_reference, generate_golden
 from models.demos.common.bringup.reference.golden import Golden, content_hash
 from models.demos.common.bringup.reference.interface import Step, validate_graph
+from models.demos.common.bringup.selftest.conftest import got
 
 ERNIE_2K = CODE_ROOT / "generated/ernie45_d_p/golden/s4096_c2048"
-
-
-@pytest.fixture
-def fx(tmp_path, monkeypatch):
-    """A valid model spec whose hooks are the synthetic fixture; metrics go to tmp."""
-    monkeypatch.setenv(M.RESULTS_ENV, str(tmp_path / "results"))
-    monkeypatch.setenv(M.TASK_ENV, "T")
-
-    def make(**over):
-        d = {
-            "model": "fixture",
-            "hf_id": "none/fixture",
-            "model_dir": "models/demos/fixture",
-            "hooks": "models.demos.common.bringup.selftest.fixture_model",
-            "num_layers": 3,
-            "box": {"mesh": [1, 1]},
-            "target": {"seq": 256, "chunk": 64},
-            "ladder": [
-                {"name": "s256", "seq": 256, "chunk": 64, "full_dumps": True},
-                {"name": "s512", "seq": 512, "chunk": 128},
-                {"name": "last", "seq": 512, "chunk": 128, "golden": "s512", "prefix_from_golden": True},
-            ],
-            "block_types": {"blk": {"layers": "0-2"}},
-            "state": {"kind": "kv", "tensors": ["key", "value"]},
-            "paths": {"art": str(tmp_path / "art")},
-        }
-        d.update(over)
-        p = tmp_path / "spec.yaml"
-        p.write_text(yaml.safe_dump(d))
-        return str(p)
-
-    return make
-
-
-def got():
-    return {k: v["value"] for k, v in M.load("T").items()}
 
 
 def test_fixture_spec_is_valid(fx):
