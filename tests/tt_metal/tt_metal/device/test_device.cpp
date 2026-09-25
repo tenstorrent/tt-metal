@@ -41,6 +41,7 @@
 #include "math.hpp"
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <distributed/mesh_device_impl.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
 
@@ -60,13 +61,12 @@ bool l1_ping(
     const size_t& byte_size,
     const size_t& l1_byte_address,
     const CoreCoord& grid_size) {
-    auto* device = mesh_device->get_devices()[0];
     bool pass = true;
     auto inputs = generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size / sizeof(uint32_t));
     for (int y = 0; y < grid_size.y; y++) {
         for (int x = 0; x < grid_size.x; x++) {
             CoreCoord dest_core(static_cast<size_t>(x), static_cast<size_t>(y));
-            tt_metal::detail::WriteToDeviceL1(device, dest_core, l1_byte_address, inputs);
+            slow_dispatch::WriteToL1(*mesh_device, dest_core, l1_byte_address, inputs);
         }
     }
 
@@ -74,7 +74,7 @@ bool l1_ping(
         for (int x = 0; x < grid_size.x; x++) {
             CoreCoord dest_core(static_cast<size_t>(x), static_cast<size_t>(y));
             std::vector<uint32_t> dest_core_data;
-            tt_metal::detail::ReadFromDeviceL1(device, dest_core, l1_byte_address, byte_size, dest_core_data);
+            slow_dispatch::ReadFromL1(*mesh_device, dest_core, l1_byte_address, byte_size, dest_core_data);
             pass &= (dest_core_data == inputs);
             if (not pass) {
                 log_error(tt::LogTest, "Mismatch at Core: ={}", dest_core.str());
@@ -95,16 +95,15 @@ bool dram_ping(
     const size_t& byte_size,
     const size_t& dram_byte_address,
     const unsigned int& num_channels) {
-    auto* device = mesh_device->get_devices()[0];
     bool pass = true;
     auto inputs = generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size / sizeof(uint32_t));
     for (unsigned int channel = 0; channel < num_channels; channel++) {
-        tt_metal::detail::WriteToDeviceDRAMChannel(device, channel, dram_byte_address, inputs);
+        slow_dispatch::WriteToDRAMChannel(*mesh_device, channel, dram_byte_address, inputs);
     }
 
     for (unsigned int channel = 0; channel < num_channels; channel++) {
         std::vector<uint32_t> dest_channel_data;
-        tt_metal::detail::ReadFromDeviceDRAMChannel(device, channel, dram_byte_address, byte_size, dest_channel_data);
+        slow_dispatch::ReadFromDRAMChannel(*mesh_device, channel, dram_byte_address, byte_size, dest_channel_data);
         pass &= (dest_channel_data == inputs);
         if (not pass) {
             std::cout << "Mismatch at Channel: " << channel << std::endl;
@@ -209,7 +208,6 @@ TEST_F(MeshDeviceFixture, TensixPingIllegalL1Cores) {
 // Purpose of this test is to ensure that L1 reader/writer APIs do not target harvested cores
 TEST_F(MeshDeviceFixture, TensixValidateKernelDoesNotTargetHarvestedCores) {
     for (auto& mesh_device : this->devices_) {
-        auto* device = mesh_device->get_devices()[0];
         uint32_t num_l1_banks = mesh_device->allocator()->get_num_banks(BufferType::L1);
         std::vector<uint32_t> host_input(1);
         std::map<uint32_t, uint32_t> bank_id_to_value;
@@ -219,7 +217,7 @@ TEST_F(MeshDeviceFixture, TensixValidateKernelDoesNotTargetHarvestedCores) {
             bank_id_to_value[bank_id] = host_input.at(0);
             CoreCoord logical_core = mesh_device->allocator()->get_logical_core_from_bank_id(bank_id);
             uint32_t write_address = l1_address + mesh_device->allocator()->get_bank_offset(BufferType::L1, bank_id);
-            tt_metal::detail::WriteToDeviceL1(device, logical_core, write_address, host_input);
+            slow_dispatch::WriteToL1(*mesh_device, logical_core, write_address, host_input);
         }
 
         auto& cq = mesh_device->mesh_command_queue();
@@ -249,7 +247,7 @@ TEST_F(MeshDeviceFixture, TensixValidateKernelDoesNotTargetHarvestedCores) {
         for (uint32_t bank_id = 0; bank_id < num_l1_banks; bank_id++) {
             CoreCoord logical_core = mesh_device->allocator()->get_logical_core_from_bank_id(bank_id);
             uint32_t read_address = l1_address + mesh_device->allocator()->get_bank_offset(BufferType::L1, bank_id);
-            tt_metal::detail::ReadFromDeviceL1(device, logical_core, read_address, size_bytes, output);
+            slow_dispatch::ReadFromL1(*mesh_device, logical_core, read_address, size_bytes, output);
             ASSERT_EQ(output.size(), host_input.size());
             uint32_t expected_value =
                 bank_id_to_value.at(bank_id) + 1;  // ping_legal_l1s kernel increments each value it reads
@@ -341,12 +339,10 @@ TEST_F(MeshDeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
 // 3. `invalidate_cache` is false and env var `TT_METAL_ENABLE_HW_CACHE_INVALIDATION` is set: pass
 TEST_F(BlackholeSingleCardFixture, TensixL1DataCache) {
     CoreCoord core{0, 0};
-    const auto& mesh_device = devices_.at(0);
-    auto* const device = mesh_device->get_devices()[0];
 
-    uint32_t l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    uint32_t l1_unreserved_base = this->device().allocator()->get_base_allocator_addr(HalMemType::L1);
     std::vector<uint32_t> random_vec(1, 0xDEADBEEF);
-    tt_metal::detail::WriteToDeviceL1(device, core, l1_unreserved_base, random_vec);
+    slow_dispatch::WriteToL1(this->device(), core, l1_unreserved_base, random_vec);
 
     uint32_t value_to_write = 39;
     bool invalidate_cache =
@@ -379,11 +375,11 @@ TEST_F(BlackholeSingleCardFixture, TensixL1DataCache) {
 
     tt_metal::SetRuntimeArgs(program_, kernel1, core, {l1_unreserved_base, value_to_write, sem0_id});
 
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = this->device().mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
 
-    tt_metal::detail::ReadFromDeviceL1(device, core, l1_unreserved_base, sizeof(uint32_t), random_vec);
+    slow_dispatch::ReadFromL1(this->device(), core, l1_unreserved_base, sizeof(uint32_t), random_vec);
     EXPECT_EQ(random_vec[0], value_to_write);
 }
 
@@ -393,7 +389,6 @@ TEST_F(MeshDeviceFixture, VerifyLogicalToVirtualMap) {
     std::map<CoreCoord, CoreCoord> logical_to_virtual_map;
 
     auto mesh_device = this->devices_.at(0);
-    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -402,17 +397,17 @@ TEST_F(MeshDeviceFixture, VerifyLogicalToVirtualMap) {
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
-    auto logical_grid_size = device->logical_grid_size();
+    auto logical_grid_size = mesh_device->logical_grid_size();
     for (int r = 0; r < logical_grid_size.y; r++) {
         for (int c = 0; c < logical_grid_size.x; c++) {
             CoreCoord logical_coord(c, r);
-            auto virtual_coord = device->virtual_core_from_logical_core(logical_coord, CoreType::WORKER);
+            auto virtual_coord = mesh_device->virtual_core_from_logical_core(logical_coord, CoreType::WORKER);
             logical_to_virtual_map[logical_coord] = virtual_coord;
         }
     }
 
     CoreRange logical_core_range(CoreCoord(0, 0), CoreCoord(logical_grid_size.x - 1, logical_grid_size.y - 1));
-    uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    uint32_t l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
     std::array<std::vector<uint32_t>, 2> host_buffers;
     uint32_t read_size = sizeof(uint32_t) * (logical_grid_size.x + logical_grid_size.y);
 
@@ -443,8 +438,8 @@ TEST_F(MeshDeviceFixture, VerifyLogicalToVirtualMap) {
     for (size_t x = 0; x < logical_grid_size.x; x++) {
         for (size_t y = 0; y < logical_grid_size.y; y++) {
             CoreCoord logical_core(x, y);
-            tt_metal::detail::ReadFromDeviceL1(device, logical_core, kernel0_l1_address, read_size, host_buffers[0]);
-            tt_metal::detail::ReadFromDeviceL1(device, logical_core, kernel1_l1_address, read_size, host_buffers[1]);
+            slow_dispatch::ReadFromL1(*mesh_device, logical_core, kernel0_l1_address, read_size, host_buffers[0]);
+            slow_dispatch::ReadFromL1(*mesh_device, logical_core, kernel1_l1_address, read_size, host_buffers[1]);
 
             for (size_t index = 0; index < host_buffers.size(); index++) {
                 std::vector<uint32_t> logical_col_to_virtual_col(logical_grid_size.x);
