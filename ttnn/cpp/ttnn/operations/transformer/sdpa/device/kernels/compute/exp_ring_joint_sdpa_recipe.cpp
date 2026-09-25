@@ -4,7 +4,8 @@
 
 // Exp ring joint SDPA compute for the named precision recipes B/C/D/E (FAST keeps exp_ring_joint_sdpa.cpp).
 // The shared streaming recipe continuation (recipe_ring.hpp) keeps one recurrent state per pass across the
-// ring. Compile-time arguments share the exp-ring layout (ExpRingJointSDPARecipeProgramFactory).
+// ring. Compile-time arguments share the exp-ring layout (ExpRingJointSDPARecipeProgramFactory). Any
+// tile-aligned Q/K chunk and head dim (the QK/PV subblock widths are the host's SDPA_RECIPE_QK_W/PV_W).
 
 #include <cstdint>
 
@@ -17,7 +18,9 @@
 #define LLK_ZEROFLAG_OUTLINE 1
 // Size-limited builds (odd Q chunks) size-optimize only the pack thread: exp-ring Q224
 // single-pass B 1.08 -> 0.87 ms, E_bf16 1.06 -> 0.77 ms on 1x2.
-#if defined(WATCHER_ENABLED) || (defined(SDPA_RECIPE_SIZE_OPTIMIZED) && defined(TRISC_PACK))
+// Outside the qualified geometries (SDPA_RECIPE_GENERIC_GEOMETRY) unpack is size-optimized as well.
+#if defined(WATCHER_ENABLED) || (defined(SDPA_RECIPE_SIZE_OPTIMIZED) && defined(TRISC_PACK)) || \
+    (defined(SDPA_RECIPE_GENERIC_GEOMETRY) && defined(TRISC_UNPACK))
 #pragma GCC optimize("Os")
 #else
 #pragma GCC optimize("O2")
@@ -38,6 +41,10 @@
 #include "streaming/recipe_streaming.hpp"
 #include "streaming/recipe_ring.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/exp_fused_op_indexer.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/exp_ring_recipe_cbs.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
+
+namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
 void kernel_main() {
     constexpr uint32_t DHt = get_compile_time_arg_val(0);
@@ -45,15 +52,15 @@ void kernel_main() {
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(2);
     constexpr uint32_t local_padded_N = get_compile_time_arg_val(3);
     constexpr uint32_t local_padded_Nt = get_compile_time_arg_val(4);
-    // The logical_n tensor is rejected on the host, so logical_n/logical_nt are the compile-time values.
-    constexpr uint32_t logical_n = get_compile_time_arg_val(5);
-    constexpr uint32_t logical_nt = get_compile_time_arg_val(6);
+    // With a device-tensor logical_n these are the worst-case placeholder; the live values arrive below.
+    constexpr uint32_t logical_n_ct = get_compile_time_arg_val(5);
+    constexpr uint32_t logical_nt_ct = get_compile_time_arg_val(6);
     constexpr uint32_t L = get_compile_time_arg_val(8);
     constexpr uint32_t num_local_k_chunks = get_compile_time_arg_val(9);
     constexpr uint32_t num_joint_k_chunks = get_compile_time_arg_val(10);
     constexpr uint32_t ring_size = get_compile_time_arg_val(11);
     constexpr uint32_t scale_fp32 = get_compile_time_arg_val(16);
-    static_assert(get_compile_time_arg_val(22) == 0, "Named exp ring recipes reject a logical_n tensor");
+    constexpr bool has_logical_n_tensor = get_compile_time_arg_val(22) == 1;
 
     uint32_t argidx = 0;
     // Head-serial passes: this core owns flat Q chunks q_base + p * q_stride for p in [0, q_count). The
@@ -73,7 +80,23 @@ void kernel_main() {
 #else
     constexpr uint32_t recipe_subblock_h = 2;
 #endif
-    static_assert(Sk_chunk_t == 16 && DHt == 4, "Named exp ring recipes require K512/D128");
+    // Live length from the reader's mailbox (compute cannot NoC-read DRAM), read once so compute and the
+    // reader derive the same chunk skips. Must precede compute_kernel_hw_startup (read_tile_value
+    // rendezvouses UNPACK -> MATH/PACK through the mailboxes).
+    uint32_t logical_n = logical_n_ct;
+    uint32_t logical_nt = logical_nt_ct;
+    if constexpr (has_logical_n_tensor) {
+        constexpr uint32_t cb_derived = ttnn::operations::transformer::sdpa::exp_ring::kRecipeDerivedCb;
+        CircularBuffer derived(cb_derived);
+        derived.wait_front(1);
+        logical_nt = ckernel::read_tile_value(cb_derived, 0, ring_joint::kDerivedLogicalNt);
+        const uint32_t partial_col = ckernel::read_tile_value(cb_derived, 0, ring_joint::kDerivedGlobalNPartialCol);
+        derived.pop_front(1);
+        // Exact inverse of the reader's (logical_nt, partial_col) derivation.
+        logical_n = logical_nt == 0 ? 0u
+                                    : (logical_nt - 1) * ring_joint::kTileHeight +
+                                          (partial_col == 0 ? ring_joint::kTileHeight : partial_col);
+    }
     compute_kernel_hw_startup<SrcOrder::Reverse>(recipe_cb_q, recipe_cb_k, recipe_cb_qk_im);
     matmul_init(recipe_cb_q, recipe_cb_k);
     init_sdpa_streaming_semaphores();
@@ -101,7 +124,7 @@ void kernel_main() {
             }
             // Valid key rows of this shard: local shard padding and the global logical_n tail. The
             // recipe skips chunks whose origin is at/after the valid rows -- exactly the reader's
-            // kv_chunk_is_beyond_logical_n skip (chunk kc is sent iff kc*512 < primary_rows) -- and masks
+            // kv_chunk_is_beyond_logical_n skip (chunk kc is sent iff kc * Sk_chunk_t * 32 < primary_rows) -- and masks
             // the remaining partial chunk columns. Joint chunks are never skipped (joint_rows = L).
             const uint32_t n_origin = ring_id * local_padded_N;
             const uint32_t primary_rows = logical_n <= n_origin                   ? 0
@@ -109,7 +132,7 @@ void kernel_main() {
                                                                                   : local_padded_N;
             const uint32_t joint_rows = do_joint_kv ? L : 0;
             // Consumes the reader's per-pass phase-alignment K/V pair (sent iff the chunk count is even).
-            sdpa_recipe_ring_segment<Sq_chunk_t, scale_fp32, recipe_subblock_h>(
+            sdpa_recipe_ring_segment<Sq_chunk_t, scale_fp32, recipe_subblock_h, Sk_chunk_t, DHt>(
                 resident,
                 0,
                 1,

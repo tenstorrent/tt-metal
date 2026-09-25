@@ -71,6 +71,7 @@ BlockCostModel block_cost_model(const PrecisionPolicy& policy) {
 struct RecipeBuild {
     uint64_t cb_bytes = 0;
     bool size_optimized = false;  // SDPA_RECIPE_SIZE_OPTIMIZED: pack thread built at -Os
+    bool generic_geometry = false;  // SDPA_RECIPE_GENERIC_GEOMETRY: ring / exp ring also build unpack at -Os
     uint32_t qk_width = 4;        // SDPA_RECIPE_QK_W
     uint32_t pv_width = 4;        // SDPA_RECIPE_PV_W
 };
@@ -78,6 +79,8 @@ struct RecipeBuild {
 // Compute slowdowns not in the fitted model: a size-optimized pack thread (odd or new paired
 // geometries) and narrower matmul subblocks.
 constexpr double kSizeOptimizedPenalty = 1.08;
+// Ring / exp-ring recipe kernels outside the qualified geometries also build unpack at -Os.
+constexpr double kRingGenericGeometryPenalty = 1.05;
 double subblock_penalty(uint32_t width) { return width >= 4 ? 1.0 : width == 2 ? 1.10 : 1.30; }
 
 double block_cost(
@@ -123,6 +126,8 @@ RecipeBuild recipe_build(const PrecisionPolicy& policy, uint32_t q_tiles, uint32
     for (const auto& [name, value] : program.kernels.front().defines) {
         if (name == "SDPA_RECIPE_SIZE_OPTIMIZED") {
             build.size_optimized = true;
+        } else if (name == "SDPA_RECIPE_GENERIC_GEOMETRY") {
+            build.generic_geometry = true;
         } else if (name == "SDPA_RECIPE_QK_W") {
             build.qk_width = std::stoul(value);
         } else if (name == "SDPA_RECIPE_PV_W") {
@@ -242,20 +247,21 @@ std::vector<uint32_t> tile_range(uint32_t fixed, uint32_t lo, uint32_t hi) {
 
 std::optional<std::string> recipe_geometry_rejection(
     RecipeOp op, const PrecisionPolicy& policy, uint32_t q_tiles, uint32_t k_tiles, uint32_t d_tiles) {
-    (void)policy;
-    // Mirrors recipe_dense_q_tiles / recipe_dense_k_tiles (dense, joint) and recipe_q_tiles /
-    // recipe_k_tiles plus the ring / exp-ring device operation validation (sdpa_recipe.cpp,
-    // sdpa.cpp, *_device_operation.cpp). Keep those checks and this function in lockstep; the
-    // chooser only consults this one.
+    // The only statement of supported recipe geometry: the chooser consults it, and the ring / exp-ring
+    // entry points and device operations validate through validate_recipe_geometry below. Dense/joint
+    // also mirror it in recipe_dense_q_tiles / recipe_dense_k_tiles (sdpa_recipe.cpp).
     if (q_tiles == 0 || k_tiles == 0 || d_tiles == 0) {
         return std::string("recipes require tile-aligned, nonzero Q/K chunks and head dims");
     }
-    if (op == RecipeOp::Dense || op == RecipeOp::Joint) {
-        if (q_tiles > 32) {
-            return fmt::format("Q chunk {} exceeds 1024 rows", q_tiles * kTile);
-        }
+    // B-E on every op: any tile-aligned Q chunk up to the recurrent-state arrays (32 tile rows), any
+    // tile-aligned K chunk and head dim; L1 fit is recipe_l1_bytes.
+    if (q_tiles > 32) {
+        return fmt::format("Q chunk {} exceeds 1024 rows", q_tiles * kTile);
+    }
+    if (op == RecipeOp::Dense || op == RecipeOp::Joint || policy.selection.recipe != Recipe::A) {
         return std::nullopt;
     }
+    // FAST ring / exp ring keep the legacy ring kernels, qualified only at these geometries.
     if (d_tiles != 2 && d_tiles != 4 && d_tiles != 8) {
         return fmt::format("head dim {} is not 64, 128 or 256", d_tiles * kTile);
     }
@@ -269,6 +275,31 @@ std::optional<std::string> recipe_geometry_rejection(
         return std::string("exp ring recipes require K512/D128");
     }
     return std::nullopt;
+}
+
+void validate_recipe_geometry(
+    RecipeOp op, const PrecisionPolicy& policy, uint32_t q_chunk_size, uint32_t k_chunk_size, uint32_t head_dim) {
+    const char* name = op == RecipeOp::Ring      ? "ring"
+                       : op == RecipeOp::ExpRing ? "exp ring"
+                       : op == RecipeOp::Joint   ? "joint"
+                                                 : "dense";
+    TT_FATAL(
+        q_chunk_size % kTile == 0 && k_chunk_size % kTile == 0 && head_dim % kTile == 0,
+        "Named {} SDPA recipes require tile-aligned Q/K chunks and head dims, got Q{}/K{}/D{}",
+        name,
+        q_chunk_size,
+        k_chunk_size,
+        head_dim);
+    const auto rejection =
+        recipe_geometry_rejection(op, policy, q_chunk_size / kTile, k_chunk_size / kTile, head_dim / kTile);
+    TT_FATAL(
+        !rejection,
+        "Named {} SDPA recipes do not support Q{}/K{}/D{}: {}",
+        name,
+        q_chunk_size,
+        k_chunk_size,
+        head_dim,
+        rejection.value_or(""));
 }
 
 RecipeL1Estimate recipe_l1_bytes(
@@ -303,8 +334,9 @@ RecipeL1Estimate recipe_l1_bytes(
                     legacy_exp_ring_fast_bytes(q_tiles, k_tiles, d_tiles, context.passes, true),
                     legacy_exp_ring_fast_bytes(q_tiles, k_tiles, d_tiles, context.passes, false)};
             }
-            // The exp-ring factory keeps the recipe layout with a single Q slot.
-            const uint64_t bytes = recipe_cb_bytes(policy, q_tiles, k_tiles, d_tiles) - q_slot;
+            // The exp-ring factory keeps the recipe layout with a single Q slot, plus the 64 B live-length
+            // mailbox of a device-tensor logical_n (counted unconditionally).
+            const uint64_t bytes = recipe_cb_bytes(policy, q_tiles, k_tiles, d_tiles) - q_slot + 64;
             return {bytes, bytes};
         }
     }
@@ -342,8 +374,11 @@ std::vector<RecipeBlocking> recipe_blocking_candidates(const RecipeBlockingProbl
             const uint32_t k_chunk = kt * kTile;
             // FAST ring / exp ring keep their legacy compute; everything else builds the recipe program.
             const bool recipe_compute = dense || p.policy.selection.recipe != Recipe::A;
-            const double block = block_cost(
-                p.policy, qt, kt, p.d_tiles, recipe_compute ? recipe_build(p.policy, qt, kt, p.d_tiles) : RecipeBuild{});
+            const RecipeBuild build = recipe_compute ? recipe_build(p.policy, qt, kt, p.d_tiles) : RecipeBuild{};
+            double block = block_cost(p.policy, qt, kt, p.d_tiles, build);
+            if (!dense && build.generic_geometry) {
+                block *= kRingGenericGeometryPenalty;
+            }
             auto admit = [&](uint32_t jobs, uint32_t k_blocks, CoreCoord grid, const RecipeL1Context& context) {
                 const auto l1 = recipe_l1_bytes(p.op, p.policy, qt, kt, p.d_tiles, context);
                 if (l1.minimum > p.l1_bytes) {

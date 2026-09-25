@@ -17,6 +17,8 @@ struct ExpRingJointReaderPolicy {
     static constexpr bool kPassOuterRing = true;
     // C/D keep one K slot (applied to every recipe so all share one schedule).
     static constexpr bool kCreditKAfterQ = true;
+    // Live logical_n mailbox to compute (c_13 is the recipe's second denominator).
+    static constexpr uint32_t kDerivedCb = ttnn::operations::transformer::sdpa::exp_ring::kRecipeDerivedCb;
 };
 
 #include "exp_ring_joint_reader_impl.hpp"

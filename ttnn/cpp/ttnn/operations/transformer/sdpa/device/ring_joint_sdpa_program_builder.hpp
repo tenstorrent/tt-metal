@@ -51,9 +51,6 @@ enum class ComputeCb {
 
 class ComputeVariant {
 public:
-    // Matmul subblock width of fixed compute schedules (clamped to vDHt for the PV product).
-    static constexpr uint32_t kFixedSubblockW = 4;
-
     virtual ~ComputeVariant() = default;
 
     virtual KernelSources kernel_sources() const = 0;
@@ -72,6 +69,9 @@ public:
     // Fixed QK/PV matmul subblock height of the compute schedule, which then also accepts a partial last Q
     // row group; nullopt lets the host choose (Sq must then divide by it).
     virtual std::optional<uint32_t> fixed_subblock_h(bool /*fp32_dest_acc_en*/) const { return std::nullopt; }
+    // Matmul subblock width of a fixed compute schedule for a QK (K chunk) or PV (head dim) product of `tiles`
+    // output columns; only consulted when fixed_subblock_h is set.
+    virtual uint32_t fixed_subblock_w(uint32_t tiles) const { return tiles < 4 ? tiles : 4; }
 
     // Compute continues one recurrent state across every active ring iteration and normalizes only on the
     // last: streaming compute, no LSE / accumulator DRAM staging.

@@ -27,6 +27,7 @@
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_perf_model.hpp"
 #include "ttnn/operations/transformer/sdpa/sdpa_recipe.hpp"
+#include "ttnn/operations/transformer/sdpa/sdpa_recipe_blocking.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/recipe_state_layout.hpp"
 #include "ttnn/tensor/types.hpp"
 
@@ -578,16 +579,20 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
                 "Named ring recipe joint types must match their primary Q/K/V types");
         }
         TT_FATAL(
-            (q_shape[3] == 64 || q_shape[3] == 128 || q_shape[3] == 256) &&
-                tensor_args.input_k.logical_shape()[3] == q_shape[3] &&
-                tensor_args.input_v->logical_shape()[3] == q_shape[3] && args.get_q_chunk_size() % 32 == 0 &&
-                args.get_q_chunk_size() >= 128 && args.get_q_chunk_size() <= 320 &&
-                (args.get_k_chunk_size() == 256 || args.get_k_chunk_size() == 384 || args.get_k_chunk_size() == 512),
-            "Named ring recipes require a Q chunk of 128-320 rows in 32-row steps, K256/K384/K512 and D64/D128/D256");
+            tensor_args.input_k.logical_shape()[3] == q_shape[3] && tensor_args.input_v->logical_shape()[3] == q_shape[3],
+            "Named ring recipes require matching Q/K/V head dims");
+        // Supported geometry lives in recipe_geometry_rejection (shared with the blocking chooser); L1 fit is
+        // checked when the program is built.
+        ttnn::operations::transformer::sdpa::detail::validate_recipe_geometry(
+            ttnn::operations::transformer::sdpa::detail::RecipeOp::Ring,
+            ttnn::operations::transformer::sdpa::detail::resolve_precision_policy(
+                ttnn::operations::transformer::sdpa::detail::select_recipe(*args.precision, tensor_args.input_k.dtype())),
+            args.get_q_chunk_size(),
+            args.get_k_chunk_size(),
+            q_shape[3]);
         TT_FATAL(
             !args.is_causal && !args.is_balanced && !args.has_sliding_window() && !has_indexed_kv_cache &&
-                !kv_pad_rotation_active(args, tensor_args) && !tensor_args.attention_sink &&
-                !tensor_args.has_logical_n_tensor() && !tensor_args.has_logical_l_tensor(),
+                !kv_pad_rotation_active(args, tensor_args) && !tensor_args.attention_sink,
             "Unsupported feature for named ring recipes");
         TT_FATAL(
             !args.scale || *args.scale == 1.0f / std::sqrt(static_cast<float>(q_shape[3])),

@@ -14,6 +14,9 @@
 //                               Policy::transfer_state<Sq_chunk_t, vDHt>(noc, backing) (only
 //                               instantiated for such policies).
 //                               Otherwise the legacy LSE / deferred-normalization protocol runs.
+//   Policy::kCommonArgCount     Common runtime args the policy owns at the front (the host variant's
+//                               append_writer_common_runtime_args); the op's metadata / logical-length
+//                               common args follow them.
 
 #pragma once
 
@@ -609,9 +612,11 @@ void kernel_main() {
 
     Noc noc;
 
-    // Common runtime args: kv_actual_isl slot first when present, then the logical-length pair.
+    // Common runtime args: the policy's own args first (the recipe's state tensor), then the kv_actual_isl slot
+    // when present, then the logical-length pair.
+    constexpr uint32_t metadata_common_arg_base = Policy::kCommonArgCount;
     constexpr uint32_t logical_length_common_arg_base =
-        kv_pad_from_metadata ? ring_joint::kWriterMetadataCommonArgCount : 0;
+        metadata_common_arg_base + (kv_pad_from_metadata ? ring_joint::kWriterMetadataCommonArgCount : 0);
     [[maybe_unused]] uint32_t global_n_partial_col_live = global_n_partial_col;
     [[maybe_unused]] uint32_t joint_l_partial_col_live = joint_l_partial_col;
 
@@ -667,7 +672,7 @@ void kernel_main() {
     if constexpr (kv_pad_from_metadata) {
         CircularBuffer cb_meta_scratch(cb_out);
         uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
-            noc, meta_args, get_common_arg_val<uint32_t>(0), cb_meta_scratch.get_write_ptr());
+            noc, meta_args, get_common_arg_val<uint32_t>(metadata_common_arg_base), cb_meta_scratch.get_write_ptr());
         kv_actual_isl =
             trace_metadata::bounded_kv_actual_isl(kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size);
         logical_nt = trace_metadata::logical_tile_rows_clamped_to_cache(

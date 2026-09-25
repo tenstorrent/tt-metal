@@ -34,27 +34,6 @@ RecipeSelection select_recipe(ttnn::transformer::SDPAPrecision precision, DataTy
     return {recipe, storage};
 }
 
-uint32_t recipe_q_tiles(const std::optional<SDPAProgramConfig>& program_config) {
-    const uint32_t q_chunk = program_config ? program_config->q_chunk_size : 256;
-    // Ten query tile rows bound the recurrent-state arrays; odd tile counts end
-    // with a single-row group in the paired BF16 recipes.
-    TT_FATAL(
-        q_chunk % 32 == 0 && q_chunk >= 128 && q_chunk <= 320,
-        "Named SDPA recipes support Q chunks from 128 to 320 rows in 32-row steps, got {}",
-        q_chunk);
-    return q_chunk / 32;
-}
-
-uint32_t recipe_k_tiles(const std::optional<SDPAProgramConfig>& program_config) {
-    const uint32_t k_chunk = program_config ? program_config->k_chunk_size : 512;
-    // QK/PV subblocks are four tiles wide; the early max-reduce trigger needs at least two of them.
-    TT_FATAL(
-        k_chunk == 256 || k_chunk == 384 || k_chunk == 512,
-        "Named SDPA recipes support K chunks of 256, 384 or 512 rows, got {}",
-        k_chunk);
-    return k_chunk / 32;
-}
-
 uint32_t recipe_dense_q_tiles(const std::optional<SDPAProgramConfig>& program_config) {
     const uint32_t q_chunk = program_config ? program_config->q_chunk_size : 256;
     // Any tile-aligned Q chunk up to the recurrent-state arrays (32 tile rows); L1 fit is checked separately.
@@ -72,10 +51,9 @@ uint32_t recipe_dense_k_tiles(const std::optional<SDPAProgramConfig>& program_co
     return k_chunk / 32;
 }
 
-namespace {
-// Largest of 4, 2 and 1 dividing the tile count: the recipe's QK/PV subblock width.
 uint32_t recipe_subblock_width(uint32_t tiles) { return tiles % 4 == 0 ? 4 : tiles % 2 == 0 ? 2 : 1; }
 
+namespace {
 // Legacy SDPA's granularity rule: the largest value <= limit that divides the tile count.
 uint32_t recipe_granularity(uint32_t tiles, uint32_t limit) {
     uint32_t g = std::min(tiles, limit);
@@ -191,6 +169,12 @@ ProgramDescriptor recipe_compute_program(
         // previously qualified set (all of B-E; e.g. BALANCED D96 with joint tails), do not fit the
         // kernel config buffer at the default optimization; only the pack thread is size-optimized.
         compute.defines.emplace_back("SDPA_RECIPE_SIZE_OPTIMIZED", "1");
+    }
+    if (policy.selection.recipe != Recipe::A && !recipe_legacy_geometry(q_tiles, k_tiles, d_tiles)) {
+        // The ring / exp ring recipe kernels (ring transport, checkpoints, runtime tail masks) also exceed the
+        // kernel config buffer outside the qualified geometries with pack alone at -Os; they size-optimize
+        // unpack too. The dense kernel ignores this define.
+        compute.defines.emplace_back("SDPA_RECIPE_GENERIC_GEOMETRY", "1");
     }
     program.kernels.push_back(std::move(compute));
     return program;

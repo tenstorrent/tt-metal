@@ -18,6 +18,7 @@
 #include "ttnn/operations/transformer/sdpa/device/sdpa_perf_model.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/transformer/sdpa/sdpa_recipe.hpp"
+#include "ttnn/operations/transformer/sdpa/sdpa_recipe_blocking.hpp"
 
 #include <cmath>
 
@@ -80,16 +81,18 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
                     tensor_args.joint_v->dtype() == kv_dtype,
                 "Named exp ring recipe joint types must match their primary Q/K/V types");
         }
+        // Supported geometry lives in recipe_geometry_rejection (shared with the blocking chooser); L1 fit is
+        // checked when the program is built.
+        const uint32_t head_dim = input_tensor_q.logical_shape()[3];
+        recipes::validate_recipe_geometry(
+            recipes::RecipeOp::ExpRing,
+            recipes::resolve_precision_policy(recipes::select_recipe(*args.precision, kv_dtype)),
+            args.get_q_chunk_size(),
+            args.get_k_chunk_size(),
+            head_dim);
         TT_FATAL(
-            input_tensor_q.logical_shape()[3] == 128 && args.get_q_chunk_size() % 32 == 0 &&
-                args.get_q_chunk_size() >= 128 && args.get_q_chunk_size() <= 320 && args.get_k_chunk_size() == 512,
-            "Named exp ring recipes require D128, a Q chunk of 128-320 rows in 32-row steps and K512 blocking");
-        TT_FATAL(
-            !tensor_args.has_logical_n_tensor(),
-            "Named exp ring recipes do not yet support a device-tensor logical_n; pass a scalar");
-        TT_FATAL(
-            !args.scale || *args.scale == 1.0f / std::sqrt(128.0f),
-            "Named exp ring recipes require the default D128 scale");
+            !args.scale || *args.scale == 1.0f / std::sqrt(static_cast<float>(head_dim)),
+            "Named exp ring recipes require the default 1/sqrt(head_dim) scale");
     } else {
         // Validate all tensors have the same dtype
         for (const auto& tensor : sdpa_input_tensors) {
