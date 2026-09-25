@@ -30,23 +30,18 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
     tt::tt_fabric::Topology topology,
     const tt::tt_metal::MemoryConfig& memory_config,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id) {
-    // Resolve the caller's topology against how this axis is actually wired, the way every other CCL
-    // front end does, and store the resolved value. Passing Ring on an axis whose closing link is not
-    // wired comes back as Linear, and this op has no Linear mode: it sends single hops around a ring.
+    // Ring on an axis without a closing link resolves to Linear, which this op cannot run: it sends
+    // single hops around a ring.
     const tt::tt_fabric::Topology usable = ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     TT_FATAL(
         usable == tt::tt_fabric::Topology::Ring || usable == tt::tt_fabric::Topology::Torus,
-        "dispatch_fabric2d: axis {} resolves to {}, not a ring. This op forwards single hops around one, so "
-        "the axis has to be wrap-wired and the topology has to be Ring or Torus; {} was requested.",
+        "dispatch_fabric2d: axis {} resolves to {}, not a ring. The axis must be wrap-wired and the "
+        "topology Ring or Torus; {} was requested.",
         cluster_axis,
         usable,
         topology);
 
-    // Every core this op may occupy: the caller's core set, exactly as for the sibling `dispatch`. The
-    // streams take the row under their eth cores and a TILE input's untilizer pool wants the row under
-    // that, so a TILE input needs a core set of at least two rows and a one-row core set refuses it.
-    // Defaulting to the first sub-device means no sub-device manager loaded gives the whole grid,
-    // which is what a standalone caller wants and what a test gets.
+    // With no sub-device manager loaded, the first sub-device is the whole compute grid.
     auto* mesh_device = input_tensor.device();
     const auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     const tt::tt_metal::CoreRangeSet allowed_cores =

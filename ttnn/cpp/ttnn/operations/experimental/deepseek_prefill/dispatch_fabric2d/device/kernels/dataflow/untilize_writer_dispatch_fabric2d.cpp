@@ -39,9 +39,8 @@ void kernel_main() {
         for (uint32_t r = 0; r < rows_per_tile_row; r++) {
             noc_async_write(read_ptr + r * token_bytes, staging_acc.get_noc_addr(first_page + r), token_bytes);
         }
-        // A stream core reads these pages back out of DRAM as soon as the counter below says the
-        // tile row is there, so the writes have to be ACKNOWLEDGED first. Flushing the source would
-        // only prove the CB is free to reuse, which is the other thing this barrier happens to give.
+        // Stream cores read these pages as soon as the counter below is signalled, so the writes must be
+        // acknowledged first; a flush would only show the CB can be reused.
         noc_async_write_barrier();
         cb_pop_front(cb_out, rows_per_tile_row);
         for (uint32_t i = 0; i < stream_count; i++) {
@@ -50,7 +49,6 @@ void kernel_main() {
             noc_semaphore_inc(get_noc_addr(x, y, sem_addr), 1);
         }
     }
-    // The increments complete on their atomic response, which nothing above waits for; a kernel that
-    // retired without them would strand every stream core on the count.
+    // Wait for the increments to complete before the kernel exits, or the stream cores may never see them.
     noc_async_atomic_barrier();
 }

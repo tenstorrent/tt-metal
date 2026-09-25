@@ -2,19 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Reader kernel (reader RISC, NOC_0). Leads the build of this chip's routing index, then fills the L1
-// queue the sender on this same core drains.
-//
-// The routing index is the piece with no counterpart in combine. Combine's input is already grouped by
-// origin chip, so a chunk is four words out of a control table. Dispatch's input is token order and a
-// token's destination is data-dependent (indices -> dispatch table), so the destination-grouped runs the
-// protocol needs have to be manufactured here. The build itself lives in dispatch_fabric2d_routing_index.hpp,
-// shared with the compute kernel: this RISC reads the tables in and runs one of the four RISCs.
-//
-// Replaying the production op's allocator EXACTLY is what makes the pages byte-identical to it, including
-// the rule that a token past the buffer's capacity is dropped while its counter still advances. Every
-// stream core replays the whole walk independently and identically, which is what lets the baton
-// semaphore the production op passes between its workers disappear.
+// Reader kernel of a stream core (reader RISC, NOC_0). Reads the tables and builds this chip's routing index
+// together with the three TRISCs, then reads tokens into the TokenQueue that the sender on this core drains.
+// Every stream core builds the whole index on its own, so stream cores never wait on each other for it.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -28,8 +18,8 @@ namespace routing_index = dspf2d::routing_index;
 using routing_index::Control;
 using routing_index::ct;
 
-// Every source chip's row of the offsets table, plus the two tensors that close the last row, plus the
-// dispatch table. A few kB, read once and indexed from L1 thereafter.
+// Every source chip's row of the offsets table, the two tensors that close the last row, and the dispatch
+// table. A few kB, read into L1 once.
 void read_control_tables(const Control& c) {
     const auto offsets_acc = TensorAccessor(
         dspf2d::ReaderCtArgs::offsets_args, get_arg_val<uint32_t>(dspf2d::ReaderRtArg::kExpertOffsetsAddr));
@@ -56,9 +46,8 @@ void read_control_tables(const Control& c) {
     noc_async_read_barrier();
 }
 
-// One 64-byte-padded record per token. The pad is not a convenience: a DRAM read needs a 64-byte-aligned
-// L1 destination on Blackhole, so reading topk uint16 per token into a packed array would put every token
-// after the first at a wrong address and build the whole index out of garbage.
+// One record per token, padded to indices_pad_stride because on Blackhole a DRAM read needs a 64-byte-aligned
+// L1 destination.
 void read_indices(const Control& c) {
     const auto indices_acc =
         TensorAccessor(dspf2d::ReaderCtArgs::indices_args, get_arg_val<uint32_t>(dspf2d::ReaderRtArg::kIndicesAddr));
@@ -69,25 +58,20 @@ void read_indices(const Control& c) {
     noc_async_read_barrier();
 }
 
-// Tokens one origin chip owes one expert. Every chip on the axis computes this identically from the
-// replicated table, which is what lets a chip size a run it neither wrote nor receives. Rows are
-// absolute buffer positions, so the last origin closes against counts + region_offsets, not counts alone.
+// Tokens that origin_row sends to expert e. Every chip on the axis computes the same value from the replicated
+// table, so a chip can size a chunk it neither writes nor receives. Offsets are absolute buffer positions, so
+// the last origin row closes against counts + region_offsets.
 uint32_t run_len(const Control& c, uint32_t origin_row, uint32_t e) {
     const uint32_t at = c.offsets[origin_row * ct.num_routed_experts + e];
     const uint32_t routed = (origin_row + 1 < ct.extent) ? c.offsets[(origin_row + 1) * ct.num_routed_experts + e] - at
                                                          : c.counts[e] + c.region_offsets[e] - at;
-    // The table counts every token routed to e, but the origin drops the ones past the expert's
-    // capacity while still advancing the counter. Sizing a chunk by `routed` would make every reader
-    // downstream wait for pages the origin never sent.
+    // The origin drops tokens past the expert's capacity and does not send them.
     return routing_index::kept_count(at, routed);
 }
 
-// expert -> bucket, and the chip -> experts inverse beside it.
-//
-// Every chip on the axis builds the same inverse because the dispatch table is replicated along it,
-// which is what lets a forward expand a (origin, destination) descriptor into the same experts_per_chip
-// chunks the writer expanded it into. Resolving a pick is then one indexed load rather than a table
-// lookup followed by a linear search over the destination chip's experts.
+// expert -> bucket, and the inverse chip -> experts. Every chip on the axis builds the same inverse from the
+// replicated dispatch table, so a forwarding chip expands an (origin, destination) descriptor into the same
+// experts_per_chip chunks the writing chip did.
 void build_expert_buckets(const Control& c) {
     for (uint32_t i = 0; i < ct.extent * ct.experts_per_chip; i++) {
         c.chip_experts[i] = 0;
@@ -95,15 +79,12 @@ void build_expert_buckets(const Control& c) {
     for (uint32_t r = 0; r < ct.extent; r++) {
         c.row_fill[r] = 0;
     }
-    // Inclusive of the dispatch table's trailing sentinel column, so that a padded token's unguarded
-    // lookup resolves to "not in this group" here exactly as it did when the pass read the table
-    // itself.
+    // Includes the table's sentinel column, so a padded token's lookup resolves to BUCKET_NOT_HERE.
     //
-    // The guard bounds the write rather than trusting the table, whose WIDTH is validated on the host
-    // but whose VALUES are not: a column naming a row off the axis, or one row too many, would put
-    // `bucket` in the next row's buckets and at the last row past the block entirely. A forward would then
-    // size a chunk from an inverse its neighbour does not share, and the axis would wait forever.
-    // Refusing the entry makes a malformed table produce no pages instead of corrupting L1.
+    // The host checks the table's width but not its values. The guard keeps a bad row from writing into the
+    // next row's buckets or past the block. A skipped entry leaves a chip_experts bucket at expert 0; that
+    // bucket is sized run_len(my_row, 0), fills nothing, and each of its pages becomes a duplicate write of
+    // token 0 to page 0 (see merge_routing_index).
     for (uint32_t e = 0; e <= ct.num_routed_experts; e++) {
         const int32_t row = c.table[e];
         if (row < 0 || (uint32_t)row >= ct.extent || c.row_fill[(uint32_t)row] >= ct.experts_per_chip) {
@@ -118,27 +99,19 @@ void build_expert_buckets(const Control& c) {
         c.expert_bucket[e] = bucket;
     }
     for (uint32_t r = 0; r < ct.extent; r++) {
-        // The whole protocol sizes a forwarded chunk group as experts_per_chip terms, so a chip hosting a
-        // different number would desynchronise the writer and the reader of a forwarding section.
+        // Chunk groups are sized as experts_per_chip chunks, so every chip must host exactly that many.
         ASSERT(c.row_fill[r] == ct.experts_per_chip);
     }
 }
 
-// Where each bucket sits and how long it is, plus each bucket's first output page.
-//
-// The lengths come straight out of the offsets table rather than from a counting pass over the picks:
-// this chip owes expert e exactly run_len tokens, because that table was derived from the same
-// routing. Every chunk length in the protocol is already run_len, so taking the buckets from it makes
-// the two agree by construction instead of by an ASSERT this hardware compiles out.
-//
-// bucket_start is an exclusive prefix sum with a closing total: bucket b runs from bucket_start[b] to
-// bucket_start[b + 1], which is what bounds the fill and what gives the phases their run lengths.
+// Bucket b holds entries [bucket_start[b], bucket_start[b + 1]) and starts at output page first_page[b].
+// Its length is run_len from the offsets table, the same number every chunk length uses, so bucket sizes and
+// chunk sizes always agree.
 void size_buckets(const Control& c) {
     const uint32_t n_buckets = ct.extent * ct.experts_per_chip;
-    // One entry per (token, pick) is what the block holds, and the total cannot exceed it. The lengths
-    // come from host tensors that nothing ties to seq_len, so an offsets table inconsistent with the
-    // input would otherwise run the fill -- and the tail zeroing behind it -- through every block after
-    // this one and into the global semaphores. A consistent table never reaches the cap.
+    // The block holds one entry per (token, topk index). The clamp keeps an offsets table inconsistent with
+    // the input from overrunning L1; a consistent table never reaches it. If it does fire, this chip sends
+    // fewer pages than the downstream chips' chunk_len expects, and they wait forever.
     const uint32_t max_entries = ct.seq_len * ct.topk;
     uint32_t at = 0;
     for (uint32_t b = 0; b < n_buckets; b++) {
@@ -151,17 +124,13 @@ void size_buckets(const Control& c) {
     c.bucket_start[n_buckets] = at;
 }
 
-// After the four RISCs have filled their slices: does every bucket hold exactly the length the offsets
-// table sized it at? The RISCs' counts per bucket sum to the picks routed to it, and the kept are
-// the first of those, in token order, which is what the RISCs wrote. A divergence means the replay and
-// the production allocator disagree, which surfaces as wrong pages or, once chunk lengths are computed
-// from these same numbers, as a deadlock.
+// Checks that every bucket was filled to the length size_buckets gave it. The kept picks of a bucket are the
+// first of the picks routed to it, in token order, which is what the RISCs wrote.
 //
-// The tail of a bucket the replay left short is neutralised rather than merely asserted about. The
-// phases take their run length from the bucket, not from the fill, so an entry the pass never wrote
-// would be read out of scratch nothing zeroes -- and its `page` word becomes a fabric write
-// to an arbitrary DRAM address on another chip. This costs one load per bucket when the tables
-// agree, which they do, and turns that into a duplicate write of token 0 to page 0.
+// A bucket can fall short only if the offsets table disagrees with the indices. Its length still comes from
+// run_len, so send and receive counts match and nothing hangs, but its unwritten entries would hold stale
+// scratch whose `page` word becomes a write to an arbitrary address. They are zeroed, so each becomes a
+// duplicate write of token 0 to page 0: wrong pages, no corruption elsewhere.
 void merge_routing_index(const Control& c) {
     for (uint32_t b = 0; b < routing_index::num_buckets(); b++) {
         uint32_t routed = 0;
@@ -181,21 +150,16 @@ void merge_routing_index(const Control& c) {
     }
 }
 
-// Under a TILE input the tokens are not where the input tensor is: the untilizer pool is writing them
-// into a staging buffer, which is what `in_acc` addresses. Nothing may be read out of it until every
-// tile row has landed.
-//
-// Placed immediately before the first phase that reads a token rather than before the routing index,
-// which is the whole reason the staging design pays: the pool's DRAM traffic and this RISC's scalar
-// index build are different resources and overlap for free. If this zone is not ~0 the pool is the
-// critical path and needs more cores, not the routing index.
+// With a TILE input, `in_acc` addresses a staging buffer that the untilize cores write, so no token may be
+// read until every tile row has landed. The wait sits just before the first token read so that untilize
+// runs in parallel with the routing index build. If this zone is not near zero, untilize is the critical
+// path and needs more cores.
 void wait_for_untilize() {
     if constexpr (ct.untilize_tile_rows > 0) {
         DeviceZoneScopedN("dspf2d_wait_untilize");
         volatile tt_l1_ptr uint32_t* landed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.untilize_sem_addr);
         while (true) {
-            // Another core on this chip owns the counter, so a cached line would never show its
-            // increments.
+            // Another core increments this counter, so drop any cached copy before each read.
             invalidate_l1_cache();
             if (*landed >= ct.untilize_tile_rows) {
                 return;
@@ -206,16 +170,13 @@ void wait_for_untilize() {
 
 using routing_index::slice_begin;
 
-// The reader -> sender queue. Two monotonic single-writer counters: this side owns `filled`, the sender
-// owns `freed`, and each works on the difference, so neither needs a read-modify-write the other could
-// race. `claimed` runs ahead of `published` so several token reads are in flight at once; BATCH <=
-// QUEUE_DEPTH/2 is what proves the reader cannot take every entry before announcing any.
+// The reader -> sender queue of queue_depth entries. Two monotonic counters with one writer each: this side
+// owns `filled`, the sender owns `freed`, and each uses the difference, so neither needs an atomic
+// read-modify-write. `claimed` runs ahead of `published` so several token reads are in flight at once.
 struct TokenQueue {
     uint32_t claimed = 0;
-    // Entries whose routing tail is final. An entry is announced only once it reaches here, never merely
-    // because it was claimed: a reader that claims several entries to keep DRAM reads in flight would
-    // otherwise hand the sender an entry whose command word it has not written yet, every time a claim
-    // blocks and flushes.
+    // Entries whose fwd_meta is written. Only these are published: when a blocked claim flushes, other
+    // claimed entries may not have their command word yet.
     uint32_t ready = 0;
     uint32_t published = 0;
 
@@ -226,18 +187,15 @@ struct TokenQueue {
             if (claimed - *freed < ct.queue_depth) {
                 return claimed++ % ct.queue_depth;
             }
-            // Never block holding entries the sender has not been told about, or it waits on us while we
-            // wait on it.
+            // Publish before blocking, or the sender and this reader wait on each other.
             flush_publish();
         }
     }
 
-    // An entry's tail is written; it may now be announced.
+    // The entry's fwd_meta is written; it may now be published.
     void mark_ready() { ready++; }
 
-    // Give back the capacity of every claim that was never marked ready. The sender never saw them --
-    // flush_publish only ever announces up to `ready` -- so this only stops them counting against
-    // claimed - freed for the rest of the run.
+    // Returns the capacity of claims never marked ready. The sender never saw them.
     void release_unready() {
         ASSERT(claimed >= ready);
         claimed = ready;
@@ -259,9 +217,9 @@ uint32_t chunk_len(const Control& c, uint32_t origin_row, uint32_t e, uint32_t i
     return slice_begin(n, idx + 1, count) - slice_begin(n, idx, count);
 }
 
-// Where each chunk of a descriptor list starts, as a page offset into a stream's section. The section is
-// dense and holds no addresses, so a chunk is found only by summing the lengths before it -- and both
-// sides of a section run this over lists validate_chunk_agreement proved identical.
+// Page offset of each chunk of a descriptor list within a stream's fwd_section. The section holds only pages,
+// so a chunk starts at the sum of the lengths before it. Both chips of a section run this over the same list;
+// the host function validate_chunk_agreement guarantees that.
 uint32_t chunk_starts(const Control& c, uint32_t block_base, volatile tt_l1_ptr uint32_t* start) {
     uint32_t at = 0;
     for (uint32_t d = 0; d < ct.num_forward; d++) {
@@ -276,8 +234,7 @@ uint32_t chunk_starts(const Control& c, uint32_t block_base, volatile tt_l1_ptr 
             at += chunk_len(c, origin, e, idx, cnt);
         }
     }
-    // The host bounds the section without knowing any of these lengths, so this is where that bound is
-    // actually tested against the data.
+    // The host sizes the section without knowing these lengths; this checks the data fits.
     ASSERT(at <= ct.fwd_pages_per_stream);
     return at;
 }
@@ -298,10 +255,9 @@ void own_phase(
     const MetaAcc& meta_acc,
     const FwdAcc& fwd_acc,
     uint32_t my_fwd_section) {
-    // Own assignments, furthest first. The nearest one is the chip across the cable: a single hop that
-    // lands straight in its output. Everything further goes into that chip's forwarding section instead,
-    // at the position the two chips agree this chunk occupies -- own assignment a is outgoing
-    // descriptor a, because both lists are emitted furthest-first by the same generator.
+    // Own assignments, furthest first. The nearest is the neighbour chip: one hop, straight into its output.
+    // Anything further goes into the neighbour's fwd_section. Own assignment a is outgoing descriptor a,
+    // because dispatch_fabric2d_assignments.cpp emits both lists furthest-first.
     for (uint32_t a = 0; a < ct.num_own; a++) {
         const uint32_t base = ct.assignment_base + a * dspf2d::ASSIGNMENT_WORDS;
         const uint32_t dst_chip = kernel_compile_time_args[base + 0];
@@ -323,9 +279,9 @@ void own_phase(
                 const uint32_t entry = queue.claim_entry();
                 noc_async_read(in_acc.get_noc_addr(token), entry_addr(entry), ct.token_size_bytes);
 
-                // Both destination addresses are computed HERE and travel with the token: every buffer
-                // is interleaved DRAM whose base is uniform across the mesh, so a page index names the
-                // same place on any chip and no later hop needs an address generator.
+                // Both final addresses are computed here and travel with the token. Every buffer is
+                // interleaved DRAM with the same base on every chip, so a page index names the same place
+                // on any chip.
                 volatile tt_l1_ptr dspf2d::FwdMetadata* fwd_meta = entry_meta(entry);
                 fwd_meta->final_payload_addr = out_acc.get_noc_addr(page);
                 fwd_meta->final_meta_addr = meta_acc.get_noc_addr(page);
@@ -338,8 +294,8 @@ void own_phase(
                     fwd_meta->cmd = dspf2d::CMD_FINAL_WRITE;
                     fwd_meta->this_addr = fwd_meta->final_payload_addr;
                 } else {
-                    // The last page of a chunk forces the downstream signal, which is the boundary that
-                    // reader switches on: leave it uncounted and the whole axis waits.
+                    // A chunk's last page forces the downstream signal; without it the downstream reader
+                    // waits forever for the chunk to finish.
                     fwd_meta->cmd = (i + 1 == to) ? dspf2d::CMD_FORWARD_END : dspf2d::CMD_FORWARD;
                     fwd_meta->this_addr = fwd_acc.get_noc_addr(my_fwd_section + out_base + (i - from));
                 }
@@ -349,15 +305,13 @@ void own_phase(
     }
 }
 
-// Pages this stream forwards: read out of its own forwarding section and pushed one hop further, or
-// delivered if the chip across the cable is where they were going.
+// Pages this stream forwards: read from its fwd_section and sent one hop further, or delivered if the
+// neighbour chip is their destination.
 template <typename FwdAcc>
 uint32_t forward_phase(
     const Control& c, TokenQueue& queue, const FwdAcc& fwd_acc, uint32_t my_fwd_section, uint32_t nbr_row) {
     uint32_t consumed = 0;  // pages taken out of this stream's section, which is what end_stream gives back
-    // Arrivals, in the order upstream wrote them. A page here is bound for the chip across the cable or
-    // further; the first case is a final write, the second goes into that chip's section at the position
-    // the outgoing list gives it.
+    // Arriving chunks, in the order upstream wrote them.
     uint32_t out_d = ct.num_own - 1;  // own assignments occupy the first num_own - 1 outgoing descriptors
     for (uint32_t d = 0; d < ct.num_forward; d++) {
         const uint32_t base = ct.in_chunks_base + d * dspf2d::ASSIGNMENT_WORDS;
@@ -375,18 +329,15 @@ uint32_t forward_phase(
             const uint32_t in_base = c.in_start[d * ct.experts_per_chip + j];
             const uint32_t out_base = continues ? c.out_start[this_out_d * ct.experts_per_chip + j] : 0;
             volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.fwd_sem_addr);
-            // Pages are read a batch at a time. One read in flight per stream is a DRAM round trip
-            // per page -- the op's actual limit, not its bandwidth -- and the queue already has the
-            // depth to cover it. BATCH <= QUEUE_DEPTH/2 is what keeps a batch of unannounced entries
-            // from filling the queue against a sender that is still draining the previous one.
+            // Pages are read a batch at a time so several DRAM reads are in flight. BATCH <= QUEUE_DEPTH is
+            // enough to avoid deadlock, since claim_entry publishes before it blocks; BATCH <= QUEUE_DEPTH/2
+            // lets the sender drain one batch while the next is read.
             for (uint32_t p = 0; p < len;) {
                 const uint32_t n = (len - p < ct.batch) ? (len - p) : ct.batch;
                 uint32_t entries[dspf2d::BATCH];
                 for (uint32_t i = 0; i < n; i++) {
-                    // Upstream fills the section strictly left to right, so its page count is the
-                    // high-water offset and a page is ready once that count passes it.
-                    // The invalidate has to precede the read: an upstream chip owns this counter, so a
-                    // cached line would never show its increments.
+                    // Upstream fills the section in order, so a page is ready once the arrival count
+                    // passes its offset. An upstream chip increments the counter, so invalidate first.
                     while (true) {
                         invalidate_l1_cache();
                         if (*arrived > in_base + p + i) {
@@ -400,20 +351,16 @@ uint32_t forward_phase(
                         entry_addr(entries[i]),
                         ct.token_size_bytes + dspf2d::FWD_EXTRA_BYTES);
                 }
-                noc_async_read_barrier();  // the routing tails decide the next hop, so they must be here
-                // The reads landed behind the data cache, and these entries carried different pages a
-                // few iterations ago: without this, a tail's addresses can still be that page's.
+                noc_async_read_barrier();  // fwd_meta decides the next hop, so it must have landed
+                // The reads bypass the data cache and these entries held other pages before, so a cached
+                // fwd_meta could be stale.
                 invalidate_l1_cache();
 
                 for (uint32_t i = 0; i < n; i++) {
                     volatile tt_l1_ptr dspf2d::FwdMetadata* fwd_meta = entry_meta(entries[i]);
-                    // Whether this hop is the last is a property of the CHUNK, so it comes from the
-                    // descriptor rather than from the arriving tail: every page of (origin, dst_row)
-                    // shares one destination, and the descriptor lists are the pair
-                    // validate_chunk_agreement proved the two chips agree on. Reading it back out of
-                    // the tail would instead make control flow depend on a DRAM round-trip, and an
-                    // unwritten tail reads as chip 0 -- indistinguishable from a genuine destination
-                    // on the chip whose id is 0.
+                    // Every page of (origin, dst_row) shares one destination, so whether this hop is the
+                    // last comes from the descriptor. fwd_meta is only checked: an unwritten one reads as
+                    // chip 0, which is also a valid chip id.
                     ASSERT(fwd_meta->dst_chip == (uint64_t)dst_chip);
                     if (!continues) {
                         fwd_meta->cmd = dspf2d::CMD_FINAL_WRITE;
@@ -431,26 +378,20 @@ uint32_t forward_phase(
     return consumed;
 }
 
-// Tokens routed to an expert this chip hosts. They never touch the fabric, so each is a DRAM read and
-// two DRAM writes out of scratch entries that are deliberately never published -- publishing them would
-// put these tokens on the cable as well. Every stream runs this over its own fraction, so the split
-// has to cover exactly once, the same rule the remote assignments follow.
+// Tokens routed to an expert this chip hosts. They do not use the fabric: each is one DRAM read and two DRAM
+// writes through queue entries used as scratch, which are never published so the sender does not send them.
+// Each stream takes its own slice of every bucket; the slices cover each token exactly once.
 //
-// One read in flight is a DRAM round trip per token, which is the limit here, so the phase keeps
-// ct.batch outstanding and waits once per batch on each side. Scratch is claimed as tokens need it,
-// so a stream with few local tokens does not wait for entries it will not use. The queue argument is not
-// the forwards': scratch never becomes ready, so the flush_publish inside claim_entry can free nothing
-// here, and progress rests on the sender draining what the earlier phases published -- which it does
-// unconditionally -- with this phase holding at most ct.batch of the queue_depth meanwhile.
+// ct.batch reads are kept in flight. Scratch is claimed only as tokens need it. Scratch never becomes
+// ready, so claim_entry's flush frees nothing here; progress relies on the sender draining what earlier
+// phases published, while this phase holds at most ct.batch entries.
 template <typename InAcc, typename OutAcc, typename MetaAcc>
 void local_phase(
     const Control& c, TokenQueue& queue, const InAcc& in_acc, const OutAcc& out_acc, const MetaAcc& meta_acc) {
-    // Every earlier phase ended in flush_publish, so nothing unready is held: the scratch this phase
-    // claims is exactly what release_unready gives back.
+    // Every earlier phase ended with flush_publish, so release_unready returns exactly this phase's scratch.
     ASSERT(queue.claimed == queue.ready);
-    // held <= ct.batch: an entry is claimed only when every held one is pending, and a batch is written
-    // out at ct.batch pending. Every batch restarts at scratch[0], reusing the same held entries, which
-    // write_batch's departure wait makes safe.
+    // held <= ct.batch: an entry is claimed only when every held one is pending, and a batch is written out
+    // at ct.batch pending. Each batch reuses the held entries from scratch[0], safe after write_batch's flush.
     static_assert(ct.batch <= dspf2d::BATCH, "the scratch arrays are sized by BATCH");
     uint32_t scratch[dspf2d::BATCH];
     uint32_t pages[dspf2d::BATCH];
@@ -464,8 +405,7 @@ void local_phase(
             noc_async_write(addr, out_acc.get_noc_addr(pages[i]), ct.token_size_bytes);
             noc_async_write(addr + ct.token_size_bytes, meta_acc.get_noc_addr(pages[i]), dspf2d::METADATA_WIRE_BYTES);
         }
-        // The entries ARE the buffers: a refill may start once the writes have read them out of L1,
-        // which is departure, not completion -- the wait the sender uses before it frees an entry.
+        // The entries are the write sources, so they may be refilled once the writes have left L1.
         noc_async_writes_flushed();
         pending = 0;
     };
@@ -498,8 +438,7 @@ void local_phase(
     if (pending > 0) {
         write_batch();
     }
-    // Departure was enough for the entries; the output pages need completion, and this RISC is the only
-    // thing that waits for it -- the firmware barriers nothing at kernel end. One wait per phase.
+    // The output pages need completion, and the firmware does not wait for writes at kernel end.
     noc_async_write_barrier();
     queue.release_unready();
 }
@@ -512,8 +451,7 @@ void kernel_main() {
 
     {
         DeviceZoneScopedN("dspf2d_index");
-        // The compute RISCs have been waiting for the tables since launch; once they are in, the four
-        // RISCs walk together and this RISC's own RISC is one of them.
+        // The TRISCs wait for the tables; once they are in, all four RISCs build the index together.
         routing_index::reader_routing_index(c, [&] {
             read_control_tables(c);
             read_indices(c);
@@ -521,7 +459,7 @@ void kernel_main() {
             size_buckets(c);
         });
         {
-            // How long this RISC waits for the slowest of the other three: the split's imbalance.
+            // How long this RISC waits for the slowest of the other three: the imbalance of the split.
             DeviceZoneScopedN("dspf2d_index_wait");
             routing_index::wait_all_riscs(dspf2d::kRiscFilled);
         }
@@ -542,8 +480,7 @@ void kernel_main() {
         TensorAccessor(dspf2d::ReaderCtArgs::fwd_args, get_arg_val<uint32_t>(dspf2d::ReaderRtArg::kFwdAddr));
     const uint32_t my_fwd_section = ct.stream * ct.fwd_pages_per_stream;
 
-    // Which position on the axis the chip across this cable holds. The outgoing list is ordered by it,
-    // and a page bound for it is delivered rather than forwarded.
+    // The neighbour chip's position on the axis. A page bound for it is delivered, not forwarded.
     uint32_t nbr_row = 0;
     for (uint32_t r = 0; r < ct.extent; r++) {
         if (kernel_compile_time_args[ct.ring_chip_ids_base + r] == ct.nbr_chip_id) {
@@ -563,14 +500,13 @@ void kernel_main() {
         own_phase(c, queue, in_acc, out_acc, meta_acc, fwd_acc, my_fwd_section);
         queue.flush_publish();
     }
-    uint32_t consumed = 0;  // pages this stream took out of its forwarding section
+    uint32_t consumed = 0;  // pages this stream took out of its fwd_section
     {
         DeviceZoneScopedN("dspf2d_forward");
         consumed = forward_phase(c, queue, fwd_acc, my_fwd_section, nbr_row);
         queue.flush_publish();
     }
-    // Last, because these pages never leave the chip: anything ahead of them in this order is a chip
-    // downstream waiting.
+    // Local tokens go last because they never leave the chip, while earlier pages have chips downstream waiting.
     {
         DeviceZoneScopedN("dspf2d_local");
         local_phase(c, queue, in_acc, out_acc, meta_acc);
@@ -584,21 +520,14 @@ void kernel_main() {
         queue.flush_publish();
 
         noc_async_atomic_barrier();
-        // Give back exactly what was taken, rather than zeroing. The upstream chip owns this counter's
-        // increments and is under no obligation to have stopped: it may already be a launch ahead and
-        // signalling for the next one. A zero throws those away and its forward then waits for pages that,
-        // as far as the counter is concerned, never arrived -- which is a ring-wide hang rather than
-        // wrong data. Subtracting leaves an early signal standing, and it is already the right base for
-        // the next launch, whose positions start at zero again.
-        //
-        // The NoC has only an atomic add, so a subtract is the two's complement; `noc_semaphore.h`
-        // does the same where it decrements. Both counts are bounded by the section, so the unsigned
-        // wrap is exact.
+        // Subtract what this launch consumed instead of zeroing: the upstream chip may already be signalling
+        // for the next launch, and zeroing would drop those signals and hang it. The NoC only has an atomic
+        // add, so this adds the two's complement; both counts are bounded by the section, so the wrap is exact.
         noc_semaphore_inc(get_noc_addr(ct.fwd_sem_addr), (uint32_t)(0u - consumed));
         noc_async_atomic_barrier();
         if constexpr (ct.untilize_tile_rows > 0) {
-            // Safe here and only here: the wait above this launch's first token read proved all
-            // untilize_tile_rows increments had arrived, so no writer is still signalling this counter.
+            // Safe only here: the wait before the first token read saw all untilize_tile_rows increments,
+            // so no writer still signals this counter.
             noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.untilize_sem_addr), 0);
         }
     }

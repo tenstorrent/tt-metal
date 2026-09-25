@@ -73,11 +73,10 @@ StreamPlacements decide_device_placement(
         }
     }
 
-    // Every send is a single hop, so the two directions must leave by different cables. On an axis that
-    // is not wrap-wired the "neighbour" one way round is the far end of the line, and its route's first
-    // hop leaves by the SAME eth core as the other direction -- so both streams would open a connection
-    // on one EDM channel, which stores a single worker_xy and deadlocks both of them permanently at open.
-    // Catching it here turns a 32-chip hang into a message.
+    // Every send is a single hop, so the two directions must leave by different eth cores. On an axis that
+    // is not wrap-wired, the neighbour one way round is the far end of the line, and the first hop toward
+    // it leaves by the same eth core as the other direction. Both streams would then open a connection on
+    // one EDM channel, which stores a single worker_xy, and both would deadlock at open.
     for (uint32_t k = 0; k < num_links; k++) {
         const StreamId cw = make_stream_id(k, true);
         const StreamId ccw = make_stream_id(k, false);
@@ -111,11 +110,11 @@ StreamPlacements decide_device_placement(
                 candidate.link_idx});
     };
 
-    // Nearest-first, so a stream already as close as it can get keeps that core and any displacement
-    // falls on a stream that was further out anyway. Eth cores own a row no worker sits in, so the
-    // NOC_1 -y leg always costs a hop and sharing the eth core's column is what removes the -x leg --
-    // which means the floor is one hop and several streams can sit on it. Two of a chip's eth cores
-    // can share a column, so even a nearest stream may find its core taken and has to walk.
+    // Nearest first, so a stream that already has its closest core keeps it, and any stream that has to
+    // move was further away anyway. Eth cores sit in a row with no workers, so the NOC_1 -y leg always
+    // costs a hop, and a worker in the eth core's column avoids the -x leg: the minimum is one hop, and
+    // several streams can have it. Two eth cores can share a column, so even a nearest stream may find its
+    // core taken and have to move.
     std::vector<StreamId> order;
     order.reserve(candidates.size());
     for (const auto& [stream, candidate] : candidates) {
@@ -128,11 +127,8 @@ StreamPlacements decide_device_placement(
     for (const StreamId stream : order) {
         const auto& candidate = candidates.at(stream);
         const auto at = std::find(allowed_cores.begin(), allowed_cores.end(), candidate.worker);
-        // Refused rather than quietly relocated: the whole point of bounding the allowed cores is that the
-        // cores it does NOT hand this op belong to whatever else shares the chip, so a stream that
-        // wants one of those is the caller's core set being wrong, not something to work around. The
-        // model's core set is a row of the compute grid, which is where get_closest_worker_to_eth_core
-        // lands anyway.
+        // Refused, not relocated: cores outside allowed_cores belong to other work on the chip, so a
+        // nearest core outside it means the caller's core set is wrong.
         TT_FATAL(
             at != allowed_cores.end(),
             "dispatch_fabric2d {}: the worker nearest stream {}'s eth core is {}, which is outside the "
@@ -162,7 +158,7 @@ StreamPlacements decide_device_placement(
 MeshPlacement decide_placement(
     ttnn::MeshDevice* mesh, uint32_t axis, uint32_t num_links, const tt::tt_metal::CoreRangeSet& allowed_cores) {
     TT_FATAL(mesh != nullptr, "dispatch_fabric2d: mesh device is null");
-    // One order for every chip, so a stream's core is decided the same way everywhere -- a sender's
+    // One order for every chip, so a stream's core is decided the same way everywhere; a sender's
     // arguments name the worker serving the same stream on the downstream chip.
     const std::vector<tt::tt_metal::CoreCoord> cores = corerange_to_cores(allowed_cores);
     TT_FATAL(
@@ -177,8 +173,6 @@ MeshPlacement decide_placement(
     return placement;
 }
 
-// The cores of the allowed cores this op does NOT use for a stream, in allowed cores order. There is nothing
-// else on them, which is what lets the untilize CBs take most of an untilizer's L1.
 std::vector<tt::tt_metal::CoreCoord> spare_cores(
     const tt::tt_metal::CoreRangeSet& allowed_cores, const StreamPlacements& streams) {
     std::set<tt::tt_metal::CoreCoord> taken;

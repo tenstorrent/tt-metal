@@ -13,14 +13,11 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d {
 
-// Everything every core of the untilizer pool is told, which is everything except which tile rows it
-// takes. Built only for a TILE input; `plan_untilize` returns nothing for a row-major one, and that
-// absence is what the rest of the program factory branches on.
+// Settings shared by every core of the untilizer pool; only the tile rows each core takes differ. A tile
+// row is 32 token rows, one tile high. `plan_untilize` returns nothing for a row-major input.
 //
-// The two formats are the two tensors: the tiles arrive in the input's and the rows leave in the
-// payload's, and the packer converts between them as it writes. They are equal today because the op
-// takes a BFLOAT16 input and pages a BFLOAT16 payload, and keeping them apart is what leaves room for
-// the fp8 payload the sibling `dispatch` already packs this way.
+// Tiles arrive in the input's format and rows leave in the payload's; the packer converts between them as
+// it writes. Both are BFLOAT16 today.
 struct UntilizePlan {
     uint32_t num_tile_rows = 0;
     uint32_t tiles_per_row = 0;
@@ -42,30 +39,25 @@ std::optional<UntilizePlan> plan_untilize(
     uint32_t sem_addr,
     tt::tt_metal::Buffer* staging);
 
-// Untilizers per link, a link being its two streams. Five per link covers the production shape (20
-// tile rows at seq 640). The stream readers' `dspf2d_wait_untilize` zone rising off zero is the signal
-// this is too low, and it is the only one.
+// Untilizers per link (two streams per link).
 constexpr uint32_t UNTILIZERS_PER_LINK = 5;
 
-// Where the pool ended up relative to where it is designed to be.
+// Whether the whole pool fit in the row under the streams.
 enum class UntilizerPoolFallback : uint8_t {
     kNone,          // all of it in the row under the streams
     kRowTooNarrow,  // the row has fewer spare cores than the pool wants; the rest come from elsewhere
 };
 
-// The pool that turns a TILE input into staging: a bounded subset of the allowed cores' spare cores, each
-// running a reader / pack_untilize / writer trio over its round-robin share of the tile rows.
+// Adds the pool that untilizes a TILE input into staging: spare cores, each running a reader,
+// pack_untilize and a writer over its round-robin share of the tile rows.
 //
-// UNTILIZERS_PER_LINK per link, capped at one per tile row, in the row directly under the streams and
-// spread across the streams' columns. The streams sit in the row under the eth cores; an untilizer on
-// that same row puts its DRAM reads and staging writes on the NoC row the streams' own DRAM traffic
-// (forwarding pages, output pages, staging reads) already fills, and the row below is the closest one
-// that does not. A sub-device with no such row is refused. One where that row has too few spare cores
-// tops the pool up from elsewhere, and the return value says so for the caller to report once per build.
+// UNTILIZERS_PER_LINK per link, at most one per tile row, in the row directly under the streams and
+// spread across the streams' columns. The streams' own row already carries their DRAM traffic
+// (fwd_section pages, output pages, staging reads); the row below is the closest one that does not. A
+// sub-device without that row is refused. If that row has too few spare cores, the rest of the pool
+// comes from other spare cores, and the return value says so, so the caller can warn once per build.
 //
-// These cores run nothing else, which is what lets the untilize circular buffers take most of their
-// L1 -- and it is why the pool is drawn from the allowed cores rather than from the grid: on the model's
-// split, everything outside it belongs to the shared expert running at the same time.
+// Nothing else runs on these cores, so the untilize circular buffers can take most of their L1.
 UntilizerPoolFallback add_untilizer_pool(
     tt::tt_metal::ProgramDescriptor& desc,
     const StreamPlacements& streams,
