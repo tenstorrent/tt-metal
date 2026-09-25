@@ -166,6 +166,8 @@ inline void _llk_math_eltwise_binary_broadcast_init_(const TensorShape& tensor_s
     _llk_math_eltwise_binary_broadcast_addrmod_<BROADCAST_TYPE, MATH_FIDELITY_TYPE>();
     _llk_math_eltwise_binary_broadcast_mop_config_<ELTWISE_BINARY_TYPE, BROADCAST_TYPE, MATH_FIDELITY_TYPE>(tensor_shape);
 
+    _set_tile_shape_idx_gpr_(find_max(FACE_R_DIM, tensor_shape.face_r_dim * tensor_shape.total_num_faces()));
+
     // Reset all counters
     _reset_counters_<p_setrwc::SET_ABD_F>();
 }
@@ -182,7 +184,7 @@ inline void _llk_math_eltwise_binary_broadcast_init_(const TensorShape& tensor_s
  */
 inline void _llk_math_eltwise_binary_broadcast_(const std::uint32_t tile_idx)
 {
-    _set_dst_write_addr_<DstTileShape::Tile32x32>(tile_idx);
+    _set_dst_write_addr_by_rows_(tile_idx);
 
     // Run MOP
     ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);

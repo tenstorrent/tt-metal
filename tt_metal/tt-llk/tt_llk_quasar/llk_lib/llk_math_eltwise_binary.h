@@ -298,6 +298,8 @@ inline void _llk_math_eltwise_binary_init_(const ckernel::TensorShape& tensor_sh
         addr_mod_t {}.set(ADDR_MOD_3);
     }
 
+    _set_tile_shape_idx_gpr_(find_max(FACE_R_DIM, tensor_shape.face_r_dim * tensor_shape.total_num_faces()));
+
     // Reset all counters
     _reset_counters_<p_setrwc::SET_ABD_F>();
 }
@@ -319,7 +321,7 @@ inline void _llk_math_eltwise_binary_init_(const ckernel::TensorShape& tensor_sh
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE, EltwiseBinaryReuseDestType reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void _llk_math_eltwise_binary_(const std::uint32_t tile_idx, const ckernel::TensorShape& tensor_shape, const bool clear_in_fp32_mode = false)
 {
-    _set_dst_write_addr_<DstTileShape::Tile32x32>(tile_idx);
+    _set_dst_write_addr_by_rows_(tile_idx);
 
     if constexpr (reuse_dest != EltwiseBinaryReuseDestType::NONE)
     {
