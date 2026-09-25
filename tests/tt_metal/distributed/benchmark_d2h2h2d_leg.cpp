@@ -46,7 +46,8 @@ const std::vector<int64_t> kCores = {1, 2, 4, 8, 16, 32, 64};
 // full host-to-host credit round trip per frame. ring_pages x page must fit one arena.
 // Runs break at a ring wrap, so depth bounds how many frames one put can carry. The guard
 // array holds kMaxRingSlots per core, and ring x page must still fit the arena.
-const std::vector<int64_t> kRingPages = {1, 4, 8, 16, 32, 64};
+// 95 is the arena bound at a 16 KiB payload (1536 KiB / 16448); 128 only fits smaller pages.
+const std::vector<int64_t> kRingPages = {1, 4, 8, 16, 32, 64, 95, 128};
 const std::vector<int64_t> kVolumeMiB = {1024, 4096, 20480};
 const std::vector<int64_t> kPctSteady = {0, 10, 25};
 const std::vector<int64_t> kVerify = {0, 1};
@@ -85,6 +86,15 @@ void init_counters(benchmark::State& state) {
     state.counters["credit_puts_per_frame"] = 0;
     state.counters["done_puts_per_frame"] = 0;
     state.counters["msgs_per_frame"] = 0;
+    // The receiver's half. starved_credit_pct says the sender waits on it, so where ITS
+    // time goes is the other half of the chain and was previously invisible.
+    state.counters["rx_h2h_flush_pct"] = 0;
+    state.counters["rx_h2h_poll_pct"] = 0;
+    state.counters["rx_h2d_drain_pct"] = 0;
+    state.counters["rx_d2h_poll_pct"] = 0;
+    state.counters["rx_poll_calls"] = 0;
+    state.counters["rx_flushes"] = 0;
+    state.counters["rx_starved_pass_pct"] = 0;
     for (const char* p : {"d2h_issue_", "d2h_stall_", "h2h_put_credit_", "h2d_publish_drained_"}) {
         set_latency_counters(state, LatencySummary{}, 0, p);
     }
@@ -475,6 +485,13 @@ BENCHMARK_DEFINE_F(D2H2H2DFixture, Volume)(benchmark::State& state) {
         state.counters["done_puts_per_frame"] = rx.done_puts_per_frame;
         state.counters["msgs_per_frame"] =
             tx.puts_per_frame + rx.credit_puts_per_frame + rx.done_puts_per_frame;
+        state.counters["rx_h2h_flush_pct"] = rx.h2h_flush_pct;
+        state.counters["rx_h2h_poll_pct"] = rx.h2h_poll_pct;
+        state.counters["rx_h2d_drain_pct"] = rx.h2d_drain_pct;
+        state.counters["rx_d2h_poll_pct"] = rx.d2h_poll_pct;
+        state.counters["rx_poll_calls"] = static_cast<double>(rx.poll_calls);
+        state.counters["rx_flushes"] = rx.flushes;
+        state.counters["rx_starved_pass_pct"] = rx.starved_pass_pct;
         set_latency_counters(state, tx.d2h_issue, tx.d2h_samples, "d2h_issue_");
         set_latency_counters(state, tx.d2h_stall, tx.d2h_samples, "d2h_stall_");
         set_latency_counters(state, tx.h2h_put_credit, tx.h2h_samples, "h2h_put_credit_");
