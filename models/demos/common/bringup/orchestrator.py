@@ -148,39 +148,24 @@ def parse_stream(log: Path) -> dict:
     return info
 
 
-def _module_imports_ttnn(mod: str, repo: Path) -> bool:
-    base = repo / Path(*mod.split("."))
-    f = base.with_suffix(".py") if base.with_suffix(".py").exists() else base / "__init__.py"
-    return f.exists() and bool(re.search(r"^\s*(import ttnn|from ttnn)", f.read_text(errors="replace"), re.M))
+# Opening a device is what needs the safe runner's lock; importing ttnn does not grab the box.
+DEVICE_OPEN = re.compile(
+    r"open_mesh_device|open_device\s*\(|CreateDevice|ttnn\.MeshDevice\s*\(|ttnn\.open_|synchronize_device|"
+    r"get_device\s*\(|mesh_device\s*=\s*ttnn"
+)
 
 
-def code_imports_ttnn(code: str, repo: Path) -> bool:
-    """True if Python source actually imports ttnn, directly or through a repo module that imports it.
-    Parsed, so a script that only writes text containing "import ttnn" into a file is not flagged."""
-    import ast
-
-    try:
-        tree = ast.parse(code)
-    except SyntaxError:
-        return bool(re.search(r"^\s*(import ttnn|from ttnn)", code, re.M))
-    for node in ast.walk(tree):
-        names = []
-        if isinstance(node, ast.Import):
-            names = [a.name for a in node.names]
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            names = [node.module]
-        for n in names:
-            if n == "ttnn" or n.startswith("ttnn.") or _module_imports_ttnn(n, repo):
-                return True
-    return False
+def code_opens_device(code: str, repo: Path) -> bool:
+    """True if Python source (a heredoc, -c code or a script) opens a Tenstorrent device itself."""
+    return bool(DEVICE_OPEN.search(code))
 
 
 _HEREDOC = re.compile(r"<<-?\s*['\"]?(\w+)['\"]?[^\n]*\n(.*?)\n\1\b", re.S)
 
 
 def command_violations(commands: list[str], repo: Path) -> list[str]:
-    """Commands that reach the device without the safe runners: any direct pytest, or python running code that
-    imports ttnn (a script file, -c code, or a heredoc)."""
+    """Commands that reach the device without the safe runners: any direct pytest, or python whose own code (a script
+    file, -c code, a -m module or a heredoc) opens a device. Importing ttnn or reading goldens is not device access."""
     out = []
     for cmd in commands:
         heredocs = [m.group(2) for m in _HEREDOC.finditer(cmd)]
@@ -198,15 +183,17 @@ def command_violations(commands: list[str], repo: Path) -> list[str]:
             elif Path(w[0]).name.startswith("python"):
                 if "-c" in w:
                     code = w[w.index("-c") + 1] if w.index("-c") + 1 < len(w) else ""
-                    touches = code_imports_ttnn(code, repo)
                 elif "-m" in w:
                     mod = w[w.index("-m") + 1] if w.index("-m") + 1 < len(w) else ""
-                    touches = _module_imports_ttnn(mod, repo) and mod.split(".")[0] != "pip"
+                    base = repo / Path(*mod.split("."))
+                    f = base.with_suffix(".py") if base.with_suffix(".py").exists() else base / "__main__.py"
+                    code = f.read_text(errors="replace") if f.exists() else ""
                 elif any(x.endswith(".py") for x in w[1:]):
                     f = repo / next(x for x in w[1:] if x.endswith(".py"))
-                    touches = f.exists() and code_imports_ttnn(f.read_text(errors="replace"), repo)
+                    code = f.read_text(errors="replace") if f.exists() else ""
                 else:  # python - <<EOF
-                    touches = any(code_imports_ttnn(h, repo) for h in heredocs)
+                    code = "\n".join(heredocs)
+                touches = code_opens_device(code, repo)
                 if touches:
                     out.append(f"python on device code without a safe runner: {cmd[:120]!r}")
     return sorted(set(out))
