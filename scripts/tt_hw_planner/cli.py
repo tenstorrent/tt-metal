@@ -11675,6 +11675,29 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--dry-run", dest="dry_run", action="store_true", help="stage + preview the model card without pushing"
     )
     pph.add_argument("--token", help="HF token (default: env HF_TOKEN or the CLI login file)")
+    pph.add_argument(
+        "--container",
+        action="store_true",
+        help="build a REAL v5.1 tt-model container bundle (tt-model package --container "
+        "+ push): servable via tt-model pull/serve, like the published TT repos. "
+        "2.5-4h OCI build; needs Docker + a vLLM adapter (vllm_metadata.json).",
+    )
+    pph.add_argument("--box", help="planner box (QB2/T3K/GalaxyBH/...) to derive arch/hardware/mesh")
+    pph.add_argument("--arch", help="override arch: blackhole | wormhole_b0")
+    pph.add_argument("--hardware", help="override serve.hardware (e.g. p300x2)")
+    pph.add_argument("--mesh", help="override serve.mesh_device (e.g. P300x2)")
+    pph.add_argument("--kind", help="tt-model kind: vllm-plugin (default) | vllm-fork | tt-dit-server")
+    pph.add_argument("--plugin-ref", dest="plugin_ref", help="vllm-tt-plugin git ref (default: main)")
+    pph.add_argument("--vllm-version", dest="vllm_version", help="vLLM version (default: 0.24.0)")
+    pph.add_argument(
+        "--extra-models-dir",
+        dest="extra_models_dir",
+        help="dir the plugin scans for vllm_metadata.json (under source.code)",
+    )
+    pph.add_argument("--out", help="tt-model build staging dir (default ~/tt-model-builds)")
+    pph.add_argument("--tt-model-bin", dest="tt_model_bin", help="path to the tt-model executable")
+    pph.add_argument("--public", action="store_true", help="push the bundle public (shared by link)")
+    pph.add_argument("--publish", action="store_true", help="push public AND list in the catalog")
     pph.set_defaults(func=cmd_publish_hf)
 
     pao = sub.add_parser(
