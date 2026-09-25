@@ -96,8 +96,8 @@ the rendered `binding_*.yaml` + `manifest_*.json` per launch, `reset_<host>.log`
 
 The measurement arithmetic (steady-state window, TTFT-under-load statistics, timing-CSV reader) is
 in the ttnn-free `matrix_math.py`, unit-tested by
-`models/demos/minimax_m3/tests/unit/test_prefill_matrix_math.py` (host-only, runs in the 1-card
-MiniMax-M3 unit-test CI job).
+`models/demos/minimax_m3/tests/unit/test_prefill_matrix_math.py` (host-only, no device; run it with
+`pytest models/demos/minimax_m3/tests/unit/test_prefill_matrix_math.py`).
 
 ## Notes for comparing runs
 

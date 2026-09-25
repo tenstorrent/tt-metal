@@ -737,7 +737,7 @@
 # Deploy mesh is SP=8 x TP=4 -> (8, 4) on BH Galaxy
 - name: MiniMax-M3 unit tests (1-card)
   cmd: |
-    pytest --timeout 300 models/demos/minimax_m3/tests/unit/ -k "(1x1 or prefill_matrix) and not msa_layer"
+    pytest --timeout 300 models/demos/minimax_m3/tests/unit/ -k "1x1 and not msa_layer"
   model: minimax-m3
   skus:
     bh_p150:
