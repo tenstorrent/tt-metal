@@ -146,6 +146,37 @@ inline ttnn::operations::transformer::sdpa::ring_joint::SlidingHaloSources compu
     return sliding::sliding_halo_sources(mapping, q_local_tile_rows, ring_size, halo_tile_rows, 0, hop);
 }
 
+constexpr uint32_t kMaxMulticastHaloHops = 8;
+
+// Source tile row each hop of a multicast halo exchange ships, derived from kv_actual_isl. The caller
+// supplies the first hop's row, which it has already derived.
+inline void compute_multicast_origin_rows(
+    uint32_t kv_actual_isl,
+    uint32_t q_local_tile_rows,
+    uint32_t ring_size,
+    uint32_t halo_tile_rows,
+    uint32_t source_device,
+    uint32_t cache_local_tile_rows,
+    uint32_t halo_slot_count,
+    uint32_t first_hop,
+    uint32_t first_origin_row,
+    uint32_t hop_count,
+    uint32_t* origin_rows) {
+    origin_rows[0] = first_origin_row;
+    for (uint32_t i = 1; i < hop_count; ++i) {
+        origin_rows[i] = compute_halo_sources(
+                             kv_actual_isl,
+                             q_local_tile_rows,
+                             ring_size,
+                             halo_tile_rows,
+                             source_device,
+                             cache_local_tile_rows,
+                             halo_slot_count,
+                             first_hop + i)
+                             .first_start_tile;
+    }
+}
+
 // Clamp each input to the valid slab prefix, then repartition that prefix across links. Reader and
 // writer must update the effective page count and both range endpoints identically or their cb_output
 // page counts can diverge. The bank-owned path consumes the effective page count directly.

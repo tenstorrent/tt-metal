@@ -4516,16 +4516,19 @@ RING_JOINT_TRACE_REGION_SIZE = 32 * 1024 * 1024
 
 
 @pytest.mark.parametrize(
-    "block_cyclic,halo_slots,sliding_window_size",
+    "prefix_kind,halo_slots,sliding_window_size",
     [
-        pytest.param(False, 1, 128, id="aligned-single-halo"),
+        pytest.param("aligned", 1, 128, id="aligned-single-halo"),
         # A 256-token slab: the 384 and 1024 windows need two (the second a partial slab) and four halo
         # hops, so replays also cover the per-hop page ranges and the shared-link hand-off.
-        pytest.param(False, 1, 384, id="aligned-two-hop-partial"),
-        pytest.param(False, 1, 1024, id="aligned-four-hop"),
-        pytest.param(True, 2, 128, id="rotated-two-halos"),
+        pytest.param("aligned", 1, 384, id="aligned-two-hop-partial"),
+        pytest.param("aligned", 1, 1024, id="aligned-four-hop"),
+        # Slab-aligned but not group-aligned prefixes: the four-hop multicast splits into two runs whose
+        # origins change per replay.
+        pytest.param("slab_rotated", 1, 1024, id="slab-rotated-four-hop"),
+        pytest.param("rotated", 2, 128, id="rotated-two-halos"),
         pytest.param(
-            True,
+            "rotated",
             1,
             128,
             id="rotated-single-halo-guard",
@@ -4537,19 +4540,21 @@ RING_JOINT_TRACE_REGION_SIZE = 32 * 1024 * 1024
     ],
 )
 def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores(
-    block_cyclic, halo_slots, sliding_window_size
+    prefix_kind, halo_slots, sliding_window_size
 ):
     """Replay changing prefixes and slots; undersized halos use the bounded fallback."""
-    invalid_wrap = block_cyclic and halo_slots == 1
+    invalid_wrap = prefix_kind == "rotated" and halo_slots == 1
     halo_tokens = math.ceil((sliding_window_size - 1) / 128) * 128
     mesh_config = gpt_oss_chunked_mesh_config()
     sp_size = mesh_config.sp_size
     chunk_local = 256
     halo_tokens = math.ceil((sliding_window_size - 1) / 128) * 128
     chunk_global = chunk_local * sp_size
-    prefix_lengths = (
-        (0, chunk_global + 32, 2 * chunk_global - 32) if block_cyclic else (0, chunk_global, 2 * chunk_global)
-    )
+    prefix_lengths = {
+        "aligned": (0, chunk_global, 2 * chunk_global),
+        "slab_rotated": (0, chunk_global + 2 * chunk_local, chunk_local),
+        "rotated": (0, chunk_global + 32, 2 * chunk_global - 32),
+    }[prefix_kind]
     stable_groups = 4
     stable_kv_seq = sp_size * stable_groups * chunk_local
 
