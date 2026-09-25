@@ -51,6 +51,7 @@
 #include "combine_fabric2d_reader_ct_args.hpp"
 #include "combine_fabric2d_reader_rt_args.hpp"
 #include "combine_fabric2d_group_walk.hpp"
+#include "combine_fabric2d_tail_probe.hpp"
 
 constexpr hyb_cmbf2d::ReaderCtArgs ct{};
 
@@ -214,10 +215,12 @@ struct Untilized {
         if (batch != open) {
             release_through(batch);
             volatile tt_l1_ptr uint32_t* produced = produced_by(owner(batch));
-            invalidate_l1_cache();
-            while (*produced < batch / ct.num_untilizers + 1) {
+            hyb_cmbf2d::tail_probe::timed(hyb_cmbf2d::tail_probe::UNT, [&] {
                 invalidate_l1_cache();
-            }
+                while (*produced < batch / ct.num_untilizers + 1) {
+                    invalidate_l1_cache();
+                }
+            });
             open = batch;
         }
         const uint32_t row = (batch / ct.num_untilizers % ct.unt_ring_batches) * hyb_cmbf2d::UNT_BATCH_ROWS +
@@ -303,12 +306,14 @@ struct Reader {
         invalidate_l1_cache();
         if (claimed - *freed >= ct.num_l1_slots) {
             flush_publish();
-            while (true) {
-                invalidate_l1_cache();
-                if (claimed - *freed < ct.num_l1_slots) {
-                    break;
+            hyb_cmbf2d::tail_probe::timed(hyb_cmbf2d::tail_probe::SLOT, [&] {
+                while (true) {
+                    invalidate_l1_cache();
+                    if (claimed - *freed < ct.num_l1_slots) {
+                        break;
+                    }
                 }
-            }
+            });
         }
         return claimed++ % ct.num_l1_slots;
     }
@@ -481,12 +486,14 @@ struct Reader {
         invalidate_l1_cache();
         if (*fwd_arrived <= consumed) {
             flush_publish();  // let the sender work while we wait on upstream
-            while (true) {
-                invalidate_l1_cache();
-                if (*fwd_arrived > consumed) {
-                    break;
+            hyb_cmbf2d::tail_probe::timed(hyb_cmbf2d::tail_probe::FWD, [&] {
+                while (true) {
+                    invalidate_l1_cache();
+                    if (*fwd_arrived > consumed) {
+                        break;
+                    }
                 }
-            }
+            });
         }
         uint32_t k = *fwd_arrived - consumed;
         if (k > ct.batch) {
@@ -574,6 +581,10 @@ struct Reader {
 };
 
 void kernel_main() {
+#ifdef CMBF2D_IDLE
+    // Measurement mode: the routed expert runs as overlapped, with no combine traffic beside it.
+    return;
+#endif
     const Dram dram = open_dram();
     Reader reader{dram, read_control_tables(dram)};
 
@@ -603,15 +614,16 @@ void kernel_main() {
         }
 #endif
         reader.run_schedule(step);
-        reader.run_local_phase(step);
+        hyb_cmbf2d::tail_probe::timed(hyb_cmbf2d::tail_probe::LOCAL, [&] { reader.run_local_phase(step); });
 #if TILE
         reader.untilized.finish_expert(reader.walk);
 #endif
     }
     reader.end_stream();
 #if TILE
-    reader.untilized.wait_for_last_bumps();
+    hyb_cmbf2d::tail_probe::timed(hyb_cmbf2d::tail_probe::UNT, [&] { reader.untilized.wait_for_last_bumps(); });
 #endif
+    hyb_cmbf2d::tail_probe::report();
 
     // Back to zero for the next launch, which starts its own count at zero. The upstream sender cannot bump
     // this again: its bumps sum to exactly the pages of our region and we consumed all of them, so the last
