@@ -2,16 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The Blackhole Ethernet tile's clocks: the ERISC wall clock (AICLK ticks) and the eth_ctrl PTP timer's two counters,
-// CFR (refclk ticks, free-running from power-on) and PTP64NS (ns, running once PtpTimer::start() in eth_ptp.hpp
-// enables it). Reading a counter's LO half captures its HI half (tt_ptp_timer.sv; for the wall clock the captured
-// half is WALL_CLOCK_1_AT, WALL_CLOCK_1 being live). Usable from idle and active eth kernels alike; the stamping
-// hardware is eth_ptp.hpp.
+// The Blackhole Ethernet tile's clocks: the ERISC wall clock, which counts AI clock cycles, and the PTP timer's two
+// counters, the reference count (50 MHz ticks since power-on) and the PTP time in ns, which runs once PtpTimer::start()
+// in eth_ptp.hpp has started it. Reading the low half of any of them latches its high half for the next read. These
+// work from idle and active Ethernet kernels alike; the timestamping hardware is in eth_ptp.hpp.
 
 #pragma once
 
 #include <cstdint>
-#include <type_traits>
 
 #include "hostdev/streaming_profiler_common.h"
 #include "internal/ethernet/tt_eth_ss_regs.h"
@@ -23,47 +21,53 @@ constexpr uint32_t kRefclkHz = kernel_profiler::kEthRefclkHz;
 constexpr uint32_t kNsPerRefclkTick = 1'000'000'000u / kRefclkHz;  // 20
 constexpr uint32_t kPtiRefclk = kNsPerRefclkTick << 16;            // the timer's per-tick increment, 8.16 fixed point
 
-// ERISC wall clock (AICLK ticks). Reading LO latches HI into WALL_CLOCK_1_AT.
-constexpr uint32_t kWallClockLo = ETH_RISC_REGS_START + ETH_RISC_WALL_CLOCK_0;
-constexpr uint32_t kWallClockHi = ETH_RISC_REGS_START + ETH_RISC_WALL_CLOCK_1_AT;
-
-constexpr uint32_t kPtpTimerCtrl = ETH_PTP_TIMER_REGS_START + ETH_PTP_TIMER_CTRL;
-constexpr uint32_t kPtpFutureCfrLo = ETH_PTP_TIMER_REGS_START + ETH_PTP_TIMER_FUTURE_CFR_LO;
-constexpr uint32_t kPtpFutureCfrHi = ETH_PTP_TIMER_REGS_START + ETH_PTP_TIMER_FUTURE_CFR_HI;
-constexpr uint32_t kPtpFuturePti = ETH_PTP_TIMER_REGS_START + ETH_PTP_TIMER_FUTURE_PTI;
-constexpr uint32_t kPtpFutureTimestampLo = ETH_PTP_TIMER_REGS_START + ETH_PTP_TIMER_FUTURE_TIMESTAMP_LO;
-constexpr uint32_t kPtpFutureTimestampHi = ETH_PTP_TIMER_REGS_START + ETH_PTP_TIMER_FUTURE_TIMESTAMP_HI;
-constexpr uint32_t kPtpUpdatePti = ETH_PTP_TIMER_REGS_START + ETH_PTP_TIMER_UPDATE_PTI;
-constexpr uint32_t kPtpUpdateTimestamp = ETH_PTP_TIMER_REGS_START + ETH_PTP_TIMER_UPDATE_TIMESTAMP;
-constexpr uint32_t kPtpUpdateStat = ETH_PTP_TIMER_REGS_START + ETH_PTP_TIMER_UPDATE_STAT;
-constexpr uint32_t kPtpPtiStat = ETH_PTP_TIMER_REGS_START + ETH_PTP_TIMER_PTI_STAT;
-constexpr uint32_t kPtpCfrLo = ETH_PTP_TIMER_REGS_START + ETH_PTP_TIMER_CFR_LO;
-constexpr uint32_t kPtpCfrHi = ETH_PTP_TIMER_REGS_START + ETH_PTP_TIMER_CFR_HI;
-constexpr uint32_t kPtp64nsLo = ETH_PTP_TIMER_REGS_START + ETH_PTP_TIMER_64NS_LO;
-constexpr uint32_t kPtp64nsHi = ETH_PTP_TIMER_REGS_START + ETH_PTP_TIMER_64NS_HI;
-
 FORCE_INLINE uint32_t rd(uint32_t addr) { return *reinterpret_cast<volatile uint32_t*>(addr); }
 FORCE_INLINE void wr(uint32_t addr, uint32_t v) { *reinterpret_cast<volatile uint32_t*>(addr) = v; }
 
-// A register's fields as a struct of uint32_t bit-fields, the first at bit 0. Every bit has a name, reserved ones
-// included, so that a value built from designated initializers has all its other bits zero.
-template <typename Reg>
-FORCE_INLINE Reg rd(uint32_t addr) {
-    static_assert(sizeof(Reg) == sizeof(uint32_t));
-    return __builtin_bit_cast(Reg, rd(addr));
-}
-template <typename Reg, typename = std::enable_if_t<std::is_class_v<Reg>>>
-FORCE_INLINE void wr(uint32_t addr, Reg v) {
-    static_assert(sizeof(Reg) == sizeof(uint32_t));
-    wr(addr, __builtin_bit_cast(uint32_t, v));
+template <typename T>
+constexpr uint32_t bits(T v) {
+    static_assert(sizeof(T) == sizeof(uint32_t));
+    return __builtin_bit_cast(uint32_t, v);
 }
 
+// A memory-mapped register at a fixed address, read and written as T: uint32_t, or a struct of uint32_t bit-fields
+// laid out from bit 0. Every bit of such a struct has a name, reserved ones included, so that a value built with
+// designated initializers has all its other bits zero.
+template <typename T = uint32_t>
+struct Reg {
+    static_assert(sizeof(T) == sizeof(uint32_t));
+    uint32_t addr;
+    FORCE_INLINE T read() const { return __builtin_bit_cast(T, rd(addr)); }
+    FORCE_INLINE void write(T v) const { wr(addr, bits(v)); }
+};
+
+// The high word that goes with the low word is WALL_CLOCK_1_AT, latched by the low word's read; WALL_CLOCK_1 is live.
+constexpr Reg<> kWallClockLo{ETH_RISC_REGS_START + ETH_RISC_WALL_CLOCK_0};
+constexpr Reg<> kWallClockHi{ETH_RISC_REGS_START + ETH_RISC_WALL_CLOCK_1_AT};
+
 struct PtpUpdateStat {
-    uint32_t rsvd0 : 8;
+    uint32_t pti_pending : 1;
+    uint32_t timestamp_pending : 1;
+    uint32_t rsvd0 : 6;
     uint32_t pti_ack : 1;
     uint32_t timestamp_ack : 1;
     uint32_t rsvd1 : 22;
 };
+
+constexpr Reg<> kPtpTimerCtrl{ETH_PTP_TIMER_REGS_START + ETH_PTP_TIMER_CTRL};
+constexpr Reg<> kPtpFutureCfrLo{ETH_PTP_TIMER_REGS_START + ETH_PTP_TIMER_FUTURE_CFR_LO};
+constexpr Reg<> kPtpFutureCfrHi{ETH_PTP_TIMER_REGS_START + ETH_PTP_TIMER_FUTURE_CFR_HI};
+constexpr Reg<> kPtpFuturePti{ETH_PTP_TIMER_REGS_START + ETH_PTP_TIMER_FUTURE_PTI};
+constexpr Reg<> kPtpFutureTimestampLo{ETH_PTP_TIMER_REGS_START + ETH_PTP_TIMER_FUTURE_TIMESTAMP_LO};
+constexpr Reg<> kPtpFutureTimestampHi{ETH_PTP_TIMER_REGS_START + ETH_PTP_TIMER_FUTURE_TIMESTAMP_HI};
+constexpr Reg<> kPtpUpdatePti{ETH_PTP_TIMER_REGS_START + ETH_PTP_TIMER_UPDATE_PTI};
+constexpr Reg<> kPtpUpdateTimestamp{ETH_PTP_TIMER_REGS_START + ETH_PTP_TIMER_UPDATE_TIMESTAMP};
+constexpr Reg<PtpUpdateStat> kPtpUpdateStat{ETH_PTP_TIMER_REGS_START + ETH_PTP_TIMER_UPDATE_STAT};
+constexpr Reg<> kPtpPtiStat{ETH_PTP_TIMER_REGS_START + ETH_PTP_TIMER_PTI_STAT};
+constexpr Reg<> kPtpCfrLo{ETH_PTP_TIMER_REGS_START + ETH_PTP_TIMER_CFR_LO};
+constexpr Reg<> kPtpCfrHi{ETH_PTP_TIMER_REGS_START + ETH_PTP_TIMER_CFR_HI};
+constexpr Reg<> kPtp64nsLo{ETH_PTP_TIMER_REGS_START + ETH_PTP_TIMER_64NS_LO};
+constexpr Reg<> kPtp64nsHi{ETH_PTP_TIMER_REGS_START + ETH_PTP_TIMER_64NS_HI};
 
 // One step of a xorshift32 walk, any nonzero state.
 FORCE_INLINE uint32_t xorshift(uint32_t& x) {
@@ -75,13 +79,13 @@ FORCE_INLINE uint32_t xorshift(uint32_t& x) {
 
 // LO first: the read latches HI.
 FORCE_INLINE uint64_t read_cfr() {
-    const uint32_t lo = rd(kPtpCfrLo);
-    const uint32_t hi = rd(kPtpCfrHi);
+    const uint32_t lo = kPtpCfrLo.read();
+    const uint32_t hi = kPtpCfrHi.read();
     return (static_cast<uint64_t>(hi) << 32) | lo;
 }
 FORCE_INLINE uint64_t read_ptp64ns() {
-    const uint32_t lo = rd(kPtp64nsLo);
-    const uint32_t hi = rd(kPtp64nsHi);
+    const uint32_t lo = kPtp64nsLo.read();
+    const uint32_t hi = kPtp64nsHi.read();
     return (static_cast<uint64_t>(hi) << 32) | lo;
 }
 
@@ -101,11 +105,11 @@ struct Instant {
 FORCE_INLINE Instant read_instant() {
     Instant t;
     for (;;) {
-        const uint32_t hi0 = rd(kWallClockHi);
-        t.wall_lo = rd(kWallClockLo);
-        const uint32_t rlo = rd(kPtpCfrLo);
-        t.wall_hi = rd(kWallClockHi);
-        const uint32_t rhi = rd(kPtpCfrHi);
+        const uint32_t hi0 = kWallClockHi.read();
+        t.wall_lo = kWallClockLo.read();
+        const uint32_t rlo = kPtpCfrLo.read();
+        t.wall_hi = kWallClockHi.read();
+        const uint32_t rhi = kPtpCfrHi.read();
         if (t.wall_hi == hi0) {
             t.refclk = (static_cast<uint64_t>(rhi) << 32) | rlo;
             return t;
@@ -131,9 +135,9 @@ FORCE_INLINE void phase_walk(uint32_t& x) {
 // (a read_instant, for the high words) then holding that wall read and the new refclk.
 FORCE_INLINE bool try_bracket(Instant& t, uint32_t& x) {
     phase_walk(x);
-    const uint32_t ra = rd(kPtpCfrLo);
-    const uint32_t w = rd(kWallClockLo);
-    const uint32_t rb = rd(kPtpCfrLo);
+    const uint32_t ra = kPtpCfrLo.read();
+    const uint32_t w = kWallClockLo.read();
+    const uint32_t rb = kPtpCfrLo.read();
     if (ra == rb) {
         return false;
     }

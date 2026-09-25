@@ -107,10 +107,10 @@ FORCE_INLINE uint32_t frame_phase_cycles(uint32_t k, uint32_t p16) {
 // The next refclk update the ERISC sees, from reads back to back: its count and the wall read between the two refclk
 // reads that differ. False if none came within the spins (a dead refclk).
 FORCE_INLINE bool next_update(uint32_t& wall, uint32_t& refclk) {
-    uint32_t prev = rd(kPtpCfrLo);
+    uint32_t prev = kPtpCfrLo.read();
     for (uint32_t spin = 0; spin < 1024; spin++) {
-        const uint32_t w = rd(kWallClockLo);
-        const uint32_t r = rd(kPtpCfrLo);
+        const uint32_t w = kWallClockLo.read();
+        const uint32_t r = kPtpCfrLo.read();
         if (r != prev) {
             wall = w;
             refclk = r;
@@ -134,17 +134,17 @@ struct Pacer {
         }
     }
     void calibrate() {
-        const uint32_t a = rd(kWallClockLo);
+        const uint32_t a = kWallClockLo.read();
         turns(4096);
-        const uint32_t b = rd(kWallClockLo);
+        const uint32_t b = kWallClockLo.read();
         iter16 = ((b - a) * 16u) / 4096u;
     }
     FORCE_INLINE void until(uint32_t target) const {
-        const int32_t rem = static_cast<int32_t>(target - rd(kWallClockLo)) - 16;
+        const int32_t rem = static_cast<int32_t>(target - kWallClockLo.read()) - 16;
         if (rem > 0) {
             turns((static_cast<uint32_t>(rem) * 16u) / iter16);
         }
-        while (static_cast<int32_t>(rd(kWallClockLo) - target) < 0) {
+        while (static_cast<int32_t>(kWallClockLo.read() - target) < 0) {
         }
     }
 };
@@ -312,7 +312,7 @@ struct Grid {
         pacer.calibrate();
         uint32_t w0 = 0, r0 = 0, w1 = 0, r1 = 0;
         if (next_update(w0, r0)) {
-            while (rd(kPtpCfrLo) - r0 < 1000u) {
+            while (kPtpCfrLo.read() - r0 < 1000u) {
             }
             if (next_update(w1, r1)) {
                 p16 = ((w1 - w0) << 4) / ((r1 - r0) / 4u);
@@ -335,7 +335,7 @@ struct Grid {
             edge_wall = w;
             edge_refclk = r;
         } else {
-            w = rd(kWallClockLo);
+            w = kWallClockLo.read();
         }
         pacer.until(w + kLeadCycles + frame_phase_cycles(round * kTripsPerRound + j, p16));
         const bool went = issue(frame_at(base, j));
@@ -475,7 +475,7 @@ struct SenderLink : EndBase {
             send_next();
             return;
         }
-        const uint32_t w = rd(kWallClockLo);
+        const uint32_t w = kWallClockLo.read();
         if (static_cast<int32_t>(w - slot_wall) < 0) {
             return;
         }
@@ -506,9 +506,9 @@ private:
         return true;
     }
     __attribute__((noinline)) void send_next() {
-        const uint32_t w = rd(kWallClockLo);
+        const uint32_t w = kWallClockLo.read();
         out_sent += grid.send(slot_base, round, out_j0 + out_sent, diag);
-        diag.note_hold(rd(kWallClockLo) - w);
+        diag.note_hold(kWallClockLo.read() - w);
     }
     // A slot, once all the last burst's echoes are in: its pairs (egress stamps from the echoes themselves, ingress
     // stamps here), the round's records at a round boundary, then the next burst's frames, which the steps after it
@@ -552,7 +552,7 @@ private:
             slot_cfr = now.refclk;
         }
         schedule(now);
-        diag.note_hold(rd(kWallClockLo) - now.wall_lo);
+        diag.note_hold(kWallClockLo.read() - now.wall_lo);
     }
 };
 
@@ -585,7 +585,7 @@ private:
     // key back and, once sent, this end's egress stamp. A burst's first frame names the round, the sender's; a new one
     // closes the previous. Its last frame takes the burst's ingress stamps and pairs them.
     __attribute__((noinline)) void take() {
-        const uint32_t w = rd(kWallClockLo);
+        const uint32_t w = kWallClockLo.read();
         const uint32_t f = frame_at(slot_base, taken);
         volatile eth_channel_sync_t* s = sync_word(f);
         if (taken == 0) {
@@ -610,16 +610,16 @@ private:
         s->receiver_ack = s->bytes_sent;
         s->bytes_sent = 0;
         taken++;
-        diag.note_hold(rd(kWallClockLo) - w);
+        diag.note_hold(kWallClockLo.read() - w);
     }
     __attribute__((noinline)) void echo() {
-        const uint32_t w = rd(kWallClockLo);
+        const uint32_t w = kWallClockLo.read();
         echoed += grid.send(slot_base, round, echo_j0 + echoed, diag);
         if (echoed == kBurstFrames) {
             taken = 0;
             echoed = 0;
         }
-        diag.note_hold(rd(kWallClockLo) - w);
+        diag.note_hold(kWallClockLo.read() - w);
     }
 };
 

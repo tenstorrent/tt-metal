@@ -359,7 +359,7 @@ FORCE_INLINE uint32_t pass(uint32_t (&w)[3], uint32_t (&o)[4]) {
           [s2_1] "=&r"(x9),
           [s2_2] "=&r"(x10),
           [s2_3] "=&r"(x11)
-        : [wall] "r"(eth_ptp::kWallClockLo), [cfr] "r"(eth_ptp::kPtpCfrLo)
+        : [wall] "r"(eth_ptp::kWallClockLo.addr), [cfr] "r"(eth_ptp::kPtpCfrLo.addr)
         : "memory");
     w[0] = w0;
     w[1] = w1;
@@ -418,7 +418,7 @@ FORCE_INLINE bool take(uint32_t& walk, Catch& c, const Table& t) {
 Table calibrate(volatile tt_l1_ptr uint32_t* go, volatile tt_l1_ptr uint32_t* stop, volatile tt_l1_ptr uint32_t* hb) {
     Table t;
     static uint32_t hist[64];
-    uint32_t walk = eth_ptp::rd(eth_ptp::kWallClockLo) | 1u;
+    uint32_t walk = eth_ptp::kWallClockLo.read() | 1u;
     for (uint32_t i = 0; i < 1024; i++) {
         uint32_t w[3], o[4];
         pad(walk);

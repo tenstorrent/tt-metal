@@ -90,8 +90,8 @@ void kernel_main() {
     frame->bytes_sent = 0;
     frame->receiver_ack = 0;
     res->done = 0;
-    res->sel_before = eth_ptp::rd(eth_ptp::txq_reg(kTxq, eth_ptp::kTxqPktCfgSelSwOff));
-    res->no_match_before = eth_ptp::rd(eth_ptp::kRxFlNoMatchActions);
+    res->sel_before = eth_ptp::bits(eth_ptp::txq_pkt_cfg_sel_sw(kTxq).read());
+    res->no_match_before = eth_ptp::bits(eth_ptp::kRxNoMatchActions.read());
     res->timer_ok = g_timer.start();
     g_rule.install();
     g_header.install();
@@ -137,8 +137,8 @@ void kernel_main() {
     g_txq.disarm();
     g_header.restore();
     g_rule.remove();
-    res->sel_after = eth_ptp::rd(eth_ptp::txq_reg(kTxq, eth_ptp::kTxqPktCfgSelSwOff));
-    res->no_match_after = eth_ptp::rd(eth_ptp::kRxFlNoMatchActions);
+    res->sel_after = eth_ptp::bits(eth_ptp::txq_pkt_cfg_sel_sw(kTxq).read());
+    res->no_match_after = eth_ptp::bits(eth_ptp::kRxNoMatchActions.read());
     res->tx_missing = tx_missing;
     res->tx_extra = tx_extra;
     res->rx_missing = rx_missing;

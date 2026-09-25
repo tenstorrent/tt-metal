@@ -522,12 +522,12 @@ void kernel_main() {
         (*hb)++;
         invalidate_l1_cache();
     }
-    uint32_t last_sweep = eth_ptp::rd(eth_ptp::kWallClockLo);
+    uint32_t last_sweep = eth_ptp::kWallClockLo.read();
     while (true) {
         (*hb)++;
         invalidate_l1_cache();
         d.drain_pusher(false);
-        const uint32_t now = eth_ptp::rd(eth_ptp::kWallClockLo);
+        const uint32_t now = eth_ptp::kWallClockLo.read();
         if (now - last_sweep >= kSweepCycles) {
             last_sweep = now;
             d.drain_pusher(true);
