@@ -148,7 +148,6 @@ public:
         std::optional<tt::umd::IoOrdering> ordering = std::nullopt) const;
     void read_dram_vec(void* mem_ptr, uint32_t sz_in_bytes, ChipId device_id, int dram_view, uint64_t addr) const;
 
-    // Write to core. Accepts physical noc coordinates. See write_dram_vec for `ordering`.
     void write_core(
         const void* mem_ptr,
         uint32_t sz_in_bytes,

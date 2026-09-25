@@ -869,8 +869,6 @@ void Cluster::write_core(
     if (this->supports_dma_operations(chip_id, sz_in_bytes)) {
         this->driver_->dma_write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
     } else {
-        // DRAM cores were never Strict before the static TLBs went away: Posted inside the
-        // window, Relaxed on the fallback above it. Everything else was Strict.
         const tt::umd::IoOrdering resolved_ordering = ordering.value_or(
             core_coord.core_type == CoreType::DRAM ? tt::umd::IoOrdering::Relaxed : tt::umd::IoOrdering::Strict);
         this->driver_->write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr, resolved_ordering);
