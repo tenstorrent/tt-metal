@@ -2861,6 +2861,26 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
             pass
 
     # -- prefill: capture taps (untraced) ------------------------------------
+    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, greedy_only: bool = False):
+        """Warm the prefill buckets eagerly: this rail never replays a prefill trace.
+
+        Every prefill on the dFlash rails runs untraced at runtime -- the drafter
+        reads residual taps from a python hook that a traced replay does not run,
+        and ``_left_pad_kv_to_hist`` is not trace-safe (see ``prefill_forward``).
+        The inherited warmup only cleared ``enable_trace`` for bounded sliding, so
+        an unbounded dFlash server captured every prefill bucket at warmup and
+        then never replayed one: warmup work and trace-region space spent on
+        traces that cannot be used (tt-metal#57853).
+
+        The warmup itself still runs, eagerly, so the buckets are warm.
+        """
+        super().warmup_model_prefill(
+            kv_cache,
+            enable_trace=False,
+            can_sample_on_device=can_sample_on_device,
+            greedy_only=greedy_only,
+        )
+
     def prefill_forward(self, *args, **kwargs):
         tokens = kwargs.get("tokens")
         if tokens is None and args:
