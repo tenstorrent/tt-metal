@@ -981,7 +981,7 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadCBUpdate) {
         max_cb_region_size += 2 * cb_config.num_pages * cb_config.page_size;
     }
     const uint32_t report_addr =
-        mesh_device_->get_devices().front()->allocator()->get_base_allocator_addr(HalMemType::L1) + max_cb_region_size;
+        mesh_device_->allocator()->get_base_allocator_addr(HalMemType::L1) + max_cb_region_size;
     SetRuntimeArgs(*program, report_kernel, cr_set, {report_addr});
 
     auto mesh_workload = MeshWorkload();

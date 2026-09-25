@@ -865,7 +865,6 @@ def test_page_table_realloc_reused_program_cache_hit(device_with_program_cache):
     # position is read on-device, so a fixed cur_pos keeps every dispatch a cache hit.
     cur_pos = min(s - 1, s // 2)
     start_indices = [cur_pos for _ in range(b)]
-    padded_layer_len = nearest_n(cur_pos + 1, n=get_chunk_size(cur_pos + 1, s))
 
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=grid_size,
