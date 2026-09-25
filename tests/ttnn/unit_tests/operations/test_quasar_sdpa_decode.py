@@ -91,12 +91,13 @@ def _q_height_sharded(t_bf16, mesh_device, batch):
     return (qi2s or ttnn.interleaved_to_sharded)(qt, memcfg)
 
 
-def _prog_cfg():
+def _prog_cfg(max_cores_per_head_batch=16, k_chunk_size=0):
     return ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(GRID_X, GRID_Y),
         exp_approx_mode=True,
         q_chunk_size=0,
-        k_chunk_size=0,
+        k_chunk_size=k_chunk_size,
+        max_cores_per_head_batch=max_cores_per_head_batch,
     )
 
 
@@ -116,17 +117,16 @@ def _skip_if_small(mesh_device):
         pytest.skip(f"needs an {GRID_X}x{GRID_Y} grid; device has {grid.x}x{grid.y}")
 
 
-def test_paged_sdpa_decode(mesh_device):
-    """Paged flash-decode SDPA (the exact op the llama decode path stalls on). FAILS/hangs on Quasar."""
+def _run_paged(mesh_device, cur_pos, max_cores_per_head_batch=16, k_chunk_size=0):
+    """Paged flash-decode SDPA at the llama shapes. num_cores_per_head is grid-derived (8x4 / 8 KV heads = 4),
+    so a multi-core TREE reduction is configured; whether it actually runs (and deadlocks on Quasar) depends
+    on k_num_chunks>1 (children get K data). max_cores_per_head_batch=1 collapses to 1 core/head (no tree)."""
     _skip_if_small(mesh_device)
-    batch = 1  # page_table.shape[0]; factory derives B from here (captured case is batch=1)
-    cur_pos = 64  # current KV position
-
+    batch = 1
     torch.manual_seed(0)
     q = torch.randn(1, batch, N_Q_HEADS, HEAD_DIM, dtype=torch.bfloat16)
     keys = torch.randn(MAX_NUM_BLOCKS, N_KV_HEADS, BLOCK_SIZE, HEAD_DIM, dtype=torch.bfloat16)
     values = torch.randn(MAX_NUM_BLOCKS, N_KV_HEADS, BLOCK_SIZE, HEAD_DIM, dtype=torch.bfloat16)
-    # one block per (batch); page_table[b, i] = block id for logical block i of batch b
     page_table = torch.arange(MAX_NUM_BLOCKS, dtype=torch.int32).reshape(1, MAX_NUM_BLOCKS).repeat(batch, 1)
     cur_pos_t = torch.full((batch,), cur_pos, dtype=torch.int32)
 
@@ -137,7 +137,9 @@ def test_paged_sdpa_decode(mesh_device):
     cp_t = _int32_rm_dram(cur_pos_t, mesh_device)
 
     logger.info(
-        f"[sdpa-repro] paged decode: q[1,{batch},{N_Q_HEADS},{HEAD_DIM}] kv[{MAX_NUM_BLOCKS},{N_KV_HEADS},{BLOCK_SIZE},{HEAD_DIM}] grid {GRID_X}x{GRID_Y}"
+        f"[sdpa-repro] paged decode cur_pos={cur_pos} max_cores_per_head_batch={max_cores_per_head_batch} "
+        f"k_chunk_size={k_chunk_size} grid {GRID_X}x{GRID_Y} (num_cores_per_head={GRID_X * GRID_Y // N_KV_HEADS} "
+        f"-> {'NO tree' if max_cores_per_head_batch == 1 else 'TREE reduction'})"
     )
     out = ttnn.experimental.quasar.transformer.paged_scaled_dot_product_attention_decode(
         q_t,
@@ -146,7 +148,7 @@ def test_paged_sdpa_decode(mesh_device):
         page_table_tensor=pt_t,
         cur_pos_tensor=cp_t,
         scale=SCALE,
-        program_config=_prog_cfg(),
+        program_config=_prog_cfg(max_cores_per_head_batch=max_cores_per_head_batch, k_chunk_size=k_chunk_size),
         compute_kernel_config=_compute_cfg(),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -154,6 +156,26 @@ def test_paged_sdpa_decode(mesh_device):
     o = ttnn.to_torch(out)
     logger.info(f"[sdpa-repro] paged decode out shape {tuple(o.shape)} finite={torch.isfinite(o).all().item()}")
     assert torch.isfinite(o).all(), "SDPA decode produced non-finite output"
+
+
+def test_paged_sdpa_decode(mesh_device):
+    """Baseline: short KV (cur_pos=64), k_num_chunks=1 -> tree children have no data -> single-core finalize
+    path. Passes on Quasar (this is the case that already worked)."""
+    _run_paged(mesh_device, cur_pos=64)
+
+
+def test_paged_sdpa_decode_tree_reduction_hang(mesh_device):
+    """REPRO: long KV + small k_chunk forces k_num_chunks>1, so all 4 cores/head get K data and the MULTI-CORE
+    TREE reduction runs. This DEADLOCKS on the Quasar sim (workers stall at waypoint WFW, cross-core
+    mcast/DFB handshake). Run under watcher to observe the hang. On WH/BH it passes."""
+    _run_paged(mesh_device, cur_pos=200, max_cores_per_head_batch=16, k_chunk_size=BLOCK_SIZE)
+
+
+def test_paged_sdpa_decode_single_core(mesh_device):
+    """FIX validation: same long-KV case as the hang repro, but max_cores_per_head_batch=1 -> num_cores_per_head=1
+    -> num_tree_reduction_rounds=0 (no cross-core reduction). Should PASS on Quasar. This is what the e2e
+    _install_quasar_sdpa_single_core monkeypatch does."""
+    _run_paged(mesh_device, cur_pos=200, max_cores_per_head_batch=1, k_chunk_size=BLOCK_SIZE)
 
 
 def test_non_paged_sdpa_decode(mesh_device):
