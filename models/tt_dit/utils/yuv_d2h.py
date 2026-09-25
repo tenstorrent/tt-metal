@@ -56,6 +56,28 @@ def _bt601_yuv_coefficients():
     return ttnn.experimental.yuv_bt601_coefficients()
 
 
+def rgb_chwt_to_yuv_device(tt_CHWT: ttnn.Tensor, *, coefficients=None):
+    """Pure device region, preserving RGB clip before every color/chroma operation."""
+    if coefficients is None:
+        coefficients = _bt601_yuv_coefficients()
+    tt_CHWT = ttnn.clip(tt_CHWT, -1.0, 1.0)
+    return ttnn.experimental.rgb_to_yuv(tt_CHWT, coefficients=coefficients)
+
+
+def yuv_planes_to_host(planes, mesh_device, *, logical_h: int, logical_w: int):
+    """Single-host H/W-sharded planes to the existing asynchronous DMA/reassembly path."""
+    if ttnn.using_distributed_env():
+        raise ValueError("direct YUV planes currently require a single host")
+    y, cb, cr = planes
+    channels, h_per, w_per, frames = tuple(y.shape)
+    assert channels == 1 and h_per % 2 == 0 and w_per % 2 == 0
+    assert tuple(cb.shape) == tuple(cr.shape) == (1, h_per // 2, w_per // 2, frames)
+    h, w = h_per * mesh_device.shape[0], w_per * mesh_device.shape[1]
+    if not (0 < logical_h <= h and logical_h % 2 == 0 and 0 < logical_w <= w and logical_w % 2 == 0):
+        raise ValueError("YUV crop must be positive, even, and inside the assembled planes")
+    return _yuv_planar_d2h(y, cb, cr, mesh_device, h, w, frames, out_H=logical_h, out_W=logical_w)
+
+
 def _yuv_planar_d2h(
     tt_Y: ttnn.Tensor,
     tt_Cb: ttnn.Tensor,
@@ -416,8 +438,7 @@ def fast_device_to_host_yuv(
     # Match the float export, which clamps RGB to [0, 255] before ffmpeg converts it: the kernel converts first
     # and clips [0, 255] after, so the VAE's out-of-range extremes would otherwise land outside the limited
     # range (Y 0-255 instead of 16-235; measured ~3 Y levels RMS on 10 % of the pixels).
-    tt_CHWT = ttnn.clip(tt_CHWT, -1.0, 1.0)
-    tt_Y, tt_Cb, tt_Cr = ttnn.experimental.rgb_to_yuv(tt_CHWT, coefficients=coefficients)
+    tt_Y, tt_Cb, tt_Cr = rgb_chwt_to_yuv_device(tt_CHWT, coefficients=coefficients)
     if debug:
         print(f"  [yuv-d2h] yuv outputs per-shard:")
         print(f"  [yuv-d2h]   Y : {list(tt_Y.shape)}")

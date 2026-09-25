@@ -493,6 +493,8 @@ class LTXPipeline:
             self.tt_vocoder_with_bwe.release_trace()
         if self.tt_mel_decoder is not None:
             self.tt_mel_decoder.release_trace()
+        if self.vae_decoder is not None:
+            self.vae_decoder.release_trace()
         self._trace_state.clear()
         self._prompt_v = StateTensor()
         self._prompt_a = StateTensor()
@@ -1345,6 +1347,8 @@ class LTXPipeline:
         latent_spatial = latent_spatial.permute(0, 4, 1, 2, 3)  # BCTHW
 
         with Watchdog("vae decode"):
+            if output_type == "yuv" and self.vae_decoder.trace_yuv_output and self.dynamic_load:
+                raise ValueError("LTX_TRACE_YUV_OUTPUT requires resident weights (dynamic_load=False)")
             video = self.vae_decoder(latent_spatial, output_type=output_type)
         if output_type == "yuv":
             return video  # already a numpy (T, H*3//2, W) uint8 yuv420p planar array
@@ -1432,7 +1436,10 @@ class LTXPipeline:
         latent_frames, latent_h, latent_w = latent_grid(num_frames, height, width)
         dummy = torch.zeros(1, latent_frames * latent_h * latent_w, self.in_channels)
         self._prepare_vae()
-        self.decode_latents(dummy, latent_frames, latent_h, latent_w)
+        # Capture the output tail before the subsequent audio captures. Delaying
+        # it until generation can put its workspace over their persistent inputs.
+        output_type = "yuv" if self.vae_decoder.fuse_yuv_output or self.vae_decoder.trace_yuv_output else "float"
+        self.decode_latents(dummy, latent_frames, latent_h, latent_w, output_type=output_type)
 
     def _prepare_trans_mat(self) -> ttnn.Tensor:
         """Cached per-tile rotation matrix for rotary_embedding_llama (shared builder)."""

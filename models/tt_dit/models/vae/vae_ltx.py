@@ -38,7 +38,7 @@ from ...utils.conv3d import (
 from ...utils.ltx import pad_hw_replicate
 from ...utils.tensor import fast_device_to_host, float_to_uint8, typed_tensor, typed_tensor_2dshard
 from ...utils.tracing import Tracer
-from ...utils.yuv_d2h import fast_device_to_host_yuv
+from ...utils.yuv_d2h import fast_device_to_host_yuv, rgb_chwt_to_yuv_device, yuv_planes_to_host
 
 if TYPE_CHECKING:
     from ..upsampler.latent_upsampler_ltx import LTXLatentUpsampler
@@ -663,6 +663,9 @@ class LTXVideoDecoder(Module):
         # Lazily-built trace of the device-only decode (decode_device), plus the post-upsample logical
         # dims it stashes for forward's crop. Only used when forward(traced=True).
         self._decode_tracer = None
+        self._yuv_output_tracer = None
+        self.fuse_yuv_output = os.environ.get("LTX_FUSE_YUV_OUTPUT", "0") == "1"
+        self.trace_yuv_output = os.environ.get("LTX_TRACE_YUV_OUTPUT", "0") == "1"
         self._decode_logical_hw = (0, 0)
         out_channels_with_patch = out_channels * patch_size**2  # 3 * 16 = 48
 
@@ -826,6 +829,30 @@ class LTXVideoDecoder(Module):
         self._decode_logical_hw = (logical_h, logical_w)
         return sample_tt
 
+    def release_trace(self) -> None:
+        """Release both decode and output captures before rebuilding or unloading weights."""
+        for name in ("_decode_tracer", "_yuv_output_tracer"):
+            tracer = getattr(self, name)
+            if tracer is not None:
+                tracer.release_trace()
+                setattr(self, name, None)
+
+    def deallocate_weights(self) -> None:
+        self.release_trace()
+        super().deallocate_weights()
+
+    def _unpatch_yuv_device(self, sample_tt: ttnn.Tensor):
+        """Compose unpatch + BCTHW→CHWT into one permutation, then unchanged clip/YUV."""
+        b, t, h, w, channels = tuple(sample_tt.shape)
+        q = r = self.patch_size
+        assert b == 1 and channels == 3 * q * r
+        # Existing unpatch is (c,p,r,q)->B,C,T,p,H,q,W,r with p=1;
+        # composing its following BCTHW->BCHWT gives B,C,H,q,W,r,T,p.
+        expanded = ttnn.reshape(sample_tt, (b, t, h, w, 3, 1, r, q))
+        chwt = ttnn.permute(expanded, (0, 4, 2, 7, 3, 6, 1, 5))
+        chwt = ttnn.reshape(chwt, (3, h * q, w * r, t))
+        return rgb_chwt_to_yuv_device(chwt)
+
     def forward(self, sample_BCTHW: torch.Tensor, *, output_type: str = "float", traced: bool = False) -> torch.Tensor:
         """Decode latent (B, 128, F', H', W') → video.
 
@@ -861,6 +888,26 @@ class LTXVideoDecoder(Module):
             sample_tt = self.decode_device(sample_tt, logical_h, logical_w)
         # decode_device threads logical_h/logical_w through the upsamples; read back the final dims.
         logical_h, logical_w = self._decode_logical_hw
+
+        if (
+            output_type == "yuv"
+            and (self.fuse_yuv_output or self.trace_yuv_output)
+            and not ttnn.using_distributed_env()
+            and self.parallel_config.height_parallel.mesh_axis == 0
+            and self.parallel_config.width_parallel.mesh_axis == 1
+            and sample_tt.shape[0] == 1
+        ):
+            if self.trace_yuv_output:
+                if self._yuv_output_tracer is None:
+                    self._yuv_output_tracer = Tracer(
+                        self._unpatch_yuv_device, device=self.mesh_device, prep_run=True, clone_prep_inputs=False
+                    )
+                planes = self._yuv_output_tracer(sample_tt)
+            else:
+                planes = self._unpatch_yuv_device(sample_tt)
+            h_out, w_out = logical_h * self.patch_size, logical_w * self.patch_size
+            planar = yuv_planes_to_host(planes, self.mesh_device, logical_h=h_out, logical_w=w_out)
+            return planar.reshape(planar.shape[0], h_out * 3 // 2, w_out)
 
         # Depth-to-space unpatch on device, output BCTHW so the gather's innermost dim stays large
         # (channels-last would gather a length-3 innermost). conv_out channels are ordered (c, p, r, q).
