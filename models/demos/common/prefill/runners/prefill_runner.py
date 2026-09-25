@@ -256,13 +256,16 @@ def _d2d_send(
 def _forward_shutdown(d2d_out, rank: int, hidden_size: int, planes: int = 1) -> None:
     # `planes` must match this rank's OUTBOUND spec, not its inbound one.
     dev = d2d_out.get_backing_tensor().device()
-    dummy = ttnn.from_torch(
-        torch.zeros(1, planes, CHUNK_SIZE, hidden_size),
+    # Only the metadata sentinel is read on the far end, so the payload content is irrelevant.
+    # Allocate directly on device instead of materializing a (potentially multi-hundred-MB, at
+    # high plane counts) host tensor via torch.zeros + from_torch at teardown, when host and
+    # device residency are already at their peak for the run.
+    dummy = ttnn.zeros(
+        ttnn.Shape([1, planes, CHUNK_SIZE, hidden_size]),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=dev,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.create_mesh_mapper(dev, D2D_MAPPER_CONFIG),
     )
     sentinel = {
         "slot_id": SHUTDOWN_METADATA_WORD,
