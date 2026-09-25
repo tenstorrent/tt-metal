@@ -14,6 +14,7 @@
 
 #include "hostdev/streaming_profiler_common.h"
 #include "internal/ethernet/tt_eth_ss_regs.h"
+#include "internal/risc_attribs.h"
 
 namespace tt::tt_metal::eth_ptp {
 
@@ -42,18 +43,16 @@ constexpr uint32_t kPtp64nsHi = ETH_PTP_TIMER_REGS_START + ETH_PTP_TIMER_64NS_HI
 constexpr uint32_t kUpdateStatPtiAck = 1u << 8;
 constexpr uint32_t kUpdateStatTsAck = 1u << 9;
 
-inline __attribute__((always_inline)) uint32_t rd(uint32_t addr) { return *reinterpret_cast<volatile uint32_t*>(addr); }
-inline __attribute__((always_inline)) void wr(uint32_t addr, uint32_t v) {
-    *reinterpret_cast<volatile uint32_t*>(addr) = v;
-}
+FORCE_INLINE uint32_t rd(uint32_t addr) { return *reinterpret_cast<volatile uint32_t*>(addr); }
+FORCE_INLINE void wr(uint32_t addr, uint32_t v) { *reinterpret_cast<volatile uint32_t*>(addr) = v; }
 
 // LO first: the read latches HI.
-inline __attribute__((always_inline)) uint64_t read_cfr() {
+FORCE_INLINE uint64_t read_cfr() {
     const uint32_t lo = rd(kPtpCfrLo);
     const uint32_t hi = rd(kPtpCfrHi);
     return (static_cast<uint64_t>(hi) << 32) | lo;
 }
-inline __attribute__((always_inline)) uint64_t read_ptp64ns() {
+FORCE_INLINE uint64_t read_ptp64ns() {
     const uint32_t lo = rd(kPtp64nsLo);
     const uint32_t hi = rd(kPtp64nsHi);
     return (static_cast<uint64_t>(hi) << 32) | lo;
@@ -72,7 +71,7 @@ struct Instant {
 // longer, so a low word that wrapped before the high read tore the pair by 2^32 (once per 20 s run across 8 chips).
 // A high word read ahead of the instant equal to the one read after it means no wrap fell inside the window; the
 // stamped reads themselves keep their order and spacing.
-inline __attribute__((always_inline)) Instant read_instant() {
+FORCE_INLINE Instant read_instant() {
     Instant t;
     for (;;) {
         const uint32_t hi0 = rd(kWallClockHi);
@@ -94,7 +93,7 @@ inline __attribute__((always_inline)) Instant read_instant() {
 // where the 80 ns between updates is a whole number of iterations, the update lands at the same phase of every one
 // and, outside the bracket, is never caught -- whole half seconds without a sample at 1237.5 and 1306.25 MHz; a
 // short regular walk locked the same way at 1350 MHz. `x` is the walk's state, any nonzero seed.
-inline __attribute__((always_inline)) void phase_walk(uint32_t& x) {
+FORCE_INLINE void phase_walk(uint32_t& x) {
     x ^= x << 13;
     x ^= x >> 17;
     x ^= x << 5;
@@ -104,7 +103,7 @@ inline __attribute__((always_inline)) void phase_walk(uint32_t& x) {
 }
 // One attempt at a bracketed pair: true when a refclk update fell between the refclk reads around the wall read, `t`
 // (a read_instant, for the high words) then holding that wall read and the new refclk.
-inline __attribute__((always_inline)) bool try_bracket(Instant& t, uint32_t& x) {
+FORCE_INLINE bool try_bracket(Instant& t, uint32_t& x) {
     phase_walk(x);
     const uint32_t ra = rd(kPtpCfrLo);
     const uint32_t w = rd(kWallClockLo);
@@ -118,7 +117,7 @@ inline __attribute__((always_inline)) bool try_bracket(Instant& t, uint32_t& x) 
     t.refclk = (static_cast<uint64_t>(r_hi) << 32) | rb;
     return true;
 }
-inline __attribute__((always_inline)) Instant read_bracketed() {
+FORCE_INLINE Instant read_bracketed() {
     Instant t = read_instant();
     uint32_t x = t.wall_lo | 1u;
     for (uint32_t spin = 0; spin < 65536u; spin++) {

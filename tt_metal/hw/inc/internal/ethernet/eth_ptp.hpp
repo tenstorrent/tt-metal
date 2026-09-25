@@ -155,30 +155,24 @@ using eth_ptp::rd;
 using eth_ptp::wr;
 
 // The tag the MAC files queue q's egress stamps under, sampled when a frame is handed to the MAC.
-inline __attribute__((always_inline)) void txq_set_tag(uint32_t q, uint64_t tag) {
+FORCE_INLINE void txq_set_tag(uint32_t q, uint64_t tag) {
     wr(txq_reg(q, kTxqRxTimestampLoOff), static_cast<uint32_t>(tag));
     wr(txq_reg(q, kTxqRxTimestampHiOff), static_cast<uint32_t>(tag >> 32));
 }
 // Arms the MAC to push {tag, egress timestamp} into its FIFO for every frame queue q sends until the command is
 // cleared.
-inline __attribute__((always_inline)) void txq_request_two_step(uint32_t q, uint64_t tag) {
+FORCE_INLINE void txq_request_two_step(uint32_t q, uint64_t tag) {
     txq_set_tag(q, tag);
     wr(txq_reg(q, kTxqTimestampOff), TS_CMD_TWO_STEP_FIFO);
 }
-inline __attribute__((always_inline)) void txq_clear_timestamp_cmd(uint32_t q) {
-    wr(txq_reg(q, kTxqTimestampOff), TS_CMD_NOP);
-}
-inline __attribute__((always_inline)) uint32_t txq_pkt_start_cnt(uint32_t q) {
-    return rd(txq_reg(q, ETH_TXQ_PKT_START_CNT));
-}
-inline __attribute__((always_inline)) uint32_t txq_word_cnt(uint32_t q) { return rd(txq_reg(q, ETH_TXQ_WORD_CNT)); }
+FORCE_INLINE void txq_clear_timestamp_cmd(uint32_t q) { wr(txq_reg(q, kTxqTimestampOff), TS_CMD_NOP); }
+FORCE_INLINE uint32_t txq_pkt_start_cnt(uint32_t q) { return rd(txq_reg(q, ETH_TXQ_PKT_START_CNT)); }
+FORCE_INLINE uint32_t txq_word_cnt(uint32_t q) { return rd(txq_reg(q, ETH_TXQ_WORD_CNT)); }
 
-inline __attribute__((always_inline)) bool mac_tx_fifo_not_empty() {
-    return (rd(kMacTxIntRaw) & kMacTxIntTsFifoNotEmpty) != 0;
-}
+FORCE_INLINE bool mac_tx_fifo_not_empty() { return (rd(kMacTxIntRaw) & kMacTxIntTsFifoNotEmpty) != 0; }
 // Pops one entry: its tag's low word and the stamp (the tag's high word is the caller's own). Word 0 must be read
 // first, it is what advances the FIFO.
-inline __attribute__((always_inline)) bool mac_tx_fifo_pop(uint32_t& tag_lo, uint64_t& tx_ts) {
+FORCE_INLINE bool mac_tx_fifo_pop(uint32_t& tag_lo, uint64_t& tx_ts) {
     const uint32_t w0 = rd(kMacTsFifo0);
     if (w0 == 0xFFFFFFFFu) {
         return false;
@@ -202,7 +196,7 @@ struct RxStamp {
     bool valid;
 };
 // Reads the head entry, then pops it.
-inline __attribute__((always_inline)) bool rx_th_pop(RxStamp& out) {
+FORCE_INLINE bool rx_th_pop(RxStamp& out) {
     if (rd(kRxThStatus) & kRxThStatusEmpty) {
         return false;
     }
@@ -412,11 +406,11 @@ struct StampSession {
 // A keepalive of the queue's own that samples an armed request is stamped under the tag like a frame, and the
 // counters are what tell them apart (eth_ptp_link.hpp, collect_burst).
 template <typename Session>
-inline __attribute__((always_inline)) void stamps_arm(const Session&, uint64_t tag) {
+FORCE_INLINE void stamps_arm(const Session&, uint64_t tag) {
     raw::txq_request_two_step(Session::kTxq, tag);
 }
 template <typename Session>
-inline __attribute__((always_inline)) void stamps_disarm(const Session&) {
+FORCE_INLINE void stamps_disarm(const Session&) {
     raw::txq_clear_timestamp_cmd(Session::kTxq);
 }
 // A run of frames that carry their own egress stamp: stamps_arm_in_frame once, then every frame the queue sends until
@@ -430,10 +424,10 @@ constexpr uint32_t kFrameStampField = 2 * kFrameStampOffset + 2;
 constexpr uint32_t kFrameStampHiWord = (kFrameStampField + 2) / 4;
 static_assert((kFrameStampField + 2) % 4 == 0);
 template <typename Session>
-inline __attribute__((always_inline)) void stamps_arm_in_frame(const Session&) {
+FORCE_INLINE void stamps_arm_in_frame(const Session&) {
     raw::wr(txq_reg(Session::kTxq, kTxqTimestampOff), TS_CMD_ONE_STEP_ORIGIN | (kFrameStampOffset << 16));
 }
-inline __attribute__((always_inline)) uint64_t frame_stamp(const volatile uint32_t* payload) {
+FORCE_INLINE uint64_t frame_stamp(const volatile uint32_t* payload) {
     return (static_cast<uint64_t>(__builtin_bswap32(payload[kFrameStampHiWord])) << 32) |
            __builtin_bswap32(payload[kFrameStampHiWord + 1]);
 }
@@ -441,11 +435,11 @@ inline __attribute__((always_inline)) uint64_t frame_stamp(const volatile uint32
 // unstamped like the queue's keepalives, or back at the session's row. The row is latched with a frame's command,
 // so switch back once the queue reports the command taken.
 template <typename Session>
-inline __attribute__((always_inline)) void tx_header_row_select(const Session& s, bool boot) {
+FORCE_INLINE void tx_header_row_select(const Session& s, bool boot) {
     raw::wr(txq_reg(Session::kTxq, kTxqPktCfgSelSwOff), boot ? s.hdr_prev.sel_sw : Session::kHeaderRow * 0x111u);
 }
 template <typename Sink>
-inline __attribute__((always_inline)) uint32_t tx_stamps_drain(uint32_t tag_lo, Sink&& sink) {
+FORCE_INLINE uint32_t tx_stamps_drain(uint32_t tag_lo, Sink&& sink) {
     uint32_t got_tag = 0;
     uint64_t ts = 0;
     uint32_t n = 0;
@@ -459,7 +453,7 @@ inline __attribute__((always_inline)) uint32_t tx_stamps_drain(uint32_t tag_lo, 
 }
 // At most one FIFO's worth per call, so a stream of stamped packets cannot hold a router's core here.
 template <typename Session, typename Sink>
-inline __attribute__((always_inline)) uint32_t rx_stamps_drain(const Session&, Sink&& sink) {
+FORCE_INLINE uint32_t rx_stamps_drain(const Session&, Sink&& sink) {
     raw::RxStamp s;
     uint32_t n = 0;
     for (uint32_t i = 0; i <= kRxThStatusEntriesMask && raw::rx_th_pop(s); i++) {

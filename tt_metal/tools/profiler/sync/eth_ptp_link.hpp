@@ -96,17 +96,17 @@ static_assert(kCtlOffset + 8 + 14 * sizeof(uint32_t) <= kernel_profiler::kLinkSy
 // Frame j of a round rides in slot j % kBurstFrames, the same L1 address on both ends, so the receiver's echo lands
 // on the frame it answers. The sync word carries the round and the trip: bytes_sent in the frame, which the receiver
 // clears once it has taken it, and receiver_ack in the echo; reserved_2 carries the round's full number.
-inline __attribute__((always_inline)) volatile eth_channel_sync_t* slot(uint32_t base, uint32_t j) {
+FORCE_INLINE volatile eth_channel_sync_t* slot(uint32_t base, uint32_t j) {
     return reinterpret_cast<volatile eth_channel_sync_t*>(base + kSlotsOffset + (j % kBurstFrames) * kFrameBytes);
 }
-inline __attribute__((always_inline)) volatile eth_channel_sync_t* pilot(uint32_t base) {
+FORCE_INLINE volatile eth_channel_sync_t* pilot(uint32_t base) {
     return reinterpret_cast<volatile eth_channel_sync_t*>(base + kPilotOffset);
 }
 constexpr uint32_t kTripMask = 0x1FF;
 constexpr uint32_t frame_key(uint32_t round, uint32_t j) { return (round << 9) | (j + 1); }
 static_assert(kTripsPerRound <= kTripMask);
 // Frame j's phase of the stamp tick in wall cycles, c16 being wall cycles per refclk tick times 16.
-inline __attribute__((always_inline)) uint32_t frame_phase_cycles(uint32_t j, uint32_t c16) {
+FORCE_INLINE uint32_t frame_phase_cycles(uint32_t j, uint32_t c16) {
     return (((j * kFramePhaseStep) & (kTripsPerRound - 1)) * c16) >> 12;
 }
 
@@ -128,7 +128,7 @@ struct Pacer {
         const uint32_t b = rd(kWallClockLo);
         iter16 = ((b - a) * 16u) / 4096u;
     }
-    __attribute__((always_inline)) void until(uint32_t target) const {
+    FORCE_INLINE void until(uint32_t target) const {
         const int32_t rem = static_cast<int32_t>(target - rd(kWallClockLo)) - 16;
         if (rem > 0) {
             turns((static_cast<uint32_t>(rem) * 16u) / iter16);
@@ -144,11 +144,11 @@ struct StampSum {
     uint32_t n = 0;
     uint64_t base = 0;
     uint32_t rel = 0;  // sum of (stamp - base), ns: 256 stamps spread over a 10 ms round reach ~1.3e9
-    __attribute__((always_inline)) void reset() {
+    FORCE_INLINE void reset() {
         n = 0;
         rel = 0;
     }
-    __attribute__((always_inline)) void add(uint64_t ts) {
+    FORCE_INLINE void add(uint64_t ts) {
         if (n == 0) {
             base = ts;
         }
@@ -173,7 +173,7 @@ struct StampSum {
 // This end's offset and timer flag into a frame it is about to send, and its stamp field cleared: the slot still holds
 // the stamp of the last frame that came in through it, so a frame the MAC did not stamp reads as zero, not as that.
 template <typename Session>
-__attribute__((always_inline)) inline void carry_offset(volatile eth_channel_sync_t* s, const Session& sess) {
+FORCE_INLINE void carry_offset(volatile eth_channel_sync_t* s, const Session& sess) {
     volatile uint32_t* w = reinterpret_cast<volatile uint32_t*>(s);
     w[kWordOffsetLo] = static_cast<uint32_t>(sess.ptp_offset_64);
     w[kWordOffsetHi] = static_cast<uint32_t>(static_cast<uint64_t>(sess.ptp_offset_64) >> 32);
@@ -193,11 +193,11 @@ struct StopDiag {
     uint64_t hold = 0, span_wall = 0, span_refclk = 0;
     uint32_t hold_max = 0;
     uint32_t drop[5] = {};
-    __attribute__((always_inline)) void note_hold(uint32_t cycles) {
+    FORCE_INLINE void note_hold(uint32_t cycles) {
         hold += cycles;
         hold_max = cycles > hold_max ? cycles : hold_max;
     }
-    __attribute__((always_inline)) void note_round(bool recorded) {
+    FORCE_INLINE void note_round(bool recorded) {
         rounds++;
         drop[0] += !recorded;
     }
@@ -231,7 +231,7 @@ struct HwRound {
     StampSum tx, rx;
     int64_t peer_offset_64 = 0;
     bool peer_ok = false, peer_seen = false;
-    __attribute__((always_inline)) void begin(uint32_t round) {
+    FORCE_INLINE void begin(uint32_t round) {
         id = round;
         tx.reset();
         rx.reset();
@@ -239,14 +239,14 @@ struct HwRound {
         peer_ok = true;
     }
     // A frame from the peer: the offset and timer flag it carried, and its egress stamp, 0 if the MAC did not stamp it.
-    __attribute__((always_inline)) uint64_t peer_frame(const volatile uint32_t* w) {
+    FORCE_INLINE uint64_t peer_frame(const volatile uint32_t* w) {
         const int64_t off = static_cast<int64_t>((static_cast<uint64_t>(w[kWordOffsetHi]) << 32) | w[kWordOffsetLo]);
         peer_ok = peer_ok && w[kWordTimerOk] == 1 && (!peer_seen || off == peer_offset_64);
         peer_offset_64 = off;
         peer_seen = true;
         return frame_stamp(w);
     }
-    __attribute__((always_inline)) void pair(const uint64_t* tx_ts, const uint64_t* rx_ts, StopDiag& diag) {
+    FORCE_INLINE void pair(const uint64_t* tx_ts, const uint64_t* rx_ts, StopDiag& diag) {
         for (uint32_t m = 0; m < kBurstFrames; m++) {
             if (tx_ts[m] == 0) {
                 diag.drop[4]++;
@@ -293,7 +293,7 @@ struct Anchor {
 // link-level resend on it can keep it busy for good, and a router waiting on it stops serving the fabric, which then
 // deadlocks. No context switch while waiting: the core's owner may be a router, whose switches to base firmware are
 // coordinated with the tile's other RISC.
-__attribute__((always_inline)) inline bool txq_free() {
+FORCE_INLINE bool txq_free() {
     for (uint32_t spin = 0; internal_::eth_txq_is_busy(kLinkTxq); spin++) {
         if (spin == kHandoffSpins) {
             return false;
@@ -301,7 +301,7 @@ __attribute__((always_inline)) inline bool txq_free() {
     }
     return true;
 }
-__attribute__((always_inline)) inline bool issue(volatile eth_channel_sync_t* s) {
+FORCE_INLINE bool issue(volatile eth_channel_sync_t* s) {
     if (!txq_free()) {
         return false;
     }
@@ -364,7 +364,7 @@ struct Grid {
         walk = seed | 1u;
     }
     // Readings up to 2^24 wall cycles apart, so the ratio x256 stays in 32 bits.
-    __attribute__((always_inline)) void rate(const Instant& a, const Instant& b) {
+    FORCE_INLINE void rate(const Instant& a, const Instant& b) {
         const uint64_t wall = b.wall() - a.wall();
         if (a.refclk == 0 || b.refclk <= a.refclk || (wall >> 24) != 0) {
             return;
@@ -379,7 +379,7 @@ struct Grid {
     }
     // A burst's comb origin, a pseudo-random part of a tick past now. walk's top 16 bits scale into [0, cycles per
     // tick): one multiply, no division routine in a router's text.
-    __attribute__((always_inline)) void begin() {
+    FORCE_INLINE void begin() {
         phase_walk(walk);
         origin = rd(kWallClockLo) + (((walk >> 16) * (c16 >> 4)) >> 16);
     }
@@ -456,7 +456,7 @@ struct Ring {
             hold[held++] = Held{value, round, role};
         }
     }
-    __attribute__((always_inline)) void poll() {
+    FORCE_INLINE void poll() {
         if constexpr (!Bracket) {
             if (held != 0) {
                 poll_held();
@@ -551,12 +551,12 @@ struct SenderLink {
         slot_cfr = start_at.refclk + kRatioTicks;
         schedule(start_at);
     }
-    __attribute__((always_inline)) void schedule(const Instant& now) {
+    FORCE_INLINE void schedule(const Instant& now) {
         const int64_t ticks = static_cast<int64_t>(slot_cfr - now.refclk);
         slot_wall = now.wall_lo + ((static_cast<uint32_t>(ticks < 0 ? 0 : ticks) * grid.c16) >> 4);
         pre_wall = slot_wall - ((kRatioTicks * grid.c16) >> 4);
     }
-    __attribute__((always_inline)) void step() {
+    FORCE_INLINE void step() {
         ring.poll();
         if (out_sent != kBurstFrames) {
             send_next();
@@ -612,7 +612,7 @@ private:
         diag.note_round(recorded);
         write_diag();
     }
-    __attribute__((always_inline)) bool echoed() const {
+    FORCE_INLINE bool echoed() const {
         for (uint32_t i = 0; i < kBurstFrames; i++) {
             if (slot(slot_base, i)->receiver_ack != frame_key(round, out_j0 + i)) {
                 return false;
@@ -704,7 +704,7 @@ struct ReceiverLink {
     // Each frame is read and echoed at the step that finds it, the burst's ingress stamps taken with its last frame,
     // before that frame's echo: the sender issues nothing more until every echo is in. An echo the queue did not take
     // goes at the next step.
-    __attribute__((always_inline)) void step() {
+    FORCE_INLINE void step() {
         ring.poll();
         if constexpr (DataCache) {
             invalidate_l1_cache();
@@ -792,7 +792,7 @@ using LinkEnd = std::conditional_t<Sender, SenderLink<DataCache, false>, Receive
 // Calls F(arg) with the caller-saved registers kept here instead of by the caller: the asm clobbers ra alone, so the
 // code around the call site is register-allocated as if there were no call.
 template <void (*F)(uint32_t)>
-__attribute__((always_inline)) inline void saved_call(uint32_t arg) {
+FORCE_INLINE void saved_call(uint32_t arg) {
     asm volatile(
         "addi sp, sp, -64\n\t"
         "sw t0, 0(sp)\n\t"
@@ -844,9 +844,9 @@ struct HostedEnd {
     }
     __attribute__((noipa)) static void step_body(uint32_t) { end.step(); }
     __attribute__((noipa)) static void stop_body(uint32_t) { end.stop(); }
-    __attribute__((always_inline)) void start(uint32_t l1) { saved_call<&start_body>(l1); }
-    __attribute__((always_inline)) void step() { saved_call<&step_body>(0); }
-    __attribute__((always_inline)) void stop() { saved_call<&stop_body>(0); }
+    FORCE_INLINE void start(uint32_t l1) { saved_call<&start_body>(l1); }
+    FORCE_INLINE void step() { saved_call<&step_body>(0); }
+    FORCE_INLINE void stop() { saved_call<&stop_body>(0); }
 };
 template <bool DataCache>
 struct RouterHook<1, DataCache> : HostedEnd<true, DataCache> {};
