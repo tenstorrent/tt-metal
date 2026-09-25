@@ -329,7 +329,9 @@ class TtLMHead(LightweightModule):
 
         Args:
             x: Input tensor [dispatch_group_size, seq_len, emb_dim]
-            global_token_id: The global token position whose logits we need.
+            global_token_id: Which token's logits we need, indexed the way
+                ``global_to_local_token_id`` reads it: ``seq_len`` here is ``x``'s own extent, so in
+                chunked prefill this is a chip-major ROW of ``x``, not a global position.
 
         Returns:
             tuple[ttnn.Tensor, tuple[int, int]]:

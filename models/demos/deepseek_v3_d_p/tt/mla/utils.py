@@ -159,6 +159,27 @@ def rotated_chip_real_token_counts(kv_actual_isl: int, actual_isl: int, sp: int,
     ]
 
 
+def rotated_row_of_position(kv_actual_isl: int, sp: int, chunk_local: int, global_pos: int) -> int | None:
+    """The chip-major flat row ``chip * chunk_local + local`` carrying ``global_pos``, or None.
+
+    Inverse of ``rotated_chip_positions``, keyed off it so it cannot drift from the writer kernel.
+    """
+    for c, row in enumerate(rotated_chip_positions(kv_actual_isl, sp, chunk_local)):
+        for r, p in enumerate(row):
+            if p == global_pos:
+                return c * chunk_local + r
+    return None
+
+
+def rotated_rows_are_contiguous(kv_actual_isl: int, chunk_local: int) -> bool:
+    """Does every chip's rotated row carry a CONTIGUOUS run of positions?
+
+    True exactly when kv_actual_isl is a multiple of chunk_local. Consumers that shift by a ROW to
+    mean a shift by a POSITION -- the MTP union window is one -- are only correct where this holds.
+    """
+    return kv_actual_isl % chunk_local == 0
+
+
 def blockcyclic_positions(sp: int, chunk_size_global: int, seq_len_cache: int) -> torch.Tensor:
     """Global natural position held by each block-cyclic shard row (device-major: an SP-contiguous
     split of the cache's seq dim yields each chip's rows).
@@ -200,7 +221,8 @@ def global_to_local_token_id(
     """Convert a global token ID to a device ID and local token ID.
 
     Args:
-        global_token_id: The global token position across the full sequence.
+        global_token_id: Index into the sequence ``seq_len`` describes -- a global position for a
+            whole sequence, a chip-major flat ROW for one chunk (see ``rotated_row_of_position``).
         sp_factor: Number of devices in the sequence parallel group.
         seq_len: Total sequence length across all devices.
         is_balanced: If True (default), uses zigzag (striped) attention where the sequence

@@ -28,6 +28,8 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     create_balanced_chunk_order,
     global_to_local_token_id,
     reverse_reorder_tensor_chunks,
+    rotated_row_of_position,
+    rotated_rows_are_contiguous,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE
@@ -643,12 +645,13 @@ class TtPrefillTransformer(LightweightModule):
         """Gather ``[sp, 1, N]`` uint32 ids into ``[1, 1, N, H/tp]`` bf16 TILE. Does not consume ``tt_ids``."""
         return ttnn.unsqueeze_to_4D(self.embed(tt_ids))
 
-    def mtp_generate_embedding(self, h_normed: ttnn.Tensor, actual_isl: int) -> ttnn.Tensor:
-        """``H^k -> [1, 1, 32*sp, H/tp]``: the greedy next token at the last real row, embedded and
-        SP-broadcast so every chip can read it.
+    def mtp_generate_embedding(self, h_normed: ttnn.Tensor, last_row: int) -> ttnn.Tensor:
+        """``H^k -> [1, 1, 32*sp, H/tp]``: the greedy next token at ``last_row``, embedded and
+        SP-broadcast so every chip can read it. ``last_row`` is the chip-major flat row carrying the
+        chunk's last real position, which is ``actual_isl - 1`` only on a slab-aligned chunk.
         """
         assert self.lm_head is not None, "MTP generation needs the LM head (last rank, build_tail)"
-        logits, _ = self.lm_head(h_normed, actual_isl - 1)
+        logits, _ = self.lm_head(h_normed, last_row)
         if self.lm_head.is_column_parallel and self.tp_factor > 1:
             full = ttnn.all_gather(
                 logits,
@@ -685,8 +688,12 @@ class TtPrefillTransformer(LightweightModule):
         assert (
             actual_end - actual_start == actual_isl
         ), f"actual_end - actual_start = {actual_end - actual_start} != actual_isl {actual_isl}"
+        last_row = rotated_row_of_position(actual_start, self.sp_factor, self.seq_len // self.sp_factor, actual_end - 1)
+        assert (
+            last_row is not None
+        ), f"the chunk at {actual_start} does not carry its own last real position {actual_end - 1}"
         device_id, local_token_id = global_to_local_token_id(
-            actual_isl - 1, self.sp_factor, self.seq_len, is_balanced=self.is_balanced
+            last_row, self.sp_factor, self.seq_len, is_balanced=self.is_balanced
         )
         source_row = device_id * ttnn.TILE_SIZE + local_token_id % ttnn.TILE_SIZE
         geom = dict(
@@ -705,7 +712,7 @@ class TtPrefillTransformer(LightweightModule):
             build_mtp_generation_select(**geom, level=k, source_row=source_row) if k in generated else None
             for k in range(self.num_mtp_levels)
         ]
-        return MTPDeviceGeneration(keep_mask, selects, embed_fn=lambda h: self.mtp_generate_embedding(h, actual_isl))
+        return MTPDeviceGeneration(keep_mask, selects, embed_fn=lambda h: self.mtp_generate_embedding(h, last_row))
 
     def run_mtp(
         self,
@@ -728,6 +735,13 @@ class TtPrefillTransformer(LightweightModule):
         assert (
             0 <= provided_levels <= self.num_mtp_levels
         ), f"provided_levels {provided_levels} outside [0, {self.num_mtp_levels}]"
+        isl_per_chip = self.seq_len // self.sp_factor
+        assert rotated_rows_are_contiguous(fwd_kwargs["actual_start"], isl_per_chip), (
+            f"MTP needs a chunk start that is a multiple of the per-chip shard {isl_per_chip}; got "
+            f"{fwd_kwargs['actual_start']}. Off that boundary the rotated chunk leaves the boundary chip's "
+            "rows position-discontiguous, and an MTP window is a ROW shift, so level k would read the wrong "
+            "position on that chip. Resume on a multiple of chunk_size // sp_factor."
+        )
         generation = None
         if provided_levels < self.num_mtp_levels:
             generation = self._mtp_build_generation(

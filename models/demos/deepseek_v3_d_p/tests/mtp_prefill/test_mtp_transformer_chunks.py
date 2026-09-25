@@ -30,6 +30,7 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_2.mtp import glm_mtp_predictor
 from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank, num_full_indexer_layers
+from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions, rotated_row_of_position
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import MTPUnionEmbedding
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.tt_mtp import TtMTPPredictor
@@ -59,8 +60,9 @@ TOTAL = CHUNK * NUM_CHUNKS
 
 # A last chunk whose real end sits inside a tile.
 PARTIAL_TAIL = 2540
-# Two turns on one cache; the resume point is tile-aligned but not a chunk multiple.
-MT_PREFIX = 3072
+# Two turns on one cache; not a chunk multiple, so the second chunk is ROTATED across the chips. Must
+# stay a multiple of CHUNK // sp_factor -- see TtPrefillTransformer.run_mtp, which asserts it.
+MT_PREFIX = 5 * 640
 MT_TURN2 = 2500
 
 
@@ -101,10 +103,11 @@ def _shard_dims():
 
 
 def _from_device(t: ttnn.Tensor, mesh_device) -> torch.Tensor:
-    """``[1, 1, C/sp, H/tp]`` per chip -> ``[1, 1, C, H]`` in POSITION order.
+    """``[1, 1, C/sp, H/tp]`` per chip -> ``[1, 1, C, H]`` in chip-major ROW order.
 
     Valid because this test runs ``is_balanced=False``, where the input sharding is a plain reshape
-    and concatenating the chips back along ``-2`` is its exact inverse.
+    and concatenating the chips back along ``-2`` is its exact inverse. Row order is position order
+    only when slab-aligned; ``_unrotate_index`` converts the general case.
     """
     return ttnn.to_torch(
         t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=_shard_dims(), mesh_shape=mesh_device.shape)
@@ -144,6 +147,7 @@ def assert_socket_rows(stream: Sequence[int], sp_factor: int, chunk_size: int, n
     """Claim (1): each chip's row is the CONTIGUOUS slice of the stream at its own offset.
 
     Restated over the host lists: on device the trunk row and the lookahead row are separate blocks.
+    This is the H2D WIRE layout, which is the device's row layout only when slab-aligned.
     """
     isl = chunk_size // sp_factor
     for c in range(sp_factor):
@@ -159,11 +163,46 @@ def assert_socket_rows(stream: Sequence[int], sp_factor: int, chunk_size: int, n
         )
 
 
-def _mtp_union(transformer: TtPrefillTransformer, stream: Sequence[int], n_mtp: int, num_levels: int):
+def _unrotate_index(start: int, sp_factor: int, chunk_size: int) -> torch.Tensor:
+    """Device row -> natural position order, for reading a rotated chunk back against the reference.
+
+    The identity when slab-aligned, so the comparison below is one expression for both.
+    """
+    isl_per_chip = chunk_size // sp_factor
+    perm = torch.tensor(
+        [p - start for row in rotated_chip_positions(start, sp_factor, isl_per_chip) for p in row], dtype=torch.long
+    )
+    inverse = torch.empty_like(perm)
+    inverse[perm] = torch.arange(chunk_size, dtype=torch.long)
+    return inverse
+
+
+def _last_real_row(transformer: TtPrefillTransformer, start: int, actual_end: int) -> int:
+    """The device row carrying this chunk's last real position -- where generation reads h^k.
+
+    Ground-truthed against ``rotated_chip_positions`` rather than mirroring the code under test: on a
+    rotated chunk this is NOT row ``actual_end - start - 1``.
+    """
+    if transformer.padding_side != "right":
+        return transformer.seq_len - 1
+    sp_factor = transformer.sp_factor
+    isl_per_chip = transformer.seq_len // sp_factor
+    row = rotated_row_of_position(start, sp_factor, isl_per_chip, actual_end - 1)
+    assert row is not None, f"the chunk at {start} does not carry its own last real position {actual_end - 1}"
+    positions = rotated_chip_positions(start, sp_factor, isl_per_chip)
+    assert positions[row // isl_per_chip][row % isl_per_chip] == actual_end - 1, (
+        f"row {row} carries position {positions[row // isl_per_chip][row % isl_per_chip]}, not the "
+        f"last real position {actual_end - 1}"
+    )
+    return row
+
+
+def _mtp_union(transformer: TtPrefillTransformer, stream: Sequence[int], n_mtp: int, num_levels: int, start: int):
     """Build this chunk's :class:`MTPUnionEmbedding` the way the runtime does.
 
     Mirrors the runtime's first-rank branch: upload both id tensors, gather each with the model's own
-    embedding, and hand the blocks to ``from_ids``. The union owns ``trunk`` and frees it.
+    embedding, and hand the blocks to ``from_ids``. The union owns ``trunk`` and frees it. ``start``
+    lets both uploads place each id on the chip that will rope and cache it.
     """
     chunk_ids = prepare_prefill_input_tensor(
         list(stream[: transformer.seq_len]),
@@ -172,6 +211,7 @@ def _mtp_union(transformer: TtPrefillTransformer, stream: Sequence[int], n_mtp: 
         transformer.is_balanced,
         transformer.mesh_shape,
         transformer.sp_axis,
+        chunk_start=start,
     )
     mtp_ids = prepare_prefill_mtp_tokens(
         list(stream),
@@ -180,6 +220,7 @@ def _mtp_union(transformer: TtPrefillTransformer, stream: Sequence[int], n_mtp: 
         transformer.mesh_shape,
         transformer.sp_axis,
         num_mtp_tokens=n_mtp,
+        chunk_start=start,
     )
     union = MTPUnionEmbedding.from_ids(chunk_ids, mtp_ids, transformer.mtp_embed_ids, num_levels=num_levels)
     ttnn.deallocate(chunk_ids)
@@ -210,14 +251,14 @@ def _mtp_cache_dir(preferred: Path, fallback_root: Path) -> Path:
     return fallback
 
 
-def _next_token_fn(transformer: TtPrefillTransformer, actual_isl: int):
-    """``H^k -> int``: the greedy token at the last real row, through the trunk's own LM head.
+def _next_token_fn(transformer: TtPrefillTransformer, row: int):
+    """``H^k -> int``: the greedy token at ``row``, through the trunk's own LM head.
 
-    Tells the TEST which id the device must have generated so the reference can embed it.
+    Tells the TEST which id the device must have generated so the reference can embed it. ``row``
+    comes from ``_last_real_row``; it is ``actual_isl - 1`` only when slab-aligned.
     """
 
     def next_token(h_normed):
-        row = actual_isl - 1 if transformer.padding_side == "right" else transformer.seq_len - 1
         lm_head = transformer.lm_head
         raw, (device_id, token_offset) = lm_head(h_normed, row)
         logits_host = lm_head.logit_to_host(raw, device_id)
@@ -490,12 +531,12 @@ def test_mtp_transformer_chunks(
 
     h0_host: dict = {}
     real_run_mtp = transformer.run_mtp
-    derive_gen: dict = {"on": False, "isl": 0, "first": 0}
+    derive_gen: dict = {"on": False, "row": 0, "first": 0}
 
     def _capture_h0(h_normed, *args, **kwargs):
         h0_host["h"] = None if skip_pcc else _from_device(h_normed, mesh_device)
         if derive_gen["on"] and derive_gen["first"] == 0:
-            h0_host["t0"] = _next_token_fn(transformer, derive_gen["isl"])(h_normed)
+            h0_host["t0"] = _next_token_fn(transformer, derive_gen["row"])(h_normed)
         return real_run_mtp(h_normed, *args, **kwargs)
 
     monkeypatch.setattr(transformer, "run_mtp", _capture_h0)
@@ -539,10 +580,11 @@ def test_mtp_transformer_chunks(
             f"arithmetic clamp(actual_isl - actual_end, 0, K) gives {provided}"
         )
 
-        union = _mtp_union(transformer, stream, N_MTP, NUM_LEVELS)
+        union = _mtp_union(transformer, stream, N_MTP, NUM_LEVELS, start)
         h0_host.clear()
         captured.clear()
-        derive_gen.update(on=(provided < NUM_LEVELS and not skip_pcc), isl=real_len, first=provided)
+        last_row = _last_real_row(transformer, start, actual_end)
+        derive_gen.update(on=(provided < NUM_LEVELS and not skip_pcc), row=last_row, first=provided)
 
         logger.info(
             f"[mtp chunks] chunk {chunk_idx}: start={start} real_len={real_len} actual_isl={actual_isl} "
@@ -586,7 +628,7 @@ def test_mtp_transformer_chunks(
         seam_is_decisive = True
         generated = []
         if derive_gen["on"]:
-            next_token = _next_token_fn(transformer, real_len)
+            next_token = _next_token_fn(transformer, last_row)
             generated = [
                 h0_host["t0"] if k == 0 else next_token(res.out_head_normed[k - 1]) for k in range(provided, NUM_LEVELS)
             ]
@@ -620,11 +662,14 @@ def test_mtp_transformer_chunks(
         )
         host_embeds = [_host_window_embedding(embed_table, w) for w in windows[chunk_idx]]
 
-        dev_x = [_from_device(res.x[k], mesh_device)[:, :, :real_len] for k in range(NUM_LEVELS)]
-        dev_out = [_from_device(res.out[k], mesh_device)[:, :, :real_len] for k in range(NUM_LEVELS)]
-        dev_normed = [_from_device(res.out_head_normed[k], mesh_device)[:, :, :real_len] for k in range(NUM_LEVELS)]
+        natural = _unrotate_index(start, sp_factor, CHUNK)
+        dev_x = [_from_device(res.x[k], mesh_device)[:, :, natural][:, :, :real_len] for k in range(NUM_LEVELS)]
+        dev_out = [_from_device(res.out[k], mesh_device)[:, :, natural][:, :, :real_len] for k in range(NUM_LEVELS)]
+        dev_normed = [
+            _from_device(res.out_head_normed[k], mesh_device)[:, :, natural][:, :, :real_len] for k in range(NUM_LEVELS)
+        ]
         del res
-        ref_hiddens = [h0_host["h"][:, :, :real_len]] + dev_normed[:-1]
+        ref_hiddens = [h0_host["h"][:, :, natural][:, :, :real_len]] + dev_normed[:-1]
 
         t0 = time.monotonic()
         ref_xs, ref_outs, ref_normeds, _ = glm_mtp_predictor_reference(
