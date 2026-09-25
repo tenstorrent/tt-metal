@@ -4,6 +4,7 @@
 
 #include "padded_slice_rm_program_factory.hpp"
 #include "padded_slice_utils.hpp"
+#include "slice_cb_descriptor.hpp"
 
 #include <tt-metalium/program_descriptors.hpp>
 #include "hostdevcommon/kernel_structs.h"
@@ -34,25 +35,6 @@ namespace {
 constexpr uint32_t kPaddedSliceRmReaderKernelIdx = 0;
 constexpr uint32_t kPaddedSliceRmReaderAddressArgIdx = 0;
 constexpr uint32_t kPaddedSliceRmOutputCbIndex = 0;
-
-CBDescriptor make_padded_slice_rm_cb(
-    uint32_t cb_index,
-    const CoreRangeSet& core_ranges,
-    uint32_t page_size,
-    uint32_t num_pages,
-    tt::DataFormat data_format,
-    Buffer* buffer = nullptr) {
-    return CBDescriptor{
-        .total_size = num_pages * page_size,
-        .core_ranges = core_ranges,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(cb_index),
-            .data_format = data_format,
-            .page_size = page_size,
-        }}},
-        .buffer = buffer,
-    };
-}
 
 uint32_t padded_slice_rm_reader_address(
     const Tensor& input_tensor,
@@ -333,12 +315,12 @@ ProgramDescriptor PaddedSliceRMProgramFactory::create_descriptor(
 
     uint32_t num_output_sticks_per_core = output_shard_spec.shape[0];
 
-    desc.cbs.push_back(make_padded_slice_rm_cb(
+    desc.cbs.push_back(make_slice_cb_descriptor(
         output_cb_index, total_cores, output_cb_page_size, num_output_sticks_per_core, cb_data_format, dst_buffer));
     if (output_row_size_bytes > input_row_size_bytes) {
         pad_output_row = true;
         desc.cbs.push_back(
-            make_padded_slice_rm_cb(temp_pad_cb_index, total_cores, output_row_size_bytes, 1, cb_data_format));
+            make_slice_cb_descriptor(temp_pad_cb_index, total_cores, output_row_size_bytes, 1, cb_data_format));
     } else {
         non_aligned_temp_cb_index = temp_pad_cb_index;  // Use the unused temp pad index so that CBs are continuous.
     }
@@ -347,7 +329,7 @@ ProgramDescriptor PaddedSliceRMProgramFactory::create_descriptor(
         // Scratch page must accommodate padded_stick_size + worst-case misalignment.
         const uint32_t scratch_page_size =
             tt::align((a.logical_shape()[-1] * a.element_size()) + src_buffer_alignment, src_buffer_alignment);
-        desc.cbs.push_back(make_padded_slice_rm_cb(
+        desc.cbs.push_back(make_slice_cb_descriptor(
             non_aligned_temp_cb_index, total_cores, scratch_page_size, num_trids, cb_data_format));
     }
 
@@ -392,8 +374,16 @@ ProgramDescriptor PaddedSliceRMProgramFactory::create_descriptor(
         i++;
     }
 
+    // kPaddedSliceRmReaderKernelIdx is the GetRuntimeArgs index in override_runtime_arguments.
+    // Capture it from the push so a reorder fails here instead of patching the writer.
+    const uint32_t reader_kernel_idx = static_cast<uint32_t>(desc.kernels.size());
     desc.kernels.push_back(std::move(reader_kernel));
     desc.kernels.push_back(std::move(writer_kernel));
+    TT_FATAL(
+        reader_kernel_idx == kPaddedSliceRmReaderKernelIdx,
+        "Padded-slice RM reader must be kernel index {}, got {}",
+        kPaddedSliceRmReaderKernelIdx,
+        reader_kernel_idx);
     return desc;
 }
 

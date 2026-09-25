@@ -17,6 +17,7 @@
 #include "tt-metalium/math.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/experimental/padded_slice/device/padded_slice_utils.hpp"
+#include "ttnn/operations/experimental/padded_slice/device/slice_cb_descriptor.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -27,25 +28,6 @@ namespace ttnn::experimental::prim {
 namespace {
 constexpr uint32_t cb_input_index = 0;
 constexpr uint32_t kSliceWriteTiledWriterAddressArgIdx = 0;
-
-CBDescriptor make_slice_write_tiled_cb(
-    uint32_t cb_index,
-    const CoreRangeSet& core_ranges,
-    uint32_t page_size,
-    uint32_t num_pages,
-    tt::DataFormat data_format,
-    Buffer* buffer = nullptr) {
-    return CBDescriptor{
-        .total_size = num_pages * page_size,
-        .core_ranges = core_ranges,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(cb_index),
-            .data_format = data_format,
-            .page_size = page_size,
-        }}},
-        .buffer = buffer,
-    };
-}
 
 void emplace_slice_write_tiled_writer_args(
     KernelDescriptor& kernel, const CoreCoord& core, const std::vector<uint32_t>& args, Buffer* output_buffer) {
@@ -304,7 +286,7 @@ ProgramDescriptor SliceWriteTiledShardedInputProgramFactory::create_descriptor(
         input_cb_data_format,
         output_cb_data_format);
 
-    desc.cbs.push_back(make_slice_write_tiled_cb(
+    desc.cbs.push_back(make_slice_cb_descriptor(
         cb_input_index,
         input_cores,
         input_single_tile_size,
