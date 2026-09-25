@@ -192,9 +192,9 @@ KV_CACHE_PCC_THRESHOLD = 0.85
 INDEXER_K_PCC_THRESHOLD = 0.95
 
 # Per-chunk baseline medians (seconds) for the perf gate, derived from completed Galaxy runs. Keyed by
-# (num_layers, n_chunks, num_iters) so only exact configs with CI numbers are gated; every other combo
+# (num_layers, n_chunks, num_iters) so only exact calibrated configs are gated; every other combo
 # in the sweep stays record-only. Each list has one entry per chunk (index c == chunk c). Recalibrate
-# from completed Galaxy CI runs that exercise the exact configuration, and record the source run.
+# from completed Galaxy runs using the exact CI configuration and flags, and record the source run.
 #
 # Traced and untraced get SEPARATE tables and SEPARATE margins, selected by mode in
 # `kimi_chunked_perf_gate` -- a traced baseline can never gate an untraced run or vice versa. The two
@@ -204,6 +204,9 @@ KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
     # (55k / code_debug). These numbers were updated for the K2.6 -> K2.7 weights transition (#54944),
     # then re-cut twice. Recentered to CI run 34492835936 / job 102927415897.
+    # Chunks 7-10 refreshed for #56108 on 508a3a2f (includes #56258), from a high-power Galaxy:
+    # 61 layers / 11 chunks / 10 iterations, LOGURU_LEVEL=INFO, default SHM tracking; omit iteration 0.
+    # The full traced workload and golden check validate the faster timings. Keep the 3% band.
     (61, 11, 10): [
         0.413,
         0.419,
@@ -212,10 +215,10 @@ KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
         0.513,
         0.549,
         0.584,
-        0.623,
-        0.676,
-        0.716,
-        0.756,
+        0.604,
+        0.650,
+        0.691,
+        0.728,
     ],
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {

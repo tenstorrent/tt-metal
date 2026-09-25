@@ -731,6 +731,22 @@
   team: models
   budget_type: unit
 
+# Generic Galaxy CI is not wrap-cabling certified. The torus arm is registered
+# separately under kimi_rmsnorm in blaze_models_prefill_tests.yaml.
+- name: Kimi-K2.7 fused RMSNorm linear unit tests (BH Galaxy 8x4)
+  cmd: |
+    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+    pytest --timeout 180 models/demos/deepseek_v3_d_p/tests/pcc/test_rmsnorm_fused.py -k linear-1d -vv --tb=short
+  model: kimi-k2.7-rmsnorm
+  skus:
+    bh_galaxy:
+      timeout: 5
+      tier: 1
+  owner_id: U089NPHL0GN # Diego Gomez
+  team: models
+  budget_type: unit
+
 # MiniMax-M3 unit tests — random-weight module PCC only (no HF_MODEL / M3_CKPT).
 # test_msa_layer_vs_ref is real-weights and opt-in locally; excluded from CI so Tier-1
 # does not silently skip. Synthetic MSA prefill coverage: test_msa_prefill_vs_ref.

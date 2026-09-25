@@ -149,6 +149,7 @@ class TtPrefillTransformer(LightweightModule):
         is_last_rank: bool = True,
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
         overlap_shared_expert_with_dispatch: bool = True,
+        use_fused_rmsnorm: Optional[bool] = None,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -247,6 +248,7 @@ class TtPrefillTransformer(LightweightModule):
                 overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
                 first_layer_idx=first_layer_idx,
                 llama4_scale_cache=self._llama4_scale_cache,
+                use_fused_rmsnorm=use_fused_rmsnorm,
             )
             self.layers.append(layer)
 
