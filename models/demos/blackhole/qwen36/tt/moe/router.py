@@ -22,23 +22,7 @@ from models.demos.blackhole.qwen36.tt import tp_common as tpc
 _FUSED_GATE_TOPK = (4, 6, 8)
 
 
-# TTMoEGate allocates four PERSISTENT SHARDED L1 buffers per instance -- tt_bias, tt_input_indices
-# and the two preallocated output buffers -- and one instance is built PER MoE LAYER. Each is a
-# single tile per core (2,048 B/bank, already the floor: shrinking batch_per_device cannot go below
-# one tile), so at 40 MoE layers they MEASURED 327,680 B/bank of permanently reserved L1
-# (1,152 -> 328,832 before the first prefill). That pushes the L1 buffer floor down to 523,136 and
-# collides with the GDN prefill circular-buffer region, which ends at 572,640:
-#     "Statically allocated circular buffers in program 90 clash with L1 buffers"
-# -- bisected to "Phase 2 moe otpimizations", and reproducible with the GDN layer reverted.
-#
-# All four are layer-INDEPENDENT: tt_bias is built from the phantom-expert _PAD_NEG padding plus a
-# zero real-bias (Qwen3.6 routing has no score-correction bias, which is exactly why the fused gate
-# is eligible here), tt_input_indices is a constant arange of global expert ids, and the two output
-# buffers are scratch the op fills in place and the caller consumes before the next layer's gate
-# runs. So one set serves every layer: 40 x 8,192 -> 8,192 B/bank.
-#
-# Keyed on everything the buffer CONTENTS depend on. Sharing is done here rather than inside
-# models/common/modules/moe/tt_moe_gate.py so no other model's gate changes behaviour.
+# TTMoEGate's four persistent sharded L1 buffers are layer-INDEPENDENT, so share one set: per-layer copies reserve enough L1 to clash with the GDN prefill CBs.
 _GATE_BUF_NAMES = ("tt_bias", "tt_input_indices", "tt_output", "tt_output_indices")
 _SHARED_GATE_BUFS = {}
 
@@ -73,10 +57,7 @@ class Qwen36Router:
         is_mesh = hasattr(mesh_device, "shape")
         replicate_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
 
-        # HF mlp.gate.weight is [E, H] (nn.Linear out,in). Transpose to [1,1,H,E] for
-        # ttnn.linear (in,out) and replicate on every device (router is tiny +
-        # accuracy-sensitive, kept at bf16).
-        # The cast + transpose run as the as_tensor preprocess, i.e. on a tensor-cache miss only.
+        # HF [E,H] -> [1,1,H,E] for ttnn.linear, replicated and kept bf16; the transform runs as an as_tensor preprocess (cache-miss only).
         self.proj_weight = ttnn.as_tensor(
             state_dict["weight"] if state_dict else None,
             device=mesh_device,
@@ -96,18 +77,10 @@ class Qwen36Router:
             ttnn.TILE_SIZE, config.hidden_size, config.num_experts, num_cores=n_tiles
         )
 
-        # Fused decode gate. ttnn.generalized_moe_gate does the router matmul, softmax scoring,
-        # top-k and linear renormalization in one height-sharded op at ONE TOKEN PER CORE, which
-        # replaces the single-core ttnn.topk (151 us on 8x256) and its pad/normalize tail: the whole
-        # router chain measured 233 -> 74 us, the gate op itself 2.1 us on 8 cores.
-        # Qwen3.6 routing is exactly what the op calls softmax-"pre" + linear renorm: no score
-        # correction bias, no router linear bias, no expert scale, ungrouped (n_group=1).
+        # Fused decode gate: one height-sharded op at one token per core, replacing the single-core topk and its normalize tail.
         self.mesh_device = mesh_device
         self.decode_gate = None
-        # Zeroed scatter bases, one per seq_len, built on first use. ttnn.zeros(shape, device=...)
-        # allocates on the HOST and uploads (it emits no device op), so calling it per forward would
-        # put a host round-trip in the decode path and break tracing; ttnn.zeros_like on a resident
-        # template is a device fill instead.
+        # Zeroed scatter bases cached per seq_len: ttnn.zeros is a host upload, so per-forward it would break tracing; zeros_like is a device fill.
         self._scatter_base = {}
         if (
             state_dict  # the op builds its own weights from the torch tensor; no ttnn disk-cache path
@@ -149,10 +122,7 @@ class Qwen36Router:
         top_k_values, top_k_indices = ttnn.topk(router_probs, k=self.top_k, dim=-1)
         top_k_indices.deallocate(True)
 
-        # Build the dense [1,1,S,E] routing by thresholding at the k-th largest probability
-        # rather than scattering the top-k values back by index. ttnn.scatter only runs in
-        # ROW_MAJOR, so the scatter form costs three untilize + one tilize around it (and a
-        # pad-fill for the narrow top-k reduce); thresholding stays in TILE the whole way.
+        # Build the dense routing by thresholding at the k-th largest probability: ttnn.scatter is ROW_MAJOR-only, thresholding stays in TILE.
         kth = ttnn.slice(
             top_k_values,
             [0, 0, 0, self.top_k - 1],
@@ -190,12 +160,7 @@ class Qwen36Router:
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
-                # The template is resident for the model's lifetime and one is cached PER decode
-                # width (the bucket warmup compiles 1/2/4/8/16/32) PER MoE layer, so keeping it in
-                # L1 permanently reserved enough L1 to push the GDN decode CBs over the edge at
-                # B=32 on a 64-core WH grid. It is only a shape/dtype template -- nothing reads it
-                # -- so it lives in DRAM; the zeros_like BELOW still returns the L1 tensor the
-                # scatter and the sparse_matmul path want.
+                # DRAM: nothing reads this template, and one is cached per decode width per MoE layer -- in L1 that tips the GDN decode CBs over.
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             self._scatter_base[seq_len] = base

@@ -56,10 +56,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
         # DRAM-sharded memcfgs from args.
         from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
-        # w1/w3 DRAM-WIDTH_SHARDED for decode (M=1 tile, ~+10% tok/s); w2 interleaved.
-        # Cache uses `.dramshard` suffix — layout incompatible with interleaved cache
-        # (as_tensor ignores requested memcfg on reload). Fallback if memcfgs absent.
-        # 1D-decode (default) uses interleaved weights (its mcast decode matmul needs them).
+        # w1/w3 DRAM-width-sharded for decode, w2 interleaved; the `.dramshard` cache suffix keeps the two layouts from colliding on reload.
         dram_sharded = (
             args is not None
             and getattr(args, "mlp_w1_weight_memcfg", None) is not None
@@ -196,11 +193,7 @@ class Qwen36MLP:
         )
 
     def forward(self, x, mode=None, reduce=True):
-        # mode is unused (accepted only for a uniform signature with Qwen36MoE, which needs an
-        # explicit decode/prefill mode); the dense MLP still infers its path from the input shape.
-        # reduce=False returns the un-reduced row-parallel partial (full hidden) so a caller that
-        # is about to sum this with another partial can reduce-scatter the sum once; see
-        # Qwen36MoE.forward. Only meaningful on TP.
+        # mode is accepted only for signature parity with Qwen36MoE; reduce=False returns the un-reduced partial so a caller can reduce-scatter once.
         if self.num_devices > 1:
             return self._forward_tp(x, reduce=reduce)
         w = self.weights

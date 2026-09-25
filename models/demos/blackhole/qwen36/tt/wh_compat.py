@@ -4,61 +4,36 @@
 
 This model runs on Blackhole (P150) and Wormhole (n300). The shared kernels in
 ``models/experimental/gated_attention_gated_deltanet`` were tuned for Blackhole, which has
-substantially more L1 to spend:
+substantially more total L1 and more interleave banks, so working sets that fit comfortably there
+do not fit here -- and the Tensix circular buffers those kernels allocate are L1-only by hardware,
+so the only things that can move are the surrounding activations.
 
-    Blackhole  140 worker cores x 1,572,864 B L1  ~= 210 MB,  80 interleave banks
-    Wormhole    80 worker cores x 1,499,136 B L1  ~= 114 MB,  64 interleave banks
+The shared module is NOT edited: the adjustments are applied from inside this model's folder.
+``apply()`` is idempotent and runs from the qwen36 GDN entry points before any GDN forward.
 
-Blackhole therefore has ~1.84x the total L1 (the delta is core count, not L1 per core), and with
-64 banks instead of 80 the same interleaved tensor costs ~1.25x more per bank on Wormhole.
-Working sets that fit comfortably there do not fit here, and the Tensix circular buffers those
-kernels allocate are L1-only by hardware -- compute cannot read DRAM -- so the only things that
-can move are the surrounding activations.
+Three adjustments, all no-ops on Blackhole:
 
-The shared module is NOT edited: both adjustments are applied from inside this model's folder.
-``apply()`` is idempotent and is called by the qwen36 GDN entry points before any GDN forward.
+1. ``_seq_memory_config`` -> DRAM. Upstream keeps short sequences in L1; on Wormhole those
+   activations no longer fit beside the chunk-seq kernel's circular buffers.
+2. ``chunk_gated_delta_rule_seq`` -> the bf16 variant in ``chunk_seq_wh.py``, halving an
+   L1-resident fp32 relayout that does not otherwise fit.
+3. ``fused_decay_and_write_ttnn`` -> DRAM for the [B,H,K,V] state-write intermediates once they
+   exceed the L1 budget. See that override for why upstream cannot do B=32 in L1.
 
-Two adjustments, both no-ops on Blackhole:
+BLAST RADIUS: these rebind module globals on the SHARED module, so within a process that imports
+it the change is visible to any other model using it -- and ``apply()`` runs as an import side
+effect of any qwen36 GDN module, so it is not opt-in and has no per-caller scoping. Every override
+is guarded by ``is_blackhole()`` evaluated PER CALL (not at import, which would need an open
+device), so Blackhole is bit-for-bit unchanged and only Wormhole takes the new paths.
 
-1. ``_seq_memory_config`` -> DRAM. Upstream keeps short sequences in L1 for speed; on Wormhole
-   those activations no longer fit beside the chunk-seq kernel's circular buffers and fail as
-   "clash with L1 buffers" for T <= 512.
-
-2. ``chunk_gated_delta_rule_seq`` -> the bf16 variant in ``chunk_seq_wh.py``. Its
-   L1-resident ``[BH, L, V]`` fp32 relayout needs 33,554,432 B at L=2048, which does not fit;
-   bf16 halves it to 16,777,216 B. That dispatch delegates to the upstream function whenever
-   ``is_blackhole()``, so Blackhole always runs upstream code.
-
-NOTE on blast radius: these rebind module-globals in the shared module, so within a process that
-imports it the change is visible to any other model using it. Both are guarded by
-``is_blackhole()`` evaluated per call (not at import, which would need an open device), so
-Blackhole behaviour is bit-for-bit unchanged and only Wormhole takes the new paths.
-
-    Blackhole: no exposure. Both overrides delegate to the upstream implementation whenever
-    ``is_blackhole()``, so any model in the process -- qwen36 or not -- runs upstream code.
-
-    Wormhole: real exposure, and it is process-wide, not qwen36-scoped. Importing any qwen36
-    GDN module (``tt/gdn/tp.py``, ``tt/gdn/decode.py``, or this module) runs ``apply()`` as an
-    import side effect, which rebinds ``_seq_memory_config`` and
-    ``chunk_gated_delta_rule_seq`` on the SHARED module. From that point any *other* Wormhole
-    model that imports ``models/experimental/gated_attention_gated_deltanet`` in the same
-    process silently gets DRAM chunk-seq activations and the bf16 output relayout, even though
-    it never imported anything under qwen36. It is not opt-in and there is no per-caller
-    scoping.
-
-    Why that is acceptable today: qwen36 is the only Wormhole consumer of the shared GDN
-    module, so no other model can observe the rebind. Both overrides are also strictly
-    L1-relief changes on a path that OOMs without them -- the alternative for a co-resident
-    Wormhole model is not "upstream numerics", it is a failed allocation.
-
-    What to do if that stops holding: if a second Wormhole model starts using the shared GDN
-    module, do NOT leave this as an import side effect. Drop the module-level ``apply()`` call
-    at the bottom of this file, keep the explicit calls at the qwen36 GDN entry points, and
-    push the dtype/memory-config choice down into the shared module as a parameter so each
-    caller picks its own. The pytest process is the case to watch: a single session that
-    collects both qwen36 and another Wormhole GDN model would share one interpreter, and
-    collection-time imports alone are enough to flip the globals -- test order, not the model
-    under test, would decide which kernels run.
+That is acceptable only because qwen36 is currently the sole Wormhole consumer of the shared
+module, and because all three are strictly L1-relief on paths that OOM without them -- the
+alternative for a co-resident Wormhole model is not "upstream numerics", it is a failed
+allocation. If a SECOND Wormhole model starts using the shared module, do not leave this as an
+import side effect: drop the module-level ``apply()`` below, keep the explicit entry-point calls,
+and push the dtype/memory-config choice into the shared module as a per-caller parameter. Watch
+pytest in particular -- one session collecting two such models shares an interpreter, and
+collection-time imports alone would let test order decide which kernels run.
 """
 import inspect
 
@@ -137,25 +112,16 @@ def apply():
     def _fused_decay_and_write(h, k_t, delta, decay_t, beta_t, device=None, apply_decay=True):
         """Wormhole: place the [B,H,K,V] state-write intermediates in DRAM when they miss L1.
 
-        Upstream keeps every one of them in L1 -- "Decode opt: keep state-write operands in L1
-        (tiny at B=1)" -- and there are FOUR of that shape: the k(x)delta outer product, its beta
-        scaling, the decayed h, and the sum. At B=1 each is 512 KB and L1 is the right call.
+        Upstream keeps all FOUR of that shape in L1 -- the k(x)delta outer product, its beta
+        scaling, the decayed h, and the sum -- which is right at B=1 and impossible at B=32, where
+        each is far larger than the free L1 per bank. This is the decode leg the WH fork
+        deliberately declines (wh_decode_fork_applies), so without this override B=32 had nowhere
+        to go: the fork refused it for exactly this reason and upstream then tried L1 anyway.
+        Blackhole spreads the same tensor over more banks of a larger L1 and keeps the upstream
+        function untouched.
 
-        At B=32 with the fp32 state each is [32,8,128,128] = 16,777,216 B. Wormhole interleaves
-        over 64 banks, so that is 262,144 B/bank against the 1,368,864 B a bank has -- and with the
-        model resident only ~186 KB/bank is free, so the very first one dies with
-
-            Out of Memory: Not enough space to allocate 16777216 B L1 buffer across 64 banks
-
-        This is the decode leg the WH fork deliberately declines (wh_decode_fork_applies), so
-        before this override B=32 decode had nowhere to go: the fork refused it for exactly this
-        reason and upstream then tried to do it in L1 anyway.
-
-        Blackhole spreads the same tensor over 80 banks of a larger L1 and never trips this, so it
-        keeps the upstream function untouched.
-
-        ONLY the memory configs change. The op sequence, dtypes and compute config are upstream's,
-        so the result is bit-identical -- DRAM vs L1 is placement, not arithmetic.
+        ONLY the memory configs change -- op sequence, dtypes and compute config are upstream's, so
+        the result is bit-identical. DRAM vs L1 is placement, not arithmetic.
         """
         if is_blackhole():
             return _orig_fused_decay_and_write(

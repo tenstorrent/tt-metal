@@ -447,12 +447,7 @@ def test_model_tp_prefill_paged_slots_long(mesh_device, T, traced, reset_seeds, 
 
     comp0 = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
-    # ---- per-user B=1 reference: eager chunk-outer prefill + B=1 decode (trusted path) ----
-    # Both variants use the EAGER oracle: it never parks a chunk trace, so its per-user eager decode
-    # compiles freely. (A *traced* oracle would interleave eager-decode compiles with parked-chunk-trace
-    # replays across users and wedge the device — a harness artifact, not a model bug.) prefill_tp can't
-    # be the reference (single-passes the whole sequence -> GDN L1 overflow at T>=4096). The eager
-    # chunk-outer path is validated vs the bespoke oracle by test_model_tp_long_prefill.
+    # Per-user B=1 reference: the EAGER chunk-outer path, which parks no chunk trace (a traced oracle wedges the device) and is itself validated by test_model_tp_long_prefill.
     omodel, args, opt, _ = _build(1)
     vocab = args.vocab_size
     prompts = [torch.randint(0, vocab, (T,)).tolist() for _ in range(B)]
@@ -470,11 +465,7 @@ def test_model_tp_prefill_paged_slots_long(mesh_device, T, traced, reset_seeds, 
         )
         pos = T
         fed = int(torch.argmax(oracle_pf[u]))
-        # Teacher-force: record the token fed into each step so the batched path below replays
-        # the SAME input sequence rather than following its own greedy argmax. A tiny numeric
-        # delta at any step can flip a near-tied argmax, and once the two paths feed different
-        # tokens forward, every later step legitimately diverges (different question, not a
-        # wrong answer) -- teacher-forcing isolates per-step compute correctness from that cascade.
+        # Teacher-force: record each fed token so the batched path replays the SAME sequence -- a near-tied argmax otherwise sends the two runs down different sequences.
         fed_tokens_u = []
         for _ in range(N_DEC):
             fed_tokens_u.append(fed)
@@ -537,14 +528,7 @@ def test_model_tp_prefill_paged_slots_long(mesh_device, T, traced, reset_seeds, 
     del bmodel
     gc.collect()
 
-    # ---- per-user prefill logits + GDN state (+ decode for the eager variant) PCC ----
-    # Prefill logits and per-slot GDN rec_state are what prefill_paged_slots actually produces/writes,
-    # so both variants must match the eager reference at the full bar. Decode is asserted only for the
-    # eager variant: the traced chunk forward (_forward_prefill_chunk_tp) is a DIFFERENT kernel from the
-    # eager one (_forward_prefill_chunk_masked_tp), so comparing traced-prefill->decode against the eager
-    # reference compounds that cross-kernel delta (test_model_tp_long_prefill_traced already bounds the
-    # traced-vs-eager prefill delta at 0.99). The traced path's decode-from-state is the same code the
-    # eager variant fully exercises, and its state is validated by the rec_state check below.
+    # Both variants assert prefill logits and rec_state; decode is asserted only for eager, since the traced chunk forward is a different kernel and would compound that delta.
     thr = get_pcc_threshold(request, default=0.97)
     worst = (1.0, -1, "")
     for u in range(B):
@@ -590,10 +574,7 @@ def test_model_tp_prefill_traced_bucket(mesh_device, B, reset_seeds, ensure_gc, 
     N_DEC = 2
     torch.manual_seed(0)
 
-    # All prompts are exactly the bucket length (128) — the only length the traced path serves
-    # (full bucket, valid_len=None, numerically identical to eager valid_len=128 by GDN full-chunk
-    # equivalence). Sub-bucket prompts would corrupt the GDN decode state through the recurrence,
-    # so the caller routes them to eager prefill instead; there is no sub-bucket traced case.
+    # All prompts are exactly the bucket length -- the only length the traced path serves; sub-bucket prompts would corrupt the GDN state, so they route to eager.
     # Distinct content per user still exercises per-user page-table routing.
     bucket = 128
     prompt_lens = [bucket] * B
@@ -631,12 +612,7 @@ def test_model_tp_prefill_traced_bucket(mesh_device, B, reset_seeds, ensure_gc, 
         for la in model.layers
         if not la.is_full_attention
     ]
-    # A few eager decode steps for a per-user decode-correctness baseline. Both paths decode from the
-    # SAME greedy token sequence (fed_ref, eager's argmax): when a user's top-2 prefill logits are
-    # near-tied, the tiny eager-vs-traced numerical delta can flip the argmax, so feeding each path
-    # its own argmax would decode divergent continuations and make the decode-PCC comparison
-    # meaningless (a false failure). Production greedily decodes its own argmax per request and both
-    # paths are individually correct; sharing the seed here isolates decode-compute equivalence.
+    # Both paths decode from the SAME token sequence: a near-tied argmax would otherwise send them down divergent continuations and make the PCC meaningless.
     eager_dec = [[] for _ in range(B)]
     pos = list(prompt_lens)
     fed_ref = [[int(torch.argmax(eager_pf_torch[u]))] for u in range(B)]
@@ -783,11 +759,7 @@ def test_model_tp_prefill_chunked_batched(mesh_device, B, seqlen, reset_seeds, e
         )
         pos = prompt_lens[u]
         fed = int(torch.argmax(oracle_pf[u]))
-        # Teacher-force: record the token fed into each step so the batched path below replays
-        # the SAME input sequence rather than following its own greedy argmax. A tiny numeric
-        # delta at any step can flip a near-tied argmax, and once the two paths feed different
-        # tokens forward, every later step legitimately diverges (different question, not a
-        # wrong answer) -- teacher-forcing isolates per-step compute correctness from that cascade.
+        # Teacher-force: record each fed token so the batched path replays the SAME sequence -- a near-tied argmax otherwise sends the two runs down different sequences.
         fed_tokens_u = []
         for s in range(N_DEC):
             fed_tokens_u.append(fed)

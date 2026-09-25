@@ -114,12 +114,7 @@ def _chunk_gated_delta_rule_seq_wh(
     # across the full device grid instead of the ~16-core auto-config. Same math (see _bmm_progcfg).
     _bmm_cfg = _bmm_progcfg(mesh_device, chunk_size // _TILE, chunk_size // _TILE, K // _TILE)
 
-    # Right-padding mask: zero every state-affecting input past valid_len. The mask
-    # SHAPE is fixed by bucket length T (only values depend on valid_len), so a
-    # single program serves all real lengths. Mirrors the zeros concatenated below for
-    # pad_len; here it covers the [valid_len, T) region the caller padded.
-    # valid_len may be a scalar (all BH rows) or a per-row list/tuple of length B
-    # (batched prefill): BH rows run b*H + h, so user b owns [b*H, (b+1)*H).
+    # Right-padding mask zeroing every state-affecting input past valid_len; the SHAPE is fixed by T, so one program serves all real lengths.
     _is_per_row = isinstance(valid_len, (list, tuple))
     if _is_per_row or (valid_len is not None and valid_len < T):
         # Built ON DEVICE: arange over T compared against valid_len, so no host tensor is
@@ -133,10 +128,7 @@ def _chunk_gated_delta_rule_seq_wh(
             _is_per_row = False
             valid_len = int(valid_len[0])
         if _is_per_row:
-            # Per-row lengths, built ENTIRELY ON DEVICE: one [1,T,1] compare per user, repeated
-            # over that user's H rows, then concatenated. No host tensor and no from_torch, which
-            # also makes this trace-safe -- a host->device write inside begin_trace_capture raises
-            # "Writes are not supported during trace capture" (see wh_compat.py).
+            # Per-row lengths built ENTIRELY ON DEVICE: no from_torch, which keeps this trace-safe (a host write under trace capture TT_FATALs).
             _Bv = len(valid_len)
             _H = BH // _Bv
             _rows = []
@@ -225,11 +217,7 @@ def _chunk_gated_delta_rule_seq_wh(
 
     _cmc = ttnn.DRAM_MEMORY_CONFIG if chunk_size > 64 else None
 
-    # ---- Decay preprocessing ----
-    # decay = g_c @ triu_ones (prefix-sum of g along the chunk). triu_ones is broadcast across
-    # the batch, so the per-batch [1,C]@[C,C] bmm (M=1, ~4 cores) is bit-identical
-    # a single 2D [batch,C]@[C,C] matmul, which spreads the batch rows across ~24 cores. Same
-    # math, same HiFi4/fp32 fidelity — pure parallelization win.
+    # Decay = prefix-sum of g along the chunk, as one 2D matmul rather than a per-batch bmm: same math, spread over far more cores.
     triu_ones_2d = ttnn.reshape(triu_ones, [chunk_size, chunk_size], memory_config=None)
     decay = ttnn.matmul(g_c, triu_ones_2d, memory_config=None, compute_kernel_config=_hifi_cfg)
     decay_offset = decay[:, 0:1]
@@ -263,10 +251,7 @@ def _chunk_gated_delta_rule_seq_wh(
     ttnn.deallocate(k_c_t)
 
     _ck("kk", kk)
-    # L_mat diagonal regularization (QWEN_GDN_DIAG_ALPHA): diag = 1 + alpha*diag(kk*L_mask).
-    # alpha=0: exact HF/FLA (unit diag, undamped ||N||~19). alpha=1: full 1/(1+beta) damping.
-    # Default 0.25: partial damping prevents GDN state saturation at 256k (alpha=0 rides doc narrative).
-    # Horner inverse stable at any alpha; QWEN_GDN_INV_DOUBLING=1 forces alpha=1 + doubling (A/B pair).
+    # L_mat diagonal regularization (QWEN_GDN_DIAG_ALPHA): 0 is exact HF/FLA, 1 is full damping; the 0.25 default prevents state saturation at 256k.
     if _os.environ.get("QWEN_GDN_INV_DOUBLING", "0") != "0":
         # A/B: full diagonal-included L_mat + doubling inverse.
         L_mat = ttnn.add(_eye_1cc, ttnn.multiply(kk, L_mask, memory_config=_cmc), memory_config=_cmc)
@@ -436,13 +421,7 @@ def _chunk_gated_delta_rule_seq_wh(
     ttnn.deallocate(L_inv_4d)
 
     _out_l1 = ttnn.L1_MEMORY_CONFIG
-    # THE ONE CHANGE vs upstream: bf16 instead of fp32 for this L1-resident relayout.
-    # fp32 costs BH*L*V*4 = 32*2048*128*4 = 33,554,432 B, which does not fit Wormhole's L1
-    # (80 cores / ~114MB / 64 banks) beside the live prefill set; bf16 halves it
-    # to 16,777,216 B, which does. fp32 gave 14x "Out of Memory ... 33554432 B"
-    # test_prefill failures; bf16 -> 0 OOM, 17/17 pass, logit PCC 0.9998-1.0000 (unchanged).
-    # L1 (not DRAM) is deliberate: the DRAM path makes the `o[:, :T, :]` slice
-    # host reads, and this runs inside begin_trace_capture.
+    # THE ONE CHANGE vs upstream: bf16, not fp32, for this L1-resident relayout -- fp32 does not fit Wormhole's L1. L1 (not DRAM) is deliberate: DRAM makes the slice below a host read, and this runs under trace capture.
     _out_dtype = ttnn.bfloat16
     # No memory_config: output is already TILE, so it would be a warning no-op;
     # the reshape below places it in L1.

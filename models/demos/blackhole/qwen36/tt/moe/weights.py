@@ -69,15 +69,7 @@ def load_expert_weights(
         gate_up_fused = state_dict["gate_up_proj"]  # [E, 2I, H], rows [:I]=gate, [I:]=up
         down_proj = state_dict["down_proj"]  # [E, H, I]
 
-    # The bf16 cast, the [up|gate] fusion and the transposes to the ttnn.linear (in, out)
-    # convention run as the as_tensor preprocess, i.e. on a tensor-cache MISS only; a cached load
-    # never materialises the checkpoint tensors.
-    #
-    # The fusion happens HERE, on the host, and is uploaded as ONE tensor. Uploading gate and up
-    # separately and concatenating them on device instead cost ~1.2 ms of device time per MoE
-    # layer, and could never be anything but a DRAM round-trip: it needs ~160 MB resident (two
-    # 40 MB bfloat4_b stacks in, 80 MB out) against 96 MB of total L1 on Wormhole. Arch-independent
-    # -- the host build is never worse -- so both arches take it.
+    # Cast, [up|gate] fusion and transposes run as the as_tensor preprocess (cache-miss only) and upload as ONE tensor; a device-side concat would need more resident memory than Wormhole has L1.
     def _gate_up(t):
         # [E, 2I, H] -> [up | gate] -> [1, E, H, 2I]. The [up|gate] order matches ttnn.swiglu's
         # first_half * silu(second_half) contract.

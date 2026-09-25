@@ -190,57 +190,46 @@ batch row.
 
 **End-to-end, with the real checkpoint.** `Qwen/Qwen3.6-35B-A3B` on a `(1, 4)` Wormhole mesh:
 
-```
+```bash
 MESH_DEVICE=N150x4 HF_MODEL=Qwen/Qwen3.6-35B-A3B \
     pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s \
            -k "traced_128 and not 128k" --timeout=5000
 ```
 
-| ISL | TTFT | Decode | Result |
-| --- | ---- | ------ | ------ |
-| 128 | 0.65 s | 14.96 tok/s | PASSED |
-| 4k  | 12.53 s | 14.94 tok/s | PASSED |
-| 8k  | 33.87 s | 14.95 tok/s | PASSED |
+| Case | TTFT | Decode / user | Aggregate | Result |
+| ---- | ---- | ------------- | --------- | ------ |
+| `traced_128` | 0.67 s | 25.48 tok/s | — | PASSED |
+| `traced_4k` | 12.6 s | 25.25 tok/s | — | PASSED |
+| `determinism_128` | — | — | — | PASSED (two runs, identical output) |
+| `batched_128_b8` | — | 20.13 tok/s | 161.1 tok/s | PASSED |
+| `batched_128_b32` | 45.2 s | 9.31 tok/s | 298.0 tok/s | PASSED |
 
 Model load 30-32 s from a warm bf8 cache; generated text is fluent and on-topic (the test's
 non-degeneracy gate passes). The 40-layer model's weights fit the 4 x 12 GB budget with the 1 GiB
 trace region resident.
 
-**Decode is healthy; PREFILL is not yet tuned for Wormhole.** Decode holds ~14.95 tok/s flat
-across ISLs, but TTFT scales at roughly 4 ms/token — far off what this hardware should do. Two
-known causes, both listed above: the fused matmul + reduce-scatter is off (it hangs on WH), and
-none of the WH prefill tuning from PR #54572 applies here (all of it is gated to `wh_9b_n300`).
-That PR's `wh_9b_n300` decode/prefill passes are the obvious next step, but every one of them was
-swept on an N300 at TP=2 with dim<=4096 — they need re-measuring for this (1,4) MoE config, not
-copying.
+Decode is the tuned path. Prefill TTFT still scales at roughly 3 ms/token at long ISL: the fused
+matmul + reduce-scatter is off here (it hangs on Wormhole, see `tp_common.mmrs_prefill_supported`),
+and the `wh_9b_n300` prefill passes from PR #54572 were swept on an N300 at TP=2 with dim<=4096, so
+they need re-measuring for this (1,4) MoE config rather than copying.
 
-The tensor-parallel component suite was additionally run on the same mesh against the **dense
-Qwen3.6-27B** checkpoint. That is a *validation vehicle only* — the 27B is not supported on
-Wormhole — but it exercises the shared TP surface with a torch PCC oracle per component: fused
-all-gather matmul, GDN prefill, paged and non-paged attention, RoPE and the SwiGLU MLP:
+**Component tests**, same mesh, same real checkpoint:
 
-```bash
-MESH_DEVICE=N150x4 HF_MODEL=Qwen/Qwen3.6-27B \
-    pytest models/demos/blackhole/qwen36/tests/test_mlp_tp.py \
-           models/demos/blackhole/qwen36/tests/test_attention_tp.py \
-           models/demos/blackhole/qwen36/tests/test_gdn_tp.py \
-           models/demos/blackhole/qwen36/tests/test_rope_tp.py -v -s
-```
+| Suite | Result |
+| ----- | ------ |
+| `test_gdn_tp.py` | 17/17 |
+| `test_attention_tp.py` | 7/7 |
+| `test_moe_tp.py` | 6/6 |
+| `test_rope_tp.py` | 2/2 |
+| `test_generate_tp.py`, `test_sampling.py` | 1/1 each |
+| `test_decode_bucketing.py` | 16/17 (the remaining one imports vLLM) |
+| `test_model_tp.py` | 13/14 |
 
-Component results on the (1,4) WH mesh (27B checkpoint): `test_mlp_tp` 2/2, `test_attention_tp`
-7/7 (including B=32 decode, PCC 1.00000 after the `pad_and_free` fix), `test_gdn_tp_prefill`
-PCC 0.99996.
-
-The MoE block was validated with the **real 35B-A3B checkpoint** on the same mesh
-(`test_moe_tp.py`, 5/5):
-
-| Case | PCC vs torch |
-| ---- | ------------ |
-| decode | pass |
-| decode, batch 8 | pass |
-| prefill, seq 32 | 0.98960 |
-| prefill, seq 256 | 0.99047 |
-| prefill, seq 512 | 0.99028 |
+The one `test_model_tp` failure is `prefill_paged_slots_long[eager-2chunks_plus_tail]`: for one
+user of eight, first-step decode logits land at PCC 0.96 against the B=1 chunk-outer reference.
+Both per-slot prefill variants (eager and traced) show the same user, so it is a real
+per-slot-vs-reference numerical delta and not a cascade — the prefill logits and the GDN recurrent
+state round-trip are both bit-exact for that user.
 
 > **Fixed while porting:** the decode KV-cache update did `ttnn.pad(...)` and then
 > deallocated the pad's *source*. `ttnn.pad` returns a metadata-only view aliasing
@@ -372,3 +361,38 @@ pytest models/demos/blackhole/qwen36/tests/test_generate_tp.py -v -s
 
 > `test_substate.py` and `test_weight_mapping.py` are pure-CPU and need no device.
 > `test_weight_mapping.py`'s shape constants assume the 9B checkpoint.
+
+### Running the tests on Wormhole — **35B-A3B (N150x4)**
+
+Wormhole runs the sparse-MoE `Qwen3.6-35B-A3B` only, and only on the `(1,4)` mesh. The TP tests
+above are the applicable set; everything single-device is Blackhole-only in practice:
+
+* `tests/unit/*` skip themselves (`run_for_blackhole`, "only runs for Blackhole"). `test_substate.py`
+  is pure CPU and passes anywhere.
+* `test_prefill.py`, `test_weight_mapping.py` and the vision tests (`test_patch_merger.py`,
+  `test_vision_attention.py`, `test_vision_block.py`, `test_wrapped_model.py`, `test_mlp.py`,
+  `test_model.py`) target the 9B/27B/vision checkpoints and fail on 35B-A3B with
+  `KeyError: 'Qwen3.6-35B-A3B'` or an empty state dict — not a regression.
+* `test_prefill.py` additionally builds a **single-device** model. The chunk-seq kernel's circular
+  buffers want nearly a whole Wormhole L1 bank at this model's head count, so any resident L1
+  buffer collides; it needs the larger Blackhole L1.
+
+```bash
+export TT_METAL_HOME=$PWD PYTHONPATH=$PWD
+export HF_MODEL=Qwen/Qwen3.6-35B-A3B MESH_DEVICE=N150x4
+
+pytest models/demos/blackhole/qwen36/tests/test_gdn_tp.py         -q --timeout=900
+pytest models/demos/blackhole/qwen36/tests/test_attention_tp.py   -q --timeout=900
+pytest models/demos/blackhole/qwen36/tests/test_moe_tp.py         -q --timeout=900
+pytest models/demos/blackhole/qwen36/tests/test_rope_tp.py        -q --timeout=600
+pytest models/demos/blackhole/qwen36/tests/test_generate_tp.py    -q --timeout=900
+pytest models/demos/blackhole/qwen36/tests/test_sampling.py       -q --timeout=600
+pytest models/demos/blackhole/qwen36/tests/test_decode_bucketing.py -q --timeout=900
+pytest models/demos/blackhole/qwen36/tests/test_model_tp.py       -q --timeout=2400
+```
+
+> Run these **module by module**, not as one pytest session: a single session collecting the whole
+> directory has been seen to die with a `Fatal Python error: Bus error` partway through and take
+> the remaining modules with it. `tt-smi -r` between the heavy modules clears a wedged card.
+
+> `test_decode_bucketing.py` needs vLLM for one case; without it that case skips.
