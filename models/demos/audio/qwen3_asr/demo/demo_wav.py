@@ -22,7 +22,7 @@ from safetensors import safe_open
 from transformers import AutoTokenizer
 
 import ttnn
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.ttt_compat.tt.model_config import ModelArgs
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.join(ROOT, "reference"))

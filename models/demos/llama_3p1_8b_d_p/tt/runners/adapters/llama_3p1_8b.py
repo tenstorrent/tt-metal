@@ -42,7 +42,7 @@ class Llama31PrefillAdapter(PrefillModelAdapter):
     # Repo-bundled config.json (no mount, no network needed for the config path), as gpt_oss_d_p
     # and kimi_k2_6 do. The WEIGHTS path is separate -- see tt/model_config.py.
     # PREFILL_HF_MODEL overrides, and when it does it supplies both config and weights.
-    hf_model_default = "models/tt_transformers/model_params/Llama-3.1-8B-Instruct"
+    hf_model_default = "models/ttt_compat/model_params/Llama-3.1-8B-Instruct"
     ttnn_cache_default = ""  # TTNN weight-cache root; PREFILL_TTNN_CACHE overrides (empty => no cache)
     prefill_trace_default = ""  # golden trace dir (token_ids + KV); PREFILL_TRACE_DIR overrides
     default_gate_mode = "DEVICE_FP32"  # dense model — no gate; the engine reads this unconditionally

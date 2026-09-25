@@ -1825,8 +1825,8 @@
     # of reserving its own leg: the async-ahead keep runs before any transformer layer
     # and reads only torch tensors plus the two device trace-input buffers, so one
     # device is enough, no weights are loaded, and both files finish in seconds.
-    pytest --timeout 300 models/tt_transformers/tests/test_async_ahead_token_keep_unit.py \
-      models/tt_transformers/tests/test_async_ahead_token_keep_decode.py || exit_code=$?
+    pytest --timeout 300 models/ttt_compat/tests/test_async_ahead_token_keep_unit.py \
+      models/ttt_compat/tests/test_async_ahead_token_keep_decode.py || exit_code=$?
     exit $exit_code
   model: tt-model-sampling
   skus:
@@ -2008,7 +2008,7 @@
       -m "not slow" \
       --tb=short \
       --durations=10 \
-      --deselect "models/common/tests/modules/sampling/test_params.py::test_legacy_device_sampling_capabilities_declare_the_exact_limit[models/tt_transformers/tt/generator_vllm.py]" || fail=1
+      --deselect "models/common/tests/modules/sampling/test_params.py::test_legacy_device_sampling_capabilities_declare_the_exact_limit[models/ttt_compat/tt/generator_vllm.py]" || fail=1
     pytest models/common/tests/modules/sampling/test_sampling_1d.py \
       -m "not slow" \
       --tb=short \

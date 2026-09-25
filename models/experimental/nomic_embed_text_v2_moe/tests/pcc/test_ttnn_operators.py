@@ -309,7 +309,7 @@ def test_the_suite_runs_on_one_chip(device):
 def test_core_grid_is_read_from_the_device(device, tt_config):
     """The grid must come from the device, not a constant copied out of another model.
 
-    models/tt_transformers/tt/model_config.py implies (8, 10); this p300c reports 11x10, and a
+    models/ttt_compat/tt/model_config.py implies (8, 10); this p300c reports 11x10, and a
     program config sized for the smaller grid would silently leave cores idle.
     """
     grid = device.compute_with_storage_grid_size()

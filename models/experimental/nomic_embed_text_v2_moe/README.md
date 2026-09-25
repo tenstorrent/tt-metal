@@ -112,7 +112,7 @@ the rotary tables and the attention mask are host builds that depend on S. Its `
 tokenization, which have no device equivalent.
 
 Modules take the full state dict plus a prefix and move their weights to device once at
-construction, following `models/tt_transformers`.
+construction, following `models/ttt_compat`.
 
 ## Documentation
 

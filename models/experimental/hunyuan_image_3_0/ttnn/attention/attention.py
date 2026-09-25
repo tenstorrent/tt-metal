@@ -21,7 +21,7 @@
 #   models/demos/gpt_oss/tt/attention/prefill.py   — full prefill pipeline
 #   models/demos/gpt_oss/tt/attention/operations.py — split/concat/rope helpers
 #   models/common/rmsnorm.py                        — HunyuanTtRMSNorm wrapper
-#   models/tt_transformers/tt/attention.py          — qkv weight loading pattern (not used directly)
+#   models/ttt_compat/tt/attention.py          — qkv weight loading pattern (not used directly)
 
 import os
 

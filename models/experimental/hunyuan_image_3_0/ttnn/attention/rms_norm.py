@@ -9,7 +9,7 @@ import os
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
-from models.tt_transformers.tt.common import Mode
+from models.ttt_compat.tt.common import Mode
 
 from ..parallel_utils import rmsnorm_shard_config
 

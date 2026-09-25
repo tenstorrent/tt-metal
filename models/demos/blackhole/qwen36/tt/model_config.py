@@ -328,7 +328,7 @@ class Qwen36ModelArgs(ModelArgs):
         override (dense variants either hit the dim>4096 heuristic like the 27B, or are validated on
         the base path), so gate it on moe_num_experts to avoid diverging the dense path from base.
         """
-        from models.tt_transformers.tt.common import Mode
+        from models.ttt_compat.tt.common import Mode
 
         if self.moe_num_experts > 0 and self.is_multichip and mode == Mode.PREFILL:
             return True

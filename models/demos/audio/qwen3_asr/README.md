@@ -46,7 +46,7 @@ Interleaving prefills whose padded lengths fall in *different* 512-buckets corru
 in one long-lived process. **Root cause (confirmed on device, Blackhole P150, 2026-07-07):** a tt-metal
 **program-cache collision across the MLP prefill reshape**, not a bug in this model's code.
 
-`models/tt_transformers/tt/mlp.py` reshapes the prefill activation to `[1, S_pad//512, 512, -1]` when
+`models/ttt_compat/tt/mlp.py` reshapes the prefill activation to `[1, S_pad//512, 512, -1]` when
 `S_pad >= prefill_len_cutoff` (512 on Blackhole). So a 512-pad prefill is `[1, 1, 512, d]` and a 1024-pad
 prefill is `[1, 2, 512, d]` — they differ **only in the batch dim `-3`**, which the downstream matmul's
 (`ttnn.experimental.minimal_matmul` / the attention `wo` matmul) program-cache hash does not distinguish.

@@ -59,7 +59,7 @@ class TtModelConfig:
         """Build the config from an open ttnn device or single-device mesh.
 
         The grid is queried, never hardcoded: this p300c reports 11x10, not the (8, 10) that
-        models/tt_transformers/tt/model_config.py implies.
+        models/ttt_compat/tt/model_config.py implies.
 
         math_approx_mode is off because it selects cheaper SFPU polynomials.
         """

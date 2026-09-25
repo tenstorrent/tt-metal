@@ -54,7 +54,7 @@ def test_moe_tp(mesh_device, seq_len, mode, reset_seeds, ensure_gc, request):
 
     moe_state = load_moe_layer(args.CKPT_DIR, 0)
 
-    from models.tt_transformers.tt.ccl import TT_CCL
+    from models.ttt_compat.tt.ccl import TT_CCL
 
     tt_ccl = TT_CCL(mesh_device) if nd > 1 else None
     moe = Qwen36MoE(mesh_device, MoEConfig.from_args(args), moe_state, None, args=args, tt_ccl=tt_ccl)
@@ -103,7 +103,7 @@ def test_moe_routed_experts_batch(mesh_device, reset_seeds, ensure_gc, request):
 
     moe_state = load_moe_layer(args.CKPT_DIR, 0)
 
-    from models.tt_transformers.tt.ccl import TT_CCL
+    from models.ttt_compat.tt.ccl import TT_CCL
 
     tt_ccl = TT_CCL(mesh_device) if nd > 1 else None
     moe = Qwen36MoE(mesh_device, MoEConfig.from_args(args), moe_state, None, args=args, tt_ccl=tt_ccl)

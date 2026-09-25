@@ -4,7 +4,7 @@ Two failures block long audio today. Root causes (from static analysis of tt_tra
 no device experiments — chip 3 is busy serving):
 
 ## Failure 1 — prefill seq length (`a_shape[-1]==b_shape[-2]` in MLP)
-`models/tt_transformers/tt/mlp.py` prefill path:
+`models/ttt_compat/tt/mlp.py` prefill path:
 ```python
 if mode == PREFILL and seq_len >= prefill_len_cutoff:   # 512 on Blackhole
     x = ttnn.reshape(x, [1, seq_len // prefill_len_cutoff, prefill_len_cutoff, -1])
