@@ -1,7 +1,7 @@
 # Wan2.2 TI2V-5B — I2V enablement and optimization (nkira)
 
-Everything done on `nkira/wan2.2-5B-i2v` since branching from Teja's bring-up at
-`8d596eb242d`. Companion to `Wan2_2_TI2V_5B.md`, which stays the bring-up doc.
+Everything done on `nkira/wan2.2-5B-i2v` (sprint-4 tip on `nkira/wan2.2-5B-i2v-step3`) since
+branching from Teja's bring-up at `8d596eb242d`. Companion to `Wan2_2_TI2V_5B.md`, which stays the bring-up doc.
 
 Hardware throughout: one Blackhole Galaxy, 4x8, SP=8 axis1 / TP=4 axis0, Ring, FSDP off.
 All timings are 40 steps, warm-traced, and every figure below is a **mean of 3 invocations** —
@@ -10,6 +10,28 @@ the per-run `Std` the perf test prints is a single sample, not a spread.
 ---
 
 ## 1. Results
+
+**Current tip (sprint 4, 2026-09-25, host u13-43, mean of 3, 81 f / 40 steps, warm-traced).** The
+default pipeline now runs the trace on two command queues non-blocking (section 7.5); the
+`all_bf8_lofi` row is opt-in (`WAN5B_QUANT_CONFIG=all_bf8_lofi`, section 7.7) and is the fastest
+configuration that passes every gate.
+
+| Mode | Resolution | Config | Text enc | Image enc | Denoise | VAE dec | Total | vs sprint 3 (11.77 / 13.96 / 6.34) |
+|------|------------|--------|----------|-----------|---------|---------|-------|---|
+| T2V  | 1280x704   | default (bf16, 2cq) | 0.091s | — | **10.434s** | 0.951s | **11.50s** | -2.3% |
+| T2V  | 1280x704   | `all_bf8_lofi` (2cq) | 0.090s | — | **8.914s** | 0.930s | **9.95s** | **-15.5%** |
+| I2V  | 1280x704   | default (bf16, 2cq) | 0.088s | 1.327s | **11.073s** | 0.985s | **13.49s** | -3.3% |
+| T2V  | 832x480    | default (bf16, 2cq) | 0.088s | — | **5.350s** | 0.586s | **6.03s** | -4.9% |
+
+Denoise and total spreads across the three runs are 0.1-0.7% for T2V; I2V total spreads 2.2%
+because its host image encode spreads 12% (VAE alone spreads 1-11%, see section 8). Against
+the sprint-3 tip measured the same way on the same host with blocking execution (720p T2V
+10.747s denoise / 11.825s total, 480p 5.649 / 6.325, single-queue runs of 2026-09-24), the 2cq
+default is -2.9% / -2.8% at 720p and -5.3% / -4.7% at 480p, i.e. 7.8 ms per step at 720p — the
+outside bound estimated in section 7.5 before it was built.
+Against the sprint start (16.78s) the 720p T2V total is now **-31.5% default, -40.7% opt-in**.
+
+Sprint 3 results (2026-09-22), kept for the record:
 
 | | before | after | delta |
 |---|---|---|---|
@@ -312,10 +334,41 @@ All verified by reading the code; none implemented.
    the outside (if the solver's dispatch-bound 6.5 ms overlapped completely). Both are under
    the 10 ms/step bar set before measuring, so the ceiling is < 3 % and the realistic gain
    ~1 %. Not built; the bench stays so the number can be re-taken if the trace gets shorter.
+
+   *Revisited and built anyway (2026-09-24), as an opt-in first.* `Tracer` gained
+   `tracer_blocking_execution` and `tracer_input_cq_id` (`models/tt_dit/utils/tracing.py`): the
+   per-call input copies go on a second command queue fenced with events (the input queue waits
+   for the previous execution, the compute queue waits for the copies), the same scheme as the
+   tt_cnn pipelines. `WanPipeline.configure_trace_execution(blocking, input_cq_id)` selects the
+   mode per pipeline and `WAN5B_TRACE_MODE=blocking|nonblocking|2cq` drives the perf tests and
+   the demo (`2cq` adds `num_command_queues=2` to the device params). Gate
+   `test_trace_modes_ti2v_5b.py`: the same captured trace in all three modes is **bit-identical**
+   (`torch.equal` on the latents) and two queues leave the compute grid at **12x10**, the same as
+   one queue — the first version of the gate expected 11x10 and failed; that key is a derived cap
+   for the matmul tables, not the device grid. The gate's own 8-step wall deltas are noise-level
+   (-3.8 / -6.5 ms/step nonblocking / 2cq on 2026-09-24, -6.0 / -3.0 on 2026-09-25): use the
+   full runs, not the gate, for the perf number. Full runs, mean of 3 (2026-09-24):
+
+   | 81 f / 40 steps | blocking denoise / total | 2cq denoise / total | delta |
+   |---|---|---|---|
+   | 720p T2V | 10.747 / 11.825s | **10.434 / 11.498s** | -2.9% / -2.8% (7.8 ms/step) |
+   | 480p T2V | 5.649 / 6.325s (1 run) | **5.350 / 6.030s** | -5.3% / -4.7% |
+   | 720p I2V | not re-run blocking | **11.073 / 13.493s** | -3.8% / -3.3% vs sprint 3 |
+
+   **2cq is the default since `b5dd469bd09`.** The measured gain sits at the *outside* bound of
+   the estimate above (7.8 ms/step), not the strict one (1.4 ms): the solver's dispatch-bound
+   6.5 ms does overlap once the compute queue no longer waits for the host. The strict figure
+   was the wrong one to gate on; the bar of 10 ms/step still would not have been met, so the
+   decision to build it was a judgement call that paid ~3%. `WAN5B_TRACE_MODE=blocking` restores
+   the single-queue path.
 6. **bf8 for the ring-SDPA K/V gather.** ~120GB/device/generation crosses the SP fabric in bf16
    and the `bfloat8_b` path already exists but is only enabled by a `QuantConfig` no 5B pipeline
    applies. Overlapped with compute, so precision-gate it and expect only what the fabric is
    actually binding.
+
+   *Preset exists, isolated effect not measured (2026-09-25).* `bf8_weights_sdpa_bf8` is
+   `all_weights_bf8` plus bf8 SDPA inputs at HiFi2. It has not been run on its own; the bf8 K/V
+   path is exercised and gated as part of `all_bf8_lofi` (item 7), whose SDPA is bf8 HiFi2.
 
 7. **`QuantConfig` presets on the 5B (opt-in, 2026-09-22).** `WAN5B_QUANT_CONFIG=<preset>` now
    applies a `QuantConfig` preset in the two 5B perf tests, the generate test and the
@@ -323,11 +376,31 @@ All verified by reading the code; none implemented.
    re-run the eager warmup after applying it, because trace capture cannot compile the programs
    a new dtype or fidelity needs. The default is unchanged.
 
-   | preset | transformer PCC scalar / per-token (bf16: 99.9893 / 99.9894) | CLIP mean, Teja's 121f generate (bf16 40.38, gate 36.00) | 720p T2V perf |
+   All rows 2026-09-25 unless noted, 720p T2V, 2cq default, perf = mean of 3 (bf8 is mean of 2:
+   the third run was interrupted). CLIP is Teja's 121 f generate, seed 42, gate 36.00, bf16 40.38.
+
+   | preset | transformer PCC scalar / per-token (bf16: 99.9893 / 99.9894) | CLIP mean (min / max) | 720p T2V denoise / total (default 10.434 / 11.50) |
    |---|---|---|---|
-   | `all_weights_bf8` | **99.9885 / 99.9885 %** (-0.0008 / -0.0009 pp) | **40.20** (min 38.65, max 41.67) | see section 1 |
-   | `all_lofi` | **hangs the device** in the first LoFi matmul (self-attn QKV; host blocked in `synchronize_device` inside `get_fused_norm_stats_buffer`, `wait_for_outstanding_reads`); needed a `tt-smi -glx_reset_auto` | not reachable | not reachable |
-   | `all_bf8_lofi` | not tried (contains the LoFi compute that hangs) | — | — |
+   | `all_weights_bf8` | 99.9885 / 99.9885 % | 40.20 (38.65 / 41.67) | 10.048 / **11.14s** (-3.7% / -3.1%) |
+   | `bf8_weights_sdpa_bf8` | not measured on its own | — | — |
+   | `all_bf8_lofi` | **99.9651 / 99.9651 %** (-0.024 pp) | **41.34** (39.73 / 42.51) | **8.914 / 9.95s** (-14.6% / -13.5%) |
+   | `all_lofi` (2026-09-22) | **hangs the device** in the first LoFi matmul (self-attn QKV; host blocked in `synchronize_device` inside `get_fused_norm_stats_buffer`, `wait_for_outstanding_reads`); needed `tt-smi -glx_reset_auto` | — | — |
+   | `all_bf8_lofi_sdpa_lofi` | **hangs the device** in the scalar-timestep PCC test (4 min without output, `py-spy dump` captured no model frame within 60 s, the process needed SIGKILL and chip 0 then failed FW init until a `-glx_reset_auto`) | — | — |
+
+   Read the two hangs together: LoFi matmuls with **bf8 operands** run (that is every matmul in
+   `all_bf8_lofi`), LoFi matmuls with **bf16 operands** hang (`all_lofi`), and the ring SDPA at
+   LoFi hangs even with bf8 inputs. Both hangs reproduce on the first affected op, so a preset
+   that is going to hang does so inside the 20 s PCC test, not in a 4-minute perf run: gate new
+   presets there first, with a watchdog, and expect to reset the box. The SDPA at bf8 HiFi2 is the
+   floor for that op until someone debugs the LoFi ring-SDPA kernel.
+
+   `all_bf8_lofi` is the sprint-4 result: -15.5% end to end at 720p against the sprint-3 tip, a
+   0.024 pp PCC cost and a CLIP mean *above* bf16 (which says nothing about quality, section 8).
+   The 121 f previews `/home/ttuser/wan5b_t2v_720p_bf8lofi_{first,mid,last}.png` and the mp4
+   next to them are sharp and identity-stable to the eye; the decision to make it the default
+   is a visual one against `/home/ttuser/wan5b_demo_t2v.mp4` (bf16) and has not been taken —
+   it stays opt-in. If it is adopted, re-run 480p and I2V under it (neither has been measured
+   with any preset) and recalibrate the three gate functions.
 
    `all_weights_bf8` as shipped asserted `ternary_a_tile_size == in1_tile_size` in the fused
    AGMM+addcmul kernel: the residual is a bf16 activation and must match the weight tile
@@ -335,6 +408,16 @@ All verified by reading the code; none implemented.
    preset now does the same (qkv, cross-attn q/kv/out, ff1, ff2 go to bf8). The bf8 preview
    frames (`/home/ttuser/wan5b_t2v_720p_bf8_{first,mid,last}.png`) are visually clean: sharp,
    coherent, stable identities across 121 frames.
+
+8. **Tracy validation capture of the traced step (checklist item).** Attempted three times on
+   2026-09-25 with the block in `Wan2_2_TI2V_5B_checklist.md`; every attempt died with
+   `OSError: [Errno 28] No space left on device`. A Tracy run JIT-recompiles every kernel with
+   profiler markers (thousands of `riscv-tt-elf-g++` invocations into `~/.cache/tt-metal-cache`)
+   and streams the device log into `generated/profiler/.logs/`, and the root disk had 11-12 GB
+   free. `tracy_summarize_ops.py` is written and untested on a real capture. Options: symlink
+   `generated/profiler` (and/or the kernel cache) onto `/mnt/tt-data`, or free ~40 GB on root.
+   Not a code blocker; the per-step device time is already known from the blocking
+   `execute_trace` measurement (258.5 ms of 266.4 ms, item 5).
 
 ---
 
@@ -374,22 +457,41 @@ All verified by reading the code; none implemented.
   as a guard: diffusers' `from_pretrained` calls the model-info API before touching the cache
   and fails outright in offline mode.
 - **`pytest` is not on PATH** until `source python_env/bin/activate`.
+- **A LoFi hang leaves chip 0 unable to init FW** (`Device 0 init: failed to initialize FW!`)
+  even after the process is killed and `fuser` shows the devices free. The only fix that worked
+  is `tt-smi -glx_reset_auto` (about 6 minutes on this Galaxy); check the firmware preconditions
+  first. Run new quant presets through the 20 s transformer PCC test under a watchdog before
+  anything longer.
+- **`pgrep -f` on the pytest node id finds the wrapper, not the device holder.** The device is
+  held by a child python (`fuser /dev/tenstorrent/*`); `kill -TERM` on the parent leaves it
+  alive. Kill the fuser pid, then confirm `fuser` is empty.
+- **The root disk is ~12 GB from full and both Tracy and the matmul sweep fill it** (section
+  7.1, 7.8). `generated/profiler/.logs/` alone reaches several GB per capture; delete
+  `profile_log_device.csv` and `tracy_profile_log_host.tracy` there after each attempt.
+- **VAE decode spreads 1-8 % run to run** at ~0.95 s; do not read a VAE delta under 10 % as
+  real from a single run.
 
 ---
 
 ## 9. Validation
 
-Everything below was re-run green at the current tip.
+Everything below was re-run green at the current tip (`3d34a070c13`, 2026-09-25 unless noted).
 
 | gate | result |
 |---|---|
-| `test_dup_up3d_ti2v_5b` | 12/12, `max_abs_diff == 0.0` at production shapes |
-| `test_vae_chunk_pcc_ti2v_5b` | PCC **1.0**, max_abs_diff 0.0 |
-| `test_transformer_wan_ti2v_5b` | PCC **100.0000 / 99.9893 / 99.9894%** (2 pre-existing skips); identical to four decimals after the swept matmul table (2026-09-22) |
-| `test_pipeline_performance_ti2v_5b` 720p / 480p, `_i2v` 720p | 3/3 pass each with the swept table (2026-09-22); section 1 has the means |
-| `test_ti2v_5b_i2v_math` | 20/20 |
-| I2V E2E frame-0 vs seed | PCC **0.9984** |
-| Teja's 121f `test_pipeline_ti2v_5b_generate` | passes, CLIP mean 40.38 vs 36.00 |
+| `test_dup_up3d_ti2v_5b` | 12/12, `max_abs_diff == 0.0` at production shapes (2026-09-22) |
+| `test_vae_chunk_pcc_ti2v_5b` | PCC **1.0**, max_abs_diff 0.0 (2026-09-22) |
+| `test_transformer_wan_ti2v_5b` | PCC **100.0000 / 99.9893 / 99.9894%** (2 pre-existing skips) after the CFG hoist; scalar re-run at the tip 2026-09-25: 99.9893% |
+| `test_cfg_hoist_ti2v_5b` | `max_abs_diff == 0.0` for cond, uncond and combined at 720p geometry |
+| `test_trace_modes_ti2v_5b` | nonblocking and 2cq **bit-identical** to blocking, compute grid 12x10 with two queues |
+| `test_pipeline_performance_ti2v_5b` 720p / 480p, `_i2v` 720p | 3/3 pass each under the 2cq default (section 1 has the means) |
+| same, `WAN5B_QUANT_CONFIG=all_bf8_lofi`, 720p T2V | 3/3 pass, PCC 99.9651 / 99.9651%, CLIP 41.34 |
+| same, `WAN5B_QUANT_CONFIG=all_weights_bf8`, 720p T2V | 2/2 pass, PCC 99.9885 / 99.9885%, CLIP 40.20 |
+| `test_step_gap_ti2v_5b` | passes; 1.37 ms/step host-only gap on the blocking path (section 7.5) |
+| `test_ti2v_5b_i2v_math` | 20/20 (2026-09-22) |
+| I2V E2E frame-0 vs seed | PCC **0.9984** (2026-09-22) |
+| Teja's 121f `test_pipeline_ti2v_5b_generate` | passes; CLIP mean 40.38 (bf16), 40.20 (bf8), 41.34 (bf8 LoFi) vs 36.00 |
+| `wan2_2_ti2v_5b_demo.py` T2V / I2V | 81 f 720p mp4 each, warm traced 11.57 s / 13.76 s (2026-09-23 / 09-24) |
 
 The VAE rewrite is **bit-exact**, not merely within PCC — it is pure data movement, so the gate
 asserts exact equality against the original implementation rather than a correlation floor.
