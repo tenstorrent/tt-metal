@@ -229,13 +229,35 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 }
             }
             {
-                // COMPILE_FOR_* selection index + the PROCESSOR_INDEX define value (collect_kernels).
+                // COMPILE_FOR_* selection index + the PROCESSOR_INDEX define value (collect_kernels). An ethernet
+                // kernel is data movement on its own core type (EthernetKernel is not a DataMovementKernel).
                 auto* dm_kernel = dynamic_cast<DataMovementKernel*>(&k);
-                kd.is_data_movement = (dm_kernel != nullptr);
+                auto* eth_kernel = dynamic_cast<EthernetKernel*>(&k);
+                kd.is_data_movement = (dm_kernel != nullptr || eth_kernel != nullptr);
                 uint32_t proc_type_idx = 0;
-                if (!kd.is_compute && dm_kernel != nullptr &&
+                if (dm_kernel != nullptr &&
                     std::get<DataMovementConfig>(dm_kernel->config()).processor == DataMovementProcessor::RISCV_1) {
                     proc_type_idx = 1;
+                }
+                if (eth_kernel != nullptr) {
+                    const auto processor = std::get<EthernetConfig>(eth_kernel->config()).processor;
+                    kd.dm_processor = static_cast<uint32_t>(processor);
+                    proc_type_idx = processor == DataMovementProcessor::RISCV_1 ? 1 : 0;
+                    // Silicon's JIT takes an ethernet build's per-RISC macros (COMPILE_FOR_ERISC, ...) from HAL.
+                    const auto& rtoptions = MetalContext::instance().rtoptions();
+                    for (const auto& define : hw.get_jit_build_query().defines(
+                             {false,
+                              k.get_kernel_programmable_core_type(),
+                              HalProcessorClassType::DM,
+                              proc_type_idx,
+                              rtoptions})) {
+                        const auto eq = define.find('=');
+                        const std::string name = define.substr(0, eq);
+                        if (name == "PROCESSOR_INDEX" || name == "PROGRAMMABLE_CORE_TYPE") {
+                            continue;  // collect_kernels sets these for every kernel
+                        }
+                        kd.defines[name] = eq == std::string::npos ? "1" : define.substr(eq + 1);
+                    }
                 }
                 kd.compile_processor_index = hw.get_processor_index(
                     k.get_kernel_programmable_core_type(), k.get_kernel_processor_class(), proc_type_idx);
