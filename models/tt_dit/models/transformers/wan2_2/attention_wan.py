@@ -21,12 +21,12 @@ from ....utils.tensor import bf16_tensor
 
 
 class WanAttention(Module):
-    # Named SDPA recipe of every SDPA call on Blackhole: self-attention (ring joint, exp ring joint on
-    # the 4x32 mesh, dense without SP) and cross-attention (dense, optional attn_mask). The legacy setup
-    # was HiFi2 / BF16 dest / exact exp (exp_approx_mode=False); BALANCED (HiFi4 QK, FP32 state) is more
-    # accurate than it at every measured shape. See
-    # tests/ttnn/unit_tests/operations/sdpa/test_sdpa_dit_recipe_parity.py.
-    sdpa_precision_default = ttnn.SDPAPrecision.BALANCED
+    # Named SDPA recipe of every SDPA call in this module on Blackhole. DiT models default to
+    # FAST (legacy streaming numerics with the approximate exponential; user decision
+    # 2026-09-25): at the models' shapes it is as accurate as the legacy HiFi2 / BF16-dest /
+    # exact-exp setup within a few percent and at least as fast. Pass sdpa_precision to opt
+    # up (e.g. BALANCED). See tests/ttnn/unit_tests/operations/sdpa/test_sdpa_dit_recipe_parity.py.
+    sdpa_precision_default = ttnn.SDPAPrecision.FAST
 
     # Legacy ring SDPA chunks (non-Blackhole only): (is_blackhole, sp_factor, tp_factor) -> (q, k).
     sdpa_chunk_size_map = {

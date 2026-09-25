@@ -70,8 +70,8 @@ def _resolve(monkeypatch, name, blackhole, **overrides):
 
 
 @pytest.mark.parametrize("name", sorted(MODULES))
-def test_denoiser_default_recipe_is_balanced(name):
-    assert MODULES[name][1].sdpa_precision_default == BALANCED
+def test_denoiser_default_recipe_is_fast(name):
+    assert MODULES[name][1].sdpa_precision_default == FAST
 
 
 def test_vae_default_recipes():
@@ -81,12 +81,12 @@ def test_vae_default_recipes():
 
 @pytest.mark.parametrize("name", sorted(MODULES))
 def test_none_selects_the_default_on_blackhole(monkeypatch, name):
-    assert _resolve(monkeypatch, name, True) == (BALANCED, ttnn.bfloat16)
+    assert _resolve(monkeypatch, name, True) == (FAST, ttnn.bfloat16)
 
 
 @pytest.mark.parametrize("name", sorted(MODULES))
 def test_explicit_recipe_overrides_the_default(monkeypatch, name):
-    assert _resolve(monkeypatch, name, True, sdpa_precision=FAST) == (FAST, ttnn.bfloat16)
+    assert _resolve(monkeypatch, name, True, sdpa_precision=BALANCED) == (BALANCED, ttnn.bfloat16)
     assert _resolve(monkeypatch, name, True, sdpa_precision=LOW, sdpa_kv_dtype=ttnn.bfloat8_b) == (
         LOW,
         ttnn.bfloat8_b,
@@ -102,7 +102,7 @@ def test_legacy_off_blackhole(monkeypatch, name):
 
 @pytest.mark.parametrize("name", sorted(MODULES))
 def test_low_precision_kv_needs_low_precision(monkeypatch, name):
-    # The default (BALANCED) keeps BF16 KV; a packed KV dtype needs an explicit LOW_PRECISION.
+    # The default (FAST) keeps BF16 KV; a packed KV dtype needs an explicit LOW_PRECISION.
     with pytest.raises(ValueError):
         _resolve(monkeypatch, name, True, sdpa_kv_dtype=ttnn.bfloat8_b)
 
@@ -115,7 +115,7 @@ def test_ltx_quant_profile_self_attention_recipe(monkeypatch):
     profile = LtxQuantProfile.all_bf8_lofi()
     assert profile.sdpa_self_recipe() == (FAST, None)
     assert _resolve(monkeypatch, "ltx", True, quant_config=profile, is_self=True) == (FAST, ttnn.bfloat16)
-    assert _resolve(monkeypatch, "ltx", True, quant_config=profile, is_self=False) == (BALANCED, ttnn.bfloat16)
+    assert _resolve(monkeypatch, "ltx", True, quant_config=profile, is_self=False) == (FAST, ttnn.bfloat16)
     monkeypatch.setattr(quant_config, "LTX_QUANT_ACTIVATIONS", False)
     assert profile.sdpa_self_recipe() == (None, None)
 

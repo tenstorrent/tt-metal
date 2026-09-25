@@ -37,13 +37,12 @@ LTX_DEDUP_GATE_GATHER = os.environ.get("LTX_DEDUP_GATE_GATHER", "1") in ("1", "t
 
 
 class LTXAttention(Module):
-    # Named SDPA recipe of every SDPA call on Blackhole: video/audio self-attention (ring joint, dense,
-    # dense on gathered K/V), text/A2V cross-attention (dense) and V2A ring cross-attention. The legacy
-    # setup was HiFi2 / BF16 dest / exact exp (exp_approx_mode=False); BALANCED (HiFi4 QK, FP32 state)
-    # is more accurate than it at every measured shape. A quant profile may replace it for the
-    # self-attention (LtxQuantProfile.sdpa_self_recipe). See
-    # tests/ttnn/unit_tests/operations/sdpa/test_sdpa_dit_recipe_parity.py.
-    sdpa_precision_default = ttnn.SDPAPrecision.BALANCED
+    # Named SDPA recipe of every SDPA call in this module on Blackhole. DiT models default to
+    # FAST (legacy streaming numerics with the approximate exponential; user decision
+    # 2026-09-25): at the models' shapes it is as accurate as the legacy HiFi2 / BF16-dest /
+    # exact-exp setup within a few percent and at least as fast. Pass sdpa_precision to opt
+    # up (e.g. BALANCED). See tests/ttnn/unit_tests/operations/sdpa/test_sdpa_dit_recipe_parity.py.
+    sdpa_precision_default = ttnn.SDPAPrecision.FAST
 
     # Legacy ring SDPA chunks (non-Blackhole only): (is_blackhole, sp_factor, tp_factor) -> (q, k).
     sdpa_chunk_size_map = {
