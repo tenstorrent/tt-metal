@@ -23,7 +23,7 @@
  * DM builds expose local operations plus the NoC operations (remote up, set/relay/inc multicast).
  *
  * Blackhole UNPACK/PACK builds expose the local operations only, on the Tensix hardware (Sync Unit)
- * semaphore, and require SemScope::COMPUTE_ATOMIC; any other scope is a compile error, so a compute
+ * semaphore, and require SemScope::COMPUTE_SEMAPHORE; any other scope is a compile error, so a compute
  * kernel cannot reach a semaphore through a non-atomic path. Compute rules a kernel author must know:
  *  - The value is 0..15. More than 15 outstanding credits lose posts silently; a producer that gates
  *    each up() with wait_not_full() can never get there.
@@ -82,7 +82,7 @@ public:
      * DM_LOCAL_CACHED: atomic 32-bit AMO on the cached alias.
      * EXTERNAL:        self-targeted NoC atomic increment.
      * LOCAL_NONATOMIC: L1 read-modify-write (not atomic; the host picks it only for a single binder).
-     * COMPUTE_ATOMIC:  `value` SEMPOSTs, each ordered after this thread's packer/unpacker work, so a
+     * COMPUTE_SEMAPHORE: `value` SEMPOSTs, each ordered after this thread's packer/unpacker work, so a
      *                  consumer that sees the credit also sees the data (publish-after-data). Value +
      *                  outstanding credits must stay <= 15; a bounded producer pairs up(n) with wait_not_full(n).
      *
@@ -99,7 +99,7 @@ public:
      * DM_LOCAL_CACHED: multi-consumer-safe via LR/SC retry loop.
      * EXTERNAL:        multi-consumer-safe via a NoC-CAS lock; consumers must run on the semaphore's node.
      * LOCAL_NONATOMIC: single-owner (non-atomic) decrement.
-     * COMPUTE_ATOMIC:  `value` SEMGETs ordered after this thread's engine work (release-after-read). Does
+     * COMPUTE_SEMAPHORE: `value` SEMGETs ordered after this thread's engine work (release-after-read). Does
      *                  NOT wait for sufficiency (SEMGET floors at 0): the wait belongs before the engine
      *                  reads the slot and the decrement after, so pair it with wait_min() --
      *                  `wait_min(n); <engine reads slot>; down(n)`.
@@ -113,7 +113,7 @@ public:
     /**
      * @brief Block until the semaphore equals `value`. Does not modify it.
      *
-     * DM: RISC poll. COMPUTE_ATOMIC: retires this thread's own posted up()/down() first, then RISC-polls.
+     * DM: RISC poll. COMPUTE_SEMAPHORE: retires this thread's own posted up()/down() first, then RISC-polls.
      *
      * @param value The value to wait for.
      */
@@ -124,7 +124,7 @@ public:
     /**
      * @brief Block until the semaphore is at least `value`. Does not modify it.
      *
-     * DM: RISC poll. COMPUTE_ATOMIC with value == 1: Tensix-side SEMWAIT -- the RISC returns at once
+     * DM: RISC poll. COMPUTE_SEMAPHORE with value == 1: Tensix-side SEMWAIT -- the RISC returns at once
      * and this thread's next engine instructions (UNPACR/PACR) are held until the value is nonzero;
      * the fastest form. Other values: as wait().
      *
@@ -155,7 +155,7 @@ public:
      * @brief Set the semaphore to `value`.
      *
      * @note A non-atomic destructive store under every scope; requires a quiescent protocol.
-     * DM: plain store. COMPUTE_ATOMIC: SEMINIT (Max = capacity) ordered after this thread's engine work;
+     * DM: plain store. COMPUTE_SEMAPHORE: SEMINIT (Max = capacity) ordered after this thread's engine work;
      * `value` <= 15.
      *
      * @param value The value to set the semaphore to.
@@ -165,7 +165,7 @@ public:
     /**
      * @brief The settled current value.
      *
-     * DM: a fresh (cache-invalidated) read; a RISC-side write has already retired. COMPUTE_ATOMIC: first
+     * DM: a fresh (cache-invalidated) read; a RISC-side write has already retired. COMPUTE_SEMAPHORE: first
      * retires this thread's own posted SEMPOST/SEMGET (tensix_sync), then reads the Sync Unit.
      *
      * @return Current semaphore value.

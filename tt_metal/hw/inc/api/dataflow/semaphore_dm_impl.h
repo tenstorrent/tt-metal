@@ -14,10 +14,10 @@ namespace semaphore_detail {
 
 template <ProgrammableCoreType core_type, SemScope scope>
 __attribute__((always_inline)) inline std::uintptr_t sem_l1_offset(std::uint32_t id) {
-    // COMPUTE_ATOMIC is the Blackhole Tensix hardware semaphore, which a DM core cannot reach; the host
+    // COMPUTE_SEMAPHORE is the Blackhole Tensix hardware semaphore, which a DM core cannot reach; the host
     // rejects such a binding (ValidateProgramSpec). Kept as a build failure so a relaxed host rule can
     // never silently take the non-atomic path.
-    static_assert(scope != SemScope::COMPUTE_ATOMIC, "COMPUTE_ATOMIC semaphores may not be bound by a DM kernel");
+    static_assert(scope != SemScope::COMPUTE_SEMAPHORE, "COMPUTE_SEMAPHORE semaphores may not be bound by a DM kernel");
 #ifdef ARCH_QUASAR
     if constexpr (scope == SemScope::DM_LOCAL_CACHED) {
         ASSERT(id < MEM_SEM_CACHED_POOL_SIZE / MEM_SEM_CACHED_POOL_ROW);

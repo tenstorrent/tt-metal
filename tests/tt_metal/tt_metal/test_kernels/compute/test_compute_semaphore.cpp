@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Test kernel for the Blackhole compute semaphore (SemScope::COMPUTE_ATOMIC): the Tensix hardware (Sync
+// Test kernel for the Blackhole compute semaphore (SemScope::COMPUTE_SEMAPHORE): the Tensix hardware (Sync
 // Unit) semaphore, index UNPACK_OPERAND_SYNC. One kernel, three patterns selected by the compile-time
 // arg `pattern`:
 //

@@ -3,15 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Compute kernel for testing sync events on TRISC.
-// Tests CB APIs (all architectures) and ckernel::Semaphore (Quasar only).
+// Tests CB APIs.
 
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
 #include "api/compute/cb_api.h"
-#ifdef ARCH_QUASAR
-#include "api/compute/experimental/semaphore.h"
-#endif
 
 #ifndef DELAY_CYCLES
 #define DELAY_CYCLES 10000
@@ -71,43 +68,6 @@ void kernel_main() {
             cb_reserve_back(CB_ID, 1);  // SYNC-CB-RESERVE (stalls ~DELAY_CYCLES)
             break;
         }
-
-#ifdef ARCH_QUASAR
-        // =====================================================================
-        // ckernel::Semaphore APIs (Quasar only)
-        // =====================================================================
-        case 13: {
-            ckernel::Semaphore sem(0);
-            delay_cycles(DELAY_CYCLES);
-            sem.up(1);  // SYNC-SEM-SET
-            break;
-        }
-
-        case 14: {
-            ckernel::Semaphore sem(0);
-            sem.down(1);  // SYNC-SEM-WAIT + SYNC-SEM-SET
-            break;
-        }
-
-        case 15: {
-            ckernel::Semaphore sem(0);
-            sem.wait(1);  // SYNC-SEM-WAIT
-            break;
-        }
-
-        case 16: {
-            ckernel::Semaphore sem(0);
-            sem.wait_min(1);  // SYNC-SEM-WAIT
-            break;
-        }
-
-        case 17: {
-            ckernel::Semaphore sem(0);
-            delay_cycles(DELAY_CYCLES);
-            sem.set(1);  // SYNC-SEM-SET
-            break;
-        }
-#endif
 
         default: break;
     }

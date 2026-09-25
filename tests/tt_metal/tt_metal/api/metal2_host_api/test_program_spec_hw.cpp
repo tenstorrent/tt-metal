@@ -1366,7 +1366,7 @@ void kernel_main() {
 }
 
 // ============================================================================
-// Compute semaphore (SemScope::COMPUTE_ATOMIC): the Tensix hardware (Sync Unit) semaphore, index
+// Compute semaphore (SemScope::COMPUTE_SEMAPHORE): the Tensix hardware (Sync Unit) semaphore, index
 // UNPACK_OPERAND_SYNC. One kernel (test_compute_semaphore.cpp), three patterns (A, D, E) selected by
 // the `pattern` compile-time arg.
 // ============================================================================

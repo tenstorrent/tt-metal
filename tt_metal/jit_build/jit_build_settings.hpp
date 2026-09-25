@@ -27,7 +27,7 @@ enum class SemScope : uint8_t {
     // semaphore bound only by compute kernels (semaphore_scope.hpp). Keep this enum numerically in
     // step with the device-side SemScope in api/dataflow/semaphore_binding_token.h -- the two are
     // unlinked mirrors.
-    COMPUTE_ATOMIC = 3,
+    COMPUTE_SEMAPHORE = 3,
 };
 
 namespace tt::tt_metal {
@@ -46,7 +46,7 @@ inline std::string_view sem_scope_enumerator(SemScope scope) {
         case SemScope::LOCAL_NONATOMIC: return "LOCAL_NONATOMIC";
         case SemScope::DM_LOCAL_CACHED: return "DM_LOCAL_CACHED";
         case SemScope::EXTERNAL: return "EXTERNAL";
-        case SemScope::COMPUTE_ATOMIC: return "COMPUTE_ATOMIC";
+        case SemScope::COMPUTE_SEMAPHORE: return "COMPUTE_SEMAPHORE";
     }
     TT_THROW("unhandled SemScope value {}", static_cast<int>(scope));
 }

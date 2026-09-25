@@ -1577,7 +1577,7 @@ void ValidateProgramSpec(
         }
     }
 
-    // Blackhole supports local semaphore bindings on UNPACK and PACK (SemScope::COMPUTE_ATOMIC).
+    // Blackhole supports local semaphore bindings on UNPACK and PACK (SemScope::COMPUTE_SEMAPHORE).
     // Wormhole has no compute implementation and Quasar compute remains out of scope.
     for (const auto& kernel : spec.kernels) {
         TT_FATAL(
@@ -3899,7 +3899,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
                 // SEMINITs read COMPUTE_SEMAPHORE_MAX). At most one compute semaphore per program
                 // (ValidateProgramSpec), so at most one define.
                 for (const auto& binding : kernel_spec.semaphore_bindings) {
-                    if (semaphore_name_to_scope.at(binding.semaphore_spec_name) != SemScope::COMPUTE_ATOMIC) {
+                    if (semaphore_name_to_scope.at(binding.semaphore_spec_name) != SemScope::COMPUTE_SEMAPHORE) {
                         continue;
                     }
                     const auto sem =

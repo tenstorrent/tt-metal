@@ -12,7 +12,7 @@
 //
 // Instrumented in:
 //   dataflow_api.h, noc_semaphore.h (BRISC/NCRISC)
-//   llk_io_pack.h, llk_io_unpack.h, experimental/semaphore.h (TRISC)
+//   llk_io_pack.h, llk_io_unpack.h (TRISC)
 //
 // Enable with: TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_SYNC_EVENTS=1
 

@@ -3253,7 +3253,7 @@ protected:
 // into the kernel's binding token. A wrong answer is therefore a silently wrong *mechanism* on
 // device, not a build failure -- so it needs assertions here. On Blackhole a compute binding
 // compiles into three TRISC binaries with two writers (UNPACK and PACK), so a compute-bound
-// semaphore must resolve to COMPUTE_ATOMIC, never to a non-atomic read-modify-write.
+// semaphore must resolve to COMPUTE_SEMAPHORE, never to a non-atomic read-modify-write.
 
 // Resolve one semaphore's scope from a spec the way BuildProgramFromSpec does: census the binders
 // against each kernel's node set, then resolve. Placement is derived from the work units, which is
@@ -3286,12 +3286,12 @@ void BindSemaphoreToKernels(ProgramSpec& spec, const char* semaphore_name, const
 }
 
 // The headline rule: a Blackhole semaphore with a compute binder gets the atomic mechanism.
-TEST_F(ProgramSpecTestBlackhole, CPU_ComputeBoundSemaphoreResolvesToComputeAtomic) {
+TEST_F(ProgramSpecTestBlackhole, CPU_ComputeBoundSemaphoreResolvesToComputeSemaphore) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
     BindSemaphoreToKernels(spec, "compute_sem", {"compute_kernel"});
 
-    EXPECT_EQ(ResolveScopeFor(spec, "compute_sem"), SemScope::COMPUTE_ATOMIC);
+    EXPECT_EQ(ResolveScopeFor(spec, "compute_sem"), SemScope::COMPUTE_SEMAPHORE);
 }
 
 // A compute semaphore synchronizes UNPACK with PACK and may not be shared with a DM kernel: it is
@@ -3366,10 +3366,10 @@ TEST_F(ProgramSpecTestBlackhole, CPU_DMOnlyBoundSemaphoreResolvesToLocalNonatomi
     EXPECT_EQ(ResolveScopeFor(spec, "dm_sem"), SemScope::LOCAL_NONATOMIC);
 }
 
-// Wormhole is Gen1 too, but has no compute semaphore implementation, so COMPUTE_ATOMIC stays
+// Wormhole is Gen1 too, but has no compute semaphore implementation, so COMPUTE_SEMAPHORE stays
 // Blackhole-only. (A WH compute binding is separately rejected by ValidateProgramSpec; this pins the
 // resolver itself, so the guard survives even if that validation is ever relaxed.)
-TEST_F(ProgramSpecTestGen1, CPU_WormholeComputeBoundSemaphoreDoesNotResolveToComputeAtomic) {
+TEST_F(ProgramSpecTestGen1, CPU_WormholeComputeBoundSemaphoreDoesNotResolveToComputeSemaphore) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     BindSemaphoreToKernels(spec, "compute_sem", {"compute_kernel"});
 
