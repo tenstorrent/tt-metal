@@ -57,8 +57,8 @@ def global_avg_pool2d(input_tensor, *, memory_config=None, dtype=None):
     case (kernel == input spatial, no padding/dilation) and runs a single pool_sum reduction.
 
     The caller does not need to flatten to (1, 1, N*H*W, C); the fast path inside pool2d()
-    handles rank-4 NHWC directly via an explicit logical+padded reshape so it preserves
-    pad-to-tile zero-padding from legacy callers.
+    handles rank-4 NHWC directly. Interleaved pad-to-tile padding (W padded on every H row)
+    is stripped before that fold so the reduce does not sum pad rows.
 
     Args:
         input_tensor: Input tensor in NHWC format. Rank 2 [H,W], 3 [H,W,C], or 4 [N,H,W,C] accepted.
