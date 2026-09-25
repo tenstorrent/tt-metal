@@ -25,7 +25,7 @@ Env:
   BUDGET_W           forward width in tokens (= chunk_size)                             [default 2048]
   BUDGET_POINTS      comma list of h:n (n defaults to W), e.g. 0:2048,16384:256          [default 0:W]
   BUDGET_CAPACITY    per-slot KV capacity in tokens, rounded up to a multiple of W   [default max h + W]
-  BUDGET_WARMUP      warm-up forwards per point                                           [default 2]
+  BUDGET_WARMUP      warm-up forwards per point; the first point of a process gets at least 5 [default 2]
   BUDGET_ITERS       timed forwards per point                                             [default 5]
   BUDGET_FILL        real | none. none skips the history fill (attends a zeroed cache)   [default real]
   BUDGET_STAGES      1, 2 or 4 (sub-mesh (8/S, 4)); BUDGET_STAGE picks which one      [default 2 / 0]
@@ -158,7 +158,7 @@ def main():
                 for pos in range(depth, h, W):
                     emit(kind="fill", h=pos, n=W, wall_ms=round(forward(pos, W), 3))
             depth = h
-            for k in range(warmup):
+            for k in range(max(warmup, 5) if (h, n) == points[0] else warmup):
                 emit(kind="warmup", h=h, n=n, iter=k, wall_ms=round(forward(h, n), 3))
             walls = []
             for k in range(iters):
