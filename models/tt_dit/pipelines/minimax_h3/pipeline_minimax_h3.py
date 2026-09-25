@@ -72,6 +72,7 @@ from ...models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_mini
 from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
 from ...models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3AudioEncoder
 from ...models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
+from ...models.transformers.minimax_h3.quant_config import apply_env_quant_config
 from ...models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
 from ...models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
@@ -428,7 +429,7 @@ class MiniMaxH3Pipeline:
         )
         self.coresident = coresident
         self.trace_denoise = self.trace_denoise and self.coresident
-        self.bucket_denoise = self.trace_denoise or bool(bucket_denoise)
+        self.bucket_denoise = self.trace_denoise if bucket_denoise is None else bool(bucket_denoise)
         self._log_generation = True
         self._buckets: dict[int, _BucketState] = {}
         self._force_bucket: int | None = None
@@ -1187,6 +1188,7 @@ class MiniMaxH3Pipeline:
             mesh_device=self.mesh_device,
             get_torch_state_dict=lambda: self._read_safetensors(self.transformer_subfolder),
         )
+        apply_env_quant_config(self._transformer)
         return self._transformer
 
     @property
@@ -2034,6 +2036,9 @@ class MiniMaxH3Pipeline:
         try:
             self(prompt, num_inference_steps=num_inference_steps, **generation_kwargs)
             if not self.bucket_denoise:
+                if self.trace_denoise:
+                    # Exact-length tracing: the first pass warmed the rung, this one captures it.
+                    self(prompt, num_inference_steps=2, **generation_kwargs)
                 return
             natural = self.last_seq_len.padded
 
@@ -2335,7 +2340,7 @@ class MiniMaxH3Pipeline:
 
         row_slot, slot_roles = build_slot_routing(layout, roles=self.adaln_slot_roles)
 
-        state = self._buckets.setdefault(rung if self.bucket_denoise else 0, _BucketState())
+        state = self._buckets.setdefault(rung if (self.bucket_denoise or self.trace_denoise) else 0, _BucketState())
         traced = self.trace_denoise and state.warm
         if self.trace_denoise and not state.warm:
             self.release_traces()
