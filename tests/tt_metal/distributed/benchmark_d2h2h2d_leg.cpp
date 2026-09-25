@@ -69,6 +69,15 @@ void init_counters(benchmark::State& state) {
     state.counters["h2h_poll_pct"] = 0;
     state.counters["h2d_drain_pct"] = 0;
     state.counters["poll_calls"] = 0;
+    // What a flush actually covered, and why a pass had nothing to post. pending_max_kb
+    // bounds any batching threshold; the starved split says which end is the constraint.
+    state.counters["flushes"] = 0;
+    state.counters["pending_avg_kb"] = 0;
+    state.counters["pending_max_kb"] = 0;
+    state.counters["tiny_flush_pct"] = 0;
+    state.counters["starved_credit_pct"] = 0;
+    state.counters["starved_empty_pct"] = 0;
+    state.counters["puts_per_frame"] = 0;
     for (const char* p : {"d2h_issue_", "d2h_stall_", "h2h_put_credit_", "h2d_publish_drained_"}) {
         set_latency_counters(state, LatencySummary{}, 0, p);
     }
@@ -95,6 +104,13 @@ struct RankReport {
     double h2h_poll_pct = 0.0;
     double h2d_drain_pct = 0.0;
     uint64_t poll_calls = 0;
+    double flushes = 0.0;
+    double pending_avg_kb = 0.0;
+    double pending_max_kb = 0.0;
+    double tiny_flush_pct = 0.0;
+    double starved_credit_pct = 0.0;
+    double starved_empty_pct = 0.0;
+    double puts_per_frame = 0.0;
 };
 
 class D2H2H2DFixture : public benchmark::Fixture {
@@ -332,6 +348,25 @@ BENCHMARK_DEFINE_F(D2H2H2DFixture, Volume)(benchmark::State& state) {
                 local.h2d_drain_pct = 100.0 * static_cast<double>(tm.h2d_drain_ns) / legs;
             }
             local.poll_calls = tm.poll_calls;
+
+            local.flushes = static_cast<double>(ps.flushes);
+            local.pending_max_kb = static_cast<double>(ps.pending_max) / 1024.0;
+            if (ps.flushes != 0) {
+                local.pending_avg_kb =
+                    static_cast<double>(ps.pending_sum) / static_cast<double>(ps.flushes) / 1024.0;
+                local.tiny_flush_pct =
+                    100.0 * static_cast<double>(ps.flushes_tiny) / static_cast<double>(ps.flushes);
+            }
+            if (ps.starved != 0) {
+                local.starved_credit_pct =
+                    100.0 * static_cast<double>(ps.starved_credit) / static_cast<double>(ps.starved);
+                local.starved_empty_pct =
+                    100.0 * static_cast<double>(ps.starved_empty) / static_cast<double>(ps.starved);
+            }
+            if (msgs_ != 0) {
+                local.puts_per_frame = static_cast<double>(ps.posts + ps.trailer_puts + ps.credit_puts) /
+                                       static_cast<double>(msgs_);
+            }
         }
         if (timing) {
             const double secs = std::chrono::duration<double>(t1 - t0).count();
@@ -411,6 +446,13 @@ BENCHMARK_DEFINE_F(D2H2H2DFixture, Volume)(benchmark::State& state) {
         state.counters["h2h_poll_pct"] = tx.h2h_poll_pct;
         state.counters["h2d_drain_pct"] = tx.h2d_drain_pct;
         state.counters["poll_calls"] = static_cast<double>(tx.poll_calls);
+        state.counters["flushes"] = tx.flushes;
+        state.counters["pending_avg_kb"] = tx.pending_avg_kb;
+        state.counters["pending_max_kb"] = tx.pending_max_kb;
+        state.counters["tiny_flush_pct"] = tx.tiny_flush_pct;
+        state.counters["starved_credit_pct"] = tx.starved_credit_pct;
+        state.counters["starved_empty_pct"] = tx.starved_empty_pct;
+        state.counters["puts_per_frame"] = tx.puts_per_frame;
         set_latency_counters(state, tx.d2h_issue, tx.d2h_samples, "d2h_issue_");
         set_latency_counters(state, tx.d2h_stall, tx.d2h_samples, "d2h_stall_");
         set_latency_counters(state, tx.h2h_put_credit, tx.h2h_samples, "h2h_put_credit_");
