@@ -344,6 +344,19 @@ def test_csa_islands_pinpoint(mesh_device, device_params, sp_axis, tp_axis):
     y1_p_host = _to_host(mesh_device, a2[0], sp_axis, tp_axis).float()
     _, pcc_phase = comp_pcc(y1_e_host, y1_p_host)
     logger.info(f"[pinpoint] phases (eager) vs forward: y PCC {pcc_phase:.6f}")
+
+    def _where(a, b, tag):
+        # localise a deviation: per SP chip (rows r*S_l..) and the worst 128-row blocks
+        S_l = chunk // sp
+        per_chip = [comp_pcc(a[0, 0, r * S_l : (r + 1) * S_l], b[0, 0, r * S_l : (r + 1) * S_l])[1] for r in range(sp)]
+        blocks = [(i, comp_pcc(a[0, 0, i : i + 128], b[0, 0, i : i + 128])[1]) for i in range(0, chunk, 128)]
+        worst = sorted(blocks, key=lambda t: t[1])[:6]
+        logger.info(
+            f"[pinpoint] {tag}: per-SP-chip PCC {[round(x, 5) for x in per_chip]}; worst 128-row blocks (row, pcc) "
+            f"{[(i, round(v, 4)) for i, v in worst]}"
+        )
+
+    _where(y1_e_host, y1_p_host, "phases vs forward")
     for t in a2:
         ttnn.deallocate(t)
     A2 = TraceIsland(mesh_device, lambda: tt_i.forward_attn(h1, outs, st_i, chunk), [], name="pinpoint.A2")
@@ -355,6 +368,8 @@ def test_csa_islands_pinpoint(mesh_device, device_params, sp_axis, tp_axis):
     y1_r_host = _to_host(mesh_device, cap[0], sp_axis, tp_axis).float()
     _, pcc_rep = comp_pcc(y1_e_host, y1_r_host)
     logger.info(f"[pinpoint] A2 captured vs forward: y PCC {pcc_cap:.6f}; replayed: {pcc_rep:.6f}")
+    _where(y1_e_host, y1_r_host, "A2 replayed vs forward")
+    _where(y1_p_host, y1_r_host, "A2 replayed vs phases-eager")
     A2.release()
     assert jac_mean >= 0.9, (jac_mean, jac_min)
     assert pcc_phase >= 0.999 and pcc_cap >= 0.999 and pcc_rep >= 0.999, (pcc_phase, pcc_cap, pcc_rep)
