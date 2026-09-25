@@ -46,7 +46,7 @@ _DRAM = ttnn.DRAM_MEMORY_CONFIG
 
 
 def _seq_out_dtype(out_dtype=None):
-    """None -> fp32 on Blackhole; bf16 on Wormhole, where fp32 output does not fit L1."""
+    """None -> fp32 on Blackhole; bf16 on Wormhole, where the fp32 [BH, L, V] relayout does not fit L1."""
     if out_dtype is not None:
         return out_dtype
     from models.common.utility_functions import is_blackhole
@@ -421,8 +421,8 @@ def chunk_gated_delta_rule_seq(
 
     Returns (output [BH,T,V], final_state [BH,K,V]) float32.
     valid_len: zero q/k/v/beta/g past valid_len (padding); identity state updates preserve recurrent state.
-    out_dtype: dtype of the L1-resident [BH, L, V] output relayout. fp32 is BH*L*V*4 =
-        too large for Wormhole L1 beside the prefill working set; use bfloat16 there.
+    out_dtype: dtype of the L1-resident [BH, L, V] output relayout. fp32 does not fit
+        Wormhole L1 beside the prefill working set; use bfloat16 there.
     """
     # Preprocessing matmuls: HiFi4 (matches block-inverse fidelity).
     _hifi_cfg = ttnn.WormholeComputeKernelConfig(

@@ -16,8 +16,8 @@ from models.demos.blackhole.qwen36.tests.gdn_fla_ref import (
     naive_recurrent_per_token_state,
     pcc,
 )
+from models.demos.blackhole.qwen36.tt.gdn.fused_recurrent_op import fused_recurrent_gated_delta_rule_ttnn
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
-    fused_recurrent_gated_delta_rule_ttnn,
     recurrent_gated_delta_rule_decode_ttnn,
 )
 
