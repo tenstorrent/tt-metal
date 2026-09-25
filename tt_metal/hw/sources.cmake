@@ -398,6 +398,8 @@ set(HW_JIT_API_HEADERS
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_gradient_finalization_owner.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_gradient_finalize.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_horner.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_inverse_square.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_inverse_square_core.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_log2.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_min_max.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_mirrored_terminals.h
@@ -434,6 +436,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/eltwise_unary/hardswish_bw_tt_poly_bf16.h
     inc/api/compute/eltwise_unary/hardtanh_bw_tt_poly_bf16.h
     inc/api/compute/eltwise_unary/log_sigmoid_bw_tt_poly_bf16.h
+    inc/api/compute/eltwise_unary/polygamma.h
     inc/api/compute/eltwise_unary/softplus_bw_tt_poly_bf16.h
     inc/api/compute/eltwise_unary/softshrink_bw_tt_poly_bf16.h
     inc/api/compute/eltwise_unary/softsign_bw_tt_poly_bf16.h

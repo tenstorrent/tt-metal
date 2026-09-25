@@ -141,3 +141,18 @@ void polygamma_init() {
 }
 
 }  // namespace ckernel::sfpu
+
+#if !defined(TT_POLY_LLK_DISABLE)
+#include "ckernel_sfpu_polygamma_bf16.h"
+#endif
+
+namespace ckernel::sfpu {
+
+#if !defined(TT_POLY_LLK_DISABLE)
+template <int ITERATIONS = 8>
+inline void calculate_polygamma_tt_poly_bf16() {
+    ckernel::sfpu::ttpoly::calculate_inverse_square<ttpoly_generated::PolygammaBf16Config, ITERATIONS>();
+}
+#endif
+
+}  // namespace ckernel::sfpu

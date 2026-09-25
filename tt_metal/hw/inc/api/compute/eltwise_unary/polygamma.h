@@ -56,4 +56,46 @@ ALWI void polygamma_tile(std::uint32_t idst, std::uint32_t n_packed, std::uint32
  */
 ALWI void polygamma_tile_init() { MATH(SFPU_UNARY_INIT_FN(polygamma, sfpu::polygamma_init, (APPROX))); }
 
+#if !defined(TT_POLY_LLK_DISABLE) && ((defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)) && \
+                                      defined(TT_METAL_SFPU_SINGLE_TILE_DST) && TT_METAL_SFPU_SINGLE_TILE_DST == 1)
+#define TT_POLY_POLYGAMMA_BF16_ROUTE_ACTIVE 1
+#else
+#define TT_POLY_POLYGAMMA_BF16_ROUTE_ACTIVE 0
+#endif
+
+/** Internal BF16 typed-compiler route; public callers retain the stock entry point. */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void polygamma_tt_poly_bf16_tile(std::uint32_t idst, std::uint32_t n_packed, std::uint32_t scale_packed) {
+#if !TT_POLY_POLYGAMMA_BF16_ROUTE_ACTIVE
+    polygamma_tile<is_fp32_dest_acc_en>(idst, n_packed, scale_packed);
+#else
+    if constexpr (is_fp32_dest_acc_en) {
+        polygamma_tile<is_fp32_dest_acc_en>(idst, n_packed, scale_packed);
+    } else {
+        if (n_packed != 0x3f800000u || scale_packed != 0x3f800000u) {
+            polygamma_tile_init();
+            polygamma_tile<is_fp32_dest_acc_en>(idst, n_packed, scale_packed);
+            return;
+        }
+        if (idst != 0) {
+            polygamma_tile_init();
+            polygamma_tile<is_fp32_dest_acc_en>(idst, n_packed, scale_packed);
+            return;
+        }
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            calculate_polygamma_tt_poly_bf16,
+            (32 /* ITERATIONS */),
+            idst,
+            VectorMode::None));
+    }
+#endif
+}
+
+/** Initialize the internal BF16 typed-compiler route. */
+ALWI void polygamma_tt_poly_bf16_tile_init() { polygamma_tile_init(); }
+
+#undef TT_POLY_POLYGAMMA_BF16_ROUTE_ACTIVE
+
 }  // namespace ckernel
