@@ -139,19 +139,34 @@ def test_a_noc_hang_on_a_live_galaxy_is_reset_with_the_galaxy_reset(host, monkey
     assert seen and seen[0] == GLX[0], seen
 
 
-# --- the galaxy-tray reset's host tool is installed, not just reported (like tt-lang) -------------
+# --- a host tool the reset needs is installed when the reset reports it missing (like tt-lang) -----
+#
+# The tool's name is never typed in the code: tt-smi names it ("sudo: <tool>: command not found").
+# TOOL is test data standing in for whatever tt-smi reports.
+
+TOOL = "bmc-tool-x"
+REAL_FAILURE = "Resetting WH Galaxy trays with reset command...\nsudo: ipmitool: command not found\n"
 
 
-def _fake_host(monkeypatch, installed_after=True, have_sudo=True):
+def test_the_missing_tool_is_read_from_the_failure():
+    assert P.missing_host_tool(REAL_FAILURE) == "ipmitool"  # what the WH Galaxy printed on 2026-09-25
+    assert P.missing_host_tool("sudo: %s: command not found" % TOOL) == TOOL
+    assert P.missing_host_tool("Error: POST_RESET failed for device 1.") is None
+    assert P.missing_host_tool("") is None and P.missing_host_tool(None) is None
+
+
+def _fake_host(monkeypatch, installed_after=True, have_sudo=True, managers=True):
     from agent import pkgtools
 
     state = {"present": False, "cmds": []}
 
     def _which(name):
-        if name == P._GALAXY_RESET_TOOL:
+        if name == TOOL:
             return "/usr/bin/" + name if state["present"] else None
-        if name == "sudo" and not have_sudo:
-            return None
+        if name == pkgtools._ELEVATE[0]:
+            return "/usr/bin/" + name if have_sudo else None
+        if any(name == pm for pm, _ in pkgtools._PACKAGE_MANAGERS):
+            return "/usr/bin/" + name if managers else None
         return "/usr/bin/" + name
 
     def _run(cmd, **k):
@@ -160,6 +175,7 @@ def _fake_host(monkeypatch, installed_after=True, have_sudo=True):
         return subprocess.CompletedProcess(cmd, 0 if installed_after else 100, "", "")
 
     monkeypatch.delenv(pkgtools.NO_SYSTEM_INSTALL_ENV, raising=False)
+    monkeypatch.delenv(pkgtools.SYSTEM_INSTALL_CMD_ENV, raising=False)
     monkeypatch.setattr(pkgtools, "_SYSTEM_TOOL_TRIED", {})
     monkeypatch.setattr(pkgtools.shutil, "which", _which)
     monkeypatch.setattr(pkgtools.subprocess, "run", _run)
@@ -169,39 +185,76 @@ def _fake_host(monkeypatch, installed_after=True, have_sudo=True):
 
 def test_a_missing_tool_is_installed_non_interactively(monkeypatch):
     pkgtools, state = _fake_host(monkeypatch)
-    assert pkgtools.ensure_system_tool(P._GALAXY_RESET_TOOL) is True
-    assert state["cmds"] == [["/usr/bin/sudo", "-n", "/usr/bin/apt-get", "install", "-y", "-q", P._GALAXY_RESET_TOOL]]
+    assert pkgtools.ensure_system_tool(TOOL) is True
+    pm, args = pkgtools._PACKAGE_MANAGERS[0]
+    assert state["cmds"] == [
+        ["/usr/bin/" + pkgtools._ELEVATE[0], *pkgtools._ELEVATE[1:], "/usr/bin/" + pm, *args, TOOL]
+    ]
+
+
+def test_the_install_command_is_configurable(monkeypatch):
+    pkgtools, state = _fake_host(monkeypatch, managers=False)
+    monkeypatch.setenv(pkgtools.SYSTEM_INSTALL_CMD_ENV, "site-installer --yes")
+    assert pkgtools.ensure_system_tool(TOOL) is True
+    assert state["cmds"][0][-3:] == ["site-installer", "--yes", TOOL]
+
+
+def test_no_package_manager_means_no_install_attempt(monkeypatch):
+    pkgtools, state = _fake_host(monkeypatch, managers=False)
+    assert pkgtools.ensure_system_tool(TOOL) is False
+    assert state["cmds"] == []
 
 
 def test_an_install_that_fails_is_reported_and_not_retried(monkeypatch):
     pkgtools, state = _fake_host(monkeypatch, installed_after=False)
-    assert pkgtools.ensure_system_tool(P._GALAXY_RESET_TOOL) is False
-    assert pkgtools.ensure_system_tool(P._GALAXY_RESET_TOOL) is False
+    assert pkgtools.ensure_system_tool(TOOL) is False
+    assert pkgtools.ensure_system_tool(TOOL) is False
     assert len(state["cmds"]) == 1, "a host where the install cannot work was asked again"
 
 
 def test_no_sudo_means_no_install_attempt(monkeypatch):
     pkgtools, state = _fake_host(monkeypatch, have_sudo=False)
-    assert pkgtools.ensure_system_tool(P._GALAXY_RESET_TOOL) is False
+    assert pkgtools.ensure_system_tool(TOOL) is False
     assert state["cmds"] == []
 
 
 def test_the_opt_out_is_honoured(monkeypatch):
     pkgtools, state = _fake_host(monkeypatch)
     monkeypatch.setenv(pkgtools.NO_SYSTEM_INSTALL_ENV, "1")
-    assert pkgtools.ensure_system_tool(P._GALAXY_RESET_TOOL) is False
+    assert pkgtools.ensure_system_tool(TOOL) is False
     assert state["cmds"] == []
 
 
-def test_a_galaxy_reset_installs_its_tool_first(host, monkeypatch):
-    host(True, 32)
-    asked = []
-    monkeypatch.setattr(P, "_ensure_galaxy_reset_tool", lambda: asked.append(1) or True)
-    P.reset_commands("9")
-    assert asked
+def _reset_runs(monkeypatch, first_output, installed=True):
+    from agent import pkgtools
+
+    calls = []
+
+    def _run(cmd, **k):
+        calls.append(list(cmd))
+        failed = len(calls) == 1
+        return subprocess.CompletedProcess(cmd, 1 if failed else 0, first_output if failed else "done", "")
+
+    monkeypatch.setattr(P.subprocess, "run", _run)
+    monkeypatch.setattr(P.shutil, "which", lambda name: None)
+    monkeypatch.setattr(pkgtools, "ensure_system_tool", lambda name: installed)
+    return calls
 
 
-def test_a_plain_board_reset_installs_nothing(host, monkeypatch):
-    host(False, 4)
-    monkeypatch.setattr(P, "_ensure_galaxy_reset_tool", lambda: pytest.fail("installed a Galaxy tool on a plain board"))
-    P.reset_commands("2,3")
+def test_a_reset_that_reports_a_missing_tool_installs_it_and_retries(monkeypatch):
+    calls = _reset_runs(monkeypatch, "sudo: %s: command not found" % TOOL)
+    assert P.run_reset_command("/bin/tt-smi", ["-glx_reset"], 5).returncode == 0
+    assert calls == [["/bin/tt-smi", "-glx_reset"]] * 2
+
+
+def test_a_reset_that_fails_for_another_reason_is_not_retried(monkeypatch):
+    calls = _reset_runs(monkeypatch, "Error: POST_RESET failed for device 1.")
+    assert P.run_reset_command("/bin/tt-smi", ["-glx_reset"], 5).returncode == 1
+    assert len(calls) == 1
+
+
+def test_a_tool_that_cannot_be_installed_returns_the_original_failure(monkeypatch):
+    calls = _reset_runs(monkeypatch, "sudo: %s: command not found" % TOOL, installed=False)
+    proc = P.run_reset_command("/bin/tt-smi", ["-glx_reset"], 5)
+    assert proc.returncode == 1 and TOOL in proc.stdout
+    assert len(calls) == 1

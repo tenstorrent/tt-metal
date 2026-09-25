@@ -938,39 +938,50 @@ def reset_commands(target: str = "") -> list[list[str]]:
     chip-targeted `-r` on a Galaxy is exactly the reset that leaves it wedged."""
     ensure_board_noted()
     chips = "" if (target or "").strip().lower() in ("", "all") else target
-    arg_sets = _reset_arg_sets()
-    if any(args and args[0].startswith("-glx") for args in arg_sets):
-        _ensure_galaxy_reset_tool()
-    return [["-r", chips] if (chips and args and args[0] == "-r") else list(args) for args in arg_sets]
+    return [["-r", chips] if (chips and args and args[0] == "-r") else list(args) for args in _reset_arg_sets()]
 
 
-# tt-smi's galaxy-tray reset drives the chassis BMC through this host tool. Absent, every `-glx_reset`
-# fails with "sudo: ipmitool: command not found" and a wedged Galaxy cannot be reset at all (2026-09-25).
-_GALAXY_RESET_TOOL = "ipmitool"
+# A tt-smi reset shells out to host tools -- the galaxy-tray reset drives the chassis BMC through one --
+# and when one is missing the reset fails NAMING it: "sudo: <tool>: command not found" (a WH Galaxy,
+# 2026-09-25, where every -glx_reset failed that way and the board could not be reset at all). The name
+# is read from that failure rather than typed here, so whatever tool tt-smi needs is the one installed.
+_MISSING_TOOL_RE = re.compile(r"([A-Za-z0-9][A-Za-z0-9._+-]*): command not found")
 
 
-def _ensure_galaxy_reset_tool() -> bool:
-    """Install the galaxy-tray reset's host dependency when it is missing -- like the tt-lang install."""
+def missing_host_tool(output: str) -> str | None:
+    """The host command a failed tt-smi run reported as missing, or None."""
+    m = _MISSING_TOOL_RE.search(output or "")
+    return m.group(1) if m else None
+
+
+def run_reset_command(tt_smi: str, args: list, timeout_s: float) -> subprocess.CompletedProcess:
+    """Run one tt-smi reset. If it fails because a host tool it needs is missing, install that tool
+    (pkgtools.ensure_system_tool -- like the tt-lang auto-install) and run the same reset once more.
+    Raises what subprocess.run raises (TimeoutExpired, OSError), exactly as the callers already expect."""
+    cmd = [tt_smi, *args]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
+    if proc.returncode == 0:
+        return proc
+    tool = missing_host_tool((proc.stdout or "") + (proc.stderr or ""))
+    if not tool or shutil.which(tool):
+        return proc
     from .pkgtools import ensure_system_tool
 
-    if shutil.which(_GALAXY_RESET_TOOL):
-        return True
-    ok = ensure_system_tool(_GALAXY_RESET_TOOL)
+    ok = ensure_system_tool(tool)
     print(
-        "  [device-reset] %s was missing (the galaxy-tray reset needs it): %s"
-        % (_GALAXY_RESET_TOOL, "installed" if ok else "could NOT be installed -- install it by hand"),
+        "  [device-reset] `tt-smi %s` needs %s, which is missing: %s"
+        % (" ".join(args), tool, "installed it, retrying" if ok else "could NOT install it -- install it by hand"),
         file=sys.stderr,
         flush=True,
     )
-    return ok
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s) if ok else proc
 
 
 def prepare_device_reset(box: str = "") -> None:
-    """At a stage's startup, while the board is healthy: decide the host kind and make sure its reset
-    can run, so the first wedge is not also the first time anyone learns the reset tool is missing."""
+    """At a stage's startup, while the board is healthy: decide the host kind, so the reset path is
+    not first asked on a wedged board (see ensure_board_noted). A host tool the reset needs is
+    installed when a reset reports it missing (run_reset_command)."""
     ensure_board_noted(box=box)
-    if _GALAXY_HOST:
-        _ensure_galaxy_reset_tool()
 
 
 def _device_reset(error_text: str = "", config_target: str = "") -> bool:
@@ -987,7 +998,7 @@ def _device_reset(error_text: str = "", config_target: str = "") -> bool:
         tt_smi = tt_smi_bin()
         for args in reset_commands(target):
             try:
-                proc = subprocess.run([tt_smi, *args], capture_output=True, text=True, timeout=300)
+                proc = run_reset_command(tt_smi, args, 300)
                 if proc.returncode == 0:
                     return True
             except Exception:  # noqa: BLE001

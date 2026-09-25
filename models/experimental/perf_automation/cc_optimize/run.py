@@ -3334,11 +3334,13 @@ def _reset_devices(devices: str) -> str:
         arg_sets = _pr.reset_commands(chips)
     except Exception:  # noqa: BLE001
         arg_sets = [["-r", chips]] if chips else [["-r"]]
+    from agent.probes import run_reset_command  # also installs a host tool the reset reports missing
+
     last = "no reset ran"
     for args in arg_sets:
         cmd = [tt_smi, *args]
         try:
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=420)
+            r = run_reset_command(tt_smi, args, 420)
             last = "tt-smi %s rc=%d" % (" ".join(cmd[1:]), r.returncode)
             if r.returncode == 0:
                 return last

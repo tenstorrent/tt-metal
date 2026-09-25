@@ -7715,8 +7715,13 @@ def _run_tt_smi_reset(
         from models.experimental.perf_automation.agent import probes as _pr
 
         arg_sets = _pr.reset_commands(devices)
+        _run_reset = _pr.run_reset_command  # also installs a host tool the reset reports missing
     except Exception:  # noqa: BLE001
         arg_sets = [["-r", devices]]
+
+        def _run_reset(smi, args, timeout):
+            return _sp.run([smi, *args], timeout=timeout, capture_output=True, text=True)
+
     label = f" [{context}]" if context else ""
     print()
     print("=" * 78)
@@ -7726,12 +7731,7 @@ def _run_tt_smi_reset(
     for args in arg_sets:
         shown = " ".join(args)
         try:
-            proc = _sp.run(
-                ["tt-smi", *args],
-                timeout=timeout_s,
-                capture_output=True,
-                text=True,
-            )
+            proc = _run_reset("tt-smi", args, timeout_s)
         except _sp.TimeoutExpired:
             print(f"  tt-smi {shown} timed out after {timeout_s}s", file=sys.stderr)
             proc = None
