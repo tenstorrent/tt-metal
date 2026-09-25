@@ -66,9 +66,7 @@ BASE_MATH_OPS = [
 ]
 BASE_PERF_MATH_OPS = [MathOperation.Elwadd, MathOperation.Elwmul]
 BFP4_MATH_OPS = [MathOperation.Elwadd, MathOperation.Elwsub]
-# Elwadd is already covered for BFP4 by the base perf sweep. Keep the
-# extended BFP4 perf family incremental so identical measurements are not
-# emitted twice under the same report key.
+# Elwadd is already in the base BFP4 perf sweep, so this list stays Elwsub-only.
 BFP4_PERF_MATH_OPS = [MathOperation.Elwsub]
 DEST_REUSE_MATH_OPS = [
     MathOperation.Elwadd,
