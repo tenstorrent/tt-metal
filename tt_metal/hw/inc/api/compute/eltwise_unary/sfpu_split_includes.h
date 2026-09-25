@@ -271,3 +271,7 @@
 #if TT_POLY_BACKWARD_SOFTPLUS_BW_INCLUDE
 #include "api/compute/eltwise_unary/softplus_bw_tt_poly_bf16.h"
 #endif
+
+#if TT_POLY_BACKWARD_SOFTSIGN_BW_INCLUDE
+#include "api/compute/eltwise_unary/softsign_bw_tt_poly_bf16.h"
+#endif

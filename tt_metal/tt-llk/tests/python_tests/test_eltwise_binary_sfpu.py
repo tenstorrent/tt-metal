@@ -450,6 +450,8 @@ def sfpu_binary(
     twos_complement=False,
     input_dimensions=None,
     unspecified_nonfinite_sign=False,
+    extra_templates=(),
+    lhs_factor_golden=None,
 ):
     """*unspecified_nonfinite_sign* compares a non-finite result by magnitude only.
 
@@ -533,6 +535,11 @@ def sfpu_binary(
     ):
         dest_acc = DestAccumulation.Yes
 
+    if lhs_factor_golden is not None:
+        golden_src = golden_src.clone()
+        for offset in range(0, golden_src.numel(), 2 * 32 * 32):
+            lhs = golden_src[offset : offset + 32 * 32]
+            golden_src[offset : offset + 32 * 32] = lhs_factor_golden(lhs)
     generate_golden = get_golden_generator(BinarySFPUGolden)
     golden_format = (
         DataFormat.Float16_b
@@ -576,6 +583,7 @@ def sfpu_binary(
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
             MATH_OP(mathop=mathop),
+            *extra_templates,
             APPROX_MODE(),
             BROADCAST_TYPE(bcast),
         ],
@@ -1792,3 +1800,35 @@ def test_eltwise_binary_sfpu_bcast(
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
     ), "Assert against golden failed"
+
+
+from helpers.test_variant_parameters import TemplateParameter
+
+
+class _TTPolyBackwardFactor(TemplateParameter):
+    def __init__(self, op):
+        self.op = op
+
+    def convert_to_cpp(self) -> str:
+        op = self.op
+        config = op.title().replace("_", "") + "Bf16Config"
+        return (
+            f'#define TT_POLY_LLK_TEST_FACTOR_HEADER "llk_sfpu/ckernel_sfpu_{op}_bf16.h"\n'
+            f'#define TT_POLY_LLK_TEST_FACTOR_INIT init_{op}_tt_poly_bf16\n'
+            f'#define TT_POLY_LLK_TEST_FACTOR_CALC calculate_{op}_tt_poly_bf16\n'
+            f'#define TT_POLY_LLK_TEST_FACTOR_CALC_2 calculate_{op}_gradient_tt_poly_bf16\n'
+            f'#define TT_POLY_LLK_TEST_FACTOR_FINISH_IF ttpoly_generated::{config}::needs_gradient\n'
+        )
+
+
+@pytest.mark.parametrize("op,lhs_factor_golden", [
+    ("softsign_bw", lambda x: torch.reciprocal(1.0 + torch.abs(x)) ** 2),
+])
+def test_tt_poly_generated_backward_bf16_llk(op, lhs_factor_golden):
+    sfpu_binary(
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        DestAccumulation.No,
+        MathOperation.SfpuElwmul,
+        extra_templates=(_TTPolyBackwardFactor(op),),
+        lhs_factor_golden=lhs_factor_golden,
+    )
