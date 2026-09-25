@@ -44,6 +44,7 @@ public:
             policy_->fp32_destination);
         k_chunk_tiles_ = args.get_k_chunk_size() / tt::constants::TILE_HEIGHT;
         has_logical_n_tensor_ = tensor_args.has_logical_n_tensor();
+        kernel_config_bytes_ = exp_recipes::recipe_kernel_config_bytes(*tensor_args.input_q.device());
     }
 
     // Recipe matmul subblocks are fixed by the recipe schedule: (FP32 ? 1 : 2) x 4.
@@ -95,6 +96,13 @@ public:
         for (const auto& [name, value] : recipe_compute.defines) {
             defines[name] = value;
         }
+        if (exp_recipes::exp_ring_recipe_size_optimized_for_config_buffer(
+                *policy_, Sq_chunk_t, k_chunk_tiles_, DHt, kernel_config_bytes_)) {
+            // The qualified-geometry BF16-destination build does not fit this device's kernel config buffer
+            // (default worker L1): build pack and unpack at -Os like the generic geometries.
+            defines["SDPA_RECIPE_SIZE_OPTIMIZED"] = "1";
+            defines["SDPA_RECIPE_GENERIC_GEOMETRY"] = "1";
+        }
         compute_config_ = recipe_compute.config;
         return true;
     }
@@ -118,6 +126,7 @@ private:
     std::optional<exp_recipes::PrecisionPolicy> policy_;
     uint32_t k_chunk_tiles_ = 0;
     bool has_logical_n_tensor_ = false;
+    uint64_t kernel_config_bytes_ = 0;
     std::optional<tt::tt_metal::KernelDescriptor::ConfigDescriptor> compute_config_;
 };
 

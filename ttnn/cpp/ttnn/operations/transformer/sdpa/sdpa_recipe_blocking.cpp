@@ -206,6 +206,7 @@ using ProblemKey = std::tuple<
     std::size_t,
     uint32_t,
     uint64_t,
+    uint64_t,
     uint32_t,
     uint32_t,
     bool>;
@@ -227,6 +228,7 @@ ProblemKey key_of(const RecipeBlockingProblem& p) {
         p.grid.y,
         p.max_cores_per_head_batch,
         p.l1_bytes,
+        p.kernel_config_bytes,
         p.fixed_q_tiles,
         p.fixed_k_tiles,
         p.exp_mux_on_bottom_row};
@@ -374,7 +376,12 @@ std::vector<RecipeBlocking> recipe_blocking_candidates(const RecipeBlockingProbl
             const uint32_t k_chunk = kt * kTile;
             // FAST ring / exp ring keep their legacy compute; everything else builds the recipe program.
             const bool recipe_compute = dense || p.policy.selection.recipe != Recipe::A;
-            const RecipeBuild build = recipe_compute ? recipe_build(p.policy, qt, kt, p.d_tiles) : RecipeBuild{};
+            RecipeBuild build = recipe_compute ? recipe_build(p.policy, qt, kt, p.d_tiles) : RecipeBuild{};
+            if (p.op == RecipeOp::ExpRing && recipe_compute &&
+                exp_ring_recipe_size_optimized_for_config_buffer(p.policy, qt, kt, p.d_tiles, p.kernel_config_bytes)) {
+                build.size_optimized = true;  // the factory's small-kernel-config-buffer build flags
+                build.generic_geometry = true;
+            }
             double block = block_cost(p.policy, qt, kt, p.d_tiles, build);
             if (!dense && build.generic_geometry) {
                 block *= kRingGenericGeometryPenalty;
@@ -656,6 +663,7 @@ SDPAProgramConfig resolve_exp_ring_recipe_blocking(
     const auto lowest = device->lowest_occupied_compute_l1_address();
     const uint64_t top = lowest.has_value() ? static_cast<uint64_t>(*lowest) : device->l1_size_per_core();
     problem.l1_bytes = top - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    problem.kernel_config_bytes = recipe_kernel_config_bytes(*device);
     const auto choice = invalid_fixed(program_config) ? std::nullopt : choose_recipe_blocking(problem);
     return apply_choice(program_config, choice, problem, "exp ring");
 }
