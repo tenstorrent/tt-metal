@@ -1,0 +1,7 @@
+intake:
+  by: dnijemcevic
+  at: '2026-09-25T21:26:13'
+  files:
+    models/demos/gemma4_a4b_d_p/bringup/spec.yaml: 469f041d2fa16bce69d75d3a26583b16449ca25587fcebc0f360656debd15620
+  note: 'owner''s instruction: proceed with bringing up Gemma-4 26B-A4B on this box
+    and the framework; target and ladder as the ERNIE run (chosen by Claude)'
