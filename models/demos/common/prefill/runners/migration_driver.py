@@ -249,7 +249,14 @@ class MigrationDriver:
         while we push chunks.
         """
         self.client = self._attach_client()
-        if self.cross_endpoint:
+        if self.cross_endpoint and os.environ.get("PREFILL_MIGRATION_SKIP_PAIRING", "0") == "1":
+            # DS4F-0266: the pair was established out of band (the publisher side of THIS endpoint already accepted a
+            # connector, e.g. after a driver restart while the worker sat in MPI_Comm_accept); a second publish would
+            # wait for a connector that never comes.
+            logger.warning(
+                f"[migration_driver] PREFILL_MIGRATION_SKIP_PAIRING=1: not pairing with remote_ep={self.dest_endpoint_id}"
+            )
+        elif self.cross_endpoint:
             self._pair_cross_endpoint()
 
     def _attach_client(self):

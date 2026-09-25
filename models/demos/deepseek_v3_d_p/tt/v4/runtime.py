@@ -389,4 +389,7 @@ class TtV4PrefillRuntime:
             hf_config=self.hf_config,
             num_slots=self.config.num_users,
             path=path,
+            # DS4F-0267: the destination's table must carry the SAME config count. The blaze decode ring has no pending
+            # tensors (DS4F-0242) and registers 4 configs; PREFILL_KV_TABLE_PENDING=0 drops the two pending configs here.
+            include_pending=os.environ.get("PREFILL_KV_TABLE_PENDING", "1") == "1",
         )
