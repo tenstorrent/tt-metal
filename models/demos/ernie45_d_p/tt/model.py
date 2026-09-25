@@ -15,7 +15,7 @@ import torch
 import ttnn
 from models.demos.ernie45_d_p.reference.ernie_ref import ErnieConfig, LayerWeights, WeightLoader, load_layer
 from models.demos.ernie45_d_p.tt.attention import TtAttention, TtKVCache
-from models.demos.ernie45_d_p.tt.common import COMPUTE_HIFI2, cache_name, shard
+from models.demos.ernie45_d_p.tt.common import COMPUTE_HIFI2, cache_name, shard, signpost
 from models.demos.ernie45_d_p.tt.embedding import TtEmbedding
 from models.demos.ernie45_d_p.tt.moe import TtMoE
 from models.demos.ernie45_d_p.tt.moe_unified import TtMoEUnified
@@ -43,19 +43,23 @@ class TtDecoderLayer:
             self.mlp = TtMoE(mesh, cfg, i, w)
 
     def __call__(self, h, start: int, cache: TtKVCache, contract_kv=None):
+        signpost(f"L{self.i}.other.attn_norm")
         x = self.attn_norm(h)
         a = self.attn(x, start, cache, contract_kv=contract_kv)
         ttnn.deallocate(x)
+        signpost(f"L{self.i}.other.residual")
         h2 = ttnn.add(h, a)
         ttnn.deallocate(a)
         x = self.ffn_norm(h2)
         if self.is_moe:
             m = self.mlp(x)
         else:
+            signpost("dense_mlp")
             p = self.mlp(x)
             m = all_reduce(p)
             ttnn.deallocate(p)
         ttnn.deallocate(x)
+        signpost(f"L{self.i}.other.residual")
         out = ttnn.add(h2, m)
         ttnn.deallocate(h2)
         ttnn.deallocate(m)
@@ -97,6 +101,7 @@ class TtErnieModel:
         contract_kv=None,
     ) -> ttnn.Tensor:
         """Run one chunk at absolute positions [start, start+len). Returns final-normed hidden [1,1,S,H]."""
+        signpost("model.other.embed")
         h = self.embed(tokens) if hidden_in is None else hidden_in
         for layer in self.layers:
             h2 = layer(h, start, cache, contract_kv=contract_kv)
@@ -104,6 +109,7 @@ class TtErnieModel:
             h = h2
             if on_layer is not None:
                 on_layer(layer.i, h)
+        signpost("model.other.final_norm")
         out = self.final_norm(h)
         ttnn.deallocate(h)
         return out

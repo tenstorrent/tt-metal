@@ -16,7 +16,7 @@ import torch
 
 import ttnn
 from models.demos.ernie45_d_p.reference.ernie_ref import ErnieConfig, LayerWeights
-from models.demos.ernie45_d_p.tt.common import COMPUTE_HIFI2, COMPUTE_HIFI4, cache_name, shard
+from models.demos.ernie45_d_p.tt.common import COMPUTE_HIFI2, COMPUTE_HIFI4, cache_name, shard, signpost
 from models.demos.ernie45_d_p.tt.ops import TtRope, all_reduce
 
 NUM_CHIPS = 4
@@ -124,6 +124,7 @@ class TtAttention:
     def __call__(self, x, start: int, cache: TtKVCache, debug: dict | None = None, contract_kv=None):
         """x: [1,1,S,H] replicated (already normed). Returns [1,1,S,H] replicated (all-reduced)."""
         seq = x.shape[-2]
+        signpost("attn.qkv")
         qkv = ttnn.linear(x, self.wqkv, compute_kernel_config=COMPUTE_HIFI2)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv,
@@ -133,11 +134,13 @@ class TtAttention:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(qkv)
+        signpost("attn.rope")
         q = self.rope(q, start)
         k = self.rope(k, start)
         if debug is not None:
             debug.update(q=q, k=k, v=v)
 
+        signpost("attn.kv_write")
         if contract_kv is not None:  # prefill-server contract layout (bf8, DRAM round-robin), see tt/kv_contract.py
             contract_kv.write(self.layer, k, v, start)
         pt = cache.chunk_page_table(start, seq)
@@ -148,6 +151,7 @@ class TtAttention:
             cache.v[self.layer], ttnn.typecast(v, cache.dtype) if cache.dtype != v.dtype else v, pt, batch_idx=0
         )
 
+        signpost("attn.sdpa")
         prog = self._sdpa_cfg(seq, start)
         if start == 0:
             attn = ttnn.transformer.scaled_dot_product_attention(
@@ -169,11 +173,13 @@ class TtAttention:
             ttnn.deallocate(v)
         else:
             debug["sdpa"] = attn
+        signpost("attn.o_proj")
         a = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if debug is None:
             ttnn.deallocate(attn)
         o = ttnn.linear(a, self.wo, compute_kernel_config=COMPUTE_HIFI2)
         ttnn.deallocate(a)
+        signpost("attn.all_reduce")
         out = all_reduce(o)
         ttnn.deallocate(o)
         return out
