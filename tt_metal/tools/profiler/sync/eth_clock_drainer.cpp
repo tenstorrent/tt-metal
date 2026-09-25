@@ -407,7 +407,8 @@ struct Drainer {
     }
 
     // The pusher's records [head, tail): the tail from its control block, the records from its ring, the consumed
-    // count written back so it knows how far it may overwrite. One frame per call, or everything with `all`.
+    // count written back so it knows how far it may overwrite. Full frames only, or everything with `all` (at each
+    // sweep and at stop): a frame pads to 24 words, so one of a single record is four times its size.
     __attribute__((noinline)) void drain_pusher(bool all) {
         const uint32_t px = kPusherXy & 0xFFFFu, py = kPusherXy >> 16;
         volatile tt_l1_ptr uint32_t* pctl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kPusherCtrlScratch);
@@ -415,7 +416,7 @@ struct Drainer {
             noc_async_read(get_noc_addr(px, py, kPusherCtrl), kPusherCtrlScratch, 64);
             noc_async_read_barrier();
             const uint32_t tail = pctl[3];
-            if (tail == head) {
+            if (tail == head || (!all && tail - head < kp::kSyncFrameRecords)) {
                 return;
             }
             const uint32_t left = tail - head;
@@ -455,9 +456,6 @@ struct Drainer {
                     kp::kSyncFrameRecords));
             head += n;
             noc_inline_dw_write(get_noc_addr(px, py, kPusherCtrl + 16), head, 0xF);
-            if (!all) {
-                return;
-            }
         }
     }
 
@@ -541,6 +539,7 @@ void kernel_main() {
         const uint32_t now = eth_ptp::rd(eth_ptp::kWallClockLo);
         if (now - last_sweep >= kSweepCycles) {
             last_sweep = now;
+            d.drain_pusher(true);
             d.sweep();
         }
         // Teardown: the relay stop word, written by the host at quiesce once the pusher has stopped, so its tail
