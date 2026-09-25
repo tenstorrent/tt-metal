@@ -108,7 +108,7 @@ struct ReaderCtArgs {
     uint32_t untilize_tile_rows;
     // Read the two padding words and bound the routing pass at the real token count.
     uint32_t has_padding_config;
-    uint32_t ring_chip_ids_base;
+    uint32_t ring_chip_ids_base = kCount;  // the ring's chip ids follow the fixed args
     uint32_t assignment_base;
     uint32_t in_descriptors_base;
     uint32_t out_descriptors_base;
@@ -151,7 +151,6 @@ struct ReaderCtArgs {
         untilize_sem_addr(plan.untilize_sem_addr),
         untilize_tile_rows(plan.untilize_tile_rows),
         has_padding_config(args.has_padding_config ? 1u : 0u),
-        ring_chip_ids_base(kCount),
         assignment_base(kCount + args.device->shape()[args.axis]),
         in_descriptors_base(assignment_base + own_count * ASSIGNMENT_WORDS),
         out_descriptors_base(in_descriptors_base + forward_count * CHUNK_DESCRIPTOR_WORDS) {}
