@@ -69,6 +69,60 @@ Floor:
   - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
   - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
   - {max_ulp: 0}  # wh: 0 ULP, 156 variants each, all four output formats x both dest_acc, 2026-09-16
+  - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Bfp8_b, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Bfp8_b, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16_b, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16_b, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp8_b, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp8_b, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp8_b, out: Float32, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp8_b, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Bfp8_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Bfp8_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Bfp8_b, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Bfp8_b, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 Ceil:
@@ -91,6 +145,60 @@ Ceil:
   - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
   - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
   - {max_ulp: 0}  # wh: 0 ULP, as Floor, 2026-09-16
+  - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Bfp8_b, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Bfp8_b, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16_b, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16_b, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp8_b, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp8_b, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp8_b, out: Float32, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp8_b, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Bfp8_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Bfp8_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Bfp8_b, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Bfp8_b, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 Trunc:
@@ -113,14 +221,46 @@ Trunc:
   - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
   - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
   - {max_ulp: 0}  # wh: 0 ULP, as Floor, 2026-09-16
-
-
-# Sign-bit and select: exact in fp32, one step in the 16-bit formats. No arithmetic to
-# round, so fp32 is bit-exact. The single step on the 16-bit outputs is the *pack* path,
-# not the op -- it shows up for all three, mostly at dest_acc=Yes where the value is
-# rounded at pack rather than truncated in Dest first, and a step budget is what makes it
-# visible at all (atol=0.05 is ~6 bf16 steps). No headroom, deliberately: these are exact
-# by construction, so any movement is real signal.
+  - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Bfp8_b, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Bfp8_b, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16_b, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16_b, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp8_b, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp8_b, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp8_b, out: Float32, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp8_b, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Bfp8_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Bfp8_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Bfp8_b, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Bfp8_b, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
 Abs:
   - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 393 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
   - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 393 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
@@ -143,6 +283,56 @@ Abs:
   - {max_ulp: 1}  # wh: max 1 ULP on Float16/Float16_b, 80 variants, 2026-09-16
   - {out: Float32, max_ulp: 0}  # wh: max 0 ULP, 32 variants, 2026-09-16
   - {out: Bfp8_b, metric: tolerance}  # see the Bfp8_b note above
+  - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "No", metric: tolerance}  # max 0 ULP, wormhole, 2026-09-21, but a Bfp4_b input makes every block degenerately coarse; the exhaustive sweep reads 393 here, so this 0 described the stimulus. See the Bfp8_b note above
+  - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "Yes", metric: tolerance}  # max 0 ULP, wormhole, 2026-09-21, but a Bfp4_b input makes every block degenerately coarse; the exhaustive sweep reads 393 here, so this 0 described the stimulus. See the Bfp8_b note above
+  - {in: Bfp4_b, out: Bfp8_b, approx: "Yes", dest: "No", metric: tolerance}  # max 0 ULP, wormhole, 2026-09-21, but a Bfp4_b input makes every block degenerately coarse; the exhaustive sweep reads 393 here, so this 0 described the stimulus. See the Bfp8_b note above
+  - {in: Bfp4_b, out: Bfp8_b, approx: "Yes", dest: "Yes", metric: tolerance}  # max 0 ULP, wormhole, 2026-09-21, but a Bfp4_b input makes every block degenerately coarse; the exhaustive sweep reads 393 here, so this 0 described the stimulus. See the Bfp8_b note above
+  - {in: Bfp4_b, out: Float16, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16_b, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16_b, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp8_b, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp8_b, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp8_b, out: Float32, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp8_b, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, approx: "No", dest: "Yes", max_ulp: 1}  # max 1 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, approx: "Yes", dest: "Yes", max_ulp: 1}  # max 1 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 1}  # max 1 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "Yes", dest: "Yes", max_ulp: 1}  # max 1 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 Neg:
@@ -167,11 +357,42 @@ Neg:
   - {max_ulp: 1}  # wh: max 1 ULP on Float16/Float16_b, 80 variants, 2026-09-16
   - {out: Float32, max_ulp: 0}  # wh: max 0 ULP, 32 variants, 2026-09-16
   - {out: Bfp8_b, metric: tolerance}  # see the Bfp8_b note above
-
-
-# Keyed per format, not through a DEFAULT: Identity was never in BROAD_SWEEP_OPS, so fp16
-# was never measured for it -- and Square measured 1 step on bf16 against 4 on fp16, so
-# fp16 is not safely interpolated from bf16.
+  - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "No", metric: tolerance}  # max 0 ULP, wormhole, 2026-09-21, but a Bfp4_b input makes every block degenerately coarse; the exhaustive sweep reads 393 here, so this 0 described the stimulus. See the Bfp8_b note above
+  - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "Yes", metric: tolerance}  # max 0 ULP, wormhole, 2026-09-21, but a Bfp4_b input makes every block degenerately coarse; the exhaustive sweep reads 393 here, so this 0 described the stimulus. See the Bfp8_b note above
+  - {in: Bfp4_b, out: Bfp8_b, approx: "Yes", dest: "No", metric: tolerance}  # max 0 ULP, wormhole, 2026-09-21, but a Bfp4_b input makes every block degenerately coarse; the exhaustive sweep reads 393 here, so this 0 described the stimulus. See the Bfp8_b note above
+  - {in: Bfp4_b, out: Bfp8_b, approx: "Yes", dest: "Yes", metric: tolerance}  # max 0 ULP, wormhole, 2026-09-21, but a Bfp4_b input makes every block degenerately coarse; the exhaustive sweep reads 393 here, so this 0 described the stimulus. See the Bfp8_b note above
+  - {in: Bfp4_b, out: Float16, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16_b, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16_b, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp8_b, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp8_b, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp8_b, out: Float32, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp8_b, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, approx: "No", dest: "Yes", max_ulp: 1}  # max 1 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, approx: "Yes", dest: "Yes", max_ulp: 1}  # max 1 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 1}  # max 1 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "Yes", dest: "Yes", max_ulp: 1}  # max 1 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
 Identity:
   - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 393 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
   - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 393 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
@@ -193,8 +414,12 @@ Identity:
   - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
   - {out: Float32, max_ulp: 0}  # wh: max 0 ULP, 2026-09-16
   - {out: Float16_b, max_ulp: 1}  # wh: max 1 ULP, 4 variants, 2026-09-16
-
-
+  - {in: Float16_b, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 1}  # max 1 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
 # One multiply, and one open question. x*x has rounding slack the sign-bit ops do not:
 # the golden rounds in float64, the hardware in the datapath, and ties can differ.
 # Float32 is NOT enrolled, and the measurement is why -- 65536 steps at dest_acc=No is
@@ -975,3 +1200,677 @@ SfpuXlogy:
   - {out: Float32, metric: tolerance, atol: 0.14}    # 0.116 measured, ~20% margin
   - {out: Float16_b, metric: tolerance, atol: 0.6}
   - {out: Float16, metric: tolerance, atol: 0.12}    # 0.0989 measured
+
+# ── Exact and predicate unary ops ───────────────────────────────────────────
+#
+# Measured on Wormhole 2026-09-18 over the standard unary sweep with --ulp-report.
+# These ops are exactly rounded by construction -- a predicate writing 1.0/0.0, a
+# constant fill, a clamp, or a subtraction the hardware does in one step -- so the budget
+# is 0 and any drift at all is a regression. The exception is the 16-bit outputs of
+# ReluMax, ReluMin and Frac, which carry 1: the op is still exact, and the step is the
+# output rounding on the way out of Dest, as the rows there record.
+#
+# Every row names an output format that was actually measured. Nothing is enrolled on
+# Bfp8_b: its shared block exponent quantises a small element in a wide block to zero,
+# which costs thousands of steps for reasons that have nothing to do with the kernel
+# (ReluMax reports 15488 there on the stimuli where ReluMin reports 3). An unlisted
+# format falls through to the tolerance metric, which is what Bfp8_b and Bfp4_b want.
+
+Fill:  # 0 ULP, 115 variants / 2.09M lanes, 2026-09-18
+  - {in: Bfp8_b, out: Bfp8_b, metric: tolerance}  # max 0 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16, max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16_b, max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Bfp8_b, metric: tolerance}  # max 0 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16, max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16_b, max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Bfp8_b, metric: tolerance}  # max 0 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16, max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16_b, max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {out: Float32, max_ulp: 0}
+  - {out: Float16_b, max_ulp: 0}
+  - {out: Float16, max_ulp: 0}
+  - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Bfp8_b, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Bfp8_b, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16_b, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16_b, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp8_b, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp8_b, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp8_b, out: Float32, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp8_b, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Bfp8_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Bfp8_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Bfp8_b, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Bfp8_b, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Threshold:  # 0 ULP, 116 variants / 2.10M lanes, 2026-09-18
+  - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 2 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 2 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16, dest: "No", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Bfp8_b, dest: "No", metric: tolerance}  # max 2 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 2 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16, dest: "No", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16_b, dest: "No", max_ulp: 2}  # max 1 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16_b, dest: "Yes", max_ulp: 2}  # max 1 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 2 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 3 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16, dest: "No", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {out: Float32, max_ulp: 0}
+  - {out: Float16_b, max_ulp: 0}
+  - {out: Float16, max_ulp: 0}
+  - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "No", metric: tolerance}  # max 0 ULP, wormhole, 2026-09-21, but on uniform(-5, 5) against THRESHOLD_T=5.0 the pass-through branch never fires, so every block holds only the constant 10.0; the exhaustive sweep reads 16545 here
+  - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "Yes", metric: tolerance}  # max 0 ULP, wormhole, 2026-09-21, but on uniform(-5, 5) against THRESHOLD_T=5.0 the pass-through branch never fires, so every block holds only the constant 10.0; the exhaustive sweep reads 16545 here
+  - {in: Bfp4_b, out: Bfp8_b, approx: "Yes", dest: "No", metric: tolerance}  # max 0 ULP, wormhole, 2026-09-21, but on uniform(-5, 5) against THRESHOLD_T=5.0 the pass-through branch never fires, so every block holds only the constant 10.0; the exhaustive sweep reads 16545 here
+  - {in: Bfp4_b, out: Bfp8_b, approx: "Yes", dest: "Yes", metric: tolerance}  # max 0 ULP, wormhole, 2026-09-21, but on uniform(-5, 5) against THRESHOLD_T=5.0 the pass-through branch never fires, so every block holds only the constant 10.0; the exhaustive sweep reads 16545 here
+  - {in: Bfp4_b, out: Float16, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16_b, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16_b, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp8_b, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp8_b, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp8_b, out: Float32, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp8_b, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Bfp8_b, approx: "No", dest: "No", metric: tolerance}  # max 0 ULP, wormhole, 2026-09-21, but on uniform(-5, 5) against THRESHOLD_T=5.0 the pass-through branch never fires, so every block holds only the constant 10.0; the exhaustive sweep reads 16545 here for every swept input
+  - {in: Float32, out: Bfp8_b, approx: "No", dest: "Yes", metric: tolerance}  # max 0 ULP, wormhole, 2026-09-21, but on uniform(-5, 5) against THRESHOLD_T=5.0 the pass-through branch never fires, so every block holds only the constant 10.0; the exhaustive sweep reads 16545 here for every swept input
+  - {in: Float32, out: Bfp8_b, approx: "Yes", dest: "No", metric: tolerance}  # max 0 ULP, wormhole, 2026-09-21, but on uniform(-5, 5) against THRESHOLD_T=5.0 the pass-through branch never fires, so every block holds only the constant 10.0; the exhaustive sweep reads 16545 here for every swept input
+  - {in: Float32, out: Bfp8_b, approx: "Yes", dest: "Yes", metric: tolerance}  # max 0 ULP, wormhole, 2026-09-21, but on uniform(-5, 5) against THRESHOLD_T=5.0 the pass-through branch never fires, so every block holds only the constant 10.0; the exhaustive sweep reads 16545 here for every swept input
+  - {in: Float32, out: Float16, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+# The five is_* predicates write 1.0/0.0, so an exact result is the only correct one.
+# Measured on Float32 and Float16_b only, which is all the isinf_isnan sweep drives:
+# the bf16-input dest_acc=Yes path cannot answer is_nan/is_neg_inf/is_inf at all, since
+# it delivers both NaN and -inf to the LREG as +inf.
+Isfinite:  # 0 ULP, 8 variants / 32768 lanes, 2026-09-18
+  - {out: Float32, max_ulp: 0}
+  - {out: Float16_b, max_ulp: 0}
+  - {in: Float16_b, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+Isinf:  # 0 ULP, 6 variants / 24576 lanes, 2026-09-18
+  - {out: Float32, max_ulp: 0}
+  - {out: Float16_b, max_ulp: 0}
+  - {in: Float16_b, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+Isnan:  # 0 ULP, 6 variants / 24576 lanes, 2026-09-18
+  - {out: Float32, max_ulp: 0}
+  - {out: Float16_b, max_ulp: 0}
+  - {in: Float16_b, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+Isneginf:  # 0 ULP, 6 variants / 24576 lanes, 2026-09-18
+  - {out: Float32, max_ulp: 0}
+  - {out: Float16_b, max_ulp: 0}
+  - {in: Float16_b, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+Isposinf:  # 0 ULP, 8 variants / 32768 lanes, 2026-09-18
+  - {out: Float32, max_ulp: 0}
+  - {out: Float16_b, max_ulp: 0}
+  - {in: Float16_b, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+
+
+
+
+
+
+
+
+LogicalNot:  # 0 ULP, 8 variants / 32768 lanes, 2026-09-18
+  - {out: Float32, max_ulp: 0}
+  - {out: Float16_b, max_ulp: 0}
+  - {in: Float16_b, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+Signbit:  # 0 ULP, 16 variants / 65536 lanes, 2026-09-18
+  - {in: Bfp8_b, out: Bfp8_b, metric: tolerance}  # max 16129 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16, metric: tolerance}  # max 15360 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16_b, metric: tolerance}  # max 16129 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Bfp8_b, metric: tolerance}  # max 16129 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16, metric: tolerance}  # max 15360 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16_b, metric: tolerance}  # max 16129 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Bfp8_b, metric: tolerance}  # max 16129 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16, metric: tolerance}  # max 15360 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16_b, metric: tolerance}  # max 16129 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {out: Float32, max_ulp: 0}
+  - {out: Float16_b, max_ulp: 0}
+  - {in: Float16_b, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+UnaryEq:  # 0 ULP, 8 variants / 32768 lanes, 2026-09-18
+  - {out: Float32, max_ulp: 0}
+  - {out: Float16_b, max_ulp: 0}
+  - {in: Float16_b, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+UnaryNe:  # 0 ULP, 8 variants / 32768 lanes, 2026-09-18
+  - {out: Float32, max_ulp: 0}
+  - {out: Float16_b, max_ulp: 0}
+  - {in: Float16_b, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+ReluMax:
+  - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 393 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 393 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16, dest: "No", metric: tolerance}  # max 992 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16, dest: "Yes", metric: tolerance}  # max 512 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Bfp8_b, dest: "No", metric: tolerance}  # max 2 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 2 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16, dest: "No", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16_b, dest: "No", max_ulp: 2}  # max 1 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16_b, dest: "Yes", max_ulp: 2}  # max 1 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 393 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 393 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16, dest: "No", metric: tolerance}  # max 1016 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16, dest: "Yes", metric: tolerance}  # max 512 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {out: Float32, max_ulp: 0}    # 0 ULP, 40 variants / 623k lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 1}  # 1 ULP, 48 variants / 770k lanes, 2026-09-18
+  - {out: Float16, max_ulp: 1}    # 1 ULP, 40 variants / 737k lanes, 2026-09-18
+ReluMin:
+  - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 0 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 0 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16, dest: "No", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Bfp8_b, dest: "No", metric: tolerance}  # max 2 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 2 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16, dest: "No", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16_b, dest: "No", max_ulp: 2}  # max 1 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16_b, dest: "Yes", max_ulp: 2}  # max 1 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 2 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 3 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16, dest: "No", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {out: Float32, max_ulp: 0}    # 0 ULP, 40 variants / 623k lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 1}  # 1 ULP, 48 variants / 770k lanes, 2026-09-18
+  - {out: Float16, max_ulp: 1}    # 1 ULP, 40 variants / 737k lanes, 2026-09-18
+
+
+# frac(x) = x - floor(x) cancels near an integer, and the smaller the result the more of
+# the output mantissa the remaining error occupies. Float16 keeps 10 of those bits where
+# Float16_b keeps 7, and at 384 measured steps a budget would be looser than the
+# tolerance it replaces (the usable ceiling there is 51), so fp16 stays on tolerance.
+Frac:
+  - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 393 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 393 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16, dest: "No", metric: tolerance}  # max 1008 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16, dest: "Yes", metric: tolerance}  # max 512 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Bfp8_b, dest: "No", metric: tolerance}  # max 3 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 3 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16, dest: "No", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16_b, dest: "No", max_ulp: 2}  # max 1 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16_b, dest: "Yes", max_ulp: 2}  # max 1 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 393 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 393 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16, dest: "No", metric: tolerance}  # max 1016 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16, dest: "Yes", metric: tolerance}  # max 512 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {out: Float32, max_ulp: 0}    # 0 ULP, 36 variants / 606k lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 1}  # 1 ULP, 44 variants / 754k lanes, 2026-09-18
+  - {out: Float16, metric: tolerance}  # max 384 ULP, 40 variants / 737k lanes, past the 51-step ceiling
+
+
+# Sign and Heaviside are exact on every lane except -0.0, and there they diverge by
+# hardware design, not drift: WH SFPSETCC compares bit patterns, so -0.0 reads as
+# negative. sign(-0.0) returns -1 where IEEE gives 0, and heaviside(-0.0) returns 0
+# where -0.0 == 0 makes it 0.5. One such lane costs ~1.05e9 steps on Float32, so a
+# 0-ULP budget would fail a test that is behaving as specified. Recorded here as
+# tolerance on purpose -- do not "close the gap" by enrolling them.
+Sign:
+  - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 16129 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 16129 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16, dest: "No", metric: tolerance}  # max 15360 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16, dest: "Yes", metric: tolerance}  # max 15360 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16_b, dest: "No", metric: tolerance}  # max 16129 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16_b, dest: "Yes", metric: tolerance}  # max 16129 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Bfp8_b, dest: "No", metric: tolerance}  # max 0 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 0 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16, dest: "No", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 0 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 0 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16, dest: "No", metric: tolerance}  # max 15360 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {metric: tolerance}       # exact except -0.0; max 1056964609 ULP Float32, 16129 Float16_b, 2026-09-18
+Heaviside:
+  - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 16001 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 16001 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16, dest: "No", metric: tolerance}  # max 14336 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16, dest: "Yes", metric: tolerance}  # max 14336 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16_b, dest: "No", metric: tolerance}  # max 16001 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16_b, dest: "Yes", metric: tolerance}  # max 16001 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Bfp8_b, dest: "No", metric: tolerance}  # max 0 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 0 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16, dest: "No", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 0 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 0 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16, dest: "No", metric: tolerance}  # max 14336 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {metric: tolerance}       # exact except -0.0; max 1048576001 ULP Float32, 16001 Float16_b, 2026-09-18
+
+
+# ── Binary and ternary SFPU, and the remaining unary approximations ─────────
+#
+# Measured on Wormhole 2026-09-18 with --ulp-report over each driver's own sweep.
+# Budget = 1.25x the sweep's p99.9, rounded up and floored at 1, as everywhere else in
+# this file -- not 1.25x the worst lane, which would widen every row by the one unluckiest
+# sample. The `max` each row records is the worst lane, so a budget sitting at or a little
+# under 1.25x that number is the rule working, not a row that lost its margin. A budget is
+# only written where it is *tighter* than the tolerance it replaces: the usable ceiling
+# is 419430 steps on Float32, 51 on Float16 and 6 on Float16_b, and an op past it is
+# recorded as tolerance with its measurement so nobody re-derives it.
+#
+# Bfp8_b is never enrolled here. Its shared block exponent quantises a small element in
+# a wide block to zero, which costs ~15k steps on ops that cannot be wrong; that is the
+# block, not the kernel. Unlisted formats fall through to the tolerance metric.
+
+# -- Unary approximations that stay on tolerance -----------------------------
+# Both are past the ceiling on every float column, by three orders of magnitude on
+# Float32. They are approximations, and the tolerance is the tighter bound.
+GeluTanh:
+  - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 13219 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 13219 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16, dest: "No", metric: tolerance}  # max 1007 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16, dest: "Yes", metric: tolerance}  # max 512 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16_b, dest: "No", metric: tolerance}  # max 13219 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16_b, dest: "Yes", metric: tolerance}  # max 13219 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Bfp8_b, dest: "No", metric: tolerance}  # max 14337 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 13249 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16, dest: "No", metric: tolerance}  # max 1024 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16, dest: "Yes", metric: tolerance}  # max 512 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16_b, dest: "No", metric: tolerance}  # max 14337 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16_b, dest: "Yes", metric: tolerance}  # max 13249 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 13222 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 13222 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16, dest: "No", metric: tolerance}  # max 1016 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16, dest: "Yes", metric: tolerance}  # max 512 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16_b, dest: "No", metric: tolerance}  # max 13222 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16_b, dest: "Yes", metric: tolerance}  # max 13222 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {metric: tolerance}  # max 868220929 ULP Float32 / 13249 Float16_b / 1003 Float16 / 15616 Bfp8_b, 2026-09-18
+Tanhshrink:
+  - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 6083 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 6081 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16, dest: "No", metric: tolerance}  # max 1005 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16, dest: "Yes", metric: tolerance}  # max 506 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16_b, dest: "No", metric: tolerance}  # max 6083 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16_b, dest: "Yes", metric: tolerance}  # max 6082 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Bfp8_b, dest: "No", metric: tolerance}  # max 14337 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 12929 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16, dest: "No", metric: tolerance}  # max 1024 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16, dest: "Yes", metric: tolerance}  # max 512 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16_b, dest: "No", metric: tolerance}  # max 14337 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16_b, dest: "Yes", metric: tolerance}  # max 12929 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 6085 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 6085 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16, dest: "No", metric: tolerance}  # max 1005 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16, dest: "Yes", metric: tolerance}  # max 511 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16_b, dest: "No", metric: tolerance}  # max 6085 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16_b, dest: "Yes", metric: tolerance}  # max 6085 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {metric: tolerance}  # max 841656935 ULP Float32 / 12844 Float16_b / 1024 Float16 / 15486 Bfp8_b, 2026-09-18
+
+
+SqrtCustom:
+  - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 163 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 163 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16, dest: "No", metric: tolerance}  # max 2472 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16, dest: "Yes", metric: tolerance}  # max 512 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16_b, dest: "No", metric: tolerance}  # max 163 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Bfp8_b, out: Float16_b, dest: "Yes", metric: tolerance}  # max 162 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Bfp8_b, dest: "No", metric: tolerance}  # max 18303 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 1 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16, dest: "No", max_ulp: 2}  # max 1 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16, dest: "Yes", max_ulp: 2}  # max 1 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16_b, dest: "No", metric: tolerance}  # max 18304 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16, out: Float16_b, dest: "Yes", max_ulp: 2}  # max 1 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 163 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 163 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16, dest: "No", metric: tolerance}  # max 2472 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16, dest: "Yes", metric: tolerance}  # max 512 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16_b, dest: "No", metric: tolerance}  # max 162 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {in: Float16_b, out: Float16_b, dest: "Yes", metric: tolerance}  # max 162 ULP, past this output's usable ceiling, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
+  - {out: Float32, max_ulp: 81920}   # max 65536 ULP, 5 variants / 20480 lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 1}     # max 1 ULP, 5 variants / 20480 lanes, 2026-09-18
+
+
+
+
+# -- Binary comparison predicates: exact by construction ---------------------
+# Each writes 1.0/0.0, so 0 is the only correct answer. The measurement sits on each op
+# rather than here, so every budget names the sweep that backs it.
+SfpuElwEq:  # 0 ULP, 147k-246k lanes across the six, 2026-09-18
+  - {out: Float32, max_ulp: 0}
+  - {out: Float16_b, max_ulp: 0}
+  - {out: Float16, max_ulp: 0}
+  - {in: Float16, out: Float16, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float16, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+SfpuElwNe:  # 0 ULP, 147k-246k lanes across the six, 2026-09-18
+  - {out: Float32, max_ulp: 0}
+  - {out: Float16_b, max_ulp: 0}
+  - {out: Float16, max_ulp: 0}
+  - {in: Float16, out: Float16, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float16, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+# add/sub/rsub are single IEEE operations: one step on bf16, and the Float32 65536 is the
+# usual output-rounding figure. fp16 needs 140 steps on sub/rsub, past its 51 ceiling.
+SfpuElwGt:  # 0 ULP, 147k-246k lanes across the six, 2026-09-18
+  - {out: Float32, max_ulp: 0}
+  - {out: Float16_b, max_ulp: 0}
+  - {out: Float16, max_ulp: 0}
+  - {in: Float16, out: Float16, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float16, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+SfpuElwGe:  # 0 ULP, 147k-246k lanes across the six, 2026-09-18
+  - {out: Float32, max_ulp: 0}
+  - {out: Float16_b, max_ulp: 0}
+  - {out: Float16, max_ulp: 0}
+  - {in: Float16, out: Float16, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float16, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+SfpuElwLt:  # 0 ULP, 147k-246k lanes across the six, 2026-09-18
+  - {out: Float32, max_ulp: 0}
+  - {out: Float16_b, max_ulp: 0}
+  - {out: Float16, max_ulp: 0}
+  - {in: Float16, out: Float16, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float16, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+SfpuElwLe:  # 0 ULP, 147k-246k lanes across the six, 2026-09-18
+  - {out: Float32, max_ulp: 0}
+  - {out: Float16_b, max_ulp: 0}
+  - {out: Float16, max_ulp: 0}
+  - {in: Float16, out: Float16, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float16, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+SfpuIsclose:
+  - {out: Float32, max_ulp: 0}       # 0 ULP, 3 variants / 81920 lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 0}     # 0 ULP, 3 variants / 81920 lanes, 2026-09-18
+  - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+SfpuMask:
+  - {out: Float32, max_ulp: 0}       # 0 ULP, 3 variants / 6144 lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 0}     # 0 ULP, 3 variants / 6144 lanes, 2026-09-18
+  - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+SfpuBinaryMax:
+  - {out: Float32, max_ulp: 0}       # 0 ULP, 11 variants / 306k lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 1}     # 1 ULP, 11 variants / 311k lanes, 2026-09-18
+  - {out: Float16, max_ulp: 1}       # 1 ULP, 7 variants / 213k lanes, 2026-09-18
+SfpuBinaryMin:
+  - {out: Float32, max_ulp: 0}       # 0 ULP, 11 variants / 309k lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 1}     # 1 ULP, 11 variants / 311k lanes, 2026-09-18
+  - {out: Float16, max_ulp: 1}       # 1 ULP, 7 variants / 213k lanes, 2026-09-18
+
+SfpuAddTopRow:
+  - {out: Float32, max_ulp: 0}       # 0 ULP, 1 variant / 2048 lanes -- the whole sweep, 2026-09-18
+  - {in: Float32, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+SfpuElwadd:
+  - {out: Float32, max_ulp: 81920}   # max 65536 ULP, 30 variants / 831k lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 1}     # max 1 ULP, 32 variants / 840k lanes, 2026-09-18
+  - {out: Float16, max_ulp: 1}       # max 1 ULP, 26 variants / 676k lanes, 2026-09-18
+SfpuElwsub:
+  - {out: Float32, max_ulp: 81920}   # max 65536 ULP, 30 variants / 831k lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 1}     # max 1 ULP, 32 variants / 840k lanes, 2026-09-18
+  - {out: Float16, metric: tolerance}  # max 140 ULP, 26 variants, past the 51-step ceiling
+SfpuElwrsub:
+  - {out: Float32, max_ulp: 81920}   # max 65536 ULP, 28 variants / 829k lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 1}     # max 1 ULP, 28 variants / 836k lanes, 2026-09-18
+  - {out: Float16, metric: tolerance}  # max 140 ULP, 22 variants, past the 51-step ceiling
+
+# Division is driven by two sweeps: the shared binary sweep, where it is exact on both
+# float columns, and test_eltwise_binary_sfpu_div, whose own stimuli are what set these
+# numbers. The budget has to cover the harder of the two -- an earlier pass measured only
+# the shared sweep and enrolled 0, which the dedicated sweep then failed on hardware.
+SfpuElwdiv:
+  - {out: Float32, max_ulp: 40960}   # max 32768 ULP on the div sweep (0 on the shared one), 14 variants, 2026-09-18
+  - {out: Float16_b, max_ulp: 1}     # max 1 ULP on the div sweep (0 on the shared one), 14 variants, 2026-09-18
+  - {out: Float16, metric: tolerance}  # max 305 ULP, 5 variants, past the 51-step ceiling
+
+# Multiplication is the one arithmetic op past the ceiling everywhere: its Float32 worst
+# lane is 9.4e8 steps against a p99 of 65536, the near-zero spread a product produces.
+SfpuElwmul:
+  - {metric: tolerance}  # max 936116225 ULP Float32 / 14285 Float16_b / 816 Float16 / 15553 Bfp8_b, 2026-09-18
+
+SfpuAtan2:
+  - {out: Float32, max_ulp: 81920}   # max 65536 ULP, 9 variants / 246k lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 1}     # max 1 ULP, 9 variants / 246k lanes, 2026-09-18
+SfpuLogsigmoid:
+  - {out: Float32, max_ulp: 163840}  # max 131072 ULP, 3 variants / 81920 lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 2}     # max 2 ULP, 3 variants / 81920 lanes, 2026-09-18
+
+# fmod and remainder share an implementation and measure identically.
+SfpuBinaryFmod:
+  - {out: Float32, max_ulp: 40960}   # max 32768 ULP, 19 variants / 491k lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 1}     # max 1 ULP, 19 variants / 541k lanes, 2026-09-18
+  - {out: Float16, metric: tolerance}  # max 442 ULP, 7 variants, past the 51-step ceiling
+SfpuBinaryRemainder:
+  - {out: Float32, max_ulp: 40960}   # max 32768 ULP, 19 variants / 491k lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 1}     # max 1 ULP, 19 variants / 541k lanes, 2026-09-18
+  - {out: Float16, metric: tolerance}  # max 442 ULP, 7 variants, past the 51-step ceiling
+
+# -- Ternary -----------------------------------------------------------------
+# The ternary sweep is small, so each figure below covers every variant that exists for
+# that format rather than a sample of a larger space; the counts say how many that is.
+SfpuAddcmul:
+  - {out: Float32, max_ulp: 120}     # max 96 ULP, 1 variant / 4096 lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 1}     # max 1 ULP, 2 variants / 8192 lanes, 2026-09-18
+SfpuAddcdiv:
+  - {out: Float32, max_ulp: 1600}    # max 1280 ULP, 2 variants / 8192 lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 1}     # max 1 ULP, 4 variants / 16384 lanes, 2026-09-18
+SfpuLerp:
+  - {out: Float32, max_ulp: 3840}    # max 3072 ULP, 2 variants / 8192 lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 1}     # max 1 ULP, 4 variants / 16384 lanes, 2026-09-18
+SfpuSnakeBeta:
+  - {out: Float32, max_ulp: 5}       # max 4 ULP, 2 variants / 8192 lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 1}     # max 1 ULP, 4 variants / 16384 lanes, 2026-09-18
