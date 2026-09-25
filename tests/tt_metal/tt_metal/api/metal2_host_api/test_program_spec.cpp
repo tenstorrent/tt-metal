@@ -2215,9 +2215,9 @@ TEST_F(ProgramSpecTestQuasar, DFBInvalidFaceGeometryFails) {
     spec.dataflow_buffers = {dfb};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    // Checked at spec build: Quasar mock compile() returns before CB descriptor generation.
     EXPECT_THAT(
-        [&] { program.impl().compile(mesh_device_.get()); },
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("face_r_dim must be > 0")));
 }
 
@@ -2241,9 +2241,9 @@ TEST_F(ProgramSpecTestQuasar, DFBFaceGridDoesNotFitTileFails) {
     spec.dataflow_buffers = {dfb};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    // Checked at spec build: Quasar mock compile() returns before CB descriptor generation.
     EXPECT_THAT(
-        [&] { program.impl().compile(mesh_device_.get()); },
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("face grid")));
 }
 

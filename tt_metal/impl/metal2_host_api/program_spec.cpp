@@ -1189,7 +1189,7 @@ void ValidatePrefetcherPipeSpec(const ProgramSpec& spec, const CollectedSpecData
 }
 
 // Scratchpads do not pass through CB descriptor generation, so validate their LLK geometry here.
-// DFB geometry keeps its existing validation semantics in compute_num_faces_rc_dims.
+// Their face_r_dim is capped at FACE_HEIGHT and measured against the requested tile.
 template <typename Id>
 void ValidateLlkTileAndFaceGeometry(
     std::string_view kind,
@@ -1235,6 +1235,53 @@ void ValidateLlkTileAndFaceGeometry(
         face->face_r_dim,
         num_faces_r_dim * face->face_r_dim,
         resolved_tile.get_height());
+}
+
+// DFB unpack geometry is checked again in compute_num_faces_rc_dims when JIT runs. Quasar mock and
+// Emule return from ProgramImpl::compile before that, so reject the same illegal combos here.
+// The tile is the effective LLK tile: a representable face-geometry override replaces the requested tile,
+// matching set_cb_data_fmt_tile_and_face_geometry.
+void ValidateDfbUnpackFaceGeometry(const DataflowBufferSpec& dfb) {
+    const std::optional<FaceGeometry>& face = dfb.unpack_face_geometry_metadata;
+    if (!face.has_value()) {
+        return;
+    }
+    TT_FATAL(
+        face->face_r_dim > 0,
+        "DFB '{}' has unpack_face_geometry_metadata.face_r_dim == 0; face_r_dim must be > 0",
+        dfb.unique_id);
+    TT_FATAL(
+        face->num_faces > 0,
+        "DFB '{}' has unpack_face_geometry_metadata.num_faces == 0; num_faces must be > 0",
+        dfb.unique_id);
+
+    const Tile effective_tile = EffectiveLlkTile(dfb.tile_format_metadata, face);
+    const uint32_t tile_r_dim = effective_tile.get_height();
+    const uint32_t tile_c_dim = effective_tile.get_width();
+    TT_FATAL(
+        tile_c_dim % constants::FACE_WIDTH == 0,
+        "DFB '{}': tile width ({}) must be a multiple of FACE_WIDTH ({})",
+        dfb.unique_id,
+        tile_c_dim,
+        constants::FACE_WIDTH);
+    const uint32_t tile_c_faces = tile_c_dim / constants::FACE_WIDTH;
+    TT_FATAL(tile_c_faces > 0, "DFB '{}': tile width ({}) must include at least one face", dfb.unique_id, tile_c_dim);
+    const uint32_t num_faces_c_dim = std::min(tile_c_faces, face->num_faces);
+    TT_FATAL(
+        face->num_faces % num_faces_c_dim == 0,
+        "DFB '{}': num_faces ({}) must be divisible by num_faces_c_dim ({})",
+        dfb.unique_id,
+        face->num_faces,
+        num_faces_c_dim);
+    const uint32_t num_faces_r_dim = face->num_faces / num_faces_c_dim;
+    TT_FATAL(
+        num_faces_r_dim * face->face_r_dim <= tile_r_dim,
+        "DFB '{}': face grid (num_faces_r_dim={} * face_r_dim={} = {} rows) exceeds tile height ({})",
+        dfb.unique_id,
+        num_faces_r_dim,
+        face->face_r_dim,
+        num_faces_r_dim * face->face_r_dim,
+        tile_r_dim);
 }
 
 std::optional<LLKMetadata> LLKMetadataFromDfb(const DataflowBufferSpec& spec) {
@@ -2333,6 +2380,7 @@ void ValidateProgramSpec(
                 dfb.data_format_metadata.value(),
                 arch);
         }
+        ValidateDfbUnpackFaceGeometry(dfb);
     }
 
     for (const auto& scratchpad : spec.scratchpads) {
