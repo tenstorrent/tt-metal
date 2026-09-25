@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import socket
+import zlib
 from pathlib import Path
 
 import pytest
@@ -169,7 +171,10 @@ def _write_synthetic_cache(mesh_device, cache):
 
 def _assert_table_geometry(table):
     assert table.num_configs() == len(CONFIG_NAMES)
-    assert tuple(table.config_name(config_id) for config_id in range(table.num_configs())) == CONFIG_NAMES
+    # Native KVM matches the names and IDs against Blaze's zero-padded wire names.
+    assert tuple(table.config_name(config_id) for config_id in range(table.num_configs())) == tuple(
+        f"{config_id:02d}" for config_id in range(len(CONFIG_NAMES))
+    )
     assert table.total_entries() == EXPECTED_PAGES
     for config_id in range(table.num_configs()):
         config = table.config(config_id)
@@ -193,7 +198,8 @@ def _assert_tables_equivalent(expected, actual):
         for node in expected_group.fabric_node_ids:
             assert expected.has_host(node)
             assert actual.has_host(node)
-            assert actual.get_host(node) == expected.get_host(node)
+            expected_host = f"host-{zlib.crc32(socket.gethostname().encode()) & 0x7FFFFFFF:08x}"
+            assert actual.get_host(node) == expected.get_host(node) == expected_host
 
     for config_id in range(len(CONFIG_NAMES)):
         for slot in range(NUM_SLOTS):
@@ -262,9 +268,9 @@ def test_llama_kv_table_reads_all_synthetic_cache_pages(mesh_device, device_para
         cache_dtype=ttnn.bfloat8_b,
     )
     try:
-        _write_synthetic_cache(mesh_device, cache)
         table = build_kv_chunk_address_table(mesh_device=mesh_device, kv_cache=cache, chunk_size=GLOBAL_CHUNK)
         _assert_table_geometry(table)
+        _write_synthetic_cache(mesh_device, cache)
         snapshots = {"k": _snapshot_shards(cache.k), "v": _snapshot_shards(cache.v)}
         comparisons = 0
         for config_id, config_name in enumerate(CONFIG_NAMES):

@@ -3,6 +3,7 @@
 """Build the native/legacy shared KvChunkAddressTable for Llama prefill."""
 
 import socket
+import zlib
 
 from .kv_layout import PrefillKVLayout
 
@@ -47,9 +48,12 @@ def build_kv_chunk_address_table(*, mesh_device, kv_cache, chunk_size):
     }
     api = ttnn.experimental.disaggregation
     base_addresses = tuple(int(t.buffer_address()) for t in (kv_cache.k, kv_cache.v))
-    host_name = socket.gethostname()
+    # Match the shared Blaze exporter and native KVM host identity.
+    host_name = f"host-{zlib.crc32(socket.gethostname().encode()) & 0x7FFFFFFF:08x}"
+    # K heads precede V heads; zero-padded names preserve that order on the wire.
+    config_names = tuple(f"{config:02d}" for config in range(len(layout.config_names)))
     configs = {}
-    for name in layout.config_names:
+    for name in config_names:
         cfg = api.KvChunkAddressTableConfig()
         cfg.num_layers = layout.num_layers
         cfg.max_sequence_length = layout.max_seq_len
@@ -58,7 +62,7 @@ def build_kv_chunk_address_table(*, mesh_device, kv_cache, chunk_size):
         cfg.chunk_size_bytes = layout.chunk_size_bytes
         configs[name] = cfg
     table = api.KvChunkAddressTable(configs)
-    if tuple(table.config_name(i) for i in range(table.num_configs())) != layout.config_names:
+    if tuple(table.config_name(i) for i in range(table.num_configs())) != config_names:
         raise RuntimeError("shared table changed the K/V config order")
     groups = {}
     for coord, node in nodes.items():

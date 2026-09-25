@@ -683,7 +683,7 @@ def _read_slot_kv_and_check_pcc_llama(table, device_map: dict, slot_id: int, rea
             "Llama GQA verification requires a nonempty prefix, 32 layers, 8 KV heads and head dimension 128"
         )
 
-    expected_names = [f"{kind}_h{head}" for kind in ("k", "v") for head in range(n_kv)]
+    expected_names = [f"{config_id:02d}" for config_id in range(2 * n_kv)]
     if _config_names(table) != expected_names:
         raise ValueError(f"Llama GQA table requires config order {expected_names}")
     expected_bytes = (head_dim // 32) * _BFP8_TILE_BYTES
