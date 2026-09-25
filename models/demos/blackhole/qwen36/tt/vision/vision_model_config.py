@@ -10,6 +10,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_wormhole_b0
+from models.demos.blackhole.qwen36.tt.model_config import VISION_MM_TUNING, VISION_MM_TUNING_BY_DEVICE
 from models.demos.qwen3_vl.tt.common import nearest_multiple
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.model_config import ModelArgs, OpGroup
@@ -51,29 +52,8 @@ _L1_PER_CORE = 1499136  # MEM_L1_SIZE, wormhole/dev_mem_map.h
 # Per-core L1 a matmul's CBs and buffers must not use.
 _L1_RESERVE = 32 * 1024
 
-# Per-device override, keyed like `_VISION_MM_TUNING_BY_DEVICE`.
+# Per-device override, keyed like VISION_MM_TUNING_BY_DEVICE in model_config.py.
 _L1_RESERVE_BY_DEVICE = {"N300": 128 * 1024}
-
-# Wormhole only; gated by vision_mm_tuned.
-_VISION_MM_TUNING = {
-    "patch_embed": dict(in0_l1=False, chunk=5504, in0_block_w=6, fidelity="hifi2", out_l1=False),
-    "qkv": dict(in0_l1=False, chunk=1536, in0_block_w=18, fidelity="hifi2", out_l1=False),
-    "wo": dict(in0_l1=False, chunk=4096, in0_block_w=24, fidelity="lofi", out_l1=False),
-    "mlp_fc1": dict(in0_l1=False, chunk=3072, in0_block_w=6, fidelity="hifi2_fp16", out_l1=False),
-    "mlp_fc2": dict(in0_l1=False, chunk=1536, in0_block_w=4, fidelity="hifi2_fp16", out_l1=True),
-    "merger_fc1": dict(in0_l1=False, chunk=None, in0_block_w=None, fidelity="hifi2_fp16", out_l1=False),
-    "merger_fc2": dict(in0_l1=False, chunk=None, in0_block_w=None, fidelity="hifi2_fp16", out_l1=False),
-}
-
-_VISION_MM_TUNING_BY_DEVICE = {
-    "T3K": {
-        "patch_embed": dict(grid_x=8, in0_block_w=6),
-        "qkv": dict(chunk=768, grid_x=8, in0_l1=True, out_l1=True),
-        "wo": dict(chunk=3072, fidelity="hifi2", out_l1=True),
-        "mlp_fc1": dict(chunk=1536, in0_block_w=18, in0_l1=True, out_l1=True),
-        "merger_fc2": dict(chunk=1376, in0_block_w=9, out_l1=True),
-    },
-}
 
 _UNTUNED_FIDELITY_OP = {"qkv": OpGroup.LI_QKV_PREFILL, "wo": OpGroup.LI_O_PREFILL}
 _FIDELITY_NAMES = ("lofi", "hifi2", "hifi2_na", "hifi2_fp16", "hifi2_nol1acc", "hifi4", "hifi4_fp16", "hifi4_fp32")
@@ -191,9 +171,9 @@ class VisionModelArgs(ModelArgs):
         if cached is not None:
             return cached
 
-        tune = dict(_VISION_MM_TUNING[family])
+        tune = dict(VISION_MM_TUNING[family])
         if self.vision_mm_tuned:
-            tune.update(_VISION_MM_TUNING_BY_DEVICE.get(self.device_name, {}).get(family, {}))
+            tune.update(VISION_MM_TUNING_BY_DEVICE.get(self.device_name, {}).get(family, {}))
             untuned_op = None
         else:
             untuned_op = _UNTUNED_FIDELITY_OP.get(family)
@@ -305,7 +285,7 @@ class VisionModelArgs(ModelArgs):
             f"in0_block_w {in0_block_w}, subblock {sbh}x{sbw}, per_core {per_core_m}x{per_core_n}, "
             f"{tune['fidelity']}, in0 {'L1' if in0_cfg is ttnn.L1_MEMORY_CONFIG else 'DRAM'}, "
             f"out {'L1' if mem_cfg is ttnn.L1_MEMORY_CONFIG else 'DRAM'}"
-            f"{f' [{self.device_name} override]' if family in _VISION_MM_TUNING_BY_DEVICE.get(self.device_name, {}) else ''}"
+            f"{f' [{self.device_name} override]' if family in VISION_MM_TUNING_BY_DEVICE.get(self.device_name, {}) else ''}"
         )
         self._vision_mm_plans[cache_key] = plan
         return plan

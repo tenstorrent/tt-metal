@@ -9,14 +9,14 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.blackhole.qwen36.tests.mtp_torch_ref import load_head_sd, mtp_reference
+from models.demos.blackhole.qwen36.tests.mtp_torch_ref import MTPTorchHead, load_head_sd, mtp_reference
 from models.demos.blackhole.qwen36.tests.test_factory import (
     assert_argmaxes_match_except_near_ties,
     get_pcc_threshold,
     model_path,
     shard_to_device,
 )
-from models.demos.blackhole.qwen36.tt.attention.rope_tp import rot_mats_prefill
+from models.demos.blackhole.qwen36.tt.attention.rope_tp import rot_mats_decode, rot_mats_prefill
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.tt_transformers.tt.common import Mode
 
@@ -83,6 +83,50 @@ def test_mtp_head_tp_pcc(mesh_device, reset_seeds, request):
         near_tie_gap=1.0,
     )
     assert passing, f"MTP head TP PCC too low: {pcc}"
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+def test_mtp_head_decode_pcc(mesh_device, reset_seeds, request):
+    """One MTP decode step (empty KV cache, position 0) vs the torch step reference."""
+    os.environ.setdefault("HF_MODEL", model_path())
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
+    sd = load_head_sd(args.CKPT_DIR)
+    assert "mtp.fc.weight" in sd, "mtp.* missing (weight_mapping regression)"
+    args.n_layers = 0
+    from models.demos.blackhole.qwen36.tt.model import Qwen36Model
+
+    model = Qwen36Model(mesh_device, args, sd, tensor_cache_path=args.weight_cache_path())
+    assert model.mtp is not None, "MTP head was not constructed"
+
+    block_size, num_blocks = 32, 2
+    cache_shape = [num_blocks, args.n_local_kv_heads, block_size, args.head_dim]
+    model.allocate_kv_caches(cache_shape, ttnn.bfloat16, batch_size=1)
+    page_table = ttnn.Tensor(list(range(num_blocks)), [1, num_blocks], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, mesh_device)
+
+    hidden = torch.randn(1, 1, 1, args.dim, dtype=torch.bfloat16)
+    token = int(torch.randint(0, args.vocab_size, (1,)).item())
+    head = MTPTorchHead(sd, rope_dim=args.rope_head_dim, rope_theta=args.rope_theta)
+    ref_logit, _, _, _ = head.forward_step(hidden[0, 0, 0], token, 0)
+
+    cos, sin = rot_mats_decode(mesh_device, args.rope_head_dim, args.max_seq_len, args.rope_theta, [0])
+    hidden_tt = shard_to_device(mesh_device, hidden, dim=-1)
+    tok_tt = ttnn.Tensor([token], [1, 1], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh_device)
+    pos_tt = ttnn.Tensor([0], [1], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, mesh_device)
+    logits_tt, next_hidden = model.mtp.forward_decode(hidden_tt, tok_tt, pos_tt, cos, sin, page_table)
+    ttnn.deallocate(next_hidden)
+
+    if int(logits_tt.shape[-1]) == args.vocab_size:
+        got = ttnn.to_torch(logits_tt, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+    else:
+        got = ttnn.to_torch(logits_tt, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
+    got = got.reshape(-1, got.shape[-1])[0, : args.vocab_size].float()
+
+    assert not torch.isnan(got).any(), "MTP decode logits contain NaN"
+    passing, pcc = comp_pcc(ref_logit, got, get_pcc_threshold(request, default=0.98))
+    logger.info(f"MTP HEAD DECODE PCC = {pcc}")
+    assert_argmaxes_match_except_near_ties([ref_logit], [got], "MTP decode vs torch reference", near_tie_gap=1.0)
+    assert passing, f"MTP decode PCC too low: {pcc}"
 
 
 @torch.no_grad()
