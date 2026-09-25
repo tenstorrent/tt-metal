@@ -51,18 +51,6 @@
   budget_type: e2e
 
 # --- unit ---
-- id: bh-streaming-sdpa-recipes-ring
-  name: streaming SDPA recipes on two-device ring
-  cmd: >-
-    pytest tests/ttnn/unit_tests/operations/sdpa/test_sdpa_recipe_mesh.py
-    tests/ttnn/unit_tests/operations/sdpa/test_sdpa_recipe_ring.py
-  skus:
-    bh_p300:
-      timeout: 10
-  owner_id: U085GDCAZTN # Pavle Josipovic
-  team: ttnn
-  budget_type: e2e
-
 - id: bh-fabric-ttnn-udm-unit
   name: fabric and ttnn UDM unit tests
   cmd: |

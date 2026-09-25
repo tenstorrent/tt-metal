@@ -16,10 +16,6 @@
 #include "ttnn/operations/transformer/sdpa_config.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_fusion.hpp"
 
-namespace ttnn::transformer {
-enum class SDPAPrecision : uint8_t;
-}
-
 namespace ttnn::prim {
 
 struct RingJointSDPAParams {
@@ -49,7 +45,6 @@ struct RingJointSDPAParams {
     // callers only opt in. false = unbounded cache (byte-identical to the pre-existing behavior).
     // Requires chunked sliding + kv_actual_isl.
     bool circular_kv_cache = false;
-    std::optional<ttnn::transformer::SDPAPrecision> precision = std::nullopt;
 
     // We need a constructor, because all_gather_struct is not default initializable.
     RingJointSDPAParams(
@@ -130,7 +125,6 @@ struct RingJointSDPAParams {
         "latent_v_head_dim",
         "sliding_window_size",
         "circular_kv_cache",
-        "precision",
         "all_gather_operation_attributes",
         "all_gather_tensor_args");
     auto attribute_values() const {
@@ -152,7 +146,6 @@ struct RingJointSDPAParams {
             std::cref(latent_v_head_dim),
             std::cref(sliding_window_size),
             std::cref(circular_kv_cache),
-            std::cref(precision),
             std::cref(all_gather_operation_attributes),
             std::cref(all_gather_tensor_args));
     }

@@ -63,9 +63,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& slot_id,
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     std::optional<uint32_t> kv_cache_num_layers,
-    std::optional<uint32_t> kv_cache_layer_idx,
-    std::optional<ttnn::transformer::SDPAPrecision> precision,
-    bool inputs_prepared) {
+    std::optional<uint32_t> kv_cache_layer_idx) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
 
@@ -106,9 +104,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         slot_id,
         kv_actual_isl_tensor,
         kv_cache_num_layers,
-        kv_cache_layer_idx,
-        precision,
-        inputs_prepared);
+        kv_cache_layer_idx);
     return outputs;
 }
 
@@ -188,9 +184,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> exp_ring_joint_scaled_dot_p
     ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     uint32_t num_workers_per_link,
-    uint32_t num_buffers_per_channel,
-    std::optional<ttnn::transformer::SDPAPrecision> precision,
-    bool inputs_prepared) {
+    uint32_t num_buffers_per_channel) {
     return ttnn::transformer::ExecuteExpRingJointAttention::invoke(
         input_tensor_q,
         input_tensor_k,
@@ -213,9 +207,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> exp_ring_joint_scaled_dot_p
         scale,
         compute_kernel_config,
         num_workers_per_link,
-        num_buffers_per_channel,
-        precision,
-        inputs_prepared);
+        num_buffers_per_channel);
 }
 
 }  // namespace
@@ -747,13 +739,6 @@ void bind_sdpa(nb::module_& mod) {
                 slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx.
             kv_cache_layer_idx (int, optional): Layer within the cache-user slot. None uses 0 and the
                 value must be less than kv_cache_num_layers.
-            precision (ttnn.SDPAPrecision, optional): Explicit Blackhole noncausal recipe at any tile-aligned
-                Q chunk (32-1024 rows), K chunk and head dim that fits L1; logical_n/logical_l may be scalars or
-                device tensors. Preserves recurrent state across ring steps; rejects unsupported
-                causal/cache/window/sink features.
-                Omit to retain legacy behavior. Cannot be combined with compute_kernel_config or exp_approx_mode=False.
-            inputs_prepared (bool): LOW_PRECISION caller acknowledgment; prepare Q and both primary/joint KV
-                before communication. Required only for LOW_PRECISION.
 
         Chunked-prefill mode is entered implicitly when input_tensor_q's per-device seq
         length is less than input_tensor_k's (Q is the latest slab; K is the populated
@@ -777,7 +762,7 @@ void bind_sdpa(nb::module_& mod) {
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
               - The attention output for the original Q/K/V shape [b x nh x N/num_devices x dv].
               - The attention output for the joint Q/K/V shape [b x nh x L/num_devices x dv] (or [b x nh x L x dv] on the replicated path).
-              - Internal scratch statistics, not a supported log-sum-exp result. Do not consume this tensor.
+              - The final log-sum-exp of the operation.           [b x nh x (N/num_devices + L/num_devices) x 1]
         )doc";
 
     ttnn::bind_function<"ring_joint_scaled_dot_product_attention", "ttnn.transformer.">(
@@ -821,9 +806,7 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("slot_id").noconvert() = nb::none(),
         nb::arg("kv_actual_isl_tensor").noconvert() = nb::none(),
         nb::arg("kv_cache_num_layers").noconvert() = nb::none(),
-        nb::arg("kv_cache_layer_idx").noconvert() = nb::none(),
-        nb::arg("precision") = nb::none(),
-        nb::arg("inputs_prepared") = false);
+        nb::arg("kv_cache_layer_idx").noconvert() = nb::none());
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.
@@ -947,18 +930,6 @@ void bind_sdpa(nb::module_& mod) {
             mesh_device (ttnn.MeshDevice): Multi-device mesh for distributed computation.
             topology (ttnn.ccl.Topology): Communication topology (Ring or Linear).
             subdevice_id (Optional[tt.tt_metal.SubDeviceId]): Sub-device identifier. Defaults to None.
-            num_workers_per_link (int): Must equal half the SDPA grid rows. Defaults to 1.
-            num_buffers_per_channel (int): Fabric MUX buffers per channel. Defaults to 8.
-            precision (ttnn.SDPAPrecision, optional): Explicit Blackhole noncausal numerical recipe (see
-                docs/sdpa_precision.md) at any tile-aligned Q chunk (32-1024 rows), K chunk and head dim that
-                fits L1. One recurrent state per Q chunk is kept in L1 across all active ring steps and
-                normalized once on the last one. logical_n may be a scalar or a device tensor; requires the
-                default scale; up to three head-segments per core row run pass-outer.
-                Omit to retain the legacy behavior. Cannot be combined with compute_kernel_config or
-                exp_approx_mode=False.
-            inputs_prepared (bool): LOW_PRECISION caller acknowledgment; prepare Q and both primary/joint
-                KV with ttnn.transformer.prepare_sdpa_input before communication. Required only for
-                LOW_PRECISION. Defaults to False.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
@@ -993,9 +964,7 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("topology"),
         nb::arg("subdevice_id") = nb::none(),
         nb::arg("num_workers_per_link") = 1,
-        nb::arg("num_buffers_per_channel") = 8,
-        nb::arg("precision") = nb::none(),
-        nb::arg("inputs_prepared") = false);
+        nb::arg("num_buffers_per_channel") = 8);
 
     const auto* const mla_doc =
         R"doc(

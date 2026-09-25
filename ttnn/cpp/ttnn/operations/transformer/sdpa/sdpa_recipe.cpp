@@ -11,7 +11,6 @@
 #include <set>
 
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/generic/generic_op.hpp"
@@ -173,33 +172,8 @@ ProgramDescriptor recipe_compute_program(
         // kernel config buffer at the default optimization; only the pack thread is size-optimized.
         compute.defines.emplace_back("SDPA_RECIPE_SIZE_OPTIMIZED", "1");
     }
-    if (policy.selection.recipe != Recipe::A && !recipe_legacy_geometry(q_tiles, k_tiles, d_tiles)) {
-        // The ring / exp ring recipe kernels (ring transport, checkpoints, runtime tail masks) also exceed the
-        // kernel config buffer outside the qualified geometries with pack alone at -Os; they size-optimize
-        // unpack too. The dense kernel ignores this define.
-        compute.defines.emplace_back("SDPA_RECIPE_GENERIC_GEOMETRY", "1");
-    }
     program.kernels.push_back(std::move(compute));
     return program;
-}
-
-uint64_t recipe_kernel_config_bytes(const tt::tt_metal::distributed::MeshDevice& device) {
-    // The kernel config buffer starts at KERNEL_CONFIG, which is where the maximum unreserved region would start
-    // (L1 base 0), and ends at the allocator's unreserved base (program.cpp get_ringbuffer_size).
-    const uint64_t kernel_config_base =
-        uint64_t{tt::tt_metal::hal::get_l1_size()} - tt::tt_metal::hal::get_max_worker_l1_unreserved_size();
-    const uint64_t unreserved_base = device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    return unreserved_base > kernel_config_base ? unreserved_base - kernel_config_base : 0;
-}
-
-bool exp_ring_recipe_size_optimized_for_config_buffer(
-    const PrecisionPolicy& policy, uint32_t q_tiles, uint32_t k_tiles, uint32_t d_tiles, uint64_t kernel_config_bytes) {
-    if (policy.selection.recipe == Recipe::A || policy.fp32_destination || kernel_config_bytes == 0 ||
-        kernel_config_bytes >= kExpRingRecipeQualifiedKernelConfigBytes) {
-        return false;
-    }
-    // recipe_compute_program already adds the generic-geometry flags outside the qualified geometries.
-    return recipe_legacy_geometry(q_tiles, k_tiles, d_tiles);
 }
 
 PrecisionPolicy resolve_recipe_policy(
@@ -273,7 +247,7 @@ void validate_recipe_mask(const Tensor& q, const Tensor& k, const Tensor& mask, 
         "SDPA recipe attn_mask only supports minimal tile padding");
 }
 
-// CB 15 is free in the dense recipe layout (0-14 and 16 are recipe-owned; ring uses 17/18).
+// CB 15 is free in the dense recipe layout (0-14 and 16 are recipe-owned).
 constexpr uint8_t kRecipeMaskCb = 15;
 
 static std::vector<Tensor> run_recipe_segments(

@@ -273,8 +273,6 @@
     tests/ttnn/unit_tests/operations/sdpa/test_sdpa_joint_recipes.py
     tests/ttnn/unit_tests/operations/sdpa/test_sdpa_recipe_tails.py
     tests/ttnn/unit_tests/operations/sdpa/test_sdpa_recipe_gqa.py
-    tests/ttnn/unit_tests/operations/sdpa/test_sdpa_recipe_mesh.py
-    tests/ttnn/unit_tests/operations/sdpa/test_sdpa_recipe_continuation.py
   skus:
     bh_p100:
       timeout: 20

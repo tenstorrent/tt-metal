@@ -23,11 +23,7 @@ struct ExpRingJointSDPADeviceOperation {
     using tensor_args_t = ExpRingJointSDPAInputs;
     using spec_return_value_t = ExpRingJointSDPAResultSpec;
     using tensor_return_value_t = ExpRingJointSDPAResult;
-    using program_factory_t =
-        std::variant<ExpRingJointSDPAMeshWorkloadFactory, ExpRingJointSDPARecipeMeshWorkloadFactory>;
-
-    // Named recipes B-E run on the recipe factory; precision unset or FAST keeps the exp-ring factory.
-    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
+    using program_factory_t = std::variant<ExpRingJointSDPAMeshWorkloadFactory>;
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
@@ -59,8 +55,6 @@ ExpRingJointSDPAResult exp_ring_joint_scaled_dot_product_attention(
     uint32_t num_workers_per_link = 1,
     uint32_t num_buffers_per_channel = 8,
     // When set, logical_n above is the worst-case placeholder and the live value is read on-device.
-    const std::optional<ttnn::Tensor>& logical_n_tensor = std::nullopt,
-    // Opt-in named numerical recipe (see docs/sdpa_precision.md); nullopt keeps the legacy compute.
-    std::optional<ttnn::transformer::SDPAPrecision> precision = std::nullopt);
+    const std::optional<ttnn::Tensor>& logical_n_tensor = std::nullopt);
 
 }  // namespace ttnn::prim
