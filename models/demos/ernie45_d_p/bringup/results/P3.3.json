@@ -1,0 +1,69 @@
+{
+ "metrics": {
+  "chunk_wall_ms": {
+   "t": "2026-09-25T01:03:33",
+   "value": 1570.4
+  },
+  "device_ms_attention_qkv_rope_kv_write_o_proj": {
+   "t": "2026-09-25T01:03:33",
+   "value": 19.64
+  },
+  "device_ms_attention_sdpa": {
+   "t": "2026-09-25T01:03:33",
+   "value": 1328.04
+  },
+  "device_ms_ccl_all_reduce": {
+   "t": "2026-09-25T01:03:33",
+   "value": 19.77
+  },
+  "device_ms_chip0": {
+   "t": "2026-09-25T01:03:33",
+   "value": 1563.45
+  },
+  "device_ms_chip1": {
+   "t": "2026-09-25T01:03:33",
+   "value": 1562.74
+  },
+  "device_ms_chip2": {
+   "t": "2026-09-25T01:03:33",
+   "value": 1564.44
+  },
+  "device_ms_chip3": {
+   "t": "2026-09-25T01:03:33",
+   "value": 1565.51
+  },
+  "device_ms_dense_mlp": {
+   "t": "2026-09-25T01:03:33",
+   "value": 2.42
+  },
+  "device_ms_moe_routed_experts": {
+   "t": "2026-09-25T01:03:33",
+   "value": 53.61
+  },
+  "device_ms_moe_router_dispatch_combine_reduce": {
+   "t": "2026-09-25T01:03:33",
+   "value": 100.08
+  },
+  "device_ms_moe_shared_expert": {
+   "t": "2026-09-25T01:03:33",
+   "value": 27.93
+  },
+  "device_ms_other_norms_residual_adds_embed": {
+   "t": "2026-09-25T01:03:33",
+   "value": 18.79
+  },
+  "device_ms_total": {
+   "t": "2026-09-25T01:03:33",
+   "value": 1570.27
+  },
+  "host_overhead_ms": {
+   "t": "2026-09-25T01:03:33",
+   "value": 0.1
+  },
+  "profiled_programs": {
+   "t": "2026-09-25T01:03:33",
+   "value": 5600
+  }
+ },
+ "task": "P3.3"
+}

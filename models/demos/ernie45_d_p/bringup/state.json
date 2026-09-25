@@ -1153,5 +1153,53 @@
   "rc": 0,
   "started": "2026-09-25T00:27:21",
   "status": "PASS"
+ },
+ "P3.3": {
+  "duration_s": 133.3,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-25T00:50:14"
+   },
+   {
+    "status": "FAIL",
+    "t": "2026-09-25T00:52:37"
+   },
+   {
+    "status": "FAIL",
+    "t": "2026-09-25T00:55:52"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-25T00:58:54"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-25T01:03:41"
+   }
+  ],
+  "last_run": "2026-09-25T01:03:41",
+  "log": "models/demos/ernie45_d_p/bringup/logs/P3.3.log",
+  "metrics": {
+   "chunk_wall_ms": 1570.4,
+   "device_ms_attention_qkv_rope_kv_write_o_proj": 19.64,
+   "device_ms_attention_sdpa": 1328.04,
+   "device_ms_ccl_all_reduce": 19.77,
+   "device_ms_chip0": 1563.45,
+   "device_ms_chip1": 1562.74,
+   "device_ms_chip2": 1564.44,
+   "device_ms_chip3": 1565.51,
+   "device_ms_dense_mlp": 2.42,
+   "device_ms_moe_routed_experts": 53.61,
+   "device_ms_moe_router_dispatch_combine_reduce": 100.08,
+   "device_ms_moe_shared_expert": 27.93,
+   "device_ms_other_norms_residual_adds_embed": 18.79,
+   "device_ms_total": 1570.27,
+   "host_overhead_ms": 0.1,
+   "profiled_programs": 5600
+  },
+  "rc": 0,
+  "started": "2026-09-25T01:01:27",
+  "status": "PASS"
  }
 }
