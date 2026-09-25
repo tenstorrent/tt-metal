@@ -12,6 +12,7 @@ on:
         options:
           - all
           - llama3.1-8b-qb2
+          - qwen38-27b-qb2
       sku:
         description: Hardware to test
         type: choice
@@ -29,10 +30,9 @@ on:
           - "2"
           - "3"
       vllm-tt-plugin-ref:
-        description: vLLM TT plugin branch or tag for serving tests
+        description: vLLM TT plugin ref override (empty uses each model's default)
         type: string
-        # Switch back to main once vllm-tt-plugin#116 has merged.
-        default: yieldthought/llama31-qb2-serving
+        default: ""
 
 permissions:
   contents: read
@@ -51,7 +51,7 @@ jobs:
       SKU: ${{ inputs.sku || 'all' }}
       MODEL: ${{ inputs.model || 'all' }}
       TIER: ${{ inputs.tier || 'all' }}
-      VLLM_TT_PLUGIN_REF: ${{ inputs.vllm-tt-plugin-ref || 'yieldthought/llama31-qb2-serving' }}
+      VLLM_TT_PLUGIN_REF: ${{ inputs.vllm-tt-plugin-ref || '' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -78,7 +78,9 @@ jobs:
           selected=$(jq -c --arg model "$MODEL" --arg tier "$TIER" --arg plugin_ref "$VLLM_TT_PLUGIN_REF" '
             [.[] | select(($model == "all" or .model == $model) and
                           ($tier == "all" or (.tier | tostring) == $tier))
-                 | .cmd = ("export VLLM_TT_PLUGIN_REF=" + ($plugin_ref | @sh) + "\n" + .cmd)]
+                 | if $plugin_ref == "" then .
+                   else .cmd = ("export VLLM_TT_PLUGIN_REF=" + ($plugin_ref | @sh) + "\n" + .cmd)
+                   end]
           ' <<< "$MATRIX")
           if [ "$selected" = '[]' ]; then
             echo "::error::No tests match model=$MODEL, sku=$SKU, tier=$TIER"

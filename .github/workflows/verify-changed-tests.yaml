@@ -271,6 +271,8 @@ jobs:
         PYTHONPATH: ${{ matrix.leg.gate_packages && '/usr/libexec/tt-metalium' || '/work' }}
         GTEST_TOTAL_SHARDS: ${{ matrix.leg.gtest_shard_total || 1 }}
         GTEST_SHARD_INDEX: ${{ matrix.leg.gtest_shard_index || 0 }}
+        HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
+        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
         HF_HUB_OFFLINE: ${{ (matrix.leg['weights-cache-mode'] == 'local-disk' || matrix.leg['weights-cache-mode'] == 'lfc') && '0' || '1' }}
         # The tracy paths the three profiler impls set. Empty on every other leg,
         # which the consuming scripts treat as unset (they test with -z).
