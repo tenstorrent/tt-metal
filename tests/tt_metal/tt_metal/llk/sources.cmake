@@ -5,10 +5,15 @@ set(UNIT_TESTS_LLK_SRC
     test_broadcast.cpp
     test_compute_kernel_sentinel.cpp
     test_copy_block_matmul_partials.cpp
+    test_csa_index_remap_compute.cpp
     test_cumsum.cpp
+    test_custom_mm_operands.cpp
+    test_deepseek_binary_dest_reuse.cpp
     test_dropout_sfpu_compute.cpp
     test_fp8_typecast.cpp
+    test_generic_moe_gate_compute.cpp
     test_golden_impls.cpp
+    test_hadamard_compute.cpp
     test_mul_reduce_scalar.cpp
     test_mxfp4_typecast.cpp
     test_mxfp6_typecast.cpp
@@ -19,8 +24,12 @@ set(UNIT_TESTS_LLK_SRC
     test_quasar_bfd_datacopy.cpp
     test_reconfig.cpp
     test_reduce.cpp
+    test_rmsnorm_chunked.cpp
+    test_rope_fused_compute.cpp
+    test_sdpa_reconciliation.cpp
     test_sfpu_binary_bcast.cpp
     test_sfpu_compute.cpp
+    test_sfpu_reduce.cpp
     test_single_core_binary_compute.cpp
     test_single_core_matmul_compute.cpp
     test_stochastic_rounding.cpp

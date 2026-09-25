@@ -129,6 +129,7 @@ it is classified differently on different systems.
 | HunyuanImage-3.0 | BH QuietBox 2 |
 | Panoptic-DeepLab | BH P150 |
 | BEVFormer | BH P150 |
+| DiffusionDrive | WH N300 |
 | Mistral-Small-3.1-24B | WH LLMBox, BH QuietBox 2 |
 | Stable Diffusion 3.5 Large | WH LLMBox |
 | Mochi-1-preview | WH LLMBox, WH Galaxy |
@@ -256,6 +257,13 @@ Each test entry contains an explicit `cmd: |` block with its environment, setup,
 test, and cleanup commands. Keep those commands in the YAML so reviewers and
 dashboards can read the full procedure in one place. To reproduce a test locally,
 run its block from the checkout with the required hardware and model weights.
+
+Before each single-host model test, **Check device readiness (tt-check)** installs
+the latest tt-check release and runs `tt-check --json` with the installed TTNN
+build. It resets the assigned devices and prints the full JSON output in the CI
+log, also saved to `generated/test_logs/tt-check.log`. A failed check stops the
+model test. This step has a separate five-minute timeout. Its replay timings include device work,
+communications, readback, and CPU validation.
 
 For a manual run, select **Run workflow** in GitHub Actions. Choose `model`, `sku`,
 and `tier`, or leave them at `all`. Use `vllm-tt-plugin-ref` to select a plugin

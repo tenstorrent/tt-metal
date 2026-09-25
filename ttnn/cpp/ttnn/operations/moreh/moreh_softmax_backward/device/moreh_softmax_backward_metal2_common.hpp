@@ -17,7 +17,7 @@
 
 #include "ttnn/operations/moreh/moreh_softmax_backward/device/moreh_softmax_backward_device_operation.hpp"
 
-namespace ttnn::operations::moreh::moreh_softmax_backward {
+namespace ttnn::operations::moreh::moreh_softmax_backward::metal2 {
 
 // Metal 2.0 named resources and small builders shared by all five moreh_softmax_backward
 // factories.
@@ -25,7 +25,6 @@ namespace ttnn::operations::moreh::moreh_softmax_backward {
 // These live in one header with inline linkage rather than in per-factory anonymous namespaces
 // because ttnn_op_moreh is a unity build: the anonymous namespaces of the five factory .cpp files
 // merge into one scope, where same-named constants would collide.
-namespace metal2 {
 
 using tt::tt_metal::experimental::ComputeUnpackModes;
 using tt::tt_metal::experimental::DataflowBufferSpec;
@@ -126,6 +125,4 @@ inline ComputeUnpackModes MakeUnpackModes(
     return unpack_modes;
 }
 
-}  // namespace metal2
-
-}  // namespace ttnn::operations::moreh::moreh_softmax_backward
+}  // namespace ttnn::operations::moreh::moreh_softmax_backward::metal2

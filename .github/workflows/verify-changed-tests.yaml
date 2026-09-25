@@ -3,8 +3,10 @@ name: "Verify changed tests"
 # Gate for tests/pipeline_reorg edits. A PR that touches a test entry cannot enter
 # the merge queue until that specific entry has run green
 #
-# All logic lives in .github/scripts/utils/verify_changed_tests.py. This file only
-# wires it up, plus the two policy lists below.
+# All logic lives in the tenstorrent/tt-metal/.github/actions/verify-changed-tests
+# action, pinned to @main so a PR branch always runs the current gate rather than
+# whatever copy (or lack of one) sits at its own head. This file only wires it up,
+# plus the two policy lists below.
 #
 # merge_group runs `scope` only. The hardware legs already ran on the PR head;
 # re-firing them in the queue would spend the same scarce hardware twice. The
@@ -97,6 +99,8 @@ env:
     galaxy_profiler_tests.yaml
     single_card_profiler_tests.yaml
     t3k_profiler_tests.yaml
+    fabric_sanity_tests.yaml
+    fabric_perf_tests.yaml
     runtime_perf_profiler_tests.yaml
     blackhole_e2e_tests.yaml
 
@@ -123,6 +127,7 @@ jobs:
         with:
           # Full history: the gate diffs against the merge base with main.
           fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
 
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -134,16 +139,17 @@ jobs:
 
       - name: Scope the changed tests, narrow the matrix, enforce owner review
         id: gate
+        # Pinned to @main: a PR branch runs the current gate, not whatever
+        # copy (or lack of one) happens to sit at its own head.
+        uses: tenstorrent/tt-metal/.github/actions/verify-changed-tests@main
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          python3 .github/scripts/utils/verify_changed_tests.py \
-            --event "${{ github.event_name }}" \
-            --base "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}" \
-            --repo "${{ github.repository }}" \
-            --pr "${{ github.event.pull_request.number }}" \
-            --head-sha "${{ github.event.pull_request.head.sha }}" \
-            --output scope.json
+        with:
+          event: ${{ github.event_name }}
+          base: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          repo: ${{ github.repository }}
+          pr: ${{ github.event.pull_request.number }}
+          output: scope.json
 
       - name: Summarise
         if: ${{ !cancelled() }}
@@ -171,7 +177,7 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      build-wheel: true
+      build-inplace-wheel: true
       tracy: false
 
   build-profiler:
@@ -184,7 +190,7 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      build-wheel: true
+      build-inplace-wheel: true
       tracy: true
 
   fetch-ttsim:
@@ -279,10 +285,12 @@ jobs:
         DONT_USE_VIRTUAL_ENVIRONMENT: ${{ matrix.leg.gate_profile == 'profiler' && '1' || '' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - /dev/hugepages-1G:/dev/hugepages-1G
+        # GitHub-hosted runners have no hugepages or weights cache; derived from runs_on
+        # so a new hosted SKU is covered automatically. Same exclusion as smoke.yaml.
+        - ${{ contains(join(matrix.leg.runs_on, ','), 'ubuntu-latest') && '/no_hugepages' || '/dev/hugepages-1G:/dev/hugepages-1G' }}
         # Weights cache, selected by the SKU's weights-cache-mode exactly as the
         # owning pipeline selects it.
-        - ${{ matrix.leg['weights-cache-mode'] == 'cloud-mlperf' && '/mnt/MLPerf/huggingface:/mnt/MLPerf/huggingface:ro' || (matrix.leg['weights-cache-mode'] == 'yyz4-mnt-models' && '/mnt/models/huggingface:/mnt/MLPerf/huggingface:ro') || (matrix.leg['weights-cache-mode'] == 'local-disk' || matrix.leg['weights-cache-mode'] == 'lfc') && '/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface:rw' || '/mnt/MLPerf:/mnt/MLPerf:ro' }}
+        - ${{ contains(join(matrix.leg.runs_on, ','), 'ubuntu-latest') && '/no_weights_cache' || (matrix.leg['weights-cache-mode'] == 'cloud-mlperf' && '/mnt/MLPerf/huggingface:/mnt/MLPerf/huggingface:ro') || (matrix.leg['weights-cache-mode'] == 'yyz4-mnt-models' && '/mnt/models/huggingface:/mnt/MLPerf/huggingface:ro') || (matrix.leg['weights-cache-mode'] == 'local-disk' || matrix.leg['weights-cache-mode'] == 'lfc') && '/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface:rw' || '/mnt/MLPerf:/mnt/MLPerf:ro' }}
       options: >-
          ${{ (startsWith(matrix.leg.sku, 'sim_') && '--label runner-mode=sim')
              || (matrix.leg.sku != 'github_hosted_cpu' && '--device /dev/tenstorrent')
@@ -434,8 +442,7 @@ jobs:
           fi
 
           # A skipped stage is never treated as a pass. Every branch below states
-          # positively what had to succeed. The scope job also fails outright when a
-          # blocked leg lacks its owner approval, so that case never reaches here.
+          # positively what had to succeed.
           [[ '${{ needs.scope.result }}' == 'success' ]] \
             || fail "the scope stage did not succeed (${{ needs.scope.result }})."
 
@@ -455,10 +462,9 @@ jobs:
               || fail "${{ needs.scope.outputs.leg-count }} leg(s) did not all pass (run-tests: ${{ needs.run-tests.result }})."
           fi
 
-          # The scope step reports the review verdict rather than failing on it, so
-          # the runnable legs still get dispatched and proven. Enforce it here.
+          # Reported, not failed on: CODEOWNERS and the branch ruleset already block the merge.
           if [[ '${{ needs.scope.outputs.review-met }}' == 'false' ]]; then
-            fail "${{ needs.scope.outputs.review-leg-count }} leg(s) on highly contended SKUs need an approving review from a code owner. See the scope job for which files and owners."
+            echo "::notice::${{ needs.scope.outputs.review-leg-count }} leg(s) on highly contended SKUs still need an approving review from a code owner; the branch ruleset holds the merge until then. See the scope job for which files and owners."
           fi
 
           case '${{ needs.scope.outputs.status }}' in
@@ -466,7 +472,7 @@ jobs:
               echo "No behaviour-affecting test-entry changes. Nothing to prove."
               ;;
             blocked)
-              echo "${{ needs.scope.outputs.leg-count }} leg(s) ran; ${{ needs.scope.outputs.review-leg-count }} on highly contended SKUs carry a code owner's approval instead."
+              echo "${{ needs.scope.outputs.leg-count }} leg(s) ran; ${{ needs.scope.outputs.review-leg-count }} on highly contended SKUs are left to code owner review."
               ;;
             run)
               echo "All ${{ needs.scope.outputs.leg-count }} leg(s) passed."

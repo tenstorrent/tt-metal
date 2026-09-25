@@ -5,7 +5,7 @@
 # Test for eltwise binary operations with reuse_dest on Quasar.
 import pytest
 import torch
-from helpers.constraints import get_perf_math_operations
+from helpers.constraints import get_perf_math_operations, get_valid_math_fidelities
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     EltwiseBinaryGolden,
@@ -27,6 +27,7 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    quasar_mx_smoke,
     runtime,
 )
 from helpers.perf.core import create_test_or_perf_config
@@ -63,14 +64,8 @@ REUSE_DEST_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
         DataFormat.Float16,
-        DataFormat.MxFp8R,
-        DataFormat.MxFp8P,
-        DataFormat.MxFp4,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
     ],
-)
+) + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
 
 TILE_DIMENSIONS = [32, 32]
 
@@ -80,17 +75,11 @@ def reuse_dest_dest_sync_modes(*, is_perf=False):
 
 
 def reuse_dest_mathops(formats, *, is_perf=False):
-    if (
-        formats.input_format == DataFormat.MxFp8R
-        or formats.input_format == DataFormat.MxFp8P
-    ):
-        supported_mathops = [MathOperation.Elwadd, MathOperation.Elwsub]
-    else:
-        supported_mathops = [
-            MathOperation.Elwadd,
-            MathOperation.Elwsub,
-            MathOperation.Elwmul,
-        ]
+    supported_mathops = [
+        MathOperation.Elwadd,
+        MathOperation.Elwsub,
+        MathOperation.Elwmul,
+    ]
     if is_perf:
         return [
             mathop
@@ -98,17 +87,6 @@ def reuse_dest_mathops(formats, *, is_perf=False):
             if mathop in supported_mathops
         ]
     return supported_mathops
-
-
-def reuse_dest_math_fidelities(mathop):
-    if mathop in [MathOperation.Elwadd, MathOperation.Elwsub]:
-        return [MathFidelity.LoFi]
-    return [
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ]
 
 
 def reuse_dest_implied_math_format(formats, *, is_perf=False):
@@ -162,7 +140,7 @@ def valid_output_dimensions(formats, dest_sync_mode, input_dimensions) -> list:
 @parametrize(
     formats=REUSE_DEST_FORMATS,
     mathop=lambda formats: reuse_dest_mathops(formats, is_perf=False),
-    math_fidelity=reuse_dest_math_fidelities,
+    math_fidelity=lambda formats, mathop: get_valid_math_fidelities(formats, mathop),
     reuse_dest_type=[
         EltwiseBinaryReuseDestType.DEST_TO_SRCA,
         EltwiseBinaryReuseDestType.DEST_TO_SRCB,

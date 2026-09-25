@@ -122,12 +122,9 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
     // is gated on !(WH || BH) so new architectures default to the safe 32-bit path.
     const bool use_32bit_index = !(device->arch() == tt::ARCH::WORMHOLE_B0 || device->arch() == tt::ARCH::BLACKHOLE);
 
-    // Use the fast unstable top-k network. The stable network (ties keep the lowest candidate
-    // position) costs ~2.5-3x on the SFPU sort stage, and the greedy pick does not need it:
-    // callers go through the host-side tie-break adjustment (_adjust_values_for_tiebreak in
-    // models/common/sampling/tt_sampling.py). The compile-time-arg plumbing is kept so
-    // re-enabling is a one-line change.
-    const bool stable_sort = false;
+    // Use the stable bitonic top-k network: on exact value ties the candidate at the lowest position
+    // wins, so the sampled index does not depend on how the network swaps equal values.
+    const bool stable_sort = true;
 
     tt::DataFormat input_values_dfb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(input_values_tensor.dtype());

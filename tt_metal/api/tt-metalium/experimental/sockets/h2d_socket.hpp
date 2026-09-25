@@ -51,6 +51,14 @@ enum class H2DMode : uint8_t {
  * and the device kernel updates `bytes_acked` to indicate consumed data. The host blocks
  * on write() if the FIFO is full until the device acknowledges data.
  *
+ * Thread safety:
+ * - The FIFO is single-producer/single-consumer: one host producer writes data and one
+ *   device consumer acknowledges it.
+ * - An H2DSocket instance is not internally synchronized. Calls on the same instance
+ *   must not overlap across host threads unless the caller provides external synchronization.
+ * - A descriptor attaches another handle to the same FIFO; it does not create an independent
+ *   channel. At most one host process may actively write through the owner/connector handles.
+ *
  * Supports cross-process usage: the owner process creates the socket and exports a
  * flatbuffer descriptor. A remote process connects via the descriptor using only UMD
  * (no MetalContext required).
@@ -76,6 +84,12 @@ public:
      * Allocates named shared memory for host-side buffers, pins it for device DMA,
      * and sets up device-side config and data buffers. The socket can be exported
      * via export_descriptor() for cross-process attachment.
+     *
+     * All ranks sharing the mesh must construct the socket to reserve device buffers together.
+     * Shared meshes support worker-core endpoints only; claimed service cores are rejected on every rank.
+     * Only the rank owning recv_core maps host memory and may write or export the socket.
+     * Non-owning ranks may set the page size and query configuration; barrier() is a no-op.
+     * Host I/O on a non-owning rank throws. Descriptor connectors retain host I/O access.
      *
      * If `recv_core` is a claimed service core, the device-side buffers are allocated
      * from that core's service-core L1 region instead of the worker-grid BankManager.
@@ -267,8 +281,7 @@ private:
         const std::shared_ptr<MeshDevice>& mesh_device,
         const PinnedBufferInfo& bytes_acked_info,
         const PinnedBufferInfo& data_info);
-    void init_receiver_tlb(
-        const std::shared_ptr<MeshDevice>& mesh_device, std::optional<uint32_t> device_id = std::nullopt);
+    void init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device);
 
     // Mock owner only: alias bytes_acked_ptr_ to bytes_sent_ so the FIFO reads as drained.
     // Connectors remain context-free and do not use this path.

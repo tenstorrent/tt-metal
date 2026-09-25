@@ -68,6 +68,17 @@ inline void llk_unpack_AB_reduce_block_max_row_runtime(
     const ckernel::TensorShape& tensor_shape,
     const bool respect_trigger = false,
     const bool overlap_first_half = false) {
+    LLK_REINIT_GUARD_ASSERT_MATCHES(
+        ckernel::trisc::BfdResource::Unp0,
+        operandA,
+        "unpack_AB_reduce_block_max_row_runtime operandA DFB differs from the one "
+        "llk_unpack_AB_reduce_block_max_row_init_runtime programmed");
+    LLK_REINIT_GUARD_ASSERT_MATCHES(
+        ckernel::trisc::BfdResource::Unp1,
+        operandB,
+        "unpack_AB_reduce_block_max_row_runtime operandB DFB differs from the one "
+        "llk_unpack_AB_reduce_block_max_row_init_runtime programmed");
+
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
     const LocalDFBInterface& local_dfb_interface_a = get_local_dfb_interface(operandA_id);

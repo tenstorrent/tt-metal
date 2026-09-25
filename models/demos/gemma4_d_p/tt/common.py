@@ -10,8 +10,8 @@ from loguru import logger
 import ttnn
 from models.common.weight_cache import build_cached_state_dict, mark_weight_cache_complete, weight_cache_is_complete
 from models.demos.gemma4_d_p.tt.ccl import CCLManager
-from models.demos.gemma4_d_p.tt.model import Gemma4Model
-from models.demos.gemma4_d_p.tt.model_config import Gemma4ModelArgs
+from models.demos.gemma4_d_p.tt.model import Gemma4Model, prefill_chunk_geometry_error
+from models.demos.gemma4_d_p.tt.model_config import Gemma4ModelArgs, resolve_cache_dir_from_tt_cache_path
 from models.demos.gemma4_d_p.tt.precision import Gemma4Precision
 
 # Host weights required for embedding construction and learned layer scalars.
@@ -33,9 +33,10 @@ def create_tt_model(
     dtype=ttnn.bfloat16,
     state_dict=None,
     num_layers=None,
-    model_path=None,
+    hf_model_id=None,
     ring_kv_caches=None,
     force_rebuild=False,
+    tt_cache_path=None,
 ):
     """
     Create Gemma4 model with all weights loaded to device.
@@ -44,19 +45,16 @@ def create_tt_model(
         (model_args, model, tt_kv_cache, state_dict)
     """
     mesh_device = mesh_config.device
-    SLIDING_WINDOW_SIZE = 1024
-    if max_seq_len <= 0 or prefill_chunk_size <= 0:
-        raise ValueError("sequence and chunk lengths must be positive")
-    if prefill_chunk_size % (mesh_config.cp_degree * ttnn.TILE_SIZE) or max_seq_len % prefill_chunk_size:
-        raise ValueError("prefill chunks must divide max_seq_len and contain whole CP-local tiles")
-    if prefill_chunk_size < SLIDING_WINDOW_SIZE * mesh_config.cp_degree:
-        raise ValueError("prefill chunk size must cover the sliding window on each CP rank")
+    geometry_error = prefill_chunk_geometry_error(prefill_chunk_size, mesh_config.cp_degree, max_seq_len)
+    if geometry_error:
+        raise ValueError(geometry_error)
 
-    model_path = model_path or os.getenv("HF_MODEL")
+    hf_model_id = hf_model_id or os.getenv("HF_MODEL")
+    tt_cache_path = tt_cache_path or os.getenv("TT_CACHE_PATH")
+    cache_dir = resolve_cache_dir_from_tt_cache_path(tt_cache_path, dtype=dtype, mesh_shape=tuple(mesh_device.shape))
 
-    hf_config = Gemma4ModelArgs.load_hf_config(model_path)
+    hf_config = Gemma4ModelArgs.load_hf_config(hf_model_id)
     model_args = Gemma4ModelArgs.from_hf_config(hf_config)
-    model_args.model_cache_path = model_args.resolve_model_cache_path(model_path)
     # Store the real HF text config for RoPE creation (Gemma4TextRotaryEmbedding needs it)
     hf_text_config = getattr(hf_config, "text_config", hf_config)
     model_args._hf_text_config = hf_text_config
@@ -67,14 +65,11 @@ def create_tt_model(
     ccl_manager = CCLManager(mesh_config)
 
     # Reuse cached device weights; load embeddings and layer scalars from the host weight cache.
-    _worker_mesh = tuple(mesh_device.shape)
-    model_args.cluster_shape = _worker_mesh
-    cache_dir = model_args.weight_cache_path(dtype)
-    _precision_for_variant = Gemma4Precision.load(model_path)
+    _precision_for_variant = Gemma4Precision.load(hf_model_id)
     cache_identity = dict(
-        model_name=os.path.basename(str(model_path).rstrip("/")) or "gemma4",
+        model_name=os.path.basename(str(hf_model_id).rstrip("/")) or "gemma4",
         n_layers=model_args.num_hidden_layers,
-        mesh_shape=_worker_mesh,
+        mesh_shape=tuple(mesh_device.shape),
         build_variant={
             "prefill_cache_layout": 1,
             "global_projection": "qk",
@@ -89,7 +84,7 @@ def create_tt_model(
                 cache_dir, args=model_args, build_variant=cache_identity["build_variant"]
             )
         else:
-            state_dict = Gemma4ModelArgs.load_state_dict(model_path, dummy_weights=False)
+            state_dict = Gemma4ModelArgs.load_state_dict(hf_model_id, dummy_weights=False)
             loaded_real_weights = bool(state_dict)
 
     tensor_cache_path = str(cache_dir)

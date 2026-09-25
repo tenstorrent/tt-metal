@@ -97,15 +97,17 @@ public:
     };
 
     struct StridedRowMap {
-        // One (slot, layer) row: chunk c at bases[c % step] + (c / step) * strides[c % step].
-        // step == 0 marks a never-populated row (lookup returns a zeroed location, matching
-        // an unset unrolled cell). A populated row is dense: residues 0..step-1 each present.
+        // One (slot, layer) row: chunk c at bases[c % step] + (c / step) * strides[c % step], on
+        // device group device_group_indices[c % step] — a row spanning SP/TP-sharded devices
+        // changes group along the sequence. step == 0 marks a never-populated row (lookup
+        // returns a zeroed location, matching an unset unrolled cell). A populated row is
+        // dense: residues 0..step-1 each present.
         struct Row {
             uint32_t step = 0;
             uint32_t size_bytes = 0;
-            DeviceGroupIndex device_group_index{0};
-            std::vector<uint64_t> bases;    // [step]
-            std::vector<int64_t> strides;   // [step]
+            std::vector<DeviceGroupIndex> device_group_indices;  // [step]
+            std::vector<uint64_t> bases;                         // [step]
+            std::vector<int64_t> strides;                        // [step]
         };
 
         std::vector<Row> rows;  // [slot][layer]
@@ -181,6 +183,7 @@ public:
     // alternative (UnrolledGrid / StridedRowMap) and must return the same type
     // (e.g. void) for each — range objects do not escape the dispatch.
     template <typename F>
+    // NOLINTNEXTLINE(cppcoreguidelines-missing-std-forward) -- Preserve lvalue invocation of temporary callbacks.
     decltype(auto) visit_map(uint32_t config_id, F&& fn) const {
         validate_config_id(config_id);
         if (const auto* grid = std::get_if<UnrolledGrid>(&maps_[config_id])) {
@@ -194,7 +197,13 @@ public:
     // StridedRowRangeView (strided). Same single-return-type constraint.
     template <typename F>
     decltype(auto) visit_range(
-        uint32_t layer, uint32_t start_pos, uint32_t end_pos, uint32_t slot, uint32_t config_id, F&& fn) const {
+        uint32_t layer,
+        uint32_t start_pos,
+        uint32_t end_pos,
+        uint32_t slot,
+        uint32_t config_id,
+        // NOLINTNEXTLINE(cppcoreguidelines-missing-std-forward) -- Preserve lvalue invocation of temporary callbacks.
+        F&& fn) const {
         validate_args(config_id, layer, start_pos, slot);
         const auto& cfg = configs_[config_id];
         TT_FATAL(

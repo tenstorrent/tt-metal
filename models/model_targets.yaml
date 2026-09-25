@@ -1625,8 +1625,12 @@ targets:
 
   # ResNet-50 is tier 1, so unlike the tier-3 models migrated alongside it, it is not
   # exempt from targets. The values below are measured, not placeholders:
-  #   wh_n150        batch 16   top1 75.375   fps 28.43   (run 31590127406)
-  #   wh_llmbox_perf batch 128  top1 75.456   fps 29.05   (run 31606078371)
+  #   wh_n150        batch 16   top1 75.375   fps 35.61   (run 35174410535, 2026-09-17)
+  #   wh_llmbox_perf batch 128  top1 75.456   fps 33.65   (run 35174410535, 2026-09-17)
+  # fps is dominated by the iteration-0 JIT kernel compile (~95 % of the measured time).
+  # #56218 (precompiled standard-library headers for every JIT kernel compile) cut that
+  # compile from 52.8 s to 42.0 s on wh_n150 and from 47.5 s to 43.8 s on wh_llmbox_perf,
+  # so the pre-#56218 targets (28.43 / 29.05) now fail the +15 % upper bound.
   #
   # Only the two e2e SKUs are listed -- validate_perf_targets.py's
   # _collect_active_test_combos walks models_e2e_tests.yaml alone, so unit and device-perf
@@ -1646,7 +1650,7 @@ targets:
             seq_len: null
             status: active
             perf:
-              fps: 28.43
+              fps: 35.61
               fps_tolerance: 0.15
             accuracy:
               top1: 75.375
@@ -1659,7 +1663,7 @@ targets:
             seq_len: null
             status: active
             perf:
-              fps: 29.05
+              fps: 33.65
               fps_tolerance: 0.15
             accuracy:
               top1: 75.456
@@ -1727,4 +1731,23 @@ targets:
               fps: 76.0
               fps_tolerance: 0.10
             owner_id: U0978501V8B # CODEOWNERS @tvardhineniTT
+            team: models
+
+  # DiffusionDrive is tier 3, so it is exempt from perf targets. Its accuracy gate is
+  # the committed assert in tests/pcc/test_pcc_checkpoint_accuracy.py -- trajectory PCC
+  # >= 0.99 against the PyTorch reference at production resolution (camera 256x1024,
+  # LiDAR 256x256) with the real 88.1-PDMS checkpoint. That test emits no benchmark
+  # payload, so there is no metric here for validate_perf_targets.py to compare; the
+  # combo is kept on the books as TODO, matching the vit entry above.
+  diffusiondrive:
+    aliases: ["DiffusionDrive", "diffusiondrive", "hustvl/DiffusionDrive"]
+    skus:
+      wh_n300:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U03HY7MK4BT # Mark O'Connor
             team: models
