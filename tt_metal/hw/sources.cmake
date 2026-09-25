@@ -397,6 +397,7 @@ set(HW_JIT_API_HEADERS
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_horner.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_min_max.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_mirrored_terminals.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_polynomial_dst_tile.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_polynomial_dual_tile.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_rational_dst_core.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_rational_interleaved_core.inc
@@ -406,6 +407,7 @@ set(HW_JIT_API_HEADERS
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_rational_segment_core.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_raw_class_policy.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_selected_core_total.inc
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_selected_exp_pool_init.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_selected_reciprocal_init.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_simple_algebraic.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_simple_forward.h
@@ -413,5 +415,8 @@ set(HW_JIT_API_HEADERS
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_sqrt_factored_core.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_target_special_policy.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_tti_replay.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_zone_gradient_finalize.inc
+    inc/api/compute/eltwise_unary/celu_bw_tt_poly_bf16.h
+    inc/api/compute/eltwise_unary/elu_bw_tt_poly_bf16.h
     inc/api/compute/eltwise_unary/erf_bw_tt_poly_bf16.h
 )

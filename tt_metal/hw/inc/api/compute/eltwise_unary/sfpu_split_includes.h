@@ -235,3 +235,11 @@
 #if TT_POLY_BACKWARD_ERF_BW_INCLUDE
 #include "api/compute/eltwise_unary/erf_bw_tt_poly_bf16.h"
 #endif
+
+#if TT_POLY_BACKWARD_CELU_BW_INCLUDE
+#include "api/compute/eltwise_unary/celu_bw_tt_poly_bf16.h"
+#endif
+
+#if TT_POLY_BACKWARD_ELU_BW_INCLUDE
+#include "api/compute/eltwise_unary/elu_bw_tt_poly_bf16.h"
+#endif
