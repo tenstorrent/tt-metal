@@ -142,7 +142,7 @@ def generate(spec, ref=None, early: bool = False) -> dict:
     add(
         "PL.0",
         "Ledger: add the component, swap, ladder, contract and perf tasks from the block graphs",
-        "plan",
+        "ledger",
         ["R.3"],
         f"{PY}.plan.ledger_gen --extend",
         {"ledger_errors": "== 0", "ledger_tasks": ">= 1"},
@@ -171,6 +171,7 @@ def generate(spec, ref=None, early: bool = False) -> dict:
             f"{model_dir}/bringup/approvals.yaml",
             f"{model_dir}/bringup/results/plan_memory.json",
         ],
+        approval="plan",
     )
 
     comp_rung = spec.get("tests.component_rung") or next(r["name"] for r in ladder if r.get("full_dumps"))
