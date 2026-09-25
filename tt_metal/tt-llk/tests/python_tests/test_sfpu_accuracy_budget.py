@@ -372,6 +372,17 @@ def test_a_ulp_row_that_names_its_arch_binds_there(arch, monkeypatch):
             )
 
 
+@pytest.mark.parametrize(
+    "op", [MathOperation.Exp, MathOperation.SigmoidAppx], ids=lambda o: o.name
+)
+def test_a_bad_query_is_refused_whether_or_not_the_op_is_enrolled(op):
+    """Validation must not depend on the table's contents, or a miswired driver passes
+    until the day its op is enrolled."""
+    assert (op in _SFPU_ACCURACY_BUDGET) == (op is MathOperation.SigmoidAppx)
+    with _refuses("BudgetKey.arch must be a"):
+        accuracy_contract(op, output_format=DataFormat.Float32, arch="wormhole")
+
+
 def test_arch_must_be_passed_explicitly():
     """``arch`` is the one dimension where the numbers do not transfer, so unlike the
     others it cannot be left unset and quietly resolved against the Wormhole table."""
@@ -450,6 +461,14 @@ def test_the_loader_refuses_what_it_cannot_turn_into_a_contract(tmp_path):
     # ...and the contract invariants still come from AccuracyContract itself.
     with _refuses("a ulp contract replaces the tolerance gate"):
         _table(tmp_path, "Abs:\n  - {max_ulp: 1, atol: 0.5}\n")
+
+
+@pytest.mark.parametrize("alias", ["1", "0", "1.0"])
+def test_a_numeric_alias_for_a_boolean_enum_is_refused(tmp_path, alias):
+    """``True == 1`` in Python, so a by-value lookup alone would load ``approx: 1`` as
+    ``Yes``: a typo in a key dimension would select a contract instead of failing."""
+    with _refuses("is not a ApproximationMode"):
+        _table(tmp_path, f"Abs:\n  - {{approx: {alias}, max_ulp: 1}}\n")
 
 
 def test_a_quoted_and_an_unquoted_no_mean_the_same_thing(tmp_path):
