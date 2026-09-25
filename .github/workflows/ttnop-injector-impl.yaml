@@ -66,26 +66,32 @@ jobs:
           if [[ "$CHANGED_ONLY" != "true" ]]; then
             echo "base-sha=" >> "$GITHUB_OUTPUT"
             echo "mode=full" >> "$GITHUB_OUTPUT"
-            echo "shards=15" >> "$GITHUB_OUTPUT"
+            # TEMP: 2 machines per arch instead of 15. Revert: restore the line below.
+            # echo "shards=15" >> "$GITHUB_OUTPUT"
+            echo "shards=2" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # A failed Friday is retried next week instead of becoming the new baseline.
-          if ! base="$(
-            gh api --method GET \
-              "/repos/$GITHUB_REPOSITORY/actions/workflows/ttnop-injector.yaml/runs" \
-              -f event=schedule \
-              -f status=success \
-              -f per_page=1 \
-              --jq '.workflow_runs[0].head_sha // empty'
-          )"; then
-            echo "::warning::Could not query prior TTNOP runs; using the weekly fallback"
-            base=""
-          fi
+          # TEMP: only select tests changed on main in the last day. Revert: delete the
+          # next line and uncomment the block below it.
+          base="$(git rev-list -1 --before='1 day ago' origin/main)"
+          # # A failed Friday is retried next week instead of becoming the new baseline.
+          # if ! base="$(
+          #   gh api --method GET \
+          #     "/repos/$GITHUB_REPOSITORY/actions/workflows/ttnop-injector.yaml/runs" \
+          #     -f event=schedule \
+          #     -f status=success \
+          #     -f per_page=1 \
+          #     --jq '.workflow_runs[0].head_sha // empty'
+          # )"; then
+          #   echo "::warning::Could not query prior TTNOP runs; using the weekly fallback"
+          #   base=""
+          # fi
+          #
+          # if [[ -z "$base" ]]; then
+          #   base="$(git rev-list -1 --before='7 days ago' "$GITHUB_SHA")"
+          # fi
 
-          if [[ -z "$base" ]]; then
-            base="$(git rev-list -1 --before='7 days ago' "$GITHUB_SHA")"
-          fi
           if [[ -z "$base" ]]; then
             echo "::error::No commit exists before the weekly comparison window"
             exit 1
@@ -115,7 +121,9 @@ jobs:
           count=${#selected_tests[@]}
           if [[ "$count" -gt 0 ]]; then
             mode=changed
-            shards=15
+            # TEMP: 2 machines per arch instead of 15. Revert: restore the line below.
+            # shards=15
+            shards=2
           else
             mode=none
             shards=0
