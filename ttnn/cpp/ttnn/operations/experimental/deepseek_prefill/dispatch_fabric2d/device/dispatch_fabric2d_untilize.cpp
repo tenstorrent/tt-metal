@@ -64,12 +64,14 @@ std::vector<tt::tt_metal::CoreCoord> decide_untilizer_cores(
             below.push_back(core);
         }
     }
-    if (below.empty()) {
-        // Nothing under the streams: fall back to every spare core, up to one per stripe.
-        *fallback = UntilizerPoolFallback::kNoRowBelow;
-        const std::size_t n = std::min<std::size_t>(spare.size(), num_stripes);
-        return std::vector<tt::tt_metal::CoreCoord>(spare.begin(), spare.begin() + n);
-    }
+    // Refused rather than run on the streams' row: the pool's DRAM traffic there lands on the NoC row
+    // the streams already saturate, which is a slowdown nothing but a profile would ever show.
+    TT_FATAL(
+        !below.empty(),
+        "dispatch_fabric2d: a TILE input needs its sub-device to include row {}, the row under the streams "
+        "(row {}), for the untilizers. Give the op at least two rows, or pass a ROW_MAJOR input.",
+        pool_row,
+        lowest_stream_row);
 
     std::vector<tt::tt_metal::CoreCoord> pool;
     std::vector<bool> taken(below.size(), false);
