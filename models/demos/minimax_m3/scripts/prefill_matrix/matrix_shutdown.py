@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """Send the SHUTDOWN sentinel to the live runner (H2D service). Needs the same PREFILL_* env as the producer."""
 
 import os

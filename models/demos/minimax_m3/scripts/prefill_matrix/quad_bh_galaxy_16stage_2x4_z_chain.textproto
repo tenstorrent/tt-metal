@@ -1,7 +1,8 @@
 # Quad BH galaxy (4 hosts, 4 trays each) as a 16-stage Z-CHAIN of [2,4] meshes for pipeline prefill.
 # mesh_id == pipeline stage == MPI rank. Intra-host: tray chain as in single_bh_galaxy_4x4x2_z_chain.
-# Inter-host: same-tray Z link between adjacent chassis (see quad_bh_galaxy_16x4x2_z), host ring
-# b09u02 -> b09u08 -> b08u08 -> b08u02. Which physical tray each mesh_id is comes from the rank binding.
+# Inter-host: same-tray Z link between adjacent chassis (see quad_bh_galaxy_16x4x2_z), hosts in physical ring order
+# (e.g. the Sep-2026 baseline quad b09u02 -> b09u08 -> b08u08 -> b08u02; other quads may be wired differently).
+# Which physical tray each mesh_id is comes from the rank binding.
 mesh_descriptors {
   name: "M0"
   arch: BLACKHOLE

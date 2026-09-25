@@ -8,6 +8,8 @@
 #   JOB=<slurm job id> HOSTS=<rank0-host,host2,host3,host4> ./run_matrix.sh
 # Env (all optional): STAGES=16|12  USERS=4  ITERS=3  CACHED=0,61440,143360,312320,552960,860160  NEW=640,1600,3072,5120,6900,32768,51200
 #   WORK=<shared dir for logs/results>  OUT=<results jsonl>  HF_MODEL / TT_CACHE_PATH / PREFILL_TRACE_DIR  REPS=1 (full passes)
+#   REQS / TARGET_CHUNKS / SKIP_IDLE / MAX_NEW are passed through to matrix_row.sh (see its header).
+# Ctrl-C / TERM shuts the live runner down (sentinel, then scoped kill) before exiting.
 set -uo pipefail
 PKG_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 TT_METAL_HOME=${TT_METAL_HOME:-$(cd "$PKG_DIR/../../../../.." && pwd)}
@@ -17,21 +19,22 @@ JOB=${JOB:?}; HOSTS=${HOSTS:?}; STAGES=${STAGES:-16}; USERS=${USERS:-4}; ITERS=$
 CACHED=${CACHED:-0,61440,143360,312320,552960,860160}
 WORK=${WORK:-$TT_METAL_HOME/generated/m3_prefill_matrix/$(date +%Y%m%d_%H%M%S)}; mkdir -p "$WORK"
 OUT=${OUT:-$WORK/results_${STAGES}stage.jsonl}
-echo "[matrix] $(date) job=$JOB hosts=$HOSTS stages=$STAGES users=$USERS iters=$ITERS reps=$REPS cached=$CACHED commit=$(git -C "$TT_METAL_HOME" rev-parse --short HEAD)"
+IFS=, read -r -a HOST_ARR <<< "$HOSTS"
+echo "[matrix] $(date) job=$JOB hosts=$HOSTS stages=$STAGES users=$USERS iters=$ITERS reps=$REPS cached=$CACHED new=${NEW:-default} commit=$(git -C "$TT_METAL_HOME" rev-parse --short HEAD)"
 echo "[matrix] work=$WORK out=$OUT"
+
+shutdown_last_runner() { matrix_shutdown_runner "$JOB" "$WORK" "${HOST_ARR[@]}"; }
+trap 'echo "[matrix] interrupted; shutting the runner down"; trap - INT TERM; shutdown_last_runner; exit 130' INT TERM
+
 first=1; failed=0
 for rep in $(seq 1 "$REPS"); do
   for C in ${CACHED//,/ }; do
-    R=0; [ $first = 1 ] && R=1; first=0     # reset the galaxies once, before the first runner launch
+    R=0; [ "$first" = 1 ] && R=1; first=0     # reset the galaxies before the first launch (and after a failed row)
     JOB=$JOB HOSTS=$HOSTS STAGES=$STAGES CACHED=$C ITERS=$ITERS USERS=$USERS RESET=$R WORK=$WORK OUT=$OUT "$PKG_DIR/matrix_row.sh"; rc=$?
-    echo "[matrix] rep $rep row cached=$C exit=$rc"; [ $rc -ne 0 ] && failed=$((failed + 1))
+    echo "[matrix] rep $rep row cached=$C exit=$rc"
+    [ "$rc" -ne 0 ] && { failed=$((failed + 1)); first=1; }
   done
 done
-# shut the last runner down
-PREV=$(cat "$WORK/last_runner_log" 2>/dev/null)
-if [ -n "$PREV" ] && ! grep -q '^EXIT=' "$PREV"; then
-  IFS=, read -r R0 _ <<< "$HOSTS"; CAP=$(grep -o 'capacity=[0-9]*' "$PREV" | head -1 | cut -d= -f2)
-  srun --jobid="$JOB" --overlap -N1 -n1 -w "$R0" bash -c "$MATRIX_ULIMITS; cd $TT_METAL_HOME && source python_env/bin/activate && env $(matrix_producer_env ${CAP:-56320}) timeout 300 python3 $PKG_DIR/matrix_shutdown.py" 2>&1 | grep -v '^srun: '
-fi
+shutdown_last_runner
 echo; echo "[matrix] RESULTS ($OUT):"; python3 "$PKG_DIR/matrix_table.py" "$OUT"
-if [ $failed -ne 0 ]; then echo "[matrix] $failed row(s) FAILED -- the matrix above is partial"; exit 1; fi
+if [ "$failed" -ne 0 ]; then echo "[matrix] $failed row(s) FAILED -- the matrix above is partial"; exit 1; fi

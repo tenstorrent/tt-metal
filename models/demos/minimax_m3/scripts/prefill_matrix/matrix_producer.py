@@ -1,34 +1,39 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """MiniMax-M3 prefill MATRIX producer: (new tokens) x (cached tokens) against a live pipeline runner.
 
 Driven by run_matrix.sh / matrix_row.sh (see README.md); direct use:
 
 Run ON rank 0's host after every rank logs "setup complete, entering request loop":
-  srun --jobid <id> --overlap -N1 -n1 -w <rank0 host> env <PREFILL_* env> python3 m3_matrix_producer.py \
-      --cached 61440 --new 640,1600,3072,5120,32768,51200 --iters 3 --timing-dir <dir> --out results.jsonl
+  srun --jobid <id> --overlap -N1 -n1 -w <rank0 host> env <PREFILL_* env> python3 matrix_producer.py \
+      --cached 61440 --new 640,1600,3072,5120,6900,32768,51200 --iters 3 --timing-dir <dir> --out results.jsonl
 
 Semantics of one row (cached = C, a chunk multiple):
-  1. prefill [0, C) into slot 0 once (C / chunk chunks), wait until rank 15 finished the last one;
+  1. prefill [0, C) into slot 0 once (C / chunk chunks), wait until the last rank (--last-rank) finished it;
   2. for each N: ITERS times push ceil(N / chunk) chunks at actual_start = C + k*chunk, actual_end =
-     min(C + (k+1)*chunk, C + N), waiting for rank 15 to finish before the next push burst. Every
+     min(C + (k+1)*chunk, C + N), waiting for the last rank to finish before the next push burst. Every
      iteration overwrites the same positions [C, C+N), so the cached prefix [0, C) stays intact and every
      cell sees exactly C cached tokens on an IDLE pipeline (no queueing behind earlier chunks).
-  TTFT = rank-15 end of the burst's last chunk - producer push time of the first chunk (hosts are NTP
-  synced; the device-side variant from rank 0's compute_start is reported too). tok/s = N / TTFT.
+  TTFT = last-rank end of the burst's last chunk - producer push time of the first chunk (the producer and
+  rank 0 share a host; the last rank is on another host, so this relies on NTP; h2d_ms = rank 0 compute_start -
+  push time is the skew-free host->device latency). tok/s = N / TTFT.
   3. LOADED mode (--users U --reqs M, or --target-chunks): slots 1..U-1 also get the cached prefix once, then for
      each N the producer streams U*M requests of N new tokens back-to-back, round-robin across slots at CHUNK
      granularity (every slot advances one chunk per round), never waiting -> a fully filled pipeline. Reported:
        * steady-state throughput from the LAST rank's chunk cadence with the first and last `stages` chunks
-         dropped (pipeline fill / drain excluded): new tok/s = mid_chunks * (N / chunks_per_req) / window;
+         dropped (pipeline fill / drain excluded): new tok/s = (new tokens of the kept chunks) / window;
        * aggregate over the whole stream incl. tails (R*N / wall);
-       * per-request TTFT under load (push of its first chunk -> last-rank end of its last chunk): median/p90.
+       * per-request TTFT under load (push of its first chunk -> last-rank end of its last chunk): median/p90
+         over the requests whose first chunk entered a full pipeline (the first `stages` chunks of the stream
+         are excluded). The push blocks when the runner's H2D FIFO is full, so this is the closed-loop TTFT
+         of U zero-think-time users, not an open-loop arrival TTFT.
      The runner must be launched with PREFILL_NUM_USERS >= U (each slot holds its own cache; capacity per slot).
 Completion is read from the runner's PREFILL_TIMING_DIR CSVs (rank<r>.csv: rank,c,compute_start,compute_ms;
 one unbuffered line per chunk, c = per-rank running chunk index). Requires PREFILL_SYNC_PER_CHUNK=1.
 """
 
 import argparse
-import csv
 import json
 import math
 import os
@@ -41,70 +46,10 @@ sys.path.insert(
 )
 
 from loguru import logger  # noqa: E402
+from matrix_math import read_rank_csv, steady_state, ttft_stats, wait_for_chunk  # noqa: E402  (same directory)
 
 import ttnn  # noqa: E402
 from models.demos.common.prefill.runners import prefill_producer as pp  # noqa: E402  (reads PREFILL_* env at import)
-
-
-def read_rank_csv(timing_dir: str, rank: int) -> dict:
-    """{c: (compute_start_epoch_s, compute_ms)} for one rank; re-opened every call (NFS close-to-open)."""
-    out = {}
-    path = os.path.join(timing_dir, f"rank{rank}.csv")
-    try:
-        with open(path) as fh:
-            for row in csv.reader(fh):
-                if len(row) == 4:
-                    out[int(row[1])] = (float(row[2]), float(row[3]))
-    except FileNotFoundError:
-        pass
-    return out
-
-
-def wait_for_chunk(timing_dir: str, rank: int, c: int, timeout_s: float, poll_s: float = 0.2) -> tuple:
-    t0 = time.perf_counter()
-    while True:
-        rows = read_rank_csv(timing_dir, rank)
-        if c in rows:
-            return rows[c]
-        if time.perf_counter() - t0 > timeout_s:
-            raise TimeoutError(f"rank {rank} chunk c={c} not done after {timeout_s:.0f} s (have {len(rows)} rows)")
-        time.sleep(poll_s)
-
-
-def steady_state(ends: dict, c0: int, c_end: int, stages: int, real_per_chunk: float, chunk: int):
-    """Steady-state throughput of a back-to-back chunk stream from the LAST rank's chunk end times.
-
-    ``ends`` maps chunk index -> wall-clock end time (s) for every chunk in [c0, c_end]. The first and last
-    ``stages`` chunks are dropped (pipeline fill / drain); the window is the time from the end of the chunk before
-    the first kept one to the end of the last kept one, so it spans exactly ``mid`` chunk periods. Returns None
-    when fewer than 4 chunks remain."""
-    lo, hi = c0 + stages, c_end - stages
-    mid = hi - lo + 1
-    if mid < 4:
-        return None
-    window = ends[hi] - ends[lo - 1]
-    periods = [ends[c] - ends[c - 1] for c in range(lo, hi + 1)]
-    return {
-        "mid_chunks": mid,
-        "window_s": window,
-        "steady_new_tps": mid * real_per_chunk / window,
-        "steady_processed_tps": mid * chunk / window,
-        "chunk_period_ms_median": statistics.median(periods) * 1000.0,
-    }
-
-
-def ttft_stats(req: dict, ends: dict) -> dict:
-    """Per-request TTFT under load (ms): push of the request's first chunk -> last-rank end of its last chunk.
-    Every request must have its last chunk in ``ends`` (the caller asserted the stream is complete)."""
-    missing = [k for k, r in req.items() if r["c_last"] not in ends]
-    assert not missing, f"{len(missing)} request(s) have no completion row: {missing[:4]}"
-    ttfts = sorted((ends[r["c_last"]] - r["t_push_first"]) * 1000.0 for r in req.values())
-    return {
-        "ttft_under_load_ms_median": statistics.median(ttfts),
-        "ttft_under_load_ms_p90": ttfts[int(0.9 * (len(ttfts) - 1))],
-        "ttft_under_load_ms_min": ttfts[0],
-        "ttft_under_load_ms_max": ttfts[-1],
-    }
 
 
 def main() -> int:
@@ -123,7 +68,6 @@ def main() -> int:
         help="golden trace dir whose token_ids are tiled to the cache capacity (default: PREFILL_TRACE_DIR or the weka 55k golden)",
     )
     ap.add_argument("--last-rank", type=int, default=15)
-    ap.add_argument("--shutdown", action="store_true", help="send the SHUTDOWN sentinel at the end")
     ap.add_argument("--timeout", type=float, default=900.0, help="per-burst completion timeout (s)")
     ap.add_argument("--label", type=str, default="")
     ap.add_argument("--users", type=int, default=0, help="LOADED mode: number of slots streamed round-robin (0 = off)")
@@ -143,7 +87,8 @@ def main() -> int:
     C = args.cached
     news = [int(x) for x in args.new.split(",") if x]
     assert C % chunk == 0, f"cached {C} must be a multiple of chunk {chunk}"
-    assert C + max(news) <= max_seq, f"C + max N = {C + max(news)} exceeds PREFILL_MAX_SEQ_LEN {max_seq}"
+    need = C + math.ceil(max(news) / chunk) * chunk  # the runner writes whole chunks
+    assert need <= max_seq, f"C + max N rounded up to chunks = {need} exceeds PREFILL_MAX_SEQ_LEN {max_seq}"
     pool = pp._load_token_pool(args.trace, max_seq)  # trace tiled cyclically to the cache capacity
     logger.info(
         f"[matrix] cached={C} new={news} iters={args.iters} chunk={chunk} max_seq={max_seq} "
@@ -156,14 +101,18 @@ def main() -> int:
     payload_bytes = service.payload_size_bytes()
     logger.info(f"[matrix] attached to {service_id}; payload={payload_bytes}B")
 
-    # The runner's per-rank chunk counter continues across producer sessions: start from what is there.
+    # The runner's per-rank chunk counter continues across producer sessions: start from what is there. Every
+    # rank processes every chunk exactly once, so rank 0 and the last rank must have logged the same chunk set,
+    # otherwise the pipeline is not idle (or a CSV row was lost) and our chunk indices would silently drift.
     rows0 = read_rank_csv(args.timing_dir, 0)
     rows_last = read_rank_csv(args.timing_dir, args.last_rank)
-    if len(rows0) != len(rows_last):
-        logger.warning(
-            f"[matrix] rank0 has {len(rows0)} rows, rank{args.last_rank} {len(rows_last)}: pipeline not idle?"
-        )
-    next_c = (max(rows0) + 1) if rows0 else 0
+    n_prev = max(list(rows0) + list(rows_last), default=-1) + 1
+    assert set(rows0) == set(rows_last) == set(range(n_prev)), (
+        f"rank0 logged {len(rows0)} chunks, rank{args.last_rank} {len(rows_last)} (expected both = 0..{n_prev - 1}): "
+        "pipeline not idle or timing CSVs incomplete; use a fresh PREFILL_TIMING_DIR"
+    )
+    next_c = n_prev
+    new_tokens = {}  # chunk index -> new tokens carried (actual_end - actual_start)
     logger.info(f"[matrix] first chunk index c={next_c}")
 
     def push(actual_start: int, actual_end: int, slot: int = 0) -> float:
@@ -172,6 +121,7 @@ def main() -> int:
         assert arr.nbytes == payload_bytes
         t = time.time()
         service.forward_to_tensor_bytes(arr, metadata=pp._pack_metadata(slot, actual_start, actual_end))
+        new_tokens[next_c] = actual_end - actual_start
         next_c += 1
         return t
 
@@ -185,8 +135,16 @@ def main() -> int:
             t_push.append(push(a, min(a + chunk, start + n_tokens), slot))
         c_last = next_c - 1
         last_start, last_ms = wait_for_chunk(args.timing_dir, args.last_rank, c_last, args.timeout)
-        r0 = read_rank_csv(args.timing_dir, 0)
-        r0_first = r0.get(c_first, (None, None))[0]
+        # Rank 0 shares our host and writes its row before forwarding the chunk, so its row for c_first must exist
+        # and must not predate our push: that would mean our chunk index is not the runner's (stale CSVs).
+        r0_first = read_rank_csv(args.timing_dir, 0).get(c_first, (None, None))[0]
+        assert (
+            r0_first is not None
+        ), f"rank0 has no row for c={c_first} although rank{args.last_rank} finished c={c_last}"
+        assert r0_first >= t_push[0] - 0.05, (
+            f"rank0 started c={c_first} at {r0_first:.3f}, {t_push[0] - r0_first:.3f} s BEFORE we pushed it: chunk "
+            "index misaligned with the runner (stale timing CSVs?)"
+        )
         t_end = last_start + last_ms / 1000.0
         return {
             "n_chunks": n_chunks,
@@ -196,7 +154,7 @@ def main() -> int:
             "t_rank0_start_first": r0_first,
             "t_last_end": t_end,
             "ttft_ms": (t_end - t_push[0]) * 1000.0,
-            "ttft_dev_ms": (t_end - r0_first) * 1000.0 if r0_first else None,
+            "h2d_ms": (r0_first - t_push[0]) * 1000.0,
             "last_rank_compute_ms": last_ms,
         }
 
@@ -205,25 +163,23 @@ def main() -> int:
         n_chunks = math.ceil(N / chunk)
         req = {}  # (slot, k) -> dict(c_first, c_last, t_push_first)
         c0 = next_c
-        t_stream0 = None
         for k in range(reqs):
             for j in range(n_chunks):
                 a = C + j * chunk
                 for s in range(users):
                     t = push(a, min(a + chunk, C + N), s)
-                    t_stream0 = t_stream0 if t_stream0 is not None else t
                     r = req.setdefault((s, k), {"c_first": next_c - 1, "t_push_first": t})
                     r["c_last"] = next_c - 1
         c_end = next_c - 1
-        last_start, last_ms = wait_for_chunk(args.timing_dir, args.last_rank, c_end, args.timeout * 4)
+        t_stream0 = req[(0, 0)]["t_push_first"]
+        wait_for_chunk(args.timing_dir, args.last_rank, c_end, args.timeout * 4)
         rl = read_rank_csv(args.timing_dir, args.last_rank)
         ends = {c: rl[c][0] + rl[c][1] / 1000.0 for c in range(c0, c_end + 1) if c in rl}
         assert len(ends) == c_end - c0 + 1, f"last rank missing {c_end - c0 + 1 - len(ends)} chunk rows"
         total_chunks = c_end - c0 + 1
         R = users * reqs
-        real_per_chunk = N / n_chunks
         wall = ends[c_end] - t_stream0
-        steady = steady_state(ends, c0, c_end, stages, real_per_chunk, chunk)
+        steady = steady_state(ends, c0, c_end, stages, new_tokens, chunk)
         out = {
             "mode": "loaded",
             "cached": C,
@@ -239,13 +195,11 @@ def main() -> int:
             "aggregate_processed_tps": total_chunks * chunk / wall,
             "label": args.label,
         }
-        out.update(ttft_stats(req, ends))
+        out.update(ttft_stats(req, ends, c_full=c0 + stages))
         if steady:
             out.update(steady)
         return out
 
-    results = []
-    loaded_results = []
     users = args.users
     if C > 0:
         logger.info(f"[matrix] === prefilling the cached prefix [0, {C}) : {C // chunk} chunks (slot 0)")
@@ -273,20 +227,20 @@ def main() -> int:
                     }
                 )
                 logger.info(
-                    f"[matrix] cell cached={C} new={N} iter={it}: TTFT {b['ttft_ms']:.1f} ms (dev {b['ttft_dev_ms']:.1f}) "
+                    f"[matrix] cell cached={C} new={N} iter={it}: TTFT {b['ttft_ms']:.1f} ms (h2d {b['h2d_ms']:.1f}) "
                     f"-> {b['tps']:.0f} new tok/s ({b['n_chunks']} chunks, last-rank compute {b['last_rank_compute_ms']:.0f} ms)"
                 )
                 with open(args.out, "a") as fh:
                     fh.write(json.dumps(b) + "\n")
                 cell.append(b)
-                time.sleep(0.5)  # let the pipeline go fully idle
+                time.sleep(0.5)  # margin only: the last rank's row already implies every rank finished the burst
             steady = cell[1:] if len(cell) > 1 else cell
             med = statistics.median(x["ttft_ms"] for x in steady)
+            over = f"iters 1..{len(cell) - 1}" if len(cell) > 1 else "iter 0 only"
             logger.info(
-                f"[matrix] CELL cached={C} new={N}: median TTFT {med:.1f} ms over iters 1..{len(cell) - 1} "
+                f"[matrix] CELL cached={C} new={N}: median TTFT {med:.1f} ms over {over} "
                 f"(iter0 {cell[0]['ttft_ms']:.1f}) -> {N / (med / 1000):.0f} new tok/s"
             )
-            results.append((N, med, cell[0]["ttft_ms"]))
         if users > 0:
             n_chunks = math.ceil(N / chunk)
             reqs = args.reqs or max(3, math.ceil(args.target_chunks / (users * n_chunks)))
@@ -299,35 +253,12 @@ def main() -> int:
                 f"({lr.get('steady_processed_tps', float('nan')):.0f} processed, period {lr.get('chunk_period_ms_median', float('nan')):.1f} ms, "
                 f"{lr.get('mid_chunks', 0)} mid chunks) | aggregate incl. tails {lr['aggregate_new_tps']:.0f} new tok/s over {lr['wall_s']:.1f} s | "
                 f"TTFT under load median {lr['ttft_under_load_ms_median']:.0f} ms p90 {lr['ttft_under_load_ms_p90']:.0f} "
-                f"[{lr['ttft_under_load_ms_min']:.0f}, {lr['ttft_under_load_ms_max']:.0f}] ({lr['requests']} requests)"
+                f"[{lr['ttft_under_load_ms_min']:.0f}, {lr['ttft_under_load_ms_max']:.0f}] ({lr['ttft_under_load_requests']} of {lr['requests']} requests)"
             )
             with open(args.out, "a") as fh:
                 fh.write(json.dumps(lr) + "\n")
-            loaded_results.append(lr)
             time.sleep(0.5)
-
-    print(f"\n[matrix] ===== ROW cached={C} (chunk {chunk}, capacity {max_seq}) =====")
-    if results:
-        print(f"IDLE pipeline: {'new':>7} {'TTFT ms (med)':>14} {'new tok/s':>10} {'iter0 ms':>9}")
-        for N, med, it0 in results:
-            print(f"{'':>14} {N:>7} {med:>14.1f} {N / (med / 1000):>10.0f} {it0:>9.1f}")
-    if loaded_results:
-        print(
-            f"LOADED ({users} users): {'new':>7} {'steady new tok/s':>16} {'processed':>10} {'period ms':>10} {'agg new tok/s':>13} {'TTFT med ms':>11} {'p90':>8}"
-        )
-        for lr in loaded_results:
-            print(
-                f"{'':>20} {lr['new']:>7} {lr.get('steady_new_tps', float('nan')):>16.0f} {lr.get('steady_processed_tps', float('nan')):>10.0f} "
-                f"{lr.get('chunk_period_ms_median', float('nan')):>10.1f} {lr['aggregate_new_tps']:>13.0f} {lr['ttft_under_load_ms_median']:>11.0f} {lr['ttft_under_load_ms_p90']:>8.0f}"
-            )
-
-    if args.shutdown:
-        import struct
-
-        sentinel = struct.pack("<iii", -1, -1, -1)
-        service.forward_to_tensor_bytes(pp._chunk_to_host_array([1] * chunk), metadata=sentinel)
-        service.barrier()
-        logger.info("[matrix] SHUTDOWN sentinel sent")
+    logger.info(f"[matrix] ROW cached={C} done; tables: matrix_table.py {args.out}")
     return 0
 
 

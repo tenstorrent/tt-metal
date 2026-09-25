@@ -142,6 +142,7 @@ tt/moe/   EP MoE (TtMiniMaxMoE + fused swigluoai routed expert), activation
 tt/               dense_mlp, layer, model, rms_norm, topk, mlp, weight_cache, tt_prefill_runtime
 reference/        torch reference model + sparse GQA prefill
 scripts/          golden KV-cache generation + verification
+scripts/prefill_matrix/  repeatable (new x cached) prefill perf matrix on the 16-stage pipeline (see its README)
 docs/             multi-galaxy pipeline-parallel prefill running & testing
 configs/MiniMax-M3/config.json    dims only (modeling code loaded from the checkpoint via HF_MODEL)
 tests/unit/       module-by-module PCC tests
