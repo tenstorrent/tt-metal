@@ -62,6 +62,30 @@ def _load_kv_pt_trace(pt_path: str) -> dict:
     return cached
 
 
+def _load_sharded_rows(layer_dir: Path, key: str, start: int, total_len: int) -> "torch.Tensor":
+    """Rows ``[start, start + total_len)`` of a row-sharded stream, concatenated in row order.
+
+    Every ``rows_<first>_<last>.safetensors`` name carries the row span it holds, so a windowed read
+    opens only the shards that overlap it rather than the whole stream from row 0 -- at 1M context
+    that is the difference between two shards and two hundred.
+    """
+    import torch
+    from safetensors import safe_open
+
+    end = start + total_len
+    rows = []
+    for shard in sorted(layer_dir.glob("rows_*.safetensors"), key=lambda p: int(p.stem.split("_")[1])):
+        first, last = (int(x) for x in shard.stem.split("_")[1:3])
+        if last <= start or first >= end:
+            continue
+        with safe_open(shard, framework="pt") as f:
+            t = f.get_tensor(key)
+        rows.append(t[max(start - first, 0) : min(end - first, t.shape[0])])
+    if not rows:
+        raise FileNotFoundError(f"{layer_dir} holds no shard covering rows [{start},{end})")
+    return torch.cat(rows, dim=0).to(torch.float32)
+
+
 def _load_golden_kv_post(trace_dir, layer_idx: int, total_len: int, start: int = 0) -> "torch.Tensor":
     """[total_len, 576] golden kv_post_transform for one layer, format-agnostic:
     - DeepSeek: a single kv_cache/layer_N.safetensors holding the full tensor.
@@ -79,21 +103,7 @@ def _load_golden_kv_post(trace_dir, layer_idx: int, total_len: int, start: int =
     if single.exists():
         with safe_open(single, framework="pt") as f:
             return f.get_slice(key)[start : start + total_len].to(torch.float32)
-    layer_dir = Path(trace_dir) / "kv_cache" / f"layer_{layer_idx}"
-    if start:
-        # The sharded layout would need the offset resolved against each shard's row range; no
-        # head+tail capture ships sharded, so refuse rather than silently score the wrong rows.
-        raise NotImplementedError(f"start={start} is not supported for the sharded layout at {layer_dir}")
-    shards = sorted(layer_dir.glob("rows_*.safetensors"), key=lambda p: int(p.stem.split("_")[1]))
-    rows, have = [], 0
-    for shard in shards:
-        with safe_open(shard, framework="pt") as f:
-            t = f.get_tensor(key)
-        rows.append(t)
-        have += t.shape[0]
-        if have >= total_len:
-            break
-    return torch.cat(rows, dim=0)[:total_len].to(torch.float32)
+    return _load_sharded_rows(Path(trace_dir) / "kv_cache" / f"layer_{layer_idx}", key, start, total_len)
 
 
 def kvpe_golden_present(trace_dir, layer_idx: int) -> bool:
@@ -123,26 +133,12 @@ def index_golden_present(trace_dir) -> bool:
     return dsa_dir.is_dir() and any(dsa_dir.glob("indexer_k_layer_*"))
 
 
-def _load_golden_index_k(trace_dir, layer_idx: int, total_len: int) -> "torch.Tensor":
+def _load_golden_index_k(trace_dir, layer_idx: int, total_len: int, start: int = 0) -> "torch.Tensor":
     """[total_len, index_head_dim] golden indexer key for one layer, from the vLLM trace's row-sharded
     dsa/indexer_k_layer_N/rows_<start>_<end>.safetensors shards (concatenated by start row). Mirrors
-    _load_golden_kv_post but reads the dsa/ subdir and the indexer_k_layer_N key."""
-    from pathlib import Path
-
-    from safetensors import safe_open
-
+    _load_golden_kv_post, `start` included, but reads the dsa/ subdir and the indexer_k_layer_N key."""
     key = f"indexer_k_layer_{layer_idx}"
-    layer_dir = Path(trace_dir) / "dsa" / key
-    shards = sorted(layer_dir.glob("rows_*.safetensors"), key=lambda p: int(p.stem.split("_")[1]))
-    rows, have = [], 0
-    for shard in shards:
-        with safe_open(shard, framework="pt") as f:
-            t = f.get_tensor(key)
-        rows.append(t)
-        have += t.shape[0]
-        if have >= total_len:
-            break
-    return torch.cat(rows, dim=0)[:total_len].to(torch.float32)
+    return _load_sharded_rows(Path(trace_dir) / "dsa" / key, key, start, total_len)
 
 
 def kv_cache_pcc_check(
