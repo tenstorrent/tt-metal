@@ -22,8 +22,12 @@ inline void read_two_pass_stats_block(
     std::uint32_t start_tile,
     std::uint32_t row_stride,
     std::uint32_t rows) {
-    // Tuned Blackhole read batch size, not a hardware limit on outstanding NOC reads.
+    // Calibrated batch sizes, not hardware limits on outstanding NOC reads.
+#if defined(ARCH_WORMHOLE)
+    constexpr std::uint32_t max_tiles_per_read_batch = 2;
+#else
     constexpr std::uint32_t max_tiles_per_read_batch = 4;
+#endif
     bool read_contiguous = false;
     if constexpr (TilesPerRow == 1 && std::is_base_of_v<InterleavedAddrGen<true>, Accessor>) {
         // Stepping by the bank count advances one physical page in the same bank.

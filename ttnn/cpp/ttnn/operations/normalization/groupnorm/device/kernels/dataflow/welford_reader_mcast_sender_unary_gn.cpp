@@ -240,7 +240,7 @@ void kernel_main() {
     }
 
     std::uint32_t index_b_offset = 0;
-#if defined(ARCH_BLACKHOLE) && !defined(TILIZE_IN) && !defined(GN_DISTRIBUTED_AG)
+#if (defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)) && !defined(TILIZE_IN) && !defined(GN_DISTRIBUTED_AG)
     const std::uint32_t input_ring_end = dfb_in0.get_write_ptr() + dfb_in0.get_total_size_bytes();
 #endif
     for (std::uint32_t b = 0; b < num_batches; ++b) {
@@ -257,7 +257,7 @@ void kernel_main() {
                 }
 
 #if !defined(READER_REPACK) or !defined(TILIZE_IN)
-#if defined(ARCH_BLACKHOLE) && !defined(TILIZE_IN) && !defined(GN_DISTRIBUTED_AG)
+#if (defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)) && !defined(TILIZE_IN) && !defined(GN_DISTRIBUTED_AG)
                 if constexpr (!sfpu_two_pass_l1_replay) {
                     read_two_pass_stats_block<per_core_N, src0_tile_bytes, welford_fp32_alias>(
                         noc,
