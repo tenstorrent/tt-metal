@@ -17,14 +17,20 @@ from collections import Counter, defaultdict
 REGRESSION = 0.95  # speedup below this counts as a regression
 
 
-def load(path, mode=None):
-    with open(path) as f:
-        rows = [r for r in csv.DictReader(f) if mode is None or r["mode"] == mode]
-    return {r["case"]: r for r in rows}
-
-
 def ok(r):
     return r is not None and r["status"] == "ok" and r["device_ns"]
+
+
+def load(path, mode=None):
+    """case -> row; with several rows per case (sweep candidates) keeps the fastest ok one."""
+    with open(path) as f:
+        rows = [r for r in csv.DictReader(f) if mode is None or r["mode"] == mode]
+    best = {}
+    for r in rows:
+        cur = best.get(r["case"])
+        if cur is None or (ok(r) and (not ok(cur) or float(r["device_ns"]) < float(cur["device_ns"]))):
+            best[r["case"]] = r
+    return best
 
 
 def geomean(xs):

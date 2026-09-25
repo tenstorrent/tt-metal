@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
+#include "ttnn/config.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_auto_config.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/types.hpp"
 #include <algorithm>
@@ -1034,18 +1036,24 @@ MatmulProgramConfig get_program_config(
     if (attributes.program_config.has_value()) {
         return attributes.program_config.value();
     }
-    auto config = generate_matmul_program_config(
-        input_tensor_a,
-        input_tensor_b,
-        transpose_a,
-        transpose_b,
-        bias_single_tile_size,
-        attributes.output_mem_config,
-        attributes.compute_kernel_config,
-        attributes.user_core_coord,
-        attributes.user_fused_activation,
-        attributes.user_run_batched,
-        attributes.output_dtype.value_or(input_tensor_a.dtype()));
+    std::optional<MatmulProgramConfig> auto_config;
+    if (ttnn::CONFIG.get<"matmul_auto_config_v2">()) {
+        auto_config = auto_config::select_program_config(
+            input_tensor_a, input_tensor_b, transpose_a, transpose_b, bias_single_tile_size, attributes);
+    }
+    auto config = auto_config.has_value() ? std::move(auto_config.value())
+                                          : generate_matmul_program_config(
+                                                input_tensor_a,
+                                                input_tensor_b,
+                                                transpose_a,
+                                                transpose_b,
+                                                bias_single_tile_size,
+                                                attributes.output_mem_config,
+                                                attributes.compute_kernel_config,
+                                                attributes.user_core_coord,
+                                                attributes.user_fused_activation,
+                                                attributes.user_run_batched,
+                                                attributes.output_dtype.value_or(input_tensor_a.dtype()));
     log_debug(tt::LogOp, "Auto generated program config: {}", config);
     last_auto_program_config = config;
 

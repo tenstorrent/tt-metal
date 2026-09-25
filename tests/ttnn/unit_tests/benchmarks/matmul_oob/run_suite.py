@@ -62,7 +62,7 @@ DRAM_GBPS = {"wormhole_b0": 288, "blackhole": 512}
 TILE_BYTES = {"bf16": 2048, "bfp8": 1088, "bfp4": 576, "fp32": 4096}
 # Cases whose L1-resident tensors need more than this fraction of the grid's L1 are skipped as infeasible
 L1_BYTES_PER_CORE = 1536 * 1024
-L1_FEASIBLE_FRACTION = 0.75
+L1_FEASIBLE_FRACTION = 0.6
 # PCC floor for cases with bfp4 operands (the default --pcc-threshold applies otherwise)
 BFP4_PCC_THRESHOLD = 0.97
 SHARD_STRATEGIES = {
@@ -92,6 +92,7 @@ PCC_SAMPLE = 1 << 24  # max output elements used for PCC
 # Selector modes. Each is a context manager active while the case runs; new selectors hook in here.
 MODES = {
     "oob": contextlib.nullcontext,
+    "v2": lambda: ttnn.manage_config("matmul_auto_config_v2", True),
 }
 
 FIELDS = [
@@ -228,162 +229,200 @@ def placement_bytes(case):
     return l1, dram
 
 
-def run_case(case, mode, device, args, seen_programs):
-    grid = device.compute_with_storage_grid_size()
-    batch, M, K, N = case.mkn
-    row = {"status": "ok", "error": ""}
-    tensors = []
+class CaseRun:
+    """Input tensors for one case, reusable across modes and explicit program configs.
 
-    l1_bytes, dram_bytes = placement_bytes(case)
-    l1_capacity = L1_FEASIBLE_FRACTION * L1_BYTES_PER_CORE * grid.x * grid.y
-    if l1_bytes > l1_capacity:
-        return {
-            **row,
-            "status": "infeasible",
-            "error": f"L1-resident tensors need {l1_bytes / 2**20:.0f} MiB > {l1_capacity / 2**20:.0f} MiB",
-        }
+    Construction raises Infeasible or SetupError; measure() returns a result row.
+    """
 
-    try:
-        torch.manual_seed(0)
-        a_t = torch.randn(case.a_shape, dtype=torch.bfloat16)
-        b_t = torch.randn(case.b_shape, dtype=torch.bfloat16) / math.sqrt(K)
-        a = ttnn.from_torch(
-            a_t,
-            dtype=DTYPES[case.a_dtype],
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=input_memory_config(case.a_mem, case.a_shape, grid),
-        )
-        b = ttnn.from_torch(
-            b_t,
-            dtype=DTYPES[case.b_dtype],
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=input_memory_config(case.b_mem, case.b_shape, grid),
-        )
-        tensors += [a, b]
-        bias = None
-        if case.bias:
-            bias_t = torch.randn((1, N), dtype=torch.bfloat16)
-            bias = ttnn.from_torch(bias_t, dtype=DTYPES[case.b_dtype], layout=ttnn.TILE_LAYOUT, device=device)
-            tensors.append(bias)
-        del a_t, b_t
-    except Exception as e:
-        return {**row, "status": "setup_error", "error": short_error(e)}
+    class Infeasible(Exception):
+        pass
 
-    kwargs = dict(
-        transpose_a=case.transpose_a,
-        transpose_b=case.transpose_b,
-        memory_config=output_memory_config(case.out_mem),
-        dtype=DTYPES[case.out_dtype] if case.out_dtype else None,
-        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-            math_fidelity=FIDELITIES[case.fidelity],
-            math_approx_mode=False,
-            fp32_dest_acc_en=case.fp32_acc,
-            packer_l1_acc=case.packer_l1_acc,
-        ),
-    )
-    if case.core_grid == "device":
-        kwargs["core_grid"] = ttnn.CoreGrid(y=grid.y, x=grid.x)
-    elif case.core_grid is not None:
-        kwargs["core_grid"] = ttnn.CoreGrid(x=case.core_grid[0], y=case.core_grid[1])
+    class SetupError(Exception):
+        pass
 
-    def call():
-        if case.op == "linear":
-            return ttnn.linear(a, b, bias=bias, activation=case.activation, **kwargs)
-        return ttnn.matmul(a, b, **kwargs)
+    def __init__(self, case, device, args, seen_programs):
+        self.case, self.device, self.args, self.seen_programs = case, device, args, seen_programs
+        self.grid = device.compute_with_storage_grid_size()
+        self.arch = str(device.arch()).split(".")[-1].lower()
+        self.device_id = device.get_device_ids()[0] if hasattr(device, "get_device_ids") else device.id()
+        self.tensors = []
+        self.golden = None
+        batch, M, K, N = case.mkn
 
-    device_id = device.get_device_ids()[0] if hasattr(device, "get_device_ids") else device.id()
-    out = None
-    try:
-        with MODES[mode]():
-            last_auto_config(reset=True)
-            out = call()  # compile
-            ttnn.synchronize_device(device)
-            config = last_auto_config(reset=True)
-            row["config"] = config or ""
-            row["config_type"] = config.split("(", 1)[0] if config else ""
-            for _ in range(args.warmup):
-                out = call()
-            ttnn.synchronize_device(device)
-            ttnn.ReadDeviceProfiler(device)
-            new_program_entries(device_id, seen_programs)  # discard compile/warmup
-
-            for _ in range(args.iters):
-                out = call()
-            ttnn.synchronize_device(device)
-            ttnn.ReadDeviceProfiler(device)
-            entries = new_program_entries(device_id, seen_programs)
-    except Exception as e:
-        for t in tensors:
-            ttnn.deallocate(t)
-        return {**row, "status": "error", "error": short_error(e)}
-
-    if not entries or len(entries) % args.iters != 0:
-        row.update(status="perf_error", error=f"{len(entries)} profiler entries for {args.iters} iterations")
-    else:
-        per_call = len(entries) // args.iters
-        calls = [entries[i * per_call : (i + 1) * per_call] for i in range(args.iters)]
-
-        def total(call_entries, key):
-            results = [p.program_analyses_results.get(key) for p in call_entries]
-            return sum(r.duration for r in results if r is not None)
-
-        # Report the median call by kernel duration; the other durations come from that same call
-        calls.sort(key=lambda c: total(c, DURATION_KEY))
-        median_call = calls[len(calls) // 2]
-        device_ns = total(median_call, DURATION_KEY)
-        row.update({col: total(median_call, key) for col, key in EXTRA_DURATIONS.items()})
-        row["cores"] = max(p.core_count for p in median_call)
-        arch = str(device.arch()).split(".")[-1].lower()
-        tiles = batch * math.ceil(M / 32) * math.ceil(K / 32) * math.ceil(N / 32)
-        ideal_ns = tiles * CYCLES_PER_TILE[case.fidelity] / (grid.x * grid.y) / FREQ_GHZ.get(arch, 1.0)
-        # DRAM ideal: every DRAM-resident tensor read/written exactly once at peak bandwidth
-        dram_ideal_ns = dram_bytes / DRAM_GBPS.get(arch, DRAM_GBPS["wormhole_b0"])
-        row.update(
-            device_ns=device_ns,
-            device_ns_min=total(calls[0], DURATION_KEY),
-            programs_per_call=per_call,
-            util_pct=round(100 * ideal_ns / device_ns, 2),
-            dram_util_pct=round(100 * dram_ideal_ns / device_ns, 2),
-            roofline_pct=round(100 * max(ideal_ns, dram_ideal_ns) / device_ns, 2),
-            bound="dram" if dram_ideal_ns > ideal_ns else "math",
-            tflops=round(2 * batch * M * K * N / device_ns / 1e3, 3),
-        )
-
-    flops = 2 * batch * M * K * N
-    if args.pcc_max_flops and flops > args.pcc_max_flops:
-        row["pcc"] = ""
-    else:
+        l1_bytes, self.dram_bytes = placement_bytes(case)
+        l1_capacity = L1_FEASIBLE_FRACTION * L1_BYTES_PER_CORE * self.grid.x * self.grid.y
+        if l1_bytes > l1_capacity:
+            raise CaseRun.Infeasible(
+                f"L1-resident tensors need {l1_bytes / 2**20:.0f} MiB > {l1_capacity / 2**20:.0f} MiB"
+            )
         try:
-            ga = ttnn.to_torch(a).float()
-            gb = ttnn.to_torch(b).float()
+            torch.manual_seed(0)
+            a_t = torch.randn(case.a_shape, dtype=torch.bfloat16)
+            b_t = torch.randn(case.b_shape, dtype=torch.bfloat16) / math.sqrt(K)
+            self.a = self._to_device(a_t, case.a_dtype, input_memory_config(case.a_mem, case.a_shape, self.grid))
+            self.b = self._to_device(b_t, case.b_dtype, input_memory_config(case.b_mem, case.b_shape, self.grid))
+            self.bias = None
+            if case.bias:
+                bias_t = torch.randn((1, N), dtype=torch.bfloat16)
+                self.bias = self._to_device(bias_t, case.b_dtype, ttnn.DRAM_MEMORY_CONFIG)
+        except Exception as e:
+            self.close()
+            raise CaseRun.SetupError(short_error(e)) from e
+
+        self.kwargs = dict(
+            transpose_a=case.transpose_a,
+            transpose_b=case.transpose_b,
+            memory_config=output_memory_config(case.out_mem),
+            dtype=DTYPES[case.out_dtype] if case.out_dtype else None,
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=FIDELITIES[case.fidelity],
+                math_approx_mode=False,
+                fp32_dest_acc_en=case.fp32_acc,
+                packer_l1_acc=case.packer_l1_acc,
+            ),
+        )
+        if case.core_grid == "device":
+            self.kwargs["core_grid"] = ttnn.CoreGrid(y=self.grid.y, x=self.grid.x)
+        elif case.core_grid is not None:
+            self.kwargs["core_grid"] = ttnn.CoreGrid(x=case.core_grid[0], y=case.core_grid[1])
+
+    def _to_device(self, t, dtype, memory_config):
+        tensor = ttnn.from_torch(
+            t, dtype=DTYPES[dtype], layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=memory_config
+        )
+        self.tensors.append(tensor)
+        return tensor
+
+    def _call(self, program_config):
+        kwargs = dict(self.kwargs)
+        if program_config is not None:
+            kwargs.pop("core_grid", None)  # core_grid and program_config are mutually exclusive
+            kwargs["program_config"] = program_config
+        if self.case.op == "linear":
+            return ttnn.linear(self.a, self.b, bias=self.bias, activation=self.case.activation, **kwargs)
+        return ttnn.matmul(self.a, self.b, **kwargs)
+
+    def measure(self, mode="oob", program_config=None):
+        """Run warmup + timed iterations; returns a row with timing, config and PCC."""
+        case, args, grid = self.case, self.args, self.grid
+        batch, M, K, N = case.mkn
+        row = {"status": "ok", "error": ""}
+        out = None
+        try:
+            with MODES[mode]():
+                last_auto_config(reset=True)
+                out = self._call(program_config)  # compile
+                ttnn.synchronize_device(self.device)
+                config = repr(program_config) if program_config is not None else last_auto_config(reset=True)
+                row["config"] = config or ""
+                row["config_type"] = config.split("(", 1)[0] if config else ""
+                for _ in range(args.warmup):
+                    out = self._call(program_config)
+                ttnn.synchronize_device(self.device)
+                ttnn.ReadDeviceProfiler(self.device)
+                new_program_entries(self.device_id, self.seen_programs)  # discard compile/warmup
+
+                for _ in range(args.iters):
+                    out = self._call(program_config)
+                ttnn.synchronize_device(self.device)
+                ttnn.ReadDeviceProfiler(self.device)
+                entries = new_program_entries(self.device_id, self.seen_programs)
+        except Exception as e:
+            if out is not None:
+                ttnn.deallocate(out)
+            return {**row, "status": "error", "error": short_error(e)}
+
+        if not entries or len(entries) % args.iters != 0:
+            row.update(status="perf_error", error=f"{len(entries)} profiler entries for {args.iters} iterations")
+        else:
+            per_call = len(entries) // args.iters
+            calls = [entries[i * per_call : (i + 1) * per_call] for i in range(args.iters)]
+
+            def total(call_entries, key):
+                results = [p.program_analyses_results.get(key) for p in call_entries]
+                return sum(r.duration for r in results if r is not None)
+
+            # Report the median call by kernel duration; the other durations come from that same call
+            calls.sort(key=lambda c: total(c, DURATION_KEY))
+            median_call = calls[len(calls) // 2]
+            device_ns = total(median_call, DURATION_KEY)
+            row.update({col: total(median_call, key) for col, key in EXTRA_DURATIONS.items()})
+            row["cores"] = max(p.core_count for p in median_call)
+            tiles = batch * math.ceil(M / 32) * math.ceil(K / 32) * math.ceil(N / 32)
+            ideal_ns = tiles * CYCLES_PER_TILE[case.fidelity] / (grid.x * grid.y) / FREQ_GHZ.get(self.arch, 1.0)
+            # DRAM ideal: every DRAM-resident tensor read/written exactly once at peak bandwidth
+            dram_ideal_ns = self.dram_bytes / DRAM_GBPS.get(self.arch, DRAM_GBPS["wormhole_b0"])
+            row.update(
+                device_ns=device_ns,
+                device_ns_min=total(calls[0], DURATION_KEY),
+                programs_per_call=per_call,
+                util_pct=round(100 * ideal_ns / device_ns, 2),
+                dram_util_pct=round(100 * dram_ideal_ns / device_ns, 2),
+                roofline_pct=round(100 * max(ideal_ns, dram_ideal_ns) / device_ns, 2),
+                bound="dram" if dram_ideal_ns > ideal_ns else "math",
+                tflops=round(2 * batch * M * K * N / device_ns / 1e3, 3),
+            )
+
+        self._check(row, out)
+        ttnn.deallocate(out)
+        return row
+
+    def _golden(self):
+        if self.golden is None:
+            case = self.case
+            ga = ttnn.to_torch(self.a).float()
+            gb = ttnn.to_torch(self.b).float()
             if case.transpose_a:
                 ga = ga.transpose(-1, -2)
             if case.transpose_b:
                 gb = gb.transpose(-1, -2)
             golden = ga @ gb
-            if bias is not None:
-                golden = golden + ttnn.to_torch(bias).float()
+            if self.bias is not None:
+                golden = golden + ttnn.to_torch(self.bias).float()
             if case.activation == "silu":
                 golden = torch.nn.functional.silu(golden)
             elif case.activation == "relu":
                 golden = torch.relu(golden)
             elif case.activation == "gelu":
                 golden = torch.nn.functional.gelu(golden)
+            self.golden = golden
+        return self.golden
+
+    def _check(self, row, out):
+        case, args = self.case, self.args
+        batch, M, K, N = case.mkn
+        row["pcc"] = ""
+        if args.pcc_max_flops and 2 * batch * M * K * N > args.pcc_max_flops:
+            return
+        try:
+            golden = self._golden()
             actual = ttnn.to_torch(out).float()
             row["pcc"] = round(pcc(golden, actual.reshape(golden.shape)), 6)
             threshold = BFP4_PCC_THRESHOLD if "bfp4" in (case.a_dtype, case.b_dtype) else args.pcc_threshold
             if row["status"] == "ok" and row["pcc"] < threshold:
                 row["status"] = "pcc_fail"
         except Exception as e:
-            row["pcc"] = ""
             row["error"] = (row["error"] + " | pcc: " + short_error(e)).strip(" |")
 
-    ttnn.deallocate(out)
-    for t in tensors:
-        ttnn.deallocate(t)
-    return row
+    def close(self):
+        for t in self.tensors:
+            ttnn.deallocate(t)
+        self.tensors = []
+        self.golden = None
+
+
+def run_case(case, mode, device, args, seen_programs):
+    try:
+        run = CaseRun(case, device, args, seen_programs)
+    except CaseRun.Infeasible as e:
+        return {"status": "infeasible", "error": str(e)}
+    except CaseRun.SetupError as e:
+        return {"status": "setup_error", "error": str(e)}
+    try:
+        return run.measure(mode)
+    finally:
+        run.close()
 
 
 def case_fields(case, arch, grid, git):
