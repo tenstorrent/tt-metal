@@ -1248,8 +1248,10 @@ void py_module(nb::module_& mod) {
             nb::arg("bias") = nb::none(),
             nb::arg("attributes"),
             R"doc(
-        Launch ttnn::prim::matmul with optional fused bias. ttnn.linear / ttnn.matmul post-process
-        bias when in1 is batched, so they never fuse in that case.
+        Testing only, not part of the public API; use ttnn.matmul or ttnn.linear instead.
+
+        Calls ttnn::prim::matmul directly so tests can exercise fused bias where ttnn.matmul /
+        ttnn.linear would not fuse it (they add bias as a separate op when in1 is batched).
     )doc");
 
     // Bind select_program_factory for Python-side factory dispatch
