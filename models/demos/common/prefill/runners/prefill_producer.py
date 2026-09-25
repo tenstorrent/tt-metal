@@ -641,7 +641,79 @@ def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len:
         return _read_slot_kv_and_check_pcc_m3(table, device_map, slot_id, real_len, trace_dir)
     if ADAPTER.name == "gpt_oss_d_p":
         return _read_slot_kv_and_check_pcc_gpt_oss(table, device_map, slot_id, real_len, trace_dir)
+    if ADAPTER.name == "deepseek_v4_flash":
+        return _read_slot_kv_and_check_pcc_v4(table, device_map, slot_id, real_len, trace_dir)
     return _read_slot_kv_and_check_pcc_mla(table, device_map, slot_id, real_len, trace_dir)
+
+
+def _read_slot_kv_and_check_pcc_v4(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
+    """DeepSeek-V4-Flash: the table has one config per contract group (tt/v4/kv_contract.py, order = contract order,
+    pending groups last), its "layer" is the group's KIND-RANK and its "position" the UNIFIED ROW (rows [0, 128) =
+    the window ring, row 128 + w = compressed entry w; the index-key cache is indexed by entry). Reads every layer
+    of every migrated group over UMD, decodes with the byte-size-driven chunk decoder (bfp8 tiles x512 / x128, bf16
+    ROW_MAJOR x512) and PCCs against a "v4_groups_v1" golden (tt/v4/golden.py): window ring, entries [:T] with
+    T = real_len // rate, index keys [:T]. Returns the min PCC; raises when the trace carries no V4 golden."""
+    from models.demos.deepseek_v3_d_p.tt.v4 import kv_contract as kc
+    from models.demos.deepseek_v3_d_p.tt.v4.golden import LAYOUT, load_golden, trace_layout
+    from models.demos.deepseek_v3_d_p.tt.v4.layer_kinds import layers_of_kind
+    from tests.ttnn.utils_for_testing import comp_pcc
+
+    if trace_layout(trace_dir) != LAYOUT:
+        raise RuntimeError(
+            f"[producer] {trace_dir} carries no {LAYOUT} golden (tt/v4/golden.py writes one); cannot PCC the V4 KV"
+        )
+    cfg = ADAPTER.load_hf_config()
+    kinds = {}
+    plan = [g for g in kc.CONTRACT if not g.pending and layers_of_kind(cfg, g.kind, num_layers=NUM_LAYERS)]
+    assert table.num_configs() >= len(plan), (table.num_configs(), [g.name for g in plan])
+    min_pcc, checked = 1.0, 0
+    for config_id, g in enumerate(plan):
+        all_of_kind = layers_of_kind(cfg, g.kind)  # kind-rank -> global layer over the WHOLE model
+        rate = kc.CSA_RATE if g.kind == "compressed_sparse_attention" else kc.HCA_RATE
+        for kind_rank, layer in enumerate(all_of_kind):
+            if layer >= NUM_LAYERS:
+                break
+            loc0 = table.lookup(kind_rank, 0, slot_id, config_id)
+            try:
+                _resolve_unique_id(table.get_device_group(loc0.device_group_index).fabric_node_ids, device_map)
+            except KeyError:
+                continue  # another host's layer
+            golden = load_golden(trace_dir, layer)
+            extent = g.extent(MAX_SEQ_LEN)
+            rows = []
+            for pos in range(0, extent, kc.CHUNK_N_TOKENS):
+                loc = table.lookup(kind_rank, pos, slot_id, config_id)
+                uid = _resolve_unique_id(table.get_device_group(loc.device_group_index).fabric_node_ids, device_map)
+                raw = ttnn.experimental.disaggregation.read_dram_umd(uid, loc.noc_addr, loc.size_bytes)
+                rows.append(_decode_kv_chunk(bytes(raw), g.width))
+            dev = torch.cat(rows, 0).float()
+            if g.name == "csa_index_k":
+                T = min(real_len // rate, golden[f"index_k_layer_{layer}"].shape[0])
+                _, pcc = comp_pcc(golden[f"index_k_layer_{layer}"][:T].float(), dev[:T])
+                logger.info(
+                    f"[producer] slot {slot_id} layer {layer:>2} {g.name}: index keys PCC {pcc:.5f} ({T} entries)"
+                )
+                min_pcc = min(min_pcc, pcc)
+            else:
+                _, pcc_w = comp_pcc(golden[f"window_layer_{layer}"].float(), dev[:WINDOW_ROWS])
+                min_pcc = min(min_pcc, pcc_w)
+                msg = f"window {pcc_w:.5f}"
+                if f"compressed_layer_{layer}" in golden:
+                    T = min(real_len // rate, golden[f"compressed_layer_{layer}"].shape[0])
+                    _, pcc_e = comp_pcc(
+                        golden[f"compressed_layer_{layer}"][:T].float(), dev[WINDOW_ROWS : WINDOW_ROWS + T]
+                    )
+                    min_pcc = min(min_pcc, pcc_e)
+                    msg += f" entries {pcc_e:.5f} ({T})"
+                logger.info(f"[producer] slot {slot_id} layer {layer:>2} {g.name}: {msg}")
+            checked += 1
+    if checked == 0:
+        raise RuntimeError(f"slot {slot_id}: no local layers resolved against the device map (nothing verified)")
+    logger.info(f"[producer] slot {slot_id} V4 KV PCC over {checked} (group, layer) pairs -> {min_pcc:.6f}")
+    return min_pcc
+
+
+WINDOW_ROWS = 128
 
 
 def _read_kv_slice(table, device_map, config_id, layer, slot_id, read_len, head_dim, decode):
