@@ -8,7 +8,14 @@
 #include "api/tensor/noc_traits.h"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/chronological_selections/device/kernels/chronology.hpp"
 using namespace kda_chronology;
-template <uint32_t sp_rank, uint32_t sp_size, uint32_t local_rows, uint32_t BH, uint32_t K, uint32_t V>
+template <
+    uint32_t sp_rank,
+    uint32_t sp_size,
+    uint32_t local_rows,
+    uint32_t BH,
+    uint32_t K,
+    uint32_t V,
+    uint32_t has_actual_end>
 TT_KERNEL void derive() {
     Noc noc;
     Scratchpad<volatile uint32_t> scratch(scratch::scratch);
@@ -18,12 +25,24 @@ TT_KERNEL void derive() {
     auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(address);
     noc.async_read(actual_start, CoreLocalMem<uint32_t>(address), sizeof(uint32_t), {.page_id = 0}, {});
     noc.async_read_barrier();
-    const auto topology = derive(words[0], sp_rank, sp_size, local_rows);
+    const uint32_t start = words[0];
+    auto topology = derive(start, sp_rank, sp_size, local_rows);
+    if constexpr (has_actual_end) {
+        const auto actual_end = TensorAccessor(tensor::actual_end);
+        noc.async_read(actual_end, CoreLocalMem<uint32_t>(address), sizeof(uint32_t), {.page_id = 0}, {});
+        noc.async_read_barrier();
+        topology = derive_interval(start, words[0], sp_rank, sp_size, local_rows);
+    }
     for (uint32_t row = 0; row < selection::record_count(sp_size); ++row) {
         for (uint32_t i = 0; i < selection::record_width; ++i) {
             words[i] = 0;
         }
-        if (row < selection::local_entry_state) {
+        if (row == selection::local_final_history(sp_size)) {
+            const uint32_t history_end = topology.valid_rows == 0 ? selection::history_rows : topology.valid_rows;
+            for (uint32_t i = 0; i < selection::history_rows; ++i) {
+                words[i] = history_end - selection::history_rows + i;
+            }
+        } else if (row < selection::local_entry_state) {
             uint32_t base;
             if (row == selection::outgoing_history) {
                 base = (topology.local_split ? topology.head_rows : local_rows) - selection::history_rows;
@@ -46,9 +65,9 @@ TT_KERNEL void derive() {
             } else {
                 selected = (topology.first_rank + (row - selection::affine_transforms) / 2) % sp_size;
             }
-            const bool end = (row - selection::local_entry_state) % 2 != 0;
-            words[0] = selected + uint32_t(end);
-            if (end) {
+            const bool is_end_record = (row - selection::local_entry_state) % 2 != 0;
+            words[0] = selected + uint32_t(is_end_record);
+            if (is_end_record) {
                 words[1] = BH;
                 words[2] = K;
                 words[3] = row >= selection::affine_transforms ? K + V : V;
