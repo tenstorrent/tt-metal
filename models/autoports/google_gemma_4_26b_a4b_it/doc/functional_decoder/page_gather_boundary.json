@@ -1,0 +1,50 @@
+{
+  "results": [
+    {
+      "pages": 128,
+      "native_exact": true,
+      "direct_exact": true,
+      "first_mismatch": null,
+      "mismatch_count": 0,
+      "first_expected": null,
+      "first_actual": null
+    },
+    {
+      "pages": 1920,
+      "native_exact": true,
+      "direct_exact": true,
+      "first_mismatch": null,
+      "mismatch_count": 0,
+      "first_expected": null,
+      "first_actual": null
+    },
+    {
+      "pages": 1921,
+      "native_exact": false,
+      "direct_exact": true,
+      "first_mismatch": 34,
+      "mismatch_count": 1480,
+      "first_expected": 797,
+      "first_actual": 0
+    },
+    {
+      "pages": 2048,
+      "native_exact": false,
+      "direct_exact": true,
+      "first_mismatch": 35,
+      "mismatch_count": 1563,
+      "first_expected": 1557,
+      "first_actual": 1020935572
+    },
+    {
+      "pages": 8192,
+      "native_exact": false,
+      "direct_exact": true,
+      "first_mismatch": 75,
+      "mismatch_count": 6139,
+      "first_expected": 4213,
+      "first_actual": 4945
+    }
+  ],
+  "runtime_audit": "clean"
+}

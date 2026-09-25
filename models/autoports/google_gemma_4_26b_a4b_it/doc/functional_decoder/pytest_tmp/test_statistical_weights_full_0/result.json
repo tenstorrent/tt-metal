@@ -1,0 +1,50 @@
+{
+  "runtime_prefill_audit": "clean",
+  "prefix_length": 0,
+  "layer_type": "full_attention",
+  "phase": "prefill",
+  "length": 33,
+  "real_weights": false,
+  "pcc": 0.998781342090561,
+  "passed": true,
+  "decode": {
+    "pcc": 0.9997719638141638,
+    "passed": true,
+    "traced": true,
+    "runtime_decode_audit": "clean",
+    "repeated_equal": true,
+    "steps": 4,
+    "min_pcc": 0.9997719638141638,
+    "positions": [
+      33,
+      36
+    ],
+    "checks": [
+      {
+        "position": 33,
+        "pcc": 0.9997719638141638,
+        "passed": true
+      },
+      {
+        "position": 33,
+        "pcc": 0.9997719638141638,
+        "passed": true
+      },
+      {
+        "position": 34,
+        "pcc": 0.9997943978330236,
+        "passed": true
+      },
+      {
+        "position": 35,
+        "pcc": 0.9998119257390072,
+        "passed": true
+      },
+      {
+        "position": 36,
+        "pcc": 0.9998252967719994,
+        "passed": true
+      }
+    ]
+  }
+}

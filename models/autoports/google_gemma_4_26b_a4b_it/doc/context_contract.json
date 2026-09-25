@@ -1,0 +1,38 @@
+{
+  "hf_model": "google/gemma-4-26B-A4B-it",
+  "hf_revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+  "hf_advertised_context": 262144,
+  "supported_context": 262144,
+  "largest_tested_prefill_context": 262144,
+  "largest_tested_decode_context": 262144,
+  "capability_reduction": false,
+  "status": "validated_clean_pass",
+  "layer_types": [
+    "full_attention",
+    "sliding_attention"
+  ],
+  "per_layer_type": {
+    "sliding_attention": {
+      "passing_prefill_tokens": 262144,
+      "passing_traced_decode_context": 262144,
+      "evidence": [
+        "functional_decoder/long_sliding_262144_final.json",
+        "functional_decoder/long_sliding_262143_final.json"
+      ],
+      "status": "Final policy passes maximum and non-aligned near-maximum context",
+      "non_aligned_prefill_tokens": 262143,
+      "non_aligned_traced_decode_context": 262143
+    },
+    "full_attention": {
+      "passing_prefill_tokens": 262144,
+      "passing_traced_decode_context": 262144,
+      "evidence": [
+        "functional_decoder/long_full_262144_fixed.json",
+        "functional_decoder/long_full_262143_fixed.json"
+      ],
+      "status": "Final policy passes maximum and non-aligned near-maximum context",
+      "non_aligned_prefill_tokens": 262143,
+      "non_aligned_traced_decode_context": 262143
+    }
+  }
+}

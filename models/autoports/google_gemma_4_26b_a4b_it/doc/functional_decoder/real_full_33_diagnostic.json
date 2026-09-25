@@ -1,0 +1,14 @@
+{
+  "layer_type": "full_attention",
+  "phase": "prefill",
+  "length": 33,
+  "real_weights": true,
+  "pcc": 0.9990409416886573,
+  "passed": true,
+  "decode": {
+    "pcc": 0.9832279444343548,
+    "passed": false,
+    "traced": true,
+    "repeated_equal": true
+  }
+}

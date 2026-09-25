@@ -1,0 +1,52 @@
+{
+  "sliding_attention": {
+    "status": "clean-pass",
+    "watcher_interval_seconds": 10,
+    "disabled_features": [],
+    "workload": {
+      "input_tokens": 4096,
+      "output_tokens": 128,
+      "batch": 1,
+      "concurrency": 1
+    },
+    "exit_code": 0,
+    "watcher_log": "models/autoports/google_gemma_4_26b_a4b_it/doc/functional_decoder/watcher/sliding/generated/watcher/watcher.log",
+    "console_log": "models/autoports/google_gemma_4_26b_a4b_it/doc/functional_decoder/watcher_sliding_final.log",
+    "correctness_json": "models/autoports/google_gemma_4_26b_a4b_it/doc/functional_decoder/watcher_sliding_final.json",
+    "prefill_pcc": 0.9985263365689756,
+    "minimum_decode_pcc": 0.999043223618764,
+    "distinct_decode_positions": 128,
+    "pcc_comparisons": 129,
+    "comparison_note": "128 successive positions plus a repeated initial-position comparison",
+    "repeated_equal": true,
+    "program_cache_miss_guard": true,
+    "completed_dumps": 13,
+    "minimum_reported_free_stack_bytes": 1328,
+    "error_matches": []
+  },
+  "full_attention": {
+    "status": "clean-pass",
+    "watcher_interval_seconds": 10,
+    "disabled_features": [],
+    "workload": {
+      "input_tokens": 4096,
+      "output_tokens": 128,
+      "batch": 1,
+      "concurrency": 1
+    },
+    "exit_code": 0,
+    "watcher_log": "models/autoports/google_gemma_4_26b_a4b_it/doc/functional_decoder/watcher/full/generated/watcher/watcher.log",
+    "console_log": "models/autoports/google_gemma_4_26b_a4b_it/doc/functional_decoder/watcher_full_final.log",
+    "correctness_json": "models/autoports/google_gemma_4_26b_a4b_it/doc/functional_decoder/watcher_full_final.json",
+    "prefill_pcc": 0.9994406150513534,
+    "minimum_decode_pcc": 0.9997738820415613,
+    "distinct_decode_positions": 128,
+    "pcc_comparisons": 129,
+    "comparison_note": "128 successive positions plus a repeated initial-position comparison",
+    "repeated_equal": true,
+    "program_cache_miss_guard": true,
+    "completed_dumps": 10,
+    "minimum_reported_free_stack_bytes": 1252,
+    "error_matches": []
+  }
+}

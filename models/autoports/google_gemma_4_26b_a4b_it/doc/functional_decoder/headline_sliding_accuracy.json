@@ -1,0 +1,23 @@
+{
+  "runtime_prefill_audit": "clean",
+  "prefix_length": 0,
+  "layer_type": "sliding_attention",
+  "phase": "prefill",
+  "length": 4096,
+  "real_weights": true,
+  "pcc": 0.9985263365689756,
+  "passed": true,
+  "decode": {
+    "pcc": 0.9998275452911685,
+    "passed": false,
+    "traced": true,
+    "runtime_decode_audit": "clean",
+    "repeated_equal": true,
+    "steps": 128,
+    "min_pcc": 0.9949413719655231,
+    "positions": [
+      4096,
+      4223
+    ]
+  }
+}

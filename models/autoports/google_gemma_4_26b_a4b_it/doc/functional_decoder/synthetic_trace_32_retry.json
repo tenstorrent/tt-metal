@@ -1,0 +1,14 @@
+{
+  "layer_type": "sliding_attention",
+  "phase": "prefill",
+  "length": 32,
+  "real_weights": false,
+  "pcc": 0.9713391913952353,
+  "passed": false,
+  "decode": {
+    "pcc": 0.997149425797613,
+    "passed": true,
+    "traced": true,
+    "repeated_equal": true
+  }
+}

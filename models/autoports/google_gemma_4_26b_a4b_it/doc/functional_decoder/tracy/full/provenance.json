@@ -1,0 +1,16 @@
+{
+  "source_ops_csv": "raw_final/reports/headline/2026_09_25_20_21_24/ops_perf_results_headline_2026_09_25_20_21_24.csv",
+  "raw_device_csv": "raw_final/.logs/cpp_device_perf_report.csv",
+  "raw_host_trace": "raw_final/.logs/tracy_profile_log_host.tracy",
+  "profile_result": "../../profile_full_final.json",
+  "profile_console": "../../profile_full_final.log",
+  "op_info_cache": false,
+  "program_support_count": 100000,
+  "whole_layer_calculation": "tests/summarize_perf.py",
+  "tt_perf_report_version": "1.3.0",
+  "human_decode_report": "decode_perf_report.txt is the first measured replay; decode_all_replays_perf_report.txt and decode_perf_report.csv contain all128 replays",
+  "warning_classification": "Tracy GUI copy looks in default generated/profiler despite custom output root and warns file missing there; the actual trace exists under raw_final/.logs and CSV export completes. GUI warning does not remove the measured device records.",
+  "formatting": "Repository pre-commit strips trailing spaces from rendered text; table data are unchanged.",
+  "ops_csv_sha256": "f56052cff5b49ce9e6875765d57a4e76e639a681bdc2d3e27449a3e855f34dac",
+  "ops_csv_bytes": 121560712
+}

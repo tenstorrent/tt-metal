@@ -1,0 +1,33 @@
+{
+  "layer_type": "sliding_attention",
+  "batch": 2,
+  "length": 33,
+  "prefill": [
+    {
+      "slot": 0,
+      "pcc": 0.9980045227691806,
+      "passed": true
+    },
+    {
+      "slot": 1,
+      "pcc": 0.9966074182675794,
+      "passed": true
+    }
+  ],
+  "decode": [
+    {
+      "slot": 0,
+      "pcc": 0.9885266416559328,
+      "passed": false
+    },
+    {
+      "slot": 1,
+      "pcc": 0.9991798158571897,
+      "passed": true
+    }
+  ],
+  "repeated_equal": true,
+  "traced": true,
+  "runtime_audit": "clean",
+  "page_table": "random permutation, disjoint pages per slot"
+}
