@@ -302,6 +302,38 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         });
     }
 
+    const bool operand_split = config.operand_split;
+    TT_FATAL(
+        !operand_split || (use_fp32_exact && tensor_args.weight_lo_tensor.has_value()),
+        "operand_split needs float32 data with fp32 dest accumulation and a weight_lo_tensor");
+    uint32_t cb_x_hi_tiled_id = 32;
+    uint32_t cb_x_lo_tiled_id = 32;
+    uint32_t cb_weight_lo_tiled_id = 32;
+    if (operand_split) {
+        for (uint32_t* id : {&cb_x_hi_tiled_id, &cb_x_lo_tiled_id}) {
+            *id = next_cb_index++;
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = out_subblock_h * matmul_K_t * tile_size,
+                .core_ranges = CoreRangeSet(core_grid),
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(*id),
+                    .data_format = data_format,
+                    .page_size = tile_size,
+                }}},
+            });
+        }
+        cb_weight_lo_tiled_id = next_cb_index++;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = matmul_K_t * matmul_N_t * tile_size,
+            .core_ranges = CoreRangeSet(core_grid),
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_weight_lo_tiled_id),
+                .data_format = data_format,
+                .page_size = tile_size,
+            }}},
+        });
+    }
+
     log_debug(
         tt::LogOp,
         "CB vol2col_rm: page_size={} bytes (padded from {}), num_pages={}",
@@ -399,6 +431,10 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     }
     if (use_bias) {
         other_cbs_bytes += tile_size * matmul_N_t;  // bias
+    }
+    if (operand_split) {
+        other_cbs_bytes += 2 * tile_size * out_subblock_h * matmul_K_t;
+        other_cbs_bytes += tile_size * matmul_K_t * matmul_N_t;
     }
     uint32_t l1_prefetch_max_bytes =
         (other_cbs_bytes < l1_usable_for_cbs) ? std::min(l1_usable_for_cbs - other_cbs_bytes, L1_PREFETCH_HARD_CAP) : 0;
@@ -651,6 +687,9 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         const bool mcast_fits = (uint64_t)num_groups * rows_per_group <= grid_size.y;
         weight_share_mode = mcast_fits ? WeightShareMode::Mcast : WeightShareMode::Chain;
     }
+    if (operand_split) {
+        weight_share_mode = WeightShareMode::Disabled;
+    }
     log_debug(
         tt::LogOp,
         "Weight share: mode={}, active group_size={}, num_groups={}",
@@ -855,7 +894,11 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         // Stream final output rows only for many small output writes when there is a writer tail to overlap.
         (uint32_t)(enable_streaming_output ? 1 : 0),
         cb_reduction_acc_tiled_id,
-        (uint32_t)use_fp32_exact};
+        (uint32_t)use_fp32_exact,
+        cb_x_hi_tiled_id,
+        cb_x_lo_tiled_id,
+        cb_weight_lo_tiled_id,
+        (uint32_t)operand_split};
 
     // Deliver every CB the fp32 tail reads UnpackToDestFp32 -- interm (untilize/bias read-back),
     // bias, and, with multiple C_in blocks, reduction + acc. Without the flag the unpacker rounds
@@ -872,6 +915,10 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         if (use_fp32_partials) {
             unpack_to_dest_mode[cb_reduction_tiled_id] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
             unpack_to_dest_mode[cb_reduction_acc_tiled_id] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        }
+        if (operand_split) {
+            unpack_to_dest_mode[cb_vol2col_rm_id] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+            unpack_to_dest_mode[cb_vol2col_tiled_id] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         }
     }
 
@@ -916,10 +963,14 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         weights_mcast_receiver_sem_id,
         static_cast<uint32_t>(enable_streaming_output),
         operation_attributes.output_pad_h,
-        operation_attributes.output_pad_w};
+        operation_attributes.output_pad_w,
+        cb_weight_lo_tiled_id,
+        (uint32_t)operand_split};
     tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(bias_tensor.has_value() ? bias_tensor.value().buffer() : nullptr)
+        .append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(operand_split ? tensor_args.weight_lo_tensor.value().buffer() : nullptr)
         .append_to(writer_compile_time_args);
 
     KernelDescriptor writer_desc;
@@ -936,6 +987,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     tt::tt_metal::Buffer* out_buffer = output_tensor.buffer();
     tt::tt_metal::Buffer* weight_buffer = weight_tensor.buffer();
     tt::tt_metal::Buffer* bias_buffer = bias_tensor.has_value() ? bias_tensor.value().buffer() : nullptr;
+    tt::tt_metal::Buffer* weight_lo_buffer = operand_split ? tensor_args.weight_lo_tensor.value().buffer() : nullptr;
 
     // Per-core work and weight-sharing metadata. See conv3d_weight_share.hpp for the role values.
     struct CoreWork {
@@ -1324,11 +1376,16 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         // Writer pos[0..2] are the output, weight, and bias buffer addresses. nullptr bias becomes
         // an embedded 0 so the kernel-side address is still well-defined.
         KernelDescriptor::RTArgList writer_args;
-        writer_args.reserve(26 + (num_workers > 0 ? 2 + 2 * num_workers : 0));
+        writer_args.reserve(27 + (num_workers > 0 ? 2 + 2 * num_workers : 0));
         writer_args.push_back(out_buffer);
         writer_args.push_back(weight_buffer);
         if (bias_buffer != nullptr) {
             writer_args.push_back(bias_buffer);
+        } else {
+            writer_args.push_back(uint32_t{0});
+        }
+        if (weight_lo_buffer != nullptr) {
+            writer_args.push_back(weight_lo_buffer);
         } else {
             writer_args.push_back(uint32_t{0});
         }

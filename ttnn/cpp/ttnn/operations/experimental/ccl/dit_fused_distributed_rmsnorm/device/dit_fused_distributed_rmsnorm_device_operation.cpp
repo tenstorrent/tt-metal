@@ -18,6 +18,14 @@ using namespace tt::constants;
 
 namespace ttnn::experimental::prim {
 
+uint32_t dit_fused_norm_ring_size(const MeshDevice& mesh_device, std::optional<uint32_t> cluster_axis) {
+    if (!cluster_axis.has_value()) {
+        return 1u;
+    }
+    const auto& mesh_view = mesh_device.get_view();
+    return static_cast<uint32_t>((*cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols());
+}
+
 void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
@@ -362,7 +370,7 @@ namespace ttnn::prim {
 
 Tensor dit_fused_distributed_rmsnorm(
     const Tensor& input_tensor,
-    uint32_t cluster_axis,
+    std::optional<uint32_t> cluster_axis,
     const MeshDevice& mesh_device,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     ttnn::ccl::Topology topology,
@@ -391,13 +399,12 @@ Tensor dit_fused_distributed_rmsnorm(
     auto kernel_config_val = init_device_compute_kernel_config(
         arch, compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4, false, true, false);
 
-    const auto& mesh_view = mesh_device.get_view();
-    const std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+    const uint32_t num_devices = ttnn::experimental::prim::dit_fused_norm_ring_size(mesh_device, cluster_axis);
 
     // get_usable_topology reaches into the fabric context, which is null when the op runs on a
-    // single device with fabric uninitialized (TP=1, ring_size==1). At num_devices==1 there is no
-    // ring / all-gather and the topology is never used (every ring path is guarded on
-    // ring_size>1), so skip the fabric query and use a harmless default.
+    // single device with fabric uninitialized (TP=1 or cluster_axis absent, ring_size==1). At
+    // num_devices==1 there is no ring / all-gather and the topology is never used (every ring
+    // path is guarded on ring_size>1), so skip the fabric query and use a harmless default.
     tt::tt_fabric::Topology topology_ = (num_devices > 1)
                                             ? ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis)
                                             : tt::tt_fabric::Topology::Linear;
@@ -408,9 +415,9 @@ Tensor dit_fused_distributed_rmsnorm(
         per_head_norm,
         dtype,
         memory_config.value_or(input_tensor.memory_config()),
-        cluster_axis,
+        cluster_axis.value_or(0),
         static_cast<uint32_t>(num_preferred_links.value_or(1)),
-        static_cast<uint32_t>(num_devices),
+        num_devices,
         topology_,
         multi_device_global_semaphore,
         subdevice_id,

@@ -137,3 +137,54 @@ def test_fast_device_to_host_yuv_rejects_invalid_crop(logical_h, logical_w, expe
             logical_h=logical_h,
             logical_w=logical_w,
         )
+
+
+@pytest.mark.skipif(not HAS_CPP_PLANAR_CONCAT, reason="planar concat extension not built (models/tt_dit/utils/cpp)")
+def test_planar_concat_default_results_do_not_alias():
+    """Consecutive calls return distinct arrays."""
+    rng = np.random.default_rng(0xA11A5)
+    TP, SP, h_per, w_per, T = 2, 2, 32, 32, 16
+    u = _make_shards(rng, TP * SP, h_per // 2, w_per // 2, T, "CHWT")
+    v = _make_shards(rng, TP * SP, h_per // 2, w_per // 2, T, "CHWT")
+
+    first = planar_concat_cpp(_make_shards(rng, TP * SP, h_per, w_per, T, "CHWT"), u, v, "CHWT", (TP, SP))
+    snapshot = first.copy()
+    second = planar_concat_cpp(_make_shards(rng, TP * SP, h_per, w_per, T, "CHWT"), u, v, "CHWT", (TP, SP))
+
+    assert not np.shares_memory(first, second), "the second call wrote into the first call's array"
+    assert np.array_equal(first, snapshot), "the first result changed while the second was assembled"
+    assert not np.array_equal(first, second), "the two calls got the same luma shards; the guard proves nothing"
+
+
+@pytest.mark.skipif(not HAS_CPP_PLANAR_CONCAT, reason="planar concat extension not built (models/tt_dit/utils/cpp)")
+def test_planar_concat_explicit_buffer_is_written_in_place():
+    """Returns out= in place."""
+    rng = np.random.default_rng(0xB0B)
+    TP, SP, h_per, w_per, T = 2, 2, 32, 32, 8
+    y = _make_shards(rng, TP * SP, h_per, w_per, T, "CHWT")
+    u = _make_shards(rng, TP * SP, h_per // 2, w_per // 2, T, "CHWT")
+    v = _make_shards(rng, TP * SP, h_per // 2, w_per // 2, T, "CHWT")
+
+    H, W = h_per * TP, w_per * SP
+    row = H * W + 2 * (H // 2) * (W // 2)
+    buf = np.zeros((T, row), dtype=np.uint8)
+    got = planar_concat_cpp(y, u, v, "CHWT", (TP, SP), out=buf)
+
+    assert got is buf
+    assert np.array_equal(got, planar_concat_cpp(y, u, v, "CHWT", (TP, SP)))
+
+
+def test_all_contiguous_rejects_a_trimmed_padded_view():
+    """A padded shard view is non-contiguous."""
+    import torch
+
+    from ...utils.yuv_d2h import _all_contiguous
+
+    contiguous = [torch.zeros((1, 8, 8, 28), dtype=torch.uint8) for _ in range(2)]
+    padded_view = [torch.zeros((1, 8, 8, 32), dtype=torch.uint8)[:, :, :, :28] for _ in range(2)]
+    numpy_view = [np.zeros((1, 8, 8, 32), dtype=np.uint8)[:, :, :, :28] for _ in range(2)]
+
+    assert _all_contiguous(contiguous, contiguous)
+    assert not _all_contiguous(contiguous, padded_view)
+    assert not _all_contiguous(numpy_view)
+    assert _all_contiguous([np.zeros((1, 8, 8, 28), dtype=np.uint8)])

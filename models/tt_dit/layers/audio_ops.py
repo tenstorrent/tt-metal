@@ -48,15 +48,30 @@ def _warn_padded_out_channels(unpadded: int, padded: int) -> None:
         _warn_once(("padded_out", unpadded, padded), f"Padding out_channels from {unpadded} to {padded}")
 
 
-CONV_SPLIT_MODES = ("off", "weight", "full")
+CONV_SPLIT_MODES = ("off", "weight", "full", "kernel")
+WEIGHT_SPLIT_MODES = ("weight", "full", "kernel")
 
 # Default cap on conv3d's C_in_block for the H3 audio blocking table; the sweep that keeps it at
 # 128 lives in `blockings_minimax_h3_audio`.
 DEFAULT_MAX_C_IN_BLOCK = 128
 
 
-def weights_variant(split_mode: str, max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK) -> str:
+_WEIGHT_PREP_REVISION = 3
+
+_KERNEL_SPLIT_MAX_K = 7
+
+
+def weights_variant(
+    split_mode: str,
+    max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK,
+    pack_bands: dict[int, int] | None = None,
+    act_mode: str = "chain",
+    polyphase: bool = False,
+) -> str:
     """Cache-key suffix for the precision levers that change the prepared parameter set.
+
+    The returned suffix ends in ``_wp<N>`` (see ``_WEIGHT_PREP_REVISION``), so a cache written by an
+    older preparation is a miss rather than a silently different fidelity.
 
     ``split_mode`` decides whether the ``weight_lo`` residual parameters exist, so device-weight
     caches prepared under different settings hold different ``.tensorbin`` sets and are not
@@ -68,10 +83,17 @@ def weights_variant(split_mode: str, max_c_in_block: int = DEFAULT_MAX_C_IN_BLOC
     ``"_split-full_tap1"``, so it can never collide with a stale cache from either. The caller
     must pass the same values it constructed its modules with.
     """
-    suffix = "" if split_mode == "off" else f"_split-{split_mode}"
+    variant = "full" if split_mode == "kernel" else split_mode
+    suffix = "" if variant == "off" else f"_split-{variant}"
     if max_c_in_block != DEFAULT_MAX_C_IN_BLOCK:
         suffix += f"_cinb{max_c_in_block}"
-    return suffix
+    if pack_bands:
+        suffix += "_pack" + "-".join(f"{b}x{k}" for b, k in sorted(pack_bands.items()))
+    if polyphase:
+        suffix += "_pp"
+    if act_mode != "chain":
+        suffix += f"_act-{act_mode}"
+    return f"{suffix}_wp{_WEIGHT_PREP_REVISION}"
 
 
 def _split_operand(x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -100,14 +122,29 @@ def conv3d_maybe_split(
     reduction depth -- the operands are being truncated, not the sum drifting, so ``fp32_dest_acc_en``
     cannot help. Conv is linear in both arguments, so splitting an operand into ``hi = bf16(v)`` plus
     the exact residual ``lo = v - hi`` lets a second conv carry the dropped mantissa bits.
-    ``split_mode="weight"`` splits the weight only (2 convs, measured 1.5x less error on ``conv_pre``);
-    ``"full"`` splits both (3 convs -- the ``lo*lo`` term is negligible and omitted; 1.9x).
+    ``split_mode="weight"`` splits the weight only (2 convs, measured 1.5x less error on ``conv_pre``); ``"full"``
+    splits both (3 convs -- the ``lo*lo`` term is negligible and omitted; 1.9x); ``"kernel"`` is the full split
+    inside one conv3d launch.
 
     ``bias`` is applied to exactly one term, since it is not a factor of the product being split.
     """
+    if split_mode == "kernel" and max(conv_kwargs.get("kernel_size", (1,))) > _KERNEL_SPLIT_MAX_K:
+        split_mode = "full"
+    config = conv_kwargs.get("config")
+    if config is not None and config.operand_split != (split_mode == "kernel"):
+        config.operand_split = split_mode == "kernel"
     if split_mode == "off":
         return ttnn.experimental.conv3d(
             input_tensor=input_tensor, weight_tensor=weight_tensor, bias_tensor=bias_tensor, **conv_kwargs
+        )
+    if split_mode == "kernel":
+        assert weight_lo_tensor is not None, "split_mode='kernel' needs a prepared weight residual"
+        return ttnn.experimental.conv3d(
+            input_tensor=input_tensor,
+            weight_tensor=weight_tensor,
+            weight_lo_tensor=weight_lo_tensor,
+            bias_tensor=bias_tensor,
+            **conv_kwargs,
         )
     assert weight_lo_tensor is not None, f"split_mode={split_mode!r} needs a prepared weight residual"
 
@@ -225,12 +262,12 @@ def prepare_conv3d_weight_state(
         # `ttnn.to_torch` refuses on a multi-host mesh; the helper reads a shard this host owns.
         return local_device_to_torch(prepared)
 
+    w_hi = w_5d.float().bfloat16().float()
     if split:
-        w_hi = w_5d.float().bfloat16().float()
         state["weight"] = _prepare(w_hi)
         state["weight_lo"] = _prepare(w_5d.float() - w_hi)
     else:
-        state["weight"] = _prepare(w_5d)
+        state["weight"] = _prepare(w_hi)
 
 
 def _t_neighbor_pad(
@@ -242,7 +279,7 @@ def _t_neighbor_pad(
     ccl_manager: CCLManager,
     padding_mode: str = "zeros",
 ) -> ttnn.Tensor:
-    """Halo exchange on the T axis (dim 1 in BTC), single- or two-axis sharded."""
+    """Halo-pad T; don't free result."""
     if pad_left == 0 and pad_right == 0:
         return x_BTC
     if parallel_config is None or parallel_config.factor <= 1:
@@ -265,7 +302,7 @@ def _t_neighbor_pad(
     if isinstance(parallel_config, AudioTParallelConfig):
         # Two-axis halo: one call per mesh axis (distinct pad dims required).
         sem0 = ccl_manager.get_np_ping_pong_semaphore(parallel_config.axis0.mesh_axis)
-        x_BTC = ccl_manager.neighbor_pad(
+        x_BTC = ccl_manager.neighbor_pad_persistent_buffer(
             x_BTC,
             dims=[1],
             pad_left=[pad_left],
@@ -276,7 +313,7 @@ def _t_neighbor_pad(
             num_links=[num_links],
         )
         sem1 = ccl_manager.get_np_ping_pong_semaphore(parallel_config.axis1.mesh_axis)
-        return ccl_manager.neighbor_pad(
+        return ccl_manager.neighbor_pad_persistent_buffer(
             x_BTC,
             dims=[1],
             pad_left=[pad_left],
@@ -288,7 +325,7 @@ def _t_neighbor_pad(
         )
 
     sem = ccl_manager.get_np_ping_pong_semaphore(parallel_config.mesh_axis)
-    return ccl_manager.neighbor_pad(
+    return ccl_manager.neighbor_pad_persistent_buffer(
         x_BTC,
         dims=[1],
         pad_left=[pad_left],
@@ -890,6 +927,8 @@ class Conv2dViaConv3d(Module):
             h_factor=1,
             w_factor=1,
         )
+        if split_mode == "kernel" and dtype == ttnn.float32:
+            self.conv_config.operand_split = True
 
         from models.common.utility_functions import is_blackhole
 
@@ -911,7 +950,7 @@ class Conv2dViaConv3d(Module):
         self.weight = Parameter(total_shape=[d, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
         self.weight_lo = (
             Parameter(total_shape=[d, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
-            if self.split_mode != "off"
+            if self.split_mode in WEIGHT_SPLIT_MODES
             else None
         )
         self.bias = Parameter(total_shape=[1, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
@@ -934,7 +973,7 @@ class Conv2dViaConv3d(Module):
                 dtype=self.dtype,
                 unpadded_out=self.unpadded_out_channels,
                 out_channels=self.out_channels,
-                split=self.split_mode != "off",
+                split=self.split_mode in WEIGHT_SPLIT_MODES,
             )
         if "bias" in state:
             state["bias"] = state["bias"].reshape(1, -1)
@@ -1063,16 +1102,13 @@ class Conv1dViaConv3d(Module):
             self.halo_pad_left = 0
             self.halo_pad_right = 0
 
+        self.split_mode = split_mode if dtype == ttnn.float32 else "off"
+        grid = self.mesh_device.compute_with_storage_grid_size()
         self.conv_config = get_conv3d_config(
-            self.in_channels,
-            self.out_channels,
-            self.kernel_size,
-            dtype,
-            grid_size=self.mesh_device.compute_with_storage_grid_size(),
-            h_factor=1,
-            w_factor=1,
+            self.in_channels, self.out_channels, self.kernel_size, dtype, grid_size=grid, h_factor=1, w_factor=1
         )
-
+        if self.split_mode == "kernel":
+            self.conv_config.operand_split = True
         # Column-parallel C-TP: each chip owns out_channels/factor C_out; C_in stays full (gathered).
         self.out_channels_shard = self.out_channels // channel_factor(parallel_config)
         if channel_factor(parallel_config) > 1:
@@ -1085,6 +1121,7 @@ class Conv1dViaConv3d(Module):
                 C_out_block=_pick_c_out_block_shard(full=self.conv_config.C_out_block, shard=self.out_channels_shard),
                 C_in_block=self.conv_config.C_in_block,
                 compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
+                operand_split=self.conv_config.operand_split,
             )
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -1095,12 +1132,9 @@ class Conv1dViaConv3d(Module):
             packer_l1_acc=True,
         )
 
-        # An explicit constructor argument: MiniMax-H3 opts in, LTX's audio path keeps the fast
-        # default. Splitting only helps an fp32 datapath.
-        self.split_mode = split_mode if dtype == ttnn.float32 else "off"
-
         self.same_pad = same_pad
         self.eff_k = eff_k
+        self.halo_padding_mode = "zeros"
 
         self._alloc_weight_bias()
 
@@ -1124,7 +1158,7 @@ class Conv1dViaConv3d(Module):
                 out_channels=self.out_channels,
                 unpadded_in=self.unpadded_in_channels,
                 in_channels=self.in_channels,
-                split=self.split_mode != "off",
+                split=self.split_mode in WEIGHT_SPLIT_MODES,
             )
         if "bias" in state and self.bias is not None:
             state["bias"] = state["bias"].reshape(1, -1)
@@ -1153,7 +1187,7 @@ class Conv1dViaConv3d(Module):
                 dtype=self.dtype,
                 mesh_axes=mesh_axes,
             )
-            if self.split_mode != "off"
+            if self.split_mode in WEIGHT_SPLIT_MODES
             else None
         )
         self.bias = (
@@ -1191,7 +1225,7 @@ class Conv1dViaConv3d(Module):
                 pad_right=self.halo_pad_right,
                 parallel_config=self.parallel_config,
                 ccl_manager=self.ccl_manager,
-                padding_mode="zeros",
+                padding_mode=self.halo_padding_mode,
             )
         elif self.external_pad_front > 0:
             B, T, C = x_BTC.shape
@@ -1290,6 +1324,7 @@ class ConvTranspose1dViaConv3d(Module):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         split_mode: str = "off",
+        polyphase: bool = False,
     ) -> None:
         super().__init__()
         self.in_channels = in_channels
@@ -1301,23 +1336,43 @@ class ConvTranspose1dViaConv3d(Module):
         self.dtype = dtype
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
+        self.polyphase = polyphase
+        sharded = parallel_config is not None and parallel_config.factor > 1
+        self.local_shard = self.polyphase and sharded
+        if self.polyphase:
+            from .audio_pack import packed_weight
 
-        # Inner conv stays UNSHARDED; forward gathers T, runs unsharded, then re-partitions.
+            probe = packed_weight(
+                lambda x: torch.nn.functional.conv_transpose1d(
+                    x,
+                    torch.ones(1, 1, kernel_size, dtype=torch.float64),
+                    stride=stride,
+                    padding=(kernel_size - stride) // 2,
+                ),
+                c_in=1,
+                c_out=1,
+                k_in=1,
+                k_out=stride,
+                support=kernel_size,
+            )
+            self.poly_kernel = int(probe.shape[-1])
+            assert self.poly_kernel % 2 == 1, f"polyphase kernel must be odd for 'same' padding, got {self.poly_kernel}"
+
         self.conv = _AlignedOutConv1d(
             in_channels=in_channels,
-            out_channels=out_channels,
-            kernel_size=kernel_size,
+            out_channels=(stride * out_channels) if self.polyphase else out_channels,
+            kernel_size=self.poly_kernel if self.polyphase else kernel_size,
             stride=1,
-            padding_mode="causal",
+            padding_mode="zeros" if self.polyphase else "causal",
             bias=bias,
             mesh_device=mesh_device,
             dtype=dtype,
-            parallel_config=None,
-            ccl_manager=None,
+            parallel_config=parallel_config if self.local_shard else None,
+            ccl_manager=ccl_manager if self.local_shard else None,
             split_mode=split_mode,
         )
-        # forward() supplies its own symmetric padding, so the inner conv's causal front pad is disabled.
-        self.conv.external_pad_front = 0
+        if not self.polyphase:
+            self.conv.external_pad_front = 0
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         """Reshape ConvTranspose1d weight ``(in, out, k)`` → Conv1d ``(out, in, k)`` (flipped along k)."""
@@ -1327,11 +1382,27 @@ class ConvTranspose1dViaConv3d(Module):
                 f"expected ConvTranspose1d weight shape ({self.in_channels}, {self.out_channels}, "
                 f"{self.kernel_size}), got {tuple(w.shape)}"
             )
-            w_flipped = torch.flip(w, dims=[-1])
-            w_conv1d = w_flipped.permute(1, 0, 2).contiguous()
-            state["conv.weight"] = w_conv1d
+            if self.polyphase:
+                from .audio_pack import packed_weight
+
+                k, s = self.kernel_size, self.stride
+                w64 = w.double()
+                state["conv.weight"] = packed_weight(
+                    lambda x: torch.nn.functional.conv_transpose1d(x, w64, stride=s, padding=(k - s) // 2),
+                    c_in=self.in_channels,
+                    c_out=self.out_channels,
+                    k_in=1,
+                    k_out=s,
+                    support=k,
+                    q_half=self.poly_kernel // 2,
+                )
+            else:
+                w_flipped = torch.flip(w, dims=[-1])
+                w_conv1d = w_flipped.permute(1, 0, 2).contiguous()
+                state["conv.weight"] = w_conv1d
         if "bias" in state:
-            state["conv.bias"] = state.pop("bias")
+            bias = state.pop("bias")
+            state["conv.bias"] = bias.repeat(self.stride) if self.polyphase else bias
 
     def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
         assert x_BTC.layout == ttnn.ROW_MAJOR_LAYOUT
@@ -1344,18 +1415,23 @@ class ConvTranspose1dViaConv3d(Module):
             # Drop the gathered pad channels so the aligned-32 inner conv sees its real C_in.
             x_BTC = ttnn.slice(x_BTC, [0, 0, 0], [x_BTC.shape[0], x_BTC.shape[1], self.in_channels])
 
-        if sharded:
+        if sharded and not self.local_shard:
             x_BTC = ttnn.to_layout(x_BTC, ttnn.TILE_LAYOUT)
             x_BTC = _all_gather_t(self.ccl_manager, x_BTC, self.parallel_config)
             x_BTC = ttnn.to_layout(x_BTC, ttnn.ROW_MAJOR_LAYOUT)
 
         # Input C must match the aligned-C the conv weight was allocated for.
         x_BTC = _pad_channels_to_aligned(x_BTC, self.mesh_device)
-        x_zs = _zero_stuff_t(x_BTC, stride=self.stride, mesh_device=self.mesh_device)
-        x_padded = _zero_pad_t(x_zs, self.external_pad_each, self.external_pad_each, self.mesh_device)
-        y = self.conv(x_padded)
+        if self.polyphase:
+            y = self.conv(x_BTC)
+            B, T, C = y.shape
+            y = ttnn.reshape(y, (B, T * self.stride, C // self.stride))
+        else:
+            x_zs = _zero_stuff_t(x_BTC, stride=self.stride, mesh_device=self.mesh_device)
+            x_padded = _zero_pad_t(x_zs, self.external_pad_each, self.external_pad_each, self.mesh_device)
+            y = self.conv(x_padded)
 
-        if sharded:
+        if sharded and not self.local_shard:
             y = _partition_t(y, self.parallel_config)  # ROW_MAJOR: no tile-aligned offset needed
 
         if ch_axis is not None:

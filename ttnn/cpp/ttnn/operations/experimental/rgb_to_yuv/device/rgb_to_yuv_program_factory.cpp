@@ -4,12 +4,14 @@
 
 #include "rgb_to_yuv_program_factory.hpp"
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <fmt/format.h>
+#include <algorithm>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -102,6 +104,7 @@ RgbToYuvProgramFactory::cached_program_t RgbToYuvProgramFactory::create(
     constexpr uint32_t cb_scratch = 9;
     // 12 resident scalar CBs (Y, Cb, Cr) x (wr, wg, wb, off), generated once.
     constexpr uint32_t cb_scalar_base = 10;  // 10..21
+    constexpr uint32_t cb_rowbuf = 22;
 
     // --- Circular buffers ----------------------------------------------------
     // Row-major channel input CBs (reader -> compute): 4 pages for UV corners.
@@ -147,6 +150,15 @@ RgbToYuvProgramFactory::cached_program_t RgbToYuvProgramFactory::create(
         CreateCircularBuffer(program, all_cores, cfg);
     }
 
+    const bool wide_rows = op_attrs.wide_rows;
+    const uint32_t row_bytes_y = W * T;
+    const uint32_t row_bytes_uv = W2 * T;
+    const uint32_t rowpage = tt::align(row_bytes_y, std::max(hal::get_l1_alignment(), hal::get_dram_alignment()));
+    if (wide_rows) {
+        auto cfg = CircularBufferConfig(2 * rowpage, {{cb_rowbuf, u8_fmt}}).set_page_size(cb_rowbuf, rowpage);
+        CreateCircularBuffer(program, all_cores, cfg);
+    }
+
     // --- Compile-time args ---------------------------------------------------
     std::vector<uint32_t> reader_ct_args = {
         cb_R_rm,
@@ -187,6 +199,11 @@ RgbToYuvProgramFactory::cached_program_t RgbToYuvProgramFactory::create(
         W2,
         y_tiles,
         uv_tiles,
+        wide_rows ? 1u : 0u,
+        cb_rowbuf,
+        row_bytes_y,
+        row_bytes_uv,
+        rowpage,
     };
     TensorAccessorArgs(*y_buf).append_to(writer_ct_args);
     TensorAccessorArgs(*u_buf).append_to(writer_ct_args);

@@ -1568,9 +1568,11 @@ void write_block(
     const uint32_t cols,
     const uint32_t out_tile_id,
     const uint32_t tile_bytes,
-    const uint32_t barrier_threshold) {
+    const uint32_t barrier_threshold,
+    const uint32_t row_stride = 0) {
     uint32_t barrier_count = 0;
     uint32_t tile_id = out_tile_id;
+    const uint32_t row_skip = (row_stride ? row_stride : cols) - cols;
 
     CircularBuffer cb(cb_out);
     cb.wait_front(out_chunk_tiles);
@@ -1587,6 +1589,7 @@ void write_block(
                 barrier_count = 0;
             }
         }
+        tile_id += row_skip;
     }
     noc.async_write_barrier();
     cb.pop_front(out_chunk_tiles);
@@ -1609,10 +1612,12 @@ void write_block_row_grouped(
     const uint32_t out_tile_id,
     const uint32_t tile_bytes,
     const uint32_t sbh,
-    const uint32_t barrier_threshold) {
+    const uint32_t barrier_threshold,
+    const uint32_t row_stride = 0) {
     constexpr uint32_t default_trid = 0;
     uint32_t tile_id = out_tile_id;
     uint32_t barrier_count = 0;
+    const uint32_t row_skip = (row_stride ? row_stride : cols) - cols;
 
     const uint32_t num_full_groups = total_rows / sbh;
     const uint32_t remainder_rows = total_rows - num_full_groups * sbh;
@@ -1635,6 +1640,7 @@ void write_block_row_grouped(
                         barrier_count = 0;
                     }
                 }
+                tile_id += row_skip;
             }
         }
         // Flush THIS drain's writes (default trid) before pop so compute can safely reuse the L1 slot.
