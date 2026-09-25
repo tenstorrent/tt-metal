@@ -15,7 +15,7 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/tt_align.hpp>
 
 namespace ttnn::prim {
 
@@ -98,7 +98,8 @@ ProgramDescriptor MoveOverlapProgramFactory::create_descriptor(
 
     // CB is being used as temp L1 buffer to copy src data into before writing to dst
     const uint32_t cb_index = 0;
-    const uint32_t aligned_page_size = round_up_to_mul32(page_size);
+    // Must round the same way as size_per_l1_bank below, or a 16-mod-32 page_size overruns the CB.
+    const uint32_t aligned_page_size = tt::align(page_size, tt::tt_metal::hal::get_l1_alignment());
     desc.cbs.push_back(CBDescriptor{
         .total_size = size_per_l1_bank,
         .core_ranges = all_cores,
