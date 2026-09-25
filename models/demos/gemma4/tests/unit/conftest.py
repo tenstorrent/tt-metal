@@ -225,7 +225,6 @@ def build_model(adapter, monkeypatch, *, ring=None, widths=(1024,)):
     model._spec_owner_slot = None
     model._spec_pending = None
     model._spec_pending_owner = None
-    model._spec_carry = []
     model._spec_first_step = True
     model._spec_decoder_bucket = None
     model._bounded_sliding_kv_cache = ring is not None
