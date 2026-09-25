@@ -60,12 +60,7 @@ whether a suite reaches the changed code.
 cd "$WORKTREE_DIR/tt_metal/tt-llk"
 ```
 
-Read `${LOG_DIR}/repo_map.md` first: it is the generated index of the test
-tree, host-marked nodes, kernel sources and LLK symbols, so scope and test
-candidates come from it rather than from searching. `repo_map.json` beside it
-carries each module's parametrize axes and each symbol's header.
-
-Then read `.claude/CLAUDE.md`. Parse `TARGET_ARCHES_JSON` as JSON for
+Read `.claude/CLAUDE.md`. Parse `TARGET_ARCHES_JSON` as JSON for
 multi-arch runs; otherwise use `TARGET_ARCH`.
 
 ## Analysis Process

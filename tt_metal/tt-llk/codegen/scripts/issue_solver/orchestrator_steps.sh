@@ -634,17 +634,6 @@ PY
     cp .claude/CLAUDE.md "$LOG_DIR/instructions/tt-llk-CLAUDE.md" 2>/dev/null || true
     cp -R .claude/skills "$LOG_DIR/instructions/claude-skills" 2>/dev/null || true
 
-    # Index the tree once, deterministically, instead of letting each role
-    # rediscover it. Measured on trial04: 236 of 343 inspection probes went to
-    # test and kernel source, nearly all unique. Cached by base commit, so the
-    # second and later runs at a base pay nothing. Written to LOG_DIR, never
-    # inside the worktree, because a dirty tree must not enter a base-keyed
-    # cache. Best effort: a missing map costs discovery time, never the run.
-    python "$S/repo_map.py" --worktree "$wt" \
-        --out "$LOG_DIR/repo_map.json" \
-        --summary-out "$LOG_DIR/repo_map.md" \
-        --cache-dir "${LOGS_BASE}/.repo_maps" >/dev/null 2>&1 || true
-
     # LOG_DIR and RUN_ID are bootstrap identity — write them to the worktree file
     # so later steps and queue dispatch recover them with no persistent shell env.
     _disk_guard python "$S/state.py" --worktree-dir "$wt" set LOG_DIR "$LOG_DIR" || return $?
@@ -1037,18 +1026,6 @@ execute_step_record_changed_files() {
     ss CHANGED_FILES "$cf"
     test_changes="$(printf '%s\n' "$cf" | grep -E '(^|/)tests?/|(^|/)test_[^/]+$' || true)"
     [ -z "$test_changes" ] || rj metric --patch-json '{"tests_generated":true}'
-    if [ -n "$test_changes" ]; then
-        # The writer is required to add tests, markers included, so the map
-        # built at setup is now stale for every role after it -- and a stale
-        # host-marked list routes a leaf to the wrong executor. Rebuilding is
-        # deterministic, takes under a second and spends no model budget, so
-        # refresh rather than reason about staleness. No --cache-dir: the tree
-        # is dirty now and a candidate's edits must never enter a base-keyed
-        # cache.
-        python "$_ORCH_SCRIPTS/repo_map.py" --worktree "$wt" \
-            --out "$_L/repo_map.json" --summary-out "$_L/repo_map.md" \
-            >/dev/null 2>&1 || true
-    fi
     printf '%s\n' "$cf"
 }
 
