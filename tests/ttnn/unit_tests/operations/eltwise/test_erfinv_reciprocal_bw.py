@@ -7,9 +7,9 @@ import torch
 import ttnn
 
 OPS = [
-    (ttnn.erfinv_bw, torch.erfinv, "inside"),
-    (ttnn.erf_bw, torch.erf, "wide"),
-    (ttnn.reciprocal_bw, torch.reciprocal, "wide"),
+    (ttnn.erfinv_bw, "erfinv", "inside"),
+    (ttnn.erf_bw, "erf", "wide"),
+    (ttnn.reciprocal_bw, "reciprocal", "wide"),
 ]
 
 
@@ -40,6 +40,7 @@ def test_backward_matches_torch(device, ttnn_op, torch_op, domain, which_grad, d
     got = ttnn.to_torch(ttnn_op(dev(grad), dev(x))[0]).float()
 
     tx = x.float().clone().requires_grad_(True)
+    torch_op = getattr(torch, torch_op)
     torch_op(tx).backward(grad.float())
 
     keep = torch.isfinite(tx.grad) & torch.isfinite(got)
