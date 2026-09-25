@@ -47,7 +47,7 @@
  },
  "R.1": {
   "attempts": 0,
-  "duration_s": 1.5,
+  "duration_s": 9.8,
   "history": [
    {
     "status": "PASS",
@@ -60,9 +60,17 @@
    {
     "status": "PASS",
     "t": "2026-09-25T22:04:46"
+   },
+   {
+    "status": "RESET",
+    "t": "2026-09-25T22:13:28"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-25T22:13:44"
    }
   ],
-  "last_run": "2026-09-25T22:04:46",
+  "last_run": "2026-09-25T22:13:44",
   "log": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/logs/R.1.log",
   "metrics": {
    "checkpoint_tensors": 1013,
@@ -70,11 +78,13 @@
    "count_mismatches": 0,
    "intake_approved": 1,
    "missing_tensors": 0,
+   "prompt_hash_ok": 1,
+   "prompt_tokens": 56320,
    "shape_mismatches": 0
   },
   "rc": 0,
   "reason": [],
-  "started": "2026-09-25T22:04:44",
+  "started": "2026-09-25T22:13:34",
   "status": "PASS"
  },
  "R.2": {
@@ -149,6 +159,10 @@
    {
     "status": "PASS",
     "t": "2026-09-25T22:05:47"
+   },
+   {
+    "status": "RESET",
+    "t": "2026-09-25T22:13:28"
    }
   ],
   "last_run": "2026-09-25T22:05:47",
@@ -192,7 +206,7 @@
   "rc": 0,
   "reason": [],
   "started": "2026-09-25T22:04:50",
-  "status": "PASS"
+  "status": "TODO"
  },
  "R.3": {
   "attempts": 0,
@@ -209,6 +223,10 @@
    {
     "status": "RESET",
     "t": "2026-09-25T22:04:39"
+   },
+   {
+    "status": "RESET",
+    "t": "2026-09-25T22:13:28"
    }
   ],
   "last_run": "2026-09-25T21:56:22",
@@ -223,7 +241,7 @@
   },
   "rc": 0,
   "reason": [],
-  "started": "2026-09-25T21:53:54",
+  "started": "2026-09-25T22:05:51",
   "status": "TODO"
  },
  "_run": {
