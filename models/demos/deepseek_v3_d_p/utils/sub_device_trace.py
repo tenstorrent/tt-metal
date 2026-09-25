@@ -169,8 +169,18 @@ class SubDeviceTraceController:
         return mv.total_bytes_allocated_per_bank * mv.num_banks
 
     def release(self):
-        """Release every captured trace. Safe to call repeatedly."""
+        """Release every captured trace UNDER THE SUB-DEVICE MANAGER THAT OWNS IT. A trace captured while a manager was
+        loaded lives in that manager's registry; releasing it with a different (or no) manager loaded leaves the
+        MeshTraceBuffer registered, and MeshDevice::close then destroys it after the allocator -> SIGSEGV in
+        BankManager::deallocate_buffer (DS4F-0258: seen on every traced runner exit until this walked the LOAD/CLEAR
+        switches too). Ends with no manager loaded. Safe to call repeatedly."""
         for kind, payload in self._program:
             if kind == self._TRACE:
                 ttnn.release_trace(self.mesh_device, payload)
+            elif kind == self._LOAD:
+                self.mesh_device.load_sub_device_manager(payload)
+            elif kind == self._CLEAR:
+                self.mesh_device.clear_loaded_sub_device_manager()
+        if self._program:
+            self.mesh_device.clear_loaded_sub_device_manager()
         self._program = []

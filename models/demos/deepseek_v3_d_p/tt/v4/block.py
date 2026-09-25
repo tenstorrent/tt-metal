@@ -364,7 +364,9 @@ class TtV4PrefillBlock(LightweightModule):
                 if i is not None:
                     i.release()
             self._islands = None
-        release = getattr(self.moe, "release_sub_device_managers", None)
+        release = getattr(self.moe, "release_sub_device_manager", None) or getattr(
+            self.moe, "release_sub_device_managers", None
+        )
         if release is not None:
             release()
 
