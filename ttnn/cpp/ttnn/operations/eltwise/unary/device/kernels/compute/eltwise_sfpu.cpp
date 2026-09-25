@@ -55,4 +55,7 @@ void kernel_main() {
 
         tile_regs_release();
     }
+#if defined(SFPU_OP_PROGRAM_FINISH_0) && !defined(TT_POLY_LLK_DISABLE)
+    SFPU_OP_PROGRAM_FINISH_0
+#endif
 }
