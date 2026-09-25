@@ -13,6 +13,7 @@ non-last:    the packed streams for the D2D socket.
 
 from __future__ import annotations
 
+import os
 from typing import Callable, Optional
 
 import ttnn
@@ -135,6 +136,8 @@ class TtV4PrefillTransformer(LightweightModule):
         ``SharedScalar`` each, so a chunk costs 2-3 host writes instead of 3 per CSA layer + 1-2 per HCA / SWA layer
         (each `copy_host_to_device_tensor` is a blocking round trip on the host-issue-bound galaxy). Every consumer
         goes through ``_push_scalar`` / ``_rope_index``, which unwrap the alias. Idempotent."""
+        if os.environ.get("PREFILL_SHARED_SCALARS", "1") != "1":
+            return  # A/B switch (DS4F-0262 attribution): every layer keeps its own scalar buffers
         kv = None
         ent = {}
         for layer in self.layers:
