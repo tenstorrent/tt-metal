@@ -144,7 +144,7 @@ constexpr std::array<float, LUT_SIZE> LUT_DATA = {
 #define TT_SPECIAL_POS_ZERO 5
 #define TT_SPECIAL_NEG_ZERO 5
 
-#include "../../../../common/llk_sfpu/ckernel_sfpu_tt_poly_rational_squared_replay.inc"
+#include "ckernel_sfpu_tt_poly_rational_squared_replay.inc"
 static_assert(kSquaredAbsDenominatorTtiReplay);
 inline void tile() { squared_abs_denominator_tti_replay_tile(); }
 
@@ -157,7 +157,20 @@ inline void init() {
     ckernel::llk_math_sfpu_init_once();
 #endif
     ckernel::sfpu::sfpu_reciprocal_init<false>();
-#include "../../../../common/llk_sfpu/ckernel_sfpu_tt_poly_rational_squared_init.inc"
+#if SQUARED_ABS_DENOMINATOR_TTI_CANDIDATE
+    if constexpr (sfpi::kSquaredAbsDenominatorTtiReplay) {
+        // Prgm0/L12 remains the reciprocal helper's immutable 2.0.  No other
+        // programmable constant is consumed: the certificate proves the body
+        // needs neither a clamp bound nor a special poison.
+        ckernel::addr_mod_t{
+            .srca = {.incr = 0},
+            .srcb = {.incr = 0},
+            .dest = {.incr = 2},
+        }
+            .set(ckernel::ADDR_MOD_6);
+        sfpi::squared_abs_denominator_tti_lm_init();
+    }
+#endif
 }
 }  // namespace ttpoly_generated::SoftsignBwBf16Config_initialization
 namespace ttpoly_generated::SoftsignBwBf16Config_execution {

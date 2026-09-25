@@ -155,7 +155,11 @@ inline void init() {
     ckernel::llk_math_sfpu_init_once();
 #endif
     ckernel::sfpu::sfpu_reciprocal_init<false>();
-#include "../../../../common/llk_sfpu/ckernel_sfpu_tt_poly_rational_squared_init.inc"
+#if WH_SQUARED_ABS_DENOMINATOR_TTI_CANDIDATE
+    ckernel::addr_mod_t{
+        .srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2},
+    }.set(ckernel::ADDR_MOD_6);
+#endif
 }
 }  // namespace ttpoly_generated::SoftsignBwBf16Config_initialization
 namespace ttpoly_generated::SoftsignBwBf16Config_execution {
