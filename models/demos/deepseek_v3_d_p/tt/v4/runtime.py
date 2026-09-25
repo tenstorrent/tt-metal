@@ -10,6 +10,7 @@ owns the model and knows how to write the caches. Eager only (no trace) in this 
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -251,6 +252,7 @@ class TtV4PrefillRuntime:
                 cb = self._ack_after_drain
             else:
                 cb = deferred.append
+        t_issue0 = time.perf_counter()
         out = self.model(
             input_tensor,
             slot=slot_id,
@@ -260,21 +262,68 @@ class TtV4PrefillRuntime:
             input_ids=ids,
             on_layer_complete=cb,
         )
+        t_issue1 = time.perf_counter()
         if deferred:
-            ttnn.synchronize_device(self.mesh_device)
-            for layer_idx in deferred:
-                self._ack(layer_idx)
+            if self._ack_mode == "lag1":
+                # LAG-1 acks: mark this chunk's end with a device event and ack the PREVIOUS chunk once its event has passed
+                # -- by then this chunk's issue has already overlapped the previous chunk's device tail, so the host never
+                # idles on a drain (0.1-0.2 s per chunk on run16, INFERRED from cadence - per-layer device sums). The last
+                # chunk's acks are flushed by flush_acks() (runner: at the shutdown sentinel) or by the next chunk.
+                ev = ttnn.record_event(self.mesh_device)
+                prev = self._pending_ack
+                self._pending_ack = (ev, list(deferred), int(actual_start))
+                if prev is not None:
+                    self._fire_pending(prev, t_issue0, t_issue1)
+            else:
+                ttnn.synchronize_device(self.mesh_device)
+                t_drain = time.perf_counter()
+                for layer_idx in deferred:
+                    self._ack(layer_idx)
+                if not warmup and self._chunk_log_every and (self._chunks_logged % self._chunk_log_every == 0):
+                    # host issue vs the device tail the per-chunk drain waits for (both ms); the acks are host-only
+                    logger.info(
+                        f"[v4 runtime] chunk @{actual_start}: issue {(t_issue1 - t_issue0) * 1e3:.1f} ms, drain wait "
+                        f"{(t_drain - t_issue1) * 1e3:.1f} ms, acks {(time.perf_counter() - t_drain) * 1e3:.2f} ms ({len(deferred)} layers)"
+                    )
+            self._chunks_logged += 1
         if isinstance(ids, ttnn.Tensor) and ids is not getattr(self, "_ids_dev", None):
             ttnn.deallocate(ids)
         if c.is_last_rank:
             return None
         return out
 
+    _chunks_logged = 0
+    _chunk_log_every = int(os.environ.get("PREFILL_CHUNK_LOG_EVERY", "5"))  # 0 = never
+    _pending_ack = None  # lag1: (MeshEvent, [layer ids], chunk start) of the last issued, not yet acked chunk
+
     @property
     def _ack_mode(self) -> str:
         mode = os.environ.get("PREFILL_LAYER_ACK_MODE", "chunk")
-        assert mode in ("layer", "chunk"), f"PREFILL_LAYER_ACK_MODE={mode!r}: expected 'layer' or 'chunk'"
+        assert mode in (
+            "layer",
+            "chunk",
+            "lag1",
+        ), f"PREFILL_LAYER_ACK_MODE={mode!r}: expected 'layer', 'chunk' or 'lag1'"
         return mode
+
+    def _fire_pending(self, pending, t_issue0=None, t_issue1=None) -> None:
+        ev, layers, start = pending
+        t0 = time.perf_counter()
+        ttnn.event_synchronize(ev)
+        t1 = time.perf_counter()
+        for layer_idx in layers:
+            self._ack(layer_idx)
+        if self._chunk_log_every and (self._chunks_logged % self._chunk_log_every == 0) and t_issue0 is not None:
+            logger.info(
+                f"[v4 runtime] chunk @{start} acked (lag1): next chunk issue {(t_issue1 - t_issue0) * 1e3:.1f} ms, event wait "
+                f"{(t1 - t0) * 1e3:.1f} ms, acks {(time.perf_counter() - t1) * 1e3:.2f} ms ({len(layers)} layers)"
+            )
+
+    def flush_acks(self) -> None:
+        """lag1: ack the last issued chunk now (the runner calls this at the end-of-stream sentinel; also safe any time)."""
+        pending, self._pending_ack = self._pending_ack, None
+        if pending is not None:
+            self._fire_pending(pending)
 
     def _ack_after_drain(self, layer_idx: int) -> None:
         ttnn.synchronize_device(self.mesh_device)  # the unified-cache writes are done before the ack fires

@@ -497,6 +497,9 @@ def run_request_loop(
         if _is_shutdown_sentinel(meta):
             # End of stream: drop the throwaway payload + its metadata tensor, hand the sentinel to the
             # next rank so it too unblocks and exits, then fall through to the graceful drain below.
+            _flush = getattr(runtime, "flush_acks", None)  # lag-1 LayerAck mode: ack the last chunk before leaving
+            if _flush is not None:
+                _flush()
             logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} chunks; exiting request loop")
             ttnn.deallocate(inp)
             ttnn.deallocate(metadata_device)
