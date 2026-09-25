@@ -291,6 +291,45 @@ TEST_F(SplitGalaxyMeshDeviceFixture, SocketSubContextValidation) {
     parent_context->barrier();
 }
 
+// Test that socket creation works correctly when the sender and receiver ranks are provided.
+TEST_F(SplitGalaxyMeshDeviceFixture, RankBasedSocketCreation) {
+    using namespace tt_metal::distributed::multihost;
+    auto& metal_context = tt::tt_metal::MetalContext::instance();
+    const auto& distributed_context = metal_context.global_distributed_context();
+
+    uint32_t socket_fifo_size = 1024;
+    auto sender_rank_0 = Rank{0};
+    auto recv_rank_0 = Rank{2};
+    auto sender_rank_1 = Rank{1};
+    auto recv_rank_1 = Rank{3};
+
+    auto socket_mem_config = tt_metal::distributed::SocketMemoryConfig(tt_metal::BufferType::L1, socket_fifo_size);
+    socket_mem_config.per_core_allocation = true;
+    // Rank-addressed sockets use canonical logical mesh coordinates. Ranks 0/2 own (0, 0);
+    // ranks 1/3 own (3, 3) on this 4x4 split-host mesh.
+    auto socket_connection_0 = tt_metal::distributed::SocketConnection(
+        tt_metal::distributed::MeshCoreCoord(MeshCoordinate(0, 0), tt_metal::CoreCoord(0, 0)),
+        tt_metal::distributed::MeshCoreCoord(MeshCoordinate(0, 0), tt_metal::CoreCoord(0, 0)));
+    auto socket_connection_1 = tt_metal::distributed::SocketConnection(
+        tt_metal::distributed::MeshCoreCoord(MeshCoordinate(3, 3), tt_metal::CoreCoord(0, 0)),
+        tt_metal::distributed::MeshCoreCoord(MeshCoordinate(3, 3), tt_metal::CoreCoord(0, 0)));
+
+    tt_metal::distributed::SocketConfig socket_config_0(
+        {socket_connection_0}, socket_mem_config, sender_rank_0, recv_rank_0);
+    tt_metal::distributed::SocketConfig socket_config_1(
+        {socket_connection_1}, socket_mem_config, sender_rank_1, recv_rank_1);
+    if (*distributed_context.rank() == 0) {
+        auto send_socket = tt_metal::distributed::MeshSocket(mesh_device_, socket_config_0);
+    } else if (*distributed_context.rank() == 2) {
+        auto recv_socket = tt_metal::distributed::MeshSocket(mesh_device_, socket_config_0);
+    } else if (*distributed_context.rank() == 1) {
+        auto send_socket = tt_metal::distributed::MeshSocket(mesh_device_, socket_config_1);
+    } else if (*distributed_context.rank() == 3) {
+        auto recv_socket = tt_metal::distributed::MeshSocket(mesh_device_, socket_config_1);
+    }
+    distributed_context.barrier();
+}
+
 // Generate a random pairing of sender and receiver device coordinates.
 std::vector<tt_metal::distributed::SocketConnection> generate_random_socket_connections(
     const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
