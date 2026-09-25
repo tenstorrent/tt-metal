@@ -43,8 +43,10 @@ def rel(spec, p) -> str:
     return str(p.relative_to(spec.repo))
 
 
-def generate(spec, ref=None) -> dict:
-    if ref is None:
+def generate(spec, ref=None, early: bool = False) -> dict:
+    """early=True: only the tasks that exist before the reference does (R, G, B, and PL.0, which extends the ledger
+    with the rest once R.3 has passed and the block graphs are known)."""
+    if ref is None and not early:
         reps = sorted({spec.representative_layer(bt) for bt in spec.data["block_types"]})
         ref = spec.hooks().reference(spec, layers=reps, dtype=torch.float32)
     model_dir = rel(spec, spec.model_dir)
@@ -136,10 +138,21 @@ def generate(spec, ref=None) -> dict:
         device=True,
     )
     add(
+        "PL.0",
+        "Ledger: add the component, swap, ladder, contract and perf tasks from the block graphs",
+        "plan",
+        ["R.3"],
+        f"{PY}.plan.ledger_gen --extend",
+        {"ledger_errors": "== 0", "ledger_tasks": ">= 1"},
+        paths=[f"{model_dir}/bringup/tasks.yaml"],
+    )
+    if early:
+        return {"model": spec.data["hf_id"], "target": spec.data["target"], "tasks": tasks}
+    add(
         "PL.1",
         "Plan: fits per-chip DRAM (from the checkpoint), every step mapped, ledger valid, approved",
         "plan",
-        ["R.3", "B.1"],
+        ["PL.0", "B.1"],
         f"{PY}.plan.check_plan",
         {
             "plan_fits": "== 1",
@@ -252,22 +265,43 @@ def generate(spec, ref=None) -> dict:
 
 
 def main(argv=None):
+    from models.demos.common.bringup.core import metrics
+    from models.demos.common.bringup.core.ledger import Ledger
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--spec")
     ap.add_argument("--write", action="store_true", help="write <bringup_dir>/tasks.yaml (refuses to overwrite)")
+    ap.add_argument("--early", action="store_true", help="only the tasks that need no reference (R, G, B, PL.0)")
+    ap.add_argument(
+        "--extend", action="store_true", help="append the generated tasks whose ids are not in tasks.yaml yet"
+    )
     a = ap.parse_args(argv)
     spec = load_spec(a.spec)
-    out = generate(spec)
-    text = yaml.safe_dump(out, sort_keys=False, width=120)
+    out = generate(spec, early=a.early)
+    led = Ledger(spec.bringup_dir)
+    if a.extend:
+        cur = led.load_spec()
+        have = {t["id"] for t in cur.get("tasks", [])}
+        new = [t for t in out["tasks"] if t["id"] not in have]
+        cur.setdefault("tasks", []).extend(new)
+        for k in ("model", "target"):
+            cur.setdefault(k, out[k])
+        led.write_tasks(cur)
+        errs = led.validate()
+        print(f"added {len(new)} tasks: {' '.join(t['id'] for t in new)}")
+        for e in errs:
+            print(f"LEDGER ERROR {e}")
+        metrics.record("ledger_tasks", len(cur["tasks"]))
+        metrics.record("ledger_tasks_added", len(new))
+        metrics.record("ledger_errors", len(errs))
+        return
     if a.write:
-        p = spec.bringup_dir / "tasks.yaml"
-        if p.exists():
-            raise SystemExit(f"{p} exists; edit it instead of regenerating")
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(text)
-        print(f"wrote {p}: {len(out['tasks'])} tasks")
+        if led.tasks_path.exists():
+            raise SystemExit(f"{led.tasks_path} exists; use --extend or edit it")
+        led.write_tasks(out)
+        print(f"wrote {led.tasks_path}: {len(out['tasks'])} tasks")
     else:
-        print(text)
+        print(yaml.safe_dump(out, sort_keys=False, width=120))
 
 
 if __name__ == "__main__":

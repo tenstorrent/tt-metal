@@ -1,0 +1,30 @@
+# Model spec for the gated bring-up framework (models/demos/common/bringup). Written by the /bringup intake skill,
+# approved by a person (python -m models.demos.common.bringup approve intake --spec <this file>).
+model: $model                      # slug: package models/demos/<model>, commit tag [<model>][<task>]
+hf_id: $hf_id
+model_dir: models/demos/$model
+hooks: models.demos.$model.bringup.hooks
+num_layers: $num_layers
+layers: all                        # or a subset, e.g. "0-1,29" (a subset result is never reported as full-model)
+box:
+  mesh: $mesh                      # [rows, cols]
+  chip_dram_gb: $chip_dram_gb
+  device_params: {fabric_config: $fabric, l1_small_size: 24576}
+target: {seq: $seq, chunk: $chunk, dtype: bf16}
+ladder:                            # rungs in order; the first rung with full_dumps feeds component and swap tests
+$ladder
+block_types:                       # every layer exactly once; representative = the layer swap tests use
+$block_types
+state:
+  kind: $state_kind                # kv | recurrent | ...
+  tensors: [key, value]            # names state_tensors() returns per layer
+  format: separate_k_v
+thresholds: {component: 0.99, block: 0.98, layer: 0.97, state: 0.97, final_hidden: 0.97, top5: 0.9}
+text: {source: models/tt_transformers/tests/tale-of-two-cities.txt.bz2, bos: true}
+hf: {parity_seq: 512}
+checkpoint:
+  expect: {}                       # tensor glob -> shape ("*" = any); filled by intake from the checkpoint index
+  config: {}                       # text-config fields that must match
+contract: {adapter: $model}
+agents: {model: null, timeout_s: 14400}
+paths: {}                          # defaults: art /localdev/$$USER/bringup/<model>; hf, golden, tt_cache under it

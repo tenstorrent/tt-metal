@@ -194,6 +194,40 @@ def cmd_render_tests(a):
     return 0
 
 
+@command("new", "scaffold models/demos/<--model>/bringup/ (spec template, hooks skeleton, breadcrumbs)")
+def cmd_new(a):
+    from pathlib import Path
+    from string import Template
+
+    from models.demos.common.bringup.core.spec import CODE_ROOT
+
+    if not a.model or not a.hf_id:
+        sys.exit("new needs --model <slug> and --hf-id <org/name>")
+    here = Path(__file__).resolve().parent / "templates"
+    d = CODE_ROOT / "models" / "demos" / a.model
+    b = d / "bringup"
+    b.mkdir(parents=True, exist_ok=True)
+    header = "# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC\n#\n# SPDX-License-Identifier: Apache-2.0\n"
+    for p in (d / "__init__.py", b / "__init__.py"):
+        if not p.exists():
+            p.write_text(header)
+    vals = {"model": a.model, "hf_id": a.hf_id}
+    for name in ("spec.yaml", "hooks.py"):
+        out = b / name
+        if out.exists():
+            print(f"exists, kept: {out.relative_to(CODE_ROOT)}")
+            continue
+        out.write_text(Template((here / f"{name}.tmpl").read_text()).safe_substitute(vals))
+        print(f"wrote {out.relative_to(CODE_ROOT)}")
+    bc = b / "BREADCRUMBS.md"
+    if not bc.exists():
+        bc.write_text(
+            f"# {a.hf_id} bring-up: breadcrumbs\n\nAppend-only log, one section per task attempt: what was "
+            "done, decisions and why, gotchas, the re-run command, the verdict.\n"
+        )
+    return 0
+
+
 def build_parser(extra=None) -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="python -m models.demos.common.bringup")
     ap.add_argument("command", choices=sorted(COMMANDS))
@@ -209,6 +243,8 @@ def build_parser(extra=None) -> argparse.ArgumentParser:
     ap.add_argument("--no-run", action="store_true", help="rerun: only reset the verdicts")
     ap.add_argument("--other", help="compare: the other run's spec")
     ap.add_argument("--note", help="approve: note stored with the approval")
+    ap.add_argument("--model", help="new: model slug (package name under models/demos)")
+    ap.add_argument("--hf-id", help="new: Hugging Face id")
     for fn in extra or []:
         fn(ap)
     return ap
