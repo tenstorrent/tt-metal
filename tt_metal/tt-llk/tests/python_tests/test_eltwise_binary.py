@@ -3,6 +3,7 @@
 
 import pytest
 import torch
+from helpers.data_format_inference import is_format_combination_outlier
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     BroadcastGolden,
@@ -75,6 +76,21 @@ DEST_REUSE_MATH_OPS = [
     MathOperation.Elwmul,
 ]
 INT8_MATH_OPS = [MathOperation.Elwadd, MathOperation.Elwsub]
+INT8_FORMAT = InputOutputFormat(DataFormat.Int8, DataFormat.Int8)
+
+
+def get_eltwise_binary_math_ops(formats, *, is_perf=False):
+    """Int8 is an exact integer add/sub. The base sweeps keep multiply."""
+    if formats.input_format == DataFormat.Int8:
+        return INT8_MATH_OPS
+    return BASE_PERF_MATH_OPS if is_perf else BASE_MATH_OPS
+
+
+def get_eltwise_binary_transpose(formats):
+    """Int8 coverage stays on the non-transposed path used by the integer test."""
+    if formats.input_format == DataFormat.Int8:
+        return [Transpose.No]
+    return [Transpose.Yes, Transpose.No]
 
 
 def _unique_dimensions(dimensions):
@@ -181,20 +197,32 @@ def _accumulated_output_dimensions(
 def _get_valid_formats(dest_acc):
     """
     Filter formats based on dest accumulation:
-    - If dest accumulation is enabled, input must be Float32
+    - dest accumulation Yes keeps Float32 inputs, plus Int8 to Int8
+    - dest accumulation No drops exponent-B inputs that pack directly to Float16
     """
     all_formats = input_output_formats(
         [
             DataFormat.Bfp4_b,
             DataFormat.Bfp8_b,
             DataFormat.Float16_b,
+            DataFormat.Float16,
             DataFormat.Float32,
         ],
         same=False,
     )
     if dest_acc == DestAccumulation.Yes:
-        return [f for f in all_formats if f.input_format == DataFormat.Float32]
-    return all_formats
+        return [
+            formats
+            for formats in all_formats
+            if formats.input_format == DataFormat.Float32
+        ] + [INT8_FORMAT]
+    return [
+        formats
+        for formats in all_formats
+        if not is_format_combination_outlier(
+            formats.input_format, formats.output_format, dest_acc
+        )
+    ]
 
 
 def get_base_perf_formats(dest_acc):
@@ -225,9 +253,6 @@ def get_dest_reuse_formats(math_op):
     )
 
 
-INT8_FORMAT = InputOutputFormat(DataFormat.Int8, DataFormat.Int8)
-
-
 def _get_valid_math_fidelity(formats, math_op=None):
     """
     Filter math fidelity based on input data format:
@@ -241,6 +266,8 @@ def _get_valid_math_fidelity(formats, math_op=None):
     if math_op is not None and math_op != MathOperation.Elwmul:
         return [MathFidelity.LoFi]
     input_format = formats.input_format
+    if input_format == DataFormat.Int8:
+        return [MathFidelity.LoFi]
     if input_format in [DataFormat.Bfp8_b, DataFormat.Bfp4_b]:
         return [MathFidelity.LoFi]
     elif input_format == DataFormat.Float16_b:
@@ -268,7 +295,6 @@ def _run_eltwise_binary_test(
     tile_dimensions,
     acc_to_dest,
     *,
-    int8_inputs=False,
     is_perf=False,
     perf_report=None,
     run_types=None,
@@ -297,6 +323,7 @@ def _run_eltwise_binary_test(
         input_dimensions_B=input_dimensions,
         tile_dimensions=tile_dimensions,
     )
+    int8_inputs = formats.input_format == DataFormat.Int8
     if int8_inputs:
         # Keep values in range so Int8 add/sub can be compared exactly.
         src_A = (src_A % 101) - 50
@@ -497,9 +524,9 @@ def _run_eltwise_binary_test(
     dest_sync=[DestSync.Half],
     unpack_to_dest=[False],
     formats=lambda dest_acc: _get_valid_formats(dest_acc),
-    math_op=BASE_MATH_OPS,
+    math_op=lambda formats: get_eltwise_binary_math_ops(formats),
     math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
-    transpose_srca=[Transpose.Yes, Transpose.No],
+    transpose_srca=get_eltwise_binary_transpose,
     tile_dimensions=lambda transpose_srca: get_eltwise_binary_tile_dimensions(
         transpose_srca, BroadcastType.None_
     ),
@@ -1042,52 +1069,4 @@ def test_eltwise_binary_dest_reuse(
         tile_dimensions,
         input_dimensions,
         output_dimensions,
-    )
-
-
-@parametrize(
-    dest_acc=[DestAccumulation.Yes],  # Dest accumulation is required for int8.
-    dest_sync=[DestSync.Half],
-    unpack_to_dest=[False],
-    formats=INT8_FORMAT,
-    math_fidelity=MathFidelity.LoFi,
-    transpose_srca=Transpose.No,
-    math_op=INT8_MATH_OPS,
-    tile_dimensions=lambda transpose_srca: get_eltwise_binary_tile_dimensions(
-        transpose_srca, BroadcastType.None_
-    ),
-    input_dimensions=lambda dest_acc, dest_sync, formats, tile_dimensions: get_eltwise_binary_input_dimensions(
-        dest_acc,
-        dest_sync,
-        formats,
-        tile_dimensions,
-        existing_dimensions=[[32, 32], [512, 32]],
-    ),
-    acc_to_dest=get_eltwise_binary_acc_to_dest,
-)
-def test_eltwise_binary_int8_format(
-    dest_acc,
-    dest_sync,
-    unpack_to_dest,
-    formats,
-    math_fidelity,
-    transpose_srca,
-    math_op,
-    input_dimensions,
-    tile_dimensions,
-    acc_to_dest,
-):
-    return _run_eltwise_binary_test(
-        dest_acc,
-        dest_sync,
-        unpack_to_dest,
-        formats,
-        BroadcastType.None_,
-        math_op,
-        math_fidelity,
-        transpose_srca,
-        input_dimensions,
-        tile_dimensions,
-        acc_to_dest,
-        int8_inputs=True,
     )

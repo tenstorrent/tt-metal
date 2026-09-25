@@ -4,7 +4,6 @@
 from helpers.llk_params import BroadcastType, DestAccumulation, DestSync, Transpose
 from helpers.param_config import parametrize
 from test_eltwise_binary import (
-    BASE_MATH_OPS,
     BFP4_MATH_OPS,
     _get_valid_formats,
     _get_valid_math_fidelity,
@@ -12,7 +11,9 @@ from test_eltwise_binary import (
     get_bfp4_formats,
     get_eltwise_binary_acc_to_dest,
     get_eltwise_binary_input_dimensions,
+    get_eltwise_binary_math_ops,
     get_eltwise_binary_tile_dimensions,
+    get_eltwise_binary_transpose,
 )
 
 ELTWISE_BINARY_BROADCAST_TYPES = [
@@ -28,9 +29,9 @@ ELTWISE_BINARY_BROADCAST_TYPES = [
     unpack_to_dest=[False],
     formats=lambda dest_acc: _get_valid_formats(dest_acc),
     broadcast_type=ELTWISE_BINARY_BROADCAST_TYPES,
-    math_op=BASE_MATH_OPS,
+    math_op=lambda formats: get_eltwise_binary_math_ops(formats),
     math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
-    transpose_srca=[Transpose.Yes, Transpose.No],
+    transpose_srca=get_eltwise_binary_transpose,
     tile_dimensions=lambda transpose_srca, broadcast_type: get_eltwise_binary_tile_dimensions(
         transpose_srca, broadcast_type
     ),

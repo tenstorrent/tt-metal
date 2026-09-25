@@ -6,15 +6,16 @@ from helpers.llk_params import DestAccumulation, DestSync, Transpose
 from helpers.param_config import parametrize
 from helpers.perf.core import ALL_PERF_RUN_TYPES
 from test_eltwise_binary import (
-    BASE_PERF_MATH_OPS,
     BFP4_PERF_MATH_OPS,
     _get_valid_math_fidelity,
     _run_eltwise_binary_test,
     get_base_perf_formats,
     get_bfp4_formats,
+    get_eltwise_binary_math_ops,
     get_eltwise_binary_perf_acc_to_dest,
     get_eltwise_binary_perf_input_dimensions,
     get_eltwise_binary_perf_tile_dimensions,
+    get_eltwise_binary_transpose,
 )
 from test_eltwise_binary_broadcast import ELTWISE_BINARY_BROADCAST_TYPES
 
@@ -28,9 +29,9 @@ PERF_LOOP_FACTOR = 32
     unpack_to_dest=[False],
     formats=get_base_perf_formats,
     broadcast_type=ELTWISE_BINARY_BROADCAST_TYPES,
-    math_op=BASE_PERF_MATH_OPS,
+    math_op=lambda formats: get_eltwise_binary_math_ops(formats, is_perf=True),
     math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
-    transpose_srca=[Transpose.Yes, Transpose.No],
+    transpose_srca=get_eltwise_binary_transpose,
     tile_dimensions=get_eltwise_binary_perf_tile_dimensions,
     input_dimensions=get_eltwise_binary_perf_input_dimensions,
     acc_to_dest=get_eltwise_binary_perf_acc_to_dest,
