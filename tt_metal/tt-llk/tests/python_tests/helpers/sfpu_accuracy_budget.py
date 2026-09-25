@@ -471,22 +471,43 @@ def accuracy_contract(
     if found is None:
         return TOLERANCE_CONTRACT
     key, contract = found
-    if contract.metric is not Metric.ULP:
-        return contract
-    # A step count is trustworthy only where the format has a per-element ULP -- the
-    # block floats' lattice compares are the stronger criterion -- and only on the
-    # architecture it was measured on, which for an unkeyed row is MEASURED_ARCH. A row
-    # whose own key names `arch` was measured there and is exempt.
-    if has_ulp_gate(output_format) and (arch == MEASURED_ARCH or key.arch is not None):
-        return contract
-    # Downgrade onto the op's *own* tolerance row where it has one, not the global
-    # default: a ULP row that wins on specificity must not shadow a broader declared atol.
-    tolerance_rows = {
+    if contract.metric is Metric.ULP:
+        # A step count is trustworthy only where the format has a per-element ULP --
+        # the block floats' lattice compares are the stronger criterion -- and only on
+        # the architecture it was measured on, which for an unkeyed row is
+        # MEASURED_ARCH. A row whose own key names `arch` was measured there and is
+        # exempt. Anywhere else the cell downgrades onto the tolerance the op declares.
+        if has_ulp_gate(output_format) and (
+            arch == MEASURED_ARCH or key.arch is not None
+        ):
+            return contract
+        return _declared_tolerance(table, query, op.name, TOLERANCE_CONTRACT)
+    if contract.atol is None and contract.rtol is None:
+        # A tolerance row with no numbers opts its cell *out of the ULP metric*; it does
+        # not retract an atol/rtol the op declares on a broader row. The sweep emits
+        # such rows for every cell whose budget crossed the format's ceiling, keyed on
+        # (in, out, dest) -- more specific than the shared `atol 0.13` row SigmoidAppx
+        # and GeluAppx carry, which they shadowed straight back to the default.
+        return _declared_tolerance(table, query, op.name, contract)
+    return contract
+
+
+def _declared_tolerance(
+    table: _BudgetTable, query: BudgetKey, label: str, fallback: AccuracyContract
+) -> AccuracyContract:
+    """The most specific tolerance row *with numbers* covering *query*, or *fallback*.
+
+    Both downgrades land here rather than on the global default: a ULP row or a bare
+    tolerance row that wins on specificity must not shadow a broader declared atol.
+    """
+    numbered = {
         key: contract
         for key, contract in table.items()
-        if contract.metric is not Metric.ULP
+        if contract.metric is Metric.TOLERANCE
+        and (contract.atol is not None or contract.rtol is not None)
     }
-    return resolve_contract(tolerance_rows, query, label=op.name)
+    found = _winner(numbered, query, label)
+    return fallback if found is None else found[1]
 
 
 def enrolled_ops() -> Tuple[MathOperation, ...]:
@@ -506,14 +527,17 @@ def usable_budget_ceiling(output_format: DataFormat) -> float:
     about 35%, before it. A bound that admits either is not a gate.
 
     The real bound is the ``rtol`` half of the ``isclose`` this replaces, itself a step
-    budget at large magnitude: about 419,430 steps for fp32, 51 for fp16, 6 for bf16.
-    ``passed_test`` warns on the same line at runtime; no row here may cross it.
+    budget at large magnitude, rounded *up* to a whole step because a budget is one:
+    419,431 steps for fp32, 52 for fp16, 7 for bf16. So a bf16 cell measuring 7 enrols
+    at 7 -- 5.5% relative error at the top of a binade against the 5% rtol, and tighter
+    than the tolerance gate everywhere below it. ``passed_test`` warns on the same line
+    at runtime; no row here may cross it.
     """
     from .utils import tolerances
 
     dtype = ulp_dtype(output_format)
     by_rtol = tolerances[output_format].rtol * (1 << MANTISSA_BITS_FOR_ULP[dtype])
-    return min(by_rtol, float(MAX_MEANINGFUL_ULP[dtype]))
+    return float(math.ceil(min(by_rtol, float(MAX_MEANINGFUL_ULP[dtype]))))
 
 
 def validate_registry() -> None:

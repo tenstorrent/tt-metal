@@ -61,12 +61,14 @@ from helpers.test_variant_parameters import (
 from helpers.ulp import ulp_distance, ulp_stats
 from helpers.ulp_sweep import (
     SWEEP_FORMATS,
+    SWEEP_INPUT_FORMATS,
+    is_exhaustive,
     measurable_mask,
     nonfinite_failures,
     stimuli_format_for,
     sweep_spec,
 )
-from helpers.utils import passed_test
+from helpers.utils import _record_ulp_measurement, passed_test
 
 #: Every variant here is a real 64-tile device run, and the whole sweep is ~7 minutes on
 #: hardware. Unmarked, the PR gate collects it and runs it with `--timeout=60 -x` under a
@@ -96,7 +98,7 @@ def run_sweep(
         input_dimensions_A=SWEEP_DIMENSIONS,
         stimuli_format_B=stimuli_format_for(formats.input_format),
         input_dimensions_B=SWEEP_DIMENSIONS,
-        spec_A=sweep_spec(),
+        spec_A=sweep_spec(formats.input_format),
     )
 
     generate_golden = get_golden_generator(UnarySFPUGolden)
@@ -237,7 +239,7 @@ SWEEP_OPS = _measurable_unary_ops() if _emitting() else _ulp_gateable_unary_ops(
     "approx_mode", list(ApproximationMode), ids=lambda a: f"approx:{a.name}"
 )
 @pytest.mark.parametrize("out_fmt", SWEEP_FORMATS, ids=lambda f: f"out:{f.name}")
-@pytest.mark.parametrize("in_fmt", SWEEP_FORMATS, ids=lambda f: f"in:{f.name}")
+@pytest.mark.parametrize("in_fmt", SWEEP_INPUT_FORMATS, ids=lambda f: f"in:{f.name}")
 @pytest.mark.parametrize("mathop", SWEEP_OPS, ids=lambda op: op.name)
 def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
     """Every non-special value of the input format, against the op's declared budget.
@@ -311,6 +313,13 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
             (in_fmt.name, out_fmt.name, approx_mode.name, dest_acc.name),
             int(stats["max"]),
         )
+        # `--ulp-measure` writes its row from inside `passed_test`, which this branch
+        # never reaches -- so an emit run under xdist, whose workers' `MEASURED` never
+        # reach the controller, used to leave no record at all. Written here, the
+        # JSONL is the one artefact that survives either mode.
+        _record_ulp_measurement(
+            ulp_distance(golden, result), mask=mask, output_data_format=out_fmt
+        )
         return
 
     # The verdict the contract declares, not a bare `stats["max"]`: five rows carry a
@@ -370,9 +379,15 @@ def _emit_measured_table(request):
             "measured a subset. Nothing written -- emit from a clean run."
         )
 
+    # Names the input axis, split by how it was walked: Float32 has 2^32 values and one
+    # run holds 2^16, so calling the whole thing exhaustive would overstate every row
+    # keyed on a Float32 input.
+    walked = "/".join(f.name for f in SWEEP_INPUT_FORMATS if is_exhaustive(f))
+    strided = "/".join(f.name for f in SWEEP_INPUT_FORMATS if not is_exhaustive(f))
     suffix = (
-        f"exhaustive {'/'.join(f.name for f in SWEEP_FORMATS)} sweep, "
-        f"{arch.value}, {date.today().isoformat()}"
+        f"exhaustive {walked}"
+        + (f" + strided {strided}" if strided else "")
+        + f" sweep, {arch.value}, {date.today().isoformat()}"
     )
     n = ulp_sweep.write_table(_TABLE_PATH, suffix)
     print(f"\n--ulp-emit: rewrote {n} op block(s) in {_TABLE_PATH.name}")

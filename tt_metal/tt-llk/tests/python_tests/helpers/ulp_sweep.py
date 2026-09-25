@@ -32,12 +32,34 @@ SWEEP_FORMATS: Tuple[DataFormat, ...] = (
     DataFormat.Float16_b,
     DataFormat.Float16,
     DataFormat.Bfp8_b,
+    DataFormat.Float32,
 )
 
-#: What a Bfp8_b sweep is actually enumerated in.
+#: Formats the sweep drives as an *input* but never judges as an output. Bfp4_b keeps
+#: 2 fractional bits, so a bf16 step count would read every legal quantization of its
+#: output as a 32-step error -- but it is a perfectly good thing to feed, and gated
+#: cells do take it.
+SWEEP_INPUT_ONLY_FORMATS: Tuple[DataFormat, ...] = (DataFormat.Bfp4_b,)
+
+#: Every format the sweep feeds, whether or not it can judge a result in it.
+SWEEP_INPUT_FORMATS: Tuple[DataFormat, ...] = SWEEP_FORMATS + SWEEP_INPUT_ONLY_FORMATS
+
+#: What a block float's sweep is actually enumerated in: they have no enumerable value
+#: set of their own, so the sweep generates bfloat16 and the pipeline packs it on the
+#: way in.
 _STIMULI_FORMAT: Dict[DataFormat, DataFormat] = {
     DataFormat.Bfp8_b: DataFormat.Float16_b,
+    DataFormat.Bfp4_b: DataFormat.Float16_b,
 }
+
+#: Float32 has 2**32 values and one device run holds 2**16, so it cannot be enumerated.
+#: Striding the total order by this much samples it evenly instead: every binade holds
+#: the same number of representable values, so each gets an equal share, and one run
+#: reaches 261 binades from 0 to 3.4e38. A consecutive walk covers a millionth of one
+#: binade and would call that a measurement.
+#:
+#: This is the one place the sweep is a *sample* rather than exhaustive.
+_FP32_STRIDE = 2**16
 
 #: A top-level op key in the table.
 _OP_KEY = re.compile(r"^([A-Za-z_]\w*):")
@@ -50,27 +72,42 @@ def stimuli_format_for(fmt: DataFormat) -> DataFormat:
     return _STIMULI_FORMAT.get(fmt, fmt)
 
 
-def sweep_spec() -> StimuliSpec:
-    """Every finite representable value of the stimuli format, once.
-
-    Deliberately not clipped to the op's domain. ``exclude_undefined`` expresses a domain
-    as ``intervals``, which ULP_SWEEP does not read -- and clipping would also stop the
-    undefined inputs reaching hardware at all. They are swept and then masked out of the
-    statistics by :func:`measurable_mask`, so the run still exercises them.
-    """
-    return StimuliSpec.ulp_sweep(low=-_INF, high=_INF)
+def is_exhaustive(input_format: DataFormat) -> bool:
+    """Whether the sweep sees *every* value the input can take, or a stride of them."""
+    return stimuli_format_for(input_format) != DataFormat.Float32
 
 
 @lru_cache(maxsize=None)
 def swept_value_count(input_format: DataFormat) -> int:
     """How many values the sweep actually generates for *input_format*.
 
-    Cached because the answer is a property of the format, while finding it walks the
-    whole format, and `padding_lanes` asks twice per variant.
-    """
-    from helpers.stimuli_generator.strategies.structured import ulp_sweep_value_count
+    Not ``ulp_sweep_value_count``, which answers how many the format *has*: 2**32 for
+    float32, where the sweep generates 2**16 of them.
 
-    return int(ulp_sweep_value_count(stimuli_format_for(input_format), -_INF, _INF))
+    Cached because the answer is a property of the format and the walk, while finding
+    it enumerates the whole format: 2.4 ms a call, and `padding_lanes` asks twice per
+    variant, which is ~37 s of recomputation across an emit run over five formats.
+    """
+    from helpers.stimuli_generator.strategies.structured import (
+        _enumerate_representable,
+    )
+
+    fmt = stimuli_format_for(input_format)
+    stride = 1 if is_exhaustive(input_format) else _FP32_STRIDE
+    return int(_enumerate_representable(fmt, -_INF, _INF, 2**16, stride).numel())
+
+
+def sweep_spec(input_format: DataFormat = DataFormat.Float16_b) -> StimuliSpec:
+    """Every finite representable value of the stimuli format, once -- or, for float32,
+    every ``_FP32_STRIDE``-th, since 2**32 values do not fit one run.
+
+    Deliberately not clipped to the op's domain. ``exclude_undefined`` expresses a domain
+    as ``intervals``, which ULP_SWEEP does not read -- and clipping would also stop the
+    undefined inputs reaching hardware at all. They are swept and then masked out of the
+    statistics by :func:`measurable_mask`, so the run still exercises them.
+    """
+    stride = 1 if is_exhaustive(input_format) else _FP32_STRIDE
+    return StimuliSpec.ulp_sweep(low=-_INF, high=_INF, stride=stride)
 
 
 def padding_lanes(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
@@ -88,6 +125,10 @@ def padding_lanes(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
     Identified by position rather than by value, because ``0.0`` is also a legitimate
     swept value: exactly one, in the middle of the sorted order. Confirmed on hardware
     that the padding is the contiguous tail.
+
+    Counted by :func:`swept_value_count`, not by how many values the format has: a
+    strided float32 walk generates 65,279 of 2**32, and asking the format would put the
+    padding boundary past the end of the tensor and mask nothing.
     """
     swept = swept_value_count(input_format)
     # On *src*'s device: the mask is composed with tensors derived from it, and a
@@ -282,7 +323,7 @@ def _verdict(measured: int, out_fmt: str) -> Tuple[str, int]:
     ``("ulp", budget)`` while a step budget is still *stronger* than the tolerance it
     replaces, and ``("tolerance", budget)`` once it is not -- the budget either way, so
     the row's comment can name the number that actually crossed the line. The bound is the table's
-    own ``usable_budget_ceiling``: ~419,430 steps for fp32, 51 for fp16, 6 for bf16, 25
+    own ``usable_budget_ceiling``: 419,431 steps for fp32, 52 for fp16, 7 for bf16, 26
     for Bfp8_b. Decided per cell and before collapsing, because it depends on the output
     format and collapsing may drop it.
 
@@ -307,10 +348,18 @@ def _verdict(measured: int, out_fmt: str) -> Tuple[str, int]:
         # Enrolling the second number would gate nothing and hide the first.
         return ("block", measured)
     budget = 0 if measured == 0 else math.ceil(measured * EMIT_HEADROOM)
-    if budget > usable_budget_ceiling(DataFormat[out_fmt]):
-        # The *budget* is what crosses the line, not the measurement: with 1.1x headroom
-        # a measured 6 becomes a budget of 7, past bf16's 6.4. Writing "max 6 ULP, past
-        # this output's usable ceiling" then made a checkable claim that is false.
+    ceiling = usable_budget_ceiling(DataFormat[out_fmt])
+    if budget > ceiling:
+        if measured <= ceiling:
+            # The kernel meets the gate; only the headroom does not. Exp measures 7 on
+            # a bf16 output whose ceiling is 7, and 1.1x made that 8 -- refusing the
+            # only step gate Exp could have on bf16 over rounding. Cap at the ceiling:
+            # a budget sitting exactly on it is still stronger than the tolerance it
+            # replaces, and zero slack means any drift fails, which is what a gate is
+            # for. 14 cells on the 2026-09-25 sweep, all Exp.
+            return ("ulp", int(ceiling))
+        # The *budget* is what crosses the line, not the measurement, so the row's
+        # comment names both and the claim stays checkable.
         return ("tolerance", budget)
     return ("ulp", budget)
 
@@ -419,9 +468,9 @@ def _render(key_line: str, rows: List[dict], suffix: str) -> List[str]:
             # is the pair of numbers, so the claim stays checkable against
             # `usable_budget_ceiling`.
             ceiling = usable_budget_ceiling(DataFormat[row["out"]])
-            note += f", budget would be {value} > {ceiling:.0f}-step ceiling"
+            note += f", budget {value} > ceiling {ceiling:.0f}"
         elif metric == "block":
-            note += ", block-quantized, so tolerance"
+            note += ", block-quantized"
         out.append(f"  - {{{pairs}}}  # {note}\n")
     return out
 

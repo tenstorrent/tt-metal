@@ -47,11 +47,16 @@ and **128 ULP** over every bfloat16 value there is.
 | `Float16_b` | yes | yes | all 65,279 finite values |
 | `Float16` | yes | yes | all 63,487 finite values |
 | `Bfp8_b` | yes | yes | swept in bfloat16, packed on the way in |
+| `Bfp4_b` | yes | **no** | swept in bfloat16, packed on the way in |
+| `Float32` | yes | yes | **strided**, not exhaustive — see below |
 
-A budget keyed on a format the sweep does not drive is declared but never measured, so
-it holds only as far as whatever sampled it. `Float32` is the one that bites: it has
-2^32 values and one device run holds 2^16, so it cannot be enumerated the way the
-16-bit formats are.
+`Bfp4_b` is input-only: it keeps 2 fractional bits, so a bfloat16 step count would read
+every legal quantization of a `Bfp4_b` *output* as a 32-step error.
+
+`Float32` has 2^32 values and one device run holds 2^16, so it cannot be enumerated. The
+sweep strides the format's total order instead. Every binade holds the same number of
+representable values, so each gets an equal share: one run reaches 261 binades from 0 to
+3.4e38. Ask `ulp_sweep.is_exhaustive(input_format)` if you need to know which you got.
 
 The domain is deliberately **not** clipped to the op's safe range. Undefined inputs are
 swept and then masked out of the statistics, so they still reach hardware.
@@ -103,7 +108,7 @@ from an older run, an `arch:`-keyed entry, a row carrying a `near_zero_atol` flo
 ### 4. Read what it wrote
 
 ```yaml
-MyOp:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-23, except where a row says otherwise
+MyOp:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-09-23, except where a row says otherwise
   - {in: Float16_b, out: Float16_b, max_ulp: 2}  # max 1 ULP
   - {in: Float16, out: Float16_b, metric: tolerance}  # max 14337 ULP, budget would be 15771 > 6-step ceiling
   - {in: Float16_b, out: Bfp8_b, metric: tolerance}  # max 393 ULP, block-quantized, so tolerance

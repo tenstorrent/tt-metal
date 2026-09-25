@@ -158,6 +158,12 @@ def test_the_emitted_budget_uses_the_declared_headroom():
     from helpers.ulp_sweep import _verdict
 
     assert _verdict(100, "Float32") == ("ulp", math.ceil(100 * EMIT_HEADROOM))
+    # A measurement that fits the ceiling enrols even when the headroom would not:
+    # capped at the ceiling, with zero slack. One past it stays on tolerance.
+    assert _verdict(6, "Float16_b") == ("ulp", 7)  # 1.1x of 6 is 6.6, within the 7
+    assert _verdict(7, "Float16_b") == ("ulp", 7)  # measured at the ceiling: zero slack
+    assert _verdict(8, "Float16_b") == ("tolerance", math.ceil(8 * EMIT_HEADROOM))
+    assert _verdict(393216, "Float32") == ("ulp", 419431)
     # Zero is exact and stays exact: the sweep saw every value.
     assert _verdict(0, "Float32") == ("ulp", 0)
 
