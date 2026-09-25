@@ -11641,6 +11641,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="HF model_id of a planner demo, or a demo dir (default: newest run).",
     )
     pph.add_argument("--run", dest="run", help="explicit run id or run directory path")
+    pph.add_argument(
+        "--from-dashboard",
+        dest="from_dashboard",
+        help="read metrics from a live dashboard URL (e.g. http://127.0.0.1:8798) "
+        "instead of run state files — best for an in-flight run",
+    )
     pph.add_argument("--repo", required=True, help="target HF repo id, e.g. ashwaaaaa/<model>-tt")
     pph.add_argument("--weights", help="base weights HF repo id to reference (pointer; not uploaded)")
     pph.add_argument("--private", action="store_true", help="create the HF repo as private")

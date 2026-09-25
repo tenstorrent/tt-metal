@@ -31,6 +31,17 @@ from ..optimize_dashboard import (
 from .optimize import _repo_root, _resolve_target
 
 
+def _fetch_dashboard_state(url: str) -> dict:
+    """Read a live/served dashboard's /api/state — the exact metrics shown on the dashboard (throughput
+    per-user, batch, serving, etc.). More reliable than out-of-process state-dir discovery for a run
+    that is still in flight (its ledger lives in the running process's PERF_MCP_STATE_DIR)."""
+    import urllib.request
+
+    u = url.rstrip("/") + "/api/state"
+    with urllib.request.urlopen(u, timeout=20) as r:
+        return json.loads(r.read().decode())
+
+
 def _git_commit(repo_root: Path) -> str | None:
     try:
         out = subprocess.run(
@@ -133,14 +144,32 @@ def cmd_publish_hf(args) -> int:
         if demo_dir is not None:
             slug = demo_dir.name
 
-    run_dir = find_run_dir(repo_root, slug=slug, run_ref=getattr(args, "run", None))
-    if run_dir is None:
-        what = f"for '{slug}' " if slug else ""
-        print(f"  [publish-hf] no optimize run found {what}under {repo_root}. Pass a target or --run.")
+    from_dash = getattr(args, "from_dashboard", None)
+    if from_dash:
+        # Pull the exact metrics the dashboard shows (best for an in-flight run).
+        try:
+            state = _fetch_dashboard_state(from_dash)
+        except Exception as e:
+            print(f"  [publish-hf] could not read dashboard state from {from_dash}: {e}")
+            return 2
+        slug = slug or (state.get("model") or {}).get("slug")
+        run_dir = None
+        state_root = repo_root
+    else:
+        run_dir = find_run_dir(repo_root, slug=slug, run_ref=getattr(args, "run", None))
+        if run_dir is None:
+            what = f"for '{slug}' " if slug else ""
+            print(
+                f"  [publish-hf] no optimize run found {what}under {repo_root}. "
+                f"Pass a target, --run, or --from-dashboard <url>."
+            )
+            return 2
+        slug = slug or run_slug(run_dir)
+        state_root = repo_root_for_run(run_dir, repo_root)
+        state = collect_state(run_dir, state_dir_candidates(state_root, slug), slug)
+    if not slug:
+        print("  [publish-hf] could not determine the model slug. Pass a target.")
         return 2
-    slug = slug or run_slug(run_dir)
-    state_root = repo_root_for_run(run_dir, repo_root)
-    state = collect_state(run_dir, state_dir_candidates(state_root, slug), slug)
 
     # The publishable model source is the demo dir in the MAIN checkout — after `commit-wins` it holds
     # the optimized code. Fall back to the run's own model_root only if the checkout lacks it.
@@ -174,7 +203,7 @@ def cmd_publish_hf(args) -> int:
         "serve": {"block_size": 64, "max_num_seqs": state.get("batch") or 32},
         "provenance": {
             "tt_metal_commit": commit,
-            "run": run_dir.name,
+            "run": run_dir.name if run_dir else (state.get("run") or {}).get("id"),
             "throughput_tok_s_user": (state.get("throughput") or {}).get("current"),
             "batch": state.get("batch"),
         },
