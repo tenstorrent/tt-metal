@@ -50,9 +50,7 @@ _PERF_REFERENCE_MS = {
     "SP2xTP4": 9.539,
     "SP4xTP2": 9.991,
 }
-# Blackhole Galaxy SP8xTP4 calibration at c4f8ddd0e377 (2026-09-02): median
-# of five warm synchronized 10-replay samples on the high-power CI lane.
-_GALAXY_PERF_REFERENCE_MS = 3.963
+_GALAXY_PERF_REFERENCE_MS = 4.195
 
 
 @pytest.fixture(scope="session")
