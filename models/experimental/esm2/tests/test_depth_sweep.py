@@ -20,6 +20,7 @@ emulated TT piecewise-CDF formula extracted from the runtime kernel source
 tt-metal-fd80faa3). Validates the CPU sim's gelu emulation on the real
 activation distribution.
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -55,12 +56,12 @@ def gelu_tt_emul(x: torch.Tensor) -> torch.Tensor:
     x2 = x * x
     hc = _H_C0 + x * (_H_C1 + x * (_H_C2 + x * _H_C3))
     h = torch.exp(-0.5 * x2) * hc
-    hs = (h + _GRID) - _GRID                       # round to 2^-25 grid
-    res = x * hs                                   # exp tail region
+    hs = (h + _GRID) - _GRID  # round to 2^-25 grid
+    res = x * hs  # exp tail region
     p = _G_C1 + x2 * (_G_C3 + x2 * (_G_C5 + x2 * (_G_C7 + x2 * (_G_C9 + x2 * (_G_C11 + x2 * _G_C13)))))
     core = x * (0.5 + x * p)
-    res = torch.where(x > -3.125, core, res)       # core CDF region
-    res = torch.where(x > 2.78125, x, res)         # identity region
+    res = torch.where(x > -3.125, core, res)  # core CDF region
+    res = torch.where(x > 2.78125, x, res)  # identity region
     res = torch.where(x <= _GELU_SAT, torch.zeros_like(res), res)
     return res
 
@@ -70,13 +71,13 @@ def row_nrmse(actual, expected):
     ratio, MAX over rows; for B=1 max == mean == whole-tensor RMS ratio."""
     axes = tuple(range(1, actual.ndim))
     err = np.sqrt(np.mean((actual - expected) ** 2, axis=axes)) / np.maximum(
-        1e-12, np.sqrt(np.mean(expected ** 2, axis=axes)))
+        1e-12, np.sqrt(np.mean(expected**2, axis=axes))
+    )
     return float(err.max()), float(err.mean())
 
 
 def slice_weights(w, depth):
-    return {k: v for k, v in w.items()
-            if not (k.startswith("layers.") and int(k.split(".")[1]) >= depth)}
+    return {k: v for k, v in w.items() if not (k.startswith("layers.") and int(k.split(".")[1]) >= depth)}
 
 
 def main():
@@ -86,8 +87,9 @@ def main():
         cfg0 = Esm2TTConfig.from_dict(json.load(f))
     wall = load_canonical_weights("/weights", cfg0)
 
-    import ttnn
     from tt.esm2.ttnn_backend import TtnnEsm2
+
+    import ttnn
 
     def dram_used(dev):
         try:
@@ -101,13 +103,13 @@ def main():
     def hook_for(i):
         def h(_mod, _inp, out):
             caps[i] = out.detach().reshape(-1).clone()
+
         return h
 
     def free_backend(tt):
         # build()'s atexit hook pins the object; drop device tensors manually.
         tt.layer_ops = None
-        for k in ("final_w", "final_b", "lm_d_w", "lm_d_b", "lm_l_w", "lm_l_b",
-                  "dec_w", "lm_bias"):
+        for k in ("final_w", "final_b", "lm_d_w", "lm_d_b", "lm_l_w", "lm_l_b", "dec_w", "lm_bias"):
             setattr(tt, k, None)
         tt._rotary_cache.clear()
         tt._mask_cache.clear()
@@ -130,9 +132,11 @@ def main():
             hm, ha = row_nrmse(out["hidden"], hr)
             lm, la = row_nrmse(out["logits"], lr)
             rows.append((depth, hm, lm))
-            print(f"depth={depth:2d} hidden max={hm:.4e} mean={ha:.4e} "
-                  f"logits max={lm:.4e} mean={la:.4e} dram={dram_used(device)/1e6:.0f}MB",
-                  flush=True)
+            print(
+                f"depth={depth:2d} hidden max={hm:.4e} mean={ha:.4e} "
+                f"logits max={lm:.4e} mean={la:.4e} dram={dram_used(device)/1e6:.0f}MB",
+                flush=True,
+            )
             free_backend(tt)
             del tt, ref, w, out
             gc.collect()
@@ -150,22 +154,25 @@ def main():
             x = caps[i]
             xb = x.to(torch.bfloat16).to(torch.float32)  # values the SFPU sees
             t = ttnn.to_device(
-                ttnn.from_torch(xb.to(torch.bfloat16).reshape(1, -1), dtype=ttnn.bfloat16,
-                                layout=ttnn.TILE_LAYOUT), device)
+                ttnn.from_torch(xb.to(torch.bfloat16).reshape(1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
+                device,
+            )
             g = ttnn.gelu(t)
             ttnn.synchronize_device(device)
-            dev = ttnn.to_torch(ttnn.to_layout(ttnn.from_device(g),
-                                               ttnn.ROW_MAJOR_LAYOUT)).reshape(-1).float()
-            ref_e = F.gelu(xb)          # exact erf gelu on same bf16 inputs
+            dev = ttnn.to_torch(ttnn.to_layout(ttnn.from_device(g), ttnn.ROW_MAJOR_LAYOUT)).reshape(-1).float()
+            ref_e = F.gelu(xb)  # exact erf gelu on same bf16 inputs
             emu = gelu_tt_emul(xb)
 
             def rms(a, b):
                 return float((a - b).pow(2).mean().sqrt() / b.pow(2).mean().sqrt())
 
-            print(f"L{i:2d} gelu n={x.numel()}: dev_vs_erf NRMSE={rms(dev, ref_e):.3e} "
-                  f"emu_vs_erf NRMSE={rms(emu, ref_e):.3e} "
-                  f"max|dev-emu|={float((dev - emu).abs().max()):.3e} "
-                  f"max|dev-erf|={float((dev - ref_e).abs().max()):.3e}", flush=True)
+            print(
+                f"L{i:2d} gelu n={x.numel()}: dev_vs_erf NRMSE={rms(dev, ref_e):.3e} "
+                f"emu_vs_erf NRMSE={rms(emu, ref_e):.3e} "
+                f"max|dev-emu|={float((dev - emu).abs().max()):.3e} "
+                f"max|dev-erf|={float((dev - ref_e).abs().max()):.3e}",
+                flush=True,
+            )
         print("PROBE_DONE", flush=True)
     finally:
         ttnn.close_device(device)

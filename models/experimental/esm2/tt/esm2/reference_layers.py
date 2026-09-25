@@ -7,6 +7,7 @@ Semantics verified against transformers 5.12.1 models/esm/modeling_esm.py;
 position semantics corrected from the installed oracle source after the
 bringup batch-pad failure (see position_ids_from_input_ids).
 """
+
 from __future__ import annotations
 
 import math
@@ -32,8 +33,7 @@ def position_ids_from_input_ids(input_ids: torch.Tensor, pad_token_id: int) -> t
     NRMSE at pad positions (real positions 4.2e-4) vs 0.013 for arange.
     Signature kept for drop-in compatibility with existing callers.
     """
-    return torch.arange(input_ids.shape[1], dtype=torch.long,
-                        device=input_ids.device).expand_as(input_ids).contiguous()
+    return torch.arange(input_ids.shape[1], dtype=torch.long, device=input_ids.device).expand_as(input_ids).contiguous()
 
 
 def additive_attention_mask(attention_mask: torch.Tensor) -> torch.Tensor:
@@ -57,14 +57,12 @@ class RotaryTables:
         self._cache: dict = {}
 
     def cos_sin(self, position_ids: torch.Tensor):
-        key = (tuple(position_ids.shape), int(position_ids.min()), int(position_ids.max()),
-               position_ids.sum().item())
+        key = (tuple(position_ids.shape), int(position_ids.min()), int(position_ids.max()), position_ids.sum().item())
         cached = self._cache.get(key)
         if cached is not None:
             return cached
         inv_freq = 1.0 / (
-            self.base ** (torch.arange(0, self.head_dim, 2, dtype=torch.float32, device=self.device)
-                          / self.head_dim)
+            self.base ** (torch.arange(0, self.head_dim, 2, dtype=torch.float32, device=self.device) / self.head_dim)
         )
         freqs = torch.einsum("bl,f->blf", position_ids.to(torch.float32), inv_freq)
         emb = torch.cat((freqs, freqs), dim=-1)  # [B,L,head_dim]
@@ -121,7 +119,7 @@ class Esm2SelfAttention(torch.nn.Module):
         q = self.q(x_ln).view(B, L, self.n_heads, self.head_dim).transpose(1, 2)  # [B,H,L,D]
         k = self.k(x_ln).view(B, L, self.n_heads, self.head_dim).transpose(1, 2)
         v = self.v(x_ln).view(B, L, self.n_heads, self.head_dim).transpose(1, 2)
-        q = q * self.head_dim ** -0.5
+        q = q * self.head_dim**-0.5
         q, k = apply_rotary(q, k, cos, sin)
         scores = torch.matmul(q, k.transpose(-1, -2)) + attn_bias  # fp32
         probs = torch.softmax(scores, dim=-1)

@@ -11,6 +11,7 @@ Gate: hidden max-row NRMSE <= ~0.02 (sim prediction 1.94e-2, CPU bf16
 attribution study fa9696c0) agrees with the simulation; device full-bf16
 measured 5.40e-2 on the same input.
 """
+
 from __future__ import annotations
 
 import json
@@ -28,7 +29,8 @@ from tt.esm2.reference_layers import Esm2Model
 def row_nrmse(actual: np.ndarray, expected: np.ndarray):
     axes = tuple(range(1, actual.ndim))
     err = np.sqrt(np.mean((actual - expected) ** 2, axis=axes)) / np.maximum(
-        1e-12, np.sqrt(np.mean(expected**2, axis=axes)))
+        1e-12, np.sqrt(np.mean(expected**2, axis=axes))
+    )
     return float(err.max()), float(err.mean())
 
 
@@ -46,9 +48,9 @@ def main():
     logits_ref, hidden_ref = logits_ref.numpy(), hidden_ref.numpy()
     print(f"twin done shapes logits={logits_ref.shape} hidden={hidden_ref.shape}", flush=True)
 
-    import ttnn
-
     from tt.esm2.ttnn_backend import TtnnEsm2
+
+    import ttnn
 
     device = ttnn.open_device(device_id=0)
     try:
@@ -59,8 +61,7 @@ def main():
         hm, ha = row_nrmse(out["hidden"], hidden_ref)
         lm, la = row_nrmse(out["logits"], logits_ref)
         print(f"cast_fn={getattr(tt._cast_fn, '__name__', None)}", flush=True)
-        print(f"hidden  NRMSE max={hm:.4e} mean={ha:.4e}  (device pre-fix 5.40e-2, sim fix 1.94e-2)",
-              flush=True)
+        print(f"hidden  NRMSE max={hm:.4e} mean={ha:.4e}  (device pre-fix 5.40e-2, sim fix 1.94e-2)", flush=True)
         print(f"logits  NRMSE max={lm:.4e} mean={la:.4e}  (pre-fix 1.62e-2)", flush=True)
         print(f"determinism max|dlogits|={det:.1e}", flush=True)
         print("MINI_CHECK_" + ("AGREE" if hm <= 0.024 else "DISAGREE"), flush=True)

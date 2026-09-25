@@ -4,6 +4,7 @@
 The pinned checkpoint config (/weights/config.json) is authoritative; nothing
 in this package hardcodes dimensions beyond documented defaults.
 """
+
 from __future__ import annotations
 
 import json
@@ -44,10 +45,21 @@ class Esm2TTConfig:
     @classmethod
     def from_dict(cls, d: dict) -> "Esm2TTConfig":
         fields = cls.__dataclass_fields__
-        missing = [k for k in ("num_hidden_layers", "hidden_size", "num_attention_heads",
-                               "intermediate_size", "vocab_size", "layer_norm_eps",
-                               "pad_token_id", "mask_token_id", "max_position_embeddings")
-                   if k not in d]
+        missing = [
+            k
+            for k in (
+                "num_hidden_layers",
+                "hidden_size",
+                "num_attention_heads",
+                "intermediate_size",
+                "vocab_size",
+                "layer_norm_eps",
+                "pad_token_id",
+                "mask_token_id",
+                "max_position_embeddings",
+            )
+            if k not in d
+        ]
         if missing:
             raise ValueError(f"config missing required keys: {missing}")
         kwargs = {k: d[k] for k in fields if k in d}

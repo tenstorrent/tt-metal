@@ -14,6 +14,7 @@ The default FASTA example is embedded below: the source sync has twice
 dropped non-Python asset files (demo/example.fasta), so the demo writes it
 on first use instead of requiring it in the manifest.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -58,7 +59,7 @@ def tokenize(fasta: str, vocab: dict[str, int], max_len: int = 1026):
     cases = []
     for name, seq in read_fasta(fasta):
         residues = seq[: max_len - 2]
-        ids = ([vocab["<cls>"]] + [vocab.get(r, unk) for r in residues] + [vocab["<eos>"]])
+        ids = [vocab["<cls>"]] + [vocab.get(r, unk) for r in residues] + [vocab["<eos>"]]
         cases.append((name, np.asarray(ids, dtype=np.int64)))
     return cases
 
@@ -102,10 +103,18 @@ def main() -> int:
         ids[i, : len(case_ids)] = case_ids
         am[i, : len(case_ids)] = 1
     out = backend.embed(ids, am)
-    np.savez(args.out, names=np.asarray([n for n, _ in cases]), input_ids=ids,
-             attention_mask=am, logits=out["logits"], hidden=out["hidden"])
-    print(f"wrote {args.out}: logits {out['logits'].shape}, hidden {out['hidden'].shape} "
-          f"({B} sequence(s), padded to {L})")
+    np.savez(
+        args.out,
+        names=np.asarray([n for n, _ in cases]),
+        input_ids=ids,
+        attention_mask=am,
+        logits=out["logits"],
+        hidden=out["hidden"],
+    )
+    print(
+        f"wrote {args.out}: logits {out['logits'].shape}, hidden {out['hidden'].shape} "
+        f"({B} sequence(s), padded to {L})"
+    )
     return 0
 
 

@@ -11,6 +11,7 @@
 
 Run from the model root on a TT host: python tests/test_ttnn_bringup.py
 """
+
 from __future__ import annotations
 
 import sys
@@ -19,7 +20,6 @@ import torch
 
 sys.path.insert(0, ".")
 
-from tests.util import nrmse  # noqa: E402
 from tt.esm2.config import Esm2TTConfig  # noqa: E402
 from tt.esm2.reference_layers import (  # noqa: E402
     Esm2Embeddings,
@@ -29,6 +29,8 @@ from tt.esm2.reference_layers import (  # noqa: E402
     position_ids_from_input_ids,
 )
 from tt.esm2.ttnn_backend import TtnnEsm2  # noqa: E402
+
+from tests.util import nrmse  # noqa: E402
 
 _ALIAS = {
     "lm_dense.weight": "lm.dense.weight",
@@ -58,14 +60,20 @@ def main() -> int:
     import ttnn
 
     cfg = Esm2TTConfig(
-        num_hidden_layers=1, hidden_size=1280, num_attention_heads=20,
-        intermediate_size=5120, vocab_size=33, layer_norm_eps=1e-5,
-        pad_token_id=1, mask_token_id=32, max_position_embeddings=1026,
+        num_hidden_layers=1,
+        hidden_size=1280,
+        num_attention_heads=20,
+        intermediate_size=5120,
+        vocab_size=33,
+        layer_norm_eps=1e-5,
+        pad_token_id=1,
+        mask_token_id=32,
+        max_position_embeddings=1026,
     )
     B, L = 2, 16
     torch.manual_seed(0)
     ids = torch.randint(4, 24, (B, L))
-    ids[:, 0] = 0   # cls
+    ids[:, 0] = 0  # cls
     ids[:, -1] = 2  # eos
     ids[0, 6:9] = cfg.pad_token_id
     ids[1, 10:12] = cfg.pad_token_id
@@ -83,25 +91,21 @@ def main() -> int:
         # ---- 1) gelu variant check -----------------------------------
         x = torch.linspace(-4.0, 4.0, 512)
         xb = x.to(torch.bfloat16)
-        dev = ttnn.to_device(
-            ttnn.from_torch(xb.reshape(1, -1), dtype=ttnn.bfloat16,
-                            layout=ttnn.TILE_LAYOUT), device)
+        dev = ttnn.to_device(ttnn.from_torch(xb.reshape(1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), device)
         g = ttnn.gelu(dev)
-        gt = ttnn.to_torch(ttnn.to_layout(ttnn.from_device(g),
-                                          ttnn.ROW_MAJOR_LAYOUT)).float().flatten()
+        gt = ttnn.to_torch(ttnn.to_layout(ttnn.from_device(g), ttnn.ROW_MAJOR_LAYOUT)).float().flatten()
         ref_erf = torch.nn.functional.gelu(xb.float())
         ref_tanh = torch.nn.functional.gelu(xb.float(), approximate="tanh")
         e_erf = nrmse(ref_erf, gt)
         d_tanh = (gt - ref_tanh).abs().max().item()
         d_erf = (gt - ref_erf).abs().max().item()
-        print(f"[gelu  ] NRMSE vs erf={e_erf:.3e}  max|dev-erf|={d_erf:.3e}  "
-              f"max|dev-tanh|={d_tanh:.3e}")
+        print(f"[gelu  ] NRMSE vs erf={e_erf:.3e}  max|dev-erf|={d_erf:.3e}  " f"max|dev-tanh|={d_tanh:.3e}")
         ok &= e_erf < 2e-2
 
         # ---- 2) rotary on device (q layout and k^T layout) ------------
         pos = position_ids_from_input_ids(ids, cfg.pad_token_id)
         cos, sin = RotaryTables(cfg).cos_sin(pos)
-        q = (torch.randn(B, cfg.num_attention_heads, L, cfg.head_dim) * 0.5)
+        q = torch.randn(B, cfg.num_attention_heads, L, cfg.head_dim) * 0.5
         qb = q.to(torch.bfloat16)
         q_dev = model._dev(qb)
         q_tables, k_tables = model.rotary_tensors(ids)
@@ -129,8 +133,7 @@ def main() -> int:
         with torch.no_grad():
             ref_out = twin_layer(x0.clone(), attn_bias, cos, sin)
         x_dev = model._dev(x0)
-        out = model._host(model._layer_forward(x_dev, 0, q_tables, k_tables,
-                                               model.mask_tensor(am)))
+        out = model._host(model._layer_forward(x_dev, 0, q_tables, k_tables, model.mask_tensor(am)))
         e_layer = nrmse(ref_out, out)
         print(f"[layer ] NRMSE={e_layer:.3e}  shape={tuple(out.shape)}")
         ok &= e_layer < 3e-2

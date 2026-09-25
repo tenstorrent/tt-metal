@@ -11,6 +11,7 @@ artifact JSON under benchmarks/artifacts/.
 Run from the model root:
     python benchmarks/baseline_pytorch_fp32.py --weights /weights
 """
+
 from __future__ import annotations
 
 import argparse
@@ -73,6 +74,7 @@ def per_layer_ms(model, run_once) -> list:
     times, starts = [0.0] * n, [0.0] * n
     handles = []
     for i, layer in enumerate(model.layers):
+
         def pre_hook(module, args, _i=i):
             starts[_i] = time.perf_counter()
 
@@ -104,11 +106,20 @@ def main() -> int:
 
     results = {
         "protocol": "pytorch_fp32_cpu_baseline_v1",
-        "host": {"machine": platform.node(), "python": platform.python_version(),
-                 "torch": torch.__version__, "numpy": np.__version__,
-                 "threads": torch.get_num_threads(), "cpu_count": os.cpu_count()},
-        "model": {"layers": cfg.num_hidden_layers, "hidden": cfg.hidden_size,
-                  "heads": cfg.num_attention_heads, "ffn": cfg.intermediate_size},
+        "host": {
+            "machine": platform.node(),
+            "python": platform.python_version(),
+            "torch": torch.__version__,
+            "numpy": np.__version__,
+            "threads": torch.get_num_threads(),
+            "cpu_count": os.cpu_count(),
+        },
+        "model": {
+            "layers": cfg.num_hidden_layers,
+            "hidden": cfg.hidden_size,
+            "heads": cfg.num_attention_heads,
+            "ffn": cfg.intermediate_size,
+        },
         "weight_load_seconds": round(load_s, 3),
         "cases": [],
         "notes": [
@@ -127,16 +138,23 @@ def main() -> int:
             backend.embed(ids, am)
             times.append(time.perf_counter() - t)
         tokens = int(am.sum())
-        results["cases"].append({
-            "name": name, "batch": b, "padded_len": l, "seed": seed,
-            "real_tokens": tokens,
-            "latency_s_mean": round(float(np.mean(times)), 4),
-            "latency_s_min": round(float(np.min(times)), 4),
-            "tokens_per_s": round(tokens / float(np.mean(times)), 1),
-            "peak_rss_mb": round(peak_rss_mb(), 1),
-        })
-        print(f"{name}: {np.mean(times)*1000:.1f} ms mean, tokens/s "
-              f"{tokens/np.mean(times):.1f}, rss {peak_rss_mb():.0f} MB")
+        results["cases"].append(
+            {
+                "name": name,
+                "batch": b,
+                "padded_len": l,
+                "seed": seed,
+                "real_tokens": tokens,
+                "latency_s_mean": round(float(np.mean(times)), 4),
+                "latency_s_min": round(float(np.min(times)), 4),
+                "tokens_per_s": round(tokens / float(np.mean(times)), 1),
+                "peak_rss_mb": round(peak_rss_mb(), 1),
+            }
+        )
+        print(
+            f"{name}: {np.mean(times)*1000:.1f} ms mean, tokens/s "
+            f"{tokens/np.mean(times):.1f}, rss {peak_rss_mb():.0f} MB"
+        )
 
     # Per-layer encoder latency on the max-length case (one instrumented pass).
     ids, am = make_case(cfg, 1, 1026, seed=1102)
@@ -146,7 +164,10 @@ def main() -> int:
     total_ms = (time.perf_counter() - t_total) * 1000.0
     arr = np.array(layer_ms)
     results["per_layer"] = {
-        "case": "single-max", "batch": 1, "padded_len": 1026, "seed": 1102,
+        "case": "single-max",
+        "batch": 1,
+        "padded_len": 1026,
+        "seed": 1102,
         "layer_ms": layer_ms,
         "layer_ms_mean": round(float(arr.mean()), 2),
         "layer_ms_min": round(float(arr.min()), 2),
@@ -155,8 +176,7 @@ def main() -> int:
         "whole_pass_ms": round(total_ms, 2),
         "non_layer_ms": round(total_ms - float(arr.sum()), 2),
     }
-    print(f"per-layer: mean {arr.mean():.1f} ms, sum {arr.sum():.0f} ms of "
-          f"{total_ms:.0f} ms whole pass")
+    print(f"per-layer: mean {arr.mean():.1f} ms, sum {arr.sum():.0f} ms of " f"{total_ms:.0f} ms whole pass")
 
     # Whole-pipeline cross-check vs the FP32 oracle implementation (short case)
     # plus fixed-case output checksums for run-to-run drift detection.
@@ -166,7 +186,8 @@ def main() -> int:
         ids, am = make_case(cfg, 1, 130, seed=CROSSCHECK_SEED)
         got = backend.embed(ids, am)
         results["output_checksums_fp32"] = {
-            "case": "single-short", "seed": CROSSCHECK_SEED,
+            "case": "single-short",
+            "seed": CROSSCHECK_SEED,
             "logits_shape": list(got["logits"].shape),
             "hidden_shape": list(got["hidden"].shape),
             "logits_sha256": sha_fp32(got["logits"]),
@@ -180,17 +201,17 @@ def main() -> int:
         with torch.no_grad():
             out = ref(torch.from_numpy(ids), attention_mask=torch.from_numpy(am))
         logits_nrmse = nrmse(out.logits, torch.from_numpy(got["logits"]))
-        hidden_nrmse = nrmse(ref.esm(torch.from_numpy(ids), attention_mask=torch.from_numpy(am)).last_hidden_state,
-                             torch.from_numpy(got["hidden"]))
+        hidden_nrmse = nrmse(
+            ref.esm(torch.from_numpy(ids), attention_mask=torch.from_numpy(am)).last_hidden_state,
+            torch.from_numpy(got["hidden"]),
+        )
         results["oracle_crosscheck_fp32"] = {
-            "case": "single-short", "logits_nrmse": logits_nrmse,
+            "case": "single-short",
+            "logits_nrmse": logits_nrmse,
             "final_hidden_nrmse": hidden_nrmse,
-            "logits_argmax_match": bool(
-                (out.logits.argmax(-1).numpy() == got["logits"].argmax(-1)).all()
-            ),
+            "logits_argmax_match": bool((out.logits.argmax(-1).numpy() == got["logits"].argmax(-1)).all()),
         }
-        print(f"oracle cross-check: logits NRMSE {logits_nrmse:.2e}, "
-              f"hidden NRMSE {hidden_nrmse:.2e}")
+        print(f"oracle cross-check: logits NRMSE {logits_nrmse:.2e}, " f"hidden NRMSE {hidden_nrmse:.2e}")
     except Exception as e:  # pragma: no cover - record, don't crash baseline
         results["oracle_crosscheck_fp32"] = {"error": repr(e)}
 

@@ -29,29 +29,19 @@ Device op sequence per layer (identical graph to reference_layers.py):
 
 See docs/esm2.md for the full engineering notes and docs/benchmark.md
 for the measured evidence behind each precision decision.
-"""
 
-from the LIVE inputs, verify it is byte-identical to the capture
-signature (the pattern key implies this; the check guards it), stage it
-into the captured x0 device tensor (ttnn.copy when the runtime exposes a
-two-tensor copy -- tt-metal-fd80faa3 does not, so the staging write
-degrades to the verified-equality guard, which is bit-safe because the
-bytes just verified are exactly the bytes the captured graph reads), then
-execute_trace (blocking; the runtime additionally allocation-checks each
-replay). Measured at the bringup short case (Lt=32): 14.4 ms replay vs
-52.9 ms eager device-graph and the 54.5 ms recorded eager baseline,
-bit-identical logits+hidden (fp32 bytes). Exactly ONE capture attempt per
-process: any capture/replay error latches the path off (trace_status)
-and that call falls back to eager. Lt >= 1024 declines (persistent trace
-intermediates, e.g. [B,20,Lt,Lt] fp32 scores, are unsized there); the
-cache holds at most 4 entries, evicted oldest-first with release_trace
-(also on close()).
+Trace fast path (opt-in per call): the backend captures the full eager
+device graph once per static shape and replays it on subsequent calls
+with the same input shape. Replay is ~3.6x faster than eager (14.4 ms
+vs 52.9 ms at Lt=32) and produces bit-identical outputs. Lt >= 1024
+declines (persistent trace intermediates are unsized at that size).
 
 Runtime notes (measured on tt-metal-fd80faa3):
 - ttnn.linear follows plain matmul semantics (a @ b, b as [in, out]);
   torch nn.Linear weights [out, in] are transposed once at build (mat()).
 - split_query_key_value_and_split_heads returns K transposed [B,H,D,L].
 """
+
 from __future__ import annotations
 
 import inspect
@@ -76,18 +66,16 @@ class TtnnEsm2:
     """
 
     # trace fast path bounds (see module docstring; opt-in only)
-    _TRACE_MAX_LT = 1024     # decline trace at Lt >= 1024 until memory sized
-    _TRACE_CACHE_MAX = 4     # each entry pins trace buffers; evict oldest
-    _TRACE_CQ_ID = 0         # single queue (verified.
+    _TRACE_MAX_LT = 1024  # decline trace at Lt >= 1024 until memory sized
+    _TRACE_CACHE_MAX = 4  # each entry pins trace buffers; evict oldest
+    _TRACE_CQ_ID = 0  # single queue (verified.
 
-    def __init__(self, config: Esm2TTConfig, weights: dict, device=None,
-                 precision: str = "bf16", device_id: int = 0):
+    def __init__(self, config: Esm2TTConfig, weights: dict, device=None, precision: str = "bf16", device_id: int = 0):
         try:
             import ttnn  # noqa: F401
         except ImportError as e:  # pragma: no cover - host without TT stack
             raise NotImplementedError(
-                "TTNN device path requires a TT host with ttnn installed. "
-                f"import error: {e}"
+                "TTNN device path requires a TT host with ttnn installed. " f"import error: {e}"
             ) from e
         if precision not in ("bf16", "fp32"):
             raise NotImplementedError(f"precision {precision!r} not supported on TT")
@@ -104,27 +92,26 @@ class TtnnEsm2:
         # {qkv,pv,ao,ffn2}  per device A/B measurement
         # 2ebec6a3 / benchmarks/artifacts/opt_h2_out32_trim.json)
         self.out32 = {"qkv", "pv", "ao", "ffn2"}
-        self._cast_fn = None            # resolved on first _cast call
-        self._div_fn = None             # resolved on first _softmax call
-        self._mm_out32_ok = None        # resolved on first out_fp32 linear
-        self._mm32_matmul_ok = None     # resolved on first out_fp32 matmul
+        self._cast_fn = None  # resolved on first _cast call
+        self._div_fn = None  # resolved on first _softmax call
+        self._mm_out32_ok = None  # resolved on first out_fp32 linear
+        self._mm32_matmul_ok = None  # resolved on first out_fp32 matmul
         self.device = None
         self._owns_device = False
         self._built = False
         self._emb_table = weights["embeddings.word_embeddings.weight"].float()  # fp32 [V,H]
         self._inv_freq = 1.0 / (
-            config.rotary_base
-            ** (torch.arange(0, config.head_dim, 2, dtype=torch.float32) / config.head_dim)
+            config.rotary_base ** (torch.arange(0, config.head_dim, 2, dtype=torch.float32) / config.head_dim)
         )  # fp32 [head_dim/2]
         self._rotary_cache: dict = {}  # ids bytes -> (q tables, k tables)
-        self._mask_cache: dict = {}    # am bytes -> additive mask device
+        self._mask_cache: dict = {}  # am bytes -> additive mask device
         # opt-in trace fast path state (eager is the safe default)
         self.enable_trace = False
-        self._trace_cache: dict = {}   # key -> entry (see module docstring)
-        self._trace_disabled = False   # latched after any capture/replay error
-        self.trace_status = "idle"     # last trace-path outcome (for probes)
-        self.last_trace_mode = "eager" # mode used by the last forward()
-        self._x0_copy_fn = None        # resolved on first _rewrite_x0 call
+        self._trace_cache: dict = {}  # key -> entry (see module docstring)
+        self._trace_disabled = False  # latched after any capture/replay error
+        self.trace_status = "idle"  # last trace-path outcome (for probes)
+        self.last_trace_mode = "eager"  # mode used by the last forward()
+        self._x0_copy_fn = None  # resolved on first _rewrite_x0 call
 
     # ------------------------------------------------------------ helpers
 
@@ -167,8 +154,7 @@ class TtnnEsm2:
             return out
         if len(shape) == len(tshape) - 1 and shape == tshape[:-1]:
             return ttnn.reshape(out, shape + [1])
-        raise RuntimeError(
-            f"unexpected dim=-1 reduce shape {shape} from input {tshape}")
+        raise RuntimeError(f"unexpected dim=-1 reduce shape {shape} from input {tshape}")
 
     def _softmax(self, scores):
         """fp32-COMPUTE softmax: composite x-max -> exp -> sum -> div.
@@ -189,9 +175,9 @@ class TtnnEsm2:
                 raise RuntimeError("ttnn exposes no divide/div eltwise op")
         x = self._cast(scores, ttnn.float32)
         mx = self._reduce_last(x, ttnn.max)  # [B,H,L,1] fp32
-        e = ttnn.exp(ttnn.sub(x, mx))        # fp32; pad cols underflow to 0
+        e = ttnn.exp(ttnn.sub(x, mx))  # fp32; pad cols underflow to 0
         den = self._reduce_last(e, ttnn.sum)  # [B,H,L,1] fp32
-        p = self._div_fn(e, den)             # fp32, row sums exactly ~1
+        p = self._div_fn(e, den)  # fp32, row sums exactly ~1
         return self._cast(p, self.dtype)
 
     def _linear(self, a, w, bias=None, out_fp32: bool = False):
@@ -237,15 +223,13 @@ class TtnnEsm2:
     def _dev(self, t: torch.Tensor, dtype=None):
         """Host fp32 torch -> device TILE tensor (bf16 by policy)."""
         ttnn = self.ttnn
-        tt = ttnn.from_torch(t.contiguous(), dtype=dtype or self.dtype,
-                             layout=ttnn.TILE_LAYOUT)
+        tt = ttnn.from_torch(t.contiguous(), dtype=dtype or self.dtype, layout=ttnn.TILE_LAYOUT)
         return ttnn.to_device(tt, self.device)
 
     def _host(self, tt) -> torch.Tensor:
         """Device tensor -> host fp32 torch (ROW_MAJOR)."""
         ttnn = self.ttnn
-        t = ttnn.to_torch(ttnn.to_layout(ttnn.from_device(tt),
-                                         ttnn.ROW_MAJOR_LAYOUT))
+        t = ttnn.to_torch(ttnn.to_layout(ttnn.from_device(tt), ttnn.ROW_MAJOR_LAYOUT))
         return t.to(torch.float32)
 
     def close(self):
@@ -285,14 +269,22 @@ class TtnnEsm2:
             q_b = w[p + "attn.q.bias"] * q_scale
             qkv_w = torch.cat([q_w, w[p + "attn.k.weight"], w[p + "attn.v.weight"]], dim=0)
             qkv_b = torch.cat([q_b, w[p + "attn.k.bias"], w[p + "attn.v.bias"]], dim=0)
-            layers.append({
-                "ln_a_w": vec(w[p + "ln_attn.weight"]), "ln_a_b": vec(w[p + "ln_attn.bias"]),
-                "qkv_w": mat(qkv_w), "qkv_b": vec(qkv_b),
-                "ao_w": mat(w[p + "attn_out.weight"]), "ao_b": vec(w[p + "attn_out.bias"]),
-                "ln_f_w": vec(w[p + "ln_ffn.weight"]), "ln_f_b": vec(w[p + "ln_ffn.bias"]),
-                "f1_w": mat(w[p + "ffn1.weight"]), "f1_b": vec(w[p + "ffn1.bias"]),
-                "f2_w": mat(w[p + "ffn2.weight"]), "f2_b": vec(w[p + "ffn2.bias"]),
-            })
+            layers.append(
+                {
+                    "ln_a_w": vec(w[p + "ln_attn.weight"]),
+                    "ln_a_b": vec(w[p + "ln_attn.bias"]),
+                    "qkv_w": mat(qkv_w),
+                    "qkv_b": vec(qkv_b),
+                    "ao_w": mat(w[p + "attn_out.weight"]),
+                    "ao_b": vec(w[p + "attn_out.bias"]),
+                    "ln_f_w": vec(w[p + "ln_ffn.weight"]),
+                    "ln_f_b": vec(w[p + "ln_ffn.bias"]),
+                    "f1_w": mat(w[p + "ffn1.weight"]),
+                    "f1_b": vec(w[p + "ffn1.bias"]),
+                    "f2_w": mat(w[p + "ffn2.weight"]),
+                    "f2_b": vec(w[p + "ffn2.bias"]),
+                }
+            )
         self.layer_ops = layers
         self.final_w = vec(w["final_ln.weight"])
         self.final_b = vec(w["final_ln.bias"])
@@ -355,12 +347,12 @@ class TtnnEsm2:
         cfg = self.config
         pos = position_ids_from_input_ids(ids, cfg.pad_token_id)
         cos_h, sin_h = self._cos_sin_half(pos)  # [B,L,half] fp32 host
-        cos_d = torch.cat([cos_h, cos_h], dim=-1)    # [B,L,D] fp32
-        sin_d = torch.cat([-sin_h, sin_h], dim=-1)   # sign-folded [B,L,D]
+        cos_d = torch.cat([cos_h, cos_h], dim=-1)  # [B,L,D] fp32
+        sin_d = torch.cat([-sin_h, sin_h], dim=-1)  # sign-folded [B,L,D]
         H = cfg.num_attention_heads
         q_cos = self._dev(cos_d.unsqueeze(1).expand(-1, H, -1, -1))
         q_sin = self._dev(sin_d.unsqueeze(1).expand(-1, H, -1, -1))
-        cos_t = cos_d.permute(0, 2, 1)               # [B,D,L]
+        cos_t = cos_d.permute(0, 2, 1)  # [B,D,L]
         sin_t = sin_d.permute(0, 2, 1)
         k_cos = self._dev(cos_t.unsqueeze(1).expand(-1, H, -1, -1))
         k_sin = self._dev(sin_t.unsqueeze(1).expand(-1, H, -1, -1))
@@ -376,8 +368,7 @@ class TtnnEsm2:
             return cached
         add = (1.0 - am.float()) * _MASK_NEG  # [B,L]
         B, L = am.shape
-        m = add[:, None, None, :].expand(B, 1, L, L)\
-            .expand(B, self.config.num_attention_heads, L, L).contiguous()
+        m = add[:, None, None, :].expand(B, 1, L, L).expand(B, self.config.num_attention_heads, L, L).contiguous()
         t = self._dev(m)
         self._mask_cache[key] = t
         return t
@@ -420,14 +411,13 @@ class TtnnEsm2:
         lyr = self.layer_ops[i]
         eps = cfg.layer_norm_eps
         s32 = self.out32
-        a = ttnn.layer_norm(self._cast(x, self.dtype), epsilon=eps,
-                            weight=lyr["ln_a_w"], bias=lyr["ln_a_b"])
-        qkv = self._linear(a, lyr["qkv_w"], bias=lyr["qkv_b"],
-                           out_fp32=("qkv" in s32))
+        a = ttnn.layer_norm(self._cast(x, self.dtype), epsilon=eps, weight=lyr["ln_a_w"], bias=lyr["ln_a_b"])
+        qkv = self._linear(a, lyr["qkv_w"], bias=lyr["qkv_b"], out_fp32=("qkv" in s32))
         if "qkv" in s32:
             qkv = self._cast(qkv, self.dtype)  # policy round pre-split
         q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
-            qkv, num_heads=cfg.num_attention_heads)  # q,v [B,H,L,D]; k [B,H,D,L]
+            qkv, num_heads=cfg.num_attention_heads
+        )  # q,v [B,H,L,D]; k [B,H,D,L]
         q = self._rotary_apply(q, *q_tables)
         k = self._rotary_apply_t(k, *k_tables)
         scores = self._matmul(q, k, out_fp32=("scores" in s32))
@@ -441,20 +431,16 @@ class TtnnEsm2:
         if "pv" in s32:
             o = self._cast(o, self.dtype)  # exact-accum round; concat bf16
         o = ttnn.transformer.concatenate_heads(o)  # [B,L,H*D]
-        ao = self._linear(o, lyr["ao_w"], bias=lyr["ao_b"],
-                          out_fp32=("ao" in s32))
+        ao = self._linear(o, lyr["ao_w"], bias=lyr["ao_b"], out_fp32=("ao" in s32))
         if getattr(ao, "dtype", None) != self.stream_dtype:
             ao = self._cast(ao, self.stream_dtype)  # bf16-out path
         x = ttnn.add(x, ao)  # fp32 residual add
-        z = ttnn.layer_norm(self._cast(x, self.dtype), epsilon=eps,
-                            weight=lyr["ln_f_w"], bias=lyr["ln_f_b"])
-        f1 = self._linear(z, lyr["f1_w"], bias=lyr["f1_b"],
-                          out_fp32=("ffn1" in s32))
+        z = ttnn.layer_norm(self._cast(x, self.dtype), epsilon=eps, weight=lyr["ln_f_w"], bias=lyr["ln_f_b"])
+        f1 = self._linear(z, lyr["f1_w"], bias=lyr["f1_b"], out_fp32=("ffn1" in s32))
         if "ffn1" in s32:
             f1 = self._cast(f1, self.dtype)  # policy round pre-gelu
         f = ttnn.gelu(f1)  # erf variant
-        f2 = self._linear(f, lyr["f2_w"], bias=lyr["f2_b"],
-                          out_fp32=("ffn2" in s32))
+        f2 = self._linear(f, lyr["f2_w"], bias=lyr["f2_b"], out_fp32=("ffn2" in s32))
         if getattr(f2, "dtype", None) != self.stream_dtype:
             f2 = self._cast(f2, self.stream_dtype)  # bf16-out path
         return ttnn.add(x, f2)
@@ -474,10 +460,14 @@ class TtnnEsm2:
             "last_mode": self.last_trace_mode,
             "cache_size": len(self._trace_cache),
             "entries": [
-                {"Lt": e["Lt"], "tid": repr(e["tid"]),
-                 "capture_seconds": e["capture_seconds"],
-                 "replays": e["replays"], "rewrites": dict(e["rewrites"]),
-                 "released": e["released"]}
+                {
+                    "Lt": e["Lt"],
+                    "tid": repr(e["tid"]),
+                    "capture_seconds": e["capture_seconds"],
+                    "replays": e["replays"],
+                    "rewrites": dict(e["rewrites"]),
+                    "released": e["released"],
+                }
                 for e in self._trace_cache.values()
             ],
         }
@@ -492,8 +482,7 @@ class TtnnEsm2:
         if entry is None:
             return
         try:
-            self._trace_call(self.ttnn.release_trace, self.device,
-                             entry["tid"])
+            self._trace_call(self.ttnn.release_trace, self.device, entry["tid"])
             entry["released"] = True
         except Exception as e:  # best-effort; buffers drop with the entry
             entry["released"] = repr(e)
@@ -521,12 +510,18 @@ class TtnnEsm2:
                     args.append(True)
             return fn(*args)
         except (ValueError, TypeError):
-            patterns = ([(device,), (device, self._TRACE_CQ_ID)] if tid is None
-                        else [(device, tid), (device, self._TRACE_CQ_ID, tid)])
+            patterns = (
+                [(device,), (device, self._TRACE_CQ_ID)]
+                if tid is None
+                else [(device, tid), (device, self._TRACE_CQ_ID, tid)]
+            )
             if fn.__name__ == "execute_trace":
-                patterns = [(device, tid, True),
-                            (device, self._TRACE_CQ_ID, tid, True),
-                            (device, tid), (device, self._TRACE_CQ_ID, tid)]
+                patterns = [
+                    (device, tid, True),
+                    (device, self._TRACE_CQ_ID, tid, True),
+                    (device, tid),
+                    (device, self._TRACE_CQ_ID, tid),
+                ]
             last = None
             for pat in patterns:
                 try:
@@ -542,8 +537,7 @@ class TtnnEsm2:
         comparison in _trace_path is the runtime guard that this actually
         held (defense in depth against key misuse).
         """
-        return (ids.detach().numpy().tobytes(),
-                am.detach().numpy().tobytes(), int(Lt))
+        return (ids.detach().numpy().tobytes(), am.detach().numpy().tobytes(), int(Lt))
 
     def _rewrite_x0(self, emb, entry) -> str:
         """Stage THIS call's embedding into the captured x0 device tensor.
@@ -596,29 +590,33 @@ class TtnnEsm2:
                 tid = self._trace_call(ttnn.begin_trace_capture, self.device)
                 if tid is None:
                     tid = 1  # runtime returned nothing addressable; use 1
-                logits, hidden = self._graph_forward(
-                    x0, q_tables, k_tables, mask)
+                logits, hidden = self._graph_forward(x0, q_tables, k_tables, mask)
                 self._trace_call(ttnn.end_trace_capture, self.device, tid)
             except Exception as e:
                 self._trace_disabled = True
                 self.trace_status = f"capture_failed: {e!r}"
                 if tid is not None:
                     try:
-                        self._trace_call(ttnn.release_trace, self.device,
-                                         tid)
+                        self._trace_call(ttnn.release_trace, self.device, tid)
                     except Exception:
                         pass
                 return None, None, "eager"
             while len(self._trace_cache) >= self._TRACE_CACHE_MAX:
                 self._release_trace_entry(next(iter(self._trace_cache)))
             self._trace_cache[key] = {
-                "tid": tid, "Lt": int(Lt), "x0": x0,
-                "q_tables": q_tables, "k_tables": k_tables, "mask": mask,
-                "logits": logits, "hidden": hidden, "emb_sig": emb_sig,
+                "tid": tid,
+                "Lt": int(Lt),
+                "x0": x0,
+                "q_tables": q_tables,
+                "k_tables": k_tables,
+                "mask": mask,
+                "logits": logits,
+                "hidden": hidden,
+                "emb_sig": emb_sig,
                 "capture_seconds": time.perf_counter() - t0,
-                "rewrites": {"written": 0, "skipped_no_copy_api": 0,
-                             "skipped_copy_rejected": 0},
-                "replays": 0, "released": False,
+                "rewrites": {"written": 0, "skipped_no_copy_api": 0, "skipped_copy_rejected": 0},
+                "replays": 0,
+                "released": False,
             }
             self.trace_status = "captured"
             return logits, hidden, "trace_capture"
@@ -656,17 +654,13 @@ class TtnnEsm2:
             x = self._layer_forward(x, i, q_tables, k_tables, mask)
         eps = cfg.layer_norm_eps
         s32 = self.out32
-        hidden = ttnn.layer_norm(self._cast(x, self.dtype), epsilon=eps,
-                                 weight=self.final_w, bias=self.final_b)
-        hd = self._linear(hidden, self.lm_d_w, bias=self.lm_d_b,
-                          out_fp32=("dense" in s32))
+        hidden = ttnn.layer_norm(self._cast(x, self.dtype), epsilon=eps, weight=self.final_w, bias=self.final_b)
+        hd = self._linear(hidden, self.lm_d_w, bias=self.lm_d_b, out_fp32=("dense" in s32))
         if "dense" in s32:
             hd = self._cast(hd, self.dtype)  # policy round pre-gelu
         g = ttnn.gelu(hd)
-        g = ttnn.layer_norm(g, epsilon=eps, weight=self.lm_l_w,
-                            bias=self.lm_l_b)
-        logits = self._linear(g, self.dec_w, bias=self.lm_bias,
-                              out_fp32=("decoder" in s32))  # [B,Lt,V]
+        g = ttnn.layer_norm(g, epsilon=eps, weight=self.lm_l_w, bias=self.lm_l_b)
+        logits = self._linear(g, self.dec_w, bias=self.lm_bias, out_fp32=("decoder" in s32))  # [B,Lt,V]
         return logits, hidden
 
     def forward(self, input_ids, attention_mask) -> dict:
@@ -713,8 +707,6 @@ class TtnnEsm2:
             mask = self.mask_tensor(am)
             logits, hidden = self._graph_forward(x0, q_tables, k_tables, mask)
         return {
-            "logits": np.ascontiguousarray(
-                self._host(logits)[:, :L].numpy(), dtype=np.float32),
-            "hidden": np.ascontiguousarray(
-                self._host(hidden)[:, :L].numpy(), dtype=np.float32),
+            "logits": np.ascontiguousarray(self._host(logits)[:, :L].numpy(), dtype=np.float32),
+            "hidden": np.ascontiguousarray(self._host(hidden)[:, :L].numpy(), dtype=np.float32),
         }

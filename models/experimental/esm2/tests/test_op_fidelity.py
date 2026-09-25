@@ -16,6 +16,7 @@ RMS-ratio table. The first op diverging beyond the ~1e-3 rounding scale is
 the coherent source. Smoke input has 0 pads => attention mask is a no-op.
 K is compared transposed ([B,H,D,L], the split helper's layout).
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -41,8 +42,7 @@ def rms_ratio(a, b):
 
 
 def slice_weights(w, depth):
-    return {k: v for k, v in w.items()
-            if not (k.startswith("layers.") and int(k.split(".")[1]) >= depth)}
+    return {k: v for k, v in w.items() if not (k.startswith("layers.") and int(k.split(".")[1]) >= depth)}
 
 
 def twin_forward(cfg, w, ids, am):
@@ -68,8 +68,7 @@ def twin_forward(cfg, w, ids, am):
         q_pre = F.linear(ln1, w[p + "attn.q.weight"], w[p + "attn.q.bias"]) * qs
         k_pre = F.linear(ln1, w[p + "attn.k.weight"], w[p + "attn.k.bias"])
         v_pre = F.linear(ln1, w[p + "attn.v.weight"], w[p + "attn.v.bias"])
-        qkv = torch.cat([F.linear(ln1, w[p + "attn.q.weight"], w[p + "attn.q.bias"]) * qs,
-                         k_pre, v_pre], dim=-1)
+        qkv = torch.cat([F.linear(ln1, w[p + "attn.q.weight"], w[p + "attn.q.bias"]) * qs, k_pre, v_pre], dim=-1)
         B, L, _ = q_pre.shape
         q = q_pre.view(B, L, H, D).transpose(1, 2)
         k = k_pre.view(B, L, H, D).transpose(1, 2)
@@ -86,9 +85,24 @@ def twin_forward(cfg, w, ids, am):
         g = F.gelu(f1)
         f2 = F.linear(g, w[p + "ffn2.weight"], w[p + "ffn2.bias"])
         xout = xmid + f2
-        d[i] = dict(ln1=ln1, qkv=qkv, q=q, k=k, q_pre=q, v=v, scores=scores,
-                    probs=probs, o=o, ao=ao, xmid=xmid, ln2=ln2, f1=f1, g=g,
-                    f2=f2, xout=xout)
+        d[i] = dict(
+            ln1=ln1,
+            qkv=qkv,
+            q=q,
+            k=k,
+            q_pre=q,
+            v=v,
+            scores=scores,
+            probs=probs,
+            o=o,
+            ao=ao,
+            xmid=xmid,
+            ln2=ln2,
+            f1=f1,
+            g=g,
+            f2=f2,
+            xout=xout,
+        )
         x = xout
     hidden = F.layer_norm(x, (cfg.hidden_size,), w["final_ln.weight"], w["final_ln.bias"], eps)
     g1 = F.linear(hidden, w["lm.dense.weight"], w["lm.dense.bias"])
@@ -113,14 +127,19 @@ def main():
 
     # sanity: twin must agree with the trusted Esm2Model end-to-end
     from tt.esm2.reference_layers import Esm2Model
+
     ref = Esm2Model(cfg, weights=w).eval()
     with torch.no_grad():
         lr, hr = ref(ids, am)
-    print(f"twin-vs-Esm2Model sanity: logits {rms_ratio(twin['head']['logits'], lr):.2e} "
-          f"hidden {rms_ratio(twin['head']['hidden'], hr):.2e} (expect <1e-6)", flush=True)
+    print(
+        f"twin-vs-Esm2Model sanity: logits {rms_ratio(twin['head']['logits'], lr):.2e} "
+        f"hidden {rms_ratio(twin['head']['hidden'], hr):.2e} (expect <1e-6)",
+        flush=True,
+    )
+
+    from tt.esm2.ttnn_backend import TtnnEsm2
 
     import ttnn
-    from tt.esm2.ttnn_backend import TtnnEsm2
 
     rows = []
     device = ttnn.open_device(device_id=0)
@@ -134,11 +153,9 @@ def main():
         for i in range(NLAYER):
             lyr = tt.layer_ops[i]
             eps = cfg.layer_norm_eps
-            a = ttnn.layer_norm(tt._cast(x, tt.dtype), epsilon=eps,
-                                weight=lyr["ln_a_w"], bias=lyr["ln_a_b"])
+            a = ttnn.layer_norm(tt._cast(x, tt.dtype), epsilon=eps, weight=lyr["ln_a_w"], bias=lyr["ln_a_b"])
             qkv = ttnn.linear(a, lyr["qkv_w"], bias=lyr["qkv_b"])
-            q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
-                qkv, num_heads=cfg.num_attention_heads)
+            q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(qkv, num_heads=cfg.num_attention_heads)
             q = tt._rotary_apply(q, *q_tables)
             k = tt._rotary_apply_t(k, *k_tables)
             scores = ttnn.matmul(q, k)
@@ -148,41 +165,67 @@ def main():
             o = ttnn.transformer.concatenate_heads(o)
             ao = ttnn.linear(o, lyr["ao_w"], bias=lyr["ao_b"])
             xmid = ttnn.add(x, tt._cast(ao, tt.stream_dtype))
-            z = ttnn.layer_norm(tt._cast(xmid, tt.dtype), epsilon=eps,
-                                weight=lyr["ln_f_w"], bias=lyr["ln_f_b"])
+            z = ttnn.layer_norm(tt._cast(xmid, tt.dtype), epsilon=eps, weight=lyr["ln_f_w"], bias=lyr["ln_f_b"])
             f1 = ttnn.linear(z, lyr["f1_w"], bias=lyr["f1_b"])
             g = ttnn.gelu(f1)
             f2 = ttnn.linear(g, lyr["f2_w"], bias=lyr["f2_b"])
             xout = ttnn.add(xmid, tt._cast(f2, tt.stream_dtype))
-            dev = dict(ln1=host(a), qkv=host(qkv), q=host(q), kT=host(k), v=host(v),
-                       scores=host(scores), probs=host(probs), o=host(o), ao=host(ao),
-                       xmid=host(xmid), ln2=host(z), f1=host(f1), g=host(g),
-                       f2=host(f2), xout=host(xout))
+            dev = dict(
+                ln1=host(a),
+                qkv=host(qkv),
+                q=host(q),
+                kT=host(k),
+                v=host(v),
+                scores=host(scores),
+                probs=host(probs),
+                o=host(o),
+                ao=host(ao),
+                xmid=host(xmid),
+                ln2=host(z),
+                f1=host(f1),
+                g=host(g),
+                f2=host(f2),
+                xout=host(xout),
+            )
             t = twin[i]
-            pairs = [("ln1", t["ln1"]), ("qkv", t["qkv"]), ("q", t["q"]),
-                     ("kT", t["k"].transpose(-1, -2).contiguous()), ("v", t["v"]),
-                     ("scores", t["scores"]), ("probs", t["probs"]), ("o", t["o"]),
-                     ("ao", t["ao"]), ("xmid", t["xmid"]), ("ln2", t["ln2"]),
-                     ("f1", t["f1"]), ("g", t["g"]), ("f2", t["f2"]), ("xout", t["xout"])]
+            pairs = [
+                ("ln1", t["ln1"]),
+                ("qkv", t["qkv"]),
+                ("q", t["q"]),
+                ("kT", t["k"].transpose(-1, -2).contiguous()),
+                ("v", t["v"]),
+                ("scores", t["scores"]),
+                ("probs", t["probs"]),
+                ("o", t["o"]),
+                ("ao", t["ao"]),
+                ("xmid", t["xmid"]),
+                ("ln2", t["ln2"]),
+                ("f1", t["f1"]),
+                ("g", t["g"]),
+                ("f2", t["f2"]),
+                ("xout", t["xout"]),
+            ]
             for key, tv in pairs:
                 rows.append((f"L{i}.{key}", rms_ratio(dev[key], tv)))
             x = xout
-        hidden = ttnn.layer_norm(tt._cast(x, tt.dtype), epsilon=eps,
-                                 weight=tt.final_w, bias=tt.final_b)
+        hidden = ttnn.layer_norm(tt._cast(x, tt.dtype), epsilon=eps, weight=tt.final_w, bias=tt.final_b)
         g1 = ttnn.linear(hidden, tt.lm_d_w, bias=tt.lm_d_b)
         g2g = ttnn.gelu(g1)
         g2 = ttnn.layer_norm(g2g, epsilon=eps, weight=tt.lm_l_w, bias=tt.lm_l_b)
         logits = ttnn.linear(g2, tt.dec_w, bias=tt.lm_bias)
         th = twin["head"]
-        for key, dv, tv in (("hidden", hidden, th["hidden"]), ("g1", g1, th["g1"]),
-                            ("g2g", g2g, th["g2g"]), ("g2", g2, th["g2"]),
-                            ("logits", logits, th["logits"])):
+        for key, dv, tv in (
+            ("hidden", hidden, th["hidden"]),
+            ("g1", g1, th["g1"]),
+            ("g2g", g2g, th["g2g"]),
+            ("g2", g2, th["g2"]),
+            ("logits", logits, th["logits"]),
+        ):
             rows.append((f"head.{key}", rms_ratio(host(dv), tv)))
     finally:
         ttnn.close_device(device)
 
-    print(f"{'tensor':14s} {'RMS ratio':>10s}   (modeled rounding scale ~1e-3)",
-          flush=True)
+    print(f"{'tensor':14s} {'RMS ratio':>10s}   (modeled rounding scale ~1e-3)", flush=True)
     for name, v in rows:
         print(f"{name:14s} {v:10.3e}", flush=True)
     print("OP_FIDELITY_DONE", flush=True)

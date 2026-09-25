@@ -4,6 +4,7 @@
 Used by tests and the baseline cross-check. This is the same code path the
 porting evaluator uses as its immutable FP32 oracle.
 """
+
 from __future__ import annotations
 
 import torch

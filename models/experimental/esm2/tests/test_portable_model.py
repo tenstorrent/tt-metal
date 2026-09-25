@@ -18,6 +18,7 @@ Checks:
 4. input sensitivity: changing a residue id (incl. to the mask token, whose
    embedding the token-dropout policy zeroes) changes that position's logits.
 """
+
 from __future__ import annotations
 
 import sys
@@ -32,9 +33,15 @@ from tt.esm2.reference_layers import Esm2Model  # noqa: E402
 
 def small_cfg() -> Esm2TTConfig:
     return Esm2TTConfig(
-        num_hidden_layers=2, hidden_size=128, num_attention_heads=4,
-        intermediate_size=256, vocab_size=33, layer_norm_eps=1e-5,
-        pad_token_id=1, mask_token_id=32, max_position_embeddings=1026,
+        num_hidden_layers=2,
+        hidden_size=128,
+        num_attention_heads=4,
+        intermediate_size=256,
+        vocab_size=33,
+        layer_norm_eps=1e-5,
+        pad_token_id=1,
+        mask_token_id=32,
+        max_position_embeddings=1026,
     )
 
 
@@ -45,7 +52,7 @@ def main() -> int:
     model.embeddings.weight.normal_(0.0, 0.05)  # zero table -> random (see note)
     B, L = 2, 37
     ids = torch.randint(4, 24, (B, L))
-    ids[:, 0] = 0   # cls
+    ids[:, 0] = 0  # cls
     ids[:, -1] = 2  # eos
     ids[0, 9:12] = cfg.pad_token_id
     ids[1, 20:24] = cfg.pad_token_id
@@ -61,8 +68,7 @@ def main() -> int:
     print(f"[determinism] max|delta| = {det:.3e}")
     ok &= det == 0.0
 
-    shapes_ok = (tuple(l1.shape) == (B, L, cfg.vocab_size)
-                 and tuple(h1.shape) == (B, L, cfg.hidden_size))
+    shapes_ok = tuple(l1.shape) == (B, L, cfg.vocab_size) and tuple(h1.shape) == (B, L, cfg.hidden_size)
     print(f"[shapes      ] logits {tuple(l1.shape)} hidden {tuple(h1.shape)}")
     ok &= shapes_ok
 
@@ -70,8 +76,7 @@ def main() -> int:
     am_p = torch.cat([am, torch.zeros((B, 5), dtype=am.dtype)], dim=1)
     with torch.no_grad():
         l_p, h_p = model(ids_p, am_p)
-    pad_delta = max((l1 - l_p[:, :L]).abs().max().item(),
-                    (h1 - h_p[:, :L]).abs().max().item())
+    pad_delta = max((l1 - l_p[:, :L]).abs().max().item(), (h1 - h_p[:, :L]).abs().max().item())
     print(f"[pad-invar   ] max|delta| real positions = {pad_delta:.3e}")
     ok &= pad_delta == 0.0
 

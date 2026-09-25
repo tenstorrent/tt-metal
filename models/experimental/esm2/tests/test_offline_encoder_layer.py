@@ -6,6 +6,7 @@ random-weight transformers.EsmLayer / EsmRotaryEmbedding (the oracle code)
 with exact weight transfer through the canonical key map. No device, no
 network. Run from the model root: python tests/test_offline_encoder_layer.py
 """
+
 from __future__ import annotations
 
 import sys
@@ -14,7 +15,6 @@ import torch
 
 sys.path.insert(0, ".")
 
-from tests.util import nrmse  # noqa: E402
 from tt.esm2.config import Esm2TTConfig  # noqa: E402
 from tt.esm2.loader import layer_key_map  # noqa: E402
 from tt.esm2.reference_layers import (  # noqa: E402
@@ -23,6 +23,8 @@ from tt.esm2.reference_layers import (  # noqa: E402
     additive_attention_mask,
     position_ids_from_input_ids,
 )
+
+from tests.util import nrmse  # noqa: E402
 
 LAYER_PREFIX = "esm.encoder.layer.0."
 
@@ -55,7 +57,7 @@ def build_hf_layer(cfg: Esm2TTConfig, seed: int):
 def transfer_weights(hf_layer, twin: Esm2Layer):
     sd = hf_layer.state_dict()
     for hf_key, canon_key in layer_key_map(0):
-        local_key = hf_key[len(LAYER_PREFIX):]
+        local_key = hf_key[len(LAYER_PREFIX) :]
         path = canon_key.replace("layers.0.", "")
         parts = path.split(".")
         obj = twin
@@ -96,9 +98,7 @@ def main() -> int:
     attn_bias = additive_attention_mask(am)
     with torch.no_grad():
         x0 = torch.randn(B, L, cfg.hidden_size)
-        out = hf_layer(
-            x0.clone(), attention_mask=attn_bias, position_embeddings=(cos_h, sin_h)
-        )
+        out = hf_layer(x0.clone(), attention_mask=attn_bias, position_embeddings=(cos_h, sin_h))
         out_hf = out[0] if isinstance(out, tuple) else out
         out_twin = twin(x0.clone(), attn_bias, cos_t, sin_t)
 

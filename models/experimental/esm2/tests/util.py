@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MIT
 """Small test helpers (CPU only)."""
+
 from __future__ import annotations
 
 import torch
