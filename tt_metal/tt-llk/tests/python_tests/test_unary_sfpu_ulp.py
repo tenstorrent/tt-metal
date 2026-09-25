@@ -68,7 +68,7 @@ from helpers.ulp_sweep import (
     stimuli_format_for,
     sweep_spec,
 )
-from helpers.utils import passed_test
+from helpers.utils import _record_ulp_measurement, passed_test
 
 #: Every variant here is a real 64-tile device run, and the whole sweep is ~7 minutes on
 #: hardware. Unmarked, the PR gate collects it and runs it with `--timeout=60 -x` under a
@@ -312,6 +312,13 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
             mathop.name,
             (in_fmt.name, out_fmt.name, approx_mode.name, dest_acc.name),
             int(stats["max"]),
+        )
+        # `--ulp-measure` writes its row from inside `passed_test`, which this branch
+        # never reaches -- so an emit run under xdist, whose workers' `MEASURED` never
+        # reach the controller, used to leave no record at all. Written here, the
+        # JSONL is the one artefact that survives either mode.
+        _record_ulp_measurement(
+            ulp_distance(golden, result), mask=mask, output_data_format=out_fmt
         )
         return
 
