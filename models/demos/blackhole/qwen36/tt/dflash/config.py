@@ -54,9 +54,10 @@ def paged_blocks_for(total_tokens: int) -> int:
 #: Trace region for the verify capture: one masked forward over 64 layers plus the LM head. Too
 #: small and the capture fails with "Cannot load new binaries".
 TRACE_REGION_SIZE = 250_000_000
-#: Production traced decode on T3K (``demo/text_demo.py``, ISL 128; see README-T3K-27B.md). The
-#: demo and the throughput test report the speculative rate relative to it.
-PRODUCTION_DECODE_TOK_S_T3K = 17.87
+#: Production traced decode on T3K (``demo/text_demo.py -k "traced_128 and not 128k"``: ISL 128,
+#: batch 1), measured on the same build as the README's DFlash numbers. The demo and the
+#: throughput test report the speculative rate relative to it.
+PRODUCTION_DECODE_TOK_S_T3K = 16.52
 
 
 @dataclass(frozen=True)
