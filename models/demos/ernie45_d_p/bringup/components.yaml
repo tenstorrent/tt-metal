@@ -80,9 +80,9 @@ components:
     name: Routed experts (64, top-6, FFN 1536), EP4
     block: moe
     ref: sum_k w_k SwiGLU_e(x)
-    ttnn: ttnn.sparse_matmul (16 local experts) + swiglu + weighted reduce
-    tag: COMPOSED
-    task: P2.9
+    ttnn: deepseek_prefill dispatch -> unified_routed_expert_moe -> combine -> post_combine_reduce (1-chip dispatch groups)
+    tag: NATIVE
+    task: P3.2
   - id: shared
     name: Shared experts (2 x 1536 fused), TP4
     block: moe
@@ -129,16 +129,12 @@ components:
 # Things a reader of the dashboard should know: missing/limited TTNN ops (tagged), harness pitfalls.
 findings:
   - tag: TTNN-GAP
-    title: No fused MoE op for this routing scheme
+    title: DeepSeek EP pipeline assumed >1 chip per dispatch group (patched)
     text: >-
-      Routed experts are COMPOSED (router from linear/softmax/topk/gather/scatter; experts as dense-EP matmuls).
-      Correct (PCC >= 0.9999), but it spends 16/6 more expert FLOPs than needed. Next step: ttnn.sparse_matmul.
-  - tag: TTNN-GAP
-    title: unified_routed_expert_moe works (about 13x) but its EP dispatch needs a >1-chip dispatch group
-    text: >-
-      Fused expert kernel measured on real routing: 2.0 ms vs 26.9 ms dense-EP per 5k chunk per layer (PCC 0.9992).
-      Integration is blocked on 1x4: DeepSeek dispatch wires fabric neighbours on the dispatch axis (none for a 1-chip group)
-      and only supports cluster_axis 0; offset_cumsum was patched to skip its 1-device all_gather. See P3.1 and P3.2.
+      unified_routed_expert_moe is now the MoE (TTFT 55k@5k 35.9 s -> 10.9 s). On a 1x4 mesh each dispatch group is one chip:
+      offset_cumsum's all_gather and dispatch/combine's fabric-neighbour setup assumed more than one. Patched in ttnn host code
+      (skip them on a 1-device axis; the kernels' existing no-fabric build is used). Cost: the kernel packs expert
+      activations to bf8, so final-hidden PCC goes 0.9984 -> 0.9965 and top-1 97.7% -> 95.7% (top-5 stays 100%).
   - tag: TTNN-GAP
     title: ttnn.scatter has no fp32 TILE path
     text: The dense routing matrix is scattered in bf16. Selection and renormalization stay fp32 (99.9% expert agreement).
