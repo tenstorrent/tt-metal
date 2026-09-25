@@ -101,10 +101,17 @@ public:
         return static_cast<uint32_t>(mem_.get_address());
     }
 
+#if defined(COMPILE_FOR_TRISC)
+    // Returns the LLKOperand pointing to the base address of the local tensor accessor
+    // Functionalities meant to be used with LLKOperand for LLK 2.0
+    //
+    // Parameters:
+    // - Operand: The LLKOperand type to return. (hint: use LLKOperandFrom<tensor::token>)
     template <typename Operand>
-    [[nodiscard]] Operand operand() const {
+    [[nodiscard]] Operand operand() const noexcept {
         return Operand{(get_bank_base_address() >> 4) - 1};
     }
+#endif
 
     /** @brief Lock num_elements elements starting at element `offset`.
      *

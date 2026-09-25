@@ -97,10 +97,17 @@ public:
         return static_cast<uint32_t>(start_addr_.get_address());
     }
 
+#if defined(COMPILE_FOR_TRISC)
+    // Returns the LLKOperand pointing to the base address of the scratchpad
+    // Functionalities meant to be used with LLKOperand for LLK 2.0
+    //
+    // Parameters:
+    // - Operand: The LLKOperand type to return. (hint: use LLKOperandFrom<scratchpad::token>)
     template <typename Operand>
-    [[nodiscard]] Operand operand() const {
+    [[nodiscard]] Operand operand() const noexcept {
         return Operand{(get_base_address() >> 4) - 1};
     }
+#endif
 
     // begin/end pair to enable range-based-for over the entire scratchpad region.
     // NOTE: This does not support standard-library algorithms that require a conforming iterator:
