@@ -111,7 +111,11 @@ constexpr uint32_t meta_rotation_exact = get_compile_time_arg_val(meta_ct_base +
 // metadata path than the scalar path uses. Carry the split factor so this side can undo it; it is
 // already hashed (structural), so it costs no extra program variant.
 constexpr uint32_t meta_key_stripe_split = get_compile_time_arg_val(meta_ct_base + 6);
-constexpr auto meta_args = TensorAccessorArgs<meta_ct_base + 7>();
+// Tiles the chunk this dispatch covers: sp*chunk_local for a block-cyclic cache, seq_ring*Sq for a
+// contiguous one. The derived kv_len is chunk_start + this. Explicit rather than recomputed from the
+// block-cyclic args so the classic (possibly contiguous) path derives the same bound the host would pass.
+constexpr uint32_t meta_chunk_extent_tiles = get_compile_time_arg_val(meta_ct_base + 7);
+constexpr auto meta_args = TensorAccessorArgs<meta_ct_base + 8>();
 // Cache-slot select, appended with the same fixed-width discipline as the chunk-start block above: both
 // factories always push it (zero-filled, with a placeholder accessor, when off), so every index here is
 // valid unconditionally and no guarded-index trick is needed.
@@ -646,8 +650,9 @@ void kernel_main() {
         x(diag),
         y(row),
         schedule_cols - 1};
-    // Persistent-cache args remain common and are re-applied on every dispatch.
-    const uint32_t k_batch_page_offset = get_common_arg_val<uint32_t>(
+    // Persistent-cache args remain common and are re-applied on every dispatch. The classic path may
+    // replace the offset below with the one recomposed from the on-device slot tensor.
+    uint32_t k_batch_page_offset = get_common_arg_val<uint32_t>(
         indexer_common::reader::BatchOffset);  // indexed-cache page offset; 0 when not indexed
     uint32_t kv_len_tiles =
         get_common_arg_val<uint32_t>(indexer_common::reader::KvLength);  // valid KV length in tiles (full when unset)
@@ -776,8 +781,9 @@ void kernel_main() {
         }
     };
 
-    if constexpr (fused_ring_enabled && metadata_mode) {
-        // Derive causal values before the blocking ring receiver so compute can consume them independently.
+    if constexpr (metadata_mode) {
+        // Both factories. Fused: derive causal values before the blocking ring receiver so compute can consume
+        // them independently. Classic: the caller pre-gathered K, so this is the only metadata consumer.
         // The factory supplies meta_rt_base to keep this layout coupled to the runtime-argument builder.
         CircularBuffer cb_derived(cb_meta_derived);
         cb_derived.reserve_back(1);
@@ -793,14 +799,13 @@ void kernel_main() {
         // the AG reader's bounded_kv_actual_isl (start < T, then clamp), so a legitimate padded window
         // tripped this ASSERT under the watcher while the scalar path accepted it -- and it made the
         // kv_len_tiles clamp below dead code. Both readers of this word now fall back identically.
-        constexpr uint32_t chunk_global_tiles = bc_sp * bc_chunk_local;
         ASSERT(
             chunk_start_idx % iscore::kCausalTileWidth == 0 &&
             chunk_start_idx / iscore::kCausalTileWidth < k_len_tiles);
         // Undo the key-stripe split so this matches device_causal_geometry's (unsplit) arguments exactly.
         // Identity when key_stripe_split == 1, which is every non-dedup path.
-        // Guard the divisor: the non-fused factory zero-fills this block (it rejects the metadata path),
-        // and `bc_sp / 0` is an ill-formed constant expression even in a discarded branch.
+        // Guard the divisor: both factories zero-fill this block when metadata is off, and `bc_sp / 0`
+        // is an ill-formed constant expression even in a discarded branch.
         constexpr uint32_t geom_split = meta_key_stripe_split != 0 ? meta_key_stripe_split : 1;
         constexpr uint32_t geom_sp = bc_sp / geom_split;
         constexpr uint32_t geom_chunk_local_elems = bc_chunk_local * 32 * geom_split;
@@ -814,7 +819,7 @@ void kernel_main() {
             get_common_arg_val<uint32_t>(meta_rt_base + 2),  // tp_index
             meta_Sq);
         // Derive kv_len from the same position used for causal geometry.
-        uint32_t derived_kv_len_tiles = chunk_start_idx / 32 + chunk_global_tiles;
+        uint32_t derived_kv_len_tiles = chunk_start_idx / 32 + meta_chunk_extent_tiles;
         // Cap at the REAL token end when the host supplied it. Uncapped, this is the padded-window end, so
         // on a partial chunk the score covers columns this request never wrote: harmless for real query
         // rows (those keys sit at s > t and the causal edge masks them) but NOT for pad rows, whose top-k
@@ -829,7 +834,12 @@ void kernel_main() {
             // a local above, and the four mailbox words are not written until below, so the page is free.
             const uint32_t valid_end =
                 trace_metadata::read_metadata_scalar_u32(noc, vend_args, valid_end_addr, derived_l1);
-            const uint32_t valid_end_tiles = (valid_end + 31) / 32;
+            uint32_t valid_end_tiles = (valid_end + 31) / 32;
+            if constexpr (block_pool) {
+                // The writer stores whole blocks only, so the cap rounds to the pooling width -- the same
+                // granularity the scalar kv_len must already have when block-max-pooling.
+                valid_end_tiles = (valid_end_tiles + block_tiles - 1) / block_tiles * block_tiles;
+            }
             if (valid_end_tiles < derived_kv_len_tiles) {
                 derived_kv_len_tiles = valid_end_tiles;
             }
@@ -893,6 +903,20 @@ void kernel_main() {
         const FusedRingGate gate(fused_recv, local_slot_offset, slot_active);
         run(&gate);
     } else {
+        // TRACE-SAFE slot select on the classic path: k itself is the multi-slot cache, so the recomposed
+        // slot replaces the host page offset directly. Same user-id contract as the fused branch above.
+        const uint32_t slot_addr = get_common_arg_val<uint32_t>(slot_rt_base + 0);
+        if (slot_addr != 0) {
+            CircularBuffer cb_slot(cb_meta_slot);
+            cb_slot.reserve_back(1);
+            const uint32_t user_id =
+                trace_metadata::read_metadata_scalar_u32(noc, slot_meta_args, slot_addr, cb_slot.get_write_ptr());
+            const uint32_t num_layers = get_common_arg_val<uint32_t>(slot_rt_base + 1);
+            const uint32_t layer_idx = get_common_arg_val<uint32_t>(slot_rt_base + 2);
+            k_batch_page_offset =
+                trace_metadata::bounded_cache_batch_idx(user_id, num_layers, layer_idx, slot_cache_extent) *
+                slot_local_pages;
+        }
         run(nullptr);
     }
 }

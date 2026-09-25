@@ -14,6 +14,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/block_cyclic_causal_geometry.hpp"
 
 namespace ttnn::prim {
 
@@ -59,8 +60,16 @@ struct SparseSDPAMsaOperation {
         kReaderKGroupStride,
         kReaderVGroupStride,
         kReaderChunkStart,
-        kReaderStraddleRow,
+        kReaderStraddleRow,  // host-path geometry: rows >= this jump by kReaderStraddleJump (mid-slab start)
         kReaderStraddleJump,
+        kReaderChunkStartMeta,  // chunk_start_idx_tensor address (0 = host path)
+        kReaderDeviceIndex,     // SP rank for the in-kernel geometry on the metadata path
+        kReaderSlotMeta,        // cache_batch_idx_tensor address (0 = host path)
+        kReaderKSlotStride,     // K/V tiles per cache slot, for the on-device slot offset
+        kReaderVSlotStride,
+        kReaderNumLayers,
+        kReaderLayerIdx,
+        kReaderCacheSlots,  // K/V batch extent, bounds the recomposed slot
         kReaderArgCount,
     };
     enum WriterArg : uint32_t {
@@ -73,6 +82,12 @@ struct SparseSDPAMsaOperation {
         kWriterVBatchOffset,
         kWriterKGroupStride,
         kWriterVGroupStride,
+        kWriterSlotMeta,  // the writer co-gathers the lower K/V halves, so it selects the slot too
+        kWriterKSlotStride,
+        kWriterVSlotStride,
+        kWriterNumLayers,
+        kWriterLayerIdx,
+        kWriterCacheSlots,
         kWriterArgCount,
     };
     enum ComputeArg : uint32_t { kComputeWorkStart, kComputeWorkCount, kComputeArgCount };
@@ -85,25 +100,29 @@ struct SparseSDPAMsaOperation {
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     // Per-device causal geometry, in rows: the global position of this device's query row 0, plus the
-    // straddle (query rows >= straddle_row sit straddle_jump positions further along; jump 0 = none).
-    struct CausalGeometry {
-        uint32_t chunk_start = 0;
-        uint32_t straddle_row = 0;
-        uint32_t straddle_jump = 0;
-    };
+    // straddle (query rows >= straddle_q sit straddle_jump positions further along; jump 0 = none). The type the
+    // kernels use, so the host bakes exactly what the metadata path derives on device.
+    using CausalGeometry = tt::block_cyclic::CausalGeometry;
+    // This device's rank for the causal geometry: along cluster_axis, or linear over the mesh when unset (0 on a
+    // single device).
+    static uint32_t compute_device_index(
+        const operation_attributes_t& attrs,
+        const tensor_args_t& t,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
     // Block-cyclic cache + cluster_axis (the SP-sharded chunked-prefill cache read): the rotation-exact
-    // geometry of the update_padded_kv_cache writer, shared with indexer_score so the diagonal-block mask and
-    // the indexer's selection agree on every query's position, including mid-slab (non-chunk-aligned) starts.
-    // Otherwise the linear chunk_start_idx + rank*S along cluster_axis (rank from the coordinate; 0 on a single
-    // device). All zeros when non-causal.
+    // geometry of the update_padded_kv_cache writer, shared with indexer_score (block_cyclic_causal_geometry.hpp)
+    // so the diagonal-block mask and the indexer's selection agree on every query's position, including mid-slab
+    // (non-chunk-aligned) starts. Otherwise the linear chunk_start_idx + rank*S along cluster_axis (rank from the
+    // coordinate; 0 on a single device). All zeros when non-causal or on the metadata path (the kernel derives it).
     static CausalGeometry compute_causal_geometry(
         const operation_attributes_t& attrs,
         const tensor_args_t& t,
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
 
     // Work split plus every scalar compute_program_hash excludes: interleaved K/V T and batch slots, n_kv,
-    // cache_batch_idx, chunk_start_idx/cluster_axis. Single-sourced so create_descriptor (miss-bake) and
-    // override_runtime_arguments (hit-patch) write the same values and cannot drift.
+    // cache_batch_idx, chunk_start_idx/cluster_axis, the slot-fold layer terms, and the metadata tensor addresses.
+    // Single-sourced so create_descriptor (miss-bake) and override_runtime_arguments (hit-patch) write the same values
+    // and cannot drift.
     struct DispatchArgs {
         tt::tt_metal::CoreCoord grid;  // per-core arg order: core i == {i % grid.x, i / grid.x}
         uint32_t num_cores = 0;
@@ -113,7 +132,13 @@ struct SparseSDPAMsaOperation {
         uint32_t v_batch_tile_offset = 0;
         uint32_t k_group_tile_stride = 0;
         uint32_t v_group_tile_stride = 0;
-        CausalGeometry causal;
+        CausalGeometry causal{};
+        uint32_t device_index = 0;
+        uint32_t k_slot_tile_stride = 0;  // n_kv * k_group_tile_stride
+        uint32_t v_slot_tile_stride = 0;
+        uint32_t cache_slots = 0;  // K/V batch extent
+        uint32_t chunk_start_meta_addr = 0;
+        uint32_t slot_meta_addr = 0;
     };
     static DispatchArgs compute_dispatch_args(
         const operation_attributes_t& attrs,
@@ -132,6 +157,10 @@ Tensor sparse_sdpa_msa(
     std::optional<uint32_t> cache_batch_idx = std::nullopt,
     std::optional<uint32_t> chunk_start_idx = std::nullopt,
     std::optional<uint32_t> cluster_axis = std::nullopt,
-    std::optional<BlockCyclicLayout> block_cyclic = std::nullopt);
+    std::optional<BlockCyclicLayout> block_cyclic = std::nullopt,
+    const std::optional<Tensor>& chunk_start_idx_tensor = std::nullopt,
+    const std::optional<Tensor>& cache_batch_idx_tensor = std::nullopt,
+    uint32_t index_cache_num_layers = 1,
+    uint32_t index_cache_layer_idx = 0);
 
 }  // namespace ttnn::prim

@@ -175,6 +175,26 @@ void bind_indexer_score(nb::module_& mod) {
                 reads the permuted cache back in natural token order so the per-group
                 scores (and the block-max-pool, which pools token-contiguous blocks)
                 come out correct. Unset = contiguous K.
+            chunk_start_idx_tensor: optional 1-element UINT32 ROW_MAJOR interleaved DRAM tensor holding
+                chunk_start_idx (same meaning: rank 0's global start, tile-aligned). The reader NoC-reads it
+                every dispatch and derives each device's start (+ the block-cyclic rotation) and kv_len on
+                device: kv_len = chunk_start + chunk extent (sp*block_cyclic_chunk_local for a block-cyclic
+                cache, sp_ring*Sq for a contiguous one), i.e. exactly the history + chunk prefix a scalar caller
+                passes. Mutually exclusive with chunk_start_idx AND kv_len. The trace-safe form: a host int is
+                patched into the launch per dispatch, and a trace replay never re-runs that patch.
+            valid_end_tensor: optional 1-element UINT32 tensor (same container rules), requires
+                chunk_start_idx_tensor. The request's REAL token end; caps the derived kv_len at
+                ceil(valid_end) to the tile (block_size when pooling), so a partial final chunk scores the
+                same window the scalar path does.
+            cache_batch_idx_tensor: optional 1-element UINT32 tensor (same container rules) holding the USER
+                id; the reader selects slot user * index_cache_num_layers + index_cache_layer_idx of k.
+                Mutually exclusive with cache_batch_idx.
+            index_cache_num_layers / index_cache_layer_idx: the layer fold of a user-major [users*layers, 1,
+                T, D] cache, used only with cache_batch_idx_tensor. Runtime (not hashed).
+
+            Trace: the op re-points to whichever metadata tensors a dispatch passes (cache hits included),
+            but a captured trace keeps the addresses it was captured with -- rewrite the SAME tensors in
+            place (e.g. ttnn.copy_host_to_device_tensor) between replays to retarget slot / depth.
 
         Returns: score [B, num_groups, Sq, T_out] bf16 row-major (T_out = T, or
             T/block_size when block-max-pooling); future/pad columns/blocks -inf.
@@ -193,7 +213,12 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("kv_len") = std::nullopt,
         nb::arg("seq_shard_axes") = std::nullopt,
         nb::arg("block_cyclic_sp_axis") = std::nullopt,
-        nb::arg("block_cyclic_chunk_local") = std::nullopt);
+        nb::arg("block_cyclic_chunk_local") = std::nullopt,
+        nb::arg("chunk_start_idx_tensor") = nb::none(),
+        nb::arg("valid_end_tensor") = nb::none(),
+        nb::arg("cache_batch_idx_tensor") = nb::none(),
+        nb::arg("index_cache_num_layers") = 1,
+        nb::arg("index_cache_layer_idx") = 0);
 
     ttnn::bind_function<"ring_indexer_score_dsa", "ttnn.experimental.">(
         mod,
