@@ -27,7 +27,7 @@ def hf_layers(model):
 
 
 # Device steps swapped in so far, per block type. Every other step runs on the CPU reference.
-DEVICE_STEPS = {"sliding": {"attn_norm"}, "global": set()}
+DEVICE_STEPS = {"sliding": {"attn_norm", "attention"}, "global": set()}
 
 # Norm steps -> checkpoint weight name (under model.language_model.layers.<i>.).
 _NORM_WEIGHTS = {"attn_norm": "input_layernorm.weight"}
@@ -59,20 +59,92 @@ def _host_fn(mesh, module):
     return fn
 
 
+def _attention_module(mesh, spec, layer, loader=None, cfg=None):
+    """TtSlidingAttention for a sliding layer, loading only its attention weights (not the experts)."""
+    import os
+    from types import SimpleNamespace
+
+    from models.demos.common.bringup.reference.golden import hf_path
+    from models.demos.gemma4_a4b_d_p.reference.gemma4_ref import PREFIX, Gemma4TextConfig, WeightLoader, rope_inv_freq
+    from models.demos.gemma4_a4b_d_p.tt.attention import TtSlidingAttention
+
+    loader = loader or WeightLoader(hf_path(spec))
+    cfg = cfg or Gemma4TextConfig.from_json(os.path.join(loader.model_path, "config.json"))
+    if not cfg.is_sliding(layer):
+        raise NotImplementedError(f"implement step: no device attention for global layer {layer} yet")
+    p = f"{PREFIX}layers.{layer}.self_attn."
+    names = {"wq": "q_proj", "wk": "k_proj", "wv": "v_proj", "wo": "o_proj", "q_norm": "q_norm", "k_norm": "k_norm"}
+    w = SimpleNamespace(**{k: loader.get(p + n + ".weight").float() for k, n in names.items()})
+    inv_freq, _ = rope_inv_freq(cfg, True)
+    return TtSlidingAttention(mesh, cfg, w, inv_freq, cfg.sliding_window, eps=cfg.rms_norm_eps), cfg
+
+
+def _attention_host_fn(mesh, module, cfg, cache_of):
+    """fn(ctx, x_host [S, H]) -> host [S, H]; cache_of(ctx) returns the layer's TtKVCacheSliding."""
+    import ttnn
+    from models.demos.gemma4_a4b_d_p.tt.rms_norm import replicated_to_host, to_device_replicated
+
+    def fn(ctx, x):
+        xd = to_device_replicated(mesh, x)
+        yd = module(xd, ctx.start, cache_of(ctx))
+        y = replicated_to_host(yd)
+        ttnn.deallocate(xd)
+        ttnn.deallocate(yd)
+        return y.to(x.dtype)
+
+    return fn
+
+
 def device_component(mesh, spec, layer, step):
     if step in _NORM_WEIGHTS:
         return _host_fn(mesh, _norm_module(mesh, spec, layer, step))
+    if step == "attention":
+        from models.demos.gemma4_a4b_d_p.tt.attention import TtKVCacheSliding
+
+        module, cfg = _attention_module(mesh, spec, layer)
+        caches = {}
+
+        def cache_of(ctx):
+            # Component/swap tests: a fresh device cache holding the golden prefix [0, prefix_len).
+            ex = ctx.extra or {}
+            max_seq = int(ex.get("max_seq", ctx.start + ctx.length))
+            max_seq = -(-max_seq // 32) * 32
+            if "c" in caches:
+                caches.pop("c").free()
+            c = TtKVCacheSliding(mesh, cfg.num_key_value_heads, cfg.head_dim, max_seq)
+            n = int(ex.get("prefix_len", ctx.start))
+            if n:
+                c.load_prefix(ex["state_prefix"]["key"], ex["state_prefix"]["value"], n)
+            caches["c"] = c
+            return c
+
+        return _attention_host_fn(mesh, module, cfg, cache_of)
     raise NotImplementedError(f"implement step: no device module for {step} yet")
 
 
 class _HybridState:
-    def __init__(self, ref, max_seq):
+    """CPU reference state, except layers whose attention runs on the device: their K/V live in a device cache."""
+
+    def __init__(self, ref, max_seq, mesh=None, device_attn_layers=(), cfg=None):
+        from models.demos.gemma4_a4b_d_p.tt.attention import TtKVCacheSliding
+
         self.ref, self.s = ref, ref.new_state(max_seq)
+        self.dev = {}
+        if device_attn_layers:
+            seq = -(-max_seq // 32) * 32
+            self.dev = {
+                i: TtKVCacheSliding(mesh, cfg.num_key_value_heads, cfg.head_dim, seq) for i in device_attn_layers
+            }
 
     def load_prefix(self, layer, tensors, length):
-        self.ref.load_state(self.s, layer, tensors, length)
+        if layer in self.dev:
+            self.dev[layer].load_prefix(tensors["key"], tensors["value"], length)
+        else:
+            self.ref.load_state(self.s, layer, tensors, length)
 
     def to_torch(self, layer, length):
+        if layer in self.dev:
+            return self.dev[layer].to_torch(length)
         return self.ref.state_tensors(self.s, layer, length)
 
 
@@ -90,16 +162,21 @@ class HybridDeviceModel:
         self.ref = reference(spec, layers=layers, dtype=torch.float32)
         self.cfg = self.ref.cfg
         loader = WeightLoader(self.ref.loader.model_path)
+        self.mesh = mesh
         self.overrides = {}
+        self.attn_layers = []
         for i in self.ref.layer_ids:
-            bt = spec.block_type_of(i)
-            self.overrides[i] = {
-                step: _host_fn(mesh, _norm_module(mesh, spec, i, step, loader)) for step in DEVICE_STEPS.get(bt, ())
-            }
+            steps = DEVICE_STEPS.get(spec.block_type_of(i), ())
+            ov = {s: _host_fn(mesh, _norm_module(mesh, spec, i, s, loader)) for s in steps if s in _NORM_WEIGHTS}
+            if "attention" in steps:
+                module, _ = _attention_module(mesh, spec, i, loader, self.cfg)
+                ov["attention"] = _attention_host_fn(mesh, module, self.cfg, lambda ctx: ctx.extra["dev_cache"])
+                self.attn_layers.append(i)
+            self.overrides[i] = ov
         self.load_seconds = time.time() - t0
 
     def new_state(self, max_seq):
-        return _HybridState(self.ref, max_seq)
+        return _HybridState(self.ref, max_seq, self.mesh, self.attn_layers, self.cfg)
 
     def embed(self, tokens):
         import torch.nn.functional as F
@@ -113,9 +190,11 @@ class HybridDeviceModel:
         return h
 
     def layer(self, i, h, start, state):
-        from models.demos.common.bringup.reference.interface import run_block
+        from models.demos.common.bringup.reference.interface import Ctx, run_block
 
         ctx = self.ref.chunk_context(i, start, h.shape[0], state.s)
+        if i in state.dev:
+            ctx = Ctx(ctx.layer, ctx.start, ctx.length, ctx.state, {**ctx.extra, "dev_cache": state.dev[i]})
         return run_block(
             self.ref.block_graph(i),
             lambda n: self.ref.component(i, n),
