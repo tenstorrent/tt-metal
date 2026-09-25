@@ -24,7 +24,8 @@
 
 namespace tt::tt_fabric::detail {
 
-// Every SAT solve is bounded by the same conflict cap. On budget exhaustion the caller grows candidate
+// Every SAT solve is bounded by the same conflict cap -- one default all around; there is deliberately no
+// unlimited special case for the SAT placement solve. On budget exhaustion the caller grows candidate
 // columns and retries, and ultimately fails gracefully instead of hanging. Sized well above what feasible
 // instances (e.g. the revAB SC16 64-stage, ~seconds) need.
 static constexpr int kDefaultConflictCap = 1'000'000;

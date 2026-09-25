@@ -2466,18 +2466,63 @@ bool inject_sat_placement_fallbacks(
     return added;
 }
 
+// Footprint dedup (default ON; TT_METAL_SAT_NO_DEDUP=1 disables): collapse candidates that share the same (grouping
+// variant, physical ASIC footprint) into ONE canonical node. N meshes of the same descriptor share the SAME physical
+// footprints, so without dedup each mesh gets its own private copy of every footprint (n_meshes x n_footprints seat
+// nodes)
+// -- a huge value symmetry the solver thrashes on. Dedup makes the seats the ~n_footprints shared physical
+// positions while meshes stay DISTINCT targets, turning the solve into a mesh->footprint (near-)bijection like
+// the mesh-level solve on main. Dedup keys on (variant, footprint), so it NEVER merges across shapes (Gemma's
+// S4x1/S4x2/S4x4 footprints differ) -- Gemma stays valid. No anchoring is introduced.
+// Canonical key = variant IDENTITY (name+type, NOT the pointer -- each mesh's pool holds its own GroupingInfo
+// copy, so pointers differ per mesh even for the same shape) + the physical ASIC sequence in chip-id order,
+// UNSORTED: the sequence encodes the ORIENTATION (chip->ASIC wiring), not just the footprint. Two candidates
+// merge only when they are fully identical placements (same shape, same chips, same orientation) -- merging is
+// then exact, not approximate. Sorting the ASICs here once collapsed different orientations of the same
+// footprint (enumeration keeps them deliberately, unique_shapes=false) and made a dual-4x16 instance
+// unplaceable (2 meshes x 84 candidates deduped to 83 seats -> "no placement found").
+std::string sat_footprint_key(const Candidate* c) {
+    std::vector<uint64_t> asics;
+    asics.reserve(c->asics().size());
+    for (const AsicID& a : c->asics()) {
+        asics.push_back(*a);
+    }
+    const GroupingInfo* v = c->variant();
+    return fmt::format("{}|{}|{}", v != nullptr ? v->name : "", v != nullptr ? v->type : "", fmt::join(asics, ","));
+}
+
+const Candidate* sat_footprint_canonical(
+    const Candidate* c, bool dedup, std::map<std::string, const Candidate*>& canon) {
+    if (!dedup) {
+        return c;
+    }
+    return canon.emplace(sat_footprint_key(c), c).first->second;
+}
+
 AdjacencyGraph<const Candidate*> build_sat_placement_seat_graph(
     const std::map<GlobalMeshId, CandidatePool>& pools, const AdjacencyGraph<GlobalMeshId>& mesh_level_graph) {
+    const bool dedup =
+        std::getenv("TT_METAL_SAT_NO_DEDUP") == nullptr;  // ON by default; TT_METAL_SAT_NO_DEDUP=1 opts out
+    std::map<std::string, const Candidate*> canon;
     AdjacencyMatrixCache adjacency_cache;
+    // Two-tier edge handling under node dedup:
+    //   - dedupe VISITS: many mesh pairs alias to the same canonical seat pair; record each canonical pair
+    //     ONCE (otherwise multiplicity would inflate by the number of visiting mesh pairs), keyed on the
+    //     pointer-ordered pair;
+    //   - keep MULTIPLICITY: emit `links` parallel edges per canonical pair. The parallel-edge count is the
+    //     channel-count data the STRICT/RELAXED channel validation reads ("parallel link count >= k"); a
+    //     boolean edge cannot express that a pair has 4 links vs 1, which made the master propose seatings
+    //     the STRICT channels{count} check then rejected (e.g. dual_4x16's count:4 intermesh connection).
+    std::map<std::pair<const Candidate*, const Candidate*>, std::size_t> pair_links;
     std::map<const Candidate*, std::vector<const Candidate*>> seat_adj;
     std::map<GlobalMeshId, std::vector<const Candidate*>> mesh_seats;
     for (const auto& [mesh_id, pool] : pools) {
         auto& seats = mesh_seats[mesh_id];
         seats.reserve(pool.candidates().size());
         for (const Candidate& candidate : pool.candidates()) {
-            const Candidate* seat = &candidate;
+            const Candidate* seat = sat_footprint_canonical(&candidate, dedup, canon);
             seats.push_back(seat);
-            seat_adj[seat] = {};
+            seat_adj[seat];  // ensure node present
         }
     }
 
@@ -2497,15 +2542,91 @@ AdjacencyGraph<const Candidate*> build_sat_placement_seat_graph(
                     if (links == 0) {
                         continue;
                     }
-                    for (std::size_t copy = 0; copy < links; ++copy) {
-                        seat_adj[s1[from_seat]].push_back(s2[to_seat]);
-                        seat_adj[s2[to_seat]].push_back(s1[from_seat]);
+                    if (s1[from_seat] == s2[to_seat]) {
+                        continue;  // dedup can alias a footprint to itself across mesh pairs -- no self loops
+                    }
+                    const Candidate* a = std::min(s1[from_seat], s2[to_seat]);
+                    const Candidate* b = std::max(s1[from_seat], s2[to_seat]);
+                    // links is a property of the two physical footprints, so every visit sees the same count;
+                    // max() keeps the invariant explicit.
+                    auto [it, inserted] = pair_links.emplace(std::make_pair(a, b), links);
+                    if (!inserted) {
+                        it->second = std::max(it->second, links);
                     }
                 }
             }
         }
     }
+    for (const auto& [pair, links] : pair_links) {
+        for (std::size_t copy = 0; copy < links; ++copy) {
+            seat_adj[pair.first].push_back(pair.second);
+            seat_adj[pair.second].push_back(pair.first);
+        }
+    }
+    {
+        std::size_t total_edges = 0, unique_edges = 0, max_deg = 0, max_unique_deg = 0;
+        std::map<std::size_t, std::size_t> unique_deg_hist;  // unique-degree -> #seats
+        for (const auto& [seat, nbrs] : seat_adj) {
+            total_edges += nbrs.size();
+            max_deg = std::max(max_deg, nbrs.size());
+            std::set<const Candidate*> u(nbrs.begin(), nbrs.end());
+            unique_edges += u.size();
+            max_unique_deg = std::max(max_unique_deg, u.size());
+            unique_deg_hist[u.size()]++;
+        }
+        log_info(
+            tt::LogFabric,
+            "DBGSEAT nodes={} edges_with_mult={} unique_edges={} max_deg={} max_unique_deg={} mult_ratio={:.2f}",
+            seat_adj.size(),
+            total_edges,
+            unique_edges,
+            max_deg,
+            max_unique_deg,
+            unique_edges ? static_cast<double>(total_edges) / static_cast<double>(unique_edges) : 0.0);
+        // Diagnostic (TT_METAL_SAT_DIAG=1): unique-degree distribution. Low-degree seats are propagation
+        // "anchors" that force assignments; a graph with none (all-uniform degree) makes CDCL search blindly.
+        if (std::getenv("TT_METAL_SAT_DIAG") != nullptr) {
+            std::string hist;
+            for (const auto& [deg, cnt] : unique_deg_hist) {
+                hist += fmt::format("deg{}={} ", deg, cnt);
+            }
+            log_info(tt::LogFabric, "DBGDEG unique-degree histogram: {}", hist);
+        }
+    }
     return AdjacencyGraph<const Candidate*>(std::move(seat_adj));
+}
+
+// Diagnostic (TT_METAL_SAT_PIN_SOLUTION=/path): load a known-good placement as mesh_id -> sorted ASIC-set.
+// File format: one line per mesh "meshId asic0,asic1,...". Used to pin the SAT to exactly that placement
+// so we can tell whether a valid placement is a satisfiable SAT model (adjacency correct, just hard) or is
+// rejected by the encoding (adjacency/footprint bug). Returns empty map when env unset / file unreadable.
+static std::map<uint64_t, std::vector<uint64_t>> load_sat_pin_solution() {
+    std::map<uint64_t, std::vector<uint64_t>> pin;
+    const char* path = std::getenv("TT_METAL_SAT_PIN_SOLUTION");
+    if (path == nullptr) {
+        return pin;
+    }
+    std::ifstream in(path);
+    std::string line;
+    while (std::getline(in, line)) {
+        std::istringstream ls(line);
+        uint64_t mesh = 0;
+        std::string csv;
+        if (!(ls >> mesh >> csv)) {
+            continue;
+        }
+        std::vector<uint64_t> asics;
+        std::stringstream cs(csv);
+        std::string tok;
+        while (std::getline(cs, tok, ',')) {
+            if (!tok.empty()) {
+                asics.push_back(std::stoull(tok));
+            }
+        }
+        std::sort(asics.begin(), asics.end());
+        pin[mesh] = std::move(asics);
+    }
+    return pin;
 }
 
 bool build_sat_placement_constraints(
@@ -2513,20 +2634,156 @@ bool build_sat_placement_constraints(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     MappingConstraints<GlobalMeshId, const Candidate*>& constraints) {
     constraints = {};
+    const std::map<uint64_t, std::vector<uint64_t>> pin_solution = load_sat_pin_solution();
+    // TT_METAL_SAT_ANCHOR_N=k: anchor only the first k meshes (by mesh_id order) to their pinned footprint,
+    // leaving the rest free. k<0 / unset => pin ALL meshes (full-pin test). Used to measure how many anchors
+    // it takes to collapse the interchange symmetry (adjacency-stage symmetry break).
+    int anchor_n = -1;
+    if (const char* v = std::getenv("TT_METAL_SAT_ANCHOR_N")) {
+        anchor_n = std::atoi(v);
+    }
+    // Same footprint dedup as build_sat_placement_seat_graph -- MUST use the identical canonicalization so the
+    // constraint's allowed seats match the graph's nodes. Meshes stay distinct targets; only seats are shared.
+    const bool dedup =
+        std::getenv("TT_METAL_SAT_NO_DEDUP") == nullptr;  // ON by default; TT_METAL_SAT_NO_DEDUP=1 opts out
+    std::map<std::string, const Candidate*> canon;
     std::map<const Candidate*, std::vector<uint32_t>> seat_to_asics;
+    std::size_t mesh_index = 0;
     for (const auto& [mesh_id, pool] : pools) {
         std::set<const Candidate*> seats;
+        // When pinning, restrict this mesh to only candidates whose sorted ASIC-set matches the pinned set.
+        const std::vector<uint64_t>* pinned = nullptr;
+        const bool within_anchor = (anchor_n < 0) || (static_cast<int>(mesh_index) < anchor_n);
+        if (!pin_solution.empty() && within_anchor) {
+            auto it = pin_solution.find(*mesh_id);
+            pinned = (it != pin_solution.end()) ? &it->second : nullptr;
+        }
+        ++mesh_index;
         for (const Candidate& candidate : pool.candidates()) {
-            const Candidate* seat = &candidate;
+            const Candidate* seat = sat_footprint_canonical(&candidate, dedup, canon);
+            if (pinned != nullptr) {
+                std::vector<uint64_t> cand_asics;
+                cand_asics.reserve(candidate.asics().size());
+                for (const AsicID& a : candidate.asics()) {
+                    cand_asics.push_back(*a);
+                }
+                std::sort(cand_asics.begin(), cand_asics.end());
+                if (cand_asics != *pinned) {
+                    continue;  // not the pinned footprint for this mesh -> exclude
+                }
+            }
             seats.insert(seat);
             seat_to_asics[seat] = candidate.dense_asics();
+        }
+        if (!pin_solution.empty() && std::getenv("TT_METAL_SAT_DIAG") != nullptr) {
+            log_info(
+                tt::LogFabric, "DBGPIN mesh={} pinned_seats={} (pinned={})", *mesh_id, seats.size(), pinned != nullptr);
         }
         if (seats.empty() || !constraints.add_required_constraint(mesh_id, seats)) {
             return false;
         }
     }
+    {
+        std::size_t max_seats = 0, min_seats = SIZE_MAX;
+        for (const auto& [mesh_id, pool] : pools) {
+            (void)mesh_id;
+            const std::size_t n = pool.candidates().size();
+            max_seats = std::max(max_seats, n);
+            min_seats = std::min(min_seats, n);
+        }
+        log_info(
+            tt::LogFabric,
+            "DBGSAT meshes={} total_seats={} seats_per_mesh[min={},max={}]",
+            pools.size(),
+            seat_to_asics.size(),
+            min_seats == SIZE_MAX ? 0 : min_seats,
+            max_seats);
+    }
+    // Diagnostic (TT_METAL_SAT_DIAG=1): per-mesh candidate-variant table. Shows which grouping variants
+    // generated the seats for each mesh (name+type -> seat count), plus a global histogram across all
+    // meshes. Lets us compare which variants the solver has to choose among for revAB vs revC.
+    if (std::getenv("TT_METAL_SAT_DIAG") != nullptr) {
+        std::map<std::string, std::size_t> global_variant_seats;
+        log_info(tt::LogFabric, "DBGVAR ==== per-mesh candidate variant table ({} meshes) ====", pools.size());
+        for (const auto& [mesh_id, pool] : pools) {
+            std::map<std::string, std::size_t> per_mesh;
+            std::set<std::string> distinct_asic_sets;  // same ASIC footprint, different orientation => duplicate set
+            for (const Candidate& candidate : pool.candidates()) {
+                const GroupingInfo* v = candidate.variant();
+                const std::string key = v != nullptr ? fmt::format("{}[{}]", v->name, v->type) : "<null>";
+                per_mesh[key]++;
+                global_variant_seats[key]++;
+                std::vector<uint64_t> sorted_asics;
+                sorted_asics.reserve(candidate.asics().size());
+                for (const AsicID& a : candidate.asics()) {
+                    sorted_asics.push_back(*a);
+                }
+                std::sort(sorted_asics.begin(), sorted_asics.end());
+                const std::string set_key = fmt::format("{}", fmt::join(sorted_asics, ","));
+                distinct_asic_sets.insert(set_key);
+                // TT_METAL_SAT_DUMP_CANDS=1: emit each candidate's sorted ASIC-id set so we can check whether
+                // the known-good greedy placement's per-mesh ASIC set is even present in the SAT candidate pool.
+                if (std::getenv("TT_METAL_SAT_DUMP_CANDS") != nullptr) {
+                    log_info(tt::LogFabric, "DBGCAND mesh={} asics={}", *mesh_id, set_key);
+                }
+            }
+            std::string row;
+            for (const auto& [name, cnt] : per_mesh) {
+                row += fmt::format("{}={} ", name, cnt);
+            }
+            log_info(
+                tt::LogFabric,
+                "DBGVAR mesh={} candidates={} distinct_asic_sets={} orientations_per_set={:.2f} variants={} | {}",
+                *mesh_id,
+                pool.candidates().size(),
+                distinct_asic_sets.size(),
+                distinct_asic_sets.empty()
+                    ? 0.0
+                    : static_cast<double>(pool.candidates().size()) / static_cast<double>(distinct_asic_sets.size()),
+                per_mesh.size(),
+                row);
+        }
+        log_info(tt::LogFabric, "DBGVAR ==== global variant histogram (across all meshes) ====");
+        for (const auto& [name, cnt] : global_variant_seats) {
+            log_info(tt::LogFabric, "DBGVAR GLOBAL variant={} total_seats={}", name, cnt);
+        }
+    }
     // Chip disjointness: each ASIC is claimed by at most one chosen seat.
-    if (!constraints.add_resource_constraint<uint32_t>(seat_to_asics)) {
+    //
+    // When footprint dedup is on AND the deduped footprints are pairwise DISJOINT (each ASIC belongs to exactly
+    // one canonical seat -- true for homogeneous cases where the footprints partition the machine), the resource
+    // constraints are fully subsumed by injectivity: two meshes can only share an ASIC by picking the SAME seat,
+    // which injectivity already forbids. Skipping them then (a) removes one redundant AMO chain per ASIC (8
+    // identical chains per seat -- parallel copies CDCL re-derives the same conflicts through), and (b) leaves
+    // resource_count == 0, so the encoder's existing bijection-completeness gate opens and the placement gets
+    // the same permutation/pigeonhole propagation as the mesh-level solve (the thing that makes ring-into-
+    // sparse-graph instances converge). Any overlap between distinct footprints (heterogeneous shapes, grown
+    // pools, MGD fallback variants) keeps the resource constraints exactly as before.
+    bool footprints_disjoint = false;
+    if (dedup) {
+        footprints_disjoint = true;
+        std::set<uint32_t> claimed;
+        for (const auto& [seat, asics] : seat_to_asics) {
+            (void)seat;
+            for (const uint32_t asic : asics) {
+                if (!claimed.insert(asic).second) {
+                    footprints_disjoint = false;
+                    break;
+                }
+            }
+            if (!footprints_disjoint) {
+                break;
+            }
+        }
+        if (std::getenv("TT_METAL_SAT_DIAG") != nullptr) {
+            log_info(
+                tt::LogFabric,
+                "DBGSAT dedup footprints_disjoint={} -> resource constraints {}",
+                footprints_disjoint,
+                footprints_disjoint ? "SKIPPED (injectivity subsumes; completeness enabled)" : "kept");
+        }
+    }
+    if (!footprints_disjoint && !constraints.add_resource_constraint<uint32_t>(seat_to_asics)) {
         return false;
     }
     // Group the single-host seats by host so the host-count cap below can constrain how many distinct
@@ -3036,17 +3293,14 @@ AssignedMeshes SatPlacementEnumerationSession::next() {
         return {};
     }
 
-    // Same mode and host cap: next() is another model from the live session.
+    // Same mode and host cap: next() is another model from the live session. The growth loop uses ONLY the
+    // normal PGD candidates -- MGD fallbacks are a strict last resort below, never mixed into the pool while
+    // the normal enumeration can still grow or has an untried solve.
     MappingResult<MeshId, const Candidate*> result = master_solve_->next(/*drop_cap=*/false);
     while (!result.success && cycle_ < kMaxGrowthCycles) {
         ++cycle_;
         const bool at_cap = cycle_ >= kMaxGrowthCycles;
         std::size_t grown = grow_sat_placement_pools(*pools_, kGrowBudgetPerVariant, stats_);
-        if ((grown == 0 || at_cap) && !fallbacks_in_ &&
-            inject_sat_placement_fallbacks(*pools_, mgd_fallback_by_mesh_)) {
-            fallbacks_in_ = true;
-            grown += grow_sat_placement_pools(*pools_, kGrowBudgetPerVariant, stats_);
-        }
         if (grown == 0) {
             break;
         }
@@ -3055,6 +3309,24 @@ AssignedMeshes SatPlacementEnumerationSession::next() {
         result = master_solve_->next(/*drop_cap=*/false);
         if (at_cap) {
             break;
+        }
+    }
+    // The normal PGD-only path failed (enumeration exhausted or growth capped, capped solve unsuccessful):
+    // only now inject the MGD placement fallbacks, then run the same grow-after-each-failed-solve loop over
+    // the enlarged pool -- the first fallback solve may fail while the fallback variants can still grow.
+    if (!result.success && !fallbacks_in_ && inject_sat_placement_fallbacks(*pools_, mgd_fallback_by_mesh_)) {
+        fallbacks_in_ = true;
+        std::size_t fallback_cycles = 0;
+        while (!result.success && fallback_cycles < kMaxGrowthCycles) {
+            ++fallback_cycles;
+            ++cycle_;  // counted into master_growth_rounds stats like the normal growth rounds
+            const std::size_t grown = grow_sat_placement_pools(*pools_, kGrowBudgetPerVariant, stats_);
+            if (grown == 0) {
+                break;
+            }
+            // Growth reallocates candidate pointers, so the live encoding cannot be reused.
+            master_solve_->reset();
+            result = master_solve_->next(/*drop_cap=*/false);
         }
     }
     // Growth is exhausted and the capped solve still failed. Dropping the cap changes the encoding.
