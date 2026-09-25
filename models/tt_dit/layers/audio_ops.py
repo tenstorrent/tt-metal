@@ -1399,6 +1399,12 @@ class Snake(Module):
                 a = torch.nn.functional.pad(a, (0, self._aligned_channels - a.shape[-1]))
             state["alpha"] = a.contiguous()
 
+    def deallocate_weights(self) -> None:
+        # Without channel-TP the shard cache *is* `alpha.data`, so it dies with the weights; drop it so a
+        # reload rebuilds it from the new tensor rather than handing the op an evicted one.
+        self._alpha_shard = None
+        super().deallocate_weights()
+
     def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
         # α is per-channel; C-shard it under channel-TP.
         if self._alpha_shard is None:
@@ -1451,6 +1457,11 @@ class SnakeBeta(Module):
                     if real < self._aligned_channels:
                         t[..., real:] = 1.0
                 state[name] = t.contiguous()
+
+    def deallocate_weights(self) -> None:
+        # See Snake.deallocate_weights: the cached shards alias the parameters when there is no channel-TP.
+        self._ab_shard = None
+        super().deallocate_weights()
 
     def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
         # α, β per-channel; C-shard under channel-TP.
