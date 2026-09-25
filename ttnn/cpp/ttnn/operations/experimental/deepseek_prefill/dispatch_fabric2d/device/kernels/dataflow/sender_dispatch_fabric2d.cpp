@@ -75,14 +75,16 @@ void send_token_with_inline_meta(
 void prebuild_routes() {
     for (uint32_t entry = 0; entry < ct.queue_depth; entry++) {
         fabric_set_unicast_route(
-            (volatile tt::tt_fabric::HybridMeshPacketHeader*)entry_hdr(entry), ct.peer_chip_id, ct.peer_mesh_id);
+            (volatile tt::tt_fabric::HybridMeshPacketHeader*)entry_hdr(entry),
+            ct.downstream_chip_id,
+            ct.downstream_mesh_id);
     }
-    // signal_downstream sends from the drain header during the send loop; drain_fabric reuses it after.
+    // signal_downstream sends from the signal header during the send loop; drain_fabric reuses it after.
     // Setting the command fields later leaves this route in place.
     fabric_set_unicast_route(
-        reinterpret_cast<volatile tt::tt_fabric::HybridMeshPacketHeader*>(ct.pkt_hdr_drain_addr),
-        ct.peer_chip_id,
-        ct.peer_mesh_id);
+        reinterpret_cast<volatile tt::tt_fabric::HybridMeshPacketHeader*>(ct.pkt_hdr_signal_addr),
+        ct.downstream_chip_id,
+        ct.downstream_mesh_id);
 }
 
 // Blocks until the reader has announced at least one entry beyond `sent`, then reports how many.
@@ -101,11 +103,11 @@ uint32_t wait_for_filled(uint32_t sent) {
 // triggers a signal, because the downstream reader waits for it before moving to the next chunk.
 template <typename FabricSender>
 void signal_downstream(FabricSender& fabric, uint32_t count) {
-    volatile PACKET_HEADER_TYPE* hdr_signal = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct.pkt_hdr_drain_addr);
+    volatile PACKET_HEADER_TYPE* hdr_signal = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct.pkt_hdr_signal_addr);
     // A header-only atomic inc. The fused write + inc hangs Blackhole when the payload destination is
     // DRAM, and the fwd_section is in DRAM.
     hdr_signal->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-        get_noc_addr(ct.fwd_sem_noc_x, ct.fwd_sem_noc_y, ct.fwd_sem_addr), /*val=*/count, /*flush=*/true});
+        get_noc_addr(ct.downstream_noc_x, ct.downstream_noc_y, ct.fwd_sem_addr), /*val=*/count, /*flush=*/true});
     fabric.wait_for_empty_write_slot();
     fabric.send_payload_flush_blocking_from_address((uint32_t)hdr_signal, sizeof(PACKET_HEADER_TYPE));
 }
@@ -179,14 +181,14 @@ uint32_t pump_stream(FabricSender& fabric) {
 // therefore means every payload packet has reached the destination chip. It does not prove the
 // destination DRAM write has finished: the far eRISC may acknowledge when it issues the write.
 //
-// The filler packets are header-only atomic incs of 0 to a drain sink on the peer chip, because the
+// The filler packets are header-only atomic incs of 0 to a drain sink on the downstream chip, because the
 // fabric has no no-op packet. Waiting for a free slot cannot deadlock: the reverse direction uses
 // another eth channel.
 template <typename FabricSender>
 void drain_fabric(FabricSender& fabric) {
-    volatile PACKET_HEADER_TYPE* hdr_drain = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct.pkt_hdr_drain_addr);
+    volatile PACKET_HEADER_TYPE* hdr_drain = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct.pkt_hdr_signal_addr);
     hdr_drain->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-        get_noc_addr(ct.fwd_sem_noc_x, ct.fwd_sem_noc_y, ct.drain_sink_addr), /*val=*/0, /*flush=*/false});
+        get_noc_addr(ct.downstream_noc_x, ct.downstream_noc_y, ct.drain_sink_addr), /*val=*/0, /*flush=*/false});
     for (uint32_t d = 0; d + 1 < fabric.num_buffers_per_channel; d++) {
         fabric.wait_for_empty_write_slot();
         fabric.send_payload_flush_blocking_from_address((uint32_t)hdr_drain, sizeof(PACKET_HEADER_TYPE));

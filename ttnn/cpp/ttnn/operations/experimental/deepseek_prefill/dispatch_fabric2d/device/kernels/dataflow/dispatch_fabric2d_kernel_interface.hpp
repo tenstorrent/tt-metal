@@ -25,13 +25,13 @@
 namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d {
 
 struct L1Layout {
-    uint32_t pkt_hdr_drain;
+    uint32_t pkt_hdr_signal;
     uint32_t drain_sink;
     uint32_t queue;          // queue_depth tokens, filled by the reader and drained by the sender
     uint32_t pkt_hdr_queue;  // one prebuilt packet header per entry
     // The reader's scratch: its copy of the control tensors and its routing index. No other chip
     // addresses it, so it goes last.
-    uint32_t control;
+    uint32_t scratch;
 };
 
 // Per-chip values the host derives, plus the stream.
@@ -72,6 +72,9 @@ constexpr uint32_t META_PAD_STRIDE = 64;
 
 // Words per assignment in the reader's assignment block: [dst_chip_id, dst_row, split_idx, split_count].
 constexpr uint32_t ASSIGNMENT_WORDS = 4;
+
+// Words per chunk descriptor in the reader's in/out chunk blocks: [origin_row, dst_row, split_idx, split_count].
+constexpr uint32_t CHUNK_DESCRIPTOR_WORDS = 4;
 
 // The RISCs of a stream core that build the routing index, each over a contiguous slice of the tokens:
 // the reader and the three compute RISCs, which have no tile math in this op. The set is fixed: the
@@ -123,14 +126,14 @@ constexpr uint32_t FWD_EXTRA_BYTES = FORWARDING_METADATA_SIZE;
 // Bytes of fwd_meta the next hop reads. Used only by the static_asserts below, which pin the layout.
 constexpr uint32_t FWD_USED_BYTES = 4 * sizeof(uint32_t) + 3 * sizeof(uint64_t);
 
-// kCbExpertBucket holds one word per global expert id: that expert's bucket index, or BUCKET_NOT_HERE
+// kBlkExpertBucket holds one word per global expert id: that expert's bucket index, or BUCKET_NOT_HERE
 // for an expert outside this dispatch group, so resolving a top-k choice is one indexed load. The routing
 // pass tests `bucket >= num_buckets()`, which rejects the sentinel and any out-of-range index together.
 constexpr uint32_t BUCKET_NOT_HERE = 0xFFFFFFFFu;
 
-// Words per record in kCbEntries: the token's index on this chip, its page on the destination, and its
+// Words per record in kBlkRecords: the token's index on this chip, its page on the destination, and its
 // topk index.
-constexpr uint32_t entry_words() { return 3u; }
+constexpr uint32_t record_words() { return 3u; }
 
 // Bytes the last hop writes to the metadata page: the three meta words plus pad, padded to the 16-byte
 // NoC write alignment.
@@ -166,38 +169,39 @@ struct ChunkDescriptor {
     uint32_t split_idx = 0;
     uint32_t split_count = 1;
 };
+static_assert(sizeof(ChunkDescriptor) == 4 * CHUNK_DESCRIPTOR_WORDS, "one uint32_t per descriptor word");
 
 // --- The stream core's L1 scratch --------------------------------------------------------
 //
 // One ordered list of blocks, sized only here. The host reserves the sum and the kernel lays out the
 // offsets from the same list. A mismatch overruns into the global semaphores, and the kernel's ASSERT
 // against that compiles in only when the watcher is enabled.
-enum ControlBlock : uint32_t {
-    kCbIndices,
-    kCbOffsets,
-    kCbCounts,
-    kCbRegionOffsets,
-    kCbTable,
-    kCbExpertBucket,
-    kCbFirstPage,
-    kCbChipExperts,
-    kCbRowFill,
-    kCbBucketStart,
-    kCbEntries,
-    kCbPadding,
-    kCbInStart,
-    kCbOutStart,
+enum ScratchBlock : uint32_t {
+    kBlkIndices,
+    kBlkOffsets,
+    kBlkCounts,
+    kBlkRegionOffsets,
+    kBlkTable,
+    kBlkExpertBucket,
+    kBlkFirstPage,
+    kBlkChipExperts,
+    kBlkRowFill,
+    kBlkBucketStart,
+    kBlkRecords,
+    kBlkPadding,
+    kBlkInStart,
+    kBlkOutStart,
     // Per routing-index RISC: routed choices per bucket over its token slice, plus its next_page and
-    // next_entry cursors. The later RISCs and the reader read its counts after the exchange; the cursors
+    // next_record cursors. The later RISCs and the reader read its counts after the exchange; the cursors
     // are private to the RISC.
-    kCbRisc,
-    kCbCount
+    kBlkRisc,
+    kBlkCount
 };
 
-// Words one RISC owns in kCbRisc: cnt, next_page and next_entry, one per bucket each.
+// Words one RISC owns in kBlkRisc: cnt, next_page and next_record, one per bucket each.
 constexpr uint32_t index_risc_words(uint32_t num_buckets) { return 3u * num_buckets; }
 
-struct ControlGeometry {
+struct ScratchGeometry {
     uint32_t seq_len = 0;
     uint32_t indices_pad_stride = 0;
     uint32_t extent = 0;
@@ -208,48 +212,48 @@ struct ControlGeometry {
 };
 
 // Chunk starts: one per (forward chunk, expert), which is also what the outgoing list expands to.
-constexpr uint32_t control_chunk_start_slots(const ControlGeometry& g) { return g.num_forward * g.experts_per_chip; }
+constexpr uint32_t chunk_start_count(const ScratchGeometry& g) { return g.num_forward * g.experts_per_chip; }
 
-constexpr uint32_t control_block_raw_bytes(const ControlGeometry& g, uint32_t block) {
+constexpr uint32_t scratch_block_raw_bytes(const ScratchGeometry& g, uint32_t block) {
     switch (block) {
-        case kCbIndices: return g.seq_len * g.indices_pad_stride;
-        case kCbOffsets: return 4u * g.extent * g.num_routed_experts;
-        case kCbCounts: return 4u * g.num_routed_experts;
-        case kCbRegionOffsets: return 4u * g.num_routed_experts;
+        case kBlkIndices: return g.seq_len * g.indices_pad_stride;
+        case kBlkOffsets: return 4u * g.extent * g.num_routed_experts;
+        case kBlkCounts: return 4u * g.num_routed_experts;
+        case kBlkRegionOffsets: return 4u * g.num_routed_experts;
         // A trailing sentinel column, so a padded token's unguarded lookup reads "not in this group".
-        case kCbTable: return 4u * (g.num_routed_experts + 1u);
-        // Indexed like kCbTable, sentinel column included.
-        case kCbExpertBucket: return 4u * (g.num_routed_experts + 1u);
+        case kBlkTable: return 4u * (g.num_routed_experts + 1u);
+        // Indexed like kBlkTable, sentinel column included.
+        case kBlkExpertBucket: return 4u * (g.num_routed_experts + 1u);
         // Indexed by bucket; only this group's experts have one.
-        case kCbFirstPage: return 4u * g.extent * g.experts_per_chip;
-        case kCbChipExperts: return 4u * g.extent * g.experts_per_chip;
+        case kBlkFirstPage: return 4u * g.extent * g.experts_per_chip;
+        case kBlkChipExperts: return 4u * g.extent * g.experts_per_chip;
         // One counter per chip on the axis, used while the chip -> experts inverse is built. A separate
         // block because the blocks below are indexed by bucket.
-        case kCbRowFill: return 4u * g.extent;
+        case kBlkRowFill: return 4u * g.extent;
         // Exclusive prefix sums plus a closing total: bucket b's records run from bucket_start[b] to
         // bucket_start[b + 1].
-        case kCbBucketStart: return 4u * (g.extent * g.experts_per_chip + 1u);
-        case kCbEntries:
-            return 4u * g.seq_len * entry_words() * g.topk;  // one per (token, top-k choice)
+        case kBlkBucketStart: return 4u * (g.extent * g.experts_per_chip + 1u);
+        case kBlkRecords:
+            return 4u * g.seq_len * record_words() * g.topk;  // one per (token, top-k choice)
         // Reserved even with no padding config, so the host and kernel lists never differ.
-        case kCbPadding: return PADDING_CONFIG_BYTES;
-        case kCbInStart: return 4u * control_chunk_start_slots(g);
-        case kCbOutStart: return 4u * control_chunk_start_slots(g);
-        case kCbRisc: return 4u * INDEX_RISCS * index_risc_words(g.extent * g.experts_per_chip);
+        case kBlkPadding: return PADDING_CONFIG_BYTES;
+        case kBlkInStart: return 4u * chunk_start_count(g);
+        case kBlkOutStart: return 4u * chunk_start_count(g);
+        case kBlkRisc: return 4u * INDEX_RISCS * index_risc_words(g.extent * g.experts_per_chip);
         default: return 0u;
     }
 }
 
 // Every block starts 64-byte aligned. Several are DRAM read destinations, which Blackhole requires to be
 // 64-byte aligned; aligning all of them also covers blocks added later.
-constexpr uint32_t control_block_bytes(const ControlGeometry& g, uint32_t block) {
-    return (control_block_raw_bytes(g, block) + 63u) & ~63u;
+constexpr uint32_t scratch_block_bytes(const ScratchGeometry& g, uint32_t block) {
+    return (scratch_block_raw_bytes(g, block) + 63u) & ~63u;
 }
 
-constexpr uint32_t scratch_bytes(const ControlGeometry& g) {
+constexpr uint32_t scratch_bytes(const ScratchGeometry& g) {
     uint32_t total = 0;
-    for (uint32_t b = 0; b < kCbCount; b++) {
-        total += control_block_bytes(g, b);
+    for (uint32_t b = 0; b < kBlkCount; b++) {
+        total += scratch_block_bytes(g, b);
     }
     return total;
 }

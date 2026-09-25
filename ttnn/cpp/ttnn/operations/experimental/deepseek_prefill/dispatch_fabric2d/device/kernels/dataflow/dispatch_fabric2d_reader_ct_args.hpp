@@ -45,14 +45,14 @@ struct ReaderCtArgs {
         kExpertsPerChip,
         kExtent,
         kMyRow,
-        kNbrChipId,
+        kDownstreamChipId,
         kLinearizedCoord,
         kNumLinks,
         kStream,
-        kMaxDispatchBufTokens,
+        kMaxDispatchBufferTokenSize,
         kIndicesPadStride,
         kQueueAddr,
-        kControlAddr,
+        kScratchAddr,
         kFilledAddr,
         kFreedAddr,
         kFwdSemAddr,
@@ -85,17 +85,17 @@ struct ReaderCtArgs {
     uint32_t experts_per_chip;
     uint32_t extent;
     uint32_t my_row;
-    uint32_t nbr_chip_id;
+    uint32_t downstream_chip_id;
     // Written as metadata field 0, the source chip.
     uint32_t linearized_coord;
     uint32_t num_links;
     uint32_t stream;
-    uint32_t max_dispatch_buf_tokens;
+    uint32_t max_dispatch_buffer_token_size;
     // One 64-byte pad per token: a DRAM read needs a 64-byte-aligned L1 destination on Blackhole, and a
     // packed topk*2-byte record would put every token after the first at a wrong address.
     uint32_t indices_pad_stride;
     uint32_t queue_addr;
-    uint32_t control_addr;
+    uint32_t scratch_addr;
     uint32_t filled_addr;
     uint32_t freed_addr;
     uint32_t fwd_sem_addr;
@@ -134,14 +134,14 @@ struct ReaderCtArgs {
         experts_per_chip(args.experts_per_chip),
         extent(plan.extent),
         my_row(row),
-        nbr_chip_id(neighbour_chip_id),
+        downstream_chip_id(neighbour_chip_id),
         linearized_coord(linearized),
         num_links(args.num_links),
         stream(plan.stream),
-        max_dispatch_buf_tokens(args.max_dispatch_buffer_token_size),
+        max_dispatch_buffer_token_size(args.max_dispatch_buffer_token_size),
         indices_pad_stride(META_PAD_STRIDE * ((args.num_experts_per_tok * 2 + META_PAD_STRIDE - 1) / META_PAD_STRIDE)),
         queue_addr(l1.queue),
-        control_addr(l1.control),
+        scratch_addr(l1.scratch),
         filled_addr(plan.queue_filled_addr),
         freed_addr(plan.queue_freed_addr),
         fwd_sem_addr(plan.fwd_arrived_addr),
@@ -154,7 +154,7 @@ struct ReaderCtArgs {
         ring_chip_ids_base(kCount),
         assignment_base(kCount + args.device->shape()[args.axis]),
         in_chunks_base(assignment_base + own_count * ASSIGNMENT_WORDS),
-        out_chunks_base(in_chunks_base + forward_count * ASSIGNMENT_WORDS) {}
+        out_chunks_base(in_chunks_base + forward_count * CHUNK_DESCRIPTOR_WORDS) {}
 
     // Scalars, then ring_chip_ids, the assignments and the two chunk-descriptor blocks, at the base
     // indices set in the constructor.
@@ -175,14 +175,14 @@ struct ReaderCtArgs {
         w[kExpertsPerChip] = experts_per_chip;
         w[kExtent] = extent;
         w[kMyRow] = my_row;
-        w[kNbrChipId] = nbr_chip_id;
+        w[kDownstreamChipId] = downstream_chip_id;
         w[kLinearizedCoord] = linearized_coord;
         w[kNumLinks] = num_links;
         w[kStream] = stream;
-        w[kMaxDispatchBufTokens] = max_dispatch_buf_tokens;
+        w[kMaxDispatchBufferTokenSize] = max_dispatch_buffer_token_size;
         w[kIndicesPadStride] = indices_pad_stride;
         w[kQueueAddr] = queue_addr;
-        w[kControlAddr] = control_addr;
+        w[kScratchAddr] = scratch_addr;
         w[kFilledAddr] = filled_addr;
         w[kFreedAddr] = freed_addr;
         w[kFwdSemAddr] = fwd_sem_addr;
@@ -207,11 +207,12 @@ struct ReaderCtArgs {
             extent,
             num_own * ASSIGNMENT_WORDS);
         TT_FATAL(
-            in_chunks.size() == num_forward * ASSIGNMENT_WORDS && out_chunks.size() == num_forward * ASSIGNMENT_WORDS,
+            in_chunks.size() == num_forward * CHUNK_DESCRIPTOR_WORDS &&
+                out_chunks.size() == num_forward * CHUNK_DESCRIPTOR_WORDS,
             "dispatch_fabric2d: chunk descriptor blocks are {}/{} words but the kernel indexes {} each",
             in_chunks.size(),
             out_chunks.size(),
-            num_forward * ASSIGNMENT_WORDS);
+            num_forward * CHUNK_DESCRIPTOR_WORDS);
         w.insert(w.end(), ring_chip_ids.begin(), ring_chip_ids.end());
         w.insert(w.end(), assignment_words.begin(), assignment_words.end());
         w.insert(w.end(), in_chunks.begin(), in_chunks.end());
@@ -230,14 +231,14 @@ struct ReaderCtArgs {
         experts_per_chip(get_compile_time_arg_val(kExpertsPerChip)),
         extent(get_compile_time_arg_val(kExtent)),
         my_row(get_compile_time_arg_val(kMyRow)),
-        nbr_chip_id(get_compile_time_arg_val(kNbrChipId)),
+        downstream_chip_id(get_compile_time_arg_val(kDownstreamChipId)),
         linearized_coord(get_compile_time_arg_val(kLinearizedCoord)),
         num_links(get_compile_time_arg_val(kNumLinks)),
         stream(get_compile_time_arg_val(kStream)),
-        max_dispatch_buf_tokens(get_compile_time_arg_val(kMaxDispatchBufTokens)),
+        max_dispatch_buffer_token_size(get_compile_time_arg_val(kMaxDispatchBufferTokenSize)),
         indices_pad_stride(get_compile_time_arg_val(kIndicesPadStride)),
         queue_addr(get_compile_time_arg_val(kQueueAddr)),
-        control_addr(get_compile_time_arg_val(kControlAddr)),
+        scratch_addr(get_compile_time_arg_val(kScratchAddr)),
         filled_addr(get_compile_time_arg_val(kFilledAddr)),
         freed_addr(get_compile_time_arg_val(kFreedAddr)),
         fwd_sem_addr(get_compile_time_arg_val(kFwdSemAddr)),
@@ -259,7 +260,7 @@ struct ReaderCtArgs {
     // The program factory appends the TensorAccessorArgs after the blocks above, in ReaderRtArg order.
     // Their base is derived from the block bases, so adding a scalar or widening a block keeps it right.
     static constexpr uint32_t accessor_base =
-        get_compile_time_arg_val(kOutChunksBase) + get_compile_time_arg_val(kNumForward) * ASSIGNMENT_WORDS;
+        get_compile_time_arg_val(kOutChunksBase) + get_compile_time_arg_val(kNumForward) * CHUNK_DESCRIPTOR_WORDS;
     static constexpr auto in_args = TensorAccessorArgs<accessor_base>();
     static constexpr auto indices_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
     static constexpr auto offsets_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
