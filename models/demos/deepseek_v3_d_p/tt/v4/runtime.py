@@ -327,7 +327,9 @@ class TtV4PrefillRuntime:
         if isinstance(ids, ttnn.Tensor) and ids is not getattr(self, "_ids_dev", None):
             ttnn.deallocate(ids)
         if c.is_last_rank:
-            return None
+            # the last rank has nothing to forward; with the tail built its output is the final-norm activation the runner
+            # turns into the request's first token (tail_hidden_row, DS4F-0263) -- hand it back, else None
+            return out if getattr(self.model, "build_tail", False) else None
         return out
 
     _chunks_logged = 0

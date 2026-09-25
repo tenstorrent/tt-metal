@@ -444,7 +444,12 @@ class MigrationDriver:
         if self.layers:
             logger.info(f"[migration_driver] migrating layer subset {self.layers} (one migrate per layer)")
         migrated = 0
-        next_uuid = 1
+        # DS4F-0269: the uuid must be unique for the LIFE of the client, not per run(): with one uuid per round the next
+        # round's wait_complete consumed the previous round's late MIGRATION_COMPLETE and returned in 0 ms while the KV was
+        # still streaming (the decode side then read a half-landed cache).
+        if not hasattr(self, "_next_uuid"):
+            self._next_uuid = 1
+        next_uuid = self._next_uuid
         for src_slot, dst_slot, real_len in triples:
             for layer_start, layer_end in layer_ranges:
                 logger.info(
@@ -453,6 +458,7 @@ class MigrationDriver:
                 )
                 uuid = next_uuid
                 next_uuid += 1
+                self._next_uuid = next_uuid
                 t_mig0 = time.perf_counter()
                 token = self.client.migrate(
                     uuid=uuid,
