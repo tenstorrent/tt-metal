@@ -245,3 +245,19 @@ def test_resume_after_a_fix(orch):
     from models.demos.common.bringup.orchestrator import main
 
     assert main(["resume", "--spec", str(o.spec.path)]) == DONE
+
+
+def test_files_committed_by_someone_else_during_a_step_are_not_the_agents(orch, sandbox):
+    (sandbox.repo / "mine.py").write_text("a person's work in progress\n")
+    o = orch([impl_task()], {"C.1.implement.1.md": {"write": {"src/impl.txt": "0.999"}}})
+    real = o.run_agent
+
+    def run_agent_while_someone_commits(task, role, attempt, brief, agent="bringup-engineer"):
+        if role == "implement":
+            sandbox.git("add", "mine.py")
+            sandbox.git("commit", "-q", "-m", "someone else's commit")
+        return real(task, role, attempt, brief, agent)
+
+    o.run_agent = run_agent_while_someone_commits
+    assert o.run() == DONE
+    assert all(not r["problems"] for r in o.led.state()["C.1"]["agent_runs"])
