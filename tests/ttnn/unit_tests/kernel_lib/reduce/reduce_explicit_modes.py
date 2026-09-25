@@ -3,7 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Device tests for the explicit reduce() parameters: algorithm, within-tile, reduce factor, partial mode,
-reload mode, output group, auxiliary offset, batch stride and the auxiliary tile patterns."""
+reload mode, output group, auxiliary offset, batch stride and the auxiliary tile patterns.
+
+The file has no test_ prefix so directory runs (sanity, nightly) skip it; run it by path. It is temporary
+and goes away when the host-planned reduce migration is complete."""
 
 from dataclasses import dataclass
 import math
