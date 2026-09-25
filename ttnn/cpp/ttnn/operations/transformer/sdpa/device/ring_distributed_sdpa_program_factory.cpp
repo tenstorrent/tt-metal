@@ -414,6 +414,7 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
     defines_map["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines_map["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines_map["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    defines_map["SDPA_STREAMING_PHASES"] = "2";  // the Q range is walked once per ring phase
     KernelDescriptor::Defines defines(defines_map.begin(), defines_map.end());
 
     // ---- Circular buffers ----
