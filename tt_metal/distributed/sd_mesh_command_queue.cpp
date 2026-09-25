@@ -6,9 +6,11 @@
 #include <tt_stl/fmt.hpp>
 #include <mutex>
 #include "sd_mesh_command_queue.hpp"
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/threading/thread_pool.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"
+#include "tt_metal/impl/program/slow_dispatch.hpp"
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
 #include <tt-metalium/experimental/core_subset_write/buffer_write.hpp>
@@ -248,8 +250,8 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
         return;
     }
 
-    // First device: full LaunchProgram (compiles, finalizes, allocates CBs, dispatches)
-    tt_metal::detail::LaunchProgram(local_devices[0], program, false);
+    // First device: full launch (compiles, finalizes, allocates CBs, dispatches)
+    tt_metal::slow_dispatch::LaunchProgram(*local_devices[0], program, /*force_slow_dispatch=*/false);
 
     // Remaining devices: dispatch pre-compiled binary only.
     // TODO: This loop can be parallelized with a inner thread loop
@@ -262,7 +264,8 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
     if (blocking) {
         // Can be parallelized: wait across all devices
         for (auto* device : local_devices) {
-            tt_metal::detail::WaitProgramDone(device, program);
+            tt_metal::slow_dispatch::WaitProgramDone(*device, program);
+            tt_metal::detail::ReadDeviceProfilerResults(device);
         }
     } else {
         {
