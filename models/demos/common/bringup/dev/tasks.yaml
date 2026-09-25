@@ -21,3 +21,12 @@ tasks:
     gate:
       cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/
       metrics: {selftest_passed: ">= 39", selftest_failed: "== 0"}
+  - id: F3
+    title: Reference interface + block graph, HF parity, chunked + graph replay, golden generator and reader
+    step: framework
+    deps: [F2]
+    paths: [models/demos/common/bringup/reference, models/demos/common/bringup/selftest/fixture_model.py,
+            models/demos/common/bringup/selftest/test_reference.py]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/
+      metrics: {selftest_passed: ">= 49", selftest_failed: "== 0"}
