@@ -66,6 +66,26 @@ static ttnn::Tensor to_tt(const xt::xarray<float>& x) {
     return ttml::core::from_xtensor(x, &ttml::autograd::ctx().get_device());
 }
 
+static ttnn::Tensor make_sgd_tensor(float value, const tt::tt_metal::Alignment& alignment) {
+    const ttnn::Shape logical_shape{1, 2, 32, 32};
+    const auto spec = tt::tt_metal::TensorSpec(
+        logical_shape,
+        tt::tt_metal::TensorLayout(
+            ttnn::DataType::BFLOAT16, ttnn::PageConfig(ttnn::Layout::TILE), ttnn::DRAM_MEMORY_CONFIG, alignment));
+    return ttnn::Tensor::from_vector<float>(
+        std::vector<float>(logical_shape.volume(), value),
+        spec,
+        &ttml::autograd::ctx().get_device(),
+        std::nullopt,
+        /* pad_value=*/0.0F);
+}
+
+static void expect_all_values(const ttnn::Tensor& tensor, float expected) {
+    for (const float value : ttml::core::to_vector<float>(tensor)) {
+        EXPECT_NEAR(value, expected, 1e-3F);
+    }
+}
+
 static size_t compare_tensors(
     const xt::xarray<float>& expected,
     const xt::xarray<float>& actual,
@@ -585,4 +605,136 @@ TEST_F(SGDValidationTest, RejectsInconsistentMomentumModesOnMissAndHitValidation
         },
         buffer_args,
         "Nesterov requires positive momentum and zero dampening");
+}
+
+class SGDProgramCacheTest : public ::testing::Test {
+public:
+    static void SetUpTestSuite() {
+        ttml::autograd::ctx().open_device();
+    }
+
+    static void TearDownTestSuite() {
+        ttml::autograd::ctx().close_device();
+    }
+
+protected:
+    void TearDown() override {
+        ttml::autograd::ctx().get_device().disable_and_clear_program_cache();
+    }
+};
+
+TEST_F(SGDProgramCacheTest, DistinguishesPaddedPhysicalGeometry) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    device->enable_program_cache();
+
+    const tt::tt_metal::Alignment compact_alignment{32, 32};
+    const tt::tt_metal::Alignment padded_alignment{64, 32};
+    auto run_update = [](const tt::tt_metal::Alignment& alignment) {
+        auto param = make_sgd_tensor(1.0F, alignment);
+        auto grad = make_sgd_tensor(0.25F, alignment);
+        return ttml::metal::sgd(
+            param,
+            grad,
+            /* lr=*/1.0F,
+            /* momentum=*/0.0F,
+            /* dampening=*/0.0F,
+            /* weight_decay=*/0.0F,
+            /* nesterov=*/false,
+            /* momentum_buffer=*/std::nullopt);
+    };
+
+    device->clear_program_cache();
+    expect_all_values(run_update(compact_alignment), 0.75F);
+    device->clear_program_cache();
+    expect_all_values(run_update(padded_alignment), 0.75F);
+
+    auto compact_param = make_sgd_tensor(1.0F, compact_alignment);
+    auto compact_grad = make_sgd_tensor(0.25F, compact_alignment);
+    auto padded_param = make_sgd_tensor(1.0F, padded_alignment);
+    auto padded_grad = make_sgd_tensor(0.25F, padded_alignment);
+    device->clear_program_cache();
+
+    const auto entries_before = device->num_program_cache_entries();
+    const auto compact_result = ttml::metal::sgd(
+        compact_param,
+        compact_grad,
+        /* lr=*/1.0F,
+        /* momentum=*/0.0F,
+        /* dampening=*/0.0F,
+        /* weight_decay=*/0.0F,
+        /* nesterov=*/false,
+        /* momentum_buffer=*/std::nullopt);
+    const auto entries_after_compact = device->num_program_cache_entries();
+    ASSERT_EQ(entries_after_compact, entries_before + 1U);
+    expect_all_values(compact_result, 0.75F);
+
+    const auto padded_result = ttml::metal::sgd(
+        padded_param,
+        padded_grad,
+        /* lr=*/1.0F,
+        /* momentum=*/0.0F,
+        /* dampening=*/0.0F,
+        /* weight_decay=*/0.0F,
+        /* nesterov=*/false,
+        /* momentum_buffer=*/std::nullopt);
+    EXPECT_EQ(device->num_program_cache_entries(), entries_after_compact + 1U)
+        << "different physical tensor geometry must compile a distinct SGD program";
+    expect_all_values(padded_result, 0.75F);
+}
+
+TEST_F(SGDProgramCacheTest, ReusesProgramWithFreshAddressesAndRuntimeAttributes) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    device->enable_program_cache();
+    const tt::tt_metal::Alignment alignment{32, 32};
+
+    auto reference_param = make_sgd_tensor(0.75F, alignment);
+    auto reference_grad = make_sgd_tensor(0.125F, alignment);
+    auto reference_momentum = make_sgd_tensor(0.25F, alignment);
+    device->clear_program_cache();
+    const auto reference_result = ttml::metal::sgd(
+        reference_param,
+        reference_grad,
+        /* lr=*/0.125F,
+        /* momentum=*/0.75F,
+        /* dampening=*/0.25F,
+        /* weight_decay=*/0.5F,
+        /* nesterov=*/false,
+        reference_momentum);
+    const auto reference_param_values = ttml::core::to_vector<float>(reference_result);
+    const auto reference_momentum_values = ttml::core::to_vector<float>(reference_momentum);
+
+    auto seed_param = make_sgd_tensor(1.0F, alignment);
+    auto seed_grad = make_sgd_tensor(0.25F, alignment);
+    auto seed_momentum = make_sgd_tensor(0.5F, alignment);
+    auto warm_param = make_sgd_tensor(0.75F, alignment);
+    auto warm_grad = make_sgd_tensor(0.125F, alignment);
+    auto warm_momentum = make_sgd_tensor(0.25F, alignment);
+    device->clear_program_cache();
+
+    const auto entries_before_seed = device->num_program_cache_entries();
+    ttml::metal::sgd(
+        seed_param,
+        seed_grad,
+        /* lr=*/0.25F,
+        /* momentum=*/0.5F,
+        /* dampening=*/0.0F,
+        /* weight_decay=*/0.0F,
+        /* nesterov=*/false,
+        seed_momentum);
+    const auto entries_after_seed = device->num_program_cache_entries();
+    ASSERT_EQ(entries_after_seed, entries_before_seed + 1U);
+
+    const auto warm_result = ttml::metal::sgd(
+        warm_param,
+        warm_grad,
+        /* lr=*/0.125F,
+        /* momentum=*/0.75F,
+        /* dampening=*/0.25F,
+        /* weight_decay=*/0.5F,
+        /* nesterov=*/false,
+        warm_momentum);
+    EXPECT_EQ(device->num_program_cache_entries(), entries_after_seed)
+        << "runtime-only SGD attributes and buffer addresses should reuse the cached program";
+    EXPECT_EQ(ttml::core::to_vector<float>(warm_result), reference_param_values);
+    EXPECT_EQ(ttml::core::to_vector<float>(warm_momentum), reference_momentum_values);
 }

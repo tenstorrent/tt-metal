@@ -31,8 +31,6 @@ struct SGDDeviceOperation {
     // checkpointer gathers by that label.
     static std::vector<tt::tt_metal::TensorTopology> compute_output_topologies(
         const operation_attributes_t&, const tensor_args_t&);
-
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttml::metal::optimizers::sgd::device
