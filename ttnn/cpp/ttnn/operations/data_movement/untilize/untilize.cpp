@@ -173,7 +173,11 @@ ttnn::Tensor untilize(
     auto dispatch = [=](const ttnn::Tensor& normalized_input) -> ttnn::Tensor {
         const auto output_mem_config = memory_config.value_or(normalized_input.memory_config());
 
-        if (controls_ok && supported_by_codegen(normalized_input, output_mem_config) &&
+        // The codegen untilize path is not supported on Quasar (its kernels build Gen1 DataMovementKernels,
+        // which Quasar rejects) and only the native path has been validated there, so always take native on
+        // Quasar.
+        const bool is_quasar = normalized_input.device()->arch() == tt::ARCH::QUASAR;
+        if (!is_quasar && controls_ok && supported_by_codegen(normalized_input, output_mem_config) &&
             !is_demoted(normalized_input, output_mem_config) &&
             codegen_cb_plan_fits_live_l1(normalized_input, output_mem_config)) {
             return ttnn::prim::untilize_codegen(normalized_input, output_mem_config);

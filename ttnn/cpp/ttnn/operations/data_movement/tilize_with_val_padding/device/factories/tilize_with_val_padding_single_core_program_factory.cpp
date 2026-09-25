@@ -208,11 +208,23 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingSingleCoreFactory::
     // unpack_to_dest_mode vector was Default everywhere except v[c_0] = UnpackToDestFp32 when
     // fp32_llk_acc, i.e. UnpackToDest on the tilize input DFB (Default == UnpackToSrc is expressed by
     // omitting the entry).
-    ComputeGen1Config compute_gen1{.enable_32_bit_dest = fp32_llk_acc};
-    if (fp32_llk_acc) {
-        compute_gen1.unpack_modes = ComputeUnpackModes{{IN, UnpackMode::UnpackToDest}};
-    }
-    ComputeHardwareConfig compute_hw{std::move(compute_gen1)};
+    //
+    // Quasar (Gen2) rejects a ComputeGen1Config on a compute KernelSpec, so emit the Gen2 equivalent
+    // there (same enable_32_bit_dest + the tilize-input UnpackToDest). WH/BH keep the byte-identical Gen1 config.
+    ComputeHardwareConfig compute_hw = [&]() -> ComputeHardwareConfig {
+        if (a.device()->arch() == tt::ARCH::QUASAR) {
+            ComputeGen2Config compute_gen2{.enable_32_bit_dest = fp32_llk_acc};
+            if (fp32_llk_acc) {
+                compute_gen2.unpack_modes = ComputeUnpackModes{{IN, UnpackMode::UnpackToDest}};
+            }
+            return ComputeHardwareConfig{std::move(compute_gen2)};
+        }
+        ComputeGen1Config compute_gen1{.enable_32_bit_dest = fp32_llk_acc};
+        if (fp32_llk_acc) {
+            compute_gen1.unpack_modes = ComputeUnpackModes{{IN, UnpackMode::UnpackToDest}};
+        }
+        return ComputeHardwareConfig{std::move(compute_gen1)};
+    }();
 
     spec.kernels.push_back(KernelSpec{
         .unique_id = COMPUTE,

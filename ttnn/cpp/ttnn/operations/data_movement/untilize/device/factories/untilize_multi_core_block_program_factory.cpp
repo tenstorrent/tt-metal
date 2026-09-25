@@ -276,10 +276,22 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreBlockProgramFactory::c
         // fp32 unpack is marked for exactly the buffer this kernel reads. Marking both sets' DFBs
         // would name `cliffrow_set`'s input even when that set is empty -- an operand with no buffer
         // on any core -- and would do so in the full-set kernels too.
-        ComputeGen1Config compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
-        if (fp32_dest_acc_en) {
-            compute_cfg.unpack_modes.insert({in_dfb_of(set), UnpackMode::UnpackToDest});
-        }
+        // Quasar (Gen2) rejects a ComputeGen1Config on a compute KernelSpec; emit the Gen2 equivalent
+        // there (same enable_32_bit_dest + per-DFB UnpackToDest). WH/BH keep the byte-identical Gen1 config.
+        ComputeHardwareConfig compute_cfg = [&]() -> ComputeHardwareConfig {
+            if (device->arch() == tt::ARCH::QUASAR) {
+                ComputeGen2Config cfg{.enable_32_bit_dest = fp32_dest_acc_en};
+                if (fp32_dest_acc_en) {
+                    cfg.unpack_modes.insert({in_dfb_of(set), UnpackMode::UnpackToDest});
+                }
+                return ComputeHardwareConfig{std::move(cfg)};
+            }
+            ComputeGen1Config cfg{.enable_32_bit_dest = fp32_dest_acc_en};
+            if (fp32_dest_acc_en) {
+                cfg.unpack_modes.insert({in_dfb_of(set), UnpackMode::UnpackToDest});
+            }
+            return ComputeHardwareConfig{std::move(cfg)};
+        }();
 
         const bool is_cliff_row_set = (&set == &cliffrow_set);
         spec.kernels.push_back(KernelSpec{
