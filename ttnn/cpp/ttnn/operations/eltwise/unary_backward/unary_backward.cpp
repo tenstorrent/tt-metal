@@ -1679,13 +1679,23 @@ std::vector<Tensor> prod_bw(
     if (zero_count.layout() == Layout::ROW_MAJOR && zero_count.storage_type() == StorageType::DEVICE) {
         zero_count = ttnn::operations::unary_backward::change_layout_to_tile(zero_count, output_memory_config);
     }
-    Tensor no_zero = ttnn::eqz(zero_count, output_memory_config);
-    Tensor one_zero = ttnn::eq_unary(zero_count, 1.0f, output_memory_config);
-    Tensor per_element = ttnn::add(
-        ttnn::multiply(ttnn::reciprocal(safe_input, output_memory_config), no_zero, std::nullopt, output_memory_config),
-        ttnn::multiply(is_zero, one_zero, std::nullopt, output_memory_config),
-        std::nullopt,
-        output_memory_config);
+    // A non-zero element survives only where the count is 0, a zero only where it is the only one.
+    Tensor survives = ttnn::eq(is_zero, zero_count, std::nullopt, output_memory_config);
+    zero_count.deallocate();
+    is_zero.deallocate();
+    const std::array<ttnn::operations::unary::EltwiseUnaryWithParam, 1> recip{
+        ttnn::operations::unary::EltwiseUnaryWithParam(ttnn::operations::unary::UnaryOpType::RECIP)};
+    Tensor per_element = ttnn::multiply(
+        survives,
+        safe_input,
+        /*output_dtype=*/std::nullopt,
+        output_memory_config,
+        /*output=*/std::nullopt,
+        /*post_activations=*/{},
+        /*lhs_activations=*/{},
+        /*rhs_activations=*/recip);
+    survives.deallocate();
+    safe_input.deallocate();
 
     if (all_dimensions) {
         Tensor temp = ttnn::multiply(
