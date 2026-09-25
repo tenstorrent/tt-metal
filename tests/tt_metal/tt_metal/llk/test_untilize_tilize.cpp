@@ -253,7 +253,8 @@ void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const 
         !test_config.explicit_untilize_geometry) {
         // DST untilize reads the face layout from the output CB metadata (no explicit kernel args).
         output_dfb_spec.tile_format_metadata = Tile::from_face_grid(
-            {test_config.tile_shape_in_faces_r, test_config.tile_shape_in_faces_c},
+            test_config.tile_shape_in_faces_r,
+            test_config.tile_shape_in_faces_c,
             {test_config.face_r_dim, constants::FACE_WIDTH});
     } else if (
         test_config.tilize_type.has_value() && test_config.tilize_type == TilizeType::UNPACK_A &&
@@ -263,7 +264,8 @@ void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const 
         // tile's face layout from the CB metadata, so tag both the input and output buffers with it.
         // Gate on either a non-2x2 face grid or a shorter face row dim so shortened four-face tiles are caught too.
         const auto tile = Tile::from_face_grid(
-            {test_config.tile_shape_in_faces_r, test_config.tile_shape_in_faces_c},
+            test_config.tile_shape_in_faces_r,
+            test_config.tile_shape_in_faces_c,
             {test_config.face_r_dim, constants::FACE_WIDTH});
         input_dfb_spec.tile_format_metadata = tile;
         output_dfb_spec.tile_format_metadata = tile;
@@ -999,7 +1001,8 @@ static void run_quasar_tilize_untilize_test(
         .data_format_metadata = output_data_format,
     };
     if (tiny_tile) {
-        const auto tile = Tile::from_face_grid(tile_shape_in_faces, {face_r_dim, constants::FACE_WIDTH});
+        const auto tile =
+            Tile::from_face_grid(tile_shape_in_faces[0], tile_shape_in_faces[1], {face_r_dim, constants::FACE_WIDTH});
         input_dfb_spec.tile_format_metadata = tile;
         output_dfb_spec.tile_format_metadata = tile;
     }

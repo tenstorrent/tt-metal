@@ -161,11 +161,11 @@ TEST(TileConstructorTranspose, CustomFaceShapeRejectsHeightOtherThan16Or32) {
         ThrowsMessage<std::runtime_error>(HasSubstr("Tile height must equal 16 or 32 in transpose mode")));
 }
 
-TEST(TileFromFaceGrid, DefaultFaceProduces32x32) { EXPECT_EQ(Tile::from_face_grid({2, 2}), Tile()); }
+TEST(TileFromFaceGrid, DefaultFaceProduces32x32) { EXPECT_EQ(Tile::from_face_grid(2, 2), Tile()); }
 
 TEST(TileFromFaceGrid, CustomFaceMatchesEquivalentConstructor) {
     constexpr std::array<uint32_t, 2> face_shape{8, 16};
-    const Tile from_grid = Tile::from_face_grid({2, 2}, face_shape);
+    const Tile from_grid = Tile::from_face_grid(2, 2, face_shape);
     const Tile from_ctor({16, 32}, face_shape);
     EXPECT_EQ(from_grid, from_ctor);
 }
@@ -173,7 +173,7 @@ TEST(TileFromFaceGrid, CustomFaceMatchesEquivalentConstructor) {
 TEST(TileFromFaceGrid, RejectsGridThatExceedsMaxFaces) {
     // 4x2 faces of 8x16 → 32x32 tile, but 4 faces along a dim exceeds the max of 2.
     EXPECT_THAT(
-        [] { (void)Tile::from_face_grid({4, 2}, {8, 16}); },
+        [] { (void)Tile::from_face_grid(4, 2, {8, 16}); },
         ThrowsMessage<std::runtime_error>(HasSubstr("exceeds the maximum supported num_faces")));
 }
 

@@ -720,7 +720,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     // z_dim is 4" (ckernel_trisc_common.h). num_faces=1 gives the (x=16, y=1, z=1) descriptor the LLK
     // documents as the expected srcB scaler layout, which validates with the assert enabled. (srcA keeps its
     // full 32x32 4-face geometry below -- that operand genuinely needs it.)
-    const auto scalar_tile = tt::tt_metal::Tile::from_face_grid({1, 1}, {1, tt::constants::FACE_WIDTH});
+    const auto scalar_tile = tt::tt_metal::Tile::from_face_grid(1, 1, {1, tt::constants::FACE_WIDTH});
     const uint32_t window_size_hw = kernel_h * kernel_w;
     // WORKAROUND (Quasar): the input-CB tile's face_r_dim feeds both the reduce tensor-shape and the
     // TDMA buffer-descriptor y_dim, and Quasar LLK restricts both to powers of 2 <= 16
@@ -749,11 +749,8 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     // full-tile-padded, round_up(in_cb_sz, TILE_HW)) in_cb page as 4 faces; the padding rows
     // [window_size, 32) hold the pool identity (-inf max / 0 avg via force_max_clear + clear_value_cb,
     // AVG scalar = 1/true_window), so reducing the extra rows is a no-op.
-    const std::array<uint32_t, 2> faces_grid_in_input_tile_for_cb = {2u, 2u};
     const auto input_tile =
-        return_indices
-            ? std::nullopt
-            : std::optional{tt::tt_metal::Tile::from_face_grid(faces_grid_in_input_tile_for_cb, raw_face_shape)};
+        return_indices ? std::nullopt : std::optional{tt::tt_metal::Tile::from_face_grid(2, 2, raw_face_shape)};
 
     // Single-row faces: one 1x16 face, or two of them side by side (a 1x32 tile).
     const bool last_tile_is_partial = in_c % tt::constants::TILE_WIDTH != 0;
