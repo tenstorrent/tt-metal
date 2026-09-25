@@ -30,3 +30,21 @@ inline void calculate_hardtanh(uint param0, uint param1) {
 }
 
 }  // namespace ckernel::sfpu
+
+#if !defined(TT_POLY_LLK_DISABLE)
+#include "ckernel_sfpu_hardtanh_bf16.h"
+#endif
+
+namespace ckernel::sfpu {
+
+#if !defined(TT_POLY_LLK_DISABLE)
+template <int ITERATIONS = 8>
+inline void calculate_hardtanh_tt_poly_bf16() {
+    ckernel::sfpu::ttpoly::calculate_clamped_affine<ttpoly_generated::HardtanhBf16Config, ITERATIONS>();
+}
+inline void init_hardtanh_tt_poly_bf16() {
+    ckernel::sfpu::ttpoly::init_clamped_affine<ttpoly_generated::HardtanhBf16Config>();
+}
+#endif
+
+}  // namespace ckernel::sfpu

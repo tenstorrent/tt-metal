@@ -1337,4 +1337,40 @@ ALWI void sigmoid_tt_poly_bf16_tile_init() {
 
 #undef TT_POLY_SIGMOID_BF16_ROUTE_ACTIVE
 
+#if !defined(TT_POLY_LLK_DISABLE) && (defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE))
+#define TT_POLY_ABS_BF16_ROUTE_ACTIVE 1
+#else
+#define TT_POLY_ABS_BF16_ROUTE_ACTIVE 0
+#endif
+
+/** Internal BF16 typed-compiler route; public callers retain the stock entry point. */
+ALWI void abs_tt_poly_bf16_tile(uint32_t idst) {
+#if !TT_POLY_ABS_BF16_ROUTE_ACTIVE
+    abs_tile(idst);
+#else
+    if constexpr (DST_ACCUM_MODE) {
+        abs_tile(idst);
+    } else {
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_abs_tt_poly_bf16, (8 /* ITERATIONS */), idst, VectorMode::RC));
+    }
+#endif
+}
+
+/** Initialize the internal BF16 typed-compiler route. */
+ALWI void abs_tt_poly_bf16_tile_init() {
+#if !TT_POLY_ABS_BF16_ROUTE_ACTIVE
+    abs_tile_init();
+#else
+    if constexpr (DST_ACCUM_MODE) {
+        abs_tile_init();
+    } else {
+        abs_tile_init();
+        MATH(sfpu::init_abs_tt_poly_bf16());
+    }
+#endif
+}
+
+#undef TT_POLY_ABS_BF16_ROUTE_ACTIVE
+
 }  // namespace ckernel
