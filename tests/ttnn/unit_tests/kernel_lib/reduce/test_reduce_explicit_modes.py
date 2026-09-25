@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Device tests for the explicit reduce() parameters: algorithm, within-tile, reduce factor, partial mode,
-reload mode, input chunk, auxiliary offset, batch stride and the auxiliary tile primitive."""
+reload mode, output group, auxiliary offset, batch stride and the auxiliary tile patterns."""
 
 from dataclasses import dataclass
 import math
@@ -56,7 +56,7 @@ class ReduceCase:
     partial: int = 0
     within_tile: str = "Collapse"
     reload: str = "CopySeedPairs"
-    chunk_outputs: int = 0
+    output_group: int = 0
     auxiliary_offset: int = 0
     row_padding: int = 0
     batch_padding: int = 0
@@ -138,9 +138,9 @@ class ReduceCase:
     def col_chunk(self) -> int:
         """Column group in which a streamed REDUCE_COL input arrives."""
         if self.additive:
-            return 1 if self.policy == "WaitAndPopPerTile" else (self.chunk_outputs or DEST_LIMIT)
+            return 1 if self.policy == "WaitAndPopPerTile" else (self.output_group or DEST_LIMIT)
         default = DEST_LIMIT - 1 if self.uses_sfpu else DEST_LIMIT
-        return min(self.chunk_outputs, default) if self.chunk_outputs else default
+        return min(self.output_group, default) if self.output_group else default
 
     @property
     def auxiliary_tiles(self) -> list[tuple[str, int, float]]:
@@ -398,7 +398,7 @@ def _chunk_cases() -> list[ReduceCase]:
                     cols=6,
                     batches=2,
                     policy=policy,
-                    chunk_outputs=chunk,
+                    output_group=chunk,
                 )
             )
         cases.append(
@@ -409,7 +409,7 @@ def _chunk_cases() -> list[ReduceCase]:
                 cols=6,
                 batches=2,
                 algorithm="AccumulateViaAdd",
-                chunk_outputs=chunk,
+                output_group=chunk,
             )
         )
     cases.append(
@@ -421,7 +421,7 @@ def _chunk_cases() -> list[ReduceCase]:
             policy="WaitAndPopPerTile",
             input_dtype="int32",
             output_dtype="int32",
-            chunk_outputs=2,
+            output_group=2,
         )
     )
     cases.append(
@@ -432,7 +432,7 @@ def _chunk_cases() -> list[ReduceCase]:
             cols=6,
             policy="WaitAndPopPerTile",
             calls=2,
-            chunk_outputs=2,
+            output_group=2,
         )
     )
     return cases
@@ -646,7 +646,7 @@ def _defines(case: ReduceCase) -> list[tuple[str, str]]:
         ("REDUCE_FACTOR", str(case.reduce_factor)),
         ("REDUCE_PARTIAL_MODE", f"compute_kernel_lib::ReducePartialMode::{case.partial_mode}"),
         ("REDUCE_RELOAD_MODE", f"compute_kernel_lib::AccumulateReloadMode::{case.reload}"),
-        ("REDUCE_CHUNK_OUTPUTS", str(case.chunk_outputs)),
+        ("REDUCE_OUTPUT_GROUP", str(case.output_group)),
         ("REDUCE_AUXILIARY_OFFSET", str(case.auxiliary_offset)),
         ("REDUCE_AUXILIARY_CB", auxiliary_cb),
     ]

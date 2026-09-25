@@ -229,7 +229,7 @@ ALWI void reduce_accumulate_via_add(
     ReducePartialMode partial_mode,
     AccumulateT accumulate,
     PostReduceOp post_reduce_op,
-    ReduceInputChunk input_chunk,
+    uint32_t output_group,
     uint32_t auxiliary_tile_offset) {
     const uint32_t Ht = shape.rows, Wt = shape.cols, NC = shape.batches;
     // row_pitch = tile distance between consecutive rows of the resident block (>= Wt). row_stride > Wt lets
@@ -321,7 +321,7 @@ ALWI void reduce_accumulate_via_add(
     if constexpr (input_policy == ReduceInputPolicy::WaitAndPopPerTile) {
         UNPACK(ASSERT(get_dfb_num_pages(input_dfb_id) >= 2 && (get_dfb_num_pages(input_dfb_id) & 1u) == 0));
         if constexpr (is_col) {
-            ASSERT(input_chunk.output_tiles <= 1);
+            ASSERT(output_group <= 1);
         }
     }
 #ifndef ARCH_QUASAR  // is_valid_dfb_tile_page_size is WH/BH only
@@ -436,12 +436,12 @@ ALWI void reduce_accumulate_via_add(
     if constexpr (grouped_col) {
         // A bulk contains all rows of an output-column group.
         const uint32_t default_output_group = Wt < DEST_AUTO_LIMIT ? Wt : DEST_AUTO_LIMIT;
-        const uint32_t output_group = input_chunk.output_tiles > 0 ? input_chunk.output_tiles : default_output_group;
-        ASSERT(output_group > 0 && output_group <= DEST_AUTO_LIMIT);
+        const uint32_t group = output_group > 0 ? output_group : default_output_group;
+        ASSERT(group > 0 && group <= DEST_AUTO_LIMIT);
 
         for (uint32_t nc = 0; nc < NC; ++nc) {
-            for (uint32_t wt = 0; wt < Wt; wt += output_group) {
-                const uint32_t current_outputs = output_group < Wt - wt ? output_group : Wt - wt;
+            for (uint32_t wt = 0; wt < Wt; wt += group) {
+                const uint32_t current_outputs = group < Wt - wt ? group : Wt - wt;
                 tile_regs_acquire();
 
                 if constexpr (has_accum) {
@@ -896,7 +896,7 @@ ALWI void reduce(
     AccumulateT accumulate,
     PostReduceOp post_reduce_op,
     ReducePartialMode partial_mode,
-    ReduceInputChunk input_chunk,
+    uint32_t output_group,
     uint32_t auxiliary_tile_offset) {
     // Int32 and Accurate fp32 route to the SFPU via is_sfpu_reduce_path<>(); others use FPU/GMPOOL.
     constexpr DataFormat reduce_format = static_cast<DataFormat>(unpack_src_format[input_dfb_id]);
@@ -953,9 +953,6 @@ ALWI void reduce(
     // anything it cannot express is rejected here (compile-time where possible) and must use ReduceTile.
     // =============================================================================
     constexpr bool is_sfpu = is_sfpu_reduce_path<reduce_type, reduce_dim, reduce_format, fp32_mode>();
-    // Only output-column grouping is implemented. Do not silently accept a smaller reduction-axis
-    // chunk and then wait for the entire axis, which can deadlock a bounded input stream.
-    ASSERT(input_chunk.reduce_axis_tiles == 0);
     static_assert(
         has_auxiliary || algorithm == ReduceAlgorithm::AccumulateViaAdd || is_sfpu,
         "Native reduction requires an auxiliary scaler CB");
@@ -1022,7 +1019,7 @@ ALWI void reduce(
             partial_mode,
             accumulate,
             post_reduce_op,
-            input_chunk,
+            output_group,
             auxiliary_tile_offset);
         return;
     }
@@ -1325,7 +1322,7 @@ ALWI void reduce(
         // Auto-detect chunk size from DEST register capacity
         // Both reader (dataflow) and compute kernels compute this identically via DEST_AUTO_LIMIT
         constexpr uint32_t default_chunk_size = is_sfpu ? (DEST_AUTO_LIMIT - 1) : DEST_AUTO_LIMIT;
-        const uint32_t requested_chunk = input_chunk.output_tiles > 0 ? input_chunk.output_tiles : default_chunk_size;
+        const uint32_t requested_chunk = output_group > 0 ? output_group : default_chunk_size;
         const uint32_t chunk_size = requested_chunk < default_chunk_size ? requested_chunk : default_chunk_size;
         const uint32_t stride = (input_memory_layout.row_stride > 0) ? input_memory_layout.row_stride : Wt;
         const uint32_t tiles_per_bulk = Ht * stride;
