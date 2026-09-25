@@ -379,5 +379,60 @@
       "bs32": 0.8159
     },
     "note": "off = QWEN_BATCHED_L1_INTERMEDIATES=0; the post-attention sum is in L1 at bs8/16 only (does not fit at bs32)"
+  },
+  "batched_sdpa_reuse_kv_20260925": {
+    "sdpa_us_per_call_standalone": {
+      "bs8": {
+        "model": 247.5,
+        "reuse_q128_12x8": 233.9
+      },
+      "bs16": {
+        "model": 515.0,
+        "reuse_q128_12x10": 355.0
+      },
+      "bs32": {
+        "model": 911.6,
+        "reuse_q128_12x10": 620.5
+      }
+    },
+    "bs16_solo_chip_sustained_run_3_alternating_rounds": {
+      "host": "8x p150b host, chip 0, host otherwise idle",
+      "branch_baseline": {
+        "cold": 202.9,
+        "sustained": 231.2,
+        "aiclk_mhz": 1161
+      },
+      "l1_intermediates_plus_reuse": {
+        "cold": 189.2,
+        "sustained": 221.8,
+        "aiclk_mhz": 1146
+      },
+      "baseline_env": "QWEN_BATCHED_L1_INTERMEDIATES=0 QWEN_SDPA_REUSE_KV=0"
+    },
+    "reuse_only_concurrent_chips_0_2": {
+      "bs8": {
+        "cold_off": 102.8,
+        "cold_on": 102.2,
+        "sustained_off": 117.7,
+        "sustained_on": 115.9
+      },
+      "bs16": {
+        "cold_off": 194.8,
+        "cold_on": 189.2,
+        "sustained_off": 233.0,
+        "sustained_on": 230.7
+      },
+      "bs32": {
+        "cold_off": 381.8,
+        "cold_on": 372.0,
+        "sustained_off": 448.1,
+        "sustained_on": 442.9
+      }
+    },
+    "stsb_batched": {
+      "bs8": 0.8114,
+      "bs16": 0.8144,
+      "bs32": 0.8146
+    }
   }
 }

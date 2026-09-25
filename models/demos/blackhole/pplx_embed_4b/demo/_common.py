@@ -480,6 +480,13 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
             os.environ.setdefault(k, "1")
         if batch_size in (8, 16):
             os.environ.setdefault("QWEN_FUSED_ADD_NORM_SUM1_L1", "1")
+    # Batched ISL 512 SDPA with reuse_kv: each core reads a KV head's K/V once instead of once per Q chunk (at q512 the
+    # 4 Q heads sharing a KV head each re-read it: 142 MB per call at bs16, DRAM-bound and contention-limited), and the
+    # reuse calls take q128 (2048 units at bs16 balance 120 cores). Standalone per call, model config -> reuse q128:
+    # bs8 247.5 -> 233.9 us (12x8), bs16 515 -> 355 (12x10), bs32 911.6 -> 620.5 (12x10). Opt out: QWEN_SDPA_REUSE_KV=0.
+    if batch_size in (8, 16, 32) and seq_len == 512 and os.getenv("QWEN_SDPA_REUSE_KV", "1") == "1":
+        os.environ.setdefault("QWEN_SDPA_REUSE_KV", "1")
+        os.environ.setdefault("QWEN_SDPA_REUSE_Q_CHUNK", "128")
     # bs1 SDPA: q_chunk 256 doubles the work units (32 -> 64) so the 8x8 grid is full; k stays 256.
     # Standalone at the model's config (LoFi, fp32 acc off = streaming kernel, exp approx, bfp8
     # Q/K/V in L1): q512/k256 79.1 us -> q256/k256 55.0 us (-30%); q256/k512 71.5, q128/k128 72.2,
