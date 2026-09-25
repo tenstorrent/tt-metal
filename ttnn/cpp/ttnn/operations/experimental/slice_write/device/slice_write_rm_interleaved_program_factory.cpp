@@ -4,13 +4,16 @@
 
 #include "slice_write_rm_interleaved_program_factory.hpp"
 
+#include <algorithm>
 #include <cstdint>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "slice_write_device_operation_types.hpp"
+#include "ttnn/operations/experimental/padded_slice/device/slice_cb_descriptor.hpp"
 #include "tt-metalium/math.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 
@@ -19,6 +22,22 @@ using namespace tt::tt_metal;
 namespace ttnn::experimental::prim {
 
 namespace {
+
+constexpr uint32_t kSliceWriteInterleavedAddressArgIdx = 0;
+
+void emplace_slice_write_interleaved_args(
+    KernelDescriptor& kernel, const CoreCoord& core, const std::vector<uint32_t>& args, Buffer* buffer) {
+    KernelDescriptor::RTArgList runtime_args;
+    runtime_args.reserve(args.size());
+    for (uint32_t arg_idx = 0; arg_idx < args.size(); ++arg_idx) {
+        if (arg_idx == kSliceWriteInterleavedAddressArgIdx) {
+            runtime_args.push_back(buffer);
+        } else {
+            runtime_args.push_back(args[arg_idx]);
+        }
+    }
+    kernel.emplace_runtime_args(core, runtime_args);
+}
 
 SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
     const Tensor& input_tensor,
@@ -32,8 +51,6 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
     uint32_t num_sticks_per_core_group_1,
     uint32_t num_sticks_per_core_group_2,
     uint32_t max_read_size) {
-    auto* input_buffer = input_tensor.buffer();
-    auto* output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();
 
@@ -104,15 +121,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
     uint32_t input_row_size_bytes_offset = tt::round_up(input_row_size_bytes, src_buffer_alignment);
 
     std::vector<uint32_t> common_writer_kernel_args = {
-        output_buffer->address(),
-        output_row_size_bytes,
-        input_row_size_bytes,
-        input_row_size_bytes_offset,
-        num_dims,
-        0,
-        0,
-        0,
-        0};
+        0u, output_row_size_bytes, input_row_size_bytes, input_row_size_bytes_offset, num_dims, 0, 0, 0, 0};
 
     common_writer_kernel_args.insert(
         common_writer_kernel_args.end(), num_input_sticks_per_dim.begin(), num_input_sticks_per_dim.end());
@@ -166,7 +175,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
         writer_kernel_args.insert(writer_kernel_args.end(), rev_stride.begin(), rev_stride.end());
 
         std::vector<uint32_t> reader_kernel_args = {
-            input_buffer->address(),
+            0u,
             input_row_size_bytes,
             input_row_size_bytes_offset,
             num_sticks_per_core,
@@ -182,14 +191,14 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
 }
 }  // namespace
 
-SliceWriteRMInterleavedProgramFactory::cached_program_t SliceWriteRMInterleavedProgramFactory::create(
+ProgramDescriptor SliceWriteRMInterleavedProgramFactory::create_descriptor(
     const SliceWriteParams& operation_attributes, const SliceWriteInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input = tensor_args.input;
     const auto& output = tensor_return_value;
     const auto& output_tensor_start = operation_attributes.slice_start;
     const auto& stride = operation_attributes.step;
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    ProgramDescriptor desc;
     tt::tt_metal::IDevice* device = input.device();
     const auto& input_padded_shape = input.padded_shape();
 
@@ -199,28 +208,27 @@ SliceWriteRMInterleavedProgramFactory::cached_program_t SliceWriteRMInterleavedP
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
-    CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
+    const CoreRangeSet total_cores(CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1}));
     uint32_t num_cores_total = num_cores_x * num_cores_y;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_sticks);
 
     tt::tt_metal::Buffer* src0_buffer = input.buffer();
+    TT_FATAL(src0_buffer != nullptr, "Input buffer should be allocated on device");
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
 
     uint32_t input_row_size_bytes = input_padded_shape[-1] * input.element_size();
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t max_read_size = 4096;
 
-    auto src_buffer_alignment = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
-                                    ? hal::get_dram_alignment()
-                                    : hal::get_l1_alignment();
-    auto dst_buffer_alignment = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
-                                    ? hal::get_dram_alignment()
-                                    : hal::get_l1_alignment();
+    auto src_buffer_alignment = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? hal::get_dram_alignment()
+                                                                                             : hal::get_l1_alignment();
+    auto dst_buffer_alignment = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? hal::get_dram_alignment()
+                                                                                            : hal::get_l1_alignment();
     auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
 
     // if begins is not aligned then we need to pad the cb size, so that we can read from the nearest aligned address
@@ -228,9 +236,9 @@ SliceWriteRMInterleavedProgramFactory::cached_program_t SliceWriteRMInterleavedP
     uint32_t page_alignment_offset = begins_bytes % src_buffer_alignment;
 
     // reader defines
-    std::map<std::string, std::string> reader_defines;
+    KernelDescriptor::Defines reader_defines;
     if (page_alignment_offset != 0) {
-        reader_defines["LAST_DIM"] = "1";
+        reader_defines.emplace_back("LAST_DIM", "1");
     }
 
     const uint32_t src0_cb_index = tt::CBIndex::c_0;  // cb for reading in input
@@ -247,22 +255,17 @@ SliceWriteRMInterleavedProgramFactory::cached_program_t SliceWriteRMInterleavedP
             tt::tt_metal::merge_num_sticks_to_read(num_input_pages_pad32, cb_page_size, max_read_size);
         num_read_per_barrier = num_input_pages_pad32 / num_sticks_per_core_read;
     }
-    tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(num_read_per_barrier * 2 * cb_page_size, {{src0_cb_index, cb_data_format}})
-            .set_page_size(src0_cb_index, cb_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
+    desc.cbs.push_back(
+        make_slice_cb_descriptor(src0_cb_index, total_cores, cb_page_size, num_read_per_barrier * 2, cb_data_format));
 
-    std::map<std::string, std::string> writer_defines;
+    KernelDescriptor::Defines writer_defines;
     if (stride[-1] != 1) {
-        writer_defines["LAST_DIM_STRIDED"] = "1";
+        writer_defines.emplace_back("LAST_DIM_STRIDED", "1");
         uint32_t output_row_size_bytes = input_padded_shape[-1] * input.element_size();
         cb_page_size = tt::round_up(output_row_size_bytes, alignment);
-        tt::tt_metal::CircularBufferConfig cb_dst0_config =
-            tt::tt_metal::CircularBufferConfig(
-                num_read_per_barrier * 2 * cb_page_size,
-                {{dst0_cb_index, cb_data_format}})  // input/output data_formats should be the same
-                .set_page_size(dst0_cb_index, cb_page_size);
-        tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_dst0_config);
+        // input/output data_formats should be the same
+        desc.cbs.push_back(make_slice_cb_descriptor(
+            dst0_cb_index, total_cores, cb_page_size, num_read_per_barrier * 2, cb_data_format));
     }
 
     std::vector<uint32_t> reader_compile_time_args_vec = {(std::uint32_t)src0_cb_index, page_alignment_offset};
@@ -275,19 +278,25 @@ SliceWriteRMInterleavedProgramFactory::cached_program_t SliceWriteRMInterleavedP
     tt::tt_metal::TensorAccessorArgs(src0_buffer).append_to(reader_compile_time_args_vec);
     tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args_vec);
 
-    tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
+    KernelDescriptor reader_kernel;
+    reader_kernel.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/slice_write/device/kernels/dataflow/"
-        "slice_write_reader_interleaved.cpp",
-        total_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args_vec, reader_defines));
+        "slice_write_reader_interleaved.cpp";
+    reader_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_kernel.core_ranges = total_cores;
+    reader_kernel.compile_time_args = std::move(reader_compile_time_args_vec);
+    reader_kernel.defines = std::move(reader_defines);
+    reader_kernel.config = ReaderConfigDescriptor{};
 
-    tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
+    KernelDescriptor writer_kernel;
+    writer_kernel.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/slice_write/device/kernels/dataflow/"
-        "slice_write_writer_interleaved_strided.cpp",
-        total_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args_vec, writer_defines));
+        "slice_write_writer_interleaved_strided.cpp";
+    writer_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_kernel.core_ranges = total_cores;
+    writer_kernel.compile_time_args = std::move(writer_compile_time_args_vec);
+    writer_kernel.defines = std::move(writer_defines);
+    writer_kernel.config = WriterConfigDescriptor{};
 
     auto all_runtime_args = get_slice_write_runtime_args_rm(
         input,
@@ -304,62 +313,13 @@ SliceWriteRMInterleavedProgramFactory::cached_program_t SliceWriteRMInterleavedP
 
     for (uint32_t i = 0; i < num_cores_total; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, all_runtime_args[i].first);
-        tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, all_runtime_args[i].second);
+        emplace_slice_write_interleaved_args(reader_kernel, core, all_runtime_args[i].first, src0_buffer);
+        emplace_slice_write_interleaved_args(writer_kernel, core, all_runtime_args[i].second, dst_buffer);
     }
 
-    return cached_program_t(
-        std::move(program),
-        shared_variables_t{
-            .unary_reader_kernel_id = unary_reader_kernel_id,
-            .unary_writer_kernel_id = unary_writer_kernel_id,
-            .compute_with_storage_grid_size = compute_with_storage_grid_size,
-            .max_read_size = max_read_size});
-}
-
-void SliceWriteRMInterleavedProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const SliceWriteParams& operation_attributes,
-    const SliceWriteInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    const auto& src_tensor = tensor_args.input;
-    const auto& dst_tensor = tensor_return_value;
-    uint32_t num_cores_x = cached_program.shared_variables.compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = cached_program.shared_variables.compute_with_storage_grid_size.y;
-    uint32_t num_cores_total = num_cores_x * num_cores_y;
-    uint32_t num_unpadded_sticks = src_tensor.physical_volume() / src_tensor.padded_shape()[-1];
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(
-            cached_program.shared_variables.compute_with_storage_grid_size, num_unpadded_sticks);
-
-    const auto& tensor_start = operation_attributes.slice_start;
-    const auto& stride = operation_attributes.step;
-    auto all_runtime_args = get_slice_write_runtime_args_rm(
-        src_tensor,
-        dst_tensor,
-        tensor_start,
-        stride,
-        num_cores_total,
-        num_cores_y,
-        core_group_1,
-        core_group_2,
-        num_sticks_per_core_group_1,
-        num_sticks_per_core_group_2,
-        cached_program.shared_variables.max_read_size);
-
-    for (uint32_t i = 0; i < num_cores_total; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        SetRuntimeArgs(
-            cached_program.program,
-            cached_program.shared_variables.unary_reader_kernel_id,
-            core,
-            all_runtime_args[i].first);
-        SetRuntimeArgs(
-            cached_program.program,
-            cached_program.shared_variables.unary_writer_kernel_id,
-            core,
-            all_runtime_args[i].second);
-    }
+    desc.kernels.push_back(std::move(reader_kernel));
+    desc.kernels.push_back(std::move(writer_kernel));
+    return desc;
 }
 
 }  // namespace ttnn::experimental::prim

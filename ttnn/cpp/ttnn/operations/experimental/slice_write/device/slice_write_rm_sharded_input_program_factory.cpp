@@ -6,14 +6,15 @@
 
 #include <cstdint>
 #include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "slice_write_device_operation_types.hpp"
+#include "ttnn/operations/experimental/padded_slice/device/slice_cb_descriptor.hpp"
 #include "tt-metalium/math.hpp"
-#include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 
 using namespace tt::tt_metal;
@@ -21,6 +22,37 @@ using namespace tt::tt_metal;
 namespace ttnn::experimental::prim {
 
 namespace {
+
+constexpr uint32_t kSliceWriteRmShardedWriterKernelIdx = 1;
+constexpr uint32_t kSliceWriteRmShardedWriterAddressArgIdx = 0;
+constexpr uint8_t kSliceWriteRmShardedInputCbIndex = static_cast<uint8_t>(tt::CBIndex::c_0);
+
+uint32_t slice_write_rm_sharded_writer_address(
+    const Tensor& input_tensor,
+    const Tensor& output_tensor,
+    const ttnn::Shape& output_tensor_start,
+    const CoreCoord& core) {
+    auto* output_buffer = output_tensor.buffer();
+    TT_FATAL(output_buffer != nullptr, "Output buffer should be allocated on device!");
+    const auto shard_spec = input_tensor.shard_spec().value();
+    const bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
+    const bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
+    const uint32_t input_row_size_bytes = shard_spec.shape[1] * input_tensor.element_size();
+    uint32_t core_w_index = 0;
+    if (is_block_sharded) {
+        core_w_index = rm_orientation ? core.x : core.y;
+    }
+    const uint32_t width_offset = core_w_index * input_row_size_bytes;
+    return output_buffer->address() + (output_tensor_start[-1] * output_tensor.element_size()) + width_offset;
+}
+
+void update_slice_write_rm_sharded_input_cb(Program& program, Buffer& input_buffer) {
+    for (const auto& cb : program.circular_buffers()) {
+        if (cb->buffer_indices().contains(kSliceWriteRmShardedInputCbIndex)) {
+            UpdateDynamicCircularBufferAddress(program, cb->id(), input_buffer);
+        }
+    }
+}
 
 SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
     const Tensor& input_tensor,
@@ -110,15 +142,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
 
     log_debug(tt::LogOp, "Output Buffer address: {}", output_buffer->address());
     std::vector<uint32_t> common_writer_kernel_args = {
-        output_buffer->address() + (output_tensor_start[-1] * output_tensor.element_size()),
-        output_row_size_bytes,
-        input_row_size_bytes,
-        input_row_size_bytes_offset,
-        num_dims,
-        0,
-        0,
-        0,
-        0};
+        0u, output_row_size_bytes, input_row_size_bytes, input_row_size_bytes_offset, num_dims, 0, 0, 0, 0};
 
     common_writer_kernel_args.insert(
         common_writer_kernel_args.end(), num_input_sticks_per_dim.begin(), num_input_sticks_per_dim.end());
@@ -171,7 +195,8 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
 
         uint32_t this_input_row_size_bytes = std::min(input_row_size_bytes, output_row_size_bytes - width_offset);
         WriterKernelArgs writer_kernel_args = common_writer_kernel_args;
-        writer_kernel_args[0] += width_offset;
+        writer_kernel_args[0] =
+            slice_write_rm_sharded_writer_address(input_tensor, output_tensor, output_tensor_start, core);
         writer_kernel_args[2] = this_input_row_size_bytes;
 
         uint32_t num_sticks_this_core =
@@ -203,14 +228,14 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
 }
 }  // namespace
 
-SliceWriteRMShardedInputProgramFactory::cached_program_t SliceWriteRMShardedInputProgramFactory::create(
+ProgramDescriptor SliceWriteRMShardedInputProgramFactory::create_descriptor(
     const SliceWriteParams& operation_attributes, const SliceWriteInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input = tensor_args.input;
     const auto& output = tensor_return_value;
     const auto& output_tensor_start = operation_attributes.slice_start;
     const auto& output_tensor_end = operation_attributes.slice_end;
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    ProgramDescriptor desc;
 
     auto input_shape = input.logical_shape();
     auto output_shape = output.logical_shape();
@@ -231,7 +256,9 @@ SliceWriteRMShardedInputProgramFactory::cached_program_t SliceWriteRMShardedInpu
 
     uint32_t input_row_size_bytes = shard_spec.shape[1] * input.element_size();
 
-    auto src_buffer_alignment = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto* input_buffer = input.buffer();
+    TT_FATAL(input_buffer != nullptr, "Input buffer should be allocated on device");
+    auto src_buffer_alignment = input_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? hal::get_dram_alignment()
                                     : hal::get_l1_alignment();
     uint32_t input_row_size_bytes_offset = tt::round_up(input_row_size_bytes, src_buffer_alignment);
@@ -239,9 +266,9 @@ SliceWriteRMShardedInputProgramFactory::cached_program_t SliceWriteRMShardedInpu
     uint32_t max_read_size = 4096;
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    const uint32_t src0_cb_index = tt::CBIndex::c_0;
+    const uint32_t src0_cb_index = kSliceWriteRmShardedInputCbIndex;
 
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
     std::vector<uint32_t> num_input_sticks_per_dim(num_dims);
@@ -269,30 +296,34 @@ SliceWriteRMShardedInputProgramFactory::cached_program_t SliceWriteRMShardedInpu
         "Input & output should have the same data format, {} , {}",
         input_cb_data_format,
         output_cb_data_format);
-    tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_input_sticks_per_core * input_row_size_bytes_offset, {{src0_cb_index, input_cb_data_format}})
-            .set_page_size(src0_cb_index, input_row_size_bytes_offset)
-            .set_globally_allocated_address(*input.buffer());
-
-    auto input_cb_handle = tt::tt_metal::CreateCircularBuffer(program, input_cores, cb_src0_config);
+    desc.cbs.push_back(make_slice_cb_descriptor(
+        src0_cb_index,
+        input_cores,
+        input_row_size_bytes_offset,
+        num_input_sticks_per_core,
+        input_cb_data_format,
+        input_buffer));
 
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_cb_index};
     std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index, 0};
     tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args_vec);
 
-    tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
-        input_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+    KernelDescriptor reader_kernel;
+    reader_kernel.kernel_source =
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp";
+    reader_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_kernel.core_ranges = input_cores;
+    reader_kernel.compile_time_args = std::move(reader_compile_time_args);
+    reader_kernel.config = ReaderConfigDescriptor{};
 
-    tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
+    KernelDescriptor writer_kernel;
+    writer_kernel.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/slice_write/device/kernels/dataflow/"
-        "slice_write_writer_interleaved.cpp",
-        input_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args_vec));
+        "slice_write_writer_interleaved.cpp";
+    writer_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_kernel.core_ranges = input_cores;
+    writer_kernel.compile_time_args = std::move(writer_compile_time_args_vec);
+    writer_kernel.config = WriterConfigDescriptor{};
 
     const auto iter_cores = corerange_to_cores(input_cores, std::nullopt, rm_orientation);
 
@@ -301,55 +332,45 @@ SliceWriteRMShardedInputProgramFactory::cached_program_t SliceWriteRMShardedInpu
 
     uint32_t i = 0;
     for (const auto& core : iter_cores) {
-        tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, all_runtime_args[i].first);
-        tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, all_runtime_args[i].second);
+        reader_kernel.runtime_args.emplace_back(core, all_runtime_args[i].first);
+        writer_kernel.runtime_args.emplace_back(core, all_runtime_args[i].second);
         i++;
     }
 
-    return cached_program_t(
-        std::move(program),
-        shared_variables_t{
-            .iter_cores = iter_cores,
-            .unary_reader_kernel_id = unary_reader_kernel_id,
-            .unary_writer_kernel_id = unary_writer_kernel_id,
-            .output_tensor_start = output_tensor_start,
-            .output_tensor_end = output_tensor_end,
-            .max_read_size = max_read_size,
-            .input_cb_handle = input_cb_handle});
+    desc.kernels.push_back(std::move(reader_kernel));
+    // kSliceWriteRmShardedWriterKernelIdx is the GetRuntimeArgs index in override_runtime_arguments.
+    // Capture it from the push so a reorder fails here instead of patching the reader.
+    const uint32_t writer_kernel_idx = static_cast<uint32_t>(desc.kernels.size());
+    desc.kernels.push_back(std::move(writer_kernel));
+    TT_FATAL(
+        writer_kernel_idx == kSliceWriteRmShardedWriterKernelIdx,
+        "Slice-write RM sharded writer must be kernel index {}, got {}",
+        kSliceWriteRmShardedWriterKernelIdx,
+        writer_kernel_idx);
+    return desc;
 }
 
 void SliceWriteRMShardedInputProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const SliceWriteParams& /*operation_attributes*/,
+    Program& program,
+    const SliceWriteParams& operation_attributes,
     const SliceWriteInputs& tensor_args,
-    Tensor& tensor_return_value) {
+    Tensor& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*coord*/) {
     const auto& src_tensor = tensor_args.input;
     const auto& dst_tensor = tensor_return_value;
+    auto* src_buffer = src_tensor.buffer();
+    TT_FATAL(src_buffer != nullptr, "Input buffer should be allocated on device");
+    TT_FATAL(src_tensor.is_sharded(), "Input tensor should be sharded");
+    update_slice_write_rm_sharded_input_cb(program, *src_buffer);
 
-    UpdateDynamicCircularBufferAddress(
-        cached_program.program, cached_program.shared_variables.input_cb_handle, *src_tensor.buffer());
+    const auto shard_spec = src_tensor.shard_spec().value();
+    const bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
+    const auto iter_cores = corerange_to_cores(shard_spec.grid, std::nullopt, rm_orientation);
 
-    auto all_runtime_args = get_slice_write_runtime_args_rm_sharded_input(
-        src_tensor,
-        dst_tensor,
-        cached_program.shared_variables.output_tensor_start,
-        cached_program.shared_variables.output_tensor_end,
-        cached_program.shared_variables.iter_cores,
-        cached_program.shared_variables.max_read_size);
-
-    uint32_t i = 0;
-    for (const auto& core : cached_program.shared_variables.iter_cores) {
-        tt::tt_metal::SetRuntimeArgs(
-            cached_program.program,
-            cached_program.shared_variables.unary_reader_kernel_id,
-            core,
-            all_runtime_args[i].first);
-        tt::tt_metal::SetRuntimeArgs(
-            cached_program.program,
-            cached_program.shared_variables.unary_writer_kernel_id,
-            core,
-            all_runtime_args[i].second);
-        i++;
+    for (const auto& core : iter_cores) {
+        auto& writer_args = GetRuntimeArgs(program, kSliceWriteRmShardedWriterKernelIdx, core);
+        writer_args[kSliceWriteRmShardedWriterAddressArgIdx] =
+            slice_write_rm_sharded_writer_address(src_tensor, dst_tensor, operation_attributes.slice_start, core);
     }
 }
 
