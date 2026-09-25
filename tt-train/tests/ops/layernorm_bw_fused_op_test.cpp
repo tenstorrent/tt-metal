@@ -398,3 +398,71 @@ TEST_F(LayerNormBackwardOpTest, ProgramCacheSeparatesPaddingAndRebindsAllAddress
     ASSERT_NE(replay_dbeta.buffer()->address(), padded_dbeta.buffer()->address());
     expect_cache_test_backward_matches(replay_result, replay_data);
 }
+
+TEST_F(LayerNormBackwardOpTest, RejectsMalformedContractsWithColdAndWarmCache) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    device->enable_program_cache();
+    device->clear_program_cache();
+
+    const ttnn::Shape input_shape({1U, 1U, kCacheTestRows, kCacheTestWidth});
+    const ttnn::Shape parameter_shape({1U, 1U, 1U, kCacheTestWidth});
+    const ttnn::Shape stats_shape({1U, 1U, kCacheTestRows, 1U});
+    const tt::tt_metal::Alignment overpadded_alignment({1U, 1U, 64U, 32U});
+    const auto data = make_backward_cache_test_data(0.25F);
+
+    auto input = make_cache_test_tensor(data.input, input_shape, device, overpadded_alignment);
+    auto overwide_input =
+        make_cache_test_tensor(data.input, input_shape, device, tt::tt_metal::Alignment({1U, 1U, 32U, 96U}));
+    auto gamma = make_cache_test_tensor(data.gamma, parameter_shape, device);
+    auto mean = make_cache_test_tensor(data.mean, stats_shape, device, overpadded_alignment);
+    auto rstd = make_cache_test_tensor(data.rstd, stats_shape, device, overpadded_alignment);
+    auto upstream_grad = make_cache_test_tensor(data.upstream_grad, input_shape, device, overpadded_alignment);
+    auto rank3_gamma = make_cache_test_tensor(data.gamma, ttnn::Shape({1U, 1U, kCacheTestWidth}), device);
+    auto oversized_mean = make_cache_test_tensor(
+        std::vector<float>(2U * stats_shape.volume(), 0.0F),
+        ttnn::Shape({1U, 1U, 2U * kCacheTestRows, 1U}),
+        device,
+        overpadded_alignment);
+    auto oversized_upstream_grad = make_cache_test_tensor(
+        std::vector<float>(2U * input_shape.volume(), 0.0F),
+        ttnn::Shape({1U, 1U, 2U * kCacheTestRows, kCacheTestWidth}),
+        device,
+        overpadded_alignment);
+    auto oversized_dx = make_cache_test_tensor(
+        std::vector<float>(2U * input_shape.volume(), -7.0F),
+        ttnn::Shape({1U, 1U, 2U * kCacheTestRows, kCacheTestWidth}),
+        device,
+        overpadded_alignment);
+
+    const auto narrow_tile_layout = tt::tt_metal::TensorLayout(
+        ttnn::DataType::BFLOAT16,
+        ttnn::PageConfig(ttnn::Layout::TILE, tt::tt_metal::Tile({16U, 16U})),
+        ttnn::DRAM_MEMORY_CONFIG);
+    auto narrow_tile_input =
+        ttnn::Tensor::from_vector(data.input, tt::tt_metal::TensorSpec(input_shape, narrow_tile_layout), device);
+
+    const auto expect_malformed_contracts_rejected = [&] {
+        EXPECT_ANY_THROW((void)ttnn::prim::ttml_layernorm_bw(input, rank3_gamma, mean, rstd, upstream_grad));
+        EXPECT_ANY_THROW((void)ttnn::prim::ttml_layernorm_bw(input, gamma, oversized_mean, rstd, upstream_grad));
+        EXPECT_ANY_THROW((void)ttnn::prim::ttml_layernorm_bw(input, gamma, mean, rstd, oversized_upstream_grad));
+        EXPECT_ANY_THROW((void)ttnn::prim::ttml_layernorm_bw(input, gamma, mean, rstd, upstream_grad, oversized_dx));
+        EXPECT_ANY_THROW((void)ttnn::prim::ttml_layernorm_bw(narrow_tile_input, gamma, mean, rstd, upstream_grad));
+        EXPECT_ANY_THROW((void)ttnn::prim::ttml_layernorm_bw(overwide_input, gamma, mean, rstd, upstream_grad));
+    };
+
+    // All malformed calls must fail with an empty cache.
+    expect_malformed_contracts_rejected();
+
+    const auto entries_before_warmup = device->num_program_cache_entries();
+    const auto valid_result = ttnn::prim::ttml_layernorm_bw(input, gamma, mean, rstd, upstream_grad);
+    const auto entries_after_warmup = device->num_program_cache_entries();
+    EXPECT_GT(entries_after_warmup, entries_before_warmup);
+    ASSERT_EQ(valid_result.size(), 3U);
+    EXPECT_EQ(valid_result[0].tensor_spec(), input.tensor_spec());
+    EXPECT_EQ(valid_result[1].tensor_spec(), input.tensor_spec());
+    EXPECT_EQ(valid_result[2].tensor_spec(), input.tensor_spec());
+    expect_cache_test_backward_matches(valid_result, data);
+
+    // The same malformed contracts must still fail once a compatible valid program is warm.
+    expect_malformed_contracts_rejected();
+}
