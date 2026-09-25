@@ -1190,10 +1190,16 @@ bool SyncEngine::round_error(
     // Otherwise the model's wall for the midpoint, which cancels the model out of the error.
     const double mid_a = LinkSolver::mid_a_refclk(r), mid_b = LinkSolver::mid_b_refclk(r);
     anchored = anchored && r.t2.ref != 0 && r.t1.ref != 0;
-    const double wa = anchored ? static_cast<double>(r.t2.wall) + la->second.wall_at(mid_a) -
+    // Each end reads its own eth tile's wall clock: into the pusher's wall domain by that core's tile offset.
+    const auto tile_offset_of = [&](uint32_t dev, uint32_t core) {
+        const std::vector<int64_t>& t = ctx_.devices[dev].tile_offset;
+        return core < t.size() ? static_cast<double>(t[core]) : 0.0;
+    };
+    const double off_a = tile_offset_of(L.dev_a, L.core_a), off_b = tile_offset_of(L.dev_b, L.core_b);
+    const double wa = anchored ? static_cast<double>(r.t2.wall) + off_a + la->second.wall_at(mid_a) -
                                      la->second.wall_at(static_cast<double>(r.t2.ref))
                                : la->second.wall_at(mid_a);
-    const double wb = anchored ? static_cast<double>(r.t1.wall) + lb->second.wall_at(mid_b) -
+    const double wb = anchored ? static_cast<double>(r.t1.wall) + off_b + lb->second.wall_at(mid_b) -
                                      lb->second.wall_at(static_cast<double>(r.t1.ref))
                                : lb->second.wall_at(mid_b);
     if (wa <= 0.0 || wb <= 0.0) {
@@ -1203,13 +1209,13 @@ bool SyncEngine::round_error(
     t.wall_a = wa;
     t.wall_b = wb;
     if (anchored) {
-        const auto res_ns = [](const LocalClockModel& m, const LinkSolver::Stamp& st) {
+        const auto res_ns = [](const LocalClockModel& m, const LinkSolver::Stamp& st, double off) {
             const double ref = static_cast<double>(st.ref);
             const double ghz = (m.wall_at(ref + 1.0) - m.wall_at(ref)) / kNsPerRefclk;
-            return (static_cast<double>(st.wall) - m.wall_at(ref)) / std::max(ghz, 0.1);
+            return (static_cast<double>(st.wall) + off - m.wall_at(ref)) / std::max(ghz, 0.1);
         };
-        t.res_a = res_ns(la->second, r.t2);
-        t.res_b = res_ns(lb->second, r.t1);
+        t.res_a = res_ns(la->second, r.t2, off_a);
+        t.res_b = res_ns(lb->second, r.t1, off_b);
         t.spins_a = r.t2.spins;
         t.spins_b = r.t1.spins;
         t.ref_a = static_cast<double>(r.t2.ref);
