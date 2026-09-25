@@ -1557,78 +1557,67 @@ targets:
       # Wormhole LoudBox / QuietBox (4x n300 = 8 chips), TP=8. Architecturally identical to
       # qwen3.6-27b above -- the two config.json files differ only in transformers_version.
       #
-      # PROVENANCE: measured 2026-09-23 through vLLM SERVING (tt-inference-server benchmarks
-      # workflow, concurrency 1), NOT from models/demos/wormhole/qwen38/demo/text_demo.py.
-      # This distinction matters:
-      #   * prefill_time_to_first_token is graded against the harness's mean_ttft_ms, which is a
-      #     full serving request. The demo's TTFT covers only the model forward + first token and
-      #     runs ~0.7-1.1s faster at every ISL, so demo numbers can never be met here.
-      #   * decode_t/s is graded against output_throughput = OSL/E2EL, which INCLUDES TTFT. It is
-      #     therefore lower than the per-token rate even at batch 1, where the two are often
-      #     assumed equal. decode_t/s/u is graded against 1000/mean_tpot_ms and does match the
-      #     per-token decode rate (16.89 serving at ISL 128 vs 16.8 in the demo -- decode is healthy).
-      # TTFT is in ms. Single run per point; two ISL-128 runs differed by 0.5% (1292.2/1298.3 ms),
-      # while within-run p99 spread is ~12%, hence tolerance 0.2.
-      # accuracy is empty: there is no reference_outputs/*.refpt for this checkpoint, so top1/top5
-      # are unmeasured. Concurrency>1 points are intentionally ungraded while prefill is still
-      # serialised one user at a time.
+      # PROVENANCE: measured 2026-09-25 from models/demos/wormhole/qwen38/demo/text_demo.py --
+      # the same cases the e2e leg runs, which is what produces the benchmark data these targets
+      # are graded against. Targets must come from the emitting run: validate_perf_targets uses a
+      # SYMMETRIC band and fails on the fast side too, so serving-sourced numbers (whose TTFT is a
+      # full request, ~0.7-1.1s slower than the demo's model-forward-only TTFT) fail this leg.
+      # TTFT is in ms, from the demo's inference_prefill time_to_token.
+      # Repeatability over 3 runs (ISL 128) / 2 runs (ISL 4096): TTFT 470-511 ms and 1428-1450 ms
+      # (8.8% / 1.6% spread), decode 16.79-16.95 and 16.70-16.72 (1.0% / 0.1%), against tolerance 0.2.
+      # decode_t/s is deliberately absent: _save_tp_benchmark emits it as a copy of decode_t/s/u,
+      # but it is graded as output_throughput = OSL/E2EL, which includes TTFT and is strictly
+      # lower. The demo cannot measure it, so grading it would compare two different quantities.
+      # Only ISL 128 and 4096 are active because only those two cases emit -- determinism_128
+      # returns before _save_tp_benchmark. accuracy is empty: there is no reference_outputs/*.refpt
+      # for this checkpoint, so top1/top5 are unmeasured.
       wh_llmbox_perf:
         entries:
           - batch_size: 1
             seq_len: 128
             status: active
             perf:
-              prefill_time_to_first_token: 1298.3
-              decode_t/s: 14.5
-              decode_t/s/u: 16.89
+              prefill_time_to_first_token: 494.0
+              decode_t/s/u: 16.87
               tolerance: 0.2
             accuracy: {}
             team: models
           - batch_size: 1
             seq_len: 1024
-            status: active
-            perf:
-              prefill_time_to_first_token: 1395.6
-              decode_t/s: 14.3
-              decode_t/s/u: 16.78
-              tolerance: 0.2
+            status: todo  # no producing run: the e2e leg emits only ISL 128 and 4096
+            perf: {}
             accuracy: {}
             team: models
           - batch_size: 1
             seq_len: 4096
             status: active
             perf:
-              prefill_time_to_first_token: 2465.6
-              decode_t/s: 12.6
-              decode_t/s/u: 16.5
+              prefill_time_to_first_token: 1439.0
+              decode_t/s/u: 16.71
               tolerance: 0.2
             accuracy: {}
             team: models
           - batch_size: 1
             seq_len: 32768
-            status: active
-            perf:
-              prefill_time_to_first_token: 14856.3
-              decode_t/s: 5.6
-              decode_t/s/u: 15.9
-              tolerance: 0.2
+            status: todo  # no producing run: the e2e leg emits only ISL 128 and 4096
+            perf: {}
             accuracy: {}
             team: models
           - batch_size: 1
             seq_len: 8192
-            status: todo  # demo measured 3.18s TTFT; not yet measured through vLLM serving
+            status: todo  # demo measured 3.18s TTFT; the e2e leg does not run this ISL
             perf: {}
             accuracy: {}
             team: models
           - batch_size: 1
             seq_len: 16384
-            status: todo  # demo measured 6.44s TTFT; not yet measured through vLLM serving
+            status: todo  # demo measured 6.44s TTFT; the e2e leg does not run this ISL
             perf: {}
             accuracy: {}
             team: models
           - batch_size: 1
             seq_len: 131072
-            status: todo  # demo measured 56.45s TTFT; not yet measured through vLLM serving
+            status: todo  # demo measured 56.45s TTFT; the e2e leg does not run this ISL
             perf: {}
             accuracy: {}
             team: models
