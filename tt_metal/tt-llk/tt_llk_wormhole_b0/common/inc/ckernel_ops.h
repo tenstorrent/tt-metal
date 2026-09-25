@@ -4,10 +4,10 @@
 
 #pragma once
 
-#if __riscv_xtttensixwh || (__clang__ && defined(COMPILE_FOR_TRISC) && defined(ARCH_WORMHOLE))
+#if __riscv_xtttensixwh || (__clang__ && defined(ARCH_WORMHOLE) && defined(COMPILE_FOR_TRISC))
 #define TTI_INSN(ENCODING)    void(({ __asm__ __volatile__(".ttinsn %0" : : "n"((ENCODING))); }))
 #define TT_INSN(ENCODING)     void(::ckernel::instrn_buffer[0] = (ENCODING))
-#elif defined(ARCH_WORMHOLE) && defined(COMPILE_FOR_BRISC) && defined(LLK_TEST)
+#elif defined(ARCH_WORMHOLE) && defined(LLK_TEST)
 // The llk test infra uses brisc to poke insns, make that work.  so icky.
 #define TTI_INSN(ENCODING) void(::ckernel::instrn_buffer[0] = (ENCODING))
 #define TT_INSN(ENCODING) void(::ckernel::instrn_buffer[0] = (ENCODING))
