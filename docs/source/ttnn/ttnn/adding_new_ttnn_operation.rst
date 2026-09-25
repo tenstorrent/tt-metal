@@ -114,12 +114,17 @@ with ``create_descriptor`` and put them in a variant:
    ProgramDescriptor desc;
 
    // 1. Declare circular buffers
+   //    data_format accepts the tensor's DataType directly; there is no need to convert it to a
+   //    tt::DataFormat first. Pass a tt::DataFormat only when the buffer's format differs from a
+   //    tensor type (for example a Float32 intermediate buffer), or when the kernel does its own
+   //    INT8 sign handling and needs tt::tt_metal::cb_dataformat_for(dtype).
+   const uint32_t tile_size = tt::tt_metal::tile_size(input.dtype());
    desc.cbs.push_back(CBDescriptor{
        .total_size = num_tiles * tile_size,
        .core_ranges = all_cores,
        .format_descriptors = {{CBFormatDescriptor{
            .buffer_index = cb_id,
-           .data_format = data_format,
+           .data_format = input.dtype(),
            .page_size = tile_size,
        }}},
    });

@@ -67,13 +67,21 @@ bool is_floating_point(DataType dtype);
 
 bool is_block_float(DataType dtype);
 
+/**
+ * Returns the DataFormat that stores this DataType.
+ *
+ * Circular buffer, tile size, and descriptor APIs accept a DataType directly and use this conversion, so op code
+ * rarely needs to call it.
+ */
 tt::DataFormat datatype_to_dataformat_converter(DataType datatype);
 tt::tt_metal::DataType dataformat_to_datatype_converter(tt::DataFormat dataformat);
 
 /**
- * Returns the format to declare a CB when moving a tensor of this dtype through the unpacker/packer.
+ * Returns the CB format for kernels that do their own INT8 sign handling in the SFPU (typecast, unary, binary_ng).
  *
- *This differs from datatype_to_dataformat_converter only for INT8.
+ * INT8 tensors hold two's complement, which the Int8 unpacker reads as sign-magnitude. These kernels declare the
+ * CB as UInt8 so the byte arrives unchanged, then convert it themselves. Other kernels should pass the DataType.
+ * This differs from datatype_to_dataformat_converter only for INT8.
  */
 tt::DataFormat cb_dataformat_for(DataType datatype);
 
