@@ -152,6 +152,7 @@ AUDIO_SHIFT = 3.0
 
 _AUDIO_T_FACTOR_ENV = "MINIMAX_H3_AUDIO_T_FACTOR"
 _ADALN_TABLES_ENV = "MINIMAX_H3_ADALN_TABLES"
+_ADALN_FSDP_ENV = "MINIMAX_H3_ADALN_FSDP"
 _DEFAULT_AUDIO_T_FACTOR = 8
 
 
@@ -441,6 +442,7 @@ class MiniMaxH3Pipeline:
         audio_t_factor: int | None = None,
         dit_fsdp: bool | None = None,
         adaln_tables: bool | None = None,
+        adaln_fsdp: bool | None = None,
         trace_denoise: bool | None = None,
         bucket_denoise: bool | None = None,
         bucket_ladder: tuple[int, ...] | None = None,
@@ -586,7 +588,23 @@ class MiniMaxH3Pipeline:
         # defaults on whenever the DiT is unsharded there; Blackhole's 32 GB never needs it and keeps the
         # verified resident path. MINIMAX_H3_ADALN_TABLES=0/1 overrides the default, within the arch gate.
         wormhole = not is_blackhole()
-        self.adaln_tables = (wormhole and not self.dit_fsdp) if adaln_tables is None else adaln_tables
+        # `adaln_fsdp`: shard only the adaLN projections across SP while the rest of the DiT stays unsharded
+        # (see `MiniMaxH3TransformerBlock`). The third placement for an unsharded DiT on Wormhole: resident
+        # weights need the audio decoder evicted and still peak within ~36 MiB/bank; tables cost a per-request
+        # build; this costs one ~49 MB gather per block per step. Off by default; MINIMAX_H3_ADALN_FSDP=0/1.
+        self.adaln_fsdp = False if adaln_fsdp is None else adaln_fsdp
+        env_adaln_fsdp = os.environ.get(_ADALN_FSDP_ENV)
+        if env_adaln_fsdp is not None:
+            self.adaln_fsdp = env_adaln_fsdp not in ("0", "false", "False")
+        if self.adaln_fsdp and not wormhole:
+            logger.warning(f"adaln_fsdp is a Wormhole-only mode ({_ADALN_FSDP_ENV}); ignoring it on this architecture")
+            self.adaln_fsdp = False
+        if self.adaln_fsdp and self.dit_fsdp:
+            logger.info("adaln_fsdp is implied by DiT FSDP; nothing extra to shard")
+            self.adaln_fsdp = False
+        self.adaln_tables = (
+            (wormhole and not self.dit_fsdp and not self.adaln_fsdp) if adaln_tables is None else adaln_tables
+        )
         env_adaln_tables = os.environ.get(_ADALN_TABLES_ENV)
         if env_adaln_tables is not None:
             self.adaln_tables = env_adaln_tables not in ("0", "false", "False")
@@ -597,6 +615,8 @@ class MiniMaxH3Pipeline:
             self.adaln_tables = False
         if self.adaln_tables and self.trace_denoise:
             raise ValueError("adaln_tables cannot run under trace_denoise: the blocks slice a per-step table")
+        if self.adaln_tables and self.adaln_fsdp:
+            raise ValueError("adaln_tables and adaln_fsdp are alternative adaLN placements; enable one")
         self.last_seq_len: SeqLen | None = None
 
         self._host_log("building the Qwen3-VL text encoder")
@@ -665,6 +685,7 @@ class MiniMaxH3Pipeline:
         audio_t_factor: int | None = None,
         dit_fsdp: bool | None = None,
         adaln_tables: bool | None = None,
+        adaln_fsdp: bool | None = None,
         trace_denoise: bool | None = None,
         bucket_denoise: bool | None = None,
         bucket_ladder: tuple[int, ...] | None = None,
@@ -702,6 +723,7 @@ class MiniMaxH3Pipeline:
             audio_t_factor=audio_t_factor,
             dit_fsdp=dit_fsdp,
             adaln_tables=adaln_tables,
+            adaln_fsdp=adaln_fsdp,
             trace_denoise=trace_denoise,
             bucket_denoise=bucket_denoise,
             bucket_ladder=bucket_ladder,
@@ -1234,6 +1256,8 @@ class MiniMaxH3Pipeline:
         # `resident_adaln` (only their residency differs) and the cache is shared.
         if self.adaln_tables and self.dit_fsdp:
             return "adaln_tables_fsdp"
+        if self.adaln_fsdp and not self.dit_fsdp:
+            return "resident_adaln_adalnfsdp"  # only the adaLN projections are SP-sharded
         return "resident_adaln_fsdp" if self.dit_fsdp else "resident_adaln"
 
     def _build_transformer(self) -> MiniMaxH3Transformer3DModel:
@@ -1243,7 +1267,8 @@ class MiniMaxH3Pipeline:
         self._host_log(
             f"building the {config['num_layers']}-layer transformer from {self.transformer_subfolder}/, "
             f"TP={self.tp_factor}/SP={self.sp_factor} ({weight_mode}"
-            f"{', adaLN projections on host, per-request tables' if self.adaln_tables else ''})"
+            f"{', adaLN projections on host, per-request tables' if self.adaln_tables else ''}"
+            f"{', adaLN projections FSDP-sharded over SP' if self.adaln_fsdp else ''})"
         )
         return MiniMaxH3Transformer3DModel(
             **config,
@@ -1252,6 +1277,7 @@ class MiniMaxH3Pipeline:
             parallel_config=self.dit_parallel_config,
             is_fsdp=self.dit_fsdp,
             adaln_tables=self.adaln_tables,
+            adaln_fsdp=self.adaln_fsdp,
         )
 
     def _prepare_transformer(self) -> MiniMaxH3Transformer3DModel:

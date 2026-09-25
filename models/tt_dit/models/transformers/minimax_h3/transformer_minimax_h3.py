@@ -195,12 +195,15 @@ class MiniMaxH3Transformer3DModel(Module):
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
         adaln_tables: bool = False,
+        adaln_fsdp: bool = False,
     ) -> None:
         super().__init__()
 
         self.hidden_size = hidden_size
         self.freq_dim = freq_dim
         self.mesh_device = mesh_device
+        # `adaln_fsdp`: FSDP for the blocks' adaLN projections only (see MiniMaxH3TransformerBlock).
+        self.adaln_fsdp = adaln_fsdp
         # `adaln_tables`: keep the blocks' AdaLN projection weights on host and project each request's
         # whole timestep schedule once (`prepare_request_modulation`), so `forward` only slices the
         # step's rows. Saves 130 MB per device per block at TP=4 of DRAM residency and one matmul per
@@ -292,6 +295,7 @@ class MiniMaxH3Transformer3DModel(Module):
                     parallel_config=parallel_config,
                     is_fsdp=is_fsdp,
                     adaln_tables=adaln_tables,
+                    adaln_fsdp=adaln_fsdp,
                 )
                 for _ in range(num_layers)
             ]

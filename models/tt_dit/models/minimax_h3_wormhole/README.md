@@ -862,11 +862,20 @@ i.e. the per-request DiT reload that `coresident=False` pays between the encoder
 | TP8/SP4, FSDP on, resident adaLN | 12277 | 1.1 s | 604.5 s | 4.3 | 17.8 | 15.4 | 646.1 s | 4.0 s | 37.29 |
 | TP8/SP4, FSDP off, `adaln_tables` | 12130 | 3.6 s (tables 2.6) | 599.7 s | 4.2 | 17.2 | 14.8 | 640.1 s | 4.2 s | 37.25 |
 | TP8/SP4, FSDP off, resident adaLN, audio evicted | 12176 | 1.0 s | 599.5 s | 4.2 | 18.1 | 15.1 | 643.7 s | 6.8 s | 37.20 |
+| TP8/SP4, FSDP off, `adaln_fsdp` (adaLN projections SP-sharded, rest unsharded) | 12192 | 1.2 s | 600.4 s | 4.2 | 18.1 | 15.3 | 643.6 s | 5.7 s | 37.45 |
 
 Read at fixed TP8/SP4: FSDP costs 0.8% (resident) to 1.2% (tables) per step, in line with the 5.8%-of-block
 FSDP overhead partly hidden behind compute; the unsharded 8 GB/device DiT costs 3 s more per request to
 reload. Read at fixed FSDP-on: TP=8 costs 1.8% per step against the shipped TP=4 with untuned TP=8
 blockings. Net, the best FSDP-off configuration is 0.7% slower per request than the shipped preset.
+
+**`adaln_fsdp`** (`MiniMaxH3Pipeline(adaln_fsdp=True)`, `MINIMAX_H3_ADALN_FSDP=1`; Wormhole only, off by default)
+is the third placement for an unsharded DiT: only the blocks' `adaln_proj` take `fsdp_mesh_axis` (the SP axis),
+through the same gather path FSDP-on uses. Residency 258 -> 65 MiB/bank at TP=8; the per-step gather of the
+other three quarters (49 MB per block, ~1 ms on the ring) costs 16 ms/step over the resident path (0.13%),
+i.e. mostly hidden behind compute. Probe with the 5 s warmup on: denoise start 533.5 MiB/bank, peak 802.0,
+177 MiB contiguous left -- against the resident path's 985.3 / 18 MiB. Its 3-step output is exactly equal
+to FSDP-on. Cache subfolder `transformer_resident_adaln_adalnfsdp`.
 
 Output equality across the matrix: every 3-step pair within TP8/SP4 (FSDP on/off, tables/resident) is
 exactly equal, frames and audio. Over 49 forwards the TP8/SP4 runs differ from each other at PCC
