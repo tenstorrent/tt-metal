@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ckernel.h"
+#include "ckernel_addrmod.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_exp.h"
@@ -98,19 +99,27 @@ inline void calculate_sfpu_logaddexp(const uint dst_index_in0, const uint dst_in
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }
 
-        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
-        sfpi::dst_reg++;
+        // ADDR_MOD_6 (calculate_sfpu_logaddexp_init) advances the destination on the store,
+        // in place of a separate dst_reg++. Wormhole's SFPU load and store pick ADDR_MOD_4..7
+        // with a two-bit field, so ADDR_MOD_6 is selected as 2, as in binary max/min.
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode(ADDR_MOD_2) = result;
     }
 }
 
 // The corrections read their polynomial coefficients from the program constant registers,
 // so they have to be loaded here: an SFPU helper called from another op's kernel does not
-// carry its own initialisation.
+// carry its own initialisation. The same goes for ADDR_MOD_6, which the kernels store
+// through.
 //
 // The coefficient set differs by destination precision, which is why this init is
 // templated where the surrounding binary inits are not.
 template <bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_logaddexp_init() {
+    // The store advances the destination by one SFPU row (dest.incr = 2, what dst_reg++
+    // does), so each iteration saves a TTINCRWC. The binary SFPU init only sets ADDR_MOD_6
+    // this way for binary max/min and the comparisons, not for this op, so it is set here.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+
     if constexpr (is_fp32_dest_acc_en) {
         // Delegating to log1p_init rather than copying its values keeps one source for the
         // tuned coefficients: a retune of the log1p polynomial reaches this op instead of

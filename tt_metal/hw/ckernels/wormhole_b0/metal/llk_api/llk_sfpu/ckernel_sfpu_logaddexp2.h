@@ -73,8 +73,9 @@ inline void calculate_sfpu_logaddexp2(const uint dst_index_in0, const uint dst_i
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }
 
-        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
-        sfpi::dst_reg++;
+        // ADDR_MOD_6 (set by logaddexp's init) advances the destination on the store,
+        // in place of a separate dst_reg++. Selected as 2 on Wormhole, as in logaddexp.
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode(ADDR_MOD_2) = result;
     }
 }
 
@@ -87,8 +88,9 @@ inline void calculate_sfpu_logaddexp2(const uint dst_index_in0, const uint dst_i
 // exactly the ones the log1p correction expects.
 template <bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_logaddexp2_init() {
-    // Identical setup to logaddexp: both need the log1p coefficients and nothing else. This
-    // forwards instead of repeating the setup so the two cannot drift apart.
+    // Identical setup to logaddexp: both need the log1p coefficients and the store's
+    // ADDR_MOD_6, and nothing else. This forwards instead of repeating the setup so the two
+    // cannot drift apart.
     calculate_sfpu_logaddexp_init<is_fp32_dest_acc_en>();
 }
 
