@@ -72,8 +72,17 @@ def test_single_user_performance_never_submits_a_batch(monkeypatch, tmp_path):
     """Capacity-one results contain four measured requests and two separate warmups."""
     from transformers import AutoTokenizer
 
+    model_weights_dir = "/models/Qwen3.8-27B"
+    monkeypatch.setenv("MODEL_WEIGHTS_DIR", model_weights_dir)
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "empty-hub"))
     tokenizer = SimpleNamespace(bos_token_id=2, encode=lambda *args, **kwargs: [3, 4, 5])
-    monkeypatch.setattr(AutoTokenizer, "from_pretrained", lambda *args, **kwargs: tokenizer)
+
+    def load_tokenizer(path, **kwargs):
+        assert path == model_weights_dir
+        assert kwargs == {"local_files_only": True}
+        return tokenizer
+
+    monkeypatch.setattr(AutoTokenizer, "from_pretrained", load_tokenizer)
     active = calls = 0
 
     async def complete(client, payload, *, chat):
