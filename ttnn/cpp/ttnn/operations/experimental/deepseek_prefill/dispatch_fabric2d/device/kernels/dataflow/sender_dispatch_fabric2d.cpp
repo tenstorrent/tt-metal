@@ -79,7 +79,7 @@ void prebuild_routes() {
             ct.downstream_chip_id,
             ct.downstream_mesh_id);
     }
-    // signal_downstream sends from the signal header during the send loop; drain_fabric reuses it after.
+    // pkt_hdr_signal is used by signal_downstream during the send loop and reused by drain_fabric after it.
     // Setting the command fields later leaves this route in place.
     fabric_set_unicast_route(
         reinterpret_cast<volatile tt::tt_fabric::HybridMeshPacketHeader*>(ct.pkt_hdr_signal_addr),
@@ -104,8 +104,8 @@ uint32_t wait_for_filled(uint32_t sent) {
 template <typename FabricSender>
 void signal_downstream(FabricSender& fabric, uint32_t count) {
     volatile PACKET_HEADER_TYPE* hdr_signal = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct.pkt_hdr_signal_addr);
-    // A header-only atomic inc. The fused write + inc hangs Blackhole when the payload destination is
-    // DRAM, and the fwd_section is in DRAM.
+    // downstream_noc_x/y are the downstream stream core's coordinates. A header-only atomic inc. The fused write + inc
+    // hangs Blackhole when the payload destination is DRAM, and the fwd_section is in DRAM.
     hdr_signal->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
         get_noc_addr(ct.downstream_noc_x, ct.downstream_noc_y, ct.fwd_sem_addr), /*val=*/count, /*flush=*/true});
     fabric.wait_for_empty_write_slot();

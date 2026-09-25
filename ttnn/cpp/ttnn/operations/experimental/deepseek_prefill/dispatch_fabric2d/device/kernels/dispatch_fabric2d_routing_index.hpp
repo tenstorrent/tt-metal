@@ -29,7 +29,7 @@ inline constexpr dspf2d::ReaderCtArgs ct{};
 constexpr uint32_t RISCS = INDEX_RISCS;
 
 // The stream core's L1 working set, laid out in scratch in a fixed order from compile-time arguments only, so
-// every chip and every RISC computes the same layout. `indices` comes first to keep its records 64-byte aligned.
+// every chip and every RISC computes the same layout.
 struct Scratch {
     volatile tt_l1_ptr uint16_t* indices;         // seq_len records, each padded to indices_pad_stride
     volatile tt_l1_ptr uint32_t* offsets;         // extent x num_routed_experts: every source chip's row
@@ -176,8 +176,8 @@ inline void signal(uint32_t id, uint32_t value) {
     fence();
 }
 
-// Invalidate before each poll in case the data cache is enabled. With the watcher enabled, the waypoints show
-// a RISC stuck in this wait.
+// Invalidate before each poll in case the data cache is enabled. With the watcher enabled, a RISC stuck in
+// this wait shows waypoint RIW (waiting); RID means it got past.
 inline void wait_at_least(uint32_t id, uint32_t value) {
     WAYPOINT("RIW");
     volatile tt_l1_ptr uint32_t* sem = semaphore(id);
