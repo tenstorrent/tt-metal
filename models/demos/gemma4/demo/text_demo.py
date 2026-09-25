@@ -749,18 +749,24 @@ def _run_generation_via_generator(
     )
 
     # Pipelined token readback (ported from text_demo_v2): submit step j+1 before
-    # syncing step j's token. Only possible with device sampling AND tracing --
-    # the sampled token is written straight into the trace's token input buffer,
-    # so the next submit needs nothing from host (Generator._decode_forward_trace_text
-    # leaves reset_inputs False once decode is steady). Note the extra
-    # ``enable_decode_trace`` term: ``_decode_forward_no_trace_text`` always
-    # consumes the host ``tokens`` argument, and in the pipelined loop ``out_tok``
-    # is never refreshed on host, so pipelining an untraced decode would feed the
-    # same stale token every step. GEMMA4_DECODE_PIPELINE=0 restores the blocking
-    # loop.
+    # syncing step j's token. Only possible with device sampling AND when the
+    # device actually carries the sampled token forward on its own -- the
+    # sampled token is written straight into the trace's token input buffer, so
+    # the next submit needs nothing from host (Generator._decode_forward_trace_text
+    # leaves reset_inputs False once decode is steady). Gated on
+    # ``device_tracks_pos`` (computed above), not just ``enable_decode_trace``:
+    # ``out_tok`` is never refreshed on host in the pipelined loop, so pipelining
+    # would feed the same stale (original prefill) token every step whenever the
+    # host must restage it -- not just untraced decode
+    # (``_decode_forward_no_trace_text`` always consumes the host ``tokens``
+    # argument), but also a traced PLI model (E2B/E4B) or
+    # ``GEMMA4_ALWAYS_REFRESH_DECODE=1``, both of which force a host refresh
+    # every replay even with tracing on. ``device_tracks_pos`` already checks
+    # both tracing and that refresh requirement. GEMMA4_DECODE_PIPELINE=0
+    # restores the blocking loop.
     pipeline_reads = (
         device_sampling_params is not None
-        and enable_decode_trace
+        and device_tracks_pos
         and os.environ.get("GEMMA4_DECODE_PIPELINE", "1").lower() in ("1", "true", "yes")
     )
     pending = []

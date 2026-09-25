@@ -380,8 +380,17 @@ def decode_forward(
                 if rope_presliced:
                     cos_b_q, sin_b_q = cos_pos, sin_pos  # already expanded by model.py, see above
                 else:
+                    # position_idx may be padded wider than the active batch (e.g. a
+                    # [1,32] buffer with only 16 real users) -- the presliced/model.py
+                    # caller already trims to real_batch before this same helper
+                    # (model.py's expand_gather branch); this direct (non-presliced)
+                    # caller must too, since _rope_expanded_broadcast reshapes to
+                    # exactly (batch, 1) and TT_FATALs on a width mismatch.
+                    position_idx_active = (
+                        position_idx[:, :batch] if len(position_idx.shape) > 1 else position_idx[:batch]
+                    )
                     cos_b_q, sin_b_q = _rope_expanded_broadcast(
-                        position_idx, cos_cache, sin_cache, batch, num_local_heads
+                        position_idx_active, cos_cache, sin_cache, batch, num_local_heads
                     )
                 cos_b_k, sin_b_k = cos_b_q[:, :, :num_local_kv, :], sin_b_q[:, :, :num_local_kv, :]
             else:

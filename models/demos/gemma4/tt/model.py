@@ -1225,9 +1225,25 @@ class Gemma4Model:
                 kv_pair[0].deallocate(True)
                 kv_pair[1].deallocate(True)
 
+        # Reset before deciding: only the batched-prefill branch below sets this
+        # True. Every other prefill call must leave it False so a stale True
+        # from an EARLIER batched call can't leak into a later, unrelated
+        # process_logits_after_prefill_trace consumer (decode never reads this
+        # flag, so it's untouched on that path).
+        if not is_decode:
+            self._g4_batched_prefill_consumption = False
+
         # Batched prefill returns pre-norm hidden states; Generator selects each
-        # user's last row and applies norm + lm_head via _apply_norm_and_lm_head.
+        # user's last row and applies norm + lm_head via _apply_norm_and_lm_head
+        # -- or, for a host-sample (non-vLLM, non-on-device-sampling) caller,
+        # process_logits_after_prefill_trace applies norm per slot, gated on
+        # the flag set here. Setting it HERE (not by the caller) is what makes
+        # every consumer of this batched output correct automatically -- the
+        # model tracks its own pre/post-norm state instead of relying on each
+        # caller (Generator.prefill_forward_text, the vLLM bridge, ...) to
+        # separately remember to flag it.
         if not is_decode and get_last_token == -1 and batch_size > 1:
+            self._g4_batched_prefill_consumption = True
             self._flush_deferred_bounded_fills_if_needed()
             return hidden_states
 
@@ -2322,13 +2338,15 @@ class Gemma4Model:
         Host full-vocab readback must keep the default ``False``.
 
         Trace-safety contract (owned here, NOT in tt_transformers), applied
-        only to the BATCHED consumption (``_g4_batched_prefill_consumption``
-        set by the vLLM bridge around a batched call): the caller's per-slot
-        input slice and every intermediate are deallocated before the next
-        trace replay, and the return is already ROW_MAJOR so the caller's
-        ``to_layout`` is a no-op and creates nothing new. The single-user
-        path is untouched: its input is the trace's PERSISTENT output buffer
-        (must not be deallocated) and its consumer untilizes a TILE return.
+        only to the BATCHED consumption (``_g4_batched_prefill_consumption``,
+        set by ``__call__`` itself whenever it returns pre-norm hidden states
+        for a batch_size>1 prefill -- self-managed here, not by any caller):
+        the caller's per-slot input slice and every intermediate are
+        deallocated before the next trace replay, and the return is already
+        ROW_MAJOR so the caller's ``to_layout`` is a no-op and creates nothing
+        new. The single-user path is untouched: its input is the trace's
+        PERSISTENT output buffer (must not be deallocated) and its consumer
+        untilizes a TILE return.
         """
         batched = bool(getattr(self, "_g4_batched_prefill_consumption", False))
         # Scavenge unconditionally: the retired list only ever holds batched

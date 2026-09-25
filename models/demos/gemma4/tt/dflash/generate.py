@@ -459,34 +459,44 @@ def dflash_generate(
                 break
         acceptance_lengths.append(accept)
 
-        # next_context_padded is ALREADY exactly block_size-wide (ttnn_verify_forward
-        # always processes exactly block_size candidates); its first `produced` rows are
-        # real. Project THROUGH EVERY LAYER's own k_proj/v_proj/k_norm + RoPE (reusing
-        # this iteration's own cos_tt/sin_tt -- the delta's positions are exactly the
-        # first `produced` rows of noise's own range, see module docstring) and APPEND
-        # into each layer's cache at the current context_len offset -- growing the
-        # accumulator, never replacing it -- then advance context_len/start together
-        # (they stay equal: context_len is always the count of real rows accumulated so
-        # far, which is exactly the next absolute position).
-        dflash_drafter_update_kv_caches(
-            next_context_padded,
-            produced,
-            weights,
-            cos_tt,
-            sin_tt,
-            kv_caches,
-            offset=context_len,
-            num_local_heads=num_local_heads,
-            num_local_kv_heads=num_local_kv_heads,
-            head_dim=head_dim,
-            eps=config.rms_norm_eps,
-        )
+        # Nothing will ever read past this iteration's tap once we're done
+        # generating (stopped, or the output budget is exhausted): the drafter
+        # cache was sized to the ORIGINAL remaining budget (see
+        # drafter_max_seq_len above), not to `produced`, which can exceed what's
+        # left once the last few tokens land mid-block. Committing the tap on a
+        # final iteration is both unnecessary (nothing reads context_len/start
+        # again -- this function returns right after) and, at cache capacity, a
+        # TT_FATAL waiting to happen from writing past the allocated rows.
+        will_continue = not stopped and len(output_ids) < max_new_tokens
+        if will_continue:
+            # next_context_padded is ALREADY exactly block_size-wide (ttnn_verify_forward
+            # always processes exactly block_size candidates); its first `produced` rows are
+            # real. Project THROUGH EVERY LAYER's own k_proj/v_proj/k_norm + RoPE (reusing
+            # this iteration's own cos_tt/sin_tt -- the delta's positions are exactly the
+            # first `produced` rows of noise's own range, see module docstring) and APPEND
+            # into each layer's cache at the current context_len offset -- growing the
+            # accumulator, never replacing it -- then advance context_len/start together
+            # (they stay equal: context_len is always the count of real rows accumulated so
+            # far, which is exactly the next absolute position).
+            dflash_drafter_update_kv_caches(
+                next_context_padded,
+                produced,
+                weights,
+                cos_tt,
+                sin_tt,
+                kv_caches,
+                offset=context_len,
+                num_local_heads=num_local_heads,
+                num_local_kv_heads=num_local_kv_heads,
+                head_dim=head_dim,
+                eps=config.rms_norm_eps,
+            )
+            context_len += produced
+            start += produced
         ttnn.deallocate(next_context_padded)
-        context_len += produced
-        start += produced
         first_iteration = False
 
-        if stopped or len(output_ids) >= max_new_tokens:
+        if not will_continue:
             break
 
         _write_anchor(bonus)  # next iteration's anchor -- skipped on the final iteration
@@ -720,30 +730,37 @@ def _traced_steady_state(
                 break
         acceptance_lengths.append(accept)
 
-        # Project this replay's newly-tapped rows through every layer's own
-        # k_proj/v_proj/k_norm + RoPE (reusing THIS replay's own cos_out/sin_out --
-        # trace-bound persistent output tensors, safe to read now: the blocking
-        # to_torch() reads above already guarantee this replay's execute_trace has
-        # completed) and append into each layer's cache -- BEFORE advancing
-        # context_len -- context_len here is still the offset this tap belongs at
-        # (mirrors the main loop's identical pattern).
-        dflash_drafter_update_kv_caches(
-            next_context_out,
-            produced,
-            weights,
-            cos_out,
-            sin_out,
-            kv_caches,
-            offset=context_len,
-            num_local_heads=num_local_heads,
-            num_local_kv_heads=num_local_kv_heads,
-            head_dim=head_dim,
-            eps=config.rms_norm_eps,
-        )
-        context_len += produced
-        start += produced
+        # Skip the commit on a final replay (mirrors the eager loop's identical
+        # fix): nothing reads context_len/start again once we're done generating,
+        # and the drafter cache was sized to the remaining budget, not to
+        # `produced`, which can exceed what's left once the last tokens land
+        # mid-block -- committing here would write past the allocated rows.
+        will_continue = not stopped and len(output_ids) < max_new_tokens
+        if will_continue:
+            # Project this replay's newly-tapped rows through every layer's own
+            # k_proj/v_proj/k_norm + RoPE (reusing THIS replay's own cos_out/sin_out --
+            # trace-bound persistent output tensors, safe to read now: the blocking
+            # to_torch() reads above already guarantee this replay's execute_trace has
+            # completed) and append into each layer's cache -- BEFORE advancing
+            # context_len -- context_len here is still the offset this tap belongs at
+            # (mirrors the main loop's identical pattern).
+            dflash_drafter_update_kv_caches(
+                next_context_out,
+                produced,
+                weights,
+                cos_out,
+                sin_out,
+                kv_caches,
+                offset=context_len,
+                num_local_heads=num_local_heads,
+                num_local_kv_heads=num_local_kv_heads,
+                head_dim=head_dim,
+                eps=config.rms_norm_eps,
+            )
+            context_len += produced
+            start += produced
 
-        if stopped or len(output_ids) >= max_new_tokens:
+        if not will_continue:
             break
 
         write_anchor(bonus)

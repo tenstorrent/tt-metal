@@ -535,15 +535,24 @@ def run_demo_text(
     # and EOS is seen one step late — that extra token is discarded below, so
     # the emitted text is unchanged. GEMMA4_DECODE_PIPELINE=0 restores the
     # blocking loop.
-    pipeline_reads = device_sampling_params is not None and os.environ.get("GEMMA4_DECODE_PIPELINE", "1").lower() in (
-        "1",
-        "true",
-        "yes",
-    )
+    #
+    # device_tracks_pos (below) is the correct, already-existing gate for
+    # exactly this: it's False whenever eager decode (GEMMA4_DECODE_TRACE=0),
+    # a PLI model (E2B/E4B), or GEMMA4_ALWAYS_REFRESH_DECODE=1 requires the
+    # host to restage tokens every step. out_tok is only ever reassigned in
+    # the non-pipelined branch below (`else: out_tok = ...`), so pipelining
+    # without this gate silently re-feeds the ORIGINAL prefill token into
+    # every decode step instead of the newly sampled one, for any of those
+    # three cases.
     device_tracks_pos = device_tracks_decode_on_device(
         generator.model[0],
         device_sampling=device_sampling_params is not None,
         enable_trace=enable_trace,
+    )
+    pipeline_reads = (
+        device_sampling_params is not None
+        and device_tracks_pos
+        and os.environ.get("GEMMA4_DECODE_PIPELINE", "1").lower() in ("1", "true", "yes")
     )
     pending = []
 

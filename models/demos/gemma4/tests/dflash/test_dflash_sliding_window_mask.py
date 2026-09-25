@@ -56,20 +56,29 @@ CASES = [
 
 
 def _torch_reference_mask(ctx_len, q_len, is_causal, sliding_window, start, valid_len, q_len_padded=None):
-    """Correct reference: query position = start + local_row (TRUE absolute position)."""
+    """Correct reference: query position = start + local_row (TRUE absolute position).
+
+    Noise keys (physical column >= ctx_len) are translated to their LOGICAL position
+    (valid_len + physical offset within the noise block) before the causal/sliding
+    comparisons -- a noise key immediately follows the real context in the true
+    sequence, not the context buffer's full fixed capacity. Using the physical
+    column there (as this reference used to) hides every noise key whenever
+    ctx_len > valid_len, including a query's own key. Padding/validity checks
+    below intentionally keep using the physical key_position."""
     total_real = ctx_len + q_len
     total = ctx_len + (q_len_padded if q_len_padded else q_len)
     query_position = start + torch.arange(q_len)[:, None]
     key_position = torch.arange(total)[None, :]
+    is_noise_col = key_position >= ctx_len
+    key_logical = torch.where(is_noise_col, valid_len + (key_position - ctx_len), key_position)
     visible = torch.ones((q_len, total), dtype=torch.bool)
     if is_causal:
-        visible &= key_position <= query_position
+        visible &= key_logical <= query_position
     if sliding_window is not None:
-        visible &= (query_position - key_position) < sliding_window
+        visible &= (query_position - key_logical) < sliding_window
         if not is_causal:
-            visible &= (key_position - query_position) < sliding_window
+            visible &= (key_logical - query_position) < sliding_window
     is_valid_context_col = key_position < valid_len
-    is_noise_col = key_position >= ctx_len
     visible &= is_valid_context_col | is_noise_col
     if total > total_real:
         visible &= key_position < total_real
@@ -115,6 +124,23 @@ def test_dflash_sliding_window_mask_fixed(mesh_device, device_params, reset_seed
     all_ok = True
     for ctx_len, q_len, is_causal, sliding_window, start, valid_len in CASES:
         ref = _torch_reference_mask(ctx_len, q_len, is_causal, sliding_window, start, valid_len)
+
+        # Regression guard for the logical-vs-physical noise-key bug: a query must
+        # always see its OWN noise key (physical ctx_len+i, logical valid_len+i ==
+        # the query's own logical position when start == valid_len, as every CASE
+        # here sets it) under a causal or symmetric-window mask -- distance 0 is
+        # always <= 0 / < any positive sliding_window. The old (physical-key) mask
+        # hid every noise column whenever ctx_len > valid_len, including this one,
+        # so this specifically catches that class of bug reappearing in either the
+        # reference above or the device builders under test.
+        assert start == valid_len, "diagonal self-visibility check below assumes start == valid_len"
+        noise_diag_visible = ref[0, 0, torch.arange(q_len), ctx_len + torch.arange(q_len)] > -1.0
+        assert noise_diag_visible.all(), (
+            f"ctx_len={ctx_len} q_len={q_len} window={sliding_window}: a query's own noise key must be "
+            f"visible (logical position == query's own position), got hidden diagonal entries -- "
+            f"{(~noise_diag_visible).sum().item()}/{q_len}"
+        )
+
         ref_bf16 = ref.to(torch.bfloat16).float()
 
         valid_len_tt = ttnn.from_torch(

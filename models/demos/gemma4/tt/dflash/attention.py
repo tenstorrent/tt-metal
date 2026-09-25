@@ -226,19 +226,36 @@ def build_attention_mask_additive_device_dynamic(
     query_col = ttnn.add(local_query_col, start_col)
     query_full = ttnn.repeat(query_col, ttnn.Shape([1, total]))
 
-    visible = ttnn.ones([q_len, total], dtype=ttnn.int32, device=mesh_device)
-    if is_causal:
-        visible = ttnn.logical_and(visible, ttnn.le(key_full, query_full))
-    if sliding_window is not None:
-        visible = ttnn.logical_and(visible, ttnn.lt(ttnn.subtract(query_full, key_full), sliding_window))
-        if not is_causal:
-            visible = ttnn.logical_and(visible, ttnn.lt(ttnn.subtract(key_full, query_full), sliding_window))
-
     # context_valid_len_tt IS the true start (see above) -- reuse start_col/query_col's
-    # broadcast rather than rebuilding it.
+    # broadcast rather than rebuilding it. Needed before the causal/sliding checks
+    # too, since noise keys must be compared using their LOGICAL position (see
+    # key_logical below), not their physical buffer column.
     valid_len_full = ttnn.repeat(start_col, ttnn.Shape([1, total]))
     is_valid_context_col = ttnn.lt(key_full, valid_len_full)  # key_position < context_valid_len
     is_noise_col = ttnn.ge(key_full, ctx_len)  # noise columns are unaffected by context padding
+
+    # Noise key j sits at PHYSICAL column ctx_len+j, but its true LOGICAL sequence
+    # position is context_valid_len+j -- the noise block immediately follows the
+    # real (valid) context, not the context buffer's full fixed capacity. Using the
+    # physical column for the causal/sliding comparisons (as before) hides every
+    # noise key whenever ctx_len > context_valid_len (the normal case once the
+    # context has grown), including a query's own key. Context-column keys are
+    # unaffected: their physical index already equals their logical position.
+    # Padding/validity checks below intentionally keep using the physical key_full.
+    # Arithmetic (not ttnn.where) because these grids stay ROW_MAJOR here, and the
+    # ternary op requires TILE layout.
+    is_noise_col_i32 = ttnn.typecast(is_noise_col, ttnn.int32)
+    noise_logical_delta = ttnn.subtract(ttnn.add(valid_len_full, ttnn.subtract(key_full, ctx_len)), key_full)
+    key_logical = ttnn.add(key_full, ttnn.multiply(is_noise_col_i32, noise_logical_delta))
+
+    visible = ttnn.ones([q_len, total], dtype=ttnn.int32, device=mesh_device)
+    if is_causal:
+        visible = ttnn.logical_and(visible, ttnn.le(key_logical, query_full))
+    if sliding_window is not None:
+        visible = ttnn.logical_and(visible, ttnn.lt(ttnn.subtract(query_full, key_logical), sliding_window))
+        if not is_causal:
+            visible = ttnn.logical_and(visible, ttnn.lt(ttnn.subtract(key_logical, query_full), sliding_window))
+
     visible = ttnn.logical_and(visible, ttnn.logical_or(is_valid_context_col, is_noise_col))
     if total > total_real:
         visible = ttnn.logical_and(visible, ttnn.lt(key_full, total_real))
@@ -272,6 +289,7 @@ class DynamicMaskStaticParts:
         "local_query_full",
         "visible_base",
         "is_noise_col",
+        "noise_offset",
         "zero",
         "neg",
         "q_len",
@@ -281,12 +299,24 @@ class DynamicMaskStaticParts:
     )
 
     def __init__(
-        self, key_full, local_query_full, visible_base, is_noise_col, zero, neg, q_len, total, is_causal, sliding_window
+        self,
+        key_full,
+        local_query_full,
+        visible_base,
+        is_noise_col,
+        noise_offset,
+        zero,
+        neg,
+        q_len,
+        total,
+        is_causal,
+        sliding_window,
     ):
         self.key_full = key_full
         self.local_query_full = local_query_full
         self.visible_base = visible_base
         self.is_noise_col = is_noise_col
+        self.noise_offset = noise_offset
         self.zero = zero
         self.neg = neg
         self.q_len = q_len
@@ -326,11 +356,26 @@ def build_attention_mask_static_parts(
         visible_base = ttnn.logical_and(visible_base, ttnn.lt(key_full, total_real))
 
     is_noise_col = ttnn.ge(key_full, ctx_len)  # noise columns are unaffected by context padding
+    # Physical offset of a noise key within the noise block (key_full - ctx_len);
+    # value-independent (ctx_len is fixed), so precomputed here. Only meaningful
+    # where is_noise_col is true -- combine_attention_mask_dynamic adds the
+    # per-replay context_valid_len to it to get the noise key's LOGICAL position.
+    noise_offset = ttnn.subtract(key_full, ctx_len)
 
     zero = ttnn.zeros([q_len, total], dtype=ttnn.bfloat16, device=mesh_device, layout=ttnn.TILE_LAYOUT)
     neg = ttnn.full([q_len, total], fill_value=-1e4, dtype=ttnn.bfloat16, device=mesh_device, layout=ttnn.TILE_LAYOUT)
     return DynamicMaskStaticParts(
-        key_full, local_query_full, visible_base, is_noise_col, zero, neg, q_len, total, is_causal, sliding_window
+        key_full,
+        local_query_full,
+        visible_base,
+        is_noise_col,
+        noise_offset,
+        zero,
+        neg,
+        q_len,
+        total,
+        is_causal,
+        sliding_window,
     )
 
 
@@ -358,15 +403,23 @@ def combine_attention_mask_dynamic(static: DynamicMaskStaticParts, context_valid
     start_full = ttnn.repeat(start_col, ttnn.Shape([1, total]))
     query_full = ttnn.add(static.local_query_full, start_full)
 
+    # Noise key j sits at PHYSICAL column ctx_len+j, but its true LOGICAL sequence
+    # position is context_valid_len+j -- see build_attention_mask_additive_device_
+    # dynamic's key_logical comment. Causal/sliding checks below use key_logical;
+    # padding/validity checks intentionally keep using static.key_full (physical).
+    # Arithmetic (not ttnn.where): these grids stay ROW_MAJOR, and the ternary op
+    # requires TILE layout.
+    is_noise_col_i32 = ttnn.typecast(static.is_noise_col, ttnn.int32)
+    noise_logical_delta = ttnn.subtract(ttnn.add(start_full, static.noise_offset), static.key_full)
+    key_logical = ttnn.add(static.key_full, ttnn.multiply(is_noise_col_i32, noise_logical_delta))
+
     visible = static.visible_base
     if static.is_causal:
-        visible = ttnn.logical_and(visible, ttnn.le(static.key_full, query_full))
+        visible = ttnn.logical_and(visible, ttnn.le(key_logical, query_full))
     if static.sliding_window is not None:
-        visible = ttnn.logical_and(visible, ttnn.lt(ttnn.subtract(query_full, static.key_full), static.sliding_window))
+        visible = ttnn.logical_and(visible, ttnn.lt(ttnn.subtract(query_full, key_logical), static.sliding_window))
         if not static.is_causal:
-            visible = ttnn.logical_and(
-                visible, ttnn.lt(ttnn.subtract(static.key_full, query_full), static.sliding_window)
-            )
+            visible = ttnn.logical_and(visible, ttnn.lt(ttnn.subtract(key_logical, query_full), static.sliding_window))
 
     is_valid_context_col = ttnn.lt(static.key_full, start_full)
     visible = ttnn.logical_and(visible, ttnn.logical_or(is_valid_context_col, static.is_noise_col))
