@@ -388,7 +388,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
              {"dfb_length", cb_length},
              {"Wt", Wt},
              {"reduce_factor", reduce_factor}},
-        .runtime_arg_schema = {.runtime_arg_names = {"NCHt", "tile_offset", "stats_tile_offset", "eps", "y_offset"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"NCHt", "tile_offset", "stats_tile_offset", "eps", "y_offset", "row_stride"}},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
     // The shared reader always fills a reduce-scalar tile, but the Welford compute kernel derives
@@ -548,12 +548,13 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
     m2::KernelRunArgs compute_run{.kernel = POSTWF_COMPUTE};
 
     if (use_2d_kernel) {
+        const uint32_t row_stride = Wt - tiles_per_core_y;
         for (uint32_t x = 0; x < cores_x; ++x) {
             for (uint32_t y = 0; y < cores_y; ++y) {
                 CoreCoord core = {x, y};
 
-                uint32_t tile_offset = (x * Wt) + (y * tiles_per_core_y);
-                uint32_t stats_offset = x * stats_tiles_cols;
+                uint32_t tile_offset = (x * tiles_per_core_x * Wt) + (y * tiles_per_core_y);
+                uint32_t stats_offset = x * tiles_per_core_x * stats_tiles_cols;
 
                 log_debug(
                     tt::LogOp,
@@ -568,7 +569,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
                      {"tile_offset", tile_offset},
                      {"stats_tile_offset", stats_offset},
                      {"eps", eps},
-                     {"y_offset", y * tiles_per_core_y}});
+                     {"y_offset", y * tiles_per_core_y},
+                     {"row_stride", row_stride}});
                 m2::AddRuntimeArgsForNode(compute_run.runtime_arg_values, core, {{"NCHt", tiles_per_core_x}});
                 m2::AddRuntimeArgsForNode(
                     writer_run.runtime_arg_values,
@@ -601,7 +603,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
                  {"tile_offset", tile_offset},
                  {"stats_tile_offset", stats_offset},
                  {"eps", eps},
-                 {"y_offset", y_offset}});
+                 {"y_offset", y_offset},
+                 {"row_stride", 0}});
             m2::AddRuntimeArgsForNode(compute_run.runtime_arg_values, core, {{"NCHt", num_tile_rows_per_core}});
             m2::AddRuntimeArgsForNode(
                 writer_run.runtime_arg_values,
