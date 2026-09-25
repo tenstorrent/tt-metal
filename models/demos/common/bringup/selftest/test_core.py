@@ -234,6 +234,7 @@ def test_spec_subset_moves_the_representative_layer():
         ({"layers": [7]}, "out of range"),
         ({"state": {"kind": "kv"}}, "state.tensors"),
         ({"box": {"mesh": [4]}}, "box.mesh"),
+        ({"checkpoint": {"config": {"sliding_window": 1024}}}, "must exceed the sliding window"),
     ],
 )
 def test_spec_validation_errors(over, needle):

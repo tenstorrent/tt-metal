@@ -239,6 +239,10 @@ class Spec:
                     self.representative_layer(bt)
                 except StopIteration:
                     errs.append(f"block type {bt} has no layer in the selected subset")
+        window = self.get("checkpoint.config.sliding_window")
+        parity = int(self.get("hf.parity_seq", 512))
+        if window and parity <= int(window):
+            errs.append(f"hf.parity_seq {parity} must exceed the sliding window {window}, or HF parity never tests it")
         if not self.get("state.tensors"):
             errs.append("state.tensors must list the per-layer state tensor names (e.g. [key, value])")
         return errs
