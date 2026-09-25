@@ -71,8 +71,8 @@ inline bool pack_2d_route_vectors(
     std::size_t out_size,
     std::uint32_t y_size,
     std::uint32_t x_size,
-    YActionSource&& y_action,
-    XActionSource&& x_action) {
+    YActionSource y_action,
+    XActionSource x_action) {
     if (!is_valid_2d_route_table_shape(y_size, x_size)) {
         return false;
     }
