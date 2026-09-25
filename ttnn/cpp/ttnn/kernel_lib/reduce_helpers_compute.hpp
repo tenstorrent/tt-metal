@@ -316,21 +316,6 @@ struct ReduceInputMemoryLayout {
 };
 
 /**
- * @brief Host-planned input synchronization geometry.
- *
- * A zero field requests the automatic/default geometry. output_tiles is normally one, except
- * REDUCE_COL where it is the number of independent columns held in DEST together.
- */
-struct ReduceInputChunk {
-    std::uint32_t reduce_axis_tiles = 0;
-    std::uint32_t output_tiles = 0;
-    static constexpr ReduceInputChunk automatic() { return {}; }
-    static constexpr ReduceInputChunk of(std::uint32_t reduce_tiles, std::uint32_t outputs = 1) {
-        return {reduce_tiles, outputs};
-    }
-};
-
-/**
  * @brief Input block shape specification for reduce operations (rows x cols x batches)
  *
  * Specifies the dimensions of the input tile block to be reduced.
@@ -658,7 +643,8 @@ ALWI void reduce(
     AccumulateT accumulate = AccumulateT{},
     PostReduceOp post_reduce_op = PostReduceOp{},
     ReducePartialMode partial_mode = ReducePartialMode::None,
-    ReduceInputChunk input_chunk = ReduceInputChunk::automatic(),
+    // REDUCE_COL only: independent output columns held in DEST together. 0 selects the DEST limit.
+    std::uint32_t output_group = 0,
     std::uint32_t auxiliary_tile_offset = 0);
 
 /**

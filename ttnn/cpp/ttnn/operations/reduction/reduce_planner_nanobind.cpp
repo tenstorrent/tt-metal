@@ -123,10 +123,8 @@ void bind_reduce_planner(nb::module_& mod) {
         .def_rw("math_fidelity", &host::ReduceHardwareConfig::math_fidelity);
 
     nb::class_<host::ReduceChunkPlan>(planner, "ReduceChunkPlan")
-        .def_ro("reduce_axis_tiles", &host::ReduceChunkPlan::reduce_axis_tiles)
         .def_ro("output_tiles", &host::ReduceChunkPlan::output_tiles)
-        .def_ro("buffers", &host::ReduceChunkPlan::buffers)
-        .def_prop_ro("input_tiles", &host::ReduceChunkPlan::input_tiles);
+        .def_ro("buffers", &host::ReduceChunkPlan::buffers);
 
     nb::class_<host::ReduceCbRequirement>(planner, "ReduceCbRequirement")
         .def_ro("role", &host::ReduceCbRequirement::role)

@@ -145,7 +145,6 @@ TEST(ReduceHostPlanner, AdditiveStreamingRequiresPairs) {
                     compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
                 EXPECT_EQ(plan.algorithm, compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd);
                 EXPECT_EQ(plan.input_policy, compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
-                EXPECT_EQ(plan.chunk.reduce_axis_tiles, 1U);
                 EXPECT_EQ(plan.chunk.output_tiles, 1U);
                 EXPECT_EQ(plan.chunk.buffers, 2U);
                 EXPECT_EQ(plan.find_cb(ReduceCbRole::Input)->page_count, 2U);
@@ -189,7 +188,6 @@ TEST(ReduceHostPlanner, StreamingCapacityDependsOnAlgorithm) {
         Policy::WaitAndPopPerTile);
     EXPECT_EQ(native.algorithm, Algorithm::ReduceTile);
     EXPECT_EQ(native.input_policy, Policy::WaitAndPopPerTile);
-    EXPECT_EQ(native.chunk.reduce_axis_tiles, 1U);
 }
 
 TEST(ReduceHostPlanner, RowMajorColumnPacketsPreserveShortStaticTails) {
@@ -227,7 +225,6 @@ TEST(ReduceHostPlanner, RowMajorColumnPacketsPreserveShortStaticTails) {
         for (const auto& call : sequence.calls) {
             EXPECT_EQ(call.plan.algorithm, compute_kernel_lib::ReduceAlgorithm::ReduceTile);
             EXPECT_EQ(call.plan.input_policy, compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
-            EXPECT_EQ(call.plan.chunk.reduce_axis_tiles, 1U);
             EXPECT_EQ(call.plan.chunk.output_tiles, 1U);
 
             EXPECT_EQ(call.plan.find_cb(ReduceCbRole::Input)->page_count, 1U);
@@ -433,7 +430,6 @@ TEST(ReduceHostPlanner, TailPlanningResolvesExactScalersAndMasks) {
             EXPECT_EQ(tail.auxiliary_tiles[add ? 0 : 1].num_valid_elements, 7U);
             EXPECT_EQ(tail.auxiliary_tiles.back().num_valid_elements, 1U);
             EXPECT_FLOAT_EQ(tail.auxiliary_tiles.back().value, 1.0F);
-            EXPECT_EQ(tail.chunk.reduce_axis_tiles, 5U);
             EXPECT_EQ(tail.reduce_factor, add ? 135U : 1U);
             EXPECT_NEAR(tail.post_scale, 1.0F, 1e-6F);
             if (!add) {
@@ -506,7 +502,6 @@ TEST(ReduceHostPlanner, AlignedTailNeedsNoEdgeMasks) {
     EXPECT_EQ(small.algorithm, compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd);
     ASSERT_NE(small.tail_plan, nullptr);
     EXPECT_EQ(small.tail_plan->algorithm, compute_kernel_lib::ReduceAlgorithm::ReduceTile);
-    EXPECT_EQ(small.tail_plan->chunk.reduce_axis_tiles, 1U);
 }
 
 TEST(ReduceHostPlanner, ExplicitAverageScalarBypassesGeometry) {
@@ -914,7 +909,6 @@ TEST(ReduceHostPlanner, TailStreamsUseFixedBoundedPackets) {
         EXPECT_EQ(plan.input_policy, compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
         EXPECT_EQ(plan.find_cb(ReduceCbRole::Input)->page_count, dim == ReduceOpDim::W ? 2U : 1U);
         ASSERT_NE(plan.tail_plan, nullptr);
-        EXPECT_EQ(plan.chunk.reduce_axis_tiles, plan.tail_plan->chunk.reduce_axis_tiles);
     }
 }
 
@@ -1275,7 +1269,6 @@ TEST(ReduceHostPlanner, BasicAlgorithmAndChunkSanity) {
         hardware,
         compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
     EXPECT_EQ(streaming_plan.input_policy, compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
-    EXPECT_EQ(streaming_plan.chunk.reduce_axis_tiles, 1U);
     ASSERT_NE(streaming_plan.find_cb(ReduceCbRole::Input), nullptr);
     EXPECT_EQ(streaming_plan.find_cb(ReduceCbRole::Input)->total_size_bytes, 2 * tile_bytes);
 
@@ -1318,7 +1311,6 @@ TEST(ReduceHostPlanner, BasicAlgorithmAndChunkSanity) {
     for (const auto& call : sequence.calls) {
         EXPECT_EQ(call.plan.algorithm, compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd);
         EXPECT_EQ(call.plan.input_policy, compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop);
-        EXPECT_EQ(call.plan.chunk.reduce_axis_tiles, 8U);
         EXPECT_EQ(call.plan.chunk.output_tiles, 8U);
     }
 

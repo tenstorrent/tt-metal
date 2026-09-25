@@ -458,7 +458,7 @@ ReducePlan make_tiled_plan(
     const auto output_group = dim == ReduceOpDim::H ? std::min(work_wt, output_slots) : 1U;
     std::uint32_t input_pages;
     if (is_retained(input_policy)) {
-        plan.chunk = {.reduce_axis_tiles = reduced_tiles, .output_tiles = output_group, .buffers = 0};
+        plan.chunk = {.output_tiles = output_group, .buffers = 0};
         const auto stride = block.input_row_stride_tiles == 0 ? plan.Wt : block.input_row_stride_tiles;
         input_pages =
             checked_mul_u32(checked_mul_u32(plan.Ht, stride, "resident input"), block.batches, "input batches");
@@ -468,14 +468,13 @@ ReducePlan make_tiled_plan(
         while (work_wt % bulk_outputs != 0) {
             --bulk_outputs;
         }
-        plan.chunk = {.reduce_axis_tiles = reduced_tiles, .output_tiles = bulk_outputs, .buffers = 1};
+        plan.chunk = {.output_tiles = bulk_outputs, .buffers = 1};
         input_pages = checked_mul_u32(reduced_tiles, bulk_outputs, "bulk input");
     } else {
         // Additive streaming requires two input slots and consumes one output
         // column at a time for H reductions.
         const bool additive = plan.algorithm == ReduceAlgorithm::AccumulateViaAdd;
-        plan.chunk = {
-            .reduce_axis_tiles = 1, .output_tiles = additive ? 1U : output_group, .buffers = additive ? 2U : 1U};
+        plan.chunk = {.output_tiles = additive ? 1U : output_group, .buffers = additive ? 2U : 1U};
         input_pages = additive ? 2U : 1U;
         TT_FATAL(
             !block.resident_input_tiles ||
@@ -877,6 +876,15 @@ void recount_owned_bytes(ReducePlan& plan) {
     }
 }
 
+std::uint32_t bulk_axis_tiles(const ReducePlan& plan) {
+    const auto ht = plan.tail ? div_up_u32(plan.logical_h, 32) : plan.Ht;
+    const auto wt = plan.tail ? div_up_u32(plan.logical_w, 32) : plan.Wt;
+    if (plan.reduce_dim == ReduceOpDim::W) {
+        return wt;
+    }
+    return plan.reduce_dim == ReduceOpDim::H ? ht : checked_mul_u32(ht, wt, "HW tile count");
+}
+
 void share_tail_input_packets(ReducePlan& full, ReducePlan& tail) {
     TT_FATAL(full.input_policy == tail.input_policy, "Reduce planner: full and tail must use the same input policy");
     if (full.input_policy == ReduceInputPolicy::BulkWaitBulkPop) {
@@ -888,15 +896,15 @@ void share_tail_input_packets(ReducePlan& full, ReducePlan& tail) {
         while (full_columns % outputs != 0 || tail_columns % outputs != 0) {
             --outputs;
         }
-        const auto full_axis = full.chunk.reduce_axis_tiles;
-        const auto tail_axis = tail.chunk.reduce_axis_tiles;
+        const auto full_axis = bulk_axis_tiles(full);
+        const auto tail_axis = bulk_axis_tiles(tail);
         const auto pages = checked_mul_u32(
             checked_mul_u32(full_axis / std::gcd(full_axis, tail_axis), tail_axis, "shared bulk axis"),
             outputs,
             "shared bulk input");
         for (auto* plan : {&full, &tail}) {
             plan->chunk.output_tiles = outputs;
-            plan->chunk.buffers = pages / plan->chunk.input_tiles();
+            plan->chunk.buffers = pages / (bulk_axis_tiles(*plan) * outputs);
             for (auto& requirement : plan->cb_requirements) {
                 if (requirement.role == ReduceCbRole::Input) {
                     if (requirement.alias == ReduceCbAlias::InputTensor) {
@@ -1183,8 +1191,7 @@ ReduceCallArgs::ReduceCallArgs(const ReduceCallPlan& call) {
             plan.algorithm == ReduceAlgorithm::AccumulateViaAdd,
         "Reduce plan args: a partial-mask call must use AccumulateViaAdd");
     TT_FATAL(
-        plan.Ht > 0 && plan.Wt > 0 && plan.batches > 0 && plan.reduce_factor > 0 && plan.chunk.reduce_axis_tiles > 0 &&
-            plan.chunk.output_tiles > 0,
+        plan.Ht > 0 && plan.Wt > 0 && plan.batches > 0 && plan.reduce_factor > 0 && plan.chunk.output_tiles > 0,
         "Reduce plan args: call contains zero-sized kernel geometry");
     if (plan.auxiliary_tiles.empty()) {
         const auto* input = plan.find_cb(ReduceCbRole::Input);
@@ -1207,7 +1214,6 @@ ReduceCallArgs::ReduceCallArgs(const ReduceCallPlan& call) {
         plan.batches,
         plan.input_row_stride_tiles,
         plan.reduce_factor,
-        plan.chunk.reduce_axis_tiles,
         encode_chunk_and_auxiliary(call),
         std::bit_cast<std::uint32_t>(plan.post_scale),
         call.accumulation_index,

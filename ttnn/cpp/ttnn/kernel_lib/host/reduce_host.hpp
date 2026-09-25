@@ -86,14 +86,10 @@ struct ReduceHardwareConfig {
 };
 
 struct ReduceChunkPlan {
-    // Tiles consumed along the reduction axis per synchronization chunk.
-    std::uint32_t reduce_axis_tiles = 1;
     // Independent outputs retained in DEST for the chunk (greater than one for H reduction).
     std::uint32_t output_tiles = 1;
     // Number of chunks required by the default input allocation.
     std::uint32_t buffers = 1;
-
-    std::uint32_t input_tiles() const { return reduce_axis_tiles * output_tiles; }
 };
 
 struct ReduceCbRequirement {

@@ -242,7 +242,7 @@ ALWI void reduce_accumulate_via_add(
     ReducePartialMode partial_mode,
     AccumulateT accumulate,
     PostReduceOp post_reduce_op,
-    ReduceInputChunk input_chunk,
+    uint32_t output_group,
     uint32_t auxiliary_tile_offset) {
     const uint32_t Ht = shape.rows, Wt = shape.cols, NC = shape.batches;
     // row_pitch = tile distance between consecutive rows of the resident block (>= Wt). row_stride > Wt lets
@@ -346,7 +346,7 @@ ALWI void reduce_accumulate_via_add(
     if constexpr (input_policy == ReduceInputPolicy::WaitAndPopPerTile) {
         UNPACK(ASSERT(get_dfb_num_pages(input_dfb_id) >= 2 && (get_dfb_num_pages(input_dfb_id) & 1u) == 0));
         if constexpr (is_col) {
-            ASSERT(input_chunk.output_tiles == 1);
+            ASSERT(output_group == 1);
         }
     }
 #ifndef ARCH_QUASAR  // is_valid_dfb_tile_page_size is WH/BH only
@@ -460,12 +460,12 @@ ALWI void reduce_accumulate_via_add(
     if constexpr (grouped_col) {
         // A bulk contains all rows of an output-column group.
         const uint32_t default_output_group = Wt < DEST_AUTO_LIMIT ? Wt : DEST_AUTO_LIMIT;
-        const uint32_t output_group = input_chunk.output_tiles > 0 ? input_chunk.output_tiles : default_output_group;
-        ASSERT(output_group > 0 && output_group <= DEST_AUTO_LIMIT);
+        const uint32_t group = output_group > 0 ? output_group : default_output_group;
+        ASSERT(group > 0 && group <= DEST_AUTO_LIMIT);
 
         for (uint32_t nc = 0; nc < NC; ++nc) {
-            for (uint32_t wt = 0; wt < Wt; wt += output_group) {
-                const uint32_t current_outputs = output_group < Wt - wt ? output_group : Wt - wt;
+            for (uint32_t wt = 0; wt < Wt; wt += group) {
+                const uint32_t current_outputs = group < Wt - wt ? group : Wt - wt;
                 tile_regs_acquire();
 
                 if constexpr (has_accum) {
@@ -929,7 +929,7 @@ ALWI void reduce(
     AccumulateT accumulate,
     PostReduceOp post_reduce_op,
     ReducePartialMode partial_mode,
-    ReduceInputChunk input_chunk,
+    uint32_t output_group,
     uint32_t auxiliary_tile_offset) {
     // Int32 and Accurate fp32 route to the SFPU via is_sfpu_reduce_path<>(); others use FPU/GMPOOL.
     constexpr DataFormat reduce_format = static_cast<DataFormat>(unpack_src_format[input_dfb_id]);
@@ -1052,7 +1052,7 @@ ALWI void reduce(
             partial_mode,
             accumulate,
             post_reduce_op,
-            input_chunk,
+            output_group,
             auxiliary_tile_offset);
         return;
     }
@@ -1356,7 +1356,7 @@ ALWI void reduce(
         // Auto-detect chunk size from DEST register capacity
         // Both reader (dataflow) and compute kernels compute this identically via DEST_AUTO_LIMIT
         constexpr uint32_t default_chunk_size = is_sfpu ? (DEST_AUTO_LIMIT - 1) : DEST_AUTO_LIMIT;
-        const uint32_t requested_chunk = input_chunk.output_tiles > 0 ? input_chunk.output_tiles : default_chunk_size;
+        const uint32_t requested_chunk = output_group > 0 ? output_group : default_chunk_size;
         const uint32_t chunk_size = requested_chunk < default_chunk_size ? requested_chunk : default_chunk_size;
         const uint32_t stride = (input_memory_layout.row_stride > 0) ? input_memory_layout.row_stride : Wt;
         const uint32_t tiles_per_bulk = Ht * stride;
@@ -1502,7 +1502,6 @@ ALWI void reduce_planned_variant(PostReduceOp post_reduce_op) {
     auto shape = ReduceInputBlockShape::of(Call::rows, Call::columns, Call::batches);
     auto layout = Call::row_stride == 0 ? ReduceInputMemoryLayout::contiguous()
                                         : ReduceInputMemoryLayout::with_row_stride(Call::row_stride);
-    constexpr auto chunk = ReduceInputChunk::of(Call::reduce_axis_chunk_tiles, Call::output_chunk_tiles);
     [[maybe_unused]] uint32_t valid_h = Call::logical_h;
     [[maybe_unused]] uint32_t valid_w = Call::logical_w;
     [[maybe_unused]] uint32_t output_index = 0;
@@ -1573,7 +1572,13 @@ ALWI void reduce_planned_variant(PostReduceOp post_reduce_op) {
             Call::algorithm,
             Call::within_tile,
             Call::reduce_factor>(
-            shape, layout, NoAccumulation{}, post_scale, Call::partial_mode, chunk, Call::auxiliary_tile_offset);
+            shape,
+            layout,
+            NoAccumulation{},
+            post_scale,
+            Call::partial_mode,
+            Call::output_chunk_tiles,
+            Call::auxiliary_tile_offset);
     } else if constexpr (Call::accumulation_mode == ttnn::kernel_lib::ReduceAccumulationMode::Final) {
         reduce<
             Call::reduce_type,
@@ -1592,7 +1597,7 @@ ALWI void reduce_planned_variant(PostReduceOp post_reduce_op) {
             Accumulate::at_last(Call::accumulator_cb_id, Call::accumulation_index).with_reload(Call::reload_mode),
             post_scale,
             Call::partial_mode,
-            chunk,
+            Call::output_chunk_tiles,
             Call::auxiliary_tile_offset);
     } else {
         static_assert(
@@ -1615,7 +1620,7 @@ ALWI void reduce_planned_variant(PostReduceOp post_reduce_op) {
             Accumulate::at(Call::accumulator_cb_id, Call::accumulation_index).with_reload(Call::reload_mode),
             NoOp{},
             Call::partial_mode,
-            chunk,
+            Call::output_chunk_tiles,
             Call::auxiliary_tile_offset);
     }
 }

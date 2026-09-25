@@ -30,7 +30,6 @@ enum class CallWord : std::uint32_t {
     Batches,
     RowStride,
     ReduceFactor,
-    ReduceAxisChunkTiles,
     ChunkAndAuxiliary,
     PostScaleBits,
     AccumulationIndex,

@@ -267,7 +267,6 @@ public:
                     (reduce_dim == ckernel::ReduceDim::REDUCE_COL && logical_w % 32 != 0));
     static constexpr std::uint32_t row_stride = word<reduce_plan_args::CallWord::RowStride>();
     static constexpr std::uint32_t reduce_factor = word<reduce_plan_args::CallWord::ReduceFactor>();
-    static constexpr std::uint32_t reduce_axis_chunk_tiles = word<reduce_plan_args::CallWord::ReduceAxisChunkTiles>();
     static constexpr std::uint32_t output_chunk_tiles = reduce_plan_args::extract(
         chunk_and_auxiliary,
         reduce_plan_args::chunk_and_auxiliary::output_tiles_shift,
@@ -290,7 +289,7 @@ public:
 
     static_assert(rows > 0 && columns > 0 && batches > 0, "Reduction block shape must be non-zero");
     static_assert(reduce_factor > 0, "Reduction factor must be non-zero");
-    static_assert(reduce_axis_chunk_tiles > 0 && output_chunk_tiles > 0, "Reduction chunk must be non-zero");
+    static_assert(output_chunk_tiles > 0, "Reduction output group must be non-zero");
     static_assert(
         auxiliary_tile_count == 0 || auxiliary_cb_id != reduce_plan_args::no_cb_id,
         "A non-empty reduction auxiliary slice requires a CB");

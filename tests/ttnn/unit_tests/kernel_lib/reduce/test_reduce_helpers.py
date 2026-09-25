@@ -1333,14 +1333,15 @@ def test_reduce_runtime_tail_stream_wraps(device, dim, pool, algorithm, fp32_inp
         if input_policy != "bulk":
             assert input_pages == (2 if plan.algorithm == _ALGORITHM["ACCUMULATE_VIA_ADD"] else 1)
         else:
-            assert input_pages % plan.chunk.input_tiles == 0
-            assert input_pages % plan.tail_plan.chunk.input_tiles == 0
+            for variant_height, variant_width in ((256, 256), (height, width)):
+                axis = ((variant_width if dim == "REDUCE_ROW" else variant_height) + 31) // TILE
+                assert input_pages % (axis * plan.chunk.output_tiles) == 0
         compute_args, auxiliary_args = _serialize_plan(sequence)
         # The test reader uses the same call metadata to count the planned packets.
         auxiliary_args += sequence.calls[0].compile_time_args
         for use_tail in (False, True):
             variant = plan.tail_plan if use_tail else plan
-            axis, group = variant.chunk.reduce_axis_tiles, variant.chunk.output_tiles
+            group = variant.chunk.output_tiles
             height, width, batches = (
                 (block.tail.shape.height, block.tail.shape.width, block.tail.shape.batches)
                 if use_tail
@@ -1357,17 +1358,12 @@ def test_reduce_runtime_tail_stream_wraps(device, dim, pool, algorithm, fp32_inp
             tiles = []
             for batch in range(batches):
                 for out in range(0, ht if dim == "REDUCE_ROW" else wt, group):
-                    for base in range(0, wt if dim == "REDUCE_ROW" else ht, axis):
-                        for a in range(axis):
-                            for o in range(group):
-                                h, w = (out + o, base + a) if dim == "REDUCE_ROW" else (base + a, out + o)
-                                if h >= ht or w >= wt:
-                                    continue
-                                tiles.append(
-                                    padded[batch, h * TILE : (h + 1) * TILE, w * TILE : (w + 1) * TILE]
-                                    if h < ht and w < wt
-                                    else torch.full((TILE, TILE), 999, dtype=torch.bfloat16)
-                                )
+                    for r in range(wt if dim == "REDUCE_ROW" else ht):
+                        for o in range(group):
+                            h, w = (out + o, r) if dim == "REDUCE_ROW" else (r, out + o)
+                            if h >= ht or w >= wt:
+                                continue
+                            tiles.append(padded[batch, h * TILE : (h + 1) * TILE, w * TILE : (w + 1) * TILE])
             source_values = torch.cat(tiles, dim=0)
             source = ttnn.from_torch(
                 source_values,
