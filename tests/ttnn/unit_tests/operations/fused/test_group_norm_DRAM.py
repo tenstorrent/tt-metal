@@ -185,12 +185,19 @@ def test_group_norm_interleaved_l1_replay_respects_occupied_l1(device, enabled_p
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("num_out_blocks", [13, 17, 73])
 @pytest.mark.parametrize("cores_y", [1, 4])
-def test_group_norm_streaming_stats_wrap_DRAM(device, enabled_program_cache, dtype, num_out_blocks, cores_y):
+@pytest.mark.parametrize("C, cores_x, groups", [(64, 1, 2), (256, 8, 32)], ids=["strided", "bank_contiguous"])
+def test_group_norm_streaming_stats_wrap_DRAM(
+    device, enabled_program_cache, dtype, num_out_blocks, cores_y, C, cores_x, groups
+):
+    available_grid = device.compute_with_storage_grid_size()
+    if cores_x > available_grid.x or cores_y > available_grid.y:
+        pytest.skip("Requested streaming grid exceeds the available compute grid")
     # One core's input exceeds L1. Odd CB sizes and partial final blocks make
     # statistics batches split at wrap boundaries, including on the second batch.
-    N, C, groups = 2, 64, 2
+    # The eight-bank Blackhole case also coalesces one-tile rows within each bank.
+    N = 2
     HW = 16384 * max(1, cores_y // N)
-    grid = ttnn.CoreGrid(y=cores_y, x=1)
+    grid = ttnn.CoreGrid(y=cores_y, x=cores_x)
     torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
     weight = torch.linspace(0.75, 1.25, C).to(torch_dtype).float()
     bias = torch.linspace(-0.25, 0.25, C).to(torch_dtype).float()
@@ -228,7 +235,9 @@ def test_group_norm_streaming_stats_wrap_DRAM(device, enabled_program_cache, dty
         )
         actual = ttnn.to_torch(output).float()
         assert torch.isfinite(actual).all()
-        assert_numeric_metrics(reference, actual, atol=0.05, frobenius_threshold=0.01)
+        # The 256-channel BF16 control reaches 0.051 absolute error with the original reader too.
+        atol = 0.06 if C == 256 and dtype == ttnn.bfloat16 else 0.05
+        assert_numeric_metrics(reference, actual, atol=atol, frobenius_threshold=0.01)
         output.deallocate(force=True)
         input_tensor.deallocate(force=True)
 

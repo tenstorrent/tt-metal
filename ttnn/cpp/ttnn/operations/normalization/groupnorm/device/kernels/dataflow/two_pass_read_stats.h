@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <type_traits>
 
 #include "api/core_local_mem.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -22,7 +23,12 @@ inline void read_two_pass_stats_block(
     std::uint32_t row_stride,
     std::uint32_t rows) {
     // Tuned Blackhole read batch size, not a hardware limit on outstanding NOC reads.
-    constexpr std::uint32_t max_tiles_per_read_batch = 8;
+    constexpr std::uint32_t max_tiles_per_read_batch = 4;
+    bool read_contiguous = false;
+    if constexpr (TilesPerRow == 1 && std::is_base_of_v<InterleavedAddrGen<true>, Accessor>) {
+        // Stepping by the bank count advances one physical page in the same bank.
+        read_contiguous = row_stride == NUM_DRAM_BANKS && src.get_aligned_page_size() == TileBytes;
+    }
     const std::uint32_t tiles = rows * TilesPerRow;
     for (std::uint32_t tile = 0; tile < tiles;) {
         const std::uint32_t address = input.get_write_ptr();
@@ -33,14 +39,23 @@ inline void read_two_pass_stats_block(
         if constexpr (HasAlias) {
             alias.reserve_back(count);
         }
-        for (std::uint32_t i = 0; i < count; ++i) {
-            const std::uint32_t offset = tile + i;
-            noc.async_read(
+        if (read_contiguous) {
+            noc.async_read<NocOptions::DEFAULT, max_tiles_per_read_batch * TileBytes>(
                 src,
-                CoreLocalMem<std::uint32_t>(address + i * TileBytes),
-                TileBytes,
-                {.page_id = start_tile + (offset / TilesPerRow) * row_stride + offset % TilesPerRow},
+                CoreLocalMem<std::uint32_t>(address),
+                count * TileBytes,
+                {.page_id = start_tile + tile * row_stride},
                 {});
+        } else {
+            for (std::uint32_t i = 0; i < count; ++i) {
+                const std::uint32_t offset = tile + i;
+                noc.async_read<NocOptions::DEFAULT, TileBytes>(
+                    src,
+                    CoreLocalMem<std::uint32_t>(address + i * TileBytes),
+                    TileBytes,
+                    {.page_id = start_tile + (offset / TilesPerRow) * row_stride + offset % TilesPerRow},
+                    {});
+            }
         }
         noc.async_read_barrier();
         input.push_back(count);
