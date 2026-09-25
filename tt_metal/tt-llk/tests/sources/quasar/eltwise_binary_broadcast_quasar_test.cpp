@@ -47,7 +47,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_binary_broadcast_operands_init_<BROADCAST_TYPE>(
             ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),
             ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
-            tensor_shape,
             INPUT_NUM_TILES_IN_BLOCK);
         PROFILER_SYNC();
     }
@@ -135,7 +134,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
         }
 
-        _llk_math_eltwise_binary_broadcast_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY>(tensor_shape, ACC_TO_DEST);
+        _llk_math_eltwise_binary_broadcast_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY>(tensor_shape);
         PROFILER_SYNC();
     }
     {

@@ -14,12 +14,6 @@ using namespace ckernel;
 using namespace ckernel::trisc;
 using namespace ckernel::math;
 
-inline std::uint32_t _eltwise_binary_broadcast_dest_rows_per_tile_(const TensorShape& tensor_shape)
-{
-    const std::uint32_t rows_per_face = (tensor_shape.face_r_dim < ELTWISE_MATH_ROWS) ? ELTWISE_MATH_ROWS : tensor_shape.face_r_dim;
-    return tensor_shape.total_num_faces() * rows_per_face;
-}
-
 /**
  * @brief Sets up mop config for elementwise binary broadcast operations.
  *
@@ -32,23 +26,17 @@ inline std::uint32_t _eltwise_binary_broadcast_dest_rows_per_tile_(const TensorS
  * @param tensor_shape: Face grid and face row/column dimensions for the operand tile
  */
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE, BroadcastType BROADCAST_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
-inline void _llk_math_eltwise_binary_broadcast_mop_config_(const TensorShape& tensor_shape, bool acc_to_dest = false)
+inline void _llk_math_eltwise_binary_broadcast_mop_config_(const TensorShape& tensor_shape)
 {
     static_assert((BROADCAST_TYPE != BroadcastType::NONE), "Broadcast type cannot be NONE for this operation");
-    if constexpr (BROADCAST_TYPE != BroadcastType::SCALAR)
-    {
-        LLK_ASSERT(tensor_shape.num_faces_c_dim >= tensor_shape.num_faces_r_dim, "ROW/COL broadcast does not support a face grid narrower than it is tall");
-    }
-    const std::uint32_t num_eltwise_instrn_per_face =
-        (tensor_shape.face_r_dim < ELTWISE_MATH_ROWS) ? 1u : (tensor_shape.face_r_dim >> rows_log2(ELTWISE_MATH_ROWS));
+    const std::uint32_t num_eltwise_instrn_per_face = (tensor_shape.face_r_dim >> rows_log2(ELTWISE_MATH_ROWS));
 
     constexpr auto SRCB_BROADCAST_TYPE = (BROADCAST_TYPE == BroadcastType::COL)
                                              ? p_elwise::SRCB_BCAST_COL
                                              : ((BROADCAST_TYPE == BroadcastType::ROW) ? p_elwise::SRCB_BCAST_ROW : p_elwise::SRCB_BCAST_ALL);
 
-    constexpr bool high_fidelity = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
-    static_assert(!(high_fidelity && ELTWISE_BINARY_TYPE != EltwiseBinaryType::ELWMUL), "Math fidelity larger than LoFi only works with Eltwise MUL");
-    const std::uint32_t EN_DST_ACC = acc_to_dest ? 1u : static_cast<std::uint32_t>(high_fidelity);
+    constexpr std::uint32_t EN_DST_ACC = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
+    static_assert(!(EN_DST_ACC && ELTWISE_BINARY_TYPE != EltwiseBinaryType::ELWMUL), "Math fidelity larger than LoFi only works with Eltwise MUL");
 
     const std::uint32_t MOP_OUTER_LOOP = tensor_shape.total_num_faces();
     const std::uint32_t MOP_INNER_LOOP = num_eltwise_instrn_per_face;
@@ -57,9 +45,9 @@ inline void _llk_math_eltwise_binary_broadcast_mop_config_(const TensorShape& te
     const std::uint32_t eltwise_binary_op_clr_srcAB_valid =
         eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_SRCAB_VLD, SRCB_BROADCAST_TYPE, ADDR_MOD_1>(EN_DST_ACC);
 
-    constexpr std::uint32_t replay_buf_len = high_fidelity ? to_underlying(MATH_FIDELITY_TYPE) - 1 : 0;
+    constexpr std::uint32_t replay_buf_len = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 0 : to_underlying(MATH_FIDELITY_TYPE) - 1;
 
-    if constexpr (high_fidelity)
+    if constexpr (EN_DST_ACC)
     {
         load_replay_buf<0, replay_buf_len>(
             // Lambda function to load reply buffer
@@ -77,8 +65,8 @@ inline void _llk_math_eltwise_binary_broadcast_mop_config_(const TensorShape& te
     ROW -> Unpacker unpacks 4 (default in 32x32 tile) faces: F0, F1, F0, F1, SrcB Inc = 0
     COL -> Unpacker unpacks 4 (default in 32x32 tile) faces: F0, F0, F2, F2, SrcB Inc += ELTWISE_MATH_ROWS
     */
-    ckernel_template temp = high_fidelity ? ckernel_template(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0), eltwise_binary_op)
-                                          : ckernel_template(MOP_OUTER_LOOP, MOP_INNER_LOOP, eltwise_binary_op);
+    ckernel_template temp = EN_DST_ACC ? ckernel_template(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0), eltwise_binary_op)
+                                       : ckernel_template(MOP_OUTER_LOOP, MOP_INNER_LOOP, eltwise_binary_op);
 
     // Only need to clear per face for ROW/COL, since SCALAR only has 1 face from the unpacker
     if constexpr (BROADCAST_TYPE != BroadcastType::SCALAR)
@@ -173,12 +161,10 @@ inline void _llk_math_eltwise_binary_broadcast_addrmod_()
  * @note @ref _llk_math_eltwise_binary_broadcast_ runs the configured op with matching template args.
  */
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE, BroadcastType BROADCAST_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
-inline void _llk_math_eltwise_binary_broadcast_init_(const TensorShape& tensor_shape, bool acc_to_dest = false)
+inline void _llk_math_eltwise_binary_broadcast_init_(const TensorShape& tensor_shape)
 {
     _llk_math_eltwise_binary_broadcast_addrmod_<BROADCAST_TYPE, MATH_FIDELITY_TYPE>();
-    _llk_math_eltwise_binary_broadcast_mop_config_<ELTWISE_BINARY_TYPE, BROADCAST_TYPE, MATH_FIDELITY_TYPE>(tensor_shape, acc_to_dest);
-
-    _set_tile_shape_idx_gpr_(_eltwise_binary_broadcast_dest_rows_per_tile_(tensor_shape));
+    _llk_math_eltwise_binary_broadcast_mop_config_<ELTWISE_BINARY_TYPE, BROADCAST_TYPE, MATH_FIDELITY_TYPE>(tensor_shape);
 
     // Reset all counters
     _reset_counters_<p_setrwc::SET_ABD_F>();
@@ -196,7 +182,7 @@ inline void _llk_math_eltwise_binary_broadcast_init_(const TensorShape& tensor_s
  */
 inline void _llk_math_eltwise_binary_broadcast_(const std::uint32_t tile_idx)
 {
-    _set_dst_write_addr_by_rows_(tile_idx);
+    _set_dst_write_addr_<DstTileShape::Tile32x32>(tile_idx);
 
     // Run MOP
     ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);

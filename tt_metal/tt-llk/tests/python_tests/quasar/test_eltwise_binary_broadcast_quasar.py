@@ -96,6 +96,42 @@ def binary_broadcast_dest_sync_modes(*, is_perf=False):
     return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
 
 
+# Reverted broadcast math uses `face_r_dim >> 3` as the MOP inner loop. A face
+# shorter than one ELW instruction (8 rows) programs inner loop 0 and hangs.
+_BROADCAST_MATH_ROWS = 8
+
+
+def skip_if_quasar_binary_broadcast_unsupported(
+    tile_dimensions, math_fidelity, acc_to_dest
+) -> None:
+    """Skip broadcast cases the reverted full-tile kernels cannot run.
+
+    Tiny-tile broadcast math/unpack was reverted. Until that returns:
+    face_r_dim < 8 hangs, every other non-32x32 tile reads or packs the wrong
+    faces, and acc_to_dest only matches hardware when it equals "not LoFi".
+    """
+    tile_shape = construct_tile_shape(tile_dimensions)
+    if tile_shape.face_r_dim < _BROADCAST_MATH_ROWS:
+        pytest.skip(
+            "Quasar eltwise binary broadcast math MOP inner loop is 0 when "
+            f"face_r_dim={tile_shape.face_r_dim} < {_BROADCAST_MATH_ROWS} "
+            f"(tile {list(tile_dimensions)}). See tenstorrent/tt-metal#57902"
+        )
+    if tuple(tile_dimensions) != (32, 32):
+        pytest.skip(
+            "Quasar eltwise binary broadcast unpack and dest addressing are "
+            f"32x32-only after reverting tiny-tile support (tile {list(tile_dimensions)}). "
+            "See tenstorrent/tt-metal#57902"
+        )
+    hardware_acc = math_fidelity != MathFidelity.LoFi
+    if bool(acc_to_dest) != hardware_acc:
+        pytest.skip(
+            "Quasar eltwise binary broadcast enables dest accumulation only for "
+            f"non-LoFi fidelity (requested acc_to_dest={acc_to_dest}, "
+            f"math_fidelity={math_fidelity.name}). See tenstorrent/tt-metal#57902"
+        )
+
+
 def binary_broadcast_tile_dimensions(formats, broadcast_type, *, is_perf=False):
     tile_sizes = (
         select_perf_tile_sizes(SUPPORTED_TILE_SIZES)
@@ -196,6 +232,9 @@ def test_eltwise_binary_broadcast_quasar(
     is_perf=False,
     perf_report=None,
 ):
+    skip_if_quasar_binary_broadcast_unsupported(
+        tile_dimensions, math_fidelity, acc_to_dest
+    )
     tile_shape = construct_tile_shape(tile_dimensions)
     num_faces = tile_shape.total_num_faces()
     num_tiles_per_accumulation = get_num_tiles_per_accumulation(acc_to_dest)

@@ -89,6 +89,23 @@ def eltwise_binary_math_fidelities(math_op, formats):
     ]
 
 
+# Quasar FPU eltwise binary steps 8 dest rows per instruction. A tile with
+# faces * face_r_dim < 8 programs MOP_OUTER_LOOP = 0 and hangs.
+ELTWISE_MATH_ROWS = 8
+
+
+def skip_if_quasar_eltwise_binary_hangs(tile_dimensions) -> None:
+    """Skip tiles whose math MOP never runs, so unpack dvalid is never cleared."""
+    tile_shape = construct_tile_shape(tile_dimensions)
+    dest_rows = tile_shape.total_num_faces() * tile_shape.face_r_dim
+    if dest_rows < ELTWISE_MATH_ROWS:
+        pytest.skip(
+            "Quasar eltwise binary math MOP outer loop is 0 when "
+            f"faces*face_r_dim={dest_rows} < {ELTWISE_MATH_ROWS} "
+            f"(tile {list(tile_dimensions)}). See tenstorrent/tt-metal#57902"
+        )
+
+
 # For acc_to_dest setting, accumulate two result tiles into dest. Can be extended.
 def get_num_tiles_per_accumulation(acc_to_dest: bool) -> int:
     return 2 if acc_to_dest else 1
@@ -192,6 +209,7 @@ def test_eltwise_binary(
     is_perf=False,
     perf_report=None,
 ):
+    skip_if_quasar_eltwise_binary_hangs(tile_dimensions)
     tile_shape = construct_tile_shape(tile_dimensions)
     num_faces = tile_shape.total_num_faces()
     num_tiles_per_accumulation = get_num_tiles_per_accumulation(acc_to_dest)

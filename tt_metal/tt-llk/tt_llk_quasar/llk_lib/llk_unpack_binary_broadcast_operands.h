@@ -7,7 +7,6 @@
 #include <cstdint>
 
 #include "llk_unpack_common.h"
-#include "tensor_shape.h"
 using namespace ckernel;
 
 /**
@@ -23,40 +22,33 @@ using namespace ckernel;
  */
 template <BroadcastType BROADCAST_TYPE>
 inline void _llk_unpack_binary_broadcast_operands_mop_config_(
-    const std::uint32_t buf_desc_id_0, const std::uint32_t buf_desc_id_1, const TensorShape& tensor_shape, const std::uint32_t num_tiles)
+    const std::uint32_t buf_desc_id_0, const std::uint32_t buf_desc_id_1, const std::uint32_t num_tiles)
 {
     static_assert((BROADCAST_TYPE != BroadcastType::NONE), "Broadcast type cannot be NONE for this operation");
-    if constexpr (BROADCAST_TYPE != BroadcastType::SCALAR)
-    {
-        LLK_ASSERT(tensor_shape.num_faces_c_dim >= tensor_shape.num_faces_r_dim, "ROW/COL broadcast does not support a face grid narrower than it is tall");
-    }
 
     const std::uint32_t MOP_OUTER_LOOP     = num_tiles;
     constexpr std::uint32_t MOP_INNER_LOOP = 1;
 
-    const std::uint32_t unpack_srca_tile_inc = TT_OP_UNPACR0_TILE_INC(0, 1 /*Src Tile Idx*/, buf_desc_id_0, 1 /*Set Dvalid*/);
-    const std::uint32_t replay_buf_len       = (BROADCAST_TYPE == BroadcastType::SCALAR) ? 1u : tensor_shape.total_num_faces();
+    std::uint32_t unpack_srca_tile_inc            = TT_OP_UNPACR0_TILE_INC(0, 1 /*Src Tile Idx*/, buf_desc_id_0, 1 /*Set Dvalid*/);
+    constexpr static std::uint32_t replay_buf_len = (BROADCAST_TYPE == BroadcastType::SCALAR) ? 1 : 4;
 
-    load_replay_buf(
-        0u,
-        replay_buf_len,
-        false,
-        0,
-        0,
-        [buf_desc_id_1, tensor_shape, replay_buf_len]
+    load_replay_buf<0, replay_buf_len>(
+        [buf_desc_id_1]
         {
-            for (std::uint32_t face = 0; face < replay_buf_len; ++face)
+            // Unpacks face 0 into dest offset 0
+            TT_UNPACR1_FACE(0 /*Dst Face Idx*/, 0 /*Src Face Idx*/, 0, 0, buf_desc_id_1, 1 /*Set Dvalid*/);
+
+            if constexpr (BROADCAST_TYPE == BroadcastType::ROW)
             {
-                std::uint32_t src_face = 0;
-                if constexpr (BROADCAST_TYPE == BroadcastType::ROW)
-                {
-                    src_face = face % tensor_shape.num_faces_c_dim;
-                }
-                else if constexpr (BROADCAST_TYPE == BroadcastType::COL)
-                {
-                    src_face = (face / tensor_shape.num_faces_c_dim) * tensor_shape.num_faces_c_dim;
-                }
-                TT_UNPACR1_FACE(0 /*Dst Face Idx*/, src_face, 0, 0, buf_desc_id_1, 1 /*Set Dvalid*/);
+                TT_UNPACR1_FACE(0 /*Dst Face Idx*/, 1 /*Src Face Idx*/, 0, 0, buf_desc_id_1, 1 /*Set Dvalid*/);
+                TT_UNPACR1_FACE(0 /*Dst Face Idx*/, 0 /*Src Face Idx*/, 0, 0, buf_desc_id_1, 1 /*Set Dvalid*/);
+                TT_UNPACR1_FACE(0 /*Dst Face Idx*/, 1 /*Src Face Idx*/, 0, 0, buf_desc_id_1, 1 /*Set Dvalid*/);
+            }
+            else if constexpr (BROADCAST_TYPE == BroadcastType::COL)
+            {
+                TT_UNPACR1_FACE(0 /*Dst Face Idx*/, 0 /*Src Face Idx*/, 0, 0, buf_desc_id_1, 1 /*Set Dvalid*/);
+                TT_UNPACR1_FACE(0 /*Dst Face Idx*/, 2 /*Src Face Idx*/, 0, 0, buf_desc_id_1, 1 /*Set Dvalid*/);
+                TT_UNPACR1_FACE(0 /*Dst Face Idx*/, 2 /*Src Face Idx*/, 0, 0, buf_desc_id_1, 1 /*Set Dvalid*/);
             }
         });
 
@@ -87,19 +79,11 @@ inline void _llk_unpack_binary_broadcast_operands_mop_config_(
  */
 template <BroadcastType BROADCAST_TYPE>
 inline void _llk_unpack_binary_broadcast_operands_init_(
-    const std::uint32_t buf_desc_id_0, const std::uint32_t buf_desc_id_1, const TensorShape& tensor_shape, const std::uint32_t num_tiles = NUM_TILES)
+    const std::uint32_t buf_desc_id_0, const std::uint32_t buf_desc_id_1, const std::uint32_t num_tiles = NUM_TILES)
 {
     cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0);
     cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
-    _llk_unpack_binary_broadcast_operands_mop_config_<BROADCAST_TYPE>(buf_desc_id_0, buf_desc_id_1, tensor_shape, num_tiles);
-}
-
-// Backward-compatible full-tile entry point used by existing fused kernels.
-template <BroadcastType BROADCAST_TYPE>
-inline void _llk_unpack_binary_broadcast_operands_init_(
-    const std::uint32_t buf_desc_id_0, const std::uint32_t buf_desc_id_1, const std::uint32_t num_tiles = NUM_TILES)
-{
-    _llk_unpack_binary_broadcast_operands_init_<BROADCAST_TYPE>(buf_desc_id_0, buf_desc_id_1, ckernel::DEFAULT_TENSOR_SHAPE, num_tiles);
+    _llk_unpack_binary_broadcast_operands_mop_config_<BROADCAST_TYPE>(buf_desc_id_0, buf_desc_id_1, num_tiles);
 }
 
 /**
