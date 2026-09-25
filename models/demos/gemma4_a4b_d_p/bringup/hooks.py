@@ -27,10 +27,13 @@ def hf_layers(model):
 
 
 # Device steps swapped in so far, per block type. Every other step runs on the CPU reference.
-DEVICE_STEPS = {"sliding": {"attn_norm", "attention"}, "global": set()}
+DEVICE_STEPS = {"sliding": {"attn_norm", "attention", "post_attn_norm"}, "global": set()}
 
 # Norm steps -> checkpoint weight name (under model.language_model.layers.<i>.).
-_NORM_WEIGHTS = {"attn_norm": "input_layernorm.weight"}
+_NORM_WEIGHTS = {
+    "attn_norm": "input_layernorm.weight",
+    "post_attn_norm": "post_attention_layernorm.weight",
+}
 
 
 def _norm_module(mesh, spec, layer, step, loader=None):
