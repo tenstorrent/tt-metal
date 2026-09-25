@@ -176,8 +176,6 @@ ALWI void mul_reduce_scalar_chunked_tile(uint32_t icb0, uint32_t icb1, uint32_t 
     }
 }
 
-#endif  // ARCH_BLACKHOLE
-
 // Explicit-fidelity forms of mul_reuse_dest_init / mul_reuse_dest_tiles (eltwise_binary.h) and
 // mul_bcast_scalar_init / mul_tiles_bcast_scalar (bcast.h), named apart for the same reason as the rmsnorm
 // _fidelity variants above.
@@ -221,5 +219,7 @@ ALWI void mul_tiles_bcast_scalar_fidelity(
           EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true /* clear_fp32_dst_acc */)));
     UNPACK((llk_unpack_AB<BroadcastType::SCALAR>(icb0, icb1, itile0, itile1)));
 }
+
+#endif  // ARCH_BLACKHOLE
 
 }  // namespace ckernel

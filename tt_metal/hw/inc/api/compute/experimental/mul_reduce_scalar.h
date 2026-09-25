@@ -5,6 +5,7 @@
 #pragma once
 
 #include "api/compute/eltwise_binary.h"
+#include "llk_assert.h"
 #ifdef TRISC_MATH
 #include "sfpu/ckernel_sfpu_fill.h"  // _calculate_fill_ used by mul_reduce_scalar_tile
 #include "llk_math_eltwise_unary_sfpu_macros.h"
@@ -72,6 +73,11 @@ template <
 ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t num_tiles, float scaler) {
     MATH(constexpr MathFidelity mul_f = program_fidelity ? MATH_FIDELITY : mul_fidelity);
     MATH(constexpr MathFidelity reduce_f = program_fidelity ? MATH_FIDELITY : reduce_fidelity);
+    constexpr uint32_t dest_capacity =
+        get_dest_max_tiles<DST_SYNC_MODE, is_fp32_dest_acc_en, DstTileShape::Tile32x32>();
+    LLK_ASSERT(
+        accumulate_in_one_tile || num_tiles <= dest_capacity,
+        "mul_reduce_scalar_tile: num_tiles exceeds the DEST capacity; accumulate_in_one_tile has no such limit");
 
     // Step 1: Unpack input tiles from both circular buffers and perform multiplication. ELWMUL accumulates
     // into DEST, so with accumulate_in_one_tile every product lands in dest[0].
