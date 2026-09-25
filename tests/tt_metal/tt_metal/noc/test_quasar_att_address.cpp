@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Host-only golden tests of the typed ATT resolution layer: exact encoded
-// addresses for every address kind on both product maps, self-detection,
-// rejection of out-of-map identities, and the worker multicast rectangle.
-// No device is opened.
+// addresses for every address kind on both product maps, host-frame (packed
+// word) resolution through the map's frame offset, self-detection, rejection
+// of out-of-map identities, and the worker multicast rectangle. No device is
+// opened.
 
 #include <gtest/gtest.h>
 
@@ -62,10 +63,74 @@ TEST(QuasarAttAddressQsr1, OutOfMapIdentitiesAreRejected) {
     static_assert(!Address::worker(2, 1, 0).encode<QSR1>().has_value());
     static_assert(!Address::worker(10, 2, 0).encode<QSR1>().has_value());
     static_assert(!Address::worker(2, 6, 0).encode<QSR1>().has_value());
-    // No logical DRAM or Dispatch binding exists in the checked-in descriptor:
-    // the map's tables are empty, so these kinds resolve invalid.
-    static_assert(!Address::dram(0, 0).encode<QSR1>().has_value());
+    // Logical DRAM is bound to the four boot-programmed channels only.
+    static_assert(!Address::dram(4, 0).encode<QSR1>().has_value());
+    // Dispatch keys are descriptor-frame coordinates of the listed tiles: an
+    // unlisted tile and the LIVE-frame coordinate of a DE tile both miss.
     static_assert(!Address::dispatch(0, 0, 0).encode<QSR1>().has_value());
+    static_assert(!Address::dispatch(12, 8, 0).encode<QSR1>().has_value());
+}
+
+TEST(QuasarAttAddressQsr1, DramEncodesThroughTheDramWindow) {
+    // Logical bank N -> selector N -> 0x1_0000_0000_0000 | N<<33 | offset (pass-through, no rebase).
+    static_assert(*Address::dram(0, 0x1000).encode<QSR1>() == 0x1000000001000ull);
+    static_assert(*Address::dram(1, 0x1000).encode<QSR1>() == (0x1000000000000ull | (1ull << 33) | 0x1000));
+    static_assert(*Address::dram(3, 0).encode<QSR1>() == (0x1000000000000ull | (3ull << 33)));
+    // The 8 GiB slot ends where the selector field starts.
+    static_assert(Address::dram(0, (1ull << 33) - 4).encode<QSR1>(4).has_value());
+    static_assert(!Address::dram(0, (1ull << 33) - 4).encode<QSR1>(8).has_value());
+}
+
+TEST(QuasarAttAddressQsr1, DispatchEncodesThroughItsTileWindow) {
+    // DE tiles (descriptor frame) -> full-tile selectors 56..58: 0x18_0000_0000 | sel<<27 | offset.
+    static_assert(*Address::dispatch(10, 6, 0).encode<QSR1>() == 0x19c0000000ull);
+    static_assert(*Address::dispatch(10, 6, 0x40).encode<QSR1>() == (0x1800000000ull | (56ull << 27) | 0x40));
+    static_assert(*Address::dispatch(10, 1, 0).encode<QSR1>() == (0x1800000000ull | (57ull << 27)));
+    static_assert(*Address::dispatch(1, 6, 0).encode<QSR1>() == (0x1800000000ull | (58ull << 27)));
+    // The interim Tensix dispatch tiles are worker selectors: the same operand Address::worker builds.
+    static_assert(*Address::dispatch(9, 5, 0x1234).encode<QSR1>() == *Address::worker(9, 5, 0x1234).encode<QSR1>());
+    static_assert(*Address::dispatch(9, 5, 0).encode<QSR1>() == 0x1001F000000ull);
+}
+
+TEST(QuasarAttAddressQsr1, HostFrameCoordinatesResolveThroughTheOffset) {
+    // Host-packed words are descriptor-frame; the inverse tables are live-frame
+    // (+2,+2). Worker 2-2 -> word 0x104 -> selector 0; 9-5 -> 0x1cb -> 31.
+    static_assert(QSR1.node_id_offset_x == 2 && QSR1.node_id_offset_y == 2);
+    constexpr ResolvedTile origin = noc_att::resolve_host_coordinate(QSR1, 2, 2);
+    static_assert(origin.valid && origin.window == WindowClass::Worker && origin.selector == 0);
+    constexpr ResolvedTile corner = noc_att::resolve_host_coordinate(QSR1, 9, 5);
+    static_assert(corner.valid && corner.window == WindowClass::Worker && corner.selector == 31);
+    // A mid-grid worker: host coordinate (2,5) is worker selector 24, and the forward path agrees.
+    constexpr ResolvedTile row3 = noc_att::resolve_host_coordinate(QSR1, 2, 5);
+    static_assert(row3.valid && row3.selector == 24);
+    static_assert(noc_att::resolve(QSR1, Address::worker(2, 5, 0)).selector == 24);
+    static_assert(
+        noc_att::map_window(QSR1, row3.window).make_address(row3.selector, 0x4da00) ==
+        *Address::worker(2, 5, 0x4da00).encode<QSR1>());
+    // A DE tile resolves through the full-tile table to its dispatch selector.
+    constexpr ResolvedTile de = noc_att::resolve_host_coordinate(QSR1, 10, 6);
+    static_assert(de.valid && de.window == WindowClass::FullTile && de.selector == 56);
+    // The live-frame coordinate of the origin is not a host coordinate...
+    static_assert(!noc_att::resolve_host_coordinate(QSR1, 0, 0).valid);
+    // ...while the DRAM channel tiles ([4-7], [8-7], [7-0], [3-0] -> live 0x246,
+    // 0x24a, 0x089, 0x085) resolve through the DRAM endpoint words to the DRAM
+    // window at the channel's selector (lane A), so a host coordinate naming a
+    // DRAM tile (CQ write_linear to DRAM-sharded buffers) reaches the Mimir.
+    constexpr auto dram0 = noc_att::resolve_host_coordinate(QSR1, 4, 7);
+    static_assert(dram0.valid && dram0.window == WindowClass::Dram && dram0.selector == 0);
+    constexpr auto dram1 = noc_att::resolve_host_coordinate(QSR1, 8, 7);
+    static_assert(dram1.valid && dram1.window == WindowClass::Dram && dram1.selector == 1);
+    constexpr auto dram2 = noc_att::resolve_host_coordinate(QSR1, 7, 0);
+    static_assert(dram2.valid && dram2.window == WindowClass::Dram && dram2.selector == 2);
+    constexpr auto dram3 = noc_att::resolve_host_coordinate(QSR1, 3, 0);
+    static_assert(dram3.valid && dram3.window == WindowClass::Dram && dram3.selector == 3);
+    // Lane B (second core of each channel pair) reaches the same channel via selector 16+N.
+    constexpr auto dram0b = noc_att::resolve_host_coordinate(QSR1, 5, 7);
+    static_assert(dram0b.valid && dram0b.window == WindowClass::Dram && dram0b.selector == 16);
+    // Self-detection by host coordinate: tile 2-2 latches NOC_NODE_ID (4,4).
+    static_assert(noc_att::host_coordinate_is_current(QSR1, 2, 2, 4, 4));
+    static_assert(!noc_att::host_coordinate_is_current(QSR1, 4, 4, 4, 4));
+    static_assert(!noc_att::host_coordinate_is_current(QSR1, 2, 2, 2, 2));
 }
 
 TEST(QuasarAttAddressQsr1, TransfersAreValidatedAgainstTheWindow) {
@@ -274,17 +339,21 @@ TEST(QuasarAttAddressAether, OversizedIdentitiesClampAndReject) {
 }
 
 TEST(QuasarAttAddressAether, PackedDramEndpointsMatchAddressDram) {
-    // The packed bank-table path resolves a DRAM tile coordinate through the
-    // inverse endpoint lookup; the result must equal Address::dram for the
-    // same bank (regression for the DRAM-bank misrouting found on the first
-    // emulator run). Aether DRAM tiles: bank 0 -> (0,0), bank 1 -> (1,0).
-    constexpr ResolvedTile bank0 = noc_att::resolve_current(AETHER, 0, 0);
+    // On this map the NOC_NODE_ID frame is the descriptor frame (no offset),
+    // so a host coordinate resolves through the inverse tables unchanged; a
+    // DRAM tile coordinate lands on the same remote-window selector
+    // Address::dram produces for that bank. Aether DRAM tiles: bank 0
+    // -> (0,0), bank 1 -> (1,0). (Under ATT the kernels' DRAM path is typed on
+    // every map; this pins the two views of the same tile together.)
+    static_assert(AETHER.node_id_offset_x == 0 && AETHER.node_id_offset_y == 0);
+    static_assert(noc_att::host_coordinate_is_current(AETHER, 0, 1, 0, 1));
+    constexpr ResolvedTile bank0 = noc_att::resolve_host_coordinate(AETHER, 0, 0);
     static_assert(bank0.valid);
     static_assert(bank0.window == WindowClass::FullTile);
     static_assert(
         noc_att::map_window(AETHER, bank0.window).make_address(bank0.selector, 0x2000) ==
         *Address::dram(0, 0x2000).encode<AETHER>());
-    constexpr ResolvedTile bank1 = noc_att::resolve_current(AETHER, 1, 0);
+    constexpr ResolvedTile bank1 = noc_att::resolve_host_coordinate(AETHER, 1, 0);
     static_assert(bank1.valid);
     static_assert(bank1.window == WindowClass::FullTile);
     static_assert(

@@ -16,6 +16,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/assert.hpp>
@@ -88,6 +89,7 @@ enum class EnvVarID {
     TT_METAL_DISPATCH_DATA_COLLECTION,  // Enable dispatch debug data collection
     TT_METAL_GTEST_ETH_DISPATCH,        // Use Ethernet cores for dispatch in tests
     TT_METAL_TENSIX_DISPATCH_CORES,     // Quasar: force interim Tensix dispatch cores from core descriptor YAML
+    TT_METAL_NOC_ATT,                   // Quasar: NoC address-translation-table map for device traffic
     TT_METAL_SKIP_LOADING_FW,           // Skip firmware loading
     TT_METAL_DISABLE_XIP_DUMP,          // Disable XIP dump
 
@@ -698,6 +700,23 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
                 tt::LogDevice,
                 "TT_METAL_TENSIX_DISPATCH_CORES=1: using interim Tensix dispatch cores from core descriptor YAML");
             break;
+
+        // TT_METAL_NOC_ATT
+        // Quasar: the NoC address-translation-table (ATT) map device traffic is composed against.
+        // "off", "none" or "0" force plain XY addressing. When unset, XY addressing is used except
+        // that MetalEnvImpl defaults the qsr.s1 emulator model to, grendel_qsr1. Unknown map names
+        // are rejected by the Quasar HAL when the JIT defines are generated.
+        // Default: unset
+        // Usage: export TT_METAL_NOC_ATT=grendel_qsr1
+        case EnvVarID::TT_METAL_NOC_ATT: {
+            this->noc_att_specified_ = true;
+            std::string lowered(value);
+            std::transform(
+                lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char ch) { return std::tolower(ch); });
+            this->noc_att_map_ =
+                (lowered == "off" || lowered == "none" || lowered == "0") ? std::string() : std::string(value);
+            break;
+        }
 
         // TT_METAL_SKIP_LOADING_FW
         // Skip loading firmware during device initialization.

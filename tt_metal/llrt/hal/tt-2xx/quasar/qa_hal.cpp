@@ -7,8 +7,11 @@
 #include <cstdlib>
 #include <enchantum/enchantum.hpp>
 #include <numeric>
+#include <optional>
 #include <string>
+#include <string_view>
 
+#include "quasar/qa_att_windows.hpp"
 #include "quasar/qa_hal.hpp"
 #include "dev_mem_map.h"
 #include "eth_fw_api.h"
@@ -341,22 +344,18 @@ public:
     std::vector<std::string> defines(const Params& params) const override {
         auto defines = HalJitBuildQueryBase::defines(params);
         defines.push_back("ARCH_QUASAR");
-        // Snapshot the env once: defines() runs separately for firmware and
-        // kernel builds, and a mid-process env change must not compile them
-        // against different maps.
-        static const char* const att_map = std::getenv("TT_METAL_NOC_ATT");
-        if (att_map != nullptr) {
+        // The map comes from RunTimeOptions (TT_METAL_NOC_ATT, or the qsr.s1 default MetalEnvImpl
+        // installs) and is fixed for the process, so the firmware and kernel builds see the same map.
+        if (const std::optional<std::string_view> att_map = params.rtoptions.get_noc_att_map();
+            att_map.has_value()) {
             // ATT enabled => the ATT backend and the V3 API everywhere, one map
             // per build. The defines reach the JIT build key through the
             // define hash, so toggling can never reuse stale binaries.
-            const std::string_view map(att_map);
-            if (map == "grendel_qsr1") {
-                defines.push_back("NOC_ATT_CONFIG_GRENDEL_QSR1");
-            } else if (map == "quasar_aether_2x3") {
-                defines.push_back("NOC_ATT_CONFIG_QUASAR_AETHER_2X3");
-            } else {
-                TT_THROW("Unknown TT_METAL_NOC_ATT map '{}' (expected grendel_qsr1 or quasar_aether_2x3)", map);
+            const quasar_att::MapInfo* map_info = quasar_att::find_map(*att_map);
+            if (map_info == nullptr) {
+                TT_THROW("Unknown TT_METAL_NOC_ATT map '{}' (expected {})", *att_map, quasar_att::KNOWN_MAP_NAMES);
             }
+            defines.push_back(std::string(map_info->config_define));
             // Fast dispatch runs on the V3 CQ flag family (cq_dispatch/cq_prefetch
             // reject non-DRAM-backed CQs at compile time). The watcher NoC sanitizer
             // decodes XY operands and cannot run under ATT currently; the rest of the

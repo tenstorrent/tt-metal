@@ -149,6 +149,58 @@ FORCE_INLINE uint64_t cq_mcast_noc_addr(uint32_t packed_rect, uint64_t offset) {
 #endif
 }
 
+#if defined(NOC_ATT_ENABLED)
+// Stateful CQ reads whose source is a bank id. The address backend turns the bank id
+// into the operand's base (under ATT a DRAM bank maps straight to its selector, with no
+// table search). So the command-queue kernels can name DRAM and L1 banks by bank number
+// and let the address backend produce the address, instead of naming them by coordinates
+// and converting. These sit here, not in the V3 API header, because the backend and the
+// bank tables are only available once the dataflow address layer has been included.
+template <bool is_dram>
+inline __attribute__((always_inline)) uint64_t noc_v3_cq_bank_base(uint32_t bank, uint8_t noc) {
+    return noc_address_backend::bank_address<is_dram>(bank, 0, noc);
+}
+
+// The split-source noc_read_with_state with the source base taken from a bank id.
+// Kept as its own function so the bank resolve only happens under the NOC flag.
+template <
+    uint8_t noc_mode = DM_DEDICATED_NOC,
+    uint32_t cmd_buf,
+    enum CQNocFlags flags,
+    bool is_dram,
+    enum CQNocSend send = CQ_NOC_SEND,
+    enum CQNocWait wait = CQ_NOC_WAIT>
+inline __attribute__((always_inline)) void noc_read_with_state_bank(
+    uint32_t noc, uint32_t bank, uint64_t src_addr, uint32_t dst_addr, uint32_t size) {
+    static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+
+    if constexpr (flags & CQ_NOC_FLAG_SRC) {
+        noc_v3_cq_state[cmd_buf].src_local = src_addr;
+    }
+    if constexpr (flags & CQ_NOC_FLAG_NOC) {
+        noc_v3_cq_state[cmd_buf].src_base = noc_v3_cq_bank_base<is_dram>(bank, noc);
+    }
+    if constexpr (flags & (CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_NOC)) {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf,
+            TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8,
+            noc_v3_cq_state[cmd_buf].src_base | noc_v3_cq_state[cmd_buf].src_local);
+    }
+    if constexpr (flags & CQ_NOC_FLAG_DST) {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, noc_v3_local_operand(dst_addr));
+    }
+    if constexpr (flags & CQ_NOC_FLAG_LEN) {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, size);
+    }
+    if constexpr (send) {
+        __builtin_riscv_ttrocc_cmdbuf_issue_trans(cmd_buf);
+        noc_reads_num_issued[noc] += 1;
+    }
+}
+#endif  // NOC_ATT_ENABLED
+
 template <
     enum CQNocFlags flags,
     enum CQNocWait wait = CQ_NOC_WAIT,

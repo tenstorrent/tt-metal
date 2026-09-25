@@ -209,9 +209,13 @@ public:
         // uint8_t risc_state[processor_count]; // Rounded up to nearest word
         // uint32_t lock;
         // byte print_buffer[remaining buffer];
-        auto make_buffer = [](uint64_t address, uint16_t size, uint16_t processor_count, uint16_t processor_offset) {
+        const bool quasar_layout = hal.get_arch() == tt::ARCH::QUASAR;
+        auto make_buffer = [quasar_layout](
+                               uint64_t address, uint16_t size, uint16_t processor_count, uint16_t processor_offset) {
             const uint16_t risc_state_bytes = ((processor_count + 3) / 4) * 4;
-            const uint16_t buffer_offset = 8u + risc_state_bytes + sizeof(uint32_t);
+            // Quasar isolates the lock on its own 64-byte line.
+            const uint16_t buffer_offset =
+                quasar_layout ? 128u : static_cast<uint16_t>(8u + risc_state_bytes + sizeof(uint32_t));
             const uint16_t buffer_size = size - buffer_offset;
             return DPrintBufferInfo{address, size, 0, buffer_offset, buffer_size, processor_count, processor_offset};
         };
@@ -587,6 +591,21 @@ bool DPrintServer::Impl::poll_print_buffer(
 
         // Clear stall bit to get actual wpos value
         wpos = wpos & ~DEVICE_PRINT_WRITE_STALL_FLAG;
+
+        // Both pointers are word offsets into the data ring; skip anything else instead of issuing a
+        // wrapped or sub-word read.
+        if (wpos > print_buffer_size || rpos > print_buffer_size || ((wpos | rpos) & 3) != 0) {
+            log_warning(
+                tt::LogMetal,
+                "DPRINT buffer header out of range on device {} virtual core {}: wpos={} rpos={} size={}; skipping",
+                device_id,
+                virtual_core.str(),
+                wpos,
+                rpos,
+                print_buffer_size);
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            return false;
+        }
 
         if (rpos > wpos) {
             // Read until end of buffer and then from beginning until wpos
@@ -1220,8 +1239,10 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
     }
     log_info(tt::LogMetal, "DPRINT Server attached device {}", device_id);
 
-    // Set up dispatch_s DRAM aggregation for this device (when dispatch_s is enabled).
-    if (!context_->get_dispatch_query_manager().dispatch_s_enabled()) {
+    // Set up dispatch_s DRAM aggregation for this device (when dispatch_s is enabled). Under an ATT
+    // map dispatch_s is built without the aggregator (see DispatchSKernel), so the server polls the
+    // per-core L1 buffers directly.
+    if (!context_->get_dispatch_query_manager().dispatch_s_enabled() || env_.get_rtoptions().get_noc_att_map().has_value()) {
         return;
     }
 

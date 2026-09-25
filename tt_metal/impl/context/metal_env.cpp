@@ -5,7 +5,9 @@
 
 #include <pthread.h>
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
+#include <string>
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/fmt.hpp>
 #include <limits>
@@ -158,6 +160,31 @@ bool should_enable_blackhole_dram_programmable_cores(const Cluster& cluster, con
         res);
     return res.dram_programmable_cores;
 }
+
+// The qsr.s1 emulator model only routes device NoC traffic through the boot-programmed
+// address-translation tables, so tt-metal defaults it to the grendel_qsr1 ATT map.
+// The simulator directory basename, with any trailing separator stripped so filename() is not empty.
+std::string quasar_simulator_name(const llrt::RunTimeOptions& rtoptions) {
+    std::string simulator = rtoptions.get_simulator_path().string();
+    while (simulator.size() > 1 && simulator.back() == '/') {
+        simulator.pop_back();
+    }
+    return std::filesystem::path(simulator).filename().string();
+}
+
+// Set the qsr.s1 ATT default from the simulator path alone. Only called when the user did not set
+// TT_METAL_NOC_ATT.
+void default_quasar_noc_att_from_path(llrt::RunTimeOptions& rtoptions) {
+    if (!rtoptions.is_qsr_s1_simulator()) {
+        return;
+    }
+    rtoptions.set_noc_att_map("grendel_qsr1");
+    log_info(
+        tt::LogMetal,
+        "TT_METAL_NOC_ATT defaulted to grendel_qsr1 for the qsr.s1 simulator '{}' (set TT_METAL_NOC_ATT=off to opt out)",
+        quasar_simulator_name(rtoptions));
+}
+
 }  // namespace
 
 void MetalEnvImpl::initialize_base_objects() {
@@ -169,6 +196,16 @@ void MetalEnvImpl::initialize_base_objects() {
     }
 
     const auto platform_arch = get_platform_architecture(*this->rtoptions_);
+
+    // Default the ATT map for the qsr.s1 model before constructing the Cluster, whose constructor
+    // opens the simulator. Only when TT_METAL_NOC_ATT is not set at all.
+    if (platform_arch == tt::ARCH::QUASAR && this->rtoptions_->get_simulator_enabled() &&
+        !this->rtoptions_->is_noc_att_specified()) {
+        default_quasar_noc_att_from_path(*this->rtoptions_);
+    }
+    if (platform_arch == tt::ARCH::QUASAR && this->rtoptions_->get_noc_att_map() == "grendel_qsr1") {
+        setenv("TT_UMD_NOC_ATT", "grendel_qsr1", 0);
+    }
 
     cluster_ = std::make_unique<Cluster>(*this->rtoptions_);
     this->verify_fw_capabilities();

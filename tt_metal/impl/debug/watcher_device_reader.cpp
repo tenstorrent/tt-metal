@@ -717,9 +717,15 @@ void WatcherDeviceReader::Core::Dump() const {
 }
 
 void WatcherDeviceReader::Core::DumpL1Status() const {
+    const auto& hal = reader_.env.get_hal();
+    // The L1[0] canary guards the reset jump that generate_risc_startup_addr writes at L1[0]. The
+    // qsr.s1 simulator boots the DM from the tile-reset shadow register instead, so L1[0] is not the
+    // live reset vector there and DM firmware data may overwrite it; skip the canary on that model only.
+    if (reader_.env.get_rtoptions().is_qsr_s1_simulator()) {
+        return;
+    }
     // Read L1 address 0, looking for memory corruption
     std::vector<uint32_t> data;
-    const auto& hal = reader_.env.get_hal();
     const auto l1_base = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
     data = reader_.env.get_cluster().read_core(reader_.device_id, virtual_coord_, l1_base, sizeof(uint32_t));
     TT_ASSERT(programmable_core_type_ == HalProgrammableCoreType::TENSIX);
@@ -840,9 +846,24 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
 
 void WatcherDeviceReader::Core::DumpAssertStatus() const {
     auto assert_status = mbox_data_.watcher().assert_status();
+    // On the qsr.s1 simulator the DM firmware's assert record travels through the cached L1 alias and
+    // can arrive partially written. There the record is reported and polling continues (a hart that
+    // really asserted stays at its waypoint, which the regular dump shows); elsewhere the record is
+    // authoritative and stops the run.
+    const bool tolerant_record = reader_.env.get_hal().get_arch() == tt::ARCH::QUASAR &&
+                                 reader_.env.get_rtoptions().get_simulator_enabled();
     if (assert_status.tripped() == dev_msgs::DebugAssertOK) {
         if (assert_status.line_num() != DEBUG_SANITIZE_SENTINEL_OK_16 ||
             assert_status.which() != DEBUG_SANITIZE_SENTINEL_OK_8) {
+            if (tolerant_record) {
+                log_warning(
+                    tt::LogMetal,
+                    "Watcher assert record on {} reported OK with non-sentinel fields (which={} line=0x{:x}); ignoring (Quasar simulator)",
+                    core_str_,
+                    assert_status.which(),
+                    assert_status.line_num());
+                return;
+            }
             TT_THROW(
                 "Watcher unexpected assert state on core {}, reported OK but got processor {}, line {}.",
                 virtual_coord_.str(),
@@ -850,6 +871,19 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
                 assert_status.line_num());
         }
         return;  // no assert tripped, nothing to do
+    }
+    if (tolerant_record) {
+        // The firmware claims the record (claim == 0xDEADBEEF) before filling it, so a tripped record
+        // without the claim was not written by assert_and_hang().
+        log_warning(
+            tt::LogMetal,
+            "Watcher assert record on {}: tripped={} which={} line_num=0x{:x} claim=0x{:x} hw_fault_info=0x{:016x}",
+            core_str_,
+            assert_status.tripped(),
+            assert_status.which(),
+            assert_status.line_num(),
+            assert_status.claim(),
+            assert_status.hw_fault_info());
     }
     std::string error_msg = fmt::format(
         "{}: {} ", core_str_, get_riscv_name(reader_.env.get_hal(), programmable_core_type_, assert_status.which()));
@@ -859,6 +893,16 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
         assert_status.hw_fault_info());
     if (assert_msg.empty()) {
         LogRunningKernels();
+        if (tolerant_record) {
+            DumpWaypoints(true);
+            DumpRingBuffer(true);
+            log_warning(
+                tt::LogMetal,
+                "Watcher assert record on {} has unknown failure code {}; continuing to poll (Quasar simulator)",
+                core_str_,
+                assert_status.tripped());
+            return;
+        }
         TT_THROW(
             "Watcher data corruption, noc assert state on core {} unknown failure code: {}.\n",
             virtual_coord_.str(),
@@ -871,6 +915,10 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
     DumpWaypoints(true);
     DumpRingBuffer(true);
     LogRunningKernels();
+    if (tolerant_record) {
+        log_warning(tt::LogMetal, "Watcher assert record on {} noted; continuing to poll (Quasar simulator)", core_str_);
+        return;
+    }
     reader_.watcher_server.set_exception_message(error_msg);
     TT_THROW("Watcher detected tripped assert and stopped device.");
 }

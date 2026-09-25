@@ -1045,6 +1045,12 @@ inline bool is_quasar_sim() {
            tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR;
 }
 
+// The qsr.s1 chiplet model (grendel_qsr1 ATT map): only the four corner Tensix tiles of its 8x4 grid are live.
+inline bool is_quasar_sparse_sim() {
+    const auto att_map = tt::tt_metal::MetalContext::instance().rtoptions().get_noc_att_map();
+    return is_quasar_sim() && att_map.has_value() && *att_map == "grendel_qsr1";
+}
+
 // Honour an explicit TT_METAL_DRAM_BACKED_CQ value, otherwise retain the DRAM-backed default required by the Quasar
 // simulator.
 inline bool is_quasar_cq_dram_backed() {
@@ -1181,6 +1187,11 @@ protected:
     }
 
     CoreRange worker_range(const CoreCoord& first_worker, bool multi_core = true) const {
+        if (Common::is_quasar_sparse_sim()) {
+            // The qsr.s1 model exposes only the four corner tiles of an 8x4 grid: a multi-tile rectangle
+            // contains stub tiles that never acknowledge, so keep the multicast destination a single tile.
+            return CoreRange{first_worker, first_worker};
+        }
         if (Common::is_quasar_sim()) {
             const CoreCoord worker_grid = device_->compute_with_storage_grid_size();
             const CoreCoord last_worker = multi_core ? CoreCoord{worker_grid.x - 1, worker_grid.y - 1} : first_worker;
@@ -1413,7 +1424,10 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
     const tt_metal::NOC upstream_noc =
         (device_->arch() == tt::ARCH::QUASAR) ? tt_metal::NOC::NOC_0 : tt_metal::NOC::NOC_1;
     const auto upstream_virtual = device_->virtual_noc0_coordinate(upstream_noc, phys_spoof);
-    const auto downstream_virtual = device_->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, CoreCoord{0, 0});
+    // The slow-dispatch harness has no downstream and no dispatch_s. Name the dispatcher's own tile
+    // for both instead of the {0,0} / (255,255) placeholders: the CQ kernels latch these coordinates
+    // at entry, and a placeholder has no address-map entry under ATT (the resolver traps on it).
+    const auto downstream_virtual = my_virtual;
 
     const bool cq_dram_backed = Common::is_quasar_cq_dram_backed();
     const std::string is_cq_dram_backed = cq_dram_backed ? "1" : "0";
@@ -1509,8 +1523,8 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
         {"UPSTREAM_NOC_Y", std::to_string(upstream_virtual.y)},
         {"DOWNSTREAM_NOC_X", std::to_string(downstream_virtual.x)},
         {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual.y)},
-        {"DOWNSTREAM_SUBORDINATE_NOC_X", "255"},
-        {"DOWNSTREAM_SUBORDINATE_NOC_Y", "255"},
+        {"DOWNSTREAM_SUBORDINATE_NOC_X", std::to_string(downstream_virtual.x)},
+        {"DOWNSTREAM_SUBORDINATE_NOC_Y", std::to_string(downstream_virtual.y)},
         {"IS_D_VARIANT", "1"},
         {"IS_H_VARIANT", "1"},
     };
@@ -1556,8 +1570,8 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
         {"UPSTREAM_NOC_Y", std::to_string(my_virtual.y)},
         {"DOWNSTREAM_NOC_X", std::to_string(downstream_virtual.x)},
         {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual.y)},
-        {"DOWNSTREAM_SUBORDINATE_NOC_X", "255"},
-        {"DOWNSTREAM_SUBORDINATE_NOC_Y", "255"},
+        {"DOWNSTREAM_SUBORDINATE_NOC_X", std::to_string(downstream_virtual.x)},
+        {"DOWNSTREAM_SUBORDINATE_NOC_Y", std::to_string(downstream_virtual.y)},
         {"DOWNSTREAM_CB_BASE", std::to_string(dispatch_cb_base)},
         {"DOWNSTREAM_CB_LOG_PAGE_SIZE", std::to_string(DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE)},
         {"DOWNSTREAM_CB_PAGES", std::to_string(dispatch_cb_pages)},

@@ -31,6 +31,12 @@ constexpr std::uint32_t ATT_WORKER_API_ORIGIN_Y = 2;
 constexpr std::uint32_t ATT_WORKER_GRID_X = 8;
 constexpr std::uint32_t ATT_WORKER_GRID_Y = 4;
 
+// Frame offset from the soc descriptor's coordinates (what kernels receive) to
+// the live package frame of the endpoint words and NOC_NODE_ID: worker 2-2
+// reads NOC_NODE_ID (4,4). Same value as UMD's package offset for this map.
+constexpr std::uint32_t ATT_NODE_ID_OFFSET_X = 2;
+constexpr std::uint32_t ATT_NODE_ID_OFFSET_Y = 2;
+
 // Worker selectors are row-major logical coordinates.
 // clang-format off
 constexpr std::uint8_t ATT_WORKER_SELECTORS[] = {
@@ -124,9 +130,53 @@ constexpr noc_att::Window LOCAL_WINDOW = TILE_WINDOW;
 constexpr std::uint64_t LOCAL_WINDOW_BASE = LOCAL_WINDOW.make_address(/*selector*/ 0, /*local_address*/ 0);
 static_assert(LOCAL_WINDOW_BASE == 0x1800000000ull);
 
+// DRAM window selector per logical DRAM channel: boot rows 96..99 are the Mimir
+// d2d0 ingress nodes of channels 0..3 in that order, so channel N is selector N.
+// The allocator binds one interleaved bank per channel, so logical bank N is
+// selector N too.
+constexpr std::uint8_t ATT_LOGICAL_DRAM_SELECTORS[] = {0, 1, 2, 3};
+
+// DRAM endpoint words by DRAM-window selector (boot rows 96..127): lane A (d2d0
+// ingress) at selectors 0..3, lane B (d2d1) at 16..19, the rest unprogrammed.
+// A host coordinate naming a DRAM tile resolves through these to the DRAM window.
+// clang-format off
+constexpr std::uint16_t ATT_DRAM_ENDPOINT_WORDS[] = {
+    0x246, 0x24a, 0x089, 0x085, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0x247, 0x24b, 0x088, 0x084, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+};
+// clang-format on
+
+// Dispatch-capable tiles, keyed by the descriptor-frame coordinate the host
+// publishes (go-message master coordinates, the dispatch core descriptors).
+// The three DE tiles reach their L1 through the full-tile window (boot rows
+// 312..314 = full-tile selectors 56..58); the interim Tensix dispatch tile is
+// an ordinary worker-window selector. Each entry is checked against the
+// endpoint word its selector programs.
+inline constexpr noc_att::MapData::DispatchEntry DISPATCH_ENTRIES[] = {
+    {.x = 10, .y = 6, .selector = 56, .window = noc_att::WindowClass::FullTile},
+    {.x = 10, .y = 1, .selector = 57, .window = noc_att::WindowClass::FullTile},
+    {.x = 1, .y = 6, .selector = 58, .window = noc_att::WindowClass::FullTile},
+    {.x = 9, .y = 5, .selector = 31, .window = noc_att::WindowClass::Worker},
+    {.x = 2, .y = 5, .selector = 24, .window = noc_att::WindowClass::Worker},
+    {.x = 9, .y = 2, .selector = 7, .window = noc_att::WindowClass::Worker},
+};
+
+constexpr bool dispatch_entries_match_endpoint_words() {
+    for (const noc_att::MapData::DispatchEntry& entry : DISPATCH_ENTRIES) {
+        const std::uint32_t live_word = ((entry.y + ATT_NODE_ID_OFFSET_Y) << 6) | (entry.x + ATT_NODE_ID_OFFSET_X);
+        const std::uint32_t programmed = entry.window == noc_att::WindowClass::Worker
+                                             ? ATT_WORKER_ENDPOINT_WORDS[entry.selector]
+                                             : ATT_FULL_TILE_ENDPOINT_WORDS[entry.selector];
+        if (programmed != live_word) {
+            return false;
+        }
+    }
+    return true;
+}
+static_assert(dispatch_entries_match_endpoint_words(), "a dispatch entry's selector does not program its tile");
+
 // The declarative map: everything the shared resolver needs, as data.
-// Windows are indexed by WindowClass (LoopbackScratch, Worker, Dram, FullTile, Local). No logical DRAM or dispatch
-// binding exists in the checked-in descriptor, so those identities resolve invalid until descriptor-owned rows exist.
+// Windows are indexed by WindowClass (LoopbackScratch, Worker, Dram, FullTile, Local).
 inline constexpr noc_att::MapData MAP{
     .windows = {{LOOPBACK_SCRATCH_WINDOW, WORKER_WINDOW, DRAM_WINDOW, TILE_WINDOW, LOCAL_WINDOW}},
     .local_window_class = noc_att::WindowClass::Local,  // boot-patched ep256 = self at selector 0
@@ -135,10 +185,13 @@ inline constexpr noc_att::MapData MAP{
     .worker_grid_x = ATT_WORKER_GRID_X,
     .worker_grid_y = ATT_WORKER_GRID_Y,
     .worker_selectors = {ATT_WORKER_SELECTORS},
+    .node_id_offset_x = ATT_NODE_ID_OFFSET_X,
+    .node_id_offset_y = ATT_NODE_ID_OFFSET_Y,
     .worker_endpoint_words = {ATT_WORKER_ENDPOINT_WORDS},
     .full_tile_endpoint_words = {ATT_FULL_TILE_ENDPOINT_WORDS},
-    .dram_selectors = {},
-    .dispatch_entries = {},
+    .dram_endpoint_words = {ATT_DRAM_ENDPOINT_WORDS},
+    .dram_selectors = {ATT_LOGICAL_DRAM_SELECTORS},
+    .dispatch_entries = {DISPATCH_ENTRIES},
 };
 
 }  // namespace grendel_qsr1_att_config
