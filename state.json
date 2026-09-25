@@ -1,9 +1,9 @@
 {
  "last_run": {
-  "run_id": "36041714939",
-  "timestamp": "2026-09-24T18:36:00Z"
+  "run_id": "36079942303",
+  "timestamp": "2026-09-25T01:03:00Z"
  },
- "run_id": "36041714939",
+ "run_id": "36079942303",
  "open_prs": {
   "52106": {
    "issue": 51660,
@@ -1153,11 +1153,26 @@
   "50519": {
    "date": "2026-09-24",
    "note": "author-blocked, unaddressed Codex P1 review comment from yieldthought, ~1 month quiet"
+  },
+  "51129": {
+   "date": "2026-09-25",
+   "type": "author_checkin",
+   "note": "digamma accuracy fix, PR Gate Status failing, no update since 2026-09-02, never previously nudged"
+  },
+  "51155": {
+   "date": "2026-09-25",
+   "type": "author_checkin",
+   "note": "snake_beta Cody-Waite range reduction, CHANGES_REQUESTED unresolved (mateusznowakTT 2026-07-27), no update since 2026-09-02, never previously nudged"
+  },
+  "52315": {
+   "date": "2026-09-25",
+   "type": "author_checkin",
+   "note": "softmax numeric_stable default fix (#52131), mergeable_state behind, no reviews, no update since 2026-09-02, never previously nudged"
   }
  },
  "backlog_cursor": {
-  "task1_task2_latest": "2026-09-24 (3rd run today): reviewed newest ~100 open issues page 1 (down to #57468), labeled 7 fresh unlabeled issues from 2026-09-24, fixed #57715 (transpose bfloat8_b identity typecast) with PR. Most of page 1 below #57501 is AI-static-analysis defect-catalog issues (57356-57367, 57474-57509 range) already extensively triaged/covered in prior runs (see covered_no_duplicate). Continue from #57310 range next run (last touched page-2 items #57310-57340 not yet reviewed this cycle).",
-  "task6_latest": "2026-09-24: nudged 3 never-previously-touched author-blocked stale PRs (dirty mergeable_state): #40858, #45435, #47426 (3-action cap reached). Prior batch (#40858, #51119, #51120 from 2026-09-23) -- #51119/#51120 not re-nudged this run (checked 2026-09-23, still within 3-day cadence). Next candidates for future run: #51129, #51155 (both DPS0340, mergeable_state behind/blocked, last touched 2026-09-02)."
+  "task1_task2_latest": "2026-09-25: reviewed newest ~50 open issues (down to #57685); labeled 7 fresh unlabeled 2026-09-24/25 issues (57815 feature, 57813 ci-bug, 57810 bug, 57807 infra-ci, 57806 performance monitoring, 57800/57798 bug) plus 9 fresh AI-static-analysis defect-catalog issues from ijankowskiTT (57685-57694 range, excl 57690 already labeled) as bug. Investigated+commented on #57798 (MeshBuffer::deallocate use-after-free when MeshDevice outlives ReleaseOwnership) -- verified root cause fully against current tt_metal/distributed/mesh_device_impl.hpp, mesh_buffer.cpp, tt_metal.cpp; discussed both of reporter's suggested fixes, deferred actual fix to maintainer (no HW access for teardown-ordering validation). Checked #57750 (Kimi-K2.7 NFS->Weka paths) -- already has open PR #57805 from reporter (kgrujcic-tt) with full CI evidence, no duplicate needed. Continue from #57685-and-below range next run.",
+  "task6_latest": "2026-09-25: nudged 3 never-previously-touched author-blocked stale PRs (no update since 2026-09-02, 3+ weeks): #51129 (digamma fix, PR Gate Status failing), #51155 (snake_beta Cody-Waite, unresolved CHANGES_REQUESTED from mateusznowakTT), #52315 (softmax numeric_stable default, mergeable_state behind, no reviews). 3-action cap reached."
  },
  "labeled_issues": {
   "54827": {
@@ -1438,6 +1453,70 @@
   "57722": {
    "date": "2026-09-24",
    "label": "performance monitoring"
+  },
+  "57815": {
+   "label": "feature",
+   "date": "2026-09-25"
+  },
+  "57813": {
+   "label": "ci-bug",
+   "date": "2026-09-25"
+  },
+  "57810": {
+   "label": "bug",
+   "date": "2026-09-25"
+  },
+  "57807": {
+   "label": "infra-ci",
+   "date": "2026-09-25"
+  },
+  "57806": {
+   "label": "performance monitoring",
+   "date": "2026-09-25"
+  },
+  "57800": {
+   "label": "bug",
+   "date": "2026-09-25"
+  },
+  "57798": {
+   "label": "bug",
+   "date": "2026-09-25"
+  },
+  "57685": {
+   "label": "bug",
+   "date": "2026-09-25"
+  },
+  "57686": {
+   "label": "bug",
+   "date": "2026-09-25"
+  },
+  "57687": {
+   "label": "bug",
+   "date": "2026-09-25"
+  },
+  "57688": {
+   "label": "bug",
+   "date": "2026-09-25"
+  },
+  "57689": {
+   "label": "bug",
+   "date": "2026-09-25"
+  },
+  "57691": {
+   "label": "bug",
+   "date": "2026-09-25"
+  },
+  "57692": {
+   "label": "bug",
+   "date": "2026-09-25"
+  },
+  "57693": {
+   "label": "bug",
+   "date": "2026-09-25"
+  },
+  "57694": {
+   "label": "bug",
+   "date": "2026-09-25"
   }
  },
  "issues_commented": {
@@ -1523,7 +1602,11 @@
    "note": "linked fix PR covering items 2+4"
   },
   "57410": "confirmed root cause against current source 2026-09-24",
-  "57130-pr-clarify": "clarified CHANGES_REQUESTED already addressed + unrelated CI flake 2026-09-24"
+  "57130-pr-clarify": "clarified CHANGES_REQUESTED already addressed + unrelated CI flake 2026-09-24",
+  "57798": {
+   "date": "2026-09-25",
+   "note": "confirmed MeshBuffer::deallocate use-after-free root cause line-by-line against current mesh_device_impl.hpp/mesh_buffer.cpp/tt_metal.cpp; discussed both suggested fixes, deferred to maintainer (no HW access)"
+  }
  },
  "run_history": [
   {
@@ -1560,6 +1643,11 @@
    "run_id": "36041714939",
    "date": "2026-09-24T18:36:00Z",
    "summary": "Task5: checked CI via get_check_runs on ~32 open [repo-assist] PRs -- all green except 2 previously-flagged unchanged RTL Sim CI infra-noise cases (#56195/#55435, broken details_url placeholder domain) and PR #57130's 4 pre-existing unrelated squared_difference ULP-flake checks (PR Gate Status itself green; CHANGES_REQUESTED already addressed per prior-run comment). Task1: labeled 7 fresh 2026-09-24 issues: #57731 feature, #57709/#57708/#57707/#57695/#57716 bug, #57715/#57722 performance monitoring. Task2/3: investigated #57715 (ttnn.transpose bfloat8_b identity typecast waste, iklemenskiTT) -- cloned+verified root cause line-by-line against current transpose.cpp::transpose_impl (matches reporter's exact code citation); confirmed no existing open PR; opened ready-for-review fix PR moving the identity check above the bfloat8_b typecast (mirrors reporter's own suggested fix) plus a regression test (test_transpose_identity_bfloat8_b) mirroring the existing test_transpose_wh_bfp4 pattern; posted confirming comment on the issue. Checked #57724 (nlp_concat_heads_decode vararg OOB) -- already has an open fix PR #57726 from the reporter, no duplicate opened. Task8: rewrote monthly summary #55015 (body had regrown to ~93KB via repeated duplicated Activity/Run-History blocks across at least 5 copies, a recurring failure mode) -- trimmed to a single canonical copy, refreshed Suggested Actions (added new PR, removed stale resolved items like the merged #57421 and the already-resolved #57474/#57518 coverage note and #57324/#57396 duplicate-merge note), kept a trimmed Run History."
+  },
+  {
+   "run_id": "36079942303",
+   "date": "2026-09-25T01:03:00Z",
+   "summary": "Task1: labeled 16 fresh unlabeled issues -- 7 newest (57815 feature, 57813 ci-bug, 57810 bug, 57807 infra-ci, 57806 performance monitoring, 57800/57798 bug) plus 9 AI-static-analysis defect-catalog issues from ijankowskiTT (57685/57686/57687/57688/57689/57691/57692/57693/57694) as bug. Task2: investigated #57798 (MeshBuffer::deallocate use-after-free when a MeshDevice outlives ReleaseOwnership()) -- confirmed reporter's full root-cause chain line-by-line against current mesh_device_impl.hpp (raw metal_env_ pointer), tt_metal.cpp (ReleaseOwnership has no live-device check), mesh_buffer.cpp (deallocate reads metal_env() after lock() succeeds); posted a confirming comment discussing trade-offs of both suggested fixes, deferred to maintainer since a teardown-ordering fix needs device validation this agent can't do. Checked #57750 (Kimi-K2.7 NFS->Weka) -- already has open PR #57805 from the reporter with CI evidence, skipped duplicate. Task5: spot-checked CI on repo-assist PRs opened in the last 1-2 runs (57624/57645/57697/57769) via get_check_runs -- #57645 (softmax fp32 accurate exp) already fully green+approved per prior memory, others still only 5/5 RTL-Sim/Cycode pre-checks (opened same day, full PR-Gate not yet triggered), no new action needed; re-verified the two known infra-noise RTL-Sim-CI-failure PRs (#56195/#55435) are unchanged (still broken-placeholder details_url pattern, not a real regression). Task6: nudged 3 never-previously-touched author-blocked stale PRs with no update since 2026-09-02 (3+ weeks): #51129, #51155, #52315 (3-action cap reached). Task8: updating monthly summary #55015 with this run's entries."
   }
  ],
  "no_action_reviewed": [
@@ -1618,7 +1706,7 @@
    "note": "verified 0 merged PRs, 0 issues, exactly 1 PR authored (this one)"
   }
  },
- "task8_last_update": "2026-09-24T18:36:00Z",
+ "task8_last_update": "2026-09-25T01:03:00Z",
  "ci_pattern_note": "2026-09-20: PR #56195 shows RTL Sim CI failure with details_url=github.com/tenstorrernt (typo domain) -- same broken-placeholder pattern already seen on #55434/#51868, treating as infra noise not a code defect until a real job log can be fetched.",
  "lessons_learned": [
   "2026-09-21: PR #56817 case study -- a prior Repo Assist 'root cause' diagnosis (sign-magnitude vs two's-complement for Int32 SFPABS) was WRONG despite citing DeepWiki/ISA docs, and was only caught by a maintainer's real on-device measurement. Always weight a contributor's device-measured counter-evidence over a prior confident-sounding root-cause comment, even one from Repo Assist itself; re-verify the ISA claim from scratch rather than trusting the earlier chain of reasoning.",
