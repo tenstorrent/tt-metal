@@ -1,0 +1,21 @@
+{
+ "metrics": {
+  "pcc_attn_residual_L00": {
+   "t": "2026-09-25T23:49:33",
+   "value": 0.9999960969343243
+  },
+  "rel_l2_attn_residual_L00": {
+   "t": "2026-09-25T23:49:33",
+   "value": 0.002819699002429843
+  },
+  "row_norm_ratio_max_attn_residual_L00": {
+   "t": "2026-09-25T23:49:33",
+   "value": 1.0060319900512695
+  },
+  "row_norm_ratio_min_attn_residual_L00": {
+   "t": "2026-09-25T23:49:33",
+   "value": 0.9946677088737488
+  }
+ },
+ "task": "C.sliding.attn_residual"
+}
