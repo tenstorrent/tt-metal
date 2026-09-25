@@ -106,46 +106,6 @@ K-invariant. COMPENSATED at K256 keeps less of its long-context advantage: on
 8192-key uniform attention it measures 1.48% L2 versus 1.04% at K512 and 0.93% at
 K384, still below FAST (2.0%). Prefer K384/K512 for COMPENSATED at long context.
 
-## Op-selected blocking
-
-A recipe caller does not need to pick chunk sizes. Omit `program_config` (dense SDPA) or leave
-`q_chunk_size`/`k_chunk_size` at their default of 0 in `SDPAProgramConfig`, and the op chooses them
-(and, for exp ring, the grid width) from the shape, recipe, op, grid and L1. Explicit chunk sizes are
-honored and validated exactly as before, and a single explicit dimension pins only that dimension. A
-chunk size of 0 without `precision` is rejected: legacy SDPA always needs explicit chunks.
-
-```python
-cfg = ttnn.SDPAProgramConfig(compute_with_storage_grid_size=(10, 10))  # grid only; chunks op-selected
-out = ttnn.transformer.ring_joint_scaled_dot_product_attention(..., program_config=cfg, precision=p)
-```
-
-Blocking is an execution detail: the chosen chunks change rounding order (see
-[Q blocking](#q-blocking)), never the recipe arithmetic, and a given shape always resolves to the same
-blocking. For every candidate the chooser asks two host functions in
-`sdpa_recipe_blocking.cpp`: `recipe_geometry_rejection` (the supported Q/K/D geometry per op) and
-`recipe_l1_bytes` (circular-buffer bytes from `recipe_compute_program`, plus the ring factory's extra
-buffers, single-slot Q fallback, and FAST's legacy ring/exp-ring layouts). It consults nothing else,
-so widening the supported geometry needs no chooser change. The heuristic:
-
-- **Makespan.** Cost = (Q chunks on the busiest core) x (K blocks per Q chunk) x block cost. Dense and
-  joint follow the per-head chain split; ring spreads all heads' Q chunks over the worker grid and
-  streams `ring_size` local KV shards; exp ring requires a head's Q chunks to fill a core row exactly
-  (`ceil(N_local/q) + L/q == cols * segs`, at most 3 passes, every row busy) and may narrow the
-  grid width. Padded Q rows and K columns are counted, so a long tail chunk costs its full size.
-- **Block cost** is a per-variant roofline, fitted to the matched-chunk timings in the
-  [qualification](sdpa_precision_qualification.md) (10 heads, 8192 x 8192): compute
-  `c * (q*k*d/4 + ck*q*d/4)` against KV streaming `bw * k*d/4`. Short Q chunks are
-  bandwidth-bound for FAST/B/E_bf16 (Q128 costs FAST 1.37x per row), short K chunks pay the per-row
-  softmax update (`ck`). A size-optimized pack thread or narrow subblocks (read from the recipe's
-  build flags) add a penalty; so does a ring layout that only fits with single-slot Q.
-- **Frozen preference.** Q256/K512 is chosen whenever it fits and is within 5% of the best modeled
-  cost, so the bit-for-bit qualified geometry stays the common case.
-- K > 512 is not searched yet (unmeasured); callers may still pass it explicitly.
-
-If nothing fits, unset chunks fall back to Q256/K512 and the op's own validation reports why.
-`ttnn._ttnn.operations.transformer._sdpa_recipe_blocking(...)` and
-`_sdpa_recipe_resolved_program_config(...)` expose the choice for tests and tooling.
-
 ## Head dimensions
 
 D64 and D256 use the same recipe arithmetic as D128; the compensated state's row
@@ -226,17 +186,6 @@ default scale and up to three head-segments per core row. Multi-pass programs ru
 ring-inner, keeping one resident recurrent state and Q chunk per pass; FAST at three passes keeps the
 legacy exp-ring L1 layout, which does not fit Q256/K512.
 
-`WanPipeline`, `WanTransformer3DModel`, `WanTransformerBlock` and `WanAttention`
-have opt-in `sdpa_precision` and `sdpa_kv_dtype` arguments that apply to both
-self- and unmasked cross-attention. Under a recipe every SDPA call leaves the chunks
-to the op ([op-selected blocking](#op-selected-blocking)); the 4x32
-Galaxy mesh uses exp_ring with the recipe, which is not yet qualified on Galaxy
-hardware. E preparation happens after norm/RoPE and before
-ring communication; ping-pong KV buffers use the selected storage dtype.
-Omitting these arguments retains the original model behavior. Fresh pretrained
-attention-block tests qualify this integration, not generated-video quality or
-a change to model defaults.
-
 ## Examples
 
 ```python
@@ -294,7 +243,7 @@ caller responsibilities, not an implicit host scan.
 - `sdpa_numerics.cpp`: conflicts and legacy defaults.
 - `sdpa_recipe.cpp`: eligibility, grid/chain assignment, CB formats/capacities,
   and ordinary cached program descriptors.
-- `sdpa_recipe_blocking.cpp`: op-selected chunks/grid; the geometry and L1 queries it relies on.
+- `sdpa_recipe_blocking.cpp`: the supported ring / exp-ring recipe geometry (`recipe_geometry_rejection`).
 - `compute/sdpa_recipe.cpp`: recipe specialization; A reuses the existing
   streaming implementation. B/C/D/E share `streaming/recipe_streaming.hpp`.
 - `streaming/recipe_sfpu.hpp`, `compensated_sfpu.hpp`, `compensated_group.hpp`:

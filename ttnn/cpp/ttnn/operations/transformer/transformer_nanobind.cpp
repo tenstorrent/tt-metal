@@ -36,9 +36,8 @@ void py_module(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("compute_with_storage_grid_size"),
             nb::arg("sub_core_grids") = nb::none(),
-            // 0 lets a named precision recipe choose the chunk size (docs/sdpa_precision.md).
-            nb::arg("q_chunk_size").noconvert() = 0,
-            nb::arg("k_chunk_size").noconvert() = 0,
+            nb::arg("q_chunk_size").noconvert(),
+            nb::arg("k_chunk_size").noconvert(),
             nb::arg("exp_approx_mode") = nb::none(),
             nb::arg("max_cores_per_head_batch") = 16)
         .def_rw("compute_with_storage_grid_size", &SDPAProgramConfig::compute_with_storage_grid_size)
