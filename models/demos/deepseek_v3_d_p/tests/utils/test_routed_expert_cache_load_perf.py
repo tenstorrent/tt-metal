@@ -5,7 +5,7 @@
 
 Reports a number and asserts no threshold; calibrating one is tenstorrent/tt-metal#57760.
 
-    TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill \\
+    TT_KIMI_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill \\
     RE_CACHE_PERF=1 pytest models/demos/deepseek_v3_d_p/tests/utils/test_routed_expert_cache_load_perf.py -s
 """
 
