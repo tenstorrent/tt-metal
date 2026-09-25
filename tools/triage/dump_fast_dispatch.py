@@ -51,7 +51,6 @@ class DumpWaitGlobalsData:
     last_wait_count: int | None = triage_field("last_wait_count", verbose=2)
     last_wait_stream: int | None = triage_field("last_wait_stream", verbose=2)
     last_go_token: int | None = triage_field("last_go_token", verbose=2)
-    last_fds_go_pending_mask: int | None = triage_field("last_fds_go_pending_mask", verbose=2)
     last_fds_tracked_sub_device_mask: int | None = triage_field("last_fds_tracked_sub_device_mask", verbose=2)
     wait_stream_value: int | None = triage_field("wait_stream_value", verbose=2)
     cb_fence: int | None = triage_field("cb_fence", verbose=2)
@@ -203,9 +202,6 @@ def read_wait_globals(
         kernel_elf, "last_wait_stream", loc_mem_access, check_value=is_dispatcher_kernel
     )
     last_go_token = _read_symbol_value(kernel_elf, "last_go_token", loc_mem_access, check_value=False)
-    last_fds_go_pending_mask = _read_symbol_value(
-        kernel_elf, "last_fds_go_pending_mask", loc_mem_access, check_value=False
-    )
     last_fds_tracked_sub_device_mask = _read_symbol_value(
         kernel_elf, "last_fds_tracked_sub_device_mask", loc_mem_access, check_value=False
     )
@@ -297,7 +293,6 @@ def read_wait_globals(
         last_wait_count=last_wait_count,
         last_wait_stream=last_wait_stream,
         last_go_token=last_go_token,
-        last_fds_go_pending_mask=last_fds_go_pending_mask,
         last_fds_tracked_sub_device_mask=last_fds_tracked_sub_device_mask,
         wait_stream_value=wait_stream_value,
         cb_fence=circular_buffer_fence,
