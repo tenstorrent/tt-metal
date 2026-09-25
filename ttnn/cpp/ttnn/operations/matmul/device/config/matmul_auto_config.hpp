@@ -28,7 +28,8 @@
 //    or 1D in0-mcast keeps as many cores busy with less input per core (per_core_M + per_core_N);
 //  - batched B: Reuse (one batch matrix per core block), unless a 2D/1D layout looping over the batch keeps
 //    ONE_D_CORE_ADVANTAGE times as many cores busy (e.g. large N, where Reuse's per_core_N = N leaves few cores);
-//  - block sizes follow the #57884 heuristics within the L1 budget, with one K block depth rule.
+//  - block sizes follow the #57884 heuristics within the L1 budget, with one K block depth rule
+//    (MAX_IN0_BLOCK_W, MAX_SELF_READ_TILES_PER_K_STEP).
 // Problems it does not handle yet return nullopt, and the caller falls back to the legacy selection.
 namespace ttnn::operations::matmul::auto_config {
 
@@ -42,6 +43,12 @@ constexpr double ONE_D_CORE_ADVANTAGE = 1.5;
 // only source of data reuse) for K depth. The mcast families also keep at least two K blocks, since with a
 // single block they single-buffer the inputs.
 constexpr uint32_t MAX_IN0_BLOCK_W = 8;
+
+// K block depth is further limited so that the operand a core reads by itself (not by multicast) moves at
+// most this many tiles per K step: B's slice in 1D in0-mcast, A's in 1D in1-mcast, both in Reuse, none in 2D.
+// Small per-step reads keep the double-buffered DRAM stream ahead of math; wide per-core blocks get
+// shallower K blocks.
+constexpr uint32_t MAX_SELF_READ_TILES_PER_K_STEP = 16;
 
 // Hardware facts the selector depends on. Tests can describe other architectures directly.
 struct HardwareDesc {

@@ -24,12 +24,22 @@ constexpr uint32_t L1_HEADROOM_BYTES = 16 * 1024;
 uint32_t div_up(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 uint32_t align_up(uint32_t a, uint32_t alignment) { return div_up(a, alignment) * alignment; }
 
-// Largest in0_block_w (see MAX_IN0_BLOCK_W). With a single K block the mcast factories single-buffer the
-// inputs, so reading the next block can't overlap math on the current one: keep two blocks when K allows it.
-// The reuse factory always double-buffers.
-uint32_t max_in0_block_w(uint32_t Kt, Family family) {
+// Largest in0_block_w (see MAX_IN0_BLOCK_W and MAX_SELF_READ_TILES_PER_K_STEP). With a single K block the
+// mcast factories single-buffer the inputs, so reading the next block can't overlap math on the current one:
+// keep two blocks when K allows it. The reuse factory always double-buffers.
+uint32_t max_in0_block_w(uint32_t Kt, Family family, uint32_t out_block_h, uint32_t out_block_w) {
     const uint32_t two_blocks = (family != Family::Reuse && Kt >= 2) ? Kt / 2 : Kt;
-    return std::min(MAX_IN0_BLOCK_W, two_blocks);
+    // Tiles per K step of the operand(s) each core reads itself rather than receiving by multicast
+    uint32_t self_read = 0;
+    switch (family) {
+        case Family::Mcast2D: self_read = 0; break;
+        case Family::Mcast1DIn0: self_read = out_block_w; break;
+        case Family::Mcast1DIn1: self_read = out_block_h; break;
+        case Family::Reuse: self_read = out_block_h + out_block_w; break;
+    }
+    const uint32_t self_read_limit =
+        self_read == 0 ? MAX_IN0_BLOCK_W : std::max(1u, MAX_SELF_READ_TILES_PER_K_STEP / self_read);
+    return std::min({MAX_IN0_BLOCK_W, two_blocks, self_read_limit});
 }
 
 // Rows of output tiles the mcast families split across cores: all batches when fused, else one batch.
@@ -158,7 +168,7 @@ namespace {
 std::optional<Blocking> block_2d(
     const Problem& p, const HardwareDesc& hw, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
     const auto k_options = divisors_desc(p.Kt);
-    const uint32_t k_max = max_in0_block_w(p.Kt, Family::Mcast2D);
+    const uint32_t k_max = max_in0_block_w(p.Kt, Family::Mcast2D, per_core_M, per_core_N);
     std::optional<Blocking> best;
     uint64_t best_product = 0;
     uint64_t best_area = 0;
@@ -211,7 +221,7 @@ std::optional<Blocking> block_1d(
         if (is_tall && div_up(M_rows, per_core_M) == 1 && M_rows % out_block_h != 0 && per_core_M != out_block_h) {
             continue;
         }
-        const uint32_t k_limit = max_in0_block_w(p.Kt, family);
+        const uint32_t k_limit = max_in0_block_w(p.Kt, family, out_block_h, out_block_w);
         for (uint32_t k : divisors_desc(p.Kt)) {
             if (k > k_limit) {
                 continue;
@@ -248,7 +258,7 @@ std::optional<Blocking> block_reuse(const Problem& p, const HardwareDesc& hw) {
             break;  // smaller slices would put several partial blocks on a core
         }
         for (uint32_t k : divisors_desc(p.Kt)) {
-            if (k > max_in0_block_w(p.Kt, Family::Reuse)) {
+            if (k > max_in0_block_w(p.Kt, Family::Reuse, std::min(per_core_M, p.Mt), p.Nt)) {
                 continue;
             }
             Blocking b{per_core_M, p.Nt, k, per_core_M, p.Nt, 0, 0};
