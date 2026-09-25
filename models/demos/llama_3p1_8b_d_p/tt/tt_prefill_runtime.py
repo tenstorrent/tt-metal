@@ -114,8 +114,8 @@ class TtPrefillRuntime:
                 completed, output = output, None
                 completed.deallocate(True)
             if sink is not None:
-                for layer in range(self.config.num_layers):
-                    sink(self.config.first_layer_idx + layer, request)
+                first = self.config.first_layer_idx
+                sink.layers_completed(first, first + self.config.num_layers, request, slot, start, end)
         finally:
             if output is not None:
                 output.deallocate(True)
@@ -174,8 +174,8 @@ class TtPrefillRuntime:
         self._check_ready()
         if not self.compiled:
             raise RuntimeError("compile must complete before sink installation")
-        if sink is not None and not callable(sink):
-            raise TypeError("sink must be callable or None")
+        if sink is not None and not callable(getattr(sink, "layers_completed", None)):
+            raise TypeError("sink must implement layers_completed or be None")
         self._layer_completion_sink = sink
 
     def kv_migration_stages(self, kv_cache, first_layer_idx=None, num_my_layers=None):

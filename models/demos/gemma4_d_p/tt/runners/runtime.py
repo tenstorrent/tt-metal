@@ -137,8 +137,9 @@ class Gemma4PrefillRuntime:
         ttnn.synchronize_device(self.mesh_device)
         self.slot_ends[slot_id] = actual_end
         if self.layer_completion_sink is not None:
-            for layer_idx in range(self.config.num_layers):
-                self.layer_completion_sink(layer_idx, request_id)
+            self.layer_completion_sink.layers_completed(
+                0, self.config.num_layers, request_id, slot_id, actual_start, actual_end
+            )
         ttnn.deallocate(input_tensor)
         if metadata_msg is not None:
             ttnn.deallocate(metadata_msg)
