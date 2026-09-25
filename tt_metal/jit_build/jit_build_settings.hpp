@@ -18,7 +18,7 @@
 
 // Host-side mirror of the device SemScope enum.
 // Codegen spells the scope by name.
-enum class SemScope : uint8_t {
+enum class SemScope : std::uint8_t {
     LOCAL_NONATOMIC = 0,
     DM_LOCAL_CACHED = 1,
     EXTERNAL = 2,
@@ -35,9 +35,9 @@ namespace tt::tt_metal {
 // One resolved semaphore binding.
 struct SemBindingEntry {
     std::string name;
-    uint16_t id = 0;
+    std::uint16_t id = 0;
     SemScope scope = SemScope::LOCAL_NONATOMIC;
-    uint32_t total_binder_harts = 0;
+    std::uint32_t total_binder_harts = 0;
 };
 
 // The enumerator name, as the kernel spells it.
@@ -84,22 +84,22 @@ inline void emit_semaphore_binding_tokens(std::ostream& os, const std::vector<Se
 // time (varargs are open-ended / runtime-counted, so a section after them would not be).
 struct KernelCrtaLayout {
     // Section 1 size, in words. Equals the number of user-named CRTAs.
-    uint32_t num_named_words = 0;
+    std::uint32_t num_named_words = 0;
     // Section 2 size, in words. Equals the sum-over-bindings of (1 + num_runtime_field_crta_words).
-    uint32_t binding_section_words = 0;
+    std::uint32_t binding_section_words = 0;
     // Section 3 size, in words. Equals the number of scratchpad bindings (one address word each).
-    uint32_t scratchpad_section_words = 0;
+    std::uint32_t scratchpad_section_words = 0;
     // Start offset of section 4 (varargs), in words.
     // Stored (not computed on demand) so it can be set from a known value at spec resolution
     // and asserted against the derived sum if a consumer wants belt-and-suspenders verification.
-    uint32_t vararg_section_offset = 0;
+    std::uint32_t vararg_section_offset = 0;
 };
 
 ////////////////////////////////////////////////////////////
 // Blaze-only experimental named args
 // Removal is tracked by issue #50953
 // Dispatch type for named runtime args — determines which device-side accessor to use.
-enum class RuntimeArgDispatch : uint8_t {
+enum class RuntimeArgDispatch : std::uint8_t {
     COMMON,   // get_common_arg_val (shared across all cores)
     PER_CORE  // get_arg_val (unique per core)
 };
@@ -109,8 +109,8 @@ enum class RuntimeArgDispatch : uint8_t {
 // length > 1:  emits constexpr ArrayArg (array of contiguous slots).
 struct NamedRuntimeArgEntry {
     std::string field;
-    uint32_t index;
-    uint32_t length = 1;
+    std::uint32_t index;
+    std::uint32_t length = 1;
     RuntimeArgDispatch dispatch;
 };
 
@@ -118,7 +118,7 @@ struct NamedRuntimeArgEntry {
 using NamedRuntimeArgNamespaces = std::map<std::string, std::vector<NamedRuntimeArgEntry>>;
 
 // Namespace → [(field, value)] map for named compile-time arg header generation.
-using NamedCTArgNamespaces = std::map<std::string, std::vector<std::pair<std::string, uint32_t>>>;
+using NamedCTArgNamespaces = std::map<std::string, std::vector<std::pair<std::string, std::uint32_t>>>;
 ////////////////////////////////////////////////////////////
 
 // Abstract base class for kernel specialization
@@ -136,18 +136,18 @@ public:
     virtual std::string_view get_compiler_opt_level() const = 0;
     // Returns the linker optimization level
     virtual std::string_view get_linker_opt_level() const = 0;
-    // Returns true when this kernel opted into RISC-V Vector (Zve32f) code generation for its
-    // TRISC2 (pack) compile (ComputeConfig::enable_trisc2_rvv). Default off: the build recipe
-    // is byte-identical to a build without this knob.
-    virtual bool get_trisc2_rvv_enabled() const { return false; }
+    // Returns true when this kernel opted into RISC-V Vector code generation for the compile of
+    // the given compute processor. This is supported for TRISC2 on Blackhole and TRISC0 on Quasar.
+    // Default setting is off.
+    virtual bool get_rvv_enabled_for_compute_processor(std::uint32_t /*processor_id*/) const { return false; }
 
     // Called to process the user defines
     virtual void process_defines(std::function<void(const std::string& define, const std::string& value)>) const = 0;
     // Called to process the user compile time args
-    virtual void process_compile_time_args(std::function<void(const std::vector<uint32_t>& values)>) const = 0;
+    virtual void process_compile_time_args(std::function<void(const std::vector<std::uint32_t>& values)>) const = 0;
     // Called to process the user named compile time args
     virtual void process_named_compile_time_args(
-        std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const = 0;
+        std::function<void(const std::unordered_map<std::string, std::uint32_t>& named_args)>) const = 0;
 
     // Called to process the user kernel resource bindings (Metal 2.0 APIs)
     //  - DFB bindings
@@ -156,16 +156,20 @@ public:
     // prefetcher_pipe_id is 0xFF unless the binding is a PrefetcherPipe relay, in which case
     // it identifies the persistent slot the relay-token constructor aligns from on TRISC.
     // Callbacks are copied to isolate mutable target state, matching the overrides.
-    virtual void process_dataflow_buffer_binding_handles(
-        std::function<
-            // NOLINTNEXTLINE(performance-unnecessary-value-param)
-            void(const std::string& accessor_name, uint16_t logical_dfb_id, bool is_relay, uint8_t prefetcher_pipe_id)>)
-        const {}
-    virtual void process_semaphore_binding_handles(
-        std::function<
-            // NOLINTNEXTLINE(performance-unnecessary-value-param)
-            void(const std::string& accessor_name, uint16_t semaphore_id, SemScope scope, uint32_t total_binder_harts)>)
-        const {}
+    virtual void process_dataflow_buffer_binding_handles(std::function<
+                                                         // NOLINTNEXTLINE(performance-unnecessary-value-param)
+                                                         void(
+                                                             const std::string& accessor_name,
+                                                             std::uint16_t logical_dfb_id,
+                                                             bool is_relay,
+                                                             std::uint8_t prefetcher_pipe_id)>) const {}
+    virtual void process_semaphore_binding_handles(std::function<
+                                                   // NOLINTNEXTLINE(performance-unnecessary-value-param)
+                                                   void(
+                                                       const std::string& accessor_name,
+                                                       std::uint16_t semaphore_id,
+                                                       SemScope scope,
+                                                       std::uint32_t total_binder_harts)>) const {}
 
     // TensorBinding callback emits the codegen-relevant fields only:
     //  - accessor_name: kernel-side identifier, used as the symbol name in the `tensor::` namespace
@@ -180,10 +184,10 @@ public:
     // (The tensor_parameter_name is also part of TensorBindingHandle, but we don't need it for codegen.)
     virtual void process_tensor_binding_handles(std::function<void(
                                                     const std::string& accessor_name,
-                                                    uint32_t cta_offset,
-                                                    uint32_t addr_crta_offset,
+                                                    std::uint32_t cta_offset,
+                                                    std::uint32_t addr_crta_offset,
                                                     // NOLINTNEXTLINE(performance-unnecessary-value-param)
-                                                    uint32_t num_runtime_field_crta_words)>) const {}
+                                                    std::uint32_t num_runtime_field_crta_words)>) const {}
 
     // Scratchpad binding callback emits the codegen-relevant fields:
     //  - accessor_name: kernel-side identifier, used as the symbol name in the `scratch::` namespace
@@ -192,14 +196,15 @@ public:
     //    scratchpad's (framework-allocated) L1 base address
     virtual void process_scratchpad_binding_handles(
         // NOLINTNEXTLINE(performance-unnecessary-value-param)
-        std::function<void(const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_word)>) const {}
+        std::function<void(const std::string& accessor_name, std::uint32_t size_bytes, std::uint32_t addr_crta_word)>)
+        const {}
 
     // PrefetcherPipe binding callback (Metal 2.0):
     //  - accessor_name: kernel-side identifier, used as the symbol name in the `pipe::` namespace
     //  - prefetcher_pipe_id: the program PrefetcherPipe slot the accessor constructs its PrefetcherPipe with
     virtual void process_prefetcher_pipe_binding_handles(
         // NOLINTNEXTLINE(performance-unnecessary-value-param)
-        std::function<void(const std::string& accessor_name, uint8_t prefetcher_pipe_id)>) const {}
+        std::function<void(const std::string& accessor_name, std::uint8_t prefetcher_pipe_id)>) const {}
 
     // Tensor binding sequence callback: sequence_name + ordered member TensorBinding accessor names.
     // Emitted as constexpr std::tuple tokens in the `tensor::` namespace (user order; no sort).
@@ -228,7 +233,7 @@ public:
 
     // Metal 2.0: length of the CTA-vararg prefix in positional compile_time_args.
     // Default 0 for non–Metal 2.0 kernels.
-    virtual uint32_t get_compile_time_vararg_count() const { return 0; }
+    virtual std::uint32_t get_compile_time_vararg_count() const { return 0; }
 
     ////////////////////////////////////////////////////////////
     // Blaze-only experimental named args

@@ -39,6 +39,7 @@
 #include <core_descriptor.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <variant>
+#include <cstdint>
 
 namespace tt::tt_metal::experimental {
 
@@ -46,12 +47,13 @@ namespace tt::tt_metal::experimental {
 // Constants
 // ============================================================================
 
-// TODO: These constants should be queriable from the public API (currently HAL, for consistency)
+// TODO: These constants should be queryable from the public API (currently HAL, for consistency)
 //       They are currently also hardcoded in the temporary Quasar host_api.hpp. Need to clean this up.
-static constexpr uint32_t QUASAR_DM_CORES_PER_NODE = 8;
-static constexpr uint32_t QUASAR_RESERVED_DM_CORES_PER_NODE = 2;  // DM0 and DM1 reserved for internal use
-static constexpr uint32_t QUASAR_USER_DM_CORES_PER_NODE = QUASAR_DM_CORES_PER_NODE - QUASAR_RESERVED_DM_CORES_PER_NODE;
-static constexpr uint32_t QUASAR_TENSIX_ENGINES_PER_NODE = 4;
+static constexpr std::uint32_t QUASAR_DM_CORES_PER_NODE = 8;
+static constexpr std::uint32_t QUASAR_RESERVED_DM_CORES_PER_NODE = 2;  // DM0 and DM1 reserved for internal use
+static constexpr std::uint32_t QUASAR_USER_DM_CORES_PER_NODE =
+    QUASAR_DM_CORES_PER_NODE - QUASAR_RESERVED_DM_CORES_PER_NODE;
+static constexpr std::uint32_t QUASAR_TENSIX_ENGINES_PER_NODE = 4;
 
 // ============================================================================
 // Type Definitions
@@ -127,19 +129,19 @@ struct CollectedSpecData {
 };
 
 // Bitmask for tracking processor allocation on a node
-template <uint8_t NUM_CORES>
+template <std::uint8_t NUM_CORES>
 struct ProcessorMask {
     static_assert(NUM_CORES > 0 && NUM_CORES <= 8, "ProcessorMask supports 1-8 processors");
-    static constexpr uint8_t VALID_BITS_MASK = (NUM_CORES == 8) ? 0xFF : ((1 << NUM_CORES) - 1);
+    static constexpr std::uint8_t VALID_BITS_MASK = (NUM_CORES == 8) ? 0xFF : ((1 << NUM_CORES) - 1);
 
-    uint8_t bits = 0x00;
+    std::uint8_t bits = 0x00;
 
     // Operators
     bool operator==(ProcessorMask other) const { return bits == other.bits; }
     bool operator!=(ProcessorMask other) const { return bits != other.bits; }
-    ProcessorMask operator|(ProcessorMask other) const { return {uint8_t(bits | other.bits)}; }
-    ProcessorMask operator&(ProcessorMask other) const { return {uint8_t(bits & other.bits)}; }
-    ProcessorMask operator~() const { return {uint8_t(~bits & VALID_BITS_MASK)}; }
+    ProcessorMask operator|(ProcessorMask other) const { return {std::uint8_t(bits | other.bits)}; }
+    ProcessorMask operator&(ProcessorMask other) const { return {std::uint8_t(bits & other.bits)}; }
+    ProcessorMask operator~() const { return {std::uint8_t(~bits & VALID_BITS_MASK)}; }
     ProcessorMask& operator|=(ProcessorMask other) {
         bits |= other.bits;
         return *this;
@@ -150,10 +152,10 @@ struct ProcessorMask {
     }
 
     // Queries
-    uint8_t num_in_use() const { return std::popcount(bits); }
-    uint8_t num_available() const { return NUM_CORES - num_in_use(); }
-    bool is_idx_available(uint8_t idx) const { return (bits & (1 << idx)) == 0; }
-    bool is_idx_in_use(uint8_t idx) const { return (bits & (1 << idx)) != 0; }
+    std::uint8_t num_in_use() const { return std::popcount(bits); }
+    std::uint8_t num_available() const { return NUM_CORES - num_in_use(); }
+    bool is_idx_available(std::uint8_t idx) const { return (bits & (1 << idx)) == 0; }
+    bool is_idx_in_use(std::uint8_t idx) const { return (bits & (1 << idx)) != 0; }
     bool conflicts_with(ProcessorMask other) const { return (bits & other.bits) != 0; }
 };
 
@@ -168,14 +170,14 @@ using ComputeEngineMaskMap = std::unordered_map<const KernelSpec*, ComputeEngine
 // Kernel -> DFB risc mask (passed to MakeDataflowBufferConfig)
 //   Gen1: bit 0 = RISCV_0 (BRISC), bit 1 = RISCV_1 (NCRISC), bit 2 = Tensix compute
 //   Gen2: bits 0-7 = DM processors, bits 8-15 = Tensix compute engines
-using KernelRiscMaskMap = std::unordered_map<const KernelSpec*, uint16_t>;
+using KernelRiscMaskMap = std::unordered_map<const KernelSpec*, std::uint16_t>;
 
 // DFB name -> program-wide DFB ID map (host-side identity: aliasing, borrowed bindings)
-using DFBNameToIdMap = std::unordered_map<DFBSpecName, uint32_t>;
+using DFBNameToIdMap = std::unordered_map<DFBSpecName, std::uint32_t>;
 // DFB name -> device slot map. The slot is what a kernel sees (the dfb::<name> accessor value) and
 // what indexes the per-core config table, so it is what device-facing lowering must use.
-using DFBNameToSlotMap = std::unordered_map<DFBSpecName, uint32_t>;
-using SemaphoreNameToIdMap = std::unordered_map<SemaphoreSpecName, uint32_t>;
+using DFBNameToSlotMap = std::unordered_map<DFBSpecName, std::uint32_t>;
+using SemaphoreNameToIdMap = std::unordered_map<SemaphoreSpecName, std::uint32_t>;
 
 // ============================================================================
 // Basic Utility Helpers
@@ -823,7 +825,7 @@ void ValidateNodeBounds(const ProgramSpec& spec, MetalContext& metal_ctx) {
     // A default DispatchCoreConfig and 1 CQ is sufficient to look up the compute grid size
     // from the YAML descriptor, and both are available in mock mode.
     DispatchCoreConfig dispatch_core_config{};
-    uint8_t num_hw_cqs = 1;
+    std::uint8_t num_hw_cqs = 1;
     constexpr ChipId chip_id = 0;
 
     // But, best get the real dispatch_core_config and num_hw_cqs
@@ -1728,10 +1730,11 @@ void ValidateProgramSpec(
     // indexes the packed config by device slot up to dfb::NUM_DFBS. Tile-counter exhaustion on
     // Gen2 is still checked later at enqueue.
     {
-        const uint32_t max_slots_per_core = hal.has_tile_counter_registers() ? static_cast<uint32_t>(::dfb::NUM_DFBS)
-                                                                             : hal.get_arch_num_circular_buffers();
+        const std::uint32_t max_slots_per_core = hal.has_tile_counter_registers()
+                                                     ? static_cast<std::uint32_t>(::dfb::NUM_DFBS)
+                                                     : hal.get_arch_num_circular_buffers();
 
-        std::unordered_map<NodeCoord, uint32_t> dfbs_per_node;
+        std::unordered_map<NodeCoord, std::uint32_t> dfbs_per_node;
         for (const auto& dfb : spec.dataflow_buffers) {
             for (const NodeCoord& node : corerange_to_cores(collected.dfb_node_set.at(dfb.unique_id))) {
                 dfbs_per_node[node]++;
@@ -1875,7 +1878,7 @@ void ValidateProgramSpec(
         // (1)/(2) Placement — per-node census. A local DFB lives in shared SRAM on each node, so
         // every node it is instantiated on must run exactly one producer instance and exactly one
         // consumer instance. Tally instances per node directly from the bindings: this subsumes the
-        // old within-role disjointness check (a node with >1 same-role instance) and the cross-role
+        // old within-role disjointedness check (a node with >1 same-role instance) and the cross-role
         // coverage check (a node with one role but not the other), and reports the offending node in
         // node terms rather than WorkUnitSpec terms. It counts actual node occupancy, so overlapping
         // same-role placements are caught regardless of how the WorkUnitSpec bookkeeping produced
@@ -2259,7 +2262,7 @@ void ValidateProgramSpec(
     //////////////////////////////////
 
     for (const auto& sem : spec.semaphores) {
-        const uint32_t init_value = sem.advanced_options.initial_value;
+        const std::uint32_t init_value = sem.advanced_options.initial_value;
         if (is_gen2_arch(hal)) {
             TT_FATAL(
                 init_value == 0,
@@ -2297,8 +2300,8 @@ void ValidateProgramSpec(
 
     // Does the WorkUnit have enough cores to run all of its kernels?
     for (const auto& work_unit : work_units) {
-        uint32_t dm_cores_needed = 0;
-        uint32_t compute_engines_needed = 0;
+        std::uint32_t dm_cores_needed = 0;
+        std::uint32_t compute_engines_needed = 0;
         for (const auto& kernel_name : work_unit.kernels) {
             const auto& kernel_spec = collected.kernel_by_name.at(kernel_name);
             if (kernel_spec->is_compute_kernel()) {
@@ -2338,7 +2341,7 @@ void ValidateProgramSpec(
 
     // A work_unit can have at most one compute kernel
     for (const auto& work_unit : work_units) {
-        uint32_t num_compute_kernels = 0;
+        std::uint32_t num_compute_kernels = 0;
         for (const auto& kernel_name : work_unit.kernels) {
             const auto& kernel_spec = collected.kernel_by_name.at(kernel_name);
             if (kernel_spec->is_compute_kernel()) {
@@ -2360,8 +2363,8 @@ void ValidateProgramSpec(
 // ============================================================================
 
 // ProcessorMask factory functions
-template <uint8_t NUM_CORES>
-ProcessorMask<NUM_CORES> CreateMask(uint8_t mask) {
+template <std::uint8_t NUM_CORES>
+ProcessorMask<NUM_CORES> CreateMask(std::uint8_t mask) {
     TT_FATAL(
         mask <= ProcessorMask<NUM_CORES>::VALID_BITS_MASK,
         "Mask specifies too many cores for ProcessorMask<{}>: {}",
@@ -2370,14 +2373,15 @@ ProcessorMask<NUM_CORES> CreateMask(uint8_t mask) {
     return {mask};
 }
 
-template <uint8_t NUM_CORES>
-std::optional<ProcessorMask<NUM_CORES>> ReserveProcessors(uint8_t n, const ProcessorMask<NUM_CORES>& already_in_use) {
+template <std::uint8_t NUM_CORES>
+std::optional<ProcessorMask<NUM_CORES>> ReserveProcessors(
+    std::uint8_t n, const ProcessorMask<NUM_CORES>& already_in_use) {
     if (already_in_use.num_available() < n) {
         return std::nullopt;
     }
 
     ProcessorMask<NUM_CORES> newly_reserved;
-    for (uint8_t i = 0; i < NUM_CORES && n > 0; i++) {
+    for (std::uint8_t i = 0; i < NUM_CORES && n > 0; i++) {
         if (already_in_use.is_idx_available(i)) {
             newly_reserved.bits |= (1 << i);
             n--;
@@ -2475,7 +2479,7 @@ using KernelNodeSetMap = std::unordered_map<KernelSpecName, NodeRangeSet>;
 struct KernelCouplingGroup {
     std::vector<const KernelSpec*> members;  // ≥ 1; canonical member is members.front()
     NodeRangeSet merged_node_set;            // union of members' node sets
-    uint8_t num_threads = 0;                 // shared across members
+    std::uint8_t num_threads = 0;            // shared across members
 };
 
 // State for tracking per-node processor usage
@@ -2746,7 +2750,7 @@ KernelRiscMaskMap SolveGen2KernelRiscMasks(const ProgramSpec& spec, const Collec
         }
     }
     for (const auto& [kernel, mask] : compute_assignments) {
-        result[kernel] = static_cast<uint16_t>(mask.bits) << 8;  // Compute engines in bits 8-15
+        result[kernel] = static_cast<std::uint16_t>(mask.bits) << 8;  // Compute engines in bits 8-15
     }
     return result;
 }
@@ -2754,16 +2758,16 @@ KernelRiscMaskMap SolveGen2KernelRiscMasks(const ProgramSpec& spec, const Collec
 // Gen1 (WH/BH) processor assignment: read the kernel's gen1_config processor and return a
 // KernelRiscMaskMap using the Gen1 bit encoding (RISCV_0: bit 0, RISCV_1: bit 1, compute: bit 2).
 KernelRiscMaskMap BuildGen1KernelRiscMasks(const ProgramSpec& spec) {
-    static constexpr uint8_t GEN1_COMPUTE_RISC_BIT = 2;
+    static constexpr std::uint8_t GEN1_COMPUTE_RISC_BIT = 2;
 
     KernelRiscMaskMap result;
     for (const KernelSpec& kernel : spec.kernels) {
         if (kernel.is_data_movement_kernel()) {
             const auto& dm_config = std::get<DataMovementHardwareConfig>(kernel.hw_config);
             const auto gen1 = std::get<DataMovementGen1Config>(dm_config);
-            result[&kernel] = static_cast<uint16_t>(1u << static_cast<uint8_t>(gen1.processor));
+            result[&kernel] = static_cast<std::uint16_t>(1u << static_cast<std::uint8_t>(gen1.processor));
         } else {
-            result[&kernel] = static_cast<uint16_t>(1u << GEN1_COMPUTE_RISC_BIT);
+            result[&kernel] = static_cast<std::uint16_t>(1u << GEN1_COMPUTE_RISC_BIT);
         }
     }
     return result;
@@ -2787,11 +2791,11 @@ KernelRiscMaskMap BuildGen1KernelRiscMasks(const ProgramSpec& spec) {
 // `rank` shape words in CRTAs), or interleaved row-major + dynamic_tensor_shape (one
 // page-size word). The two are mutually exclusive per binding -- see runtime_field_is_page_size.
 struct ResolvedTensorParameter {
-    std::vector<uint32_t> cta_payload;
+    std::vector<std::uint32_t> cta_payload;
 
     // How many CRTA words (beyond the base address) does this binding consume?
     // This is only used if TensorParameter relaxations have been requested.
-    uint32_t extra_crta_words = 0;
+    std::uint32_t extra_crta_words = 0;
 
     // What info the runtime field CRTA words actually contain depends on the relaxation.
     // Currently, there are only two mutually exclusive possibilities (though more may be added):
@@ -2870,24 +2874,24 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
 
     // aligned_page_size: align the unaligned page size up to the buffer-type alignment.
     const size_t unaligned_page_size = spec.compute_page_size_bytes();
-    const uint32_t alignment = mesh_device.allocator()->get_alignment(buffer_type);
+    const std::uint32_t alignment = mesh_device.allocator()->get_alignment(buffer_type);
     const size_t aligned_page_size = align(unaligned_page_size, static_cast<size_t>(alignment));
     TT_FATAL(
-        aligned_page_size <= std::numeric_limits<uint32_t>::max(),
+        aligned_page_size <= std::numeric_limits<std::uint32_t>::max(),
         "TensorParameter '{}' aligned page size {} exceeds uint32_t max {}",
         tensor_parameter.unique_id,
         aligned_page_size,
-        std::numeric_limits<uint32_t>::max());
+        std::numeric_limits<std::uint32_t>::max());
 
     ResolvedTensorParameter result;
-    std::vector<uint32_t>& cta_payload = result.cta_payload;
+    std::vector<std::uint32_t>& cta_payload = result.cta_payload;
 
     // Common header (always emitted, sharded or not):
     cta_payload.push_back(args_config.raw());
     // If the page size is static, it rides as a CTA.
     // (If it's dynamic, it will live in a CRTA word instead.)
     if (!dyn_page) {
-        cta_payload.push_back(static_cast<uint32_t>(aligned_page_size));
+        cta_payload.push_back(static_cast<std::uint32_t>(aligned_page_size));
     } else {
         TT_FATAL(!is_sharded, "Internal error: dynamic page size should not occur on a sharded tensor parameter");
 
@@ -2923,19 +2927,19 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
     const size_t rank = tensor_shape.rank();
     const size_t n_banks = bank_coords.size();
 
-    cta_payload.push_back(static_cast<uint32_t>(rank));
-    cta_payload.push_back(static_cast<uint32_t>(n_banks));
+    cta_payload.push_back(static_cast<std::uint32_t>(rank));
+    cta_payload.push_back(static_cast<std::uint32_t>(n_banks));
 
     if (!dyn_shape) {
         for (size_t i = 0; i < rank; ++i) {
-            cta_payload.push_back(static_cast<uint32_t>(tensor_shape[i]));
+            cta_payload.push_back(static_cast<std::uint32_t>(tensor_shape[i]));
         }
     } else {
         // Shape lives in CRTAs (one word per dim, written at enqueue time from the bound MeshTensor).
-        result.extra_crta_words = static_cast<uint32_t>(rank);
+        result.extra_crta_words = static_cast<std::uint32_t>(rank);
     }
     for (size_t i = 0; i < rank; ++i) {
-        cta_payload.push_back(static_cast<uint32_t>(shard_shape[i]));
+        cta_payload.push_back(static_cast<std::uint32_t>(shard_shape[i]));
     }
 
     // Bank coords packed two-per-uint32.
@@ -2969,7 +2973,7 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
 struct TensorBindingsForKernel {
     std::vector<TensorBindingHandle> handles;
     // Binding-only CTA payload; appended after the user CTA-vararg positional prefix.
-    std::vector<uint32_t> cta_words;
+    std::vector<std::uint32_t> cta_words;
     KernelCrtaLayout crta_layout;
 };
 
@@ -2990,39 +2994,39 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
     const KernelSpec& kernel,
     const std::unordered_map<TensorParamName, ResolvedTensorParameter>& resolved_tensor_parameters,
     size_t base_named_crta_count,
-    uint32_t base_cta_offset) {
+    std::uint32_t base_cta_offset) {
     TensorBindingsForKernel out;
     out.handles.reserve(kernel.tensor_bindings.size());
 
     // Absolute word index into the unified positional CTA buffer:
     //   [ CTA varargs (base_cta_offset words) | TensorBinding payloads ... ]
-    uint32_t cta_word_offset = base_cta_offset;
+    std::uint32_t cta_word_offset = base_cta_offset;
     size_t crta_word_index = base_named_crta_count;
-    uint32_t binding_section_words = 0;
+    std::uint32_t binding_section_words = 0;
     for (const auto& binding : kernel.tensor_bindings) {
         const ResolvedTensorParameter& resolved = resolved_tensor_parameters.at(binding.tensor_parameter_name);
-        const std::vector<uint32_t>& binding_ctas = resolved.cta_payload;
+        const std::vector<std::uint32_t>& binding_ctas = resolved.cta_payload;
 
         TensorBindingHandle handle;
         handle.accessor_name = binding.accessor_name;
         handle.tensor_parameter_name = binding.tensor_parameter_name.get();
         handle.cta_offset = cta_word_offset;
-        handle.addr_crta_offset = static_cast<uint32_t>(crta_word_index * sizeof(uint32_t));
+        handle.addr_crta_offset = static_cast<std::uint32_t>(crta_word_index * sizeof(std::uint32_t));
         handle.num_runtime_field_crta_words = resolved.extra_crta_words;
         handle.runtime_field_is_page_size = resolved.runtime_field_is_page_size;
 
         out.cta_words.insert(out.cta_words.end(), binding_ctas.begin(), binding_ctas.end());
-        cta_word_offset += static_cast<uint32_t>(binding_ctas.size());
-        const uint32_t binding_words = 1u + resolved.extra_crta_words;
+        cta_word_offset += static_cast<std::uint32_t>(binding_ctas.size());
+        const std::uint32_t binding_words = 1u + resolved.extra_crta_words;
         crta_word_index += binding_words;
         binding_section_words += binding_words;
 
         out.handles.push_back(std::move(handle));
     }
 
-    out.crta_layout.num_named_words = static_cast<uint32_t>(base_named_crta_count);
+    out.crta_layout.num_named_words = static_cast<std::uint32_t>(base_named_crta_count);
     out.crta_layout.binding_section_words = binding_section_words;
-    out.crta_layout.vararg_section_offset = static_cast<uint32_t>(base_named_crta_count) + binding_section_words;
+    out.crta_layout.vararg_section_offset = static_cast<std::uint32_t>(base_named_crta_count) + binding_section_words;
 
     return out;
 }
@@ -3035,7 +3039,7 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
 // The allocated_address is left 0 here; allocate_scratchpads fills it once L1 is allocated.
 struct ScratchpadBindingsForKernel {
     std::vector<ScratchpadBindingHandle> handles;
-    uint32_t section_words = 0;  // == number of scratchpad bindings
+    std::uint32_t section_words = 0;  // == number of scratchpad bindings
 };
 
 ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
@@ -3052,13 +3056,13 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
         ScratchpadBindingHandle handle;
         handle.accessor_name = binding.accessor_name;
         handle.size_bytes = scratchpad_spec->size_per_node;
-        handle.addr_crta_word = static_cast<uint32_t>(crta_word_index);
+        handle.addr_crta_word = static_cast<std::uint32_t>(crta_word_index);
         // handle.allocated_address stays 0 until allocate_scratchpads runs.
         out.handles.push_back(std::move(handle));
         crta_word_index += 1;  // one address word per scratchpad binding
     }
 
-    out.section_words = static_cast<uint32_t>(kernel.scratchpad_bindings.size());
+    out.section_words = static_cast<std::uint32_t>(kernel.scratchpad_bindings.size());
     return out;
 }
 
@@ -3072,23 +3076,23 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
     const KernelSpec& kernel_spec,
     const DFBNameToSlotMap& dfb_name_to_slot,
     const std::unordered_map<DFBSpecName, bool>& dfb_name_to_is_relay,
-    const std::unordered_map<DFBSpecName, uint8_t>& dfb_name_to_prefetcher_pipe_id) {
+    const std::unordered_map<DFBSpecName, std::uint8_t>& dfb_name_to_prefetcher_pipe_id) {
     tt::tt_metal::DataflowBufferBindingHandleMap out;
     out.reserve(kernel_spec.dfb_bindings.size());
     for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
-        const uint32_t slot = dfb_name_to_slot.at(dfb_binding.dfb_spec_name);
+        const std::uint32_t slot = dfb_name_to_slot.at(dfb_binding.dfb_spec_name);
         TT_FATAL(
-            slot <= std::numeric_limits<uint16_t>::max(),
+            slot <= std::numeric_limits<std::uint16_t>::max(),
             "Kernel '{}' DFB '{}' device slot {} does not fit uint16_t",
             kernel_spec.unique_id,
             dfb_binding.dfb_spec_name,
             slot);
         const bool is_relay = dfb_name_to_is_relay.at(dfb_binding.dfb_spec_name);
-        const uint8_t prefetcher_pipe_id = dfb_name_to_prefetcher_pipe_id.at(dfb_binding.dfb_spec_name);
+        const std::uint8_t prefetcher_pipe_id = dfb_name_to_prefetcher_pipe_id.at(dfb_binding.dfb_spec_name);
         out.emplace(
             dfb_binding.accessor_name,
             tt::tt_metal::DataflowBufferBindingHandle{
-                .logical_dfb_id = static_cast<uint16_t>(slot),
+                .logical_dfb_id = static_cast<std::uint16_t>(slot),
                 .is_relay = is_relay,
                 .prefetcher_pipe_id = prefetcher_pipe_id});
     }
@@ -3105,15 +3109,15 @@ tt::tt_metal::SemaphoreBindingHandleMap MakeSemaphoreBindingHandles(
     tt::tt_metal::SemaphoreBindingHandleMap out;
     out.reserve(kernel_spec.semaphore_bindings.size());
     for (const auto& semaphore_binding : kernel_spec.semaphore_bindings) {
-        const uint32_t id = semaphore_name_to_id.at(semaphore_binding.semaphore_spec_name);
+        const std::uint32_t id = semaphore_name_to_id.at(semaphore_binding.semaphore_spec_name);
         TT_FATAL(
-            id <= std::numeric_limits<uint16_t>::max(),
+            id <= std::numeric_limits<std::uint16_t>::max(),
             "Kernel '{}' semaphore '{}' id {} does not fit uint16_t",
             kernel_spec.unique_id,
             semaphore_binding.semaphore_spec_name,
             id);
         const SemScope scope = semaphore_name_to_scope.at(semaphore_binding.semaphore_spec_name);
-        const uint32_t total_binder_harts =
+        const std::uint32_t total_binder_harts =
             scope == SemScope::DM_LOCAL_CACHED
                 ? sem_solver::BinderHartCount(semaphore_binders, semaphore_binding.semaphore_spec_name)
                 : 0u;
@@ -3124,7 +3128,7 @@ tt::tt_metal::SemaphoreBindingHandleMap MakeSemaphoreBindingHandles(
             total_binder_harts);
         out.emplace(
             semaphore_binding.accessor_name,
-            tt::tt_metal::SemaphoreBindingHandle{static_cast<uint16_t>(id), scope, total_binder_harts});
+            tt::tt_metal::SemaphoreBindingHandle{static_cast<std::uint16_t>(id), scope, total_binder_harts});
     }
     return out;
 }
@@ -3144,8 +3148,8 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     const DFBBinding* producer_binding = dfb_endpoint_info.producers.front().binding;
     const DFBBinding* consumer_binding = dfb_endpoint_info.consumers.front().binding;
 
-    uint16_t producer_risc_mask = kernel_to_risc_mask.at(producer);
-    uint16_t consumer_risc_mask = kernel_to_risc_mask.at(consumer);
+    std::uint16_t producer_risc_mask = kernel_to_risc_mask.at(producer);
+    std::uint16_t consumer_risc_mask = kernel_to_risc_mask.at(consumer);
 
     // Convert user-facing access pattern enum to hardware interface access pattern enum
     // (TODO: We should merge these enums; it's silly to have separate ones.)
@@ -3209,10 +3213,10 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .entry_size = dfb_spec->entry_size,
         .num_entries = dfb_spec->num_entries,
         .producer_risc_mask = producer_risc_mask,
-        .num_producers = static_cast<uint8_t>(producer->num_threads),
+        .num_producers = static_cast<std::uint8_t>(producer->num_threads),
         .pap = producer_access_pattern,
         .consumer_risc_mask = consumer_risc_mask,
-        .num_consumers = static_cast<uint8_t>(consumer->num_threads),
+        .num_consumers = static_cast<std::uint8_t>(consumer->num_threads),
         .cap = consumer_access_pattern,
         .enable_producer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.producers),
         .enable_consumer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.consumers),
@@ -3258,8 +3262,8 @@ KernelSource MakeKernelSource(const KernelSpec& kernel_spec, ContextId context_i
 // This is deliberate, done so ProgramSpec stays hashable for TTNN's program caching.
 // For now, just convert to the map types that the core runtime expects.
 // TODO: Fix this inefficiency eventually.
-std::unordered_map<std::string, uint32_t> to_named_compile_args_map(const KernelSpec::CompileTimeArgs& bindings) {
-    return std::unordered_map<std::string, uint32_t>(bindings.begin(), bindings.end());
+std::unordered_map<std::string, std::uint32_t> to_named_compile_args_map(const KernelSpec::CompileTimeArgs& bindings) {
+    return std::unordered_map<std::string, std::uint32_t>(bindings.begin(), bindings.end());
 }
 std::map<std::string, std::string> to_defines_map(const KernelSpec::CompilerOptions::Defines& defines) {
     return std::map<std::string, std::string>(defines.begin(), defines.end());
@@ -3305,12 +3309,12 @@ DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
 
 std::vector<UnpackToDestMode> BuildUnpackToDestModeVector(
     const ComputeUnpackModes& user_modes, const DFBNameToSlotMap& dfb_name_to_slot, const Hal& hal) {
-    const uint32_t max_cbs = hal.get_arch_num_circular_buffers();
+    const std::uint32_t max_cbs = hal.get_arch_num_circular_buffers();
     std::vector<UnpackToDestMode> unpack_modes(max_cbs, UnpackToDestMode::Default);
     for (const auto& [dfb_name, mode] : user_modes) {
         // Indexed by device slot: this vector is consumed by the HLK alongside the CB-indexed data
         // formats, which set_dfb_data_fmt_and_tile also keys by slot.
-        uint32_t dfb_slot = dfb_name_to_slot.at(dfb_name);
+        std::uint32_t dfb_slot = dfb_name_to_slot.at(dfb_name);
         // This TT_FATAL is unreachable, provided that validation wasn't skipped.
         TT_FATAL(
             dfb_slot < max_cbs,
@@ -3402,6 +3406,7 @@ experimental::quasar::QuasarComputeConfig MakeGen2ComputeConfig(
         .dst_full_sync_en = !gen2.double_buffer_dest,
         .unpack_to_dest_mode = unpack_dst_modes,
         .math_approx_mode = (gen2.sfpu_precision_mode == Precision::Approximate),
+        .enable_trisc0_rvv = gen2.enable_trisc0_rvv,
         .compile_args = {},  // Compile args are passed via named_compile_args
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
         .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_args),
@@ -3416,7 +3421,7 @@ experimental::quasar::QuasarComputeConfig MakeGen2ComputeConfig(
 
 std::set<DataMovementProcessor> GetDMProcessorSet(DMProcessorMask mask) {
     std::set<DataMovementProcessor> processors;
-    for (uint8_t i = 0; i < QUASAR_DM_CORES_PER_NODE; ++i) {
+    for (std::uint8_t i = 0; i < QUASAR_DM_CORES_PER_NODE; ++i) {
         if (mask.is_idx_in_use(i)) {
             processors.insert(static_cast<DataMovementProcessor>(i));
         }
@@ -3438,14 +3443,15 @@ std::set<DataMovementProcessor> GetDMProcessorSet(DMProcessorMask mask) {
 
 std::set<experimental::quasar::QuasarComputeProcessor> GetComputeProcessorSet(ComputeEngineMask mask) {
     using QuasarComputeProcessor = experimental::quasar::QuasarComputeProcessor;
-    constexpr uint8_t PROCESSORS_PER_ENGINE = experimental::quasar::QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE;
+    constexpr std::uint8_t PROCESSORS_PER_ENGINE =
+        experimental::quasar::QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE;
 
     std::set<QuasarComputeProcessor> processors;
-    for (uint8_t engine = 0; engine < QUASAR_TENSIX_ENGINES_PER_NODE; ++engine) {
+    for (std::uint8_t engine = 0; engine < QUASAR_TENSIX_ENGINES_PER_NODE; ++engine) {
         if (mask.is_idx_in_use(engine)) {
             // Add all 4 compute processors for this engine
-            for (uint8_t proc = 0; proc < PROCESSORS_PER_ENGINE; ++proc) {
-                uint8_t processor_id = (engine * PROCESSORS_PER_ENGINE) + proc;
+            for (std::uint8_t proc = 0; proc < PROCESSORS_PER_ENGINE; ++proc) {
+                std::uint8_t processor_id = (engine * PROCESSORS_PER_ENGINE) + proc;
                 processors.insert(static_cast<QuasarComputeProcessor>(processor_id));
             }
         }
@@ -3631,10 +3637,10 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
             if (records.size() < 2) {
                 return;
             }
-            const uint16_t first_mask = kernel_to_risc_mask.at(records[0].kernel);
+            const std::uint16_t first_mask = kernel_to_risc_mask.at(records[0].kernel);
             const auto* first_kernel = records[0].kernel;
             for (size_t i = 1; i < records.size(); ++i) {
-                const uint16_t mask = kernel_to_risc_mask.at(records[i].kernel);
+                const std::uint16_t mask = kernel_to_risc_mask.at(records[i].kernel);
                 if (mask == first_mask) {
                     continue;
                 }
@@ -3713,7 +3719,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         // Allocation nodes are derived from binding kernels' WorkUnitSpec membership.
         // (For borrowed-memory DFBs, config.borrows_memory was set in MakeDataflowBufferConfig;
         // the device-side runtime uses that to skip regular L1 allocation.)
-        uint32_t dfb_id = program_impl->add_dataflow_buffer(collected.dfb_node_set.at(dfb_name), config);
+        std::uint32_t dfb_id = program_impl->add_dataflow_buffer(collected.dfb_node_set.at(dfb_name), config);
         program_impl->register_dfb_spec_name(dfb_name.get(), dfb_id);
         dfb_name_to_id[dfb_name] = dfb_id;
         const auto& created_config = program_impl->get_dataflow_buffer(dfb_id)->config;
@@ -3756,12 +3762,12 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
             if (dfb_alias_with(dfb_spec).empty()) {
                 continue;
             }
-            const uint32_t primary_id = dfb_name_to_id.at(dfb_spec.unique_id);
+            const std::uint32_t primary_id = dfb_name_to_id.at(dfb_spec.unique_id);
             for (const auto& alias_name : dfb_alias_with(dfb_spec)) {
                 if (handled_as_secondary.contains(alias_name)) {
                     continue;
                 }
-                const uint32_t secondary_id = dfb_name_to_id.at(alias_name);
+                const std::uint32_t secondary_id = dfb_name_to_id.at(alias_name);
                 program_impl->set_dfb_alias(primary_id, secondary_id);
                 handled_as_secondary.insert(alias_name);
             }
@@ -3773,8 +3779,8 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
     SemaphoreNameToIdMap semaphore_name_to_id;
     for (const auto& semaphore_spec : spec.semaphores) {
         const SemaphoreSpecName& semaphore_name = semaphore_spec.unique_id;
-        const uint32_t init_value = semaphore_spec.advanced_options.initial_value;
-        uint32_t sem_id = program_impl->create_semaphore(
+        const std::uint32_t init_value = semaphore_spec.advanced_options.initial_value;
+        std::uint32_t sem_id = program_impl->create_semaphore(
             to_node_range_set(semaphore_spec.target_nodes), init_value, CoreType::WORKER);
         program_impl->register_semaphore_spec_name(semaphore_name.get(), sem_id);
         semaphore_name_to_id[semaphore_name] = sem_id;
@@ -3802,7 +3808,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         //  - assign each binding a slot in the kernel's CRTA buffer (TensorBinding address section)
         const auto& user_named_crtas = kernel_spec.runtime_arg_schema.common_runtime_arg_names;
         const auto& cta_varargs = kernel_spec.advanced_options.compile_time_varargs;
-        const uint32_t vararg_cta_count = static_cast<uint32_t>(cta_varargs.size());
+        const std::uint32_t vararg_cta_count = static_cast<std::uint32_t>(cta_varargs.size());
         TensorBindingsForKernel ta_bindings = ResolveTensorBindingsForKernel(
             kernel_spec,
             resolved_tensor_parameters,
@@ -3830,7 +3836,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         const auto& named_rtas = kernel_spec.runtime_arg_schema.runtime_arg_names;
 
         // Positional CTAs: [ user CTA varargs | TensorBinding CTA payloads ]
-        std::vector<uint32_t> compile_args = cta_varargs;
+        std::vector<std::uint32_t> compile_args = cta_varargs;
         compile_args.insert(compile_args.end(), ta_bindings.cta_words.begin(), ta_bindings.cta_words.end());
 
         // Create the kernel object
@@ -3840,11 +3846,11 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         constexpr bool is_metal2_kernel = true;
 
         if (is_gen2_arch(hal)) {
-            uint16_t risc_mask = kernel_to_risc_mask.at(&kernel_spec);
+            std::uint16_t risc_mask = kernel_to_risc_mask.at(&kernel_spec);
             if (kernel_spec.is_data_movement_kernel()) {
                 auto config = MakeQuasarDataMovementConfig(kernel_spec);
                 config.compile_args = std::move(compile_args);
-                auto processors = GetDMProcessorSet(DMProcessorMask{(uint8_t)(risc_mask & 0xFF)});
+                auto processors = GetDMProcessorSet(DMProcessorMask{(std::uint8_t)(risc_mask & 0xFF)});
                 kernel = std::make_shared<experimental::quasar::QuasarDataMovementKernel>(
                     program_impl->get_context_id(),
                     kernel_src,
@@ -3861,7 +3867,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
             } else {
                 auto config = MakeGen2ComputeConfig(kernel_spec, dfb_name_to_slot, hal);
                 config.compile_args = std::move(compile_args);
-                auto processors = GetComputeProcessorSet(ComputeEngineMask{(uint8_t)(risc_mask >> 8)});
+                auto processors = GetComputeProcessorSet(ComputeEngineMask{(std::uint8_t)(risc_mask >> 8)});
                 kernel = std::make_shared<experimental::quasar::QuasarComputeKernel>(
                     program_impl->get_context_id(),
                     kernel_src,
@@ -3987,8 +3993,8 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         }
 
         // Varargs schema now lives on KernelAdvancedOptions.
-        const uint32_t num_runtime_varargs = kernel_spec.advanced_options.num_runtime_varargs;
-        const uint32_t num_common_runtime_varargs = kernel_spec.advanced_options.num_common_runtime_varargs;
+        const std::uint32_t num_runtime_varargs = kernel_spec.advanced_options.num_runtime_varargs;
+        const std::uint32_t num_common_runtime_varargs = kernel_spec.advanced_options.num_common_runtime_varargs;
         const bool has_per_node_override = !kernel_spec.advanced_options.num_runtime_varargs_per_node.empty();
 
         if (num_runtime_varargs > 0) {

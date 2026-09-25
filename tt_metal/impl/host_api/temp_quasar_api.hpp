@@ -11,6 +11,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
+#include <cstdint>
 
 /**
  * The APIs in this file are for initial support of Quasar, our next-generation architecture.
@@ -30,19 +31,19 @@ namespace tt::tt_metal {
 class Program;
 
 namespace experimental::quasar {
-static constexpr uint32_t QUASAR_NUM_DM_CORES_PER_CLUSTER = 8;
+static constexpr std::uint32_t QUASAR_NUM_DM_CORES_PER_CLUSTER = 8;
 // Tensix WORKER clusters reserve DM0 (ISR) and DM1 (remapper) for runtime use; CreateKernel
 // assigns user kernels to DM2..DM7 only. Dispatch-engine cores do not apply this reservation.
-static constexpr uint32_t QUASAR_NUM_RESERVED_DM_CORES_PER_CLUSTER = 2;
-static constexpr uint32_t QUASAR_NUM_USER_DM_CORES_PER_CLUSTER =
+static constexpr std::uint32_t QUASAR_NUM_RESERVED_DM_CORES_PER_CLUSTER = 2;
+static constexpr std::uint32_t QUASAR_NUM_USER_DM_CORES_PER_CLUSTER =
     QUASAR_NUM_DM_CORES_PER_CLUSTER - QUASAR_NUM_RESERVED_DM_CORES_PER_CLUSTER;
-static constexpr uint32_t QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER = 4;
+static constexpr std::uint32_t QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER = 4;
 
 struct QuasarDataMovementConfig {
     // Number of data movement cores per cluster to use (max is QUASAR_NUM_USER_DM_CORES_PER_CLUSTER)
-    uint32_t num_threads_per_cluster = QUASAR_NUM_USER_DM_CORES_PER_CLUSTER;
+    std::uint32_t num_threads_per_cluster = QUASAR_NUM_USER_DM_CORES_PER_CLUSTER;
 
-    std::vector<uint32_t> compile_args;
+    std::vector<std::uint32_t> compile_args;
 
     std::map<std::string, std::string> defines;
 
@@ -53,7 +54,7 @@ struct QuasarDataMovementConfig {
     //     std::unordered_map<std::string, uint32_t> named_compile_args = {{"arg1", 5}, {"arg2", 7}};
     //     CreateKernel(program, "kernel.cpp", core, QuasarDataMovementConfig{.compile_args = compile_args,
     //     .named_compile_args = named_compile_args})
-    std::unordered_map<std::string, uint32_t> named_compile_args;
+    std::unordered_map<std::string, std::uint32_t> named_compile_args;
 
     // Flag to enable rapid porting of kernels from WH/BH to Quasar.
     // If set to true, global variables will be accessed as local variables
@@ -72,7 +73,7 @@ struct QuasarDataMovementConfig {
 
 struct QuasarComputeConfig {
     // Number of Tensix engines per cluster to use
-    uint32_t num_threads_per_cluster = QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER;
+    std::uint32_t num_threads_per_cluster = QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER;
 
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     bool fp32_dest_acc_en = false;
@@ -80,8 +81,13 @@ struct QuasarComputeConfig {
     std::vector<UnpackToDestMode> unpack_to_dest_mode;
     bool bfp8_pack_precise = false;
     bool math_approx_mode = false;
+    // Opt-in: compile this kernel's TRISC0 binaries with the RISC-V Vector extension
+    // enabled; on Quasar the vector unit is wired to TRISC0 only. The math, pack and SFPU TRISC
+    // compiles are unchanged, and the vector unit is reachable only through explicit intrinsics.
+    // Needed by LLKs that push data through the vector unit.
+    bool enable_trisc0_rvv = false;
 
-    std::vector<uint32_t> compile_args;
+    std::vector<std::uint32_t> compile_args;
 
     std::map<std::string, std::string> defines;
 
@@ -92,7 +98,7 @@ struct QuasarComputeConfig {
     //     std::unordered_map<std::string, uint32_t> named_compile_args = {{"arg1", 5}, {"arg2", 7}};
     //     CreateKernel(program, "kernel.cpp", core, QuasarComputeConfig{.compile_args = compile_args,
     //     .named_compile_args = named_compile_args})
-    std::unordered_map<std::string, uint32_t> named_compile_args;
+    std::unordered_map<std::string, std::uint32_t> named_compile_args;
 
     // Set the compiler and linker optimization level
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::O3;
@@ -141,7 +147,7 @@ KernelHandle CreateKernel(
 std::set<DataMovementProcessor> GetAvailableDataMovementProcessors(
     Program& program,
     const CoreRangeSet& core_ranges,
-    uint32_t num_processors_per_cluster,
+    std::uint32_t num_processors_per_cluster,
     HalProgrammableCoreType programmable_core_type);
 
 }  // namespace experimental::quasar

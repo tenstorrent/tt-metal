@@ -35,11 +35,11 @@ namespace {
 // committed
 constexpr static std::uint32_t DRAM_BARRIER_BASE = 0;
 constexpr static std::uint32_t DRAM_BARRIER_SIZE =
-    ((sizeof(uint32_t) + DRAM_ALIGNMENT - 1) / DRAM_ALIGNMENT) * DRAM_ALIGNMENT;
+    ((sizeof(std::uint32_t) + DRAM_ALIGNMENT - 1) / DRAM_ALIGNMENT) * DRAM_ALIGNMENT;
 
 constexpr static std::uint32_t DRAM_PROFILER_BASE = DRAM_BARRIER_BASE + DRAM_BARRIER_SIZE;
 constexpr static std::uint32_t get_dram_profiler_size(
-    [[maybe_unused]] uint32_t profiler_dram_bank_size_per_risc_bytes) {
+    [[maybe_unused]] std::uint32_t profiler_dram_bank_size_per_risc_bytes) {
 #if defined(TRACY_ENABLE)
     constexpr std::uint32_t MAX_NUM_UNHARVESTED_TENSIX_CORES = 140;
     constexpr std::uint32_t MAX_NUM_ETH_CORES = 14;
@@ -406,6 +406,18 @@ public:
         return cflags;
     }
 
+    std::string rvv_compile_flags(const Params& params) const override {
+        // Only TRISC0 of each Neo has the vector unit on Quasar.
+        constexpr std::uint32_t trisc_per_neo = 4;
+        if (!(params.core_type == HalProgrammableCoreType::TENSIX &&
+              params.processor_class == HalProcessorClassType::COMPUTE && params.processor_id % trisc_per_neo == 0)) {
+            return {};
+        }
+
+        return "-march=rv32im_zmmul_zaamo_zve32x_zvl128b_xtttensixqsr -fno-lto "
+               "-fno-tree-vectorize -fno-tree-slp-vectorize -Wno-error=array-bounds ";
+    }
+
     bool firmware_is_kernel_object(const Params&) const override { return true; }
     std::string linker_script(const Params& params) const override {
         switch (params.core_type) {
@@ -522,7 +534,7 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
     this->mem_alignments_with_pcie_[static_cast<std::size_t>(HalMemType::HOST)] =
         std::lcm(PCIE_ALIGNMENT, PCIE_ALIGNMENT);
 
-    this->relocate_func_ = [](uint64_t addr, uint64_t local_init_addr, bool /*has_shared_local_mem*/) {
+    this->relocate_func_ = [](std::uint64_t addr, std::uint64_t local_init_addr, bool /*has_shared_local_mem*/) {
         if ((addr & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
             // For RISC0 we have a shared local memory with base firmware so offset by that
             // if (has_shared_local_mem) {
@@ -538,28 +550,33 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
         return addr;
     };
 
-    this->erisc_iram_relocate_func_ = [](uint64_t addr) { return addr; };
+    this->erisc_iram_relocate_func_ = [](std::uint64_t addr) { return addr; };
 
-    this->valid_reg_addr_func_ = [](uint32_t /*addr*/) {
+    this->valid_reg_addr_func_ = [](std::uint32_t /*addr*/) {
         return true;  // used to program start addr for eth FW TODO: add correct value
     };
 
-    this->noc_xy_encoding_func_ = [](uint32_t x, uint32_t y) { return NOC_XY_ENCODING(x, y); };
-    this->noc_multicast_encoding_func_ = [](uint32_t x_start, uint32_t y_start, uint32_t x_end, uint32_t y_end) {
-        return NOC_MULTICAST_ENCODING(x_start, y_start, x_end, y_end);
+    this->noc_xy_encoding_func_ = [](std::uint32_t x, std::uint32_t y) { return NOC_XY_ENCODING(x, y); };
+    this->noc_multicast_encoding_func_ =
+        [](std::uint32_t x_start, std::uint32_t y_start, std::uint32_t x_end, std::uint32_t y_end) {
+            return NOC_MULTICAST_ENCODING(x_start, y_start, x_end, y_end);
+        };
+    this->noc_mcast_addr_start_x_func_ = [](std::uint64_t addr) -> std::uint64_t {
+        return NOC_MCAST_ADDR_START_X(addr);
     };
-    this->noc_mcast_addr_start_x_func_ = [](uint64_t addr) -> uint64_t { return NOC_MCAST_ADDR_START_X(addr); };
-    this->noc_mcast_addr_start_y_func_ = [](uint64_t addr) -> uint64_t { return NOC_MCAST_ADDR_START_Y(addr); };
-    this->noc_mcast_addr_end_x_func_ = [](uint64_t addr) -> uint64_t { return NOC_MCAST_ADDR_END_X(addr); };
-    this->noc_mcast_addr_end_y_func_ = [](uint64_t addr) -> uint64_t { return NOC_MCAST_ADDR_END_Y(addr); };
-    this->noc_ucast_addr_x_func_ = [](uint64_t addr) -> uint64_t { return NOC_UNICAST_ADDR_X(addr); };
-    this->noc_ucast_addr_y_func_ = [](uint64_t addr) -> uint64_t { return NOC_UNICAST_ADDR_Y(addr); };
-    this->noc_local_addr_func_ = [](uint64_t addr) -> uint64_t { return NOC_LOCAL_ADDR(addr); };
+    this->noc_mcast_addr_start_y_func_ = [](std::uint64_t addr) -> std::uint64_t {
+        return NOC_MCAST_ADDR_START_Y(addr);
+    };
+    this->noc_mcast_addr_end_x_func_ = [](std::uint64_t addr) -> std::uint64_t { return NOC_MCAST_ADDR_END_X(addr); };
+    this->noc_mcast_addr_end_y_func_ = [](std::uint64_t addr) -> std::uint64_t { return NOC_MCAST_ADDR_END_Y(addr); };
+    this->noc_ucast_addr_x_func_ = [](std::uint64_t addr) -> std::uint64_t { return NOC_UNICAST_ADDR_X(addr); };
+    this->noc_ucast_addr_y_func_ = [](std::uint64_t addr) -> std::uint64_t { return NOC_UNICAST_ADDR_Y(addr); };
+    this->noc_local_addr_func_ = [](std::uint64_t addr) -> std::uint64_t { return NOC_LOCAL_ADDR(addr); };
 
-    this->eth_fw_arg_addr_func_ = [&](int mailbox_index, uint32_t arg_index) -> uint32_t {
+    this->eth_fw_arg_addr_func_ = [&](int mailbox_index, std::uint32_t arg_index) -> std::uint32_t {
         // +1 because of the message
-        uint32_t mailbox_base =
-            MEM_SYSENG_ETH_MAILBOX_ADDR + (mailbox_index * (MEM_SYSENG_ETH_MAILBOX_NUM_ARGS + 1) * sizeof(uint32_t));
+        std::uint32_t mailbox_base = MEM_SYSENG_ETH_MAILBOX_ADDR +
+                                     (mailbox_index * (MEM_SYSENG_ETH_MAILBOX_NUM_ARGS + 1) * sizeof(std::uint32_t));
         return mailbox_base + offsetof(quasar::EthFwMailbox, arg) +
                (arg_index * sizeof(((quasar::EthFwMailbox*)nullptr)->arg[0]));
     };

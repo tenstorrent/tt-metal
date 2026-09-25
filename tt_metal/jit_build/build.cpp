@@ -73,7 +73,7 @@ namespace {
 // define-variants of one source then share a tu_id, which the host reports as a collision rather than
 // mis-naming. Append-only "<source_id>\t<tu_id>" lines, lowest free id; flock() covers parallel builds
 // sharing a cache root, the mutex covers the JIT's own thread pool.
-uint32_t get_or_assign_profiler_tu_id(const std::string& registry_path, const std::string& source_id) {
+std::uint32_t get_or_assign_profiler_tu_id(const std::string& registry_path, const std::string& source_id) {
     static std::mutex mtx;
     std::lock_guard<std::mutex> lk(mtx);
 
@@ -102,9 +102,9 @@ uint32_t get_or_assign_profiler_tu_id(const std::string& registry_path, const st
             if (tab == std::string::npos) {
                 continue;
             }
-            uint32_t entry_id = 0;
+            std::uint32_t entry_id = 0;
             try {
-                entry_id = static_cast<uint32_t>(std::stoul(line.substr(tab + 1)));
+                entry_id = static_cast<std::uint32_t>(std::stoul(line.substr(tab + 1)));
             } catch (const std::exception&) {
                 continue;
             }
@@ -119,7 +119,7 @@ uint32_t get_or_assign_profiler_tu_id(const std::string& registry_path, const st
     }
 
     taken[TT_ZONE_RESERVED_TU] = true;
-    uint32_t id = 0;
+    std::uint32_t id = 0;
     while (id < TT_ZONE_TU_COUNT && taken[id]) {
         ++id;
     }
@@ -201,7 +201,7 @@ std::string get_default_root_path() {
 JitBuildEnv::JitBuildEnv() = default;
 
 void JitBuildEnv::init(
-    uint64_t build_key,
+    std::uint64_t build_key,
     const JitDeviceConfig& config,
     const tt::llrt::RunTimeOptions& rtoptions,
     const std::map<std::string, std::string>& device_kernel_defines) {
@@ -304,7 +304,7 @@ void JitBuildEnv::init(
     this->defines_ += "-DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 ";
 
     if (rtoptions.get_profiler_enabled()) {
-        uint32_t profiler_options = 1;
+        std::uint32_t profiler_options = 1;
         if (rtoptions.get_profiler_do_dispatch_cores()) {
             profiler_options |= PROFILER_OPT_DO_DISPATCH_CORES;
         }
@@ -530,14 +530,14 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
         build_config.is_fw,
         build_config.core_type,
         build_config.processor_class,
-        static_cast<uint32_t>(build_config.processor_id),
+        static_cast<std::uint32_t>(build_config.processor_id),
         env_.get_rtoptions()};
     const auto& jit_build_query = hal.get_jit_build_query();
 
     this->target_name_ = jit_build_query.target_name(params);
-    this->is_compute_pack_ = build_config.core_type == HalProgrammableCoreType::TENSIX &&
-                             build_config.processor_class == HalProcessorClassType::COMPUTE &&
-                             build_config.processor_id == 2;
+    this->is_tensix_compute_ = build_config.core_type == HalProgrammableCoreType::TENSIX &&
+                               build_config.processor_class == HalProcessorClassType::COMPUTE;
+    this->processor_id_ = static_cast<std::uint32_t>(build_config.processor_id);
     // Per-kernel opt-in flags (applied in export_target_recipe); empty when unsupported.
     this->rvv_cflags_ = jit_build_query.rvv_compile_flags(params);
     // Includes
@@ -660,7 +660,7 @@ bool JitBuildState::build_state_matches(const string& out_dir) const {
     if (!file.is_open()) {
         return false;
     }
-    uint64_t stored_hash{};
+    std::uint64_t stored_hash{};
     file >> stored_hash;
     if (file.fail() || stored_hash != build_state_hash_) {
         log_debug(
@@ -768,11 +768,7 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     // Add the machine-local PCH here so exported recipes remain portable.
     // Exclude build-map dump flags from the PCH profile.
     const std::string pch = tt::jit_build::ensure_pch(
-        env_.gpp_,
-        recipe.compiler_opt_level,
-        recipe.cflags,
-        recipe.pch_umbrella,
-        fs::path(env_.out_root_) / "pch");
+        env_.gpp_, recipe.compiler_opt_level, recipe.cflags, recipe.pch_umbrella, fs::path(env_.out_root_) / "pch");
 
     // Preserve the recipe's defines for watcher logging.
     std::vector<std::string> defines = recipe.defines;
@@ -795,7 +791,7 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
         const std::string source_id = (settings != nullptr)
                                           ? settings->get_profiler_zone_src_id() + '\x1f' + this->target_name_
                                           : "fw\x1f" + this->srcs_[src_index] + '\x1f' + this->target_name_;
-        const uint32_t tu_id =
+        const std::uint32_t tu_id =
             get_or_assign_profiler_tu_id(env_.get_out_root_path() + ".profiler_zone_tu_ids", source_id);
         defines.push_back(fmt::format("-DTT_PROFILER_TU_ID={}", tu_id));
     }
@@ -863,7 +859,7 @@ std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(
     sync_build_steps(events);
 
     BuildCacheTelemetry::inst().record_compile(
-        static_cast<uint32_t>(this->srcs_.size()), static_cast<uint32_t>(compiled.count()));
+        static_cast<std::uint32_t>(this->srcs_.size()), static_cast<std::uint32_t>(compiled.count()));
 
     if (env_.get_rtoptions().get_watcher_enabled()) {
         dump_kernel_defines_and_args(env_.get_out_kernel_root_path());
@@ -1004,7 +1000,7 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
             return target->warmed_elf_reusable(kernel_name);
         });
         if (all_reusable) {
-            BuildCacheTelemetry::inst().record_compile(static_cast<uint32_t>(num_objs), 0);
+            BuildCacheTelemetry::inst().record_compile(static_cast<std::uint32_t>(num_objs), 0);
             extract_zone_src_locations(out_dir);
             return;
         }
@@ -1019,7 +1015,7 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
         if (!link_objs.empty()) {
             return;
         }
-        uint32_t reused_objs = 0;
+        std::uint32_t reused_objs = 0;
         for (size_t i = 0; i < num_objs; ++i) {
             auto temp_obj = out_dir + this->temp_objs_[i];
             if (!compiled.test(i)) {
@@ -1120,15 +1116,17 @@ tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSe
     target.target_name = target_name_;
     target.cflags = cflags_;
     target.pch_umbrella = (fs::path(env_.root_) / jit_build::PCH_UMBRELLA).string();
-    // Per-kernel RVV opt-in: only the pack (TRISC2) compile of a kernel that set
-    // ComputeConfig::enable_trisc2_rvv gets the vector flags. Compile-only: lflags_ is
-    // untouched, so the link stays stock (the -fno-lto object simply opts out of LTO).
-    if (settings != nullptr && this->is_compute_pack_ && settings->get_trisc2_rvv_enabled()) {
+    // Per-kernel RVV opt-in: only the compile of the compute processor the kernel opted in for
+    // gets the vector flags. Right now, RVV on TRISC0 is supported on Quasar and TRISC2 on BH
+    // Compile-only: lflags_ is untouched, so the link stays stock (the -fno-lto object simply opts out of LTO).
+    if (settings != nullptr && this->is_tensix_compute_ &&
+        settings->get_rvv_enabled_for_compute_processor(this->processor_id_)) {
         TT_FATAL(
             !this->rvv_cflags_.empty(),
-            "Kernel {} sets enable_trisc2_rvv, but this architecture does not support RVV code "
-            "generation on the pack processor",
-            settings->get_full_kernel_name());
+            "Kernel {} enables RVV code generation for compute processor {}, but this architecture does not "
+            "support RVV code generation on that processor",
+            settings->get_full_kernel_name(),
+            this->processor_id_);
         target.cflags += this->rvv_cflags_;
     }
     target.lflags = lflags_;
@@ -1165,7 +1163,7 @@ tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSe
         // shell-free as one verbatim argv element with literal quotes (the unified/remote-JIT
         // path does no shell expansion).
         defines.push_back(fmt::format(R"(-DFULL_KERNEL_NAME="{}")", settings->get_full_kernel_name()));
-        settings->process_compile_time_args([&defines](const std::vector<uint32_t>& values) {
+        settings->process_compile_time_args([&defines](const std::vector<std::uint32_t>& values) {
             if (!values.empty()) {
                 defines.push_back(fmt::format("-DKERNEL_COMPILE_TIME_ARGS={}", fmt::join(values, ",")));
             }
@@ -1177,7 +1175,7 @@ tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSe
         // recipe stays valid verbatim on the remote compile server, where a client-side absolute
         // path would not resolve. See NAMED_CT_ARG_MAP_HEADER.
         settings->process_named_compile_time_args(
-            [&defines](const std::unordered_map<std::string, uint32_t>& named_args) {
+            [&defines](const std::unordered_map<std::string, std::uint32_t>& named_args) {
                 if (!named_args.empty()) {
                     defines.emplace_back("-include");
                     defines.emplace_back(tt::jit_build::utils::NAMED_CT_ARG_MAP_HEADER);
