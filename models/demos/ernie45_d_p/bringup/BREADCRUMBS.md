@@ -91,3 +91,22 @@ Workflow for any agent picking up a step:
 - The probe dispatched buffer is built on the host from golden routing (`tests/pcc/test_unified_expert_probe.py`).
 - P3.2 (TtMoEUnified, full pipeline) stays TODO until a 1-chip dispatch/combine exists. Options: patch dispatch/combine
   for dispatch_group_size == 1 (local NOC copy, no fabric), or compose a local dispatch from TTNN ops.
+
+## P3.2 (2026-09-25): unified_routed_expert_moe integrated as the default MoE. PASS; full ladder re-run PASS
+- ttnn patches for a 1-device dispatch axis (1xN mesh, dispatch group = 1 chip), host side only:
+  `offset_cumsum` skips its all_gather; `dispatch` and `combine` program factories gate all fabric setup on
+  `use_fabric = num_links > 0 && dispatch-axis devices > 1`. The kernels already had a no-fabric build (`#ifdef DEST_CHIP_ID`)
+  and every routed expert is local or absent (-1), so nothing needs the fabric.
+- `tt/moe_unified.py` TtMoEUnified: router -> masked_bincount/offset_cumsum -> dispatch -> unified op (ROW_MAJOR bf16
+  input = fused fast path) -> combine -> post_combine_reduce (weighted top-k, local) -> + shared partial -> one all_reduce.
+  Dispatch/combine are built lazily per chunk length and shared by all layers. `ERNIE_MOE_IMPL=dense` restores dense-EP.
+- Gotcha: with TILE input the op returns its input buffer as the output (in place). Do not free the input before combine.
+- Results (unified vs dense-EP):
+  | | final hidden | worst KV | top-1 | TTFT |
+  |---|---|---|---|---|
+  | 2k->2k | 0.9958 (0.9983) | 0.9939 (0.9979) | 94.3% (98.7%) | 0.76 s (1.79 s) |
+  | 55k@5k | 0.9965 (0.9984) | 0.9926 (0.9960) | 95.7% (97.7%) | **10.9 s (35.9 s)** |
+  Top-5 stays 100%. The accuracy cost comes from the kernel packing expert activations to bf8 internally (even for bf16 input).
+- Correction: the isolated P3.1 probe timed dense-EP experts at 27 ms per layer, but in the model the dense-EP MoE cost about 2.4 s
+  per 5k chunk. The measured TTFT win (3.3x) is far larger than the 20-25% predicted from the probe.
+- Chunk time is now 0.44 s at 5k context and grows to 1.45 s at 50k: attention is now the dominant, context-dependent cost.
