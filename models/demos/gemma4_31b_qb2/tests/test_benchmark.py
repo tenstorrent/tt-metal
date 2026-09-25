@@ -203,3 +203,53 @@ def test_startup_status_never_copies_log_content():
         "last_layer_started": None,
         "exception_logged": False,
     }
+
+
+def test_report_preserves_run_start_and_every_shape(monkeypatch, tmp_path):
+    import importlib
+    import pickle
+
+    from infra.data_collection.pydantic_models import BenchmarkMeasurement, PartialBenchmarkRun
+    from models.perf import benchmarking_utils
+
+    report = importlib.import_module("models.demos.gemma4_31b_qb2.tests.report")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(benchmarking_utils, "IS_CI_ENV", True)
+    monkeypatch.setattr(benchmarking_utils, "BenchmarkMeasurement", BenchmarkMeasurement, raising=False)
+    monkeypatch.setattr(benchmarking_utils, "PartialBenchmarkRun", PartialBenchmarkRun, raising=False)
+    monkeypatch.setattr(report, "IS_CI_ENV", True)
+    row = dict(
+        measurement_start="2026-09-25T10:01:00+00:00",
+        measurement_end="2026-09-25T10:02:00+00:00",
+        mean_ttft_ms=70,
+        mean_decode_tokens_per_s=40,
+        aggregate_output_tokens_per_s=39,
+        concurrency=1,
+        requests=2,
+        input_tokens=128,
+        output_tokens=128,
+    )
+    summary = dict(
+        run_start="2026-09-25T10:00:00+00:00",
+        server_capacity=1,
+        checkpoint_revision="checkpoint",
+        input_sha256="input",
+        scope="synthetic regression",
+        performance_results=[row],
+    )
+    report.report(summary)
+    summary.update(
+        server_capacity=32,
+        gpqa_result={**row, "concurrency": 10, "requests": 10, "accuracy": 0.9},
+        performance_results=[row, {**row, "concurrency": 32, "requests": 64}],
+    )
+    report.report(summary)
+    files = list((tmp_path / "generated/benchmark_data").glob("partial_run_*.pkl"))
+    assert len(files) == 4, "Shapes sharing a run start must not overwrite each other"
+    records = [pickle.loads(path.read_bytes()) for path in files]
+    assert {r.batch_size for r in records} == {1, 10, 32}
+    for record in records:
+        assert record.run_start_ts.isoformat() == summary["run_start"]
+        assert record.run_end_ts.isoformat() == row["measurement_end"]
+        assert all(m.step_start_ts.isoformat() == row["measurement_start"] for m in record.measurements)
+        assert record.config_params["server_capacity"] in (1, 32)

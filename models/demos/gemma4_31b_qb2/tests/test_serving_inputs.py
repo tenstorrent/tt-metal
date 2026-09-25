@@ -4,8 +4,12 @@
 
 from types import SimpleNamespace
 
+import pytest
 import torch
 
+import ttnn
+from models.demos.gemma4_31b_qb2.tt.decoder import Decoder
+from models.demos.gemma4_31b_qb2.tt.generator import CacheState, Gemma4Generator
 from models.demos.gemma4_31b_qb2.tt.generator_vllm import Gemma4ForCausalLM
 
 
@@ -43,3 +47,54 @@ def test_prefill_rejects_missing_live_rows(expect_error):
     source = torch.zeros(1, 8, dtype=torch.int32)
     with expect_error(ValueError, "fewer rows"):
         model._tables(model.cache, [source, source], slots=[0, 1])
+
+
+def private_sliding_cache(logical_pages):
+    generator = object.__new__(Gemma4Generator)
+    generator.mesh = object()
+    generator.max_seq_len = 262144
+    generator.model = SimpleNamespace(layers=[SimpleNamespace(kind="sliding_attention", kv_heads=4, head_dim=128)])
+    pool = min(logical_pages, Decoder.SLIDING_WINDOW_PAGES)
+    table = (torch.arange(2)[:, None] * pool + torch.arange(logical_pages)[None, :] % pool).int()
+    kv = [
+        SimpleNamespace(
+            shape=(2 * pool + 2, 4, 128, 128),
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=lambda: ttnn.DRAM_MEMORY_CONFIG,
+            device=lambda: generator.mesh,
+            buffer_unique_id=lambda index=index: index,
+        )
+        for index in range(2)
+    ]
+    state = CacheState(
+        [kv],
+        {"sliding_attention": table},
+        2,
+        logical_pages * 128,
+        scratch_pages={"sliding_attention": [2 * pool, 2 * pool + 1]},
+    )
+    return generator, state, table
+
+
+@pytest.mark.parametrize("logical_pages", [5, 12])
+def test_private_sliding_cache_accepts_short_and_cyclic_tables(logical_pages):
+    generator, state, table = private_sliding_cache(logical_pages)
+    generator._validate_cache(state, state.page_tables)
+    # Moving whole request slots preserves private ownership and the cycle.
+    generator._validate_cache(state, {"sliding_attention": table.flip(0)})
+
+
+@pytest.mark.parametrize("row,column,value", [(0, 1, 0), (1, 0, 0), (0, 9, 1)])
+def test_private_sliding_cache_rejects_aliases_and_broken_cycles(row, column, value, expect_error):
+    generator, state, table = private_sliding_cache(12)
+    table[row, column] = value
+    with expect_error(ValueError, "distinct|cyclic"):
+        generator._validate_cache(state, state.page_tables)
+
+
+def test_decoder_rejects_other_four_chip_blackhole_topologies(monkeypatch, expect_error):
+    mesh = SimpleNamespace(get_num_devices=lambda: 4, shape=(1, 4), arch=lambda: ttnn.Arch.BLACKHOLE)
+    monkeypatch.setattr(ttnn.cluster, "get_cluster_type", lambda: object())
+    with expect_error(ValueError, "P300_X2"):
+        Decoder.from_state_dict({}, hf_config=None, layer_idx=0, mesh_device=mesh)

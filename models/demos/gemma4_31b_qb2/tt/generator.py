@@ -18,6 +18,7 @@ from ttnn.tools.trace_allocation_tracker import corruptible_allocation_scope
 
 import ttnn
 from models.common.sampling.tt_sampling import TTSampling
+from models.demos.gemma4_31b_qb2.tt.decoder import Decoder
 from models.demos.gemma4_31b_qb2.tt.model import Gemma4Model
 
 
@@ -88,7 +89,7 @@ class Gemma4Generator:
         tables = {}
         pools = {}
         for kind in {l.kind for l in self.model.layers}:
-            pool = min(pages, 9) if kind == "sliding_attention" else pages
+            pool = min(pages, Decoder.SLIDING_WINDOW_PAGES) if kind == "sliding_attention" else pages
             pools[kind] = pool
             tables[kind] = (torch.arange(batch)[:, None] * pool + torch.arange(pages)[None, :] % pool).int()
         # Private per-slot scratch pages let warmup use the real cache geometry
@@ -166,7 +167,9 @@ class Gemma4Generator:
         for kind, table in tables.items():
             if not isinstance(table, torch.Tensor) or tuple(table.shape) != (state.batch, state.capacity // 128):
                 raise ValueError("Expected a two-dimensional page table")
-            period = min(table.shape[1], 9) if kind == "sliding_attention" else table.shape[1]
+            period = (
+                min(table.shape[1], Decoder.SLIDING_WINDOW_PAGES) if kind == "sliding_attention" else table.shape[1]
+            )
             unique_pages = table[:, :period]
             if unique_pages.numel() != torch.unique(unique_pages).numel():
                 raise ValueError("Writable cache pages must be distinct across slots and live logical blocks")

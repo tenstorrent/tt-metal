@@ -5,6 +5,7 @@
 import torch
 
 import ttnn
+from models.demos.gemma4_31b_qb2.tt.decoder import Decoder
 from models.demos.gemma4_31b_qb2.tt.generator import CacheState, build_generator
 
 
@@ -94,7 +95,7 @@ class Gemma4ForCausalLM:
         # The shared pool uses one full-attention group and five sliding groups.
         # Each window can straddle nine pages. The plugin adds one output page
         # per request separately; this budget covers full history plus live tails.
-        return 262144 + 5 * 9 * 128 * max_num_seqs
+        return 262144 + 5 * Decoder.SLIDING_WINDOW_PAGES * Decoder.PAGE_SIZE * max_num_seqs
 
     def allocate_kv_cache_per_layer(self, per_layer_specs):
         pools, kv, scratch = {}, [], {}

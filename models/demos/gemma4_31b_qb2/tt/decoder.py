@@ -42,6 +42,8 @@ DECODE_GEOMETRY = {
 
 class Decoder:
     PAGE_SIZE = 128
+    # An unaligned 1024-token live window can straddle nine 128-token pages.
+    SLIDING_WINDOW_PAGES = 1024 // PAGE_SIZE + 1
     PREFILL_CHUNK = 1024
 
     @classmethod
@@ -55,8 +57,9 @@ class Decoder:
             mesh_device.get_num_devices() != 4
             or tuple(mesh_device.shape) != (1, 4)
             or mesh_device.arch() != ttnn.Arch.BLACKHOLE
+            or ttnn.cluster.get_cluster_type() != ttnn.cluster.ClusterType.P300_X2
         ):
-            raise ValueError("Gemma4 31B QB2 requires four Blackhole devices in a [1, 4] mesh")
+            raise ValueError("Gemma4 31B QB2 requires a P300_X2 cluster with four Blackhole devices in a [1, 4] mesh")
         assert (c.hidden_size, c.intermediate_size, c.num_attention_heads) == (5376, 21504, 32)
         assert not c.enable_moe_block and (not c.hidden_size_per_layer_input) and (not c.num_kv_shared_layers)
         assert not c.attention_bias and c.attention_k_eq_v and (not c.use_double_wide_mlp)
@@ -992,7 +995,7 @@ class Decoder:
         )
         v = ttnn.to_memory_config(v, vmem)
         bounded = cyclic_cache and self.sliding and page_table.padded_shape[1] > kv_cache[0].shape[0]
-        modulo = {"cache_position_modulo": 9 * self.PAGE_SIZE} if bounded else {}
+        modulo = {"cache_position_modulo": self.SLIDING_WINDOW_PAGES * self.PAGE_SIZE} if bounded else {}
         if bounded:
             # Fused update still enforces logical pages <= physical pages.
             # Native separate updates support a bounded pool explicitly. The

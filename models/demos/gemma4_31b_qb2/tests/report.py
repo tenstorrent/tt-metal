@@ -7,7 +7,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+from models.perf.benchmarking_utils import IS_CI_ENV, BenchmarkData, BenchmarkProfiler
 
 
 def report(summary):
@@ -18,10 +18,11 @@ def report(summary):
         (row, f"Fixed-length text serving, server capacity {summary['server_capacity']}", False)
         for row in summary.get("performance_results", [])
     )
-    for row, dataset, accuracy in runs:
+    for index, (row, dataset, accuracy) in enumerate(runs):
         profiler = BenchmarkProfiler()
         for phase in ("run", "inference", "inference_prefill", "inference_decode"):
-            profiler.start_times[(0, phase)] = datetime.fromisoformat(row["measurement_start"])
+            start = summary["run_start"] if phase == "run" else row["measurement_start"]
+            profiler.start_times[(0, phase)] = datetime.fromisoformat(start)
             profiler.end_times[(0, phase)] = datetime.fromisoformat(row["measurement_end"])
         benchmark = BenchmarkData()
         metrics = [
@@ -59,6 +60,13 @@ def report(summary):
                 "scope": summary["scope"] if accuracy else "warmed, greedy, ignored EOS",
             },
         )
+
+        if IS_CI_ENV:
+            # The shared writer names files by run start. Keep every shape when
+            # several records share the same benchmark-wide start timestamp.
+            start = profiler.get_str_start("run")
+            path = Path(benchmark.output_folder) / f"partial_run_{start}.pkl"
+            path.rename(path.with_name(f"partial_run_gemma4_b{summary['server_capacity']}_{index}_{start}.pkl"))
 
 
 if __name__ == "__main__":
