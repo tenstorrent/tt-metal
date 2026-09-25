@@ -24,7 +24,8 @@
 // (grid, L1), so it can be exercised for any architecture without a device. It uses structural heuristics
 // only, no measured constants:
 //  - B not batched: the batch is fused into M and 2D mcast is used, unless a 1D layout keeps at least
-//    ONE_D_CORE_ADVANTAGE times as many cores busy (small M or small N), in which case that 1D layout is used;
+//    ONE_D_CORE_ADVANTAGE times as many cores busy (small M or small N), in which case that 1D layout is used,
+//    or 1D in0-mcast keeps as many cores busy with less input per core (per_core_M + per_core_N);
 //  - batched B: Reuse (one batch matrix per core block), unless a 2D/1D layout looping over the batch keeps
 //    ONE_D_CORE_ADVANTAGE times as many cores busy (e.g. large N, where Reuse's per_core_N = N leaves few cores);
 //  - block sizes follow the #57884 heuristics within the L1 budget, with one K block depth rule.

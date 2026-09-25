@@ -96,6 +96,10 @@ std::string check_config(const Problem& p, const HardwareDesc& hw, const MatmulP
                     if (p.fp32_dest_acc_en && c.out_subblock_h * c.out_subblock_w > 4) {
                         return "reuse fp32 subblock";
                     }
+                    // The reuse factory leaves output unwritten when a core gets several partial-batch blocks
+                    if (c.per_core_M < p.Mt && p.batch_a * (p.Mt / c.per_core_M) > cores) {
+                        return "reuse partial-batch blocks exceed cores";
+                    }
                     Blocking b{c.per_core_M, c.per_core_N, c.in0_block_w, c.per_core_M, c.per_core_N, 0, 0};
                     if (circular_buffer_bytes(p, hw, Family::Reuse, b) > hw.l1_cb_budget) {
                         return "reuse L1";
@@ -253,16 +257,17 @@ TEST(MatmulAutoConfig, FamilyChoice) {
         Family family;
     };
     const std::vector<Expected> expected = {
-        {{1, 1, 32, 4096, 14336}, Family::Mcast1DIn0},  // decode: M is one tile row
-        {{1, 1, 128, 4096, 6144}, Family::Mcast1DIn0},  // decode, 4 rows but wide N
-        {{1, 1, 128, 8192, 1280}, Family::Mcast2D},     // 4 rows, N=40 tiles: 2D fills 32 cores vs 40
-        {{1, 1, 128, 7168, 256}, Family::Mcast2D},      // #40845
-        {{1, 1, 2048, 4096, 4096}, Family::Mcast2D},    // prefill
-        {{1, 1, 1024, 5376, 5376}, Family::Mcast2D},    // #56976
-        {{1, 1, 16384, 384, 1152}, Family::Mcast2D},    // nanoGPT
-        {{768, 1, 768, 128, 32}, Family::Mcast1DIn1},   // tall and one tile wide
-        {{384, 384, 256, 256, 64}, Family::Reuse},      // batched attention
-        {{4, 4, 256, 2048, 7168}, Family::Mcast2D},     // #31743: batched with wide N, looped over batch
+        {{1, 1, 32, 4096, 14336}, Family::Mcast1DIn0},   // decode: M is one tile row
+        {{1, 1, 128, 4096, 6144}, Family::Mcast1DIn0},   // decode, 4 rows but wide N
+        {{1, 1, 128, 8192, 1280}, Family::Mcast1DIn0},   // 4 rows, N=40 tiles: 40 cores vs 32, less input each
+        {{1, 1, 256, 4096, 16384}, Family::Mcast1DIn0},  // 8 rows, wide N: 8x8 blocks beat 2D's 1x64
+        {{1, 1, 128, 7168, 256}, Family::Mcast2D},       // #40845
+        {{1, 1, 2048, 4096, 4096}, Family::Mcast2D},     // prefill
+        {{1, 1, 1024, 5376, 5376}, Family::Mcast2D},     // #56976
+        {{1, 1, 16384, 384, 1152}, Family::Mcast2D},     // nanoGPT
+        {{768, 1, 768, 128, 32}, Family::Mcast1DIn1},    // tall and one tile wide
+        {{384, 384, 256, 256, 64}, Family::Reuse},       // batched attention
+        {{4, 4, 256, 2048, 7168}, Family::Mcast2D},      // #31743: batched with wide N, looped over batch
     };
     for (const auto& e : expected) {
         const auto& s = e.shape;

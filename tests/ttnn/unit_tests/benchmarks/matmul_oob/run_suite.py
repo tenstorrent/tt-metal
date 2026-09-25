@@ -303,6 +303,25 @@ class CaseRun:
             return ttnn.linear(self.a, self.b, bias=self.bias, activation=self.case.activation, **kwargs)
         return ttnn.matmul(self.a, self.b, **kwargs)
 
+    def _poison_output_location(self):
+        """Allocate and free a NaN tensor the size of the output in the output's memory, so output tiles the
+        kernel never writes read back as NaN (and fail PCC) instead of showing a previous run's result."""
+        case = self.case
+        if case.out_mem not in ("dram", "l1"):
+            return
+        batch, M, _, N = case.mkn
+        try:
+            t = ttnn.from_torch(
+                torch.full((batch, M, N), float("nan"), dtype=torch.bfloat16),
+                dtype=DTYPES[case.out_dtype or case.a_dtype],
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=output_memory_config(case.out_mem),
+            )
+            ttnn.deallocate(t)
+        except Exception:
+            pass  # best effort (e.g. no room in L1)
+
     def measure(self, mode="oob", program_config=None):
         """Run warmup + timed iterations; returns a row with timing, config and PCC."""
         case, args, grid = self.case, self.args, self.grid
@@ -328,6 +347,14 @@ class CaseRun:
                 ttnn.synchronize_device(self.device)
                 ttnn.ReadDeviceProfiler(self.device)
                 entries = new_program_entries(self.device_id, self.seen_programs)
+
+                # One more call for the PCC check, into a location freshly filled with NaN
+                ttnn.deallocate(out)
+                self._poison_output_location()
+                out = self._call(program_config)
+                ttnn.synchronize_device(self.device)
+                ttnn.ReadDeviceProfiler(self.device)
+                new_program_entries(self.device_id, self.seen_programs)  # not timed
         except Exception as e:
             if out is not None:
                 ttnn.deallocate(out)
@@ -400,7 +427,7 @@ class CaseRun:
             actual = ttnn.to_torch(out).float()
             row["pcc"] = round(pcc(golden, actual.reshape(golden.shape)), 6)
             threshold = BFP4_PCC_THRESHOLD if "bfp4" in (case.a_dtype, case.b_dtype) else args.pcc_threshold
-            if row["status"] == "ok" and row["pcc"] < threshold:
+            if row["status"] == "ok" and not row["pcc"] >= threshold:  # NaN (unwritten output) fails too
                 row["status"] = "pcc_fail"
         except Exception as e:
             row["error"] = (row["error"] + " | pcc: " + short_error(e)).strip(" |")

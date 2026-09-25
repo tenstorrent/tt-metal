@@ -236,15 +236,16 @@ std::optional<Blocking> block_1d(
     return best;
 }
 
-// Reuse (batched B): per_core_N = Nt and per_core_M is the tallest slice of a batch matrix that still gives
-// every core a block (all of Mt when the batch alone fills the grid) and fits L1; in0_block_w is the largest
-// divisor of Kt up to MAX_IN0_BLOCK_W that fits.
+// Reuse (batched B): per_core_N = Nt, and each core block is a whole batch matrix (per_core_M = Mt) unless
+// the batch alone leaves cores idle. Then each matrix is split into row slices, as many as still give every
+// core at most one block: the reuse factory leaves output unwritten when a core gets several blocks that are
+// partial batch matrices. in0_block_w is the largest divisor of Kt up to MAX_IN0_BLOCK_W that fits L1.
 std::optional<Blocking> block_reuse(const Problem& p, const HardwareDesc& hw) {
     const uint32_t cores = hw.grid.x * hw.grid.y;
+    std::optional<Blocking> best;
     for (uint32_t per_core_M : divisors_desc(p.Mt)) {
-        const bool fills_grid = p.batch_a * (p.Mt / per_core_M) >= cores;
-        if (!fills_grid && per_core_M > 1) {
-            continue;
+        if (per_core_M < p.Mt && p.batch_a * (p.Mt / per_core_M) > cores) {
+            break;  // smaller slices would put several partial blocks on a core
         }
         for (uint32_t k : divisors_desc(p.Kt)) {
             if (k > max_in0_block_w(p.Kt, Family::Reuse)) {
@@ -252,12 +253,16 @@ std::optional<Blocking> block_reuse(const Problem& p, const HardwareDesc& hw) {
             }
             Blocking b{per_core_M, p.Nt, k, per_core_M, p.Nt, 0, 0};
             if (circular_buffer_bytes(p, hw, Family::Reuse, b) <= hw.l1_cb_budget) {
-                return b;
+                best = b;  // fits; keep looking for a finer split that is still one block per core
+                break;
             }
         }
     }
-    return std::nullopt;
+    return best;
 }
+
+// Input tiles per K tile each core reads: its rows of A plus its columns of B
+uint32_t per_core_input_tiles(const Blocking& b) { return b.per_core_M + b.per_core_N; }
 
 uint32_t cores_used(const Problem& p, const HardwareDesc& hw, Family family, const Blocking& b) {
     if (family == Family::Reuse) {
@@ -338,6 +343,11 @@ std::optional<Candidate> choose_candidate(const Problem& p, const HardwareDesc& 
         one_d = in1;
     } else if (!two_d) {
         one_d = in0 ? in0 : in1;
+    } else if (
+        in0 && in0->cores >= two_d->cores &&
+        per_core_input_tiles(in0->blocking) < per_core_input_tiles(two_d->blocking)) {
+        // As many cores busy and each reads less input (a taller, squarer per-core block): in0-mcast
+        one_d = in0;
     }
     return one_d ? *one_d : *two_d;
 }
