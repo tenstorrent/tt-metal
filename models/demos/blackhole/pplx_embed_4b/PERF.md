@@ -65,8 +65,8 @@ which gates the synchronous aggregate.
 
 ## Where the time goes now
 
-Share of device kernel time per batch (Tracy, signposted trace replay, one P150); per-op tables and the
-reproduction commands are in [docs/baseline.md](docs/baseline.md).
+Share of device kernel time per batch (Tracy, signposted trace replay, one P150). The SwiGLU column is empty at
+bs 8 and 16 because there the product runs inside the fused SwiGLU matmul.
 
 | Batch | Matmul | SDPA | Fused heads | Norm + residual | SwiGLU product | Matmul + SDPA | Kernel sum |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
