@@ -102,6 +102,7 @@ class TtV4PrefillRuntime:
         self._sink = None
         self._request_id = 0
         self._compiled = False
+        self._ids_dev = None
 
     # ---- engine contract ----------------------------------------------------------------------------------------
     def compile(self, kv_caches) -> None:
@@ -130,13 +131,18 @@ class TtV4PrefillRuntime:
         assert self._compiled, "capture_trace needs compile() first (the islands' programs must exist)"
         x = self.make_chunk_input([0] * c.chunk_size)
         self._pending_ids.pop(id(x), None)
-        ids = self._token_ids_view(x) if self._needs_token_ids else None
-        self.model.enable_trace_islands(x, input_ids=ids)
-        if ids is not None:
-            ttnn.deallocate(ids)
+        # The hash gate's ids live in ONE persistent buffer for the whole prefill: the per-chunk view is copied into it
+        # before any island replays, so no eager tensor that a later layer reads survives a replay (the trace's
+        # intermediates land wherever DRAM was free at capture time -- a live view there is overwritten).
+        self._ids_dev = self._token_ids_view(x) if self._needs_token_ids else None
+        self.model.enable_trace_islands(x, input_ids=self._ids_dev)
+        self._trace_captured = True
+        # warm the traced path once (the islands' copy / reshape programs compile here, not on the first request)
+        self.prefill_chunk(x, kv_caches, slot_id=0, actual_start=0, actual_end=c.chunk_size, warmup=True)
+        for layer in self.model.layers:
+            layer.reset_slot(0)
         ttnn.deallocate(x)
         ttnn.synchronize_device(self.mesh_device)
-        self._trace_captured = True
         segs = sum(
             (0 if layer._islands is None else sum(i.num_segments for i in layer._islands[:2] if i is not None))
             for layer in self.model.layers
@@ -209,6 +215,13 @@ class TtV4PrefillRuntime:
                 # request mode: the chunk arrived over the H2D socket as a device tensor [sp, 1, S/sp] uint32
                 # (SP-sharded, TP-replicated) -- hand the hash-routed MoE layers a device view of it
                 ids = self._token_ids_view(input_tensor)
+            if ids is not None and getattr(self, "_trace_captured", False) and self._ids_dev is not None:
+                if isinstance(ids, torch.Tensor):
+                    ids = self.model.layers[0].moe.gate._input_ids_to_device(ids)
+                if ids is not self._ids_dev:
+                    ttnn.copy(ids, self._ids_dev)
+                    ttnn.deallocate(ids)
+                    ids = self._ids_dev
         self._request_id = int(request_id)
         out = self.model(
             input_tensor,
@@ -219,7 +232,7 @@ class TtV4PrefillRuntime:
             input_ids=ids,
             on_layer_complete=None if warmup else self._ack,
         )
-        if isinstance(ids, ttnn.Tensor):
+        if isinstance(ids, ttnn.Tensor) and ids is not getattr(self, "_ids_dev", None):
             ttnn.deallocate(ids)
         if c.is_last_rank:
             return None
