@@ -31,6 +31,7 @@ class Program;
 
 namespace detail {
 
+[[deprecated("DispatchStateCheck is an internal API and will be removed after 2026-10-30.")]]
 bool DispatchStateCheck(bool isFastDispatch);
 
 [[deprecated("Use distributed::MeshDevice::create_unit_meshes instead. This API will be removed after 2026-09-27.")]]
@@ -82,6 +83,9 @@ void ReleaseOwnership();
  * |-------------|-------------------------------------------------|-------------------------|--------------------------------------------------|----------|
  * | device_id   | ID of the device to look for                    | ChipId                  | Valid device IDs | Yes |
  */
+[[deprecated(
+    "Use the owning distributed::MeshDevice instead (e.g. MeshDevice::get_device). GetActiveDevice will be removed "
+    "after 2026-10-24.")]]
 IDevice* GetActiveDevice(ChipId device_id);
 
 /**
@@ -377,6 +381,7 @@ bool WriteToDeviceL1(
     std::vector<uint32_t>& host_buffer,
     CoreType core_type = CoreType::WORKER);
 
+[[deprecated("WriteRegToDevice is unused and will be removed after 2026-10-30.")]]
 bool WriteRegToDevice(IDevice* device, const CoreCoord& logical_core, uint32_t address, const uint32_t& regval);
 
 // clang-format off
@@ -424,6 +429,7 @@ bool ReadFromDeviceL1(
     std::vector<uint32_t>& host_buffer,
     CoreType core_type = CoreType::WORKER);
 
+[[deprecated("ReadRegFromDevice is unused and will be removed after 2026-10-30.")]]
 bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t address, uint32_t& regval);
 
 /**

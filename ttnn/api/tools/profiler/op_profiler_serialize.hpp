@@ -32,6 +32,9 @@
 // Forward declarations — avoid pulling in heavy headers for 1000+ TU include chain.
 namespace tt::tt_metal {
 class Program;
+namespace distributed {
+class MeshDevice;
+}  // namespace distributed
 namespace detail {
 // Note: no default argument here — redefinition of default argument is ill-formed when tt_metal.hpp is also included.
 // Callers in this header always pass all three arguments explicitly.
@@ -82,6 +85,7 @@ std::string assemble_device_op_json(
     const OpProfileData& data,
     ttsl::hash::hash_t program_hash,
     ChipId device_id,
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
     bool program_cache_hit,
     const tt::tt_metal::Program& program);
 
@@ -322,6 +326,7 @@ inline std::string op_meta_data_serialized_json(
     const device_operation_t& /*operation*/,
     uint32_t operation_id,
     auto device_id,
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
     const auto& program,
     const auto& operation_attributes,
     const auto& tensor_args,
@@ -373,7 +378,7 @@ inline std::string op_meta_data_serialized_json(
         }
         // else: default values (1, 1, 1, {}, {}) match OpPerformanceModel default constructor
 
-        return assemble_device_op_json(data, program_hash, device_id, program_cache_hit, program);
+        return assemble_device_op_json(data, program_hash, device_id, mesh_device, program_cache_hit, program);
     }
 
     // --- Cache hit: fast path, no JSON needed ---
@@ -408,6 +413,7 @@ inline std::string op_meta_data_serialized_json(
                     operation,                                                                                        \
                     op_id,                                                                                            \
                     device_id,                                                                                        \
+                    mesh_device,                                                                                      \
                     program,                                                                                          \
                     operation_attributes,                                                                             \
                     tensor_args,                                                                                      \

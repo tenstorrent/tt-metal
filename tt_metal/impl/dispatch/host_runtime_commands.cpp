@@ -15,6 +15,7 @@
 #include "device.hpp"
 #include "dispatch/device_command.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/device/device_manager.hpp"
 #include "hal_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "tt-metalium/program.hpp"
@@ -33,9 +34,8 @@ using namespace tt::tt_metal;
 namespace tt::tt_metal::detail {
 
 bool DispatchStateCheck(bool isFastDispatch) {
-    static bool fd = isFastDispatch;
-    TT_FATAL(fd == isFastDispatch, "Mixing fast and slow dispatch is prohibited!");
-    return fd;
+    MetalContext::instance().device_manager()->check_dispatch_mode(isFastDispatch);
+    return isFastDispatch;
 }
 
 Buffer& GetBufferObject(const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer) {

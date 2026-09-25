@@ -364,6 +364,14 @@ bool DeviceManager::is_device_active(ChipId id) const {
     return device->is_initialized();
 }
 
+void DeviceManager::check_dispatch_mode(bool fast_dispatch) {
+    const int8_t mode = fast_dispatch ? 1 : 0;
+    int8_t recorded = -1;
+    if (!checked_dispatch_mode_.compare_exchange_strong(recorded, mode)) {
+        TT_FATAL(recorded == mode, "Mixing fast and slow dispatch is prohibited!");
+    }
+}
+
 Device* DeviceManager::get_device(ChipId id) const {
     auto it = std::find_if(devices_.begin(), devices_.end(), [&id](const auto& device) { return device->id() == id; });
     if (it == devices_.end()) {

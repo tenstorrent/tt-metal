@@ -49,6 +49,7 @@
 #include "dispatch/dispatch_query_manager.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/device/device_manager.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -907,7 +908,7 @@ std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address(
 }
 
 HWCommandQueue& Device::command_queue(std::optional<uint8_t> cq_id) {
-    detail::DispatchStateCheck(using_fast_dispatch_);
+    MetalContext::instance(this->get_context_id()).device_manager()->check_dispatch_mode(using_fast_dispatch_);
     TT_FATAL(using_fast_dispatch_, "Fast dispatch must be enabled to use command_queue");
     auto actual_cq_id = cq_id.value_or(GetCurrentCommandQueueIdForThread());
     TT_FATAL(actual_cq_id < command_queues_.size(), "cq_id {} is out of range", actual_cq_id);

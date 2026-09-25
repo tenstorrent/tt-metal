@@ -383,8 +383,13 @@ void syncDeviceDevice(ChipId device_id_sender, ChipId device_id_receiver) {
         return;
     }
 
-    IDevice* device_sender = detail::GetActiveDevice(device_id_sender);
-    IDevice* device_receiver = detail::GetActiveDevice(device_id_receiver);
+    const auto& device_manager = MetalContext::instance().device_manager();
+    IDevice* device_sender = device_manager->is_device_active(device_id_sender)
+                                 ? device_manager->get_active_device(device_id_sender)
+                                 : nullptr;
+    IDevice* device_receiver = device_manager->is_device_active(device_id_receiver)
+                                   ? device_manager->get_active_device(device_id_receiver)
+                                   : nullptr;
 
     if (device_sender != nullptr and device_receiver != nullptr) {
         constexpr std::uint16_t sample_count = 240;
