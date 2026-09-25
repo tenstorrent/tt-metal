@@ -67,7 +67,7 @@ static_assert(
 // Total L1 footprint of one block: the fixed struct plus the variable-length
 // receiver NOC XY table (2 * num_receivers). The per-receiver g_r rotation table no
 // longer lives here (rotation is host-owned, carried in the request page).
-inline constexpr uint32_t dram_sender_state_block_size(uint32_t num_receivers) {
+constexpr uint32_t dram_sender_state_block_size(uint32_t num_receivers) {
     return sizeof(DramSenderStateBlock) + 2u * num_receivers * sizeof(uint32_t);
 }
 

@@ -11,6 +11,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "debug_tools_fixture.hpp"
+#include <tt_metal/impl/dispatch/slow_dispatch.hpp>
 #include <tt-logger/tt-logger.hpp>
 
 using namespace tt;
@@ -20,8 +21,7 @@ namespace {
 
 // Helper to run a wrap-around multicast test on device
 bool RunDeviceMcastWrapAroundTest(
-    IDevice* device,
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     NOC noc_id,
     CoreCoord sender_logical,
     CoreCoord mcast_start_logical,
@@ -29,9 +29,9 @@ bool RunDeviceMcastWrapAroundTest(
     const std::string& test_name) {
     bool pass = true;
 
-    CoreCoord sender_noc = device->worker_core_from_logical_core(sender_logical);
-    CoreCoord mcast_start_noc = device->worker_core_from_logical_core(mcast_start_logical);
-    CoreCoord mcast_end_noc = device->worker_core_from_logical_core(mcast_end_logical);
+    CoreCoord sender_noc = mesh_device.worker_core_from_logical_core(sender_logical);
+    CoreCoord mcast_start_noc = mesh_device.worker_core_from_logical_core(mcast_start_logical);
+    CoreCoord mcast_end_noc = mesh_device.worker_core_from_logical_core(mcast_end_logical);
 
     log_info(
         LogTest,
@@ -58,7 +58,7 @@ bool RunDeviceMcastWrapAroundTest(
 
     uint32_t num_dests = 0;
     std::vector<CoreCoord> receiver_cores;
-    CoreCoord grid = device->compute_with_storage_grid_size();
+    CoreCoord grid = mesh_device.compute_with_storage_grid_size();
 
     for (uint32_t y = 0; y < grid.y; y++) {
         for (uint32_t x = 0; x < grid.x; x++) {
@@ -68,7 +68,7 @@ bool RunDeviceMcastWrapAroundTest(
                 continue;
             }
 
-            CoreCoord noc_core = device->worker_core_from_logical_core(logical_core);
+            CoreCoord noc_core = mesh_device.worker_core_from_logical_core(logical_core);
             bool in_x_range, in_y_range;
 
             if (mcast_start_noc.x <= mcast_end_noc.x) {
@@ -119,18 +119,18 @@ bool RunDeviceMcastWrapAroundTest(
          num_dests,
          data_size_bytes});
 
-    detail::WriteToDeviceL1(device, sender_logical, sender_l1_addr, test_data);
+    slow_dispatch::WriteToL1(mesh_device, sender_logical, sender_l1_addr, test_data);
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinate zero_coord{0, 0};
     distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
     workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-    distributed::Finish(mesh_device->mesh_command_queue());
+    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, false);
+    distributed::Finish(mesh_device.mesh_command_queue());
 
     for (const auto& receiver_core : receiver_cores) {
         std::vector<uint32_t> readback_data;
-        detail::ReadFromDeviceL1(device, receiver_core, receiver_l1_addr, data_size_bytes, readback_data);
+        slow_dispatch::ReadFromL1(mesh_device, receiver_core, receiver_l1_addr, data_size_bytes, readback_data);
 
         if (readback_data != test_data) {
             log_error(LogTest, "Data mismatch on receiver core {}", receiver_core.str());
@@ -148,8 +148,7 @@ TEST_F(MeshWatcherFixture, DeviceMcastWrapAroundY_Down_Noc0_SingleCol) {
     if (!this->IsSlowDispatch()) {
         GTEST_SKIP() << "Wrap-around multicast device tests require Slow Dispatch mode";
     }
-    auto* device = this->devices_[0]->get_devices()[0];
-    CoreCoord grid = device->compute_with_storage_grid_size();
+    CoreCoord grid = this->devices_[0]->compute_with_storage_grid_size();
 
     if (grid.y < 2) {
         GTEST_SKIP() << "Need grid.y >= 2 for Y-wrap test";
@@ -162,13 +161,7 @@ TEST_F(MeshWatcherFixture, DeviceMcastWrapAroundY_Down_Noc0_SingleCol) {
     bool pass = false;
     EXPECT_NO_THROW({
         pass = RunDeviceMcastWrapAroundTest(
-            device,
-            this->devices_[0],
-            NOC::RISCV_0_default,
-            sender,
-            mcast_start,
-            mcast_end,
-            "Y-wrap single column (noc0)");
+            *this->devices_[0], NOC::RISCV_0_default, sender, mcast_start, mcast_end, "Y-wrap single column (noc0)");
     });
 
     EXPECT_TRUE(pass);
@@ -178,8 +171,7 @@ TEST_F(MeshWatcherFixture, DeviceMcastWrapAroundY_Down_Noc0_MultiCol_S4) {
     if (!this->IsSlowDispatch()) {
         GTEST_SKIP() << "Wrap-around multicast device tests require Slow Dispatch mode";
     }
-    auto* device = this->devices_[0]->get_devices()[0];
-    CoreCoord grid = device->compute_with_storage_grid_size();
+    CoreCoord grid = this->devices_[0]->compute_with_storage_grid_size();
 
     if (grid.y < 2 || grid.x < 5) {
         GTEST_SKIP() << "Need grid.y >= 2 and grid.x >= 5 for S4 pattern test";
@@ -192,8 +184,7 @@ TEST_F(MeshWatcherFixture, DeviceMcastWrapAroundY_Down_Noc0_MultiCol_S4) {
     bool pass = false;
     EXPECT_NO_THROW({
         pass = RunDeviceMcastWrapAroundTest(
-            device,
-            this->devices_[0],
+            *this->devices_[0],
             NOC::RISCV_0_default,
             sender,
             mcast_start,
@@ -208,8 +199,7 @@ TEST_F(MeshWatcherFixture, DeviceMcastWrapAroundY_Down_Noc1_MultiCol_S8) {
     if (!this->IsSlowDispatch()) {
         GTEST_SKIP() << "Wrap-around multicast device tests require Slow Dispatch mode";
     }
-    auto* device = this->devices_[0]->get_devices()[0];
-    CoreCoord grid = device->compute_with_storage_grid_size();
+    CoreCoord grid = this->devices_[0]->compute_with_storage_grid_size();
 
     if (grid.y < 2 || grid.x < 12) {
         GTEST_SKIP() << "Need grid.y >= 2 and grid.x >= 12 for S8 pattern test";
@@ -222,8 +212,7 @@ TEST_F(MeshWatcherFixture, DeviceMcastWrapAroundY_Down_Noc1_MultiCol_S8) {
     bool pass = false;
     EXPECT_NO_THROW({
         pass = RunDeviceMcastWrapAroundTest(
-            device,
-            this->devices_[0],
+            *this->devices_[0],
             NOC::RISCV_1_default,
             sender,
             mcast_start,
@@ -238,8 +227,7 @@ TEST_F(MeshWatcherFixture, DeviceMcastWrapAroundY_Down_Noc1_SingleCol) {
     if (!this->IsSlowDispatch()) {
         GTEST_SKIP() << "Wrap-around multicast device tests require Slow Dispatch mode";
     }
-    auto* device = this->devices_[0]->get_devices()[0];
-    CoreCoord grid = device->compute_with_storage_grid_size();
+    CoreCoord grid = this->devices_[0]->compute_with_storage_grid_size();
 
     if (grid.y < 2) {
         GTEST_SKIP() << "Need grid.y >= 2 for Y-wrap test";
@@ -252,13 +240,7 @@ TEST_F(MeshWatcherFixture, DeviceMcastWrapAroundY_Down_Noc1_SingleCol) {
     bool pass = false;
     EXPECT_NO_THROW({
         pass = RunDeviceMcastWrapAroundTest(
-            device,
-            this->devices_[0],
-            NOC::RISCV_1_default,
-            sender,
-            mcast_start,
-            mcast_end,
-            "Y-wrap single column (noc1)");
+            *this->devices_[0], NOC::RISCV_1_default, sender, mcast_start, mcast_end, "Y-wrap single column (noc1)");
     });
 
     EXPECT_TRUE(pass);
@@ -268,8 +250,7 @@ TEST_F(MeshWatcherFixture, DeviceMcastWrapAroundX_Right_Noc0) {
     if (!this->IsSlowDispatch()) {
         GTEST_SKIP() << "Wrap-around multicast device tests require Slow Dispatch mode";
     }
-    auto* device = this->devices_[0]->get_devices()[0];
-    CoreCoord grid = device->compute_with_storage_grid_size();
+    CoreCoord grid = this->devices_[0]->compute_with_storage_grid_size();
 
     if (grid.x < 2) {
         GTEST_SKIP() << "Need grid.x >= 2 for X-wrap test";
@@ -282,7 +263,7 @@ TEST_F(MeshWatcherFixture, DeviceMcastWrapAroundX_Right_Noc0) {
     bool pass = false;
     EXPECT_NO_THROW({
         pass = RunDeviceMcastWrapAroundTest(
-            device, this->devices_[0], NOC::RISCV_0_default, sender, mcast_start, mcast_end, "X-wrap right (noc0)");
+            *this->devices_[0], NOC::RISCV_0_default, sender, mcast_start, mcast_end, "X-wrap right (noc0)");
     });
 
     EXPECT_TRUE(pass);
@@ -292,8 +273,7 @@ TEST_F(MeshWatcherFixture, DeviceMcastWrapAroundX_Right_Noc1) {
     if (!this->IsSlowDispatch()) {
         GTEST_SKIP() << "Wrap-around multicast device tests require Slow Dispatch mode";
     }
-    auto* device = this->devices_[0]->get_devices()[0];
-    CoreCoord grid = device->compute_with_storage_grid_size();
+    CoreCoord grid = this->devices_[0]->compute_with_storage_grid_size();
 
     if (grid.x < 2) {
         GTEST_SKIP() << "Need grid.x >= 2 for X-wrap test";
@@ -306,7 +286,7 @@ TEST_F(MeshWatcherFixture, DeviceMcastWrapAroundX_Right_Noc1) {
     bool pass = false;
     EXPECT_NO_THROW({
         pass = RunDeviceMcastWrapAroundTest(
-            device, this->devices_[0], NOC::RISCV_1_default, sender, mcast_start, mcast_end, "X-wrap right (noc1)");
+            *this->devices_[0], NOC::RISCV_1_default, sender, mcast_start, mcast_end, "X-wrap right (noc1)");
     });
 
     EXPECT_TRUE(pass);
@@ -316,8 +296,7 @@ TEST_F(MeshWatcherFixture, DeviceMcastMixedWrap_XWrapYNormal_Noc0) {
     if (!this->IsSlowDispatch()) {
         GTEST_SKIP() << "Wrap-around multicast device tests require Slow Dispatch mode";
     }
-    auto* device = this->devices_[0]->get_devices()[0];
-    CoreCoord grid = device->compute_with_storage_grid_size();
+    CoreCoord grid = this->devices_[0]->compute_with_storage_grid_size();
 
     if (grid.x < 2 || grid.y < 3) {
         GTEST_SKIP() << "Need grid.x >= 2 and grid.y >= 3 for mixed wrap test";
@@ -330,8 +309,7 @@ TEST_F(MeshWatcherFixture, DeviceMcastMixedWrap_XWrapYNormal_Noc0) {
     bool pass = false;
     EXPECT_NO_THROW({
         pass = RunDeviceMcastWrapAroundTest(
-            device,
-            this->devices_[0],
+            *this->devices_[0],
             NOC::RISCV_0_default,
             sender,
             mcast_start,

@@ -898,6 +898,19 @@ _FABRIC_INFRA_SIGNATURES = (
     # failures for one broken runner. Nothing was tested, so this is NOT_RUN + abort.
     "devices are available in the system mesh",
     "requested_size <= system_size",
+    # The host's mesh came up in a SHAPE the traced topology cannot be mapped into, which is the
+    # sibling of the two signatures above (those are "not enough chips", this is "wrong shape").
+    # SystemMesh::Impl::get_mapped_devices rotates the requested shape looking for a fit and
+    # throws from tt_metal/distributed/system_mesh.cpp:220 when none of the rotations fit:
+    #   Requested mesh is too big and is not rotatable: MeshShape([4, 4]) and
+    #   SystemMesh MeshShape([32, 1]), offset MeshCoordinate([0, 0])
+    # Seen on scheduled lead-models runs 35482911171 (158 occurrences) and 35552969641, where a
+    # Galaxy host enumerated as a 32x1 system mesh: every 2D lane (4x8, 8x4, 4x4) failed to open
+    # its mesh and was booked as FAIL_ASSERT_EXCEPTION, while the 1x32 lane on the same host ran
+    # -- so the vectors were fine and the host's shape was not. Mesh open happens before any
+    # kernel runs, so nothing was tested: NOT_RUN + abort.
+    # Matched on the invariant part of the format string; both shapes and the offset vary.
+    "too big and is not rotatable",
     # The fabric routers never reached the synced state, so the control plane never came up and
     # no kernel ran. Seen on lead-models run 30696173498 job mesh4x4_col_2d_conv2d (a HEALTHY
     # 32-chip runner, topology OK):
@@ -960,6 +973,26 @@ def _set_crash_hang_defaults(result):
     result["num_cores"] = None
     result["peak_l1_memory_aggregate"] = None
     result["peak_l1_memory_device"] = None
+
+
+def _stamp_result_footer(result, original_vector_data):
+    """Stamp the fields every exported result must carry, whatever path produced it.
+
+    end_time_ts is not optional downstream: result_destination maps it to OpTest.test_end_ts,
+    whose pydantic model rejects None, so a result that reaches export without it takes the
+    whole export down with a ValidationError (#54543).
+
+    Most results get these from the footer at the end of the execute_suite loop body, but the
+    paths that abort the suite `break` before reaching it, and the marking helpers in
+    _populate_result_from_response (canary failure, profiler readback failure, infra
+    classification) deliberately set only status/exception. Rather than have each of those
+    remember the footer, they all call this.
+    """
+    result["original_vector_data"] = original_vector_data
+    result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
+    result["timestamp"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
+    result["host"] = get_hostname()
+    result["user"] = get_username()
 
 
 def _mark_infra_abort(result, reason: str):
@@ -1335,6 +1368,10 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
 
                 if abort_suite:
                     if infra_abort or config.skip_on_timeout:
+                        # This branch breaks out before the footer at the end of the loop body,
+                        # so stamp it here: the vector that caused the abort is exported like
+                        # any other result and must carry end_time_ts (#54543).
+                        _stamp_result_footer(result, original_vector_data)
                         results.append(result)
                         suite_pbar.update()
                         skip_reason = (
@@ -1370,14 +1407,9 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                 logger.error(f"Device reset failed unrecoverably: {e}. Aborting remaining tests in suite.")
                 result["status"] = TestStatus.FAIL_CRASH_HANG
                 result["exception"] = str(e)
-                # This path breaks before the common footer that stamps this; set it here
-                # so the abort record carries original_vector_data like every other result.
-                result["original_vector_data"] = original_vector_data
                 result["e2e_perf"] = None
-                result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
-                result["timestamp"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
-                result["host"] = get_hostname()
-                result["user"] = get_username()
+                # This path also breaks before the common footer.
+                _stamp_result_footer(result, original_vector_data)
                 results.append(result)
                 suite_pbar.update()
                 for j in range(i + 1, len(test_vectors)):
@@ -1405,12 +1437,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
             finally:
                 ttnn.operation_tracer.set_sweep_source_hash(None)
 
-        # Add the original test vector data to the result
-        result["original_vector_data"] = original_vector_data
-        result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
-        result["timestamp"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
-        result["host"] = get_hostname()
-        result["user"] = get_username()
+        _stamp_result_footer(result, original_vector_data)
 
         suite_pbar.update()
         results.append(result)

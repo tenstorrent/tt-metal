@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -183,7 +184,6 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
 
     auto& output_tensor = output_tensors[EXP_RING_JOINT_SDPA_OUTPUT_IDX];
     auto& joint_output_tensor = output_tensors[EXP_RING_JOINT_SDPA_JOINT_OUTPUT_IDX];
-    auto& stats_output_tensor = output_tensors[EXP_RING_JOINT_SDPA_STATS_OUTPUT_IDX];
 
     std::size_t q_chunk_size = args.get_q_chunk_size();
     std::size_t k_chunk_size = args.get_k_chunk_size();
@@ -237,16 +237,27 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     const uint32_t Sq_chunk_t = q_chunk_size / tt::constants::TILE_HEIGHT;
     const uint32_t Sk_chunk_t = k_chunk_size / tt::constants::TILE_HEIGHT;
 
+    // Trace-safe logical_n: args.logical_n is the worst-case placeholder (padded_N) and the kernels read
+    // the live value. The placeholder already worst-cases every size derivation below EXCEPT three, which
+    // a chunk-aligned placeholder resolves the wrong way — the two mask derivations (resolve to "no mask")
+    // and the state-FIFO spare (resolves to "no one-chunk iter", the ANTI-worst case). CB geometry is
+    // fixed at program creation, so all three are forced whenever the tensor is present.
+    const bool has_logical_n_tensor = tensor_args.has_logical_n_tensor();
+
     // Lightweight mask: only needed when any K/joint dimension has padding that doesn't fill a chunk.
     const bool local_n_has_padding = (local_padded_Nt % Sk_chunk_t) != 0;
-    const bool global_n_has_padding = (args.logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0;
+    const bool global_n_has_padding =
+        has_logical_n_tensor || (args.logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0;
     const bool joint_has_padding = L > 0 && (L % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0;
     const bool needs_lightweight_mask = local_n_has_padding || global_n_has_padding || joint_has_padding;
 
-    // Partial tile support when padding boundary falls inside a tile.
+    // Partial tile support when padding boundary falls inside a tile. The kernels stamp the live column
+    // into the forced tile and gate the stamp off when that column is 0 (see partial_tile_present).
     const uint32_t global_n_partial_col = args.logical_n % tt::constants::TILE_HEIGHT;
     const uint32_t joint_l_partial_col = L % tt::constants::TILE_HEIGHT;
-    const uint32_t partial_mask_tiles = (global_n_partial_col != 0 ? 1 : 0) + (joint_l_partial_col != 0 ? 1 : 0);
+    const bool has_global_n_partial_tile = ttnn::operations::transformer::sdpa::ring_joint::partial_tile_present(
+        global_n_partial_col, has_logical_n_tensor);
+    const uint32_t partial_mask_tiles = (has_global_n_partial_tile ? 1 : 0) + (joint_l_partial_col != 0 ? 1 : 0);
     // Single CB holds: 1 neginf tile + up to 2 partial mask tiles
     const uint32_t total_lightweight_mask_tiles = 1 + partial_mask_tiles;
 
@@ -401,7 +412,28 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     // reserves the new entry up front), which would deadlock at full depth — so give that case one
     // spare entry. The last active ring iteration is the only one that can be partial, and it
     // normalizes into cb_out instead of pushing to the FIFO, so it never needs the spare.
-    const uint32_t state_fifo_entries = num_passes + (num_local_k_chunks <= 1 ? 1 : 0);
+    // A pass that processes exactly ONE K/V chunk runs the state-FIFO entry (read + POST-step pop
+    // of this pass's previous state) and the FIFO exit (PRE-step reserve + push of its new state)
+    // around the SAME sdpa_inner_loop_step call — so the exit's reserve precedes the pop it needs.
+    // Rows whose pass count fills the FIFO deadlock on that reserve. Give the FIFO one spare entry
+    // whenever any ring iteration can process a single chunk: a one-chunk shard, or the
+    // beyond-logical_n whole-chunk skip shaving a shard down to one chunk (a pad tail that
+    // covers at least one full K chunk — first hit by the fl2va 1024x768 canvas at 4x32).
+    bool some_iter_processes_one_chunk = has_logical_n_tensor || (num_local_k_chunks <= 1);
+    for (uint32_t rid = 0; rid < args.ring_size && !some_iter_processes_one_chunk; ++rid) {
+        uint32_t iter_chunks = 0;
+        for (uint32_t kc = 0; kc < num_local_k_chunks; ++kc) {
+            // Mirrors the kernels' kv_chunk_is_beyond_logical_n skip (joint chunks never skip).
+            if (local_padded_Nt * rid + kc * Sk_chunk_t < logical_nt) {
+                iter_chunks++;
+            }
+        }
+        if (rid == args.ring_size - 1) {
+            iter_chunks += num_joint_k_chunks;
+        }
+        some_iter_processes_one_chunk = (iter_chunks == 1);
+    }
+    const uint32_t state_fifo_entries = num_passes + (some_iter_processes_one_chunk ? 1 : 0);
     log_debug(tt::LogOp, "state_fifo_entries: {}", state_fifo_entries);
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
@@ -424,7 +456,6 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
 
     // Host code is responsible for determining matmul configuration
     const uint32_t dst_size = ttnn::get_dest_reg_count(args.compute_kernel_config);
-    const uint32_t qk_in0_block_w = DHt;
     auto [qk_out_subblock_h, qk_out_subblock_w] =
         detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
 
@@ -434,11 +465,6 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         Sq_chunk_t,
         qk_out_subblock_h);
     const uint32_t qk_in0_num_subblocks = Sq_chunk_t / qk_out_subblock_h;
-    const uint32_t qk_in1_num_subblocks = Sk_chunk_t / qk_out_subblock_w;
-    const uint32_t qk_num_blocks = DHt / qk_in0_block_w;
-
-    // now for out0
-    const uint32_t out_in0_block_w = Sk_chunk_t;
 
     // Streaming compute v2: eliminates row buffers via cb_push_back_hold_wr_ptr.
     // Ring joint has no causal/mask/sink/sliding/chunked flags — gating is simpler.
@@ -449,10 +475,6 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
 
     auto [out_out_subblock_h, out_out_subblock_w] =
         detail::determine_largest_subblock_size(Sq_chunk_t, DHt, dst_size, use_streaming_compute ? 2 : UINT32_MAX);
-
-    const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
-    const uint32_t out_in1_num_subblocks = DHt / out_out_subblock_w;
-    const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
 
     // Streaming: shrink cb_out to a 2-slot ping-pong (see sdpa_subblock_utils.hpp). Safe here
     // because every pass runs with q_per_core == 1 (one Q chunk per pass, head-serial), so
@@ -471,31 +493,22 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
 
     // log all values
     log_debug(tt::LogOp, "dst_size: {}", dst_size);
-    log_debug(tt::LogOp, "qk_in0_block_w: {}", qk_in0_block_w);
     log_debug(tt::LogOp, "qk_out_subblock_w: {}", qk_out_subblock_w);
     log_debug(tt::LogOp, "qk_out_subblock_h: {}", qk_out_subblock_h);
     log_debug(tt::LogOp, "qk_in0_num_subblocks: {}", qk_in0_num_subblocks);
-    log_debug(tt::LogOp, "qk_in1_num_subblocks: {}", qk_in1_num_subblocks);
-    log_debug(tt::LogOp, "qk_num_blocks: {}", qk_num_blocks);
-    log_debug(tt::LogOp, "out_in0_block_w: {}", out_in0_block_w);
     log_debug(tt::LogOp, "out_out_subblock_w: {}", out_out_subblock_w);
     log_debug(tt::LogOp, "out_out_subblock_h: {}", out_out_subblock_h);
-    log_debug(tt::LogOp, "out_in0_num_subblocks: {}", out_in0_num_subblocks);
-    log_debug(tt::LogOp, "out_in1_num_subblocks: {}", out_in1_num_subblocks);
-    log_debug(tt::LogOp, "out_num_blocks: {}", out_num_blocks);
 
     // Determine granularity for statistics computation
     // Each granularity must evenly divide its tile count to avoid dropping tiles
     const uint32_t stats_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size);
     const uint32_t sub_exp_granularity = detail::find_valid_granularity(Sk_chunk_t, dst_size);
-    const uint32_t mul_bcast_granularity = detail::find_valid_granularity(Sq_chunk_t * Sk_chunk_t, dst_size);
     const uint32_t dht_granularity = detail::find_valid_granularity(DHt, dst_size);
     const uint32_t reduce_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size / 2);
 
     // Log these
     log_debug(tt::LogOp, "stats_granularity: {}", stats_granularity);
     log_debug(tt::LogOp, "sub_exp_granularity: {}", sub_exp_granularity);
-    log_debug(tt::LogOp, "mul_bcast_granularity: {}", mul_bcast_granularity);
     log_debug(tt::LogOp, "dht_granularity: {}", dht_granularity);
     log_debug(tt::LogOp, "reduce_granularity: {}", reduce_granularity);
 
@@ -522,7 +535,6 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         Lt,
         L,
         num_local_q_chunks,
-        num_joint_q_chunks,
         num_local_k_chunks,
         num_joint_k_chunks,
         num_q_chunks,
@@ -616,6 +628,11 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     reader_compile_time_args.push_back(receiver_semaphore_b_id);
     reader_compile_time_args.push_back(sender_semaphore_v_id);
     reader_compile_time_args.push_back(buddy_gate_semaphore_id);
+    // Trace-safe logical_n: presence flag, then the accessor args for the 1-element tensor. The accessor
+    // block is emitted unconditionally (nullptr when absent) so the CT-arg layout after it never shifts.
+    reader_compile_time_args.push_back(static_cast<uint32_t>(has_logical_n_tensor));
+    TensorAccessorArgs(has_logical_n_tensor ? tensor_args.logical_n_tensor->buffer() : nullptr)
+        .append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
         B,
@@ -623,14 +640,12 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         DHt,
         Sq_chunk_t,
         Sk_chunk_t,
-        local_padded_N,
         local_padded_Nt,
         args.logical_n,
         logical_nt,
         Lt,
         L,
         num_local_q_chunks,
-        num_joint_q_chunks,
         num_local_k_chunks,
         num_joint_k_chunks,
         num_q_chunks,
@@ -639,13 +654,17 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         args.ring_size,
         global_n_partial_col,
         joint_l_partial_col,
-        static_cast<std::uint32_t>(use_streaming_compute),
         static_cast<std::uint32_t>(out_out_subblock_h),
+        static_cast<std::uint32_t>(has_logical_n_tensor),
     };
 
+    // Trace-safe logical_n accessor block sits ahead of the output accessors so every downstream offset
+    // (out / joint_out, and the MUX + AG block that chains off joint_out) keeps deriving normally.
+    // Emitted unconditionally (nullptr when absent) to keep the layout stable across both modes.
+    TensorAccessorArgs(has_logical_n_tensor ? tensor_args.logical_n_tensor->buffer() : nullptr)
+        .append_to(writer_compile_time_args);
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
-    TensorAccessorArgs(stats_output_tensor.buffer()).append_to(writer_compile_time_args);
 
     // Streaming-only compute kernel: NH and the classic matmul block params (in0_block_w,
     // num_subblocks, num_blocks) are not consumed — only the subblock shapes are.
@@ -676,12 +695,13 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         // max write) when several head-passes share a core. The 1-pass shapes are gated by
         // utilization-band perf tests calibrated on the scratch path.
         (num_passes > 1) ? 1u : 0u,  // use_l1_state_fifo
+        // Trace-safe logical_n: compute reads the live values from the reader's derived CB.
+        static_cast<uint32_t>(has_logical_n_tensor),
     };
 
     std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
     defines["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
-    defines["MUL_BCAST_GRANULARITY"] = std::to_string(mul_bcast_granularity);
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
@@ -970,6 +990,25 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         });
     }
 
+    // Compute RISCs cannot NoC-read DRAM, so the reader publishes derived values here (slots per
+    // ring_joint_derived_slots.hpp) and compute reads them with read_tile_value. Must be UInt32:
+    // read_tile_value's indexing follows the CB format, and a float format misreads these raw words.
+    if (has_logical_n_tensor) {
+        constexpr uint32_t kDerivedPageBytes = 64;
+        static_assert(
+            ttnn::operations::transformer::sdpa::ring_joint::kDerivedSlotCount * sizeof(uint32_t) <= kDerivedPageBytes,
+            "derived slots must fit the page");
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = kDerivedPageBytes,
+            .core_ranges = sdpa_grid_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_13),
+                .data_format = tt::DataFormat::UInt32,
+                .page_size = kDerivedPageBytes,
+            }}},
+        });
+    }
+
     // c_10 (cb_sum_out) belongs to the multi-Q DRAM round-trip, which head-serial passes never
     // take (every pass runs with q_per_core == 1); it is NOT allocated — the kernel's cb_sum_out
     // index is only touched in the staging branch, which is dead at q_per_core == 1.
@@ -1032,7 +1071,6 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     auto* const joint_v_buf = joint_tensor_v.buffer();
     auto* const out_buf = output_tensor.buffer();
     auto* const joint_out_buf = joint_output_tensor.buffer();
-    auto* const stats_buf = stats_output_tensor.buffer();
 
     /**
      * Build per-row store-and-forward chains.
@@ -1043,13 +1081,6 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
      * single fabric atomic-inc destination for the whole op (see exp_ring_joint_writer.cpp), so
      * every pass of a row must signal the same injector core.
      */
-    struct CoreHeadWork {
-        uint32_t batch = 0;
-        uint32_t head = 0;
-        uint32_t q_chunk_start = 0;
-        uint32_t q_chunk_count = 0;
-    };
-
     struct CoreWork {
         CoreCoord logical_core;
         CoreCoord physical_core;
@@ -1057,23 +1088,14 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         uint32_t q_base = 0;
         uint32_t q_stride = 0;
         uint32_t q_count = 0;
-        std::vector<CoreHeadWork> head_work;  // one entry per pass, in pass order
     };
 
     struct CoreChainInfo {
         bool participates = false;
         bool is_injector = false;
         bool is_sink = false;
-        // Pass-0 (batch, head) and chunk range. The kernels no longer compare chunks against these:
-        // row-aligned scheduling makes every chunk a core owns part of its row's chain. Kept so the
-        // reader RT-arg layout is unchanged.
-        uint32_t batch = 0;
-        uint32_t head = 0;
-        uint32_t q_chunk_start = 0;
-        uint32_t q_chunk_count = 0;
         CoreCoord prev_physical = CoreCoord{0, 0};
         CoreCoord next_physical = CoreCoord{0, 0};
-        uint32_t next_core_q_chunks = 0;
         uint32_t mcast_num_dests = 0;
         uint32_t mcast_sender_wait = 0;
     };
@@ -1112,14 +1134,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
             if (seg_id >= total_segments) {
                 break;
             }
-            const uint32_t head_id = seg_id / segs_per_head;
             work.q_count++;
-            work.head_work.push_back(CoreHeadWork{
-                .batch = head_id / NH,
-                .head = head_id % NH,
-                .q_chunk_start = (seg_id % segs_per_head) * sdpa_grid.x + core.x,
-                .q_chunk_count = 1,
-            });
         }
     }
 
@@ -1157,14 +1172,9 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
 
         for (std::size_t idx = 0; idx < chain_cores.size(); ++idx) {
             const uint32_t core_idx = chain_cores[idx];
-            const auto& hw = core_work.at(core_idx).head_work.at(0);
             auto& chain = core_chain_info.at(core_idx);
 
             chain.participates = true;
-            chain.batch = hw.batch;
-            chain.head = hw.head;
-            chain.q_chunk_start = hw.q_chunk_start;
-            chain.q_chunk_count = hw.q_chunk_count;
             chain.is_injector = (idx == 0);
             chain.is_sink = (idx + 1 == chain_cores.size());
 
@@ -1174,7 +1184,6 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
             if (idx + 1 < chain_cores.size()) {
                 const uint32_t next_core_idx = chain_cores[idx + 1];
                 chain.next_physical = core_work.at(next_core_idx).physical_core;
-                chain.next_core_q_chunks = core_work.at(next_core_idx).head_work.at(0).q_chunk_count;
             }
         }
     }
@@ -1201,7 +1210,6 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     {
         struct McastCandidate {
             std::vector<uint32_t> core_indices;
-            uint32_t ref_q_chunks;
         };
         std::vector<McastCandidate> candidates;
         candidates.reserve(rows);
@@ -1254,22 +1262,8 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
                 break;
             }
 
-            // Condition 3: uniform per-core chunk count (one chunk per pass, so always uniform).
-            const uint32_t ref_q_chunks = core_chain_info[chain_cores[0]].q_chunk_count;
-            bool uniform_q_mcast = true;
-            for (std::size_t ci = 1; ci < chain_cores.size(); ++ci) {
-                if (core_chain_info[chain_cores[ci]].q_chunk_count != ref_q_chunks) {
-                    uniform_q_mcast = false;
-                    break;
-                }
-            }
-            if (!uniform_q_mcast) {
-                all_eligible = false;
-                log_debug(tt::LogOp, "Row {}: mcast ineligible - mixed q_chunk_counts", y);
-                break;
-            }
-
-            candidates.push_back(McastCandidate{chain_cores, ref_q_chunks});
+            // Every participating core owns one Q chunk per head-serial pass.
+            candidates.push_back(McastCandidate{chain_cores});
         }
 
         if (all_eligible && !candidates.empty()) {
@@ -1336,7 +1330,6 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
                 injector_chain.next_physical = rect_end;
                 injector_chain.mcast_num_dests = mcast_num_dests;
                 injector_chain.mcast_sender_wait = num_receivers;
-                injector_chain.next_core_q_chunks = cand.ref_q_chunks;
 
                 for (const auto& ci : cand.core_indices) {
                     if (ci == injector_idx) {
@@ -1345,7 +1338,6 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
                     auto& receiver_chain = core_chain_info[ci];
                     receiver_chain.prev_physical = core_work[injector_idx].physical_core;
                     receiver_chain.next_physical = CoreCoord{0, 0};
-                    receiver_chain.next_core_q_chunks = 0;
                     receiver_chain.is_sink = true;
                 }
 
@@ -1565,6 +1557,20 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         .math_approx_mode = math_approx_mode,
     };
 
+    // Live-length tensor address for all three kernels -- each derives chunk-skip counts from it and
+    // the credit/gate protocol requires they agree. Buffer* (not ->address()) so a cache hit re-patches it.
+    if (has_logical_n_tensor) {
+        auto* logical_n_buffer = tensor_args.logical_n_tensor->buffer();
+        const auto logical_n_common_args = [&]() {
+            KernelDescriptor::RTArgList args_list;
+            args_list.push_back(logical_n_buffer);
+            return args_list;
+        };
+        reader_kernel.emplace_common_runtime_args(logical_n_common_args());
+        writer_kernel.emplace_common_runtime_args(logical_n_common_args());
+        writer_fabric_kernel.emplace_common_runtime_args(logical_n_common_args());
+    }
+
     // Build backward and forward termination master core sets (1 per link per direction)
     // Backward masters: row 0 of both MUX client columns (top half = backward direction).
     // Forward masters:  row num_workers_per_link of both MUX client columns (bottom half = forward).
@@ -1627,8 +1633,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
 
         log_debug(
             tt::LogOp,
-            "core logical=({},{})->phys=({},{}), q_base={} stride={} count={}, chain={{part:{}, inj:{}, sink:{}, "
-            "b:{}, h:{}, q_start:{}, q_cnt:{}, next_cnt:{}}}",
+            "core logical=({},{})->phys=({},{}), q_base={} stride={} count={}, chain={{part:{}, inj:{}, sink:{}}}",
             core.x,
             core.y,
             core_work.at(i).physical_core.x,
@@ -1638,25 +1643,15 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
             work.q_count,
             chain.participates,
             chain.is_injector,
-            chain.is_sink,
-            chain.batch,
-            chain.head,
-            chain.q_chunk_start,
-            chain.q_chunk_count,
-            chain.next_core_q_chunks);
+            chain.is_sink);
 
         reader_args.push_back(static_cast<uint32_t>(chain.participates));
         reader_args.push_back(static_cast<uint32_t>(chain.is_injector));
         reader_args.push_back(static_cast<uint32_t>(chain.is_sink));
-        reader_args.push_back(chain.batch);
-        reader_args.push_back(chain.head);
-        reader_args.push_back(chain.q_chunk_start);
-        reader_args.push_back(chain.q_chunk_count);
         reader_args.push_back(static_cast<uint32_t>(chain.prev_physical.x));
         reader_args.push_back(static_cast<uint32_t>(chain.prev_physical.y));
         reader_args.push_back(static_cast<uint32_t>(chain.next_physical.x));
         reader_args.push_back(static_cast<uint32_t>(chain.next_physical.y));
-        reader_args.push_back(chain.next_core_q_chunks);
         reader_args.push_back(chain.mcast_num_dests);
         reader_args.push_back(chain.mcast_sender_wait);
 
@@ -1709,7 +1704,6 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         writer_args.push_back(out_buf);
         // Zero-seq when no joint; address unused at runtime (L=0 => no joint writes).
         writer_args.push_back(joint_out_buf);
-        writer_args.push_back(stats_buf);
         writer_args.push_back(work.q_base);
         writer_args.push_back(work.q_stride);
         writer_args.push_back(work.q_count);
@@ -1781,7 +1775,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
             }
             writer_args.append(mux_writer_args);
 
-            // MUX writer RT args: out_ready_sem, injector coords, AG params, op signaler.
+            // MUX writer RT args: out_ready_sem, injector coords, AG params, forwarding dedup flag.
             if (link_in_range) {
                 // out_ready_sem_addr occupies per-core fabric-writer slot
                 // exp_ring_joint_sdpa_dynamic::kWriterFabricOutReadySemArg. It is a hash-excluded

@@ -47,6 +47,7 @@ def test_min(device, batch_size, h, w, dim, keepdim, dtype):
     )
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [32, 64, 41, 37])
 @pytest.mark.parametrize("w", [32, 64, 31, 63])
