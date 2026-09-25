@@ -48,8 +48,7 @@ _MESH_IDS = (
 _MESH_CONFIGS = [param for param in ALL_MESH_CONFIGS if param.id in _MESH_IDS]
 assert len(_MESH_CONFIGS) == len(_MESH_IDS), "dispatch_fabric2d mesh configs missing from ALL_MESH_CONFIGS"
 
-# The production 8x4 row on its own, for the tests whose subject is how the op is CALLED rather than
-# the ring geometry.
+# The production 8x4 mesh on its own, for the tests about how the op is called, not the ring geometry.
 _PRODUCTION_MESH = [param for param in _MESH_CONFIGS if param.id == "fabric2d-torus-xy-8x4-2link"]
 
 
@@ -112,13 +111,11 @@ PRODUCTION_ROUTING = (0.372, 2.0)
 
 
 def _draw_indices(G, H, seq, topk, num_routed_experts, in_group_share, hot_weight):
-    """topk distinct experts per token, drawn from ALL experts with a controllable in-group skew.
+    """topk distinct experts per token, drawn from all experts with a controllable in-group skew.
 
-    How many of a token's picks land in its own dispatch group is drawn FIRST, then that many distinct
-    in-group experts and the rest from the other groups. Weighting the whole expert list and drawing
-    topk distinct picks from it instead pulls the realized share well above the target, because
-    sampling without replacement favours the weighted entries -- and a share that drifts changes the
-    routing the test believes it is exercising.
+    The number of picks in the token's own dispatch group is drawn first, then that many in-group experts
+    and the rest from other groups. Weighting the whole expert list instead overshoots the target share,
+    because sampling without replacement favours the weighted entries.
     """
     experts_per_group = num_routed_experts // G
     experts_per_chip = experts_per_group // H
@@ -219,12 +216,12 @@ def test_dispatch_fabric2d(mesh_device, device_params, num_links, capacity_div, 
         )
 
     x = torch.randn(H, G, seq_len_per_chip, emb_dim, dtype=torch.bfloat16)
-    # Same values in either layout, so one reference gates both runs -- which is what makes the TILE
-    # path's untilizer byte-exact rather than merely close.
+    # Same values in either layout, so one reference checks both runs and the TILE path must match it
+    # byte for byte.
     tt_x = shard(x, (0, 1), ttnn.bfloat16, layout=input_layout)
     tt_idx = shard(indices.permute(1, 0, 2, 3).to(torch.int32).to(torch.int16), (0, 1), ttnn.uint16)
-    # expert_offsets is the ALL-ROWS table: replicated along the dispatch axis, since a forwarding chip
-    # sizes a run it neither wrote nor receives.
+    # expert_offsets holds every source chip's row, replicated along the dispatch axis: a forwarding chip
+    # needs them to size what it forwards.
     tt_offs = shard(offs, (None, 0), ttnn.int32)
     tt_counts = shard(counts[:, 0:1, :], (None, 0), ttnn.int32)
     tt_region = shard(region[:, 0:1, :], (None, 0), ttnn.int32)
@@ -307,14 +304,13 @@ class _Fixture:
     """One in-group routing draw at the production chunk, on device in both input layouts, plus its
     torch reference.
 
-    Shared by the tests below that care about how the op is CALLED rather than about the routing.
+    Shared by the tests below that are about how the op is called, not about the routing.
     Routing coverage (in-group vs production draws, roomy vs tight capacity) lives in
     test_dispatch_fabric2d's parametrization.
     """
 
-    # emb_dim 512 is 16 tiles wide, so the untilizer packs two column blocks per tile row. At 256 it is
-    # exactly one, and a block's L1 column offset -- the thing block_ct_dim exists to make legal --
-    # would never be anything but zero.
+    # emb_dim 512 is 16 tiles wide, so the untilizer packs two column blocks per tile row. At 256 there
+    # is one block, so its L1 column offset would always be zero and block_ct_dim would go untested.
     def __init__(
         self,
         mesh_device,
@@ -477,9 +473,8 @@ class _Fixture:
 def _sub_device_manager(mesh_device, sub_devices):
     """Register, load and tear down one sub-device manager over the given CoreRangeSets.
 
-    A manager's sub-devices have to be disjoint, so a test that wants overlapping carves needs two
-    managers and only one of them loaded at a time. Removal is not optional: leaving a manager
-    registered at device close has been observed to segfault the teardown.
+    A manager's sub-devices must be disjoint, so overlapping core sets need two managers, loaded one at a
+    time. The manager must be removed: one left registered at device close segfaults the teardown.
     """
     manager = mesh_device.create_sub_device_manager([ttnn.SubDevice([cores]) for cores in sub_devices], 0)
     mesh_device.load_sub_device_manager(manager)
@@ -507,12 +502,11 @@ def _moe_grid_split(mesh_device, dispatch_rows=1):
 
 
 def _leading_row_cores(width):
-    """The first `width` cores of row 0 -- a strict subset of the row the streams need.
+    """The first `width` cores of row 0, a strict subset of the row the streams need.
 
-    The op does not support this: a stream lands on the worker nearest its eth core and those are
-    spread along the whole row, so any partial carve leaves one of them outside. What it is good for
-    is showing that the sub-device reached the placement at all, which a carve wide enough to hold
-    every stream cannot.
+    The op refuses this: each stream goes on the worker nearest its eth core, and those are spread along
+    the whole row. The refusal shows the op read the sub-device; a core set that holds every stream
+    could not show that.
     """
     return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(width - 1, 0))})
 
@@ -530,10 +524,10 @@ def test_dispatch_fabric2d_subdevice(mesh_device, device_params, num_links, capf
     rest. The op is run four times, each time given a different sub-device:
 
     1. Rows 0 and 1 with a TILE input, so the untilizers need row 1 too: must succeed, byte-exact,
-       with every untilizer in row 1 -- no warning that some spilled elsewhere.
+       with every untilizer in row 1 (no warning that some spilled elsewhere).
     2. Row 0 only, the model's split today, with a ROW_MAJOR input: must succeed, byte-exact.
     3. Everything but row 0: must refuse, and the error must name a row-0 core. That shows the op
-       wants row 0 for its streams, so runs 1 and 2 were not a fluke.
+       places its streams in row 0, so runs 1 and 2 were not a fluke.
     4. Part of row 0: must refuse. An op that ignored its sub-device would take the whole grid and
        succeed, so the refusal shows the argument is actually read.
     """
@@ -578,9 +572,9 @@ def test_dispatch_fabric2d_subdevice(mesh_device, device_params, num_links, capf
     indirect=["mesh_device", "device_params"],
 )
 # 90 and 224 tiles wide. 90 is not a multiple of 8, so it is the width that exercises
-# `untilize_block_ct_dim`'s divisor search (block 6, fifteen blocks per tile row) rather than taking the
-# 8 every power-of-two width takes; gpt_oss_120b's 2880 is a deployed emb_dim of exactly this shape.
-# 7168 is the production token, 14336 B: the size every packet-size bound in the sender is measured at.
+# `untilize_block_ct_dim`'s divisor search (block 6, fifteen blocks per tile row); power-of-two widths
+# always get 8. gpt_oss_120b uses emb_dim 2880. 7168 is the production token (14336 B), the size the
+# sender's packet-size bounds are checked against.
 @pytest.mark.parametrize("emb_dim", [2880, 7168], ids=lambda e: f"emb{e}")
 @pytest.mark.timeout(1800)
 def test_dispatch_fabric2d_relaunch(mesh_device, device_params, num_links, emb_dim):
