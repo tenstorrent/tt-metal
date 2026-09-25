@@ -152,12 +152,16 @@ def verify_saved_model(tt_model: Module, cache_dir: str | Path, /, *, prefix: st
     for name, parameter in tt_model.named_parameters():
         path = cache_dir / f"{prefix}{name}.tensorbin"
         if not path.is_file():
-            # Subclasses may persist a parameter their own way (Mochi/Wan keep torch fallbacks
-            # beside the tensorbins); only what `Module.save` wrote is checked here.
-            logger.warning(f"cache verify: no tensorbin for '{prefix}{name}', skipping it")
+            # `Module.save` writes one tensorbin per parameter and `Module.load` reads every one of
+            # them back, so a missing file is an incomplete cache, not a parameter stored elsewhere
+            # (the Mochi/Wan torch fallbacks are plain torch modules, not parameters).
+            ok = False
+            logger.error(f"cache incomplete: no tensorbin for '{prefix}{name}' at '{path}'")
             continue
-        reloaded = ttnn.load_tensor(path, device=None if parameter.on_host else parameter.device)
+        reloaded = None
         try:
+            # A truncated or malformed file raises here; that is a bad cache, not a bad run.
+            reloaded = ttnn.load_tensor(path, device=None if parameter.on_host else parameter.device)
             resident = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(parameter.data)]
             fresh = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(reloaded)]
             bad = [i for i, (a, b) in enumerate(zip(resident, fresh)) if a.shape != b.shape or not torch.equal(a, b)]
@@ -167,8 +171,11 @@ def verify_saved_model(tt_model: Module, cache_dir: str | Path, /, *, prefix: st
                     f"cache mismatch in '{path.name}': shards {bad or 'count'} differ "
                     f"({len(resident)} resident vs {len(fresh)} reloaded)"
                 )
+        except RuntimeError as err:
+            ok = False
+            logger.error(f"cache unreadable: '{path.name}' failed to load or compare: {err}")
         finally:
-            if not parameter.on_host:
+            if reloaded is not None and not parameter.on_host:
                 ttnn.deallocate(reloaded)
     return ok
 
