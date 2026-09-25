@@ -300,8 +300,8 @@ struct H2HSocket::Impl {
     // 12 MiB, measured: a sweep from 64 KiB to 16 MiB peaked here (9.70 vs 8.79 at 1 MiB),
     // and the run coalescer's own output is ~1 MiB, so nothing below that has any effect.
     static constexpr uint64_t kFlushWatermark = 12288u * 1024u;
-    // Overridable so the right value can be swept without a rebuild: the measured wire rate
-    // moved 10.67 -> 10.04 GB/s when batches grew 1 MB -> 2.7 MB, so it is worth tuning.
+    // A PERMANENT tuning knob, not a sweep aid: the optimum tracks link rate, PCIe width and
+    // core count, so a different platform wants a different value with no rebuild.
     static uint64_t watermark_bytes() {
         if (const char* s = std::getenv("TT_H2H_FLUSH_KB"); s != nullptr && *s != '\0') {
             if (const long v = std::atol(s); v > 0) {
@@ -312,7 +312,17 @@ struct H2HSocket::Impl {
     }
     // Breaks the credit deadlock, not just a stuck queue: holding the flush stops the peer
     // crediting, which blocks posting, and no force fires because frames are still queued.
-    static constexpr auto kFlushDeadline = std::chrono::microseconds(500);
+    static constexpr uint64_t kFlushDeadlineUs = 500;
+    // The other half of the batching policy, so it tunes per platform like the watermark:
+    // it bounds credit latency against the receiver's flush count, and tracks link RTT.
+    static std::chrono::microseconds flush_deadline() {
+        if (const char* s = std::getenv("TT_H2H_FLUSH_DEADLINE_US"); s != nullptr && *s != '\0') {
+            if (const long v = std::atol(s); v > 0) {
+                return std::chrono::microseconds(v);
+            }
+        }
+        return std::chrono::microseconds(kFlushDeadlineUs);
+    }
 
     uint64_t watermark = kFlushWatermark;
     std::vector<std::chrono::steady_clock::time_point> first_pending;
@@ -344,19 +354,20 @@ struct H2HSocket::Impl {
     // until this runs. final_flush is barrier and teardown, where everything must go out.
     void flush_dirty(bool force, bool final_flush = false) {
         const auto now = std::chrono::steady_clock::now();
+        const auto deadline = flush_deadline();
         for (uint32_t h = 0; h < cfg.topo.num; ++h) {
             if (pending[h] + ctrl_pending[h] == 0) {
                 continue;
             }
             if (!final_flush) {
                 if (pending[h] != 0) {
-                    if (!force && pending[h] < watermark && now - first_pending[h] < kFlushDeadline) {
+                    if (!force && pending[h] < watermark && now - first_pending[h] < deadline) {
                         ++stats.flushes_held;
                         continue;
                     }
                 // Credits alone: a receiver's no_supply fires every pass, so `force` must not
                 // apply here. The put is at the NIC already; the flush only confirms it.
-                } else if (now - first_ctrl[h] < kFlushDeadline) {
+                } else if (now - first_ctrl[h] < deadline) {
                     ++stats.flushes_held;
                     continue;
                 }
