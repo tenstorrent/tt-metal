@@ -38,6 +38,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.blackhole.qwen36.tt.spec_sampling import SpecSampler, SpecSamplingParams  # noqa: F401
 
 # Prompt length above which the reseed goes back to the per-slot loop; see generate().
 EAGER_RESEED_PROMPT_LEN = 131072
@@ -59,7 +60,7 @@ class SpeculativeDecoder:
     # the timing lines are tagged with a class-level call id to tell the two apart in the log.
     _gen_calls = 0
 
-    def __init__(self, model, page_table_torch, draft_len=None, stop_tokens=None):
+    def __init__(self, model, page_table_torch, draft_len=None, stop_tokens=None, sampling=None):
         assert model.mtp is not None, "model has no MTP head (has_mtp / mtp.* weights?)"
         assert model.num_devices > 1, "SpeculativeDecoder is TP-only for now"
         self.model = model
@@ -129,10 +130,31 @@ class SpeculativeDecoder:
         self._commit_traced = False  # resolved in generate(): did the capture actually take?
         # Persistent anchor-hidden buffer, allocated before any trace capture (see _anchor_warmup).
         self._hp_buf = None
+        # Acceptance mode. None => greedy (argmax-prefix). A SpecSamplingParams => exact
+        # speculative rejection sampling on host over the verify logits (tt/spec_sampling.py).
+        self.sampler = SpecSampler(sampling, self.vocab) if sampling is not None else None
         # Read the full [T, vocab] verify logits back to host as well as the argmax ids. Greedy
-        # acceptance does not need them (the trace argmaxes on device), so this is off; the device
-        # path stays in model.verify_traced for whatever needs distributions (sampling, debug).
-        self.read_verify_logits = False
+        # acceptance does not need them (the trace argmaxes on device), so it stays off; the
+        # sampling accept step needs the distributions, so the sampler turns it on.
+        self.read_verify_logits = self.sampler is not None
+        # QWEN36_SPEC_DEVICE_TOPK=1 opts into the device top-k support (tt/spec_sampling_device.py)
+        # instead of the dense readback. OFF by default: it is exact and fast standalone (2.6 ms vs
+        # 47 ms) but its per-iteration ttnn.pad allocation wedges the verify readback while the
+        # decode traces are live. Needs a persistent pad buffer allocated before trace capture.
+        # Also requires top_k > 0 and no presence penalty (which precedes the selection).
+        self._logits_topk = (
+            sampling.top_k
+            if (
+                sampling is not None
+                and sampling.top_k > 0
+                and sampling.presence_penalty <= 0
+                and os.environ.get("QWEN36_SPEC_DEVICE_TOPK", "0") == "1"
+            )
+            else 0
+        )
+        # Mean target probability of the drafts the sampler evaluated (sampling path only).
+        self._p_draft_sum = 0.0
+        self._p_draft_n = 0
         # None => generate() picks batched or eager from the prompt length (see the note there).
         # Set True/False to force one, for A/B work.
         self.force_eager_reseed = None
@@ -448,6 +470,31 @@ class SpeculativeDecoder:
             self.zero_accept += 1
         return m
 
+    def _accept_sample(self, drafts, vlogits):
+        """Exact speculative rejection sampling over the verify logits; returns (m, next_token).
+
+        The drafts are the drafter's argmax, so the proposal is the delta at ``d_j`` and the accept
+        test is ``u_j < p_j(d_j)`` -- which makes P(x) = p(x) exactly (see tt/spec_sampling.py).
+        ``next_token`` is recovered from the rejection row (m < K) or sampled from the bonus row
+        (m == K), and becomes the next iteration's ``pending``, where greedy uses ``vids[mi]``.
+        Same acceptance instrumentation as _accept_greedy, plus the mean target probability of the
+        drafts the sampler actually evaluated.
+        """
+        assert vlogits is not None, "sampling acceptance needs read_verify_logits; got None"
+        # _verify hands back a device-selected (idx, vals) support when _logits_topk is on.
+        if self._logits_topk:
+            m, next_tok, p_draft = self.sampler.accept_support(vlogits, drafts)
+        else:
+            m, next_tok, p_draft = self.sampler.accept(vlogits, drafts)
+        self.accept_hist[m] += 1
+        for j in range(m):
+            self.depth_hits[j] += 1
+        if m == 0:
+            self.zero_accept += 1
+        self._p_draft_sum += sum(p_draft)
+        self._p_draft_n += len(p_draft)
+        return m, next_tok
+
     # --------------------------------------------------------------------- #
     # Verify / commit
     # --------------------------------------------------------------------- #
@@ -459,12 +506,19 @@ class SpeculativeDecoder:
         the per-token GDN state so commit_verify_slot(m) can roll the durable state to the accepted
         slot — no rollback, no commit forward.
 
-        Returns (per-position argmax ids, per-position hidden rows [1,1,len,dim/tp]).
+        Returns (per-position argmax ids, per-position hidden rows [1,1,len,dim/tp], logits).
+        ``logits`` is None under greedy (ids only); with read_verify_logits it is the [T, vocab]
+        host tensor, or a device-selected (idx, vals) [T, k] support when _logits_topk is set.
         """
-        _lt, vhidden, ids = self.model.verify_traced(
-            tokens, p + 1, read_logits=self.read_verify_logits, clone_rows=False, page_table=self._pt_row
+        lt, vhidden, ids = self.model.verify_traced(
+            tokens,
+            p + 1,
+            read_logits=self.read_verify_logits,
+            clone_rows=False,
+            page_table=self._pt_row,
+            logits_topk=self._logits_topk,
         )
-        return ids, vhidden
+        return ids, vhidden, lt
 
     def _commit(self, mi):
         """Point the durable GDN state at the accepted prefix's last verify slot `mi`.
@@ -576,7 +630,7 @@ class SpeculativeDecoder:
         trailing sync flushes the small hidden-rows clone that follows the readback, which lands in
         the readback bucket.
 
-        Returns (vids, vhidden, device_seconds, readback_seconds).
+        Returns (vids, vhidden, vlogits, device_seconds, readback_seconds).
         """
         orig = ttnn.get_device_tensors
         mark = []
@@ -589,13 +643,13 @@ class SpeculativeDecoder:
         ttnn.get_device_tensors = hooked
         t0 = time.perf_counter()
         try:
-            vids, vhidden = self._verify(tokens, p)
+            vids, vhidden, vlt = self._verify(tokens, p)
         finally:
             ttnn.get_device_tensors = orig
         ttnn.synchronize_device(self.mesh)
         t1 = time.perf_counter()
         t_mark = mark[0] if mark else t1
-        return vids, vhidden, t_mark - t0, t1 - t_mark
+        return vids, vhidden, vlt, t_mark - t0, t1 - t_mark
 
     def _log_iter_timing(self, row):
         """Log one iteration's breakdown and fold it into the mean (first 2 iterations excluded)."""
@@ -831,11 +885,17 @@ class SpeculativeDecoder:
             # Verify buffers per-token GDN state and keeps the hidden; commit = select the accepted
             # slot (no re-run forward). committed = [pending] + drafts[:m].
             if self._timing:
-                vids, vhidden, _s_verify, _s_read = self._verify_split([pending] + drafts, p)
+                vids, vhidden, vlt, _s_verify, _s_read = self._verify_split([pending] + drafts, p)
                 _t_verify = time.perf_counter()
             else:
-                vids, vhidden = self._phase("verify", lambda: self._verify([pending] + drafts, p))
-            m = self._accept_greedy(drafts, vids)
+                vids, vhidden, vlt = self._phase("verify", lambda: self._verify([pending] + drafts, p))
+            # Sampling returns its own next token (recovered or bonus); greedy takes it from
+            # vids[mi] below. Both commit [pending] + the accepted prefix.
+            sampled_next = None
+            if self.sampler is not None:
+                m, sampled_next = self._accept_sample(drafts, vlt)
+            else:
+                m = self._accept_greedy(drafts, vids)
             committed = [pending] + drafts[:m]
             # The accept test can accept drafts PAST a stop token, so emit only through the first
             # one. commit/anchor/reseed/p all follow the shortened prefix, since they derive from
@@ -849,7 +909,7 @@ class SpeculativeDecoder:
             _t_commit = self._tick() if self._timing else 0.0
             prev_p = p
             # The next anchor's own next token: the base's argmax at the accepted-prefix's last row.
-            next_pending = vids[mi]
+            next_pending = vids[mi] if sampled_next is None else sampled_next
             # The new anchor hidden is the accepted prefix's last row of the verify window, refilled
             # into the SAME persistent buffer the drafter already read this iteration (see
             # _anchor_warmup: a fresh per-iteration clone here is what the commit traces aliased).
