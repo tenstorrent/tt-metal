@@ -135,9 +135,14 @@ constexpr uint32_t POOL_TILE_HW = tt::constants::TILE_HEIGHT * tt::constants::TI
 constexpr uint16_t POOL_POS_INF_BF16 = 0x7F80;                                                  // +inf in bf16
 constexpr uint32_t POOL_BLOCK_KEYS = block_pool ? block_tiles * tt::constants::TILE_WIDTH : 1;  // 1: avoid /0 codegen
 
-/** Gather each pooled tile's col-0 into a query-major [TILE_HEIGHT][valid_blocks] scratch, force each
- *  query's own block to +inf (forced-local / sparse_local_block), then write each query row's run once.
- *  `q_seq_row0` = sequence-local index of this tile-row's query 0 (within Sq). */
+/** Gather each pooled tile's col-0 into a query-major [TILE_HEIGHT][blocks_per_unit] scratch, force each
+ *  query's own block to +inf (forced-local / sparse_local_block), then write each query row's valid run once.
+ *  `q_seq_row0` = sequence-local index of this tile-row's query 0 (within Sq).
+ *
+ *  The scratch row stride is the FULL blocks_per_unit (a multiple of 8 bf16 = 16 B, validated), not
+ *  valid_blocks: each row is a NoC write source, which must be 16 B-aligned. A runtime kv_len that ends
+ *  mid-unit leaves valid_blocks < blocks_per_unit; packing rows at valid_blocks*2 bytes then misaligned every
+ *  row after the first and the NoC read the aligned-down address (row 1 wrote row 0's scores, and so on). */
 template <typename OutAcc>
 inline void write_pooled_strip(
     Noc noc,
@@ -163,7 +168,8 @@ inline void write_pooled_strip(
         for (uint32_t fr = 0; fr < POOL_FACE_ROWS; ++fr) {
             const uint32_t face_base = fr * POOL_FACE_ROW_STRIDE;
             for (uint32_t rr = 0; rr < tt::constants::FACE_HEIGHT; ++rr) {
-                scratch[qrow * valid_blocks + b] = tile[face_base + rr * tt::constants::FACE_WIDTH];  // col 0, row qrow
+                scratch[qrow * blocks_per_unit + b] =
+                    tile[face_base + rr * tt::constants::FACE_WIDTH];  // col 0, row qrow
                 ++qrow;
             }
         }
@@ -179,15 +185,16 @@ inline void write_pooled_strip(
         const uint32_t q_pos = iscore::causal_diag_tile(q_seq, chunk_start_keys, straddle_q_keys, straddle_jump_keys);
         const uint32_t local_block = q_pos / POOL_BLOCK_KEYS;
         if (local_block >= col_off_blocks && local_block < col_off_blocks + valid_blocks) {
-            scratch[rr * valid_blocks + (local_block - col_off_blocks)] = POOL_POS_INF_BF16;
+            scratch[rr * blocks_per_unit + (local_block - col_off_blocks)] = POOL_POS_INF_BF16;
         }
     }
 
+    constexpr uint32_t scratch_row_bytes = blocks_per_unit * sizeof(uint16_t);
     const uint32_t row_bytes = valid_blocks * sizeof(uint16_t);
     const uint32_t col_off_bytes = col_off_blocks * sizeof(uint16_t);
     for (uint32_t rr = 0; rr < tt::constants::TILE_HEIGHT; ++rr) {
         noc.async_write(
-            CoreLocalMem<uint32_t>(scratch_addr + rr * row_bytes),
+            CoreLocalMem<uint32_t>(scratch_addr + rr * scratch_row_bytes),
             out_acc,
             row_bytes,
             {},
@@ -294,7 +301,7 @@ void kernel_main() {
             }
             // block-pool: this band's slice starts at block-column k_tile0/block_tiles, width valid_blocks.
             const uint32_t col_off_blocks = block_pool ? (k_tile0 / block_tiles) : 0;
-            const uint32_t valid_blocks = block_pool ? (valid_w / block_tiles) : 0;  // == blocks_per_unit (no partial)
+            const uint32_t valid_blocks = block_pool ? (valid_w / block_tiles) : 0;  // < blocks_per_unit past kv_len
             for (uint32_t g = 0; g < num_out_groups; ++g) {
                 const uint32_t plane_row0 = g * sq_rows;
                 for (uint32_t q_row = 0; q_row < q_tiles_per_unit; ++q_row) {
