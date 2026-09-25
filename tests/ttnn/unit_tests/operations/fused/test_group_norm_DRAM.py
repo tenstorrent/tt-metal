@@ -713,26 +713,30 @@ def test_group_norm_non_tile_aligned_garbage_padding_DRAM(device):
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize(
-    "N, cores_y, num_out_blocks",
+    "N, cores_y, num_out_blocks, input_layout",
     [
         # The grid fixes num_virtual_rows, hence whether a batch is split across core rows and so
         # which cores hold the padding row-tile.
-        pytest.param(1, 1, None, id="N1_grid1x8_whole_batch_per_core"),
-        pytest.param(1, 2, None, id="N1_grid2x8_batch_split_2"),
-        pytest.param(1, 4, None, id="N1_grid4x8_batch_split_4_block_h_1"),
-        pytest.param(2, 1, None, id="N2_grid1x8_two_batches_per_core"),
-        pytest.param(2, 4, None, id="N2_grid4x8_batch_split_2"),
+        pytest.param(1, 1, None, ttnn.TILE_LAYOUT, id="N1_grid1x8_whole_batch_per_core"),
+        pytest.param(1, 2, None, ttnn.TILE_LAYOUT, id="N1_grid2x8_batch_split_2"),
+        pytest.param(1, 4, None, ttnn.TILE_LAYOUT, id="N1_grid4x8_batch_split_4_block_h_1"),
+        pytest.param(2, 1, None, ttnn.TILE_LAYOUT, id="N2_grid1x8_two_batches_per_core"),
+        pytest.param(2, 4, None, ttnn.TILE_LAYOUT, id="N2_grid4x8_batch_split_2"),
         # num_out_blocks=3 over block_h=4 leaves the last out-block empty -- the case that breaks a
         # naive "last block, last row" test.
-        pytest.param(1, 1, 3, id="N1_grid1x8_num_out_blocks_3_empty_last_block"),
-        pytest.param(1, 1, 4, id="N1_grid1x8_num_out_blocks_4"),
+        pytest.param(1, 1, 3, ttnn.TILE_LAYOUT, id="N1_grid1x8_num_out_blocks_3_empty_last_block"),
+        pytest.param(2, 1, 3, ttnn.TILE_LAYOUT, id="N2_grid1x8_num_out_blocks_3_empty_last_block"),
+        pytest.param(1, 1, 3, ttnn.ROW_MAJOR_LAYOUT, id="N1_grid1x8_num_out_blocks_3_empty_last_block_row_major"),
+        pytest.param(1, 1, 4, ttnn.TILE_LAYOUT, id="N1_grid1x8_num_out_blocks_4"),
     ],
 )
-def test_group_norm_non_tile_aligned_dirty_padding_grids_DRAM(device, N, cores_y, num_out_blocks):
+def test_group_norm_non_tile_aligned_dirty_padding_grids_DRAM(device, N, cores_y, num_out_blocks, input_layout):
     # Which core applies the row mask depends on how the grid splits H*W, and with N > 1 the padding
     # recurs once per batch on the same core -- a single auto-selected grid reaches neither. Also
     # pins the out-block indexing: num_out_blocks not dividing block_h can leave the last out-block
     # with zero rows, so the final row-tile is found by its global index within the batch.
+    if input_layout == ttnn.ROW_MAJOR_LAYOUT and device.arch() != ttnn.device.Arch.WORMHOLE_B0:
+        pytest.skip("Interleaved row-major GroupNorm is supported only on Wormhole")
     cores_x = 8
     if device.core_grid.y < cores_y or device.core_grid.x < cores_x:
         pytest.skip(f"device grid too small for {cores_x}x{cores_y}")
@@ -749,7 +753,7 @@ def test_group_norm_non_tile_aligned_dirty_padding_grids_DRAM(device, N, cores_y
     buf[:, :, HW:, :] = 7.0
 
     tt = ttnn.from_torch(
-        buf, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        buf, dtype=ttnn.bfloat16, layout=input_layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     tt = ttnn.reshape(tt, ttnn.Shape([N, 1, HW, C]), ttnn.Shape([N, 1, padded, C]))
     out = ttnn.group_norm(
