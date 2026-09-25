@@ -112,7 +112,7 @@ tt::tt_metal::WorkloadDescriptor HybridOverlapProgramFactory::create_workload_de
     ttnn::Tensor& output,
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     auto* mesh = t.x.device();
-    // Without pass A the routed expert has no arena to lay its buffers over, and neither op needs one: each
+    // Without the fused pass the routed expert has no arena to lay its buffers over, and neither op needs one: each
     // keeps static circular buffers on its own rows, both below fwd_arrived.
     const bool run_fused_pass = op.hybrid_token_threshold > 0;
     const auto l1 = allocate_overlap_l1(mesh, run_fused_pass);
