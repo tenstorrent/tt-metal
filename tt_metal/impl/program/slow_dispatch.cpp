@@ -85,13 +85,13 @@ bool program_targets_only_dram_cores(const Program& program, const Hal& hal) {
 
 void ConfigureDeviceWithProgram(IDevice& device, Program& program, bool force_slow_dispatch) {
     ZoneScoped;
-    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(&device));
+    MetalContext& metal_ctx = MetalContext::instance(extract_context_id(&device));
     // This function is shared between FD and SD.
     // We call this function when initializing HW Command Queues or when reading Profiler Device to Device
     // sync information from the accelerators.
     // Must be set by the user only when its safe to mix slow dispatch with fast dispatch (advanced feature).
     if (!force_slow_dispatch) {
-        detail::DispatchStateCheck(false);
+        metal_ctx.device_manager()->check_dispatch_mode(/*fast_dispatch=*/false);
     }
 
     auto device_id = device.id();
@@ -270,15 +270,15 @@ void ConfigureDeviceWithProgram(IDevice& device, Program& program, bool force_sl
 void WriteRuntimeArgsToDevice(IDevice& device, Program& program, bool force_slow_dispatch) {
     ZoneScoped;
     auto device_id = device.id();
+    MetalContext& metal_ctx = MetalContext::instance(extract_context_id(&device));
     // This function is shared between FD and SD.
     // We call this function when initializing HW Command Queues or when reading Profiler Device to Device
     // sync information from the accelerators.
     // Must be set by the user only when its safe to mix slow dispatch with fast dispatch (advanced feature).
     if (!force_slow_dispatch) {
-        detail::DispatchStateCheck(false);
+        metal_ctx.device_manager()->check_dispatch_mode(/*fast_dispatch=*/false);
     }
 
-    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(&device));
     const auto& hal = metal_ctx.hal();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         CoreType core_type = hal.get_core_type(index);
@@ -352,7 +352,7 @@ void LaunchProgramAsync(IDevice& device, Program& program, bool force_slow_dispa
     MetalContext& metal_ctx = MetalContext::instance(extract_context_id(&device));
     // Must be set by the user only when its safe to mix slow dispatch with fast dispatch (advanced feature).
     if (!force_slow_dispatch) {
-        detail::DispatchStateCheck(false);
+        metal_ctx.device_manager()->check_dispatch_mode(/*fast_dispatch=*/false);
     } else {
         auto& dm = metal_ctx.device_manager();
         const bool fd_active = dm->is_dispatch_firmware_active();

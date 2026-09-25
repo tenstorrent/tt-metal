@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <atomic>
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <tt_stl/span.hpp>
@@ -48,6 +50,9 @@ public:
     std::unordered_map<ChipId, std::vector<uint32_t>> get_all_command_queue_event_infos() const;
     bool close_devices(const std::vector<IDevice*>& devices, bool skip_synchronize = false);
     bool is_device_active(ChipId id) const;
+    // Records the dispatch mode on the first call and fails if a later call passes a different mode: mixing fast and
+    // slow dispatch is prohibited.
+    void check_dispatch_mode(bool fast_dispatch);
     // True if dispatch firmware is active on this device pool
     bool is_dispatch_firmware_active() const;
     // Called by the mesh device
@@ -78,6 +83,8 @@ private:
     size_t worker_l1_size_{};
     std::vector<uint32_t> l1_bank_remap_;
     bool using_fast_dispatch_ = false;
+    // Dispatch mode recorded by check_dispatch_mode: -1 if unset, otherwise 0 (slow) or 1 (fast).
+    std::atomic<int8_t> checked_dispatch_mode_{-1};
     bool init_profiler_ = true;
     bool initialize_fabric_and_dispatch_fw_ = false;
     bool is_initialized_ = false;

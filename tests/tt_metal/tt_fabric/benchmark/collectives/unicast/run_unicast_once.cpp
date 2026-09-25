@@ -59,9 +59,13 @@ inline bool pick_forwarding_link_or_fail(
 
 // Device lookup and basic existence check.
 inline bool lookup_devices_or_fail(
-    ChipId src_phys, ChipId dst_phys, tt::tt_metal::IDevice*& src_dev, tt::tt_metal::IDevice*& dst_dev) {
-    src_dev = tt::tt_metal::detail::GetActiveDevice(src_phys);
-    dst_dev = tt::tt_metal::detail::GetActiveDevice(dst_phys);
+    const tt::tt_metal::distributed::MeshDevice& mesh,
+    ChipId src_phys,
+    ChipId dst_phys,
+    tt::tt_metal::IDevice*& src_dev,
+    tt::tt_metal::IDevice*& dst_dev) {
+    src_dev = mesh.get_device(src_phys);
+    dst_dev = mesh.get_device(dst_phys);
     if (!src_dev || !dst_dev) {
         ADD_FAILURE() << "Failed to find devices: src=" << src_phys << " dst=" << dst_phys;
         return false;
@@ -106,7 +110,7 @@ PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
 
     tt::tt_metal::IDevice* src_dev = nullptr;
     tt::tt_metal::IDevice* dst_dev = nullptr;
-    if (!lookup_devices_or_fail(src_phys, dst_phys, src_dev, dst_dev)) {
+    if (!lookup_devices_or_fail(*fixture->get_mesh_device(), src_phys, dst_phys, src_dev, dst_dev)) {
         return PerfPoint{};
     }
 

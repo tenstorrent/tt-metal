@@ -12,6 +12,7 @@
 #include <set>
 #include <string_view>
 #include <unordered_set>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "ttnn/operation.hpp"
 #include <enchantum/enchantum.hpp>
@@ -45,11 +46,9 @@ static json tensor_meta_to_json(const TensorMeta& m) {
     return ret;
 }
 
-static json get_kernels_json(ChipId device_id, const Program& program) {
+static json get_kernels_json(distributed::MeshDevice* mesh_device, const Program& program) {
     std::vector<json> computeKernels;
     std::vector<json> datamovementKernels;
-
-    IDevice* device = tt::tt_metal::detail::GetActiveDevice(device_id);
 
     json kernelSizes;
     // TODO(HalProcessorClassType): all the combinations can be queried from HAL instead of hardcoded here, but
@@ -72,7 +71,7 @@ static json get_kernels_json(ChipId device_id, const Program& program) {
     // profiler JSON well within Tracy's 64 KiB message limit.
     std::set<std::pair<std::string_view, std::string>> seenCompute;
     std::set<std::string_view> seenDatamovement;
-    const auto kernelMeta = detail::collect_kernel_meta(program, device);
+    const auto kernelMeta = detail::collect_kernel_meta(program, mesh_device);
     computeKernels.reserve(kernelMeta.size());
     datamovementKernels.reserve(kernelMeta.size());
     for (const auto& kernel : kernelMeta) {
@@ -126,6 +125,7 @@ std::string assemble_device_op_json(
     [[maybe_unused]] const OpProfileData& data,
     [[maybe_unused]] ttsl::hash::hash_t program_hash,
     [[maybe_unused]] ChipId device_id,
+    [[maybe_unused]] tt::tt_metal::distributed::MeshDevice* mesh_device,
     [[maybe_unused]] bool program_cache_hit,
     [[maybe_unused]] const tt::tt_metal::Program& program) {
 #if defined(TRACY_ENABLE)
@@ -157,7 +157,7 @@ std::string assemble_device_op_json(
     j["device_id"] = device_id;
     j["op_hash"] = program_hash;
     j["program_cache_hit"] = program_cache_hit;
-    j["kernel_info"] = get_kernels_json(device_id, program);
+    j["kernel_info"] = get_kernels_json(mesh_device, program);
 
     auto opname = j["op_code"].template get<std::string>();
     runtime_id_to_opname_.insert({device_id, program.get_runtime_id()}, opname);
