@@ -1,0 +1,50 @@
+{
+  "runtime_prefill_audit": "clean",
+  "prefix_length": 0,
+  "layer_type": "sliding_attention",
+  "phase": "prefill",
+  "length": 33,
+  "real_weights": false,
+  "pcc": 0.9962797287349068,
+  "passed": true,
+  "decode": {
+    "pcc": 0.9997344186438469,
+    "passed": true,
+    "traced": true,
+    "runtime_decode_audit": "clean",
+    "repeated_equal": true,
+    "steps": 4,
+    "min_pcc": 0.9996612827847191,
+    "positions": [
+      33,
+      36
+    ],
+    "checks": [
+      {
+        "position": 33,
+        "pcc": 0.9997344186438469,
+        "passed": true
+      },
+      {
+        "position": 33,
+        "pcc": 0.9997344186438469,
+        "passed": true
+      },
+      {
+        "position": 34,
+        "pcc": 0.9996612827847191,
+        "passed": true
+      },
+      {
+        "position": 35,
+        "pcc": 0.9996883199476984,
+        "passed": true
+      },
+      {
+        "position": 36,
+        "pcc": 0.9996635401929699,
+        "passed": true
+      }
+    ]
+  }
+}

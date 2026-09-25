@@ -1,0 +1,87 @@
+[
+  {
+    "command": [
+      "python_env/bin/tt-perf-report",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/functional_decoder/tracy/sliding/ops.csv",
+      "--start-signpost",
+      "PERF_PREFILL",
+      "--end-signpost",
+      "PERF_PREFILL_END",
+      "--active-experts",
+      "8",
+      "--no-advice",
+      "--no-color",
+      "--csv",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/functional_decoder/tracy/sliding/prefill_perf_report.csv"
+    ],
+    "output": "models/autoports/google_gemma_4_26b_a4b_it/doc/functional_decoder/tracy/sliding/prefill_perf_report.console.log",
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "python_env/bin/tt-perf-report",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/functional_decoder/tracy/sliding/ops.csv",
+      "--start-signpost",
+      "PERF_PREFILL",
+      "--end-signpost",
+      "PERF_PREFILL_END",
+      "--active-experts",
+      "8",
+      "--no-advice",
+      "--no-color",
+      "--no-summary"
+    ],
+    "output": "models/autoports/google_gemma_4_26b_a4b_it/doc/functional_decoder/tracy/sliding/prefill_perf_report.txt",
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "python_env/bin/tt-perf-report",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/functional_decoder/tracy/sliding/ops.csv",
+      "--start-signpost",
+      "PERF_DECODE",
+      "--end-signpost",
+      "PERF_DECODE_END",
+      "--active-experts",
+      "8",
+      "--no-advice",
+      "--no-color",
+      "--csv",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/functional_decoder/tracy/sliding/decode_perf_report.csv"
+    ],
+    "output": "models/autoports/google_gemma_4_26b_a4b_it/doc/functional_decoder/tracy/sliding/decode_perf_report.console.log",
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "python_env/bin/tt-perf-report",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/functional_decoder/tracy/sliding/ops.csv",
+      "--start-signpost",
+      "PERF_DECODE",
+      "--end-signpost",
+      "PERF_DECODE_END",
+      "--active-experts",
+      "8",
+      "--no-advice",
+      "--no-color",
+      "--no-summary"
+    ],
+    "output": "models/autoports/google_gemma_4_26b_a4b_it/doc/functional_decoder/tracy/sliding/decode_all_replays_perf_report.txt",
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "python_env/bin/tt-perf-report",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/functional_decoder/tracy/sliding/decode_example_ops.csv",
+      "--ignore-signposts",
+      "--tracing-mode",
+      "--active-experts",
+      "8",
+      "--no-summary",
+      "--no-advice",
+      "--no-color"
+    ],
+    "output": "models/autoports/google_gemma_4_26b_a4b_it/doc/functional_decoder/tracy/sliding/decode_perf_report.txt",
+    "exit_code": 0
+  }
+]

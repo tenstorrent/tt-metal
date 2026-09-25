@@ -1,0 +1,14 @@
+{
+  "checkout_commit": "a3a9fb4229a045ad9361b4e39ad854b491346ea9",
+  "available_devices": 4,
+  "device_series": "p300c",
+  "architecture": "blackhole",
+  "selected_mesh": [
+    1,
+    1
+  ],
+  "device_list_command": "timeout 60 tt-smi -ls --local",
+  "device_list_exit_code": 0,
+  "mesh_smoke": "open_mesh_device(MeshShape(1,1), trace_region_size=0); close_mesh_device: MESH_SMOKE_OK",
+  "hf_revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52"
+}

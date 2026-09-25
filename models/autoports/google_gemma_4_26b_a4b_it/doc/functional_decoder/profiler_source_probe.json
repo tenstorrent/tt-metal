@@ -1,0 +1,51 @@
+{
+  "source_only": true,
+  "source_artifacts": [
+    "tracy/sliding/raw/.logs/tracy_ops_data.csv",
+    "tracy/sliding/raw/.logs/tracy_ops_times.csv"
+  ],
+  "captured_programs": 560,
+  "total_replays": 130,
+  "replays_between_decode_signposts": 128,
+  "measured_program_executions": 71680,
+  "realtime_program_records": 78391,
+  "runtime_id_occurrence_histogram": {
+    "1": 5591,
+    "130": 560
+  },
+  "completed_control_buffer_reads": 114,
+  "allocation_cases": [
+    {
+      "op_support_count": 150000,
+      "cores_per_dram": 15,
+      "bank_bytes": 540000000,
+      "required_host_bytes": 4320000000,
+      "allocated_host_bytes": 25032704,
+      "first_bank_exceeds_allocation": true
+    },
+    {
+      "op_support_count": 150000,
+      "cores_per_dram": 16,
+      "bank_bytes": 576000000,
+      "required_host_bytes": 4608000000,
+      "allocated_host_bytes": 313032704,
+      "first_bank_exceeds_allocation": true
+    },
+    {
+      "op_support_count": 100000,
+      "cores_per_dram": 15,
+      "bank_bytes": 360000000,
+      "required_host_bytes": 2880000000,
+      "allocated_host_bytes": 2880000000,
+      "first_bank_exceeds_allocation": false
+    },
+    {
+      "op_support_count": 100000,
+      "cores_per_dram": 16,
+      "bank_bytes": 384000000,
+      "required_host_bytes": 3072000000,
+      "allocated_host_bytes": 3072000000,
+      "first_bank_exceeds_allocation": false
+    }
+  ]
+}

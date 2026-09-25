@@ -1,0 +1,51 @@
+{
+  "length": 262144,
+  "layer": 5,
+  "stages": [
+    {
+      "operation": "page_ids",
+      "shape": [
+        1,
+        8192
+      ],
+      "exact": true,
+      "statistics_stride": 1,
+      "pcc": 1.0,
+      "max_error": 0.0,
+      "rms_error": 0.0,
+      "expected_rms": 4729.22021484375,
+      "actual_rms": 4729.22021484375,
+      "finite": true
+    },
+    {
+      "operation": "gather",
+      "shape": [
+        1,
+        8192
+      ],
+      "exact": false,
+      "statistics_stride": 1,
+      "pcc": -0.001069122769151366,
+      "max_error": 1151226240.0,
+      "rms_error": 132499280.0,
+      "expected_rms": 4729.220703125,
+      "actual_rms": 132499208.0,
+      "finite": true
+    },
+    {
+      "operation": "cache_rows",
+      "shape": [
+        1,
+        524288
+      ],
+      "exact": false,
+      "statistics_stride": 1,
+      "pcc": -0.013675687864942365,
+      "max_error": 4226515712.0,
+      "rms_error": 336432864.0,
+      "expected_rms": 302697.375,
+      "actual_rms": 336461408.0,
+      "finite": true
+    }
+  ]
+}

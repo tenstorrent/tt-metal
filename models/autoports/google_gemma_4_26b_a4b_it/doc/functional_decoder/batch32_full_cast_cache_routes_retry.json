@@ -1,0 +1,1634 @@
+[
+  {
+    "slot": 0,
+    "residual_pcc": 0.9999995328014329,
+    "stages": {
+      "input_layernorm": 0.9999999999999999,
+      "self_attn": 0.9999980186793451,
+      "post_attention_layernorm": 0.9999979643414704,
+      "q_after_rope": 0.9999998213836455,
+      "q_same_bf16_table": 0.9999999433147013,
+      "current_k_same_bf16_table": 0.9999993752385583,
+      "current_v_quantized_hf": 0.9999994832822122,
+      "current_v_max_error": 0.015625,
+      "cached_k": 0.999998421631848,
+      "cached_v": 0.9999985936384362,
+      "sdpa_same_qkv": 0.9999999522894369,
+      "o_same_input": 0.9999999079894558,
+      "qkv": 0.9999999431643604
+    },
+    "router_detail": {},
+    "hf_routes": [
+      108,
+      125,
+      43,
+      37,
+      92,
+      52,
+      40,
+      6
+    ],
+    "cpu_same_residual_routes": [
+      108,
+      125,
+      43,
+      37,
+      92,
+      52,
+      40,
+      6
+    ],
+    "tt_routes": [
+      6,
+      37,
+      40,
+      43,
+      52,
+      92,
+      108,
+      125
+    ]
+  },
+  {
+    "slot": 1,
+    "residual_pcc": 0.9999994922846488,
+    "stages": {
+      "input_layernorm": 0.9999999999999999,
+      "self_attn": 0.9999977747940446,
+      "post_attention_layernorm": 0.9999977303609684,
+      "q_after_rope": 0.9999998381471387,
+      "q_same_bf16_table": 0.9999999409723959,
+      "current_k_same_bf16_table": 0.9999993520523578,
+      "current_v_quantized_hf": 0.9999995950490946,
+      "current_v_max_error": 0.0078125,
+      "cached_k": 0.9999984518731675,
+      "cached_v": 0.9999985637064654,
+      "sdpa_same_qkv": 0.9999999627461378,
+      "o_same_input": 0.999999918851882,
+      "qkv": 0.9999999420550139
+    },
+    "router_detail": {},
+    "hf_routes": [
+      26,
+      112,
+      12,
+      82,
+      87,
+      65,
+      54,
+      7
+    ],
+    "cpu_same_residual_routes": [
+      26,
+      112,
+      12,
+      82,
+      87,
+      65,
+      54,
+      7
+    ],
+    "tt_routes": [
+      7,
+      12,
+      26,
+      54,
+      65,
+      82,
+      87,
+      112
+    ]
+  },
+  {
+    "slot": 2,
+    "residual_pcc": 0.9999994776626175,
+    "stages": {
+      "input_layernorm": 1.0,
+      "self_attn": 0.9999975407503784,
+      "post_attention_layernorm": 0.9999976456219022,
+      "q_after_rope": 0.9999998251381468,
+      "q_same_bf16_table": 0.9999999429122124,
+      "current_k_same_bf16_table": 0.9999993705554101,
+      "current_v_quantized_hf": 0.9999993290960866,
+      "current_v_max_error": 0.015625,
+      "cached_k": 0.999998450013527,
+      "cached_v": 0.9999985515552967,
+      "sdpa_same_qkv": 0.9999999659939323,
+      "o_same_input": 0.9999999196086006,
+      "qkv": 0.9999999437177413
+    },
+    "router_detail": {},
+    "hf_routes": [
+      98,
+      16,
+      94,
+      63,
+      105,
+      61,
+      118,
+      1
+    ],
+    "cpu_same_residual_routes": [
+      98,
+      16,
+      94,
+      63,
+      105,
+      61,
+      118,
+      1
+    ],
+    "tt_routes": [
+      1,
+      16,
+      61,
+      63,
+      94,
+      98,
+      105,
+      118
+    ]
+  },
+  {
+    "slot": 3,
+    "residual_pcc": 0.9999995023718011,
+    "stages": {
+      "input_layernorm": 1.0,
+      "self_attn": 0.9999979307094148,
+      "post_attention_layernorm": 0.999997885525909,
+      "q_after_rope": 0.9999998320140578,
+      "q_same_bf16_table": 0.99999994123964,
+      "current_k_same_bf16_table": 0.9999995157980361,
+      "current_v_quantized_hf": 0.9999994613586468,
+      "current_v_max_error": 0.015625,
+      "cached_k": 0.9999984497825828,
+      "cached_v": 0.9999985604209396,
+      "sdpa_same_qkv": 0.999999980214306,
+      "o_same_input": 0.9999999122448323,
+      "qkv": 0.9999999429068664
+    },
+    "router_detail": {},
+    "hf_routes": [
+      112,
+      87,
+      16,
+      33,
+      14,
+      109,
+      25,
+      0
+    ],
+    "cpu_same_residual_routes": [
+      112,
+      87,
+      16,
+      33,
+      14,
+      109,
+      25,
+      0
+    ],
+    "tt_routes": [
+      0,
+      14,
+      16,
+      25,
+      33,
+      87,
+      109,
+      112
+    ]
+  },
+  {
+    "slot": 4,
+    "residual_pcc": 0.9999993878418802,
+    "stages": {
+      "input_layernorm": 1.0,
+      "self_attn": 0.9999975769533519,
+      "post_attention_layernorm": 0.9999968309927264,
+      "q_after_rope": 0.999999823805647,
+      "q_same_bf16_table": 0.999999934510811,
+      "current_k_same_bf16_table": 0.9999992578412965,
+      "current_v_quantized_hf": 0.9999995828182849,
+      "current_v_max_error": 0.0078125,
+      "cached_k": 0.9999984580092082,
+      "cached_v": 0.999998555212023,
+      "sdpa_same_qkv": 0.9999999621050318,
+      "o_same_input": 0.9999999193509957,
+      "qkv": 0.9999999344110172
+    },
+    "router_detail": {},
+    "hf_routes": [
+      74,
+      67,
+      75,
+      7,
+      19,
+      113,
+      15,
+      86
+    ],
+    "cpu_same_residual_routes": [
+      74,
+      67,
+      75,
+      7,
+      19,
+      113,
+      15,
+      86
+    ],
+    "tt_routes": [
+      7,
+      15,
+      19,
+      67,
+      74,
+      75,
+      86,
+      113
+    ]
+  },
+  {
+    "slot": 5,
+    "residual_pcc": 0.9999993037103153,
+    "stages": {
+      "input_layernorm": 0.9999999999999999,
+      "self_attn": 0.9999974819851877,
+      "post_attention_layernorm": 0.9999970027032345,
+      "q_after_rope": 0.9999998276376547,
+      "q_same_bf16_table": 0.9999999395108721,
+      "current_k_same_bf16_table": 0.9999993970581871,
+      "current_v_quantized_hf": 0.9999995672600798,
+      "current_v_max_error": 0.0078125,
+      "cached_k": 0.9999984596221739,
+      "cached_v": 0.9999985497621832,
+      "sdpa_same_qkv": 0.9999999759459556,
+      "o_same_input": 0.9999999175016235,
+      "qkv": 0.999999941252786
+    },
+    "router_detail": {},
+    "hf_routes": [
+      5,
+      47,
+      76,
+      11,
+      121,
+      19,
+      107,
+      114
+    ],
+    "cpu_same_residual_routes": [
+      5,
+      47,
+      76,
+      11,
+      121,
+      19,
+      107,
+      114
+    ],
+    "tt_routes": [
+      5,
+      11,
+      19,
+      47,
+      76,
+      107,
+      114,
+      121
+    ]
+  },
+  {
+    "slot": 6,
+    "residual_pcc": 0.9999994411116846,
+    "stages": {
+      "input_layernorm": 1.0,
+      "self_attn": 0.9999974815394128,
+      "post_attention_layernorm": 0.9999973016429502,
+      "q_after_rope": 0.9999998423165802,
+      "q_same_bf16_table": 0.9999999398527888,
+      "current_k_same_bf16_table": 0.9999995149625056,
+      "current_v_quantized_hf": 0.9999993169728343,
+      "current_v_max_error": 0.015625,
+      "cached_k": 0.9999984802637026,
+      "cached_v": 0.9999985443096637,
+      "sdpa_same_qkv": 0.9999999672835335,
+      "o_same_input": 0.9999999172719861,
+      "qkv": 0.9999999404167151
+    },
+    "router_detail": {},
+    "hf_routes": [
+      15,
+      6,
+      30,
+      69,
+      117,
+      20,
+      73,
+      125
+    ],
+    "cpu_same_residual_routes": [
+      15,
+      6,
+      30,
+      69,
+      117,
+      20,
+      73,
+      125
+    ],
+    "tt_routes": [
+      6,
+      15,
+      20,
+      30,
+      69,
+      73,
+      117,
+      125
+    ]
+  },
+  {
+    "slot": 7,
+    "residual_pcc": 0.9999994606264471,
+    "stages": {
+      "input_layernorm": 0.9999999999999981,
+      "self_attn": 0.9999977490737322,
+      "post_attention_layernorm": 0.9999976446022198,
+      "q_after_rope": 0.9999998359763915,
+      "q_same_bf16_table": 0.9999999437815874,
+      "current_k_same_bf16_table": 0.9999995869738308,
+      "current_v_quantized_hf": 0.9999993485073658,
+      "current_v_max_error": 0.015625,
+      "cached_k": 0.9999984406472663,
+      "cached_v": 0.9999985432694574,
+      "sdpa_same_qkv": 0.9999999663367125,
+      "o_same_input": 0.9999999230883855,
+      "qkv": 0.9999999431093172
+    },
+    "router_detail": {},
+    "hf_routes": [
+      55,
+      42,
+      36,
+      51,
+      83,
+      122,
+      8,
+      10
+    ],
+    "cpu_same_residual_routes": [
+      55,
+      42,
+      36,
+      51,
+      83,
+      122,
+      8,
+      10
+    ],
+    "tt_routes": [
+      8,
+      10,
+      36,
+      42,
+      51,
+      55,
+      83,
+      122
+    ]
+  },
+  {
+    "slot": 8,
+    "residual_pcc": 0.9999994655317822,
+    "stages": {
+      "input_layernorm": 0.9999999999999988,
+      "self_attn": 0.9999975464091335,
+      "post_attention_layernorm": 0.9999978484794011,
+      "q_after_rope": 0.9999998237145902,
+      "q_same_bf16_table": 0.9999999419429051,
+      "current_k_same_bf16_table": 0.999999577876855,
+      "current_v_quantized_hf": 0.9999992935223636,
+      "current_v_max_error": 0.015625,
+      "cached_k": 0.9999984443971143,
+      "cached_v": 0.9999985749270509,
+      "sdpa_same_qkv": 0.999999959883743,
+      "o_same_input": 0.999999928636276,
+      "qkv": 0.9999999429678471
+    },
+    "router_detail": {},
+    "hf_routes": [
+      37,
+      23,
+      18,
+      14,
+      104,
+      24,
+      74,
+      97
+    ],
+    "cpu_same_residual_routes": [
+      37,
+      23,
+      18,
+      14,
+      104,
+      24,
+      74,
+      97
+    ],
+    "tt_routes": [
+      14,
+      18,
+      23,
+      24,
+      37,
+      74,
+      97,
+      104
+    ]
+  },
+  {
+    "slot": 9,
+    "residual_pcc": 0.9999991554907232,
+    "stages": {
+      "input_layernorm": 0.9999999999999986,
+      "self_attn": 0.9999966202905863,
+      "post_attention_layernorm": 0.9999956157350957,
+      "q_after_rope": 0.9999998390598026,
+      "q_same_bf16_table": 0.9999999391200465,
+      "current_k_same_bf16_table": 0.999999270408351,
+      "current_v_quantized_hf": 0.9999995305520137,
+      "current_v_max_error": 0.0078125,
+      "cached_k": 0.9999984425347048,
+      "cached_v": 0.9999985477488108,
+      "sdpa_same_qkv": 0.9999999676528962,
+      "o_same_input": 0.9999998963581581,
+      "qkv": 0.9999999397015841
+    },
+    "router_detail": {},
+    "hf_routes": [
+      2,
+      25,
+      111,
+      112,
+      26,
+      99,
+      47,
+      37
+    ],
+    "cpu_same_residual_routes": [
+      2,
+      111,
+      25,
+      112,
+      26,
+      99,
+      47,
+      37
+    ],
+    "tt_routes": [
+      2,
+      25,
+      26,
+      37,
+      47,
+      99,
+      111,
+      112
+    ]
+  },
+  {
+    "slot": 10,
+    "residual_pcc": 0.9999994144820197,
+    "stages": {
+      "input_layernorm": 0.999999999999999,
+      "self_attn": 0.999996841808252,
+      "post_attention_layernorm": 0.9999975398065365,
+      "q_after_rope": 0.9999998211651006,
+      "q_same_bf16_table": 0.9999999393052017,
+      "current_k_same_bf16_table": 0.9999989897700045,
+      "current_v_quantized_hf": 0.9999992698946062,
+      "current_v_max_error": 0.015625,
+      "cached_k": 0.9999984591247736,
+      "cached_v": 0.9999985603735931,
+      "sdpa_same_qkv": 0.9999999597345157,
+      "o_same_input": 0.999999900838232,
+      "qkv": 0.9999999392943489
+    },
+    "router_detail": {},
+    "hf_routes": [
+      127,
+      17,
+      18,
+      32,
+      101,
+      38,
+      66,
+      73
+    ],
+    "cpu_same_residual_routes": [
+      127,
+      17,
+      18,
+      32,
+      38,
+      101,
+      66,
+      73
+    ],
+    "tt_routes": [
+      17,
+      18,
+      32,
+      38,
+      66,
+      73,
+      101,
+      127
+    ]
+  },
+  {
+    "slot": 11,
+    "residual_pcc": 0.9999994310696118,
+    "stages": {
+      "input_layernorm": 0.9999999999999987,
+      "self_attn": 0.9999975750226788,
+      "post_attention_layernorm": 0.9999971553486113,
+      "q_after_rope": 0.9999998277109814,
+      "q_same_bf16_table": 0.9999999423612802,
+      "current_k_same_bf16_table": 0.9999994112797687,
+      "current_v_quantized_hf": 0.9999992463145496,
+      "current_v_max_error": 0.015625,
+      "cached_k": 0.9999984659789777,
+      "cached_v": 0.9999985402005775,
+      "sdpa_same_qkv": 0.9999999745976365,
+      "o_same_input": 0.9999999215158032,
+      "qkv": 0.9999999422442359
+    },
+    "router_detail": {
+      "norm_pcc": 1.0,
+      "linear_same_input_pcc": 0.9999999438986504,
+      "linear_max_error": 0.0009177923202514648,
+      "tt_score_ranks": [
+        17,
+        13,
+        86,
+        16,
+        73,
+        14,
+        97,
+        111,
+        72,
+        39,
+        34,
+        19
+      ],
+      "cpu_same_scaled_ranks": [
+        17,
+        13,
+        86,
+        16,
+        73,
+        14,
+        97,
+        72,
+        111,
+        39,
+        34,
+        19
+      ]
+    },
+    "hf_routes": [
+      17,
+      13,
+      86,
+      16,
+      73,
+      14,
+      97,
+      72
+    ],
+    "cpu_same_residual_routes": [
+      17,
+      13,
+      86,
+      16,
+      73,
+      14,
+      97,
+      72
+    ],
+    "tt_routes": [
+      13,
+      14,
+      16,
+      17,
+      73,
+      86,
+      97,
+      111
+    ]
+  },
+  {
+    "slot": 12,
+    "residual_pcc": 0.9999994988018068,
+    "stages": {
+      "input_layernorm": 0.9999999999999989,
+      "self_attn": 0.9999977538381286,
+      "post_attention_layernorm": 0.9999974831929636,
+      "q_after_rope": 0.9999998264771061,
+      "q_same_bf16_table": 0.9999999391094804,
+      "current_k_same_bf16_table": 0.9999995369876402,
+      "current_v_quantized_hf": 0.9999993784396527,
+      "current_v_max_error": 0.015625,
+      "cached_k": 0.9999984612580278,
+      "cached_v": 0.9999985381115377,
+      "sdpa_same_qkv": 0.9999999600812849,
+      "o_same_input": 0.9999999217554476,
+      "qkv": 0.9999999401541511
+    },
+    "router_detail": {},
+    "hf_routes": [
+      2,
+      18,
+      49,
+      70,
+      38,
+      116,
+      67,
+      60
+    ],
+    "cpu_same_residual_routes": [
+      2,
+      18,
+      49,
+      70,
+      38,
+      116,
+      67,
+      60
+    ],
+    "tt_routes": [
+      2,
+      18,
+      38,
+      49,
+      60,
+      67,
+      70,
+      116
+    ]
+  },
+  {
+    "slot": 13,
+    "residual_pcc": 0.9999994079199125,
+    "stages": {
+      "input_layernorm": 0.999999999999999,
+      "self_attn": 0.9999975054917686,
+      "post_attention_layernorm": 0.9999975095774761,
+      "q_after_rope": 0.9999998200978799,
+      "q_same_bf16_table": 0.9999999391746728,
+      "current_k_same_bf16_table": 0.9999994306127854,
+      "current_v_quantized_hf": 0.9999992185866667,
+      "current_v_max_error": 0.015625,
+      "cached_k": 0.999998443696504,
+      "cached_v": 0.9999985804474264,
+      "sdpa_same_qkv": 0.9999999578486514,
+      "o_same_input": 0.9999999169879289,
+      "qkv": 0.9999999396937369
+    },
+    "router_detail": {},
+    "hf_routes": [
+      51,
+      56,
+      112,
+      92,
+      81,
+      70,
+      48,
+      120
+    ],
+    "cpu_same_residual_routes": [
+      51,
+      56,
+      112,
+      92,
+      81,
+      70,
+      48,
+      120
+    ],
+    "tt_routes": [
+      48,
+      51,
+      56,
+      70,
+      81,
+      92,
+      112,
+      120
+    ]
+  },
+  {
+    "slot": 14,
+    "residual_pcc": 0.9999994824790447,
+    "stages": {
+      "input_layernorm": 0.9999999999999989,
+      "self_attn": 0.999997877368245,
+      "post_attention_layernorm": 0.9999973935188987,
+      "q_after_rope": 0.9999998265355575,
+      "q_same_bf16_table": 0.9999999401955855,
+      "current_k_same_bf16_table": 0.9999994898647205,
+      "current_v_quantized_hf": 0.9999993760735435,
+      "current_v_max_error": 0.0078125,
+      "cached_k": 0.9999984470122134,
+      "cached_v": 0.9999985777966347,
+      "sdpa_same_qkv": 0.9999999587070328,
+      "o_same_input": 0.9999999268463197,
+      "qkv": 0.999999939778811
+    },
+    "router_detail": {},
+    "hf_routes": [
+      104,
+      39,
+      26,
+      69,
+      86,
+      84,
+      10,
+      32
+    ],
+    "cpu_same_residual_routes": [
+      104,
+      39,
+      26,
+      69,
+      86,
+      84,
+      10,
+      32
+    ],
+    "tt_routes": [
+      10,
+      26,
+      32,
+      39,
+      69,
+      84,
+      86,
+      104
+    ]
+  },
+  {
+    "slot": 15,
+    "residual_pcc": 0.999999572669293,
+    "stages": {
+      "input_layernorm": 1.0,
+      "self_attn": 0.9999979520716984,
+      "post_attention_layernorm": 0.9999981009886095,
+      "q_after_rope": 0.9999998289364884,
+      "q_same_bf16_table": 0.9999999412790642,
+      "current_k_same_bf16_table": 0.9999993069434512,
+      "current_v_quantized_hf": 0.9999991213834014,
+      "current_v_max_error": 0.015625,
+      "cached_k": 0.999998439221761,
+      "cached_v": 0.9999985451951984,
+      "sdpa_same_qkv": 0.9999999646527087,
+      "o_same_input": 0.9999999164544391,
+      "qkv": 0.9999999420153599
+    },
+    "router_detail": {},
+    "hf_routes": [
+      67,
+      120,
+      35,
+      47,
+      6,
+      23,
+      40,
+      63
+    ],
+    "cpu_same_residual_routes": [
+      67,
+      120,
+      47,
+      35,
+      6,
+      23,
+      40,
+      63
+    ],
+    "tt_routes": [
+      6,
+      23,
+      35,
+      40,
+      47,
+      63,
+      67,
+      120
+    ]
+  },
+  {
+    "slot": 16,
+    "residual_pcc": 0.9999994854542419,
+    "stages": {
+      "input_layernorm": 0.9999999999999996,
+      "self_attn": 0.9999977897455633,
+      "post_attention_layernorm": 0.9999976784182596,
+      "q_after_rope": 0.9999998356510253,
+      "q_same_bf16_table": 0.9999999417047012,
+      "current_k_same_bf16_table": 0.9999994836940638,
+      "current_v_quantized_hf": 0.9999997177937503,
+      "current_v_max_error": 0.0078125,
+      "cached_k": 0.9999984533974167,
+      "cached_v": 0.9999985510585904,
+      "sdpa_same_qkv": 0.9999999546877544,
+      "o_same_input": 0.9999999297550868,
+      "qkv": 0.9999999419727785
+    },
+    "router_detail": {},
+    "hf_routes": [
+      77,
+      67,
+      30,
+      2,
+      127,
+      20,
+      8,
+      12
+    ],
+    "cpu_same_residual_routes": [
+      77,
+      67,
+      30,
+      2,
+      127,
+      20,
+      8,
+      12
+    ],
+    "tt_routes": [
+      2,
+      8,
+      12,
+      20,
+      30,
+      67,
+      77,
+      127
+    ]
+  },
+  {
+    "slot": 17,
+    "residual_pcc": 0.9999994120068794,
+    "stages": {
+      "input_layernorm": 0.9999999999999987,
+      "self_attn": 0.9999976198271776,
+      "post_attention_layernorm": 0.9999973858986912,
+      "q_after_rope": 0.9999998230797504,
+      "q_same_bf16_table": 0.9999999375269998,
+      "current_k_same_bf16_table": 0.9999992304436592,
+      "current_v_quantized_hf": 0.9999992808182585,
+      "current_v_max_error": 0.015625,
+      "cached_k": 0.9999984407397567,
+      "cached_v": 0.9999985624170126,
+      "sdpa_same_qkv": 0.9999999594397034,
+      "o_same_input": 0.9999999021763246,
+      "qkv": 0.9999999383255747
+    },
+    "router_detail": {},
+    "hf_routes": [
+      23,
+      6,
+      127,
+      88,
+      118,
+      18,
+      43,
+      64
+    ],
+    "cpu_same_residual_routes": [
+      23,
+      6,
+      127,
+      88,
+      118,
+      18,
+      43,
+      64
+    ],
+    "tt_routes": [
+      6,
+      18,
+      23,
+      43,
+      64,
+      88,
+      118,
+      127
+    ]
+  },
+  {
+    "slot": 18,
+    "residual_pcc": 0.9999994399250248,
+    "stages": {
+      "input_layernorm": 0.9999999999999999,
+      "self_attn": 0.9999976518015558,
+      "post_attention_layernorm": 0.9999975866072427,
+      "q_after_rope": 0.9999998303837688,
+      "q_same_bf16_table": 0.9999999419425214,
+      "current_k_same_bf16_table": 0.9999995617863,
+      "current_v_quantized_hf": 0.9999994852031452,
+      "current_v_max_error": 0.0078125,
+      "cached_k": 0.9999984334321005,
+      "cached_v": 0.9999985696424665,
+      "sdpa_same_qkv": 0.9999999485057237,
+      "o_same_input": 0.999999917776351,
+      "qkv": 0.9999999419431328
+    },
+    "router_detail": {},
+    "hf_routes": [
+      109,
+      51,
+      102,
+      116,
+      84,
+      91,
+      3,
+      126
+    ],
+    "cpu_same_residual_routes": [
+      109,
+      51,
+      102,
+      116,
+      84,
+      91,
+      3,
+      126
+    ],
+    "tt_routes": [
+      3,
+      51,
+      84,
+      91,
+      102,
+      109,
+      116,
+      126
+    ]
+  },
+  {
+    "slot": 19,
+    "residual_pcc": 0.999999257849667,
+    "stages": {
+      "input_layernorm": 1.0,
+      "self_attn": 0.9999973541737611,
+      "post_attention_layernorm": 0.9999965048232324,
+      "q_after_rope": 0.9999998239548019,
+      "q_same_bf16_table": 0.9999999355721988,
+      "current_k_same_bf16_table": 0.9999994448345711,
+      "current_v_quantized_hf": 0.9999994405980243,
+      "current_v_max_error": 0.015625,
+      "cached_k": 0.9999984575682798,
+      "cached_v": 0.9999985406616423,
+      "sdpa_same_qkv": 0.9999999630774236,
+      "o_same_input": 0.9999999041158864,
+      "qkv": 0.9999999356611774
+    },
+    "router_detail": {},
+    "hf_routes": [
+      9,
+      36,
+      56,
+      52,
+      44,
+      25,
+      24,
+      108
+    ],
+    "cpu_same_residual_routes": [
+      9,
+      36,
+      56,
+      52,
+      44,
+      25,
+      24,
+      108
+    ],
+    "tt_routes": [
+      9,
+      24,
+      25,
+      36,
+      44,
+      52,
+      56,
+      108
+    ]
+  },
+  {
+    "slot": 20,
+    "residual_pcc": 0.9999993533929749,
+    "stages": {
+      "input_layernorm": 0.9999999999999989,
+      "self_attn": 0.9999970952582842,
+      "post_attention_layernorm": 0.9999970053425028,
+      "q_after_rope": 0.99999984213754,
+      "q_same_bf16_table": 0.9999999413699763,
+      "current_k_same_bf16_table": 0.9999992326012059,
+      "current_v_quantized_hf": 0.9999993212448176,
+      "current_v_max_error": 0.015625,
+      "cached_k": 0.9999984513811344,
+      "cached_v": 0.9999985630644251,
+      "sdpa_same_qkv": 0.9999999592594114,
+      "o_same_input": 0.9999999191782035,
+      "qkv": 0.999999943554856
+    },
+    "router_detail": {},
+    "hf_routes": [
+      54,
+      101,
+      117,
+      67,
+      23,
+      90,
+      104,
+      113
+    ],
+    "cpu_same_residual_routes": [
+      54,
+      101,
+      117,
+      67,
+      23,
+      90,
+      104,
+      113
+    ],
+    "tt_routes": [
+      23,
+      54,
+      67,
+      90,
+      101,
+      104,
+      113,
+      117
+    ]
+  },
+  {
+    "slot": 21,
+    "residual_pcc": 0.9999994546225321,
+    "stages": {
+      "input_layernorm": 0.999999999999999,
+      "self_attn": 0.999997881200795,
+      "post_attention_layernorm": 0.9999974678761273,
+      "q_after_rope": 0.9999998314289633,
+      "q_same_bf16_table": 0.9999999413696036,
+      "current_k_same_bf16_table": 0.9999992744200669,
+      "current_v_quantized_hf": 0.9999989084721352,
+      "current_v_max_error": 0.015625,
+      "cached_k": 0.9999984400156514,
+      "cached_v": 0.999998558624814,
+      "sdpa_same_qkv": 0.9999999585090262,
+      "o_same_input": 0.9999999273792993,
+      "qkv": 0.9999999421767664
+    },
+    "router_detail": {},
+    "hf_routes": [
+      22,
+      39,
+      58,
+      12,
+      122,
+      104,
+      116,
+      84
+    ],
+    "cpu_same_residual_routes": [
+      22,
+      39,
+      58,
+      12,
+      122,
+      104,
+      116,
+      84
+    ],
+    "tt_routes": [
+      12,
+      22,
+      39,
+      58,
+      84,
+      104,
+      116,
+      122
+    ]
+  },
+  {
+    "slot": 22,
+    "residual_pcc": 0.9999993762008705,
+    "stages": {
+      "input_layernorm": 1.0,
+      "self_attn": 0.999997336521571,
+      "post_attention_layernorm": 0.9999970967548915,
+      "q_after_rope": 0.999999818990292,
+      "q_same_bf16_table": 0.9999999384019383,
+      "current_k_same_bf16_table": 0.9999993797750966,
+      "current_v_quantized_hf": 0.9999995195466805,
+      "current_v_max_error": 0.0078125,
+      "cached_k": 0.9999984343664751,
+      "cached_v": 0.9999985836724654,
+      "sdpa_same_qkv": 0.9999999595030895,
+      "o_same_input": 0.9999999184368773,
+      "qkv": 0.9999999394858498
+    },
+    "router_detail": {},
+    "hf_routes": [
+      93,
+      90,
+      110,
+      39,
+      19,
+      70,
+      94,
+      75
+    ],
+    "cpu_same_residual_routes": [
+      93,
+      90,
+      110,
+      39,
+      19,
+      70,
+      94,
+      75
+    ],
+    "tt_routes": [
+      19,
+      39,
+      70,
+      75,
+      90,
+      93,
+      94,
+      110
+    ]
+  },
+  {
+    "slot": 23,
+    "residual_pcc": 0.9999994563276131,
+    "stages": {
+      "input_layernorm": 1.0,
+      "self_attn": 0.9999976462027329,
+      "post_attention_layernorm": 0.999997336524754,
+      "q_after_rope": 0.9999998351088998,
+      "q_same_bf16_table": 0.9999999395178358,
+      "current_k_same_bf16_table": 0.9999995979387242,
+      "current_v_quantized_hf": 0.9999993072219441,
+      "current_v_max_error": 0.015625,
+      "cached_k": 0.9999984553509726,
+      "cached_v": 0.9999985860400942,
+      "sdpa_same_qkv": 0.999999960401953,
+      "o_same_input": 0.9999999094603,
+      "qkv": 0.9999999402966799
+    },
+    "router_detail": {},
+    "hf_routes": [
+      99,
+      3,
+      125,
+      97,
+      13,
+      73,
+      71,
+      27
+    ],
+    "cpu_same_residual_routes": [
+      99,
+      3,
+      125,
+      97,
+      13,
+      73,
+      71,
+      27
+    ],
+    "tt_routes": [
+      3,
+      13,
+      27,
+      71,
+      73,
+      97,
+      99,
+      125
+    ]
+  },
+  {
+    "slot": 24,
+    "residual_pcc": 0.9999995603050646,
+    "stages": {
+      "input_layernorm": 1.0,
+      "self_attn": 0.9999980039080766,
+      "post_attention_layernorm": 0.9999981435711846,
+      "q_after_rope": 0.9999998343886111,
+      "q_same_bf16_table": 0.999999942666832,
+      "current_k_same_bf16_table": 0.9999990829231457,
+      "current_v_quantized_hf": 0.9999995146690219,
+      "current_v_max_error": 0.0078125,
+      "cached_k": 0.999998455225425,
+      "cached_v": 0.9999985870740394,
+      "sdpa_same_qkv": 0.9999999738302905,
+      "o_same_input": 0.9999999191924999,
+      "qkv": 0.9999999457308001
+    },
+    "router_detail": {},
+    "hf_routes": [
+      105,
+      22,
+      36,
+      101,
+      104,
+      108,
+      30,
+      45
+    ],
+    "cpu_same_residual_routes": [
+      105,
+      22,
+      36,
+      101,
+      104,
+      108,
+      30,
+      45
+    ],
+    "tt_routes": [
+      22,
+      30,
+      36,
+      45,
+      101,
+      104,
+      105,
+      108
+    ]
+  },
+  {
+    "slot": 25,
+    "residual_pcc": 0.9999994461063036,
+    "stages": {
+      "input_layernorm": 1.0,
+      "self_attn": 0.9999978401677894,
+      "post_attention_layernorm": 0.9999974897450138,
+      "q_after_rope": 0.9999998397080267,
+      "q_same_bf16_table": 0.9999999400114185,
+      "current_k_same_bf16_table": 0.9999992522857019,
+      "current_v_quantized_hf": 0.9999991587133823,
+      "current_v_max_error": 0.015625,
+      "cached_k": 0.999998443555285,
+      "cached_v": 0.99999854482247,
+      "sdpa_same_qkv": 0.9999999721338079,
+      "o_same_input": 0.9999999205220854,
+      "qkv": 0.9999999401711762
+    },
+    "router_detail": {},
+    "hf_routes": [
+      37,
+      97,
+      58,
+      1,
+      113,
+      91,
+      33,
+      115
+    ],
+    "cpu_same_residual_routes": [
+      37,
+      97,
+      58,
+      1,
+      113,
+      91,
+      33,
+      115
+    ],
+    "tt_routes": [
+      1,
+      33,
+      37,
+      58,
+      91,
+      97,
+      113,
+      115
+    ]
+  },
+  {
+    "slot": 26,
+    "residual_pcc": 0.9999995307454177,
+    "stages": {
+      "input_layernorm": 1.0,
+      "self_attn": 0.9999979475431142,
+      "post_attention_layernorm": 0.9999979511864877,
+      "q_after_rope": 0.9999998214133027,
+      "q_same_bf16_table": 0.9999999369341637,
+      "current_k_same_bf16_table": 0.999999510358085,
+      "current_v_quantized_hf": 0.9999995885868753,
+      "current_v_max_error": 0.0078125,
+      "cached_k": 0.9999984584173902,
+      "cached_v": 0.9999985590908095,
+      "sdpa_same_qkv": 0.9999999642393386,
+      "o_same_input": 0.9999999191169042,
+      "qkv": 0.9999999390938982
+    },
+    "router_detail": {},
+    "hf_routes": [
+      117,
+      118,
+      64,
+      47,
+      102,
+      67,
+      18,
+      127
+    ],
+    "cpu_same_residual_routes": [
+      117,
+      118,
+      64,
+      47,
+      102,
+      67,
+      18,
+      127
+    ],
+    "tt_routes": [
+      18,
+      47,
+      64,
+      67,
+      102,
+      117,
+      118,
+      127
+    ]
+  },
+  {
+    "slot": 27,
+    "residual_pcc": 0.9999994593051592,
+    "stages": {
+      "input_layernorm": 0.9999999999999988,
+      "self_attn": 0.9999976997705198,
+      "post_attention_layernorm": 0.999997624074951,
+      "q_after_rope": 0.9999998440192733,
+      "q_same_bf16_table": 0.9999999411311352,
+      "current_k_same_bf16_table": 0.999999281402059,
+      "current_v_quantized_hf": 0.9999994666816775,
+      "current_v_max_error": 0.015625,
+      "cached_k": 0.9999984541183485,
+      "cached_v": 0.999998571009128,
+      "sdpa_same_qkv": 0.9999999679603496,
+      "o_same_input": 0.9999999195937778,
+      "qkv": 0.9999999414952194
+    },
+    "router_detail": {},
+    "hf_routes": [
+      85,
+      114,
+      37,
+      53,
+      102,
+      15,
+      25,
+      66
+    ],
+    "cpu_same_residual_routes": [
+      85,
+      114,
+      37,
+      53,
+      102,
+      15,
+      66,
+      25
+    ],
+    "tt_routes": [
+      15,
+      25,
+      37,
+      53,
+      66,
+      85,
+      102,
+      114
+    ]
+  },
+  {
+    "slot": 28,
+    "residual_pcc": 0.9999994510851671,
+    "stages": {
+      "input_layernorm": 0.9999999999999999,
+      "self_attn": 0.999997731286824,
+      "post_attention_layernorm": 0.9999975554309506,
+      "q_after_rope": 0.9999998383300291,
+      "q_same_bf16_table": 0.9999999422022255,
+      "current_k_same_bf16_table": 0.9999994790567978,
+      "current_v_quantized_hf": 0.9999993472259381,
+      "current_v_max_error": 0.015625,
+      "cached_k": 0.9999984531352465,
+      "cached_v": 0.9999985541612783,
+      "sdpa_same_qkv": 0.9999999544666744,
+      "o_same_input": 0.9999999241471415,
+      "qkv": 0.9999999428180523
+    },
+    "router_detail": {},
+    "hf_routes": [
+      111,
+      1,
+      22,
+      104,
+      89,
+      114,
+      37,
+      74
+    ],
+    "cpu_same_residual_routes": [
+      111,
+      1,
+      22,
+      104,
+      89,
+      114,
+      37,
+      74
+    ],
+    "tt_routes": [
+      1,
+      22,
+      37,
+      74,
+      89,
+      104,
+      111,
+      114
+    ]
+  },
+  {
+    "slot": 29,
+    "residual_pcc": 0.9999995003377707,
+    "stages": {
+      "input_layernorm": 0.9999999999999984,
+      "self_attn": 0.9999980842501498,
+      "post_attention_layernorm": 0.9999977616751561,
+      "q_after_rope": 0.999999826375076,
+      "q_same_bf16_table": 0.9999999397521738,
+      "current_k_same_bf16_table": 0.999999477550001,
+      "current_v_quantized_hf": 0.9999994540056616,
+      "current_v_max_error": 0.015625,
+      "cached_k": 0.9999984528383274,
+      "cached_v": 0.9999985775499075,
+      "sdpa_same_qkv": 0.9999999537072557,
+      "o_same_input": 0.9999999203870549,
+      "qkv": 0.9999999389170792
+    },
+    "router_detail": {},
+    "hf_routes": [
+      86,
+      31,
+      10,
+      5,
+      19,
+      121,
+      103,
+      56
+    ],
+    "cpu_same_residual_routes": [
+      86,
+      31,
+      10,
+      5,
+      19,
+      121,
+      103,
+      56
+    ],
+    "tt_routes": [
+      5,
+      10,
+      19,
+      31,
+      56,
+      86,
+      103,
+      121
+    ]
+  },
+  {
+    "slot": 30,
+    "residual_pcc": 0.9999994432804697,
+    "stages": {
+      "input_layernorm": 0.999999999999999,
+      "self_attn": 0.999997710239087,
+      "post_attention_layernorm": 0.9999976230986307,
+      "q_after_rope": 0.9999998503319177,
+      "q_same_bf16_table": 0.9999999440922215,
+      "current_k_same_bf16_table": 0.9999996040401667,
+      "current_v_quantized_hf": 0.9999992626719876,
+      "current_v_max_error": 0.015625,
+      "cached_k": 0.9999984505701008,
+      "cached_v": 0.9999985423965642,
+      "sdpa_same_qkv": 0.9999999684538164,
+      "o_same_input": 0.9999999157883008,
+      "qkv": 0.9999999430544394
+    },
+    "router_detail": {},
+    "hf_routes": [
+      22,
+      18,
+      21,
+      37,
+      29,
+      93,
+      121,
+      32
+    ],
+    "cpu_same_residual_routes": [
+      22,
+      18,
+      21,
+      37,
+      29,
+      93,
+      121,
+      32
+    ],
+    "tt_routes": [
+      18,
+      21,
+      22,
+      29,
+      32,
+      37,
+      93,
+      121
+    ]
+  },
+  {
+    "slot": 31,
+    "residual_pcc": 0.9999993698266204,
+    "stages": {
+      "input_layernorm": 0.9999999999999988,
+      "self_attn": 0.999997748464004,
+      "post_attention_layernorm": 0.9999970236449718,
+      "q_after_rope": 0.9999998373687802,
+      "q_same_bf16_table": 0.9999999434313956,
+      "current_k_same_bf16_table": 0.9999995065959831,
+      "current_v_quantized_hf": 0.9999996489100097,
+      "current_v_max_error": 0.0078125,
+      "cached_k": 0.9999984252447535,
+      "cached_v": 0.9999985703387112,
+      "sdpa_same_qkv": 0.9999999616179297,
+      "o_same_input": 0.9999999156123923,
+      "qkv": 0.9999999441502149
+    },
+    "router_detail": {},
+    "hf_routes": [
+      34,
+      121,
+      30,
+      43,
+      37,
+      77,
+      39,
+      80
+    ],
+    "cpu_same_residual_routes": [
+      34,
+      121,
+      30,
+      43,
+      37,
+      77,
+      39,
+      80
+    ],
+    "tt_routes": [
+      30,
+      34,
+      37,
+      39,
+      43,
+      77,
+      80,
+      121
+    ]
+  }
+]

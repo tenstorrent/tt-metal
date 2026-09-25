@@ -1,0 +1,6 @@
+# Keep bulky profiler captures locally; commit compact reports and provenance.
+doc/functional_decoder/tracy/*/raw*/
+doc/functional_decoder/watcher/*/generated/
+doc/functional_decoder/tracy/*/*_all_replays_perf_report.txt
+# Pytest's absolute-path aliases are machine-local; keep the result JSONs.
+doc/functional_decoder/pytest*/*current

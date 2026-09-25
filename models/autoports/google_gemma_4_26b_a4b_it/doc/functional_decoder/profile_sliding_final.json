@@ -1,0 +1,37 @@
+{
+  "runtime_prefill_audit": "clean",
+  "program_cache_miss_guard": true,
+  "prefill_cache_entries": 195,
+  "prefix_length": 0,
+  "layer_type": "sliding_attention",
+  "phase": "prefill",
+  "length": 4096,
+  "real_weights": true,
+  "pcc": 0.9985263365689756,
+  "passed": true,
+  "decode": {
+    "pcc": 0.9998601990854121,
+    "passed": true,
+    "traced": true,
+    "runtime_decode_audit": "clean",
+    "repeated_equal": true,
+    "steps": 128,
+    "min_pcc": 0.9998601990854121,
+    "positions": [
+      4096,
+      4223
+    ],
+    "checks": [
+      {
+        "position": 4096,
+        "pcc": 0.9998601990854121,
+        "passed": true
+      },
+      {
+        "position": 4223,
+        "pcc": 0.9999245276573036,
+        "passed": true
+      }
+    ]
+  }
+}

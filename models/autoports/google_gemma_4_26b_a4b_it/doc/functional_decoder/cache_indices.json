@@ -1,0 +1,15 @@
+{
+  "results": [
+    {
+      "kv_heads": 8,
+      "max_physical_page": 262144,
+      "exact": true
+    },
+    {
+      "kv_heads": 2,
+      "max_physical_page": 262144,
+      "exact": true
+    }
+  ],
+  "runtime_audit": "clean"
+}
