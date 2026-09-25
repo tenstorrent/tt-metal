@@ -127,6 +127,8 @@ void kernel_main() {
     constexpr uint32_t qsb =
         get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::QUERY_SUBBLOCK);  // query tile-rows per DST group
     constexpr uint32_t packed_row_bytes = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::PACKED_ROW_BYTES);
+    constexpr uint32_t cb_sink = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_SINK);
+    constexpr bool use_sink = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::USE_SINK) != 0;
     constexpr uint32_t Sqt = H / tt::constants::TILE_HEIGHT;  // total query tile-rows (32 heads each)
     constexpr uint32_t q_groups = Sqt / qsb;                  // DST-bound work runs in this many query-row passes
     constexpr uint32_t KT_stride = Skt;                       // cb_qk_im physical row width
@@ -491,6 +493,9 @@ void kernel_main() {
             if (is_last) {
                 // Finalize: row-sum (matmul vs col-identity) -> recip -> out *= 1/sum -> cb_out_im.
                 // normalize_row_streaming is DST-safe for any sbh, so it does all Sqt rows in one call.
+                // Attention sink (optional): the per-head sink logit joins the softmax denominator as
+                // exp((sink - max) * scale) with no V contribution -- folded into the row-sum column here,
+                // from the [Sqt, 1] sink column tiles (row = head), against this token's final running max.
                 normalize_row_streaming<
                     /*profiling_enabled=*/false,
                     vDHt,
@@ -498,7 +503,11 @@ void kernel_main() {
                     cb_col_identity,
                     cb_recip_scratch,
                     cb_out_im,
-                    scale_fp32>(sum_cur.get_cb_id(), out_cur.get_cb_id(), Sqt);
+                    scale_fp32,
+                    /*use_attention_sink=*/use_sink,
+                    cb_sink,
+                    /*sink_is_column=*/true>(
+                    sum_cur.get_cb_id(), out_cur.get_cb_id(), Sqt, max_cur.get_cb_id(), /*sink_row_offset=*/0);
                 max_cur.pop_front(Sqt);  // running max no longer needed
             }
 

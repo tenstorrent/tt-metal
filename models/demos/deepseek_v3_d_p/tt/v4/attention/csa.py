@@ -17,6 +17,8 @@ entries per 5120-token chunk -- no tail tile). Attention itself is TtHCA's dense
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
@@ -297,22 +299,44 @@ class TtCSAIndexer(_TtHCABase):
         )
 
     def _tp_all_reduce_via_gather(self, t):
+        """TP all-reduce of the per-chip partial scores as gather-then-sum (dim 1), on the tt_ccl-owned semaphores.
+        DS4F-0255: this was ``high_bw_all_gather``, which allocates its own L1_SMALL semaphores per PROGRAM and never
+        frees them; with the live extent every distinct score width (one per chunk index x layer) is a new program,
+        and the 1152 B L1_SMALL bank ran out at 72 programs on the 43-layer 128k run. ``all_gather_async`` reuses the
+        pre-allocated, cycled global semaphores, so the program count no longer costs L1."""
         if self.tp_factor == 1:
             return t
-        key = tuple(t.shape)
-        buf = self._gather_bufs.get(key)
-        if buf is None:
-            buf = self._gather_bufs[key] = self._from_torch(
-                torch.zeros(1, self.tp_factor, key[2], key[3]), dtype=t.dtype
-            )
-        g = ttnn.experimental.high_bw_all_gather(
-            t, dim=1, output_tensor=buf, num_links=self.ccl_num_links, cluster_axis=self.tp_axis
+        g = ttnn.experimental.all_gather_async(
+            t,
+            dim=1,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
+            num_links=self.ccl_num_links,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=self.ccl_topology,
+            cluster_axis=self.tp_axis,
         )
         return ttnn.experimental.fast_reduce_nc(g, dims=[1], output=None, compute_kernel_config=self.fp32)
 
     def select(self, q_latent, hidden_states, cos, sin, keys, mask_block):
         """-> additive [1, 1, S_l, cap] mask: 0 on the top-k causally visible entries of each query, -inf else.
         ``keys`` is the index-key cache [1, 1, cap, Dh] (replicated), ``mask_block`` the causal 0/-inf block."""
+        scores = self._scores(q_latent, hidden_states, cos, sin, keys, mask_block)
+        cap = scores.shape[3]
+        k = min(self.topk, cap)
+        theta = ttnn.min(ttnn.topk(scores, k=k, dim=-1, largest=True, sorted=True)[0], dim=-1, keepdim=True)
+        return ttnn.add(ttnn.log(ttnn.ge(scores, theta)), mask_block)
+
+    def select_indices(self, q_latent, hidden_states, cos, sin, keys, mask_block):
+        """-> [1, 1, S_l, topk] entry indices (uint32, TILE) of each query's top-k causally visible entries, for the
+        sparse attention path. The caller guarantees every query sees >= topk entries (no -inf pick)."""
+        scores = self._scores(q_latent, hidden_states, cos, sin, keys, mask_block)
+        assert scores.shape[3] >= self.topk, (scores.shape, self.topk)
+        idx = ttnn.topk(scores, k=self.topk, dim=-1, largest=True, sorted=True)[1]
+        return idx if idx.dtype == ttnn.uint32 else ttnn.typecast(idx, ttnn.uint32)
+
+    def _scores(self, q_latent, hidden_states, cos, sin, keys, mask_block):
+        """Indexer scores [1, 1, S_l, cap]: sum_h relu(q_h . k) * w_h * scale, TP-reduced, + the causal block."""
         S_l = q_latent.shape[2]
         heads_local = self.n_heads // self.tp_factor
         q = ttnn.linear(q_latent, self.wq_b, memory_config=self.memory_config)
@@ -333,11 +357,7 @@ class TtCSAIndexer(_TtHCABase):
             ttnn.matmul(w, self.head_sel, memory_config=self.memory_config), (0, 3, 2, 1)
         )  # [1, H_l, S_l, 1]
         scores = ttnn.multiply(ttnn.sum(ttnn.multiply(scores, w), dim=1, keepdim=True), self.scale)  # [1, 1, S_l, cap]
-        scores = ttnn.add(self._tp_all_reduce_via_gather(scores), mask_block)
-        cap = scores.shape[3]
-        k = min(self.topk, cap)
-        theta = ttnn.min(ttnn.topk(scores, k=k, dim=-1, largest=True, sorted=True)[0], dim=-1, keepdim=True)
-        return ttnn.add(ttnn.log(ttnn.ge(scores, theta)), mask_block)
+        return ttnn.add(self._tp_all_reduce_via_gather(scores), mask_block)
 
 
 class TtCSA(TtHCA):
@@ -345,12 +365,28 @@ class TtCSA(TtHCA):
     indexer's selection mask on the compressed columns, and tile-aligned entry writes (path B)."""
 
     def __init__(
-        self, device, *, compressor: TtCSACompressor, indexer: TtCSAIndexer, live_extent: bool = True, **kwargs
+        self,
+        device,
+        *,
+        compressor: TtCSACompressor,
+        indexer: TtCSAIndexer,
+        live_extent: bool = True,
+        sparse_path: bool | None = None,
+        **kwargs,
     ):
         kwargs.setdefault("rope_layer_type", "compress")
         super().__init__(device, compressor=compressor, **kwargs)
         self.indexer = indexer
         self.live_extent = bool(live_extent)  # DS4F-0252: attention over the live entries, not the capacity
+        # PATH A (plan section 3 / DS4F-0252): sparse_sdpa over [128 window rows | top-k entries] per query instead of
+        # the dense masked SDPA over every live entry. Used once every query of a chunk sees >= topk entries (so no
+        # sentinel is ever needed: the kernel wants sentinels as a contiguous tail); chunk 0 stays on path B.
+        self.sparse_path = (
+            os.environ.get("PREFILL_CSA_SPARSE", "0") == "1" if sparse_path is None else bool(sparse_path)
+        )
+        self._window_idx_dev = {}
+        self._sink_col_dev = None
+        self.last_path = None
 
     @staticmethod
     def prepare_input(hidden, sp_factor: int, compress_rate: int = ttnn.TILE_SIZE):
@@ -452,19 +488,30 @@ class TtCSA(TtHCA):
             comp_live = ttnn.slice(state.compressed_kv, [0, 0, 0, 0], [1, 1, cap_live, self.head_dim])
         else:
             keys_live, block_live, comp_live = state.index_k, mask_block, state.compressed_kv
-        mask_sel = self.indexer.select(q_latent, hidden_states, cos, sin, keys_live, block_live)
-        self.debug_last_selection = mask_sel  # tests compare the selected sets with the reference block bias
-        attn, next_carry, slab = self._attention(
-            q,
-            sliding_kv,
-            comp_live,
-            mask_sel,
-            cos,
-            sin,
-            carry=state.sliding_carry,
-            kv_actual=state.kv_actual,
-            real_len=real_len,
-        )
+        # every query of this chunk sees >= topk entries (and a full 128-token window) -> path A needs no sentinels
+        use_sparse = self.sparse_path and state.kv_actual >= max(self.sliding_window, self.indexer.topk * rate)
+        if use_sparse:
+            idx = self.indexer.select_indices(q_latent, hidden_states, cos, sin, keys_live, block_live)
+            self.debug_last_selection = None
+            self.last_path = "A"
+            attn, next_carry, slab = self._attention_sparse(
+                q, sliding_kv, comp_live, idx, cos, sin, carry=state.sliding_carry, real_len=real_len
+            )
+        else:
+            mask_sel = self.indexer.select(q_latent, hidden_states, cos, sin, keys_live, block_live)
+            self.debug_last_selection = mask_sel  # tests compare the selected sets with the reference block bias
+            self.last_path = "B"
+            attn, next_carry, slab = self._attention(
+                q,
+                sliding_kv,
+                comp_live,
+                mask_sel,
+                cos,
+                sin,
+                carry=state.sliding_carry,
+                kv_actual=state.kv_actual,
+                real_len=real_len,
+            )
         if export is not None:
             self._export_csa(export, entries, keys, slab, state, real_len)
         state.entry_count += n_new
@@ -499,6 +546,110 @@ class TtCSA(TtHCA):
                 kv_actual_global=(row + j * piece) * self.sp_factor,
                 cluster_axis=self.sp_axis,
             )
+
+    # ---- PATH A: sparse attention over [window | top-k entries] ---------------------------------------------------
+    def _window_indices(self, seq_local: int):
+        """[1, 1, S_l, 128] uint32 ROW_MAJOR, per SP chip: slab rows of the 128 keys ending at each query. The slab is
+        ``[carry 128 | chunk S | entries]``, so chunk-local token t sits at row t + 128 and its window is rows
+        t+1 .. t+128 (the carry holds the previous chunk's last 128 tokens). SP chip r owns tokens r*S_l .. ."""
+        dev = self._window_idx_dev.get(seq_local)
+        if dev is None:
+            S = seq_local * self.sp_factor
+            win = (
+                torch.arange(S, dtype=torch.int32).view(1, 1, S, 1)
+                + 1
+                + torch.arange(self.sliding_window, dtype=torch.int32).view(1, 1, 1, -1)
+            )
+            dev = self._window_idx_dev[seq_local] = self._from_torch(
+                win, mesh_mapper=self._mesh_mapper(sp_dim=2), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+            )
+        return dev
+
+    def _sink_column(self, all_heads: bool):
+        """[1, 1, H, 32] bf16 TILE: each head's sink / scale in column 0 (sparse_sdpa's attention_sink contract). All
+        heads replicated when the op runs on the head-gathered q, else this chip's TP shard of heads."""
+        dev = self._sink_col_dev.get(all_heads) if isinstance(self._sink_col_dev, dict) else None
+        if dev is None:
+            if not isinstance(self._sink_col_dev, dict):
+                self._sink_col_dev = {}
+            col = (
+                self._sinks_over_scale_host.view(1, 1, self.num_heads, 1).expand(1, 1, self.num_heads, 32).contiguous()
+            )
+            dev = self._sink_col_dev[all_heads] = self._from_torch(
+                col, mesh_mapper=None if all_heads else self._mesh_mapper(tp_dim=2)
+            )
+        return dev
+
+    def _attention_sparse(self, q, sliding_kv, compressed_kv, topk_idx, cos, sin, carry, real_len: int):
+        """Path A. Same inputs as ``_attention`` but the indexer's top-k INDICES instead of its mask: builds the
+        row-major slab ``[carry | chunk (SP-gathered) | live entries]``, per-query indices ``[window 128 | top-k]``
+        (all valid, so no sentinels), transposes the TP sharding from heads to sequence around the op (sparse_sdpa
+        wants H % 32 == 0), adds the sink, and undoes V's RoPE exactly like path B. Returns ``(attn, next_carry, slab)``.
+        """
+        batch, seq_local = q.shape[0], q.shape[2]
+        seq_len = seq_local * self.sp_factor
+        heads_local = self.num_heads // self.tp_factor
+        if self.sp_factor > 1:
+            sliding_kv = ttnn.experimental.all_gather_async(
+                sliding_kv,
+                dim=2,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.sp_axis),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.sp_axis),
+                num_links=self.ccl_num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=self.tp_ccl_topology,
+                cluster_axis=self.sp_axis,
+            )
+        start, end = self._carry_index[self._carry_key(real_len)]
+        next_carry = ttnn.slice(sliding_kv, start, end, slice_dim=2, num_devices=seq_len // self.sliding_window)
+
+        # the slab, row-major for the gather kernel: rows [0,128) carry, [128, 128+S) this chunk, then the entries
+        kv_rm = ttnn.to_layout(ttnn.concat([carry, sliding_kv, compressed_kv], dim=2), ttnn.ROW_MAJOR_LAYOUT)
+        # indices: window rows (constant per chip) ++ entry rows (top-k + the slab offset of the entries)
+        ent = ttnn.typecast(topk_idx, ttnn.int32)
+        ent = ttnn.add(ent, self.sliding_window + seq_len)
+        ent = ttnn.to_layout(ttnn.typecast(ent, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT)
+        idx = ttnn.concat([self._window_indices(seq_local), ent], dim=3)  # [1, 1, S_l, 128 + topk]
+        # q: sparse_sdpa wants H % 32 == 0 per chip; at TP 4 the head shard is 16, so transpose the TP sharding from heads
+        # to sequence with one all-to-all (mla.py _sparse_mla pattern: each chip sends its destination sequence quarter,
+        # receives every head quarter), split the (TP-identical) indices the same way, and invert after the op.
+        transpose = self.tp_factor > 1 and heads_local % ttnn.TILE_SIZE != 0
+        if transpose:
+            q = ttnn.experimental.all_to_all_async_generic(
+                q,
+                in_dim=1,
+                out_dim=2,
+                num_links=self.ccl_num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cluster_axis=self.tp_axis,
+            )  # [1, H, S_l/tp, Dh]
+            idx = ttnn.mesh_partition(idx, dim=2, cluster_axis=self.tp_axis)
+        q_rm = ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT)
+        out = ttnn.transformer.sparse_sdpa(
+            q_rm,
+            kv_rm,
+            idx,
+            self.head_dim,
+            kv_format=ttnn.transformer.SparseKVFormat.BF16,
+            scale=self.scaling,
+            k_chunk_size=128,
+            attention_sink=self._sink_column(transpose),
+        )  # [1, H or H_l, rows, head_dim] ROW_MAJOR
+        out = ttnn.to_layout(out, ttnn.TILE_LAYOUT)
+        if transpose:
+            out = ttnn.experimental.all_to_all_async_generic(
+                out,
+                in_dim=2,
+                out_dim=1,
+                num_links=self.ccl_num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cluster_axis=self.tp_axis,
+            )  # back to [1, H_l, S_l, Dh]
+        nope_dim = self.head_dim - self.rope_head_dim
+        nope = ttnn.slice(out, [0, 0, 0, 0], [batch, heads_local, seq_local, nope_dim])
+        rope = ttnn.slice(out, [0, 0, 0, nope_dim], [batch, heads_local, seq_local, self.head_dim])
+        rope = ttnn.experimental.rotary_embedding_llama(rope, cos, ttnn.neg(sin), self.trans_mat, is_decode_mode=False)
+        return ttnn.concat([nope, rope], dim=-1), next_carry, sliding_kv
 
     def _h128_export(self):
         """[1, 1, 128, 128] the contract's index-key rotation H128 / sqrt(128), built once, bf16 TILE, replicated."""

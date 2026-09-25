@@ -514,6 +514,7 @@ class TtHCA(_TtHCABase):
         # QK -- dividing here cancels the kernel's extra multiply. TP-sharded to match the query heads.
         sinks_host = sinks.detach().reshape(1, self.num_heads, 1, 1) / self.scaling
         self.sinks_sdpa = self._from_torch(sinks_host, mesh_mapper=self._mesh_mapper(tp_dim=1))
+        self._sinks_over_scale_host = sinks_host.reshape(-1).float().clone()  # all heads; CSA path A's sink column
 
         self.wq_a = self._to_tt_linear_weight(q_a_proj_weight, tp_shard_dim=2, cache_name="wq_a")
         self.wq_b = self._to_tt_linear_weight(q_b_proj_weight, tp_shard_dim=3, cache_name="wq_b")

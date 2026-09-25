@@ -182,6 +182,49 @@ def test_csa_forward(mesh_device, device_params, sp_axis, tp_axis, seq_len):
     assert ok, pcc
 
 
+@pytest.mark.parametrize(
+    "mesh_device, device_params, sp_axis, tp_axis", _MESH_CONFIGS, indirect=["mesh_device", "device_params"]
+)
+def test_csa_sparse_path_matches_dense(mesh_device, device_params, sp_axis, tp_axis):
+    """PATH A (sparse_sdpa over [window | top-k], sink) vs PATH B (dense masked SDPA) on the same chunked prefill:
+    both vs the reference (>= _BLOCK_PCC) and A vs B on the chunks that take path A (kv_actual >= topk*rate = 2048)."""
+    chunk_size, iters_valid = 1024, [1024, 1024, 1024, 1024]
+    torch.manual_seed(_SEED)
+    cfg = deepseek_v4_flash_hf_config(num_hidden_layers=4)
+    ref = _ref_layer(cfg)
+    total = sum(iters_valid)
+    hidden = torch.randn(1, total, cfg.hidden_size)
+    out_ref = _ref_forward(ref, hidden, cfg.sliding_window)
+    outs, paths = {}, {}
+    for sparse in (False, True):
+        tt = TtCSA.from_reference(mesh_device, ref, cfg, sp_axis=sp_axis, tp_axis=tp_axis, sparse_path=sparse)
+        state = tt.alloc_state(total, chunk_tokens=chunk_size)
+        kv_actual = 0
+        outs[sparse], paths[sparse] = [], []
+        for valid in iters_valid:
+            chunk = hidden[:, kv_actual : kv_actual + valid]
+            out = tt(_to_device(mesh_device, chunk.unsqueeze(1), sp_axis, tp_axis), seq_len_actual=valid, state=state)
+            outs[sparse].append(_to_host(mesh_device, out, sp_axis, tp_axis).squeeze(1)[:, :valid].float())
+            paths[sparse].append(tt.last_path)
+            kv_actual += valid
+    assert paths[False] == ["B"] * 4 and paths[True] == ["B", "B", "A", "A"], paths
+    worst = {"A": 1.0, "B": 1.0, "A vs B": 1.0}
+    kv_actual = 0
+    for it, valid in enumerate(iters_valid):
+        ref_slice = out_ref[:, kv_actual : kv_actual + valid].float()
+        _, pcc_b = comp_pcc(ref_slice, outs[False][it])
+        _, pcc_a = comp_pcc(ref_slice, outs[True][it])
+        _, pcc_ab = comp_pcc(outs[False][it], outs[True][it])
+        logger.info(f"  chunk {it} ({paths[True][it]}): dense {pcc_b:.6f}  sparse {pcc_a:.6f}  A vs B {pcc_ab:.6f}")
+        worst["B"] = min(worst["B"], pcc_b)
+        if paths[True][it] == "A":
+            worst["A"] = min(worst["A"], pcc_a)
+            worst["A vs B"] = min(worst["A vs B"], pcc_ab)
+        kv_actual += valid
+    assert worst["B"] >= _BLOCK_PCC and worst["A"] >= _BLOCK_PCC, worst
+    assert worst["A vs B"] >= 0.999, worst
+
+
 @pytest.mark.parametrize("name, chunk_size, iters_valid", _CHUNKED, ids=[n for n, _, _ in _CHUNKED])
 @pytest.mark.parametrize(
     "mesh_device, device_params, sp_axis, tp_axis", _MESH_CONFIGS, indirect=["mesh_device", "device_params"]

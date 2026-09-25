@@ -122,6 +122,45 @@ def test_sparse_sdpa_scaled_fp8_kv(device, S, T, TOPK, kc, all_valid, round_scal
 
 
 @run_for_blackhole()
+def test_sparse_sdpa_attention_sink(device):
+    """Per-head attention sink: an extra softmax logit sink_h against the scaled scores, no V contribution
+    (DeepSeek-V4 `attn_sink`). The op takes the sink pre-divided by `scale` as a [1,1,H,32] bf16 TILE column."""
+    H, S, T, TOPK, kc = 64, 40, 512, 256, 128
+    q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: TOPK, seed=61)
+    scale = K_DIM**-0.5
+    gen = torch.Generator().manual_seed(7)
+    sink = torch.randn(H, generator=gen) * 3.0  # heads with sink logits comparable to the scores
+    # golden: the reference softmax over [scores * scale, sink_h]; V = 0 for the sink column
+    idx = indices[0, 0].to(torch.int64)  # [S, TOPK], all valid
+    sel = kv[0, 0][idx]  # [S, TOPK, K_DIM]
+    scores = torch.einsum("hsd,sjd->hsj", q[0], sel) * scale  # [H, S, TOPK]
+    logits = torch.cat([scores, sink.view(H, 1, 1).expand(H, S, 1)], dim=-1)
+    probs = logits.softmax(dim=-1)[..., :TOPK]
+    expected = torch.einsum("hsj,sjd->hsd", probs, sel[..., :V_DIM]).unsqueeze(0)  # [1, H, S, V_DIM]
+    no_sink = golden(q, kv, indices, scale, V_DIM)
+    assert pcc(expected, no_sink) < 0.999, "the sink must change the golden or this test proves nothing"
+    tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
+    tt_kv = to_dev(kv.to(torch.bfloat16), device, ttnn.bfloat16)
+    tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+    tt_sink = ttnn.from_torch(
+        (sink / scale).to(torch.bfloat16).view(1, 1, H, 1).expand(1, 1, H, 32).contiguous(),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    out = ttnn.transformer.sparse_sdpa(
+        tt_q, tt_kv, tt_idx, V_DIM, kv_format=BF16_KV, scale=scale, k_chunk_size=kc, attention_sink=tt_sink
+    )
+    out = ttnn.to_torch(out)
+    score, score_vs_no_sink = pcc(out, expected), pcc(out, no_sink)
+    assert (
+        score >= 0.999
+    ), f"sink sparse SDPA PCC {score:.5f} vs the sink golden (vs no-sink golden {score_vs_no_sink:.5f})"
+    assert score > score_vs_no_sink, "the output must be closer to the sink golden than to the no-sink golden"
+
+
+@run_for_blackhole()
 def test_sparse_sdpa_bf16_multi_query_tile(device):
     """Two query tiles must pack into distinct score rows when qsb is two."""
     H, S, T, TOPK, kc = 64, 64, 128, 64, 32

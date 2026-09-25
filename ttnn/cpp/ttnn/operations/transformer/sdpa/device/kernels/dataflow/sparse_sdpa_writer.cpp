@@ -43,10 +43,15 @@ void kernel_main() {
     constexpr uint32_t cb_kreq = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_KREQ);
     constexpr uint32_t cb_kack = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_KACK);
     constexpr uint32_t packed_row_bytes = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::PACKED_ROW_BYTES);
+    constexpr uint32_t cb_sink = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_SINK);
+    constexpr bool use_sink = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::USE_SINK) != 0;
     constexpr auto out_args = TensorAccessorArgs<sparse_sdpa::writer_ct_arg::END, 0>();
     // kv carries a RUNTIME tensor shape (T dim in common runtime args), so its accessor spans both arg streams.
     constexpr auto kv_args =
         TensorAccessorArgs<out_args.next_compile_time_args_offset(), out_args.next_common_runtime_args_offset()>();
+    // attention sink [1,1,H,32] bf16 TILE (always described so the arg layout is fixed; read only when use_sink)
+    constexpr auto sink_args =
+        TensorAccessorArgs<kv_args.next_compile_time_args_offset(), kv_args.next_common_runtime_args_offset()>();
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t tok_start = get_arg_val<uint32_t>(1);
@@ -54,6 +59,7 @@ void kernel_main() {
     const uint32_t kv_addr = get_arg_val<uint32_t>(3);  // dual-NoC K-half gather
     // Indexed KV cache: page offset (cache_batch_idx * T) selecting the cache's batch slot; 0 if not indexed.
     const uint32_t kv_batch_page_offset = get_arg_val<uint32_t>(4);
+    const uint32_t sink_addr = get_arg_val<uint32_t>(5);  // attention sink tensor (0 when unused)
 
     constexpr uint32_t row_bytes = vDHt * tt::constants::TILE_WIDTH * out_elem_bytes;  // V_DIM bytes per head-row
     constexpr uint32_t block_tiles = (H / tt::constants::TILE_HEIGHT) * vDHt;          // Sqt*vDHt: the [H,V_DIM] block
@@ -95,6 +101,23 @@ void kernel_main() {
             p[tt::constants::FACE_HW + c] = neg_inf_bf16;
         }
         neginf_cb.push_back(1);
+    }
+
+    // Attention sink column tiles: tile t holds heads [32t, 32t+32) down its rows, the sink logit / scale in
+    // column 0 (the host expands it across the 32 columns). Copied in once; compute reads it for every token
+    // (normalize_row_streaming's column variant) and never pops it.
+    if constexpr (use_sink) {
+        constexpr uint32_t Sqt = H / tt::constants::TILE_HEIGHT;
+        constexpr uint32_t sink_tile_bytes = tt::constants::TILE_HW * sizeof(uint16_t);
+        const auto sink = TensorAccessor(sink_args, sink_addr);
+        experimental::CB sink_cb(cb_sink);
+        sink_cb.reserve_back(Sqt);
+        const uint32_t sink_l1 = sink_cb.get_write_ptr();
+        for (uint32_t t = 0; t < Sqt; ++t) {
+            noc_async_read_page(t, sink, sink_l1 + t * sink_tile_bytes);
+        }
+        noc_async_read_barrier();
+        sink_cb.push_back(Sqt);
     }
 
     for (uint32_t tok = tok_start; tok < tok_start + tok_count; ++tok) {

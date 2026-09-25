@@ -383,6 +383,10 @@ void bind_sdpa(nb::module_& mod) {
             block_cyclic_chunk_local (int, optional): the per-shard chunk length (chunk_size_global / sp).
                 Required iff block_cyclic_sp_axis is set. Cross-checked against q's per-chip seq length: must be
                 q_isl or tp*q_isl (tp = mesh_size/sp) — the only two values it can legally take.
+            attention_sink (ttnn.Tensor, optional): [1, 1, H, 32] bf16 TILE, DRAM interleaved. Row h (its value
+                repeated across the 32 columns) holds the per-head sink logit DIVIDED BY `scale`; the kernel adds
+                exp((sink - max) * scale) to every token's softmax denominator (no V contribution), i.e. the
+                reference softmax over [scores * scale, sink_h].
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16->bf16, fp8->fp8).
         )doc",
@@ -398,7 +402,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("cache_batch_idx") = nb::none(),
         nb::arg("block_cyclic_sp_axis") = nb::none(),
-        nb::arg("block_cyclic_chunk_local") = nb::none());
+        nb::arg("block_cyclic_chunk_local") = nb::none(),
+        nb::arg("attention_sink") = nb::none());
 
     ttnn::bind_function<"sparse_sdpa_msa", "ttnn.transformer.">(
         mod,
