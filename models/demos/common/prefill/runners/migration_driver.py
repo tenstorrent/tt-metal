@@ -258,7 +258,25 @@ class MigrationDriver:
             f"[migration_driver] cross-endpoint pairing: connect_to(remote_ep={self.dest_endpoint_id}, "
             f"role={role}, service={service_name}) own_ep={self.src_endpoint_id}"
         )
-        self.client.connect_to(remote_endpoint_id=self.dest_endpoint_id, role=role, service_name=service_name)
+        # connect_to only ENQUEUES the request: the pair is up when on_connection_received fires (channel up + both tables
+        # exchanged + acked). Wait for it here -- issuing MIGRATE before that aborts the sender worker with "No remote table
+        # found for destination" (DS4F-0261: the publisher sat in MPI_Comm_accept while the driver went on). The decode
+        # side must issue the matching CONNECTOR connect_to on its own endpoint (e.g. scratchpad gate3/dst_connect.py).
+        import threading
+
+        connected = threading.Event()
+        self.client.on_connection_received(lambda _r: connected.set())
+        self.client.start_poll_thread()
+        try:
+            self.client.connect_to(remote_endpoint_id=self.dest_endpoint_id, role=role, service_name=service_name)
+            timeout_ms = int(os.environ.get("PREFILL_MIGRATION_CONNECT_TIMEOUT_MS", "300000"))
+            if not connected.wait(timeout_ms / 1000.0):
+                raise RuntimeError(
+                    f"cross-endpoint pairing with remote_ep={self.dest_endpoint_id} not established within {timeout_ms} ms "
+                    f"(service {service_name}, role {role}); is the decode side's CONNECTOR connect_to running?"
+                )
+        finally:
+            self.client.stop_poll_thread()  # the blocking migrate/wait_complete below consume the resp queue themselves
         logger.success(f"[migration_driver] cross-endpoint pairing established with remote_ep={self.dest_endpoint_id}")
 
     # ------------------------------------------------------------------- run
