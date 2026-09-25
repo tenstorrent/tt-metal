@@ -1378,20 +1378,6 @@ class MiniMaxH3Pipeline:
         indices[:count] = torch.arange(start, start + count)
         return self._replicated_indices(indices)
 
-    def _prompt_windows(self, l_len: int, cap: int) -> ttnn.Tensor | None:
-        """Window boundaries `[0, l_len, cap]` for the token refiner's windowed SDPA, so no real token
-        attends to a pad row. None when the prompt fills the capacity exactly.
-        """
-        if l_len >= cap:
-            return None
-        return from_torch(
-            torch.tensor([0, l_len, cap], dtype=torch.int32),
-            device=self.mesh_device,
-            dtype=ttnn.uint32,
-            layout=ttnn.Layout.ROW_MAJOR,
-            mesh_axes=[None],
-        )
-
     # ------------------------------------------------------------------ decode
 
     def _cache_submodel(self, module, subfolder: str, state: dict[str, torch.Tensor]) -> None:
@@ -2427,7 +2413,7 @@ class MiniMaxH3Pipeline:
 
         transformer.prepare_static_sources(
             prompt_1BLP=prompt_device,
-            prompt_windows=self._prompt_windows(l_len, prompt_embeds.shape[1]),
+            prompt_len=l_len,
             condition_video_1BKC=self._tt_cond_video.value,
             condition_audio_1BKC=self._tt_cond_audio.value if self.task == "ref2va" else None,
             prompt_cap=caps.prompt,
