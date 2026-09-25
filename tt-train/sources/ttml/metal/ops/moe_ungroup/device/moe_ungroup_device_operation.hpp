@@ -40,6 +40,7 @@ ttml::metal::ops::moe_ungroup::device::MoeUngroupDeviceOperation::tensor_return_
     uint32_t e_local,
     uint32_t d,
     uint32_t b,
-    uint32_t s);
+    uint32_t s,
+    bool report_offsets_status);
 
 }  // namespace ttnn::prim
