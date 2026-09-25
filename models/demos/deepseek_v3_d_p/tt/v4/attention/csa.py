@@ -576,7 +576,9 @@ class TtCSA(TtHCA):
             **kwargs,
         )
 
-    def alloc_state(self, max_seq_len: int, batch: int = 1, chunk_tokens: int | None = None) -> TtCSAState:
+    def alloc_state(
+        self, max_seq_len: int, batch: int = 1, chunk_tokens: int | None = None, slot: int = 0
+    ) -> TtCSAState:
         rate = self.compressor.compress_rate
         chunk = chunk_tokens or max_seq_len
         align = ttnn.TILE_SIZE * self.sp_factor
@@ -605,6 +607,9 @@ class TtCSA(TtHCA):
             prior_i=self.indexer.compressor.empty_prior(batch),
             max_seq_len=max_seq_len,
         )
+        state.slot = int(
+            slot
+        )  # the score mask is shared by every CSA layer of a slot (identical content), see _score_mask
         if self.sparse_path:
             # EVERY persistent buffer the sparse / traced path reads must exist BEFORE any trace is captured: a tensor
             # allocated after a capture can sit on addresses that capture's intermediates reuse, and the next replay
@@ -779,8 +784,9 @@ class TtCSA(TtHCA):
         self.indexer._zeros_block_tile(seq_local, real_len // rate)
         self.indexer._chunk_cut_mask_tile(seq_local, real_len // rate)
         self.indexer._chunk_cut_mask(seq_local, real_len // rate)
-        if self.__dict__.get("_neg_inf_mask_const") is None:
-            self._neg_inf_mask_const = self._from_torch(torch.full(tuple(state.score_mask.shape), float("-inf")))
+        key = (id(self.device), tuple(state.score_mask.shape))
+        if TtCSA._SHARED_NEG_INF.get(key) is None:
+            TtCSA._SHARED_NEG_INF[key] = self._from_torch(torch.full(tuple(state.score_mask.shape), float("-inf")))
         if state.slab_rm is None:
             self._slab_alloc(state)
         self._window_indices(seq_local)
@@ -871,10 +877,21 @@ class TtCSA(TtHCA):
                 step=[1, 1, 1, 1],
             )
 
+    # The additive score mask [1,1,S_l,cap] of a slot has the SAME content in every CSA layer (it is a function of the slot's
+    # entry_count / n_new only), so one tensor per (device, slot, shape) serves all 21 layers: 99 MB instead of 2.1 GB per
+    # slot at 128k with a 10,240 chunk (DRAM ran out at 32.2 of 32.6 GB per chip). Every layer's glue re-writes the same
+    # columns each chunk (idempotent, 2 small writes) and every layer's reset copies the same -inf constant into it.
+    _SHARED_SCORE_MASKS: dict = {}
+    _SHARED_NEG_INF: dict = {}
+
     def _score_mask(self, state, S_l: int):
         if state.score_mask is None:
             cap = int(state.index_k.shape[2])
-            state.score_mask = self._from_torch(torch.full((1, 1, S_l, cap), float("-inf")))
+            key = (id(self.device), int(getattr(state, "slot", 0)), int(S_l), cap)
+            mask = TtCSA._SHARED_SCORE_MASKS.get(key)
+            if mask is None:
+                mask = TtCSA._SHARED_SCORE_MASKS[key] = self._from_torch(torch.full((1, 1, S_l, cap), float("-inf")))
+            state.score_mask = mask
             state.mask_zeroed_upto = 0
         return state.score_mask
 
@@ -882,9 +899,10 @@ class TtCSA(TtHCA):
         """A new prompt in this slot: every entry column back to -inf (device copy from a constant, no host write)."""
         if state.score_mask is None:
             return
-        const = self.__dict__.get("_neg_inf_mask_const")
-        if const is None or tuple(const.shape) != tuple(state.score_mask.shape):
-            const = self._neg_inf_mask_const = self._from_torch(
+        key = (id(self.device), tuple(state.score_mask.shape))
+        const = TtCSA._SHARED_NEG_INF.get(key)
+        if const is None:
+            const = TtCSA._SHARED_NEG_INF[key] = self._from_torch(
                 torch.full(tuple(state.score_mask.shape), float("-inf"))
             )
         ttnn.copy(const, state.score_mask)

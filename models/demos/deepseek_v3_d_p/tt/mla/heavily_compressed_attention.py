@@ -632,7 +632,9 @@ class TtHCA(_TtHCABase):
             ),
         }
 
-    def alloc_state(self, max_seq_len: int, batch: int = 1, chunk_tokens: int | None = None) -> TtHCAState:
+    def alloc_state(
+        self, max_seq_len: int, batch: int = 1, chunk_tokens: int | None = None, slot: int = 0
+    ) -> TtHCAState:
         """Size the state once for the longest context this layer will serve, so its shape is fixed for
         every chunk. ``max_seq_len`` is the longest context to serve, ``chunk_tokens`` the slab width
         forward will be called with (defaults to one chunk).

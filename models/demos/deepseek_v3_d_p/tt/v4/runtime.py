@@ -112,6 +112,7 @@ class TtV4PrefillRuntime:
         first-run compile; the slot state is reset afterwards."""
         c = self.config
         self.model.alloc_states(c.num_users, c.max_seq_len)
+        self._log_dram("after alloc_states")
         x = self.make_chunk_input([0] * c.chunk_size)
         # every chunk index: the CSA attention's live-extent programs differ per position (DS4F-0252), so warm them
         # all here instead of paying a JIT inside the first request (~1-2 s per shape per layer kind)
@@ -125,6 +126,7 @@ class TtV4PrefillRuntime:
         ttnn.synchronize_device(self.mesh_device)
         self._compiled = True
         self._trace_captured = False
+        self._log_dram("after compile")
         logger.info(
             f"[v4 runtime] compiled: layers {c.first_layer_idx}..{c.first_layer_idx + c.num_layers - 1}, chunk {c.chunk_size}, max_seq {c.max_seq_len}, users {c.num_users}"
         )
@@ -156,6 +158,19 @@ class TtV4PrefillRuntime:
             for layer in self.model.layers
         )
         logger.info(f"[v4 runtime] trace islands captured: {len(self.model.layers)} layers, {segs} trace segments")
+        self._log_dram("after capture_trace")
+
+    def _log_dram(self, tag: str) -> None:
+        """Per-bank DRAM occupancy (the chunk-10240 43-layer run OOMed at 4.026 of 4.071 GB per bank, DS4F-0260)."""
+        try:
+            mv = ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.DRAM)
+            logger.info(
+                f"[v4 runtime] DRAM {tag}: {mv.total_bytes_allocated_per_bank / 2**30:.3f} GB allocated / bank, "
+                f"{mv.total_bytes_free_per_bank / 2**30:.3f} GB free, largest block {mv.largest_contiguous_bytes_free_per_bank / 2**20:.0f} MB "
+                f"({mv.num_banks} banks)"
+            )
+        except Exception as e:  # informational only
+            logger.info(f"[v4 runtime] DRAM {tag}: memory view unavailable ({type(e).__name__})")
 
     def release_trace(self) -> None:
         """The engine's shutdown hook (prefill_runner calls ``runtime.release_trace`` before ``close_mesh_device``):

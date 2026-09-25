@@ -242,7 +242,7 @@ class TtV4PrefillBlock(LightweightModule):
     # ---- chunk state per slot ------------------------------------------------------------------------------------
     def alloc_states(self, num_users: int, max_seq_len: int, chunk_tokens: int) -> None:
         for slot in range(int(num_users)):
-            self.states[slot] = self.attn.alloc_state(max_seq_len, chunk_tokens=chunk_tokens)
+            self.states[slot] = self.attn.alloc_state(max_seq_len, chunk_tokens=chunk_tokens, slot=slot)
 
     def reset_slot(self, slot: int) -> None:
         """A new prompt starts in ``slot``: counters back to zero (stale rows are masked by the counters), CSA
