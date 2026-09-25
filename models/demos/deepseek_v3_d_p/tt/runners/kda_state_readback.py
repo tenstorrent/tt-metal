@@ -80,6 +80,17 @@ def _worse(a: float, b: float) -> float:
     return float("nan") if math.isnan(a) or math.isnan(b) else min(a, b)
 
 
+def _json_ready(obj):
+    """NaN -> null; json.dump would otherwise write a bare NaN token, which strict parsers reject."""
+    if isinstance(obj, dict):
+        return {key: _json_ready(value) for key, value in obj.items()}
+    if isinstance(obj, list):
+        return [_json_ready(value) for value in obj]
+    if isinstance(obj, float) and math.isnan(obj):
+        return None
+    return obj
+
+
 def read_layer(table, config_id: int, kind: str, layer: int, slot: int, geometry, device_map):
     """All segments of one layer as a host tensor, or None when the layer lives on another host."""
     first = table.lookup(layer, 0, slot, config_id)
@@ -165,9 +176,8 @@ def main(argv=None) -> int:
         logger.info(f"min pcc {kind}: {score:.6f}")
     if args.json:
         with open(args.json, "w") as handle:
-            json.dump(
-                {"real_len": args.real_len, "golden_row": row, "min_pcc": worst, "layers": results}, handle, indent=2
-            )
+            payload = {"real_len": args.real_len, "golden_row": row, "min_pcc": worst, "layers": results}
+            json.dump(_json_ready(payload), handle, indent=2)
     if not checked:
         logger.error("no KDA layer was reachable from this host")
         return 2

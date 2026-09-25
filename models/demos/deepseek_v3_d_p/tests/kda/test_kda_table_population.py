@@ -18,6 +18,8 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     kda_chunk_n_tokens,
     kda_max_sequence_length,
     kda_position,
+    kda_segment_bytes,
+    kda_segments_per_layer,
     kda_window,
     populate_kv_chunk_address_table_kda,
 )
@@ -78,13 +80,12 @@ def _fake_location(monkeypatch):
 
 
 def _config(geometry, kind, num_layers, num_users):
-    bytes_ = geometry.recurrent_segment_bytes if kind == "kda_recurrent" else geometry.convolution_segment_bytes
     return SimpleNamespace(
         num_layers=num_layers,
         max_sequence_length=kda_max_sequence_length(geometry),
         num_slots=num_users,
         chunk_n_tokens=kda_chunk_n_tokens(geometry, kind),
-        chunk_size_bytes=bytes_,
+        chunk_size_bytes=kda_segment_bytes(geometry, kind),
     )
 
 
@@ -122,10 +123,8 @@ def test_walk_addresses_every_segment_of_every_stage(kind, num_users):
         layer_rows=layer_rows,
     )
 
-    segments = (
-        geometry.recurrent_segments_per_layer if kind == "kda_recurrent" else geometry.convolution_segments_per_layer
-    )
-    seg_bytes = geometry.recurrent_segment_bytes if kind == "kda_recurrent" else geometry.convolution_segment_bytes
+    segments = kda_segments_per_layer(geometry, kind)
+    seg_bytes = kda_segment_bytes(geometry, kind)
     shards_per_layer = (
         geometry.recurrent_shards_per_layer if kind == "kda_recurrent" else geometry.convolution_shards_per_layer
     )
@@ -193,6 +192,20 @@ def test_walk_skips_null_stages_and_rejects_wrong_config(expect_error):
         populate_kv_chunk_address_table_kda(
             _RecordingTable(),
             bad,
+            (SP, TP),
+            0,
+            1,
+            geometry,
+            "kda_recurrent",
+            stage_layout=layout,
+            layer_rows=layer_rows,
+        )
+    one_window = _config(geometry, "kda_recurrent", 93, 1)
+    one_window.max_sequence_length = kda_window(geometry)  # the pre-contract, single-window extent
+    with expect_error(AssertionError, "windows of"):
+        populate_kv_chunk_address_table_kda(
+            _RecordingTable(),
+            one_window,
             (SP, TP),
             0,
             1,

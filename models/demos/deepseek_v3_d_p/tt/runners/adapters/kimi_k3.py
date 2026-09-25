@@ -264,6 +264,20 @@ class KimiK3Adapter(MLAPrefillAdapter):
             return KimiK3Config.KV_LORA_RANK + KimiK3Config.QK_ROPE_HEAD_DIM
         return None
 
+    def layer_position_range(self, layer_idx: int, real_len: int) -> tuple[int, int]:
+        """MLA layers migrate the request's tokens; a KDA layer migrates the version window decode reads
+        next, `[v * W, (v + 1) * W)` with `v = (real_len - 1) % 8` (k3_disagg_contract.md, section 5)."""
+        if layer_idx in KimiK3Config.mla_layer_ids():
+            return 0, real_len
+        from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaContractGeometry
+        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import KDA_VERSIONS, kda_window
+
+        # The window depends on the global head count only; any legal mesh gives the same value.
+        geometry = KdaContractGeometry.from_kda_config(kimi_k3_kda_config(), mesh_shape=(1, 1), sp_axis=0, tp_axis=1)
+        window = kda_window(geometry)
+        version = (real_len - 1) % KDA_VERSIONS
+        return version * window, (version + 1) * window
+
     def load_hf_config(self):
         """The Kimi-K3 config, hand-built rather than loaded through `AutoConfig`.
 

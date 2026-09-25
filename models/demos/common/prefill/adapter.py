@@ -151,6 +151,13 @@ class PrefillModelAdapter(ABC):
             return "kvpe"
         return "index" if config_id == 1 else "other"
 
+    def layer_position_range(self, layer_idx: int, real_len: int) -> tuple[int, int]:
+        """Table positions one /migrate of layer ``layer_idx`` covers after a ``real_len``-token prefill.
+        A token cache migrates ``[0, real_len)``. A model whose layer holds a cache on another axis
+        (Kimi-K3's KDA state: one of decode's eight version windows) overrides this; the migration driver
+        issues one call per run of consecutive layers with equal ranges and byte-verifies that range."""
+        return 0, real_len
+
     def pipeline_activation_planes(self, boundary_layer_idx: int) -> int:
         """Planes on dim 1 of the D2D payload at a rank boundary placed before `boundary_layer_idx`.
 

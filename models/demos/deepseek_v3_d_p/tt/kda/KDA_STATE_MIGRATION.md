@@ -85,6 +85,8 @@ devices, so run it once per host of a multi-rank run.
   `v = (real_len - 1) % 8`, the version decode reads next, the call is `[v * W, (v + 1) * W)` on both
   sides (contract section 5), or source `[0, W)` to destination `[v * W, (v + 1) * W)` where the
   caller can pass separate ranges. MLA and KDA layers need separate calls.
+  `KimiK3Adapter.layer_position_range` gives the in-repo migration driver these ranges: one call per
+  run of same-kind layers, and the byte verify walks the window it requested.
 * The state is a fold over the prefix, not position-addressed: decode must resume at exactly the
   prefilled length; replaying a chunk advances it twice.
 * Only the final state after the last chunk is meaningful; per-chunk copies are valid but wasted.

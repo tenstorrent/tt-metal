@@ -105,3 +105,36 @@ def test_adapter_hooks_name_the_three_configs():
     assert len(adapter.cache_layer_rows(2, 24)) == 18
     assert adapter.cache_head_dim(0) == 576 and adapter.cache_head_dim(1) is None
     assert set(KimiK3Config.kda_layer_ids()) | set(KimiK3Config.mla_layer_ids()) == set(range(93))
+
+
+def test_layer_position_range_follows_the_contract():
+    """Contract section 5: MLA layers over the request, KDA layers over the version window decode reads next."""
+    adapter = KimiK3Adapter()
+    assert adapter.layer_position_range(3, 100) == (0, 100)
+    assert adapter.layer_position_range(0, 100) == (110_592, 147_456)  # the contract's own example, v = 3
+    assert adapter.layer_position_range(0, 56_320) == (7 * 36_864, 8 * 36_864)
+    assert adapter.layer_position_range(0, 1) == (0, 36_864)
+    assert adapter.layer_position_range(92, 56_320) == (0, 56_320)
+
+
+def test_driver_groups_consecutive_same_axis_layers_into_runs():
+    from models.demos.common.prefill.runners.migration_driver import _layer_runs
+
+    real_len = 56_320
+    runs = _layer_runs(range(KimiK3Config.NUM_LAYERS), real_len, KimiK3Adapter().layer_position_range)
+    window = (7 * 36_864, 8 * 36_864)
+    assert runs[:4] == [(0, 3, *window), (3, 4, 0, real_len), (4, 7, *window), (7, 8, 0, real_len)]
+    assert runs[-1] == (91, 93, 0, real_len)  # layers 91 and 92 are both MLA: one call
+    assert len(runs) == 46
+    assert all(runs[idx][1] == runs[idx + 1][0] for idx in range(len(runs) - 1))
+    mla = set(KimiK3Config.mla_layer_ids())
+    for start, end, pos_start, pos_end in runs:
+        kinds = {layer in mla for layer in range(start, end)}
+        assert len(kinds) == 1
+        assert (pos_start, pos_end) == ((0, real_len) if kinds.pop() else window)
+    # A subset keeps its own layers only and never merges across a gap.
+    assert _layer_runs([22, 23, 27], real_len, KimiK3Adapter().layer_position_range) == [
+        (22, 23, *window),
+        (23, 24, 0, real_len),
+        (27, 28, 0, real_len),
+    ]
