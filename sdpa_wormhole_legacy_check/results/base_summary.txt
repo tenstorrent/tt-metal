@@ -1,0 +1,61 @@
+base_chunked.log |  36 passed in 822.08s (0:13:42)  
+base_dit.log |  6 passed, 6 warnings in 83.96s (0:01:23)  
+base_expring.log |  2 failed, 1 error in 43.14s  
+base_host.log |  
+base_joint.log |  48 passed, 8 skipped, 144 deselected in 276.61s (0:04:36)  
+base_matrix.log |  MATRIX_DONE fails= 0
+base_nprefill.log |  156 passed, 6 skipped, 833 deselected in 1098.44s (0:18:18)  
+base_ring.log |  12 passed in 55.77s  
+base_unit.log |  88 passed, 4 skipped in 593.36s (0:09:53)  
+base_wmatrix.log |  MATRIX_DONE fails= 0
+base_wring.log |  
+CFG 0 {'kind': 'dense', 'causal': False, 'fid': None, 'fp32': None, 's': 1024, 'd': 128, 'nh': 4, 'nkv': 4, 'q': 128, 'k': 128, 'dtype': 'bf16'} pcc=0.999680 OK
+CFG 1 {'kind': 'dense', 'causal': False, 'fid': 'HiFi2', 'fp32': False, 's': 1024, 'd': 128, 'nh': 4, 'nkv': 4, 'q': 128, 'k': 128, 'dtype': 'bf16'} pcc=0.999680 OK
+CFG 2 {'kind': 'dense', 'causal': False, 'fid': 'HiFi4', 'fp32': False, 's': 1024, 'd': 128, 'nh': 4, 'nkv': 4, 'q': 128, 'k': 128, 'dtype': 'bf16'} pcc=0.999668 OK
+CFG 3 {'kind': 'dense', 'causal': False, 'fid': 'LoFi', 'fp32': False, 's': 1024, 'd': 128, 'nh': 4, 'nkv': 4, 'q': 128, 'k': 128, 'dtype': 'bf16'} pcc=0.997718 OK
+CFG 4 {'kind': 'dense', 'causal': False, 'fid': 'HiFi2', 'fp32': True, 's': 1024, 'd': 128, 'nh': 4, 'nkv': 4, 'q': 128, 'k': 128, 'dtype': 'bf16'} pcc=0.999702 OK
+CFG 5 {'kind': 'dense', 'causal': False, 'fid': 'HiFi4', 'fp32': True, 's': 1024, 'd': 128, 'nh': 4, 'nkv': 4, 'q': 128, 'k': 128, 'dtype': 'bf16'} pcc=0.999738 OK
+CFG 6 {'kind': 'dense', 'causal': True, 'fid': None, 'fp32': None, 's': 1024, 'd': 128, 'nh': 4, 'nkv': 4, 'q': 128, 'k': 128, 'dtype': 'bf16'} pcc=0.999739 OK
+CFG 7 {'kind': 'dense', 'causal': True, 'fid': 'HiFi2', 'fp32': False, 's': 1024, 'd': 128, 'nh': 4, 'nkv': 4, 'q': 128, 'k': 128, 'dtype': 'bf16'} pcc=0.999739 OK
+CFG 8 {'kind': 'dense', 'causal': True, 'fid': 'HiFi4', 'fp32': False, 's': 1024, 'd': 128, 'nh': 4, 'nkv': 4, 'q': 128, 'k': 128, 'dtype': 'bf16'} pcc=0.999721 OK
+CFG 9 {'kind': 'dense', 'causal': True, 'fid': 'LoFi', 'fp32': False, 's': 1024, 'd': 128, 'nh': 4, 'nkv': 4, 'q': 128, 'k': 128, 'dtype': 'bf16'} pcc=0.999098 OK
+CFG 10 {'kind': 'dense', 'causal': True, 'fid': 'HiFi2', 'fp32': True, 's': 1024, 'd': 128, 'nh': 4, 'nkv': 4, 'q': 128, 'k': 128, 'dtype': 'bf16'} pcc=0.999742 OK
+CFG 11 {'kind': 'dense', 'causal': True, 'fid': 'HiFi4', 'fp32': True, 's': 1024, 'd': 128, 'nh': 4, 'nkv': 4, 'q': 128, 'k': 128, 'dtype': 'bf16'} pcc=0.999773 OK
+CFG 12 {'kind': 'dense', 'causal': False, 'fid': None, 'fp32': None, 's': 2048, 'd': 64, 'nh': 8, 'nkv': 1, 'q': 256, 'k': 256, 'dtype': 'bf8'} pcc=0.999584 OK
+CFG 13 {'kind': 'dense', 'causal': True, 'fid': None, 'fp32': None, 's': 2048, 'd': 64, 'nh': 8, 'nkv': 2, 'q': 64, 'k': 512, 'dtype': 'bf8'} pcc=0.999679 OK
+CFG 14 {'kind': 'dense', 'causal': False, 'fid': 'HiFi2', 'fp32': False, 's': 4096, 'd': 128, 'nh': 2, 'nkv': 2, 'q': 256, 'k': 512, 'dtype': 'bf16'} pcc=0.999648 OK
+CFG 15 {'kind': 'mask', 'causal': False, 'fid': None, 'fp32': None, 's': 1024, 'd': 128, 'nh': 4, 'nkv': 4, 'q': 128, 'k': 128, 'dtype': 'bf16'} pcc=0.999685 OK
+CFG 16 {'kind': 'mask', 'causal': False, 'fid': 'HiFi4', 'fp32': True, 's': 1024, 'd': 128, 'nh': 4, 'nkv': 4, 'q': 128, 'k': 128, 'dtype': 'bf16'} pcc=0.999729 OK
+   joint pcc 0.9996660371867747
+CFG 17 {'kind': 'joint', 'causal': False, 'fid': None, 'fp32': None, 's': 1024, 'd': 128, 'nh': 4, 'nkv': 4, 'q': 128, 'k': 128, 'dtype': 'bf16'} pcc=0.999678 OK
+   joint pcc 0.9997489717543255
+CFG 18 {'kind': 'joint', 'causal': False, 'fid': 'HiFi4', 'fp32': True, 's': 1024, 'd': 128, 'nh': 4, 'nkv': 4, 'q': 128, 'k': 128, 'dtype': 'bf16'} pcc=0.999753 OK
+   joint pcc 0.9973795213729924
+CFG 19 {'kind': 'joint', 'causal': False, 'fid': 'LoFi', 'fp32': False, 's': 2048, 'd': 64, 'nh': 4, 'nkv': 4, 'q': 256, 'k': 256, 'dtype': 'bf16'} pcc=0.997424 OK
+WHCHECK flux1_(1,1)_p128 spatial pcc 0.9999023169669201
+WHCHECK flux1_(1,1)_p128 prompt pcc 0.9999083926110863
+WHCHECK wan_self_(1,1) pcc 0.9999066400288503
+WHCHECK flux1_(1,2)_p128 spatial pcc 0.9999065672964862
+WHCHECK flux1_(1,2)_p128 prompt pcc 0.9999115469059136
+WHCHECK wan_self_(1,2) pcc 0.9999066688839294
+WHCHECK flux1_(1,1)_p0 spatial pcc 0.9998012384454751
+WHCHECK flux1_(1,2)_p0 spatial pcc 0.9998099931022776
+[sdpa_chunk0] rc=0
+    RESULT sdpa_chunk0 RAISED TypeError | ['__init__(): incompatible function arguments. The following argument types are supported:', '    1. __init__(self, *, compute_with_storage_grid_size: ttnn._ttnn.tensor.CoreCoord, sub_core_grids: ttnn._ttnn.t
+[pc_repr_defaults] rc=1
+    (no RESULT)
+        1. __init__(self, *, compute_with_storage_grid_size: ttnn._ttnn.tensor.CoreCoord, sub_core_grids: ttnn._ttnn.tensor.CoreRangeSet | None = None, q_chunk_size: int, k_chunk_size: int, exp_approx_mode: bool | None = None, max_cores_per_head_batc
+    
+    Invoked with types: ttnn._ttnn.operations.transformer.SDPAProgramConfig, kwargs = { compute_with_storage_grid_size: ttnn._ttnn.tensor.CoreCoord }
+[sdpa_explicit_ok] rc=0
+    RESULT sdpa_explicit_ok OK Shape([1, 2, 256, 64])
+[sdpa_no_pc_ok] rc=0
+    RESULT sdpa_no_pc_ok OK Shape([1, 2, 256, 64])
+[sdpa_bad_chunk_48] rc=0
+    RESULT sdpa_bad_chunk_48 RAISED RuntimeError | ['TT_FATAL @ /localdev/cglagovich/whcheck/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_device_operation.cpp:111: q_chunk_size % tt::constants::TILE_WIDTH == 0', 'info:']
+[decode_k0] rc=0
+    RESULT decode_k0 OK Shape([1, 1, 32, 64])
+[chunked_sdpa_chunk0] rc=0
+    RESULT chunked_sdpa_chunk0 RAISED TypeError | ['__init__(): incompatible function arguments. The following argument types are supported:', '    1. __init__(self, *, compute_with_storage_grid_size: ttnn._ttnn.tensor.CoreCoord, sub_core_grids: ttnn
+[sdpa_qchunk0_only] rc=0
+    RESULT sdpa_qchunk0_only RAISED TypeError | ['__init__(): incompatible function arguments. The following argument types are supported:', '    1. __init__(self, *, compute_with_storage_grid_size: ttnn._ttnn.tensor.CoreCoord, sub_core_grids: ttnn._
