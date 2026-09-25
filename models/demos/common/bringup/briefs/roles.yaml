@@ -4,7 +4,12 @@ reference: |
   `models/demos/common/bringup/reference/interface.py`, and the `reference` hook (plus `tokenizer` / `hf_layers` if
   the defaults do not fit) in `$model_dir/bringup/hooks.py`. The HF implementation is the oracle; the checkpoint is at
   `$hf_dir`. Block types and layers are in the spec. Every block's forward goes through `run_block`, and every step
-  output is recorded as `L{i}.<output>`.
+  output is recorded as `L{i}.<output>`. The following gates hold the same code: R.3 requires chunked prefill to equal
+  one-shot prefill and each block type's graph to replay exactly from recorded boundaries, and the goldens step runs
+  the reference over the longest ladder rung on CPU, so make it fast (group tokens per expert for MoE, attend each chunk
+  against the state instead of recomputing the prefix). Split the block into steps at the boundaries a device
+  implementation would swap one at a time (norms, attention, residual adds, MLP / router / experts), and keep
+  `state_tensors` / `load_state` exact inverses.
 plan: |
   Role: plan. Map every component to TTNN and shard the model over the $mesh mesh ($chips chips, $dram GB each). Write
   `$bringup_dir/plan.yaml` (schema in `models/demos/common/bringup/plan/memory.py`), `$bringup_dir/plan.md`, and
