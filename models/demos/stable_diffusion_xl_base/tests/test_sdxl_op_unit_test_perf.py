@@ -5,7 +5,7 @@
 import pytest
 
 import ttnn
-from models.common.utility_functions import is_wormhole_b0, skip_with_llk_assert
+from models.common.utility_functions import skip_with_llk_assert
 from models.perf.device_perf_utils import run_device_perf_detailed
 
 MARGIN = 0.015
@@ -135,7 +135,7 @@ def test_dram_group_norm_vae_welford_reciprocal_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 1351000  # Measured: ~1.351ms for GroupNorm VAE welford_reciprocal
+    expected_duration_ns = 1319491  # Measured: ~1.319ms for GroupNorm VAE welford_reciprocal
 
     # Log the performance result
     print(
@@ -172,8 +172,7 @@ def test_block_sharded_group_norm_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    # Wormhole measured 73.090 and 73.106 us; preserve the other architectures' target.
-    expected_duration_ns = 73_100 if is_wormhole_b0() else 74_907
+    expected_duration_ns = 68875  # Measured: ~68.9μs for GroupNorm SDXL block sharded
 
     # Log the performance result
     print(
@@ -210,7 +209,7 @@ def test_block_sharded_group_norm_negative_mask_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 549179  # Measured: ~549μs for GroupNorm SDXL negative mask
+    expected_duration_ns = 460175  # Measured: ~460μs for GroupNorm SDXL negative mask
 
     # Log the performance result
     print(
@@ -247,7 +246,7 @@ def test_ff_matmul_with_gelu_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 238419  # Measured: 238μs for FF Matmul SDXL with GELU
+    expected_duration_ns = 235541  # Measured: ~235.5μs for FF Matmul SDXL with GELU
 
     # Log the performance result
     print(
@@ -284,9 +283,7 @@ def test_conv2d_block_sharded_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = (
-        993500  # Updated 2026-07-09: ~3% faster (~0.9935ms) after CircularBuffer->DataflowBuffer kernel port
-    )
+    expected_duration_ns = 994294  # Measured: ~0.9943ms for Conv2D SDXL block sharded
 
     # Log the performance result
     print(
