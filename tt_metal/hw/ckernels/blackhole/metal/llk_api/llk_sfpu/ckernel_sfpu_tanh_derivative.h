@@ -89,6 +89,23 @@ inline void tanh_derivative_init() {
     sfpi::l_reg[sfpi::LRegs::LReg6] = sfpi::vLut16ii(0.90625f, 1.0f);
 }
 
+// Cody-Waite constants shared by both inline exps below. -ln(2) is split into a high part
+// that is a 13-bit multiple of 2^-13, so k*SECH2_LN2_HI is exact for the |k| these callers
+// reach, and a low part that carries the rest.
+constexpr float SECH2_INV_LN2 = 1.4426950408889634f;
+constexpr float SECH2_LN2_HI = -0.6931152343750000f;  // -ln(2) high bits (exact in float)
+constexpr float SECH2_LN2_LO = -3.19461832987e-05f;   // -ln(2) low bits
+
+// Cody-Waite range reduction t = k·ln(2) + r, k = round(t/ln2), |r| <= ln(2)/2.
+// Returns r and leaves k in k_int for the 2^k scaling.
+sfpi_inline sfpi::vFloat sech2_reduce_ln2(sfpi::vFloat t, sfpi::vInt& k_int) {
+    sfpi::vFloat z = t * SECH2_INV_LN2;
+    sfpi::vFloat k = _sfpu_round_to_nearest_int32_(z, k_int);
+
+    sfpi::vFloat r = k * SECH2_LN2_HI + t;  // Extended precision subtraction
+    return k * SECH2_LN2_LO + r;
+}
+
 // =============================================================================
 // Inline exp for sech² tail: computes exp(-2|x| + ln4) = 4·exp(-2|x|)
 // =============================================================================
@@ -112,9 +129,6 @@ inline void tanh_derivative_init() {
 // =============================================================================
 sfpi_inline sfpi::vFloat inline_exp_sech2_tail(sfpi::vFloat a) {
     constexpr float LN4 = 1.3862943611198906f;
-    constexpr float INV_LN2 = 1.4426950408889634f;
-    constexpr float LN2_HI = -0.6931152343750000f;  // -ln(2) high bits (exact in float)
-    constexpr float LN2_LO = -3.19461832987e-05f;   // -ln(2) low bits
 
     // Taylor coefficients for exp(r), |r| < ln(2)/2 ≈ 0.347
     // Degree-4 is sufficient: the degree-5 term contributes < 0.0001 BF16 ULP
@@ -128,12 +142,8 @@ sfpi_inline sfpi::vFloat inline_exp_sech2_tail(sfpi::vFloat a) {
     sfpi::vFloat t = a * (-2.0f) + LN4;
 
     // Cody-Waite range reduction: t = k·ln(2) + r
-    sfpi::vFloat z = t * INV_LN2;
     sfpi::vInt k_int;
-    sfpi::vFloat k = _sfpu_round_to_nearest_int32_(z, k_int);
-
-    sfpi::vFloat r = k * LN2_HI + t;  // Extended precision subtraction
-    r = k * LN2_LO + r;
+    sfpi::vFloat r = sech2_reduce_ln2(t, k_int);
 
     // Degree-4 Taylor for exp(r)
     sfpi::vFloat poly = PolynomialEvaluator::eval(r, 1.0f, 1.0f, C2, C3, C4);
@@ -161,39 +171,33 @@ sfpi_inline sfpi::vFloat inline_exp_sech2_tail(sfpi::vFloat a) {
 //    the reconstructed exponent rather than folded into the argument as +ln4.
 //    Folding it in costs up to ulp(88)/2 = 3.8e-6 of absolute argument error at the
 //    far end, which is 3.8e-6 of relative error in the result -- under a bfloat16
-//    ulp, but ~60 fp32 ulp. Applying the x4 after the underflow test keeps what the
-//    ln4 trick bought: 4*exp(-2|x|) is still a normal fp32 number out to |x| ~ 44.4,
-//    well past the |x| = 43.7 where exp(-2|x|) alone goes subnormal and flushes.
-// 2. The Taylor polynomial runs to degree 7. Degree 4 truncates at r^5/120 = 4.2e-5
-//    relative for |r| <= ln(2)/2; degree 7 truncates at r^8/8! = 5.2e-9, under 0.1
-//    fp32 ulp.
+//    ulp, but ~60 fp32 ulp. Folding the x4 into the exponent before the FTZ test keeps
+//    what the ln4 trick bought: 4*exp(-2|x|) is still a normal fp32 number out to
+//    |x| ~ 44.4, well past the |x| = 43.7 where exp(-2|x|) alone goes subnormal and
+//    flushes.
+// 2. The polynomial is the fp32 degree-6 minimax that _sfpu_exp_fp32_accurate_ in
+//    ckernel_sfpu_exp.h uses on the same reduced range, not the degree-4 Taylor above,
+//    which truncates at r^5/120 = 4.2e-5 relative for |r| <= ln(2)/2.
 //
-// k*LN2_HI is exact (LN2_HI is a 13-bit multiple of 2^-13 and |k| <= 128), and so is
-// its sum with t, so the reduced argument carries only the LN2_LO rounding.
+// k*SECH2_LN2_HI is exact (a 13-bit multiple of 2^-13 times |k| <= 130, the bound the
+// caller's a < TAIL_REGION_LIMIT guard gives), and so is its sum with t, so the reduced
+// argument carries only the SECH2_LN2_LO rounding.
 // =============================================================================
 sfpi_inline sfpi::vFloat inline_exp4_neg2x_fp32(sfpi::vFloat a) {
-    constexpr float INV_LN2 = 1.4426950408889634f;
-    constexpr float LN2_HI = -0.6931152343750000f;  // -ln(2) high bits (exact in float)
-    constexpr float LN2_LO = -3.19461832987e-05f;   // -ln(2) low bits
-
-    constexpr float C2 = 0.5f;
-    constexpr float C3 = 0.166666667f;
-    constexpr float C4 = 0.0416666667f;
-    constexpr float C5 = 0.00833333333f;
-    constexpr float C6 = 0.00138888889f;
-    constexpr float C7 = 1.98412698e-4f;
+    // Degree-6 minimax for exp(r), |r| <= ln(2)/2, from _sfpu_exp_fp32_accurate_
+    constexpr float C2 = 4.99999851e-1f;  // 0x1.fffff6p-2
+    constexpr float C3 = 1.66664720e-1f;  // 0x1.555450p-3
+    constexpr float C4 = 4.16695364e-2f;  // 0x1.555b5ap-5
+    constexpr float C5 = 8.37312452e-3f;  // 0x1.125edcp-7
+    constexpr float C6 = 1.37805939e-3f;
 
     sfpi::vFloat t = a * -2.0f;
 
     // Cody-Waite range reduction: t = k*ln(2) + r
-    sfpi::vFloat z = t * INV_LN2;
     sfpi::vInt k_int;
-    sfpi::vFloat k = _sfpu_round_to_nearest_int32_(z, k_int);
+    sfpi::vFloat r = sech2_reduce_ln2(t, k_int);
 
-    sfpi::vFloat r = k * LN2_HI + t;
-    r = k * LN2_LO + r;
-
-    sfpi::vFloat poly = PolynomialEvaluator::eval(r, 1.0f, 1.0f, C2, C3, C4, C5, C6, C7);
+    sfpi::vFloat poly = PolynomialEvaluator::eval(r, 1.0f, 1.0f, C2, C3, C4, C5, C6);
 
     // 2^(k+2) scaling via direct exponent bit manipulation. The +2 is the x4.
     sfpi::vInt p_exp = sfpi::exexp(poly, sfpi::ExponentMode::Biased);
@@ -213,6 +217,9 @@ sfpi_inline sfpi::vFloat inline_exp4_neg2x_fp32(sfpi::vFloat a) {
 // interval is closed, not half-open: x = 0 gives exactly 4, and the exp flushes to
 // zero for |x| past ~44.4, which gives exactly 1. Two iterations from the SFPARECIP
 // seed, matching the fp32 arm of _sfpu_reciprocal_gt0_ in ckernel_sfpu_trigonometry.h.
+// This is also why tanh_derivative_sech2_init needs no setup: the seed is SFPARECIP and
+// every constant is a literal. sfpu_reciprocal_iter reads vConstFloatPrgm0 instead, so
+// swapping it in here would need an init that loads it.
 sfpi_inline sfpi::vFloat inline_reciprocal_1_to_4(sfpi::vFloat x) {
     sfpi::vFloat y = sfpi::approx_recip(x);
     sfpi::vFloat e = -x * y + 1.0f;
@@ -273,16 +280,18 @@ constexpr float SECH2_POLY_C10 = 6.33840343077387569082e-02f;
 // fp32 destination -- the exact identity sech²(x) = 4e/(1 + e)², e = exp(-2|x|),
 //   over the whole range, because the piecewise fit above is only ever within
 //   1 bf16 ULP and that is 8.0e-4 relative at x = 0 and 5.0e-3 just past x = 3.
-//   Accuracy: max 4 fp32 ULP, 69% correctly rounded and 94% within 1 ULP over a
-//   65k-point Blackhole sweep of [-45, 45]; against 65,054 max ULP and 1.4%
-//   correctly rounded for the bf16-grade arm on the same points.
-//   Performance: 58 SFPU instructions and 2203.5 cycles/tile, against 83 and
+//   Accuracy (Blackhole): max 2 fp32 ULP, 86% correctly rounded and 99.8% within
+//   1 ULP, both over 65,536 evenly spaced points on [-45, 45] and over 65,536
+//   uniform random points on [-44.5, 44.5]. The bf16-grade arm this replaces
+//   measured 65,054 max ULP and 1.4% correctly rounded over [-45, 45].
+//   Performance: 57 SFPU instructions and 2203.5 cycles/tile, against 83 and
 //   2843.6 for the bf16-grade math this replaces -- 640 cycles/tile *faster*,
 //   not slower, because dropping the two-region split drops a whole region body
-//   that used to be issued for every element. The 25 instructions removed net out
+//   that used to be issued for every element. The 26 instructions removed net out
 //   at 20 issue slots: the Newton reciprocal is a strictly serial 5-op dependency
-//   chain and measures 5 cycles/iteration of pipeline stall that the predicated
-//   straight-line code it replaced did not have.
+//   chain, and with the (1 + e)² chain ahead of it the arm measures 6
+//   cycles/iteration of pipeline stall that the predicated straight-line code it
+//   replaced did not have.
 //
 // Both arms exploit even symmetry via a = |x|.
 // =============================================================================
@@ -300,10 +309,13 @@ inline void calculate_tanh_derivative_sech2() {
         sfpi::vFloat val = sfpi::dst_reg[0];
         sfpi::vFloat result = 0.0f;
 
-        // sech²(x) is an even function: sech²(-x) = sech²(x)
-        sfpi::vFloat a = sfpi::abs(val);
-
         if constexpr (is_fp32_dest_acc_en) {
+            // sech²(x) is an even function: sech²(-x) = sech²(x). Clear the sign bit
+            // rather than take sfpi::abs, which leaves a sign-set NaN sign-set: -NaN
+            // would then pass the a < TAIL_REGION_LIMIT test below, and its bits come
+            // out of inline_exp4_neg2x_fp32 as a finite ~1.8e-38 rather than 0.
+            sfpi::vFloat a = sfpi::setsgn(val, 0);
+
             // fp32 destination: the exact identity, not an approximation of the shape.
             //
             //   sech²(x) = 4e / (1 + e)²,  e = exp(-2|x|)
@@ -317,19 +329,30 @@ inline void calculate_tanh_derivative_sech2() {
             //
             // One formula over the whole range, so there is no boundary to step at. The
             // reciprocal argument is (1 + e)² ∈ [1, 4], and at x = 0 the chain is exact:
-            // e = 1, (1 + e)² = 4, 4/4 = 1. Measured max 4 fp32 ULP and no monotonicity
-            // violation over the full range on Blackhole.
+            // e = 1, (1 + e)² = 4, 4/4 = 1. Measured max 2 fp32 ULP, and no monotonicity
+            // violation in a 32,768-point sweep of [0, 45] on Blackhole. That sweep is
+            // ~1.4e-3 apart, so it cannot see single-ULP steps between adjacent fp32
+            // inputs, and there is one near 0: x = 3e-8 gives 0x3F7FFFFF, 5e-8 gives 1.0.
             //
-            // The a < TAIL_REGION_LIMIT guard is what sends the infinities and NaN to 0,
-            // as in the bf16 arm; past it 4·exp(-2|x|) is subnormal in fp32 anyway.
+            // (1 + e)² is formed as e·(e + 2) + 1, one fused rounding, rather than by
+            // rounding 1 + e and squaring it, which doubles that rounding; the e + 2
+            // rounding enters scaled by e/(1 + e)² <= 1/4. Still exact at x = 0 (4) and
+            // at the flush end (1). It took max ULP from 4 to 2.
+            //
+            // The a < TAIL_REGION_LIMIT guard is what sends the infinities and NaN of
+            // either sign to 0, as in the bf16 arm; past it 4·exp(-2|x|) is subnormal in
+            // fp32 anyway.
             v_if(a < TAIL_REGION_LIMIT) {
                 sfpi::vFloat e4 = inline_exp4_neg2x_fp32(a);  // 4·exp(-2|x|)
                 sfpi::vFloat e = e4 * 0.25f;                  // exp(-2|x|), exact (power of two)
-                sfpi::vFloat den = 1.0f + e;
-                result = e4 * inline_reciprocal_1_to_4(den * den);
+                sfpi::vFloat den = e * (e + 2.0f) + 1.0f;     // (1 + e)², one rounding
+                result = e4 * inline_reciprocal_1_to_4(den);
             }
             v_endif;
         } else {
+            // sech²(x) is an even function: sech²(-x) = sech²(x)
+            sfpi::vFloat a = sfpi::abs(val);
+
             v_if(a < CORE_REGION_LIMIT) {
                 // Core region: degree-10 polynomial in t = (2/9)·u - 1, u = a²
                 // Scaling u ∈ [0, 9) → t ∈ [-1, 1) keeps powers bounded.
@@ -369,8 +392,9 @@ inline void calculate_tanh_derivative_sech2() {
 template <bool APPROXIMATION_MODE>
 inline void tanh_derivative_sech2_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
-    // No special initialization needed — no reciprocal, no LUT.
-    // Polynomial uses only Horner evaluation, inline exp uses only arithmetic.
+    // No special initialization needed — no LUT, no programmable constants. The
+    // polynomial and both inline exps use only Horner evaluation and literals, and the
+    // fp32 arm's reciprocal seeds from SFPARECIP (see inline_reciprocal_1_to_4).
 }
 
 }  // namespace sfpu
