@@ -530,6 +530,25 @@
   team: models
   budget_type: e2e
 
+# Wormhole (N150x4) coherence check only, not perf. README (models/demos/blackhole/qwen36/README.md,
+# "What was validated on Wormhole"): decode is healthy (~14.95 tok/s flat) but prefill is not yet
+# tuned for WH (TTFT scales ~4ms/token), so this stays at the 128-token bucket rather than mirroring
+# the P150x4 entry's traced_4k case.
+- name: Qwen3.6-35B-A3B (Wormhole N150x4) e2e tests
+  cmd: |
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-35B-A3B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-35B-A3B MESH_DEVICE=N150x4
+    pytest --timeout 1800 models/demos/blackhole/qwen36/demo/text_demo.py -k "traced_128 and not traced_128k"
+  model: qwen3.6-35b-a3b
+  model_family: Qwen
+  skus:
+    wh_llmbox_perf:
+      timeout: 45
+      tier: 1
+      release_ready: false
+  owner_id: U08FBKRKTB8 # Kohei Yamaguchi
+  team: models
+  budget_type: e2e
+
 # ── Gemma ──────────────────────────────────────────────────────────
 
 # Tier 3: accuracy-only e2e (ci-token-matching). Validated locally on N300
