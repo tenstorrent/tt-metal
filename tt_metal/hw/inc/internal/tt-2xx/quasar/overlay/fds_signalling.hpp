@@ -38,13 +38,7 @@ inline constexpr uint32_t worker_go_threshold = 1;
 // worker arms its go interrupt mask only after auto dispatch is enabled and groups are programmed.
 inline constexpr uint32_t interrupts_disabled = 0;
 
-// The three cycle counts below are temporary placeholders and will be updated to their actual values later.
-
-// At init, dispatch writes idle to the go wire directly and holds it this long before enabling
-// auto dispatch. Worker filters capture only when the wire value changes, so every worker has to
-// capture idle first; otherwise a first go that repeats the group the previous run left on the wire
-// is never seen.
-inline constexpr uint32_t init_go_park_hold_cycles = 4096;
+// The two cycle counts below are temporary placeholders and will be updated to their actual values later.
 
 // Auto dispatch pacing on dispatch: queued gos go out one every count + 1 cycles, so each go stays on
 // the wire long enough for every worker's filter to capture it before the next value replaces it.
@@ -128,11 +122,6 @@ inline void dispatch_config_group(uint32_t group_id, uint32_t lane_mask, uint32_
 
 // This write is intercepted by auto dispatch.
 inline void dispatch_write_go(uint32_t value) { FdsDispatch::fds_go(value); }
-
-// Direct-path go write, valid only while auto dispatch is disabled.
-inline void dispatch_write_go_direct(uint32_t value) {
-    write_until_readback_matches([=] { FdsDispatch::fds_go(value); }, [] { return FdsDispatch::fds_read_go(); }, value);
-}
 
 inline uint32_t dispatch_read_group_status(uint32_t group_id) { return FdsDispatch::fds_read_group_status(group_id); }
 
