@@ -1065,5 +1065,53 @@
   "rc": 0,
   "started": "2026-09-25T00:11:31",
   "status": "PASS"
+ },
+ "P3.2": {
+  "duration_s": 37.5,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-25T00:21:21"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-25T00:22:12"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-25T00:24:06"
+   }
+  ],
+  "last_run": "2026-09-25T00:24:06",
+  "log": "models/demos/ernie45_d_p/bringup/logs/P3.2.log",
+  "metrics": {
+   "dense_ep_moe_ms_L01": 14.97,
+   "dense_ep_moe_ms_L14": 14.97,
+   "dense_ep_moe_ms_L27": 15.09,
+   "pcc_moe_L01_c0": 0.9999406072636327,
+   "pcc_moe_L01_c1": 0.9996242197333566,
+   "pcc_moe_L14_c0": 0.9995071839785786,
+   "pcc_moe_L14_c1": 0.9995137231021446,
+   "pcc_moe_L27_c0": 0.9995406758143113,
+   "pcc_moe_L27_c1": 0.9995546929470703,
+   "pcc_routed_L01_c0": 0.9999472674507486,
+   "pcc_routed_L01_c1": 0.9996168872882067,
+   "pcc_routed_L14_c0": 0.9994118819093265,
+   "pcc_routed_L14_c1": 0.9994198775779961,
+   "pcc_routed_L27_c0": 0.999490662457374,
+   "pcc_routed_L27_c1": 0.9994841115626831,
+   "speedup_L01": 2.62,
+   "speedup_L14": 2.66,
+   "speedup_L27": 2.71,
+   "unified_moe_ms_L01_c0": 5.71,
+   "unified_moe_ms_L01_c1": 5.49,
+   "unified_moe_ms_L14_c0": 5.62,
+   "unified_moe_ms_L14_c1": 5.3,
+   "unified_moe_ms_L27_c0": 5.56,
+   "unified_moe_ms_L27_c1": 5.42
+  },
+  "rc": 0,
+  "started": "2026-09-25T00:23:29",
+  "status": "PASS"
  }
 }
