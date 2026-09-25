@@ -68,8 +68,6 @@ void kernel_main() {
             // wait on in0 semaphore value to become VALID (set by mcast sender after it multicasts data)
             receiver_sem.wait_min(VALID);
 
-            // value() rather than a raw pointer: Semaphore no longer exposes its L1 address, and on
-            // Quasar value() invalidates the L1 cache and reads the uncached alias.
             const auto is_batch_valid = receiver_sem.value() == VALID;
 
             // We need to pass the value to compute cores regardless of the value of is_batch_valid
