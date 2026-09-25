@@ -85,7 +85,8 @@ ttnn::device_operation::ProgramArtifacts UpsampleNearestFloatProgramFactory::cre
 
     const std::vector<CoreCoord> logical_cores = corerange_to_cores(all_cores, std::nullopt, true);
 
-    // Calculate stick sizes (aligned based on buffer type for efficient reads)
+    // Reader writes aligned_input_page_size bytes per entry, writer reads aligned_output_page_size.
+    // Take the larger so both fit and every entry stays DRAM-aligned if either tensor is in DRAM.
     const std::uint32_t num_cb_pages = BUFFERING_FACTOR;
     const std::uint32_t output_cb_page_size = std::max(aligned_input_page_size, aligned_output_page_size);
 
