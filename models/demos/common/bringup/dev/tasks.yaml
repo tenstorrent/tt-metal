@@ -71,3 +71,11 @@ tasks:
     gate:
       cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/
       metrics: {selftest_passed: ">= 96", selftest_failed: "== 0"}
+  - id: F8
+    title: Framework README, known issues from the build
+    step: framework
+    deps: [F7]
+    paths: [models/demos/common/bringup/README.md, models/demos/common/bringup/knowledge]
+    gate:
+      cmd: python -m models.demos.common.bringup.knowledge.check
+      metrics: {known_issue_errors: "== 0", repo_map_errors: "== 0"}
