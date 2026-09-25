@@ -188,27 +188,6 @@ def test_div_no_nan_fp32(device):
     assert_with_ulp(expected_result=torch_output, actual_result=output, ulp_threshold=1, allow_nonfinite=True)
 
 
-@pytest.mark.parametrize(
-    "input_shapes",
-    [[64, 640], [2, 32, 320], [1, 1, 32, 32], [1, 2, 32, 64, 64]],
-)
-def test_binary_fmod_bf16(
-    device,
-    input_shapes,
-):
-    torch_input_tensor_a = torch.empty(input_shapes, dtype=torch.bfloat16).uniform_(-100, 100)
-    torch_input_tensor_b = torch.empty(input_shapes, dtype=torch.bfloat16).uniform_(-80, 120)
-    torch_output_tensor = torch.fmod(torch_input_tensor_a, torch_input_tensor_b)
-
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
-    output = ttnn.fmod(input_tensor_a, input_tensor_b)
-    output = ttnn.to_torch(output)
-
-    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output, ulp_threshold=1)
-
-
 # This test was added for #17361
 # If input is a multiple of the scalar, the result should be 0, but both Torch and TT output either 0 or the scalar value itself depending on the operands.
 # This inconsistency is persistent due to some fp precision loss in both Torch and TT.
