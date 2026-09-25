@@ -929,8 +929,20 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::SQRT: return {"sqrt_tile_init();", fmt::format("sqrt_tile({});", idst)};
         case UnaryOpType::RSQRT: return {"rsqrt_tile_init();", fmt::format("rsqrt_tile({});", idst)};
         case UnaryOpType::CBRT: return {"cbrt_tile_init();", fmt::format("cbrt_tile({});", idst)};
-        case UnaryOpType::EXP2: return {"exp2_tile_init();", fmt::format("exp2_tile({});", idst)};
-        case UnaryOpType::EXPM1: return {"expm1_tile_init();", fmt::format("expm1_tile({});", idst)};
+        case UnaryOpType::EXP2:
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16) {
+                return {"exp2_tt_poly_bf16_tile_init();", fmt::format("exp2_tt_poly_bf16_tile({});", idst)};
+            }
+#endif
+            return {"exp2_tile_init();", fmt::format("exp2_tile({});", idst)};
+        case UnaryOpType::EXPM1:
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16) {
+                return {"expm1_tt_poly_bf16_tile_init();", fmt::format("expm1_tt_poly_bf16_tile({});", idst)};
+            }
+#endif
+            return {"expm1_tile_init();", fmt::format("expm1_tile({});", idst)};
         case UnaryOpType::ASIN: return {"asin_tile_init();", fmt::format("asin_tile({});", idst)};
         case UnaryOpType::ASINH: return {"asinh_tile_init();", fmt::format("asinh_tile({});", idst)};
         case UnaryOpType::ACOS: return {"acos_tile_init();", fmt::format("acos_tile({});", idst)};
