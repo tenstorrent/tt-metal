@@ -21,7 +21,6 @@ from ...layers.linear import ColParallelLinear, Linear
 from ...layers.module import Module, ModuleList, Parameter
 from ...utils import cache
 from ...utils.padding import PaddingConfig
-from ...utils.sdpa_recipe import validate_recipe_args
 from ...utils.substate import rename_substate, substate
 from ...utils.tensor import bf16_tensor
 
@@ -145,13 +144,8 @@ class MotifTransformer(Module):
         mesh_device: ttnn.MeshDevice,
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
-        sdpa_precision: ttnn.SDPAPrecision | None = None,
-        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
         super().__init__()
-
-        # Fail fast, before any device allocation, on an invalid SDPA recipe / KV dtype request.
-        self.validate_sdpa_recipe(config, sdpa_precision, sdpa_kv_dtype)
 
         in_channels = self.LATENT_CHANNELS
         out_channels = self.LATENT_CHANNELS
@@ -226,8 +220,6 @@ class MotifTransformer(Module):
                 mesh_device=mesh_device,
                 attention_k_chunk_size=self.get_k_chunk_size(sp_factor),
                 attention_q_chunk_size=self.Q_CHUNK_SIZE,
-                sdpa_precision=sdpa_precision,
-                sdpa_kv_dtype=sdpa_kv_dtype,
             )
             for i in range(config.num_layers)
         )
@@ -263,15 +255,6 @@ class MotifTransformer(Module):
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
         )
-
-    @staticmethod
-    def validate_sdpa_recipe(
-        config: MotifTransformerConfig,
-        sdpa_precision: ttnn.SDPAPrecision | None,
-        sdpa_kv_dtype: ttnn.DataType | None,
-    ) -> None:
-        """Raise ValueError for an invalid named SDPA recipe / KV dtype (Motif-6B is D64, supported)."""
-        validate_recipe_args(sdpa_precision, sdpa_kv_dtype, head_dim=config.head_dim, model="Motif")
 
     @classmethod
     def get_k_chunk_size(cls, sp_factor: int) -> int:
@@ -555,8 +538,6 @@ class MotifCheckpoint:
         latents_width: int,
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
-        sdpa_precision: ttnn.SDPAPrecision | None = None,
-        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> MotifTransformer:
         """Construct a ``MotifTransformer`` for this checkpoint and load its weights."""
         device = ccl_manager.mesh_device
@@ -568,8 +549,6 @@ class MotifCheckpoint:
             mesh_device=device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
-            sdpa_precision=sdpa_precision,
-            sdpa_kv_dtype=sdpa_kv_dtype,
         )
         cache.load_model(
             model,

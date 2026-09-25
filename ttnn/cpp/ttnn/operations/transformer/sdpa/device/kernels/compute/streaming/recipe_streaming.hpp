@@ -1010,8 +1010,8 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
                 matmul_block(cur_sum_cb, col_identity_cb, 1, 0, 0, 0, N, 1, N);
             }
 
-            recip_tile_init<false>();
-            MATH((recip_tile<false>(0 /*dst_index*/, VectorMode::C)));
+            recip_tile_init();
+            MATH((recip_tile(0 /*dst_index*/, VectorMode::C)));
             tile_regs_commit();
 
             tile_regs_wait();

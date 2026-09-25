@@ -83,11 +83,7 @@ class Flux2Pipeline:
         trace_warmup: bool = False,
         vae_use_conv3d: bool = False,
         shard_prompt: bool = False,
-        sdpa_precision: ttnn.SDPAPrecision | None = None,
-        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
-        """``sdpa_precision``/``sdpa_kv_dtype`` override the named SDPA recipe of every
-        denoiser attention call; omit them for each attention's default recipe (legacy SDPA off Blackhole)."""
         self._mesh_device = mesh_device
         self._parallel_config = parallel_config
         self._encoder_parallel_config = encoder_parallel_config
@@ -154,8 +150,6 @@ class Flux2Pipeline:
             padding_config=padding_config,
             is_fsdp=self.is_fsdp,
             shard_prompt=self._shard_prompt,
-            sdpa_precision=sdpa_precision,
-            sdpa_kv_dtype=sdpa_kv_dtype,
         )
 
         self._pos_embed = self._torch_transformer.pos_embed
@@ -323,8 +317,6 @@ class Flux2Pipeline:
         checkpoint_name: str = "black-forest-labs/FLUX.2-dev",
         vae_use_conv3d: bool = False,
         shard_prompt: bool = False,
-        sdpa_precision: ttnn.SDPAPrecision | None = None,
-        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> Flux2Pipeline:
         dit_parallel_config = DiTGParallelConfigNoCFG(
             tensor_parallel=ParallelFactor(factor=int(mesh_device.shape[tp_axis]), mesh_axis=tp_axis),
@@ -352,8 +344,6 @@ class Flux2Pipeline:
             trace_warmup=trace_warmup,
             vae_use_conv3d=vae_use_conv3d,
             shard_prompt=shard_prompt,
-            sdpa_precision=sdpa_precision,
-            sdpa_kv_dtype=sdpa_kv_dtype,
         )
 
     def __call__(

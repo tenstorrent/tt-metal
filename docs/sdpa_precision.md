@@ -226,17 +226,6 @@ default scale and up to three head-segments per core row. Multi-pass programs ru
 ring-inner, keeping one resident recurrent state and Q chunk per pass; FAST at three passes keeps the
 legacy exp-ring L1 layout, which does not fit Q256/K512.
 
-`WanPipeline`, `WanTransformer3DModel`, `WanTransformerBlock` and `WanAttention`
-have opt-in `sdpa_precision` and `sdpa_kv_dtype` arguments that apply to both
-self- and unmasked cross-attention. Under a recipe every SDPA call leaves the chunks
-to the op ([op-selected blocking](#op-selected-blocking)); the 4x32
-Galaxy mesh uses exp_ring with the recipe, which is not yet qualified on Galaxy
-hardware. E preparation happens after norm/RoPE and before
-ring communication; ping-pong KV buffers use the selected storage dtype.
-Omitting these arguments retains the original model behavior. Fresh pretrained
-attention-block tests qualify this integration, not generated-video quality or
-a change to model defaults.
-
 ## Examples
 
 ```python

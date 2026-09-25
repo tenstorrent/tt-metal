@@ -472,9 +472,6 @@ class VaeAttention(Module):
         )
 
         grid_size = ctx.device.compute_with_storage_grid_size()
-        # Legacy SDPA on purpose: this is single-head attention with head dim = num_channels (512 in
-        # the FLUX/SD VAEs), and the named SDPA recipes reject D512 on Blackhole for L1 ("bytes <=
-        # available", sdpa_recipe.cpp check_recipe_l1_fit; test_sdpa_dit_recipe_parity.py::test_vae_*).
         self._sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid_size,
             q_chunk_size=resolved_q_chunk,

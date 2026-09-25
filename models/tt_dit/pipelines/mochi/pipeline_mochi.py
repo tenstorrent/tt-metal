@@ -186,8 +186,6 @@ class MochiPipeline(PipelineAPIMixin):
         num_frames: int = 168,
         max_sequence_length: int = 256,
         checkpoint_name: str = _DEFAULT_CHECKPOINT,
-        sdpa_precision: ttnn.SDPAPrecision | None = None,
-        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> MochiPipeline:
         config = MochiPipelineConfig.default(
             mesh_shape=mesh_device.shape,
@@ -197,20 +195,14 @@ class MochiPipeline(PipelineAPIMixin):
             max_sequence_length=max_sequence_length,
             checkpoint_name=checkpoint_name,
         )
-        return cls(device=mesh_device, config=config, sdpa_precision=sdpa_precision, sdpa_kv_dtype=sdpa_kv_dtype)
+        return cls(device=mesh_device, config=config)
 
     def __init__(
         self,
         *,
         device: ttnn.MeshDevice,
         config: MochiPipelineConfig,
-        sdpa_precision: ttnn.SDPAPrecision | None = None,
-        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
-        """``sdpa_precision``/``sdpa_kv_dtype`` override the named SDPA recipe of every
-        denoiser attention call; omit them for each attention's default recipe (legacy SDPA off Blackhole)."""
-        self._sdpa_precision = sdpa_precision
-        self._sdpa_kv_dtype = sdpa_kv_dtype
         # TODO: determine these scaling factors from model parameters
         self.vae_spatial_scale_factor = 8
         self.vae_temporal_scale_factor = 6
@@ -274,8 +266,6 @@ class MochiPipeline(PipelineAPIMixin):
             ccl_manager=self._ccl_manager,
             parallel_config=self.parallel_config,
             is_fsdp=True,
-            sdpa_precision=self._sdpa_precision,
-            sdpa_kv_dtype=self._sdpa_kv_dtype,
         )
         self._tracer = Tracer(self._transformer.forward, device=device, prep_run=False)
 
@@ -348,8 +338,6 @@ class MochiPipeline(PipelineAPIMixin):
                 ccl_manager=self._ccl_manager,
                 parallel_config=self.parallel_config,
                 is_fsdp=True,
-                sdpa_precision=self._sdpa_precision,
-                sdpa_kv_dtype=self._sdpa_kv_dtype,
             )
             self._tracer = Tracer(
                 self._transformer.forward, device=self._device, prep_run=True, clone_prep_inputs=False
