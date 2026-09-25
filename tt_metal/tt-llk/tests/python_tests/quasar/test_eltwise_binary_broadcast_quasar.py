@@ -176,26 +176,17 @@ def binary_broadcast_implied_math_formats(format, *, is_perf=False):
     return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
 
 
-def binary_broadcast_math_fidelities(format, math_op):
-    # Int8 is an exact integer op. Float16_b is full precision at LoFi.
-    if format.input_format in (DataFormat.Int8, DataFormat.Float16_b):
-        return [MathFidelity.LoFi]
-    return get_valid_math_fidelities(format, math_op)
-
-
 @pytest.mark.quasar
 @parametrize(
     formats=BINARY_BROADCAST_FORMATS,
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
-    math_op=[
+    mathop=[
         MathOperation.Elwadd,
         MathOperation.Elwsub,
         MathOperation.Elwmul,
     ],
     broadcast_type=BROADCAST_TYPES,
-    math_fidelity=lambda formats, math_op: binary_broadcast_math_fidelities(
-        formats, math_op
-    ),
+    math_fidelity=lambda formats, mathop: get_valid_math_fidelities(formats, mathop),
     implied_math_format=lambda formats: binary_broadcast_implied_math_formats(formats),
     dest_sync=lambda: binary_broadcast_dest_sync_modes(is_perf=False),
     unpack_to_dest=[False],
@@ -216,7 +207,7 @@ def binary_broadcast_math_fidelities(format, math_op):
 def test_eltwise_binary_broadcast_quasar(
     formats,
     dest_acc,
-    math_op,
+    mathop,
     broadcast_type,
     math_fidelity,
     implied_math_format,
@@ -283,7 +274,7 @@ def test_eltwise_binary_broadcast_quasar(
         else formats.input_format
     )
     golden_tensor = generate_golden(
-        math_op,
+        mathop,
         src_A,
         bcast_src_B_tensor,
         formats.output_format,
@@ -304,7 +295,7 @@ def test_eltwise_binary_broadcast_quasar(
         "formats": formats,
         "templates": [
             MATH_FIDELITY(math_fidelity),
-            MATH_OP(mathop=math_op),
+            MATH_OP(mathop=mathop),
             IMPLIED_MATH_FORMAT(implied_math_format),
             BROADCAST_TYPE(broadcast_type),
             DEST_SYNC(dest_sync),

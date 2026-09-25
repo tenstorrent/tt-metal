@@ -2,7 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from helpers.constraints import get_perf_math_operations
+from helpers.constraints import (
+    get_perf_math_operations,
+    get_valid_math_fidelities,
+)
 from helpers.llk_params import (
     PERF_LOOP_FACTOR_QUASAR,
     PERF_RUN_TYPES_QUASAR,
@@ -14,7 +17,6 @@ from quasar.test_eltwise_binary_quasar import (
     eltwise_binary_dest_sync_modes,
     eltwise_binary_implied_math_formats,
     eltwise_binary_input_dimensions,
-    eltwise_binary_math_fidelities,
     eltwise_binary_tile_dimensions,
     skip_if_quasar_eltwise_binary_hangs,
 )
@@ -28,8 +30,8 @@ from quasar.test_eltwise_binary_quasar import (
 @pytest.mark.quasar
 @parametrize(
     formats=ELTWISE_FORMATS,
-    math_op=get_perf_math_operations,
-    math_fidelity=eltwise_binary_math_fidelities,
+    mathop=get_perf_math_operations,
+    math_fidelity=lambda formats, mathop: get_valid_math_fidelities(formats, mathop),
     implied_math_format=lambda formats: eltwise_binary_implied_math_formats(
         formats, is_perf=True
     ),
@@ -50,7 +52,7 @@ from quasar.test_eltwise_binary_quasar import (
 def test_perf_eltwise_binary_quasar(
     perf_report,
     formats,
-    math_op,
+    mathop,
     math_fidelity,
     implied_math_format,
     dest_acc,
@@ -67,7 +69,7 @@ def test_perf_eltwise_binary_quasar(
 
     run_eltwise_binary(
         formats,
-        math_op,
+        mathop,
         math_fidelity,
         implied_math_format,
         dest_acc,

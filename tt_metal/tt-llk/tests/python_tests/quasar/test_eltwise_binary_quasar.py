@@ -3,6 +3,7 @@
 
 import pytest
 import torch
+from helpers.constraints import get_valid_math_fidelities
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     EltwiseBinaryGolden,
@@ -12,7 +13,6 @@ from helpers.llk_params import (
     DestAccumulation,
     DestSync,
     ImpliedMathFormat,
-    MathFidelity,
     MathOperation,
     PerfRunType,
     format_dict,
@@ -71,22 +71,6 @@ def eltwise_binary_implied_math_formats(formats, *, is_perf=False):
     if formats.input_format.is_mx_format():
         return [ImpliedMathFormat.Yes]
     return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
-
-
-def eltwise_binary_math_fidelities(math_op, formats):
-    # Add/sub ignore fidelity. Int8 is an exact integer op, and Float16_b is
-    # already full precision at LoFi: HiFi only touches the low 3 mantissa bits.
-    if math_op in [
-        MathOperation.Elwadd,
-        MathOperation.Elwsub,
-    ] or formats.input_format in (DataFormat.Int8, DataFormat.Float16_b):
-        return [MathFidelity.LoFi]
-    return [
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ]
 
 
 # Quasar FPU eltwise binary steps 8 dest rows per instruction. A tile with
@@ -167,12 +151,12 @@ ELTWISE_FORMATS = (
 @pytest.mark.quasar
 @parametrize(
     formats=ELTWISE_FORMATS,
-    math_op=[
+    mathop=[
         MathOperation.Elwadd,
         MathOperation.Elwsub,
         MathOperation.Elwmul,
     ],
-    math_fidelity=eltwise_binary_math_fidelities,
+    math_fidelity=lambda formats, mathop: get_valid_math_fidelities(formats, mathop),
     implied_math_format=lambda formats: eltwise_binary_implied_math_formats(
         formats, is_perf=False
     ),
@@ -193,7 +177,7 @@ ELTWISE_FORMATS = (
 )
 def test_eltwise_binary(
     formats,
-    math_op,
+    mathop,
     math_fidelity,
     implied_math_format,
     dest_acc,
@@ -240,7 +224,7 @@ def test_eltwise_binary(
 
     generate_golden = get_golden_generator(EltwiseBinaryGolden)
     golden_tensor = generate_golden(
-        math_op,
+        mathop,
         src_A,
         src_B,
         formats.output_format,
@@ -260,7 +244,7 @@ def test_eltwise_binary(
         "formats": formats,
         "templates": [
             MATH_FIDELITY(math_fidelity),
-            MATH_OP(mathop=math_op),
+            MATH_OP(mathop=mathop),
             IMPLIED_MATH_FORMAT(implied_math_format),
             DEST_SYNC(dest_sync),
             ACC_TO_DEST(acc_to_dest),

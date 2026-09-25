@@ -328,6 +328,42 @@ def test_cache_prefix_tracks_complete_writes_and_invalidates_failed_suffix(monke
     assert cache.populated_end(0, NUM_LAYERS) == 0
 
 
+# A capacity failure must name the knob that caused it and must not strand the cache that did fit,
+# while any other RuntimeError must arrive unedited rather than wearing footprint advice that does
+# not apply. Inject the failure: provoking a real one needs a slot count whose host staging tensor
+# is larger than the DRAM it is meant to overflow, and the device path is covered above.
+@pytest.mark.parametrize(
+    "message, names_num_users",
+    [
+        ("Out of Memory: Not enough space to allocate 268435456 B DRAM buffer across 8 banks", True),
+        ("Cannot access device 3: device has been closed", False),
+    ],
+    ids=["oom", "unrelated"],
+)
+def test_allocate_kv_cache_failure_explains_num_users_and_frees_the_first_cache(
+    monkeypatch, expect_error, message, names_num_users
+):
+    live = []
+
+    def fake_from_torch(source, **metadata):
+        if len(live) == 1:  # the K cache fit; fail the V cache
+            raise RuntimeError(message)
+        tensor = SimpleNamespace(deallocate=lambda force: live.remove(tensor))
+        live.append(tensor)
+        return tensor
+
+    monkeypatch.setattr(cache_module, "_validate_target", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cache_module, "_cache_memory_config", lambda mesh_device: None)
+    monkeypatch.setattr(cache_module.ttnn, "from_torch", fake_from_torch)
+    monkeypatch.setattr(cache_module.ttnn, "ReplicateTensorToMesh", lambda mesh_device: None)
+    # The staging buffer is beside the point here and would be 4 GB at this slot count.
+    monkeypatch.setattr(cache_module.torch, "zeros", lambda shape: None)
+
+    with expect_error(RuntimeError, "num_users=64" if names_num_users else message):
+        allocate_kv_cache(object(), object(), num_users=64, max_seq_len=8192)
+    assert not live, "the K cache stayed allocated after the V cache failed"
+
+
 # Allocate the exact 2-user/32-layer cache on the actual DRAM bank grid and read every chip; this
 # catches wrong batch packing, local sequence size, dtype, NdShard page geometry, or nonzero startup.
 @pytest.mark.parametrize("mesh_device", [pytest.param(MESH_SHAPE, id="galaxy-4x8")], indirect=True)
@@ -355,8 +391,10 @@ def test_allocate_kv_cache_is_zero_and_has_packed_page_geometry(mesh_device, cac
     cache.k.deallocate(True)
     cache.v.deallocate(True)
 
-    with expect_error(ValueError, "num_users=2"):
-        allocate_kv_cache(mesh_device, mesh_config, num_users=1)
+    with expect_error(ValueError, "num_users must be a positive int"):
+        allocate_kv_cache(mesh_device, mesh_config, num_users=0)
+    with expect_error(TypeError, "num_users must be an eager Python int"):
+        allocate_kv_cache(mesh_device, mesh_config, num_users=2.0)
     with expect_error(ValueError, "num_layers=32"):
         allocate_kv_cache(mesh_device, mesh_config, num_layers=31)
     with expect_error(ValueError, "positive multiple of 1024"):
@@ -364,6 +402,63 @@ def test_allocate_kv_cache_is_zero_and_has_packed_page_geometry(mesh_device, cac
     wrong_mesh = SimpleNamespace(mesh_shape=(8, 4), sp=8, tp=4, sp_axis=0, tp_axis=1)
     with expect_error(ValueError, "requires mesh_shape"):
         allocate_kv_cache(mesh_device, wrong_mesh)
+
+
+# More than two concurrent users: allocate four slots and check the packing that makes them
+# independent. Every slot is its own 32-plane K/V region at batch = slot * 32 + layer, so this
+# catches a slot stride that collides, a batch extent that silently truncates the extra slots, and
+# an out-of-range slot that would alias slot 0 instead of failing.
+@pytest.mark.parametrize("mesh_device", [pytest.param(MESH_SHAPE, id="galaxy-4x8")], indirect=True)
+@pytest.mark.parametrize("cache_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16", "bf8-b"])
+def test_allocate_kv_cache_keeps_extra_user_slots_independent(mesh_device, cache_dtype, expect_error):
+    slots, layer = 4, 5
+    cache = allocate_kv_cache(
+        mesh_device,
+        MeshConfig(MESH_SHAPE, TP),
+        num_users=slots,
+        max_seq_len=MAX_SEQ_LEN,
+        cache_dtype=cache_dtype,
+    )
+    try:
+        assert (cache.num_users, cache.num_layers, cache.max_seq_len, cache.sp) == (slots, NUM_LAYERS, MAX_SEQ_LEN, SP)
+        for tensor in (cache.k, cache.v):
+            assert tuple(tensor.shape) == (slots * NUM_LAYERS, 1, LOCAL_CACHE_SEQUENCE, HEAD_DIM)
+
+        # One distinct power of two per slot: exact in BF16 and in every BF8_B block, so any
+        # difference below is placement, not rounding.
+        values = {slot: float(2**slot) for slot in range(slots)}
+        for slot, value in values.items():
+            chunk = torch.full((NUM_KV_HEADS, GLOBAL_CHUNK, HEAD_DIM), value)
+            tt_k, tt_v = _to_chunk(mesh_device, chunk), _to_chunk(mesh_device, -chunk)
+            write_kv_chunk(cache, tt_k, tt_v, slot_idx=slot, layer_idx=layer, actual_start=0, actual_end=GLOBAL_CHUNK)
+            tt_k.deallocate(True)
+            tt_v.deallocate(True)
+        ttnn.synchronize_device(mesh_device)
+
+        # A GLOBAL_CHUNK write fills each SP rank's first LOCAL_CHUNK rows of the addressed plane.
+        for kind, tensor, sign in (("k", cache.k, 1.0), ("v", cache.v, -1.0)):
+            for device_idx, shard in enumerate(ttnn.get_device_tensors(tensor)):
+                plane = ttnn.to_torch(shard).float()
+                for batch in range(slots * NUM_LAYERS):
+                    slot, written = divmod(batch, NUM_LAYERS)
+                    want = sign * values[slot] if written == layer else 0.0
+                    rows = plane[batch, 0, :LOCAL_CHUNK]
+                    assert torch.equal(
+                        rows, torch.full_like(rows, want)
+                    ), f"{kind} chip={device_idx} batch={batch} (slot {slot}, layer {written}) expected {want}"
+                    tail = plane[batch, 0, LOCAL_CHUNK:LOCAL_CACHE_SEQUENCE]
+                    assert torch.count_nonzero(tail) == 0, f"{kind} chip={device_idx} batch={batch} tail not zero"
+
+        chunk = torch.full((NUM_KV_HEADS, GLOBAL_CHUNK, HEAD_DIM), 1.0)
+        tt_k, tt_v = _to_chunk(mesh_device, chunk), _to_chunk(mesh_device, chunk)
+        with expect_error(ValueError, f"slot_idx {slots} out of range"):
+            write_kv_chunk(cache, tt_k, tt_v, slot_idx=slots, layer_idx=0, actual_start=0, actual_end=GLOBAL_CHUNK)
+        tt_k.deallocate(True)
+        tt_v.deallocate(True)
+        logger.info(f"{slots}-slot cache: per-slot planes independent for K and V on all {SP * TP} chips")
+    finally:
+        cache.k.deallocate(True)
+        cache.v.deallocate(True)
 
 
 # Write boundary, partial-tile, full-chunk, continuation, and physical-tail cases into sentinel

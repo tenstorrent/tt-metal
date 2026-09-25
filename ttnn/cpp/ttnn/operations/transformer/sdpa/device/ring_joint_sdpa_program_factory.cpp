@@ -610,6 +610,22 @@ void apply_ring_joint_scalar_runtime_args(
     const std::array<const Tensor*, 2> ag_inputs = {
         &input_k, tensor_args.input_v.has_value() ? &tensor_args.input_v.value() : &input_k};
     const bool uses_neighbor_halo = args.has_sliding_window();
+    // One reader/writer kernel pair per halo hop, appended in hop order after the three SDPA kernels.
+    std::optional<ring_joint::ChunkedSlidingHaloLayout> runtime_halo_layout;
+    if (uses_neighbor_halo) {
+        runtime_halo_layout = ring_joint::build_chunked_sliding_halo_layout(
+            tensor_args.input_q.padded_shape()[2] / tt::constants::TILE_HEIGHT,
+            args.get_k_chunk_size() / tt::constants::TILE_HEIGHT,
+            args.sliding_window_size.value(),
+            tt::constants::TILE_HEIGHT,
+            static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size),
+            runtime_plan.logical_nt,
+            derived_kv_slab_count(args, tensor_args),
+            args.kv_actual_isl.has_value() ? std::optional<uint32_t>(*args.kv_actual_isl / tt::constants::TILE_HEIGHT)
+                                           : std::nullopt);
+        TT_FATAL(runtime_halo_layout->uses_neighbor_halo(), "Sliding attention requires a neighbor halo");
+    }
+    const uint32_t halo_hop_count = runtime_halo_layout ? runtime_halo_layout->remote_hop_count() : 0;
     const uint32_t tensor_descriptor_field_count =
         tensor_args.has_metadata() ? ag_rt::kMetadataTensorDescriptorFieldCount : ag_rt::kTensorDescriptorFieldCount;
     const uint32_t neighbor_reader_tensor_descriptor_field_count =
@@ -643,11 +659,13 @@ void apply_ring_joint_scalar_runtime_args(
             }
         };
         if (uses_neighbor_halo) {
-            patch_reader_batch_base(
-                kNeighborHaloReaderKernelIndex,
-                ag_rt::kNeighborReaderRuntimeArgHeaderCount,
-                neighbor_reader_tensor_descriptor_field_count,
-                ag_rt::kNeighborReaderInputBatchBaseFieldOffset);
+            for (uint32_t hop = 1; hop <= halo_hop_count; ++hop) {
+                patch_reader_batch_base(
+                    kNeighborHaloReaderKernelIndex + 2 * (hop - 1),
+                    ag_rt::kNeighborReaderRuntimeArgHeaderCount,
+                    neighbor_reader_tensor_descriptor_field_count,
+                    ag_rt::kNeighborReaderInputBatchBaseFieldOffset);
+            }
         } else {
             patch_reader_batch_base(
                 kAllGatherReaderForwardKernelIndex,
@@ -715,61 +733,56 @@ void apply_ring_joint_scalar_runtime_args(
     }
 
     if (args.has_sliding_window() && (patch_indexed_kv_cache || patch_kv_pad_rotation)) {
-        const uint32_t runtime_ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
-        const auto runtime_chunked_sliding_layout = ring_joint::build_chunked_sliding_halo_layout(
-            tensor_args.input_q.padded_shape()[2] / tt::constants::TILE_HEIGHT,
-            args.get_k_chunk_size() / tt::constants::TILE_HEIGHT,
-            args.sliding_window_size.value(),
-            tt::constants::TILE_HEIGHT,
-            runtime_ring_size,
-            runtime_plan.logical_nt,
-            derived_kv_slab_count(args, tensor_args),
-            args.kv_actual_isl.has_value() ? std::optional<uint32_t>(*args.kv_actual_isl / tt::constants::TILE_HEIGHT)
-                                           : std::nullopt);
-        TT_FATAL(runtime_chunked_sliding_layout.uses_neighbor_halo(), "Sliding attention requires a neighbor halo");
+        const auto& runtime_chunked_sliding_layout = runtime_halo_layout.value();
         // logical_n/kv_actual_isl are runtime-patched and excluded from the program hash. For
-        // compact chunked sliding they also choose which cache-group tail the one-hop gather reads.
-        // Relocate every per-link reader/writer slice from the descriptor's previous group to the current group.
-        const auto sources = runtime_chunked_sliding_layout.send_sources(ring_write_plan.transport_rank);
-        auto& reader_grid_args = GetRuntimeArgs(program, kNeighborHaloReaderKernelIndex);
-        auto& writer_grid_args = GetRuntimeArgs(program, kNeighborHaloWriterKernelIndex);
-        TT_FATAL(reader_grid_args.size() == writer_grid_args.size(), "Directional gather runtime grids disagree");
-        for (uint32_t x = 0; x < reader_grid_args.size(); ++x) {
-            TT_FATAL(
-                reader_grid_args[x].size() == writer_grid_args[x].size(),
-                "Directional gather runtime grid columns disagree");
-            for (uint32_t y = 0; y < reader_grid_args[x].size(); ++y) {
-                auto& reader_args = reader_grid_args[x][y];
-                auto& writer_args = writer_grid_args[x][y];
-                if (reader_args.size() == 0 && writer_args.size() == 0) {
-                    continue;
-                }
+        // compact chunked sliding they also choose which cache-group tail each hop reads.
+        // Rewrite every per-link reader/writer slice for the current request.
+        // A one-hop halo spreads its exchange over every link; a multi-hop halo gives each hop one.
+        const uint32_t links_per_hop = halo_hop_count == 1 ? args.all_gather_operation_attributes.num_links : 1;
+        for (uint32_t hop = 1; hop <= halo_hop_count; ++hop) {
+            const auto sources = runtime_chunked_sliding_layout.send_sources(ring_write_plan.transport_rank, hop);
+            const uint32_t tail_rows = runtime_chunked_sliding_layout.hop_rows(hop);
+            auto& reader_grid_args = GetRuntimeArgs(program, kNeighborHaloReaderKernelIndex + 2 * (hop - 1));
+            auto& writer_grid_args = GetRuntimeArgs(program, kNeighborHaloWriterKernelIndex + 2 * (hop - 1));
+            TT_FATAL(reader_grid_args.size() == writer_grid_args.size(), "Directional gather runtime grids disagree");
+            for (uint32_t x = 0; x < reader_grid_args.size(); ++x) {
                 TT_FATAL(
-                    reader_args.size() != 0 && writer_args.size() != 0, "Directional gather worker pair is incomplete");
-                for (uint32_t in = 0; in < num_ag_inputs; ++in) {
-                    const uint32_t reader_base = ag_rt::kNeighborReaderRuntimeArgHeaderCount +
-                                                 in * neighbor_reader_tensor_descriptor_field_count;
-                    const uint32_t writer_base = ag_rt::kNeighborWriterRuntimeArgHeaderCount +
-                                                 in * ag_rt::kNeighborWriterTensorDescriptorFieldCount;
+                    reader_grid_args[x].size() == writer_grid_args[x].size(),
+                    "Directional gather runtime grid columns disagree");
+                for (uint32_t y = 0; y < reader_grid_args[x].size(); ++y) {
+                    auto& reader_args = reader_grid_args[x][y];
+                    auto& writer_args = writer_grid_args[x][y];
+                    if (reader_args.size() == 0 && writer_args.size() == 0) {
+                        continue;
+                    }
                     TT_FATAL(
-                        writer_args.size() >= writer_base + ag_rt::kNeighborWriterTensorDescriptorFieldCount,
-                        "Directional gather writer descriptor is incomplete");
-                    const uint32_t input_Wt = ag_inputs[in]->padded_shape()[3] / tt::constants::TILE_WIDTH;
-                    const uint32_t halo_pages = runtime_chunked_sliding_layout.halo_tile_rows * input_Wt;
-                    const uint32_t link = reader_args[ag_rt::kNeighborReaderRuntimeArgHeaderCount - 1];
-                    const uint32_t num_links = args.all_gather_operation_attributes.num_links;
-                    const uint32_t pages = sources.count * halo_pages;
-                    const uint32_t start = link * (pages / num_links) + std::min(link, pages % num_links);
-                    const uint32_t end = (link + 1) * (pages / num_links) + std::min(link + 1, pages % num_links);
-                    reader_args[reader_base + ag_rt::kNeighborReaderInputTileStartFieldOffset] = start;
-                    reader_args[reader_base + ag_rt::kNeighborReaderInputTileEndFieldOffset] = end;
-                    reader_args[reader_base + ag_rt::kNeighborReaderFirstOriginFieldOffset] =
-                        sources.first_start_tile * input_Wt;
-                    reader_args[reader_base + ag_rt::kNeighborReaderSecondOriginFieldOffset] =
-                        sources.second_start_tile * input_Wt;
-                    reader_args[reader_base + ag_rt::kNeighborReaderHaloPagesFieldOffset] = halo_pages;
-                    writer_args[writer_base + ag_rt::kNeighborWriterInputTileStartFieldOffset] = start;
-                    writer_args[writer_base + ag_rt::kNeighborWriterInputTileEndFieldOffset] = end;
+                        reader_args.size() != 0 && writer_args.size() != 0,
+                        "Directional gather worker pair is incomplete");
+                    for (uint32_t in = 0; in < num_ag_inputs; ++in) {
+                        const uint32_t reader_base = ag_rt::kNeighborReaderRuntimeArgHeaderCount +
+                                                     in * neighbor_reader_tensor_descriptor_field_count;
+                        const uint32_t writer_base = ag_rt::kNeighborWriterRuntimeArgHeaderCount +
+                                                     in * ag_rt::kNeighborWriterTensorDescriptorFieldCount;
+                        TT_FATAL(
+                            writer_args.size() >= writer_base + ag_rt::kNeighborWriterTensorDescriptorFieldCount,
+                            "Directional gather writer descriptor is incomplete");
+                        const uint32_t input_Wt = ag_inputs[in]->padded_shape()[3] / tt::constants::TILE_WIDTH;
+                        const uint32_t halo_pages = tail_rows * input_Wt;
+                        const uint32_t link = reader_args[ag_rt::kNeighborReaderRuntimeArgHeaderCount - 1];
+                        const uint32_t pages = sources.count * halo_pages;
+                        const uint32_t start = link * (pages / links_per_hop) + std::min(link, pages % links_per_hop);
+                        const uint32_t end =
+                            (link + 1) * (pages / links_per_hop) + std::min(link + 1, pages % links_per_hop);
+                        reader_args[reader_base + ag_rt::kNeighborReaderInputTileStartFieldOffset] = start;
+                        reader_args[reader_base + ag_rt::kNeighborReaderInputTileEndFieldOffset] = end;
+                        reader_args[reader_base + ag_rt::kNeighborReaderFirstOriginFieldOffset] =
+                            sources.first_start_tile * input_Wt;
+                        reader_args[reader_base + ag_rt::kNeighborReaderSecondOriginFieldOffset] =
+                            sources.second_start_tile * input_Wt;
+                        reader_args[reader_base + ag_rt::kNeighborReaderHaloPagesFieldOffset] = halo_pages;
+                        writer_args[writer_base + ag_rt::kNeighborWriterInputTileStartFieldOffset] = start;
+                        writer_args[writer_base + ag_rt::kNeighborWriterInputTileEndFieldOffset] = end;
+                    }
                 }
             }
         }
@@ -3116,68 +3129,210 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         all_gather_output_tensors.push_back(tensor_args.gathered_joint_v.value());
     }
     if (has_sliding_window) {
-        const bool linear_wrap_halo = args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Linear &&
-                                      transport_rank + 1 == ring_size;
-        std::optional<MeshCoordinate> halo_transport_coord = forward_coord;
-        std::optional<MeshCoordinate> halo_destination_coord = forward_coord;
-        if (linear_wrap_halo) {
-            // Preserve the cyclic logical Q/K layout on a physical line: send device N-1's
-            // predecessor tail backward over N-1 hops to device 0. The transport connection is
-            // its immediate backward neighbor; the packet route names the actual endpoint.
-            TT_FATAL(backward_coord.has_value(), "Linear sliding halo wrap requires a backward neighbor");
-            TT_FATAL(
-                args.all_gather_operation_attributes.cluster_axis.has_value(),
-                "Linear sliding halo wrap requires cluster_axis");
-            halo_transport_coord = backward_coord;
-            halo_destination_coord = coord;
-            halo_destination_coord->operator[](args.all_gather_operation_attributes.cluster_axis.value()) = 0;
-        }
-        TT_FATAL(
-            halo_transport_coord.has_value() && halo_destination_coord.has_value(),
-            "Sliding attention requires a next-device route");
-        // Metadata kernels derive source tails on-device for each trace replay.
-        const auto halo_sources = chunked_sliding_halo_layout.send_sources(transport_rank);
-        const RingAttentionNeighborHaloConfig neighbor_halo{
-            .send_to_next_start_Ht = halo_sources.first_start_tile,
-            .send_to_next_count_Ht = halo_sources.count * chunked_sliding_halo_layout.halo_tile_rows,
-            .send_second_start_Ht = halo_sources.second_start_tile,
-            .send_backward = linear_wrap_halo,
-            .unicast_hops = linear_wrap_halo ? ring_size - 1 : 1,
-            .slot_id = tensor_args.has_metadata() ? &tensor_args.slot_id.value() : nullptr,
-            .kv_actual_isl = tensor_args.has_metadata() ? &tensor_args.kv_actual_isl.value() : nullptr,
-            .kv_cache_num_layers = args.kv_cache_num_layers,
-            .kv_cache_layer_idx = args.kv_cache_layer_idx,
-            .q_local_tile_rows = chunked_sliding_halo_layout.q_local_tile_rows,
-            .halo_tile_rows = chunked_sliding_halo_layout.halo_tile_rows,
-            .source_device = transport_rank,
+        // A halo that fits in one Q slab is a single exchange with the +1 neighbour. A wider one is
+        // covered by one exchange per hop: hop d ships the tail of the slab d positions back into its
+        // own block of the receiver's compact buffer, and the SDPA reader waits for all of them
+        // before its K loop. A hop that lands back on this device (halo spanning the whole ring) is a
+        // local cache read and gets no exchange. validate_on_program_cache_miss bounds the hop count.
+        const uint32_t halo_remote_hops = chunked_sliding_halo_layout.remote_hop_count();
+        const auto& ag_attrs = args.all_gather_operation_attributes;
+        // A one-hop halo spreads over every link. With more hops each hop takes one link, and hops
+        // beyond the link count time-share one (see RingAttentionNeighborHaloConfig).
+        const uint32_t halo_links_per_hop = halo_remote_hops == 1 ? ag_attrs.num_links : 1;
+        // Each hop needs its own workers. The CCL offset points at a reserved column (or row), so
+        // walk along it: allocation order is the same for every call, so the blocks are disjoint.
+        const bool halo_column_major =
+            ag_attrs.core_allocation_strategy == ttnn::ccl::CoreAllocationStrategy::COL_MAJOR;
+        const auto halo_hop_core_grid_offset = [&](uint32_t hop) {
+            const uint32_t worker_stride = (hop - 1) * halo_links_per_hop;
+            return CoreCoord{
+                args.ccl_core_grid_offset.x + (halo_column_major ? 0 : worker_stride),
+                args.ccl_core_grid_offset.y + (halo_column_major ? worker_stride : 0)};
         };
-        log_debug(
-            tt::LogOp,
-            "Chunked sliding K/V halo: device={}, predecessor={}, tail=[{}, {}), payload_rows={}",
-            transport_rank,
-            (transport_rank + ring_size - 1) % ring_size,
-            neighbor_halo.send_to_next_start_Ht,
-            neighbor_halo.send_to_next_start_Ht + neighbor_halo.send_to_next_count_Ht,
-            neighbor_halo.send_to_next_count_Ht);
-        ring_attention_neighbor_halo_exchange_helper(
-            desc,
-            all_gather_input_tensors,
-            coord,
-            halo_transport_coord.value(),
-            halo_destination_coord.value(),
-            all_gather_output_tensors,
-            args.all_gather_operation_attributes.num_links,
-            args.all_gather_operation_attributes.ring_size,
-            transport_rank,
-            args.all_gather_operation_attributes.topology,
-            args.all_gather_operation_attributes.semaphore,
-            args.all_gather_operation_attributes.sub_device_id,
-            all_gather_fused_op_signaler.value(),
-            args.ccl_core_grid_offset,
-            args.all_gather_operation_attributes.core_allocation_strategy,
-            args.cache_batch_idx(),
-            compute_gather_valid_Ht(args, tensor_args),
-            neighbor_halo);
+        // Same allocator the helper uses, so the two agree. hop_first_cores[h - 1] is hop h's first
+        // (and, when h > 1, only) worker.
+        std::vector<CoreCoord> hop_first_cores;
+        hop_first_cores.reserve(halo_remote_hops);
+        for (uint32_t hop = 1; hop <= halo_remote_hops; ++hop) {
+            const auto [hop_core_range, hop_cores] = ttnn::ccl::choose_worker_cores(
+                halo_links_per_hop,
+                1,
+                mesh_device,
+                ag_attrs.sub_device_id,
+                halo_hop_core_grid_offset(hop),
+                std::nullopt,
+                ag_attrs.core_allocation_strategy);
+            hop_first_cores.push_back(hop_cores.front());
+        }
+        // Hop 1's worker is where every hop of this halo delivers its ready-increment, so one reader
+        // can gate on the whole halo.
+        const CoreCoord halo_rendezvous = mesh_device->worker_core_from_logical_core(hop_first_cores.front());
+        // A linear topology has no physical wrap link, so a hop whose destination wraps goes backward
+        // (at hop 1, the device N-1 -> 0 case). Forward and backward are separate fabric connections,
+        // so each direction time-shares only its own links: within a direction, hop k (0-based) runs
+        // on link k % span and, beyond the first span hops, waits for hop k - span to close its
+        // connection first. Queued hops still overlap their DRAM reads with the predecessor's send,
+        // so only the fabric transfer serialises.
+        const auto hop_sends_backward = [&](uint32_t hop) {
+            return ag_attrs.topology == ttnn::ccl::Topology::Linear && transport_rank + hop >= ring_size;
+        };
+        std::array<std::vector<uint32_t>, 2> direction_hops;  // [0] forward, [1] backward
+        for (uint32_t hop = 1; hop <= halo_remote_hops; ++hop) {
+            direction_hops[hop_sends_backward(hop)].push_back(hop);
+        }
+        std::array<uint32_t, 2> direction_link_span{0, 0};
+        for (uint32_t direction = 0; direction < 2; ++direction) {
+            if (direction_hops[direction].empty()) {
+                continue;
+            }
+            const auto& neighbour = direction == 0 ? forward_coord : backward_coord;
+            TT_FATAL(
+                neighbour.has_value(), "Sliding halo hop {} has no fabric neighbour", direction_hops[direction][0]);
+            const uint32_t links_available =
+                tt::tt_fabric::get_forwarding_link_indices(
+                    mesh_device->get_fabric_node_id(coord), mesh_device->get_fabric_node_id(neighbour.value()))
+                    .size();
+            TT_FATAL(links_available >= 1, "Chunked sliding halo found no forwarding fabric link");
+            // Never use more links than the caller asked for.
+            direction_link_span[direction] = std::min(
+                {static_cast<uint32_t>(direction_hops[direction].size()), ag_attrs.num_links, links_available});
+        }
+        const bool halo_links_shared =
+            direction_hops[0].size() > direction_link_span[0] || direction_hops[1].size() > direction_link_span[1];
+        // One local semaphore, same id on every hop worker, carries the hand-off. It is allocated
+        // before the helper's own per-core semaphores, so pick an id free on all hop workers.
+        uint32_t halo_chain_semaphore_id = 0;
+        if (halo_links_shared) {
+            // Per-core ids are handed out densely from 0, so the largest first-free id is free on
+            // every hop core; asserted below, since a taken id would silently alias a semaphore.
+            for (const auto& core : hop_first_cores) {
+                const auto sem_id = desc.find_available_semaphore_id(core, tt::CoreType::WORKER);
+                TT_FATAL(
+                    sem_id.has_value(),
+                    "Ran out of semaphore IDs on sliding-halo worker core ({}, {})",
+                    core.x,
+                    core.y);
+                halo_chain_semaphore_id = std::max(halo_chain_semaphore_id, sem_id.value());
+            }
+            for (const auto& sem : desc.semaphores) {
+                TT_FATAL(
+                    sem.core_type != tt::CoreType::WORKER || sem.id != halo_chain_semaphore_id ||
+                        std::none_of(
+                            hop_first_cores.begin(),
+                            hop_first_cores.end(),
+                            [&](const CoreCoord& core) { return sem.core_ranges.contains(core); }),
+                    "Sliding-halo link hand-off semaphore id {} is already used on a hop worker core",
+                    halo_chain_semaphore_id);
+            }
+            std::vector<CoreRange> chain_core_ranges;
+            chain_core_ranges.reserve(hop_first_cores.size());
+            for (const auto& core : hop_first_cores) {
+                chain_core_ranges.emplace_back(core, core);
+            }
+            desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+                .id = halo_chain_semaphore_id,
+                .core_type = tt::CoreType::WORKER,
+                .core_ranges = CoreRangeSet(chain_core_ranges),
+                .initial_value = 0,
+            });
+        }
+        for (uint32_t hop = 1; hop <= halo_remote_hops; ++hop) {
+            const uint32_t destination_rank = (transport_rank + hop) % ring_size;
+            const bool send_backward = hop_sends_backward(hop);
+            const uint32_t unicast_hops = send_backward ? transport_rank - destination_rank : hop;
+            const int32_t signed_hops =
+                send_backward ? -static_cast<int32_t>(unicast_hops) : static_cast<int32_t>(unicast_hops);
+            const auto halo_destination_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+                tensor_args.input_q, coord, signed_hops, ag_attrs.topology, ag_attrs.cluster_axis);
+            const auto halo_transport_coord = send_backward ? backward_coord : forward_coord;
+            TT_FATAL(
+                halo_transport_coord.has_value() && halo_destination_coord.has_value(),
+                "Sliding attention hop {} requires a route to ring device {}",
+                hop,
+                destination_rank);
+            const CoreCoord hop_core_grid_offset = halo_hop_core_grid_offset(hop);
+            // Hops beyond their direction's link count queue up behind the hop `span` earlier in the
+            // same direction, which shares their link, and hand it on to the hop `span` later.
+            const auto& lane = direction_hops[send_backward];
+            const uint32_t lane_span = direction_link_span[send_backward];
+            const uint32_t lane_index = std::find(lane.begin(), lane.end(), hop) - lane.begin();
+            const bool hop_waits = lane_index >= lane_span;
+            const bool hop_signals = lane_index + lane_span < lane.size();
+            const CoreCoord hop_successor =
+                hop_signals
+                    ? mesh_device->worker_core_from_logical_core(hop_first_cores[lane[lane_index + lane_span] - 1])
+                    : CoreCoord{0, 0};
+            // send_to_next_start_Ht is linear in the chunk index, so on the scalar path the host relocates
+            // the halo page ranges every dispatch (apply_ring_joint_scalar_runtime_args). A captured trace
+            // never replays that, so on the metadata path hand the halo kernels the same kv_actual_isl the
+            // rest of the op reads and let them derive the start themselves; the value here then serves as
+            // the baked origin they shift away from.
+            // The tail(s) this hop ships follow from the receiver's Q mapping; a one-hop halo can ship
+            // two when block-cyclic Q wraps. Metadata kernels re-derive them on-device each replay.
+            const auto hop_sources = chunked_sliding_halo_layout.send_sources(transport_rank, hop);
+            const uint32_t hop_tail_rows = chunked_sliding_halo_layout.hop_rows(hop);
+            const RingAttentionNeighborHaloConfig neighbor_halo{
+                .send_to_next_start_Ht = hop_sources.first_start_tile,
+                .send_to_next_count_Ht = hop_sources.count * hop_tail_rows,
+                .send_second_start_Ht = hop_sources.second_start_tile,
+                .send_backward = send_backward,
+                .unicast_hops = unicast_hops,
+                .hop = hop,
+                .tail_tile_rows = hop_tail_rows,
+                .dest_row_base = chunked_sliding_halo_layout.hop_dest_row(hop),
+                .link_base = lane_index % lane_span,
+                .arrivals_expected = halo_remote_hops,
+                .rendezvous_noc_x = static_cast<uint32_t>(halo_rendezvous.x),
+                .rendezvous_noc_y = static_cast<uint32_t>(halo_rendezvous.y),
+                .waits_for_predecessor = hop_waits,
+                .signals_successor = hop_signals,
+                .chain_semaphore_id = halo_chain_semaphore_id,
+                .successor_noc_x = static_cast<uint32_t>(hop_successor.x),
+                .successor_noc_y = static_cast<uint32_t>(hop_successor.y),
+                .slot_id = tensor_args.has_metadata() ? &tensor_args.slot_id.value() : nullptr,
+                .kv_actual_isl = tensor_args.has_metadata() ? &tensor_args.kv_actual_isl.value() : nullptr,
+                .kv_cache_num_layers = args.kv_cache_num_layers,
+                .kv_cache_layer_idx = args.kv_cache_layer_idx,
+                .q_local_tile_rows = chunked_sliding_halo_layout.q_local_tile_rows,
+                .halo_tile_rows = chunked_sliding_halo_layout.halo_tile_rows,
+                .source_device = transport_rank,
+            };
+            log_debug(
+                tt::LogOp,
+                "Chunked sliding K/V halo: device={}, hop={}/{} -> device={}, link={}, chain(w={}, s={}), "
+                "tail=[{}, {}), payload_rows={}, compact rows [{}, {})",
+                transport_rank,
+                hop,
+                halo_remote_hops,
+                destination_rank,
+                neighbor_halo.link_base,
+                hop_waits,
+                hop_signals,
+                neighbor_halo.send_to_next_start_Ht,
+                neighbor_halo.send_to_next_start_Ht + neighbor_halo.send_to_next_count_Ht,
+                neighbor_halo.send_to_next_count_Ht,
+                neighbor_halo.dest_row_base,
+                neighbor_halo.dest_row_base + neighbor_halo.send_to_next_count_Ht);
+            ring_attention_neighbor_halo_exchange_helper(
+                desc,
+                all_gather_input_tensors,
+                coord,
+                halo_transport_coord.value(),
+                halo_destination_coord.value(),
+                all_gather_output_tensors,
+                halo_links_per_hop,
+                ag_attrs.ring_size,
+                transport_rank,
+                ag_attrs.topology,
+                ag_attrs.semaphore,
+                ag_attrs.sub_device_id,
+                all_gather_fused_op_signaler.value(),
+                hop_core_grid_offset,
+                ag_attrs.core_allocation_strategy,
+                args.cache_batch_idx(),
+                compute_gather_valid_Ht(args, tensor_args),
+                neighbor_halo);
+        }
     } else {
         // Append the all-gather portion to `desc`. Buffer addresses are auto-patched on cache hits; the
         // indexed-mode input_batch_base scalar is re-patched in apply_ring_joint_scalar_runtime_args.
