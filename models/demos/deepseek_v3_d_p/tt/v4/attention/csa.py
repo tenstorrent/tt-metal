@@ -597,7 +597,7 @@ class TtCSA(TtHCA):
         self._slab_cap = int(capacity)
         self._slab_rope = self._build_rope_table(_rope_table_tokens(max_seq_len, chunk), 1)
         self._slab_index = self._rope_index_base(chunk // self.sp_factor)
-        return TtCSAState(
+        state = TtCSAState(
             compressed_kv=self._from_torch(torch.zeros(batch, 1, capacity, self.head_dim)),
             index_k=self._from_torch(torch.zeros(batch, 1, capacity, self.indexer.head_dim)),
             sliding_carry=self._from_torch(torch.zeros(batch, 1, self.sliding_window, self.head_dim)),
@@ -605,6 +605,14 @@ class TtCSA(TtHCA):
             prior_i=self.indexer.compressor.empty_prior(batch),
             max_seq_len=max_seq_len,
         )
+        if self.sparse_path:
+            # EVERY persistent buffer the sparse / traced path reads must exist BEFORE any trace is captured: a tensor
+            # allocated after a capture can sit on addresses that capture's intermediates reuse, and the next replay
+            # of THAT island (the block's mHC island A runs before the attention every chunk) overwrites it. DS4F-0262:
+            # the score mask, the cut / zero blocks and the window indices were created at the attention warm-up, i.e.
+            # after island A was captured -> garbage causal mask at every traced chunk (HCA KV export 0.9997 -> 0.98).
+            self.precreate_constants(state, int(chunk) // self.sp_factor, int(chunk))
+        return state
 
     def forward(self, hidden_states, seq_len_actual: int | None = None, *, state: TtCSAState, export=None):
         batch = hidden_states.shape[0]
@@ -770,8 +778,19 @@ class TtCSA(TtHCA):
         self._score_mask(state, seq_local)
         self.indexer._zeros_block_tile(seq_local, real_len // rate)
         self.indexer._chunk_cut_mask_tile(seq_local, real_len // rate)
+        self.indexer._chunk_cut_mask(seq_local, real_len // rate)
         if self.__dict__.get("_neg_inf_mask_const") is None:
             self._neg_inf_mask_const = self._from_torch(torch.full(tuple(state.score_mask.shape), float("-inf")))
+        if state.slab_rm is None:
+            self._slab_alloc(state)
+        self._window_indices(seq_local)
+        heads_local = self.num_heads // self.tp_factor
+        self._sink_column(self.tp_factor > 1 and heads_local % C.TILE != 0)
+        self._h128_export()
+        if self.indexer._wq_b_all is None:
+            self.indexer._wq_b_all = self.indexer._to_tt_linear_weight(
+                self.indexer._host_q_b_proj_weight, tp_shard_dim=None, cache_name="wq_b_all"
+            )
 
     def prepare_chunk(self, state, real_len: int) -> None:
         """Eager, before the islands replay: push this chunk's position scalars into the persistent buffers the traced
