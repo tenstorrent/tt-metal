@@ -82,7 +82,7 @@ activations in **L1** when the per-user sequence is ≤ 512
 
 | Workload        | Activation | Placement | Matmul kernel / grid | Sustained latency (median of it 15–29 of 30) |
 |-----------------|-----------:|-----------|----------------------|----------------------------------------------|
-| bs=1  ISL=512   |  2.5 MB    | **L1** (single-user) | legacy 2D multicast, 12×8 (96 cores) | **17.6 ms · 29.1k tok/s** |
+| bs=1  ISL=512   |  2.5 MB    | **L1** (single-user) | legacy 2D multicast, 12×8 (96 cores) | **16.5 ms · 31.0k tok/s** |
 | bs=4  ISL=512   | 10.5 MB    | DRAM ᵃ    | `minimal_matmul`, 12×10 (120 cores) | **69.0 ms · 29.7k tok/s** |
 | bs=8  ISL=512   | 20 MB      | DRAM      | `minimal_matmul`, 12×10 | **120.9 ms · 33.9k tok/s** |
 | bs=16 ISL=512   | 40 MB      | DRAM      | `minimal_matmul`, 12×10 | **227.6 ms · 36.0k tok/s** |
@@ -94,8 +94,8 @@ circular buffers, and DRAM is faster with them anyway (65 ms best of 10 vs the 7
 Measured on a Galaxy P150 exposing **12×10 = 120 worker cores** (a p150a card exposes 13×10);
 "sustained" is after the board's power manager has settled the clock at ≈1.1–1.3 GHz under continuous
 load, which is the like-for-like comparison against a steady-state H200 (bs=1 5.44 ms, bs=8 33.08,
-bs=16 67.23, bs=32 139.15): **3.24× / 3.65× / 3.39× / 3.21×**. Qwen3-Embedding-4B through the same
-stack (`HF_MODEL=Qwen/Qwen3-Embedding-4B`): 18.4 / 120.8 / 228.2 / 445.1 ms. Baseline (customer reference
+bs=16 67.23, bs=32 139.15): **3.03× / 3.65× / 3.39× / 3.21×**. Qwen3-Embedding-4B through the same
+stack (`HF_MODEL=Qwen/Qwen3-Embedding-4B`): 17.4 / 120.8 / 228.2 / 445.1 ms. Baseline (customer reference
 measurement on Blackhole P150): 45.773 / 190.065 / 375.817 / 726.944 ms — the full path is in [PERF.md](PERF.md).
 
 ### Optimization history

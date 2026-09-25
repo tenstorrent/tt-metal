@@ -132,7 +132,7 @@ Sustained latency at ISL 512 (median of iterations 15–29 of a 30-iteration run
 
 | batch | Qwen3-Embedding-4B | pplx-embed-4B (same stack) | H200 reference | × H200 |
 |---|---|---|---|---|
-| 1 | **18.4 ms** | 17.6 ms | 5.44 ms | 3.4× |
+| 1 | **17.4 ms** | 16.5 ms | 5.44 ms | 3.2× |
 | 8 | **120.8** | 120.9 | 33.08 | 3.7× |
 | 16 | **228.2** | 227.6 | 67.23 | 3.4× |
 | 32 | **445.1** | 446.4 | 139.15 | 3.2× |

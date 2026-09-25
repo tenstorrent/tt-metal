@@ -9,7 +9,7 @@ after the board's power manager has settled the clock (≈1.1–1.3 GHz under lo
 
 | batch | baseline | pplx-embed-4B now | Qwen3-Embedding-4B now | speedup | H200 | × H200 (pplx) | tok/s (pplx) |
 |---|---|---|---|---|---|---|---|
-| 1 | 45.773 ± 0.160 ms | **17.6 ms** | 18.4 ms | 2.60× | 5.44 ms | 3.24× | 29.1k |
+| 1 | 45.773 ± 0.160 ms | **16.5 ms** | 17.4 ms | 2.77× | 5.44 ms | 3.03× | 31.0k |
 | 8 | 190.065 ± 4.527 | **120.9** | 120.8 | 1.57× | 33.08 | 3.65× | 33.9k |
 | 16 | 375.817 ± 5.810 | **227.6** | 228.2 | 1.65× | 67.23 | 3.39× | 36.0k |
 | 32 | 726.944 ± 2.552 | **446.4** | 445.1 | 1.63× | 139.15 | 3.21× | 36.7k |
@@ -40,8 +40,9 @@ was adopted later). The last column is e2e latency after the step: bs1 / bs8 / b
 | 10 | bs>1: add + RMSNorm split over 4–5 cores per row, SDPA 12×8 at bs8, DRAM-interleaved weights at bs32 | all 120 cores busy in the norm; fuller SDPA work units; faster weight reads at M=16384 | 17.7 / 118.5 / 216.7 / 428.1 |
 | 11 | SDPA writes the concatenated-heads layout directly (new op flag) | the concat pass (142 MB per layer at bs32) is gone | 17.6 / 115.3 / 221.0 / 425.5 |
 | 12 | bs1: concat-free SDPA output; residual adds written in the norm's shard layout | the per-layer concat and 72 layout conversions are gone | 17.3 / 115.3 / 221.0 / 425.5 |
+| 13 | bs1: SDPA packs each GQA group's 4 query heads as one head (`pack_gqa_heads`, q192 on 11×8); the fused heads kernel batches every norm/RoPE phase across a unit's heads and keeps its constants resident in L1; both norms keep their block-shard output for the QKV/FF1/FF3 matmuls | K/V stream once per KV head instead of once per query head; 45 phase set-ups per unit → 9; the 72 sharded-to-interleaved ops are gone | **15.9** / 115.3 / 221.0 / 425.5 |
 
-Sustained after step 12: **17.6 / 120.9 / 227.6 / 446.4 ms**. Configuration lives in
+Sustained after step 13: **16.5 / 120.9 / 227.6 / 446.4 ms**. Configuration lives in
 `demo/_common.py::apply_workload_env` (per-batch defaults, every knob overridable from the shell), the kernels in
 `tt/custom_ops/`, the shared-code changes in `models/tt_transformers/tt/`, the SDPA op and the 2D matmul factory.
 
@@ -53,14 +54,14 @@ throughput gated by the slowest chip (pplx-embed-4B, ISL 512, 32/32 chips active
 
 | per-chip batch | global batch | per-chip median | slowest chip | vs one chip sustained | embeddings/s | tokens/s | scaling vs 32 × one chip |
 |---|---|---|---|---|---|---|---|
-| 1 | 32 | 18.2 ms | 18.4 ms | +3% | 1,741 | 0.89 M | 96% |
+| 1 | 32 | 17.1 ms | 17.5 ms | +4% | 1,833 | 0.94 M | 95% |
 | 4 | 128 | 70.1 | 72.0 | +2% | 1,777 | 0.91 M | 96% |
 | 8 | 256 | 121.5 | 126.6 | +0.5% | 2,023 | 1.04 M | 96% |
 | 16 | 512 | 227.8 | 242.8 | +0.1% | 2,109 | 1.08 M | 94% |
 | 32 | 1,024 | 442.4 | 468.1 | −1% | 2,188 | 1.12 M | 95% |
 
 The per-chip median matches the single-chip sustained numbers, so the chips do not interfere; the 4–6% lost
-against ideal scaling is chip-to-chip spread (fastest to slowest chip: 17.3–18.6 ms at bs1, 420–469 ms at bs32),
+against ideal scaling is chip-to-chip spread (fastest to slowest chip: 16.0–17.7 ms at bs1, 420–469 ms at bs32),
 which gates the synchronous aggregate.
 
 ## Where the time goes now
@@ -70,7 +71,7 @@ bs 8 and 16 because there the product runs inside the fused SwiGLU matmul.
 
 | Batch | Matmul | SDPA | Fused heads | Norm + residual | SwiGLU product | Matmul + SDPA | Kernel sum |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | 60.4% | 10.6% | 9.6% | 6.6% | 11.3% | 71.1% | 16.6 ms |
+| 1 | 66.6% | 6.8% | 6.6% | 7.3% | 12.4% | 73.4% | 15.1 ms |
 | 8 | 77.6% | 7.7% | 6.0% | 8.7% | 0.0% | 85.3% | 106.6 ms |
 | 16 | 77.6% | 8.4% | 5.7% | 8.1% | 0.0% | 86.0% | 199.8 ms |
 | 32 | 64.8% | 8.0% | 5.7% | 8.0% | 13.4% | 72.8% | 365.3 ms |
