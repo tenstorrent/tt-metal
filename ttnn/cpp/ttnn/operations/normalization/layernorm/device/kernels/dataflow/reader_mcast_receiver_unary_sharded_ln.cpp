@@ -265,10 +265,7 @@ void kernel_main() {
         // balanced.
         dfb_partial_obj.pop_front(static_cast<uint16_t>(block_h * num_tiles_scaler));
 
-        // The all-to-all workers wait on the combined-result buffer as a readiness handshake before
-        // signalling the sender, and the sender has finished gathering from it by the time the
-        // multicast received above arrives. Pop the same count that was waited, in the same branch,
-        // to leave the buffer balanced.
+        // Pop the same count that was waited for, in the same branch, to leave the buffer balanced.
         if constexpr (is_all_to_all_worker) {
             if constexpr (use_two_stage_reduce) {
                 if (is_second_stage_reader) {
