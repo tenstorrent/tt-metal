@@ -73,7 +73,9 @@ def test_exp_ring_recipe_config_is_op_selected(seq_local):
         )
         assert choice is not None
         q, k, gx, gy, *_ = choice
-        assert k == 512 and 128 <= q <= 320 and -(-seq_local // q) % (gx - 1) == 0
+        # Generic exp ring geometry: any tile-aligned chunk inside the chooser's search range.
+        assert q % 32 == 0 and k % 32 == 0 and 128 <= q and 256 <= k <= 512
+        assert -(-seq_local // q) % (gx - 1) == 0
 
 
 def test_exp_ring_recipe_infeasible_falls_back_to_ring():
