@@ -877,12 +877,17 @@ i.e. mostly hidden behind compute. Probe with the 5 s warmup on: denoise start 5
 177 MiB contiguous left -- against the resident path's 985.3 / 18 MiB. Its 3-step output is exactly equal
 to FSDP-on. Cache subfolder `transformer_resident_adaln_adalnfsdp`.
 
-Output equality across the matrix: every 3-step pair within TP8/SP4 (FSDP on/off, tables/resident) is
-exactly equal, frames and audio. Over 49 forwards the TP8/SP4 runs differ from each other at PCC
-0.99971-0.99973 -- FSDP on vs off with the same resident adaLN path included -- so the small drift is not
-attributable to the tables' 147-row projection; whether it is run-to-run nondeterminism or a per-path
-effect that only shows past 2 forwards needs a repeated identical run, which has not been done. TP4 vs
-TP8 is the familiar 0.914 reduction-order regime.
+Output equality across the matrix: every 3-step pair within TP8/SP4 (FSDP on/off, tables/resident/
+`adaln_fsdp`) is exactly equal, frames and audio. Over 49 forwards the pipeline is **not run-to-run
+deterministic**: the FSDP-on TP8/SP4 run repeated unchanged (same seed, host, cache) gave CLIP 37.288 then
+37.293, and its correlation with the same tables and resident runs moved from 0.9997 to 0.9962 between the
+two repeats. So the 50-step PCCs between variants (tables/resident 0.9997-0.9962 against FSDP-on,
+`adaln_fsdp` 0.963 against both FSDP-on runs and 0.963-0.966 against the other two variants) sit inside a
+noise process whose size depends on how early the first divergence lands, and none of them is evidence of
+a per-path numeric difference; the 3-step exactness is. Where the nondeterminism enters (the async
+collectives are the obvious suspects) has not been isolated. The repeat also overwrote the first FSDP-on
+run's frame dump (same output directory), so the two FSDP-on runs could not be correlated directly. TP4 vs
+TP8 is the familiar 0.914-0.918 reduction-order regime.
 
 ### Open issues
 
