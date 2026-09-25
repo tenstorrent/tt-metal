@@ -453,12 +453,38 @@ def _is_device_disruption(rc, out: str) -> bool:
     a wall-time marker, or the tracy hang marker), the trace capture wedged mid-test — that already got
     one reset and must return to the caller as a WEDGE (-> eager fallback), NOT loop reset+retry (which
     just re-hangs). The post-hang reset re-init prints 'AICLK failed to settle', which would otherwise
-    look like a fresh board disruption — this guard prevents that misclassification."""
+    look like a fresh board disruption — this guard prevents that misclassification.
+
+    The board-level evidence is device_recovery.is_dead_board's, not a second list kept here."""
     if not out:
         return False
     if any(m in out for m in _TRACE_RAN_MARKERS):
         return False
     if _DEVICE_DISRUPTION_RE.search(out):
+        return True
+    # ONE VOCABULARY FOR "THE BOARD IS DEAD", NOT TWO.
+    #
+    # The reset below this predicate already existed and worked; it was simply never reached,
+    # because this path matched the failure against a PRIVATE list while device_recovery kept the
+    # authoritative one. Two lists drift, and one of them had not been told about the ETH fabric.
+    #
+    # Measured 2026-09-25: the perf-test builder failed at device open three times in a row with
+    # "Timed out waiting for ETH heartbeat on device ASIC ID ..., ETH core e7-0 (NOC0) to advance.
+    # Stuck at 0x..." (umd/device/pcie/pci_device.cpp), retried into the identical wedge each time
+    # and gave up after 51 minutes. is_dead_board() returned True for that text throughout; this
+    # returned False, so no reset was issued. The builder's own agent wrote the diagnosis down:
+    # "The harness only resets the board after a hang, not on this failure, and no other process is
+    # holding the chips."
+    #
+    # So ASK the shared predicate rather than copying its signatures here -- a signature added for
+    # any other caller then reaches this one too, which is the whole point of there being one list.
+    from .device_recovery import is_dead_board
+
+    # DELIBERATELY BELOW THE _TRACE_RAN_MARKERS GUARD. That guard is what keeps a TRACE HANG out of
+    # this branch: a test that already ran has had its one reset and must return to the caller as a
+    # WEDGE, not loop reset+retry (which "just re-hangs"). A hang's output can mention a dead board,
+    # so asking first would defeat the guard. Everything reaching here failed BEFORE the test body.
+    if is_dead_board(out):
         return True
     if "unordered_map::at" in out and re.search(
         r"GetPCIeDeviceID|open_device|CreateDevice|MeshDevice|conftest\.py|device_params", out
