@@ -106,6 +106,19 @@ class LtxQuantProfile:
         )
         return compute_config, (self.sdpa_input_dtype if LTX_QUANT_ACTIVATIONS else None)
 
+    def sdpa_self_recipe(self) -> tuple:
+        """``(precision, kv_dtype)`` of the self-attn SDPA recipe on Blackhole (replaces ``sdpa_self_config``).
+
+        The legacy tier narrows the SDPA inputs to ``sdpa_input_dtype`` (BFP8) under
+        ``LTX_QUANT_ACTIVATIONS`` and keeps HiFi2. The cheapest recipe at least as accurate as that is
+        FAST on BF16 inputs (LOW_PRECISION with BFP8 KV is less accurate on peaked softmax; see
+        tests/ttnn/unit_tests/operations/sdpa/test_sdpa_dit_recipe_parity.py, ``legacy_bfp8``).
+        ``(None, None)`` (inputs stay BF16) keeps the attention's default recipe.
+        """
+        if not LTX_QUANT_ACTIVATIONS or self.sdpa_input_dtype == ttnn.bfloat16:
+            return None, None
+        return ttnn.SDPAPrecision.FAST, None
+
     @staticmethod
     def all_bf8_lofi() -> LtxQuantProfile:
         """Weights bf8, LoFi compute, bf8 activations. SDPA math stays HiFi2 with bf8 inputs.
