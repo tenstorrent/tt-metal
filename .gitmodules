@@ -13,3 +13,6 @@
 [submodule "models/experimental/chronos_forecast/third_party/chronos-forecasting"]
 	path = models/experimental/chronos_forecast/third_party/chronos-forecasting
 	url = https://github.com/amazon-science/chronos-forecasting.git
+[submodule "models/experimental/chronos_forecast/third_party/fev"]
+	path = models/experimental/chronos_forecast/third_party/fev
+	url = git@github.com:autogluon/fev.git

@@ -1,0 +1,14 @@
+tasks:
+  - dataset_path: autogluon/fev_datasets
+    dataset_config: us_consumption_1Y
+    horizon: 5
+    num_windows: 1
+    seasonality: 1
+    eval_metric: SQL
+    extra_metrics:
+      - MASE
+      - {name: WAPE, epsilon: 1.0}
+      - {name: WQL, epsilon: 1.0}
+    quantile_levels: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+    static_columns: []
+    task_name: us_consumption_1Y_smoke

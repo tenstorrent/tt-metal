@@ -55,7 +55,9 @@ class Chronos2PatchedInputs:
     target_idx_ranges: list[tuple[int, int]]
 
 
-def preprocess_model_parameters(state_dict, device=None, *, eps: float = 1e-6, rope_theta: float = 10000.0, head_dim: int | None = None):
+def preprocess_model_parameters(
+    state_dict, device=None, *, eps: float = 1e-6, rope_theta: float = 10000.0, head_dim: int | None = None
+):
     """Map a Chronos-2 state_dict onto host-side ``TtChronosWeights``.
 
     Expected keys (HF ``Chronos2Model`` format)::
@@ -181,12 +183,8 @@ def prepare_chronos2_inputs(
     target_is_batch = _is_nested_series_list(target)
     targets = _as_series_list(target, name="target")
     n_series = len(targets)
-    past_per_series = _parse_covariates(
-        past_covariates, n_series, target_is_batch, name="past_covariates"
-    )
-    future_per_series = _parse_covariates(
-        future_covariates, n_series, target_is_batch, name="future_covariates"
-    )
+    past_per_series = _parse_covariates(past_covariates, n_series, target_is_batch, name="past_covariates")
+    future_per_series = _parse_covariates(future_covariates, n_series, target_is_batch, name="future_covariates")
 
     target_2ds = [_as_variate_time(t, name="target") for t in targets]
     n_targets = target_2ds[0].shape[0]
@@ -249,9 +247,7 @@ def prepare_chronos2_inputs(
         target_idx_ranges=target_idx_ranges,
     )
     if apply_instance_norm:
-        packed = normalize_chronos2_inputs(
-            packed, eps=instance_norm_eps, use_arcsinh=use_arcsinh
-        )
+        packed = normalize_chronos2_inputs(packed, eps=instance_norm_eps, use_arcsinh=use_arcsinh)
     return packed
 
 
@@ -306,9 +302,7 @@ def normalize_chronos2_inputs(
 ) -> Chronos2PackedInputs:
     """Apply InstanceNorm to packed V, then the same loc/scale to W."""
     context, loc_scale = instance_norm(packed.context, eps=eps, use_arcsinh=use_arcsinh)
-    future, _ = instance_norm(
-        packed.future_covariates, loc_scale, eps=eps, use_arcsinh=use_arcsinh
-    )
+    future, _ = instance_norm(packed.future_covariates, loc_scale, eps=eps, use_arcsinh=use_arcsinh)
     return Chronos2PackedInputs(
         context=context,
         future_covariates=future,
@@ -368,9 +362,7 @@ def prepare_patched_context(
         context_mask = context_mask[..., -context_length:]
 
     if apply_instance_norm:
-        context, loc_scale = instance_norm(
-            context, loc_scale, eps=instance_norm_eps, use_arcsinh=use_arcsinh
-        )
+        context, loc_scale = instance_norm(context, loc_scale, eps=instance_norm_eps, use_arcsinh=use_arcsinh)
     elif loc_scale is None:
         raise ValueError("loc_scale is required when apply_instance_norm is False")
 
@@ -388,9 +380,7 @@ def prepare_patched_context(
     scale = time_encoding_scale if time_encoding_scale is not None else context_length
     if scale is None:
         scale = final_context_length
-    context_time_enc = torch.arange(
-        start=-final_context_length, end=0, device=context.device, dtype=torch.float32
-    )
+    context_time_enc = torch.arange(start=-final_context_length, end=0, device=context.device, dtype=torch.float32)
     context_time_enc = (
         repeat(
             context_time_enc,
@@ -444,9 +434,7 @@ def prepare_patched_future(
                 *future_covariates.shape[:-1],
                 num_output_patches * output_patch_size - future_covariates.shape[-1],
             )
-            future_covariates = torch.cat(
-                [future_covariates, torch.zeros(padding_shape).to(future_covariates)], dim=-1
-            )
+            future_covariates = torch.cat([future_covariates, torch.zeros(padding_shape).to(future_covariates)], dim=-1)
             future_covariates_mask = torch.cat(
                 [future_covariates_mask, torch.zeros(padding_shape).to(future_covariates_mask)], dim=-1
             )
@@ -458,9 +446,7 @@ def prepare_patched_future(
             future_covariates_mask, "b (n p) -> b n p", n=num_output_patches, p=output_patch_size
         )
     else:
-        patched_future_covariates = torch.zeros(
-            batch_size, num_output_patches, output_patch_size, dtype=torch.float32
-        )
+        patched_future_covariates = torch.zeros(batch_size, num_output_patches, output_patch_size, dtype=torch.float32)
         patched_future_covariates_mask = torch.zeros(
             batch_size, num_output_patches, output_patch_size, dtype=torch.float32
         )
@@ -689,9 +675,7 @@ def _encode_covariate_columns(
             )
         else:
             enc_past = np.asarray(stacked_past, dtype=np.float32)
-            enc_future = (
-                np.asarray(stacked_future, dtype=np.float32) if stacked_future is not None else None
-            )
+            enc_future = np.asarray(stacked_future, dtype=np.float32) if stacked_future is not None else None
 
         if enc_future is None:
             enc_future = nan_future
@@ -726,16 +710,13 @@ def _covariate_layout(
         raise ValueError("future_covariates requires past_covariates (known-future vars must have history)")
     if n_future_cov > n_cov:
         raise ValueError(
-            "future_covariates rows must be a suffix of past_covariates rows, "
-            f"got M_f={n_future_cov} > M={n_cov}"
+            "future_covariates rows must be a suffix of past_covariates rows, " f"got M_f={n_future_cov} > M={n_cov}"
         )
 
     for rows, t_len in zip(past_per_series, series_lengths):
         for row in rows:
             if len(row) != t_len:
-                raise ValueError(
-                    f"past_covariates time length must match target, got {len(row)} vs {t_len}"
-                )
+                raise ValueError(f"past_covariates time length must match target, got {len(row)} vs {t_len}")
 
     inferred: int | None = None
     for rows in future_per_series:
@@ -755,8 +736,7 @@ def _covariate_layout(
             raise ValueError(f"prediction_length must be positive, got {prediction_length}")
         if inferred is not None and inferred != prediction_length:
             raise ValueError(
-                "prediction_length must match future_covariates length, "
-                f"got {prediction_length} vs {inferred}"
+                "prediction_length must match future_covariates length, " f"got {prediction_length} vs {inferred}"
             )
         horizon = prediction_length
     return n_cov, n_future_cov, horizon
@@ -804,9 +784,7 @@ def _is_row_list(value: object) -> bool:
     if not isinstance(value, Sequence) or len(value) == 0:
         return False
     first = value[0]
-    return isinstance(first, (torch.Tensor, np.ndarray, Sequence)) and not isinstance(
-        first, (str, bytes, int, float)
-    )
+    return isinstance(first, (torch.Tensor, np.ndarray, Sequence)) and not isinstance(first, (str, bytes, int, float))
 
 
 def _is_categorical(values: np.ndarray) -> bool:
