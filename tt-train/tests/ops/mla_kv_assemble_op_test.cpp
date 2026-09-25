@@ -165,6 +165,38 @@ void run_autograd_wrapper_bw(const AssembleShape& shape) {
         << shape.name << " autograd/dk_pe";
 }
 
+enum class SelectedOutput { K, V };
+
+void run_partial_autograd_wrapper_bw(const AssembleShape& shape, SelectedOutput selected_output) {
+    auto kv_up = ttml::autograd::create_tensor(
+        make_input(shape.batch, 1U, shape.seq_len, shape.n_heads * (shape.qk_nope_dim + shape.v_dim), 1010U),
+        /*requires_grad=*/true);
+    auto k_pe = ttml::autograd::create_tensor(
+        make_input(shape.batch, 1U, shape.seq_len, shape.qk_rope_dim, 1111U), /*requires_grad=*/true);
+
+    auto [k, v] =
+        ttml::ops::mla_kv_assemble(kv_up, k_pe, shape.n_heads, shape.qk_nope_dim, shape.qk_rope_dim, shape.v_dim);
+    EXPECT_FALSE(k->is_grad_initialized());
+    EXPECT_FALSE(v->is_grad_initialized());
+
+    auto selected = selected_output == SelectedOutput::K ? k : v;
+    auto loss = ttml::ops::mean(selected);
+    loss->backward();
+
+    EXPECT_EQ(k->is_grad_initialized(), selected_output == SelectedOutput::K);
+    EXPECT_EQ(v->is_grad_initialized(), selected_output == SelectedOutput::V);
+    ASSERT_TRUE(kv_up->is_grad_initialized());
+    ASSERT_TRUE(k_pe->is_grad_initialized());
+
+    const auto dK = k->is_grad_initialized() ? k->get_grad() : ttml::core::zeros_like(k->get_value());
+    const auto dV = v->is_grad_initialized() ? v->get_grad() : ttml::core::zeros_like(v->get_value());
+    const auto ref = reference_bw(dK, dV, shape);
+    EXPECT_TRUE(xt::allclose(ttml::core::to_xtensor(kv_up->get_grad()), ref.dkv_up, 0.0, 0.0))
+        << shape.name << " partial autograd/dkv_up";
+    EXPECT_TRUE(xt::allclose(ttml::core::to_xtensor(k_pe->get_grad()), ref.dk_pe, /*rtol=*/5e-3, /*atol=*/5e-3))
+        << shape.name << " partial autograd/dk_pe";
+}
+
 const std::vector<AssembleShape>& shapes() {
     static const std::vector<AssembleShape> cases = {
         {"square_st1", 2, 32, 2, 32, 32, 32},
@@ -194,6 +226,14 @@ TEST_F(MLAKVAssembleTest, BackwardMatchesReference) {
 
 TEST_F(MLAKVAssembleTest, AutogradWrapperBackwardMatchesReference) {
     run_autograd_wrapper_bw({"wrapper_heads4", 2, 64, 4, 64, 32, 64});
+}
+
+TEST_F(MLAKVAssembleTest, AutogradWrapperKOnlyBackwardMatchesReference) {
+    run_partial_autograd_wrapper_bw({"wrapper_k_only", 2, 64, 4, 32, 32, 32}, SelectedOutput::K);
+}
+
+TEST_F(MLAKVAssembleTest, AutogradWrapperVOnlyBackwardMatchesReference) {
+    run_partial_autograd_wrapper_bw({"wrapper_v_only", 2, 64, 4, 32, 32, 32}, SelectedOutput::V);
 }
 
 TEST_F(MLAKVAssembleTest, BackwardRejectsRopeDimBeyondDstBudget) {
