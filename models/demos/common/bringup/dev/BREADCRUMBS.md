@@ -170,3 +170,13 @@ Drive this ledger with
   re-export loop ran during the agent step. The orchestrator was stopped before attempt 2 (whose brief would have told
   an agent to revert framework files). Now a file that is clean after the step is not attributed to the agent (agents
   never commit), `*/dashboard/index.html` is ignored, and `resume` also resets tasks an interrupted run left RUNNING.
+
+## F12 (2026-09-25): per-role retry policy
+- Owner's correction: ttnn-expert-debugger debugs TTNN ops (hangs, CB sync, kernel numerics) and cannot debug a CPU
+  reference. The design's "3 attempts, then WIP commit and the debugger" applies to the implement step; F6 had applied
+  it to every agent step. Now `DEFAULT_POLICY` in orchestrator.py: implement and fix-after-a-device-gate escalate to the
+  debugger; reference, plan, contract, test and fix-after-a-CPU-gate stop for a person after their attempts. The spec
+  overrides per role (`agents.policy.<role>: {attempts, escalate, debugger_attempts}`); `--attempts` overrides all.
+- Gemma R.3 (for the record): chunked != one-shot at PCC 0.99983 was MKL matmul results depending on the row count;
+  per-expert token groups differ between chunked and one-shot, and routing flips amplified it. The reference agent
+  pads each expert group to a multiple of 32 rows; chunked now matches one-shot bit for bit.
