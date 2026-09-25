@@ -55,7 +55,9 @@ constexpr uint64_t done_offset(uint32_t core, uint32_t peer) {
 // page's trailer, but the h2h hop publishes here instead: a run of K slots then arms in one
 // put rather than K, which is what takes puts-per-frame from 2 to 2/K. A put coalesces only
 // when its DESTINATION bytes are adjacent, so the relocation is the mechanism, not a tidy-up.
-constexpr uint32_t kMaxRingSlots = 64;
+// 128, not 64: ring depth is the sender's credit window, and a slot cannot be credited
+// until the device drains it. The arena caps actual depth (95 slots at a 16 KiB payload).
+constexpr uint32_t kMaxRingSlots = 128;
 constexpr uint64_t kGuardArrayOffset = kDoneArrayOffset + kDoneArrayBytes;
 constexpr uint64_t kGuardArrayBytes =
     static_cast<uint64_t>(kProvisionedCores) * kMaxRingSlots * sizeof(uint64_t);
@@ -102,9 +104,9 @@ constexpr uint64_t pinned_bytes_for(uint32_t cores) {
 // The header. Two parties disagreeing on geometry compute different offsets for one core
 // and each reads bytes that are legitimately idle, so the constants are published.
 constexpr uint64_t kRegionMagic = 0x543648'4F535456ull;  // "T6HOSTV"
-// 8 repacked the credit and done arrays to [peer][core] so credits coalesce; a v7 peer
-// writes a credit where a v8 reader does not look, and the sender's ring gate never opens.
-constexpr uint32_t kRegionVersion = 8;
+// 9 doubled kMaxRingSlots, which restrides the guard array: a v8 peer arms the guard for
+// one slot where a v9 reader polls another, so frames would publish into the wrong slot.
+constexpr uint32_t kRegionVersion = 9;
 
 struct RegionHeader {
     uint64_t magic;
