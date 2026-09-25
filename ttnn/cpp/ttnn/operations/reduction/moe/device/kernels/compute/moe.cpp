@@ -263,7 +263,9 @@ void mask_and_topk() {
     DataflowBuffer input_dfb(input_dfb_index);
     DataflowBuffer expert_mask_dfb(expert_mask_dfb_index);
     DataflowBuffer masked_input_dfb(masked_input_dfb_index);
+#if !INDEX_TILES_ON_COMPUTE
     DataflowBuffer index_dfb(index_dfb_index);
+#endif
     DataflowBuffer input_transposed_dfb(input_transposed_dfb_index);
     DataflowBuffer index_transposed_dfb(index_transposed_dfb_index);
     DataflowBuffer values_dfb(values_dfb_index);
@@ -284,7 +286,9 @@ void mask_and_topk() {
         // streaming in input and index tiles to transpose and bitonic local sort them, two tiles at a time
         for (uint32_t wt = 0; wt < Wt; wt += 2) {
             input_dfb.wait_front(2);
+#if !INDEX_TILES_ON_COMPUTE
             index_dfb.wait_front(2);
+#endif
 
             // Before transposing, add expert_mask to the two input tiles and store the result in masked_input_dfb.
             tile_regs_acquire();
@@ -311,17 +315,25 @@ void mask_and_topk() {
             transpose_tile(masked_input_dfb_index, 1, 1);
             masked_input_dfb.pop_front(2);
 
+#if INDEX_TILES_ON_COMPUTE
+            // The index tile is a per-column constant, so its transpose is built in DEST directly.
+            ckernel::topk_fill_index_tile(2, wt * 32);
+            ckernel::topk_fill_index_tile(3, (wt + 1) * 32);
+#else
             reconfig_data_format_srca(index_dfb_index);
             transpose_init(index_dfb_index);
             transpose_tile(index_dfb_index, 0, 2);
             transpose_tile(index_dfb_index, 1, 3);
+#endif
 
             // llk_topk_sort -> inplace
             ckernel::topk_local_sort(0, static_cast<int>(ascending), logk - 1);
 
             tile_regs_commit();
 
+#if !INDEX_TILES_ON_COMPUTE
             index_dfb.pop_front(2);
+#endif
 
             tile_regs_wait();
             // pack value tiles into cb_intermed0
@@ -453,6 +465,12 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb::input, dfb::input_transposed);
 
+#if INDEX_TILES_ON_COMPUTE
+    constexpr uint32_t index_dfb_or_none = 0;  // no index DFB: the index tiles are built in DEST
+#else
+    constexpr uint32_t index_dfb_or_none = dfb::index;
+#endif
+
     // Apply expert_mask to each input tile pair and run top-k on the masked values.
     mask_and_topk<
         Ht,
@@ -463,7 +481,7 @@ void kernel_main() {
         dfb::input,
         dfb::expert_mask,
         dfb::masked_input,
-        dfb::index,
+        index_dfb_or_none,
         dfb::input_transposed,
         dfb::index_transposed,
         dfb::values,

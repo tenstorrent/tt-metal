@@ -143,6 +143,17 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
     ProgramSpec spec;
     spec.name = "topk_single_core";
 
+    // Generated index tiles: on Wormhole and Blackhole the compute kernel builds each one in DEST
+    // from the lane id (topk_fill_index_tile), so there is no index DFB and the reader streams
+    // values only. Other architectures keep the DM generator, and a caller-supplied indices
+    // tensor is streamed through the DFB as before.
+    const tt::ARCH arch = input_tensor.device().arch();
+    const bool index_tiles_on_compute =
+        !tensor_args.indices.has_value() && (arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE);
+    KernelSpec::CompilerOptions::Defines index_defines;
+    index_defines.insert({"GENERATE_INDICES", tensor_args.indices.has_value() ? "0" : "1"});
+    index_defines.insert({"INDEX_TILES_ON_COMPUTE", index_tiles_on_compute ? "1" : "0"});
+
     // Dataflow Buffer Creations:
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = INPUT_DFB,
@@ -151,12 +162,14 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
         .data_format_metadata = input_cb_data_format,
     });
 
-    spec.dataflow_buffers.push_back(DataflowBufferSpec{
-        .unique_id = INDEX_DFB,
-        .entry_size = index_tile_size,
-        .num_entries = input_cb_tile_count,
-        .data_format_metadata = output_ind_cb_data_format,
-    });
+    if (!index_tiles_on_compute) {
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = INDEX_DFB,
+            .entry_size = index_tile_size,
+            .num_entries = input_cb_tile_count,
+            .data_format_metadata = output_ind_cb_data_format,
+        });
+    }
 
     // Uses bf16 when input is bfp8/bfp4 so that the insertion sort operates at higher
     // precision and avoids shared-exponent corruption of tiles adjacent to inf values.
@@ -225,18 +238,13 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
         .source = "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_create_index_tensor.cpp",
         .compiler_options =
             {
-                .defines = {{"GENERATE_INDICES", tensor_args.indices.has_value() ? "0" : "1"}},
+                .defines = index_defines,
             },
         .dfb_bindings =
             {
                 DFBBinding{
                     .dfb_spec_name = INPUT_DFB,  // Input values
                     .accessor_name = "input",
-                    .endpoint_type = DFBEndpointType::PRODUCER,
-                },
-                DFBBinding{
-                    .dfb_spec_name = INDEX_DFB,  // Generated indices
-                    .accessor_name = "index",
                     .endpoint_type = DFBEndpointType::PRODUCER,
                 },
             },
@@ -313,7 +321,7 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
         .source = "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk.cpp",
         // A compute kernel's legacy default optimization level is O3, while the Metal 2.0
         // default is O2 for every kernel kind, so it has to be stated to keep the level.
-        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+        .compiler_options = {.defines = index_defines, .opt_level = KernelBuildOptLevel::O3},
         // The four workspace buffers are touched by this kernel alone, which both fills and
         // drains each of them, so each is bound at both endpoints under one accessor name.
         .dfb_bindings =
@@ -321,11 +329,6 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
                 DFBBinding{
                     .dfb_spec_name = INPUT_DFB,  // Input values
                     .accessor_name = "input",
-                    .endpoint_type = DFBEndpointType::CONSUMER,
-                },
-                DFBBinding{
-                    .dfb_spec_name = INDEX_DFB,  // Input indices
-                    .accessor_name = "index",
                     .endpoint_type = DFBEndpointType::CONSUMER,
                 },
                 DFBBinding{
@@ -399,6 +402,20 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
                 .unpack_modes = std::move(compute_unpack_modes),
             },
     };
+
+    if (!index_tiles_on_compute) {
+        // The reader generates (or streams) the index tiles and the compute kernel consumes them.
+        reader.dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = INDEX_DFB,
+            .accessor_name = "index",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        compute.dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = INDEX_DFB,
+            .accessor_name = "index",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+    }
 
     spec.kernels.push_back(std::move(reader));
     spec.kernels.push_back(std::move(writer));

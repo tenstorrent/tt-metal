@@ -31,8 +31,12 @@ namespace {
 // when the input dtype is UInt16, so the reader/writer software-conversion loops (which
 // reference `dfb::uint16_input_stage` etc.) must also be preprocessor-gated to avoid the
 // undeclared handles from tripping name lookup on the non-UINT16 path.
-KernelSpec::CompilerOptions::Defines sort_kernel_defines(bool is_row_major, bool is_uint16_input) {
+// INDEX_TILES_ON_COMPUTE: the compute kernel builds each index tile in DEST (topk_fill_index_tile),
+// so no index DFB is bound and the writer generates nothing. Always defined, as 0 or 1.
+KernelSpec::CompilerOptions::Defines sort_kernel_defines(
+    bool is_row_major, bool is_uint16_input, bool index_tiles_on_compute) {
     KernelSpec::CompilerOptions::Defines defines;
+    defines.insert({"INDEX_TILES_ON_COMPUTE", index_tiles_on_compute ? "1" : "0"});
     if (is_row_major) {
         defines.insert({"IS_ROW_MAJOR", "1"});
     }
@@ -45,8 +49,8 @@ KernelSpec::CompilerOptions::Defines sort_kernel_defines(bool is_row_major, bool
 // Layout-only overload kept for the CrossCore factory, which routes UINT16 inputs to
 // a different program via select_program_factory and therefore never sets
 // IS_UINT16_FP32_MODE (its reader/writer have no software-conversion loops).
-KernelSpec::CompilerOptions::Defines layout_defines(bool is_row_major) {
-    return sort_kernel_defines(is_row_major, /*is_uint16_input=*/false);
+KernelSpec::CompilerOptions::Defines layout_defines(bool is_row_major, bool index_tiles_on_compute) {
+    return sort_kernel_defines(is_row_major, /*is_uint16_input=*/false, index_tiles_on_compute);
 }
 
 }  // namespace
@@ -88,6 +92,10 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
     constexpr uint32_t cb_in_units = 2 * num_cb_unit;
 
     auto* device = tensor_args.input_tensor.device();
+    // Wormhole and Blackhole build the index tiles in DEST on the compute kernel (topk_fill_index_tile);
+    // other architectures keep the writer's DM generator and the index DFB.
+    const bool index_tiles_on_compute =
+        device->arch() == tt::ARCH::WORMHOLE_B0 || device->arch() == tt::ARCH::BLACKHOLE;
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t total_number_of_cores = compute_with_storage_grid_size.y * compute_with_storage_grid_size.x;
 
@@ -196,12 +204,14 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
         .num_entries = is_row_major ? Wt : cb_in_units,
         .data_format_metadata = sort_value_cb_data_format,
     });
-    spec.dataflow_buffers.push_back(DataflowBufferSpec{
-        .unique_id = INDEX_TENSOR,
-        .entry_size = index_tensor_tile_size,
-        .num_entries = is_row_major ? Wt : cb_in_units,
-        .data_format_metadata = index_tensor_cb_data_format,
-    });
+    if (!index_tiles_on_compute) {
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = INDEX_TENSOR,
+            .entry_size = index_tensor_tile_size,
+            .num_entries = is_row_major ? Wt : cb_in_units,
+            .data_format_metadata = index_tensor_cb_data_format,
+        });
+    }
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = INPUT_TRANSPOSED,
         // The transposed value buffer sits between pack_tile and the next
@@ -393,12 +403,15 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
         }
     }
 
-    // The writer generates the index tiles the compute kernel sorts, in both configurations.
-    writer_dfb_bindings.push_back(DFBBinding{
-        .dfb_spec_name = INDEX_TENSOR,
-        .accessor_name = "index_tensor",
-        .endpoint_type = DFBEndpointType::PRODUCER,
-    });
+    // The writer generates the index tiles the compute kernel sorts, in both configurations, unless
+    // the compute kernel builds them in DEST.
+    if (!index_tiles_on_compute) {
+        writer_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = INDEX_TENSOR,
+            .accessor_name = "index_tensor",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+    }
     if (is_row_major) {
         writer_dfb_bindings.push_back(DFBBinding{
             .dfb_spec_name = RM_VALUE_OUTPUT,
@@ -454,11 +467,13 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
         .accessor_name = "input_tensor",
         .endpoint_type = DFBEndpointType::CONSUMER,
     });
-    compute_dfb_bindings.push_back(DFBBinding{
-        .dfb_spec_name = INDEX_TENSOR,
-        .accessor_name = "index_tensor",
-        .endpoint_type = DFBEndpointType::CONSUMER,
-    });
+    if (!index_tiles_on_compute) {
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = INDEX_TENSOR,
+            .accessor_name = "index_tensor",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+    }
     compute_dfb_bindings.push_back(DFBBinding{
         .dfb_spec_name = INPUT_TRANSPOSED,
         .accessor_name = "input_tensor_transposed",
@@ -539,7 +554,7 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
         .unique_id = READER,
         .source = "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/"
                   "reader_single_row_single_core.cpp",
-        .compiler_options = {.defines = sort_kernel_defines(is_row_major, is_uint16_input)},
+        .compiler_options = {.defines = sort_kernel_defines(is_row_major, is_uint16_input, index_tiles_on_compute)},
         .dfb_bindings = std::move(reader_dfb_bindings),
         .tensor_bindings =
             {
@@ -564,7 +579,7 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
         .unique_id = WRITER,
         .source = "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/"
                   "writer_single_row_single_core.cpp",
-        .compiler_options = {.defines = sort_kernel_defines(is_row_major, is_uint16_input)},
+        .compiler_options = {.defines = sort_kernel_defines(is_row_major, is_uint16_input, index_tiles_on_compute)},
         .dfb_bindings = std::move(writer_dfb_bindings),
         .tensor_bindings =
             {
@@ -613,7 +628,7 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
         // Compute kernels build at O3; the compiler-options default is O2, so the level is stated
         // explicitly rather than inherited.
         .compiler_options =
-            {.defines = sort_kernel_defines(is_row_major, is_uint16_input),
+            {.defines = sort_kernel_defines(is_row_major, is_uint16_input, index_tiles_on_compute),
              .opt_level = KernelSpec::CompilerOptions::OptLevel::O3},
         .dfb_bindings = std::move(compute_dfb_bindings),
         .compile_time_args =
@@ -905,6 +920,10 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryCrossCoreDataExchange
     const bool is_32_bit_data = is_32_bit_index || input_tensor_cb_data_format == tt::DataFormat::Float32;
 
     const bool is_row_major = (tensor_args.input_tensor.layout() == Layout::ROW_MAJOR);
+    // Wormhole and Blackhole build the index tiles in DEST on the compute kernel (topk_fill_index_tile);
+    // other architectures keep the writer's DM generator and the index DFB.
+    const tt::ARCH arch = tensor_args.input_tensor.device()->arch();
+    const bool index_tiles_on_compute = arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE;
     const auto tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
     const uint32_t value_element_bytes = tt::datum_size(value_tensor_cb_data_format);
     const uint32_t index_element_bytes = tt::datum_size(index_tensor_cb_data_format);
@@ -971,12 +990,14 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryCrossCoreDataExchange
         .num_entries = is_row_major ? number_of_tiles_per_core : cb_scale_factor,
         .data_format_metadata = input_tensor_cb_data_format,
     });
-    spec.dataflow_buffers.push_back(DataflowBufferSpec{
-        .unique_id = INDEX_TENSOR,
-        .entry_size = index_tensor_tile_size,
-        .num_entries = cb_scale_factor,
-        .data_format_metadata = index_tensor_cb_data_format,
-    });
+    if (!index_tiles_on_compute) {
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = INDEX_TENSOR,
+            .entry_size = index_tensor_tile_size,
+            .num_entries = cb_scale_factor,
+            .data_format_metadata = index_tensor_cb_data_format,
+        });
+    }
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = INPUT_TRANSPOSED,
         .entry_size = input_tensor_tile_size,
@@ -1154,11 +1175,13 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryCrossCoreDataExchange
         .endpoint_type = DFBEndpointType::PRODUCER,
     });
 
-    writer_dfb_bindings.push_back(DFBBinding{
-        .dfb_spec_name = INDEX_TENSOR,
-        .accessor_name = "index_tensor",
-        .endpoint_type = DFBEndpointType::PRODUCER,
-    });
+    if (!index_tiles_on_compute) {
+        writer_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = INDEX_TENSOR,
+            .accessor_name = "index_tensor",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+    }
     if (is_row_major) {
         writer_dfb_bindings.push_back(DFBBinding{
             .dfb_spec_name = RM_VALUE_OUTPUT,
@@ -1195,11 +1218,13 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryCrossCoreDataExchange
         .accessor_name = "input_tensor",
         .endpoint_type = DFBEndpointType::CONSUMER,
     });
-    compute_dfb_bindings.push_back(DFBBinding{
-        .dfb_spec_name = INDEX_TENSOR,
-        .accessor_name = "index_tensor",
-        .endpoint_type = DFBEndpointType::CONSUMER,
-    });
+    if (!index_tiles_on_compute) {
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = INDEX_TENSOR,
+            .accessor_name = "index_tensor",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+    }
     compute_dfb_bindings.push_back(DFBBinding{
         .dfb_spec_name = INPUT_TRANSPOSED,
         .accessor_name = "input_tensor_transposed",
@@ -1296,7 +1321,7 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryCrossCoreDataExchange
         .unique_id = READER,
         .source = "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/"
                   "reader_cross_core_data_exchange.cpp",
-        .compiler_options = {.defines = layout_defines(is_row_major)},
+        .compiler_options = {.defines = layout_defines(is_row_major, index_tiles_on_compute)},
         .dfb_bindings = std::move(reader_dfb_bindings),
         .semaphore_bindings =
             {
@@ -1332,7 +1357,7 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryCrossCoreDataExchange
         .unique_id = WRITER,
         .source = "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/"
                   "writer_cross_core_data_exchange.cpp",
-        .compiler_options = {.defines = layout_defines(is_row_major)},
+        .compiler_options = {.defines = layout_defines(is_row_major, index_tiles_on_compute)},
         .dfb_bindings = std::move(writer_dfb_bindings),
         .tensor_bindings =
             {
@@ -1375,7 +1400,8 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryCrossCoreDataExchange
         // Compute kernels build at O3; the compiler-options default is O2, so the level is stated
         // explicitly rather than inherited.
         .compiler_options =
-            {.defines = layout_defines(is_row_major), .opt_level = KernelSpec::CompilerOptions::OptLevel::O3},
+            {.defines = layout_defines(is_row_major, index_tiles_on_compute),
+             .opt_level = KernelSpec::CompilerOptions::OptLevel::O3},
         .dfb_bindings = std::move(compute_dfb_bindings),
         .compile_time_args =
             {
@@ -1450,6 +1476,11 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowMultiCore::c
     const uint32_t W_index_bytes = tile_width * index_element_size;
 
     auto* device = tensor_args.input_tensor.device();
+    // Wormhole and Blackhole build the stage-1 index tiles in DEST on the compute kernel (topk_fill_index_tile);
+    // the coordinator then copies values only and stage 1 writes the first index tiles to DRAM. Other
+    // architectures keep the coordinator's DM generator. The row-major path keeps its tilize-based index rows.
+    const bool index_tiles_on_compute =
+        device->arch() == tt::ARCH::WORMHOLE_B0 || device->arch() == tt::ARCH::BLACKHOLE;
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t total_number_of_cores = compute_with_storage_grid_size.y * compute_with_storage_grid_size.x;
 
@@ -1963,7 +1994,7 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowMultiCore::c
         .unique_id = COORDINATOR,
         .source = "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/"
                   "coordinator_single_row_multi_core.cpp",
-        .compiler_options = {.defines = sort_kernel_defines(is_row_major, is_uint16_input)},
+        .compiler_options = {.defines = sort_kernel_defines(is_row_major, is_uint16_input, index_tiles_on_compute)},
         .dfb_bindings = std::move(coordinator_dfb_bindings),
         .semaphore_bindings =
             {
@@ -2006,7 +2037,7 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowMultiCore::c
         .unique_id = READER,
         .source = "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/"
                   "reader_single_row_multi_core.cpp",
-        .compiler_options = {.defines = sort_kernel_defines(is_row_major, is_uint16_input)},
+        .compiler_options = {.defines = sort_kernel_defines(is_row_major, is_uint16_input, index_tiles_on_compute)},
         .dfb_bindings = std::move(reader_dfb_bindings),
         .semaphore_bindings =
             {
@@ -2040,7 +2071,7 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowMultiCore::c
         .unique_id = WRITER,
         .source = "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/"
                   "writer_single_row_multi_core.cpp",
-        .compiler_options = {.defines = sort_kernel_defines(is_row_major, is_uint16_input)},
+        .compiler_options = {.defines = sort_kernel_defines(is_row_major, is_uint16_input, index_tiles_on_compute)},
         .dfb_bindings = std::move(writer_dfb_bindings),
         .semaphore_bindings =
             {
@@ -2087,7 +2118,7 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowMultiCore::c
         // Compute kernels build at O3; the compiler-options default is O2, so the level is stated
         // explicitly rather than inherited.
         .compiler_options =
-            {.defines = sort_kernel_defines(is_row_major, is_uint16_input),
+            {.defines = sort_kernel_defines(is_row_major, is_uint16_input, index_tiles_on_compute),
              .opt_level = KernelSpec::CompilerOptions::OptLevel::O3},
         .dfb_bindings = std::move(compute_dfb_bindings),
         .compile_time_args =

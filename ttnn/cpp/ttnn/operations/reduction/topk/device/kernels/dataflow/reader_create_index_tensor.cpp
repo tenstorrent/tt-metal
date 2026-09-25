@@ -36,7 +36,9 @@ void kernel_main() {
 
     const Noc noc;
     DataflowBuffer dfb_in0(dfb::input);
-    DataflowBuffer dfb_index(dfb::index);
+#if !(GENERATE_INDICES && INDEX_TILES_ON_COMPUTE)
+    DataflowBuffer dfb_index(dfb::index);  // absent when the compute kernel builds the index tiles in DEST
+#endif
     const uint32_t tile_bytes_in0 = dfb_in0.get_entry_size();
 #if not GENERATE_INDICES
     const uint32_t tile_bytes_index = dfb_index.get_entry_size();
@@ -53,11 +55,13 @@ void kernel_main() {
 
             dfb_in0.push_back(onetile);
 #if GENERATE_INDICES
+#if !INDEX_TILES_ON_COMPUTE
             if (uint16_output) {
                 dataflow_kernel_lib::generate_index_tile<uint16_t>(dfb::index, w);
             } else {
                 dataflow_kernel_lib::generate_index_tile<uint32_t>(dfb::index, w);
             }
+#endif  // !INDEX_TILES_ON_COMPUTE: otherwise the compute kernel builds the index tile in DEST
 #else
             // Read precomputed indices to dataflow buffer
             dfb_index.reserve_back(onetile);

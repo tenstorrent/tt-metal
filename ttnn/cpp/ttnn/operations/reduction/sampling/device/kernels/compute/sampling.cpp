@@ -227,7 +227,9 @@ void top_k() {
     ckernel::topk_tile_init();
 
     DataflowBuffer input_dfb(input_dfb_index);
+#if !INDEX_TILES_ON_COMPUTE
     DataflowBuffer index_dfb(index_dfb_index);
+#endif
     DataflowBuffer input_transposed_dfb(input_transposed_dfb_index);
     DataflowBuffer index_transposed_dfb(index_transposed_dfb_index);
     DataflowBuffer values_dfb(values_dfb_index);
@@ -245,7 +247,9 @@ void top_k() {
         for (uint32_t wt = 0; wt < Wt; wt += 2) {
             // local sort into k groups
             input_dfb.wait_front(2);
+#if !INDEX_TILES_ON_COMPUTE
             index_dfb.wait_front(2);
+#endif
 
             tile_regs_acquire();
             reconfig_data_format_srca(input_dfb_index);
@@ -253,10 +257,16 @@ void top_k() {
             transpose_tile(input_dfb_index, 0, 0);
             transpose_tile(input_dfb_index, 1, 1);
 
+#if INDEX_TILES_ON_COMPUTE
+            // The index tile is a per-column constant, so its transpose is built in DEST directly.
+            ckernel::topk_fill_index_tile(2, wt * 32);
+            ckernel::topk_fill_index_tile(3, (wt + 1) * 32);
+#else
             reconfig_data_format_srca(index_dfb_index);
             transpose_init(index_dfb_index);
             transpose_tile(index_dfb_index, 0, 2);
             transpose_tile(index_dfb_index, 1, 3);
+#endif
 
             // llk_topk_sort -> inplace
             // stable_sort: equal values keep their original (lowest) position, so the candidate the
@@ -274,7 +284,9 @@ void top_k() {
             tile_regs_commit();
 
             input_dfb.pop_front(2);
+#if !INDEX_TILES_ON_COMPUTE
             index_dfb.pop_front(2);
+#endif
 
             tile_regs_wait();
             // pack value tiles into cb_intermed0
@@ -455,7 +467,13 @@ void kernel_main() {
     const uint32_t logk = 5;  // log(32)
 
     // top-k
+#if INDEX_TILES_ON_COMPUTE
+    constexpr uint32_t index_dfb_or_none = 0;  // no index DFB: the index tiles are built in DEST
+    compute_kernel_hw_startup(dfb::input_values, dfb::input_transposed, dfb::input_transposed);
+#else
+    constexpr uint32_t index_dfb_or_none = dfb::index;
     compute_kernel_hw_startup(dfb::input_values, dfb::index, dfb::input_transposed);
+#endif
     top_k<
         Ht,
         Wt,
@@ -463,7 +481,7 @@ void kernel_main() {
         logWt,
         logk,
         dfb::input_values,
-        dfb::index,
+        index_dfb_or_none,
         dfb::input_transposed,
         dfb::index_transposed,
         dfb::values,

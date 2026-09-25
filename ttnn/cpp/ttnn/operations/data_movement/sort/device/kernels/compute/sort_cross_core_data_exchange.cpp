@@ -39,7 +39,15 @@ void kernel_main() {
     constexpr bool stable = get_arg(args::stable) == 1;
 
     DataflowBuffer input_tensor_dfb(dfb::input_tensor);
+#if INDEX_TILES_ON_COMPUTE
+    // No index DFB: the sort helper builds the index tiles in DEST. The alias only satisfies the
+    // helper's signature and the format-init calls below.
+    constexpr auto index_operand = dfb::input_tensor;
+    DataflowBuffer& index_tensor_dfb = input_tensor_dfb;
+#else
+    constexpr auto index_operand = dfb::index_tensor;
     DataflowBuffer index_tensor_dfb(dfb::index_tensor);
+#endif
     DataflowBuffer input_tensor_transposed_dfb(dfb::input_tensor_transposed);
     DataflowBuffer index_tensor_transposed_dfb(dfb::index_tensor_transposed);
     DataflowBuffer value_tensor_intermediate_dfb(dfb::value_tensor_intermediate);
@@ -79,11 +87,11 @@ void kernel_main() {
     // re-init (compute_kernel_hw_startup is documented call-once, but the pre-existing
     // mid-kernel re-init pattern is preserved as-is by the init-cleanup rename).
 #ifdef IS_ROW_MAJOR
-    compute_kernel_hw_startup(dfb::rm_input, dfb::index_tensor, dfb::input_tensor);
+    compute_kernel_hw_startup(dfb::rm_input, index_operand, dfb::input_tensor);
     // TODO(#52395): compute_kernel_hw_startup is a call-once API and should be the kernel's first Tensix-engine call, but here it follows another engine op (init_sfpu / a prior startup); see the issue.
-    compute_kernel_hw_startup(dfb::input_tensor, dfb::index_tensor, dfb::input_tensor_transposed);
+    compute_kernel_hw_startup(dfb::input_tensor, index_operand, dfb::input_tensor_transposed);
 #else
-    compute_kernel_hw_startup(dfb::input_tensor, dfb::index_tensor, dfb::input_tensor);
+    compute_kernel_hw_startup(dfb::input_tensor, index_operand, dfb::input_tensor);
 #endif
     ckernel::topk_tile_init();
     transpose_init(dfb::input_tensor);
@@ -115,9 +123,10 @@ void kernel_main() {
             number_of_tiles_per_core,
             /*switch_dir=*/true,
             dir,
-            /*end_phase(log2(K))=*/5);
+            /*end_phase(log2(K))=*/5,
+            global_tile_start);
 
-        global_old_cb = dfb::index_tensor;
+        global_old_cb = index_operand;
 
         // Wait for bitonic sequence of Wt tiles
         input_tensor_transposed_dfb.wait_front(number_of_tiles_per_core);
@@ -385,7 +394,7 @@ void kernel_main() {
 
             // Untilize values: number_of_tiles_per_core tiles → TILE_H RM pages.
             // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
-            compute_kernel_hw_startup(dfb::input_tensor, dfb::index_tensor, dfb::rm_value_output);
+            compute_kernel_hw_startup(dfb::input_tensor, index_operand, dfb::rm_value_output);
             pack_untilize_init<SUB_BLOCK_DIM, number_of_tiles_per_core>(dfb::input_tensor, dfb::rm_value_output);
             input_tensor_dfb.wait_front(number_of_tiles_per_core);
             rm_value_output_dfb.reserve_back(TILE_H);
