@@ -70,7 +70,6 @@ within each slot's populated prefix; input tokens must already use CP row order.
   It tokenizes the Gutenberg text, verifies token IDs, and replays 54 requests
   with random tile-aligned starts, unaligned ends, and rewinds. It compares all
   final-layer KV heads and positions against the GPU trace (PCC >=0.98).
-  The BFP8 aligned baseline is PCC 0.983890 against that BF16 reference.
 
 ```sh
 HF_MODEL=google/gemma-4-31B-it \
@@ -80,18 +79,18 @@ HF_HUB_OFFLINE=1 \
 python_env/bin/python -m pytest models/demos/gemma4_d_p/tests/test_block_cyclic_golden.py -sv
 ```
 
-Measured before rebasing onto main, on Blackhole 8x4 with matching inputs
-and synchronized trace timing (main now has newer activation and SDPA tuning):
+Validated on 2026-09-25 after rebasing onto main `e2e1771d624`, using a local
+`./build_metal.sh -ce` build. All 72 selected host unit cases, four device replay
+variants, the 256K golden test, and the canonical 256K traced test passed.
+The branch changes only `models/demos/gemma4_d_p`; native SWA comes from main.
 
-| Request | Previous Gemma workaround | Native SWA |
-| --- | ---: | ---: |
-| `[0, 4300)` | 243.8 ms | 244.1 ms |
-| `[3168, 9270)` | 370.8 ms | 255.4 ms |
-| `[8352, 13591)` | 319.1 ms | 263.1 ms |
-| `[258016, 262144)` | 683.3 ms | 620.4 ms |
-| All 54 replays | 28.72 s | 23.30 s |
-| Canonical chunks 1 / 2 | 243.9 / 256.1 ms | 244.7 / 256.5 ms |
+Blackhole 8x4 synchronized trace timings, including main's activation/SDPA tuning:
 
-Golden PCC remains 0.983890. Staging, warmup, and capture are excluded from
-replay timing.
-Serving integration is not exercised by these direct tests.
+| Run | First replay | Second replay | Final replay | Total replay |
+| --- | ---: | ---: | ---: | ---: |
+| Block-cyclic, 54 requests with rewinds | 197.5 ms | 206.3 ms | 496.4 ms | 18.413 s |
+| Canonical, 32 aligned chunks | 197.7 ms | 206.6 ms | 505.8 ms | 11.1 s |
+
+Block-cyclic final-layer KV PCC is 0.982167 against the GPU golden (threshold 0.98).
+Staging, warmup, and capture are excluded from replay timing. Serving integration
+is not exercised by these direct tests; runner metadata staging is unit-tested.
