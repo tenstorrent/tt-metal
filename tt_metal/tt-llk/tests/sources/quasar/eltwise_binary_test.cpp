@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 
@@ -99,9 +98,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
-    const std::uint32_t INPUT_TILE_CNT     = params.INPUT_TILE_CNT;
-    const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
+    const std::uint32_t LOOP_FACTOR               = params.LOOP_FACTOR;
+    const std::uint32_t INPUT_TILE_CNT            = params.INPUT_TILE_CNT;
+    const std::uint32_t NUM_BLOCKS                = params.NUM_BLOCKS;
+    const std::uint32_t INPUT_NUM_TILES_IN_BLOCK  = params.INPUT_NUM_TILES_IN_BLOCK;
+    const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
 #endif
     {
         ZONE_SCOPED("INIT")
@@ -133,39 +134,28 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(LOOP_FACTOR * INPUT_TILE_CNT);
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
-        {
-            const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
-            {
-                std::uint32_t dest_idx = 0;
-                for (std::uint32_t remaining_tiles = INPUT_TILE_CNT; remaining_tiles > 0; remaining_tiles -= std::min(remaining_tiles, NUM_TILES_IN_BLOCK))
-                {
-                    const std::uint32_t num_tiles_in_block = std::min(remaining_tiles, NUM_TILES_IN_BLOCK);
-                    for (std::uint32_t tile = 0; tile < num_tiles_in_block; ++tile)
-                    {
-                        _llk_math_eltwise_binary_<ELTWISE_BINARY_OP>(dest_idx, tensor_shape);
-                    }
-                    ++dest_idx;
-                }
-            }
-        }
         else
         {
+            // acc_to_dest folds num_tiles_per_accum input tiles into one dest tile.
+            // Blocks that overflow dest switch banks between sections.
+            const std::uint32_t num_tiles_per_accum = INPUT_NUM_TILES_IN_BLOCK / OUTPUT_NUM_TILES_IN_BLOCK;
             const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                std::uint32_t dest_idx = 0;
-                for (std::uint32_t remaining_tiles = INPUT_TILE_CNT; remaining_tiles > 0; remaining_tiles -= std::min(remaining_tiles, NUM_TILES_IN_BLOCK))
+                for (std::uint32_t block = 0; block < NUM_BLOCKS; block++)
                 {
-                    const std::uint32_t num_tiles_in_block = std::min(remaining_tiles, NUM_TILES_IN_BLOCK);
-                    for (std::uint32_t tile = 0; tile < num_tiles_in_block; ++tile)
+                    for (std::uint32_t dest_idx = 0; dest_idx < OUTPUT_NUM_TILES_IN_BLOCK; ++dest_idx)
                     {
-                        _llk_math_eltwise_binary_<ELTWISE_BINARY_OP>(dest_idx, tensor_shape);
+                        for (std::uint32_t tile = 0; tile < num_tiles_per_accum; ++tile)
+                        {
+                            _llk_math_eltwise_binary_<ELTWISE_BINARY_OP>(dest_idx, tensor_shape);
+                        }
                     }
-                    ++dest_idx;
+                    if constexpr (PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE)
+                    {
+                        _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                    }
                 }
-                _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
             }
         }
         PROFILER_SYNC();
@@ -187,9 +177,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
-    const std::uint32_t OUTPUT_TILE_CNT = params.OUTPUT_TILE_CNT;
-    const Operand& buffer_Res           = params.buffer_Res;
+    const std::uint32_t LOOP_FACTOR               = params.LOOP_FACTOR;
+    const std::uint32_t NUM_BLOCKS                = params.NUM_BLOCKS;
+    const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
+    const Operand& buffer_Res                     = params.buffer_Res;
 #endif
 
     {
@@ -220,13 +211,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
             const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t i = 0; i < OUTPUT_TILE_CNT; ++i)
+                for (std::uint32_t block = 0; block < NUM_BLOCKS; block++)
                 {
-                    _llk_pack_(i, i, tensor_shape);
-                }
-                if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION)
-                {
-                    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    for (std::uint32_t i = 0; i < OUTPUT_NUM_TILES_IN_BLOCK; ++i)
+                    {
+                        _llk_pack_(i, block * OUTPUT_NUM_TILES_IN_BLOCK + i, tensor_shape);
+                    }
+                    if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION)
+                    {
+                        _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    }
                 }
             }
         }

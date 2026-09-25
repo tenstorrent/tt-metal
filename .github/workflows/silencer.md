@@ -129,14 +129,10 @@ safe-outputs:
       - sanity-tests
       - blackhole-e2e-tests
       - galaxy-profiler-tests
-      - galaxy-multi-user-isolation-tests
-      - galaxy-unit-tests
-      - models-t1-device-perf-tests
-      - galaxy-integration-tests
-      - galaxy-stress-tests
-      - galaxy-e2e-tests
+      - galaxy-tests
       - galaxy-sanity
-      - galaxy-health
+      - models-t1-device-perf-tests
+      - galaxy-stress-tests
       - t3000-tests
       - t3000-dispatch-tests
       - t3000-profiler-tests
