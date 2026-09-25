@@ -255,7 +255,10 @@ private:
     std::set<CoreCoord> storage_only_cores_;
     std::set<CoreCoord> ethernet_cores_;
     // Cached assignment is NOC-specific (DRAM endpoints differ per NOC) and compute-grid-specific
-    // (dispatch axis / harvesting change logical worker bounds). Mutable so the getter can stay const.
+    // (dispatch axis / harvesting change logical worker bounds). Mutable so the const getter can fill
+    // the cache. The mutex covers every read and write: callers may invoke the getter concurrently
+    // through a const Device&.
+    mutable std::mutex optimal_dram_bank_to_logical_worker_assignment_mutex_;
     mutable std::vector<CoreCoord> optimal_dram_bank_to_logical_worker_assignment_;
     mutable std::optional<std::uint8_t> optimal_dram_bank_to_logical_worker_assignment_noc_;
     mutable std::optional<CoreCoord> optimal_dram_bank_to_logical_worker_assignment_grid_size_;
