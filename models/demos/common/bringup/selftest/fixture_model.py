@@ -182,3 +182,78 @@ def hf_model(spec, num_layers):
 
 def tokenizer(spec):
     return Tokenizer()
+
+
+# ---- fake device hooks: the reference plus small deterministic noise, for testing the device-side test helpers
+NOISE = {"value": 1e-3}
+
+
+def _noisy(t: torch.Tensor, seed: int) -> torch.Tensor:
+    if not t.is_floating_point() or NOISE["value"] == 0:
+        return t
+    g = torch.Generator().manual_seed(seed)
+    return t + NOISE["value"] * t.abs().mean() * torch.randn(t.shape, generator=g)
+
+
+def device_component(mesh, spec, layer, name):
+    ref = Reference(spec, [layer])
+    cpu = ref.component(layer, name)
+
+    def fn(ctx, *x):
+        state = ref.new_state(ctx.extra["max_seq"])
+        if ctx.extra["prefix_len"]:
+            ref.load_state(state, layer, ctx.extra["state_prefix"], ctx.extra["prefix_len"])
+        return _noisy(cpu(Ctx(layer, ctx.start, ctx.length, state), *x), layer)
+
+    return fn
+
+
+class _FakeState:
+    def __init__(self, ref, max_seq):
+        self.ref, self.s = ref, ref.new_state(max_seq)
+
+    def load_prefix(self, layer, tensors, length):
+        self.ref.load_state(self.s, layer, tensors, length)
+
+    def to_torch(self, layer, length):
+        return self.ref.state_tensors(self.s, layer, length)
+
+
+class FakeDeviceModel:
+    load_seconds = 0.0
+
+    def __init__(self, spec, layers):
+        self.ref = Reference(spec, layers)
+
+    def new_state(self, max_seq):
+        return _FakeState(self.ref, max_seq)
+
+    def embed(self, tokens):
+        return self.ref.w["embed"][tokens]
+
+    def from_host(self, h):
+        return h.float()
+
+    def to_host(self, h):
+        return h
+
+    def layer(self, i, h, start, state):
+        ctx = self.ref.chunk_context(i, start, h.shape[0], state.s)
+        out = run_block(self.ref.block_graph(i), lambda n: self.ref.component(i, n), ctx, h)
+        return _noisy(out, 100 + i)
+
+    def final_norm(self, h):
+        return norm(h)
+
+    def logits(self, hidden, rows):
+        return hidden[rows] @ self.ref.w["head"].T
+
+    def free(self, h):
+        pass
+
+    def sync(self):
+        pass
+
+
+def device_model(mesh, spec, layers, lm_head=True):
+    return FakeDeviceModel(spec, layers)
