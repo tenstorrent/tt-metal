@@ -91,6 +91,10 @@ class TtV4PrefillRuntime:
         self._pending_ids: dict = (
             {}
         )  # id(input tensor) -> (tensor, host token ids) between make_chunk_input and prefill_chunk
+        self._needs_token_ids = config.is_first_rank and any(
+            hf_config.mlp_layer_types[i] == "hash_moe"
+            for i in range(config.first_layer_idx, config.first_layer_idx + config.num_layers)
+        )
         self._ack: Optional[Callable[[int], None]] = None
         self._sink = None
         self._request_id = 0
@@ -121,6 +125,14 @@ class TtV4PrefillRuntime:
             self._pending_ids[id(t)] = (t, torch.tensor(ids, dtype=torch.int64))
             return t
         return self.make_placeholder_activation()
+
+    def _token_ids_from_device(self, input_tensor) -> torch.Tensor:
+        c = self.config
+        full = ttnn.to_torch(
+            input_tensor,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, mesh_shape=tuple(c.mesh_shape), dims=(0, 1)),
+        )  # [sp, tp, S/sp]: rows = the SP shards, the TP replicas identical
+        return full[:, 0, :].reshape(-1).to(torch.int64)
 
     def make_placeholder_activation(self):
         """A non-first rank's input: the packed 4 streams [1, 1, S_l, 4 D_l] the D2D socket overwrites."""
@@ -155,6 +167,10 @@ class TtV4PrefillRuntime:
         if c.is_first_rank:
             entry = self._pending_ids.pop(id(input_tensor), None)
             ids = None if entry is None else entry[1]
+            if ids is None and self._needs_token_ids:
+                # request mode: the chunk arrived over the H2D socket as a device tensor [sp, 1, S/sp] uint32
+                # (SP-sharded, TP-replicated) -- read the ids back (20 KB per chunk) for the hash-routed MoE layers
+                ids = self._token_ids_from_device(input_tensor)
         self._request_id = int(request_id)
         out = self.model(
             input_tensor,
