@@ -41,8 +41,7 @@ export MODEL_WEIGHTS_DIR
 MODEL_WEIGHTS_DIR=$(python -c 'from models.demos.qwen38_27b_qb2.tt.model import checkpoint_path; print(checkpoint_path())')
 python -m pytest "$model_dir/tests/unit" "$model_dir/tests/vllm" "$model_dir/tests/test_benchmark.py" \
     --timeout 300 --junitxml "$results/host.xml"
-python -m pytest "$model_dir/tests/test_decode_conv.py" -k '8 or 16' \
-    --timeout 300 --junitxml "$results/device.xml"
+python -m pytest "$model_dir/tests/test_decode_conv.py" --timeout 300 --junitxml "$results/device.xml"
 
 export QWEN_DECODE_BUCKETS=1 QWEN_COMPACT_DECODE_RESIDUAL=1 QWEN_COMPACT_DECODE_MLP=1
 export QWEN_BATCHED_DECODE_ROPE=1 QWEN_COMPACT_DECODE_ATTENTION=1
