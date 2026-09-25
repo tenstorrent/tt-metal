@@ -570,7 +570,8 @@ class Qwen36KVTransfer:
             f"[PD] warmup_kv_transfer role={role} mode={mode} chunk_tokens={chunk_tokens} slots={slots}: "
             f"+{self._n_program_cache_after_warmup - n0} programs ({self._n_program_cache_after_warmup} total), "
             f"{len(self._shape_keys)} shape keys, {1e3 * (time.perf_counter() - t0):.0f} ms; "
-            f"strict_shapes={self.strict} rec_write={self.rec_write} via_write_slot={self.via_write_slot}"
+            f"strict_shapes={self.strict} rec_write={self.rec_write} via_write_slot={self.via_write_slot} "
+            f"hist_write={self.hist_write} (staged={self._hist_stage is not None}) rows_prefetch={self.rows_prefetch}"
         )
 
     # ----------------------------------------------------------------------------------------------------------- #
