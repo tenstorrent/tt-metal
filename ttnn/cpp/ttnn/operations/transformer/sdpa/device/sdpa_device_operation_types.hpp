@@ -40,6 +40,10 @@ struct SDPAParams {
     // [B, NKH, (NQH / NKH) * Sq, d] (the same memory), so the K/V of a KV head is streamed once down one chain of
     // cores instead of once per query head. Non-causal, unmasked, unchunked calls only; output layout unchanged.
     bool pack_gqa_heads = false;
+    // Keep K/V in the CBs across a core's consecutive Q chunks of the same (batch, KV head): each core reads a KV
+    // head's K/V once instead of once per Q chunk, and no K/V chains are built between cores. Non-causal, unmasked,
+    // one K chunk (k_chunk_size >= Sk), streaming compute only.
+    bool reuse_kv = false;
 };
 
 struct SDPAInputs {

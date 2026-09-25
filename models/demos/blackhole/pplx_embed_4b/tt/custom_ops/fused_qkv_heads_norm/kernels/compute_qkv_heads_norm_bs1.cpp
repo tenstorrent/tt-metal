@@ -1,12 +1,14 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// v3 of the fused head-split + RMSNorm + RoPE compute: v1's math, tile for tile and in the same order (so the output
-// is bit-identical), but each phase runs once per unit over all of the unit's normalised heads (its Q heads and, when
-// the unit carries K, its K heads, which sit contiguously in the unit) instead of once per head. Every phase pays its
-// data-format reconfig, *_init and CB handshakes once per unit; at bs1 that is 9 phase set-ups for 5 heads instead
-// of 45. Only the gamma multiply (gamma_q vs gamma_k) and the last RoPE step (Q output CB vs K|V output CB) split
-// into a Q and a K loop. Per unit, over nh heads of Wt = head_dim_tiles tiles:
+// bs1 compute of the fused head-split + RMSNorm + RoPE op (QWEN_FUSED_COMPUTE_V3=1, bs1 default; batched sizes keep
+// compute_qkv_heads_norm.cpp). v1's math, tile for tile and in the same order (so the output is bit-identical), but
+// each phase runs once per unit over all of the unit's normalised heads (its Q heads and, when the unit carries K, its
+// K heads, which sit contiguously in the unit) instead of once per head. Every phase pays its data-format reconfig,
+// *_init and CB handshakes once per unit; at bs1 that is 9 phase set-ups for 5 heads instead of 45 (heads op 41.7 ->
+// 28.7 us in-model). At bs8/16/32 it is bit-identical too but 0.4-1.2% slower end to end, so it stays bs1-only
+// (NEGATIVE_RESULTS 53). Only the gamma multiply (gamma_q vs gamma_k) and the last RoPE step (Q output CB vs K|V
+// output CB) split into a Q and a K loop. Per unit, over nh heads of Wt = head_dim_tiles tiles:
 //   x2  = x * x                        (CB 5,  nh*Wt tiles)
 //   ms  = row-sum(x2) * 1/head_dim     (CB 6,  nh tiles; one DST slot per head, <= 4 heads per acquire)
 //   inv = rsqrt(ms + eps)              (CB 7,  nh tiles)

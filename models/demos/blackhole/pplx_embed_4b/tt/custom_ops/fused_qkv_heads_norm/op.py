@@ -24,7 +24,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 READER_KERNEL = os.path.join(_HERE, "kernels", "reader_qkv_heads_norm.cpp")
 COMPUTE_KERNEL = os.path.join(_HERE, "kernels", "compute_qkv_heads_norm.cpp")
 COMPUTE_KERNEL_V2 = os.path.join(_HERE, "kernels", "compute_qkv_heads_norm_v2.cpp")  # dest-reuse, 6 passes/head
-COMPUTE_KERNEL_V3 = os.path.join(_HERE, "kernels", "compute_qkv_heads_norm_v3.cpp")  # phases batched across heads
+COMPUTE_KERNEL_BS1 = os.path.join(_HERE, "kernels", "compute_qkv_heads_norm_bs1.cpp")  # phases batched across heads
 WRITER_KERNEL = os.path.join(_HERE, "kernels", "writer_qkv_heads_norm.cpp")
 _BF16_TILE = _TILE_BYTES[ttnn.bfloat16]
 TILE = 32
@@ -113,8 +113,9 @@ def nlp_create_qkv_heads_norm_headsplit(
     device = qkv_fused.device()
     fuse_rotary = rot_cos is not None
     use_v2 = os.getenv("QWEN_FUSED_COMPUTE_V2", "0") == "1"
-    # v3: v1's math with every phase run over a chunk of heads (a unit's Q heads, then its K heads), so each phase's
-    # reconfig / init / CB handshakes are paid once per chunk; intermediate CBs hold a chunk. Bit-identical to v1.
+    # bs1 compute (QWEN_FUSED_COMPUTE_V3=1, set at bs1 only): v1's math with every phase run once per unit over the
+    # unit's Q and K heads, so each phase's reconfig / init / CB handshakes are paid once per unit; intermediate CBs
+    # hold a unit's heads. Bit-identical to v1 at every batch size, but slower than v1 at bs8/16/32.
     use_v3 = os.getenv("QWEN_FUSED_COMPUTE_V3", "0") == "1" and not use_v2
     # cos/sin tiles depend only on the seq tile; consecutive units of a core share it across the
     # head groups, so with the v2 compute they are read once per seq tile instead of once per unit.
@@ -315,7 +316,7 @@ def nlp_create_qkv_heads_norm_headsplit(
                 config=ttnn.ReaderConfigDescriptor(),
             ),
             ttnn.KernelDescriptor(
-                kernel_source=COMPUTE_KERNEL_V2 if use_v2 else (COMPUTE_KERNEL_V3 if use_v3 else COMPUTE_KERNEL),
+                kernel_source=COMPUTE_KERNEL_V2 if use_v2 else (COMPUTE_KERNEL_BS1 if use_v3 else COMPUTE_KERNEL),
                 source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                 core_ranges=used_cores,
                 compile_time_args=compute_ct,

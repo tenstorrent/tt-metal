@@ -771,6 +771,20 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     }
     log_debug(tt::LogOp, "use_zigzag_balancing: {}", use_zigzag_balancing);
 
+    // reuse_kv: a core keeps K/V in its CBs across consecutive Q chunks of the same (batch, KV head), so it needs
+    // the whole K sequence in one chunk; the K/V chains between cores are not built (below).
+    const bool reuse_kv = operation_attributes.reuse_kv;
+    if (reuse_kv) {
+        TT_FATAL(
+            k_num_chunks == 1,
+            "SDPA reuse_kv needs a single K chunk (k_chunk_size {} >= Sk {}), got {} chunks",
+            k_chunk_size,
+            Sk,
+            k_num_chunks);
+        TT_FATAL(use_streaming_compute, "SDPA reuse_kv needs the streaming compute kernel (fp32_dest_acc_en=False)");
+        defines_map["REUSE_KV"] = "1";
+    }
+
     KernelDescriptor::Defines defines(defines_map.begin(), defines_map.end());
 
     // NOTE: Kernel descriptors are appended to the program descriptor after chain construction so that
@@ -956,7 +970,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // lock-step-forward K between cores whose Q chunks now need DIFFERENT K ranges — the semaphore
     // handshake counts diverge and the cores deadlock. Narrowing saves far more K reads than
     // forwarding did.
-    if (!is_causal && !is_chunked && !has_sliding_window && !is_windowed) {
+    if (!is_causal && !is_chunked && !has_sliding_window && !is_windowed && !reuse_kv) {
         head_segments.resize(total_heads);
 
         log_debug(tt::LogOp, "=== Building KV chain forwarding topology ===");
