@@ -1,3 +1,4 @@
+#include <bit>
 // SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
@@ -670,6 +671,15 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     std::bit_cast<uint32_t>(param1))};
         }
         case UnaryOpType::HARDSHRINK: {
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16 && params.size() == 1 &&
+                std::bit_cast<uint32_t>(params[0]) == 0x3f000000u) {
+                return {
+                    "hardshrink_tt_poly_bf16_tile_init();",
+                    fmt::format("hardshrink_tt_poly_bf16_tile({}, 0x3f000000u);", idst)};
+            }
+#endif
+
             uint32_t lambda_bits = std::bit_cast<uint32_t>(param0);
             if (input_dtype.has_value() && *input_dtype == DataType::BFLOAT16) {
                 // For BF16 inputs, pre-round lambda to BF16 precision (RNE) then

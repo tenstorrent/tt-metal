@@ -43,3 +43,21 @@ inline void calculate_hardshrink(std::uint32_t param0) {
 }
 
 }  // namespace ckernel::sfpu
+
+#if !defined(TT_POLY_LLK_DISABLE)
+#include "ckernel_sfpu_hardshrink_bf16.h"
+#endif
+
+namespace ckernel::sfpu {
+
+#if !defined(TT_POLY_LLK_DISABLE)
+template <int ITERATIONS = 8>
+inline void calculate_hardshrink_tt_poly_bf16() {
+    ckernel::sfpu::ttpoly::calculate_simple_forward<ttpoly_generated::HardshrinkBf16Config, ITERATIONS>();
+}
+inline void init_hardshrink_tt_poly_bf16() {
+    ckernel::sfpu::ttpoly::init_simple_forward<ttpoly_generated::HardshrinkBf16Config>();
+}
+#endif
+
+}  // namespace ckernel::sfpu
