@@ -182,6 +182,29 @@ class TtV4PrefillRuntime:
             self.model.release_islands()
             self._trace_captured = False
 
+    def tail_hidden_row(self, tail_out, row: int):
+        """The final-norm output at chunk row ``row`` (0-based within the chunk) as a host fp32 ``[hidden]`` vector, plus the
+        host ms it took. ``tail_out`` is the transformer tail's output, per chip ``[1, 1, S_l, D_l]``: SP-sharded on rows and
+        TP-sharded on the hidden dim over the (sp, tp) mesh; one tile-aligned 32-row slice is pulled from every chip and the
+        row's SP shard picked on the host. Disaggregated prefill needs only the request's FIRST TOKEN, so the LM head is
+        applied on the host by the consumer of this row (the migration driver), not on the device (DS4F-0263)."""
+        c = self.config
+        t0 = time.perf_counter()
+        s_l = c.chunk_size // c.sp_factor
+        sp_idx, local = divmod(int(row), s_l)
+        tile0 = (local // 32) * 32
+        d_l = int(tail_out.shape[-1])
+        sl = ttnn.slice(tail_out, [0, 0, tile0, 0], [1, 1, tile0 + 32, d_l])
+        dims = [0, 0]
+        dims[c.sp_axis], dims[c.tp_axis] = 2, 3
+        host = ttnn.to_torch(
+            sl,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, mesh_shape=tuple(c.mesh_shape), dims=tuple(dims)),
+        )
+        ttnn.deallocate(sl)
+        h = host[0, 0, sp_idx * 32 + (local - tile0)].float().clone()  # [hidden]
+        return h, (time.perf_counter() - t0) * 1e3
+
     def make_chunk_input(self, token_ids: list):
         c = self.config
         if c.is_first_rank:

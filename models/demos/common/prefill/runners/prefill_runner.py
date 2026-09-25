@@ -34,6 +34,7 @@ import os
 import signal
 import time
 
+import torch
 from loguru import logger
 
 import ttnn
@@ -131,6 +132,10 @@ _gate_mode_name = os.environ.get("PREFILL_GATE_FALLBACK_MODE", ADAPTER.default_g
 # When on (default), the last transformer layer runs kv-only: it fills the KV cache for migration and
 # skips its Q/SDPA/wo, FFN/MoE, final norm, and LM head. In a pipeline only the last rank applies it.
 KV_ONLY_LAST_LAYER = os.environ.get("PREFILL_KV_ONLY_LAST_LAYER", "1") == "1"
+# DS4F-0263: when set (and the tail is built, PREFILL_KV_ONLY_LAST_LAYER=0), the last rank publishes every chunk's
+# final-norm output at its last valid position as <dir>/slot<s>_end<actual_end>.pt; the migration driver applies the LM
+# head on the host and hands the resulting first token to the decode side, which starts at prompt_len with it.
+FIRST_TOKEN_DIR = os.environ.get("PREFILL_FIRST_TOKEN_DIR", "")
 # Build the DFlash drafter context-KV cache during this prefill. Three gates, ALL required: the selected
 # model declares the capability (ADAPTER.supports_dflash — only Kimi K2.6/K2.7), the run explicitly opts in
 # (PREFILL_DFLASH=1), and a drafter checkpoint is provided (DFLASH_HF_MODEL, resolved by the runtime). The
@@ -438,6 +443,8 @@ def _compute_and_send(
         # proxy. Serializes dispatch (no overlap) — measurement runs only.
         ttnn.synchronize_device(runtime.mesh_device)
         logger.info(f"[pp rank {rank}] CHUNK_COMPUTE c={c} compute_ms={(time.time() - t_start) * 1000.0:.3f}")
+    if FIRST_TOKEN_DIR and runtime.config.is_last_rank and out is not None:
+        _emit_first_token(runtime, out, meta, rank)
     if not runtime.config.is_last_rank:
         # Traced: `out` is the runtime's persistent _trace_output (the next replay overwrites it in place),
         # so the send copies it into the socket backing but must not free it. Eager: `out` is fresh — free it.
@@ -445,6 +452,42 @@ def _compute_and_send(
     if d2d_out is not None:
         d2d_out.release_fabric_links()
     return t_start
+
+
+def _emit_first_token(runtime, out, meta: dict, rank: int) -> None:
+    """Last rank with the tail built: pull the final-norm output at the chunk's last VALID position and publish it as
+    <PREFILL_FIRST_TOKEN_DIR>/slot<slot>_end<actual_end>.pt ({"hidden": fp32 [hidden], ...}). Every chunk publishes (the
+    runner does not know which chunk ends a request); the migration driver reads the file at the request's real length,
+    applies the LM head on the host (argmax -> first token) and hands the token to the decode side, which then never
+    re-runs position prompt_len-1 (that rewrites the last window row and the closing compressed entries of every layer
+    from the decoder's stale compressor state, DS4F-0263). to_torch blocks on the device, so no synchronize is needed;
+    one 32-row tile slice per chip (~64 KB) -- the head matmul is NOT on the runner's per-chunk path. Never fatal."""
+    try:
+        n_valid = int(meta["actual_end"]) - int(meta["actual_start"])
+        if n_valid <= 0:
+            return
+        hidden, host_ms = runtime.tail_hidden_row(out, n_valid - 1)
+        os.makedirs(FIRST_TOKEN_DIR, exist_ok=True)
+        path = os.path.join(FIRST_TOKEN_DIR, f"slot{int(meta['slot_id'])}_end{int(meta['actual_end'])}.pt")
+        tmp = path + ".tmp"
+        torch.save(
+            {
+                "slot_id": int(meta["slot_id"]),
+                "actual_start": int(meta["actual_start"]),
+                "actual_end": int(meta["actual_end"]),
+                "hidden": hidden,
+                "host_ms": host_ms,
+                "t_epoch": time.time(),
+            },
+            tmp,
+        )
+        os.replace(tmp, path)
+        logger.info(
+            f"[pp rank {rank}] TAIL_ROW slot={meta['slot_id']} end={meta['actual_end']} |h|={float(hidden.norm()):.3f} "
+            f"({host_ms:.1f} ms host) -> {path}"
+        )
+    except Exception as e:  # noqa: BLE001 -- best effort; the KV is what the request is for
+        logger.error(f"[pp rank {rank}] tail-row emission failed: {type(e).__name__}: {e}")
 
 
 def _drain_and_log_e2e(runtime, rank: int, d2d_out, first_compute_start, n_done: int, t0: float) -> None:

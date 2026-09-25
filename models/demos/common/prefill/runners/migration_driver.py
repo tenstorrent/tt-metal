@@ -190,6 +190,28 @@ def _parse_layers(spec: str):
     return [int(x) for x in spec.split(",") if x.strip()] if spec else None
 
 
+_LM_HEAD = None
+
+
+def _lm_head_weight():
+    """The checkpoint's LM head as a host fp32 [vocab, hidden] matrix, read once per process from PREFILL_HF_MODEL
+    (the tt-metal V4 weight reader; ~1 GB bf16 on NFS). Used to turn the runner's tail row into the first token."""
+    global _LM_HEAD
+    if _LM_HEAD is None:
+        from models.demos.deepseek_v3_d_p.tt.v4.weights import hf_names
+
+        model_dir = os.environ["PREFILL_HF_MODEL"]
+        t0 = time.perf_counter()
+        w = hf_names.read_tensors(model_dir, ["head.weight"], weight_map=hf_names.read_weight_map(model_dir))[
+            "head.weight"
+        ]
+        _LM_HEAD = w.float()
+        logger.info(
+            f"[migration_driver] loaded lm_head {tuple(_LM_HEAD.shape)} from {model_dir} in {time.perf_counter() - t0:.1f}s"
+        )
+    return _LM_HEAD
+
+
 class MigrationDriver:
     """Issues producer-side KV migrations. Construct via ``create_driver`` (which applies the enable flag),
     then ``attach()`` before prefill and ``run()`` after the ack drain."""
@@ -209,6 +231,7 @@ class MigrationDriver:
         self.layers = _parse_layers(os.environ.get("PREFILL_MIGRATION_LAYERS", ""))
         self.done_file = os.environ.get("MIGRATION_DONE_FILE", "/tmp/migration_done.sentinel")
         self.handoff_path = os.environ.get("PREFILL_MIGRATION_HANDOFF_PATH", "")
+        self.last_migrate_ms = 0.0  # host wall clock of the most recent migrate() issue -> wait_complete (DS4F-0263)
         self.client = None
 
     @property
@@ -423,6 +446,7 @@ class MigrationDriver:
                 )
                 uuid = next_uuid
                 next_uuid += 1
+                t_mig0 = time.perf_counter()
                 token = self.client.migrate(
                     uuid=uuid,
                     remote_endpoint_id=self.dest_endpoint_id,
@@ -434,9 +458,10 @@ class MigrationDriver:
                     pos_end_exclusive=real_len,
                 )
                 self.client.wait_complete(token, self.timeout_ms)  # self-polls when no poll thread is running
+                self.last_migrate_ms = (time.perf_counter() - t_mig0) * 1e3  # issue -> wait_complete, host wall clock
             logger.success(
                 f"[migration_driver] MIGRATE slot {src_slot} -> {dst_slot} complete "
-                f"({len(layer_ranges)} layer range(s))"
+                f"({len(layer_ranges)} layer range(s), last range {self.last_migrate_ms:.1f} ms issue->complete)"
             )
             migrated += 1
         logger.info(f"[migration_driver] migrations complete: {migrated} pair(s)")
@@ -464,10 +489,45 @@ class MigrationDriver:
                 "the handoff needs each src slot's prompt to record its last token."
             )
         slots = []
+        # DS4F-0263: the runner's last rank publishes the FIRST TOKEN of every request it completes (argmax of the
+        # last valid row through the LM head, PREFILL_FIRST_TOKEN_DIR/slot<s>_end<len>.json) so the decode side can
+        # start at position prompt_len with it instead of re-running position prompt_len-1 -- which would REWRITE
+        # the last window row and the last compressed entries of every layer from the decoder's (stale) compressor
+        # state. The trace dir travels too, so a reference prefill-by-decode on the destination can use the same ids.
+        ft_dir = os.environ.get("PREFILL_FIRST_TOKEN_DIR", "")
         for src, dst, real_len in triples:
             pool = pools_by_trace[slot_traces[src]]
             last_tok = int(pool[real_len - 1]) if 1 <= real_len <= len(pool) else int(pool[-1])
-            slots.append({"dst_slot": int(dst), "prompt_len": int(real_len), "last_prompt_token": last_tok})
+            entry = {
+                "dst_slot": int(dst),
+                "prompt_len": int(real_len),
+                "last_prompt_token": last_tok,
+                "trace_dir": str(slot_traces[src]),
+            }
+            if ft_dir:
+                ft_path = os.path.join(ft_dir, f"slot{int(src)}_end{int(real_len)}.pt")
+                if os.path.exists(ft_path):
+                    import torch
+
+                    ft = torch.load(ft_path)
+                    t_head = time.perf_counter()
+                    logits = torch.matmul(_lm_head_weight(), ft["hidden"].float())  # [vocab]
+                    entry["first_token"] = int(torch.argmax(logits).item())
+                    entry["first_token_ms"] = {
+                        "tail_row_host_ms": ft.get("host_ms"),
+                        "head_ms": (time.perf_counter() - t_head) * 1e3,
+                    }
+                    os.remove(ft_path)  # consumed: a later request of the same length must not read a stale row
+                    logger.info(
+                        f"[migration_driver] first token for slot {src} (len {real_len}): {entry['first_token']} "
+                        f"(host LM head {entry['first_token_ms']['head_ms']:.1f} ms)"
+                    )
+                else:
+                    logger.warning(
+                        f"[migration_driver] PREFILL_FIRST_TOKEN_DIR set but {ft_path} is missing; the decode side "
+                        f"will derive the first token itself (rewrites the last entries, DS4F-0263)"
+                    )
+            slots.append(entry)
         # Safelist the configured directory and confirm both joined paths stay inside it before opening.
         base_dir = os.path.abspath(os.path.dirname(self.handoff_path) or ".")
         name = os.path.basename(self.handoff_path)
@@ -1107,6 +1167,82 @@ def main() -> None:
     # prefill, and a cross-endpoint pairing rendezvous's while the decode side is still blocked on it.
     driver.attach()
 
+    # DS4F-0263: PREFILL_PRODUCER_SLOT_TRACES_SEQUENCE="dirA,dirB,..." runs the whole prefill -> migrate -> handoff -> DONE
+    # cycle once PER ENTRY in one process (one H2D client, one endpoint pairing), each entry standing in for
+    # PREFILL_PRODUCER_SLOT_TRACES for its round. Between rounds the driver waits until the consumer has REMOVED the
+    # previous DONE sentinel (the decode side's acknowledgement that it consumed the handoff). Single-rank only.
+    sequence = [e.strip() for e in os.environ.get("PREFILL_PRODUCER_SLOT_TRACES_SEQUENCE", "").split(",") if e.strip()]
+    if sequence and world_size > 1:
+        raise RuntimeError("PREFILL_PRODUCER_SLOT_TRACES_SEQUENCE is single-rank only")
+    rounds = sequence or [None]
+    round_summaries = []
+    for round_idx, trace_spec in enumerate(rounds, 1):
+        if trace_spec is not None:
+            if round_idx > 1:
+                _wait_consumer_ack(driver.done_file, float(os.environ.get("PREFILL_ROUND_ACK_TIMEOUT_S", "7200")))
+            os.environ["PREFILL_PRODUCER_SLOT_TRACES"] = trace_spec
+            ft_dir = os.environ.get("PREFILL_FIRST_TOKEN_DIR", "")
+            if ft_dir and os.path.isdir(ft_dir):
+                for f in os.listdir(ft_dir):  # a stale token of an earlier request must never be handed off
+                    if f.startswith("slot") and f.endswith(".json"):
+                        os.remove(os.path.join(ft_dir, f))
+            logger.info(f"[migration_driver] ===== ROUND {round_idx}/{len(rounds)}: {trace_spec} =====")
+        t_round0 = time.perf_counter()
+        stats, triples, migrate_ok, migration_ok, verify_ok, slot_traces = _run_one_request_set(
+            args,
+            cfg,
+            producer_ns=producer,
+            driver=driver,
+            service=service,
+            ack_channel=ack_channel,
+            kv_table=kv_table,
+            payload_bytes=payload_bytes,
+            mr_rank=mr_rank,
+            world_size=world_size,
+        )
+        if trace_spec is not None:
+            round_summaries.append((round_idx, trace_spec, stats.wall_s, driver.last_migrate_ms, migrate_ok))
+            logger.success(
+                f"[migration_driver] ROUND {round_idx} DONE: {trace_spec} prefill wall={stats.wall_s:.3f}s "
+                f"migrate={driver.last_migrate_ms:.1f}ms ok={migrate_ok} round wall={time.perf_counter() - t_round0:.3f}s"
+            )
+    if round_summaries:
+        for r, t, w, m, ok in round_summaries:
+            logger.info(
+                f"[migration_driver] SUMMARY round={r} trace={t} prefill_wall_s={w:.3f} migrate_ms={m:.1f} ok={ok}"
+            )
+
+    _finish(
+        args,
+        cfg,
+        producer_ns=producer,
+        service=service,
+        migration_ok=migration_ok,
+        verify_ok=verify_ok,
+        world_size=world_size,
+    )
+
+
+def _wait_consumer_ack(done_file: str, timeout_s: float) -> None:
+    """Block until the consumer has removed the DONE sentinel of the previous round (its handoff acknowledgement)."""
+    t0 = time.perf_counter()
+    logger.info(f"[migration_driver] waiting for the consumer to remove {done_file} (previous round's handoff)")
+    while os.path.exists(done_file):
+        if time.perf_counter() - t0 > timeout_s:
+            raise RuntimeError(
+                f"consumer did not acknowledge the previous round within {timeout_s:.0f}s ({done_file} still present)"
+            )
+        time.sleep(0.2)
+    logger.info(f"[migration_driver] consumer acknowledged after {time.perf_counter() - t0:.1f}s")
+
+
+def _run_one_request_set(
+    args, cfg, *, producer_ns, driver, service, ack_channel, kv_table, payload_bytes, mr_rank, world_size
+):
+    """One prefill -> (PCC) -> migrate -> handoff/DONE -> destination verify cycle over the CURRENT
+    PREFILL_PRODUCER_SLOT_TRACES / PREFILL_TRACE_DIR. Returns (stats, triples, migrate_ok, migration_ok, verify_ok,
+    slot_traces). Extracted from main() so a PREFILL_PRODUCER_SLOT_TRACES_SEQUENCE run can repeat it."""
+    producer = producer_ns
     slot_traces, slot_lengths, pools_by_trace = producer._resolve_slot_prompts(cfg)
     cfg.slot_lengths = slot_lengths
 
@@ -1213,7 +1349,12 @@ def main() -> None:
         logger.exception(f"[migration_driver] destination verify raised {type(e).__name__}: {e}")
         migration_ok = False
     migration_ok = migration_ok and migrate_ok
+    return stats, triples, migrate_ok, migration_ok, verify_ok, slot_traces
 
+
+def _finish(args, cfg, *, producer_ns, service, migration_ok, verify_ok, world_size):
+    """The verdict allgather + optional SHUTDOWN sentinel + exit code (the former tail of main())."""
+    producer = producer_ns
     # Multi-rank DONE: the verdict allgather is also the barrier that holds this rank until every validator
     # has finished reading, so the shutdown sentinel below cannot tear the mesh/DRAM down under one. Fold
     # every rank's verdict — this rank's own is contributed as element [0] — so a failure anywhere fails
