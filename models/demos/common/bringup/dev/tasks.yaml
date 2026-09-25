@@ -161,3 +161,12 @@ tasks:
     gate:
       cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/
       metrics: {selftest_passed: ">= 108", selftest_failed: "== 0"}
+  - id: F18
+    title: Device-command check parses Python (file edits mentioning ttnn are fine); commits carry package files
+    step: framework
+    deps: [F17]
+    paths: [models/demos/common/bringup/orchestrator.py, models/demos/common/bringup/core,
+            models/demos/common/bringup/selftest/test_orchestrator.py]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/
+      metrics: {selftest_passed: ">= 109", selftest_failed: "== 0"}
