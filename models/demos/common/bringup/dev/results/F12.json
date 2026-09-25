@@ -1,0 +1,13 @@
+{
+ "metrics": {
+  "selftest_failed": {
+   "t": "2026-09-25T21:52:35",
+   "value": 0
+  },
+  "selftest_passed": {
+   "t": "2026-09-25T21:52:35",
+   "value": 100
+  }
+ },
+ "task": "F12"
+}
