@@ -12,6 +12,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -1310,53 +1311,6 @@ def _batch_gate_reason(requested: int, test_output: str) -> Optional[str]:
     return f"G3 batch: --batch {requested} was requested but tests/e2e drove {served} samples; {how}"
 
 
-# The gate's hang wall. Absolute when the operator names one; otherwise proportional to the work
-# the gate was TOLD to do, because that is the thing this tool now varies.
-_GATE_WALL_ENV = "E2E_GATE_HANG_TIMEOUT"
-_GATE_WALL_PER_SAMPLE_S = 2700  # unchanged since 2026-07-04 -- what the wall has always been at B=1
-
-
-def _gate_wall_s(batch: int) -> int:
-    """Seconds the e2e gate may run before it is called a hang.
-
-    A FLAT WALL AND AN ENFORCED --batch CANNOT BOTH HOLD. The wall was added on 2026-07-04 to catch
-    a fabric wedge "in minutes not hours", and 2700 s was generous then because the gate ran at
-    whatever small batch the test happened to type. Since the gate began ENFORCING --batch, the work
-    behind that wall is set by the caller: Qwen-Image-Edit measures 16.06 s per scheduler step at
-    B=4 and 120 s at B=32, so the same 50-step schedule that finishes in ~15 min at B=4 needs
-    ~100 min at B=32. The flat wall then kills a HEALTHY run mid-gate and reports
-    "exceeded 2700s with no verdict (likely device/fabric hang)" -- a hardware verdict on hardware
-    that was fine, after hours of builder work.
-
-    So the default scales with the batch and the operator's own value stays absolute:
-
-      * E2E_GATE_HANG_TIMEOUT set -> exactly that, unscaled. Somebody who asks for a tight wall gets
-        one, and the meaning of the variable does not change under them.
-      * unset -> the per-sample budget times the batch. At B=1 that is 2700, bit-identical to every
-        run before this change.
-
-    The caller's own budget still bounds it (the min() at the call site), so this can only ever
-    tighten toward timeout_s, never exceed it.
-
-    NOT the end of it: a wall of any size cannot tell "hung" from "slow". agent.probes._execute
-    already solves that properly -- it kills only when the log has stopped growing AND the process
-    group has burned no CPU, keeping timeout_s as the absolute backstop. Moving this gate onto it
-    is the right fix; it is not done here because this gate's four tests stub subprocess.run and
-    the swap would break them, which is a change worth making on its own.
-    """
-    override = os.environ.get(_GATE_WALL_ENV)
-    if override:
-        try:
-            return int(override)
-        except ValueError:
-            pass
-    try:
-        b = max(1, int(batch or 1))
-    except (TypeError, ValueError):
-        b = 1
-    return _GATE_WALL_PER_SAMPLE_S * b
-
-
 def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int, batch: int = 1):
     """Model-agnostic gate runner: G1 native, G2/G3 (run tests/e2e), G4 demo/ structure. Returns (ok, reasons).
 
@@ -1478,33 +1432,62 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int, batch: 
 
         gate_env[BATCH_ENV] = str(batch)
     pytest_out = ""
-    hang_timeout = min(int(timeout_s), _gate_wall_s(batch))
     gate_tests = [f for f in test_files if "perf" not in f.name] or test_files
+    # A STOPWATCH CANNOT TELL "HUNG" FROM "SLOW", SO IT MUST NOT BE THE JUDGE.
+    #
+    # This ran pytest under subprocess.run(timeout=N) with N a typed constant, and a gate that
+    # outlived N was reported as "likely device/fabric hang". The gate's runtime is not knowable in
+    # advance: it includes building the reference the PCC is scored against, whose cost belongs to
+    # the MODEL. A text model's reference is a generate() of a few dozen tokens; Qwen-Image-Edit's
+    # is 32 samples x 50 diffusion steps x 2 CFG in fp32 on CPU.
+    #
+    # Measured 2026-09-25 on a healthy T3K: that reference had run 3 h 55 m on ~11 cores when the
+    # 4 h budget killed it, and the verdict read
+    #
+    #   "exceeded 14400s with no verdict (likely device/fabric hang)
+    #    -- device recovery: board answering after recovery (verified)"
+    #
+    # accusing the fabric and confirming the fabric was fine in one sentence. It also reset a
+    # healthy board, and because the reference is saved only when complete, every round discarded
+    # ~4 h and began again: a loop that cannot converge however long it is given.
+    #
+    # probes._execute already decides this correctly and its docstring names this exact failure ("a
+    # fixed wall-clock kill cannot tell 'hung' from 'slow' ... a flat 30-min cap killed it mid-compile
+    # before a single op ran"): it kills only when the log has stopped growing AND the process group
+    # has burned no CPU, treats timeout_s as a budget to REPORT rather than enforce, and keeps a hard
+    # ceiling far behind that for a runaway. So the gate uses it instead of a stopwatch of its own,
+    # and no wall is typed here at all -- the caller's budget is the only number, as a fuse.
+    from models.experimental.perf_automation.agent import probes as _pr
+
+    _gate_log = Path(tempfile.mkdtemp(prefix="e2e_gate_")) / "gate.log"
     try:
-        proc = subprocess.run(
-            [py, "-m", "pytest", *[str(f) for f in gate_tests], "-p", "no:cacheprovider", "-rA", "-s"],
-            capture_output=True,
-            text=True,
-            timeout=hang_timeout,
-            cwd=str(demo_repo_root),
-            env=gate_env,
-        )
-        pytest_out = proc.stdout or ""
-        if proc.returncode != 0:
-            tail = "\n".join(pytest_out.splitlines()[-15:])
-            reasons.append(f"G2/G3: tests/e2e did not pass (pytest rc={proc.returncode}); tail:\n{tail}")
-            _rst = _recover_if_wedged(pytest_out + "\n" + (proc.stderr or ""))
-            if _rst:
-                reasons.append(f"G2/G3: the device reported a wedge during tests/e2e — {_rst}")
-        if batch > 1:
-            _batch_reason = _batch_gate_reason(batch, pytest_out)
-            if _batch_reason:
-                reasons.append(_batch_reason)
-    except subprocess.TimeoutExpired as _te:
-        _rst = _reset_device(error_text=_as_text(_te.stdout) + "\n" + _as_text(_te.stderr))
-        reasons.append(
-            f"G2/G3: tests/e2e exceeded {hang_timeout}s with no verdict (likely device/fabric hang) — {_rst}"
-        )
+        try:
+            rc = _pr._execute(
+                [py, "-m", "pytest", *[str(f) for f in gate_tests], "-p", "no:cacheprovider", "-rA", "-s"],
+                Path(demo_repo_root),
+                gate_env,
+                int(timeout_s),
+                _gate_log,
+            )
+            pytest_out = _gate_log.read_text(errors="ignore") if _gate_log.exists() else ""
+            if rc != 0:
+                tail = "\n".join(pytest_out.splitlines()[-15:])
+                reasons.append(f"G2/G3: tests/e2e did not pass (pytest rc={rc}); tail:\n{tail}")
+                _rst = _recover_if_wedged(pytest_out)
+                if _rst:
+                    reasons.append(f"G2/G3: the device reported a wedge during tests/e2e — {_rst}")
+            if batch > 1:
+                _batch_reason = _batch_gate_reason(batch, pytest_out)
+                if _batch_reason:
+                    reasons.append(_batch_reason)
+        except _pr.TracyHangError as _he:
+            # NOW this really is a stall: no log growth and no CPU. Say what was observed, and let
+            # the board's own answer decide whether to blame it.
+            pytest_out = _gate_log.read_text(errors="ignore") if _gate_log.exists() else ""
+            _rst = _reset_device(error_text=pytest_out + "\n" + str(_he))
+            reasons.append(f"G2/G3: tests/e2e made no forward progress ({_he}) — {_rst}")
+    finally:
+        shutil.rmtree(_gate_log.parent, ignore_errors=True)
 
     for cnt, kind in re.findall(r"(\d+)\s+(xfailed|xpassed|skipped|errors?)\b", pytest_out):
         if int(cnt) > 0:
@@ -1604,7 +1587,9 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int, batch: 
             tenv = dict(os.environ)
             tenv["TT_METAL_HOME"] = str(demo_repo_root)
             tenv["PYTHONPATH"] = str(demo_repo_root) + os.pathsep + tenv.get("PYTHONPATH", "")
-            g6_hang = min(int(hang_timeout), int(os.environ.get("E2E_G6_HANG_TIMEOUT", "600")))
+            # G6 is a cheap, batch-independent stack survey -- a short stopwatch is right for it,
+            # and it is bounded by the caller's budget rather than by the e2e gate's (now gone) wall.
+            g6_hang = min(int(timeout_s), int(os.environ.get("E2E_G6_HANG_TIMEOUT", "600")))
             proc = subprocess.Popen(
                 [py, str(probe_py), str(demo_dir)],
                 stdout=subprocess.PIPE,

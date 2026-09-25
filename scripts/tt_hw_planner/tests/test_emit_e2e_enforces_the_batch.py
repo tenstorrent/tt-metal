@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import importlib
 import subprocess
+from pathlib import Path
 import sys
 
 import pytest
 
 from scripts.tt_hw_planner.commands import emit_e2e as E
+from models.experimental.perf_automation.agent import probes as _PR
 from models.experimental.perf_automation.agent import perf_adapter as PA
 
 
@@ -58,9 +60,18 @@ def _run_gate(monkeypatch, tmp_path, batch, test_output):
             return subprocess.CompletedProcess(cmd, 0, test_output, "")
         return subprocess.CompletedProcess(cmd, 1, "", "")
 
+    # The gate's pytest now runs through probes._execute (progress watchdog, not a stopwatch);
+    # _execute streams to a log and returns rc, so the double writes the output the gate reads.
+    def _exec(cmd, cwd, env, timeout_s, log_path, **k):
+        seen["env"] = dict(env or {})
+        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(log_path).write_text(test_output)
+        return 0
+
     monkeypatch.setenv("E2E_REQUIRE_ON_DEVICE", "0")
     monkeypatch.delenv(PA.BATCH_ENV, raising=False)
     monkeypatch.setattr(E.subprocess, "run", _run)
+    monkeypatch.setattr(_PR, "_execute", _exec)
     ok, reasons = E._run_deterministic_gates(_demo(tmp_path), 0.99, 60, batch=batch)
     return seen["env"], [r for r in reasons if r.startswith("G3 batch")]
 
@@ -86,6 +97,13 @@ def test_the_default_batch_is_unchanged(monkeypatch, tmp_path):
 def test_existing_callers_without_a_batch_still_work(monkeypatch, tmp_path):
     monkeypatch.setenv("E2E_REQUIRE_ON_DEVICE", "0")
     monkeypatch.setattr(E.subprocess, "run", lambda cmd, **k: subprocess.CompletedProcess(cmd, 0, "1 passed", ""))
+
+    def _exec(cmd, cwd, env, timeout_s, log_path, **k):
+        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(log_path).write_text("1 passed")
+        return 0
+
+    monkeypatch.setattr(_PR, "_execute", _exec)
     ok, reasons = E._run_deterministic_gates(_demo(tmp_path), 0.99, 60)
     assert not [r for r in reasons if r.startswith("G3 batch")]
 

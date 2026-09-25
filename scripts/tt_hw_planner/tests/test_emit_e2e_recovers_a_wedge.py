@@ -10,8 +10,10 @@ chips that were not the hung one. Each round failed identically until the run wa
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 
 from scripts.tt_hw_planner.commands import emit_e2e as E
+from models.experimental.perf_automation.agent import probes as _PR
 
 NOC_HANG = "E   RuntimeError: NOC0 is hung on PCIe device ID 9.\nLocation: umd/device/tt_device/tt_device.cpp:90"
 
@@ -70,10 +72,14 @@ def test_the_e2e_gate_resets_a_board_that_wedges_without_hanging(monkeypatch, tm
     (demo / "tests" / "e2e" / "test_e2e_m.py").write_text("def test_e2e():\n    pass\n")
     monkeypatch.setenv("E2E_REQUIRE_ON_DEVICE", "0")
 
-    class _Failed:
-        returncode, stdout, stderr = 1, NOC_HANG + "\n1 error in 7.4s", ""
+    # The gate runs pytest through probes._execute now (progress watchdog, not a stopwatch): it
+    # streams to a log and returns rc, so the double writes what the gate will read back.
+    def _exec(cmd, cwd, env, timeout_s, log_path, **k):
+        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(log_path).write_text(NOC_HANG + "\n1 error in 7.4s")
+        return 1
 
-    monkeypatch.setattr(E.subprocess, "run", lambda *a, **k: _Failed())
+    monkeypatch.setattr(_PR, "_execute", _exec)
     ok, reasons = E._run_deterministic_gates(demo, 0.99, 60)
     assert ok is False
     assert any("reported a wedge" in r for r in reasons), reasons
@@ -87,16 +93,19 @@ def test_a_hang_hands_its_partial_output_to_the_recovery(monkeypatch, tmp_path):
     (demo / "tests" / "e2e" / "test_e2e_m.py").write_text("def test_e2e():\n    pass\n")
     monkeypatch.setenv("E2E_REQUIRE_ON_DEVICE", "0")
 
-    def _hang(cmd, **k):
-        if "pytest" in cmd:
-            raise subprocess.TimeoutExpired(cmd, 60, output=b"[e2e] stage dp_gather\n", stderr=b"")
-        return subprocess.CompletedProcess(cmd, 1, "", "")
+    # A STALL, NOT A CLOCK. The watchdog raises only when the log stopped growing AND no CPU was
+    # burned, so what the gate reports is "made no forward progress" -- it no longer accuses the
+    # fabric merely because a slow run outlived a typed number.
+    def _hang(cmd, cwd, env, timeout_s, log_path, **k):
+        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(log_path).write_text("[e2e] stage dp_gather\n")
+        raise _PR.TracyHangError("tracy run made no forward progress for 600s; log: %s" % log_path)
 
-    monkeypatch.setattr(E.subprocess, "run", _hang)
+    monkeypatch.setattr(_PR, "_execute", _hang)
     ok, reasons = E._run_deterministic_gates(demo, 0.99, 60)
     assert ok is False
-    assert any("exceeded" in r for r in reasons), reasons
-    assert seen and "dp_gather" in seen[0]["error_text"]
+    assert any("made no forward progress" in r for r in reasons), reasons
+    assert seen and "dp_gather" in seen[0]["error_text"], "the partial output must still reach recovery"
 
 
 def test_emit_e2e_stamps_its_run_before_any_device_work(monkeypatch):
