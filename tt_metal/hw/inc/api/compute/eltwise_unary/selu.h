@@ -65,4 +65,46 @@ ALWI void selu_tile_init() { MATH(SFPU_UNARY_INIT(selu)); }
 ALWI void selu_tile_init_pack() { PACK(SFPU_UNARY_INIT(selu)); }
 #endif  // !ARCH_QUASAR
 
+#if !defined(TT_POLY_LLK_DISABLE) && ((defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)) && \
+                                      defined(TT_METAL_SFPU_SINGLE_TILE_DST) && TT_METAL_SFPU_SINGLE_TILE_DST == 1)
+#define TT_POLY_SELU_BF16_ROUTE_ACTIVE 1
+#else
+#define TT_POLY_SELU_BF16_ROUTE_ACTIVE 0
+#endif
+
+/** Internal BF16 typed-compiler route; public callers retain the stock entry point. */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void selu_tt_poly_bf16_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
+#if !TT_POLY_SELU_BF16_ROUTE_ACTIVE
+    selu_tile<is_fp32_dest_acc_en>(idst, param0, param1);
+#else
+    if constexpr (is_fp32_dest_acc_en) {
+        selu_tile<is_fp32_dest_acc_en>(idst, param0, param1);
+    } else {
+        if (param0 != 0x3f867d5fu || param1 != 0x3fd62d7du) {
+            selu_tile_init();
+            selu_tile<is_fp32_dest_acc_en>(idst, param0, param1);
+            return;
+        }
+        if (idst != 0) {
+            selu_tile_init();
+            selu_tile<is_fp32_dest_acc_en>(idst, param0, param1);
+            return;
+        }
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            calculate_selu_tt_poly_bf16,
+            (32 /* ITERATIONS */),
+            idst,
+            VectorMode::None));
+    }
+#endif
+}
+
+/** Initialize the internal BF16 typed-compiler route. */
+ALWI void selu_tt_poly_bf16_tile_init() { selu_tile_init(); }
+
+#undef TT_POLY_SELU_BF16_ROUTE_ACTIVE
+
 }  // namespace ckernel

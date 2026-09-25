@@ -1248,6 +1248,7 @@ def eltwise_unary_sfpu(
     shift_amount=None,
     relu_min_int_threshold=None,
     twos_complement=False,
+    extra_templates=(),
 ):
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
@@ -1310,6 +1311,7 @@ def eltwise_unary_sfpu(
             FAST_MODE(fast_mode),
             CLAMP_NEGATIVE(True),
             MATH_OP(mathop=mathop),
+            *extra_templates,
             # Only emitted when swept: sfpu_operations.h keys off #ifdef, and every other
             # unary test has to keep compiling without the macro.
             *([] if shift_amount is None else [SFPU_SHIFT_AMOUNT(shift_amount)]),
