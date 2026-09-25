@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
+from typing import TypeVar
 
 import torch
 
@@ -12,6 +14,8 @@ from models.experimental.chronos_forecast.tt.model import (
     TtChronosDeviceInputs,
     TtChronosPreparedInputs,
 )
+
+T = TypeVar("T")
 
 
 @dataclass(frozen=True)
@@ -165,6 +169,34 @@ class TtChronosTraceRunner:
             return self._trace_output
         ttnn.synchronize_device(self.device)
         return self.read_output()
+
+    def stream(
+        self, items: Iterable[T], prepare: Callable[[T], TtChronosPreparedInputs]
+    ) -> Iterator[TraceExecutionResult]:
+        """Yield one result per item, preparing item i+1 on the host while replay i runs.
+
+        ``prepare`` must return inputs with the captured shapes and group layout.
+        """
+        import ttnn
+
+        if self._trace_id is None or self._trace_output is None:
+            raise RuntimeError("capture() must be called before stream()")
+        items = iter(items)
+        try:
+            first = next(items)
+        except StopIteration:
+            return
+        self.update_inputs(prepare(first))
+        ttnn.execute_trace(self.device, self._trace_id, cq_id=self.cq_id, blocking=False)
+        for item in items:
+            prepared = prepare(item)
+            # The next replay overwrites the output, so read this one back first.
+            ttnn.synchronize_device(self.device)
+            yield self.read_output()
+            self.update_inputs(prepared)
+            ttnn.execute_trace(self.device, self._trace_id, cq_id=self.cq_id, blocking=False)
+        ttnn.synchronize_device(self.device)
+        yield self.read_output()
 
     def release(self) -> None:
         import ttnn

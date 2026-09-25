@@ -111,6 +111,12 @@ def _run_trace_perf(mesh_device, precision_name, l1_resident, group_size, batch)
             duration = time.perf_counter() - start
             e2e_times.append(duration)
             print(f"[TRACE PERF] e2e    {index + 1:2d}/{REPLAY_ITERS} {duration:.6f}s")
+
+        # Back-to-back batches with host prepare overlapping the previous replay.
+        start = time.perf_counter()
+        for result in runner.stream(range(REPLAY_ITERS), lambda _: prepare()):
+            pass
+        stream_s = (time.perf_counter() - start) / REPLAY_ITERS
     finally:
         runner.release()
 
@@ -137,6 +143,8 @@ def _run_trace_perf(mesh_device, precision_name, l1_resident, group_size, batch)
         f"\n  e2e_median_s:         {e2e_median:.6f}"
         f"\n  e2e_p95_s:            {_percentile(e2e_times, 0.95):.6f}"
         f"\n  e2e_series_per_s:     {batch / e2e_median:.2f}"
+        f"\n  stream_per_batch_s:   {stream_s:.6f}"
+        f"\n  stream_series_per_s:  {batch / stream_s:.2f}"
         f"\n  a10g_wall_s:          {A10G_WALL_S:.3f}"
         f"\n  a10g_series_per_s:    {A10G_SERIES_PER_S:.0f}"
     )

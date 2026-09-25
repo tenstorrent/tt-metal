@@ -6,6 +6,8 @@ from __future__ import annotations
 import pytest
 import torch
 
+from models.experimental.chronos_forecast.tests.mesh_params import DATA_PARALLEL_MESHES
+
 
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 20_000_000}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
@@ -17,9 +19,6 @@ def test_tt_forward_trace_pcc(mesh_device):
     from models.experimental.chronos_forecast.tests.golden_helpers import DUMMY_MODEL_PATH
     from models.experimental.chronos_forecast.tt.model import TtChronos
     from models.experimental.chronos_forecast.tt.trace_runner import TtChronosTraceRunner
-
-    if mesh_device.get_num_devices() != 1:
-        pytest.skip("single-chip bring-up only (one chip)")
 
     reference = RefModel.from_pretrained(DUMMY_MODEL_PATH).eval()
     model = TtChronos.from_torch_model(mesh_device, reference)
@@ -73,6 +72,41 @@ def test_tt_forward_trace_two_cq_pcc(mesh_device):
         runner.release()
 
     assert_with_pcc(expected.float(), got, pcc=0.99)
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 20_000_000}], indirect=True)
+@pytest.mark.parametrize("mesh_device", DATA_PARALLEL_MESHES, indirect=True)
+def test_tt_forward_trace_stream_pcc(mesh_device):
+    """Every streamed batch matches the reference; 6 series also exercises mesh padding."""
+    pytest.importorskip("ttnn")
+    from tests.ttnn.utils_for_testing import assert_with_pcc
+
+    from models.experimental.chronos_forecast.reference.chronos2.model import Chronos2Model as RefModel
+    from models.experimental.chronos_forecast.tests.golden_helpers import DUMMY_MODEL_PATH
+    from models.experimental.chronos_forecast.tt.model import TtChronos
+    from models.experimental.chronos_forecast.tt.trace_runner import TtChronosTraceRunner
+
+    reference = RefModel.from_pretrained(DUMMY_MODEL_PATH).eval()
+    model = TtChronos.from_torch_model(mesh_device, reference)
+    torch.manual_seed(3)
+    contexts = [torch.randn(6, 32) for _ in range(3)]
+
+    def prepare(context):
+        return model.prepare_inputs(context=context, num_output_patches=1)
+
+    runner = TtChronosTraceRunner(model, prepare(contexts[0]))
+    try:
+        runner.capture()
+        results = [result.quantile_preds for result in runner.stream(contexts, prepare)]
+    finally:
+        runner.release()
+
+    assert len(results) == len(contexts)
+    for context, got in zip(contexts, results):
+        with torch.no_grad():
+            expected = reference(context=context, num_output_patches=1).quantile_preds
+        assert got.shape == expected.shape
+        assert_with_pcc(expected.float(), got, pcc=0.99)
 
 
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 20_000_000}], indirect=True)
