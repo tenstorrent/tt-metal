@@ -72,9 +72,6 @@ bool chip_to_chip_dram_buffer_transfer(
     const DataMovementProcessor& processor) {
     bool pass = true;
 
-    auto* sender_device = sender_mesh_device->get_devices()[0];
-    auto* receiver_device = receiver_mesh_device->get_devices()[0];
-
     distributed::DeviceLocalBufferConfig sender_dram_config{
         .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM, .bottom_up = false};
     distributed::ReplicatedBufferConfig sender_buffer_config{.size = byte_size};
@@ -93,15 +90,15 @@ bool chip_to_chip_dram_buffer_transfer(
         distributed::MeshBuffer::create(receiver_buffer_config, receiver_dram_config, receiver_mesh_device.get());
     uint32_t output_dram_byte_address = output_dram_buffer->address();
 
-    log_info(
+    log_debug(
         tt::LogTest,
         "Sending {} bytes from device {} dram bank 0 addr {} to device {} dram bank 0 addr {}, using eth core {} {} "
         "and "
         "{} {}",
         byte_size,
-        sender_device->id(),
+        sender_mesh_device->get_device_ids()[0],
         input_dram_byte_address,
-        receiver_device->id(),
+        receiver_mesh_device->get_device_ids()[0],
         output_dram_byte_address,
         eth_sender_core.str(),
         eth_receiver_core.str(),
@@ -224,7 +221,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
     const DataMovementProcessor& processor) {
     bool pass = true;
 
-    log_info(
+    log_debug(
         tt::LogTest,
         "chip_to_chip_interleaved_buffer_transfer num_pages: {}, page_size_bytes: {}, size_bytes: {}, "
         "max_transfer_size: {}, processor {}",
@@ -474,26 +471,26 @@ TEST_F(N300MeshDeviceFixture, ActiveEthKernelsSendInterleavedBufferChip0ToChip1)
     const auto& sender_mesh_device = devices_.at(0);
     const auto& receiver_mesh_device = devices_.at(1);
     auto* const sender_device = sender_mesh_device->get_devices()[0];
-    auto* const receiver_device = receiver_mesh_device->get_devices()[0];
+    const auto receiver_device_id = receiver_mesh_device->get_device_ids()[0];
     uint32_t MAX_BUFFER_SIZE =
         MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
-    if (sender_device->get_ethernet_sockets(receiver_device->id()).empty()) {
+    if (sender_device->get_ethernet_sockets(receiver_device_id).empty()) {
         GTEST_SKIP() << "No connected ethernet sockets";
     }
 
-    for (const auto& sender_eth_core : sender_device->get_ethernet_sockets(receiver_device->id())) {
+    for (const auto& sender_eth_core : sender_device->get_ethernet_sockets(receiver_device_id)) {
         if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
                 sender_device->id(), sender_eth_core)) {
             continue;
         }
         CoreCoord receiver_eth_core = std::get<1>(sender_device->get_connected_ethernet_core(sender_eth_core));
 
-        log_info(
+        log_debug(
             tt::LogTest,
             "Sending interleaved buffer from device {} to device {}, using eth core {} and {}",
             sender_device->id(),
-            receiver_device->id(),
+            receiver_device_id,
             sender_eth_core.str(),
             receiver_eth_core.str());
         BankedConfig test_config;
@@ -562,8 +559,8 @@ TEST_F(MeshDeviceFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips
     for (const auto& sender_mesh_device : devices_) {
         auto* const sender_device = sender_mesh_device->get_devices()[0];
         for (const auto& receiver_mesh_device : devices_) {
-            auto* const receiver_device = receiver_mesh_device->get_devices()[0];
-            if (sender_device->id() == receiver_device->id()) {
+            const auto receiver_device_id = receiver_mesh_device->get_device_ids()[0];
+            if (sender_device->id() == receiver_device_id) {
                 continue;
             }
             for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
@@ -572,18 +569,18 @@ TEST_F(MeshDeviceFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips
                     continue;
                 }
                 auto [device_id, receiver_eth_core] = sender_device->get_connected_ethernet_core(sender_eth_core);
-                if (receiver_device->id() != device_id) {
+                if (receiver_device_id != device_id) {
                     continue;
                 }
                 const auto num_eriscs = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
                     HalProgrammableCoreType::ACTIVE_ETH);
                 for (uint32_t erisc_idx = 0; erisc_idx < num_eriscs; erisc_idx++) {
                     const auto processor = static_cast<DataMovementProcessor>(erisc_idx);
-                    log_info(
+                    log_debug(
                         tt::LogTest,
                         "Sending interleaved buffer from device {} to device {}, using eth core {} and {}",
                         sender_device->id(),
-                        receiver_device->id(),
+                        receiver_device_id,
                         sender_eth_core.str(),
                         receiver_eth_core.str());
                     BankedConfig test_config = BankedConfig{
@@ -652,8 +649,8 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsSendDramBufferAllCon
     for (const auto& sender_mesh_device : devices_) {
         auto* const sender_device = sender_mesh_device->get_devices()[0];
         for (const auto& receiver_mesh_device : devices_) {
-            auto* const receiver_device = receiver_mesh_device->get_devices()[0];
-            if (sender_device->id() >= receiver_device->id()) {
+            const auto receiver_device_id = receiver_mesh_device->get_device_ids()[0];
+            if (sender_device->id() >= receiver_device_id) {
                 continue;
             }
             for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
@@ -662,17 +659,17 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsSendDramBufferAllCon
                     continue;
                 }
                 auto [device_id, receiver_eth_core] = sender_device->get_connected_ethernet_core(sender_eth_core);
-                if (receiver_device->id() != device_id) {
+                if (receiver_device_id != device_id) {
                     continue;
                 }
 
                 for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; ++erisc_idx) {
                     const auto processor = static_cast<DataMovementProcessor>(erisc_idx);
-                    log_info(
+                    log_debug(
                         tt::LogTest,
                         "Sending dram buffer from device {} to device {}, using eth core {} DM{} and {}",
                         sender_device->id(),
-                        receiver_device->id(),
+                        receiver_device_id,
                         sender_eth_core.str(),
                         erisc_idx,
                         receiver_eth_core.str());
@@ -728,8 +725,8 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBuffe
     for (const auto& sender_mesh_device : devices_) {
         auto* const sender_device = sender_mesh_device->get_devices()[0];
         for (const auto& receiver_mesh_device : devices_) {
-            auto* const receiver_device = receiver_mesh_device->get_devices()[0];
-            if (sender_device->id() >= receiver_device->id()) {
+            const auto receiver_device_id = receiver_mesh_device->get_device_ids()[0];
+            if (sender_device->id() >= receiver_device_id) {
                 continue;
             }
             for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
@@ -738,17 +735,17 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBuffe
                     continue;
                 }
                 auto [device_id, receiver_eth_core] = sender_device->get_connected_ethernet_core(sender_eth_core);
-                if (receiver_device->id() != device_id) {
+                if (receiver_device_id != device_id) {
                     continue;
                 }
 
                 for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; ++erisc_idx) {
                     const auto processor = static_cast<DataMovementProcessor>(erisc_idx);
-                    log_info(
+                    log_debug(
                         tt::LogTest,
                         "Sending interleaved buffer from device {} to device {}, using eth core {} DM{} and {}",
                         sender_device->id(),
-                        receiver_device->id(),
+                        receiver_device_id,
                         sender_eth_core.str(),
                         erisc_idx,
                         receiver_eth_core.str());

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include <tt-metalium/program_descriptors.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -12,9 +14,9 @@
 namespace ttnn::prim {
 
 // CB depth shared by all three program-factory branches (TILE-interleaved, RM
-// last-dim, RM higher-dim). Matches ops/repeat/spec.py's _CB_DEPTH. Also
-// consulted by repeat_codegen_supported.cpp's L1-capacity gate, so this is the
-// single source of truth rather than a value duplicated across files.
+// last-dim, RM higher-dim). Also consulted by repeat_codegen_supported.cpp's
+// L1-capacity gate, so this is the single source of truth rather than a value
+// duplicated across files.
 inline constexpr uint32_t kRepeatCbDepth = 8;
 
 struct RepeatCodegenParams {
@@ -30,6 +32,7 @@ struct RepeatCodegenParams {
 
 struct RepeatCodegenInputs {
     Tensor input;
+    std::optional<Tensor> optional_output_tensor;
 };
 
 struct RepeatCodegenProgramFactory {

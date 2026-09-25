@@ -92,8 +92,7 @@ protected:
         for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
             ids.push_back(id);
         }
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config();
         shared.id_to_device = distributed::MeshDevice::create_unit_meshes(
             ids, l1_small_size, trace_region_size, 1, dispatch_core_config);
         shared.devices.clear();
@@ -166,10 +165,10 @@ protected:
 
     void RunTestOnDevice(
         const std::function<void()>& run_function, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-        auto* device = mesh_device->get_devices()[0];
-        log_info(tt::LogTest, "Running test on device {}.", device->id());
+        const auto device_id = mesh_device->get_device_ids()[0];
+        log_info(tt::LogTest, "Running test on device {}.", device_id);
         run_function();
-        log_info(tt::LogTest, "Finished running test on device {}.", device->id());
+        log_info(tt::LogTest, "Finished running test on device {}.", device_id);
     }
 
     void DetectDispatchMode() {

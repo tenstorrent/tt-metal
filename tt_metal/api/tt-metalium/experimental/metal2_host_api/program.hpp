@@ -102,9 +102,15 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
 // ProgramSpec, exactly once. The supplied MeshTensor's TensorSpec must match the
 // TensorParameter's declared spec.
 //
+// PRE-CONDITION: If skip_validation is true, the caller guarantees the completeness and
+// spec-match requirements above.
+//
 // USE CASE: Program re-enqueue loops where the only per-enqueue ProgramRunArgs variation
 // is in the tensor args (i.e. which specific MeshTensors are operated on by the Program).
-void UpdateTensorArgs(Program& program, const Table<TensorParamName, ProgramRunArgs::TensorArgument>& tensor_args);
+void UpdateTensorArgs(
+    Program& program,
+    const Table<TensorParamName, ProgramRunArgs::TensorArgument>& tensor_args,
+    bool skip_validation = false);
 
 }  // namespace tt::tt_metal::experimental
 

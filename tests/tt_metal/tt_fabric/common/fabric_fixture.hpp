@@ -19,7 +19,11 @@
 #include "common/tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
 #include <tt-metalium/allocator.hpp>
+#include "impl/program/program_impl.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "test_host_kernel_common.hpp"
+
+#include <unordered_map>
 
 namespace tt::tt_fabric::fabric_router_tests {
 
@@ -62,6 +66,9 @@ public:
     inline static std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_;
     inline static bool slow_dispatch_;
 
+    std::unordered_map<tt::tt_metal::distributed::MeshDevice*, std::vector<tt::tt_metal::distributed::MeshWorkload>>
+        pending_async_workloads_;
+
     const std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>>& get_devices() const { return devices_; }
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& get_device(ChipId id) const {
         return devices_map_.at(id);
@@ -102,6 +109,12 @@ public:
         // Set up all available devices
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         auto num_devices = tt::tt_metal::GetNumAvailableDevices();
+        // Fabric cannot be run if we have < 2 devices
+        if (num_devices < 2) {
+            log_info(tt::LogTest, "Skipping fabric tests as fabric requires > 2 devices, but only saw {} devices", num_devices);
+            GTEST_SKIP();
+        }
+
         std::vector<ChipId> ids;
         ids.reserve(num_devices);
         for (unsigned int id = 0; id < num_devices; id++) {
@@ -109,8 +122,7 @@ public:
         }
         tt::tt_fabric::SetFabricConfig(
             fabric_config, reliability_mode, num_routing_planes, fabric_tensix_config, fabric_udm_mode);
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config();
         devices_map_ = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(
             ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, dispatch_core_config, {}, DEFAULT_WORKER_L1_SIZE);
         for (auto& [id, device] : devices_map_) {
@@ -133,33 +145,14 @@ public:
 
     // NOLINTNEXTLINE(readability-make-member-function-const)
     void RunProgramNonblocking(
-        const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device, tt::tt_metal::Program& program) {
-        if (this->slow_dispatch_) {
-            tt::tt_metal::detail::LaunchProgram(device->get_devices()[0], program, false);
-        } else {
-            tt::tt_metal::distributed::MeshCommandQueue& cq = device->mesh_command_queue();
-            // Create a mesh workload from the program
-            auto& program_copy = program;
-            auto mesh_workload = tt::tt_metal::distributed::MeshWorkload();
-            mesh_workload.add_program(
-                tt::tt_metal::distributed::MeshCoordinateRange(
-                    tt::tt_metal::distributed::MeshCoordinate(0, 0), tt::tt_metal::distributed::MeshCoordinate(0, 0)),
-                std::move(program_copy));
-            tt::tt_metal::distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
-        }
+        const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device, tt::tt_metal::Program&& program) {
+        pending_async_workloads_[device.get()].push_back(tt_metal::LaunchProgramAsync(*device, std::move(program)));
     }
 
     // NOLINTNEXTLINE(readability-make-member-function-const)
-    void WaitForSingleProgramDone(
-        const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device, tt::tt_metal::Program& program) {
-        if (this->slow_dispatch_) {
-            // Wait for the program to finish
-            tt::tt_metal::detail::WaitProgramDone(device->get_devices()[0], program);
-        } else {
-            // Wait for all programs on cq to finish
-            tt::tt_metal::distributed::MeshCommandQueue& cq = device->mesh_command_queue();
-            tt::tt_metal::distributed::Finish(cq);
-        }
+    void WaitForSingleProgramDone(const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device) {
+        tt::tt_metal::distributed::Finish(device->mesh_command_queue());
+        pending_async_workloads_.erase(device.get());
     }
 
     // Utility function reused across tests to get address params

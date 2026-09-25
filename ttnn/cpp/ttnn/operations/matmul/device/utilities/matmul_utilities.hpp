@@ -33,6 +33,19 @@ inline bool fused_matmul_bias_row_broadcastable(const std::optional<const Tensor
     return shape[-2] == 1;
 }
 
+// Sharded out CB is the shard buffer and is never drained, so B>1 would overflow it.
+inline void validate_block_sharded_output_batch(
+    bool output_is_sharded, uint32_t B, uint32_t per_core_M, uint32_t per_core_N) {
+    TT_FATAL(
+        !(output_is_sharded && B > 1),
+        "Block-sharded output is incompatible with batch > 1 (B={}). The output CB is backed by the shard buffer "
+        "which only holds per_core_M * per_core_N = {} tiles, but the kernel would produce B * per_core_M * per_core_N "
+        "= {} tiles without draining. Use fuse_batch=True.",
+        B,
+        per_core_M * per_core_N,
+        B * per_core_M * per_core_N);
+}
+
 uint32_t get_estimated_size_of_cbs(
     uint32_t per_core_M,
     uint32_t per_core_N,
@@ -304,10 +317,18 @@ inline ActivationParams get_activation_params(const ttnn::operations::unary::Una
 
         case UnaryOpType::SELU:
             result.type = KernelActivation::SELU;
-            // param0 is alpha (default 1.67326)
-            result.param0 = has_first ? std::bit_cast<uint32_t>(params[0]) : 0x3fd637bdu;
-            // param1 is lambda (default 1.05070)
-            result.param1 = has_second ? std::bit_cast<uint32_t>(params[1]) : 0x3f8674f5u;
+            // selu(x) is scale * x for x >= 0, and scale * alpha * (exp(x) - 1) for x < 0.
+            // selu_tile_pack takes the scale first and alpha second.
+            //
+            // Each default is the nearest float to the published SELU constant. Shown below as
+            // the published value and the exact value of the float it rounds to, which is what
+            // the bit patterns hold:
+            //   scale  1.0507009873554804934193349852946 -> 1.05070102214813232421875
+            //   alpha  1.6732632423543772848170429916717 -> 1.67326319217681884765625
+            // param0 is scale
+            result.param0 = has_first ? std::bit_cast<uint32_t>(params[0]) : 0x3f867d5fu;
+            // param1 is alpha
+            result.param1 = has_second ? std::bit_cast<uint32_t>(params[1]) : 0x3fd62d7du;
             break;
 
         case UnaryOpType::SOFTPLUS:
@@ -349,6 +370,14 @@ void validate_matmul_reuse_work_split(
 }  // namespace ttnn::operations::matmul::utilities
 
 namespace ttnn::prim::dram_sharded_helpers {
+struct DramBankReaderAssignment {
+    tt::tt_metal::CoreCoord worker_core;
+    uint32_t bank_id;
+    uint32_t worker_index;
+};
+
+void validate_num_workers_per_dram_bank(std::size_t workers_per_bank);
+
 // This type of access pattern cannot be copied.
 // Treat it as a one off patch to restore functionality that
 // was adjusted to fix one P0 causing another P0.
@@ -358,12 +387,21 @@ tt::tt_metal::IDevice* get_device_for_dram_banks(const ttnn::Tensor& a, const tt
 void get_max_page_size_and_num_pages(
     tt::tt_metal::IDevice* device, uint32_t num_tiles, uint32_t tile_size, uint32_t& page_size, uint32_t& num_pages);
 
-void move_common_entries(std::vector<tt::tt_metal::CoreCoord>& v1, std::vector<tt::tt_metal::CoreCoord>& v2, std::vector<tt::tt_metal::CoreCoord>& commons);
+void move_common_entries(
+    std::vector<tt::tt_metal::CoreCoord>& v1,
+    std::vector<tt::tt_metal::CoreCoord>& v2,
+    std::vector<tt::tt_metal::CoreCoord>& commons);
 
 void get_optimal_dram_bank_to_reader_assignment(
     tt::tt_metal::IDevice* device,
     std::vector<tt::tt_metal::CoreCoord>& all_worker_cores_ordered,
     CoreRangeSet& all_worker_cores,
     tt::tt_metal::NOC noc);
+
+std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
+    tt::tt_metal::IDevice* device,
+    tt::tt_metal::NOC noc,
+    uint32_t workers_per_bank,
+    const CoreRangeSet& secondary_reader_excluded_cores);
 
 }  // namespace ttnn::prim::dram_sharded_helpers

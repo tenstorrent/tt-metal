@@ -61,6 +61,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     uint32_t num_out_blocks = program_config.num_out_blocks;
     bool use_welford = operation_attributes.use_welford;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(a.device()->arch(), compute_kernel_config);
 
     if (gamma.has_value()) {
         TT_FATAL(gamma.value().layout() == Layout::ROW_MAJOR, "Gamma tensor must have ROW_MAJOR layout");
@@ -176,7 +178,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
 
     // -1 sentinel from GroupNormMultiCoreProgramConfig means "auto select".
     // Any other value is taken as an explicit user choice and validated below.
-    if (num_out_blocks == static_cast<uint32_t>(-1)) {
+    const bool auto_num_out_blocks = num_out_blocks == static_cast<uint32_t>(-1);
+    if (auto_num_out_blocks) {
         num_out_blocks =
             groupnorm_heuristic_num_out_blocks(shape[1] * shape[2] * shape[3], num_virtual_cols * num_virtual_rows);
     }
@@ -190,6 +193,10 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     uint32_t subblock_wt = get_max_subblock(block_wt, 8);
     uint32_t num_subblocks_w = block_wt / subblock_wt;
     uint32_t block_wt_last = (per_core_Nt + num_groups_per_core - 1) / num_groups_per_core;
+
+    if (auto_num_out_blocks && !use_welford && !fp32_dest_acc_en) {
+        num_out_blocks = groupnorm_bf16_num_out_blocks(num_out_blocks, block_ht_group_1, block_wt);
+    }
 
     TT_FATAL(
         block_ht_group_1 > 0,
@@ -232,9 +239,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
             block_ht_group_1);
         num_out_blocks = block_ht_group_1;
     }
-
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
     // Float32 input requires fp32_dest_acc_en=true on both GroupNorm paths:
     //  - Welford: prerequisite for UnpackToDestFp32 (set below), which bypasses the unpacker's
@@ -322,8 +326,10 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     uint32_t in5_CB_size = gamma_beta_num_cols_tile_per_core * gamma_beta_single_tile_size;
     uint32_t in6_CB_size = gamma_beta_num_cols_tile_per_core * gamma_beta_single_tile_size;
     uint32_t input_mask_num_tiles_per_core = block_wt * num_groups_per_core;
-    // The row-masked set shares the CB with the normal one, on top of the double-buffering.
-    uint32_t in_mask_CB_size = use_welford ? input_mask.value().physical_volume() * input_mask.value().element_size()
+    // Sized from block_wt (a synthesized mask has no tensor to size against). Welford holds all
+    // groups' tiles at once; non-Welford double-buffers block_wt tiles per set (mask_sets == 2
+    // when the row-masked set is present).
+    uint32_t in_mask_CB_size = use_welford ? input_mask_num_tiles_per_core * in_mask_single_tile_size
                                            : block_wt * in_mask_single_tile_size * 2 * mask_sets;
     uint32_t repack_CB_size = per_core_Nt * in_single_tile_size * 2;
     uint32_t interm_block_tiles_group_1 = in0_block_tiles_group_1;
@@ -341,7 +347,10 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
 
     if (use_welford) {
         x_CB_size_group_1 = single_tile_size * 1;
-        xmm_CB_size_group_1 = single_tile_size * 3;
+        // cb_xmm double buffer. After the Welford mask-multiply reorder
+        // (`((x − μ) · rsqrt) · mask`), only one tile is live in cb_xmm at
+        // a time, so the allocation drops from 3 to 2.
+        xmm_CB_size_group_1 = single_tile_size * 2;
     }
 
     // c_17 holds the whole per-core group, tilized once and reused by all three passes.
@@ -570,6 +579,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         {"num_groups_per_core", num_groups_per_core},
         {"num_batches_per_core", num_batches_per_core_group_1},
         {"num_cols_per_group", num_channels_per_group_mod_tile_w},
+        {"num_channels_per_group", num_channels_per_group},
         {"num_tiles_per_batch", per_core_Mt_group_1 * Wt / num_batches_per_core_group_1},
         {"block_w_last", block_wt_last},
         {"GROUP_SIZE_IS_POWER_OF_2",
@@ -618,6 +628,13 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     std::map<std::string, std::string> writer_defines;
     if (untilize_out) {
         writer_defines["UNTILIZE_OUT"] = "1";
+    }
+    // See groupnorm_sharded_program_factory.cpp for the mask data path
+    // selection (synthesize / full read). Synthesis fires only when the
+    // caller did not pass an input_mask tensor.
+    const bool synth_mask = !input_mask.has_value();
+    if (synth_mask) {
+        writer_defines["MASK_SYNTHESIZE"] = "1";
     }
 
     KernelDescriptor writer_desc;
@@ -946,7 +963,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
             }}},
         });
     }
-    if (input_mask.has_value()) {
+    if (input_mask.has_value() || synth_mask) {
         constexpr uint32_t in_mask_cb_index = tt::CBIndex::c_28;
         desc.cbs.push_back(CBDescriptor{
             .total_size = in_mask_CB_size,
@@ -1293,12 +1310,13 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         writer_mcast_sender_args.push_back(beta_tile_start_id);
         writer_mcast_sender_args.push_back(input_mask_tile_start_id);
         writer_mcast_sender_args.push_back(Wt);
-        // Where this core reads the row-masked set from. Only the core holding a batch's final
-        // row-tile needs it; the rest get the normal set again, making compute's switch a no-op
-        // there. Deciding it here keeps the compute kernel compile-time-only.
+        // Per-core: under synthesis the valid-row count, on the DRAM path where to read the
+        // row-masked set from. Cores that do not hold a batch's final row-tile get values that
+        // make the second set identical to the first.
+        const bool owns_pad_tile = pad.active && group_norm_core_owns_pad_tile(virtual_core.y, num_cores_per_batch);
         writer_mcast_sender_args.push_back(
-            input_mask_tile_start_id +
-            (pad.active && group_norm_core_owns_pad_tile(virtual_core.y, num_cores_per_batch) ? mask_set_tiles : 0));
+            synth_mask ? (owns_pad_tile ? pad.rows_in_last_tile : tile_height)
+                       : (input_mask_tile_start_id + (owns_pad_tile ? mask_set_tiles : 0)));
         writer_desc.emplace_runtime_args(core, writer_mcast_sender_args);
     }
 

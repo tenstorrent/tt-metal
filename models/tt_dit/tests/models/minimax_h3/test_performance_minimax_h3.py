@@ -2,186 +2,270 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device perf of one MiniMax-H3 transformer block at 768P; run under `scripts/run_safe_pytest.sh --profile`,
-then `tt-perf-report <csv> --start-signpost start --end-signpost stop`. Profile one duration at a time with
-`-k`: a multi-parameter profiled run yields a CSV containing only the first parameter's ops."""
+"""t2va pipeline wall-clock at the published working points, via `BenchmarkProfiler`.
+
+`ENABLE_USER_INPUT=1` opens a prompt / aspect / duration loop after the measured generation.
+"""
 
 from __future__ import annotations
 
+import os
+
 import pytest
-import torch
-from diffusers.models.transformers.transformer_minimax_h3 import MINIMAX_H3_MODALITY_NUM, MiniMaxH3RotaryPosEmbed
-from diffusers.models.transformers.transformer_minimax_h3 import MiniMaxH3TransformerBlock as TorchMiniMaxH3Block
 from loguru import logger
-from tracy import signpost
+from PIL import Image
 
 import ttnn
+from models.perf.benchmarking_utils import BenchmarkProfiler
 
-from ....models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
-from ....models.transformers.minimax_h3.transformer_block_minimax_h3 import MiniMaxH3TransformerBlock
-from ....parallel.config import DiTParallelConfig, ParallelFactor
-from ....parallel.manager import CCLManager
-from ....pipelines.minimax_h3.packing import (
-    MINIMAX_H3_FPS,
-    align_num_frames,
-    audio_latent_num_frames,
-    resolve_canvas_size,
-    video_latent_num_frames,
+from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames, resolve_canvas_size
+from ....pipelines.minimax_h3.packing_ref2va import (
+    MiniMaxH3Reference,
+    decode_reference_audio,
+    reference_from_video_file,
 )
-from ....utils.tensor import bf16_tensor_2dshard, from_torch
-from ....utils.test import skip_if_unsupported_num_links
-from .common import (
-    GALAXY_RING,
-    REAL_BLOCK_CONFIG,
-    ROPE_FREQ_DIM,
-    ROPE_THETA,
-    TT_BLOCK_CONFIG,
-    packed_layout,
-    upload_rope,
+from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
+from .common import GALAXY_MESHES, create_fractal_image
+from .common_av import (
+    CALIBRATED_FOX_PROMPT,
+    artifact_dir,
+    assert_generation_ok,
+    frames_for_export,
+    is_host,
+    log_pipeline_perf,
+    pretest_user_repl,
+    read_user_reference_spec,
+    run_user_generations,
+    run_user_ref_generations,
+    run_warm_generation,
+    weights_dir,
+    write_artifacts,
 )
 
-HIDDEN_SIZE = REAL_BLOCK_CONFIG["hidden_size"]
-HEAD_DIM = REAL_BLOCK_CONFIG["attention_head_dim"]
-TIME_EMBED_DIM = REAL_BLOCK_CONFIG["time_embed_dim"]
+NUM_INFERENCE_STEPS = 50
+SEED = 0
 
-PATCH_SIZE = (1, 2, 2)
-VAE_SPATIAL_DOWNSAMPLE = 16  # prod(spatial_downsample_factors) from the video VAE config
-NUM_TEXT_TOKENS = 512
-ASPECT = (16, 9)
+# The published working points; `resolve_canvas_size` derives each canvas (e.g. 21:9 -> 672x1536).
+ASPECT_RATIOS = [(21, 9), (16, 9), (4, 3), (1, 1), (3, 4), (9, 16)]
+DURATIONS_S = [5, 10, 15]
 
+PROMPT = CALIBRATED_FOX_PROMPT
 
-def _packed_sizes(duration_s: float) -> dict:
-    """Token counts for `duration_s` seconds of 768P video, derived from the pipeline's own packing helpers."""
-    height, width = resolve_canvas_size(*ASPECT)
-    tokens_per_latent_frame = (height // VAE_SPATIAL_DOWNSAMPLE // PATCH_SIZE[1]) * (
-        width // VAE_SPATIAL_DOWNSAMPLE // PATCH_SIZE[2]
-    )
-    num_frames = align_num_frames(int(duration_s * MINIMAX_H3_FPS))
-    latent_frames = video_latent_num_frames(num_frames)
-    num_audio = audio_latent_num_frames(num_frames)
-    num_video = latent_frames * tokens_per_latent_frame
-    return {
-        "height": height,
-        "width": width,
-        "num_frames": num_frames,
-        "latent_frames": latent_frames,
-        "grid_h": height // VAE_SPATIAL_DOWNSAMPLE // PATCH_SIZE[1],
-        "grid_w": width // VAE_SPATIAL_DOWNSAMPLE // PATCH_SIZE[2],
-        "num_video": num_video,
-        "num_audio": num_audio,
-        "num_text": NUM_TEXT_TOKENS,
-        "seq_len": NUM_TEXT_TOKENS + num_audio + num_video,
-    }
+SWEEP = [
+    pytest.param(ratio, seconds, id=f"{ratio[0]}x{ratio[1]}_{seconds}s")
+    for seconds in DURATIONS_S
+    for ratio in ASPECT_RATIOS
+]
 
 
-@GALAXY_RING
-@pytest.mark.parametrize(
-    "duration_s",
-    [
-        pytest.param(5.0, id="5s_768p"),
-        pytest.param(10.0, id="10s_768p"),
-        pytest.param(15.0, id="15s_768p"),
-    ],
-)
-def test_minimax_h3_transformer_block_perf(
-    mesh_device: ttnn.MeshDevice,
-    sp_axis: int,
-    tp_axis: int,
-    num_links: int,
-    duration_s: float,
-    is_fsdp: bool,
-    topology: ttnn.Topology,
-    reset_seeds,
-) -> None:
-    skip_if_unsupported_num_links(mesh_device, num_links)
+@pytest.mark.timeout(7200)
+@pytest.mark.parametrize(("aspect_ratio", "duration_s"), SWEEP)
+@pytest.mark.parametrize(("mesh_device", "device_params"), GALAXY_MESHES, indirect=["mesh_device", "device_params"])
+def test_t2va_performance(mesh_device, reset_seeds, aspect_ratio, duration_s):
+    pretest_user_repl()
+    weights = weights_dir("transformer", "text_encoder", "vae", "audio_vae")
+    prompt = PROMPT
 
-    sp_factor = tuple(mesh_device.shape)[sp_axis]
-    tp_factor = tuple(mesh_device.shape)[tp_axis]
+    HEIGHT, WIDTH = resolve_canvas_size(*aspect_ratio)
+    NUM_FRAMES = align_num_frames(round(duration_s * MINIMAX_H3_FPS))
+    if is_host():
+        logger.info(f"working point: {aspect_ratio[0]}:{aspect_ratio[1]} -> {WIDTH}x{HEIGHT}, {NUM_FRAMES} frames")
 
-    sizes = _packed_sizes(duration_s)
-    seq_len = sizes["seq_len"]
-    alignment = sp_factor * ttnn.TILE_SIZE
-    padded_len = ((seq_len + alignment - 1) // alignment) * alignment
-    logger.info(
-        f"{duration_s:g}s @ {sizes['height']}x{sizes['width']}: {sizes['num_frames']} frames -> "
-        f"{sizes['latent_frames']} latent frames x {sizes['grid_h']}x{sizes['grid_w']} patches = "
-        f"{sizes['num_video']} video + {sizes['num_audio']} audio + {sizes['num_text']} text "
-        f"= seq_len {seq_len} (padded {padded_len}, {padded_len // sp_factor} rows/device)"
-    )
-
-    num_timesteps = 2
-    position_ids, tags, timestep_indices = packed_layout(
-        sizes["num_text"], sizes["num_audio"], sizes["num_video"], (sizes["grid_h"], sizes["grid_w"]), padded_len
-    )
-    adaln_indices = timestep_indices * MINIMAX_H3_MODALITY_NUM + tags.clamp(min=0)
-
-    # Built only to source a correctly-keyed random state dict; its forward is never called.
-    torch_block = TorchMiniMaxH3Block(**REAL_BLOCK_CONFIG).to(torch.float32)
-
-    rope = MiniMaxH3RotaryPosEmbed(rope_freq_dim=ROPE_FREQ_DIM, rope_theta=ROPE_THETA)
-    with torch.no_grad():
-        rope_cos, rope_sin = rope(position_ids)
-    rope_cos, rope_sin = prepare_rope_tables(rope_cos, rope_sin, HEAD_DIM)
-
-    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
-    parallel_config = DiTParallelConfig(
-        tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=tp_factor),
-        sequence_parallel=ParallelFactor(mesh_axis=sp_axis, factor=sp_factor),
-        cfg_parallel=None,
-    )
-
-    tt_block = MiniMaxH3TransformerBlock(
-        **TT_BLOCK_CONFIG,
-        rotary_dim=2 * 3 * ROPE_FREQ_DIM,
-        mesh_device=mesh_device,
-        ccl_manager=ccl_manager,
-        parallel_config=parallel_config,
-        is_fsdp=is_fsdp,
-    )
-    tt_block.load_torch_state_dict(torch_block.state_dict())
-    del torch_block
-
-    tt_spatial = bf16_tensor_2dshard(
-        torch.randn(1, 1, padded_len, HIDDEN_SIZE),
-        device=mesh_device,
-        shard_mapping={sp_axis: 2, tp_axis: 3},
-    )
-    tt_temb = from_torch(torch.randn(1, 1, num_timesteps, TIME_EMBED_DIM), device=mesh_device, dtype=ttnn.float32)
-    tt_adaln = from_torch(
-        adaln_indices.to(torch.int32).reshape(1, 1, 1, padded_len),
-        device=mesh_device,
-        dtype=ttnn.int32,
-        layout=ttnn.Layout.ROW_MAJOR,
-        mesh_axes=[..., None, sp_axis],
-    )
-    tt_rope_cos, tt_rope_sin = upload_rope(rope_cos, rope_sin, mesh_device=mesh_device, sp_axis=sp_axis)
-
-    def run_block() -> ttnn.Tensor:
-        out = tt_block(
-            tt_spatial,
-            N=seq_len,  # unpadded length: ring attention masks the pad tail via logical_n
-            temb=tt_temb,
-            adaln_indices=tt_adaln,
-            rope_cos=tt_rope_cos,
-            rope_sin=tt_rope_sin,
+    if is_host() and not os.environ.get("TT_DIT_CACHE_DIR"):
+        logger.warning(
+            "TT_DIT_CACHE_DIR is unset, so every weight load reads safetensors. Prepares are excluded "
+            "from the total either way, but the run will take far longer than the reported compute."
         )
-        ttnn.synchronize_device(mesh_device)
-        return out
 
-    logger.info("iteration 1: compiling kernels and populating the program cache")
-    run_block()
+    pipeline = MiniMaxH3Pipeline.create_pipeline(
+        mesh_device=mesh_device,
+        weights_dir=weights,
+        dit_fsdp=False,
+        vae_output_type="yuv420",
+    )
 
-    logger.info("iteration 2: warm run (the profiled region)")
-    signpost("start")
-    tt_out = run_block()
-    signpost("stop")
+    benchmark_profiler = BenchmarkProfiler()
+    output = run_warm_generation(
+        pipeline,
+        prompt,
+        num_frames=NUM_FRAMES,
+        height=HEIGHT,
+        width=WIDTH,
+        num_inference_steps=NUM_INFERENCE_STEPS,
+        seed=SEED,
+        profiler=benchmark_profiler,
+    )
 
-    assert tuple(tt_out.shape) == (
-        1,
-        1,
-        padded_len // sp_factor,
-        HIDDEN_SIZE // tp_factor,
-    ), f"unexpected output shape {tuple(tt_out.shape)}"
-    local = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
-    assert torch.isfinite(local).all(), "block output contains NaN or Inf"
-    logger.info(f"output {tuple(tt_out.shape)}, local shard std={local.std().item():.4f}")
+    expected_frames = align_num_frames(NUM_FRAMES)
+    assert_generation_ok(output, expected_frames)
+
+    num_forwards = NUM_INFERENCE_STEPS - 1
+    log_pipeline_perf(
+        benchmark_profiler,
+        label="t2va",
+        pipeline=pipeline,
+        num_forwards=num_forwards,
+        width=WIDTH,
+        height=HEIGHT,
+        num_frames=expected_frames,
+        fps=MINIMAX_H3_FPS,
+        aspect_ratio=aspect_ratio,
+        num_inference_steps=NUM_INFERENCE_STEPS,
+    )
+    if ttnn.using_distributed_env():
+        ttnn.distributed_context_barrier()
+    if is_host():
+        artifacts = artifact_dir("h3_t2va_artifacts")
+        stem = f"t2va_{aspect_ratio[0]}x{aspect_ratio[1]}_{WIDTH}x{HEIGHT}_{duration_s}s"
+        frames = frames_for_export(output)
+        write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=stem)
+
+    run_user_generations(
+        pipeline,
+        default_aspect_ratio=aspect_ratio,
+        default_duration_s=duration_s,
+        num_inference_steps=NUM_INFERENCE_STEPS,
+        seed=SEED,
+    )
+
+    pipeline.release_traces()
+
+
+# --------------------------------------------------------------------- ref2va perf
+
+# Single ref2va working point; no sweep, since ref2va padded lengths run 1.2-3.0x t2va's.
+REF2VA_ASPECT_RATIO = (16, 9)
+REF2VA_DURATION_S = 5
+
+# The ref2va reference set -- EDIT these to point at your own media (at least one is required).
+REF2VA_USE_IMAGE = True
+REF2VA_VIDEO_FILE = "/data/DC-deploy/vision-models/h3_t2va_artifacts/t2va_16x9_1344x768_5s.mp4"
+REF2VA_AUDIO_FILE = "/data/DC-deploy/vision-models/h3_t2va_artifacts/t2va_16x9_1344x768_5s.wav"
+
+# ref2va's taps=3 video encoder clashes with the default L1 pool, so it runs a smaller L1_SMALL.
+_REF2VA_L1_SMALL = 16384
+REF2VA_MESHES = [
+    pytest.param(shape, {**params, "l1_small_size": _REF2VA_L1_SMALL}, id=param.id)
+    for param in GALAXY_MESHES
+    for shape, params in [param.values]
+]
+
+
+def ref2va_references() -> list[MiniMaxH3Reference]:
+    """The image / video / audio references the ref2va perf run packs. A placeholder set to edit."""
+    references: list[MiniMaxH3Reference] = []
+    if REF2VA_USE_IMAGE:
+        references.append(MiniMaxH3Reference(image=create_fractal_image(512, 512)))
+    if False:  # os.path.isfile(REF2VA_VIDEO_FILE):
+        references.append(reference_from_video_file(REF2VA_VIDEO_FILE))
+    if False:  # os.path.isfile(REF2VA_AUDIO_FILE):
+        waveform, sample_rate = decode_reference_audio(REF2VA_AUDIO_FILE)
+        references.append(MiniMaxH3Reference(audio=waveform, sample_rate=sample_rate))
+    if not references:
+        pytest.skip("no ref2va references: enable REF2VA_USE_IMAGE or place a video/audio file")
+    return references
+
+
+def read_user_input() -> tuple[str, list[MiniMaxH3Reference], tuple[int, int], float, int] | None:
+    """An interactively entered `(prompt, references, aspect_ratio, duration_s, num_steps)` request.
+
+    None when ENABLE_USER_INPUT is unset or the entry is aborted, which stops the REPL loop.
+    """
+    spec = read_user_reference_spec(REF2VA_ASPECT_RATIO, REF2VA_DURATION_S, NUM_INFERENCE_STEPS)
+    if not spec:
+        return None
+    references: list[MiniMaxH3Reference] = []
+    for path in spec.get("image", []):
+        references.append(MiniMaxH3Reference(image=Image.open(path).convert("RGB")))
+    for path in spec.get("audio", []):
+        waveform, sample_rate = decode_reference_audio(path)
+        references.append(MiniMaxH3Reference(audio=waveform, sample_rate=sample_rate))
+    for path in spec.get("video", []):
+        references.append(reference_from_video_file(path))
+    return (
+        spec["prompt"],
+        references,
+        (int(spec["aspect"][0]), int(spec["aspect"][1])),
+        float(spec["duration_s"]),
+        int(spec["num_steps"]),
+    )
+
+
+@pytest.mark.timeout(10800)
+@pytest.mark.parametrize(("mesh_device", "device_params"), REF2VA_MESHES, indirect=["mesh_device", "device_params"])
+def test_ref2va_performance(mesh_device, reset_seeds):
+    pretest_user_repl()
+    weights = weights_dir("transformer_ref", "text_encoder", "vae", "audio_vae")
+    prompt = PROMPT
+    aspect_ratio = REF2VA_ASPECT_RATIO
+    duration_s = REF2VA_DURATION_S
+
+    HEIGHT, WIDTH = resolve_canvas_size(*aspect_ratio)
+    NUM_FRAMES = align_num_frames(round(duration_s * MINIMAX_H3_FPS))
+    references = ref2va_references()
+    if is_host():
+        kinds = ", ".join(reference.kind for reference in references)
+        logger.info(f"working point: {aspect_ratio[0]}:{aspect_ratio[1]} -> {WIDTH}x{HEIGHT}, {NUM_FRAMES} frames")
+        logger.info(f"references ({len(references)}): {kinds}")
+
+    if is_host() and not os.environ.get("TT_DIT_CACHE_DIR"):
+        logger.warning(
+            "TT_DIT_CACHE_DIR is unset, so every weight load reads safetensors. Prepares are excluded "
+            "from the total either way, but the run will take far longer than the reported compute."
+        )
+
+    pipeline = MiniMaxH3Pipeline.create_pipeline(
+        mesh_device=mesh_device,
+        weights_dir=weights,
+        task="ref2va",
+        dit_fsdp=True,
+        trace_denoise=True,
+        bucket_denoise=True,
+        vae_output_type="yuv420",
+    )
+
+    benchmark_profiler = BenchmarkProfiler()
+    output = run_warm_generation(
+        pipeline,
+        prompt,
+        references=references,
+        num_frames=NUM_FRAMES,
+        height=HEIGHT,
+        width=WIDTH,
+        num_inference_steps=NUM_INFERENCE_STEPS,
+        seed=SEED,
+        profiler=benchmark_profiler,
+    )
+
+    expected_frames = align_num_frames(NUM_FRAMES)
+    assert_generation_ok(output, expected_frames)
+
+    num_forwards = NUM_INFERENCE_STEPS - 1
+    log_pipeline_perf(
+        benchmark_profiler,
+        label="ref2va",
+        pipeline=pipeline,
+        num_forwards=num_forwards,
+        width=WIDTH,
+        height=HEIGHT,
+        num_frames=expected_frames,
+        fps=MINIMAX_H3_FPS,
+        aspect_ratio=aspect_ratio,
+        num_inference_steps=NUM_INFERENCE_STEPS,
+        extra_lines=(f"L1 Small Size: {_REF2VA_L1_SMALL}",),
+    )
+    if ttnn.using_distributed_env():
+        ttnn.distributed_context_barrier()
+    if is_host():
+        artifacts = artifact_dir("h3_ref2va_perf_artifacts")
+        stem = f"ref2va_{aspect_ratio[0]}x{aspect_ratio[1]}_{WIDTH}x{HEIGHT}_{duration_s}s"
+        frames = frames_for_export(output)
+        write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=stem)
+
+    run_user_ref_generations(
+        pipeline,
+        read_user_input,
+        seed=SEED,
+    )
+
+    pipeline.release_traces()

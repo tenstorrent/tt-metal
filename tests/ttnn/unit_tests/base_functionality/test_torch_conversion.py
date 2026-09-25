@@ -1138,12 +1138,10 @@ def test_from_torch_large_tensor_type_conversion_row_major_l1(device, torch_dtyp
 
 
 @skip_for_slow_dispatch()
-@pytest.mark.xfail(
-    reason="sharded buffer write dispatch crashes on dispatch-core-row shards (write path fix not implemented)",
-    strict=True,
-)
-def test_from_torch_sharded_tilize_dispatch_core_overlap(device):
+def test_from_torch_sharded_tilize_dispatch_core_overlap(device, expect_error):
     """
+    ** FAILING TEST **
+
     Regression test for tilize with a shard grid that extends beyond the compute
     grid (e.g. includes dispatch cores).
 
@@ -1187,18 +1185,22 @@ def test_from_torch_sharded_tilize_dispatch_core_overlap(device):
     )
     torch_tensor = torch.zeros(shape, dtype=torch.bfloat16)
 
-    result = ttnn.from_torch(
-        torch_tensor,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=sharded_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-    )
+    # expect_error rather than xfail: it brackets the rejection so CI log triage does not
+    # read the fatal as a crash, and it fails once the write path accepts the shard grid.
+    # Restore the assertions below at that point.
+    with expect_error(RuntimeError, r"Invalid shard grid"):
+        result = ttnn.from_torch(
+            torch_tensor,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=sharded_mem_config,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        )
 
-    assert result.layout == ttnn.TILE_LAYOUT
-    assert result.dtype == ttnn.bfloat16
-    assert list(result.shape) == list(shape)
+    # assert result.layout == ttnn.TILE_LAYOUT
+    # assert result.dtype == ttnn.bfloat16
+    # assert list(result.shape) == list(shape)
 
 
 @skip_for_slow_dispatch()

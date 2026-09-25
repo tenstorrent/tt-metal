@@ -3,6 +3,7 @@
 
 import pytest
 import torch
+from helpers.constraints import get_valid_math_fidelities
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     EltwiseBinaryGolden,
@@ -12,21 +13,22 @@ from helpers.llk_params import (
     DestAccumulation,
     DestSync,
     ImpliedMathFormat,
-    MathFidelity,
     MathOperation,
     PerfRunType,
     format_dict,
 )
 from helpers.param_config import (
-    generate_unary_input_dimensions,
+    generate_reduced_input_dimensions,
+    get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    quasar_mx_smoke,
     runtime,
 )
-from helpers.perf.core import PerfConfig
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import BootMode, TestConfig
+from helpers.test_config import BootMode
 from helpers.test_variant_parameters import (
     ACC_TO_DEST,
     DEST_SYNC,
@@ -35,11 +37,12 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_FIDELITY,
     MATH_OP,
+    NUM_BLOCKS,
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
     OUTPUT_TILE_CNT,
-    PERF_RUN_TYPE,
     TEST_FACE_DIMS,
+    generate_input_dim,
 )
 from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test
@@ -71,29 +74,6 @@ def eltwise_binary_implied_math_formats(formats, *, is_perf=False):
     return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
 
 
-def eltwise_binary_math_fidelities(mathop, formats, *, is_perf=False):
-    if (
-        is_perf
-        or mathop in [MathOperation.Elwadd, MathOperation.Elwsub]
-        or formats.input_format == DataFormat.Int8
-    ):
-        return [MathFidelity.LoFi]
-    return [
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ]
-
-
-def eltwise_binary_input_dimensions(dest_sync_dest_acc, *, is_perf=False):
-    if is_perf:
-        # Nested list: parametrize treats a flat list as multiple values, so
-        # [32, 32] would become input_dimensions=32 (int) and break generate_stimuli.
-        return [[32, 32]]
-    return generate_unary_input_dimensions(dest_sync_dest_acc[1], dest_sync_dest_acc[0])
-
-
 # For acc_to_dest setting, accumulate two result tiles into dest. Can be extended.
 def get_num_tiles_per_accumulation(acc_to_dest: bool) -> int:
     return 2 if acc_to_dest else 1
@@ -118,18 +98,16 @@ def valid_acc_to_dest(input_dimensions) -> list:
     return [False]
 
 
-ELTWISE_FORMATS = input_output_formats(
-    [
-        DataFormat.MxFp8R,
-        DataFormat.MxFp8P,
-        DataFormat.MxFp4,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
-        DataFormat.Float16_b,
-        DataFormat.Float16,
-    ],
-) + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
+ELTWISE_FORMATS = (
+    input_output_formats(
+        [
+            DataFormat.Float16_b,
+            DataFormat.Float16,
+        ],
+    )
+    + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
+    + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
+)
 
 
 @pytest.mark.quasar
@@ -140,9 +118,7 @@ ELTWISE_FORMATS = input_output_formats(
         MathOperation.Elwsub,
         MathOperation.Elwmul,
     ],
-    math_fidelity=lambda mathop, formats: eltwise_binary_math_fidelities(
-        mathop, formats, is_perf=False
-    ),
+    math_fidelity=lambda formats, mathop: get_valid_math_fidelities(formats, mathop),
     implied_math_format=lambda formats: eltwise_binary_implied_math_formats(
         formats, is_perf=False
     ),
@@ -150,8 +126,8 @@ ELTWISE_FORMATS = input_output_formats(
         formats, is_perf=False
     ),
     input_dimensions=runtime(
-        lambda dest_sync_dest_acc: eltwise_binary_input_dimensions(
-            dest_sync_dest_acc, is_perf=False
+        lambda dest_sync_dest_acc: generate_reduced_input_dimensions(
+            dest_sync_dest_acc[1], dest_sync_dest_acc[0]
         )
     ),
     acc_to_dest=valid_acc_to_dest,
@@ -178,6 +154,11 @@ def test_eltwise_binary(
     dest_sync_mode, dest_acc = dest_sync_dest_acc
 
     num_tiles_per_accumulation = get_num_tiles_per_accumulation(acc_to_dest)
+
+    num_blocks, input_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        dest_sync_mode, dest_acc, formats, input_dimensions
+    )
+    output_tiles_in_block = input_tiles_in_block // num_tiles_per_accumulation
 
     if formats.input_format == DataFormat.Int8:
         stimuli_spec = StimuliSpec.uniform(low=-127.0, high=127.0)
@@ -224,11 +205,16 @@ def test_eltwise_binary(
             ACC_TO_DEST(acc_to_dest),
         ],
         "runtimes": [
+            generate_input_dim(input_dimensions, input_dimensions),
             INPUT_TILE_CNT(tile_cnt_A),
             OUTPUT_TILE_CNT(tile_cnt_res),
             NUM_FACES(num_faces),
             TEST_FACE_DIMS(),
-            NUM_TILES_IN_BLOCK(num_tiles_per_accumulation),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(
+                input_tiles_in_block,
+                output_num_tiles_in_block=output_tiles_in_block,
+            ),
             LOOP_FACTOR(loop_factor),
         ],
         "variant_stimuli": StimuliConfig(
@@ -249,19 +235,16 @@ def test_eltwise_binary(
         "disable_format_inference": formats.input_format.is_mx_format(),
     }
 
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
+        boot_mode=boot_mode,
+    )
     if is_perf:
-        configuration = PerfConfig(run_types=run_types, **test_config_kwargs)
         configuration.run(perf_report)
         return
 
-    configuration = TestConfig(
-        **{
-            **test_config_kwargs,
-            "boot_mode": boot_mode,
-            "templates": test_config_kwargs["templates"]
-            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
-        },
-    )
     res_from_L1 = configuration.run().result
 
     # Verify results match golden

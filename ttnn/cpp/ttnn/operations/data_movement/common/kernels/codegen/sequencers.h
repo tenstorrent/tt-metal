@@ -54,9 +54,9 @@ struct SeqRepeatState {
 };
 
 struct SeqRepeatInterleaveState {
-    uint32_t out_page;
-    uint32_t src_lower;    // REP_DIM_PAGES * LOWER_PAGES
-    uint32_t dst_lower;    // NUM_REPEATS * src_lower
+    uint32_t src_page;     // source page for the next call
+    uint32_t lo;           // offset below the repeat dim, wraps at lower_pages
+    uint32_t rep_phase;    // which copy of the current element, wraps at num_repeats
     uint32_t num_repeats;  // per-element replication factor
     uint32_t lower_pages;  // pages below the repeat dim
 };
@@ -162,23 +162,42 @@ inline __attribute__((always_inline)) uint32_t seq_repeat_next(SeqRepeatState& s
 // When lower_pages == 1 this reduces to the documented short form
 //   src = block*src_lower + (within / num_repeats)
 // repeat (ABAB) instead uses within % src_lower, replicating whole blocks.
+//
+// out_page only ever advances by one, so the closed form is evaluated once at
+// init and then stepped with counters. The divisors are runtime args, so the
+// compiler cannot strength-reduce them and the closed form would cost real
+// divides on every page.
 // =====================================================================
 
 inline __attribute__((always_inline)) SeqRepeatInterleaveState seq_repeat_interleave_init(
     uint32_t out_start_page, uint32_t num_repeats, uint32_t lower_pages, uint32_t rep_dim_pages) {
     uint32_t src_lower = rep_dim_pages * lower_pages;
     uint32_t dst_lower = num_repeats * src_lower;
-    return {out_start_page, src_lower, dst_lower, num_repeats, lower_pages};
+    uint32_t block = out_start_page / dst_lower;
+    uint32_t within = out_start_page % dst_lower;
+    uint32_t lo = within % lower_pages;
+    uint32_t out_rep = within / lower_pages;
+    uint32_t in_rep = out_rep / num_repeats;
+    uint32_t src_page = block * src_lower + in_rep * lower_pages + lo;
+    return {src_page, lo, out_rep - in_rep * num_repeats, num_repeats, lower_pages};
 }
 
 inline __attribute__((always_inline)) uint32_t seq_repeat_interleave_next(SeqRepeatInterleaveState& st) {
-    uint32_t block = st.out_page / st.dst_lower;
-    uint32_t within = st.out_page % st.dst_lower;
-    uint32_t lo = within % st.lower_pages;
-    uint32_t out_rep = within / st.lower_pages;
-    uint32_t in_rep = out_rep / st.num_repeats;
-    uint32_t src_page = block * st.src_lower + in_rep * st.lower_pages + lo;
-    st.out_page++;
+    uint32_t src_page = st.src_page;
+    if (++st.lo == st.lower_pages) {
+        st.lo = 0;
+        if (++st.rep_phase == st.num_repeats) {
+            // in_rep advances, carrying into block when it wraps. src_lower is
+            // rep_dim_pages * lower_pages, so either carry moves the source base up by
+            // exactly lower_pages, which cancels against rewinding lo to 0.
+            st.rep_phase = 0;
+            st.src_page++;
+        } else {
+            st.src_page -= st.lower_pages - 1;
+        }
+    } else {
+        st.src_page++;
+    }
     return src_page;
 }
 

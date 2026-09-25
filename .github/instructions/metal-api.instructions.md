@@ -8,6 +8,11 @@ excludeAgent: "cloud-agent"
 
 The public API surface lives in `tt_metal/api/tt-metalium/`. Everything here is consumed by downstream users (ttnn, tt-train, external customers). Changes require extreme care. This review also covers placement into `tt-metalium/experimental/` and `api/internal/`.
 
+Read `scripts/validate_api/README.md` for the shared hygiene policy, current automated
+coverage, and tracked exceptions. Use checker diagnostics as evidence; focus
+review comments on unresolved violations and decisions rather than repeating
+checks that CI already performed.
+
 ## 🔴 CRITICAL
 
 ### Experimental / FAFO Segregation
@@ -17,13 +22,13 @@ All new experimental ("FAFO") work must reside in the `tt::tt_metal::experimenta
 - **Experimental methods on stable classes**: do not add experimental methods directly to an existing stable class. Implement them as free functions in the `tt::tt_metal::experimental::<stable_class_name>` namespace, with headers under `experimental/`.
 - **Friend access**: `friend` functions that access private members of stable classes are permitted solely for this segregation purpose.
 - **Clarity**: the file must include comments explicitly stating that it is experimental and subject to change. Individual functions do not need their own experimental warning.
-- **Stability boundary**: `experimental/` headers carry no API-stability guarantee, but must NOT be included by stable (non-experimental) headers. If a stable header pulls in an experimental one, that experimental API becomes a de facto stable commitment.
+- **Stability boundary**: stable headers must not include experimental or internal headers, and experimental headers must not include internal headers. This also applies to transitive includes and types exposed through public interfaces. Consult the exact migration exceptions and coverage limits in `scripts/validate_api/README.md`.
 
 ### Modifying or Deleting Stable APIs
 
 - **Design alignment**: significant changes to existing stable APIs require an associated design document and documented pre-alignment before the PR is submitted.
 - **Deprecation process**: for minor changes or deletions of stable APIs (outside `experimental/`), enforce the two-step deprecation process:
-  1. Add the replacement, update internal callers, and annotate the old function with `[[deprecated("<message>")]]`.
+  1. In the **same PR**, add the replacement, migrate every in-repository production caller, and annotate the old function with `[[deprecated("<message>")]]`. Only compatibility tests and necessary shim implementation may retain narrowly scoped exceptions. Do not introduce new usages of already-deprecated APIs.
   2. Remove the old function in a **separate PR** only after the deprecation has been on `main` for at least 4 weeks.
 - **Required deprecation message details**: the `[[deprecated]]` message must explicitly include:
   - An expiration notice (e.g., "This is deprecated and will be removed.").
@@ -51,9 +56,11 @@ Promoting experimental functionality to the stable API requires consultation wit
 - [ ] New experimental work lives in `tt::tt_metal::experimental` with headers under `experimental/`
 - [ ] Experimental methods on stable classes are free functions in `experimental::<stable_class_name>`, not members of the stable class
 - [ ] Experimental files include a comment stating they are experimental and subject to change (per-function warnings not required)
-- [ ] `experimental/` headers are not included from stable headers
+- [ ] Stable headers do not depend on experimental/internal APIs; experimental headers do not depend on internal APIs
+- [ ] Header guards, namespace discipline, and implementation placement follow `scripts/validate_api/README.md`
 - [ ] Significant stable API changes have a design doc and documented pre-alignment
 - [ ] Stable API removals/changes follow the two-step deprecation process
+- [ ] The deprecation PR migrates all in-repository production callers; no new deprecated API usages are introduced
 - [ ] Deprecation messages include expiration notice + refactor instruction
 - [ ] Deprecated code has been on `main` ≥4 weeks before removal
 - [ ] Graduation from experimental to stable has Runtime team consultation and formal design review

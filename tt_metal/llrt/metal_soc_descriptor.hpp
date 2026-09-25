@@ -29,8 +29,10 @@ public:
     std::vector<std::vector<tt::tt_metal::CoreCoord>> dram_view_eth_cores;  // per dram view preferred eth endpoints for each noc
     std::vector<size_t> dram_view_address_offsets;            // starting address offset
 
-    // Per bank, ordered endpoint translated coordinates.
-    // Index 0 = preferred worker endpoint (NOC 0), indices 1..N = remaining endpoints on the same bank.
+    // Per bank, ordered endpoint translated coordinates. The index is the y of a logical DRAM
+    // CoreCoord, and the order is by role so that y means the same thing on every device regardless
+    // of DRAM harvesting: index 0 = worker endpoint for NOC 0, index 1 = worker endpoint for NOC 1
+    // (when it is a different subchannel), then the bank's remaining subchannels ascending.
     std::vector<std::vector<tt::tt_metal::CoreCoord>> dram_bank_endpoint_coords;
 
     uint64_t dram_core_size{};
@@ -42,6 +44,13 @@ public:
 
     tt::tt_metal::CoreCoord get_preferred_worker_core_for_dram_view(int dram_view, uint8_t noc) const;
     tt::tt_metal::CoreCoord get_preferred_eth_core_for_dram_view(int dram_view, uint8_t noc) const;
+
+    // Bitmask of NOC indices for which `translated_coord` is a DRAM view's preferred endpoint (worker
+    // or eth): the NIUs on that core that forward DRAM accesses over AXI, so they must stay in NOC2AXI
+    // mode. Bit N is NOC N. DRISC firmware puts every NIU outside this mask into stream mode, where the
+    // DRISC can initiate NOC transactions. Argument must be a TRANSLATED (UMD) coord; returns 0 for a
+    // core that is no view's endpoint.
+    uint8_t get_dram_endpoint_noc_mask(const tt::tt_metal::CoreCoord& translated_coord) const;
 
     // The DRAM cores Metal may place kernels/firmware on, in the requested coordinate system. This is
     // the single source of truth for "usable DRAM cores": every DRAM loop in Metal (firmware init,
@@ -66,7 +75,7 @@ public:
     tt::tt_metal::CoreCoord get_physical_tensix_core_from_logical(const tt::tt_metal::CoreCoord& logical_coord) const;
     tt::tt_metal::CoreCoord get_physical_dram_core_from_logical(const tt::tt_metal::CoreCoord& logical_coord) const;
     // Map a DRAM view + hardware subchannel to the logical CoreCoord used by CreateKernel(DramConfig).
-    // logical.y indexes dram_bank_endpoint_coords (worker endpoint first), not the raw subchannel id.
+    // logical.y indexes dram_bank_endpoint_coords (ordered by endpoint role), not the raw subchannel id.
     tt::tt_metal::CoreCoord get_logical_dram_core_for_subchannel(int dram_view, int subchannel) const;
     // Same logical space as get_logical_dram_core_for_subchannel, keyed by a TRANSLATED coord. Inverse
     // of get_physical_dram_core_from_logical. A DRAM view is a dram_view_size window of one hardware
@@ -93,8 +102,9 @@ private:
     // index get_dram_core_for_channel expects; callers want the logical one.
     size_t get_physical_channel_for_dram_view(int dram_view) const;
 
-    // True if `translated_coord` is any DRAM view's NOC0 worker endpoint (the subchannel a NOC0 DRAM
-    // access routes to) -- the syseng-owned endpoint excluded by get_metal_dram_cores on Blackhole.
+    // True if `translated_coord` is any DRAM view's NOC0 endpoint (the subchannel a NOC0 DRAM access
+    // routes to) -- the syseng-owned endpoint excluded by get_metal_dram_cores on Blackhole. The NOC0
+    // bit of get_dram_endpoint_noc_mask, named for its one caller.
     // Argument must be a TRANSLATED (UMD) coord; a metal-logical {view, subchannel} coord never matches.
     bool is_noc0_dram_endpoint(const tt::tt_metal::CoreCoord& translated_coord) const;
 

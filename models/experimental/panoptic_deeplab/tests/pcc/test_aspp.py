@@ -19,6 +19,7 @@ from models.experimental.panoptic_deeplab.tt.common import (
     get_panoptic_deeplab_config,
 )
 from models.experimental.panoptic_deeplab.tests.pcc.common import (
+    bf16_conv_via_fp32,
     check_ttnn_output,
     skip_if_not_blackhole_110_cores,
     skip_if_not_blackhole_20_cores,
@@ -126,7 +127,7 @@ def test_ttnn_aspp(device, pcc_values, skip_check, model_location_generator):
 
     # Test ASPP component specifically by testing semantic head which uses ASPP
     logger.info("Running PyTorch ASPP test...")
-    with torch.no_grad():
+    with torch.no_grad(), bf16_conv_via_fp32():
         # Get ASPP output from semantic head decoder - ASPP is the project_conv for res5
         pytorch_aspp_output = pytorch_model.semantic_head.decoder["res5"]["project_conv"](pytorch_input)
 

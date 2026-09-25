@@ -6,16 +6,19 @@
 
 #include "api/compute/common_globals.h"
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
+#ifndef ARCH_QUASAR
 #include "ckernel_sfpu_softsign.h"
 #include "ckernel_sfpu_softshrink.h"
 #include "ckernel_sfpu_hardshrink.h"
 #include "ckernel_sfpu_celu.h"
 #include "ckernel_sfpu_activations.h"
+#endif
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
 
+#ifndef ARCH_QUASAR
 // clang-format off
 /**
 * Performs element-wise hardsigmoid operation. The DST
@@ -94,12 +97,13 @@ ALWI void softsign_tile_init() { MATH(SFPU_UNARY_INIT_FN(softsign, sfpu::init_so
 * | alpha_recip     | The reciprocal of the alpha parameter for the CELU function                | uint32_t |                                                       | True     |
 */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void celu_tile(uint32_t idst, uint32_t alpha, uint32_t alpha_recip) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_celu,
-        (APPROX, DST_ACCUM_MODE, 8 /* ITERATIONS */),
+        (APPROX, is_fp32_dest_acc_en, 8 /* ITERATIONS */),
         idst,
         VectorMode::RC,
         alpha,
@@ -125,7 +129,7 @@ ALWI void celu_tile_init() { MATH(SFPU_UNARY_INIT(celu)); }
  * | param0          | The λ value for the Softshrink formulation                                 | uint32   |                                                       | True     |
  */
  // clang-format on
- ALWI void softshrink_tile(uint32_t idst, uint32_t param0) {
+ALWI void softshrink_tile(uint32_t idst, uint32_t param0) {
      MATH(SFPU_UNARY_CALL(
          DST_SYNC_MODE,
          DST_ACCUM_MODE,
@@ -173,5 +177,6 @@ ALWI void hardshrink_tile(uint32_t idst, uint32_t param0) {
  * Please refer to documentation for any_init.
  */
 ALWI void hardshrink_tile_init() { MATH(SFPU_UNARY_INIT(hardshrink)); }
+#endif  // !ARCH_QUASAR
 
 }  // namespace ckernel

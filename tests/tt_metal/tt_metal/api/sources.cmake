@@ -12,6 +12,7 @@ set(UNIT_TESTS_API_SOURCES
     circular_buffer/test_CircularBuffer_wrapping.cpp
     core_coord/test_CoreRange_adjacent.cpp
     core_coord/test_CoreRange_contains.cpp
+    core_coord/test_CoreRange_hash.cpp
     core_coord/test_CoreRange_intersects.cpp
     core_coord/test_CoreRange_iterator.cpp
     core_coord/test_CoreRange_merge.cpp
@@ -28,10 +29,10 @@ set(UNIT_TESTS_API_SOURCES
     dataflow_buffer/test_dataflow_buffer_overrides.cpp
     dataflow_buffer/test_dataflow_buffer_configs.cpp
     dataflow_buffer/test_dataflow_buffer_disjoint_slots.cpp
-    dataflow_buffer/test_dataflow_buffer_scoped_lock_cache.cpp
     dataflow_buffer/test_borrowed_memory_dataflow_buffer.cpp
     distribution_spec/test_buffer_distribution_spec.cpp
     metal2_host_api/test_mesh_workload_factories_hw.cpp
+    metal2_host_api/test_prefetcher_pipe_spec.cpp
     metal2_host_api/test_program_spec.cpp
     metal2_host_api/test_program_spec_hw.cpp
     metal2_host_api/test_scratchpad_hw.cpp
@@ -41,9 +42,11 @@ set(UNIT_TESTS_API_SOURCES
     test_kernel_thread_sync.cpp
     test_banked.cpp
     test_bit_utils.cpp
+    test_math.cpp
     test_filesystem_utils.cpp
     test_tt_memory.cpp
     test_graph_tracking.cpp
+    test_cb_statistics.cpp
     test_buffer_region.cpp
     test_compile_time_args.cpp
     test_compile_defines.cpp
@@ -56,6 +59,7 @@ set(UNIT_TESTS_API_SOURCES
     test_dram.cpp
     test_global_circular_buffers.cpp
     test_cross_node_dfb.cpp
+    test_prefetcher_pipe.cpp
     test_global_semaphores.cpp
     test_host_buffer.cpp
     test_kernel_compile_cache.cpp
@@ -63,24 +67,29 @@ set(UNIT_TESTS_API_SOURCES
     test_offline_kernel_compile.cpp
     test_memory_pin.cpp
     test_noc.cpp
+    test_pinned_memory.cpp
     test_blaze_named_args_hashing.cpp
     test_blaze_named_runtime_args.cpp
     test_runtime_args.cpp
     test_semaphores.cpp
     test_shape_base.cpp
     test_shape.cpp
+    test_shard_grid_validation.cpp
     test_sharded_l1_buffer.cpp
     test_simple_dram_buffer.cpp
     test_tensor_accessor_default_page_size.cpp
     test_simple_l1_buffer.cpp
     test_soc_descriptor.cpp
     test_stream_scratch_register.cpp
+    test_tile.cpp
     test_tilize_untilize.cpp
     test_worker_config_buffer.cpp
     test_blockfloat_common.cpp
+    test_mx_common.cpp
     test_descriptor_patching.cpp
     test_duplicate_kernel.cpp
     test_core_local_mem_api.cpp
+    test_scoped_lock_cache.cpp
     test_zero_memory_api.cpp
     disaggregation/test_kv_chunk_address_table.cpp
 )

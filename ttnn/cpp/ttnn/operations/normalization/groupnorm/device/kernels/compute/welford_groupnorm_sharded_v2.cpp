@@ -9,6 +9,7 @@
 
 #include "api/compute/reduce.h"
 #include "api/compute/bcast.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
@@ -19,25 +20,33 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "api/dataflow/dataflow_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
+
+namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
-    constexpr uint32_t do_gamma = get_compile_time_arg_val(1);
-    constexpr uint32_t do_beta = get_compile_time_arg_val(2);
+    constexpr bool do_gamma = get_compile_time_arg_val(1) == 1;
+    constexpr bool do_beta = get_compile_time_arg_val(2) == 1;
 
-    constexpr uint32_t num_batches = get_compile_time_arg_val(4);
-    constexpr uint32_t num_groups = get_compile_time_arg_val(5);
+    constexpr std::uint32_t num_batches = get_compile_time_arg_val(4);
+    constexpr std::uint32_t num_groups = get_compile_time_arg_val(5);
 
-    constexpr uint32_t block_h = get_compile_time_arg_val(7);
-    constexpr uint32_t block_w = get_compile_time_arg_val(8);
-    constexpr uint32_t block_hw = get_compile_time_arg_val(9);
+    constexpr std::uint32_t block_h = get_compile_time_arg_val(7);
+    constexpr std::uint32_t block_w = get_compile_time_arg_val(8);
 
-    constexpr uint32_t per_core_M = get_compile_time_arg_val(12);
-    constexpr uint32_t per_core_N = get_compile_time_arg_val(13);
-    constexpr uint32_t per_core_MN = get_compile_time_arg_val(14);
+    constexpr std::uint32_t per_core_M = get_compile_time_arg_val(12);
+    constexpr std::uint32_t per_core_N = get_compile_time_arg_val(13);
+    constexpr std::uint32_t per_core_MN = get_compile_time_arg_val(14);
 
-    constexpr uint32_t num_tiles_input_mask = get_compile_time_arg_val(19);
-    constexpr uint32_t num_channels_per_group = get_compile_time_arg_val(24);
-    constexpr uint32_t tile_width = get_compile_time_arg_val(25);
+    // Distance in tiles between the start of one batch and the start of the next batch within this
+    // core's shard.
+    constexpr std::uint32_t num_tiles_per_batch = get_compile_time_arg_val(18);
+
+    constexpr std::uint32_t num_tiles_input_mask = get_compile_time_arg_val(19);
+    constexpr std::uint32_t num_channels_per_group = get_compile_time_arg_val(24);
+    constexpr std::uint32_t tile_width = get_compile_time_arg_val(25);
 
     // Welford-fp32 alias args. When the alias is active, cb_in0_welford_id points
     // to c_29 (shares SRAM with c_0) and cb_in_welford_id points to c_31 (shares SRAM with c_1).
@@ -54,60 +63,108 @@ void kernel_main() {
     // unpack-fp32 CB without an alias, so those kernels need the unpack-fp32
     // state and the alias gating to be tracked independently.
     constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
-    constexpr uint32_t dfb_in0_welford_id = get_named_compile_time_arg_val("cb_in0_welford");
-    constexpr uint32_t dfb_in_welford_id = get_named_compile_time_arg_val("cb_in_welford");
+    constexpr std::uint32_t dfb_in0_welford_id = get_named_compile_time_arg_val("cb_in0_welford");
+    constexpr std::uint32_t dfb_in_welford_id = get_named_compile_time_arg_val("cb_in_welford");
     // True when a reconfig-relevant operand is fp32: the per-tile reconfig_data_format calls below
     // are then required. All-bf16 compiles them out (no-ops). See program factory.
     constexpr bool enable_fp32_reconfig = get_named_compile_time_arg_val("enable_fp32_reconfig") != 0;
 
     // dst regs
-    constexpr uint32_t dst0 = 0;
-    constexpr uint32_t input_dst = 0;
-    constexpr uint32_t mean_dst = 1;
+    constexpr std::uint32_t dst0 = 0;
+    constexpr std::uint32_t input_dst = 0;
+    constexpr std::uint32_t mean_dst = 1;
 
     // input cbs
-    constexpr uint32_t dfb_in0_id = tt::CBIndex::c_0;
-    constexpr uint32_t dfb_in_id = tt::CBIndex::c_1;
-    constexpr uint32_t dfb_eps_id = tt::CBIndex::c_3;
-    constexpr uint32_t dfb_gamma_id = tt::CBIndex::c_5;
-    constexpr uint32_t dfb_beta_id = tt::CBIndex::c_6;
-    constexpr uint32_t dfb_input_mask_id = tt::CBIndex::c_7;
-
-    // interm cbs
-    constexpr uint32_t dfb_repack_id = tt::CBIndex::c_11;
-    constexpr uint32_t dfb_repack_out_id = tt::CBIndex::c_12;
-    constexpr uint32_t dfb_x_id = tt::CBIndex::c_13;
-    constexpr uint32_t dfb_xmm_id = tt::CBIndex::c_2;
-    constexpr uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;
-    constexpr uint32_t dfb_ex_global_id = tt::CBIndex::c_15;
-    constexpr uint32_t dfb_ex2pe_id = tt::CBIndex::c_17;
-
-    // output cb
-    constexpr uint32_t dfb_out0_id = tt::CBIndex::c_16;
-#ifdef UNTILIZE_OUT
-    constexpr uint32_t dfb_out_id = tt::CBIndex::c_30;
+    constexpr std::uint32_t dfb_in0_id = tt::CBIndex::c_0;
+    constexpr std::uint32_t dfb_in_id = tt::CBIndex::c_1;
+    constexpr std::uint32_t dfb_eps_id = tt::CBIndex::c_3;
+    constexpr std::uint32_t dfb_gamma_id = tt::CBIndex::c_5;
+    constexpr std::uint32_t dfb_beta_id = tt::CBIndex::c_6;
+    constexpr std::uint32_t dfb_input_mask_id = tt::CBIndex::c_7;
+#ifdef TILIZE_IN
+    constexpr std::uint32_t dfb_welford_in_id = dfb_in_welford_id;
+    constexpr std::uint32_t dfb_normalization_in_id = dfb_in_id;
 #else
-    constexpr uint32_t dfb_out_id =
-        (do_gamma or do_beta) ? (((do_gamma and not do_beta) or (not do_gamma and do_beta)) ? dfb_in_id : dfb_out0_id)
-                              : dfb_out0_id;
+    constexpr std::uint32_t dfb_welford_in_id = dfb_in0_welford_id;
+    constexpr std::uint32_t dfb_normalization_in_id = dfb_in0_id;
 #endif
 
+    // interm cbs
+    constexpr std::uint32_t dfb_repack_id = tt::CBIndex::c_11;
+    constexpr std::uint32_t dfb_repack_out_id = tt::CBIndex::c_12;
+    constexpr std::uint32_t dfb_x_id = tt::CBIndex::c_13;
+    constexpr std::uint32_t dfb_xmm_id = tt::CBIndex::c_2;
+    constexpr std::uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;
+    constexpr std::uint32_t dfb_ex_global_id = tt::CBIndex::c_15;
+    constexpr std::uint32_t dfb_ex2pe_id = tt::CBIndex::c_17;
+
+    // output cb
+    constexpr std::uint32_t dfb_out0_id = tt::CBIndex::c_16;
 #ifdef UNTILIZE_OUT
-    constexpr int dfb_outgamma_id = dfb_in_id;
-    constexpr int dfb_outbeta_id = do_gamma ? dfb_out_id : dfb_in_id;
-    constexpr int dfb_untilize_in_id = (do_gamma and not do_beta) ? dfb_outgamma_id
-                                       : do_beta                  ? dfb_outbeta_id
-                                                                  : dfb_out_id;
+    constexpr std::uint32_t dfb_out_id = tt::CBIndex::c_30;
+    // dfb_in holds the whole tilized input and is never popped, so it cannot take the output;
+    // the final pack goes to c_30 and untilize reads from there.
+    constexpr int dfb_untilize_in_id = dfb_out_id;
     constexpr int dfb_untilize_out_id =
 #ifdef READER_REPACK
         dfb_repack_out_id;
 #else
         dfb_out0_id;
-#endif
-#else
-    constexpr int dfb_outgamma_id = do_beta ? dfb_in_id : dfb_out0_id;
-    constexpr int dfb_outbeta_id = dfb_out0_id;
-#endif
+#endif  // READER_REPACK
+#endif  // UNTILIZE_OUT
+
+    constexpr auto normalization_in_scalar_offset_input = ckl::input(
+        dfb_normalization_in_id,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Scalar,
+        ckl::DataFormatReconfig::Disabled,
+        ckl::TileAddressing::Offset);
+    constexpr auto ex_global_scalar_offset_input = ckl::input(
+        dfb_ex_global_id,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Scalar,
+        ckl::DataFormatReconfig::Disabled,
+        ckl::TileAddressing::Offset);
+    constexpr auto ex2pe_scalar_offset_input = ckl::input(
+        dfb_ex2pe_id,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Scalar,
+        ckl::DataFormatReconfig::Disabled,
+        ckl::TileAddressing::Offset);
+    constexpr auto input_mask_scalar_offset_input = ckl::input(
+        dfb_input_mask_id,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Scalar,
+        ckl::DataFormatReconfig::Disabled,
+        ckl::TileAddressing::Offset);
+    constexpr auto gamma_scalar_offset_input = ckl::input(
+        dfb_gamma_id,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Scalar,
+        ckl::DataFormatReconfig::Disabled,
+        ckl::TileAddressing::Offset);
+    constexpr auto beta_scalar_offset_input = ckl::input(
+        dfb_beta_id,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Scalar,
+        ckl::DataFormatReconfig::Disabled,
+        ckl::TileAddressing::Offset);
+    constexpr auto xmm_per_tile_input =
+        ckl::input(dfb_xmm_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled);
+    constexpr auto x_per_tile_input =
+        ckl::input(dfb_x_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled);
+    constexpr auto xmm_per_tile_output = ckl::output(
+        dfb_xmm_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled);
+    constexpr auto x_per_tile_output =
+        ckl::output(dfb_x_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled);
+    constexpr auto ex2pe_per_tile_output = ckl::output(
+        dfb_ex2pe_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled);
 
     DataflowBuffer dfb_beta(dfb_beta_id);
     DataflowBuffer dfb_eps(dfb_eps_id);
@@ -117,17 +174,14 @@ void kernel_main() {
     DataflowBuffer dfb_gamma(dfb_gamma_id);
     DataflowBuffer dfb_in(dfb_in_id);
     DataflowBuffer dfb_in_welford(dfb_in_welford_id);
-    DataflowBuffer dfb_in0_welford(dfb_in0_welford_id);
     DataflowBuffer dfb_input_mask(dfb_input_mask_id);
-    DataflowBuffer dfb_x(dfb_x_id);
-    DataflowBuffer dfb_xmm(dfb_xmm_id);
 
 // tilize input from RM to tile layout
 #ifdef TILIZE_IN
     compute_kernel_hw_startup(dfb_in0_id, dfb_in0_id, dfb_in_id);
 // Tilize in0 -> in (row-major to tiled)
 #ifdef READER_REPACK
-    constexpr uint32_t dfb_in_rm_id = dfb_repack_id;
+    constexpr std::uint32_t dfb_in_rm_id = dfb_repack_id;
     compute_kernel_lib::tilize<
         per_core_N,
         dfb_in_rm_id,
@@ -136,7 +190,7 @@ void kernel_main() {
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
         compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #else
-    constexpr uint32_t dfb_in_rm_id = dfb_in0_id;
+    constexpr std::uint32_t dfb_in_rm_id = dfb_in0_id;
     compute_kernel_lib::tilize<
         per_core_N,
         dfb_in_rm_id,
@@ -159,7 +213,7 @@ void kernel_main() {
 #endif
 
     // Sharded v2 does not use reciprocal lookup table, so we pass an empty array
-    constexpr std::array<uint32_t, 0> empty_reciprocal_lut{};
+    constexpr std::array<std::uint32_t, 0> empty_reciprocal_lut{};
 
     dfb_eps.wait_front(1);
     dfb_input_mask.wait_front(num_tiles_input_mask);
@@ -171,55 +225,47 @@ void kernel_main() {
         dfb_beta.wait_front(per_core_N);
     }
 
-    for (uint32_t b = 0; b < num_batches; ++b) {
-        uint32_t tile_id = b * block_hw;
+    for (std::uint32_t b = 0; b < num_batches; ++b) {
+        std::uint32_t tile_id = b * num_tiles_per_batch;
         dfb_ex_partial.reserve_back(2);
         if constexpr (welford_fp32_alias) {
-            // Reconfigure the transpose op for the alias buffer index consumed by the
-            // welford loop below.
-#ifdef TILIZE_IN
-            transpose_init(dfb_in_welford_id);
-#else
-            transpose_init(dfb_in0_welford_id);
-#endif
+            // The alias carries UnpackToDestFp32 while c_0 / c_1 stay Default; transpose_init only
+            // programs the MOP, so without the reconfig the fp32 intake is silently truncated to TF32.
+            reconfig_data_format_srca(dfb_welford_in_id);
+            transpose_init(dfb_welford_in_id);
         } else {
             transpose_init(dfb_in0_id);
         }
         tile_regs_acquire();
         welford_init();
 
-        uint32_t block_xy_coord = 0;
+        std::uint32_t block_xy_coord = 0;
 
-        for (uint32_t g = 0; g < num_groups; ++g) {
+        for (std::uint32_t g = 0; g < num_groups; ++g) {
             welford_save_state(mean_dst, g);
         }
 
-        for (uint32_t i = 0; i < block_h; ++i) {
+        for (std::uint32_t i = 0; i < block_h; ++i) {
             // This indicates the smallest group that is yet to be processed for this block
             // As we iterate over nt, some of the groups will be completed, and we will update
             // this variable
-            uint32_t min_group = 0;
+            std::uint32_t min_group = 0;
 
             // This indicates the number of channels left to be processed for the min_group
             // As we iterate over nt, some of the channels will be completed, and we will
             // update this variable
             // It is mainly used when we move from one tile to the next, if there are channels
             // left to be processed for the min_group, we will process them in the next tile
-            uint32_t channels_left = num_channels_per_group;
+            std::uint32_t channels_left = num_channels_per_group;
 
             // This tracks the global index of the first element in a given group in a tile.
             // It is used by the Welford's algorithm to scale the running mean and m2.
             // This moves reverse of channels_left, except that it is the global index.
-            uint32_t curr_xy_coord = block_xy_coord;
+            std::uint32_t curr_xy_coord = block_xy_coord;
 
-            for (uint32_t nt = 0; nt < per_core_N; ++nt) {
-#ifdef TILIZE_IN
-                transpose_init(dfb_in_welford_id);
-                transpose_tile(dfb_in_welford_id, tile_id, input_dst);
-#else
-                transpose_init(dfb_in0_welford_id);
-                transpose_tile(dfb_in0_welford_id, tile_id, input_dst);
-#endif
+            for (std::uint32_t nt = 0; nt < per_core_N; ++nt) {
+                transpose_init(dfb_welford_in_id);
+                transpose_tile(dfb_welford_in_id, tile_id, input_dst);
 
                 // Re-establish the welford SFPU replay buffer state. When transpose_tile
                 // takes the unpack-to-DEST fp32 path, transpose_tile calls
@@ -234,11 +280,11 @@ void kernel_main() {
                     welford_init<WelfordInitMode::PreserveStats>();
                 }
 
-                uint32_t group_offset = 0;
-                for (uint32_t g = min_group; g < num_groups; ++g) {
+                std::uint32_t group_offset = 0;
+                for (std::uint32_t g = min_group; g < num_groups; ++g) {
                     // Start Welford's Calculation
-                    uint32_t cols_available = tile_width - group_offset;
-                    uint32_t cols_consumed = std::min(cols_available, channels_left);
+                    const std::uint32_t cols_available = tile_width - group_offset;
+                    const std::uint32_t cols_consumed = std::min(cols_available, channels_left);
 
                     welford_restore_state(mean_dst, g);
                     welford_update_rows<0>(input_dst, curr_xy_coord, group_offset, cols_consumed, empty_reciprocal_lut);
@@ -273,7 +319,7 @@ void kernel_main() {
             block_xy_coord += num_channels_per_group;
         }
 
-        for (uint32_t g = 0; g < num_groups; ++g) {
+        for (std::uint32_t g = 0; g < num_groups; ++g) {
             // Convert M2 to variance
             welford_restore_state(mean_dst, g);
             welford_finalize_to_face<0>(mean_dst, g, block_xy_coord - 1, empty_reciprocal_lut);
@@ -288,136 +334,98 @@ void kernel_main() {
         // Start Variance Calc
         // Wait for final welford values in cb_ex_global_id
         dfb_ex_global.wait_front(2 * num_groups);
-        dfb_ex2pe.reserve_back(num_groups);
-        // (Var + eps)
         // fp32: dfb_ex_global is fp32 (var), dfb_eps is bf16; the welford intake left SrcA on the fp32 input alias.
         if constexpr (enable_fp32_reconfig) {
             reconfig_data_format_srca(dfb_ex_global_id);
         }
         reconfig_data_format_srcb(dfb_eps_id);
-        add_init(dfb_ex_global_id, dfb_eps_id);
-        for (uint32_t g = 0; g < num_groups; ++g) {
-            tile_regs_acquire();
-            add_tiles(dfb_ex_global_id, dfb_eps_id, 1 + (g << 1), 0, dst0);
-
-            // 1/[sqrt(Var + eps)]
-            rsqrt_tile_init<true>();
-            rsqrt_tile<true>(dst0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, dfb_ex2pe_id);
-            tile_regs_release();
+        for (std::uint32_t g = 0; g < num_groups; ++g) {
+            ckl::eltwise_chain(
+                ckl::IterationShape::one_tile(),
+                ckl::BinaryFpu<
+                    ckl::BinaryFpuOp::Add,
+                    ex_global_scalar_offset_input,
+                    ckl::input(
+                        dfb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled)>{
+                    1 + (g << 1), 0u},
+                ckl::Rsqrt<ckl::Approx::Exact, ckl::Dst::D0>{},
+                ckl::PackTile<ex2pe_per_tile_output>{});
         }
-        dfb_ex2pe.push_back(num_groups);
         // End Variance Calc
 
         dfb_ex2pe.wait_front(num_groups);
 
         // Start Final Val Calc
-        tile_id = b * block_hw;
-        for (uint32_t i = 0; i < block_h; ++i) {
+        tile_id = b * num_tiles_per_batch;
+        for (std::uint32_t i = 0; i < block_h; ++i) {
             // This indicates the smallest group that is yet to be processed for this block
             // As we iterate over nt, some of the groups will be completed, and we will update
             // this variable
-            uint32_t min_group = 0;
+            std::uint32_t min_group = 0;
 
             // This indicates the number of channels left to be processed for the min_group
             // As we iterate over nt, some of the channels will be completed, and we will
             // update this variable
             // It is mainly used when we move from one tile to the next, if there are channels
             // left to be processed for the min_group, we will process them in the next tile
-            uint32_t channels_left = num_channels_per_group;
+            std::uint32_t channels_left = num_channels_per_group;
 
             // This tracks the correct index to use for the mask.
             // For each group, there are block_w number of mask tiles. As we iterate over nt,
             // we will update this variable to track the correct index to use for the mask.
-            uint32_t block_w_index = 0;
+            std::uint32_t block_w_index = 0;
 
-            for (uint32_t nt = 0; nt < per_core_N; ++nt) {
-                uint32_t group_offset = 0;
-                for (uint32_t g = min_group; g < num_groups; ++g) {
-                    dfb_xmm.reserve_back(2);
-
+            for (std::uint32_t nt = 0; nt < per_core_N; ++nt) {
+                std::uint32_t group_offset = 0;
+                for (std::uint32_t g = min_group; g < num_groups; ++g) {
                     // // Now let us do the actual computation for the current group here
                     // // a. x-u
                     reconfig_data_format(dfb_in0_id, dfb_ex_global_id);
-                    sub_bcast_scalar_init(dfb_in0_id, dfb_ex_global_id);
+                    ckl::eltwise_chain(
+                        ckl::IterationShape::one_tile(),
+                        ckl::BinaryFpu<
+                            ckl::BinaryFpuOp::Sub,
+                            normalization_in_scalar_offset_input,
+                            ckl::input(ex_global_scalar_offset_input, ckl::BroadcastDim::Scalar)>{tile_id, g << 1},
+                        ckl::PackTile<xmm_per_tile_output>{});
 
-                    tile_regs_acquire();
-#ifdef TILIZE_IN
-                    sub_tiles_bcast_scalar(dfb_in_id, dfb_ex_global_id, tile_id, 0 + (g << 1), dst0);
-#else
-                    sub_tiles_bcast_scalar(dfb_in0_id, dfb_ex_global_id, tile_id, 0 + (g << 1), dst0);
-#endif
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    pack_tile(dst0, dfb_xmm_id);
-                    tile_regs_release();
+                    // Normalize the centered input: (x - mean) * rsqrt(variance + epsilon).
+                    reconfig_data_format(dfb_in0_id, dfb_xmm_id, dfb_ex_global_id, dfb_ex2pe_id);
+                    ckl::eltwise_chain(
+                        ckl::IterationShape::one_tile(),
+                        ckl::BinaryFpu<
+                            ckl::BinaryFpuOp::Mul,
+                            xmm_per_tile_input,
+                            ckl::input(ex2pe_scalar_offset_input, ckl::BroadcastDim::Scalar)>{0u, g},
+                        ckl::PackTile<xmm_per_tile_output>{});
 
-                    // // b. 1/[sqrt(Var + eps)] * mask
-                    const uint32_t mask_offset = g * block_w;
-                    const uint32_t mask_index = mask_offset + block_w_index;
+                    // Apply the current group's row selector.
+                    const std::uint32_t mask_offset = g * block_w;
+                    const std::uint32_t mask_index = mask_offset + block_w_index;
+                    reconfig_data_format(dfb_xmm_id, dfb_xmm_id, dfb_ex2pe_id, dfb_input_mask_id);
+                    ckl::eltwise_chain(
+                        ckl::IterationShape::one_tile(),
+                        ckl::BinaryFpu<
+                            ckl::BinaryFpuOp::Mul,
+                            xmm_per_tile_input,
+                            ckl::input(input_mask_scalar_offset_input, ckl::BroadcastDim::Row)>{0u, mask_index},
+                        ckl::PackTile<xmm_per_tile_output>{});
 
-                    reconfig_data_format(dfb_in0_id, dfb_input_mask_id, dfb_ex_global_id, dfb_ex2pe_id);
-                    mul_bcast_scalar_init(dfb_input_mask_id, dfb_ex2pe_id);
-                    tile_regs_acquire();
-                    mul_tiles_bcast_scalar(dfb_input_mask_id, dfb_ex2pe_id, mask_index, g, dst0);
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    pack_tile(dst0, dfb_xmm_id);
-                    tile_regs_release();
-                    dfb_xmm.push_back(2);
-
-                    // // c. a * b
-                    dfb_xmm.wait_front(2);
-                    reconfig_data_format(dfb_input_mask_id, dfb_xmm_id, dfb_ex2pe_id, dfb_xmm_id);
-                    mul_init(dfb_xmm_id, dfb_xmm_id);
-                    tile_regs_acquire();
-                    mul_tiles(dfb_xmm_id, dfb_xmm_id, 0, 1, dst0);
-                    tile_regs_commit();
-                    dfb_xmm.pop_front(2);
-                    dfb_xmm.reserve_back(1);
-                    tile_regs_wait();
-                    pack_tile(dst0, dfb_xmm_id);
-                    tile_regs_release();
-                    dfb_xmm.push_back(1);
-
-                    // // d. Add to cb_xmm_id (accumulate results)
-                    // // First we get the result in dst0
+                    // Accumulate contributions when a tile spans multiple groups.
                     if (group_offset == 0) {
-                        // When group_offset is 0, this is the first group for this tile,
-                        // so we can copy the results to cb_x_id without needing to add them
-                        copy_tile_init(dfb_xmm_id);
-
-                        dfb_xmm.wait_front(1);
-                        tile_regs_acquire();
-                        copy_tile(dfb_xmm_id, 0, dst0);
-                        tile_regs_commit();
-                        dfb_xmm.pop_front(1);
+                        ckl::copy<xmm_per_tile_input, x_per_tile_output>(ckl::IterationShape::one_tile());
                     } else {
-                        // This is not the first group for this tile, so we need to add
-                        // the results over what is already in cb_x_id
+                        // Not the first group for this tile: add what is already in cb_x.
                         reconfig_data_format_srca(dfb_xmm_id, dfb_x_id);
-                        add_init(dfb_x_id, dfb_xmm_id);
-
-                        dfb_xmm.wait_front(1);
-                        dfb_x.wait_front(1);
-                        tile_regs_acquire();
-                        add_tiles(dfb_x_id, dfb_xmm_id, 0, 0, dst0);
-                        tile_regs_commit();
-                        dfb_xmm.pop_front(1);
-                        dfb_x.pop_front(1);
+                        reconfig_data_format_srcb(dfb_input_mask_id, dfb_xmm_id);
+                        ckl::add<x_per_tile_input, xmm_per_tile_input, x_per_tile_output>(
+                            ckl::IterationShape::one_tile());
                     }
 
-                    // Then we pack the result into cb_x_id
-                    dfb_x.reserve_back(1);
-                    tile_regs_wait();
-                    pack_tile(dst0, dfb_x_id);
-                    tile_regs_release();
-                    dfb_x.push_back(1);
-
-                    uint32_t cols_available = tile_width - group_offset;
-                    uint32_t cols_consumed = std::min(cols_available, channels_left);
+                    // The blocks after this loop assume srcb still carries cb_xmm's format.
+                    reconfig_data_format_srcb(dfb_xmm_id);
+                    const std::uint32_t cols_available = tile_width - group_offset;
+                    const std::uint32_t cols_consumed = std::min(cols_available, channels_left);
                     channels_left -= cols_consumed;
                     group_offset += cols_consumed;
 
@@ -451,18 +459,13 @@ void kernel_main() {
                         reconfig_data_format_srca(dfb_x_id);
                     }
                     reconfig_data_format_srcb(dfb_xmm_id, dfb_gamma_id);
-                    mul_bcast_rows_init(dfb_x_id, dfb_gamma_id);
-
-                    dfb_x.wait_front(1);
-                    tile_regs_acquire();
-                    mul_tiles_bcast_rows(dfb_x_id, dfb_gamma_id, 0, nt, dst0);
-                    tile_regs_commit();
-                    dfb_x.pop_front(1);
-                    dfb_x.reserve_back(1);
-                    tile_regs_wait();
-                    pack_tile(dst0, dfb_x_id);
-                    tile_regs_release();
-                    dfb_x.push_back(1);
+                    ckl::eltwise_chain(
+                        ckl::IterationShape::one_tile(),
+                        ckl::BinaryFpu<
+                            ckl::BinaryFpuOp::Mul,
+                            x_per_tile_input,
+                            ckl::input(gamma_scalar_offset_input, ckl::BroadcastDim::Row)>{0u, nt},
+                        ckl::PackTile<x_per_tile_output>{});
                 }
 
                 if constexpr (do_beta) {
@@ -471,41 +474,26 @@ void kernel_main() {
                         reconfig_data_format_srca(dfb_x_id);
                     }
                     reconfig_data_format_srcb(do_gamma ? dfb_gamma_id : dfb_xmm_id, dfb_beta_id);
-                    add_bcast_rows_init(dfb_x_id, dfb_beta_id);
-
-                    dfb_x.wait_front(1);
-                    tile_regs_acquire();
-                    add_tiles_bcast_rows(dfb_x_id, dfb_beta_id, 0, nt, dst0);
-                    tile_regs_commit();
-                    dfb_x.pop_front(1);
-                    dfb_x.reserve_back(1);
-                    tile_regs_wait();
-                    pack_tile(dst0, dfb_x_id);
-                    tile_regs_release();
-                    dfb_x.push_back(1);
+                    ckl::eltwise_chain(
+                        ckl::IterationShape::one_tile(),
+                        ckl::BinaryFpu<
+                            ckl::BinaryFpuOp::Add,
+                            x_per_tile_input,
+                            ckl::input(beta_scalar_offset_input, ckl::BroadcastDim::Row)>{0u, nt},
+                        ckl::PackTile<x_per_tile_output>{});
                 }
 
                 // Write out the final output
+#ifdef UNTILIZE_OUT
+                constexpr auto write_dfb_id = dfb_untilize_in_id;
+#else
+                constexpr auto write_dfb_id = dfb_out0_id;
+#endif
                 // fp32: reset SrcA to dfb_x (fp32).
                 if constexpr (enable_fp32_reconfig) {
                     reconfig_data_format_srca(dfb_x_id);
                 }
                 reconfig_data_format_srcb(do_beta ? dfb_beta_id : dfb_xmm_id, dfb_x_id);
-                copy_tile_init(dfb_x_id);
-
-                dfb_x.wait_front(1);
-                tile_regs_acquire();
-                copy_tile(dfb_x_id, 0, dst0);
-                tile_regs_commit();
-                dfb_x.pop_front(1);
-#ifdef UNTILIZE_OUT
-                auto write_dfb_id = dfb_untilize_in_id;
-#else
-                auto write_dfb_id = dfb_out0_id;
-#endif
-                DataflowBuffer write_dfb(write_dfb_id);
-                write_dfb.reserve_back(1);
-                tile_regs_wait();
 #ifndef UNTILIZE_OUT
                 // Packer was last set for bf16 dfb_xmm; reconfigure to write_dfb_id (may be fp32) before pack, restore
                 // after. Gated out for bf16 (no format change).
@@ -513,14 +501,18 @@ void kernel_main() {
                     pack_reconfig_data_format(write_dfb_id);
                 }
 #endif
-                pack_tile(dst0, write_dfb_id);
+                ckl::copy<
+                    x_per_tile_input,
+                    ckl::output(
+                        write_dfb_id,
+                        ckl::ReservePolicy::PerTile,
+                        ckl::PushPolicy::PerTile,
+                        ckl::DataFormatReconfig::Disabled)>(ckl::IterationShape::one_tile());
 #ifndef UNTILIZE_OUT
                 if constexpr (enable_fp32_reconfig) {
                     pack_reconfig_data_format(dfb_xmm_id);
                 }
 #endif
-                tile_regs_release();
-                write_dfb.push_back(1);
             }
         }
 

@@ -11,6 +11,7 @@
 #include "tools/profiler/noc_debugging_metadata.hpp"
 #include "tools/profiler/noc_debugging_profiler.hpp"
 #include "internal/debug/sanitize.h"
+#include "internal/scoped_lock_cache_ops.h"
 
 /**
  * @brief Provides a safe pointer to a structure of type T in the core's local memory
@@ -144,13 +145,19 @@ public:
         return byte_diff / sizeof(T);
     }
 
-    /** @brief Lock a region of num_elements for the duration of the returned guard (same as scoped_lock(); size for
-     * future debug/profiler use). */
-    [[nodiscard]] auto scoped_lock(size_t num_elements) {
+    /** @brief Lock num_elements elements, starting where this pointer points.
+     *
+     * To lock a chunk in the middle, offset the pointer: `(mem + 4).scoped_lock(8)` locks elements 4..11.
+     *
+     * @param num_elements Number of T elements to lock.
+     */
+    [[nodiscard]] auto scoped_lock(size_t num_elements) const {
         uint32_t addr = static_cast<uint32_t>(get_address());
         uint32_t num_bytes = static_cast<uint32_t>(num_elements * sizeof(T));
+        scoped_lock_acquire_cache_ops(static_cast<uintptr_t>(addr), num_bytes);
         RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::MEM_LOCK, addr, num_bytes);
-        return Lock([this, addr, num_bytes]() {
+        return Lock([addr, num_bytes]() {
+            scoped_lock_release_cache_ops(static_cast<uintptr_t>(addr), num_bytes);
             RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::MEM_UNLOCK, addr, num_bytes);
         });
     }
@@ -196,4 +203,13 @@ struct noc_traits_t<CoreLocalMem<T, AddressType>> {
         static_assert(false, "CoreLocalMem cannot be used as NoC mcast destination");
     }
 };
+
+template <typename T, typename AddressType>
+inline constexpr bool noc_zero_l1_endpoint_v<CoreLocalMem<T, AddressType>> = true;
+#ifdef ARCH_QUASAR
+#include "internal/tt-2xx/noc_zero_l1.inl"
+#else
+#include "internal/tt-1xx/noc_zero_l1.inl"
+#endif
+#include "internal/noc_zero_dram.inl"
 #endif  // !defined(COMPILE_FOR_TRISC)

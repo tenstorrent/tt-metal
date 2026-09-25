@@ -114,7 +114,7 @@ tt::tt_metal::ProgramDescriptor GeluBwProgramFactory::create_descriptor(
         (input.dtype() == DataType::FLOAT32) ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
 
     std::string compute_kernel_path;
-    if (args.approximate) {
+    if (args.variant == operations::unary::GeluVariant::TANH) {
         // For bfloat16, we have 8 DST tiles available in DstSync::SyncHalf.
         // For float32, we have 4 DST tiles available in DstSync::SyncHalf.
         compute_kernel_path = fp32_dest_acc_en ? "ttnn/cpp/ttnn/operations/eltwise/unary_backward/gelu_bw/device/"
@@ -128,9 +128,9 @@ tt::tt_metal::ProgramDescriptor GeluBwProgramFactory::create_descriptor(
     }
     std::map<std::string, std::string> compute_defines;
     if (fp32_dest_acc_en) {
-        compute_defines["COPY_DEST_VALUES"] = "copy_dest_values<DataFormat::Float32>";
+        compute_defines["COPY_DEST_DATA_FORMAT"] = "DataFormat::Float32";
     } else {
-        compute_defines["COPY_DEST_VALUES"] = "copy_dest_values<DataFormat::Float16_b>";
+        compute_defines["COPY_DEST_DATA_FORMAT"] = "DataFormat::Float16_b";
     }
 
     if (output.dtype() == DataType::BFLOAT16) {

@@ -9,6 +9,7 @@
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/fmt.hpp>
 #include <limits>
+#include <optional>
 #include <unordered_set>
 #include "metal_env_impl.hpp"
 #include "metal_env_accessor.hpp"
@@ -133,12 +134,9 @@ namespace {
 // A tri-state env var (TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES) overrides the auto-detect:
 //   =1 → force enable, =0 → force disable, unset → auto-detect (below).
 //
-// Two independent constraints for auto-detect, both about the application owning the right DRAM RISC core:
-//   - Firmware must support it (arch + firmware-bundle floor) -- resolved by check_firmware_capabilities.
-//   - Topology: with DRAM harvesting the specific core the application must write to for GCB credits can
-//     differ per device, which breaks our programming model that the cores look identical on every
-//     device. A single device has no cross-device consistency to break, and an unharvested multi-device
-//     system lines the cores up the same way -- so require no harvested DRAM channels, OR a single device.
+// Auto-detect resolves firmware support only (architecture + firmware-bundle floor, via
+// check_firmware_capabilities). DRAM harvesting no longer disables the core type: DRAM programs and
+// GCB credit targets resolve sender coordinates from each device's SOC descriptor.
 bool should_enable_blackhole_dram_programmable_cores(const Cluster& cluster, const llrt::RunTimeOptions& rtoptions) {
     const auto override = rtoptions.get_blackhole_dram_programmable_cores_override();
     if (override.has_value()) {
@@ -158,21 +156,7 @@ bool should_enable_blackhole_dram_programmable_cores(const Cluster& cluster, con
         {.firmware_bundle = cluster.get_cluster_desc()->get_cluster_firmware_bundle_version()},
         req,
         res);
-    if (!res.dram_programmable_cores) {
-        return false;
-    }
-
-    if (cluster.number_of_devices() == 1) {
-        return true;
-    }
-    // Multi-device: the GCB-credit core must be the same on every device, so reject if any device has
-    // a harvested DRAM channel (which would shift that core on that device).
-    for (const auto chip : cluster.all_chip_ids()) {
-        if (cluster.get_soc_desc(chip).harvesting_masks.dram_harvesting_mask != 0) {
-            return false;
-        }
-    }
-    return true;
+    return res.dram_programmable_cores;
 }
 }  // namespace
 
@@ -209,7 +193,8 @@ void MetalEnvImpl::initialize_base_objects() {
         get_profiler_dram_bank_size_for_hal_allocation(*this->rtoptions_),
         this->rtoptions_->get_dram_backed_cq(),
         this->rtoptions_->get_simulator_enabled(),
-        should_enable_blackhole_dram_programmable_cores(*this->cluster_, *this->rtoptions_));
+        should_enable_blackhole_dram_programmable_cores(*this->cluster_, *this->rtoptions_),
+        this->rtoptions_->get_eth_ptp_trace());
 
     this->rtoptions_->ParseAllFeatureEnv(*hal_);
     this->cluster_->set_hal(hal_.get());
@@ -218,11 +203,13 @@ void MetalEnvImpl::initialize_base_objects() {
 void MetalEnvImpl::verify_fw_capabilities() {
     FirmwareCapabilityRequest req;
     req.enable_2_erisc_mode = this->rtoptions_->get_enable_2_erisc_mode();
+    req.eth_ptp_trace = this->rtoptions_->get_eth_ptp_trace();
 
     FirmwareCapabilityResult res;
     const auto platform_arch = get_platform_architecture(*this->rtoptions_);
     if (!check_firmware_capabilities(platform_arch, {.eth_fw = cluster_->get_ethernet_firmware_version()}, req, res)) {
         this->rtoptions_->set_enable_2_erisc_mode(res.enable_2_erisc_mode);
+        this->rtoptions_->set_eth_ptp_trace(res.eth_ptp_trace);
     }
 }
 
@@ -305,7 +292,11 @@ bool MetalEnvImpl::set_fabric_config(
     }
 
     if (num_routing_planes.has_value() && num_routing_planes.value() < this->num_fabric_active_routing_planes_) {
-        log_warning(
+        // This is the expected, common case: DeviceManager's legacy dispatch-fallback path (see
+        // DeviceManager::initialize) always requests num_routing_planes=1 to enable minimal fabric for dispatch,
+        // regardless of how many routing planes the control plane already has active. Silently keeping the higher
+        // existing value is correct behavior, not a misconfiguration, so this does not warrant warning severity.
+        log_debug(
             tt::LogMetal,
             "Got num_routing_planes: {}, which is less than current value: {}, ignoring the override",
             num_routing_planes.value(),
@@ -330,11 +321,25 @@ bool MetalEnvImpl::set_fabric_config(
     this->fabric_router_config_ = router_config;
 
     if (control_plane_ != nullptr) {
-        log_info(
-            tt::LogMetal,
-            "Fabric config changed from {} to {}, reinitializing control plane",
-            this->get_control_plane().get_fabric_config(),
-            this->fabric_config_);
+        const auto prev_fabric_config = this->get_control_plane().get_fabric_config();
+        // Reinitialization is still required unconditionally here (other fields such as
+        // fabric_tensix_config_/fabric_udm_mode_/fabric_router_config_ may have changed even when
+        // fabric_config_ itself has not), but the log message should only claim a "change"
+        // occurred when the fabric config value actually differs; otherwise this fires on every
+        // call (e.g. repeated no-op calls from callers that always pass the same config) and
+        // floods logs with a misleading message.
+        if (prev_fabric_config != this->fabric_config_) {
+            log_info(
+                tt::LogMetal,
+                "Fabric config changed from {} to {}, reinitializing control plane",
+                prev_fabric_config,
+                this->fabric_config_);
+        } else {
+            log_debug(
+                tt::LogMetal,
+                "Fabric config unchanged ({}), reinitializing control plane",
+                this->fabric_config_);
+        }
         system_mesh_.reset();
         this->initialize_control_plane_impl();
     }
@@ -376,10 +381,8 @@ void MetalEnvImpl::initialize_fabric_tensix_datamover_config() {
         return;
     }
 
-    if (get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
-        return;
-    }
-
+    // Mock is included: this is control-plane/soc-descriptor derived (no device I/O), and the mock
+    // fabric compile fatals on a null tensix_config_ when FabricTensixConfig != DISABLED.
     if (tt::tt_fabric::is_tt_fabric_config(this->fabric_config_)) {
         auto& cp = this->get_control_plane();
         cp.initialize_fabric_tensix_datamover_config();
@@ -652,14 +655,38 @@ float MetalEnv::get_eps() const { return impl_->get_hal().get_eps(); }
 float MetalEnv::get_nan() const { return impl_->get_hal().get_nan(); }
 float MetalEnv::get_inf() const { return impl_->get_hal().get_inf(); }
 
-tt::tt_fabric::ControlPlane& MetalEnv::get_control_plane() {
-    impl_->ensure_context_registered(*this);
-    return impl_->get_control_plane();
-}
 distributed::SystemMesh& MetalEnv::get_system_mesh() {
     impl_->ensure_context_registered(*this);
     return impl_->get_system_mesh();
 }
+
+namespace {
+
+// Destroys a context created here if it never reaches the mesh device that takes ownership of it.
+// Inert when the env owns the context. https://github.com/tenstorrent/tt-metal/issues/57286
+class TransitContextGuard {
+public:
+    TransitContextGuard(ContextId context_id, bool env_owns_context) {
+        if (!env_owns_context) {
+            context_id_ = context_id;
+        }
+    }
+    TransitContextGuard(const TransitContextGuard&) = delete;
+    TransitContextGuard& operator=(const TransitContextGuard&) = delete;
+    ~TransitContextGuard() {
+        if (context_id_.has_value()) {
+            MetalContext::destroy_instance(/*check_device_count=*/false, *context_id_);
+        }
+    }
+    bool holds_context() const { return context_id_.has_value(); }
+    void release() { context_id_.reset(); }
+
+private:
+    std::optional<ContextId> context_id_;
+};
+
+}  // namespace
+
 std::shared_ptr<distributed::MeshDevice> MetalEnv::create_mesh_device(
     const distributed::MeshDeviceConfig& config,
     size_t l1_small_size,
@@ -676,6 +703,7 @@ std::shared_ptr<distributed::MeshDevice> MetalEnv::create_mesh_device(
     const bool env_owns_context = impl_->has_registered_context();
     ContextId context_id =
         env_owns_context ? ContextId{impl_->ensure_context_registered(*this)} : MetalContext::create_instance(*this);
+    TransitContextGuard context_guard(context_id, env_owns_context);
     auto mesh_device = distributed::MeshDeviceImpl::create(
         context_id,
         config,
@@ -685,8 +713,9 @@ std::shared_ptr<distributed::MeshDevice> MetalEnv::create_mesh_device(
         dispatch_core_config,
         l1_bank_remap,
         worker_l1_size);
-    if (!env_owns_context) {
+    if (context_guard.holds_context()) {
         mesh_device->impl().set_destroy_metal_context_instance_on_close(true);
+        context_guard.release();
     }
     return mesh_device;
 }
@@ -702,6 +731,7 @@ std::shared_ptr<distributed::MeshDevice> MetalEnv::create_unit_mesh_device(
     const bool env_owns_context = impl_->has_registered_context();
     ContextId context_id =
         env_owns_context ? ContextId{impl_->ensure_context_registered(*this)} : MetalContext::create_instance(*this);
+    TransitContextGuard context_guard(context_id, env_owns_context);
     auto mesh_device = distributed::MeshDeviceImpl::create_unit_mesh(
         context_id,
         device_id,
@@ -711,8 +741,9 @@ std::shared_ptr<distributed::MeshDevice> MetalEnv::create_unit_mesh_device(
         dispatch_core_config,
         l1_bank_remap,
         worker_l1_size);
-    if (!env_owns_context) {
+    if (context_guard.holds_context()) {
         mesh_device->impl().set_destroy_metal_context_instance_on_close(true);
+        context_guard.release();
     }
     return mesh_device;
 }
@@ -728,6 +759,7 @@ std::map<int, std::shared_ptr<distributed::MeshDevice>> MetalEnv::create_unit_me
     const bool env_owns_context = impl_->has_registered_context();
     ContextId context_id =
         env_owns_context ? ContextId{impl_->ensure_context_registered(*this)} : MetalContext::create_instance(*this);
+    TransitContextGuard context_guard(context_id, env_owns_context);
     auto result = distributed::MeshDeviceImpl::create_unit_meshes(
         context_id,
         device_ids,
@@ -737,11 +769,11 @@ std::map<int, std::shared_ptr<distributed::MeshDevice>> MetalEnv::create_unit_me
         dispatch_core_config,
         l1_bank_remap,
         worker_l1_size);
-    if (!env_owns_context && !result.empty()) {
+    if (context_guard.holds_context() && !result.empty()) {
         const auto& parent = result.begin()->second->get_parent_mesh();
-        if (parent) {
-            parent->impl().set_destroy_metal_context_instance_on_close(true);
-        }
+        TT_FATAL(parent != nullptr, "Unit meshes are submeshes, so they always have a parent to own the context");
+        parent->impl().set_destroy_metal_context_instance_on_close(true);
+        context_guard.release();
     }
     return result;
 }

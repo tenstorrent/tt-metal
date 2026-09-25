@@ -7,20 +7,24 @@
 #include <vector>
 #include <cstdint>
 #include <initializer_list>
+#include <optional>
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include "ttnn/tensor/tensor.hpp"  // ttnn::Tensor, tt::tt_metal::DataType
 
 namespace ttnn::prim {
 
 enum class GroupNormMode : uint32_t { LEGACY = 0, WELFORD_NATIVE = 1, WELFORD_RECIPROCALS = 2 };
 
 // Non-tile-aligned H*W: the reduce scaler must divide by the real element count (`scaler_bits`),
-// and the padding rows must be excluded from both accumulation passes -- the kernels do that by
-// switching to a row-masked set of input-mask tiles on each batch's final row-tile, of which
-// `rows_in_last_tile` are real. Shared by all three two-pass factories. Kernels re-derive `active`
-// from (padded_hw != logical_hw), hence kernel_logical_hw reporting padded_hw when off.
+// and the padding rows must be excluded from both accumulation passes. The interleaved kernels do
+// that by switching to a row-masked set of input-mask tiles on each batch's final row-tile, of
+// which `rows_in_last_tile` are real; the sharded kernels compose that row mask on device from a
+// rowvalid tile (c_18) and the column selector. Shared by all three two-pass factories. Kernels
+// re-derive `active` from (padded_hw != logical_hw), hence kernel_logical_hw reporting padded_hw
+// when off.
 struct GroupNormPadCorrection {
     bool active = false;
     uint32_t logical_hw = 0;
@@ -65,10 +69,23 @@ std::pair<uint32_t, uint32_t> find_max_tile_span(uint32_t W, uint32_t group_size
 // Tiles the row-major path keeps resident in c_17 for one per-core group.
 uint32_t groupnorm_tilized_group_tiles(uint32_t block_ht, uint32_t num_out_blocks, uint32_t block_wt);
 
-// Auto-select num_out_blocks from tensor volume / virtual core count: next power of two,
-// capped at 256. Shared by the program factories and the L1-fit estimate.
+// Memory-based num_out_blocks heuristic: next power of two, capped at 256.
+// Shared by the program factories and the L1-fit estimate. The factories may then
+// increase a single block to two via groupnorm_bf16_num_out_blocks for accuracy;
+// the L1-fit estimate deliberately retains the conservative, unsplit CB footprint.
 // `volume` is H * W * C (padded), `num_virtual_cores` is num_virtual_cols * num_virtual_rows.
 uint32_t groupnorm_heuristic_num_out_blocks(uint32_t volume, uint32_t num_virtual_cores);
+
+// The memory heuristic can leave a long BF16 mean/variance reduction in a single DEST
+// accumulator. Split that case into two partials to reduce repeated BF16 truncation.
+// Existing chunking is retained to avoid increasing global-reduction traffic on large tensors.
+// Call only for auto-selected, non-Welford BF16 accumulation; explicit configs are unchanged.
+inline uint32_t groupnorm_bf16_num_out_blocks(uint32_t memory_blocks, uint32_t block_ht, uint32_t block_wt) {
+    constexpr uint32_t max_unchunked_tiles = 8;
+    return memory_blocks == 1 && block_ht > 1 && static_cast<uint64_t>(block_ht) * block_wt > max_unchunked_tiles
+               ? 2
+               : memory_blocks;
+}
 
 // Percent of usable L1 we allow the estimate to reach; the margin covers the approximated small CBs.
 inline constexpr uint64_t kGroupnormTilizedL1UsagePercent = 95;
@@ -102,5 +119,53 @@ bool groupnorm_legacy_rm_input_fits_l1(
 // Prefer composite (host tilize + TILE GN) over fused RM for small grids or uneven batch mapping.
 // num_cores = num_virtual_cols * num_virtual_rows.
 bool groupnorm_legacy_rm_prefer_composite_for_perf(uint32_t num_cores, uint32_t num_virtual_rows, uint32_t num_batches);
+
+// Which of the optional static CBs the sharded factory will emit.
+struct GroupNormShardedCbFlags {
+    // Selects the negative-mask CB (c_14) in place of the untilize-out copy (c_30) -- the
+    // overlap trick the negative mask exists for. True whenever the factory sees either a
+    // caller-supplied negative_mask or synthesize_negative_mask.
+    bool with_negative_mask = false;
+    bool untilize_out = false;
+    bool has_gamma = false;
+    bool has_beta = false;
+    bool reader_repack_output = false;
+    bool use_welford = false;
+    bool pad_correction_active = false;
+};
+
+// Per-core byte sizes of the statically-allocated circular buffers used by the sharded
+// group-norm program factory.
+struct GroupNormShardedStaticCbSizes {
+    uint32_t in_CB_size = 0;                // c_1  tilized input (and the c_30 untilize-out copy)
+    uint32_t in2_CB_size = 0;               // c_2  scaler (and c_4 scaler-c when !welford)
+    uint32_t in3_CB_size = 0;               // c_3  eps
+    uint32_t in5_CB_size = 0;               // c_5  gamma
+    uint32_t in6_CB_size = 0;               // c_6  beta
+    uint32_t in_mask_CB_size = 0;           // c_7  input mask
+    uint32_t in_negative_mask_CB_size = 0;  // c_14 negative mask
+    uint32_t repack_CB_size = 0;            // c_11/c_12 repack
+    uint32_t x_CB_size = 0;                 // c_13 x
+    uint32_t ex_partial_CB_size = 0;        // c_8  ex_partial
+    uint32_t ex_global_CB_size = 0;         // c_9/c_15 ex_global
+    uint32_t ex2pe_CB_size = 0;             // c_17 ex2pe
+    uint32_t single_tile_size = 0;          // c_10 ex_external
+    uint32_t scalar_tile_size = 0;          // c_26 ones -- bf16 even on the legacy fp32 path
+    uint32_t rowvalid_CB_size = 0;          // c_18, bf16, 1 tile, pad correction only
+    uint32_t composed_mask_CB_size = 0;     // c_19, bf16, block_wt tiles, pad correction only
+
+    // Total per-core L1 occupied by the static CB region.
+    uint32_t total(const GroupNormShardedCbFlags& flags) const;
+};
+
+GroupNormShardedStaticCbSizes compute_sharded_gn_static_cb_sizes(
+    const ttnn::Tensor& input,
+    tt::tt_metal::DataType im_data_format,
+    std::optional<tt::tt_metal::DataType> gamma_dtype,
+    std::optional<tt::tt_metal::DataType> beta_dtype,
+    std::optional<tt::tt_metal::DataType> input_mask_dtype,
+    std::optional<tt::tt_metal::DataType> negative_mask_dtype,
+    bool use_welford,
+    uint32_t num_groups);
 
 }  // namespace ttnn::prim

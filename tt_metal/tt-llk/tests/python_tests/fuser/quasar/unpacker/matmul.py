@@ -2,20 +2,23 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List, Tuple
+from typing import List
 
-import torch
 from fuser.base_unpacker import Unpacker
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
+from fuser.golden.unpack.matmul import unpack_matmul_golden
+from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.tile_loop import LoopBlock, TileLoop
+from fuser.operand import BfdResource, bfd_current
 
 
 class MatmulUnpacker(Unpacker):
-    loop: TileLoop = LoopBlock()
+    granularity = InvocationGranularity.BLOCK
     per_block_init = True
+
+    golden_fn = staticmethod(unpack_matmul_golden)
 
     def get_headers(self) -> List[str]:
         return [
@@ -23,15 +26,31 @@ class MatmulUnpacker(Unpacker):
             "llk_unpack_matmul.h",
         ]
 
-    def golden(
+    def perf_set_valid(
         self,
-        tensor_a: torch.Tensor,
-        tensor_b: torch.Tensor,
         operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        return tensor_a, tensor_b
+        block: BlockData,
+    ) -> str:
+        num_cols = compute_unit.src_a.tile_shape.total_col_dim()
+        kt_dim = compute_unit.src_a.dimensions[1] // num_cols
+        rt_dim = block.block_rows
+        ct_dim = block.block_cols
+        return f"_perf_unpack_matmul_mock(1, {rt_dim}, {kt_dim}, {ct_dim});\n"
+
+    def perf_clear_valid(
+        self,
+        operation: L1Operation,
+        config: GlobalConfig,
+        compute_unit: FpuNode,
+        block: BlockData,
+    ) -> str:
+        num_cols = compute_unit.src_a.tile_shape.total_col_dim()
+        kt_dim = compute_unit.src_a.dimensions[1] // num_cols
+        rt_dim = block.block_rows
+        ct_dim = block.block_cols
+        return f"_perf_math_matmul_mock(1, {rt_dim}, {kt_dim}, {ct_dim});\n"
 
     def init(
         self,
@@ -40,16 +59,21 @@ class MatmulUnpacker(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        buf_desc_id_a = compute_unit.src_a.buf_desc_id
-        buf_desc_id_b = compute_unit.src_b.buf_desc_id
-        rt_dim = block.block_tiles_y
-        ct_dim = block.block_tiles_x
+        bfd_program = compute_unit.src_a.bfd_alloc_and_program(
+            BfdResource.UNP1
+        ) + compute_unit.src_b.bfd_alloc_and_program(BfdResource.UNP0)
+        id_a = bfd_current(BfdResource.UNP1)
+        id_b = bfd_current(BfdResource.UNP0)
+        src_b_shape = compute_unit.src_a.tile_shape.cpp_value
+        src_a_shape = compute_unit.src_b.tile_shape.cpp_value
+        rt_dim = block.block_rows
+        ct_dim = block.block_cols
         num_cols = compute_unit.src_a.tile_shape.total_col_dim()
         kt_dim = compute_unit.src_a.dimensions[1] // num_cols
 
         return (
-            f"_llk_unpack_matmul_init_<false>"
-            f"({buf_desc_id_a}, {buf_desc_id_b}, {ct_dim}, {rt_dim}, {kt_dim});\n"
+            bfd_program + f"_llk_unpack_matmul_init_<false>"
+            f"({id_a}, {id_b}, {ct_dim}, {rt_dim}, {kt_dim}, {src_b_shape}, {src_a_shape});\n"
         )
 
     def unpack(
@@ -59,24 +83,23 @@ class MatmulUnpacker(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        rt_dim = block.block_tiles_y
-        ct_dim = block.block_tiles_x
+        rt_dim = block.block_rows
+        ct_dim = block.block_cols
+        src_b_shape = compute_unit.src_a.tile_shape.cpp_value
+        src_a_shape = compute_unit.src_b.tile_shape.cpp_value
         num_cols = compute_unit.src_a.tile_shape.total_col_dim()
         kt_dim = compute_unit.src_a.dimensions[1] // num_cols
         full_ct_dim = (
             compute_unit.src_b.dimensions[1]
             // compute_unit.src_b.tile_shape.total_col_dim()
         )
-        output_ct_dim = compute_unit.src_a.tile_count_x
 
         return (
             f"{{\n"
-            f"    std::uint32_t row = ({block.tile_id_global}) / {output_ct_dim};\n"
-            f"    std::uint32_t col = ({block.tile_id_global}) % {output_ct_dim};\n"
             f"    for (std::uint32_t kt = 0; kt < {kt_dim}; ++kt) {{\n"
-            f"        std::uint32_t srca_tile_idx = row * {kt_dim} + kt;\n"
-            f"        std::uint32_t srcb_tile_idx = kt * {full_ct_dim} + col;\n"
-            f"        _llk_unpack_matmul_({ct_dim}, {rt_dim}, {kt_dim}, srca_tile_idx, srcb_tile_idx);\n"
+            f"        std::uint32_t srca_tile_idx = ({block.tile_id_src_a}) + kt;\n"
+            f"        std::uint32_t srcb_tile_idx = ({block.tile_id_src_b}) + kt * {full_ct_dim};\n"
+            f"        _llk_unpack_matmul_({ct_dim}, {rt_dim}, {kt_dim}, srca_tile_idx, srcb_tile_idx, {src_b_shape}, {src_a_shape});\n"
             f"    }}\n"
             f"}}\n"
         )

@@ -43,6 +43,7 @@
 #include "impl/program/program_impl.hpp"
 // Access to CircularBufferImpl::size(), local_buffer_indices(), etc.
 #include "impl/buffers/circular_buffer.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 using std::vector;
 using namespace tt::tt_metal;
@@ -51,14 +52,11 @@ namespace basic_tests::circular_buffer {
 
 void validate_cb_address(
     distributed::MeshWorkload& workload,
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const CoreRangeSet& cr_set,
     const std::map<CoreCoord, std::map<uint8_t, uint32_t>>& core_to_address_per_buffer_index) {
     auto& cq = mesh_device->mesh_command_queue();
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::EnqueueMeshWorkload(cq, workload, false);
-    auto& program = workload.get_programs().at(device_range);
     uint32_t max_cbs = MetalContext::instance().hal().get_arch_num_circular_buffers();
 
     vector<uint32_t> cb_config_vector;
@@ -68,10 +66,8 @@ void validate_cb_address(
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                 CoreCoord core_coord(x, y);
-                auto address =
-                    program.impl().get_cb_base_addr(mesh_device->get_devices()[0], core_coord, tt::CoreType::WORKER);
-                tt::tt_metal::detail::ReadFromDeviceL1(
-                    mesh_device->get_devices()[0], core_coord, address, cb_config_buffer_size, cb_config_vector);
+                auto address = workload.get_cb_base_addr(mesh_device, core_coord, tt::CoreType::WORKER);
+                slow_dispatch::ReadFromL1(*mesh_device, core_coord, address, cb_config_buffer_size, cb_config_vector);
 
                 std::map<uint8_t, uint32_t> address_per_buffer_index = core_to_address_per_buffer_index.at(core_coord);
 
@@ -179,12 +175,10 @@ TEST_F(MeshDeviceFixture, TensixTestValidCircularBufferAddress) {
         CBConfig cb_config;
 
         auto buffer_size = cb_config.page_size;
-        tt::tt_metal::InterleavedBufferConfig buff_config{
-            .device = device->get_devices()[0],
-            .size = buffer_size,
-            .page_size = buffer_size,
-            .buffer_type = tt::tt_metal::BufferType::L1};
-        auto l1_buffer = CreateBuffer(buff_config);
+        auto l1_buffer = distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = buffer_size},
+            {.page_size = buffer_size, .buffer_type = tt::tt_metal::BufferType::L1},
+            device.get());
 
         CoreRange cr({0, 0}, {0, 2});
         CoreRangeSet cr_set({cr});
@@ -195,7 +189,7 @@ TEST_F(MeshDeviceFixture, TensixTestValidCircularBufferAddress) {
             CircularBufferConfig(
                 cb_config.page_size,
                 {{buffer_indices[0], cb_config.data_format}, {buffer_indices[1], cb_config.data_format}},
-                *l1_buffer)
+                *l1_buffer->get_reference_buffer())
                 .set_page_size(buffer_indices[0], cb_config.page_size)
                 .set_page_size(buffer_indices[1], cb_config.page_size);
         CreateCircularBuffer(program_, cr_set, config1);
@@ -229,7 +223,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBuffersAndL1BuffersCollision) {
         uint32_t page_size = tt::tile_size(tt::DataFormat::Float16_b);
 
         DeviceAddr l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
-        DeviceAddr l1_max_size = mesh_device->get_devices()[0]->l1_size_per_core();
+        DeviceAddr l1_max_size = mesh_device->l1_size_per_core();
         DeviceAddr l1_bank_size = l1_max_size - l1_unreserved_base;
 
         // Allocate a MeshBuffer that consumes most of L1 bank 0 (top-down), leaving room for
@@ -357,12 +351,10 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferAddress) {
         CoreRangeSet cr_set({cr});
 
         auto buffer_size = cb_config.page_size;
-        tt::tt_metal::InterleavedBufferConfig buff_config{
-            .device = device->get_devices()[0],
-            .size = buffer_size,
-            .page_size = buffer_size,
-            .buffer_type = tt::tt_metal::BufferType::L1};
-        auto l1_buffer = CreateBuffer(buff_config);
+        auto l1_buffer = distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = buffer_size},
+            {.page_size = buffer_size, .buffer_type = tt::tt_metal::BufferType::L1},
+            device.get());
 
         initialize_program(program_, cr_set);
 
@@ -382,7 +374,7 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferAddress) {
 
         validate_cb_address(workload, device, cr_set, golden_addresses_per_core);
         // Update address of the first CB
-        UpdateDynamicCircularBufferAddress(program_, cb_ids[0], *l1_buffer);
+        UpdateDynamicCircularBufferAddress(program_, cb_ids[0], *l1_buffer->get_reference_buffer());
         golden_addresses_per_core[core0][0] = l1_buffer->address();
         validate_cb_address(workload, device, cr_set, golden_addresses_per_core);
     }
@@ -538,10 +530,8 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferPageSize) {
             for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     CoreCoord core_coord(x, y);
-                    auto address =
-                        program_.impl().get_cb_base_addr(device->get_devices()[0], core_coord, tt::CoreType::WORKER);
-                    tt::tt_metal::detail::ReadFromDeviceL1(
-                        device->get_devices()[0], core_coord, address, cb_config_buffer_size, cb_config_vector);
+                    auto address = workload.get_cb_base_addr(device, core_coord, tt::CoreType::WORKER);
+                    slow_dispatch::ReadFromL1(*device, core_coord, address, cb_config_buffer_size, cb_config_vector);
 
                     std::map<uint8_t, uint32_t> address_per_buffer_index = golden_addresses_per_core.at(core_coord);
                     const std::map<uint8_t, uint32_t>& num_pages_per_buffer_index =
@@ -569,10 +559,8 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferPageSize) {
             for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     CoreCoord core_coord(x, y);
-                    auto address =
-                        program_.impl().get_cb_base_addr(device->get_devices()[0], core_coord, tt::CoreType::WORKER);
-                    tt::tt_metal::detail::ReadFromDeviceL1(
-                        device->get_devices()[0], core_coord, address, cb_config_buffer_size, cb_config_vector);
+                    auto address = workload.get_cb_base_addr(device, core_coord, tt::CoreType::WORKER);
+                    slow_dispatch::ReadFromL1(*device, core_coord, address, cb_config_buffer_size, cb_config_vector);
 
                     std::map<uint8_t, uint32_t> address_per_buffer_index = golden_addresses_per_core.at(core_coord);
                     const std::map<uint8_t, uint32_t>& num_pages_per_buffer_index =
@@ -607,21 +595,18 @@ TEST_F(MeshDeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
         uint32_t num_tiles = 2;
         uint32_t buffer_size = single_tile_size * num_tiles;
 
-        tt::tt_metal::InterleavedBufferConfig dram_config{
-            .device = device->get_devices()[0],
-            .size = buffer_size,
-            .page_size = buffer_size,
-            .buffer_type = tt::tt_metal::BufferType::DRAM};
-
-        tt::tt_metal::InterleavedBufferConfig l1_config{
-            .device = device->get_devices()[0],
-            .size = buffer_size,
-            .page_size = buffer_size,
-            .buffer_type = tt::tt_metal::BufferType::L1};
-
-        auto src_dram_buffer = CreateBuffer(dram_config);
-        auto dst_dram_buffer = CreateBuffer(dram_config);
-        auto global_cb_buffer = CreateBuffer(l1_config);
+        auto src_dram_buffer = distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = buffer_size},
+            {.page_size = buffer_size, .buffer_type = tt::tt_metal::BufferType::DRAM},
+            device.get());
+        auto dst_dram_buffer = distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = buffer_size},
+            {.page_size = buffer_size, .buffer_type = tt::tt_metal::BufferType::DRAM},
+            device.get());
+        auto global_cb_buffer = distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = buffer_size},
+            {.page_size = buffer_size, .buffer_type = tt::tt_metal::BufferType::L1},
+            device.get());
 
         uint32_t cb_index = 0;
         CircularBufferConfig cb_src0_config = CircularBufferConfig(buffer_size, {{cb_index, tt::DataFormat::Float16_b}})
@@ -672,42 +657,37 @@ TEST_F(MeshDeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
 
         std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
             buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-        detail::WriteToBuffer(src_dram_buffer, src_vec);
+        distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, src_vec, true);
 
         distributed::EnqueueMeshWorkload(cq, workload, false);
         distributed::Finish(cq);
 
         std::vector<uint32_t> result_vec;
-        detail::ReadFromBuffer(dst_dram_buffer, result_vec);
+        distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
         EXPECT_EQ(src_vec, result_vec);
 
         std::vector<uint32_t> input_cb_data;
-        detail::ReadFromDeviceL1(
-            device->get_devices()[0],
-            core,
-            device->allocator()->get_base_allocator_addr(HalMemType::L1),
-            buffer_size,
-            input_cb_data);
+        slow_dispatch::ReadFromL1(
+            *device, core, device->allocator()->get_base_allocator_addr(HalMemType::L1), buffer_size, input_cb_data);
         EXPECT_EQ(src_vec, input_cb_data);
 
         // update cb address
-        UpdateDynamicCircularBufferAddress(program_, cb_src0, *global_cb_buffer);
+        UpdateDynamicCircularBufferAddress(program_, cb_src0, *global_cb_buffer->get_reference_buffer());
 
         // zero out dst buffer
         std::vector<uint32_t> zero_vec = create_constant_vector_of_bfloat16(buffer_size, 0);
-        detail::WriteToBuffer(dst_dram_buffer, zero_vec);
+        distributed::EnqueueWriteMeshBuffer(cq, dst_dram_buffer, zero_vec, true);
 
         // relaunch program
         distributed::EnqueueMeshWorkload(cq, workload, false);
         distributed::Finish(cq);
 
         std::vector<uint32_t> second_result_vec;
-        detail::ReadFromBuffer(dst_dram_buffer, second_result_vec);
+        distributed::EnqueueReadMeshBuffer(cq, second_result_vec, dst_dram_buffer, true);
         EXPECT_EQ(src_vec, second_result_vec);
 
         std::vector<uint32_t> second_cb_data;
-        detail::ReadFromDeviceL1(
-            device->get_devices()[0], core, global_cb_buffer->address(), buffer_size, second_cb_data);
+        slow_dispatch::ReadFromL1(*device, core, global_cb_buffer->address(), buffer_size, second_cb_data);
         EXPECT_EQ(src_vec, second_cb_data);
     }
 }

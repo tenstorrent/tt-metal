@@ -8,7 +8,7 @@
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 
-#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 #include "tt-metalium/work_split.hpp"
 #include "tt-metalium/tensor_accessor_args.hpp"
 #include <tt-metalium/hal.hpp>
@@ -16,13 +16,18 @@
 
 namespace ttnn::prim {
 
-SparseMatmulMultiCoreReuseMcast1DProgramFactory::cached_program_t
-SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
+tt::tt_metal::ProgramDescriptor SparseMatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
     const ttnn::prim::SparseMatmulParams& operation_attributes,
     const ttnn::prim::SparseMatmulInputs& tensor_args,
     std::vector<Tensor>& tensor_return_value) {
-    tt::tt_metal::Program program{}; /* Create a program */
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler;
+    using tt::tt_metal::CBDescriptor;
+    using tt::tt_metal::CBFormatDescriptor;
+    using tt::tt_metal::ComputeConfigDescriptor;
+    using tt::tt_metal::DataMovementConfigDescriptor;
+    using tt::tt_metal::KernelDescriptor;
+    using tt::tt_metal::ProgramDescriptor;
+    using tt::tt_metal::SemaphoreDescriptor;
+    using tt::tt_metal::TileDescriptor;
     using namespace tt;
     using namespace operations::matmul::utilities;
 
@@ -72,6 +77,27 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     auto nnz = operation_attributes.nnz;
     auto is_input_a_sparse = operation_attributes.is_input_a_sparse;
 
+    // Indexed/gather mode: an optional `indices` operand (optional_input_tensors[0]) holds the
+    // compacted list of active sparse-group ids. When present, the reader/sender kernels iterate only
+    // the num_active selected groups (bB = indices[i]) instead of scanning all batchB sparsity slots,
+    // and the output group axis is compact (length num_active). This maps onto the existing
+    // get_batch_from_reader=false semantics: every iterated batch is processed (none skipped), so
+    // compute and the in0 receiver simply loop num_batch_compute = num_active.
+    //
+    // The mode is signalled to the kernels purely by the "num_active" named compile-time arg below
+    // (0 = off), so no preprocessor defines and no compile-time arg layout changes are needed in the
+    // shared reader kernels. Both readers are shared with the dense matmul factories, which pass
+    // {"num_active", 0} for the same reason they already pass an unused "cb_sparsity".
+    const bool use_indices = operation_attributes.use_indices && !tensor_args.optional_input_tensors.empty() &&
+                             tensor_args.optional_input_tensors.at(0).has_value();
+    uint32_t num_active = 0;
+    if (use_indices) {
+        num_active = tensor_args.optional_input_tensors.at(0)->logical_volume();
+    }
+    // In indexed mode the readers never broadcast per-slot validity (every iterated batch is valid),
+    // so get_batch_from_reader is forced false regardless of nnz.
+    const bool get_batch_from_reader = use_indices ? false : !nnz.has_value();
+
     const auto& ashape = get_matmul_tensor_padded_shape(a, /*transpose=*/false);
     const auto& bshape = get_matmul_tensor_padded_shape(b, /*transpose=*/false);
     const auto in0_tile = get_matmul_tile(a, /*transpose=*/false);
@@ -96,12 +122,18 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     const uint32_t in0_aligned_tile_size = tt::align(in0_single_tile_size, dram_alignment);
     const uint32_t in1_aligned_tile_size = tt::align(in1_single_tile_size, dram_alignment);
     const auto output_single_tile_size = output_tile.get_tile_size(output_data_format);
-    const auto interm0_single_tile_size = output_tile.get_tile_size(output_data_format);
 
     auto* const in0_buffer = a.buffer();
     auto* const in1_buffer = b.buffer();
     auto* const sparsity_buffer = sparsity.buffer();
     auto* const out_buffer = output_tensor.buffer();
+    // The in1 sender/writer's "sparsity" slot (accessor args, page size, sparsity_addr runtime arg and
+    // the c_7 buffer) carries the active-group id list in indexed/gather mode -- that kernel never
+    // reads the sparsity mask there, so reusing the slot avoids adding an operand to a kernel shared
+    // with the dense matmul factories. The in0 sender ignores its own slot entirely in this mode, so
+    // it keeps pointing at the real sparsity tensor.
+    const Tensor& in1_sparsity_tensor = use_indices ? tensor_args.optional_input_tensors.at(0).value() : sparsity;
+    auto* const in1_sparsity_buffer = in1_sparsity_tensor.buffer();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config.value());
@@ -164,6 +196,8 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     const auto interm0_data_format = packer_l1_acc_en
                                          ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
                                          : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
+    // interm0 CB page size follows interm0_data_format, not the output dtype.
+    const auto interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -253,19 +287,25 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     }
 
     // Mcast args
-    auto in0_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    auto in0_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    // The descriptor path takes semaphore ids as given, so these are hand-assigned. 0 and 1 are
+    // exactly what CreateSemaphore returned on a fresh program, which keeps the ids baked into the
+    // sender/receiver compile-time args below -- and hence the kernel ELFs -- unchanged. The
+    // descriptors themselves are pushed alongside the CBs further down.
+    constexpr std::uint32_t in0_mcast_sender_semaphore_id = 0;
+    constexpr std::uint32_t in0_mcast_receiver_semaphore_id = 1;
 
     CoreCoord top_left_core = in0_mcast_receiver_cores_bounding_box.start_coord;
     CoreCoord bottom_right_core = in0_mcast_receiver_cores_bounding_box.end_coord;
     auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
     auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
 
-    uint32_t num_batch_compute = nnz.value_or(sparsity.logical_volume());
+    uint32_t num_batch_compute = use_indices ? num_active : nnz.value_or(sparsity.logical_volume());
     // Compact output packs only the `nnz` active batch pairs in scan order. Detect it exactly as the
     // device op (device/sparse/sparse_matmul_device_operation.cpp): [1, nnz, M, N]. Shape matching,
     // rather than volume matching, prevents a same-volume tensor with incompatible geometry from
     // selecting compact writer indexing.
+    // (Orthogonal to indexed/gather mode, which is already compact by construction and rejects nnz:
+    // the writer's skip path -- the only thing this flag guards -- is never reached there.)
     const bool compact_output =
         nnz.has_value() &&
         output_tensor.logical_shape() == ttnn::Shape{1U, nnz.value(), a.logical_shape()[-2], b.logical_shape()[-1]};
@@ -324,7 +364,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         (std::uint32_t)batchB,                                  // batchB
         (std::uint32_t)sparsity.buffer()->aligned_page_size(),  // sparsity_pagesize
         (std::uint32_t)!is_input_a_sparse,                      // bcast_A
-        (std::uint32_t)!nnz.has_value(),                        // get_batch_from_reader
+        (std::uint32_t)get_batch_from_reader,                   // get_batch_from_reader
         // fuse op args
         (std::uint32_t)false,  // fuse_op
     };
@@ -359,9 +399,9 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         (std::uint32_t)Kt * Nt,  // KtNt
         (std::uint32_t)batchA,   // batchA
         (std::uint32_t)true,     // bcast_B
-        // sparsity args
-        (std::uint32_t)batchB,                                  // batchB
-        (std::uint32_t)sparsity.buffer()->aligned_page_size(),  // sparsity_pagesize
+        // sparsity args (in indexed/gather mode this slot carries the active-group id list)
+        (std::uint32_t)batchB,                                    // batchB
+        (std::uint32_t)in1_sparsity_buffer->aligned_page_size(),  // sparsity_pagesize
 
         // WRITER
         // out tensor args
@@ -387,7 +427,8 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
 
     // Append TensorAccessorArgs
     tt::tt_metal::TensorAccessorArgs(*in1_buffer).append_to(in1_sender_writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*sparsity_buffer).append_to(in1_sender_writer_compile_time_args);
+    // Indexed/gather mode reuses this slot for the active-group id list (see in1_sparsity_buffer).
+    tt::tt_metal::TensorAccessorArgs(*in1_sparsity_buffer).append_to(in1_sender_writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*out_buffer).append_to(in1_sender_writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs().append_to(in1_sender_writer_compile_time_args);  // placeholder for bias
 
@@ -402,8 +443,8 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         (std::uint32_t)in0_mcast_sender_semaphore_id,
         (std::uint32_t)in0_mcast_receiver_semaphore_id,
         // batch args
-        (std::uint32_t)num_batch_compute,  // batch
-        (std::uint32_t)!nnz.has_value(),   // get_batch_from_reader
+        (std::uint32_t)num_batch_compute,      // batch
+        (std::uint32_t)get_batch_from_reader,  // get_batch_from_reader
     };
 
     std::map<std::string, std::string> mm_kernel_defines;
@@ -426,58 +467,70 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         mm_kernel_defines,
         ttnn::get_throttle_level(operation_attributes.compute_kernel_config));
 
+    if (in0_mcast_receiver_num_cores == 1) {
+        mm_kernel_in0_sender_writer_defines["SKIP_MCAST"] = "1";
+    }
+
     mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
     tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
 
-    auto mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
-        in0_mcast_sender_cores,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = in0_noc,
-            .compile_args = in0_sender_compile_time_args,
-            .defines = mm_kernel_in0_sender_writer_defines,
-            .named_compile_args = {
-                {"cb_in0", tt::CBIndex::c_0},
-                {"cb_in0_sharded", tt::CBIndex::c_2},
-                {"cb_sparsity", tt::CBIndex::c_6},
-            }});
+    // Helper to convert std::map defines to KernelDescriptor::Defines (vector of pairs). The map
+    // iterates in sorted key order, so the resulting vector -- and the descriptor hash over it -- is
+    // deterministic across builds.
+    auto map_to_defines = [](const std::map<std::string, std::string>& m) -> KernelDescriptor::Defines {
+        KernelDescriptor::Defines result;
+        result.reserve(m.size());
+        for (const auto& [k, v] : m) {
+            result.emplace_back(k, v);
+        }
+        return result;
+    };
 
-    tt::tt_metal::KernelHandle mm_kernel_in0_receiver_id = 0;
-    if (in0_mcast_receivers.num_cores() > 0) {
-        mm_kernel_in0_receiver_id = tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
-            in0_mcast_receivers,
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = in0_noc,
-                .compile_args = in0_receiver_compile_time_args,
-                .named_compile_args = {
-                    {"cb_in0", tt::CBIndex::c_0},
-                }});
-    }
+    KernelDescriptor in0_sender_kernel_desc;
+    in0_sender_kernel_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp";
+    in0_sender_kernel_desc.core_ranges = in0_mcast_sender_cores;
+    in0_sender_kernel_desc.compile_time_args = in0_sender_compile_time_args;
+    in0_sender_kernel_desc.defines = map_to_defines(mm_kernel_in0_sender_writer_defines);
+    in0_sender_kernel_desc.named_compile_time_args = {
+        {"cb_in0", tt::CBIndex::c_0},
+        {"cb_in0_sharded", tt::CBIndex::c_2},
+        {"cb_sparsity", tt::CBIndex::c_6},
+        {"num_active", num_active},  // indexed/gather mode loop count (0 = not indexed)
+    };
+    in0_sender_kernel_desc.config =
+        DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in0_noc};
 
-    auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
-        program,
+    KernelDescriptor in0_receiver_kernel_desc;
+    in0_receiver_kernel_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp";
+    in0_receiver_kernel_desc.core_ranges = in0_mcast_receivers;
+    in0_receiver_kernel_desc.compile_time_args = in0_receiver_compile_time_args;
+    in0_receiver_kernel_desc.named_compile_time_args = {
+        {"cb_in0", tt::CBIndex::c_0},
+    };
+    in0_receiver_kernel_desc.config =
+        DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in0_noc};
+
+    KernelDescriptor in1_sender_writer_kernel_desc;
+    in1_sender_writer_kernel_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
-        "reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
-        all_cores_with_work,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = in1_noc,
-            .compile_args = in1_sender_writer_compile_time_args,
-            .defines = mm_kernel_in1_sender_writer_defines,
-            .named_compile_args = {
-                {"cb_in1", tt::CBIndex::c_1},
-                {"cb_bias", tt::CBIndex::c_3},
-                {"cb_out", tt::CBIndex::c_4},
-                {"cb_sparsity", tt::CBIndex::c_7},
-            }});
+        "reader_bmm_tile_layout_in1_sender_writer_padding.cpp";
+    in1_sender_writer_kernel_desc.core_ranges = all_cores_with_work;
+    in1_sender_writer_kernel_desc.compile_time_args = in1_sender_writer_compile_time_args;
+    in1_sender_writer_kernel_desc.defines = map_to_defines(mm_kernel_in1_sender_writer_defines);
+    in1_sender_writer_kernel_desc.named_compile_time_args = {
+        {"cb_in1", tt::CBIndex::c_1},
+        {"cb_bias", tt::CBIndex::c_3},
+        {"cb_out", tt::CBIndex::c_4},
+        {"cb_sparsity", tt::CBIndex::c_7},
+        {"num_active", num_active},  // indexed/gather mode loop count (0 = not indexed)
+    };
+    in1_sender_writer_kernel_desc.config =
+        DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in1_noc};
 
     // Compute kernel compile time args
     uint32_t in0_subblock_num_tiles = out_subblock_h * in0_block_w;
@@ -508,42 +561,67 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         num_batch_compute,       // batch_nnz
         out_block_tiles,         // out_block_num_tiles
 
-        false,             // untilize_out
-        !nnz.has_value(),  // get_batch_from_reader
-        false,             // in0_transpose_tile
+        false,                  // untilize_out
+        get_batch_from_reader,  // get_batch_from_reader
+        false,                  // in0_transpose_tile
     };
-
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_mode[tt::CBIndex::c_5] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
     // Create compute kernel
     // bool fp32_dest_acc_en = false;
     // Gelu currently has better accuracy when run in approx mode
     // bool math_approx_mode = false;
-    tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
-        all_cores_with_work,
-        tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .dst_full_sync_en = dst_full_sync_en,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_kernel_args,
-            .defines = mm_kernel_defines,
-            .named_compile_args = {
-                {"cb_in0", tt::CBIndex::c_0},
-                {"cb_in1", tt::CBIndex::c_1},
-                {"cb_bias", tt::CBIndex::c_3},
-                {"cb_out", tt::CBIndex::c_4},
-                {"cb_intermed0", tt::CBIndex::c_5},
-                {"cb_in0_transposed", tt::CBIndex::c_10},
-            }});
+    KernelDescriptor compute_kernel_desc;
+    compute_kernel_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp";
+    compute_kernel_desc.core_ranges = all_cores_with_work;
+    compute_kernel_desc.compile_time_args = compute_kernel_args;
+    compute_kernel_desc.defines = map_to_defines(mm_kernel_defines);
+    compute_kernel_desc.named_compile_time_args = {
+        {"cb_in0", tt::CBIndex::c_0},
+        {"cb_in1", tt::CBIndex::c_1},
+        {"cb_bias", tt::CBIndex::c_3},
+        {"cb_out", tt::CBIndex::c_4},
+        {"cb_intermed0", tt::CBIndex::c_5},
+        {"cb_in0_transposed", tt::CBIndex::c_10},
+    };
+    // Preserve the FP32 partial-reload behavior: the Float32 intermediate CB must use
+    // UnpackToDestFp32, while all other CB entries retain the legacy Default mode.
+    compute_kernel_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .unpack_to_dest_mode = unpack_to_dest_mode,
+        .math_approx_mode = math_approx_mode};
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Descriptor Assembly
+    ////////////////////////////////////////////////////////////////////////////
+    ProgramDescriptor desc;
 
-    // Create circular buffers
+    const TileDescriptor in0_tile_desc{in0_tile};
+    const TileDescriptor in1_tile_desc{in1_tile};
+    const TileDescriptor output_tile_desc{output_tile};
+
+    // CB push order is preserved from the legacy factory (c_0, c_1, c_6, c_7, [c_5], c_4): CB
+    // descriptors are consumed positionally, so keeping the order identical keeps the resulting
+    // program structurally identical. in0/in1/sparsity/output are all interleaved here, so every CB
+    // below is a plain L1 allocation described by size and format alone; the framework's CB-side
+    // patching applies to the .buffer/.tensor fields, which belong to tensor-backed CBs.
     uint32_t src0_cb_index = tt::CBIndex::c_0;
-    tt_metal::CircularBufferConfig src0_cb_config =
-        tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_data_format}})
-            .set_page_size(src0_cb_index, in0_aligned_tile_size)
-            .set_tile_dims(src0_cb_index, in0_tile);
-    tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
+    {
+        CBDescriptor cb_desc;
+        cb_desc.total_size = in0_CB_size;
+        cb_desc.core_ranges = all_cores;
+        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_0,
+            .data_format = in0_data_format,
+            .page_size = in0_aligned_tile_size,
+            .tile = in0_tile_desc});
+        desc.cbs.push_back(std::move(cb_desc));
+    }
     log_debug(
         LogOp,
         "CB {} :: PS = {}, NP = {}, TOTAL = {}",
@@ -553,12 +631,17 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         in0_CB_size);
 
     uint32_t src1_cb_index = tt::CBIndex::c_1;
-    tt_metal::CircularBufferConfig src1_cb_config =
-        tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
-            .set_page_size(src1_cb_index, in1_aligned_tile_size)
-            .set_tile_dims(src1_cb_index, in1_tile);
-
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
+    {
+        CBDescriptor cb_desc;
+        cb_desc.total_size = in1_CB_size;
+        cb_desc.core_ranges = all_cores;
+        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_1,
+            .data_format = in1_data_format,
+            .page_size = in1_aligned_tile_size,
+            .tile = in1_tile_desc});
+        desc.cbs.push_back(std::move(cb_desc));
+    }
     log_debug(
         LogOp,
         "CB {} :: PS = {}, NP = {}, TOTAL = {}",
@@ -567,48 +650,47 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         in1_CB_size / in1_single_tile_size,
         in1_CB_size);
 
-    tt::tt_metal::CBHandle cb_src2 = 0;
+    const uint32_t sparsity_cb_size = static_cast<uint32_t>(sparsity.buffer()->aligned_page_size());
+    {
+        CBDescriptor cb_desc;
+        cb_desc.total_size = sparsity_cb_size;
+        cb_desc.core_ranges = all_cores;
+        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_6,
+            .data_format = tt::tt_metal::datatype_to_dataformat_converter(sparsity.dtype()),
+            .page_size = sparsity_cb_size});
+        desc.cbs.push_back(std::move(cb_desc));
+    }
+
+    // c_7 is the in1 sender/writer's slot; in indexed/gather mode it holds the active-group id list
+    // instead of a sparsity page, so it is sized and typed from whichever tensor that kernel reads.
+    const uint32_t in1_sparsity_cb_size = static_cast<uint32_t>(in1_sparsity_buffer->aligned_page_size());
+    {
+        CBDescriptor cb_desc;
+        cb_desc.total_size = in1_sparsity_cb_size;
+        cb_desc.core_ranges = all_cores;
+        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_7,
+            .data_format = tt::tt_metal::datatype_to_dataformat_converter(in1_sparsity_tensor.dtype()),
+            .page_size = in1_sparsity_cb_size});
+        desc.cbs.push_back(std::move(cb_desc));
+    }
 
     uint32_t output_cb_index = tt::CBIndex::c_4;
     uint32_t interm0_cb_index = tt::CBIndex::c_5;
-    tt_metal::CircularBufferConfig interm0_cb_config =
-        tt_metal::CircularBufferConfig(0, {{interm0_cb_index, interm0_data_format}});
-    tt_metal::CircularBufferConfig output_cb_config =
-        tt_metal::CircularBufferConfig(0, {{output_cb_index, output_data_format}});
-
-    uint32_t sparsity_cb_index0 = tt::CBIndex::c_6;
-    uint32_t sparsity_cb_index1 = tt::CBIndex::c_7;
-
-    uint32_t sparsity_cb_size = sparsity.buffer()->aligned_page_size();
-    tt_metal::CircularBufferConfig sparsity_cb_config0 =
-        tt_metal::CircularBufferConfig(
-            sparsity_cb_size, {{sparsity_cb_index0, tt::tt_metal::datatype_to_dataformat_converter(sparsity.dtype())}})
-            .set_page_size(sparsity_cb_index0, sparsity_cb_size);
-    tt_metal::CircularBufferConfig sparsity_cb_config1 =
-        tt_metal::CircularBufferConfig(
-            sparsity_cb_size, {{sparsity_cb_index1, tt::tt_metal::datatype_to_dataformat_converter(sparsity.dtype())}})
-            .set_page_size(sparsity_cb_index1, sparsity_cb_size);
-
-    tt_metal::CreateCircularBuffer(program, all_cores, sparsity_cb_config0);
-    tt_metal::CreateCircularBuffer(program, all_cores, sparsity_cb_config1);
-
     if (interm0_data_format != output_data_format) {
-        // output
-        std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{
-            {output_cb_index, output_data_format},
-        };
-        output_cb_config = tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
-                               .set_page_size(output_cb_index, output_single_tile_size)
-                               .set_tile_dims(output_cb_index, output_tile);
         // interm0
-        std::map<uint8_t, tt::DataFormat> interm0_cb_data_format_spec{
-            {interm0_cb_index, interm0_data_format},
-        };
-        interm0_cb_config = tt_metal::CircularBufferConfig(interm0_CB_size, interm0_cb_data_format_spec)
-                                .set_page_size(interm0_cb_index, interm0_single_tile_size)
-                                .set_tile_dims(interm0_cb_index, output_tile);
-
-        tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), interm0_cb_config);
+        {
+            CBDescriptor cb_desc;
+            cb_desc.total_size = interm0_CB_size;
+            cb_desc.core_ranges = all_cores;
+            cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+                .buffer_index = tt::CBIndex::c_5,
+                .data_format = interm0_data_format,
+                .page_size = interm0_single_tile_size,
+                .tile = output_tile_desc});
+            desc.cbs.push_back(std::move(cb_desc));
+        }
         log_debug(
             LogOp,
             "CB {} :: PS = {}, NP = {}, TOTAL = {}",
@@ -616,18 +698,35 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
             interm0_single_tile_size,
             interm0_CB_size / interm0_single_tile_size,
             interm0_CB_size);
-    } else {
-        // share buffer
-        std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{
-            {output_cb_index, output_data_format}, {interm0_cb_index, interm0_data_format}};
-        output_cb_config = tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
-                               .set_page_size(output_cb_index, output_single_tile_size)
-                               .set_page_size(interm0_cb_index, interm0_single_tile_size)
-                               .set_tile_dims(output_cb_index, output_tile)
-                               .set_tile_dims(interm0_cb_index, output_tile);
-    }
 
-    auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
+        // output
+        CBDescriptor cb_desc;
+        cb_desc.total_size = out_CB_size;
+        cb_desc.core_ranges = all_cores;
+        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_4,
+            .data_format = output_data_format,
+            .page_size = output_single_tile_size,
+            .tile = output_tile_desc});
+        desc.cbs.push_back(std::move(cb_desc));
+    } else {
+        // share buffer: c_4 and c_5 alias one L1 allocation, expressed as two format descriptors
+        // on a single CBDescriptor.
+        CBDescriptor cb_desc;
+        cb_desc.total_size = out_CB_size;
+        cb_desc.core_ranges = all_cores;
+        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_4,
+            .data_format = output_data_format,
+            .page_size = output_single_tile_size,
+            .tile = output_tile_desc});
+        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_5,
+            .data_format = interm0_data_format,
+            .page_size = interm0_single_tile_size,
+            .tile = output_tile_desc});
+        desc.cbs.push_back(std::move(cb_desc));
+    }
     log_debug(
         LogOp,
         "CB {} :: PS = {}, NP = {}, TOTAL = {}",
@@ -635,6 +734,11 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         output_single_tile_size,
         out_CB_size / output_single_tile_size,
         out_CB_size);
+
+    desc.semaphores.push_back(
+        SemaphoreDescriptor{.id = in0_mcast_sender_semaphore_id, .core_ranges = all_cores, .initial_value = INVALID});
+    desc.semaphores.push_back(
+        SemaphoreDescriptor{.id = in0_mcast_receiver_semaphore_id, .core_ranges = all_cores, .initial_value = INVALID});
 
     // Parameters for last row, col, or block, no need to re-calc h-dim since there's no split on height
     uint32_t last_per_core_N = Nt % per_core_N == 0 ? per_core_N : Nt % per_core_N;
@@ -678,11 +782,14 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
                 (std::uint32_t)sparsity_buffer->address()  // sparsity_addr
             };
 
-            tt_metal::SetRuntimeArgs(
-                program,
-                mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id,
-                core,
-                mm_in0_sender_args);  // RISCV_0_default
+            // in0 and sparsity are declared as Buffer* bindings so the framework patches their
+            // addresses in place on a cache hit. Every other slot here is derived from the hashed
+            // shapes/attributes, so a hit guarantees it is already correct.
+            std::vector<std::variant<std::uint32_t, tt::tt_metal::Buffer*>> in0_args(
+                mm_in0_sender_args.begin(), mm_in0_sender_args.end());
+            in0_args[0] = in0_buffer;
+            in0_args[7] = sparsity_buffer;
+            in0_sender_kernel_desc.emplace_runtime_args(core, in0_args);
         }
         // in0 receiver and in 1 sender
         else {
@@ -691,7 +798,9 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
                 (std::uint32_t)top_left_core_physical.x,  // in0_mcast_sender_noc_x
                 (std::uint32_t)top_left_core_physical.y   // in0_mcast_sender_noc_y
             };
-            tt_metal::SetRuntimeArgs(program, mm_kernel_in0_receiver_id, core, mm_in0_receiver_args);
+            // The receiver's args are both NoC coordinates, fixed for a given core grid, so these
+            // go in as plain values.
+            in0_receiver_kernel_desc.runtime_args.emplace_back(core, mm_in0_receiver_args);
         }
         if (i < num_cores_with_work) {
             std::vector<uint32_t> mm_in1_sender_writer_args = {
@@ -705,8 +814,8 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
                 (std::uint32_t)0,  // in1_mcast_dest_noc_end_x
                 (std::uint32_t)0,  // in1_mcast_dest_noc_end_y
 
-                // sparsity args
-                (std::uint32_t)sparsity_buffer->address(),  // sparsity_addr
+                // sparsity args (the active-group id list in indexed/gather mode)
+                (std::uint32_t)in1_sparsity_buffer->address(),  // sparsity_addr
 
                 // WRITER
                 // out tensor args
@@ -758,91 +867,27 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
             mm_in1_sender_writer_args.push_back(0);
             mm_in1_sender_writer_args.push_back(0);
 
-            tt_metal::SetRuntimeArgs(
-                program, mm_kernel_in1_sender_writer_id, core, mm_in1_sender_writer_args);  // RISCV_0_default
+            std::vector<std::variant<std::uint32_t, tt::tt_metal::Buffer*>> in1_args(
+                mm_in1_sender_writer_args.begin(), mm_in1_sender_writer_args.end());
+            in1_args[0] = in1_buffer;
+            in1_args[6] = in1_sparsity_buffer;
+            in1_args[7] = out_buffer;
+            in1_sender_writer_kernel_desc.emplace_runtime_args(core, in1_args);
         }
     }
 
-    auto shared_vars = SparseMatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t{
-        {mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id, mm_kernel_in1_sender_writer_id},
-        {cb_src1, cb_src2, cb_output},
-        false,
-        start_core,
-        cores,
-        num_cores_with_work,
-        ttnn::prim::Matmul1DType::MCAST_IN0};
-
-    return {std::move(program), std::move(shared_vars)};
-}
-
-void SparseMatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const ttnn::prim::SparseMatmulParams& /*operation_attributes*/,
-    const ttnn::prim::SparseMatmulInputs& tensor_args,
-    std::vector<Tensor>& tensor_return_value) {
-    auto& program = cached_program.program;
-    auto& shared_vars = cached_program.shared_variables;
-
-    auto* src_buffer_a = tensor_args.input_tensors.at(0).buffer();
-    auto* src_buffer_b = tensor_args.input_tensors.at(1).buffer();
-    auto* sparsity_buffer = tensor_args.input_tensors.at(2).buffer();
-    auto* dst_buffer = tensor_return_value.at(0).buffer();
-
-    // Manually unroll sender core
-    // in0 sender
-    auto& reader_sender_runtime_args = GetRuntimeArgs(program, shared_vars.kernels.at(0), shared_vars.start_core);
-    reader_sender_runtime_args[0] = src_buffer_a->address();
-    reader_sender_runtime_args[7] = sparsity_buffer->address();
-
-    auto& writer_runtime_args_by_core = GetRuntimeArgs(program, shared_vars.kernels.at(1));
-
-    for (uint32_t i = 0; i < shared_vars.num_cores_with_work; ++i) {
-        const auto& core = shared_vars.cores[i];
-
-        auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
-
-        // in1 sender
-        writer_runtime_args[0] = src_buffer_b->address();
-        writer_runtime_args[6] = sparsity_buffer->address();
-        writer_runtime_args[7] = dst_buffer->address();
+    // Kernel push order defines each kernel's handle (its index in desc.kernels). The in0 receiver
+    // is conditional, so indices after it shift on the single-core geometry -- fine here because
+    // buffer bindings are resolved positionally at cache-miss time, but anything that later hard-codes
+    // a kernel index (e.g. a hand-written override) must account for it.
+    desc.kernels.push_back(std::move(in0_sender_kernel_desc));
+    if (in0_mcast_receivers.num_cores() > 0) {
+        desc.kernels.push_back(std::move(in0_receiver_kernel_desc));
     }
-}
+    desc.kernels.push_back(std::move(in1_sender_writer_kernel_desc));
+    desc.kernels.push_back(std::move(compute_kernel_desc));
 
-////////////////////////////////////////////////////////////////////////////
-//                      Mesh Workload Setup
-////////////////////////////////////////////////////////////////////////////
-
-SparseMatmulMeshWorkloadMultiCoreReuseMcast1DFactory::cached_mesh_workload_t
-SparseMatmulMeshWorkloadMultiCoreReuseMcast1DFactory::create_mesh_workload(
-    const ttnn::prim::SparseMatmulParams& attributes,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const ttnn::prim::SparseMatmulInputs& tensor_args,
-    std::vector<Tensor>& output) {
-    tt::tt_metal::distributed::MeshWorkload workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-    for (const auto& mesh_coord_range : tensor_coords.ranges()) {
-        for (const auto& mesh_coord : mesh_coord_range) {
-            const ttnn::MeshCoordinateRange mesh_coord_range{mesh_coord, mesh_coord};
-            auto single_device_program =
-                SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(attributes, tensor_args, output);
-            shared_variables[mesh_coord_range] = single_device_program.shared_variables;
-            workload.add_program(mesh_coord_range, std::move(single_device_program.program));
-        }
-    }
-    return {std::move(workload), std::move(shared_variables)};
-}
-
-void SparseMatmulMeshWorkloadMultiCoreReuseMcast1DFactory::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
-    const ttnn::prim::SparseMatmulParams& attributes,
-    const ttnn::prim::SparseMatmulInputs& tensor_args,
-    std::vector<Tensor>& tensor_return_value) {
-    for (auto& [mesh_coord_range, program] : cached_workload.workload.get_programs()) {
-        auto cached_program_proxy = SparseMatmulMultiCoreReuseMcast1DProgramFactory::cached_program_t::proxy(
-            program, cached_workload.shared_variables.at(mesh_coord_range));
-        SparseMatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments(
-            cached_program_proxy, attributes, tensor_args, tensor_return_value);
-    }
+    return desc;
 }
 
 }  // namespace ttnn::prim

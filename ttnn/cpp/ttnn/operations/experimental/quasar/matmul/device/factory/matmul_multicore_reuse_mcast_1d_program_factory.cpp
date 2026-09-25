@@ -2597,31 +2597,19 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             // Look up bank_id based on core.y and which column group core.x belongs to
             if (core.x <= first_col_max_x) {
                 auto it = worker_y_to_dram_bank_first_col.find(core.y);
-                if (it == worker_y_to_dram_bank_first_col.end()) {
-                    log_info(
-                        tt::LogOp,
-                        "ERROR: Worker core ({}, {}) y={} NOT FOUND in first-col map! Available y values:",
-                        core.x,
-                        core.y,
-                        core.y);
-                    for (const auto& [y, bank] : worker_y_to_dram_bank_first_col) {
-                        log_info(tt::LogOp, "  y={}", y);
-                    }
-                }
+                TT_FATAL(
+                    it != worker_y_to_dram_bank_first_col.end(),
+                    "Worker core ({}, {}) NOT FOUND in first-col map",
+                    core.x,
+                    core.y);
                 bank_id = it->second;
             } else {
                 auto it = worker_y_to_dram_bank_second_col.find(core.y);
-                if (it == worker_y_to_dram_bank_second_col.end()) {
-                    log_info(
-                        tt::LogOp,
-                        "ERROR: Worker core ({}, {}) y={} NOT FOUND in second-col map! Available y values:",
-                        core.x,
-                        core.y,
-                        core.y);
-                    for (const auto& [y, bank] : worker_y_to_dram_bank_second_col) {
-                        log_info(tt::LogOp, "  y={}", y);
-                    }
-                }
+                TT_FATAL(
+                    it != worker_y_to_dram_bank_second_col.end(),
+                    "Worker core ({}, {}) NOT FOUND in second-col map",
+                    core.x,
+                    core.y);
                 bank_id = it->second;
             }
 
@@ -5231,7 +5219,6 @@ const m2::TensorParamName RO_IN0_TENSOR{"in0"};
 const m2::TensorParamName RO_IN1_TENSOR{"in1"};
 const m2::TensorParamName RO_OUT_TENSOR{"out"};
 const m2::TensorParamName RO_BIAS_TENSOR{"bias"};
-const m2::TensorParamName RO_SPARSITY_TENSOR{"sparsity"};
 
 const m2::SemaphoreSpecName RO_IN0_SENDER_SEM{"in0_sender"};
 const m2::SemaphoreSpecName RO_IN0_RECEIVER_SEM{"in0_receiver"};
@@ -5309,7 +5296,6 @@ m2::KernelSpec make_compute_kernel(
     bool has_bias,
     uint32_t bias_ntiles,
     bool row_broadcast_bias,
-    const std::optional<UnaryWithParam>& fused_activation,
     const std::map<std::string, std::string>& mm_kernel_defines,
     const m2::ComputeHardwareConfig& compute_hw_config) {
     std::vector<m2::DFBBinding> dfb_bindings = {
@@ -5366,14 +5352,6 @@ m2::KernelSpec make_compute_kernel(
     };
     if (has_bias) {
         cta.insert({"row_broadcast_bias", row_broadcast_bias ? 1u : 0u});
-    }
-    if (fused_activation.has_value() && fused_activation.value().op_type != UnaryOpType::RELU) {
-        using ttnn::operations::experimental::quasar::matmul::utilities::get_activation_params;
-        const auto params = get_activation_params(fused_activation.value());
-        cta.insert({"activation_type", static_cast<uint32_t>(params.type)});
-        cta.insert({"activation_param0", params.param0});
-        cta.insert({"activation_param1", params.param1});
-        cta.insert({"activation_param2", params.param2});
     }
 
     return m2::KernelSpec{
@@ -5648,11 +5626,11 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         mm_kernel_in1_sender_writer_defines["FUSE_BIAS"] = "1";
     }
     if (fused_activation.has_value()) {
-        if (fused_activation.value().op_type == UnaryOpType::RELU) {
-            mm_kernel_defines["PACK_RELU"] = "1";
-        } else {
-            mm_kernel_defines["SFPU_ACTIVATION"] = "1";
-        }
+        TT_FATAL(
+            fused_activation.value().op_type == UnaryOpType::RELU,
+            "Quasar 1D matmul fused activation only supports RELU (packer); packer-thread SFPU "
+            "activations (SFPU_ACTIVATION) are not supported.");
+        mm_kernel_defines["PACK_RELU"] = "1";
     }
     if (packer_l1_acc_en) {
         mm_kernel_defines["PACKER_L1_ACC"] = "1";
@@ -5689,13 +5667,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
     mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
 
     // ---- Tensor parameters (replace buffer-address RTAs + TensorAccessorArgs) ----
-    // The sparsity TensorParameter is inert for resnet50 (batchB == 0; never read); it aliases the
-    // in0 spec so the kernels' tensor::sparsity binding resolves and is supplied in0 at runtime.
     m2::Group<m2::TensorParameter> tensor_parameters = {
         m2::TensorParameter{.unique_id = RO_IN0_TENSOR, .spec = in0_tensor.tensor_spec()},
         m2::TensorParameter{.unique_id = RO_IN1_TENSOR, .spec = in1_tensor.tensor_spec()},
         m2::TensorParameter{.unique_id = RO_OUT_TENSOR, .spec = out_tensor.tensor_spec()},
-        m2::TensorParameter{.unique_id = RO_SPARSITY_TENSOR, .spec = in0_tensor.tensor_spec()},
     };
     if (bias_tensor.has_value()) {
         tensor_parameters.push_back(
@@ -5717,9 +5692,11 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
     // Sparsity scratch DFBs are a single-kernel DMA-landing self-loop (PRODUCER+CONSUMER on one DM
     // kernel), rejected by the Metal 2.0 DM-kernel self-loop validator. This factory never enables
     // sparsity (batchB hardcoded 0; the sparse path is a separate factory), so the sparsity DFBs/
-    // bindings and the kernels' SPARSITY-gated cb_sparsity usage are absent. When the sparse matmul
-    // is ported to Metal 2.0, flip sparsity_enabled, define SPARSITY on the senders, and replace the
-    // self-loop with a scratchpad/LocalTensorAccessor.
+    // bindings, the sparsity TensorParameter, and the kernels' SPARSITY-gated cb_sparsity / tensor::sparsity
+    // usage are absent. When the sparse matmul is ported to Metal 2.0, flip sparsity_enabled, define
+    // SPARSITY on the senders, declare a sparsity TensorParameter bound to the real sparsity tensor
+    // (never an alias of an io tensor: the mesh adapter resolves each binding to its own tensor slot),
+    // and replace the self-loop with a scratchpad/LocalTensorAccessor.
     const bool sparsity_enabled = false;
     if (sparsity_enabled) {
         dataflow_buffers.push_back(m2::DataflowBufferSpec{
@@ -5961,7 +5938,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         .tensor_bindings =
             {
                 m2::TensorBinding{.tensor_parameter_name = RO_IN0_TENSOR, .accessor_name = "in0"},
-                m2::TensorBinding{.tensor_parameter_name = RO_SPARSITY_TENSOR, .accessor_name = "sparsity"},
             },
         .compile_time_args = make_in0_sender_cta(1, 1),
         .runtime_arg_schema = {.runtime_arg_names = in0_sender_rta_names},
@@ -5995,7 +5971,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             .tensor_bindings =
                 {
                     m2::TensorBinding{.tensor_parameter_name = RO_IN0_TENSOR, .accessor_name = "in0"},
-                    m2::TensorBinding{.tensor_parameter_name = RO_SPARSITY_TENSOR, .accessor_name = "sparsity"},
                 },
             .compile_time_args = make_in0_sender_cta(0, 1),
             .runtime_arg_schema = {.runtime_arg_names = in0_no_work_rta_names},
@@ -6021,7 +5996,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             .tensor_bindings =
                 {
                     m2::TensorBinding{.tensor_parameter_name = RO_IN0_TENSOR, .accessor_name = "in0"},
-                    m2::TensorBinding{.tensor_parameter_name = RO_SPARSITY_TENSOR, .accessor_name = "sparsity"},
                 },
             .compile_time_args = make_in0_sender_cta(0, 0),
             .runtime_arg_schema = {.runtime_arg_names = in0_no_work_rta_names},
@@ -6095,7 +6069,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         std::vector<m2::TensorBinding> tb = {
             m2::TensorBinding{.tensor_parameter_name = RO_IN1_TENSOR, .accessor_name = "in1"},
             m2::TensorBinding{.tensor_parameter_name = RO_OUT_TENSOR, .accessor_name = "out"},
-            m2::TensorBinding{.tensor_parameter_name = RO_SPARSITY_TENSOR, .accessor_name = "sparsity"},
         };
         if (bias_tensor.has_value()) {
             b.push_back(m2::DFBBinding{
@@ -6210,7 +6183,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         bias_tensor.has_value(),
         in1_per_core_w,
         row_broadcast_bias,
-        fused_activation,
         mm_kernel_defines,
         compute_hw_config));
 
@@ -6449,7 +6421,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
     run_args.tensor_args.emplace(RO_IN0_TENSOR, in0_tensor);
     run_args.tensor_args.emplace(RO_IN1_TENSOR, in1_tensor);
     run_args.tensor_args.emplace(RO_OUT_TENSOR, out_tensor);
-    run_args.tensor_args.emplace(RO_SPARSITY_TENSOR, in0_tensor);  // inert alias
     if (bias_tensor.has_value()) {
         run_args.tensor_args.emplace(RO_BIAS_TENSOR, *bias_tensor);
     }
@@ -6672,11 +6643,11 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
         mm_kernel_in1_receiver_writer_defines["FUSE_BIAS"] = "1";
     }
     if (fused_activation.has_value()) {
-        if (fused_activation.value().op_type == UnaryOpType::RELU) {
-            mm_kernel_defines["PACK_RELU"] = "1";
-        } else {
-            mm_kernel_defines["SFPU_ACTIVATION"] = "1";
-        }
+        TT_FATAL(
+            fused_activation.value().op_type == UnaryOpType::RELU,
+            "Quasar 1D matmul fused activation only supports RELU (packer); packer-thread SFPU "
+            "activations (SFPU_ACTIVATION) are not supported.");
+        mm_kernel_defines["PACK_RELU"] = "1";
     }
     if (packer_l1_acc_en) {
         mm_kernel_defines["PACKER_L1_ACC"] = "1";
@@ -6714,12 +6685,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     }
 
     // ---- Tensor parameters ----
-    // Sparsity TensorParameter is inert (batchB == 0); aliases the in0 spec so tensor::sparsity binds.
     m2::Group<m2::TensorParameter> tensor_parameters = {
         m2::TensorParameter{.unique_id = RO_IN0_TENSOR, .spec = in0_tensor.tensor_spec()},
         m2::TensorParameter{.unique_id = RO_IN1_TENSOR, .spec = in1_tensor.tensor_spec()},
         m2::TensorParameter{.unique_id = RO_OUT_TENSOR, .spec = out_tensor.tensor_spec()},
-        m2::TensorParameter{.unique_id = RO_SPARSITY_TENSOR, .spec = in0_tensor.tensor_spec()},
     };
     if (bias_tensor.has_value()) {
         tensor_parameters.push_back(
@@ -6744,9 +6713,11 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     // Sparsity scratch DFBs are a single-kernel DMA-landing self-loop (PRODUCER+CONSUMER on one DM
     // kernel), rejected by the Metal 2.0 DM-kernel self-loop validator. This factory never enables
     // sparsity (batchB hardcoded 0; the sparse path is a separate factory), so the sparsity DFBs/
-    // bindings and the kernels' SPARSITY-gated cb_sparsity usage are absent. When the sparse matmul
-    // is ported to Metal 2.0, flip sparsity_enabled, define SPARSITY on the senders, and replace the
-    // self-loop with a scratchpad/LocalTensorAccessor.
+    // bindings, the sparsity TensorParameter, and the kernels' SPARSITY-gated cb_sparsity / tensor::sparsity
+    // usage are absent. When the sparse matmul is ported to Metal 2.0, flip sparsity_enabled, define
+    // SPARSITY on the senders, declare a sparsity TensorParameter bound to the real sparsity tensor
+    // (never an alias of an io tensor: the mesh adapter resolves each binding to its own tensor slot),
+    // and replace the self-loop with a scratchpad/LocalTensorAccessor.
     const bool sparsity_enabled = false;
     if (sparsity_enabled) {
         dataflow_buffers.push_back(m2::DataflowBufferSpec{
@@ -6896,7 +6867,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             .tensor_bindings =
                 {
                     m2::TensorBinding{.tensor_parameter_name = RO_IN0_TENSOR, .accessor_name = "in0"},
-                    m2::TensorBinding{.tensor_parameter_name = RO_SPARSITY_TENSOR, .accessor_name = "sparsity"},
                 },
             .compile_time_args =
                 {
@@ -6972,7 +6942,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
         std::vector<m2::TensorBinding> tb = {
             m2::TensorBinding{.tensor_parameter_name = RO_IN1_TENSOR, .accessor_name = "in1"},
             m2::TensorBinding{.tensor_parameter_name = RO_OUT_TENSOR, .accessor_name = "out"},
-            m2::TensorBinding{.tensor_parameter_name = RO_SPARSITY_TENSOR, .accessor_name = "sparsity"},
         };
         if (bias_tensor.has_value()) {
             b.push_back(m2::DFBBinding{
@@ -7164,7 +7133,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
         bias_tensor.has_value(),
         in1_per_core_w,
         row_broadcast_bias,
-        fused_activation,
         mm_kernel_defines,
         compute_hw_config));
 
@@ -7397,7 +7365,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     run_args.tensor_args.emplace(RO_IN0_TENSOR, in0_tensor);
     run_args.tensor_args.emplace(RO_IN1_TENSOR, in1_tensor);
     run_args.tensor_args.emplace(RO_OUT_TENSOR, out_tensor);
-    run_args.tensor_args.emplace(RO_SPARSITY_TENSOR, in0_tensor);  // inert alias
     if (bias_tensor.has_value()) {
         run_args.tensor_args.emplace(RO_BIAS_TENSOR, *bias_tensor);
     }

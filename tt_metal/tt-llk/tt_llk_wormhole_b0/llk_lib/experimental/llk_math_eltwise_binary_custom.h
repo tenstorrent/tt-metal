@@ -85,7 +85,7 @@ inline void _llk_math_eltwise_binary_uninit_custom_()
 //                     callers (e.g. the fuser LoopBlockRow driver) advance this per block-row so each row
 //                     lands on its own dest slots; single-tile-row callers leave it at 0.
 inline void _llk_math_sub_bcast_cols_reuse_custom_(
-    const std::uint32_t ct_dim = 1, const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE, const std::uint32_t dst_index = 0)
+    const std::uint32_t ct_dim = 1, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE, const std::uint32_t dst_index = 0)
 {
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
 

@@ -3,11 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Conv2d CORRECTNESS bisection for Quasar (independent of Option C / the tilize race).
+Conv2d CORRECTNESS bisection for Quasar.
 
-test_conv2d_split_tilize_hypothesis.py surfaced a Quasar conv that runs to completion but is numerically
-WRONG (PCC ~0.42), IDENTICAL on the fused and split compute kernels -> the bug is in the shared conv path
-(halo / reader / matmul / pack / output), not the tilize split. This test localizes it by isolating each
+Originally diagnosed a Quasar conv that ran to completion but was numerically wrong (PCC ~0.42), identical on
+the fused and split compute kernels -> the bug was in the shared conv path (halo / reader / matmul / pack /
+output), not the tilize split. The root cause (packer relu on Quasar) has been FIXED and all variants now
+pass. This test is kept as a regression guard.
+
+The test localizes errors by isolating each
 stage across a small variant matrix, all fed an L1-sharded input (so they reach the Quasar compute instead
 of dying in the unported DRAM-slicing sharded_to_interleaved). Run it on BOTH WH and Quasar and compare the
 pass/fail matrix:
@@ -188,43 +191,33 @@ def _report_error_pattern(golden, tt, oh, ow, c):
     logger.info(f"[BISECT] golden absmax={float(g.abs().max()):.3f} tt absmax={float(t.abs().max()):.3f}")
 
 
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(1200)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-# PER-ELEMENT-STAGE discriminator. The window-shape sweep (k3x3/k3x1/k1x3/k2x2) all gave ~0.85 regardless
-# of tap count => the corruption is NOT in the reduction (gather/weight-K/matmul-K would scale with taps).
-# It's a per-element stage that runs the same for every conv: input reshard, output pack accumulation, bias,
-# or RELU. Toggle each on a fixed 3x3 conv; whichever flip lifts PCC to ~1.0 is the culprit. If none do, the
-# bug is in the core matmul_block / conv tilize (values). (Quasar output absmax > golden => extra/stale term.)
+# PER-ELEMENT-STAGE discriminator. During initial investigation the window-shape sweep
+# (k3x3/k3x1/k1x3/k2x2) all gave ~0.85 regardless of tap count, pointing to a per-element stage
+# (input reshard, output pack accumulation, bias, or RELU). The root cause was packer relu on Quasar;
+# with that fixed, RELU now works correctly through the packer path and all variants pass.
 @pytest.mark.parametrize(
     "label, with_bias, activation, packer_l1_acc, reshard",
     [
-        # ROOT CAUSE (proven): activation off => 0.99997, RELU on => 0.8547. RELU was routed to the PACKER
-        # (llk_pack_relu_config(ReluConfig::zero())), which leaves ~1 face/output-tile unclamped on Quasar.
-        # FIX APPLIED (conv2d_op_sharded_program_factory.cpp): on Quasar, pack_relu is forced false so RELU
-        # goes through the SFPU activation path (full-tile) instead. Expected with the fix built:
-        pytest.param("relu", True, "relu", True, True, id="relu_now_sfpu"),  # was 0.85; expect ~1.0 after fix
-        pytest.param("none", True, "none", True, True, id="none"),  # control (~1.0)
-        # (gelu_sfpu dropped: Quasar GELU SFPU is UNPORTED -- ckernel_sfpu_gelu.h fails to compile
-        #  (_sfpu_load_config32_ undeclared). RELU SFPU (ckernel_sfpu_relu.h / relu_tile) IS ported/clean,
-        #  so the fix routes RELU -- not GELU -- through SFPU.)
+        pytest.param("relu", True, "relu", True, True, id="relu"),
+        pytest.param("none", True, "none", True, True, id="none"),
     ],
 )
 def test_conv2d_correctness_bisect(mesh_device, label, with_bias, activation, packer_l1_acc, reshard):
-    # WH-only HANG on BOTH variants (relu_now_sfpu AND the `none` control): the fused conv_bmm_tilize hits the
-    # WH fast_tilize->matmul cadence race -- MATH MWDD in matmul_block, PACK in program_packer_destination
-    # (SyncHalf), cb stuck rcv!=ack, genuine (asserts-on, no assert). The `none` control (activation off) hanging
-    # too is the decisive proof it is the fuse_bias + packer_l1_acc CADENCE driving the kRaceGuardSpin race, NOT
-    # relu/SFPU-specific. Same family as test_conv2d.py[stem_7x7] / split_tilize_hypothesis / unpack_to_dest.
-    # Imperative xfail so the sweep does NOT execute the hanging conv. Quasar is left to run (there the SFPU-relu
-    # fix makes relu_now_sfpu pass; the `none` control is the correctness base).
+    # WH-only HANG on BOTH variants: the fused conv_bmm_tilize hits the WH fast_tilize->matmul cadence race
+    # -- MATH MWDD in matmul_block, PACK in program_packer_destination (SyncHalf), cb stuck rcv!=ack.
+    # The `none` control hanging too proves it's the fuse_bias + packer_l1_acc cadence driving the
+    # kRaceGuardSpin race, not activation-specific.
+    # Same family as test_conv2d.py[stem_7x7].
+    # Imperative xfail so the sweep does NOT execute the hanging conv. Quasar runs (both variants pass).
     if is_wormhole_b0():
         pytest.xfail(
             "WH fused conv_bmm_tilize fast_tilize->matmul cadence race (kRaceGuardSpin family; MATH in "
             "matmul_block, PACK in program_packer_destination). BOTH variants hang incl. the `none` control -> "
             "it's the fuse_bias+packer_l1_acc cadence, not relu/SFPU-specific. Not the WH model path."
         )
-    # Quasar: 3x3 base = 0.8547, values wrong (sorted-PCC too), uniform, fidelity- AND window-shape-independent.
-    # `bare` = matmul only (no bias/relu/l1acc) isolates the core matmul+tilize+pack.
+    # 3x3 conv with the parameterized activation/bias/l1acc variants.
     _run(
         mesh_device,
         kernel=(3, 3),

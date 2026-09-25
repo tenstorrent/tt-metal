@@ -9,6 +9,9 @@ import ttnn
 from loguru import logger
 from models.common.utility_functions import comp_allclose_and_pcc
 
+# Module-scoped device: opens once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device
+
 
 def run_fold_test(device, input_shape, output_size, kernel_size, dilation, padding, stride, dtype):
     if dtype == torch.float:
@@ -31,6 +34,27 @@ def run_fold_test(device, input_shape, output_size, kernel_size, dilation, paddi
     elif dtype == torch.bfloat16:
         passing, out = comp_allclose_and_pcc(expected, actual, rtol=0.05, atol=0.05)
     assert passing
+
+
+def test_moreh_fold_golden_accepts_bound_positional_arguments():
+    input_tensor = torch.randn(1, 4, 4)
+    output_size = (3, 3)
+    kernel_size = (2, 2)
+    golden_function = ttnn.get_golden_function(ttnn.moreh_fold)
+
+    actual = golden_function(
+        input_tensor,
+        None,
+        output_size,
+        kernel_size,
+        (1, 1),
+        (0, 0),
+        (1, 1),
+        None,
+    )
+    expected = torch.nn.functional.fold(input_tensor, output_size=output_size, kernel_size=kernel_size)
+
+    torch.testing.assert_close(actual, expected)
 
 
 @pytest.mark.parametrize(
@@ -76,6 +100,8 @@ def test_fold(device, input_shape, output_size, kernel_size, dilation, padding, 
 )
 def test_fold_callback(device, input_shape, output_size, kernel_size, dilation, padding, stride, dtype):
     torch.manual_seed(0)
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(2):
         run_fold_test(device, input_shape, output_size, kernel_size, dilation, padding, stride, dtype)
@@ -86,3 +112,46 @@ def test_fold_callback(device, input_shape, output_size, kernel_size, dilation, 
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
     assert num_program_cache_entries_list[0] > 0
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
+
+
+def test_fold_l1_output_short_row(device):
+    """Regression test for #57475 item 2: an L1-resident output whose real row is shorter than
+    the 32-byte-rounded DFB page size used to spill the rounding padding past the row on every
+    page write (past the end of the buffer on a bank's last page)."""
+    torch.manual_seed(2024)
+    input_shape = (1, 4, 21)
+    output_size = (4, 8)
+    kernel_size = (2, 2)
+    dilation = (1, 1)
+    padding = (0, 0)
+    stride = (1, 1)
+
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16) + 1
+    torch_fold = torch.nn.Fold(
+        output_size=output_size, kernel_size=kernel_size, dilation=dilation, padding=padding, stride=stride
+    )
+    expected = torch_fold(torch_input)
+
+    # output row (8 elements * 2 bytes for bfloat16 = 16 B) is smaller than the 32-byte-rounded
+    # CB page size, and L1 is what exposes the writer's over-long NoC write.
+    tt_input = ttnn.from_torch(
+        torch_input,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    tt_out = ttnn.operations.moreh.fold(
+        tt_input,
+        None,
+        output_size,
+        kernel_size,
+        dilation,
+        padding,
+        stride,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    actual = ttnn.to_torch(tt_out)
+    passing, out = comp_allclose_and_pcc(expected, actual, rtol=0.05, atol=0.05)
+    logger.info(out)
+    assert passing

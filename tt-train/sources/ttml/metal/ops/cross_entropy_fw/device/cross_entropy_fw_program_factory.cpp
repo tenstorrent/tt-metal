@@ -44,6 +44,7 @@ constexpr auto kMaxValueAfterReductionCbIndex = tt::CBIndex::c_8;
 constexpr auto kExpSumBeforeReductionCbIndex = tt::CBIndex::c_9;
 constexpr auto KExpSumAfterReductionCbIndex = tt::CBIndex::c_10;
 constexpr auto kOutputCbIndex = tt::CBIndex::c_11;
+constexpr auto kMatMulReduceCbIndex = tt::CBIndex::c_12;
 
 constexpr uint32_t kNumTargetIndexesTiles = 1U;
 constexpr uint32_t kNumMaskTiles = 1U;
@@ -54,6 +55,7 @@ constexpr uint32_t kNumMaxValueAfterReductionTiles = 2U;
 constexpr uint32_t kNumExpSumBeforeReductionTiles = 2U;
 constexpr uint32_t kNumExpSumAfterReductionTiles = 2U;
 constexpr uint32_t kNumScalerTiles = 1U;  // used it to reduction
+constexpr uint32_t kNumMatMulReduceTiles = 1U;
 constexpr uint32_t kNumOutputTiles = 1U;
 
 constexpr uint32_t kPageElementsNumber = 32U;
@@ -188,14 +190,15 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 
     const uint64_t mask_scaler_maxmask_memory =
-        (kNumMaskTiles + kNumScalerTiles + kNumMaskTiles) * bfloat16_single_tile_size_bytes;
+        (kNumMaskTiles + kNumScalerTiles + kNumMaskTiles + kNumMatMulReduceTiles) * bfloat16_single_tile_size_bytes;
     const uint64_t output_memory = kNumOutputTiles * bfloat16_single_tile_size_bytes;
     const uint64_t max_value_memory =
         (kNumMaxValueAfterReductionTiles + kMaxValueBeforeReductionTiles) * bfloat16_single_tile_size_bytes;
     const uint64_t exp_sum_memory =
         (kNumExpSumBeforeReductionTiles + kNumExpSumAfterReductionTiles) * float32_single_tile_size_bytes;
-    const uint64_t input_memory =
-        Wt * bfloat16_single_tile_size_bytes + 2U * bfloat16_single_tile_size_bytes + uint32_read_page_size;
+    const uint64_t input_memory = Wt * bfloat16_single_tile_size_bytes +
+                                  (kNumInputTilesByIndx + kNumTargetLogitsTiles) * bfloat16_single_tile_size_bytes +
+                                  uint32_read_page_size;
 
     // Total L1 memory required
     const uint64_t required_L1_in_bytes =
@@ -206,6 +209,9 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
     const uint32_t num_input_tiles = (everything_fits_in_l1) ? Wt : twice_block_size;
 
     auto data_format = input_data_format;  // tt::DataFormat::Float16_b
+    // The exp sums accumulate Wt bf16 tiles; keeping them in fp32 through the reduction avoids
+    // the large-vocab precision loss (the L1 budget above already sizes them as fp32).
+    auto precise_data_format = tt::DataFormat::Float32;
     auto target_indexes_data_format = tt::DataFormat::UInt32;
 
     [[maybe_unused]] auto cb_input = create_circular_buffer(
@@ -249,17 +255,20 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
         program,
         all_cores,
         kExpSumBeforeReductionCbIndex,
-        data_format,
-        bfloat16_single_tile_size_bytes,
+        precise_data_format,
+        float32_single_tile_size_bytes,
         kNumExpSumBeforeReductionTiles);
 
     [[maybe_unused]] auto cb_exp_sum_after_reduction = create_circular_buffer(
         program,
         all_cores,
         KExpSumAfterReductionCbIndex,
-        data_format,
-        bfloat16_single_tile_size_bytes,
+        precise_data_format,
+        float32_single_tile_size_bytes,
         kNumExpSumAfterReductionTiles);
+
+    [[maybe_unused]] auto cb_matmul_reduce = create_circular_buffer(
+        program, all_cores, kMatMulReduceCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMatMulReduceTiles);
 
     [[maybe_unused]] auto cb_output = create_circular_buffer(
         program,

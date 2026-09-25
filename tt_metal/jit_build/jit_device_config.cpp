@@ -198,7 +198,8 @@ void enumerate_jit_device_configs(
                             profiler_dram_bank_size_per_risc_bytes,
                             enable_dram_backed_cq,
                             /*is_simulator=*/false,
-                            /*enable_blackhole_dram_programmable_cores=*/true);
+                            /*enable_blackhole_dram_programmable_cores=*/true,
+                            /*enable_aerisc_ptp_trace=*/true);
                         JitDeviceConfig jit_device_config = {
                             .hal = &hal,
                             .arch = arch,
@@ -209,6 +210,7 @@ void enumerate_jit_device_configs(
                             // has no effect on compilation
                             .harvesting_mask = 0,
                             .dispatch_core_type = dispatch_core_type,
+                            .resolved_dispatch_core_type = resolve_dispatch_core_type(arch, dispatch_core_type),
                             .dispatch_core_axis = dispatch_core_axis,
                             .coordinate_virtualization_enabled = true,
                             .dispatch_message_addr = dispatch_message_addr(hal, dispatch_core_type),

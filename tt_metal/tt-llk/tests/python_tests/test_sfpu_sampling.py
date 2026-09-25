@@ -6,7 +6,7 @@ Sampling SFPU helpers test.
 Covers every entry point of
 hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sampling.h:
 
-  recip_scalar<legacy_compat>          1/x                    rows 0-3
+  recip_scalar                         1/x                    rows 0-3
   clamp_max_scalar(max)                min(x, max)            rows 0-3
   mul_unary_scalar_first_column(k)     x * k                  rows 0-15
   binary_comp_first_column<le|lt|ge>   (in0 OP in1) ? 1 : 0   rows 0-15
@@ -56,8 +56,8 @@ from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
-    SAMPLING_LEGACY_COMPAT,
     SAMPLING_OP,
+    SAMPLING_PRGM0_HAZARD,
     SFPU_UNARY_SCALAR,
     VECTOR_MODE,
 )
@@ -209,14 +209,10 @@ def assert_even_columns(
     formats=FORMATS,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     op=list(SAMPLING_OPS.keys()),
-    legacy_compat=[True, False],
     vector_mode=[VectorMode.None_, VectorMode.C],
 )
-def test_sfpu_sampling(formats, dest_acc, op, legacy_compat, vector_mode):
+def test_sfpu_sampling(formats, dest_acc, op, vector_mode):
     is_binary, rows_per_face = SAMPLING_OPS[op]
-
-    if op != "recip_scalar" and not legacy_compat:
-        pytest.skip("legacy_compat only applies to recip_scalar")
 
     if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
         pytest.skip("Float32 inputs with dest_acc=No are not supported")
@@ -269,7 +265,6 @@ def test_sfpu_sampling(formats, dest_acc, op, legacy_compat, vector_mode):
         formats,
         templates=[
             SAMPLING_OP(sampling_op=op),
-            SAMPLING_LEGACY_COMPAT(legacy_compat=legacy_compat),
             SFPU_UNARY_SCALAR(value_bits=scalar_bits),
             VECTOR_MODE(vector_mode=vector_mode),
         ],
@@ -357,3 +352,157 @@ def test_sfpu_sampling(formats, dest_acc, op, legacy_compat, vector_mode):
                 f"{op}: face 1 (columns 16-31) must be untouched, but "
                 f"[{row}, {col}] holds {got}, want {want}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Cross-op vConstFloatPrgm0 hazard (tt-metal #52745)
+# ---------------------------------------------------------------------------
+# The sweep above always calls sampling_recip_init immediately before the op, so it proves
+# the init *works* but never that it is *necessary*. #52745's stated motivation is the
+# opposite direction: the reciprocal reads vConstFloatPrgm0 as its
+# Newton-Raphson constant, and only sfpu_reciprocal_init writes the 2.0f it expects, so a
+# kernel that ran some other vConstFloatPrgm0-owning op earlier computes silently wrong.
+#
+# The driver stands that hazard up: SAMPLING_POLLUTE_PRGM0 runs log_init first (which sets
+# the register to LOG_TWO * 2^-23, about 8.3e-8 -- nine orders of magnitude from 2.0f, so a
+# surviving pollution cannot be mistaken for rounding), and SAMPLING_SKIP_RECIP_INIT drops
+# the repair.
+_HAZARD_ROWS = 4  # recip_scalar walks DEST rows 0-3 of face 0
+
+
+@skip_for_wormhole
+@parametrize(
+    formats=FORMATS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    skip_init=[False, True],
+)
+def test_sfpu_sampling_recip_prgm0_hazard(formats, dest_acc, skip_init):
+    """Prove sampling_recip_init repairs a polluted vConstFloatPrgm0, and is required to.
+
+    With an earlier log_init having taken vConstFloatPrgm0, calling the reciprocal
+    init must repair the constant; skipping it must expose the loss of refinement.
+
+    The polluter always runs, so it is a constant in the driver rather than an axis: with
+    no polluter and no init, vConstFloatPrgm0 holds whatever the invariant LLK SFPU init
+    happened to leave, which is not a defined value and so not something to assert on
+    either way.
+    """
+    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
+        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+
+    torch.manual_seed(0)
+    torch_format = format_dict[formats.input_format]
+
+    in0_rows = _bf16_row_values()
+    in1_rows = _bf16_row_values()
+    in0_tile = _column_uniform_tile(in0_rows, torch_format)
+    in1_tile = _column_uniform_tile(in1_rows, torch_format)
+    background_tile = torch.full(
+        (TILE_DIM, TILE_DIM), OUT_BACKGROUND, dtype=torch_format
+    )
+
+    src_A = torch.cat(
+        [
+            tilize_block(
+                t.flatten(), [TILE_DIM, TILE_DIM], stimuli_format=formats.input_format
+            ).flatten()
+            for t in (in0_tile, in1_tile, background_tile)
+        ]
+    )
+    src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch_format)
+    scalar_bits = _f32_bits(MUL_SCALAR)
+
+    configuration = TestConfig(
+        "sources/sfpu_sampling_test.cpp",
+        formats,
+        templates=[
+            SAMPLING_OP(sampling_op="recip_scalar"),
+            SFPU_UNARY_SCALAR(value_bits=scalar_bits),
+            VECTOR_MODE(vector_mode=VectorMode.None_),
+            SAMPLING_PRGM0_HAZARD(pollute=True, skip_init=skip_init),
+        ],
+        runtimes=[],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=NUM_TILES,
+            tile_count_B=1,
+            tile_count_res=NUM_TILES,
+        ),
+        dest_acc=dest_acc,
+        unpack_to_dest=formats.input_format.is_32_bit(),
+    )
+
+    res_from_L1 = configuration.run().result
+    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    out_face = untilize_block(
+        res_tensor[:ELEMENTS_PER_TILE],
+        formats.output_format,
+        [TILE_DIM, TILE_DIM],
+    ).reshape(TILE_DIM, TILE_DIM)
+
+    in0_ref = round_to_dest_width(in0_tile[:, 0], dest_acc)
+    in1_ref = round_to_dest_width(in1_tile[:, 0], dest_acc)
+    golden_generator = get_golden_generator(SamplingGolden)
+    transformed = golden_generator(
+        "recip_scalar", in0_ref, in1_ref, scalar_bits, dest_acc
+    )
+
+    tol = _rel_tol("recip_scalar", dest_acc, formats.output_format)
+    device_rows = out_face[:_HAZARD_ROWS, 0].to(torch.float32)
+    golden_rows = torch.as_tensor(transformed[:_HAZARD_ROWS]).to(torch.float32)
+    close = torch.allclose(device_rows, golden_rows, rtol=tol, atol=tol)
+    max_rel = ((device_rows - golden_rows).abs() / golden_rows.abs()).max().item()
+
+    # The suite's own 2% tolerance for recip_scalar is far too loose to see this hazard,
+    # which is precisely why it went unnoticed: a polluted vConstFloatPrgm0 does not produce
+    # garbage, it makes `t = x * y - Prgm0` come out *positive* (Prgm0 becomes ~8.3e-8
+    # instead of 2.0), so the `v_if(t < 0)` Newton-Raphson refinement inside
+    # sfpu_reciprocal_iter never fires and the raw approx_recip result survives. That costs
+    # roughly 1e-3 relative -- real, but well inside 2%.
+    #
+    # Measured on BH p100a, max relative error vs golden:
+    #
+    #   output / dest_acc      recip_init called    recip_init skipped
+    #   Float16_b / No              0.0                   6.2e-03
+    #   Float32   / Yes             1.1e-07               5.0e-03
+    #   Float16_b / Yes             2.3e-03               5.0e-03
+    #
+    # so 1e-3 cleanly separates refined from unrefined in the first two rows. The third is
+    # excluded from the strict check: there the packer's own fp32->bf16 conversion already
+    # costs 2.3e-3, only 2.2x away from the unrefined error, so the two are not reliably
+    # distinguishable and a strict assertion would be measuring the packer, not the hazard.
+    _STRICT_REL = 1e-3
+    strict_cell = (
+        dest_acc == DestAccumulation.No or formats.output_format == DataFormat.Float32
+    )
+
+    expect_correct = not skip_init
+
+    if not strict_cell:
+        assert close, (
+            f"recip_scalar(recip_init={not skip_init}) "
+            f"exceeded even the loose suite tolerance: max_rel={max_rel:.3e}"
+        )
+        return
+
+    refined = max_rel <= _STRICT_REL
+
+    if expect_correct:
+        assert refined, (
+            f"recip_scalar(recip_init={not skip_init}) "
+            f"after log_init polluted vConstFloatPrgm0: max_rel={max_rel:.3e} exceeds "
+            f"{_STRICT_REL:.0e}, i.e. the Newton-Raphson refinement did not run. "
+            + "sampling_recip_init should have restored the 2.0f constant."
+        )
+    else:
+        assert not refined, (
+            f"recip_scalar refined to max_rel={max_rel:.3e} "
+            f"(<= {_STRICT_REL:.0e}) even though vConstFloatPrgm0 was polluted by "
+            "log_init and sampling_recip_init was skipped -- the init is not "
+            "load-bearing here, so #52745's motivation for adding it does not "
+            "reproduce and this test has lost its point"
+        )

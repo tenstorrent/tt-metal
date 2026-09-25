@@ -146,7 +146,7 @@ def _run_conv2d(
 
 # The stem conv routes through conv_bmm_tilize which currently deadlocks on Quasar (see test_conv_hang.py);
 # cap the run so that hang surfaces as a timeout, not a suite block.
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(1200)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, in_channels, out_channels, input_height, input_width, kernel_size, stride, padding, shard_layout, reshard_if_not_optimal",

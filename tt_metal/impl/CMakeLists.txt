@@ -107,6 +107,14 @@ list(APPEND IMPL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/internal/disaggregation/kv_chun
 add_library(impl OBJECT ${IMPL_SRC})
 add_library(Metalium::Metal::Impl ALIAS impl)
 
+# Keep the reload extension from perturbing the established unity source batches.
+set_source_files_properties(
+    ${CMAKE_CURRENT_SOURCE_DIR}/internal/reload_table.cpp
+    PROPERTIES
+        SKIP_UNITY_BUILD_INCLUSION
+            TRUE
+)
+
 # Enable unity builds and PCH reuse for faster compilation. When the optional
 # OpenMP dispatch path in the host BFP tilizer is enabled, we have to skip
 # the shared PCH: the PCH is built across the whole project without
@@ -116,7 +124,7 @@ add_library(Metalium::Metal::Impl ALIAS impl)
 # source easy to isolate.
 if(NOT TT_BFP_HOST_TILIZER_OPENMP)
     TT_ENABLE_UNITY_BUILD(impl)
-    target_precompile_headers(impl REUSE_FROM metal_common_pch)
+    tt_reuse_precompile_headers(impl metal_common_pch)
 endif()
 
 target_link_libraries(
@@ -184,9 +192,10 @@ if(TT_METAL_USE_EMULE)
     target_link_libraries(
         impl
         PRIVATE
-            tt-emule::headers
+            tt_emule_runtime
             dl
     )
+    target_include_directories(impl PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/emulation)
 endif()
 
 # Generate Inspector RPC stub file

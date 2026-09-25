@@ -9,7 +9,9 @@
 #include "groupnorm_input_mask.hpp"
 
 #include <mutex>
+#include <optional>
 #include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/allocator.hpp>
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
@@ -84,6 +86,105 @@ void validate_dram_grid(
             requested.x,
             requested.y);
     }
+}
+
+// Decides whether the sharded program needs the negative-mask CB-overlap trick to fit in L1.
+bool needs_negative_mask_overlap(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::prim::GroupNormShardedMultiCoreProgramConfig& program_config,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<ttnn::Tensor>& gamma,
+    const std::optional<ttnn::Tensor>& beta,
+    const std::optional<ttnn::Tensor>& input_mask,
+    const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
+    float eps,
+    bool use_welford,
+    uint32_t num_groups) {
+    using tt::tt_metal::BufferType;
+    using tt::tt_metal::HalMemType;
+    using tt::tt_metal::Layout;
+
+    // Only the ROW_MAJOR-in / ROW_MAJOR-out non-Welford sharded kernels have a negative-mask
+    // path.
+    if (use_welford || input_tensor.layout() != Layout::ROW_MAJOR ||
+        program_config.output_layout != Layout::ROW_MAJOR) {
+        return false;
+    }
+
+    auto* device = input_tensor.device();
+    const auto& allocator = device->allocator();
+    const uint32_t l1_base = allocator->get_base_allocator_addr(HalMemType::L1);
+    // L1 tensor buffers grow down from the top of L1 while circular buffers grow up from
+    // l1_base, so the gap between the two is what the CB region has to fit into. nullopt means
+    // no L1 tensor is placed at all, which cannot happen on this path.
+    const auto lowest_occupied = device->lowest_occupied_compute_l1_address();
+    if (!lowest_occupied.has_value() || lowest_occupied.value() <= l1_base) {
+        return false;
+    }
+    uint32_t available = lowest_occupied.value() - l1_base;
+
+    // The output buffer is allocated after this point, so account for it up front.
+    if (!program_config.inplace && output_mem_config.buffer_type() == BufferType::L1) {
+        const auto output_spec = ttnn::prim::GroupNormDeviceOperation::compute_output_specs(
+            ttnn::prim::GroupNormParams{
+                .eps = eps,
+                .num_groups = num_groups,
+                .output_mem_config = output_mem_config,
+                .program_config = program_config,
+                .compute_kernel_config = compute_kernel_config,
+                .use_welford = use_welford},
+            ttnn::prim::GroupNormInputs{.input = input_tensor});
+        const uint32_t output_per_bank = static_cast<uint32_t>(output_spec.compute_consumed_memory_bytes_per_bank(
+            allocator->get_alignment(BufferType::L1), allocator->get_num_banks(BufferType::L1)));
+        if (output_per_bank >= available) {
+            // Nothing left for CBs either way.
+            return false;
+        }
+        available -= output_per_bank;
+    }
+
+    const auto pad = ttnn::prim::make_group_norm_pad_correction(
+        static_cast<uint32_t>(input_tensor.logical_shape()[2]),
+        static_cast<uint32_t>(input_tensor.padded_shape()[2]),
+        use_welford);
+    const auto cb_sizes = ttnn::prim::compute_sharded_gn_static_cb_sizes(
+        input_tensor,
+        program_config.im_data_format,
+        gamma.has_value() ? std::make_optional(gamma->dtype()) : std::nullopt,
+        beta.has_value() ? std::make_optional(beta->dtype()) : std::nullopt,
+        input_mask.has_value() ? std::make_optional(input_mask->dtype()) : std::nullopt,
+        /*negative_mask_dtype=*/std::nullopt,  // synthesized, hence bfloat16
+        use_welford,
+        // c_7 sizing matches the factory by construction now: the sharded writer streams a single
+        // (double-buffered) mask set even under the pad correction -- the row mask is composed on
+        // device (c_18/c_19) -- so there is no second-set factor to keep in sync here.
+        num_groups);
+    const uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
+    ttnn::prim::GroupNormShardedCbFlags flags{
+        .with_negative_mask = false,
+        .untilize_out = true,  // guaranteed by the ROW_MAJOR output check above
+        .has_gamma = gamma.has_value(),
+        .has_beta = beta.has_value(),
+        .reader_repack_output = (input_tensor.shard_spec().value().shape[1] % tile_width) != 0,
+        .use_welford = use_welford,
+        .pad_correction_active = pad.active};
+    const uint32_t cb_total = cb_sizes.total(flags);
+
+    const bool needed = cb_total > available;
+    if (needed) {
+        flags.with_negative_mask = true;
+        log_debug(
+            tt::LogOp,
+            "group_norm: enabling the negative-mask CB overlap -- {} B of CBs do not fit in {} B of L1, "
+            "the overlap needs {} B",
+            cb_total,
+            available,
+            cb_sizes.total(flags));
+    } else {
+        log_debug(
+            tt::LogOp, "group_norm: no negative-mask overlap needed ({} B of CBs fit in {} B)", cb_total, available);
+    }
+    return needed;
 }
 
 int64_t get_group_norm_cores_across_channel(
@@ -198,6 +299,7 @@ Tensor group_norm(
     TT_FATAL(
         input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
         "Unsupported memory layout: Input tensor cannot be width-sharded.");
+
 
     const auto& input_shape = input_tensor.logical_shape();
     TT_FATAL(
@@ -410,33 +512,36 @@ Tensor group_norm(
         validate_dram_grid(core_grid.value(), W, Ht, num_groups, input_padded_shape[0]);
     }
 
-    // Non-tile-aligned H*W: the tile-padding rows are not guaranteed to hold zeros (reshape, slice
-    // and exp all leave non-zero bytes there), so they must be excluded from both accumulation
-    // passes. The input mask is already multiplied into both, so carry a second set of mask tiles
-    // with those rows zeroed; the kernels select it on the final row-tile of each batch. Nothing
-    // writes to the input tensor, which is what makes this work for sharded too. See #52685.
-    // Welford is unaffected: non-tile-aligned H*W already fell back to the two-pass path above.
+    // Tile-aligned H*W: the caller's optional passes straight through; when it is empty the
+    // writer kernel synthesizes the per-group {0.0, 1.0} selector directly in L1 (see
+    // groupnorm_mask_synthesize.hpp).
+    //
+    // Non-tile-aligned H*W: the tile-padding rows are not guaranteed to hold zeros (reshape,
+    // slice and exp all leave non-zero bytes there), so both accumulation passes must exclude
+    // them via a row-masked variant of the mask on each batch's final row-tile. An empty
+    // optional still means "synthesize". Welford is unaffected: non-tile-aligned H*W already
+    // fell back to the two-pass path above.
+    //
+    // A caller-supplied mask is honoured as the column selector (synthesis is bf16-only, while
+    // callers commonly supply BFLOAT8_B). A doubled mask built with rows_in_last_tile is
+    // accepted; a single-set mask is used for both sets.
     const uint32_t rows_in_last_tile =
         (input_padded_shape[2] != input_shape[2] && !use_welford) ? (input_shape[2] % tile_height_align) : 0;
 
-    // auto generate mask tensor if both input_mask and negative_mask are not provided
-    ttnn::Tensor mask = operations::normalization::get_mask_tensor(
-        input_tensor, input_mask, negative_mask, core_grid.value(), num_groups, rows_in_last_tile);
-
-    // Fallback for a caller-supplied mask not built with rows_in_last_tile: derive the second set
-    // here. Costs a host build, an upload, a multiply and a concat per call, so prefer passing
-    // rows_in_last_tile to create_group_norm_input_mask instead.
+    std::optional<ttnn::Tensor> effective_input_mask = input_mask;
     if (rows_in_last_tile != 0 && input_mask.has_value() &&
-        mask.padded_shape()[1] == static_cast<uint32_t>(num_groups)) {
-        const auto row_mask = operations::normalization::create_group_norm_row_mask(
-                                  rows_in_last_tile,
-                                  mask.padded_shape()[1],
-                                  mask.padded_shape()[3],
-                                  mask.dtype(),
-                                  tile_height_align)
-                                  .to_device(mask.device());
+        input_mask.value().padded_shape()[1] == static_cast<uint32_t>(num_groups)) {
+        // Caller supplied a single-set mask for a non-tile-aligned input. Derive the row-masked
+        // second set. Costs a host build, an upload, a multiply and a concat per call, so prefer
+        // passing rows_in_last_tile to create_group_norm_input_mask -- or omitting the mask
+        // entirely, which is now free on this path.
+        ttnn::Tensor mask = input_mask.value();
+        const auto row_mask =
+            operations::normalization::create_group_norm_row_mask(
+                rows_in_last_tile, mask.padded_shape()[1], mask.padded_shape()[3], mask.dtype(), tile_height_align)
+                .to_device(mask.device());
         const auto row_masked = ttnn::multiply(mask, row_mask, mask.dtype());
-        mask = ttnn::concat({mask, row_masked}, 1);
+        effective_input_mask = ttnn::concat({mask, row_masked}, 1);
     }
 
     if (input_tensor.is_sharded()) {
@@ -446,6 +551,19 @@ Tensor group_norm(
             .out_data_format = out_dtype,
             .inplace = inplace.value_or(false),
             .output_layout = output_layout.value_or(input_tensor.layout())};
+        // A caller-supplied negative_mask always wins; otherwise the op decides for itself
+        // whether it needs it.
+        const bool synthesize_negative_mask = !negative_mask.has_value() && needs_negative_mask_overlap(
+                                                                                input_tensor,
+                                                                                program_config,
+                                                                                output_mem_config,
+                                                                                gamma,
+                                                                                beta,
+                                                                                input_mask,
+                                                                                kernel_config_val,
+                                                                                epsilon,
+                                                                                use_welford,
+                                                                                static_cast<uint32_t>(num_groups));
         return ttnn::prim::group_norm(
             input_tensor,
             epsilon,
@@ -456,9 +574,10 @@ Tensor group_norm(
             use_welford,
             gamma,
             beta,
-            mask,
+            effective_input_mask,
             negative_mask,
-            effective_reciprocals);
+            effective_reciprocals,
+            synthesize_negative_mask);
     }
 
     const uint32_t per_batch_hw = input_padded_shape[1] * input_padded_shape[2];
@@ -545,9 +664,11 @@ Tensor group_norm(
         use_welford,
         gamma,
         beta,
-        mask,
+        effective_input_mask,
         negative_mask,
-        effective_reciprocals);
+        effective_reciprocals,
+        // The interleaved factories have no negative-mask code path at all.
+        /*synthesize_negative_mask=*/false);
     if (untilize_out_on_host) {
         output = ttnn::to_layout(output, Layout::ROW_MAJOR);
     }

@@ -10,6 +10,7 @@
 #include <optional>
 #include <string_view>
 
+#include <enchantum/enchantum.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -34,8 +35,7 @@ using tt::tt_fabric::chan_id_t;
 using tt::tt_fabric::EDMStatus;
 
 // Emule teleports cross-chip traffic at the fabric client-API shim and never runs the ERISC router,
-// so its launch/sync handshake would never complete — skip it (as for Mock). See tt-emule
-// docs/fabric-ccl-emulation.md.
+// so its launch/sync handshake would never complete — skip it (as for Mock).
 bool skip_fabric_fw_for_emule() {
     return MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Emule;
 }
@@ -287,12 +287,36 @@ void FabricFirmwareInitializer::init(
         return;
     }
 
-    if (descriptor_->is_mock_device() || skip_fabric_fw_for_emule()) {
-        log_info(tt::LogMetal, "Skipping fabric initialization for mock/emule devices");
+    // Emule compiles kernels to x86 and never links an erisc binary.
+    if (skip_fabric_fw_for_emule()) {
+        log_info(tt::LogMetal, "Skipping fabric initialization for emule devices");
+        return;
+    }
+
+    // Mock: compile only, to warm the erisc kernel cache. Everything past the compile is device
+    // I/O that MockChip discards.
+    if (descriptor_->is_mock_device()) {
+        const auto fabric_manager = descriptor_->fabric_manager();
+        if (has_flag(fabric_manager, tt_fabric::FabricManagerMode::INIT_FABRIC) ||
+            has_flag(fabric_manager, tt_fabric::FabricManagerMode::TERMINATE_FABRIC)) {
+            compile_fabric_only();
+        }
         return;
     }
 
     if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
+        // Reject fabric launch on a single-host mesh with fewer than 2 opened chips.
+        // Multi-host meshes with 1 local chip per rank are unaffected: peers live on other ranks.
+        const auto local_mesh_ids = control_plane_.get_local_mesh_id_bindings();
+        const size_t num_hosts = control_plane_.get_mesh_graph().get_host_ranks(local_mesh_ids.front()).size();
+        TT_FATAL(
+            devices_.size() > 1 || num_hosts > 1,
+            "Fabric config {} requires at least 2 participating chips, but the opened mesh has {} "
+            "local device(s) on a single host. Either open a larger mesh (e.g. a MeshShape with >= 2 "
+            "devices) or call SetFabricConfig(FabricConfig::DISABLED) before opening a 1-chip mesh.",
+            enchantum::to_string(fabric_config),
+            devices_.size());
+
         log_info(tt::LogMetal, "Initializing Fabric");
 #if defined(TT_UMD_BUILD_SIMULATION)
         if (rtoptions_.get_simulator_enabled()) {
@@ -322,8 +346,7 @@ void FabricFirmwareInitializer::init(
 }
 
 void FabricFirmwareInitializer::configure() {
-    // Mock/Emule: skip router sync (init() skips fabric; sync would fatal/timeout — emule never
-    // runs the ERISC router, so the handshake status stays NOT_STARTED).
+    // Mock/Emule: no router ever runs, so the sync below would spin to its timeout and throw.
     if (descriptor_->is_mock_device() || skip_fabric_fw_for_emule()) {
         log_info(tt::LogMetal, "Skipping fabric configure (router sync) for mock/emule devices");
         initialized_.test_and_set();
@@ -442,6 +465,24 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
         }
     }
     log_info(tt::LogMetal, "Fabric initialized on {} devices", configured_count);
+}
+
+void FabricFirmwareInitializer::compile_fabric_only() {
+    // ERISC debug builds run from L1 and may exceed the fabric router's L1 budget.
+    // Skipping only leaves the cache cold.
+    if (!rtoptions_.get_erisc_iram_enabled()) {
+        log_info(tt::LogMetal, "Skipping mock fabric compile: erisc IRAM disabled by debug tooling");
+        return;
+    }
+    log_info(tt::LogMetal, "Compiling fabric on mock devices (no router programming or sync)");
+
+    // Serial on purpose: the shared tensix mux config mutates state from a const getter, which
+    // races when devices compile in parallel.
+    for (auto* dev : devices_) {
+        if (!dev->compile_fabric()) {
+            log_trace(tt::LogMetal, "Did not build fabric on Device {}", dev->id());
+        }
+    }
 }
 
 void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms) const {

@@ -6,6 +6,7 @@
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/debug/dprint.h"
 #include "experimental/kernel_args.h"
 
@@ -13,7 +14,8 @@ void kernel_main() {
     constexpr uint32_t num_entries_per_consumer = get_arg(args::num_entries_per_consumer);
     DataflowBuffer dfb(dfb::in);
 
-    unary_op_init_common(dfb::in, dfb::in);
+    compute_kernel_hw_startup(dfb::in, dfb::in);
+    copy_init(dfb::in);
 
     // Each consumer pops exactly num_entries_per_consumer entries from its own TC(s).
     // No modulo-skip is needed: the DFB hardware delivers only this consumer's entries

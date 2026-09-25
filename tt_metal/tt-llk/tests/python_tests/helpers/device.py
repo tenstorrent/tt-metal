@@ -113,6 +113,70 @@ ALL_CORES = get_all_cores()
 TRISC_CORES = get_all_cores(trisc_only=True)
 
 
+# Successful enumerations only. A miss must not stick: pytest_configure used to
+# call this before silicon/RTL Exalens init, and caching an empty tuple pinned
+# the session to a fake 8-wide grid.
+_functional_tensix_locations: dict[int, tuple] = {}
+
+
+def get_functional_tensix_locations(device_id: int = 0) -> tuple:
+    """Logical coordinates of every Tensix this card actually has, in a stable order.
+
+    "functional_workers" is the post-harvesting list, so this is what is really on
+    the part rather than what the architecture nominally provides. Logical
+    coordinates are already dense over that set and print as "x,y", which is the
+    form TENSIX_LOCATION carries and OnChipCoordinate.create parses back.
+
+    Raises if Exalens cannot answer. Compile-producer never calls this; a miss
+    here is a device-backed run that failed to find its cores.
+    """
+    cached = _functional_tensix_locations.get(device_id)
+    if cached is not None:
+        return cached
+    try:
+        device = check_context().devices[device_id]
+        locations = [
+            coordinate.to_str("logical")
+            for coordinate in device.get_block_locations("functional_workers")
+        ]
+    except Exception as err:
+        raise RuntimeError(
+            f"Could not enumerate Tensix cores from Exalens: "
+            f"{type(err).__name__}: {err}"
+        ) from err
+    # Every worker derives its own core from this list independently, so the order
+    # has to come out identical in each process; get_block_locations promises none.
+    result = tuple(
+        sorted(locations, key=lambda loc: tuple(int(v) for v in loc.split(",")))
+    )
+    if not result:
+        raise RuntimeError(
+            "Exalens reported no functional Tensix workers on this device."
+        )
+    _functional_tensix_locations[device_id] = result
+    return result
+
+
+def tensix_location_for_worker(worker_index: int, device_id: int = 0) -> str:
+    """The Tensix an xdist worker owns.
+
+    Two workers sharing a core would silently corrupt each other's results, so
+    running wider than the card is fatal rather than wrapped. Call after Exalens
+    has a context; an enumeration failure is not a reason to invent cores.
+    """
+    locations = get_functional_tensix_locations(device_id)
+    if worker_index >= len(locations):
+        # Also reachable without over-subscribing: xdist numbers a replacement for
+        # a crashed worker above every existing one, so a run that keeps losing
+        # cores climbs into this eventually.
+        raise RuntimeError(
+            f"worker {worker_index} has no Tensix to run on: the card has "
+            f"{len(locations)} functional core(s). Lower --device-jobs, or stop "
+            f"replacing wedged workers, so the total stays under that."
+        )
+    return locations[worker_index]
+
+
 def get_register_store(location="0,0", device_id=0, neo_id=0):
     CHIP_ARCH = get_chip_architecture()
     context = check_context()
@@ -313,11 +377,21 @@ def _print_callstack(risc_name: str, callstack: list[CallstackEntry]) -> str:
     for idx, entry in enumerate(callstack):
         # Format PC hex like Rust does
         pc = f"0x{entry.pc:016x}" if entry.pc is not None else "0x????????????????"
-        file_path = (TESTS_DIR / Path(entry.file)).resolve()
         # first line: idx, pc, function
         temp_str += f"{idx:>4}: {pc} - {entry.function_name}\n"
-        # second line: file, line, column
-        temp_str += f"{' '*25}| at {file_path}:{entry.line}:{entry.column}\n"
+        # second line: file, line, column. ttexalens >= 0.3.29 moved these onto a nullable
+        # CallstackEntry.file_info (DwarfFileLine); older versions exposed them directly on the
+        # entry. Support both, and tolerate frames with no DWARF line info at all -- an
+        # AttributeError here would mask the LLK assertion we are trying to report.
+        file_info = getattr(entry, "file_info", entry)
+        source_file = (
+            getattr(file_info, "file", None) if file_info is not None else None
+        )
+        if source_file is None:
+            temp_str += f"{' '*25}| at <no line info>\n"
+            continue
+        file_path = (TESTS_DIR / Path(source_file)).resolve()
+        temp_str += f"{' '*25}| at {file_path}:{file_info.line}:{file_info.column}\n"
 
     return temp_str
 

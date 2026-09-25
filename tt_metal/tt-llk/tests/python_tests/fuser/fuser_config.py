@@ -18,9 +18,11 @@ from helpers.perf.schema import LOOP_FACTOR_COLUMN, MARKER, TEST_NAME_COLUMN
 from helpers.profiler import Profiler, ProfilerData
 from helpers.test_config import BuildMode, ProfilerBuild, StimuliMode, TestConfig
 
+from .fpu_node import FpuNode
 from .l1_operation import L1Operation
 from .operand import OperandRegistry
 from .sentinel import FuserSentinel
+from .sfpu_node import SfpuNode
 
 
 @dataclass
@@ -33,6 +35,7 @@ class GlobalConfig:
     perf_run_type: PerfRunType = None
     loop_factor: int = 16
     quasar_use_dvalid: bool = False
+    skip_for_perf: bool = False
     sentinel: FuserSentinel = field(default_factory=FuserSentinel)
 
     @property
@@ -79,6 +82,32 @@ class FuserConfig(TestConfig):
 
         if self.global_config.architecture is None:
             self.global_config.architecture = self.CHIP_ARCH
+        self._validate_pack_sfpu_formats()
+
+    def _validate_pack_sfpu_formats(self):
+        config = self.global_config
+        if config.dest_acc.value or not any(
+            isinstance(node, SfpuNode) for op in self.pipeline for node in op.pack_nodes
+        ):
+            return
+        formats = set()
+        for op in self.pipeline:
+            config.sentinel.prepare_operation(config, op)
+            output_format = op._get_pack_nodes()[0].output.data_format
+            for node in op.math_nodes:
+                if isinstance(node, FpuNode) and node.src_a is not None:
+                    formats.add(
+                        config.sentinel._infer_node_formats(
+                            config, node, output_format, op
+                        )[4]
+                    )
+            for node in op.pack_nodes:
+                if isinstance(node, SfpuNode):
+                    formats.add(config.sentinel._dest_source_format(config, op, node))
+        if len(formats) > 1:
+            raise ValueError(
+                "pack-thread SFPU requires a stable math format throughout a 16-bit Dst pipeline"
+            )
 
     def generate_variant_hash(self):
         NON_COMPILATION_ARGUMENTS = [
@@ -117,6 +146,9 @@ class FuserConfig(TestConfig):
 
         from .kernel_generator import FUSED_TESTS_DIR
 
+        if self.global_config.skip_for_perf:
+            pytest.skip(f"'{self.global_config.test_name}' opts out of perf runs")
+
         self.global_config.profiler_enabled = True
         self.profiler_build = ProfilerBuild.Yes
 
@@ -134,6 +166,7 @@ class FuserConfig(TestConfig):
         for run_type in run_types:
             runs = []
             self.global_config.perf_run_type = run_type
+            self.global_config.sentinel = FuserSentinel()
 
             self.test_name = (
                 FUSED_TESTS_DIR / f"{self.global_config.test_name}_{run_type.name}.cpp"
@@ -182,7 +215,7 @@ class FuserConfig(TestConfig):
             perf_report.append(results)
             logger.info("Perf results:\n{}", results)
 
-            csv_prefix = f"{self.global_config.test_name}_fused_test"
+            csv_prefix = f"{self.global_config.test_name.replace('/', '_')}_fused_test"
             perf_report.dump_csv(f"{csv_prefix}.{worker_id}.csv")
             perf_report.post_process()
             perf_report.dump_csv(f"{csv_prefix}.{worker_id}.post.csv")

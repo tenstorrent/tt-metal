@@ -14,24 +14,26 @@ from helpers.golden_generators import (
     get_golden_generator,
 )
 from helpers.llk_params import (
+    BlocksCalculationAlgorithm,
     BroadcastType,
     DestSync,
     ImpliedMathFormat,
-    MathFidelity,
     MathOperation,
     PerfRunType,
     format_dict,
 )
 from helpers.param_config import (
-    generate_unary_input_dimensions,
+    generate_reduced_input_dimensions,
+    get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    quasar_mx_smoke,
     runtime,
 )
-from helpers.perf.core import PerfConfig
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import BootMode, TestConfig
+from helpers.test_config import BootMode
 from helpers.test_variant_parameters import (
     BROADCAST_TYPE,
     DEST_SYNC,
@@ -39,10 +41,12 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_FIDELITY,
     MATH_OP,
+    NUM_BLOCKS,
     NUM_FACES,
-    PERF_RUN_TYPE,
+    NUM_TILES_IN_BLOCK,
     TEST_FACE_DIMS,
     TILE_COUNT,
+    generate_input_dim,
 )
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
 from helpers.utils import passed_test
@@ -50,16 +54,22 @@ from helpers.utils import passed_test
 TILE_ELEMS = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
 FACE_ELEMS = 16 * 16
 
-BINARY_BROADCAST_FORMATS = input_output_formats(
-    [
-        DataFormat.Float16_b,
-        DataFormat.Float16,
-        DataFormat.MxFp4,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
-    ],
-) + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
+BINARY_BROADCAST_FORMATS = (
+    input_output_formats(
+        [
+            DataFormat.Float16_b,
+            DataFormat.Float16,
+        ],
+    )
+    + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
+    + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
+)
+
+BROADCAST_TYPES = [
+    BroadcastType.Column,
+    BroadcastType.Row,
+    BroadcastType.Scalar,
+]
 
 
 def binary_broadcast_dest_sync_modes(*, is_perf=False):
@@ -74,22 +84,6 @@ def binary_broadcast_implied_math_formats(format, *, is_perf=False):
     return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
 
 
-def binary_broadcast_math_fidelities(format, mathop, *, is_perf=False):
-    if format.input_format == DataFormat.Int8:
-        return [MathFidelity.LoFi]
-    if is_perf:
-        return [MathFidelity.LoFi]
-    return get_valid_math_fidelities(format, mathop)
-
-
-def binary_broadcast_input_dimensions(dest_acc, dest_sync_mode, *, is_perf=False):
-    if is_perf:
-        # Nested list: parametrize treats a flat list as multiple values, so
-        # [32, 32] would become input_dimensions=32 (int) and break generate_stimuli.
-        return [[DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM]]
-    return generate_unary_input_dimensions(dest_acc, dest_sync_mode)
-
-
 @pytest.mark.quasar
 @parametrize(
     formats=BINARY_BROADCAST_FORMATS,
@@ -99,19 +93,13 @@ def binary_broadcast_input_dimensions(dest_acc, dest_sync_mode, *, is_perf=False
         MathOperation.Elwsub,
         MathOperation.Elwmul,
     ],
-    broadcast_type=[
-        BroadcastType.Column,
-        BroadcastType.Row,
-        BroadcastType.Scalar,
-    ],
-    math_fidelity=lambda formats, mathop: binary_broadcast_math_fidelities(
-        formats, mathop
-    ),
+    broadcast_type=BROADCAST_TYPES,
+    math_fidelity=lambda formats, mathop: get_valid_math_fidelities(formats, mathop),
     implied_math_format=lambda formats: binary_broadcast_implied_math_formats(formats),
     dest_sync_mode=lambda: binary_broadcast_dest_sync_modes(is_perf=False),
     input_dimensions=runtime(
-        lambda dest_acc, dest_sync_mode: binary_broadcast_input_dimensions(
-            dest_acc, dest_sync_mode, is_perf=False
+        lambda dest_acc, dest_sync_mode: generate_reduced_input_dimensions(
+            dest_acc, dest_sync_mode
         )
     ),
     run_types=[[PerfRunType.L1_TO_L1]],
@@ -133,6 +121,14 @@ def test_eltwise_binary_broadcast_quasar(
     is_perf=False,
     perf_report=None,
 ):
+
+    num_blocks, tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        dest_sync_mode,
+        dest_acc,
+        formats,
+        input_dimensions,
+        blocks_algorithm=BlocksCalculationAlgorithm.Standard,
+    )
 
     if formats.input_format == DataFormat.Int8:
         stimuli_spec = StimuliSpec.uniform(low=-127.0, high=127.0)
@@ -189,7 +185,10 @@ def test_eltwise_binary_broadcast_quasar(
             DEST_SYNC(dest_sync_mode),
         ],
         "runtimes": [
+            generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_cnt_A),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(tiles_in_block),
             NUM_FACES(4),
             TEST_FACE_DIMS(),
             LOOP_FACTOR(loop_factor),
@@ -210,19 +209,16 @@ def test_eltwise_binary_broadcast_quasar(
         "disable_format_inference": formats.input_format.is_mx_format(),
     }
 
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
+        boot_mode=boot_mode,
+    )
     if is_perf:
-        configuration = PerfConfig(run_types=run_types, **test_config_kwargs)
         configuration.run(perf_report)
         return
 
-    configuration = TestConfig(
-        **{
-            **test_config_kwargs,
-            "templates": test_config_kwargs["templates"]
-            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
-            "boot_mode": boot_mode,
-        },
-    )
     res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(

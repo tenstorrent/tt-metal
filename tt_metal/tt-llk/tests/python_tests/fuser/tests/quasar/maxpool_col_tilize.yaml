@@ -1,0 +1,38 @@
+# Column max reduce that reads in0 through the strided tilize unpack, then
+# untilizes the pooled output (maxpool over the column dimension).
+
+dest_acc: false
+
+operands:
+  - name: input_A
+    dims: [2016, 160]
+    format: Float16_b
+  - name: input_B
+    dims: [32, 32]
+    format: Float16_b
+    const_value: 1.0
+  - name: maxpool_out
+    dims: [672, 480]
+    format: Float16_b
+
+operations:
+  - math:
+      - type: Fpu
+        operation: Reduce
+        reduce_dim: REDUCE_COL
+        reduce_pool: MAX
+        unpacker: UnpackReduceTilize
+        math_fidelity: HiFi4
+        in0: input_A
+        in1: input_B
+        block_size: [32, 160]
+        indexes:
+          in0: {count: 63, step: 5}
+          in1:
+            multipliers: {tile_x: 0, tile_y: 0}
+    pack:
+      - output: maxpool_out
+        packer: PackUntilize
+        block_size: [32, 160]
+        indexes:
+          out: {count: 63, step: 5}

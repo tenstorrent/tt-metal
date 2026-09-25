@@ -14,6 +14,7 @@ from helpers.golden_generators import (
     quantize_mx_tensor_chunked,
 )
 from helpers.llk_params import (
+    BlocksCalculationAlgorithm,
     DestAccumulation,
     DestSync,
     ImpliedMathFormat,
@@ -22,28 +23,33 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
-    generate_unary_input_dimensions,
+    generate_perf_input_dimensions,
+    generate_reduced_input_dimensions,
+    get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
     runtime,
+    select_perf_tile_sizes,
 )
-from helpers.perf.core import PerfConfig
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (  # generate_stimuli_w_tile_dimensions
     generate_stimuli,
 )
-from helpers.test_config import BootMode, TestConfig
+from helpers.test_config import BootMode
 from helpers.test_variant_parameters import (
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
+    NUM_BLOCKS,
     NUM_FACES,
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
-    PERF_RUN_TYPE,
+    NUM_TILES_IN_BLOCK,
     RELU_CONFIG,
     TEST_FACE_DIMS,
     TILE_COUNT,
+    generate_input_dim,
 )
 from helpers.tile_constants import (
     MX_SUPPORTED_TILE_SIZES,
@@ -64,8 +70,8 @@ def generate_qsr_pack_combinations(
 
     Args:
         formats_list: List of input/output format pairs
-        is_perf: Restrict combinations to SyncHalf, NoRelu, a 16x16 tile,
-            and a 32x32 input for performance measurements.
+        is_perf: Restrict combinations to SyncHalf, MOP-class tile sizes, and
+            dest-full perf input dimensions for performance measurements.
 
     Returns:
         List of (format, dest_acc, dest_sync, input_dimensions, relu_type,
@@ -128,36 +134,19 @@ def generate_qsr_pack_combinations(
         # Threshold ReLU modes are not supported for integer pack_src formats
         # (mirroring the pytest.skip guard in the test body).
         relu_types = (
-            [PackerReluType.NoRelu]
-            if is_perf
-            else (
-                [PackerReluType.NoRelu, PackerReluType.ZeroRelu]
-                if in_fmt.is_integer()
-                else all_relu_types
-            )
+            [PackerReluType.NoRelu, PackerReluType.ZeroRelu]
+            if in_fmt.is_integer()
+            else all_relu_types
         )
         for dest_acc in get_dest_acc_modes(in_fmt):
             if is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
-                if is_perf:
-                    tile_dims = MX_SUPPORTED_TILE_SIZES[0]
-                    if is_mx_unsupported_tile_dims(in_fmt, out_fmt, tile_dims):
-                        continue
-                    input_dimensions = [32, 32]  # [rows, columns]
-                    for dest_sync in dest_sync_modes:
-                        for relu_type in relu_types:
-                            combinations.append(
-                                (
-                                    fmt,
-                                    dest_acc,
-                                    dest_sync,
-                                    runtime(input_dimensions),
-                                    runtime(relu_type),
-                                    runtime(tile_dims),
-                                )
-                            )
-                    continue
+                tile_sizes = (
+                    select_perf_tile_sizes(SUPPORTED_TILE_SIZES)
+                    if is_perf
+                    else SUPPORTED_TILE_SIZES
+                )
                 for dest_sync in dest_sync_modes:
-                    for tile_dims in SUPPORTED_TILE_SIZES:
+                    for tile_dims in tile_sizes:
                         if is_mx_unsupported_tile_dims(in_fmt, out_fmt, tile_dims):
                             continue
                         # Unpack-to-dest (required for 32-bit formats) does not support tiny tiles.
@@ -168,16 +157,23 @@ def generate_qsr_pack_combinations(
                         ):
                             continue
                         tile_shape = construct_tile_shape(tile_dims)
-                        for dimensions in generate_unary_input_dimensions(
-                            dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
-                        ):
+                        dimensions_list = (
+                            generate_perf_input_dimensions(
+                                dest_acc, dest_sync, tile_shape
+                            )
+                            if is_perf
+                            else generate_reduced_input_dimensions(
+                                dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
+                            )
+                        )
+                        for dimensions in dimensions_list:
                             for relu_type in relu_types:
                                 combinations.append(
                                     (
                                         fmt,
                                         dest_acc,
                                         dest_sync,
-                                        runtime(dimensions),
+                                        runtime(dimensions) if is_perf else dimensions,
                                         runtime(relu_type),
                                         runtime(tile_dims),
                                     )
@@ -195,6 +191,8 @@ PACK_FORMATS = input_output_formats(
         DataFormat.Int8,
         DataFormat.UInt8,
         DataFormat.Int16,
+        DataFormat.MxFp8R,
+        DataFormat.MxFp8P,
         DataFormat.MxFp4,
         DataFormat.MxInt8,
         DataFormat.MxInt4,
@@ -241,6 +239,15 @@ def test_pack_quasar(
 
     num_faces = tile_shape.total_num_faces()
 
+    num_blocks, tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        dest_sync_mode,
+        dest_acc,
+        formats,
+        input_dimensions,
+        tile_dimensions,
+        BlocksCalculationAlgorithm.Standard,
+    )
+
     # Same method as test_pack.py for original ReLu testing and threshold tolerance issue
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
@@ -285,8 +292,9 @@ def test_pack_quasar(
             tile_shape=tile_shape,
         )
 
+        # THCON_PACKER<n>_RELU_THRESHOLD has to be a +ve number, so use the mean magnitude
         tensor_average = (
-            torch.mean(golden_tensor).item()
+            torch.mean(torch.abs(golden_tensor)).item()
             if not formats.output_format.is_integer()
             else 0.0
         )
@@ -317,10 +325,15 @@ def test_pack_quasar(
             TEST_FACE_DIMS(tile_shape.face_r_dim),
             NUM_FACES(num_faces),
             TILE_COUNT(tile_cnt_A),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(tiles_in_block),
             RELU_CONFIG(relu_config),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
             NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
             LOOP_FACTOR(loop_factor),
+            generate_input_dim(
+                input_dimensions, input_dimensions, tile_dimensions=tile_dimensions
+            ),
         ],
         "variant_stimuli": StimuliConfig(
             src_A,
@@ -341,26 +354,22 @@ def test_pack_quasar(
         "disable_format_inference": (formats.input_format.is_mx_format()),
     }
 
-    if is_perf:
-        configuration = PerfConfig(run_types=run_types, **test_config_kwargs)
-        configuration.run(perf_report)
-        return
-
     # Single output MX quantization, after relu — matches HW's pack-time
     # block-scale derivation from post-relu values.
-    if formats.output_format.is_mx_format():
+    if not is_perf and formats.output_format.is_mx_format():
         golden_tensor = quantize_mx_tensor_chunked(
             golden_tensor.to(torch.bfloat16), formats.output_format
         )
 
-    configuration = TestConfig(
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
         boot_mode=boot_mode,
-        **{
-            **test_config_kwargs,
-            "templates": test_config_kwargs["templates"]
-            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
-        },
     )
+    if is_perf:
+        configuration.run(perf_report)
+        return
 
     res_from_L1 = configuration.run().result
 

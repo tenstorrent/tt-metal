@@ -22,7 +22,6 @@
 #include "jit_build/build_env_manager.hpp"
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "impl/kernels/kernel.hpp"
 // Access to internal API: ProgramImpl::get_kernels
 #include "impl/program/program_impl.hpp"
@@ -33,7 +32,6 @@ TEST_F(MeshDeviceFixture, TensixTestEquivalentDataMovementKernelsWithDifferentPr
     const std::string kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
 
     for (const auto& mesh_device : this->devices_) {
-        auto* device = mesh_device->get_devices()[0];
         jit_build_cache_clear();
 
         DataMovementConfig config_riscv_0 = {.processor = DataMovementProcessor::RISCV_0};
@@ -42,7 +40,7 @@ TEST_F(MeshDeviceFixture, TensixTestEquivalentDataMovementKernelsWithDifferentPr
         Program program = CreateProgram();
         KernelHandle kernel_handle_riscv_0 = CreateKernel(program, kernel_file, CoreCoord(0, 0), config_riscv_0);
         KernelHandle kernel_handle_riscv_1 = CreateKernel(program, kernel_file, CoreCoord(0, 0), config_riscv_1);
-        slow_dispatch::CompileProgram(*mesh_device, program);
+        program.impl().compile(mesh_device.get());
 
         const uint32_t tensix_core_type =
             MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
@@ -50,11 +48,11 @@ TEST_F(MeshDeviceFixture, TensixTestEquivalentDataMovementKernelsWithDifferentPr
         const int riscv_0_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(config_riscv_0.processor);
         const int riscv_1_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(config_riscv_1.processor);
         const JitBuildState& build_state_riscv_0 =
-            BuildEnvManager::get_instance(extract_context_id(device))
-                .get_kernel_build_state(device->build_id(), tensix_core_type, dm_class_idx, riscv_0_id);
+            BuildEnvManager::get_instance(extract_context_id(mesh_device.get()))
+                .get_kernel_build_state(mesh_device->build_id(), tensix_core_type, dm_class_idx, riscv_0_id);
         const JitBuildState& build_state_riscv_1 =
-            BuildEnvManager::get_instance(extract_context_id(device))
-                .get_kernel_build_state(device->build_id(), tensix_core_type, dm_class_idx, riscv_1_id);
+            BuildEnvManager::get_instance(extract_context_id(mesh_device.get()))
+                .get_kernel_build_state(mesh_device->build_id(), tensix_core_type, dm_class_idx, riscv_1_id);
 
         const auto& kernels = program.impl().get_kernels(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
         const std::string full_kernel_name_riscv_0 = kernels.at(kernel_handle_riscv_0)->get_full_kernel_name();

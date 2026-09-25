@@ -12,13 +12,17 @@ class PerfSchemaError(AssertionError):
 
 MARKER = "marker"
 
+# Zones that use bare ZONE_SCOPED (no entry rendezvous), exempt from the cross-thread ordering invariant.
+NON_RENDEZVOUS_MARKERS = frozenset({"UNINIT"})
+
 FORMAT_HEADERS = (
     "formats.input_A",
     "formats.input_B",
     "formats.register_A",
     "formats.register_B",
     "formats.output",
-    "formats.sfpu_math",
+    "formats.sfpu_src",
+    "formats.sfpu_dst",
 )
 FLAG_HEADERS = ("unpack_to_dest", "dest_acc")
 
@@ -90,7 +94,14 @@ def assert_unique_columns(columns, context: str = "") -> None:
 
 # Run-type names — mirror helpers/llk_params.py::PerfRunType.
 RUN_TYPE_NAMES = frozenset(
-    {"L1_TO_L1", "UNPACK_ISOLATE", "MATH_ISOLATE", "PACK_ISOLATE", "L1_CONGESTION"}
+    {
+        "L1_TO_L1",
+        "UNPACK_ISOLATE",
+        "MATH_ISOLATE",
+        "PACK_ISOLATE",
+        "L1_CONGESTION",
+        "SFPU_ISOLATE",
+    }
 )
 
 # Stat kinds a timing/counter column may carry.

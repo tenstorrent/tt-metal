@@ -8,12 +8,15 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/internal/cluster_noc_helpers.hpp>
-#include <umd/device/chip_helpers/tlb_manager.hpp>
+#include <internal/cluster_noc_helpers.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <algorithm>
 #include <chrono>
+#include <exception>
 #include <random>
+#include <stdexcept>
+#include <string>
+#include <thread>
 #include "gmock/gmock.h"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -23,12 +26,15 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "tt_metal/distributed/mesh_socket_serialization.hpp"
+#include "tt_metal/impl/buffers/d2h_socket_internal.hpp"
+#include "tt_metal/impl/buffers/h2d_socket_internal.hpp"
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include <cstring>
 #include <tt-metalium/tt_align.hpp>
 #include "tt_metal/llrt/tt_cluster.hpp"
+#include <umd/device/io_window/io_window.hpp>
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 
 namespace tt::tt_metal::distributed {
@@ -230,7 +236,7 @@ void test_hd_socket_loopback(
                 static_cast<uint32_t>(scratch_buffer->address()),
             }});
 
-    uint32_t num_txns = data_size / page_size;
+    const uint32_t num_txns = data_size / page_size;
     std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
     std::vector<uint32_t> dst_vec(data_size / sizeof(uint32_t));
 
@@ -313,32 +319,81 @@ void test_hd_socket_multithreaded_loopback(
     input_socket.set_page_size(page_size);
     output_socket.set_page_size(page_size);
 
-    uint32_t page_size_words = page_size / sizeof(uint32_t);
-    uint32_t data_size_words = data_size / sizeof(uint32_t);
+    const uint32_t page_size_words = page_size / sizeof(uint32_t);
+    const uint32_t data_size_words = data_size / sizeof(uint32_t);
+    const uint32_t total_pages = num_iterations * num_txns;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
 
-    // Socket Read/Write done over different threads.
-    std::thread write_thread([&]() {
-        for (uint32_t i = 0; i < num_iterations; i++) {
-            for (uint32_t j = 0; j < num_txns; j++) {
-                input_socket.write(src_vec.data() + (i * data_size_words) + (j * page_size_words), 1);
+    auto retry_until_deadline =
+        [deadline](auto&& operation, const char* timeout_message, uint32_t completed_pages, uint32_t total_pages) {
+            while (!operation()) {
+                if (std::chrono::steady_clock::now() >= deadline) {
+                    throw std::runtime_error(
+                        std::string(timeout_message) + " after " + std::to_string(completed_pages) + "/" +
+                        std::to_string(total_pages) + " pages completed");
+                }
+                std::this_thread::yield();
             }
+        };
+
+    std::exception_ptr write_error;
+    std::exception_ptr read_error;
+
+    // Socket read/write are done on different threads, with each socket confined to one host thread.
+    std::thread write_thread([&]() {
+        try {
+            for (uint32_t i = 0; i < num_iterations; i++) {
+                for (uint32_t j = 0; j < num_txns; j++) {
+                    retry_until_deadline(
+                        [&]() {
+                            return experimental::detail::try_write(
+                                input_socket,
+                                src_vec.data() + (i * data_size_words) + (j * page_size_words),
+                                /*num_pages=*/1);
+                        },
+                        "Timed out waiting for space in the H2D socket",
+                        i * num_txns + j,
+                        total_pages);
+                }
+            }
+        } catch (...) {
+            write_error = std::current_exception();
         }
     });
 
     std::thread read_thread([&]() {
-        for (uint32_t i = 0; i < num_iterations; i++) {
-            for (uint32_t j = 0; j < num_txns; j++) {
-                output_socket.read(dst_vec.data() + (i * data_size_words) + (j * page_size_words), 1);
+        try {
+            for (uint32_t i = 0; i < num_iterations; i++) {
+                for (uint32_t j = 0; j < num_txns; j++) {
+                    retry_until_deadline(
+                        [&]() {
+                            return experimental::detail::try_read(
+                                output_socket,
+                                dst_vec.data() + (i * data_size_words) + (j * page_size_words),
+                                /*num_pages=*/1);
+                        },
+                        "Timed out waiting for data in the D2H socket",
+                        i * num_txns + j,
+                        total_pages);
+                }
             }
+        } catch (...) {
+            read_error = std::current_exception();
         }
     });
-    // Barrier with a timeout in the main thread ensure that the read/write threads are not hung.
-    input_socket.barrier(10000);
-    output_socket.barrier(10000);
 
     write_thread.join();
     read_thread.join();
 
+    if (write_error) {
+        std::rethrow_exception(write_error);
+    }
+    if (read_error) {
+        std::rethrow_exception(read_error);
+    }
+
+    input_socket.barrier(10000);
+    output_socket.barrier(10000);
     EXPECT_EQ(src_vec, dst_vec);
 }
 
@@ -517,9 +572,9 @@ TEST_F(L2CpuSocketFixture, DramBankTableMatchesAllocatorAndSocDescriptor) {
     }
 }
 
-// Every L2CPU tile must have a static TLB window anchored at the LIM base; without
-// the registration get_tlb_window() throws.
-TEST_F(L2CpuSocketFixture, L2CpuStaticTlbsAnchoredAtLimBase) {
+// H2D/D2H socket setup maps an L2CPU tile with a window anchored at the LIM base. Every tile must
+// be mappable that way, and the window must cover the LIM aperture the sockets address through it.
+TEST_F(L2CpuSocketFixture, L2CpuIoWindowsAnchoredAtLimBase) {
     if (!is_blackhole()) {
         GTEST_SKIP() << "L2CPU tiles only exist on Blackhole";
     }
@@ -531,19 +586,22 @@ TEST_F(L2CpuSocketFixture, L2CpuStaticTlbsAnchoredAtLimBase) {
         GTEST_SKIP() << "No unharvested L2CPU tiles on this device";
     }
 
+    // Spelled out here rather than taken from ll_api so the test checks the aperture the sockets
+    // are built around, not just that it agrees with itself.
     constexpr uint64_t kL2CpuLimBase = 0x08000000ULL;
-    auto* tlb_manager = MetalContext::instance().get_cluster().get_driver()->get_chip(device_id)->get_tlb_manager();
-    ASSERT_NE(tlb_manager, nullptr);
+    constexpr uint64_t kL2CpuLimSize = 2ULL * 1024 * 1024;
+    auto& cluster = MetalContext::instance().get_cluster();
 
     for (const auto& core : l2cpu_cores) {
-        const tt_xy_pair xy(core.x, core.y);
-        ASSERT_TRUE(tlb_manager->is_tlb_mapped(xy))
-            << "L2CPU (" << core.x << ", " << core.y << ") has no static TLB; H2D/D2H socket setup would throw";
-        EXPECT_EQ(tlb_manager->get_tlb_window(xy)->get_base_address(), kL2CpuLimBase)
-            << "L2CPU (" << core.x << ", " << core.y << ") TLB must be anchored at the LIM base";
-        // The config buffer and (in HOST_PUSH) the data FIFO are addressed
-        // through this window, so LIM base itself must be inside it.
-        EXPECT_TRUE(tlb_manager->is_tlb_mapped(xy, kL2CpuLimBase, sizeof(uint32_t)));
+        std::unique_ptr<tt::umd::IoWindow> window =
+            cluster.get_driver()->create_io_window(device_id, core, kL2CpuLimBase, {.size = kL2CpuLimSize});
+        ASSERT_NE(window, nullptr) << "L2CPU (" << core.x << ", " << core.y
+                                   << ") cannot be mapped; H2D/D2H socket setup would throw";
+        EXPECT_EQ(window->get_target_config().addr, kL2CpuLimBase)
+            << "L2CPU (" << core.x << ", " << core.y << ") window must be anchored at the LIM base";
+        // The config buffer and (in HOST_PUSH) the data FIFO are addressed through this window, so
+        // the whole LIM aperture has to be reachable from the anchor.
+        EXPECT_GE(window->get_size(), kL2CpuLimSize);
     }
 }
 
@@ -581,7 +639,7 @@ TEST_F(L2CpuSocketFixture, L2CpuSocketRejectsInvalidLimAddresses) {
     EXPECT_ANY_THROW(H2DSocket(*mesh_device_, l2cpu, /*fifo_size=*/0, config_addr, data_addr, H2DMode::HOST_PUSH));
     EXPECT_ANY_THROW(H2DSocket(*mesh_device_, l2cpu, pcie_alignment + 1, config_addr, data_addr, H2DMode::HOST_PUSH));
 
-    // In HOST_PUSH the ring lives in LIM and is reached through the static TLB window,
+    // In HOST_PUSH the ring lives in LIM and is reached through the IoWindow,
     // so a ring running past the window end must be rejected at construction.
     EXPECT_ANY_THROW(H2DSocket(
         *mesh_device_,

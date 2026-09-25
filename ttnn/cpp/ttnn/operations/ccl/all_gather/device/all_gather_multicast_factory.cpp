@@ -92,6 +92,12 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         if (!is_axis_active) {
             continue;
         }
+        // A true 2D collective cannot fall back to unicast, so factory selection cannot save us
+        // here. No mesh view bends a true 2D axis today, so this only guards a future one.
+        TT_FATAL(
+            !fabric_is_2d || operation_attributes.axis_is_straight[axis],
+            "AllGather 2D multicast needs mesh axis {} wired straight, but it turns corners",
+            axis);
 
         const auto axis_topology = operation_attributes.axis_topology[axis];
         const uint32_t axis_index = sender_device_coord[axis];

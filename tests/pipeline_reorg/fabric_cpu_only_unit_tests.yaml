@@ -16,6 +16,7 @@
     cpu_medium:
       timeout: 15
   team: scaleout
+  budget_type: unit
   arch: wormhole_b0
   owner_id: U08RRAU5E15 # Ridvan Song
 
@@ -30,6 +31,7 @@
     cpu_medium:
       timeout: 25
   team: scaleout
+  budget_type: unit
   arch: wormhole_b0
   owner_id: U08RRAU5E15 # Ridvan Song
 
@@ -50,6 +52,7 @@
       # see https://github.com/tenstorrent/tt-metal/issues/49313.)
       timeout: 15
   team: scaleout
+  budget_type: unit
   arch: wormhole_b0
   owner_id: U08RRAU5E15 # Ridvan Song
 
@@ -61,6 +64,7 @@
       # 14 fast layout/pipeline-builder combos (SC4 revC subtorus aisleC/aisleD); ~3 min.
       timeout: 15
   team: scaleout
+  budget_type: unit
   arch: wormhole_b0
   owner_id: U08RRAU5E15 # Ridvan Song
 
@@ -74,6 +78,7 @@
       # run completes in ~40 min, so this shard gets a dedicated 55-min budget for host-variance headroom.
       timeout: 55
   team: scaleout
+  budget_type: unit
   arch: wormhole_b0
   owner_id: U08RRAU5E15 # Ridvan Song
 
@@ -84,6 +89,7 @@
     cpu_medium:
       timeout: 15
   team: scaleout
+  budget_type: unit
   arch: wormhole_b0
   owner_id: U08RRAU5E15 # Ridvan Song
 
@@ -96,6 +102,7 @@
     cpu_medium:
       timeout: 15
   team: scaleout
+  budget_type: unit
   arch: wormhole_b0
   owner_id: U08RRAU5E15 # Ridvan Song
 
@@ -108,6 +115,7 @@
       # 32x4 5-group ring — the slowest CPU-only shard; 15 min timed out on CI.
       timeout: 40
   team: scaleout
+  budget_type: unit
   arch: wormhole_b0
   owner_id: U08RRAU5E15 # Ridvan Song
 
@@ -120,6 +128,18 @@
       # suite has grown past the old 15-min cap (deterministic timeout on main nightly).
       timeout: 30
   team: scaleout
+  budget_type: unit
+  arch: wormhole_b0
+  owner_id: U08RRAU5E15 # Ridvan Song
+
+- id: fabric-cpu-pipeline-placement-sc20
+  name: fabric cpu pipeline placement (SC20)
+  cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group pipeline-placement --grep "TT_PIPELINE_TEST_STAGES=20"
+  skus:
+    cpu_medium:
+      timeout: 10
+  team: scaleout
+  budget_type: unit
   arch: wormhole_b0
   owner_id: U08RRAU5E15 # Ridvan Song
 
@@ -128,10 +148,13 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-ring-stress
   skus:
     cpu_medium:
-      # Long-running: 5 non-pod-aligned ring maps (20/24/28/32/36 stages) on the 36-host SC36 revC subtorus
-      # aisleD mock. Erratic general-SAT solves. ~1.5 min locally BUT the cpu_medium CI runner is ~4x
-      # slower -- the 4-stage step measured 5m34s on CI, so 5 stages ~6.5 min; 10 min = ~1.5x margin.
-      timeout: 10
+      # Long-running: non-pod-aligned ring maps (20/24/28/32/36 stages) on the SC36 revC subtorus aisleD
+      # and SC36 revAB subtorus aisleC (SC20 mapping) mocks, plus the long 96/112-stage rings embedded on
+      # the full SC36 aisleD mock and the 112-stage exact fit on the SC28 aisleD subset, plus the SC24
+      # 96-stage/6-BigMesh entries. Erratic general-SAT solves; the cpu_medium CI runner is ~4x slower
+      # than local (the 4-stage step measured 5m34s on CI). Budgeted from local end-to-end x4 + margin.
+      timeout: 45
   team: scaleout
+  budget_type: unit
   arch: wormhole_b0
   owner_id: U08RRAU5E15 # Ridvan Song

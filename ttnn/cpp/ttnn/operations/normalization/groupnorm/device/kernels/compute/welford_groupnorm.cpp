@@ -9,7 +9,9 @@
 
 #include "api/compute/reduce.h"
 #include "api/compute/bcast.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
@@ -20,6 +22,41 @@
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
+
+namespace ckl = compute_kernel_lib;
+
+struct FusedActivation : ckl::UnaryOp<FusedActivation, ckl::Dst::D0> {
+    static ALWI void init() {
+#ifdef SFPU_OP_INIT_ACTIVATION
+        SFPU_OP_INIT_ACTIVATION
+#endif
+    }
+
+    static ALWI void exec_impl([[maybe_unused]] uint32_t i) {
+#ifdef SFPU_OP_INIT_ACTIVATION
+        constexpr uint32_t dst0 = 0;
+        SFPU_OP_FUNC_ACTIVATION
+#endif
+    }
+};
+
+// The optional fused activation is applied to the final output tile in DEST, right before it is
+// packed into dfb_out (see "Write out the final output" below). The UNTILIZE_OUT branch routes the
+// output through a different CB chain (dfb_untilize_in_id), so that insertion point would not be
+// the last touch of the data — fail the build rather than fuse into the wrong place.
+#if defined(UNTILIZE_OUT) && defined(SFPU_OP_INIT_ACTIVATION)
+#error "fused activation + UNTILIZE_OUT not wired: untilize consumes dfb_untilize_in, not dfb_out"
+#endif
+
+#ifdef SFPU_OP_INIT_ACTIVATION
+constexpr bool fused_activation_enabled = true;
+#else
+constexpr bool fused_activation_enabled = false;
+#endif
 
 void kernel_main() {
     /*
@@ -71,8 +108,8 @@ void kernel_main() {
      *       Store normalization factor in cb_ex2pe_id for use in final calculation
      *   Final Normalization:
      *       Center inputs: x - μ (mean subtraction)
-     *       Apply input mask to handle padding/ignored elements
      *       Scale by normalization factor: (x - μ) * (1/sqrt(Var + eps))
+     *       Apply input mask to handle padding/ignored elements
      *       Optional affine transform:
      *         Gamma scaling: result * γ
      *         Beta shift: result + β
@@ -88,8 +125,8 @@ void kernel_main() {
      * Examples: "Start Welford Partial Tile" or "End Statistics Aggregation"
      */
 
-    constexpr uint32_t do_gamma = get_named_compile_time_arg_val("do_gamma");
-    constexpr uint32_t do_beta = get_named_compile_time_arg_val("do_beta");
+    constexpr bool do_gamma = get_named_compile_time_arg_val("do_gamma") == 1;
+    constexpr bool do_beta = get_named_compile_time_arg_val("do_beta") == 1;
     constexpr uint32_t num_cores_per_mcast_group = get_named_compile_time_arg_val("num_cores_per_mcast_group");
 
     constexpr uint32_t num_batches = get_named_compile_time_arg_val("batch");
@@ -123,6 +160,11 @@ void kernel_main() {
     // its own buffer index configured with unpack_to_dest_mode=UnpackToDestFp32
     // dfb_in0 is in Default mode so the final-stage sub_tiles_bcast_scalar (FPU on SrcA) keeps working.
     constexpr uint32_t dfb_in0_welford_id = get_named_compile_time_arg_val("cb_in0_welford");
+#ifdef TILIZE_IN
+    constexpr uint32_t dfb_welford_in_id = dfb_in_id;
+#else
+    constexpr uint32_t dfb_welford_in_id = dfb_in0_welford_id;
+#endif
     // Boolean indicating whether the welford kernel uses the alias CB.
     constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
     // True when the welford intake CB is configured with UnpackToDestFp32, i.e. the FP32
@@ -182,6 +224,61 @@ void kernel_main() {
     constexpr int dfb_outbeta_id = dfb_out0_id;
 #endif
 
+    constexpr auto ex_global_scalar_offset_input = ckl::input(
+        dfb_ex_global_id,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Scalar,
+        ckl::DataFormatReconfig::Disabled,
+        ckl::TileAddressing::Offset);
+    constexpr auto in0_scalar_offset_input = ckl::input(
+        dfb_in0_id,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Scalar,
+        ckl::DataFormatReconfig::Disabled,
+        ckl::TileAddressing::Offset);
+    constexpr auto ex2pe_scalar_offset_input = ckl::input(
+        dfb_ex2pe_id,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Scalar,
+        ckl::DataFormatReconfig::Disabled,
+        ckl::TileAddressing::Offset);
+    constexpr auto input_mask_scalar_offset_input = ckl::input(
+        dfb_input_mask_id,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Scalar,
+        ckl::DataFormatReconfig::Disabled,
+        ckl::TileAddressing::Offset);
+    constexpr auto gamma_scalar_offset_input = ckl::input(
+        dfb_gamma_id,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Scalar,
+        ckl::DataFormatReconfig::Disabled,
+        ckl::TileAddressing::Offset);
+    constexpr auto beta_scalar_offset_input = ckl::input(
+        dfb_beta_id,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Scalar,
+        ckl::DataFormatReconfig::Disabled,
+        ckl::TileAddressing::Offset);
+    constexpr auto xmm_per_tile_input =
+        ckl::input(dfb_xmm_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled);
+    constexpr auto x_per_tile_input =
+        ckl::input(dfb_x_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled);
+    constexpr auto xmm_per_tile_output = ckl::output(
+        dfb_xmm_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled);
+    constexpr auto x_per_tile_output =
+        ckl::output(dfb_x_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled);
+    constexpr auto ex2pe_per_tile_output = ckl::output(
+        dfb_ex2pe_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled);
+    constexpr auto out_per_tile_output = ckl::output(
+        dfb_out_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled);
+
     DataflowBuffer dfb_beta(dfb_beta_id);
     DataflowBuffer dfb_eps(dfb_eps_id);
     DataflowBuffer dfb_ex2pe(dfb_ex2pe_id);
@@ -192,9 +289,6 @@ void kernel_main() {
     DataflowBuffer dfb_in0(dfb_in0_id);
     DataflowBuffer dfb_in0_welford(dfb_in0_welford_id);
     DataflowBuffer dfb_input_mask(dfb_input_mask_id);
-    DataflowBuffer dfb_out(dfb_out_id);
-    DataflowBuffer dfb_x(dfb_x_id);
-    DataflowBuffer dfb_xmm(dfb_xmm_id);
 
 // tilize input from RM to tile layout
 #ifdef TILIZE_IN
@@ -224,19 +318,9 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_in0_id, dfb_in0_id, dfb_in0_id);
 #endif
 
-    if constexpr (welford_unpack_fp32_active) {
-        // Reconfigure the transpose op for the welford intake CB. The factory marks this CB
-        // with UnpackToDestFp32: c_29 in the TILIZE_IN branch, c_19 in the non-TILIZE_IN alias branch.
-#ifdef TILIZE_IN
-        transpose_init(dfb_in_id);
-#else
-        transpose_init(dfb_in0_welford_id);
-#endif
-    }
-
     constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
     uint32_t num_out_blocks_padded = num_out_blocks;
-    uint32_t extra_out_block = false;
+    bool extra_out_block = false;
     uint32_t out_block_h_last = out_block_h_normal;
     if constexpr (block_h % num_out_blocks != 0) {
         extra_out_block = true;
@@ -246,8 +330,8 @@ void kernel_main() {
 
     // Get pointer to the reciprocal LUT
     using recip_lut_t = std::array<uint32_t, reciprocal_size>;
-    auto p_reciprocal =
-        norm::kernel_util::compute::memory::get_pointer_to_cb_data<recip_lut_t>(dfb_reciprocals_id, /*tile_idx=*/0);
+    auto* p_reciprocal =
+        norm::kernel_util::compute::memory::get_pointer_to_cb_data<recip_lut_t>(dfb_reciprocals_id, /*tile_index=*/0);
 
     dfb_eps.wait_front(1);
     dfb_input_mask.wait_front(num_tiles_input_mask);
@@ -260,6 +344,13 @@ void kernel_main() {
     }
 
     for (uint32_t b = 0; b < num_batches; ++b) {
+        // Aim the unpacker at the welford intake CB; the tail stage leaves SrcA on dfb_x, so this
+        // repeats every batch. Only the fp32 path needs the reconfig, and it must precede the init:
+        // transpose_init's LLK assert checks the unpack config registers against the operand it is given.
+        if constexpr (welford_unpack_fp32_active) {
+            reconfig_data_format_srca(dfb_welford_in_id);
+            transpose_init(dfb_welford_in_id);
+        }
         dfb_ex_partial.reserve_back(2);
         tile_regs_acquire();
         welford_init();
@@ -303,13 +394,8 @@ void kernel_main() {
                         // second before transpose_tile reads via the alias below.
                         dfb_in0_welford.wait_front(1);
                     }
-#ifdef TILIZE_IN
-                    transpose_init(dfb_in_id);
-                    transpose_tile(dfb_in_id, 0, input_dst);
-#else
-                    transpose_init(dfb_in0_welford_id);
-                    transpose_tile(dfb_in0_welford_id, 0, input_dst);
-#endif
+                    transpose_init(dfb_welford_in_id);
+                    transpose_tile(dfb_welford_in_id, 0, input_dst);
 
                     // Re-establish the welford SFPU replay buffer state. When transpose_tile
                     // takes the unpack-to-DEST fp32 path, transpose_tile calls
@@ -327,8 +413,8 @@ void kernel_main() {
                     uint32_t group_offset = 0;
                     for (uint32_t g = min_group; g < num_groups; ++g) {
                         // Start Welford Partial Tile Updates
-                        uint32_t cols_available = tile_width - group_offset;
-                        uint32_t cols_consumed = std::min(cols_available, channels_left);
+                        const uint32_t cols_available = tile_width - group_offset;
+                        const uint32_t cols_consumed = std::min(cols_available, channels_left);
 
                         welford_restore_state(mean_dst, g);
                         welford_update_rows<reciprocal_size>(
@@ -386,28 +472,24 @@ void kernel_main() {
         // Start Normalization Factor Calculation
         // Wait for final welford values in cb_ex_global_id
         dfb_ex_global.wait_front(2 * num_groups);
-        dfb_ex2pe.reserve_back(num_groups);
-        // (Var + eps)
         // fp32: dfb_ex_global is fp32 (var), dfb_eps is bf16; the welford intake left SrcA on the fp32 input alias.
         // Reset both srcs so they match the operands read below. no-op for bf16.
-        add_init(dfb_ex_global_id, dfb_eps_id);
         if constexpr (enable_fp32_reconfig) {
             reconfig_data_format_srca(dfb_ex_global_id);
         }
         reconfig_data_format_srcb(dfb_eps_id);
         for (uint32_t g = 0; g < num_groups; ++g) {
-            tile_regs_acquire();
-            add_tiles(dfb_ex_global_id, dfb_eps_id, 1 + (g << 1), 0, dst0);
-
-            // 1/[sqrt(Var + eps)]
-            rsqrt_tile_init<true>();
-            rsqrt_tile<true>(dst0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, dfb_ex2pe_id);
-            tile_regs_release();
+            ckl::eltwise_chain(
+                ckl::IterationShape::one_tile(),
+                ckl::BinaryFpu<
+                    ckl::BinaryFpuOp::Add,
+                    ex_global_scalar_offset_input,
+                    ckl::input(
+                        dfb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled)>{
+                    1 + (g << 1), 0u},
+                ckl::Rsqrt<ckl::Approx::Exact, ckl::Dst::D0>{},
+                ckl::PackTile<ex2pe_per_tile_output>{});
         }
-        dfb_ex2pe.push_back(num_groups);
         // End Normalization Factor Calculation
 
         dfb_ex2pe.wait_front(num_groups);
@@ -448,100 +530,70 @@ void kernel_main() {
 
                     uint32_t group_offset = 0;
                     for (uint32_t g = min_group; g < num_groups; ++g) {
-                        dfb_xmm.reserve_back(2);
-
                         // // Now let us do the actual computation for the current group here
                         // // a. x-u
                         // fp32: SrcA needs dfb_in0 (fp32 input), SrcB needs dfb_ex_global (fp32 mean); the prior
                         // group's mul_tiles(dfb_xmm) left SrcA on dfb_xmm. Use the unconditional 1-arg form: the old
                         // 2-arg srcb(dfb_eps -> dfb_ex_global) never reset SrcA at all.
-                        sub_bcast_scalar_init(dfb_in0_id, dfb_ex_global_id);
                         if constexpr (enable_fp32_reconfig) {
                             reconfig_data_format_srca(dfb_in0_id);
                             reconfig_data_format_srcb(dfb_ex_global_id);
                         } else {
                             reconfig_data_format_srcb(dfb_eps_id, dfb_ex_global_id);
                         }
+                        ckl::eltwise_chain(
+                            ckl::IterationShape::one_tile(),
+                            ckl::BinaryFpu<
+                                ckl::BinaryFpuOp::Sub,
+                                in0_scalar_offset_input,
+                                ckl::input(ex_global_scalar_offset_input, ckl::BroadcastDim::Scalar)>{0u, g << 1},
+                            ckl::PackTile<xmm_per_tile_output>{});
 
-                        tile_regs_acquire();
-                        sub_tiles_bcast_scalar(dfb_in0_id, dfb_ex_global_id, 0, 0 + (g << 1), dst0);
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        pack_tile(dst0, dfb_xmm_id);
-                        tile_regs_release();
-
-                        // // b. 1/[sqrt(Var + eps)] * mask
-                        const uint32_t mask_offset = g * block_w;
-                        const uint32_t mask_index = mask_offset + block_w_index;
-
-                        // fp32: reset SrcA to the mask format before reading dfb_input_mask (prior step left it on fp32
-                        // dfb_in0).
-                        mul_bcast_scalar_init(dfb_input_mask_id, dfb_ex2pe_id);
+                        // Normalize the centered input: (x - mean) * rsqrt(variance + epsilon).
                         if constexpr (enable_fp32_reconfig) {
-                            reconfig_data_format_srca(dfb_in0_id, dfb_input_mask_id);
+                            reconfig_data_format_srca(dfb_in0_id, dfb_xmm_id);
                         }
                         reconfig_data_format_srcb(dfb_ex_global_id, dfb_ex2pe_id);
-                        tile_regs_acquire();
-                        mul_tiles_bcast_scalar(dfb_input_mask_id, dfb_ex2pe_id, mask_index, g, dst0);
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        pack_tile(dst0, dfb_xmm_id);
-                        tile_regs_release();
-                        dfb_xmm.push_back(2);
+                        ckl::eltwise_chain(
+                            ckl::IterationShape::one_tile(),
+                            ckl::BinaryFpu<
+                                ckl::BinaryFpuOp::Mul,
+                                xmm_per_tile_input,
+                                ckl::input(ex2pe_scalar_offset_input, ckl::BroadcastDim::Scalar)>{0u, g},
+                            ckl::PackTile<xmm_per_tile_output>{});
 
-                        // // c. a * b
-                        dfb_xmm.wait_front(2);
-                        mul_init(dfb_xmm_id, dfb_xmm_id);
-                        // fp32: reset SrcA to dfb_xmm (fp32); step b above left SrcA on the bf16 input mask.
-                        if constexpr (enable_fp32_reconfig) {
-                            reconfig_data_format_srca(dfb_xmm_id);
-                        }
-                        reconfig_data_format_srcb(dfb_ex2pe_id, dfb_xmm_id);
-                        tile_regs_acquire();
-                        mul_tiles(dfb_xmm_id, dfb_xmm_id, 0, 1, dst0);
-                        tile_regs_commit();
-                        dfb_xmm.pop_front(2);
-                        dfb_xmm.reserve_back(1);
-                        tile_regs_wait();
-                        pack_tile(dst0, dfb_xmm_id);
-                        tile_regs_release();
-                        dfb_xmm.push_back(1);
-
-                        // // d. Add to cb_xmm_id (accumulate results)
-                        // // First we get the result in dst0
+                        // Keep the masked value in DEST and add the existing output before packing.
+                        const uint32_t mask_offset = g * block_w;
+                        const uint32_t mask_index = mask_offset + block_w_index;
+                        reconfig_data_format_srcb(dfb_ex2pe_id, dfb_input_mask_id);
                         if (group_offset == 0) {
-                            // When group_offset is 0, this is the first group for this tile,
-                            // so we can copy the results to cb_x_id without needing to add them
-                            copy_tile_init(dfb_xmm_id);
-
-                            dfb_xmm.wait_front(1);
-                            tile_regs_acquire();
-                            copy_tile(dfb_xmm_id, 0, dst0);
-                            tile_regs_commit();
-                            dfb_xmm.pop_front(1);
+                            ckl::eltwise_chain(
+                                ckl::IterationShape::one_tile(),
+                                ckl::BinaryFpu<
+                                    ckl::BinaryFpuOp::Mul,
+                                    xmm_per_tile_input,
+                                    ckl::input(input_mask_scalar_offset_input, ckl::BroadcastDim::Row)>{0u, mask_index},
+                                ckl::PackTile<x_per_tile_output>{});
                         } else {
-                            // This is not the first group for this tile, so we need to add
-                            // the results over what is already in cb_x_id
-                            add_init(dfb_x_id, dfb_xmm_id);
-
-                            dfb_xmm.wait_front(1);
-                            dfb_x.wait_front(1);
-                            tile_regs_acquire();
-                            add_tiles(dfb_x_id, dfb_xmm_id, 0, 0, dst0);
-                            tile_regs_commit();
-                            dfb_xmm.pop_front(1);
-                            dfb_x.pop_front(1);
+                            // Not the first group for this tile: add what is already in cb_x.
+                            reconfig_data_format_srca(dfb_x_id);
+                            ckl::eltwise_chain(
+                                ckl::IterationShape::one_tile(),
+                                ckl::BinaryFpu<
+                                    ckl::BinaryFpuOp::Mul,
+                                    xmm_per_tile_input,
+                                    ckl::input(input_mask_scalar_offset_input, ckl::BroadcastDim::Row)>{0u, mask_index},
+                                ckl::DestReuseBinary<
+                                    ckl::BinaryFpuOp::Add,
+                                    x_per_tile_input,
+                                    ckl::DestReuseType::DEST_TO_SRCB>{},
+                                ckl::PackTile<x_per_tile_output>{});
                         }
 
-                        // Then we pack the result into cb_x_id
-                        dfb_x.reserve_back(1);
-                        tile_regs_wait();
-                        pack_tile(dst0, dfb_x_id);
-                        tile_regs_release();
-                        dfb_x.push_back(1);
-
-                        uint32_t cols_available = tile_width - group_offset;
-                        uint32_t cols_consumed = std::min(cols_available, channels_left);
+                        // The blocks after this loop assume srcb still carries cb_xmm's format.
+                        reconfig_data_format_srcb(dfb_xmm_id);
+                        const uint32_t cols_available = tile_width - group_offset;
+                        const uint32_t cols_consumed = std::min(cols_available, channels_left);
                         channels_left -= cols_consumed;
                         group_offset += cols_consumed;
 
@@ -576,62 +628,37 @@ void kernel_main() {
                         // fp32: reset SrcA to dfb_x (fp32); the prior mask/accumulate step left SrcA on a bf16 format.
                         if constexpr (enable_fp32_reconfig) {
                             reconfig_data_format_srca(dfb_x_id);
-                            reconfig_data_format_srcb(dfb_xmm_id, dfb_gamma_id);
-                            mul_bcast_rows_init(dfb_x_id, dfb_gamma_id);
-                        } else {
-                            mul_bcast_rows_init(dfb_x_id, dfb_gamma_id);
-                            reconfig_data_format_srcb(dfb_xmm_id, dfb_gamma_id);
                         }
-
-                        dfb_x.wait_front(1);
-                        tile_regs_acquire();
-                        mul_tiles_bcast_rows(dfb_x_id, dfb_gamma_id, 0, nt, dst0);
-                        tile_regs_commit();
-                        dfb_x.pop_front(1);
-                        dfb_x.reserve_back(1);
-                        tile_regs_wait();
-                        pack_tile(dst0, dfb_x_id);
-                        tile_regs_release();
-                        dfb_x.push_back(1);
+                        reconfig_data_format_srcb(dfb_xmm_id, dfb_gamma_id);
+                        ckl::eltwise_chain(
+                            ckl::IterationShape::one_tile(),
+                            ckl::BinaryFpu<
+                                ckl::BinaryFpuOp::Mul,
+                                x_per_tile_input,
+                                ckl::input(gamma_scalar_offset_input, ckl::BroadcastDim::Row)>{0u, nt},
+                            ckl::PackTile<x_per_tile_output>{});
                     }
 
                     if constexpr (do_beta) {
                         // fp32: reset SrcA to dfb_x (fp32), same as the gamma step above.
                         if constexpr (enable_fp32_reconfig) {
                             reconfig_data_format_srca(dfb_x_id);
-                            reconfig_data_format_srcb(do_gamma ? dfb_gamma_id : dfb_xmm_id, dfb_beta_id);
-                            add_bcast_rows_init(dfb_x_id, dfb_beta_id);
-                        } else {
-                            add_bcast_rows_init(dfb_x_id, dfb_beta_id);
-                            reconfig_data_format_srcb(do_gamma ? dfb_gamma_id : dfb_xmm_id, dfb_beta_id);
                         }
-
-                        dfb_x.wait_front(1);
-                        tile_regs_acquire();
-                        add_tiles_bcast_rows(dfb_x_id, dfb_beta_id, 0, nt, dst0);
-                        tile_regs_commit();
-                        dfb_x.pop_front(1);
-                        dfb_x.reserve_back(1);
-                        tile_regs_wait();
-                        pack_tile(dst0, dfb_x_id);
-                        tile_regs_release();
-                        dfb_x.push_back(1);
+                        reconfig_data_format_srcb(do_gamma ? dfb_gamma_id : dfb_xmm_id, dfb_beta_id);
+                        ckl::eltwise_chain(
+                            ckl::IterationShape::one_tile(),
+                            ckl::BinaryFpu<
+                                ckl::BinaryFpuOp::Add,
+                                x_per_tile_input,
+                                ckl::input(beta_scalar_offset_input, ckl::BroadcastDim::Row)>{0u, nt},
+                            ckl::PackTile<x_per_tile_output>{});
                     }
 
                     // Write out the final output
-                    copy_tile_init(dfb_x_id);
                     if constexpr (enable_fp32_reconfig) {
                         reconfig_data_format_srca(dfb_x_id);
                     }
                     reconfig_data_format_srcb(do_beta ? dfb_beta_id : dfb_xmm_id, dfb_x_id);
-
-                    dfb_x.wait_front(1);
-                    tile_regs_acquire();
-                    copy_tile(dfb_x_id, 0, dst0);
-                    tile_regs_commit();
-                    dfb_x.pop_front(1);
-                    dfb_out.reserve_back(1);
-                    tile_regs_wait();
 #ifndef UNTILIZE_OUT
                     // Packer was last set for bf16 dfb_x; reconfigure to dfb_out_id (may be fp32) before pack, restore
                     // after. Only needed when out differs from dfb_x (fp32 path); no-op gated out for bf16.
@@ -639,14 +666,16 @@ void kernel_main() {
                         pack_reconfig_data_format(dfb_out_id);
                     }
 #endif
-                    pack_tile(dst0, dfb_out_id);
+                    ckl::eltwise_chain(
+                        ckl::IterationShape::one_tile(),
+                        ckl::CopyTile<x_per_tile_input, ckl::Dst::D0>{},
+                        ckl::Optional<fused_activation_enabled, FusedActivation>{},
+                        ckl::PackTile<out_per_tile_output>{});
 #ifndef UNTILIZE_OUT
                     if constexpr (enable_fp32_reconfig) {
                         pack_reconfig_data_format(dfb_x_id);
                     }
 #endif
-                    tile_regs_release();
-                    dfb_out.push_back(1);
                 }
             }
 

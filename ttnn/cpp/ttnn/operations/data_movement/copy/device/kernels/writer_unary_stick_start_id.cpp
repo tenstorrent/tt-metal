@@ -4,9 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
-#include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -16,38 +16,27 @@ void kernel_main() {
     uint32_t num_shards = get_arg_val<uint32_t>(4);
 
     constexpr uint32_t dfb_id_out0 = get_compile_time_arg_val(0);
-    constexpr uint32_t page_size = get_compile_time_arg_val(1);
+    constexpr auto dst_args = TensorAccessorArgs<2>();
     DataflowBuffer dfb_out0(dfb_id_out0);
 
-    typedef ShardedInfo<
-        get_compile_time_arg_val(2),
-        get_compile_time_arg_val(3),
-        get_compile_time_arg_val(4),
-        get_compile_time_arg_val(5),
-        get_compile_time_arg_val(6),
-        get_compile_time_arg_val(7),
-        get_compile_time_arg_val(8)>
-        tensor_shard_info;
-
-    const auto [mapping_table, rt_increment] =
-        experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(5));
-    experimental::ShardedAddrGen<tensor_shard_info> s0 = {.bank_base_address = dst_addr, .shard_array = mapping_table};
+    Noc noc;
+    const auto s0 = TensorAccessor(dst_args, dst_addr);
 
 #ifdef BACKWARDS
     uint32_t end_id = start_id - num_sticks;
     for (uint32_t i = start_id; i != end_id; --i) {
-        for (uint32_t k = num_shards - 1; k >= 0; k--) {
+        for (uint32_t k = num_shards; k > 0; --k) {
+            uint32_t shard_idx = k - 1;
 #else
     uint32_t end_id = start_id + num_sticks;
     for (uint32_t i = start_id; i < end_id; ++i) {
         for (uint32_t k = 0; k < num_shards; k++) {
+            uint32_t shard_idx = k;
 #endif
-            uint32_t stick_index = i * num_shards + k;
+            uint32_t stick_index = i * num_shards + shard_idx;
             dfb_out0.wait_front(1);
-            uint32_t l1_read_addr = dfb_out0.get_read_ptr();
-            uint64_t dst_noc_addr = s0.get_noc_addr(stick_index);
-            noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
-            noc_async_write_barrier();
+            noc.async_write(dfb_out0, s0, stick_size, {.offset_bytes = 0}, {.page_id = stick_index, .offset_bytes = 0});
+            noc.async_write_barrier();
             dfb_out0.pop_front(1);
         }
     }

@@ -14,11 +14,9 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
-    create_fabric_router_config,
-    extract_mesh_config,
-    get_max_payload_size,
-)
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_y_device_params
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import extract_mesh_config
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
 
 def torch_offset_cumsum(
@@ -73,64 +71,42 @@ def torch_offset_cumsum(
     [256],
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
         pytest.param(
-            (2, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 1), topology="linear"),
-            id="linear-2x1",
-        ),
-        pytest.param(
             (4, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
+            torus_y_device_params(),
             1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="linear"),
-            id="linear-4x1",
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="ring"),
+            id="torus-y-4x1",
         ),
         pytest.param(
             (4, 2),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
+            fabric2d_device_params(),
             1,
-            ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-            id="mesh-4x2",
+            id="fabric2d-mesh-4x2",
         ),
         pytest.param(
             (2, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
+            fabric2d_device_params(),
             1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-4x2"),
-            id="mesh-2x4",
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="fabric2d-mesh-2x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
 )
 def test_offset_cumsum(
     mesh_device,
+    device_params,
     n_routed_experts,
     num_links,
-    topology,
 ):
     """Test ttnn.offset_cumsum against PyTorch reference."""
     mesh_config = extract_mesh_config(mesh_device)
     sp_axis = mesh_config.sp_axis
+    topology = per_axis_topology(device_params["fabric_config"])[sp_axis]
     dispatch_group_size = mesh_config.dispatch_group_size
     num_dispatch_groups = mesh_config.num_dispatch_groups
     experts_per_chip = n_routed_experts // num_dispatch_groups // dispatch_group_size
@@ -268,3 +244,67 @@ def test_offset_cumsum(
 
     assert all_passed, "offset_cumsum output does not match torch reference on one or more devices"
     logger.info("offset_cumsum matches torch reference!")
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [fabric2d_device_params(fabric_payload_size=6144, l1_small_size=1216)],
+    indirect=True,
+)
+@pytest.mark.parametrize("cluster_axis", [0, 1])
+@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
+def test_offset_cumsum_distinct_groups_cache(mesh_device, cluster_axis, memory_config):
+    rows, cols = tuple(mesh_device.shape)
+    width, experts_per_chip = 256, 8
+    retained = []
+    mesh_device.enable_program_cache()
+
+    def make_input(seed):
+        generator = torch.Generator().manual_seed(seed)
+        histograms = torch.randint(0, 64, (rows, cols, width), dtype=torch.int32, generator=generator)
+        tensor = ttnn.from_torch(
+            histograms,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(0, 1)),
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        retained.append(tensor)
+        return histograms, tensor
+
+    def run(tensor):
+        return ttnn.experimental.deepseek_prefill.offset_cumsum(
+            tensor,
+            cluster_axis=cluster_axis,
+            num_links=2,
+            experts_per_chip=experts_per_chip,
+            memory_config=memory_config,
+            use_l1_small_for_semaphores=True,
+        )
+
+    def check(histograms, outputs):
+        per_device = [ttnn.get_device_tensors(t) for t in outputs]
+        assert all(len(tensors) == rows * cols for tensors in per_device)
+        for chip in range(rows * cols):
+            row, col = divmod(chip, cols)
+            data = histograms[:, col, :] if cluster_axis == 0 else histograms[row, :, :]
+            position = row if cluster_axis == 0 else col
+            total = data.sum(0)
+            aligned = ((total + 31) // 32 * 32).reshape(-1, experts_per_chip)
+            region = (aligned.cumsum(-1) - aligned).reshape(width)
+            offset = data[:position].sum(0) + region
+            for reference, tensors in zip((offset, total, region), per_device):
+                actual = ttnn.to_torch(tensors[chip]).reshape(-1).to(torch.int64)
+                assert torch.equal(actual, reference), (cluster_axis, row, col)
+
+    for iteration in range(3):
+        host, tensor = make_input(1234 + iteration)
+        outputs = run(tensor)
+        check(host, outputs)
+        if iteration == 0:
+            entries = mesh_device.num_program_cache_entries()
+        else:
+            assert mesh_device.num_program_cache_entries() == entries
+        retained.extend(outputs)
