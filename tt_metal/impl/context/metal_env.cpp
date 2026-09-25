@@ -9,6 +9,7 @@
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/fmt.hpp>
 #include <limits>
+#include <optional>
 #include <unordered_set>
 #include "metal_env_impl.hpp"
 #include "metal_env_accessor.hpp"
@@ -192,7 +193,8 @@ void MetalEnvImpl::initialize_base_objects() {
         get_profiler_dram_bank_size_for_hal_allocation(*this->rtoptions_),
         this->rtoptions_->get_dram_backed_cq(),
         this->rtoptions_->get_simulator_enabled(),
-        should_enable_blackhole_dram_programmable_cores(*this->cluster_, *this->rtoptions_));
+        should_enable_blackhole_dram_programmable_cores(*this->cluster_, *this->rtoptions_),
+        this->rtoptions_->get_eth_ptp_trace());
 
     this->rtoptions_->ParseAllFeatureEnv(*hal_);
     this->cluster_->set_hal(hal_.get());
@@ -201,11 +203,13 @@ void MetalEnvImpl::initialize_base_objects() {
 void MetalEnvImpl::verify_fw_capabilities() {
     FirmwareCapabilityRequest req;
     req.enable_2_erisc_mode = this->rtoptions_->get_enable_2_erisc_mode();
+    req.eth_ptp_trace = this->rtoptions_->get_eth_ptp_trace();
 
     FirmwareCapabilityResult res;
     const auto platform_arch = get_platform_architecture(*this->rtoptions_);
     if (!check_firmware_capabilities(platform_arch, {.eth_fw = cluster_->get_ethernet_firmware_version()}, req, res)) {
         this->rtoptions_->set_enable_2_erisc_mode(res.enable_2_erisc_mode);
+        this->rtoptions_->set_eth_ptp_trace(res.eth_ptp_trace);
     }
 }
 
@@ -655,6 +659,34 @@ distributed::SystemMesh& MetalEnv::get_system_mesh() {
     impl_->ensure_context_registered(*this);
     return impl_->get_system_mesh();
 }
+
+namespace {
+
+// Destroys a context created here if it never reaches the mesh device that takes ownership of it.
+// Inert when the env owns the context. https://github.com/tenstorrent/tt-metal/issues/57286
+class TransitContextGuard {
+public:
+    TransitContextGuard(ContextId context_id, bool env_owns_context) {
+        if (!env_owns_context) {
+            context_id_ = context_id;
+        }
+    }
+    TransitContextGuard(const TransitContextGuard&) = delete;
+    TransitContextGuard& operator=(const TransitContextGuard&) = delete;
+    ~TransitContextGuard() {
+        if (context_id_.has_value()) {
+            MetalContext::destroy_instance(/*check_device_count=*/false, *context_id_);
+        }
+    }
+    bool holds_context() const { return context_id_.has_value(); }
+    void release() { context_id_.reset(); }
+
+private:
+    std::optional<ContextId> context_id_;
+};
+
+}  // namespace
+
 std::shared_ptr<distributed::MeshDevice> MetalEnv::create_mesh_device(
     const distributed::MeshDeviceConfig& config,
     size_t l1_small_size,
@@ -671,6 +703,7 @@ std::shared_ptr<distributed::MeshDevice> MetalEnv::create_mesh_device(
     const bool env_owns_context = impl_->has_registered_context();
     ContextId context_id =
         env_owns_context ? ContextId{impl_->ensure_context_registered(*this)} : MetalContext::create_instance(*this);
+    TransitContextGuard context_guard(context_id, env_owns_context);
     auto mesh_device = distributed::MeshDeviceImpl::create(
         context_id,
         config,
@@ -680,8 +713,9 @@ std::shared_ptr<distributed::MeshDevice> MetalEnv::create_mesh_device(
         dispatch_core_config,
         l1_bank_remap,
         worker_l1_size);
-    if (!env_owns_context) {
+    if (context_guard.holds_context()) {
         mesh_device->impl().set_destroy_metal_context_instance_on_close(true);
+        context_guard.release();
     }
     return mesh_device;
 }
@@ -697,6 +731,7 @@ std::shared_ptr<distributed::MeshDevice> MetalEnv::create_unit_mesh_device(
     const bool env_owns_context = impl_->has_registered_context();
     ContextId context_id =
         env_owns_context ? ContextId{impl_->ensure_context_registered(*this)} : MetalContext::create_instance(*this);
+    TransitContextGuard context_guard(context_id, env_owns_context);
     auto mesh_device = distributed::MeshDeviceImpl::create_unit_mesh(
         context_id,
         device_id,
@@ -706,8 +741,9 @@ std::shared_ptr<distributed::MeshDevice> MetalEnv::create_unit_mesh_device(
         dispatch_core_config,
         l1_bank_remap,
         worker_l1_size);
-    if (!env_owns_context) {
+    if (context_guard.holds_context()) {
         mesh_device->impl().set_destroy_metal_context_instance_on_close(true);
+        context_guard.release();
     }
     return mesh_device;
 }
@@ -723,6 +759,7 @@ std::map<int, std::shared_ptr<distributed::MeshDevice>> MetalEnv::create_unit_me
     const bool env_owns_context = impl_->has_registered_context();
     ContextId context_id =
         env_owns_context ? ContextId{impl_->ensure_context_registered(*this)} : MetalContext::create_instance(*this);
+    TransitContextGuard context_guard(context_id, env_owns_context);
     auto result = distributed::MeshDeviceImpl::create_unit_meshes(
         context_id,
         device_ids,
@@ -732,11 +769,11 @@ std::map<int, std::shared_ptr<distributed::MeshDevice>> MetalEnv::create_unit_me
         dispatch_core_config,
         l1_bank_remap,
         worker_l1_size);
-    if (!env_owns_context && !result.empty()) {
+    if (context_guard.holds_context() && !result.empty()) {
         const auto& parent = result.begin()->second->get_parent_mesh();
-        if (parent) {
-            parent->impl().set_destroy_metal_context_instance_on_close(true);
-        }
+        TT_FATAL(parent != nullptr, "Unit meshes are submeshes, so they always have a parent to own the context");
+        parent->impl().set_destroy_metal_context_instance_on_close(true);
+        context_guard.release();
     }
     return result;
 }

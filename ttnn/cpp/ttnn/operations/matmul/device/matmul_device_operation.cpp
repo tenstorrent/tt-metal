@@ -2956,8 +2956,9 @@ MatmulDeviceOperation::tensor_return_value_t matmul(
     }
     operations::matmul::normalize_program_config(
         normalized_attributes.program_config.value(), input_tensors.at(0).device()->compute_with_storage_grid_size());
+    // validate requires optional_input_tensors.size() == 1; this path has no bias.
     return ttnn::device_operation::launch<MatmulDeviceOperation>(
-        normalized_attributes, {input_tensors, {}, {optional_output_tensor}});
+        normalized_attributes, {input_tensors, {std::nullopt}, {optional_output_tensor}});
 }
 
 }  // namespace ttnn::prim

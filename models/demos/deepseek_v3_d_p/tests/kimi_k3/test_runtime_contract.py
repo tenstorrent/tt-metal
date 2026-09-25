@@ -22,7 +22,15 @@ from __future__ import annotations
 import inspect
 import re
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock, create_autospec
 
+import pytest
+import torch
+
+import ttnn
+from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
+from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext, TtK3KdaAttention, build_attention
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.block import TtKimiK3Block
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 
@@ -75,3 +83,69 @@ def test_the_block_kwargs_that_are_swept_through_are_genuinely_block_level():
         f"the set of kwargs forwarded to TtKimiK3Block changed: +{sorted(swept - expected)} "
         f"-{sorted(expected - swept)}. If the addition is model-level, name it on the transformer."
     )
+
+
+@pytest.mark.parametrize("sp_axis,tp_axis", [(0, 1), (1, 0)])
+def test_kda_construction_passes_global_and_local_geometry(monkeypatch, sp_axis, tp_axis):
+    constructor = create_autospec(ttKDA)
+    monkeypatch.setattr("models.demos.deepseek_v3_d_p.tt.kda.kda.ttKDA", constructor)
+    monkeypatch.setattr("models.demos.deepseek_v3_d_p.tt.tt_ccl.get_tt_ccl", lambda device: None)
+    build_attention(
+        SimpleNamespace(shape=(8, 4)),
+        None,
+        None,
+        {},
+        1,
+        SimpleNamespace(is_mla=lambda layer: False),
+        seq_len=2560,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        topology=(ttnn.Topology.Linear, ttnn.Topology.Linear),
+    )
+    kwargs = constructor.call_args.kwargs
+    assert kwargs["active_seq_len"] == 2560
+    # SP8 owns 320 rows (10 chunks); SP4 owns 640 rows (20 chunks).
+    assert kwargs["program_config"].recurrence.summary_group_chunks == (10 if sp_axis == 0 else 20)
+
+
+@pytest.mark.parametrize("host_start,use_metadata", [(None, False), (672, False), (0, True)])
+def test_kda_forward_uses_live_metadata_or_eager_position(monkeypatch, host_start, use_metadata):
+    kda = create_autospec(ttKDA, instance=True)
+    kda.device = object()
+    output, new_state, scalar = object(), object(), object()
+    kda.forward.return_value = output, new_state
+    states = Mock()
+    from_torch = Mock(return_value=scalar)
+    mapper = object()
+    deallocate = Mock()
+    monkeypatch.setattr(ttnn, "from_torch", from_torch)
+    monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda device: mapper)
+    monkeypatch.setattr(ttnn, "deallocate", deallocate)
+    monkeypatch.setattr(ttnn, "all_gather", lambda tensor, **kwargs: tensor)
+    monkeypatch.setattr(ttnn, "squeeze", lambda tensor, **kwargs: tensor)
+    monkeypatch.setattr(ttnn, "unsqueeze", lambda tensor, **kwargs: tensor)
+    attention = TtK3KdaAttention(kda, 1, 1, 1, ttnn.Topology.Linear, states)
+    metadata = (object(), scalar, object()) if use_metadata else None
+    hidden = object()
+    assert (
+        attention.forward(hidden, K3AttnContext(actual_start=host_start, cache_user_id=2, metadata=metadata)) is output
+    )
+    states.read.assert_called_once_with(1, 2)
+    kda.forward.assert_called_once_with(hidden, states.read.return_value, actual_start=scalar)
+    states.commit.assert_called_once_with(1, new_state, 2)
+    if use_metadata:
+        from_torch.assert_not_called()
+        assert all(call.args != (scalar,) for call in deallocate.call_args_list)
+    else:
+        from_torch.assert_called_once()
+        assert torch.equal(
+            from_torch.call_args.args[0], torch.tensor([0 if host_start is None else host_start], dtype=torch.int64)
+        )
+        assert from_torch.call_args.kwargs == {
+            "dtype": ttnn.uint32,
+            "layout": ttnn.ROW_MAJOR_LAYOUT,
+            "device": kda.device,
+            "memory_config": ttnn.DRAM_MEMORY_CONFIG,
+            "mesh_mapper": mapper,
+        }
+        assert any(call.args == (scalar,) for call in deallocate.call_args_list)

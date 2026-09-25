@@ -3,11 +3,11 @@
 
 """Tracy harness for a single BEVFormer encoder layer.
 
-Same shape as ``test_bevformer_encoder_perf``, one layer instead of six: PCC
-gate, warmup, then signposted iterations so the report covers already-compiled,
-already-dispatched programs. The reference points and the camera projection are
-built once outside the measured region — the encoder does the same, so what is
-measured here is the per-layer cost the encoder repeats.
+Same shape as ``test_bevformer_encoder_perf``, one layer instead of six: a PCC
+gate that doubles as the warmup, then signposted iterations so the report covers
+already-compiled, already-dispatched programs. The reference points and the camera projection
+are built once outside the measured region — the encoder does the same, so
+what is measured here is the per-layer cost the encoder repeats.
 
 Camera geometry comes from the dataset's fixed rig, not from random matrices.
 ``lidar2img`` decides ``bev_mask`` and therefore the spatial-cross-attention
@@ -29,7 +29,8 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.experimental.bevformer.config.encoder_config import get_preset_config, img_metas_for_dataset
+from models.experimental.bevformer.config.encoder_config import get_preset_config
+from models.experimental.bevformer.tests.camera_rig import img_metas_for_dataset
 from models.experimental.bevformer.reference.encoder import BEVFormerLayer
 from models.experimental.bevformer.reference.point_sampling_3d_2d import (
     generate_reference_points,
@@ -41,7 +42,6 @@ from models.experimental.bevformer.tt.tt_encoder import TTBEVFormerLayer
 from models.experimental.bevformer.tt.tt_point_sampling_3d_2d import point_sampling_3d_to_2d_ttnn
 from models.experimental.bevformer.tt.tt_spatial_cross_attention import build_rebatch_plan
 
-PERF_WARMUP_ITERS = 1
 DEVICE_PERF_ITERS = 1
 
 
@@ -179,6 +179,8 @@ def test_bevformer_layer_perf(
             rebatch_plan=rebatch_plan,
         )
 
+    # Doubles as the warmup: this call compiles the kernels and fills the program
+    # cache, so the signposted iterations already run at steady state.
     tt_output = op_fn()
     tt_output_torch = ttnn.to_torch(tt_output, dtype=torch.float32)
     passed, message = check_with_pcc(ref_output, tt_output_torch, expected_pcc)
@@ -186,13 +188,10 @@ def test_bevformer_layer_perf(
     logger.info(f"PCC gate: {message}")
     ttnn.deallocate(tt_output)
 
-    for _ in range(PERF_WARMUP_ITERS):
-        out = op_fn()
-        ttnn.synchronize_device(device)
-        ttnn.deallocate(out)
-
     ttnn.synchronize_device(device)
     outputs = []
+    # Drains and resets the device profiler buffers so the signposted region starts
+    # from empty; the PCC call's markers would otherwise eat into the same budget.
     ttnn.ReadDeviceProfiler(device)
     signpost("start")
     for _ in range(DEVICE_PERF_ITERS):
