@@ -568,12 +568,13 @@ void kernel_main() {
                             dfb_xmm.push_back(1);
 
                             // // b. (x - u) * 1/[sqrt(Var + eps)]
-                            dfb_xmm.wait_front(1);
+                            // Configure the next operation while PACK produces its input.
                             if constexpr (enable_fp32_reconfig) {
                                 reconfig_data_format_srca(dfb_in0_id, dfb_xmm_id);
                             }
                             reconfig_data_format_srcb(dfb_ex_global_id, dfb_ex2pe_id);
                             mul_bcast_scalar_init(dfb_xmm_id, dfb_ex2pe_id);
+                            dfb_xmm.wait_front(1);
                             tile_regs_acquire();
                             mul_tiles_bcast_scalar(dfb_xmm_id, dfb_ex2pe_id, 0, g, dst0);
                             tile_regs_commit();
@@ -589,7 +590,7 @@ void kernel_main() {
                         const uint32_t mask_offset = g * block_w;
                         const uint32_t mask_index = mask_offset + block_w_index;
 
-                        dfb_xmm.wait_front(1);
+                        // Keep configuration independent of the preceding pack's FIFO credit.
                         if constexpr (fp32_sfpu_normalizer) {
                             // Exit the UnpackToDestFp32 copy configuration before returning to
                             // the ordinary FPU mask and affine pipeline.
@@ -598,6 +599,7 @@ void kernel_main() {
                             reconfig_data_format_srcb(dfb_ex2pe_id, dfb_input_mask_id);
                         }
                         mul_bcast_rows_init(dfb_xmm_id, dfb_input_mask_id);
+                        dfb_xmm.wait_front(1);
                         tile_regs_acquire();
                         mul_tiles_bcast_rows(dfb_xmm_id, dfb_input_mask_id, 0, mask_index, dst0);
                         dfb_xmm.pop_front(1);
