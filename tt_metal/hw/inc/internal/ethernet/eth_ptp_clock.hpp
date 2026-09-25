@@ -11,6 +11,7 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 
 #include "hostdev/streaming_profiler_common.h"
 #include "internal/ethernet/tt_eth_ss_regs.h"
@@ -40,11 +41,29 @@ constexpr uint32_t kPtpCfrLo = ETH_PTP_TIMER_REGS_START + ETH_PTP_TIMER_CFR_LO;
 constexpr uint32_t kPtpCfrHi = ETH_PTP_TIMER_REGS_START + ETH_PTP_TIMER_CFR_HI;
 constexpr uint32_t kPtp64nsLo = ETH_PTP_TIMER_REGS_START + ETH_PTP_TIMER_64NS_LO;
 constexpr uint32_t kPtp64nsHi = ETH_PTP_TIMER_REGS_START + ETH_PTP_TIMER_64NS_HI;
-constexpr uint32_t kUpdateStatPtiAck = 1u << 8;
-constexpr uint32_t kUpdateStatTsAck = 1u << 9;
 
 FORCE_INLINE uint32_t rd(uint32_t addr) { return *reinterpret_cast<volatile uint32_t*>(addr); }
 FORCE_INLINE void wr(uint32_t addr, uint32_t v) { *reinterpret_cast<volatile uint32_t*>(addr) = v; }
+
+// A register's fields as a struct of uint32_t bit-fields, the first at bit 0. Every bit has a name, reserved ones
+// included, so that a value built from designated initializers has all its other bits zero.
+template <typename Reg>
+FORCE_INLINE Reg rd(uint32_t addr) {
+    static_assert(sizeof(Reg) == sizeof(uint32_t));
+    return __builtin_bit_cast(Reg, rd(addr));
+}
+template <typename Reg, typename = std::enable_if_t<std::is_class_v<Reg>>>
+FORCE_INLINE void wr(uint32_t addr, Reg v) {
+    static_assert(sizeof(Reg) == sizeof(uint32_t));
+    wr(addr, __builtin_bit_cast(uint32_t, v));
+}
+
+struct PtpUpdateStat {
+    uint32_t rsvd0 : 8;
+    uint32_t pti_ack : 1;
+    uint32_t timestamp_ack : 1;
+    uint32_t rsvd1 : 22;
+};
 
 // One step of a xorshift32 walk, any nonzero state.
 FORCE_INLINE uint32_t xorshift(uint32_t& x) {

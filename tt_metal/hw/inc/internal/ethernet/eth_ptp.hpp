@@ -2,54 +2,43 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Device-side access to the Blackhole Ethernet tile's IEEE-1588 hardware, one type per block: the eth_ctrl PTP timer
-// (PtpTimer), a TX queue's timestamp command and hand-off counters (TxQueue), a TX header row (TxHeaderRow), an RX
-// classifier stamp rule (RxStampRule), the Rianta RSm410 MAC's two-step TX timestamp FIFO (TxStampFifo) and the RX
-// classifier's timestamp FIFO (RxStampFifo); the tile's clocks are eth_ptp_clock.hpp. The blocks that change tile
-// state keep what they changed and put it back. Register offsets follow tt-isa-documentation (EthernetRxClassifier.md,
-// the eth_ctrl and TXQ maps) and the Rianta RSm410 register guide; the TXQ and RISC bases are tt_eth_ss_regs.h's.
+// Device-side access to the Blackhole Ethernet tile's IEEE 1588 timestamping hardware.
 //
-// The PTP timer counts refclk (50 MHz on Blackhole) and is independent of AICLK, so it is immune to DVFS. Nothing in
-// the shipped firmware enables its main counter; PtpTimer::start() does, and leaves it running.
-// Verified on silicon (2026-09-10), where the documents differ or are silent:
-//   - TXQ TIMESTAMP.ts_cmd is sticky: every frame the queue sends is stamped until it is written back to 0.
-//   - MAC FIFO word order is tag LO, tag HI, txTS LO, txTS HI (the Rianta text has the pairs reversed).
-//   - The RX FIFO head is readable before the pop, and the pop bit is a 1-then-0 strobe.
-//   - The RX stamp is pushed at start-of-frame, before the RX queue's L1 write of the frame is visible to the ERISC,
-//     so a poller that drains the FIFO while waiting for a frame consumes that frame's stamp.
-//   - The link is never idle: each TX queue sends a sequence-number keepalive after LOCAL_SEQ_UPDATE_TIMEOUT idle
-//     cycles (0x1f40 at boot; measured 8002 AICLK cycles apart), and every keepalive gets an RX stamp under the
-//     no-match label. A keepalive waiting at the MAC when the stamp request is armed is stamped under the frames'
-//     tag. The timeout cannot be held off to avoid that: with it at its maximum the peer's queue retransmits
-//     (duplicate frames, so duplicate ingress stamps, in every round after the first), the updates being its acks.
-//   - The queue's counters see every hand-off, keepalives included, and in a fixed order: PKT_START_CNT moves 86
-//     cycles after the command (the L1 fetch), PKT_END_CNT 22 cycles later, the MAC FIFO entry 65 cycles after that
-//     (35 after a keepalive's count), whatever the frame's size. WORD_CNT counts 96-byte units on the wire: one for a
-//     keepalive or a frame of up to 64 bytes of payload, two from 80 bytes of payload to 128. Keepalives carry no
-//     sequence number (the RX queues' sequence registers stand still through them) and, per the ISA documentation, are
-//     generated only when the queue has no other packet to carry the numbers, so none is sent between or behind queued
-//     frames.
-//   - A keepalive is its link header and padding to the minimum frame; an in-frame stamp at ts_offset 2 lands in that
-//     padding and the keepalive arrives intact, so a queue can stay armed in-frame for a whole session (2026-09-25:
-//     every keepalive stamped at ts_offset 2 or 8 arrived, while at ts_offset 40 every one was lost).
-//   - Reading the LO half of CFR or PTP64NS captures its HI half (tt_ptp_timer.sv: the HI register loads on the LO
-//     read strobe). The wall clock has two HI addresses: WALL_CLOCK_1 is live, WALL_CLOCK_1_AT is the value at the
-//     last LO read; only the latter pairs with LO.
+// IEEE 1588, the Precision Time Protocol, compares two machines' clocks using the send and receive times of packets,
+// captured by the network hardware as the packets pass. The tile does this with several independent blocks, each
+// wrapped in a type here:
+//   - PtpTimer is the timestamp counter. It runs off the 50 MHz reference clock, so AI clock changes don't affect it.
+//     The firmware never starts it; start() does, and leaves it running.
+//   - TxQueue turns on timestamping for one transmit queue: each packet's send time is either written into the packet
+//     (arm_in_frame) or pushed, with a tag of the caller's choosing, into TxStampFifo (arm_two_step).
+//   - TxHeaderRow gives the packets sent here a distinctive destination address, and RxStampRule has the receiver
+//     record the arrival times of packets with that address in RxStampFifo.
+// Every block except PtpTimer puts back what it changes. The clocks are in eth_ptp_clock.hpp. Register layouts follow
+// the Tenstorrent ISA documentation and the register guide of the tile's Rianta RSm410 MAC.
 //
-// Measured on p150 links over 0.5 m passive DAC: one way inside the stamps 33-35 ns, a receiver's turnaround
-// ~350 ns; 96 exchanges averaged per side dither the 20 ns tick to ~0.6 ns per round.
+// Found on silicon, where the documentation is silent or wrong:
+//   - A queue's timestamp setting applies to every packet it sends until it is cleared.
+//   - The MAC's send-time queue returns tag low, tag high, time low, time high; the vendor's guide swaps the pairs.
+//   - The receive-time queue's head can be read before it is removed, and removing it takes a write of 1, then of 0.
+//   - A receive time is recorded as a packet starts to arrive, before its data is in L1.
+//   - Each transmit queue sends a keepalive after about 8,000 idle cycles, but never between queued packets, and
+//     keepalives are timestamped like any other packet. A keepalive is only headers and padding, so an in-frame stamp
+//     near the start of the payload lands harmlessly in the padding; at offset 40, past its end, every keepalive was
+//     lost. The interval can't just be raised: at its maximum, the peer starts retransmitting.
+//   - A queue's packet-start count moves 86 cycles after a send command, its packet-end count 22 cycles later, and the
+//     MAC's send-time entry appears 65 cycles after that, whatever the packet's size.
 //
-// One end of a link, its configuration compile-time so the per-frame path has no loads (the ERISC runs no dynamic
-// init, so the blocks are statics or members):
+// On p150 links over 0.5 m of copper, the one-way delay between a packet's two stamps is 33-35 ns and a reply takes
+// about 350 ns. A stamp resolves 20 ns; averaging 96 exchanges each way brings a round to about 0.6 ns.
+//
+// Typical use (each end's configuration is fixed at compile time, so sending needs no memory loads):
 //   PtpTimer timer; TxHeaderRow<kTxq, kRow> header; RxStampRule<kTcamRow, kLabel> rule;
-//   timer.start(); rule.install(); header.install();      // start() is false if the timer never took its rate
-//   TxQueue<kTxq>{}.arm_two_step(tag);                     // every frame the queue sends from here is stamped
-//   internal_::eth_send_packet(kTxq, ...);                 // ... per frame
-//   TxStampFifo{}.drain(tag_lo, sink);                     // this end's egress stamps
-//   RxStampFifo{}.drain<kLabel>(sink);                     // the peer's frames' ingress stamps
-//   TxQueue<kTxq>{}.disarm();                              // once the last frame's egress stamp has been drained
-//   header.restore(); rule.remove();
-// The two FIFOs are the tile's: a second user on the same tile would consume the first one's stamps.
+//   timer.start(); rule.install(); header.install();  // start() is false if the timer never took its rate
+//   TxQueue<kTxq>{}.arm_in_frame();                    // every packet the queue sends now carries its send time
+//   internal_::eth_send_packet(kTxq, ...);             // the peer reads the send time out of the packet
+//   RxStampFifo{}.drain<kLabel>(sink);                 // the arrival times of the peer's packets
+//   TxQueue<kTxq>{}.disarm(); header.restore(); rule.remove();
+// The two timestamp queues belong to the tile, so a second user on the same tile would take the first one's entries.
 
 #pragma once
 
@@ -60,16 +49,13 @@
 
 namespace tt::tt_metal::eth_ptp {
 
-// Per TX queue
 constexpr uint32_t kTxqRegsBase = ETH_TXQ0_REGS_START;
 constexpr uint32_t kTxqStride = ETH_TXQ_REGS_SIZE;
 constexpr uint32_t kNumTxq = NUM_ETH_QUEUES;
-constexpr uint32_t kTxqTimestampOff = 0x90;      // [2:0] ts_cmd, [21:16] ts_offset (2-byte units)
-constexpr uint32_t kTxqRxTimestampLoOff = 0x94;  // drives TX_RX_TS[31:0], echoed in the MAC FIFO as the tag
-constexpr uint32_t kTxqRxTimestampHiOff = 0x98;  // drives TX_RX_TS[63:32]
-constexpr uint32_t kTxqLocalSeqUpdateTimeoutOff = ETH_TXQ_LOCAL_SEQ_UPDATE_TIMEOUT;
-constexpr uint32_t kTxqPktCfgSelSwOff =
-    0x80;  // header row per software-initiated frame type: [3:0] raw, [7:4] reg write, [11:8] packet
+constexpr uint32_t kTxqPktCfgSelSwOff = 0x80;
+constexpr uint32_t kTxqTimestampOff = 0x90;
+constexpr uint32_t kTxqRxTimestampLoOff = 0x94;  // the two-step tag, low word; the MAC returns it with the send time
+constexpr uint32_t kTxqRxTimestampHiOff = 0x98;  // the two-step tag, high word
 constexpr uint32_t txq_reg(uint32_t q, uint32_t off) { return kTxqRegsBase + q * kTxqStride + off; }
 
 enum TsCmd : uint32_t {
@@ -79,8 +65,24 @@ enum TsCmd : uint32_t {
     TS_CMD_TWO_STEP_FIFO = 3,
 };
 
-// TX header-template rows (eth_ctrl TXPKT_CFG). Firmware programs rows 0..2 for queues 0..2 (DA broadcast /
-// multicast / 02:00:00:00:00:00 unicast, which MAC_RX_ADDR_ROUTING maps to RXQ0/1/2) and leaves 3..9 free.
+struct TxqTimestamp {
+    uint32_t cmd : 3;  // TsCmd
+    uint32_t rsvd0 : 13;
+    uint32_t offset : 6;  // where an in-frame stamp goes, in 2-byte units
+    uint32_t rsvd1 : 10;
+};
+
+// The header row each kind of software-sent packet uses.
+struct TxqPktCfgSelSw {
+    uint32_t raw : 4;
+    uint32_t reg_write : 4;
+    uint32_t packet : 4;
+    uint32_t rsvd : 20;
+};
+
+// The transmit header table (the Ethernet controller's TXPKT_CFG rows). The firmware programs rows 0 to 2 for queues 0
+// to 2, with destination addresses broadcast, multicast and 02:00:00:00:00:00, which the receiving MAC routes to
+// receive queues 0, 1 and 2. Rows 3 to 9 are left free.
 constexpr uint32_t kTxPktCfgBase = 0xFFB98200;
 constexpr uint32_t kTxPktCfgStride = 0x80;
 constexpr uint32_t kTxPktCfgInsertCtlOff = 0x00;
@@ -94,74 +96,171 @@ constexpr uint32_t kTxPktCfgVlan1Off = 0x24;
 constexpr uint32_t kTxPktCfgVlan2Off = 0x28;
 constexpr uint32_t tx_pkt_cfg_reg(uint32_t row, uint32_t off) { return kTxPktCfgBase + row * kTxPktCfgStride + off; }
 
-// Rianta RSm410 MAC (RSM410_A_REG_MAP_BASE_ADDR 0xFFBA0000)
-constexpr uint32_t kMacTxCfg = 0xFFBA2200;        // [1] tx_enb [4] tx_ts_fifo_enb [11] tx_origin_timestamp_mode
-constexpr uint32_t kMacTxCfgTsFifoEnb = 1u << 4;  // 1 = FIFO entry for every packet, 0 = only TS_CMD == 3
-constexpr uint32_t kMacTxDelay = 0xFFBA2218;      // [15:0] added to txTimestamp
-constexpr uint32_t kMacTxInt = 0xFFBA2288;        // W1C
-constexpr uint32_t kMacTxIntRaw = 0xFFBA2290;     // [2] ts_fifo_full [3] ts_fifo_not_empty [4] err_ts_offset
-constexpr uint32_t kMacTxIntTsFifoNotEmpty = 1u << 3;
+// The Rianta RSm410 MAC's registers (its register map starts at 0xFFBA0000).
+constexpr uint32_t kMacTxCfg = 0xFFBA2200;
+constexpr uint32_t kMacTxDelay = 0xFFBA2218;   // [15:0] a fixed delay the MAC adds to every send time
+constexpr uint32_t kMacTxInt = 0xFFBA2288;     // MacTxInt; writing 1 to a bit clears it
+constexpr uint32_t kMacTxIntRaw = 0xFFBA2290;  // MacTxInt
 constexpr uint32_t kMacTsFifoFullThresh = 0xFFBA2300;
-constexpr uint32_t kMacTsFifo0 = 0xFFBA2E00;  // reading pops; empty reads 0xFFFFFFFF
+constexpr uint32_t kMacTsFifo0 = 0xFFBA2E00;  // reading it removes the head entry; an empty queue reads 0xFFFFFFFF
 constexpr uint32_t kMacTsFifo1 = 0xFFBA2E04;
 constexpr uint32_t kMacTsFifo2 = 0xFFBA2E08;
 constexpr uint32_t kMacTsFifo3 = 0xFFBA2E0C;
 
-// RX classifier timestamp handling ("TH") file, and the flow-table bits that feed it
+struct MacTxCfg {
+    uint32_t rsvd0 : 1;
+    uint32_t tx_enable : 1;
+    uint32_t rsvd1 : 2;
+    uint32_t ts_fifo_enable : 1;  // 1: a send time for every packet; 0: only under a two-step request
+    uint32_t rsvd2 : 6;
+    uint32_t origin_timestamp_mode : 1;
+    uint32_t rsvd3 : 20;
+};
+
+struct MacTxInt {
+    uint32_t rsvd0 : 2;
+    uint32_t ts_fifo_full : 1;
+    uint32_t ts_fifo_not_empty : 1;
+    uint32_t ts_offset_error : 1;
+    uint32_t rsvd1 : 27;
+};
+
+// The receive classifier's receive-time queue (its timestamp handling registers).
 constexpr uint32_t kRxThTsLow = 0xFFB9D800;
 constexpr uint32_t kRxThTsHigh = 0xFFB9D804;
-constexpr uint32_t kRxThTsLabel = 0xFFB9D808;  // [5:0] flow label, [31] valid_ts
-constexpr uint32_t kRxThStatus =
-    0xFFB9D810;  // [3:0] entries [16] full [17] becoming_full [18] empty [30] flush [31] pop
-constexpr uint32_t kRxThStatusEntriesMask = 0xF;
-constexpr uint32_t kRxThStatusFull = 1u << 16;
-constexpr uint32_t kRxThStatusEmpty = 1u << 18;
-constexpr uint32_t kRxThStatusFlush = 1u << 30;
-constexpr uint32_t kRxThStatusPop = 1u << 31;
-constexpr uint32_t kRxThLabelMask = 0x1F;
-constexpr uint32_t kRxThLabelValid = 1u << 31;
-// [1:0]: 0 accept all, 2 use the flow table. At 0 the classifier still applies the table's keep-timestamp action and
-// only ignores its drop decisions, so the stamp rule needs no change here.
-constexpr uint32_t kRxFdOverrideDecision = 0xFFB9D000;
-constexpr uint32_t kRxFlNoMatchActions = 0xFFB9CD04;  // [1:0] queue [2] drop [3] rm_hdr [4] keep_timestamp
-constexpr uint32_t kRxFlKeepTimestamp = 1u << 4;
+constexpr uint32_t kRxThTsLabel = 0xFFB9D808;
+constexpr uint32_t kRxThStatus = 0xFFB9D810;
 
-// RX classifier flow lookup (64-row TCAM) and flow table, per tt-isa-documentation EthernetRxClassifier.md.
-constexpr uint32_t kRxFlTcamRowMappingBase = 0xFFB9CC00;  // + 4 * row: [2:0] priority, [21:16] flow-table row
-constexpr uint32_t kRxFlTcamRowUpdate = 0xFFB9CD40;       // [5:0] row, [8] enable, [16] write, [31] go
-constexpr uint32_t kRxFlTcamTupleTypeWrite = 0xFFB9CD80;  // 0 = not IP
-constexpr uint32_t kRxFlTcamSaWrite0 = 0xFFB9CD90;        // 4 words
-constexpr uint32_t kRxFlTcamDaWrite0 = 0xFFB9CDA0;        // 4 words; not-IP rows: first six bytes = MAC DA
+struct RxThTsLabel {
+    uint32_t label : 5;
+    uint32_t rsvd0 : 1;  // set in the entries a rule records (measured), so not part of the label
+    uint32_t rsvd1 : 25;
+    uint32_t valid : 1;
+};
+
+struct RxThStatus {
+    uint32_t entries : 4;
+    uint32_t rsvd0 : 12;
+    uint32_t full : 1;
+    uint32_t nearly_full : 1;
+    uint32_t empty : 1;
+    uint32_t rsvd1 : 11;
+    uint32_t flush : 1;
+    uint32_t pop : 1;
+};
+
+// The receive classifier's match table (a 64-row content-addressable memory) and the flow table its rows point at,
+// per the ISA documentation's EthernetRxClassifier.md. The flow table's row 64 holds the actions for packets no row
+// matches.
+constexpr uint32_t kRxFlNoMatchActions = 0xFFB9CD04;
+constexpr uint32_t kRxFlTcamRowMappingBase = 0xFFB9CC00;  // + 4 * row
+constexpr uint32_t kRxFlTcamRowUpdate = 0xFFB9CD40;
+constexpr uint32_t kRxFlTcamTupleTypeWrite = 0xFFB9CD80;  // [1:0] the row's kind; 0 is not IP
+constexpr uint32_t kRxFlTcamSaWrite0 = 0xFFB9CD90;        // four words
+constexpr uint32_t kRxFlTcamDaWrite0 = 0xFFB9CDA0;  // four words; a non-IP row's first six bytes are the MAC address
 constexpr uint32_t kRxFlTcamNonIpAddrFlagsWrite = 0xFFB9CDB0;
 constexpr uint32_t kRxFlTcamEthertypeWrite = 0xFFB9CDC0;
 constexpr uint32_t kRxFlTcamPriorityWrite = 0xFFB9CDC4;
-constexpr uint32_t kRxFlTcamUpdate = 0xFFB9CDF0;  // [5:0] row [8] mask [9] write [10] not IP [19] DA [20] SA [21] kind
-                                                  // [22] ethertype [23] l2 pri [31] go
-constexpr uint32_t kRxFlFtableLabels = 0xFFB9CE80;   // [4:0] label, copied into every TH FIFO entry of the flow
-constexpr uint32_t kRxFlFtableActions = 0xFFB9CE84;  // NO_MATCH_ACTIONS layout
+constexpr uint32_t kRxFlTcamUpdate = 0xFFB9CDF0;
+constexpr uint32_t kRxFlFtableLabels = 0xFFB9CE80;
+constexpr uint32_t kRxFlFtableActions = 0xFFB9CE84;
 constexpr uint32_t kRxFlFtableVlan = 0xFFB9CE88;
 constexpr uint32_t kRxFlFtableSwMetadata = 0xFFB9CE8C;
-constexpr uint32_t kRxFlFtableUpdate = 0xFFB9CEA0;  // [5:0] row, [8] write, [31] go
+constexpr uint32_t kRxFlFtableUpdate = 0xFFB9CEA0;
 
-// Identity of a stamped frame: a locally administered unicast DA whose middle four bytes are 0xA5. The RX rule
-// compares only those four bytes, so it holds whichever byte order the TCAM stores addresses in, and no firmware
-// frame (broadcast, 01:00:.. multicast, 02:00:.. unicast) can match it.
+struct RxFlowActions {
+    uint32_t rx_queue : 2;
+    uint32_t drop : 1;
+    uint32_t strip_headers : 1;
+    uint32_t record_rx_time : 1;
+    uint32_t prepend_sw_metadata : 1;
+    uint32_t prepend_hw_metadata : 1;
+    uint32_t rsvd : 25;
+};
+
+struct RxTcamRowMapping {
+    uint32_t priority : 3;  // the larger wins
+    uint32_t rsvd0 : 13;
+    uint32_t ftable_row : 6;
+    uint32_t rsvd1 : 10;
+};
+
+struct RxTcamRowUpdate {
+    uint32_t row : 6;
+    uint32_t rsvd0 : 2;
+    uint32_t enable : 1;
+    uint32_t rsvd1 : 7;
+    uint32_t write : 1;
+    uint32_t rsvd2 : 14;
+    uint32_t go : 1;
+};
+
+// Each update_* bit has the row take that part of its pattern from the write registers; the rest is left unchanged.
+struct RxTcamUpdate {
+    uint32_t row : 6;
+    uint32_t rsvd0 : 2;
+    uint32_t mask : 1;  // the row's mask bits rather than its values
+    uint32_t write : 1;
+    uint32_t not_ip : 1;
+    uint32_t rsvd1 : 5;
+    uint32_t update_protocol : 1;
+    uint32_t update_dst_port : 1;
+    uint32_t update_src_port : 1;
+    uint32_t update_da : 1;
+    uint32_t update_sa : 1;
+    uint32_t update_row_kind : 1;
+    uint32_t update_ethertype : 1;
+    uint32_t update_l2_priority : 1;
+    uint32_t rsvd2 : 7;
+    uint32_t go : 1;
+};
+
+struct RxTcamNonIpAddrFlags {
+    uint32_t augmented_da : 4;
+    uint32_t rsvd0 : 12;
+    uint32_t augmented_sa : 4;
+    uint32_t rsvd1 : 12;
+};
+
+struct RxTcamEthertype {
+    uint32_t value : 16;
+    uint32_t augmented : 4;
+    uint32_t rsvd : 12;
+};
+
+struct RxTcamPriority {
+    uint32_t pcp : 3;
+    uint32_t rsvd : 29;
+};
+
+struct RxFtableUpdate {
+    uint32_t row : 6;
+    uint32_t rsvd0 : 2;
+    uint32_t write : 1;
+    uint32_t rsvd1 : 22;
+    uint32_t go : 1;
+};
+
+// The destination address that marks the packets sent here: a locally administered unicast address whose middle four
+// bytes are 0xA5. The receive rule compares only those four bytes, so it matches whichever byte order the match table
+// stores addresses in, and no packet the firmware sends (broadcast, 01:00:.. multicast, 02:00:.. unicast) can match.
 constexpr uint64_t kStampFrameDa = 0x02A5'A5A5'A5A5ull;
 
-constexpr uint32_t kTimerLeadTicks = 5000;    // the scheduled rate update lands this far ahead of the CFR: 100 us
+constexpr uint32_t kTimerLeadTicks = 5000;    // how far ahead the timer's start is scheduled: 100 us of reference ticks
 constexpr uint32_t kTimerAckSpins = 200'000;  // polls of the update status before PtpTimer::start gives up
 
-// The eth_ctrl PTP timer. start() enables its main counter, then schedules, at a CFR tick kTimerLeadTicks ahead, both
-// its per-tick increment and a restart of its timestamp from 0, which lands on the tick after the one scheduled (the
-// timer compares the CFR count against it, then updates); PTP64NS is 20 ns per tick from there, so its offset from the
-// CFR count is known exactly. The counter runs before the restart lands, so it counts from that very tick.
-// Cold: in a kernel built -O3 (the fabric router) the once-per-link routines would otherwise unroll into a couple of KB
-// of a 26 KB kernel budget shared with the router.
+// The Ethernet controller's PTP timer. start() enables the counter, then schedules two updates for kTimerLeadTicks
+// reference ticks later: the per-tick increment, and a reset of the time to 0. The reset takes effect one tick after
+// the scheduled one (the timer compares the reference count with the scheduled value, then updates), and from there
+// the time advances 20 ns per tick, so its offset from the reference count is known exactly. The counter is already
+// running when the reset lands, so it counts from that very tick.
+// The routines that run once per link are marked cold: in a kernel built at -O3 (the fabric router) they would
+// otherwise unroll into a couple of KB of the 26 KB code budget the router shares.
 struct PtpTimer {
-    bool ok = false;        // the restart landed; the timer's stamps are meaningless otherwise
-    int64_t offset_64 = 0;  // PTP64NS minus the CFR count in ns, in 64ths of a ns: -20 ns times the restart tick
+    bool ok = false;        // the reset landed; the timer's stamps are meaningless otherwise
+    int64_t offset_64 = 0;  // PTP time minus the reference count in ns, in 64ths of a ns: -20 ns times the reset tick
 
-    // False, and the timestamp as it was, if the hardware never acknowledges both updates.
+    // False, with the time left as it was, if the hardware never acknowledges both updates.
     __attribute__((noinline, cold)) bool start() {
         wr(kPtpTimerCtrl, 1);
         const uint64_t at = read_cfr() + kTimerLeadTicks;
@@ -172,24 +271,24 @@ struct PtpTimer {
         wr(kPtpFutureTimestampHi, 0);
         wr(kPtpUpdatePti, 1);
         wr(kPtpUpdateTimestamp, 1);
-        constexpr uint32_t kAcks = kUpdateStatPtiAck | kUpdateStatTsAck;
-        uint32_t stat = 0;
-        for (uint32_t i = 0; i < kTimerAckSpins && (stat & kAcks) != kAcks; i++) {
-            stat = rd(kPtpUpdateStat);
+        PtpUpdateStat stat{};
+        for (uint32_t i = 0; i < kTimerAckSpins && !(stat.pti_ack && stat.timestamp_ack); i++) {
+            stat = rd<PtpUpdateStat>(kPtpUpdateStat);
         }
         wr(kPtpUpdatePti, 0);
         wr(kPtpUpdateTimestamp, 0);
-        ok = (stat & kAcks) == kAcks;
+        ok = stat.pti_ack && stat.timestamp_ack;
         offset_64 = -static_cast<int64_t>(at + 1) * kNsPerRefclkTick * 64;
         return ok;
     }
 };
 
-// A frame sent under arm_in_frame() carries the MAC's egress time kFrameStampField bytes into its payload: sixteen
-// bits of ORIGIN_TIMESTAMP_MSBS then PTP64NS, big-endian (ts_offset kFrameStampOffset, in 2-byte units; the field
-// lands two bytes past it, measured). The peer reads the stamp out of the frame in its own L1, so no core reads the
-// MAC: under fabric traffic a router's reads of any MAC register, the egress FIFO or a status word, wedged the link.
-// The field sits where a keepalive has only padding, so the keepalives an armed queue sends stay intact.
+// A packet sent under arm_in_frame() carries its send time kFrameStampField bytes into its payload, as 16 high bits
+// followed by the 64-bit PTP time, big-endian. The queue's offset setting (kFrameStampOffset) is in 2-byte units, and
+// the field lands 2 bytes after it (measured). The receiver reads the time straight out of the packet in its own L1,
+// so no core has to read the MAC: under fabric traffic, a router reading any MAC register, the send-time queue or a
+// status word stalled the link. The field falls where a keepalive has only padding, so an armed queue's keepalives
+// arrive intact.
 constexpr uint32_t kFrameStampOffset = 2;
 constexpr uint32_t kFrameStampField = 2 * kFrameStampOffset + 2;
 constexpr uint32_t kFrameStampHiWord = (kFrameStampField + 2) / 4;
@@ -199,42 +298,43 @@ FORCE_INLINE uint64_t frame_stamp(const volatile uint32_t* payload) {
            __builtin_bswap32(payload[kFrameStampHiWord + 1]);
 }
 
-// TX queue Q's timestamp command and hand-off counters. arm_two_step(tag) has the MAC push {tag, egress stamp} into
-// TxStampFifo for every frame the queue sends; arm_in_frame() has it write each frame's egress stamp into the frame.
-// The command is sticky until disarm(), and the queue reports idle before the MAC has taken a frame's command
-// (measured: a clear at queue idle lost the stamp of one frame in fifteen), so disarm only once the last frame's
-// stamp is in. The command and tag are sampled when the queue latches a frame's command, 24 to 32 cycles after the
-// write (measured: a request armed 24 cycles after the command still stamps the frame, one armed 32 after does not)
-// and some 60 before PKT_START_CNT counts the hand-off; a keepalive samples them 15 to 73 cycles before its count, and
-// one that samples an armed request is stamped like a frame (the counters tell them apart).
+// Timestamping on transmit queue Q. arm_two_step(tag) has the MAC push the tag and send time of every packet the queue
+// sends into TxStampFifo; arm_in_frame() has it write each packet's send time into the packet. Either stays in effect
+// until disarm(). The queue reports idle before the MAC has picked up a packet's setting (measured: disarming at idle
+// lost the time of one packet in fifteen), so to stamp only particular packets, disarm once the last one's time is in.
+// The queue samples the setting and tag 24 to 32 cycles after a send command is written (measured: armed 24 cycles
+// after the command, the packet is still stamped; armed 32 cycles after, it is not), about 60 cycles before the
+// packet-start count moves. A keepalive samples them 15 to 73 cycles before its count moves, and one that finds a
+// request set is stamped like any other packet.
 template <uint32_t Q>
 struct TxQueue {
     static_assert(Q < kNumTxq);
     FORCE_INLINE void arm_two_step(uint64_t tag) const {
         wr(txq_reg(Q, kTxqRxTimestampLoOff), static_cast<uint32_t>(tag));
         wr(txq_reg(Q, kTxqRxTimestampHiOff), static_cast<uint32_t>(tag >> 32));
-        wr(txq_reg(Q, kTxqTimestampOff), TS_CMD_TWO_STEP_FIFO);
+        wr(txq_reg(Q, kTxqTimestampOff), TxqTimestamp{.cmd = TS_CMD_TWO_STEP_FIFO});
     }
     FORCE_INLINE void arm_in_frame() const {
-        wr(txq_reg(Q, kTxqTimestampOff), TS_CMD_ONE_STEP_ORIGIN | (kFrameStampOffset << 16));
+        wr(txq_reg(Q, kTxqTimestampOff), TxqTimestamp{.cmd = TS_CMD_ONE_STEP_ORIGIN, .offset = kFrameStampOffset});
     }
-    FORCE_INLINE void disarm() const { wr(txq_reg(Q, kTxqTimestampOff), TS_CMD_NOP); }
-    FORCE_INLINE uint32_t packets_started() const { return rd(txq_reg(Q, ETH_TXQ_PKT_START_CNT)); }
-    // In 96-byte units on the wire: one for a keepalive or a frame of up to 64 bytes of payload, two to 128.
+    FORCE_INLINE void disarm() const { wr(txq_reg(Q, kTxqTimestampOff), TxqTimestamp{.cmd = TS_CMD_NOP}); }
+    // In 96-byte units on the wire: one for a keepalive or a packet of up to 64 bytes of payload, two up to 128.
     FORCE_INLINE uint32_t words_sent() const { return rd(txq_reg(Q, ETH_TXQ_WORD_CNT)); }
 };
 
-// Header row Row as a copy of queue Q's boot row with DA kStampFrameDa. install() points the queue's software frames
-// at it; hardware-generated frames (sequence-number keepalives) keep the boot row, so only frames the kernel sends
-// carry the identity. select() points the software frames at this row or back at the boot row, under which the peer's
-// classifier leaves them unstamped; the row is latched with a frame's command, so switch back once the queue reports
-// the command taken. restore() puts the row's DA and the selection back.
+// Header row Row, set up as a copy of queue Q's row at boot with the destination address kStampFrameDa. install()
+// points the packets software sends on the queue at it, while the packets the hardware generates (the keepalives)
+// keep the boot row, so only the packets sent here carry the address. select() switches software packets between this
+// row and the boot row, whose packets the receiver's classifier records no time for; a packet picks up its row when
+// the queue takes its send command, so switch back only once the queue reports the command taken. restore() puts back
+// the row's address and the queue's selection.
 template <uint32_t Q, uint32_t Row>
 struct TxHeaderRow {
-    uint32_t sel_boot = 0, da_prev[2] = {};
+    TxqPktCfgSelSw sel_boot{};
+    uint32_t da_prev[2] = {};
 
     __attribute__((noinline, cold)) void install() {
-        sel_boot = rd(txq_reg(Q, kTxqPktCfgSelSwOff));
+        sel_boot = rd<TxqPktCfgSelSw>(txq_reg(Q, kTxqPktCfgSelSwOff));
         da_prev[0] = rd(tx_pkt_cfg_reg(Row, kTxPktCfgMacDaLoOff));
         da_prev[1] = rd(tx_pkt_cfg_reg(Row, kTxPktCfgMacDaHiOff));
         for (uint32_t off :
@@ -257,45 +357,49 @@ struct TxHeaderRow {
         wr(tx_pkt_cfg_reg(Row, kTxPktCfgMacDaHiOff), da_prev[1]);
     }
     FORCE_INLINE void select(bool stamped) const {
-        wr(txq_reg(Q, kTxqPktCfgSelSwOff), stamped ? Row * 0x111u : sel_boot);
+        wr(txq_reg(Q, kTxqPktCfgSelSwOff),
+           stamped ? TxqPktCfgSelSw{.raw = Row, .reg_write = Row, .packet = Row} : sel_boot);
     }
 };
 
-// The RX classifier's ingress timestamp FIFO, 16 deep: a stamp for every frame a rule keeps it for, pushed at
-// start-of-frame, before the frame's bytes are visible in L1, so a frame that has been seen has its stamp waiting.
+// The receive classifier's receive-time queue. It holds a time for every packet a rule asks to have timed, recorded as
+// the packet starts to arrive and before its data is visible in L1, so a packet that has been seen already has its
+// time waiting.
 struct RxStampFifo {
+    static constexpr uint32_t kDepth = 16;
     struct Entry {
         uint64_t ts;
         uint32_t label;
         bool valid;
     };
-    // Reads the head entry, then pops it.
+    // Reads the head entry, then removes it.
     FORCE_INLINE bool pop(Entry& e) const {
-        if (rd(kRxThStatus) & kRxThStatusEmpty) {
+        if (rd<RxThStatus>(kRxThStatus).empty) {
             return false;
         }
         const uint32_t lo = rd(kRxThTsLow);
         const uint32_t hi = rd(kRxThTsHigh);
-        const uint32_t label = rd(kRxThTsLabel);
-        wr(kRxThStatus, kRxThStatusPop);
-        wr(kRxThStatus, 0);
+        const RxThTsLabel label = rd<RxThTsLabel>(kRxThTsLabel);
+        wr(kRxThStatus, RxThStatus{.pop = 1});
+        wr(kRxThStatus, RxThStatus{});
         e.ts = (static_cast<uint64_t>(hi) << 32) | lo;
-        e.label = label & kRxThLabelMask;
-        e.valid = (label & kRxThLabelValid) != 0;
+        e.label = label.label;
+        e.valid = label.valid;
         return true;
     }
-    // Exactly n entries, and never full since the last pop.
+    // Exactly n entries, and not full at any point since the last pop.
     FORCE_INLINE bool holds_exactly(uint32_t n) const {
-        return (rd(kRxThStatus) & (kRxThStatusFull | kRxThStatusEntriesMask)) == n;
+        constexpr RxThStatus kCounted{.entries = 0xF, .full = 1};
+        return (rd(kRxThStatus) & __builtin_bit_cast(uint32_t, kCounted)) == n;
     }
-    FORCE_INLINE void flush() const { wr(kRxThStatus, kRxThStatusFlush); }
-    // Each valid stamp under Label to sink(uint64_t), the rest discarded; returns how many went to sink. At most one
-    // FIFO's worth per call, so a stream of stamped frames cannot hold a router's core here.
+    FORCE_INLINE void flush() const { wr(kRxThStatus, RxThStatus{.flush = 1}); }
+    // Passes each valid time under Label to sink(uint64_t) and discards the rest; returns how many it passed. It takes
+    // at most one queue's worth per call, so a stream of stamped packets cannot hold a router's core here.
     template <uint32_t Label, typename Sink>
     FORCE_INLINE uint32_t drain(Sink&& sink) const {
         Entry e;
         uint32_t n = 0;
-        for (uint32_t i = 0; i <= kRxThStatusEntriesMask && pop(e); i++) {
+        for (uint32_t i = 0; i < kDepth && pop(e); i++) {
             if (e.valid && e.label == Label) {
                 sink(e.ts);
                 n++;
@@ -305,35 +409,51 @@ struct RxStampFifo {
     }
 };
 
-// A TCAM row matching kStampFrameDa's middle bytes, mapped to a flow-table row whose only action is to keep the RX
-// timestamp under Label. install() also clears the keep-timestamp action of frames no rule matches, so the FIFO holds
-// only the rule's stamps, and flushes what the FIFO held; remove() puts the no-match actions back.
+// A match-table row for kStampFrameDa's middle bytes, pointing at a flow-table row whose only action is to record the
+// receive time under Label. install() also turns off time recording for packets that match no rule, so the queue
+// holds only this rule's times, and empties the queue; remove() restores the no-match actions.
 template <uint32_t Row, uint32_t Label>
 struct RxStampRule {
-    static_assert(Label <= kRxThLabelMask);
+    static_assert(Label < 32);  // flow-table labels are five bits
     static constexpr uint32_t kLabel = Label;
-    uint32_t no_match_prev = 0;
+    RxFlowActions no_match_prev{};
 
     __attribute__((noinline, cold)) void install() {
-        no_match_prev = rd(kRxFlNoMatchActions);
+        no_match_prev = rd<RxFlowActions>(kRxFlNoMatchActions);
         RxStampFifo{}.flush();
-        wr(kRxFlNoMatchActions, no_match_prev & ~kRxFlKeepTimestamp);
-        write_pattern(false, 0xA5A5A500u, 0x000000A5u, 0u, 0u, 0u, 0u);
-        write_pattern(true, 0x000000FFu, 0xFFFFFF00u, 0xFFFFFFFFu, 0x000F000Fu, 0x000FFFFFu, 0x7u);
-        wr(kRxFlTcamRowMappingBase + 4 * Row, (Row << 16) | 7u);
-        write_flow(kRxFlKeepTimestamp, Label);
-        wr(kRxFlTcamRowUpdate, Row | (1u << 8) | (1u << 16) | (1u << 31));
+        RxFlowActions no_match = no_match_prev;
+        no_match.record_rx_time = 0;
+        wr(kRxFlNoMatchActions, no_match);
+        write_pattern(false, 0xA5A5A500u, 0x000000A5u, 0u, {}, {}, {});
+        // A mask bit of 1 means don't care: of the whole pattern, only the destination's four 0xA5 bytes are compared.
+        write_pattern(
+            true,
+            0x000000FFu,
+            0xFFFFFF00u,
+            0xFFFFFFFFu,
+            {.augmented_da = 0xF, .augmented_sa = 0xF},
+            {.value = 0xFFFF, .augmented = 0xF},
+            {.pcp = 7});
+        wr(kRxFlTcamRowMappingBase + 4 * Row, RxTcamRowMapping{.priority = 7, .ftable_row = Row});
+        write_flow({.record_rx_time = 1}, Label);
+        wr(kRxFlTcamRowUpdate, RxTcamRowUpdate{.row = Row, .enable = 1, .write = 1, .go = 1});
     }
     __attribute__((noinline, cold)) void remove() const {
-        wr(kRxFlTcamRowUpdate, Row | (1u << 16) | (1u << 31));
-        write_flow(0, 0);
+        wr(kRxFlTcamRowUpdate, RxTcamRowUpdate{.row = Row, .write = 1, .go = 1});
+        write_flow({}, 0);
         wr(kRxFlNoMatchActions, no_match_prev);
         RxStampFifo{}.flush();
     }
 
 private:
-    static void write_pattern(
-        bool mask, uint32_t da_w0, uint32_t da_w1, uint32_t rest, uint32_t flags, uint32_t etype, uint32_t pri) {
+    FORCE_INLINE static void write_pattern(
+        bool mask,
+        uint32_t da_w0,
+        uint32_t da_w1,
+        uint32_t rest,
+        RxTcamNonIpAddrFlags flags,
+        RxTcamEthertype etype,
+        RxTcamPriority pri) {
         wr(kRxFlTcamTupleTypeWrite, 0);
         wr(kRxFlTcamEthertypeWrite, etype);
         wr(kRxFlTcamPriorityWrite, pri);
@@ -346,22 +466,31 @@ private:
         wr(kRxFlTcamDaWrite0 + 12, rest);
         wr(kRxFlTcamNonIpAddrFlagsWrite, flags);
         wr(kRxFlTcamUpdate,
-           Row | (mask ? 1u << 8 : 0u) | (1u << 9) | (1u << 10) | (1u << 19) | (1u << 20) | (1u << 21) | (1u << 22) |
-               (1u << 23) | (1u << 31));
+           RxTcamUpdate{
+               .row = Row,
+               .mask = mask,
+               .write = 1,
+               .not_ip = 1,
+               .update_da = 1,
+               .update_sa = 1,
+               .update_row_kind = 1,
+               .update_ethertype = 1,
+               .update_l2_priority = 1,
+               .go = 1});
     }
-    static void write_flow(uint32_t actions, uint32_t label) {
+    FORCE_INLINE static void write_flow(RxFlowActions actions, uint32_t label) {
         wr(kRxFlFtableActions, actions);
         wr(kRxFlFtableVlan, 0);
-        wr(kRxFlFtableLabels, label & kRxThLabelMask);
+        wr(kRxFlFtableLabels, label);
         wr(kRxFlFtableSwMetadata, 0);
-        wr(kRxFlFtableUpdate, Row | (1u << 8) | (1u << 31));
+        wr(kRxFlFtableUpdate, RxFtableUpdate{.row = Row, .write = 1, .go = 1});
     }
 };
 
-// The MAC's two-step egress timestamp FIFO, 128 deep: {tag, stamp} for every frame a queue sends under arm_two_step.
+// The MAC's send-time queue, 128 entries deep: the tag and send time of every packet a queue sends under arm_two_step.
 struct TxStampFifo {
-    // One entry: its tag's low word and the stamp (the tag's high word is the caller's own). Word 0 must be read
-    // first, it is what advances the FIFO; an empty FIFO reads 0xFFFFFFFF there.
+    // Removes one entry: its tag's low word and the send time (the tag's high word is the caller's own). Word 0 must be
+    // read first, since reading it is what advances the queue; an empty queue reads 0xFFFFFFFF there.
     FORCE_INLINE bool pop(uint32_t& tag_lo, uint64_t& ts) const {
         const uint32_t w0 = rd(kMacTsFifo0);
         if (w0 == 0xFFFFFFFFu) {
@@ -373,14 +502,15 @@ struct TxStampFifo {
         ts = (static_cast<uint64_t>(w3) << 32) | w2;
         return true;
     }
-    FORCE_INLINE bool empty() const { return (rd(kMacTxIntRaw) & kMacTxIntTsFifoNotEmpty) == 0; }
+    FORCE_INLINE bool empty() const { return !rd<MacTxInt>(kMacTxIntRaw).ts_fifo_not_empty; }
     void clear() const {
         uint32_t tag_lo = 0;
         uint64_t ts = 0;
         while (pop(tag_lo, ts)) {
         }
     }
-    // Each stamp whose tag's low word is tag_lo to sink(uint64_t), the rest discarded; returns how many went to sink.
+    // Passes each time whose tag's low word is tag_lo to sink(uint64_t) and discards the rest; returns how many it
+    // passed.
     template <typename Sink>
     FORCE_INLINE uint32_t drain(uint32_t tag_lo, Sink&& sink) const {
         uint32_t got = 0, n = 0;
