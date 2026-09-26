@@ -1329,6 +1329,13 @@ tasks:
     - ffn_norm
     - mlp
     layer: 5
+  frozen:
+    at: '2026-09-26T02:49:18'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_06_mlp.py: e412cfe99758bb8a2e2f1bc8c53746d544f3fc0ac06eabeed2d9195f853f1f1d
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
 - id: C.global.post_mlp_norm
   title: global post_mlp_norm (norm) on device, layer 5
   step: implement
