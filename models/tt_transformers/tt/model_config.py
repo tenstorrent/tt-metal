@@ -3460,8 +3460,6 @@ class ModelArgs:
                 return AutoModelForImageTextToText
             return AutoModelForCausalLM
 
-        # AutoModelForVision2Seq was removed in transformers 5.x; its model mapping
-        # was folded into AutoModelForImageTextToText (available since 4.46).
         for model_cls in (AutoModelForImageTextToText,):
             if type(self.hf_config) in model_cls._model_mapping:
                 return model_cls
