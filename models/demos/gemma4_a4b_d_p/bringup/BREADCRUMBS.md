@@ -759,3 +759,17 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Device gate: pass, pcc_swap_out 0.999989, block out rel 0.0048 / 0.0038; moe_norm pcc 0.99998, rel 0.0061 vs golden, iso 0.0019,
   ratio [0.9984, 1.0006]. The pcc=0.000000 lines come from the precompile pass (comp_pcc stub).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_09_moe_norm.py`
+
+## C.global.experts.test.1 (test review)
+- Replaced the rendered one-liner with test_c_sliding_experts.py (LAYER = 5). The gated metric stays `pcc_experts_L05` >= 0.99. The test also asserts a finite output,
+  rel L2 <= 0.03, a per-token norm ratio in [0.97, 1.03], and the worst per-token rel L2 <= 0.1. Informational metrics: `rel_l2_experts_L05`,
+  `row_norm_ratio_{min,max}_experts_L05`, `max_row_rel_l2_experts_L05`. Thresholds are the same as for sliding.
+- Layer 5 golden routing is more skewed than layer 0: tokens per expert run from 0 to 1915, expert 93 takes 1915 of 2048 tokens, and expert 127 gets none, so a
+  "drop expert 127" mutation is a no-op here. Any per-expert capacity cap in dispatch fails badly (capacity 512: PCC 0.74).
+- Scored mutations on the CPU (script /tmp/g5ex/v.py, not kept); the numbers are in the test docstring. These pass PCC but fail an extra check: drop expert 0, drop the smallest pair per token,
+  drop token 0's top-1, a zeroed last row or last 32 rows, and 2x. Emulated bfp8 activations and weights pass (rel 0.0153, worst row 0.020). Known gap as at layer 0:
+  routing renormalized to sum 1 passes (the router test catches it).
+- Verified: BRINGUP_IMPL=reference PASS (pcc 0.999996, rel 0.0027, ratio [0.9963, 1.0032], worst 0.0044). Stub FAIL (PCC 0). Default device gate already PASSES
+  (pcc 0.999837, rel 0.0226, ratio [0.9971, 1.0225], worst row 0.030), because the global layer uses the same device experts module as sliding. rel L2 has only about 25% headroom to 0.03.
+  The `FAIL ... pcc=0.000000` line comes from the precompile pass (comp_pcc stub).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_experts.py`
