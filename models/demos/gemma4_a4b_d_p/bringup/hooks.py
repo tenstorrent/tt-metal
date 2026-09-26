@@ -485,7 +485,7 @@ class Gemma4DeviceModel:
 
     def perf_settings(self):
         """Recorded in the profile: the active SDPA preset (GEMMA4_SDPA_CFG=base selects the bring-up config)."""
-        from models.demos.gemma4_a4b_d_p.tt.attention import sdpa_settings
+        from models.demos.gemma4_a4b_d_p.tt.attention import ATTN_SIGNPOSTS, sdpa_settings
 
         c = sdpa_settings()
         return {
@@ -496,6 +496,7 @@ class Gemma4DeviceModel:
             "sdpa_exp_approx": c["exp_approx"],
             "sdpa_sliding_q_k": list(c["sliding"]),
             "sdpa_global_q_k": list(c["glob"]),
+            "attn_signposts": int(ATTN_SIGNPOSTS),  # GEMMA4_ATTN_SIGNPOSTS=0: attention as one section (pre-P.3)
         }
 
 
