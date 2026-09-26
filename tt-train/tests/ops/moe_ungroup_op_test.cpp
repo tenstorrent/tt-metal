@@ -8,11 +8,15 @@
 #include <cstdint>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <utility>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/ops/moe_group/moe_group.hpp"
+#include "metal/ops/moe_ungroup/device/moe_ungroup_device_operation.hpp"
 #include "metal/ops/moe_ungroup/moe_ungroup.hpp"
 #include "moe_test_utils.hpp"
 
@@ -132,6 +136,59 @@ TEST_F(MoeUngroupTest, Basic) {
     constexpr uint32_t E = 4, K = 2;
     const std::vector<uint16_t> leids = {0, 1};
     run_and_check(make_inputs(D, B, S, H, E, K), leids, K);
+}
+
+TEST_F(MoeUngroupTest, ProgramCacheSeparatesAcceptedPlanPageGeometry) {
+    constexpr uint32_t D = 2, B = 1, S = 32, H = 64;
+    constexpr uint32_t E = 4, K = 2;
+    const std::vector<uint16_t> leids = {0, 1};
+    auto g = build_group_inputs(make_inputs(D, B, S, H, E, K), leids, K);
+    auto* device = &ttml::autograd::ctx().get_device();
+    const uint32_t t_cap = static_cast<uint32_t>(g.plan.logical_shape()[-1]);
+    const auto custom_plan_spec = tt::tt_metal::TensorSpec(
+        g.plan.logical_shape(),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::UINT32,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
+            ttnn::DRAM_MEMORY_CONFIG,
+            tt::tt_metal::Alignment({2U * t_cap})));
+    auto custom_plan = ttnn::Tensor::from_vector(g.plan_host, custom_plan_spec, device);
+    auto same_custom_plan = ttnn::Tensor::from_vector(g.plan_host, custom_plan_spec, device);
+
+    const auto default_accessor_args = tt::tt_metal::TensorAccessorArgs(g.plan.buffer()).get_compile_time_args();
+    const auto custom_accessor_args = tt::tt_metal::TensorAccessorArgs(custom_plan.buffer()).get_compile_time_args();
+    ASSERT_EQ(default_accessor_args.size(), 2U);
+    ASSERT_EQ(custom_accessor_args.size(), 2U);
+    EXPECT_EQ(default_accessor_args[0], custom_accessor_args[0]);
+    ASSERT_NE(default_accessor_args[1], custom_accessor_args[1])
+        << "custom plan alignment did not change the compiled page size";
+
+    const auto reference = moe_ungroup_reference(g.expert_out_host, g.plan_host, g.grouped_scores_host, D, B, S);
+    const auto run_and_check_plan = [&](const ttnn::Tensor& plan) {
+        const auto entries_before = device->num_program_cache_entries();
+        auto output = ttml::metal::moe_ungroup(
+            g.expert_out, plan, g.offsets, g.grouped_scores, static_cast<uint32_t>(leids.size()), D, B, S);
+        const auto entries_after = device->num_program_cache_entries();
+        EXPECT_TRUE(xt::allclose(ttml::core::to_xtensor(output), reference, kRtol, kAtol));
+        return std::pair{entries_before, entries_after};
+    };
+
+    device->enable_program_cache();
+    device->clear_program_cache();
+
+    const auto [before_default, after_default] = run_and_check_plan(g.plan);
+    ASSERT_GT(after_default, before_default) << "default plan did not populate the program cache";
+    const auto [before_custom, after_custom] = run_and_check_plan(custom_plan);
+    EXPECT_GT(after_custom, before_custom) << "custom plan reused a program compiled for a different page size";
+    const auto [before_same_custom, after_same_custom] = run_and_check_plan(same_custom_plan);
+    EXPECT_EQ(after_same_custom, before_same_custom) << "equivalent custom plan allocation missed the cache";
+
+    device->clear_program_cache();
+    const auto [before_custom_first, after_custom_first] = run_and_check_plan(custom_plan);
+    ASSERT_GT(after_custom_first, before_custom_first) << "custom plan did not populate the cleared program cache";
+    const auto [before_default_second, after_default_second] = run_and_check_plan(g.plan);
+    EXPECT_GT(after_default_second, before_default_second)
+        << "default plan reused a program compiled for a different page size";
 }
 
 TEST_F(MoeUngroupTest, LargerH) {
