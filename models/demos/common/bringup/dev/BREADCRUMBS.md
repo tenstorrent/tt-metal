@@ -280,3 +280,12 @@ Drive this ledger with
   and other pages stay put. With prefers-reduced-motion, hold starts on, so it does not flip.
 - `selftest/teletext_shim.js` runs the screen script under node with a fake DOM and clock;
   `test_teletext_carousel` checks the timeline (the flip, hold, a key press, another page).
+
+## F25 (2026-09-26): device-test timeout
+- Gemma L.s56320 passed every check (worst layer 0.9937, state 0.9895, top-5 1.0), then pytest-timeout killed it at
+  300 s, the repo `pytest.ini` default. The orchestrator took that for a failed check and started a fix agent (stopped
+  by the supervisor before it changed anything).
+- The ladder, contract and profile tests now carry `pytestmark = device_timeout(S)`, from spec `box.test_timeout_s`
+  (default 3600 s; in the spec template). run_safe_pytest still catches hangs.
+- A `Timeout (>Ns) from pytest-timeout` in a gate log now stops the task for a person, like a failed device open;
+  no attempt is used and no agent starts.
