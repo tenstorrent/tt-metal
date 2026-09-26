@@ -15,11 +15,22 @@ on:
         required: false
         type: string
       baseline_run_id:
-        description: >-
-          Read the baseline from this workflow run's perf artifacts instead of
-          from the warehouse. For piloting the gate without writing anything to
-          Snowflake. Empty = the normal path (Snowflake + SFTP).
+        description: "Baseline from this run's artifacts instead of the warehouse"
         required: false
+        type: string
+      warehouse_table:
+        description: "Warehouse view (default TTDATASF.LLK_PERF.LLK_PERF_V)"
+        required: false
+        type: string
+      baseline_pipeline:
+        description: "Baseline source: 'baseline' (pinned) or 'nightly' (rolling)"
+        required: false
+        default: baseline
+        type: string
+      speed_of_light:
+        description: "Which mode's rows to take as the baseline"
+        required: false
+        default: "false"
         type: string
       baseline_artifact_pattern:
         description: >-
@@ -50,6 +61,11 @@ on:
         required: false
         default: L1_TO_L1
         type: string
+      fail_on_regression:
+        description: "Fail the job on a regression. False reports to Slack only."
+        required: false
+        default: true
+        type: boolean
       threshold:
         description: "Relative slowdown counting as a regression (BH 0.02, WH 0.08)"
         required: false
@@ -65,11 +81,6 @@ on:
         required: false
         default: "30"
         type: string
-      fail_on_regression:
-        description: "Fail the job on a regression. False reports to Slack only."
-        required: false
-        default: true
-        type: boolean
       pr_number:
         description: >-
           The PR the compared runs came from. Only used to label the Slack
@@ -107,7 +118,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pandas
+          pip install pandas snowflake-connector-python cryptography
 
       - name: Check the measurement is complete
         id: measured
@@ -125,12 +136,27 @@ jobs:
             echo "::error::The measurement did not complete (${MEASURE_RESULT}), so the gate compares nothing."
           fi
 
-      - name: No baseline source
+      - name: Read the baseline from the warehouse
         if: inputs.baseline_run_id == '' && inputs.baseline_artifact_pattern == ''
+        env:
+          SNOWFLAKE_ACCOUNT: TLUIIGS-MN66866
+          SNOWFLAKE_USER: SVC_TTOPS_SWEEPS
+          SNOWFLAKE_WAREHOUSE: PUBLIC
+          SNOWFLAKE_PRIVATE_KEY: ${{ secrets.SWEEPS_SNOWFLAKE_KEY }}
+          ARCH: ${{ inputs.arch }}
+          BASELINE_PIPELINE: ${{ inputs.baseline_pipeline }}
+          SPEED_OF_LIGHT: ${{ inputs.speed_of_light }}
+          MEASURED_RUN: ${{ inputs.perf_run_id || github.run_id }}
+          LLK_PERF_WAREHOUSE_TABLE: >-
+            ${{ inputs.warehouse_table || vars.LLK_PERF_WAREHOUSE_TABLE }}
         run: |
-          echo "::warning::No baseline source was given, so the gate compares nothing."
-          echo "false" > have_baseline.txt
-          echo '{}' > baseline_metadata.json
+          python3 ${{ env.LLK_PATH }}/perf/baseline_from_warehouse.py \
+            --arch "$ARCH" \
+            --pipeline "$BASELINE_PIPELINE" \
+            --speed-of-light "$SPEED_OF_LIGHT" \
+            --exclude-workflow-run "$MEASURED_RUN" \
+            --out baseline_perf/baseline.csv \
+            --metadata baseline_metadata.json
 
       - name: Download the baseline from a workflow run
         if: inputs.baseline_run_id != ''
@@ -202,12 +228,13 @@ jobs:
           pattern: ${{ inputs.current_artifact_pattern || format('perf-data-{0}-*', inputs.arch) }}
           merge-multiple: true
           path: current_perf
-          run-id: ${{ inputs.perf_run_id }}
+          run-id: ${{ inputs.perf_run_id || github.run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Check that perf data arrived
         env:
           ARCH: ${{ inputs.arch }}
+          EXPECT_SOL: ${{ inputs.speed_of_light }}
         run: |
           COUNT=$(find current_perf -name '*.csv' -not -name '*.post.csv' | wc -l)
           echo "Current-side CSVs for ${ARCH}: ${COUNT}"
@@ -216,6 +243,29 @@ jobs:
             echo "::error::Check that the run published perf-data-${ARCH}-* artifacts."
             exit 1
           fi
+          python3 - <<'PYTHON'
+          import csv
+          import glob
+          import os
+          import sys
+
+          want = os.environ["EXPECT_SOL"].strip().lower() == "true"
+          for path in glob.glob("current_perf/**/*.csv", recursive=True):
+              if path.endswith(".post.csv"):
+                  continue
+              with open(path, newline="") as fh:
+                  row = next(csv.DictReader(fh), None)
+              if not row or "speed_of_light" not in row:
+                  continue
+              got = str(row["speed_of_light"]).strip().lower() == "true"
+              if got != want:
+                  sys.exit(
+                      f"::error::The current side is speed_of_light={got}, the "
+                      f"baseline is {want}. The two sides share no points, so "
+                      f"the gate cannot compare them."
+                  )
+              break
+          PYTHON
 
       - name: Compare regressions
         id: compare
@@ -313,6 +363,10 @@ jobs:
           ARCH: ${{ inputs.arch }}
           RUN_TYPES: ${{ inputs.run_types }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          COMMIT_SHA: ${{ github.sha }}
+          MODE: >-
+            ${{ inputs.speed_of_light == 'true'
+                && 'speed of light' || 'non speed-of-light' }}
         run: |
           if [ -z "$SLACK_CHANNEL_ID" ]; then
             echo "LLK_PERF_GATE_SLACK_CHANNEL_ID is unset. No notification is sent."
@@ -346,6 +400,8 @@ jobs:
             --run-types "$RUN_TYPES" \
             --run-url "$RUN_URL" \
             --baseline-sha "$BASELINE_SHA" \
+            --commit "$COMMIT_SHA" \
+            --mode "$MODE" \
             --out slack_payload.json && exit 0
 
           echo "::error::The gate could not build its Slack notification."
