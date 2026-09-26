@@ -992,6 +992,77 @@
   "started": "2026-09-26T22:52:18",
   "status": "PASS"
  },
+ "C.full_moe.ffn_residual": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "eb02228aec4d68e24f038c915a5484258282a725",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "952af9ecbb5c0f59a17b4aef22965f68739e199f",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "15e4e542c3ac99c2c2c4d57306664be05c79d5c2",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5[1m]",
+   "session_id": "2c69ee40-495b-44f1-8e77-d681b473c54d"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/mimo_v2_6_d_p/runs/run1/briefs/C.full_moe.ffn_residual.test.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "eb02228aec4d68e24f038c915a5484258282a725",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "952af9ecbb5c0f59a17b4aef22965f68739e199f",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "15e4e542c3ac99c2c2c4d57306664be05c79d5c2",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/mimo_v2_6_d_p/runs/run1/agents/C.full_moe.ffn_residual.test.1.jsonl",
+    "model": "claude-opus-5-5[1m]",
+    "problems": [],
+    "rc": 0,
+    "role": "test",
+    "seconds": 142.5,
+    "session_id": "2c69ee40-495b-44f1-8e77-d681b473c54d",
+    "t": "2026-09-26T23:26:23"
+   }
+  ],
+  "attempts": 0,
+  "duration_s": 22.6,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-26T23:27:33"
+   }
+  ],
+  "last_run": "2026-09-26T23:27:33",
+  "log": "/localdev/dnijemcevic/bringup/mimo_v2_6_d_p/runs/run1/logs/C.full_moe.ffn_residual.log",
+  "metrics": {
+   "experts_coef_ffn_residual_L05": 1.0016459226608276,
+   "experts_rel_l2_ffn_residual_L05": 0.01939006708562374,
+   "pcc_ffn_residual_L05": 0.9999973476067943,
+   "rel_l2_ffn_residual_L05": 0.0023045840207487345,
+   "row_norm_ratio_max_ffn_residual_L05": 1.0013777017593384,
+   "row_norm_ratio_min_ffn_residual_L05": 0.998774528503418
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-26T23:27:10",
+  "status": "PASS"
+ },
  "C.full_moe.router": {
   "agent": {
    "defs": {
