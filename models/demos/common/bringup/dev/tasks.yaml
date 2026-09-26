@@ -197,3 +197,11 @@ tasks:
     gate:
       cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/
       metrics: {selftest_passed: ">= 114", selftest_failed: "== 0"}
+  - id: F22
+    title: /bringup skill - context discipline and hand-off for long supervised runs
+    step: framework
+    deps: [F21]
+    paths: [models/demos/common/bringup/skill]
+    gate:
+      cmd: python -m models.demos.common.bringup.knowledge.check
+      metrics: {known_issue_errors: "== 0"}
