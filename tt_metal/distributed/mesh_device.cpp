@@ -330,6 +330,14 @@ void MeshDeviceImpl::remove_unsafe_tracked_id(size_t buffer_unique_id) {
         allocator->remove_unsafe_tracked_id(buffer_unique_id);
     }
 }
+// NOLINTNEXTLINE(readability-make-member-function-const)
+void MeshDeviceImpl::remove_unsafe_tracked_id(const MeshTraceId& trace_id, size_t buffer_unique_id) {
+    validate_sub_device_manager_tracker();
+    const auto manager_id = sub_device_manager_tracker_->get_active_sub_device_manager_id();
+    for (auto* allocator : this->trace_allocators(manager_id)) {
+        allocator->remove_unsafe_tracked_id(manager_id, trace_id, buffer_unique_id);
+    }
+}
 void MeshDeviceImpl::push_corruptible_allocation_scope() {
     tt::tt_metal::push_corruptible_allocation_scope(this->trace_allocators());
 }

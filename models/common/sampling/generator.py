@@ -162,6 +162,11 @@ class SamplingGenerator:
             self._trace_states[key] = slot
         return key, slot
 
+    @property
+    def trace_ids(self):
+        """Currently captured sampling traces, excluding released trace slots."""
+        return tuple(slot["id"] for slot in self._trace_states.values() if slot["id"] is not None)
+
     def reset_trace(self):
         """
         Drop any cached trace metadata for all sampling configurations and bucket widths.

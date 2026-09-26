@@ -898,12 +898,12 @@ uint32_t Device::dram_channel_from_virtual_core(const CoreCoord& virtual_core) c
 }
 
 std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address() const {
-    return default_allocator_->get_lowest_occupied_l1_address(0);
+    return default_allocator_->get_lowest_occupied_l1_address(0, /*include_suspended=*/false);
 }
 
 std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address(
     ttsl::Span<const SubDeviceId> /*sub_device_ids*/) const {
-    return default_allocator_->get_lowest_occupied_l1_address(0);
+    return default_allocator_->get_lowest_occupied_l1_address(0, /*include_suspended=*/false);
 }
 
 HWCommandQueue& Device::command_queue(std::optional<uint8_t> cq_id) {

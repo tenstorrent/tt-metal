@@ -15,6 +15,7 @@
 #include <vector>
 
 #include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "mesh_dispatch_fixture.hpp"
@@ -24,6 +25,7 @@
 
 // Access to internal API: ProgramImpl::finalize_offsets
 #include "impl/program/program_impl.hpp"
+#include "impl/allocator/allocator.hpp"
 
 namespace tt::tt_metal {
 
@@ -127,6 +129,55 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffersAPI) {
         auto& program_ = workload.get_programs().at(device_range);
         EXPECT_THROW(program_.impl().finalize_offsets(mesh_device.get()), std::exception);
     }
+}
+
+TEST_F(MeshDispatchFixture, TensixGlobalCircularBufferSuspensionReservesAndRestores) {
+    auto mesh_device = devices_[0];
+    const CoreCoord sender{0, 0};
+    const CoreRangeSet receivers{CoreRange{{1, 0}, {1, 0}}};
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping{{sender, receivers}};
+    auto global_cb = experimental::GlobalCircularBuffer(*mesh_device, mapping, 65536, BufferType::L1);
+    auto alias = global_cb;
+    const auto data_address = global_cb.buffer_address();
+    const auto config_address = global_cb.config_address();
+    distributed::Synchronize(*mesh_device, std::nullopt);
+    auto* physical_device = mesh_device->get_devices().front();
+    std::vector<uint32_t> expected_config;
+    detail::ReadFromDeviceL1(physical_device, sender, config_address, 32, expected_config, CoreType::WORKER);
+    const auto occupied = mesh_device->allocator()->get_statistics(BufferType::L1).total_allocated_bytes;
+    const auto active_lowest = mesh_device->lowest_occupied_compute_l1_address();
+    ASSERT_TRUE(active_lowest.has_value());
+
+    global_cb.suspend();
+    global_cb.suspend();  // Idempotent; copies share the backing reservation.
+    ASSERT_TRUE(alias.is_suspended());
+    EXPECT_EQ(mesh_device->allocator()->get_statistics(BufferType::L1).total_allocated_bytes, occupied);
+    // The persistent-allocation query still sees the reservation. Only the
+    // program-local scratch query may exclude it while it is lent.
+    EXPECT_EQ(mesh_device->allocator_impl()->get_lowest_occupied_l1_address(0), active_lowest);
+    const auto borrowed_lowest = mesh_device->lowest_occupied_compute_l1_address();
+    EXPECT_TRUE(!borrowed_lowest || *borrowed_lowest > *active_lowest);
+    {
+        auto competing = experimental::GlobalCircularBuffer(*mesh_device, mapping, 65536, BufferType::L1);
+        EXPECT_TRUE(
+            competing.buffer_address() + competing.size() <= data_address ||
+            competing.buffer_address() >= data_address + global_cb.size());
+        EXPECT_NE(competing.config_address(), config_address);
+        std::vector<uint32_t> scratch(8, 0xa5a5a5a5);
+        detail::WriteToDeviceL1(physical_device, sender, config_address, scratch, CoreType::WORKER);
+        alias.resume();
+        alias.resume();
+        EXPECT_FALSE(global_cb.is_suspended());
+        EXPECT_EQ(global_cb.buffer_address(), data_address);
+        EXPECT_EQ(global_cb.config_address(), config_address);
+        distributed::Synchronize(*mesh_device, std::nullopt);
+        std::vector<uint32_t> restored_config;
+        detail::ReadFromDeviceL1(physical_device, sender, config_address, 32, restored_config, CoreType::WORKER);
+        EXPECT_EQ(restored_config, expected_config);
+    }
+    EXPECT_EQ(mesh_device->lowest_occupied_compute_l1_address(), active_lowest);
+    // Destruction while suspended must release the owning reservation normally.
+    global_cb.suspend();
 }
 
 }  // namespace tt::tt_metal
