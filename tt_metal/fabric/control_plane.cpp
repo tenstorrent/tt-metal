@@ -869,8 +869,8 @@ void ControlPlane::initialize_fabric_context() {
         "FabricConfig {} was not validated for consistency across ranks before fabric initialization",
         enchantum::to_string(this->fabric_config_));
     if (tt::tt_fabric::is_tt_fabric_config(fabric_config_)) {
-        this->fabric_context_ = std::make_unique<FabricContext>(
-            *this, hal_, cluster_.get().arch(), cluster_.get().is_ubb_galaxy(), fabric_config_, fabric_router_config_);
+        this->fabric_context_ =
+            std::make_unique<FabricContext>(*this, hal_, cluster_, rtoptions_, fabric_config_, fabric_router_config_);
     }
 }
 
