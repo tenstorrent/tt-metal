@@ -267,6 +267,49 @@ _STOCK_GENERATORS = {
 _GEN_MOD = "models.tt_transformers.tt.generator_vllm"
 
 
+def _detect_weights(demo_dir: Path, slug: str) -> str | None:
+    """The base-weights HF repo id for this model, so the card/manifest never carry a placeholder.
+    Prefers config.json's _name_or_path, else the HF id in the bring-up metadata that best matches the
+    model slug (e.g. the Lightning-BF16 id over an unrelated Nano id)."""
+    import glob as _g
+    import re as _re
+
+    for cfg in _g.glob(str(Path(demo_dir) / "**" / "config.json"), recursive=True):
+        try:
+            d = json.loads(Path(cfg).read_text())
+        except Exception:
+            continue
+        nop = d.get("_name_or_path")
+        if nop and "/" in str(nop):
+            return str(nop)
+    toks = [t for t in _re.split(r"[^a-z0-9]+", slug.lower()) if len(t) > 1]
+    best, best_score = None, 0
+    for meta in (
+        "bringup_status.json",
+        "e2e_plan.json",
+        "BRING_UP_PLAN.md",
+        "README.md",
+        "manifest.json",
+        "bringup_cc_state.json",
+        ".bringup_cc_state.json",
+    ):
+        p = Path(demo_dir) / meta
+        if not p.is_file():
+            continue
+        try:
+            txt = p.read_text(errors="replace")
+        except Exception:
+            continue
+        for cand in _re.findall(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", txt):
+            low = cand.lower()
+            if "/" not in cand or low.startswith("models/") or low.startswith("tests/"):
+                continue
+            score = sum(1 for t in toks if t in low)
+            if score > best_score:
+                best_score, best = score, cand
+    return best if best_score > 0 else None
+
+
 def _detect_arch_and_type(demo_dir: Path) -> tuple[str | None, str | None]:
     """The HF architecture name + model_type from any config.json under the demo (works for every
     model, not just one): arch is what the vLLM plugin registers as TT<arch>."""
@@ -613,6 +656,13 @@ def cmd_publish_hf(args) -> int:
         return 2
 
     commit = _git_commit(state_root)
+    # Auto-detect the base-weights HF id when the caller didn't pass one, so the card/manifest never
+    # ship a placeholder. Also feeds the container path (it reads args.weights downstream).
+    if not getattr(args, "weights", None):
+        detected = _detect_weights(Path(demo_dir), slug)
+        if detected:
+            args.weights = detected
+            print(f"  [publish-hf] base weights auto-detected: {detected}")
     base_weights = getattr(args, "weights", None)
 
     if getattr(args, "container", False):
