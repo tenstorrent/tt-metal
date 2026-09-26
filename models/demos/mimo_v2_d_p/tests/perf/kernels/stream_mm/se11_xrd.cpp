@@ -76,7 +76,12 @@ void kernel_main() {
                     }
                     const uint32_t dst = l1 + in_batch * 32 * seg;
                     const uint32_t r0 = s * mt * 32 + m * 32;
+#ifdef XRD_SKIP_READS
+                    // perf experiment only: no DRAM traffic (the tiles are garbage)
+                    for (uint32_t r = 0; r < XRD_SKIP_READS && r0 + r < count; ++r) {
+#else
                     for (uint32_t r = 0; r < 32 && r0 + r < count; ++r) {
+#endif
                         noc_async_read(get_noc_addr(off + r0 + r, xg, j * seg), dst + r * seg, seg);
                     }
                     if (++in_batch == batch) {

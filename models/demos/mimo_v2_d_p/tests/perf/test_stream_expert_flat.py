@@ -68,6 +68,10 @@ H_TILE = BF8_TILE
 DN_NOC = int(os.environ.get("MIMO_FL_DN_NOC", "1"))  # NoC of the down cores' h chain / y writes (weights: the other)
 FWD_DEPTH = int(os.environ.get("MIMO_FL_FWD_DEPTH", "0"))  # > 0: pipelined forwarder (se10_fwd.cpp), chunks in flight
 RD_SLOTS = int(os.environ.get("MIMO_FL_RD_SLOTS", "0"))  # reader CB slots (0: 2 x READ_BATCH)
+XHELP_ENV = os.environ.get(
+    "MIMO_FL_XHELP", "auto"
+)  # e2e: one multicaster per rectangle, a helper core reads / tilizes half of x
+LAND_SLOTS = int(os.environ.get("MIMO_FL_LAND_SLOTS", "3"))  # helper -> primary landing ring (super-blocks)
 PREPASS = int(os.environ.get("MIMO_FL_PREPASS", "0"))  # extract + tilize x in a separate op, then the pre-tiled op
 PP_CORES = int(os.environ.get("MIMO_FL_PP_CORES", "110"))  # cores of the pre-pass op
 DYN = int(
@@ -156,6 +160,10 @@ def test_stream_expert_flat(device, m, wdtype):
     # with reader-down two per rectangle (X2), taking turns by super-block
     XCOL = (1 if E2E and not RDOWN else 0) if XCOL_ENV == "auto" else int(XCOL_ENV)
     X2 = not XCOL and (E2E and RDOWN if X2_ENV == "auto" else bool(int(X2_ENV)))  # two x relays per rectangle
+    XHELP = (E2E and RDOWN and not XCOL) if XHELP_ENV == "auto" else bool(int(XHELP_ENV))
+    if XHELP:  # the X2 cores, but relays 2 / 3 only read + tilize for relays 0 / 1 (one sender per rectangle)
+        assert E2E and not XCOL
+        X2 = True
     grid, phys, readers, gu, rects, relays, down = _layout(device, X2, XCOL)
     ND = len(down)
     nrl = len(relays)
@@ -170,7 +178,7 @@ def test_stream_expert_flat(device, m, wdtype):
     V = E * S
     nk_gu = Ht // KBLK
     slot = KBLK * 2
-    ring_g = 2 * nk_gu
+    ring_g = int(round(float(os.environ.get("MIMO_FL_GU_RING", "2")) * nk_gu))  # gate/up weight ring, in experts
     n_rdn = D_CHAINS if RDOWN else 0  # readers that also compute down columns: one per down chain, as its tail
     pcd_r = (int(RDOWN_PCD_ENV) if RDOWN_PCD_ENV else 6 if (X2 or XCOL == 4) else 4) if RDOWN else 0
     rem_cols = Ht - n_rdn * pcd_r  # the down cores' columns; uneven when they do not divide: two widths
@@ -258,7 +266,11 @@ def test_stream_expert_flat(device, m, wdtype):
     cap = E * tok_pad
     nsb = H // 1024  # e2e: super-blocks (32 K tiles) per row
     SB_OFF = al(RM_CHUNKS * 32 * 2048)
-    relay_bytes = SB_OFF + al(SB_SLOTS * MT * 32 * BF8_TILE) if E2E else al(RELAY_CB * x_bytes)
+    assert RM_CHUNKS % XRD_BATCH == 0, "a read batch must not straddle the row-major CB's wrap"
+    LAND_OFF = SB_OFF + al(
+        SB_SLOTS * MT * 32 * BF8_TILE
+    )  # XHELP: the primary's landing ring for the helper's super-blocks
+    relay_bytes = (LAND_OFF + (al(LAND_SLOTS * MT * 32 * BF8_TILE) if XHELP else 0)) if E2E else al(RELAY_CB * x_bytes)
     arena_tiles = max(gu_bytes, dn_bytes, relay_bytes, RD_OFF) // 2048
     logger.info(
         f"M {m}: {S} sub-blocks; gu ring {ring_g * slot * w_tile >> 10} KB, x ring {X_SLOTS * x_bytes >> 10} KB; "
@@ -543,7 +555,7 @@ def test_stream_expert_flat(device, m, wdtype):
                     *(
                         [pk(relays[k]) if k < XCOL else 0 for k in (1, 2, 3)]
                         if XCOL
-                        else [pk(relays[rect_of(g) + 2]) if X2 else 0, 2, 3]
+                        else [pk(relays[rect_of(g) + 2]) if X2 and not XHELP else 0, 2, 3]
                     ),
                     0,
                     SFREE,
@@ -575,7 +587,7 @@ def test_stream_expert_flat(device, m, wdtype):
             + e2e_rt
         )
         dw_rt[dc.x][dc.y] = [wd_dev.buffer_address(), d % banks, (d // banks) * wd_region] + dyn_args
-    xr_rt, xm_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+    xr_rt, xm_rt, hl_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
     vstride = XCOL or (2 if X2 else 1)
     rl_off = lambda idx: idx if XCOL else idx // 2
     rl_sb = lambda idx: len([g for g in range(V * nsb) if g % vstride == rl_off(idx)])  # super-blocks relay idx sends
@@ -616,6 +628,12 @@ def test_stream_expert_flat(device, m, wdtype):
                 pk(ttnn.CoreCoord(bx0, by0)),
                 pk(ttnn.CoreCoord(bx1, by1)),
             ]
+        if XHELP and idx < 2:  # the rectangle's one sender: all its super-blocks, the helper's via the landing ring
+            hp = relays[idx + 2]
+            xm_l = xm_l[:6] + [V * nsb, XARR, 1, 0, 0, 0, 0, 0, pk(hp), base + LAND_OFF, LAND_SLOTS]
+        if XHELP and idx >= 2:
+            hl_rt[rl.x][rl.y] = [pk(relays[idx - 2]), base + LAND_OFF, rl_sb(idx)] + dyn_args
+            continue
         xm_rt[rl.x][rl.y] = xm_l + dyn_args
 
     dm = lambda proc, noc: ttnn.DataMovementConfigDescriptor(processor=proc, noc=noc)
@@ -788,7 +806,13 @@ def test_stream_expert_flat(device, m, wdtype):
                     core_ranges=rl_crs,
                     compile_time_args=[0, H * 2, E, MT, nsb, S, XRD_BATCH],
                     runtime_args=xr_rt,
-                    defines=zones + dyn_def,
+                    defines=zones
+                    + dyn_def
+                    + (
+                        [("XRD_SKIP_READS", os.environ["MIMO_FL_XRD_SKIP"])]
+                        if os.environ.get("MIMO_FL_XRD_SKIP")
+                        else []
+                    ),
                     config=dm(ttnn.DataMovementProcessor.RISCV_0, ttnn.NOC.NOC_0 if XNOC == 1 else ttnn.NOC.NOC_1),
                 ),
                 ttnn.KernelDescriptor(
@@ -803,13 +827,31 @@ def test_stream_expert_flat(device, m, wdtype):
                 ttnn.KernelDescriptor(
                     kernel_source=f"{KDIR}/se11_xmc.cpp",
                     source_type=FP,
-                    core_ranges=rl_crs,
+                    core_ranges=_crs(relays[:2]) if XHELP else rl_crs,
                     compile_time_args=[1, MT, BF8_TILE, X_SLOTS, XARR, WORD, KBLK, E, nsb],
                     runtime_args=xm_rt,
-                    defines=zones + dyn_def,
+                    defines=zones
+                    + dyn_def
+                    + ([("XMC_WHOLE_SB", "1")] if int(os.environ.get("MIMO_FL_WHOLE_SB", "1" if E2E else "0")) else [])
+                    + ([("XMC_HELPER", "1")] if XHELP else []),
                     config=dm(ttnn.DataMovementProcessor.RISCV_1, ttnn.NOC.NOC_1 if XNOC == 1 else ttnn.NOC.NOC_0),
                 ),
             ]
+            + (
+                [
+                    ttnn.KernelDescriptor(
+                        kernel_source=f"{KDIR}/se13_xhelp.cpp",
+                        source_type=FP,
+                        core_ranges=_crs(relays[2:]),
+                        compile_time_args=[1, MT, BF8_TILE, LAND_SLOTS, 4, 5, E, nsb],
+                        runtime_args=hl_rt,
+                        defines=dyn_def,
+                        config=dm(ttnn.DataMovementProcessor.RISCV_1, ttnn.NOC.NOC_0),
+                    )
+                ]
+                if XHELP
+                else []
+            )
             if E2E
             else [
                 ttnn.KernelDescriptor(
@@ -877,11 +919,15 @@ def test_stream_expert_flat(device, m, wdtype):
                 defines=zones
                 + dyn_def
                 + [("SE_GU_ONLY", "1"), ("SE_X_RELAY", "1"), ("SE_NO_PARTNER", "1")]
-                + ([("SE_X_RELAY2", str(32 // KBLK)), ("SE_X_NRELAY", str(XCOL or 2))] if (X2 or XCOL) else []),
+                + (
+                    [("SE_X_RELAY2", str(32 // KBLK)), ("SE_X_NRELAY", str(XCOL or 2))]
+                    if ((X2 and not XHELP) or XCOL)
+                    else []
+                ),
                 runtime_args=gu_rt,
                 config=dm(
                     ttnn.DataMovementProcessor.RISCV_0,
-                    ttnn.NOC.NOC_1 if int(os.environ.get("MIMO_FL_GU_NOC", "1")) else ttnn.NOC.NOC_0,
+                    ttnn.NOC.NOC_1 if int(os.environ.get("MIMO_FL_GU_NOC", "0" if E2E else "1")) else ttnn.NOC.NOC_0,
                 ),
             ),
             ttnn.KernelDescriptor(
@@ -1081,7 +1127,7 @@ def test_stream_expert_flat(device, m, wdtype):
                 }
                 pccs = [comp_pcc(refs_q[e], yh[e * tok_pad : e * tok_pad + cnts[e]], 0.99) for e in act]
                 logger.info(f"e2e per-expert PCC {[round(float(p_[1]), 5) for p_ in pccs]}")
-                assert all(p_[0] for p_ in pccs)
+                assert all(p_[0] for p_ in pccs) or os.environ.get("MIMO_FL_XRD_SKIP")
                 if DYN:
                     logger.info(f"dyn: counts {cnts} band {band} -> active {act}")
                     ok = True
@@ -1173,5 +1219,5 @@ def test_stream_expert_flat(device, m, wdtype):
                     )
             _, pcc = comp_pcc(ref, got, 0.0)
             logger.info(f"{tag}: PCC {pcc_q} vs quantized-weight reference, {pcc} vs fp32")
-            assert ok, pcc_q
+            assert ok or os.environ.get("MIMO_FL_XRD_SKIP"), pcc_q
     logger.info(f"ran {tag}")
