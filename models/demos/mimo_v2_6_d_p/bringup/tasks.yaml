@@ -723,6 +723,13 @@ tasks:
     kind: router
     layer: 1
     stateful: false
+  frozen:
+    at: '2026-09-26T21:32:55'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/mimo_v2_6_d_p/tests/bringup/test_c_sliding_moe_router.py: 12722767b08112092fff9760f65f10c7e0c0303e1b63f0f88b083ba53a0bfa7b
+      /localdev/dnijemcevic/bringup/mimo_v2_6_d_p/golden/s4096_c2048/manifest.json: 7551c6cae2f8c65a4c62f37dd9c3cd418b52f99e8c986901116b91e32f5f9933
 - id: S.sliding_moe.05
   title: 'sliding_moe block with steps 1-5 on device (last: router)'
   step: implement
