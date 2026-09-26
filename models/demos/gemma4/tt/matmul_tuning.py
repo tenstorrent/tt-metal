@@ -116,12 +116,34 @@ class DecodeMatmulTuner:
         values = list(self._cache.values())
         return sum(config is not None for config in values), len(values)
 
+    def compute_config_for(self, x, weight):
+        """Return the compute config ttnn would pick for this matmul without a program config.
+
+        ttnn lowers its default math fidelity from HiFi2 to LoFi as soon as a program config is
+        passed, so a tuned call restates the automatic defaults to change only the blocking. Returns
+        None where ttnn's default already matches (both inputs BFP8/BFP4, or both FLOAT32).
+        """
+        low_precision = (ttnn.bfloat8_b, ttnn.bfloat4_b)
+        if x.dtype in low_precision and weight.dtype in low_precision:
+            return None
+        if x.dtype == ttnn.float32 and weight.dtype == ttnn.float32:
+            return None
+        return ttnn.init_device_compute_kernel_config(
+            x.device().arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+
     def linear(self, x, weight, **kwargs):
         """Call ``ttnn.linear`` while preserving an explicit caller config."""
         if kwargs.get("program_config") is None:
             config = self.config_for(x, weight)
             if config is not None:
                 kwargs["program_config"] = config
+                if kwargs.get("compute_kernel_config") is None:
+                    kwargs["compute_kernel_config"] = self.compute_config_for(x, weight)
         return ttnn.linear(x, weight, **kwargs)
 
 

@@ -114,3 +114,58 @@ def test_explicit_program_config_takes_precedence(monkeypatch):
     explicit = object()
     assert tuner.linear(object(), object(), program_config=explicit) == "output"
     assert captured["program_config"] is explicit
+
+
+def _patch_compute_config(monkeypatch):
+    monkeypatch.setattr(
+        matmul_tuning.ttnn,
+        "init_device_compute_kernel_config",
+        lambda arch, **kwargs: SimpleNamespace(arch=arch, **kwargs),
+    )
+
+
+def _tensor(dtype, shape=(1, 1, 1, 256)):
+    return SimpleNamespace(dtype=dtype, shape=shape, device=lambda: SimpleNamespace(arch=lambda: "arch"))
+
+
+def test_tuned_call_keeps_automatic_compute_config(monkeypatch):
+    _patch_compute_config(monkeypatch)
+    captured = {}
+
+    def linear(x, weight, **kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(matmul_tuning.ttnn, "linear", linear)
+    tuner = matmul_tuning.DecodeMatmulTuner(enabled=True)
+    tuner.config_for = lambda *args: "tuned"
+    tuner.linear(_tensor(matmul_tuning.ttnn.bfloat16), _tensor(matmul_tuning.ttnn.bfloat8_b))
+    config = captured["compute_kernel_config"]
+    assert captured["program_config"] == "tuned"
+    assert config.math_fidelity == matmul_tuning.ttnn.MathFidelity.HiFi2
+    assert config.packer_l1_acc and not config.fp32_dest_acc_en and not config.math_approx_mode
+
+
+def test_caller_compute_config_and_untuned_calls_are_unchanged(monkeypatch):
+    _patch_compute_config(monkeypatch)
+    captured = []
+    monkeypatch.setattr(matmul_tuning.ttnn, "linear", lambda x, weight, **kwargs: captured.append(kwargs))
+    tuner = matmul_tuning.DecodeMatmulTuner(enabled=True)
+    x, weight = _tensor(matmul_tuning.ttnn.bfloat16), _tensor(matmul_tuning.ttnn.bfloat16)
+    explicit = object()
+    tuner.config_for = lambda *args: "tuned"
+    tuner.linear(x, weight, compute_kernel_config=explicit)
+    tuner.config_for = lambda *args: None
+    tuner.linear(x, weight)
+    assert captured[0]["compute_kernel_config"] is explicit
+    assert "compute_kernel_config" not in captured[1]
+
+
+@pytest.mark.parametrize(
+    "x_dtype,weight_dtype",
+    [("bfloat8_b", "bfloat8_b"), ("bfloat4_b", "bfloat8_b"), ("float32", "float32")],
+)
+def test_compute_config_defers_where_ttnn_default_matches(monkeypatch, x_dtype, weight_dtype):
+    _patch_compute_config(monkeypatch)
+    tuner = matmul_tuning.DecodeMatmulTuner(enabled=True)
+    ttnn = matmul_tuning.ttnn
+    assert tuner.compute_config_for(_tensor(getattr(ttnn, x_dtype)), _tensor(getattr(ttnn, weight_dtype))) is None

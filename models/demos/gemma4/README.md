@@ -191,7 +191,7 @@ HF_MODEL=<path-or-id> pytest models/demos/gemma4/demo/text_demo.py::test_demo_si
   - Optional `K=V` tying on global layers and KV-sharing across layer groups.
   - Sparse MoE block on 26B-A4B and 31B; dense MLP on E2B/E4B.
 - **Pre/post-processing:** tokenization via the upstream HF tokenizer on host; logit softcapping (`final_logit_softcapping=30.0`) applied on device.
-- **Decode matmul tuning:** `GEMMA4_TUNE_MATMULS` defaults to `target` on a single device and to no tuning on a multi-device mesh, where the target configs gave no decode gain. Set it to `0` to disable tuning, or use `draft`, `target`, `draft,target`, or `all` to select explicit single-tile-row decode configurations. Draft/CME tuning remains opt-in. Caller-supplied configs and dedicated LM-head/DRAM-sharded paths retain precedence. Reblocking can change rounding and generated tokens, so compare tuned and untuned runs with the same setting on every target path.
+- **Decode matmul tuning:** `GEMMA4_TUNE_MATMULS` defaults to `target` on a single device and to no tuning on a multi-device mesh, where the target configs gave no decode gain. Set it to `0` to disable tuning, or use `draft`, `target`, `draft,target`, or `all` to select explicit single-tile-row decode configurations. Draft/CME tuning remains opt-in. Caller-supplied configs and dedicated LM-head/DRAM-sharded paths retain precedence. Tuned calls restate ttnn's automatic compute config (HiFi2, packer L1 accumulation), which ttnn would otherwise lower to LoFi once a program config is passed, so only the K blocking differs from an untuned call. Reblocking can change rounding and generated tokens, so compare tuned and untuned runs with the same setting on every target path.
 
 ## Notes
 
