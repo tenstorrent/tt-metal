@@ -109,9 +109,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
 
-    uint32_t block_size =
-        fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(Wt, 4) : tt::tt_metal::find_max_divisor(Wt, 8);
-
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat stats_data_format = tt::tt_metal::datatype_to_dataformat_converter(stats.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -139,69 +136,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
     log_debug(tt::LogOp, "math_fidelity: {}", math_fidelity);
     log_debug(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
     log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
-
-    uint32_t cb_length = Wt;
-
-    const uint32_t available_L1 =
-        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    if (static_cast<double>(cb_length * in_single_tile_size) > static_cast<double>(available_L1) * 0.95) {
-        cb_length = static_cast<uint32_t>(static_cast<double>(available_L1) * 0.95 / in_single_tile_size) / 7;
-    }
-    const uint32_t in0_tiles = cb_length;
-    const uint32_t in1_tiles = stats_tiles_cols;
-    const uint32_t in2_tiles = cb_length;
-    const uint32_t in3_tiles = cb_length;
-    const uint32_t in4_tiles = 1;  // epsilon
-    const uint32_t in5_tiles = 1;  // reduce scalar
-
-    const uint32_t intermed0_tiles = tile_cols_per_device;
-    const uint32_t intermed4_tiles = 1;
-    const uint32_t intermed5_tiles = cb_length;
-    const uint32_t intermed6_tiles = cb_length;
-    const uint32_t intermed7_tiles = cb_length;
-    const uint32_t out0_tiles = cb_length;
-
-    TT_FATAL(
-        W <= tile_width * in0_tiles,
-        "W ({}) exceeds the maximum supported size of tile buffer ({} * {}, kernel limitation right now)",
-        W,
-        tile_width,
-        in0_tiles);
-    TT_FATAL(
-        in0_tiles % block_size == 0,
-        "Buffer size in0_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
-        in0_tiles,
-        block_size);
-    TT_FATAL(
-        in2_tiles % block_size == 0,
-        "Buffer size in2_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
-        in2_tiles,
-        block_size);
-    TT_FATAL(
-        in3_tiles % block_size == 0,
-        "Buffer size in3_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
-        in3_tiles,
-        block_size);
-    TT_FATAL(
-        out0_tiles % block_size == 0,
-        "Buffer size out0_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
-        out0_tiles,
-        block_size);
-    TT_FATAL(
-        intermed5_tiles % block_size == 0,
-        "Buffer size im0_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
-        intermed5_tiles,
-        block_size);
-    TT_FATAL(
-        intermed6_tiles % block_size == 0,
-        "Buffer size im6_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
-        intermed6_tiles,
-        block_size);
-    TT_FATAL(
-        intermed7_tiles % block_size == 0,
-        "Buffer size im7_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
-        intermed7_tiles,
-        block_size);
 
     // Float32 input on the welford path requires fp32_dest_acc_en=true as a prerequisite for
     // UnpackToDest (set below). UnpackToDest is what bypasses the unpacker's
@@ -273,6 +207,83 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
         log_debug(tt::LogOp, "core_group_2: {}", core_group_2.str());
         log_debug(tt::LogOp, "num_tile_rows_per_core_group_2: {}", num_tile_rows_per_core_group_2);
     }
+
+    // Block and circular-buffer sizing follow the per-core slice width, matching the
+    // non-Welford post-all-gather factory. In the 1D path tiles_per_core_y == Wt, so this is
+    // a no-op; in the 2D path it keeps blk dividing tiles_per_core_y, which the row-structured
+    // reader/compute/writer kernels require (a Wt-derived blk can exceed the per-core slice
+    // and deadlock the writer's wait_front).
+    uint32_t block_size =
+        fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(tiles_per_core_y, 4)
+                         : tt::tt_metal::find_max_divisor(tiles_per_core_y, 8);
+
+    uint32_t cb_length = tiles_per_core_y;
+
+    const uint32_t available_L1 =
+        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    if (!use_2d_kernel &&
+        static_cast<double>(cb_length * in_single_tile_size) > static_cast<double>(available_L1) * 0.95) {
+        cb_length = static_cast<uint32_t>(static_cast<double>(available_L1) * 0.95 / in_single_tile_size) / 7;
+    }
+    const uint32_t in0_tiles = cb_length;
+    const uint32_t in1_tiles = stats_tiles_cols;
+    const uint32_t in2_tiles = cb_length;
+    const uint32_t in3_tiles = cb_length;
+    const uint32_t in4_tiles = 1;  // epsilon
+    const uint32_t in5_tiles = 1;  // reduce scalar
+
+    const uint32_t intermed0_tiles = tile_cols_per_device;
+    const uint32_t intermed4_tiles = 1;
+    const uint32_t intermed5_tiles = cb_length;
+    const uint32_t intermed6_tiles = cb_length;
+    const uint32_t intermed7_tiles = cb_length;
+    const uint32_t out0_tiles = cb_length;
+
+    // The full-row buffer limit only applies in the 1D path; in the 2D path each core
+    // buffers its own slice, whose width matches the buffer by construction.
+    if (!use_2d_kernel) {
+        TT_FATAL(
+            W <= tile_width * in0_tiles,
+            "W ({}) exceeds the maximum supported size of tile buffer ({} * {}, kernel limitation right now)",
+            W,
+            tile_width,
+            in0_tiles);
+    }
+    TT_FATAL(
+        in0_tiles % block_size == 0,
+        "Buffer size in0_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
+        in0_tiles,
+        block_size);
+    TT_FATAL(
+        in2_tiles % block_size == 0,
+        "Buffer size in2_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
+        in2_tiles,
+        block_size);
+    TT_FATAL(
+        in3_tiles % block_size == 0,
+        "Buffer size in3_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
+        in3_tiles,
+        block_size);
+    TT_FATAL(
+        out0_tiles % block_size == 0,
+        "Buffer size out0_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
+        out0_tiles,
+        block_size);
+    TT_FATAL(
+        intermed5_tiles % block_size == 0,
+        "Buffer size im0_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
+        intermed5_tiles,
+        block_size);
+    TT_FATAL(
+        intermed6_tiles % block_size == 0,
+        "Buffer size im6_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
+        intermed6_tiles,
+        block_size);
+    TT_FATAL(
+        intermed7_tiles % block_size == 0,
+        "Buffer size im7_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
+        intermed7_tiles,
+        block_size);
 
     uint32_t gamma_stick_size = 0;
     uint32_t gamma_is_row_major = 0;
