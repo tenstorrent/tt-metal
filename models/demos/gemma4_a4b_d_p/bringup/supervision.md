@@ -30,6 +30,7 @@ Framework fixes are the `[bringup][F<n>]` commits; the owner's decisions are mar
 | 05:23 | X.1 | profile: no device durations; the ladder/profile model is the hybrid harness (~20 s/chunk of host glue) | framework + owner picks | killed the fix agent; F32 fast loop (one chunk on the golden prefix, no precompile), F33 run_block sections + standing assemble step; owner delegated picks: P.1 assemble all-device model, then X.1 baseline, then P.2 SDPA config A |
 | 05:50 | P.1 | gate PASS de51b4c945b (0.743 s/chunk vs ~20 s hybrid, host transfers 0, accuracy unchanged); false device alarm started attempt 2 | review: accepted; framework | stopped attempt 2; F34 parse-based device check, no retry after a pass, profile timings on the dashboard |
 | 06:17 | P.2 | gate PASS 02d9c8f7ce1 (attention 381.6 -> 248.4 ms, chunk 743 -> 610 ms, pcc 0.9986) | review: accepted; framework | config A as ERNIE, chunk sizes fitted to Gemma head dims (findings); base selectable. F35 applied; added P.3 attention sub-sections |
+| 06:19 | P.3 | timing rows lacked run metadata (results before F35) | data annotation | backfilled only descriptive fields: device_model_hybrid=1 for L.* (hybrid harness), 0 for P.1/X.1/P.2; chunk_start 51200 / chunk_len 5120 for the profiles; P.1 rung 4096/2048. No measurement changed |
 
 ## Hand-off (2026-09-26 02:10)
 
