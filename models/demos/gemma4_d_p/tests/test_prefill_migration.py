@@ -24,7 +24,9 @@ from models.demos.gemma4_d_p.tt.runners.kv_validation import (
     read_cache_tensor,
 )
 
-GPU_PCC_THRESHOLD = 0.91
+MIN_PER_HEAD_PCC = 0.91
+MIN_OVERALL_PCC = 0.97
+MAX_OVERALL_RRMSE = 0.23
 
 
 def verify_inputs(adapter, trace_dir):
@@ -141,7 +143,7 @@ def test_prefill_migration(migration_environment, context_len):
     report = json.loads((output_dir / "gemma4_slot0.json").read_text())
     assert report["slot"] == 0 and report["tokens"] == context_len
     assert len(report["measurements"]) == 1640
-    assert min(report["minima"].values()) >= GPU_PCC_THRESHOLD
+    assert min(report["minima"].values()) >= MIN_PER_HEAD_PCC
     metrics = report["error_metrics"]
     print(f"\n{'Layer':>7} {'PCC':>12} {'Relative RMSE':>16} {'RMSE':>12}")
     for entry in metrics["layers"]:
@@ -153,6 +155,8 @@ def test_prefill_migration(migration_environment, context_len):
         f"Worst head: layer={worst_head['layer']} head={worst_head['head']} "
         f"type={worst_head['cache_type']} PCC={worst_head['pcc']:.6f}"
     )
+    assert overall["pcc"] > MIN_OVERALL_PCC, overall
+    assert overall["relative_rmse"] < MAX_OVERALL_RRMSE, overall
     if gate == "loopback":
         assert "[migration] WORKER_READY:" in (output_dir / "runner.log").read_text()
         assert "verify bytes PASSED" in (output_dir / "producer.log").read_text()
@@ -204,7 +208,7 @@ def run_migration_case(gate, context_len, output_dir):
                             yield config_id, actual
 
                 scores = compare_slot_cache(read_heads, 0, context_len, env["PREFILL_TRACE_DIR"])
-                assert min(scores.values()) >= GPU_PCC_THRESHOLD, scores
+                assert min(scores.values()) >= MIN_PER_HEAD_PCC, scores
             except BaseException as error:
                 failures.append(error.with_traceback(None))
             finally:
