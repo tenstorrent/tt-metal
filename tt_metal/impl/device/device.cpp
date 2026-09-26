@@ -40,6 +40,7 @@
 #include "dispatch/command_queue_common.hpp"
 #include "common/core_assignment.hpp"
 #include "program/program_impl.hpp"
+#include "program/slow_dispatch.hpp"
 #include "memory_tracking/memory_stats_shm.hpp"
 #include "memory_tracking/shm_tracking_processor.hpp"
 #include <tt-metalium/graph_tracking.hpp>
@@ -377,7 +378,7 @@ void Device::configure_command_queue_programs(DispatchTopology* dispatch_topolog
 
     // Run the cq program
     command_queue_program.impl().finalize_offsets(this);
-    detail::ConfigureDeviceWithProgram(this, command_queue_program, true);
+    slow_dispatch::ConfigureDeviceWithProgram(*this, command_queue_program, /*force_slow_dispatch=*/true);
     MetalEnvAccessor(*env_).impl().get_cluster().l1_barrier(this->id());
 }
 
@@ -530,8 +531,8 @@ void Device::configure_fabric() {
 
     fabric_program_->impl().finalize_offsets(this);
 
-    detail::WriteRuntimeArgsToDevice(this, *fabric_program_, using_fast_dispatch_);
-    detail::ConfigureDeviceWithProgram(this, *fabric_program_, using_fast_dispatch_);
+    slow_dispatch::WriteRuntimeArgsToDevice(*this, *fabric_program_, /*force_slow_dispatch=*/using_fast_dispatch_);
+    slow_dispatch::ConfigureDeviceWithProgram(*this, *fabric_program_, /*force_slow_dispatch=*/using_fast_dispatch_);
 
     // Note: the l1_barrier below is needed to be sure writes to cores that
     // don't get the GO mailbox have all landed

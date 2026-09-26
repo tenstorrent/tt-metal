@@ -67,6 +67,7 @@
 #include "program_command_sequence.hpp"
 #include "program_device_map.hpp"
 #include "program_impl.hpp"
+#include "slow_dispatch.hpp"
 #include "tt-metalium/program.hpp"
 #include <tt_stl/span.hpp>
 #include <tt_stl/strong_type.hpp>
@@ -3677,7 +3678,7 @@ void detail::ProgramCompileGroup::finalize_offsets() {
 void detail::ProgramCompileGroup::write_runtime_args(bool force_slow_dispatch) {
     std::lock_guard lock(mutex_);
     for (auto& [device, program] : program_device_map_) {
-        detail::WriteRuntimeArgsToDevice(device, *program, force_slow_dispatch);
+        slow_dispatch::WriteRuntimeArgsToDevice(*device, *program, force_slow_dispatch);
     }
 }
 
