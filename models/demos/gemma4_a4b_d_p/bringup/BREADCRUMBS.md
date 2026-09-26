@@ -609,3 +609,15 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Gate PASS: pcc_attention_L05 0.999975, rel L2 0.00795, first 128 rows 0.00696, row-norm ratio [0.9952, 1.0111]. The `FAIL ... pcc=0.000000` line is the precompile stub.
 - Not covered by this gate: the chunk-0 path (plain SDPA) and the K/V read-back (`to_torch`). The ladder's state metrics exercise both.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_attention.py`
+
+## S.global.02 test (run1, attempt 1)
+- Replaced the one-line template body with the checks from test_swap_sliding_02_attention.py (BLOCK_TYPE = global, layer 5). The global layer has no window,
+  so the "prefix rows" are the first 128 rows (HEAD_ROWS, the same as test_c_global_attention.py). The gated metric stays `pcc_swap_out` >= 0.98. The test also asserts:
+  each swapped step's own output vs golden (PCC >= 0.99, rel L2 <= 0.03), attn_out rel L2 on the first 128 rows <= 0.03, attn_out per-token norm ratio in [0.95, 1.05],
+  block out rel L2 <= 0.02 over the whole chunk and over the first 128 rows, and finite outputs. The limits come from the component test and sliding swap 2. I took no new CPU measurements.
+  The RoPE-from-0 bug is caught at the step (attn_out first 128 rows rel 0.062, ratio [0.85, 1.22], from C.global.attention.test).
+- Verified: BRINGUP_IMPL=reference PASS (block 0.999996, rel 0.0029 / first 128 rows 0.0026; attn rel 0.0028 / 0.0027, ratio [0.9989, 1.0034]). Stub FAIL (block PCC fails,
+  rel 0.314, attn rel 1.0). The device gate PASSES: pcc_swap_out 0.999990, block rel 0.0045 / 0.0033, attn_norm rel 0.0030, attn_out PCC 0.999975, rel 0.0079 / 0.0070,
+  ratio [0.9964, 1.0117]. The FAIL / pcc=0.000000 lines come from the precompile pass (comp_pcc stub).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_02_attention.py`
+  (BRINGUP_IMPL=reference / stub for the freeze checks).
