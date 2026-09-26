@@ -1153,6 +1153,43 @@ void write_sharded_buffer_to_core(
     }
 }
 
+bool pinned_interleaved_write_layout_supported(const Buffer& buffer) {
+    return buffer.page_size() == buffer.aligned_page_size() && !is_sharded(buffer.buffer_layout());
+}
+
+bool pinned_write_source_aligned(const Buffer& buffer, const void* src_region_start) {
+    const auto& hal = MetalContext::instance(extract_context_id(buffer.device())).hal();
+    return reinterpret_cast<uintptr_t>(src_region_start) % hal.get_read_alignment(HalMemType::L1) == 0;
+}
+
+PinnedInterleavedWriteSource resolve_pinned_interleaved_write_source(
+    const Buffer& buffer,
+    const void* src_region_start,
+    uint64_t region_size,
+    const experimental::PinnedMemory& pinned_memory) {
+    using Status = PinnedInterleavedWriteSource::Status;
+    const auto device_id = buffer.device()->id();
+    const auto noc_addr = pinned_memory.get_noc_addr(device_id);
+    if (!noc_addr.has_value()) {
+        return {.status = Status::NotMapped};
+    }
+    if (!pinned_write_source_aligned(buffer, src_region_start)) {
+        return {.status = Status::Unaligned};
+    }
+    const auto* pinned_host_base = static_cast<const uint8_t*>(pinned_memory.get_host_ptr());
+    const auto* region_start = static_cast<const uint8_t*>(src_region_start);
+    if (region_start < pinned_host_base ||
+        pinned_host_base + pinned_memory.get_buffer_size() < region_start + region_size) {
+        return {.status = Status::OutsidePin};
+    }
+    return {
+        .status = Status::Pinned,
+        .noc_addr = noc_addr->addr + static_cast<uint64_t>(region_start - pinned_host_base),
+        .noc_xy = noc_addr->pcie_xy_enc,
+        .remote_chip = noc_addr->device_id != device_id,
+    };
+}
+
 // Main API to write buffer data
 bool write_to_device_buffer(
     const void* src,
@@ -1183,21 +1220,20 @@ bool write_to_device_buffer(
     uint64_t pinned_src_addr = 0;
     bool use_pinned_transfer = false;
     bool remote_chip = false;
-    if (has_pinned_inputs && is_unpadded && !is_sharded(buffer.buffer_layout())) {
-        auto device_id = buffer.device()->id();
-        auto noc_addr_pair_opt = pinned_memory->get_noc_addr(device_id);
-        if (noc_addr_pair_opt.has_value()) {
-            remote_chip = noc_addr_pair_opt->device_id != device_id;
-            const uint64_t pinned_noc_base = noc_addr_pair_opt->addr;
-            const uint8_t* pinned_host_base = static_cast<const uint8_t*>(pinned_memory->get_host_ptr());
-            const uint8_t* src_ptr = static_cast<const uint8_t*>(src);
-            const uint64_t pinned_size = pinned_memory->get_buffer_size();
-            auto region = buffer.impl().root_buffer_region();
-            const uint8_t* src_region_start = src_ptr + region.offset;
-            const uint8_t* src_region_end = src_region_start + region.size;
-            // Check against L1 alignment because we need the copy from the prefetcher to the dispatcher to be aligned.
-            const uint32_t pinned_src_alignment = hal.get_read_alignment(HalMemType::L1);
-            if (reinterpret_cast<uintptr_t>(src_region_start) % pinned_src_alignment != 0) {
+    if (has_pinned_inputs && pinned_interleaved_write_layout_supported(buffer)) {
+        const auto region = buffer.impl().root_buffer_region();
+        const uint8_t* src_region_start = static_cast<const uint8_t*>(src) + region.offset;
+        const auto source =
+            resolve_pinned_interleaved_write_source(buffer, src_region_start, region.size, *pinned_memory);
+        switch (source.status) {
+            case PinnedInterleavedWriteSource::Status::Pinned:
+                pinned_src_addr = source.noc_addr;
+                pinned_src_noc_xy = source.noc_xy;
+                remote_chip = source.remote_chip;
+                use_pinned_transfer = true;
+                break;
+            case PinnedInterleavedWriteSource::Status::NotMapped: break;
+            case PinnedInterleavedWriteSource::Status::Unaligned: {
                 // Once per process: buffer writes run inside per-step model loops.
                 static std::once_flag unaligned_pinned_src_warned;
                 std::call_once(unaligned_pinned_src_warned, [&] {
@@ -1206,27 +1242,26 @@ bool write_to_device_buffer(
                         "Pinned source memory start address {:#x} must be aligned to {} B to be read directly by the "
                         "device; copying through the command queue instead. This message is emitted once per process.",
                         reinterpret_cast<uintptr_t>(src_region_start),
-                        pinned_src_alignment);
+                        hal.get_read_alignment(HalMemType::L1));
                 });
-            } else if ((src_region_start < pinned_host_base) or (pinned_host_base + pinned_size < src_region_end)) {
+                break;
+            }
+            case PinnedInterleavedWriteSource::Status::OutsidePin: {
                 // Once per process: buffer writes run inside per-step model loops.
                 static std::once_flag pinned_src_out_of_region_warned;
                 std::call_once(pinned_src_out_of_region_warned, [&] {
+                    const auto pinned_host_base = reinterpret_cast<uintptr_t>(pinned_memory->get_host_ptr());
                     log_info(
                         tt::LogMetal,
                         "Pinned memory region must contain source buffer region: pinned region start:{:#X} end:{:#X} "
                         "src start:{:#X} end:{:#X}; copying through the command queue instead. This message is "
                         "emitted once per process.",
-                        reinterpret_cast<uintptr_t>(pinned_host_base),
-                        reinterpret_cast<uintptr_t>(pinned_host_base + pinned_size),
+                        pinned_host_base,
+                        pinned_host_base + pinned_memory->get_buffer_size(),
                         reinterpret_cast<uintptr_t>(src_region_start),
-                        reinterpret_cast<uintptr_t>(src_region_end));
+                        reinterpret_cast<uintptr_t>(src_region_start + region.size));
                 });
-            } else {
-                const uint64_t src_offset_base = static_cast<uintptr_t>(src_region_start - pinned_host_base);
-                pinned_src_addr = pinned_noc_base + src_offset_base;
-                pinned_src_noc_xy = noc_addr_pair_opt->pcie_xy_enc;
-                use_pinned_transfer = true;
+                break;
             }
         }
     }
@@ -1387,8 +1422,11 @@ bool write_to_device_buffer(
         dispatch_params_variant);
     TT_ASSERT(dispatch_params != nullptr);
 
+    // A copied write reads the region's bytes from `src`. A pinned write relays them from pinned_src_addr and copies
+    // only the unaligned head inline; that head is the region's first bytes, and `src` is the root buffer's host base.
+    const void* region_src = use_pinned_transfer ? static_cast<const uint8_t*>(src) + region.offset : src;
     write_interleaved_buffer_to_device(
-        src, *dispatch_params, *root_buffer, buf_dispatch_constants, sub_device_ids, dispatch_core_type);
+        region_src, *dispatch_params, *root_buffer, buf_dispatch_constants, sub_device_ids, dispatch_core_type);
     return use_pinned_transfer;
 }
 

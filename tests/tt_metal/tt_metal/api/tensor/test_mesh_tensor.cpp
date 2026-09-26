@@ -305,6 +305,25 @@ private:
     size_t previous_limit_bytes_;
 };
 
+// Selects the whole-shard pinned write (PinnedMemoryCache) instead of the chunked upload for large writes.
+class ScopedWholeShardPinnedWrites {
+public:
+    ScopedWholeShardPinnedWrites() :
+        previous_threads_(tt::tt_metal::MetalContext::instance().rtoptions().get_pinned_upload_threads()) {
+        tt::tt_metal::MetalContext::instance().rtoptions().set_pinned_upload_threads(0);
+    }
+
+    ~ScopedWholeShardPinnedWrites() {
+        tt::tt_metal::MetalContext::instance().rtoptions().set_pinned_upload_threads(previous_threads_);
+    }
+
+    ScopedWholeShardPinnedWrites(const ScopedWholeShardPinnedWrites&) = delete;
+    ScopedWholeShardPinnedWrites& operator=(const ScopedWholeShardPinnedWrites&) = delete;
+
+private:
+    uint32_t previous_threads_ = 0;
+};
+
 HostBuffer make_aligned_host_buffer(size_t num_words, uint32_t fill) {
     auto data = std::make_shared<AlignedUInt32Vector>(num_words, fill);
     return HostBuffer(ttsl::Span<uint32_t>(data->data(), data->size()), tt::tt_metal::MemoryPin(data));
@@ -582,6 +601,8 @@ TEST_F(MeshTensorDeviceTest, UniformCopyToDevice_ReusesPinnedMemoryCacheEntries)
         return;
     }
 
+    // Whole-shard pins are what the cache holds; the chunked upload does not add cache entries.
+    ScopedWholeShardPinnedWrites whole_shard_pins;
     std::vector<uint32_t> shard_fills(shard_count);
     std::iota(shard_fills.begin(), shard_fills.end(), 1u);
     auto host_tensor = make_full_coverage_aligned_host_tensor(shape, mesh_device_->shape(), shard_fills);
@@ -1005,7 +1026,11 @@ void run_large_read_only_file_backed_write_test(distributed::MeshDevice& mesh_de
     auto& cache = tt::tt_metal::experimental::PinnedMemoryCache::instance();
     auto& cq = mesh_device.mesh_command_queue();
     const size_t entries_before = cache.num_entries();
-    MeshTensor device_tensor = cq.enqueue_write_tensor(host_tensor);
+    // This covers the cached whole-shard pin; the chunked upload's pins are not cached (see test_pinned_upload.cpp).
+    MeshTensor device_tensor = [&] {
+        ScopedWholeShardPinnedWrites whole_shard_pins;
+        return cq.enqueue_write_tensor(host_tensor);
+    }();
     cq.finish();
 
     // The write itself must have created the pin. Asserting only on a try_pin issued after the fact would pass
