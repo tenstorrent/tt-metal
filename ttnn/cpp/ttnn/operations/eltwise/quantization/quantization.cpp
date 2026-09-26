@@ -189,15 +189,15 @@ ttnn::Tensor widen_quantized_input_to_f32(const ttnn::Tensor& input) {
     return ttnn::dequantize(input, 1.0f, 0, /*axis=*/std::nullopt, ttnn::DataType::FLOAT32, std::nullopt, std::nullopt);
 }
 
-// Narrow composite's fp result to the output dtype. int8 goes through quantize instead of typecast for
-// saturation since the QUANT kernel clamps to [-128, 127] while typecast wraps modulo 256 (callers here
-// pass unbounded floats).
+// Narrow composite's fp result to the output dtype. typecast truncates toward zero and wraps modulo 256
+// (callers here pass unbounded floats), so int8 and uint8 go through quantize instead, which saturates and
+// rounds to nearest even.
 ttnn::Tensor narrow_composite_result(
     const ttnn::Tensor& shifted,
     ttnn::DataType c_dtype,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<ttnn::Tensor> optional_output_tensor) {
-    if (c_dtype != ttnn::DataType::INT8) {
+    if (!is_narrow_quantized_dtype(c_dtype)) {
         return ttnn::typecast(shifted, c_dtype, memory_config, optional_output_tensor);
     }
     return ttnn::quantize(
@@ -205,7 +205,7 @@ ttnn::Tensor narrow_composite_result(
         1.0f,
         0,
         /*axis=*/std::nullopt,
-        ttnn::DataType::INT8,
+        c_dtype,
         memory_config,
         std::move(optional_output_tensor));
 }
@@ -235,8 +235,8 @@ Tensor quantize(
         is_supported_quantized_dtype(c_dtype),
         "Quantize only supports int32, int8 or uint8 outputs for now, got {}",
         c_dtype);
-    // per-channel path narrows with ttnn::typecast(float, int8/uint8), which wraps
-    // mod 256 instead of saturating, so reject it here.
+    // per-channel narrows through narrow_composite_result, which saturates, but int8/uint8
+    // output is not enabled on that path yet, so reject it here.
     TT_FATAL(
         !(axis.has_value() && is_narrow_quantized_dtype(c_dtype)),
         "Per-channel (axis) quantize does not support int8/uint8 output yet; use int32 output or per-tensor quantize");
