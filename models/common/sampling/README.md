@@ -108,7 +108,7 @@ runtime prefill compute layout matches the sampling-group layout. If a model
 uses `sampling_dp > 1` but does not expose a row-sharded batched-prefill input
 contract, batched prefill must fall back to sequential prefill for correctness.
 
-**Trace invalidation**: Changing `force_argmax_sampling` state invalidates captured traces. Force-argmax is triggered when callers pass k=1, p=1.0, temp=1.0 (note: p=1.0 means "no top-p filtering", distinct from the internal initialization default of p=0). `SamplingGenerator.reset_sampling_params` handles this.
+**Trace keying**: The greedy (force-argmax) and regular sampling pipelines are different programs, so they are captured into separate trace slots keyed by `_TraceKey(penalties_on, log_probs_on, force_argmax, bucket)`. Switching between them reuses the trace already captured for that path. Force-argmax is triggered when callers pass k=1, p=1.0, temp=1.0 (note: p=1.0 means "no top-p filtering", distinct from the internal initialization default of p=0). Call `SamplingGenerator.reset_trace()` when the logits or output tensor bindings change.
 
 ## Future Work
 

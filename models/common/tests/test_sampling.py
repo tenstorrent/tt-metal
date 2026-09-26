@@ -22,6 +22,7 @@ from models.common.sampling import (
 from models.common.sampling._utils import topk_would_route_to_large_indices
 from models.common.sampling.generator import (
     MAX_UINT32,
+    _acknowledge_corruptible,
     _acknowledge_trace_buffers_corruptible,
     _hash_request_seed_to_device_seed,
 )
@@ -69,14 +70,15 @@ def test_sampling_precompile_preserves_logits_and_request_state(monkeypatch, all
     assert log_probs.num_logprobs == [0]
 
 
-def test_sampling_trace_buffer_reuse_is_bucket_only(monkeypatch):
+def test_sampling_trace_buffer_acknowledgement(monkeypatch):
     marked = []
     monkeypatch.setattr(trace_allocation_tracker, "acknowledge_corruptible", marked.append)
 
+    _acknowledge_corruptible(["trace-output", None])
     _acknowledge_trace_buffers_corruptible(None, ["default"])
     _acknowledge_trace_buffers_corruptible(1, ["input", None, ("output",)])
 
-    assert marked == ["input", "output"]
+    assert marked == ["trace-output", "input", "output"]
 
 
 def test_sampling_trace_bucket_isolation():

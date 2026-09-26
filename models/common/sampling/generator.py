@@ -16,6 +16,7 @@ from ttnn.tools import trace_allocation_tracker
 import ttnn
 
 from ._utils import clamp, is_default_value, split_list
+from .tt_log_probs import LogProbsResult
 from .tt_penalties import TTPenalties
 from .tt_sampling import TTSampling
 
@@ -25,15 +26,24 @@ DEVICE_SEED_MAX = 1_000_000
 _UINT64_MASK = (1 << 64) - 1
 
 
-def _acknowledge_trace_buffers_corruptible(bucket, value):
-    """Acknowledge bucketed trace I/O that another live trace may overwrite."""
-    if bucket is None or value is None:
+def _acknowledge_corruptible(value):
+    """Acknowledge the device tensors contained in a sampling result."""
+    if value is None:
         return
     if isinstance(value, (list, tuple)):
         for item in value:
-            _acknowledge_trace_buffers_corruptible(bucket, item)
+            _acknowledge_corruptible(item)
+        return
+    if isinstance(value, LogProbsResult):
+        _acknowledge_corruptible((value.topk_logprobs, value.topk_indices))
         return
     trace_allocation_tracker.acknowledge_corruptible(value)
+
+
+def _acknowledge_trace_buffers_corruptible(bucket, value):
+    """Acknowledge bucketed trace I/O that another live trace may overwrite."""
+    if bucket is not None:
+        _acknowledge_corruptible(value)
 
 
 def _hash_request_seed_to_device_seed(seed: int, counter: int, salt: int = 0) -> int:
@@ -264,7 +274,6 @@ class SamplingGenerator:
     # Sampling helpers
     # ---------------------------------------------------------------------
     def reset_sampling_params(self, sampling_params, empty_slots: list[int] | None = None):
-        old_force_argmax_sampling = self.tt_sampling.force_argmax_sampling
         num_logprobs = getattr(sampling_params, "num_logprobs", None)
         self.tt_sampling.reset_params(
             k=sampling_params.top_k,
@@ -274,8 +283,6 @@ class SamplingGenerator:
             num_logprobs=num_logprobs,
             empty_slots=empty_slots,
         )
-        if self.tt_sampling.force_argmax_sampling != old_force_argmax_sampling:
-            self.reset_trace()
 
         old_penalties_active = self._penalties_active
         self._penalties_active = not (
@@ -453,19 +460,14 @@ class SamplingGenerator:
             if scratch is not logits:
                 ttnn.deallocate(scratch)
 
-        # Whatever sampling allocates inside the capture window (e.g. the argmax output when no
-        # feedback buffer is supplied) belongs to the trace being recorded and must stay allocated
-        # for replay. Acknowledge the window (no-op unless TT_METAL_TRACE_ALLOC_TRACKING=1), as the
-        # model decode capture does; measured: 1 buffer left live across every replay on Qwen2.5-VL.
-        with trace_allocation_tracker.corruptible_allocation_scope(self.mesh_device):
-            trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
-            sampled = self._run_sampling(
-                logits,
-                penalties_on=penalties_on,
-                tt_out_tok=tt_out_tok,
-            )
-            ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=self.cq_id)
-            ttnn.synchronize_device(self.mesh_device)
+        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
+        sampled = self._run_sampling(
+            logits,
+            penalties_on=penalties_on,
+            tt_out_tok=tt_out_tok,
+        )
+        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=self.cq_id)
+        ttnn.synchronize_device(self.mesh_device)
 
         if tt_out_tok is not None:
             if isinstance(sampled, tuple):
@@ -479,7 +481,10 @@ class SamplingGenerator:
         slot["input"] = logits
         slot["output"] = output
         slot["kwargs"] = {"tt_out_tok": tt_out_tok}
-        _acknowledge_trace_buffers_corruptible(self._active_trace_bucket, (logits, output))
+        # These output buffers are owned by this trace and fully overwritten before each return.
+        # They can therefore safely survive while another keyed sampling trace is replayed.
+        _acknowledge_corruptible(output)
+        _acknowledge_trace_buffers_corruptible(self._active_trace_bucket, logits)
 
         return slot["output"]
 
