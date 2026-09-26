@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_helpers_dataflow_host.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -26,12 +27,16 @@ tt::tt_metal::ProgramDescriptor receive_program_factory(
     // basic accounting
     const uint32_t output_num_pages = data_movement::get_num_pages(output_tensor);
     const uint32_t output_page_size_bytes = output_tensor.tensor_spec().compute_page_size_bytes();
-    const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
+    // Framing (packet dims, CB sizing, local packet-stride ct arg) must use the output tensor's OWN
+    // buffer alignment (DRAM alignment on Blackhole is 64B, not L1's 16B) -- otherwise CBs sized for
+    // an under-aligned page overflow once the reader/writer TensorAccessors below read/write the
+    // buffer's true aligned page size.
+    const uint32_t buffer_alignment = output_tensor.buffer()->alignment();
 
     // figure out packets
     const auto [packet_size_bytes, num_pages_per_packet, num_page_segments, total_packets] =
-        detail::compute_aligned_packet_dims(
-            output_tensor.dtype(), output_page_size_bytes, output_num_pages, l1_alignment);
+        ::ttnn::ccl::dataflow::ccl_packet_dims(
+            output_tensor.dtype(), output_page_size_bytes, output_num_pages, buffer_alignment);
     // distribute work
     const CoreCoord use_cores = {1, 1};
 
@@ -44,23 +49,12 @@ tt::tt_metal::ProgramDescriptor receive_program_factory(
 
     tt::DataFormat inter_dataformat = tt::tt_metal::datatype_to_dataformat_converter(intermediate_tensor.dtype());
 
-    // CB for packet headers
-    constexpr auto packet_header_cb_id = tt::CBIndex::c_0;
-    constexpr auto buffering_factor = 2;  // this is in other fabric kernels
-    constexpr auto num_packet_headers_storable = 2;
-    const auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
-    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = num_packet_headers_storable * packet_header_size_bytes * buffering_factor,
-        .core_ranges = all_cores,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(packet_header_cb_id),
-            .data_format = tt::DataFormat::RawUInt32,
-            .page_size = packet_header_size_bytes,
-        }}},
-    });
+    // Packet headers are drawn from the fabric-L1 PacketHeaderPool by the kernel-side
+    // FabricStreamSender (HeaderPolicy is gone — Pool is the idiomatic default), so no
+    // packet-header CB is allocated here.
 
     // Scratch CB for loading up pages that are collected into packets
-    constexpr auto packet_cb_id = tt::CBIndex::c_1;
+    constexpr auto packet_cb_id = tt::CBIndex::c_0;
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = packet_size_bytes,
         .core_ranges = all_cores,
@@ -72,7 +66,7 @@ tt::tt_metal::ProgramDescriptor receive_program_factory(
     });
 
     // CB for sender reader->writer kernels
-    constexpr auto receiver_cb_id = tt::CBIndex::c_2;
+    constexpr auto receiver_cb_id = tt::CBIndex::c_1;
     const uint32_t cb_num_pages = 3 * num_pages_per_packet;
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = cb_num_pages * output_page_size_bytes,
@@ -87,9 +81,9 @@ tt::tt_metal::ProgramDescriptor receive_program_factory(
     const auto& topology = operation_attributes.topology;
     const auto this_fabric_id = mesh_device->get_fabric_node_id(receive_coord);
     const auto [num_hops, sender_is_forward, next_fabric_id] =
-        detail::fabric_1d_routing(mesh_device, receive_coord, send_coord, topology);
+        ::ttnn::ccl::dataflow::ccl_dm_route(mesh_device, receive_coord, send_coord, topology);
 
-    std::vector<uint32_t> reader_ct_args = {packet_header_cb_id, packet_cb_id, receiver_cb_id, l1_alignment};
+    std::vector<uint32_t> reader_ct_args = {packet_cb_id, receiver_cb_id, buffer_alignment};
     tt::tt_metal::TensorAccessorArgs(output_tensors.at(0).buffer()).append_to(reader_ct_args);
 
     tt::tt_metal::KernelDescriptor reader_kernel_desc;
@@ -134,42 +128,26 @@ tt::tt_metal::ProgramDescriptor receive_program_factory(
         increment = std::min(increment, output_num_pages - page_idx_start);
         page_idx_end += increment;
 
-        // Build reader RT args via plain vector to interop with the fabric
-        // helper, then promote to the KernelDescriptor's RTArgList — index 3
-        // (intermediate buffer address) becomes a Buffer* binding, and index
-        // 7 stays as the GlobalSemaphore's absolute address.
-        std::vector<uint32_t> reader_runtime_args = {
-            page_idx_start,
-            page_idx_end,
-            num_pages_per_packet,
-            intermediate_tensor.buffer()->address(),  // placeholder, replaced via Buffer* below
-            packet_size_bytes,
-            output_page_size_bytes,
-            num_page_segments,
-            semaphore.address(),
-            num_hops,
-            sender_is_forward};
-
-        if (sender_is_forward) {
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                this_fabric_id, next_fabric_id, link_idx, desc, c, reader_runtime_args);
+        // Reader RT args. The fabric-connection block (built by the host helper, which owns its
+        // wire layout) goes FIRST; the kernel consumes it with a cursor from 0 and reads the op's
+        // own args after it — neither side hardcodes where the fabric block starts. Op args are
+        // pushed as their natural types: Buffer* records a BufferBinding the framework patches on
+        // a program-cache hit, so no placeholder/promotion pass is needed.
+        tt::tt_metal::KernelDescriptor::RTArgList reader_rt_args;
+        for (uint32_t arg : ::ttnn::ccl::dataflow::build_ccl_fabric_rt_args(
+                 this_fabric_id, next_fabric_id, link_idx, desc, c, sender_is_forward)) {
+            reader_rt_args.push_back(arg);
         }
-        reader_runtime_args.emplace_back(!sender_is_forward);
-        if (!sender_is_forward) {
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                this_fabric_id, next_fabric_id, link_idx, desc, c, reader_runtime_args);
-        }
-
-        tt::tt_metal::KernelDescriptor::RTArgList reader_rt_args_builder;
-        reader_rt_args_builder.reserve(reader_runtime_args.size());
-        for (size_t i = 0; i < reader_runtime_args.size(); ++i) {
-            if (i == 3) {
-                reader_rt_args_builder.push_back(intermediate_tensor.buffer());
-            } else {
-                reader_rt_args_builder.push_back(reader_runtime_args[i]);
-            }
-        }
-        desc.kernels[receive_unary_reader_kernel_id].emplace_runtime_args(c, reader_rt_args_builder);
+        reader_rt_args.push_back(page_idx_start);
+        reader_rt_args.push_back(page_idx_end);
+        reader_rt_args.push_back(num_pages_per_packet);
+        reader_rt_args.push_back(intermediate_tensor.buffer());  // intermediate base address (Buffer* binding)
+        reader_rt_args.push_back(packet_size_bytes);
+        reader_rt_args.push_back(output_page_size_bytes);
+        reader_rt_args.push_back(num_page_segments);
+        reader_rt_args.push_back(semaphore.address());
+        reader_rt_args.push_back(num_hops);
+        desc.kernels[receive_unary_reader_kernel_id].emplace_runtime_args(c, reader_rt_args);
 
         // Writer RT args.  Index 0 is the output buffer's base address —
         // push as Buffer* so the framework records a BufferBinding.
@@ -177,7 +155,11 @@ tt::tt_metal::ProgramDescriptor receive_program_factory(
         writer_rt_args.push_back(output_tensor.buffer());
         writer_rt_args.push_back(increment);
         writer_rt_args.push_back(page_idx_start);
-        writer_rt_args.push_back(output_page_size_bytes);
+        // arg[3] is consumed by writer_unary_interleaved_start_id_gen.cpp's TensorAccessor ctor as an
+        // override of TensorAccessorArgs::AlignedPageSize -- it must be the buffer's ALIGNED page size
+        // (matches s.get_aligned_page_size() used for the noc_async_write below), not the raw/logical
+        // page size, or odd-indexed pages address wrong when raw != aligned (e.g. unaligned RM DRAM).
+        writer_rt_args.push_back(static_cast<uint32_t>(output_tensor.buffer()->aligned_page_size()));
         desc.kernels[receive_unary_writer_kernel_id].emplace_runtime_args(c, writer_rt_args);
 
         page_idx_start += increment;
