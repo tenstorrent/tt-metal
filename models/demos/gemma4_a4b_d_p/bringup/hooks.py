@@ -41,6 +41,7 @@ DEVICE_STEPS = {
         "experts",
         "post_moe_norm",
         "ffn_combine",
+        "post_ffn_norm",
     },
     "global": set(),
 }
@@ -56,6 +57,7 @@ _NORM_WEIGHTS = {
     "post_mlp_norm": "post_feedforward_layernorm_1.weight",
     "moe_norm": "pre_feedforward_layernorm_2.weight",
     "post_moe_norm": "post_feedforward_layernorm_2.weight",
+    "post_ffn_norm": "post_feedforward_layernorm.weight",
 }
 
 
