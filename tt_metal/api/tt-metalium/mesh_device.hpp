@@ -119,7 +119,7 @@ public:
     [[deprecated(
         "Returns only the reference device's assignment, which is incorrect on heterogeneously-harvested "
         "meshes. Use get_optimal_dram_bank_to_logical_worker_assignment(noc, coord) instead.")]]
-    std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) override;
+    std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) const override;
 
     // Returns the optimal DRAM-bank-to-logical-worker assignment for the device at `coord` as a map from
     // DRAM bank id to the logical worker core that should service it. The assignment is a device-local
@@ -128,7 +128,7 @@ public:
     // arbitrary local device's assignment (best-effort, exact only on homogeneous meshes); it throws only
     // when the mesh has no local device to fall back to.
     std::unordered_map<uint32_t, CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(
-        NOC noc, const MeshCoordinate& coord);
+        NOC noc, const MeshCoordinate& coord) const;
 
     CoreCoord virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const override;
     CoreCoord worker_core_from_logical_core(const CoreCoord& logical_core) const override;
