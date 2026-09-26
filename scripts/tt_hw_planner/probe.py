@@ -822,10 +822,13 @@ def _maybe_fetch_config(model_id: str) -> Optional[dict]:
     return None
 
 
-def fetch_repo_json(model_id: str, filename: str) -> Optional[dict]:
-    """Download and parse one JSON file from a model repo (or read it from a local
-    model dir). Returns ``None`` on any failure -- missing file, no access, bad
-    JSON. Shared by every caller that needs a raw repo-side JSON document."""
+def fetch_repo_text(model_id: str, filename: str) -> Optional[str]:
+    """Download and read one TEXT file from a model repo (or read it from a local model dir).
+    Returns ``None`` on any failure -- missing file, no access, unreadable.
+
+    This is the single repo-side read path: ``fetch_repo_json`` parses what this returns, so a
+    caller that needs a non-JSON document (a model card, say) does not grow a second downloader
+    that could resolve local dirs or validate ids differently."""
     if isinstance(model_id, str) and os.path.isdir(model_id):
         safe_id = model_id
     else:
@@ -836,19 +839,31 @@ def fetch_repo_json(model_id: str, filename: str) -> Optional[dict]:
     if os.path.isdir(safe_id):
         path = os.path.join(safe_id, filename)
         try:
-            with open(path) as f:
-                doc = json.load(f)
-            return doc if isinstance(doc, dict) else None
+            with open(path, encoding="utf-8") as f:
+                return f.read()
         except Exception:
             return None
     try:
         from huggingface_hub import hf_hub_download
 
-        with open(hf_hub_download(safe_id, filename)) as f:
-            doc = json.load(f)
-        return doc if isinstance(doc, dict) else None
+        with open(hf_hub_download(safe_id, filename), encoding="utf-8") as f:
+            return f.read()
     except Exception:
         return None
+
+
+def fetch_repo_json(model_id: str, filename: str) -> Optional[dict]:
+    """Download and parse one JSON file from a model repo (or read it from a local
+    model dir). Returns ``None`` on any failure -- missing file, no access, bad
+    JSON. Shared by every caller that needs a raw repo-side JSON document."""
+    raw = fetch_repo_text(model_id, filename)
+    if raw is None:
+        return None
+    try:
+        doc = json.loads(raw)
+    except Exception:
+        return None
+    return doc if isinstance(doc, dict) else None
 
 
 def _repo_access_status(model_id: str, filename: str) -> str:

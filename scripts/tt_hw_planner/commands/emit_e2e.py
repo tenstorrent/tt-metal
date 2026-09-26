@@ -2231,7 +2231,18 @@ def _emit_e2e_phase_a(args) -> int:
     # generation, so the independent-sample axis applies. Passing None here instead would send exactly
     # the models this fix is for back down the autoregressive path.
     _batch_heads = _enumerate_task_heads(model_id) if _batch_size > 1 else None
-    _batch_note = _batch_prompt_block(_batch_size, heads=_batch_heads)
+    # The batch's inputs come from the model's own published example where it has one. Looked up
+    # only for a real batch, like the heads above: at B=1 the block is empty and nothing reads it.
+    _batch_reference = _discover_reference_inputs(model_id) if _batch_size > 1 else None
+    if _batch_size > 1:
+        if _batch_reference is None:
+            print(f"  [inputs] no published example discovered for {model_id} — the builder will")
+            print("           author ONE input and reuse it for every sample (recorded as tool-authored)")
+        else:
+            print("  [inputs] batch inputs sourced from the model's own published example:")
+            for _line in _batch_reference.describe().splitlines():
+                print(f"    {_line}")
+    _batch_note = _batch_prompt_block(_batch_size, heads=_batch_heads, reference=_batch_reference)
     build_prompt = _build_agent_prompt(
         model_id=model_id,
         demo_dir=demo_dir,
@@ -2880,9 +2891,9 @@ _BATCH_COMMON_RULES = """  - ONE program per step feeds all {batch} samples -- d
   - graduated stubs were PCC'd at B=1 and may hardcode a leading 1 in slice/reshape bounds. Where they
     do, take that bound from the tensor itself (e.g. x.shape[0]) and re-verify the stub -- a hardcoded
     1 SILENTLY DROPS samples 2..{batch} rather than failing.
-The PCC gate must pass for ALL {batch} samples: feed {batch} DISTINCT reference inputs and compare each
-sample to its OWN golden from the reference model. A pipeline that shape-supports B but emits {batch}
-identical outputs is WRONG. If the model genuinely has no axis over which {batch} independent samples
+The PCC gate must pass for ALL {batch} samples, each compared to its OWN golden from the reference
+model (how the {batch} inputs are SOURCED is below -- they are not yours to invent). A pipeline that
+shape-supports B but emits {batch} identical outputs is WRONG. If the model genuinely has no axis over which {batch} independent samples
 can be batched, STOP and report it as a hole -- do NOT fake a batch axis.
 
 If a stage cannot hold {batch} at once, EXHAUST THE MECHANISMS THIS PIPELINE ALREADY HAS before you
@@ -2902,7 +2913,90 @@ still reproduces.
 """
 
 
-def _batch_prompt_block(batch: int, *, heads: Optional[list] = None) -> str:
+# WHERE THE {batch} INPUTS COME FROM. Split out from the axis rules because the policy is the same
+# for either axis, and because this is the one the last bring-up got wrong: the rules said only that
+# the inputs must be DISTINCT, so the builder authored {batch} of its own. Every sample then varied
+# its content AND its seed at once, so a PCC miss named no cause -- and because no input could be
+# sourced, a miss read exactly like a hardware fault and no re-run ever settled it. One axis moves,
+# and it is the one the model already samples over.
+_BATCH_INPUT_RULES = """
+HOW TO SOURCE THE {batch} INPUTS -- a correctness requirement, not a style note.
+  - Hold the CONTENT inputs IDENTICAL across all {batch} samples. Vary ONLY the sampling axis the
+    model itself exposes -- the seed/generator its own example seeds -- one value per sample.
+  - Do NOT author {batch} different content inputs. An input you wrote is one nobody can source, and
+    it moves a second variable between samples, so a failure cannot be attributed.
+  - A seed is not authored content: it indexes into the distribution the model already defines, so
+    every value is equally in-distribution. Content is authored; a seed is not.
+  - DISTINCT OUTPUTS ARE STILL REQUIRED. If the model exposes no sampling axis (it is deterministic),
+    vary instead the one input its example supplies as LOADED DATA -- a file or URL the example opens
+    -- and say so. If it has neither a sampling axis nor a loaded-data input, report that as a hole;
+    do NOT invent {batch} inputs to fill it.
+  - Record the inputs' provenance beside the test in one line: what they are and where they came
+    from. A PCC number whose inputs have no provenance cannot be cited.
+"""
+
+_BATCH_INPUT_PUBLISHED = """  - THE MODEL PUBLISHES ITS OWN EXAMPLE. Use it VERBATIM as the content input for every one of the
+    {batch} samples:
+"""
+
+_BATCH_INPUT_SEEDED = """    The example declares seed {seed}. Sample 0 uses {seed} EXACTLY -- so sample 0 reproduces the
+    published example and can be diffed against it -- and sample i uses {seed}+i.
+    Keep these values in ONE named block in the inputs module, each line carrying the source above,
+    so a reader can check them against the model's own documents. Do not scatter them as literals.
+"""
+
+_BATCH_INPUT_UNSEEDED = """    The example declares no seed. Pick one base value, record it beside the inputs, and let sample i
+    use base+i.
+    Keep these values in ONE named block in the inputs module, each line carrying the source above,
+    so a reader can check them against the model's own documents. Do not scatter them as literals.
+"""
+
+_BATCH_INPUT_UNPUBLISHED = """  - NO PUBLISHED EXAMPLE WAS DISCOVERED FOR THIS MODEL. Author exactly ONE content input -- the
+    smallest, most ordinary instance of what this model is for -- and reuse that SAME one for all
+    {batch} samples, still varying only the sampling axis. One authored input shared by every sample
+    is a single declared assumption; {batch} authored inputs are {batch} of them.
+  - Record it as TOOL-AUTHORED, not as sourced from the model, so the report does not imply a
+    provenance it does not have.
+"""
+
+
+def _discover_reference_inputs(model_id: str):
+    """The model's own published example inputs, or None. Never raises.
+
+    Discovery reads the hub, so it can fail for reasons that have nothing to do with the bring-up
+    (offline, gated repo, a card with no example). None is a valid answer -- the builder is then told
+    to author ONE input -- so a failure here must never take the run down with it."""
+    try:
+        from ..reference_inputs import discover
+
+        return discover(model_id)
+    except Exception as exc:  # noqa: BLE001 - provenance is best-effort, the bring-up is not
+        print(f"  [inputs] could not read the model's published example ({type(exc).__name__}: {exc})")
+        return None
+
+
+def _batch_input_block(batch: int, reference=None) -> str:
+    """The sourcing policy, plus whichever origin applies.
+
+    `reference` is a `reference_inputs.ExampleInputs` or None. None covers both "the model publishes
+    nothing parseable" and "this caller did not look", which is why the text claims only that none
+    was discovered -- it never asserts the model has none."""
+    parts = [_BATCH_INPUT_RULES.format(batch=batch)]
+    if reference is None:
+        parts.append(_BATCH_INPUT_UNPUBLISHED.format(batch=batch))
+    else:
+        parts.append(_BATCH_INPUT_PUBLISHED.format(batch=batch))
+        # The example is inserted, never formatted: its values legitimately contain braces (a chat
+        # template's message dicts), which str.format would read as fields and fail on.
+        parts.append(reference.describe() + "\n")
+        seed = reference.seed
+        parts.append(
+            _BATCH_INPUT_SEEDED.format(seed=seed) if seed is not None else _BATCH_INPUT_UNSEEDED.format(batch=batch)
+        )
+    return "".join(parts)
+
+
+def _batch_prompt_block(batch: int, *, heads: Optional[list] = None, reference=None) -> str:
     """Builder instruction for a batch of B>1 independent samples. Empty for B<=1 (default, unchanged
     single-sample behaviour).
 
@@ -2918,6 +3012,8 @@ def _batch_prompt_block(batch: int, *, heads: Optional[list] = None) -> str:
     invariants; only the axis-specific guidance differs.
 
     `heads` is optional and defaults to the previous behaviour, so existing call sites are unchanged.
+    `reference` -- the model's own published example inputs, if any -- is optional for the same
+    reason; omitted, the builder is told none was discovered and authors ONE input for all samples.
     """
     if not batch or batch <= 1:
         return ""
@@ -2939,7 +3035,7 @@ BATCH = {batch}. Emit the pipeline to process {batch} INDEPENDENT samples per ca
 sample wastes 31/32 of a 32-row matmul tile, so filling it with {batch} real samples raises AGGREGATE
 throughput ~{batch}x; per-sample latency is unchanged. Thread a leading batch dimension B={batch}
 through the WHOLE path and verify it end to end:
-{axis_note}{_BATCH_COMMON_RULES.format(batch=batch)}{gate_contract}"""
+{axis_note}{_BATCH_COMMON_RULES.format(batch=batch)}{_batch_input_block(batch, reference)}{gate_contract}"""
 
 
 # What the gate ENFORCES about the batch (see _batch_gate_reason), stated to the builder up front so it
