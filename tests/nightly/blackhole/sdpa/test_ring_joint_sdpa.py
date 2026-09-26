@@ -1687,6 +1687,7 @@ def run_ring_joint_sdpa_chunked(
     reserve_llk_kernel_config: bool = True,
     circular_kv_cache: bool = False,
     attention_sink_values: torch.Tensor = None,
+    max_k_splits: int = 1,
 ):
     """
     Validate ring joint SDPA chunked-prefill, or verify deterministic replay.
@@ -1873,6 +1874,7 @@ def run_ring_joint_sdpa_chunked(
                 q_chunk_size=q_chunk,
                 k_chunk_size=k_chunk,
                 exp_approx_mode=False,
+                max_k_splits=max_k_splits,
             )
             for q_chunk, k_chunk in qk_configs
         }
@@ -4589,10 +4591,12 @@ RING_JOINT_TRACE_REGION_SIZE = 32 * 1024 * 1024
         ),
     ],
 )
+@pytest.mark.parametrize("max_k_splits", [1, 3], ids=["unsplit", "ksplit3"])
 def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores(
-    block_cyclic, halo_slots, sliding_window_size
+    block_cyclic, halo_slots, sliding_window_size, max_k_splits
 ):
-    """Replay changing prefixes and slots; undersized halos use the bounded fallback."""
+    """Replay changing prefixes and slots; undersized halos use the bounded fallback. The dense layer's 32 units
+    (8 heads x 4 q64 chunks) are eligible for the K split."""
     invalid_wrap = block_cyclic and halo_slots == 1
     halo_tokens = math.ceil((sliding_window_size - 1) / 128) * 128
     mesh_config = gpt_oss_chunked_mesh_config()
@@ -4710,6 +4714,7 @@ def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores(
             q_chunk_size=64,
             k_chunk_size=128,
             exp_approx_mode=False,
+            max_k_splits=max_k_splits,
         )
         composer = ttnn.create_mesh_composer(
             mesh_device,
@@ -7452,4 +7457,41 @@ def test_ring_joint_attention_sdpa_cross_accuracy(
         tp_size=tp_size,
         sp_size=sp_size,
         topology=topology,
+    )
+
+
+# Gemma4-31B global attention per ring: 32 Q heads and 4 tied K/V heads over TP=4, head dim 512.
+GEMMA4_GLOBAL_CHUNKED_MODEL = ModelConfig(
+    name="gemma4_global",
+    nhq=8,
+    nhk=1,
+    nhv=1,
+    d_q=512,
+    d_k=512,
+    d_v=512,
+    is_causal=True,
+    q_dtype=ttnn.bfloat16,
+    kv_dtype=ttnn.bfloat8_b,
+    q_chunk_sizes=[64],
+    k_chunk_sizes=[256],
+    seq_len=CHUNKED_PREFILL_CHUNK_SIZE,
+)
+
+
+@pytest.mark.timeout(900)
+@pytest.mark.parametrize("max_k_splits", [1, 3], ids=["unsplit", "ksplit3"])
+@pytest.mark.parametrize(
+    "tokens_per_device,q_chunk_size", [(256, 64), (512, 128)], ids=["chunk2048-q64", "chunk4096-q128"]
+)
+def test_ring_joint_attention_gemma4_global_ksplit_accuracy(tokens_per_device, q_chunk_size, max_k_splits):
+    """Chunked global attention at Gemma4 prefill shapes. Both give 32 (head, Q chunk) units, three bands; the five
+    chunks cover a split slice empty on every ring iteration (chunk 0), one empty on some, and uneven slices."""
+    chunk_size = tokens_per_device * MESH_CONFIG.sp_size
+    run_ring_joint_sdpa_chunked(
+        MESH_CONFIG,
+        GEMMA4_GLOBAL_CHUNKED_MODEL,
+        chunk_size=chunk_size,
+        total_seq=5 * chunk_size,
+        qk_configs=[(q_chunk_size, 256)],
+        max_k_splits=max_k_splits,
     )
