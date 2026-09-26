@@ -1,0 +1,21 @@
+{
+ "metrics": {
+  "pcc_ffn_combine_L05": {
+   "t": "2026-09-26T03:22:22",
+   "value": 0.9999966572882598
+  },
+  "rel_l2_ffn_combine_L05": {
+   "t": "2026-09-26T03:22:22",
+   "value": 0.002657915698364377
+  },
+  "row_norm_ratio_max_ffn_combine_L05": {
+   "t": "2026-09-26T03:22:22",
+   "value": 1.004615306854248
+  },
+  "row_norm_ratio_min_ffn_combine_L05": {
+   "t": "2026-09-26T03:22:22",
+   "value": 0.9960013031959534
+  }
+ },
+ "task": "C.global.ffn_combine"
+}
