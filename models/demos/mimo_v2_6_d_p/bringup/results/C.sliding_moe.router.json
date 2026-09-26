@@ -1,0 +1,25 @@
+{
+ "metrics": {
+  "matched_rel_l2_router_L01": {
+   "t": "2026-09-26T21:40:27",
+   "value": 0.0010230564512312412
+  },
+  "pcc_router_L01": {
+   "t": "2026-09-26T21:40:27",
+   "value": 0.9991285530428139
+  },
+  "row_sum_max_router_L01": {
+   "t": "2026-09-26T21:40:27",
+   "value": 1.001953125
+  },
+  "row_sum_min_router_L01": {
+   "t": "2026-09-26T21:40:27",
+   "value": 0.99755859375
+  },
+  "selection_overlap_router_L01": {
+   "t": "2026-09-26T21:40:27",
+   "value": 0.9984130859375
+  }
+ },
+ "task": "C.sliding_moe.router"
+}

@@ -643,3 +643,65 @@ Results
   The attention numbers match swap 03; the w127 margin is still 0.0011.
 
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_sliding_moe_04_ffn_norm.py`
+
+## C.sliding_moe.router test (attempt 1), 2026-09-26
+
+What was done
+- Replaced the rendered `run_component_test` call in `tests/bringup/test_c_sliding_moe_router.py` with the Gemma
+  router-test body (gemma4_a4b_d_p `test_c_sliding_router.py`), adapted to MiMo's router: sigmoid, noaux_tc,
+  n_group 1, weights renormalized to sum 1, no per_expert_scale. The gated metric is still PCC >= 0.99. The test also
+  asserts exactly 8 nonzeros per row, non-negative weights, selection overlap >= 0.985, matched-row weight rel L2
+  <= 0.005, and every row sum within 0.01 of 1.
+- The mutation measurements are in the test docstring. They came from a CPU-only tt-probe: golden ffn_norm, layer-1 gate weight and bias, route() with mutations. The probe file was deleted because it was outside this step's paths.
+
+Why
+- The PCC gate misses these bugs: weights x1.02 (0.9996), logits x1.1 (0.9965), the last row or the last 32 rows
+  zeroed (0.9991 / 0.9909). Other checks catch them: the matched-row rel L2, the row-sum check or the nnz check.
+- Overlap limit 0.985: the CPU reference scores 0.99878, logits rounded to bf16 score 0.990, and half the bias scores
+  0.950. The PCC gate by itself already implies about 0.98.
+
+Gotchas for implement
+- The choice score (sigmoid + bias, around 2.0) must be fp32 or bias-recentred. Rounding the bias to bf16 fails the PCC
+  gate (0.970). The logits must be fp32 too: bf16 logits score 0.9943, which leaves almost no margin. Take the weights from the
+  unbiased sigmoid and renormalize them; routed_scaling_factor is null, which means 1.0.
+- The CPU reference itself scores only PCC 0.99933 on the bf16 golden input: 20 rows flip on near ties.
+- The `FAIL pcc_router_L01: pcc=0.000000` line during collection comes from the precompile plugin stub. It is not a test result.
+
+Results
+- BRINGUP_IMPL=reference: PASS (PCC 0.999328, overlap 0.99878, matched rel 0.00159, row sums 1.0).
+- BRINGUP_IMPL=stub: FAIL (PCC 0).
+- Device (gate): FAIL with NotImplementedError. No device router module exists yet; the implement step writes it.
+
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_sliding_moe_router.py`
+
+## C.sliding_moe.router implement (attempt 1), 2026-09-26
+
+What was done
+- Added `tt/router.py:TtRouter`. It is replicated with no CCL. It does an fp32 `ttnn.linear` (weight [4096, 256] fp32, HiFi4 +
+  fp32 acc, fp32 out), then `ttnn.sigmoid`, then `ttnn.add` of the fp32 bias [1, 1, 1, 256] (broadcast), then `ttnn.topk`
+  (k=8). The weights are `ttnn.gather` of the unbiased sigmoid, divided by their sum; route_scale is 1.0. The dense
+  [S, 256] output comes from a bf16 `ttnn.scatter` into a zero tensor. That tensor is built once at load for max chunk 8192
+  and sliced on the device per chunk. Returns (dense, idx, weights).
+- hooks.py: `_router_module` and `_router_host_fn`; `device_component` handles "router"; "router" is added to
+  `DEVICE_STEPS["sliding_moe"]`; the hybrid `device_model` gets a router override. `_max_chunk(spec)` is the largest
+  ladder/target chunk.
+
+Decisions and why
+- Departed from the components entry (moe_grouped_topk). On this golden, with exact fp32 logits fed in, the fused op
+  scores PCC 0.9855 and overlap 0.975, which fails the gate. The cause is its FPU bias add and TF32 sort keys (step 0.002
+  near 2.3; the 8th/9th gap median is 0.0017). With the bias recentred by its mean it scores 0.9975. The fp32 SFPU path
+  scores 0.99933, the same as the CPU reference. The fused op stays selectable: `MIMO_ROUTER_MODE=fused` (bias
+  recentred, full-shape bias built at load).
+- Device logits are accurate: rel err 9.7e-5 against the fp32 CPU logits. Precision is lost in selection only.
+- No row slicing needed: both modes ran 8192 rows (s16384 chunk) fine. Warm: fp32 2.24 ms, fused 2.01 ms at 8192
+  rows; 1.51 / 1.37 ms at 5120.
+
+Gotchas
+- `ttnn.topk` returns uint32 indices here (moe_grouped_topk returns uint16). `ttnn.scatter` accepts either.
+- tt-probe dir `tests/ttnn/unit_tests/operations/mimo_router/` was deleted after probing.
+
+Results
+- Gate PASS: pcc_router_L01 0.999129; nnz 8 per row; selection_overlap 0.99841; matched rows 2022/2048, matched_rel_l2
+  0.00102; row sums [0.9976, 1.0020]. The pcc=0 line is the precompile stub.
+
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_sliding_moe_router.py`
