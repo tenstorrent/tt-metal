@@ -1,0 +1,83 @@
+{
+  "layer_type": "sliding_attention",
+  "phase": "decode",
+  "input_source": "random FP32 rows normalized in host FP32; BF16 paired cos/sin tables",
+  "real_weights": false,
+  "query_shape": [
+    1,
+    1,
+    16,
+    256
+  ],
+  "key_shape": [
+    1,
+    1,
+    8,
+    256
+  ],
+  "seed": 42,
+  "pcc_threshold": 0.995,
+  "repeats": 30,
+  "timing_samples": 3,
+  "warmup_replays": 30,
+  "results": [
+    {
+      "candidate": "separate",
+      "comparisons": [
+        {
+          "tensor": "query",
+          "pcc": 1.0,
+          "passed": true,
+          "exact_equal": true,
+          "max_abs": 0.0
+        },
+        {
+          "tensor": "key",
+          "pcc": 1.0,
+          "passed": true,
+          "exact_equal": true,
+          "max_abs": 0.0
+        }
+      ],
+      "min_pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "trace_replay_equal": true,
+      "traced_host_us": 100.442,
+      "traced_host_us_samples": [
+        100.443,
+        100.442,
+        100.15043333333334
+      ]
+    },
+    {
+      "candidate": "concat_rotary_split",
+      "comparisons": [
+        {
+          "tensor": "query",
+          "pcc": 1.0,
+          "passed": true,
+          "exact_equal": true,
+          "max_abs": 0.0
+        },
+        {
+          "tensor": "key",
+          "pcc": 1.0,
+          "passed": true,
+          "exact_equal": true,
+          "max_abs": 0.0
+        }
+      ],
+      "min_pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "trace_replay_equal": true,
+      "traced_host_us": 102.86026666666666,
+      "traced_host_us_samples": [
+        102.86026666666666,
+        102.7487,
+        102.95876666666666
+      ]
+    }
+  ]
+}

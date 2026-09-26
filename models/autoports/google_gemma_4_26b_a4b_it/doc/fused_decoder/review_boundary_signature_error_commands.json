@@ -1,0 +1,15 @@
+[
+  {
+    "name": "shared_sharding_sliding",
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_fused_shared_sharding",
+      "--layer",
+      "0",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/shared_sharding_sliding.json"
+    ],
+    "exit_code": 1
+  }
+]

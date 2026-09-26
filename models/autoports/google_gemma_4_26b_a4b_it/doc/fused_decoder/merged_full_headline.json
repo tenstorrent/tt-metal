@@ -1,0 +1,14 @@
+{
+  "decoder": "fused",
+  "fusion": "broadcast_pack_gelu_router_tail",
+  "runtime_prefill_audit": "clean",
+  "program_cache_miss_guard": true,
+  "prefill_cache_entries": 163,
+  "prefix_length": 0,
+  "layer_type": "full_attention",
+  "phase": "prefill",
+  "length": 4096,
+  "real_weights": true,
+  "pcc": 0.9994406150513534,
+  "passed": true
+}

@@ -1,0 +1,74 @@
+[
+  {
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder",
+      "--decoder",
+      "fused",
+      "--fusion",
+      "broadcast_pack_gelu_router_tail_norm_attention_common_tied_expmerge_residualnorm_shardedtail_kvnorm",
+      "--layer",
+      "5",
+      "--length",
+      "4096",
+      "--real",
+      "--decode",
+      "--steps",
+      "128",
+      "--timing",
+      "--verify-program-cache",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/full_boundary_kvnorm.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder",
+      "--decoder",
+      "fused",
+      "--fusion",
+      "broadcast_pack_gelu_router_tail_norm_attention_common_tied_expmerge_residualnorm_shardedtail_cache",
+      "--layer",
+      "5",
+      "--length",
+      "4096",
+      "--real",
+      "--decode",
+      "--steps",
+      "128",
+      "--timing",
+      "--verify-program-cache",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/full_boundary_cache.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder",
+      "--decoder",
+      "fused",
+      "--fusion",
+      "broadcast_pack_gelu_router_tail_norm_attention_common_tied_expmerge_residualnorm_shardedtail_ropepolicy",
+      "--layer",
+      "5",
+      "--length",
+      "4096",
+      "--real",
+      "--decode",
+      "--steps",
+      "128",
+      "--timing",
+      "--verify-program-cache",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/full_boundary_ropepolicy.json"
+    ],
+    "exit_code": 0
+  }
+]

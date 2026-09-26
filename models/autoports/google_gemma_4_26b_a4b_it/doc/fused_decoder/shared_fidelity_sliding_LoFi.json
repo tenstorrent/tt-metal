@@ -1,0 +1,130 @@
+{
+  "layer": 0,
+  "layer_type": "sliding_attention",
+  "revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+  "real_weights": true,
+  "results": [
+    {
+      "candidate": "interleaved_then_shard",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "repeated_equal": true,
+      "traced_host_us": 62.031333333333336,
+      "traced_host_us_samples": [
+        62.072766666666666,
+        62.031333333333336,
+        62.00633333333333
+      ]
+    },
+    {
+      "candidate": "direct_shard_k2",
+      "pcc": 0.9998909443611607,
+      "passed": true,
+      "exact_equal": false,
+      "repeated_equal": true,
+      "traced_host_us": 59.465466666666664,
+      "traced_host_us_samples": [
+        59.492533333333334,
+        59.465466666666664,
+        59.448766666666664
+      ]
+    },
+    {
+      "candidate": "direct_shard_k3",
+      "pcc": 0.9998772709560303,
+      "passed": true,
+      "exact_equal": false,
+      "repeated_equal": true,
+      "traced_host_us": 45.724666666666664,
+      "traced_host_us_samples": [
+        45.79913333333333,
+        45.724666666666664,
+        45.7086
+      ]
+    },
+    {
+      "candidate": "direct_shard_k6",
+      "pcc": 0.9998896403731863,
+      "passed": true,
+      "exact_equal": false,
+      "repeated_equal": true,
+      "traced_host_us": 44.7184,
+      "traced_host_us_samples": [
+        44.7184,
+        44.7144,
+        44.7505
+      ]
+    },
+    {
+      "candidate": "direct_shard_k11",
+      "pcc": 0.9998580175292199,
+      "passed": true,
+      "exact_equal": false,
+      "repeated_equal": true,
+      "traced_host_us": 45.276466666666664,
+      "traced_host_us_samples": [
+        45.450466666666664,
+        45.2551,
+        45.276466666666664
+      ]
+    },
+    {
+      "candidate": "direct_shard_k22",
+      "pcc": 0.9998466505347613,
+      "passed": true,
+      "exact_equal": false,
+      "repeated_equal": true,
+      "traced_host_us": 47.18176666666667,
+      "traced_host_us_samples": [
+        47.18176666666667,
+        47.2362,
+        47.087266666666665
+      ]
+    },
+    {
+      "candidate": "direct_shard_k33",
+      "pcc": 0.9997840185314864,
+      "passed": true,
+      "exact_equal": false,
+      "repeated_equal": true,
+      "traced_host_us": 48.344633333333334,
+      "traced_host_us_samples": [
+        48.344633333333334,
+        48.40943333333333,
+        48.2351
+      ]
+    },
+    {
+      "candidate": "direct_shard_k66",
+      "pcc": 0.9997840185314864,
+      "passed": true,
+      "exact_equal": false,
+      "repeated_equal": true,
+      "traced_host_us": 50.05586666666667,
+      "traced_host_us_samples": [
+        50.125366666666665,
+        50.05586666666667,
+        49.93533333333333
+      ]
+    }
+  ],
+  "capture_fusion": "broadcast_pack_gelu_router_tail_norm_attention_common_tied_ropepolicy_cache_kvnorm_shardedtail_preciseheads_expmerge_residualnorm_rsqrt_expertbatch64_mixmatmul_mixsharded_mixfp32_qkvl1_projectsharded_unarycastshard_directtail",
+  "input_shape": [
+    1,
+    1,
+    1,
+    2112
+  ],
+  "weight_shape": [
+    1,
+    1,
+    2112,
+    2816
+  ],
+  "norm_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":10,\"y\":7}], shape=[32, 32], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+  "baseline_matches_capture": true,
+  "scope": "decode shared down projection, all layout movement, and following norm; BF16",
+  "baseline_fidelity": "HiFi2 (inferred without explicit program config)",
+  "candidate_fidelity": "LoFi"
+}

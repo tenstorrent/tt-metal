@@ -17,7 +17,9 @@
       "passing_traced_decode_context": 262144,
       "evidence": [
         "functional_decoder/long_sliding_262144_final.json",
-        "functional_decoder/long_sliding_262143_final.json"
+        "functional_decoder/long_sliding_262143_final.json",
+        "fused_decoder/verified_long_sliding_262144.json",
+        "fused_decoder/verified_long_sliding_262143.json"
       ],
       "status": "Final policy passes maximum and non-aligned near-maximum context",
       "non_aligned_prefill_tokens": 262143,
@@ -28,7 +30,9 @@
       "passing_traced_decode_context": 262144,
       "evidence": [
         "functional_decoder/long_full_262144_fixed.json",
-        "functional_decoder/long_full_262143_fixed.json"
+        "functional_decoder/long_full_262143_fixed.json",
+        "fused_decoder/verified_long_full_262144.json",
+        "fused_decoder/verified_long_full_262143.json"
       ],
       "status": "Final policy passes maximum and non-aligned near-maximum context",
       "non_aligned_prefill_tokens": 262143,

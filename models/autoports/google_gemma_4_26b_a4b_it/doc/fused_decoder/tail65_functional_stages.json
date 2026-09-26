@@ -1,0 +1,94 @@
+[
+  {
+    "position": 65,
+    "pcc": 0.9997156012749201,
+    "passed": true
+  },
+  {
+    "position": 65,
+    "pcc": 0.9997156012749201,
+    "passed": true
+  },
+  {
+    "position": 66,
+    "pcc": 0.9997192054302428,
+    "passed": true
+  },
+  {
+    "position": 67,
+    "pcc": 0.999820067230092,
+    "passed": true
+  },
+  {
+    "position": 68,
+    "pcc": 0.9809274230811537,
+    "passed": false,
+    "residual_pcc": 0.9999971752061487,
+    "attention_pcc": 0.9999978049318797,
+    "hf_routes": [
+      1,
+      56,
+      50,
+      94,
+      80,
+      113,
+      115,
+      10
+    ],
+    "cpu_same_residual_routes": [
+      1,
+      56,
+      50,
+      94,
+      80,
+      113,
+      115,
+      70
+    ],
+    "tt_routes": [
+      1,
+      50,
+      56,
+      70,
+      80,
+      94,
+      113,
+      115
+    ],
+    "sdpa_same_qkv_pcc": 0.99999985012578,
+    "cpu_sdpa_o_routes": [
+      1,
+      56,
+      50,
+      94,
+      80,
+      113,
+      115,
+      70
+    ],
+    "qkv_same_input_pcc": 0.999999999344115,
+    "qkv_same_input_max_error": 6.103515625e-05,
+    "fpu_qkv_same_input_pcc": 0.9999999175147622,
+    "fpu_qkv_same_input_max_error": 0.08356475830078125
+  },
+  {
+    "position": 69,
+    "pcc": 0.9998212046134359,
+    "passed": true
+  },
+  {
+    "position": 70,
+    "pcc": 0.9996478328247986,
+    "passed": true
+  },
+  {
+    "position": 71,
+    "pcc": 0.9997443314121757,
+    "passed": true
+  },
+  {
+    "position": 72,
+    "pcc": 0.9998767609590511,
+    "passed": true
+  }
+]

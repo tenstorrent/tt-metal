@@ -1,0 +1,21 @@
+{
+  "source_ops_csv": "raw/reports/headline/2026_09_25_21_53_35/ops_perf_results_headline_2026_09_25_21_53_35.csv",
+  "ops_csv_sha256": "0d0b1cac2f795c50a325a681854431188d3b611f89ebe0dc469c5d9f63d53a4a",
+  "ops_csv_bytes": 34612283,
+  "summary_command": [
+    "python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_26b_a4b_it.tests.summarize_perf",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/tracy/full_batch64/ops.csv",
+    "--layer-type",
+    "full_attention",
+    "--output",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/tracy/full_batch64/whole_layer.json"
+  ],
+  "summary_exit_code": 0,
+  "op_info_cache": false,
+  "profile_result": "../../batch64_profile_full.json",
+  "raw_device_csv": "raw/.logs/cpp_device_perf_report.csv",
+  "raw_host_trace": "raw/.logs/tracy_profile_log_host.tracy",
+  "source_fused_decoder_sha256": "82d81c96b366afb00a1cbef46a857ebc578282f502059b67588d9f5bddfe5b6d"
+}

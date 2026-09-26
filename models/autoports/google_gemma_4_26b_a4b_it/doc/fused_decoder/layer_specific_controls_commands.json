@@ -1,0 +1,104 @@
+[
+  {
+    "command": [
+      "/workspace/tt-metal/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder",
+      "--decoder",
+      "fused",
+      "--fusion",
+      "broadcast_pack_gelu_router_tail_norm_attention_common_tied",
+      "--group-size",
+      "16384",
+      "--layer",
+      "5",
+      "--length",
+      "4096",
+      "--real",
+      "--decode",
+      "--steps",
+      "128",
+      "--timing",
+      "--verify-program-cache",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/tied_common_full.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "/workspace/tt-metal/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_fused_precision",
+      "--candidate",
+      "rope_native_fp32",
+      "--layer",
+      "5",
+      "--length",
+      "4096",
+      "--steps",
+      "128",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/rope_rope_native_fp32_headline_full.json"
+    ],
+    "exit_code": 1
+  },
+  {
+    "command": [
+      "/workspace/tt-metal/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_fused_precision",
+      "--candidate",
+      "rope_hf_fp32",
+      "--layer",
+      "5",
+      "--length",
+      "4096",
+      "--steps",
+      "128",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/rope_rope_hf_fp32_headline_full.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "/workspace/tt-metal/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_fused_precision",
+      "--candidate",
+      "rope_hf_fp32",
+      "--phase",
+      "prefill",
+      "--layer",
+      "0",
+      "--length",
+      "4096",
+      "--steps",
+      "128",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/rope_hf_prefill_headline_sliding.json"
+    ],
+    "exit_code": 1
+  },
+  {
+    "command": [
+      "/workspace/tt-metal/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_fused_precision",
+      "--candidate",
+      "rope_hf_fp32",
+      "--phase",
+      "decode",
+      "--layer",
+      "0",
+      "--length",
+      "4096",
+      "--steps",
+      "128",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/rope_hf_decode_headline_sliding.json"
+    ],
+    "exit_code": 0
+  }
+]
