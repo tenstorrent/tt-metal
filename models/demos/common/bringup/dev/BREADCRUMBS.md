@@ -393,3 +393,10 @@ Drive this ledger with
   `text.template_kwargs` (e.g. `{enable_thinking: false}`) now reaches every `apply_chat_template` call: the canonical
   prompt (user_turn, model_turn; recorded in prompt.json) and the intake smoke. With it the book is the model's
   non-thinking reply (`<think></think>` then the text). Selftest pins both paths.
+
+## F39 (2026-09-26): HF sanity after the model's own loader
+- MiMo-V2.6's checkpoint (fp8 block-scaled dense, per-expert mxfp4, ~618 GB in bf16 vs 503 GB host RAM) cannot be run
+  by the stock `from_pretrained` at R.1, and R.1 has no agent to write `hooks.hf_model`. Spec `hf.custom_loader: true`
+  moves the HF sanity (revision, smoke, accuracy floor) from R.1's gate into R.2's, before `check_hf`; R.1 keeps the
+  checkpoint check and the canonical prompt. Thresholds are unchanged. The reference brief says when and how to write
+  `hf_model` (full model with `num_layers=None`, packed where it does not fit). Selftest pins the move.
