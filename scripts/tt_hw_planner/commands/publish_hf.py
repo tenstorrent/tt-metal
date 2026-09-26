@@ -303,7 +303,16 @@ def _scaffold_vllm_bundle(
     - Stock arch (Llama/Qwen/Mistral/Gemma/...) -> adapter is a trivial subclass of the stock
       generator: servable as-is.
     - Novel arch -> adapter subclasses the closest base with a clearly-marked TODO body."""
-    bundle = Path(checkout) / extra_models_dir
+    # The plugin scans the CHILDREN of extra_models_dir for vllm_metadata.json — so the bundle must be
+    # a per-model SUBFOLDER (extra_models_dir/<slug>/), not files placed directly in extra_models_dir.
+    base_dir = Path(checkout) / extra_models_dir
+    for stale in (base_dir / "vllm_metadata.json", base_dir / "adapter.py"):
+        try:
+            if stale.is_file():
+                stale.unlink()  # remove the older, mis-placed layout
+        except Exception:
+            pass
+    bundle = base_dir / slug
     meta = bundle / "vllm_metadata.json"
     base_cls, is_stub = _pick_base_generator(arch, model_type)
     if meta.is_file():
@@ -542,7 +551,25 @@ def cmd_publish_hf(args) -> int:
         if mr and Path(mr).is_dir():
             demo_dir = Path(mr)
     if demo_dir is None or not Path(demo_dir).is_dir():
-        print(f"  [publish-hf] could not locate the model demo dir for '{slug}'. Run `commit-wins` first.")
+        # Direct fallbacks: the demo dir straight under the checkout (works after commit-wins even
+        # when find_demo_dir's registry lookup or the dashboard's model.root come back empty), then
+        # a glob anywhere under models/.
+        cand = Path(repo_root) / "models" / "demos" / slug
+        if cand.is_dir():
+            demo_dir = cand
+        else:
+            import glob as _g
+
+            hits = [
+                h for h in _g.glob(str(Path(repo_root) / "models" / "**" / slug), recursive=True) if Path(h).is_dir()
+            ]
+            if hits:
+                demo_dir = Path(hits[0])
+    if demo_dir is None or not Path(demo_dir).is_dir():
+        print(
+            f"  [publish-hf] could not locate the model demo dir for '{slug}' under {repo_root}. "
+            f"Run `commit-wins` first so the optimized model lands in the checkout."
+        )
         return 2
 
     commit = _git_commit(state_root)
