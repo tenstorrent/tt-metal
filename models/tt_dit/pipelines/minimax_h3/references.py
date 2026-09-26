@@ -10,9 +10,10 @@ The two passes between a request and the packed layout, mirroring the reference'
 
 1. :func:`prepare_references` -- validate the request and put every reference on
    **its own** resolution. An image is resized by ``reference_resize_mode`` (default
-   ``match`` against the target canvas), a video onto the 768 px canvas of its own
-   aspect ratio at 24 fps truncated to the generated frame count, a soundtrack onto
-   the audio VAE's sample rate truncated to the generated duration.
+   ``match`` against the target canvas), a video the same way under ``match`` and
+   otherwise onto the 768 px canvas of its own aspect ratio, at 24 fps truncated to
+   the generated frame count, a soundtrack onto the audio VAE's sample rate
+   truncated to the generated duration.
 2. :func:`encode_references` -- encode each one and, in doing so, **resolve the
    latent geometry the packed layout is built from**. This is why the encode has to
    run before the layout, unlike ``fl2va`` where a keyframe's geometry is the
@@ -150,7 +151,7 @@ def prepare_references(
 
     A video goes through the two passes the reference's ``ffmpeg`` decode applied,
     **in this order**: the constant-frame-rate resample onto 24 fps, then the
-    LANCZOS rescale onto its own canvas. Frames handed over at 24 fps and already at
+    LANCZOS rescale onto its encode size. Frames handed over at 24 fps and already at
     that canvas therefore reach the VAE untouched, which is the parity-exact route.
     """
     check_references(references)
@@ -178,7 +179,13 @@ def prepare_references(
             reference.image = prepare_reference_image(image, height, width)
         elif reference.kind == "video":
             frames = resample_reference_frames(reference_media_to_uint8(entry.video), float(entry.fps))
-            reference.frames = prepare_reference_frames(frames, num_frames)
+            reference.frames = prepare_reference_frames(
+                frames,
+                num_frames,
+                mode=reference_resize_mode,
+                target_width=target_width,
+                target_height=target_height,
+            )
         if reference.has_audio:
             reference.waveform = prepare_reference_waveform(
                 entry.audio,
