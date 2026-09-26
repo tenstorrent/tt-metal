@@ -34,7 +34,11 @@ if [ $((CACHED % MATRIX_CHUNK)) -ne 0 ]; then   # the default cached values are 
   C_ROUNDED=$(( CACHED / MATRIX_CHUNK * MATRIX_CHUNK )); echo "[row C=$CACHED] rounding cached $CACHED down to $C_ROUNDED (multiple of CHUNK=$MATRIX_CHUNK)"; CACHED=$C_ROUNDED
 fi
 if [ -n "$MATRIX_LAYER_COUNTS" ]; then
-  IFS=, read -r -a LC_ARR <<< "$MATRIX_LAYER_COUNTS"; lc_sum=0; for x in "${LC_ARR[@]}"; do lc_sum=$((lc_sum + x)); done
+  IFS=, read -r -a LC_ARR <<< "$MATRIX_LAYER_COUNTS"; lc_sum=0
+  for x in "${LC_ARR[@]}"; do
+    [[ $x =~ ^[1-9][0-9]*$ ]] || { echo "LAYER_COUNTS=$MATRIX_LAYER_COUNTS: '$x' is not a positive integer"; exit 2; }
+    lc_sum=$((lc_sum + x))
+  done
   [ "${#LC_ARR[@]}" -eq "$STAGES" ] && [ "$lc_sum" -eq "$MATRIX_NUM_LAYERS" ] \
     || { echo "LAYER_COUNTS=$MATRIX_LAYER_COUNTS must list $STAGES counts summing to $MATRIX_NUM_LAYERS (got ${#LC_ARR[@]} summing to $lc_sum)"; exit 2; }
 fi
@@ -53,6 +57,9 @@ if [ "$RESET" = "1" ]; then
   done
   reset_failed=0; for p in "${pids[@]}"; do wait "$p" || reset_failed=1; done
   [ "$reset_failed" = 0 ] || { log "galaxy reset FAILED (see $WORK/reset_*.log)"; exit 2; }
+  # tt-smi returns as soon as the boards are re-initialised; ranks that open devices within ~15 s of that have failed
+  # with "Query mappings failed on device N: No such device" (2026-09-26), so let the driver settle first.
+  log "reset done; letting the device drivers settle 90 s"; sleep 90
 fi
 # 3. runner: its own session (setsid) so a Ctrl-C on the login shell never reaches the srun step; the runner is
 #    always torn down through the deterministic sentinel -> wait -> scoped-kill path (matrix_shutdown_runner).

@@ -33,6 +33,7 @@ matrix_q() { printf '%q' "$1"; }
 matrix_producer_env() {
   local e="PREFILL_MODEL=minimax_m3 PREFILL_H2D_SERVICE_ID=ds_prefill PREFILL_SP=2 PREFILL_TP=4 PREFILL_NUM_LAYERS=60"
   e="$e PREFILL_CHUNK_SIZE=$MATRIX_CHUNK PREFILL_NUM_USERS=1 PREFILL_MAX_SEQ_LEN=$1"
+  [ -n "$MATRIX_LAYER_COUNTS" ] && e="$e PREFILL_PP_LAYER_COUNTS=$MATRIX_LAYER_COUNTS"   # so the producer labels its rows
   e="$e $(matrix_q "TT_METAL_HOME=$TT_METAL_HOME") $(matrix_q "PYTHONPATH=$TT_METAL_HOME")"
   local v
   for v in HF_MODEL TT_CACHE_PATH PREFILL_TRACE_DIR; do

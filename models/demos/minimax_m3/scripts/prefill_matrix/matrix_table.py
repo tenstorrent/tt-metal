@@ -49,11 +49,17 @@ def idle_ttfts(rows, iter0):
     return out
 
 
-def _lbl(v, pct):
-    """Percentile label; a value within one 5120-chunk of a default matrix value inherits its label (cached values are
-    rounded down to the chunk size when CHUNK != 5120, e.g. 312320 -> 311296 at CHUNK=2048)."""
-    near = [k for k in pct if abs(k - v) < 5120]
-    return f"{v} ({pct[near[0]]})" if near else str(v)
+def _lbl(v, pct, tolerance=0):
+    """Percentile label. Exact match, or -- with ``tolerance`` > 0 -- the NEAREST default value within it. Only the
+    cached axis uses a tolerance (one 5120 chunk): cached values are rounded down to the chunk size when
+    CHUNK != 5120 (312320 -> 311296 at 2048) and must keep their label; new-token values are never rounded."""
+    if v in pct:
+        return f"{v} ({pct[v]})"
+    near = min(pct, key=lambda k: abs(k - v)) if pct else None
+    return f"{v} ({pct[near]})" if near is not None and abs(near - v) < tolerance else str(v)
+
+
+CACHED_TOLERANCE = 5120
 
 
 def table(title, cells, cached, news):
@@ -63,7 +69,7 @@ def table(title, cells, cached, news):
     print("-" * (16 + w * len(news)))
     for c in cached:
         print(
-            f"{_lbl(c, CACHED_PCT):>14} |"
+            f"{_lbl(c, CACHED_PCT, CACHED_TOLERANCE):>14} |"
             + "".join(f"{cells[(c, n)]:>{w}.0f}" if (c, n) in cells else f"{'-':>{w}}" for n in news)
         )
 

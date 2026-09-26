@@ -83,7 +83,9 @@ def main() -> int:
     stages = args.stages or (args.last_rank + 1)
 
     chunk = pp.CHUNK_SIZE
-    layer_counts = os.environ.get("PREFILL_PP_LAYER_COUNTS", "even")  # informational; matrix_row.sh passes the runner's
+    # Informational label only: matrix_row.sh forwards LAYER_COUNTS both to the runner's manifest and to this env; the
+    # producer never parses or validates it.
+    layer_counts = os.environ.get("PREFILL_PP_LAYER_COUNTS", "even")
     max_seq = pp.MAX_SEQ_LEN
     C = args.cached
     news = [int(x) for x in args.new.split(",") if x]
