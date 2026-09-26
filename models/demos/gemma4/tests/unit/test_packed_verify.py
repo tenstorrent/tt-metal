@@ -26,6 +26,87 @@ import ttnn
 from ...tests.test_factory import parametrize_mesh_with_fabric
 
 
+def test_device_pli_rejects_non_pli_target(expect_error):
+    from models.demos.gemma4.tt.model import Gemma4Model
+
+    model = Gemma4Model.__new__(Gemma4Model)
+    model.hidden_size_per_layer_input = 0
+    model.per_layer_input_weights = {}
+    with expect_error(ValueError, "requires a PLI target"):
+        model.init_pli_device_weights()
+
+
+def _load_pli_target(mesh_device):
+    """Load a PLI checkpoint only after checking its config cheaply."""
+    model_path = os.getenv("HF_MODEL")
+    if not model_path:
+        pytest.skip("set HF_MODEL to run device PLI tests")
+    from transformers import AutoConfig
+
+    config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    text_config = getattr(config, "text_config", config)
+    if not getattr(text_config, "hidden_size_per_layer_input", 0):
+        pytest.skip("requires a PLI checkpoint")
+    if _is_moe_model(model_path):
+        pytest.skip(_MOE_UNSUPPORTED_REASON)
+
+    from models.demos.gemma4.tt.generator import Gemma4Generator
+    from models.tt_transformers.tt.common import PagedAttentionConfig
+
+    max_seq_len, block_size = 1024, 64
+    generator, _, _ = Gemma4Generator.from_pretrained(
+        mesh_device=mesh_device,
+        model_path=model_path,
+        max_batch_size=1,
+        max_seq_len=max_seq_len,
+        num_layers=None,
+        paged_attention_config=PagedAttentionConfig(
+            block_size=block_size, max_num_blocks=math.ceil(max_seq_len / block_size)
+        ),
+        bounded_sliding_kv_cache=False,
+    )
+    return generator.model[0]
+
+
+def _device_pli_for_ids(model, mesh_device, ids):
+    mapper = ttnn.ReplicateTensorToMesh(mesh_device) if mesh_device.get_num_devices() > 1 else None
+    ids_tt = ttnn.from_torch(
+        ids, device=mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=mapper
+    )
+    embeds = model.embed_tokens(ids_tt)
+    if len(embeds.shape) == 3:
+        embeds = ttnn.unsqueeze_to_4D(embeds)
+    embeds = ttnn.to_layout(embeds, ttnn.TILE_LAYOUT)
+    output = model.compute_pli_device(ids_tt, embeds)
+    replica = ttnn.get_device_tensors(output)[0] if mesh_device.get_num_devices() > 1 else output
+    return ttnn.to_torch(replica).float()
+
+
+@parametrize_mesh_with_fabric()
+def test_pli_device_matches_host_scaled_embedding(mesh_device, reset_seeds):
+    model = _load_pli_target(mesh_device)
+    ids = torch.tensor([[1408, 22202, 529, 107182]], dtype=torch.int64)
+    host = model.compute_host_pli_batch(ids).float()
+    model.init_pli_device_weights()
+    first_table = model._pli_embed_tt
+    model.init_pli_device_weights()
+    assert model._pli_embed_tt is first_table
+    device = _device_pli_for_ids(model, mesh_device, ids)
+    assert device.shape == host.shape
+    pcc = torch.corrcoef(torch.stack([host.flatten(), device.flatten()]))[0, 1].item()
+    logger.info("device PLI versus host PLI: PCC={} max|diff|={}", pcc, (host - device).abs().max().item())
+    assert pcc > 0.999
+
+
+@parametrize_mesh_with_fabric()
+def test_pli_device_row_count_invariant(mesh_device, reset_seeds):
+    model = _load_pli_target(mesh_device)
+    ids = torch.tensor([[1408, 22202, 529, 107182]], dtype=torch.int64)
+    one = _device_pli_for_ids(model, mesh_device, ids[:, :1])
+    four = _device_pli_for_ids(model, mesh_device, ids)
+    assert torch.equal(one[:, :, 0, :], four[:, :, 0, :])
+
+
 def _is_moe_model(model_path):
     """True for Mixture-of-Experts checkpoints (e.g. gemma-4-26B-A4B).
 
@@ -57,36 +138,6 @@ _MOE_UNSUPPORTED_REASON = (
 )
 
 
-def _is_pli_model(model_path):
-    """True for per-layer-input (MatFormer) checkpoints (e.g. gemma-4-E2B/E4B).
-
-    These models carry a per-layer input embedding (``hidden_size_per_layer_input``)
-    that must be fed to every layer. Packed verify drives ``self(...)`` through
-    ``ttnn_packed_verify_forward`` without threading PLI, so a PLI model falls into
-    ``Gemma4Model._compute_per_layer_inputs(None, None)`` and raises. PLI is not
-    wired through the speculative-verify path yet, so packed verify is unsupported
-    on these checkpoints (tracked in #49022). Dense non-PLI targets (12B, 31B) are
-    unaffected. Detect it cheaply from the config (no weights loaded) so we can skip
-    before ``from_pretrained`` — which also avoids writing the weight cache on the
-    read-only NAS mount used by CI e2e.
-    """
-    try:
-        from transformers import AutoConfig
-
-        cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
-        tc = getattr(cfg, "text_config", cfg)
-        return bool(getattr(tc, "hidden_size_per_layer_input", 0))
-    except Exception:
-        return False
-
-
-_PLI_UNSUPPORTED_REASON = (
-    "packed verify does not thread per-layer inputs (PLI) through the verify forward, so "
-    "PLI/MatFormer checkpoints (e.g. gemma-4-E2B/E4B) hit _compute_per_layer_inputs(None, None) "
-    "and raise. Unsupported until PLI is wired through the speculative-verify path (see #49022). "
-    "Dense non-PLI targets (12B, 31B) run this test."
-)
-
 _L1_OVERFLOW_REASON = (
     "packed-verify global-layer SDPA (head_dim=512, fp32-accum, P candidates folded into "
     "heads) exceeds this core's L1 at the current TP. The per-core footprint shrinks ~TP×, "
@@ -116,9 +167,6 @@ def test_packed_verify_matches_sequential(mesh_device, reset_seeds):
 
     if _is_moe_model(model_path):
         pytest.skip(_MOE_UNSUPPORTED_REASON)
-
-    if _is_pli_model(model_path):
-        pytest.skip(_PLI_UNSUPPORTED_REASON)
 
     # Single-device (TP=1) is unsupported for packed verify on the 12B model: the
     # global layers (global_head_dim=512) run the packed SDPA with fp32_dest_acc_en
@@ -271,8 +319,6 @@ def test_packed_verify_batch_perf(mesh_device, reset_seeds):
     if _is_moe_model(model_path):
         pytest.skip(_MOE_UNSUPPORTED_REASON)
 
-    if _is_pli_model(model_path):
-        pytest.skip(_PLI_UNSUPPORTED_REASON)
     if mesh_device.get_num_devices() == 1:
         pytest.skip("single-device L1 limit: use a TP mesh (e.g. 1x4)")
 
