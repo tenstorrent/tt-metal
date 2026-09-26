@@ -205,6 +205,7 @@ def _experts_module(mesh, spec, layer, loader=None, cfg=None):
     experts are dequantized one at a time at load unless the bfp8 device cache for the layer is complete."""
     import os
 
+    import ttnn
     from models.demos.common.bringup.reference.golden import hf_path
     from models.demos.mimo_v2_6_d_p.reference.mimo_ref import MiMoConfig
     from models.demos.mimo_v2_6_d_p.reference.weights import WeightLoader
@@ -213,9 +214,13 @@ def _experts_module(mesh, spec, layer, loader=None, cfg=None):
     loader = loader or WeightLoader(hf_path(spec))
     cfg = cfg or MiMoConfig.from_json(os.path.join(loader.model_path, "config.json"))
     weights = LazyExpertWeights(loader, f"model.layers.{layer}.mlp.experts.", cfg.n_routed_experts)
-    # "loop" (default): per-expert extract -> ttnn.linear SwiGLU (HiFi2, fp32 dest) -> insert; "unified":
+    # "loop" (default): per-expert extract -> ttnn.linear SwiGLU (HiFi4, fp32 dest) -> insert; "unified":
     # unified_routed_expert_moe (Silu forced to LoFi + bf16 dest, fails the norm-ratio check); "fused": moe_fused_swiglu.
     mode = os.environ.get("MIMO_EXPERTS_MODE", "loop")
+    # Loop-mode expert input dtype: bf16 (default; bfp8 fails layer 5's outlier channels), "bfp8" for comparison.
+    act = ttnn.bfloat8_b if os.environ.get("MIMO_EXPERTS_ACT", "bf16") == "bfp8" else ttnn.bfloat16
+    # fp32 (default) or bf16 gate/up/h intermediates; HiFi4 (default) or MIMO_EXPERTS_FIDELITY=HiFi2 for comparison.
+    mid = ttnn.bfloat16 if os.environ.get("MIMO_EXPERTS_MID", "fp32") == "bf16" else ttnn.float32
     return TtExperts(
         mesh,
         layer,
@@ -225,6 +230,9 @@ def _experts_module(mesh, spec, layer, loader=None, cfg=None):
         top_k=cfg.num_experts_per_tok,
         max_seq_len=_max_chunk(spec),
         mode=mode,
+        loop_act_dtype=act,
+        loop_mid_dtype=mid,
+        math_fidelity=getattr(ttnn.MathFidelity, os.environ.get("MIMO_EXPERTS_FIDELITY", "HiFi4")),
     )
 
 
