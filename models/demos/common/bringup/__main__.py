@@ -164,11 +164,19 @@ def cmd_compare(a):
     return 0
 
 
-@command("approve", "record a person's approval of an approval point (intake, plan, perf) with file hashes")
+@command("approve", "record a person's approval of an approval point (intake, plan, perf, shared:<task id>)")
 def cmd_approve(a):
     from models.demos.common.bringup.plan.approvals import approve
 
     spec, _ = load(a)
+    if a.task.startswith("shared:"):
+        from models.demos.common.bringup.core.ledger import Ledger
+        from models.demos.common.bringup.plan.approvals import approve_shared
+
+        tid = a.task.split(":", 1)[1]
+        rec = approve_shared(spec, Ledger(spec.bringup_dir).task(tid), note=a.note or "")
+        print(f"approved shared-code changes of {tid} by {rec['by']} at {rec['at']}: " + ", ".join(rec["paths"]))
+        return 0
     rec = approve(spec, a.task, note=a.note or "")
     print(f"approved {a.task} by {rec['by']} at {rec['at']}: " + ", ".join(rec["files"]))
     return 0
