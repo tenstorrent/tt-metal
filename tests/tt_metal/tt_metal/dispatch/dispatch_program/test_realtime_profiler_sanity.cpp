@@ -20,6 +20,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <map>
 #include <mutex>
 #include <set>
 #include <stdexcept>
@@ -36,6 +37,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/mesh_config.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_workload.hpp>
@@ -419,6 +421,139 @@ TEST(RealtimeProfilerSanity, TraceReplayResolvesKernelSources) {
     }
     EXPECT_GT(trace_records, 0u) << "No records observed for the trace-replayed program (runtime_id=" << kTraceRuntimeId
                                  << ")";
+
+    EXPECT_TRUE(mesh_device->close());
+}
+
+// A MeshWorkload stamps every program it holds with one runtime_id, and heterogeneous workloads run
+// a different program per device range. The per-record metadata (core_count, kernel_sources) must
+// therefore resolve per (chip, runtime_id): each chip's record has to describe the program that ran
+// on THAT chip, not whichever program the dispatch loop happened to record last. Exercised on both
+// the direct-enqueue and the trace-capture recording paths.
+TEST(RealtimeProfilerSanity, HeterogeneousMeshWorkloadMetadataIsPerChip) {
+    constexpr uint32_t kEnqueueRuntimeId = 0x7001;
+    constexpr uint32_t kTraceRuntimeId = 0x7002;
+    constexpr size_t kTraceRegionSize = 8 * 1024 * 1024;
+
+    if (GetNumAvailableDevices() < 2) {
+        GTEST_SKIP() << "Needs at least two devices to build a heterogeneous mesh workload";
+    }
+
+    std::shared_ptr<distributed::MeshDevice> mesh_device;
+    try {
+        mesh_device = distributed::MeshDevice::create(
+            distributed::MeshDeviceConfig(distributed::MeshShape{1, 2}),
+            DEFAULT_L1_SMALL_SIZE,
+            kTraceRegionSize,
+            /*num_command_queues=*/1,
+            DispatchCoreConfig{DispatchCoreType::WORKER});
+    } catch (const std::exception& e) {
+        GTEST_SKIP() << "Could not open a 1x2 mesh on this system: " << e.what();
+    }
+    ASSERT_NE(mesh_device, nullptr);
+
+    if (!IsProgramRealtimeProfilerActive()) {
+        mesh_device->close();
+        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
+    }
+
+    const distributed::MeshCoordinate small_coord{0, 0};
+    const distributed::MeshCoordinate wide_coord{0, 1};
+    const uint32_t small_chip = mesh_device->get_device(small_coord)->id();
+    const uint32_t wide_chip = mesh_device->get_device(wide_coord)->id();
+    ASSERT_NE(small_chip, wide_chip);
+
+    // Both chips must be profiled for the per-chip assertion to be meaningful; a chip the RT profiler
+    // declined (e.g. non-MMIO) would simply never produce records.
+    std::mutex records_mu;
+    std::vector<ProgramRealtimeRecord> records;
+    ProgramRealtimeProfilerCallbackHandle handle =
+        RegisterProgramRealtimeProfilerCallback([&records_mu, &records](const ProgramRealtimeRecordBatch& batch) {
+            std::lock_guard<std::mutex> lock(records_mu);
+            records.insert(records.end(), batch.records.begin(), batch.records.end());
+        });
+
+    const CoreCoord compute_grid = mesh_device->compute_with_storage_grid_size();
+    const CoreRange one_core(CoreCoord{0, 0}, CoreCoord{0, 0});
+    const CoreRange all_cores(CoreCoord{0, 0}, CoreCoord{compute_grid.x - 1, compute_grid.y - 1});
+    const uint32_t expected_small_core_count = 1;
+    const uint32_t expected_wide_core_count = compute_grid.x * compute_grid.y;
+    ASSERT_GT(expected_wide_core_count, expected_small_core_count);
+
+    // Distinct source markers so kernel_sources can be checked per chip alongside core_count. The
+    // marker doubles as a tag distinguishing the two programs, so it is derived from the core count.
+    const std::string small_src = make_sanity_kernel_source(expected_small_core_count);
+    const std::string wide_src = make_sanity_kernel_source(expected_wide_core_count);
+    const std::string small_marker = kSourceMarkerPrefix + std::to_string(expected_small_core_count);
+    const std::string wide_marker = kSourceMarkerPrefix + std::to_string(expected_wide_core_count);
+
+    auto make_program = [](const std::string& src, const CoreRange& cores, uint32_t runtime_id) {
+        Program program = CreateProgram();
+        CreateKernelFromString(
+            program,
+            src,
+            cores,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        CreateKernelFromString(program, src, cores, ComputeConfig{});
+        program.set_runtime_id(static_cast<uint64_t>(runtime_id));
+        return program;
+    };
+
+    distributed::MeshWorkload workload;
+    workload.add_program(
+        distributed::MeshCoordinateRange(small_coord, small_coord),
+        make_program(small_src, one_core, kEnqueueRuntimeId));
+    workload.add_program(
+        distributed::MeshCoordinateRange(wide_coord, wide_coord), make_program(wide_src, all_cores, kEnqueueRuntimeId));
+    auto& mesh_cq = mesh_device->mesh_command_queue(0);
+
+    // Direct enqueue (also serves as the warm-up trace capture needs).
+    distributed::EnqueueMeshWorkload(mesh_cq, workload, true);
+
+    // Trace capture records metadata through a separate path; retag so its records are distinguishable.
+    for (auto& [_, prog] : workload.get_programs()) {
+        prog.set_runtime_id(static_cast<uint64_t>(kTraceRuntimeId));
+    }
+    distributed::MeshTraceId trace_id = mesh_device->begin_mesh_trace(mesh_cq);
+    distributed::EnqueueMeshWorkload(mesh_cq, workload, false);
+    mesh_device->end_mesh_trace(mesh_cq, trace_id);
+    mesh_device->replay_mesh_trace(mesh_cq, trace_id, true);
+
+    mesh_device->quiesce_devices();
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    UnregisterProgramRealtimeProfilerCallback(handle);
+    mesh_device->release_mesh_trace(trace_id);
+
+    // (runtime_id, chip) -> number of records seen.
+    std::map<std::pair<uint32_t, uint32_t>, uint32_t> seen;
+    for (const auto& rec : records) {
+        if (rec.runtime_id != kEnqueueRuntimeId && rec.runtime_id != kTraceRuntimeId) {
+            continue;
+        }
+        ++seen[std::make_pair(rec.runtime_id, rec.chip_id)];
+
+        const bool on_small_chip = rec.chip_id == small_chip;
+        ASSERT_TRUE(on_small_chip || rec.chip_id == wide_chip) << "record from unexpected chip " << rec.chip_id;
+        const uint32_t expected_core_count = on_small_chip ? expected_small_core_count : expected_wide_core_count;
+        const std::string& expected_marker = on_small_chip ? small_marker : wide_marker;
+
+        EXPECT_EQ(rec.core_count, expected_core_count)
+            << "runtime_id=" << rec.runtime_id << " chip=" << rec.chip_id
+            << " reported the core count of the program that ran on the other chip";
+        ASSERT_FALSE(rec.kernel_sources.empty())
+            << "runtime_id=" << rec.runtime_id << " chip=" << rec.chip_id << " carried no kernel sources";
+        for (const auto& src : rec.kernel_sources) {
+            EXPECT_NE(src.find(expected_marker), std::string_view::npos)
+                << "runtime_id=" << rec.runtime_id << " chip=" << rec.chip_id
+                << " carried the other chip's program source: " << src;
+        }
+    }
+    for (uint32_t runtime_id : {kEnqueueRuntimeId, kTraceRuntimeId}) {
+        for (uint32_t chip : {small_chip, wide_chip}) {
+            const uint32_t num_records = seen[std::make_pair(runtime_id, chip)];
+            EXPECT_GT(num_records, 0u) << "no record for runtime_id=" << runtime_id << " from chip=" << chip;
+        }
+    }
 
     EXPECT_TRUE(mesh_device->close());
 }

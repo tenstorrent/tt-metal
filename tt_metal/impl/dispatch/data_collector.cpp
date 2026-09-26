@@ -133,25 +133,40 @@ void DataCollector::RecordKernelGroup(
 
 void DataCollector::RecordProgramRun(uint64_t program_id) { program_id_to_call_count[program_id]++; }
 
-void DataCollector::RecordProgramMetadata(ProgramImpl& program) {
+void DataCollector::RecordProgramMetadata(ProgramImpl& program, std::span<const tt::ChipId> device_ids) {
     // The real-time profiler currently narrows the runtime ID to 16 bits, so we do the same here.
     uint16_t runtime_id = static_cast<uint16_t>(program.get_runtime_id());
     uint64_t program_id = program.get_id();
-    std::lock_guard<std::mutex> lock(kernel_source_mutex_);
-    auto [it, inserted] = program_id_to_kernel_sources_.try_emplace(program_id);
+    std::lock_guard<std::mutex> lock(program_metadata_mutex_);
+    auto [it, inserted] = program_id_to_metadata_.try_emplace(program_id);
     if (inserted) {
-        auto& kernel_sources = it->second;
+        auto& entry = it->second;
         const auto& hal = env_.get_hal();
         for (uint32_t i = 0; i < hal.get_programmable_core_type_count(); i++) {
             for (const auto& [handle, kernel] : program.get_kernels(i)) {
                 // insert(const string&) allocates only on a miss; on a hit it just returns the
                 // existing node, so this allocation is only done once per unique source.
                 const std::string& stored_path = *unique_kernel_sources_.insert(kernel->kernel_source().source_).first;
-                kernel_sources.emplace_back(stored_path);
+                entry.kernel_sources.emplace_back(stored_path);
             }
         }
+        for (const auto& cores : program.logical_cores()) {
+            entry.core_count += cores.size();
+        }
     }
-    runtime_id_to_kernel_sources_[runtime_id].store(&it->second, std::memory_order_release);
+    for (tt::ChipId device_id : device_ids) {
+        runtime_id_to_metadata_[std::make_pair(device_id, runtime_id)] = &it->second;
+    }
+}
+
+DataCollector::ProgramRealtimeMetadata DataCollector::GetProgramRealtimeMetadata(
+    tt::ChipId device_id, uint16_t runtime_id) const {
+    std::lock_guard<std::mutex> lock(program_metadata_mutex_);
+    auto it = runtime_id_to_metadata_.find(std::make_pair(device_id, runtime_id));
+    if (it == runtime_id_to_metadata_.end()) {
+        return {};
+    }
+    return {.kernel_sources = it->second->kernel_sources, .core_count = it->second->core_count};
 }
 
 void DataCollector::RecordProgramSubDevice(

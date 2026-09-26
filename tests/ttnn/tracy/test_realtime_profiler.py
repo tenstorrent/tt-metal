@@ -236,6 +236,7 @@ def test_callback(tmp_path):
     for rec in snapshot:
         assert rec["end_timestamp"] >= rec["start_timestamp"], "end_timestamp < start_timestamp"
         assert rec["frequency_ghz"] > 0, "frequency_ghz must be positive"
+        assert rec["core_count"] > 0, "core_count must be positive"
         assert isinstance(rec["kernel_sources"], list), "kernel_sources must be list-like"
         assert all(
             isinstance(source, str) and source for source in rec["kernel_sources"]
@@ -403,6 +404,8 @@ def _cross_reference_impl(
     # Build duration maps.
     dev_by_raw = defaultdict(list)
     dev_by_decoded = defaultdict(list)
+    dev_cores_by_raw = defaultdict(list)
+    dev_cores_by_decoded = defaultdict(list)
     for entry in dev_flat:
         duration_ns = entry["duration_ns"]
         if duration_ns <= 0:
@@ -410,10 +413,13 @@ def _cross_reference_impl(
         runtime_id = entry["runtime_id"]
         dev_by_raw[runtime_id].append(duration_ns)
         dev_by_decoded[_decode_runtime_id(runtime_id)].append(duration_ns)
+        dev_cores_by_raw[runtime_id].append(entry["core_count"])
+        dev_cores_by_decoded[_decode_runtime_id(runtime_id)].append(entry["core_count"])
 
     assert dev_by_raw or dev_by_decoded, "No device profiler programs with kernel duration data"
 
     rt_by_id = defaultdict(list)
+    rt_cores_by_id = defaultdict(list)
     for rec in rt_snapshot:
         runtime_id = rec["runtime_id"]
         freq = rec["frequency_ghz"]
@@ -423,6 +429,7 @@ def _cross_reference_impl(
         if dur_ns <= 0:
             continue
         rt_by_id[runtime_id].append(dur_ns)
+        rt_cores_by_id[runtime_id].append(rec["core_count"])
 
     assert rt_by_id, "No valid real-time profiler records"
 
@@ -430,13 +437,14 @@ def _cross_reference_impl(
     raw_matches = sum(1 for runtime_id in rt_by_id if runtime_id in dev_by_raw)
     decoded_matches = sum(1 for runtime_id in rt_by_id if runtime_id in dev_by_decoded)
     if raw_matches >= decoded_matches:
-        dev_durations, match_strategy = dev_by_raw, "raw"
+        dev_durations, dev_core_counts, match_strategy = dev_by_raw, dev_cores_by_raw, "raw"
     else:
-        dev_durations, match_strategy = dev_by_decoded, "decoded"
+        dev_durations, dev_core_counts, match_strategy = dev_by_decoded, dev_cores_by_decoded, "decoded"
 
     # Cross-reference.
     matched = 0
     within = 0
+    core_count_matches = 0
     skipped_short = 0
     details = []
     for runtime_id, rt_durs in sorted(rt_by_id.items()):
@@ -446,6 +454,8 @@ def _cross_reference_impl(
         for i in range(min(len(rt_durs), len(dev_durs))):
             rt_ns = rt_durs[i]
             dev_ns = dev_durs[i]
+            rt_core_count = rt_cores_by_id[runtime_id][i]
+            dev_core_count = dev_core_counts[runtime_id][i]
             rel_err = abs(rt_ns - dev_ns) / dev_ns if dev_ns > 0 else float("inf")
             short = dev_ns < MIN_DEVICE_KERNEL_DURATION_NS
             if short:
@@ -455,6 +465,8 @@ def _cross_reference_impl(
                 matched += 1
                 if ok:
                     within += 1
+                if rt_core_count == dev_core_count:
+                    core_count_matches += 1
             details.append(
                 {
                     "runtime_id": runtime_id,
@@ -463,6 +475,9 @@ def _cross_reference_impl(
                     "dev_duration_ns": round(dev_ns, 1),
                     "relative_error": round(rel_err, 4),
                     "within_tolerance": ok,
+                    "rt_core_count": rt_core_count,
+                    "dev_core_count": dev_core_count,
+                    "core_count_matches": rt_core_count == dev_core_count,
                     "below_threshold": short,
                 }
             )
@@ -476,6 +491,7 @@ def _cross_reference_impl(
         "matched_pairs": matched,
         "skipped_short": skipped_short,
         "within_tolerance": within,
+        "core_count_matches": core_count_matches,
         "tolerance": RELATIVE_TOLERANCE,
         "min_device_kernel_duration_ns": MIN_DEVICE_KERNEL_DURATION_NS,
         "comparisons": details,
@@ -491,6 +507,7 @@ def _cross_reference_impl(
     print(f"  Dev unique runtime IDs:  {len(dev_by_raw)} (raw) / {len(dev_by_decoded)} (decoded)")
     print(f"  Matched (>={MIN_DEVICE_KERNEL_DURATION_NS}ns): {matched} (skipped {skipped_short} short)")
     print(f"  Within {RELATIVE_TOLERANCE*100:.0f}% tolerance:  {within}/{matched}")
+    print(f"  Matching core counts:    {core_count_matches}/{matched}")
     print(f"  Diagnostics:             {out_file}")
 
     _save_artifacts(test_name, **{"cross_reference.json": out_file, "workload_output.log": workload_log})
@@ -504,6 +521,10 @@ def _cross_reference_impl(
     assert pass_rate >= CROSS_REF_PASS_RATE, (
         f"Only {within}/{matched} ({pass_rate*100:.1f}%) pairs within "
         f"{RELATIVE_TOLERANCE*100:.0f}% tolerance (need >= {CROSS_REF_PASS_RATE*100:.0f}%); see {out_file}"
+    )
+    assert core_count_matches == matched, (
+        f"Only {core_count_matches}/{matched} matched runtime IDs reported the same core count in the real-time and "
+        f"standard profilers. See {out_file} for per-program details."
     )
 
     if expected_multi_chip:
