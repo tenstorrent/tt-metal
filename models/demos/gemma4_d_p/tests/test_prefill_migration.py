@@ -125,25 +125,36 @@ def test_prefill_migration(migration_environment, context_len):
     gate, env, output_dir = migration_environment
     env["PREFILL_PCC_SUMMARY_DIR"] = str(output_dir)
     with (output_dir / "runner.log").open("w") as log:
-        result = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "models.demos.gemma4_d_p.tests.test_prefill_migration",
-                gate,
-                str(context_len),
-                str(output_dir),
-            ],
-            env=env,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            timeout=10800,
+        try:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "models.demos.gemma4_d_p.tests.test_prefill_migration",
+                    gate,
+                    str(context_len),
+                    str(output_dir),
+                ],
+                env=env,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                timeout=10800,
+            )
+        except subprocess.TimeoutExpired as error:
+            pytest.fail(
+                f"Runner timed out after {error.timeout:g}s. "
+                f"See {output_dir / 'runner.log'} and {output_dir / 'producer.log'}.",
+                pytrace=False,
+            )
+    if result.returncode != 0:
+        pytest.fail(
+            f"Runner exited with code {result.returncode}. "
+            f"See {output_dir / 'runner.log'} and {output_dir / 'producer.log'}.",
+            pytrace=False,
         )
-    assert result.returncode == 0, (output_dir / "runner.log").read_text()
     report = json.loads((output_dir / "gemma4_slot0.json").read_text())
     assert report["slot"] == 0 and report["tokens"] == context_len
     assert len(report["measurements"]) == 1640
-    assert min(report["minima"].values()) >= MIN_PER_HEAD_PCC
     metrics = report["error_metrics"]
     print(f"\n{'Layer':>7} {'PCC':>12} {'Relative RMSE':>16} {'RMSE':>12}")
     for entry in metrics["layers"]:
@@ -155,8 +166,20 @@ def test_prefill_migration(migration_environment, context_len):
         f"Worst head: layer={worst_head['layer']} head={worst_head['head']} "
         f"type={worst_head['cache_type']} PCC={worst_head['pcc']:.6f}"
     )
-    assert overall["pcc"] > MIN_OVERALL_PCC, overall
-    assert overall["relative_rmse"] < MAX_OVERALL_RRMSE, overall
+    failures = []
+    if not worst_head["pcc"] >= MIN_PER_HEAD_PCC:
+        failures.append(
+            f"Per-head PCC failed: layer={worst_head['layer']} head={worst_head['head']} "
+            f"type={worst_head['cache_type']}, actual={worst_head['pcc']:.6f}, required >= {MIN_PER_HEAD_PCC:.6f}"
+        )
+    if not overall["pcc"] > MIN_OVERALL_PCC:
+        failures.append(f"Overall PCC failed: actual={overall['pcc']:.6f}, required > {MIN_OVERALL_PCC:.6f}")
+    if not overall["relative_rmse"] < MAX_OVERALL_RRMSE:
+        failures.append(
+            f"Overall RRMSE failed: actual={overall['relative_rmse']:.6f}, required < {MAX_OVERALL_RRMSE:.6f}"
+        )
+    if failures:
+        pytest.fail("Accuracy checks failed:\n" + "\n".join(failures), pytrace=False)
     if gate == "loopback":
         assert "[migration] WORKER_READY:" in (output_dir / "runner.log").read_text()
         assert "verify bytes PASSED" in (output_dir / "producer.log").read_text()
@@ -192,7 +215,11 @@ def run_migration_case(gate, context_len, output_dir):
             producer = subprocess.Popen(command, env=client_env, stdout=log, stderr=subprocess.STDOUT)
             try:
                 original_loop(runtime, kv_cache, *args, **kwargs)
-                assert producer.wait(timeout=120) == 0, (output_dir / "producer.log").read_text()
+                producer_returncode = producer.wait(timeout=120)
+                if producer_returncode != 0:
+                    raise RuntimeError(
+                        f"Producer exited with code {producer_returncode}. See {output_dir / 'producer.log'}."
+                    )
                 assert runtime.slot_ends == [context_len] + [0] * (Gemma4ServiceConfig.MAX_USER_SLOTS - 1)
                 table = ttnn.experimental.disaggregation.import_from_protobuf_file(env["PREFILL_MIGRATION_TABLE_PATH"])
                 device_map = prefill_producer._read_device_map(timeout_s=10)
@@ -207,8 +234,7 @@ def run_migration_case(gate, context_len, output_dir):
                             check_table_samples(table, device_map, layer, 0, config_id, actual)
                             yield config_id, actual
 
-                scores = compare_slot_cache(read_heads, 0, context_len, env["PREFILL_TRACE_DIR"])
-                assert min(scores.values()) >= MIN_PER_HEAD_PCC, scores
+                compare_slot_cache(read_heads, 0, context_len, env["PREFILL_TRACE_DIR"])
             except BaseException as error:
                 failures.append(error.with_traceback(None))
             finally:
