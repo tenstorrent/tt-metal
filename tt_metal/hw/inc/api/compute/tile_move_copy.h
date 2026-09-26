@@ -29,10 +29,12 @@ namespace ckernel {
  * does not reconfigure the unpacker data types. Eltwise-unary / SFPU kernels use this same init:
  * compute_kernel_hw_startup(icb, ocb) once, then copy_init(icb).
  *
- * Numerics: the copy preserves bf16 -0.0 and denormal inputs (it keeps the Src zero-substitution flag
- * disabled), so sign-sensitive SFPU ops such as signbit / copysign read the exact value back out of DST.
- * Matmul and eltwise-binary re-establish the format-driven default themselves, so this preservation never
- * leaks into them.
+ * Numerics: with a 16-bit dest the copy preserves bf16 -0.0 and denormal inputs (it keeps the Src
+ * zero-substitution flag disabled), so sign-sensitive SFPU ops such as signbit / copysign read the exact
+ * value back out of DST. With a 32-bit dest the datacopy is an ELWADD rather than a MOVA2D, which cannot
+ * preserve either, and holding the flag there instead adds 2^-127 into the result; that case takes the
+ * format-driven default. Matmul and eltwise-binary re-establish the default themselves, so this
+ * preservation never leaks into them.
  *
  * Return value: None
  *
@@ -66,7 +68,20 @@ ALWI void copy_init(
     // datums (drop-in for the eltwise-unary short init and the plain-copy path), but flush fp8
     // (e4m3/e5m2) whose zero widens to a nonzero SrcA residual and must read back as 0. MATH-only
     // config: records no format-reconfig diff, so single-SrcA reconfig tracking is unchanged. Not on Quasar.
-    MATH((ckernel::math::_configure_copy_zero_flag_state_(get_operand_dst_format(cbid))));
+    //
+    // 16-bit dest only. That policy is written for the MOVA2D datacopy, where the flag decides whether
+    // the moved datum keeps its bit pattern. Under a 32-bit dest the datacopy is an ELWADD against a
+    // ZEROSRC'd SrcB instead, and with substitution disabled the FPU reads each zeroed SrcB datum as
+    // exp==0 plus the implied hidden bit -- 2^-127 -- which is added into every result that falls inside
+    // the adder's alignment window, corrupting the eleven smallest normal binades. Nothing is preserved
+    // by holding the flag there either: ELWADD returns +0.0 for a -0.0 input whatever the flag says. So
+    // fall back to the operand-driven default, which keeps the flush on for float operands and still
+    // disables it for the 16-bit integer operands the integer datacopy branch needs.
+    if constexpr (is_fp32_dest_acc_en) {
+        MATH((ckernel::math::_configure_default_zero_flag_state_()));
+    } else {
+        MATH((ckernel::math::_configure_copy_zero_flag_state_(get_operand_dst_format(cbid))));
+    }
 #else
     MATH((llk_math_eltwise_unary_datacopy_init<
           DataCopyType::A2D,
