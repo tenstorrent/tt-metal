@@ -651,8 +651,9 @@ FORCE_INLINE void dfb_program_intra_tensix_alias(
     WRITE_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(pair_idx), clientL_val);
 }
 
-// Clear ClientL valid for packer remapper pairs in [lo, hi). Called from trisc.cc after the kernel
-// so pairs from launch N cannot leak into launch N+1. lo==0xFF means nothing was programmed.
+// Clear ClientL valid for packer remapper pairs in [lo, hi). Called from trisc.cc once this Neo's
+// TRISCs have all finished, so pairs from launch N cannot leak into launch N+1 and no in-flight
+// counter update loses its alias. lo==0xFF means nothing was programmed.
 FORCE_INLINE void dfb_clear_packer_remapper_window(uint8_t lo, uint8_t hi) {
     if (lo == 0xFFu) {
         return;
