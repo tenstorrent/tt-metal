@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Qwen3.5/3.6 end-to-end text generation test on Blackhole (P150 / P150x4).
+"""Qwen3.5/3.6 end-to-end text generation test on Blackhole (P150 / P150x4 / P150x8)
+and Wormhole (N150x4).
 
 A single parametrized test covering prefill + decode across ISLs from 128 up to 256k
 (single-user) and batched serving (B=8/B=32, multi-device TP) up to 64k.
@@ -31,23 +32,32 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole
+from models.common.utility_functions import is_blackhole, run_for_wormhole_b0_or_blackhole
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import determine_device_name
 
-_MESH_SHAPE = {"P150": (1, 1), "P150x4": (1, 4), "P150x8": (1, 8)}.get(os.environ.get("MESH_DEVICE"), (1, 4))
+# N150x4 is the Wormhole mesh, and it is supported for the Qwen3.6-35B-A3B (MoE) checkpoint ONLY
+# — see `_skip_unsupported_on_wormhole`. Every other entry is the pre-existing Blackhole set.
+_MESH_SHAPE = {
+    "P150": (1, 1),
+    "P150x4": (1, 4),
+    "P150x8": (1, 8),
+    "N150x4": (1, 4),
+}.get(os.environ.get("MESH_DEVICE"), (1, 4))
 _MULTI = _MESH_SHAPE != (1, 1)
 # Multi-device (TP) long-context prefill replays a captured per-chunk trace, so the mesh needs a
 # trace region (ttnn's DEFAULT_TRACE_REGION_SIZE is 0). 1 GiB is ample for every checkpoint,
 # including the 40-layer 35B-A3B MoE (~535 MiB captured prefill+decode trace).
 _TP_TRACE_REGION_SIZE = 1024 * 1024 * 1024
+# The second command queue is never used (everything here passes cq_id=0); Wormhole asks for 1 since its dispatch tunnels over ethernet.
+_NUM_CQS = 2 if "blackhole" in ttnn.get_arch_name() else 1
 DEVICE_PARAMS = [
     {
         "l1_small_size": 24576,
-        "num_command_queues": 2,
+        "num_command_queues": _NUM_CQS,
         **(
             {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": _TP_TRACE_REGION_SIZE} if _MULTI else {}
         ),
@@ -196,7 +206,28 @@ def _blocks_for(seqlen, max_generated_tokens):
     return min(MAX_BLOCK_BUDGET, blocks)
 
 
-@run_for_blackhole()
+def _skip_unsupported_on_wormhole():
+    """Wormhole runs the sparse-MoE Qwen3.6-35B-A3B on N150x4 only.
+
+    The 9B / 27B checkpoints are Blackhole-only: their program configs and memory budget were
+    tuned for a P150 (32 GB, 11x10 grid) and neither has been brought up or validated on a
+    Wormhole n150 (12 GB, 8x8). Skip rather than run something unvalidated. Blackhole is
+    unaffected — this returns immediately there."""
+    if is_blackhole():
+        return
+    hf_model = os.environ.get("HF_MODEL", "")
+    config_path = os.path.join(hf_model, "config.json")
+    if os.path.isfile(config_path):
+        with open(config_path) as f:
+            cfg = json.load(f)
+        is_moe = bool((cfg.get("text_config") or cfg).get("num_experts"))
+    else:
+        is_moe = "A3B" in hf_model  # hub id, not yet snapshot_download'd
+    if not is_moe:
+        pytest.skip(f"Wormhole supports only the Qwen3.6-35B-A3B (MoE) checkpoint here; HF_MODEL={hf_model!r}")
+
+
+@run_for_wormhole_b0_or_blackhole()
 @pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize(
@@ -241,11 +272,12 @@ def test_demo_text(
     repeat_batches,
 ):
     """E2e text generation: prefill + decode."""
+    _skip_unsupported_on_wormhole()
     from transformers import AutoTokenizer
 
     device = mesh_device
     if batch > 1 and not _MULTI:
-        pytest.skip("batched decode is the TP (multi-device) path; run with MESH_DEVICE=P150x4 or P150x8")
+        pytest.skip("batched decode is the TP (multi-device) path; run with MESH_DEVICE=P150x4/P150x8/N150x4")
     device.enable_program_cache()
     # Block budget → max_seq_len, KV cache, and RoPE table
     num_blocks = _blocks_for(seqlen, max_generated_tokens)
@@ -275,10 +307,7 @@ def test_demo_text(
         f"Prompt: {actual_len} tokens (block budget: {num_blocks} blocks x {BLOCK_SIZE} = {max_seq_len} tokens)"
     )
 
-    # Multi-device (TP): route through the chunk-outer prefill + paged decode path.
-    # Prefill runs each ~2048-token chunk through all layers, carrying GDN recurrent/
-    # conv state + paged KV across chunks (so the GDN seq kernel never sees the whole
-    # sequence — the long-context OOM fix), then incremental paged single-token decode.
+    # TP: chunk-outer prefill (each chunk through all layers, carrying GDN + paged KV state) so the GDN seq kernel never sees the whole sequence.
     if model.num_devices > 1 and batch > 1:
         # Batched serving: B users share one paged KV + batched GDN state. The demo replicates the
         # one loaded prompt to all B users, so every row must generate identical tokens (asserted
@@ -516,11 +545,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
         return d * _per_shard + int(idxs[d].item())
 
     def _update(token, position):
-        # page_table is a constant identity table for the whole sequence; it was uploaded once into
-        # dev[3] by prepare_inputs_decode (init) and the trace bakes in its address, so it never needs
-        # to change per token. Rebuilding it from torch every token was O(num_blocks) redundant host
-        # work that grows with context (~1056 blocks at 64k). Update only the per-token inputs
-        # (tokens, cur_pos, rope) and leave dev[3] as-is.
+        # page_table is constant for the whole sequence and its address is baked into the trace, so update only the per-token inputs.
         host = model.prepare_decode_inputs_host(
             torch.tensor([[token]], dtype=torch.int32),
             torch.tensor([position], dtype=torch.int32),
@@ -681,10 +706,7 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
     mesh = model.mesh_device
     T = token_ids.shape[1]
 
-    # Per-user block budget covering the prompt + decode (one contiguous range/user). Round up to a
-    # multiple of 8: chunked SDPA reads each user's page-table row as a ROW_MAJOR int32 stick and
-    # requires stick_size (= bpu * 4 bytes) % 32 == 0, i.e. bpu % 8 == 0 (as _blocks_for enforces for
-    # the single-user path). A misaligned bpu makes the long-prefill SDPA read the wrong KV.
+    # Per-user block budget, rounded up to a multiple of 8: chunked SDPA needs the page-table row stick 32-byte aligned or it reads the wrong KV.
     bpu = max(8, -(-(T + max_generated_tokens) // BLOCK_SIZE))
     bpu = ((bpu + 7) // 8) * 8
     total_blocks = B * bpu
@@ -692,10 +714,7 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
     model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=B)
     page_table = torch.stack([torch.arange(u * bpu, (u + 1) * bpu, dtype=torch.int32) for u in range(B)])  # [B, bpu]
 
-    # Prefill routes: T<=256 grouped single-pass; T>256 prefill_chunked_peruser (per-user).
-    # QWEN_BATCHED_GROUPED=1 (default): group short prompts (groups of up to 8 users — the fused GDN
-    # op's SCAN ceiling BH=B*Nv_tp<=cores, bucket-independent) so a B=8 request is one group for both
-    # T<=128 and T<=256. prefill_paged_grouped auto-caps group size. T>256 stays per-user.
+    # Prefill routes: T<=256 grouped single-pass (group size capped by the fused GDN op's scan ceiling), T>256 per-user chunked.
     bucket = 128
     eager = os.environ.get("QWEN35_TP_PREFILL_EAGER") == "1"
     grouped_short = os.environ.get("QWEN_BATCHED_GROUPED", "1") != "0" and T <= 256
@@ -759,11 +778,7 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
                 ttnn.deallocate(cc)
 
     def _update(tokens_row, positions):
-        # page_table is a constant per-user block mapping for the whole decode loop; it was
-        # uploaded once into dev[3] by prepare_inputs_decode (init) and the trace bakes in its
-        # address, so it never needs to change per step. Rebuilding + re-uploading it from torch
-        # every step was O(B * num_blocks_per_user) redundant host work that grows with both
-        # batch and context length. Update only the per-step inputs (tokens, cur_pos, rope).
+        # page_table is constant for the whole decode loop and its address is baked into the trace, so update only the per-step inputs.
         host = model.prepare_decode_inputs_host(
             torch.tensor(tokens_row, dtype=torch.int32).reshape(B, 1),
             torch.tensor(positions, dtype=torch.int32),
@@ -778,15 +793,7 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
         page_table=page_table,
     )
 
-    # Batched decode readback mode (QWEN36_BATCHED_DECODE_MODE):
-    #   "shard" (default) - per-shard on-device argmax+max (generalizes _run_tp_generation's
-    #            B=1 fast path to B>1): each device reduces its OWN vocab shard to (idx, max)
-    #            on device, then only 2 tiny [num_devices, B] tensors are read to host — no
-    #            full-vocab all-gather, no [B,1,vocab] logits transfer.
-    #   "sample" - TTSampling force-argmax path (all-gathers full logits across devices before
-    #            arg-maxing). Avoids the full logits HOST transfer but adds a real device-side
-    #            all-gather; measured slower overall than "shard" — kept for comparison.
-    #   "host"  - legacy: full [B,1,vocab] logits to host, then torch.argmax. Baseline.
+    # Batched decode readback (QWEN36_BATCHED_DECODE_MODE): "shard" reduces each vocab shard on device, "sample" all-gathers first, "host" is the legacy full readback.
     _mode = os.environ.get("QWEN36_BATCHED_DECODE_MODE", "shard")
     if _mode == "sample" and model.sampling is None:
         _mode = "host"

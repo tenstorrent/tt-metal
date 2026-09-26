@@ -12,15 +12,21 @@ import torch
 
 import ttnn
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
-from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
-    recurrent_gated_delta_rule_decode_ttnn,
+
+# Wormhole takes a local fork of the decode step; Blackhole uses the shared upstream one. See recurrent_decode_wh.py.
+from models.demos.blackhole.qwen36.tt.gdn.recurrent_decode_wh import (
+    recurrent_gated_delta_rule_decode_dispatch as recurrent_gated_delta_rule_decode_ttnn,
 )
+from models.demos.blackhole.qwen36.tt.gdn.recurrent_decode_wh import wh_decode_fork_applies
+from models.demos.blackhole.qwen36.tt.wh_compat import apply as _apply_wh_compat
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq import (
     chunk_gated_delta_rule_seq_adapter,
     create_chunk_masks_seq,
 )
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import _causal_conv1d_fir
 from models.tt_transformers.tt.ccl import tt_all_reduce
+
+_apply_wh_compat()  # Wormhole GDN L1 adjustments (see tt/wh_compat.py)
 
 
 def _softplus_add(a, bias):
@@ -31,7 +37,15 @@ def _softplus_add(a, bias):
 def _silu_mul(x, z, memory_config, dtype=None):
     """out-gate: x * silu(z). NOT fused into one op: fusing silu via input_tensor_b_activations
     overflows to NaN in the real layer for large-magnitude z (op-level PCC hid it — small inputs).
-    dtype: optional output dtype (bf16 for the column-parallel prefill out-proj; default = x's)."""
+    dtype: optional output dtype (bf16 for the column-parallel prefill out-proj; default = x's).
+
+    RE-TESTED and the warning above holds. An op-level probe against torch at [1,B,1024] shows the
+    fused form BIT-EQUIVALENT to the separate one -- bf16 and fp32, at |z| up to ~120, no NaN
+    anywhere -- so it looks safe in isolation. It is not. With real weights it takes
+    test_gdn_tp_prefill (prefill-vs-decode) from 0.99996 to 0.000137, fused-chunk-vs-seq from
+    0.99871 to -0.0012, and test_gdn_tp_peruser_state[B32] to PCC = nan. The real layer reaches
+    magnitudes a synthetic probe does not. Do not re-try this without running test_gdn_tp.py.
+    """
     s = ttnn.silu(z, memory_config=memory_config)
     if dtype is None:
         return ttnn.multiply(x, s, memory_config=memory_config)
@@ -79,14 +93,23 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
     # Fold a/b into qkvz → one matmul outputs [qkv|z|a|b] (default when DRAM-sharded)
     fuse_ab = qkvz_sharded
     if fuse_ab:
+        # a/b padded to a full TILE each so both start on a 32-column boundary; a mid-tile slice costs an untilize+tilize.
+        _T = tpc.TILE_SIZE
+
+        def _pad_to_tile(w):
+            if tpc.is_blackhole() or w.shape[0] == _T:  # Blackhole keeps the bare-nv packing
+                return w
+            return torch.cat([w, torch.zeros(_T - w.shape[0], w.shape[1], dtype=w.dtype)], dim=0)
+
+        assert nv_per <= _T, f"gdn_nv_tp ({nv_per}) > TILE ({_T}); a/b tile packing assumes one tile"
         fused = torch.cat(
             [
                 torch.cat(
                     [
                         qkv_re[d * qkv_per : (d + 1) * qkv_per],
                         z_w[d * z_per : (d + 1) * z_per],
-                        a_w[d * nv_per : (d + 1) * nv_per],
-                        b_w[d * nv_per : (d + 1) * nv_per],
+                        _pad_to_tile(a_w[d * nv_per : (d + 1) * nv_per]),
+                        _pad_to_tile(b_w[d * nv_per : (d + 1) * nv_per]),
                     ],
                     dim=0,
                 )
@@ -102,7 +125,8 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
             mesh,
             dim=-1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if _proj1d else args.gdn_qkvzab_weight_memcfg,
-            cache_path=c("qkvzab" + (".il" if _proj1d else ".dramshard")),
+            cache_path=c(("qkvzab" if tpc.is_blackhole() else "qkvzab_abtile") + (".il" if _proj1d else ".dramshard")),
+            # STAYS bfloat8_b: bf4 is faster but costs ~0.06 decode PCC, and this feeds the recurrent state, so it compounds.
             dtype=ttnn.bfloat8_b,
         )
     else:
@@ -141,6 +165,7 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
         dim=0,
         memory_config=args.gdn_out_weight_memcfg if _out_sharded else ttnn.DRAM_MEMORY_CONFIG,
         cache_path=c("out.dramshard" if _out_sharded else "out"),
+        # STAYS bfloat8_b: bf4 is marginally faster but costs PCC on each of the 30 GDN layers' residual.
         dtype=ttnn.bfloat8_b,
     )
     if getattr(args, "num_devices", 1) > 1:
@@ -159,12 +184,18 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
     A_log = tpc.shard_small(sd[P + "A_log"].float(), mesh, c("A_log"))
     tw["neg_exp_A"] = ttnn.neg(ttnn.exp(A_log))
     tw["norm_w"] = tpc.replicate(sd[P + "norm.weight"].float(), mesh, c("norm_w"))
+    # Constant weights folding the q/k L2 scaling (and q's attention scale) into rms_norm, saving a broadcast multiply each.
+    # Wormhole only: Blackhole's upstream decode step applies the scaling itself.
+    if not tpc.is_blackhole():
+        _dk = args.gdn_dk
+        tw["qn_w"] = tpc.replicate(
+            torch.full((_dk,), (_dk**-0.5) * (_dk**-0.5), dtype=torch.float32), mesh, c("qn_w")
+        )
+        tw["kn_w"] = tpc.replicate(torch.full((_dk,), _dk**-0.5, dtype=torch.float32), mesh, c("kn_w"))
     # Conv taps (4), sharded per Q/K/V head grouping
     taps = tpc.prepare_conv_taps(conv1d_w, key_dim, nk, dk, nv, dv, args.gdn_conv_kernel_size, tp)
     tw["conv_taps"] = [tpc.shard_small(taps[j], mesh, c(f"tap{j}")) for j in range(args.gdn_conv_kernel_size)]
-    # Depthwise conv1d weight [qkv_dim, 1, K], host-held mesh-sharded (dim=0) for prepare_conv_weights /
-    # _conv1d_prefill. When gdn_conv_channel_chunks > 1 it is a list of per-device channel-chunk weights
-    # (see TPGatedDeltaNet.__init__ for why); chunks=1 keeps the single tensor.
+    # Depthwise conv1d weight [qkv_dim,1,K], host-held mesh-sharded (dim=0); a list of per-chunk weights when chunks > 1.
     W1d = torch.stack(taps, dim=-1).reshape(args.gdn_qkv_dim, 1, args.gdn_conv_kernel_size).contiguous()
     n_cc = getattr(args, "gdn_conv_channel_chunks", 1)
 
@@ -215,6 +246,7 @@ class TPGatedDeltaNet:
         self._gdn_fuse_out = True
         self.K = args.gdn_conv_kernel_size
         self.scale = self.Dk**-0.5
+        # GDN in/out projections STAY HiFi2 + fp32 dest-acc on both arches: lower fidelity compounds into the recurrent state.
         self.cfg = tpc.COMPUTE_HIFI2
         # Must match load_gdn_weights_tp gates
         self._dram_sharded = getattr(args, "gdn_qkvz_weight_memcfg", None) is not None
@@ -222,10 +254,8 @@ class TPGatedDeltaNet:
         # Fuse prefill norm-allgather + qkvzab in-proj into all_gather_minimal_matmul_async.
         # Requires the folded qkvzab weight; norm's post-AG is disabled in layer.py (GDN, prefill).
         self._fuse_agmm = self._fuse_ab
-        # PREFILL out-proj fusion (matmul_reduce_scatter, (8,8) grid). Slight TTFT cost at small ISL
-        # (~13k crossover from a fixed warmup/compile overhead) but a large win at long ISL (e.g.
-        # 128k ~-2s); overlaps the fp32 GDN-out reduce-scatter with the matmul.
-        self._fuse_out_mmrs_prefill = not self._out_sharded and args.num_devices > 1
+        # PREFILL out-proj fusion overlaps the reduce-scatter with the matmul; ARCH GUARD -- the fused op HANGS on Wormhole.
+        self._fuse_out_mmrs_prefill = not self._out_sharded and args.num_devices > 1 and tpc.mmrs_prefill_supported()
         # PREFILL out-proj as column-parallel AG+matmul (takes precedence over the MMRS arm when the
         # col-sharded weight was loaded).
         self._out_colpar_prefill = "out_colpar" in tw
@@ -243,10 +273,7 @@ class TPGatedDeltaNet:
         # Native ttnn.conv1d depthwise prefill; L1_FULL slice keeps it trace-safe.
         # Only used when valid_len is None (masked buckets keep the MAC FIR).
         self._gdn_conv1d = True
-        # Split the depthwise conv over channel chunks so each native L1_FULL conv fits L1: the
-        # per-channel-independent depthwise CB is channel-dominated (not reducible by act-block or
-        # DRAM width/height slicing), and the 35B-A3B GDN qkv_dim_tp overflows a single call on BH.
-        # 27B runs a single chunk (unchanged); see model_config.gdn_conv_channel_chunks.
+        # Split the depthwise conv over channel chunks so each native L1_FULL conv fits L1; 27B runs a single chunk.
         self._conv_chunks = getattr(args, "gdn_conv_channel_chunks", 1)
         self._conv1d_wprep = None  # prepared depthwise weight (populated on first prefill call)
         # Persistent zero sources for trace-safe reset_state_inplace (alloc before any trace)
@@ -256,17 +283,24 @@ class TPGatedDeltaNet:
         self._pending = []  # per-user (rec, conv) states collected during batched per-user prefill
 
     def reset_state(self):
-        def z(shape):
+        def z(shape, mc=None):
             return ttnn.from_torch(
                 torch.zeros(*shape, dtype=torch.bfloat16),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+                memory_config=mc,
             )
 
-        self.conv_states = [z((1, self.B, self.qkv_dim_tp)) for _ in range(self.K)]
-        # fp32 recurrent state by default (QWEN35_GDN_STATE_BF16=1 reverts)
+        # Wormhole: L1-resident at B=1 ONLY (measured): at any larger batch these tip the fused-chunk prefill into a CB/L1 clash.
+        # Blackhole keeps its original placement (from_torch default, i.e. DRAM interleaved).
+        if tpc.is_blackhole():
+            _conv_mc = None
+        else:
+            _conv_mc = ttnn.L1_MEMORY_CONFIG if self.B == 1 else ttnn.DRAM_MEMORY_CONFIG
+        self.conv_states = [z((1, self.B, self.qkv_dim_tp), _conv_mc) for _ in range(self.K)]
+        # fp32 recurrent state (QWEN35_GDN_STATE_BF16=1 reverts); do NOT move to L1 -- all 30 layers' states are resident.
         if os.environ.get("QWEN35_GDN_STATE_BF16") != "1":
             self.rec_state = ttnn.from_torch(
                 torch.zeros(self.B, self.Nv, self.Dk, self.Dv, dtype=torch.float32),
@@ -309,6 +343,21 @@ class TPGatedDeltaNet:
         # Zero cross-chunk conv carry for new sequence
         ttnn.copy(self._zero_conv_carry, self.conv_carry)
 
+    def _spill_rec_state_to_dram(self):
+        """Move rec_state out of L1 before prefill (ported from PR #54572).
+
+        The prefill conv1d + chunk kernel run with very little L1 headroom on Wormhole; a resident
+        [B,Nv,Dk,Dv] recurrent state is the documented "clash with L1 buffers" trigger. No-op when
+        already DRAM or unset. Must NOT run under _stable_state: that path bakes rec_state's
+        address into the prefill/decode traces."""
+        if tpc.is_blackhole() or self.rec_state is None or self._stable_state:
+            return
+        if self.rec_state.memory_config().buffer_type == ttnn.BufferType.DRAM:
+            return
+        spilled = ttnn.to_memory_config(self.rec_state, ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(self.rec_state)
+        self.rec_state = spilled
+
     def _col_proj(self, x, weight, decode_progcfg, out_memory_config=ttnn.DRAM_MEMORY_CONFIG):
         """Column-parallel qkvz projection; DRAM-sharded decode matmul when enabled.
         out_memory_config: decode result placement (default DRAM; L1 keeps it resident)."""
@@ -333,20 +382,45 @@ class TPGatedDeltaNet:
         """
         dev, K, C = self.mesh, self.K, self.qkv_dim_tp
         _dram = ttnn.DRAM_MEMORY_CONFIG
+        _RM = ttnn.ROW_MAJOR_LAYOUT
         Lin = (K - 1) + T
-        # new_state: last K-1 real input tokens (for the next chunk's carry), TILE/DRAM.
-        new_state = ttnn.slice(qkv, (0, T - (K - 1), 0), (1, T, C))
-        new_state = ttnn.to_memory_config(ttnn.to_layout(new_state, ttnn.TILE_LAYOUT), _dram)
-        if conv_state is None:
-            pad = ttnn.zeros(
-                [1, K - 1, C], device=dev, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=_dram
-            )
-            xin = ttnn.concat([pad, qkv], dim=1, memory_config=_dram)
-            ttnn.deallocate(pad)
+        # Wormhole: ONE tile->row-major conversion up front; conv1d needs ROW_MAJOR anyway and it makes the carry slice/concat stick ops.
+        if tpc.is_blackhole():
+            # Blackhole: the original TILE slice/concat, then one conversion to ROW_MAJOR for the conv.
+            new_state = ttnn.slice(qkv, (0, T - (K - 1), 0), (1, T, C))
+            new_state = ttnn.to_memory_config(ttnn.to_layout(new_state, ttnn.TILE_LAYOUT), _dram)
+            if conv_state is None:
+                pad = ttnn.zeros(
+                    [1, K - 1, C], device=dev, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=_dram
+                )
+                xin = ttnn.concat([pad, qkv], dim=1, memory_config=_dram)
+                ttnn.deallocate(pad)
+            else:
+                xin = ttnn.concat([conv_state, qkv], dim=1, memory_config=_dram)
+            xin = ttnn.to_layout(xin, ttnn.ROW_MAJOR_LAYOUT, memory_config=_dram)
+            xin = ttnn.reshape(xin, (1, Lin, 1, C))
         else:
-            xin = ttnn.concat([conv_state, qkv], dim=1, memory_config=_dram)
-        xin = ttnn.to_layout(xin, ttnn.ROW_MAJOR_LAYOUT, memory_config=_dram)
-        xin = ttnn.reshape(xin, (1, Lin, 1, C))
+            qkv_rm = ttnn.to_layout(qkv, _RM, memory_config=_dram)
+
+            # last K-1 real input rows = the next chunk's carry
+            new_state_rm = ttnn.slice(qkv_rm, (0, T - (K - 1), 0), (1, T, C))
+
+            if conv_state is None:
+                pad = ttnn.zeros([1, K - 1, C], device=dev, dtype=ttnn.bfloat16, layout=_RM, memory_config=_dram)
+                xin = ttnn.concat([pad, qkv_rm], dim=1, memory_config=_dram)
+                ttnn.deallocate(pad)
+            else:
+                # callers hold the carry in TILE (it lands in TILE persistent buffers); it is only
+                # [1,K-1,C] = one tile-row, so converting it is cheap next to the chunk itself.
+                cs_rm = conv_state if conv_state.layout == _RM else ttnn.to_layout(conv_state, _RM, memory_config=_dram)
+                xin = ttnn.concat([cs_rm, qkv_rm], dim=1, memory_config=_dram)
+                if cs_rm is not conv_state:
+                    ttnn.deallocate(cs_rm)
+            ttnn.deallocate(qkv_rm)
+            xin = ttnn.reshape(xin, (1, Lin, 1, C))
+            # carry returned in TILE for the callers; one tile-row, not the full chunk.
+            new_state = ttnn.to_memory_config(ttnn.to_layout(new_state_rm, ttnn.TILE_LAYOUT), _dram)
+            ttnn.deallocate(new_state_rm)
         cc = ttnn.init_device_compute_kernel_config(
             dev.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
         )
@@ -355,9 +429,7 @@ class TPGatedDeltaNet:
             weights_dtype=ttnn.bfloat16,
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         )
-        # Depthwise conv over channel chunks (per-channel-independent → concatenation is exact);
-        # n_cc=1 (27B) is the original single call. Weights prepped once per chunk (warmup) so trace
-        # replay stays device-only.
+        # DO NOT LOWER n_cc: fewer chunks is faster and still passes test_gdn_tp, but breaks the full model with a CB/L1 clash.
         w1d_chunks = self.tw["conv_w1d"] if isinstance(self.tw["conv_w1d"], list) else [self.tw["conv_w1d"]]
         n_cc = len(w1d_chunks)
         assert C % n_cc == 0, f"GDN conv channels {C} not divisible by n_cc {n_cc}"
@@ -425,15 +497,17 @@ class TPGatedDeltaNet:
         """Row-parallel out projection: DRAM-sharded decode/prefill matmul (K=gdn_value_dim_tp),
         matching the in-proj. Falls back to plain interleaved on single device (no sharded memcfg)."""
         if getattr(self.args, "proj_1d_decode", False) and x.shape[-2] <= tpc.TILE_SIZE:
-            # Decode: tuned ~32-core 1D matmul (interleaved weight) -> DRAM for the reduce-scatter.
+            # Decode: tuned ~32-core 1D matmul, L1 out -- the reduce-scatter reads it straight back. Placement only.
             return tpc.matmul_1d_decode(
-                x, weight, self.args.gdn_out_decode_1d_progcfg, self.cfg, out_memory_config=ttnn.DRAM_MEMORY_CONFIG
+                x,
+                weight,
+                self.args.gdn_out_decode_1d_progcfg,
+                self.cfg,
+                out_memory_config=ttnn.DRAM_MEMORY_CONFIG if tpc.is_blackhole() else ttnn.L1_MEMORY_CONFIG,
             )
         if not self._out_sharded:
             if x.shape[-2] > tpc.TILE_SIZE:
-                # Prefill non-fused arm (single device, or out-sharded): tuned 2D config vs ttnn-auto.
-                # fp32 [seq,dim] output too big for L1 (42MB) -> DRAM out; separate tt_all_reduce does the RS.
-                # max_cols = device width (11 on BH): wide grid (~10-wide), fp32-neutral.
+                # Prefill non-fused arm: tuned 2D config; the fp32 [seq,dim] output is far too big for L1, so DRAM out.
                 pc = tpc.create_prefill_mlp_matmul_program_config(
                     x.shape[-2],
                     weight.shape[-2],
@@ -489,14 +563,22 @@ class TPGatedDeltaNet:
             # clashes with the scan kernel CBs -> keep DRAM in chunk-prefill; decode (small S) keeps out_mc.
             _z_mc = ttnn.DRAM_MEMORY_CONFIG if (self._fuse_agmm and S > tpc.TILE_SIZE) else out_mc
             z = ttnn.slice(qkvzab, (0, 0, qz), (1, S, az), memory_config=_z_mc)
-            # a,b end mid-tile; slicing straight from qkvzab untilizes the full 4120-wide tensor.
-            # Grab the enclosing tile-aligned block once (no untilize), then split a/b from it (test_gdn_slice_opt).
-            _ab_end = min(az + -(-2 * Nv // tpc.TILE_SIZE) * tpc.TILE_SIZE, qkvzab.shape[-1])  # 2*Nv up to a tile
-            ab = ttnn.slice(qkvzab, (0, 0, az), (1, S, _ab_end), memory_config=out_mc)
+            if tpc.is_blackhole():
+                # Blackhole bare-nv packing: a,b end mid-tile; slicing straight from qkvzab untilizes
+                # the full tensor. Grab the enclosing tile-aligned block once (no untilize), then
+                # split a/b from it (test_gdn_slice_opt).
+                _ab_end = min(az + -(-2 * Nv // tpc.TILE_SIZE) * tpc.TILE_SIZE, qkvzab.shape[-1])  # 2*Nv up to a tile
+                ab = ttnn.slice(qkvzab, (0, 0, az), (1, S, _ab_end), memory_config=out_mc)
+                ttnn.deallocate(qkvzab)
+                a = ttnn.slice(ab, (0, 0, 0), (1, S, Nv), memory_config=out_mc)
+                b = ttnn.slice(ab, (0, 0, Nv), (1, S, 2 * Nv), memory_config=out_mc)
+                ttnn.deallocate(ab)
+                return qkv, z, a, b
+            # Wormhole: a/b each own a whole tile of columns, so both slices start tile-aligned and are plain width truncations.
+            _T = tpc.TILE_SIZE
+            a = ttnn.slice(qkvzab, (0, 0, az), (1, S, az + Nv), memory_config=out_mc)
+            b = ttnn.slice(qkvzab, (0, 0, az + _T), (1, S, az + _T + Nv), memory_config=out_mc)
             ttnn.deallocate(qkvzab)
-            a = ttnn.slice(ab, (0, 0, 0), (1, S, Nv), memory_config=out_mc)
-            b = ttnn.slice(ab, (0, 0, Nv), (1, S, 2 * Nv), memory_config=out_mc)
-            ttnn.deallocate(ab)
             return qkv, z, a, b
         qkvz = self._col_proj(x, self.tw["qkvz"], self.args.gdn_qkvz_progcfg)
         qkv = ttnn.slice(qkvz, (0, 0, 0), (1, S, qz))
@@ -519,24 +601,14 @@ class TPGatedDeltaNet:
         pass and skip all self.* writeback; the caller stitches per-user states via
         assemble_batched_state(). Single-sequence behavior is unchanged when False.
         """
+        self._spill_rec_state_to_dram()
         tw, Nk, Nv, Dk, Dv = self.tw, self.Nk, self.Nv, self.Dk, self.Dv
         if len(x.shape) == 4:
             x = ttnn.reshape(x, (1, x.shape[-2], x.shape[-1]))
         T = x.shape[1]
-        # Pass the RAW valid_len (may be None) to the conv-FIR / seq kernels below — NOT a
-        # `valid_len or T` coercion. A full chunk (valid_len is None) must take the kernels'
-        # valid_len-None path (a static last-(K-1) slice for the conv state), which is trace-safe;
-        # the valid_len-set path builds a one-hot via ttnn.from_torch (a host write) that TT_FATALs
-        # ("Writes are not supported during trace capture") inside the captured chunk-outer trace.
-        # Masked buckets still pass a real valid_len (< T) so their exact masking is unchanged, and
-        # for a full chunk the None slice and the valid_len==T one-hot select the identical rows.
+        # Pass the RAW valid_len (may be None), never `valid_len or T`: the valid_len path does a host write that TT_FATALs under trace.
 
-        # Cross-chunk carry (chunk-outer prefill): when _stable_state, the recurrent + conv
-        # state continue from the persistent buffers (zeroed at sequence start by
-        # reset_state_inplace, so a from-scratch single pass reads zeros == None). The demo
-        # path (_stable_state False) is unchanged: no carry, reassign state.
-        # Per-user prefill (return_state) is always from scratch: must not carry the shared
-        # batched buffer (other users' state) as its initial recurrent/conv state.
+        # Cross-chunk carry under _stable_state only; per-user prefill is always from scratch (must not carry other users' state).
         carry = self._stable_state and not return_state
         if carry and self.conv_carry is None:
             self.reset_state()
@@ -618,18 +690,14 @@ class TPGatedDeltaNet:
             # into the batched buffers. No self.* writeback; tensors are not deallocated here.
             captured = (final_state, conv_new_state)
         else:
-            # ---- Carry recurrent + conv state for the NEXT chunk (chunk-outer prefill). ----
-            # In place (ttnn.copy) when _stable_state so the addresses the prefill/decode traces
-            # baked in stay valid across execute_trace replays and across sequences.
+            # Carry state to the next chunk, in place under _stable_state so the traces' baked addresses stay valid.
             if carry:
                 ttnn.copy(final_state, self.rec_state)
                 ttnn.deallocate(final_state)
                 ttnn.copy(conv_new_state, self.conv_carry)  # [1, K-1, D] last-K-1 conv inputs
             else:
                 self.rec_state = final_state
-            # ---- Finalize the decode conv window (last chunk / short prompt). ----
-            # conv_states[1..K-1] = the last K-1 real conv inputs; [0] is the (shifted-out) zero.
-            # Harmless to refresh every chunk — the last chunk's values are the ones decode reads.
+            # Finalize the decode conv window: conv_states[1..K-1] = the last K-1 real inputs, [0] the shifted-out zero.
             if capture_state:
                 if self.conv_states is None:
                     self.reset_state()
@@ -652,9 +720,7 @@ class TPGatedDeltaNet:
         # Gated RMSNorm + SiLU(z); norm/flatten in L1, gated output in DRAM for out-proj
         _L1 = ttnn.L1_MEMORY_CONFIG
         if self._gdn_fuse_out:
-            # Fuse adapter relayout with per-head rms_norm + head-flatten.
-            # TILE-native head->token relayout (transpose + fold), dropping the
-            # TILE->ROW_MAJOR->TILE round-trip. o is head-major (1,Nv,T,Dv).
+            # TILE-native head->token relayout fused with the per-head rms_norm, dropping a TILE->ROW_MAJOR->TILE round trip.
             n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)
             ttnn.deallocate(o)
             n = ttnn.reshape(n, (1, Nv, T, Dv))
@@ -667,9 +733,7 @@ class TPGatedDeltaNet:
             out_f = ttnn.reshape(out_n, (1, T, self.value_dim_tp), memory_config=_L1)
             ttnn.deallocate(out_n)
         if self._out_colpar_prefill:
-            # Column-parallel out-proj: the gate multiply emits the AGMM input directly as bf16 (the
-            # only numerics change vs the fp32 MMRS arm: activation quantized to bf16 before the
-            # matmul, as every other projection in the model already does).
+            # Column-parallel out-proj; the gate multiply emits the AGMM input as bf16, like every other projection.
             gated = _silu_mul(out_f, z, _L1, dtype=ttnn.bfloat16)
             ttnn.deallocate(out_f)
             ttnn.deallocate(z)
@@ -790,18 +854,7 @@ class TPGatedDeltaNet:
         for t in conv_new_list:
             ttnn.deallocate(t)
 
-    # ------------------------------------------------------------------ #
-    # Per-slot state edits for vLLM continuous batching.
-    # ------------------------------------------------------------------ #
-    # The demo prefills all B users up front and assembles the whole batch at
-    # once (assemble_batched_state). vLLM instead prefills ONE user at a time
-    # into its decode slot while the other rows are mid-decode, and condenses
-    # the batch when a request finishes. GDN's recurrent+conv state is a fixed
-    # [B,...] buffer indexed by physical slot (not paged), so both events need a
-    # single-row edit that preserves the other (live) rows. ttnn has no in-place
-    # row write, so — exactly like assemble_batched_state — these rebuild the
-    # buffer by slice+concat and ttnn.copy the result back (the copy preserves
-    # the decode trace's baked buffer address).
+    # Per-slot state edits for vLLM continuous batching: ttnn has no in-place row write, so rebuild by slice+concat and copy back.
     def _slice_along(self, buf, dim, lo, hi):
         """ttnn.slice of buf along `dim` for indices [lo, hi), other dims kept full."""
         start = [0] * len(buf.shape)
@@ -822,9 +875,7 @@ class TPGatedDeltaNet:
         ), f"GDN prefix state rows B={B}, Nv={self.Nv}, Dk={self.Dk} -> {nhw} is not tile-aligned"
         n_tiles = nhw // ttnn.TILE_SIZE
 
-        # Prefer the tuned 8x6=48-core rectangle, which every TP=4 shape hits (Nv=12 -> nhw=B*1536
-        # -> 48*B tiles). At TP=8 Nv halves to 6, so B=1 gives only 24 tiles and cannot fill 48
-        # cores with tile-aligned shards — fall back to the largest core count that divides evenly.
+        # Prefer the tuned 48-core rectangle; fall back to the largest core count that divides evenly when it cannot tile.
         if n_tiles % 48 == 0:
             num_cores = 48
             grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 5))})
@@ -949,19 +1000,14 @@ class TPGatedDeltaNet:
         kernel's `BH <= compute_grid` assert (B=32); B>4 would need grouped launches (groups <=4).
         The model currently prefills per-user instead (see prefill_paged_peruser).
         """
+        self._spill_rec_state_to_dram()
         tw, Nk, Nv, Dk, Dv = self.tw, self.Nk, self.Nv, self.Dk, self.Dv
         if len(x.shape) == 4:
             x = ttnn.reshape(x, (x.shape[-3], x.shape[-2], x.shape[-1]))  # [.,B,T,dim] -> [B,T,dim]
         B, T = x.shape[0], x.shape[1]
         D = self.qkv_dim_tp
 
-        # Route through the shared per-token projection (handles _fuse_ab/_fuse_agmm — required
-        # when the caller's norm skipped its post-AG and x arrives K-sharded, e.g. prefill_paged_
-        # grouped). A plain ttnn.linear(x, tw["qkvz"]) here would (a) mismatch the K-sharded width
-        # against the fused-weight's full-K height, and (b) KeyError on tw["ab"], which doesn't
-        # exist when _fuse_ab folds a/b into tw["qkvz"]. Flatten the batch dim into the token dim
-        # (the projection is per-token; user boundaries don't matter to a linear layer) since
-        # _project_qkvzab's slicing assumes a leading dim of 1.
+        # Route through the shared per-token projection: a plain ttnn.linear would mismatch the K-sharded width and miss _fuse_ab.
         x_flat = ttnn.reshape(x, (1, B * T, x.shape[-1]))
         qkv_flat, z_flat, a_flat, b_flat = self._project_qkvzab(x_flat, B * T, out_mc=ttnn.DRAM_MEMORY_CONFIG)
         qkv = ttnn.reshape(qkv_flat, (B, T, D))
@@ -1104,10 +1150,7 @@ class TPGatedDeltaNet:
         if len(x.shape) == 4:
             x = ttnn.reshape(x, (1, x.shape[-2], x.shape[-1]))
 
-        # Active decode width, taken from the input. Normally == Bmax. BUCKETED decode: a request
-        # feeds B<Bmax tokens and the whole step runs on state rows [0:B]; idle rows [B:Bmax] are
-        # preserved. Conv taps are per-channel (broadcast over batch), so the conv weighted-sum
-        # works at any width. The B==Bmax path is byte-identical to before.
+        # Active decode width from the input; bucketed decode runs rows [0:B] and preserves idle rows [B:Bmax].
         B = x.shape[-2]
 
         qkv, z, a, b = self._project_qkvzab(x, B, out_mc=_L1)
@@ -1115,48 +1158,68 @@ class TPGatedDeltaNet:
         # Conv1d shift-register + weighted sum + SiLU
         st = self.conv_states
         if B < Bmax:
-            # Bucketed decode: active requests occupy a contiguous prefix [0:B]; idle rows [B:Bmax]
-            # hold no live request (a slot is re-initialized by prefill/write_slot when reused), so
-            # they are don't-care. Pad the width-B new input up to Bmax and run the SAME full-width
-            # shift-register as below -- the conv sum's active rows [0:B] are exact and the downstream
-            # q/k/v slices take [0:B]. This keeps the op COUNT identical to the baseline path (just a
-            # single pad), vs a per-row slice/concat that added ~4*K ops/layer and erased the width win.
-            qkv_p = ttnn.pad(qkv, [(0, 0), (0, Bmax - B), (0, 0)], value=0.0, memory_config=_L1)
+            # Pad to Bmax and run the same full-width shift register; pad_and_free, NOT pad + deallocate -- this pad can alias.
+            qkv = tpc.pad_and_free(qkv, [(0, 0), (0, Bmax - B), (0, 0)], value=0.0, memory_config=_L1)
+        # Wormhole: FIR runs BEFORE the shift, reading the newest token from `qkv`; taps are oldest->newest so this indexes
+        # the same K values. Blackhole keeps the original shift-then-FIR.
+        bh = tpc.is_blackhole()
+        if bh:
+            for j in range(self.K - 1):
+                ttnn.copy(st[j + 1], st[j])
+            ttnn.copy(qkv, st[self.K - 1])
             ttnn.deallocate(qkv)
-            qkv = qkv_p
-        for j in range(self.K - 1):
-            ttnn.copy(st[j + 1], st[j])
-        ttnn.copy(qkv, st[self.K - 1])
-        ttnn.deallocate(qkv)
-        conv = ttnn.multiply(st[0], tw["conv_taps"][0], memory_config=_L1)
-        for j in range(1, self.K):
-            conv = ttnn.mac(st[j], tw["conv_taps"][j], conv)
+            conv = ttnn.multiply(st[0], tw["conv_taps"][0], memory_config=_L1)
+            for j in range(1, self.K):
+                conv = ttnn.mac(st[j], tw["conv_taps"][j], conv)
+        else:
+            conv = ttnn.multiply(st[1], tw["conv_taps"][0], memory_config=_L1)
+            for j in range(1, self.K - 1):
+                conv = ttnn.mac(st[j + 1], tw["conv_taps"][j], conv)
+            conv = ttnn.mac(qkv, tw["conv_taps"][self.K - 1], conv)
+            # Roll the window forward; the remaining K-1 copies are STRUCTURAL under tracing (baked addresses forbid rotating an index).
+            for j in range(1, self.K - 1):
+                ttnn.copy(st[j + 1], st[j])
+            ttnn.copy(qkv, st[self.K - 1])
+            ttnn.deallocate(qkv)
+        # FIR over the K taps. KEEP ttnn.mac: _write_state_wh's "mac is slower" note is about a BROADCAST shape, not this one.
         conv = ttnn.silu(conv, memory_config=_L1)
 
         kd = self.key_dim_tp
-        q = ttnn.reshape(ttnn.slice(conv, (0, 0, 0), (1, B, kd)), (B, Nk, Dk))
-        k = ttnn.reshape(ttnn.slice(conv, (0, 0, kd), (1, B, 2 * kd)), (B, Nk, Dk))
-        v = ttnn.reshape(ttnn.slice(conv, (0, 0, 2 * kd), (1, B, self.qkv_dim_tp)), (B, Nv, Dv))
-        ttnn.deallocate(conv)
-
-        # GQA expand Q/K Nk→Nv; recurrence L2-norms + scales internally
+        # GQA expansion is deferred to the recurrence, where repeat_interleave hits its TILE-native kernel. fp32 decode by default.
+        _hp = os.environ.get("QWEN35_GDN_DECODE_BF16") != "1"
+        # q/k are adjacent and same-width, so hand them over fused; gated on the SAME predicate the dispatch uses.
+        _fuse_qk = wh_decode_fork_applies(B, Nk, Dk, Dv, gqa_repeat=Nv // Nk, high_precision=_hp)
+        q = k = qk = None
         rf = Nv // Nk
-        q = ttnn.repeat_interleave(q, rf, dim=1)
-        k = ttnn.repeat_interleave(k, rf, dim=1)
-        # Decode: hand q/k/v to the recurrent kernel in L1. The kernel typecasts + does a LOCAL
-        # l2-norm (no cross-device gather), so placement is output-neutral here (unlike SDPA-q,
-        # which hard-requires DRAM, and unlike the residual→DistributedNorm all-gather).
-        q = ttnn.reshape(q, (B, 1, Nv, Dk), memory_config=_L1)
-        k = ttnn.reshape(k, (B, 1, Nv, Dk), memory_config=_L1)
-        v = ttnn.reshape(v, (B, 1, Nv, Dv), memory_config=_L1)
+        if bh:
+            # Blackhole: original prep -- GQA expand Q/K Nk->Nv here, hand the recurrence gqa_repeat=1.
+            q = ttnn.reshape(ttnn.slice(conv, (0, 0, 0), (1, B, kd)), (B, Nk, Dk))
+            k = ttnn.reshape(ttnn.slice(conv, (0, 0, kd), (1, B, 2 * kd)), (B, Nk, Dk))
+            v = ttnn.reshape(ttnn.slice(conv, (0, 0, 2 * kd), (1, B, self.qkv_dim_tp)), (B, Nv, Dv))
+            ttnn.deallocate(conv)
+            q = ttnn.repeat_interleave(q, rf, dim=1)
+            k = ttnn.repeat_interleave(k, rf, dim=1)
+            q = ttnn.reshape(q, (B, 1, Nv, Dk), memory_config=_L1)
+            k = ttnn.reshape(k, (B, 1, Nv, Dk), memory_config=_L1)
+            v = ttnn.reshape(v, (B, 1, Nv, Dv), memory_config=_L1)
+        elif _fuse_qk:
+            qk = ttnn.reshape(ttnn.slice(conv, (0, 0, 0), (1, B, 2 * kd)), (B, 1, 2 * Nk, Dk), memory_config=_L1)
+        else:
+            q = ttnn.reshape(ttnn.slice(conv, (0, 0, 0), (1, B, kd)), (B, 1, Nk, Dk), memory_config=_L1)
+            k = ttnn.reshape(ttnn.slice(conv, (0, 0, kd), (1, B, 2 * kd)), (B, 1, Nk, Dk), memory_config=_L1)
+        # Under the fork, reshape v straight to rowed [B,Nv,1,Dv]; only sound under this gate -- it pads to 8x the tiles.
+        if not bh:
+            _v_shape = (B, Nv, 1, Dv) if _fuse_qk else (B, 1, Nv, Dv)
+            v = ttnn.reshape(ttnn.slice(conv, (0, 0, 2 * kd), (1, B, self.qkv_dim_tp)), _v_shape, memory_config=_L1)
+            ttnn.deallocate(conv)
 
         beta = ttnn.reshape(ttnn.sigmoid(b, memory_config=_L1), (B, 1, Nv))
         ttnn.deallocate(b)
+        # DO NOT add dtype=float32 here to save the recurrence's typecast of g: it breaks test_gdn_tp_peruser_state[B32].
         g = ttnn.multiply(tw["neg_exp_A"], _softplus_add(a, tw["dt_bias"]), memory_config=_L1)
         ttnn.deallocate(a)
         g = ttnn.reshape(g, (B, 1, Nv))
 
-        # fp32 decode step by default (QWEN35_GDN_DECODE_BF16=1 reverts)
         init_state = self.rec_state if B == Bmax else self._slice_along(self.rec_state, 0, 0, B)
         o, new_rec = recurrent_gated_delta_rule_decode_ttnn(
             q,
@@ -1167,7 +1230,12 @@ class TPGatedDeltaNet:
             scale=self.scale,
             initial_state=init_state,
             device=self.mesh,
-            high_precision=(os.environ.get("QWEN35_GDN_DECODE_BF16") != "1"),
+            high_precision=_hp,
+            gqa_repeat=1 if bh else rf,
+            q_norm_weight=tw.get("qn_w"),
+            k_norm_weight=tw.get("kn_w"),
+            qk_fused=qk,
+            v_rowed=_fuse_qk,
         )
         if init_state is not self.rec_state:
             ttnn.deallocate(init_state)
@@ -1181,9 +1249,13 @@ class TPGatedDeltaNet:
         else:
             self.rec_state = new_rec
 
-        out_r = ttnn.reshape(o, (B, Nv, Dv))
-        out_n = ttnn.rms_norm(out_r, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)  # gated norm (no +1)
-        ttnn.deallocate(out_r)
+        # Gated norm (no +1). EPSILON IS NOT CONSTANT: the fused-q/k path makes o Dk**0.5 larger, and rms_norm(s*x, s^2*eps) == rms_norm(x, eps).
+        if bh:
+            out_r = ttnn.reshape(o, (B, Nv, Dv))
+            out_n = ttnn.rms_norm(out_r, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)  # gated norm (no +1)
+            ttnn.deallocate(out_r)
+        else:
+            out_n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6 * (Dk if _fuse_qk else 1), memory_config=_L1)
         out_f = ttnn.reshape(out_n, (1, B, self.value_dim_tp))
         ttnn.deallocate(out_n)
         gated = _silu_mul(out_f, z, _L1)
@@ -1193,6 +1265,7 @@ class TPGatedDeltaNet:
         partial = self._row_proj(gated, tw["out"])
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, B, partial.shape[-1]))
+        # Sync/latency-bound and NOT reducible here: fusing it into the out-proj hangs on Wormhole, and the CCL knobs do nothing.
         out = tt_all_reduce(
             partial,
             self.mesh,

@@ -12,7 +12,12 @@ import torch
 
 import ttnn
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
-from models.demos.blackhole.qwen36.tt.attention.rope_tp import apply_partial_rope_decode, apply_partial_rope_prefill
+from models.demos.blackhole.qwen36.tt.attention.rope_tp import (
+    apply_partial_rope_decode,
+    apply_partial_rope_decode_bh,
+    apply_partial_rope_prefill,
+    shard_rope_tables_decode,
+)
 from models.tt_transformers.tt.ccl import tt_all_reduce
 
 
@@ -31,10 +36,7 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
     # De-interleave [q,gate] per head → contiguous q/gate slices (avoids ~5.3ms relayout).
     qg_deint = fused_qkv
 
-    # TP > n_kv_heads (e.g. 27B's 4 KV heads on TP=8): there is no whole KV head per device, so
-    # pre-expand K/V to tp*head_dim rows where device d holds the head its GQA query group maps
-    # to (devices 2d, 2d+1 share head d at TP=8). The per-device slicing below is then uniform.
-    # No-op when tp <= n_kv_heads, so TP=4 weights stay bit-identical.
+    # When TP > n_kv_heads there is no whole KV head per device, so pre-expand K/V; a no-op when tp <= n_kv_heads.
     kv_rep = lambda w: tpc.replicate_kv_weight(w, args.n_kv_heads, args.num_devices, args.head_dim)
     k_proj, v_proj = kv_rep(state_dict["k_proj.weight"]), kv_rep(state_dict["v_proj.weight"])
 
@@ -112,9 +114,12 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
         cache_path=c("wo.dramshard" if wo_sharded else "wo"),
         dtype=ttnn.bfloat8_b,
     )
-    # QK norms: HF-correct zero-centered (1+weight), used uniformly at prefill AND decode
-    tw["q_norm"] = tpc.replicate(state_dict["q_norm.weight"].to(torch.float32) + 1.0, mesh, None)
-    tw["k_norm"] = tpc.replicate(state_dict["k_norm.weight"].to(torch.float32) + 1.0, mesh, None)
+    # QK norms: HF-correct zero-centered (1+weight), used uniformly at prefill AND decode.
+    # Wormhole: ROW_MAJOR gamma layout -> folded into ttnn.rms_norm's `weight=` (one kernel, not
+    # norm+multiply). Blackhole keeps the TILE gain applied by a separate multiply (TPAttention._qk_norm).
+    _rep_norm = tpc.replicate if tpc.is_blackhole() else tpc.replicate_rmsnorm_weight
+    tw["q_norm"] = _rep_norm(state_dict["q_norm.weight"].to(torch.float32) + 1.0, mesh, None)
+    tw["k_norm"] = _rep_norm(state_dict["k_norm.weight"].to(torch.float32) + 1.0, mesh, None)
     return tw
 
 
@@ -144,8 +149,6 @@ class TPAttention:
         # Fuse prefill norm-allgather + fused-QKV in-proj (all_gather_minimal_matmul_async).
         # Norm's prefill post-AG disabled in layer.py; decode path unchanged.
         self._fuse_agmm = self._fused_qkv
-        # Decode head split/merge via nlp_create/concat_heads_decode (the batched-decode idiom).
-        self._use_nlp_decode_heads = True
         self.k_caches = None
         self.v_caches = None
         # External paged KV cache (vLLM/contract path); internal caches kept for demo fallback
@@ -168,12 +171,34 @@ class TPAttention:
                 self._col_proj(x, tw["wk"], self.args.attn_k_progcfg),
                 self._col_proj(x, tw["wv"], self.args.attn_v_progcfg),
             )
-        # Prefill: x is K-sharded (norm skipped its AG) -> fused all-gather + QKV matmul. Output stays
-        # DRAM: L1 clashes with a downstream matmul's CBs (verified; full-attn has more L1 pressure here).
+        # Prefill gathers x back to full K; long chunks use the FUSED all-gather+matmul, short ones gather separately. Output stays DRAM.
         if self._fuse_agmm and x.shape[-2] > tpc.TILE_SIZE:
-            qkv = tpc.all_gather_matmul_prefill(
-                x, tw["wqkv_fused"], self.tt_ccl, self.compute_cfg, self.args.ccl_topology()
-            )
+            # Blackhole always takes the fused op; the short-prefill split is Wormhole-only.
+            if tpc.is_blackhole() or x.shape[-2] >= tpc.AGMM_MIN_SEQ:
+                qkv = tpc.all_gather_matmul_prefill(
+                    x, tw["wqkv_fused"], self.tt_ccl, self.compute_cfg, self.args.ccl_topology()
+                )
+            else:
+                x_full = tpc.all_gather_prefill(x, self.tt_ccl, self.args.ccl_topology())
+                # Short prefill: the 2D kernel is core-starved at this M (tpc.short_prefill_1d_progcfg).
+                pc_1d = tpc.short_prefill_1d_progcfg(
+                    x_full.shape[-2],
+                    self.args.dim,
+                    tw["wqkv_fused"].shape[-1],
+                    num_cores=40,
+                    grid_w=self.args.decode_grid_w,
+                )
+                if pc_1d is not None:
+                    qkv = ttnn.linear(
+                        x_full,
+                        tw["wqkv_fused"],
+                        compute_kernel_config=self.compute_cfg,
+                        program_config=pc_1d,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                else:
+                    qkv = self._col_proj(x_full, tw["wqkv_fused"], self.args.attn_qkv_fused_progcfg)
+                ttnn.deallocate(x_full)
         elif getattr(self.args, "proj_1d_decode", False) and x.shape[-2] <= tpc.TILE_SIZE:
             # Decode: small-grid 1D matmul (interleaved weight). Output DRAM so _make_heads_decode's
             # to_memory_config(.,L1) stays a real copy before it deallocates the source.
@@ -228,10 +253,19 @@ class TPAttention:
             )
         if not self._wo_sharded:
             if x.shape[-2] > tpc.TILE_SIZE:
-                # Prefill: FPU-tuned 2D config beats ttnn-auto's 1x1 stall; L1 output (gated stays DRAM)
-                # feeds the separate RS. max_cols = device width (11 on BH): wide grid (~10-wide) + the
-                # existing L1-out. See test_mlp_matmul_sweep_prefill.
-                pc = tpc.create_prefill_mlp_matmul_program_config(
+                # Prefill: FPU-tuned 2D config beats ttnn-auto; short prefill (Wormhole only) switches to 1D,
+                # where the 2D kernel is core-starved.
+                pc = (
+                    None
+                    if tpc.is_blackhole()
+                    else tpc.short_prefill_1d_progcfg(
+                        x.shape[-2],
+                        weight.shape[-2],
+                        weight.shape[-1],
+                        num_cores=48,
+                        grid_w=getattr(self.args, "decode_grid_w", 8),
+                    )
+                ) or tpc.create_prefill_mlp_matmul_program_config(
                     x.shape[-2],
                     weight.shape[-2],
                     weight.shape[-1],
@@ -243,7 +277,8 @@ class TPAttention:
                     weight,
                     compute_kernel_config=self.compute_cfg,
                     program_config=pc,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    # L1 output on BH only; WH has no room beside the CBs (tpc.prefill_l1_output_ok).
+                    memory_config=ttnn.L1_MEMORY_CONFIG if tpc.prefill_l1_output_ok() else ttnn.DRAM_MEMORY_CONFIG,
                 )
             return ttnn.linear(x, weight, compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return tpc.sharded_decode_matmul(
@@ -316,20 +351,22 @@ class TPAttention:
     def _make_heads_decode(self, qg, kp, vp, B):
         """Decode head-split via nlp_create_qkv_heads_decode (the batched-decode idiom).
 
-        Returns (q, gate, k, v): q [1,B,NH,HD], gate [1,B,NH,HD], k/v [1,B,NKV,HD], all L1-interleaved.
-        The kernel only shuffles a fused Q|K|V, so the gate half of qg is split off first and applied
-        post-SDPA exactly like the reshape path. The fused tensor is kept in L1 to dodge the Blackhole
-        interleaved-reader bug (tt-metal #16667: DRAM input zeros odd-indexed Q rows). The height-sharded
-        output is returned to L1-interleaved so the existing rms_norm / partial-rope / SDPA-decode path
-        is unchanged.
+        Returns (q, gate_flat, k, v): q [1,B,NH,HD] and k/v [1,B,NKV,HD] HEIGHT-SHARDED one user per
+        core (heads padded to a tile), gate_flat [1,1,B,NH*HD] flat. The kernel only shuffles a fused
+        Q|K|V, so the gate half of qg is split off first and applied post-SDPA. The fused tensor is
+        kept in L1 to dodge the Blackhole interleaved-reader bug (tt-metal #16667: DRAM input zeros
+        odd-indexed Q rows).
+
+        The head tensors stay SHARDED: that layout is exactly what paged_update_cache, the decode-mode
+        rope and SDPA-decode want, so v reaches the KV cache with no data movement at all and q/k only
+        round-trip through L1-interleaved for the rms_norm (which has no height-sharded kernel).
+        gate_flat is left flat — the gate is applied after nlp_concat_heads_decode, whose column order
+        is the same h*HD+d, so no head-major reshape is needed (bit-identical, saves a relayout).
         """
         NH, NKV, HD = self.NH, self.NKV, self.HD
         _L1 = ttnn.L1_MEMORY_CONFIG
         if vp is None:
-            # Fused [q|k|v|gate] weight (_qkv sentinel vp=None): qg is already the contiguous [q|k|v]
-            # the decode head-split wants — feed it directly, no concat. kp is the gate. qkv must be
-            # L1 (tt-metal #16667: DRAM input zeros odd Q rows); one to_memory_config replaces the
-            # old 3-way concat (which had also served to land qkv in L1).
+            # Fused [q|k|v|gate] weight: qg is already the contiguous [q|k|v] the head-split wants. qkv MUST be L1 (tt-metal #16667 zeros odd Q rows from DRAM).
             qkv = ttnn.to_memory_config(qg, _L1)
             ttnn.deallocate(qg)
             gate_flat = kp
@@ -352,48 +389,58 @@ class TPAttention:
             qkv, num_heads=NH, num_kv_heads=NKV, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
         )
         ttnn.deallocate(qkv)
-        q = ttnn.sharded_to_interleaved(q, _L1)
-        k = ttnn.sharded_to_interleaved(k, _L1)
-        v = ttnn.sharded_to_interleaved(v, _L1)
-        gate = ttnn.reshape(gate_flat, (1, B, NH, HD), memory_config=_L1)
-        ttnn.deallocate(gate_flat)
-        return q, gate, k, v
+        return q, gate_flat, k, v
 
-    def _concat_heads_decode(self, gated, B):
-        """Decode concat-heads via nlp_concat_heads_decode. gated [1,B,NH,HD] L1 -> [1,B,NH*HD] L1.
+    def _qk_norm(self, x, weight):
+        """(1+w) RMS norm over the head dim on an L1-interleaved tensor. Wormhole folds the gain into
+        the norm kernel (ROW_MAJOR gamma); Blackhole keeps the original norm + multiply."""
+        _L1 = ttnn.L1_MEMORY_CONFIG
+        if tpc.is_blackhole():
+            return ttnn.multiply(ttnn.rms_norm(x, epsilon=1e-6, memory_config=_L1), weight, memory_config=_L1)
+        return ttnn.rms_norm(x, epsilon=1e-6, weight=weight, memory_config=_L1)
 
-        The op wants a height-sharded input ([1,B,heads-padded-to-32,HD], one core per user), so the
-        gated SDPA output is resharded across `B` cores first (a grid-width-aligned rectangle — a
-        ragged core set is rejected by the height-sharded mem config). Output is width-sharded, then
-        returned to L1-interleaved so the downstream o_proj matmul is unchanged.
+    def _qk_norm_decode(self, x, weight):
+        """(1+w) RMS norm over the head dim, returned in the head-shard layout it came in with.
+
+        ttnn.rms_norm has no HEIGHT_SHARDED program factory (layernorm rejects it outright), so the
+        head tensor round-trips through L1-interleaved. The gain is folded into the norm kernel via
+        ``weight=`` (ROW_MAJOR gamma) instead of a separate broadcast multiply.
         """
-        from models.tt_transformers.tt.model_config import num_to_corerange
+        _L1 = ttnn.L1_MEMORY_CONFIG
+        mc = x.memory_config()
+        x_i = ttnn.sharded_to_interleaved(x, _L1)
+        ttnn.deallocate(x)
+        x_n = ttnn.rms_norm(x_i, epsilon=1e-6, weight=weight, memory_config=_L1)
+        ttnn.deallocate(x_i)
+        out = ttnn.to_memory_config(x_n, mc)
+        ttnn.deallocate(x_n)
+        return out
 
+    def _concat_heads_decode(self, attn, head_mc, B):
+        """Decode concat-heads via nlp_concat_heads_decode. attn [1,B,NH,HD] -> [1,1,B,NH*HD] L1.
+
+        The op wants a height-sharded input ([1,B,heads-padded-to-32,HD], one core per user) — the
+        very layout nlp_create_qkv_heads_decode produced and SDPA-decode wrote back into, so the
+        reshard below is a no-op except on the multi-KV-head configs where SDPA can't emit sharded.
+        Output is width-sharded, then returned to L1-interleaved for the gate + o_proj matmul.
+        """
         NH, HD = self.NH, self.HD
         _L1 = ttnn.L1_MEMORY_CONFIG
-        grid = self.mesh.compute_with_storage_grid_size()
-        gx = min(B, grid.x)
-        if B >= gx and B % gx != 0:
-            gx = max(x for x in range(gx, 0, -1) if B % x == 0 and B // x <= grid.y)
-        core_grid = ttnn.CoreRangeSet({num_to_corerange(B, grid_x=gx, grid_y=grid.y)})
-        shard_cfg = ttnn.create_sharded_memory_config(
-            shape=(ttnn.TILE_SIZE, HD),
-            core_grid=core_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-        gated_sh = ttnn.to_memory_config(gated, shard_cfg)
-        ttnn.deallocate(gated)
-        out_sh = ttnn.experimental.nlp_concat_heads_decode(gated_sh, num_heads=NH)
-        ttnn.deallocate(gated_sh)
+        if attn.memory_config() != head_mc:
+            attn_sh = ttnn.to_memory_config(attn, head_mc)
+            ttnn.deallocate(attn)
+            attn = attn_sh
+        out_sh = ttnn.experimental.nlp_concat_heads_decode(attn, num_heads=NH)
+        ttnn.deallocate(attn)
         out = ttnn.sharded_to_interleaved(out_sh, _L1)  # [1, 1, 32, NH*HD] (batch padded to 32)
         ttnn.deallocate(out_sh)
-        # nlp_concat_heads_decode always emits batch padded to 32; slice back to the real B before
-        # the reshape (a no-op at B=32, required for B<32 e.g. the B=1 demo/vLLM path).
+        # nlp_concat_heads_decode always emits batch padded to 32; slice back to the real B (a no-op
+        # at B=32, required for B<32 e.g. the B=1 demo/vLLM path).
         if out.shape[-2] != B:
-            out = ttnn.slice(out, (0, 0, 0, 0), (1, 1, B, NH * HD), memory_config=_L1)
-        return ttnn.reshape(out, (1, B, NH * HD), memory_config=_L1)
+            out_b = ttnn.slice(out, (0, 0, 0, 0), (1, 1, B, NH * HD), memory_config=_L1)
+            ttnn.deallocate(out)
+            out = out_b
+        return out
 
     def reset_state(self):
         def z():
@@ -419,16 +466,8 @@ class TPAttention:
 
         q, gate_flat, k, v = self._make_heads(qg, kp, vp, S)
 
-        q = ttnn.multiply(
-            ttnn.rms_norm(q, epsilon=1e-6, memory_config=ttnn.L1_MEMORY_CONFIG),
-            tw["q_norm"],
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-        k = ttnn.multiply(
-            ttnn.rms_norm(k, epsilon=1e-6, memory_config=ttnn.L1_MEMORY_CONFIG),
-            tw["k_norm"],
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
+        q = self._qk_norm(q, tw["q_norm"])
+        k = self._qk_norm(k, tw["k_norm"])
         q = apply_partial_rope_prefill(q, cos_tt, sin_tt, NH, self.rope_dim)
         k = apply_partial_rope_prefill(k, cos_tt, sin_tt, NKV, self.rope_dim)
 
@@ -441,11 +480,7 @@ class TPAttention:
 
         q8, k8, v8 = q, k, v
         padded = max(32, ((S + 31) // 32) * 32)
-        # SDPA flash chunk: 128 for S>=2048, 64 below. (256 wins in ISOLATION at S=3072/4096
-        # -- test_sdpa_prefill_opt -- but in the full model its larger CBs clash with the resident
-        # attn-input L1 buffer during a single-pass prefill of S>2048 (prefill_tp/generate_tp;
-        # program.cpp "circular buffers ... clash with L1 buffers"). Production serving chunks
-        # prefill at <=2048, so this path never sees S>2048 and 256 has no reachable win.)
+        # SDPA flash chunk: 128 for S>=2048, 64 below. 256 wins in isolation but its CBs clash with the resident attn input in the full model.
         ch = min(128 if S >= 2048 else 64, padded)
         sdpa_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(8, 8), exp_approx_mode=False, q_chunk_size=ch, k_chunk_size=ch
@@ -500,10 +535,7 @@ class TPAttention:
 
     def forward_decode(self, x, cur_pos_tt, cos_tt, sin_tt, page_table=None):
         tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
-        # Active decode width, taken from the input (x is [1,1,B,dim_frac]). Normally == self.B.
-        # BUCKETED decode: a request feeds B<self.B users; every shape/reshape/rope/head-split and
-        # the KV-update shard config below run at this width, and the paged SDPA reads only these B
-        # users' pages via the width-B page_table. The B==self.B path is byte-identical to before.
+        # Active decode width from the input; under bucketed decode everything below runs at this width and SDPA reads only these B users' pages.
         B = x.shape[-2]
         _L1 = ttnn.L1_MEMORY_CONFIG  # keep decode head-prep + attn output L1-resident
         use_paged = self.use_paged and page_table is not None
@@ -511,45 +543,146 @@ class TPAttention:
             self.reset_state()
 
         qg, kp, vp = self._qkv(x)
+        if tpc.is_blackhole():
+            return self._forward_decode_bh(qg, kp, vp, B, cur_pos_tt, cos_tt, sin_tt, page_table, use_paged)
 
-        if self._use_nlp_decode_heads:
-            q, gate, k, v = self._make_heads_decode(qg, kp, vp, B)
-        elif vp is None:
-            # Fused [q|k|v|gate] weight (_qkv sentinel vp=None): qg is contiguous [q|k|v], kp is gate.
-            # Slice q/k/v heads directly from qg; gate is the separate block.
-            q = ttnn.reshape(
-                ttnn.slice(qg, (0, 0, 0, 0), (1, 1, B, NH * HD), memory_config=_L1), (1, B, NH, HD), memory_config=_L1
+        # q/k/v come out HEIGHT-SHARDED, one user per core, heads padded to a tile — the layout the
+        # rope, the KV-cache update and SDPA-decode all take, so they stay in it end to end.
+        q, gate_flat, k, v = self._make_heads_decode(qg, kp, vp, B)
+        head_mc = q.memory_config()
+
+        # QK norm — (1+w), matching prefill/HF, folded into the rms_norm kernel.
+        q = self._qk_norm_decode(q, tw["q_norm"])
+        k = self._qk_norm_decode(k, tw["k_norm"])
+
+        # Decode cos/sin arrive [1,B,1,rope_dim] interleaved; height-shard them once onto the head
+        # grid (q and k share the pair) for the op's native decode mode.
+        cos_s, sin_s = shard_rope_tables_decode(cos_tt, sin_tt, head_mc)
+        q = apply_partial_rope_decode(q, cos_s, sin_s, NH, B, self.rope_dim)
+        k = apply_partial_rope_decode(k, cos_s, sin_s, NKV, B, self.rope_dim)
+        ttnn.deallocate(cos_s)
+        ttnn.deallocate(sin_s)
+
+        # SDPA-decode uses the real device grid, not a hardcoded 64: cores_per_head = grid/B, so the extra cores pay off at long context.
+        _sdpa_grid = self.mesh.compute_with_storage_grid_size()
+        sdpa_dec_cfg = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(_sdpa_grid.x, _sdpa_grid.y),
+            exp_approx_mode=False,
+            q_chunk_size=0,
+            k_chunk_size=0,
+        )
+        # Emit SDPA straight into the head shard so nlp_concat_heads_decode needs no reshard. The op
+        # refuses a sharded output for a multi-KV-head cache (is_gqa), which keeps the interleaved one.
+        sdpa_out_mc = head_mc if NKV == 1 else _L1
+        if use_paged:
+            # External paged KV: update at cur_pos, then paged SDPA-decode. k/v are already the
+            # one-user-per-core height shard paged_update_cache requires — no pad, no reshard.
+            keys, values = self.paged_k, self.paged_v
+            # paged_update_cache takes bf16/fp32 and casts to bf8 cache; decode K/V stay bf16 (prefill fill needs bf8)
+            ttnn.experimental.paged_update_cache(keys, k, update_idxs_tensor=cur_pos_tt, page_table=page_table)
+            ttnn.experimental.paged_update_cache(values, v, update_idxs_tensor=cur_pos_tt, page_table=page_table)
+            ttnn.deallocate(k)
+            ttnn.deallocate(v)
+            attn_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+                q,
+                keys,
+                values,
+                page_table_tensor=page_table,
+                cur_pos_tensor=cur_pos_tt,
+                scale=self.scale,
+                program_config=sdpa_dec_cfg,
+                memory_config=sdpa_out_mc,
             )
-            k = ttnn.reshape(
-                ttnn.slice(qg, (0, 0, 0, NH * HD), (1, 1, B, NH * HD + NKV * HD), memory_config=_L1),
-                (1, B, NKV, HD),
-                memory_config=_L1,
-            )
-            v = ttnn.reshape(
-                ttnn.slice(qg, (0, 0, 0, NH * HD + NKV * HD), (1, 1, B, NH * HD + 2 * NKV * HD), memory_config=_L1),
-                (1, B, NKV, HD),
-                memory_config=_L1,
-            )
-            ttnn.deallocate(qg)
-            gate = ttnn.reshape(kp, (1, B, NH, HD), memory_config=_L1)
-            ttnn.deallocate(kp)
+            ttnn.deallocate(q)
         else:
-            qg_r = ttnn.reshape(qg, (1, B, NH, HD * 2), memory_config=_L1)
-            ttnn.deallocate(qg)
-            q = ttnn.slice(qg_r, (0, 0, 0, 0), (1, B, NH, HD), memory_config=_L1)
-            gate = ttnn.slice(qg_r, (0, 0, 0, HD), (1, B, NH, HD * 2), memory_config=_L1)
-            ttnn.deallocate(qg_r)
-            k = ttnn.reshape(kp, (1, B, NKV, HD), memory_config=_L1)
-            ttnn.deallocate(kp)
-            v = ttnn.reshape(vp, (1, B, NKV, HD), memory_config=_L1)
-            ttnn.deallocate(vp)
+            # Internal per-head KV caches (test / generate_tp oracle path).
+            if NKV == 1:
+                ttnn.experimental.paged_update_cache(self.k_caches[0], k, update_idxs_tensor=cur_pos_tt)
+                ttnn.experimental.paged_update_cache(self.v_caches[0], v, update_idxs_tensor=cur_pos_tt)
+                ttnn.deallocate(k)
+                ttnn.deallocate(v)
+            else:
+                # One cache per KV head: slice the heads apart, which needs an interleaved tensor.
+                k_i = ttnn.sharded_to_interleaved(k, _L1)
+                ttnn.deallocate(k)
+                v_i = ttnn.sharded_to_interleaved(v, _L1)
+                ttnn.deallocate(v)
+                for h in range(NKV):
+                    k_h = ttnn.slice(k_i, (0, 0, h, 0), (1, B, h + 1, HD))
+                    v_h = ttnn.slice(v_i, (0, 0, h, 0), (1, B, h + 1, HD))
+                    # pad_and_free, NOT pad + deallocate: this pad aliases its input (tpc.pad_and_free).
+                    k_hp = tpc.pad_and_free(k_h, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
+                    v_hp = tpc.pad_and_free(v_h, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
+                    _kv_cfg = self._kv_shard_cfg(B)
+                    k_sh = ttnn.to_memory_config(k_hp, _kv_cfg)
+                    v_sh = ttnn.to_memory_config(v_hp, _kv_cfg)
+                    ttnn.deallocate(k_hp)
+                    ttnn.deallocate(v_hp)
+                    ttnn.experimental.paged_update_cache(self.k_caches[h], k_sh, update_idxs_tensor=cur_pos_tt)
+                    ttnn.experimental.paged_update_cache(self.v_caches[h], v_sh, update_idxs_tensor=cur_pos_tt)
+                    ttnn.deallocate(k_sh)
+                    ttnn.deallocate(v_sh)
+                ttnn.deallocate(k_i)
+                ttnn.deallocate(v_i)
+
+            if NKV == 1:
+                k_full, v_full = self.k_caches[0], self.v_caches[0]
+            else:
+                k_full = ttnn.concat(self.k_caches, dim=1)
+                v_full = ttnn.concat(self.v_caches, dim=1)
+
+            # Non-paged oracle path only: bound the K-chunk, or the full-cache SDPA's CBs grow with max_seq_len and overrun the CCL semaphores.
+            nonpaged_sdpa_cfg = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(8, 8), exp_approx_mode=False, q_chunk_size=0, k_chunk_size=128
+            )
+            attn_out = ttnn.transformer.scaled_dot_product_attention_decode(
+                q,
+                k_full,
+                v_full,
+                cur_pos_tensor=cur_pos_tt,
+                scale=self.scale,
+                program_config=nonpaged_sdpa_cfg,
+                memory_config=sdpa_out_mc,
+            )
+            ttnn.deallocate(q)
+
+        # Merge heads FIRST, then gate: nlp_concat_heads_decode puts head h dim d at column h*HD+d,
+        # which is exactly gate_flat's column order, so this is bit-identical to gating per head and
+        # skips the gate's head-major relayout.
+        out = self._concat_heads_decode(attn_out, head_mc, B)  # consumes attn_out
+        gated_flat = ttnn.multiply(out, ttnn.sigmoid(gate_flat, memory_config=_L1), memory_config=_L1)
+        ttnn.deallocate(out)
+        ttnn.deallocate(gate_flat)
+        wo_partial = self._wo_proj(gated_flat, tw["wo"])
+        ttnn.deallocate(gated_flat)
+        wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
+        return tt_all_reduce(
+            wo_partial,
+            self.mesh,
+            self.tt_ccl,
+            cluster_axis=0,
+            dim=3,
+            topology=self.args.ccl_topology(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def _forward_decode_bh(self, qg, kp, vp, B, cur_pos_tt, cos_tt, sin_tt, page_table, use_paged):
+        """Blackhole decode after the QKV projection: the original L1-interleaved head path."""
+        tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
+        _L1 = ttnn.L1_MEMORY_CONFIG
+        q, gate_flat, k, v = self._make_heads_decode(qg, kp, vp, B)
+        q = ttnn.sharded_to_interleaved(q, _L1)
+        k = ttnn.sharded_to_interleaved(k, _L1)
+        v = ttnn.sharded_to_interleaved(v, _L1)
+        gate = ttnn.reshape(gate_flat, (1, B, NH, HD), memory_config=_L1)
+        ttnn.deallocate(gate_flat)
 
         # QK norm — (1+w), matching prefill/HF (the prior "flat" no-+1 decode band-aided the reshape scramble).
         q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6, memory_config=_L1), tw["q_norm"], memory_config=_L1)
         k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6, memory_config=_L1), tw["k_norm"], memory_config=_L1)
 
-        q = apply_partial_rope_decode(q, cos_tt, sin_tt, NH, B, self.rope_dim)
-        k = apply_partial_rope_decode(k, cos_tt, sin_tt, NKV, B, self.rope_dim)
+        q = apply_partial_rope_decode_bh(q, cos_tt, sin_tt, NH, B, self.rope_dim)
+        k = apply_partial_rope_decode_bh(k, cos_tt, sin_tt, NKV, B, self.rope_dim)
 
         # SDPA-decode grid: use the real device grid (11x10=110 cores on P150x4), not a
         # hardcoded 64. cores_per_head = grid_total/B (sdpa_decode_program_factory.cpp), so a
@@ -570,10 +703,9 @@ class TPAttention:
         if use_paged:
             # External paged KV: update at cur_pos, then paged SDPA-decode
             keys, values = self.paged_k, self.paged_v
-            k_p = ttnn.pad(k, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
-            v_p = ttnn.pad(v, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
-            ttnn.deallocate(k)
-            ttnn.deallocate(v)
+            # pad_and_free, NOT pad + deallocate: this pad aliases its input (tpc.pad_and_free).
+            k_p = tpc.pad_and_free(k, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
+            v_p = tpc.pad_and_free(v, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
             _kv_cfg = self._kv_shard_cfg(B)
             k_sh = ttnn.to_memory_config(k_p, _kv_cfg)
             v_sh = ttnn.to_memory_config(v_p, _kv_cfg)
@@ -602,10 +734,9 @@ class TPAttention:
             for h in range(NKV):
                 k_h = ttnn.slice(k, (0, 0, h, 0), (1, B, h + 1, HD))
                 v_h = ttnn.slice(v, (0, 0, h, 0), (1, B, h + 1, HD))
-                k_hp = ttnn.pad(k_h, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
-                v_hp = ttnn.pad(v_h, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
-                ttnn.deallocate(k_h)
-                ttnn.deallocate(v_h)
+                # pad_and_free, NOT pad + deallocate: this pad aliases its input (tpc.pad_and_free).
+                k_hp = tpc.pad_and_free(k_h, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
+                v_hp = tpc.pad_and_free(v_h, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
                 _kv_cfg = self._kv_shard_cfg(B)
                 k_sh = ttnn.to_memory_config(k_hp, _kv_cfg)
                 v_sh = ttnn.to_memory_config(v_hp, _kv_cfg)
@@ -648,11 +779,7 @@ class TPAttention:
         ttnn.deallocate(attn_out)
         ttnn.deallocate(gate)
 
-        if self._use_nlp_decode_heads:
-            gated_flat = self._concat_heads_decode(gated, B)  # consumes + deallocates gated
-        else:
-            gated_flat = ttnn.reshape(gated, (1, B, NH * HD))
-            ttnn.deallocate(gated)
+        gated_flat = self._concat_heads_decode_bh(gated, B)  # consumes + deallocates gated
         wo_partial = self._wo_proj(gated_flat, tw["wo"])
         ttnn.deallocate(gated_flat)
         wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
@@ -665,6 +792,42 @@ class TPAttention:
             topology=self.args.ccl_topology(),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+
+    def _concat_heads_decode_bh(self, gated, B):
+        """Decode concat-heads via nlp_concat_heads_decode. gated [1,B,NH,HD] L1 -> [1,B,NH*HD] L1.
+
+        The op wants a height-sharded input ([1,B,heads-padded-to-32,HD], one core per user), so the
+        gated SDPA output is resharded across `B` cores first (a grid-width-aligned rectangle — a
+        ragged core set is rejected by the height-sharded mem config). Output is width-sharded, then
+        returned to L1-interleaved so the downstream o_proj matmul is unchanged.
+        """
+        from models.tt_transformers.tt.model_config import num_to_corerange
+
+        NH, HD = self.NH, self.HD
+        _L1 = ttnn.L1_MEMORY_CONFIG
+        grid = self.mesh.compute_with_storage_grid_size()
+        gx = min(B, grid.x)
+        if B >= gx and B % gx != 0:
+            gx = max(x for x in range(gx, 0, -1) if B % x == 0 and B // x <= grid.y)
+        core_grid = ttnn.CoreRangeSet({num_to_corerange(B, grid_x=gx, grid_y=grid.y)})
+        shard_cfg = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, HD),
+            core_grid=core_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        gated_sh = ttnn.to_memory_config(gated, shard_cfg)
+        ttnn.deallocate(gated)
+        out_sh = ttnn.experimental.nlp_concat_heads_decode(gated_sh, num_heads=NH)
+        ttnn.deallocate(gated_sh)
+        out = ttnn.sharded_to_interleaved(out_sh, _L1)  # [1, 1, 32, NH*HD] (batch padded to 32)
+        ttnn.deallocate(out_sh)
+        # nlp_concat_heads_decode always emits batch padded to 32; slice back to the real B before
+        # the reshape (a no-op at B=32, required for B<32 e.g. the B=1 demo/vLLM path).
+        if out.shape[-2] != B:
+            out = ttnn.slice(out, (0, 0, 0, 0), (1, 1, B, NH * HD), memory_config=_L1)
+        return ttnn.reshape(out, (1, B, NH * HD), memory_config=_L1)
 
     def forward_prefill_paged(
         self,
@@ -693,16 +856,8 @@ class TPAttention:
 
         q, gate_flat, k, v = self._make_heads(qg, kp, vp, S)
 
-        q = ttnn.multiply(
-            ttnn.rms_norm(q, epsilon=1e-6, memory_config=ttnn.L1_MEMORY_CONFIG),
-            tw["q_norm"],
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-        k = ttnn.multiply(
-            ttnn.rms_norm(k, epsilon=1e-6, memory_config=ttnn.L1_MEMORY_CONFIG),
-            tw["k_norm"],
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
+        q = self._qk_norm(q, tw["q_norm"])
+        k = self._qk_norm(k, tw["k_norm"])
         q = apply_partial_rope_prefill(q, cos_tt, sin_tt, NH, self.rope_dim)
         k = apply_partial_rope_prefill(k, cos_tt, sin_tt, NKV, self.rope_dim)
 

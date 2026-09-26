@@ -305,8 +305,54 @@ def rot_mats_prefill(device, rope_dim, seq_len, theta, position_ids=None, mrope_
     return cos, sin
 
 
+def reshard_width(mem_cfg, width):
+    """Same height-shard grid/orientation as `mem_cfg`, but `width` columns per shard."""
+    spec = mem_cfg.shard_spec
+    return ttnn.MemoryConfig(
+        mem_cfg.memory_layout,
+        mem_cfg.buffer_type,
+        ttnn.ShardSpec(spec.grid, (spec.shape[0], width), spec.orientation),
+    )
+
+
+def shard_rope_tables_decode(cos_tt, sin_tt, x_mem_cfg):
+    """Height-shard decode cos/sin onto the same one-user-per-core grid as the q/k head tensors.
+
+    ``rotary_embedding_hf(is_decode_mode=True)`` binds the cos/sin circular buffers straight to
+    their device buffers on the input's shard grid, so cos/sin must carry the SAME grid as x with
+    one [TILE, rope_dim] shard per user. Called once per attention layer (q and k share the pair).
+    """
+    cfg = reshard_width(x_mem_cfg, cos_tt.shape[-1])
+    return ttnn.to_memory_config(cos_tt, cfg), ttnn.to_memory_config(sin_tt, cfg)
+
+
 def apply_partial_rope_decode(x, cos_tt, sin_tt, n_heads, batch_size, rope_dim):
-    """x: [1, B, n_heads, HD]; cos/sin: [1, B, 1, rope_dim]; rotates first rope_dim dims.
+    """x: [1, B, n_heads, HD] HEIGHT-SHARDED (one user per core); cos/sin: [1, B, 1, rope_dim]
+    height-sharded on the same grid (see ``shard_rope_tables_decode``). Rotates the first rope_dim
+    dims; the tail passes through. Output keeps x's shard layout, which is exactly what
+    paged_update_cache and SDPA-decode want, so nothing is resharded around it.
+
+    Uses the op's native decode mode (is_decode_mode=True), which takes [1, B, heads, dim] directly
+    — no transpose into a prefill-shaped tensor, and no per-call cos/sin reshape.
+    """
+    hd = x.shape[-1]
+    B = batch_size
+    mc = x.memory_config()
+    if rope_dim == hd:
+        return ttnn.experimental.rotary_embedding_hf(x, cos_tt, sin_tt, is_decode_mode=True, memory_config=mc)
+    rot_mc = reshard_width(mc, rope_dim)
+    x_rope = ttnn.slice(x, (0, 0, 0, 0), (1, B, n_heads, rope_dim), memory_config=rot_mc)
+    roped = ttnn.experimental.rotary_embedding_hf(x_rope, cos_tt, sin_tt, is_decode_mode=True, memory_config=rot_mc)
+    ttnn.deallocate(x_rope)
+    x_pass = ttnn.slice(x, (0, 0, 0, rope_dim), (1, B, n_heads, hd), memory_config=reshard_width(mc, hd - rope_dim))
+    result = ttnn.concat([roped, x_pass], dim=-1, memory_config=mc)
+    ttnn.deallocate(roped)
+    ttnn.deallocate(x_pass)
+    return result
+
+
+def apply_partial_rope_decode_bh(x, cos_tt, sin_tt, n_heads, batch_size, rope_dim):
+    """Blackhole decode rope. x: [1, B, n_heads, HD]; cos/sin: [1, B, 1, rope_dim]; rotates first rope_dim dims.
 
     Fused HF-convention rotate-half via ttnn.experimental.rotary_embedding_hf. The op's native
     decode mode (is_decode_mode=True) hard-requires HEIGHT_SHARDED input + cos/sin, but qwen36's
