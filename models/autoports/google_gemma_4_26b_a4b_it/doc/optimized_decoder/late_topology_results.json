@@ -1,0 +1,450 @@
+[
+  {
+    "artifact": "expert_expanded_weighted_packed_layer0.json",
+    "layer_type": "sliding_attention",
+    "prefill_pcc": 0.9986693851431688,
+    "decode_min_pcc": 0.995341638094249,
+    "passed": true,
+    "traced_host_median_us": 1142.4224,
+    "samples_us": [
+      1142.4224,
+      1142.6004333333333,
+      1141.8870666666667,
+      1139.0045333333333,
+      1142.8355333333334
+    ],
+    "runtime_sha256": "e81018299b722aa81eae0e4e9ec3ec638520adcb3bdd85d3c2c8b429dfa0e370"
+  },
+  {
+    "artifact": "expert_expanded_weighted_packed_layer5.json",
+    "layer_type": "full_attention",
+    "prefill_pcc": 0.9991318001817636,
+    "decode_min_pcc": 0.995139759476722,
+    "passed": true,
+    "traced_host_median_us": 1226.2019666666667,
+    "samples_us": [
+      1226.2019666666667,
+      1218.5961,
+      1229.0714333333333,
+      1226.7343,
+      1225.3506333333332
+    ],
+    "runtime_sha256": "e81018299b722aa81eae0e4e9ec3ec638520adcb3bdd85d3c2c8b429dfa0e370"
+  },
+  {
+    "artifact": "expert_indexed_matmul_packed_layer0.json",
+    "layer_type": "sliding_attention",
+    "prefill_pcc": 0.9986693851431688,
+    "decode_min_pcc": 0.9953353194067491,
+    "passed": true,
+    "traced_host_median_us": 832.1625,
+    "samples_us": [
+      831.0911333333333,
+      832.1625,
+      832.5452333333334,
+      832.8401333333334,
+      831.8516
+    ],
+    "runtime_sha256": "e81018299b722aa81eae0e4e9ec3ec638520adcb3bdd85d3c2c8b429dfa0e370"
+  },
+  {
+    "artifact": "expert_indexed_matmul_packed_layer5.json",
+    "layer_type": "full_attention",
+    "prefill_pcc": 0.9991318001817636,
+    "decode_min_pcc": 0.9951361141534202,
+    "passed": true,
+    "traced_host_median_us": 922.7376666666667,
+    "samples_us": [
+      922.384,
+      922.7376666666667,
+      923.4443333333334,
+      922.7196333333334,
+      923.2242666666667
+    ],
+    "runtime_sha256": "e81018299b722aa81eae0e4e9ec3ec638520adcb3bdd85d3c2c8b429dfa0e370"
+  },
+  {
+    "artifact": "expert_indexed_weighted_packed_layer0.json",
+    "layer_type": "sliding_attention",
+    "prefill_pcc": 0.9986693851431688,
+    "decode_min_pcc": 0.995341638094249,
+    "passed": true,
+    "traced_host_median_us": 836.5398666666666,
+    "samples_us": [
+      836.0205333333333,
+      836.618,
+      835.7861,
+      836.6297,
+      836.5398666666666
+    ],
+    "runtime_sha256": "e81018299b722aa81eae0e4e9ec3ec638520adcb3bdd85d3c2c8b429dfa0e370"
+  },
+  {
+    "artifact": "expert_indexed_weighted_packed_layer5.json",
+    "layer_type": "full_attention",
+    "prefill_pcc": 0.9991318001817636,
+    "decode_min_pcc": 0.995139759476722,
+    "passed": true,
+    "traced_host_median_us": 927.8423666666666,
+    "samples_us": [
+      927.8423666666666,
+      927.5795666666667,
+      927.4042,
+      928.0227333333333,
+      928.2882333333333
+    ],
+    "runtime_sha256": "e81018299b722aa81eae0e4e9ec3ec638520adcb3bdd85d3c2c8b429dfa0e370"
+  },
+  {
+    "artifact": "expert_indexed_weighted_separate_layer0.json",
+    "layer_type": "sliding_attention",
+    "prefill_pcc": 0.9986693851431688,
+    "decode_min_pcc": 0.995341638094249,
+    "passed": true,
+    "traced_host_median_us": 849.3732666666667,
+    "samples_us": [
+      849.0476666666667,
+      849.9343333333334,
+      849.3732666666667,
+      849.4424,
+      848.7611
+    ],
+    "runtime_sha256": "e81018299b722aa81eae0e4e9ec3ec638520adcb3bdd85d3c2c8b429dfa0e370"
+  },
+  {
+    "artifact": "expert_indexed_weighted_separate_layer5.json",
+    "layer_type": "full_attention",
+    "prefill_pcc": 0.9991318001817636,
+    "decode_min_pcc": 0.995139759476722,
+    "passed": true,
+    "traced_host_median_us": 941.7248333333333,
+    "samples_us": [
+      941.5084,
+      941.5882333333333,
+      941.7248333333333,
+      941.8561,
+      941.9148666666666
+    ],
+    "runtime_sha256": "e81018299b722aa81eae0e4e9ec3ec638520adcb3bdd85d3c2c8b429dfa0e370"
+  },
+  {
+    "artifact": "compact_geometry_cores22_layer0.json",
+    "layer_type": "sliding_attention",
+    "prefill_pcc": 0.9991598414846561,
+    "decode_min_pcc": 0.9953353194067491,
+    "passed": true,
+    "traced_host_median_us": 847.6469666666667,
+    "samples_us": [
+      847.6469666666667,
+      847.2318666666666,
+      847.482,
+      848.2458,
+      848.0397333333333
+    ],
+    "runtime_sha256": "0aabcac2109a35b436c78ca6322ba4e88331abdab39e8271e14ea5235af9938a"
+  },
+  {
+    "artifact": "compact_geometry_cores22_layer5.json",
+    "layer_type": "full_attention",
+    "prefill_pcc": 0.9991318001817636,
+    "decode_min_pcc": 0.9951361141534202,
+    "passed": true,
+    "traced_host_median_us": 939.1001333333334,
+    "samples_us": [
+      938.7691666666667,
+      939.1001333333334,
+      939.2160333333334,
+      939.1298666666667,
+      938.7104
+    ],
+    "runtime_sha256": "0aabcac2109a35b436c78ca6322ba4e88331abdab39e8271e14ea5235af9938a"
+  },
+  {
+    "artifact": "compact_geometry_down88_layer0.json",
+    "layer_type": "sliding_attention",
+    "prefill_pcc": 0.9991598414846561,
+    "decode_min_pcc": 0.9953353194067491,
+    "passed": true,
+    "traced_host_median_us": 835.3084666666666,
+    "samples_us": [
+      835.0476333333334,
+      835.9830666666667,
+      835.3084666666666,
+      835.4868333333334,
+      834.9110666666667
+    ],
+    "runtime_sha256": "0aabcac2109a35b436c78ca6322ba4e88331abdab39e8271e14ea5235af9938a"
+  },
+  {
+    "artifact": "compact_geometry_down88_layer5.json",
+    "layer_type": "full_attention",
+    "prefill_pcc": 0.9991318001817636,
+    "decode_min_pcc": 0.9951361141534202,
+    "passed": true,
+    "traced_host_median_us": 926.7339,
+    "samples_us": [
+      927.3447333333334,
+      926.6711333333334,
+      926.7339,
+      927.0024,
+      926.4403666666667
+    ],
+    "runtime_sha256": "0aabcac2109a35b436c78ca6322ba4e88331abdab39e8271e14ea5235af9938a"
+  },
+  {
+    "artifact": "compact_geometry_gate22_layer0.json",
+    "layer_type": "sliding_attention",
+    "prefill_pcc": 0.9991598414846561,
+    "decode_min_pcc": 0.9953353194067491,
+    "passed": true,
+    "traced_host_median_us": 835.4531,
+    "samples_us": [
+      834.9608333333333,
+      835.6741666666667,
+      835.4531,
+      835.9674,
+      835.0810333333334
+    ],
+    "runtime_sha256": "0aabcac2109a35b436c78ca6322ba4e88331abdab39e8271e14ea5235af9938a"
+  },
+  {
+    "artifact": "compact_geometry_gate22_layer5.json",
+    "layer_type": "full_attention",
+    "prefill_pcc": 0.9991318001817636,
+    "decode_min_pcc": 0.9951361141534202,
+    "passed": true,
+    "traced_host_median_us": 924.9251333333333,
+    "samples_us": [
+      924.0992333333334,
+      924.9251333333333,
+      925.3088666666666,
+      925.3155333333333,
+      924.6265666666667
+    ],
+    "runtime_sha256": "0aabcac2109a35b436c78ca6322ba4e88331abdab39e8271e14ea5235af9938a"
+  },
+  {
+    "artifact": "compact_geometry_gate88_layer0.json",
+    "layer_type": "sliding_attention",
+    "prefill_pcc": 0.9991598414846561,
+    "decode_min_pcc": 0.9953353194067491,
+    "passed": true,
+    "traced_host_median_us": 835.2303333333333,
+    "samples_us": [
+      835.7667,
+      834.8927,
+      835.2303333333333,
+      835.5272,
+      834.1626333333334
+    ],
+    "runtime_sha256": "0aabcac2109a35b436c78ca6322ba4e88331abdab39e8271e14ea5235af9938a"
+  },
+  {
+    "artifact": "compact_geometry_gate88_layer5.json",
+    "layer_type": "full_attention",
+    "prefill_pcc": 0.9991318001817636,
+    "decode_min_pcc": 0.9951361141534202,
+    "passed": true,
+    "traced_host_median_us": 926.5659,
+    "samples_us": [
+      926.798,
+      926.5659,
+      926.1948666666667,
+      926.7432666666666,
+      926.0873666666666
+    ],
+    "runtime_sha256": "0aabcac2109a35b436c78ca6322ba4e88331abdab39e8271e14ea5235af9938a"
+  },
+  {
+    "artifact": "compact_geometry_gelu_layer0.json",
+    "layer_type": "sliding_attention",
+    "prefill_pcc": 0.9991598414846561,
+    "decode_min_pcc": 0.9953353194067491,
+    "passed": true,
+    "traced_host_median_us": 830.6382666666667,
+    "samples_us": [
+      831.6578333333333,
+      831.9874666666667,
+      830.6008333333333,
+      830.6382666666667,
+      830.1914
+    ],
+    "runtime_sha256": "0aabcac2109a35b436c78ca6322ba4e88331abdab39e8271e14ea5235af9938a"
+  },
+  {
+    "artifact": "compact_geometry_gelu_layer5.json",
+    "layer_type": "full_attention",
+    "prefill_pcc": 0.9991318001817636,
+    "decode_min_pcc": 0.9951361141534202,
+    "passed": true,
+    "traced_host_median_us": 921.6649333333334,
+    "samples_us": [
+      921.2120333333334,
+      921.6649333333334,
+      921.7527333333334,
+      922.0102333333333,
+      921.4595333333333
+    ],
+    "runtime_sha256": "0aabcac2109a35b436c78ca6322ba4e88331abdab39e8271e14ea5235af9938a"
+  },
+  {
+    "artifact": "compact_geometry_separate_layer0.json",
+    "layer_type": "sliding_attention",
+    "prefill_pcc": 0.9991598414846561,
+    "decode_min_pcc": 0.9953353194067491,
+    "passed": true,
+    "traced_host_median_us": 843.8116666666666,
+    "samples_us": [
+      843.467,
+      844.3897666666667,
+      844.3931,
+      843.6153,
+      843.8116666666666
+    ],
+    "runtime_sha256": "0aabcac2109a35b436c78ca6322ba4e88331abdab39e8271e14ea5235af9938a"
+  },
+  {
+    "artifact": "compact_geometry_separate_layer5.json",
+    "layer_type": "full_attention",
+    "prefill_pcc": 0.9991318001817636,
+    "decode_min_pcc": 0.9951361141534202,
+    "passed": true,
+    "traced_host_median_us": 936.7476666666666,
+    "samples_us": [
+      936.7476666666666,
+      937.3678333333334,
+      936.4377,
+      936.9403333333333,
+      936.4414
+    ],
+    "runtime_sha256": "0aabcac2109a35b436c78ca6322ba4e88331abdab39e8271e14ea5235af9938a"
+  },
+  {
+    "artifact": "actual_decode_rope_row_major_layer0.json",
+    "layer_type": "sliding_attention",
+    "prefill_pcc": 0.9991598414846561,
+    "decode_min_pcc": 0.9953419568746218,
+    "passed": true,
+    "traced_host_median_us": 957.5018,
+    "samples_us": [
+      958.2589333333333,
+      957.5018,
+      957.4797666666667,
+      957.4400333333333,
+      957.6007
+    ],
+    "runtime_sha256": "0aabcac2109a35b436c78ca6322ba4e88331abdab39e8271e14ea5235af9938a"
+  },
+  {
+    "artifact": "actual_decode_rope_row_major_layer5.json",
+    "layer_type": "full_attention",
+    "prefill_pcc": 0.9991318001817636,
+    "decode_min_pcc": 0.9951458768237071,
+    "passed": true,
+    "traced_host_median_us": 1021.8246666666666,
+    "samples_us": [
+      1022.2314333333334,
+      1021.3116666666666,
+      1022.2571333333333,
+      1021.8246666666666,
+      1021.3971666666666
+    ],
+    "runtime_sha256": "0aabcac2109a35b436c78ca6322ba4e88331abdab39e8271e14ea5235af9938a"
+  },
+  {
+    "artifact": "actual_decode_rope_tile_layer0.json",
+    "layer_type": "sliding_attention",
+    "prefill_pcc": 0.9991598414846561,
+    "decode_min_pcc": 0.9953419568746218,
+    "passed": true,
+    "traced_host_median_us": 987.8683333333333,
+    "samples_us": [
+      987.7487666666667,
+      987.6973333333333,
+      988.1892666666666,
+      987.8683333333333,
+      988.1462
+    ],
+    "runtime_sha256": "0aabcac2109a35b436c78ca6322ba4e88331abdab39e8271e14ea5235af9938a"
+  },
+  {
+    "artifact": "actual_decode_rope_tile_layer5.json",
+    "layer_type": "full_attention",
+    "prefill_pcc": 0.9991318001817636,
+    "decode_min_pcc": 0.9951458768237071,
+    "passed": true,
+    "traced_host_median_us": 1076.6009666666666,
+    "samples_us": [
+      1076.6009666666666,
+      1076.5482,
+      1076.7566333333334,
+      1076.8103666666666,
+      1076.2249
+    ],
+    "runtime_sha256": "0aabcac2109a35b436c78ca6322ba4e88331abdab39e8271e14ea5235af9938a"
+  },
+  {
+    "artifact": "router_subblock_cores1_layer0.json",
+    "layer_type": "sliding_attention",
+    "prefill_pcc": 0.9986693851431688,
+    "decode_min_pcc": 0.9953419568746218,
+    "passed": true,
+    "traced_host_median_us": 998.1126666666667,
+    "samples_us": [
+      997.3645666666666,
+      998.2459,
+      997.6194,
+      998.1126666666667,
+      998.3925333333333
+    ],
+    "runtime_sha256": "e81018299b722aa81eae0e4e9ec3ec638520adcb3bdd85d3c2c8b429dfa0e370"
+  },
+  {
+    "artifact": "router_subblock_cores1_layer5.json",
+    "layer_type": "full_attention",
+    "prefill_pcc": 0.9991318001817636,
+    "decode_min_pcc": 0.9951458768237071,
+    "passed": true,
+    "traced_host_median_us": 1080.2911333333334,
+    "samples_us": [
+      1079.8563333333334,
+      1080.913,
+      1080.197,
+      1080.8368666666668,
+      1080.2911333333334
+    ],
+    "runtime_sha256": "e81018299b722aa81eae0e4e9ec3ec638520adcb3bdd85d3c2c8b429dfa0e370"
+  },
+  {
+    "artifact": "router_subblock_cores2_layer0.json",
+    "layer_type": "sliding_attention",
+    "prefill_pcc": 0.9986693851431688,
+    "decode_min_pcc": 0.9953419568746218,
+    "passed": true,
+    "traced_host_median_us": 989.8656333333333,
+    "samples_us": [
+      990.0824,
+      989.9925666666667,
+      989.8656333333333,
+      989.0544,
+      988.9689333333333
+    ],
+    "runtime_sha256": "e81018299b722aa81eae0e4e9ec3ec638520adcb3bdd85d3c2c8b429dfa0e370"
+  },
+  {
+    "artifact": "router_subblock_cores2_layer5.json",
+    "layer_type": "full_attention",
+    "prefill_pcc": 0.9991318001817636,
+    "decode_min_pcc": 0.9951458768237071,
+    "passed": true,
+    "traced_host_median_us": 1076.8857,
+    "samples_us": [
+      1077.1498333333334,
+      1076.9277666666667,
+      1076.4027666666666,
+      1076.6756333333333,
+      1076.8857
+    ],
+    "runtime_sha256": "e81018299b722aa81eae0e4e9ec3ec638520adcb3bdd85d3c2c8b429dfa0e370"
+  }
+]

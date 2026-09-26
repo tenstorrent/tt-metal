@@ -1,0 +1,1861 @@
+{
+  "schema_version": 2,
+  "status": "passed",
+  "runtime_sha256": "3d51014f98128dfb21bb484fcece50993524b967754f68f6dfe825ae7f472ba9",
+  "scope": {
+    "model": "google/gemma-4-26B-A4B-it",
+    "mode": "CPU source and saved-artifact audit",
+    "input_tokens": 4096,
+    "decode_positions_inclusive": [
+      4096,
+      4223
+    ],
+    "decode_replays": 128,
+    "batch": 1,
+    "devices": 1,
+    "hardware_run_by_auditor": false,
+    "final_profile_totals_verified": true
+  },
+  "conclusion": "Both final v4 summaries and same-run reconciliations reproduce from their raw profiler evidence; no numerical correction required.",
+  "sources": [
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/tests/summarize_perf.py",
+      "sha256": "8beb5082231274b8a8b8f1a7ba6212471b37f0bc1e615a9b484b54b43706381a"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/tests/reconcile_perf.py",
+      "sha256": "c705b0ad0db8bdb630660c97a4283b852a4bcfc906b6b97048a48f7a40da5b4a"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/tests/run_decoder.py",
+      "sha256": "13e23a8beeb5c3aa436079a3b8c68827e22defc74e061189c9891846caaaffe5"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/tests/config.json",
+      "sha256": "ed0c1eb3633de771906e9ba004a44cc5635bcc06ee2062077c3d2e88a50707d3"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py",
+      "sha256": "3d51014f98128dfb21bb484fcece50993524b967754f68f6dfe825ae7f472ba9"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/tt/fused_decoder.py",
+      "sha256": "0c8892be32e04202fdbddd2b06850848c63ae57660c49d03c4d149a5a88b041c"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/roofline_native_basis.md",
+      "sha256": "b490640018bb3670cbd68de8757f904283c69aa314626d80ae813114c2e813b2"
+    },
+    {
+      "path": "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp",
+      "sha256": "1b52c60d78ada6f08effd326c2ed2407b3a74cf0db2353fadbe51b088610aec8"
+    },
+    {
+      "path": "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/sdpa_decode_program_factory.cpp",
+      "sha256": "05708e6d9ddeddfdf13303d8f8fa391941d73b742ea3a380beeb0883ce8d4792"
+    },
+    {
+      "path": "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/reader_decode_all.cpp",
+      "sha256": "49a05926b437e2ca90d7e01c60e85a6b11f333375a6159fa02c9ff6f78af764e"
+    },
+    {
+      "path": "tt_metal/impl/data_format/tile.cpp",
+      "sha256": "e0fe57c9f7a23286d2241d9c6585a3ffa287f5cd633bdd3d517dc964b6fee842"
+    },
+    {
+      "path": "tests/nightly/sdpa_perf_utils.py",
+      "sha256": "2b675690cbf937f02e166f327c2c103ba7d50d10c608f0970614837c48c9fc05"
+    },
+    {
+      "path": "tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py",
+      "sha256": "3e685cd3e5e39edc5b71708d59d04184a23292c3662d2c1be0638ac7df3f0090"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/audit_final_roofline_v4.py",
+      "sha256": "87e834dd8c175976abcd854fa08b0deb4cee747a93fc9ef6bef9f8c133b610c3"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_optimized_v4_profile_commands.json",
+      "sha256": "aeeea36332857d1c8c5b97d2e396fb1ef25e3e5ba001c75217f627d82e580f91"
+    },
+    {
+      "path": "ttnn/cpp/ttnn/operations/matmul/device/sparse/sparse_matmul_device_operation.cpp",
+      "sha256": "005e7881351c32222ce180b45c812f4239d7da2c2979dc300faf00b84fac614c"
+    },
+    {
+      "path": "ttnn/cpp/ttnn/operations/matmul/device/sparse/factory/sparse_matmul_multicore_reuse_mcast_1d_optimized.cpp",
+      "sha256": "ba25c662b5b5486cf09e02d44e34ac7ffc742206aea2383a9e0d0cef720f9a46"
+    }
+  ],
+  "layers": [
+    {
+      "layer": 0,
+      "layer_type": "sliding_attention",
+      "status": "passed",
+      "runtime_sha256": "3d51014f98128dfb21bb484fcece50993524b967754f68f6dfe825ae7f472ba9",
+      "sources": [
+        {
+          "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_v4_layer0/whole_layer.json",
+          "sha256": "36d44e92fe73f32dcd00b1680d261739b910fb82eedb38ad1607e20bdf082220"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/profile_actual_optimized_v4_layer0.json",
+          "sha256": "91defefd205559f69b3d13509d2e4d716a68f45f503f59553ed9b5d0db27c9e4"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_v4_layer0/ops.csv",
+          "sha256": "dcdc0c6d7c4649d28ee0bdfa04423f72bd87110cf47226b12270294e015ca4fe"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_v4_layer0/raw/reports/headline/2026_09_26_15_05_27/ops_perf_results_headline_2026_09_26_15_05_27.csv",
+          "sha256": "dcdc0c6d7c4649d28ee0bdfa04423f72bd87110cf47226b12270294e015ca4fe"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_v4_layer0/raw/.logs/tracy_ops_data.csv",
+          "sha256": "0062f86af2a60589aa556dcb7cc003187d4a3555858775de8cbb740f13350cfa"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_v4_layer0/timing_reconciliation.json",
+          "sha256": "979f2e217dfca2479018af668526ce4cc636417c6e1f543732d20dc39d812b4c"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_v4_layer0/summary_commands.json",
+          "sha256": "030f812e6ec14614a279d2721c9bdd63e4de029fc64fa191fded78199fc6c954"
+        }
+      ],
+      "windows": {
+        "prefill": {
+          "device_us": 222496.81333333332,
+          "min_device_us": 222496.81333333332,
+          "max_device_us": 222496.81333333332,
+          "ns_per_cycle": 0.7407407407407407,
+          "samples": 1,
+          "native_ops": 2173,
+          "summed_kernel_device_us": 220823.631
+        },
+        "decode": {
+          "device_us": 881.3432581018518,
+          "min_device_us": 873.6814814814815,
+          "max_device_us": 889.7251851851852,
+          "ns_per_cycle": 0.7407407407407407,
+          "samples": 128,
+          "native_ops": 15744,
+          "summed_kernel_device_us": 752.9638359375,
+          "estimated_dram_bytes": 110493448.0
+        }
+      },
+      "native_ops_per_decode": 123,
+      "decode_op_histogram": {
+        "InterleavedToShardedDeviceOperation": 7,
+        "TypecastDeviceOperation": 13,
+        "LayerNormDeviceOperation": 6,
+        "ShardedToInterleavedDeviceOperation": 11,
+        "BinaryNgDeviceOperation": 22,
+        "MatmulDeviceOperation": 6,
+        "NLPCreateQKVHeadsDecodeDeviceOperation": 1,
+        "FillPadDeviceOperation": 5,
+        "ReduceDeviceOperation": 4,
+        "EmbeddingsDeviceOperation": 2,
+        "SliceDeviceOperation": 12,
+        "UntilizeWithUnpaddingDeviceOperation": 6,
+        "RepeatDeviceOperation": 4,
+        "TilizeWithValPaddingDeviceOperation": 6,
+        "RotaryEmbeddingHfDeviceOperation": 2,
+        "UnaryDeviceOperation": 5,
+        "PagedFusedUpdateCacheDeviceOperation": 1,
+        "SdpaDecodeDeviceOperation": 1,
+        "NLPConcatHeadsDecodeDeviceOperation": 1,
+        "PadDeviceOperation": 1,
+        "ReshapeViewDeviceOperation": 1,
+        "GeneralizedMoeGateDeviceOperation": 1,
+        "ScatterDeviceOperation": 1,
+        "GatherDeviceOperation": 1,
+        "SparseMatmulDeviceOperation": 2,
+        "TransposeDeviceOperation": 1
+      },
+      "useful_flops_terms": {
+        "qkv_and_output_projections": 283467841536,
+        "shared_mlp": 146163105792,
+        "active_experts_top8": 389768282112,
+        "router_projection": 2952790016,
+        "causal_attention_qk_and_pv": 60137930752
+      },
+      "useful_prefill_flops": 882489950208,
+      "prefill_flops_pct": 0.5977381988172494,
+      "decode_dram_pct": 24.48620485164707,
+      "estimated_decode_dram_bytes_by_op": {
+        "InterleavedToShardedDeviceOperation": 196608.0,
+        "TypecastDeviceOperation": 442368.0,
+        "LayerNormDeviceOperation": 16896.0,
+        "ShardedToInterleavedDeviceOperation": 98304.0,
+        "BinaryNgDeviceOperation": 2715648.0,
+        "MatmulDeviceOperation": 58167296.0,
+        "NLPCreateQKVHeadsDecodeDeviceOperation": 0.0,
+        "FillPadDeviceOperation": 196608.0,
+        "ReduceDeviceOperation": 110592.0,
+        "EmbeddingsDeviceOperation": 65792.0,
+        "SliceDeviceOperation": 131072.0,
+        "UntilizeWithUnpaddingDeviceOperation": 4096.0,
+        "RepeatDeviceOperation": 26624.0,
+        "TilizeWithValPaddingDeviceOperation": 90112.0,
+        "RotaryEmbeddingHfDeviceOperation": 221184.0,
+        "UnaryDeviceOperation": 65536.0,
+        "PagedFusedUpdateCacheDeviceOperation": 279172.0,
+        "SdpaDecodeDeviceOperation": 5042564.0,
+        "NLPConcatHeadsDecodeDeviceOperation": 0.0,
+        "PadDeviceOperation": 0.0,
+        "ReshapeViewDeviceOperation": 0.0,
+        "GeneralizedMoeGateDeviceOperation": 0.0,
+        "ScatterDeviceOperation": 0.0,
+        "GatherDeviceOperation": 0.0,
+        "SparseMatmulDeviceOperation": 42622976.0,
+        "TransposeDeviceOperation": 0.0
+      },
+      "compact_sparse_rows_checked": 256,
+      "native_sdpa_rows_checked": 128,
+      "native_sdpa_mean_read_tokens": 1151,
+      "native_sdpa_mean_kv_bytes": 5009152.0,
+      "decode_matmul_and_sdpa_operand_metadata": [
+        {
+          "operation": "MatmulDeviceOperation",
+          "fidelity": "HiFi2",
+          "operands": {
+            "INPUT_0": {
+              "padded_shape": [
+                1,
+                1,
+                32,
+                2816
+              ],
+              "logical_shape": [
+                1,
+                1,
+                1,
+                2816
+              ],
+              "dtype": "FLOAT32",
+              "memory": "DEV_0_L1_INTERLEAVED"
+            },
+            "INPUT_1": {
+              "padded_shape": [
+                1,
+                1,
+                2816,
+                8192
+              ],
+              "logical_shape": [
+                1,
+                1,
+                2816,
+                8192
+              ],
+              "dtype": "BFLOAT8_B",
+              "memory": "DEV_0_DRAM_INTERLEAVED"
+            },
+            "OUTPUT_0": {
+              "padded_shape": [
+                1,
+                1,
+                32,
+                8192
+              ],
+              "logical_shape": [
+                1,
+                1,
+                1,
+                8192
+              ],
+              "dtype": "FLOAT32",
+              "memory": "DEV_0_L1_INTERLEAVED"
+            }
+          },
+          "estimated_dram_bytes": 24510464.0
+        },
+        {
+          "operation": "SdpaDecodeDeviceOperation",
+          "fidelity": "HiFi4",
+          "operands": {
+            "INPUT_0": {
+              "padded_shape": [
+                1,
+                1,
+                32,
+                256
+              ],
+              "logical_shape": [
+                1,
+                1,
+                16,
+                256
+              ],
+              "dtype": "BFLOAT16",
+              "memory": "DEV_0_DRAM_INTERLEAVED"
+            },
+            "INPUT_1": {
+              "padded_shape": [
+                160,
+                8,
+                32,
+                256
+              ],
+              "logical_shape": [
+                160,
+                8,
+                32,
+                256
+              ],
+              "dtype": "BFLOAT8_B",
+              "memory": "DEV_0_DRAM_INTERLEAVED"
+            },
+            "INPUT_2": {
+              "padded_shape": [
+                160,
+                8,
+                32,
+                256
+              ],
+              "logical_shape": [
+                160,
+                8,
+                32,
+                256
+              ],
+              "dtype": "BFLOAT8_B",
+              "memory": "DEV_0_DRAM_INTERLEAVED"
+            },
+            "INPUT_3": {
+              "padded_shape": [
+                1,
+                1,
+                1,
+                1
+              ],
+              "logical_shape": [
+                1,
+                1,
+                1,
+                1
+              ],
+              "dtype": "INT32",
+              "memory": "DEV_0_DRAM_INTERLEAVED"
+            },
+            "OUTPUT_0": {
+              "padded_shape": [
+                1,
+                1,
+                32,
+                256
+              ],
+              "logical_shape": [
+                1,
+                1,
+                16,
+                256
+              ],
+              "dtype": "BFLOAT16",
+              "memory": "DEV_0_DRAM_INTERLEAVED"
+            }
+          },
+          "estimated_dram_bytes": 5046916.0
+        },
+        {
+          "operation": "MatmulDeviceOperation",
+          "fidelity": "HiFi4",
+          "operands": {
+            "INPUT_0": {
+              "padded_shape": [
+                1,
+                1,
+                32,
+                4096
+              ],
+              "logical_shape": [
+                1,
+                1,
+                1,
+                4096
+              ],
+              "dtype": "BFLOAT16",
+              "memory": "DEV_0_L1_INTERLEAVED"
+            },
+            "INPUT_1": {
+              "padded_shape": [
+                1,
+                1,
+                4096,
+                2816
+              ],
+              "logical_shape": [
+                1,
+                1,
+                4096,
+                2816
+              ],
+              "dtype": "BFLOAT8_B",
+              "memory": "DEV_0_DRAM_INTERLEAVED"
+            },
+            "OUTPUT_0": {
+              "padded_shape": [
+                1,
+                1,
+                32,
+                2816
+              ],
+              "logical_shape": [
+                1,
+                1,
+                1,
+                2816
+              ],
+              "dtype": "FLOAT32",
+              "memory": "DEV_0_L1_INTERLEAVED"
+            }
+          },
+          "estimated_dram_bytes": 12255232.0
+        },
+        {
+          "operation": "MatmulDeviceOperation",
+          "fidelity": "HiFi4",
+          "operands": {
+            "INPUT_0": {
+              "padded_shape": [
+                1,
+                1,
+                32,
+                2816
+              ],
+              "logical_shape": [
+                1,
+                1,
+                1,
+                2816
+              ],
+              "dtype": "FLOAT32",
+              "memory": "DEV_0_L1_INTERLEAVED"
+            },
+            "INPUT_1": {
+              "padded_shape": [
+                1,
+                1,
+                2816,
+                128
+              ],
+              "logical_shape": [
+                1,
+                1,
+                2816,
+                128
+              ],
+              "dtype": "BFLOAT16",
+              "memory": "DEV_0_DRAM_INTERLEAVED"
+            },
+            "OUTPUT_0": {
+              "padded_shape": [
+                1,
+                1,
+                32,
+                128
+              ],
+              "logical_shape": [
+                1,
+                1,
+                1,
+                128
+              ],
+              "dtype": "FLOAT32",
+              "memory": "DEV_0_L1_INTERLEAVED"
+            }
+          },
+          "estimated_dram_bytes": 720896
+        },
+        {
+          "operation": "SparseMatmulDeviceOperation",
+          "fidelity": "LoFi",
+          "operands": {
+            "INPUT_0": {
+              "padded_shape": [
+                1,
+                1,
+                32,
+                2816
+              ],
+              "logical_shape": [
+                1,
+                1,
+                1,
+                2816
+              ],
+              "dtype": "BFLOAT16",
+              "memory": "DEV_0_L1_INTERLEAVED"
+            },
+            "INPUT_1": {
+              "padded_shape": [
+                1,
+                128,
+                2816,
+                1408
+              ],
+              "logical_shape": [
+                1,
+                128,
+                2816,
+                1408
+              ],
+              "dtype": "BFLOAT8_B",
+              "memory": "DEV_0_DRAM_INTERLEAVED"
+            },
+            "INPUT_2": {
+              "padded_shape": [
+                1,
+                1,
+                1,
+                128
+              ],
+              "logical_shape": [
+                1,
+                1,
+                1,
+                128
+              ],
+              "dtype": "BFLOAT16",
+              "memory": "DEV_0_L1_INTERLEAVED"
+            },
+            "INPUT_3": {
+              "padded_shape": [
+                1,
+                1,
+                1,
+                8
+              ],
+              "logical_shape": [
+                1,
+                1,
+                1,
+                8
+              ],
+              "dtype": "UINT16",
+              "memory": "DEV_0_L1_INTERLEAVED"
+            },
+            "OUTPUT_0": {
+              "padded_shape": [
+                1,
+                8,
+                32,
+                1408
+              ],
+              "logical_shape": [
+                1,
+                8,
+                1,
+                1408
+              ],
+              "dtype": "BFLOAT16",
+              "memory": "DEV_0_L1_INTERLEAVED"
+            }
+          },
+          "estimated_dram_bytes": 33701888.0
+        },
+        {
+          "operation": "SparseMatmulDeviceOperation",
+          "fidelity": "LoFi",
+          "operands": {
+            "INPUT_0": {
+              "padded_shape": [
+                1,
+                8,
+                32,
+                704
+              ],
+              "logical_shape": [
+                1,
+                8,
+                1,
+                704
+              ],
+              "dtype": "BFLOAT16",
+              "memory": "DEV_0_L1_INTERLEAVED"
+            },
+            "INPUT_1": {
+              "padded_shape": [
+                1,
+                128,
+                704,
+                2816
+              ],
+              "logical_shape": [
+                1,
+                128,
+                704,
+                2816
+              ],
+              "dtype": "BFLOAT4_B",
+              "memory": "DEV_0_DRAM_INTERLEAVED"
+            },
+            "INPUT_2": {
+              "padded_shape": [
+                1,
+                1,
+                1,
+                128
+              ],
+              "logical_shape": [
+                1,
+                1,
+                1,
+                128
+              ],
+              "dtype": "BFLOAT16",
+              "memory": "DEV_0_L1_INTERLEAVED"
+            },
+            "INPUT_3": {
+              "padded_shape": [
+                1,
+                1,
+                1,
+                8
+              ],
+              "logical_shape": [
+                1,
+                1,
+                1,
+                8
+              ],
+              "dtype": "UINT16",
+              "memory": "DEV_0_L1_INTERLEAVED"
+            },
+            "OUTPUT_0": {
+              "padded_shape": [
+                1,
+                8,
+                32,
+                2816
+              ],
+              "logical_shape": [
+                1,
+                8,
+                1,
+                2816
+              ],
+              "dtype": "BFLOAT16",
+              "memory": "DEV_0_L1_INTERLEAVED"
+            }
+          },
+          "estimated_dram_bytes": 8921088.0
+        },
+        {
+          "operation": "MatmulDeviceOperation",
+          "fidelity": "HiFi4",
+          "operands": {
+            "INPUT_0": {
+              "padded_shape": [
+                1,
+                1,
+                32,
+                32
+              ],
+              "logical_shape": [
+                1,
+                1,
+                1,
+                8
+              ],
+              "dtype": "BFLOAT16",
+              "memory": "DEV_0_L1_INTERLEAVED"
+            },
+            "INPUT_1": {
+              "padded_shape": [
+                1,
+                1,
+                32,
+                2816
+              ],
+              "logical_shape": [
+                1,
+                1,
+                8,
+                2816
+              ],
+              "dtype": "BFLOAT16",
+              "memory": "DEV_0_L1_INTERLEAVED"
+            },
+            "OUTPUT_0": {
+              "padded_shape": [
+                1,
+                1,
+                32,
+                2816
+              ],
+              "logical_shape": [
+                1,
+                1,
+                1,
+                2816
+              ],
+              "dtype": "BFLOAT16",
+              "memory": "DEV_0_L1_WIDTH_SHARDED"
+            }
+          },
+          "estimated_dram_bytes": 0
+        },
+        {
+          "operation": "MatmulDeviceOperation",
+          "fidelity": "LoFi",
+          "operands": {
+            "INPUT_0": {
+              "padded_shape": [
+                1,
+                1,
+                32,
+                2816
+              ],
+              "logical_shape": [
+                1,
+                1,
+                1,
+                2816
+              ],
+              "dtype": "BFLOAT16",
+              "memory": "DEV_0_L1_WIDTH_SHARDED"
+            },
+            "INPUT_1": {
+              "padded_shape": [
+                1,
+                1,
+                2816,
+                4608
+              ],
+              "logical_shape": [
+                1,
+                1,
+                2816,
+                4608
+              ],
+              "dtype": "BFLOAT8_B",
+              "memory": "DEV_0_DRAM_WIDTH_SHARDED"
+            },
+            "OUTPUT_0": {
+              "padded_shape": [
+                1,
+                1,
+                32,
+                4608
+              ],
+              "logical_shape": [
+                1,
+                1,
+                1,
+                4608
+              ],
+              "dtype": "BFLOAT16",
+              "memory": "DEV_0_L1_WIDTH_SHARDED"
+            }
+          },
+          "estimated_dram_bytes": 13787136.0
+        },
+        {
+          "operation": "MatmulDeviceOperation",
+          "fidelity": "LoFi",
+          "operands": {
+            "INPUT_0": {
+              "padded_shape": [
+                1,
+                1,
+                32,
+                2112
+              ],
+              "logical_shape": [
+                1,
+                1,
+                1,
+                2112
+              ],
+              "dtype": "BFLOAT16",
+              "memory": "DEV_0_L1_WIDTH_SHARDED"
+            },
+            "INPUT_1": {
+              "padded_shape": [
+                1,
+                1,
+                2112,
+                3072
+              ],
+              "logical_shape": [
+                1,
+                1,
+                2112,
+                3072
+              ],
+              "dtype": "BFLOAT8_B",
+              "memory": "DEV_0_DRAM_WIDTH_SHARDED"
+            },
+            "OUTPUT_0": {
+              "padded_shape": [
+                1,
+                1,
+                32,
+                3072
+              ],
+              "logical_shape": [
+                1,
+                1,
+                1,
+                3072
+              ],
+              "dtype": "BFLOAT16",
+              "memory": "DEV_0_L1_WIDTH_SHARDED"
+            }
+          },
+          "estimated_dram_bytes": 6893568.0
+        }
+      ],
+      "measured_precision_policy": {
+        "kv_cache": "bfloat8_b",
+        "native_sdpa_fidelity": "MathFidelity.HiFi4",
+        "prefill_attention_fidelity": "MathFidelity.LoFi",
+        "expert_gate": "DataType.BFLOAT8_B",
+        "decode_expert_down": "DataType.BFLOAT4_B",
+        "prefill_expert_gate": "DataType.BFLOAT8_B",
+        "prefill_expert_down": "DataType.BFLOAT4_B",
+        "decode_expert_activation": "unchanged",
+        "decode_expert_fidelity": "MathFidelity.LoFi",
+        "decode_expert_fused_gelu": true,
+        "decode_expert_backend": "indexed_compact",
+        "decode_expert_slots": 8,
+        "shared_decode_weights": "DataType.BFLOAT8_B",
+        "qkv_fidelity": "MathFidelity.HiFi2"
+      },
+      "same_run_reconciliation": {
+        "layer_type": "sliding_attention",
+        "workload": {
+          "input_tokens": 4096,
+          "output_tokens": 128,
+          "batch": 1,
+          "concurrency": 1,
+          "decode_start_position": 4096
+        },
+        "sources": {
+          "summary": {
+            "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_v4_layer0/whole_layer.json",
+            "sha256": "36d44e92fe73f32dcd00b1680d261739b910fb82eedb38ad1607e20bdf082220"
+          },
+          "runner": {
+            "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/profile_actual_optimized_v4_layer0.json",
+            "sha256": "91defefd205559f69b3d13509d2e4d716a68f45f503f59553ed9b5d0db27c9e4"
+          },
+          "csv": {
+            "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_v4_layer0/ops.csv",
+            "sha256": "dcdc0c6d7c4649d28ee0bdfa04423f72bd87110cf47226b12270294e015ca4fe"
+          }
+        },
+        "same_run_provenance": {
+          "journal": {
+            "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_optimized_v4_profile_commands.json",
+            "sha256": "aeeea36332857d1c8c5b97d2e396fb1ef25e3e5ba001c75217f627d82e580f91"
+          },
+          "command": [
+            "python",
+            "-m",
+            "tracy",
+            "-r",
+            "-p",
+            "-v",
+            "--op-support-count",
+            "100000",
+            "--no-op-info-cache",
+            "--disable-device-data-dump-to-files",
+            "--disable-device-data-push-to-tracy",
+            "-o",
+            "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_v4_layer0/raw",
+            "-n",
+            "headline",
+            "-m",
+            "models.autoports.google_gemma_4_26b_a4b_it.tests.run_optimized_decoder",
+            "--defaults",
+            "--input-fixture",
+            "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+            "--layer",
+            "0",
+            "--length",
+            "4096",
+            "--real",
+            "--decode",
+            "--steps",
+            "128",
+            "--profile",
+            "--timing",
+            "--verify-program-cache",
+            "--output",
+            "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/profile_actual_optimized_v4_layer0.json"
+          ],
+          "raw_csv": {
+            "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_v4_layer0/raw/reports/headline/2026_09_26_15_05_27/ops_perf_results_headline_2026_09_26_15_05_27.csv",
+            "sha256": "dcdc0c6d7c4649d28ee0bdfa04423f72bd87110cf47226b12270294e015ca4fe"
+          }
+        },
+        "decode_estimated_dram_bytes": 110493448.0,
+        "theoretical_dram_bytes_per_s": 512000000000.0,
+        "decode_theoretical_transfer_us": 215.80751562499998,
+        "decode_whole_device_window_mean_us": 881.3432581018518,
+        "decode_profile_loop_host_mean_us": 896.7259375,
+        "decode_fixed_position_host_median_us": 880.7697,
+        "profile_loop": {
+          "start_ns": 17156344218,
+          "end_ns": 17271125138,
+          "total_ns": 114780920,
+          "mean_host_us": 896.7259375,
+          "replays": 128,
+          "native_ops": 15744
+        },
+        "fixed_position_host": {
+          "samples_us": [
+            880.7697,
+            881.2189,
+            881.2656333333333,
+            879.8763333333334,
+            879.7798333333334
+          ],
+          "samples": 5,
+          "replays_per_sample": 30,
+          "absolute_position": 4223,
+          "input_refresh": false
+        },
+        "gaps_us": {
+          "device_window_minus_theoretical_transfer": 665.5357424768519,
+          "profile_loop_host_minus_device_window": 15.382679398148184,
+          "fixed_position_host_minus_device_window": -0.5735581018518587,
+          "profile_loop_host_minus_fixed_position_host": 15.956237500000043
+        },
+        "scopes": [
+          "Theoretical transfer time is estimated operand bytes divided by the stated peak DRAM bandwidth. It is a traffic-only roofline estimate, not measured memory-controller time or a prediction of complete-layer latency.",
+          "Device time is the mean of complete first-firmware-start to last-firmware-end windows for all successive-position replays. All layer operations and intra-layer gaps remain included; inter-replay gaps and input refresh are outside these individual windows.",
+          "Profile-loop host time is the Tracy host-clock difference between PERF_DECODE and PERF_DECODE_END divided by replay count. The runner synchronizes before the first signpost and before the final signpost. The span includes all per-step input/position preparation, copies, trace submissions, waits, inter-replay intervals, final synchronization and signpost-call boundary costs; HF preparation and output readback are outside it.",
+          "Fixed-position host time is from the same profiled process, after the successive-position loop: median of five batches of 30 trace replays with no input refresh at the final position. It uses perf_counter_ns and is a different execution regime from the profile-loop mean.",
+          "Only elapsed durations are compared across host/device clocks; absolute timestamps are not subtracted across clock domains. The CSV host signpost timestamps are nanoseconds (Tracy message total_ns). Device cycle conversion follows the whole-layer summary.",
+          "Gaps are arithmetic differences, not isolated measurements of Python, dispatch, refresh, DRAM, contention or synchronization costs. Those components can overlap, and fixed-position versus successive-position behavior differs. No specific bottleneck or contention cause is inferred from these artifacts alone; negative differences are retained without clamping."
+        ],
+        "separate_unprofiled_observation": {
+          "source": {
+            "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/validated_v4_headline_layer0.json",
+            "sha256": "c00a03ffe2b7063bdec9448b3b27df8c2dbc545b60ba7d1b306796cf99212a68"
+          },
+          "median_host_us": 796.2105666666666,
+          "layer_type": "sliding_attention",
+          "input_tokens": 4096,
+          "output_tokens": 128,
+          "scope": "Separate process/instrumentation regime; excluded from all same-run gaps above."
+        }
+      },
+      "checks": [
+        "Runtime and recorded fixture hashes",
+        "Successful matching command and raw CSV hash",
+        "Four advice-enabled reports",
+        "All complete native windows and replay counts",
+        "All 256 indexed sparse rows have eight IDs/compact groups",
+        "All 128 source-derived rounded KV reads",
+        "Every saved replay duration and estimated traffic",
+        "Useful FLOP terms and declared peak ratios",
+        "Raw Tracy total_ns matches CSV host signposts",
+        "Exact same-run reconciliation including the final command-journal hash"
+      ]
+    },
+    {
+      "layer": 5,
+      "layer_type": "full_attention",
+      "status": "passed",
+      "runtime_sha256": "3d51014f98128dfb21bb484fcece50993524b967754f68f6dfe825ae7f472ba9",
+      "sources": [
+        {
+          "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_v4_layer5/whole_layer.json",
+          "sha256": "0bbbe439fba10dabd29609ddd7047d3b5f9af3c406a6c782031d90a05da0dad9"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/profile_actual_optimized_v4_layer5.json",
+          "sha256": "f9dc2946001d9b04f9d5de3272353de673b57e504c766edb311adb9b8250e3a9"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_v4_layer5/ops.csv",
+          "sha256": "6b36486a6334046f89c4de5af04d5a8c02c7acaa903a8053429617a3080d29c3"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_v4_layer5/raw/reports/headline/2026_09_26_15_07_18/ops_perf_results_headline_2026_09_26_15_07_18.csv",
+          "sha256": "6b36486a6334046f89c4de5af04d5a8c02c7acaa903a8053429617a3080d29c3"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_v4_layer5/raw/.logs/tracy_ops_data.csv",
+          "sha256": "7d11ef7ba80157a986a433fa0031f24bcfc65626f0a73898035417b183a86c6c"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_v4_layer5/timing_reconciliation.json",
+          "sha256": "0e3af1ecd316d5aacc7617f2a28e09fb23862708e9fd89f014843718631a0170"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_v4_layer5/summary_commands.json",
+          "sha256": "54884f90fe86e4734f14ed40ccbf6897124f6662eeede3b97626542e3f04d713"
+        }
+      ],
+      "windows": {
+        "prefill": {
+          "device_us": 190201.3333333333,
+          "min_device_us": 190201.3333333333,
+          "max_device_us": 190201.3333333333,
+          "ns_per_cycle": 0.7407407407407407,
+          "samples": 1,
+          "native_ops": 2109,
+          "summed_kernel_device_us": 188665.38
+        },
+        "decode": {
+          "device_us": 899.0581597222222,
+          "min_device_us": 893.9681481481481,
+          "max_device_us": 908.934074074074,
+          "ns_per_cycle": 0.7407407407407407,
+          "samples": 128,
+          "native_ops": 16128,
+          "summed_kernel_device_us": 772.1001328125,
+          "estimated_dram_bytes": 106384012.0
+        }
+      },
+      "native_ops_per_decode": 126,
+      "decode_op_histogram": {
+        "InterleavedToShardedDeviceOperation": 9,
+        "TypecastDeviceOperation": 15,
+        "LayerNormDeviceOperation": 8,
+        "ShardedToInterleavedDeviceOperation": 10,
+        "BinaryNgDeviceOperation": 19,
+        "MatmulDeviceOperation": 6,
+        "SliceDeviceOperation": 17,
+        "ConcatDeviceOperation": 3,
+        "NLPCreateQKVHeadsDecodeDeviceOperation": 1,
+        "EmbeddingsDeviceOperation": 2,
+        "UntilizeWithUnpaddingDeviceOperation": 6,
+        "RepeatDeviceOperation": 4,
+        "TilizeWithValPaddingDeviceOperation": 6,
+        "UnaryDeviceOperation": 5,
+        "PagedUpdateCacheDeviceOperation": 2,
+        "SdpaDecodeDeviceOperation": 1,
+        "NLPConcatHeadsDecodeDeviceOperation": 1,
+        "FillPadDeviceOperation": 2,
+        "ReduceDeviceOperation": 1,
+        "PadDeviceOperation": 1,
+        "ReshapeViewDeviceOperation": 1,
+        "GeneralizedMoeGateDeviceOperation": 1,
+        "ScatterDeviceOperation": 1,
+        "GatherDeviceOperation": 1,
+        "SparseMatmulDeviceOperation": 2,
+        "TransposeDeviceOperation": 1
+      },
+      "useful_flops_terms": {
+        "qkv_and_output_projections": 401579442176,
+        "shared_mlp": 146163105792,
+        "active_experts_top8": 389768282112,
+        "router_projection": 2952790016,
+        "causal_attention_qk_and_pv": 274945015808
+      },
+      "useful_prefill_flops": 1215408635904,
+      "prefill_flops_pct": 0.9630166552557564,
+      "decode_dram_pct": 23.110993564832025,
+      "estimated_decode_dram_bytes_by_op": {
+        "InterleavedToShardedDeviceOperation": 278528.0,
+        "TypecastDeviceOperation": 950272.0,
+        "LayerNormDeviceOperation": 279040.0,
+        "ShardedToInterleavedDeviceOperation": 131072.0,
+        "BinaryNgDeviceOperation": 3563520.0,
+        "MatmulDeviceOperation": 63754240.0,
+        "SliceDeviceOperation": 524288.0,
+        "ConcatDeviceOperation": 262144.0,
+        "NLPCreateQKVHeadsDecodeDeviceOperation": 0.0,
+        "EmbeddingsDeviceOperation": 131328.0,
+        "UntilizeWithUnpaddingDeviceOperation": 8192.0,
+        "RepeatDeviceOperation": 40960.0,
+        "TilizeWithValPaddingDeviceOperation": 167936.0,
+        "UnaryDeviceOperation": 131072.0,
+        "PagedUpdateCacheDeviceOperation": 140552.0,
+        "SdpaDecodeDeviceOperation": 9257604.0,
+        "NLPConcatHeadsDecodeDeviceOperation": 0.0,
+        "FillPadDeviceOperation": 0.0,
+        "ReduceDeviceOperation": 0.0,
+        "PadDeviceOperation": 0.0,
+        "ReshapeViewDeviceOperation": 0.0,
+        "GeneralizedMoeGateDeviceOperation": 0.0,
+        "ScatterDeviceOperation": 0.0,
+        "GatherDeviceOperation": 0.0,
+        "SparseMatmulDeviceOperation": 26763264.0,
+        "TransposeDeviceOperation": 0.0
+      },
+      "compact_sparse_rows_checked": 256,
+      "native_sdpa_rows_checked": 128,
+      "native_sdpa_mean_read_tokens": 4224,
+      "native_sdpa_mean_kv_bytes": 9191424.0,
+      "decode_matmul_and_sdpa_operand_metadata": [
+        {
+          "operation": "MatmulDeviceOperation",
+          "fidelity": "LoFi",
+          "operands": {
+            "INPUT_0": {
+              "padded_shape": [
+                1,
+                1,
+                32,
+                2816
+              ],
+              "logical_shape": [
+                1,
+                1,
+                1,
+                2816
+              ],
+              "dtype": "FLOAT32",
+              "memory": "DEV_0_L1_INTERLEAVED"
+            },
+            "INPUT_1": {
+              "padded_shape": [
+                1,
+                1,
+                2816,
+                9216
+              ],
+              "logical_shape": [
+                1,
+                1,
+                2816,
+                9216
+              ],
+              "dtype": "BFLOAT8_B",
+              "memory": "DEV_0_DRAM_INTERLEAVED"
+            },
+            "OUTPUT_0": {
+              "padded_shape": [
+                1,
+                1,
+                32,
+                9216
+              ],
+              "logical_shape": [
+                1,
+                1,
+                1,
+                9216
+              ],
+              "dtype": "FLOAT32",
+              "memory": "DEV_0_L1_INTERLEAVED"
+            }
+          },
+          "estimated_dram_bytes": 27574272.0
+        },
+        {
+          "operation": "SdpaDecodeDeviceOperation",
+          "fidelity": "LoFi",
+          "operands": {
+            "INPUT_0": {
+              "padded_shape": [
+                1,
+                1,
+                32,
+                512
+              ],
+              "logical_shape": [
+                1,
+                1,
+                16,
+                512
+              ],
+              "dtype": "BFLOAT16",
+              "memory": "DEV_0_DRAM_INTERLEAVED"
+            },
+            "INPUT_1": {
+              "padded_shape": [
+                160,
+                2,
+                32,
+                512
+              ],
+              "logical_shape": [
+                160,
+                2,
+                32,
+                512
+              ],
+              "dtype": "BFLOAT8_B",
+              "memory": "DEV_0_DRAM_INTERLEAVED"
+            },
+            "INPUT_2": {
+              "padded_shape": [
+                160,
+                2,
+                32,
+                512
+              ],
+              "logical_shape": [
+                160,
+                2,
+                32,
+                512
+              ],
+              "dtype": "BFLOAT8_B",
+              "memory": "DEV_0_DRAM_INTERLEAVED"
+            },
+            "INPUT_3": {
+              "padded_shape": [
+                1,
+                1,
+                1,
+                1
+              ],
+              "logical_shape": [
+                1,
+                1,
+                1,
+                1
+              ],
+              "dtype": "INT32",
+              "memory": "DEV_0_DRAM_INTERLEAVED"
+            },
+            "OUTPUT_0": {
+              "padded_shape": [
+                1,
+                1,
+                32,
+                512
+              ],
+              "logical_shape": [
+                1,
+                1,
+                16,
+                512
+              ],
+              "dtype": "BFLOAT16",
+              "memory": "DEV_0_DRAM_INTERLEAVED"
+            }
+          },
+          "estimated_dram_bytes": 9257604.0
+        },
+        {
+          "operation": "MatmulDeviceOperation",
+          "fidelity": "LoFi",
+          "operands": {
+            "INPUT_0": {
+              "padded_shape": [
+                1,
+                1,
+                32,
+                8192
+              ],
+              "logical_shape": [
+                1,
+                1,
+                1,
+                8192
+              ],
+              "dtype": "BFLOAT16",
+              "memory": "DEV_0_L1_INTERLEAVED"
+            },
+            "INPUT_1": {
+              "padded_shape": [
+                1,
+                1,
+                8192,
+                2816
+              ],
+              "logical_shape": [
+                1,
+                1,
+                8192,
+                2816
+              ],
+              "dtype": "BFLOAT8_B",
+              "memory": "DEV_0_DRAM_INTERLEAVED"
+            },
+            "OUTPUT_0": {
+              "padded_shape": [
+                1,
+                1,
+                32,
+                2816
+              ],
+              "logical_shape": [
+                1,
+                1,
+                1,
+                2816
+              ],
+              "dtype": "FLOAT32",
+              "memory": "DEV_0_L1_INTERLEAVED"
+            }
+          },
+          "estimated_dram_bytes": 24510464.0
+        },
+        {
+          "operation": "MatmulDeviceOperation",
+          "fidelity": "LoFi",
+          "operands": {
+            "INPUT_0": {
+              "padded_shape": [
+                1,
+                1,
+                32,
+                2816
+              ],
+              "logical_shape": [
+                1,
+                1,
+                1,
+                2816
+              ],
+              "dtype": "FLOAT32",
+              "memory": "DEV_0_L1_INTERLEAVED"
+            },
+            "INPUT_1": {
+              "padded_shape": [
+                1,
+                1,
+                2816,
+                128
+              ],
+              "logical_shape": [
+                1,
+                1,
+                2816,
+                128
+              ],
+              "dtype": "BFLOAT16",
+              "memory": "DEV_0_DRAM_INTERLEAVED"
+            },
+            "OUTPUT_0": {
+              "padded_shape": [
+                1,
+                1,
+                32,
+                128
+              ],
+              "logical_shape": [
+                1,
+                1,
+                1,
+                128
+              ],
+              "dtype": "FLOAT32",
+              "memory": "DEV_0_L1_INTERLEAVED"
+            }
+          },
+          "estimated_dram_bytes": 720896
+        },
+        {
+          "operation": "SparseMatmulDeviceOperation",
+          "fidelity": "LoFi",
+          "operands": {
+            "INPUT_0": {
+              "padded_shape": [
+                1,
+                1,
+                32,
+                2816
+              ],
+              "logical_shape": [
+                1,
+                1,
+                1,
+                2816
+              ],
+              "dtype": "BFLOAT8_B",
+              "memory": "DEV_0_L1_INTERLEAVED"
+            },
+            "INPUT_1": {
+              "padded_shape": [
+                1,
+                128,
+                2816,
+                1408
+              ],
+              "logical_shape": [
+                1,
+                128,
+                2816,
+                1408
+              ],
+              "dtype": "BFLOAT4_B",
+              "memory": "DEV_0_DRAM_INTERLEAVED"
+            },
+            "INPUT_2": {
+              "padded_shape": [
+                1,
+                1,
+                1,
+                128
+              ],
+              "logical_shape": [
+                1,
+                1,
+                1,
+                128
+              ],
+              "dtype": "BFLOAT16",
+              "memory": "DEV_0_L1_INTERLEAVED"
+            },
+            "INPUT_3": {
+              "padded_shape": [
+                1,
+                1,
+                1,
+                8
+              ],
+              "logical_shape": [
+                1,
+                1,
+                1,
+                8
+              ],
+              "dtype": "UINT16",
+              "memory": "DEV_0_L1_INTERLEAVED"
+            },
+            "OUTPUT_0": {
+              "padded_shape": [
+                1,
+                8,
+                32,
+                1408
+              ],
+              "logical_shape": [
+                1,
+                8,
+                1,
+                1408
+              ],
+              "dtype": "BFLOAT16",
+              "memory": "DEV_0_L1_INTERLEAVED"
+            }
+          },
+          "estimated_dram_bytes": 17842176.0
+        },
+        {
+          "operation": "SparseMatmulDeviceOperation",
+          "fidelity": "LoFi",
+          "operands": {
+            "INPUT_0": {
+              "padded_shape": [
+                1,
+                8,
+                32,
+                704
+              ],
+              "logical_shape": [
+                1,
+                8,
+                1,
+                704
+              ],
+              "dtype": "BFLOAT16",
+              "memory": "DEV_0_L1_INTERLEAVED"
+            },
+            "INPUT_1": {
+              "padded_shape": [
+                1,
+                128,
+                704,
+                2816
+              ],
+              "logical_shape": [
+                1,
+                128,
+                704,
+                2816
+              ],
+              "dtype": "BFLOAT4_B",
+              "memory": "DEV_0_DRAM_INTERLEAVED"
+            },
+            "INPUT_2": {
+              "padded_shape": [
+                1,
+                1,
+                1,
+                128
+              ],
+              "logical_shape": [
+                1,
+                1,
+                1,
+                128
+              ],
+              "dtype": "BFLOAT16",
+              "memory": "DEV_0_L1_INTERLEAVED"
+            },
+            "INPUT_3": {
+              "padded_shape": [
+                1,
+                1,
+                1,
+                8
+              ],
+              "logical_shape": [
+                1,
+                1,
+                1,
+                8
+              ],
+              "dtype": "UINT16",
+              "memory": "DEV_0_L1_INTERLEAVED"
+            },
+            "OUTPUT_0": {
+              "padded_shape": [
+                1,
+                8,
+                32,
+                2816
+              ],
+              "logical_shape": [
+                1,
+                8,
+                1,
+                2816
+              ],
+              "dtype": "BFLOAT16",
+              "memory": "DEV_0_L1_INTERLEAVED"
+            }
+          },
+          "estimated_dram_bytes": 8921088.0
+        },
+        {
+          "operation": "MatmulDeviceOperation",
+          "fidelity": "HiFi4",
+          "operands": {
+            "INPUT_0": {
+              "padded_shape": [
+                1,
+                1,
+                32,
+                32
+              ],
+              "logical_shape": [
+                1,
+                1,
+                1,
+                8
+              ],
+              "dtype": "BFLOAT16",
+              "memory": "DEV_0_L1_INTERLEAVED"
+            },
+            "INPUT_1": {
+              "padded_shape": [
+                1,
+                1,
+                32,
+                2816
+              ],
+              "logical_shape": [
+                1,
+                1,
+                8,
+                2816
+              ],
+              "dtype": "BFLOAT16",
+              "memory": "DEV_0_L1_INTERLEAVED"
+            },
+            "OUTPUT_0": {
+              "padded_shape": [
+                1,
+                1,
+                32,
+                2816
+              ],
+              "logical_shape": [
+                1,
+                1,
+                1,
+                2816
+              ],
+              "dtype": "BFLOAT16",
+              "memory": "DEV_0_L1_WIDTH_SHARDED"
+            }
+          },
+          "estimated_dram_bytes": 0
+        },
+        {
+          "operation": "MatmulDeviceOperation",
+          "fidelity": "LoFi",
+          "operands": {
+            "INPUT_0": {
+              "padded_shape": [
+                1,
+                1,
+                32,
+                2816
+              ],
+              "logical_shape": [
+                1,
+                1,
+                1,
+                2816
+              ],
+              "dtype": "BFLOAT16",
+              "memory": "DEV_0_L1_WIDTH_SHARDED"
+            },
+            "INPUT_1": {
+              "padded_shape": [
+                1,
+                1,
+                2816,
+                4608
+              ],
+              "logical_shape": [
+                1,
+                1,
+                2816,
+                4608
+              ],
+              "dtype": "BFLOAT4_B",
+              "memory": "DEV_0_DRAM_WIDTH_SHARDED"
+            },
+            "OUTPUT_0": {
+              "padded_shape": [
+                1,
+                1,
+                32,
+                4608
+              ],
+              "logical_shape": [
+                1,
+                1,
+                1,
+                4608
+              ],
+              "dtype": "BFLOAT16",
+              "memory": "DEV_0_L1_WIDTH_SHARDED"
+            }
+          },
+          "estimated_dram_bytes": 7299072.0
+        },
+        {
+          "operation": "MatmulDeviceOperation",
+          "fidelity": "LoFi",
+          "operands": {
+            "INPUT_0": {
+              "padded_shape": [
+                1,
+                1,
+                32,
+                2112
+              ],
+              "logical_shape": [
+                1,
+                1,
+                1,
+                2112
+              ],
+              "dtype": "BFLOAT16",
+              "memory": "DEV_0_L1_WIDTH_SHARDED"
+            },
+            "INPUT_1": {
+              "padded_shape": [
+                1,
+                1,
+                2112,
+                3072
+              ],
+              "logical_shape": [
+                1,
+                1,
+                2112,
+                3072
+              ],
+              "dtype": "BFLOAT4_B",
+              "memory": "DEV_0_DRAM_WIDTH_SHARDED"
+            },
+            "OUTPUT_0": {
+              "padded_shape": [
+                1,
+                1,
+                32,
+                3072
+              ],
+              "logical_shape": [
+                1,
+                1,
+                1,
+                3072
+              ],
+              "dtype": "BFLOAT16",
+              "memory": "DEV_0_L1_WIDTH_SHARDED"
+            }
+          },
+          "estimated_dram_bytes": 3649536.0
+        }
+      ],
+      "measured_precision_policy": {
+        "kv_cache": "bfloat8_b",
+        "native_sdpa_fidelity": "MathFidelity.LoFi",
+        "prefill_attention_fidelity": "MathFidelity.HiFi2",
+        "expert_gate": "DataType.BFLOAT4_B",
+        "decode_expert_down": "DataType.BFLOAT4_B",
+        "prefill_expert_gate": "DataType.BFLOAT4_B",
+        "prefill_expert_down": "DataType.BFLOAT4_B",
+        "decode_expert_activation": "DataType.BFLOAT8_B",
+        "decode_expert_fidelity": "MathFidelity.LoFi",
+        "decode_expert_fused_gelu": true,
+        "decode_expert_backend": "indexed_compact",
+        "decode_expert_slots": 8,
+        "shared_decode_weights": "DataType.BFLOAT4_B",
+        "qkv_fidelity": "MathFidelity.LoFi"
+      },
+      "same_run_reconciliation": {
+        "layer_type": "full_attention",
+        "workload": {
+          "input_tokens": 4096,
+          "output_tokens": 128,
+          "batch": 1,
+          "concurrency": 1,
+          "decode_start_position": 4096
+        },
+        "sources": {
+          "summary": {
+            "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_v4_layer5/whole_layer.json",
+            "sha256": "0bbbe439fba10dabd29609ddd7047d3b5f9af3c406a6c782031d90a05da0dad9"
+          },
+          "runner": {
+            "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/profile_actual_optimized_v4_layer5.json",
+            "sha256": "f9dc2946001d9b04f9d5de3272353de673b57e504c766edb311adb9b8250e3a9"
+          },
+          "csv": {
+            "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_v4_layer5/ops.csv",
+            "sha256": "6b36486a6334046f89c4de5af04d5a8c02c7acaa903a8053429617a3080d29c3"
+          }
+        },
+        "same_run_provenance": {
+          "journal": {
+            "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_optimized_v4_profile_commands.json",
+            "sha256": "aeeea36332857d1c8c5b97d2e396fb1ef25e3e5ba001c75217f627d82e580f91"
+          },
+          "command": [
+            "python",
+            "-m",
+            "tracy",
+            "-r",
+            "-p",
+            "-v",
+            "--op-support-count",
+            "100000",
+            "--no-op-info-cache",
+            "--disable-device-data-dump-to-files",
+            "--disable-device-data-push-to-tracy",
+            "-o",
+            "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_v4_layer5/raw",
+            "-n",
+            "headline",
+            "-m",
+            "models.autoports.google_gemma_4_26b_a4b_it.tests.run_optimized_decoder",
+            "--defaults",
+            "--input-fixture",
+            "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+            "--layer",
+            "5",
+            "--length",
+            "4096",
+            "--real",
+            "--decode",
+            "--steps",
+            "128",
+            "--profile",
+            "--timing",
+            "--verify-program-cache",
+            "--output",
+            "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/profile_actual_optimized_v4_layer5.json"
+          ],
+          "raw_csv": {
+            "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_v4_layer5/raw/reports/headline/2026_09_26_15_07_18/ops_perf_results_headline_2026_09_26_15_07_18.csv",
+            "sha256": "6b36486a6334046f89c4de5af04d5a8c02c7acaa903a8053429617a3080d29c3"
+          }
+        },
+        "decode_estimated_dram_bytes": 106384012.0,
+        "theoretical_dram_bytes_per_s": 512000000000.0,
+        "decode_theoretical_transfer_us": 207.7812734375,
+        "decode_whole_device_window_mean_us": 899.0581597222222,
+        "decode_profile_loop_host_mean_us": 914.8208203125,
+        "decode_fixed_position_host_median_us": 906.8677666666666,
+        "profile_loop": {
+          "start_ns": 17326683470,
+          "end_ns": 17443780535,
+          "total_ns": 117097065,
+          "mean_host_us": 914.8208203125,
+          "replays": 128,
+          "native_ops": 16128
+        },
+        "fixed_position_host": {
+          "samples_us": [
+            906.4873666666666,
+            906.9295333333333,
+            906.8677666666666,
+            907.3430333333333,
+            906.6794
+          ],
+          "samples": 5,
+          "replays_per_sample": 30,
+          "absolute_position": 4223,
+          "input_refresh": false
+        },
+        "gaps_us": {
+          "device_window_minus_theoretical_transfer": 691.2768862847222,
+          "profile_loop_host_minus_device_window": 15.762660590277846,
+          "fixed_position_host_minus_device_window": 7.809606944444454,
+          "profile_loop_host_minus_fixed_position_host": 7.953053645833393
+        },
+        "scopes": [
+          "Theoretical transfer time is estimated operand bytes divided by the stated peak DRAM bandwidth. It is a traffic-only roofline estimate, not measured memory-controller time or a prediction of complete-layer latency.",
+          "Device time is the mean of complete first-firmware-start to last-firmware-end windows for all successive-position replays. All layer operations and intra-layer gaps remain included; inter-replay gaps and input refresh are outside these individual windows.",
+          "Profile-loop host time is the Tracy host-clock difference between PERF_DECODE and PERF_DECODE_END divided by replay count. The runner synchronizes before the first signpost and before the final signpost. The span includes all per-step input/position preparation, copies, trace submissions, waits, inter-replay intervals, final synchronization and signpost-call boundary costs; HF preparation and output readback are outside it.",
+          "Fixed-position host time is from the same profiled process, after the successive-position loop: median of five batches of 30 trace replays with no input refresh at the final position. It uses perf_counter_ns and is a different execution regime from the profile-loop mean.",
+          "Only elapsed durations are compared across host/device clocks; absolute timestamps are not subtracted across clock domains. The CSV host signpost timestamps are nanoseconds (Tracy message total_ns). Device cycle conversion follows the whole-layer summary.",
+          "Gaps are arithmetic differences, not isolated measurements of Python, dispatch, refresh, DRAM, contention or synchronization costs. Those components can overlap, and fixed-position versus successive-position behavior differs. No specific bottleneck or contention cause is inferred from these artifacts alone; negative differences are retained without clamping."
+        ],
+        "separate_unprofiled_observation": {
+          "source": {
+            "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/validated_v4_headline_layer5.json",
+            "sha256": "fe3107fa03bcabca6e2217b3afb8dd8f01a6b24bc891b0fc69ba55cea00b33f8"
+          },
+          "median_host_us": 833.1233333333333,
+          "layer_type": "full_attention",
+          "input_tokens": 4096,
+          "output_tokens": 128,
+          "scope": "Separate process/instrumentation regime; excluded from all same-run gaps above."
+        }
+      },
+      "checks": [
+        "Runtime and recorded fixture hashes",
+        "Successful matching command and raw CSV hash",
+        "Four advice-enabled reports",
+        "All complete native windows and replay counts",
+        "All 256 indexed sparse rows have eight IDs/compact groups",
+        "All 128 source-derived rounded KV reads",
+        "Every saved replay duration and estimated traffic",
+        "Useful FLOP terms and declared peak ratios",
+        "Raw Tracy total_ns matches CSV host signposts",
+        "Exact same-run reconciliation including the final command-journal hash"
+      ]
+    }
+  ],
+  "peak_basis": {
+    "cores_per_asic": 120,
+    "clock_hz": 1350000000,
+    "lofi_flops_per_core_cycle": 4096,
+    "common_fidelity_cycles": 1,
+    "peak_flops_per_s": 663552000000000,
+    "peak_dram_bytes_per_s": 512000000000,
+    "official_topology_source": "https://docs.tenstorrent.com/aibs/blackhole/p300.html",
+    "interpretation": "Common theoretical LoFi peak for mixed-fidelity code; percentages are neither measured FPU utilization nor controller bandwidth."
+  },
+  "limitations": [
+    "Estimated DRAM operands include actual padded metadata shapes and BFP exponent storage; extra core rereads, NoC/reduction and profiler writes are excluded.",
+    "Useful FLOPs omit padding, masked attention, extra union-expert prefill work, scalar normalization and transcendental work; their device time remains included.",
+    "Decode denominator includes every operation and intra-layer gap in each replay, excluding inter-replay host/input refresh gaps.",
+    "Fixed-position host and successive-position device runs have different execution regimes; arithmetic gaps, including negative gaps, do not isolate causes.",
+    "Separate unprofiled observations are excluded from same-run gaps.",
+    "The profiler checks selected HF outputs; complete correctness and strict actual-input long-row gates remain separately evidenced in validated_v4_validation_summary.json."
+  ],
+  "historical": {
+    "path": "roofline_audit_e810_historical.json",
+    "runtime_sha256": "e81018299b722aa81eae0e4e9ec3ec638520adcb3bdd85d3c2c8b429dfa0e370",
+    "scope": "Earlier source-only audit; HiFi4 peak 165.888 TFLOP/s differs by 4x from current LoFi peak. No historical metric is current v4 evidence."
+  },
+  "cpu_verification": {
+    "command": "python models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/audit_final_roofline_v4.py",
+    "status": "passed",
+    "method": "Independent window/peak/FLOP/KV arithmetic plus reviewed summarizer traffic helpers and exact reconciliation regeneration; standard library only."
+  },
+  "artifact_status": "historical_verified_v4_profiles_not_current_v5_evidence"
+}

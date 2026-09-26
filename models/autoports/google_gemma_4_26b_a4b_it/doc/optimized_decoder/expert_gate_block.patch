@@ -1,0 +1,55 @@
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py
+@@ -36,6 +36,7 @@
+         block_w,
+         fidelity,
+         mesh_device,
++        gate_block_w=None,
+         activation_dtype=None,
+         expert_grid=None,
+         down_grid=None,
+@@ -137,6 +138,10 @@
+                         mcast_in0=True,
+                     ),
+                 )
++        if gate_block_w is not None:
++            if not isinstance(gate_block_w, int) or gate_block_w <= 0 or self.config.hidden_size % (32 * gate_block_w):
++                raise ValueError("Expert gate K block must be a positive integer divisor of the tiled hidden width")
++            self.gate_config.in0_block_w = gate_block_w
+         self.expert_split = expert_split
+         self.decode_gelu_activations = [ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0)] if expert_fused_gelu else None
+         if expert_split:
+@@ -144,7 +149,7 @@
+             self.up = self.gate_up[..., self.width :]
+             self.separate_program = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                 compute_with_storage_grid_size=ttnn.CoreCoord(11, 2),
+-                in0_block_w=block_w,
++                in0_block_w=self.gate_config.in0_block_w,
+                 out_subblock_h=1,
+                 out_subblock_w=1,
+                 out_block_h=1,
+@@ -246,6 +251,7 @@
+         expert_gate_dtype="auto",
+         expert_down_dtype=ttnn.bfloat4_b,
+         expert_block_w=22,
++        expert_gate_block_w=None,
+         expert_fidelity=ttnn.MathFidelity.LoFi,
+         compensated_qkv=False,
+         qkv_lanes=16,
+@@ -407,6 +413,7 @@
+             gate_dtype=expert_gate_dtype,
+             down_dtype=expert_down_dtype,
+             block_w=expert_block_w,
++            gate_block_w=expert_gate_block_w,
+             fidelity=expert_fidelity,
+             mesh_device=kwargs["mesh_device"],
+             activation_dtype=expert_activation_dtype,
+@@ -423,6 +430,8 @@
+             expert_split=expert_split,
+             expert_fused_gelu=expert_fused_gelu,
+         )
++        self.precision_policy["expert_gate_k_block"] = self.layer.moe.experts.gate_config.in0_block_w
++        self.precision_policy["expert_down_k_block"] = self.layer.moe.experts.down_config.in0_block_w
+         self.use_sharded_norms = sharded_norms
+         self.sharded_norm_site = sharded_norm_site or (
+             "input_common" if self.config.layer_types[self.layer_idx] == "sliding_attention" else "post_common"

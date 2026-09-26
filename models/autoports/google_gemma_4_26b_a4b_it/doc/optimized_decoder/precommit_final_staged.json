@@ -1,0 +1,6 @@
+{
+  "command": "pre-commit run --files <all stage-owned staged files>",
+  "file_count": 1546,
+  "returncode": 0,
+  "changed_during_check": []
+}

@@ -1,0 +1,36 @@
+{
+  "0": {
+    "native_sdpa": true,
+    "kv_cache_dtype": "bfloat8_b",
+    "qkv_weight_dtype": "bfloat8_b",
+    "output_weight_dtype": "bfloat8_b",
+    "expert_gate_dtype": "bfloat8_b",
+    "sharded_norm_site": "all",
+    "qkv_direct_dtype": "float32",
+    "qkv_fidelity": "HiFi4",
+    "generalized_router": true,
+    "prefill_dtype": "bfloat4_b",
+    "prefill_down_dtype": "bfloat4_b",
+    "prefill_attention_fidelity": "LoFi",
+    "generalized_router_center": true,
+    "qkv_direct_cleanup": true
+  },
+  "5": {
+    "native_sdpa": true,
+    "kv_cache_dtype": "bfloat8_b",
+    "qkv_weight_dtype": "bfloat8_b",
+    "output_weight_dtype": "bfloat8_b",
+    "expert_gate_dtype": "bfloat4_b",
+    "qkv_direct_dtype": "float32",
+    "qkv_fidelity": "LoFi",
+    "generalized_router": true,
+    "prefill_dtype": "bfloat4_b",
+    "prefill_down_dtype": "bfloat4_b",
+    "prefill_attention_fidelity": "LoFi",
+    "expert_activation_dtype": "bfloat8_b",
+    "shared_dtype": "bfloat4_b",
+    "shared_down_dtype": "bfloat4_b",
+    "native_sdpa_fidelity": "LoFi",
+    "qkv_direct_cleanup": true
+  }
+}

@@ -1,0 +1,162 @@
+[
+  {
+    "artifact": "actual_gate_k22_layer0.json",
+    "layer_type": "sliding_attention",
+    "runtime_sha256": "365be21918879bdf94514fd344c352db2e0e898979d059880ef9cd261de5457c",
+    "prefill_pcc": 0.9986693851431688,
+    "decode_min_pcc": 0.9953419568746218,
+    "traced_host_median_us": 1073.8795666666667,
+    "traced_host_samples_us": [
+      1073.8779,
+      1074.0298333333333,
+      1073.8795666666667,
+      1074.4242333333334,
+      1073.7115666666666
+    ],
+    "passed": true
+  },
+  {
+    "artifact": "actual_gate_k22_layer5.json",
+    "layer_type": "full_attention",
+    "runtime_sha256": "365be21918879bdf94514fd344c352db2e0e898979d059880ef9cd261de5457c",
+    "prefill_pcc": 0.9991320669166669,
+    "decode_min_pcc": 0.9952141214781637,
+    "traced_host_median_us": 1170.9427333333333,
+    "traced_host_samples_us": [
+      1170.7954333333332,
+      1170.9427333333333,
+      1171.0288666666668,
+      1170.9814666666666,
+      1170.7259666666666
+    ],
+    "passed": true
+  },
+  {
+    "artifact": "actual_gate_k44_cores22_layer0.json",
+    "layer_type": "sliding_attention",
+    "runtime_sha256": "365be21918879bdf94514fd344c352db2e0e898979d059880ef9cd261de5457c",
+    "prefill_pcc": 0.9986693851431688,
+    "decode_min_pcc": 0.9953419568746218,
+    "traced_host_median_us": 1089.8366,
+    "traced_host_samples_us": [
+      1090.2561,
+      1089.7204,
+      1089.8673333333334,
+      1089.8332666666668,
+      1089.8366
+    ],
+    "passed": true
+  },
+  {
+    "artifact": "actual_gate_k44_cores22_layer5.json",
+    "layer_type": "full_attention",
+    "runtime_sha256": "365be21918879bdf94514fd344c352db2e0e898979d059880ef9cd261de5457c",
+    "prefill_pcc": 0.9991320669166669,
+    "decode_min_pcc": 0.9952141214781637,
+    "traced_host_median_us": 1187.7487,
+    "traced_host_samples_us": [
+      1187.6221333333333,
+      1187.7487,
+      1187.6545333333333,
+      1188.7753333333333,
+      1188.268
+    ],
+    "passed": true
+  },
+  {
+    "artifact": "actual_gate_k44_layer0.json",
+    "layer_type": "sliding_attention",
+    "runtime_sha256": "365be21918879bdf94514fd344c352db2e0e898979d059880ef9cd261de5457c",
+    "prefill_pcc": 0.9986693851431688,
+    "decode_min_pcc": 0.9953419568746218,
+    "traced_host_median_us": 1070.7987,
+    "traced_host_samples_us": [
+      1071.0461666666667,
+      1070.7987,
+      1070.7793,
+      1071.0211,
+      1070.6293666666666
+    ],
+    "passed": true
+  },
+  {
+    "artifact": "actual_gate_k44_layer5.json",
+    "layer_type": "full_attention",
+    "runtime_sha256": "365be21918879bdf94514fd344c352db2e0e898979d059880ef9cd261de5457c",
+    "prefill_pcc": 0.9991320669166669,
+    "decode_min_pcc": 0.9952141214781637,
+    "traced_host_median_us": 1168.4329333333333,
+    "traced_host_samples_us": [
+      1168.4329333333333,
+      1168.5698666666667,
+      1168.3557666666666,
+      1168.3938333333333,
+      1169.1446
+    ],
+    "passed": true
+  },
+  {
+    "artifact": "actual_gate_k44_separate_layer0.json",
+    "layer_type": "sliding_attention",
+    "runtime_sha256": "365be21918879bdf94514fd344c352db2e0e898979d059880ef9cd261de5457c",
+    "prefill_pcc": 0.9986693851431688,
+    "decode_min_pcc": 0.9953419568746218,
+    "traced_host_median_us": 1076.9297,
+    "traced_host_samples_us": [
+      1077.8087,
+      1076.7807333333333,
+      1076.9297,
+      1076.045,
+      1077.2583
+    ],
+    "passed": true
+  },
+  {
+    "artifact": "actual_gate_k44_separate_layer5.json",
+    "layer_type": "full_attention",
+    "runtime_sha256": "365be21918879bdf94514fd344c352db2e0e898979d059880ef9cd261de5457c",
+    "prefill_pcc": 0.9991320669166669,
+    "decode_min_pcc": 0.9952141214781637,
+    "traced_host_median_us": 1177.5516,
+    "traced_host_samples_us": [
+      1177.2861,
+      1177.1238,
+      1177.5516,
+      1177.8568666666667,
+      1177.593
+    ],
+    "passed": true
+  },
+  {
+    "artifact": "actual_gate_k88_layer0.json",
+    "layer_type": "sliding_attention",
+    "runtime_sha256": "365be21918879bdf94514fd344c352db2e0e898979d059880ef9cd261de5457c",
+    "prefill_pcc": 0.9986693851431688,
+    "decode_min_pcc": 0.9953419568746218,
+    "traced_host_median_us": 1075.7093333333332,
+    "traced_host_samples_us": [
+      1075.4686,
+      1073.932,
+      1075.7093333333332,
+      1076.7680666666668,
+      1076.3566
+    ],
+    "passed": true
+  },
+  {
+    "artifact": "actual_gate_k88_layer5.json",
+    "layer_type": "full_attention",
+    "runtime_sha256": "365be21918879bdf94514fd344c352db2e0e898979d059880ef9cd261de5457c",
+    "prefill_pcc": 0.9991320669166669,
+    "decode_min_pcc": 0.9952141214781637,
+    "traced_host_median_us": 1171.2807,
+    "traced_host_samples_us": [
+      1172.3717666666666,
+      1171.6416666666667,
+      1171.275,
+      1171.2807,
+      1171.0495666666666
+    ],
+    "passed": true
+  }
+]

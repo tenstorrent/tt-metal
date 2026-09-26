@@ -1,0 +1,126 @@
+{
+  "qkv_input_l1": {
+    "candidate": "L1 interleaved input; all projection configs/dtypes unchanged",
+    "metadata": {
+      "projection": {
+        "weight_dtype": "DataType.BFLOAT8_B",
+        "weight_shape": [
+          1,
+          1,
+          2816,
+          9216
+        ],
+        "weight_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+        "programs": [
+          "MinimalMatmulConfig(M_block_size=1,K_block_size=16,N_block_size=8,subblock_h=1,subblock_w=4,compute_with_storage_grid_size=11-8)",
+          "MinimalMatmulConfig(M_block_size=2,K_block_size=16,N_block_size=8,subblock_h=1,subblock_w=4,compute_with_storage_grid_size=11-8)",
+          "MinimalMatmulConfig(M_block_size=3,K_block_size=16,N_block_size=8,subblock_h=1,subblock_w=4,compute_with_storage_grid_size=11-8)",
+          "MinimalMatmulConfig(M_block_size=4,K_block_size=16,N_block_size=8,subblock_h=1,subblock_w=4,compute_with_storage_grid_size=11-8)"
+        ],
+        "compute": {
+          "math_fidelity": "MathFidelity.HiFi2",
+          "math_approx_mode": "False",
+          "fp32_dest_acc_en": "True",
+          "packer_l1_acc": "False",
+          "dst_full_sync_en": "False",
+          "throttle_level": "ThrottleLevel.NO_THROTTLE"
+        },
+        "output_dtype": "float32",
+        "input_dtype": "unchanged (selected FP32 prefill activation)"
+      },
+      "decode_policy": {
+        "backend": "native_packed_linear",
+        "input_dtype": "DataType.FLOAT32",
+        "weight_dtypes": [
+          "DataType.BFLOAT8_B"
+        ],
+        "weight_shapes": [
+          [
+            1,
+            1,
+            2816,
+            9216
+          ]
+        ],
+        "weight_memory": [
+          "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+        ],
+        "output_dtype": "float32",
+        "output_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+        "math_fidelity": "MathFidelity.LoFi",
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false,
+        "dram": false,
+        "programs": [
+          {
+            "grid": [
+              11,
+              10
+            ],
+            "in0_block_w": 11,
+            "out_subblock_h": 1,
+            "out_subblock_w": 3,
+            "per_core_M": 1,
+            "per_core_N": 3
+          }
+        ],
+        "setup_cleanup": {
+          "requested": true,
+          "shared_phase_weight": true,
+          "released_rows": true,
+          "released_lane_mask": true
+        },
+        "activation_decomposition": false,
+        "lane_mask": false,
+        "partial_row_reduce": false
+      }
+    },
+    "observed": [
+      {
+        "baseline": {
+          "input_shape": [
+            1,
+            1,
+            1024,
+            2816
+          ],
+          "input_dtype": "DataType.FLOAT32",
+          "input_before_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+          "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+          "requested_output_memory": "None"
+        },
+        "candidate": {
+          "input_shape": [
+            1,
+            1,
+            1024,
+            2816
+          ],
+          "input_dtype": "DataType.FLOAT32",
+          "input_before_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+          "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+          "requested_output_memory": "None"
+        }
+      }
+    ],
+    "source_hashes": {
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py": "daa82a4a5197a007ccd5d29d912f082e695fd37a596578f25fba96a6694e625b",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tests/probe_optimized_prefill_qkv_l1.py": "7040e24332c1cf651d353c66a1f3239e146ceee0b512e8c6afc22074c57ce2c7",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tests/probe_optimized_prefill_pairs.py": "13f71dfb87a9cced61bd974effdb666dee972bade6591954fcb86a8c76a09376",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tests/probe_optimized_minimal_advice.py": "42e64584c36ed0cde95fada7d911abbb7db8af03ac6eada214d349ecafe14b98"
+    }
+  },
+  "paired_prefill": {
+    "pairs_requested": 8,
+    "samples": [],
+    "warmups": [
+      {
+        "round": 0,
+        "candidate": false,
+        "entries_before": 29,
+        "entries_after": 174
+      }
+    ]
+  },
+  "qkv_input_l1_error": "RuntimeError: TT_THROW @ /workspace/tt-metal/tt_metal/impl/program/program.cpp:1932: tt::exception\ninfo:\nStatically allocated circular buffers in program 352 clash with L1 buffers on core range [0-0 - 10-7]. L1 buffer allocated at 1114112 and static circular buffer region ends at 1307648\nbacktrace:\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/libtt_metal.so(+0x9e4ee3) [0x763c737e4ee3]\n --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim28MinimalMatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSJ_12MeshWorkloadEb+0x2d9) [0x763c762c7559]\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1ecbf23) [0x763c762cbf23]\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim28MinimalMatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x280) [0x763c762c38f0]\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_12experimental4prim28MinimalMatmulDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x3a5) [0x763c762c32d5]\n --- ttnn::prim::minimal_matmul(ttnn::Tensor const&, ttnn::Tensor const&, std::optional<ttnn::Tensor> const&, std::optional<ttnn::operations::unary::BasicUnaryWithParam<float> >, std::optional<ttnn::experimental::prim::MinimalMatmulConfig const> const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<tt::tt_metal::DataType const>, std::optional<ttnn::ComputeKernelConfig>, int)\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn12experimental14minimal_matmulERKSt7variantIJNS_6TensorESt6vectorIS2_SaIS2_EEEERKS2_RKSt8optionalIS2_ESB_INS_10operations5unary19BasicUnaryWithParamIJfEEEERKSB_IKNS0_4prim19MinimalMatmulConfigEERKSB_IN2tt8tt_metal12MemoryConfigEESB_IKNSR_8DataTypeEESB_INS_19ComputeKernelConfigEEb+0x440) [0x763c762bf030]\n --- /workspace/tt-metal/ttnn/ttnn/_ttnn.so(+0x4553f8) [0x763c774553f8]\n --- /workspace/tt-metal/ttnn/ttnn/_ttnn.so(+0x454dd8) [0x763c77454dd8]\n --- /workspace/tt-metal/ttnn/ttnn/_ttnn.so(+0x374d3d) [0x763c77374d3d]\n --- python_env/bin/python(_PyObject_Call_Prepend+0x115) [0x6088e3863c65]\n --- python_env/bin/python(+0x3a2b46) [0x6088e3897b46]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0xa16c) [0x6088e37c587c]\n --- python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x6088e3766352]\n --- python_env/bin/python(_PyObject_Call_Prepend+0x115) [0x6088e3863c65]\n --- python_env/bin/python(+0x3a2b46) [0x6088e3897b46]\n --- python_env/bin/python(+0x2fd2a2) [0x6088e37f22a2]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0x3eef) [0x6088e37bf5ff]\n --- python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x6088e3766352]\n --- python_env/bin/python(_PyObject_Call_Prepend+0x115) [0x6088e3863c65]\n --- python_env/bin/python(+0x3a2b46) [0x6088e3897b46]\n --- python_env/bin/python(+0x2fd2a2) [0x6088e37f22a2]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0x3eef) [0x6088e37bf5ff]\n --- python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x6088e3766352]\n --- python_env/bin/python(_PyObject_Call_Prepend+0x115) [0x6088e3863c65]\n --- python_env/bin/python(+0x3a2b46) [0x6088e3897b46]\n --- python_env/bin/python(+0x2fd2a2) [0x6088e37f22a2]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0x3eef) [0x6088e37bf5ff]\n --- python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x6088e3766352]\n --- python_env/bin/python(_PyObject_Call_Prepend+0x96) [0x6088e3863be6]\n --- python_env/bin/python(+0x3a2b46) [0x6088e3897b46]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0x12f3e) [0x6088e37ce64e]\n --- python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x6088e3766352]\n --- python_env/bin/python(+0x273350) [0x6088e3768350]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0xa3df) [0x6088e37c5aef]\n --- python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x6088e3766352]\n --- python_env/bin/python(+0x273350) [0x6088e3768350]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0x36749) [0x6088e37f1e59]\n --- python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x6088e3766352]\n --- python_env/bin/python(_PyObject_Call_Prepend+0x115) [0x6088e3863c65]\n --- python_env/bin/python(+0x3a2b46) [0x6088e3897b46]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0xa16c) [0x6088e37c587c]\n --- python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x6088e3766352]\n --- python_env/bin/python(+0x273350) [0x6088e3768350]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0x36749) [0x6088e37f1e59]\n --- python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x6088e3766352]\n --- python_env/bin/python(+0x273350) [0x6088e3768350]\n --- python_env/bin/python(+0x2fd0b9) [0x6088e37f20b9]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0x3eef) [0x6088e37bf5ff]\n --- python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x6088e3766352]\n --- python_env/bin/python(+0x273350) [0x6088e3768350]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0x36749) [0x6088e37f1e59]\n --- python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x6088e3766352]\n --- python_env/bin/python(+0x2fd0b9) [0x6088e37f20b9]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0x3eef) [0x6088e37bf5ff]\n --- python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x6088e3766352]\n --- python_env/bin/python(+0x2fd0b9) [0x6088e37f20b9]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0x4068) [0x6088e37bf778]\n --- python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x6088e3766352]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0xa3df) [0x6088e37c5aef]\n --- python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x6088e3766352]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0xa3df) [0x6088e37c5aef]\n --- python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x6088e3766352]\n --- python_env/bin/python(+0x2fd0b9) [0x6088e37f20b9]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0x4068) [0x6088e37bf778]\n --- python_env/bin/python(+0x3d4a54) [0x6088e38c9a54]\n --- python_env/bin/python(+0x3d27c9) [0x6088e38c77c9]\n --- python_env/bin/python(+0x29259f) [0x6088e378759f]\n --- python_env/bin/python(+0x2fd0b9) [0x6088e37f20b9]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0x4068) [0x6088e37bf778]\n --- python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x6088e3766352]\n --- python_env/bin/python(+0x2fd0b9) [0x6088e37f20b9]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0x4068) [0x6088e37bf778]\n --- python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x6088e3766352]\n --- python_env/bin/python(+0x1bc738) [0x6088e36b1738]\n --- python_env/bin/python(Py_RunMain+0x673) [0x6088e390b023]\n --- python_env/bin/python(+0x148028) [0x6088e363d028]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x763c9c7c0d90]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x763c9c7c0e40]\n --- python_env/bin/python(+0x34616b) [0x6088e383b16b]\n"
+}

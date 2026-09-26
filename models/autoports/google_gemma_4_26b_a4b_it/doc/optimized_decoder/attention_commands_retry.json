@@ -1,0 +1,22 @@
+[
+  {
+    "command": [
+      "/workspace/tt-metal/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_optimized_attention",
+      "--layer",
+      "0",
+      "--length",
+      "33",
+      "--real",
+      "--decode",
+      "--steps",
+      "8",
+      "--timing",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/attention_cache8_layer0_33_retry.json",
+      "--cache-bfp8"
+    ],
+    "exit_code": 1
+  }
+]

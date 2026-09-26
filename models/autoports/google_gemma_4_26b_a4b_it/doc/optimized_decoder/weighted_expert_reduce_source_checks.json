@@ -1,0 +1,244 @@
+{
+  "scope": "CPU source-AST dispatch, dtype/layout descriptors, and deterministic layout algebra; not TTNN numeric, allocation, or performance validation.",
+  "runtime_sha256": "e81018299b722aa81eae0e4e9ec3ec638520adcb3bdd85d3c2c8b429dfa0e370",
+  "probe_sha256": "bc0d1adf68ae940e3d00cf15155736cdfd8276056e49d080cf91f7ccea82cf41",
+  "probe_compute_lines": [
+    52,
+    58
+  ],
+  "probe_weighted_branch_lines": [
+    142,
+    151
+  ],
+  "cases": [
+    {
+      "expert_slots": 128,
+      "weight_dtype": "bfloat16",
+      "passed": true,
+      "operations": [
+        [
+          "permute",
+          [
+            1,
+            1,
+            1,
+            128
+          ],
+          [
+            0,
+            3,
+            2,
+            1
+          ]
+        ],
+        [
+          "weighted",
+          [
+            1,
+            128,
+            1,
+            2816
+          ],
+          [
+            1,
+            128,
+            1,
+            1
+          ]
+        ],
+        [
+          "to_memory_config",
+          "L1",
+          "L1_width_sharded"
+        ]
+      ],
+      "output_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "output_dtype": "bfloat16",
+      "output_memory": "L1_width_sharded",
+      "algebra_exact": true
+    },
+    {
+      "expert_slots": 128,
+      "weight_dtype": "float32",
+      "passed": true,
+      "operations": [
+        [
+          "permute",
+          [
+            1,
+            1,
+            1,
+            128
+          ],
+          [
+            0,
+            3,
+            2,
+            1
+          ]
+        ],
+        [
+          "weighted",
+          [
+            1,
+            128,
+            1,
+            2816
+          ],
+          [
+            1,
+            128,
+            1,
+            1
+          ]
+        ],
+        [
+          "to_memory_config",
+          "L1",
+          "L1_width_sharded"
+        ]
+      ],
+      "output_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "output_dtype": "bfloat16",
+      "output_memory": "L1_width_sharded",
+      "algebra_exact": true
+    },
+    {
+      "expert_slots": 8,
+      "weight_dtype": "bfloat16",
+      "passed": true,
+      "operations": [
+        [
+          "permute",
+          [
+            1,
+            1,
+            1,
+            8
+          ],
+          [
+            0,
+            3,
+            2,
+            1
+          ]
+        ],
+        [
+          "weighted",
+          [
+            1,
+            8,
+            1,
+            2816
+          ],
+          [
+            1,
+            8,
+            1,
+            1
+          ]
+        ],
+        [
+          "to_memory_config",
+          "L1",
+          "L1_width_sharded"
+        ]
+      ],
+      "output_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "output_dtype": "bfloat16",
+      "output_memory": "L1_width_sharded",
+      "algebra_exact": true
+    },
+    {
+      "expert_slots": 8,
+      "weight_dtype": "float32",
+      "passed": true,
+      "operations": [
+        [
+          "permute",
+          [
+            1,
+            1,
+            1,
+            8
+          ],
+          [
+            0,
+            3,
+            2,
+            1
+          ]
+        ],
+        [
+          "weighted",
+          [
+            1,
+            8,
+            1,
+            2816
+          ],
+          [
+            1,
+            8,
+            1,
+            1
+          ]
+        ],
+        [
+          "to_memory_config",
+          "L1",
+          "L1_width_sharded"
+        ]
+      ],
+      "output_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "output_dtype": "bfloat16",
+      "output_memory": "L1_width_sharded",
+      "algebra_exact": true
+    }
+  ],
+  "tests_passed": true,
+  "unapplied_patch": "weighted_expert_reduce.patch",
+  "candidate_runtime_sha256": "2edc29751d07e285accdcf05977937b32eb51dce24abc983dfbed62363048000",
+  "cb_bytes_per_worker": [
+    {
+      "expert_slots": 128,
+      "weight_dtype": "bfloat16",
+      "bytes": 790528
+    },
+    {
+      "expert_slots": 128,
+      "weight_dtype": "float32",
+      "bytes": 1052672
+    },
+    {
+      "expert_slots": 8,
+      "weight_dtype": "bfloat16",
+      "bytes": 53248
+    },
+    {
+      "expert_slots": 8,
+      "weight_dtype": "float32",
+      "bytes": 69632
+    }
+  ]
+}

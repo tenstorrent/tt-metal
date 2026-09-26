@@ -1,0 +1,4161 @@
+{
+  "layer_type": "full_attention",
+  "workload": {
+    "input_tokens": 4096,
+    "output_tokens": 128,
+    "batch": 1,
+    "concurrency": 1,
+    "decode_start_position": 4096
+  },
+  "source": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_v7_layer5/ops.csv",
+  "whole_layer_windows": {
+    "prefill": {
+      "device_us": 187438.15703703702,
+      "min_device_us": 187438.15703703702,
+      "max_device_us": 187438.15703703702,
+      "ns_per_cycle": 0.7407407407407407,
+      "samples": 1,
+      "native_ops": 2109,
+      "summed_kernel_device_us": 185902.527
+    },
+    "decode": {
+      "device_us": 899.7246759259259,
+      "min_device_us": 893.2103703703704,
+      "max_device_us": 906.8222222222221,
+      "ns_per_cycle": 0.7407407407407407,
+      "samples": 128,
+      "native_ops": 16128,
+      "summed_kernel_device_us": 772.4104140625,
+      "estimated_dram_bytes": 106384012.0
+    }
+  },
+  "prefill_device_us": 187438.15703703702,
+  "decode_device_us": 899.7246759259259,
+  "prefill_useful_flops": 1215408635904,
+  "useful_flops_terms": {
+    "qkv_and_output_projections": 401579442176,
+    "shared_mlp": 146163105792,
+    "active_experts_top8": 389768282112,
+    "router_projection": 2952790016,
+    "causal_attention_qk_and_pv": 274945015808
+  },
+  "decode_dram_bytes": 106384012.0,
+  "peak_flops_per_s": 663552000000000.0,
+  "peak_dram_bytes_per_s": 512000000000.0,
+  "prefill_flops_pct": 0.9772132566138003,
+  "decode_dram_pct": 23.09387293659228,
+  "peak_basis": "One P300 Blackhole ASIC: theoretical120 Tensix cores at1.35GHz,4096 FLOP/core/cycle divided by1 fidelity cycles;512GB/s DRAM. Mixed fidelity/SFPU code, so this is a stated common useful-work roofline basis, not measured FPU utilization.",
+  "assumptions": [
+    "Time is first native firmware start to last native firmware end, including all intervening layer operations and gaps. Decode is mean of128 individual trace replay windows; inter-replay input-copy/host gaps are excluded.",
+    "Useful FLOPs count logical projection/MLP/router and causal attention work, with only8 active experts. Padding, masked attention, extra prefill expert computation, scalar normalization and transcendental work are excluded from numerator; their time remains in denominator.",
+    "Estimated DRAM bytes sum one padded DRAM input read/output write per native operation. Sparse weights use recorded nnz divided by the weight expert count, or use_indices=true plus the compact output expert dimension; cache updates read/write one 32-token page across KV heads; embedding/slices count selected inputs; whole-cache conversions count the full pool. Native decode SDPA K/V reads use per-position causal/sliding spans rounded to its effective read chunk, not allocated cache capacity. Other operands, including index/page-table tensors, keep generic one-read/write counts. Extra per-core operand/table rereads, NOC/reduction and profiler traffic are excluded. This is an estimate, not hardware counters.",
+    "Selected v7 defaults, runtime daa82a4a5197a007ccd5d29d912f082e695fd37a596578f25fba96a6694e625b. Prefill QKV uses minimal matmul 11x8, K8 sliding/K16 full, HiFi4 sliding/HiFi2 full, FP32 accumulation/output with BFP8 weights. Full prefill output uses minimal matmul K8 LoFi; sliding retains 2D K16 LoFi. Prefill expert gate BFP8 sliding/BFP4 full, down BFP4. Indexed compact top8 decode with actual native index/output metadata. Single-ASIC theoretical LoFi peak; useful work excludes padded/inactive experts. Runtime policy: {\"attention_weights\": {\"qkv\": \"DataType.BFLOAT8_B\", \"output\": \"DataType.BFLOAT8_B\"}, \"kv_cache\": \"bfloat8_b\", \"native_sdpa\": true, \"native_sdpa_grid\": [8, 8], \"native_sdpa_fidelity\": \"MathFidelity.LoFi\", \"prefill_attention_fidelity\": \"MathFidelity.HiFi2\", \"decode_expert_activation\": \"DataType.BFLOAT8_B\", \"router_selection\": \"generalized_moe_gate\", \"generalized_router_center\": true, \"native_sdpa_dst_full_sync\": true, \"residual\": \"float32\", \"expert_gate\": \"DataType.BFLOAT4_B\", \"decode_expert_down\": \"DataType.BFLOAT4_B\", \"prefill_expert_gate\": \"DataType.BFLOAT4_B\", \"prefill_expert_down\": \"DataType.BFLOAT4_B\", \"decode_expert_fidelity\": \"MathFidelity.LoFi\", \"decode_expert_fused_gelu\": true, \"decode_expert_backend\": \"indexed_compact\", \"decode_expert_slots\": 8, \"prefill_expert_fidelity\": \"MathFidelity.LoFi\", \"shared_decode_weights\": \"DataType.BFLOAT4_B\", \"shared_decode_fidelity\": \"MathFidelity.LoFi\", \"qkv_fidelity\": \"MathFidelity.LoFi\", \"qkv_grid\": [11, 10], \"qkv_terms\": null, \"qkv_lanes\": 0, \"qkv_direct_dtype\": \"DataType.FLOAT32\", \"qkv_direct_cleanup\": true, \"router_lanes\": 0, \"qkv_dram\": false, \"qkv_dram_readers\": null, \"qkv_dram_block\": null, \"expert_grid\": [11, 4], \"expert_k_block\": 22, \"prefill_batch_tokens\": 32, \"expert_gate_k_block\": 44, \"expert_down_k_block\": 22, \"qkv_decode\": {\"backend\": \"native_packed_linear\", \"input_dtype\": \"DataType.FLOAT32\", \"weight_dtypes\": [\"DataType.BFLOAT8_B\"], \"weight_shapes\": [[1, 1, 2816, 9216]], \"weight_memory\": [\"MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)\"], \"output_dtype\": \"float32\", \"output_memory\": \"MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)\", \"math_fidelity\": \"MathFidelity.LoFi\", \"fp32_dest_acc_en\": true, \"packer_l1_acc\": false, \"dram\": false, \"programs\": [{\"grid\": [11, 10], \"in0_block_w\": 11, \"out_subblock_h\": 1, \"out_subblock_w\": 3, \"per_core_M\": 1, \"per_core_N\": 3}], \"setup_cleanup\": {\"requested\": true, \"shared_phase_weight\": true, \"released_rows\": true, \"released_lane_mask\": true}, \"activation_decomposition\": false, \"lane_mask\": false, \"partial_row_reduce\": false}, \"prefill_qkv_projection\": {\"backend\": \"minimal_matmul\", \"grid\": [11, 8], \"k_block\": 16, \"m_block\": \"min(4, padded_M_tiles)\", \"n_block\": 8, \"subblock\": [1, 4], \"weight_dtype\": \"DataType.BFLOAT8_B\", \"weight_shape\": [1, 1, 2816, 9216], \"input_dtype\": \"unchanged\", \"output_dtype\": \"float32\", \"fidelity\": \"MathFidelity.HiFi2\", \"fp32_dest_acc_en\": true, \"math_approx_mode\": false, \"packer_l1_acc\": false, \"programs\": {\"1\": \"MinimalMatmulConfig(M_block_size=1,K_block_size=16,N_block_size=8,subblock_h=1,subblock_w=4,compute_with_storage_grid_size=11-8)\", \"2\": \"MinimalMatmulConfig(M_block_size=2,K_block_size=16,N_block_size=8,subblock_h=1,subblock_w=4,compute_with_storage_grid_size=11-8)\", \"3\": \"MinimalMatmulConfig(M_block_size=3,K_block_size=16,N_block_size=8,subblock_h=1,subblock_w=4,compute_with_storage_grid_size=11-8)\", \"4\": \"MinimalMatmulConfig(M_block_size=4,K_block_size=16,N_block_size=8,subblock_h=1,subblock_w=4,compute_with_storage_grid_size=11-8)\"}}, \"router_projection\": {\"backend\": \"native_linear\", \"input_dtype\": \"float32\", \"weight_dtype\": \"DataType.BFLOAT16\", \"output_dtype\": \"float32\", \"output_memory\": \"L1 interleaved\", \"grid\": [4, 1], \"k_block\": 44, \"fidelity\": \"MathFidelity.LoFi\", \"fp32_dest_acc_en\": true, \"packer_l1_acc\": false, \"program\": \"MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=4-1,in0_block_w=44,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=1,per_core_M=1,per_core_N=1,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)\"}, \"output_projection\": {\"grid\": [11, 10], \"program\": \"MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=16,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=1,per_core_M=1,per_core_N=1,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)\", \"fidelity\": \"MathFidelity.LoFi\", \"memory\": \"MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)\", \"weight_dtype\": \"DataType.BFLOAT8_B\"}, \"prefill_output_projection\": {\"enabled\": true, \"grid\": [11, 8], \"k_block\": 8, \"fidelity\": \"MathFidelity.LoFi\", \"fp32_dest_acc_en\": true, \"input_l1\": false, \"output_dtype\": \"float32\", \"output_memory\": \"DRAM interleaved\", \"weight_dtype\": \"DataType.BFLOAT8_B\", \"programs\": {\"1\": \"MinimalMatmulConfig(M_block_size=1,K_block_size=8,N_block_size=8,subblock_h=1,subblock_w=4,compute_with_storage_grid_size=11-8)\", \"2\": \"MinimalMatmulConfig(M_block_size=2,K_block_size=8,N_block_size=8,subblock_h=1,subblock_w=4,compute_with_storage_grid_size=11-8)\", \"3\": \"MinimalMatmulConfig(M_block_size=3,K_block_size=8,N_block_size=8,subblock_h=1,subblock_w=4,compute_with_storage_grid_size=11-8)\", \"4\": \"MinimalMatmulConfig(M_block_size=4,K_block_size=8,N_block_size=8,subblock_h=1,subblock_w=4,compute_with_storage_grid_size=11-8)\"}, \"backend\": \"minimal_matmul\", \"m_block\": \"min(4, padded_M_tiles)\", \"n_block\": 8, \"subblock\": [1, 4], \"weight_shape\": [1, 1, 8192, 2816], \"input_dtype\": \"unchanged\", \"math_approx_mode\": false, \"packer_l1_acc\": false}} No percentages are clamped."
+  ],
+  "sparse_weight_reads": [
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4599811",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "global_call_count": "4604931",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    }
+  ],
+  "native_sdpa_cache_reads": {
+    "basis": "One read per selected K/V tile for batch-one non-MLA GQA with unsharded query; rounded spans follow rt_args_common.hpp",
+    "position_basis": "128 successive positions assigned to replay groups ordered by first firmware cycle",
+    "effective_chunk_override": 128,
+    "mean_kv_dram_bytes": 9191424.0,
+    "mean_read_tokens": 4224,
+    "per_replay": [
+      {
+        "session": "3",
+        "position": 4096,
+        "logical_start": 0,
+        "logical_end_exclusive": 4097,
+        "logical_tokens": 4097,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "4",
+        "position": 4097,
+        "logical_start": 0,
+        "logical_end_exclusive": 4098,
+        "logical_tokens": 4098,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "5",
+        "position": 4098,
+        "logical_start": 0,
+        "logical_end_exclusive": 4099,
+        "logical_tokens": 4099,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "6",
+        "position": 4099,
+        "logical_start": 0,
+        "logical_end_exclusive": 4100,
+        "logical_tokens": 4100,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "7",
+        "position": 4100,
+        "logical_start": 0,
+        "logical_end_exclusive": 4101,
+        "logical_tokens": 4101,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "8",
+        "position": 4101,
+        "logical_start": 0,
+        "logical_end_exclusive": 4102,
+        "logical_tokens": 4102,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "9",
+        "position": 4102,
+        "logical_start": 0,
+        "logical_end_exclusive": 4103,
+        "logical_tokens": 4103,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "10",
+        "position": 4103,
+        "logical_start": 0,
+        "logical_end_exclusive": 4104,
+        "logical_tokens": 4104,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "11",
+        "position": 4104,
+        "logical_start": 0,
+        "logical_end_exclusive": 4105,
+        "logical_tokens": 4105,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "12",
+        "position": 4105,
+        "logical_start": 0,
+        "logical_end_exclusive": 4106,
+        "logical_tokens": 4106,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "13",
+        "position": 4106,
+        "logical_start": 0,
+        "logical_end_exclusive": 4107,
+        "logical_tokens": 4107,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "14",
+        "position": 4107,
+        "logical_start": 0,
+        "logical_end_exclusive": 4108,
+        "logical_tokens": 4108,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "15",
+        "position": 4108,
+        "logical_start": 0,
+        "logical_end_exclusive": 4109,
+        "logical_tokens": 4109,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "16",
+        "position": 4109,
+        "logical_start": 0,
+        "logical_end_exclusive": 4110,
+        "logical_tokens": 4110,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "17",
+        "position": 4110,
+        "logical_start": 0,
+        "logical_end_exclusive": 4111,
+        "logical_tokens": 4111,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "18",
+        "position": 4111,
+        "logical_start": 0,
+        "logical_end_exclusive": 4112,
+        "logical_tokens": 4112,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "19",
+        "position": 4112,
+        "logical_start": 0,
+        "logical_end_exclusive": 4113,
+        "logical_tokens": 4113,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "20",
+        "position": 4113,
+        "logical_start": 0,
+        "logical_end_exclusive": 4114,
+        "logical_tokens": 4114,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "21",
+        "position": 4114,
+        "logical_start": 0,
+        "logical_end_exclusive": 4115,
+        "logical_tokens": 4115,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "22",
+        "position": 4115,
+        "logical_start": 0,
+        "logical_end_exclusive": 4116,
+        "logical_tokens": 4116,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "23",
+        "position": 4116,
+        "logical_start": 0,
+        "logical_end_exclusive": 4117,
+        "logical_tokens": 4117,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "24",
+        "position": 4117,
+        "logical_start": 0,
+        "logical_end_exclusive": 4118,
+        "logical_tokens": 4118,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "25",
+        "position": 4118,
+        "logical_start": 0,
+        "logical_end_exclusive": 4119,
+        "logical_tokens": 4119,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "26",
+        "position": 4119,
+        "logical_start": 0,
+        "logical_end_exclusive": 4120,
+        "logical_tokens": 4120,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "27",
+        "position": 4120,
+        "logical_start": 0,
+        "logical_end_exclusive": 4121,
+        "logical_tokens": 4121,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "28",
+        "position": 4121,
+        "logical_start": 0,
+        "logical_end_exclusive": 4122,
+        "logical_tokens": 4122,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "29",
+        "position": 4122,
+        "logical_start": 0,
+        "logical_end_exclusive": 4123,
+        "logical_tokens": 4123,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "30",
+        "position": 4123,
+        "logical_start": 0,
+        "logical_end_exclusive": 4124,
+        "logical_tokens": 4124,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "31",
+        "position": 4124,
+        "logical_start": 0,
+        "logical_end_exclusive": 4125,
+        "logical_tokens": 4125,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "32",
+        "position": 4125,
+        "logical_start": 0,
+        "logical_end_exclusive": 4126,
+        "logical_tokens": 4126,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "33",
+        "position": 4126,
+        "logical_start": 0,
+        "logical_end_exclusive": 4127,
+        "logical_tokens": 4127,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "34",
+        "position": 4127,
+        "logical_start": 0,
+        "logical_end_exclusive": 4128,
+        "logical_tokens": 4128,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "35",
+        "position": 4128,
+        "logical_start": 0,
+        "logical_end_exclusive": 4129,
+        "logical_tokens": 4129,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "36",
+        "position": 4129,
+        "logical_start": 0,
+        "logical_end_exclusive": 4130,
+        "logical_tokens": 4130,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "37",
+        "position": 4130,
+        "logical_start": 0,
+        "logical_end_exclusive": 4131,
+        "logical_tokens": 4131,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "38",
+        "position": 4131,
+        "logical_start": 0,
+        "logical_end_exclusive": 4132,
+        "logical_tokens": 4132,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "39",
+        "position": 4132,
+        "logical_start": 0,
+        "logical_end_exclusive": 4133,
+        "logical_tokens": 4133,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "40",
+        "position": 4133,
+        "logical_start": 0,
+        "logical_end_exclusive": 4134,
+        "logical_tokens": 4134,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "41",
+        "position": 4134,
+        "logical_start": 0,
+        "logical_end_exclusive": 4135,
+        "logical_tokens": 4135,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "42",
+        "position": 4135,
+        "logical_start": 0,
+        "logical_end_exclusive": 4136,
+        "logical_tokens": 4136,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "43",
+        "position": 4136,
+        "logical_start": 0,
+        "logical_end_exclusive": 4137,
+        "logical_tokens": 4137,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "44",
+        "position": 4137,
+        "logical_start": 0,
+        "logical_end_exclusive": 4138,
+        "logical_tokens": 4138,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "45",
+        "position": 4138,
+        "logical_start": 0,
+        "logical_end_exclusive": 4139,
+        "logical_tokens": 4139,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "46",
+        "position": 4139,
+        "logical_start": 0,
+        "logical_end_exclusive": 4140,
+        "logical_tokens": 4140,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "47",
+        "position": 4140,
+        "logical_start": 0,
+        "logical_end_exclusive": 4141,
+        "logical_tokens": 4141,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "48",
+        "position": 4141,
+        "logical_start": 0,
+        "logical_end_exclusive": 4142,
+        "logical_tokens": 4142,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "49",
+        "position": 4142,
+        "logical_start": 0,
+        "logical_end_exclusive": 4143,
+        "logical_tokens": 4143,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "50",
+        "position": 4143,
+        "logical_start": 0,
+        "logical_end_exclusive": 4144,
+        "logical_tokens": 4144,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "51",
+        "position": 4144,
+        "logical_start": 0,
+        "logical_end_exclusive": 4145,
+        "logical_tokens": 4145,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "52",
+        "position": 4145,
+        "logical_start": 0,
+        "logical_end_exclusive": 4146,
+        "logical_tokens": 4146,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "53",
+        "position": 4146,
+        "logical_start": 0,
+        "logical_end_exclusive": 4147,
+        "logical_tokens": 4147,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "54",
+        "position": 4147,
+        "logical_start": 0,
+        "logical_end_exclusive": 4148,
+        "logical_tokens": 4148,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "55",
+        "position": 4148,
+        "logical_start": 0,
+        "logical_end_exclusive": 4149,
+        "logical_tokens": 4149,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "56",
+        "position": 4149,
+        "logical_start": 0,
+        "logical_end_exclusive": 4150,
+        "logical_tokens": 4150,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "57",
+        "position": 4150,
+        "logical_start": 0,
+        "logical_end_exclusive": 4151,
+        "logical_tokens": 4151,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "58",
+        "position": 4151,
+        "logical_start": 0,
+        "logical_end_exclusive": 4152,
+        "logical_tokens": 4152,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "59",
+        "position": 4152,
+        "logical_start": 0,
+        "logical_end_exclusive": 4153,
+        "logical_tokens": 4153,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "60",
+        "position": 4153,
+        "logical_start": 0,
+        "logical_end_exclusive": 4154,
+        "logical_tokens": 4154,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "61",
+        "position": 4154,
+        "logical_start": 0,
+        "logical_end_exclusive": 4155,
+        "logical_tokens": 4155,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "62",
+        "position": 4155,
+        "logical_start": 0,
+        "logical_end_exclusive": 4156,
+        "logical_tokens": 4156,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "63",
+        "position": 4156,
+        "logical_start": 0,
+        "logical_end_exclusive": 4157,
+        "logical_tokens": 4157,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "64",
+        "position": 4157,
+        "logical_start": 0,
+        "logical_end_exclusive": 4158,
+        "logical_tokens": 4158,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "65",
+        "position": 4158,
+        "logical_start": 0,
+        "logical_end_exclusive": 4159,
+        "logical_tokens": 4159,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "66",
+        "position": 4159,
+        "logical_start": 0,
+        "logical_end_exclusive": 4160,
+        "logical_tokens": 4160,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "67",
+        "position": 4160,
+        "logical_start": 0,
+        "logical_end_exclusive": 4161,
+        "logical_tokens": 4161,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "68",
+        "position": 4161,
+        "logical_start": 0,
+        "logical_end_exclusive": 4162,
+        "logical_tokens": 4162,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "69",
+        "position": 4162,
+        "logical_start": 0,
+        "logical_end_exclusive": 4163,
+        "logical_tokens": 4163,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "70",
+        "position": 4163,
+        "logical_start": 0,
+        "logical_end_exclusive": 4164,
+        "logical_tokens": 4164,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "71",
+        "position": 4164,
+        "logical_start": 0,
+        "logical_end_exclusive": 4165,
+        "logical_tokens": 4165,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "72",
+        "position": 4165,
+        "logical_start": 0,
+        "logical_end_exclusive": 4166,
+        "logical_tokens": 4166,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "73",
+        "position": 4166,
+        "logical_start": 0,
+        "logical_end_exclusive": 4167,
+        "logical_tokens": 4167,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "74",
+        "position": 4167,
+        "logical_start": 0,
+        "logical_end_exclusive": 4168,
+        "logical_tokens": 4168,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "75",
+        "position": 4168,
+        "logical_start": 0,
+        "logical_end_exclusive": 4169,
+        "logical_tokens": 4169,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "76",
+        "position": 4169,
+        "logical_start": 0,
+        "logical_end_exclusive": 4170,
+        "logical_tokens": 4170,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "77",
+        "position": 4170,
+        "logical_start": 0,
+        "logical_end_exclusive": 4171,
+        "logical_tokens": 4171,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "78",
+        "position": 4171,
+        "logical_start": 0,
+        "logical_end_exclusive": 4172,
+        "logical_tokens": 4172,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "79",
+        "position": 4172,
+        "logical_start": 0,
+        "logical_end_exclusive": 4173,
+        "logical_tokens": 4173,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "80",
+        "position": 4173,
+        "logical_start": 0,
+        "logical_end_exclusive": 4174,
+        "logical_tokens": 4174,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "81",
+        "position": 4174,
+        "logical_start": 0,
+        "logical_end_exclusive": 4175,
+        "logical_tokens": 4175,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "82",
+        "position": 4175,
+        "logical_start": 0,
+        "logical_end_exclusive": 4176,
+        "logical_tokens": 4176,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "83",
+        "position": 4176,
+        "logical_start": 0,
+        "logical_end_exclusive": 4177,
+        "logical_tokens": 4177,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "84",
+        "position": 4177,
+        "logical_start": 0,
+        "logical_end_exclusive": 4178,
+        "logical_tokens": 4178,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "85",
+        "position": 4178,
+        "logical_start": 0,
+        "logical_end_exclusive": 4179,
+        "logical_tokens": 4179,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "86",
+        "position": 4179,
+        "logical_start": 0,
+        "logical_end_exclusive": 4180,
+        "logical_tokens": 4180,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "87",
+        "position": 4180,
+        "logical_start": 0,
+        "logical_end_exclusive": 4181,
+        "logical_tokens": 4181,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "88",
+        "position": 4181,
+        "logical_start": 0,
+        "logical_end_exclusive": 4182,
+        "logical_tokens": 4182,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "89",
+        "position": 4182,
+        "logical_start": 0,
+        "logical_end_exclusive": 4183,
+        "logical_tokens": 4183,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "90",
+        "position": 4183,
+        "logical_start": 0,
+        "logical_end_exclusive": 4184,
+        "logical_tokens": 4184,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "91",
+        "position": 4184,
+        "logical_start": 0,
+        "logical_end_exclusive": 4185,
+        "logical_tokens": 4185,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "92",
+        "position": 4185,
+        "logical_start": 0,
+        "logical_end_exclusive": 4186,
+        "logical_tokens": 4186,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "93",
+        "position": 4186,
+        "logical_start": 0,
+        "logical_end_exclusive": 4187,
+        "logical_tokens": 4187,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "94",
+        "position": 4187,
+        "logical_start": 0,
+        "logical_end_exclusive": 4188,
+        "logical_tokens": 4188,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "95",
+        "position": 4188,
+        "logical_start": 0,
+        "logical_end_exclusive": 4189,
+        "logical_tokens": 4189,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "96",
+        "position": 4189,
+        "logical_start": 0,
+        "logical_end_exclusive": 4190,
+        "logical_tokens": 4190,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "97",
+        "position": 4190,
+        "logical_start": 0,
+        "logical_end_exclusive": 4191,
+        "logical_tokens": 4191,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "98",
+        "position": 4191,
+        "logical_start": 0,
+        "logical_end_exclusive": 4192,
+        "logical_tokens": 4192,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "99",
+        "position": 4192,
+        "logical_start": 0,
+        "logical_end_exclusive": 4193,
+        "logical_tokens": 4193,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "100",
+        "position": 4193,
+        "logical_start": 0,
+        "logical_end_exclusive": 4194,
+        "logical_tokens": 4194,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "101",
+        "position": 4194,
+        "logical_start": 0,
+        "logical_end_exclusive": 4195,
+        "logical_tokens": 4195,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "102",
+        "position": 4195,
+        "logical_start": 0,
+        "logical_end_exclusive": 4196,
+        "logical_tokens": 4196,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "103",
+        "position": 4196,
+        "logical_start": 0,
+        "logical_end_exclusive": 4197,
+        "logical_tokens": 4197,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "104",
+        "position": 4197,
+        "logical_start": 0,
+        "logical_end_exclusive": 4198,
+        "logical_tokens": 4198,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "105",
+        "position": 4198,
+        "logical_start": 0,
+        "logical_end_exclusive": 4199,
+        "logical_tokens": 4199,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "106",
+        "position": 4199,
+        "logical_start": 0,
+        "logical_end_exclusive": 4200,
+        "logical_tokens": 4200,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "107",
+        "position": 4200,
+        "logical_start": 0,
+        "logical_end_exclusive": 4201,
+        "logical_tokens": 4201,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "108",
+        "position": 4201,
+        "logical_start": 0,
+        "logical_end_exclusive": 4202,
+        "logical_tokens": 4202,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "109",
+        "position": 4202,
+        "logical_start": 0,
+        "logical_end_exclusive": 4203,
+        "logical_tokens": 4203,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "110",
+        "position": 4203,
+        "logical_start": 0,
+        "logical_end_exclusive": 4204,
+        "logical_tokens": 4204,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "111",
+        "position": 4204,
+        "logical_start": 0,
+        "logical_end_exclusive": 4205,
+        "logical_tokens": 4205,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "112",
+        "position": 4205,
+        "logical_start": 0,
+        "logical_end_exclusive": 4206,
+        "logical_tokens": 4206,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "113",
+        "position": 4206,
+        "logical_start": 0,
+        "logical_end_exclusive": 4207,
+        "logical_tokens": 4207,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "114",
+        "position": 4207,
+        "logical_start": 0,
+        "logical_end_exclusive": 4208,
+        "logical_tokens": 4208,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "115",
+        "position": 4208,
+        "logical_start": 0,
+        "logical_end_exclusive": 4209,
+        "logical_tokens": 4209,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "116",
+        "position": 4209,
+        "logical_start": 0,
+        "logical_end_exclusive": 4210,
+        "logical_tokens": 4210,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "117",
+        "position": 4210,
+        "logical_start": 0,
+        "logical_end_exclusive": 4211,
+        "logical_tokens": 4211,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "118",
+        "position": 4211,
+        "logical_start": 0,
+        "logical_end_exclusive": 4212,
+        "logical_tokens": 4212,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "119",
+        "position": 4212,
+        "logical_start": 0,
+        "logical_end_exclusive": 4213,
+        "logical_tokens": 4213,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "120",
+        "position": 4213,
+        "logical_start": 0,
+        "logical_end_exclusive": 4214,
+        "logical_tokens": 4214,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "121",
+        "position": 4214,
+        "logical_start": 0,
+        "logical_end_exclusive": 4215,
+        "logical_tokens": 4215,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "122",
+        "position": 4215,
+        "logical_start": 0,
+        "logical_end_exclusive": 4216,
+        "logical_tokens": 4216,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "123",
+        "position": 4216,
+        "logical_start": 0,
+        "logical_end_exclusive": 4217,
+        "logical_tokens": 4217,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "124",
+        "position": 4217,
+        "logical_start": 0,
+        "logical_end_exclusive": 4218,
+        "logical_tokens": 4218,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "125",
+        "position": 4218,
+        "logical_start": 0,
+        "logical_end_exclusive": 4219,
+        "logical_tokens": 4219,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "126",
+        "position": 4219,
+        "logical_start": 0,
+        "logical_end_exclusive": 4220,
+        "logical_tokens": 4220,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "127",
+        "position": 4220,
+        "logical_start": 0,
+        "logical_end_exclusive": 4221,
+        "logical_tokens": 4221,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "128",
+        "position": 4221,
+        "logical_start": 0,
+        "logical_end_exclusive": 4222,
+        "logical_tokens": 4222,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "129",
+        "position": 4222,
+        "logical_start": 0,
+        "logical_end_exclusive": 4223,
+        "logical_tokens": 4223,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      },
+      {
+        "session": "130",
+        "position": 4223,
+        "logical_start": 0,
+        "logical_end_exclusive": 4224,
+        "logical_tokens": 4224,
+        "read_start": 0,
+        "read_end_exclusive": 4224,
+        "read_tokens": 4224,
+        "chunk_tokens": 128,
+        "chunk_basis": "explicit CLI effective read-chunk override",
+        "cache_dtypes": {
+          "INPUT_1": "BFLOAT8_B",
+          "INPUT_2": "BFLOAT8_B"
+        },
+        "kv_dram_bytes": 9191424.0,
+        "allocated_kv_bytes": 11141120.0
+      }
+    ]
+  }
+}

@@ -1,0 +1,126 @@
+{
+  "status": "unapplied_candidate",
+  "runtime": "models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py",
+  "base_sha256": "365be21918879bdf94514fd344c352db2e0e898979d059880ef9cd261de5457c",
+  "candidate_sha256": "1259635843c1227699e6d9c56b817d48e2f0ce0996a32b02b233b18d0e9c4520",
+  "change": "Return native BF16 SDPA result directly; preserve BF16 through concat and projection input, retaining FP32 linear output.",
+  "checks": [
+    {
+      "head_dim": 256,
+      "explicit_program": true,
+      "sharded_project": true,
+      "candidate": false,
+      "attention_and_projection_input_dtype": "fp32",
+      "output_dtype": "fp32",
+      "passed": true
+    },
+    {
+      "head_dim": 256,
+      "explicit_program": true,
+      "sharded_project": true,
+      "candidate": true,
+      "attention_and_projection_input_dtype": "bf16",
+      "output_dtype": "fp32",
+      "passed": true
+    },
+    {
+      "head_dim": 256,
+      "explicit_program": false,
+      "sharded_project": true,
+      "candidate": false,
+      "attention_and_projection_input_dtype": "fp32",
+      "output_dtype": "fp32",
+      "passed": true
+    },
+    {
+      "head_dim": 256,
+      "explicit_program": false,
+      "sharded_project": true,
+      "candidate": true,
+      "attention_and_projection_input_dtype": "bf16",
+      "output_dtype": "fp32",
+      "passed": true
+    },
+    {
+      "head_dim": 256,
+      "explicit_program": false,
+      "sharded_project": false,
+      "candidate": false,
+      "attention_and_projection_input_dtype": "fp32",
+      "output_dtype": "fp32",
+      "passed": true
+    },
+    {
+      "head_dim": 256,
+      "explicit_program": false,
+      "sharded_project": false,
+      "candidate": true,
+      "attention_and_projection_input_dtype": "bf16",
+      "output_dtype": "fp32",
+      "passed": true
+    },
+    {
+      "head_dim": 512,
+      "explicit_program": true,
+      "sharded_project": true,
+      "candidate": false,
+      "attention_and_projection_input_dtype": "fp32",
+      "output_dtype": "fp32",
+      "passed": true
+    },
+    {
+      "head_dim": 512,
+      "explicit_program": true,
+      "sharded_project": true,
+      "candidate": true,
+      "attention_and_projection_input_dtype": "bf16",
+      "output_dtype": "fp32",
+      "passed": true
+    },
+    {
+      "head_dim": 512,
+      "explicit_program": false,
+      "sharded_project": true,
+      "candidate": false,
+      "attention_and_projection_input_dtype": "fp32",
+      "output_dtype": "fp32",
+      "passed": true
+    },
+    {
+      "head_dim": 512,
+      "explicit_program": false,
+      "sharded_project": true,
+      "candidate": true,
+      "attention_and_projection_input_dtype": "bf16",
+      "output_dtype": "fp32",
+      "passed": true
+    },
+    {
+      "head_dim": 512,
+      "explicit_program": false,
+      "sharded_project": false,
+      "candidate": false,
+      "attention_and_projection_input_dtype": "fp32",
+      "output_dtype": "fp32",
+      "passed": true
+    },
+    {
+      "head_dim": 512,
+      "explicit_program": false,
+      "sharded_project": false,
+      "candidate": true,
+      "attention_and_projection_input_dtype": "bf16",
+      "output_dtype": "fp32",
+      "passed": true
+    }
+  ],
+  "hardware_executed": false,
+  "performance_claim": null,
+  "validation": {
+    "syntax": "pass",
+    "git_apply_check": "pass",
+    "cpu_wiring_checks": 12,
+    "black_incremental_difference": "none",
+    "black_full_file": "Existing normalize conditional at lines668-676 would reformat identically before and after; runtime left unchanged."
+  }
+}

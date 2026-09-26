@@ -1,0 +1,976 @@
+{
+  "decoder": "optimized",
+  "fusion": "broadcast_pack_gelu_router_tail_norm_attention_common_tied_expmerge_residualnorm_shardedtail_kvnorm_expertbatch64_mixmatmul_mixsharded_qkvl1_projectsharded_sharedshard_directtail",
+  "runtime_prefill_audit": "clean",
+  "program_cache_miss_guard": true,
+  "prefill_cache_entries": 174,
+  "prefix_length": 0,
+  "layer_type": "full_attention",
+  "phase": "prefill",
+  "length": 4096,
+  "real_weights": true,
+  "pcc": 0.9988463594264674,
+  "passed": true,
+  "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+  "input_fixture_sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa",
+  "input_source": {
+    "model": "google/gemma-4-26B-A4B-it",
+    "revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+    "layer": 5,
+    "length": 4096,
+    "steps": 128,
+    "source": {
+      "kind": "recorded_real_text_hf_layer_inputs",
+      "text_files": [
+        {
+          "path": "/workspace/tt-metal/README.md",
+          "sha256": "7fdc0eca06ec1762c883745af52d022aabf154c09ac14035fdadc45f44a5648e"
+        },
+        {
+          "path": "/workspace/tt-metal/docs/realtime_profiler_architecture.md",
+          "sha256": "c82373c5d2b278773ab41af8d0aff21d9bdc0da9e82a5645873fd7d08fd3f857"
+        },
+        {
+          "path": "/workspace/tt-metal/docs/L1_ACCUMULATION_FP32_ANALYSIS.md",
+          "sha256": "00c228fd4e95c4d5d1b65c5b66e9d8ebabe6b9a7a379bec59894508b44ee9184"
+        }
+      ],
+      "corpus_path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_source.txt",
+      "corpus_sha256": "75ee9ef41b9c66e2f5619f02d1de3c56c58cf7759489892616794ccb799e5002",
+      "tokens_path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_tokens.json",
+      "tokens_sha256": "11e130cdfd2ff0ebdc0dd8ae8bfcc837a082a3192aa45b74d887089d28f46bf3",
+      "tokenizer": "GemmaTokenizer",
+      "tokenizer_revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+      "transformers_version": "5.12.1",
+      "hf_source_sha256": "90bb5dbd9f78208ef07851e099311603e9f185f8fac2ef588df823f3df96b776",
+      "config_sha256": "ed0c1eb3633de771906e9ba004a44cc5635bcc06ee2062077c3d2e88a50707d3",
+      "weight_index_sha256": "907826a6e46ff454272bd6db1fee629d5531a2303be22986d825a0871d7dc7a7",
+      "preceding_computation": "HF FP32 eager, FP32 checkpoint weights and KV, original scaled embedding and layer scalars",
+      "embedding_scale_fp32": 53.06599807739258,
+      "embedding_scale_bfloat16_control": 53.0,
+      "per_layer_embeddings": false,
+      "shared_kv_layers": 0,
+      "sampling": "Actual corpus token continuation; no generated or random activations"
+    },
+    "raw_dtype": "float32",
+    "transport_dtype": "bfloat16_roundtripped_float32",
+    "teacher_forced": true
+  },
+  "decode": {
+    "pcc": 0.9975412383366895,
+    "passed": true,
+    "traced": true,
+    "runtime_decode_audit": "clean",
+    "repeated_equal": true,
+    "steps": 128,
+    "min_pcc": 0.9952810128043733,
+    "positions": [
+      4096,
+      4223
+    ],
+    "checks": [
+      {
+        "position": 4096,
+        "pcc": 0.9975412383366895,
+        "passed": true
+      },
+      {
+        "position": 4096,
+        "pcc": 0.9975412383366895,
+        "passed": true
+      },
+      {
+        "position": 4097,
+        "pcc": 0.9982094799000223,
+        "passed": true
+      },
+      {
+        "position": 4098,
+        "pcc": 0.9976432655481057,
+        "passed": true
+      },
+      {
+        "position": 4099,
+        "pcc": 0.9990607543194179,
+        "passed": true
+      },
+      {
+        "position": 4100,
+        "pcc": 0.9989533868793744,
+        "passed": true
+      },
+      {
+        "position": 4101,
+        "pcc": 0.9993788382966827,
+        "passed": true
+      },
+      {
+        "position": 4102,
+        "pcc": 0.9988517803399833,
+        "passed": true
+      },
+      {
+        "position": 4103,
+        "pcc": 0.9982318744370263,
+        "passed": true
+      },
+      {
+        "position": 4104,
+        "pcc": 0.9985461460543729,
+        "passed": true
+      },
+      {
+        "position": 4105,
+        "pcc": 0.9985017123378085,
+        "passed": true
+      },
+      {
+        "position": 4106,
+        "pcc": 0.9976957989409948,
+        "passed": true
+      },
+      {
+        "position": 4107,
+        "pcc": 0.998201670208258,
+        "passed": true
+      },
+      {
+        "position": 4108,
+        "pcc": 0.9992146204575703,
+        "passed": true
+      },
+      {
+        "position": 4109,
+        "pcc": 0.999204374359334,
+        "passed": true
+      },
+      {
+        "position": 4110,
+        "pcc": 0.9985163721086439,
+        "passed": true
+      },
+      {
+        "position": 4111,
+        "pcc": 0.9989276652779444,
+        "passed": true
+      },
+      {
+        "position": 4112,
+        "pcc": 0.9992632120932728,
+        "passed": true
+      },
+      {
+        "position": 4113,
+        "pcc": 0.9992451246305584,
+        "passed": true
+      },
+      {
+        "position": 4114,
+        "pcc": 0.9989227650682819,
+        "passed": true
+      },
+      {
+        "position": 4115,
+        "pcc": 0.9990085109098247,
+        "passed": true
+      },
+      {
+        "position": 4116,
+        "pcc": 0.9987043216761183,
+        "passed": true
+      },
+      {
+        "position": 4117,
+        "pcc": 0.9988100139805928,
+        "passed": true
+      },
+      {
+        "position": 4118,
+        "pcc": 0.9987260768902765,
+        "passed": true
+      },
+      {
+        "position": 4119,
+        "pcc": 0.998702784763338,
+        "passed": true
+      },
+      {
+        "position": 4120,
+        "pcc": 0.9992185189291365,
+        "passed": true
+      },
+      {
+        "position": 4121,
+        "pcc": 0.9980275893722551,
+        "passed": true
+      },
+      {
+        "position": 4122,
+        "pcc": 0.998533151349186,
+        "passed": true
+      },
+      {
+        "position": 4123,
+        "pcc": 0.9987234651585052,
+        "passed": true
+      },
+      {
+        "position": 4124,
+        "pcc": 0.9991334085566417,
+        "passed": true
+      },
+      {
+        "position": 4125,
+        "pcc": 0.9990713032452213,
+        "passed": true
+      },
+      {
+        "position": 4126,
+        "pcc": 0.9982999731847776,
+        "passed": true
+      },
+      {
+        "position": 4127,
+        "pcc": 0.9993112848621651,
+        "passed": true
+      },
+      {
+        "position": 4128,
+        "pcc": 0.9991277022191206,
+        "passed": true
+      },
+      {
+        "position": 4129,
+        "pcc": 0.998796368493998,
+        "passed": true
+      },
+      {
+        "position": 4130,
+        "pcc": 0.9984960591403722,
+        "passed": true
+      },
+      {
+        "position": 4131,
+        "pcc": 0.9988282280434709,
+        "passed": true
+      },
+      {
+        "position": 4132,
+        "pcc": 0.9990859177087346,
+        "passed": true
+      },
+      {
+        "position": 4133,
+        "pcc": 0.9992361181422358,
+        "passed": true
+      },
+      {
+        "position": 4134,
+        "pcc": 0.9983129093571612,
+        "passed": true
+      },
+      {
+        "position": 4135,
+        "pcc": 0.9979997818010238,
+        "passed": true
+      },
+      {
+        "position": 4136,
+        "pcc": 0.997641595454653,
+        "passed": true
+      },
+      {
+        "position": 4137,
+        "pcc": 0.9986213437403976,
+        "passed": true
+      },
+      {
+        "position": 4138,
+        "pcc": 0.9992452083600475,
+        "passed": true
+      },
+      {
+        "position": 4139,
+        "pcc": 0.9986783377849715,
+        "passed": true
+      },
+      {
+        "position": 4140,
+        "pcc": 0.9992973353122915,
+        "passed": true
+      },
+      {
+        "position": 4141,
+        "pcc": 0.9990389365743814,
+        "passed": true
+      },
+      {
+        "position": 4142,
+        "pcc": 0.9988668298832334,
+        "passed": true
+      },
+      {
+        "position": 4143,
+        "pcc": 0.9990956171514763,
+        "passed": true
+      },
+      {
+        "position": 4144,
+        "pcc": 0.9989579909894333,
+        "passed": true
+      },
+      {
+        "position": 4145,
+        "pcc": 0.9989355987958146,
+        "passed": true
+      },
+      {
+        "position": 4146,
+        "pcc": 0.998422745872216,
+        "passed": true
+      },
+      {
+        "position": 4147,
+        "pcc": 0.9994505546967943,
+        "passed": true
+      },
+      {
+        "position": 4148,
+        "pcc": 0.9987004361635423,
+        "passed": true
+      },
+      {
+        "position": 4149,
+        "pcc": 0.9996092037282704,
+        "passed": true
+      },
+      {
+        "position": 4150,
+        "pcc": 0.9994944159695591,
+        "passed": true
+      },
+      {
+        "position": 4151,
+        "pcc": 0.9988702640919352,
+        "passed": true
+      },
+      {
+        "position": 4152,
+        "pcc": 0.9987738975996585,
+        "passed": true
+      },
+      {
+        "position": 4153,
+        "pcc": 0.9996278605552151,
+        "passed": true
+      },
+      {
+        "position": 4154,
+        "pcc": 0.9992132465081222,
+        "passed": true
+      },
+      {
+        "position": 4155,
+        "pcc": 0.998415979946094,
+        "passed": true
+      },
+      {
+        "position": 4156,
+        "pcc": 0.9987877862768257,
+        "passed": true
+      },
+      {
+        "position": 4157,
+        "pcc": 0.9992610978786218,
+        "passed": true
+      },
+      {
+        "position": 4158,
+        "pcc": 0.9985768043342287,
+        "passed": true
+      },
+      {
+        "position": 4159,
+        "pcc": 0.9988720514877174,
+        "passed": true
+      },
+      {
+        "position": 4160,
+        "pcc": 0.997678978201336,
+        "passed": true
+      },
+      {
+        "position": 4161,
+        "pcc": 0.9988957661176704,
+        "passed": true
+      },
+      {
+        "position": 4162,
+        "pcc": 0.9988798369040223,
+        "passed": true
+      },
+      {
+        "position": 4163,
+        "pcc": 0.99935095400642,
+        "passed": true
+      },
+      {
+        "position": 4164,
+        "pcc": 0.99879230011842,
+        "passed": true
+      },
+      {
+        "position": 4165,
+        "pcc": 0.9981143782379363,
+        "passed": true
+      },
+      {
+        "position": 4166,
+        "pcc": 0.9992498506641391,
+        "passed": true
+      },
+      {
+        "position": 4167,
+        "pcc": 0.9991441484184055,
+        "passed": true
+      },
+      {
+        "position": 4168,
+        "pcc": 0.9980844639702554,
+        "passed": true
+      },
+      {
+        "position": 4169,
+        "pcc": 0.9994253083345166,
+        "passed": true
+      },
+      {
+        "position": 4170,
+        "pcc": 0.9989485029957467,
+        "passed": true
+      },
+      {
+        "position": 4171,
+        "pcc": 0.9990084125527352,
+        "passed": true
+      },
+      {
+        "position": 4172,
+        "pcc": 0.9991958961023165,
+        "passed": true
+      },
+      {
+        "position": 4173,
+        "pcc": 0.9993403047221013,
+        "passed": true
+      },
+      {
+        "position": 4174,
+        "pcc": 0.9987206013967997,
+        "passed": true
+      },
+      {
+        "position": 4175,
+        "pcc": 0.9984642891365261,
+        "passed": true
+      },
+      {
+        "position": 4176,
+        "pcc": 0.9992790014873298,
+        "passed": true
+      },
+      {
+        "position": 4177,
+        "pcc": 0.9991518812791587,
+        "passed": true
+      },
+      {
+        "position": 4178,
+        "pcc": 0.9988685535357212,
+        "passed": true
+      },
+      {
+        "position": 4179,
+        "pcc": 0.9990884207929452,
+        "passed": true
+      },
+      {
+        "position": 4180,
+        "pcc": 0.9990128773169019,
+        "passed": true
+      },
+      {
+        "position": 4181,
+        "pcc": 0.9991454626122629,
+        "passed": true
+      },
+      {
+        "position": 4182,
+        "pcc": 0.9986117562001006,
+        "passed": true
+      },
+      {
+        "position": 4183,
+        "pcc": 0.9988246350946147,
+        "passed": true
+      },
+      {
+        "position": 4184,
+        "pcc": 0.9992284911604934,
+        "passed": true
+      },
+      {
+        "position": 4185,
+        "pcc": 0.999263840594327,
+        "passed": true
+      },
+      {
+        "position": 4186,
+        "pcc": 0.9990498482066202,
+        "passed": true
+      },
+      {
+        "position": 4187,
+        "pcc": 0.9994054197329112,
+        "passed": true
+      },
+      {
+        "position": 4188,
+        "pcc": 0.9991254874756067,
+        "passed": true
+      },
+      {
+        "position": 4189,
+        "pcc": 0.9986558162171969,
+        "passed": true
+      },
+      {
+        "position": 4190,
+        "pcc": 0.9994532096955813,
+        "passed": true
+      },
+      {
+        "position": 4191,
+        "pcc": 0.9990376695266492,
+        "passed": true
+      },
+      {
+        "position": 4192,
+        "pcc": 0.9991406888240316,
+        "passed": true
+      },
+      {
+        "position": 4193,
+        "pcc": 0.9990438511381537,
+        "passed": true
+      },
+      {
+        "position": 4194,
+        "pcc": 0.9991661727161996,
+        "passed": true
+      },
+      {
+        "position": 4195,
+        "pcc": 0.9989442462802409,
+        "passed": true
+      },
+      {
+        "position": 4196,
+        "pcc": 0.9960493664699062,
+        "passed": true
+      },
+      {
+        "position": 4197,
+        "pcc": 0.9975008242153761,
+        "passed": true
+      },
+      {
+        "position": 4198,
+        "pcc": 0.998536711118657,
+        "passed": true
+      },
+      {
+        "position": 4199,
+        "pcc": 0.999367794032037,
+        "passed": true
+      },
+      {
+        "position": 4200,
+        "pcc": 0.9970253385192346,
+        "passed": true
+      },
+      {
+        "position": 4201,
+        "pcc": 0.9995875137894161,
+        "passed": true
+      },
+      {
+        "position": 4202,
+        "pcc": 0.9992478162500017,
+        "passed": true
+      },
+      {
+        "position": 4203,
+        "pcc": 0.9977762450931833,
+        "passed": true
+      },
+      {
+        "position": 4204,
+        "pcc": 0.9990100785536798,
+        "passed": true
+      },
+      {
+        "position": 4205,
+        "pcc": 0.9995730019993613,
+        "passed": true
+      },
+      {
+        "position": 4206,
+        "pcc": 0.9992524435764167,
+        "passed": true
+      },
+      {
+        "position": 4207,
+        "pcc": 0.9987122005315119,
+        "passed": true
+      },
+      {
+        "position": 4208,
+        "pcc": 0.9989164903701915,
+        "passed": true
+      },
+      {
+        "position": 4209,
+        "pcc": 0.9994173278149654,
+        "passed": true
+      },
+      {
+        "position": 4210,
+        "pcc": 0.9985079605711658,
+        "passed": true
+      },
+      {
+        "position": 4211,
+        "pcc": 0.9952810128043733,
+        "passed": true
+      },
+      {
+        "position": 4212,
+        "pcc": 0.999071112273486,
+        "passed": true
+      },
+      {
+        "position": 4213,
+        "pcc": 0.9988764460119398,
+        "passed": true
+      },
+      {
+        "position": 4214,
+        "pcc": 0.9991501778069044,
+        "passed": true
+      },
+      {
+        "position": 4215,
+        "pcc": 0.9959463283538201,
+        "passed": true
+      },
+      {
+        "position": 4216,
+        "pcc": 0.9985335110426463,
+        "passed": true
+      },
+      {
+        "position": 4217,
+        "pcc": 0.9987689531260026,
+        "passed": true
+      },
+      {
+        "position": 4218,
+        "pcc": 0.998940591285023,
+        "passed": true
+      },
+      {
+        "position": 4219,
+        "pcc": 0.9991318079871127,
+        "passed": true
+      },
+      {
+        "position": 4220,
+        "pcc": 0.9982628063934659,
+        "passed": true
+      },
+      {
+        "position": 4221,
+        "pcc": 0.9977781438876278,
+        "passed": true
+      },
+      {
+        "position": 4222,
+        "pcc": 0.9988429036176653,
+        "passed": true
+      },
+      {
+        "position": 4223,
+        "pcc": 0.9984237842449021,
+        "passed": true
+      }
+    ]
+  },
+  "traced_decode_host_us": [
+    1161.3017,
+    1160.8438333333334,
+    1160.8141,
+    1161.0882666666666,
+    1161.0565333333334
+  ],
+  "candidate": {
+    "defaults": true,
+    "overrides": {
+      "native_sdpa": true,
+      "kv_cache_dtype": "bfloat8_b",
+      "qkv_weight_dtype": "bfloat8_b",
+      "output_weight_dtype": "bfloat8_b",
+      "expert_gate_dtype": "bfloat4_b",
+      "qkv_direct_dtype": "float32",
+      "qkv_fidelity": "LoFi",
+      "generalized_router": true,
+      "prefill_dtype": "bfloat4_b",
+      "prefill_down_dtype": "bfloat4_b",
+      "prefill_attention_fidelity": "LoFi",
+      "expert_activation_dtype": "bfloat8_b",
+      "shared_dtype": "bfloat4_b",
+      "shared_down_dtype": "bfloat4_b",
+      "native_sdpa_fidelity": "LoFi",
+      "qkv_direct_cleanup": true,
+      "qkv_grid": [
+        11,
+        10
+      ],
+      "qkv_subblock_w": 0,
+      "expert_block_w": 22
+    }
+  },
+  "runtime_sha256": "4a9050497d5d4734eb40715d8942adfc33413b958358a209dbbd31c9132a146e",
+  "precision_policy": {
+    "attention_weights": {
+      "qkv": "DataType.BFLOAT8_B",
+      "output": "DataType.BFLOAT8_B"
+    },
+    "kv_cache": "bfloat8_b",
+    "native_sdpa": true,
+    "native_sdpa_grid": [
+      8,
+      8
+    ],
+    "native_sdpa_fidelity": "MathFidelity.LoFi",
+    "prefill_attention_fidelity": "MathFidelity.LoFi",
+    "decode_expert_activation": "DataType.BFLOAT8_B",
+    "router_selection": "generalized_moe_gate",
+    "generalized_router_center": false,
+    "native_sdpa_dst_full_sync": true,
+    "residual": "float32",
+    "expert_gate": "DataType.BFLOAT4_B",
+    "decode_expert_down": "DataType.BFLOAT4_B",
+    "prefill_expert_gate": "DataType.BFLOAT4_B",
+    "prefill_expert_down": "DataType.BFLOAT4_B",
+    "decode_expert_fidelity": "MathFidelity.LoFi",
+    "decode_expert_fused_gelu": false,
+    "prefill_expert_fidelity": "MathFidelity.LoFi",
+    "shared_decode_weights": "DataType.BFLOAT4_B",
+    "shared_decode_fidelity": "MathFidelity.LoFi",
+    "qkv_fidelity": "MathFidelity.LoFi",
+    "qkv_grid": [
+      11,
+      10
+    ],
+    "qkv_terms": null,
+    "qkv_lanes": 0,
+    "qkv_direct_dtype": "DataType.FLOAT32",
+    "qkv_direct_cleanup": true,
+    "router_lanes": 0,
+    "qkv_dram": false,
+    "qkv_dram_readers": null,
+    "qkv_dram_block": null,
+    "expert_grid": [
+      11,
+      4
+    ],
+    "expert_k_block": 22,
+    "prefill_batch_tokens": 32,
+    "qkv_decode": {
+      "backend": "native_packed_linear",
+      "input_dtype": "DataType.FLOAT32",
+      "weight_dtypes": [
+        "DataType.BFLOAT8_B"
+      ],
+      "weight_shapes": [
+        [
+          1,
+          1,
+          2816,
+          9216
+        ]
+      ],
+      "weight_memory": [
+        "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+      ],
+      "output_dtype": "float32",
+      "output_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+      "math_fidelity": "MathFidelity.LoFi",
+      "fp32_dest_acc_en": true,
+      "packer_l1_acc": false,
+      "dram": false,
+      "programs": [
+        {
+          "grid": [
+            11,
+            10
+          ],
+          "in0_block_w": 11,
+          "out_subblock_h": 1,
+          "out_subblock_w": 3,
+          "per_core_M": 1,
+          "per_core_N": 3
+        }
+      ],
+      "setup_cleanup": {
+        "requested": true,
+        "shared_phase_weight": true,
+        "released_rows": true,
+        "released_lane_mask": true
+      },
+      "activation_decomposition": false,
+      "lane_mask": false,
+      "partial_row_reduce": false
+    }
+  },
+  "output_projection_probe": {
+    "output_mode": "interleaved",
+    "output_grid": [
+      11,
+      10
+    ],
+    "output_k_block": 16,
+    "output_subblock": 0,
+    "output_readers": 1,
+    "output_input_cores": 0,
+    "output_memory": "dram",
+    "output_input_dtype": "float32",
+    "output_weight_dtype": null,
+    "output_fidelity": "HiFi2"
+  },
+  "output_projection_probe_runtime": {
+    "source_weight": {
+      "shape": [
+        1,
+        1,
+        8192,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        8192,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT8_B",
+      "layout": "Layout.TILE",
+      "memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "geometry": {
+      "grid": [
+        11,
+        10
+      ],
+      "per_core_N": 1,
+      "output_subblock": [
+        1,
+        1
+      ]
+    },
+    "mode": "interleaved",
+    "weight": {
+      "shape": [
+        1,
+        1,
+        8192,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        8192,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT8_B",
+      "layout": "Layout.TILE",
+      "memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=16,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=1,per_core_M=1,per_core_N=1,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+    "compute": {
+      "math_fidelity": "MathFidelity.HiFi2",
+      "math_approx_mode": "False",
+      "fp32_dest_acc_en": "True",
+      "packer_l1_acc": "False",
+      "dst_full_sync_en": "False"
+    },
+    "input_dtype": "DataType.FLOAT32",
+    "matmul_output_dtype": "float32",
+    "final_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+    "prefill": "delegate unchanged",
+    "observed_decode": {
+      "attention": {
+        "shape": [
+          1,
+          1,
+          16,
+          512
+        ],
+        "padded_shape": [
+          1,
+          1,
+          32,
+          512
+        ],
+        "dtype": "DataType.FLOAT32",
+        "layout": "Layout.TILE",
+        "memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+      },
+      "matmul_input": {
+        "shape": [
+          1,
+          1,
+          1,
+          8192
+        ],
+        "padded_shape": [
+          1,
+          1,
+          32,
+          8192
+        ],
+        "dtype": "DataType.FLOAT32",
+        "layout": "Layout.TILE",
+        "memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+      },
+      "output": {
+        "shape": [
+          1,
+          1,
+          1,
+          2816
+        ],
+        "padded_shape": [
+          1,
+          1,
+          32,
+          2816
+        ],
+        "dtype": "DataType.FLOAT32",
+        "layout": "Layout.TILE",
+        "memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+      }
+    }
+  },
+  "output_projection_probe_sha256": "93364a50da16ee9b11f6e0809e355c1469639b27b3b2414024ddbe39947ebb8d"
+}

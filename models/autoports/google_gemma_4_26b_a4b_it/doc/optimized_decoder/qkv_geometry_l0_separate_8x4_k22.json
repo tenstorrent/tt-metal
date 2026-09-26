@@ -1,0 +1,125 @@
+{
+  "decoder": "optimized",
+  "fusion": "broadcast_pack_gelu_router_tail_norm_attention_common_tied_ropepolicy_cache_kvnorm_shardedtail_preciseheads_expmerge_residualnorm_rsqrt_expertbatch64_mixmatmul_mixsharded_mixfp32_qkvl1_projectsharded_sharedshard_unarycastshard_directtail",
+  "runtime_prefill_audit": "clean",
+  "program_cache_miss_guard": true,
+  "prefill_cache_entries": 96,
+  "prefix_length": 0,
+  "layer_type": "sliding_attention",
+  "phase": "prefill",
+  "length": 33,
+  "real_weights": true,
+  "pcc": 0.9982383435853565,
+  "passed": true,
+  "decode": {
+    "pcc": 0.9990205038080481,
+    "passed": true,
+    "traced": true,
+    "runtime_decode_audit": "clean",
+    "repeated_equal": true,
+    "steps": 8,
+    "min_pcc": 0.9972776479966969,
+    "positions": [
+      33,
+      40
+    ],
+    "checks": [
+      {
+        "position": 33,
+        "pcc": 0.9990205038080481,
+        "passed": true
+      },
+      {
+        "position": 33,
+        "pcc": 0.9990205038080481,
+        "passed": true
+      },
+      {
+        "position": 34,
+        "pcc": 0.9983215403870275,
+        "passed": true
+      },
+      {
+        "position": 35,
+        "pcc": 0.9984315980837795,
+        "passed": true
+      },
+      {
+        "position": 36,
+        "pcc": 0.9972776479966969,
+        "passed": true
+      },
+      {
+        "position": 37,
+        "pcc": 0.9980546167586013,
+        "passed": true
+      },
+      {
+        "position": 38,
+        "pcc": 0.9973688259205501,
+        "passed": true
+      },
+      {
+        "position": 39,
+        "pcc": 0.9982311933206294,
+        "passed": true
+      },
+      {
+        "position": 40,
+        "pcc": 0.9976601071122807,
+        "passed": true
+      }
+    ]
+  },
+  "traced_decode_host_us": [
+    1885.2233,
+    1885.0523,
+    1884.9030333333333,
+    1885.2857333333334,
+    1885.9817
+  ],
+  "candidate": {
+    "expert_gate_dtype": "bfloat8_b",
+    "expert_down_dtype": "bfloat4_b",
+    "expert_block_w": 11,
+    "expert_fidelity": "LoFi",
+    "prefill_grid": [
+      11,
+      4
+    ],
+    "prefill_block_w": 11,
+    "active_prefill": true,
+    "expert_grid": [
+      11,
+      4
+    ],
+    "down_grid": null,
+    "prefill_tokens": null,
+    "compensated_qkv": false,
+    "qkv_lanes": 16,
+    "qkv_terms": 2,
+    "qkv_grid": [
+      8,
+      4
+    ],
+    "qkv_block_w": 22,
+    "qkv_subblock_w": 1,
+    "qkv_separate": true,
+    "qkv_fidelity": "HiFi4",
+    "shared_dtype": "bfloat8_b",
+    "shared_down_dtype": null,
+    "shared_fidelity": "LoFi",
+    "shared_dram": true,
+    "shared_readers": 1,
+    "shared_split": false,
+    "prefill_dtype": "bfloat8_b",
+    "prefill_fidelity": "HiFi2",
+    "prefill_l1": true,
+    "sharded_norms": true,
+    "shared_block": 11,
+    "expert_split": false,
+    "residual_l1": false,
+    "sharded_norm_site": "input_common"
+  },
+  "runtime_sha256": "dcdde4c2b9221864a484a9ebb814b4fbd6c748989d76bc7ad490983490de1eff"
+}

@@ -1,0 +1,421 @@
+{
+  "generated_utc": "2026-09-26T18:44:08.104500+00:00",
+  "scope": "CPU/source/artifact audit only; no hardware/runtime/test modifications",
+  "ancestor_source": "runtime_v5_before_review.py.txt",
+  "ancestor_runtime_sha256": "169c0d97d7d0e9f35d97633f133305f1088b987ef625693d3faa100d25c3e67b",
+  "current_runtime_sha256": "b585a21f0b66144f69a823fa2d1088b130e34928a65fc91a38fd1bc5c2526846",
+  "unified_diff": "--- runtime_v5_before_review.py.txt\n+++ tt/optimized_decoder.py\n@@ -712,6 +712,7 @@\n                 valid_seq_len=valid,\n                 chunk_start_idx=chunk_start,\n                 chunk_page_table=chunk_table,\n+                retain_prefill_tail=start + valid < length,\n             )\n             outputs.append(out[:, :, :valid, :])\n         return outputs[0] if len(outputs) == 1 else ttnn.concat(outputs, dim=2)\n@@ -1046,6 +1047,12 @@\n             k_chunk_size=max(32, min(k_chunk, self.chunk_size)),\n             exp_approx_mode=False,\n         )\n+        self.boundary_program = ttnn.SDPAProgramConfig(\n+            compute_with_storage_grid_size=grid,\n+            q_chunk_size=min(self.program.q_chunk_size, 128),\n+            k_chunk_size=min(self.program.k_chunk_size, 128),\n+            exp_approx_mode=False,\n+        )\n \n     def __call__(self, q, k_cache, v_cache, page_table, user_id, head_dim, scale=1.0, base_offset=0, num_kv_heads=None):\n         # OptimizedDecoder uses scalar offsets for full-attention chunks;\n@@ -1065,7 +1072,15 @@\n         for start in range(0, q.shape[-2], self.chunk_size):\n             length = min(self.chunk_size, q.shape[-2] - start)\n             query = ttnn.slice(q, [0, 0, start, 0], [1, q.shape[1], start + length, head_dim])\n-            padding = (-length) % self.program.q_chunk_size\n+            program = self.program\n+            query_end = base_offset + start + length + (-length) % program.q_chunk_size\n+            read_end = query_end + (-query_end) % program.k_chunk_size\n+            capacity = page_table.shape[-1] * k_cache.shape[-2]\n+            if read_end > capacity:\n+                # The public cache contract rounds capacity to 128 tokens.\n+                # A wider K block must not read past its logical page table.\n+                program = self.boundary_program\n+            padding = (-length) % program.q_chunk_size\n             if padding:\n                 unpadded = query\n                 query = ttnn.pad(unpadded, [(0, 0), (0, 0), (0, padding), (0, 0)], value=0.0)\n@@ -1077,7 +1092,7 @@\n                 user_table,\n                 chunk_start_idx=base_offset + start,\n                 scale=scale,\n-                program_config=self.program,\n+                program_config=program,\n                 compute_kernel_config=self.compute,\n                 paged_cache_geometry=geometry,\n             )\n@@ -1376,10 +1391,14 @@\n             )\n             if history:\n                 attention = attention[:, :, history : history + q.shape[-2], :]\n-            # All non-final physical chunks cover a full sliding window. A\n-            # fresh request clears this tail; prefix continuation uses decode.\n+            # Only another chunk in this prefill consumes the tail. Decode\n+            # and prefix continuation use the paged cache instead.\n             tail_length = min(cfg.sliding_window, k.shape[-2])\n-            self.tail = tuple(ttnn.clone(t[:, :, -tail_length:, :]) for t in (k, v))\n+            self.tail = (\n+                tuple(ttnn.clone(t[:, :, -tail_length:, :]) for t in (k, v))\n+                if kwargs.get(\"retain_prefill_tail\", True)\n+                else None\n+            )\n         elif start is not None and start != 0:\n             chunked = self.configured_chunked_prefill or chunked_prefill_sdpa\n             attention = chunked(\n",
+  "changed_methods": [
+    "OptimizedDecoder.prefill_forward",
+    "ConfiguredChunkedPrefillAttention.__init__",
+    "ConfiguredChunkedPrefillAttention.__call__",
+    "OptimizedAttention.prefill"
+  ],
+  "method_count": 40,
+  "unchanged_methods": {
+    "OptimizedExperts.__init__": {
+      "ast_sha256": "dd23316703bc4702dc1d79ae975f648f7a8ce7382ae87d7cd352fc2f843fc76f",
+      "v6_lines": [
+        30,
+        170
+      ]
+    },
+    "OptimizedExperts.enable_indexed_decode": {
+      "ast_sha256": "428a20d59c78058fc790e756bbb1a114a270ed89aeca6908602cda954a512a8f",
+      "v6_lines": [
+        172,
+        191
+      ]
+    },
+    "OptimizedExperts._chunk": {
+      "ast_sha256": "0c79bbec8604e53c35257aa26ae9d232b3dccf8cd0f0c48e0f154e711f1fc38b",
+      "v6_lines": [
+        193,
+        241
+      ]
+    },
+    "OptimizedExperts._active_prefill": {
+      "ast_sha256": "f6104fc290d6bed2190c1fbbe987d19dfc9df33f7025fd306f940abdbecd0f91",
+      "v6_lines": [
+        243,
+        271
+      ]
+    },
+    "OptimizedDecoder.from_state_dict": {
+      "ast_sha256": "3ea42b634fc201d788ca9c7bd45e8b8a3d19c3328d80b4433b0b65db4d33ee39",
+      "v6_lines": [
+        280,
+        628
+      ]
+    },
+    "OptimizedDecoder._validate_kv_cache": {
+      "ast_sha256": "673391af8160e724941a1abea1e0dd34944a3853858dde7fde55e5b5cbe9c3e4",
+      "v6_lines": [
+        631,
+        637
+      ]
+    },
+    "OptimizedDecoder.decode_forward": {
+      "ast_sha256": "21015be5f453c35c9e31cf1410d9325a5c010033878bdf4985dd763d3c1c6521",
+      "v6_lines": [
+        720,
+        757
+      ]
+    },
+    "OptimizedDecoder._forward": {
+      "ast_sha256": "6ac39f5586902023b802c974f93468803c1f17ad6c809f6ee51ebc9701693ff6",
+      "v6_lines": [
+        759,
+        767
+      ]
+    },
+    "OptimizedDecoder.normalize": {
+      "ast_sha256": "625d665f461fe9589cf57d7392999d0752b02581e8d6c73488ae993217232959",
+      "v6_lines": [
+        769,
+        796
+      ]
+    },
+    "GeneralizedRouter.__init__": {
+      "ast_sha256": "fe3dbdd1afb51b123269462062da102aeca32fe775a38209464fe53cfbd6cbc7",
+      "v6_lines": [
+        802,
+        892
+      ]
+    },
+    "GeneralizedRouter.__getattr__": {
+      "ast_sha256": "a37e957c09b77a126cfa8bc83a238c29f12ad8f60a3631e34f244d31efd96097",
+      "v6_lines": [
+        894,
+        895
+      ]
+    },
+    "GeneralizedRouter.__call__": {
+      "ast_sha256": "4e8d42333470a59a35f4a5adf52a1b6d99b773f053a06e7969e1a250954d7987",
+      "v6_lines": [
+        897,
+        956
+      ]
+    },
+    "GeneralizedRouter.decode_indices": {
+      "ast_sha256": "2a38efd8938dc51196c923ed4dab041ce3268564e71e2fcd115c5b273c2bd2b3",
+      "v6_lines": [
+        958,
+        961
+      ]
+    },
+    "LanePartitionRouter.__init__": {
+      "ast_sha256": "3360b257a8cba3199bb3180d494fe1f34ab3f76d81a21aab09e0fb6aeb2adadf",
+      "v6_lines": [
+        967,
+        1009
+      ]
+    },
+    "LanePartitionRouter.__call__": {
+      "ast_sha256": "d585e82379956bc45ba0ddb438a7dd8ff0ce13f2f9423ba71e21498e11e4b6f2",
+      "v6_lines": [
+        1011,
+        1032
+      ]
+    },
+    "NativePagedAttention.__init__": {
+      "ast_sha256": "6511d709bde91f3efbb869cc364eaad9a5d02638c1f69319b378142a458e5c0a",
+      "v6_lines": [
+        1118,
+        1130
+      ]
+    },
+    "NativePagedAttention.__call__": {
+      "ast_sha256": "438b4521682289806ba6599779cb18b7457c8881a54b5548ccffa41959da8402",
+      "v6_lines": [
+        1132,
+        1146
+      ]
+    },
+    "OptimizedAttention.from_existing": {
+      "ast_sha256": "73c1d182e47ccfd91084f4ceefb00f48a4a8157b6bff247b29213479cd8e609b",
+      "v6_lines": [
+        1153,
+        1230
+      ]
+    },
+    "OptimizedAttention.configure_prefill_output": {
+      "ast_sha256": "683e1432e2d26a01c7bf4364abc1985acd7df40711cecd461f87a6fbe92a6a03",
+      "v6_lines": [
+        1232,
+        1297
+      ]
+    },
+    "OptimizedAttention.project": {
+      "ast_sha256": "a825d44092b4ad775f2bd46bb07d4e11ebd75d4ce0ea316a96741927ffb8b33c",
+      "v6_lines": [
+        1299,
+        1347
+      ]
+    },
+    "OptimizedAttention.cache_cast": {
+      "ast_sha256": "54e96a4aeb9cc93e7109c55d73f6326efc79e9ee8913c3ca51a17d9bb1e12443",
+      "v6_lines": [
+        1349,
+        1351
+      ]
+    },
+    "MinimalPrefillProjection.__init__": {
+      "ast_sha256": "dbcb06216e8da0fac8cdd5babecd53868a787d26876837257447df606a8fd68a",
+      "v6_lines": [
+        1430,
+        1465
+      ]
+    },
+    "MinimalPrefillProjection.__call__": {
+      "ast_sha256": "973a2ccdc8ee88a68f104cf8c5ce5ee246731f0987db659261eee1460b9f193c",
+      "v6_lines": [
+        1467,
+        1476
+      ]
+    },
+    "MinimalPrefillQKV.__init__": {
+      "ast_sha256": "0711d159555faa8846b35a03a626f2d5b59f3cb342c0b6c6e5a4b18187ad404a",
+      "v6_lines": [
+        1482,
+        1489
+      ]
+    },
+    "MinimalPrefillQKV.__call__": {
+      "ast_sha256": "5b35dba04a9209a02175d69949a6b5a04d85ff52d39ab0a93cc47642e4b6d71f",
+      "v6_lines": [
+        1491,
+        1501
+      ]
+    },
+    "DirectQKV.__init__": {
+      "ast_sha256": "d01c3fc14a5b06c7f4eaca8abf89b848076e8c2ac896d850b75ef4deb05242d0",
+      "v6_lines": [
+        1507,
+        1608
+      ]
+    },
+    "DirectQKV.__call__": {
+      "ast_sha256": "32a7dedf860faebf2ef98d1dcd5517c4dc0f8d5c5c77dd3509edc7b88656bb0a",
+      "v6_lines": [
+        1610,
+        1641
+      ]
+    },
+    "LanePartitionQKV.__init__": {
+      "ast_sha256": "50591bb9dd064295dc610a1d99bcfd8830903e02b69d333b324f5579f109b46f",
+      "v6_lines": [
+        1647,
+        1763
+      ]
+    },
+    "LanePartitionQKV._init_dram": {
+      "ast_sha256": "ab40317ad9593313548c59f65c49b3fbe87b22b799f9f90d94bd7f626b7c7b5d",
+      "v6_lines": [
+        1765,
+        1835
+      ]
+    },
+    "LanePartitionQKV.__call__": {
+      "ast_sha256": "f64bfe912ecbe397b477f8d2a4d3f7267067d1a53ba4b0071cf120ab21d547db",
+      "v6_lines": [
+        1837,
+        1898
+      ]
+    },
+    "CompensatedQKV.__init__": {
+      "ast_sha256": "797edb05afb201759761ec2fad231b17619696ac7f1440db58b2715140550740",
+      "v6_lines": [
+        1904,
+        1905
+      ]
+    },
+    "CompensatedQKV.__call__": {
+      "ast_sha256": "2b38f56c866de93220d9c95a595dadbebc1f73e268ee562f0ac80c7ddcf4f578",
+      "v6_lines": [
+        1907,
+        1926
+      ]
+    },
+    "DecodeLinear.__init__": {
+      "ast_sha256": "0a3fad12ab68102117118b4a25c16c6d84dec93f3f222153dba73fde3ec3235d",
+      "v6_lines": [
+        1932,
+        1988
+      ]
+    },
+    "DecodeLinear.__call__": {
+      "ast_sha256": "5379f3a95eb2d42790a11fab4703d97afa8a69da3e0d0a4311066fed0fd505df",
+      "v6_lines": [
+        1990,
+        2004
+      ]
+    },
+    "OptimizedSharedMLP.__init__": {
+      "ast_sha256": "2462e6e6a1e370f164bd33cac1f3ccff76b439457e6cbaaf6387bf6fba2cba57",
+      "v6_lines": [
+        2008,
+        2032
+      ]
+    },
+    "OptimizedSharedMLP.__call__": {
+      "ast_sha256": "82f8b240b301b964d088f894ba95dc7196a4d6e503430b5dc9b821363035c963",
+      "v6_lines": [
+        2034,
+        2043
+      ]
+    }
+  },
+  "exact_delta_reversal_proof": [
+    {
+      "method": "OptimizedDecoder.prefill_forward",
+      "removed_delta_statements_or_keyword": 1,
+      "remaining_ast_exactly_matches_v5": true,
+      "v5_lines": [
+        639,
+        717
+      ],
+      "v6_lines": [
+        639,
+        718
+      ]
+    },
+    {
+      "method": "ConfiguredChunkedPrefillAttention.__init__",
+      "removed_delta_statements_or_keyword": 1,
+      "remaining_ast_exactly_matches_v5": true,
+      "v5_lines": [
+        1037,
+        1048
+      ],
+      "v6_lines": [
+        1038,
+        1055
+      ]
+    },
+    {
+      "method": "ConfiguredChunkedPrefillAttention.__call__",
+      "removed_delta_statements_or_keyword": 5,
+      "remaining_ast_exactly_matches_v5": true,
+      "v5_lines": [
+        1050,
+        1097
+      ],
+      "v6_lines": [
+        1057,
+        1112
+      ]
+    },
+    {
+      "method": "OptimizedAttention.prefill",
+      "removed_delta_statements_or_keyword": 1,
+      "remaining_ast_exactly_matches_v5": true,
+      "v5_lines": [
+        1338,
+        1405
+      ],
+      "v6_lines": [
+        1353,
+        1424
+      ]
+    }
+  ],
+  "unchanged_factory_defaults_and_resolution": true,
+  "cpu_geometry_checks": {
+    "source_lines": [
+      1075,
+      1083
+    ],
+    "method": "Execute only unmodified source scalar assignments/condition with Python shape/config stand-ins; no TTNN import",
+    "default_q": 64,
+    "default_k": 256,
+    "boundary_q": 64,
+    "boundary_k": 128,
+    "base_offsets": [
+      1024,
+      2048,
+      261120
+    ],
+    "valid_tail_lengths": "1..1024",
+    "capacities": "minimum128-token-rounded and1024-token-rounded",
+    "cases_passed": 6144,
+    "fallback_cases": 1536,
+    "all_chosen_rounded_reads_within_capacity": true,
+    "all_sufficient_capacity_cases_use_identical_v5_program": true,
+    "scope": "Default Q64/K256 full-attention geometry and public32-token pages. This does not prove arbitrary environment-overridden chunk geometry."
+  },
+  "targeted_hardware_evidence": {
+    "file": "tight_cache_v6_layer5_1025.json",
+    "sha256": "ca817d0e591dcdafcb0f1941b24808bf1968d4f9684d59c01499d10c012f4342",
+    "log": "tight_cache_v6_layer5_1025.log",
+    "log_sha256": "8b3f321e287b55208c954a1fdabe56b3f01c3bde07c146dbe39f68e33c6fb643",
+    "runtime_sha256": "b585a21f0b66144f69a823fa2d1088b130e34928a65fc91a38fd1bc5c2526846",
+    "real_weights": true,
+    "input_fixture_sha256": "4006f4bf472b7e734ef25f15f1215c369c2a5f63d25bc26deef1afd3aae55852",
+    "length": 1025,
+    "cache_extent": 1152,
+    "cache_pages": 36,
+    "prefill_pcc": 0.99904124467498,
+    "decode_min_pcc": 0.99916185200719,
+    "decode_repeated_equal": true,
+    "program_cache_miss_guard": true,
+    "capacity_checks": [
+      {
+        "offset": 1024,
+        "query_rows": 64,
+        "q_chunk": 64,
+        "k_chunk": 128,
+        "read_end": 1152,
+        "cache_capacity": 1152,
+        "table_pages": 36,
+        "passed": true
+      },
+      {
+        "offset": 1024,
+        "query_rows": 64,
+        "q_chunk": 64,
+        "k_chunk": 128,
+        "read_end": 1152,
+        "cache_capacity": 1152,
+        "table_pages": 36,
+        "passed": true
+      }
+    ],
+    "passed": true,
+    "scope": "Parent-run targeted v6 actual-input1025/1 test; not full v6 suite/profile completion."
+  },
+  "memory_delta": {
+    "checkpoint_weights_bytes": 0,
+    "kv_cache_bytes": 0,
+    "rope_table_bytes": 0,
+    "new_device_tensors_at_setup": 0,
+    "additional_host_program_configs": 1,
+    "sliding_final_tail_pair_formula_bytes": "2 * Hkv(8) * min(window1024, physical_K_rows) * D256 * BF16_bytes2",
+    "sliding_final_tail_pair_max_bytes_removed": 8388608,
+    "sliding_final_tail_clones_removed": 2,
+    "full_attention_tail_delta_bytes": 0,
+    "cb_footprint": "Boundary SDPA Q64/K128 uses existing compute/dtype; no byte estimate inferred without factory accounting. It is an additional program geometry, not an additional simultaneous cache/weight tensor.",
+    "scope": "Private per-request sliding-prefill stash/output allocation only, not measured allocator peak. Nonfinal tails remain unchanged."
+  },
+  "ancestor_native_profiles": {
+    "0": {
+      "report": "profile_actual_optimized_v5_layer0.json",
+      "runtime_sha256": "169c0d97d7d0e9f35d97633f133305f1088b987ef625693d3faa100d25c3e67b",
+      "report_sha256": "bd0d6392cbbe7c8c00505db6111512c0b5e3f85dd544ea95187c7f7ba70bc6ab",
+      "native_source": "tracy/actual_optimized_v5_layer0",
+      "raw_sha256": "7a58709c9b908009e2fa0b44222889e77b92bcb436d48a6eace02919f29073f6",
+      "scope": "Ancestor v5 profile; never relabeled as v6 execution."
+    },
+    "5": {
+      "report": "profile_actual_optimized_v5_layer5.json",
+      "runtime_sha256": "169c0d97d7d0e9f35d97633f133305f1088b987ef625693d3faa100d25c3e67b",
+      "report_sha256": "55da047a1a0731d93327c618bb160fb0b6374151387eb0e511e4ddc0981b60eb",
+      "native_source": "tracy/actual_optimized_v5_layer5",
+      "raw_sha256": "3907568b16a9bdc678f08ef12f9d706237b72b5dc5660c483ec4c2b544f260d9",
+      "scope": "Ancestor v5 profile; never relabeled as v6 execution."
+    }
+  },
+  "current_validation_status": "current_targeted_and_inherited_gates_passed",
+  "current_validation_summary": "validated_v6_validation_summary.json",
+  "validation_attribution": "Current affected paths passed eight tight-cache cases, both full-tracker nine-request reuse catalogs, headline/Watcher both kinds and four pytest cases. Broad B32/prefix/BF16-cache/maximum-context/512-step stress coverage is retained at the original v5 hash via the exact source delta; these are not unperformed mandatory v6 reruns. Native v6 profiles remain separate."
+}

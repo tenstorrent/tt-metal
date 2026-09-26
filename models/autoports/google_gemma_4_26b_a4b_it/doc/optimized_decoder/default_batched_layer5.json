@@ -1,0 +1,337 @@
+{
+  "layer_type": "full_attention",
+  "batch": 32,
+  "length": 33,
+  "prefill": [
+    {
+      "slot": 0,
+      "pcc": 0.9997780665670662,
+      "passed": true
+    },
+    {
+      "slot": 1,
+      "pcc": 0.9986104100390565,
+      "passed": true
+    },
+    {
+      "slot": 2,
+      "pcc": 0.9993024488084914,
+      "passed": true
+    },
+    {
+      "slot": 3,
+      "pcc": 0.999429463876349,
+      "passed": true
+    },
+    {
+      "slot": 4,
+      "pcc": 0.9996183674447942,
+      "passed": true
+    },
+    {
+      "slot": 5,
+      "pcc": 0.9983772922656265,
+      "passed": true
+    },
+    {
+      "slot": 6,
+      "pcc": 0.9991858074312464,
+      "passed": true
+    },
+    {
+      "slot": 7,
+      "pcc": 0.9987319470518788,
+      "passed": true
+    },
+    {
+      "slot": 8,
+      "pcc": 0.9987290850116312,
+      "passed": true
+    },
+    {
+      "slot": 9,
+      "pcc": 0.9993946842266417,
+      "passed": true
+    },
+    {
+      "slot": 10,
+      "pcc": 0.9989114530003707,
+      "passed": true
+    },
+    {
+      "slot": 11,
+      "pcc": 0.998475140109155,
+      "passed": true
+    },
+    {
+      "slot": 12,
+      "pcc": 0.9995395177215677,
+      "passed": true
+    },
+    {
+      "slot": 13,
+      "pcc": 0.9997675071986808,
+      "passed": true
+    },
+    {
+      "slot": 14,
+      "pcc": 0.9995708852564669,
+      "passed": true
+    },
+    {
+      "slot": 15,
+      "pcc": 0.9988462762664714,
+      "passed": true
+    },
+    {
+      "slot": 16,
+      "pcc": 0.9981710160877567,
+      "passed": true
+    },
+    {
+      "slot": 17,
+      "pcc": 0.9992644243587285,
+      "passed": true
+    },
+    {
+      "slot": 18,
+      "pcc": 0.9993183439933032,
+      "passed": true
+    },
+    {
+      "slot": 19,
+      "pcc": 0.9973451925963652,
+      "passed": true
+    },
+    {
+      "slot": 20,
+      "pcc": 0.9991470770197848,
+      "passed": true
+    },
+    {
+      "slot": 21,
+      "pcc": 0.9988561876908472,
+      "passed": true
+    },
+    {
+      "slot": 22,
+      "pcc": 0.9991509090023944,
+      "passed": true
+    },
+    {
+      "slot": 23,
+      "pcc": 0.9978867950260449,
+      "passed": true
+    },
+    {
+      "slot": 24,
+      "pcc": 0.9989766913936778,
+      "passed": true
+    },
+    {
+      "slot": 25,
+      "pcc": 0.999314758406193,
+      "passed": true
+    },
+    {
+      "slot": 26,
+      "pcc": 0.9997823293210252,
+      "passed": true
+    },
+    {
+      "slot": 27,
+      "pcc": 0.9991799271303264,
+      "passed": true
+    },
+    {
+      "slot": 28,
+      "pcc": 0.999145847674423,
+      "passed": true
+    },
+    {
+      "slot": 29,
+      "pcc": 0.9990481655863412,
+      "passed": true
+    },
+    {
+      "slot": 30,
+      "pcc": 0.9993034596740711,
+      "passed": true
+    },
+    {
+      "slot": 31,
+      "pcc": 0.99811576513084,
+      "passed": true
+    }
+  ],
+  "decode": [
+    {
+      "slot": 0,
+      "pcc": 0.9975591453604133,
+      "passed": true
+    },
+    {
+      "slot": 1,
+      "pcc": 0.9986180101248157,
+      "passed": true
+    },
+    {
+      "slot": 2,
+      "pcc": 0.9980649954689371,
+      "passed": true
+    },
+    {
+      "slot": 3,
+      "pcc": 0.9985368616951222,
+      "passed": true
+    },
+    {
+      "slot": 4,
+      "pcc": 0.9977239773579941,
+      "passed": true
+    },
+    {
+      "slot": 5,
+      "pcc": 0.9979842510382966,
+      "passed": true
+    },
+    {
+      "slot": 6,
+      "pcc": 0.9967311451283,
+      "passed": true
+    },
+    {
+      "slot": 7,
+      "pcc": 0.9981733028197642,
+      "passed": true
+    },
+    {
+      "slot": 8,
+      "pcc": 0.9974495452011581,
+      "passed": true
+    },
+    {
+      "slot": 9,
+      "pcc": 0.9980806749004906,
+      "passed": true
+    },
+    {
+      "slot": 10,
+      "pcc": 0.9979884341593889,
+      "passed": true
+    },
+    {
+      "slot": 11,
+      "pcc": 0.9973278126480525,
+      "passed": true
+    },
+    {
+      "slot": 12,
+      "pcc": 0.9975589886276253,
+      "passed": true
+    },
+    {
+      "slot": 13,
+      "pcc": 0.9979700173171047,
+      "passed": true
+    },
+    {
+      "slot": 14,
+      "pcc": 0.9981674184489131,
+      "passed": true
+    },
+    {
+      "slot": 15,
+      "pcc": 0.9980992615213667,
+      "passed": true
+    },
+    {
+      "slot": 16,
+      "pcc": 0.998146086527245,
+      "passed": true
+    },
+    {
+      "slot": 17,
+      "pcc": 0.9980542172409872,
+      "passed": true
+    },
+    {
+      "slot": 18,
+      "pcc": 0.9985535306240209,
+      "passed": true
+    },
+    {
+      "slot": 19,
+      "pcc": 0.9984335144253347,
+      "passed": true
+    },
+    {
+      "slot": 20,
+      "pcc": 0.9972619847120612,
+      "passed": true
+    },
+    {
+      "slot": 21,
+      "pcc": 0.9976896791434693,
+      "passed": true
+    },
+    {
+      "slot": 22,
+      "pcc": 0.9979007460224478,
+      "passed": true
+    },
+    {
+      "slot": 23,
+      "pcc": 0.9977575131360832,
+      "passed": true
+    },
+    {
+      "slot": 24,
+      "pcc": 0.99839710527391,
+      "passed": true
+    },
+    {
+      "slot": 25,
+      "pcc": 0.998042117640805,
+      "passed": true
+    },
+    {
+      "slot": 26,
+      "pcc": 0.9984682825329052,
+      "passed": true
+    },
+    {
+      "slot": 27,
+      "pcc": 0.9978813230743634,
+      "passed": true
+    },
+    {
+      "slot": 28,
+      "pcc": 0.9974849499698915,
+      "passed": true
+    },
+    {
+      "slot": 29,
+      "pcc": 0.9984309139894639,
+      "passed": true
+    },
+    {
+      "slot": 30,
+      "pcc": 0.9979885217214807,
+      "passed": true
+    },
+    {
+      "slot": 31,
+      "pcc": 0.9984777355496678,
+      "passed": true
+    }
+  ],
+  "repeated_equal": true,
+  "traced": true,
+  "runtime_audit": "clean",
+  "page_table": "random permutation, disjoint pages per slot",
+  "decoder": "optimized",
+  "runtime_sha256": "9fb650ad97e124dcee102e697542e3dba342d469af1b58ceb20eeda0c6e05088",
+  "contract": "batched",
+  "functional_fallback": "forbidden"
+}

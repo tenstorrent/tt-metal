@@ -1,0 +1,176 @@
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py
+@@ -256,6 +256,7 @@
+         qkv_separate=False,
+         qkv_fidelity=None,
+         qkv_weight_dtype=None,
++        qkv_direct_dtype=None,
+         output_weight_dtype=None,
+         qkv_dram=False,
+         qkv_dram_readers=1,
+@@ -304,6 +305,8 @@
+             raise ValueError("Router score centering requires generalized_router=True")
+         if generalized_router and router_lanes:
+             raise ValueError("Generalized routing and lane-router projection are separate candidates")
++        if qkv_direct_dtype is not None and (not qkv_lanes or qkv_direct_dtype not in (ttnn.float32, ttnn.bfloat16)):
++            raise ValueError("Direct QKV requires lane setup and FP32 or BF16 input dtype")
+         if qkv_dram and (not qkv_lanes or qkv_separate):
+             raise ValueError("DRAM-sharded QKV requires lane partitioning and a packed QKV projection")
+         if kv_cache_dtype not in (ttnn.bfloat16, ttnn.bfloat8_b):
+@@ -315,7 +318,7 @@
+             prefill_down_dtype = ttnn.bfloat4_b if sliding else ttnn.bfloat8_b
+         if qkv_grid == "auto":
+             qkv_grid = (8, 8) if sliding else (9, 8)
+-            qkv_subblock_w = 1 if sliding else 4
++            qkv_subblock_w = 1 if sliding or (qkv_direct_dtype is not None and qkv_separate) else 4
+         self.precision_policy = dict(
+             attention_weights={
+                 "qkv": str(qkv_weight_dtype or ttnn.bfloat16),
+@@ -346,8 +349,9 @@
+             shared_decode_fidelity=str(shared_fidelity),
+             qkv_fidelity=str(ttnn.MathFidelity.HiFi4 if qkv_fidelity is None else qkv_fidelity),
+             qkv_grid=None if qkv_dram else qkv_grid,
+-            qkv_terms=qkv_terms,
+-            qkv_lanes=qkv_lanes,
++            qkv_terms=None if qkv_direct_dtype is not None else qkv_terms,
++            qkv_lanes=0 if qkv_direct_dtype is not None else qkv_lanes,
++            qkv_direct_dtype=str(qkv_direct_dtype) if qkv_direct_dtype is not None else None,
+             router_lanes=router_lanes,
+             qkv_dram=qkv_dram,
+             qkv_dram_readers=qkv_dram_readers if qkv_dram else None,
+@@ -436,6 +440,12 @@
+                 projection = projection.source
+             projection.weight = ttnn.typecast(projection.weight, qkv_weight_dtype)
+             projection.rows = ttnn.transpose(ttnn.typecast(projection.weight, ttnn.float32), -2, -1)
++        if qkv_direct_dtype is not None:
++            projection = DirectQKV(attention.weights.wqkv, qkv_direct_dtype)
++            attention.weights = replace(attention.weights, wqkv=projection)
++            self.precision_policy["qkv_decode"] = projection.precision_policy
++            if qkv_dram:
++                self.precision_policy["qkv_dram_geometry"]["weight_dtype"] = str(projection.weights[0].dtype)
+         if output_weight_dtype is not None:
+             attention.weights = replace(
+                 attention.weights, o_proj=ttnn.typecast(attention.weights.o_proj, output_weight_dtype)
+@@ -991,6 +1001,122 @@
+         return self.project(attention, False)
+ 
+ 
++class DirectQKV:
++    """Use native one-token projections while retaining the configured prefill path."""
++
++    def __init__(self, source, input_dtype):
++        if not isinstance(source, LanePartitionQKV):
++            raise ValueError("Direct QKV requires the configured lane projection for setup")
++        if input_dtype not in (ttnn.float32, ttnn.bfloat16):
++            raise ValueError("Direct QKV input dtype must be FP32 or BF16")
++        self.prefill_source = source
++        self.source = source.source
++        self.weights = source.weights
++        self.compute = source.compute
++        self.input_dtype = input_dtype
++        self.dram = source.dram
++        self.programs = []
++        geometry = []
++        for weight, program in zip(self.weights, source.programs):
++            if program is None:
++                self.programs.append(None)
++                geometry.append(None)
++            elif self.dram:
++                self.programs.append(
++                    ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
++                        in0_block_w=program.in0_block_w,
++                        per_core_M=1,
++                        per_core_N=program.per_core_N,
++                        num_workers_per_dram_bank=program.num_workers_per_dram_bank,
++                        fused_activation=None,
++                    )
++                )
++                geometry.append(
++                    dict(
++                        in0_block_w=program.in0_block_w,
++                        per_core_M=1,
++                        per_core_N=program.per_core_N,
++                        num_workers_per_dram_bank=program.num_workers_per_dram_bank,
++                    )
++                )
++            else:
++                grid = program.compute_with_storage_grid_size
++                self.programs.append(
++                    ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
++                        compute_with_storage_grid_size=grid,
++                        in0_block_w=program.in0_block_w,
++                        out_subblock_h=1,
++                        out_subblock_w=program.out_subblock_w,
++                        per_core_M=1,
++                        per_core_N=program.per_core_N,
++                        fuse_batch=True,
++                        fused_activation=None,
++                        mcast_in0=True,
++                    )
++                )
++                geometry.append(
++                    dict(
++                        grid=[grid.x, grid.y],
++                        in0_block_w=program.in0_block_w,
++                        out_subblock_h=1,
++                        out_subblock_w=program.out_subblock_w,
++                        per_core_M=1,
++                        per_core_N=program.per_core_N,
++                    )
++                )
++        self.input_memory = source.input_memory if self.dram else None
++        self.precision_policy = dict(
++            backend="native_separate_linear" if len(self.weights) > 1 else "native_packed_linear",
++            input_dtype=str(self.input_dtype),
++            weight_dtypes=[str(weight.dtype) for weight in self.weights],
++            weight_shapes=[list(weight.shape) for weight in self.weights],
++            weight_memory=[str(weight.memory_config()) for weight in self.weights],
++            output_dtype="float32",
++            output_memory=str(self.source.decode_memory),
++            math_fidelity=str(self.compute.math_fidelity),
++            fp32_dest_acc_en=self.compute.fp32_dest_acc_en,
++            packer_l1_acc=self.compute.packer_l1_acc,
++            dram=self.dram,
++            programs=geometry,
++            activation_decomposition=False,
++            lane_mask=False,
++            partial_row_reduce=False,
++        )
++
++    def __call__(self, hidden_states, compute_kernel_config=None, out_memory_config=None):
++        if hidden_states.shape[-2] != 1:
++            return self.prefill_source(hidden_states, compute_kernel_config, out_memory_config)
++        operand = hidden_states
++        if operand.dtype != self.input_dtype:
++            operand = ttnn.typecast(operand, self.input_dtype)
++        if self.dram:
++            operand = ttnn.to_memory_config(operand, self.input_memory)
++        outputs = []
++        for weight, program in zip(self.weights, self.programs):
++            result = ttnn.linear(
++                operand,
++                weight,
++                dtype=ttnn.float32,
++                program_config=program,
++                compute_kernel_config=self.compute,
++                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if self.dram else self.source.decode_memory,
++            )
++            if self.dram:
++                result = ttnn.to_memory_config(result, self.source.decode_memory)
++                result = result[..., : self.source.weight.shape[-1]]
++            outputs.append(result)
++        result = (
++            ttnn.concat(outputs, dim=-1, memory_config=self.source.decode_memory) if len(outputs) > 1 else outputs[0]
++        )
++        if hasattr(self.source, "kv_width"):
++            result = ttnn.concat(
++                (result, result[..., self.source.width - self.source.kv_width :]),
++                dim=-1,
++                memory_config=self.source.decode_memory,
++            )
++        return result
++
++
+ class LanePartitionQKV:
+     """Project disjoint K lanes, then combine FP32 rows outside the FPU dot."""
+ 

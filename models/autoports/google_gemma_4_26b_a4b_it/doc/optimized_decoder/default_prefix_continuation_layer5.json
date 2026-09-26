@@ -1,0 +1,34 @@
+{
+  "layer_type": "full_attention",
+  "length": 65,
+  "slot": 1,
+  "real_weights": true,
+  "pcc": 0.9988816632085914,
+  "passed": true,
+  "runtime_audit": "clean",
+  "cache_preservation": [
+    {
+      "start": 0,
+      "end": 31,
+      "prefix_unchanged": true,
+      "other_slot_unchanged": true
+    },
+    {
+      "start": 31,
+      "end": 33,
+      "prefix_unchanged": true,
+      "other_slot_unchanged": true
+    },
+    {
+      "start": 33,
+      "end": 65,
+      "prefix_unchanged": true,
+      "other_slot_unchanged": true
+    }
+  ],
+  "page_table": "random disjoint physical pages",
+  "decoder": "optimized",
+  "runtime_sha256": "9fb650ad97e124dcee102e697542e3dba342d469af1b58ceb20eeda0c6e05088",
+  "contract": "prefix_continuation",
+  "functional_fallback": "forbidden"
+}

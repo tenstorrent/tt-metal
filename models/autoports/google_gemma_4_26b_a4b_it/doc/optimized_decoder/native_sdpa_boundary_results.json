@@ -1,0 +1,62 @@
+[
+  {
+    "kind": "fp32_boundary",
+    "layer": 0,
+    "artifact": "actual_gate_k22_layer0.json",
+    "prefill_pcc": 0.9986693851431688,
+    "decode_min_pcc": 0.9953419568746218,
+    "median_traced_host_us": 1073.8795666666667,
+    "samples": [
+      1073.8779,
+      1074.0298333333333,
+      1073.8795666666667,
+      1074.4242333333334,
+      1073.7115666666666
+    ]
+  },
+  {
+    "kind": "bf16_boundary",
+    "layer": 0,
+    "artifact": "actual_bf16_boundary_layer0.json",
+    "prefill_pcc": 0.9986693851431688,
+    "decode_min_pcc": 0.9953419568746218,
+    "median_traced_host_us": 1074.6359666666667,
+    "samples": [
+      1075.3727333333334,
+      1074.6359666666667,
+      1074.7796,
+      1074.1003,
+      1074.6226333333334
+    ]
+  },
+  {
+    "kind": "fp32_boundary",
+    "layer": 5,
+    "artifact": "actual_gate_k22_layer5.json",
+    "prefill_pcc": 0.9991320669166669,
+    "decode_min_pcc": 0.9952141214781637,
+    "median_traced_host_us": 1170.9427333333333,
+    "samples": [
+      1170.7954333333332,
+      1170.9427333333333,
+      1171.0288666666668,
+      1170.9814666666666,
+      1170.7259666666666
+    ]
+  },
+  {
+    "kind": "bf16_boundary",
+    "layer": 5,
+    "artifact": "actual_bf16_boundary_layer5.json",
+    "prefill_pcc": 0.9991320669166669,
+    "decode_min_pcc": 0.9952141214781637,
+    "median_traced_host_us": 1160.8060666666668,
+    "samples": [
+      1160.3692333333333,
+      1161.8497,
+      1161.4863333333333,
+      1160.4049333333332,
+      1160.8060666666668
+    ]
+  }
+]

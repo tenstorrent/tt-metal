@@ -1,0 +1,665 @@
+{
+  "status": "passed",
+  "runtime_sha256": "169c0d97d7d0e9f35d97633f133305f1088b987ef625693d3faa100d25c3e67b",
+  "command_count": 16,
+  "pairs": [
+    {
+      "layer": 0,
+      "layer_type": "sliding_attention",
+      "logical_length": 65,
+      "chunk_count": 1,
+      "physical_rows": [
+        96
+      ],
+      "fused": {
+        "decoder": "fused",
+        "layer": 0,
+        "logical_length": 65,
+        "physical_rows": [
+          96
+        ],
+        "samples_host_us": [
+          69100.469,
+          68748.068,
+          68996.592
+        ],
+        "median_host_us": 68996.592,
+        "minimum_host_us": 68748.068,
+        "maximum_host_us": 69100.469,
+        "prefill_hf_pcc": 0.9998803639934909,
+        "minimum_decode_hf_pcc": 0.999928245526263,
+        "program_cache_miss_guard": true,
+        "prefill_cache_entries": 97,
+        "runtime_sha256": null,
+        "report": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_fused_layer0_65.json",
+          "sha256": "727d237d1f27aeb3be0c0cef625239c8423dc414120d93d5513a7e8c0438dd6b"
+        },
+        "fixture": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_layer0_65.pt",
+          "sha256": "01abd541c527bd8fd6f4000657a2fd9243730aa9eb3971de95331ea727432a72"
+        },
+        "recorded_slice_source": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+          "sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3"
+        }
+      },
+      "optimized": {
+        "decoder": "optimized",
+        "layer": 0,
+        "logical_length": 65,
+        "physical_rows": [
+          96
+        ],
+        "samples_host_us": [
+          7335.759,
+          6437.41,
+          6498.796
+        ],
+        "median_host_us": 6498.796,
+        "minimum_host_us": 6437.41,
+        "maximum_host_us": 7335.759,
+        "prefill_hf_pcc": 0.9985348119324635,
+        "minimum_decode_hf_pcc": 0.9954684988777738,
+        "program_cache_miss_guard": true,
+        "prefill_cache_entries": 103,
+        "runtime_sha256": "169c0d97d7d0e9f35d97633f133305f1088b987ef625693d3faa100d25c3e67b",
+        "report": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_optimized_layer0_65.json",
+          "sha256": "834f7e00a339669e0dafdf1a8a2dee0d4394a09220035780b944778438bfa4af"
+        },
+        "fixture": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_layer0_65.pt",
+          "sha256": "01abd541c527bd8fd6f4000657a2fd9243730aa9eb3971de95331ea727432a72"
+        },
+        "recorded_slice_source": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+          "sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3"
+        }
+      },
+      "fused_to_optimized_host_speedup": 10.616826870700358,
+      "host_time_saved_us": 62497.796
+    },
+    {
+      "layer": 0,
+      "layer_type": "sliding_attention",
+      "logical_length": 1023,
+      "chunk_count": 1,
+      "physical_rows": [
+        1024
+      ],
+      "fused": {
+        "decoder": "fused",
+        "layer": 0,
+        "logical_length": 1023,
+        "physical_rows": [
+          1024
+        ],
+        "samples_host_us": [
+          703711.463,
+          703757.501,
+          704255.116
+        ],
+        "median_host_us": 703757.501,
+        "minimum_host_us": 703711.463,
+        "maximum_host_us": 704255.116,
+        "prefill_hf_pcc": 0.9999031896452841,
+        "minimum_decode_hf_pcc": 0.9999240384537823,
+        "program_cache_miss_guard": true,
+        "prefill_cache_entries": 119,
+        "runtime_sha256": null,
+        "report": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_fused_layer0_1023.json",
+          "sha256": "27fc7c1ef2c5cb952c56120a2e7214999d56dfa4924ec38dd07d32069031e558"
+        },
+        "fixture": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_layer0_1023.pt",
+          "sha256": "e287135fef52c80e6a059d01913f9ac9f6dec6019132a170f2c3f0ccac2106d4"
+        },
+        "recorded_slice_source": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+          "sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3"
+        }
+      },
+      "optimized": {
+        "decoder": "optimized",
+        "layer": 0,
+        "logical_length": 1023,
+        "physical_rows": [
+          1024
+        ],
+        "samples_host_us": [
+          55527.47,
+          54869.108,
+          54912.421
+        ],
+        "median_host_us": 54912.421,
+        "minimum_host_us": 54869.108,
+        "maximum_host_us": 55527.47,
+        "prefill_hf_pcc": 0.9990977590610713,
+        "minimum_decode_hf_pcc": 0.9994290065329267,
+        "program_cache_miss_guard": true,
+        "prefill_cache_entries": 161,
+        "runtime_sha256": "169c0d97d7d0e9f35d97633f133305f1088b987ef625693d3faa100d25c3e67b",
+        "report": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_optimized_layer0_1023.json",
+          "sha256": "b07048717dd36ea1418292f22f5fc146f4e37e78f83819687541dd394d19099c"
+        },
+        "fixture": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_layer0_1023.pt",
+          "sha256": "e287135fef52c80e6a059d01913f9ac9f6dec6019132a170f2c3f0ccac2106d4"
+        },
+        "recorded_slice_source": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+          "sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3"
+        }
+      },
+      "fused_to_optimized_host_speedup": 12.81599842410882,
+      "host_time_saved_us": 648845.0800000001
+    },
+    {
+      "layer": 0,
+      "layer_type": "sliding_attention",
+      "logical_length": 1024,
+      "chunk_count": 1,
+      "physical_rows": [
+        1024
+      ],
+      "fused": {
+        "decoder": "fused",
+        "layer": 0,
+        "logical_length": 1024,
+        "physical_rows": [
+          1024
+        ],
+        "samples_host_us": [
+          703808.977,
+          703792.626,
+          704114.148
+        ],
+        "median_host_us": 703808.977,
+        "minimum_host_us": 703792.626,
+        "maximum_host_us": 704114.148,
+        "prefill_hf_pcc": 0.9999031647343937,
+        "minimum_decode_hf_pcc": 0.9999498844223006,
+        "program_cache_miss_guard": true,
+        "prefill_cache_entries": 117,
+        "runtime_sha256": null,
+        "report": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_fused_layer0_1024.json",
+          "sha256": "4760ebf451e612c7a514f50329f66086865fa0d1aabedd02c82d40a29f1ac445"
+        },
+        "fixture": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_layer0_1024.pt",
+          "sha256": "049fcb9c03d177e2705f7c1bca1f73de7e1a8904c69e8bed204911524c3a5acd"
+        },
+        "recorded_slice_source": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+          "sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3"
+        }
+      },
+      "optimized": {
+        "decoder": "optimized",
+        "layer": 0,
+        "logical_length": 1024,
+        "physical_rows": [
+          1024
+        ],
+        "samples_host_us": [
+          55745.514,
+          54907.08,
+          54988.254
+        ],
+        "median_host_us": 54988.254,
+        "minimum_host_us": 54907.08,
+        "maximum_host_us": 55745.514,
+        "prefill_hf_pcc": 0.999097959341004,
+        "minimum_decode_hf_pcc": 0.9995400622779432,
+        "program_cache_miss_guard": true,
+        "prefill_cache_entries": 159,
+        "runtime_sha256": "169c0d97d7d0e9f35d97633f133305f1088b987ef625693d3faa100d25c3e67b",
+        "report": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_optimized_layer0_1024.json",
+          "sha256": "f734fc6e1c12ff2ccf4f5f7ef5affe258e910883c49827a107643bfdfd9b2299"
+        },
+        "fixture": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_layer0_1024.pt",
+          "sha256": "049fcb9c03d177e2705f7c1bca1f73de7e1a8904c69e8bed204911524c3a5acd"
+        },
+        "recorded_slice_source": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+          "sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3"
+        }
+      },
+      "fused_to_optimized_host_speedup": 12.79926031112026,
+      "host_time_saved_us": 648820.723
+    },
+    {
+      "layer": 0,
+      "layer_type": "sliding_attention",
+      "logical_length": 1025,
+      "chunk_count": 2,
+      "physical_rows": [
+        1024,
+        1024
+      ],
+      "fused": {
+        "decoder": "fused",
+        "layer": 0,
+        "logical_length": 1025,
+        "physical_rows": [
+          1024,
+          1024
+        ],
+        "samples_host_us": [
+          1407306.681,
+          1406953.358,
+          1408028.682
+        ],
+        "median_host_us": 1407306.681,
+        "minimum_host_us": 1406953.358,
+        "maximum_host_us": 1408028.682,
+        "prefill_hf_pcc": 0.9999031906788831,
+        "minimum_decode_hf_pcc": 0.9999472098429455,
+        "program_cache_miss_guard": true,
+        "prefill_cache_entries": 135,
+        "runtime_sha256": null,
+        "report": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_fused_layer0_1025.json",
+          "sha256": "16d6cbb737804d0dfd281e75e17658cf4ea1af77ca152a9365741290593ed5c0"
+        },
+        "fixture": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_layer0_1025.pt",
+          "sha256": "2a6f6860e63712187d1f2ed94ab4cd134396972dbbf91cfb00bc99c7a5aab929"
+        },
+        "recorded_slice_source": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+          "sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3"
+        }
+      },
+      "optimized": {
+        "decoder": "optimized",
+        "layer": 0,
+        "logical_length": 1025,
+        "physical_rows": [
+          1024,
+          1024
+        ],
+        "samples_host_us": [
+          83218.84,
+          82370.116,
+          82655.399
+        ],
+        "median_host_us": 82655.399,
+        "minimum_host_us": 82370.116,
+        "maximum_host_us": 83218.84,
+        "prefill_hf_pcc": 0.9990982367369677,
+        "minimum_decode_hf_pcc": 0.9997239216282358,
+        "program_cache_miss_guard": true,
+        "prefill_cache_entries": 177,
+        "runtime_sha256": "169c0d97d7d0e9f35d97633f133305f1088b987ef625693d3faa100d25c3e67b",
+        "report": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_optimized_layer0_1025.json",
+          "sha256": "f17be357820891faf7eff310a1b88ecbe14f08477e4320f146bf2c97e3478b88"
+        },
+        "fixture": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_layer0_1025.pt",
+          "sha256": "2a6f6860e63712187d1f2ed94ab4cd134396972dbbf91cfb00bc99c7a5aab929"
+        },
+        "recorded_slice_source": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+          "sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3"
+        }
+      },
+      "fused_to_optimized_host_speedup": 17.026191852270898,
+      "host_time_saved_us": 1324651.2820000001
+    },
+    {
+      "layer": 5,
+      "layer_type": "full_attention",
+      "logical_length": 65,
+      "chunk_count": 1,
+      "physical_rows": [
+        96
+      ],
+      "fused": {
+        "decoder": "fused",
+        "layer": 5,
+        "logical_length": 65,
+        "physical_rows": [
+          96
+        ],
+        "samples_host_us": [
+          68676.759,
+          68165.927,
+          68822.937
+        ],
+        "median_host_us": 68676.759,
+        "minimum_host_us": 68165.927,
+        "maximum_host_us": 68822.937,
+        "prefill_hf_pcc": 0.999846677399132,
+        "minimum_decode_hf_pcc": 0.999989676468198,
+        "program_cache_miss_guard": true,
+        "prefill_cache_entries": 97,
+        "runtime_sha256": null,
+        "report": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_fused_layer5_65.json",
+          "sha256": "5e361d6ccfd25bd568692252c39cfa80b0c2239da73b7ae6f66fdf55e82507cb"
+        },
+        "fixture": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_layer5_65.pt",
+          "sha256": "3621d14ef40df4375183e9795f13da23101760ca323a8cbe4b09bcf7920fc882"
+        },
+        "recorded_slice_source": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+          "sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa"
+        }
+      },
+      "optimized": {
+        "decoder": "optimized",
+        "layer": 5,
+        "logical_length": 65,
+        "physical_rows": [
+          96
+        ],
+        "samples_host_us": [
+          5925.275,
+          5249.328,
+          5260.359
+        ],
+        "median_host_us": 5260.359,
+        "minimum_host_us": 5249.328,
+        "maximum_host_us": 5925.275,
+        "prefill_hf_pcc": 0.9990602204643664,
+        "minimum_decode_hf_pcc": 0.999392041985217,
+        "program_cache_miss_guard": true,
+        "prefill_cache_entries": 104,
+        "runtime_sha256": "169c0d97d7d0e9f35d97633f133305f1088b987ef625693d3faa100d25c3e67b",
+        "report": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_optimized_layer5_65.json",
+          "sha256": "c2d45f99976186a242bd2b6ef581a6cc63e54a464b43b137e010b836a113b5a6"
+        },
+        "fixture": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_layer5_65.pt",
+          "sha256": "3621d14ef40df4375183e9795f13da23101760ca323a8cbe4b09bcf7920fc882"
+        },
+        "recorded_slice_source": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+          "sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa"
+        }
+      },
+      "fused_to_optimized_host_speedup": 13.05552700870796,
+      "host_time_saved_us": 63416.40000000001
+    },
+    {
+      "layer": 5,
+      "layer_type": "full_attention",
+      "logical_length": 1023,
+      "chunk_count": 1,
+      "physical_rows": [
+        1024
+      ],
+      "fused": {
+        "decoder": "fused",
+        "layer": 5,
+        "logical_length": 1023,
+        "physical_rows": [
+          1024
+        ],
+        "samples_host_us": [
+          705745.995,
+          705661.103,
+          706271.183
+        ],
+        "median_host_us": 705745.995,
+        "minimum_host_us": 705661.103,
+        "maximum_host_us": 706271.183,
+        "prefill_hf_pcc": 0.9999129285284273,
+        "minimum_decode_hf_pcc": 0.9999583450809597,
+        "program_cache_miss_guard": true,
+        "prefill_cache_entries": 119,
+        "runtime_sha256": null,
+        "report": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_fused_layer5_1023.json",
+          "sha256": "6b29f23828573960328df15c910991d69d41ad86f39dc141f20fb6bd2a8504f7"
+        },
+        "fixture": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_layer5_1023.pt",
+          "sha256": "3c8c42ab78b97c75fab53a0413e9b99a0a5215e18dd5aaadd293baa2d8e7af0f"
+        },
+        "recorded_slice_source": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+          "sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa"
+        }
+      },
+      "optimized": {
+        "decoder": "optimized",
+        "layer": 5,
+        "logical_length": 1023,
+        "physical_rows": [
+          1024
+        ],
+        "samples_host_us": [
+          46255.744,
+          45659.06,
+          45752.127
+        ],
+        "median_host_us": 45752.127,
+        "minimum_host_us": 45659.06,
+        "maximum_host_us": 46255.744,
+        "prefill_hf_pcc": 0.9990438458841362,
+        "minimum_decode_hf_pcc": 0.9982085807486282,
+        "program_cache_miss_guard": true,
+        "prefill_cache_entries": 162,
+        "runtime_sha256": "169c0d97d7d0e9f35d97633f133305f1088b987ef625693d3faa100d25c3e67b",
+        "report": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_optimized_layer5_1023.json",
+          "sha256": "393b4afb15b6dd50eff083bdcd2960834c5df58738583e88da66352d181a5a48"
+        },
+        "fixture": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_layer5_1023.pt",
+          "sha256": "3c8c42ab78b97c75fab53a0413e9b99a0a5215e18dd5aaadd293baa2d8e7af0f"
+        },
+        "recorded_slice_source": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+          "sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa"
+        }
+      },
+      "fused_to_optimized_host_speedup": 15.425424811397292,
+      "host_time_saved_us": 659993.868
+    },
+    {
+      "layer": 5,
+      "layer_type": "full_attention",
+      "logical_length": 1024,
+      "chunk_count": 1,
+      "physical_rows": [
+        1024
+      ],
+      "fused": {
+        "decoder": "fused",
+        "layer": 5,
+        "logical_length": 1024,
+        "physical_rows": [
+          1024
+        ],
+        "samples_host_us": [
+          706707.124,
+          705552.567,
+          706077.585
+        ],
+        "median_host_us": 706077.585,
+        "minimum_host_us": 705552.567,
+        "maximum_host_us": 706707.124,
+        "prefill_hf_pcc": 0.9999128670712545,
+        "minimum_decode_hf_pcc": 0.9999379576797793,
+        "program_cache_miss_guard": true,
+        "prefill_cache_entries": 117,
+        "runtime_sha256": null,
+        "report": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_fused_layer5_1024.json",
+          "sha256": "9872aa757d15e0ec365224b27339baec2a49ac3ea3ae45e83767078ee3adce50"
+        },
+        "fixture": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_layer5_1024.pt",
+          "sha256": "fd00585b10b6b6f50d090c878e0cf491d677dcbfda1a685606d6c1bea6e90969"
+        },
+        "recorded_slice_source": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+          "sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa"
+        }
+      },
+      "optimized": {
+        "decoder": "optimized",
+        "layer": 5,
+        "logical_length": 1024,
+        "physical_rows": [
+          1024
+        ],
+        "samples_host_us": [
+          46538.553,
+          45894.818,
+          46304.307
+        ],
+        "median_host_us": 46304.307,
+        "minimum_host_us": 45894.818,
+        "maximum_host_us": 46538.553,
+        "prefill_hf_pcc": 0.9990434566236724,
+        "minimum_decode_hf_pcc": 0.9966538281329936,
+        "program_cache_miss_guard": true,
+        "prefill_cache_entries": 160,
+        "runtime_sha256": "169c0d97d7d0e9f35d97633f133305f1088b987ef625693d3faa100d25c3e67b",
+        "report": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_optimized_layer5_1024.json",
+          "sha256": "b9cb3d61c95c3850771f8fbfb1a830b50bc2befde2c82b50daad15eb8ecf3a51"
+        },
+        "fixture": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_layer5_1024.pt",
+          "sha256": "fd00585b10b6b6f50d090c878e0cf491d677dcbfda1a685606d6c1bea6e90969"
+        },
+        "recorded_slice_source": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+          "sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa"
+        }
+      },
+      "fused_to_optimized_host_speedup": 15.24863734598166,
+      "host_time_saved_us": 659773.2779999999
+    },
+    {
+      "layer": 5,
+      "layer_type": "full_attention",
+      "logical_length": 1025,
+      "chunk_count": 2,
+      "physical_rows": [
+        1024,
+        32
+      ],
+      "fused": {
+        "decoder": "fused",
+        "layer": 5,
+        "logical_length": 1025,
+        "physical_rows": [
+          1024,
+          32
+        ],
+        "samples_host_us": [
+          729475.659,
+          729313.92,
+          729814.071
+        ],
+        "median_host_us": 729475.659,
+        "minimum_host_us": 729313.92,
+        "maximum_host_us": 729814.071,
+        "prefill_hf_pcc": 0.9999127613134449,
+        "minimum_decode_hf_pcc": 0.9999726341099551,
+        "program_cache_miss_guard": true,
+        "prefill_cache_entries": 179,
+        "runtime_sha256": null,
+        "report": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_fused_layer5_1025.json",
+          "sha256": "2e013116c3af77950f74cc5cca9a9b5cdbd660caa14c7abb2ccdf2942c766f15"
+        },
+        "fixture": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_layer5_1025.pt",
+          "sha256": "4006f4bf472b7e734ef25f15f1215c369c2a5f63d25bc26deef1afd3aae55852"
+        },
+        "recorded_slice_source": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+          "sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa"
+        }
+      },
+      "optimized": {
+        "decoder": "optimized",
+        "layer": 5,
+        "logical_length": 1025,
+        "physical_rows": [
+          1024,
+          32
+        ],
+        "samples_host_us": [
+          48475.187,
+          48154.507,
+          47848.685
+        ],
+        "median_host_us": 48154.507,
+        "minimum_host_us": 47848.685,
+        "maximum_host_us": 48475.187,
+        "prefill_hf_pcc": 0.9990412040380116,
+        "minimum_decode_hf_pcc": 0.99916185200719,
+        "program_cache_miss_guard": true,
+        "prefill_cache_entries": 217,
+        "runtime_sha256": "169c0d97d7d0e9f35d97633f133305f1088b987ef625693d3faa100d25c3e67b",
+        "report": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_optimized_layer5_1025.json",
+          "sha256": "982c927399d578e08f4d64cfe73101e39ee28041292bf02247150b0dcf08cd47"
+        },
+        "fixture": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_layer5_1025.pt",
+          "sha256": "4006f4bf472b7e734ef25f15f1215c369c2a5f63d25bc26deef1afd3aae55852"
+        },
+        "recorded_slice_source": {
+          "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+          "sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa"
+        }
+      },
+      "fused_to_optimized_host_speedup": 15.148647643718999,
+      "host_time_saved_us": 681321.152
+    }
+  ],
+  "sources": [
+    {
+      "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_commands.json",
+      "sha256": "cad79ad07647d7bb324abe06dcb56558560d3de9f6c24e690a2e1e7c296eba86"
+    },
+    {
+      "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/run_prefill_boundaries.py",
+      "sha256": "02ea5c8926f59fe17b2b00841c714c0ff5992e4a47a8ef0df53189d791c1f243"
+    },
+    {
+      "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/summarize_prefill_boundaries.py",
+      "sha256": "a928dd07ababe954f819cb4f418f9f1a9f1fd8c0f9b485c2f96563ca431017ab"
+    },
+    {
+      "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py",
+      "sha256": "169c0d97d7d0e9f35d97633f133305f1088b987ef625693d3faa100d25c3e67b"
+    },
+    {
+      "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tt/fused_decoder.py",
+      "sha256": "0c8892be32e04202fdbddd2b06850848c63ae57660c49d03c4d149a5a88b041c"
+    },
+    {
+      "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tt/functional_decoder.py",
+      "sha256": "d19667d70e42650a5a241fa334dd57a396a564a2dca0cf8ab2a1a6573156b3a3"
+    },
+    {
+      "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tests/run_decoder.py",
+      "sha256": "13e23a8beeb5c3aa436079a3b8c68827e22defc74e061189c9891846caaaffe5"
+    }
+  ],
+  "timing_scope": "Median of three warmed synchronous whole-prefill host calls; host dispatch and final synchronization included; output deallocation and initial synchronization precede each timed interval. No device profiling or decode latency is inferred.",
+  "cache_scope": "The warmup populated program cache and a preceding whole-prefill rerun disallowed misses. Timed samples follow that check; their misses are not separately blocked or counted.",
+  "physical_scope": "Source-derived layer-call physical rows, cross-checked with the command journal; not measured native trace shapes. Both decoders tile-pad each chunk; a short noninitial sliding chunk expands to 1024 rows.",
+  "comparison_scope": "Whole selected optimized decoder versus fused baseline on identical real input bytes and logical/physical geometry; not an isolated minimal-matmul speedup or full-model result.",
+  "provenance_limit": "Optimized reports record the frozen runtime hash. Fused reports do not record a per-run source hash; the current fused/functional source hashes above are audit-time provenance only.",
+  "correctness_scope": "Every prefill aggregate and traced one-step HF check passes PCC .995 with repeat equality and clean device-only audits. No direct fused-to-optimized tensor comparison was recorded in this boundary campaign."
+}

@@ -1,0 +1,292 @@
+[
+  {
+    "artifact": "actual_router_direct_k22_hifi4_layer0.json",
+    "layer_type": "sliding_attention",
+    "prefill_pcc": 0.9986693851431688,
+    "decode_min_pcc": 0.9953419568746218,
+    "traced_host_median_us": 988.2247666666667,
+    "samples_us": [
+      987.5330666666666,
+      988.3533333333334,
+      988.6258666666666,
+      987.6076,
+      988.2247666666667
+    ],
+    "passed": true,
+    "probe": {
+      "direct_router_backend": "linear",
+      "direct_router_grid": [
+        4,
+        1
+      ],
+      "direct_router_block": 22,
+      "direct_router_fidelity": "HiFi4",
+      "direct_router_full_sync": false,
+      "direct_router_program": "explicit",
+      "direct_router_input_memory": "inherit",
+      "direct_router_output_memory": "l1",
+      "direct_router_weight_dtype": "bfloat16"
+    }
+  },
+  {
+    "artifact": "actual_router_direct_k22_hifi4_layer5.json",
+    "layer_type": "full_attention",
+    "prefill_pcc": 0.9991318001817636,
+    "decode_min_pcc": 0.9952141214781637,
+    "traced_host_median_us": 1077.5084333333334,
+    "samples_us": [
+      1077.4463,
+      1076.5699666666667,
+      1077.7639,
+      1077.6417,
+      1077.5084333333334
+    ],
+    "passed": true,
+    "probe": {
+      "direct_router_backend": "linear",
+      "direct_router_grid": [
+        4,
+        1
+      ],
+      "direct_router_block": 22,
+      "direct_router_fidelity": "HiFi4",
+      "direct_router_full_sync": false,
+      "direct_router_program": "explicit",
+      "direct_router_input_memory": "inherit",
+      "direct_router_output_memory": "l1",
+      "direct_router_weight_dtype": "bfloat16"
+    }
+  },
+  {
+    "artifact": "actual_router_direct_k44_hifi2_layer0.json",
+    "layer_type": "sliding_attention",
+    "prefill_pcc": 0.9986693851431688,
+    "decode_min_pcc": 0.9953811938367992,
+    "traced_host_median_us": 986.606,
+    "samples_us": [
+      986.9563333333333,
+      986.8758666666666,
+      986.606,
+      986.4677666666666,
+      986.5916333333333
+    ],
+    "passed": true,
+    "probe": {
+      "direct_router_backend": "linear",
+      "direct_router_grid": [
+        4,
+        1
+      ],
+      "direct_router_block": 44,
+      "direct_router_fidelity": "HiFi2",
+      "direct_router_full_sync": false,
+      "direct_router_program": "explicit",
+      "direct_router_input_memory": "inherit",
+      "direct_router_output_memory": "l1",
+      "direct_router_weight_dtype": "bfloat16"
+    }
+  },
+  {
+    "artifact": "actual_router_direct_k44_hifi2_layer5.json",
+    "layer_type": "full_attention",
+    "prefill_pcc": 0.9991318001817636,
+    "decode_min_pcc": 0.9952003662998415,
+    "traced_host_median_us": 1076.4828,
+    "samples_us": [
+      1076.4828,
+      1077.4894,
+      1076.0553333333332,
+      1077.0575666666666,
+      1075.8823666666667
+    ],
+    "passed": true,
+    "probe": {
+      "direct_router_backend": "linear",
+      "direct_router_grid": [
+        4,
+        1
+      ],
+      "direct_router_block": 44,
+      "direct_router_fidelity": "HiFi2",
+      "direct_router_full_sync": false,
+      "direct_router_program": "explicit",
+      "direct_router_input_memory": "inherit",
+      "direct_router_output_memory": "l1",
+      "direct_router_weight_dtype": "bfloat16"
+    }
+  },
+  {
+    "artifact": "actual_router_direct_k44_hifi4_layer0.json",
+    "layer_type": "sliding_attention",
+    "prefill_pcc": 0.9986693851431688,
+    "decode_min_pcc": 0.9953419568746218,
+    "traced_host_median_us": 988.4732333333334,
+    "samples_us": [
+      988.6171333333333,
+      988.5687333333333,
+      988.4732333333334,
+      987.9312,
+      987.7902666666666
+    ],
+    "passed": true,
+    "probe": {
+      "direct_router_backend": "linear",
+      "direct_router_grid": [
+        4,
+        1
+      ],
+      "direct_router_block": 44,
+      "direct_router_fidelity": "HiFi4",
+      "direct_router_full_sync": false,
+      "direct_router_program": "explicit",
+      "direct_router_input_memory": "inherit",
+      "direct_router_output_memory": "l1",
+      "direct_router_weight_dtype": "bfloat16"
+    }
+  },
+  {
+    "artifact": "actual_router_direct_k44_hifi4_layer5.json",
+    "layer_type": "full_attention",
+    "prefill_pcc": 0.9991318001817636,
+    "decode_min_pcc": 0.9952141214781637,
+    "traced_host_median_us": 1077.7325,
+    "samples_us": [
+      1077.9105333333334,
+      1078.1092,
+      1077.1354,
+      1077.7325,
+      1077.1177
+    ],
+    "passed": true,
+    "probe": {
+      "direct_router_backend": "linear",
+      "direct_router_grid": [
+        4,
+        1
+      ],
+      "direct_router_block": 44,
+      "direct_router_fidelity": "HiFi4",
+      "direct_router_full_sync": false,
+      "direct_router_program": "explicit",
+      "direct_router_input_memory": "inherit",
+      "direct_router_output_memory": "l1",
+      "direct_router_weight_dtype": "bfloat16"
+    }
+  },
+  {
+    "artifact": "actual_router_direct_k44_lofi_layer0.json",
+    "layer_type": "sliding_attention",
+    "prefill_pcc": 0.9986693851431688,
+    "decode_min_pcc": 0.9953097264000075,
+    "traced_host_median_us": 987.3708,
+    "samples_us": [
+      987.2462,
+      987.3083333333333,
+      987.3708,
+      987.4426,
+      987.6870333333334
+    ],
+    "passed": true,
+    "probe": {
+      "direct_router_backend": "linear",
+      "direct_router_grid": [
+        4,
+        1
+      ],
+      "direct_router_block": 44,
+      "direct_router_fidelity": "LoFi",
+      "direct_router_full_sync": false,
+      "direct_router_program": "explicit",
+      "direct_router_input_memory": "inherit",
+      "direct_router_output_memory": "l1",
+      "direct_router_weight_dtype": "bfloat16"
+    }
+  },
+  {
+    "artifact": "actual_router_direct_k44_lofi_layer5.json",
+    "layer_type": "full_attention",
+    "prefill_pcc": 0.9991318001817636,
+    "decode_min_pcc": 0.9951458768237071,
+    "traced_host_median_us": 1076.3522333333333,
+    "samples_us": [
+      1076.1912333333332,
+      1076.5462666666667,
+      1076.3522333333333,
+      1076.7827,
+      1076.2941
+    ],
+    "passed": true,
+    "probe": {
+      "direct_router_backend": "linear",
+      "direct_router_grid": [
+        4,
+        1
+      ],
+      "direct_router_block": 44,
+      "direct_router_fidelity": "LoFi",
+      "direct_router_full_sync": false,
+      "direct_router_program": "explicit",
+      "direct_router_input_memory": "inherit",
+      "direct_router_output_memory": "l1",
+      "direct_router_weight_dtype": "bfloat16"
+    }
+  },
+  {
+    "artifact": "actual_router_direct_k88_hifi4_layer0.json",
+    "layer_type": "sliding_attention",
+    "prefill_pcc": 0.9986693851431688,
+    "decode_min_pcc": 0.9953419568746218,
+    "traced_host_median_us": 990.273,
+    "samples_us": [
+      990.5709,
+      990.9028333333333,
+      990.273,
+      990.0719333333333,
+      990.0899666666667
+    ],
+    "passed": true,
+    "probe": {
+      "direct_router_backend": "linear",
+      "direct_router_grid": [
+        4,
+        1
+      ],
+      "direct_router_block": 88,
+      "direct_router_fidelity": "HiFi4",
+      "direct_router_full_sync": false,
+      "direct_router_program": "explicit",
+      "direct_router_input_memory": "inherit",
+      "direct_router_output_memory": "l1",
+      "direct_router_weight_dtype": "bfloat16"
+    }
+  },
+  {
+    "artifact": "actual_router_direct_k88_hifi4_layer5.json",
+    "layer_type": "full_attention",
+    "prefill_pcc": 0.9991318001817636,
+    "decode_min_pcc": 0.9952141214781637,
+    "traced_host_median_us": 1078.1466666666668,
+    "samples_us": [
+      1078.1466666666668,
+      1077.9215333333334,
+      1077.8337,
+      1078.8326333333334,
+      1078.2832333333333
+    ],
+    "passed": true,
+    "probe": {
+      "direct_router_backend": "linear",
+      "direct_router_grid": [
+        4,
+        1
+      ],
+      "direct_router_block": 88,
+      "direct_router_fidelity": "HiFi4",
+      "direct_router_full_sync": false,
+      "direct_router_program": "explicit",
+      "direct_router_input_memory": "inherit",
+      "direct_router_output_memory": "l1",
+      "direct_router_weight_dtype": "bfloat16"
+    }
+  }
+]

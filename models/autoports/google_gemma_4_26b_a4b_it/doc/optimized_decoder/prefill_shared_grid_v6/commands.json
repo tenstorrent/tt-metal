@@ -1,0 +1,82 @@
+[
+  {
+    "layer": 0,
+    "candidate": "shared_grid110",
+    "command": [
+      "/workspace/tt-metal/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_optimized_prefill_shared_grid",
+      "--defaults",
+      "--real",
+      "--layer",
+      "0",
+      "--length",
+      "4096",
+      "--decode",
+      "--steps",
+      "128",
+      "--input-fixture",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+      "--prefill-timing",
+      "--timing",
+      "--verify-program-cache",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_shared_grid_v6/layer0_shared_grid110.json"
+    ],
+    "output": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_shared_grid_v6/layer0_shared_grid110.json",
+    "log": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_shared_grid_v6/layer0_shared_grid110.log",
+    "returncode": 0,
+    "seconds": 19.450366297736764,
+    "hashes": {
+      "runtime": "b585a21f0b66144f69a823fa2d1088b130e34928a65fc91a38fd1bc5c2526846",
+      "probe": "184121808060ae5465e54f8c0f6c4e5191cc74bed71e84fcdb37bb069c3532d3",
+      "driver": "d562c1a0aee50e62d3dd9b19a453d37fdf2a9acefbbd84f501bf2aefce33b36a"
+    },
+    "report_sha256": "9ee01168b697c0f7788adc030f91cc3123e1f8607ace877211ed1f2071c3edae",
+    "status": "passed",
+    "prefill_pcc": 0.999156094275135,
+    "min_decode_pcc": 0.995257485930251,
+    "prefill_host_median_us": 221857.644,
+    "decode_host_median_us": 796.4986333333334
+  },
+  {
+    "layer": 5,
+    "candidate": "shared_grid110",
+    "command": [
+      "/workspace/tt-metal/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_optimized_prefill_shared_grid",
+      "--defaults",
+      "--real",
+      "--layer",
+      "5",
+      "--length",
+      "4096",
+      "--decode",
+      "--steps",
+      "128",
+      "--input-fixture",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+      "--prefill-timing",
+      "--timing",
+      "--verify-program-cache",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_shared_grid_v6/layer5_shared_grid110.json"
+    ],
+    "output": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_shared_grid_v6/layer5_shared_grid110.json",
+    "log": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_shared_grid_v6/layer5_shared_grid110.log",
+    "returncode": 0,
+    "seconds": 20.900878402404487,
+    "hashes": {
+      "runtime": "b585a21f0b66144f69a823fa2d1088b130e34928a65fc91a38fd1bc5c2526846",
+      "probe": "184121808060ae5465e54f8c0f6c4e5191cc74bed71e84fcdb37bb069c3532d3",
+      "driver": "d562c1a0aee50e62d3dd9b19a453d37fdf2a9acefbbd84f501bf2aefce33b36a"
+    },
+    "report_sha256": "93e84242d797adb9456830ca931a37e7e9e370a0fced8c172f648df28a3db0a2",
+    "status": "passed",
+    "prefill_pcc": 0.9991234308737644,
+    "min_decode_pcc": 0.9950717322997412,
+    "prefill_host_median_us": 188432.31,
+    "decode_host_median_us": 832.7696666666667
+  }
+]

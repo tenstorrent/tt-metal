@@ -1,0 +1,525 @@
+{
+  "schema_version": 1,
+  "scope": {
+    "model": "google/gemma-4-26B-A4B-it",
+    "layer": 5,
+    "layer_type": "full_attention",
+    "context": 262144,
+    "all_kv_positions": 262144,
+    "compared_query_count": 291,
+    "comparison_scope": "subset",
+    "threshold": 0.995,
+    "fixture_sha256": "52d5a811ff0735478d3fff537be518fc10c098c812c8a34ffede705b0385352a"
+  },
+  "gate_history": {
+    "original": "Aggregate PCC across 291 sampled prefill rows >= .995, plus each traced decode check >= .995.",
+    "added_regression": "Require prefill rows 262142 and 262143 individually >= .995 in addition to the aggregate and existing decode checks.",
+    "reason": "Observed final-prefill-row PCC .9592894097092435 for Q64/K256 LoFi while decode at the same row passed.",
+    "other_sampled_rows": "Diagnostics only; no blanket per-row acceptance gate."
+  },
+  "completed_accuracy_matrix": [
+    {
+      "id": "baseline",
+      "artifact": "validated_long_262144_layer5.json",
+      "artifact_sha256": "8cdf0361421c017d21469c9d2d605a8749202e47356ae0376a07a0231392dd43",
+      "runtime_sha256": "d6f4d858d7358f6d52332d9d1747a8bdb25cfa359f5c6f5aedde2f2e4f5d9f93",
+      "input_fixture_sha256": "52d5a811ff0735478d3fff537be518fc10c098c812c8a34ffede705b0385352a",
+      "first_chunk_q": 128,
+      "first_chunk_k": 128,
+      "paged_q": 128,
+      "paged_k": 128,
+      "prefill_attention_fidelity": "MathFidelity.LoFi",
+      "prefill_expert_gate": "DataType.BFLOAT4_B",
+      "prefill_expert_down": "DataType.BFLOAT4_B",
+      "kv_cache": "bfloat8_b",
+      "aggregate_pcc": 0.99170327883148,
+      "original_aggregate_gate_passed": false,
+      "recorded_prefill_passed": false,
+      "endpoint_regression_enforced_during_run": false,
+      "endpoint_evidence": "unavailable",
+      "endpoint_checks": null,
+      "endpoint_regression_passed": null,
+      "combined_prefill_acceptance": false,
+      "decode_checks": [
+        {
+          "position": 262143,
+          "pcc": 0.9977452721876459,
+          "passed": true
+        },
+        {
+          "position": 262142,
+          "pcc": 0.9990883887593417,
+          "passed": true
+        },
+        {
+          "position": 262143,
+          "pcc": 0.9977452721876459,
+          "passed": true
+        }
+      ],
+      "all_decode_checks_passed": true
+    },
+    {
+      "id": "prefill_down8",
+      "artifact": "actual_long_control_down8_layer5.json",
+      "artifact_sha256": "104a90a568986670b2cdb0863d9991a42a78c5cc92fd9dd1e2f9cae80791f7d4",
+      "runtime_sha256": "d6f4d858d7358f6d52332d9d1747a8bdb25cfa359f5c6f5aedde2f2e4f5d9f93",
+      "input_fixture_sha256": "52d5a811ff0735478d3fff537be518fc10c098c812c8a34ffede705b0385352a",
+      "first_chunk_q": 128,
+      "first_chunk_k": 128,
+      "paged_q": 128,
+      "paged_k": 128,
+      "prefill_attention_fidelity": "MathFidelity.LoFi",
+      "prefill_expert_gate": "DataType.BFLOAT4_B",
+      "prefill_expert_down": "DataType.BFLOAT8_B",
+      "kv_cache": "bfloat8_b",
+      "aggregate_pcc": 0.9920093534153488,
+      "original_aggregate_gate_passed": false,
+      "recorded_prefill_passed": false,
+      "endpoint_regression_enforced_during_run": false,
+      "endpoint_evidence": "unavailable",
+      "endpoint_checks": null,
+      "endpoint_regression_passed": null,
+      "combined_prefill_acceptance": false,
+      "decode_checks": [
+        {
+          "position": 262143,
+          "pcc": 0.9977452721876459,
+          "passed": true
+        },
+        {
+          "position": 262142,
+          "pcc": 0.9990883887593417,
+          "passed": true
+        },
+        {
+          "position": 262143,
+          "pcc": 0.9977452721876459,
+          "passed": true
+        }
+      ],
+      "all_decode_checks_passed": true
+    },
+    {
+      "id": "prefill_gate8",
+      "artifact": "actual_long_control_gate8_layer5.json",
+      "artifact_sha256": "a04b78daea5979ac9a00fac9fa50301c00d3080b0c16aa331b5a54943ebfdb70",
+      "runtime_sha256": "d6f4d858d7358f6d52332d9d1747a8bdb25cfa359f5c6f5aedde2f2e4f5d9f93",
+      "input_fixture_sha256": "52d5a811ff0735478d3fff537be518fc10c098c812c8a34ffede705b0385352a",
+      "first_chunk_q": 128,
+      "first_chunk_k": 128,
+      "paged_q": 128,
+      "paged_k": 128,
+      "prefill_attention_fidelity": "MathFidelity.LoFi",
+      "prefill_expert_gate": "DataType.BFLOAT8_B",
+      "prefill_expert_down": "DataType.BFLOAT4_B",
+      "kv_cache": "bfloat8_b",
+      "aggregate_pcc": 0.9920183417617187,
+      "original_aggregate_gate_passed": false,
+      "recorded_prefill_passed": false,
+      "endpoint_regression_enforced_during_run": false,
+      "endpoint_evidence": "unavailable",
+      "endpoint_checks": null,
+      "endpoint_regression_passed": null,
+      "combined_prefill_acceptance": false,
+      "decode_checks": [
+        {
+          "position": 262143,
+          "pcc": 0.9977452721876459,
+          "passed": true
+        },
+        {
+          "position": 262142,
+          "pcc": 0.9990883887593417,
+          "passed": true
+        },
+        {
+          "position": 262143,
+          "pcc": 0.9977452721876459,
+          "passed": true
+        }
+      ],
+      "all_decode_checks_passed": true
+    },
+    {
+      "id": "prefill_both8",
+      "artifact": "actual_long_control_both8_layer5.json",
+      "artifact_sha256": "70d1f615144124324c47b062c3d6bcc5dc477fd02e6c3b9bfc56c82d629aced2",
+      "runtime_sha256": "d6f4d858d7358f6d52332d9d1747a8bdb25cfa359f5c6f5aedde2f2e4f5d9f93",
+      "input_fixture_sha256": "52d5a811ff0735478d3fff537be518fc10c098c812c8a34ffede705b0385352a",
+      "first_chunk_q": 128,
+      "first_chunk_k": 128,
+      "paged_q": 128,
+      "paged_k": 128,
+      "prefill_attention_fidelity": "MathFidelity.LoFi",
+      "prefill_expert_gate": "DataType.BFLOAT8_B",
+      "prefill_expert_down": "DataType.BFLOAT8_B",
+      "kv_cache": "bfloat8_b",
+      "aggregate_pcc": 0.9923329847405855,
+      "original_aggregate_gate_passed": false,
+      "recorded_prefill_passed": false,
+      "endpoint_regression_enforced_during_run": false,
+      "endpoint_evidence": "unavailable",
+      "endpoint_checks": null,
+      "endpoint_regression_passed": null,
+      "combined_prefill_acceptance": false,
+      "decode_checks": [
+        {
+          "position": 262143,
+          "pcc": 0.9977452721876459,
+          "passed": true
+        },
+        {
+          "position": 262142,
+          "pcc": 0.9990883887593417,
+          "passed": true
+        },
+        {
+          "position": 262143,
+          "pcc": 0.9977452721876459,
+          "passed": true
+        }
+      ],
+      "all_decode_checks_passed": true
+    },
+    {
+      "id": "q128_k128_hifi2",
+      "artifact": "actual_long_attention_hifi2_layer5.json",
+      "artifact_sha256": "46a5963c0b5b6a97508c46c8cc3f5f0cc1e198f1fc3cd0b6d50360ca0d08fc94",
+      "runtime_sha256": "d6f4d858d7358f6d52332d9d1747a8bdb25cfa359f5c6f5aedde2f2e4f5d9f93",
+      "input_fixture_sha256": "52d5a811ff0735478d3fff537be518fc10c098c812c8a34ffede705b0385352a",
+      "first_chunk_q": 128,
+      "first_chunk_k": 128,
+      "paged_q": 128,
+      "paged_k": 128,
+      "prefill_attention_fidelity": "MathFidelity.HiFi2",
+      "prefill_expert_gate": "DataType.BFLOAT4_B",
+      "prefill_expert_down": "DataType.BFLOAT4_B",
+      "kv_cache": "bfloat8_b",
+      "aggregate_pcc": 0.9987005770651347,
+      "original_aggregate_gate_passed": true,
+      "recorded_prefill_passed": true,
+      "endpoint_regression_enforced_during_run": false,
+      "endpoint_evidence": "reclassified_from_saved_diagnostics",
+      "endpoint_checks": [
+        {
+          "position": 262142,
+          "pcc": 0.9983785229391055,
+          "passed": true
+        },
+        {
+          "position": 262143,
+          "pcc": 0.9970204683914798,
+          "passed": true
+        }
+      ],
+      "endpoint_regression_passed": true,
+      "combined_prefill_acceptance": true,
+      "decode_checks": [
+        {
+          "position": 262143,
+          "pcc": 0.9977452721876459,
+          "passed": true
+        },
+        {
+          "position": 262142,
+          "pcc": 0.9990883887593417,
+          "passed": true
+        },
+        {
+          "position": 262143,
+          "pcc": 0.9977452721876459,
+          "passed": true
+        }
+      ],
+      "all_decode_checks_passed": true,
+      "diagnostics": {
+        "sampled_rows": 291,
+        "rows_below_0995": 2,
+        "minimum_row_pcc": 0.9942408184463241,
+        "last_33_mean_pcc": 0.9984868093837411,
+        "last_33_rows_below_0995": 0
+      }
+    },
+    {
+      "id": "paged_q64_k256_lofi",
+      "artifact": "actual_long_paged_q64k256_lofi_layer5.json",
+      "artifact_sha256": "a9fd5c9365318cade70aac1f6c79a092d0897a08ce7b3d7eeb38b7b980ec83ce",
+      "runtime_sha256": "d6f4d858d7358f6d52332d9d1747a8bdb25cfa359f5c6f5aedde2f2e4f5d9f93",
+      "input_fixture_sha256": "52d5a811ff0735478d3fff537be518fc10c098c812c8a34ffede705b0385352a",
+      "first_chunk_q": 128,
+      "first_chunk_k": 128,
+      "paged_q": 64,
+      "paged_k": 256,
+      "prefill_attention_fidelity": "MathFidelity.LoFi",
+      "prefill_expert_gate": "DataType.BFLOAT4_B",
+      "prefill_expert_down": "DataType.BFLOAT4_B",
+      "kv_cache": "bfloat8_b",
+      "aggregate_pcc": 0.9945550525960524,
+      "original_aggregate_gate_passed": false,
+      "recorded_prefill_passed": false,
+      "endpoint_regression_enforced_during_run": false,
+      "endpoint_evidence": "reclassified_from_saved_diagnostics",
+      "endpoint_checks": [
+        {
+          "position": 262142,
+          "pcc": 0.9955495628394495,
+          "passed": true
+        },
+        {
+          "position": 262143,
+          "pcc": 0.9592894097092435,
+          "passed": false
+        }
+      ],
+      "endpoint_regression_passed": false,
+      "combined_prefill_acceptance": false,
+      "decode_checks": [
+        {
+          "position": 262143,
+          "pcc": 0.9977452721876459,
+          "passed": true
+        },
+        {
+          "position": 262142,
+          "pcc": 0.9990883887593417,
+          "passed": true
+        },
+        {
+          "position": 262143,
+          "pcc": 0.9977452721876459,
+          "passed": true
+        }
+      ],
+      "all_decode_checks_passed": true,
+      "diagnostics": {
+        "sampled_rows": 291,
+        "rows_below_0995": 108,
+        "minimum_row_pcc": 0.9592894097092435,
+        "last_33_mean_pcc": 0.9898245485275211,
+        "last_33_rows_below_0995": 20
+      }
+    },
+    {
+      "id": "paged_q64_k256_hifi2",
+      "artifact": "actual_long_paged_q64k256_hifi2_layer5.json",
+      "artifact_sha256": "c255217dd8796a19ef112210af74d954e6bc65eca8cbee15c6edf3de86bcea88",
+      "runtime_sha256": "d6f4d858d7358f6d52332d9d1747a8bdb25cfa359f5c6f5aedde2f2e4f5d9f93",
+      "input_fixture_sha256": "52d5a811ff0735478d3fff537be518fc10c098c812c8a34ffede705b0385352a",
+      "first_chunk_q": 128,
+      "first_chunk_k": 128,
+      "paged_q": 64,
+      "paged_k": 256,
+      "prefill_attention_fidelity": "MathFidelity.HiFi2",
+      "prefill_expert_gate": "DataType.BFLOAT4_B",
+      "prefill_expert_down": "DataType.BFLOAT4_B",
+      "kv_cache": "bfloat8_b",
+      "aggregate_pcc": 0.9990505377367619,
+      "original_aggregate_gate_passed": true,
+      "recorded_prefill_passed": true,
+      "endpoint_regression_enforced_during_run": false,
+      "endpoint_evidence": "reclassified_from_saved_diagnostics",
+      "endpoint_checks": [
+        {
+          "position": 262142,
+          "pcc": 0.9991468788896654,
+          "passed": true
+        },
+        {
+          "position": 262143,
+          "pcc": 0.9982092091062834,
+          "passed": true
+        }
+      ],
+      "endpoint_regression_passed": true,
+      "combined_prefill_acceptance": true,
+      "decode_checks": [
+        {
+          "position": 262143,
+          "pcc": 0.9977452721876459,
+          "passed": true
+        },
+        {
+          "position": 262142,
+          "pcc": 0.9990883887593417,
+          "passed": true
+        },
+        {
+          "position": 262143,
+          "pcc": 0.9977452721876459,
+          "passed": true
+        }
+      ],
+      "all_decode_checks_passed": true,
+      "diagnostics": {
+        "sampled_rows": 291,
+        "rows_below_0995": 0,
+        "minimum_row_pcc": 0.9960616452956428,
+        "last_33_mean_pcc": 0.9989629696977934,
+        "last_33_rows_below_0995": 0
+      }
+    },
+    {
+      "id": "paged_q32_k512_lofi",
+      "artifact": "actual_long_paged_q32k512_lofi_layer5.json",
+      "artifact_sha256": "6f4f3b59e0a0744e6061279700c44bae4f58e6ff1e4b80285c9e2c58711d734d",
+      "runtime_sha256": "365be21918879bdf94514fd344c352db2e0e898979d059880ef9cd261de5457c",
+      "input_fixture_sha256": "52d5a811ff0735478d3fff537be518fc10c098c812c8a34ffede705b0385352a",
+      "first_chunk_q": 128,
+      "first_chunk_k": 128,
+      "paged_q": 32,
+      "paged_k": 512,
+      "prefill_attention_fidelity": "MathFidelity.LoFi",
+      "prefill_expert_gate": "DataType.BFLOAT4_B",
+      "prefill_expert_down": "DataType.BFLOAT4_B",
+      "kv_cache": "bfloat8_b",
+      "aggregate_pcc": 0.9961339713958683,
+      "original_aggregate_gate_passed": true,
+      "recorded_prefill_passed": false,
+      "endpoint_regression_enforced_during_run": true,
+      "endpoint_evidence": "enforced_in_saved_run",
+      "endpoint_checks": [
+        {
+          "position": 262142,
+          "pcc": 0.9972122378190001,
+          "passed": true
+        },
+        {
+          "position": 262143,
+          "pcc": 0.9639094518315262,
+          "passed": false
+        }
+      ],
+      "endpoint_regression_passed": false,
+      "combined_prefill_acceptance": false,
+      "decode_checks": [
+        {
+          "position": 262143,
+          "pcc": 0.9977452721876459,
+          "passed": true
+        },
+        {
+          "position": 262142,
+          "pcc": 0.9990883887593417,
+          "passed": true
+        },
+        {
+          "position": 262143,
+          "pcc": 0.9977452721876459,
+          "passed": true
+        }
+      ],
+      "all_decode_checks_passed": true,
+      "diagnostics": {
+        "sampled_rows": 291,
+        "rows_below_0995": 62,
+        "minimum_row_pcc": 0.9639094518315262,
+        "last_33_mean_pcc": 0.9919063140451502,
+        "last_33_rows_below_0995": 14
+      }
+    }
+  ],
+  "allocation_failure": {
+    "artifact": "actual_long_attention_k256_layer5.log",
+    "configuration": "Shared environment Q128/K256 affecting initial BF16 K/V SDPA as well as paged SDPA",
+    "phase": "initial_nonpaged_prefill",
+    "cb_region_end_bytes": 2012160,
+    "physical_l1_bytes": 1572864,
+    "accuracy_result": null
+  },
+  "runtime_provenance_note": "The Q32/K512 LoFi run uses runtime 365be219..., while prior controls use d6f4d858.... It explicitly overrides prefill fidelity to LoFi. Common recorded policy values match the earlier LoFi controls except paged geometry; newly recorded expert gate/down K-block fields are both 22. This is not one unchanged-source-hash sweep.",
+  "conclusions": [
+    "Changing prefill SDPA fidelity to HiFi2 passes both original aggregate and endpoint criteria at Q128/K128 and paged Q64/K256; the latter also passes all 291 diagnostic rows.",
+    "Paged Q32/K512 LoFi passes the original aggregate criterion but fails the newly enforced endpoint regression at query 262143. It is rejected.",
+    "Raising prefill expert weights alone did not repair the original aggregate failure.",
+    "No specific kernel implementation defect is proven; no cache or global precision promotion is required by these controls."
+  ],
+  "performance_selection": {
+    "status": "completed_host_comparison_selection_recorded",
+    "selected": {
+      "paged_q": 64,
+      "paged_k": 256,
+      "prefill_attention_fidelity": "HiFi2",
+      "first_chunk_q": 128,
+      "first_chunk_k": 128,
+      "reason": "Passes aggregate and final-two-query regression, all 291 maximum-context diagnostic rows pass, and measured warmed 4096-prefill host median is modestly lower.",
+      "runtime_implementation_status": "Parent-owned; no runtime edits performed by this documentation task."
+    },
+    "measurements": [
+      {
+        "artifact": "prefill_choice_q128k128_hifi2.json",
+        "artifact_sha256": "6fbde6b51be26bb4aca7d4167e72bcb4e821c5cc82ba0bfb1715c87ee1bb3778",
+        "runtime_sha256": "365be21918879bdf94514fd344c352db2e0e898979d059880ef9cd261de5457c",
+        "input_fixture_sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa",
+        "length": 4096,
+        "paged_q": 128,
+        "paged_k": 128,
+        "prefill_attention_fidelity": "MathFidelity.HiFi2",
+        "prefill_pcc": 0.9991320669166669,
+        "prefill_passed": true,
+        "decode_steps": 128,
+        "minimum_decode_pcc": 0.9952141214781637,
+        "decode_passed": true,
+        "decode_repeated_equal": true,
+        "program_cache_miss_guard": true,
+        "prefill_cache_entries": 174,
+        "warmed_prefill_host_us": [
+          196188.591,
+          195613.065,
+          195299.758
+        ],
+        "median_warmed_prefill_host_us": 195613.065,
+        "min_warmed_prefill_host_us": 195299.758,
+        "max_warmed_prefill_host_us": 196188.591,
+        "traced_decode_host_us": [
+          1170.2667333333334,
+          1170.233,
+          1171.3214333333333,
+          1171.2312666666667,
+          1171.1347
+        ],
+        "median_traced_decode_host_us": 1171.1347
+      },
+      {
+        "artifact": "prefill_choice_q64k256_hifi2.json",
+        "artifact_sha256": "85222bb7a766618c8a13efbdcb495e0bace5302b24482e3a684074194db01d0a",
+        "runtime_sha256": "365be21918879bdf94514fd344c352db2e0e898979d059880ef9cd261de5457c",
+        "input_fixture_sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa",
+        "length": 4096,
+        "paged_q": 64,
+        "paged_k": 256,
+        "prefill_attention_fidelity": "MathFidelity.HiFi2",
+        "prefill_pcc": 0.9991318001817636,
+        "prefill_passed": true,
+        "decode_steps": 128,
+        "minimum_decode_pcc": 0.9952141214781637,
+        "decode_passed": true,
+        "decode_repeated_equal": true,
+        "program_cache_miss_guard": true,
+        "prefill_cache_entries": 174,
+        "warmed_prefill_host_us": [
+          196242.232,
+          195009.555,
+          194931.997
+        ],
+        "median_warmed_prefill_host_us": 195009.555,
+        "min_warmed_prefill_host_us": 194931.997,
+        "max_warmed_prefill_host_us": 196242.232,
+        "traced_decode_host_us": [
+          1171.4253,
+          1170.574,
+          1170.1034333333334,
+          1170.9036,
+          1171.5311333333334
+        ],
+        "median_traced_decode_host_us": 1170.9036
+      }
+    ],
+    "prefill_median_difference_us": 603.5100000000093,
+    "prefill_median_difference_percent": 0.3085223371966537,
+    "prefill_sample_ranges_overlap": true,
+    "measurement_scope": "Three warmed complete-prefill host elapsed measurements at 4096 tokens with explicit device synchronization; decode uses five host timings, each averaged over 30 trace replays and synchronization.",
+    "limitations": "Host elapsed timings, not device profiler durations or maximum-context performance. Three prefill samples with overlapping ranges do not establish a robust speedup. Selection is primarily supported by cleaner maximum-context accuracy."
+  },
+  "verification": "CPU-only JSON/source/log analysis. Input artifacts were not modified; no hardware or runtime edits by this report task."
+}

@@ -1,0 +1,11 @@
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py
+@@ -945,7 +945,7 @@
+             compute_kernel_config=self.compute,
+             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+         )
+-        return ttnn.typecast(result, ttnn.float32)
++        return result
+ 
+ 
+ class OptimizedAttention(FusedAttention):

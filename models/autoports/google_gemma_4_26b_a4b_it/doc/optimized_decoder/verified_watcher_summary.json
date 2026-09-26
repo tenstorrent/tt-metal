@@ -1,0 +1,30 @@
+[
+  {
+    "layer": 0,
+    "runtime_sha256": "e81018299b722aa81eae0e4e9ec3ec638520adcb3bdd85d3c2c8b429dfa0e370",
+    "command_journal": "verified_contract_commands.json",
+    "watcher_interval": "10",
+    "disabled_features": null,
+    "result": "verified_watcher_layer0.json",
+    "device_log": "verified_watcher_layer0.device.log",
+    "console_log": "verified_watcher_layer0.log",
+    "device_log_bytes": 146018,
+    "failure_lines": [],
+    "profiler_enabled": false,
+    "passed": true
+  },
+  {
+    "layer": 5,
+    "runtime_sha256": "e81018299b722aa81eae0e4e9ec3ec638520adcb3bdd85d3c2c8b429dfa0e370",
+    "command_journal": "verified_contract_commands.json",
+    "watcher_interval": "10",
+    "disabled_features": null,
+    "result": "verified_watcher_layer5.json",
+    "device_log": "verified_watcher_layer5.device.log",
+    "console_log": "verified_watcher_layer5.log",
+    "device_log_bytes": 220930,
+    "failure_lines": [],
+    "profiler_enabled": false,
+    "passed": true
+  }
+]

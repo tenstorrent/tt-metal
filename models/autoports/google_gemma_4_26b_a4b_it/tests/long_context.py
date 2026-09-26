@@ -13,9 +13,14 @@ from pathlib import Path
 
 import torch
 from transformers import AutoConfig
-from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding, apply_rotary_pos_emb
+from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
 
 import ttnn
+from models.autoports.google_gemma_4_26b_a4b_it.tests.create_optimized_long_reference import (
+    load_input_fixture,
+    load_reference,
+    sampled_reference,
+)
 from models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder import MODEL, REVISION, load_layer
 from models.autoports.google_gemma_4_26b_a4b_it.tests.runtime_audit import device_only
 from models.autoports.google_gemma_4_26b_a4b_it.tt.functional_decoder import FunctionalDecoder
@@ -29,6 +34,8 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--reference-only", action="store_true")
     parser.add_argument("--reference-file", type=Path)
+    parser.add_argument("--input-fixture", type=Path)
+    parser.add_argument("--threads", type=int, default=8)
     parser.add_argument("--decoder", choices=("functional", "fused"), default="functional")
     parser.add_argument("--fusion")
     parser.add_argument("--group-size", type=int)
@@ -44,69 +51,35 @@ def main():
 
         decoder_class = FusedDecoder
     torch.manual_seed(123)
-    torch.set_num_threads(8)
+    torch.set_num_threads(args.threads)
     config = AutoConfig.from_pretrained(MODEL, revision=REVISION).text_config
     config._attn_implementation = "sdpa"
     hf = load_layer(config, args.layer, True)
     kind = config.layer_types[args.layer]
     length = args.length
-    x = torch.randn(1, length, config.hidden_size).bfloat16().float()
+    input_fixture = None
+    if args.input_fixture:
+        x, input_fixture = load_input_fixture(args.input_fixture, config, args.layer, length)
+    else:
+        x = torch.randn(1, length, config.hidden_size).bfloat16().float()
     rope = Gemma4TextRotaryEmbedding(config)
     extent = (length + 1023) // 1024 * 1024
     cos, sin = rope(x, torch.arange(extent)[None], layer_type=kind)
     if args.reference_file:
-        saved = torch.load(args.reference_file, weights_only=True)
-        assert (saved["layer"], saved["length"], saved["revision"]) == (args.layer, length, REVISION)
-        ref, samples = saved["reference"], saved["samples"]
+        ref, samples = load_reference(args.reference_file, args.layer, length, input_fixture)
     else:
-        keys, values = [], []
-        with torch.no_grad():
-            for start in range(0, length, 1024):
-                end = min(start + 1024, length)
-                norm = hf.input_layernorm(x[:, start:end])
-                k = hf.self_attn.k_proj(norm).view(1, end - start, -1, hf.self_attn.head_dim)
-                v = hf.self_attn.v_proj(norm).view_as(k) if hf.self_attn.v_proj is not None else k
-                k = apply_rotary_pos_emb(hf.self_attn.k_norm(k), cos[:, start:end], sin[:, start:end], unsqueeze_dim=2)
-                keys.append(k.transpose(1, 2))
-                values.append(hf.self_attn.v_norm(v).transpose(1, 2))
-        keys, values = torch.cat(keys, dim=2), torch.cat(values, dim=2)
-
-        class FixedCache:
-            def update(self, k, v, layer_idx):
-                return keys, values
-
-        samples = sorted(
-            set(
-                [
-                    0,
-                    min(31, length - 1),
-                    min(32, length - 1),
-                    *range(1023, length, 1024),
-                    *range(max(0, length - 33), length),
-                ]
-            )
-        )
-        refs = []
-        with torch.no_grad():
-            for offset in range(0, len(samples), 16):
-                idx = torch.tensor(samples[offset : offset + 16])
-                allowed = torch.arange(length)[None, :] <= idx[:, None]
-                if kind == "sliding_attention":
-                    allowed &= torch.arange(length)[None, :] > idx[:, None] - config.sliding_window
-                mask = torch.zeros(len(idx), length).masked_fill(~allowed, float("-inf"))[None, None]
-                refs.append(
-                    hf(
-                        x[:, idx],
-                        position_embeddings=(cos[:, idx], sin[:, idx]),
-                        attention_mask=mask,
-                        past_key_values=FixedCache(),
-                    )
-                )
-        ref = torch.cat(refs, dim=1)
+        ref, samples = sampled_reference(hf, x, config, args.layer, cos, sin)
     print("HF_SAMPLED_REFERENCE_READY", len(samples), flush=True)
     if args.reference_only:
         torch.save(
-            {"reference": ref, "samples": samples, "length": length, "layer": args.layer, "revision": REVISION},
+            {
+                "reference": ref,
+                "samples": samples,
+                "length": length,
+                "layer": args.layer,
+                "revision": REVISION,
+                "input_fixture": input_fixture,
+            },
             args.output,
         )
         return
@@ -124,7 +97,13 @@ def main():
         table = torch.randperm(pages).int()[None]
         pt = device(table, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
         cfg = decoder.layer.self_attn.config
-        cache = [device(torch.zeros(pages, cfg.num_key_value_heads, block, cfg.head_dim)) for _ in range(2)]
+        cache = [
+            device(
+                torch.zeros(pages, cfg.num_key_value_heads, block, cfg.head_dim),
+                getattr(decoder, "kv_cache_dtype", ttnn.bfloat16),
+            )
+            for _ in range(2)
+        ]
         xt = device(x[None])
         rt = tuple(device(t[None]) for t in (cos, sin))
         print("TT_PREFILL_START", length, flush=True)
@@ -137,6 +116,7 @@ def main():
             length=length,
             phase="prefill",
             real_weights=True,
+            input_fixture=input_fixture,
             pcc=float(pcc),
             passed=bool(passed),
             compared_query_rows=samples,
@@ -144,10 +124,32 @@ def main():
             cache_positions=length,
             runtime_prefill_audit="passed",
         )
+        # Per-row diagnostics distinguish a length-growing attention error from
+        # a few activation-sensitive rows without saving model tensors.
+        row_checks = []
+        for index, position in enumerate(samples):
+            ok, value = comp_pcc(ref[:, index : index + 1], actual[:, index : index + 1], 0.995)
+            row_checks.append(dict(position=position, pcc=float(value), passed=bool(ok)))
+        result["sampled_row_diagnostics"] = row_checks
+        # Regression for long-prefill endpoint drift hidden by aggregate PCC.
+        # These are the same final positions compared individually by decode.
+        tail_positions = sorted({max(0, length - 2), length - 1})
+        tail_checks = [row_checks[samples.index(position)] for position in tail_positions]
+        result["prefill_aggregate_passed"] = bool(passed)
+        result["prefill_tail_checks"] = tail_checks
+        passed = passed and all(check["passed"] for check in tail_checks)
+        if input_fixture is not None:
+            # Recorded text must pass each sampled row; aggregate PCC can hide
+            # activation-sensitive expert projection errors.
+            sampled_passed = all(check["passed"] for check in row_checks)
+            result["prefill_sampled_rows_passed"] = sampled_passed
+            passed = passed and sampled_passed
+        result["passed"] = bool(passed)
         args.output.write_text(json.dumps(result, indent=2) + "\n")
         print(result, flush=True)
         dt = device(x[:, -1:][None])
-        dr = tuple(device(t.squeeze(0)) for t in (cos, sin))
+        decode_rope_layout = getattr(decoder, "decode_rope_layout", ttnn.TILE_LAYOUT)
+        dr = tuple(device(t.squeeze(0), layout=decode_rope_layout) for t in (cos, sin))
         p = torch.zeros(1, 32, dtype=torch.int32)
         p[0, 0] = length - 1
         cp = torch.tensor([length - 1], dtype=torch.int32)

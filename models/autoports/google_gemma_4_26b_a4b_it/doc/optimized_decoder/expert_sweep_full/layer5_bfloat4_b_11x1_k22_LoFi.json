@@ -1,0 +1,111 @@
+{
+  "decoder": "optimized",
+  "fusion": "broadcast_pack_gelu_router_tail_norm_attention_common_tied_expmerge_residualnorm_shardedtail_kvnorm_expertbatch64_mixmatmul_mixsharded_qkvl1_projectsharded_sharedshard_directtail",
+  "runtime_prefill_audit": "clean",
+  "program_cache_miss_guard": false,
+  "prefill_cache_entries": 90,
+  "prefix_length": 0,
+  "layer_type": "full_attention",
+  "phase": "prefill",
+  "length": 33,
+  "real_weights": true,
+  "pcc": 0.9997632078883987,
+  "passed": true,
+  "decode": {
+    "pcc": 0.9958186685454473,
+    "passed": true,
+    "traced": true,
+    "runtime_decode_audit": "clean",
+    "repeated_equal": true,
+    "steps": 8,
+    "min_pcc": 0.9956985548809785,
+    "positions": [
+      33,
+      40
+    ],
+    "checks": [
+      {
+        "position": 33,
+        "pcc": 0.9958186685454473,
+        "passed": true
+      },
+      {
+        "position": 33,
+        "pcc": 0.9958186685454473,
+        "passed": true
+      },
+      {
+        "position": 34,
+        "pcc": 0.9968302649122776,
+        "passed": true
+      },
+      {
+        "position": 35,
+        "pcc": 0.9971149429595829,
+        "passed": true
+      },
+      {
+        "position": 36,
+        "pcc": 0.9965973126355597,
+        "passed": true
+      },
+      {
+        "position": 37,
+        "pcc": 0.9961144800491981,
+        "passed": true
+      },
+      {
+        "position": 38,
+        "pcc": 0.9958167841851885,
+        "passed": true
+      },
+      {
+        "position": 39,
+        "pcc": 0.9956985548809785,
+        "passed": true
+      },
+      {
+        "position": 40,
+        "pcc": 0.9969156656670842,
+        "passed": true
+      }
+    ]
+  },
+  "traced_decode_host_us": [
+    4390.108766666666,
+    4390.7536666666665,
+    4391.981666666667,
+    4392.762166666666,
+    4392.025766666667
+  ],
+  "candidate": {
+    "expert_gate_dtype": "bfloat4_b",
+    "expert_down_dtype": "bfloat8_b",
+    "expert_block_w": 22,
+    "expert_fidelity": "LoFi",
+    "prefill_grid": null,
+    "prefill_block_w": 1,
+    "active_prefill": false,
+    "expert_grid": [
+      11,
+      1
+    ],
+    "down_grid": null,
+    "prefill_tokens": null,
+    "compensated_qkv": false,
+    "shared_dtype": null,
+    "shared_down_dtype": null,
+    "shared_fidelity": "LoFi",
+    "shared_dram": false,
+    "shared_readers": 1,
+    "shared_split": false,
+    "prefill_dtype": "bfloat16",
+    "prefill_fidelity": "HiFi4",
+    "prefill_l1": false,
+    "sharded_norms": false,
+    "shared_block": 11,
+    "expert_split": false,
+    "sharded_norm_site": "all"
+  },
+  "runtime_sha256": "bd2d03ecf9d327de4bd25a7cc40f866e9456f54f30a62c2bddb543e752d538fb"
+}

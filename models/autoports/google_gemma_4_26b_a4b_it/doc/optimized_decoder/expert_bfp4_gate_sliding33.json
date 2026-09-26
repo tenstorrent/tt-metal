@@ -1,0 +1,74 @@
+{
+  "decoder": "fused",
+  "fusion": "broadcast_pack_gelu_router_tail_norm_attention_common_tied_ropepolicy_cache_kvnorm_shardedtail_preciseheads_expmerge_residualnorm_rsqrt_expertbatch64_mixmatmul_mixsharded_mixfp32_qkvl1_projectsharded_sharedshard_unarycastshard_directtail",
+  "runtime_prefill_audit": "clean",
+  "program_cache_miss_guard": false,
+  "prefill_cache_entries": 88,
+  "prefix_length": 0,
+  "layer_type": "sliding_attention",
+  "phase": "prefill",
+  "length": 33,
+  "real_weights": true,
+  "pcc": 0.9943979804375536,
+  "passed": false,
+  "decode": {
+    "pcc": 0.9986955178455674,
+    "passed": false,
+    "traced": true,
+    "runtime_decode_audit": "clean",
+    "repeated_equal": true,
+    "steps": 8,
+    "min_pcc": 0.9933571953034891,
+    "positions": [
+      33,
+      40
+    ],
+    "checks": [
+      {
+        "position": 33,
+        "pcc": 0.9986955178455674,
+        "passed": true
+      },
+      {
+        "position": 33,
+        "pcc": 0.9986955178455674,
+        "passed": true
+      },
+      {
+        "position": 34,
+        "pcc": 0.997346194607334,
+        "passed": true
+      },
+      {
+        "position": 35,
+        "pcc": 0.9972399555460786,
+        "passed": true
+      },
+      {
+        "position": 36,
+        "pcc": 0.9968578862192798,
+        "passed": true
+      },
+      {
+        "position": 37,
+        "pcc": 0.994820820673931,
+        "passed": false
+      },
+      {
+        "position": 38,
+        "pcc": 0.9933571953034891,
+        "passed": false
+      },
+      {
+        "position": 39,
+        "pcc": 0.9982773540952125,
+        "passed": true
+      },
+      {
+        "position": 40,
+        "pcc": 0.9967171652716493,
+        "passed": true
+      }
+    ]
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "status": "passed",
+  "runtime_sha256": "daa82a4a5197a007ccd5d29d912f082e695fd37a596578f25fba96a6694e625b",
+  "watchers": [
+    {
+      "status": "passed",
+      "layer": 0,
+      "runtime_sha256": "daa82a4a5197a007ccd5d29d912f082e695fd37a596578f25fba96a6694e625b",
+      "watcher_interval": "10",
+      "disabled_features": null,
+      "result": "validated_v7_watcher_layer0.json",
+      "device_log": "validated_v7_watcher_layer0.device.log",
+      "console_log": "validated_v7_watcher_layer0.log",
+      "device_log_bytes": 146018,
+      "device_log_sha256": "e8958c7d88b986b25f8d8051dca011a98a3b054aae101799572dc78267ea06f0",
+      "failure_lines": [],
+      "profiler_enabled": false,
+      "profiler_evidence": "validated_v7_environment_snapshot.json",
+      "profiler_evidence_scope": "live orchestrator inherited environment plus saved driver; watcher logs confirm lifecycle",
+      "passed": true
+    },
+    {
+      "status": "passed",
+      "layer": 5,
+      "runtime_sha256": "daa82a4a5197a007ccd5d29d912f082e695fd37a596578f25fba96a6694e625b",
+      "watcher_interval": "10",
+      "disabled_features": null,
+      "result": "validated_v7_watcher_layer5.json",
+      "device_log": "validated_v7_watcher_layer5.device.log",
+      "console_log": "validated_v7_watcher_layer5.log",
+      "device_log_bytes": 146018,
+      "device_log_sha256": "08db9335f34990ab96c9aef6a65100ced2c8460845fe8024361cfbd891e6c3c6",
+      "failure_lines": [],
+      "profiler_enabled": false,
+      "profiler_evidence": "validated_v7_environment_snapshot.json",
+      "profiler_evidence_scope": "live orchestrator inherited environment plus saved driver; watcher logs confirm lifecycle",
+      "passed": true
+    }
+  ]
+}

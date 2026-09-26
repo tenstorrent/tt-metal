@@ -1,0 +1,7 @@
+{
+  "source": "models/autoports/google_gemma_4_26b_a4b_it/tests/probe_optimized_prefill_pairs.py",
+  "snapshot": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/probe_optimized_prefill_pairs_before_format.py.txt",
+  "before_sha256": "13f71dfb87a9cced61bd974effdb666dee972bade6591954fcb86a8c76a09376",
+  "after_sha256": "b682c87a62bab2d6e66a25a6893e75d972847f7048d4831a2e0285ced72bf630",
+  "proof": "Import statement multiset identical; all non-import AST identical. Only pinned isort/Black formatting; no runtime/model policy change."
+}

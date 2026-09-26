@@ -1,0 +1,388 @@
+diff --git a/models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py b/models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py
+@@ -3,6 +3,7 @@
+ """Single-device Gemma4 decoder with measured projection and expert policies."""
+ 
+ from dataclasses import replace
++import os
+ from types import SimpleNamespace
+ 
+ import ttnn
+@@ -13,7 +14,12 @@
+     FusedDecoder,
+     PackedExperts,
+ )
+-from models.demos.gemma4.tt.attention.operations import chunked_prefill_sdpa, prefill_sdpa_program_config
++from models.demos.gemma4.tt.attention.operations import (
++    PREFILL_CHUNK_SIZE,
++    chunked_prefill_sdpa,
++    effective_block_size,
++    prefill_sdpa_program_config,
++)
+ 
+ 
+ class OptimizedExperts(PackedExperts):
+@@ -28,6 +34,7 @@
+         block_w,
+         fidelity,
+         mesh_device,
++        activation_dtype=None,
+         expert_grid=None,
+         down_grid=None,
+         prefill_tokens=None,
+@@ -41,6 +48,7 @@
+         expert_split=False,
+     ):
+         self.__dict__.update(source.__dict__)
++        self.decode_activation_dtype = activation_dtype
+         self.prefill_source = None if active_prefill else source
+         self.active_prefill = active_prefill
+         self.prefill_memory = ttnn.L1_MEMORY_CONFIG if prefill_l1 else ttnn.DRAM_MEMORY_CONFIG
+@@ -156,6 +164,8 @@
+             if not self.active_prefill:
+                 return self.prefill_source._chunk(x, routing, decode)
+             return self._active_prefill(x, routing)
++        if self.decode_activation_dtype is not None:
++            x = ttnn.typecast(x, self.decode_activation_dtype)
+         sparsity = ttnn.to_layout(routing, ttnn.ROW_MAJOR_LAYOUT)
+         common = dict(
+             sparsity=sparsity,
+@@ -238,11 +248,18 @@
+         qkv_subblock_w=1,
+         qkv_separate=False,
+         qkv_fidelity=None,
++        qkv_weight_dtype=None,
++        output_weight_dtype=None,
+         qkv_dram=False,
+         qkv_dram_readers=1,
+         qkv_dram_block=1,
+         native_sdpa=False,
++        native_sdpa_fidelity=ttnn.MathFidelity.HiFi4,
++        native_sdpa_grid=(8, 8),
++        prefill_attention_fidelity=None,
+         kv_cache_dtype=ttnn.bfloat16,
++        expert_activation_dtype=None,
++        generalized_router=False,
+         router_lanes=0,
+         router_terms=2,
+         router_grid=(4, 1),
+@@ -274,6 +291,8 @@
+         residual_sharded=True,
+         **kwargs,
+     ):
++        if generalized_router and router_lanes:
++            raise ValueError("Generalized routing and lane-router projection are separate candidates")
+         if qkv_dram and (not qkv_lanes or qkv_separate):
+             raise ValueError("DRAM-sharded QKV requires lane partitioning and a packed QKV projection")
+         if kv_cache_dtype not in (ttnn.bfloat16, ttnn.bfloat8_b):
+@@ -287,10 +306,21 @@
+             qkv_grid = (8, 8) if sliding else (9, 8)
+             qkv_subblock_w = 1 if sliding else 4
+         self.precision_policy = dict(
+-            attention_weights="bfloat16",
++            attention_weights={
++                "qkv": str(qkv_weight_dtype or ttnn.bfloat16),
++                "output": str(output_weight_dtype or ttnn.bfloat16),
++            },
+             kv_cache=str(kv_cache_dtype).split(".")[-1].lower(),
+             native_sdpa=native_sdpa,
+-            native_sdpa_grid=(8, 8) if native_sdpa else None,
++            native_sdpa_grid=tuple(native_sdpa_grid) if native_sdpa else None,
++            native_sdpa_fidelity=str(native_sdpa_fidelity) if native_sdpa else None,
++            prefill_attention_fidelity=(
++                str(prefill_attention_fidelity) if prefill_attention_fidelity is not None else None
++            ),
++            decode_expert_activation=(
++                str(expert_activation_dtype) if expert_activation_dtype is not None else "unchanged"
++            ),
++            router_selection="generalized_moe_gate" if generalized_router else "fp32_topk",
+             native_sdpa_dst_full_sync=native_sdpa,
+             residual="float32",
+             expert_gate=str(expert_gate_dtype),
+@@ -322,6 +352,7 @@
+             block_w=expert_block_w,
+             fidelity=expert_fidelity,
+             mesh_device=kwargs["mesh_device"],
++            activation_dtype=expert_activation_dtype,
+             expert_grid=expert_grid,
+             down_grid=down_grid,
+             prefill_tokens=prefill_tokens,
+@@ -381,6 +412,22 @@
+         elif compensated_qkv:
+             attention = self.layer.self_attn.source
+             attention.weights = replace(attention.weights, wqkv=CompensatedQKV(attention.weights.wqkv))
++        attention = self.layer.self_attn.source
++        if qkv_weight_dtype is not None:
++            projection = attention.weights.wqkv
++            if isinstance(projection, LanePartitionQKV):
++                projection.weights = tuple(ttnn.typecast(weight, qkv_weight_dtype) for weight in projection.weights)
++                projection = projection.source
++            elif isinstance(projection, CompensatedQKV):
++                projection = projection.source
++            projection.weight = ttnn.typecast(projection.weight, qkv_weight_dtype)
++            projection.rows = ttnn.transpose(ttnn.typecast(projection.weight, ttnn.float32), -2, -1)
++        if output_weight_dtype is not None:
++            attention.weights = replace(
++                attention.weights, o_proj=ttnn.typecast(attention.weights.o_proj, output_weight_dtype)
++            )
++        if generalized_router:
++            self.layer.moe.router = GeneralizedRouter(self.layer.moe.router, kwargs["mesh_device"])
+         if router_lanes:
+             self.layer.moe.router = LanePartitionRouter(
+                 self.layer.moe.router,
+@@ -393,7 +440,12 @@
+             )
+             self.precision_policy["router_projection"] = self.layer.moe.router.precision_policy
+         self.layer.self_attn = OptimizedAttention.from_existing(
+-            self.layer.self_attn, mesh_device=kwargs["mesh_device"], native_sdpa=native_sdpa
++            self.layer.self_attn,
++            mesh_device=kwargs["mesh_device"],
++            native_sdpa=native_sdpa,
++            native_sdpa_fidelity=native_sdpa_fidelity,
++            native_sdpa_grid=native_sdpa_grid,
++            prefill_attention_fidelity=prefill_attention_fidelity,
+         )
+         return self
+ 
+@@ -561,6 +613,82 @@
+         return super().normalize(value, epsilon, weight)
+ 
+ 
++class GeneralizedRouter:
++    """Native top-8/softmax gate with fixed face packing and Gemma expert scales."""
++
++    def __init__(self, original, mesh):
++        import torch
++
++        if type(original) is not BroadcastRouter:
++            raise ValueError("Generalized router requires the unmodified BroadcastRouter backend")
++        if original.source.source.num_experts != 128 or original.source.source.top_k != 8:
++            raise ValueError("Generalized router requires 128 experts and top-8 routing")
++        self.original = original
++
++        core = ttnn.CoreCoord(0, 0)
++        grid = ttnn.CoreRangeSet({ttnn.CoreRange(core, core)})
++        shard = ttnn.ShardSpec(grid, (32, 32), ttnn.ShardOrientation.ROW_MAJOR)
++        self.memory = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard)
++
++        def upload(value, dtype, layout=ttnn.TILE_LAYOUT):
++            return ttnn.from_torch(value, dtype=dtype, layout=layout, device=mesh, memory_config=self.memory)
++
++        # Match test_generalized_moe_gate.py: logits stay untransposed, whereas
++        # bias and global expert ids are transposed within the 16x16 face.
++        self.bias = upload(torch.zeros((1, 16, 16), dtype=torch.bfloat16).transpose(-2, -1), ttnn.bfloat16)
++        self.indices = upload(
++            torch.arange(256, dtype=torch.int32).reshape(1, 16, 16).transpose(-2, -1).to(torch.uint16), ttnn.uint16
++        )
++        # Match TTMoEGate's row-major output buffers so UInt16 ids need only
++        # metadata views after slicing, without a device reshape or dtype cast.
++        self.output = upload(torch.zeros((1, 32, 32), dtype=torch.bfloat16), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
++        self.output_indices = upload(torch.zeros((1, 32, 32), dtype=torch.uint16), ttnn.uint16, ttnn.ROW_MAJOR_LAYOUT)
++
++    def __getattr__(self, name):
++        return getattr(self.original, name)
++
++    def __call__(self, x, normalized=None):
++        if x.shape[-2] != 1:
++            return self.original(x, normalized=normalized)
++
++        source = self.original.source
++        router = source.source
++        if normalized is None:
++            normalized = self.original.normalize(x, source.epsilon)
++        scaled = ttnn.mul(
++            normalized,
++            source.scale,
++            activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, router.scalar_root_size)],
++        )
++        products = ttnn.mul(source.projection_rows, scaled)
++        scores = ttnn.transpose(ttnn.sum(products, dim=-1, keepdim=True), -2, -1)
++        if tuple(scores.shape) != (1, 1, 1, 128):
++            raise ValueError("Generalized router supports one decode token with 128 logits")
++        rounded = ttnn.typecast(scores, ttnn.bfloat16)
++
++        padded = ttnn.pad(rounded, [(0, 0), (0, 0), (0, 0), (0, 128)], float("-inf"))
++        face = ttnn.to_memory_config(ttnn.reshape(padded, (1, 16, 16)), self.memory)
++        values, indices = ttnn.experimental.deepseek.moe.generalized_moe_gate(
++            face,
++            bias_tensor=self.bias,
++            input_indices_tensor=self.indices,
++            output_tensor=self.output,
++            output_indices_tensor=self.output_indices,
++            eps=1e-20,
++            scaling_factor=1.0,
++            enable_sigmoid=False,
++            topk=8,
++            output_softmax=True,
++            grouped=False,
++        )
++        values = ttnn.to_memory_config(values, ttnn.L1_MEMORY_CONFIG)
++        indices = ttnn.to_memory_config(indices, ttnn.L1_MEMORY_CONFIG)
++        values = ttnn.view(values[:, 0, :8], (1, 1, 1, 8))
++        indices = ttnn.view(indices[:, 0, :8], (1, 1, 1, 8))
++        routing = ttnn.scatter(ttnn.zeros_like(rounded), dim=-1, index=indices, src=values)
++        return ttnn.mul(routing, router.per_expert_scale)
++
++
+ class LanePartitionRouter:
+     """Retain routing policy while projecting isolated K lanes during decode."""
+ 
+@@ -632,21 +760,87 @@
+         return ttnn.mul(routing, router.per_expert_scale)
+ 
+ 
++class ConfiguredChunkedPrefillAttention:
++    """Paged full-prefill slices with a compute policy prepared during setup."""
++
++    def __init__(self, head_dim, compute):
++        self.compute = compute
++        self.chunk_size = PREFILL_CHUNK_SIZE
++        grid, default_q = ((8, 4), 128) if head_dim >= 512 else ((8, 8), 256)
++        q_chunk = int(os.environ.get("GEMMA4_PREFILL_SDPA_QCHUNK", default_q))
++        k_chunk = int(os.environ.get("GEMMA4_PREFILL_SDPA_KCHUNK", 128))
++        self.program = ttnn.SDPAProgramConfig(
++            compute_with_storage_grid_size=grid,
++            q_chunk_size=max(32, min(q_chunk, self.chunk_size)),
++            k_chunk_size=max(32, min(k_chunk, self.chunk_size)),
++            exp_approx_mode=False,
++        )
++
++    def __call__(self, q, k_cache, v_cache, page_table, user_id, head_dim, scale=1.0, base_offset=0, num_kv_heads=None):
++        # OptimizedDecoder uses scalar offsets for full-attention chunks;
++        # arbitrary prefix continuation is dispatched through decode_forward.
++        if not isinstance(base_offset, int):
++            raise ValueError("Configured full-prefill attention requires a scalar chunk offset")
++        geometry = None
++        if num_kv_heads is not None:
++            block_size = effective_block_size(k_cache, head_dim, num_kv_heads)
++            if block_size != k_cache.padded_shape[2] or num_kv_heads != k_cache.padded_shape[1]:
++                geometry = ttnn.PagedCacheGeometryOverride(block_size=block_size, num_kv_heads=num_kv_heads)
++        owns_table = page_table.shape[0] > 1
++        user_table = (
++            ttnn.slice(page_table, [user_id, 0], [user_id + 1, page_table.shape[-1]]) if owns_table else page_table
++        )
++        outputs = []
++        for start in range(0, q.shape[-2], self.chunk_size):
++            length = min(self.chunk_size, q.shape[-2] - start)
++            query = ttnn.slice(q, [0, 0, start, 0], [1, q.shape[1], start + length, head_dim])
++            padding = (-length) % self.program.q_chunk_size
++            if padding:
++                unpadded = query
++                query = ttnn.pad(unpadded, [(0, 0), (0, 0), (0, padding), (0, 0)], value=0.0)
++                unpadded.deallocate(True)
++            output = ttnn.transformer.chunked_scaled_dot_product_attention(
++                query,
++                k_cache,
++                v_cache,
++                user_table,
++                chunk_start_idx=base_offset + start,
++                scale=scale,
++                program_config=self.program,
++                compute_kernel_config=self.compute,
++                paged_cache_geometry=geometry,
++            )
++            query.deallocate(True)
++            if padding:
++                padded = output
++                output = ttnn.slice(padded, [0, 0, 0, 0], [1, q.shape[1], length, head_dim])
++                padded.deallocate(True)
++            outputs.append(output)
++        if owns_table:
++            user_table.deallocate(True)
++        if len(outputs) == 1:
++            return outputs[0]
++        output = ttnn.concat(outputs, dim=2)
++        for chunk in outputs:
++            chunk.deallocate(True)
++        return output
++
++
+ class NativePagedAttention:
+     """Native paged decode with explicit query rounding and synchronized FP32 accumulation."""
+ 
+-    def __init__(self, mesh_device, config):
++    def __init__(self, mesh_device, config, *, fidelity=ttnn.MathFidelity.HiFi4, grid=(8, 8)):
+         self.config = config
+         self.compute = ttnn.init_device_compute_kernel_config(
+             mesh_device.arch(),
+-            math_fidelity=ttnn.MathFidelity.HiFi4,
++            math_fidelity=fidelity,
+             math_approx_mode=False,
+             fp32_dest_acc_en=True,
+             packer_l1_acc=False,
+             dst_full_sync_en=True,
+         )
+         self.program = ttnn.SDPAProgramConfig(
+-            compute_with_storage_grid_size=(8, 8), q_chunk_size=0, k_chunk_size=0, exp_approx_mode=False
++            compute_with_storage_grid_size=tuple(grid), q_chunk_size=0, k_chunk_size=0, exp_approx_mode=False
+         )
+ 
+     def __call__(self, q, k, v, *, cur_pos_tensor, page_table_tensor, **kwargs):
+@@ -670,11 +864,36 @@
+     """Keep prefill attention in BF16 while supporting BF16 or BFP8 cache storage."""
+ 
+     @classmethod
+-    def from_existing(cls, source, *, mesh_device, native_sdpa=False):
++    def from_existing(
++        cls,
++        source,
++        *,
++        mesh_device,
++        native_sdpa=False,
++        native_sdpa_fidelity=ttnn.MathFidelity.HiFi4,
++        native_sdpa_grid=(8, 8),
++        prefill_attention_fidelity=None,
++    ):
+         self = cls.__new__(cls)
+         self.__dict__.update(source.__dict__)
+         if native_sdpa:
+-            self.decode_sdpa = NativePagedAttention(mesh_device, self.config)
++            self.decode_sdpa = NativePagedAttention(
++                mesh_device, self.config, fidelity=native_sdpa_fidelity, grid=native_sdpa_grid
++            )
++        self.prefill_attention_compute = self.compute
++        self.configured_chunked_prefill = None
++        if prefill_attention_fidelity is not None:
++            self.prefill_attention_compute = ttnn.init_device_compute_kernel_config(
++                mesh_device.arch(),
++                math_fidelity=prefill_attention_fidelity,
++                math_approx_mode=False,
++                fp32_dest_acc_en=True,
++                packer_l1_acc=False,
++                dst_full_sync_en=True,
++            )
++            self.configured_chunked_prefill = ConfiguredChunkedPrefillAttention(
++                self.config.head_dim, self.prefill_attention_compute
++            )
+         return self
+ 
+     def cache_cast(self, value, dtype, memory):
+@@ -718,7 +937,7 @@
+                 scale=1.0,
+                 sliding_window_size=cfg.sliding_window,
+                 program_config=prefill_sdpa_program_config(cfg.head_dim, q_attention.shape[-2], cfg.sliding_window),
+-                compute_kernel_config=self.compute,
++                compute_kernel_config=self.prefill_attention_compute,
+             )
+             if history:
+                 attention = attention[:, :, history : history + q.shape[-2], :]
+@@ -727,7 +946,8 @@
+             tail_length = min(cfg.sliding_window, k.shape[-2])
+             self.tail = tuple(ttnn.clone(t[:, :, -tail_length:, :]) for t in (k, v))
+         elif start is not None and start != 0:
+-            attention = chunked_prefill_sdpa(
++            chunked = self.configured_chunked_prefill or chunked_prefill_sdpa
++            attention = chunked(
+                 q,
+                 *kwargs["kv_cache"],
+                 page_table,
+@@ -745,7 +965,7 @@
+                 is_causal=True,
+                 scale=1.0,
+                 program_config=prefill_sdpa_program_config(cfg.head_dim, q.shape[-2]),
+-                compute_kernel_config=self.compute,
++                compute_kernel_config=self.prefill_attention_compute,
+             )
+         return self.project(attention, False)
+ 

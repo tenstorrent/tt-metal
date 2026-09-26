@@ -1,0 +1,211 @@
+{
+  "pcc_threshold": 0.995,
+  "cpu_only": true,
+  "layers": {
+    "0": {
+      "source_report": "stress_cpu_precision_layer0.json",
+      "layer_type": "sliding_attention",
+      "input_identity": "Seeded reconstruction; output-only fixtures; all recorded oracle PCCs reproduced",
+      "maximum_recorded_pcc_delta": 2.6859572010984323e-08,
+      "cpu_threads": 4,
+      "ttnn_imported": false,
+      "controls": {
+        "cache": {
+          "minimum_cpu_vs_fp32_pcc": 0.8130486915185731,
+          "cpu_failed_positions": [
+            1160,
+            1197,
+            1310,
+            1371
+          ],
+          "cpu_changed_route_positions": [
+            1160,
+            1174,
+            1197,
+            1242,
+            1310,
+            1371,
+            1488,
+            1499
+          ],
+          "shared_tt_failures_reproduced_with_both_tt_vs_control_passing": [
+            1310
+          ],
+          "remaining_shared_tt_failures": [
+            1067,
+            1098,
+            1143,
+            1165,
+            1173,
+            1181,
+            1184,
+            1191,
+            1240,
+            1285,
+            1293,
+            1354,
+            1420,
+            1451
+          ],
+          "minimum_matching_tt_vs_control_pcc": 0.9988063184913262,
+          "matching_attention_pcc_range": [
+            0.999998420936064,
+            0.999998420936064
+          ],
+          "matching_router_intersections": [
+            7
+          ]
+        },
+        "rope-cache": {
+          "minimum_cpu_vs_fp32_pcc": 0.9828154395161761,
+          "cpu_failed_positions": [
+            1067,
+            1160,
+            1181,
+            1191,
+            1291,
+            1310,
+            1354,
+            1369,
+            1420,
+            1460
+          ],
+          "cpu_changed_route_positions": [
+            1067,
+            1070,
+            1160,
+            1181,
+            1191,
+            1242,
+            1291,
+            1299,
+            1310,
+            1354,
+            1369,
+            1420,
+            1460,
+            1488,
+            1499
+          ],
+          "shared_tt_failures_reproduced_with_both_tt_vs_control_passing": [
+            1067,
+            1181,
+            1191,
+            1310,
+            1354,
+            1420
+          ],
+          "remaining_shared_tt_failures": [
+            1098,
+            1143,
+            1165,
+            1173,
+            1184,
+            1240,
+            1285,
+            1293,
+            1451
+          ],
+          "minimum_matching_tt_vs_control_pcc": 0.9961780262688273,
+          "matching_attention_pcc_range": [
+            0.9999959347975901,
+            0.999997183943365
+          ],
+          "matching_router_intersections": [
+            7
+          ]
+        }
+      },
+      "optimized_only_hf_failures": [
+        1108,
+        1175,
+        1519
+      ],
+      "fused_only_hf_failures": [
+        1428
+      ]
+    },
+    "5": {
+      "source_report": "stress_cpu_precision_layer5.json",
+      "layer_type": "full_attention",
+      "input_identity": "Seeded reconstruction; output-only fixtures; all recorded oracle PCCs reproduced",
+      "maximum_recorded_pcc_delta": 1.7120509343548918e-08,
+      "cpu_threads": 4,
+      "ttnn_imported": false,
+      "controls": {
+        "cache": {
+          "minimum_cpu_vs_fp32_pcc": 0.986599479755279,
+          "cpu_failed_positions": [
+            1092,
+            1189,
+            1289,
+            1382,
+            1422
+          ],
+          "cpu_changed_route_positions": [
+            1092,
+            1189,
+            1289,
+            1382,
+            1422
+          ],
+          "shared_tt_failures_reproduced_with_both_tt_vs_control_passing": [
+            1189,
+            1289,
+            1382
+          ],
+          "remaining_shared_tt_failures": [
+            1360
+          ],
+          "minimum_matching_tt_vs_control_pcc": 0.9978321552390443,
+          "matching_attention_pcc_range": [
+            0.9999985840919308,
+            0.9999988589236135
+          ],
+          "matching_router_intersections": [
+            7
+          ]
+        },
+        "rope-cache": {
+          "minimum_cpu_vs_fp32_pcc": 0.9865983479903947,
+          "cpu_failed_positions": [
+            1092,
+            1189,
+            1289,
+            1382,
+            1422
+          ],
+          "cpu_changed_route_positions": [
+            1092,
+            1189,
+            1289,
+            1382,
+            1422
+          ],
+          "shared_tt_failures_reproduced_with_both_tt_vs_control_passing": [
+            1189,
+            1289,
+            1382
+          ],
+          "remaining_shared_tt_failures": [
+            1360
+          ],
+          "minimum_matching_tt_vs_control_pcc": 0.9978321413539774,
+          "matching_attention_pcc_range": [
+            0.9999985832580115,
+            0.9999988417113583
+          ],
+          "matching_router_intersections": [
+            7
+          ]
+        }
+      },
+      "optimized_only_hf_failures": [
+        1398
+      ],
+      "fused_only_hf_failures": [
+        1396
+      ]
+    }
+  }
+}

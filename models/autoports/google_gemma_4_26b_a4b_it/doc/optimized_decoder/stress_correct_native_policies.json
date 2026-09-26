@@ -1,0 +1,17 @@
+{
+  "0": {
+    "native_sdpa": true,
+    "kv_cache_dtype": "bfloat8_b",
+    "qkv_weight_dtype": "bfloat8_b",
+    "output_weight_dtype": "bfloat8_b",
+    "expert_gate_dtype": "bfloat8_b",
+    "sharded_norm_site": "all"
+  },
+  "5": {
+    "native_sdpa": true,
+    "kv_cache_dtype": "bfloat8_b",
+    "qkv_weight_dtype": "bfloat8_b",
+    "output_weight_dtype": "bfloat8_b",
+    "expert_gate_dtype": "bfloat4_b"
+  }
+}

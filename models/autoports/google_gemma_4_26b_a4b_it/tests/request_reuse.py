@@ -12,6 +12,7 @@ from transformers.cache_utils import DynamicCache
 from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
 
 import ttnn
+from models.autoports.google_gemma_4_26b_a4b_it.tests.create_optimized_long_reference import load_input_fixture
 from models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder import MODEL, REVISION, load_layer
 from models.autoports.google_gemma_4_26b_a4b_it.tests.runtime_audit import device_only
 from models.autoports.google_gemma_4_26b_a4b_it.tt.functional_decoder import FunctionalDecoder
@@ -22,6 +23,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--layer", type=int, default=0)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--input-fixture", type=Path)
     parser.add_argument("--decoder", choices=("functional", "fused"), default="functional")
     parser.add_argument("--fusion")
     parser.add_argument("--group-size", type=int)
@@ -43,6 +45,18 @@ def main():
     hf = load_layer(cfg, args.layer, True)
     kind = cfg.layer_types[args.layer]
     extent = 4096
+    lengths = [31, 32, 33, 1023, 1024, 1025, 2049, 33, 2047]
+    input_fixture = None
+    if args.input_fixture:
+        windows = [
+            dict(request=index, prefill_start=index * 128, length=length) for index, length in enumerate(lengths)
+        ]
+        used_length = max(window["prefill_start"] + window["length"] + 1 for window in windows)
+        values, input_fixture = load_input_fixture(args.input_fixture, cfg, args.layer, used_length)
+        input_fixture["windows"] = [
+            {**window, "decode_row": window["prefill_start"] + window["length"]} for window in windows
+        ]
+        input_fixture["position_policy"] = "Each recorded window is rebased to positions 0..length for HF and TT"
     cos, sin = Gemma4TextRotaryEmbedding(cfg)(
         torch.zeros(1, 1, cfg.hidden_size), torch.arange(extent)[None], layer_type=kind
     )
@@ -61,19 +75,57 @@ def main():
             ttnn.copy_host_to_device_tensor(host, dest)
 
         ac = layer.layer.self_attn.config
-        cache = [device(torch.zeros(extent // 32, ac.num_key_value_heads, 32, ac.head_dim)) for _ in range(2)]
+        cache = [
+            device(
+                torch.zeros(extent // 32, ac.num_key_value_heads, 32, ac.head_dim),
+                getattr(layer, "kv_cache_dtype", ttnn.bfloat16),
+            )
+            for _ in range(2)
+        ]
         pt = device(torch.arange(extent // 32, dtype=torch.int32)[None], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
         rt = tuple(device(t[None]) for t in (cos, sin))
-        dr = tuple(device(t.squeeze(0)) for t in (cos, sin))
+        decode_rope_layout = getattr(layer, "decode_rope_layout", ttnn.TILE_LAYOUT)
+        dr = tuple(device(t.squeeze(0), layout=decode_rope_layout) for t in (cos, sin))
         dt = device(torch.zeros(1, 1, 1, cfg.hidden_size))
         p = torch.zeros(1, 32, dtype=torch.int32)
         cp = torch.zeros(1, dtype=torch.int32)
         rp = device(p, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
         dp = device(cp, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        # Program binaries introduced after capture can outlive the prefill call.
+        # Initialize this test's exact catalog before keeping a decode trace alive.
+        prefill_warmup = []
+        for request_index, length in enumerate(lengths):
+            if input_fixture is not None:
+                start = input_fixture["windows"][request_index]["prefill_start"]
+                warm_input = values[:, start : start + length].contiguous()
+            else:
+                warm_input = torch.zeros(1, length, cfg.hidden_size)
+            entries_before = mesh.num_program_cache_entries()
+            warm_xt = device(warm_input[None])
+            with device_only():
+                warm_out = layer.prefill_forward(warm_xt, rope_mats=rt, page_table=pt, kv_cache=cache)
+            warm_out.deallocate(True)
+            warm_xt.deallocate(True)
+            prefill_warmup.append(
+                dict(
+                    request=request_index,
+                    length=length,
+                    entries_before=entries_before,
+                    entries_after=mesh.num_program_cache_entries(),
+                )
+            )
+        ttnn.synchronize_device(mesh)
+        # The validated requests below refill their own pages and refresh inputs.
         trace = None
-        for length in [31, 32, 33, 1023, 1024, 1025, 2049, 33, 2047]:
-            x = torch.randn(1, length, cfg.hidden_size).bfloat16().float()
-            dx = torch.randn(1, 1, cfg.hidden_size).bfloat16().float()
+        captured_program_entries = None
+        for request_index, length in enumerate(lengths):
+            if input_fixture is not None:
+                start = input_fixture["windows"][request_index]["prefill_start"]
+                x = values[:, start : start + length].contiguous()
+                dx = values[:, start + length : start + length + 1].contiguous()
+            else:
+                x = torch.randn(1, length, cfg.hidden_size).bfloat16().float()
+                dx = torch.randn(1, 1, cfg.hidden_size).bfloat16().float()
             idx = torch.arange(length)
             allowed = idx[:, None] >= idx[None, :]
             if kind == "sliding_attention":
@@ -120,6 +172,9 @@ def main():
                 with device_only():
                     traced = decode()
                 ttnn.end_trace_capture(mesh, trace, cq_id=0)
+                captured_program_entries = mesh.num_program_cache_entries()
+                mesh.set_program_cache_misses_allowed(False)
+            assert mesh.num_program_cache_entries() == captured_program_entries
             ttnn.execute_trace(mesh, trace, cq_id=0, blocking=True)
             got = ttnn.to_torch(traced).squeeze(0).float()
             dpass, dpcc = comp_pcc(dref, got, 0.995)
@@ -128,7 +183,20 @@ def main():
             args.output.write_text(
                 json.dumps(
                     dict(
-                        layer_type=kind, real_weights=True, requests=results, runtime_audit="clean", trace_reused=True
+                        layer_type=kind,
+                        real_weights=True,
+                        input_fixture=input_fixture,
+                        requests=results,
+                        runtime_audit="clean",
+                        trace_reused=True,
+                        prefill_warmup=prefill_warmup,
+                        program_cache_entries_at_capture=captured_program_entries,
+                        program_cache_entries=mesh.num_program_cache_entries(),
+                        program_cache_misses_while_trace_live="forbidden",
+                        trace_allocation_contract=(
+                            "All catalog prefill signatures and the decode signature initialized before capture; "
+                            "this test does not admit unseen prefill signatures while the trace is live"
+                        ),
                     ),
                     indent=2,
                 )
@@ -136,6 +204,7 @@ def main():
             )
             print(row, flush=True)
         ttnn.release_trace(mesh, trace)
+        mesh.set_program_cache_misses_allowed(True)
         assert all(row["passed"] for row in results), results
     finally:
         ttnn.close_mesh_device(mesh)

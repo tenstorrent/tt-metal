@@ -3,6 +3,7 @@
 """Layer-only real-shape HF parity runner. All host conversion is in this harness."""
 
 import argparse
+import hashlib
 import json
 import time
 from pathlib import Path
@@ -51,12 +52,19 @@ def load_layer(config, layer_idx, real):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--timing", action="store_true")
+    parser.add_argument(
+        "--prefill-timing", action="store_true", help="Three synchronized warmed host-wall prefill samples"
+    )
     parser.add_argument("--fusion", help="Explicit fusion ablation; default selects the layer-kind policy")
     parser.add_argument("--group-size", type=int, default=16384)
     parser.add_argument("--decoder", choices=("functional", "fused"), default="functional")
     parser.add_argument("--layer", type=int, default=0)
     parser.add_argument("--length", type=int, default=32)
+    parser.add_argument("--cache-extent", type=int, help="Explicit paged capacity for tight allocation checks")
     parser.add_argument("--real", action="store_true")
+    parser.add_argument(
+        "--input-fixture", type=Path, help="Recorded text-derived layer inputs, outside timed execution"
+    )
     parser.add_argument("--decode", action="store_true")
     parser.add_argument("--diagnostic", action="store_true")
     parser.add_argument("--profile", action="store_true")
@@ -75,7 +83,21 @@ def main():
     config._attn_implementation = "eager"
     hf = load_layer(config, args.layer, args.real)
     print("HF_LAYER_READY", flush=True)
-    x = torch.randn(1, args.length, config.hidden_size).bfloat16().float()
+    fixture = None
+    fixture_sha256 = None
+    if args.input_fixture:
+        assert args.real, "Recorded activations require real model weights"
+        fixture = torch.load(args.input_fixture, map_location="cpu", weights_only=True)
+        fixture_sha256 = hashlib.sha256(args.input_fixture.read_bytes()).hexdigest()
+        metadata = fixture["metadata"]
+        assert metadata["model"] == MODEL and metadata["revision"] == REVISION
+        assert metadata["layer"] == args.layer
+        assert fixture["prefill"].shape == (1, args.length, config.hidden_size)
+        assert fixture["decode"].shape == (1, args.steps, config.hidden_size)
+        assert torch.isfinite(fixture["prefill"]).all() and torch.isfinite(fixture["decode"]).all()
+        assert torch.equal(fixture["prefill"], fixture["prefill"].bfloat16().float())
+        assert torch.equal(fixture["decode"], fixture["decode"].bfloat16().float())
+    x = fixture["prefill"].float() if fixture else torch.randn(1, args.length, config.hidden_size).bfloat16().float()
     rope = Gemma4TextRotaryEmbedding(config)
     layer_type = config.layer_types[args.layer]
     extent = (args.length + max(128, args.steps) + 1023) // 1024 * 1024
@@ -114,12 +136,15 @@ def main():
             return ttnn.from_torch(t, device=mesh, dtype=dtype, layout=layout)
 
         block = 32
-        pages = (extent + block - 1) // block
+        cache_extent = args.cache_extent if args.cache_extent is not None else extent
+        if cache_extent < args.length + (args.steps if args.decode else 0) or cache_extent % 128:
+            raise ValueError("Cache extent must cover the requested tokens and be a multiple of 128")
+        pages = (cache_extent + block - 1) // block
         table = torch.arange(pages - 1, -1, -1, dtype=torch.int32)[None]
         pt = device(table, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
         attn = decoder.layer.self_attn.config
         shape = (pages, attn.num_key_value_heads, block, attn.head_dim)
-        cache = [device(torch.zeros(shape)) for _ in range(2)]
+        cache = [device(torch.zeros(shape), getattr(decoder, "kv_cache_dtype", ttnn.bfloat16)) for _ in range(2)]
         xt = device(x[None])
         rt = tuple(device(t[None]) for t in (cos, sin))
 
@@ -156,12 +181,24 @@ def main():
             ttnn.synchronize_device(mesh)
             if args.profile:
                 signpost("PERF_PREFILL_END")
+        prefill_host_us = []
+        if args.prefill_timing:
+            for _ in range(3):
+                ttnn.synchronize_device(mesh)
+                out.deallocate(True)
+                start = time.perf_counter_ns()
+                with device_only():
+                    out = prefill()
+                ttnn.synchronize_device(mesh)
+                prefill_host_us.append((time.perf_counter_ns() - start) / 1000)
         actual = ttnn.to_torch(out).squeeze(0).float()
         if args.save_output_tensors:
             saved_outputs["prefill"] = actual
             saved_outputs["decode"] = []
         passing, pcc = comp_pcc(ref, actual, 0.995)
         result = dict(
+            cache_extent=cache_extent,
+            cache_pages=pages,
             decoder=args.decoder,
             fusion=decoder.fusion if args.decoder == "fused" else None,
             runtime_prefill_audit="clean",
@@ -176,6 +213,14 @@ def main():
             passed=bool(passing),
         )
         args.output.write_text(json.dumps(result, indent=2) + "\n")
+        if prefill_host_us:
+            result["warmed_prefill_host_us"] = prefill_host_us
+            args.output.write_text(json.dumps(result, indent=2) + "\n")
+        if fixture:
+            result["input_fixture"] = str(args.input_fixture)
+            result["input_fixture_sha256"] = fixture_sha256
+            result["input_source"] = fixture["metadata"]
+            args.output.write_text(json.dumps(result, indent=2) + "\n")
         print(result, flush=True)
         if args.decode:
             hf_stages = {}
@@ -196,7 +241,11 @@ def main():
                             hf_stages[name] = (out[0] if isinstance(out, tuple) else out).detach().clone()
 
                         module.register_forward_hook(hook)
-            dx = torch.randn(1, 1, config.hidden_size).bfloat16().float()
+            dx = (
+                fixture["decode"][:, :1].float()
+                if fixture
+                else torch.randn(1, 1, config.hidden_size).bfloat16().float()
+            )
             pos = args.length
             dmask = torch.zeros(1, 1, 1, pos + 1)
             if layer_type == "sliding_attention":
@@ -209,7 +258,9 @@ def main():
                     past_key_values=hf_cache,
                 )
             dt = device(dx[None])
-            dr = tuple(device(t.squeeze(0)) for t in (cos, sin))
+            decode_rope_layout = getattr(decoder, "decode_rope_layout", ttnn.TILE_LAYOUT)
+            dr = tuple(device(t.squeeze(0), layout=decode_rope_layout) for t in (cos, sin))
+            result["decode_rope_layout"] = str(decode_rope_layout)
             p = torch.zeros(1, 32, dtype=torch.int32)
             p[0, 0] = pos
             cp = torch.full((1,), -1, dtype=torch.int32)
@@ -289,7 +340,11 @@ def main():
             # HF and input preparation are outside the measured device window.
             decode_inputs, decode_refs = [dx], [dref]
             for step in range(1, args.steps):
-                next_x = torch.randn_like(dx).bfloat16().float()
+                next_x = (
+                    fixture["decode"][:, step : step + 1].float()
+                    if fixture
+                    else torch.randn_like(dx).bfloat16().float()
+                )
                 step_pos = pos + step
                 step_mask = torch.zeros(1, 1, 1, step_pos + 1)
                 if layer_type == "sliding_attention":

@@ -1,0 +1,156 @@
+{
+  "base_sha256": "3d51014f98128dfb21bb484fcece50993524b967754f68f6dfe825ae7f472ba9",
+  "candidate_sha256": "032ef220d04a565203993feb4d9c68706cc2b10eb73180a76e7f874469861dbe",
+  "status": "CPU-only AST/helper mock checks passed; patch unapplied",
+  "checks": [
+    "both flags defaultFalse; existing factory defaults unchanged",
+    "four configs constructed once; no per-call config creation",
+    "28 untied/tied row-boundary cases through262144",
+    "M1 decode delegates without minimal call",
+    "weight and compute object identity retained",
+    "requested projection memory retained; tied concatDRAM",
+    "independent K4/8/16 accepted; invalid K rejected"
+  ],
+  "cases": [
+    {
+      "tied": false,
+      "rows": 2,
+      "block_m": 1
+    },
+    {
+      "tied": false,
+      "rows": 31,
+      "block_m": 1
+    },
+    {
+      "tied": false,
+      "rows": 32,
+      "block_m": 1
+    },
+    {
+      "tied": false,
+      "rows": 33,
+      "block_m": 2
+    },
+    {
+      "tied": false,
+      "rows": 64,
+      "block_m": 2
+    },
+    {
+      "tied": false,
+      "rows": 65,
+      "block_m": 3
+    },
+    {
+      "tied": false,
+      "rows": 96,
+      "block_m": 3
+    },
+    {
+      "tied": false,
+      "rows": 97,
+      "block_m": 4
+    },
+    {
+      "tied": false,
+      "rows": 128,
+      "block_m": 4
+    },
+    {
+      "tied": false,
+      "rows": 129,
+      "block_m": 4
+    },
+    {
+      "tied": false,
+      "rows": 1024,
+      "block_m": 4
+    },
+    {
+      "tied": false,
+      "rows": 1025,
+      "block_m": 4
+    },
+    {
+      "tied": false,
+      "rows": 4096,
+      "block_m": 4
+    },
+    {
+      "tied": false,
+      "rows": 262144,
+      "block_m": 4
+    },
+    {
+      "tied": true,
+      "rows": 2,
+      "block_m": 1
+    },
+    {
+      "tied": true,
+      "rows": 31,
+      "block_m": 1
+    },
+    {
+      "tied": true,
+      "rows": 32,
+      "block_m": 1
+    },
+    {
+      "tied": true,
+      "rows": 33,
+      "block_m": 2
+    },
+    {
+      "tied": true,
+      "rows": 64,
+      "block_m": 2
+    },
+    {
+      "tied": true,
+      "rows": 65,
+      "block_m": 3
+    },
+    {
+      "tied": true,
+      "rows": 96,
+      "block_m": 3
+    },
+    {
+      "tied": true,
+      "rows": 97,
+      "block_m": 4
+    },
+    {
+      "tied": true,
+      "rows": 128,
+      "block_m": 4
+    },
+    {
+      "tied": true,
+      "rows": 129,
+      "block_m": 4
+    },
+    {
+      "tied": true,
+      "rows": 1024,
+      "block_m": 4
+    },
+    {
+      "tied": true,
+      "rows": 1025,
+      "block_m": 4
+    },
+    {
+      "tied": true,
+      "rows": 4096,
+      "block_m": 4
+    },
+    {
+      "tied": true,
+      "rows": 262144,
+      "block_m": 4
+    }
+  ]
+}

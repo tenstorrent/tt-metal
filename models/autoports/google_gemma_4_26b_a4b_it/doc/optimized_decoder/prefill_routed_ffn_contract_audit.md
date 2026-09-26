@@ -1,0 +1,22 @@
+# Existing routed FFN and routing-remap contracts
+
+Source-only check against Gemma H=2816, expert I=704, 128 experts, top-8 routing on one ASIC. No hardware attempt or runtime change was made. These dimensions are tile-aligned (88 and 22 tiles); the DeepSeek directory name is not a rejection criterion.
+
+| Existing operation | Actual contract | Consequence for this decoder |
+| --- | --- | --- |
+| `routed_expert_ffn` | Public arguments are x, three projection weights, compute config and optional output. No activation argument. The Blackhole path runs separate gate/up GEMMs and hardcodes `UnaryOpType::SILU` into their product. | Its geometry can represent 2816/704, but its function is `silu(gate)*up`; Gemma requires accurate `gelu(gate)*up`. Applying GELU outside cannot correct the already fused SiLU. |
+| `unified_routed_expert_moe` | Activation enum is `Silu`, `SwiGluOai`, or `SituGlu`. Selection becomes a compute-kernel define. Input is a pre-dispatched DRAM-interleaved buffer: tiled BFP8, or row-major BF16 that is internally packed to BFP8. It requires per-expert gate/up/down tensor lists, UINT32 counts/global IDs/region offsets, a tile-aligned maximum token count per expert, and writes BFP8 output into expert regions. | No accurate GELU option. It also changes Gemma's BF16 prefill expert activation/output boundaries and requires an actual token-dispatch/combine path; a boolean union mask is insufficient. E128 fits the explicit maximum of 1024, and one ASIC is not inherently excluded. |
+| `moe_expert_token_remap` | Takes row-major routing scores `[1,B,S,E]`, UINT16 expert-to-device mapping `[1,1,E,D]`, and UINT16 selected IDs `[1,B,S,K]`. Returns routing values `[1,B,S,E/D]` and a UINT16 union mask per reduction chunk. | D=1 is legal and preserves E128. Its kernel copies routing scalars and sets union bits. It neither accepts nor moves H2816 token activations, and produces no token counts or region offsets. It can generate metadata like the existing active-union prefill path, but does not eliminate union-expert work. |
+| `moe_routing_remap` | Row-major input must be rank two `[1,E]`; selected count and E must be divisible by expert-parallel size, which must equal the selected mesh-axis size. Output has the same logical shape and partitions nonzero routing entries among devices. | EP=1 is legal but retains all eight nonzero routes. It cannot group S prefill tokens by expert or provide the dispatched buffers expected by the unified FFN. |
+
+The first two are rejected as drop-in GELU FFN replacements by their mathematical/API contracts, not by an initial API failure or a synthetic PCC result. The latter two are usable metadata operations but do not express expert-token grouping. A new grouped-token implementation would need device-side dispatch/count/offset generation and combine, plus a GELU-capable FFN path with validated dtype boundaries. Changing the existing fused activation kernel lies outside the authorized model-only implementation scope. This audit does not claim that every possible composition of unrelated TTNN operators has been exhausted.
+
+Source anchors, relative to the repository root:
+
+- `ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn.hpp:15`: complete public signature.
+- `ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_bh.cpp:118`: fixed SiLU product; the grid is 11×8, not a requirement for multiple devices.
+- `ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_types.hpp:36`: complete activation enum, input/region contract, maximum global-expert count.
+- `ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_device_operation.cpp:37`: input dtype/layout validation; shape/weight validation follows; counts and region-offset validation starts at line 131.
+- `ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/unified_routed_expert_ffn.cpp:67`: BFP8 output/in-place strategy.
+- `ttnn/cpp/ttnn/operations/data_movement/moe_expert_token_remap/device/moe_expert_token_remap_device_operation.cpp:15`: input validation and output shapes; writer kernel lines 72–104 copy scalar scores and set union bits.
+- `ttnn/cpp/ttnn/operations/data_movement/moe_routing_remap/device/moe_routing_remap_device_operation.cpp:14`: `[1,E]`, divisibility and mesh-axis validation; output spec preserves the logical shape.

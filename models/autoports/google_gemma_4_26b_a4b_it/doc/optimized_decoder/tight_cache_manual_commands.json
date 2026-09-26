@@ -1,0 +1,72 @@
+[
+  {
+    "command": [
+      "python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_optimized_contract",
+      "--contract",
+      "run_decoder",
+      "--layer",
+      "5",
+      "--length",
+      "1025",
+      "--real",
+      "--input-fixture",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_layer5_1025.pt",
+      "--decode",
+      "--steps",
+      "1",
+      "--cache-extent",
+      "1152",
+      "--verify-program-cache",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tight_cache_v5_layer5_1025.json"
+    ],
+    "environment": {
+      "TT_METAL_WATCHER": "10",
+      "OMP_NUM_THREADS": "4",
+      "MKL_NUM_THREADS": "4"
+    },
+    "returncode": 0,
+    "runtime_sha256": "169c0d97d7d0e9f35d97633f133305f1088b987ef625693d3faa100d25c3e67b",
+    "log": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tight_cache_v5_layer5_1025.log",
+    "watcher_log": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tight_cache_v5_layer5_1025.device.log",
+    "report_sha256": "b4727bc2c5d6a3a33ad220d5cd1cbfa6473ad7de8e080426d93c7054c0561186",
+    "scope": "source-identified logical-capacity risk; v5 value/Watcher pass does not prove read bounds; v6 native-call guard checks them"
+  },
+  {
+    "command": [
+      "python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_optimized_cache_capacity",
+      "--contract",
+      "run_decoder",
+      "--layer",
+      "5",
+      "--length",
+      "1025",
+      "--real",
+      "--input-fixture",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_layer5_1025.pt",
+      "--decode",
+      "--steps",
+      "1",
+      "--cache-extent",
+      "1152",
+      "--verify-program-cache",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tight_cache_v6_layer5_1025.json"
+    ],
+    "environment": {
+      "TT_METAL_WATCHER": "10",
+      "OMP_NUM_THREADS": "4",
+      "MKL_NUM_THREADS": "4"
+    },
+    "returncode": 0,
+    "runtime_sha256": "b585a21f0b66144f69a823fa2d1088b130e34928a65fc91a38fd1bc5c2526846",
+    "log": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tight_cache_v6_layer5_1025.log",
+    "watcher_log": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tight_cache_v6_layer5_1025.device.log",
+    "report_sha256": "ca817d0e591dcdafcb0f1941b24808bf1968d4f9684d59c01499d10c012f4342",
+    "scope": "source-identified logical-capacity risk; v5 value/Watcher pass does not prove read bounds; v6 native-call guard checks them"
+  }
+]

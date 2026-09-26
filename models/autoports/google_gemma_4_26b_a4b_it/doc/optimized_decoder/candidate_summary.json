@@ -1,0 +1,252 @@
+[
+  {
+    "artifact": "profile_expert_candidate.json",
+    "layer_type": "sliding_attention",
+    "length": 4096,
+    "steps": null,
+    "prefill_pcc": 0.9985529033274025,
+    "decode_min_pcc": null,
+    "passed": true,
+    "traced_host_us": null,
+    "candidate": null
+  },
+  {
+    "artifact": "active_prefill_sliding65.json",
+    "layer_type": "sliding_attention",
+    "length": 65,
+    "steps": 2,
+    "prefill_pcc": 0.9987311694824392,
+    "decode_min_pcc": 0.9996369589103614,
+    "passed": true,
+    "traced_host_us": 4220.912766666666,
+    "candidate": {
+      "expert_gate_dtype": "bfloat8_b",
+      "expert_down_dtype": "bfloat8_b",
+      "expert_block_w": 11,
+      "expert_fidelity": "LoFi",
+      "active_prefill": true,
+      "expert_grid": [
+        11,
+        4
+      ],
+      "compensated_qkv": false
+    }
+  },
+  {
+    "artifact": "expert_bfp4_bfp8_k2_sliding4096.json",
+    "layer_type": "sliding_attention",
+    "length": 4096,
+    "steps": 128,
+    "prefill_pcc": 0.9985529033274025,
+    "decode_min_pcc": 0.9910124413678612,
+    "passed": false,
+    "traced_host_us": 5397.896,
+    "candidate": {
+      "expert_gate_dtype": "bfloat4_b",
+      "expert_down_dtype": "bfloat8_b",
+      "expert_block_w": 2,
+      "expert_fidelity": "LoFi",
+      "compensated_qkv": false
+    }
+  },
+  {
+    "artifact": "expert_bfp4_bfp8_k11_grid44_sliding33.json",
+    "layer_type": "sliding_attention",
+    "length": 33,
+    "steps": 8,
+    "prefill_pcc": 0.9982357658054449,
+    "decode_min_pcc": 0.9932377571785527,
+    "passed": false,
+    "traced_host_us": 4218.9632,
+    "candidate": {
+      "expert_gate_dtype": "bfloat4_b",
+      "expert_down_dtype": "bfloat8_b",
+      "expert_block_w": 11,
+      "expert_fidelity": "LoFi",
+      "expert_grid": [
+        11,
+        4
+      ],
+      "compensated_qkv": false
+    }
+  },
+  {
+    "artifact": "expert_bfp8_k11_grid44_full4096.json",
+    "layer_type": "full_attention",
+    "length": 4096,
+    "steps": 128,
+    "prefill_pcc": 0.9994185024977819,
+    "decode_min_pcc": 0.999631330299372,
+    "passed": true,
+    "traced_host_us": 4950.4401,
+    "candidate": {
+      "expert_gate_dtype": "bfloat8_b",
+      "expert_down_dtype": "bfloat8_b",
+      "expert_block_w": 11,
+      "expert_fidelity": "LoFi",
+      "expert_grid": [
+        11,
+        4
+      ],
+      "compensated_qkv": false
+    }
+  },
+  {
+    "artifact": "qkv4149_harness.json",
+    "layer_type": "sliding_attention",
+    "length": 4096,
+    "steps": 54,
+    "prefill_pcc": 0.9985529033274025,
+    "decode_min_pcc": 0.9933229629506902,
+    "passed": false,
+    "traced_host_us": null,
+    "candidate": null
+  },
+  {
+    "artifact": "active_prefill_grid44_k11_full4096.json",
+    "layer_type": "full_attention",
+    "length": 4096,
+    "steps": 128,
+    "prefill_pcc": 0.9994185024977819,
+    "decode_min_pcc": 0.999631330299372,
+    "passed": true,
+    "traced_host_us": 4950.4086,
+    "candidate": {
+      "expert_gate_dtype": "bfloat8_b",
+      "expert_down_dtype": "bfloat8_b",
+      "expert_block_w": 11,
+      "expert_fidelity": "LoFi",
+      "prefill_grid": [
+        11,
+        4
+      ],
+      "prefill_block_w": 11,
+      "active_prefill": true,
+      "expert_grid": [
+        11,
+        4
+      ],
+      "compensated_qkv": false
+    }
+  },
+  {
+    "artifact": "compensated_sliding33.json",
+    "layer_type": "sliding_attention",
+    "length": 33,
+    "steps": 8,
+    "prefill_pcc": 0.9982357658054449,
+    "decode_min_pcc": 0.9996662792881338,
+    "passed": true,
+    "traced_host_us": 3128.1503666666667,
+    "candidate": null
+  },
+  {
+    "artifact": "active_prefill_k22_sliding4096.json",
+    "layer_type": "sliding_attention",
+    "length": 4096,
+    "steps": 128,
+    "prefill_pcc": 0.9985529033274025,
+    "decode_min_pcc": 0.9989192897062095,
+    "passed": true,
+    "traced_host_us": 4500.806933333333,
+    "candidate": {
+      "expert_gate_dtype": "bfloat8_b",
+      "expert_down_dtype": "bfloat8_b",
+      "expert_block_w": 22,
+      "expert_fidelity": "LoFi",
+      "active_prefill": true,
+      "expert_grid": [
+        11,
+        4
+      ],
+      "compensated_qkv": false
+    }
+  },
+  {
+    "artifact": "compensated_sliding4096.json",
+    "layer_type": "sliding_attention",
+    "length": 4096,
+    "steps": 128,
+    "prefill_pcc": 0.9985529033274025,
+    "decode_min_pcc": 0.9932774617563148,
+    "passed": false,
+    "traced_host_us": 3404.3635,
+    "candidate": null
+  },
+  {
+    "artifact": "expert_bfp8_k11_grid44_sliding4096.json",
+    "layer_type": "sliding_attention",
+    "length": 4096,
+    "steps": 128,
+    "prefill_pcc": 0.9985529033274025,
+    "decode_min_pcc": 0.9989192897062095,
+    "passed": true,
+    "traced_host_us": 4496.445433333333,
+    "candidate": {
+      "expert_gate_dtype": "bfloat8_b",
+      "expert_down_dtype": "bfloat8_b",
+      "expert_block_w": 11,
+      "expert_fidelity": "LoFi",
+      "expert_grid": [
+        11,
+        4
+      ],
+      "compensated_qkv": false
+    }
+  },
+  {
+    "artifact": "expert_bfp8_k2_sliding33.json",
+    "layer_type": "sliding_attention",
+    "length": 33,
+    "steps": 8,
+    "prefill_pcc": 0.9982357658054449,
+    "decode_min_pcc": 0.9996811765432634,
+    "passed": true,
+    "traced_host_us": 5119.998,
+    "candidate": {
+      "expert_gate_dtype": "bfloat8_b",
+      "expert_down_dtype": "bfloat8_b",
+      "expert_block_w": 2,
+      "expert_fidelity": "LoFi",
+      "compensated_qkv": false
+    }
+  },
+  {
+    "artifact": "active_prefill_grid44_k11_sliding4096.json",
+    "layer_type": "sliding_attention",
+    "length": 4096,
+    "steps": 128,
+    "prefill_pcc": 0.9985529033274025,
+    "decode_min_pcc": 0.9989192897062095,
+    "passed": true,
+    "traced_host_us": 4498.148266666667,
+    "candidate": {
+      "expert_gate_dtype": "bfloat8_b",
+      "expert_down_dtype": "bfloat8_b",
+      "expert_block_w": 22,
+      "expert_fidelity": "LoFi",
+      "prefill_grid": [
+        11,
+        4
+      ],
+      "prefill_block_w": 11,
+      "active_prefill": true,
+      "expert_grid": [
+        11,
+        4
+      ],
+      "compensated_qkv": false
+    }
+  },
+  {
+    "artifact": "expert_bfp4_gate_sliding33.json",
+    "layer_type": "sliding_attention",
+    "length": 33,
+    "steps": 8,
+    "prefill_pcc": 0.9943979804375536,
+    "decode_min_pcc": 0.9933571953034891,
+    "passed": false,
+    "traced_host_us": null,
+    "candidate": null
+  }
+]

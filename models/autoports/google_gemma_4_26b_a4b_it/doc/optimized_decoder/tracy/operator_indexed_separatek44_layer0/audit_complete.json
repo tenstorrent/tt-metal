@@ -1,0 +1,35 @@
+{
+  "runner": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/operator_indexed_separatek44_layer0/runner.json",
+  "native_csv": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/operator_indexed_separatek44_layer0/raw/reports/operator/2026_09_26_17_54_12/ops_perf_results_operator_2026_09_26_17_54_12.csv",
+  "report_commands": [
+    [
+      "python_env/bin/tt-perf-report",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/operator_indexed_separatek44_layer0/decode_one_replay.csv",
+      "--start-signpost",
+      "PERF_DECODE",
+      "--end-signpost",
+      "PERF_DECODE_END",
+      "--no-color",
+      "--no-summary",
+      "--tracing-mode",
+      "--active-experts",
+      "8"
+    ],
+    [
+      "python_env/bin/tt-perf-report",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/operator_indexed_separatek44_layer0/decode_one_replay.csv",
+      "--start-signpost",
+      "PERF_DECODE",
+      "--end-signpost",
+      "PERF_DECODE_END",
+      "--no-color",
+      "--no-summary",
+      "--tracing-mode",
+      "--active-experts",
+      "8",
+      "--csv",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/operator_indexed_separatek44_layer0/decode_perf_report.csv"
+    ]
+  ],
+  "passed": true
+}

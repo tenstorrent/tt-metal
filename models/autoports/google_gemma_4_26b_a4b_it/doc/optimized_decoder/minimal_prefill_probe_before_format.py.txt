@@ -1,0 +1,105 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Compare minimal_matmul at the production prefill projection boundaries."""
+import argparse
+import json
+import sys
+import time
+from pathlib import Path
+from unittest.mock import patch
+
+import ttnn
+from models.autoports.google_gemma_4_26b_a4b_it.tests import run_optimized_contract, run_optimized_decoder
+from models.autoports.google_gemma_4_26b_a4b_it.tt.optimized_decoder import OptimizedDecoder
+
+
+def main():
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--minimal-role", choices=("qkv", "output"), required=True)
+    parser.add_argument("--minimal-k", type=int, choices=(4, 8, 16), default=16)
+    parser.add_argument("--alternating-prefill", type=int, default=0)
+    args, rest = parser.parse_known_args()
+    target = Path(rest[rest.index("--output") + 1])
+    assert not target.exists(), target
+    original_factory = OptimizedDecoder.from_state_dict.__func__
+    original_linear = ttnn.linear
+    selected, configs, observed = {}, {}, []
+    enabled = [True]
+    alternating = []
+
+    def factory(cls, *a, **kw):
+        decoder = original_factory(cls, *a, **kw)
+        weights = decoder.layer.self_attn.source.weights
+        weight = weights.wqkv.source.weight if args.minimal_role == "qkv" else weights.o_proj
+        selected[id(weight)] = weight
+        for rows in range(32, max(decoder.chunk_size, decoder.config.sliding_window or 0) + 1, 32):
+            configs[rows] = ttnn.MinimalMatmulConfig(
+                M_block_size=min(4, rows // 32), K_block_size=args.minimal_k, N_block_size=8,
+                subblock_h=1, subblock_w=4, compute_with_storage_grid_size=ttnn.CoreCoord(11, 8),
+            )
+        decoder.precision_policy["minimal_prefill_probe"] = {
+            "role": args.minimal_role, "k_block": args.minimal_k, "grid": [11, 8],
+            "m_block": "min(4, M_tiles)", "n_block": 8, "subblock": [1, 4],
+            "precision_memory_and_decode": "unchanged", "observed": observed,
+        }
+        if args.alternating_prefill:
+            original_prefill = decoder.prefill_forward
+            first = [True]
+            mesh = kw["mesh_device"]
+
+            def prefill(*inputs, **options):
+                output = original_prefill(*inputs, **options)
+                if first[0]:
+                    first[0] = False
+                    for use_minimal in (False, True):
+                        enabled[0] = use_minimal
+                        original_prefill(*inputs, **options)
+                    for repeat in range(args.alternating_prefill):
+                        for use_minimal in ((False, True) if repeat % 2 == 0 else (True, False)):
+                            enabled[0] = use_minimal
+                            ttnn.synchronize_device(mesh)
+                            start = time.perf_counter_ns()
+                            temporary = original_prefill(*inputs, **options)
+                            ttnn.synchronize_device(mesh)
+                            alternating.append({"repeat": repeat, "minimal": use_minimal,
+                                                "whole_prefill_host_us": (time.perf_counter_ns() - start) / 1000})
+                            del temporary
+                    enabled[0] = True
+                    original_prefill(*inputs, **options)
+                return output
+
+            decoder.prefill_forward = prefill
+        return decoder
+
+    def linear(operand, weight, *a, **kw):
+        if not enabled[0] or id(weight) not in selected or operand.shape[-2] == 1:
+            return original_linear(operand, weight, *a, **kw)
+        assert not a, a
+        rows = operand.padded_shape[-2]
+        if not observed:
+            observed.append({"input_shape": list(operand.shape), "input_dtype": str(operand.dtype),
+                             "weight_shape": list(weight.shape), "weight_dtype": str(weight.dtype),
+                             "output_dtype": str(kw.get("dtype")), "compute": str(kw.get("compute_kernel_config")),
+                             "input_memory": str(operand.memory_config()), "config": str(configs[rows])})
+        return ttnn.experimental.minimal_matmul(
+            operand, weight, config=configs[rows], dtype=kw.get("dtype"),
+            compute_kernel_config=kw.get("compute_kernel_config"), memory_config=kw.get("memory_config"),
+        )
+
+    previous = sys.argv
+    try:
+        sys.argv = [sys.argv[0], *rest]
+        with patch.object(OptimizedDecoder, "from_state_dict", classmethod(factory)), patch.object(ttnn, "linear", linear):
+            (run_optimized_contract.main if "--contract" in rest else run_optimized_decoder.main)()
+        assert observed, "The candidate was not exercised"
+    finally:
+        sys.argv = previous
+        if target.exists():
+            report = json.loads(target.read_text())
+            report["minimal_prefill_probe"] = {"role": args.minimal_role, "k_block": args.minimal_k, "observed": observed}
+            report["alternating_prefill_host"] = alternating
+            target.write_text(json.dumps(report, indent=2) + "\n")
+
+
+if __name__ == "__main__":
+    main()

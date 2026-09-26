@@ -1,0 +1,29 @@
+{
+  "threads": 4,
+  "length": 4096,
+  "chunk_size": 1024,
+  "input_fixture_sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3",
+  "output_fixture_sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa",
+  "timings": [
+    3.8748743794858456,
+    3.8439129879698157,
+    3.218588496558368,
+    3.5995830576866865,
+    3.6778319561854005
+  ],
+  "layers": [],
+  "monolithic_layer0_seconds": 4.308830611407757,
+  "layer0_stream_vs_monolithic": {
+    "min_token_pcc": 0.9999999999999045,
+    "max_abs_error": 2.288818359375e-05,
+    "exact_equal": false
+  },
+  "layer0_changed_route_rows": 0,
+  "layer5_stream_vs_recorded": {
+    "min_token_pcc": 0.9999999999875995,
+    "max_abs_error": 0.0001125335693359375,
+    "exact_equal": false
+  },
+  "linear_262144_seconds": 1165.7466161847115,
+  "passed": true
+}

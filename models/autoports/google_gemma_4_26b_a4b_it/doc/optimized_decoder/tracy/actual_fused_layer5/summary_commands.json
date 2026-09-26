@@ -1,0 +1,98 @@
+{
+  "profile_source": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_fused_layer5/raw/reports/headline/2026_09_26_12_18_47/ops_perf_results_headline_2026_09_26_12_18_47.csv",
+  "summary_command": [
+    "/workspace/tt-metal/python_env/bin/python",
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/summarize_perf.py",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_fused_layer5/ops.csv",
+    "--layer-type",
+    "full_attention",
+    "--output",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_fused_layer5/whole_layer.json",
+    "--peak-fidelity-cycles",
+    "4",
+    "--precision-policy",
+    "Fused runtime: BF16 weights and KV caches; mixed BF16/FP32 activations; HiFi4 attention and expert prefill; shared gate-up/prefill HiFi2, sparse expert decode and shared-down decode LoFi; SFPU decode QKV/router and policy-specific native/SFPU normalization/rotary. Operand storage bytes follow CSV dtypes, including BFP tile exponents. Common theoretical roofline uses four fidelity cycles."
+  ],
+  "decode_report_scope": {
+    "source": "decode_one_replay.csv",
+    "selection": "first complete decode trace replay from PERF_DECODE signpost",
+    "session": "3",
+    "native_ops": 142,
+    "whole_layer_summary_samples": 128
+  },
+  "report_commands": [
+    {
+      "argv": [
+        "python_env/bin/tt-perf-report",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_fused_layer5/ops.csv",
+        "--start-signpost",
+        "PERF_PREFILL",
+        "--end-signpost",
+        "PERF_PREFILL_END",
+        "--no-color",
+        "--no-summary",
+        "--tracing-mode"
+      ],
+      "stdout": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_fused_layer5/prefill_perf_report.txt",
+      "advice_enabled": true,
+      "returncode": 0,
+      "advice_option": "default enabled; --no-advice omitted"
+    },
+    {
+      "argv": [
+        "python_env/bin/tt-perf-report",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_fused_layer5/ops.csv",
+        "--start-signpost",
+        "PERF_PREFILL",
+        "--end-signpost",
+        "PERF_PREFILL_END",
+        "--no-color",
+        "--no-summary",
+        "--tracing-mode",
+        "--csv",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_fused_layer5/prefill_perf_report.csv"
+      ],
+      "stdout": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_fused_layer5/prefill_perf_report.console.log",
+      "advice_enabled": true,
+      "returncode": 0,
+      "advice_option": "default enabled; --no-advice omitted"
+    },
+    {
+      "argv": [
+        "python_env/bin/tt-perf-report",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_fused_layer5/decode_one_replay.csv",
+        "--start-signpost",
+        "PERF_DECODE",
+        "--end-signpost",
+        "PERF_DECODE_END",
+        "--no-color",
+        "--no-summary",
+        "--tracing-mode"
+      ],
+      "stdout": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_fused_layer5/decode_perf_report.txt",
+      "advice_enabled": true,
+      "returncode": 0,
+      "advice_option": "default enabled; --no-advice omitted"
+    },
+    {
+      "argv": [
+        "python_env/bin/tt-perf-report",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_fused_layer5/decode_one_replay.csv",
+        "--start-signpost",
+        "PERF_DECODE",
+        "--end-signpost",
+        "PERF_DECODE_END",
+        "--no-color",
+        "--no-summary",
+        "--tracing-mode",
+        "--csv",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_fused_layer5/decode_perf_report.csv"
+      ],
+      "stdout": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_fused_layer5/decode_perf_report.console.log",
+      "advice_enabled": true,
+      "returncode": 0,
+      "advice_option": "default enabled; --no-advice omitted"
+    }
+  ],
+  "summary_returncode": 0
+}

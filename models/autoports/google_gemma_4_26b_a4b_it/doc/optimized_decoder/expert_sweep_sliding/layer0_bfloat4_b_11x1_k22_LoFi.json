@@ -1,0 +1,102 @@
+{
+  "decoder": "optimized",
+  "fusion": "broadcast_pack_gelu_router_tail_norm_attention_common_tied_ropepolicy_cache_kvnorm_shardedtail_preciseheads_expmerge_residualnorm_rsqrt_expertbatch64_mixmatmul_mixsharded_mixfp32_qkvl1_projectsharded_sharedshard_unarycastshard_directtail",
+  "runtime_prefill_audit": "clean",
+  "program_cache_miss_guard": false,
+  "prefill_cache_entries": 88,
+  "prefix_length": 0,
+  "layer_type": "sliding_attention",
+  "phase": "prefill",
+  "length": 33,
+  "real_weights": true,
+  "pcc": 0.9982357658054449,
+  "passed": true,
+  "decode": {
+    "pcc": 0.9986828881012632,
+    "passed": false,
+    "traced": true,
+    "runtime_decode_audit": "clean",
+    "repeated_equal": true,
+    "steps": 8,
+    "min_pcc": 0.9932377571785527,
+    "positions": [
+      33,
+      40
+    ],
+    "checks": [
+      {
+        "position": 33,
+        "pcc": 0.9986828881012632,
+        "passed": true
+      },
+      {
+        "position": 33,
+        "pcc": 0.9986828881012632,
+        "passed": true
+      },
+      {
+        "position": 34,
+        "pcc": 0.9974372040804242,
+        "passed": true
+      },
+      {
+        "position": 35,
+        "pcc": 0.997118170797874,
+        "passed": true
+      },
+      {
+        "position": 36,
+        "pcc": 0.9969605202914975,
+        "passed": true
+      },
+      {
+        "position": 37,
+        "pcc": 0.994870866153722,
+        "passed": false
+      },
+      {
+        "position": 38,
+        "pcc": 0.9932377571785527,
+        "passed": false
+      },
+      {
+        "position": 39,
+        "pcc": 0.9982530730292537,
+        "passed": true
+      },
+      {
+        "position": 40,
+        "pcc": 0.9968152898394721,
+        "passed": true
+      }
+    ]
+  },
+  "traced_decode_host_us": [
+    4283.554933333333,
+    4284.804633333333,
+    4285.283233333334,
+    4284.003433333333,
+    4285.117566666667
+  ],
+  "candidate": {
+    "expert_gate_dtype": "bfloat4_b",
+    "expert_down_dtype": "bfloat8_b",
+    "expert_block_w": 22,
+    "expert_fidelity": "LoFi",
+    "prefill_grid": null,
+    "prefill_block_w": 1,
+    "active_prefill": false,
+    "expert_grid": [
+      11,
+      1
+    ],
+    "compensated_qkv": false,
+    "shared_dtype": null,
+    "shared_down_dtype": null,
+    "shared_fidelity": "LoFi",
+    "shared_dram": false,
+    "shared_readers": 1,
+    "shared_split": false
+  },
+  "runtime_sha256": "d81b07afb9b748f72f0663a504f17e35b1fc38a665662cc335819ea36370e669"
+}

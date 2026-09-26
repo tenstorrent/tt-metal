@@ -1,0 +1,114 @@
+{
+  "decoder": "optimized",
+  "fusion": "broadcast_pack_gelu_router_tail_norm_attention_common_tied_expmerge_residualnorm_shardedtail_kvnorm_expertbatch64_mixmatmul_mixsharded_qkvl1_projectsharded_sharedshard_directtail",
+  "runtime_prefill_audit": "clean",
+  "program_cache_miss_guard": false,
+  "prefill_cache_entries": 90,
+  "prefix_length": 0,
+  "layer_type": "full_attention",
+  "phase": "prefill",
+  "length": 33,
+  "real_weights": true,
+  "pcc": 0.9925209832606924,
+  "passed": false,
+  "decode": {
+    "pcc": 0.981250751459858,
+    "passed": false,
+    "traced": true,
+    "runtime_decode_audit": "clean",
+    "repeated_equal": true,
+    "steps": 8,
+    "min_pcc": 0.9800550386420113,
+    "positions": [
+      33,
+      40
+    ],
+    "checks": [
+      {
+        "position": 33,
+        "pcc": 0.981250751459858,
+        "passed": false
+      },
+      {
+        "position": 33,
+        "pcc": 0.981250751459858,
+        "passed": false
+      },
+      {
+        "position": 34,
+        "pcc": 0.9849864692014525,
+        "passed": false
+      },
+      {
+        "position": 35,
+        "pcc": 0.9911270895888988,
+        "passed": false
+      },
+      {
+        "position": 36,
+        "pcc": 0.982589113495114,
+        "passed": false
+      },
+      {
+        "position": 37,
+        "pcc": 0.9800550386420113,
+        "passed": false
+      },
+      {
+        "position": 38,
+        "pcc": 0.9980555037209767,
+        "passed": true
+      },
+      {
+        "position": 39,
+        "pcc": 0.9984533275173567,
+        "passed": true
+      },
+      {
+        "position": 40,
+        "pcc": 0.9983066921396445,
+        "passed": true
+      }
+    ]
+  },
+  "traced_decode_host_us": [
+    5491.661766666667,
+    5492.9776,
+    5492.340366666666,
+    5491.806666666666,
+    5491.843433333333
+  ],
+  "candidate": {
+    "expert_gate_dtype": "bfloat16",
+    "expert_down_dtype": "bfloat16",
+    "expert_block_w": 1,
+    "expert_fidelity": "LoFi",
+    "prefill_grid": null,
+    "prefill_block_w": 1,
+    "active_prefill": false,
+    "expert_grid": null,
+    "down_grid": null,
+    "prefill_tokens": null,
+    "compensated_qkv": false,
+    "shared_dtype": null,
+    "shared_down_dtype": null,
+    "shared_fidelity": "LoFi",
+    "shared_dram": false,
+    "shared_readers": 1,
+    "shared_split": false,
+    "prefill_dtype": "bfloat16",
+    "prefill_fidelity": "HiFi4",
+    "prefill_l1": false,
+    "sharded_norms": false,
+    "shared_block": 11,
+    "expert_split": false,
+    "sharded_norm_site": "all"
+  },
+  "runtime_sha256": "d6ef1d4701da1772548ab3ed7892dd7009acd78b5a6ca3e308cab27b84615256",
+  "attention_probe": {
+    "cache_bfp8": false,
+    "native_sdpa": false,
+    "qkv_weight_dtype": null,
+    "output_weight_dtype": "bfloat4_b"
+  }
+}
