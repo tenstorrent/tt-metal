@@ -300,6 +300,27 @@
   "started": "2026-09-26T01:52:17",
   "status": "PASS"
  },
+ "F22": {
+  "attempts": 0,
+  "duration_s": 0.1,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-26T02:01:17"
+   }
+  ],
+  "last_run": "2026-09-26T02:01:17",
+  "log": "/localdev/dnijemcevic/bringup/bringup_framework/runs/default/logs/F22.log",
+  "metrics": {
+   "known_issue_errors": 0,
+   "proposed_entries": 21,
+   "repo_map_errors": 0
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-26T02:01:17",
+  "status": "PASS"
+ },
  "F3": {
   "attempts": 0,
   "duration_s": 19.4,

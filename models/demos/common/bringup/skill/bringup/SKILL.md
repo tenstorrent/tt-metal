@@ -78,6 +78,21 @@ Never:
 
 Report briefly on each gate the person would care about; say plainly when you stopped something and why.
 
+### Keep the session's context small
+
+A run takes hours and dozens of gates; the supervising session must not fill its context with logs.
+- Pull numbers, not files: extract the metrics you need from `state.json` / `results/<task>.json` with a short
+  `python -c` or `grep`, and `tail -n` the orchestrator log. Never `cat` a gate log, an agent transcript
+  (`runs/<run>/agents/*.jsonl`), a golden or a dashboard page.
+- Filter the monitor to the events you act on (gate PASS/FAIL/HANG, attempts, STOPPED, WAITING, paused, problems,
+  exit); do not stream step starts or freezes.
+- One line per routine gate ("C.x passed, 29/56, commit abc123"); detail only for failures, stops and decisions.
+- Keep checks short: the box test takes seconds; never give a device check a long timeout.
+- Hand-off: everything that matters is on disk (tasks.yaml, state.json, results/, BREADCRUMBS.md, supervision.md,
+  git). When the context passes about 75%, pause the run, append a "hand-off" entry to supervision.md (where the run
+  is, what is pending, open decisions), and tell the person to continue in a fresh session with `/bringup` and "report
+  on <model>"; a new session picks up from the files, not from memory.
+
 ## 5. Resume, rerun, fork
 
 - `python -m models.demos.common.bringup.orchestrator resume --spec <spec>` (after a stop, a pause, or a fix).
