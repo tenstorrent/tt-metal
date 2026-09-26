@@ -321,3 +321,9 @@ Drive this ledger with
 - Gemma K.1: the engine's producer picks a KV reader by adapter name and sent Gemma to the MLA reader (KV_LORA_RANK).
   The agent's finding proposes an adapter hook; the next K.1 attempt can now make it.
 - A task's "waiting for a person" note is cleared when the task runs again (the teletext kept flashing it on K.1).
+
+## F30 (2026-09-26): the overseer decides
+- Owner: use judgement, do not ask for trivial permissions; the overseer judges whether an agent is cheating and
+  approves or rejects on its own. The skill's new "Decide; do not ask" section lists what still goes to the person
+  (intake spec, plan, perf picks, board reset, push/PR, evidence the model or data is wrong), what counts as cheating,
+  and how to reject (pause, revert the gate commit, add a finding, rerun).
