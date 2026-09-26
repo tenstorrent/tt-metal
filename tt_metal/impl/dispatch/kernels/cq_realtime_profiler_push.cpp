@@ -90,6 +90,7 @@ __attribute__((noinline)) void push_entries_to_host(
     }
 
     socket_push_pages(socket, num_pages);
+    // On this D2H socket the notify also clears the PCIe routing the loop left in NOC_RET_ADDR_MID.
     socket_notify_receiver(socket);
     noc_async_write_barrier();
     RT_PROF_NCRISC_DBG_INC(ring_buffer, push_write_barrier_exit_count);

@@ -22,10 +22,15 @@ void kernel_main() {
     uint64_t noc_addr = NOC_XY_PCIE_ENCODING(pcie_x_coord, pcie_y_coord) | pcie_l1_local_addr;
     {
         DeviceZoneScopedN("RISCV0");
+        // Every write uses the same address, so the PCIe routing and the destination coordinate are
+        // programmed once here instead of on every transaction.
+        noc_async_write_set_pcie_state(noc_addr);
         for (uint32_t i = 0; i < num_of_transactions; i++) {
-            noc_async_write(l1_local_addr, noc_addr, bytes_per_transaction);
+            noc_async_write_with_state(l1_local_addr, pcie_l1_local_addr, bytes_per_transaction);
         }
         noc_async_write_barrier();
+        // Clear inside the zone so the measurement includes the batch teardown.
+        noc_async_write_clear_pcie_state();
     }
 
     DeviceTimestampedData("Test id", test_id);
