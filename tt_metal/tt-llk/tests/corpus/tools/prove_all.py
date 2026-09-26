@@ -47,18 +47,45 @@ HERE = Path(__file__).resolve().parent  # .../corpus/tools
 CORPUS = HERE.parent  # .../corpus
 TESTS = CORPUS.parent  # .../tests
 LLK = TESTS.parent  # .../tt-llk
-HOME = Path(os.path.expanduser("~/sfpi-uplift"))
+# Uplift artifact root.  Was hardcoded to ~/sfpi-uplift, which made every
+# path below dead on any machine that did not happen to have one lane's
+# evidence directory.  CRAQ_UPLIFT_ROOT overrides; the old location stays
+# the default so existing checkouts keep working.
+HOME = Path(os.environ.get("CRAQ_UPLIFT_ROOT",
+                           os.path.expanduser("~/sfpi-uplift")))
 
 # ---- pinned inputs (the provenance gate verifies these) --------------------
 PIN = "pin-59"
 EXPECT_CC1PLUS_PREFIX = "b013967fffaa"  # pin-59 cc1plus
-JO_INSTRUMENT = HOME / "laneKS-evidence-20260901/simstage-trace-old/libttsim.so"
+JO_INSTRUMENT = Path(os.environ.get(
+    "CRAQ_JO_INSTRUMENT",
+    HOME / "laneKS-evidence-20260901/simstage-trace-old/libttsim.so"))
 EXPECT_JO_SHA = "ba23c3f169126425998b53b0202a10a81e35fba0692ed4eca5964f073ec31113"
-BITEXACT_SIM = HOME / "laneJN-simstage/libttsim.so"  # plain pinned craq-sim 1c47e9cd
+BITEXACT_SIM = Path(os.environ.get(
+    "CRAQ_BITEXACT_SIM",
+    HOME / "laneJN-simstage/libttsim.so"))  # plain pinned craq-sim 1c47e9cd
 EXPECT_BITEXACT_SHA_PREFIX = "1d162f0adf67"
 SFPI = TESTS / "sfpi"  # symlink -> pinned toolchain
 
-BOARD = HOME / "laneFM-evidence-20260822/FINAL-BOARD.tsv"
+# The canonical board lives in craq-sfpi, not in a lane evidence snapshot.
+# This pointed at laneFM's 2026-08-22 copy, which is two re-books stale
+# (that snapshot tallies 85/35/14; canon is 87/30/17 after the laneLT and
+# weekly-20260917 re-books), so every verdict joined against it was joined
+# against superseded classes.  CRAQ_BOARD overrides; the craq-sfpi checkout
+# is searched next to the tt-metal one before the old snapshot is used.
+def _resolve_board():
+    env = os.environ.get("CRAQ_BOARD")
+    if env:
+        return Path(env)
+    for cand in (LLK.parent.parent.parent / "craq-sfpi/board/FINAL-BOARD.tsv",
+                 Path(os.path.expanduser("~/craq-sfpi/board/FINAL-BOARD.tsv")),
+                 Path(os.path.expanduser("~/workspace/craq-sfpi/board/FINAL-BOARD.tsv"))):
+        if cand.is_file():
+            return cand
+    return HOME / "laneFM-evidence-20260822/FINAL-BOARD.tsv"
+
+
+BOARD = _resolve_board()
 MANIFEST = HERE / "prove_all_manifest.tsv"
 SILICON_OVERLAY = HERE / "prove_all_silicon_overlay.tsv"
 DOMAIN_OVERLAY = HERE / "prove_all_domain_overlay.tsv"
@@ -724,7 +751,8 @@ def main():
         choices=["formal_equiv", "bitexact", "classify"],
         help="restrict to one engine's ops",
     )
-    ap.add_argument("--out", default=str(HOME / "laneMH-evidence-20260903/run"))
+    ap.add_argument("--out", default=os.environ.get("CRAQ_PROVE_OUT",
+                               str(HOME / "laneMH-evidence-20260903/run")))
     ap.add_argument("--jobs", type=int, default=8, help="bitexact sim parallelism")
     ap.add_argument("--timeout", type=int, default=1800, help="per-op wall seconds")
     ap.add_argument("--force", action="store_true", help="ignore cached verdicts")
