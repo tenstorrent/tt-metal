@@ -21,3 +21,14 @@ findings:
     Sliding (8x256, 2 heads per chip) and global (2x512, 1 head per chip, replicated on 2 chips) layers both hold 512 values per
     token per chip for K and for V. The migratable cache is therefore the gpt_oss_d_p GQA substrate with head_dim 512:
     [users*layers, 1, seq, 512] bf8 per chip, configs K chip 0..3 then V chip 0..3. One table config size serves all 30 layers.
+- id: P2-sdpa-config-a
+  task: P.2
+  kind: PERF
+  title: SDPA config A with L1-limited chunks; global SDPA is DRAM-bound (no KV chain for causal)
+  detail: >-
+    Preset A (HiFi2, fp32 dest acc off -> streaming kernel, packer_l1_acc off, approx exp, full grid) is the default
+    (GEMMA4_SDPA_CFG=base restores the bring-up config bit-exactly: pcc_chunk_out 0.9989113, attention 381.6 ms). ERNIE's q256/k512
+    does not fit L1: sliding (D 256) runs q256/k256, global (D 512) q160/k128 (q128/k128 = 44 ms, q160 = 35 ms per global layer at 51k).
+    Last 5120 chunk of 56320: attention 381.7 -> 248.3 ms, wall 742.9 -> 609.7 ms, pcc_chunk_out 0.99891 -> 0.99856.
+    Most of what remains is the 5 global layers (~35 ms SDPA each). They are bandwidth-bound: causal SDPA builds no KV chain, so each Q chunk re-reads the prefix.
+    Next levers: bf8 attention K/V cache, or a GQA-shared KV read.
