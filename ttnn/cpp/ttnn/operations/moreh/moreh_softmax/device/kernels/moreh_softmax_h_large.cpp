@@ -62,10 +62,9 @@ void kernel_main() {
 
         for (std::uint32_t h = 0; h < Ht; h += onetile) {
             // compute exp(x - max(x))
+            sub_tiles_bcast_rows_to_cb(dfb_in0_obj, dfb_max_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
             if (h == Ht - 1) {
 #ifdef SOFTMAX
-                sub_tiles_bcast_rows_to_cb(dfb_in0_obj, dfb_max_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
-
                 exp_tile_and_mask_tile_to_cb(
                     dfb_tmp_obj,
                     dfb_mask_obj,
@@ -76,7 +75,7 @@ void kernel_main() {
                     /*popm=*/0);
 #else
                 rexp_tile_and_mask_tile_to_cb(
-                    dfb_in0_obj,
+                    dfb_tmp_obj,
                     dfb_mask_obj,
                     dfb_exps_obj,
                     /*itile=*/0,
@@ -86,12 +85,8 @@ void kernel_main() {
 #endif
             } else {
 #ifdef SOFTMAX
-                sub_tiles_bcast_rows_to_cb(dfb_in0_obj, dfb_max_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
-
                 exp_tile_to_cb(dfb_tmp_obj, dfb_exps_obj);
 #else
-                sub_tiles_bcast_rows_to_cb(dfb_in0_obj, dfb_max_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
-
                 rexp_tile_to_cb(dfb_tmp_obj, dfb_exps_obj);
 #endif
             }
