@@ -399,6 +399,8 @@ def _scaffold_vllm_bundle(
 
 def _upload_card_section(args, title: str, section: str) -> None:
     """Replace/append a titled section in the repo's README and re-upload it. Never raises."""
+    import re
+
     try:
         from huggingface_hub import HfApi, hf_hub_download
 
