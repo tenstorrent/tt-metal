@@ -18,6 +18,7 @@
 #include "api/debug/dprint.h"
 #include "internal/debug/stack_usage.h"
 #include "api/debug/ring_buffer.h"
+#include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 #if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h"
 #endif
@@ -144,6 +145,28 @@ inline void enable_cc_stack() {
 #endif
 }
 
+// Clear ClientL valid for packer remapper pairs in [lo, hi) so pairs from launch N cannot leak into launch N+1.
+// lo==0xFF means nothing was programmed.
+FORCE_INLINE void dfb_clear_packer_remapper_window(
+    uint32_t trisc_id, volatile tt_l1_ptr std::uint8_t* trisc_run, uint8_t lo, uint8_t hi) {
+#if defined(UCK_CHLKC_PACK)
+    if (lo == 0xFFu) {
+        return;
+    }
+    // Drop packer remapper pairs only after other TRISCs have drained.
+    // Clearing before that lets a Tensix-only counter update alias onto overlay counter id & 0xF
+    volatile tt_l1_ptr std::uint32_t* const neo_sync =
+        reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(trisc_run - trisc_id);
+    const std::uint32_t other_trisc_mask = ~(std::uint32_t{0xFFu} << (trisc_id * 8));
+    while ((*neo_sync & other_trisc_mask) != 0u) {
+    }
+    for (uint32_t i = lo; i < hi; i++) {
+        WRITE_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(i), 0u);
+    }
+    asm volatile("fence" ::: "memory");
+#endif
+}
+
 extern "C" std::uint32_t _start1() {
     configure_csr();
     // Raw read: hw_thread_idx has not been filled yet, and do_thread_crt1() below zeroes the .tbss
@@ -208,11 +231,10 @@ extern "C" std::uint32_t _start1() {
             std::uint32_t tt_l1_ptr* dfb_l1_base =
                 (std::uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
             std::uint32_t num_local_dfbs = launch_msg->kernel_config.local_cb_mask;
-#if defined(UCK_CHLKC_PACK)
             const DfbPackerRemapperRange packer_rmp = setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
 #else
-            setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
-#endif
+            // Math/SFPU TRISCs set up no DFBs, so there is no packer remapper window to clear.
+            const DfbPackerRemapperRange packer_rmp{};
 #endif
 
             // TODO: Remove MEM_L1_UNCACHED_BASE here and invalidate cache lines when PR #38124 is merged
@@ -261,14 +283,11 @@ extern "C" std::uint32_t _start1() {
             WAYPOINT("D");
             DEVICE_PRINT_KERNEL_FINISHED();
 
-#if defined(UCK_CHLKC_PACK)
-            // Tear down packer remapper pairs programmed this launch so they cannot leak into the next.
-            dfb_clear_packer_remapper_window(packer_rmp.lo, packer_rmp.hi);
-#endif
-
             // Signal completion
             DPRINT("SIGNALING COMPLETION {:x}\n", (std::uint32_t)*trisc_run);
             tensix_sync();
+
+            dfb_clear_packer_remapper_window(trisc_id, trisc_run, packer_rmp.lo, packer_rmp.hi);
         }
         *trisc_run = RUN_SYNC_MSG_DONE;
         DPRINT("COMPLETION SIGNED OFF {:x}\n", (std::uint32_t)*trisc_run);

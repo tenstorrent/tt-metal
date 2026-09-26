@@ -755,4 +755,140 @@ TEST_F(UnitMeshFixture, TensixIntraIsolatesOverlayTCs) {
     }
 }
 
+namespace {
+// Overlay-side (DM view) tile counter registers for Neo `llk_if`, counter `tc`. The NEO mirror in
+// read_live_tcs shows live occupancy only; an ack the counter rejects (idle counter, nothing posted)
+// leaves that unchanged and only sets the sticky error bit, so the alias check reads these directly.
+struct OverlayTcRegs {
+    uint32_t read_posted = 0;
+    uint32_t read_acked = 0;
+    uint32_t error_status = 0;
+};
+
+OverlayTcRegs read_overlay_tc(
+    distributed::MeshDevice& unit_mesh, const CoreCoord& logical_core, uint32_t llk_if, uint32_t tc) {
+    constexpr uint32_t base = 0x03003000u;        // TT_OVERLAY_LLK_TILE_COUNTERS_TT_LLK_INTERFACE_REG_MAP_BASE_ADDR
+    constexpr uint32_t llk_if_stride = 0x400u;    // ..._REG_MAP_SIZE
+    constexpr uint32_t counter_stride = 0x40u;    // ..._TILE_COUNTERS_0__REG_FILE_SIZE
+    constexpr uint32_t read_posted_off = 0x14u;   // ..._READ_POSTED_REG_OFFSET
+    constexpr uint32_t read_acked_off = 0x18u;    // ..._READ_ACKED_REG_OFFSET
+    constexpr uint32_t error_status_off = 0x1Cu;  // ..._ERROR_STATUS_REG_OFFSET
+    const uint32_t tc_base = base + llk_if * llk_if_stride + tc * counter_stride;
+    const CoreCoord virtual_core = unit_mesh.worker_core_from_logical_core(logical_core);
+    auto& cluster = MetalContext::instance().get_cluster();
+    const auto device_id = unit_mesh.get_device_ids()[0];
+    OverlayTcRegs regs;
+    regs.read_posted = cluster.read_core(device_id, virtual_core, tc_base + read_posted_off, sizeof(uint32_t))[0];
+    regs.read_acked = cluster.read_core(device_id, virtual_core, tc_base + read_acked_off, sizeof(uint32_t))[0];
+    regs.error_status =
+        cluster.read_core(device_id, virtual_core, tc_base + error_status_off, sizeof(uint32_t))[0] & 0x1u;
+    return regs;
+}
+}  // namespace
+
+// Pack returns as soon as its posts have landed; unpack spins before popping so its pops arrive after
+// pack firmware reaches the remapper teardown. Teardown must wait for unpack, or the pops alias onto
+// an overlay TC.
+TEST_F(UnitMeshFixture, TensixIntraRemapperTeardownDoesNotAliasOverlay) {
+    if (this->device().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Packer remapper teardown is Quasar-only";
+    }
+
+    constexpr uint32_t entry_size = 1024;
+    constexpr uint32_t num_entries = 4;
+    constexpr uint32_t num_threads = 1;
+    constexpr uint32_t posts_landed = 0x000A11A5u;
+    constexpr uint32_t unpack_spin = 1u << 20;
+    constexpr uint32_t client_l_tc_arg = ::dfb::TC_TENSIX_POOL_START;  // 16; aliases overlay TC 0 when unmapped
+    constexpr uint32_t total_bytes = num_entries * entry_size;
+
+    const uint32_t dfb_l1_addr =
+        static_cast<uint32_t>(this->device().allocator()->get_base_allocator_addr(HalMemType::L1));
+    const uint32_t scratch_l1_addr = dfb_l1_addr + total_bytes;
+
+    const m2::DFBSpecName DFB{"intra_dfb"};
+    const m2::KernelSpecName COMPUTE{"compute"};
+
+    m2::DataflowBufferSpec dfb_spec{
+        .unique_id = DFB,
+        .entry_size = entry_size,
+        .num_entries = num_entries,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
+
+    auto compute = make_compute_kernel(
+        COMPUTE, "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_intra_teardown_race.cpp", num_threads);
+    compute.dfb_bindings = {
+        {.dfb_spec_name = DFB,
+         .accessor_name = "out",
+         .endpoint_type = m2::DFBEndpointType::PRODUCER,
+         .access_pattern = m2::DFBAccessPattern::STRIDED},
+        {.dfb_spec_name = DFB,
+         .accessor_name = "in",
+         .endpoint_type = m2::DFBEndpointType::CONSUMER,
+         .access_pattern = m2::DFBAccessPattern::STRIDED},
+    };
+    compute.compile_time_args = {
+        {"scratch_l1_address", scratch_l1_addr},
+        {"posts_landed", posts_landed},
+        {"num_tiles", num_entries},
+        {"client_l_tc", client_l_tc_arg},
+        {"unpack_spin", unpack_spin},
+    };
+
+    const m2::NodeRangeSet node_set{m2::NodeRange{m2::NodeCoord{0, 0}, m2::NodeCoord{0, 0}}};
+    m2::ProgramSpec spec{
+        .name = "intra_remapper_teardown_race",
+        .kernels = {compute},
+        .dataflow_buffers = {dfb_spec},
+        .tensor_parameters = {},
+        .work_units = {m2::WorkUnitSpec{.name = "main", .kernels = {COMPUTE}, .target_nodes = node_set}},
+    };
+
+    Program program = m2::MakeProgramFromSpec(this->device(), spec);
+    program.impl().finalize_dataflow_buffer_configs();
+
+    auto intra_dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle(*DFB));
+    ASSERT_NE(intra_dfb, nullptr);
+    ASSERT_EQ(intra_dfb->remapper_programmer, experimental::dfb::detail::RemapperProgrammer::TENSIX_PACKER);
+    const auto& rc = intra_dfb->groups[0].hw_risc_configs[0];
+    const uint8_t client_l_tc = ::dfb::get_counter_id(rc.config.packed_tile_counter[0]);
+    ASSERT_EQ(client_l_tc, client_l_tc_arg);
+    const uint32_t alias_tc = client_l_tc & 0xFu;
+
+    m2::ProgramRunArgs params;
+    params.kernel_run_args = {{.kernel = COMPUTE}};
+    m2::SetProgramRunArgs(program, params);
+
+    std::vector<uint32_t> scratch_zero(1, 0);
+    slow_dispatch::WriteToL1(this->device(), CoreCoord(0, 0), scratch_l1_addr, scratch_zero);
+
+    const auto before = read_live_tcs(this->device(), CoreCoord(0, 0), /*neo_id=*/0);
+    ASSERT_GT(before.capacity.size(), client_l_tc);
+    const auto overlay_before = read_overlay_tc(this->device(), CoreCoord(0, 0), /*llk_if=*/0, alias_tc);
+    ASSERT_EQ(overlay_before.error_status, 0u)
+        << "Overlay TC" << alias_tc << " error bit already set before launch (sticky; left over from an earlier run)";
+
+    LaunchProgram(this->device(), std::move(program));
+
+    const auto live = read_live_tcs(this->device(), CoreCoord(0, 0), /*neo_id=*/0);
+    ASSERT_GT(live.capacity.size(), client_l_tc);
+    EXPECT_EQ(live.tiles_available[client_l_tc], 0u)
+        << "ClientL TC" << (uint32_t)client_l_tc << " still occupied — unpack acks missed it (remapper cleared early)";
+    EXPECT_EQ(live.space_available[alias_tc], before.space_available[alias_tc])
+        << "Overlay TC" << alias_tc << " space_available changed — teardown aliased a ClientL ack";
+    EXPECT_EQ(live.tiles_available[alias_tc], before.tiles_available[alias_tc])
+        << "Overlay TC" << alias_tc << " tiles_available changed — teardown aliased a ClientL update";
+
+    // Nothing in this program touches overlay TC alias_tc, so its cumulative counters and sticky error
+    // bit must be exactly as before
+    const auto overlay_after = read_overlay_tc(this->device(), CoreCoord(0, 0), /*llk_if=*/0, alias_tc);
+    EXPECT_EQ(overlay_after.read_posted, overlay_before.read_posted)
+        << "Overlay TC" << alias_tc << " cumulative posted changed — teardown aliased a ClientL post";
+    EXPECT_EQ(overlay_after.read_acked, overlay_before.read_acked)
+        << "Overlay TC" << alias_tc << " cumulative acked changed — teardown aliased a ClientL ack";
+    EXPECT_EQ(overlay_after.error_status, 0u)
+        << "Overlay TC" << alias_tc << " error bit set — an aliased ClientL update was rejected by the counter";
+}
+
 }  // namespace tt::tt_metal
