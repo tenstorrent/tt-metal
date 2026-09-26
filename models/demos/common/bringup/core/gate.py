@@ -162,6 +162,18 @@ def gate_env(spec: Spec, ledger: Ledger, tid: str) -> dict:
     return env
 
 
+FULL_MODEL_STEPS = ("integrate", "assemble", "contract", "perf")
+
+
+def gate_command(task: dict) -> str:
+    """The gate's shell command as run. Full-model steps skip run_safe_pytest's precompile pass: it runs the whole
+    test once more with stubbed checks, which doubles a model-sized gate for kernels that are almost all cached."""
+    cmd = task["gate"]["cmd"]
+    if task.get("step") in FULL_MODEL_STEPS and "precompile" not in cmd:
+        cmd = re.sub(r"(run_safe_pytest\.sh)(?=\s)", r"\1 --no-precompile", cmd)
+    return cmd
+
+
 def stage_paths(spec: Spec, ledger: Ledger, task: dict) -> list[str]:
     repo = spec.repo
     rel = lambda p: str(Path(p).resolve().relative_to(repo)) if Path(p).is_absolute() else p  # noqa: E731
@@ -281,13 +293,12 @@ def run_gate(
     log = log_dir(spec, ledger) / (f"{tid}.log" if record else f"{tid}.check.log")
     env = gate_env(spec, ledger, tid)
     env.update(extra_env or {})
+    cmd = gate_command(task)
     t0 = time.time()
     with open(log, "w") as f:
-        f.write(f"$ {task['gate']['cmd']}\n")
+        f.write(f"$ {cmd}\n")
         f.flush()
-        rc = subprocess.run(
-            task["gate"]["cmd"], shell=True, cwd=spec.repo, env=env, stdout=f, stderr=subprocess.STDOUT
-        ).returncode
+        rc = subprocess.run(cmd, shell=True, cwd=spec.repo, env=env, stdout=f, stderr=subprocess.STDOUT).returncode
     dur = time.time() - t0
 
     got = M.load(tid, ledger.results_dir)
