@@ -275,12 +275,18 @@ const tt::core_descriptor_t& MetalEnvImpl::get_core_descriptor_config(
         dispatch_cores_string = "tg_dispatch_cores";
     }
 
-    tt::tt_metal::CoreCoord grid_size = get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
+    const auto& soc_desc = get_cluster().get_soc_desc(device_id);
+    tt::tt_metal::CoreCoord grid_size = soc_desc.get_grid_size(CoreType::TENSIX);
     // For mock devices, control plane doesn't exist, use empty set
     std::unordered_set<tt::tt_metal::CoreCoord> logical_active_eth_cores;
     if (!get_cluster().is_mock_or_emulated()) {
         logical_active_eth_cores = get_control_plane().get_active_ethernet_cores(device_id);
     }
+    // The logical ETH cores this chip actually has. UMD numbers them 0..N-1 over the unharvested ethernet channels
+    // only (an ethernet-capable Blackhole has 12 of its 14 channels, an ethernet-less part such as the p100 has none),
+    // so an ETH dispatch descriptor written for the full ethernet grid can name logical cores that do not exist on
+    // this chip and cannot be translated.
+    const auto& logical_eth_cores = soc_desc.logical_eth_core_to_chan_map;
 
     dispatch_cores.reserve(desc_yaml[dispatch_cores_string].size());
     for (const auto& core_node : desc_yaml[dispatch_cores_string]) {
@@ -290,6 +296,15 @@ const tt::core_descriptor_t& MetalEnvImpl::get_core_descriptor_config(
             coord = RelativeCoreCoord({.x = core_node[0].as<int>(), .y = core_node[1].as<int>()});
             if (get_core_type_from_config(dispatch_core_config) == CoreType::ETH) {
                 auto logical_coord = get_core_coord_from_relative(coord, grid_size);
+                if (!logical_eth_cores.contains(logical_coord)) {
+                    log_debug(
+                        tt::LogMetal,
+                        "Core descriptor ETH dispatch core {} does not exist on device {} (harvested ethernet "
+                        "channel), skipping it",
+                        logical_coord.str(),
+                        device_id);
+                    continue;
+                }
                 if (logical_active_eth_cores.contains(logical_coord)) {
                     continue;
                 }
