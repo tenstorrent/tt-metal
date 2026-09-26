@@ -877,3 +877,9 @@ Results
 - The first `FAIL pcc_swap_out: pcc=0.000000` block in the log comes from the precompile collect pass.
 
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_sliding_moe_07_ffn_residual.py`
+
+## C.full_moe.attn_norm test (attempt 1)
+- Reviewed the rendered test for attn_norm, layer 5, full_moe. Replaced its body with the same checks as test_c_sliding_moe_attn_norm.py, LAYER = 5: PCC gate, output finite, rel L2 <= 0.03, per-token norm ratio in [0.97, 1.03]. The step is the same RMSNorm: plain w, eps 1e-6.
+- Measured on the layer-5 golden with a host-only script: fp32 reference rel 0.0024, ratio [0.9972, 1.0018]; bf16 math rel 0.0033. The mutations and what catches them are in the test docstring. Sum instead of mean and one zeroed row pass PCC; rel L2 or the norm ratio catches them. Layer 1's weight used instead of layer 5's fails PCC (0.33).
+- BRINGUP_IMPL=reference: pass (PCC 0.999997, rel 0.0024). BRINGUP_IMPL=stub: fails PCC. Default (device) gate run: pass (PCC 0.999996, rel 0.0030, ratio [0.9962, 1.0022]). The existing device norm module already covers layer 5.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_moe_attn_norm.py`
