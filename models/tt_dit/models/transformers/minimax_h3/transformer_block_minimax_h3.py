@@ -144,8 +144,9 @@ class MiniMaxH3TransformerBlock(Module):
             packer_l1_acc=True,
         )
         self.use_fused_agmm = ccl_manager.topology == ttnn.Topology.Ring and self.tp_factor > 1
-        # MINIMAX_H3_ADALN_GATHER=matmul: one-hot matmul instead of ttnn.embedding for the six modulation gathers.
-        self._adaln_gather = os.environ.get("MINIMAX_H3_ADALN_GATHER", "embedding")
+        # The six modulation gathers run as one-hot matmuls (exact, 3x cheaper than ttnn.embedding at 15 s);
+        # MINIMAX_H3_ADALN_GATHER=embedding restores the gather op.
+        self._adaln_gather = os.environ.get("MINIMAX_H3_ADALN_GATHER", "matmul")
         # MINIMAX_H3_FOLD_NORM_WEIGHT=1: multiply the norms' static weight into the (1 + scale) table rows instead
         # of into the per-token weight (same bf16 products, two full-sequence multiplies fewer per block).
         self._fold_norm_weight = os.environ.get("MINIMAX_H3_FOLD_NORM_WEIGHT") == "1"
