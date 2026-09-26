@@ -844,3 +844,10 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Verified: BRINGUP_IMPL=reference PASS (pcc 0.999998, rel 0.0021); stub FAIL (PCC). The device gate already PASSES (pcc 0.999995, rel 0.0032, ratio [0.9975, 1.0039])
   because the device module is the one the sliding ffn_residual uses. The `FAIL ... pcc=0.000000` line comes from the precompile pass (comp_pcc stub).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_ffn_residual.py`
+
+## S.global.14.test.1 (swap test, global steps 1-14, last ffn_residual)
+- Test = global swap 13 (`test_swap_global_13_post_ffn_norm.py`) with `ffn_residual` added to SWAPPED, as sliding swap 14. ffn_residual is a `residual` step whose output is block out; the generic residual checks apply (vs golden PCC >= 0.99, rel L2 <= 0.03; vs the CPU residual on the same device h_mid / ffn_out rel L2 <= 0.03, per-token norm ratio in [0.97, 1.03]); block out also rel L2 <= 0.02 (whole chunk and first 128 rows). These catch a dropped layer_scalar (layer 5: 1.53x). No thresholds changed.
+- BRINGUP_IMPL=reference: passes (pcc_swap_out 0.999996, block out rel 0.0029 / 0.0026, ffn_residual iso 0.0). BRINGUP_IMPL=stub: fails every check.
+- Device (the gate, all 14 steps on device): passes. pcc_swap_out 0.999969, block out rel 0.0079 / 0.0075; ffn_residual iso rel 0.0025, ratio [0.9988, 1.0028]; experts iso 0.0224, ratio [1.0007, 1.0214] (as before).
+- The pcc=0.000000 lines come from the precompile pass (comp_pcc stub).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_14_ffn_residual.py`
