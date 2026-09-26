@@ -5,7 +5,7 @@
 GPT-OSS GQA chunked-KV cache write + read-back PCC vs torch golden (round-trip + slot/layout).
 
 Allocates a small ``GptOssKVCache`` (a couple of users x layers), writes random natural-order K/V
-into each (user, layer) slot via the M3-style ``write_kv_chunk`` wrapper (which drives DeepSeek's
+into each (user, layer) slot via the ``write_kv_chunk`` wrapper (which drives DeepSeek's
 ``update_padded_kv_cache``), reads the caches back, inverts the block-cyclic SP layout to natural
 token order, and PCC-checks each slot against the torch tensor that was written.
 
