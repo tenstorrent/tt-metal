@@ -70,4 +70,141 @@ ALWI void erfc_tile(uint32_t idst) {
 
 #endif
 
+#if !defined(TT_POLY_LLK_DISABLE) &&                                                                                 \
+    ((defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)) && defined(TT_METAL_SFPU_SINGLE_TILE_DST) &&                \
+     TT_METAL_SFPU_SINGLE_TILE_DST == 1 && defined(TT_POLY_BF16_UNARY_CONTEXT) && TT_POLY_BF16_UNARY_CONTEXT == 1 && \
+     defined(SFPU_OP_PROGRAM_INIT_0))
+#define TT_POLY_ERF_BF16_ROUTE_ACTIVE 1
+#else
+#define TT_POLY_ERF_BF16_ROUTE_ACTIVE 0
+#endif
+
+/** Internal BF16 typed-compiler route; public callers retain the stock entry point. */
+template <bool fast_and_approx = true>
+ALWI void erf_tt_poly_bf16_tile(uint32_t idst) {
+#if !TT_POLY_ERF_BF16_ROUTE_ACTIVE
+    erf_tile<fast_and_approx>(idst);
+#else
+    if constexpr (DST_ACCUM_MODE) {
+        erf_tile<fast_and_approx>(idst);
+    } else {
+        if (idst != 0) {
+            erf_tile_init<fast_and_approx>();
+            erf_tile<fast_and_approx>(idst);
+#if !TT_POLY_ERF_BF16_ROUTE_ACTIVE
+            erf_tile_init<fast_and_approx>();
+#else
+            if constexpr (DST_ACCUM_MODE) {
+                erf_tile_init<fast_and_approx>();
+            } else {
+                MATH(SFPU_UNARY_INIT_FN(erf, sfpu::init_erf_tt_poly_bf16, (fast_and_approx)));
+            }
+#endif
+            return;
+        }
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erf_tt_poly_bf16, (32 /* ITERATIONS */), idst, VectorMode::None));
+    }
+#endif
+}
+
+/** Initialize the internal BF16 typed-compiler route. */
+template <bool fast_and_approx = true>
+ALWI void erf_tt_poly_bf16_tile_init() {
+#if !TT_POLY_ERF_BF16_ROUTE_ACTIVE
+    erf_tile_init<fast_and_approx>();
+#else
+    if constexpr (DST_ACCUM_MODE) {
+        erf_tile_init<fast_and_approx>();
+    }
+#endif
+}
+
+/** Initialize the selected single-tile program once, before its tile loop. */
+template <bool fast_and_approx = true>
+ALWI void erf_tt_poly_bf16_program_init() {
+#if TT_POLY_ERF_BF16_ROUTE_ACTIVE
+    if constexpr (!(DST_ACCUM_MODE)) {
+#if !TT_POLY_ERF_BF16_ROUTE_ACTIVE
+        erf_tile_init<fast_and_approx>();
+#else
+        if constexpr (DST_ACCUM_MODE) {
+            erf_tile_init<fast_and_approx>();
+        } else {
+            MATH(SFPU_UNARY_INIT_FN(erf, sfpu::init_erf_tt_poly_bf16, (fast_and_approx)));
+        }
+#endif
+    }
+#endif
+}
+
+#undef TT_POLY_ERF_BF16_ROUTE_ACTIVE
+
+#if !defined(TT_POLY_LLK_DISABLE) &&                                                                                 \
+    ((defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)) && defined(TT_METAL_SFPU_SINGLE_TILE_DST) &&                \
+     TT_METAL_SFPU_SINGLE_TILE_DST == 1 && defined(TT_POLY_BF16_UNARY_CONTEXT) && TT_POLY_BF16_UNARY_CONTEXT == 1 && \
+     defined(SFPU_OP_PROGRAM_INIT_0))
+#define TT_POLY_ERFC_BF16_ROUTE_ACTIVE 1
+#else
+#define TT_POLY_ERFC_BF16_ROUTE_ACTIVE 0
+#endif
+
+/** Internal BF16 typed-compiler route; public callers retain the stock entry point. */
+ALWI void erfc_tt_poly_bf16_tile(uint32_t idst) {
+#if !TT_POLY_ERFC_BF16_ROUTE_ACTIVE
+    erfc_tile(idst);
+#else
+    if constexpr (DST_ACCUM_MODE) {
+        erfc_tile(idst);
+    } else {
+        if (idst != 0) {
+            erfc_tile_init();
+            erfc_tile(idst);
+#if !TT_POLY_ERFC_BF16_ROUTE_ACTIVE
+            erfc_tile_init();
+#else
+            if constexpr (DST_ACCUM_MODE) {
+                erfc_tile_init();
+            } else {
+                MATH(SFPU_UNARY_INIT_FN(erfc, sfpu::init_erfc_tt_poly_bf16, (true /*APPROXIMATION_MODE*/)));
+            }
+#endif
+            return;
+        }
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erfc_tt_poly_bf16, (32 /* ITERATIONS */), idst, VectorMode::None));
+    }
+#endif
+}
+
+/** Initialize the internal BF16 typed-compiler route. */
+ALWI void erfc_tt_poly_bf16_tile_init() {
+#if !TT_POLY_ERFC_BF16_ROUTE_ACTIVE
+    erfc_tile_init();
+#else
+    if constexpr (DST_ACCUM_MODE) {
+        erfc_tile_init();
+    }
+#endif
+}
+
+/** Initialize the selected single-tile program once, before its tile loop. */
+ALWI void erfc_tt_poly_bf16_program_init() {
+#if TT_POLY_ERFC_BF16_ROUTE_ACTIVE
+    if constexpr (!(DST_ACCUM_MODE)) {
+#if !TT_POLY_ERFC_BF16_ROUTE_ACTIVE
+        erfc_tile_init();
+#else
+        if constexpr (DST_ACCUM_MODE) {
+            erfc_tile_init();
+        } else {
+            MATH(SFPU_UNARY_INIT_FN(erfc, sfpu::init_erfc_tt_poly_bf16, (true /*APPROXIMATION_MODE*/)));
+        }
+#endif
+    }
+#endif
+}
+
+#undef TT_POLY_ERFC_BF16_ROUTE_ACTIVE
+
 }  // namespace ckernel

@@ -84,3 +84,22 @@ void erfc_init() {
 }
 
 }  // namespace ckernel::sfpu
+
+#if !defined(TT_POLY_LLK_DISABLE)
+#include "ckernel_sfpu_erfc_bf16.h"
+#endif
+
+namespace ckernel::sfpu {
+
+#if !defined(TT_POLY_LLK_DISABLE)
+template <int ITERATIONS = 8>
+inline void calculate_erfc_tt_poly_bf16() {
+    ckernel::sfpu::ttpoly::calculate_abs_exp_correction<ttpoly_generated::ErfcBf16Config, ITERATIONS>();
+}
+template <auto...>
+inline void init_erfc_tt_poly_bf16() {
+    ckernel::sfpu::ttpoly::init_abs_exp_correction<ttpoly_generated::ErfcBf16Config>();
+}
+#endif
+
+}  // namespace ckernel::sfpu
