@@ -903,3 +903,19 @@ Results
   trail PCC 0.9983, experts_out 0.9993. The first FAIL/pcc=0 block in each log comes from the precompile pass.
 
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_full_moe_01_attn_norm.py`
+
+## C.full_moe.attention test (attempt 1), 2026-09-26
+- Replaced the rendered one-liner in `tests/bringup/test_c_full_moe_attention.py` with the body of
+  `test_c_full_dense_attention.py`, LAYER = 5: PCC gate, finite, rel L2 <= 0.015 whole chunk and first 128 rows,
+  per-token norm ratio in [0.97, 1.03]. Added worst per-token rel L2 <= 0.06 and asserts that layer 5 is full
+  (not sliding) with no sink.
+- Why: layer 5 uses the same attention as layer 0 (4 KV heads, theta 1e7, no sink), with its own weights. I measured
+  the mutations again on the layer-5 golden with a host-only CPU script (/tmp, not kept). Numbers are in the test
+  docstring. The smallest structural bug is non-causal: rel 0.0335 whole, 0.048 on the first rows. The noise estimate
+  (bf16 + bfp8 weights) is 0.0027. RoPE from 0, value scale, 128**-0.5, window and no-prefix bugs all pass PCC 0.99,
+  and rel L2 catches each one. Zeroed rows are caught by the norm ratio.
+- BRINGUP_IMPL=reference: PASS (PCC 0.999999, rel 0.0017). BRINGUP_IMPL=stub: FAIL (PCC 0).
+- Device (default) gate: PASS. PCC 0.999990, rel 0.0051 / first rows 0.0050, ratio [0.9933, 1.0032], worst row
+  0.0095. The existing `tt/attention.py` full-attention module already covers layer 5. The first `FAIL pcc=0` line in
+  the log comes from the precompile collect pass.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_moe_attention.py`
