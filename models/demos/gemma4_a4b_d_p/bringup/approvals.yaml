@@ -1,11 +1,9 @@
 intake:
   by: dnijemcevic
-  at: '2026-09-25T22:13:27'
+  at: '2026-09-26T01:13:38'
   files:
-    models/demos/gemma4_a4b_d_p/bringup/spec.yaml: 881d3afbb5df3c6792b9661b2ec5e31231bf232453213a54734765bf4f74e4b9
-  note: 'owner: deterministic canonical prompt; chat-wrapped with the book as the
-    model turn (measured 67% top-1 vs 18% raw, 13% user turn); target and ladder as
-    the ERNIE run'
+    models/demos/gemma4_a4b_d_p/bringup/spec.yaml: 4422c53a03bc78078cdfc0abdb493decf78b8d285b28a208919d91ac4979cc97
+  note: 'owner: always FABRIC_2D (2026-09-26)'
 plan:
   by: dnijemcevic
   at: '2026-09-25T23:11:27'

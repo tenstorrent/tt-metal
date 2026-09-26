@@ -38,6 +38,7 @@ DEVICE_STEPS = {
         "post_mlp_norm",
         "router",
         "moe_norm",
+        "experts",
     },
     "global": set(),
 }
@@ -146,6 +147,35 @@ def _router_host_fn(mesh, module):
     return fn
 
 
+def _experts_module(mesh, spec, layer, loader=None):
+    """TtExperts (EP=4, 32 experts per chip, fused unified_routed_expert_moe with GeluTanh) for one layer."""
+    from models.demos.common.bringup.reference.golden import hf_path
+    from models.demos.gemma4_a4b_d_p.reference.gemma4_ref import PREFIX, WeightLoader
+    from models.demos.gemma4_a4b_d_p.tt.experts import TtExperts
+
+    loader = loader or WeightLoader(hf_path(spec))
+    p = f"{PREFIX}layers.{layer}.experts."
+    chunk = max([int(spec.get("target.chunk"))] + [int(r.get("chunk", 0)) for r in spec.data.get("ladder", [])])
+    return TtExperts(mesh, layer, loader.get(p + "gate_up_proj"), loader.get(p + "down_proj"), max_seq_len=chunk)
+
+
+def _experts_host_fn(mesh, module):
+    """fn(ctx, moe_norm_host [S, H], dense_routing_host [S, E]) -> experts_out host [S, H]."""
+    import ttnn
+    from models.demos.gemma4_a4b_d_p.tt.rms_norm import replicated_to_host, to_device_replicated
+
+    def fn(ctx, x, r):
+        xd = to_device_replicated(mesh, x)
+        rd = to_device_replicated(mesh, r)
+        yd = module(xd, dense=rd)
+        y = replicated_to_host(yd)
+        for t in (xd, rd, yd):
+            ttnn.deallocate(t)
+        return y.to(x.dtype)
+
+    return fn
+
+
 def _attention_module(mesh, spec, layer, loader=None, cfg=None):
     """TtSlidingAttention for a sliding layer, loading only its attention weights (not the experts)."""
     import os
@@ -191,6 +221,8 @@ def device_component(mesh, spec, layer, step):
         return _host_fn(mesh, _mlp_module(mesh, spec, layer))
     if step == "router":
         return _router_host_fn(mesh, _router_module(mesh, spec, layer))
+    if step == "experts":
+        return _experts_host_fn(mesh, _experts_module(mesh, spec, layer))
     if step == "attention":
         from models.demos.gemma4_a4b_d_p.tt.attention import TtKVCacheSliding
 
@@ -266,6 +298,8 @@ class HybridDeviceModel:
                 ov["mlp"] = _host_fn(mesh, _mlp_module(mesh, spec, i, loader))
             if "router" in steps:
                 ov["router"] = _router_host_fn(mesh, _router_module(mesh, spec, i, loader))
+            if "experts" in steps:
+                ov["experts"] = _experts_host_fn(mesh, _experts_module(mesh, spec, i, loader))
             if "attention" in steps:
                 module, _ = _attention_module(mesh, spec, i, loader, self.cfg)
                 ov["attention"] = _attention_host_fn(mesh, module, self.cfg, lambda ctx: ctx.extra["dev_cache"])
