@@ -206,3 +206,29 @@ def test_knowledge_files_are_well_formed(tmp_path):
     bad.write_text("## API behavior\n- **x.** Symptom: a. Cause: b.\n")
     errs, _ = kcheck.check_known_issues(bad)
     assert any("lacks" in e for e in errs) and any("missing section" in e for e in errs)
+
+
+def test_hf_sanity_records_revision_and_accuracy(fx, tmp_path):
+    from models.demos.common.bringup.intake import check_hf_sanity as H
+    from models.demos.common.bringup.reference import prompt as P
+    from models.demos.common.bringup.selftest.conftest import got
+
+    s = Spec.load(fx())
+    P.build(s)
+    H.main(["--spec", str(s.path)])
+    m = got()
+    assert m["revision_ok"] == 1 and m["revision_pinned"] == 0 and 0 <= m["text_top1_acc"] <= 1
+    pinned = Spec.load(fx(hf={"revision": "a" * 40}))
+    H.main(["--spec", str(pinned.path)])
+    assert got()["revision_ok"] == 0  # pinned, but the local checkout's revision is unknown or different
+    d = tmp_path / "ckpt" / ".cache" / "huggingface" / "download"
+    d.mkdir(parents=True)
+    (d / "config.json.metadata").write_text("4d7ae4984b7db7de8f8457170b3f1a419ee76d52\nabc\n")
+    assert H.local_revision(tmp_path / "ckpt") == "4d7ae4984b7db7de8f8457170b3f1a419ee76d52"
+
+
+def test_ledger_gates_the_intake_sanity(fx):
+    s = Spec.load(fx(intake={"smoke": {"prompt": "capital of France?", "expect": "Paris"}}, text={"min_top1": 0.5}))
+    r1 = generate(s, Reference())["tasks"][0]
+    assert "check_hf_sanity" in r1["gate"]["cmd"]
+    assert r1["gate"]["metrics"]["text_top1_acc"] == ">= 0.5" and r1["gate"]["metrics"]["smoke_ok"] == "== 1"

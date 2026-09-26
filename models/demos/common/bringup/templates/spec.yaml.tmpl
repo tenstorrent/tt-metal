@@ -20,11 +20,24 @@ state:
   tensors: [key, value]            # names state_tensors() returns per layer
   format: separate_k_v
 thresholds: {component: 0.99, block: 0.98, layer: 0.97, state: 0.97, final_hidden: 0.97, top5: 0.9}
-text: {source: models/tt_transformers/tests/tale-of-two-cities.txt.bz2, bos: true}
-hf: {parity_seq: 512}
+text:                              # the canonical prompt, built once at R.1 (reference/prompt.py)
+  source: models/tt_transformers/tests/tale-of-two-cities.txt.bz2
+  wrap: raw                        # raw (base checkpoints) | model_turn (instruction-tuned) | user_turn
+  min_top1: 0.4                    # HF next-token accuracy floor on the prompt (intake sanity gate)
+hf:
+  revision: null                   # commit sha of the checkpoint (from the download metadata)
+  parity_seq: 2048                 # must exceed any sliding window
+intake:
+  smoke: null                      # the model card's usage example: {prompt: "...", expect: "..."}
 checkpoint:
   expect: {}                       # tensor glob -> shape ("*" = any); filled by intake from the checkpoint index
   config: {}                       # text-config fields that must match
 contract: {adapter: $model}
-agents: {model: null, timeout_s: 14400}
+agents:
+  model: null
+  timeout_s: 14400
+  rules: []                        # the owner's rules, shown in every brief (e.g. "always use 2D fabric")
+  read: {}                         # per role: files every brief of that role lists
+  policy: {}                       # per role: {attempts, escalate: debugger | stop}
+dashboard: {styles: [standard]}    # standard | teletext | both
 paths: {}                          # defaults: art /localdev/$$USER/bringup/<model>; hf, golden, tt_cache under it
