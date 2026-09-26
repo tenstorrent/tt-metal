@@ -20,7 +20,6 @@ struct ConvertToHWCDeviceOperation {
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<ConvertToHWCProgramFactory>;
-    using shared_variables_t = ConvertToHWCProgramFactory::shared_variables_t;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
@@ -35,6 +34,6 @@ struct ConvertToHWCDeviceOperation {
 namespace ttnn::prim {
 
 ttnn::experimental::prim::ConvertToHWCDeviceOperation::tensor_return_value_t convert_to_hwc(
-    const Tensor& input, const MemoryConfig& memory_config, const DataType& dtype);
+    const Tensor& input, const tt::tt_metal::MemoryConfig& memory_config, const tt::tt_metal::DataType& dtype);
 
 }  // namespace ttnn::prim

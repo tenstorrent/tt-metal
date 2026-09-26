@@ -3,8 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "convert_to_chw_program_factory.hpp"
+
 #include "tt-metalium/tt_backend_api_types.hpp"
 #include "ttnn/tensor/types.hpp"
+
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt_stl/assert.hpp>
+
+#include <algorithm>
+#include <vector>
 
 namespace ttnn::experimental::prim {
 
@@ -13,30 +22,48 @@ using namespace tt::constants;
 namespace {
 // Helper function to set runtime arguments for reader, writer, and compute kernels
 void set_runtime_args_for_all_kernels(
-    tt::tt_metal::Program& program,
-    const std::vector<CoreCoord>& cores,
-    tt::tt_metal::KernelHandle reader_kernel_id,
-    tt::tt_metal::KernelHandle writer_kernel_id,
-    tt::tt_metal::KernelHandle compute_kernel_id,
+    tt::tt_metal::KernelDescriptor& reader_kernel,
+    tt::tt_metal::KernelDescriptor& writer_kernel,
+    tt::tt_metal::KernelDescriptor& compute_kernel,
+    const std::vector<tt::tt_metal::CoreCoord>& cores,
     uint32_t total_tiles_per_core) {
-    std::vector<std::vector<uint32_t>> reader_runtime_args = {cores.size(), {0}};   // (num_tiles_per_core)
-    std::vector<std::vector<uint32_t>> writer_runtime_args = {cores.size(), {0}};   // (num_tiles_per_core)
-    std::vector<std::vector<uint32_t>> compute_runtime_args = {cores.size(), {0}};  // (num_tiles_per_core)
+    const std::vector<uint32_t> runtime_args = {total_tiles_per_core};  // (num_tiles_per_core)
+    std::for_each(cores.cbegin(), cores.cend(), [&](const tt::tt_metal::CoreCoord& core) {
+        reader_kernel.runtime_args.emplace_back(core, runtime_args);
+        writer_kernel.runtime_args.emplace_back(core, runtime_args);
+        compute_kernel.runtime_args.emplace_back(core, runtime_args);
+    });
+}
 
-    for (uint32_t i = 0; i < cores.size(); i++) {
-        reader_runtime_args[i][0] = total_tiles_per_core;
-        writer_runtime_args[i][0] = total_tiles_per_core;
-        compute_runtime_args[i][0] = total_tiles_per_core;
-    }
-    SetRuntimeArgs(program, reader_kernel_id, cores, reader_runtime_args);
-    SetRuntimeArgs(program, writer_kernel_id, cores, writer_runtime_args);
-    SetRuntimeArgs(program, compute_kernel_id, cores, compute_runtime_args);
+tt::tt_metal::CBDescriptor make_chw_circular_buffer(
+    const tt::tt_metal::CoreRangeSet& core_grid,
+    uint32_t index,
+    uint32_t total_size,
+    uint32_t page_size,
+    const tt::DataFormat& format,
+    tt::tt_metal::Buffer* buffer) {
+    log_debug(
+        tt::LogType::LogOp,
+        "Creating CB at index {} with total size {} B and page size {} B",
+        index,
+        total_size,
+        page_size);
+    return tt::tt_metal::CBDescriptor{
+        .total_size = total_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(index),
+            .data_format = format,
+            .page_size = page_size,
+        }}},
+        .buffer = buffer,
+    };
 }
 }  // namespace
 
-ConvertToCHWProgramFactory::cached_program_t ConvertToCHWProgramFactory::create(
+tt::tt_metal::ProgramDescriptor ConvertToCHWProgramFactory::create_descriptor(
     const ConvertToCHWParams& /*operation_attributes*/, const Tensor& tensor_args, Tensor& tensor_return_value) {
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    tt::tt_metal::ProgramDescriptor desc;
 
     const auto& a = tensor_args;
     auto& output = tensor_return_value;
@@ -63,24 +90,10 @@ ConvertToCHWProgramFactory::cached_program_t ConvertToCHWProgramFactory::create(
 
     log_debug(tt::LogType::LogOp, "Processing {} tiles per core ({} total tiles)", total_tiles_per_core, total_tiles);
 
-    const auto create_circular_buffer = [&program, &input_core_grid](
-                                            uint32_t index,
-                                            uint32_t total_size,
-                                            uint32_t page_size,
-                                            const tt::DataFormat& format,
-                                            tt::tt_metal::Buffer* buffer = nullptr) -> tt::tt_metal::CBHandle {
-        log_debug(
-            tt::LogType::LogOp,
-            "Creating CB at index {} with total size {} B and page size {} B",
-            index,
-            total_size,
-            page_size);
-        auto config = tt::tt_metal::CircularBufferConfig(total_size, {{index, format}}).set_page_size(index, page_size);
-        if (buffer != nullptr) {
-            config = config.set_globally_allocated_address(*buffer);
-        }
-        return tt::tt_metal::CreateCircularBuffer(program, input_core_grid, config);
-    };
+    auto* input_buffer = a.buffer();
+    auto* output_buffer = output.buffer();
+    TT_FATAL(input_buffer != nullptr, "Input buffer must be allocated on device");
+    TT_FATAL(output_buffer != nullptr, "Output buffer must be allocated on device");
 
     const tt::DataFormat input_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     const uint32_t input_tile_size = tt::tile_size(input_format);
@@ -91,93 +104,87 @@ ConvertToCHWProgramFactory::cached_program_t ConvertToCHWProgramFactory::create(
     const uint32_t cb_in_id = tt::CBIndex::c_0;
     const uint32_t cb_in_total_size = total_tiles_per_core * input_tile_size;
     const uint32_t cb_in_page_size = input_tile_size;
-    const auto cb_in = create_circular_buffer(cb_in_id, cb_in_total_size, cb_in_page_size, input_format, a.buffer());
+    desc.cbs.push_back(make_chw_circular_buffer(
+        input_core_grid, cb_in_id, cb_in_total_size, cb_in_page_size, input_format, input_buffer));
 
     const tt::DataFormat output_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     const uint32_t cb_out_id = tt::CBIndex::c_1;
     const uint32_t element_size = tt::datum_size(output_format);
     const uint32_t cb_out_total_size = output_shard_shape[0] * output_shard_shape[1] * element_size;
     const uint32_t cb_out_page_size = output_shard_shape[1] * element_size;
-    const auto cb_out =
-        create_circular_buffer(cb_out_id, cb_out_total_size, cb_out_page_size, output_format, output.buffer());
+    desc.cbs.push_back(make_chw_circular_buffer(
+        input_core_grid, cb_out_id, cb_out_total_size, cb_out_page_size, output_format, output_buffer));
 
     const uint32_t cb_in_transpose_id = tt::CBIndex::c_2;
     const uint32_t cb_in_transpose_total_size = 16 * intermediary_tile_size;
     const uint32_t cb_in_transpose_page_size = intermediary_tile_size;
-    create_circular_buffer(
-        cb_in_transpose_id, cb_in_transpose_total_size, cb_in_transpose_page_size, intermediary_format);
+    desc.cbs.push_back(make_chw_circular_buffer(
+        input_core_grid,
+        cb_in_transpose_id,
+        cb_in_transpose_total_size,
+        cb_in_transpose_page_size,
+        intermediary_format,
+        nullptr));
 
     std::vector<uint32_t> reader_compile_time_args = {cb_in_id};
     std::vector<uint32_t> writer_compile_time_args = {cb_in_transpose_id, cb_out_id, C};
     std::vector<uint32_t> compute_compile_time_args = {cb_in_id, cb_in_transpose_id};
 
-    auto reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_chw/device/kernels/reader_convert_to_chw.cpp",
-        input_core_grid,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+    tt::tt_metal::KernelDescriptor reader_kernel;
+    reader_kernel.kernel_source =
+        "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_chw/device/kernels/reader_convert_to_chw.cpp";
+    reader_kernel.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+    reader_kernel.core_ranges = input_core_grid;
+    reader_kernel.compile_time_args = std::move(reader_compile_time_args);
+    reader_kernel.config = tt::tt_metal::ReaderConfigDescriptor{};
 
-    auto writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_chw/device/kernels/writer_convert_to_chw.cpp",
-        input_core_grid,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+    tt::tt_metal::KernelDescriptor writer_kernel;
+    writer_kernel.kernel_source =
+        "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_chw/device/kernels/writer_convert_to_chw.cpp";
+    writer_kernel.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+    writer_kernel.core_ranges = input_core_grid;
+    writer_kernel.compile_time_args = std::move(writer_compile_time_args);
+    writer_kernel.config = tt::tt_metal::WriterConfigDescriptor{};
 
-    auto compute_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_chw/device/kernels/convert_to_chw.cpp",
-        input_core_grid,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-            .fp32_dest_acc_en = false,
-            .math_approx_mode = false,
-            .compile_args = compute_compile_time_args});
+    tt::tt_metal::KernelDescriptor compute_kernel;
+    compute_kernel.kernel_source =
+        "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_chw/device/kernels/convert_to_chw.cpp";
+    compute_kernel.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+    compute_kernel.core_ranges = input_core_grid;
+    compute_kernel.compile_time_args = std::move(compute_compile_time_args);
+    compute_kernel.config = tt::tt_metal::ComputeConfigDescriptor{
+        .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+        .fp32_dest_acc_en = false,
+        .dst_full_sync_en = false,
+        .math_approx_mode = false,
+    };
 
     // Set initial runtime args
-    tt::tt_metal::Buffer* a_buffer = a.buffer();
-    tt::tt_metal::Buffer* output_buffer = output.buffer();
-    UpdateDynamicCircularBufferAddress(program, cb_in, *a_buffer);
-    UpdateDynamicCircularBufferAddress(program, cb_out, *output_buffer);
+    set_runtime_args_for_all_kernels(reader_kernel, writer_kernel, compute_kernel, input_cores, total_tiles_per_core);
 
-    set_runtime_args_for_all_kernels(
-        program, input_cores, reader_kernel_id, writer_kernel_id, compute_kernel_id, total_tiles_per_core);
-
-    return cached_program_t{
-        std::move(program),
-        shared_variables_t{
-            .cb_in = cb_in,
-            .cb_out = cb_out,
-            .input_cores = input_cores,
-            .reader_kernel_id = reader_kernel_id,
-            .writer_kernel_id = writer_kernel_id,
-            .compute_kernel_id = compute_kernel_id,
-            .total_tiles_per_core = total_tiles_per_core,
-        }};
+    desc.kernels.push_back(std::move(reader_kernel));
+    desc.kernels.push_back(std::move(writer_kernel));
+    desc.kernels.push_back(std::move(compute_kernel));
+    return desc;
 }
 
 void ConvertToCHWProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
+    tt::tt_metal::Program& program,
     const ConvertToCHWParams& /*operation_attributes*/,
     const Tensor& tensor_args,
-    Tensor& output) {
-    auto& program = cached_program.program;
-    const auto& cb_in = cached_program.shared_variables.cb_in;
-    const auto& cb_out = cached_program.shared_variables.cb_out;
-    const auto& input_cores = cached_program.shared_variables.input_cores;
-    const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
-    const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-    const auto& compute_kernel_id = cached_program.shared_variables.compute_kernel_id;
-    const auto& total_tiles_per_core = cached_program.shared_variables.total_tiles_per_core;
-
+    Tensor& output,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     // buffers are not provided so we take them from output/input tensors
-    auto* output_dram_buffer = output.buffer();
-    auto* input_dram_buffer = tensor_args.buffer();
+    auto* input_buffer = tensor_args.buffer();
+    auto* output_buffer = output.buffer();
+    TT_FATAL(input_buffer != nullptr, "Input buffer must be allocated on device");
+    TT_FATAL(output_buffer != nullptr, "Output buffer must be allocated on device");
 
-    UpdateDynamicCircularBufferAddress(program, cb_in, *input_dram_buffer);
-    UpdateDynamicCircularBufferAddress(program, cb_out, *output_dram_buffer);
-
-    set_runtime_args_for_all_kernels(
-        program, input_cores, reader_kernel_id, writer_kernel_id, compute_kernel_id, total_tiles_per_core);
+    // Tile count is keyed by the tensor spec; only the sharded CB addresses move.
+    tt::tt_metal::ProgramDescriptor cb_addr_only;
+    cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = input_buffer});
+    cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = output_buffer});
+    tt::tt_metal::apply_descriptor_runtime_args(program, cb_addr_only);  // override-rebuild-ok: cb-addr-only
 }
 
 }  // namespace ttnn::experimental::prim
