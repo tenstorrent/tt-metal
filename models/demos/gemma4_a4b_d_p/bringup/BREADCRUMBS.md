@@ -565,3 +565,15 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_attn_norm.py`
 - Re-issued brief (same attempt): the test body above was already in place. The only change was the docstring's template line, "layer 0" -> "layer 5". Re-verified:
   reference PASS (pcc 0.999997, rel 0.0024, ratio [0.9985, 1.0025]); stub FAIL (PCC 0.0); device gate PASS (pcc 0.999996, rel 0.0030, ratio [0.9963, 1.0036]).
+
+## S.global.01 test (run1, attempt 1)
+- Replaced the one-line template body with the checks from test_swap_sliding_01_attn_norm.py (BLOCK_TYPE = global, layer 5). The gated metric stays `pcc_swap_out`
+  >= 0.98. The test also asserts attn_norm's own output vs golden (PCC >= 0.99, rel L2 <= 0.03) and block out rel L2 <= 0.01 (informational metrics
+  `rel_l2_swap_out`, `rel_l2_swap_attn_norm_out`).
+- Why: measured on the CPU (layer 5, s4096 chunk 1, block out PCC / rel | step PCC / rel): reference 0.999996 / 0.0029 | 1.0 / 0.0024; `1 + w` 0.9878 / 0.156
+  (passes 0.98) | 0.818 / 1.69; no weight 0.9782 / 0.208; wrong weight (post_attention) 0.9766 / 0.215; 5% noise 0.99996 / 0.0094 (under 0.01) | 0.9987 / 0.050; x2
+  same as the reference at block out | rel 1.0 at the step; zero 0.962 / 0.274. The step check catches noise and scale errors, and block-out rel L2 catches `1 + w`.
+  The measurement script was /tmp/g5_variants.py (CPU only, not kept).
+- Verified: BRINGUP_IMPL=reference PASS (0.999996, rel 0.0029, step rel 0.0024); stub FAIL (block PCC 0.962, rel 0.274, step rel 1.0). The device gate already PASSES:
+  block PCC 0.999996, rel 0.0028, step PCC 0.999996, rel 0.0030. The `FAIL ... pcc=0.000000` / rel 0.3139 lines come from the precompile pass (comp_pcc stub).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_01_attn_norm.py`
