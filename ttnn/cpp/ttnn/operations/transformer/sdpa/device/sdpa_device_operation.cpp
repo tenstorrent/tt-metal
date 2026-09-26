@@ -589,11 +589,20 @@ SDPAOperation::create_op_performance_model(
     const uint32_t Sq = q_shape[2];
     const uint32_t DH = q_shape[3];
 
-    // Compute Sk based on chunked mode
-    const uint32_t Sk = (is_chunked_prefill)
-                            ? (args.chunk_start_idx.has_value() ? q_shape[2] + args.chunk_start_idx.value()
-                                                                : k_shape[2])  // flexible: use K length as upper bound
-                            : k_shape[2];
+    // Compute Sk based on chunked mode. In chunked/paged-KV mode k_shape[2] is the paged-cache block
+    // size, not the KV sequence length, so derive the KV length from the page table the same way
+    // validate_chunked_mode does (num_pages_per_user * block_size, honouring
+    // paged_cache_geometry.block_size when the override is active).
+    uint32_t Sk = k_shape[2];
+    if (is_chunked_prefill) {
+        if (args.chunk_start_idx.has_value()) {
+            Sk = q_shape[2] + args.chunk_start_idx.value();
+        } else if (tensor_args.page_table.has_value()) {
+            const uint32_t k_page_size =
+                args.paged_cache_geometry.active() ? args.paged_cache_geometry.block_size : k_shape[2];
+            Sk = tensor_args.page_table->logical_shape()[1] * k_page_size;
+        }
+    }
 
     // Compute DV based on MLA mode
     // Note: For MLA without V, use K's head dimension; otherwise use V's head dimension

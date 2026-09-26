@@ -108,8 +108,14 @@ void kernel_main() {
 #endif
                 noc.async_read_barrier();
                 dfb_page_table.push_back(1);
+#ifdef PAGE_TABLE_ENTRY_UINT16
+                // A page table sharded into L1 stores UINT16 entries; interleaved DRAM uses UINT32.
+                volatile tt_l1_ptr uint16_t* page_table_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(page_table_wr_ptr);
+#else
                 volatile tt_l1_ptr uint32_t* page_table_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_wr_ptr);
+#endif
 
                 const uint32_t virtual_block_id = update_idx / block_size;
                 const uint32_t physical_block_id = page_table_ptr[virtual_block_id];
