@@ -53,8 +53,8 @@ __attribute__((noinline)) void realtime_profiler_read_and_enqueue(bool buffer_a)
     noc_async_read(dispatch_noc_addr, slot_addr, realtime_profiler_timestamp_size);
     noc_async_read_barrier();
 
-    const uint32_t id = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot_addr)[2];
-    if (id != REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID) {
+    const uint32_t runtime_id = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot_addr)[2];
+    if (runtime_id != REALTIME_PROFILER_UNPROFILED_RUNTIME_ID) {
         ring_buffer->write_index++;
     }
 }
