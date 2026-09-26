@@ -1848,6 +1848,13 @@ tasks:
     - post_ffn_norm
     - ffn_residual
     layer: 5
+  frozen:
+    at: '2026-09-26T03:34:07'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_14_ffn_residual.py: f7569744c7c3036958c3f1a417b2e41f74b041c85b4979393fd02abb16e69e5e
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
 - id: L.s4096
   title: 'Ladder s4096: all chunks of 4096 in 2048'
   step: integrate
