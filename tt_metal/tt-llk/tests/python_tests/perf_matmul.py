@@ -28,6 +28,7 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.perf.core import PerfConfig
+from helpers.perf.relevance import PerfRelevance, _runtime_fields
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
@@ -39,6 +40,30 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     UNPACK_TRANS_FACES,
 )
+
+
+class MatmulRelevance(PerfRelevance):
+    """``perf_matmul`` / ``matmul_test.cpp``.
+
+    Unpack's MOP walks faces and the CRK dims; math walks the same minus
+    ``NUM_FACES``; pack iterates RT x CT and so is blind to ``k_dimm`` --
+    which is the single biggest win here, because ``KT_DIMS`` is swept over
+    ``[1, 4, 32]``. L1_CONGESTION runs both halves, so it keeps unpack's set.
+    """
+
+    unpack_runtimes = frozenset(
+        {UNPACK_TRANS_FACES, NUM_FACES, LOOP_FACTOR, CRK_TILE_DIMM}
+    )
+    math_runtimes = frozenset({UNPACK_TRANS_FACES, LOOP_FACTOR, CRK_TILE_DIMM})
+    pack_runtimes = frozenset({LOOP_FACTOR, CRK_TILE_DIMM})
+    cong_runtimes = unpack_runtimes
+    pack_runtime_fields = _runtime_fields(*pack_runtimes, drop={"k_dimm"})
+    # Congestion math is _perf_math_matmul_mock, so TILE_LOOP does not see
+    # fidelity/throttle. Keep them so one miss cannot fan out across that sweep.
+    cong_templates = frozenset({DEST_SYNC, MATH_FIDELITY, THROTTLE_LEVEL})
+
+
+MATMUL_RELEVANCE = MatmulRelevance()
 
 # Cold start, functional-max inner dim, and reuse/bandwidth.
 KT_DIMS = [1, 4, 32]
@@ -182,6 +207,8 @@ def test_perf_matmul(
             tile_count_res=min(dims.rt_dim * dims.ct_dim, PERF_RING_TILES),
         ),
         dest_acc=dest_acc,
+        relevance=MATMUL_RELEVANCE,
+        relevance_source=__name__,
     )
 
     configuration.run(perf_report)
