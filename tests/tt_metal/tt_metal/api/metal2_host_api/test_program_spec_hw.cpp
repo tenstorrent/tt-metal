@@ -22,9 +22,11 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 
@@ -1613,164 +1615,444 @@ TEST_F(ProgramSpecHWTest, ComputeSemaphoreBoundedProducerNoWaitControl) {
 }
 
 // ============================================================================
-// LLKOperand address accessors (SPEC Part III)
+// LLKOperand integration: mul_tiles through each memory object (SPEC Parts II–III)
 // ============================================================================
 //
-// On Blackhole, each TRISC reports the byte and LLK-word addresses returned by
-// DataflowBuffer::front/back, Scratchpad::operand, and LocalTensorAccessor::operand into a fixed L1
-// report buffer. Host checks the conversion and the MATH-thread DFB zero.
-TEST_F(ProgramSpecHWTest, LLKOperandAddressAccessors) {
+// One Blackhole test per source of LLKOperand (DFB / LocalTensorAccessor / Scratchpad). Each pipes a
+// single Float16_b tile through experimental::mul_tiles and checks the product. Address math is
+// covered implicitly by a correct product; the DFB test also keeps the MATH-thread front/back == 0 check.
+
+namespace {
+
+constexpr uint32_t kLlkTileBytes = 2048;  // one Float16_b 32x32 tile
+constexpr uint32_t kLlkReportAddr = 100 * 1024;
+
+TensorParameter MakeDramTileTensorParameter(std::string name, const Shape& logical_shape) {
+    auto page_config = PageConfig(Layout::TILE);
+    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    auto tensor_layout = TensorLayout(DataType::BFLOAT16, page_config, memory_config);
+    return TensorParameter{
+        .unique_id = TensorParamName{std::move(name)},
+        .spec = TensorSpec(logical_shape, std::move(tensor_layout)),
+    };
+}
+
+void WriteConstantBf16(distributed::MeshDevice& mesh_device, MeshTensor& tensor, float value) {
+    std::vector<bfloat16> data(tensor.logical_volume(), bfloat16(value));
+    mesh_device.mesh_command_queue().enqueue_write_tensor(
+        HostTensor::from_vector(std::move(data), tensor.tensor_spec()), tensor);
+}
+
+std::vector<bfloat16> ReadBf16(distributed::MeshDevice& mesh_device, const MeshTensor& tensor) {
+    return mesh_device.mesh_command_queue().enqueue_read_tensor(tensor).to_vector<bfloat16>();
+}
+
+}  // namespace
+
+// Elementwise mul of one Float16_b tile (C = A * B) through DFB operands: DRAM A/B are streamed into
+// in0/in1, compute does mul_tiles(in0.front, in1.front) and packs to out.back, and a DM writer drains
+// out to DRAM C. Proves LLKOperandFrom<dfb::…> + DataflowBuffer::front/back address the FIFO correctly.
+TEST_F(ProgramSpecHWTest, LLKOperandDfbMul) {
     auto mesh_device = devices_.at(0);
     if (mesh_device->arch() != tt::ARCH::BLACKHOLE) {
-        GTEST_SKIP() << "Blackhole-only: LLKOperand does not compile on other architectures";
+        GTEST_SKIP() << "Blackhole-only: LLKOperand / 2.0 compute API does not compile on other architectures";
     }
-    IDevice* device = mesh_device->get_devices()[0];
-
-    constexpr uint32_t kReportAddr = 100 * 1024;
-    constexpr uint32_t kNumReportWords = 18;
-    constexpr uint32_t kScratchpadBytes = 2048;  // one Float16_b 32x32 tile
-    constexpr uint32_t kTileBytes = 2048;
 
     const NodeCoord node{0, 0};
 
-    auto tensor_param = MakeShardedTensorParameter("a", Shape{32, 32}, {32, 32}, /*num_cores=*/1);
-    MeshTensor local_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_param.spec);
+    auto a_param = MakeDramTileTensorParameter("a", Shape{32, 32});
+    auto b_param = MakeDramTileTensorParameter("b", Shape{32, 32});
+    auto c_param = MakeDramTileTensorParameter("c", Shape{32, 32});
+    MeshTensor a_tensor = MeshTensor::allocate_on_device(*mesh_device, a_param.spec);
+    MeshTensor b_tensor = MeshTensor::allocate_on_device(*mesh_device, b_param.spec);
+    MeshTensor c_tensor = MeshTensor::allocate_on_device(*mesh_device, c_param.spec);
 
-    auto dm = MakeMinimalGen1DMKernel("dm");
-    dm.source = KernelSpec::SourceCode{R"(
-void kernel_main() {}
+    auto reader = MakeMinimalGen1DMKernel("reader", DataMovementProcessor::RISCV_0);
+    reader.source = KernelSpec::SourceCode{R"(
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
+
+void kernel_main() {
+    Noc noc;
+    TensorAccessor a(tensor::a);
+    TensorAccessor b(tensor::b);
+    DataflowBuffer in0(dfb::in0);
+    DataflowBuffer in1(dfb::in1);
+
+    in0.reserve_back(1);
+    noc.async_read(a, in0, in0.get_entry_size(), {.page_id = 0}, {});
+    noc.async_read_barrier();
+    in0.push_back(1);
+
+    in1.reserve_back(1);
+    noc.async_read(b, in1, in1.get_entry_size(), {.page_id = 0}, {});
+    noc.async_read_barrier();
+    in1.push_back(1);
+}
 )"};
+    BindTensorParameterToKernel(reader, "a", "a");
+    BindTensorParameterToKernel(reader, "b", "b");
+
+    auto writer = MakeMinimalGen1DMKernel("writer", DataMovementProcessor::RISCV_1);
+    writer.source = KernelSpec::SourceCode{R"(
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
+
+void kernel_main() {
+    Noc noc;
+    TensorAccessor c(tensor::c);
+    DataflowBuffer out(dfb::out);
+
+    out.wait_front(1);
+    noc.async_write(out, c, out.get_entry_size(), {}, {.page_id = 0});
+    noc.async_write_barrier();
+    out.pop_front(1);
+}
+)"};
+    BindTensorParameterToKernel(writer, "c", "c");
 
     auto compute = MakeMinimalGen1ComputeKernel("compute");
-    // Report layout (uint32_t words), 6 per TRISC:
-    //   UNPACK @ 0:  scratch_byte, scratch_llk, tensor_byte, tensor_llk, dfb_front_llk, dfb_read_ptr
-    //   MATH   @ 6:  scratch_byte, scratch_llk, tensor_byte, tensor_llk, dfb_front_llk, dfb_back_llk
-    //   PACK   @ 12: scratch_byte, scratch_llk, tensor_byte, tensor_llk, dfb_back_llk,  dfb_write_ptr
     compute.source = KernelSpec::SourceCode{R"(
 #include <cstdint>
 #include "api/compute/common.h"
+#include "api/compute/experimental/2_0/eltwise_binary.h"
+#include "api/compute/experimental/2_0/hw_startup.h"
+#include "api/compute/experimental/2_0/pack.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/llk_operand_from_tokens.h"
-#include "api/scratchpad.h"
-#include "api/tensor/local_tensor_accessor.h"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
+    DataflowBuffer in0(dfb::in0);
+    DataflowBuffer in1(dfb::in1);
+    DataflowBuffer out(dfb::out);
+
+    using AOp = LLKOperandFrom<dfb::in0>;
+    using BOp = LLKOperandFrom<dfb::in1>;
+    using OutOp = LLKOperandFrom<dfb::out>;
+
+    compute_kernel_hw_startup(AOp{0}, BOp{0}, OutOp{0});
+    experimental::mul_init(AOp{0}, /*acc_to_dest=*/false);
+
+    in0.wait_front(1);
+    in1.wait_front(1);
+    out.reserve_back(1);
+
+    tile_regs_acquire();
+    experimental::mul_tiles(in0.front<AOp>(), in1.front<BOp>(), 0, 0, 0);
+    tile_regs_commit();
+    tile_regs_wait();
+    experimental::pack_tile(out.back<OutOp>(), 0, 0);
+    tile_regs_release();
+
+#if defined(TRISC_MATH)
     const uint32_t report_addr = get_arg(args::report_addr);
-
-    DataflowBuffer in(dfb::in);
-    Scratchpad<uint32_t> pad(scratch::pad);
-    LocalTensorAccessor<uint32_t> a(tensor::a);
-
-    using InOp = LLKOperandFrom<dfb::in>;
-    using PadOp = LLKOperandFrom<scratch::pad>;
-    using AOp = LLKOperandFrom<tensor::a>;
-
-    const uint32_t scratch_byte = pad.get_base_address();
-    const uint32_t scratch_llk = pad.operand<PadOp>().l1_address;
-    const uint32_t tensor_byte = a.get_bank_base_address();
-    const uint32_t tensor_llk = a.operand<AOp>().l1_address;
-
-    volatile tt_l1_ptr uint32_t* out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(report_addr);
-
-#if defined(TRISC_UNPACK)
-    out[0] = scratch_byte;
-    out[1] = scratch_llk;
-    out[2] = tensor_byte;
-    out[3] = tensor_llk;
-    out[4] = in.front<InOp>().l1_address;
-    out[5] = in.get_read_ptr();
-#elif defined(TRISC_MATH)
-    out[6] = scratch_byte;
-    out[7] = scratch_llk;
-    out[8] = tensor_byte;
-    out[9] = tensor_llk;
-    out[10] = in.front<InOp>().l1_address;
-    out[11] = in.back<InOp>().l1_address;
-#elif defined(TRISC_PACK)
-    out[12] = scratch_byte;
-    out[13] = scratch_llk;
-    out[14] = tensor_byte;
-    out[15] = tensor_llk;
-    out[16] = in.back<InOp>().l1_address;
-    out[17] = in.get_write_ptr();
+    volatile tt_l1_ptr uint32_t* report = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(report_addr);
+    report[0] = in0.front<AOp>().l1_address;
+    report[1] = in0.back<AOp>().l1_address;
 #endif
+
+    in0.pop_front(1);
+    in1.pop_front(1);
+    out.push_back(1);
 }
 )"};
     compute.runtime_arg_schema.runtime_arg_names = {"report_addr"};
-    BindTensorParameterToKernel(compute, "a", "a");
-    compute.scratchpad_bindings.push_back(
-        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
 
-    auto dfb = MakeMinimalDFB("in", kTileBytes, /*num_entries=*/2);
-    dfb.data_format_metadata = tt::DataFormat::Float16_b;
-    dm.dfb_bindings.push_back(ProducerOf(DFBSpecName{"in"}, "in"));
-    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"in"}, "in"));
+    auto in0 = MakeMinimalDFB("in0", kLlkTileBytes, /*num_entries=*/2);
+    in0.data_format_metadata = tt::DataFormat::Float16_b;
+    auto in1 = MakeMinimalDFB("in1", kLlkTileBytes, /*num_entries=*/2);
+    in1.data_format_metadata = tt::DataFormat::Float16_b;
+    auto out = MakeMinimalDFB("out", kLlkTileBytes, /*num_entries=*/2);
+    out.data_format_metadata = tt::DataFormat::Float16_b;
+
+    reader.dfb_bindings.push_back(ProducerOf(DFBSpecName{"in0"}, "in0"));
+    reader.dfb_bindings.push_back(ProducerOf(DFBSpecName{"in1"}, "in1"));
+    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"in0"}, "in0"));
+    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"in1"}, "in1"));
+    compute.dfb_bindings.push_back(ProducerOf(DFBSpecName{"out"}, "out"));
+    writer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"out"}, "out"));
 
     ProgramSpec spec;
-    spec.name = "llk_operand_address_accessors";
-    spec.kernels = {dm, compute};
-    spec.dataflow_buffers = {dfb};
-    spec.scratchpads = {ScratchpadSpec{
-        .unique_id = ScratchpadSpecName{"pad"},
-        .size_per_node = kScratchpadBytes,
-        .data_format_metadata = tt::DataFormat::Float16_b,
-    }};
-    spec.tensor_parameters = {tensor_param};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"dm", "compute"})};
+    spec.name = "llk_operand_dfb_mul";
+    spec.kernels = {reader, writer, compute};
+    spec.dataflow_buffers = {in0, in1, out};
+    spec.tensor_parameters = {a_param, b_param, c_param};
+    spec.work_units =
+        std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"reader", "writer", "compute"})};
 
-    Program program = MakeProgramFromSpec(*mesh_device, spec);
+    auto workload = MakeMeshWorkloadFromSpec(*mesh_device, spec);
+    Program& program = workload.get_programs().begin()->second;
 
     ProgramRunArgs params;
     params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = KernelSpecName{"compute"},
-        .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"report_addr", kReportAddr}}),
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"report_addr", kLlkReportAddr}}),
     }};
     params.tensor_args = {
-        {TensorParamName{"a"}, TensorArgument{local_tensor}},
+        {TensorParamName{"a"}, TensorArgument{a_tensor}},
+        {TensorParamName{"b"}, TensorArgument{b_tensor}},
+        {TensorParamName{"c"}, TensorArgument{c_tensor}},
     };
     SetProgramRunArgs(program, params);
 
-    std::vector<uint32_t> zero_report(kNumReportWords, 0u);
-    detail::WriteToDeviceL1(device, node, kReportAddr, zero_report);
+    constexpr float kA = 2.0f;
+    constexpr float kB = 3.0f;
+    WriteConstantBf16(*mesh_device, a_tensor, kA);
+    WriteConstantBf16(*mesh_device, b_tensor, kB);
+    WriteConstantBf16(*mesh_device, c_tensor, 0.0f);
 
-    auto workload = LaunchProgram(*mesh_device, std::move(program));
-    Program& launched = workload.get_programs().begin()->second;
-    auto in_dfb = launched.impl().get_dataflow_buffer(launched.impl().get_dfb_handle("in"));
-    const uint32_t expected_dfb_llk = (in_dfb->uniform_alloc_addr() >> 4) - 1;
-    const uint32_t expected_tensor_byte = static_cast<uint32_t>(local_tensor.address());
+    std::vector<uint32_t> zero_report(2, 0u);
+    slow_dispatch::WriteToL1(*mesh_device, node, kLlkReportAddr, zero_report);
+
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true);
 
     std::vector<uint32_t> reported;
-    detail::ReadFromDeviceL1(device, node, kReportAddr, kNumReportWords * sizeof(uint32_t), reported);
-    ASSERT_EQ(reported.size(), kNumReportWords);
+    slow_dispatch::ReadFromL1(*mesh_device, node, kLlkReportAddr, 2 * sizeof(uint32_t), reported);
+    ASSERT_EQ(reported.size(), 2u);
+    EXPECT_EQ(reported[0], 0u) << "MATH front must be 0";
+    EXPECT_EQ(reported[1], 0u) << "MATH back must be 0";
 
-    auto expect_byte_and_llk = [](uint32_t byte_addr, uint32_t llk_addr, const char* label) {
-        EXPECT_NE(byte_addr, 0u) << label << " byte address is 0";
-        EXPECT_EQ(llk_addr, (byte_addr >> 4) - 1) << label << " LLK address";
+    const auto output = ReadBf16(*mesh_device, c_tensor);
+    EXPECT_EQ(output, std::vector<bfloat16>(c_tensor.logical_volume(), bfloat16(kA * kB)));
+}
+
+// Elementwise mul of one Float16_b tile already resident in L1: compute-only, no DFB/DM. Host writes
+// sharded tensors A and B; compute does mul_tiles(a.operand, b.operand) and packs into C via
+// LocalTensorAccessor::operand. Proves LLKOperandFrom<tensor::…> derives format/shape from TensorSpec.
+TEST_F(ProgramSpecHWTest, LLKOperandLocalTensorMul) {
+    auto mesh_device = devices_.at(0);
+    if (mesh_device->arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Blackhole-only: LLKOperand / 2.0 compute API does not compile on other architectures";
+    }
+
+    const NodeCoord node{0, 0};
+
+    auto a_param = MakeShardedTensorParameter("a", Shape{32, 32}, {32, 32}, /*num_cores=*/1);
+    auto b_param = MakeShardedTensorParameter("b", Shape{32, 32}, {32, 32}, /*num_cores=*/1);
+    auto c_param = MakeShardedTensorParameter("c", Shape{32, 32}, {32, 32}, /*num_cores=*/1);
+    MeshTensor a_tensor = MeshTensor::allocate_on_device(*mesh_device, a_param.spec);
+    MeshTensor b_tensor = MeshTensor::allocate_on_device(*mesh_device, b_param.spec);
+    MeshTensor c_tensor = MeshTensor::allocate_on_device(*mesh_device, c_param.spec);
+
+    auto compute = MakeMinimalGen1ComputeKernel("compute");
+    compute.source = KernelSpec::SourceCode{R"(
+#include <cstdint>
+#include "api/compute/common.h"
+#include "api/compute/experimental/2_0/eltwise_binary.h"
+#include "api/compute/experimental/2_0/hw_startup.h"
+#include "api/compute/experimental/2_0/pack.h"
+#include "api/llk_operand_from_tokens.h"
+#include "api/tensor/local_tensor_accessor.h"
+
+void kernel_main() {
+    LocalTensorAccessor<uint32_t> a(tensor::a);
+    LocalTensorAccessor<uint32_t> b(tensor::b);
+    LocalTensorAccessor<uint32_t> c(tensor::c);
+
+    using AOp = LLKOperandFrom<tensor::a>;
+    using BOp = LLKOperandFrom<tensor::b>;
+    using COp = LLKOperandFrom<tensor::c>;
+
+    compute_kernel_hw_startup(AOp{0}, BOp{0}, COp{0});
+    experimental::mul_init(AOp{0}, /*acc_to_dest=*/false);
+
+    tile_regs_acquire();
+    experimental::mul_tiles(a.operand<AOp>(), b.operand<BOp>(), 0, 0, 0);
+    tile_regs_commit();
+    tile_regs_wait();
+    experimental::pack_tile(c.operand<COp>(), 0, 0);
+    tile_regs_release();
+}
+)"};
+    BindTensorParameterToKernel(compute, "a", "a");
+    BindTensorParameterToKernel(compute, "b", "b");
+    BindTensorParameterToKernel(compute, "c", "c");
+
+    ProgramSpec spec;
+    spec.name = "llk_operand_lta_mul";
+    spec.kernels = {compute};
+    spec.tensor_parameters = {a_param, b_param, c_param};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"compute"})};
+
+    auto workload = MakeMeshWorkloadFromSpec(*mesh_device, spec);
+    Program& program = workload.get_programs().begin()->second;
+
+    ProgramRunArgs params;
+    params.tensor_args = {
+        {TensorParamName{"a"}, TensorArgument{a_tensor}},
+        {TensorParamName{"b"}, TensorArgument{b_tensor}},
+        {TensorParamName{"c"}, TensorArgument{c_tensor}},
     };
+    SetProgramRunArgs(program, params);
 
-    // UNPACK
-    expect_byte_and_llk(reported[0], reported[1], "UNPACK scratch");
-    EXPECT_EQ(reported[2], expected_tensor_byte) << "UNPACK tensor byte";
-    expect_byte_and_llk(reported[2], reported[3], "UNPACK tensor");
-    EXPECT_EQ(reported[4], reported[5] - 1) << "UNPACK front == read_ptr - 1";
-    EXPECT_EQ(reported[4], expected_dfb_llk) << "UNPACK front vs DFB alloc";
+    constexpr float kA = 2.0f;
+    constexpr float kB = 4.0f;
+    WriteConstantBf16(*mesh_device, a_tensor, kA);
+    WriteConstantBf16(*mesh_device, b_tensor, kB);
+    WriteConstantBf16(*mesh_device, c_tensor, 0.0f);
 
-    // MATH: same scratch/tensor conversion; DFB accessors are 0
-    expect_byte_and_llk(reported[6], reported[7], "MATH scratch");
-    EXPECT_EQ(reported[6], reported[0]) << "MATH scratch byte matches UNPACK";
-    EXPECT_EQ(reported[8], expected_tensor_byte) << "MATH tensor byte";
-    expect_byte_and_llk(reported[8], reported[9], "MATH tensor");
-    EXPECT_EQ(reported[10], 0u) << "MATH front";
-    EXPECT_EQ(reported[11], 0u) << "MATH back";
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true);
 
-    // PACK
-    expect_byte_and_llk(reported[12], reported[13], "PACK scratch");
-    EXPECT_EQ(reported[12], reported[0]) << "PACK scratch byte matches UNPACK";
-    EXPECT_EQ(reported[14], expected_tensor_byte) << "PACK tensor byte";
-    expect_byte_and_llk(reported[14], reported[15], "PACK tensor");
-    EXPECT_EQ(reported[16], reported[17] - 1) << "PACK back == write_ptr - 1";
-    EXPECT_EQ(reported[16], expected_dfb_llk) << "PACK back vs DFB alloc";
+    const auto output = ReadBf16(*mesh_device, c_tensor);
+    EXPECT_EQ(output, std::vector<bfloat16>(c_tensor.logical_volume(), bfloat16(kA * kB)));
+}
+
+// Elementwise mul whose operands live in a Scratchpad: DM NOC-fills pad_in with tiles A@0 and B@1,
+// then posts a ready-DFB credit; compute waits, does mul_tiles(pad_in, pad_in, 0, 1), and packs to
+// pad_out (host reads that L1). Proves Scratchpad::operand as an LLK source and pack target without
+// a read-after-pack hazard.
+TEST_F(ProgramSpecHWTest, LLKOperandScratchpadMul) {
+    auto mesh_device = devices_.at(0);
+    if (mesh_device->arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Blackhole-only: LLKOperand / 2.0 compute API does not compile on other architectures";
+    }
+
+    const NodeCoord node{0, 0};
+
+    auto input_param = MakeDramTileTensorParameter("input", Shape{64, 32});  // two tiles
+    MeshTensor input_tensor = MeshTensor::allocate_on_device(*mesh_device, input_param.spec);
+
+    auto fill = MakeMinimalGen1DMKernel("fill", DataMovementProcessor::RISCV_0);
+    fill.source = KernelSpec::SourceCode{R"(
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
+
+constexpr uint32_t kTileBytes = 2048;
+
+void kernel_main() {
+    Noc noc;
+    TensorAccessor input(tensor::input);
+    Scratchpad<uint32_t> pad_in(scratch::pad_in);
+    DataflowBuffer ready(dfb::ready);
+
+    for (uint32_t p = 0; p < 2; ++p) {
+        noc.async_read(input, pad_in, kTileBytes, {.page_id = p}, {.offset_bytes = p * kTileBytes});
+    }
+    noc.async_read_barrier();
+
+    ready.reserve_back(1);
+    ready.push_back(1);
+}
+)"};
+    BindTensorParameterToKernel(fill, "input", "input");
+    fill.scratchpad_bindings.push_back(
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad_in"}, .accessor_name = "pad_in"});
+
+    auto compute = MakeMinimalGen1ComputeKernel("compute");
+    compute.source = KernelSpec::SourceCode{R"(
+#include <cstdint>
+#include "api/compute/common.h"
+#include "api/compute/experimental/2_0/eltwise_binary.h"
+#include "api/compute/experimental/2_0/hw_startup.h"
+#include "api/compute/experimental/2_0/pack.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/llk_operand_from_tokens.h"
+#include "api/scratchpad.h"
+#include "experimental/kernel_args.h"
+
+void kernel_main() {
+    DataflowBuffer ready(dfb::ready);
+    Scratchpad<uint32_t> pad_in(scratch::pad_in);
+    Scratchpad<uint32_t> pad_out(scratch::pad_out);
+
+    using InOp = LLKOperandFrom<scratch::pad_in>;
+    using OutOp = LLKOperandFrom<scratch::pad_out>;
+
+    compute_kernel_hw_startup(InOp{0}, InOp{0}, OutOp{0});
+    experimental::mul_init(InOp{0}, /*acc_to_dest=*/false);
+
+    ready.wait_front(1);
+
+    tile_regs_acquire();
+    experimental::mul_tiles(pad_in.operand<InOp>(), pad_in.operand<InOp>(), 0, 1, 0);
+    tile_regs_commit();
+    tile_regs_wait();
+    experimental::pack_tile(pad_out.operand<OutOp>(), 0, 0);
+    tile_regs_release();
+
+    ready.pop_front(1);
+
+#if defined(TRISC_PACK)
+    const uint32_t report_addr = get_arg(args::report_addr);
+    volatile tt_l1_ptr uint32_t* report = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(report_addr);
+    report[0] = pad_out.get_base_address();
+#endif
+}
+)"};
+    compute.runtime_arg_schema.runtime_arg_names = {"report_addr"};
+    compute.scratchpad_bindings.push_back(
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad_in"}, .accessor_name = "pad_in"});
+    compute.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"pad_out"}, .accessor_name = "pad_out"});
+
+    auto ready = MakeMinimalDFB("ready", kLlkTileBytes, /*num_entries=*/1);
+    ready.data_format_metadata = tt::DataFormat::Float16_b;
+    fill.dfb_bindings.push_back(ProducerOf(DFBSpecName{"ready"}, "ready"));
+    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"ready"}, "ready"));
+
+    ProgramSpec spec;
+    spec.name = "llk_operand_scratchpad_mul";
+    spec.kernels = {fill, compute};
+    spec.dataflow_buffers = {ready};
+    spec.scratchpads = {
+        ScratchpadSpec{
+            .unique_id = ScratchpadSpecName{"pad_in"},
+            .size_per_node = 2 * kLlkTileBytes,
+            .data_format_metadata = tt::DataFormat::Float16_b,
+        },
+        ScratchpadSpec{
+            .unique_id = ScratchpadSpecName{"pad_out"},
+            .size_per_node = kLlkTileBytes,
+            .data_format_metadata = tt::DataFormat::Float16_b,
+        },
+    };
+    spec.tensor_parameters = {input_param};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"fill", "compute"})};
+
+    auto workload = MakeMeshWorkloadFromSpec(*mesh_device, spec);
+    Program& program = workload.get_programs().begin()->second;
+
+    ProgramRunArgs params;
+    params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"compute"},
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"report_addr", kLlkReportAddr}}),
+    }};
+    params.tensor_args = {
+        {TensorParamName{"input"}, TensorArgument{input_tensor}},
+    };
+    SetProgramRunArgs(program, params);
+
+    constexpr float kA = 2.0f;
+    constexpr float kB = 5.0f;
+    // Logical {64,32} TILE → two tiles; fill the first tile's rows with A and the second with B.
+    std::vector<bfloat16> input_data(input_tensor.logical_volume());
+    const size_t half = input_data.size() / 2;
+    std::fill_n(input_data.begin(), half, bfloat16(kA));
+    std::fill(input_data.begin() + static_cast<std::ptrdiff_t>(half), input_data.end(), bfloat16(kB));
+    mesh_device->mesh_command_queue().enqueue_write_tensor(
+        HostTensor::from_vector(std::move(input_data), input_tensor.tensor_spec()), input_tensor);
+
+    std::vector<uint32_t> zero_report(1, 0u);
+    slow_dispatch::WriteToL1(*mesh_device, node, kLlkReportAddr, zero_report);
+
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true);
+
+    std::vector<uint32_t> reported;
+    slow_dispatch::ReadFromL1(*mesh_device, node, kLlkReportAddr, sizeof(uint32_t), reported);
+    ASSERT_EQ(reported.size(), 1u);
+    const uint32_t pad_out_base = reported[0];
+    EXPECT_NE(pad_out_base, 0u) << "PACK did not report pad_out base";
+
+    std::vector<uint32_t> output;
+    slow_dispatch::ReadFromL1(*mesh_device, node, pad_out_base, kLlkTileBytes, output);
+    EXPECT_EQ(output, create_constant_vector_of_bfloat16(kLlkTileBytes, kA * kB));
 }
 
 }  // namespace
