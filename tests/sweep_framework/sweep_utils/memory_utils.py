@@ -31,6 +31,12 @@ def capture_peak_memory(test_module, test_vector: dict, device, use_no_dispatch:
 
         Note: peak_total_aggregate (theoretical) is typically much larger than
         peak_l1_memory_device (actual) for operations with sequential execution.
+
+        The module runs with device-side tensor construction even when device perf is
+        being measured with host-side setup (sweep_utils/tensor_setup.py): readback under
+        NO_DISPATCH is undefined, so the two paths cannot share a route. Peak memory for
+        device-built inputs therefore includes the row-major source and the tilized copy
+        coexisting, which the perf row for the same vector no longer does.
     """
     metrics = None
     # Set once a NO_DISPATCH capture has actually begun: only from that point can the programs
