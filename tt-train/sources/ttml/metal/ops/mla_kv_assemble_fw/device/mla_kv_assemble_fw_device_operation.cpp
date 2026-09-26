@@ -37,6 +37,28 @@ void MLAKVAssembleFwDeviceOperation::validate_on_program_cache_miss(
             "MLAKVAssembleFw requires {} memory layout to be INTERLEAVED. Got: {}",
             name,
             enchantum::to_string(tensor.memory_config().memory_layout()));
+        const auto logical_shape = tensor.logical_shape();
+        TT_FATAL(
+            logical_shape.rank() == 4U, "MLAKVAssembleFw: {} must be rank-4. Got rank {}", name, logical_shape.rank());
+        const auto tile = tensor.tensor_spec().tile();
+        TT_FATAL(
+            tile.get_height() == TILE_HEIGHT && tile.get_width() == TILE_WIDTH,
+            "MLAKVAssembleFw: {} must use the default {}x{} tile. Got {}x{}",
+            name,
+            TILE_HEIGHT,
+            TILE_WIDTH,
+            tile.get_height(),
+            tile.get_width());
+        auto expected_padded = logical_shape;
+        expected_padded[-2] = tt::round_up(expected_padded[-2], TILE_HEIGHT);
+        expected_padded[-1] = tt::round_up(expected_padded[-1], TILE_WIDTH);
+        TT_FATAL(
+            tensor.padded_shape() == expected_padded,
+            "MLAKVAssembleFw: {} padded shape {} must be the minimally tile-padded logical shape {}. Custom "
+            "alignments are not supported.",
+            name,
+            tensor.padded_shape(),
+            expected_padded);
     };
 
     const auto& kv_up = tensor_args.kv_up;
@@ -46,11 +68,8 @@ void MLAKVAssembleFwDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(kv_up.device() == k_pe.device(), "MLAKVAssembleFw: kv_up and k_pe must be on the same device.");
 
-    const auto kv_up_shape = kv_up.padded_shape();
-    const auto k_pe_shape = k_pe.padded_shape();
-
-    TT_FATAL(kv_up_shape.rank() == 4U, "MLAKVAssembleFw: kv_up must be rank-4. Got rank {}", kv_up_shape.rank());
-    TT_FATAL(k_pe_shape.rank() == 4U, "MLAKVAssembleFw: k_pe must be rank-4. Got rank {}", k_pe_shape.rank());
+    const auto kv_up_shape = kv_up.logical_shape();
+    const auto k_pe_shape = k_pe.logical_shape();
 
     TT_FATAL(kv_up_shape[1] == 1U, "MLAKVAssembleFw: kv_up dim 1 must be 1. Got {}", kv_up_shape[1]);
     TT_FATAL(k_pe_shape[1] == 1U, "MLAKVAssembleFw: k_pe dim 1 must be 1. Got {}", k_pe_shape[1]);
