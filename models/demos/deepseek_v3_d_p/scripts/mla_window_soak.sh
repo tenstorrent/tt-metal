@@ -69,16 +69,20 @@ for i in $(seq 1 "$LOOPS"); do
 
   pkill -9 -f pytest 2>/dev/null || true
   # A crashed process stays registered against the device after it dies and the next bulk then
-  # cannot map sysmem, so wait for the driver to drop entries whose process is gone.
-  for _ in $(seq 1 90); do
-    pgrep -f "[p]ytest -q $NODE" >/dev/null && { sleep 2; continue; }
-    stale=0
-    for p in $(sort -u /proc/driver/tenstorrent/*/pids 2>/dev/null); do
-      kill -0 "$p" 2>/dev/null || stale=1
+  # cannot map sysmem, so wait for the driver to drop entries whose process is gone. Only after a
+  # crash -- the driver leaks dead entries, so unguarded this spins its full timeout every bulk.
+  if [ "$rc" -ne 0 ]; then
+    for _ in $(seq 1 90); do
+      pgrep -f "[p]ytest -q $NODE" >/dev/null && { sleep 2; continue; }
+      stale=0
+      for p in $(sort -u /proc/driver/tenstorrent/*/pids 2>/dev/null); do
+        kill -0 "$p" 2>/dev/null || stale=1
+      done
+      [ "$stale" -eq 0 ] && break
+      sleep 2
     done
-    [ "$stale" -eq 0 ] && break
-    sleep 2
-  done
+  fi
+  sleep 5
 done
 
 echo "done at $(date), $LOOPS bulks -> $TSV"
