@@ -987,3 +987,14 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_
   coef 1.0007). Trail: router 0.9955, experts_out 0.9987.
 - Tightest margin: block out rel 0.0053 against 0.01 (CPU router flips caused by upstream device error).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_full_moe_04_ffn_norm.py`
+
+## C.full_moe.router test (review, attempt 1)
+- Replaced the rendered one-liner with the reviewed layer-1 router test body (LAYER = 5): PCC gate plus exactly 8 nnz/row,
+  weights >= 0, selection overlap >= 0.985, matched-row weight rel L2 <= 0.005, row sums 1 +- 0.01.
+- Re-measured the mutations on the layer-5 golden with a CPU-only script (numbers in the test docstring). Bias 0.72..1.09
+  (std 0.067), 8th/9th gap median 0.0028. A bf16 correction bias passes PCC (0.9937) at layer 5 and only the overlap check
+  catches it (0.952). CPU reference: PCC 0.99819, overlap 0.99573.
+- Runs: BRINGUP_IMPL=reference passes (0.998186); BRINGUP_IMPL=stub fails (PCC). Default impl (device TtRouter, already
+  registered) passes: PCC 0.998111, overlap 0.99536, matched rel 0.00107, row sums [0.9976, 1.0023].
+- The "FAIL pcc_router_L05: pcc=0.000000" line printed first comes from run_safe_pytest's precompile pass. The real result is the second line.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_moe_router.py`
