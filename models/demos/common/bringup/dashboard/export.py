@@ -3,8 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Render a model's bring-up dashboard (the ERNIE dashboard's look and sections, from any model's records).
 
-    python -m models.demos.common.bringup.dashboard.export --spec S [--out PATH]
-    -> <bringup_dir>/dashboard/index.html  (self-contained, data inlined)
+    python -m models.demos.common.bringup.dashboard.export --spec S [--style standard|teletext|both] [--out PATH]
+    -> <bringup_dir>/dashboard/index.html (standard) and/or teletext.html (a 90s teletext service on a CRT),
+       self-contained, data inlined. The spec's ``dashboard.styles`` picks the default; the /bringup skill asks.
 
 Reads: tasks.yaml, state.json, results/*.json (metrics, plan_memory.json, block_graphs.json, <task>_profile.json),
 components.yaml, plan.yaml (optional ``chips``, ``ccl_per_layer``, ``profile_sections``), findings.yaml, the HF config.
@@ -168,6 +169,7 @@ def build(spec) -> dict:
         "head": git(spec.repo, "rev-parse", "--short", "HEAD"),
         "title": f"{spec.data.get('hf_id', spec.model).split('/')[-1]} chunked prefill",
         "page_title": f"{spec.get('display_name') or spec.model} Prefill Bring-up",
+        "short_name": spec.get("display_name") or spec.model,
         "model": spec.data.get("hf_id", spec.model),
         "target": f"{spec.get('target.seq'):,} tokens in {spec.get('target.chunk'):,}-token chunks, {spec.get('target.dtype', 'bf16')}"
         if spec.get("target.seq")
@@ -242,20 +244,47 @@ def load_profile(spec, res: Path, plan_doc: dict) -> dict | None:
     }
 
 
+STYLES = {"standard": ("template.html", "index.html"), "teletext": ("teletext_template.html", "teletext.html")}
+
+
+def render(data: dict, style: str) -> str:
+    tpl = (HERE / STYLES[style][0]).read_text()
+    title = data["page_title"] if style == "standard" else f"{data['short_name']} Ceefax"
+    return tpl.replace("__TITLE__", title, 1).replace("/*__DATA__*/null", json.dumps(data), 1)
+
+
+def styles_of(spec, requested: str | None) -> list[str]:
+    """--style wins; else spec dashboard.styles (a list or one name); default: standard."""
+    want = requested or spec.get("dashboard.styles") or ["standard"]
+    want = [want] if isinstance(want, str) else list(want)
+    want = list(STYLES) if want == ["both"] else want
+    bad = [w for w in want if w not in STYLES]
+    if bad:
+        raise SystemExit(f"unknown dashboard style {bad}; choose from {sorted(STYLES)} or both")
+    return want
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--spec")
-    ap.add_argument("--out")
+    ap.add_argument("--style", help="standard | teletext | both (default: spec dashboard.styles, else standard)")
+    ap.add_argument("--out", help="output file (one style only) or directory")
     a = ap.parse_args(argv)
     spec = load_spec(a.spec)
     data = build(spec)
-    tpl = (HERE / "template.html").read_text()
-    html = tpl.replace("__TITLE__", data["page_title"]).replace("/*__DATA__*/null", json.dumps(data))
-    out = Path(a.out) if a.out else spec.bringup_dir / "dashboard" / "index.html"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(html)
-    print(f"wrote {out} ({len(html) // 1024} KB)")
-    return out
+    styles = styles_of(spec, a.style)
+    outs = []
+    for style in styles:
+        html = render(data, style)
+        if a.out and len(styles) == 1 and a.out.endswith(".html"):
+            out = Path(a.out)
+        else:
+            out = (Path(a.out) if a.out else spec.bringup_dir / "dashboard") / STYLES[style][1]
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(html)
+        print(f"wrote {out} ({len(html) // 1024} KB, {style})")
+        outs.append(out)
+    return outs[0] if len(outs) == 1 else outs
 
 
 if __name__ == "__main__":

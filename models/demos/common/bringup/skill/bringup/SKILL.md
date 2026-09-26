@@ -1,50 +1,86 @@
 ---
 name: bringup
-description: Start, watch or resume a gated model bring-up (prefill on Tenstorrent) with the framework in models/demos/common/bringup. Use when someone wants to bring up a new model, asks how a bring-up run is going, or wants to resume or fork one.
+description: Interview the user about a model to bring up (prefill on Tenstorrent), write and get approval for its spec, launch the gated bring-up framework in models/demos/common/bringup, and supervise the run. Use when someone wants to bring up a new model, asks how a bring-up is going, or wants to pause, resume, rerun or fork one.
 ---
 
-# /bringup: intake for the gated bring-up framework
+# /bringup: intake and supervision for the gated bring-up framework
 
-You talk to the person, write the model spec, get it approved, and hand over to the orchestrator. You do not implement
-anything yourself. Framework docs: `models/demos/common/bringup/README.md`.
+You interview the person, write the model spec, get it approved, launch the orchestrator, and supervise the run. You
+do not implement the model yourself; agents do, one gated step at a time. Framework: `models/demos/common/bringup/`
+(README.md there). A worked run: `models/demos/gemma4_a4b_d_p/bringup/` (spec, ledger, BREADCRUMBS.md, supervision.md).
 
-## Start a new bring-up
+Always: `export PYTHONPATH=$PWD` (the shell's default points at another checkout); `B="python -m models.demos.common.bringup"`.
 
-1. Ask for what you cannot find out yourself, in one message: the model (HF id), the target (context length and chunk
-   size, e.g. 55k in 5k chunks), the ladder rungs if they have a preference, and a layer subset if the model will not fit.
-   Propose defaults: a first rung of 2 chunks at a small chunk size with full dumps, a mid rung, the last chunk after a
-   golden prefix, then the full target.
-2. Check on the spot and report:
-   - the checkpoint: `python -c "from huggingface_hub import snapshot_download as s; print(s('<hf_id>', local_files_only=True))"`
-     or its size on the hub if it is not local; it goes to `/localdev/$USER/bringup/<model>/hf/`;
-   - the box: `ls /dev/tenstorrent | wc -l` chips and the architecture (`tt-smi -ls`; never `tt-smi -r`);
-   - the config: layers, hidden size, heads, KV heads, head_dim, experts, attention types per layer, from `config.json`
-     (the text config for multimodal checkpoints);
-   - what the repo already has for this model family (grep `models/demos` and the repo map).
-3. Scaffold: `python -m models.demos.common.bringup new --model <slug> --hf-id <hf_id>`. Then fill
-   `models/demos/<slug>/bringup/spec.yaml` from the template: `num_layers`, `block_types` (one entry per distinct block,
-   with every layer exactly once and a representative layer), `state.tensors`, `box`, `target`, `ladder`, and
-   `checkpoint.expect` / `checkpoint.config` from the index and config.
-4. Validate: `python -m models.demos.common.bringup validate --spec <spec> --ledger-only` and
-   `python -c "from models.demos.common.bringup.core.spec import Spec; print(Spec.load('<spec>').validate())"`.
-5. Show the spec to the person. Wait for an explicit yes. Then record it:
-   `python -m models.demos.common.bringup approve intake --spec <spec>`.
-6. Write the first tasks: `python -m models.demos.common.bringup.plan.ledger_gen --spec <spec> --early --write`
-   (R, G, B and PL.0; PL.0 adds the component, swap, ladder, contract and perf tasks once the reference exists).
-7. Launch. The orchestrator is a long-running process that starts one `claude -p` per step. Give the person the
-   command to run in their own terminal (or with `!` in this session), and do not run it in the background yourself:
-   `python -m models.demos.common.bringup.orchestrator run --spec <spec>`
+## 1. Interview
 
-## Report on a run
+Ask in one message for what you cannot find out yourself, with defaults proposed:
+- **Model**: HF id. You will pin its revision (commit sha).
+- **Target**: context length and chunk size (default 56320 tokens in 5120-token chunks).
+- **Ladder**: default four rungs: 2 chunks of 2048 with full dumps, 2 chunks of 8192, the last chunk after a golden
+  prefix, then the full target.
+- **Layer subset**, only if the model does not fit the box.
+- **Owner rules** for every agent, e.g. "always use 2D fabric". They go in `agents.rules` and appear in every brief.
+- **Dashboard style**: `standard` (the ERNIE look), `teletext` (a 90s teletext service on a CRT), or `both`. Goes in
+  `dashboard.styles`.
+- **Retry policy**, only if they want to change it: per role, attempts (default 3) and whether it escalates to
+  `ttnn-expert-debugger` (only implement and device fixes do; that agent is for TTNN ops, never CPU code).
 
-`python -m models.demos.common.bringup status --spec <spec>` and the `waiting` / `reason` fields in
-`<bringup_dir>/state.json`. Summarize: passed, running, stopped (with the reason), waiting for a person (with what to do).
-The dashboard: `python -m models.demos.common.bringup.dashboard.export --spec <spec>`.
+## 2. Check on the spot and report
 
-## Resume, rerun, fork
+- Checkpoint: reachable, size, gated or not; it downloads to `/localdev/$USER/bringup/<model>/hf/`
+  (`snapshot_download(<id>, local_dir=...)`). The download metadata records the revision; put it in `hf.revision`.
+- Box: `ls /dev/tenstorrent | wc -l` chips; `tt-smi -ls` for the architecture. Never `tt-smi -r`.
+- Config (the text config for multimodal checkpoints): layers, hidden, heads, KV heads, head_dim, experts, attention
+  type per layer, sliding window. These give `block_types` (one entry per distinct block, every layer exactly once, a
+  representative layer each) and `checkpoint.expect` / `checkpoint.config`.
+- Base or instruction-tuned: a chat template plus `-it` / `-Instruct` in the name means instruction-tuned. That decides
+  the input wrap: `raw` for base checkpoints, `model_turn` for instruction-tuned ones (the book becomes the model's
+  reply to a short request; an -it model fed raw text is not predicting anything it was trained on).
+- The model card's usage example: becomes `intake.smoke: {prompt, expect}` (e.g. "capital of France" -> "Paris").
+- What the repo already has for this family (grep `models/demos`, the repo map); list it for the planner.
 
-- After a stop: fix or decide, then `python -m models.demos.common.bringup.orchestrator resume --spec <spec>`.
-- Approvals: `python -m models.demos.common.bringup approve plan|perf --spec <spec>`.
-- `python -m models.demos.common.bringup rerun --from <id> --spec <spec>`;
-  `python -m models.demos.common.bringup fork --from <id> --name <run> --spec <spec>`;
-  `python -m models.demos.common.bringup compare --spec <specA> --other <specB>`.
+## 3. Write the spec, get it approved, launch
+
+1. `$B new --model <slug> --hf-id <id>`, then fill `models/demos/<slug>/bringup/spec.yaml` (the template comments say
+   what each field is): the interview answers, `hf.revision`, `hf.parity_seq` longer than any sliding window,
+   `text.wrap`, `intake.smoke`, `agents.rules`, `agents.read` (HF modeling file for the reference role, similar repo
+   models for plan and implement), `dashboard.styles`.
+2. Validate: `python -c "from models.demos.common.bringup.core.spec import Spec; print(Spec.load('<spec>').validate())"`.
+3. Show the spec. Wait for an explicit yes. Then `$B approve intake --spec <spec>`.
+4. `python -m models.demos.common.bringup.plan.ledger_gen --spec <spec> --early --write` and `$B init-run run1 --spec <spec>`.
+5. Launch: `python -u -m models.demos.common.bringup.orchestrator run --spec <spec> >> $ART/runs/run1/orchestrator.log 2>&1`
+   as a background process, and watch the log (step 4). The first task, R.1, builds the canonical prompt and runs the
+   HF sanity gate (revision, usage-example smoke, next-token accuracy floor).
+6. Publish the dashboard(s): `python -m models.demos.common.bringup.dashboard.export --spec <spec>` writes
+   `<bringup_dir>/dashboard/index.html` and/or `teletext.html`; publish them as artifacts and give the links.
+
+## 4. Supervise the run
+
+Watch the orchestrator log for gate results, attempts, stops and problems. After every gate, re-export and republish
+the dashboards. Classify every failure before acting, and log every intervention in `<bringup_dir>/supervision.md`
+(time, task, trigger, classification, action, resulting commit):
+
+| Failure | Action |
+|---|---|
+| the model's code (a gate misses a threshold) | none: the retry loop and the brief handle it |
+| the check before an agent starts (no implementation yet) | none: expected |
+| the framework (a false violation, a file not committed, a wrong rule) | pause, fix with a selftest, gate the fix in `dev/`, resume |
+| the box (device open fails, ethernet or fabric timeouts) | the orchestrator stops by itself; ask the person to reset the board, then a quick box check, then resume |
+| the input or data (implausible accuracy, degenerate generations) | stop, show the evidence, ask the person |
+| an approval point (plan, performance picks) | bring the person the plan or list; record their decision with `$B approve` |
+
+Never:
+- edit anything in the tree while an agent step runs. `python -m models.demos.common.bringup.orchestrator pause --spec <spec>`
+  stops it before its next task; the path check would charge your edit to the running agent;
+- approve for the person, loosen a threshold, or edit a frozen test;
+- change shared code or the spec without asking (a spec edit voids the intake approval; re-approve on their word);
+- run `tt-smi -r`, or use long timeouts for a device check (the box test takes seconds).
+
+Report briefly on each gate the person would care about; say plainly when you stopped something and why.
+
+## 5. Resume, rerun, fork
+
+- `python -m models.demos.common.bringup.orchestrator resume --spec <spec>` (after a stop, a pause, or a fix).
+- `$B approve plan|perf --spec <spec>`; `$B status --spec <spec>`.
+- `$B rerun --from <id> --spec <spec>`; `$B fork --from <id> --name <run> --spec <spec>`;
+  `$B compare --spec <specA> --other <specB>`.

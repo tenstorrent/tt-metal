@@ -303,3 +303,28 @@ def test_only_code_that_opens_a_device_needs_the_safe_runner(sandbox):
     assert len(command_violations([opens], sandbox.repo)) == 1
     assert len(command_violations(["PYTHONPATH=. python dev.py"], sandbox.repo)) == 1
     assert len(command_violations(["python -c 'import ttnn; ttnn.open_device(0)'"], sandbox.repo)) == 1
+
+
+def test_pause_stops_before_the_next_task(orch):
+    from models.demos.common.bringup.orchestrator import PAUSED
+
+    o = orch(
+        [
+            {"id": "A", "title": "a", "gate": {"cmd": "true"}},
+            {"id": "B", "title": "b", "deps": ["A"], "gate": {"cmd": "true"}},
+        ],
+        {},
+    )
+    o.pause_file.write_text("x")
+    assert o.run() == PAUSED and o.led.status("A") == "TODO"
+    o.pause_file.unlink()
+    assert o.run() == DONE
+
+
+def test_a_box_that_fails_at_device_open_stops_the_run_without_burning_attempts(orch):
+    cmd = f"{PY} -c \"print('TT_THROW: Device 1: Timed out while waiting for active ethernet core 31-25'); raise SystemExit(1)\""
+    o = orch([impl_task(tests=[], gate={"cmd": cmd, "metrics": {}})], {})
+    assert o.run() == STOPPED
+    st = o.led.state()["C.1"]
+    assert st["status"] == "STOPPED" and "reset the board" in st["reason"][0]
+    assert orch.calls() == []  # no agent was started
