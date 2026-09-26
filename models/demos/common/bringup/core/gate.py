@@ -180,6 +180,8 @@ def stage_paths(spec: Spec, ledger: Ledger, task: dict) -> list[str]:
     if ledger.breadcrumbs.exists():
         paths.append(rel(ledger.breadcrumbs))
     paths += [p for p in task.get("paths", []) if (repo / p).exists()]
+    if task.get("step") == "contract":
+        paths.append("models/demos/common/prefill")  # orchestrator.CONTRACT_SHARED: the contract agent may change it
     return [p for p in paths if (repo / p).exists() or _tracked(repo, p)]
 
 

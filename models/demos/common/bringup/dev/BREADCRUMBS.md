@@ -308,3 +308,16 @@ Drive this ledger with
   (not on a golden-prefix rung, whose one chunk is cold). The profile records it from an extra warm run.
 - Gemma's ledger is already approved and its rungs passed, so for Gemma it is reported by X.1 only; the fixes go on
   the X.2 list. Owner approved K.1 touching adapter.py (`approve shared:K.1`).
+
+## F28 (2026-09-26): clean full-prefill measurement
+- X.1 (`testing/profile.full_prefill`) now also runs the whole target prefill warm: embed -> all layers -> final norm
+  per chunk, nothing read back, one sync at the end (a compile pass first). Records prefill_ms_full, prefill_tok_s
+  and, from a pass that syncs after each chunk, prefill_chunk_ms_c<nn>. Excludes the LM head (Gemma's is on the host).
+
+## F29 (2026-09-26): no approval formalities for agents; stale waiting note
+- Owner: no approvals for agents to do their step's work. F26's wait is removed; the contract step's agent may change
+  `models/demos/common/prefill` (orchestrator.CONTRACT_SHARED, allowed and staged for every contract task). ledger_gen's
+  K.1 paths drop adapter.py (covered by the above).
+- Gemma K.1: the engine's producer picks a KV reader by adapter name and sent Gemma to the MLA reader (KV_LORA_RANK).
+  The agent's finding proposes an adapter hook; the next K.1 attempt can now make it.
+- A task's "waiting for a person" note is cleared when the task runs again (the teletext kept flashing it on K.1).
