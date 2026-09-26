@@ -738,3 +738,14 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Device gate: pass, pcc_swap_out 0.999989, block out rel 0.0047 / 0.0038; router pcc 0.99983, whole-matrix rel 0.018, overlap 0.99805 / 0.99890,
   matched rel 0.00337 / 0.00232, row-sum ratio [0.9958, 1.0033] / [0.9973, 1.0025]. The pcc=0.000000 lines come from the precompile pass (comp_pcc stub).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_08_router.py`
+
+## C.global.moe_norm.test.1 (test review)
+- Rewrote the rendered `tests/bringup/test_c_global_moe_norm.py` to the same shape as `test_c_global_ffn_norm.py` /
+  `test_c_sliding_moe_norm.py`: gated PCC >= 0.99, plus asserted rel L2 <= 0.03 and per-token norm ratio in [0.97, 1.03]
+  (recorded as informational metrics). Reason: PCC is scale-blind (known issue "PCC alone does not gate a norm").
+- Layer 5 pre_feedforward_layernorm_2 w in [-0.31, 175]. CPU-only measurements on the golden ([2048, 2816]): reference
+  PCC 0.999997 / rel 0.0024 / ratio [0.9983, 1.0014]; bf16 rel 0.0029; `1 + w` PCC 0.535; no weight 0.33; wrong weight
+  0.53; sum-instead-of-mean and 2x pass PCC but rel ~1.0; last row zeroed caught by ratio; last 32 rows rel 0.123.
+- BRINGUP_IMPL=reference passes; BRINGUP_IMPL=stub fails (PCC 0). Default gate: PCC 0.999996, rel 0.0030,
+  ratio [0.9975, 1.0010].
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_moe_norm.py`
