@@ -1,0 +1,42 @@
+[
+  {
+    "layer_type": "sliding_attention",
+    "candidate": "EP4 v2",
+    "source": "sliding_ep_v2.json",
+    "minimum_pcc": 0.9998508502387519,
+    "minimum_cache_pcc": 0.999999998714412,
+    "timing_basis": "warmed host wall microseconds, not device time",
+    "tp1": {
+      "prefill_host_us": 221223.714761436,
+      "decode_host_us": 825.5252614617348
+    },
+    "tp4": {
+      "prefill_host_us": 100370.46577781439,
+      "decode_host_us": 936.3917633891106
+    },
+    "prefill_speedup": 2.204071815818301,
+    "decode_speedup": 0.8816024379303451,
+    "prefill_efficiency": 0.5510179539545752,
+    "decode_efficiency": 0.22040060948258627
+  },
+  {
+    "layer_type": "full_attention",
+    "candidate": "EP4 v2",
+    "source": "full_ep_v2.json",
+    "minimum_pcc": 0.9979172844722686,
+    "minimum_cache_pcc": 0.9999715022296233,
+    "timing_basis": "warmed host wall microseconds, not device time",
+    "tp1": {
+      "prefill_host_us": 186597.80267626047,
+      "decode_host_us": 876.8183179199696
+    },
+    "tp4": {
+      "prefill_host_us": 85972.09118306637,
+      "decode_host_us": 935.3798814117908
+    },
+    "prefill_speedup": 2.170446247246967,
+    "decode_speedup": 0.9373927484911981,
+    "prefill_efficiency": 0.5426115618117417,
+    "decode_efficiency": 0.23434818712279953
+  }
+]

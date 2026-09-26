@@ -166,5 +166,59 @@
     ],
     "native_profile_audit": "optimized_decoder/final_roofline_audit.json",
     "native_profile_runtime_sha256": "5ff391a2efb6096e7d9eaa499c6d19a8548cf9a60d108425e773d4ded72ee898"
+  },
+  "multichip_decoder": {
+    "status": "candidate_unvalidated",
+    "target_mesh": [
+      1,
+      4
+    ],
+    "hardware": "4 Blackhole P300c ASICs",
+    "tp": 4,
+    "supported_context_target": 262144,
+    "capability_reduction": false,
+    "logical_length_alignment_required": false,
+    "kv_dtype": "bfloat8_b",
+    "local_kv_heads": {
+      "sliding_attention": 2,
+      "full_attention": 1
+    },
+    "kv_cache_bytes_per_device_per_layer_at_max_context": {
+      "sliding_attention": 285212672,
+      "full_attention": 285212672
+    },
+    "full_stack_kv_cache_bytes_per_device_at_max_context": 8556380160,
+    "weight_bytes_per_device": 6067486720,
+    "reserved_trace_activation_bytes": 2147483648,
+    "largest_tested_multichip_context": 4224,
+    "evidence": [
+      "multichip_decoder/mesh_plan.md",
+      "multichip_decoder/memory_capacity_plan.json",
+      "multichip_decoder/memory_audit.md",
+      "multichip_decoder/sliding_ep_v2.json",
+      "multichip_decoder/full_ep_v2.json"
+    ],
+    "missing_reasons": [
+      "Full-stack payload and constructor lifetimes are source-audited; maximum-context multichip allocation and allocator peak remain unvalidated. No context reduction is made.",
+      "The 4.125 GiB long-prefill input/chunk-output/concatenation buffers are counted separately from the 2 GiB reserve; shared per-kind RoPE and tied embedding/LM-head storage are required by this bound."
+    ],
+    "memory_capacity_status": "calculated_unvalidated",
+    "long_prefill_live_buffers_bytes_per_device": 4429185024,
+    "long_prefill_live_buffer_components_bytes_per_device": {
+      "input_bf16": 1476395008,
+      "retained_chunk_outputs_bf16": 1476395008,
+      "concatenated_output_bf16": 1476395008,
+      "total": 4429185024
+    },
+    "resident_and_reserve_bound_bytes_per_device": 19858358272,
+    "conservative_peak_bound_bytes_per_device": 24287543296,
+    "memory_accounting": "multichip_decoder/memory_audit.md",
+    "hypothetical_dual_expert_layout": {
+      "selected": false,
+      "implemented": false,
+      "additional_expert_weight_bytes_per_device": 4797562880,
+      "conservative_peak_bound_bytes_per_device": 29085106176,
+      "status": "calculated_unvalidated"
+    }
   }
 }

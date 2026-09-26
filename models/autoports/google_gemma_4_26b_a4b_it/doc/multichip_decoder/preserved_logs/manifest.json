@@ -1,0 +1,47 @@
+[
+  {
+    "source": "ep_watch_noinline.log",
+    "sha256": "790510254f6fa8bed4ba6306c1935434f5689e737bb49548072444001c146e69",
+    "compressed": "preserved_logs/ep_watch_noinline.log.gz"
+  },
+  {
+    "source": "ccl_watcher.log",
+    "sha256": "42f6499308ab76142a3c55272db928fcd16b34fef459c4f108ff66cec0780cb2",
+    "compressed": "preserved_logs/ccl_watcher.log.gz"
+  },
+  {
+    "source": "ccl_watcher_single_erisc.log",
+    "sha256": "24e7274907d7748abc964c988c2de00fe5d49ced2d0c0f633fb22005ae4e1b2c",
+    "compressed": "preserved_logs/ccl_watcher_single_erisc.log.gz"
+  },
+  {
+    "source": "ccl_watcher_reset.log",
+    "sha256": "d104156b3d3ec9c17c9788d5d03f3df04678d7dd7604aa1e7ca0ad8198b58465",
+    "compressed": "preserved_logs/ccl_watcher_reset.log.gz"
+  },
+  {
+    "source": "ccl_single_erisc_reset.log",
+    "sha256": "d104156b3d3ec9c17c9788d5d03f3df04678d7dd7604aa1e7ca0ad8198b58465",
+    "compressed": "preserved_logs/ccl_single_erisc_reset.log.gz"
+  },
+  {
+    "source": "final_device_list.log",
+    "sha256": "4ac8cff3069ae17f960bf873c1a0c14a94cae6f041617726c2aa111ada1d51c8",
+    "compressed": "preserved_logs/final_device_list.log.gz"
+  },
+  {
+    "source": "final_mesh_smoke.log",
+    "sha256": "68dd1fe63601e2cd146d90e821637aeb5cffd06ee7c84d6688e7174ffd4054b6",
+    "compressed": "preserved_logs/final_mesh_smoke.log.gz"
+  },
+  {
+    "source": "precommit.log",
+    "sha256": "1ceb812b5215d77c2e302892726526904a96d9f0e4900dc27a4972d38851dd08",
+    "compressed": "preserved_logs/precommit.log.gz"
+  },
+  {
+    "source": "precommit_staged.log",
+    "sha256": "1ceb812b5215d77c2e302892726526904a96d9f0e4900dc27a4972d38851dd08",
+    "compressed": "preserved_logs/precommit_staged.log.gz"
+  }
+]
