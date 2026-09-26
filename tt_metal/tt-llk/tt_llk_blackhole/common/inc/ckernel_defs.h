@@ -365,6 +365,9 @@ enum class BinaryOp : std::uint8_t
     // register, so it needs its own variant.
     NEXTAFTER      = 43,
     NEXTAFTER_BF16 = 44,
+    // hypot scales the pair by a power of two before squaring, so neither square can leave
+    // the format. The undo scale is the only value live across the square root.
+    HYPOT = 45,
 };
 
 enum class PackMode : std::uint8_t
