@@ -430,3 +430,21 @@ Next
 - Every full_dense step is now on the device in the swap harness; the device module for mlp_residual already existed.
 
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_full_dense_06_mlp_residual.py`
+
+## C.sliding_moe.attn_norm test (attempt 1), 2026-09-26
+
+What was done
+- Replaced the rendered `run_component_test` body of `tests/bringup/test_c_sliding_moe_attn_norm.py` with the
+  full_dense attn_norm test body at LAYER = 1 (same RMSNorm: plain `w`, eps 1e-6). Checks: PCC >= 0.99 (gated),
+  output finite, rel L2 <= 0.03, per-token norm ratio in [0.97, 1.03].
+- Mutations measured on the layer-1 golden on the CPU (layer-1 input_layernorm w in [-0.13, 2.47], a wider range than layer 0):
+  fp32 reference rel 0.0024 / ratio [0.9954, 1.0043]; sum-not-mean PCC ~1.0 but rel 0.98; eps 1e-3 PCC 0.998, rel 0.36;
+  eps 1e-2 PCC 0.993, rel 0.74; 1 + w PCC 0.78; one zeroed row PCC ~1.0, ratio min 0; last 32 rows zeroed PCC 0.993,
+  rel 0.12. Every one fails at least one assert, so the limits stay as they were.
+
+Results
+- BRINGUP_IMPL=reference: PASS (PCC 0.999997, rel 0.00236). BRINGUP_IMPL=stub: FAIL (PCC).
+- Default (device) run already PASSES: PCC 0.999996, rel 0.00295, ratio [0.9934, 1.0058]. The norm module from
+  full_dense serves this step already. The first `FAIL ... pcc=0.000000` line comes from the precompile pass.
+
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_sliding_moe_attn_norm.py`
