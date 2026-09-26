@@ -27,6 +27,11 @@ on:
         required: true
         type: string
         description: "JSON array of exabox multihost legs (models-unit-tests-impl.yaml matrix_multihost output)."
+      matmul-registry-mode:
+        required: false
+        type: string
+        default: "off"
+        description: "Matmul registry mode for test processes"
       hang-detection-timeout:
         required: false
         type: number
@@ -64,6 +69,7 @@ jobs:
       # Forwarded to the mpirun ranks (PRTE_MCA_prte_fwd_environment) so gated HF models can be
       # downloaded. Requires the token's HF account to have accepted the model's license.
       HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+      TTNN_CONFIG_OVERRIDES: '{"matmul_registry_mode":"${{ inputs.matmul-registry-mode }}"}'
     strategy:
       fail-fast: false
       matrix:

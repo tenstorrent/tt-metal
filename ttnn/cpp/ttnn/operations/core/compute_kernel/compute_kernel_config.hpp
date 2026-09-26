@@ -26,6 +26,23 @@ struct ComputeKernelConfig {
         ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE;
 };
 
+// Decode the stable underlying values used by generated/configuration data.
+// Keeping this validation here avoids each consumer duplicating the enum switch.
+constexpr std::optional<tt::tt_metal::MathFidelity> math_fidelity_from_raw_value(
+    const std::uint32_t value) noexcept {
+    switch (value) {
+        case static_cast<std::uint32_t>(tt::tt_metal::MathFidelity::LoFi):
+            return tt::tt_metal::MathFidelity::LoFi;
+        case static_cast<std::uint32_t>(tt::tt_metal::MathFidelity::HiFi2):
+            return tt::tt_metal::MathFidelity::HiFi2;
+        case static_cast<std::uint32_t>(tt::tt_metal::MathFidelity::HiFi3):
+            return tt::tt_metal::MathFidelity::HiFi3;
+        case static_cast<std::uint32_t>(tt::tt_metal::MathFidelity::HiFi4):
+            return tt::tt_metal::MathFidelity::HiFi4;
+        default: return std::nullopt;
+    }
+}
+
 inline std::ostream& operator<<(std::ostream& os, const ComputeKernelConfig& cfg) {
     os << "ComputeKernelConfig(math_fidelity=" << cfg.math_fidelity << ",math_approx_mode=" << cfg.math_approx_mode
        << ",fp32_dest_acc_en=" << cfg.fp32_dest_acc_en << ",packer_l1_acc=" << cfg.packer_l1_acc
