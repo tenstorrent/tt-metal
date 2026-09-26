@@ -37,6 +37,7 @@ DEVICE_STEPS = {
         "mlp",
         "post_mlp_norm",
         "router",
+        "moe_norm",
     },
     "global": set(),
 }
@@ -50,6 +51,7 @@ _NORM_WEIGHTS = {
     "post_attn_norm": "post_attention_layernorm.weight",
     "ffn_norm": "pre_feedforward_layernorm.weight",
     "post_mlp_norm": "post_feedforward_layernorm_1.weight",
+    "moe_norm": "pre_feedforward_layernorm_2.weight",
 }
 
 
