@@ -363,3 +363,22 @@ def test_a_perf_task_brief_carries_its_details(orch):
     text = o.brief(o.led.task("C.1"), "perf", 1).read_text()
     assert "Role: perf" in text and "SDPA config A: HiFi2, approx exp" in text
     assert o.policy(o.led.task("C.1"), "perf")["escalate"] == "debugger"
+
+
+def test_a_source_edit_that_mentions_device_calls_is_not_device_access(tmp_path):
+    """F34: an agent's heredoc that rewrote hooks.py carried synchronize_device in a string and was flagged."""
+    from models.demos.common.bringup.orchestrator import code_opens_device
+
+    edit = "p='hooks.py'\ns=open(p).read()\nnew='''def sync(self):\n    ttnn.synchronize_device(self.mesh)'''\nopen(p,'w').write(s+new)\n"
+    assert not code_opens_device(edit, tmp_path)
+    assert code_opens_device("import ttnn\nd = ttnn.open_mesh_device(ttnn.MeshShape(1, 4))\n", tmp_path)
+    assert code_opens_device("import ttnn\nttnn.synchronize_device(d)\n", tmp_path)
+
+
+def test_a_passing_gate_is_not_redone_for_a_command_problem(orch):
+    """F34: P.1 passed its gate, a command problem was reported, and the orchestrator started attempt 2 anyway."""
+    acts = {"C.1.implement.1.md": {"write": {"src/impl.txt": "1.0"}, "bash": ["pytest tests/check.py"]}}
+    o = orch([impl_task()], acts)
+    assert o.run() == DONE and o.led.status("C.1") == "PASS"
+    assert [c for c in orch.calls() if ".implement." in c] == ["C.1.implement.1.md bringup-engineer"]
+    assert o.led.state()["C.1"]["review"]
