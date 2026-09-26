@@ -258,13 +258,32 @@ def test_layer_norm_welford_large_offset(device, width, has_residual):
     assert actual.mean(dim=-1).abs().max() < 0.004
 
 
-@pytest.mark.parametrize("rows,width", [(32, 8192), (512, 8192), (1024, 8192), (32, 16384)])
+@pytest.mark.parametrize(
+    "rows,width",
+    [
+        (32, 8192),
+        (512, 8192),
+        (1024, 8192),
+        (32, 16384),
+        pytest.param(None, 487, id="repeated_rows_partial_width"),
+        pytest.param(None, 2880, id="repeated_rows_aligned_width"),
+    ],
+)
 def test_layer_norm_welford_fp32_residual_large_offset(device, rows, width):
     """Fused FP32 pre-add must preserve variation below a large shared offset."""
     torch.manual_seed(29)
     base = 1_000_000.0
-    torch_input = base + 64.0 * torch.randn((rows, width), dtype=torch.float32)
-    torch_residual = base + 64.0 * torch.randn((rows, width), dtype=torch.float32)
+    scale = 64.0
+    if rows is None:
+        # Tiled FP32 residuals select the large kernel. Force several NCHt
+        # iterations per core and vary statistics to expose stale DST/DFB state.
+        grid = device.compute_with_storage_grid_size()
+        rows = 32 * (2 * grid.x * grid.y + 1)
+        tile_row = (torch.arange(rows, dtype=torch.float32) // 32).unsqueeze(1)
+        base = base + 128.0 * tile_row
+        scale = scale + 8.0 * (tile_row % 7)
+    torch_input = base + scale * torch.randn((rows, width), dtype=torch.float32)
+    torch_residual = base + scale * torch.randn((rows, width), dtype=torch.float32)
     reference = torch.nn.functional.layer_norm(
         torch_input.to(torch.float64) + torch_residual.to(torch.float64),
         [width],
