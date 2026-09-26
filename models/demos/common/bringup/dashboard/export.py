@@ -75,6 +75,8 @@ def hf_arch(spec) -> str:
 def kt(n) -> str:
     """Tokens in 1024-token k: 56320 -> '55k', 51200 -> '50k'."""
     k = n / 1024
+    if n == 0:
+        return "0"
     return f"{k:.0f}k" if abs(k - round(k)) < 0.05 else f"{k:.1f}k"
 
 
