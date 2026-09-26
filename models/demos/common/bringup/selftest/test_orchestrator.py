@@ -340,17 +340,17 @@ def test_a_test_killed_by_its_timeout_stops_for_a_person(orch):
     assert orch.calls() == []
 
 
-def test_a_task_that_changes_shared_code_waits_for_the_owner(orch, sandbox):
-    """F26: a task whose allowed paths leave the model's own directories (K.1: the engine's adapter registry) waits
-    for approve shared:<id> before any agent or gate runs; the approval is bound to that list of paths."""
-    from models.demos.common.bringup.plan import approvals
+def test_the_contract_step_may_change_the_prefill_engine(orch):
+    """F29 (owner): the contract agent may change models/demos/common/prefill without an approval; other roles may not."""
+    from models.demos.common.bringup.orchestrator import CONTRACT_SHARED
 
-    o = orch([impl_task(paths=["src", "lib/registry.py"])], {"C.1.implement.1.md": {"write": {"src/impl.txt": "1.0"}}})
-    assert o.run() == HUMAN and orch.calls() == []
-    assert "approve shared:C.1" in o.led.state()["C.1"]["waiting"]
-    task = o.led.task("C.1")
-    assert approvals.shared_paths(sandbox.spec, task) == ["lib/registry.py"]
-    approvals.approve_shared(sandbox.spec, task, by="owner")
-    assert approvals.shared_approved(sandbox.spec, task)
-    assert not approvals.shared_approved(sandbox.spec, dict(task, paths=["src", "lib/other.py"]))
-    assert o.run() == DONE
+    o = orch([impl_task()], {})
+    assert CONTRACT_SHARED in o.allowed_paths(dict(o.led.task("C.1"), step="contract"), "contract")
+    assert CONTRACT_SHARED not in o.allowed_paths(o.led.task("C.1"), "implement")
+
+
+def test_a_stale_waiting_note_is_cleared_when_the_task_runs_again(orch):
+    """F29: the dashboard showed "waiting for a person" on a running task after the person had answered."""
+    o = orch([impl_task()], {"C.1.implement.1.md": {"write": {"src/impl.txt": "1.0"}}})
+    o.led.update("C.1", waiting="approve something")
+    assert o.run() == DONE and not o.led.state()["C.1"].get("waiting")
