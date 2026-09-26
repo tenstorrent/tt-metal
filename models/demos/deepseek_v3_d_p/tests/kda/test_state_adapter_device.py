@@ -29,10 +29,11 @@ from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
     recurrent_segment_to_torch,
 )
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
-    kda_segment_bytes,
+    KDA_VERSIONS,
     kda_chunk_n_tokens,
     kda_max_sequence_length,
     kda_position,
+    kda_segment_bytes,
     populate_kv_chunk_address_table_kda,
 )
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical
@@ -288,6 +289,20 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params, layer_ids
     assert loc.noc_addr == ((shard % banks) << 32) | (
         slabs.recurrent.buffer_address() + (shard // banks) * geometry.recurrent_segment_bytes
     )
+    # 6. The window decode asks for (v = (real_len - 1) % 8, here the last one) aliases window 0: same
+    #    location on the real table object, same bytes through its own read path.
+    for name, kind in (("1", "kda_recurrent"), ("2", "kda_convolution")):
+        cfg_id = table.config_id_of(name)
+        head = table.lookup(probe_layer, kda_position(geometry, kind, 5, 0), probe_slot, cfg_id)
+        alias = table.lookup(probe_layer, kda_position(geometry, kind, 5, KDA_VERSIONS - 1), probe_slot, cfg_id)
+        assert (alias.noc_addr, alias.size_bytes, alias.device_group_index) == (
+            head.noc_addr,
+            head.size_bytes,
+            head.device_group_index,
+        ), f"{kind}: window {KDA_VERSIONS - 1} does not alias window 0"
+        assert bytes(
+            table.read_device_chunk(probe_layer, kda_position(geometry, kind, 5, KDA_VERSIONS - 1), probe_slot, cfg_id)
+        ) == bytes(table.read_device_chunk(probe_layer, kda_position(geometry, kind, 5, 0), probe_slot, cfg_id))
     print(f"host {socket.gethostname()}: table check ok for fabric node {int(fid.mesh_id)}:{int(fid.chip_id)}")
 
     for state in natives.values():
