@@ -1469,6 +1469,16 @@ targets:
             accuracy: {}
             owner_id: U08FBKRKTB8 # Kohei Yamaguchi
             team: models
+          # accuracy_512 (text_demo.py): measured 98.44 / 100.00 on bh_quietbox_2, 2026-09-18.
+          - batch_size: 1
+            seq_len: 512
+            status: active
+            perf: {}
+            accuracy:
+              top1: 97
+              top5: 99
+            owner_id: U08FBKRKTB8 # Kohei Yamaguchi
+            team: models
   qwen3.6-27b:
     aliases: ["Qwen3.6-27B", "Qwen/Qwen3.6-27B"]
     skus:
@@ -1562,6 +1572,16 @@ targets:
               decode_t/s/u: 14.67
               tolerance: 0.2
             accuracy: {}
+            owner_id: U08HL8X1ECD # Aniruddha Tupe
+            team: models
+          # accuracy_512 (text_demo.py): measured 98.63 / 100.00 on bh_quietbox_2, 2026-09-18.
+          - batch_size: 1
+            seq_len: 512
+            status: active
+            perf: {}
+            accuracy:
+              top1: 97
+              top5: 99
             owner_id: U08HL8X1ECD # Aniruddha Tupe
             team: models
   qwq-32b:

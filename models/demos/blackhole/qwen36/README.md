@@ -130,6 +130,22 @@ the config, transparent to the demo).
 > Long-context cases (64k+) download a public-domain corpus (Frankenstein, War
 > and Peace) on first run and cache it under `demo/sample_prompts/.context_cache`.
 
+### Reference accuracy (`accuracy_512`)
+
+Scores top-1/top-5 against HuggingFace by teacher-forcing a committed reference;
+the floors live in `models/model_targets.yaml`.
+
+```bash
+pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "accuracy_512"
+```
+
+When a checkpoint changes, regenerate its reference on CPU (no device needed):
+
+```bash
+python models/tt_transformers/tests/generate_reference_hf.py --model Qwen/Qwen3.6-27B \
+    --output_file models/tt_transformers/tests/reference_outputs/Qwen3.6-27B.refpt
+```
+
 ## Tests
 
 There are two tiers of tests under `tests/`.
