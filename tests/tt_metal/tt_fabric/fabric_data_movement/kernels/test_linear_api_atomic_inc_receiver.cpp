@@ -64,17 +64,6 @@ void kernel_main() {
         }
         WAYPOINT("FPD");
 
-        if constexpr (
-            noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC ||
-            noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC) {
-            bool data_written = false;
-            for (uint32_t j = 0; j < payload_size_words; j++) {
-                if (start_addr[j] != 0) {
-                    data_written = true;
-                    break;
-                }
-            }
-        }
         operations_received++;
     }
 
