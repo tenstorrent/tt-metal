@@ -4,8 +4,9 @@
 """Bit-exactness gate for the CFG hoist in `WanTransformer3DModel.combined_step`.
 
 Under classifier-free guidance `combined_step` runs `inner_step` twice with the same timestep
-and spatial input, so the timestep embedding and the patch embedding are now computed once and
-handed to both passes. That is pure reuse of identical device results, so the gate is exact
+and spatial input, so the timestep embedding, the patch embedding and every block's AdaLN
+modulation (`WanTransformerBlock.prepare_modulation`, plus the `norm_out` pair) are now computed
+once and handed to both passes. That is pure reuse of identical device results, so the gate is exact
 equality, not a PCC floor: the hoisted `combined_step` must match the pre-hoist computation
 (two independent `inner_step` calls and a `ttnn.lerp`) to the bit, and each pass must match
 its standalone `inner_step`.
@@ -121,10 +122,14 @@ def test_cfg_hoist_bit_exact(mesh_device, sp_axis, tp_axis, num_links, device_pa
         )
     )
 
-    # Each pass with the shared embeddings handed in explicitly, against its standalone self.
+    # Each pass with the shared embeddings and the per-block AdaLN modulations handed in
+    # explicitly, against its standalone self (which computes all of them inline).
+    temb_11BD, timestep_proj_1BTD = tt_model.prepare_timestep_conditioning(timestep)
     shared = {
-        "timestep_conditioning": tt_model.prepare_timestep_conditioning(timestep),
+        "timestep_conditioning": (temb_11BD, timestep_proj_1BTD),
         "spatial_1BND": tt_model.patch_embedding(spatial_device),
+        "block_modulations": [block.prepare_modulation(timestep_proj_1BTD) for block in tt_model.blocks],
+        "norm_out_modulation": tt_model.prepare_norm_out_modulation(temb_11BD),
     }
     new_cond = local_device_to_torch(tt_model.inner_step(prompt_1BLP=prompt_1BLP, **common, **shared))
     new_uncond = local_device_to_torch(tt_model.inner_step(prompt_1BLP=negative_1BLP, **common, **shared))
