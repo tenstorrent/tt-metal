@@ -208,7 +208,7 @@ std::uint64_t hash_moe_gate_program_structure(const tt::tt_metal::ProgramDescrip
     auto hash_cb_format_descriptor = [&](const tt::tt_metal::CBFormatDescriptor& format_descriptor) -> size_t {
         return ttsl::hash::hash_objects_with_default_seed(
             format_descriptor.buffer_index,
-            format_descriptor.data_format,
+            tt::tt_metal::resolve_data_format(format_descriptor.data_format),
             format_descriptor.page_size,
             format_descriptor.tile);
     };

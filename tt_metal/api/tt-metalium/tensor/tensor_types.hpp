@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <variant>
 #include <vector>
 #include <algorithm>
 
@@ -75,6 +76,14 @@ tt::tt_metal::DataType dataformat_to_datatype_converter(tt::DataFormat dataforma
  *This differs from datatype_to_dataformat_converter only for INT8.
  */
 tt::DataFormat cb_dataformat_for(DataType datatype);
+
+/**
+ * Returns the DataFormat for a descriptor field that holds either a DataFormat or a DataType
+ * (CBFormatDescriptor::data_format, DataflowBufferSpec::data_format_metadata).
+ *
+ * A DataFormat is returned as is; a DataType is converted with datatype_to_dataformat_converter.
+ */
+tt::DataFormat resolve_data_format(const std::variant<tt::DataFormat, DataType>& format);
 
 /**
  * Returns tile size of given data type in bytes.

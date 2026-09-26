@@ -109,6 +109,13 @@ tt::DataFormat cb_dataformat_for(tt::tt_metal::DataType datatype) {
                                                     : datatype_to_dataformat_converter(datatype);
 }
 
+tt::DataFormat resolve_data_format(const std::variant<tt::DataFormat, DataType>& format) {
+    if (const auto* data_type = std::get_if<DataType>(&format)) {
+        return datatype_to_dataformat_converter(*data_type);
+    }
+    return std::get<tt::DataFormat>(format);
+}
+
 tt::tt_metal::DataType dataformat_to_datatype_converter(tt::DataFormat dataformat) {
     switch (dataformat) {
         case tt::DataFormat::Float16_b: return tt::tt_metal::DataType::BFLOAT16;

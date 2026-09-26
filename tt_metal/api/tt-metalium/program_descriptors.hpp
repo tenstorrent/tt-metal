@@ -40,6 +40,7 @@ struct Tile;
 class Buffer;
 class Program;
 class MeshTensor;
+enum class DataType;
 
 namespace experimental {
 class GlobalCircularBuffer;
@@ -62,7 +63,8 @@ struct TileDescriptor {
 
 struct CBFormatDescriptor {
     uint8_t buffer_index = 0;
-    tt::DataFormat data_format = tt::DataFormat::Float32;
+    // A DataType is resolved with resolve_data_format() (tensor_types.hpp) when the circular buffer is created.
+    std::variant<tt::DataFormat, DataType> data_format = tt::DataFormat::Float32;
     uint32_t page_size = 0;
     std::optional<TileDescriptor> tile;
     std::optional<FaceGeometry> face_geometry;
