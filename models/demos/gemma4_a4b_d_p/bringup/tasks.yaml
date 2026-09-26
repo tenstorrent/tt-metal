@@ -1390,6 +1390,13 @@ tasks:
     - mlp
     - post_mlp_norm
     layer: 5
+  frozen:
+    at: '2026-09-26T02:56:03'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_07_post_mlp_norm.py: 45f82e7b302ba2647ddac1f9eb94df0712ec5cfd5f622f7c0c29d16d81d65e97
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
 - id: C.global.router
   title: global router (router) on device, layer 5
   step: implement
