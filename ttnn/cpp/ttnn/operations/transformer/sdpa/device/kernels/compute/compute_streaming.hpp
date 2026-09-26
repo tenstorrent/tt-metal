@@ -194,15 +194,6 @@ ALWI void sdpa_maybe_pack_reconfig_data_format() {
 }
 
 template <uint32_t old_cb, uint32_t new_cb>
-constexpr bool sdpa_pack_format_changed() {
-#ifdef TRISC_PACK
-    return pack_dst_format[old_cb] != pack_dst_format[new_cb];
-#else
-    return false;
-#endif
-}
-
-template <uint32_t old_cb, uint32_t new_cb>
 constexpr bool sdpa_unpack_format_changed() {
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
     return unpack_src_format[old_cb] != unpack_src_format[new_cb] ||
@@ -686,7 +677,7 @@ void reduce_c_row_group(
  * In-place sub_exp on cb_qkt_im: subtracts max, applies exp with ReLU clamping,
  * writes back to same positions. Accumulates row sums into reduce_cb.
  */
-template <bool profiling_enabled, uint32_t scale_fp32, bool reduce_pack_reconfig = false>
+template <bool profiling_enabled, uint32_t scale_fp32>
 void sub_exp_block_bcast_cols(
     uint32_t inout_cb,
     uint32_t max_cb,
@@ -749,7 +740,7 @@ void sub_exp_block_bcast_cols(
         } else {
             pack_contiguous_rows(inout_cb, max_row_base, tiles_per_row, cols_in_row, global_col_base, tiles_per_column);
         }
-        if constexpr (reduce_pack_reconfig) {
+        if constexpr (sdpa_fp32_accumulator()) {
             pack_reconfig_data_format(inout_cb, reduce_cb);
         }
         configure_single_tile_pack(reduce_cb);
@@ -784,7 +775,7 @@ void sub_exp_block_bcast_cols(
  * Column-only exp(prev_max - cur_max) for SALAD corrections.
  * Operates on first-column subset of tiles.
  */
-template <bool profiling_enabled, uint32_t scale_fp32, bool repack = false>
+template <bool profiling_enabled, uint32_t scale_fp32>
 void sub_exp_first_col_blocks(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t q_subblock, uint32_t sbh) {
     const uint32_t tiles_per_row = sbh;
     const uint32_t global_row_base = q_subblock * tiles_per_row;
@@ -811,7 +802,7 @@ void sub_exp_first_col_blocks(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb,
         }
         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 
-        if constexpr (repack) {
+        if constexpr (sdpa_fp32_accumulator()) {
             pack_reconfig_data_format(out_cb);
         }
         configure_single_tile_pack(out_cb);
@@ -981,34 +972,6 @@ void salad_correct_fp32(
     }
     // Back to the bf16 unpack formats the rest of the step assumes.
     reconfig_data_format(bcast_cb, bcast_cb);
-}
-
-template <uint32_t sbh_t, uint32_t sbw_t, uint32_t dst_size, bool fp32_acc>
-ALWI void salad_correct(
-    uint32_t out_in_cb,
-    uint32_t sum_in_cb,
-    uint32_t bcast_cb,
-    uint32_t out_out_cb,
-    uint32_t sum_out_cb,
-    uint32_t ob_q_subblock,
-    uint32_t sum_q_subblock,
-    uint32_t write_q_subblock,
-    uint32_t ones_row_cb) {
-    if constexpr (fp32_acc) {
-        salad_correct_fp32<sbh_t, sbw_t, dst_size>(
-            out_in_cb,
-            sum_in_cb,
-            bcast_cb,
-            out_out_cb,
-            sum_out_cb,
-            ob_q_subblock,
-            sum_q_subblock,
-            write_q_subblock,
-            ones_row_cb);
-    } else {
-        salad_correct_fused<sbh_t, sbw_t, dst_size>(
-            out_in_cb, sum_in_cb, bcast_cb, out_out_cb, sum_out_cb, ob_q_subblock, sum_q_subblock, write_q_subblock);
-    }
 }
 
 // Output tiles [base, base + n) times 1/sum, placed in DEST 0 from the vectors held in LREG0-7.
@@ -1741,6 +1704,11 @@ static void sdpa_inner_loop_step(
         sdpa_center_softmax_exp();
     }
 
+    // With the fp32 accumulator the scores are fp32 while the max and the reduce scaler stay bf16, so srcB is
+    // tracked through those CBs; the bf16 kernel keeps every intermediate in one format.
+    constexpr uint32_t cb_srcb_after_sub_exp = sdpa_fp32_accumulator() ? cb_exp_max_diff : cb_qkt_im;
+    constexpr uint32_t cb_srcb_after_qkt = sdpa_fp32_accumulator() ? cb_identity_scale_in : cb_qkt_im;
+
     // Use KT_stride for cb_qkt_im layout to keep CB pointers aligned across iterations
     CircularBuffer(cb_qkt_im).reserve_back(Sq_chunk_t * KT_stride);
 
@@ -1804,11 +1772,8 @@ static void sdpa_inner_loop_step(
         for (uint32_t kt_subblock = 0; kt_subblock < kt_num_full_subblocks; ++kt_subblock) {
             if (q_subblock > 0) {
                 uint32_t prev_q_subblock = q_subblock - 1;
-                sdpa_maybe_reconfig_data_format<cb_kt_in, cb_qkt_im, cb_q_in, cb_exp_max_diff>();
-                sub_exp_block_bcast_cols<
-                    profiling_enabled,
-                    scale_fp32,
-                    sdpa_pack_format_changed<cb_qkt_im, cb_recip_scratch>()>(
+                sdpa_maybe_reconfig_data_format<cb_kt_in, cb_qkt_im, cb_q_in, cb_srcb_after_sub_exp>();
+                sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
                     cb_qkt_im,
                     cur.max,
                     cur.sum,
@@ -1819,7 +1784,7 @@ static void sdpa_inner_loop_step(
                     actual_sbw,
                     /*skip_pack_configure=*/true);
                 sdpa_maybe_pack_reconfig_data_format<cb_recip_scratch, cb_qkt_im>();
-                sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_kt_in, cb_exp_max_diff, cb_q_in>();
+                sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_kt_in, cb_srcb_after_sub_exp, cb_q_in>();
                 mm_no_mop_reinit_short(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
             }
             {
@@ -1846,7 +1811,7 @@ static void sdpa_inner_loop_step(
             }
         }
         // After Q@KT: the scores on srcA for the mask and the reduce, the reduce scaler on srcB.
-        sdpa_maybe_reconfig_data_format<cb_kt_in, cb_qkt_im, cb_q_in, cb_identity_scale_in>();
+        sdpa_maybe_reconfig_data_format<cb_kt_in, cb_qkt_im, cb_q_in, cb_srcb_after_qkt>();
 
         // Mask stamp/apply: L1-accumulate the mask onto cb_qkt_im for this row group. A dense
         // user-provided mask and the structured lightweight palette are mutually exclusive — the
@@ -1996,6 +1961,7 @@ static void sdpa_inner_loop_step(
         // Writer drains save_out_cb row-by-row to DRAM during SALAD. cur.out stays empty.
         const uint32_t out_cb = (save_out_cb != INVALID_CB) ? save_out_cb : cur.out;
         constexpr bool fp32_acc = sdpa_fp32_accumulator();
+        constexpr uint32_t cb_after_v = fp32_acc ? cb_recip_scratch : cb_qkt_im;
 
         // V wait deferred: don't block here. The sub_exp drain loop below
         // doesn't touch V, so the reader's V DMA can overlap with the drain.
@@ -2017,10 +1983,7 @@ static void sdpa_inner_loop_step(
                 for (uint32_t kt_sub = 0; kt_sub < kt_num_full_subblocks; ++kt_sub) {
                     sdpa_maybe_reconfig_data_format<cb_recip_scratch, cb_qkt_im, cb_recip_scratch, cb_exp_max_diff>();
                     sdpa_maybe_pack_reconfig_data_format<cb_recip_scratch, cb_qkt_im>();
-                    sub_exp_block_bcast_cols<
-                        profiling_enabled,
-                        scale_fp32,
-                        sdpa_pack_format_changed<cb_qkt_im, cb_recip_scratch>()>(
+                    sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
                         cb_qkt_im,
                         cur.max,
                         cur.sum,
@@ -2049,7 +2012,12 @@ static void sdpa_inner_loop_step(
                     {
                         MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
                         uint32_t v_index_offset = 0;
-                        sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_v_in, cb_recip_scratch, cb_qkt_im>();
+                        if constexpr (fp32_acc) {
+                            sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_v_in, cb_recip_scratch, cb_qkt_im>();
+                        } else {
+                            sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(
+                                out_cb, out_cb);
+                        }
                         // cb_qkt_im rows are laid out at KT_stride even when this kt_sub only consumes a
                         // narrower logical width. Keep unpack init on the physical stride; inner_dim below
                         // still limits how many V rows are multiplied.
@@ -2072,7 +2040,7 @@ static void sdpa_inner_loop_step(
                                 /*skip_pack_configure=*/true);
                             v_index_offset += qktv_subblock_w;
                         }
-                        sdpa_maybe_reconfig_data_format<cb_v_in, cb_recip_scratch, cb_qkt_im, cb_recip_scratch>();
+                        sdpa_maybe_reconfig_data_format<cb_v_in, cb_after_v, cb_qkt_im, cb_after_v>();
                     }
 
                     if (kt_sub > 0) {
@@ -2087,10 +2055,7 @@ static void sdpa_inner_loop_step(
                 for (uint32_t kt_sub = 0; kt_sub < kt_num_full_subblocks; ++kt_sub) {
                     sdpa_maybe_reconfig_data_format<cb_recip_scratch, cb_qkt_im, cb_recip_scratch, cb_exp_max_diff>();
                     sdpa_maybe_pack_reconfig_data_format<cb_recip_scratch, cb_qkt_im>();
-                    sub_exp_block_bcast_cols<
-                        profiling_enabled,
-                        scale_fp32,
-                        sdpa_pack_format_changed<cb_qkt_im, cb_recip_scratch>()>(
+                    sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
                         cb_qkt_im,
                         cur.max,
                         cur.sum,
@@ -2108,7 +2073,12 @@ static void sdpa_inner_loop_step(
                 CircularBuffer(cb_qkt_im).wait_front(qktv_in0_wait_tiles);
                 {
                     MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
-                    sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_v_in, cb_recip_scratch, cb_qkt_im>();
+                    if constexpr (fp32_acc) {
+                        sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_v_in, cb_recip_scratch, cb_qkt_im>();
+                    } else {
+                        sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(
+                            out_cb, out_cb);
+                    }
                     mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
                     if constexpr (fp32_acc) {
                         pack_reconfig_data_format(out_cb);
@@ -2120,7 +2090,7 @@ static void sdpa_inner_loop_step(
                         qktv_in0_index_offset,
                         /*inner_dim=*/kt_num_full_subblocks * matmul_inner,
                         KT_stride);
-                    sdpa_maybe_reconfig_data_format<cb_v_in, cb_recip_scratch, cb_qkt_im, cb_recip_scratch>();
+                    sdpa_maybe_reconfig_data_format<cb_v_in, cb_after_v, cb_qkt_im, cb_after_v>();
                 }
             }
             qktv_in0_index_offset += qktv_h * KT_stride;
@@ -2171,7 +2141,41 @@ static void sdpa_inner_loop_step(
                 // sum_q_subblock=salad_row: prev.sum uses cumulative indexing (not popped per-row).
                 if constexpr (has_qktv_remainder) {
                     if (sbh == qktv_remainder_h) {
-                        salad_correct<qktv_remainder_h, vDHt, dst_size, fp32_acc>(
+                        if constexpr (fp32_acc) {
+                            salad_correct_fp32<qktv_remainder_h, vDHt, dst_size>(
+                                prev.out,
+                                prev.sum,
+                                cb_exp_max_diff,
+                                out_cb,
+                                cur.sum,
+                                0,
+                                salad_row,
+                                w_salad,
+                                cb_identity_scale_in);
+                        } else {
+                            salad_correct_fused<qktv_remainder_h, vDHt, dst_size>(
+                                prev.out, prev.sum, cb_exp_max_diff, out_cb, cur.sum, 0, salad_row, w_salad);
+                        }
+                    } else {
+                        if constexpr (fp32_acc) {
+                            salad_correct_fp32<qktv_h, vDHt, dst_size>(
+                                prev.out,
+                                prev.sum,
+                                cb_exp_max_diff,
+                                out_cb,
+                                cur.sum,
+                                0,
+                                salad_row,
+                                w_salad,
+                                cb_identity_scale_in);
+                        } else {
+                            salad_correct_fused<qktv_h, vDHt, dst_size>(
+                                prev.out, prev.sum, cb_exp_max_diff, out_cb, cur.sum, 0, salad_row, w_salad);
+                        }
+                    }
+                } else {
+                    if constexpr (fp32_acc) {
+                        salad_correct_fp32<qktv_h, vDHt, dst_size>(
                             prev.out,
                             prev.sum,
                             cb_exp_max_diff,
@@ -2182,28 +2186,9 @@ static void sdpa_inner_loop_step(
                             w_salad,
                             cb_identity_scale_in);
                     } else {
-                        salad_correct<qktv_h, vDHt, dst_size, fp32_acc>(
-                            prev.out,
-                            prev.sum,
-                            cb_exp_max_diff,
-                            out_cb,
-                            cur.sum,
-                            0,
-                            salad_row,
-                            w_salad,
-                            cb_identity_scale_in);
+                        salad_correct_fused<qktv_h, vDHt, dst_size>(
+                            prev.out, prev.sum, cb_exp_max_diff, out_cb, cur.sum, 0, salad_row, w_salad);
                     }
-                } else {
-                    salad_correct<qktv_h, vDHt, dst_size, fp32_acc>(
-                        prev.out,
-                        prev.sum,
-                        cb_exp_max_diff,
-                        out_cb,
-                        cur.sum,
-                        0,
-                        salad_row,
-                        w_salad,
-                        cb_identity_scale_in);
                 }
             }
             CircularBuffer(cb_exp_max_diff).pop_front(sbh);
@@ -2231,7 +2216,7 @@ static void sdpa_inner_loop_step(
             // SALAD for previous group (always a full group, h=qktv_h)
             if (!is_first_iter) {
                 CircularBuffer(cb_exp_max_diff).reserve_back(qktv_h);
-                sub_exp_first_col_blocks<profiling_enabled, scale_fp32, fp32_acc>(
+                sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
                     prev.max, cur.max, cb_exp_max_diff, salad_row, qktv_h);
                 CircularBuffer(cb_exp_max_diff).push_back(qktv_h);
             }
@@ -2245,7 +2230,12 @@ static void sdpa_inner_loop_step(
             {
                 MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
                 uint32_t v_index_offset = 0;
-                sdpa_maybe_reconfig_data_format<cb_recip_scratch, cb_v_in, cb_recip_scratch, cb_qkt_im>();
+                if constexpr (fp32_acc) {
+                    sdpa_maybe_reconfig_data_format<cb_recip_scratch, cb_v_in, cb_recip_scratch, cb_qkt_im>();
+                } else {
+                    sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(
+                        out_cb, out_cb);
+                }
                 // See the q_subblock-0 V matmul above: active_Sk can be narrower than the physical
                 // cb_qkt_im row stride, but the unpacker is configured for the physical layout.
                 mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, cur_h, KT_stride);
@@ -2276,7 +2266,7 @@ static void sdpa_inner_loop_step(
                         /*skip_pack_configure=*/true);
                     v_index_offset += qktv_subblock_w;
                 }
-                sdpa_maybe_reconfig_data_format<cb_v_in, cb_recip_scratch, cb_qkt_im, cb_recip_scratch>();
+                sdpa_maybe_reconfig_data_format<cb_v_in, cb_after_v, cb_qkt_im, cb_after_v>();
             }
 
             // SALAD corrections for previous group (always full, h=qktv_h) + row-by-row push
@@ -2289,7 +2279,7 @@ static void sdpa_inner_loop_step(
                         has_qktv_remainder ? (qktv_q_num_subblocks * qktv_h) : (qktv_q_num_subblocks - 1);
 
                     CircularBuffer(cb_exp_max_diff).reserve_back(drain_h);
-                    sub_exp_first_col_blocks<profiling_enabled, scale_fp32, fp32_acc>(
+                    sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
                         prev.max, cur.max, cb_exp_max_diff, drain_salad_row, drain_h);
                     CircularBuffer(cb_exp_max_diff).push_back(drain_h);
 
@@ -2343,7 +2333,7 @@ static void sdpa_inner_loop_step(
                 if (!is_first_iter) {
                     constexpr uint32_t drain_salad_row = 0;
                     CircularBuffer(cb_exp_max_diff).reserve_back(drain_h);
-                    sub_exp_first_col_blocks<profiling_enabled, scale_fp32, fp32_acc>(
+                    sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
                         prev.max, cur.max, cb_exp_max_diff, drain_salad_row, drain_h);
                     CircularBuffer(cb_exp_max_diff).push_back(drain_h);
                     salad_correct_row(drain_salad_row, 0, drain_h);
