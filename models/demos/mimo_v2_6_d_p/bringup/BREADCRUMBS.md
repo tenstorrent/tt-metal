@@ -725,3 +725,72 @@ Results
 - The precompile pass (zero attention) gives router overlap 0.976 against the golden, which the 0.985 limit catches.
 
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_sliding_moe_05_router.py`
+
+## C.sliding_moe.experts test (attempt 1), 2026-09-26
+
+What was done
+- Replaced the rendered `run_component_test` call in `tests/bringup/test_c_sliding_moe_experts.py` with the Gemma experts-test
+  body (gemma4_a4b_d_p `test_c_sliding_experts.py`), with LAYER set to 1. The gated metric is PCC >= 0.99. The test also asserts a finite output,
+  rel L2 <= 0.03, a per-token norm ratio within [0.97, 1.03], and a worst per-token rel L2 <= 0.1.
+- Measured the mutations on the golden with a CPU-only tt-probe (golden ffn_norm and router, the reference's layer-1 expert weights).
+  The numbers are in the test docstring. The probe dir was deleted.
+
+Why
+- PCC misses: drop expert 0 (0.9983), drop the hottest expert 64 (0.9960), drop each token's smallest pair (0.9956),
+  drop token 0's top-1 pair (0.99997), last row zeroed (0.99977), 2x output (0.999997), capacity 512/256 (0.998/0.9935). The extra
+  checks catch all of these.
+- Device-noise estimate: bfp8 weights blocked along the output dim plus bfp8 activations give rel 0.0091, ratio
+  [0.986, 1.014] and worst row 0.028. That is below a third of each limit.
+- Known gaps (these pass): drop expert 255 (3 tokens), drop one token's smallest pair, a uniform x1.02 scale.
+
+Gotchas for implement
+- Routing on this golden: tokens per expert 0..804 (expert 64 = 804). Pairs per chip (64 experts each):
+  3381 / 5292 / 3782 / 3929. Size dispatch capacity for the worst case, not the mean.
+- A crude LoFi model gives rel 0.048, which would fail. unified_routed_expert_moe hard-codes LoFi for Silu (known issues).
+  Measure early. Gemma needed a variant that honours math_fidelity (HiFi2 + fp32 dest).
+- The router golden is bf16, rows sum to 1, 8 nonzeros per row. No shared expert.
+- The `FAIL pcc_experts_L01: pcc=0.000000` line during collection is the precompile stub.
+
+Results
+- BRINGUP_IMPL=reference: PASS (PCC 0.999997, rel 0.0023, ratio [0.9954, 1.0037], worst row 0.0050).
+- BRINGUP_IMPL=stub: FAIL (PCC 0).
+- Device gate: FAIL with NotImplementedError ("no device module for experts yet"); the implement step writes it.
+
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_sliding_moe_experts.py`
+
+## C.sliding_moe.experts implement (attempt 1), 2026-09-26
+
+What was done
+- Added `tt/experts.py:TtExperts`, adapted from gemma4_a4b_d_p `tt/experts.py`. The pipeline is: topk(8) of the dense routing -> masked_bincount + offset_cumsum
+  -> TtDispatchModule (1-chip dispatch group, capacity 8 x S rows) -> experts -> TtCombineModule (init_zeros) ->
+  TtReduceModule -> `ttnn.all_reduce(cluster_axis=1)`. EP=4 puts 64 experts per chip, with bfp8 weights (a bfp4 request is asserted
+  against). Counts and offsets are [1, 256] global. `LazyExpertWeights` dequantizes mxfp4 one expert at a time.
+  TtRoutedExpert caches bfp8 tensorbins under `generated/mimo_v2_6_d_p/tt_cache/experts`
+  (`layer_{i}.experts.BFLOAT8_B.*`). A complete cache skips the dequant (checked with `check_cache_complete` + `fast_cache_checker`).
+- hooks.py: `_experts_module` and `_experts_host_fn`; `device_component` handles "experts"; "experts" is added to
+  `DEVICE_STEPS["sliding_moe"]`; the hybrid `device_model` gets an experts override.
+
+Decisions and why
+- The default is `MIMO_EXPERTS_MODE=loop`. For each local expert it runs `deepseek_prefill.extract` (cap = chunk length S), then `ttnn.linear` gate and up
+  (HiFi2, fp32 dest, auto program config), then `ttnn.multiply` with a SILU input activation, then `ttnn.linear` down, then `insert` into a
+  bf16 TILE slab. This departs from the components entry (unified_routed_expert_moe) because the fused Silu path fails the frozen
+  test's norm-ratio check: `unified` scores PCC 0.99982, rel 0.019, ratio [0.963, 1.054]; `fused` (moe_fused_swiglu) scores 0.99960 / 0.030 / [0.961, 1.055].
+  The brief's fix (make the factory honour fidelity for Silu) is a `ttnn/cpp` change, outside this step's
+  allowed paths. Both of those modes stay selectable.
+- Cost: warm, S=5120, random uniform routing: loop 148 ms per layer, unified 14 ms. Loop runs 64 experts x 5 ops per chip and
+  computes every expert over S rows (extract's static cap). About 0.6 s per chunk over the 4 sliding_moe layers of the subset.
+  The perf step should extend the factory's GeluTanh fidelity / fp32-dest handling to Silu
+  (`unified_routed_expert_ffn_program_factory.cpp:254` and `:1084`, then `./build_metal.sh`) and switch back to `unified`.
+
+Gotchas
+- `routed_expert_ffn` (BH) fixes subblock w 6 and rejects fp32 dest, hence the plain `ttnn.linear` calls.
+- `insert` needs its buffer and slab to share a dtype. The output slab is a bf16 TILE copy of the dispatch buffer; extract reads a bfp8 copy.
+- Loop mode compiles about 146 programs (extract/insert are keyed on local_expert_id). The first call is slow (55 s cold, 0.4 s JIT-warm).
+- The `FAIL pcc_experts_L01: pcc=0.000000` line during collection is the precompile stub.
+- The timing probe dir `tests/ttnn/unit_tests/operations/mimo_experts_timing/` was deleted.
+
+Results
+- Gate PASS: pcc_experts_L01 0.99995, rel_l2 0.0100, row norm ratio [0.9800, 1.0110], worst row rel L2 0.029 (device-noise
+  estimate in the test: 0.0091 / [0.986, 1.014] / 0.028).
+
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_sliding_moe_experts.py`
