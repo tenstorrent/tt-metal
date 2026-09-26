@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <core/ttnn_all_includes.hpp>
+#include <stdexcept>
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
@@ -54,6 +55,18 @@ TEST_P(FrobeniusNormalizeTest, MatchesCpuReference) {
     const auto result = core::to_xtensor(result_tensor);
 
     EXPECT_TRUE(xt::allclose(result, expected, /*rtol=*/1e-2f, /*atol=*/1e-2f));
+}
+
+class FrobeniusNormalizeValidationTest : public FrobeniusNormalizeTest {};
+
+TEST_F(FrobeniusNormalizeValidationTest, RejectsMultipleMatrices) {
+    using namespace ttml;
+
+    const ttnn::Shape shape({2, 2, 64, 64});
+    const auto data = test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, 42U);
+    const auto input_tensor = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(data, &autograd::ctx().get_device());
+
+    EXPECT_THROW(metal::frobenius_normalize(input_tensor), std::runtime_error);
 }
 
 static std::string CaseName(const ::testing::TestParamInfo<FrobeniusCase>& info) {

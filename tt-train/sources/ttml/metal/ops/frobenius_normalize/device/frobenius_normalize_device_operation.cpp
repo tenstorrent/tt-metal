@@ -4,6 +4,7 @@
 
 #include "frobenius_normalize_device_operation.hpp"
 
+#include <cstdint>
 #include <enchantum/enchantum.hpp>
 
 #include "frobenius_normalize_program_factory.hpp"
@@ -36,6 +37,18 @@ void FrobeniusNormalizeDeviceOperation::validate_on_program_cache_miss(
         input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
         "FrobeniusNormalize requires INTERLEAVED memory layout. Got: {}",
         enchantum::to_string(input_tensor.memory_config().memory_layout()));
+
+    const auto& input_shape = input_tensor.logical_shape();
+    TT_FATAL(input_shape.rank() >= 2U, "FrobeniusNormalize requires a tensor with rank >= 2. Got {}", input_shape);
+    uint64_t matrix_count = 1U;
+    for (uint32_t dim = 0; dim + 2U < input_shape.rank(); ++dim) {
+        matrix_count *= input_shape[dim];
+    }
+    TT_FATAL(
+        matrix_count == 1U,
+        "FrobeniusNormalize currently supports exactly one matrix, but shape {} contains {} matrices",
+        input_shape,
+        matrix_count);
 
     if (tensor_args.preallocated_output.has_value()) {
         const auto& output = tensor_args.preallocated_output.value();
