@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <cstdint>
 #include <optional>
 #include <string_view>
 #include <tt-metalium/core_coord.hpp>
@@ -15,6 +16,7 @@
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "metal/ops/softmax_backward/device/softmax_backward_program_factory.hpp"
 #include "test_utils/random_data.hpp"
 #include "tt-metalium/bfloat16.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -152,6 +154,53 @@ protected:
 };
 
 ttnn::distributed::MeshDevice* SoftmaxBackwardOpTest::s_device = nullptr;
+
+TEST(SoftmaxBackwardPlannerTest, SelectsOnlyModesThatFit) {
+    using ttml::metal::ops::softmax_backward::device::select_kernel_mode_for_l1;
+
+    const auto expect_mode = [&](uint32_t width_tiles,
+                                 uint32_t tile_size,
+                                 uint64_t available_l1_bytes,
+                                 uint32_t expected_tiles_per_block,
+                                 uint32_t expected_buffering_multiplier,
+                                 uint64_t expected_required_bytes) {
+        const auto mode = select_kernel_mode_for_l1(width_tiles, tile_size, available_l1_bytes);
+        ASSERT_TRUE(mode.has_value());
+        EXPECT_EQ(mode->tiles_per_block, expected_tiles_per_block);
+        EXPECT_EQ(mode->buffering_multiplier, expected_buffering_multiplier);
+        EXPECT_EQ(mode->required_memory_bytes, expected_required_bytes);
+        EXPECT_LE(mode->required_memory_bytes, available_l1_bytes);
+    };
+
+    for (const uint32_t tile_size : {2048U, 4096U}) {
+        const auto required = [tile_size](uint32_t tiles_per_block, uint32_t buffering_multiplier) {
+            return (3ULL * buffering_multiplier * tiles_per_block + 3ULL) * tile_size;
+        };
+
+        expect_mode(8U, tile_size, required(8U, 2U), 8U, 2U, required(8U, 2U));
+        expect_mode(8U, tile_size, required(8U, 1U), 8U, 1U, required(8U, 1U));
+        expect_mode(8U, tile_size, required(8U, 1U) - 1U, 4U, 1U, required(4U, 1U));
+        expect_mode(2U, tile_size, required(2U, 1U), 2U, 1U, required(2U, 1U));
+        expect_mode(9U, tile_size, required(4U, 2U), 4U, 2U, required(4U, 2U));
+        expect_mode(8U, tile_size, required(4U, 1U), 4U, 1U, required(4U, 1U));
+        expect_mode(8U, tile_size, required(3U, 1U), 3U, 1U, required(3U, 1U));
+        expect_mode(8U, tile_size, required(2U, 1U), 2U, 1U, required(2U, 1U));
+        expect_mode(8U, tile_size, required(1U, 1U), 1U, 1U, required(1U, 1U));
+        EXPECT_FALSE(select_kernel_mode_for_l1(8U, tile_size, required(1U, 1U) - 1U).has_value());
+    }
+}
+
+TEST(SoftmaxBackwardPlannerTest, DoesNotOverflowLargeRows) {
+    using ttml::metal::ops::softmax_backward::device::select_kernel_mode_for_l1;
+
+    constexpr uint32_t tile_size = 4096U;
+    constexpr uint64_t four_tile_single_buffered = 15ULL * tile_size;
+    const auto mode = select_kernel_mode_for_l1((1U << 20U) + 1U, tile_size, four_tile_single_buffered);
+    ASSERT_TRUE(mode.has_value());
+    EXPECT_EQ(mode->tiles_per_block, 4U);
+    EXPECT_EQ(mode->buffering_multiplier, 1U);
+    EXPECT_EQ(mode->required_memory_bytes, four_tile_single_buffered);
+}
 
 class SoftmaxBackwardOpTypedTest : public SoftmaxBackwardOpTest, public ::testing::WithParamInterface<DTypeParam> {};
 
