@@ -919,3 +919,27 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_
   0.0095. The existing `tt/attention.py` full-attention module already covers layer 5. The first `FAIL pcc=0` line in
   the log comes from the precompile collect pass.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_moe_attention.py`
+
+## S.full_moe.02 test (attempt 1), 2026-09-26
+
+What was done
+- Replaced the rendered `run_swap_test` call in `tests/bringup/test_swap_full_moe_02_attention.py` with the body of
+  `test_swap_full_dense_02_attention.py`, BLOCK_TYPE = full_moe (layer 5). Added the C.full_moe.attention worst
+  per-token rel L2 <= 0.06, and asserts that layer 5 is full attention with no sink. pcc_swap_out is gated at 0.98.
+  Asserted extras: attn_norm rel <= 0.03; attention rel <= 0.015 whole chunk and first 128 rows; norm ratio in
+  [0.97, 1.03] for both; block out finite, rel <= 0.01 whole chunk and first 128 rows.
+
+Why
+- Layer 5 attention is the same full causal GQA as layer 0, so the sliding window discriminator from sliding_moe_02
+  does not apply. The limits are the component-test limits, and the mutations were measured there.
+
+Results
+- BRINGUP_IMPL=reference: PASS (out 0.999997, rel 0.0025; attention rel 0.0017, worst row 0.0021).
+- BRINGUP_IMPL=stub: FAIL on every check (out PCC 0, rel 0.89).
+- Device (default): PASS. pcc_swap_out 0.999982, out rel 0.0061 / first rows 0.0043; attn_norm rel 0.0030; attention
+  rel 0.0056 / first rows 0.0052, ratio [0.9923, 1.0025], worst row 0.0102. Trail: router 0.9955, experts_out 0.9976.
+- Tightest margin: block out rel 0.0061 against a 0.01 limit. The device attention error makes the CPU router flip
+  some experts. If a later step adds noise here, re-check it.
+- The first FAIL/pcc=0 block in the log comes from the precompile collect pass.
+
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_full_moe_02_attention.py`
