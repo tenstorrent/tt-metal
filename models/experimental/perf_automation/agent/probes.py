@@ -1415,9 +1415,12 @@ def _execute(
     cold profiler-instrumented kernel compilation for a multi-chip mesh is slow
     but alive (CPU-busy, log still streaming), and a flat 30-min cap killed it
     mid-compile before a single op ran. So the watchdog gates on FORWARD PROGRESS,
-    not elapsed time: kill only when the log has not grown AND the process group
-    has burned ~no CPU for `stall_timeout_s` (a real stall/deadlock). `timeout_s`
-    remains as a generous ABSOLUTE backstop against a pathological busy-spin."""
+    not elapsed time: kill only when NOTHING IN `progress_signature` HAS MOVED for
+    `stall_timeout_s` — the log has not grown, the process group's syscall and IO
+    counters are flat, and the stack is unchanged. CPU is deliberately NOT among
+    them: a livelock burns a full core while getting nowhere, so treating CPU as
+    progress is what let one hide for ten hours. `timeout_s` remains as a generous
+    ABSOLUTE backstop (hard ceiling `timeout_s * _HARD_CEILING_MULT`)."""
     _therm_label = "generated-test run"
     try:
         _run = _cc_optimize("run")

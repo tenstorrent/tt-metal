@@ -3050,6 +3050,51 @@ ${batch_env} -- never a number typed into the test -- and print `{report}` once 
 """
 
 
+# WHAT THE SUPERVISOR WATCHES, told to the builder up front.
+#
+# The gate's tests run under `probes._execute`, which kills a step only when its log has stopped
+# growing (and its syscall/IO counters and stack have stopped moving) -- never for being slow. That
+# is the right rule, and it has one consequence the builder has to know: a test that does device
+# work WITHOUT printing looks exactly like a hang.
+#
+# This is not hypothetical. A pipeline that replayed a captured device trace enqueued the whole
+# schedule non-blocking, so the host sat inside one call with a frozen log while the hardware was
+# busy, and the supervisor killed a healthy run. The repair was a per-iteration print in the MODEL's
+# test -- which meant the lesson lived in one model's code and was lost the moment that demo was
+# regenerated. It belongs here, where every model gets it.
+_PROGRESS_PROMPT_BLOCK = """
+THE SUPERVISOR WATCHES FORWARD PROGRESS, NOT ELAPSED TIME. Your tests run under a watchdog that
+kills a step only when its LOG HAS STOPPED GROWING for {stall_s}s with nothing else moving. A long
+run is never killed for being slow -- but a SILENT one is killed for looking dead.
+  - Work enqueued on the device without blocking gives the host nothing to print: the process waits
+    inside a single call for the entire schedule while the hardware is busy, and the log is frozen
+    the whole time. That is indistinguishable from a hang, and it WILL be killed.
+  - So whatever your pipeline ITERATES over -- read that from the model, do not assume what it is
+    called -- print one line per iteration as it completes, and SYNCHRONISE THE DEVICE before the
+    print so the line means the work finished rather than that it was queued.
+  - A test that prints only when it is done will be killed before it gets there.
+  - This is a property of the harness, not of one model: it applies to any test long enough to
+    outlast the window above.
+"""
+
+
+def _progress_prompt_block() -> str:
+    """The progress requirement, carrying the watchdog's OWN stall window.
+
+    The number is read off `probes._execute`'s signature rather than retyped, so the builder is
+    never told a threshold the supervisor does not actually use."""
+    stall = None
+    try:
+        import inspect
+
+        from models.experimental.perf_automation.agent import probes as _pr
+
+        stall = inspect.signature(_pr._execute).parameters["stall_timeout_s"].default
+    except Exception:  # noqa: BLE001 - the guidance is still correct without the exact number
+        stall = None
+    return _PROGRESS_PROMPT_BLOCK.format(stall_s=int(stall) if isinstance(stall, int) else "the watchdog's stall")
+
+
 def _build_agent_prompt(
     *,
     model_id: str,
@@ -3165,7 +3210,7 @@ inventing a new layout. Keep iterating (fix the stub/wiring, re-run on the TT de
 gates pass. Use `./python_env/bin/python -m pytest <file> -s` to run on device.
 Report a final summary: which calls are READY, the FINAL_PCC per call, and
 confirm all graduated modules were invoked.
-{hardware_note}{parallel_note}{trace_note}{batch_note}
+{hardware_note}{parallel_note}{trace_note}{batch_note}{_progress_prompt_block()}
 {_TT_ONLY_CONTRACT}
 """
 
