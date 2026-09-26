@@ -12,6 +12,9 @@
 
 #include "ckernel_sfpu_piecewise_rational.h"
 #include "cmath_common.h"
+#if !defined(TT_POLY_LLK_DISABLE)
+#include "ckernel_sfpu_erf_bf16.h"
+#endif
 
 namespace ckernel::sfpu {
 
@@ -79,5 +82,16 @@ void erf_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
 }
+
+}  // namespace ckernel::sfpu
+
+namespace ckernel::sfpu {
+
+#if !defined(TT_POLY_LLK_DISABLE)
+template <int ITERATIONS = 8>
+inline void calculate_erf_tt_poly_bf16() {
+    ckernel::sfpu::ttpoly::calculate_signed_abs<ttpoly_generated::ErfBf16Config, ITERATIONS>();
+}
+#endif
 
 }  // namespace ckernel::sfpu
