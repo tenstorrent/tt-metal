@@ -44,3 +44,42 @@ Results (hand run of the gate)
 Re-run
     PYTHONPATH=$PWD python -m models.demos.common.bringup.intake.check_hf_sanity && \
     PYTHONPATH=$PWD python -m models.demos.common.bringup.reference.check_hf --seq 2048
+
+## PL.1 plan (attempt 1), 2026-09-26
+
+What was done
+- `plan.yaml`: placements for all 73033 checkpoint tensors (0 unplaced). Vision, audio, speech embeddings and layers 6-47
+  skipped (text only, spec layer subset); fp8 `weight_scale_inv` and mxfp4 `weight_scale` skipped (folded into the device
+  weight at load). Per-chip total 14.65 GiB of 27.2 GiB.
+- `plan.md`: per-block-type tables (full_dense, sliding_moe, full_moe, model level), gate totals, departures.
+- `components.yaml`: all 20 block steps + embed / final_norm / lm_head mapped (generated with a script, plain YAML, no anchors).
+- tasks.yaml unchanged (the PL.0 ledger already has one C/S task per step).
+
+Decisions and why
+- TP=4 by head for attention: the checkpoint's fused qkv is stored per TP rank (tp_size 4), so chip r takes rank r's
+  slab as stored (3392 rows full, 3712 sliding). 1 KV head per chip (full), 2 (sliding); no duplication.
+- V padded 128 -> 192 on device (zero rows in qkv, zero columns in o_proj): plain/chunked SDPA need V dim == QK dim.
+  State V counted at 192 in plan.yaml. attention_value_scale 0.707 folded into the V rows.
+- Sliding attention: gemma4_a4b_d_p TtSlidingAttention pattern (previous 128 cached rows + chunk, q_pad) with
+  `scaled_dot_product_attention(sliding_window_size=128, attention_sink=sink/scale)` (gpt_oss_d_p convention).
+- Full attention: gemma4_a4b_d_p TtGlobalAttention pattern (paged-shaped cache, identity page table, chunked SDPA).
+- Partial RoPE (64 of 192 dims, rotate-half): slice -> rotary_embedding -> concat planned; a row permutation of q/k weights
+  would avoid the slice but changes the cached K order vs the golden.
+- EP=4 experts (64 per chip), bfp8 (owner rule), ERNIE moe_unified pipeline with Silu. Pass weights_dtype=bfloat8_b
+  explicitly (tt_routed_expert default is bfloat4_b).
+- Router: DeepSeek moe_grouped_topk (sigmoid, bias, 1 group), fp32 weights, route_scale 1.0 (config routed_scaling_factor null).
+- qkv and dense MLP bf16 (small: 0.35 GiB/chip), accuracy first.
+
+Gotchas for the implement steps
+- check_plan counts the mxfp4-packed expert shape (half the values); the other half is an explicit extra entry.
+- Silu variant of unified_routed_expert_moe runs LoFi with bf16 dest (known issue); extend GeluTanh's fidelity handling
+  if the experts component fails rel-L2 / norm ratio.
+- moe_grouped_topk CBs scale with experts/32; DeepSeek runs <= 4096 rows per chip. The s16384 rung has 8192-row chunks.
+- Vocab 152576 is not a power of two: the engine pad-id mask (bitwise_and) from gemma4 does not apply; clamp instead.
+- check_plan loads the reference for layers 0, 1, 5 in fp32 (~51 GB RAM for the two MoE layers' experts).
+
+Result (hand run): plan_fits 1, unplaced 0, plan_errors 0, component_errors 0, ledger_errors 0, plan_approved 0
+(awaiting approval).
+
+Re-run
+    PYTHONPATH=$PWD python -m models.demos.common.bringup.plan.check_plan
