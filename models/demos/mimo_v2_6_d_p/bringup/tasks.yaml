@@ -321,6 +321,13 @@ tasks:
     kind: norm
     layer: 0
     stateful: false
+  frozen:
+    at: '2026-09-26T20:15:59'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_dense_ffn_norm.py: f16f904eedfdef8ed07c62dc8eda5d6f424108266818ae172bc45ec0e292cef5
+      /localdev/dnijemcevic/bringup/mimo_v2_6_d_p/golden/s4096_c2048/manifest.json: 7551c6cae2f8c65a4c62f37dd9c3cd418b52f99e8c986901116b91e32f5f9933
 - id: S.full_dense.04
   title: 'full_dense block with steps 1-4 on device (last: ffn_norm)'
   step: implement
