@@ -26,12 +26,59 @@ stash, the tail comes from the full-length cache, so a chunk is a pure function 
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
 
 NUM_CHIPS = 4
 TILE = 32
+
+# SDPA presets (env GEMMA4_SDPA_CFG, default "A").
+#   base: the bring-up config (HiFi4 + fp32 dest acc, which runs SDPA's non-streaming kernel on Blackhole, exact exp,
+#         sliding q256/k128, global q128/k128).
+#   A:    HiFi2, fp32 dest acc off (streaming kernel), packer_l1_acc off, approx exp, full grid; the compute settings
+#         of ernie45_d_p/tt/attention.py SDPA_PRESETS["A"]. ERNIE's q256/k512 does not fit L1 here (streaming CBs):
+#         sliding D 256 fits at most q256/k256 (q256/k512 needs 2.1 MB); global D 512 fits q128/k128 or q160/k128
+#         (q256 only with k32, which is slower). Global SDPA is causal, so it gets no KV chain forwarding and each Q
+#         chunk streams the whole K/V prefix from DRAM; the larger q160 chunk cuts that traffic (44 -> 35 ms at 51k).
+SDPA_PRESETS = {
+    "base": dict(fidelity="HiFi4", fp32=True, packer_l1=False, exp_approx=False, sliding=(256, 128), glob=(128, 128)),
+    "A": dict(fidelity="HiFi2", fp32=False, packer_l1=False, exp_approx=True, sliding=(256, 256), glob=(160, 128)),
+}
+
+
+def sdpa_settings() -> dict:
+    """The active SDPA preset; GEMMA4_SDPA_CFG selects it, GEMMA4_SDPA_{SQ,SK,GQ,GK} override the chunk sizes."""
+    name = os.environ.get("GEMMA4_SDPA_CFG", "A")
+    c = dict(SDPA_PRESETS[name], name=name)
+    env = os.environ.get
+    if env("GEMMA4_SDPA_SQ") or env("GEMMA4_SDPA_SK"):
+        c["sliding"] = (int(env("GEMMA4_SDPA_SQ", c["sliding"][0])), int(env("GEMMA4_SDPA_SK", c["sliding"][1])))
+    if env("GEMMA4_SDPA_GQ") or env("GEMMA4_SDPA_GK"):
+        c["glob"] = (int(env("GEMMA4_SDPA_GQ", c["glob"][0])), int(env("GEMMA4_SDPA_GK", c["glob"][1])))
+    return c
+
+
+def sdpa_compute_config():
+    c = sdpa_settings()
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=getattr(ttnn.MathFidelity, c["fidelity"]),
+        math_approx_mode=False,
+        fp32_dest_acc_en=c["fp32"],
+        packer_l1_acc=c["packer_l1"],
+    )
+
+
+def _fit_chunk(size: int, seq: int, start: int = 0) -> int:
+    """size if it divides seq and start, else the largest power of two <= min(size, 128) (>= TILE) that does."""
+    if seq % size == 0 and start % size == 0:
+        return size
+    size = 1 << (min(size, 128).bit_length() - 1)
+    while size > TILE and (seq % size or start % size):
+        size //= 2
+    return size
 
 
 def _hifi4():
@@ -176,13 +223,15 @@ class TtSlidingAttention:
         return ttnn.reshape(y, shape)
 
     def _sdpa_program_config(self, seq: int):
-        q = 256 if seq >= 256 else TILE * max(1, seq // TILE)
-        k = min(128, self.window // 2)
+        c = sdpa_settings()
+        qc, kc = c["sliding"]
+        q = qc if seq >= qc else TILE * max(1, seq // TILE)
+        k = min(kc, self.window // 2)
         return ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.mesh.compute_with_storage_grid_size(),
             q_chunk_size=q,
             k_chunk_size=k,
-            exp_approx_mode=False,
+            exp_approx_mode=c["exp_approx"],
         )
 
     def __call__(self, x: ttnn.Tensor, start: int, cache: TtKVCacheSliding, kv_sink=None) -> ttnn.Tensor:
@@ -244,7 +293,7 @@ class TtSlidingAttention:
             scale=1.0,
             sliding_window_size=self.window,
             program_config=self._sdpa_program_config(hist + seq),
-            compute_kernel_config=_hifi4(),
+            compute_kernel_config=sdpa_compute_config(),
         )
         for t in (q_cat, k_cat, v_cat):
             ttnn.deallocate(t)
@@ -398,19 +447,14 @@ class TtGlobalAttention(TtSlidingAttention):
         self._rope = {}
 
     def _sdpa_program_config(self, seq: int, start: int = 0):
-        # Head dim 512: 128 x 128 chunks keep the Q/K/V/QK circular buffers well inside L1.
-        q = k = 128
-        while q > TILE and seq % q:
-            q //= 2
-        k = q
-        if start:  # chunked SDPA: chunk_start must be a multiple of both chunk sizes
-            lowbit = start & -start
-            q, k = min(q, lowbit), min(k, lowbit)
+        c = sdpa_settings()
+        # chunked SDPA: chunk_start must be a multiple of both chunk sizes
+        q, k = _fit_chunk(c["glob"][0], seq, start), _fit_chunk(c["glob"][1], seq, start)
         return ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.mesh.compute_with_storage_grid_size(),
             q_chunk_size=q,
             k_chunk_size=k,
-            exp_approx_mode=False,
+            exp_approx_mode=c["exp_approx"],
         )
 
     def __call__(self, x: ttnn.Tensor, start: int, cache: TtKVCacheGlobal, kv_sink=None) -> ttnn.Tensor:
@@ -451,7 +495,7 @@ class TtGlobalAttention(TtSlidingAttention):
         prog = self._sdpa_program_config(seq, start)
         if start == 0:
             attn = ttnn.transformer.scaled_dot_product_attention(
-                q, k, v, is_causal=True, scale=1.0, program_config=prog, compute_kernel_config=_hifi4()
+                q, k, v, is_causal=True, scale=1.0, program_config=prog, compute_kernel_config=sdpa_compute_config()
             )
         else:
             attn = ttnn.transformer.chunked_scaled_dot_product_attention(
@@ -462,7 +506,7 @@ class TtGlobalAttention(TtSlidingAttention):
                 chunk_start_idx=start,
                 scale=1.0,
                 program_config=prog,
-                compute_kernel_config=_hifi4(),
+                compute_kernel_config=sdpa_compute_config(),
             )
         for t in (q, k, v):
             ttnn.deallocate(t)
