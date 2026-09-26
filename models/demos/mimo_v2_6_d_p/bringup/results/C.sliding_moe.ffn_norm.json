@@ -1,0 +1,21 @@
+{
+ "metrics": {
+  "pcc_ffn_norm_L01": {
+   "t": "2026-09-26T21:23:27",
+   "value": 0.9999957301333865
+  },
+  "rel_l2_ffn_norm_L01": {
+   "t": "2026-09-26T21:23:27",
+   "value": 0.0030133272521197796
+  },
+  "row_norm_ratio_max_ffn_norm_L01": {
+   "t": "2026-09-26T21:23:27",
+   "value": 1.0029124021530151
+  },
+  "row_norm_ratio_min_ffn_norm_L01": {
+   "t": "2026-09-26T21:23:27",
+   "value": 0.9953725934028625
+  }
+ },
+ "task": "C.sliding_moe.ffn_norm"
+}
