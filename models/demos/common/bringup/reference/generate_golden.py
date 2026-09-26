@@ -5,8 +5,10 @@
 
     python -m models.demos.common.bringup.reference.generate_golden --spec S --rung s4096
 
-The reference always runs every layer, because a layer's input depends on all layers before it. With a layer
-subset in the spec, only the selected layers' boundaries and state are stored, and every chunk also stores the
+The reference runs every layer up to the last selected one, because a layer's input depends on all layers before it;
+layers after it are skipped (F40), and with them the model-level outputs (final norm, top-32, logits), which the ladder
+only compares when the stack ends at the model's last layer. With a layer subset in the spec, only the selected layers'
+boundaries and state are stored, and every chunk also stores the
 block input of the first layer of each contiguous run of selected layers, so the device can restart there.
 Boundaries are stored for every chunk if the rung sets ``full_dumps``, else only for the last chunk.
 Rungs with ``golden: <other>`` reuse that rung's golden and are skipped here.
@@ -18,7 +20,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import time
 from collections import defaultdict
 
@@ -26,6 +27,7 @@ import torch
 from safetensors.torch import save_file
 
 from models.demos.common.bringup.core import metrics
+from models.demos.common.bringup.core.metrics import cpu_threads
 from models.demos.common.bringup.reference.golden import (
     LOGITS_TAIL,
     TOPK,
@@ -47,7 +49,7 @@ def main(argv=None):
     ap.add_argument("--spec")
     ap.add_argument("--rung", required=True)
     a = ap.parse_args(argv)
-    torch.set_num_threads(os.cpu_count())
+    torch.set_num_threads(cpu_threads())
     spec = load_spec(a.spec)
     rung = spec.rung(a.rung)
     if rung.get("golden"):
@@ -61,8 +63,10 @@ def main(argv=None):
     (tmp / "kv_cache").mkdir(parents=True, exist_ok=True)
 
     t0 = time.time()
-    ref = spec.hooks().reference(spec, layers=None, dtype=torch.float32)
     selected = spec.layers()
+    full_stack = max(selected) == spec.num_layers - 1
+    run_layers = None if full_stack else list(range(max(selected) + 1))
+    ref = spec.hooks().reference(spec, layers=run_layers, dtype=torch.float32)
     starts = set(run_starts(selected))
     keep_fp32 = tuple(spec.get("golden.keep_fp32", []))
     from models.demos.common.bringup.reference import prompt
@@ -87,32 +91,34 @@ def main(argv=None):
                 li = int(li)
                 if li in selected and (dump or (key == "in" and li in starts)):
                     per_layer[li][key] = store_dtype(t.detach().clone(), keep_fp32, key)
-            elif name != "logits":
+            elif name != "logits" and (full_stack or name != "final_norm"):
                 model_t[name] = store_dtype(t.detach().clone(), keep_fp32, name)
 
         s = c * chunk
         tc = time.time()
-        _, logits = ref.forward_chunk(tokens[s : s + chunk], s, state, rec, logits_last_n=chunk)
+        _, logits = ref.forward_chunk(tokens[s : s + chunk], s, state, rec, logits_last_n=chunk if full_stack else 0)
         chunk_times.append(time.time() - tc)
-        logits = logits.float()
-        vals, ids = torch.topk(logits, TOPK, dim=-1)
-        model_t.update(
-            top32_values=vals.contiguous(),
-            top32_ids=ids.to(torch.int32).contiguous(),
-            logits_tail=logits[-LOGITS_TAIL:].contiguous(),
-            tokens=tokens[s : s + chunk].to(torch.int32).contiguous(),
-        )
-        nxt = tokens[s + 1 : s + chunk + 1]
-        top1.append((ids[: nxt.shape[0], 0] == nxt).float().mean().item())
-        top5.append((ids[: nxt.shape[0], :5] == nxt[:, None]).any(-1).float().mean().item())
+        model_t["tokens"] = tokens[s : s + chunk].to(torch.int32).contiguous()
+        if full_stack:
+            logits = logits.float()
+            vals, ids = torch.topk(logits, TOPK, dim=-1)
+            model_t.update(
+                top32_values=vals.contiguous(),
+                top32_ids=ids.to(torch.int32).contiguous(),
+                logits_tail=logits[-LOGITS_TAIL:].contiguous(),
+            )
+            nxt = tokens[s + 1 : s + chunk + 1]
+            top1.append((ids[: nxt.shape[0], 0] == nxt).float().mean().item())
+            top5.append((ids[: nxt.shape[0], :5] == nxt[:, None]).any(-1).float().mean().item())
         cdir = tmp / f"chunk_{c:02d}"
         cdir.mkdir(exist_ok=True)
         save_file(model_t, str(cdir / "model.safetensors"))
         for li, tensors in per_layer.items():
             save_file(tensors, str(cdir / f"layer_{li:02d}.safetensors"))
         print(
-            f"chunk {c + 1}/{n_chunks} [{s},{s + chunk}) {chunk_times[-1]:.0f}s top1={top1[-1]:.3f} "
-            f"top5={top5[-1]:.3f} layers stored={len(per_layer)}",
+            f"chunk {c + 1}/{n_chunks} [{s},{s + chunk}) {chunk_times[-1]:.0f}s "
+            + (f"top1={top1[-1]:.3f} top5={top5[-1]:.3f} " if full_stack else "")
+            + f"layers stored={len(per_layer)}",
             flush=True,
         )
 
@@ -168,7 +174,8 @@ def main(argv=None):
     metrics.record("golden_chunks", n_chunks)
     metrics.record("golden_hash_ok", int(Golden(out).verify()))
     metrics.record("cpu_seconds", round(time.time() - t0, 1))
-    metrics.record("text_top5_acc_last_chunk", top5[-1])
+    if top5:
+        metrics.record("text_top5_acc_last_chunk", top5[-1])
     print(f"done in {time.time() - t0:.0f}s -> {out}\ncontent_hash {manifest['content_hash']}")
 
 

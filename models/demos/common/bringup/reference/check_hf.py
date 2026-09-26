@@ -7,19 +7,25 @@
 
 Records pcc_hidden_L{i:02d} per layer, pcc_logits, top1_match_frac, text_next_token_acc.
 ``--num-layers`` (or spec ``hf.parity_layers``) truncates both models to their first N layers, for checkpoints that
-do not fit in host memory in fp32. Hooks the model may provide: ``hf_model(spec, num_layers)``, ``hf_layers(model)``.
+do not fit in host memory in fp32. A layer subset that ends before the last layer defaults to N = its last layer + 1. Hooks the model may provide: ``hf_model(spec, num_layers)``, ``hf_layers(model)``.
 """
 
 from __future__ import annotations
 
 import argparse
 import gc
-import os
 
 import torch
 
 from models.demos.common.bringup.core import metrics
+from models.demos.common.bringup.core.metrics import cpu_threads
 from models.demos.common.bringup.reference.golden import hf_path, load_spec, text_tokens
+
+
+def subset_prefix(spec) -> int | None:
+    """A layer subset that stops before the last layer needs parity only up to its last layer (F40)."""
+    last = max(spec.layers())
+    return last + 1 if last < spec.num_layers - 1 else None
 
 
 def load_hf(spec, num_layers: int | None):
@@ -72,9 +78,9 @@ def main(argv=None):
     ap.add_argument("--seq", type=int, default=512)
     ap.add_argument("--num-layers", type=int, default=None)
     a = ap.parse_args(argv)
-    torch.set_num_threads(os.cpu_count())
+    torch.set_num_threads(cpu_threads())
     spec = load_spec(a.spec)
-    n = a.num_layers or spec.get("hf.parity_layers")
+    n = a.num_layers or spec.get("hf.parity_layers") or subset_prefix(spec)
     tokens = text_tokens(spec, a.seq)
 
     hf_out, hf_logits = run_hf(spec, tokens, n)
