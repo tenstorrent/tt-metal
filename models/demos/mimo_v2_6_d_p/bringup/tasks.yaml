@@ -957,6 +957,13 @@ tasks:
     kind: attention
     layer: 5
     stateful: true
+  frozen:
+    at: '2026-09-26T22:35:50'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_moe_attention.py: 4e573ea28b4f4aec6716fb9b793c1ef1018b497579ba345407dd1ba672eb98c2
+      /localdev/dnijemcevic/bringup/mimo_v2_6_d_p/golden/s4096_c2048/manifest.json: 7551c6cae2f8c65a4c62f37dd9c3cd418b52f99e8c986901116b91e32f5f9933
 - id: S.full_moe.02
   title: 'full_moe block with steps 1-2 on device (last: attention)'
   step: implement
