@@ -141,21 +141,24 @@ def ti2v_5b_metrics(mesh_shape, height):
 
     Warm-traced, 81 frames, 40 steps, CFG on. Targets = measured warm_traced + ~30% headroom
     (2x on the tiny encoder), mirroring the headroom convention used in t2v_metrics.
-    Measured on 4x8 BH ring, host u13-43, 2026-09-22, mean of 3 runs at the eleven-shape swept
-    DiT matmul table (`Wan2_2_TI2V_nadim_opt.md` section 1):
-      480p (832x480):   e2e 6.34s  | denoise 5.667s  | vae 0.576s | encode 0.089s
-      720p (1280x704):  e2e 11.77s | denoise 10.701s | vae 0.959s | encode 0.092s
+    Measured on 4x8 BH ring, host u13-43, 2026-09-26, mean of 3 runs at the sprint-5 tip
+    (two-command-queue trace, swept DiT matmul table, per-block AdaLN modulation hoisted;
+    `Wan2_2_TI2V_nadim_opt.md` section 1):
+      480p (832x480):   e2e 5.49s  | denoise 4.842s  | vae 0.556s | encode 0.088s
+      720p (1280x704):  e2e 11.23s | denoise 10.198s | vae 0.922s | encode 0.089s
     (720p uses height 704 since heights must be a multiple of 32 for patch_size=2.)
+    The 480p VAE bound keeps 0.75s: that section spreads up to 11% run to run at ~0.55s.
 
-    The VAE gate follows the `WanDupUp3D` rewrite (4.63s -> 0.96s); the previous 6.0s bound
-    would have passed a 6x regression.
+    Previous bounds (2026-09-22 means + 30%): 480p 0.2 / 7.4 / 0.75 / 8.2, 720p 0.2 / 13.9 /
+    1.25 / 15.3. The VAE gate follows the `WanDupUp3D` rewrite (4.63s -> 0.96s); the bound
+    before that (6.0s) would have passed a 6x regression.
     """
     assert is_blackhole(), "TI2V-5B perf currently targets Blackhole only"
     assert tuple(mesh_shape) == (4, 8), "TI2V-5B perf currently targets single BH Galaxy (4x8)"
     if height == 480:
-        return {"encoder": 0.2, "denoising": 7.4, "vae": 0.75, "total": 8.2}
+        return {"encoder": 0.2, "denoising": 6.3, "vae": 0.75, "total": 7.2}
     if height == 704:
-        return {"encoder": 0.2, "denoising": 13.9, "vae": 1.25, "total": 15.3}
+        return {"encoder": 0.2, "denoising": 13.3, "vae": 1.2, "total": 14.6}
     assert False, f"No TI2V-5B perf targets for height={height} (expected 480 or 704)"
 
 
@@ -732,10 +735,13 @@ def ti2v_5b_i2v_metrics(mesh_shape, height):
     remove, and because it must not be confused with `encoder` (the T5 text encoder).
 
     Targets = measured + ~30% (2x on the tiny encoder), same convention as the T2V gate.
-    Measured on 4x8 BH ring, host u13-43, 2026-09-22, mean of 3 runs at the eleven-shape swept
-    DiT matmul table, with the two-row per-token timestep path:
-      720p (1280x704):  e2e 13.96s | image_encode 1.379s | denoise 11.513s | vae 0.964s
-                        | encode 0.088s
+    Measured on 4x8 BH ring, host u13-43, 2026-09-26, mean of 3 runs at the sprint-5 tip
+    (two-command-queue trace, swept DiT matmul table, per-block AdaLN modulation hoisted), with
+    the two-row per-token timestep path:
+      720p (1280x704):  e2e 12.90s | image_encode 1.293s | denoise 10.580s | vae 0.923s
+                        | encode 0.089s
+    The host image encode spreads ~12% run to run (1.25-1.36s here), hence 1.7s on it.
+    Previous bounds (2026-09-22 means + 30%): 0.2 / 1.8 / 15.0 / 1.25 / 18.1.
 
     480p is not parametrised by `test_pipeline_performance_ti2v_5b_i2v` (720p only), so that
     row is unreachable and has never been measured; it is kept only so the two gate functions
@@ -747,7 +753,7 @@ def ti2v_5b_i2v_metrics(mesh_shape, height):
         # UNMEASURED and unreachable from the current parametrisation; not a calibrated gate.
         return {"encoder": 0.3, "image_encode": 4.0, "denoising": 18.0, "vae": 3.5, "total": 26.0}
     if height == 704:
-        return {"encoder": 0.2, "image_encode": 1.8, "denoising": 15.0, "vae": 1.25, "total": 18.1}
+        return {"encoder": 0.2, "image_encode": 1.7, "denoising": 13.8, "vae": 1.2, "total": 16.8}
     assert False, f"No TI2V-5B I2V perf targets for height={height} (expected 480 or 704)"
 
 
