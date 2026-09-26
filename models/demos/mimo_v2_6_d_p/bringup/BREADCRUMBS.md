@@ -202,3 +202,23 @@ Result
 
 Re-run
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_dense_attention.py
+
+## S.full_dense.02 test (attempt 1), 2026-09-26
+
+What was done
+- Replaced the rendered `run_swap_test` call in `tests/bringup/test_swap_full_dense_02_attention.py` with the swap 01
+  pattern plus the gemma4_a4b_d_p swap_sliding_02 head-row check: gated pcc_swap_out (0.98) plus asserted extras:
+  block out finite, rel L2 <= 0.01 whole and first 128 rows; each swapped step PCC >= 0.99, per-token norm ratio in
+  [0.97, 1.03], rel L2 <= 0.03 (attn_norm) / <= 0.015 (attention, whole and first 128 rows).
+
+Why
+- Attention limits copied from the C.full_dense.attention test (RoPE-from-0, non-causal and scale bugs pass PCC and
+  rel 0.03 on this golden). Block-out limit 0.01 kept (dense MLP, no MoE amplification: device 0.0027).
+
+Results
+- BRINGUP_IMPL=reference: PASS (out rel 0.0017). BRINGUP_IMPL=stub: FAIL (all checks).
+- Gate (device): PASS, pcc_swap_out 0.999996, out rel 0.00274, attention rel 0.00519 / first-128 0.00517,
+  ratio [0.9938, 1.0061].
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_full_dense_02_attention.py
