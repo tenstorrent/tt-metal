@@ -1,0 +1,633 @@
+diff --git a/tt_metal/programming_examples/high_power_matmul/high_power_matmul.cpp b/tt_metal/programming_examples/high_power_matmul/high_power_matmul.cpp
+index c8f8a76439b..ca711c1db53 100644
+--- a/tt_metal/programming_examples/high_power_matmul/high_power_matmul.cpp
++++ b/tt_metal/programming_examples/high_power_matmul/high_power_matmul.cpp
+@@ -78,36 +78,28 @@ static std::string format_time(std::chrono::system_clock::time_point tp) {
+     return std::string(buffer);
+ }
+ 
++// Lowest grid width swept. Below this the core count is too small for the split to be
++// meaningful, and the first interval's idle baseline is one-sided anyway.
++static constexpr uint32_t kMinGridX = 3;
++
++// The sweep walks the near-square band of the core array: for each width x, it runs the three
++// heights x-1, x and x+1, clipped to the device. That gives a dense ascending core-count series
++// while also pairing grids of equal core count but different aspect ratio (3x4 vs 4x3, 6x7 vs
++// 7x6, 8x7 vs 7x8), which is what separates a core-count effect from a NoC-shape one.
++//
++// Generated rather than listed so the band continues to whatever the device provides instead of
++// stopping where the smaller generation did. On a Wormhole-sized 8x7 array this reproduces the
++// original fifteen-grid list exactly; on Blackhole's 11x10 it carries the same three-per-width
++// pattern up to the full array, where a hard-coded list previously jumped along the x,x-1
++// diagonal alone (7x7 -> 8x7 -> 9x8 -> 10x9 -> 11x10) and skipped every grid beside it.
+ static std::vector<GridCandidate> build_test_grids(uint32_t max_x, uint32_t max_y) {
+-    const std::vector<GridCandidate> requested = {
+-        {3, 2},  // 6
+-        {3, 3},  // 9
+-        {3, 4},  // 12
+-        {4, 3},  // 12
+-        {4, 4},  // 16
+-        {4, 5},  // 20
+-        {5, 4},  // 25
+-        {5, 5},  // 25
+-        {5, 6},  // 30
+-        {6, 5},  // 36
+-        {6, 6},  // 36
+-        {6, 7},  // 42
+-        {7, 6},  // 42
+-        {7, 7},  // 49
+-        // Beyond a Wormhole-sized grid. Without these the sweep jumps from 7x7 (49 cores)
+-        // straight to the appended device maximum, which on Blackhole is 11x10 (110 cores).
+-        // Filtered out on devices too small to host them, so Wormhole's grid list is unchanged.
+-        {8, 7},   // 56
+-        {9, 8},   // 72
+-        {10, 9},  // 90
+-    };
+-
+     std::vector<GridCandidate> result;
+-    result.reserve(requested.size() + 1);
+ 
+-    for (const auto& g : requested) {
+-        if (g.x <= max_x && g.y <= max_y) {
+-            result.push_back(g);
++    for (uint32_t x = kMinGridX; x <= max_x; ++x) {
++        for (uint32_t y = x - 1; y <= x + 1; ++y) {
++            if (y >= 2 && y <= max_y) {
++                result.push_back({x, y});
++            }
+         }
+     }
+ 
+@@ -133,6 +125,10 @@ struct PowerExperimentConfig {
+     bool disable_compute = false;
+     bool disable_writer = false;
+     uint32_t write_amplification_pct = 0;
++    // Which per-tile instruction the compute kernel runs. The reader and writer are identical
++    // for every value, so this varies the math unit's work against fixed data movement -- see
++    // kernels/compute/mm_power.cpp.
++    std::string op = "matmul";
+ };
+ 
+ static bool env_flag(const char* name) {
+@@ -140,27 +136,60 @@ static bool env_flag(const char* name) {
+     return v != nullptr && std::string(v) == "1";
+ }
+ 
++// HIGH_POWER_OP value -> the JIT define the compute kernel branches on.
++static const std::map<std::string, std::string> kComputeOps = {
++    {"matmul", "HIGH_POWER_OP_MATMUL"},
++    {"add", "HIGH_POWER_OP_ADD"},
++    {"silu", "HIGH_POWER_OP_SILU"},
++    {"exp", "HIGH_POWER_OP_EXP"},
++    {"sigmoid", "HIGH_POWER_OP_SIGMOID"},
++    {"gelu", "HIGH_POWER_OP_GELU"},
++    {"recip", "HIGH_POWER_OP_RECIP"},
++};
++
++static std::string resolve_compute_op() {
++    const char* v = std::getenv("HIGH_POWER_OP");
++    if (v == nullptr || *v == '\0') { return "matmul"; }
++    std::string op(v);
++    if (kComputeOps.find(op) == kComputeOps.end()) {
++        std::string valid;
++        for (const auto& [name, _] : kComputeOps) { valid += (valid.empty() ? "" : ", ") + name; }
++        TT_THROW("HIGH_POWER_OP must be one of [{}], got '{}'", valid, op);
++    }
++    return op;
++}
++
+ static PowerExperimentConfig resolve_power_experiment() {
+     PowerExperimentConfig cfg;
++    cfg.op = resolve_compute_op();
+ 
+     if (const char* pc = std::getenv("POWER_CASE"); pc != nullptr && *pc != '\0') {
+         const int c = std::stoi(pc);
++        const std::string op = cfg.op;
+         switch (c) {
+             case 0: cfg = {false, false, false, 0};    break;  // regular (baseline)
+             case 1: cfg = {false, false, false, 100};  break;  // writer_amp
+             case 2: cfg = {false, true,  false, 100};  break;  // compute_idle
+             case 3: cfg = {true,  true,  false, 100};  break;  // reader_compute_idle
+             case 4: cfg = {true,  false, false, 100};  break;  // reader_idle2
++            // Case 5 is the writer's own idle case, symmetric with cases 2 and 4: exactly one
++            // engine does no real work while the other two are held identical. Case 0 was the
++            // stand-in for it before this existed, but case 0 only turns write amplification
++            // off, which measures the marginal cost of the extra writes rather than the
++            // writer's full contribution.
++            case 5: cfg = {false, false, true,  100};  break;  // writer_idle
+             default:
+-                TT_THROW("POWER_CASE must be in [0, 4], got {}", c);
++                TT_THROW("POWER_CASE must be in [0, 5], got {}", c);
+         }
++        cfg.op = op;
+         fmt::print(
+-            "POWER_CASE={} -- reader={} compute={} writer={} write_amplification_pct={}\n",
++            "POWER_CASE={} -- reader={} compute={} writer={} write_amplification_pct={} op={}\n",
+             c,
+             cfg.disable_reader ? "idle" : "real",
+             cfg.disable_compute ? "idle" : "real",
+             cfg.disable_writer ? "idle" : "real",
+-            cfg.write_amplification_pct);
++            cfg.write_amplification_pct,
++            cfg.op);
+         return cfg;
+     }
+ 
+@@ -213,6 +242,34 @@ int main(int argc, char* argv[]) {
+ 
+     const PowerExperimentConfig power_cfg = resolve_power_experiment();
+ 
++    // Output blocking. Each core accumulates a BLOCK_M x BLOCK_N patch of output tiles in the
++    // destination registers at once, so one column slice of A and one row slice of B feed
++    // BLOCK_M*BLOCK_N multiplies. DRAM tile reads per multiply fall from 2 to
++    // (BLOCK_M + BLOCK_N) / (BLOCK_M * BLOCK_N). 1x1 is the original tile-at-a-time behaviour.
++    uint32_t block_m = 1, block_n = 1;
++    if (const char* v = std::getenv("HIGH_POWER_BLOCK_M"); v != nullptr && *v != '\0') {
++        block_m = static_cast<uint32_t>(std::stoul(v));
++    }
++    if (const char* v = std::getenv("HIGH_POWER_BLOCK_N"); v != nullptr && *v != '\0') {
++        block_n = static_cast<uint32_t>(std::stoul(v));
++    }
++    TT_FATAL(block_m >= 1 && block_n >= 1, "HIGH_POWER_BLOCK_M/N must be >= 1");
++    // The whole block lives in the destination registers simultaneously.
++    TT_FATAL(
++        block_m * block_n <= 8,
++        "HIGH_POWER_BLOCK_M * HIGH_POWER_BLOCK_N ({}) exceeds the 8-tile destination register budget",
++        block_m * block_n);
++    TT_FATAL(Mt % block_m == 0, "Mt ({}) must be divisible by HIGH_POWER_BLOCK_M ({})", Mt, block_m);
++    TT_FATAL(Nt % block_n == 0, "Nt ({}) must be divisible by HIGH_POWER_BLOCK_N ({})", Nt, block_n);
++
++    const uint32_t blocks_per_row = Nt / block_n;
++    const uint32_t total_output_blocks = (Mt / block_m) * blocks_per_row;
++    const double reads_per_multiply = double(block_m + block_n) / double(block_m * block_n);
++    fmt::print(
++        "Output block: {}x{} tiles  |  {} blocks  |  {:.3f} DRAM tile reads per multiply "
++        "(1x1 baseline = 2.000)\n",
++        block_m, block_n, total_output_blocks, reads_per_multiply);
++
+     // The writer normally issues 1 NoC write per output tile while the reader issues 2*Kt reads.
+     // Amplification re-writes the same tile to the same address; 100% matches the read volume.
+     const uint32_t write_repeats = (power_cfg.write_amplification_pct == 0)
+@@ -284,9 +341,9 @@ int main(int argc, char* argv[]) {
+ 
+             if (fixed_tiles_per_core > 0) {
+                 TT_FATAL(
+-                    fixed_tiles_per_core <= total_output_tiles,
+-                    "fixed_tiles_per_core ({}) must not exceed total_output_tiles ({})",
+-                    fixed_tiles_per_core, total_output_tiles);
++                    fixed_tiles_per_core <= total_output_blocks,
++                    "fixed_tiles_per_core ({}) must not exceed total_output_blocks ({})",
++                    fixed_tiles_per_core, total_output_blocks);
+                 num_cores     = core_grid.x * core_grid.y;
+                 all_cores     = CoreRangeSet({CoreRange({0, 0}, {core_grid.x - 1, core_grid.y - 1})});
+                 core_group_1  = all_cores;
+@@ -294,7 +351,7 @@ int main(int argc, char* argv[]) {
+                 work_per_core1 = fixed_tiles_per_core;
+                 work_per_core2 = 0;
+             } else {
+-                auto [nc, ac, cg1, cg2, wpc1, wpc2] = split_work_to_cores(core_grid, total_output_tiles);
++                auto [nc, ac, cg1, cg2, wpc1, wpc2] = split_work_to_cores(core_grid, total_output_blocks);
+                 num_cores = nc; all_cores = ac;
+                 core_group_1 = cg1; core_group_2 = cg2;
+                 work_per_core1 = wpc1; work_per_core2 = wpc2;
+@@ -323,32 +380,38 @@ int main(int argc, char* argv[]) {
+                 mesh_device.get());
+ 
+             const auto cb_fmt = tt::DataFormat::Float16_b;
+-            constexpr uint32_t num_cb_tiles = 2;
++            // Each CB must hold one whole slice (in0/in1) or one whole output block, doubled so
++            // the reader can prefetch the next step while compute works on the current one.
++            const uint32_t cb0_tiles = 2 * block_m;
++            const uint32_t cb1_tiles = 2 * block_n;
++            const uint32_t cb_out_tiles = 2 * block_m * block_n;
+ 
+             tt_metal::CreateCircularBuffer(
+                 program,
+                 all_cores,
+-                CircularBufferConfig(num_cb_tiles * single_tile_size, {{CBIndex::c_0, cb_fmt}})
++                CircularBufferConfig(cb0_tiles * single_tile_size, {{CBIndex::c_0, cb_fmt}})
+                     .set_page_size(CBIndex::c_0, single_tile_size));
+ 
+             tt_metal::CreateCircularBuffer(
+                 program,
+                 all_cores,
+-                CircularBufferConfig(num_cb_tiles * single_tile_size, {{CBIndex::c_1, cb_fmt}})
++                CircularBufferConfig(cb1_tiles * single_tile_size, {{CBIndex::c_1, cb_fmt}})
+                     .set_page_size(CBIndex::c_1, single_tile_size));
+ 
+             tt_metal::CreateCircularBuffer(
+                 program,
+                 all_cores,
+-                CircularBufferConfig(num_cb_tiles * single_tile_size, {{CBIndex::c_16, cb_fmt}})
++                CircularBufferConfig(cb_out_tiles * single_tile_size, {{CBIndex::c_16, cb_fmt}})
+                     .set_page_size(CBIndex::c_16, single_tile_size));
+ 
+             // Passed as JIT defines so changing POWER_CASE only recompiles the kernels.
+-            std::map<std::string, std::string> reader_defines;
++            const std::string bm = std::to_string(block_m), bn = std::to_string(block_n);
++            std::map<std::string, std::string> reader_defines{{"BLOCK_M", bm}, {"BLOCK_N", bn}};
+             if (power_cfg.disable_reader) { reader_defines["HIGH_POWER_DISABLE_READER"] = "1"; }
+-            std::map<std::string, std::string> compute_defines;
++            std::map<std::string, std::string> compute_defines{{"BLOCK_M", bm}, {"BLOCK_N", bn}};
++            compute_defines[kComputeOps.at(power_cfg.op)] = "1";
+             if (power_cfg.disable_compute) { compute_defines["HIGH_POWER_DISABLE_COMPUTE"] = "1"; }
+-            std::map<std::string, std::string> writer_defines;
++            std::map<std::string, std::string> writer_defines{{"BLOCK_M", bm}, {"BLOCK_N", bn}};
+             if (power_cfg.disable_writer) { writer_defines["HIGH_POWER_DISABLE_WRITER"] = "1"; }
+ 
+             std::vector<uint32_t> reader_ct_args;
+@@ -397,19 +460,19 @@ int main(int argc, char* argv[]) {
+                         // In fixed mode each core starts at a different offset (wrapping) so
+                         // cores hit different DRAM addresses and don't serialise on the same bank.
+                         const uint32_t effective_offset = (fixed_tiles_per_core > 0)
+-                            ? (core_linear_idx * fixed_tiles_per_core) % total_output_tiles
++                            ? (core_linear_idx * fixed_tiles_per_core) % total_output_blocks
+                             : work_offset;
+ 
+                         tt_metal::SetRuntimeArgs(
+                             program, reader_id, core,
+                             {src0_dram->address(), src1_dram->address(),
+                              Mt, Kt, Nt,
+-                             effective_offset, work_per_core, num_iterations});
++                             effective_offset, work_per_core, num_iterations, blocks_per_row});
+ 
+                         tt_metal::SetRuntimeArgs(
+                             program, writer_id, core,
+                             {dst_dram->address(), work_per_core, effective_offset, num_iterations,
+-                             write_repeats});
++                             write_repeats, blocks_per_row, Nt});
+ 
+                         tt_metal::SetRuntimeArgs(
+                             program, compute_id, core,
+@@ -462,6 +525,22 @@ int main(int argc, char* argv[]) {
+             auto t_end = std::chrono::high_resolution_clock::now();
+             auto sys_end = std::chrono::system_clock::now();
+ 
++            // Cheap correctness signal. The workload never verifies its output, so with the
++            // blocked path this is the only way to notice a tile-indexing mistake: the inputs
++            // are seeded deterministically (mt19937(42)) and accumulation order over the shared
++            // dimension is identical for every block size, so this checksum must not depend on
++            // HIGH_POWER_BLOCK_M/N.
++            {
++                double sum = 0.0, absmax = 0.0;
++                for (const auto& v : result_vec) {
++                    const double d = static_cast<float>(v);
++                    sum += d;
++                    absmax = std::max(absmax, std::abs(d));
++                }
++                fmt::print("Output checksum: sum={:.6e} absmax={:.6e}\n", sum, absmax);
++            }
++
++
+             const std::string start_time_str = format_time(sys_start);
+             const std::string end_time_str = format_time(sys_end);
+ 
+diff --git a/tt_metal/programming_examples/high_power_matmul/kernels/compute/mm_power.cpp b/tt_metal/programming_examples/high_power_matmul/kernels/compute/mm_power.cpp
+index 551d685e473..40f34e91c2a 100644
+--- a/tt_metal/programming_examples/high_power_matmul/kernels/compute/mm_power.cpp
++++ b/tt_metal/programming_examples/high_power_matmul/kernels/compute/mm_power.cpp
+@@ -5,11 +5,58 @@
+ #include <cstdint>
+ #include "api/compute/matmul.h"
+ #include "api/compute/tile_move_copy.h"
++#include "api/compute/eltwise_binary.h"
++#include "api/compute/eltwise_unary/eltwise_unary.h"
++#include "api/compute/eltwise_unary/exp.h"
++#include "api/compute/eltwise_unary/gelu.h"
++#include "api/compute/eltwise_unary/recip.h"
++#include "api/compute/compute_kernel_api.h"
+ 
+ using std::uint32_t;
+ 
++// Output block handled per iteration, in tiles. BLOCK_M x BLOCK_N output tiles are accumulated
++// in the destination registers simultaneously, so one row of A and one column of B serve
++// BLOCK_M x BLOCK_N multiplies instead of one. 1x1 is the original tile-at-a-time behaviour.
++#ifndef BLOCK_M
++#define BLOCK_M 1
++#endif
++#ifndef BLOCK_N
++#define BLOCK_N 1
++#endif
++
++// Which per-tile instruction the compute kernel runs, selected by the host from HIGH_POWER_OP.
++// Exactly one HIGH_POWER_OP_* is defined; matmul is the default when the host passes none.
++//
++// The point of the switch is a controlled comparison: the reader and writer kernels are
++// untouched, so every op streams byte-identical DRAM traffic through the same circular buffers
++// at the same rate, and the only thing that varies is what the math unit does with each tile
++// pair. The difference in dynamic energy between two ops is therefore attributable to the
++// instruction rather than to data movement.
++//
++// To keep that true, every variant issues exactly kBlockTiles math operations per step of the
++// shared dimension and pops both input CBs, matching matmul's rate. The binary ops (matmul,
++// add) consume a tile from each CB the way matmul does. The unary SFPU ops have no second
++// operand, so they copy from cb_in0 into the destination register and operate in place; cb_in1
++// is still waited on and popped, so the reader's traffic and the pipeline's back-pressure are
++// unchanged. Unary variants overwrite the destination register each step rather than
++// accumulating into it, which matmul does -- that is a real difference, but it is a property of
++// the instruction, not of this harness.
++#if !defined(HIGH_POWER_OP_MATMUL) && !defined(HIGH_POWER_OP_ADD) && !defined(HIGH_POWER_OP_SILU) && \
++    !defined(HIGH_POWER_OP_EXP) && !defined(HIGH_POWER_OP_SIGMOID) && !defined(HIGH_POWER_OP_GELU) && \
++    !defined(HIGH_POWER_OP_RECIP)
++#define HIGH_POWER_OP_MATMUL 1
++#endif
++
++#if defined(HIGH_POWER_OP_MATMUL) || defined(HIGH_POWER_OP_ADD)
++#define HIGH_POWER_OP_IS_BINARY 1
++#endif
++
++constexpr uint32_t kBlockM = BLOCK_M;
++constexpr uint32_t kBlockN = BLOCK_N;
++constexpr uint32_t kBlockTiles = kBlockM * kBlockN;
++
+ void kernel_main() {
+-    uint32_t num_output_tiles = get_arg_val<uint32_t>(0);
++    uint32_t num_output_blocks = get_arg_val<uint32_t>(0);
+     uint32_t Kt = get_arg_val<uint32_t>(1);
+     uint32_t num_iterations = get_arg_val<uint32_t>(2);
+ 
+@@ -17,47 +64,90 @@ void kernel_main() {
+     constexpr tt::CBIndex cb_in1 = tt::CBIndex::c_1;
+     constexpr tt::CBIndex cb_out = tt::CBIndex::c_16;
+ 
+-    // Initialize the matmul operation
++    // Each op needs its own hardware configuration, and each of these does the full
++    // unpack/math/pack configure, so no separate startup call is needed.
++#if defined(HIGH_POWER_OP_MATMUL)
+     mm_init(cb_in0, cb_in1, cb_out);
++#elif defined(HIGH_POWER_OP_ADD)
++    binary_op_init_common(cb_in0, cb_in1, cb_out);
++    add_tiles_init(cb_in0, cb_in1);
++#else
++    init_sfpu(cb_in0, cb_out);
++#if defined(HIGH_POWER_OP_SILU)
++    silu_tile_init();
++#elif defined(HIGH_POWER_OP_EXP)
++    exp_tile_init();
++#elif defined(HIGH_POWER_OP_SIGMOID)
++    sigmoid_tile_init();
++#elif defined(HIGH_POWER_OP_GELU)
++    gelu_tile_init();
++#elif defined(HIGH_POWER_OP_RECIP)
++    recip_tile_init();
++#endif
++#endif
+ 
+     for (uint32_t iter = 0; iter < num_iterations; iter++) {
+         if (iter % 10 == 0) {
+             // Only print from TRISC0, otherwise we'll get three identical prints
+             DPRINT << "Iteration " << iter << " of " << num_iterations << ENDL();
+         }
+-        for (uint32_t i = 0; i < num_output_tiles; i++) {
+-            // TRISC1 Acquires the tile registers
++        for (uint32_t blk = 0; blk < num_output_blocks; blk++) {
++            // TRISC1 acquires the tile registers -- kBlockTiles of them, one accumulator per
++            // output tile in the block.
+             tile_regs_acquire();
+             for (uint32_t kt = 0; kt < Kt; kt++) {
+-                // TRISC0 waits for the input tiles to be available in the input circular buffers in SRAM (reader kernel
+-                // populates them)
+-                cb_wait_front(cb_in0, 1);
+-                cb_wait_front(cb_in1, 1);
+-                // TRISC0 tells the FPU to performs the matrix multiplication.
+-                // HIGH_POWER_DISABLE_COMPUTE skips the real FPU work while keeping every CB and
+-                // tile-register handshake intact, so reader and writer are stimulated exactly as
+-                // before and neither deadlocks.
++                // The reader delivers a column slice of A (kBlockM tiles) and a row slice of B
++                // (kBlockN tiles) for this step of the shared dimension.
++                cb_wait_front(cb_in0, kBlockM);
++                cb_wait_front(cb_in1, kBlockN);
++                // Every A tile is combined with every B tile in the slice, so the two slices
++                // are reused kBlockN and kBlockM times respectively before being popped. This
++                // is where the DRAM traffic reduction comes from.
+ #ifndef HIGH_POWER_DISABLE_COMPUTE
+-                matmul_tiles(cb_in0, cb_in1, 0, 0, 0);
++                for (uint32_t m = 0; m < kBlockM; m++) {
++                    for (uint32_t n = 0; n < kBlockN; n++) {
++                        const uint32_t idst = m * kBlockN + n;
++#if defined(HIGH_POWER_OP_MATMUL)
++                        matmul_tiles(cb_in0, cb_in1, m, n, idst);
++#elif defined(HIGH_POWER_OP_ADD)
++                        add_tiles(cb_in0, cb_in1, m, n, idst);
++#else
++                        // No second operand: bring a tile into the destination register and
++                        // transform it in place.
++                        copy_tile(cb_in0, m, idst);
++#if defined(HIGH_POWER_OP_SILU)
++                        silu_tile(idst);
++#elif defined(HIGH_POWER_OP_EXP)
++                        exp_tile(idst);
++#elif defined(HIGH_POWER_OP_SIGMOID)
++                        sigmoid_tile(idst);
++#elif defined(HIGH_POWER_OP_GELU)
++                        gelu_tile(idst);
++#elif defined(HIGH_POWER_OP_RECIP)
++                        recip_tile(idst);
+ #endif
+-                // TRISC1 marks the input tiles as used by popping them from the front of the circular buffers
+-                cb_pop_front(cb_in0, 1);
+-                cb_pop_front(cb_in1, 1);
++#endif
++                    }
++                }
++#endif
++                cb_pop_front(cb_in0, kBlockM);
++                cb_pop_front(cb_in1, kBlockN);
+             }
+             // TRISC1 commits the results, transferring ownership of the tile registers to the packer (TRISC2)
+             tile_regs_commit();
+             // TRISC2 waits for the FPU (TRISC1) to be ready
+             tile_regs_wait();
+-            // TRISC2 reserves space in the output circular buffer for the result tile
+-            cb_reserve_back(cb_out, 1);
+-            // TRISC2 tells the packer to pack the result tile into the output circular buffer
++            // TRISC2 reserves space in the output circular buffer for the whole block
++            cb_reserve_back(cb_out, kBlockTiles);
+ #ifndef HIGH_POWER_DISABLE_COMPUTE
+-            pack_tile(0, cb_out);
++            for (uint32_t i = 0; i < kBlockTiles; i++) {
++                pack_tile(i, cb_out);
++            }
+ #endif
+-            // TRISC2 marks the result tile as used by pushing it to the back of the output circular buffer (writer
+-            // kernel can read them now)
+-            cb_push_back(cb_out, 1);
+-            // TRISC1 releases the tile registers, allowing TRISC0 to acquire them again for the next iteration
++            // TRISC2 marks the result tiles as used by pushing them to the back of the output
++            // circular buffer (writer kernel can read them now)
++            cb_push_back(cb_out, kBlockTiles);
++            // TRISC1 releases the tile registers, allowing TRISC0 to acquire them again
+             tile_regs_release();
+         }
+     }
+diff --git a/tt_metal/programming_examples/high_power_matmul/kernels/dataflow/reader_power.cpp b/tt_metal/programming_examples/high_power_matmul/kernels/dataflow/reader_power.cpp
+index ad72d7a5b37..ce59796f357 100644
+--- a/tt_metal/programming_examples/high_power_matmul/kernels/dataflow/reader_power.cpp
++++ b/tt_metal/programming_examples/high_power_matmul/kernels/dataflow/reader_power.cpp
+@@ -6,15 +6,29 @@
+ #include "api/dataflow/dataflow_api.h"
+ #include "api/debug/dprint.h"
+ 
++// See kernels/compute/mm_power.cpp. With a BLOCK_M x BLOCK_N output block, one column slice of
++// A and one row slice of B feed BLOCK_M * BLOCK_N multiplies, so per multiply this reads
++// (BLOCK_M + BLOCK_N) / (BLOCK_M * BLOCK_N) tiles instead of 2.
++#ifndef BLOCK_M
++#define BLOCK_M 1
++#endif
++#ifndef BLOCK_N
++#define BLOCK_N 1
++#endif
++
++constexpr uint32_t kBlockM = BLOCK_M;
++constexpr uint32_t kBlockN = BLOCK_N;
++
+ void kernel_main() {
+     uint32_t src0_addr = get_arg_val<uint32_t>(0);
+     uint32_t src1_addr = get_arg_val<uint32_t>(1);
+     uint32_t Mt = get_arg_val<uint32_t>(2);
+     uint32_t Kt = get_arg_val<uint32_t>(3);
+     uint32_t Nt = get_arg_val<uint32_t>(4);
+-    uint32_t output_tile_start_id = get_arg_val<uint32_t>(5);
+-    uint32_t num_output_tiles = get_arg_val<uint32_t>(6);
++    uint32_t block_start_id = get_arg_val<uint32_t>(5);
++    uint32_t num_output_blocks = get_arg_val<uint32_t>(6);
+     uint32_t num_iterations = get_arg_val<uint32_t>(7);
++    uint32_t blocks_per_row = get_arg_val<uint32_t>(8);  // Nt / kBlockN
+ 
+     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
+     constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
+@@ -28,35 +42,39 @@ void kernel_main() {
+     const auto b = TensorAccessor(b_args, src1_addr, in1_tile_bytes);
+ 
+     for (uint32_t iter = 0; iter < num_iterations; iter++) {
+-        for (uint32_t output_tile = 0; output_tile < num_output_tiles; output_tile++) {
+-            uint32_t current_tile_id = output_tile_start_id + output_tile;
+-            uint32_t out_row = current_tile_id / Nt;
+-            uint32_t out_col = current_tile_id % Nt;
++        for (uint32_t blk = 0; blk < num_output_blocks; blk++) {
++            const uint32_t block_id = block_start_id + blk;
++            const uint32_t block_row = block_id / blocks_per_row;
++            const uint32_t block_col = block_id % blocks_per_row;
++            const uint32_t row0 = block_row * kBlockM;  // first output tile row in the block
++            const uint32_t col0 = block_col * kBlockN;  // first output tile column in the block
+ 
+             for (uint32_t k = 0; k < Kt; k++) {
+-                // When HIGH_POWER_DISABLE_READER is set the reader keeps its full CB handshake --
+-                // so compute still gets a tile "delivered" every iteration and never deadlocks --
+-                // but issues no DRAM traffic. Compute then runs on whatever stale data is already
+-                // sitting in that L1 buffer, which is harmless: the app never verifies its output.
+                 {
+-                    uint32_t tile_A = out_row * Kt + k;
+-                    cb_reserve_back(cb_id_in0, 1);
+-#ifndef HIGH_POWER_DISABLE_READER
++                    // Column slice of A: rows row0..row0+kBlockM-1 at inner index k.
++                    cb_reserve_back(cb_id_in0, kBlockM);
+                     uint32_t l1_addr = get_write_ptr(cb_id_in0);
+-                    noc_async_read_tile(tile_A, a, l1_addr);
++#ifndef HIGH_POWER_DISABLE_READER
++                    for (uint32_t m = 0; m < kBlockM; m++) {
++                        noc_async_read_tile((row0 + m) * Kt + k, a, l1_addr);
++                        l1_addr += in0_tile_bytes;
++                    }
+                     noc_async_read_barrier();
+ #endif
+-                    cb_push_back(cb_id_in0, 1);
++                    cb_push_back(cb_id_in0, kBlockM);
+                 }
+                 {
+-                    uint32_t tile_B = k * Nt + out_col;
+-                    cb_reserve_back(cb_id_in1, 1);
+-#ifndef HIGH_POWER_DISABLE_READER
++                    // Row slice of B: inner index k, columns col0..col0+kBlockN-1.
++                    cb_reserve_back(cb_id_in1, kBlockN);
+                     uint32_t l1_addr = get_write_ptr(cb_id_in1);
+-                    noc_async_read_tile(tile_B, b, l1_addr);
++#ifndef HIGH_POWER_DISABLE_READER
++                    for (uint32_t n = 0; n < kBlockN; n++) {
++                        noc_async_read_tile(k * Nt + (col0 + n), b, l1_addr);
++                        l1_addr += in1_tile_bytes;
++                    }
+                     noc_async_read_barrier();
+ #endif
+-                    cb_push_back(cb_id_in1, 1);
++                    cb_push_back(cb_id_in1, kBlockN);
+                 }
+             }
+         }
+diff --git a/tt_metal/programming_examples/high_power_matmul/kernels/dataflow/writer_power.cpp b/tt_metal/programming_examples/high_power_matmul/kernels/dataflow/writer_power.cpp
+index e759f3487d2..fee779dcfff 100644
+--- a/tt_metal/programming_examples/high_power_matmul/kernels/dataflow/writer_power.cpp
++++ b/tt_metal/programming_examples/high_power_matmul/kernels/dataflow/writer_power.cpp
+@@ -4,15 +4,30 @@
+ 
+ #include "api/dataflow/dataflow_api.h"
+ 
++// See kernels/compute/mm_power.cpp. Output arrives one BLOCK_M x BLOCK_N block at a time, in
++// row-major order within the block.
++#ifndef BLOCK_M
++#define BLOCK_M 1
++#endif
++#ifndef BLOCK_N
++#define BLOCK_N 1
++#endif
++
++constexpr uint32_t kBlockM = BLOCK_M;
++constexpr uint32_t kBlockN = BLOCK_N;
++constexpr uint32_t kBlockTiles = kBlockM * kBlockN;
++
+ void kernel_main() {
+     uint32_t dst_addr = get_arg_val<uint32_t>(0);
+-    uint32_t num_tiles = get_arg_val<uint32_t>(1);
+-    uint32_t start_id = get_arg_val<uint32_t>(2);
++    uint32_t num_output_blocks = get_arg_val<uint32_t>(1);
++    uint32_t block_start_id = get_arg_val<uint32_t>(2);
+     uint32_t num_iterations = get_arg_val<uint32_t>(3);
+     // Number of times each output tile is written. 1 = normal. Higher values re-write the same
+     // tile to the same address to load the write-side NoC path up to the reader's read volume;
+     // the host computes this from HIGH_POWER_WRITE_AMPLIFICATION_PCT.
+     uint32_t write_repeats = get_arg_val<uint32_t>(4);
++    uint32_t blocks_per_row = get_arg_val<uint32_t>(5);  // Nt / kBlockN
++    uint32_t Nt = get_arg_val<uint32_t>(6);
+ 
+     constexpr uint32_t cb_id_out = tt::CBIndex::c_16;
+     const uint32_t tile_bytes = get_tile_size(cb_id_out);
+@@ -20,22 +35,27 @@ void kernel_main() {
+     constexpr auto c_args = TensorAccessorArgs<0>();
+     const auto c = TensorAccessor(c_args, dst_addr, tile_bytes);
+ 
+-    uint32_t end_id = start_id + num_tiles;
+-
+     for (uint32_t iter = 0; iter < num_iterations; iter++) {
+-        for (uint32_t i = start_id; i < end_id; i++) {
+-            // When HIGH_POWER_DISABLE_WRITER is set the writer keeps draining the output CB -- so
+-            // compute never stalls on a full CB -- but issues no DRAM traffic, leaving the output
+-            // buffer stale. Harmless: the app never verifies its output.
+-            cb_wait_front(cb_id_out, 1);
+-#ifndef HIGH_POWER_DISABLE_WRITER
++        for (uint32_t blk = 0; blk < num_output_blocks; blk++) {
++            const uint32_t block_id = block_start_id + blk;
++            const uint32_t row0 = (block_id / blocks_per_row) * kBlockM;
++            const uint32_t col0 = (block_id % blocks_per_row) * kBlockN;
++
++            cb_wait_front(cb_id_out, kBlockTiles);
+             uint32_t l1_read_addr = get_read_ptr(cb_id_out);
+-            for (uint32_t rep = 0; rep < write_repeats; rep++) {
+-                noc_async_write_tile(i, c, l1_read_addr);
+-                noc_async_write_barrier();
++#ifndef HIGH_POWER_DISABLE_WRITER
++            for (uint32_t m = 0; m < kBlockM; m++) {
++                for (uint32_t n = 0; n < kBlockN; n++) {
++                    const uint32_t out_tile = (row0 + m) * Nt + (col0 + n);
++                    for (uint32_t rep = 0; rep < write_repeats; rep++) {
++                        noc_async_write_tile(out_tile, c, l1_read_addr);
++                        noc_async_write_barrier();
++                    }
++                    l1_read_addr += tile_bytes;
++                }
+             }
+ #endif
+-            cb_pop_front(cb_id_out, 1);
++            cb_pop_front(cb_id_out, kBlockTiles);
+         }
+     }
+ }
