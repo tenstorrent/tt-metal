@@ -868,17 +868,17 @@ std::vector<Tensor> log_bw(
 std::vector<Tensor> relu6_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor grad_result = where(ttnn::le(input, 0.0f, std::nullopt, output_mem_config), 0.0f, 6.0f, output_mem_config);
-    grad_result = where(
+    // grad where 0 < input < 6, zero elsewhere. Both comparisons are false for a NaN input, so the
+    // false arm is also what NaN returns and has to stay zero, which is the gradient torch gives.
+    Tensor grad_result = where(
         ttnn::logical_and(
             ttnn::gtz(input, output_mem_config),
             ttnn::lt(input, 6.0f, std::nullopt, output_mem_config),
             std::nullopt,
             output_mem_config),
         grad,
-        grad_result,
+        0.0f,
         output_mem_config);
-    grad_result = where(ttnn::ge(input, 6.0f, std::nullopt, output_mem_config), 0.0f, grad_result, output_mem_config);
 
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
