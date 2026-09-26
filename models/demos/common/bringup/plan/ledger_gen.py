@@ -256,7 +256,7 @@ def generate(spec, ref=None, early: bool = False) -> dict:
         "Warm per-section, per-chip profile of one long chunk",
         "perf",
         [prev],
-        f"{PROFILE_ENV} {SAFE} models/demos/common/bringup/tests/test_profile.py",
+        f"{PROFILE_ENV} {SAFE} --no-precompile models/demos/common/bringup/tests/test_profile.py",
         {"device_ms_total": "> 0", "profiled_programs": ">= 1"},
         device=True,
     )
