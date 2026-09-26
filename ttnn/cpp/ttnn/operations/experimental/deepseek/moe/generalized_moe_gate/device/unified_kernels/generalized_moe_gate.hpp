@@ -307,27 +307,27 @@ struct GeneralizedMoeGate {
                 tile_regs_acquire();
                 // block1 -> {0,2}: scores(cb_tilize p1), idx(cb_tilize_idx p1), bias(cb_tilize p3)
                 reconfig_data_format_srca(CTArgs::cb_tilize);
-                transpose_wh_init_short(CTArgs::cb_tilize);
-                transpose_wh_tile(CTArgs::cb_tilize, 1, 3);
+                transpose_init(CTArgs::cb_tilize);
+                transpose_tile(CTArgs::cb_tilize, 1, 3);
                 generalized_moe_gate_place_field_from_interm<2, 0, 2, 0, 4>();
                 reconfig_data_format_srca(CTArgs::cb_tilize_idx);
-                transpose_wh_init_short(CTArgs::cb_tilize_idx);
-                transpose_wh_tile(CTArgs::cb_tilize_idx, 1, 3);
+                transpose_init(CTArgs::cb_tilize_idx);
+                transpose_tile(CTArgs::cb_tilize_idx, 1, 3);
                 generalized_moe_gate_place_field_from_interm<1, 0, 2, 0, 4>();
                 reconfig_data_format_srca(CTArgs::cb_tilize);
-                transpose_wh_init_short(CTArgs::cb_tilize);
-                transpose_wh_tile(CTArgs::cb_tilize, 3, 3);
+                transpose_init(CTArgs::cb_tilize);
+                transpose_tile(CTArgs::cb_tilize, 3, 3);
                 generalized_moe_gate_place_field_from_interm<0, 0, 2, 0, 4>();
                 // block0 -> {4,6}: scores(cb_tilize p0), idx(cb_tilize_idx p0), bias(cb_tilize p2)
-                transpose_wh_tile(CTArgs::cb_tilize, 0, 3);
+                transpose_tile(CTArgs::cb_tilize, 0, 3);
                 generalized_moe_gate_place_field_from_interm<2, 4, 6, 0, 4>();
                 reconfig_data_format_srca(CTArgs::cb_tilize_idx);
-                transpose_wh_init_short(CTArgs::cb_tilize_idx);
-                transpose_wh_tile(CTArgs::cb_tilize_idx, 0, 3);
+                transpose_init(CTArgs::cb_tilize_idx);
+                transpose_tile(CTArgs::cb_tilize_idx, 0, 3);
                 generalized_moe_gate_place_field_from_interm<1, 4, 6, 0, 4>();
                 reconfig_data_format_srca(CTArgs::cb_tilize);
-                transpose_wh_init_short(CTArgs::cb_tilize);
-                transpose_wh_tile(CTArgs::cb_tilize, 2, 3);
+                transpose_init(CTArgs::cb_tilize);
+                transpose_tile(CTArgs::cb_tilize, 2, 3);
                 generalized_moe_gate_place_field_from_interm<0, 4, 6, 0, 4>();
                 // merge {0,2}+{4,6} -> global top-8 + normalize + step2. srcb dummy-valid AFTER the transposes.
                 generalized_moe_gate_combine_init<false>();

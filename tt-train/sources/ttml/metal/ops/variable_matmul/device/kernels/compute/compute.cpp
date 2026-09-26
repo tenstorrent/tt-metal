@@ -7,7 +7,7 @@
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/dataflow/circular_buffer.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
@@ -50,7 +50,7 @@ inline void transpose_in0_block_streamed(uint32_t src_cb, uint32_t dst_cb) {
         src_buf.wait_front(ChunkSize);
         tile_regs_acquire();
         for (uint32_t j = 0; j < ChunkSize; ++j) {
-            transpose_wh_tile(src_cb, j, /*dst=*/j);
+            transpose_tile(src_cb, j, /*dst=*/j);
         }
         tile_regs_commit();
         src_buf.pop_front(ChunkSize);
@@ -67,7 +67,7 @@ inline void transpose_in0_block_streamed(uint32_t src_cb, uint32_t dst_cb) {
         src_buf.wait_front(kTail);
         tile_regs_acquire();
         for (uint32_t j = 0; j < kTail; ++j) {
-            transpose_wh_tile(src_cb, j, /*dst=*/j);
+            transpose_tile(src_cb, j, /*dst=*/j);
         }
         tile_regs_commit();
         src_buf.pop_front(kTail);
@@ -301,7 +301,7 @@ void kernel_main() {
                         DeviceZoneScopedN("TRANSPOSE-A");
                         // State setup for transpose (one-time per K-iter, before streaming).
                         reconfig_data_format_srca(in1_cb, in0_cb);
-                        transpose_wh_init_short(in0_cb);
+                        transpose_init(in0_cb);
                         pack_reconfig_data_format(in0_transposed_cb);
                         transpose_in0_block_streamed<in0_block_num_tiles>(in0_cb, in0_transposed_cb);
                         // Restore matmul state. reconfig_data_format_srca switches SrcA off the

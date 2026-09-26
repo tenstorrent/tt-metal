@@ -49,8 +49,7 @@ namespace detail {
 // Single source of truth for the dest-reuse init path. One source operand is taken from DST, so only
 // icb0 is unpacked (into SrcA/SrcB per reuse_dest). This is a single-operand (SrcA-only) reconfigure.
 // Preserves the historic divergence: WH/BH accumulate the unpacked operand into DST (acc_to_dest=true
-// at the unpacker), Quasar does not. The public {add,sub,mul}_reuse_dest_init wrappers and the
-// deprecated binary_dest_reuse_tiles_init shim forward here.
+// at the unpacker), Quasar does not. The public {add,sub,mul}_reuse_dest_init wrappers forward here.
 template <EltwiseBinaryType eltwise_binary_type, EltwiseBinaryReuseDestType reuse_dest>
 ALWI void binary_reuse_dest_init(uint32_t icb0, uint32_t call_line) {
     state_configure(icb0, call_line);
@@ -400,8 +399,8 @@ ALWI void sub_block(
 namespace detail {
 // Single source of truth for the dest-reuse execute. The idst tile is loaded from DST into SrcA
 // (DEST_TO_SRCA) or SrcB (DEST_TO_SRCB); the op runs on SrcA & SrcB and writes back to DST[idst].
-// The public {add,sub,mul}_reuse_dest_tiles wrappers and the deprecated binary_dest_reuse_tiles shim
-// forward here. Assumes a prior op populated DST[idst], else it reads zeroes.
+// The public {add,sub,mul}_reuse_dest_tiles wrappers forward here. Assumes a prior op populated
+// DST[idst], else it reads zeroes.
 template <EltwiseBinaryType eltwise_binary_type, EltwiseBinaryReuseDestType reuse_dest, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void binary_reuse_dest_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
 #ifndef ARCH_QUASAR
@@ -457,172 +456,6 @@ ALWI void sub_reuse_dest_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uint32
 template <EltwiseBinaryReuseDestType reuse_dest, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void mul_reuse_dest_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
     detail::binary_reuse_dest_tiles<EltwiseBinaryType::ELWMUL, reuse_dest, is_fp32_dest_acc_en>(
-        in_cb_id, in_tile_index, dst_tile_index);
-}
-
-// =====================================================================================================================
-// Deprecated API
-//
-// The functions below implement the old eltwise-binary programming model. The new model is:
-//   compute_kernel_hw_startup(icb0, icb1, ocb);   // once at the start of MAIN
-//   add_init(icb0, icb1);   // (or sub_init / mul_init) before add_tiles / sub_tiles / mul_tiles
-// The dest-reuse op (one operand from DST) uses the per-op reuse_dest init, e.g.
-//   add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(in_cb);
-// Generic data-format reconfiguration is done via reconfig_data_format_srca / reconfig_data_format
-// (from reconfig_data_format.h).
-// =====================================================================================================================
-
-// clang-format off
-/**
- * Init function for all binary ops. Performs the one-time hardware configuration of the
- * unpacker/math/packer. Body kept verbatim for backwards compatibility (it also seeds the sentinel
- * reconfig tracker via state_configure).
- *
- * | Argument       | Description                                                   | Type     | Valid Range                | Required |
- * |----------------|---------------------------------------------------------------|----------|----------------------------|----------|
- * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t | 0 to 31                    | True     |
- * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31                    | True     |
- * | ocb            | The identifier of the circular buffer (CB) containing output  | uint32_t | 0 to 31, defaults to CB 16 | True     |
- */
-// clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-[[deprecated(
-    "Use compute_kernel_hw_startup(icb0, icb1, ocb) once at kernel start, then add_init/sub_init/mul_init(icb0, "
-    "icb1). This will be removed after September 15th, 2026.")]] ALWI void
-binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-#ifndef ARCH_QUASAR
-    state_configure(icb0, icb1, ocb, call_line);
-
-    UNPACK((llk_unpack_hw_configure<is_fp32_dest_acc_en>(icb0, icb1)));
-    UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1)));
-
-    MATH((llk_math_pack_sync_init<is_fp32_dest_acc_en>()));
-    MATH((llk_math_hw_configure<is_fp32_dest_acc_en>(icb0, icb1)));
-
-    PACK((llk_pack_hw_configure<is_fp32_dest_acc_en>(ocb)));
-    PACK((llk_pack_init(ocb)));
-    PACK((llk_pack_dest_init<is_fp32_dest_acc_en, PackMode::Default>(ocb)));
-#else
-    UNPACK((llk_unpack_hw_configure(icb0, icb1)));
-    UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1)));
-
-    MATH((llk_math_pack_sync_init()));
-    MATH((llk_math_hw_configure<is_fp32_dest_acc_en>(icb0, icb1)));
-
-    PACK((llk_pack_hw_configure<is_fp32_dest_acc_en>(ocb)));
-    PACK((llk_pack_init(ocb)));
-    PACK((llk_pack_dest_init()));
-#endif
-}
-
-// clang-format off
-/**
- * Short init function for mul_tiles.
- *
- * | Argument       | Description                                                   | Type     | Valid Range | Required |
- * |----------------|---------------------------------------------------------------|----------|-------------|----------|
- * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t | 0 to 31     | True     |
- * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31     | True     |
- */
-// clang-format on
-[[deprecated("Renamed to mul_init(). This will be removed after September 15th, 2026.")]] ALWI void mul_tiles_init(
-    uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
-    // acc_to_dest is unused for WH/BH and accumulation is default behaviour.
-    // For back compatibility with Quasar, acc_to_dest=true in this API for all ops.
-    // More control is provided with 3-arg version of init API.
-    mul_init(icb0, icb1, true /* acc_to_dest */, call_line);
-}
-
-// clang-format off
-/**
- * Short init function for mul_tiles, with explicit acc_to_dest control.
- *
- * | Argument       | Description                                                   | Type     | Valid Range | Required |
- * |----------------|---------------------------------------------------------------|----------|-------------|----------|
- * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t | 0 to 31     | True     |
- * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31     | True     |
- */
-// clang-format on
-[[deprecated("Renamed to mul_init(). This will be removed after September 15th, 2026.")]] ALWI void mul_tiles_init(
-    uint32_t icb0, uint32_t icb1, uint32_t acc_to_dest, uint32_t call_line = __builtin_LINE()) {
-    mul_init(icb0, icb1, acc_to_dest /* acc_to_dest */, call_line);
-}
-
-// clang-format off
-/**
- * Short init function for add_tiles.
- *
- * | Argument       | Description                                                   | Type     | Valid Range | Required |
- * |----------------|---------------------------------------------------------------|----------|-------------|----------|
- * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t | 0 to 31     | True     |
- * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31     | True     |
- * | acc_to_dest    | If true, operation = A + B + dst_tile_idx of add_tiles        | bool     | 0,1         | False    |
- */
-// clang-format on
-[[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
-    uint32_t icb0, uint32_t icb1, bool acc_to_dest = false, uint32_t call_line = __builtin_LINE()) {
-    add_init(icb0, icb1, acc_to_dest /* acc_to_dest */, call_line);
-}
-
-// clang-format off
-/**
- * Short init function for sub_tiles.
- *
- * | Argument       | Description                                                   | Type     | Valid Range | Required |
- * |----------------|---------------------------------------------------------------|----------|-------------|----------|
- * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t | 0 to 31     | True     |
- * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31     | True     |
- * | acc_to_dest    | If true, operation = A - B + dst_tile_idx of sub_tiles        | bool     | 0,1         | False    |
- */
-// clang-format on
-[[deprecated("Renamed to sub_init(). This will be removed after September 15th, 2026.")]] ALWI void sub_tiles_init(
-    uint32_t icb0, uint32_t icb1, bool acc_to_dest = false, uint32_t call_line = __builtin_LINE()) {
-    sub_init(icb0, icb1, acc_to_dest /* acc_to_dest */, call_line);
-}
-
-// clang-format off
-/**
- * Init function for the dest-reuse binary op. Replaced by the per-op
- * {add,sub,mul}_reuse_dest_init<reuse_dest> functions.
- *
- * | Argument       | Description                                                   | Type     | Valid Range | Required |
- * |----------------|---------------------------------------------------------------|----------|-------------|----------|
- * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t | 0 to 31     | True     |
- */
-// clang-format on
-template <
-    EltwiseBinaryType eltwise_binary_type = EltwiseBinaryType::ELWADD,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
-[[deprecated(
-    "Renamed to add_reuse_dest_init / sub_reuse_dest_init / mul_reuse_dest_init<reuse_dest>, e.g. "
-    "add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(in_cb). This will be removed after September 15th, 2026.")]] ALWI void
-binary_dest_reuse_tiles_init(uint32_t icb0, uint32_t call_line = __builtin_LINE()) {
-    // Single-operand dest-reuse init path. Kept as a shim so existing callers (and the degenerate
-    // binary_reuse_dest == NONE case, e.g. the sentinel test) retain the exact reconfigure behaviour.
-    detail::binary_reuse_dest_init<eltwise_binary_type, binary_reuse_dest>(icb0, call_line);
-}
-
-// clang-format off
-/**
- * Dest-reuse binary execute. Renamed to the per-op {add,sub,mul}_reuse_dest_tiles<reuse_dest>.
- * See the paired init docs for operand/register semantics.
- *
- * | Argument       | Description                                                                                              | Type     | Valid Range | Required |
- * |----------------|----------------------------------------------------------------------------------------------------------|----------|-------------|----------|
- * | in_cb_id       | The identifier of the circular buffer (CB) containing A                                                  | uint32_t | 0 to 31     | True     |
- * | in_tile_index  | The index of tile A within the first CB                                                                  | uint32_t | < CB size   | True     |
- * | dst_tile_index | The index of tile B moved to Src reg, and the index of the DST tile for the result C                     | uint32_t | < DST size  | True     |
- */
-// clang-format on
-template <
-    EltwiseBinaryType eltwise_binary_type = EltwiseBinaryType::ELWADD,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-[[deprecated(
-    "Renamed to add_reuse_dest_tiles / sub_reuse_dest_tiles / mul_reuse_dest_tiles<reuse_dest>, e.g. "
-    "add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(in_cb, it, idst). This will be removed after September 15th, 2026.")]] ALWI void
-binary_dest_reuse_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
-    detail::binary_reuse_dest_tiles<eltwise_binary_type, binary_reuse_dest, is_fp32_dest_acc_en>(
         in_cb_id, in_tile_index, dst_tile_index);
 }
 

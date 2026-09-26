@@ -167,8 +167,8 @@ Single-operand subtile broadcast (`SCALAR_A/B`, `ROW_A/B`, `COL_A/B`) **and** bo
   incoherent with the TL1 SRAM the compute consumer reads, so a plain cacheable fill is invisible to the
   consumer and can later evict over the neighbor DFB. **Open gap:** that store is coherent but **not
   ordered** against the credit `push_back` publishes — known, unmitigated, `TODO(#51291)` (§4).
-- **Design constraint:** `reconfigure_unary_bcast` (mid-program bcast-type/format switch) has no Quasar
-  branch (`#ifndef ARCH_QUASAR`-only) — each broadcast type is brought up via its own `unary_bcast_init`,
+- **Design constraint:** there is no mid-program bcast-type/format switch API (the WH/BH-only
+  `reconfigure_unary_bcast` was removed) — each broadcast type is brought up via its own `unary_bcast_init`,
   not a runtime reconfigure.
 - **Ops:** add/subtract (FPU) + multiply/divide/maximum/minimum (SFPU).
 - **Layouts:** interleaved **and** a sharded broadcast operand (via the NoC-read sharding-aware

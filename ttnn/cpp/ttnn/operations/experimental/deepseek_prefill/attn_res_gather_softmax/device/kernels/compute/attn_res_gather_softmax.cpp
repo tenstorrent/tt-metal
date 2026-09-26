@@ -280,7 +280,7 @@ void kernel_main() {
                 [] {
                     reconfig_data_format(cb_stream, cb_stream);
                     pack_reconfig_data_format(cb_tmp);
-                    mul_tiles_init(cb_stream, cb_stream);
+                    mul_init(cb_stream, cb_stream);
                 },
                 [](uint32_t wt) { mul_tiles(cb_stream, cb_stream, wt, wt, 0); });
 

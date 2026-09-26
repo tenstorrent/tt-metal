@@ -36,9 +36,10 @@ constexpr DataCopyType unary_bcast_data_copy_type =
 
 template <BroadcastType bcast_type, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void unary_bcast_init(uint32_t icb) {
-    // NOTE: no call_line parameter here — a defaulted call_line would make this 1-arg overload
-    // ambiguous with the [[deprecated]] (icb, ocb) full init below. The sentinel still tracks the
-    // operand; only the source line for this specific call is attributed to bcast.h.
+    // NOTE: no call_line parameter here — a defaulted call_line would let a stale 2-arg
+    // unary_bcast_init(icb, ocb) call (the removed full init) compile with ocb silently taken as
+    // call_line. The sentinel still tracks the operand; only the source line for this specific call
+    // is attributed to bcast.h.
     state_configure(icb, __builtin_LINE());
 
 #ifndef ARCH_QUASAR
@@ -76,19 +77,6 @@ ALWI void unary_bcast_init(uint32_t icb) {
     MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::B2D, is_fp32_dest_acc_en, bcast_type>(icb)));
 #endif
 #endif
-}
-
-// Deprecated full init: fused hardware startup + op-specific short init. Superseded by the
-// compute_kernel_hw_startup(icb, ocb) + unary_bcast_init(icb) programming model, mirroring the
-// matmul (#46346) / transpose (#23835) / eltwise (#22943) cleanups under umbrella #22219.
-template <BroadcastType bcast_type>
-[[deprecated(
-    "Use compute_kernel_hw_startup(icb, ocb) once at the top of the kernel, then unary_bcast_init(icb). "
-    "The unary_bcast_init(icb, ocb) full init will be removed after September 20th, 2026.")]]
-ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-    state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
-    compute_kernel_hw_startup(icb, ocb);
-    unary_bcast_init<bcast_type>(icb);
 }
 
 template <BroadcastType bcast_type, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
@@ -154,46 +142,6 @@ ALWI void unary_bcast_uninit(uint32_t icb) {
     MATH((llk_math_eltwise_unary_datacopy_uninit<bcast_type>()));
 #endif
 }
-
-#ifndef ARCH_QUASAR
-template <BroadcastType old_bcast_type, BroadcastType new_bcast_type, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-[[deprecated(
-    "Switch broadcast operands with the generic reconfig_data_format_srca / reconfig_data_format_srcb + "
-    "pack_reconfig_data_format, then unary_bcast_init(new_icb). This will be removed after September 15th, "
-    "2026.")]] void
-reconfigure_unary_bcast(uint32_t old_icb, uint32_t new_icb, uint32_t old_ocb, uint32_t new_ocb) {
-#if defined(TRISC_MATH) || defined(TRISC_UNPACK)
-    // Pass through uses A2D and potentially direct unpack to dest.
-    constexpr DataCopyType data_copy_type = unary_bcast_data_copy_type<new_bcast_type>;
-    constexpr bool enable_unpack_to_dest = (data_copy_type == DataCopyType::A2D);
-    const std::uint32_t new_operand_id = get_operand_id(new_icb);
-    const std::uint32_t old_operand_id = get_operand_id(old_icb);
-    bool unpacker_src_format_change = unpack_src_format[new_operand_id] != unpack_src_format[old_operand_id];
-    bool unpacker_dst_format_change = unpack_dst_format[new_operand_id] != unpack_dst_format[old_operand_id];
-    bool bcast_type_change = (old_bcast_type != new_bcast_type);
-
-    if (unpacker_src_format_change || unpacker_dst_format_change) {
-        // Will configure A & B in similar way
-        UNPACK((llk_unpack_hw_configure<is_fp32_dest_acc_en>(new_icb)));
-    }
-
-    if (unpacker_src_format_change || unpacker_dst_format_change || bcast_type_change) {
-        UNPACK((llk_unpack_A_init<new_bcast_type, false, EltwiseBinaryReuseDestType::NONE, enable_unpack_to_dest>(
-            false, false /*transpose within 16x16 face*/, new_icb)));
-    }
-
-    if (unpacker_dst_format_change) {
-        MATH((llk_math_hw_configure<is_fp32_dest_acc_en>(new_icb, new_icb)));
-    }
-
-    if (unpacker_dst_format_change || bcast_type_change) {
-        MATH((llk_math_eltwise_unary_datacopy_init<data_copy_type, is_fp32_dest_acc_en, new_bcast_type>(new_icb)));
-    }
-#endif
-
-    PACK((llk_pack_reconfig_data_format<is_fp32_dest_acc_en>(old_ocb, new_ocb)));
-}
-#endif
 
 /**
  * Shorthand template instantiation of sub_tiles_bcast.
@@ -317,50 +265,6 @@ ALWI void add_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, 
           MathFidelity::LoFi,
           EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true /* clear_fp32_dst_acc */)));
     UNPACK((llk_unpack_AB<BroadcastType::SCALAR>(icb0, icb1, itile0, itile1)));
-}
-
-// clang-format off
-/**
- * Associated init function that must be called before calling a bcast op.
- *
- * Return value: None
- *
- *
- * | Argument       | Description                                                   | Type          | Valid Range | Required |
- * |----------------|---------------------------------------------------------------|---------------|-------------|----------|
- * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t      | 0 to 31     | True     |
- * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t      | 0 to 31     | True     |
- * | ocb            | The identifier of the circular buffer (CB) containing output  | uint32_t      | 0 to 31     | False    |
- */
-// clang-format on
-template <EltwiseBinaryType tBcastOp, BroadcastType tBcastDim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-[[deprecated(
-    "Use compute_kernel_hw_startup(icb0, icb1, ocb) once at kernel start, then "
-    "bcast_init<tBcastOp, tBcastDim>(icb0, icb1). This will be removed after September 15th, 2026.")]] void
-init_bcast(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-    state_configure(icb0, icb1, ocb, call_line);
-    MATH((llk_math_eltwise_binary_init<tBcastOp, tBcastDim, MATH_FIDELITY>(icb0, icb1)));
-#ifndef ARCH_QUASAR
-    UNPACK((llk_unpack_hw_configure<is_fp32_dest_acc_en>(icb0, icb1)));
-    UNPACK((llk_unpack_AB_init<tBcastDim>(icb0, icb1)));
-
-    PACK((llk_pack_hw_configure<is_fp32_dest_acc_en>(ocb)));
-    PACK((llk_pack_init(ocb)));
-    PACK((llk_pack_dest_init<is_fp32_dest_acc_en, PackMode::Default>(ocb)));
-
-    MATH((llk_math_pack_sync_init<is_fp32_dest_acc_en>()));
-    MATH((llk_math_hw_configure<is_fp32_dest_acc_en>(icb0, icb1)));
-#else
-    UNPACK((llk_unpack_hw_configure(icb0, icb1)));
-    UNPACK((llk_unpack_AB_init<tBcastDim>(icb0, icb1)));
-
-    PACK((llk_pack_hw_configure<is_fp32_dest_acc_en>(ocb)));
-    PACK((llk_pack_init(ocb)));
-    PACK((llk_pack_dest_init()));
-
-    MATH((llk_math_pack_sync_init()));
-    MATH((llk_math_hw_configure<is_fp32_dest_acc_en>(icb0, icb1)));
-#endif
 }
 
 /*
@@ -583,57 +487,6 @@ ALWI void bcast_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builti
     state_configure(icb0, icb1, call_line);
     MATH((llk_math_eltwise_binary_init<tBcastOp, tBcastDim, MATH_FIDELITY>(icb0, icb1)));
     UNPACK((llk_unpack_AB_init<tBcastDim>(icb0, icb1)));
-}
-
-// =====================================================================================================================
-// Deprecated broadcast init API
-// New model: compute_kernel_hw_startup(icb0, icb1, ocb) once at MAIN start, then the per-op broadcast
-// init (add_bcast_rows_init / mul_bcast_cols_init / ... , or the generic bcast_init<OP, DIM>). The
-// forwarders below preserve the old *_init_short names; init_bcast (above) is the deprecated full-config init.
-// =====================================================================================================================
-[[deprecated("Renamed to add_bcast_rows_init(). This will be removed after September 15th, 2026.")]] ALWI void add_bcast_rows_init_short(
-    uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
-    add_bcast_rows_init(icb0, icb1, call_line);
-}
-
-[[deprecated("Renamed to add_bcast_cols_init(). This will be removed after September 15th, 2026.")]] ALWI void add_bcast_cols_init_short(
-    uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
-    add_bcast_cols_init(icb0, icb1, call_line);
-}
-
-[[deprecated("Renamed to add_bcast_scalar_init(). This will be removed after September 15th, 2026.")]] ALWI void add_bcast_scalar_init_short(
-    uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
-    add_bcast_scalar_init(icb0, icb1, call_line);
-}
-
-[[deprecated("Renamed to sub_bcast_rows_init(). This will be removed after September 15th, 2026.")]] ALWI void sub_bcast_rows_init_short(
-    uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
-    sub_bcast_rows_init(icb0, icb1, call_line);
-}
-
-[[deprecated("Renamed to sub_bcast_cols_init(). This will be removed after September 15th, 2026.")]] ALWI void sub_bcast_cols_init_short(
-    uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
-    sub_bcast_cols_init(icb0, icb1, call_line);
-}
-
-[[deprecated("Renamed to sub_bcast_scalar_init(). This will be removed after September 15th, 2026.")]] ALWI void sub_tiles_bcast_scalar_init_short(
-    uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
-    sub_bcast_scalar_init(icb0, icb1, call_line);
-}
-
-[[deprecated("Renamed to mul_bcast_rows_init(). This will be removed after September 15th, 2026.")]] ALWI void mul_bcast_rows_init_short(
-    uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
-    mul_bcast_rows_init(icb0, icb1, call_line);
-}
-
-[[deprecated("Renamed to mul_bcast_cols_init(). This will be removed after September 15th, 2026.")]] ALWI void mul_bcast_cols_init_short(
-    uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
-    mul_bcast_cols_init(icb0, icb1, call_line);
-}
-
-[[deprecated("Renamed to mul_bcast_scalar_init(). This will be removed after September 15th, 2026.")]] ALWI void mul_tiles_bcast_scalar_init_short(
-    uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
-    mul_bcast_scalar_init(icb0, icb1, call_line);
 }
 
 }  // namespace ckernel

@@ -44,7 +44,7 @@ ALWI void tilize_row_major_block(
 /*
  * Tilize all blocks of ROW_MAJOR input from dfb_in_rm into dfb_in (batch mode).
  * tilize_init and tilize_uninit wrap the full block loop; tilize_block is called per block.
- * Caller must reinitialize binary op hardware with binary_op_init_common after this returns,
+ * Caller must reinitialize binary op hardware (compute_kernel_hw_startup + the op init) after this returns,
  * since tilize_uninit reconfigures the hardware state.
  */
 template <uint32_t block_size>

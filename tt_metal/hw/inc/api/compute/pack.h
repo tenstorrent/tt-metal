@@ -171,26 +171,6 @@ ALWI void dummy_pack(std::uint32_t cb_id) { PACK((llk_pack_dummy(cb_id))); }
 
 // clang-format off
 /**
- * @deprecated Renamed to `pack_block()`. This forwarding shim is retained only for backwards
- * compatibility and will be removed after August 15th, 2026 (see .github/deprecations.json).
- *
- * Return value: None
- *
- * | Param Type | Name      | Description                                       | Type     | Valid Range                                          | Required |
- * |------------|-----------|---------------------------------------------------|----------|------------------------------------------------------|----------|
- * | Function   | ifrom_dst | The index of the first tile in the DEST register  | uint32_t | Must be less than the size of the DEST register (16) | True     |
- * | Function   | icb       | The identifier of the output circular buffer (CB) | uint32_t | 0 to 31                                              | True     |
- * | Function   | ntiles    | The number of tiles to copy from DEST to CB       | uint32_t | Must be less than the size of the DEST register (16) | True     |
- */
-// clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-[[deprecated("Renamed to pack_block(); pack_tile_block will be removed after August 15th, 2026.")]] ALWI void
-pack_tile_block(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ntiles) {
-    pack_block<is_fp32_dest_acc_en>(ifrom_dst, icb, ntiles);
-}
-
-// clang-format off
-/**
  * Helper function to reconfigure the packer L1 accumulation flag. This function would ideally be called
  * after other initialization functions that initialize the packer for a specific operation.
  * This function configures the packer to accumulate the values it takes from DEST with the ones that

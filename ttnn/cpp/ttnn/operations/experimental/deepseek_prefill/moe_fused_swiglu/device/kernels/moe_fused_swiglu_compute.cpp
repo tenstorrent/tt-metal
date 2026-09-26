@@ -190,7 +190,7 @@ ALWI void fold_dest(uint32_t num_contributors, uint32_t n) {
             }
             c = 1;
         } else {
-            add_tiles_init(IN, IN, /*acc_to_dest=*/false);
+            add_init(IN, IN, /*acc_to_dest=*/false);
             for (uint32_t i = 0; i < w; ++i) {
                 add_tiles(IN, IN, t0 + i, n + t0 + i, i);
             }
@@ -198,7 +198,7 @@ ALWI void fold_dest(uint32_t num_contributors, uint32_t n) {
         }
         // ...and the rest, TWO contributors per call, straight into the sticky DEST accumulator.
         // Slice `c` starts at tile `c * n` of the landing CB.
-        add_tiles_init(IN, IN, /*acc_to_dest=*/true);
+        add_init(IN, IN, /*acc_to_dest=*/true);
         for (; c + 1 < num_contributors; c += 2) {
             for (uint32_t i = 0; i < w; ++i) {
                 add_tiles(IN, IN, c * n + t0 + i, (c + 1) * n + t0 + i, i);
@@ -214,7 +214,7 @@ ALWI void fold_dest(uint32_t num_contributors, uint32_t n) {
     // Clear the latched `acc_to_dest`. It is a STICKY math-config bit, and the helpers that run next
     // may use a short init that does not re-assert it — in which case every later FPU op would keep
     // folding into DEST instead of overwriting it.
-    add_tiles_init(IN, IN, /*acc_to_dest=*/false);
+    add_init(IN, IN, /*acc_to_dest=*/false);
     // Hand the machine back in the state the FOLLOWING helper chain expects. That chain is
     // `add<blk_in(ACC), blk_in(IN), blk_out(ACC)>`, and its own reconfig is compile-time-elided
     // against a static CB sequence this raw block is invisible to — so the hardware must already
@@ -241,7 +241,7 @@ ALWI void mul_blocked(uint32_t n) {
     CircularBuffer out_buf(OUT);
     reconfig_data_format(A, B);
     pack_reconfig_data_format(OUT);
-    mul_tiles_init(A, B);
+    mul_init(A, B);
     a_buf.wait_front(n);
     b_buf.wait_front(n);
     out_buf.reserve_back(n);
@@ -295,13 +295,13 @@ ALWI void fold_binary_act_blocked(uint32_t num_contributors, uint32_t n) {
             }
             c = 1;
         } else {
-            add_tiles_init(GATE, GATE, /*acc_to_dest=*/false);
+            add_init(GATE, GATE, /*acc_to_dest=*/false);
             for (uint32_t i = 0; i < width; ++i) {
                 add_tiles(GATE, GATE, base + i, n + base + i, i);
             }
             c = 2;
         }
-        add_tiles_init(GATE, GATE, /*acc_to_dest=*/true);
+        add_init(GATE, GATE, /*acc_to_dest=*/true);
         for (; c + 1 < num_contributors; c += 2) {
             for (uint32_t i = 0; i < width; ++i) {
                 add_tiles(GATE, GATE, c * n + base + i, (c + 1) * n + base + i, i);
@@ -316,19 +316,19 @@ ALWI void fold_binary_act_blocked(uint32_t num_contributors, uint32_t n) {
             }
             c = 1;
         } else {
-            add_tiles_init(UP, UP, /*acc_to_dest=*/false);
+            add_init(UP, UP, /*acc_to_dest=*/false);
             for (uint32_t i = 0; i < width; ++i) {
                 add_tiles(UP, UP, base + i, n + base + i, width + i);
             }
             c = 2;
         }
-        add_tiles_init(UP, UP, /*acc_to_dest=*/true);
+        add_init(UP, UP, /*acc_to_dest=*/true);
         for (; c + 1 < num_contributors; c += 2) {
             for (uint32_t i = 0; i < width; ++i) {
                 add_tiles(UP, UP, c * n + base + i, (c + 1) * n + base + i, width + i);
             }
         }
-        add_tiles_init(UP, UP, /*acc_to_dest=*/false);
+        add_init(UP, UP, /*acc_to_dest=*/false);
 
         for (uint32_t i = 0; i < width; ++i) {
             BINARY_ACT_TILE(i, width + i, i);
