@@ -9,6 +9,7 @@ import ttnn
 from tests.ttnn.python_api_testing.sweep_tests.ttnn_pytorch_ops import eltwise_typecast
 from tests.ttnn.python_api_testing.typecast_test_helpers import (
     assert_integer_typecast_equal,
+    device_truncates_float_to_uint16,
     make_typecast_test_input,
     narrow_to_8bit,
     typecast_test_input_bounds,
@@ -904,3 +905,70 @@ def test_unary_chain_typecast_int8(tt_output_dtype, device):
 
     expected = ttnn.to_torch(ttnn.typecast(input_tensor, tt_output_dtype))
     assert_equal(expected, ttnn.to_torch(chained))
+
+
+def _fractional_typecast_stimulus(signed, pt_input_dtype):
+    """Values whose fractional part tells truncation apart from any rounding mode.
+
+    Half-integers are the discriminator: truncation, round-to-nearest with ties away
+    from zero, and round-to-nearest-even all disagree on them. bfloat16 has 8 mantissa
+    bits, so quarter steps below 64 are exact and survive the trip to the device.
+    """
+    offsets = torch.tensor([0.25, 0.5, 0.75], dtype=torch.float32)
+    base = torch.arange(0, 63, dtype=torch.float32)
+    values = (base[:, None] + offsets[None, :]).flatten()
+    if signed:
+        values = torch.cat([values, -values])
+    repeats = (TILE_HEIGHT * TILE_WIDTH + values.numel() - 1) // values.numel()
+    values = values.repeat(repeats)[: TILE_HEIGHT * TILE_WIDTH]
+    return values.reshape(1, 1, TILE_HEIGHT, TILE_WIDTH).to(pt_input_dtype)
+
+
+@pytest.mark.parametrize(
+    "tt_output_dtype, signed",
+    [
+        (ttnn.uint8, False),
+        (ttnn.int8, True),
+        (ttnn.uint16, False),
+        (ttnn.uint32, False),
+        (ttnn.int32, True),
+    ],
+)
+@pytest.mark.parametrize(
+    "pt_input_dtype, tt_input_dtype",
+    [
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.float32, ttnn.float32),
+    ],
+)
+@pytest.mark.parametrize("memory_config", mem_configs)
+def test_typecast_rounding_fractional(tt_output_dtype, signed, pt_input_dtype, tt_input_dtype, memory_config, device):
+    """float -> integer typecast truncates toward zero, for every integer destination.
+
+    Truncation is what the host path (`static_cast`), torch, and the int32/uint32/uint8
+    kernels all do, int8 among them because it shares the uint8 kernel. What pins it here
+    is the stimulus: deterministic quarter steps that include exact half-integers, the
+    values where truncation and both round-to-nearest modes disagree. The uniform random
+    stimuli used elsewhere in this file land on a half-integer only by accident, and the
+    LLK suite feeds whole numbers, where every rounding mode agrees.
+
+    Both input dtypes matter: a float32 source sets `preserve_fp32_precision`, so it takes
+    the 32-bit Dest path of the uint16 kernel while a bfloat16 source takes the 16-bit one.
+    """
+    torch_input = _fractional_typecast_stimulus(signed, pt_input_dtype)
+    expected = torch.trunc(torch_input.float())
+    if tt_output_dtype == ttnn.uint16 and not device_truncates_float_to_uint16():
+        # Round to zero is a Blackhole mode, so uint16 still rounds elsewhere. The stimulus is
+        # non-negative for uint16, so round half up is the same as ties away from zero here.
+        expected = torch.floor(torch_input.float() + 0.5)
+
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=tt_input_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory_config,
+    )
+    result = ttnn.to_torch(ttnn.typecast(input_tensor, tt_output_dtype))
+
+    assert_integer_typecast_equal(expected, result)
