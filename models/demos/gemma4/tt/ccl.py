@@ -50,6 +50,82 @@ def ccl_persistent_buffers_enabled() -> bool:
     return os.environ.get("GEMMA4_CCL_PERSISTENT_BUF", "1").lower() not in ("0", "false", "no")
 
 
+def _tiny_decode_fused_ar(tensor) -> bool:
+    """True for launch-bound decode all-reduces (MTP drafter: M≤32, N≤2048).
+
+    The 31B target AR is bandwidth-bound at hidden=5376 and wants the tuned sync
+    split below. The 453M it-assistant is hidden=1024 with 24 ARs per K=3 verify
+    iteration; those payloads are tiny and the extra RS+AG launch dominates.
+    Fused ``ttnn.all_reduce`` is one kernel and bit-identical. Default on;
+    ``GEMMA4_CCL_TINY_FUSED=0`` keeps the split for every shape.
+    """
+    if os.environ.get("GEMMA4_CCL_TINY_FUSED", "1").lower() in ("0", "false", "no"):
+        return False
+    try:
+        h = int(tensor.shape[-2])
+        w = int(tensor.shape[-1])
+    except Exception:
+        return False
+    return h <= 32 and w <= 2048
+
+
+def ccl_sync_split_enabled() -> bool:
+    """Run the TP all-reduce as sync ``reduce_scatter`` + ``all_gather`` instead
+    of the fused ``ttnn.all_reduce``. Default ON; ``GEMMA4_CCL_SPLIT=0`` opts out.
+
+    The fused op *is* those two ops (bit-identical), but exposes none of
+    ``chunks_per_sync`` / ``num_workers_per_link`` / ``num_buffers_per_channel``,
+    so splitting costs nothing and unlocks the knobs below. Only applies when
+    async is off (``ccl_async_enabled``).
+    """
+    return os.environ.get("GEMMA4_CCL_SPLIT", "1").lower() not in ("0", "false", "no")
+
+
+def _ccl_rs_env_int(name: str, default: int) -> int:
+    """Positive int from ``name``, or ``default`` when unset/blank."""
+    env = os.environ.get(name, "")
+    return max(1, int(env)) if env.strip() else default
+
+
+def ccl_sync_rs_workers() -> int:
+    """``num_workers_per_link`` for the split all-reduce's reduce-scatter.
+
+    ``w=1, c=1`` is the swept winner at decode / short prefill and is bit-exact.
+    ``w=4`` is a cliff, not a plateau -- on a single link extra workers contend --
+    so do not raise it without re-sweeping. The gather half is insensitive to all
+    three knobs (one worker core, at the ``num_links=1`` fabric floor).
+    """
+    return _ccl_rs_env_int("GEMMA4_CCL_SYNC_RS_WORKERS", 1)
+
+
+def ccl_sync_rs_chunks() -> int:
+    """``chunks_per_sync`` for the split all-reduce's reduce-scatter.
+    Decode / short prefill want ``c=1``; raising it only costs time."""
+    return _ccl_rs_env_int("GEMMA4_CCL_SYNC_RS_CHUNKS", 1)
+
+
+def ccl_sync_rs_buffers() -> int:
+    """``num_buffers_per_channel`` for the split all-reduce's reduce-scatter.
+    Insensitive across the swept range; 4 is the middle of it."""
+    return _ccl_rs_env_int("GEMMA4_CCL_SYNC_RS_BUFFERS", 4)
+
+
+# Measured dead ends for the DECODE all-reduce (T3K, 31B, [32, 5376] x TP8).
+# It is launch/sync-latency bound, not bandwidth bound (~80 us for a 344 KB
+# payload against a ~12 us wire-time floor), and all three obvious fixes lose:
+#   1. Async minimal CCL: 83.1-85.3 us vs the sync split's 82.7 -- inside noise.
+#      This is why ccl_async_enabled() gates async to prefill.
+#   2. Fusing the collective into its producer matmul (matmul_reduce_scatter_
+#      async): 0.69-0.88x at decode. Fusion pins the matmul to a reduced core
+#      grid, and a 32-row DRAM-bound matmul has no compute to hide a collective
+#      behind. It is a prefill / large-M technique.
+#   3. bfp8 CCL payload: 1.16x faster (+4.6% tok/s) and NOT usable -- full-model
+#      decode PCC 0.9978 -> 0.7150 against a 0.99 gate. The reduce-scatter sums
+#      partials that cancel, so quantizing before the reduction amplifies the
+#      error by the cancellation factor; casting only for the wire gives the
+#      win back (1.02x). Do not retry this without re-reading the PCC number.
+
+
 def default_ccl_topology(mesh_device=None):
     """Default CCL topology for Gemma4 TP collectives.
 
@@ -298,6 +374,31 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
         if rs_bufs is None:
             scattered.deallocate(True)
         return gathered
+
+    if ccl_sync_split_enabled() and not _tiny_decode_fused_ar(tensor):
+        scattered = ttnn.reduce_scatter(
+            tensor,
+            dim=3,
+            cluster_axis=tp_axis,
+            num_links=ccl_manager.num_links,
+            topology=topology,
+            memory_config=memory_config,
+            num_workers_per_link=ccl_sync_rs_workers(),
+            chunks_per_sync=ccl_sync_rs_chunks(),
+            num_buffers_per_channel=ccl_sync_rs_buffers(),
+        )
+        tensor.deallocate(True)
+        # num_links/topology are deprecated-and-ignored on the new ttnn.all_gather
+        # (#48301): passing them only logs the Sep-2026 removal warning. Links and
+        # topology come from the Fabric config now -- ccl_allgather() omits them too.
+        result = ttnn.all_gather(
+            scattered,
+            dim=3,
+            cluster_axis=tp_axis,
+            memory_config=memory_config,
+        )
+        scattered.deallocate(True)
+        return result
 
     # Sync all_reduce: omit deprecated num_links/topology (Sep-2026 removal);
     # Fabric / cluster_axis supply those defaults (same as sync all_gather).
