@@ -541,3 +541,13 @@ Append-only log, one section per task attempt: what was done, decisions and why,
   (comp_pcc stub), not the real pass.
 - With this step every sliding step is on the device, but each step still goes host -> device -> host (HybridDeviceModel).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_ffn_residual.py`
+
+## S.sliding.14 test (run1, attempt 1): swap attn_norm .. ffn_residual into the sliding block (whole block on device)
+- Replaced the one-line template body with swap 13's checks and added `ffn_residual` to SWAPPED. ffn_residual
+  (out = (h_mid + ffn_out) * layer_scalar) is a `residual` step whose output is block `out`, so the generic loop gives it vs golden
+  PCC >= 0.99 / rel L2 <= 0.03 and vs the CPU residual on the same device h_mid and ffn_out rel L2 <= 0.03, per-token norm ratio in
+  [0.97, 1.03]. These catch a dropped layer_scalar (ratio 14.2), 2x and zeroed rows. Block out rel L2 <= 0.02 still applies. No new limits.
+- Measured: reference pcc_swap_out 0.999996 (pass); stub fails every check; device pcc_swap_out 0.999948, block out rel 0.0102 /
+  first 1024 rows 0.0092, ffn_residual iso rel 0.0024, ratio [0.9972, 1.0042].
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_14_ffn_residual.py`
+  (BRINGUP_IMPL=reference / stub for the freeze checks).
