@@ -29,8 +29,14 @@ implement: |
   Everything not swapped stays on the CPU reference.
 contract: |
   Role: contract. Make $model servable by the prefill engine: adapter, runtime, KV layout and address table (see
-  `models/demos/common/prefill/docs/ADDING_A_PREFILL_MODEL.md` and the repo map). Registering the adapter changes
-  `models/demos/common/prefill/adapter.py`, which is shared code: add only the registry line.
+  `models/demos/common/prefill/docs/ADDING_A_PREFILL_MODEL.md` and the repo map). You may change the prefill engine
+  (`models/demos/common/prefill`) where the model's layout needs it; prefer a generic adapter hook to a name branch.
 fix: |
   Role: fix. The scripted gate below failed. Find the component whose layer first broke the PCC trail (or the contract
   check that failed), fix it in its module, and re-run the gate. The log is quoted below.
+perf: |
+  Role: perf. Make one performance change to $model and keep it correct:
+  $details
+  The gate re-runs an accuracy rung and the warm profile; it passes only if every accuracy threshold still holds and
+  the measured time drops below its threshold. Keep the previous behaviour selectable (a named setting or an env var,
+  recorded in the profile's settings) so the two can be compared. Do not change thresholds, goldens or frozen tests.
