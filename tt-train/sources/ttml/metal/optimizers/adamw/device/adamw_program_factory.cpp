@@ -101,106 +101,6 @@ std::vector<uint32_t> make_stochastic_rounding_seeds(std::optional<uint32_t> bas
 
 }  // namespace
 
-/**
- * Set up the runtime arguments for the 4 relevant kernels (reader, writer, compute G1, compute G2)
- *        for each core in the grid.
- */
-void assign_per_core_runtime_args(
-    tt::tt_metal::Program& program,
-    const AdamWKernels& kernels,
-    const tt::tt_metal::Buffer* param_buffer,
-    const tt::tt_metal::Buffer* grad_buffer,
-    const tt::tt_metal::Buffer* exp_avg_buffer,
-    const tt::tt_metal::Buffer* exp_avg_sq_buffer,
-    const tt::tt_metal::Buffer* max_exp_avg_sq_buffer,
-    const tt::tt_metal::Buffer* output_buffer,
-    const operation_attributes_t& attrs,
-    uint32_t num_cores,
-    uint32_t num_cores_y,
-    uint32_t num_tiles_per_core_group_1,
-    uint32_t num_tiles_per_core_group_2,
-    const tt::tt_metal::CoreRangeSet& core_group_1,
-    const tt::tt_metal::CoreRangeSet& core_group_2) {
-    float one_minus_beta1 = 1.0f - attrs.beta1;
-    float one_minus_beta2 = 1.0f - attrs.beta2;
-
-    float bias_correction1 = 1.0f - attrs.beta1_pow;
-    float bias_correction2 = 1.0f - attrs.beta2_pow;
-    float step_size = attrs.lr / bias_correction1;
-    float inv_sqrt_bc2 = 1.0f / std::sqrt(bias_correction2);
-    float decay_factor = 1.0f - attrs.lr * attrs.weight_decay;
-
-    std::vector<uint32_t> seeds = make_stochastic_rounding_seeds(attrs.stochastic_rounding_seed, num_cores);
-
-    // Compute runtime args (same for all cores except seed)
-    std::vector<uint32_t> compute_args{
-        std::bit_cast<uint32_t>(attrs.beta1),
-        std::bit_cast<uint32_t>(attrs.beta2),
-        std::bit_cast<uint32_t>(attrs.epsilon),
-        std::bit_cast<uint32_t>(step_size),
-        std::bit_cast<uint32_t>(inv_sqrt_bc2),
-        std::bit_cast<uint32_t>(one_minus_beta1),
-        std::bit_cast<uint32_t>(one_minus_beta2),
-        std::bit_cast<uint32_t>(decay_factor),
-        0U  // seed placeholder, updated per-core
-    };
-
-    // Update:
-    // theta_t = theta_{t-1} - step_size * (m_t / ((sqrt(v_t) * inv_sqrt_bc2) + epsilon))
-
-    for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
-        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-        // Determine how many tiles this core will process
-        uint32_t num_tiles_per_core = 0;
-        if (core_group_1.contains(core)) {
-            num_tiles_per_core = num_tiles_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            num_tiles_per_core = num_tiles_per_core_group_2;
-        } else {
-            TT_THROW("Core {} not in specified core ranges", core);
-        }
-
-        // Reader kernel
-        SetRuntimeArgs(
-            program,
-            kernels.reader,
-            core,
-            {param_buffer->address(),
-             grad_buffer->address(),
-             exp_avg_buffer->address(),
-             exp_avg_sq_buffer->address(),
-             max_exp_avg_sq_buffer != nullptr ? max_exp_avg_sq_buffer->address() : 0U,
-             num_tiles_per_core,
-             num_tiles_written});
-
-        // Compute kernel
-        compute_args[kComputeSeedIdx] = seeds[i];
-        if (core_group_1.contains(core)) {
-            SetRuntimeArgs(program, kernels.compute_group_1, core, compute_args);
-        } else if (core_group_2.contains(core)) {
-            SetRuntimeArgs(program, kernels.compute_group_2, core, compute_args);
-        } else {
-            TT_THROW("Core {} not in specified core ranges", core);
-        }
-
-        // Writer kernel: (param_out_addr, exp_avg_addr, exp_avg_sq_addr, max_exp_avg_sq_addr, number_of_tiles,
-        // offset_in_tiles)
-        SetRuntimeArgs(
-            program,
-            kernels.writer,
-            core,
-            {output_buffer->address(),
-             exp_avg_buffer->address(),
-             exp_avg_sq_buffer->address(),
-             max_exp_avg_sq_buffer != nullptr ? max_exp_avg_sq_buffer->address() : 0U,
-             num_tiles_per_core,
-             num_tiles_written});
-
-        num_tiles_written += num_tiles_per_core;
-    }
-}
-
 AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -393,22 +293,59 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
     // 5) Assign runtime args for each core
     // -------------------------------------------------------------------------
 
-    assign_per_core_runtime_args(
-        program,
-        kernels,
-        param_buffer,
-        grad_buffer,
-        exp_avg_buffer,
-        exp_avg_sq_buffer,
-        max_exp_avg_sq_buffer,
-        output_buffer,
-        operation_attributes,
+    const float one_minus_beta1 = 1.0f - operation_attributes.beta1;
+    const float one_minus_beta2 = 1.0f - operation_attributes.beta2;
+    const float bias_correction1 = 1.0f - operation_attributes.beta1_pow;
+    const float bias_correction2 = 1.0f - operation_attributes.beta2_pow;
+    const float step_size = operation_attributes.lr / bias_correction1;
+    const float inv_sqrt_bc2 = 1.0f / std::sqrt(bias_correction2);
+    const float decay_factor = 1.0f - operation_attributes.lr * operation_attributes.weight_decay;
+    const std::vector<uint32_t> seeds =
+        make_stochastic_rounding_seeds(operation_attributes.stochastic_rounding_seed, num_cores);
+    std::vector<uint32_t> compute_args{
+        std::bit_cast<uint32_t>(operation_attributes.beta1),
+        std::bit_cast<uint32_t>(operation_attributes.beta2),
+        std::bit_cast<uint32_t>(operation_attributes.epsilon),
+        std::bit_cast<uint32_t>(step_size),
+        std::bit_cast<uint32_t>(inv_sqrt_bc2),
+        std::bit_cast<uint32_t>(one_minus_beta1),
+        std::bit_cast<uint32_t>(one_minus_beta2),
+        std::bit_cast<uint32_t>(decay_factor),
+        0U  // seed placeholder, updated per-core
+    };
+    for_each_core_with_work(
         num_cores,
         num_cores_y,
+        core_group_1,
+        core_group_2,
         num_tiles_per_core_group_1,
         num_tiles_per_core_group_2,
-        core_group_1,
-        core_group_2);
+        [&](const CoreWork& work) {
+            const auto& [core, core_index, num_tiles, start_tile, in_group_1] = work;
+            SetRuntimeArgs(
+                program,
+                kernels.reader,
+                core,
+                {param_buffer->address(),
+                 grad_buffer->address(),
+                 exp_avg_buffer->address(),
+                 exp_avg_sq_buffer->address(),
+                 max_exp_avg_sq_buffer != nullptr ? max_exp_avg_sq_buffer->address() : 0U,
+                 num_tiles,
+                 start_tile});
+            compute_args[kComputeSeedIdx] = seeds[core_index];
+            SetRuntimeArgs(program, in_group_1 ? kernels.compute_group_1 : kernels.compute_group_2, core, compute_args);
+            SetRuntimeArgs(
+                program,
+                kernels.writer,
+                core,
+                {output_buffer->address(),
+                 exp_avg_buffer->address(),
+                 exp_avg_sq_buffer->address(),
+                 max_exp_avg_sq_buffer != nullptr ? max_exp_avg_sq_buffer->address() : 0U,
+                 num_tiles,
+                 start_tile});
+        });
 
     // -------------------------------------------------------------------------
     // 6) Return the fully configured program & relevant shared variables
@@ -485,9 +422,7 @@ void AdamWProgramFactory::override_runtime_arguments(
 
     // Update:
     // theta_t = theta_{t-1} - step_size * (m_t / ((sqrt(v_t) * inv_sqrt_bc2) + epsilon))
-    for (uint32_t i = 0; i < num_cores; i++) {
-        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
+    for_each_core(num_cores, num_cores_y, [&](const tt::tt_metal::CoreCoord& core, uint32_t core_index) {
         // Update reader kernel args
         {
             auto& runtime_args = reader_runtime_args[core.x][core.y];
@@ -509,7 +444,7 @@ void AdamWProgramFactory::override_runtime_arguments(
             runtime_args[kComputeOneMinusBeta1Idx] = std::bit_cast<uint32_t>(one_minus_beta1);
             runtime_args[kComputeOneMinusBeta2Idx] = std::bit_cast<uint32_t>(one_minus_beta2);
             runtime_args[kComputeDecayFactorIdx] = std::bit_cast<uint32_t>(decay_factor);
-            runtime_args[kComputeSeedIdx] = seeds[i];
+            runtime_args[kComputeSeedIdx] = seeds[core_index];
         }
         // Update writer kernel args
         {
@@ -520,7 +455,7 @@ void AdamWProgramFactory::override_runtime_arguments(
             runtime_args[kMaxExpAvgSqAddrIdxOut] =
                 max_exp_avg_sq_buffer != nullptr ? max_exp_avg_sq_buffer->address() : 0U;
         }
-    }
+    });
 }
 
 }  // namespace ttml::metal::optimizers::adamw::device

@@ -122,64 +122,6 @@ struct LayerNormBackwardKernels {
     tt::tt_metal::KernelHandle compute_group_2;
 };
 
-void assign_per_core_runtime_args(
-    tt::tt_metal::Program& program,
-    const LayerNormBackwardKernels& kernels,
-    const tt::tt_metal::Buffer* gamma_buffer,
-    const tt::tt_metal::Buffer* input_buffer,
-    const tt::tt_metal::Buffer* mean_buffer,
-    const tt::tt_metal::Buffer* rstd_buffer,
-    const tt::tt_metal::Buffer* dLdout_buffer,
-    const tt::tt_metal::Buffer* dx_buffer,
-    const tt::tt_metal::Buffer* dgamma_components_buffer,
-    const tt::tt_metal::Buffer* dbeta_components_buffer,
-    uint32_t num_cores,
-    uint32_t num_cores_y,
-    uint32_t num_rows_per_core_group_1,
-    uint32_t num_rows_per_core_group_2,
-    const tt::tt_metal::CoreRangeSet& core_group_1,
-    const tt::tt_metal::CoreRangeSet& core_group_2) {
-    for (uint32_t i = 0, num_rows_written = 0; i < num_cores; i++) {
-        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-        // Determine how many rows this core will process
-        uint32_t num_rows_per_core = 0;
-        if (core_group_1.contains(core)) {
-            num_rows_per_core = num_rows_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            num_rows_per_core = num_rows_per_core_group_2;
-        } else {
-            TT_FATAL(false, "Core {} not in specified core ranges", core.str());
-        }
-
-        // Reader kernel runtime args
-        SetRuntimeArgs(
-            program,
-            kernels.reader,
-            core,
-            {gamma_buffer->address(),
-             input_buffer->address(),
-             mean_buffer->address(),
-             rstd_buffer->address(),
-             dLdout_buffer->address(),
-             num_rows_written,
-             num_rows_per_core});
-
-        // Writer kernel runtime args
-        SetRuntimeArgs(
-            program,
-            kernels.writer,
-            core,
-            {dx_buffer->address(),
-             dgamma_components_buffer->address(),
-             dbeta_components_buffer->address(),
-             num_rows_written,
-             num_rows_per_core});
-
-        num_rows_written += num_rows_per_core;
-    }
-}
-
 LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -401,23 +343,38 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
     // -------------------------------------------------------------------------
     // 5) Assign runtime args for each core
     // -------------------------------------------------------------------------
-    assign_per_core_runtime_args(
-        program,
-        kernels,
-        gamma_buffer,
-        input_buffer,
-        mean_buffer,
-        rstd_buffer,
-        dLdout_buffer,
-        dx_buffer,
-        dgamma_components_buffer,
-        dbeta_components_buffer,
+    for_each_core_with_work(
         num_cores,
         num_cores_y,
+        core_group_1,
+        core_group_2,
         num_rows_per_core_group_1,
         num_rows_per_core_group_2,
-        core_group_1,
-        core_group_2);
+        [&](const CoreWork& work) {
+            const auto& [core, core_index, num_rows, start_row, in_group_1] = work;
+            // Reader kernel runtime args
+            SetRuntimeArgs(
+                program,
+                kernels.reader,
+                core,
+                {gamma_buffer->address(),
+                 input_buffer->address(),
+                 mean_buffer->address(),
+                 rstd_buffer->address(),
+                 dLdout_buffer->address(),
+                 start_row,
+                 num_rows});
+            // Writer kernel runtime args
+            SetRuntimeArgs(
+                program,
+                kernels.writer,
+                core,
+                {dx_buffer->address(),
+                 dgamma_components_buffer->address(),
+                 dbeta_components_buffer->address(),
+                 start_row,
+                 num_rows});
+        });
 
     // -------------------------------------------------------------------------
     // 6) Return the fully configured program & relevant shared variables
@@ -443,8 +400,6 @@ void LayerNormBackwardProgramFactory::override_runtime_arguments(
     auto& shared_variables = cached_program.shared_variables;
     auto& layernorm_bw_reader_kernel_id = shared_variables.layernorm_bw_reader_kernel_id;
     auto& layernorm_bw_writer_kernel_id = shared_variables.layernorm_bw_writer_kernel_id;
-    auto& core_group_1 = shared_variables.core_group_1;
-    auto& core_group_2 = shared_variables.core_group_2;
 
     auto* gamma_buffer = tensor_args.gamma.buffer();
     auto* input_buffer = tensor_args.input.buffer();
@@ -460,32 +415,25 @@ void LayerNormBackwardProgramFactory::override_runtime_arguments(
     auto& reader_runtime_args = GetRuntimeArgs(program, layernorm_bw_reader_kernel_id);
     auto& writer_runtime_args = GetRuntimeArgs(program, layernorm_bw_writer_kernel_id);
 
-    std::vector<tt::tt_metal::CoreRange> all_ranges;
-    all_ranges.reserve(core_group_1.ranges().size() + core_group_2.ranges().size());
-    all_ranges.insert(all_ranges.end(), core_group_1.ranges().begin(), core_group_1.ranges().end());
-    all_ranges.insert(all_ranges.end(), core_group_2.ranges().begin(), core_group_2.ranges().end());
-    // Iterate over all cores
-    for (const auto& core_range : all_ranges) {
-        for (auto core : tt::tt_metal::CoreRange(core_range)) {
-            // Update input buffers for the reader kernel
-            {
-                auto& runtime_args = reader_runtime_args[core.x][core.y];
-                runtime_args[kGammaBufferIdx] = gamma_buffer->address();
-                runtime_args[kInputBufferIdx] = input_buffer->address();
-                runtime_args[kMeanBufferIdx] = mean_buffer->address();
-                runtime_args[kRstdBufferIdx] = rstd_buffer->address();
-                runtime_args[kDLdoutBufferIdx] = dLdout_buffer->address();
-            }
-
-            // Update output buffers for the writer kernel
-            {
-                auto& runtime_args = writer_runtime_args[core.x][core.y];
-                runtime_args[kDxBufferIdx] = dx_buffer->address();
-                runtime_args[kDgammaComponentsBufferIdx] = dgamma_buffer->address();
-                runtime_args[kDbetaComponentsBufferIdx] = dbeta_buffer->address();
-            }
+    for_each_core(shared_variables.num_cores, shared_variables.num_cores_y, [&](const tt::tt_metal::CoreCoord& core) {
+        // Update input buffers for the reader kernel
+        {
+            auto& runtime_args = reader_runtime_args[core.x][core.y];
+            runtime_args[kGammaBufferIdx] = gamma_buffer->address();
+            runtime_args[kInputBufferIdx] = input_buffer->address();
+            runtime_args[kMeanBufferIdx] = mean_buffer->address();
+            runtime_args[kRstdBufferIdx] = rstd_buffer->address();
+            runtime_args[kDLdoutBufferIdx] = dLdout_buffer->address();
         }
-    }
+
+        // Update output buffers for the writer kernel
+        {
+            auto& runtime_args = writer_runtime_args[core.x][core.y];
+            runtime_args[kDxBufferIdx] = dx_buffer->address();
+            runtime_args[kDgammaComponentsBufferIdx] = dgamma_buffer->address();
+            runtime_args[kDbetaComponentsBufferIdx] = dbeta_buffer->address();
+        }
+    });
 }
 
 }  // namespace ttml::metal::ops::layernorm_bw::device

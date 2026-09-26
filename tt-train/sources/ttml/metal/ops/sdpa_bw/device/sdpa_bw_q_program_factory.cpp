@@ -109,74 +109,6 @@ struct SDPABackwardQKernels {
  * Set up the runtime arguments for the 4 relevant kernels (reader, writer, compute G1, compute G2)
  *        for each core in the grid.
  */
-void assign_per_core_runtime_args(
-    tt::tt_metal::Program& program,
-    const SDPABackwardQKernels& kernels,
-    const tt::tt_metal::Buffer* grad_output_buffer,
-    const tt::tt_metal::Buffer* attn_output_buffer,
-    const tt::tt_metal::Buffer* query_buffer,
-    const tt::tt_metal::Buffer* key_buffer,
-    const tt::tt_metal::Buffer* value_buffer,
-    const tt::tt_metal::Buffer* attn_mask_buffer,
-    const tt::tt_metal::Buffer* intermediates_buffer,
-    const tt::tt_metal::Buffer* grad_query_buffer,
-    const tt::tt_metal::Buffer* u_scaler_buffer,
-    const uint32_t num_cores,
-    const uint32_t num_cores_y,
-    const uint32_t num_rows_per_core_group_1,
-    const uint32_t num_rows_per_core_group_2,
-    const tt::tt_metal::CoreRangeSet& core_group_1,
-    const tt::tt_metal::CoreRangeSet& core_group_2) {
-    for (uint32_t i = 0, num_rows_written = 0; i < num_cores; i++) {
-        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-        // Determine how many rows this core will process
-        uint32_t num_rows_per_core = 0;
-        if (core_group_1.contains(core)) {
-            num_rows_per_core = num_rows_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            num_rows_per_core = num_rows_per_core_group_2;
-        } else {
-            TT_FATAL(false, "Core not in specified core ranges");
-        }
-
-        // Reader kernel runtime args
-        SetRuntimeArgs(
-            program,
-            kernels.reader,
-            core,
-            {
-                grad_output_buffer->address(),                                   // grad_output buffer address
-                attn_output_buffer->address(),                                   // attn_output buffer address
-                query_buffer->address(),                                         // query buffer address
-                key_buffer->address(),                                           // key buffer address
-                value_buffer->address(),                                         // value buffer address
-                attn_mask_buffer != nullptr ? attn_mask_buffer->address() : 0U,  // mask buffer address
-                intermediates_buffer->address(),                                 // intermediates buffer address
-                num_rows_per_core,                                               // rows to process in this kernel
-                num_rows_written                                                 // starting row for this core
-            });
-
-        // Writer kernel runtime args
-        SetRuntimeArgs(
-            program,
-            kernels.writer,
-            core,
-            {
-                grad_query_buffer->address(),  // grad_query buffer address
-                u_scaler_buffer->address(),    // u_scaler output buffer address
-                num_rows_per_core,             // rows to process in this kernel
-                num_rows_written               // starting row for this core
-            });
-
-        // Compute kernel runtime args - needed for causal mask to know global position
-        auto compute_kernel = core_group_1.contains(core) ? kernels.compute_group_1 : kernels.compute_group_2;
-        SetRuntimeArgs(program, compute_kernel, core, {num_rows_written});
-
-        num_rows_written += num_rows_per_core;
-    }
-}
-
 /**
  * Set up the runtime arguments for balanced parallelism mode.
  * In this mode, work is distributed by pairs rather than rows.
@@ -618,24 +550,36 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             num_cores_y,
             pair_distribution);
     } else {
-        assign_per_core_runtime_args(
-            program,
-            kernels,
-            grad_output_buffer,
-            attn_output_buffer,
-            query_buffer,
-            key_buffer,
-            value_buffer,
-            attn_mask_buffer,
-            intermediates_buffer,
-            grad_query_buffer,
-            u_scaler_buffer,
+        for_each_core_with_work(
             num_cores,
             num_cores_y,
+            core_group_1,
+            core_group_2,
             num_rows_per_core_group_1,
             num_rows_per_core_group_2,
-            core_group_1,
-            core_group_2);
+            [&](const CoreWork& work) {
+                const auto& [core, core_index, num_rows, start_row, in_group_1] = work;
+                SetRuntimeArgs(
+                    program,
+                    kernels.reader,
+                    core,
+                    {grad_output_buffer->address(),
+                     attn_output_buffer->address(),
+                     query_buffer->address(),
+                     key_buffer->address(),
+                     value_buffer->address(),
+                     attn_mask_buffer != nullptr ? attn_mask_buffer->address() : 0U,
+                     intermediates_buffer->address(),
+                     num_rows,
+                     start_row});
+                SetRuntimeArgs(
+                    program,
+                    kernels.writer,
+                    core,
+                    {grad_query_buffer->address(), u_scaler_buffer->address(), num_rows, start_row});
+                SetRuntimeArgs(
+                    program, in_group_1 ? kernels.compute_group_1 : kernels.compute_group_2, core, {start_row});
+            });
     }
 
     // -------------------------------------------------------------------------
@@ -682,9 +626,7 @@ void SDPABackwardQProgramFactory::override_runtime_arguments(
     auto& reader_runtime_args = GetRuntimeArgs(program, sdpa_bw_reader_kernel);
     auto& writer_runtime_args = GetRuntimeArgs(program, sdpa_bw_writer_kernel);
 
-    for (uint32_t i = 0; i < num_cores; i++) {
-        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
+    for_each_core(num_cores, num_cores_y, [&](const tt::tt_metal::CoreCoord& core) {
         // Update input buffers for reader kernel
         {
             auto& runtime_args = reader_runtime_args[core.x][core.y];
@@ -703,7 +645,7 @@ void SDPABackwardQProgramFactory::override_runtime_arguments(
             runtime_args[kGradQueryBufferIdx] = grad_query_buffer->address();
             runtime_args[kUScalerOutputBufferIdx] = u_scaler_buffer->address();
         }
-    }
+    });
 }
 
 }  // namespace ttml::metal::ops::sdpa_bw::device
