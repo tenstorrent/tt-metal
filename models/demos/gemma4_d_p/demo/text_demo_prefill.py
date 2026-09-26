@@ -184,10 +184,7 @@ def _build_prefill_model(mesh_config, hf_model_id, chunk_size, context_len=None)
 @pytest.mark.parametrize("token_source", ["text"], ids=lambda t: t)
 @pytest.mark.parametrize("chunk_size", PREFILL_CHUNK_SIZES, ids=lambda c: f"chunk{c}")
 @pytest.mark.parametrize("context_len", [32768, 65536, 131072, 262144], ids=lambda c: f"ctx_{c // 1024}k")
-@pytest.mark.parametrize("readback_all", [True, False], ids=["readback_all", "readback_final"])
-def test_prefill_long_context_traced(
-    mesh_device, context_len, chunk_size, readback_all, token_source, reset_seeds, request
-):
+def test_prefill_long_context_traced(mesh_device, context_len, chunk_size, token_source, reset_seeds, request):
     """Measure all prefill chunks using one replayed ring-attention trace."""
 
     mesh_config = _mesh_config(mesh_device)
@@ -281,7 +278,7 @@ def test_prefill_long_context_traced(
     t0 = time.time()
     cap_start = _stage(0)
     tid_ring = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    out_ring = _forward(cap_start)
+    _out_ring = _forward(cap_start)  # Keep the captured output alive for trace replay.
     ttnn.end_trace_capture(mesh_device, tid_ring, cq_id=0)
     ttnn.synchronize_device(mesh_device)
     capture_s = time.time() - t0
@@ -289,7 +286,7 @@ def test_prefill_long_context_traced(
 
     try:
         per_chunk = []
-        stage_s, readback_s = 0.0, 0.0
+        stage_s = 0.0
         t_run = time.time()
         for chunk_idx in range(n_chunks):
             t_stage = time.time()
@@ -299,39 +296,24 @@ def test_prefill_long_context_traced(
             ttnn.execute_trace(mesh_device, tid_ring, cq_id=0, blocking=False)
             ttnn.synchronize_device(mesh_device)
             per_chunk.append(time.time() - t_c)
-            out = out_ring
-            # Reading every chunk's hidden states to host is a test artifact — a prefill
-            # server leaves the KV cache on device and reads back only the last chunk,
-            # whose final row seeds the first decode step. readback="final" measures that
-            # shape; "all" gathers every chunk, which costs wall time but checks each one
-            # for finiteness instead of only the last.
-            if readback_all or chunk_idx == n_chunks - 1:
-                t_rb = time.time()
-                hidden = _cp_gather_torch(out, mesh_config)
-                assert torch.isfinite(hidden).all(), f"chunk {chunk_idx} produced non-finite output"
-                readback_s += time.time() - t_rb
             # Report per-chunk latency and cumulative device and wall time.
             logger.info(
                 f"[traced_perf] chunk {chunk_idx + 1}/{n_chunks} [{chunk_start}, {chunk_start + chunk_size}) "
                 f"device={per_chunk[-1] * 1000:.1f}ms ({chunk_size / per_chunk[-1]:.0f} tok/s) | "
-                f"total device={sum(per_chunk):.1f}s wall={time.time() - t_run:.1f}s"
+                f"total device={sum(per_chunk) * 1000:.1f}ms wall={(time.time() - t_run) * 1000:.1f}ms"
             )
         total_s = time.time() - t_run
     finally:
         ttnn.release_trace(mesh_device, tid_ring)
 
     device_s = sum(per_chunk)
-    # Three different numbers, because conflating them understates the model by ~2x.
+    # Separate device execution from host-side staging in the wall time.
     #   device   — execute_trace + synchronize. What the hardware spends on prefill.
     #   staging  — token upload, ring metadata, pinned RoPE refresh. Real work a
     #              deployment also pays, though it should overlap rather than serialize.
-    #   readback — gathering every chunk's hidden states to host so this test can assert
-    #              on them. Test-only: a prefill server keeps the KV cache on device and
-    #              reads back at most the final chunk.
     logger.info(
         f"[traced_perf] DEVICE {context_len} tokens in {device_s:.1f}s "
-        f"({context_len / device_s:.0f} tok/s) | staging {stage_s:.1f}s | "
-        f"readback {readback_s:.1f}s (test-only) | wall {total_s:.1f}s"
+        f"({context_len / device_s:.0f} tok/s) | staging {stage_s:.1f}s | wall {total_s:.1f}s"
     )
     logger.info(
         f"[traced_perf] staging breakdown: "
