@@ -883,3 +883,23 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_
 - Measured on the layer-5 golden with a host-only script: fp32 reference rel 0.0024, ratio [0.9972, 1.0018]; bf16 math rel 0.0033. The mutations and what catches them are in the test docstring. Sum instead of mean and one zeroed row pass PCC; rel L2 or the norm ratio catches them. Layer 1's weight used instead of layer 5's fails PCC (0.33).
 - BRINGUP_IMPL=reference: pass (PCC 0.999997, rel 0.0024). BRINGUP_IMPL=stub: fails PCC. Default (device) gate run: pass (PCC 0.999996, rel 0.0030, ratio [0.9962, 1.0022]). The existing device norm module already covers layer 5.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_moe_attn_norm.py`
+
+## S.full_moe.01 test (attempt 1), 2026-09-26
+
+What was done
+- Replaced the rendered `run_swap_test` call in `tests/bringup/test_swap_full_moe_01_attn_norm.py` with the body of
+  `test_swap_sliding_moe_01_attn_norm.py`, BLOCK_TYPE = full_moe (layer 5). pcc_swap_out is gated at 0.98. Asserted
+  extras: attn_norm vs golden PCC >= 0.99, rel L2 <= 0.03 and per-token norm ratio in [0.97, 1.03]; block out finite
+  with rel L2 <= 0.01.
+
+Why
+- It is the same RMSNorm step, and the extras catch the same mutations that pass the gate on layers 0 and 1 (x1.05,
+  eps, noise; see those tests' docstrings). The mutations were not measured again at layer 5.
+
+Results
+- BRINGUP_IMPL=reference: PASS (out 0.999997 / rel 0.0025, step rel 0.0024, ratio [0.9972, 1.0018]).
+- BRINGUP_IMPL=stub: FAIL (out PCC 0 / rel 0.345; step rel 1.0).
+- Device (default): PASS. pcc_swap_out 0.999994, out rel 0.0034, attn_norm rel 0.0030, ratio [0.9962, 1.0022]; router
+  trail PCC 0.9983, experts_out 0.9993. The first FAIL/pcc=0 block in each log comes from the precompile pass.
+
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_full_moe_01_attn_norm.py`
