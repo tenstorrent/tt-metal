@@ -303,7 +303,16 @@ def _scaffold_vllm_bundle(
     - Stock arch (Llama/Qwen/Mistral/Gemma/...) -> adapter is a trivial subclass of the stock
       generator: servable as-is.
     - Novel arch -> adapter subclasses the closest base with a clearly-marked TODO body."""
-    bundle = Path(checkout) / extra_models_dir
+    # The plugin scans the CHILDREN of extra_models_dir for vllm_metadata.json — so the bundle must be
+    # a per-model SUBFOLDER (extra_models_dir/<slug>/), not files placed directly in extra_models_dir.
+    base_dir = Path(checkout) / extra_models_dir
+    for stale in (base_dir / "vllm_metadata.json", base_dir / "adapter.py"):
+        try:
+            if stale.is_file():
+                stale.unlink()  # remove the older, mis-placed layout
+        except Exception:
+            pass
+    bundle = base_dir / slug
     meta = bundle / "vllm_metadata.json"
     base_cls, is_stub = _pick_base_generator(arch, model_type)
     if meta.is_file():
