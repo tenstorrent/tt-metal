@@ -851,3 +851,29 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_
 - Gate: pcc_ffn_residual_L01 = 0.999996, rel_l2 0.00289, row norm ratio [0.9993, 1.0016], experts coef 1.0014, rel 0.0114. PASS.
 - The log's first `FAIL pcc ... 0.000000` line comes from the precompile collect pass (stubbed outputs). Ignore it; the real pass is the second line.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_sliding_moe_ffn_residual.py`
+
+## S.sliding_moe.07.test.1 (swap 07, ffn_residual), 2026-09-26
+
+What was done
+- Replaced the rendered one-liner in `tests/bringup/test_swap_sliding_moe_07_ffn_residual.py` with swap 06's body
+  (all per-step checks for attn_norm, attention, attn_residual, ffn_norm, router and experts, block out rel L2 <= 0.01)
+  and added `_check_ffn_residual`.
+- ffn_residual's output is the block `out`. Checks vs golden: PCC >= 0.99, rel L2 <= 0.01 on the whole chunk and the
+  first 128 rows, per-token ratio in [0.98, 1.02]. Vs the CPU add on the device h_mid / experts_out ("iso"): rel L2
+  <= 0.01, ratio [0.99, 1.01], worst row <= 0.02. On delta = out - h_mid: experts coef in [0.97, 1.03] and experts-term
+  rel L2 <= 0.1 (the component test limits).
+
+Decisions and why
+- The golden per-token ratio is looser (0.98..1.02) than the iso one: router near-tie flips change a whole expert in
+  some rows, and the experts term is about 15% of ||out||. The iso checks catch add bugs (dropped or scaled operand,
+  zeroed row).
+
+Results
+- BRINGUP_IMPL=reference: PASS. Out rel 0.0030, iso 0, coef 1.0.
+- BRINGUP_IMPL=stub: FAIL on every check.
+- Device gate: PASS. pcc_swap_out 0.999991, out rel 0.0044 / first rows 0.0036, golden ratio [0.9958, 1.0042]; iso rel
+  0.0017, ratio [0.9997, 1.0011], worst row 0.0023; experts coef 1.0014, rel 0.0114. Upstream steps are unchanged
+  from swap 06 (experts iso ratio min 0.9793 is still the tightest margin).
+- The first `FAIL pcc_swap_out: pcc=0.000000` block in the log comes from the precompile collect pass.
+
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_sliding_moe_07_ffn_residual.py`
