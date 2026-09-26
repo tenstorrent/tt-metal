@@ -6,7 +6,7 @@
 import pytest
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.utils_for_testing import assert_equal, assert_numeric_metrics
 from tests.ttnn.nightly.unit_tests.operations.reduction.utility_functions import ttnn_max, TTNN_REDUCTION_WRAPPERS
 
 # Module-scoped device: these tests all run with the default device config, so the device is
@@ -206,9 +206,9 @@ def test_rm_reduce_h_axis_split(device, reduce_op, dtype, keepdim, shape):
     )
 
 
-# Tall-H TILE reduces: Ht >= 20 splits the H reduce into ROW_MAJOR FP32 partials collapsed by a
-# second stage. Post-commit covers the shape matrix at keepdim=False; the very tall Wt=1 cases and
-# the keepdim variants live here.
+# Tall-H TILE reduces: Ht >= 20 splits the H reduce into ROW_MAJOR partials collapsed by a second
+# stage. Post-commit covers the shape matrix at keepdim=False; the very tall Wt=1 cases and the
+# keepdim variants live here.
 @pytest.mark.parametrize("reduce_op", ["mean", "sum"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("keepdim", [False, True])
@@ -257,6 +257,56 @@ def test_tile_reduce_h_axis_split(device, reduce_op, dtype, keepdim, shape):
         frobenius_threshold=frobenius_threshold,
         check_ulp=False,
     )
+
+
+# The same split for max/min. They select rather than accumulate, so H depth costs them no
+# precision and the whole matrix asserts exact equality — including the bf16 shapes the sum/mean
+# variant has to skip. fp32 min is accurate-only: fast_and_approximate_mode=True is refused.
+@pytest.mark.parametrize(
+    "reduce_op, dtype, fast_and_approximate_mode",
+    [
+        ("max", ttnn.bfloat16, False),
+        ("max", ttnn.float32, False),
+        ("max", ttnn.float32, True),
+        ("min", ttnn.bfloat16, False),
+        ("min", ttnn.float32, False),
+    ],
+    ids=["max_bf16", "max_fp32_sfpu", "max_fp32_fpu", "min_bf16", "min_fp32_sfpu"],
+)
+@pytest.mark.parametrize("keepdim", [False, True])
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (1, 1, 3136, 144),  # EfficientNetB0 global-pool; Wt=5, split fills the grid
+        (1, 1, 12544, 32),  # very tall, Wt=1 — the split takes this from 1 core to the whole grid
+        (1, 1, 51264, 32),  # the shape from the issue; most slices per column here
+        (1, 1, 3216, 128),  # non-aligned H → trailing slices past the end
+        (1, 1, 3136, 145),  # non-aligned W → last-tile clamp in the RM writer
+    ],
+)
+def test_tile_reduce_h_axis_split_selection(device, reduce_op, dtype, fast_and_approximate_mode, keepdim, shape):
+    """H reduce on tall TILE input for the selection ops — tiled stage 1, RM stage 2."""
+    torch.manual_seed(0)
+    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+    # One-signed input: the trailing overhang slices must carry the math identity, not zero.
+    sign = 1.0 if reduce_op == "min" else -1.0
+    torch_input = (torch.rand(shape, dtype=torch_dtype) + 1.0) * sign
+    torch_op = torch.amax if reduce_op == "max" else torch.amin
+    torch_ref = torch_op(torch_input.float(), dim=-2, keepdim=keepdim).to(torch_dtype)
+
+    tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_op = ttnn.max if reduce_op == "max" else ttnn.min
+    tt_output = ttnn_op(tt_input, dim=-2, keepdim=keepdim, fast_and_approximate_mode=fast_and_approximate_mode)
+    # Stage 1 writes ROW_MAJOR partials so each core can own a slice-row; that layout is
+    # intermediate and must not become the result.
+    assert tt_output.layout == ttnn.TILE_LAYOUT
+
+    output = ttnn.to_torch(tt_output)
+    if dtype == ttnn.float32 and (fast_and_approximate_mode or device.arch() == ttnn.device.Arch.QUASAR):
+        # The FPU truncates inputs to tf32's 10 mantissa bits entering SrcA, split or not.
+        torch.testing.assert_close(output, torch_ref, rtol=2**-10, atol=0)
+    else:
+        assert_equal(torch_ref, output)
 
 
 # Block-float takes the same split (whole-tile I/O). Per-column scale keeps the reduced row from

@@ -138,11 +138,9 @@ def test_min_multi_dim(device, input_shape):
 @pytest.mark.parametrize("input_shape", [(32, 32), (16, 2, 32, 3), (16, 2, 32, 24), (1, 1, 64, 64)])
 @pytest.mark.parametrize("dim", [None, -1, -2])
 @pytest.mark.parametrize("scalar", [1.0, 2.5, -2.5])
-@pytest.mark.parametrize("fast_and_approximate_mode", [False, True], ids=["accurate", "fast"])
-def test_min_fp32_fast_and_approximate_mode(device, input_shape, dim, scalar, fast_and_approximate_mode):
-    """FLOAT32 min with both values of fast_and_approximate_mode.
-    - False (default): accurate SFPU path (LLK MIN reduce) - result matches torch exactly.
-    - True: faster FPU/TF32 path via -MAX(-x) - result is approximate.
+def test_min_fp32_accurate(device, input_shape, dim, scalar):
+    """FLOAT32 min on the accurate SFPU path (the LLK MIN reduce) — result matches torch exactly.
+    fast_and_approximate_mode=True is refused; see test_min_fp32_fast_mode_rejected.
     """
     torch.manual_seed(1)
 
@@ -152,10 +150,87 @@ def test_min_fp32_fast_and_approximate_mode(device, input_shape, dim, scalar, fa
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32)
     input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
-    output_tensor = ttnn.min(input_tensor, fast_and_approximate_mode=fast_and_approximate_mode, dim=dim, scalar=scalar)
+    output_tensor = ttnn.min(input_tensor, dim=dim, scalar=scalar)
     output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor)).reshape(torch_output_tensor.shape)
 
-    if fast_and_approximate_mode or device.arch() == ttnn.device.Arch.QUASAR:
+    if device.arch() == ttnn.device.Arch.QUASAR:
         assert_allclose(torch_output_tensor, output_tensor, rtol=1e-3, atol=1e-2)
     else:
         assert_equal(torch_output_tensor, output_tensor)
+
+
+# The flag asks for the FPU, which has no min pool: fp32 min would lower to -max(-x), paying an
+# extra negate pass and tf32 truncation and giving up the H-axis split. Measured never faster than
+# the default across H and W, and up to 8.5x slower, so the flag has no right answer here.
+@pytest.mark.parametrize("dim", [None, -1, -2])
+def test_min_fp32_fast_mode_rejected(device, dim, expect_error):
+    torch.manual_seed(1)
+    input_tensor = ttnn.from_torch(
+        torch.randn((1, 1, 64, 64), dtype=torch.float32), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32
+    )
+    with expect_error(RuntimeError, "does not support fast_and_approximate_mode=True on Float32"):
+        ttnn.min(input_tensor, dim=dim, fast_and_approximate_mode=True)
+
+
+# Without fp32_dest_acc_en there is no SFPU min to fall back to, so fp32 min stays on -max(-x):
+# un-split and tf32-lossy, and accepted rather than refused.
+@pytest.mark.parametrize("dim", [-1, -2])
+def test_min_fp32_without_dest_acc_runs_unsplit(device, dim):
+    torch.manual_seed(1)
+    shape = (1, 1, 4096, 128)  # tall enough that the split would engage if it could
+    torch_input_tensor = torch.randn(shape, dtype=torch.float32)
+    torch_output_tensor = torch.amin(torch_input_tensor, dim=dim)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32)
+    output_tensor = ttnn.min(
+        input_tensor,
+        dim=dim,
+        compute_kernel_config=ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi3,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+        ),
+    )
+    output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor)).reshape(torch_output_tensor.shape)
+    # A 16-bit DEST packs the selected value through bfloat16, so it lands within one bf16 ulp.
+    assert_allclose(torch_output_tensor, output_tensor, rtol=2**-7, atol=0.0)
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        (1, 1, 32, 256),  # Wt=8
+        (1, 1, 256, 32),  # Ht=8
+        (1, 1, 128, 544),  # Wt=17
+        (1, 1, 60, 100),  # tile-unaligned
+    ],
+)
+@pytest.mark.parametrize("dim", [-1, -2, None])
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["dest16", "dest32"])
+def test_min_bfloat16_dest_modes(device, input_shape, dim, fp32_dest_acc_en):
+    """bfloat16 min over both DEST widths. The SFPU reduce sizes its chunk from DEST capacity,
+    so fp32_dest_acc_en halves it; the shapes straddle both chunk boundaries."""
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch_random(input_shape, -100, 100, dtype=torch.bfloat16)
+    torch_output_tensor = torch.amin(torch_input_tensor, dim=dim)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    # Padding sits below every input value, so a chunk reading past the valid region returns it.
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
+
+    output_tensor = ttnn.min(
+        input_tensor,
+        dim=dim,
+        compute_kernel_config=ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            # HiFi4 with fp32_dest_acc_en can return wrong results on Wormhole.
+            math_fidelity=ttnn.MathFidelity.HiFi3,
+            math_approx_mode=False,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+        ),
+    )
+    output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor)).reshape(torch_output_tensor.shape)
+
+    assert_equal(torch_output_tensor, output_tensor)
