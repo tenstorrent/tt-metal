@@ -214,6 +214,14 @@ def pytest_addoption(parser):
     )
 
     parser.addoption(
+        "--memory-layout",
+        choices=("normal", "debug"),
+        default=None,
+        help="Select the existing linker layout independently of coverage instrumentation. "
+        "Default: debug with --coverage, otherwise normal.",
+    )
+
+    parser.addoption(
         "--bit-exact-runs",
         action="store",
         type=int,
@@ -421,6 +429,7 @@ def pytest_configure(config):
         config.getoption("--detailed-artefacts", default=False),
         config.getoption("--no-debug-symbols", default=False),
         config.getoption("--speed-of-light", default=False),
+        memory_layout=config.getoption("--memory-layout", default=None),
     )
 
     worker_id = getattr(config, "workerinput", {}).get("workerid", "master")

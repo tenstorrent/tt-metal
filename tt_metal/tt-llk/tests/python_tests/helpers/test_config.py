@@ -370,6 +370,42 @@ class TestConfig:
         return TestConfig.DEFAULT_ARTEFACTS_PATH
 
     @staticmethod
+    def memory_layout() -> Path:
+        """Resolve either existing layout; set the override before setup_build."""
+        suffix = ".debug" if TestConfig.WITH_COVERAGE else ""
+        default = (
+            TestConfig.LINKER_SCRIPTS / f"memory.{TestConfig.ARCH.value}{suffix}.ld"
+        )
+        layout = Path(TestConfig.MEMORY_LAYOUT_LD_SCRIPT or default).resolve()
+        supported = {
+            (
+                TestConfig.LINKER_SCRIPTS / f"memory.{TestConfig.ARCH.value}{part}.ld"
+            ).resolve()
+            for part in ("", ".debug")
+        }
+        if (
+            layout not in supported
+            or not layout.is_file()
+            or (TestConfig.WITH_COVERAGE and not layout.name.endswith(".debug.ld"))
+        ):
+            raise ValueError(
+                "memory layout must match the target and support coverage when enabled"
+            )
+        return layout
+
+    @staticmethod
+    def uses_debug_memory_layout() -> bool:
+        return TestConfig.memory_layout().name.endswith(".debug.ld")
+
+    @staticmethod
+    def runtime_address() -> int:
+        return (
+            TestConfig.RUNTIME_ADDRESS_COVERAGE
+            if TestConfig.uses_debug_memory_layout()
+            else TestConfig.RUNTIME_ADDRESS_NON_COVERAGE
+        )
+
+    @staticmethod
     def setup_paths(sources_path: Path):
         TestConfig.ARTEFACTS_DIR = TestConfig.resolve_artefacts_path()
 
@@ -397,11 +433,23 @@ class TestConfig:
             (TestConfig.TOOL_PATH / "riscv-tt-elf-gcov-tool").absolute()
         )
 
-        TestConfig.SHARED_DIR = TestConfig.ARTEFACTS_DIR / "shared"
+        # Layout changes also change BRISC's linked addresses. Never reuse
+        # normal-layout shared firmware for an uninstrumented debug layout.
+        layout_key = TestConfig.memory_layout().name
+        shared_key = (
+            "shared"
+            if not TestConfig.uses_debug_memory_layout()
+            else (
+                f"shared-{layout_key}-{'coverage' if TestConfig.WITH_COVERAGE else 'plain'}"
+            )
+        )
+        TestConfig.SHARED_DIR = TestConfig.ARTEFACTS_DIR / shared_key
         TestConfig.SHARED_OBJ_DIR = TestConfig.SHARED_DIR / "obj"
         TestConfig.SHARED_ELF_DIR = TestConfig.SHARED_DIR / "elf"
         # Profiler builds need separate shared artefacts (trisc.cpp compiles differently with -DLLK_PROFILER)
-        TestConfig.PROFILER_SHARED_DIR = TestConfig.ARTEFACTS_DIR / "shared-profiler"
+        TestConfig.PROFILER_SHARED_DIR = TestConfig.ARTEFACTS_DIR / (
+            shared_key + "-profiler"
+        )
         TestConfig.PROFILER_SHARED_OBJ_DIR = TestConfig.PROFILER_SHARED_DIR / "obj"
         TestConfig.PROFILER_SHARED_ELF_DIR = TestConfig.PROFILER_SHARED_DIR / "elf"
         TestConfig.COVERAGE_INFO_DIR = TestConfig.ARTEFACTS_DIR / "coverage_info"
@@ -790,16 +838,52 @@ class TestConfig:
         detailed_artefacts: bool = False,
         no_debug_symbols: bool = False,
         speed_of_light: bool = False,
+        memory_layout: str | None = None,
     ):
         TestConfig.setup_arch()
+        if memory_layout not in (None, "normal", "debug"):
+            raise ValueError("memory layout must be normal or debug")
+        TestConfig.MEMORY_LAYOUT_LD_SCRIPT = (
+            sources_path
+            / "tests/helpers/ld"
+            / f"memory.{TestConfig.ARCH.value}{'.debug' if memory_layout == 'debug' else ''}.ld"
+            if memory_layout is not None
+            else None
+        )
+        TestConfig.WITH_COVERAGE = with_coverage
         TestConfig.setup_paths(sources_path)
+        # Without coverage instrumentation, the debug layout leaves this
+        # 8 KiB slot unused: WH's final GCOV region, and BH's final L1 gap.
+        # Keep it below the mailbox at runtime_address() - 0x48.
+        TestConfig.DEVICE_PRINT_BUFFER_BASE = (
+            0x6A000 if TestConfig.uses_debug_memory_layout() else 0x15000
+        )
+        TestConfig.DEVICE_PRINT_BUFFER_SIZE = (
+            0x2000 if TestConfig.uses_debug_memory_layout() else 0x4000
+        )
+        # Reconfiguration must not reuse firmware or device state from a
+        # different layout. On-disk shared markers still avoid duplicate builds.
+        TestConfig.SHARED_ARTEFACTS_AVAILABLE = False
+        TestConfig.PROFILER_SHARED_ARTEFACTS_AVAILABLE = False
+        TestConfig._BUILD_DIRS_CREATED = False
+        TestConfig.BRISC_ELF_LOADED = False
+        TestConfig.LAST_LOADED_ELFS = Path()
+        TestConfig.CURRENT_LOADED_CONFIG = "uninitialised"
         TestConfig.setup_compilation_options(
             with_coverage, detailed_artefacts, no_debug_symbols, speed_of_light
         )
         device_module.Mailboxes = (
-            (MailboxesCoverageQuasar if with_coverage else MailboxesQuasar)
+            (
+                MailboxesCoverageQuasar
+                if TestConfig.uses_debug_memory_layout()
+                else MailboxesQuasar
+            )
             if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR
-            else (MailboxesCoverage if with_coverage else Mailboxes)
+            else (
+                MailboxesCoverage
+                if TestConfig.uses_debug_memory_layout()
+                else Mailboxes
+            )
         )
 
     @staticmethod
@@ -1165,18 +1249,11 @@ class TestConfig:
         serialised_data = struct.pack(self.runtime_format, *argument_data)
 
         if len(serialised_data) != 0:
-            if TestConfig.WITH_COVERAGE:
-                write_to_device(
-                    TestConfig.TENSIX_LOCATION,
-                    TestConfig.RUNTIME_ADDRESS_COVERAGE,
-                    serialised_data,
-                )
-            else:
-                write_to_device(
-                    TestConfig.TENSIX_LOCATION,
-                    TestConfig.RUNTIME_ADDRESS_NON_COVERAGE,
-                    serialised_data,
-                )
+            write_to_device(
+                TestConfig.TENSIX_LOCATION,
+                TestConfig.runtime_address(),
+                serialised_data,
+            )
 
     def collect_hash(self):
         lock_file = TEMP_DIR / "tt-llk-build-print.lock"
@@ -1295,7 +1372,14 @@ class TestConfig:
         ]
 
         self.variant_id = sha256(
-            str(" | ".join(temp_str + ["<<search-dirs>>"] + search_dirs)).encode()
+            str(
+                " | ".join(
+                    temp_str
+                    + ["<<search-dirs>>"]
+                    + search_dirs
+                    + ["<<memory-layout>>", str(TestConfig.memory_layout())]
+                )
+            ).encode()
         ).hexdigest()
 
     def resolve_shared_compile_options(self) -> tuple[str, str, str]:
@@ -1325,20 +1409,17 @@ class TestConfig:
         return self._compose_compile_options(self._header_include_tokens())
 
     def _compose_compile_options(self, include_tokens: list) -> tuple[str, str, str]:
+        MEMORY_LAYOUT_LD_SCRIPT = str(TestConfig.memory_layout())
         if (
             TestConfig.OPTIONS_COMPILE is not None
-            and TestConfig.MEMORY_LAYOUT_LD_SCRIPT is not None
             and TestConfig.NON_COVERAGE_OPTIONS_COMPILE is not None
         ):
             return (
                 TestConfig.OPTIONS_COMPILE,
                 MEMORY_LAYOUT_LD_SCRIPT,
-                NON_COVERAGE_OPTIONS_COMPILE,
+                TestConfig.NON_COVERAGE_OPTIONS_COMPILE,
             )
 
-        MEMORY_LAYOUT_LD_SCRIPT = (
-            f"{TestConfig.LINKER_SCRIPTS}/memory.{TestConfig.ARCH.value}.ld"
-        )
         include_flags = " ".join(shlex.quote(flag) for flag in include_tokens)
         OPTIONS_COMPILE = f"{include_flags} {TestConfig.INITIAL_OPTIONS_COMPILE} "
 
@@ -1354,9 +1435,6 @@ class TestConfig:
             NON_COVERAGE_OPTIONS_COMPILE = OPTIONS_COMPILE
             OPTIONS_COMPILE += (
                 "-fprofile-arcs -ftest-coverage -fprofile-info-section -DCOVERAGE "
-            )
-            MEMORY_LAYOUT_LD_SCRIPT = (
-                f"{TestConfig.LINKER_SCRIPTS}/memory.{TestConfig.ARCH.value}.debug.ld"
             )
 
         if self.profiler_build == ProfilerBuild.Yes:
@@ -1744,7 +1822,7 @@ class TestConfig:
                     device_print_flags = (
                         "-DDEBUG_PRINT_ENABLED "
                         f"-DLLK_DEVICE_PRINT_BUFFER_BASE={kernel_buffer_base:#x} "
-                        f"-DLLK_RUNTIME_ARGS_START={TestConfig.DEVICE_PRINT_RUNTIME_ARGS_START:#x} "
+                        f"-DLLK_RUNTIME_ARGS_START={TestConfig.runtime_address():#x} "
                         f"-DDEVICE_PRINT_BUFFER_SIZE={TestConfig.DEVICE_PRINT_BUFFER_SIZE} "
                         f"-DDEVICE_PRINT_BUFFER_SIZE2={TestConfig.DEVICE_PRINT_BUFFER_SIZE2} "
                         f"-DPROCESSOR_INDEX={risc_id} "
