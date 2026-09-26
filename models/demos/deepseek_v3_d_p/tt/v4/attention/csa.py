@@ -23,6 +23,7 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import (
+    SharedScalar,
     TtHCA,
     TtHCACompressor,
     TtHCAState,
@@ -863,11 +864,47 @@ class TtCSA(TtHCA):
                 self.indexer._host_q_b_proj_weight, tp_shard_dim=None, cache_name="wq_b_all"
             )
         self.precreate_ring_consts(int(real_len))
+        self._entries_per_chunk = int(seq_local) * self.sp_factor // rate
+        self._entry_row_mask(self._entries_per_chunk)
+
+    # one per (device, rows): every CSA layer of the model masks the same rows of the same chunk, so the host writes it
+    # once per chunk (SharedScalar semantics: ``value`` = the number of leading ones rows)
+    _SHARED_ROW_MASK: dict = {}
+
+    def _entry_row_mask(self, n_rows: int):
+        """The persistent [1, 1, n_rows, 1] bf16 0/1 row mask island A2 multiplies the chunk's entries / keys by; ones for
+        the real entries, zeros past them. Allocated before any capture (precreate_constants) -- DS4F-0262 class."""
+        key = (id(self.device), int(n_rows))
+        ent = TtCSA._SHARED_ROW_MASK.get(key)
+        if ent is None:
+            buf = self._from_torch(torch.ones(1, 1, int(n_rows), 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            ent = SharedScalar(buf)
+            ent.value = int(n_rows)
+            TtCSA._SHARED_ROW_MASK[key] = ent
+        return ent.buf
+
+    def _push_entry_row_mask(self, real_len: int) -> None:
+        """Eager, before island A2 replays: ones for the ceil(real_len / rate) real entry rows of this chunk, zeros after
+        (a ragged FINAL chunk on the islands, DS4F-0268); skipped when the buffer already holds that split."""
+        n_rows = getattr(self, "_entries_per_chunk", None)
+        if n_rows is None:
+            return
+        rate = self.compressor.compress_rate
+        n_real = min(int(n_rows), -(-int(real_len) // rate))
+        ent = TtCSA._SHARED_ROW_MASK[(id(self.device), int(n_rows))]
+        if ent.value == n_real:
+            return
+        t = torch.zeros(1, 1, int(n_rows), 1)
+        t[:, :, :n_real] = 1.0
+        host = self._from_torch(t, dtype=ent.buf.dtype, layout=ent.buf.layout, on_device=False)
+        ttnn.copy_host_to_device_tensor(host, ent.buf)
+        ent.value = n_real
 
     def prepare_chunk(self, state, real_len: int) -> None:
         """Eager, before the islands replay: push this chunk's position scalars into the persistent buffers the traced
         ops read (value-cached -> no host write happens inside a capture that follows a matching prepare)."""
         rate = self.compressor.compress_rate
+        self._push_entry_row_mask(int(real_len))
         self._push_scalar(self._slab_index[1], state.kv_actual)
         fwp = state.entry_count * rate
         self.compressor._push_scalar(self.compressor._entry_index_full[1], fwp // rate)
@@ -995,6 +1032,15 @@ class TtCSA(TtHCA):
         # export prep (contract dtypes from kv_contract): rotated index keys (bfp8 tiles), the unified rows as RM pieces
         # -- entries land at unified row 128 + entry_count, so their pieces are 128 rows (gcd of 128 + k*1280 and 1280);
         # the ring (rows [0, 128)) and the pending block (32 rows at row 0) are one piece each
+        # DS4F-0271 / DS4F-0274: a ragged FINAL chunk on the islands (DS4F-0268) computes the padded chunk's entries / keys,
+        # and the migration's row range hands the decode ring 128 index-key rows past the real entries. Zero them at the
+        # source: one traced W-broadcast multiply per tensor by the per-row 0/1 mask prepare_chunk pushed for this chunk
+        # (all ones on a full chunk). The eager alternative -- zero writes per 32-row piece per layer -- cost 10-12 s of
+        # host issue per NEW ragged length (launch 17).
+        mask = self._entry_row_mask(int(entries.shape[2]))
+        assert int(keys.shape[2]) == int(entries.shape[2]), (keys.shape, entries.shape)
+        entries = ttnn.multiply(entries, mask if mask.dtype == entries.dtype else ttnn.typecast(mask, entries.dtype))
+        keys = ttnn.multiply(keys, mask if mask.dtype == keys.dtype else ttnn.typecast(mask, keys.dtype))
         k_rot = ttnn.matmul(keys, self._h128_export(), memory_config=self.memory_config)
         k_rot = self._rm_pieces_dtype_only(k_rot, self._contract_dtype("csa_index_k"))
         ent_pieces = self._rm_pieces(entries, self.sliding_window, self._contract_dtype("csa_unified"))
@@ -1049,23 +1095,8 @@ class TtCSA(TtHCA):
                 for t in (ring, ring_rm_real):
                     if t is not None:
                         ttnn.deallocate(t)
-                # ZERO the padded chunk's entries / keys past the real ones (DS4F-0271 root cause candidate, launch 16): the
-                # pieces above wrote all 1280 of them, the driver's single row range (128 + S/4 rows for EVERY config) hands
-                # the decode ring the first 128 index-key rows past the real entries, and the ring's indexer reads row S/4
-                # for the first three decode positions BEFORE its own compressor writes it. The eager path never wrote
-                # those rows (zeros); make the traced path match. Transient zeros, tile-aligned start (all e2e lengths are).
-                n_real = -(-(int(real_len) // rate) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-                n_pad = int(entries_total) - n_real
-                if n_pad > 0:
-                    row0 = int(state.entry_count) + n_real
-                    zk = self._from_torch(torch.zeros(1, 1, n_pad, int(index_k.shape[-1])), dtype=index_k.dtype)
-                    ttnn.kv_cache.fill_cache_for_user_(index_k, zk, int(batch_idx), update_idx=row0)
-                    ttnn.deallocate(zk)
-                    zu = self._from_torch(torch.zeros(1, 1, n_pad, int(unified.shape[-1])), dtype=ttnn.bfloat16)
-                    zu_rm = self._rm_pieces(zu, ttnn.TILE_SIZE, self._contract_dtype("csa_unified"))
-                    self._write_rm_pieces(unified, zu_rm, batch_idx, self.sliding_window + row0)
-                    for t in [zu] + list(zu_rm):
-                        ttnn.deallocate(t)
+                # the padded chunk's entries / keys past the real ones are ZERO already: island A2 multiplies both by the
+                # per-row mask prepare_chunk set for this chunk (DS4F-0271 / DS4F-0274), so no eager zero writes here
             if pending is not None and full and real_len % rate == 0:
                 # a ragged chunk's pending block would be the padded chunk's; the decode ring does not consume csa_pending
                 # for a final chunk (PREFILL_KV_TABLE_PENDING=0), so it is skipped rather than recomputed
