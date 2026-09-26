@@ -15,6 +15,8 @@ from tracy.process_model_log import (
     run_device_profiler,
 )
 
+pytestmark = pytest.mark.use_module_device
+
 
 def assert_quality(torch_output, tt_output):
     pcc_passed, pcc_val = comp_pcc(torch_output, tt_output)
