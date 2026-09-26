@@ -20,7 +20,7 @@ CACHED_PCT = {61440: "p25", 143360: "p50", 312320: "p75", 552960: "p90", 860160:
 
 LOADED_TABLES = [  # (title, JSONL key) -- the steady_* keys are absent when a stream had too few chunks
     ("steady-state aggregate NEW tok/s (fill/drain excluded)", "steady_new_tps"),
-    ("steady-state PROCESSED tok/s (5120 per chunk)", "steady_processed_tps"),
+    ("steady-state PROCESSED tok/s (one chunk per period)", "steady_processed_tps"),
     ("aggregate NEW tok/s incl. fill/drain", "aggregate_new_tps"),
     ("per-request TTFT ms median", "ttft_under_load_ms_median"),
     ("per-request TTFT ms p90", "ttft_under_load_ms_p90"),
@@ -50,7 +50,10 @@ def idle_ttfts(rows, iter0):
 
 
 def _lbl(v, pct):
-    return f"{v} ({pct[v]})" if v in pct else str(v)
+    """Percentile label; a value within one 5120-chunk of a default matrix value inherits its label (cached values are
+    rounded down to the chunk size when CHUNK != 5120, e.g. 312320 -> 311296 at CHUNK=2048)."""
+    near = [k for k in pct if abs(k - v) < 5120]
+    return f"{v} ({pct[near[0]]})" if near else str(v)
 
 
 def table(title, cells, cached, news):
@@ -109,6 +112,8 @@ def main():
         print(
             f"\n(loaded pass: users={sorted({r['users'] for r in loaded})}, requests per cell {sorted({r['requests'] for r in loaded})})"
         )
+    cfg = sorted({(r.get("chunk", 5120), r.get("layer_counts", "even")) for r in rows})
+    print("(chunk, layer split): " + "; ".join(f"{c} / {lc}" for c, lc in cfg))
     if args.csv:
         write_csv(args.csv, cached, news, med, last)
 

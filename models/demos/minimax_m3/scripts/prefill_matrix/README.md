@@ -68,7 +68,26 @@ so `HOSTS` must have `STAGES/4` entries), `WORK` (default `generated/m3_prefill_
 `OUT` (default `$WORK/results_<STAGES>stage.jsonl`), `MAX_NEW` (KV capacity per slot = `cached +
 MAX_NEW`, default 51200; every `NEW` value must fit), `REQS` (requests per user in the loaded pass)
 or `TARGET_CHUNKS` (default 240 chunks per loaded stream), `SKIP_IDLE=1` (loaded pass only),
-`EXPERT_DTYPE` (runner manifest, default `bf4`).
+`EXPERT_DTYPE` (runner manifest, default `bf4`), `CHUNK` (`PREFILL_CHUNK_SIZE`, default 5120, minimum
+2048; cached values that are not a multiple are rounded down, e.g. 312320 -> 311296 at 2048, and keep
+their percentile label), `LAYER_COUNTS` (layers per stage, comma list summing to 60 with one entry
+per stage -> `PREFILL_PP_LAYER_COUNTS`; default the runner's even split, 4,4,...,3,3,3,3 for 16
+stages). Both are recorded in every JSONL row (`chunk`, `layer_counts`) and in the runner log header.
+
+### Pipeline balance
+
+The three dense layers (0-2) do a whole-shard ring gather per chunk, so their cost grows with the KV
+capacity while the 57 MoE/MSA layers stay nearly flat (Sep-25 data: rank 0 = 3 dense + 1 MoE went from
+42 to 409 ms per chunk between 0 and 553k cached, MoE stages 75-90 ms). The even split therefore
+bottlenecks on rank 0 from ~100k cached upward. Modelled on the Agent X request mix, the best 16-stage
+split puts each dense layer alone on a stage:
+
+```bash
+LAYER_COUNTS=1,1,1,4,4,4,4,4,4,4,4,5,5,5,5,5 CHUNK=2048 JOB=... HOSTS=... run_matrix.sh
+```
+
+(-20% at cached=0, 2-3x from 143k cached up, ~2x on the mix; a 2048 chunk on its own is a wash because
+the per-chunk gather does not shrink with the chunk.) Analysis and model: tracking issue #57827.
 
 `WORK` is per-session state (`last_runner_log` points at the live runner): never share one `WORK`
 between two concurrent sessions. `run_matrix.sh` shuts the runner down on exit and on Ctrl-C; if a

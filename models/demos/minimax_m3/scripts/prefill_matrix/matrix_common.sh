@@ -4,8 +4,10 @@
 # the matrix, and a failed shutdown must still fall through to the scoped kill.
 
 # Pipeline constants the runner's binding, the producer and the shutdown helper must agree on.
-MATRIX_CHUNK=5120           # PREFILL_CHUNK_SIZE
+MATRIX_CHUNK=${CHUNK:-5120}          # PREFILL_CHUNK_SIZE (knob CHUNK; >= 2048 so the first MSA chunk has 16 blocks)
 MATRIX_MAX_NEW=51200        # KV capacity per slot = cached + MATRIX_MAX_NEW (largest default new-token value)
+MATRIX_LAYER_COUNTS=${LAYER_COUNTS:-}   # knob LAYER_COUNTS: PREFILL_PP_LAYER_COUNTS, layers per stage (empty = even split)
+MATRIX_NUM_LAYERS=60
 MATRIX_FALLBACK_CAP=56320   # capacity assumed when a runner log carries no capacity= token (0 + MATRIX_MAX_NEW + one chunk)
 
 # A Slurm step on a host that already runs pipeline ranks cannot even fork at the exabox default soft limits
@@ -25,7 +27,7 @@ matrix_srun() {
 matrix_q() { printf '%q' "$1"; }
 
 # Environment of the producer / shutdown helper (host-side H2D clients): the mesh shape, layer count, chunk size and
-# KV capacity must agree with the runner's binding (SP=2 x TP=4 per [2,4] stage, 60 layers, 5120-token chunks);
+# KV capacity must agree with the runner's binding (SP=2 x TP=4 per [2,4] stage, 60 layers, MATRIX_CHUNK-token chunks);
 # PREFILL_NUM_USERS is only read by prefill_producer's own main() and is irrelevant here.
 #   matrix_producer_env <max_seq_len>  -> "KEY=VAL KEY=VAL ..." (each shell-quoted) for `env`
 matrix_producer_env() {
