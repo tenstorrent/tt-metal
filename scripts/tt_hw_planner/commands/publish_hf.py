@@ -542,7 +542,25 @@ def cmd_publish_hf(args) -> int:
         if mr and Path(mr).is_dir():
             demo_dir = Path(mr)
     if demo_dir is None or not Path(demo_dir).is_dir():
-        print(f"  [publish-hf] could not locate the model demo dir for '{slug}'. Run `commit-wins` first.")
+        # Direct fallbacks: the demo dir straight under the checkout (works after commit-wins even
+        # when find_demo_dir's registry lookup or the dashboard's model.root come back empty), then
+        # a glob anywhere under models/.
+        cand = Path(repo_root) / "models" / "demos" / slug
+        if cand.is_dir():
+            demo_dir = cand
+        else:
+            import glob as _g
+
+            hits = [
+                h for h in _g.glob(str(Path(repo_root) / "models" / "**" / slug), recursive=True) if Path(h).is_dir()
+            ]
+            if hits:
+                demo_dir = Path(hits[0])
+    if demo_dir is None or not Path(demo_dir).is_dir():
+        print(
+            f"  [publish-hf] could not locate the model demo dir for '{slug}' under {repo_root}. "
+            f"Run `commit-wins` first so the optimized model lands in the checkout."
+        )
         return 2
 
     commit = _git_commit(state_root)
