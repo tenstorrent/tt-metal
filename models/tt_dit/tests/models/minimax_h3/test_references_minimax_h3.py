@@ -157,7 +157,9 @@ def test_prepare_references_uses_each_references_own_resolution():
 def test_prepare_references_truncates_a_video_and_its_soundtrack_to_the_target():
     long_frames = _video(1344, 768, TARGET_FRAMES + 60)
     references = [rp.MiniMaxH3Reference(video=long_frames, fps=24.0, audio=_waveform(10.0))]
-    prepared, num_frames = R.prepare_references(references, TARGET_FRAMES, AUDIO_RATE)
+    prepared, num_frames = R.prepare_references(
+        references, TARGET_FRAMES, AUDIO_RATE, target_height=TARGET_HEIGHT, target_width=TARGET_WIDTH
+    )
 
     assert num_frames == TARGET_FRAMES
     assert prepared[0].frames.shape[0] == TARGET_FRAMES
@@ -258,7 +260,7 @@ def _image_geometry(source_width: int, source_height: int):
 
 def _video_geometry(source_width: int, source_height: int, num_frames: int = TARGET_FRAMES):
     frames = np.zeros((num_frames, source_height, source_width, 3), dtype=np.uint8)
-    frames = rp.prepare_reference_frames(frames, TARGET_FRAMES)
+    frames = rp.prepare_reference_frames(frames, TARGET_FRAMES, mode="diffusers")
     trimmed = rp.trim_reference_num_frames(frames.shape[0])
     return dict(
         num_latent_frames=p.video_latent_num_frames(trimmed),
@@ -393,7 +395,8 @@ def test_resolve_reference_image_size_match_upscales_to_canvas_area():
     height, width = rp.resolve_reference_image_size(
         512, 512, mode="match", target_width=TARGET_WIDTH, target_height=TARGET_HEIGHT
     )
-    assert (height, width) == (1024, 1024)
+    assert (height, width) == (992, 992)
+    assert height * width <= TARGET_WIDTH * TARGET_HEIGHT
     assert height % p.MINIMAX_H3_CANVAS_MULTIPLE == 0 and width % p.MINIMAX_H3_CANVAS_MULTIPLE == 0
 
 
@@ -428,10 +431,12 @@ def test_resolve_reference_image_size_match_requires_canvas(expect_error):
 
 
 def test_match_keeps_eight_1344x768_images_under_the_prompt_cap():
+    from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3ArenaCaps
+
     height, width = rp.resolve_reference_image_size(1344, 768, mode="match", target_width=1344, target_height=768)
     assert (height, width) == (768, 1344)
     tokens_per_image = (height // p.MINIMAX_H3_CANVAS_MULTIPLE) * (width // p.MINIMAX_H3_CANVAS_MULTIPLE)
-    assert 8 * tokens_per_image < 57344
+    assert 8 * tokens_per_image < MiniMaxH3ArenaCaps.for_task("ref2va").prompt
 
 
 @pytest.mark.parametrize("fps", [24.0, 30.0, 25.0, 12.0, 60.0, 23.976])
@@ -445,16 +450,23 @@ def test_resample_reference_frames_matches_reference(fps):
         assert got is frames
 
 
-def test_prepare_reference_frames_uses_its_own_aspect_canvas():
-    frames = np.zeros((10, 480, 480, 3), dtype=np.uint8)
-    prepared = rp.prepare_reference_frames(frames, TARGET_FRAMES)
-    assert prepared.shape[1:3] == p.resolve_canvas_size(480, 480) == (768, 768)
-    assert np.array_equal(prepared, reference_packing.prepare_reference_frames(frames, TARGET_FRAMES))
+def test_prepare_reference_frames_matches_the_target_canvas_like_an_image():
+    frames = np.zeros((10, 1080, 1920, 3), dtype=np.uint8)
+    prepared = rp.prepare_reference_frames(frames, TARGET_FRAMES, target_width=768, target_height=768)
+    expected = rp.resolve_reference_image_size(1920, 1080, mode="match", target_width=768, target_height=768)
+    assert prepared.shape[1:3] == expected == (576, 1024)
 
     # `shares_memory`, not `is`: the frame-count cap slices first, so a view comes back.
     at_canvas = np.zeros((10, 768, 1344, 3), dtype=np.uint8)
-    passthrough = rp.prepare_reference_frames(at_canvas, TARGET_FRAMES)
+    passthrough = rp.prepare_reference_frames(at_canvas, TARGET_FRAMES, target_width=1344, target_height=768)
     assert np.shares_memory(passthrough, at_canvas)
+
+
+def test_prepare_reference_frames_uses_its_own_aspect_canvas_outside_match():
+    frames = np.zeros((10, 480, 480, 3), dtype=np.uint8)
+    prepared = rp.prepare_reference_frames(frames, TARGET_FRAMES, mode="diffusers")
+    assert prepared.shape[1:3] == p.resolve_canvas_size(480, 480) == (768, 768)
+    assert np.array_equal(prepared, reference_packing.prepare_reference_frames(frames, TARGET_FRAMES))
 
 
 @pytest.mark.parametrize("num_frames", [1, 5, 12, 24, 25, 124, 192])

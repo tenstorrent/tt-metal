@@ -45,6 +45,8 @@ if TYPE_CHECKING:
 
 # `ttnn` SDPA requires a tile-aligned head dimension.
 _TILE = 32
+# The SDPA op loads `cu_window_seqlens` into one uint32 tile and caps it there.
+_CU_WINDOW_ENTRIES = _TILE * _TILE
 
 
 class VisionParallel(NamedTuple):
@@ -271,15 +273,25 @@ def pad_patches_for_sp(
     cu_seqlens: Sequence[int],
     *,
     sp_factor: int,
+    pad_to: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, tuple[torch.Tensor, torch.Tensor], tuple[int, ...], int]:
-    """Pad a patch batch so its SP shards are tile-aligned, isolating the pad in a phantom window.
+    """Pad a patch batch so its SP shards are tile-aligned, isolating the pad in phantom windows.
+
+    Windowed attention costs each window's length squared, so the pad is carved into windows of
+    `sp_factor * 32` rows, the last taking the remainder. With `pad_to`, pad to at least that many
+    patches and always append a phantom window (empty when nothing is padded), so every batch at one
+    padded size takes the same windowed-attention programs.
 
     The pad is trimmed after the SP gather via `Qwen3VlVisionModel.forward(logical_patches=...)`.
     """
     total = patches.shape[0]
     mult = sp_factor * _TILE
     padded = -(-total // mult) * mult
-    if padded == total:
+    if pad_to is not None:
+        if pad_to % mult != 0:
+            raise ValueError(f"pad_to must be a multiple of {mult}, got {pad_to}")
+        padded = max(padded, pad_to)
+    elif padded == total:
         return patches, pos_embeds, rope, tuple(cu_seqlens), total
     if cu_seqlens[-1] != total:
         msg = f"cu_seqlens must span [0, {total}], got {cu_seqlens[0]}..{cu_seqlens[-1]}"
@@ -293,9 +305,22 @@ def pad_patches_for_sp(
             torch.cat([cos, torch.ones(npad, cos.shape[-1], dtype=cos.dtype)], dim=0),
             torch.cat([sin, torch.zeros(npad, sin.shape[-1], dtype=sin.dtype)], dim=0),
         ),
-        (*tuple(cu_seqlens), padded),
+        (*tuple(cu_seqlens), *range(total + mult, padded, mult), padded),
         total,
     )
+
+
+def fixed_length_cu_window(cu_seqlens: Sequence[int]) -> tuple[int, ...]:
+    """`cu_seqlens` padded to the op's full capacity by repeating the last boundary.
+
+    The SDPA program-cache key includes the `cu_window_seqlens` tensor's shape, so a fixed length keeps
+    the window count out of the key. The repeats are empty windows, which the kernel's window search and
+    mask generator skip.
+    """
+    if len(cu_seqlens) > _CU_WINDOW_ENTRIES:
+        msg = f"cu_seqlens has {len(cu_seqlens)} entries; the windowed SDPA op holds at most {_CU_WINDOW_ENTRIES}"
+        raise ValueError(msg)
+    return (*cu_seqlens, *[cu_seqlens[-1]] * (_CU_WINDOW_ENTRIES - len(cu_seqlens)))
 
 
 def vision_rope_tensors(
@@ -747,7 +772,7 @@ class Qwen3VlVisionAttention(Module):
         k = ccl.all_gather(k, dim=-2, mesh_axis=sp_axis, use_hyperparams=True)
         v = ccl.all_gather(v, dim=-2, mesh_axis=sp_axis, use_hyperparams=True)
         cu_window = ttnn.from_torch(
-            torch.tensor(cu_seqlens, dtype=torch.int32),
+            torch.tensor(fixed_length_cu_window(cu_seqlens), dtype=torch.int32),
             device=self.mesh_device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.uint32,
