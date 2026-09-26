@@ -1,0 +1,21 @@
+{
+ "metrics": {
+  "pcc_ffn_residual_L00": {
+   "t": "2026-09-26T01:42:16",
+   "value": 0.9999947077102479
+  },
+  "rel_l2_ffn_residual_L00": {
+   "t": "2026-09-26T01:42:16",
+   "value": 0.003293632296845317
+  },
+  "row_norm_ratio_max_ffn_residual_L00": {
+   "t": "2026-09-26T01:42:16",
+   "value": 1.0045949220657349
+  },
+  "row_norm_ratio_min_ffn_residual_L00": {
+   "t": "2026-09-26T01:42:16",
+   "value": 0.995794951915741
+  }
+ },
+ "task": "C.sliding.ffn_residual"
+}
