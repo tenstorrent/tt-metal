@@ -11708,8 +11708,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--no-bench",
         dest="no_bench",
         action="store_true",
-        help="skip the post-publish auto-benchmark (serve + latency sweep into the card)",
+        help="skip the post-publish on-device benchmark (real-hardware sweep into the card)",
     )
+    pph.add_argument(
+        "--bench-batches", dest="bench_batches", help="batch grid for the on-device sweep (default 1,8,32)"
+    )
+    pph.add_argument("--bench-layers", dest="bench_layers", help="TT_E2E_LAYERS for the sweep (default 52 = full)")
     pph.add_argument("--out", help="tt-model build staging dir (default ~/tt-model-builds)")
     pph.add_argument("--tt-model-bin", dest="tt_model_bin", help="path to the tt-model executable")
     pph.add_argument("--public", action="store_true", help="push the bundle public (shared by link)")
