@@ -182,10 +182,10 @@ def screen_timeline(page, seconds, *keys):
 
 @pytest.mark.skipif(not shutil.which("node"), reason="node not installed")
 def test_teletext_carousel(records, tmp_path):
-    """F24: Index and Model graph take turns every 60 s; hold stops it, a key restarts the count, other pages stay."""
+    """F24: Index and Model graph take turns every 20 s; hold stops it, a key restarts the count, other pages stay."""
     page = main(["--spec", str(records.path), "--style", "teletext", "--out", str(tmp_path)])
     idx, graph = "Page 100, Index", "Page 102, Model graph"
-    assert screen_timeline(page, 130) == [(idx, 60), (graph, 60), (idx, 10)]
-    assert screen_timeline(page, 130, "@30:h") == [(idx, 29), ("Hold on", 101)]
-    assert screen_timeline(page, 130, "@50:ArrowDown") == [(idx, 110), (graph, 20)]
-    assert screen_timeline(page, 130, "@10:ArrowRight")[-1] == ("Page 101, Gate ladder", 120)
+    assert screen_timeline(page, 50) == [(idx, 20), (graph, 20), (idx, 10)]
+    assert screen_timeline(page, 50, "@10:h") == [(idx, 9), ("Hold on", 41)]
+    assert screen_timeline(page, 50, "@15:ArrowDown") == [(idx, 35), (graph, 15)]
+    assert screen_timeline(page, 50, "@5:ArrowRight")[-1] == ("Page 101, Gate ladder", 45)
