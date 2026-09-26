@@ -33,6 +33,7 @@ on:
           - hunyuan-image-3.0
           - panoptic-deeplab
           - bevformer
+          - diffusiondrive
           - mistral-small-3.1-24b
           - sd35
           - mochi

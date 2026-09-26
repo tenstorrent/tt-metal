@@ -567,7 +567,7 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S_2_0) {
 // homogeneous-grid multi-core group test
 TEST_F(UnitMeshFixture, MultiCoreDFB_HomogeneousGrid_SingleGroup_2_0) {
     if (this->device().arch() != ARCH::QUASAR) {
-        GTEST_SKIP() << "M2 path is Quasar-only (Gen2Config)";
+        GTEST_SKIP() << "M2 path is Quasar-only";
     }
     CoreCoord grid = this->device().compute_with_storage_grid_size();
     if (grid.x < 2 || grid.y < 2) {

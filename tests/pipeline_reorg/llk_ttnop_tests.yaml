@@ -133,7 +133,7 @@
   skus:
     wh_n150_civ2:
       timeout: 1440
-  owner_id: U09UC143684 #
+  owner_id: U09UC143684
 
 - name: ttnop_injector_wormhole group 10/15
   split_group: 10

@@ -6,6 +6,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "dev_mem_map.h"
+#include "experimental/kernel_args.h"
 #include "internal/hw_thread.h"
 #include "internal/tt-2xx/risc_common.h"
 #include "internal/tt-2xx/quasar/tensix_neo_reg.h"
@@ -33,9 +34,9 @@ void kernel_main() {
     if (internal_::get_hw_thread_idx() != 2) {
         return;
     }
-    constexpr std::uint32_t value_unpack = get_compile_time_arg_val(0);
-    constexpr std::uint32_t value_math = get_compile_time_arg_val(1);
-    constexpr std::uint32_t value_pack = get_compile_time_arg_val(2);
+    constexpr std::uint32_t value_unpack = get_arg(args::value_unpack);
+    constexpr std::uint32_t value_math = get_arg(args::value_math);
+    constexpr std::uint32_t value_pack = get_arg(args::value_pack);
     volatile tt_l1_ptr std::uint32_t* const scratch = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(
         TT_CLUSTER_CTRL_SCRATCH_16__REG_ADDR);  // Address 0x03000080
     volatile tt_l1_ptr std::uint32_t* const queue_unpack = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(
