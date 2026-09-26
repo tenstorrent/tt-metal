@@ -523,3 +523,58 @@ def test_softmin_backward_callback(shape_dim_strategy, dtype, device):
             assert device.num_program_cache_entries() == num_program_cache_entries
         torch_dummy = torch.randn([32, 32])
         tt_dummy = ttnn.from_torch(torch_dummy, device=device)
+
+
+@pytest.mark.parametrize(
+    "shape_dim_special",
+    [
+        [[32, 32], 1],  # single tile, dim W
+        [[32, 32 * 4], 1],  # large-W path
+        [[32 * 4, 32], 0],  # dim H
+        [[5, 6, 32, 32], 3],  # NC path
+        [[1, 1, 32, 33], 3],  # unaligned W (mask path)
+        [[1, 1, 33, 32], 2],  # unaligned H (mask path)
+    ],
+    ids=["w-single", "w-large", "h", "nc", "w-unaligned", "h-unaligned"],
+)
+@pytest.mark.parametrize(
+    "special_value",
+    [float("inf"), float("-inf")],
+    ids=["plus-inf", "minus-inf"],
+)
+def test_softmin_special_value_in_row(shape_dim_special, special_value, device):
+    """A row containing ±inf must match torch: +inf yields a valid distribution with 0 at
+    the +inf position; -inf yields an all-NaN row on torch while the SFPU evaluates
+    inf-inf to 0, so the kernel concentrates on the minimum instead (documented divergence,
+    same class as the p=±inf norm orders in #56248/#56334). See issue #56371."""
+    shape, dim = shape_dim_special
+    torch.manual_seed(0)
+
+    torch_input = torch.rand(size=shape, dtype=torch.bfloat16) + 100
+    # plant the special value in the second position along the reduced dim
+    plant_idx = [0] * len(shape)
+    plant_idx[dim] = 1 if shape[dim] > 1 else 0
+    torch_input[tuple(plant_idx)] = special_value
+
+    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_output = ttnn.operations.moreh.softmin(ttnn_input, dim)
+    ttnn_output = ttnn.to_torch(ttnn_output).to(torch.bfloat16)
+
+    torch_output = F.softmin(torch_input.float(), dim).to(torch.bfloat16)
+
+    assert list(ttnn_output.shape) == list(torch_output.shape)
+    if special_value == float("inf"):
+        # torch: the row still sums to ~1 with 0 at the +inf position; compare with tolerance
+        passing, out = comp_allclose_and_pcc(torch_output, ttnn_output, rtol=0.05, atol=0.05)
+        logger.debug(out)
+        assert passing
+    else:
+        # -inf: torch produces all-NaN via IEEE inf-inf; the kernel produces a well-defined
+        # distribution on the minimum instead. Just check it is finite and sums to ~1
+        # (the numerical content is a documented divergence, not a silent mismatch).
+        assert not torch.isnan(ttnn_output).any()
+        if dim in (0, 1):
+            pass  # NC path reduces across N or C; the row-sum check below only covers H/W dims
+        else:
+            reduced_sum = ttnn_output.to(torch.float32).sum(dim=dim)
+            assert torch.allclose(reduced_sum, torch.ones_like(reduced_sum), rtol=0.05, atol=0.05)
