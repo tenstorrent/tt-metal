@@ -723,7 +723,9 @@ def test_encode_references_matches_reference(mesh_device, case, reset_seeds):
         ours,
         encode_clip=vae.encode_clip,
         encode_video=vae.encode if needs_video else None,
-        encode_audio=(lambda waveform: audio_encoder(waveform)[0]) if audio_encoder else None,
+        encode_audio=(lambda waveform, valid_samples: audio_encoder(waveform, valid_samples=valid_samples)[0])
+        if audio_encoder
+        else None,
         latents_mean=pipeline.vae_config.latents_mean,
         latents_std=pipeline.vae_config.latents_std,
         audio_latents_mean=pipeline.audio_config["latents_mean"],

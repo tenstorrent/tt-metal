@@ -11,6 +11,8 @@ import pytest
 import torch
 from PIL import Image
 
+import ttnn
+
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
 from .common import GALAXY_MESHES
 from .common_av import weights_dir
@@ -33,8 +35,14 @@ def test_encode_prompt_vision_sp_tower(mesh_device, num_keyframes):
 
     keyframes = [_noise_image(seed) for seed in range(num_keyframes)]
     embeds, tags = pipeline.encode_prompt(PROMPT, keyframes=keyframes)
+    # encode_prompt returns the device tensor, replicated on every device; check one replica on host.
+    embeds = ttnn.to_torch(ttnn.get_device_tensors(embeds)[0])
 
     assert embeds.ndim == 3 and embeds.shape[-1] == 5120, f"unexpected embeds shape {tuple(embeds.shape)}"
-    assert embeds.shape[1] == tags.shape[0], f"embeds seq {embeds.shape[1]} != tags {tags.shape[0]}"
+    # The embeds are padded to a whole SP * TILE multiple for the ring; the tags cover the real presentation only.
+    sp_alignment = pipeline.sp_factor * ttnn.TILE_SIZE
+    padded = -(-tags.shape[0] // sp_alignment) * sp_alignment
+    assert embeds.shape[1] == padded, f"embeds seq {embeds.shape[1]} != tags {tags.shape[0]} padded to {padded}"
+    embeds = embeds[:, : tags.shape[0]]
     assert torch.isfinite(embeds).all(), "prompt embeds contain NaN or Inf"
     assert embeds.shape[1] > num_keyframes * 1008, "presentation is missing the vision rows"

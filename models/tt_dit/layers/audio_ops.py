@@ -29,7 +29,8 @@ from ..utils.tap_filter_configs import (
 )
 from ..utils.tensor import local_device_to_torch
 
-# Per-mesh cache of constant zeros buffers, keyed by id(mesh_device).
+# Per-mesh cache of constant zeros buffers, keyed by id(mesh_device). An id is only an address: a mesh opened after
+# another closed can reuse it, so an entry whose buffer is gone (freed with its device) is rebuilt, not returned.
 _ZEROS_CACHE: dict = {}
 
 # Dedup noisy construction / fallback warnings across every call in this process.
@@ -781,7 +782,7 @@ def _persistent_zeros(shape, *, dtype, layout, mesh_device: ttnn.MeshDevice) -> 
     cache = _ZEROS_CACHE.setdefault(id(mesh_device), {})
     key = (tuple(shape), dtype, layout)
     z = cache.get(key)
-    if z is None:
+    if z is None or not z.is_allocated():
         z = ttnn.zeros(shape, dtype=dtype, layout=layout, device=mesh_device)
         cache[key] = z
     return z
