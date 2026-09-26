@@ -558,23 +558,21 @@ void kernel_main() {
             const uint32_t k_head = nq / q_heads_per_k;
             const uint32_t v_head = nq / q_heads_per_v;
 
-            // Chain roles for this Q chunk: how many leading K/V chunks go to the next core and come from the
-            // previous one. Non causal chains carry every chunk.
+            // Chain forwarding conditions are loop-invariant — compute once
+            bool chain_forward = false;
+            bool chain_receive = false;
+            // Causal chains: how many leading K/V chunks go to the next core and come from the previous one.
             uint32_t fwd_chunks = 0;
             uint32_t recv_chunks = 0;
-            // Causal chains are built from each core's first segment only; a later segment of the same KV
-            // group has no partner and must not take part.
-            const bool in_chain_head = is_chain_participant && (nb == chain_batch) &&
-                                       (nq / chain_heads_per_group == chain_head) &&
-                                       (!causal_chain || segment_index == 0);
             if constexpr (!is_causal) {
-                if (in_chain_head && !is_sink && q_iter < next_core_q_chunks) {
-                    fwd_chunks = k_num_chunks;
-                }
-                if (in_chain_head && !is_injector) {
-                    recv_chunks = k_num_chunks;
-                }
+                chain_forward = is_chain_participant && !is_sink && (nb == chain_batch && nq == chain_head) &&
+                                (q_iter < next_core_q_chunks);
+                chain_receive = is_chain_participant && !is_injector && (nb == chain_batch && nq == chain_head);
             } else if constexpr (causal_chain) {
+                // Causal chains are built from each core's first segment only; a later segment of the same KV
+                // group has no partner and must not take part.
+                const bool in_chain_head = is_chain_participant && (nb == chain_batch) &&
+                                           (nq / chain_heads_per_group == chain_head) && segment_index == 0;
                 // Heavy zigzag chunks of one head need prefixes of the same K/V that shrink along the chain, so
                 // a core forwards what its successor needs and receives what it needs itself.
                 const auto needed = [&](uint32_t qc) {
@@ -610,8 +608,8 @@ void kernel_main() {
                         continue;
                     }
                 }
-                const bool should_forward = k_chunk < fwd_chunks;
-                const bool should_receive = k_chunk < recv_chunks;
+                const bool should_forward = is_causal ? k_chunk < fwd_chunks : chain_forward;
+                const bool should_receive = is_causal ? k_chunk < recv_chunks : chain_receive;
                 const uint32_t kv_row_start_tile = std::min(k_chunk * Sk_chunk_t, valid_Skt_bound);
                 const uint32_t kv_row_end_tile = std::min(kv_row_start_tile + Sk_chunk_t, valid_Skt_bound);
                 const uint32_t kv_row_tile_count = kv_row_end_tile - kv_row_start_tile;
