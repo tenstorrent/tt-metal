@@ -176,8 +176,18 @@ DEVICE_OPEN = re.compile(
 
 
 def code_opens_device(code: str, repo: Path) -> bool:
-    """True if Python source (a heredoc, -c code or a script) opens a Tenstorrent device itself."""
-    return bool(DEVICE_OPEN.search(code))
+    """True if Python source (a heredoc, -c code or a script) opens a Tenstorrent device itself. Only real code counts:
+    a script that edits a source file carries device calls inside string literals, and that is not device access."""
+    import ast
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return bool(DEVICE_OPEN.search(code))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and DEVICE_OPEN.search(ast.unparse(node.func) + "("):
+            return True
+    return False
 
 
 _HEREDOC = re.compile(r"<<-?\s*['\"]?(\w+)['\"]?[^\n]*\n(.*?)\n\1\b", re.S)
@@ -488,7 +498,11 @@ class Orchestrator:
             if task.get("approval") and not problems and self.needs_human(task):
                 return True  # the plan exists; the gate needs the approval next
             res = self.gate(task["id"])
-            if res.verdict == "PASS" and not problems:
+            if res.verdict == "PASS" and not [p for p in problems if p.startswith("changed files outside")]:
+                # A passing gate is not redone for a command problem; the overseer reviews it (state: review).
+                if problems:
+                    self.led.update(task["id"], review=problems)
+                    self.echo(f"  [{task['id']}] passed with problems for review: {len(problems)}")
                 return True
             previous = "\n".join(problems + [self.failure_text(res)])
         if pol["escalate"] == "debugger":
