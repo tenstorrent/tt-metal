@@ -18,7 +18,8 @@
 #define TTI_INSN(ENCODING) ({ __asm__ __volatile__(".ttinsn %0" ::"n"(unsigned(ENCODING))); })
 #else
 // fails
-#define TTI_INSN(ENCODING) ({ __asm__ __volatile__(".4byte (3 & (%0 >> 30)) | (0xfffffffc & (%0 << 2))" ::"n"(unsigned(ENCODING))); })
+// #define TTI_INSN(ENCODING) ({ __asm__ __volatile__(".4byte (3 & (%0 >> 30)) | (0xfffffffc & (%0 << 2))" ::"n"(unsigned(ENCODING))); })
+#define TTI_INSN(ENCODING) ({ __asm__ __volatile__(".word %0" ::"n"((((ENCODING) >> 30) & 3) | (((ENCODING) & 0x3ffffff) << 2))); })
 #endif
 #define TT_INSN(ENCODING)  ({ __asm__ __volatile__(".error \"TT_INSN in non-tensix code\"" ::"X"(unsigned(ENCODING))); })
 #endif
