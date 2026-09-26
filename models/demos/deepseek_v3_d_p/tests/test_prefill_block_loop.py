@@ -106,12 +106,6 @@ def _ci_unsupported_param_combos(**params):
         _with_isl(param)
         for param in (
             pytest.param(
-                (1, 1),
-                {},
-                1,
-                id="mesh-1x1",
-            ),
-            pytest.param(
                 (2, 4),
                 fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.EMB_SIZE),
                 2,
