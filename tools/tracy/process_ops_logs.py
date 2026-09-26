@@ -661,6 +661,7 @@ def _enrich_ops_from_perf_csv(
             perf_rows_by_key.setdefault((op_id, trace_id), []).append(row)
 
         enriched_ops = []
+        skipped_op_ids = []
         for host_op in host_ops_by_device[device_id]:
             op_id = int(host_op["global_call_count"])
             host_trace_id = host_op.get("metal_trace_id")
@@ -680,10 +681,14 @@ def _enrich_ops_from_perf_csv(
                     if cand_op_id == op_id:
                         candidates.extend(rows)
 
-            assert candidates, (
-                f"Device data missing: Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
-                f"for device {device_id} (trace_id={host_trace_id})"
-            )
+            if not candidates:
+                # A host op belonging to a trace that was captured but never replayed (e.g. a
+                # decode trace captured during a prefill-only run) legitimately has no device
+                # rows. Drop it instead of asserting so the rest of the report can still be
+                # written; ops that ran but are genuinely missing from the C++ report would
+                # still be caught downstream by consumers expecting per-op device data.
+                skipped_op_ids.append(op_id)
+                continue
 
             # Create one enriched op per ProgramExecutionUID row in the C++ report.
             for perf_row in candidates:
@@ -707,6 +712,12 @@ def _enrich_ops_from_perf_csv(
 
                 enriched_op["_device_perf_row"] = perf_row
                 enriched_ops.append(enriched_op)
+
+        if skipped_op_ids:
+            logger.warning(
+                f"Dropped {len(skipped_op_ids)} host op(s) with no device data on device {device_id} "
+                f"(likely from a trace that was captured but never replayed): {skipped_op_ids}"
+            )
 
         host_ops_by_device[device_id] = enriched_ops
     return host_ops_by_device
