@@ -299,12 +299,12 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         dst_shard_vol = shard_specs->output_shard_spec.numel() / out_tile_hw;
     }
 
-    // On cache hit, the descriptor is not rebuilt and no relaxation is applied. The dispatched
-    // tensor_layout must be the same as the one built for the cached program.  Anything omitted
-    // from this key can give different config and fail validation (wrong data now and a hard TT_FATAL
-    // once the Metal 2.0 port declares TensorParameter relaxations). The output layout needs its
-    // own term because compute_output_specs can hand back a caller-supplied preallocated spec and
-    // validation only compares its Layout enum against the input's.
+    // On cache hit, the program is not rebuilt. The TensorParameter relaxations let shape and rank vary
+    // and nothing else: the dispatched tensor_layout must be the same as the one built for the cached
+    // program. Anything omitted from this key that the relaxed match compares exactly fails validation
+    // with a hard TT_FATAL on the hit. The output layout needs its own term because
+    // compute_output_specs can hand back a caller-supplied preallocated spec and validation only
+    // compares its Layout enum against the input's.
     //
     // Hashing tensor_layout does not ignore shape. Alignment is part of tensor_layout and since
     // legacyShapeToAlignment returns {padded_h, padded_w} for an overpadded TILE tensor instead of tile
@@ -313,22 +313,17 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
     // Sharded distribution needs its own term. Since shape and shard squeeze together, one shard spec resolves
     // per shape ({64,64} over two cores: [64,64] -> [4], [64,128] -> [2,2]) and GRID_2D trims the bank list
     // from the unsqueezed shape ([64,128] and [64,192] over two and three banks). The accessor passes both as
-    // compile-time args. Use the Buffer's stored sharding_args since they describe the actual buffer layout
-    // used by the factory. A reshaped view keeps its parent tensor's sharding_args. A null buffer means the
-    // output has not been allocated yet and its buffer will come from output_spec.
-    //
-    // TODO(port): When TensorParameter replaces TensorAccessorArgs, TensorSpec becomes the authoritative source.
-    // Swap the Buffer branch for the spec on both sides since Metal 2.0 validation reads
-    // spec.compute_buffer_sharding_args().
-    const auto distribution_key = [](const tt::tt_metal::TensorSpec& spec,
-                                     const Tensor* tensor) -> std::optional<std::pair<Shape, std::vector<CoreCoord>>> {
+    // compile-time args. The TensorParameter bindings resolve that geometry from each tensor's TensorSpec, and
+    // the relaxed TensorSpec match compares spec.compute_buffer_sharding_args() exactly, so the key reads the
+    // same resolution. (A reshaped view keeps its parent buffer's sharding_args under a fresh spec; the spec's
+    // resolution is the one the program is built and validated against.)
+    const auto distribution_key =
+        [](const tt::tt_metal::TensorSpec& spec) -> std::optional<std::pair<Shape, std::vector<CoreCoord>>> {
         if (!spec.memory_config().is_sharded()) {
             return std::nullopt;
         }
-        const auto* buffer = tensor != nullptr && tensor->device() != nullptr ? tensor->buffer() : nullptr;
-        const auto computed = buffer == nullptr ? std::optional{spec.compute_buffer_sharding_args()} : std::nullopt;
-        const auto& distribution =
-            buffer != nullptr ? buffer->buffer_distribution_spec() : computed->buffer_distribution_spec();
+        const auto sharding_args = spec.compute_buffer_sharding_args();
+        const auto& distribution = sharding_args.buffer_distribution_spec();
         if (!distribution.has_value()) {
             return std::nullopt;
         }
@@ -343,8 +338,8 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         // different widths get separate cache entries. Consider hashing only the last
         // dimension to allow cache reuse when only height differs
         input_tensor.layout() == Layout::ROW_MAJOR ? std::optional{input_tensor.padded_shape()} : std::nullopt,
-        distribution_key(input_tensor.tensor_spec(), &input_tensor),
-        distribution_key(output_spec, tensor_args.output_tensor.has_value() ? &*tensor_args.output_tensor : nullptr),
+        distribution_key(input_tensor.tensor_spec()),
+        distribution_key(output_spec),
         src_shard_vol,
         dst_shard_vol);
 }

@@ -72,7 +72,7 @@ std::optional<UnaryShardSpecs> get_shard_specs(
     }
 
     // For ROW_MAJOR layout, shard element count must be a multiple of tile_hw
-    // for the sharded CB-aliasing path to work (it requires whole-tile pages).
+    // for the sharded borrowed-DFB path to work (it requires whole-tile pages).
     // Fall back to the interleaved path otherwise.
     if (input_spec.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
         auto is_shard_tile_aligned = [](const tt::tt_metal::TensorSpec& spec) {
