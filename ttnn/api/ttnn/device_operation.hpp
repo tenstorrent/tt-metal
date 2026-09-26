@@ -225,6 +225,8 @@ void enqueue_mesh_workload(
 
     tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
+    ttnn::graph::track_mesh_workload_execution(workload, mesh_device, runtime_id);
+
     TracyOpMeshWorkload(
         mesh_device,
         workload,

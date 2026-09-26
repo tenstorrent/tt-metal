@@ -24,11 +24,18 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <internal/graph_function_abort.hpp>
+#include <string_view>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 using namespace tt::tt_metal;
 
@@ -64,10 +71,16 @@ nlohmann::json to_json(const ttnn::graph::GraphProcessor::Vertex& data) {
         ttnn::graph::kAddress,
         ttnn::graph::kTensorId,
         ttnn::graph::kDeviceId,
+        ttnn::graph::kPhysicalDeviceId,
         ttnn::graph::kBufferType,
         ttnn::graph::kPageSize,
         ttnn::graph::kNumCores,
         ttnn::graph::kMaxSizePerBank,
+        ttnn::graph::kSubDeviceManagerId,
+        ttnn::graph::kSubDeviceId,
+        ttnn::graph::kRuntimeId,
+        ttnn::graph::kGlobalCallCount,
+        ttnn::graph::kCommandQueueId,
         ttnn::graph::kProgramFactoryIndex,
     };
     static const std::unordered_set<std::string> boolean_params = {
@@ -461,6 +474,275 @@ void GraphProcessor::track_program(tt::tt_metal::Program* program, const tt::tt_
     }
 }
 
+namespace {
+nlohmann::json core_range_set_to_json(const tt::tt_metal::CoreRangeSet& core_range_set) {
+    nlohmann::json ranges = nlohmann::json::array();
+    for (const auto& range : core_range_set.ranges()) {
+        ranges.push_back(
+            {{"start", {{"x", range.start_coord.x}, {"y", range.start_coord.y}}},
+             {"end", {{"x", range.end_coord.x}, {"y", range.end_coord.y}}}});
+    }
+    return ranges;
+}
+}  // namespace
+
+bool GraphProcessor::needs_sub_device_manager_snapshot(uint32_t device_id, uint64_t sub_device_manager_id) {
+    const std::lock_guard<std::mutex> lock(mutex);
+    return !current_op_id.empty() && !captured_sub_device_managers.contains({device_id, sub_device_manager_id});
+}
+
+void GraphProcessor::track_sub_device_manager(
+    uint32_t device_id, uint64_t sub_device_manager_id, const std::vector<SubDeviceTopology>& sub_devices) {
+    const std::lock_guard<std::mutex> lock(mutex);
+    if (current_op_id.empty()) {
+        return;
+    }
+    // Re-checked under the lock so the caller's needs_...() probe stays advisory.
+    if (!captured_sub_device_managers.emplace(device_id, sub_device_manager_id).second) {
+        return;
+    }
+
+    nlohmann::json sub_devices_json = nlohmann::json::array();
+    for (const auto& sub_device : sub_devices) {
+        sub_devices_json.push_back(
+            {{kSubDeviceId, sub_device.sub_device_id},
+             {kWorkerCoreRanges, core_range_set_to_json(sub_device.worker_core_ranges)}});
+    }
+
+    const node_id counter = graph.size();
+    graph.push_back(Vertex{
+        .counter = counter,
+        .node_type = kNodeSubDeviceManager,
+        .params =
+            {
+                {kDeviceId, std::to_string(device_id)},
+                {kSubDeviceManagerId, std::to_string(sub_device_manager_id)},
+                {kSubDevices, sub_devices_json.dump()},
+            },
+        .connections = {},
+        .stacking_level = static_cast<int>(current_op_id.size()) - 1});
+    graph[current_op_id.top()].connections.push_back(counter);
+}
+
+bool GraphProcessor::should_warn_unresolved_placement() {
+    const std::lock_guard<std::mutex> lock(mutex);
+    return !std::exchange(warned_unresolved_placement, true);
+}
+
+void GraphProcessor::track_program_execution(const ProgramExecutionPlacement& placement) {
+    const std::lock_guard<std::mutex> lock(mutex);
+    if (current_op_id.empty()) {
+        return;
+    }
+
+    std::unordered_map<std::string, std::string> params{
+        {kDeviceId, std::to_string(placement.device_id)},
+        {kPhysicalDeviceId, std::to_string(placement.physical_device_id)},
+        {kSubDeviceManagerId, std::to_string(placement.sub_device_manager_id)},
+        {kRuntimeId, std::to_string(placement.runtime_id)},
+        {kGlobalCallCount, std::to_string(placement.global_call_count)},
+        {kCommandQueueId, std::to_string(placement.command_queue_id)},
+    };
+    // Omitted rather than defaulted when the placement is unknown, so a consumer cannot mistake a
+    // failed resolution for a genuine placement on sub-device 0.
+    if (placement.sub_device_id.has_value()) {
+        params[kSubDeviceId] = std::to_string(*placement.sub_device_id);
+        params[kWorkerCoreRanges] = core_range_set_to_json(placement.worker_core_ranges).dump();
+    }
+
+    const node_id counter = graph.size();
+    graph.push_back(Vertex{
+        .counter = counter,
+        .node_type = kNodeProgramExecution,
+        .params = std::move(params),
+        // Leaf node: the parent op links to it, it links to nothing. Pointing back at the parent
+        // would round-trip into the report's `edges` table as an op <-> execution cycle.
+        .connections = {},
+        .stacking_level = static_cast<int>(current_op_id.size()) - 1});
+    graph[current_op_id.top()].connections.push_back(counter);
+}
+
+namespace {
+// Stands in for the worker cores of a program capture could not place.
+const tt::tt_metal::CoreRangeSet kNoWorkerCores{};
+
+// The sub-device a program occupies, or why capture could not tell.
+struct ProgramPlacement {
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
+    // Set only when sub_device_id is empty: a short, stable phrase for the one-shot diagnostic.
+    std::string_view unresolved_reason;
+};
+
+// True when the program runs kernels on a core type this resolver cannot place.
+//
+// KernelMeta is the only public view of a program's core types, and it carries no core ranges, so
+// non-Tensix work can be detected but not intersected against a sub-device. Called only on the
+// failure path, where it turns "we found nothing" into a reason worth printing.
+bool has_non_tensix_kernels(const tt::tt_metal::Program& program) {
+    for (const auto& kernel : tt::tt_metal::detail::collect_kernel_meta(program, /*device=*/nullptr)) {
+        if (kernel.programmable_core_type != tt::tt_metal::HalProgrammableCoreType::TENSIX) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Places a program on a sub-device using only the public Metalium surface.
+//
+// detail::ProgramImpl::determine_sub_device_ids is the authority for this, but it lives in a
+// private header that TTNN cannot include: tt_metal exports only api/, so pulling in
+// program_impl.hpp drags llrt/hal.hpp and the rest of Metalium's private include roots with it.
+// Rather than widen that boundary for a reporting feature, capture re-derives the answer and is
+// explicit about the cases it cannot.
+//
+// ProgramImpl intersects kernel-group core ranges, which are private; circular buffers are the
+// public proxy for the same compute cores. Dispatch has already enforced that every core of the
+// program belongs to one sub-device by the time capture runs, so a single Tensix match settles the
+// whole program -- including any eth cores it also uses.
+//
+// Two cases resolve to nothing, and both report it rather than guessing:
+//   * A program with no circular buffers on any sub-device's Tensix cores -- an eth-only program,
+//     most likely a CCL op.
+//   * A program whose circular buffers straddle sub-devices, which contradicts the dispatch
+//     invariant and so means the proxy has diverged from kernel groups.
+//
+// The caller records the execution either way; only the placement is dropped.
+ProgramPlacement resolve_program_placement(
+    const tt::tt_metal::Program& program, const std::vector<tt::tt_metal::CoreRangeSet>& tensix_cores_by_sub_device) {
+    // circular_buffers() returns by value, so it is built once rather than per sub-device.
+    const auto circular_buffers = program.circular_buffers();
+    std::optional<tt::tt_metal::SubDeviceId> match;
+    for (uint32_t index = 0; index < tensix_cores_by_sub_device.size(); ++index) {
+        const auto& sub_device_cores = tensix_cores_by_sub_device[index];
+        for (const auto& circular_buffer : circular_buffers) {
+            if (sub_device_cores.intersection(circular_buffer->core_ranges()).empty()) {
+                continue;
+            }
+            if (match.has_value()) {
+                return {std::nullopt, "its circular buffers straddle more than one sub-device"};
+            }
+            match = tt::tt_metal::SubDeviceId{static_cast<uint8_t>(index)};
+            break;
+        }
+    }
+    if (match.has_value()) {
+        return {match, {}};
+    }
+    return {
+        std::nullopt,
+        has_non_tensix_kernels(program) ? "it runs only on non-Tensix cores"
+                                        : "it allocates no circular buffers to match against"};
+}
+}  // namespace
+
+void track_mesh_workload_execution(
+    tt::tt_metal::distributed::MeshWorkload& workload,
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    uint64_t runtime_id) {
+    auto& tracker = tt::tt_metal::GraphTracker::instance();
+    if (!tracker.is_enabled()) {
+        return;
+    }
+
+    // Resolve the capture stack first so the per-program work below is skipped when the only
+    // processors on this thread are background ones (e.g. ShmTrackingProcessor).
+    std::vector<GraphProcessor*> processors;
+    for (const auto& processor : tracker.get_processors()) {
+        if (auto* graph_processor = dynamic_cast<GraphProcessor*>(processor.get())) {
+            processors.push_back(graph_processor);
+        }
+    }
+    if (processors.empty()) {
+        return;
+    }
+
+    const auto manager_id = *mesh_device->get_active_sub_device_manager_id();
+    const auto command_queue_id = static_cast<uint8_t>(mesh_device->mesh_command_queue().id());
+    const auto mesh_device_id = static_cast<uint32_t>(mesh_device->id());
+    const bool default_manager =
+        mesh_device->get_active_sub_device_manager_id() == mesh_device->get_default_sub_device_manager_id();
+
+    // Each worker_cores() call builds a CoreRangeSet, so gather them once and share them between
+    // the manager snapshot and the per-program placement below.
+    const auto num_sub_devices = mesh_device->num_sub_devices();
+    std::vector<tt::tt_metal::CoreRangeSet> tensix_cores_by_sub_device;
+    tensix_cores_by_sub_device.reserve(num_sub_devices);
+    for (uint32_t index = 0; index < num_sub_devices; ++index) {
+        tensix_cores_by_sub_device.push_back(mesh_device->worker_cores(
+            tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::SubDeviceId{static_cast<uint8_t>(index)}));
+    }
+
+    // Snapshot the active manager's whole partition the first time a capture sees it. Deriving
+    // topology from executions alone would omit any sub-device that never ran an operation, and
+    // the partition is only readable while the manager is loaded.
+    std::vector<GraphProcessor*> awaiting_snapshot;
+    for (auto* processor : processors) {
+        if (processor->needs_sub_device_manager_snapshot(mesh_device_id, manager_id)) {
+            awaiting_snapshot.push_back(processor);
+        }
+    }
+    if (!awaiting_snapshot.empty()) {
+        std::vector<SubDeviceTopology> sub_devices;
+        sub_devices.reserve(num_sub_devices);
+        for (uint32_t index = 0; index < num_sub_devices; ++index) {
+            sub_devices.push_back(SubDeviceTopology{
+                .sub_device_id = static_cast<uint8_t>(index), .worker_core_ranges = tensix_cores_by_sub_device[index]});
+        }
+        for (auto* processor : awaiting_snapshot) {
+            processor->track_sub_device_manager(mesh_device_id, manager_id, sub_devices);
+        }
+    }
+
+    for (const auto& [coordinate_range, program] : workload.get_programs()) {
+        // The default manager makes the whole grid one sub-device, so the answer is 0 with no
+        // program inspection at all. This is both the common case and the one ProgramImpl itself
+        // short-circuits, which keeps the proxy in resolve_program_placement off the path that
+        // almost every capture takes.
+        ProgramPlacement placement = default_manager ? ProgramPlacement{tt::tt_metal::SubDeviceId{0}, {}}
+                                                     : resolve_program_placement(program, tensix_cores_by_sub_device);
+
+        if (!placement.sub_device_id.has_value()) {
+            // Once per capture: on a whole-model capture an unplaceable op recurs every iteration,
+            // and the second line onwards says nothing the first did not.
+            for (auto* processor : processors) {
+                if (processor->should_warn_unresolved_placement()) {
+                    log_warning(
+                        tt::LogAlways,
+                        "Graph capture recorded a program execution without a sub-device placement because {}. "
+                        "Further occurrences in this capture are not logged.",
+                        placement.unresolved_reason);
+                    break;
+                }
+            }
+        }
+
+        std::optional<uint8_t> sub_device_id_value;
+        if (placement.sub_device_id.has_value()) {
+            // optional<SubDeviceId> -> SubDeviceId -> its underlying uint8_t.
+            sub_device_id_value = *placement.sub_device_id.value();
+        }
+        const auto& worker_core_ranges =
+            sub_device_id_value.has_value() ? tensix_cores_by_sub_device[*sub_device_id_value] : kNoWorkerCores;
+
+        for (const auto* physical_device : mesh_device->get_view().get_devices(coordinate_range)) {
+            const ProgramExecutionPlacement execution{
+                .device_id = mesh_device_id,
+                .physical_device_id = static_cast<uint32_t>(physical_device->id()),
+                .sub_device_manager_id = manager_id,
+                .sub_device_id = sub_device_id_value,
+                .worker_core_ranges = worker_core_ranges,
+                .runtime_id = runtime_id,
+                .global_call_count = tt::tt_metal::detail::EncodePerDeviceProgramID(
+                    static_cast<uint32_t>(runtime_id), physical_device->id(), false),
+                .command_queue_id = command_queue_id,
+            };
+            for (auto* processor : processors) {
+                processor->track_program_execution(execution);
+            }
+        }
+    }
+}
+
 template <typename T>
 using ProcessFunc = void (GraphProcessor::*)(const T&);
 
@@ -832,6 +1114,8 @@ void GraphProcessor::begin_capture(RunMode mode) {
     graph.clear();
     buffer_id_to_counter.clear();
     captured_device_info.clear();
+    captured_sub_device_managers.clear();
+    warned_unresolved_placement = false;
     captured_mesh_devices.clear();
     per_op_buffers_.clear();
     buffer_pages_by_address_.clear();
