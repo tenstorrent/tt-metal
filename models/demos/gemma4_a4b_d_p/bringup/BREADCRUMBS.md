@@ -305,3 +305,11 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Gate PASS: pcc_post_mlp_norm_L00 0.999996, rel L2 0.00294, ratio [0.9950, 1.0033]. The log also has a `FAIL ... pcc=0.000000` line. It comes from the
   precompile collect pass (stubbed outputs), not from the real pass.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_post_mlp_norm.py`
+
+## S.sliding.07 test (run1, attempt 1): swap attn_norm .. post_mlp_norm into the sliding block
+- Replaced the one-line template body with swap 6's checks and added `post_mlp_norm` to SWAPPED. No new check was needed. post_mlp_norm is a `norm` step, so
+  the existing check against the CPU norm on the device step's own inputs covers it (rel L2 <= 0.03, ratio in [0.97, 1.03]). That check catches `1 + w` and a
+  zeroed row, which PCC misses, and which ffn_combine followed by the CPU post_ffn_norm would partly hide at block out. The gated metric stays `pcc_swap_out` >= 0.98.
+- Verified: BRINGUP_IMPL=reference PASS (pcc 0.999996, block rel 0.0027); stub FAIL (every check). Device gate PASS: pcc_swap_out 0.999967, block out rel
+  0.0081 / 0.0067 (0.0080 at swap 6), post_mlp_norm 0.0041 vs golden (iso 0.0019, ratio [0.9971, 1.0014]).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_07_post_mlp_norm.py`
