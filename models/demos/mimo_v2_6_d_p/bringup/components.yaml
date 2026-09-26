@@ -1,0 +1,254 @@
+# MiMo-V2.6-Flash-RL (layers 0-5): every block step mapped to TTNN. Plan and reasoning in plan.md.
+components:
+- block_type: full_dense
+  step: attn_norm
+  tag: NATIVE
+  ttnn: ttnn.rms_norm (replicated [S, 4096], weight w, eps 1e-6)
+  reuse: models/demos/gemma4_a4b_d_p/tt/rms_norm.py
+  notes: input_layernorm; MiMo RMSNorm is w * rms(x) (plain w, not 1 + w), normalization in fp32 then cast, as HF. HiFi4 + fp32 acc.
+- block_type: full_dense
+  step: attention
+  tag: COMPOSED
+  ttnn: 'ttnn.linear fused qkv (per-chip slab: 16 Q x 192 + 1 K x 192 + 1 V x 192 padded, bf16, HiFi4) -> ttnn.experimental.nlp_create_qkv_heads
+    -> partial RoPE on dims 0-63 (ttnn.slice -> ttnn.experimental.rotary_embedding, theta 1e7 -> ttnn.concat) for q and k -> ttnn.experimental.paged_fill_cache
+    K and V (identity page table) -> ttnn.transformer.scaled_dot_product_attention (chunk 0, is_causal) / ttnn.transformer.chunked_scaled_dot_product_attention
+    (later chunks, keyword args), scale 192^-0.5 -> ttnn.experimental.nlp_concat_heads -> ttnn.linear o_proj (row-parallel) -> ttnn.all_reduce
+    (cluster_axis=1)'
+  reuse: models/demos/gemma4_a4b_d_p/tt/attention.py:TtGlobalAttention + TtKVCacheGlobal (paged-shaped cache, chunked SDPA), models/demos/ernie45_d_p/tt/attention.py
+    (sdpa_settings)
+  searched:
+  - 'repo_map: Chunked causal attention, Sliding-window + global attention, GQA with fewer KV heads than chips, SDPA program config'
+  - 'grep sdpa_nanobind.cpp: scaled_dot_product_attention takes sliding_window_size + attention_sink [1, nqh, 1, 1]; chunked_scaled_dot_product_attention
+    takes neither'
+  - 'grep head_dim_v / vDHt in sdpa_program_factory.cpp: V head dim != QK head dim only on the MLA path (flash_mla_prefill / chunked_flash_mla_prefill,
+    V read as a prefix of K); plain and chunked SDPA need V head dim == QK head dim'
+  - 'gpt_oss_d_p/tt/attention/prefill.py + weights.py: sliding window 128 + sinks through scaled_dot_product_attention, sinks stored pre-divided
+    by the scale'
+  - 'gemma4_a4b_d_p/tt/attention.py: TtSlidingAttention (window tail concat + q_pad), TtGlobalAttention (identity page table + chunked SDPA)'
+  notes: 'TP by head, no CCL inside: 64 Q / 4 KV heads -> chip r holds Q heads 16r..16r+15 and KV head r (GQA 16:1 on chip); the checkpoint stores
+    qkv per TP rank ([q_r; k_r; v_r], 3392 rows), which is exactly this split. At load: dequantize each rank slab (reference/weights.py), fold
+    attention_value_scale 0.707 into the V rows, and pad V rows 128 -> 192 with zeros so nlp_create_qkv_heads and SDPA see one head dim; o_proj
+    [4096, 16 x 128] per chip gets zero columns for the pad (or slice the SDPA output to 128 before concat_heads). The state read-back returns
+    V[..., :128]. No sink on full layers. RoPE cos/sin built once for max_seq and sliced on device per chunk. SDPA head dim 192 fits q256/k256
+    (known issue: L1 at large head_dim).'
+- block_type: full_dense
+  step: attn_residual
+  tag: NATIVE
+  ttnn: ttnn.add
+  reuse: models/demos/gemma4_a4b_d_p/tt/residual.py
+  notes: h_mid = in + attn_out, replicated [S, 4096]; no CCL (both inputs already replicated).
+- block_type: full_dense
+  step: ffn_norm
+  tag: NATIVE
+  ttnn: ttnn.rms_norm (replicated [S, 4096], weight w, eps 1e-6)
+  reuse: models/demos/gemma4_a4b_d_p/tt/rms_norm.py
+  notes: post_attention_layernorm; MiMo RMSNorm is w * rms(x) (plain w, not 1 + w), normalization in fp32 then cast, as HF. HiFi4 + fp32 acc.
+- block_type: full_dense
+  step: mlp
+  tag: COMPOSED
+  ttnn: ttnn.linear gate/up (column-parallel, 4096 per chip) -> ttnn.silu(gate) * up (ttnn.mul, or fused activation in the linear) -> ttnn.linear
+    down (row-parallel) -> ttnn.all_reduce (cluster_axis=1)
+  reuse: models/demos/gemma4_a4b_d_p/tt/mlp.py:TtDenseMLP, models/demos/ernie45_d_p/tt/ops.py:TtSwiGLU
+  searched:
+  - 'repo_map: MoE tensor parallel (shared_mlp.py)'
+  - grep TtSwiGLU models/demos/ernie45_d_p/tt
+  - 'known_issues: HiFi2 matmul shrinks output norms'
+  notes: 'Layer 0 only. 16384 / 4 = 4096 per chip (tile aligned, no padding). fp8 e4m3 x 128x128 block scale dequantized to bf16 at load. HiFi4
+    + fp32 acc (known issue: HiFi2 shrinks norms over chained matmuls). One all_reduce of [S, 4096].'
+- block_type: full_dense
+  step: mlp_residual
+  tag: NATIVE
+  ttnn: ttnn.add
+  reuse: models/demos/gemma4_a4b_d_p/tt/residual.py
+  notes: out = h_mid + mlp_out, replicated [S, 4096]; no CCL (both inputs already replicated).
+- block_type: sliding_moe
+  step: attn_norm
+  tag: NATIVE
+  ttnn: ttnn.rms_norm (replicated [S, 4096], weight w, eps 1e-6)
+  reuse: models/demos/gemma4_a4b_d_p/tt/rms_norm.py
+  notes: input_layernorm; MiMo RMSNorm is w * rms(x) (plain w, not 1 + w), normalization in fp32 then cast, as HF. HiFi4 + fp32 acc.
+- block_type: sliding_moe
+  step: attention
+  tag: COMPOSED
+  ttnn: 'ttnn.linear fused qkv (per-chip slab: 16 Q x 192 + 2 K x 192 + 2 V x 192 padded, bf16, HiFi4) -> ttnn.experimental.nlp_create_qkv_heads
+    -> partial RoPE on dims 0-63 (ttnn.slice -> ttnn.experimental.rotary_embedding, theta 1e4 -> ttnn.concat) -> ttnn.fill_cache K and V (update_idx=start)
+    -> ttnn.slice previous 128 K/V rows from the cache + ttnn.concat (q_pad, chunk) -> ttnn.transformer.scaled_dot_product_attention(is_causal,
+    sliding_window_size=128, attention_sink [1, 16, 1, 1], scale 192^-0.5) -> ttnn.slice -> ttnn.experimental.nlp_concat_heads -> ttnn.linear
+    o_proj (row-parallel) -> ttnn.all_reduce (cluster_axis=1)'
+  reuse: models/demos/gemma4_a4b_d_p/tt/attention.py:TtSlidingAttention + TtKVCacheSliding (window tail concat), models/demos/gpt_oss_d_p/tt/attention
+    (sinks, window 128)
+  searched:
+  - 'repo_map: Chunked causal attention, Sliding-window + global attention, GQA with fewer KV heads than chips, SDPA program config'
+  - 'grep sdpa_nanobind.cpp: scaled_dot_product_attention takes sliding_window_size + attention_sink [1, nqh, 1, 1]; chunked_scaled_dot_product_attention
+    takes neither'
+  - 'grep head_dim_v / vDHt in sdpa_program_factory.cpp: V head dim != QK head dim only on the MLA path (flash_mla_prefill / chunked_flash_mla_prefill,
+    V read as a prefix of K); plain and chunked SDPA need V head dim == QK head dim'
+  - 'gpt_oss_d_p/tt/attention/prefill.py + weights.py: sliding window 128 + sinks through scaled_dot_product_attention, sinks stored pre-divided
+    by the scale'
+  - 'gemma4_a4b_d_p/tt/attention.py: TtSlidingAttention (window tail concat + q_pad), TtGlobalAttention (identity page table + chunked SDPA)'
+  notes: 'TP by KV head: 64 Q / 8 KV heads -> chip r holds Q heads 16r..16r+15 and KV heads 2r, 2r+1 (GQA 8:1 on chip), rank slab 3712 rows as
+    stored. Sink: attention_sink_bias[16r:16r+16] stored pre-divided by the scale (the kernel scales the sink logit; HF does not), as gpt_oss_d_p
+    weights.py. Window semantics i - 128 < j <= i; the previous 128 positions are read back from the full-length cache (tile aligned), so the
+    step is a pure function of (x, state). Value scale folded into V rows, V padded to 192, o_proj zero columns, as in the full layer. Full-length
+    cache (the contract migrates it).'
+- block_type: sliding_moe
+  step: attn_residual
+  tag: NATIVE
+  ttnn: ttnn.add
+  reuse: models/demos/gemma4_a4b_d_p/tt/residual.py
+  notes: h_mid = in + attn_out, replicated [S, 4096]; no CCL (both inputs already replicated).
+- block_type: sliding_moe
+  step: ffn_norm
+  tag: NATIVE
+  ttnn: ttnn.rms_norm (replicated [S, 4096], weight w, eps 1e-6)
+  reuse: models/demos/gemma4_a4b_d_p/tt/rms_norm.py
+  notes: post_attention_layernorm; MiMo RMSNorm is w * rms(x) (plain w, not 1 + w), normalization in fp32 then cast, as HF. HiFi4 + fp32 acc.
+- block_type: sliding_moe
+  step: router
+  tag: COMPOSED
+  ttnn: ttnn.linear (fp32 weight [4096 -> 256], HiFi4 + fp32 acc) -> ttnn.experimental.deepseek_prefill.moe_grouped_topk (score_func sigmoid,
+    bias e_score_correction_bias, n_groups 1, topk_groups 1, 8 experts, route_scale 1.0, epsilon 1e-20) -> topk idx/weights [S, 8]; dense [S,
+    256] via ttnn.scatter (bf16) only for the boundary
+  reuse: 'models/demos/deepseek_v3_d_p/tt/moe/tt_moe_gate_prefill.py (DEVICE_FP32 path: _device_matmul + moe_grouped_topk), models/demos/gemma4_a4b_d_p/tt/router.py
+    (boundary tensor)'
+  searched:
+  - 'repo_map: MoE expert parallel (deepseek_v3_d_p/tt/moe)'
+  - grep moe_grouped_topk tt_moe_gate_prefill.py (sigmoid/sqrtsoftplus only, collapses to plain top-k for one group)
+  - 'known_issues: Router selection vs weights, scatter has no fp32 TILE path'
+  notes: 'Replicated: every chip routes all S tokens from replicated ffn_norm, no CCL. noaux_tc: selection on sigmoid + bias, weights = unbiased
+    sigmoid of the chosen 8, renormalized; routed_scaling_factor is null -> route_scale 1.0 (DeepSeek''s default is 2.5, do not inherit it). moe_grouped_topk''s
+    CBs grow with experts/32; DeepSeek runs it at <= 4096 rows per chip, so for the 8192-row s16384 chunk run it on row slices if it does not
+    fit L1.'
+- block_type: sliding_moe
+  step: experts
+  tag: COMPOSED
+  ttnn: ttnn.experimental.deepseek_prefill.masked_bincount + offset_cumsum -> TtDispatchModule (dispatch group of 1 chip) -> ttnn.experimental.deepseek_prefill.unified_routed_expert_moe
+    (Silu, bfp8 weights) -> TtCombineModule -> TtReduceModule (weighted top-k sum) -> ttnn.all_reduce (cluster_axis=1)
+  reuse: models/demos/ernie45_d_p/tt/moe_unified.py (the whole pipeline on 1x4), models/demos/gemma4_a4b_d_p/tt/experts.py, models/demos/deepseek_v3_d_p/tt/moe/tt_routed_expert.py
+  searched:
+  - 'repo_map: MoE expert parallel'
+  - 'grep RoutedExpertActivation: Silu present (MiMo experts are SwiGLU silu, no new activation needed)'
+  - 'grep weights_dtype tt_routed_expert.py: default bfloat4_b, pass bfloat8_b explicitly (owner rule: never bfp4)'
+  - 'known_issues: unified_routed_expert_moe works in place, Expert counts are global, DeepSeek dispatch/combine on a 1-device dispatch axis,
+    Fused expert kernel packs to bfp8'
+  notes: 'EP=4: chip c holds experts 64c..64c+63 (gate/up [64, 2048, 4096], down [64, 4096, 2048] bfp8); mxfp4 x e8m0 dequantized on the host
+    at load (reference/weights.py, low nibble first) and cached as bfp8. Every chip dispatches its replicated S tokens locally (ERNIE scheme,
+    1-chip dispatch axis patches already on this branch). Dispatch capacity 8 x S rows (worst case all 8 experts on one chip). Counts/offsets
+    are [1, 256] global. No shared expert, so one all_reduce of the routed partial. Known issue: the factory runs the Silu variant at LoFi with
+    a bf16 dest (only GeluTanh honours compute_kernel_config); if the component rel-L2 / norm-ratio checks fail, extend that handling to Silu
+    (host change, ./build_metal.sh).'
+- block_type: sliding_moe
+  step: ffn_residual
+  tag: NATIVE
+  ttnn: ttnn.add
+  reuse: models/demos/gemma4_a4b_d_p/tt/residual.py
+  notes: out = h_mid + experts_out, replicated [S, 4096]; no CCL (both inputs already replicated).
+- block_type: full_moe
+  step: attn_norm
+  tag: NATIVE
+  ttnn: ttnn.rms_norm (replicated [S, 4096], weight w, eps 1e-6)
+  reuse: models/demos/gemma4_a4b_d_p/tt/rms_norm.py
+  notes: input_layernorm; MiMo RMSNorm is w * rms(x) (plain w, not 1 + w), normalization in fp32 then cast, as HF. HiFi4 + fp32 acc.
+- block_type: full_moe
+  step: attention
+  tag: COMPOSED
+  ttnn: 'ttnn.linear fused qkv (per-chip slab: 16 Q x 192 + 1 K x 192 + 1 V x 192 padded, bf16, HiFi4) -> ttnn.experimental.nlp_create_qkv_heads
+    -> partial RoPE on dims 0-63 (ttnn.slice -> ttnn.experimental.rotary_embedding, theta 1e7 -> ttnn.concat) for q and k -> ttnn.experimental.paged_fill_cache
+    K and V (identity page table) -> ttnn.transformer.scaled_dot_product_attention (chunk 0, is_causal) / ttnn.transformer.chunked_scaled_dot_product_attention
+    (later chunks, keyword args), scale 192^-0.5 -> ttnn.experimental.nlp_concat_heads -> ttnn.linear o_proj (row-parallel) -> ttnn.all_reduce
+    (cluster_axis=1)'
+  reuse: models/demos/gemma4_a4b_d_p/tt/attention.py:TtGlobalAttention + TtKVCacheGlobal (paged-shaped cache, chunked SDPA), models/demos/ernie45_d_p/tt/attention.py
+    (sdpa_settings)
+  searched:
+  - 'repo_map: Chunked causal attention, Sliding-window + global attention, GQA with fewer KV heads than chips, SDPA program config'
+  - 'grep sdpa_nanobind.cpp: scaled_dot_product_attention takes sliding_window_size + attention_sink [1, nqh, 1, 1]; chunked_scaled_dot_product_attention
+    takes neither'
+  - 'grep head_dim_v / vDHt in sdpa_program_factory.cpp: V head dim != QK head dim only on the MLA path (flash_mla_prefill / chunked_flash_mla_prefill,
+    V read as a prefix of K); plain and chunked SDPA need V head dim == QK head dim'
+  - 'gpt_oss_d_p/tt/attention/prefill.py + weights.py: sliding window 128 + sinks through scaled_dot_product_attention, sinks stored pre-divided
+    by the scale'
+  - 'gemma4_a4b_d_p/tt/attention.py: TtSlidingAttention (window tail concat + q_pad), TtGlobalAttention (identity page table + chunked SDPA)'
+  notes: 'TP by head, no CCL inside: 64 Q / 4 KV heads -> chip r holds Q heads 16r..16r+15 and KV head r (GQA 16:1 on chip); the checkpoint stores
+    qkv per TP rank ([q_r; k_r; v_r], 3392 rows), which is exactly this split. At load: dequantize each rank slab (reference/weights.py), fold
+    attention_value_scale 0.707 into the V rows, and pad V rows 128 -> 192 with zeros so nlp_create_qkv_heads and SDPA see one head dim; o_proj
+    [4096, 16 x 128] per chip gets zero columns for the pad (or slice the SDPA output to 128 before concat_heads). The state read-back returns
+    V[..., :128]. No sink on full layers. RoPE cos/sin built once for max_seq and sliced on device per chunk. SDPA head dim 192 fits q256/k256
+    (known issue: L1 at large head_dim).'
+- block_type: full_moe
+  step: attn_residual
+  tag: NATIVE
+  ttnn: ttnn.add
+  reuse: models/demos/gemma4_a4b_d_p/tt/residual.py
+  notes: h_mid = in + attn_out, replicated [S, 4096]; no CCL (both inputs already replicated).
+- block_type: full_moe
+  step: ffn_norm
+  tag: NATIVE
+  ttnn: ttnn.rms_norm (replicated [S, 4096], weight w, eps 1e-6)
+  reuse: models/demos/gemma4_a4b_d_p/tt/rms_norm.py
+  notes: post_attention_layernorm; MiMo RMSNorm is w * rms(x) (plain w, not 1 + w), normalization in fp32 then cast, as HF. HiFi4 + fp32 acc.
+- block_type: full_moe
+  step: router
+  tag: COMPOSED
+  ttnn: ttnn.linear (fp32 weight [4096 -> 256], HiFi4 + fp32 acc) -> ttnn.experimental.deepseek_prefill.moe_grouped_topk (score_func sigmoid,
+    bias e_score_correction_bias, n_groups 1, topk_groups 1, 8 experts, route_scale 1.0, epsilon 1e-20) -> topk idx/weights [S, 8]; dense [S,
+    256] via ttnn.scatter (bf16) only for the boundary
+  reuse: 'models/demos/deepseek_v3_d_p/tt/moe/tt_moe_gate_prefill.py (DEVICE_FP32 path: _device_matmul + moe_grouped_topk), models/demos/gemma4_a4b_d_p/tt/router.py
+    (boundary tensor)'
+  searched:
+  - 'repo_map: MoE expert parallel (deepseek_v3_d_p/tt/moe)'
+  - grep moe_grouped_topk tt_moe_gate_prefill.py (sigmoid/sqrtsoftplus only, collapses to plain top-k for one group)
+  - 'known_issues: Router selection vs weights, scatter has no fp32 TILE path'
+  notes: 'Replicated: every chip routes all S tokens from replicated ffn_norm, no CCL. noaux_tc: selection on sigmoid + bias, weights = unbiased
+    sigmoid of the chosen 8, renormalized; routed_scaling_factor is null -> route_scale 1.0 (DeepSeek''s default is 2.5, do not inherit it). moe_grouped_topk''s
+    CBs grow with experts/32; DeepSeek runs it at <= 4096 rows per chip, so for the 8192-row s16384 chunk run it on row slices if it does not
+    fit L1.'
+- block_type: full_moe
+  step: experts
+  tag: COMPOSED
+  ttnn: ttnn.experimental.deepseek_prefill.masked_bincount + offset_cumsum -> TtDispatchModule (dispatch group of 1 chip) -> ttnn.experimental.deepseek_prefill.unified_routed_expert_moe
+    (Silu, bfp8 weights) -> TtCombineModule -> TtReduceModule (weighted top-k sum) -> ttnn.all_reduce (cluster_axis=1)
+  reuse: models/demos/ernie45_d_p/tt/moe_unified.py (the whole pipeline on 1x4), models/demos/gemma4_a4b_d_p/tt/experts.py, models/demos/deepseek_v3_d_p/tt/moe/tt_routed_expert.py
+  searched:
+  - 'repo_map: MoE expert parallel'
+  - 'grep RoutedExpertActivation: Silu present (MiMo experts are SwiGLU silu, no new activation needed)'
+  - 'grep weights_dtype tt_routed_expert.py: default bfloat4_b, pass bfloat8_b explicitly (owner rule: never bfp4)'
+  - 'known_issues: unified_routed_expert_moe works in place, Expert counts are global, DeepSeek dispatch/combine on a 1-device dispatch axis,
+    Fused expert kernel packs to bfp8'
+  notes: 'EP=4: chip c holds experts 64c..64c+63 (gate/up [64, 2048, 4096], down [64, 4096, 2048] bfp8); mxfp4 x e8m0 dequantized on the host
+    at load (reference/weights.py, low nibble first) and cached as bfp8. Every chip dispatches its replicated S tokens locally (ERNIE scheme,
+    1-chip dispatch axis patches already on this branch). Dispatch capacity 8 x S rows (worst case all 8 experts on one chip). Counts/offsets
+    are [1, 256] global. No shared expert, so one all_reduce of the routed partial. Known issue: the factory runs the Silu variant at LoFi with
+    a bf16 dest (only GeluTanh honours compute_kernel_config); if the component rel-L2 / norm-ratio checks fail, extend that handling to Silu
+    (host change, ./build_metal.sh).'
+- block_type: full_moe
+  step: ffn_residual
+  tag: NATIVE
+  ttnn: ttnn.add
+  reuse: models/demos/gemma4_a4b_d_p/tt/residual.py
+  notes: out = h_mid + experts_out, replicated [S, 4096]; no CCL (both inputs already replicated).
+- block_type: model
+  step: embed
+  tag: COMPOSED
+  ttnn: ttnn.to_layout(TILE) -> clamp pad ids into range (ttnn.where(ids < 152576, ids, 0) or ttnn.minimum) -> ttnn.to_layout(ROW_MAJOR) -> ttnn.embedding
+    (replicated [152576, 4096] bf16)
+  reuse: models/demos/gemma4_a4b_d_p/tt/model.py:TtEmbedding
+  searched:
+  - 'repo_map: All-device model'
+  - 'known_issues: Masking the engine''s pad token on the device (bitwise_and needs a power-of-two vocab; 152576 is not)'
+  notes: Plain lookup (no embedding scale). The engine's 0xFFFFFFFF pad ids must be mapped into range before ttnn.embedding; the rows are discarded
+    after actual_end.
+- block_type: model
+  step: final_norm
+  tag: NATIVE
+  ttnn: ttnn.rms_norm (replicated [S, 4096], model.norm.weight, eps 1e-6)
+  reuse: models/demos/gemma4_a4b_d_p/tt/rms_norm.py
+  notes: Only after layer 5 in this subset bring-up (the ladder compares final_norm of the subset).
+- block_type: model
+  step: lm_head
+  tag: COMPOSED
+  ttnn: ttnn.slice (last tokens) -> ttnn.linear (vocab-sharded lm_head, 38144 rows per chip) -> ttnn.all_gather (cluster_axis=1, dim -1)
+  reuse: models/demos/deepseek_v3_d_p/tt/tt_lm_head.py, models/demos/gemma4_a4b_d_p/tt/model.py
+  searched:
+  - 'repo_map: All-device model'
+  - ls models/demos/deepseek_v3_d_p/tt (tt_lm_head.py)
+  notes: Untied lm_head [152576, 4096] bf16; 152576 / 4 = 38144 = 1192 tiles per chip. Only the last tokens the harness asks for.

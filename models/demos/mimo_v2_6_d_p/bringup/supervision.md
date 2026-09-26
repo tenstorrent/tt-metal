@@ -14,3 +14,6 @@ https://claude.ai/artifact/DiE4z2vUUEXV2snyj4sWAf (republish both after every ga
 | 15:40 | intake | spec written, validates | approval (delegated) | approved intake: layers 0-5, bfp8 experts, 56320/5120, both dashboards, enable_thinking false | - |
 | 15:50 | R.1 | stock HF loader cannot run the checkpoint on this host | framework | F39: hf.custom_loader moves HF sanity into R.2; spec edited, intake re-approved (delegated) | cbbbedc2824 |
 | 16:59 | R.2 | gate PASS after 1 attempt | review | accepted: reference independent of HF modeling (shares dequant weights.py with the oracle; full-model smoke 'Paris' and top-1 0.955 validate the dequant) | f6f26163b79 |
+| 17:04 | R.3 | gate PASS, no code change | routine | accepted | 028a9233b76 |
+| 19:30 | G.s56320 | 6-layer subset golden ran all 48 layers on CPU (~2 h) | framework | owner: fix it; F40: subsets stop at their last layer (goldens, check_hf parity), CPU gates use physical cores; R.2 agent's 3 known-issue proposals taken | c755b88b557 |
+| 19:50 | PL.1 | plan ready (14.65/27.2 GiB per chip; TP4 attention by the checkpoint's TP ranks, EP4 bfp8 experts, V padded to 192, sinks via SDPA attention_sink) | approval (delegated) | reviewed plan.md, approved; V pad noted as a perf candidate | - |
