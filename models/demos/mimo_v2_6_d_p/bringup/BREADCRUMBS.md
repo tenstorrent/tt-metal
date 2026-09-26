@@ -1089,3 +1089,26 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_
   out rel 0.0055 / first rows 0.0047, coef 1.0016, experts rel 0.0195. The router's golden overlap (0.98846 vs 0.985)
   is still the tightest margin.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_full_moe_07_ffn_residual.py`
+
+## M.1 assemble (attempt 1), 2026-09-26
+- New `tt/model.py`: `TtMiMoModel` (TtEmbedding -> TtMiMoBlock per layer -> final TtRMSNorm) and `TtMiMoBlock` (step fns
+  keyed by the reference DENSE_GRAPH / MOE_GRAPH, run through `run_block`, each intermediate freed after its last reader;
+  the block input "in" is left to the caller). The pattern follows `gemma4_a4b_d_p/tt/model.py`. The router step returns
+  (idx, wts) and deallocates the dense routing, so the experts use them directly (no dense -> topk).
+- Module builders (`build_norm/mlp/attention/router/experts`, `new_kv_cache`) moved from hooks into `tt/model.py`. The
+  hooks' `_*_module` helpers now call them, so the component/swap path and the all-device path construct identical
+  modules with the same env knobs (MIMO_ROUTER_MODE, MIMO_EXPERTS_MODE/ACT/MID/FIDELITY, MIMO_SDPA_CFG, MIMO_SLIDING_SDPA_CFG).
+- `hooks.device_model` now returns `MiMoDeviceModel` (the all-device model). `BRINGUP_HYBRID=1` still selects
+  `HybridDeviceModel`, whose DEVICE_STEPS now lists every step of all three block types (full_moe was missing, so layer 5
+  ran fully on the CPU in the hybrid).
+- Load-time constants: RoPE cos/sin per attention module for max_seq 56320, the full layers' identity page table, the router
+  zero/bias tables for max_chunk 8192, the experts' dispatch tables. The embedding table is bf16 replicated (1.25 GB/chip),
+  with a tensorbin cache at `generated/mimo_v2_6_d_p/tt_cache/embed_bf16`.
+- Gate s4096: PASS. host_transfers_per_layer 0 (the hybrid gave 12). Layer PCC L00..L05: 0.999993 / 0.999980 / 0.999960 /
+  0.999955 / 0.999958 / 0.999926; pcc_state_min 0.999818. Chunks: 1.39 s (cold) and 0.56 s (warm, 2k->4k).
+  model_load_s 12.8 (the expert bfp8 cache was already complete).
+- Regression check after the hooks refactor: test_swap_full_moe_07_ffn_residual PASS, pcc_swap_out 0.999985 (same as before).
+- For the contract step: the vocab is 152576, not a power of two, so Gemma's `& (V - 1)` pad mask does not apply to
+  the engine's 0xFFFFFFFF pad ids. `TtEmbedding` takes clean ids. Mask the pad ids on the device before the lookup
+  (for example, clamp them or pad the table).
+- Re-run: `BRINGUP_RUNG=s4096 PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py`
