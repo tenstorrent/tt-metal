@@ -1015,3 +1015,33 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_
   on the device ffn_norm already gave router pcc 0.9955. Iso overlap 0.9989 shows that the device router itself is
   accurate. If upstream noise grows, this is the check that trips first.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_full_moe_05_router.py`
+
+## C.full_moe.experts test (review, attempt 1)
+- Replaced the rendered one-liner with the reviewed layer-1 experts test body (`test_c_sliding_moe_experts.py`), LAYER = 5,
+  with the same limits: PCC >= 0.99 (gated), finite, rel L2 <= 0.03, per-token norm ratio [0.97, 1.03], worst row rel <= 0.1.
+- Re-measured the mutations and the noise models on the layer-5 golden with CPU-only scripts (numbers in the docstring).
+  Layer 5: experts_out row norms 1.3e-4..0.98. Routing weights go down to 1e-10, and expert 235 outputs norm ~690 at
+  weight 5e-9. ffn_norm has outlier channels in every row (max 131, median |x| 0.009).
+- BRINGUP_IMPL=reference: PASS (PCC 0.999987, rel 0.0050, ratio [0.9868, 1.0162], worst row 0.0164). BRINGUP_IMPL=stub: FAIL (PCC).
+- Default impl (the already-registered device TtExperts, loop mode): FAILS the pytest, although the gated metric
+  pcc_experts_L05 = 0.998990 passes. rel 0.0450, ratio [0.8624, 1.1071], worst row 0.158 (row 1127). This matches the
+  CPU model of bfp8 x exactly (rel 0.045): `_loop_experts` converts x to bfp8 (`tt/experts.py:249`). With bfp8 weights
+  and bf16 x the model gives rel 0.0051, so the implement step should keep x (and the extract/insert buffers) in bf16.
+  The limits were deliberately not loosened. See known issues (Proposed), "bfp8 expert activations fail on a layer
+  with outlier channels".
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_moe_experts.py`
+
+## C.full_moe.experts implement (attempt 1), 2026-09-26
+- `tt/experts.py` loop mode: the expert input is now bf16 (`loop_act_dtype`, default bf16; before it was bfp8, which
+  flushes the small channels next to layer 5's outlier channels), and the gate/up/silu*up intermediates are fp32
+  (`loop_mid_dtype`, default fp32). Weights stay bfp8. `hooks.py:_experts_module` now passes HiFi4 (was HiFi2 by
+  default) and reads `MIMO_EXPERTS_ACT=bfp8`, `MIMO_EXPERTS_MID=bf16`, `MIMO_EXPERTS_FIDELITY=HiFi2` so the old
+  behaviour can still be selected for comparison. The same `_experts_module` is used by `device_component` and `device_model`.
+- Measured on layer 5: bfp8 x rel 0.045 (the previous attempt); bf16 x + HiFi2 + bf16 mid rel 0.0129, ratio [0.960, 1.061] (fails);
+  bf16 x + HiFi4 + bf16 mid rel 0.0075, ratio [0.976, 1.028] (passes, but only 0.002 from the limit); bf16 x + HiFi4 + fp32 mid (default)
+  PCC 0.999980, rel 0.0067, ratio [0.9877, 1.0164], worst row 0.017, the same as the CPU reference.
+- Layer 1 re-check: test_c_sliding_moe_experts PASS (rel 0.0056, was 0.0100; ratio [0.994, 1.007]);
+  test_swap_sliding_moe_06_experts PASS (pcc_swap_out 0.999993).
+- Speed was not measured. Loop mode is still about 10x slower than the fused kernel (see known issues), and fp32
+  intermediates add memory traffic. The fused kernel packs activations to bfp8, so it cannot pass layer 5 at all.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_moe_experts.py`

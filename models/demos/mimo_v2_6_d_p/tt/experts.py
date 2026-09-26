@@ -5,8 +5,9 @@
 
     routing as dense [S, 256] (8 nonzeros per row) or (idx [S, 8], weights [S, 8])
       -> masked_bincount + offset_cumsum -> TtDispatchModule (1-chip dispatch group, local dispatch)
-      -> per local expert: extract -> down(silu(x @ gate) * (x @ up)) via ttnn.linear (HiFi2, fp32 dest) -> insert
-         (mode 'loop', default; 'unified' = unified_routed_expert_moe Silu, which the factory forces to LoFi)
+      -> per local expert: extract -> down(silu(x @ gate) * (x @ up)) via ttnn.linear (fp32 dest) -> insert
+         (mode 'loop', default: bf16 input, fp32 intermediates, HiFi4 from the hooks; 'unified' =
+         unified_routed_expert_moe Silu, which the factory forces to LoFi and packs activations to bfp8)
       -> TtCombineModule -> TtReduceModule (fused weighted top-k sum over this chip's experts)
       -> all_reduce (cluster_axis=1) -> experts_out [1, 1, S, H] replicated
 
@@ -73,6 +74,8 @@ class TtExperts:
         cache: bool = True,
         math_fidelity=ttnn.MathFidelity.HiFi2,
         mode: str = "loop",
+        loop_act_dtype=ttnn.bfloat16,
+        loop_mid_dtype=ttnn.float32,
     ):
         """torch_weights: sequence (len E) of {'gate_proj' [I, H], 'up_proj' [I, H], 'down_proj' [H, I]}, or None to
         load a complete cache. mode 'loop' (default): per local expert extract -> ttnn.linear SwiGLU at math_fidelity
@@ -118,6 +121,11 @@ class TtExperts:
         assert torch_weights is not None or cache, "no weights and no cache"
         assert mode in ("unified", "fused", "loop"), mode
         self.mode = mode
+        # Loop mode keeps the expert input in bf16: layer 5's MoE input has outlier channels (|x| up to 131, median
+        # 0.009) and bfp8 x (one exponent per 16 values) flushes their neighbours (rel 0.045, see known issues).
+        self.loop_act_dtype = loop_act_dtype
+        # fp32 gate/up/silu*up intermediates: bf16 ones left layer-5 norm ratio [0.976, 1.028] vs [0.988, 1.016].
+        self.loop_mid_dtype = loop_mid_dtype
         self.hybrid = max_seq_len if mode == "fused" else None
         # Loop mode: per local expert extract -> routed_expert_ffn (ttnn.matmul, honours this config) -> insert.
         self.loop_cfg = ttnn.WormholeComputeKernelConfig(
@@ -233,9 +241,10 @@ class TtExperts:
     def _ffn(self, x, wg, wu, wd):
         """down(silu(x @ wg) * (x @ wu)) with ttnn.linear (auto program config) at loop_cfg; x [M, H] TILE."""
         cfg = self.loop_cfg
-        g = ttnn.linear(x, wg, compute_kernel_config=cfg, dtype=ttnn.bfloat16)
-        u = ttnn.linear(x, wu, compute_kernel_config=cfg, dtype=ttnn.bfloat16)
-        h = ttnn.multiply(g, u, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], dtype=ttnn.bfloat16)
+        mid = self.loop_mid_dtype
+        g = ttnn.linear(x, wg, compute_kernel_config=cfg, dtype=mid)
+        u = ttnn.linear(x, wu, compute_kernel_config=cfg, dtype=mid)
+        h = ttnn.multiply(g, u, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], dtype=mid)
         ttnn.deallocate(g)
         ttnn.deallocate(u)
         y = ttnn.linear(h, wd, compute_kernel_config=cfg, dtype=ttnn.bfloat16)
@@ -246,7 +255,7 @@ class TtExperts:
         """Per local expert: extract its rows ([S, H] slab, S = per-expert cap = chunk length), the SwiGLU FFN at the
         module's fidelity with fp32 dest, insert back in place. Returns a fresh TILE buffer (buf is left alone)."""
         r = self.routed
-        x = ttnn.to_layout(buf, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+        x = ttnn.to_layout(buf, ttnn.TILE_LAYOUT, dtype=self.loop_act_dtype)
         out = ttnn.to_layout(buf, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)  # bf16 output slab (insert matches dtypes)
         for le in range(self.epc):
             tok = ttnn.experimental.deepseek_prefill.extract(
