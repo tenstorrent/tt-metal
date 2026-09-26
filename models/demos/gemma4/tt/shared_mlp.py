@@ -22,6 +22,7 @@ import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allreduce
 from models.demos.gemma4.tt.compute_config import gelu_variant
 from models.demos.gemma4.tt.dram_sharded import TILE_SIZE, DramShardedLinear, can_dram_shard
+from models.demos.gemma4.tt.matmul_tuning import resolve as resolve_tuner
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
 # DRAM-width-sharded decode matmuls for the shared MLP. On by default for
@@ -65,7 +66,9 @@ class SharedMLP:
         dtype=ttnn.bfloat8_b,
         tensor_cache_path=None,
         layer_idx=None,
+        matmul_tuner=None,
     ):
+        self.mm = resolve_tuner(matmul_tuner)
         self.mesh_device = mesh_device
         self.mesh_config = mesh_config
         self.ccl_manager = ccl_manager
@@ -147,7 +150,7 @@ class SharedMLP:
         dram_shard = _DRAM_SHARD_MLP and tp > 1 and not is_moe
 
         if dram_shard and can_dram_shard(self.hidden_size, gu_n, dtype=dtype):
-            self.gate_up_proj = DramShardedLinear(
+            gate_up_linear = DramShardedLinear(
                 gate_up_weight,
                 mesh_device,
                 col_mapper,
@@ -158,6 +161,7 @@ class SharedMLP:
                     tensor_cache_path, f"gate_up_proj.weight.ws{tp_suffix}{pad_suffix}{dtype_suffix}"
                 ),
             )
+            self.gate_up_proj = lambda x, tuner: gate_up_linear(x)
         else:
             gate_up_proj = ttnn.as_tensor(
                 gate_up_weight,
@@ -171,10 +175,10 @@ class SharedMLP:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-            self.gate_up_proj = lambda x: ttnn.linear(x, gate_up_proj)
+            self.gate_up_proj = lambda x, tuner: tuner.linear(x, gate_up_proj)
 
         if dram_shard and can_dram_shard(down_k, self.hidden_size, dtype=dtype):
-            self.down_proj = DramShardedLinear(
+            down_linear = DramShardedLinear(
                 down_proj_weight,
                 mesh_device,
                 row_mapper,
@@ -185,6 +189,7 @@ class SharedMLP:
                     tensor_cache_path, f"down_proj.weight.ws{tp_suffix}{pad_suffix}{dtype_suffix}"
                 ),
             )
+            self.down_proj = lambda x, tuner: down_linear(x)
         else:
             down_proj = ttnn.as_tensor(
                 down_proj_weight,
@@ -198,9 +203,9 @@ class SharedMLP:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-            self.down_proj = lambda x: ttnn.linear(x, down_proj)
+            self.down_proj = lambda x, tuner: tuner.linear(x, down_proj)
 
-    def __call__(self, hidden_states):
+    def __call__(self, hidden_states, is_decode=False):
         """
         GeGLU MLP forward with TP support.
 
@@ -209,7 +214,8 @@ class SharedMLP:
         # Fused gate/up projection: one matmul produces [.., 2*inter_pad/device]
         # laid out as [up_i | gate_i]. Split with the padded half-width so TILE
         # slice bounds stay aligned (264 would round to 288 and break down_proj).
-        gate_up = self.gate_up_proj(hidden_states)
+        active_tuner = self.mm if is_decode else resolve_tuner(None)
+        gate_up = self.gate_up_proj(hidden_states, active_tuner)
         shard = self._inter_per_device
         s = gate_up.shape[-2]
         up = ttnn.slice(gate_up, [0, 0, 0, 0], [1, 1, s, shard])
@@ -224,7 +230,7 @@ class SharedMLP:
         up.deallocate(True)
 
         # output = hidden @ down_proj
-        output = self.down_proj(hidden)
+        output = self.down_proj(hidden, active_tuner)
         hidden.deallocate(True)
 
         # Allreduce after row-parallel down_proj

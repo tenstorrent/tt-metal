@@ -5,13 +5,24 @@ from torch import nn
 
 import ttnn
 from models.demos.gemma4.config import MeshConfig, ModeConfig
+from models.demos.gemma4.tt.activation_sharding import resolve as resolve_activation_sharding
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
 
 class RMSNorm(nn.Module):
-    def __init__(self, mesh_device, hf_config, state_dict, tensor_cache_path=None, mesh_config=None, with_scale=True):
+    def __init__(
+        self,
+        mesh_device,
+        hf_config,
+        state_dict,
+        tensor_cache_path=None,
+        mesh_config=None,
+        with_scale=True,
+        activation_sharding=None,
+    ):
         super().__init__()
         self.with_scale = with_scale
+        self.act_shard = resolve_activation_sharding(activation_sharding)
 
         if with_scale and state_dict and "weight" in state_dict:
             torch_weight = state_dict["weight"].reshape((1, 1, -1, ttnn.TILE_SIZE))
@@ -99,6 +110,40 @@ class RMSNorm(nn.Module):
         )
         return (input_memcfg, program_config)
 
+    def _chained_cfg(self, dim):
+        """Build and cache a norm config for the shared activation layout."""
+        if getattr(self, "_chain_cfg_dim", None) == dim:
+            return self._chain_cfg
+        cores = self.act_shard.cores_for(dim)
+        block_w = (dim // ttnn.TILE_SIZE) // cores
+        subblock_w = 4
+        while subblock_w > 1 and block_w % subblock_w != 0:
+            subblock_w -= 1
+        self._chain_cfg_dim = dim
+        self._chain_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=[cores, 1],
+            subblock_w=subblock_w,
+            block_h=1,
+            block_w=block_w,
+            inplace=False,
+        )
+        return self._chain_cfg
+
+    def _forward_chained(self, x):
+        """Run RMSNorm in the shared layout without a round trip."""
+        dim = int(x.shape[-1])
+        sharded = self.act_shard.to_stream(x)
+        output = ttnn.rms_norm(
+            sharded,
+            weight=self.tt_weight,
+            epsilon=self.eps,
+            program_config=self._chained_cfg(dim),
+            memory_config=self.act_shard.spec(dim),
+        )
+        if sharded is not x:
+            sharded.deallocate(True)
+        return output
+
     def _forward_sharded(self, x):
         """Width-sharded decode RMSNorm: I2S -> sharded rms_norm -> S2I."""
         x_sh = ttnn.to_memory_config(x, self._sharded_cfg[0])
@@ -154,24 +199,35 @@ class RMSNorm(nn.Module):
             ttnn.deallocate(tt_gathered_stats)
             return tt_output
         else:
+            decode_shaped = (
+                self.with_scale
+                and self.tt_weight is not None
+                and len(x.shape) == 4
+                and 1 <= x.shape[-2] <= ttnn.TILE_SIZE
+            )
+
+            if decode_shaped and self.act_shard.applies(x):
+                return self._forward_chained(x)
+
             # Decode fast path: single-tile-height (32 rows) activation with a
             # learned weight and an interleaved layout → width-sharded rms_norm.
             # Prefill (height > 32) and the no-weight per-head norms keep the
             # plain path. Sharded config is dim-specific, so rebuild if the
             # activation width ever changes.
-            if (
-                self.with_scale
-                and self.tt_weight is not None
-                and len(x.shape) == 4
-                and 1 <= x.shape[-2] <= ttnn.TILE_SIZE
-                and not x.is_sharded()
-            ):
+            if decode_shaped and not x.is_sharded():
                 dim = x.shape[-1]
                 if self._sharded_cfg is None or self._sharded_dim != dim:
                     self._sharded_dim = dim
                     self._sharded_cfg = self._build_sharded_cfg(dim)
                 if self._sharded_cfg:
                     return self._forward_sharded(x)
+
+            # A sharded input requires a sharded output. Convert explicitly when
+            # no chaining policy owns the input layout.
+            converted_input = None
+            if x.is_sharded():
+                converted_input = ttnn.sharded_to_interleaved(x, ttnn.DRAM_MEMORY_CONFIG)
+                x = converted_input
 
             is_prefill = len(x.shape) == 4 and x.shape[-2] > ttnn.TILE_SIZE
             compute_kernel_config = self.prefill_compute_kernel_config if is_prefill else None
@@ -189,4 +245,6 @@ class RMSNorm(nn.Module):
                     epsilon=self.eps,
                     compute_kernel_config=compute_kernel_config,
                 )
+            if converted_input is not None:
+                converted_input.deallocate(True)
             return tt_output

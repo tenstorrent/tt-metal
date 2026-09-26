@@ -42,8 +42,10 @@ Forward flow (matching HF exactly):
 import torch
 
 import ttnn
+from models.demos.gemma4.tt.activation_sharding import resolve as resolve_activation_sharding
 from models.demos.gemma4.tt.attention import Gemma4Attention, Gemma4AttentionConfig
 from models.demos.gemma4.tt.gemma4_attention_config import get_attention_program_config
+from models.demos.gemma4.tt.matmul_tuning import resolve as resolve_tuner
 from models.demos.gemma4.tt.moe import MoEBlock
 from models.demos.gemma4.tt.rms_norm import RMSNorm
 from models.demos.gemma4.tt.shared_mlp import SharedMLP
@@ -69,8 +71,12 @@ class Gemma4DecoderLayer:
         experts_dtype=None,
         router_dtype=None,
         bounded_sliding_kv_cache: bool = False,
+        matmul_tuner=None,
+        activation_sharding=None,
         transformation_mats=None,  # Legacy — ignored (HF-style RoPE needs no transformation mats)
     ):
+        self.mm = resolve_tuner(matmul_tuner)
+        self.act_shard = resolve_activation_sharding(activation_sharding)
         # Per-module dtype overrides default to the model-wide ``dtype`` so
         # callers that don't care about precision config see no change.
         if shared_mlp_dtype is None:
@@ -104,6 +110,7 @@ class Gemma4DecoderLayer:
                 tensor_cache_path=f"{tensor_cache_path}/layer_{layer_idx}/{name}" if tensor_cache_path else None,
                 mesh_config=mesh_config,
                 with_scale=with_scale,
+                activation_sharding=self.act_shard,
             )
 
         # 4 norms present on every layer
@@ -138,6 +145,7 @@ class Gemma4DecoderLayer:
             tensor_cache_path=f"{tensor_cache_path}/layer_{layer_idx}/self_attn" if tensor_cache_path else None,
             weight_dtype=attention_dtype,
             bounded_sliding_kv_cache=bounded_sliding_kv_cache,
+            matmul_tuner=self.mm,
         )
 
         # Shared/dense MLP (HF key: "mlp")
@@ -150,6 +158,7 @@ class Gemma4DecoderLayer:
             dtype=shared_mlp_dtype,
             tensor_cache_path=f"{tensor_cache_path}/layer_{layer_idx}/mlp" if tensor_cache_path else None,
             layer_idx=layer_idx,
+            matmul_tuner=self.mm,
         )
 
         # MoE block (router + routed experts) — split dtypes between the two
@@ -271,14 +280,18 @@ class Gemma4DecoderLayer:
                 residual = ttnn.reshape(
                     residual, [1, 1, residual.shape[-2] * residual.shape[-3] * residual.shape[0], -1]
                 )
-            hidden_states = ttnn.add(residual, attn_output)
+            unaligned_residual = residual
+            residual = self.act_shard.to_stream_like(unaligned_residual, attn_output)
+            if residual is not unaligned_residual:
+                unaligned_residual.deallocate(True)
+            hidden_states = ttnn.add(residual, attn_output, memory_config=attn_output.memory_config())
             residual.deallocate(True)
             attn_output.deallocate(True)
 
         # 2. MLP + MoE block
         residual = hidden_states
         normed = self.pre_feedforward_layernorm.forward(hidden_states)
-        mlp_output = self.shared_mlp(normed)
+        mlp_output = self.shared_mlp(normed, is_decode=is_decode)
         normed.deallocate(True)
 
         if self.enable_moe_block:
@@ -308,7 +321,11 @@ class Gemma4DecoderLayer:
 
         # post_feedforward_layernorm -> residual add
         hidden_states = self.post_feedforward_layernorm.forward(hidden_states)
-        combined = ttnn.add(residual, hidden_states)
+        unaligned_residual = residual
+        residual = self.act_shard.to_stream_like(unaligned_residual, hidden_states)
+        if residual is not unaligned_residual:
+            unaligned_residual.deallocate(True)
+        combined = ttnn.add(residual, hidden_states, memory_config=hidden_states.memory_config())
         residual.deallocate(True)
         hidden_states.deallocate(True)
 
@@ -316,13 +333,14 @@ class Gemma4DecoderLayer:
 
         # Per-layer input embeddings (E2B/E4B) — BEFORE layer_scalar (matching HF order)
         if self.hidden_size_per_layer_input and per_layer_input is not None and hasattr(self, "per_layer_input_gate"):
+            pli_mm = self.mm if is_decode else resolve_tuner(None)
             residual_pli = hidden_states
             from models.demos.gemma4.tt.compute_config import gelu_variant
 
-            gated = ttnn.linear(hidden_states, self.per_layer_input_gate)
+            gated = pli_mm.linear(hidden_states, self.per_layer_input_gate)
             gated = ttnn.gelu(gated, variant=gelu_variant())
             gated = ttnn.mul(gated, per_layer_input)
-            projected = ttnn.linear(gated, self.per_layer_projection)
+            projected = pli_mm.linear(gated, self.per_layer_projection)
             normed_pli = self.post_per_layer_input_norm.forward(projected)
             hidden_states = ttnn.add(residual_pli, normed_pli)
             if len(hidden_states.shape) > 4:
