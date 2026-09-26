@@ -834,3 +834,13 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Device (the gate): passes. pcc_swap_out 0.999972, block out rel 0.0075 / 0.0071 (first 128 rows). post_ffn_norm pcc 0.99991, rel 0.0136 vs golden, iso 0.0019, ratio [0.9973, 1.0012].
 - The pcc=0.000000 lines come from the precompile pass (comp_pcc stub).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_13_post_ffn_norm.py`
+
+## C.global.ffn_residual test (run1, attempt 1)
+- Replaced the one-line template body with test_c_sliding_ffn_residual.py (LAYER = 5). The gated metric stays `pcc_ffn_residual_L05` >= 0.99. The test also asserts
+  rel L2 <= 0.03, a per-token norm ratio in [0.97, 1.03] and a finite output, and records `rel_l2_*`, `row_norm_ratio_{min,max}_*` as informational metrics. No new limits.
+- Measured on the CPU (layer 5 golden, s4096 chunk 1; script /tmp/g5fr/v.py, not kept). Layer 5 layer_scalar is about 0.652 (||out|| / ||h_mid + ffn_out||), vs 0.0703 on layer 0,
+  so a dropped scalar is 1.53x here (rel 0.53, ratio 1.53), not 14x. PCC / rel / ratio: estimated-scalar reference 0.999998 / 0.0021 / [0.998, 1.002]; bf16 0.0032;
+  PCC passes a dropped scalar, 2x, row 0 / last row / last 32 rows zeroed and the scalar on ffn_out only (0.9925, rel 0.34); rel L2 / ratio catch all of them. Residual dropped fails PCC (0.821).
+- Verified: BRINGUP_IMPL=reference PASS (pcc 0.999998, rel 0.0021); stub FAIL (PCC). The device gate already PASSES (pcc 0.999995, rel 0.0032, ratio [0.9975, 1.0039])
+  because the device module is the one the sliding ffn_residual uses. The `FAIL ... pcc=0.000000` line comes from the precompile pass (comp_pcc stub).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_ffn_residual.py`
