@@ -448,6 +448,7 @@ def test_default_layout_and_perf_flags_are_unchanged(isolated_layout, speed_of_l
 @pytest.mark.parametrize("layout", [None, "normal", "debug"])
 def test_pytest_selects_layout_before_build_setup(isolated_layout, monkeypatch, layout):
     from types import SimpleNamespace
+
     from helpers import llk_pytest_plugin as plugin
 
     options = {}
