@@ -29,8 +29,10 @@ import os
 import time
 
 import torch
+from loguru import logger
 
 import ttnn
+from models.demos.gemma4.tt import pli_env
 
 
 def _to_probs(logits_row, temperature, top_p, top_k):
@@ -166,6 +168,12 @@ class SpeculativeDecoder:
         # the passed cache by the same last-layer-per-type map is identical on
         # metal and correct on the server.
         self._shared_kv = {lt: self.tt_kv_cache[idx] for lt, idx in target_model.last_kv_layer_by_type.items()}
+        self.target_has_pli = bool(
+            getattr(target_model, "hidden_size_per_layer_input", 0)
+            and getattr(target_model, "per_layer_input_weights", None)
+        )
+        self._pli_dev_host = pli_env.pli_on_device("GEMMA4_SPEC_PLI_DEV")
+        self._route = pli_env.spec_route()
         # Tracing: persistent I/O buffers + execute_trace replace per-op host
         # dispatch (the untraced loop is host-bound: ~77ms/decode vs a few ms
         # traced). Verify traces are keyed by batch (K+1 for verify, 1 for
@@ -204,6 +212,11 @@ class SpeculativeDecoder:
         # least one draft was accepted. These are A/B knobs for acceptance vs
         # seed quality without paying a full target reseed.
         self._fused_shift_seed = os.environ.get("GEMMA4_SPEC_FUSED_SHIFT_SEED", "current")
+        self._fused_pli_device = self._pli_dev_host
+        self._last_route = None
+        self._assert_consistent_pli()
+        self._last_metrics = None
+        self._metrics_active = False
         # Persistent anchor-hidden buffer for the traced loop (allocated once).
         # The traced loop MUST be allocation-free: any ttnn.clone/slice between
         # execute_trace calls can land in memory a later trace replay uses as
@@ -223,6 +236,69 @@ class SpeculativeDecoder:
         self._pv_ready = False
         self._pv_a_prev = -1  # last hot block index (-1 ⇒ staging unseeded)
         self._pv_traces = {}  # (P, S_k) -> persistent trace inputs/outputs
+
+    def _metrics_begin(self, route):
+        if getattr(self, "_metrics_active", False):
+            return
+        self._metrics_active = True
+        self._last_fused_setup_s = None
+        self._last_fused_replay_s = None
+        self._last_first_iter_s = None
+        self._last_metrics = {
+            "route": route,
+            "start": time.perf_counter(),
+            "setup_s": 0.0,
+            "first_s": 0.0,
+            "rest_s": 0.0,
+            "first_tokens": 0,
+            "rest_tokens": 0,
+            "first_iters": 0,
+            "rest_iters": 0,
+            "wall_s": 0.0,
+        }
+
+    def _metrics_setup_done(self):
+        metrics = self._last_metrics
+        if metrics is not None and metrics["first_iters"] == metrics["rest_iters"] == 0:
+            metrics["setup_s"] = time.perf_counter() - metrics["start"]
+
+    def _metrics_iteration(self, started, tokens):
+        metrics = self._last_metrics
+        if metrics is None:
+            return
+        first = metrics["first_iters"] == 0
+        prefix = "first" if first else "rest"
+        metrics[f"{prefix}_s"] += time.perf_counter() - started
+        metrics[f"{prefix}_tokens"] += tokens
+        metrics[f"{prefix}_iters"] += 1
+
+    def _metrics_finish(self):
+        if self._last_metrics is not None:
+            self._last_metrics["route"] = self._last_route
+            self._last_metrics["wall_s"] = time.perf_counter() - self._last_metrics["start"]
+        self._metrics_active = False
+
+    def _assert_consistent_pli(self):
+        """Keep plain decode and speculative verify on the same PLI mechanism."""
+        if not self.target_has_pli:
+            return
+        decode_device = pli_env.pli_on_device("GEMMA4_DECODE_PLI_DEV")
+        mixed = decode_device != self._pli_dev_host
+        if self._route in ("auto", "fused-packed") and self._pli_dev_host and not decode_device:
+            mixed = True
+        if mixed:
+            message = "Plain and speculative decode select different PLI implementations"
+            if os.environ.get("GEMMA4_PLI_ALLOW_MIXED") == "1":
+                logger.warning("{}; GEMMA4_PLI_ALLOW_MIXED=1 permits diagnostic execution", message)
+            else:
+                raise ValueError(message + "; set GEMMA4_PLI_ALLOW_MIXED=1 only for diagnostics")
+
+    def _effective_route(self, greedy=True, batched=False):
+        self._assert_consistent_pli()
+        route = pli_env.resolve_route(self._route, self.target_has_pli, self._pli_dev_host, self._use_trace, greedy)
+        if batched and self._route == "auto" and route == "fused-batch-dim":
+            return "fused-packed"
+        return route
 
     def _fused_shift_seed_row(self, accepted, K):
         if self._fused_shift_seed == "current":
@@ -937,7 +1013,7 @@ class SpeculativeDecoder:
             "S_k": h["S_k"],
         }
 
-    def _pv_call(self, dev, P):
+    def _pv_call(self, dev, P, tokens=None, pli_stacked=None):
         kv_write_idxs = None
         if os.environ.get("GEMMA4_PV_FALLBACK_WRITE") == "1":
             # Debug bisect: per-position write positions for the fallback loop
@@ -946,6 +1022,7 @@ class SpeculativeDecoder:
             kv_write_idxs = [
                 self._pv_from_torch(torch.tensor([c + p], dtype=torch.int32), ttnn.int32) for p in range(P)
             ]
+        device_pli = self.target_has_pli and self._pli_dev_host
         return self.target.ttnn_packed_verify_forward(
             x=dev["x"],
             position_idx=dev["pos"],
@@ -964,6 +1041,9 @@ class SpeculativeDecoder:
             # exactly as wide as its type's mask. Applies unbounded too -- the
             # full-width flat table's unwritten tail diluted softmax.
             page_tables_per_layer=self._pv_tables_per_layer(dev["S_k"]),
+            token_ids_host=None if device_pli else tokens,
+            pli_stacked=None if device_pli else pli_stacked,
+            pli_on_device=device_pli,
         )
 
     def _verify_packed(self, tokens, positions):
@@ -977,7 +1057,7 @@ class SpeculativeDecoder:
         dev = self._pv_device_inputs(tokens, h)
         dev["pt"] = self._page_table(1)
         dev["c"] = c
-        logits, hidden = self._pv_call(dev, P)
+        logits, hidden = self._pv_call(dev, P, tokens=tokens)
         self._pv_a_prev = c // self._pv_bs
         lh = self._logits_to_host(logits).reshape(P, -1)
         logits.deallocate(True)
@@ -1043,6 +1123,11 @@ class SpeculativeDecoder:
     # ── target forwards ───────────────────────────────────────────────────
     def _verify(self, tokens, positions):
         """Batched verify. Returns (logits_host [B,vocab], hidden_device [1,1,B,h])."""
+        if self._use_trace and self.target_has_pli:
+            raise NotImplementedError(
+                "Traced host PLI verification requires persistent buffers; disable GEMMA4_SPEC_TRACE "
+                "until traced host PLI support is enabled"
+            )
         # Packed-query verify: all K+1 candidates in one batch=1 pass (positions
         # packed into the query-heads dim, loop-free staging KV write).
         # Single-token calls (seed/reseed) keep the plain verify.
@@ -1062,6 +1147,7 @@ class SpeculativeDecoder:
         x = self._tokens_tensor(tokens)
         pos_u, pos_i = self._pos_tensors(positions)
         pt = self._page_table(len(tokens))
+        device_pli = self.target_has_pli and self._pli_dev_host
         logits, hidden = self.target.ttnn_verify_forward(
             x=x,
             current_pos=pos_u,
@@ -1069,6 +1155,8 @@ class SpeculativeDecoder:
             page_table=pt,
             kv_cache=self.tt_kv_cache,
             page_tables_per_layer=self._page_tables_per_layer(len(tokens)),
+            token_ids_host=None if device_pli else tokens,
+            pli_on_device=device_pli,
         )
         lh = self._logits_to_host(logits).reshape(len(tokens), -1)
         logits.deallocate(True)
@@ -1386,7 +1474,7 @@ class SpeculativeDecoder:
         hidden.deallocate(True)
         return h
 
-    def generate_fused(self, anchor_token, anchor_pos, max_new_tokens):
+    def generate_fused(self, anchor_token, anchor_pos, max_new_tokens, *, _nested=False):
         """Greedy speculative decode using the fully on-device fused iteration.
 
         Each iteration reads back only the ``2K+1`` token ids; the drafter
@@ -1396,6 +1484,24 @@ class SpeculativeDecoder:
         forward, so the whole iteration is one device program (this is the eager
         twin of the fused trace). Returns ``(generated_ids, accepts_per_iter)``.
         """
+        if not _nested:
+            self._last_metrics = None
+            self._last_route = None
+            self._metrics_active = False
+        if self.target_has_pli:
+            raise NotImplementedError("Fused device drafting requires device PLI; use the host loop for this target")
+        # Name the body that runs: the traced capture switches to packed verify
+        # whenever _fused_packed_enabled() holds; the eager iteration never does.
+        if not self._use_trace:
+            self._last_route = "fused-batch-dim-eager"
+        elif self._fused_packed_enabled():
+            self._last_route = "fused-packed-traced"
+        else:
+            self._last_route = "fused-batch-dim-traced"
+        self._metrics_begin(self._last_route)
+        if max_new_tokens <= 0:
+            self._metrics_finish()
+            return [], []
         if self._use_trace:
             return self._generate_fused_traced(anchor_token, anchor_pos, max_new_tokens)
         self._pv_a_prev = -1  # re-seed packed-verify staging for the new anchor/request
@@ -1405,7 +1511,9 @@ class SpeculativeDecoder:
         loop_t0 = time.perf_counter()
         anchor_hidden = self.seed(anchor_token, anchor_pos)  # [1,1,1,h] device
         anchor_tok_tt = self._tokens_tensor([anchor_token])
+        self._metrics_setup_done()
         while len(out) < max_new_tokens:
+            iter_t0, before = time.perf_counter(), len(out)
             if self._fused_reseed:
                 new_anchor_hidden = self.seed(anchor_token, anchor_pos)
                 anchor_hidden.deallocate(True)
@@ -1442,13 +1550,17 @@ class SpeculativeDecoder:
                 if tok in self.stop_tokens:
                     anchor_hidden.deallocate(True)
                     anchor_tok_tt.deallocate(True)
+                    self._metrics_iteration(iter_t0, len(out) - before)
                     self._last_fused_replay_s = time.perf_counter() - loop_t0
+                    self._metrics_finish()
                     return out, accepts
                 if len(out) >= max_new_tokens:
                     break
+            self._metrics_iteration(iter_t0, len(out) - before)
         anchor_hidden.deallocate(True)
         anchor_tok_tt.deallocate(True)
         self._last_fused_replay_s = time.perf_counter() - loop_t0
+        self._metrics_finish()
         return out, accepts
 
     # ── fused single-iteration trace (greedy) ───────────────────────────────
@@ -1552,7 +1664,17 @@ class SpeculativeDecoder:
         So auto only enables where the KV amortization outweighs the acceptance
         cost. Reseed mode is excluded structurally: its seed forward writes the
         anchor KV around the staging, and the staged hot block goes stale.
-        GEMMA4_SPEC_FUSED_PACKED=1/0 overrides."""
+        GEMMA4_SPEC_FUSED_PACKED=1/0 overrides.
+
+        Capability comes first. For a per-layer-input target the batch-dimension
+        body is not an option at all -- `_fused_body` does not pass PLI inputs to
+        `ttnn_verify_forward`, so verification raises there -- and the policy below
+        would choose it, since that policy keys off boundedness and a >131072
+        context that a PLI target such as E2B never reaches. So decide capability
+        before performance, and do not let the env override select a body that
+        cannot run."""
+        if self.target_has_pli:
+            return not self._fused_reseed
         env = os.environ.get("GEMMA4_SPEC_FUSED_PACKED")
         if env in ("0", "1"):
             return env == "1" and not self._fused_reseed
@@ -1684,12 +1806,14 @@ class SpeculativeDecoder:
         anchor_hidden.deallocate(True)
         tr = self._fused_trace
         self._last_fused_setup_s = time.perf_counter() - setup_t0
+        self._metrics_setup_done()
 
         out, accepts = [], []
         cur_token, cur_pos = anchor_token, anchor_pos
         first = True  # capture already bound the first inputs (token/pos/hidden)
         replay_t0 = time.perf_counter()
         while len(out) < max_new_tokens:
+            iter_t0, before = time.perf_counter(), len(out)
             if not first:
                 h_tok = self._host_tokens([cur_token])
                 ttnn.copy_host_to_device_tensor(h_tok, tr["anchor_tok"])
@@ -1764,11 +1888,15 @@ class SpeculativeDecoder:
             for tok in committed:
                 out.append(tok)
                 if tok in self.stop_tokens:
+                    self._metrics_iteration(iter_t0, len(out) - before)
                     self._last_fused_replay_s = time.perf_counter() - replay_t0
+                    self._metrics_finish()
                     return out, accepts
                 if len(out) >= max_new_tokens:
                     break
+            self._metrics_iteration(iter_t0, len(out) - before)
         self._last_fused_replay_s = time.perf_counter() - replay_t0
+        self._metrics_finish()
         return out, accepts
 
     # ── serving (step-wise fused trace; vLLM B=1 sessions) ───────────────────
@@ -2167,6 +2295,7 @@ class SpeculativeDecoder:
         x = self._tokens_tensor(tokens)  # [1,B]
         pu, pi = self._pos_tensors(positions)  # pu [1,32] (B filled), pi [B]
         pt = self._page_table_users(len(tokens))  # [B, blocks] distinct
+        device_pli = self.target_has_pli and self._pli_dev_host
         logits, hidden = self.target.ttnn_verify_forward(
             x=x,
             current_pos=pu,
@@ -2177,6 +2306,8 @@ class SpeculativeDecoder:
             # per-layer tables under bounded sliding slices row b>=1 of a 1-row
             # table (see _capture_fused_trace).
             page_tables_per_layer=self._page_tables_per_layer_users(len(tokens)),
+            token_ids_host=None if device_pli else tokens,
+            pli_on_device=device_pli,
         )
         logits.deallocate(True)
         for t in (x, pu, pi, pt):
@@ -2245,6 +2376,7 @@ class SpeculativeDecoder:
         # Width-match the table to the masks' S_k (see _page_table_users).
         _bs = int(self.tt_kv_cache[0][0].padded_shape[2])
         pt = self._page_table_users(B, width=S_k // _bs)
+        device_pli = self.target_has_pli and self._pli_dev_host
         logits, vhidden = target.ttnn_packed_verify_forward(
             x=x,
             position_idx=position_idx,
@@ -2257,6 +2389,8 @@ class SpeculativeDecoder:
             embed_idx_full=None,
             embed_idx_sliding=None,
             hot_pt=None,
+            token_ids_host=None if device_pli else [token for user_tokens in tokens_b for token in user_tokens],
+            pli_on_device=device_pli,
         )
         lh = self._logits_to_host(logits).reshape(B * P, -1)
         logits.deallocate(True)
@@ -2352,6 +2486,7 @@ class SpeculativeDecoder:
             embed_idx_full=None,
             embed_idx_sliding=None,
             hot_pt=None,
+            pli_on_device=self.target_has_pli,
         )
         vidx = self._argmax_last(vlogits, rows=B * P)  # [1,1,B*P] uint32 RM
         vlogits.deallocate(True)
@@ -2361,6 +2496,8 @@ class SpeculativeDecoder:
         """Capture ONE fused batched iteration over persistent buffers."""
         from loguru import logger as _lg
 
+        if self.target_has_pli and not getattr(self.target, "_pli_dev_ready", False):
+            raise RuntimeError("device PLI weights must be initialized before fused trace capture")
         K = self.draft_len
         B = len(anchor_tokens)
         P = K + 1
@@ -2436,6 +2573,11 @@ class SpeculativeDecoder:
         S_k = ((max_seq_len + 63) // 64) * 64
 
         setup_t0 = time.perf_counter()
+        if self.target_has_pli:
+            if not self._fused_pli_device:
+                raise ValueError("traced fused-packed PLI requires GEMMA4_PLI=device")
+            # Weight upload precedes capture; no allocation may occur inside it.
+            self.target.init_pli_device_weights()
         # Eager (untraced) batched seed, then capture (mirrors the single-user path:
         # an active verify trace would collide with the fused capture allocations).
         self._use_trace = False
@@ -2445,6 +2587,7 @@ class SpeculativeDecoder:
         seed_h.deallocate(True)
         tr = self._fused_trace_batched
         self._last_fused_setup_s = time.perf_counter() - setup_t0
+        self._metrics_setup_done()
 
         toks = list(anchor_tokens)
         pos = list(anchor_positions)
@@ -2458,6 +2601,7 @@ class SpeculativeDecoder:
         first = True
         replay_t0 = time.perf_counter()
         while not all(done):
+            iter_t0, before = time.perf_counter(), sum(map(len, outs))
             if not first:
                 cs = list(pos)
                 h_tok = self._host_tokens(toks)
@@ -2509,7 +2653,7 @@ class SpeculativeDecoder:
                 g = [gids[b * P + j] for j in range(P)]
                 m = next((i for i in range(K) if drafts[i] != g[i]), K)
                 committed = drafts[:m] + [g[m]]
-                rows_b.append(min(m + 1, K))
+                rows_b.append(self._fused_shift_seed_row(m, K))
                 if done[b]:
                     continue
                 accepts[b].append(m)
@@ -2525,11 +2669,15 @@ class SpeculativeDecoder:
 
             if not all(done):
                 self._hidden_rows_to_device_batched(rows_b)
+            self._metrics_iteration(iter_t0, sum(map(len, outs)) - before)
 
         self._last_fused_replay_s = time.perf_counter() - replay_t0
+        self._metrics_finish()
         return outs, accepts
 
-    def generate_batched(self, anchor_tokens, anchor_positions, max_new_tokens, max_seq_len, temperature=0.0):
+    def generate_batched(
+        self, anchor_tokens, anchor_positions, max_new_tokens, max_seq_len, temperature=0.0, *, _nested=False
+    ):
         """Greedy batched speculative decode for B independent users (ragged).
 
         Each iteration drafts ALL B users in one batch=B drafter chain, runs ONE
@@ -2541,10 +2689,25 @@ class SpeculativeDecoder:
         Returns (outs: list[B] of generated token-id lists, accepts: list[B] of
         per-iteration accept counts).
         """
+        if not _nested:
+            self._last_metrics = None
+            self._last_route = None
+            self._metrics_active = False
         if temperature and temperature > 0:
             raise NotImplementedError("batched spec-decode supports greedy only (temperature<=0)")
-        if self._use_trace:
+        route = self._effective_route(batched=True)
+        if route == "fused-batch-dim":
+            raise ValueError("batched generation has no fused-batch-dim body")
+        self._last_route = "fused-packed-traced" if route == "fused-packed" else "host-loop-eager"
+        self._metrics_begin(self._last_route)
+        if max_new_tokens <= 0:
+            outs, accepts = [[] for _ in anchor_tokens], [[] for _ in anchor_tokens]
+            self._metrics_finish()
+            return outs, accepts
+        if route == "fused-packed":
             return self._generate_fused_traced_batched(anchor_tokens, anchor_positions, max_new_tokens, max_seq_len)
+        if self.target_has_pli and self._pli_dev_host:
+            self.target.init_pli_device_weights()
         B = len(anchor_tokens)
         K = self.draft_len
         P = K + 1
@@ -2562,10 +2725,12 @@ class SpeculativeDecoder:
         backbone = seed_h.shape[-1]
         anchor_h = [ttnn.clone(ttnn.slice(seed_h, [0, 0, b, 0], [1, 1, b + 1, backbone])) for b in range(B)]
         seed_h.deallocate(True)
+        self._metrics_setup_done()
 
         _draft_mode = os.environ.get("GEMMA4_SPEC_DRAFT_MODE", "batched")
 
         while not all(done):
+            iter_t0, before = time.perf_counter(), sum(map(len, outs))
             if _draft_mode == "loop":
                 drafts_b = [self._draft(toks[b], anchor_h[b], pos[b], temperature=0.0, user_idx=b)[0] for b in range(B)]
             else:
@@ -2597,13 +2762,24 @@ class SpeculativeDecoder:
                 if pos[b] >= pos_cap:
                     done[b] = True
             vhidden.deallocate(True)
+            self._metrics_iteration(iter_t0, sum(map(len, outs)) - before)
 
         for b in range(B):
             anchor_h[b].deallocate(True)
+        self._metrics_finish()
         return outs, accepts
 
     def generate(
-        self, anchor_token, anchor_pos, max_new_tokens, anchor_hidden=None, temperature=0.0, top_p=1.0, top_k=0
+        self,
+        anchor_token,
+        anchor_pos,
+        max_new_tokens,
+        anchor_hidden=None,
+        temperature=0.0,
+        top_p=1.0,
+        top_k=0,
+        *,
+        _nested=False,
     ):
         """Run speculative decode from a prompt anchor (prefill must have filled the KV).
 
@@ -2617,11 +2793,27 @@ class SpeculativeDecoder:
         Returns:
             (generated_token_ids, num_accept_per_iter) — the latter for accept-rate stats.
         """
+        if not _nested:
+            self._last_metrics = None
+            self._last_route = None
+            self._metrics_active = False
         greedy = not temperature or temperature <= 0
+        route = self._effective_route(greedy)
+        self._last_route = route
+        self._metrics_begin(route)
+        if max_new_tokens <= 0:
+            self._metrics_finish()
+            return [], []
+        if route == "fused-packed":
+            outs, accepts = self.generate_batched(
+                [anchor_token], [anchor_pos], max_new_tokens, self.target.max_seq_len, _nested=True
+            )
+            return outs[0], accepts[0]
+        if route == "fused-batch-dim":
+            return self.generate_fused(anchor_token, anchor_pos, max_new_tokens, _nested=True)
+        if self.target_has_pli and self._pli_dev_host:
+            self.target.init_pli_device_weights()
         if self._use_trace:
-            if greedy:
-                return self.generate_fused(anchor_token, anchor_pos, max_new_tokens)
-
             # Sampling mode cannot use the single fused greedy trace because the
             # draft/verify token selection is non-deterministic (it depends on the
             # sampled token), so draft and verify must run as two SEPARATE traces
@@ -2636,10 +2828,12 @@ class SpeculativeDecoder:
             #      trace still references, corrupting in-flight state.
             # Greedy sidesteps both by fusing draft+verify into ONE trace; sampling
             # has no fused equivalent yet, so fall back to the untraced host loop.
+            # A greedy route without a fused body (host PLI, or an explicit
+            # host-loop route) falls back the same way.
             from loguru import logger as _lg
 
             _lg.warning(
-                "Disabling speculative trace for sampling mode; separate draft/verify "
+                "Disabling speculative trace for the host loop; separate draft/verify "
                 "trace interleaving deadlocks the mesh (see generate() for details)"
             )
             self._use_trace = False
@@ -2652,10 +2846,12 @@ class SpeculativeDecoder:
                     temperature=temperature,
                     top_p=top_p,
                     top_k=top_k,
+                    _nested=True,
                 )
             finally:
                 self._use_trace = True
 
+        self._last_route = "host-loop-eager"
         traced = self._use_trace
         self._pv_a_prev = -1  # re-seed packed-verify staging for the new anchor/request
         out = []
@@ -2667,7 +2863,9 @@ class SpeculativeDecoder:
         if anchor_hidden is None:
             anchor_hidden = self.seed(anchor_token, anchor_pos)
         draft_fn = self._draft_traced if self._use_trace else self._draft
+        self._metrics_setup_done()
         while len(out) < max_new_tokens:
+            iter_t0, before = time.perf_counter(), len(out)
             drafts, draft_logits = draft_fn(
                 anchor_token, anchor_hidden, anchor_pos, temperature=temperature, top_p=top_p, top_k=top_k
             )
@@ -2720,10 +2918,14 @@ class SpeculativeDecoder:
                 if tok in self.stop_tokens:
                     if owns_anchor_hidden:
                         anchor_hidden.deallocate(True)
+                    self._metrics_iteration(iter_t0, len(out) - before)
+                    self._metrics_finish()
                     return out, accepts
                 if len(out) >= max_new_tokens:
                     break
+            self._metrics_iteration(iter_t0, len(out) - before)
 
         if owns_anchor_hidden:
             anchor_hidden.deallocate(True)
+        self._metrics_finish()
         return out, accepts
