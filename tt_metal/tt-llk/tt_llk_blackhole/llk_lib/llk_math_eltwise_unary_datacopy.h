@@ -52,10 +52,16 @@ inline void _llk_math_eltwise_unary_datacopy_(
         math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(dst_index);
         math::math_unpack_to_dest_tile_ready();
 
-        // Pin the math dest offset to the bank base: hardware adds it to the bank-local ZEROACC and
-        // MOVD2B/MOVB2D immediates below, and a preceding op may have left another tile's offset here.
-        // TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::get_dest_buffer_base());
-        TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::get_dest_buffer_base());
+        // Pin the math dest offset to the bank base: hardware adds it to the MOVD2B/MOVB2D immediates
+        // (dst_index * 64 + row) of the broadcast sequences below, and a preceding op may have left another
+        // tile's offset here. A plain copy (NONE) only issues the budabackend#2730 ZEROACC below, whose CLR_16
+        // block index is absolute within the bank: the offset only feeds its bank select, which flips once
+        // offset + index reaches 512 (tt-metal#53693), and a 32-bit bank never gets there (offset <= 240,
+        // index <= 15). So NONE skips the write, as on Wormhole, and keeps its per-tile cost unchanged.
+        if constexpr (src_b_bcast_type != BroadcastType::NONE)
+        {
+            TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::get_dest_buffer_base());
+        }
 
         // Due to bug in Blackhole Tensix (more details in budabackend/#2730) when an event with side effect of clearing DEST zero flags
         // (such as Unpack-to-dest or RISC-to-dest) and a ZEROACC instruction from packer occur in the same cycle,
