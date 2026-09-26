@@ -7,8 +7,8 @@
 #define __FDS_FUNCTIONS_HPP__
 
 #include <cstdint>
-#include "meta/fds_registers/tt_fds_dispatch_reg.h"
-#include "meta/fds_registers/tt_fds_tensixneo_reg.h"
+#include "fds_registers/tt_fds_dispatch_reg.h"
+#include "fds_registers/tt_fds_tensixneo_reg.h"
 #include "rocc_instructions.hpp"
 
 // Definitions live in this header: these are one-instruction ROCC register accesses, and JIT-compiled
