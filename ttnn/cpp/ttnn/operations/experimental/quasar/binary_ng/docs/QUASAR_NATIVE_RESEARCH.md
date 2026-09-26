@@ -226,7 +226,7 @@ Two styles exist side by side (same test kernels):
 - **explicit** — `reserve_back → async_read → async_read_barrier → push_back` (the WH/BH shape).
 
 Rules and hazards:
-- Opt-out is **DM-only**: `DataMovementGen2Config::disable_dfb_implicit_sync_for[_all]`
+- Opt-out is **DM-only**: `DataMovement2XXConfig::disable_dfb_implicit_sync_for[_all]`
   (`data_movement_hardware_config.hpp:108-119`). **There is no compute-side opt-out** — a compute
   producer+consumer self-loop DFB must be structured correctly, not flagged off.
 - Doing **both** (explicit CB ops *and* implicit sync on the same DFB) double-counts the 16-bit counter →

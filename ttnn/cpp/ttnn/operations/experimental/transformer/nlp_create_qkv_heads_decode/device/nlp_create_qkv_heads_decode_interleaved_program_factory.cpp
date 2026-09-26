@@ -204,10 +204,9 @@ ttnn::device_operation::ProgramArtifacts NLPCreateQKVHeadsDecodeInterleavedProgr
         };
     };
 
-    const auto arch = input_tensor.device()->arch();
     // phase 1 on the reader instance, phase 2 on the writer instance
-    KernelSpec reader = make_kernel(READER, READER_SCRATCH, 1, create_reader_datamovement_config(arch));
-    KernelSpec writer = make_kernel(WRITER, WRITER_SCRATCH, 2, create_writer_datamovement_config(arch));
+    KernelSpec reader = make_kernel(READER, READER_SCRATCH, 1, create_reader_datamovement_config());
+    KernelSpec writer = make_kernel(WRITER, WRITER_SCRATCH, 2, create_writer_datamovement_config());
 
     ProgramSpec spec{
         .name = "nlp_create_qkv_heads_decode_interleaved",

@@ -211,7 +211,7 @@ void JitBuildEnv::init(
     this->out_root_ = rtoptions.is_cache_dir_specified() ? rtoptions.get_cache_dir() : get_default_root_path();
 
     this->arch_ = config.arch;
-    this->max_cbs_ = config.max_cbs;
+    this->max_dfbs_ = config.max_dfbs;
 
     // Tools
     const static bool use_ccache = std::getenv("TT_METAL_CCACHE_KERNEL_SUPPORT") != nullptr;

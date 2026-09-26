@@ -47,7 +47,7 @@ struct JitDeviceConfig {
     bool coordinate_virtualization_enabled = false;
 
     uint32_t dispatch_message_addr = 0;
-    uint32_t max_cbs = 0;
+    uint32_t max_dfbs = 0;
     uint8_t num_hw_cqs = 0;
 
     bool routing_fw_enabled = false;

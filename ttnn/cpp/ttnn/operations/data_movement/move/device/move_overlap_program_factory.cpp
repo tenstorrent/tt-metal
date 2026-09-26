@@ -79,7 +79,7 @@ ProgramDescriptor MoveOverlapProgramFactory::create_descriptor(
 
     const uint32_t num_pages =
         tilized ? (output.physical_volume() / TILE_HW) : (output.physical_volume() / output.padded_shape()[-1]);
-    const tt::tt_metal::IDevice* device = output.device();
+    const tt::tt_metal::distributed::MeshDevice* device = output.device();
     const CoreCoord compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] =

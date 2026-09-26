@@ -291,10 +291,15 @@ void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const 
 
     experimental::DataMovementHardwareConfig reader_hw_config;
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        reader_hw_config = experimental::DataMovementGen2Config{};
+        reader_hw_config = experimental::DataMovementHardwareConfig{};
     } else {
-        reader_hw_config = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
+        reader_hw_config = experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                    .noc = tt_metal::NOC::RISCV_1_default,
+                },
+        };
     }
     experimental::KernelSpec reader_spec{
         .unique_id = READER,
@@ -307,10 +312,15 @@ void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const 
 
     experimental::DataMovementHardwareConfig writer_hw_config;
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        writer_hw_config = experimental::DataMovementGen2Config{};
+        writer_hw_config = experimental::DataMovementHardwareConfig{};
     } else {
-        writer_hw_config = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
+        writer_hw_config = experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                },
+        };
     }
     experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
@@ -364,17 +374,10 @@ void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const 
     }
 
     experimental::ComputeHardwareConfig compute_hw_config;
-    if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        compute_hw_config = experimental::ComputeGen2Config{
-            .enable_32_bit_dest = test_config.fp32_dest_acc_en,
-            .double_buffer_dest = !test_config.dst_full_sync_en,
-        };
-    } else {
-        compute_hw_config = experimental::ComputeGen1Config{
-            .enable_32_bit_dest = test_config.fp32_dest_acc_en,
-            .double_buffer_dest = !test_config.dst_full_sync_en,
-        };
-    }
+    compute_hw_config = experimental::ComputeHardwareConfig{
+        .enable_32_bit_dest = test_config.fp32_dest_acc_en,
+        .double_buffer_dest = !test_config.dst_full_sync_en,
+    };
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = compute_kernel,
@@ -614,10 +617,20 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
 
     experimental::DataMovementHardwareConfig reader_hw_config;
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        reader_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        reader_hw_config = experimental::DataMovementHardwareConfig{
+            .config_2xx =
+                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true,
+                },
+        };
     } else {
-        reader_hw_config = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
+        reader_hw_config = experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                    .noc = tt_metal::NOC::RISCV_1_default,
+                },
+        };
     }
     experimental::KernelSpec reader_spec{
         .unique_id = READER,
@@ -644,10 +657,20 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
 
     experimental::DataMovementHardwareConfig writer_hw_config;
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        writer_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        writer_hw_config = experimental::DataMovementHardwareConfig{
+            .config_2xx =
+                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true,
+                },
+        };
     } else {
-        writer_hw_config = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
+        writer_hw_config = experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                },
+        };
     }
     experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
@@ -668,17 +691,10 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
     }
 
     experimental::ComputeHardwareConfig compute_hw_config;
-    if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        compute_hw_config = experimental::ComputeGen2Config{
-            .enable_32_bit_dest = test_config.fp32_dest_acc_en,
-            .double_buffer_dest = !test_config.dst_full_sync_en,
-        };
-    } else {
-        compute_hw_config = experimental::ComputeGen1Config{
-            .enable_32_bit_dest = test_config.fp32_dest_acc_en,
-            .double_buffer_dest = !test_config.dst_full_sync_en,
-        };
-    }
+    compute_hw_config = experimental::ComputeHardwareConfig{
+        .enable_32_bit_dest = test_config.fp32_dest_acc_en,
+        .double_buffer_dest = !test_config.dst_full_sync_en,
+    };
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/unpack_tilizeA_B_reduce.cpp",
@@ -1015,7 +1031,7 @@ static void run_quasar_tilize_untilize_test(
         .num_threads = 1,
         .dfb_bindings = {experimental::ProducerOf(INPUT_DFB, "out")},
         .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
 
     experimental::KernelSpec writer_spec{
@@ -1026,7 +1042,7 @@ static void run_quasar_tilize_untilize_test(
         .num_threads = 1,
         .dfb_bindings = {experimental::ConsumerOf(OUTPUT_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
 
     std::string compute_kernel;
@@ -1059,17 +1075,10 @@ static void run_quasar_tilize_untilize_test(
     }
 
     experimental::ComputeHardwareConfig compute_hw_config;
-    if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        compute_hw_config = experimental::ComputeGen2Config{
-            .enable_32_bit_dest = fp32_dest_acc_en,
-            .double_buffer_dest = !dst_full_sync_en,
-        };
-    } else {
-        compute_hw_config = experimental::ComputeGen1Config{
-            .enable_32_bit_dest = fp32_dest_acc_en,
-            .double_buffer_dest = !dst_full_sync_en,
-        };
-    }
+    compute_hw_config = experimental::ComputeHardwareConfig{
+        .enable_32_bit_dest = fp32_dest_acc_en,
+        .double_buffer_dest = !dst_full_sync_en,
+    };
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = compute_kernel,

@@ -645,7 +645,7 @@ uint32_t MetalEnv::get_l1_size() const {
 }
 uint32_t MetalEnv::get_dram_alignment() const { return impl_->get_hal().get_alignment(HalMemType::DRAM); }
 uint32_t MetalEnv::get_l1_alignment() const { return impl_->get_hal().get_alignment(HalMemType::L1); }
-uint32_t MetalEnv::get_arch_num_circular_buffers() const { return impl_->get_hal().get_arch_num_circular_buffers(); }
+uint32_t MetalEnv::get_num_dataflow_buffers() const { return impl_->get_hal().get_num_dataflow_buffers(); }
 uint32_t MetalEnv::get_max_worker_l1_unreserved_size() const {
     size_t l1_end = impl_->get_hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) +
                     impl_->get_hal().get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);

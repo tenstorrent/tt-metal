@@ -464,7 +464,7 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
     }
 
     const ComputeHardwareConfig compute_hw_config =
-        ComputeGen1Config{.fpu_math_fidelity = math_fidelity, .enable_32_bit_dest = fp32_dest_acc_en};
+        ComputeHardwareConfig{.fpu_math_fidelity = math_fidelity, .enable_32_bit_dest = fp32_dest_acc_en};
 
     const KernelSpec::CompilerOptions::Defines reload_define{{"RELOAD_IMPL", use_reload_impl ? "1" : "0"}};
     KernelSpec::CompilerOptions::Defines reader_defines = reload_define;
@@ -523,7 +523,7 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
              {"chunk_local_t", full_sp_slab_tiles(tensor_args.input, mesh_view, args.seq_subshard_axis)},
              {"query_offset_t", seq_len_t * subshard_coord}},
         .runtime_arg_schema = reader_schema,
-        .hw_config = create_reader_datamovement_config(mesh_device->arch())};
+        .hw_config = create_reader_datamovement_config()};
 
     // ------------------------------------------------------------------ indexed writer + reused llama compute
     TT_FATAL(
@@ -552,7 +552,7 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
              {"rotary_offset_t", rotary_offset_t}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end", "head_start", "head_end"}},
-        .hw_config = create_writer_datamovement_config(mesh_device->arch())};
+        .hw_config = create_writer_datamovement_config()};
 
     KernelSpec compute_spec{
         .unique_id = COMPUTE,

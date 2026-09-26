@@ -27,9 +27,9 @@ using namespace tt;
 namespace CMAKE_UNIQUE_NAMESPACE_ROW_MAJOR {
 
 bool enable_fp32_dest_acc(
-    const tt_metal::IDevice* device, const ttnn::DeviceComputeKernelConfig& compute_kernel_config) {
+    const tt_metal::distributed::MeshDevice& device, const ttnn::DeviceComputeKernelConfig& compute_kernel_config) {
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+        get_compute_kernel_config_args(device.arch(), compute_kernel_config);
 
     return fp32_dest_acc_en;
 }
@@ -99,7 +99,7 @@ PagedRowMajorFusedUpdateCacheProgramFactory::compute_row_major_fused_offsets(
     const auto& input_tensor1 = tensor_args.input_tensor1;
     const auto& input_tensor2 = tensor_args.input_tensor2;
     const bool fp32_dest_acc_en = CMAKE_UNIQUE_NAMESPACE_ROW_MAJOR::enable_fp32_dest_acc(
-        input_tensor1.device(), operation_attributes.compute_kernel_config);
+        *input_tensor1.device(), operation_attributes.compute_kernel_config);
 
     const uint32_t Wt = cache_tensor1.padded_shape()[-1] / TILE_WIDTH;
     const uint32_t Wbytes = fp32_dest_acc_en ? cache_tensor1.padded_shape()[-1] * sizeof(float)
@@ -140,7 +140,7 @@ ttnn::device_operation::ProgramArtifacts PagedRowMajorFusedUpdateCacheProgramFac
     const auto& update_idxs_tensor = tensor_args.update_idxs_tensor;
     const auto& page_table = tensor_args.page_table;
 
-    tt_metal::IDevice* device = input_tensor1.device();
+    tt_metal::distributed::MeshDevice* device = input_tensor1.device();
 
     const tt::DataFormat cache_dfb_data_format = tt_metal::datatype_to_dataformat_converter(cache_tensor1.dtype());
     const uint32_t cache_single_tile_size = tt::tile_size(cache_dfb_data_format);
@@ -148,7 +148,7 @@ ttnn::device_operation::ProgramArtifacts PagedRowMajorFusedUpdateCacheProgramFac
     const tt::DataFormat input_dfb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor1.dtype());
     const uint32_t input_single_tile_size = tt::tile_size(input_dfb_data_format);
 
-    const bool fp32_dest_acc_en = enable_fp32_dest_acc(device, operation_attributes.compute_kernel_config);
+    const bool fp32_dest_acc_en = enable_fp32_dest_acc(*device, operation_attributes.compute_kernel_config);
 
     const tt::DataFormat interm_dfb_data_format =
         fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
@@ -457,7 +457,7 @@ ttnn::device_operation::ProgramArtifacts PagedRowMajorFusedUpdateCacheProgramFac
                 },
             .runtime_arg_schema =
                 {.runtime_arg_names = {"has_work", "cache_start_id", "my_batch_idx", "wait_to_start"}},
-            .hw_config = create_reader_datamovement_config(device->arch()),
+            .hw_config = create_reader_datamovement_config(),
         });
 
         kernels.push_back(KernelSpec{
@@ -502,14 +502,14 @@ ttnn::device_operation::ProgramArtifacts PagedRowMajorFusedUpdateCacheProgramFac
                       "send_signal",
                       "send_core_x",
                       "send_core_y"}},
-            .hw_config = create_writer_datamovement_config(device->arch()),
+            .hw_config = create_writer_datamovement_config(),
         });
 
         // Legacy built a ComputeConfigDescriptor that set only fp32_dest_acc_en, leaving every other
         // knob at its default even when the caller's compute_kernel_config specified one.
-        // ComputeGen1Config's defaults coincide with those, so setting only enable_32_bit_dest
+        // ComputeHardwareConfig's defaults coincide with those, so setting only enable_32_bit_dest
         // reproduces it exactly.
-        ComputeGen1Config compute_hw{.enable_32_bit_dest = fp32_dest_acc_en};
+        ComputeHardwareConfig compute_hw{.enable_32_bit_dest = fp32_dest_acc_en};
         if (fp32_dest_acc_en) {
             // A 32-bit Dest requires an explicit unpack mode for every Float32 buffer the compute
             // kernel consumes. Legacy named none, which resolved to unpacking into SrcA/B. The input
