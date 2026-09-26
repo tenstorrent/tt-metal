@@ -16,6 +16,19 @@ namespace ckernel
 namespace sfpu
 {
 
+/**
+ * @brief Relational comparison selected by the SFPU binary compare kernels, testing `in0 OP in1`.
+ */
+enum class CompareOp : std::uint8_t
+{
+    eq,
+    ne,
+    lt,
+    le,
+    gt,
+    ge,
+};
+
 // Int32 binary comparison for relational ops (signed), ported from BH.
 // All ops reduce to computing LT(X, Y) with optional operand swap and result
 // inversion:
@@ -24,17 +37,17 @@ namespace sfpu
 template <
     bool APPROXIMATION_MODE,
     int ITERATIONS,
-    SfpuType RELATIONAL_OP,
+    CompareOp RELATIONAL_OP,
     bool SIGN_MAGNITUDE_FORMAT     = false,
     trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
 inline void calculate_binary_comp_int32(const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out)
 {
     static_assert(
-        RELATIONAL_OP == SfpuType::lt || RELATIONAL_OP == SfpuType::gt || RELATIONAL_OP == SfpuType::le || RELATIONAL_OP == SfpuType::ge,
+        RELATIONAL_OP == CompareOp::lt || RELATIONAL_OP == CompareOp::gt || RELATIONAL_OP == CompareOp::le || RELATIONAL_OP == CompareOp::ge,
         "Supported operation types: lt, gt, le, ge");
 
-    constexpr bool swap_operands = (RELATIONAL_OP == SfpuType::gt || RELATIONAL_OP == SfpuType::le);
-    constexpr bool invert_result = (RELATIONAL_OP == SfpuType::le || RELATIONAL_OP == SfpuType::ge);
+    constexpr bool swap_operands = (RELATIONAL_OP == CompareOp::gt || RELATIONAL_OP == CompareOp::le);
+    constexpr bool invert_result = (RELATIONAL_OP == CompareOp::le || RELATIONAL_OP == CompareOp::ge);
 
     if constexpr (invert_result)
     {
@@ -94,6 +107,46 @@ inline void calculate_binary_comp_int32(const std::uint32_t dst_index_in0, const
 
         TT_SFPSTORE(p_sfpu::LREG1, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, out_offset + (d << 1));
     }
+}
+
+/**
+ * @brief Map a legacy SfpuType relational selector to its CompareOp.
+ *
+ * @tparam RELATIONAL_OP: Legacy selector, values = <lt/gt/le/ge>
+ */
+template <SfpuType RELATIONAL_OP>
+constexpr CompareOp _sfpu_type_to_compare_op_()
+{
+    if constexpr (RELATIONAL_OP == SfpuType::lt)
+    {
+        return CompareOp::lt;
+    }
+    else if constexpr (RELATIONAL_OP == SfpuType::gt)
+    {
+        return CompareOp::gt;
+    }
+    else if constexpr (RELATIONAL_OP == SfpuType::le)
+    {
+        return CompareOp::le;
+    }
+    else
+    {
+        static_assert(RELATIONAL_OP == SfpuType::ge, "Supported operation types: lt, gt, le, ge");
+        return CompareOp::ge;
+    }
+}
+
+// SfpuType-selected entry point, kept for existing callers. It forwards to the CompareOp version above.
+template <
+    bool APPROXIMATION_MODE,
+    int ITERATIONS,
+    SfpuType RELATIONAL_OP,
+    bool SIGN_MAGNITUDE_FORMAT     = false,
+    trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
+inline void calculate_binary_comp_int32(const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out)
+{
+    calculate_binary_comp_int32<APPROXIMATION_MODE, ITERATIONS, _sfpu_type_to_compare_op_<RELATIONAL_OP>(), SIGN_MAGNITUDE_FORMAT, TILE_SHAPE>(
+        dst_index_in0, dst_index_in1, dst_index_out);
 }
 
 } // namespace sfpu
