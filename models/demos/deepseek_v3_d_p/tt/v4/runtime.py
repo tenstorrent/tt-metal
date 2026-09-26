@@ -319,7 +319,7 @@ class TtV4PrefillRuntime:
             actual_end=int(actual_end),
             input_ids=ids,
             on_layer_complete=cb,
-            on_layer_hidden=self._layer_hidden_hook(int(actual_start)) if not warmup else None,
+            on_layer_hidden=self._layer_hidden_hook(int(actual_start)) if not warmup else self._drafter_alloc_hook(),
         )
         t_issue1 = time.perf_counter()
         if deferred:
@@ -372,7 +372,40 @@ class TtV4PrefillRuntime:
     _drafter_layers = tuple(
         int(x) for x in os.environ.get("PREFILL_DRAFTER_LAYERS", "40,41,42").split(",") if x.strip()
     )
-    _lane_means: dict = {}
+    _lane_means: dict = {}  # layer -> PERSISTENT [1, 1, S_l, D_l] buffer, allocated before any trace capture
+    _lane_mean_shard_check: Optional[bool] = None
+
+    def _stream_mean(self, streams):
+        ts = [t for t in streams if isinstance(t, ttnn.Tensor)]
+        if not ts:
+            return None
+        acc = ttnn.add(ts[0], ts[1]) if len(ts) > 1 else ttnn.clone(ts[0])
+        for t in ts[2:]:
+            nxt = ttnn.add(acc, t)
+            ttnn.deallocate(acc)
+            acc = nxt
+        mean = ttnn.multiply(acc, 1.0 / len(ts))
+        ttnn.deallocate(acc)
+        return mean
+
+    def _drafter_alloc_hook(self):
+        """compile()'s eager warm-up (BEFORE any island is captured): allocate the persistent lane-mean buffer of every
+        target layer as a clone of its first mean. A buffer allocated after a capture can sit on a replay's intermediate
+        addresses and be overwritten (DS4F-0262 class -- launch 14: layer 41's exported window was NaN)."""
+        if self._drafter_window <= 0 or all(int(l) in self._lane_means for l in self._drafter_layers):
+            return None
+
+        def hook(layer_idx, streams):
+            if layer_idx not in self._drafter_layers or int(layer_idx) in self._lane_means:
+                return
+            if not isinstance(streams, (list, tuple)):
+                return
+            mean = self._stream_mean(streams)
+            if mean is not None:
+                self._lane_means[int(layer_idx)] = mean  # persistent from here on
+                logger.info(f"[v4 runtime] drafter window: lane-mean buffer for layer {layer_idx} {tuple(mean.shape)}")
+
+        return hook
 
     def _drafter_hook(self):
         if self._drafter_window <= 0:
@@ -381,20 +414,15 @@ class TtV4PrefillRuntime:
         def hook(layer_idx, streams):
             if layer_idx not in self._drafter_layers or not isinstance(streams, (list, tuple)):
                 return
-            ts = [t for t in streams if isinstance(t, ttnn.Tensor)]
-            if not ts:
+            dst = self._lane_means.get(int(layer_idx))
+            mean = self._stream_mean(streams)
+            if mean is None:
                 return
-            acc = ttnn.add(ts[0], ts[1]) if len(ts) > 1 else ttnn.clone(ts[0])
-            for t in ts[2:]:
-                nxt = ttnn.add(acc, t)
-                ttnn.deallocate(acc)
-                acc = nxt
-            mean = ttnn.multiply(acc, 1.0 / len(ts))
-            ttnn.deallocate(acc)
-            old = self._lane_means.pop(int(layer_idx), None)
-            if old is not None:
-                ttnn.deallocate(old)
-            self._lane_means[int(layer_idx)] = mean
+            if dst is None:  # no pre-capture allocation happened (use_trace off): keep it, nothing replays over it
+                self._lane_means[int(layer_idx)] = mean
+                return
+            ttnn.copy(mean, dst)  # into the pre-capture buffer; the transient is freed before the next replay
+            ttnn.deallocate(mean)
 
         return hook
 
@@ -433,6 +461,20 @@ class TtV4PrefillRuntime:
         host = host[0, 0].float().view(c.sp_factor, n, -1)  # [sp, n, hidden]
         return host[:, lo_local - tile0 : hi_local - tile0]
 
+    def _rows_from_sp_shard(self, t, sp_idx: int, lo_local: int, hi_local: int):
+        """Rows [lo_local, hi_local) of SP shard ``sp_idx`` read from its TP chips only -> host fp32 [rows, hidden]; None
+        when the mesh order cannot be trusted (falls back to the all-chips read)."""
+        c = self.config
+        devs = ttnn.get_device_tensors(t)
+        rows_, cols_ = int(c.mesh_shape[0]), int(c.mesh_shape[1])
+        if len(devs) != rows_ * cols_:
+            return None
+        parts = []
+        for tp_idx in range(c.tp_factor):
+            idx = sp_idx * cols_ + tp_idx if c.sp_axis == 0 else tp_idx * cols_ + sp_idx
+            parts.append(ttnn.to_torch(devs[idx])[0, 0, lo_local:hi_local].float())
+        return torch.cat(parts, dim=-1)
+
     def drafter_window_rows(self, real_len: int):
         """The last ``min(PREFILL_DRAFTER_WINDOW, real_len)`` rows of every target layer's stream mean for the chunk just
         computed -> (chunk-local row indices, host fp32 [W, len(layers) * hidden] = cat over layers, host ms)."""
@@ -451,8 +493,16 @@ class TtV4PrefillRuntime:
             while r < hi:
                 sp_idx, local = divmod(r, s_l)
                 hi_local = min(s_l, local + (hi - r))
-                rows = self._rows_from_all_chips(m, local, hi_local)  # [sp, k, hidden]
-                pieces.append(rows[sp_idx])
+                fast = self._rows_from_sp_shard(m, sp_idx, local, hi_local)
+                if fast is not None and self._lane_mean_shard_check is None:
+                    # one-time check of the mesh-order assumption against the (slow, unambiguous) all-chips read
+                    ref = self._rows_from_all_chips(m, local, hi_local)[sp_idx]
+                    ok = bool(torch.allclose(ref, fast, rtol=1e-3, atol=1e-3))
+                    self._lane_mean_shard_check = ok
+                    logger.info(f"[v4 runtime] drafter window: per-shard read matches the all-chips read: {ok}")
+                if fast is None or self._lane_mean_shard_check is False:
+                    fast = self._rows_from_all_chips(m, local, hi_local)[sp_idx]
+                pieces.append(fast)
                 r += hi_local - local
             per_layer.append(torch.cat(pieces, 0))  # [W, hidden]
         lanes = torch.cat(per_layer, dim=-1)  # [W, layers * hidden]
