@@ -31,6 +31,7 @@ Framework fixes are the `[bringup][F<n>]` commits; the owner's decisions are mar
 | 05:50 | P.1 | gate PASS de51b4c945b (0.743 s/chunk vs ~20 s hybrid, host transfers 0, accuracy unchanged); false device alarm started attempt 2 | review: accepted; framework | stopped attempt 2; F34 parse-based device check, no retry after a pass, profile timings on the dashboard |
 | 06:17 | P.2 | gate PASS 02d9c8f7ce1 (attention 381.6 -> 248.4 ms, chunk 743 -> 610 ms, pcc 0.9986) | review: accepted; framework | config A as ERNIE, chunk sizes fitted to Gemma head dims (findings); base selectable. F35 applied; added P.3 attention sub-sections |
 | 06:19 | P.3 | timing rows lacked run metadata (results before F35) | data annotation | backfilled only descriptive fields: device_model_hybrid=1 for L.* (hybrid harness), 0 for P.1/X.1/P.2; chunk_start 51200 / chunk_len 5120 for the profiles; P.1 rung 4096/2048. No measurement changed |
+| 06:43 | X.3, L.* | X.3 PASS 7dae3facd8a: warm 0->55k 5.78 s (9.7k tok/s), 56k accuracy min layer 0.9877, top-5 1.0; ladder rungs re-run on the tuned model (all PASS) | done | 76/76 tasks. Cold runs pay ~1.5 s per new chunk offset (SDPA program per chunk_start; X.3's ladder 2 s/chunk vs 0.5 s once cached) |
 
 ## Hand-off (2026-09-26 02:10)
 
@@ -47,3 +48,10 @@ Framework fixes are the `[bringup][F<n>]` commits; the owner's decisions are mar
   hf.parity_seq is 512 < window 1024 (covered by the hand check in BREADCRUMBS); dashboards: standard
   https://claude.ai/artifact/6PuG6EV3pyhchG1GTXBUuo and teletext https://claude.ai/artifact/C1yGG9j68BTTrcacwFc6nc
   (republish after every gate: `python -m models.demos.common.bringup.dashboard.export --spec <spec>`).
+
+## State (2026-09-26 07:00): run1 complete
+- 76/76 tasks PASS. Bring-up (R, G, B, PL, C/S x 56, ladder, K.1 contract) and perf (P.1 all-device model, X.1 baseline,
+  P.2 SDPA config A, P.3 attention sub-sections, X.3 final).
+- Warm 0->55k prefill 5.78 s (was 236.9 s on the hybrid harness); 50k->55k chunk 0.61 s (attention 248 ms, SDPA 186 ms).
+- Open: SDPA recompiles per chunk offset on a cold run (runtime chunk_start tensor would fix it; skipped by the owner);
+  LM head on the host; sliding vs global SDPA split not profiled; ring vs line CCLs not tried. Nothing pushed.
