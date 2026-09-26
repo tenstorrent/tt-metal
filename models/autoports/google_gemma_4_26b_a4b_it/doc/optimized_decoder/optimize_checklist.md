@@ -138,7 +138,7 @@ All eight optimized prefill and traced one-step decode checks pass .995 and repe
 - [Minimal output paired trials](minimal_selection.md) reject sliding (loses7/8 pairs) and select full (wins7/8 pairs,204.839µs whole-prefill median difference). The cumulative policy passed v5 broad coverage and current v8 affected-path regressions. New paired HiFi2/11x10 controls are complete; acceptance is tracked separately below. No additive or absolute-optimum claim follows from prior isolated controls.
 - [Installed OPT-015 audit](installed_optimize_0_1_14_audit.md) corrects the evidence scope for old reader trials. [The new probe](dram_reader_microbenchmark.md) uses actual production inputs/quantized weights, identical padding and captured compute config across all legal readers; [its isolated and whole-layer results](reader_layer_results.md) are complete; no material gain was found and defaults remain selected.
 
-## Remaining stage closure
+## Stage closure
 
 | Item | Status / required evidence |
 | --- | --- |
@@ -150,6 +150,6 @@ All eight optimized prefill and traced one-step decode checks pass .995 and repe
 | Full-QKV input-L1 advice | **Selected and validated:** source/legal-CB adaptation, matched placement/geometry/grid controls and producer-L1 comparison are recorded in [v8 proof](source_delta_v8.md). Current17 gates and native v8 profiles pass; candidate host and native timing scopes remain separate. |
 | Prefill-router HiFi2/input-L1 advice | **Complete:** [four current real-input controls](prefill_router_v8/commands.json),32 alternating pairs each; no resolved gain, retain current baseline. Disposition belongs to [final advice](final_perf_advice.md). |
 | Independent final stage review | Source findings and numerical gates are addressed; v8 correctness, profiles/accounting and material advice controls are complete; [Independent artifact/skill review](STAGE_REVIEW.md) is **clean-pass**, with no required work. |
-| Final commit | Parent-owned after review; pending. |
+| Final commit | **Complete:** reviewed stage checkpoint `a9259624f2ad89a17fcf94f7351e04c82d7faa35`; final documentation checkpoint SHA is recorded in the required external evidence packet. Local only, never pushed. |
 
 This refresh changes documentation only. The author ran CPU source/JSON/hash checks, not hardware, and changed no runtime or test acceptance.
