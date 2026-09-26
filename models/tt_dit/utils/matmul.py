@@ -660,6 +660,20 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic
     config_tuple = None
     grid_x = getattr(core_grid, "x", None)
     grid_y = getattr(core_grid, "y", None)
+    # A 4-tuple default_block_size (M_block, K_block, N_block, (subblock_h, subblock_w)) is an explicit, complete
+    # blocking from the caller and is used as given, ahead of the swept (M, K, N) tables: the tables were swept at one
+    # compute config (fp32 dest on, 4 DST tiles, 2x2 subblocks) and a caller that changes the compute config is the only
+    # one that passes a subblock. A 3-tuple keeps its legacy meaning: a fallback for when the tables miss, at 2x2.
+    if default_block_size is not None and len(default_block_size) == 4:
+        M_block_size, K_block_size, N_block_size, (subblock_h, subblock_w) = default_block_size
+        return ttnn.MinimalMatmulConfig(
+            M_block_size=M_block_size,
+            K_block_size=K_block_size,
+            N_block_size=N_block_size,
+            subblock_h=subblock_h,
+            subblock_w=subblock_w,
+            compute_with_storage_grid_size=core_grid,
+        )
     grid_dict = _grid_config_lookup.get((grid_x, grid_y))
     if grid_dict is not None:
         config_tuple = grid_dict.get((M, K, N))
@@ -1007,6 +1021,21 @@ else:
 fused_mmrs_configs = {
     ttnn.CoreCoord(8, 9): {
         (9472, 5120, 1280): FusedMMRSConfig(ttnn.CoreCoord(8, 7), 8, 8, 8, 2, 2, None, 1),
+        # MiniMax-H3 ff2 at 15 s / 768P / 16:9 (M = 13664 rows/device), Wormhole 4x8 galaxy, TP ring of 4 on
+        # 4 links. The 8x7 matmul grid leaves 16 cores = 4 links x 2 directions x (1 worker + 1 mux) for the
+        # reduce-scatter; the grid is never transposed here, so a core holds 61 M x 21 N tiles with no padding
+        # (the unfused 8x9 transposed layout pads both). Swept 2026-09-23 with sweep_mm_block_sizes.py
+        # (use case mmrs_nobias, 149 combos), device-side: (6, 8, 8) 8.51 ms, this (6, 7, 8) 8.54 ms, best
+        # DRAM-handoff blocking (8, 14, 7) sb(4, 1) 9.41 ms -- the 2-block L1 window is worth ~1 ms here.
+        # (6, 8, 8) is not landed: its window shard plus circular buffers need 1336 KB of L1 and in the
+        # transformer block, where a few KB of persistent buffers sit at the top of L1, the shard clashed
+        # with the CB region by 10 KB ("Statically allocated circular buffers ... clash with L1 buffers").
+        # (6, 7, 8) needs 1280 KB. Host-timed like-for-like on the mesh bench: 8.94 ms per call, against
+        # 10.70 for the unfused minimal_matmul + reduce_scatter_minimal_async + addcmul the model ran before
+        # (10.17 with the reduce-scatter's workers/chunks/buffers tuned). pcc 0.99993 vs fp32 torch; 2000
+        # back-to-back calls with no hang. Same worker-per-direction count as the warned default that
+        # preceded it -- the blocking, not the collective shape, was what made that default slow.
+        (13664, 3584, 5376): FusedMMRSConfig(ttnn.CoreCoord(8, 7), 6, 7, 8, 2, 2, None, 1),  # 8539.0 us
     },
     ttnn.CoreCoord(12, 10): {
         # Wan2.2 720p ff2, single galaxy, swept 2026-08-24 (windowed): Mt_per_core=37, M_block=8

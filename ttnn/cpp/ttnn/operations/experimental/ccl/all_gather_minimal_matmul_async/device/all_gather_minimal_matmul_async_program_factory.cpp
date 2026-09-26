@@ -7,6 +7,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/cb_utils.hpp"
+#include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -661,6 +662,7 @@ all_gather_minimal_matmul_async_factory_helper(
     // kernel containing output-writer or compute code sees FUSE_SWIGLU.
     if (fuse_swiglu) {
         defines["FUSE_SWIGLU"] = "1";
+        ttnn::operations::compute_throttle_utils::add_swiglu_lut_silu_define_if_needed(device->arch(), defines);
     }
     if (use_fused_ternary) {
         defines["FUSE_TERNARY"] = "1";

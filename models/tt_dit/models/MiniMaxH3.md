@@ -8,6 +8,8 @@ Bringup is split by component. Each component has its own folder for team member
 models/tt_dit/
 ├── models/
 │   ├── MiniMaxH3.md                  # this file
+│   ├── minimax_h3_wormhole/          # Wormhole Galaxy perf: baseline + breakdown (README.md), per-op docs (sdpa, ff1, to_qkv, to_out, ff2)
+│   ├── minimax_h3_blackhole/         # Blackhole Galaxy perf: AGMM fused-vs-unfused study plan (README.md) and results
 │   ├── transformers/minimax_h3/      # denoising transformer (block, attention, RoPE)
 │   ├── vae/minimax_h3/               # video VAE (AutoencoderKLMiniMaxH3)
 │   └── audio_vae/minimax_h3/         # audio VAE (AutoencoderKLMiniMaxH3Audio)
@@ -319,6 +321,24 @@ The video VAE tiles this canvas **4x7 = 28** ways (256px tiles, overlap 64), mat
 `test_performance_vae_minimax_h3.py`'s `WORK_UNITS` table and the wave math below.
 
 ### Meshes
+
+Those numbers are Blackhole. For the Wormhole Galaxy port -- the full aspect x duration sweep, the
+DiT-FSDP memory fix it needs, and its open issues -- see
+[`minimax_h3_wormhole/README.md`](minimax_h3_wormhole/README.md) (baseline, block breakdown and the
+per-op optimization docs in that directory). The Wormhole AGMM fused-vs-unfused blocking study
+([`minimax_h3_wormhole/agmm_fused_vs_unfused.md`](minimax_h3_wormhole/agmm_fused_vs_unfused.md)) has a Blackhole
+counterpart: plan and run notes in [`minimax_h3_blackhole/README.md`](minimax_h3_blackhole/README.md), results in
+[`minimax_h3_blackhole/agmm_fused_vs_unfused.md`](minimax_h3_blackhole/agmm_fused_vs_unfused.md).
+
+On the Blackhole 4x8 galaxy at 15 s / 768P (M = 13664 rows per device, 3,521 blocking and all-gather combos, all
+above PCC 0.99998) the fused `all_gather_minimal_matmul_async` still beats the best unfused all-gather + matmul pair
+on every projection: by 19% (to_qkv), 9% (to_out) and 14% (ff1). What changed against Wormhole is that the gather is
+no longer free: the compute bound shrank 2.3x while the fabric bound stayed the same, so the fused op costs 12% /
+5% more than the standalone matmul on the same 108 cores for to_qkv / ff1, and to_out is fabric-bound outright
+(1.82x its fabric bound, 33% compute utilisation against 71% standalone). The shipped `AGMM_BLOCK_SIZES` blockings
+sit 3.1% / 1.5% / 9.4% behind the sweep winners, all of which use an M_block that divides the 36 M tiles each of the
+12 worker columns holds (9, 9 and 6 instead of 8); the standalone matmuls reach 64 to 83% of the HiFi2 compute bound,
+the standalone all-gather 93% of link bandwidth (58% on Wormhole), and `chunks_per_sync` 32 is again worth 2%.
 
 Measured warm (the MEASUREMENT block in `test_performance_minimax_h3.py`), 768P/15s, 362 frames,
 49 forwards:

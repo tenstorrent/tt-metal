@@ -97,6 +97,18 @@ void add_dram_skip_defines_if_needed(
     }
 }
 
+void add_swiglu_lut_silu_define_if_needed(const tt::ARCH arch, std::map<std::string, std::string>& mm_kernel_defines) {
+    const char* lut_silu = std::getenv("TT_MM_SWIGLU_LUT_SILU");
+    if (lut_silu == nullptr || std::string(lut_silu) == "0") {
+        return;
+    }
+    if (arch != tt::ARCH::WORMHOLE_B0) {
+        log_warning(tt::LogOp, "TT_MM_SWIGLU_LUT_SILU ignored: the LUT SwiGLU epilogue is only built for Wormhole");
+        return;
+    }
+    mm_kernel_defines["SWIGLU_LUT_SILU"] = "1";
+}
+
 bool should_sync_after_in1_dram(const tt::ARCH arch) {
     const bool sync_in1_dram = std::getenv("TT_MM_SYNC_AFTER_IN1_DRAM");
     return sync_in1_dram && (arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE);
