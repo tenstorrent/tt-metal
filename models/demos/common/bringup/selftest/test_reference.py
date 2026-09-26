@@ -94,6 +94,44 @@ def test_golden_layer_subset_stores_run_starts_on_every_chunk(fx):
     generate_golden.main(["--spec", spec_path, "--rung", "last"])  # no-op
 
 
+def test_golden_subset_stops_at_the_last_selected_layer(fx, monkeypatch):
+    """F40: layers after the last selected one are never run (MiMo 0-5 of 48 ran all 48 on CPU, 8x the work); the
+    model-level outputs, which only a stack ending at the last layer compares, are not stored."""
+    from models.demos.common.bringup.selftest import fixture_model
+
+    built = []
+    real = fixture_model.reference
+    monkeypatch.setattr(
+        fixture_model, "reference", lambda spec, layers=None, dtype=None: built.append(layers) or real(spec, layers)
+    )
+    spec_path = fx(layers=[0, 1])
+    prompt.build(Spec.load(spec_path))
+    generate_golden.main(["--spec", spec_path, "--rung", "s512"])
+    assert built == [[0, 1]]
+    g = Golden.for_rung(Spec.load(spec_path), "s512")
+    from safetensors import safe_open
+
+    with safe_open(str(g.dir / "chunk_03" / "model.safetensors"), "pt") as f:
+        keys = set(f.keys())
+    assert "tokens" in keys and not keys & {"top32_ids", "top32_values", "logits_tail", "final_norm"}
+    assert "out" in g.layer(3, 1)
+    # a stack that ends at the model's last layer still runs every layer and stores the model outputs
+    import shutil
+
+    shutil.rmtree(g.dir)
+    built.clear()
+    spec_path = fx(layers=[0, 2])
+    prompt.build(Spec.load(spec_path))
+    generate_golden.main(["--spec", spec_path, "--rung", "s512"])
+    assert built == [None]
+
+
+def test_hf_parity_of_a_subset_stops_at_its_last_layer(fx):
+    """F40: parity for layers 0-5 of 48 compares a 6-layer stack, not all 48."""
+    assert check_hf.subset_prefix(Spec.load(fx(layers=[0, 1]))) == 2
+    assert check_hf.subset_prefix(Spec.load(fx(layers=[0, 2]))) is None
+
+
 def test_content_hash_ignores_the_manifest(tmp_path):
     (tmp_path / "a").write_text("1")
     h = content_hash(tmp_path)

@@ -400,3 +400,15 @@ Drive this ledger with
   moves the HF sanity (revision, smoke, accuracy floor) from R.1's gate into R.2's, before `check_hf`; R.1 keeps the
   checkpoint check and the canonical prompt. Thresholds are unchanged. The reference brief says when and how to write
   `hf_model` (full model with `num_layers=None`, packed where it does not fit). Selftest pins the move.
+
+## F40 (2026-09-26): a layer subset never runs layers after its last one
+- MiMo layers 0-5 of 48: G.s56320 ran all 48 layers on CPU (10-13 min per 5k chunk, ~2 h, 212 GB RSS) because
+  generate_golden always built the full reference; R.2's check_hf also compared all 48. Owner: fix the framework.
+- generate_golden builds the reference for layers 0..max(selected) when the subset stops before the last layer and skips
+  the model-level outputs (final norm, top-32, logits tail), which the ladder only compares when the stack ends at the
+  last layer. check_hf defaults `--num-layers` to max(selected)+1 for such subsets. A subset that ends at the last layer
+  (e.g. "0-1,29") still runs everything. The full-model HF sanity (R.1/R.2 with custom_loader) is unchanged.
+- Selftests: the reference is built with [0, 1] for a [0, 1] subset of 3 and no model outputs are stored; [0, 2] still
+  builds the full stack; check_hf's default prefix.
+- Also: CPU gates set torch threads to physical cores (`core.metrics.cpu_threads()`), not `os.cpu_count()` (SMT
+  siblings made MoE GEMMs ~6x slower, found by the MiMo R.2 agent).

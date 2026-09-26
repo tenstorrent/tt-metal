@@ -4,6 +4,7 @@
 """F1: spec, ledger, gate runner, metrics. CPU only."""
 
 import json
+import os
 import subprocess
 import sys
 
@@ -266,3 +267,12 @@ def test_cli_status_and_validate(sandbox):
         text=True,
     )
     assert out.returncode == 0 and "valid" in out.stdout
+
+
+def test_cpu_threads_are_physical_cores():
+    """F40: CPU gates use one torch thread per physical core."""
+    import psutil
+
+    from models.demos.common.bringup.core.metrics import cpu_threads
+
+    assert cpu_threads() == (psutil.cpu_count(logical=False) or os.cpu_count())

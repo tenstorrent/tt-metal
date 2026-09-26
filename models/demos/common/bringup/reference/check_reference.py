@@ -15,11 +15,11 @@
 from __future__ import annotations
 
 import argparse
-import os
 
 import torch
 
 from models.demos.common.bringup.core import metrics
+from models.demos.common.bringup.core.metrics import cpu_threads
 from models.demos.common.bringup.reference.golden import load_spec, text_tokens
 from models.demos.common.bringup.reference.interface import boundary_names, run_block, validate_graph
 
@@ -57,7 +57,7 @@ def main(argv=None):
     ap.add_argument("--chunk", type=int, default=2048)
     a = ap.parse_args(argv)
     assert a.seq % a.chunk == 0 and a.seq // a.chunk >= 2, "need at least two chunks"
-    torch.set_num_threads(os.cpu_count())
+    torch.set_num_threads(cpu_threads())
     spec = load_spec(a.spec)
     layers = spec.layers()
     ref = spec.hooks().reference(spec, layers=layers, dtype=torch.float32)

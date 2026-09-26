@@ -79,3 +79,13 @@ def pcc(a, b) -> float:
     b = b - b.mean()
     den = a.norm() * b.norm()
     return float((a @ b) / den) if den > 0 else float(bool((a == b).all()))
+
+
+def cpu_threads() -> int:
+    """Torch threads for CPU gates: physical cores, not SMT siblings (a 64-row expert GEMM: 4 ms at 16, 27 ms at 32)."""
+    try:
+        import psutil
+
+        return psutil.cpu_count(logical=False) or os.cpu_count()
+    except ImportError:
+        return os.cpu_count()
