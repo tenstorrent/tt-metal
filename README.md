@@ -78,6 +78,7 @@ For information on initial model procedures, please see [Model Bring-Up and Test
 ## TT-NN Tech Reports
 
 - [Advanced Performance Optimizations for Models](./tech_reports/AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md) (updated March 4th, 2025)
+- [CCL Performance Tuning Tips](./tech_reports/CCLs/CCL_Performance_Best_Practices.md) (updated Sept 24th, 2026)
 - [ViT Implementation in TT-NN on GS](./tech_reports/ViT-TTNN/vit.md)  (updated Sept 22nd, 2024)
 - [LLMs Bring up in TT-NN](./tech_reports/LLMs/llms.md)  (updated Oct 29th, 2024)
 - [CNN Bring up & Optimization in TT-NN](./tech_reports/CNNs/cnn_optimizations.md) (updated Jan 22nd, 2025)
@@ -85,6 +86,7 @@ For information on initial model procedures, please see [Model Bring-Up and Test
 ## Benchmarks
 
 - [Matrix Multiply FLOPS on Wormhole and Blackhole](./tech_reports/GEMM_FLOPS/GEMM_FLOPS.md)  (updated June 17th, 2025)
+- [CCL Bandwidth on Wormhole and Blackhole](./tech_reports/CCLs/CCL_bandwidth.md)  (updated Sept 24th, 2026)
 
 ---
 
@@ -123,7 +125,6 @@ Get started with [simple kernels](https://docs.tenstorrent.com/tt-metal/latest/t
 ## Scaleout Tech Reports
 
 - [Programming Mesh of Devices (Scale-Up)](./tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md) (updated Jan 6th, 2026)
-- [CCL Performance Tuning Tips](./tech_reports/Programming_Mesh_of_Devices/CCL_Performance_Best_Practices.md) (updated Jul 10th, 2026)
 - [Programming Multiple Meshes (Scale-Out)](./tech_reports/Programming_Multiple_Meshes/Programming_Multiple_Meshes.md) (updated Jan 19th, 2026)
 - [TT-Fabric Architecture](./tech_reports/TT-Fabric/TT-Fabric-Architecture.md) (updated Dec 1st, 2025)
 - [TT-Distributed Architecture](./tech_reports/TT-Distributed/TT-Distributed-Architecture-1219.md) (updated Oct 20th, 2025)

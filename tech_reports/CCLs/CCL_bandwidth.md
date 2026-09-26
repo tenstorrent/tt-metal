@@ -1,0 +1,257 @@
+# Collective Communication Bandwidth
+
+## Introduction
+
+A collective moves data between devices. Some ops may also reduce, but that arithmetic is far cheaper than the data movement and never limits the operation. Performance is set by the ethernet fabric:
+
+> **What fraction of the available link bandwidth does the operation keep busy?**
+
+The number of bytes a collective puts on a link is closed-form in the tensor size, the device count and the topology. Dividing it out gives achieved bandwidth per link. That single number characterizes any collective on any system, and on a well-optimized implementation it is also independent of datatype, memory layout and page size. Different collectives should converge on the same curve. Where one does not, it has optimization headroom rather than a harder job.
+
+This report measures that number for `all_gather`, `reduce_scatter`, `all_reduce` and `all_to_all`, and the fixed latency that sets the smallest sizes. The figures lead with bus bandwidth, which says how fast a collective runs, and show link utilization beside it.
+
+## What sets the ceiling
+
+### Line rate
+
+| Architecture | Per link, per direction |
+| --- | --- |
+| Wormhole | 100 Gbps = **12.5 GB/s** |
+| Blackhole | 400 Gbps = **50 GB/s** |
+
+### Framing overhead
+
+Two layers of framing sit between line rate and payload.
+
+Ethernet packets run from 16 B to 1500 B. Each carries upwards of 50 B of headers, FEC and CRC. A payload larger than 1500 B is fragmented into several packets, and each one pays that overhead again.
+
+The fabric adds its own header on top: 48 B for 1D routing, 80 to 128 B for 2D. The payload behind it defaults to 4352 B, or four `bfloat8_b` tiles. It caps at 7616 B (7 `bfloat8_b` tiles) on Wormhole and 15232 B (14 `bfloat8_b` tiles) on Blackhole.
+
+For a fabric payload of `P` bytes behind a header of `H`:
+
+```
+payload efficiency = P / ( P + H + 50 * ceil((P + H) / 1500) )
+```
+
+This lands near **96%** across the useful range of payload sizes. The payload ceiling is therefore ~12.0 GB/s on Wormhole and ~48 GB/s on Blackhole.
+
+### Packets and slots
+
+The ethernet transfer is sized by the bytes in the packet, so a partially filled packet wastes no wire time. Fabric flow control counts slots rather than bytes, and every packet consumes one slot credit whether it is full or empty. This is a property of the current fabric design, not of the hardware.
+
+Slot size is set once at fabric initialization, from `max_packet_payload_size_bytes` on the `FabricRouterConfig` passed to `set_fabric_config`, and is uniform across router channels. The setting is global for the run. ERISC L1 is fixed, so slot size and slot count trade against each other. A larger payload leaves room for fewer slots and a shallower pipeline, which means the architecture maximum is not always the fastest choice.
+
+What a partial packet costs is data in flight: the slot count times the payload actually carried per slot. A collective that half-fills its packets has half the data in flight for the same pipeline depth, so the link idles while credits make their way back. Throughput is then data in flight divided by that credit round-trip time.
+
+Several things cut a packet short. A scatter write carries at most four segments, and short page runs reach that limit before the payload is full. A payload that is not a whole multiple of the chunk size wastes its tail. Page boundaries force a flush.
+
+### Links available
+
+`num_links` selects routing planes per direction. The usable count is the minimum across every hop on the axis, so the weakest hop sets it for the whole collective.
+
+Some systems do not attach every device to the host. There, remote devices are reached over an ethernet tunnel, and one routing plane per tunneled direction is reserved for fast dispatch. Where every device is host-attached, nothing is reserved. Two systems with identical cabling can therefore offer different link counts, and one system can differ between its axes. Any bandwidth figure must state the count it was normalized by.
+
+### Bytes through the bottleneck link
+
+Let `T` be the un-sharded logical tensor, distributed across `N` devices. It is `all_gather`'s output, `reduce_scatter`'s input, and both the input and output of `all_reduce`.
+
+On a **line**, the device at the end has one link on the axis. Everything it does not already hold arrives through that link, which makes it the bottleneck.
+
+On a **ring**, the closing link gives every device two links on the axis. Splitting the ring into two halves cuts two links rather than one, so each direction carries half the traffic. The diameter also falls from `N-1` hops to `N/2`.
+
+`all_reduce` is a reduce-scatter followed by an all-gather over the same links, so it carries twice the bytes of either.
+
+`all_to_all` differs. Each device holds `B` bytes and sends one chunk to every other device. Chunks bound for far devices relay through the ones in between, so the middle link carries every chunk that crosses it.
+
+| Collective | Bottleneck bytes |
+| --- | --- |
+| `all_gather` | `(N-1)/N × T` |
+| `reduce_scatter` | `(N-1)/N × T` |
+| `all_reduce` | `2(N-1)/N × T` |
+| `all_to_all` | `⌊N/2⌋⌈N/2⌉/N × B` |
+
+### What a ring costs
+
+A ring halves the bytes per direction, so ideally it finishes in half the time of a line. In practice each link runs slower, because a ring needs deadlock avoidance. The fabric adds it to every router once it is configured as a ring:
+
+- **Bubble flow control.** A worker injects a packet only when the next router has at least two free slots.
+- **First-level acknowledgement.** The receiver returns an extra credit for every packet, which doubles the credit traffic.
+
+Both cost every packet, so even a line runs slower on a ring fabric. So lines are measured on a line fabric.
+
+### How this compares to local memory
+
+| Architecture | Per DRAM channel | Per link, per direction |
+| --- | --- | --- |
+| Wormhole | ~43 GB/s (6 channels, ~258 GB/s aggregate) | 12.5 GB/s |
+| Blackhole | ~64 GB/s (8 channels, ~512 GB/s aggregate) | 50 GB/s |
+
+A single DRAM channel delivers bandwidth of the same order as a single link. Summed over every ethernet core on the chip, the fabric aggregate is competitive with the whole memory system.
+
+The fabric limits a collective because the collective only gets a few links. It communicates along one axis, while the entire memory system is available locally. The headroom between the two is small enough that memory could also limit the operation on a system with many fast links. The Results section measures whether it does.
+
+Wormhole's channel figure is the peak the `ttnn` performance model uses. Blackhole's is the device specification, and a per-bank measurement of 64 GB/s agrees with it.
+
+## What sets the floor
+
+### Per-hop latency
+
+The first byte cannot reach the farthest device until it has crossed the network diameter, and that cost does not depend on tensor size. Per-hop forwarding latency was measured by timing a round trip `n` hops out and halving the slope, which cancels device clock skew.
+
+| Architecture | 1D fabric | 2D fabric |
+| --- | --- | --- |
+| Wormhole | 711 ns | 874 ns |
+| Blackhole | 515 ns | 619 ns |
+
+These figures are a linear fit. 1D latency grows superlinearly with distance.
+
+### Per-invocation cost
+
+A collective also pays setup and teardown once per call, independent of tensor size. The costs below were measured with device profiler zones around each step of `all_gather`, called back to back in a trace:
+
+| Step | Wormhole | Blackhole |
+| --- | --- | --- |
+| Launch the kernel and allocate packet headers | 1.2 µs | 1.4 µs |
+| Open fabric connections | 0.8 µs | 0.7 µs |
+| Or connect through a Fabric Mux | 1.7 µs | 1.7 µs |
+| Entry barrier, so no device starts before its peers are ready | 0.7 µs + 0.95 µs per hop | 0.3 µs + 0.64 µs per hop |
+| Send the first packet | 1.0 µs | 0.8 µs |
+| Exit wait, until remote data has landed locally | 0.7 µs + 0.95 µs per hop | 0.3 µs + 0.64 µs per hop |
+| Close fabric connections | 0.4 µs | 0.5 µs |
+| Or tear down the mux, draining its buffers | 3.2 µs | 2.9 µs |
+
+Each barrier crosses the line once, so it grows with distance. At eight devices the two barriers are about three quarters of the total. Launch skew shifts time between them from call to call, but their sum is stable.
+
+### Floor plus ceiling
+
+Adding the floor to the ceiling gives the kernel time of one call at any size:
+
+```
+kernel_time   ≈ fixed_latency + bottleneck_bytes / (0.96 * line_rate * links * directions)
+fixed_latency ≈ base + per_hop * hops
+```
+
+`per_hop` is separate for line and ring topologies.
+
+## The metric
+
+Every figure plots bus bandwidth, as `nccl-tests` defines it:
+
+```
+algorithm_bandwidth = T / kernel_time
+bus_bandwidth       = algorithm_bandwidth * (N-1)/N        (2(N-1)/N for all_reduce)
+                    = bottleneck_bytes / kernel_time
+```
+
+- `T`, the un-sharded logical tensor in bytes
+- `N`, the number of devices
+- `kernel_time`, device kernel duration
+
+Bus bandwidth says how fast the collective runs, and compares directly to `nccl-tests` output on other hardware. Its ceiling grows with the links in use.
+
+Each curve's peak also carries its link utilization, stated as a percentage of the per-link line rate:
+
+```
+per_link_bandwidth = bottleneck_bytes / ( kernel_time * num_links * num_directions )
+```
+
+- `num_links`, the routing planes opened per direction
+- `num_directions`, 1 for a line and 2 for a ring
+
+`all_to_all` is the exception. It uses `B`, the bytes each device sends and receives, in place of `T`, and its bus bandwidth leaves out the relay traffic. Its link utilization is the fairer number.
+
+## What we measure
+
+This report sweeps `ttnn.all_gather`, `ttnn.reduce_scatter`, `ttnn.all_reduce` and `ttnn.experimental.all_to_all_async_generic` across tensor size, device count and topology. All measurements are **traced**, so host dispatch is excluded.
+
+The ops query link count, topology and the rest of the machine's wiring themselves, and no op is tuned. The one setting made by hand is the fabric packet payload. Otherwise the curves show what a caller gets out of the box.
+
+The topology is read with `ttnn.get_usable_topology`, the same check the ops use. The link count is read from each op's profiler attributes. Every figure reports what ran rather than what was requested.
+
+| Held fixed | Why |
+| --- | --- |
+| Fabric packet payload |  A global setting fixed at initialization. Set to 6144 B on Wormhole and 8192 B on Blackhole in our tests. |
+| Fabric configuration | 1D routing, with lower per-hop latency and a smaller header than 2D. Lines run on `FABRIC_1D`, rings on `FABRIC_1D_RING`. A ring is measured only where the axis closes. |
+| Datatype | Only a byte count under this metric. |
+
+The benchmark is modeled on nccl-tests. Sizes double from 1 KiB upward, rounded to whole tiles.
+
+A second pass measures fixed latency. It traces 8 back-to-back calls at the smallest sizes and drops the first, which starts cold, so the rest start with the devices already in step.
+
+The following was run to generate the data in this report:
+
+```bash
+# Every collective: a line at 2, 4 and 8 devices, a ring at 8, DRAM, then the latency pass
+./tech_reports/CCLs/run_bench.sh loudbox   # or galaxy
+
+# L1 against DRAM, all_gather only, ring
+CCL_TOPOLOGY=ring CCL_MEMORY=dram,l1 CCL_SUBMESHES=1x8 CCL_OPS=all_gather ./tech_reports/CCLs/run_bench.sh loudbox
+```
+
+Each run lands in `data/runs/<timestamp>/`. The runs are merged, keeping the latest measurement of each cell, into the tables in `results/` and the figures in `images/`.
+
+## Results
+
+### Bandwidth
+
+Wormhole LoudBox:
+
+![](images/bw_wormhole_b0_bfloat16_6144_n8.png)
+
+Blackhole Galaxy links currently run at half their rated speed, so its figures and tables normalize against 25 GB/s per link per direction:
+
+![](images/bw_blackhole_bfloat16_8192_n8.png)
+
+Figures for two and four devices: Wormhole [`n2`](images/bw_wormhole_b0_bfloat16_6144_n2.png), [`n4`](images/bw_wormhole_b0_bfloat16_6144_n4.png); Blackhole [`n2`](images/bw_blackhole_bfloat16_8192_n2.png), [`n4`](images/bw_blackhole_bfloat16_8192_n4.png). They have no ring panel, because the wraparound link exists only across all eight devices.
+
+### L1 versus DRAM
+
+![](images/memcfg_wormhole_b0_bfloat16_6144_n8.png)
+
+![](images/memcfg_blackhole_bfloat16_8192_n8.png)
+
+Moving the tensors from DRAM into L1 does not change collective bandwidth. In our data, the two curves overlay wherever both exist, on either machine. L1 cannot hold the largest tensors, so its sweep stops earlier.
+
+### Kernel time
+
+`N` is the number of devices and `input_bytes` the size of the tensor each device passes in. The first two terms are the startup latency, fitted over lines of two, four and eight devices. A ring keeps the line's constant, with its cost per hop set from the eight-device ring, the only ring measured. Where a collective switches algorithm on a ring at these sizes, as `reduce_scatter` does, that cost also reflects the change. The last term is the bytes through the busiest link over the peak rate they reach on eight devices. "Within" gives the typical and the worst miss against every size measured on eight devices. The worst lands in the ramp.
+
+| Collective | Topology | Wormhole | Blackhole |
+| --- | --- | --- | --- |
+| `all_gather` | line | pending | 3.7 µs + 1.3 µs × (N−1) + (N−1) × input_bytes ÷ 48 GB/s, within 3–11% |
+| | ring | pending | 3.7 µs + 1.6 µs × N/2 + (N−1) × input_bytes ÷ 95 GB/s, within 10–22% |
+| `reduce_scatter` | line | pending | 1.3 µs + 3.0 µs × (N−1) + (N−1)/N × input_bytes ÷ 40 GB/s, within 2–13% |
+| | ring | pending | 1.3 µs + 2.1 µs × N/2 + (N−1)/N × input_bytes ÷ 82 GB/s, within 9–43% |
+| `all_reduce` | line | pending | 4.4 µs + 4.4 µs × (N−1) + 2(N−1)/N × input_bytes ÷ 44 GB/s, within 3–12% |
+| | ring | pending | 4.4 µs + 3.9 µs × N/2 + 2(N−1)/N × input_bytes ÷ 86 GB/s, within 8–30% |
+| `all_to_all` | line | pending | 1.8 µs + 1.4 µs × (N−1) + ⌊N/2⌋⌈N/2⌉/N × input_bytes ÷ 33 GB/s, within 6–21% |
+| | ring | pending | 1.8 µs + 2.2 µs × N/2 + ⌊N/2⌋⌈N/2⌉/N × input_bytes ÷ 68 GB/s, within 1–14% |
+
+## Interpreting the curve
+
+**The small sizes.** Small collectives reach a small fraction of line rate. Per-invocation cost and poor packet fill both produce that, and they leave different shapes.
+
+Per-invocation cost acts as a floor. While it dominates, time is roughly constant, so bandwidth rises with size and falls toward zero at the smallest sizes.
+
+Poor packet fill produces a flat plateau instead. At a given fill, neither data in flight nor credit round-trip time depends on tensor size, so bandwidth sits at a reduced level independent of size. Fill improves as tensors grow, because larger tensors offer longer contiguous stretches to pack into each packet.
+
+In our data, every curve keeps falling as size shrinks, and none of them flatten. Hence per-invocation cost sets the small-size behavior, not packet fill.
+
+**The ramp.** Fixed costs amortize as the payload grows. In our data, the floor-plus-ceiling model predicts `all_gather` on a line within about 5% at every size, on both machines. `reduce_scatter` runs slower than `all_gather`'s model: up to 35% at large sizes, and up to 90% at small sizes on a line. On a line, it passes data through a worker at every hop, which adds and forwards it. So each hop costs about twice as much as in `all_gather`.
+
+**Steps in the ramp.** Worker cores per link and synchronization granularity are chosen by size-thresholded heuristics that differ by collective and topology, so bandwidth should be piecewise. In our data, ring `reduce_scatter` dips at 512 KiB and jumps at 1 MiB. Up to 512 KiB per device it uses a one-shot direct algorithm, which sends about 2.3× the bytes.
+
+**The asymptote.** Fixed costs are negligible here. In our data, on Wormhole, lines flatten at 84–94% of line rate, close to the payload ceiling, and rings at 66–83%. On Blackhole topology makes no difference: lines reach 66–96% and rings 68–95%. L1 versus DRAM rules out memory hierarchy, which leaves the transfer pipeline: packet fill, worker count, and how well the implementation keeps the link fed.
+
+**Line versus ring.** A ring halves both the bytes per link and the distance, so at eight devices it should finish twice as fast. In our data, Blackhole reaches that: every collective lands within a few percent of 2×. Wormhole does not, running 1.5 to 1.8 times faster. Besides the fabric cost of a ring, the ops behave differently there:
+
+- `all_gather` relays each chunk through worker cores, hop by hop. On a line it multicasts, and the routers forward.
+- `reduce_scatter` synchronizes with its neighbor every 4 chunks on a ring, against every 20 on a line.
+- `all_reduce` is a reduce-scatter followed by an all-gather, so it inherits both.
+
+## All data
+
+Every measured cell is tabulated in `results/`. `SUMMARY` keeps one configuration per collective and device count, ring over line and DRAM over L1, under each collective's kernel time formula. `FULL` has every topology and memory configuration, and the latency pass.
+
+- Wormhole LoudBox: [`SUMMARY`](results/SUMMARY_wormhole_b0_bfloat16_6144.md), [`FULL`](results/FULL_wormhole_b0_bfloat16_6144.md)
+- Blackhole Galaxy: [`SUMMARY`](results/SUMMARY_blackhole_bfloat16_8192.md), [`FULL`](results/FULL_blackhole_bfloat16_8192.md)
