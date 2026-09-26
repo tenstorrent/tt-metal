@@ -421,12 +421,36 @@ class CompressedTensor:
         """Return the lockstep assignment tensor (non-per-core mode)."""
         return self.assignment
 
+    @property
+    def is_per_core_allocation(self) -> bool:
+        """True when data is allocated as one buffer per (device, core)."""
+        return self._per_core_allocation
+
+    def get_operand_data_tensors(self) -> list:
+        """Return data tensor(s) safe to pass as generic_op operands.
+
+        Prefer this over get_data_tensors() when building an op's io_tensors
+        list.  ttnn derives a mesh op's dispatch coordinates from its operands:
+        extract_tensor_coordinates() narrows to the SMALLEST coordinate set
+        among them.  Per-core-allocated data is one single-coordinate tensor
+        per (device, core), so passing those shards as operands pins the whole
+        mesh workload to one device and every other device silently runs an
+        empty program.  They only ever appear in io_tensors for lifetime
+        management, and this CompressedTensor owns them, so omit them here and
+        let the mesh-wide tensors define the dispatch coordinates.
+        """
+        return [] if self._per_core_allocation else [self.data]
+
     def get_data_tensors(self) -> list:
         """Return data tensor(s) for use in io_tensors lists (lifetime management).
 
         In per_core_allocation mode, returns the list of per-core tensors.
         In lockstep mode, returns a single-element list with self.data.
         For multi-device, flattens all per-device per-core tensors.
+
+        NOTE: in per_core_allocation mode these are single-coordinate tensors.
+        Do not pass them as generic_op operands on a mesh — see
+        get_operand_data_tensors().
         """
         if self._per_core_allocation:
             result = []
