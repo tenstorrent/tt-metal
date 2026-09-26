@@ -153,3 +153,18 @@ def test_move_op_with_program_cache(dtype, device):
         tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype).to(ttnn.TILE_LAYOUT).to(device, mem_config)
 
     assert device.num_program_cache_entries() == 2
+
+
+def test_move_op_overlap_narrow_core_range(device):
+    # Regression: few tiles on a wide grid gave the overlap factory a single-column shard range,
+    # which used to crash building an invalid CoreRange to the controller's right.
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+    run_move_op(0, [1, 1, 160, 32], ttnn.TILE_LAYOUT, ttnn.bfloat16, mem_config, mem_config, device)
+
+
+@pytest.mark.parametrize("buffer_type", [ttnn.BufferType.L1, ttnn.BufferType.DRAM], ids=["L1", "DRAM"])
+def test_move_op_overlap_row_major_unaligned_page_size(device, buffer_type):
+    # Regression: a row-major page_size that's 16 mod 32 (24 bf16 elements = 48 B) disagreed with
+    # the CB's 16-byte-aligned total size, overrunning the CB. DRAM also takes the overlap path here.
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type)
+    run_move_op(0, [1, 1, 64, 24], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, mem_config, mem_config, device)
