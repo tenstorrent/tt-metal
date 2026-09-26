@@ -793,13 +793,17 @@ def _golden_function_squared_difference(
 ):
     import torch
 
-    input_tensor_a = apply_activations(input_tensor_a, input_tensor_a_activations)
+    # Scalar-first calls put a Python number in input_tensor_a, so dtype-dependent branches
+    # must key off _tensor_operand rather than the argument position -- see the same fix in
+    # add/subtract/multiply/divide (#55722).
+    input_tensor_a, input_tensor_b = _integer_path_scalars(input_tensor_a, input_tensor_b)
+    input_tensor_a = apply_activations(input_tensor_a, input_tensor_a_activations, input_tensor_b)
     input_tensor_b = apply_activations(input_tensor_b, input_tensor_b_activations, input_tensor_a)
-    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+    tensor_operand = _tensor_operand(input_tensor_a, input_tensor_b)
+    if integer_golden.is_unsigned_dtype(tensor_operand.dtype):
         # Widen unsigned subtraction and square before restoring TTNN wraparound.
-        output_tensor = integer_golden.binary(
-            input_tensor_a, input_tensor_b, lambda a, b: torch.square(torch.sub(a, b))
-        )
+        wide_a, wide_b = _matched_operands(input_tensor_a, input_tensor_b, tensor_operand)
+        output_tensor = integer_golden.binary(wide_a, wide_b, lambda a, b: torch.square(torch.sub(a, b)))
     else:
         output_tensor = torch_squared_difference(input_tensor_a, input_tensor_b)
     output_tensor = apply_activations(output_tensor, activations)
