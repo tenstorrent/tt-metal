@@ -146,7 +146,8 @@ inline ttnn::operations::transformer::sdpa::ring_joint::SlidingHaloSources compu
     return sliding::sliding_halo_sources(mapping, q_local_tile_rows, ring_size, halo_tile_rows, 0, hop);
 }
 
-constexpr uint32_t kMaxMulticastHaloHops = 8;
+constexpr uint32_t kMaxMulticastHaloHops =
+    ttnn::operations::transformer::sdpa::ring_joint::SlidingQWorkPlan::max_halo_hops;
 
 // Source tile row each hop of a multicast halo exchange ships, derived from kv_actual_isl. The caller
 // supplies the first hop's row, which it has already derived.
