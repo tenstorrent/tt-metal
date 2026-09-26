@@ -20,6 +20,10 @@ def pytest_configure(config):
         "markers",
         "requires_device: mark test as requiring a Tenstorrent device to run",
     )
+    config.addinivalue_line(
+        "markers",
+        "requires_multi_device: mark test as needing the [1, 2] tp_mesh; select CI legs with -m requires_multi_device",
+    )
 
 
 def pytest_collection_modifyitems(config, items):
@@ -106,7 +110,9 @@ def _close_device_mesh_quietly() -> None:
 def tp_mesh():
     """A ``[1, 2]`` mesh with axes ``("dp", "tp")``, per requesting module.
 
-    Skips the requesting tests if two devices on the ``"tp"`` axis are unavailable.
+    Skips the requesting tests if two devices on the ``"tp"`` axis are unavailable, unless
+    ``TTML_REQUIRE_TP_MESH=1`` is set, in which case the missing mesh is a failure. CI legs
+    on multi-device runners set it so a silent skip cannot pass for coverage.
     The parallelism context is initialised here too, since the qwen3 model paths
     resolve their TP size through it.
     """
@@ -134,7 +140,10 @@ def tp_mesh():
     except Exception as e:  # noqa: BLE001
         _close_device_mesh_quietly()
         _restore_mgd_path(previous_mgd)
-        pytest.skip(f"needs a [{dp_expected}, {tp_expected}] 'tp' mesh: {e}")
+        reason = f"needs a [{dp_expected}, {tp_expected}] 'tp' mesh: {e}"
+        if os.environ.get("TTML_REQUIRE_TP_MESH") == "1":
+            pytest.fail(f"TTML_REQUIRE_TP_MESH=1 but the mesh could not be opened; {reason}")
+        pytest.skip(reason)
 
     yield ttml.mesh()
 
