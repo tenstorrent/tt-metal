@@ -31,6 +31,7 @@ import os
 import torch
 
 import ttnn
+from models.demos.common.bringup.testing import profiler
 
 NUM_CHIPS = 4
 TILE = 32
@@ -59,6 +60,17 @@ def sdpa_settings() -> dict:
     if env("GEMMA4_SDPA_GQ") or env("GEMMA4_SDPA_GK"):
         c["glob"] = (int(env("GEMMA4_SDPA_GQ", c["glob"][0])), int(env("GEMMA4_SDPA_GK", c["glob"][1])))
     return c
+
+
+# Profile sub-sections inside attention (qkv, head_norm, rope, kv_write, kv_tail, sdpa, o_proj, ccl). signpost is a
+# no-op unless the bring-up profiler is enabled, so serving and timing are unchanged. GEMMA4_ATTN_SIGNPOSTS=0 turns
+# them off (attention is then one profile section, as before P.3).
+ATTN_SIGNPOSTS = os.environ.get("GEMMA4_ATTN_SIGNPOSTS", "1") != "0"
+
+
+def _sp(name: str) -> None:
+    if ATTN_SIGNPOSTS:
+        profiler.signpost(f"attention.{name}")
 
 
 def sdpa_compute_config():
@@ -242,6 +254,7 @@ class TtSlidingAttention:
         D, nq = self.d, self.nq
         assert start % TILE == 0 and seq % TILE == 0
 
+        _sp("qkv")
         qkv = ttnn.linear(x, self.wqkv, compute_kernel_config=_hifi2(), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv, num_heads=nq, num_kv_heads=self.nkv, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -249,26 +262,33 @@ class TtSlidingAttention:
         ttnn.deallocate(qkv)
 
         cos, sin, rope_owned = self._chunk_rope(start, seq)
+        _sp("head_norm")
         qn = self._head_norm(q, self.q_norm)
         ttnn.deallocate(q)
+        _sp("rope")
         q = ttnn.experimental.rotary_embedding(qn, cos, sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(qn)
+        _sp("head_norm")
         kn = self._head_norm(k, self.k_norm)
         ttnn.deallocate(k)
+        _sp("rope")
         k = ttnn.experimental.rotary_embedding(kn, cos, sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(kn)
+        _sp("head_norm")
         vn = self._head_norm(v, None)
         ttnn.deallocate(v)
         v = vn
         if rope_owned:
             ttnn.deallocate(cos)
             ttnn.deallocate(sin)
+        _sp("kv_write")
         if kv_sink is not None:
             kv_sink(k, v)
 
         ttnn.fill_cache(cache.k, k, batch_idx=0, update_idx=start)
         ttnn.fill_cache(cache.v, v, batch_idx=0, update_idx=start)
 
+        _sp("kv_tail")
         hist = min(((self.window + TILE - 1) // TILE) * TILE, start)
         if hist:
             k_tail = ttnn.slice(cache.k, [0, 0, start - hist, 0], [1, self.nkv, start, D])
@@ -285,6 +305,7 @@ class TtSlidingAttention:
         else:
             q_cat, k_cat, v_cat = q, k, v
 
+        _sp("sdpa")
         full = ttnn.transformer.scaled_dot_product_attention(
             q_cat,
             k_cat,
@@ -303,10 +324,12 @@ class TtSlidingAttention:
         else:
             attn = full
 
+        _sp("o_proj")
         a = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(attn)
         o = ttnn.linear(a, self.wo, compute_kernel_config=_hifi2(), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(a)
+        _sp("ccl")
         out = ttnn.all_reduce(o, cluster_axis=1)
         ttnn.deallocate(o)
         return out
@@ -464,6 +487,7 @@ class TtGlobalAttention(TtSlidingAttention):
         seq = x.shape[-2]
         assert start % KV_BLOCK == 0 and seq % KV_BLOCK == 0
 
+        _sp("qkv")
         qkv = ttnn.linear(x, self.wqkv, compute_kernel_config=_hifi2(), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv, num_heads=self.nq, num_kv_heads=1, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -471,20 +495,26 @@ class TtGlobalAttention(TtSlidingAttention):
         ttnn.deallocate(qkv)
 
         cos, sin, rope_owned = self._chunk_rope(start, seq)
+        _sp("head_norm")
         qn = self._head_norm(q, self.q_norm)
         ttnn.deallocate(q)
+        _sp("rope")
         q = ttnn.experimental.rotary_embedding(qn, cos, sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(qn)
+        _sp("head_norm")
         kn = self._head_norm(k, self.k_norm)
         ttnn.deallocate(k)
+        _sp("rope")
         k = ttnn.experimental.rotary_embedding(kn, cos, sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(kn)
+        _sp("head_norm")
         vn = self._head_norm(v, None)
         ttnn.deallocate(v)
         v = vn
         if rope_owned:
             ttnn.deallocate(cos)
             ttnn.deallocate(sin)
+        _sp("kv_write")
         if kv_sink is not None:
             kv_sink(k, v)
 
@@ -492,6 +522,7 @@ class TtGlobalAttention(TtSlidingAttention):
         ttnn.experimental.paged_fill_cache(cache.k, k, pt, batch_idx=0)
         ttnn.experimental.paged_fill_cache(cache.v, v, pt, batch_idx=0)
 
+        _sp("sdpa")
         prog = self._sdpa_program_config(seq, start)
         if start == 0:
             attn = ttnn.transformer.scaled_dot_product_attention(
@@ -511,10 +542,12 @@ class TtGlobalAttention(TtSlidingAttention):
         for t in (q, k, v):
             ttnn.deallocate(t)
 
+        _sp("o_proj")
         a = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(attn)
         o = ttnn.linear(a, self.wo, compute_kernel_config=_hifi2(), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(a)
+        _sp("ccl")
         out = ttnn.all_reduce(o, cluster_axis=1)
         ttnn.deallocate(o)
         return out
