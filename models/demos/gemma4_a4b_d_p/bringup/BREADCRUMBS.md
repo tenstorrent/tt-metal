@@ -510,3 +510,14 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Gate PASS: pcc_post_ffn_norm_L00 0.999996, rel L2 0.0028, row norm ratio [0.9960, 1.0022]. The `FAIL ... pcc=0.000000` line comes from the precompile collect pass
   (comp_pcc stub), not the real pass.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_post_ffn_norm.py`
+
+## S.sliding.13 test (run1, attempt 1): swap attn_norm .. post_ffn_norm into the sliding block
+- Replaced the one-line template body with swap 12's checks, and added `post_ffn_norm` to SWAPPED. post_ffn_norm (ffn_out = rms(ffn_sum) * post_feedforward_layernorm.weight) is a
+  `norm` step, so it gets the existing norm checks: vs golden PCC >= 0.99 and rel L2 <= 0.03, and vs the CPU norm on the same device ffn_sum rel L2 <= 0.03 and a
+  per-token norm ratio in [0.97, 1.03]. No new limits. The gated metric stays `pcc_swap_out` >= 0.98.
+- Why the iso check still matters: only ffn_residual ((h_mid + ffn_out) * layer_scalar, CPU) follows, and the h_mid residual dilutes a post_ffn_norm error at block out.
+  The iso check catches `1 + w`, sum instead of mean, 2x and zeroed rows (see test_c_sliding_post_ffn_norm.py).
+- Verified: BRINGUP_IMPL=reference PASS (pcc 0.999996, post_ffn_norm rel 0.0029 / iso 0.0); stub FAIL (every check). Device gate PASS (the device module was already
+  registered in C.sliding.post_ffn_norm.implement): pcc_swap_out 0.999951, block out rel 0.0099 / 0.0090 (limit 0.02), post_ffn_norm pcc 0.99994, rel 0.0113 vs golden,
+  iso 0.0019, ratio [0.9974, 1.0013].
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_13_post_ffn_norm.py`
