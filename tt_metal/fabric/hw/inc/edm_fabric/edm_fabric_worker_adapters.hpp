@@ -103,6 +103,10 @@ struct WorkerToFabricEdmSenderBase {
         volatile uint32_t* writer_send_sem_addr;
         uint32_t worker_free_slots_stream_id;  // used to update the available buffer slot on the receiving router
                                                // (decrement by 1 from the sending side for each packet)
+        // Worker teardown flag and producer-cursor landing zone; assigned in the branch
+        // below, from the conn table on VC0 and from rt args on VC2.
+        uintptr_t worker_teardown_raw = 0;
+        uintptr_t worker_buffer_index_semaphore_addr = 0;
 
         // TODO: https://github.com/tenstorrent/tt-metal/issues/24959
         // remove redundant nested constructor to avoid copy
@@ -126,6 +130,17 @@ struct WorkerToFabricEdmSenderBase {
             writer_send_sem_addr = reinterpret_cast<volatile uint32_t*>(
                 reinterpret_cast<uintptr_t>(&aligned_conn->worker_flow_control_semaphore));
             worker_free_slots_stream_id = static_cast<uint32_t>(conn->worker_free_slots_stream_id);
+            // Storage in the same per-channel entry as worker_flow_control_semaphore above
+            worker_teardown_raw = reinterpret_cast<uintptr_t>(&aligned_conn->worker_teardown_semaphore);
+            worker_buffer_index_semaphore_addr =
+                reinterpret_cast<uintptr_t>(&aligned_conn->worker_producer_cursor[0]);
+            // must be in the fabric conn table
+            ASSERT(
+                worker_teardown_raw >= FABRIC_CONNECTIONS_BASE &&
+                worker_teardown_raw < FABRIC_CONNECTIONS_BASE + MEM_TENSIX_FABRIC_CONNECTIONS_SIZE);
+            ASSERT(
+                worker_buffer_index_semaphore_addr >= FABRIC_CONNECTIONS_BASE &&
+                worker_buffer_index_semaphore_addr < FABRIC_CONNECTIONS_BASE + MEM_TENSIX_FABRIC_CONNECTIONS_SIZE);
         } else {
             // VC2 (TENSIX or ETH): addresses are passed directly as runtime args — no L1 conn table.
             // TODO: will be deprecated. currently for ethernet dispatch case
@@ -145,6 +160,12 @@ struct WorkerToFabricEdmSenderBase {
             writer_send_sem_addr =
                 reinterpret_cast<volatile uint32_t*>(get_semaphore<my_core_type>(writer_send_sem_id));
             worker_free_slots_stream_id = STREAM_ID;
+            // VC2: no conn table, so these are program-semaphore ids read from rt args.
+            worker_teardown_raw = get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++));
+            worker_buffer_index_semaphore_addr = get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++));
+            // must be in kernel semaphore space, not an unresolved id
+            ASSERT(worker_teardown_raw >= MEM_MAP_END);
+            ASSERT(worker_buffer_index_semaphore_addr >= MEM_MAP_END);
         }
 
         // DEAD CODE
@@ -152,9 +173,7 @@ struct WorkerToFabricEdmSenderBase {
         // codepaths are split
         const StreamId my_fc_stream_channel_id = StreamId{std::numeric_limits<uint32_t>::max()};
 
-        auto worker_teardown_sem_addr =
-            reinterpret_cast<volatile uint32_t* const>(get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++)));
-        const auto worker_buffer_index_semaphore_addr = get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++));
+        auto worker_teardown_sem_addr = reinterpret_cast<volatile uint32_t* const>(worker_teardown_raw);
         return WorkerToFabricEdmSenderBase(
             is_persistent_fabric,
             edm_worker_x,
