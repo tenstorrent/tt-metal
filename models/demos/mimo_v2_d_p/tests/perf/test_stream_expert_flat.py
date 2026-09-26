@@ -198,7 +198,7 @@ def test_stream_expert_flat(device, m, wdtype):
     if RDOWN:
         kd_r = kd_of(pcd_r)
         nblk_r, slot_dr = It // kd_r, kd_r * pcd_r
-        ring_dr = int(round(DRING * nblk_r))
+        ring_dr = int(round(float(os.environ.get("MIMO_FL_DRING_R", DRING)) * nblk_r))  # the reader tails' down ring
         out_tiles_r = MT * pcd_r
     nblk = It // kd
     slot_d = kd * pcd
