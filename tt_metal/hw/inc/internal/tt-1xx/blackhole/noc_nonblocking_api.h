@@ -74,7 +74,7 @@ constexpr uint32_t NUM_NOC_CMD_BUFS = 4;
 // BH has 64 bit address space but pipegen was not updated to support this so WH scheme of encoding addresses is used
 // (36 bits of address followed by coordinates) This means that lo and mid registers need to have the address portion
 // while the coordinates go into hi register Metal does not need to use more than 32 bits for addresses but the 60th bit
-// needs to be set to enable NoC transactions through PCIe (see get_pcie_base_addr_from_device)
+// needs to be set to enable NoC transactions through PCIe (see get_sysmem_window_noc_base)
 constexpr uint32_t NOC_ADDR_COORD_SHIFT = 36;
 const uint32_t NOC_TARG_ADDR_COORDINATE = NOC_TARG_ADDR_HI;
 const uint32_t NOC_RET_ADDR_COORDINATE = NOC_RET_ADDR_HI;

@@ -80,7 +80,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, HostHugepagePcieLoopback) {
     ASSERT_GE(channel_size, kHostDstOffset + kTransferSizeBytes) << "Host channel too small for test buffers";
 
     // Device-side PCIe byte offsets mirror host hugepage offsets (see SimulationSysmemManager mapping).
-    const uint64_t pcie_base = cluster.get_pcie_base_addr_from_device(device->id());
+    const uint64_t pcie_base = cluster.get_sysmem_window_noc_base(device->id());
     const uint32_t host_src_pcie_addr = static_cast<uint32_t>(pcie_base + kHostSrcOffset);
     const uint32_t host_dst_pcie_addr = static_cast<uint32_t>(pcie_base + kHostDstOffset);
 
