@@ -190,7 +190,7 @@ footer{color:var(--muted);font-size:12px}
       <div id="findings" style="display:grid;gap:12px"></div>
     </section>
     <section aria-labelledby="s-time">
-      <div class="sec-head"><h2 id="s-time">Chunk timing</h2><p>Prefill time by token range (k = 1024 tokens). Warm rows are the real speed; ladder rows include reading every layer back</p></div>
+      <div class="sec-head"><h2 id="s-time">Chunk timing</h2><p>Warm prefill time by token range (k = 1024 tokens): nothing read back. Accuracy runs (the ladder) are not timed here</p></div>
       <div class="tbl-wrap"><table id="timing"></table></div>
     </section>
   </div>
