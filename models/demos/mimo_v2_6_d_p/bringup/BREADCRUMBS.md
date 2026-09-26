@@ -583,3 +583,24 @@ Results
   coef 1.0200, attn rel 0.1554. The coef margin is 0.03. Keep the add bf16 or fp32 (fp8-like rounding gives rel 0.032).
 
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_sliding_moe_attn_residual.py`
+
+## S.sliding_moe.03 test (attempt 1), 2026-09-26
+
+What was done
+- Replaced the rendered `run_swap_test` call in `tests/bringup/test_swap_sliding_moe_03_attn_residual.py` with the
+  body of `test_swap_sliding_moe_02_attention.py` (every swap-02 check kept: attn_norm, attention, window
+  discriminator, block out rel <= 0.01). Added attn_residual (h_mid) checks: rel L2 <= 0.01 (whole chunk and first 128 rows),
+  ratio [0.99, 1.01], plus the component test's attention-term checks on delta = h_mid - in against the attn_out the
+  swap actually fed in: coef in [0.95, 1.05], ||delta - attn_out|| / ||attn_out|| <= 0.3.
+
+Why
+- The sink keeps attn_out ~1% of ||in||, so a dropped, halved or shifted addend passes the whole-output checks
+  (C.sliding_moe.attn_residual). The delta check uses the device attn_out, so the attention error does not affect it.
+
+Results
+- BRINGUP_IMPL=reference: PASS (h_mid rel 0.0024, coef 1.0000). BRINGUP_IMPL=stub: FAIL (every check).
+- Device (gate): PASS. pcc_swap_out 0.999993, out rel 0.0037; h_mid rel 0.0029, ratio [0.9991, 1.0016], coef 1.0198,
+  attn rel 0.154; the attention numbers match swap 02 (the w127 margin is still 0.0011).
+- When attn_out is all zero, the attn-rel metric divides by a 1e-30 clamp and prints a huge number. That is expected: coef 0 fails as well.
+
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_sliding_moe_03_attn_residual.py`
