@@ -945,6 +945,13 @@ tasks:
     kind: residual
     layer: 0
     stateful: false
+  frozen:
+    at: '2026-09-26T01:40:35'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_ffn_residual.py: d862e1f3eb66eaddabc655d11fe82712cedca8df987cae014ce8b4f74ab2aba1
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
 - id: S.sliding.14
   title: 'sliding block with steps 1-14 on device (last: ffn_residual)'
   step: implement
