@@ -380,3 +380,31 @@ Next
 - `mlp_residual` is still CPU; it is not in the swap list yet.
 
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_full_dense_05_mlp.py`
+
+## C.full_dense.mlp_residual test (attempt 1), 2026-09-26
+
+What was done
+- Replaced the rendered `run_component_test` call in `tests/bringup/test_c_full_dense_mlp_residual.py` with the
+  attn_residual test body (STEP = mlp_residual): gated pcc_mlp_residual_L00 (0.99) plus asserted extras: output size,
+  finite, rel L2 <= 0.01, per-token norm ratio in [0.99, 1.01].
+
+Why
+- Step is `out = h_mid + mlp_out` (mimo_ref.py). Mutations on the golden (PCC / rel): fp32 ref 0.999998 / 0.0021,
+  bf16 add 0.999996 / 0.0028; 2x 0.999998 / 1.0; single zeroed row 0.9998 / 0.020-0.022; last 32 rows zeroed 0.992 /
+  0.125; all pass PCC 0.99, caught by rel L2 / ratio. Same limits as attn_residual (the stream profile matches).
+- Implement: `tt/residual.py:TtResidualAdd` (already used for attn_residual) fits; keep the add bf16 or better.
+
+Results
+- BRINGUP_IMPL=reference: PASS (rel 0.00214, ratio [0.9991, 1.0009]). BRINGUP_IMPL=stub: FAIL (PCC).
+- Default (device) gate: FAIL with NotImplementedError (no device module for mlp_residual yet; implement step).
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_dense_mlp_residual.py
+
+## C.full_dense.mlp_residual implement (attempt 1)
+- Reused `tt/residual.py:TtResidualAdd` (replicated bf16 `ttnn.add`, DRAM, no CCL). Only change is in `bringup/hooks.py`: added `mlp_residual` to
+  `_RESIDUAL_STEPS` (so `device_component` routes it to `_residual_host_fn`) and to `DEVICE_STEPS["full_dense"]` (hybrid `device_model`).
+- Gate: pcc_mlp_residual_L00 = 0.999997, rel_l2 0.00277, row norm ratio [1.0003, 1.0023]. A `FAIL ... pcc=0.000000` line from the
+  precompile collect pass comes before the real pass and can be ignored.
+- `ffn_norm` is handled by `device_component` but is not in `DEVICE_STEPS` yet (not this step's job).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_dense_mlp_residual.py`
