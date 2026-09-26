@@ -34,7 +34,7 @@ from triage import (
 )
 from dispatcher_data import run as get_dispatcher_data, DispatcherData, DispatcherCoreData
 from elfs_cache import run as get_elfs_cache, ElfsCache
-from ttexalens.coordinate import OnChipCoordinate
+from ttexalens.hardware.risc_debug import RiscDebug
 from ttexalens.context import Context
 from ttexalens.gdb.gdb_server import GdbServer, ServerSocket
 from ttexalens.gdb.gdb_client import get_gdb_callstack
@@ -72,13 +72,15 @@ def _pc_not_in_range_message(dispatcher_core_data: DispatcherCoreData) -> str:
 
 
 def get_callstack(
-    location: OnChipCoordinate,
-    risc_name: str,
+    risc_debug: RiscDebug,
     dispatcher_core_data: DispatcherCoreData,
     elfs_cache: ElfsCache,
     full_callstack: bool,
     rewind_pc_for_ebreak: bool,
 ) -> KernelCallstackWithMessage:
+    location = risc_debug.risc_location.location
+    risc_name = risc_debug.risc_location.risc_name
+    neo_id = risc_debug.risc_location.neo_id
     context = location.device._context
     elfs: list[ElfFile] = [elfs_cache[dispatcher_core_data.firmware_path]]
     offsets: list[int | None] = [None]
@@ -87,7 +89,7 @@ def get_callstack(
         offsets.append(dispatcher_core_data.kernel_offset)
     try:
         if not full_callstack:
-            pc = location.device.get_block(location).get_risc_debug(risc_name).get_pc()
+            pc = risc_debug.get_pc()
             if rewind_pc_for_ebreak:
                 pc = pc - 4
             try:
@@ -102,7 +104,7 @@ def get_callstack(
                 return KernelCallstackWithMessage(callstack=[], message=str(e))
         else:
             try:
-                cs = callstack(location, elfs, offsets, risc_name)
+                cs = callstack(location, elfs, offsets, risc_name, neo_id=neo_id)
                 error_message = None
                 if len(cs) == 0:
                     error_message = _pc_not_in_range_message(dispatcher_core_data)
@@ -113,7 +115,7 @@ def get_callstack(
                 error_message = str(e) + " - defaulting to top callstack"
                 try:
                     # If full callstack failed, we default to top callstack
-                    pc = location.device.get_block(location).get_risc_debug(risc_name).get_pc()
+                    pc = risc_debug.get_pc()
                     if rewind_pc_for_ebreak:
                         pc = pc - 4
                     cs = top_callstack(pc, elfs, offsets, context)
@@ -220,8 +222,7 @@ class CallstackProvider:
 
     def get_cached_callstacks(
         self,
-        location: OnChipCoordinate,
-        risc_name: str,
+        risc_debug: RiscDebug,
         rewind_pc_for_ebreak: bool = False,
         use_full_callstack: bool | None = None,
         use_gdb_callstack: bool | None = None,
@@ -230,9 +231,7 @@ class CallstackProvider:
         gdb = use_gdb_callstack if use_gdb_callstack is not None else self.gdb_callstack
 
         cache_key = (
-            location.device.id,
-            location.to_str("noc0"),
-            risc_name,
+            risc_debug.risc_location,
             full,
             gdb,
             rewind_pc_for_ebreak,
@@ -243,8 +242,7 @@ class CallstackProvider:
                 return self._callstack_cache[cache_key]
 
         callstacks = self.get_callstacks(
-            location,
-            risc_name,
+            risc_debug,
             rewind_pc_for_ebreak=rewind_pc_for_ebreak,
             use_full_callstack=use_full_callstack,
             use_gdb_callstack=use_gdb_callstack,
@@ -257,14 +255,14 @@ class CallstackProvider:
 
     def get_callstacks(
         self,
-        location: OnChipCoordinate,
-        risc_name: str,
+        risc_debug: RiscDebug,
         rewind_pc_for_ebreak: bool = False,
         use_full_callstack: bool | None = None,
         use_gdb_callstack: bool | None = None,
     ) -> CallstacksData:
-        dispatcher_core_data = self.dispatcher_data.get_cached_core_data(location, risc_name)
-        risc_debug = location.noc_block.get_risc_debug(risc_name)
+        location = risc_debug.risc_location.location
+        risc_name = risc_debug.risc_location.risc_name
+        dispatcher_core_data = self.dispatcher_data.get_cached_core_data(risc_debug.risc_location)
 
         if risc_debug.is_in_reset():
             return CallstacksData(
@@ -275,8 +273,7 @@ class CallstackProvider:
 
         if dispatcher_core_data.block_type == "active_eth" and not self.force_active_eth:
             callstack_with_message = get_callstack(
-                location,
-                risc_name,
+                risc_debug,
                 dispatcher_core_data,
                 self.elfs_cache,
                 full_callstack=False,
@@ -291,8 +288,7 @@ class CallstackProvider:
                     )
                     # Default to top callstack
                     callstack_with_message = get_callstack(
-                        location,
-                        risc_name,
+                        risc_debug,
                         dispatcher_core_data,
                         self.elfs_cache,
                         full_callstack=False,
@@ -323,8 +319,7 @@ class CallstackProvider:
                             self.gdb_server.error_stream.truncate(0)
                         # Default to top callstack
                         callstack_with_message = get_callstack(
-                            location,
-                            risc_name,
+                            risc_debug,
                             dispatcher_core_data,
                             self.elfs_cache,
                             full_callstack=False,
@@ -349,8 +344,7 @@ class CallstackProvider:
                         pass
             else:
                 callstack_with_message = get_callstack(
-                    location,
-                    risc_name,
+                    risc_debug,
                     dispatcher_core_data,
                     self.elfs_cache,
                     use_full_callstack or (use_full_callstack is None and self.full_callstack),

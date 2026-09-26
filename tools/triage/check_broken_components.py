@@ -28,8 +28,8 @@ from ttexalens.device import Device
 
 from run_checks import run as get_run_checks, RunChecks
 from triage import ScriptConfig, run_script, triage_field, collection_serializer, ScriptPriority, log_warning_risc
-from triage_session import get_triage_session
-from ttexalens.hardware.risc_debug import RiscLocation
+from triage_session import get_triage_session, is_affected_by_cont_bug
+from ttexalens.hardware.risc_debug import RiscDebug, RiscLocation
 
 script_config = ScriptConfig(
     depends=["run_checks"],
@@ -39,20 +39,26 @@ script_config = ScriptConfig(
 _USER_VIEW = False
 
 
+def risc_display_name(risc_location: RiscLocation) -> str:
+    neo = f" (NEO {risc_location.neo_id})" if risc_location.neo_id is not None else ""
+    return f"{risc_location.risc_name}{neo}"
+
+
 def group_broken_cores_by_risc_name(broken_cores: set[RiscLocation]) -> dict[str, set[OnChipCoordinate]]:
     broken_cores_by_risc_name: dict[str, set[OnChipCoordinate]] = {}
     for broken_core in broken_cores:
-        if broken_core.risc_name not in broken_cores_by_risc_name:
-            broken_cores_by_risc_name[broken_core.risc_name] = set()
-        broken_cores_by_risc_name[broken_core.risc_name].add(broken_core.location)
+        risc_name = risc_display_name(broken_core)
+        if risc_name not in broken_cores_by_risc_name:
+            broken_cores_by_risc_name[risc_name] = set()
+        broken_cores_by_risc_name[risc_name].add(broken_core.location)
     return broken_cores_by_risc_name
 
 
 def draw_broken_cores(broken_cores: set[RiscLocation]) -> str:
     def location_render(location: OnChipCoordinate) -> str:
         riscs_string = ""
-        for risc_name in location.device.get_block(location).risc_names:
-            riscs_string += "x" if RiscLocation(location, None, risc_name) in broken_cores else "-"
+        for risc_debug in location.device.get_block(location).all_riscs:
+            riscs_string += "x" if risc_debug.risc_location in broken_cores else "-"
         return riscs_string
 
     rendered = next(iter(broken_cores)).location.device.render(axis_coordinate="noc0", cell_renderer=location_render)
@@ -99,21 +105,26 @@ def verify_halted_cores(run_checks: RunChecks) -> None:
     """
     Verify that cores halted by triage are still halted.
 
-    If a core was halted by us but is no longer halted, it was broken during
-    triage (cont() is patched to no-op on affected architectures, so it
-    cannot have been continued intentionally).
+    This only tells us anything where continue is suppressed: there cont() is patched to a no-op, so
+    a core triage halted cannot have been continued intentionally and finding it running again means
+    it broke during triage. Everywhere else triage does continue the cores it halted, and a core that
+    is no longer halted is exactly what is expected.
     """
     session = get_triage_session()
 
-    def check_core(location: OnChipCoordinate, risc_name: str) -> None:
-        if not session.is_halted_core(location, risc_name):
+    def check_core(risc_debug: RiscDebug) -> None:
+        location = risc_debug.risc_location.location
+        if not is_affected_by_cont_bug(location.device):
             return None
-        risc_debug = location.noc_block.get_risc_debug(risc_name)
+        if not session.is_halted_core(risc_debug.risc_location):
+            return None
         if not risc_debug.is_halted():
             log_warning_risc(
-                risc_name, location, "Was halted by triage but is no longer halted - core was broken during triage."
+                risc_display_name(risc_debug.risc_location),
+                location,
+                "Was halted by triage but is no longer halted - core was broken during triage.",
             )
-            session.add_broken_core(location, risc_name)
+            session.add_broken_core(risc_debug.risc_location)
         return None
 
     run_checks.run_per_core_check(check_core)

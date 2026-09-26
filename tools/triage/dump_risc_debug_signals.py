@@ -29,6 +29,7 @@ from run_checks import run as get_run_checks
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from elfs_cache import run as get_elfs_cache, ElfsCache
 from ttexalens.coordinate import OnChipCoordinate
+from ttexalens.hardware.risc_debug import RiscLocation
 from ttexalens.context import Context
 from ttexalens.tt_exalens_lib import read_words_from_device, write_words_to_device
 
@@ -56,10 +57,10 @@ def _get_git_commit_hash() -> str:
 
 
 def get_firmware_text_address(
-    location: OnChipCoordinate, risc_name: str, dispatcher_data: DispatcherData, elfs_cache: ElfsCache
+    risc_location: RiscLocation, dispatcher_data: DispatcherData, elfs_cache: ElfsCache
 ) -> int:
     """Get the firmware text section address for a given RISC core."""
-    dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
+    dispatcher_core_data = dispatcher_data.get_cached_core_data(risc_location)
     firmware_elf = elfs_cache[dispatcher_core_data.firmware_path]
     text_section = firmware_elf.get_section_by_name(".text")
     assert text_section is not None, "Could not find .text section in firmware ELF"
@@ -82,7 +83,7 @@ def collect_debug_bus_signals(
     # We are using first 16 bytes of the firmware text section to collect debug bus signals
     # Use the first failed risc to get the firmware text address
     risc_for_address = failed_riscs[0]
-    l1_address = get_firmware_text_address(location, risc_for_address, dispatcher_data, elfs_cache)
+    l1_address = get_firmware_text_address(RiscLocation(location, None, risc_for_address), dispatcher_data, elfs_cache)
 
     # Since we are rewriting the firmware text, we need to read the original data to restore it later
     original_data = read_words_from_device(location, l1_address, word_count=4)

@@ -600,6 +600,7 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
     RT_CUSTOM("target_device", static_cast<int>(rt.get_target_device()));
     RT(simulator_enabled);
     RT_CUSTOM("simulator_path", rt.get_simulator_path().string());
+    RT(simulator_serve_over_sockets);
     RT(mock_enabled);
     RT(mock_cluster_desc_path);
     RT(visible_devices);

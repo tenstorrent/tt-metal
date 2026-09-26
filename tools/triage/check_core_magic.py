@@ -19,6 +19,7 @@ Owner:
 
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
+from ttexalens.hardware.risc_debug import RiscLocation
 from ttexalens.elf import ElfFile
 from ttexalens.memory_access import MemoryAccess, create_l1_memory_access
 from dispatcher_data import run as get_dispatcher_data, DispatcherData, RunChecks
@@ -80,16 +81,17 @@ def get_expected_magic_for_location(
 
 
 def try_read_magic_with_dispatcher_data(
-    location: OnChipCoordinate,
-    risc_name: str,
+    risc_location: RiscLocation,
     dispatcher_data: DispatcherData,
 ) -> int | None:
     """
     Attempt to read core_magic_number using the given firmware ELF.
     Returns the magic value or None if reading fails.
     """
+    location = risc_location.location
+    risc_name = risc_location.risc_name
     try:
-        dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
+        dispatcher_core_data = dispatcher_data.get_cached_core_data(risc_location)
         assert dispatcher_core_data.mailboxes is not None
         return int(dispatcher_core_data.mailboxes.core_info.core_magic_number.read_value())
     except TimeoutDeviceRegisterError:
@@ -115,12 +117,13 @@ def try_read_magic_with_elf(
 
 
 def check_core_magic(
-    location: OnChipCoordinate,
-    risc_name: str,
+    risc_location: RiscLocation,
     dispatcher_data: DispatcherData,
     magic_values: CoreMagicValues,
     run_checks: RunChecks,
 ):
+    location = risc_location.location
+    risc_name = risc_location.risc_name
     """
     Check if the core_magic_number matches the expected firmware type.
     If mismatch, try other firmware types to identify what's actually present.
@@ -131,7 +134,7 @@ def check_core_magic(
     expected_magic, expected_type = get_expected_magic_for_location(location, magic_values, run_checks)
 
     # Read the magic number from the expected mailbox location
-    actual_magic = try_read_magic_with_dispatcher_data(location, risc_name, dispatcher_data)
+    actual_magic = try_read_magic_with_dispatcher_data(risc_location, dispatcher_data)
 
     if actual_magic is None:
         return
@@ -146,14 +149,14 @@ def check_core_magic(
         return
 
     # Unknown magic at expected location - try other firmware ELFs to find a match
-    other_elfs_to_try = []
+    other_elfs_to_try: list[tuple[str, ElfFile]] = []
 
     # Add the firmware ELFs we haven't tried yet
     if expected_type != "WORKER":
-        other_elfs_to_try.append(("WORKER", dispatcher_data._brisc_elf))
-    if expected_type != "IDLE_ETH":
+        other_elfs_to_try.append(("WORKER", dispatcher_data._dm0_elf))
+    if expected_type != "IDLE_ETH" and dispatcher_data._idle_erisc_elf is not None:
         other_elfs_to_try.append(("IDLE_ETH", dispatcher_data._idle_erisc_elf))
-    if expected_type != "ACTIVE_ETH":
+    if expected_type != "ACTIVE_ETH" and dispatcher_data._active_erisc_elf is not None:
         other_elfs_to_try.append(("ACTIVE_ETH", dispatcher_data._active_erisc_elf))
     if expected_type != "DRAM" and dispatcher_data._drisc_elf is not None:
         other_elfs_to_try.append(("DRAM", dispatcher_data._drisc_elf))
@@ -195,10 +198,10 @@ def run(args, context: Context):
     run_checks = get_run_checks(args, context)
 
     # Read magic values from firmware (identical across all firmware types)
-    magic_values = CoreMagicValues(dispatcher_data._brisc_elf)
+    magic_values = CoreMagicValues(dispatcher_data._dm0_elf)
 
     run_checks.run_per_core_check(
-        lambda location, risc_name: check_core_magic(location, risc_name, dispatcher_data, magic_values, run_checks),
+        lambda risc_debug: check_core_magic(risc_debug.risc_location, dispatcher_data, magic_values, run_checks),
         block_filter=BLOCK_TYPES_TO_CHECK,
         core_filter=RISC_CORES_TO_CHECK,
     )

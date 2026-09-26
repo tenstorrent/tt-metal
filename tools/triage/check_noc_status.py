@@ -16,7 +16,7 @@ Owner:
 """
 
 from ttexalens.context import Context, NocId, to_noc_id
-from ttexalens.coordinate import OnChipCoordinate
+from ttexalens.hardware.risc_debug import RiscDebug
 from ttexalens.memory_access import create_memory_access
 from ttexalens.tt_exalens_lib import read_register
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
@@ -32,19 +32,20 @@ script_config = ScriptConfig(
 
 
 def check_noc_status(
-    location: OnChipCoordinate,
-    risc_name: str,
+    risc_debug: RiscDebug,
     dispatcher_data: DispatcherData,
     var_to_reg_map: dict[str, str],
     elfs_cache: ElfsCache,
     noc_id: NocId = NocId.NOC0,
 ):
+    risc_name = risc_debug.risc_location.risc_name
+    location = risc_debug.risc_location.location
     """
     Checks for mismatches between variables and registers that store number of NOC transactions
     and stores them in dictionary creating summary of checking process
     """
 
-    dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
+    dispatcher_core_data = dispatcher_data.get_cached_core_data(risc_debug.risc_location)
 
     fw_elf_path = dispatcher_core_data.firmware_path
     fw_elf = elfs_cache[fw_elf_path]
@@ -55,7 +56,7 @@ def check_noc_status(
     message = f"{risc_name} {noc_id.name}: "
     passed = True
 
-    loc_mem_access = create_memory_access(location.noc_block.get_risc_debug(risc_name))
+    loc_mem_access = create_memory_access(risc_debug)
 
     # Skip check when operating in dynamic NOC mode.
     # DM_DEDICATED_NOC is 0 as defined in dev firmware headers (see dev_msgs.h).
@@ -127,8 +128,8 @@ def run(args, context: Context):
     run_checks = get_run_checks(args, context)
     for noc_id in (NocId.NOC0, NocId.NOC1):
         run_checks.run_per_core_check(
-            lambda location, risc_name, _noc_id=noc_id: check_noc_status(
-                location, risc_name, dispatcher_data, VAR_TO_REG_MAP, elfs_cache, _noc_id
+            lambda risc_debug, _noc_id=noc_id: check_noc_status(
+                risc_debug, dispatcher_data, VAR_TO_REG_MAP, elfs_cache, _noc_id
             ),
             block_filter=BLOCK_TYPES_TO_CHECK,
             core_filter=RISC_CORES_TO_CHECK,

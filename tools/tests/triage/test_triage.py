@@ -6,13 +6,17 @@
 # You also need to install everything needed to run tt-triage.py in that environment
 # Run manually ./tools/tt-triage.py --help to see if it works and install requirements
 
+from collections import deque
 from dataclasses import fields
 from datetime import timedelta
 import os
-import sys
-import pytest
+import signal
 import subprocess
+import sys
+import threading
 import time
+
+import pytest
 
 
 metal_home = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -26,6 +30,7 @@ sys.path.insert(0, triage_home)
 
 import triage
 from triage import CheckType, run_script, ScriptArguments
+from triage_hw_utils import device_has_firmware
 from ttexalens.context import Context
 from ttexalens.tt_exalens_init import init_ttexalens
 from ttexalens.coordinate import OnChipCoordinate
@@ -48,11 +53,15 @@ HANG_APP_MESH_SOCKET = "tools/tests/triage/hang_apps/mesh_socket_hang/mesh_socke
 
 MESH_SOCKET_FIFO_SIZE = 8192
 
+SIMULATOR_HANG_DEADLINE_SECONDS = int(os.environ.get("TT_TRIAGE_SIMULATOR_HANG_DEADLINE_SECONDS", "900"))
+SIMULATOR_POLL_INTERVAL_SECONDS = 2
+APP_SHUTDOWN_TIMEOUT_SECONDS = 20
+
 HANG_APP_EXPECTED_RESULTS = {
     HANG_APP_ADD_2_INTEGERS: {
         "lightweight_asserts": {
             "kernel_name": "add_2_tiles_hang",
-            "risc_names": {"trisc0", "trisc1", "trisc2"},
+            "compute_cores_hang": True,
             "first_callstack_file": "add_2_tiles_hang.cpp",
             "first_callstack_line": 40,
         },
@@ -78,7 +87,7 @@ HANG_APP_EXPECTED_RESULTS = {
     HANG_APP_TTNN_ADD_INTEGERS: {
         "lightweight_asserts": {
             "kernel_name": "add_2_tiles_hang",
-            "risc_names": {"trisc0", "trisc1", "trisc2"},
+            "compute_cores_hang": True,
             "first_callstack_file": "add_2_tiles_hang.cpp",
             "first_callstack_line": 40,
         },
@@ -108,12 +117,85 @@ HANG_APP_EXPECTED_RESULTS = {
 }
 
 
-def print_process_output(proc):
-    stdout, stderr = proc.communicate(input=None, timeout=0)
-    print("\n=== Process stdout ===")
-    print(stdout.decode("utf-8") if stdout else "(empty)")
-    print("\n=== Process stderr ===")
-    print(stderr.decode("utf-8") if stderr else "(empty)")
+class AppOutput:
+    RETAINED_LINES = 20000
+
+    def __init__(self, proc: subprocess.Popen):
+        self._lock = threading.Lock()
+        self._chunks: deque[str] = deque(maxlen=self.RETAINED_LINES)
+        for stream in (proc.stdout, proc.stderr):
+            threading.Thread(target=self._drain, args=(stream,), daemon=True).start()
+
+    def _drain(self, stream) -> None:
+        try:
+            for line in iter(stream.readline, b""):
+                with self._lock:
+                    self._chunks.append(line.decode("utf-8", errors="replace"))
+        except (ValueError, OSError):
+            pass  # the pipe was closed under us while the app was being torn down
+
+    def text(self) -> str:
+        with self._lock:
+            return "".join(self._chunks)
+
+    def print(self) -> None:
+        # Pytest will only display this if the test fails.
+        print("\n=== Application output ===")
+        print(self.text() or "(empty)")
+
+
+def compute_risc_names(location: OnChipCoordinate, neo_id: int | None) -> set[str]:
+    return {
+        risc.risc_location.risc_name
+        for risc in location.device.get_block(location).all_riscs
+        if risc.risc_location.neo_id == neo_id and risc.risc_location.risc_name.startswith("trisc")
+    }
+
+
+def hang_is_in_place(context: Context, expected_results: dict) -> bool:
+    expected = expected_results.get("callstacks")
+    if not expected:
+        return True
+
+    location_str = expected.get("location_to_check")
+    wanted = len(expected.get("cores_to_check", {})) or 1
+    for device in context.devices.values():
+        location = OnChipCoordinate.create(location_str, device)
+        halted = 0
+        for risc_debug in location.device.get_block(location).all_riscs:
+            try:
+                if risc_debug.is_halted():
+                    halted += 1
+            except Exception:
+                continue
+        if halted >= wanted:
+            return True
+    return False
+
+
+def wait_for_simulated_hang(proc: subprocess.Popen, output: AppOutput, app: str, expected_results: dict) -> Context:
+    deadline = time.monotonic() + SIMULATOR_HANG_DEADLINE_SECONDS
+    context: Context | None = None
+    consecutive_ready = 0
+    while True:
+        if proc.poll() is not None:
+            raise RuntimeError(f"{app} exited with {proc.returncode} before its device hung.\n{output.text()}")
+        try:
+            if context is None:
+                context = init_ttexalens()
+            consecutive_ready = consecutive_ready + 1 if hang_is_in_place(context, expected_results) else 0
+            if consecutive_ready >= 2:
+                return context
+        except Exception:
+            consecutive_ready = 0
+
+        if time.monotonic() > deadline:
+            stage = "start its simulator" if context is None else "reach its hang"
+            raise RuntimeError(
+                f"{app} did not {stage} within {SIMULATOR_HANG_DEADLINE_SECONDS}s. Raise "
+                f"TT_TRIAGE_SIMULATOR_HANG_DEADLINE_SECONDS if the simulator is simply slow.\n{output.text()}"
+            )
+        time.sleep(SIMULATOR_POLL_INTERVAL_SECONDS)
 
 
 @pytest.fixture(scope="class")
@@ -122,10 +204,19 @@ def cause_hang_with_app(request):
 
     app, args, app_configuration, timeout = request.param
     os.environ.pop("TT_METAL_LOGS_PATH", None)
-    request.cls.exalens_context = init_ttexalens()
     min_devices = app_configuration.get("min_devices", 1)
-    if len(request.cls.exalens_context.devices) < min_devices:
-        pytest.skip(f"{app} needs {min_devices} chips")
+
+    on_simulator = bool(os.environ.get("TT_METAL_SIMULATOR"))
+    if on_simulator and app_configuration.get("auto_timeout", False):
+        pytest.skip("Automatic hang detection cannot be exercised on a simulator")
+
+    if on_simulator and min_devices > 1:
+        pytest.skip(f"{app} needs {min_devices} chips, and a simulator hosts one config")
+
+    if not on_simulator:
+        request.cls.exalens_context = init_ttexalens()
+        if len(request.cls.exalens_context.devices) < min_devices:
+            pytest.skip(f"{app} needs {min_devices} chips")
 
     if app.endswith(".py"):
         # Python apps live in the source tree and need this venv's interpreter, not the system one.
@@ -138,42 +229,48 @@ def cause_hang_with_app(request):
         stderr=subprocess.PIPE,
         env={**os.environ, **app_configuration.get("env", {})},
     )
-    auto_timeout = app_configuration.get("auto_timeout", False)
-    # auto_timeout apps exit 0 once they detect their own hang; expect_running ones must stay wedged.
-    expect_running = app_configuration.get("expect_running", False)
-    if auto_timeout or expect_running:
-        # Wait for the application to hang itself
-        try:
-            proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            pass
 
-        # Check if the process has exited
-        if proc.returncode != (None if expect_running else 0):
-            # Print process output for debugging
-            print("The application did not hang as expected.")
-            print_process_output(proc)
-            raise RuntimeError("The application did not hang as expected.")
-    else:
-        time.sleep(timeout)
-
-    request.cls.app_configuration = app_configuration
-    request.cls.expected_results = app_configuration.get("expected_results", {})
-    if app_configuration.get("env", {}).get("TT_METAL_LOGS_PATH"):
-        metal_logs_path = app_configuration["env"]["TT_METAL_LOGS_PATH"]
-        os.environ["TT_METAL_LOGS_PATH"] = metal_logs_path
+    output = AppOutput(proc)
     try:
+        expected_results = app_configuration.get("expected_results", {})
+        if on_simulator:
+            request.cls.exalens_context = wait_for_simulated_hang(proc, output, app, expected_results)
+        else:
+            auto_timeout = app_configuration.get("auto_timeout", False)
+            # auto_timeout apps exit 0 once they detect their own hang; expect_running ones stay wedged.
+            expect_running = app_configuration.get("expect_running", False)
+            if auto_timeout or expect_running:
+                # Wait for the application to hang itself
+                try:
+                    proc.wait(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    pass
+
+                # Check if the process has exited
+                if proc.returncode != (None if expect_running else 0):
+                    # Print process output for debugging
+                    print("The application did not hang as expected.")
+                    output.print()
+                    raise RuntimeError("The application did not hang as expected.")
+            else:
+                time.sleep(timeout)
+
+        request.cls.app_configuration = app_configuration
+        request.cls.expected_results = expected_results
+        if app_configuration.get("env", {}).get("TT_METAL_LOGS_PATH"):
+            metal_logs_path = app_configuration["env"]["TT_METAL_LOGS_PATH"]
+            os.environ["TT_METAL_LOGS_PATH"] = metal_logs_path
+
         yield
     finally:
         # Clean up the hung application
-        proc.terminate()
+        proc.send_signal(signal.SIGINT)
         try:
-            proc.wait(timeout=5)
-            # Pytest will only display this if test fails
-            print_process_output(proc)
+            proc.wait(timeout=APP_SHUTDOWN_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()
+        output.print()
 
         # Reset the device state after the hang if set in environment
         if os.environ.get("TT_METAL_RESET_DEVICE_AFTER_HANG", "0") == "1":
@@ -355,6 +452,9 @@ class TestTriage:
     def test_check_arc(self):
         result = self.run_triage_script("check_arc.py")
 
+        if not self.any_device_has_firmware():
+            assert result is None, "check_arc.py has no ARC to report on, so it should return nothing"
+            pytest.skip("No device exposes firmware that triage can read")
         assert result is not None, "Expected non-None result from check_arc.py"
         for check in result:
             assert check.result is not None, "Expected non-None result for each ARC check"
@@ -369,10 +469,18 @@ class TestTriage:
 
     def test_device_telemetry(self):
         result = self.run_triage_script("device_telemetry.py")
+
+        if not self.any_device_has_firmware():
+            assert result is None, "device_telemetry.py has no telemetry to report, so it should return nothing"
+            pytest.skip("No device exposes firmware that triage can read")
         self.assert_no_errors_or_none_in_result(result)
 
     def test_firmware_versions(self):
         result = self.run_triage_script("firmware_versions.py")
+
+        if not self.any_device_has_firmware():
+            assert result is None, "firmware_versions.py has no firmware to report, so it should return nothing"
+            pytest.skip("No device exposes firmware that triage can read")
         self.assert_no_errors_or_none_in_result(result)
 
     def test_check_binary_integrity(self):
@@ -415,13 +523,16 @@ class TestTriage:
         if not expected:
             return  # No expected results configured, just verify it runs without failures
 
-        expected_risc_names = expected.get("risc_names")
-        if expected_risc_names:
-            assert len(result) == len(
-                expected_risc_names
-            ), f"Expected {len(expected_risc_names)} risc results, got {len(result)}"
-            risc_names = {check.risc_name for check in result}
+        if expected.get("compute_cores_hang"):
+            # The whole compute pipeline stops on the kernel's ebreak, so every compute core of the
+            # NEO that ran it should report -- and nothing else should.
+            reported = {(check.neo_id, check.risc_name) for check in result}
+            neo_ids = {neo_id for neo_id, _ in reported}
+            assert len(neo_ids) == 1, f"Expected one NEO to have run the compute kernel, got {neo_ids}"
+            expected_risc_names = compute_risc_names(result[0].location, next(iter(neo_ids)))
+            risc_names = {name for _, name in reported}
             assert risc_names == expected_risc_names, f"Expected {expected_risc_names}, got {risc_names}"
+            assert len(result) == len(reported), f"Expected one result per core, got {len(result)} for {reported}"
 
         for check in result:
             assert check.result is not None, f"Expected non-None result for {check.risc_name}"
@@ -515,7 +626,6 @@ class TestTriage:
                 expected = self.expected_results.get("lightweight_asserts")
                 if expected and expected.get("kernel_name"):
                     expected_kernel_name = expected["kernel_name"]
-                    expected_risc_names = expected.get("risc_names")
                     expected_file = expected.get("first_callstack_file")
 
                     # Find aggregated row(s) with the expected kernel
@@ -523,11 +633,13 @@ class TestTriage:
                     if len(matching_rows) > 0:
                         row = matching_rows[0]
 
-                        # Validate expected RISC names if present
-                        if expected_risc_names:
-                            assert (
-                                row.risc_name in expected_risc_names
-                            ), f"Expected RISC '{row.risc_name}' not found in {expected_risc_names}"
+                        # An aggregated row groups cores across locations, so it names a risc but no
+                        # single core to look up. Assert what is left and is still true everywhere:
+                        # the cores that stop on the kernel's ebreak are the compute ones.
+                        if expected.get("compute_cores_hang"):
+                            assert row.risc_name.startswith(
+                                "trisc"
+                            ), f"Expected a compute core to have hung, got '{row.risc_name}'"
 
                         # Validate callstack if expected
                         if expected_file and row.callstack:
@@ -582,7 +694,7 @@ class TestTriage:
             assert check.result is not None, f"Expected non-None result for {risc_name}"
 
             # Verify core is halted (stuck on ebreak)
-            risc_debug = check.location.noc_block.get_risc_debug(risc_name)
+            risc_debug = check.location.noc_block.get_risc_debug(risc_name, check.neo_id)
             assert risc_debug.is_halted(), f"{risc_name}: Core is not halted (not stuck on ebreak)"
 
             # Verify callstack
@@ -612,6 +724,9 @@ class TestTriage:
                         f"{risc_name}: Expected file '{expected_file}' at line {expected_line} not found. "
                         f"Found {expected_file} at lines: {[entry.file_info.line for entry in matching_entries]}"
                     )
+
+    def any_device_has_firmware(self) -> bool:
+        return any(device_has_firmware(device) for device in self.exalens_context.devices.values())
 
     def assert_no_errors_or_none_in_result(self, result: list | None):
         assert result is not None, "Expected non-None result"

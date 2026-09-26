@@ -9,8 +9,8 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/program_descriptors.hpp>
 
 namespace triage_hang_apps {
 
@@ -26,7 +26,7 @@ struct AddIntegersHangOperation {
     using tensor_return_value_t = ttnn::Tensor;
 
     struct SingleCore {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);

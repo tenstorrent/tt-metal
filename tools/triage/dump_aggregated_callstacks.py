@@ -49,6 +49,7 @@ from callstack_provider import (
     run as get_callstack_provider,
 )
 from run_checks import run as get_run_checks, device_description_serializer
+from ttexalens.hardware.risc_debug import RiscDebug
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.elf import CallstackEntry
 from ttexalens.context import Context
@@ -199,15 +200,17 @@ def _collect_aggregated(
 ) -> list[AggregatedCallstackRow] | None:
     """Collect callstacks and aggregate cores stopped in a kernel by (frames, risc, op_id)."""
 
-    def per_core(location: OnChipCoordinate, risc_name: str) -> CallstacksData | None:
+    def per_core(risc_debug: RiscDebug) -> CallstacksData | None:
+        risc_name = risc_debug.risc_location.risc_name
+        location = risc_debug.risc_location.location
         try:
             if not callstack_provider.dispatcher_data.risc_enabled(risc_name):
                 return None
             # Filter DONE / not-enabled-by-design cores
-            if callstack_provider.dispatcher_data.is_idle_in_default_view(location, risc_name):
+            if callstack_provider.dispatcher_data.is_idle_in_default_view(risc_debug.risc_location):
                 return None
 
-            return callstack_provider.get_cached_callstacks(location, risc_name)
+            return callstack_provider.get_cached_callstacks(risc_debug)
         except TimeoutDeviceRegisterError:
             raise
         except Exception as e:
