@@ -355,3 +355,21 @@ Append-only log, one section per task attempt: what was done, decisions and why,
   block out rel 0.0081 / 0.0070; router pcc 0.99961, overlap 0.99701 / 0.99854, matched rel 0.00442 / 0.00224, row sums [0.9958, 1.0044] / [0.9978, 1.0024].
 - Block out did not change from swap 7 (0.008135). The dense router output feeds the CPU experts, and the flips are near ties, so their effect is small.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_08_router.py`
+
+## C.sliding.moe_norm test (run1, attempt 1)
+- Replaced the one-line template body with the reviewed norm-test body (same as test_c_sliding_post_mlp_norm.py / ffn_norm). PCC >= 0.99 stays the gated
+  metric. Asserted extras: finite output, rel L2 <= 0.03, per-token norm ratio in [0.97, 1.03]. Input h_mid, output moe_norm (pre_feedforward_layernorm_2).
+- Scored mutations once in a temporary block under BRINGUP_IMPL=reference, then removed it. The numbers are in the docstring. The weight is small (w in [-0.0125, 2.27]),
+  so `1 + w`, no weight and the wrong norm weight all already fail PCC (0.46-0.64). PCC misses sum-instead-of-mean (PCC ~1.0, rel 0.98) and zeroed rows
+  (last row 0.9996, last 32 rows 0.992). The rel L2 and ratio checks catch both. The CPU reference scores rel 0.0025, ratio [0.9976, 1.0025], and bf16 in/out rel 0.0029.
+- Verified: BRINGUP_IMPL=reference PASS (pcc 0.999997); stub FAIL (pcc 0.0). The device gate fails as expected until the implement step:
+  `NotImplementedError: implement step: no device module for moe_norm yet`.
+- For implement: reuse `tt/rms_norm.py:TtRMSNorm` with `_NORM_WEIGHTS["moe_norm"] = "pre_feedforward_layernorm_2.weight"` and add `moe_norm` to `DEVICE_STEPS["sliding"]`.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_moe_norm.py`
+
+## C.sliding.moe_norm implement (run1, attempt 1)
+- No new module. hooks.py maps `_NORM_WEIGHTS["moe_norm"] = "pre_feedforward_layernorm_2.weight"`, so it reuses `tt/rms_norm.py:TtRMSNorm` (replicated, `x * w`, eps 1e-6),
+  and `moe_norm` is now in `DEVICE_STEPS["sliding"]`, so `device_component` and `HybridDeviceModel` pick it up through the existing norm path.
+- Gate PASS: pcc_moe_norm_L00 0.999996, rel_l2 0.00307, row_norm_ratio [0.9965, 1.0021].
+- The log also has a `FAIL pcc_moe_norm_L00: pcc=0.000000` line. It comes from the precompile collect pass (the plugin stubs comp_pcc), not from the real run.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_moe_norm.py`
