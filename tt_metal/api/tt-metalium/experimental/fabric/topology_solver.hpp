@@ -457,6 +457,20 @@ public:
     std::size_t max_same_rank_groups_used() const { return max_same_rank_groups_used_; }
 
     /**
+     * @brief RELAXED zero-link tolerance (issue #56762): target-graph edges become SOFT.
+     *
+     * When enabled, a mapping where some target edges have no corresponding global (physical)
+     * edge is still valid — the solver instead MAXIMIZES the number of realized target edges
+     * (best effort, strictly below the host-cap / minimize-groups objectives), and unrealized
+     * edges are reported as warnings instead of failing validation. Set only for the
+     * inter-mesh (mesh-level) solve when the inter-mesh policy is RELAXED; intra-mesh solves
+     * must keep edges hard. The maximization is implemented on the SAT engine; engine
+     * selection Auto routes to SAT when this flag is set.
+     */
+    void set_allow_unmatched_target_edges(bool enable) { allow_unmatched_target_edges_ = enable; }
+    bool allow_unmatched_target_edges() const { return allow_unmatched_target_edges_; }
+
+    /**
      * @brief Get forbidden (target, global) pairs that are invalid even when no required constraints exist
      *
      * Used when add_forbidden_constraint is called for a target with no valid_mappings_ entry.
@@ -518,6 +532,9 @@ private:
 
     // Opt-in objective: minimize number of distinct same-rank global groups (host partitions) used.
     bool minimize_same_rank_groups_used_ = false;
+
+    // RELAXED zero-link tolerance: target edges are soft; realized-edge count is maximized.
+    bool allow_unmatched_target_edges_ = false;
 
     // Opt-in HARD cap: at most this many distinct same-rank global groups may be occupied (0 = no cap).
     std::size_t max_same_rank_groups_used_ = 0;
@@ -845,6 +862,10 @@ struct ConstraintIndexData {
     // Opt-in HARD cap: at most this many distinct same-rank global groups may be occupied (0 = no cap).
     std::size_t max_same_rank_groups_used = 0;
 
+    // RELAXED zero-link tolerance (issue #56762): target edges are soft; the SAT engine maximizes
+    // the number of realized edges and unrealized edges validate with a warning.
+    bool allow_unmatched_target_edges = false;
+
     /**
      * @brief Construct ConstraintIndexData from MappingConstraints and GraphIndexData
      *
@@ -928,6 +949,9 @@ struct TopologySatHardEncoding {
     std::string trivial_reason;
     std::vector<std::vector<size_t>> allowed_global_idx;
     std::vector<std::vector<int>> assign_lit;
+    // Zero-link tolerance (allow_unmatched_target_edges): one literal per soft target edge that is
+    // TRUE iff the edge's adjacency support is enforced (edge realized). Empty when edges are hard.
+    std::vector<int> edge_realized_lits;
 };
 
 /**
@@ -974,6 +998,7 @@ struct TopologySatConstraintView {
     const std::vector<size_t>& target_to_group;
     bool minimize_same_rank_groups_used = false;
     std::size_t max_same_rank_groups_used = 0;
+    bool allow_unmatched_target_edges = false;
 
     template <typename TargetNode, typename GlobalNode>
     explicit TopologySatConstraintView(const ConstraintIndexData<TargetNode, GlobalNode>& c) :
@@ -985,7 +1010,8 @@ struct TopologySatConstraintView {
         same_rank_groups(c.same_rank_groups),
         target_to_group(c.target_to_group),
         minimize_same_rank_groups_used(c.minimize_same_rank_groups_used),
-        max_same_rank_groups_used(c.max_same_rank_groups_used) {}
+        max_same_rank_groups_used(c.max_same_rank_groups_used),
+        allow_unmatched_target_edges(c.allow_unmatched_target_edges) {}
 
     bool is_valid_mapping(size_t target_idx, size_t global_idx) const {
         if (target_idx < forbidden_global_indices.size() && !forbidden_global_indices[target_idx].empty()) {

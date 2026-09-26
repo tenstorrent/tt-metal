@@ -1,0 +1,17 @@
+# SYNTHETIC disconnected-cluster mock (issue #56762): one revC-subtorus quad from EACH of two
+# DIFFERENT captures/systems -- SC36 revC subtorus aisle D (system 120, bh-glx-120-d03u02..u20)
+# and SC24 revC subtorus virtu (bg-ale22-r01..r04). BOTH are revC subtorus (same revision, so the
+# PGD matches both quads to a mesh -- a revC+revAB mix makes discovery form only ONE mesh), but
+# they are from different systems so they share ZERO ethernet links -> physical discovery yields
+# two disconnected meshes (intermesh degree {0:2}). Used to pin RELAXED inter-mesh zero-link
+# tolerance: a RELAXED connection between meshes placed on the two quads must map with the
+# connection resolving to zero physical links (logical-only / host interconnect).
+rank_to_cluster_mock_cluster_desc:
+  0: "tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC36_32x4_revC_subtorus_aisleD/SC36_32x4_revC_subtorus_aisleD_cluster_desc/SC36_32x4_revC_subtorus_aisleD_cluster_desc_bh-glx-120-d03u02_rank_32.yaml"
+  1: "tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC36_32x4_revC_subtorus_aisleD/SC36_32x4_revC_subtorus_aisleD_cluster_desc/SC36_32x4_revC_subtorus_aisleD_cluster_desc_bh-glx-120-d03u08_rank_33.yaml"
+  2: "tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC36_32x4_revC_subtorus_aisleD/SC36_32x4_revC_subtorus_aisleD_cluster_desc/SC36_32x4_revC_subtorus_aisleD_cluster_desc_bh-glx-120-d03u14_rank_34.yaml"
+  3: "tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC36_32x4_revC_subtorus_aisleD/SC36_32x4_revC_subtorus_aisleD_cluster_desc/SC36_32x4_revC_subtorus_aisleD_cluster_desc_bh-glx-120-d03u20_rank_35.yaml"
+  4: "tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC24_32x4_revC_subtorus_virtu/SC24_32x4_revC_subtorus_virtu_cluster_desc/SC24_32x4_revC_subtorus_virtu_cluster_desc_bg-ale22-r01u08-1_rank_0.yaml"
+  5: "tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC24_32x4_revC_subtorus_virtu/SC24_32x4_revC_subtorus_virtu_cluster_desc/SC24_32x4_revC_subtorus_virtu_cluster_desc_bg-ale22-r02u08-2_rank_1.yaml"
+  6: "tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC24_32x4_revC_subtorus_virtu/SC24_32x4_revC_subtorus_virtu_cluster_desc/SC24_32x4_revC_subtorus_virtu_cluster_desc_bg-ale22-r03u08-3_rank_2.yaml"
+  7: "tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC24_32x4_revC_subtorus_virtu/SC24_32x4_revC_subtorus_virtu_cluster_desc/SC24_32x4_revC_subtorus_virtu_cluster_desc_bg-ale22-r04u08-4_rank_3.yaml"

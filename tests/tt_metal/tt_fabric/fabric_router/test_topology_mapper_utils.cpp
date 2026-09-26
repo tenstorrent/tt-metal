@@ -5382,4 +5382,135 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
     const auto mapping_result = map_multi_mesh_to_physical(logical_multi_mesh_graph, physical_multi_mesh_graph, config);
     ASSERT_TRUE(mapping_result.success) << mapping_result.error_message;
 }
+
+// ============================================================================
+// RELAXED zero-link tolerance (issue #56762): an inter-mesh RELAXED connection
+// may resolve to ZERO physical links (logical-only edge over the host
+// interconnect), while the mapper maximizes realized links best-effort.
+// ============================================================================
+
+TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_RelaxedZeroLink_Succeeds) {
+    // Two 2x2 meshes whose only declared connection is mesh-level RELAXED, mapped onto a physical
+    // system with ZERO inter-mesh links: mapping must succeed (the connection stays logical-only).
+    // The identical setup with STRICT inter-mesh validation must still fail.
+    using namespace ::tt::tt_fabric;
+
+    const std::string mgd_text = R"proto(
+        mesh_descriptors {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology { dims: [ 2, 2 ] }
+          host_topology { dims: [ 1, 1 ] }
+          channels { count: 2 policy: RELAXED }
+        }
+
+        graph_descriptors {
+          name: "G0"
+          type: "FABRIC"
+          instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+          connections {
+            nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+            nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+            channels { count: 2 policy: RELAXED }
+          }
+        }
+
+        top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    // Physical system: two 2x2 meshes, no inter-mesh links at all.
+    PhysicalMultiMeshGraph physical_multi_mesh_graph;
+    for (uint64_t mesh = 0; mesh < 2; ++mesh) {
+        std::vector<tt::tt_metal::AsicID> asics;
+        asics.reserve(4);
+        for (uint64_t i = 0; i < 4; ++i) {
+            asics.push_back(tt::tt_metal::AsicID{100 * (mesh + 1) + i});
+        }
+        physical_multi_mesh_graph.mesh_adjacency_graphs_[MeshId{static_cast<uint32_t>(mesh)}] =
+            AdjacencyGraph<tt::tt_metal::AsicID>(build_grid_adjacency(asics, 2, 2));
+    }
+    AdjacencyGraph<MeshId>::AdjacencyMap empty_mesh_level_adj;
+    empty_mesh_level_adj[MeshId{0}] = {};
+    empty_mesh_level_adj[MeshId{1}] = {};
+    physical_multi_mesh_graph.mesh_level_graph_ = AdjacencyGraph<MeshId>(empty_mesh_level_adj);
+
+    MeshGraphDescriptor mgd(mgd_text);
+    const auto logical = build_logical_multi_mesh_adjacency_graph(mgd);
+
+    // RELAXED inter-mesh: zero-link mapping succeeds.
+    {
+        TopologyMappingConfig config;
+        config.disable_rank_bindings = true;
+        config.inter_mesh_validation_mode = ::tt::tt_fabric::ConnectionValidationMode::RELAXED;
+        const auto result = map_multi_mesh_to_physical(logical, physical_multi_mesh_graph, config);
+        EXPECT_TRUE(result.success) << "RELAXED inter-mesh connection must map with zero physical links: "
+                                    << result.error_message;
+        EXPECT_EQ(result.fabric_node_to_asic.size(), 8u);
+    }
+
+    // STRICT inter-mesh regression: still requires the physical links.
+    {
+        TopologyMappingConfig config;
+        config.disable_rank_bindings = true;
+        config.inter_mesh_validation_mode = ::tt::tt_fabric::ConnectionValidationMode::STRICT;
+        const auto result = map_multi_mesh_to_physical(logical, physical_multi_mesh_graph, config);
+        EXPECT_FALSE(result.success) << "STRICT inter-mesh connection with zero physical links must still fail";
+    }
+}
+
+TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_RelaxedZeroLink_PrefersLinkfulPlacement) {
+    // "Try its best": three physical 2x2 meshes -- P0 and P1 are inter-mesh adjacent, P2 is
+    // isolated. Two logical 2x2 meshes joined by one RELAXED mesh-level edge must land on the
+    // adjacent pair {P0, P1} (edge realized with links), NOT on a pair involving the isolated P2
+    // (which would also be feasible now that zero-link edges are tolerated).
+    using namespace ::tt::tt_fabric;
+
+    LogicalMultiMeshGraph logical;
+    for (uint32_t mesh = 0; mesh < 2; ++mesh) {
+        std::vector<FabricNodeId> nodes;
+        nodes.reserve(4);
+        for (uint32_t i = 0; i < 4; ++i) {
+            nodes.push_back(FabricNodeId(MeshId{mesh}, i));
+        }
+        logical.mesh_adjacency_graphs_[MeshId{mesh}] = AdjacencyGraph<FabricNodeId>(build_grid_adjacency(nodes, 2, 2));
+    }
+    AdjacencyGraph<MeshId>::AdjacencyMap logical_mesh_level_adj;
+    logical_mesh_level_adj[MeshId{0}] = {MeshId{1}};
+    logical_mesh_level_adj[MeshId{1}] = {MeshId{0}};
+    logical.mesh_level_graph_ = AdjacencyGraph<MeshId>(logical_mesh_level_adj);
+
+    PhysicalMultiMeshGraph physical;
+    for (uint64_t mesh = 0; mesh < 3; ++mesh) {
+        std::vector<tt::tt_metal::AsicID> asics;
+        asics.reserve(4);
+        for (uint64_t i = 0; i < 4; ++i) {
+            asics.push_back(tt::tt_metal::AsicID{100 * (mesh + 1) + i});
+        }
+        physical.mesh_adjacency_graphs_[MeshId{static_cast<uint32_t>(mesh)}] =
+            AdjacencyGraph<tt::tt_metal::AsicID>(build_grid_adjacency(asics, 2, 2));
+    }
+    AdjacencyGraph<MeshId>::AdjacencyMap physical_mesh_level_adj;
+    physical_mesh_level_adj[MeshId{0}] = {MeshId{1}};
+    physical_mesh_level_adj[MeshId{1}] = {MeshId{0}};
+    physical_mesh_level_adj[MeshId{2}] = {};  // isolated
+    physical.mesh_level_graph_ = AdjacencyGraph<MeshId>(physical_mesh_level_adj);
+
+    TopologyMappingConfig config;
+    config.disable_rank_bindings = true;
+    config.inter_mesh_validation_mode = ::tt::tt_fabric::ConnectionValidationMode::RELAXED;
+
+    const auto result = map_multi_mesh_to_physical(logical, physical, config);
+    ASSERT_TRUE(result.success) << result.error_message;
+    ASSERT_EQ(result.fabric_node_to_asic.size(), 8u);
+
+    // Recover which physical meshes were used from the ASIC id ranges (P0: 100s, P1: 200s, P2: 300s).
+    std::set<uint64_t> physical_meshes_used;
+    for (const auto& [fabric_node, asic] : result.fabric_node_to_asic) {
+        physical_meshes_used.insert(*asic / 100);
+    }
+    EXPECT_EQ(physical_meshes_used, (std::set<uint64_t>{1, 2}))
+        << "Best-effort link maximization must place the RELAXED edge on the adjacent physical pair, "
+           "not on the isolated mesh";
+}
 }  // namespace tt::tt_metal::experimental::tt_fabric

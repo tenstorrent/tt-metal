@@ -482,7 +482,11 @@ message Channels {
 // Policy determines whether link-lane requirements must be strictly met.
 // - STRICT: initialization requires that each connection meets `channels.count` lanes.
 // - RELAXED: initialization may proceed if fewer than `channels.count` lanes are found,
-//            but there must be at least one link; absence of a link is not permitted.
+//            INCLUDING zero for inter-mesh connections (issue #56762): the topology mapper
+//            maximizes realized links best-effort (a placement realizing an edge with >=1 link
+//            is always preferred over one that leaves it with none), but a connection that can
+//            resolve no physical links stays logical-only -- traffic rides the host
+//            interconnect -- and is reported with a loud warning instead of failing.
 // Default behavior:
 // - If Channels.policy is omitted in textproto, treat as STRICT unless the control
 //   plane overrides this default.
