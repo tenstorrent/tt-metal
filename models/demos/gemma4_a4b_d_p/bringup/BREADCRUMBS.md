@@ -621,3 +621,13 @@ Append-only log, one section per task attempt: what was done, decisions and why,
   ratio [0.9964, 1.0117]. The FAIL / pcc=0.000000 lines come from the precompile pass (comp_pcc stub).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_02_attention.py`
   (BRINGUP_IMPL=reference / stub for the freeze checks).
+
+## C.global.post_attn_norm test (run1, attempt 1)
+- Replaced the one-line template body with test_c_sliding_post_attn_norm.py (LAYER = 5). The gated metric stays `pcc_post_attn_norm_L05` >= 0.99. The test also asserts
+  rel L2 <= 0.03, a per-token norm ratio in [0.97, 1.03], and a finite output (informational metrics `rel_l2_*`, `row_norm_ratio_{min,max}_*`).
+- Measured on the CPU (layer 5 golden, attn_out -> attn_post_norm; the weight was recovered from the golden and lies in [0.0009, 1.10], much smaller than layer 0's):
+  reference rel 0.0023, ratio [0.998, 1.002]; bf16 0.0028; 1% noise 0.010; `1 + w` PCC 0.753 (at layer 0 it passed PCC); no weight PCC 0.493;
+  sum instead of mean PCC ~1.0 but rel 0.98, ratio 0.019. The script was /tmp/g5pan/v.py (CPU only, not kept).
+- Verified: BRINGUP_IMPL=reference PASS (pcc 0.999997, rel 0.0023). Stub FAIL (PCC 0.0). The device gate already PASSES (pcc 0.999996, rel 0.0030, ratio [0.9963, 1.0013]),
+  because the device norm is the same module the sliding layers use. The `FAIL ... pcc=0.000000` line comes from the precompile pass (comp_pcc stub).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_post_attn_norm.py`
