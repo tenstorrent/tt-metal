@@ -234,6 +234,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> polynorm3_backward_variant(
     float epsilon,
     PolyNorm3BackwardVariant backward_variant) {
     if (backward_variant == PolyNorm3BackwardVariant::Fused) {
+        if (x.logical_shape()[-1] % 32U != 0U) {
+            throw std::runtime_error(
+                "polynorm3 fused backward currently requires C to be divisible by 32 (no tail-channel masking yet).");
+        }
         return metal::polynorm3_bw(x, dL_dout, weight_tensor, epsilon);
     }
     return polynorm3_composite_backward(x, dL_dout, weight_tensor, epsilon);
