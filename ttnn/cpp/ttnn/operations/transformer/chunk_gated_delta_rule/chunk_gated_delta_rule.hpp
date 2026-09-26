@@ -9,6 +9,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "chunk_gated_delta_rule_config.hpp"
 
 namespace ttnn::transformer {
 
@@ -30,8 +31,12 @@ namespace ttnn::transformer {
  *               [B*HV, T, V]  TILE       (when output_head_major)
  *   final_state [B, HV, K, V]  (present iff output_final_state)
  *
- * use_mcast: The scan phase multicasts its shared inputs from one core per head to that head's
- * sibling V-block cores instead of re-reading the same DRAM pages.
+ * program_config: which device implementation runs and how it is laid out (chunk_gated_delta_rule_config.hpp):
+ * ChunkGdnFusedProgramConfig (one program, NP producers -> NV receivers per head over the NoC),
+ * ChunkGdnPhasedProgramConfig (prep -> DRAM -> scan, the bit-exact reference) or
+ * ChunkGdnMonoProgramConfig (the single-kernel op). std::nullopt: the fused path with the cost
+ * model's geometry when it fits this grid and is predicted to beat phased, else phased. All three
+ * paths are bit-identical for the same inputs and compute_kernel_config.
  *
  * output_head_major: the kernel natively produces o head-major ([BH,T,V]); the default
  * path permutes it to token-major [B,T,HV,V]. Callers that want head-major (e.g. the qwen36
@@ -50,7 +55,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     uint32_t chunk_size = 64,
     bool use_qk_l2norm = false,
     bool output_head_major = false,
-    bool use_mcast = true,
+    const std::optional<ChunkGdnProgramConfig>& program_config = std::nullopt,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     const std::optional<ttnn::Tensor>& eye = std::nullopt,

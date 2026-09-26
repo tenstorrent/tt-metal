@@ -668,3 +668,44 @@ def test_gdn_out_agmm_deterministic_under_device_skew(mesh_device, monkeypatch, 
             f"device {late} late: {bad.numel()} output rows differ from the synchronized reference "
             f"(first {bad[:8].tolist()}): the out-projection gather overwrote data the late device still used"
         )
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+@pytest.mark.parametrize("T", [256, 2048], ids=lambda t: f"T{t}")
+def test_gdn_tp_prefill_fused_vs_phased_bit_exact(mesh_device, T, reset_seeds, ensure_gc):
+    """Layer-level test for the fused prep->scan op: TPGatedDeltaNet.forward_prefill with real weights,
+    run with a phased and a fused program config on the same tokens.
+    """
+    os.environ.setdefault("HF_MODEL", model_path())
+    if mesh_device.get_num_devices() == 1:
+        pytest.skip("TP-only")
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=4096)
+    li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
+    sd = load_gdn_layer(args.CKPT_DIR, li)
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    gdn = TPGatedDeltaNet(mesh_device, args, load_gdn_weights_tp(mesh_device, sd, args), TT_CCL(mesh_device))
+    composer = tp_composer(mesh_device)
+    x_tt = shard_to_device(mesh_device, torch.randn(1, 1, T, args.dim, dtype=torch.bfloat16), dim=-1)
+
+    def run(program_config):
+        gdn.gdn_program_config = program_config
+        gdn.reset_state()
+        o = gdn.forward_prefill(x_tt)
+        out = ttnn.to_torch(o, mesh_composer=composer)[0, 0].float().clone()
+        ttnn.deallocate(o)
+        return out
+
+    phased = run(ttnn.ChunkGdnPhasedProgramConfig())
+    phased_again = run(ttnn.ChunkGdnPhasedProgramConfig())
+    n_phased = mesh_device.num_program_cache_entries()
+    fused = run(ttnn.ChunkGdnFusedProgramConfig())
+    n_fused = mesh_device.num_program_cache_entries()
+    assert torch.equal(phased, phased_again), "phased layer output is not deterministic"
+    assert n_fused > n_phased, "the fused program config compiled no new program: the fused prim did not run"
+    d = (phased - fused).abs()
+    assert torch.equal(phased, fused), (
+        f"T={T}: fused layer output differs from phased (max|d|={d.max().item():.3e}, "
+        f"first differing row {int(torch.nonzero(d.sum(-1))[0])})"
+    )

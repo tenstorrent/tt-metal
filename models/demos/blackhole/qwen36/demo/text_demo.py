@@ -10,12 +10,9 @@ Run all:      pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s
 Run 128:      pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced_128"
 Run batched:  MESH_DEVICE=P150x4 pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "b8"
 
-GDN prefill runs the fast fused path by DEFAULT — no env vars needed: chunk-parallel phase-split
-(PREP fanned across the grid + V-block SCAN), fp32 o output, fp32 state, and flat token-major q/k/v
-with in-kernel L2-norm (eliminates the head-split relayouts + host l2_norm — the bulk of the
-preprocessing cost). Two opt-out flags exist only for benchmarking/debug:
-  QWEN_GDN_PHASED=0    fall back to the monolithic single-kernel fused op (no phase split).
-  QWEN_GDN_FLAT_QKV=0  fall back to head-split q/k/v + host l2_norm (no flat token-major reads).
+GDN prefill uses a cost model to select the fastest program config at runtime. To pick a specific
+program config or a geometry for benchmarking, set Qwen36ModelArgs.gdn_program_config to one of:
+ttnn.ChunkGdnFusedProgramConfig / ChunkGdnPhasedProgramConfig / ChunkGdnMonoProgramConfig.
 """
 
 import hashlib
