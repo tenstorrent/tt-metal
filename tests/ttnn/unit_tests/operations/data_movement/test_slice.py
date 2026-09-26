@@ -2133,3 +2133,32 @@ def test_slice_rm_wide_row_chunking(device, last_dim):
     ttnn_output = ttnn.slice(ttnn_input, begins, ends, step, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     assert torch.equal(torch_output, ttnn.to_torch(ttnn_output))
+
+
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+def test_issue_57382_slice_rm_misaligned_with_truncated_dim(device, dtype):
+    """Regression test for issue #57382: RM slice corrupted rows on misaligned reads
+    when a non-innermost dimension is truncated.
+    When innermost begin != 0 (causing misalignment) and unpadded_row_size_bytes was
+    already aligned, DFB entry size failed to allocate space for the misalignment bytes.
+    The NOC read overflowed into id_per_dim scratchpad, corrupting the odometer and
+    preventing row skips at batch boundaries."""
+    shape = (5, 65, 1025)
+    begins = [0, 0, 1]
+    ends = [5, 64, 1025]
+    step = [1, 1, 1]
+
+    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+    torch_input = torch.randn(shape, dtype=torch_dtype)
+    torch_output = torch_input[0:5, 0:64, 1:1025]
+
+    ttnn_input = ttnn.from_torch(
+        torch_input,
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=dtype,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    ttnn_output = ttnn.slice(ttnn_input, begins, ends, step, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    assert_equal(torch_output, ttnn.to_torch(ttnn_output))

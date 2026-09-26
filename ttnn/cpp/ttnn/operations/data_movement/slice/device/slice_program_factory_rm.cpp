@@ -81,7 +81,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
     uint32_t begins_bytes = output_tensor_start[-1] * input_tensor.element_size();
     uint32_t misalignment = begins_bytes % src_buffer_alignment;
-    uint32_t unpadded_row_size_bytes_offset = tt::round_up(unpadded_row_size_bytes, alignment);
+    uint32_t unpadded_row_size_bytes_offset = tt::round_up(unpadded_row_size_bytes + misalignment, alignment);
 
     // The input base address is a tensor binding, not an argument, so this list is scalars only.
     std::vector<uint32_t> common_reader_kernel_args = {
@@ -191,17 +191,13 @@ SliceDfbSizing compute_dfb_size(
     auto dst_buffer_alignment = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? ::hal::get_dram_alignment()
                                     : ::hal::get_l1_alignment();
-    const auto single_alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
-    auto alignment = single_alignment;
+    const auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
 
     uint32_t begins_bytes = output_tensor_start[-1] * input.element_size();
     uint32_t misalignment = begins_bytes % src_buffer_alignment;
 
-    if (misalignment != 0) {
-        alignment *= 2;
-    }
     const uint32_t unpadded_row_size_bytes = output.padded_shape()[-1] * input.element_size();
-    const uint32_t stick_size_aligned = tt::round_up(unpadded_row_size_bytes, alignment);
+    const uint32_t stick_size_aligned = tt::round_up(unpadded_row_size_bytes + misalignment, alignment);
 
     const uint32_t l1_budget = ttnn::operations::data_movement::get_max_l1_space(input);
 
@@ -214,7 +210,7 @@ SliceDfbSizing compute_dfb_size(
 
     const bool needs_chunking = (misalignment == 0) && (static_cast<uint64_t>(2u) * stick_size_aligned > l1_budget) &&
                                 (stick_size_aligned > alignment);
-    uint32_t stride_for_merge = tt::round_up(unpadded_row_size_bytes, single_alignment);
+    uint32_t stride_for_merge = stick_size_aligned;
 
     if (needs_chunking) {
         // l1_budget/8 leaves headroom for reader + writer CBs pair-batched (each 4*chunk_size).
