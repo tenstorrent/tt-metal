@@ -78,7 +78,7 @@ def run_ssm_prefix_scan(L: int, E: int, N: int, num_cores: int, dtype, device):
 @pytest.mark.parametrize(
     "L, E, N, num_cores",
     (
-        (32, 32, 16, 1),
+        (32, 32, 16, 1),  # 16 tiles/row, shorter than the 32-tile tilize
         (32, 32, 32, 1),
         (32, 64, 32, 1),
         (64, 32, 32, 1),
