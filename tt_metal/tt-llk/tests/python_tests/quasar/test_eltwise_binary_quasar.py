@@ -18,12 +18,14 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    generate_perf_input_dimensions,
     generate_reduced_input_dimensions,
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
     quasar_mx_smoke,
     runtime,
+    select_perf_tile_sizes,
 )
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
@@ -39,31 +41,28 @@ from helpers.test_variant_parameters import (
     MATH_OP,
     NUM_BLOCKS,
     NUM_FACES,
+    NUM_FACES_C_DIM,
+    NUM_FACES_R_DIM,
     NUM_TILES_IN_BLOCK,
     OUTPUT_TILE_CNT,
     TEST_FACE_DIMS,
     generate_input_dim,
 )
+from helpers.tile_constants import SUPPORTED_TILE_SIZES, is_mx_unsupported_tile_dims
 from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test
 
 
-def _eltwise_dest_acc_sync(dest_acc_modes, *, is_perf=False):
-    dest_sync_modes = (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
-    return [
-        (dest_sync, dest_acc)
-        for dest_sync in dest_sync_modes
-        for dest_acc in dest_acc_modes
-    ]
+def eltwise_binary_dest_acc(formats):
+    # Quasar pack cannot upcast to a 32-bit L1 format, so Int32 and Float32
+    # outputs accumulate in a 32-bit dest.
+    if formats.output_format.is_32_bit():
+        return [DestAccumulation.Yes]
+    return [DestAccumulation.No]
 
 
-def eltwise_binary_dest_sync_dest_acc(formats, *, is_perf=False):
-    dest_acc_modes = (
-        (DestAccumulation.Yes,)
-        if formats.input_format == DataFormat.Int8
-        else (DestAccumulation.No,)
-    )
-    return _eltwise_dest_acc_sync(dest_acc_modes, is_perf=is_perf)
+def eltwise_binary_dest_sync_modes(*, is_perf=False):
+    return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
 
 
 def eltwise_binary_implied_math_formats(formats, *, is_perf=False):
@@ -74,26 +73,61 @@ def eltwise_binary_implied_math_formats(formats, *, is_perf=False):
     return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
 
 
+# faces * face_r_dim < 8 programs MOP_OUTER_LOOP = 0 and the test hangs.
+ELTWISE_MATH_ROWS = 8
+
+
+def skip_if_quasar_eltwise_binary_hangs(tile_dimensions) -> None:
+    """Skip tiles whose math MOP never runs, so unpack dvalid is never cleared."""
+    tile_shape = construct_tile_shape(tile_dimensions)
+    dest_rows = tile_shape.total_num_faces() * tile_shape.face_r_dim
+    if dest_rows < ELTWISE_MATH_ROWS:
+        pytest.skip(
+            "Quasar eltwise binary math MOP outer loop is 0 when "
+            f"faces*face_r_dim={dest_rows} < {ELTWISE_MATH_ROWS} "
+            f"(tile {list(tile_dimensions)}). See tenstorrent/tt-metal#57902"
+        )
+
+
 # For acc_to_dest setting, accumulate two result tiles into dest. Can be extended.
 def get_num_tiles_per_accumulation(acc_to_dest: bool) -> int:
     return 2 if acc_to_dest else 1
 
 
-_TILE_SHAPE = construct_tile_shape()
+def eltwise_binary_tile_dimensions(formats, *, is_perf=False):
+    tile_sizes = (
+        select_perf_tile_sizes(SUPPORTED_TILE_SIZES)
+        if is_perf
+        else SUPPORTED_TILE_SIZES
+    )
+    return [
+        list(tile_dims)
+        for tile_dims in tile_sizes
+        if not is_mx_unsupported_tile_dims(
+            formats.input_format, formats.output_format, tile_dims
+        )
+    ]
 
 
-def valid_acc_to_dest(input_dimensions) -> list:
+def eltwise_binary_input_dimensions(
+    dest_acc, dest_sync, tile_dimensions, *, is_perf=False
+):
+    tile_shape = construct_tile_shape(tile_dimensions)
+    if is_perf:
+        return generate_perf_input_dimensions(dest_acc, dest_sync, tile_shape)
+    return generate_reduced_input_dimensions(dest_acc, dest_sync, tile_shape)
+
+
+def valid_acc_to_dest(input_dimensions, tile_dimensions) -> list:
     """Pick the acc_to_dest modes worth running for a given input size.
 
     acc_to_dest=True accumulates `get_num_tiles_per_accumulation(True)` result tiles into
     dest, so it only makes sense when the tile count is a non-zero multiple of that.
     """
-    total_tiles = (
-        input_dimensions[0] * input_dimensions[1]
-    ) // _TILE_SHAPE.total_tile_size()
-
+    tile_rows, tile_cols = tile_dimensions
+    tile_count = (input_dimensions[0] // tile_rows) * (input_dimensions[1] // tile_cols)
     per_acc = get_num_tiles_per_accumulation(True)
-    if total_tiles >= per_acc and total_tiles % per_acc == 0:
+    if tile_count >= per_acc and tile_count % per_acc == 0:
         return [False, True]
     return [False]
 
@@ -105,7 +139,10 @@ ELTWISE_FORMATS = (
             DataFormat.Float16,
         ],
     )
-    + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
+    + [
+        InputOutputFormat(DataFormat.Int8, DataFormat.Int32),
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+    ]
     + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
 )
 
@@ -122,16 +159,18 @@ ELTWISE_FORMATS = (
     implied_math_format=lambda formats: eltwise_binary_implied_math_formats(
         formats, is_perf=False
     ),
-    dest_sync_dest_acc=lambda formats: eltwise_binary_dest_sync_dest_acc(
+    dest_acc=eltwise_binary_dest_acc,
+    dest_sync=lambda: eltwise_binary_dest_sync_modes(is_perf=False),
+    unpack_to_dest=[False],
+    tile_dimensions=lambda formats: eltwise_binary_tile_dimensions(
         formats, is_perf=False
     ),
     input_dimensions=runtime(
-        lambda dest_sync_dest_acc: generate_reduced_input_dimensions(
-            dest_sync_dest_acc[1], dest_sync_dest_acc[0]
+        lambda dest_acc, dest_sync, tile_dimensions: eltwise_binary_input_dimensions(
+            dest_acc, dest_sync, tile_dimensions, is_perf=False
         )
     ),
     acc_to_dest=valid_acc_to_dest,
-    num_faces=[4],
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
@@ -140,10 +179,12 @@ def test_eltwise_binary(
     mathop,
     math_fidelity,
     implied_math_format,
-    dest_sync_dest_acc,
+    dest_acc,
+    dest_sync,
+    unpack_to_dest,
+    tile_dimensions,
     input_dimensions,
     acc_to_dest,
-    num_faces,
     run_types,
     loop_factor,
     boot_mode=BootMode.DEFAULT,
@@ -151,12 +192,13 @@ def test_eltwise_binary(
     is_perf=False,
     perf_report=None,
 ):
-    dest_sync_mode, dest_acc = dest_sync_dest_acc
-
+    skip_if_quasar_eltwise_binary_hangs(tile_dimensions)
+    tile_shape = construct_tile_shape(tile_dimensions)
+    num_faces = tile_shape.total_num_faces()
     num_tiles_per_accumulation = get_num_tiles_per_accumulation(acc_to_dest)
 
     num_blocks, input_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        dest_sync_mode, dest_acc, formats, input_dimensions
+        dest_sync, dest_acc, formats, input_dimensions, tile_dimensions
     )
     output_tiles_in_block = input_tiles_in_block // num_tiles_per_accumulation
 
@@ -172,10 +214,11 @@ def test_eltwise_binary(
         spec_A=stimuli_spec,
         spec_B=stimuli_spec,
         output_format=formats.output_format,
+        tile_dimensions=tile_dimensions,
     )
 
     tile_cnt_res = src_A.numel() // (
-        _TILE_SHAPE.total_tile_size() * num_tiles_per_accumulation
+        tile_shape.total_tile_size() * num_tiles_per_accumulation
     )
 
     generate_golden = get_golden_generator(EltwiseBinaryGolden)
@@ -187,8 +230,9 @@ def test_eltwise_binary(
         math_fidelity,
         input_format=formats.input_format,
         acc_to_dest=acc_to_dest,
-        tile_shape=_TILE_SHAPE,
+        tile_shape=tile_shape,
         num_tiles_per_accumulation=num_tiles_per_accumulation,
+        dest_acc=dest_acc,
     )
 
     if is_perf and perf_report is None:
@@ -201,15 +245,19 @@ def test_eltwise_binary(
             MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=mathop),
             IMPLIED_MATH_FORMAT(implied_math_format),
-            DEST_SYNC(dest_sync_mode),
+            DEST_SYNC(dest_sync),
             ACC_TO_DEST(acc_to_dest),
         ],
         "runtimes": [
-            generate_input_dim(input_dimensions, input_dimensions),
+            generate_input_dim(
+                input_dimensions, input_dimensions, tile_dimensions=tile_dimensions
+            ),
             INPUT_TILE_CNT(tile_cnt_A),
             OUTPUT_TILE_CNT(tile_cnt_res),
             NUM_FACES(num_faces),
-            TEST_FACE_DIMS(),
+            NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
+            NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
+            TEST_FACE_DIMS(tile_shape.face_r_dim),
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(
                 input_tiles_in_block,
@@ -227,10 +275,11 @@ def test_eltwise_binary(
             tile_count_B=tile_cnt_A,
             tile_count_res=tile_cnt_res,
             num_faces=num_faces,
+            face_r_dim=tile_shape.face_r_dim,
+            tile_dimensions=tile_dimensions,
+            use_dense_tile_dimensions=True,
         ),
-        "unpack_to_dest": (
-            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-        ),
+        "unpack_to_dest": unpack_to_dest,
         "dest_acc": dest_acc,
         "disable_format_inference": formats.input_format.is_mx_format(),
     }
