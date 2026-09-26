@@ -406,13 +406,15 @@ void ring_attention_neighbor_halo_exchange_helper(
                 "Neighbor halo requires matching input/output tile widths, got input Wt={} and output Wt={}",
                 input_Wt,
                 output_Wt);
+            const uint32_t tail_rows = halo.tail_rows();
+            const uint32_t dest_end =
+                halo.send_to_next_count_Ht == tail_rows ? halo.dest_row_base : halo.second_dest_row_base;
             TT_FATAL(
-                output_Ht >= halo.dest_row_base + halo.send_to_next_count_Ht,
+                output_Ht >= dest_end + tail_rows,
                 "Neighbor halo output has {} tile rows but hop {} requires {}",
                 output_Ht,
                 halo.hop,
-                halo.dest_row_base + halo.send_to_next_count_Ht);
-            const uint32_t tail_rows = halo.tail_rows();
+                dest_end + tail_rows);
             TT_FATAL(
                 halo.send_to_next_start_Ht <= input_Ht && tail_rows <= input_Ht - halo.send_to_next_start_Ht,
                 "Neighbor halo [{}, {}) exceeds input Ht={}",
@@ -472,8 +474,10 @@ void ring_attention_neighbor_halo_exchange_helper(
             writer_args.push_back(batch_head_count);
             writer_args.push_back(input_tile_start);
             writer_args.push_back(input_tile_end);
-            // Where this hop's block starts in the receiver's compact buffer.
+            // Where this hop's block starts in each of the receiver's halo slots, and the pages per tail.
             writer_args.push_back(halo.dest_row_base * output_Wt);
+            writer_args.push_back(halo.second_dest_row_base * output_Wt);
+            writer_args.push_back(tail_rows * output_Wt);
             halo_input_Wt.push_back(input_Wt);
         }
 

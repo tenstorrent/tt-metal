@@ -32,6 +32,15 @@ constexpr bool reduce_trigger_supported = false;
 constexpr bool reduce_trigger_supported = true;
 #endif
 
+// Set by ring joint SDPA; other kernels that include this header keep the one-segment capacity.
+#ifdef SLIDING_MAX_SOURCE_RANGES
+constexpr uint32_t sliding_q_plan_max_source_ranges = SLIDING_MAX_SOURCE_RANGES;
+#else
+constexpr uint32_t sliding_q_plan_max_source_ranges =
+    ttnn::operations::transformer::sdpa::ring_joint::sliding_q_work_plan_source_ranges(
+        ttnn::operations::transformer::sdpa::ring_joint::sliding_max_halo_hops, 1);
+#endif
+
 // Template-driven profiling: MaybeDeviceZoneScopedN(ENABLED, name)
 // When ENABLED=true: RAII profileScope writes timestamps (same as DeviceZoneScopedN)
 // When ENABLED=false: empty struct, zero overhead (compiler eliminates entirely)
@@ -2545,7 +2554,8 @@ void sdpa_ring_v2(
             continue;
         }
 
-        ttnn::operations::transformer::sdpa::ring_joint::SlidingQWorkPlan sliding_q_plan;
+        ttnn::operations::transformer::sdpa::ring_joint::SlidingQWorkPlan<sliding_q_plan_max_source_ranges>
+            sliding_q_plan;
         constexpr bool circular_kv_cache = circular_kv_slab_count > 1;
         if constexpr (has_sliding_window) {
             const ttnn::operations::transformer::sdpa::ring_joint::ChunkedQMapping q_mapping{
@@ -2553,7 +2563,8 @@ void sdpa_ring_v2(
                 chunked.kv_pad_rotation.q_pre_wrap_tile_count,
                 chunked.kv_pad_rotation.q_post_wrap_start_tile,
                 chunked.kv_pad_rotation.q_valid_tile_count};
-            sliding_q_plan = ttnn::operations::transformer::sdpa::ring_joint::build_sliding_q_work_plan(
+            sliding_q_plan = ttnn::operations::transformer::sdpa::ring_joint::build_sliding_q_work_plan<
+                sliding_q_plan_max_source_ranges>(
                 q_chunk * Sq_chunk_t,
                 Sq_chunk_t,
                 chunked.ring_index,

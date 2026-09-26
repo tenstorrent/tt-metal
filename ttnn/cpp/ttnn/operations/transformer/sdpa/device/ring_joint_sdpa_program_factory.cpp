@@ -658,6 +658,7 @@ void apply_ring_joint_scalar_runtime_args(
             tt::constants::TILE_HEIGHT,
             static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size),
             runtime_plan.logical_nt,
+            tensor_args.gathered_k.logical_shape()[2] / tt::constants::TILE_HEIGHT,
             derived_kv_slab_count(args, tensor_args),
             args.kv_actual_isl.has_value() ? std::optional<uint32_t>(*args.kv_actual_isl / tt::constants::TILE_HEIGHT)
                                            : std::nullopt);
@@ -1152,6 +1153,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             tt::constants::TILE_HEIGHT,
             ring_size,
             logical_nt,
+            gathered_padded_Nt,
             circular_kv_slab_count,
             args.kv_actual_isl.has_value() ? std::optional<uint32_t>(*args.kv_actual_isl / tt::constants::TILE_HEIGHT)
                                            : std::nullopt);
@@ -1833,7 +1835,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     defines["SLIDING_HALO_SLOT_COUNT"] =
-        std::to_string(has_sliding_window ? gathered_padded_Nt / chunked_sliding_halo_layout.halo_tile_rows : 0);
+        std::to_string(has_sliding_window ? chunked_sliding_halo_layout.halo_slot_count : 0);
+    defines["SLIDING_MAX_SOURCE_RANGES"] = std::to_string(
+        has_sliding_window ? ring_joint::sliding_q_work_plan_source_ranges(
+                                 ring_joint::chunked_sliding_halo_hop_count(
+                                     chunked_sliding_halo_layout.halo_tile_rows, q_local_padded_Nt),
+                                 chunked_sliding_halo_layout.halo_slot_count)
+                           : 1);
 
     // NOTE: CreateKernel calls are deferred until after chain construction so that
     // the mcast_enabled compile-time arg can be determined first.
@@ -3340,8 +3348,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             // never replays that, so on the metadata path hand the halo kernels the same kv_actual_isl the
             // rest of the op reads and let them derive the start themselves; the value here then serves as
             // the baked origin they shift away from.
-            // The tail(s) this exchange ships follow from each receiver's Q mapping; a one-hop halo can
-            // ship two when block-cyclic Q wraps. A multicast lists every hop's origin so its kernels can
+            // The tail(s) this exchange ships follow from each receiver's Q mapping: two when block-cyclic
+            // Q wraps. A multicast lists every hop's origin so its kernels can
             // group equal ones into runs. Metadata kernels re-derive them on-device each replay.
             const auto hop_sources = chunked_sliding_halo_layout.send_sources(transport_rank, plan.hop);
             const uint32_t hop_tail_rows = chunked_sliding_halo_layout.hop_rows(plan.hop);
@@ -3354,6 +3362,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 .hop = plan.hop,
                 .tail_tile_rows = hop_tail_rows,
                 .dest_row_base = chunked_sliding_halo_layout.dest_row(transport_rank, plan.hop),
+                .second_dest_row_base = chunked_sliding_halo_layout.dest_row(transport_rank, plan.hop, 1),
                 .hop_origin_rows = multicast_origin_rows(chunked_sliding_halo_layout, transport_rank, plan),
                 .link_base = lane_index % lane_span,
                 .arrivals_expected = halo_remote_hops,

@@ -622,7 +622,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         const bool supported_q_chunk = q_chunk_size == 64 || q_chunk_size == 128;
         const bool supported_k_chunk = k_chunk_size == 128;
         // These are the only ring sizes the chunked sliding halo is tested on. Extend the test matrix
-        // (and SlidingQWorkPlan::max_halo_hops) before widening this allowlist.
+        // (and sliding_max_halo_hops) before widening this allowlist.
         TT_FATAL(
             args.ring_size == 4 || args.ring_size == 8,
             "Chunked sliding attention supports the SP4 production ring or SP8 test ring, got SP{}",
@@ -696,26 +696,10 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         // The work plan returns an EMPTY plan past its fixed range count; reject that here instead
         // of computing no attention.
         TT_FATAL(
-            halo_hops <= ring_joint::SlidingQWorkPlan::max_halo_hops,
+            halo_hops <= ring_joint::sliding_max_halo_hops,
             "Chunked sliding halo needs {} hops; at most {} are supported",
             halo_hops,
-            ring_joint::SlidingQWorkPlan::max_halo_hops);
-        // A multi-hop halo lays out one block per hop for a single Q segment. Block-cyclic Q that wraps
-        // has two segments and needs a second halo slot, which the multi-hop layout does not support yet:
-        // reject a two-slot buffer (provisioned for wrapping Q) and a scalar request that wraps.
-        const bool scalar_q_wraps =
-            args.has_kv_pad_rotation() &&
-            ring_joint::chunked_q_wraps(args.kv_actual_isl.value(), args.logical_n, N_local_q, args.ring_size);
-        TT_FATAL(
-            halo_hops == 1 || (gathered_buffer_n < 2 * halo_tokens && !scalar_q_wraps),
-            "Chunked sliding halo {} (window {}) needs {} hops over the per-device Q slab {}; a multi-hop halo does "
-            "not support block-cyclic Q that wraps a slab (gathered rows {}, Q wraps: {})",
-            halo_tokens,
-            window_size,
-            halo_hops,
-            N_local_q,
-            gathered_buffer_n,
-            scalar_q_wraps);
+            ring_joint::sliding_max_halo_hops);
     }
 
     if (args.circular_kv_cache) {

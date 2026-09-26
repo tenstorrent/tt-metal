@@ -4527,6 +4527,9 @@ RING_JOINT_TRACE_REGION_SIZE = 32 * 1024 * 1024
         # origins change per replay.
         pytest.param("slab_rotated", 1, 1024, id="slab-rotated-four-hop"),
         pytest.param("rotated", 2, 128, id="rotated-two-halos"),
+        # Wrapping Q with a multi-hop halo: 384 has a partial farthest hop, 1024 four whole ones.
+        pytest.param("rotated", 2, 384, id="rotated-two-halos-two-hop-partial"),
+        pytest.param("rotated", 2, 1024, id="rotated-two-halos-four-hop"),
         pytest.param(
             "rotated",
             1,
@@ -5763,26 +5766,30 @@ def test_ring_joint_attention_multi_hop_block_cyclic_sliding_reuse(local, expect
     )
 
 
-# A multi-hop halo does not support block-cyclic Q that wraps a slab yet, so the op rejects a two-slot
-# halo buffer (provisioned for wrapping Q) instead of computing a wrong answer.
-def test_ring_joint_attention_multi_hop_rejects_wrapping_block_cyclic(expect_error):
+# Block-cyclic requests whose Q wraps a slab with a multi-hop halo, mixed with aligned ones on one program.
+@pytest.mark.parametrize("local", [256, 512], ids=["four_hop", "two_hop"])
+def test_ring_joint_attention_multi_hop_wrapping_block_cyclic_sliding_reuse(local, expect_error):
     mesh_config = gpt_oss_chunked_mesh_config()
-    local = 256
     chunk = local * mesh_config.sp_size
-    with expect_error(RuntimeError, "multi-hop halo does not support block-cyclic Q"):
-        run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
-            mesh_config,
-            batch_size=1,
-            expect_error=expect_error,
-            chunk_size_local=local,
-            sliding_window_size=1024,
-            local_q_heads=4,
-            local_kv_heads=2,
-            head_dim=256,
-            q_chunk_size=128,
-            requests=[(local - 32, chunk + local - 32)],
-            num_iterations=1,
-        )
+    run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
+        mesh_config,
+        batch_size=1,
+        expect_error=expect_error,
+        chunk_size_local=local,
+        sliding_window_size=1024,
+        local_q_heads=4,
+        local_kv_heads=2,
+        head_dim=256,
+        q_chunk_size=128,
+        requests=[
+            (local - 32, chunk + local - 32),
+            (0, chunk),
+            (chunk + 3 * local + 32, 2 * chunk + 3 * local + 32),
+            (chunk + 64, 2 * chunk + 64),
+            (2 * chunk - 32, 3 * chunk - 32),
+        ],
+        halo_slots=2,
+    )
 
 
 def test_ring_joint_attention_gpt_oss_chunked_sliding_indexed_kv_cache_accuracy():
