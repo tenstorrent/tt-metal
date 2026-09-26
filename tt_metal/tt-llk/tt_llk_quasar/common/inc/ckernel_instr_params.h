@@ -83,9 +83,10 @@ struct p_unpacr
 
 struct p_set_inc_sel
 {
-    constexpr static std::uint32_t TILE_SEL = 0b000;
-    constexpr static std::uint32_t FACE_SEL = 0b001;
-    constexpr static std::uint32_t ROW_SEL  = 0b010;
+    constexpr static std::uint32_t TILE_SEL          = 0b000;
+    constexpr static std::uint32_t FACE_SEL          = 0b001;
+    constexpr static std::uint32_t ROW_SEL           = 0b010;
+    constexpr static std::uint32_t TILE_FACE_ROW_SEL = 0b011;
 };
 
 struct p_srcb
