@@ -371,3 +371,8 @@ Drive this ledger with
   (`gate.gate_command`; tasks.yaml is unchanged, so approvals hold).
 - X.2 does not stop for picks when perf tasks after it are already in the ledger.
 - The profile records sub-sections a module marks itself (`attention.sdpa` -> device_ms_attention_sdpa).
+
+## F36 (2026-09-26): timing is performance only
+- Owner: ladder rows (accuracy runs that read every layer back) never belong in the timing section. The exporter
+  drops them for every model; only warm, no-readback measurements appear (profile chunk, full prefill). The selftest
+  pins it. Token counts below 1k print as plain numbers.
