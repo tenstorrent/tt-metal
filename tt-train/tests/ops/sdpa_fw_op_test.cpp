@@ -22,6 +22,7 @@
 #include "core/tt_tensor_utils.hpp"
 #include "metal/common/const_utils.hpp"
 #include "metal/operations.hpp"
+#include "ops/scaled_dot_product_attention.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
@@ -42,6 +43,51 @@ protected:
         ttml::autograd::ctx().close_device();
     }
 };
+
+TEST_F(SDPAForwardTest, PublicWrapperFallsBackForRectangularKvCacheDecode) {
+    constexpr std::size_t Batch = 1U;
+    constexpr std::size_t QueryHeads = 4U;
+    constexpr std::size_t KvHeads = 2U;
+    constexpr std::size_t QuerySeqLen = 32U;
+    constexpr std::size_t KvSeqLen = 64U;
+    constexpr std::size_t HeadDim = 32U;
+    using Shape = xt::xarray<float>::shape_type;
+
+    xt::xarray<float> query = xt::zeros<float>(Shape{Batch, QueryHeads, QuerySeqLen, HeadDim});
+    xt::xarray<float> key = xt::zeros<float>(Shape{Batch, KvHeads, KvSeqLen, HeadDim});
+    xt::xarray<float> value = xt::zeros<float>(Shape{Batch, KvHeads, KvSeqLen, HeadDim});
+    xt::xarray<float> mask = xt::zeros<float>(Shape{1U, 1U, QuerySeqLen, KvSeqLen});
+
+    for (std::size_t d = 0; d < HeadDim; ++d) {
+        value(0, 0, 32, d) = 33.0F;
+        value(0, 1, 32, d) = 66.0F;
+    }
+    for (std::size_t query_index = 0; query_index < QuerySeqLen; ++query_index) {
+        for (std::size_t key_index = 0; key_index <= 32U; ++key_index) {
+            mask(0, 0, query_index, key_index) = 1.0F;
+        }
+    }
+
+    auto* device = &ttml::autograd::ctx().get_device();
+    auto query_tensor = ttml::autograd::create_tensor(ttml::core::from_xtensor(query, device));
+    auto key_tensor = ttml::autograd::create_tensor(ttml::core::from_xtensor(key, device));
+    auto value_tensor = ttml::autograd::create_tensor(ttml::core::from_xtensor(value, device));
+    auto mask_tensor = ttml::autograd::create_tensor(ttml::core::from_xtensor(mask, device));
+
+    auto result = ttml::ops::scaled_dot_product_attention(query_tensor, key_tensor, value_tensor, mask_tensor);
+    auto result_host = ttml::core::to_xtensor(result->get_value());
+
+    ASSERT_EQ(result_host.shape(), (std::vector<std::size_t>{Batch, QueryHeads, QuerySeqLen, HeadDim}));
+    for (std::size_t head = 0; head < QueryHeads; ++head) {
+        const float expected = head < QueryHeads / KvHeads ? 1.0F : 2.0F;
+        for (std::size_t query_index = 0; query_index < QuerySeqLen; ++query_index) {
+            for (std::size_t d = 0; d < HeadDim; ++d) {
+                EXPECT_NEAR(result_host(0, head, query_index, d), expected, 0.05F)
+                    << "head=" << head << ", query=" << query_index << ", channel=" << d;
+            }
+        }
+    }
+}
 
 xt::xarray<float> generate_mask(const xt::xarray<float>& query) {
     auto shape = query.shape();
