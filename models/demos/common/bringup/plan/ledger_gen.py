@@ -290,6 +290,28 @@ def generate(spec, ref=None, early: bool = False) -> dict:
         {"opportunities_listed": ">= 1"},
         paths=[f"{model_dir}/bringup/opportunities.md"],
     )
+    # Final measurement once the picks are in (the overseer points X.3's deps at the last pick): full-target
+    # accuracy, the warm full prefill (TTFT without the LM head) and one warm chunk at several start positions.
+    full = ladder[-1]
+    fm = {
+        "pcc_layer_L*": thr(spec, "layer"),
+        "pcc_state_min": thr(spec, "state"),
+        "prefill_ms_full": "> 0",
+        "pos_chunk": ">= 1",
+    }
+    if max(full.get("layers") or spec.layers()) == spec.num_layers - 1:
+        fm.update(pcc_final_hidden=thr(spec, "final_hidden"), top5_overlap=thr(spec, "top5"))
+    add(
+        "X.3",
+        "Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions",
+        "perf",
+        ["X.2"],
+        f"BRINGUP_RUNG={full['name']} {SAFE} models/demos/common/bringup/tests/test_ladder.py"
+        f" && BRINGUP_FULL_PREFILL=1 {PROFILE_ENV} {SAFE} models/demos/common/bringup/tests/test_profile.py"
+        f" && {SAFE} models/demos/common/bringup/tests/test_positions.py",
+        fm,
+        device=True,
+    )
     return {"model": spec.data["hf_id"], "target": spec.data["target"], "tasks": tasks}
 
 
