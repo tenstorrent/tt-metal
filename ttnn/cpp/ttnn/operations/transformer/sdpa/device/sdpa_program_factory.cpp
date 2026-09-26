@@ -241,6 +241,7 @@ uint32_t kv_chain_mode_for(
     bool plain_kv_stream,
     bool causal_pairs,
     bool fp32_legacy_block_float_kv,
+    bool bfp8_full_grid_exp_exact,
     uint32_t q_num_chunks,
     uint32_t Sq_chunk_t,
     uint32_t Sk_chunk_t,
@@ -251,9 +252,9 @@ uint32_t kv_chain_mode_for(
     if (!is_causal) {
         return 1;
     }
-    // The legacy kernel with fp32 DEST is compute bound, and with block float K/V a causal chain's relay latency
-    // outweighs the DRAM reads it saves (measured on Blackhole: +1.5 to +4 percent against no chain).
-    if (fp32_legacy_block_float_kv) {
+    // The legacy kernel with fp32 DEST is compute bound: with block float K/V a chain pays only for bfp8 on the full
+    // grid with exp_approx_mode off, two q tiles or fewer and 64 K chunks or more (measured on Blackhole).
+    if (fp32_legacy_block_float_kv && !(bfp8_full_grid_exp_exact && Sq_chunk_t <= 2 && Skt >= 64 * Sk_chunk_t)) {
         return 0;
     }
     // No q tile gate: the reader side forward that used to cost more than the DRAM reads it saved past four
@@ -759,6 +760,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         !is_chunked && !has_sliding_window && !is_windowed && !use_mask_block_map,
         global_q_pair_distribute && !use_provided_mask,
         fp32_dest_acc_en && !use_streaming_compute && block_float_kv,
+        !exp_approx_mode && input_tensor_k.dtype() == DataType::BFLOAT8_B &&
+            num_cores == device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y,
         q_num_chunks,
         Sq_chunk_t,
         Sk_chunk_t,
