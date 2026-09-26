@@ -143,6 +143,20 @@ class TtSlidingAttention:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
         )
 
+    def set_rope_tables(self, cos_full: ttnn.Tensor, sin_full: ttnn.Tensor) -> None:
+        """Use device cos/sin tables [1, 1, max_seq, D] built once at load (shared by all layers of this RoPE type);
+        each chunk then slices its rows on the device instead of uploading new tables."""
+        self.rope_full = (cos_full, sin_full)
+
+    def _chunk_rope(self, start: int, seq: int):
+        """(cos, sin, owned): owned tensors are per-chunk slices the caller frees after use."""
+        full = getattr(self, "rope_full", None)
+        if full is None:
+            return (*self._rope_tables(start, seq), False)
+        cos = ttnn.slice(full[0], [0, 0, start, 0], [1, 1, start + seq, full[0].shape[-1]])
+        sin = ttnn.slice(full[1], [0, 0, start, 0], [1, 1, start + seq, full[1].shape[-1]])
+        return cos, sin, True
+
     def _rope_tables(self, start: int, seq: int):
         key = (start, seq)
         if key not in self._rope:
@@ -171,9 +185,10 @@ class TtSlidingAttention:
             exp_approx_mode=False,
         )
 
-    def __call__(self, x: ttnn.Tensor, start: int, cache: TtKVCacheSliding) -> ttnn.Tensor:
+    def __call__(self, x: ttnn.Tensor, start: int, cache: TtKVCacheSliding, kv_sink=None) -> ttnn.Tensor:
         """x: replicated [1, 1, S, H] TILE (attn_norm output), queries at [start, start+S). Returns replicated
-        [1, 1, S, H] (all-reduced). Writes this chunk's K/V into cache positions [start, start+S)."""
+        [1, 1, S, H] (all-reduced). Writes this chunk's K/V into cache positions [start, start+S).
+        kv_sink(k, v), if given, also receives this chunk's per-chip K/V [1, nkv_local, S, D] (the serving cache)."""
         seq = x.shape[-2]
         D, nq = self.d, self.nq
         assert start % TILE == 0 and seq % TILE == 0
@@ -184,7 +199,7 @@ class TtSlidingAttention:
         )
         ttnn.deallocate(qkv)
 
-        cos, sin = self._rope_tables(start, seq)
+        cos, sin, rope_owned = self._chunk_rope(start, seq)
         qn = self._head_norm(q, self.q_norm)
         ttnn.deallocate(q)
         q = ttnn.experimental.rotary_embedding(qn, cos, sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -196,6 +211,11 @@ class TtSlidingAttention:
         vn = self._head_norm(v, None)
         ttnn.deallocate(v)
         v = vn
+        if rope_owned:
+            ttnn.deallocate(cos)
+            ttnn.deallocate(sin)
+        if kv_sink is not None:
+            kv_sink(k, v)
 
         ttnn.fill_cache(cache.k, k, batch_idx=0, update_idx=start)
         ttnn.fill_cache(cache.v, v, batch_idx=0, update_idx=start)
@@ -294,6 +314,16 @@ class TtKVCacheGlobal:
 
     def chunk_page_table(self, start: int, seq: int):
         key = (start, seq)
+        if getattr(self, "device_page_slices", False):
+            # Serving path: slice the resident identity table on the device (no per-chunk host upload).
+            assert start % KV_BLOCK == 0 and seq % KV_BLOCK == 0
+            if key not in self._chunk_pt:
+                for v in self._chunk_pt.values():
+                    ttnn.deallocate(v)
+                self._chunk_pt = {
+                    key: ttnn.slice(self.page_table, [0, start // KV_BLOCK], [1, (start + seq) // KV_BLOCK])
+                }
+            return self._chunk_pt[key]
         if key not in self._chunk_pt:
             assert start % KV_BLOCK == 0 and seq % KV_BLOCK == 0
             for v in self._chunk_pt.values():
@@ -383,9 +413,10 @@ class TtGlobalAttention(TtSlidingAttention):
             exp_approx_mode=False,
         )
 
-    def __call__(self, x: ttnn.Tensor, start: int, cache: TtKVCacheGlobal) -> ttnn.Tensor:
+    def __call__(self, x: ttnn.Tensor, start: int, cache: TtKVCacheGlobal, kv_sink=None) -> ttnn.Tensor:
         """x: replicated [1, 1, S, H] TILE (attn_norm output), queries at [start, start+S). Returns replicated
-        [1, 1, S, H] (all-reduced). Writes this chunk's K/V into cache positions [start, start+S)."""
+        [1, 1, S, H] (all-reduced). Writes this chunk's K/V into cache positions [start, start+S).
+        kv_sink(k, v), if given, also receives this chunk's per-chip K/V [1, 1, S, D] (the serving cache)."""
         seq = x.shape[-2]
         assert start % KV_BLOCK == 0 and seq % KV_BLOCK == 0
 
@@ -395,7 +426,7 @@ class TtGlobalAttention(TtSlidingAttention):
         )
         ttnn.deallocate(qkv)
 
-        cos, sin = self._rope_tables(start, seq)
+        cos, sin, rope_owned = self._chunk_rope(start, seq)
         qn = self._head_norm(q, self.q_norm)
         ttnn.deallocate(q)
         q = ttnn.experimental.rotary_embedding(qn, cos, sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -407,6 +438,11 @@ class TtGlobalAttention(TtSlidingAttention):
         vn = self._head_norm(v, None)
         ttnn.deallocate(v)
         v = vn
+        if rope_owned:
+            ttnn.deallocate(cos)
+            ttnn.deallocate(sin)
+        if kv_sink is not None:
+            kv_sink(k, v)
 
         pt = cache.chunk_page_table(start, seq)
         ttnn.experimental.paged_fill_cache(cache.k, k, pt, batch_idx=0)
