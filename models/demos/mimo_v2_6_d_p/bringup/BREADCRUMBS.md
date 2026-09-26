@@ -83,3 +83,42 @@ Result (hand run): plan_fits 1, unplaced 0, plan_errors 0, component_errors 0, l
 
 Re-run
     PYTHONPATH=$PWD python -m models.demos.common.bringup.plan.check_plan
+
+## C.full_dense.attn_norm test (attempt 1), 2026-09-26
+
+What was done
+- Replaced the rendered `run_component_test` call in `tests/bringup/test_c_full_dense_attn_norm.py` with the
+  gemma4_a4b_d_p attn_norm template: gated PCC (spec threshold 0.99) plus finite output, rel L2 <= 0.03 and per-token
+  norm ratio in [0.97, 1.03]. Records `rel_l2_attn_norm_L00`, `row_norm_ratio_{min,max}_attn_norm_L00` (informational).
+
+Why
+- PCC is scale-invariant: on this golden a sum-instead-of-mean RMS scores PCC 0.999994 (passes) but rel 0.98.
+  Measured (CPU, golden [2048, 4096] bf16): reference fp32 PCC 0.999999 / rel 0.0016 / ratio [0.9980, 1.0023];
+  bf16 math is bit-equal to the golden; eps 1e-2 rel 0.89; `1 + w` or dropped w rel 54 (w mean 0.0056, so `1 + w` is
+  a gross error here, unlike Gemma).
+
+Results
+- BRINGUP_IMPL=reference: PASS (pcc 0.999999, rel 0.001597). BRINGUP_IMPL=stub: FAIL (pcc 0.0).
+- Default mode: FAIL with NotImplementedError (no device module yet; implement step).
+
+Re-run
+    PYTHONPATH=$PWD BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_dense_attn_norm.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_dense_attn_norm.py
+
+## C.full_dense.attn_norm implement (attempt 1), 2026-09-26
+
+What was done
+- `tt/rms_norm.py`: TtRMSNorm (copy of gemma4_a4b_d_p/tt/rms_norm.py): replicated `ttnn.rms_norm`, TILE [1,1,1,H]
+  bf16 gamma, HiFi4 + fp32 dest acc, eps 1e-6, plain checkpoint `w`. Also the harness-boundary helpers
+  `to_device_replicated` / `replicated_to_host` (not used inside any forward).
+- `bringup/hooks.py`: `DEVICE_STEPS = {"full_dense": {"attn_norm"}}`, `_NORM_WEIGHTS` (attn_norm ->
+  input_layernorm, ffn_norm -> post_attention_layernorm; ffn_norm is mapped but not yet in DEVICE_STEPS),
+  `_norm_module` (loads one weight via reference/weights.WeightLoader), `_host_fn`, `device_component` for norm
+  steps, and `HybridDeviceModel` / `_HybridState` as `device_model` (CPU reference with DEVICE_STEPS overridden, plain
+  embedding with no scale, final norm on CPU). Adding a later norm step = add it to DEVICE_STEPS.
+
+Result
+- Gate: pcc_attn_norm_L00 0.999998, rel_l2 0.002118, row_norm_ratio [0.9956, 1.0012]. PASS.
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_dense_attn_norm.py
