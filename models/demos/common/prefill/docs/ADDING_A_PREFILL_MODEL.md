@@ -277,8 +277,10 @@ runner with `PREFILL_ENABLE_MIGRATION=0` (the default, so the table stays on dis
 `PREFILL_PRODUCER_CHECK_PCC=1`. Full two-terminal
 recipe in `docs/PREFILL_MIGRATION_TESTING.md` Gate 1. The runner PCCs nothing on any path — it publishes
 the table and the device map, and every read-back runs in the reader's own process. The producer's reader
-knows two cache layouts — merged MLA (DeepSeek / Kimi) and MiniMax-M3's triple cache; a third
-layout needs a branch in `_read_slot_kv_and_check_pcc`, since that read-back is not adapter-dispatched.
+knows the merged MLA (DeepSeek / Kimi), GQA (gpt_oss_d_p / ernie45_d_p) and MiniMax-M3 layouts. Any other
+layout defines `read_slot_kv_and_check_pcc(table, device_map, slot_id, real_len, trace_dir, num_layers)` on the
+adapter (returning `{cache_name: min_pcc}`); `_read_slot_kv_and_check_pcc` calls it before the name-based branches
+(example: `gemma4_a4b_d_p/tt/runners/adapter.py`).
 
 **Live migration** — `PREFILL_ENABLE_MIGRATION=1` hands the same table to a migration worker instead
 and blocks on its ready, so the endpoint must be up (see
