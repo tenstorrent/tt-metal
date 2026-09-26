@@ -168,6 +168,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/experimental/sinkhorn.h
     inc/api/compute/experimental/softmax_k.h
     inc/api/compute/experimental/sum_reduce_scalar.h
+    inc/api/compute/experimental/tile_move_copy_32x16.h
     inc/api/compute/experimental/tile_move_copy_custom.h
     inc/api/compute/experimental/topk_xl.h
     inc/api/compute/binary_fmod.h
