@@ -698,3 +698,13 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Device gate: pass, pcc_swap_out 0.999989, block out rel 0.0048 / 0.0037; mlp rel 0.0045 vs golden, iso 0.0032,
   ratio [0.9988, 1.0044]. The pcc=0.000000 lines come from the precompile pass (comp_pcc stub).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_06_mlp.py`
+
+## C.global.post_mlp_norm test (run1, attempt 1)
+- Replaced the one-line template body with test_c_sliding_post_mlp_norm.py (LAYER = 5). The gated metric stays `pcc_post_mlp_norm_L05` >= 0.99. The test also asserts
+  rel L2 <= 0.03, a per-token norm ratio in [0.97, 1.03], and a finite output (informational metrics `rel_l2_*`, `row_norm_ratio_{min,max}_*`).
+- Measured on the CPU (layer 5 golden, mlp_out -> mlp_post_norm; weight recovered from the golden, in [-0.21, 163]). PCC / rel / ratio: recovered-weight norm 0.999997 / 0.0024 / [0.9961, 1.0043];
+  bf16 0.0029; 1% noise 0.010; `1 + w` 0.9985 (passes PCC) / 0.058; no weight PCC 0.24; sum instead of mean ~1.0 / 0.98; 2x ~1.0 / 1.0; row 0 / last row zeroed pass PCC, ratio min 0;
+  last 32 rows zeroed 0.988 / 0.157. Script /tmp/g5pmn/v.py (CPU only, not kept).
+- Verified: BRINGUP_IMPL=reference PASS (pcc 0.999997, rel 0.0024). Stub FAIL (PCC 0.0). The device gate already PASSES (pcc 0.999996, rel 0.0031, ratio [0.9944, 1.0051]),
+  because the device norm is the same module the sliding layers use. The `FAIL ... pcc=0.000000` line comes from the precompile pass (comp_pcc stub).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_post_mlp_norm.py`
