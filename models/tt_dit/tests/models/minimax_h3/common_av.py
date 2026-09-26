@@ -186,6 +186,13 @@ def _ffmpeg():
     return imageio_ffmpeg.get_ffmpeg_exe()
 
 
+def is_artifact_writer() -> bool:
+    """Whether this process should write and verify artifacts. On a multi-host mesh every rank
+    holds the same output and `artifact_dir` sits on the shared export, so concurrent writers
+    race on the same files and a reader can decode a peer's half-written mp4."""
+    return not ttnn.using_distributed_env() or os.environ.get("TT_RUN_RANK", "0") == "0"
+
+
 def write_artifacts(frames, audio, sampling_rate, directory: Path, stem: str = "t2va"):
     import wave
 

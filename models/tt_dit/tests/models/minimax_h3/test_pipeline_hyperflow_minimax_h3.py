@@ -42,6 +42,7 @@ from .common_av import (
     check_av_sync,
     check_written_file,
     clip_prompt_alignment,
+    is_artifact_writer,
     log_timing_table,
     run_warm_generation,
     to_uint8_frames,
@@ -137,8 +138,9 @@ def test_t2va_hyperflow_end_to_end(mesh_device, reset_seeds, expect_error):
     check_audio_sanity(output.audio, sampling_rate=output.sampling_rate, expected_seconds=output.video_seconds)
     check_av_sync(frames, output.audio, sampling_rate=output.sampling_rate, fps=MINIMAX_H3_FPS)
 
-    paths = write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=stem)
-    check_written_file(paths, expected_frames, height=height, width=width)
+    if is_artifact_writer():
+        paths = write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=stem)
+        check_written_file(paths, expected_frames, height=height, width=width)
 
     alignment = clip_prompt_alignment(frames, PROMPT)
     logger.info(
