@@ -314,10 +314,8 @@ class TtIndexer:
         # MLA's head-to-sequence redistribution consumes exactly the TP query shards scored here.
         # Other consumers retain the SP-only output contract (gather query rows over TP).
         self.output_tp_sequence_sharded = output_tp_sequence_sharded
-        # KV dedup: index key cache sharded across SP*TP. Adds a TP-inner all-gather leg
-        # (_tp_replicate_index_kbuf, which rebuilds the fused ring's k_local) and passes tp_axis to the write.
-        # The indexer exists only on the sparse (DSA) path, and that path always dedups its caches across
-        # SP*TP -- ttMLA derives the same thing. Not a constructor flag: there is no non-deduped indexer.
+        # KV dedup: the index key cache is sharded across SP*TP. The fused ring gathers it over the
+        # complete mesh, so there is no separate TP leg; the cache write still passes tp_axis.
         self.default_compute_kernel_config = default_compute_kernel_config
         self.hifi4_fp32_compute_kernel_config = hifi4_fp32_compute_kernel_config
         self.weight_cache_path = weight_cache_path
@@ -639,68 +637,6 @@ class TtIndexer:
         entry point has to translate, not just forward()."""
         return self._index_layer_idx if self._is_index_compact else cache_layer_idx
 
-    def _tp_replicate_index_kbuf(
-        self,
-        index_kbuf: ttnn.Tensor,
-        cache_batch_idx: int,
-        *,
-        slot_id_tensor: ttnn.Tensor | None = None,
-        num_layers: int = 1,
-        layer_idx: int = 0,
-    ) -> ttnn.Tensor:
-        """KV DEDUP ONLY: rebuild this chip's FULL SP slab [1,1,T/sp,D_idx] (block-cyclic order preserved,
-        bf16 TILE) out of the sp*tp-striped key cache, so the fused ring op gets the k_local it expects.
-
-        The ring gathers along cluster_axis alone and its k_local contract is sll == T/sp, but a deduped
-        cache leaves each chip only T/(sp*tp) rows: the tp chips of one SP row hold consecutive sub-ranges
-        of that row's slab. A TP-INNER all-gather concatenates them back in tp order, which reproduces
-        exactly the slab the cache held before dedup. Only this TP leg runs on the host — the SP leg (the
-        full-T gather that used to dominate this path) stays fused inside ring_indexer_score_dsa and
-        overlaps with scoring.
-
-        SLOT SELECT INSIDE THE GATHER: index_kbuf is user-major [num_users*layer_num, 1, T/(sp*tp), D_idx]
-        (same layout as the MLA KVPE cache), and high_bw_all_gather sources the active (user, layer) slot
-        itself via input_batch_index — no host-side slice, and no ND_SHARDED → INTERLEAVED copy of the
-        whole B-slot cache (its TensorAccessor resolves block-cyclic ND-sharded source pages directly).
-        The gathered slot is batch-1, so the ring op needs NO cache_batch_idx (it requires kB==1 when
-        cache_batch_idx is unset). The unwritten suffix is never scored (future positions are causally
-        masked). The output is model-owned scratch — the caller must not deallocate it."""
-        assert (
-            index_kbuf.shape[2] % ttnn.TILE_SIZE == 0
-        ), f"the TP-local index cache slab must be tile aligned for high_bw_all_gather; got {index_kbuf.shape[2]}"
-        out = self._get_high_bw_all_gather_buffer(
-            name="indexer_kbuf_tp_replicate",
-            shape=[1, 1, index_kbuf.shape[2] * self.tp_factor, index_kbuf.shape[3]],
-            dtype=index_kbuf.dtype,
-            layout=index_kbuf.layout,
-            device=index_kbuf.device(),
-        )
-        # Trace-safe slot select. input_batch_index is a host runtime arg the program-cache override
-        # re-patches per dispatch, and a replay never re-runs that patch -- so a captured program keeps
-        # rebuilding the slab for whichever user was live at CAPTURE time (the runtime captures with
-        # cache_user_id=0), while the metadata-driven K WRITE lands in the correct slot. That is the same
-        # wrong-slot-with-no-error failure the dense path already avoids by handing over the 1-element
-        # user id; the KV-dedup path was simply never converted. Single-slot caches keep the scalar form:
-        # there is no slot to get wrong.
-        multi_slot = index_kbuf.shape[0] > 1
-        slot_kwargs = (
-            {
-                "input_batch_index_tensor": slot_id_tensor,
-                "batch_slot_num_layers": num_layers,
-                "batch_slot_layer_idx": layer_idx,
-            }
-            if slot_id_tensor is not None and multi_slot
-            else {"input_batch_index": cache_batch_idx if multi_slot else 0}
-        )
-        return ttnn.experimental.high_bw_all_gather(
-            index_kbuf,
-            dim=2,
-            output_tensor=out,
-            num_links=self.ccl_num_links,
-            cluster_axis=self.tp_axis,
-            **slot_kwargs,
-        )
-
     def _resolve_mm_cfg(self, weight_name: str, seq_len_local: int) -> dict | None:
         """Return the model-gated Blackhole config for an indexer matmul."""
         if not self._is_blackhole:
@@ -941,89 +877,60 @@ class TtIndexer:
         # (e.g. 256-token GLM unit tests, where the op rejects k_chunk_size > T) working. The valid extent
         # travels in the hash-excluded kv_len.
         cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=qc, k_chunk_size=min(k_chunk, glob), head_group_size=0)
-        # TP×SP-sharded queries: each chip scores its S/(sp*tp) rows while the fused ring indexer
-        # gathers remote block-cyclic K slabs into a shared persistent full-T buffer. The reader consumes
-        # each band as soon as its source slab arrives and dual-sources the local slab directly, overlapping
-        # the former blocking all-gather with score compute. Causality uses the original rotated SP
-        # block-cyclic offset plus this TP rank's query window. All H_idx heads are resident, so each
-        # logit is complete.
+        # TP×SP-sharded queries: each chip scores its S/(sp*tp) rows while the fused ring gathers the
+        # remote block-cyclic K slabs into a shared persistent full-T buffer, overlapping gather and compute.
         #
-        # Bound the score to the populated prefix (kv_len=valid_pos), not the full width T nor the padded
-        # window, which on the last chunk runs past what was written. kv_len only writes
-        # logits[..., :valid_pos] and leaves the tail STALE (not -inf); top-k is told the valid length so it
-        # never ranks that tail — which is future anyway, so the selection is unchanged.
-        # Pass the persistent multi-slot ND-sharded cache directly. The fused gather selects only
-        # cache_batch_idx into the batch-1 scratch and moves only the complete block-cyclic slabs touched
-        # by kv_len; the score reader addresses its own shard directly in the original ND cache.
+        # kv_len bounds the score to the populated prefix. It writes logits[..., :valid_pos] and leaves the
+        # tail stale rather than -inf; top-k gets the same valid length so it never ranks that tail.
         #
-        # GLM-5.2 KV dedup rides the SAME fused op. Its ring spans cluster_axis only, and its k_local
-        # contract is this chip's WHOLE SP slab (sll == T/sp) -- but a deduped cache leaves this chip only
-        # T/(sp*tp) rows, so it is handed a TP-INNER all-gather of the slot instead (tp chips, inside the SP
-        # row). The SP leg -- the full-T gather that dominated this path -- stays fused and overlapped with
-        # scoring rather than running as a blocking pre-pass. The rebuilt slab is batch-1, so the in-kernel
-        # slot select is not needed (cache_batch_idx=None); everything else is identical to the dense path.
-        # Unconditional: the sparse path always dedups, so the index cache is ALWAYS striped across SP*TP
-        # and always needs the TP-inner stage. (The old non-dedup route passed index_kv_cache straight
-        # through.) ttMLA asserts tp_factor > 1 at construction for every sparse build.
-        assert self.tp_factor > 1, (
-            f"the DSA indexer requires tp_factor > 1 (got {self.tp_factor}): its index-key cache is deduped "
-            "across SP*TP and there is no TP leg to reassemble at tp=1"
-        )
-        k_local = self._tp_replicate_index_kbuf(
-            index_kv_cache,
-            cache_batch_idx,
-            # metadata[0] is the 1-element USER id; the gather recomposes user*layers + layer_idx
-            # on-device, exactly as the dense path's cache_batch_idx_tensor did.
-            slot_id_tensor=metadata[0] if metadata is not None else None,
-            num_layers=self._index_cache_layers,
-            layer_idx=cache_layer_idx,
-        )
-        k_full = self.tt_ccl.get_indexer_ring_k_buffer(local_k=k_local, sp_axis=self.sp_axis)
+        # The op takes the persistent multi-slot ND-sharded cache directly: the gather selects one slot and
+        # moves only the block-cyclic slabs kv_len touches, and the score reader addresses its own shard.
+        #
+        # The index cache is always striped over sp*tp and TP-split Q leaves this chip Sq' rows, so the
+        # mesh itself is the block-cyclic ring: one full-mesh snake replaces the SP ring plus a TP leg.
+        # cluster_axis=None is what selects it; the op resolves the snake across both mesh axes.
+        k_local = index_kv_cache
+        k_full = self.tt_ccl.get_indexer_ring_k_buffer(local_k=k_local, sp_axis=None)
+        # Trace-safe path: the start position, cache slot and valid length ride device tensors instead of
+        # the host scalars a captured program would freeze at their capture-time values.
+        traced = metadata is not None
         host_start = time.perf_counter() if _fused_ring_host_timing_enabled() else None
         logits = ttnn.experimental.ring_indexer_score_dsa(
             q_dev,
             k_full,
             weights,
             k_local,
-            self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.sp_axis),
-            cluster_axis=self.sp_axis,
+            self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=None),
+            cluster_axis=None,
             topology=self.sp_ccl_topology,
             num_links=self.ccl_num_links,
-            # Trace-safe: hand the op the 1-element chunk_start_idx tensor instead of the host scalar, and
-            # leave kv_len unset (the kernel derives it as chunk_start + sp*chunk_local, exactly the value the
-            # scalar path passes). Both scalars are host runtime args that a replay would freeze.
-            chunk_start_idx=None if metadata is not None else start_pos,
-            chunk_start_idx_tensor=metadata[1] if metadata is not None else None,
-            # Trace-safe cache slot. cache_batch_idx below is a host runtime arg the program-cache override
-            # re-patches per dispatch; a replay cannot re-run that patch, so a captured program keeps
-            # scoring against the slot live at CAPTURE time -- and the runtime captures with
-            # cache_user_id=0. The KV write IS metadata-driven, so a multi-user traced request would write
-            # user N's index-K and then score it against user 0's: wrong top-k, no error. Hand over the
-            # 1-element user id and let the reader recompose user*layers + layer_idx on-device.
-            # Always None: a deduped run hands the op a rebuilt BATCH-1 slab, so there is no slot to
-            # select in-kernel. The slot was already resolved on-device by _tp_replicate_index_kbuf.
-            cache_batch_idx_tensor=None,
-            index_cache_num_layers=self._index_cache_layers,
-            # The REMAPPED local (self._cache_slot(...) above), which is exactly the term the scalar
-            # cache_batch_idx is built from. self._index_layer_idx is only the same value when
-            # _is_index_compact; using it unconditionally made every layer read another layer's slot.
-            index_cache_layer_idx=cache_layer_idx,
             program_config=cfg,
-            seq_subshard_axis=self.tp_axis if tpsp else None,
-            # Always dropped: the deduped path hands the op a rebuilt BATCH-1 slab with no slot to select.
-            cache_batch_idx=None,
-            block_cyclic_sp_axis=self.sp_axis,
-            block_cyclic_chunk_local=seq_len,  # cache slab == chunk_size_global / sp (== Sq'·tp when TP-split)
-            block_cyclic_cache_tp_sharded=True,  # rebuilt slab is TP-stripe-major: decode sp*tp stripes
-            # Metadata path: the kernel derives kv_len as chunk_start + sp*chunk_local (= end_pos) and then
-            # CAPS it at ceil32(valid_end_tensor), which is exactly the scalar path's
-            # min(end_pos, ceil32(actual_end)). Passing the real end is what makes the two paths agree on a
-            # PARTIAL chunk: uncapped, the traced score covered columns the request never wrote, and while
-            # real query rows are causally shielded from them (every such key sits at s > t), PAD query rows
-            # are not, so their top-k diverged from the scalar path's. It also narrows the scored extent
-            # instead of always paying for the full padded window.
-            kv_len=None if metadata is not None else valid_pos,
-            valid_end_tensor=metadata[2] if metadata is not None else None,
+            # Chunk start and valid extent. Under trace the kernel derives kv_len as
+            # chunk_start + sp*chunk_local, the same value the scalar path passes.
+            chunk_start_idx=None if traced else start_pos,
+            chunk_start_idx_tensor=metadata[1] if traced else None,
+            kv_len=None if traced else valid_pos,
+            # The kernel then CAPS that derived kv_len at ceil32(valid_end_tensor), which is exactly the
+            # scalar path's min(end_pos, ceil32(actual_end)). Passing the real end is what makes the two
+            # paths agree on a PARTIAL chunk: uncapped, the traced score covered columns the request never
+            # wrote, and while real query rows are causally shielded from them (every such key sits at
+            # s > t), PAD query rows are not, so their top-k diverged from the scalar path's. It also
+            # narrows the scored extent instead of always paying for the full padded window.
+            valid_end_tensor=metadata[2] if traced else None,
+            # Cache slot. The full-mesh gather reads the multi-slot cache itself rather than a rebuilt
+            # batch-1 slab, so there is a slot to select; the reader recomposes user*layers + layer_idx.
+            cache_batch_idx=None if traced else cache_batch_idx,
+            cache_batch_idx_tensor=metadata[0] if traced else None,
+            index_cache_num_layers=self._index_cache_layers,
+            index_cache_layer_idx=cache_layer_idx,
+            # Full mesh leaves the sequence-axis roles empty: sp == mesh_size already expresses both the
+            # sp*tp striping and the TP query split, so naming either axis would double-apply it.
+            seq_subshard_axis=None,
+            block_cyclic_sp_axis=None,
+            # The per-device slab is this chip's Q rows.
+            block_cyclic_chunk_local=q_dev.shape[2],
+            # The full mesh stripes the key cache over every device already.
+            block_cyclic_cache_tp_sharded=False,
         )
         if host_start is not None:
             _fused_ring_host_timing["calls"] += 1
