@@ -68,6 +68,8 @@ H_TILE = BF8_TILE
 DN_NOC = int(os.environ.get("MIMO_FL_DN_NOC", "1"))  # NoC of the down cores' h chain / y writes (weights: the other)
 FWD_DEPTH = int(os.environ.get("MIMO_FL_FWD_DEPTH", "0"))  # > 0: pipelined forwarder (se10_fwd.cpp), chunks in flight
 RD_SLOTS = int(os.environ.get("MIMO_FL_RD_SLOTS", "0"))  # reader CB slots (0: 2 x READ_BATCH)
+PREPASS = int(os.environ.get("MIMO_FL_PREPASS", "0"))  # extract + tilize x in a separate op, then the pre-tiled op
+PP_CORES = int(os.environ.get("MIMO_FL_PP_CORES", "110"))  # cores of the pre-pass op
 DYN = int(
     os.environ.get("MIMO_FL_DYN", "0")
 )  # dynamic token counts read on device (implies E2E); MIMO_FL_COUNTS per expert
@@ -325,6 +327,65 @@ def test_stream_expert_flat(device, m, wdtype):
     xregs = [torch.cat(xblocks[r::nreg]) for r in range(nreg)]
     x_dev = _bank_sharded(xregs, banks, ttnn.bfloat8_b, device)
     x_region = xregs[0].shape[0] * BF8_TILE
+    if PREPASS:  # the flat op's x layout is produced on device from the row-major dispatch buffer
+        assert not E2E
+        x_dev = _bank_sharded([torch.zeros_like(r_) for r_ in xregs], banks, ttnn.bfloat8_b, device)
+        xs_e = xs.view(E, m_pad, H)
+        disp = torch.zeros(cap, H)
+        for e in range(E):
+            disp[e * tok_pad : e * tok_pad + cnts[e]] = xs_e[e, : cnts[e]]
+        disp_dev = ttnn.from_torch(
+            disp,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        grid_ = device.compute_with_storage_grid_size()
+        pp_cores = [ttnn.CoreCoord(x_, y_) for y_ in range(grid_.y) for x_ in range(grid_.x)][:PP_CORES]
+        pp_crs = _crs(pp_cores)
+        n_pp = len(pp_cores)
+        pp_rd, pp_tz, pp_wr = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+        for i_, c_ in enumerate(pp_cores):
+            n_sb = len(range(i_, V * nsb, n_pp))
+            pp_rd[c_.x][c_.y] = [disp_dev.buffer_address(), n_pp, i_] + [
+                v_ for e in range(E) for v_ in (e * tok_pad, cnts[e])
+            ]
+            pp_tz[c_.x][c_.y] = [n_sb]
+            pp_wr[c_.x][c_.y] = [x_dev.buffer_address(), x_region, n_sb, n_pp, i_]
+        FP_ = ttnn.KernelDescriptor.SourceType.FILE_PATH
+        dm_ = lambda proc, noc: ttnn.DataMovementConfigDescriptor(processor=proc, noc=noc)
+        fmt_ = lambda i, d_, page: [ttnn.CBFormatDescriptor(buffer_index=i, data_format=d_, page_size=page)]
+        pp_prog = ttnn.ProgramDescriptor(
+            kernels=[
+                ttnn.KernelDescriptor(
+                    kernel_source=f"{KDIR}/se11_xrd.cpp",
+                    source_type=FP_,
+                    core_ranges=pp_crs,
+                    compile_time_args=[0, H * 2, E, MT, nsb, S, XRD_BATCH],
+                    runtime_args=pp_rd,
+                    config=dm_(ttnn.DataMovementProcessor.RISCV_0, ttnn.NOC.NOC_0),
+                ),
+                ttnn.KernelDescriptor(
+                    kernel_source=f"{KDIR}/se11_tz.cpp",
+                    source_type=FP_,
+                    core_ranges=pp_crs,
+                    compile_time_args=[0, 1, MT],
+                    runtime_args=pp_tz,
+                    config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.LoFi),
+                ),
+                ttnn.KernelDescriptor(
+                    kernel_source=f"{KDIR}/se12_xwr.cpp",
+                    source_type=FP_,
+                    core_ranges=pp_crs,
+                    compile_time_args=[1, MT, BF8_TILE, KBLK, nreg, banks],
+                    runtime_args=pp_wr,
+                    config=dm_(ttnn.DataMovementProcessor.RISCV_1, ttnn.NOC.NOC_1),
+                ),
+            ],
+            semaphores=[],
+            cbs=[],  # the pre-pass borrows the flat op's arena (below its live state), filled in once it exists
+        )
     if E2E:  # the model's dispatch buffer: row-major bf16 [cap, H], expert e's m tokens at row e * tok_pad
         xs_e = xs.view(E, m_pad, H)
         disp = torch.zeros(cap, H)
@@ -353,6 +414,19 @@ def test_stream_expert_flat(device, m, wdtype):
     )
     base = arena.buffer_address()
     land_addr, x_ring_addr, h_all_addr = base, base + X_OFF, base + H_OFF
+    if PREPASS:
+        pp_cbs = []
+        for idx_, off_, size_, d_, page_ in (
+            (0, 0, RM_CHUNKS * 32 * 2048, ttnn.bfloat16, 2048),
+            (1, al(RM_CHUNKS * 32 * 2048), SB_SLOTS * MT * 32 * BF8_TILE, ttnn.bfloat8_b, BF8_TILE),
+        ):
+            cb_ = ttnn.cb_descriptor_from_sharded_tensor(
+                idx_, arena, address_offset=off_, total_size=size_, core_ranges=pp_crs
+            )
+            cb_.format_descriptors = [ttnn.CBFormatDescriptor(buffer_index=idx_, data_format=d_, page_size=page_)]
+            pp_cbs.append(cb_)
+        assert al(RM_CHUNKS * 32 * 2048) + SB_SLOTS * MT * 32 * BF8_TILE < D_OFF
+        pp_prog = ttnn.ProgramDescriptor(kernels=pp_prog.kernels, semaphores=[], cbs=pp_cbs)
     y_dram = (
         ttnn.allocate_tensor_on_device(
             ttnn.Shape([cap, H]), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
@@ -952,6 +1026,7 @@ def test_stream_expert_flat(device, m, wdtype):
         f"streamfl_H{H}_M{m}_E{E}_w{wdtype}"
         + (f"_mt{MT}" if os.environ.get("MIMO_FL_MT") else "")
         + ("_e2e" if E2E else "")
+        + ("_pp" if PREPASS else "")
     )
     tok_act = sum(c for c in cnts if c and band[0] <= c <= band[1]) if DYN else E * m  # tokens this program processes
     if DYN:
@@ -974,9 +1049,21 @@ def test_stream_expert_flat(device, m, wdtype):
             )
             + "\n"
         )
+    if PREPASS:
+        with STATS_PATH.open("a") as f:
+            f.write(
+                json.dumps({"tag": tag + "x", "M": m, "E": E, "wdtype": wdtype, "weight_bytes": 0, "flops": 0}) + "\n"
+            )
     for it in range(1 + ITERS):
         ttnn.copy_host_to_device_tensor(words_zero, words)  # relay freed words restart every launch
         ttnn.synchronize_device(device)
+        if PREPASS:
+            if it:
+                signpost(f"{tag}x_start")
+            ttnn.generic_op([disp_dev, x_dev, arena], pp_prog)
+            ttnn.synchronize_device(device)
+            if it:
+                signpost(f"{tag}x_end")
         if it:
             signpost(f"{tag}_start")
         ttnn.generic_op([w_dev, wd_dev, x_dev, arena, y_dram, words] + ([wr_dev] if RDOWN else []), program)
