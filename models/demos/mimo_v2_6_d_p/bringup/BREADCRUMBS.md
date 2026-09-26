@@ -705,3 +705,23 @@ Results
   0.00102; row sums [0.9976, 1.0020]. The pcc=0 line is the precompile stub.
 
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_sliding_moe_router.py`
+
+## S.sliding_moe.05 test (attempt 1), 2026-09-26
+
+What was done
+- Replaced the rendered `run_swap_test` call in `tests/bringup/test_swap_sliding_moe_05_router.py` with swap 04's body
+  (the golden, the KV prefix, and every check on attn_norm, attention, attn_residual, ffn_norm and block out). Added a router
+  branch `_check_router` modelled on gemma4_a4b_d_p `test_swap_sliding_08_router.py` and adapted to MiMo: rows sum to 1
+  (absolute, not a ratio), and the component test's limits apply.
+- Router checks: PCC >= 0.99, exactly 8 nonzeros per row, no negative weights, row sums 1 +- 0.01. Against the golden:
+  overlap >= 0.985 and matched rel <= 0.01. Against the CPU router on the same device ffn_norm (iso): overlap >= 0.99
+  and matched rel <= 0.005. Whole-matrix router rel L2 is recorded but not gated (device 0.050 from near-tie flips).
+
+Results
+- BRINGUP_IMPL=reference PASS: out 0.999997; router overlap 0.99866 against the golden and 1.0 iso.
+- BRINGUP_IMPL=stub FAIL on every check.
+- Device gate PASS: pcc_swap_out 0.999993, out rel 0.0037; router pcc 0.99870, overlap 0.99762 against the golden and
+  0.99902 iso, matched rel 0.00147 / 0.00157, row sums [0.9980, 1.0020].
+- The precompile pass (zero attention) gives router overlap 0.976 against the golden, which the 0.985 limit catches.
+
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_sliding_moe_05_router.py`
