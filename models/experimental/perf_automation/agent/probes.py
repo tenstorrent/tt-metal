@@ -984,13 +984,16 @@ def prepare_device_reset(box: str = "") -> None:
     ensure_board_noted(box=box)
 
 
-def _device_reset(error_text: str = "", config_target: str = "") -> bool:
+def _device_reset(error_text: str = "", config_target: str = "", fault_is_certain: bool = False) -> bool:
     """Reset the device and report whether it CAME BACK -- not merely whether tt-smi exited 0.
 
     Routed through the shared recovery primitive so the profiler layer picks its target from the
     same evidence, verifies the same way, and spends the same escalation budget as the orchestrator
     and the MCP server. This used to return the exit code of a reset aimed at whatever
     _reset_arg_sets() decided, with nothing checking the device afterwards.
+
+    fault_is_certain: the caller KNOWS the board is suspect (it killed a device run mid-flight), so
+    the telemetry veto must not cancel the reset -- device_recovery.recover's own parameter.
     """
     from . import device_recovery as _dr
 
@@ -1005,7 +1008,9 @@ def _device_reset(error_text: str = "", config_target: str = "") -> bool:
                 continue
         return False
 
-    return _dr.recover("probes", _issue, error_text=error_text, config_target=config_target)
+    return _dr.recover(
+        "probes", _issue, error_text=error_text, config_target=config_target, fault_is_certain=fault_is_certain
+    )
 
 
 # "AICLK failed to settle" is what UMD emits TODAY (tt_device.cpp:342) and is arch-independent: it

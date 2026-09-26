@@ -74,7 +74,10 @@ def test_the_e2e_gate_resets_a_board_that_wedges_without_hanging(monkeypatch, tm
 
     # The gate runs pytest through probes._execute now (progress watchdog, not a stopwatch): it
     # streams to a log and returns rc, so the double writes what the gate will read back.
+    runs = []
+
     def _exec(cmd, cwd, env, timeout_s, log_path, **k):
+        runs.append(1)
         Path(log_path).parent.mkdir(parents=True, exist_ok=True)
         Path(log_path).write_text(NOC_HANG + "\n1 error in 7.4s")
         return 1
@@ -82,8 +85,9 @@ def test_the_e2e_gate_resets_a_board_that_wedges_without_hanging(monkeypatch, tm
     monkeypatch.setattr(_PR, "_execute", _exec)
     ok, reasons = E._run_deterministic_gates(demo, 0.99, 60)
     assert ok is False
-    assert any("reported a wedge" in r for r in reasons), reasons
+    assert any("the device was wedged" in r for r in reasons), reasons
     assert seen and "NOC0 is hung" in seen[0]["error_text"]
+    assert len(runs) == 2, "a wedge-caused failure is re-run once on the recovered board"
 
 
 def test_a_hang_hands_its_partial_output_to_the_recovery(monkeypatch, tmp_path):

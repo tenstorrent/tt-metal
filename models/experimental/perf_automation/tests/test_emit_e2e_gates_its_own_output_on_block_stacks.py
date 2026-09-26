@@ -60,7 +60,9 @@ def test_a_model_that_cannot_build_shallow_fails_the_gate():
     src = _src()
     i = src.index("def _block_stack_gate(")
     body = src[i : i + 4000]
-    assert "could not be BUILT at layers=2" in body, "a failed shallow build is not reported"
+    # The depth in the message comes from _STACK_PROBE_LAYERS rather than a second typed 2.
+    assert "could not be BUILT at layers=%d" in body, "a failed shallow build is not reported"
+    assert "_STACK_PROBE_LAYERS" in body
 
 
 def test_the_probe_runs_out_of_process():

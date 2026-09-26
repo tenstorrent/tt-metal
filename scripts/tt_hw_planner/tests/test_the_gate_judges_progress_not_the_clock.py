@@ -68,7 +68,10 @@ def test_the_cheap_g6_probe_keeps_its_own_short_wall():
     """Not everything needs the watchdog -- only work whose cost the model decides. G6 must still be
     bounded, and by the caller's budget now that the gate's wall no longer exists."""
     code = _code_of(E._run_deterministic_gates)
-    assert "g6_hang = min(int(timeout_s)" in code
+    assert "g6_hang = _g6_probe_timeout_s(timeout_s)" in code
+    # ...and the one helper both G6 probes use really is short and bounded by the caller's budget
+    assert E._g6_probe_timeout_s(100) == 100
+    assert E._g6_probe_timeout_s(14400) == 600
 
 
 def test_no_gate_wall_is_typed_in_this_module():
@@ -95,12 +98,32 @@ def test_a_stall_is_reported_as_a_stall_not_as_a_hardware_fault():
     assert "likely device/fabric hang" not in code
 
 
-def test_a_stall_still_reaches_device_recovery_with_its_partial_output():
-    """Recovery must keep the evidence: a real stall may well be a wedge, and the log names the chip."""
-    code = _code_of(E._run_deterministic_gates)
-    i = code.index("TracyHangError")
-    assert "_reset_device(" in code[i : i + 500]
-    assert "pytest_out" in code[i : i + 500]
+def test_a_stall_still_reaches_device_recovery_with_its_partial_output(monkeypatch, tmp_path):
+    """Recovery must keep the evidence: a real stall may well be a wedge, and the log names the chip.
+    Checked by running the gate on a stall, not by reading its source."""
+    from pathlib import Path
+    from models.experimental.perf_automation.agent import probes as _PR
+
+    demo = tmp_path / "models" / "demos" / "m"
+    (demo / "tests" / "e2e").mkdir(parents=True)
+    (demo / "tests" / "e2e" / "test_e2e_m.py").write_text("def test_e2e():\n    pass\n")
+    monkeypatch.setenv("E2E_REQUIRE_ON_DEVICE", "0")
+
+    def _stall(cmd, cwd, env, timeout_s, log_path, **k):
+        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(log_path).write_text("partial output naming chip 9")
+        raise _PR.TracyHangError("no forward progress")
+
+    seen = []
+    monkeypatch.setattr(_PR, "_execute", _stall)
+    monkeypatch.setattr(
+        E,
+        "_recover_board",
+        lambda error_text="", fault_is_certain=False: seen.append((error_text, fault_is_certain)) or (False, "x"),
+    )
+    E._run_deterministic_gates(demo, 0.99, 60)
+    assert seen and "partial output naming chip 9" in seen[0][0]
+    assert seen[0][1] is True, "a killed stall must reset whatever the telemetry says"
 
 
 def test_the_watchdog_is_the_shared_one_not_a_copy():
