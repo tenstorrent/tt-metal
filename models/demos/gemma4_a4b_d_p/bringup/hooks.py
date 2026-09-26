@@ -44,7 +44,22 @@ DEVICE_STEPS = {
         "post_ffn_norm",
         "ffn_residual",
     },
-    "global": {"attn_norm", "attention"},
+    "global": {
+        "attn_norm",
+        "attention",
+        "post_attn_norm",
+        "attn_residual",
+        "ffn_norm",
+        "mlp",
+        "post_mlp_norm",
+        "router",
+        "moe_norm",
+        "experts",
+        "post_moe_norm",
+        "ffn_combine",
+        "post_ffn_norm",
+        "ffn_residual",
+    },
 }
 
 # Residual steps (replicated, no collective): h_mid = in + attn_post_norm; ffn_sum = mlp_post_norm + moe_post_norm.
@@ -373,5 +388,106 @@ class HybridDeviceModel:
         pass
 
 
+class _DeviceState:
+    """Per-layer device attention caches (tt.model.new_attention_caches: global page-table slices cut on the device)."""
+
+    def __init__(self, mesh, cfg, layers, max_seq):
+        from models.demos.gemma4_a4b_d_p.tt.model import new_attention_caches
+
+        self.caches = new_attention_caches(mesh, cfg, layers, max_seq)
+
+    def load_prefix(self, layer, tensors, length):
+        self.caches[layer].load_prefix(tensors["key"], tensors["value"], length)
+
+    def to_torch(self, layer, length):
+        return self.caches[layer].to_torch(length)
+
+
+class Gemma4DeviceModel:
+    """Ladder/profile adapter over tt.model.TtGemma4Model (the model the prefill runtime serves).
+
+    The hidden state is a replicated [1, 1, S, H] bf16 device tensor from the embedding to the final norm. Each
+    layer is TtGemma4Block.__call__: run_block over the block graph with the validated device modules (one profiler
+    section per step). RoPE tables are built once at load for max_seq and sliced on the device; the global layers'
+    page-table slices are cut on the device. Only the LM head runs on the host (ladder logits, sampled rows)."""
+
+    def __init__(self, mesh, spec, layers, lm_head=True):
+        import time
+
+        from models.demos.common.bringup.reference.golden import hf_path
+        from models.demos.gemma4_a4b_d_p.tt.model import TtGemma4Model
+
+        t0 = time.time()
+        self.mesh, self.spec = mesh, spec
+        rungs = spec.data.get("ladder", [])
+        max_seq = max([int(spec.get("target.seq"))] + [int(r["seq"]) for r in rungs])
+        max_chunk = max([int(spec.get("target.chunk"))] + [int(r.get("chunk", 0)) for r in rungs])
+        self.path = hf_path(spec)
+        self.model = TtGemma4Model(mesh, self.path, max_seq=max_seq, max_chunk=max_chunk, layers=list(layers))
+        self.cfg = self.model.cfg
+        self.blocks = {b.i: b for b in self.model.blocks}
+        self._lm_head = None
+        if lm_head:
+            from models.demos.gemma4_a4b_d_p.reference.gemma4_ref import PREFIX, WeightLoader
+
+            self._lm_head = WeightLoader(self.path).get(PREFIX + "embed_tokens.weight").float()  # tied
+        self.load_seconds = time.time() - t0
+
+    def new_state(self, max_seq):
+        return _DeviceState(self.mesh, self.cfg, list(self.blocks), max_seq)
+
+    def embed(self, tokens):
+        import ttnn
+
+        ids = ttnn.from_torch(
+            tokens.reshape(1, 1, -1).to(torch.int64).to(torch.uint32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+        )
+        h = self.model.embed(ids)
+        ttnn.deallocate(ids)
+        return h
+
+    def from_host(self, h):
+        from models.demos.gemma4_a4b_d_p.tt.rms_norm import to_device_replicated
+
+        return to_device_replicated(self.mesh, h)
+
+    def to_host(self, h):
+        from models.demos.gemma4_a4b_d_p.tt.rms_norm import replicated_to_host
+
+        return replicated_to_host(h).float()
+
+    def layer(self, i, h, start, state):
+        return self.blocks[i](h, start, state.caches[i])
+
+    def final_norm(self, h):
+        return self.model.final_norm(h)
+
+    def logits(self, hidden, rows):
+        logits = torch.nn.functional.linear(self.to_host(hidden)[rows], self._lm_head)
+        cap = self.cfg.final_logit_softcapping
+        return torch.tanh(logits / cap) * cap if cap else logits
+
+    def free(self, h):
+        import ttnn
+
+        if isinstance(h, ttnn.Tensor) and h.is_allocated():
+            ttnn.deallocate(h)
+
+    def sync(self):
+        import ttnn
+
+        ttnn.synchronize_device(self.mesh)
+
+
 def device_model(mesh, spec, layers, lm_head=True):
-    return HybridDeviceModel(mesh, spec, layers, lm_head=lm_head)
+    """All-device model (default); BRINGUP_HYBRID=1 selects the hybrid harness (CPU reference + device steps)."""
+    import os
+
+    if os.environ.get("BRINGUP_HYBRID") == "1":
+        return HybridDeviceModel(mesh, spec, layers, lm_head=lm_head)
+    return Gemma4DeviceModel(mesh, spec, layers, lm_head=lm_head)
