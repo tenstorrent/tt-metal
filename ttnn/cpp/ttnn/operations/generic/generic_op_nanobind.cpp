@@ -45,15 +45,14 @@ void bind_generic_operation(nb::module_& mod) {
 
     // Overload for MeshProgramDescriptor (explicit mesh control)
     auto mesh_program_overload = ttnn::overload_t(
-        static_cast<Tensor (*)(
-            const std::vector<Tensor>&, const tt::tt_metal::experimental::MeshProgramDescriptor&)>(&ttnn::generic_op),
+        static_cast<Tensor (*)(const std::vector<Tensor>&, const tt::tt_metal::experimental::MeshProgramDescriptor&)>(
+            &ttnn::generic_op),
         nb::arg("io_tensors"),
         nb::arg("mesh_program_descriptor"));
 
     // Overload for ProgramDescriptor (SPMD mode - broadcasts to all devices)
     auto program_overload = ttnn::overload_t(
-        static_cast<Tensor (*)(const std::vector<Tensor>&, const tt::tt_metal::ProgramDescriptor&)>(
-            &ttnn::generic_op),
+        static_cast<Tensor (*)(const std::vector<Tensor>&, const tt::tt_metal::ProgramDescriptor&)>(&ttnn::generic_op),
         nb::arg("io_tensors"),
         nb::arg("program_descriptor"));
 
@@ -70,6 +69,28 @@ void bind_generic_operation(nb::module_& mod) {
             and semaphores. Excludes runtime arg values and buffer addresses,
             making it suitable as a cache key for structural equivalence.
         )pbdoc");
+}
+
+void bind_generic_operation_preparation(nb::module_& mod) {
+    using PreparationResult = ttnn::experimental::GenericOpPreparationResult;
+    nb::class_<PreparationResult>(mod, "GenericOpPreparationResult")
+        .def_ro("max_program_config_size_bytes", &PreparationResult::max_program_config_size_bytes)
+        .def_ro("max_kernel_binary_size_bytes", &PreparationResult::max_kernel_binary_size_bytes);
+    mod.def(
+        "prepare_generic_op",
+        static_cast<PreparationResult (*)(
+            const std::vector<Tensor>&, const tt::tt_metal::experimental::MeshProgramDescriptor&)>(
+            &ttnn::experimental::prepare_generic_op),
+        nb::arg("io_tensors"),
+        nb::arg("mesh_program_descriptor"),
+        "Compile and finalize a generic operation without dispatching it.");
+    mod.def(
+        "prepare_generic_op",
+        static_cast<PreparationResult (*)(const std::vector<Tensor>&, const tt::tt_metal::ProgramDescriptor&)>(
+            &ttnn::experimental::prepare_generic_op),
+        nb::arg("io_tensors"),
+        nb::arg("program_descriptor"),
+        "Compile and finalize a generic operation without dispatching it.");
 }
 
 }  // namespace ttnn::operations::generic

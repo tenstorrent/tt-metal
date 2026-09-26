@@ -54,6 +54,16 @@ public:
         std::optional<bool> bottom_up = std::nullopt,
         std::optional<SubDeviceId> sub_device_id = std::nullopt);
 
+    static std::shared_ptr<Buffer> create(
+        IDevice* device,
+        std::unordered_map<CoreCoord, DeviceAddr> per_core_addresses,
+        DeviceAddr size,
+        DeviceAddr page_size,
+        BufferType buffer_type,
+        const BufferShardingArgs& sharding_args,
+        std::optional<bool> bottom_up = std::nullopt,
+        std::optional<SubDeviceId> sub_device_id = std::nullopt);
+
     std::shared_ptr<Buffer> view(Buffer& self, const BufferRegion& region);
 
     bool is_allocated() const { return allocation_status_ == AllocationStatus::ALLOCATED; }

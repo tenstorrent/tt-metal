@@ -42,6 +42,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/experimental/core_subset_write/mesh_command_queue.hpp>
+#include <tt-metalium/experimental/retained_buffer_view.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
@@ -170,6 +171,141 @@ TEST_F(MeshBufferTest2x4, ReplicatedBufferInitialization) {
     EXPECT_EQ(replicated_buffer->device_local_size(), 16 << 10);
 }
 
+// Verifies that a sharded view applies a per-shard offset and retains its source allocation.
+TEST_F(MeshBufferTestSuite, ShardedViewRetainsOwner) {
+    constexpr DeviceAddr page_size = 1024;
+    constexpr DeviceAddr owner_pages = 4;
+    constexpr DeviceAddr view_pages = 2;
+    const CoreRangeSet shard_grid(CoreCoord(0, 0));
+
+    const BufferShardingArgs owner_sharding(
+        ShardSpecBuffer(shard_grid, {1, owner_pages}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, owner_pages}),
+        TensorMemoryLayout::WIDTH_SHARDED);
+    const DeviceLocalBufferConfig owner_local_config{
+        .page_size = page_size, .buffer_type = BufferType::L1, .sharding_args = owner_sharding, .bottom_up = false};
+    auto owner = MeshBuffer::create(
+        ReplicatedBufferConfig{.size = owner_pages * page_size}, owner_local_config, mesh_device_.get());
+
+    const BufferShardingArgs view_sharding(
+        ShardSpecBuffer(shard_grid, {1, view_pages}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, view_pages}),
+        TensorMemoryLayout::WIDTH_SHARDED);
+    const DeviceLocalBufferConfig view_local_config{
+        .page_size = page_size, .buffer_type = BufferType::L1, .sharding_args = view_sharding, .bottom_up = false};
+
+    const DeviceAddr owner_address = owner->address();
+    const MeshCoordinate test_coordinate(0, 0);
+    std::weak_ptr<MeshBuffer> owner_reference = owner;
+    auto view = experimental::retained_buffer_view::create(
+        owner, ReplicatedBufferConfig{.size = view_pages * page_size}, view_local_config, page_size);
+    EXPECT_EQ(view->address(), owner_address + page_size);
+
+    std::vector<uint32_t> owner_data(owner->size() / sizeof(uint32_t));
+    std::iota(owner_data.begin(), owner_data.end(), 0);
+    WriteShard(mesh_device_->mesh_command_queue(), owner, owner_data, test_coordinate, /*blocking=*/true);
+    std::vector<uint32_t> view_data;
+    ReadShard(mesh_device_->mesh_command_queue(), view_data, view, test_coordinate);
+    const size_t words_per_page = page_size / sizeof(uint32_t);
+    EXPECT_EQ(
+        view_data,
+        std::vector<uint32_t>(
+            owner_data.begin() + words_per_page, owner_data.begin() + (1 + view_pages) * words_per_page));
+
+    std::fill(view_data.begin(), view_data.end(), 0xA5A5A5A5);
+    WriteShard(mesh_device_->mesh_command_queue(), view, view_data, test_coordinate, /*blocking=*/true);
+    std::vector<uint32_t> updated_owner_data;
+    ReadShard(mesh_device_->mesh_command_queue(), updated_owner_data, owner, test_coordinate);
+    std::copy(view_data.begin(), view_data.end(), owner_data.begin() + static_cast<ptrdiff_t>(words_per_page));
+    EXPECT_EQ(updated_owner_data, owner_data);
+
+    const BufferShardingArgs nested_view_sharding(
+        ShardSpecBuffer(shard_grid, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1}),
+        TensorMemoryLayout::WIDTH_SHARDED);
+    const DeviceLocalBufferConfig nested_view_local_config{
+        .page_size = page_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = nested_view_sharding,
+        .bottom_up = false};
+    std::weak_ptr<MeshBuffer> view_reference = view;
+    auto nested_view = experimental::retained_buffer_view::create(
+        view, ReplicatedBufferConfig{.size = page_size}, nested_view_local_config, page_size);
+    EXPECT_EQ(nested_view->address(), owner_address + 2 * page_size);
+
+    owner.reset();
+    view.reset();
+    EXPECT_FALSE(owner_reference.expired());
+    EXPECT_FALSE(view_reference.expired());
+    EXPECT_TRUE(nested_view->is_allocated());
+    nested_view.reset();
+    EXPECT_TRUE(view_reference.expired());
+    EXPECT_TRUE(owner_reference.expired());
+}
+
+// Verifies interval validation and explicit deallocation behavior for retained views.
+TEST_F(MeshBufferTestSuite, ShardedViewValidatesLifetimeAndBounds) {
+    constexpr DeviceAddr page_size = 1024;
+    constexpr DeviceAddr owner_pages = 4;
+    constexpr DeviceAddr view_pages = 2;
+    const CoreRangeSet shard_grid(CoreCoord(0, 0));
+    const DeviceLocalBufferConfig owner_local_config{
+        .page_size = page_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(
+            ShardSpecBuffer(shard_grid, {1, owner_pages}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, owner_pages}),
+            TensorMemoryLayout::WIDTH_SHARDED),
+        .bottom_up = false};
+    auto owner = MeshBuffer::create(
+        ReplicatedBufferConfig{.size = owner_pages * page_size}, owner_local_config, mesh_device_.get());
+
+    const DeviceLocalBufferConfig view_local_config{
+        .page_size = page_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(
+            ShardSpecBuffer(shard_grid, {1, view_pages}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, view_pages}),
+            TensorMemoryLayout::WIDTH_SHARDED),
+        .bottom_up = false};
+    const ReplicatedBufferConfig view_config{.size = view_pages * page_size};
+
+    EXPECT_ANY_THROW(experimental::retained_buffer_view::create(owner, view_config, view_local_config, 3 * page_size));
+    EXPECT_ANY_THROW(experimental::retained_buffer_view::create(owner, view_config, view_local_config, 1));
+
+    auto exact_boundary_view =
+        experimental::retained_buffer_view::create(owner, view_config, view_local_config, 2 * page_size);
+    EXPECT_EQ(exact_boundary_view->address(), owner->address() + 2 * page_size);
+
+    auto outside_core_config = view_local_config;
+    outside_core_config.sharding_args = BufferShardingArgs(
+        ShardSpecBuffer(
+            CoreRangeSet(CoreCoord(1, 0)), {1, view_pages}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, view_pages}),
+        TensorMemoryLayout::WIDTH_SHARDED);
+    EXPECT_ANY_THROW(experimental::retained_buffer_view::create(owner, view_config, outside_core_config, page_size));
+
+    auto unsharded_config = view_local_config;
+    unsharded_config.sharding_args = BufferShardingArgs{};
+    EXPECT_ANY_THROW(experimental::retained_buffer_view::create(owner, view_config, unsharded_config, page_size));
+
+    auto dram_config = view_local_config;
+    dram_config.buffer_type = BufferType::DRAM;
+    EXPECT_ANY_THROW(experimental::retained_buffer_view::create(owner, view_config, dram_config, page_size));
+
+    auto non_owning_owner =
+        MeshBuffer::create(owner->global_config(), owner_local_config, mesh_device_.get(), owner->address());
+    EXPECT_ANY_THROW(
+        experimental::retained_buffer_view::create(non_owning_owner, view_config, view_local_config, page_size));
+
+    auto other_sub_device_config = view_local_config;
+    other_sub_device_config.sub_device_id = SubDeviceId(0);
+    EXPECT_ANY_THROW(
+        experimental::retained_buffer_view::create(owner, view_config, other_sub_device_config, page_size));
+
+    auto view = experimental::retained_buffer_view::create(owner, view_config, view_local_config, page_size);
+    view->deallocate();
+    EXPECT_TRUE(owner->is_allocated());
+
+    auto dependent_view = experimental::retained_buffer_view::create(owner, view_config, view_local_config, page_size);
+    owner->deallocate();
+    EXPECT_FALSE(dependent_view->is_allocated());
+}
+
 TEST_F(MeshBufferTestSuite, EnqueueWriteMeshBufferValidSrcSize) {
     constexpr size_t buffer_size = 16;
 
@@ -181,7 +317,8 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteMeshBufferValidSrcSize) {
     std::vector<uint8_t> exact_src_vec(buffer_size, 0);
     std::vector<uint8_t> large_src_vec(buffer_size * 2, 0);
 
-    EXPECT_THROW(EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), mesh_buffer, small_src_vec), std::exception);
+    EXPECT_THROW(
+        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), mesh_buffer, small_src_vec), std::exception);
     EXPECT_NO_THROW(EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), mesh_buffer, exact_src_vec, true));
     EXPECT_NO_THROW(EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), mesh_buffer, large_src_vec, true));
 }
@@ -761,8 +898,7 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRange) {
     uint32_t* dst_ptr_aligned = reinterpret_cast<uint32_t*>(dst->data());
 
     // Create HostBuffer on top of dst
-    HostBuffer host_buffer(
-        ttsl::Span<uint32_t>(dst_ptr_aligned, bytes_per_device / sizeof(uint32_t)), MemoryPin(dst));
+    HostBuffer host_buffer(ttsl::Span<uint32_t>(dst_ptr_aligned, bytes_per_device / sizeof(uint32_t)), MemoryPin(dst));
 
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
     auto pinned_unique = experimental::PinnedMemory::Create(
@@ -817,8 +953,7 @@ TEST_F(MeshBufferTestSuite, EnqueueReadWithDistributedHostBufferAndPinnedMemory)
     uint32_t* dst_ptr_aligned = reinterpret_cast<uint32_t*>(dst->data());
 
     // Create HostBuffer on top of dst
-    HostBuffer host_buffer(
-        ttsl::Span<uint32_t>(dst_ptr_aligned, bytes_per_device / sizeof(uint32_t)), MemoryPin(dst));
+    HostBuffer host_buffer(ttsl::Span<uint32_t>(dst_ptr_aligned, bytes_per_device / sizeof(uint32_t)), MemoryPin(dst));
 
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
     auto pinned_shared = experimental::PinnedMemory::Create(
@@ -1087,8 +1222,7 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryWaitsOnClose) {
 
     distributed::MeshCoordinate coord(0, 0);
     {
-        HostBuffer host_buffer(
-            ttsl::Span<uint32_t>(src->data(), bytes_per_device / sizeof(uint32_t)), MemoryPin(src));
+        HostBuffer host_buffer(ttsl::Span<uint32_t>(src->data(), bytes_per_device / sizeof(uint32_t)), MemoryPin(src));
         auto pinned_shared = tt_metal::experimental::PinnedMemory::Create(
             *mesh_device_,
             MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord)),

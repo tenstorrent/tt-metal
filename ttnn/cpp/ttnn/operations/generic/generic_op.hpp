@@ -24,4 +24,21 @@ Tensor generic_op(
 // Convenience entry point for single ProgramDescriptor (SPMD mode)
 Tensor generic_op(const std::vector<Tensor>& io_tensors, const tt::tt_metal::ProgramDescriptor& program_descriptor);
 
+namespace experimental {
+
+struct GenericOpPreparationResult {
+    uint32_t max_program_config_size_bytes = 0;
+    uint32_t max_kernel_binary_size_bytes = 0;
+
+    bool operator==(const GenericOpPreparationResult&) const = default;
+};
+
+GenericOpPreparationResult prepare_generic_op(
+    const std::vector<Tensor>& io_tensors,
+    const tt::tt_metal::experimental::MeshProgramDescriptor& mesh_program_descriptor);
+GenericOpPreparationResult prepare_generic_op(
+    const std::vector<Tensor>& io_tensors, const tt::tt_metal::ProgramDescriptor& program_descriptor);
+
+}  // namespace experimental
+
 }  // namespace ttnn

@@ -33,6 +33,7 @@
 #include "ttnn/tensor/serialization.hpp"
 #include "ttnn/tensor/overlapped_tensor.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/base_types.hpp>
@@ -520,14 +521,14 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
         .def(
             "experimental_set_per_core_allocation",
             [](MemoryConfig& self, bool enable) {
-                experimental::per_core_allocation::set_per_core_allocation(self, enable);
+                tt::tt_metal::experimental::per_core_allocation::set_per_core_allocation(self, enable);
             },
             nb::arg("enable"),
             "Enable or disable experimental per-core L1 allocation on this MemoryConfig.")
         .def(
             "experimental_set_range_lockstep_allocation",
             [](MemoryConfig& self, bool enable) {
-                experimental::range_lockstep_allocation::set_range_lockstep_allocation(self, enable);
+                tt::tt_metal::experimental::range_lockstep_allocation::set_range_lockstep_allocation(self, enable);
             },
             nb::arg("enable"),
             "Enable or disable experimental range lockstep L1 allocation on this MemoryConfig. The buffer still "
@@ -795,6 +796,16 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             R"doc(
                 Load a dict of OverlappedTensor from a file serialized with dump_overlapped_tensors.
             )doc");
+}
+
+void bind_experimental_tensor_view(nb::module_& mod) {
+    mod.def(
+        "create_sharded_tensor_view",
+        &ttnn::experimental::create_sharded_tensor_view,
+        nb::arg("owner"),
+        nb::arg("tensor_spec"),
+        nb::arg("shard_offset"),
+        "Create an owner-retaining sharded SRAM tensor view.");
 }
 
 }  // namespace ttnn::tensor

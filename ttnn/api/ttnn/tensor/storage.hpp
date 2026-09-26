@@ -21,6 +21,13 @@
 
 namespace ttnn {
 
+class Tensor;
+
+namespace experimental {
+Tensor create_sharded_tensor_view(
+    const Tensor& owner, const tt::tt_metal::TensorSpec& tensor_spec, tt::tt_metal::DeviceAddr shard_offset);
+}  // namespace experimental
+
 class HostStorage {
 public:
     // Creates HostStorage from a HostTensor.
@@ -203,6 +210,13 @@ private:
         std::shared_ptr<MeshTensorHolder> mesh_tensor_holder,
         std::vector<tt::tt_metal::distributed::MeshCoordinate> coords,
         std::shared_ptr<MeshTensorHolder> root_mesh_tensor_holder);
+
+    // Constructs a view whose holder retains the root allocation of owning_storage. Deallocating the view
+    // releases that retention without deallocating the owner; deallocating the owner invalidates the view.
+    static DeviceStorage create_retained_view(
+        const DeviceStorage& owning_storage, tt::tt_metal::MeshTensor reinterpreted_mesh_tensor);
+    friend Tensor experimental::create_sharded_tensor_view(
+        const Tensor& owner, const tt::tt_metal::TensorSpec& tensor_spec, tt::tt_metal::DeviceAddr shard_offset);
 
     // Invariant: should never be nullptr.
     std::shared_ptr<MeshTensorHolder> mesh_tensor_holder_;

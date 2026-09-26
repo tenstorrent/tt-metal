@@ -77,7 +77,7 @@ bool can_construct_on_device(
     // a lockstep-allocated buffer (#51133). No op understands per-core allocation today (#51354),
     // so there is nothing to preserve the bit through. Build on host instead: the subsequent
     // to_device() applies the caller's memory_config directly, with no op in between.
-    if (experimental::per_core_allocation::is_per_core_allocation(memory_config)) {
+    if (tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(memory_config)) {
         return false;
     }
 
