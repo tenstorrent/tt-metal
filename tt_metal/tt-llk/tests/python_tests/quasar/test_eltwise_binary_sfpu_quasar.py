@@ -114,7 +114,7 @@ def _run_sfpu_binary_llk_golden(
     dst_rounding_mode=DstRoundingMode.Default,
     format_variant=None,
 ):
-    """Shared driver for the unpack-to-dest, LLK-golden binary SFPU ops.
+    """Shared driver for the LLK-golden binary SFPU ops.
 
     ``prepare_stimuli(formats, input_dimensions, src0_idx, src1_idx, mathop)``
     returns ``(src_A, tile_cnt_A, src_B)``; both operands live in ``src_A`` at
@@ -124,6 +124,10 @@ def _run_sfpu_binary_llk_golden(
     src0_idx, src1_idx, dst_idx = tile_indices
     input_dimensions = [(max(src0_idx, src1_idx, dst_idx) + 1) * 32, 32]
     num_faces = MAX_NUM_FACES
+
+    unpack_to_dest = formats.input_format.is_32_bit() == (
+        dest_acc == DestAccumulation.Yes
+    )
 
     src_A, tile_cnt_A, src_B = prepare_stimuli(
         formats, input_dimensions, src0_idx, src1_idx, mathop

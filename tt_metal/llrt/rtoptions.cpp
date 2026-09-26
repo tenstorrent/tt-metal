@@ -58,6 +58,7 @@ enum class EnvVarID {
     TT_METAL_EMULE_MODE,                      // Enable emulated mode (SWEmuleChip with real memory I/O)
     TT_METAL_VISIBLE_DEVICES,                 // Comma-separated list of visible device IDs
     ARCH_NAME,                                // Architecture name (simulation mode)
+    QUASAR_ARCH_VARIANT,                      // Quasar IP variant (LLK arch/<variant> directory)
     TT_MESH_GRAPH_DESC_PATH,                  // Custom fabric mesh graph descriptor
     TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH,  // Factory System Descriptor (FSD) path
     TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE,  // Core grid override
@@ -558,6 +559,30 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: Hardware-detected architecture
         // Usage: export ARCH_NAME=wormhole_b0
         case EnvVarID::ARCH_NAME: this->arch_name = std::string(value); break;
+
+        // QUASAR_ARCH_VARIANT
+        // Build the Quasar LLKs for an IP variant. The name is a directory under
+        // tt_metal/tt-llk/tt_llk_quasar/arch/ whose headers shadow the base Quasar ones.
+        // Default: unset (base Quasar part)
+        // Usage: export QUASAR_ARCH_VARIANT=quasar_4row
+        case EnvVarID::QUASAR_ARCH_VARIANT: {
+            const std::string variant(value);
+            if (variant.empty()) {
+                break;
+            }
+            const bool plain_name = std::all_of(variant.begin(), variant.end(), [](unsigned char c) {
+                return std::islower(c) || std::isdigit(c) || c == '_';
+            });
+            TT_FATAL(plain_name, "QUASAR_ARCH_VARIANT '{}' must be a plain lowercase name (a-z, 0-9, _)", variant);
+            const auto dir = std::filesystem::path(get_root_dir()) / "tt_metal/tt-llk/tt_llk_quasar/arch" / variant;
+            TT_FATAL(
+                std::filesystem::is_directory(dir),
+                "QUASAR_ARCH_VARIANT '{}' has no directory {}",
+                variant,
+                dir.string());
+            this->quasar_arch_variant = variant;
+            break;
+        }
 
         // TT_MESH_GRAPH_DESC_PATH
         // Custom fabric mesh graph descriptor path.

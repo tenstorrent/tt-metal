@@ -3,6 +3,7 @@
 
 import os
 from enum import Enum
+from pathlib import Path
 
 
 class ChipArchitecture(Enum):
@@ -31,6 +32,23 @@ class ChipArchitecture(Enum):
         if enum_value is None:
             raise ValueError(f"Unknown architecture: {arch_str}")
         return enum_value
+
+
+QUASAR_ARCH_ROOT = Path(__file__).resolve().parents[3] / "tt_llk_quasar" / "arch"
+
+
+def quasar_arch_variant():
+    variant = os.getenv("QUASAR_ARCH_VARIANT", "").strip()
+    if variant and not (QUASAR_ARCH_ROOT / variant).is_dir():
+        known = sorted(p.name for p in QUASAR_ARCH_ROOT.iterdir() if p.is_dir())
+        raise ValueError(
+            f"QUASAR_ARCH_VARIANT={variant!r} is not a directory under {QUASAR_ARCH_ROOT}; known variants: {known}"
+        )
+    return variant
+
+
+def is_4row_arch():
+    return quasar_arch_variant() == "quasar_4row"
 
 
 # Cache for chip architecture
