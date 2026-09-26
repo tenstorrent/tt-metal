@@ -535,3 +535,9 @@ Final staged scope check: all1546 files belong to this model's optimized decoder
 ## Independent stage acceptance
 
 The fresh xhigh `$stage-review` reviewer returned **clean-pass**, recorded in `STAGE_REVIEW.md`, with no Required Work. It independently checked runtime5ff391, all249 archives including58 CSVs and104 logs,37 validation hash bindings, current native timings/configurations, all38 optimization checklist entries and final staged pre-commit evidence. All14 anomaly groups are classified/resolved. No runtime or hardware follow-up remains. The following local checkpoint step records the reviewed stage-owned source/tests/docs; nothing is pushed.
+
+## Local checkpoint record
+
+Repository `/workspace/tt-metal`, branch `gemma-4-26b-a4b-it`: reviewed implementation/tests/docs checkpoint **`a9259624f2ad89a17fcf94f7351e04c82d7faa35`**. The commit's required hooks all passed; the tree was clean immediately afterward. This documentation checkpoint records that SHA and closes the checklist. Its own SHA is recorded externally in the final required evidence packet at `bringup/artifacts/multigoal-runs/20260925T171711Z/telemetry/packets/a5411fee-0441-4640-a0ff-c23fc77b76a6.json`, avoiding a self-referential commit hash.
+
+The repository had no configured author identity, so commits use the same explicit per-command agent identity as the preceding stage (`Codex <codex@openai.com>`); no global git configuration changed. Both checkpoints are local only. Nothing was pushed. Stage03 requirements are complete, with independent `clean-pass`, preserved262144 context/non-aligned lengths, current device measurements, completed advice controls and no deferred decoder optimization.
