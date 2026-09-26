@@ -303,3 +303,21 @@ Results
   rel 0.0029, ratio [0.9933, 1.0053].
 
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_dense_ffn_norm.py`
+
+## S.full_dense.04 test (attempt 1), 2026-09-26
+
+What was done
+- Replaced the rendered `run_swap_test` call in `tests/bringup/test_swap_full_dense_04_ffn_norm.py` with the body of
+  `test_swap_full_dense_03_attn_residual.py`, adding ffn_norm: step rel L2 <= 0.03 and per-token norm ratio in
+  [0.97, 1.03] (the C.full_dense.ffn_norm limits). Block out stays at rel L2 <= 0.01, whole chunk and first 128 rows.
+
+Why
+- pcc_swap_out alone is weak: a zero ffn_norm gives mlp(0) = 0, so out = h_mid, and the residual dominates out.
+
+Measured
+- Device (gate): pcc_swap_out 0.999996, block out rel 0.0030 (first 128 rows 0.0030); ffn_norm pcc 0.999991 / rel
+  0.0043 / ratio [0.9893, 1.0071]; attention rel 0.0052, attn_residual rel 0.0042, attn_norm rel 0.0021.
+- BRINGUP_IMPL=reference: passes (all rel ~0.0016). BRINGUP_IMPL=stub: fails (pcc 0, rel 1.0 on every check).
+- The first metric block in the log with pcc=0.000000 comes from the precompile collect pass (comp_pcc stubbed), not the real run.
+
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_full_dense_04_ffn_norm.py`
