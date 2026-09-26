@@ -754,6 +754,13 @@ tasks:
     - ffn_norm
     - router
     layer: 1
+  frozen:
+    at: '2026-09-26T21:44:23'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_sliding_moe_05_router.py: 6a3efd39f76e8ebeb4a96cf066d789d4e5abd550b8e2fb002cfcd9118dbd1a7f
+      /localdev/dnijemcevic/bringup/mimo_v2_6_d_p/golden/s4096_c2048/manifest.json: 7551c6cae2f8c65a4c62f37dd9c3cd418b52f99e8c986901116b91e32f5f9933
 - id: C.sliding_moe.experts
   title: sliding_moe experts (moe) on device, layer 1
   step: implement
