@@ -343,3 +343,15 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - The selection overlap is below the CPU reference (about 26 rows differ vs 6). The likely cause is fp32 matmul/softmax on device (the TILE fp32 matmul is not
   bit-exact fp32). There is a lot of margin, and I did not tune it further.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_router.py`
+
+## S.sliding.08 test (run1, attempt 1): swap attn_norm .. router into the sliding block
+- Replaced the one-line template body with swap 7's checks and added `router` to SWAPPED. The router step (kind `router`) is exempt from the generic
+  step rel L2 <= 0.03: on device its whole-matrix rel L2 is 0.027, most of it near-tie selection flips caused by upstream h_mid error. It gets router checks
+  instead: exactly 8 nonzeros per row, no negative weights, and, vs golden / vs the CPU router on the same device h_mid (iso), selection overlap >= 0.99 / 0.995,
+  matched-row rel L2 <= 0.01 / 0.005, row-sum ratio in [0.99, 1.01]. The iso limits match the component test. The golden matched-rel limit is 0.01 because the
+  device scores 0.0044 vs golden, close to 0.005. The per_expert_scale bugs (0.0105, 0.0168 in test_c_sliding_router.py) are still caught by the iso check.
+  The gated metric stays `pcc_swap_out` >= 0.98.
+- Verified: BRINGUP_IMPL=reference PASS (router overlap 0.99969 golden / 1.0 iso); stub FAIL (every check). Device gate PASS: pcc_swap_out 0.999967,
+  block out rel 0.0081 / 0.0070; router pcc 0.99961, overlap 0.99701 / 0.99854, matched rel 0.00442 / 0.00224, row sums [0.9958, 1.0044] / [0.9978, 1.0024].
+- Block out did not change from swap 7 (0.008135). The dense router output feeds the CPU experts, and the flips are near ties, so their effect is small.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_08_router.py`

@@ -1934,6 +1934,122 @@
   "started": "2026-09-26T00:12:10",
   "status": "PASS"
  },
+ "S.sliding.08": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "fd7a7e33a858a3f97b87ac71e58dc8f4ae92864a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "b49e1877a24a60c7f76a876f75941c16c1122b0c",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "13fbb6133f917b9befcfe477bd1f4e87cda8a337",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5[1m]",
+   "session_id": "9e7f82e1-25c1-40aa-8d0a-52d358ce0e34"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/briefs/S.sliding.08.test.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "fd7a7e33a858a3f97b87ac71e58dc8f4ae92864a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "b49e1877a24a60c7f76a876f75941c16c1122b0c",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "13fbb6133f917b9befcfe477bd1f4e87cda8a337",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/agents/S.sliding.08.test.1.jsonl",
+    "model": "claude-opus-5-5[1m]",
+    "problems": [],
+    "rc": 0,
+    "role": "test",
+    "seconds": 189.2,
+    "session_id": "9e7f82e1-25c1-40aa-8d0a-52d358ce0e34",
+    "t": "2026-09-26T00:21:21"
+   }
+  ],
+  "attempts": 0,
+  "duration_s": 14.1,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-26T00:22:07"
+   }
+  ],
+  "last_run": "2026-09-26T00:22:07",
+  "log": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/logs/S.sliding.08.log",
+  "metrics": {
+   "matched_rel_l2_golden_swap_router": 0.004419111181050539,
+   "matched_rel_l2_iso_swap_router": 0.0022416538558900356,
+   "pcc_swap_attn_norm": 0.9999955649517925,
+   "pcc_swap_attn_out": 0.9999876232589971,
+   "pcc_swap_attn_post_norm": 0.9999865019126936,
+   "pcc_swap_experts_out": 0.9998101195936832,
+   "pcc_swap_ffn_norm": 0.9999819787808817,
+   "pcc_swap_ffn_out": 0.9999576883143881,
+   "pcc_swap_ffn_sum": 0.999972165328324,
+   "pcc_swap_h_mid": 0.9999854790207523,
+   "pcc_swap_mlp_out": 0.9999885828151963,
+   "pcc_swap_mlp_post_norm": 0.9999919132247321,
+   "pcc_swap_moe_norm": 0.9999801909842431,
+   "pcc_swap_moe_post_norm": 0.999881051000924,
+   "pcc_swap_out": 0.9999669155262907,
+   "pcc_swap_router": 0.9996123509008019,
+   "rel_l2_iso_swap_attn_norm": 0.001965613104403019,
+   "rel_l2_iso_swap_attn_post_norm": 0.0018975082784891129,
+   "rel_l2_iso_swap_ffn_norm": 0.0018650826532393694,
+   "rel_l2_iso_swap_h_mid": 0.0016750612994655967,
+   "rel_l2_iso_swap_mlp_out": 0.00279424712061882,
+   "rel_l2_iso_swap_mlp_post_norm": 0.001891964115202427,
+   "rel_l2_prefix_rows_swap_attn_out": 0.005174207966774702,
+   "rel_l2_prefix_rows_swap_out": 0.00696136336773634,
+   "rel_l2_swap_attn_norm": 0.0031110479030758142,
+   "rel_l2_swap_attn_out": 0.0051619913429021835,
+   "rel_l2_swap_attn_post_norm": 0.005221597850322723,
+   "rel_l2_swap_ffn_norm": 0.006026039831340313,
+   "rel_l2_swap_h_mid": 0.005390907637774944,
+   "rel_l2_swap_mlp_out": 0.0047904085367918015,
+   "rel_l2_swap_mlp_post_norm": 0.004117253702133894,
+   "rel_l2_swap_out": 0.008135413751006126,
+   "rel_l2_swap_router": 0.027283115312457085,
+   "row_norm_ratio_max_swap_attn_norm": 1.0001164674758911,
+   "row_norm_ratio_max_swap_attn_post_norm": 1.002392053604126,
+   "row_norm_ratio_max_swap_ffn_norm": 1.0012871026992798,
+   "row_norm_ratio_max_swap_h_mid": 1.0031362771987915,
+   "row_norm_ratio_max_swap_mlp_out": 1.003893494606018,
+   "row_norm_ratio_max_swap_mlp_post_norm": 1.0014398097991943,
+   "row_norm_ratio_min_swap_attn_norm": 0.9979804158210754,
+   "row_norm_ratio_min_swap_attn_post_norm": 0.9957752227783203,
+   "row_norm_ratio_min_swap_ffn_norm": 0.9971396923065186,
+   "row_norm_ratio_min_swap_h_mid": 0.9977380037307739,
+   "row_norm_ratio_min_swap_mlp_out": 0.9974897503852844,
+   "row_norm_ratio_min_swap_mlp_post_norm": 0.9970797896385193,
+   "row_sum_ratio_max_golden_swap_router": 1.0043795108795166,
+   "row_sum_ratio_max_iso_swap_router": 1.0023506879806519,
+   "row_sum_ratio_min_golden_swap_router": 0.995837390422821,
+   "row_sum_ratio_min_iso_swap_router": 0.9977735280990601,
+   "selection_overlap_golden_swap_router": 0.99700927734375,
+   "selection_overlap_iso_swap_router": 0.99853515625
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-26T00:21:53",
+  "status": "PASS"
+ },
  "_run": {
   "branch": "dnijemcevic/ernie45_prefill",
   "created": "2026-09-25T21:26:15",
