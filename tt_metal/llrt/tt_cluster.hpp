@@ -429,7 +429,13 @@ private:
     // Set tunnels from mmio
     void set_tunnels_from_mmio_device();
 
-    bool supports_dma_operations(ChipId chip_id, uint32_t sz_in_bytes) const;
+    // DMA reads are only implemented for Wormhole; DMA writes
+    // also work on Blackhole.
+    bool supports_dma_reads(ChipId chip_id, uint32_t sz_in_bytes) const;
+    bool supports_dma_writes(ChipId chip_id, uint32_t sz_in_bytes) const;
+    // Shared preconditions for both directions: DMA enabled, chip reachable over PCIe,
+    // and the transfer large enough to be worth (and safe for) the DMA path.
+    bool dma_operations_allowed(ChipId chip_id, uint32_t sz_in_bytes) const;
 
     ARCH arch_{tt::ARCH::Invalid};
     TargetDevice target_type_{0};
