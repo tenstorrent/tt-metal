@@ -333,6 +333,16 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
 
     const bool is_conv_1d_depthwise_conv =
         is_1d_depthwise_conv(groups, ashape[3], output_channels, filter_h, ashape[1], has_bias);
+    // The 1D depthwise reader/compute kernels, their CB/arg layout and the 1D mcast
+    // weight-writer kernels are height-sharded only. Block-sharded 1D depthwise
+    // convs (reachable since the auto-shard force-HEIGHT removal, e.g. DRAM
+    // width-sliced conv1d per-slice configs) run the generic conv path instead:
+    // their weights are prepared in the regular grouped layout for non-height
+    // schemes (prepare_conv2d_weights gates the depthwise layout on HEIGHT), and
+    // the 1D writer kernels would decode the block-sharded compile-time-arg
+    // layout (weight TensorAccessorArgs at 36) at the height-sharded offsets
+    // (39/41) and run past the end of the args vector (41 < 40).
+    const bool use_1d_depthwise_conv_kernels = is_conv_1d_depthwise_conv && height_sharded;
     const uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / conv_act_c_blocks;
     const bool coalesce_1d_depthwise_kw_reads = should_coalesce_1d_depthwise_conv_reads(
         is_conv_1d_depthwise_conv,
@@ -347,7 +357,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         filter_h);
 
     const bool enable_split_reader =
-        is_split_reader_supported(a.memory_config().memory_layout(), is_conv_1d_depthwise_conv, act_block_h_ntiles) &&
+        is_split_reader_supported(
+            a.memory_config().memory_layout(), use_1d_depthwise_conv_kernels, act_block_h_ntiles) &&
         force_split_reader.value_or(is_split_reader_viable(
             a.memory_config().memory_layout(),
             act_block_h_ntiles,
@@ -449,7 +460,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         out_block_h_ntiles);
 
     const uint32_t num_blocks_act_h = act_matrix_height_ntiles / act_block_h_ntiles;
-    const uint32_t num_blocks_act_w = is_conv_1d_depthwise_conv
+    const uint32_t num_blocks_act_w = use_1d_depthwise_conv_kernels
                                           ? (coalesce_1d_depthwise_kw_reads ? 1 : filter_h * filter_w)
                                           : (slice_inner_dim ? filter_h : 1);
     const uint32_t num_blocks_weight_w = weight_matrix_width_ntiles / weight_block_w_ntiles;
@@ -476,7 +487,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         weight_block_w_ntiles,
         out_subblock_w_ntiles);
     uint32_t weight_num_subblocks = weight_block_w_ntiles / out_subblock_w_ntiles;
-    uint32_t weight_block_h_ntiles = is_conv_1d_depthwise_conv
+    uint32_t weight_block_h_ntiles = use_1d_depthwise_conv_kernels
                                          ? act_block_h_ntiles * (coalesce_1d_depthwise_kw_reads ? filter_w : 1)
                                          : act_block_w_ntiles;
     uint32_t weight_block_num_tiles = weight_block_w_ntiles * weight_block_h_ntiles;
@@ -619,7 +630,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     uint32_t bias_ntiles_per_core = bias_ntiles / num_weight_slices_width;
 
     const uint32_t act_block_w_logical_scalars =
-        is_conv_1d_depthwise_conv
+        use_1d_depthwise_conv_kernels
             ? shard_shape[1] * (coalesce_1d_depthwise_kw_reads ? filter_w : 1)
             : (!slice_inner_dim ? shard_shape[1] * filter_h * filter_w : shard_shape[1] * filter_w);
     uint32_t act_block_w_extra_align_bytes =
@@ -677,7 +688,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         shard_shape,
         output_image_width,
         has_bias,
-        is_conv_1d_depthwise_conv,
+        use_1d_depthwise_conv_kernels,
         skip_activation_mcast,
         input_channels_padded,
         reader_indices_actual_page_size);
@@ -779,18 +790,30 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
         "reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
 
-    if (!is_conv_1d_depthwise_conv && block_sharded) {
-        // Block sharded conv
-        reader_kernel =
-            "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
-            "reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp";
+    if (block_sharded) {
+        // Block-sharded convs use the 2D mcast weight writer kernels: the writer
+        // compile-time args are built in the block-sharded layout (split-reader
+        // CB-shared entries at 31-35, weight/bias TensorAccessorArgs from 36 on),
+        // which only the 2D writer kernels decode. This must also apply to 1D
+        // depthwise convs whose config is block sharded (e.g. DRAM width-sliced
+        // conv1d): the 1D writer kernels would read the weight accessor at the
+        // height-sharded offset (39) and run past the end of the args vector.
         writer_mcast_sender_kernel =
             "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
             "writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
         writer_mcast_receiver_kernel =
             "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
             "writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
-    } else if (is_conv_1d_depthwise_conv) {
+        // Block sharded conv: the 2D mcast halo reader plus the generic
+        // conv_bmm_tilize compute. 1D depthwise convs land here too when their
+        // config is block sharded: the depthwise reader/compute kernels are
+        // height-sharded only (their reader offsets and weight-block math assume
+        // full channel width per core), and their weights are already prepared
+        // in the regular grouped layout for non-height shard schemes.
+        reader_kernel =
+            "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
+            "reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp";
+    } else if (use_1d_depthwise_conv_kernels) {
         // 1D Depthwise Conv (height sharded)
         compute_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/compute_depthwise_conv1d.cpp";
         reader_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_depthwise_conv1d.cpp";
@@ -856,7 +879,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_ROW_MAJOR_BFLOAT16).index,
         get_cb_info_by_name(cb_info, Conv2dCb::L1_ARRAY).index,
         (uint32_t)enable_split_reader,
-        (uint32_t)(is_conv_1d_depthwise_conv ? coalesce_1d_depthwise_kw_reads : enable_activation_reuse)};
+        (uint32_t)(use_1d_depthwise_conv_kernels ? coalesce_1d_depthwise_kw_reads : enable_activation_reuse)};
 
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;
@@ -1041,7 +1064,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     std::vector<tt::tt_metal::UnpackToDestMode> depthwise_unpack_to_dest;
 
     std::vector<uint32_t> compute_kernel_args;
-    if (is_conv_1d_depthwise_conv) {
+    if (use_1d_depthwise_conv_kernels) {
         // compute_depthwise_conv1d.cpp uses a specialized dest-reuse accumulation path. The last
         // two args select the coalesced kernel-width activation layout when the reader can fetch
         // all kernel-width sticks as one NoC packet.
@@ -1553,13 +1576,18 @@ tt::tt_metal::WorkloadDescriptor Conv2dShardedProgramFactory::create_workload_de
     }
     const bool is_conv_1d_depthwise_conv =
         is_1d_depthwise_conv(groups, ashape[3], output_channels, filter_h, ashape[1], has_bias);
+    // Mirror the program factory: the 1D depthwise kernels/arg layout are
+    // height-sharded only; block-sharded 1D depthwise convs run the generic path,
+    // so the reader-index metadata must follow the generic split-reader decision.
+    const bool use_1d_depthwise_conv_kernels = is_conv_1d_depthwise_conv && !block_sharded;
 
     auto compute_kernel_config_args =
         get_compute_kernel_config_args(a.device()->arch(), operation_attributes.compute_kernel_config);
     const bool fp32_dest_acc_en = std::get<2>(compute_kernel_config_args);
 
     const bool enable_split_reader =
-        is_split_reader_supported(a.memory_config().memory_layout(), is_conv_1d_depthwise_conv, act_block_h_ntiles) &&
+        is_split_reader_supported(
+            a.memory_config().memory_layout(), use_1d_depthwise_conv_kernels, act_block_h_ntiles) &&
         force_split_reader.value_or(is_split_reader_viable(
             a.memory_config().memory_layout(),
             act_block_h_ntiles,
