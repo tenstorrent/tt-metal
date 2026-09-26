@@ -12,8 +12,9 @@
 
 namespace tt::tt_fabric {
 
-// Forward declaration to avoid including heavy host-only headers here
+// Forward declarations to avoid including heavy host-only headers here
 class FabricNodeId;
+class ControlPlane;
 
 using chan_id_t = std::uint8_t;
 using routing_plane_id_t = std::uint8_t;
@@ -515,7 +516,8 @@ struct __attribute__((packed)) intra_mesh_routing_path_t {
 
 #if !defined(KERNEL_BUILD) && !defined(FW_BUILD)
     // Routing calculation methods
-    void calculate_chip_to_all_routing_fields(const FabricNodeId& src_fabric_node_id, uint16_t num_chips);
+    void calculate_chip_to_all_routing_fields(
+        const ControlPlane& control_plane, const FabricNodeId& src_fabric_node_id, uint16_t num_chips);
 #else
     // Device-side methods (declared here, implemented in fabric_routing_path_interface.h):
     inline bool decode_route_to_buffer(

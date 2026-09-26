@@ -876,6 +876,7 @@ int main(int argc, char** argv) {
         }
 
         PhysicalGroupingDescriptor pgd = find_and_load_physical_grouping_descriptor(
+            MetalContext::instance().get_cluster(),
             args.physical_grouping_descriptor_path.has_value()
                 ? std::optional<std::filesystem::path>(*args.physical_grouping_descriptor_path)
                 : std::nullopt,
