@@ -6,12 +6,19 @@
 
 import os
 import pathlib
+import sys
 from typing import Optional
 
 import pytest
 
 import ttnn
 import ttml
+
+# pytest.ini selects --import-mode=importlib, which leaves this directory off sys.path;
+# helper modules next to the tests (bf16_ulp) need it there.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
 
 
 def pytest_configure(config):
