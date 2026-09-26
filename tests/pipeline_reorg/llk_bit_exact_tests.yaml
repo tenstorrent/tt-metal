@@ -17,7 +17,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    pytest -q --memory-layout=debug --override-ini=log_cli=false -n auto \
+    pytest -q --override-ini=log_cli=false -n auto \
       --dist=worksteal -m "$PYTEST_MARKERS" \
       --bit-exact-runs="$BIT_EXACT_RUNS" \
       --timeout=300 \
@@ -35,7 +35,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    pytest -q --memory-layout=debug --override-ini=log_cli=false -n auto \
+    pytest -q --override-ini=log_cli=false -n auto \
       --dist=worksteal -m "$PYTEST_MARKERS" \
       --bit-exact-runs="$BIT_EXACT_RUNS" \
       --splits 2 --group 1 \
@@ -54,7 +54,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    pytest -q --memory-layout=debug --override-ini=log_cli=false -n auto \
+    pytest -q --override-ini=log_cli=false -n auto \
       --dist=worksteal -m "$PYTEST_MARKERS" \
       --bit-exact-runs="$BIT_EXACT_RUNS" \
       --splits 2 --group 2 \

@@ -257,15 +257,9 @@ class TestConfig:
     # Size of one full zone block (data + sync/pad)
     PERF_COUNTERS_ZONE_SIZE: ClassVar[int] = _PERF_COUNTERS_ZONE_DATA_BYTES + 40
 
-    # Device print buffer. It sits above loaders, and under RUNTIME_ARGS_START.
-    # Coverage builds extend TRISC sections past this address; device print
-    # is disabled under coverage so the conflict doesn't matter.
+    # Device print buffer, below runtime arguments. setup_build adjusts this
+    # region to the selected memory layout.
     DEVICE_PRINT_BUFFER_BASE: ClassVar[int] = 0x15000
-    # Matches RUNTIME_ARGS_START in the non-coverage linker scripts
-    # (memory.{wormhole,blackhole,quasar}.ld). Passed to the build as
-    # -DLLK_RUNTIME_ARGS_START so dprint.h can static_assert that the
-    # device print buffer doesn't overlap RUNTIME_ARGS.
-    DEVICE_PRINT_RUNTIME_ARGS_START: ClassVar[int] = 0x20000
     PROCESSOR_COUNT: ClassVar[int] = 0
     DEVICE_PRINT_BUFFER_SIZE: ClassVar[int] = 0x4000  # WH/BH/Quasar TRISC
     DEVICE_PRINT_BUFFER_SIZE2: ClassVar[int] = 0x2000  # Quasar DM
@@ -371,22 +365,26 @@ class TestConfig:
 
     @staticmethod
     def memory_layout() -> Path:
-        """Resolve either existing layout; set the override before setup_build."""
-        suffix = ".debug" if TestConfig.WITH_COVERAGE else ""
-        default = (
-            TestConfig.LINKER_SCRIPTS / f"memory.{TestConfig.ARCH.value}{suffix}.ld"
+        """Return the selected linker script, defaulting to debug for coverage."""
+        return TestConfig._resolve_memory_layout(
+            TestConfig.LINKER_SCRIPTS,
+            TestConfig.MEMORY_LAYOUT_LD_SCRIPT,
+            TestConfig.WITH_COVERAGE,
         )
-        layout = Path(TestConfig.MEMORY_LAYOUT_LD_SCRIPT or default).resolve()
+
+    @staticmethod
+    def _resolve_memory_layout(linker_scripts, selected, with_coverage) -> Path:
+        suffix = ".debug" if with_coverage else ""
+        default = linker_scripts / f"memory.{TestConfig.ARCH.value}{suffix}.ld"
+        layout = Path(selected or default).resolve()
         supported = {
-            (
-                TestConfig.LINKER_SCRIPTS / f"memory.{TestConfig.ARCH.value}{part}.ld"
-            ).resolve()
+            (linker_scripts / f"memory.{TestConfig.ARCH.value}{part}.ld").resolve()
             for part in ("", ".debug")
         }
         if (
             layout not in supported
             or not layout.is_file()
-            or (TestConfig.WITH_COVERAGE and not layout.name.endswith(".debug.ld"))
+            or (with_coverage and not layout.name.endswith(".debug.ld"))
         ):
             raise ValueError(
                 "memory layout must match the target and support coverage when enabled"
@@ -843,13 +841,17 @@ class TestConfig:
         TestConfig.setup_arch()
         if memory_layout not in (None, "normal", "debug"):
             raise ValueError("memory layout must be normal or debug")
-        TestConfig.MEMORY_LAYOUT_LD_SCRIPT = (
+        selected_layout = (
             sources_path
             / "tests/helpers/ld"
             / f"memory.{TestConfig.ARCH.value}{'.debug' if memory_layout == 'debug' else ''}.ld"
             if memory_layout is not None
             else None
         )
+        TestConfig._resolve_memory_layout(
+            sources_path / "tests/helpers/ld", selected_layout, with_coverage
+        )
+        TestConfig.MEMORY_LAYOUT_LD_SCRIPT = selected_layout
         TestConfig.WITH_COVERAGE = with_coverage
         TestConfig.setup_paths(sources_path)
         # Without coverage instrumentation, the debug layout leaves this
@@ -867,6 +869,7 @@ class TestConfig:
         TestConfig.PROFILER_SHARED_ARTEFACTS_AVAILABLE = False
         TestConfig._BUILD_DIRS_CREATED = False
         TestConfig.BRISC_ELF_LOADED = False
+        device_module.common_counter = 0
         TestConfig.LAST_LOADED_ELFS = Path()
         TestConfig.CURRENT_LOADED_CONFIG = "uninitialised"
         TestConfig.setup_compilation_options(
