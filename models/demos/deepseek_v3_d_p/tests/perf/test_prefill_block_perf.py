@@ -53,9 +53,9 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
     [
         pytest.param(
             f"pytest {_TEST_PATH} -k 'fabric2d-mesh-2x4-2link and layer3 and gate_device and no_ref and isl_1280' --wrapper-invocation",
-            9_134_448,  # Re-cut 2026-09-07 on the CI LoudBox (bh_loudbox, 8xP150), run 34128459250.
-            # One sample. The routed expert carries the delta: 3,128,319 ns against a 6,006,129 ns
-            # remainder the previous centre also had to contain, putting the op alone at 1.41x.
+            8_645_944,  # Re-cut 2026-09-22 on the CI LoudBox (bh_loudbox, 8xP150), run 35751696596.
+            # Supersedes 9,134,448 from run 34128459250 (2026-09-07): 5.3% faster after
+            # #57133 optimized MoE dispatch/kernel paths. One sample.
             # Keep cutting this gate on the CI runner -- bh-lb-15 read the old value 23% high.
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_2x4_layer3_moe_fabric2d",

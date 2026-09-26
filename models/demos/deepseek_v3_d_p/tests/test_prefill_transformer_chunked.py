@@ -246,6 +246,67 @@ GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
 GLM_TRACED_PERF_MARGIN = TRACED_PERF_MARGIN
 GLM_PERF_GATED_VARIANT = "glm_5_2"
 
+MISTRAL4_TRACED_PERF_MARGIN = 0.10
+# Untraced also tolerates one out-of-band chunk: isolated single-chunk spikes are ordinary here.
+MISTRAL4_UNTRACED_PERF_MARGIN = 0.10
+MISTRAL4_UNTRACED_MAX_OUT_OF_BAND = 1
+
+# Traced and untraced are different regimes, so neither table can gate the other. Only (36, 20, 10)
+# is armed; other parametrizations have no key and stay record-only. Values are per-chunk medians
+# from a CI run, not a galaxy box.
+MISTRAL4_TRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] = {
+    # Cut on bh_sc1_high_power, run 35025548110. Must be cut there: on plain bh_sc1 the same rows
+    # split into two clusters 1.5x apart depending which box the pool gave them.
+    (36, 20, 10): [
+        0.115,
+        0.125,
+        0.130,
+        0.139,
+        0.149,
+        0.156,
+        0.167,
+        0.174,
+        0.178,
+        0.186,
+        0.202,
+        0.200,
+        0.207,
+        0.219,
+        0.224,
+        0.231,
+        0.243,
+        0.252,
+        0.258,
+        0.268,
+    ],
+}
+MISTRAL4_UNTRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] = {
+    # Cut on bh_sc1_high_power, run 35232130029. Host-dispatch bound and flat with depth, so this
+    # row catches an eager-dispatch regression and cannot see MLA.
+    (36, 20, 10): [
+        0.509,
+        0.507,
+        0.517,
+        0.511,
+        0.520,
+        0.512,
+        0.507,
+        0.510,
+        0.507,
+        0.508,
+        0.513,
+        0.509,
+        0.514,
+        0.511,
+        0.510,
+        0.507,
+        0.506,
+        0.513,
+        0.513,
+        0.512,
+    ],
+}
+
 # Deepest config whose per-layer PCC is asserted; deeper runs (L61) stay record-only until their
 # accumulation headroom is pinned.
 GATED_LAYER_DEPTH = 10
@@ -1346,8 +1407,34 @@ def test_mistral4_prefill_transformer_chunked_padded(
     )
 
 
+def mistral4_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters):
+    """``(baseline_chunk_times_s, margin, max_out_of_band)`` for one Mistral parametrization,
+    mirroring ``kimi_chunked_perf_gate`` but with a third element Kimi does not need.
+
+    No ``preload_isl`` axis: the Mistral rows always start from an empty cache, so there is no
+    preload depth to disqualify a baseline. Everything else is the same contract -- a baseline of
+    None leaves the run record-only, and the mode picks both the table and the default margin so a
+    traced baseline can never arm an untraced run.
+
+    Both modes are armed at (36, 20, 10). ``max_out_of_band`` is 0 for traced: only untraced
+    exhibits the isolated single-chunk spike the allowance exists for.
+    """
+    table, default_margin, max_oob = (
+        (MISTRAL4_TRACED_BASELINE_CHUNK_TIMES_S, MISTRAL4_TRACED_PERF_MARGIN, 0)
+        if use_trace
+        else (
+            MISTRAL4_UNTRACED_BASELINE_CHUNK_TIMES_S,
+            MISTRAL4_UNTRACED_PERF_MARGIN,
+            MISTRAL4_UNTRACED_MAX_OUT_OF_BAND,
+        )
+    )
+    baseline = table.get((num_layers, n_chunks, num_iters))
+    return baseline, default_margin, max_oob
+
+
 @pytest.mark.parametrize("use_trace", [False, True], ids=["notrace", "traced"])
-@pytest.mark.parametrize("num_iters", [2], ids=["two_iters"])
+# Only the 10-iter row is gate-capable: the gate reads the median of the post-warmup iterations.
+@pytest.mark.parametrize("num_iters", [2, 10], ids=["two_iters", "ten_iters"])
 # Zero-padded: `-k chunks5` would substring-match chunks51 (the rows below hack around the same
 # collision with the ad-hoc id `chunks_eleven`).
 @pytest.mark.parametrize(
@@ -1401,6 +1488,9 @@ def test_mistral4_prefill_transformer_chunked_no_pcc(
     from the rendered table, not `iter N done ... in Xs` -- the iteration total carries fixed overhead
     that does not scale with the window, so window/iter_total understates throughput by 17-30%.
     """
+    baseline_chunk_times_s, perf_margin, max_out_of_band = mistral4_chunked_perf_gate(
+        use_trace, num_layers, n_chunks, num_iters
+    )
     run_chunked_transformer_updated(
         variant,
         config_only,
@@ -1417,6 +1507,9 @@ def test_mistral4_prefill_transformer_chunked_no_pcc(
         # chunks51 is 261,120 tokens; sized per-row so the longest sweep needs no env var and the
         # other variants' baselines keep the 100k default.
         seq_cache=max(SEQ_CACHE_NOPCC, n_chunks * CHUNK),
+        baseline_chunk_times_s=baseline_chunk_times_s,
+        perf_margin=perf_margin,
+        max_out_of_band=max_out_of_band,
     )
 
 
@@ -1550,6 +1643,7 @@ def run_chunked_transformer_updated(
     routing_use_l1_small_for_semaphores=False,
     baseline_chunk_times_s=None,
     perf_margin=None,
+    max_out_of_band=0,
     preload_isl=0,
     check_pcc=False,
     check_layer_pcc=False,
@@ -1637,9 +1731,11 @@ def run_chunked_transformer_updated(
             headers += ["baseline", "low", "high", "status"]
         rows = []
         failures: list[str] = []
+        medians: list[float] = []
         for chunk_idx in range(n_chunks):
             chunk_samples = [row[chunk_idx] for row in samples]
             median_time = statistics.median(chunk_samples)
+            medians.append(median_time)
             stddev_time = statistics.stdev(chunk_samples) if len(chunk_samples) >= 2 else 0.0
             row = [f"chunk {chunk_idx}", format_duration(median_time), format_duration(stddev_time)]
             if gated:
@@ -1660,7 +1756,29 @@ def run_chunked_transformer_updated(
                     )
             rows.append(row)
 
+        # a is depth-independent (MoE, matmuls, dispatch), b the per-unit-KV MLA/SDPA cost. They vary
+        # independently, so per-chunk medians alone make a shift in b look like depth noise.
+        if n_chunks >= 3:
+            xs = list(range(n_chunks))
+            xb, yb = statistics.mean(xs), statistics.mean(medians)
+            denom = sum((x - xb) ** 2 for x in xs)
+            b_fit = sum((x - xb) * (y - yb) for x, y in zip(xs, medians)) / denom if denom else 0.0
+            logger.info(
+                f"depth split: a = {(yb - b_fit * xb) * 1000:.1f} ms (depth-independent), "
+                f"b = {b_fit * 1000:.2f} ms per chunk of KV depth (MLA/SDPA scaling)"
+            )
+
+        # Counts out-of-band chunks; does not check they are non-adjacent.
+        if gated and failures and len(failures) <= max_out_of_band:
+            logger.warning(
+                f"{len(failures)} chunk(s) out of band, within the {max_out_of_band} tolerated as "
+                f"isolated noise; NOT failing the run. Out-of-band: {failures}"
+            )
+            failures = []
+
         margin_note = f", baseline gate +/- {margin * 100:.1f}%" if gated else ", record-only (no baseline)"
+        if gated and max_out_of_band:
+            margin_note += f", up to {max_out_of_band} isolated chunk(s) tolerated"
         logger.info(f"chunk timing stats computed over {len(samples)} iterations (iter 0 omitted){margin_note}")
         return failures, render_table(headers, rows)
 

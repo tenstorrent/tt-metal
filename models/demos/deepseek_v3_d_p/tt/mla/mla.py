@@ -1182,8 +1182,11 @@ class ttMLA:
         for weights and KV cache. Sharing is sound because every input to the tensor (offset, sp_factor,
         seq_len_local, heads_local, width, beta, orig_max) comes from the chunk, the config or the mesh;
         none varies by layer. The traced path never had the x36 problem: RotarySetup.make_llama4_scale_buffer
-        allocates one buffer per runtime and rope.refresh_llama4_scale rewrites it per chunk, so all
-        layers read the single ChunkMetadata.llama4_scale.
+        allocates one buffer per runtime and all layers read that single ChunkMetadata.llama4_scale.
+        It cannot fill it with rope.refresh_llama4_scale, which builds a host tensor -- a capture
+        cannot -- so TtPrefillRuntime._prepare_llama4_scale_offsets pre-builds one buffer per
+        chunk-aligned offset at compile() and device-to-device copies the right one in per chunk
+        (#55126).
 
         A shared per-offset SET, not one buffer refreshed in place: an entry is never mutated, so "is
         another layer's enqueued multiply still reading this?" never arises. That is settled only for a
