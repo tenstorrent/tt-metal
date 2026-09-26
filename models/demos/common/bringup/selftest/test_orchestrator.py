@@ -248,7 +248,7 @@ def test_opportunity_list_does_not_stop_when_the_picks_are_in(orch):
     o = orch(
         [
             {"id": "X.2", "title": "opportunities", "step": "perf", "gate": {"cmd": "true"}},
-            {"id": "P.1", "title": "picked", "step": "perf", "deps": ["X.2"], "gate": {"cmd": "true"}},
+            {"id": "P.1", "title": "picked", "step": "perf", "role": "perf", "deps": ["X.2"], "gate": {"cmd": "true"}},
         ],
         {},
     )

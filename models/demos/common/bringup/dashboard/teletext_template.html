@@ -455,6 +455,15 @@ function pTiming(){
         b.tr(r, 32, tps, WHT); b.tr(r, 39, trunc(t.task, 6), CYN); }});
       lines.push({draw(b, r){ b.t(r, 1, trunc(t.how, 38), warm ? GRN : MAG); }}); });
     if (old) lines.push({draw(b, r){ b.t(r, 0, trunc(`+${old} older runs on the hybrid harness`, 40), YEL); }}); }
+  const PS = D.positions;
+  if (PS && PS.points.length){
+    const kt = n => n < 1024 ? String(n) : `${Math.round(n / 1024)}k`, mx = Math.max(...PS.points.map(p => p[1]));
+    lines.push(gapLine);
+    lines.push(hdrLine("By position", `${kt(PS.chunk || 0)} chunk`, BLU, YEL));
+    PS.points.forEach(([st, ms]) => lines.push({draw(b, r){ b.t(r, 0, trunc(`${kt(st)}->${kt(st + (PS.chunk || 0))}`, 11), WHT);
+      const hu = Math.max(1, Math.round(ms / mx * 44)); for (let c = 0; c < 22; c++){ const bits = (2 * c < hu ? 21 : 0) | (2 * c + 1 < hu ? 42 : 0); if (bits) b.m(r, 11 + c, bits, GRN); }
+      b.tr(r, W - 1, `${ms.toFixed(0)}ms`, YEL); }}));
+  }
   lines.push(gapLine);
   lines.push(hdrLine("Device profile", P ? `${(P.wall_ms / 1e3).toFixed(2)}s wall` : "", BLU, YEL));
   if (!P){ lines.push(gapLine); lines.push({h:2, draw(b, r){ b.fill(r, 13, 25, RED); b.t(r, 15, "NO DATA", YEL, RED); }});

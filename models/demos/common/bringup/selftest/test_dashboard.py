@@ -43,6 +43,8 @@ def records(fx, monkeypatch):
         prefill_ms_full=2600, prefill_seq=256, prefill_chunk=64, chunk_wall_ms=800, chunk_start=192, chunk_len=64
     ).items():
         M.record(k, v, task="X.1")
+    for k, v in dict(pos_chunk=64, pos_ms_0=400, pos_ms_192=600, pos_ms_384=800, device_model_hybrid=0).items():
+        M.record(k, v, task="X.1")
     for tid in ("R.1", "R.2", "R.3", "C.blk.attn_norm", "L.s256"):
         led.update(tid, status="PASS", metrics={k: v["value"] for k, v in M.load(tid, res).items()})
     led.update(
@@ -98,6 +100,13 @@ def test_data_model(records):
     assert [(t["task"], t["headline"]) for t in d["timing"]] == [("X.1", "0->256"), ("X.1", "192->256")]
     assert tuple(d["timing"][0]["chunks"][0]) == (0, 0.5) and d["timing"][0]["seconds"] == 2.6
     assert not [t for t in d["timing"] if t["task"].startswith("L.") or t["how"].startswith("ladder")]
+    # F37: one warm chunk at several start positions, for the chart under the timing table
+    assert d["positions"] == {
+        "task": "X.1",
+        "chunk": 64,
+        "points": [(0, 400), (192, 600), (384, 800)],
+        "model": "all-device",
+    }
     assert d["plan"]["fits"] and len(d["plan_chips"]) == 4
     steps = {s["key"]: s for s in d["profile"]["steps"]}
     assert steps["attn.all_reduce"]["bound"] == "comm" and steps["attn.all_reduce"]["pat"] == "ring"
@@ -124,6 +133,8 @@ def test_page_renders_every_section(records, tmp_path):
         "#ops tbody",
         "#findings",
         "#timing",
+        "#pos",
+        "#pos-table",
         "#chips",
         "#mem-legend",
         "#p-bar",
