@@ -438,3 +438,19 @@ Append-only log, one section per task attempt: what was done, decisions and why,
   block out rel 0.0096 / 0.0087 (limit 0.02), experts pcc 0.99969, rel 0.0266 vs golden, iso rel 0.0183, ratio [0.9905, 1.0203], worst row 0.0273.
 - So the experts implementation (HiFi2 + fp32 dest GeluTanh kernel) now works on device. The board is back up after the ethernet-core outage.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_10_experts.py`
+
+## C.sliding.post_moe_norm test (run1, attempt 1)
+- Replaced the one-line template body with the post_mlp_norm test's checks (STEP = post_moe_norm): the gated metric stays `pcc_post_moe_norm_L00` >= 0.99, and it also
+  asserts rel L2 <= 0.03 and a per-token norm ratio in [0.97, 1.03]. These are recorded as informational metrics `rel_l2_*` and `row_norm_ratio_{min,max}_*`.
+- Why: on this golden (experts_out -> moe_post_norm, w in [-3.7, 89.5]) PCC passes `1 + w` (0.9969), sum instead of mean (~1.0), 2x (~1.0), a zeroed last row (0.9998)
+  and the last 32 rows zeroed (0.9916). rel L2 / ratio catch all of them (0.099 / 0.98 / 1.0 / ratio min 0 / 0.13). CPU reference: rel 0.0024, ratio [0.9981, 1.0017].
+  bf16 in/out: rel 0.0028.
+- Verified: BRINGUP_IMPL=reference PASS (pcc 0.999997, rel 0.0024); stub FAIL (PCC). The gate fails with NotImplementedError (there is no device module yet; that is the implement step).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_post_moe_norm.py`
+
+## C.sliding.post_moe_norm implement (run1, attempt 1)
+- Reused `tt/rms_norm.py:TtRMSNorm` (replicated, HiFi4 + fp32 acc, plain `x * w`). The only change is in hooks.py: `"post_moe_norm": "post_feedforward_layernorm_2.weight"`
+  in `_NORM_WEIGHTS` (so device_component and HybridDeviceModel pick it up), and `post_moe_norm` in DEVICE_STEPS["sliding"].
+- Gate PASS: pcc_post_moe_norm_L00 0.999996, rel L2 0.0030, row norm ratio [0.9970, 1.0015]. The `FAIL ... pcc=0.000000` line in the log comes from the precompile
+  collect pass (the comp_pcc stub), not from the real pass.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_post_moe_norm.py`
