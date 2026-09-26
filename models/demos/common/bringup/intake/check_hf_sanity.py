@@ -19,13 +19,13 @@ bf16 on CPU; the model is loaded once. Hooks the model may provide: ``hf_model(s
 from __future__ import annotations
 
 import argparse
-import os
 import re
 from pathlib import Path
 
 import torch
 
 from models.demos.common.bringup.core import metrics
+from models.demos.common.bringup.core.metrics import cpu_threads
 from models.demos.common.bringup.reference import prompt
 from models.demos.common.bringup.reference.golden import hf_path, load_spec, tokenizer
 
@@ -78,7 +78,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--spec")
     a = ap.parse_args(argv)
-    torch.set_num_threads(os.cpu_count())
+    torch.set_num_threads(cpu_threads())
     spec = load_spec(a.spec)
     tok = tokenizer(spec)
 
