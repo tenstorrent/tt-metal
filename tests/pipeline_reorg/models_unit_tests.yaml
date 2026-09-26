@@ -836,7 +836,7 @@
 
 - name: DeepSeek-V3 unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # tests self-skip under watcher: #36312, #36314
+    export TT_METAL_WATCHER=30  # tests self-skip under watcher: #36312, #36314
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
     export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
@@ -857,7 +857,7 @@
 
 - name: DeepSeek-V3 module unit tests (host-side)
   cmd: |
-    unset TT_METAL_WATCHER
+    export TT_METAL_WATCHER=30
     export MESH_DEVICE=N150
     pytest --durations=0 models/demos/deepseek_v3/tests -m t3k_compat \
       --ignore=models/demos/deepseek_v3/tests/test_rms_norm.py \
@@ -1194,7 +1194,7 @@
 # Same three test files as the bh_quietbox_2 leg above, on the 4x8 galaxy instead of 2x2.
 - name: TT-DiT Flux.2-dev multihost unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30  # blocked by #50886
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
     export HF_HOME=/mnt/models/huggingface
@@ -1581,7 +1581,7 @@
 # (bh_glx and nl2, not wh_glx and nl4), so the commands cannot be shared with the Wormhole entries.
 - name: TT-DiT Wan2.2-T2V-A14B unit tests (single BH galaxy)
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30  # blocked by #50886
     unset HF_HUB_OFFLINE    # umt5 fetches the Wan2.2 tokenizer from the hub
     export NO_PROMPT=1
     export HF_HOME=/mnt/models/huggingface
@@ -1610,7 +1610,7 @@
 
 - name: TT-DiT Wan2.2-I2V-A14B unit tests (single BH galaxy)
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30  # blocked by #50886
     unset HF_HUB_OFFLINE    # umt5 fetches the Wan2.2 tokenizer from the hub
     export NO_PROMPT=1
     export HF_HOME=/mnt/models/huggingface
@@ -1843,7 +1843,7 @@
 
 - name: TT-Transformers common unit tests
   cmd: |
-    unset TT_METAL_WATCHER
+    export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface
     pytest --tb=short --ignore=models/common/tests/modules models/common/tests
   model: tt-transformers-common
@@ -2095,7 +2095,7 @@
 
 - name: DeepSeek-V3 unit tests (Galaxy)
   cmd: |
-    unset TT_METAL_WATCHER  # tests self-skip under watcher: #36312, #36314
+    export TT_METAL_WATCHER=30  # tests self-skip under watcher: #36312, #36314
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
     export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
     export MESH_DEVICE=TG
@@ -2112,7 +2112,7 @@
 
 - name: DeepSeek-V3 module tests (Galaxy)
   cmd: |
-    unset TT_METAL_WATCHER  # tests self-skip under watcher: #36312, #36314
+    export TT_METAL_WATCHER=30  # tests self-skip under watcher: #36312, #36314
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
     export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
     export MESH_DEVICE=TG
