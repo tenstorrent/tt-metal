@@ -133,6 +133,10 @@ def glm_5_2_hf_config(max_seq: int = 8192):
         index_skip_topk_offset=GLM52Config.INDEX_SKIP_TOPK_OFFSET,
         first_k_dense_replace=GLM52Config.NUM_DENSE_LAYERS,
         n_routed_experts=GLM52Config.NUM_ROUTED_EXPERTS,
+        num_hidden_layers=GLM52Config.NUM_LAYERS,
+        # Counts MTP weight *modules*, not prediction levels: one module replayed at K levels.
+        num_nextn_predict_layers=1,
+        index_share_for_mtp_iteration=True,
         quantization_config={
             "quant_method": "fp8",
             "fmt": "e4m3",
