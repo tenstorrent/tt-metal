@@ -1045,3 +1045,19 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_
 - Speed was not measured. Loop mode is still about 10x slower than the fused kernel (see known issues), and fp32
   intermediates add memory traffic. The fused kernel packs activations to bfp8, so it cannot pass layer 5 at all.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_moe_experts.py`
+
+## S.full_moe.06 test (attempt 1), 2026-09-26
+- Replaced the rendered `run_swap_test` call in `tests/bringup/test_swap_full_moe_06_experts.py` with swap 05's body
+  (`test_swap_full_moe_05_router.py`, all checks unchanged) plus the `_check_experts` branch from
+  `test_swap_sliding_moe_06_experts.py`. Against the golden: finite, PCC >= 0.99, rel L2 <= 0.08. Against the CPU
+  experts on the same device ffn_norm + router (iso), the component limits: rel <= 0.03, per-token ratio [0.97, 1.03],
+  worst row <= 0.1.
+- Why the golden rel limit is 0.08 here (0.03 on layer 1): the device router's near-tie flips (184/2048 rows) alone
+  give CPU experts rel 0.0515 / PCC 0.99869 vs golden (swap 05 trail). Layer-5 experts have large outputs
+  (expert 235), so a flip moves a row a lot. The iso check is the one that catches device expert bugs.
+- BRINGUP_IMPL=reference: PASS (experts golden pcc 0.999875 / rel 0.0158, iso 0; out rel 0.0025).
+  BRINGUP_IMPL=stub: FAIL (every golden check).
+- Device gate: PASS. pcc_swap_out 0.999986, out rel 0.0053 / first rows 0.0045. Experts: golden pcc 0.998676 /
+  rel 0.0515, iso rel 0.0044, ratio [0.9967, 1.0058], worst row 0.0070. Router, as in swap 05: overlap 0.98846 vs golden
+  (limit 0.985). This is still the tightest margin.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_full_moe_06_experts.py`
