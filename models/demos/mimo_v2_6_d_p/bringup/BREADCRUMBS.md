@@ -967,3 +967,10 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_
   0.9953, experts_out 0.9976.
 - Tightest margin: block out rel 0.0062 against the 0.01 limit, the same as swap 02 (CPU router flips from the attention error).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_full_moe_03_attn_residual.py`
+
+## C.full_moe.ffn_norm test (attempt 1)
+- Replaced the rendered one-liner with the same checks as `test_c_sliding_moe_ffn_norm.py` (same RMSNorm, plain `w`, eps 1e-6), LAYER 5: PCC >= 0.99 (gated), plus finite output, rel L2 <= 0.03, per-token norm ratio in [0.97, 1.03] (recorded as informational metrics).
+- Layer-5 post_attention_layernorm w is wider than layer 1 (range [-1.06, 8.75], mean 0.417). Measured on CPU against the golden: reference rel 0.0024; sum-instead-of-mean (PCC 0.999997, rel 0.98), eps 1e-3 (rel 0.21), a zeroed row (ratio min 0) and last 32 rows zeroed (rel 0.13) are all caught by the scale checks. Full list in the test docstring.
+- BRINGUP_IMPL=reference: pass (PCC 0.999997, rel 0.0024, ratio [0.9974, 1.0021]). BRINGUP_IMPL=stub: fails PCC. Default impl (device): pass (PCC 0.999996, rel 0.0030, ratio [0.9954, 1.0031]).
+- The `FAIL pcc_ffn_norm_L05: pcc=0.000000` line at the top of every run comes from run_safe_pytest's precompile pass, not from the test.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_moe_ffn_norm.py`
