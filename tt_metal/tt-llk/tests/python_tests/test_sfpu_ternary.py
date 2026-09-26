@@ -268,7 +268,7 @@ def test_sfpu_ternary_edges(formats, dest_acc, mathop):
     ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     mathop=MathOperation.TTNNWhere,
-    test_case=["mixed", "all_ones", "all_zeros"],
+    test_case=["mixed", "all_ones", "all_zeros", "all_negative_zeros", "signed_zeros"],
 )
 def test_ttnn_where(
     formats,
@@ -313,6 +313,15 @@ def test_ttnn_where(
         src_A = torch.ones_like(src_A)
     elif test_case == "all_zeros":
         src_A = torch.zeros_like(src_A)
+    elif test_case == "all_negative_zeros":
+        if formats.input == DataFormat.Int32:
+            pytest.skip("Negative zero condition not applicable for Int32")
+        src_A = torch.full_like(src_A, -0.0)
+    elif test_case == "signed_zeros":
+        if formats.input == DataFormat.Int32:
+            pytest.skip("Negative zero condition not applicable for Int32")
+        pattern = torch.tensor([0.0, -0.0, 1.0, -1.0], dtype=src_A.dtype)
+        src_A = pattern.repeat(src_A.numel() // 4).reshape(src_A.shape)
 
     golden_generator = get_golden_generator(WhereGolden)
     golden = golden_generator(src_A, src_B, src_C)
