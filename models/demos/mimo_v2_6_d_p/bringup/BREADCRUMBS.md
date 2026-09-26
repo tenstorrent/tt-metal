@@ -604,3 +604,23 @@ Results
 - When attn_out is all zero, the attn-rel metric divides by a 1e-30 clamp and prints a huge number. That is expected: coef 0 fails as well.
 
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_sliding_moe_03_attn_residual.py`
+
+## C.sliding_moe.ffn_norm test (attempt 1), 2026-09-26
+
+What was done
+- Replaced the rendered `run_component_test` call in `tests/bringup/test_c_sliding_moe_ffn_norm.py` with the body of
+  `test_c_full_dense_ffn_norm.py` (LAYER = 1): gated PCC (spec 0.99), plus finite output, rel L2 <= 0.03 and per-token
+  norm ratio in [0.97, 1.03]. Records `rel_l2_ffn_norm_L01` and `row_norm_ratio_{min,max}_ffn_norm_L01`.
+
+Why
+- Measured on the layer-1 golden (CPU; post_attention_layernorm w in [-0.012, 2.33], mean 0.176): fp32 reference rel
+  0.0024 / ratio [0.9970, 1.0031]; sum instead of mean passes PCC (0.999997) but rel 0.98; eps 1e-3 and 1e-2 pass PCC
+  (0.997, 0.993) but rel 0.35 / 0.74; one zeroed row PCC 0.9998 but ratio min 0; last 32 rows zeroed PCC 0.992 but
+  rel 0.13. With eps 1e-5 the rel L2 is 0.0068, a harmless difference that no check catches.
+
+Results
+- BRINGUP_IMPL=reference: PASS (rel 0.0024). BRINGUP_IMPL=stub: FAIL (PCC 0).
+- Default (device): PASS already, because the generic norm module in hooks handles ffn_norm at layer 1. pcc_ffn_norm_L01
+  0.999996, rel 0.0030, ratio [0.9954, 1.0029]. The first pcc=0 line in each log is the precompile pass.
+
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_sliding_moe_ffn_norm.py`
