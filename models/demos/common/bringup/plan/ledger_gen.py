@@ -249,7 +249,7 @@ def generate(spec, ref=None, early: bool = False) -> dict:
         f"{SAFE} --no-precompile models/demos/common/bringup/tests/test_contract.py",
         {"contract_checks_failed": "== 0", "acks_early": "== 0", "pcc_producer_kv_*": thr(spec, "state")},
         device=True,
-        paths=[f"{model_dir}/tt", "models/demos/common/prefill/adapter.py"],
+        paths=[f"{model_dir}/tt"],  # plus models/demos/common/prefill, for every contract step (orchestrator)
     )
     add(
         "X.1",
