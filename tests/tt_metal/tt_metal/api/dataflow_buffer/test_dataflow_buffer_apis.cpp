@@ -101,11 +101,21 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
     m2::DataMovementHardwareConfig producer_hw;
     m2::ComputeHardwareConfig consumer_hw;
     if (this->device().arch() == ARCH::QUASAR) {
-        producer_hw = m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for = {DFB}};
-        consumer_hw = m2::ComputeGen2Config{};
+        producer_hw = m2::DataMovementHardwareConfig{
+            .config_2xx =
+                m2::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for = {DFB},
+                },
+        };
+        consumer_hw = m2::ComputeHardwareConfig{};
     } else {
-        producer_hw = m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0};
-        consumer_hw = m2::ComputeGen1Config{};
+        producer_hw = m2::DataMovementHardwareConfig{
+            .config_1xx =
+                m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
+                },
+        };
+        consumer_hw = m2::ComputeHardwareConfig{};
     }
 
     m2::KernelSpec producer{
@@ -380,11 +390,21 @@ void run_extent_probe(distributed::MeshDevice& mesh_device, const ExtentProbePar
     m2::DataMovementHardwareConfig producer_hw;
     m2::ComputeHardwareConfig consumer_hw;
     if (is_quasar) {
-        producer_hw = m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for = {DFB}};
-        consumer_hw = m2::ComputeGen2Config{};
+        producer_hw = m2::DataMovementHardwareConfig{
+            .config_2xx =
+                m2::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for = {DFB},
+                },
+        };
+        consumer_hw = m2::ComputeHardwareConfig{};
     } else {
-        producer_hw = m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0};
-        consumer_hw = m2::ComputeGen1Config{};
+        producer_hw = m2::DataMovementHardwareConfig{
+            .config_1xx =
+                m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
+                },
+        };
+        consumer_hw = m2::ComputeHardwareConfig{};
     }
 
     m2::KernelSpec producer{

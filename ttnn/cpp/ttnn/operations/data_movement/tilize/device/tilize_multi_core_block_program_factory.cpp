@@ -237,7 +237,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
                          "sub_block_width_size",
                          "single_sub_block_size_row_arg"},
                 },
-            .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+            .hw_config = ttnn::create_reader_datamovement_config(),
         };
     };
 
@@ -264,7 +264,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
                 {
                     .runtime_arg_names = {"start_id", "single_block_size_row_arg", "single_block_size_col_arg"},
                 },
-            .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+            .hw_config = ttnn::create_writer_datamovement_config(),
         };
     };
 
@@ -300,7 +300,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
             set.block_tiles);
         // fp32 unpack is marked for exactly the buffer this kernel reads. UInt8 uses 32-bit dest as
         // integer (not float): do not enable FP32 unpack-to-dest mode.
-        ComputeGen1Config compute_cfg{.enable_32_bit_dest = fp32_llk_acc};
+        ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_llk_acc};
         if (fp32_llk_acc && a.dtype() != DataType::UINT8) {
             compute_cfg.unpack_modes.insert({in_dfb_of(set), UnpackMode::UnpackToDest});
         }

@@ -109,7 +109,6 @@ void kernel_main() {
     const auto NCHt = get_arg(args::NCHt);
     constexpr auto Wt = get_arg(args::Wt);
     constexpr auto stats_tiles_cols = get_arg(args::stats_tiles_cols);
-    constexpr bool LEGACY_RSQRT = get_arg(args::legacy_rsqrt) == 1;
     constexpr auto dfb_length = get_arg(args::dfb_length);
 
     compute_kernel_hw_startup(dfb::inp, dfb::inp, dfb::stats_reduced);
@@ -189,7 +188,7 @@ void kernel_main() {
                 ckl::BinaryFpuOp::Add,
                 ckl::input(dfb::var),
                 ckl::input(dfb::eps, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{},
-            ckl::Rsqrt<ckl::Approx::Exact, LEGACY_RSQRT ? ckl::Legacy::On : ckl::Legacy::Off, ckl::Dst::D0>{},
+            ckl::Rsqrt<ckl::Approx::Exact, ckl::Dst::D0>{},
             ckl::PackTile<ckl::output(dfb::recip_sqrt_var)>{});
 
         constexpr uint32_t chunk_iterations = Wt / dfb_length;

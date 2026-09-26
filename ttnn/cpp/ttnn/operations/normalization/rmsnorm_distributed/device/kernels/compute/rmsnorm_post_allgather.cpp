@@ -38,7 +38,6 @@ void kernel_main() {
     constexpr uint32_t do_gamma = get_compile_time_arg_val(3);
     constexpr uint32_t do_beta = get_compile_time_arg_val(4);
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(5) == 1;
-    constexpr bool LEGACY_RSQRT = get_compile_time_arg_val(7) == 1;
 
     constexpr uint32_t onetile = 1;
 
@@ -88,7 +87,7 @@ void kernel_main() {
                 ckl::BinaryFpuOp::Add,
                 ckl::input(cb_var_idx),
                 ckl::input(cb_eps_idx, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{},
-            ckl::Rsqrt<ckl::Approx::Exact, LEGACY_RSQRT ? ckl::Legacy::On : ckl::Legacy::Off, ckl::Dst::D0>{},
+            ckl::Rsqrt<ckl::Approx::Exact, ckl::Dst::D0>{},
             ckl::PackTile<ckl::output(cb_recip_sqrt_var_idx)>{});
 
         // X * 1/sqrt(E[X**2] + eps), followed by optional gamma and beta.

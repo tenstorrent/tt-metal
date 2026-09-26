@@ -80,7 +80,6 @@ def test_t2va_performance(mesh_device, reset_seeds, aspect_ratio, duration_s):
     pipeline = MiniMaxH3Pipeline.create_pipeline(
         mesh_device=mesh_device,
         weights_dir=weights,
-        dit_fsdp=False,
         vae_output_type="yuv420",
     )
 
@@ -145,7 +144,7 @@ REF2VA_AUDIO_FILE = "/data/DC-deploy/vision-models/h3_t2va_artifacts/t2va_16x9_1
 # ref2va's taps=3 video encoder clashes with the default L1 pool, so it runs a smaller L1_SMALL.
 _REF2VA_L1_SMALL = 16384
 REF2VA_MESHES = [
-    pytest.param(shape, {**params, "l1_small_size": _REF2VA_L1_SMALL}, id=param.id)
+    pytest.param(shape, {**params, "l1_small_size": _REF2VA_L1_SMALL}, id=param.id, marks=param.marks)
     for param in GALAXY_MESHES
     for shape, params in [param.values]
 ]

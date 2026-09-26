@@ -332,7 +332,7 @@ std::vector<ttnn::Tensor> split(
     //   - shape4d[0] == 1 for N>2 (the N==2 path collapses batch via reshape instead)
     // Sharded input/output are handled natively on both paths (no de-shard step).
     // ---------------------------------------------------------------------------
-    tt::tt_metal::IDevice* device = input_tensor.device();
+    tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
     const uint32_t grid_dim_x = device->compute_with_storage_grid_size().x;
     const uint32_t grid_dim_y = device->compute_with_storage_grid_size().y;
 

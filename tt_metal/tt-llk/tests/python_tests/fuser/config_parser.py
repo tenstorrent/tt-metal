@@ -13,6 +13,7 @@ from helpers.data_format_inference import is_format_combination_outlier
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation
 from helpers.logger import logger
+from helpers.stimuli_generator import resolve_intervals
 from helpers.tile_constants import validate_tile_dimensions
 from pydantic import (
     BaseModel,
@@ -100,13 +101,50 @@ def format_validation_error(error: ValidationError) -> str:
     return "\n".join(messages)
 
 
+Interval = Annotated[Tuple[float, float], Field(min_length=2, max_length=2)]
+
+
+class StimuliDefinition(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    include: Annotated[List[Interval], Field(min_length=1)]
+    exclude: List[Interval] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def expand_shorthand(cls, value):
+        if type(value) in (int, float):
+            return {"include": [value]}
+        if isinstance(value, (list, tuple)):
+            return {"include": [value]}
+        return value
+
+    @field_validator("include", "exclude", mode="before")
+    @classmethod
+    def expand_points(cls, intervals):
+        if not isinstance(intervals, (list, tuple)):
+            return intervals
+        return [
+            (interval, interval) if type(interval) in (int, float) else interval
+            for interval in intervals
+        ]
+
+    @model_validator(mode="after")
+    def validate_domain(self) -> "StimuliDefinition":
+        self.resolved()
+        return self
+
+    def resolved(self) -> List[Tuple[float, float]]:
+        return resolve_intervals(self.include, self.exclude)
+
+
 class OperandDefinition(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(..., min_length=1)
     dims: Annotated[Tuple[int, int], Field(min_length=2, max_length=2)]
     format: DataFormat
-    const_value: Optional[float] = None
+    stimuli: Optional[StimuliDefinition] = None
     # Optional per-operand tile geometry (rows, cols). Defaults to a full 32x32 tile
     # (4 faces). Use (16, 32) for a 16x32 tiny tile (num_faces=2, one face-row).
     tile_dims: Optional[
@@ -269,7 +307,9 @@ class FuserConfigSchema(BaseModel):
                 name=op_def.name,
                 dimensions=op_def.dims,
                 data_format=op_def.format,
-                const_value=op_def.const_value,
+                intervals=(
+                    op_def.stimuli.resolved() if op_def.stimuli is not None else None
+                ),
                 tile_dims=op_def.tile_dims,
             )
 
@@ -319,8 +359,8 @@ class FuserConfigSchema(BaseModel):
                 f"Validation failed:\n{format_validation_error(e)}"
             ) from None
 
-    @classmethod
-    def load(cls, test_name: str):
+    @staticmethod
+    def resolve_definition_path(test_name: str) -> Path:
         yaml_path = (FUSER_CONFIG_DIR / f"{test_name}.yaml").resolve()
         if not yaml_path.exists():
             yaml_path = (FUSER_CONFIG_DIR / arch.value / f"{test_name}.yaml").resolve()
@@ -329,12 +369,24 @@ class FuserConfigSchema(BaseModel):
         if not yaml_path.exists():
             raise FileNotFoundError(f"File not found: {yaml_path}")
 
+        return yaml_path
+
+    @classmethod
+    def load_definition(cls, test_name: str) -> dict:
+        yaml_path = cls.resolve_definition_path(test_name)
         with open(yaml_path, "r") as f:
             config_dict = yaml.safe_load(f)
 
         if not isinstance(config_dict, dict):
             raise ValueError(f"Invalid config in {yaml_path.name}")
 
+        return config_dict
+
+    @classmethod
+    def load(cls, test_name: str, config_dict: Optional[dict] = None):
+        if config_dict is None:
+            config_dict = cls.load_definition(test_name)
+        config_dict = config_dict.copy()
         supported_archs = config_dict.pop("supported_archs", None)
         if supported_archs is not None:
             if arch.value not in supported_archs:
@@ -344,10 +396,10 @@ class FuserConfigSchema(BaseModel):
             schema = cls.model_validate(config_dict)
         except ValidationError as e:
             raise ValueError(
-                f"Validation failed for {yaml_path.name}:\n{format_validation_error(e)}"
+                f"Validation failed for {test_name}:\n{format_validation_error(e)}"
             ) from None
 
         try:
             return schema.to_fuser_config(test_name)
         except ValueError as e:
-            raise ValueError(f"Validation failed for {yaml_path.name}:\n{e}") from None
+            raise ValueError(f"Validation failed for {test_name}:\n{e}") from None

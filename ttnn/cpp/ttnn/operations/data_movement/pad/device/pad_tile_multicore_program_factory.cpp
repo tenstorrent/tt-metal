@@ -52,7 +52,7 @@ ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_
     const auto& a_shape = a.logical_shape();
     uint32_t num_pages = get_num_pages(output);
 
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const auto& sub_core_grids = operation_attributes.sub_core_grids;
@@ -137,7 +137,7 @@ ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_
                 {"num_dims", num_dims},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages_to_write", "start_offset"}},
-        .hw_config = ttnn::create_reader_datamovement_config(a.device()->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
         .advanced_options = {.num_runtime_varargs = num_varargs},
     };
 
@@ -171,7 +171,7 @@ ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_
                 {"element_size", static_cast<uint32_t>(output.element_size())},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages_to_write", "start_offset"}},
-        .hw_config = ttnn::create_writer_datamovement_config(a.device()->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
         .advanced_options = {.num_runtime_varargs = num_varargs},
     };
 

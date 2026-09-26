@@ -132,7 +132,7 @@ void kernel_main() {
                     ckl::DataFormatReconfig::Enabled,
                     ckl::TileAddressing::Offset),
                 ckl::input(dfb::eps, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{1u, 0u},
-            ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::On, ckl::Dst::D0>{},
+            ckl::Rsqrt<ckl::Approx::Exact, ckl::Dst::D0>{},
             ckl::PackTile<ckl::output(dfb::recip_sqrt_var)>{});
 
         constexpr uint32_t chunk_iterations = Wt / dfb_length;

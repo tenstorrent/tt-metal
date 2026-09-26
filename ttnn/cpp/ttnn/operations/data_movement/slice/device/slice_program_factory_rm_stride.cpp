@@ -26,7 +26,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmStrideProgramFactory::create_pro
     using namespace ttnn::prim::slice_metal2;
 
     const auto& input_tensor = tensor_args.input;
-    tt::tt_metal::IDevice* device = input_tensor.device();
+    tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
 
     const auto& input_shape = input_tensor.padded_shape();
     const auto& output_shape = output.padded_shape();
@@ -144,7 +144,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmStrideProgramFactory::create_pro
             },
         .compile_time_args = {{"compile_time_element_size", element_size}},
         .runtime_arg_schema = {.runtime_arg_names = reader_arg_names},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
         .advanced_options = {.num_runtime_varargs = reader_num_varargs},
     };
 
@@ -168,7 +168,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmStrideProgramFactory::create_pro
             },
         .compile_time_args = {{"compile_time_element_size", element_size}},
         .runtime_arg_schema = {.runtime_arg_names = writer_arg_names},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
         .advanced_options = {.num_runtime_varargs = writer_num_varargs},
     };
 

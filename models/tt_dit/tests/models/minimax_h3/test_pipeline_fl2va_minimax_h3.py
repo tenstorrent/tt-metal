@@ -43,14 +43,14 @@ NUM_FRAMES = 124
 NUM_INFERENCE_STEPS = 50
 SEED = 0
 
-PROMPT = CALIBRATED_FOX_PROMPT  # the tier-6 bars are calibrated against this exact prompt
+PROMPT = CALIBRATED_FOX_PROMPT
 
 # Ring collectives require FABRIC_1D_RING.
 MESHES = GALAXY_MESHES
 
-ANCHOR_PCC_FLOOR = 0.95  # measured 0.9943-0.9971 across the three anchor cases
-
-CLIP_THRESHOLD = 33.0  # t2va's bar; measured to transfer (36.63-37.30 vs t2va's 37.37)
+# calibrated 2026-08-04, fox prompt, seed 0
+ANCHOR_PCC_FLOOR = 0.95
+CLIP_THRESHOLD = 33.0
 
 
 def check_keyframe_anchor(frames, keyframe, *, index, stretch, width, height, pcc_floor=0.3):

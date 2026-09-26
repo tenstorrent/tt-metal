@@ -36,8 +36,7 @@ void validate_external_semaphores(const HighBwAllGatherParams& args, const Tenso
 
     auto* mesh_device = input_tensor.device();
     TT_FATAL(
-        ready.device() == static_cast<IDevice*>(mesh_device) &&
-            data_valid.device() == static_cast<IDevice*>(mesh_device),
+        ready.device() == mesh_device && data_valid.device() == mesh_device,
         "high_bw_all_gather external semaphores must be created on the input tensor's mesh device");
 
     // attribute_values() is a temporary tuple; copy the metadata before inspecting it.

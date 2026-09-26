@@ -22,12 +22,11 @@
 #ifdef TRISC_MATH
 namespace ttml_first_column_detail {
 
-// LLK-style body, shaped like calculate_recip_first_column in
+// LLK-style body, shaped like calculate_sdpa_fw_recip_first_column in
 // experimental/llk_sfpu/ckernel_sfpu_sdpa_fw.h: 4 half-face iterations at dst_reg stride 2.
 //
 // Calls the same _calculate_sqrt_body_ that _calculate_sqrt_internal_ uses, with the same
-// template arguments sqrt_tile passes (calculate_sqrt defaults legacy_compat to false, so
-// sqrt_tile takes the _internal_ path). The lanes this touches therefore get results
+// template arguments sqrt_tile passes. The lanes this touches therefore get results
 // identical to sqrt_tile.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool FAST_APPROX>
 inline void calculate_sqrt_first_column() {
@@ -40,7 +39,7 @@ inline void calculate_sqrt_first_column() {
             tmp = sfpi::convert<sfpi::vFloat16b>(tmp, sfpi::RoundMode::Nearest);
         }
         sfpi::dst_reg[0] = tmp;
-        sfpi::dst_reg += 2; // Skip right part of face; face stride is 2 vFloat
+        sfpi::dst_reg += 2;  // Skip right part of face; face stride is 2 vFloat
     }
 }
 

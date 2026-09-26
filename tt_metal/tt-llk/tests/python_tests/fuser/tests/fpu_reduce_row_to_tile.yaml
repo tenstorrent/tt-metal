@@ -9,7 +9,7 @@ operands:
   - name: "input_B"
     dims: [32, 32]
     format: "Float16_b"
-    const_value: 1.0
+    stimuli: 1.0
   - name: "reduce_row_out"
     dims: [32, 32]
     format: "Float16_b"

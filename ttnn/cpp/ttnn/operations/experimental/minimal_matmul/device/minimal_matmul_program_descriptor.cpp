@@ -36,11 +36,10 @@ namespace ttnn::experimental::prim {
 
 using tt::tt_metal::experimental::AddRuntimeArgsForNode;
 using tt::tt_metal::experimental::DataflowBufferSpec;
-using tt::tt_metal::experimental::DataMovementGen1Config;
+using tt::tt_metal::experimental::DataMovementHardwareConfig;
 using tt::tt_metal::experimental::DFBBinding;
 using tt::tt_metal::experimental::DFBEndpointType;
 using tt::tt_metal::experimental::DFBSpecName;
-using tt::tt_metal::experimental::double_buffer_dest;
 using tt::tt_metal::experimental::Group;
 using tt::tt_metal::experimental::KernelAdvancedOptions;
 using tt::tt_metal::experimental::KernelSpec;
@@ -53,7 +52,6 @@ using tt::tt_metal::experimental::SemaphoreSpecName;
 using tt::tt_metal::experimental::TensorBinding;
 using tt::tt_metal::experimental::TensorParameter;
 using tt::tt_metal::experimental::TensorParamName;
-using tt::tt_metal::experimental::unpack_modes;
 using tt::tt_metal::experimental::WorkUnitSpec;
 
 namespace {
@@ -658,7 +656,14 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
             .tensor_bindings = dm_tensor_bindings(own_input_tensor, bind_in3),
             .compile_time_args = std::move(cta),
             .runtime_arg_schema = dm_runtime_arg_names(rt_prefix),
-            .hw_config = DataMovementGen1Config{.processor = processor, .noc = noc},
+            .hw_config =
+                DataMovementHardwareConfig{
+                    .config_1xx =
+                        DataMovementHardwareConfig::DataMovement1XXConfig{
+                            .processor = processor,
+                            .noc = noc,
+                        },
+                },
             .advanced_options = dm_advanced_options,
         };
         return kernel;
@@ -751,8 +756,8 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device->arch(), num_cores, compute_defines, ttnn::get_throttle_level(compute_kernel_config));
 
-    auto compute_hw = to_compute_hardware_config(device->arch(), compute_kernel_config);
-    double_buffer_dest(compute_hw) = true;
+    auto compute_hw = to_compute_hardware_config(compute_kernel_config);
+    compute_hw.double_buffer_dest = true;
     if (fp32_dest_acc_en) {
         // Metal 2.0 requires an explicit unpack mode for Float32 DFBs when enable_32_bit_dest is set.
         const std::vector<std::pair<DFBSpecName, tt::DataFormat>> compute_consumed{
@@ -763,7 +768,7 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
             {DFB_TERNARY_A, ternary_a_data_format},
             {DFB_TERNARY_B, ternary_c_data_format},
         };
-        auto& compute_unpack_modes = unpack_modes(compute_hw);
+        auto& compute_unpack_modes = compute_hw.unpack_modes;
         for (const auto& [dfb, format] : compute_consumed) {
             // Only DFBs this kernel actually binds may appear in unpack_modes.
             const bool bound = (dfb == DFB_IN0 || dfb == DFB_IN1 || dfb == DFB_INTERMEDIATE) ||

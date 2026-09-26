@@ -67,15 +67,15 @@ namespace semaphore_detail {
 // The bound id selects nothing here: every compute semaphore is the one free Sync Unit index. The
 // function keeps the name sem_l1_offset so the shared Semaphore class template (semaphore.h) needs no
 // change; the returned value is the hardware index, threaded through up/down/wait/... below.
-template <ProgrammableCoreType core_type, SemScope scope>
-__attribute__((always_inline)) inline std::uintptr_t sem_l1_offset(std::uint32_t /*id*/) {
+template <ProgrammableCoreType core_type>
+__attribute__((always_inline)) inline std::uintptr_t sem_l1_offset(std::uint32_t /*id*/, SemScope scope) {
     static_assert(core_type == ProgrammableCoreType::TENSIX, "compute semaphores require a Tensix core");
-    static_assert(scope == SemScope::COMPUTE_ATOMIC, "Blackhole compute supports COMPUTE_ATOMIC only");
+    ASSERT(scope == SemScope::COMPUTE_ATOMIC);  // Blackhole compute supports COMPUTE_ATOMIC only
 #if defined(ARCH_BLACKHOLE)
     return ckernel::semaphore::UNPACK_OPERAND_SYNC;
 #else
     // Other archs' LLKs do not define this index; fail only if a kernel actually constructs one.
-    static_assert(always_false<scope>, "compute semaphores are Blackhole-only");
+    static_assert(always_false<core_type>, "compute semaphores are Blackhole-only");
     return 0;
 #endif
 }
@@ -92,52 +92,51 @@ inline constexpr std::uint32_t kEngineIdle = ckernel::p_stall::PACK;         // 
 inline constexpr std::uint32_t kEngineBlock = ckernel::p_stall::STALL_PACK;  // B2: block PACR
 #endif
 
-template <SemScope scope>
-__attribute__((always_inline)) inline std::uint32_t load(std::uintptr_t index) {
-    static_assert(scope == SemScope::COMPUTE_ATOMIC);
+__attribute__((always_inline)) inline std::uint32_t load(std::uintptr_t index, SemScope scope) {
+    ASSERT(scope == SemScope::COMPUTE_ATOMIC);
     return ckernel::semaphore_read(static_cast<std::uint8_t>(index));
 }
 
 // Settled value: retire this thread's own posted SEMPOST/SEMGET (and the engine work their STALLWAITs
 // wait on) before reading.
-template <SemScope scope>
-__attribute__((always_inline)) inline std::uint32_t current(std::uintptr_t index) {
+template <ProgrammableCoreType core_type>
+__attribute__((always_inline)) inline std::uint32_t current(std::uintptr_t index, SemScope scope) {
     ckernel::tensix_sync();
-    return load<scope>(index);
+    return load(index, scope);
 }
 
-template <ProgrammableCoreType core_type, SemScope scope>
-__attribute__((always_inline)) inline void up(std::uintptr_t index, std::uint32_t value) {
-    static_assert(scope == SemScope::COMPUTE_ATOMIC);
+template <ProgrammableCoreType core_type>
+__attribute__((always_inline)) inline void up(std::uintptr_t index, SemScope scope, std::uint32_t value) {
+    ASSERT(scope == SemScope::COMPUTE_ATOMIC);
     const std::uint8_t idx = static_cast<std::uint8_t>(index);
     for (std::uint32_t i = 0; i < value; ++i) {
         ckernel::t6_semaphore_post<kEngineIdle>(idx);  // STALLWAIT(my engine) + SEMPOST
     }
 }
 
-template <ProgrammableCoreType core_type, SemScope scope>
-__attribute__((always_inline)) inline void down(std::uintptr_t index, std::uint32_t value) {
-    static_assert(scope == SemScope::COMPUTE_ATOMIC);
+template <ProgrammableCoreType core_type>
+__attribute__((always_inline)) inline void down(std::uintptr_t index, SemScope scope, std::uint32_t value) {
+    ASSERT(scope == SemScope::COMPUTE_ATOMIC);
     const std::uint8_t idx = static_cast<std::uint8_t>(index);
     for (std::uint32_t i = 0; i < value; ++i) {
         ckernel::t6_semaphore_get<kEngineIdle>(idx);  // STALLWAIT(my engine) + SEMGET
     }
 }
 
-template <SemScope scope>
-__attribute__((always_inline)) inline void wait(std::uintptr_t index, std::uint32_t value) {
-    static_assert(scope == SemScope::COMPUTE_ATOMIC);
+template <ProgrammableCoreType core_type>
+__attribute__((always_inline)) inline void wait(std::uintptr_t index, SemScope scope, std::uint32_t value) {
+    ASSERT(scope == SemScope::COMPUTE_ATOMIC);
     // No SEMWAIT condition for "== v": RISC poll, after retiring this thread's own posted ops.
     WAYPOINT("NSW");
     ckernel::tensix_sync();
-    while (load<scope>(index) != value) {
+    while (load(index, scope) != value) {
     }
     WAYPOINT("NSD");
 }
 
-template <SemScope scope>
-__attribute__((always_inline)) inline void wait_min(std::uintptr_t index, std::uint32_t value) {
-    static_assert(scope == SemScope::COMPUTE_ATOMIC);
+template <ProgrammableCoreType core_type>
+__attribute__((always_inline)) inline void wait_min(std::uintptr_t index, SemScope scope, std::uint32_t value) {
+    ASSERT(scope == SemScope::COMPUTE_ATOMIC);
     if (value == 1) {
         // Tensix-side: hold this thread's engine instructions while Value == 0. In order with this
         // thread's own SEMGETs, so a just-consumed credit is never counted again. The RISC returns.
@@ -146,7 +145,7 @@ __attribute__((always_inline)) inline void wait_min(std::uintptr_t index, std::u
     }
     WAYPOINT("NSMW");
     ckernel::tensix_sync();
-    while (load<scope>(index) < value) {
+    while (load(index, scope) < value) {
     }
     WAYPOINT("NSMD");
 }
@@ -155,9 +154,9 @@ __attribute__((always_inline)) inline void wait_min(std::uintptr_t index, std::u
 // Value >= Max (the ring is full). In order with this thread's own SEMPOSTs, so a credit this thread has
 // posted but not yet retired still counts. n > 1: SEMWAIT has no "Value <= Max - n" condition, so RISC-poll
 // the settled value (as wait()), after retiring this thread's own posted SEMPOSTs.
-template <SemScope scope>
-__attribute__((always_inline)) inline void wait_not_full(std::uintptr_t index, std::uint32_t n) {
-    static_assert(scope == SemScope::COMPUTE_ATOMIC);
+template <ProgrammableCoreType core_type>
+__attribute__((always_inline)) inline void wait_not_full(std::uintptr_t index, SemScope scope, std::uint32_t n) {
+    ASSERT(scope == SemScope::COMPUTE_ATOMIC);
     if (n == 1) {
         ckernel::t6_semaphore_wait_on_max<kEngineBlock>(static_cast<std::uint8_t>(index));
         return;
@@ -165,14 +164,14 @@ __attribute__((always_inline)) inline void wait_not_full(std::uintptr_t index, s
     ASSERT(n <= kComputeSemaphoreMax);
     WAYPOINT("NFW");
     ckernel::tensix_sync();
-    while (load<scope>(index) > kComputeSemaphoreMax - n) {
+    while (load(index, scope) > kComputeSemaphoreMax - n) {
     }
     WAYPOINT("NFD");
 }
 
-template <SemScope scope>
-__attribute__((always_inline)) inline void set(std::uintptr_t index, std::uint32_t value) {
-    static_assert(scope == SemScope::COMPUTE_ATOMIC);
+template <ProgrammableCoreType core_type>
+__attribute__((always_inline)) inline void set(std::uintptr_t index, SemScope scope, std::uint32_t value) {
+    ASSERT(scope == SemScope::COMPUTE_ATOMIC);
     // SEMINIT takes a 4-bit Value; anything above the capacity would be truncated silently.
     ASSERT(value <= kComputeSemaphoreMax);
     // Absolute assignment via SEMINIT (Max re-programmed to the host-baked capacity), ordered after this
@@ -186,35 +185,35 @@ __attribute__((always_inline)) inline void set(std::uintptr_t index, std::uint32
 // Declared so the Semaphore class (semaphore.h) type-checks identically on every compute build; each
 // rejects on instantiation. A kernel never reaches them: constructing a compute Semaphore already fails
 // in sem_l1_offset() off Blackhole, and no compute kernel calls a semaphore method on MATH.
-#define COMPUTE_SEMAPHORE_UNSUPPORTED(scope) \
-    static_assert(always_false<scope>, "compute semaphores are a Blackhole UNPACK/PACK primitive")
-template <ProgrammableCoreType, SemScope scope>
-inline void up(std::uintptr_t, std::uint32_t) {
-    COMPUTE_SEMAPHORE_UNSUPPORTED(scope);
+#define COMPUTE_SEMAPHORE_UNSUPPORTED(core_type) \
+    static_assert(always_false<core_type>, "compute semaphores are a Blackhole UNPACK/PACK primitive")
+template <ProgrammableCoreType core_type>
+inline void up(std::uintptr_t, SemScope, std::uint32_t) {
+    COMPUTE_SEMAPHORE_UNSUPPORTED(core_type);
 }
-template <ProgrammableCoreType, SemScope scope>
-inline void down(std::uintptr_t, std::uint32_t) {
-    COMPUTE_SEMAPHORE_UNSUPPORTED(scope);
+template <ProgrammableCoreType core_type>
+inline void down(std::uintptr_t, SemScope, std::uint32_t) {
+    COMPUTE_SEMAPHORE_UNSUPPORTED(core_type);
 }
-template <SemScope scope>
-inline void wait(std::uintptr_t, std::uint32_t) {
-    COMPUTE_SEMAPHORE_UNSUPPORTED(scope);
+template <ProgrammableCoreType core_type>
+inline void wait(std::uintptr_t, SemScope, std::uint32_t) {
+    COMPUTE_SEMAPHORE_UNSUPPORTED(core_type);
 }
-template <SemScope scope>
-inline void wait_min(std::uintptr_t, std::uint32_t) {
-    COMPUTE_SEMAPHORE_UNSUPPORTED(scope);
+template <ProgrammableCoreType core_type>
+inline void wait_min(std::uintptr_t, SemScope, std::uint32_t) {
+    COMPUTE_SEMAPHORE_UNSUPPORTED(core_type);
 }
-template <SemScope scope>
-inline void wait_not_full(std::uintptr_t, std::uint32_t) {
-    COMPUTE_SEMAPHORE_UNSUPPORTED(scope);
+template <ProgrammableCoreType core_type>
+inline void wait_not_full(std::uintptr_t, SemScope, std::uint32_t) {
+    COMPUTE_SEMAPHORE_UNSUPPORTED(core_type);
 }
-template <SemScope scope>
-inline void set(std::uintptr_t, std::uint32_t) {
-    COMPUTE_SEMAPHORE_UNSUPPORTED(scope);
+template <ProgrammableCoreType core_type>
+inline void set(std::uintptr_t, SemScope, std::uint32_t) {
+    COMPUTE_SEMAPHORE_UNSUPPORTED(core_type);
 }
-template <SemScope scope>
-inline std::uint32_t current(std::uintptr_t) {
-    COMPUTE_SEMAPHORE_UNSUPPORTED(scope);
+template <ProgrammableCoreType core_type>
+inline std::uint32_t current(std::uintptr_t, SemScope) {
+    COMPUTE_SEMAPHORE_UNSUPPORTED(core_type);
     return 0;
 }
 #undef COMPUTE_SEMAPHORE_UNSUPPORTED

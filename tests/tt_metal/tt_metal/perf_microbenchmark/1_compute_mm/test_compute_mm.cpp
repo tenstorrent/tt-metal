@@ -15,6 +15,7 @@
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/work_split.hpp>
+#include "common/work_split_internal.hpp"
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_workload.hpp>

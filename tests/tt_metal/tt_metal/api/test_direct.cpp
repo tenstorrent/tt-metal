@@ -190,8 +190,8 @@ struct ReaderWriterConfig {
     experimental::NodeCoord node;
 };
 /// @brief Does Dram --> Reader --> DFB --> Writer --> Dram on a single core.
-/// Uses the Metal 2.0 host API on every arch; on WH/BH the runtime selects the
-/// Gen1 DM configs, on Quasar the Gen2 configs.
+/// Uses the Metal 2.0 host API on every arch; on WH/BH the DM kernels pin
+/// processor/NOC via config_1xx.
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
@@ -236,18 +236,27 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
         .data_format_metadata = test_config.l1_data_format,
     };
 
-    // Both gen1 and gen2 configs are populated; the runtime picks the one
-    // matching the active arch.
+    // DM configs are chosen per arch; WH/BH pins processor/NOC via config_1xx.
     experimental::DataMovementHardwareConfig reader_dm_cfg;
     experimental::DataMovementHardwareConfig writer_dm_cfg;
     if (is_quasar) {
-        reader_dm_cfg = experimental::DataMovementGen2Config{};
-        writer_dm_cfg = experimental::DataMovementGen2Config{};
+        reader_dm_cfg = experimental::DataMovementHardwareConfig{};
+        writer_dm_cfg = experimental::DataMovementHardwareConfig{};
     } else {
-        reader_dm_cfg = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
-        writer_dm_cfg = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
+        reader_dm_cfg = experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                    .noc = tt_metal::NOC::RISCV_1_default,
+                },
+        };
+        writer_dm_cfg = experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                },
+        };
     }
 
     experimental::KernelSpec reader_spec{
@@ -372,8 +381,8 @@ static bool verify_reader_datacopy_writer_output(const ReaderDatacopyWriterConte
 }
 
 /// @brief Does Dram --> Reader --> CB --> Datacopy --> CB --> Writer --> Dram on a single core.
-/// Uses the Metal 2.0 host API on every arch; on WH/BH the runtime selects the
-/// Gen1 DM configs, on Quasar the Gen2 configs.
+/// Uses the Metal 2.0 host API on every arch; on WH/BH the DM kernels pin
+/// processor/NOC via config_1xx.
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
@@ -399,7 +408,7 @@ bool reader_datacopy_writer(
     const experimental::KernelSpecName COMPUTE{"compute"};
 
     // Implicit sync is enabled by default for both DFBs (no DM kernel opts out
-    // via Gen2Config::disable_dfb_implicit_sync_for). The program-level
+    // via DataMovement2XXConfig::disable_dfb_implicit_sync_for). The program-level
     // reservation flag set below is independent of per-DFB sync mode.
     experimental::DataflowBufferSpec input_dfb_spec{
         .unique_id = INPUT_DFB,
@@ -414,18 +423,27 @@ bool reader_datacopy_writer(
         .data_format_metadata = test_config.l1_output_data_format,
     };
 
-    // Both gen1 and gen2 configs are populated; the runtime picks the one
-    // matching the active arch.
+    // DM configs are chosen per arch; WH/BH pins processor/NOC via config_1xx.
     experimental::DataMovementHardwareConfig reader_dm_cfg;
     experimental::DataMovementHardwareConfig writer_dm_cfg;
     if (is_quasar) {
-        reader_dm_cfg = experimental::DataMovementGen2Config{};
-        writer_dm_cfg = experimental::DataMovementGen2Config{};
+        reader_dm_cfg = experimental::DataMovementHardwareConfig{};
+        writer_dm_cfg = experimental::DataMovementHardwareConfig{};
     } else {
-        reader_dm_cfg = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
-        writer_dm_cfg = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
+        reader_dm_cfg = experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                    .noc = tt_metal::NOC::RISCV_1_default,
+                },
+        };
+        writer_dm_cfg = experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                },
+        };
     }
 
     experimental::KernelSpec reader_spec{
@@ -456,23 +474,15 @@ bool reader_datacopy_writer(
                                   (test_config.l1_input_data_format == tt::DataFormat::Int32) ||
                                   (test_config.l1_input_data_format == tt::DataFormat::UInt32);
     experimental::ComputeHardwareConfig compute_hw_config;
-    experimental::ComputeUnpackModes unpack_modes{};
+    experimental::ComputeHardwareConfig::ComputeUnpackModes unpack_modes{};
     if (test_config.l1_input_data_format == tt::DataFormat::Float32) {
         unpack_modes = {{INPUT_DFB, tt::tt_metal::UnpackMode::UnpackToDest}};
     }
-    if (is_quasar) {
-        compute_hw_config = experimental::ComputeGen2Config{
-            .enable_32_bit_dest = fp32_dest_acc_en,
-            .double_buffer_dest = !test_config.dst_full_sync_en,
-            .unpack_modes = unpack_modes,
-        };
-    } else {
-        compute_hw_config = experimental::ComputeGen1Config{
-            .enable_32_bit_dest = fp32_dest_acc_en,
-            .double_buffer_dest = !test_config.dst_full_sync_en,
-            .unpack_modes = unpack_modes,
-        };
-    }
+    compute_hw_config = experimental::ComputeHardwareConfig{
+        .enable_32_bit_dest = fp32_dest_acc_en,
+        .double_buffer_dest = !test_config.dst_full_sync_en,
+        .unpack_modes = unpack_modes,
+    };
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source =

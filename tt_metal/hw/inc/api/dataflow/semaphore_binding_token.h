@@ -43,7 +43,7 @@ namespace semaphore_detail {
 
 // Dependent false, so a static_assert in a Semaphore class-template member fires only on instantiation.
 // Defined here (next to SemScope) so the DM and compute Semaphore implementations share one definition.
-template <SemScope>
+template <auto>
 inline constexpr bool always_false = false;
 
 }  // namespace semaphore_detail
@@ -53,10 +53,22 @@ inline constexpr bool always_false = false;
  *
  * Carries everything the host resolved for this binding: the semaphore id and the mechanism
  * its accesses must use. A Semaphore is constructed from the token, which is how the
- * mechanism reaches the kernel as a compile-time property.
+ * mechanism reaches the kernel as a compile-time constant.
  */
-template <std::uint32_t SEM_ID, SemScope SEM_SCOPE>
 struct SemaphoreBindingToken {
-    static constexpr std::uint32_t id = SEM_ID;
-    static constexpr SemScope scope = SEM_SCOPE;
+    std::uint32_t id;
+    SemScope scope;
 };
+
+namespace sem_internal {
+
+/**
+ * @brief One entry in the generated header's list of cached semaphores: which semaphore, and
+ *        how many harts on this core use it.
+ */
+struct CachedSemaphore {
+    std::uint32_t id;
+    std::uint32_t binder_harts;
+};
+
+}  // namespace sem_internal

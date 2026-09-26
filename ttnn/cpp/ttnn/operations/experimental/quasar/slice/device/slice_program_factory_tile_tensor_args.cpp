@@ -24,7 +24,7 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
     const auto& input_tensor = tensor_args.input;
     const auto& start_tensor = tensor_args.start_tensor.value();
     const auto& end_tensor = tensor_args.end_tensor.value();
-    tt::tt_metal::IDevice* device = input_tensor.device();
+    tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
 
     uint32_t num_unpadded_tiles = output.physical_volume() / TILE_HW;
 
@@ -116,8 +116,8 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
             "ttnn/cpp/ttnn/operations/experimental/quasar/slice/device/kernels/dataflow/"
             "reader_unary_unpad_dims_interleaved_start_id_tensor_args.cpp",
         .compiler_options = {},
-        .dfb_bindings =
-            {DFBBinding{.dfb_spec_name = C0, .accessor_name = "cb_in", .endpoint_type = DFBEndpointType::PRODUCER}},
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = C0, .accessor_name = "cb_in", .endpoint_type = DFBEndpointType::PRODUCER}},
         .scratchpad_bindings = {ScratchpadBinding{.scratchpad_spec_name = C1, .accessor_name = "cb_tensor"}},
         .tensor_bindings =
             {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "in"},
@@ -125,7 +125,7 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
              TensorBinding{.tensor_parameter_name = END, .accessor_name = "end"}},
         .compile_time_args = {{"num_dims", num_dims}, {"tile_width", tile_width}, {"tile_height", tile_height}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_id", "num_tiles"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
         .advanced_options = {.num_runtime_varargs = num_dims, .num_common_runtime_varargs = 3 * num_dims},
     };
 
@@ -140,7 +140,7 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
             .dfb_spec_name = C0, .accessor_name = "cb_out", .endpoint_type = DFBEndpointType::CONSUMER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "out"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // --- Per-core runtime args ---

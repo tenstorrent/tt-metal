@@ -159,8 +159,7 @@ inline void calculate_sfpu_binary(
             // The guards test the magnitudes, not in0 and in1 directly, because SFPSETCC is
             // specified only for a comparand that is not negative zero (VectorUnit.md), and
             // in0 == 0.0f tests in0 - 0.0f, which is negative zero exactly when in0 is. Clearing
-            // the sign first is what brings -0.0 into the guard; ckernel_sfpu_rsqrt_compat.h
-            // carries the same construction for the same reason.
+            // the sign first is what brings -0.0 into the guard.
             sfpi::vFloat mag_a = sfpi::setsgn(in0, 0);
             sfpi::vFloat mag_b = sfpi::setsgn(in1, 0);
             sfpi::vFloat tiny = sfpi::as<sfpi::vFloat>(sfpi::vInt(kUlpStep));
