@@ -413,8 +413,10 @@ def _scaffold_vllm_bundle(
     return True, is_stub, str(bundle)
 
 
-def _upload_card_section(args, title: str, section: str) -> None:
-    """Replace/append a titled section in the repo's README and re-upload it. Never raises."""
+def _upload_card_section(args, title: str, section: str, aliases: tuple = ()) -> None:
+    """Upsert a titled ``## `` section in the repo's README (idempotent) and re-upload it. Removes any
+    existing section whose heading STARTS WITH ``title`` (so a dated/renamed variant is replaced, never
+    duplicated) plus any ``aliases`` (former titles), then appends the fresh one. Never raises."""
     import re
 
     try:
@@ -424,14 +426,19 @@ def _upload_card_section(args, title: str, section: str) -> None:
         api = HfApi(token=tok)
         lp = hf_hub_download(repo_id=args.repo, filename="README.md", repo_type="model", token=tok)
         s = open(lp).read()
-        s = re.sub(r"\n## " + re.escape(title) + r".*?(?=\n## |\Z)", "\n", s, flags=re.S)
+        for t in (title, *aliases):
+            # Match on the heading STEM (drop a trailing ")") so a dated/renamed variant like
+            # "Foo (real hardware, 2026-...)" is also removed — its ")" sits after the date, so the
+            # full title isn't a prefix of it.
+            stem = t[:-1] if t.endswith(")") else t
+            s = re.sub(r"\n## " + re.escape(stem) + r"[^\n]*\n.*?(?=\n## |\Z)", "\n", s, flags=re.S)
         open(lp, "w").write(s.rstrip() + "\n\n## " + title + "\n\n" + section.rstrip() + "\n")
         api.upload_file(
             path_or_fileobj=lp,
             path_in_repo="README.md",
             repo_id=args.repo,
             repo_type="model",
-            commit_message=f"Add {title.lower()}",
+            commit_message=f"Update card: {title.lower()}",
         )
     except Exception as e:
         print(f"  [publish-hf] card update skipped ({e}).")
@@ -461,6 +468,44 @@ def _discover_test_node(checkout: Path, demo_dir: Path, want: str) -> str | None
                     return node
                 best = best or node
     return best
+
+
+# Card section titles — single source of truth (stable heading; the date lives in the body so a
+# re-run replaces the section in place, and the legacy alias is stripped so no duplicate is left).
+_PERF_TITLE = "Measured latency (real hardware)"
+_PERF_ALIASES = ("Measured performance (real hardware)",)
+_ACC_TITLE = "Accuracy (real hardware)"
+
+
+def _perf_card_body(rows, depth, perf_name: str) -> str:
+    """The Measured-latency section body (table + prose). One place, reused by the engine and any
+    re-injection, so the wording never gets copy-pasted."""
+    import datetime as _dt
+
+    tbl = [
+        "| ISL | OSL | Users | TPOT (ms) | Decode (tok/s/u) | Out (tok/s total) |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
+    for isl, o, b, tpot, du, tot in rows:
+        tbl.append(
+            f"| {isl} | {o} | {b} | "
+            + (f"{tpot:.1f}" if tpot else "—")
+            + " | "
+            + (f"{du:.1f}" if du else "—")
+            + " | "
+            + (f"{tot:,.0f}" if tot else "—")
+            + " |"
+        )
+    depth_note = f"the resident {depth}-block depth" if depth else "the depth resident on the device"
+    date = _dt.date.today().isoformat()
+    return (
+        f"Measured on this package by its on-device perf harness (`{perf_name}`), decoding at "
+        f"{depth_note} on the device it was optimized on: fixed-length prompts of exactly ISL tokens, "
+        f"output pinned to OSL tokens, held at each concurrency (Users) as a batched decode. **TPOT** is "
+        f"the mean decode time per output token; **Decode (tok/s/u)** = 1000 / TPOT is the per-user "
+        f"decode rate; **Out (tok/s total)** is the aggregate output rate across all concurrent users. "
+        f"Every value is the mean over the run. _Measured {date}._\n\n" + "\n".join(tbl)
+    )
 
 
 def _enrich_card_with_benchmarks(
@@ -538,34 +583,8 @@ def _enrich_card_with_benchmarks(
     if not any(r[3] or r[5] for r in rows):
         print("  [publish-hf] bench: no on-device numbers captured; published without a sweep.")
         return
-    import datetime as _dt
-
-    tbl = [
-        "| ISL | OSL | Users | TPOT (ms) | Decode (tok/s/u) | Out (tok/s total) |",
-        "| --- | --- | --- | --- | --- | --- |",
-    ]
-    for isl, o, b, tpot, du, tot in rows:
-        tbl.append(
-            f"| {isl} | {o} | {b} | "
-            + (f"{tpot:.1f}" if tpot else "—")
-            + " | "
-            + (f"{du:.1f}" if du else "—")
-            + " | "
-            + (f"{tot:,.0f}" if tot else "—")
-            + " |"
-        )
-    depth_note = f"the resident {depth}-block depth" if depth else "the depth resident on the device"
-    date = _dt.date.today().isoformat()
     perf_name = perf_node.split("::")[-1] if "::" in perf_node else Path(perf_node).stem
-    section = (
-        f"Measured on this package by its on-device perf harness (`{perf_name}`), decoding at "
-        f"{depth_note} on the device it was optimized on: fixed-length prompts of exactly ISL tokens, "
-        f"output pinned to OSL tokens, held at each concurrency (Users) as a batched decode. **TPOT** is "
-        f"the mean decode time per output token; **Decode (tok/s/u)** = 1000 / TPOT is the per-user "
-        f"decode rate; **Out (tok/s total)** is the aggregate output rate across all concurrent users. "
-        f"Every value is the mean over the run.\n\n" + "\n".join(tbl)
-    )
-    _upload_card_section(args, f"Measured latency (real hardware, {date})", section)
+    _upload_card_section(args, _PERF_TITLE, _perf_card_body(rows, depth, perf_name), aliases=_PERF_ALIASES)
     print("  [publish-hf] bench: real-hardware sweep added to the card.")
     _enrich_card_with_accuracy(args, checkout, Path(demo_dir), py, pcc_node)
 
@@ -609,7 +628,7 @@ def _enrich_card_with_accuracy(args, checkout: Path, demo_dir: Path, py: str, pc
             "| Metric | Result | Score |\n| --- | --- | --- |\n"
             f"| End-to-end PCC vs. HF reference | **{verdict}** | {pcc_s} |"
         )
-        _upload_card_section(args, "Accuracy (real hardware)", section)
+        _upload_card_section(args, _ACC_TITLE, section)
         print(
             f"  [publish-hf] accuracy: PCC gate {'passed' if passed else 'failed'}"
             + (f", PCC={pcc}" if pcc else "")
