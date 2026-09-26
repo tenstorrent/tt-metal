@@ -251,3 +251,28 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Verified: BRINGUP_IMPL=reference PASS (pcc 0.999996, block rel 0.0027); stub FAIL (every check). Device gate PASS: pcc_swap_out 0.999969, block out rel
   0.0079 / 0.0064 (same as swap 4), ffn_norm 0.0060 vs golden (iso 0.0019, ratio [0.9971, 1.0013]).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_05_ffn_norm.py`
+
+## C.sliding.mlp test (run1, attempt 1)
+- Replaced the one-line template body with the ffn_norm-style checks: PCC >= 0.99 (gated), plus asserted element count, finite output, rel L2 <= 0.03,
+  per-token output-norm ratio in [0.97, 1.03] (informational metrics `rel_l2_mlp_L00`, `row_norm_ratio_{min,max}_mlp_L00`).
+- Scored mutations on this golden (ffn_norm -> mlp_out, [2048, 2816], row norms 385-4579) once, inside the test under BRINGUP_IMPL=reference, then
+  removed the scoring code. PCC / rel: reference 0.999998 / 0.0018; emulated bfp8 weights 0.999985 / 0.0056; bfp8 weights and activations 0.999976 / 0.0069
+  (ratio [0.992, 1.010]); silu instead of gelu_tanh 0.9986 (passes PCC) / 0.055; last row zeroed 0.9996 / 0.027, caught by the ratio (min 0); 2x caught by rel.
+  Exact gelu vs tanh gelu makes no measurable difference, so the test can't tell them apart.
+- Verified: BRINGUP_IMPL=reference PASS (pcc 0.999998, rel 0.0018, ratio [0.9979, 1.0023]); BRINGUP_IMPL=stub FAIL (pcc 0.0). The device gate fails as
+  expected until the implement step: `NotImplementedError: implement step: no device module for mlp yet`.
+- The implementation has a lot of margin: bfp8 weights should land near rel 0.006, and the limit is 0.03.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_mlp.py`
+
+## C.sliding.mlp implement (run1, attempt 1)
+- Added `tt/mlp.py:TtDenseMLP`: fused column-parallel gate/up matmul (per chip `[up_c | gate_c]`, [H, 2 * 544]), `ttnn.slice` into up/gate,
+  `gemma4/tt/experts/operations.py:apply_geglu` (Accurate gelu), row-parallel down [544, H], `ttnn.all_reduce(cluster_axis=1)`. The output is replicated,
+  and the all-reduce comes before post_mlp_norm. 2112 / 4 = 528 is padded to 544 per chip: zero gate/up columns and zero down rows, so the pad contributes exactly 0.
+  Weights bf16 (plan.yaml).
+- hooks.py: `_mlp_module` (loads only `layers.<i>.mlp.{gate,up,down}_proj.weight`). `device_component` returns `_host_fn(mlp)` for step `mlp`,
+  `mlp` is in `DEVICE_STEPS["sliding"]`, and `HybridDeviceModel` swaps it in.
+- Decision: HiFi4 + fp32 acc matmuls. HiFi2 passed (PCC 0.999993) but gave rel L2 0.0083 and a per-token norm ratio of [0.9863, 0.9975], always < 1,
+  which is a systematic shrink. HiFi4 gives rel L2 0.00327 and ratio [0.9973, 1.0047]. Added a known-issues proposal for this.
+- The attention (`tt/attention.py`) still uses HiFi2 for QKV and o_proj. Its rel L2 of 0.0052 may partly come from the same bias; this is a possible cheap win if the block-out margin gets tight.
+- Gate PASS (HiFi4): pcc_mlp_L00 0.999995, rel L2 0.00327, ratio [0.9973, 1.0047].
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_mlp.py`
