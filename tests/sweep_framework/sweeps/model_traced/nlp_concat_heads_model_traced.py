@@ -105,6 +105,16 @@ def run(
     device,
     **kwargs,
 ) -> list:
+    import os
+
+    _arch = os.environ.get("ARCH_NAME", "").lower()
+    _num_devices = device.get_num_devices() if hasattr(device, "get_num_devices") else 1
+    if "wormhole" in _arch and _num_devices == 8:
+        raise RuntimeError(
+            "[SKIP] nlp_concat_heads_model_traced is temporarily disabled on T3K (8-device Wormhole mesh) "
+            "due to a device timeout/hang (refs #54541)"
+        )
+
     torch.manual_seed(0)
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
