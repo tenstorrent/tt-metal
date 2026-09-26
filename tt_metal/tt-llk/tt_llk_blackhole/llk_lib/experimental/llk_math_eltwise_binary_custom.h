@@ -188,3 +188,78 @@ inline void _llk_math_sub_bcast_cols_reuse_custom_(
 {
     _llk_math_bcast_cols_reuse_custom_<EltwiseBinaryType::ELWSUB>(ct_dim, tensor_shape, dst_index);
 }
+
+/** @brief Initialises math state for cancellation-resistant column-broadcast subtraction. */
+inline void _llk_math_sub_bcast_cols_compensated_init_()
+{
+    addr_mod_t {.srca = {.incr = 8}, .srcb = {.incr = 8}, .dest = {.incr = 8}}.set(ADDR_MOD_3);
+    addr_mod_t {.srca = {.incr = 8}, .srcb = {.incr = 0x3F & -8}, .dest = {.incr = 8}}.set(ADDR_MOD_5);
+    addr_mod_t {.srca = {.incr = 8}, .srcb = {.incr = 24}, .dest = {.incr = 8}}.set(ADDR_MOD_6);
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_4);
+    TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
+
+/**
+ * @brief Broadcasts four SrcB column values into four rows of each destination face.
+ * @param src_row First SrcB row containing the values to broadcast.
+ * @param dst_row First destination row to write.
+ */
+inline void _compensated_move_broadcast_col_to_dest_(const std::uint32_t src_row, const std::uint32_t dst_row)
+{
+    // Blackhole forces MOVB2D's effective SrcA format to TF32 when FP32 DEST accumulation is
+    // enabled. The move therefore writes 32-bit DEST rows without relying on implied source formats.
+    TTI_MOVB2D(0, src_row + 0, ADDR_MOD_4, p_movb2d::MOV_4_ROWS_D0_BRCST, dst_row + 0);
+    TTI_MOVB2D(0, src_row + 4, ADDR_MOD_4, p_movb2d::MOV_4_ROWS_D0_BRCST, dst_row + 4);
+    TTI_MOVB2D(0, src_row + 8, ADDR_MOD_4, p_movb2d::MOV_4_ROWS_D0_BRCST, dst_row + 8);
+    TTI_MOVB2D(0, src_row + 12, ADDR_MOD_4, p_movb2d::MOV_4_ROWS_D0_BRCST, dst_row + 12);
+}
+
+/**
+ * @brief Computes (input - anchor) + (anchor - mean) for a block of 32x32 tiles.
+ * @param ct_dim Number of consecutive input tiles to process.
+ * @param tensor_shape Shape of each input tile; only full 32x32 tiles are supported.
+ * @param dst_index First destination tile slot to write.
+ * @note Call @ref _llk_math_sub_bcast_cols_compensated_init_ before this operation.
+ * @note The input and anchor are consumed as TF32. Use an SFPU finaliser when FP32 mantissa preservation is required.
+ */
+inline void _llk_math_sub_bcast_cols_compensated_(
+    const std::uint32_t ct_dim, const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE, const std::uint32_t dst_index = 0)
+{
+    LLK_ASSERT(tensor_shape.total_num_faces() == 4, "compensated column broadcast requires 32x32 tiles");
+
+    math::_configure_preserve_zero_flag_state_();
+    for (std::uint32_t tile = 0; tile < ct_dim; ++tile)
+    {
+        math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + tile);
+        math::clear_dst_reg_addr();
+
+        // Seed DEST with anchor - mean. The split statistic tile stores the
+        // upper and lower row halves in faces 1 and 3 respectively.
+        constexpr std::uint32_t upper_mean_row      = 16;
+        constexpr std::uint32_t lower_mean_row      = 48;
+        constexpr std::uint32_t upper_left_dst_row  = 0;
+        constexpr std::uint32_t upper_right_dst_row = 16;
+        constexpr std::uint32_t lower_left_dst_row  = 32;
+        constexpr std::uint32_t lower_right_dst_row = 48;
+        _compensated_move_broadcast_col_to_dest_(upper_mean_row, upper_left_dst_row);
+        _compensated_move_broadcast_col_to_dest_(upper_mean_row, upper_right_dst_row);
+        _compensated_move_broadcast_col_to_dest_(lower_mean_row, lower_left_dst_row);
+        _compensated_move_broadcast_col_to_dest_(lower_mean_row, lower_right_dst_row);
+
+        // Accumulate x - anchor into the correction already in DEST.
+        for (std::uint32_t face_row = 0; face_row < tensor_shape.num_faces_r_dim; ++face_row)
+        {
+            TTI_ELWSUB(p_setrwc::CLR_NONE, 1, p_elwise::SRCB_BCAST_COL, ADDR_MOD_3, 0);
+            TTI_ELWSUB(p_setrwc::CLR_NONE, 1, p_elwise::SRCB_BCAST_COL, ADDR_MOD_5, 0);
+            TTI_ELWSUB(p_setrwc::CLR_NONE, 1, p_elwise::SRCB_BCAST_COL, ADDR_MOD_3, 0);
+            TTI_ELWSUB(p_setrwc::CLR_NONE, 1, p_elwise::SRCB_BCAST_COL, ADDR_MOD_6, 0);
+        }
+
+        // Publish SrcA for the next input tile while keeping the split mean resident.
+        TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD);
+    }
+    TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
+    math::_configure_default_zero_flag_state_();
+    math::clear_dst_reg_addr();
+}

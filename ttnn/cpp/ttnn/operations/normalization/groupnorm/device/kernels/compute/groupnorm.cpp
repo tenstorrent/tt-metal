@@ -10,6 +10,7 @@
 #include "api/compute/reduce.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
@@ -24,6 +25,33 @@
 #include "api/dataflow/dataflow_buffer.h"
 
 namespace ckl = compute_kernel_lib;
+
+template <uint32_t input_id, uint32_t scaler_id, uint32_t output_id>
+ALWI void reduce_partial_statistics(uint32_t rows, uint32_t cols) {
+    if (rows == 0) {
+        // The reader gathers one partial per scheduled block, even for an empty tail.
+        // Publish the sum identity without asking the reduction helper to read zero rows.
+        DataflowBuffer output(output_id);
+        output.reserve_back(1);
+        fill_tile_init();
+        tile_regs_acquire();
+        fill_tile(0, 0.0f);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, output_id);
+        tile_regs_release();
+        output.push_back(1);
+    } else {
+        ckl::reduce<
+            PoolType::SUM,
+            ReduceDim::REDUCE_SCALAR,
+            input_id,
+            scaler_id,
+            output_id,
+            ckl::ReduceInputPolicy::NoWaitNoPop,
+            ckl::ReduceDataFormatReconfigMode::NONE>(ckl::ReduceInputBlockShape::of(rows, cols));
+    }
+}
 
 void kernel_main() {
     // clang-format off
@@ -447,15 +475,7 @@ void kernel_main() {
 
                 // Partial/E[x]
                 dfb_x.wait_front(static_cast<uint16_t>(out_block_hw_normal));
-                compute_kernel_lib::reduce<
-                    PoolType::SUM,
-                    ReduceDim::REDUCE_SCALAR,
-                    dfb_x_id,
-                    dfb_scaler_id,
-                    dfb_ex_partial_id,
-                    compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
-                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                    compute_kernel_lib::ReduceInputBlockShape::of(out_block_h_actual, block_w));
+                reduce_partial_statistics<dfb_x_id, dfb_scaler_id, dfb_ex_partial_id>(out_block_h_actual, block_w);
                 dfb_x.pop_front(static_cast<uint16_t>(out_block_hw_normal));
 
                 dfb_ex_partial.wait_front(1);
@@ -614,15 +634,7 @@ void kernel_main() {
 
                 // Partial-Var(x)
                 dfb_xmm.wait_front(static_cast<uint16_t>(out_block_hw_normal));
-                compute_kernel_lib::reduce<
-                    PoolType::SUM,
-                    ReduceDim::REDUCE_SCALAR,
-                    dfb_xmm_id,
-                    dfb_scaler_id,
-                    dfb_ex2_partial_id,
-                    compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
-                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                    compute_kernel_lib::ReduceInputBlockShape::of(out_block_h_actual, block_w));
+                reduce_partial_statistics<dfb_xmm_id, dfb_scaler_id, dfb_ex2_partial_id>(out_block_h_actual, block_w);
                 dfb_xmm.pop_front(static_cast<uint16_t>(out_block_hw_normal));
             }
             // End Local Reduce
