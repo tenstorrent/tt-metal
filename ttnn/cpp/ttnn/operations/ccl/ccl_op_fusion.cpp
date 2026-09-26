@@ -409,8 +409,9 @@ void MatmulFusedOpSignaler::init_llama_rs_cores_rs(const CoreRangeSet& rs_cores,
         "attempted to initialize signaler to llama rs which has a different type");
     this->initialized_llama_reduce_scatter_part1 = true;
     this->rs_cores = rs_cores;
-    auto rs_cores_superset = rs_cores.bounding_box();
-    this->rs_semaphore = tt::tt_metal::CreateSemaphore(program, rs_cores_superset, INVALID);
+    // Other sub-devices may be running in holes in this grid so semaphore initialization
+    // must not write into their live kernel configuration.
+    this->rs_semaphore = tt::tt_metal::CreateSemaphore(program, rs_cores, INVALID);
 }
 
 void MatmulFusedOpSignaler::init_llama_rs_cores_mm(
@@ -435,7 +436,7 @@ void MatmulFusedOpSignaler::push_llama_rs_rt_args_for_rs(std::vector<uint32_t>& 
 void MatmulFusedOpSignaler::push_llama_rs_rt_args_for_mm(
     std::vector<uint32_t>& out_rt_args,
     CoreCoord current_core,
-    tt::tt_metal::NOC writer_noc,
+    tt::tt_metal::NOC /*writer_noc*/,
     const tt::tt_metal::IDevice* device) const {
     out_rt_args.push_back(static_cast<uint32_t>(this->privilaged_core_physical.x));
     out_rt_args.push_back(static_cast<uint32_t>(this->privilaged_core_physical.y));
@@ -443,27 +444,15 @@ void MatmulFusedOpSignaler::push_llama_rs_rt_args_for_mm(
     if (current_core.x == this->privilaged_core.x && current_core.y == this->privilaged_core.y) {
         out_rt_args.push_back(1);
         out_rt_args.push_back(this->matmul_semaphore_target);
-        // coordinates of the bounding box
-        auto rs_cores_superset = this->rs_cores.bounding_box();
-        const CoreRange rs_cores_superset_physical = CoreRange(
-            device->worker_core_from_logical_core(rs_cores_superset.start_coord),
-            device->worker_core_from_logical_core(rs_cores_superset.end_coord));
-        if (writer_noc == NOC::NOC_1) {
-            out_rt_args.push_back(rs_cores_superset_physical.end_coord.x);
-            out_rt_args.push_back(rs_cores_superset_physical.end_coord.y);
-            out_rt_args.push_back(rs_cores_superset_physical.start_coord.x);
-            out_rt_args.push_back(rs_cores_superset_physical.start_coord.y);
-        } else {
-            out_rt_args.push_back(rs_cores_superset_physical.start_coord.x);
-            out_rt_args.push_back(rs_cores_superset_physical.start_coord.y);
-            out_rt_args.push_back(rs_cores_superset_physical.end_coord.x);
-            out_rt_args.push_back(rs_cores_superset_physical.end_coord.y);
+        // Signal only participating cores. Unicast coordinates use the same convention on both NoCs.
+        const auto receiver_cores = corerange_to_cores(this->rs_cores);
+        out_rt_args.push_back(receiver_cores.size());
+        out_rt_args.push_back(this->rs_semaphore);
+        for (const auto& core : receiver_cores) {
+            const auto physical_core = device->worker_core_from_logical_core(core);
+            out_rt_args.push_back(physical_core.x);
+            out_rt_args.push_back(physical_core.y);
         }
-        // Size of the bounding box
-        uint32_t rs_cores_superset_size = (rs_cores_superset.end_coord.y - rs_cores_superset.start_coord.y + 1) *
-                                          (rs_cores_superset.end_coord.x - rs_cores_superset.start_coord.x + 1);
-        out_rt_args.push_back(rs_cores_superset_size);
-        out_rt_args.push_back(static_cast<uint32_t>(this->rs_semaphore));
     } else {
         out_rt_args.push_back(0);
     }
