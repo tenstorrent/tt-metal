@@ -42,11 +42,13 @@ DEVICE_STEPS = {
         "post_moe_norm",
         "ffn_combine",
         "post_ffn_norm",
+        "ffn_residual",
     },
     "global": set(),
 }
 
 # Residual steps (replicated, no collective): h_mid = in + attn_post_norm; ffn_sum = mlp_post_norm + moe_post_norm.
+# ffn_residual (out = (h_mid + ffn_out) * layer_scalar) uses the same module with the scalar read on the host at load.
 _RESIDUAL_STEPS = {"attn_residual", "ffn_combine"}
 
 # Norm steps -> checkpoint weight name (under model.language_model.layers.<i>.).
@@ -87,13 +89,22 @@ def _host_fn(mesh, module):
     return fn
 
 
-def _residual_host_fn(mesh):
-    """fn(ctx, a_host [S, H], b_host [S, H]) -> host [S, H] via TtResidualAdd."""
+def _layer_scalar(spec, layer, loader=None):
+    """The layer's learned output scalar (checkpoint `layer_scalar`, shape [1]), read on the host as a Python float."""
+    from models.demos.common.bringup.reference.golden import hf_path
+    from models.demos.gemma4_a4b_d_p.reference.gemma4_ref import PREFIX, WeightLoader
+
+    loader = loader or WeightLoader(hf_path(spec))
+    return float(loader.get(f"{PREFIX}layers.{layer}.layer_scalar").float().reshape(-1)[0].item())
+
+
+def _residual_host_fn(mesh, scale=None):
+    """fn(ctx, a_host [S, H], b_host [S, H]) -> host [S, H] via TtResidualAdd: (a + b), times scale if given."""
     import ttnn
     from models.demos.gemma4_a4b_d_p.tt.residual import TtResidualAdd
     from models.demos.gemma4_a4b_d_p.tt.rms_norm import replicated_to_host, to_device_replicated
 
-    module = TtResidualAdd(mesh)
+    module = TtResidualAdd(mesh, scale=scale)
 
     def fn(ctx, a, b):
         ad = to_device_replicated(mesh, a)
@@ -222,6 +233,8 @@ def device_component(mesh, spec, layer, step):
         return _host_fn(mesh, _norm_module(mesh, spec, layer, step))
     if step in _RESIDUAL_STEPS:
         return _residual_host_fn(mesh)
+    if step == "ffn_residual":
+        return _residual_host_fn(mesh, scale=_layer_scalar(spec, layer))
     if step == "mlp":
         return _host_fn(mesh, _mlp_module(mesh, spec, layer))
     if step == "router":
@@ -299,6 +312,8 @@ class HybridDeviceModel:
             steps = DEVICE_STEPS.get(spec.block_type_of(i), ())
             ov = {s: _host_fn(mesh, _norm_module(mesh, spec, i, s, loader)) for s in steps if s in _NORM_WEIGHTS}
             ov.update({s: _residual_host_fn(mesh) for s in steps if s in _RESIDUAL_STEPS})
+            if "ffn_residual" in steps:
+                ov["ffn_residual"] = _residual_host_fn(mesh, scale=_layer_scalar(spec, i, loader))
             if "mlp" in steps:
                 ov["mlp"] = _host_fn(mesh, _mlp_module(mesh, spec, i, loader))
             if "router" in steps:

@@ -521,3 +521,23 @@ Append-only log, one section per task attempt: what was done, decisions and why,
   registered in C.sliding.post_ffn_norm.implement): pcc_swap_out 0.999951, block out rel 0.0099 / 0.0090 (limit 0.02), post_ffn_norm pcc 0.99994, rel 0.0113 vs golden,
   iso 0.0019, ratio [0.9974, 1.0013].
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_13_post_ffn_norm.py`
+
+## C.sliding.ffn_residual test (run1, attempt 1)
+- Replaced the one-line template body with the attn_residual test's checks (STEP = ffn_residual, out = (h_mid + ffn_out) * layer_scalar, layer 0 scalar 0.0703).
+  The gated metric stays `pcc_ffn_residual_L00` >= 0.99. The test also asserts rel L2 <= 0.03, a per-token norm ratio in [0.97, 1.03] and a finite output. It records
+  `rel_l2_*` and `row_norm_ratio_{min,max}_*` as informational metrics.
+- Why: on this golden PCC passes a dropped layer_scalar (0.999997; rel 13.2, ratio 14.2), 2x (~1.0), row 0 zeroed (0.99976), the last row zeroed (0.99981) and the
+  last 32 rows zeroed (0.9926). rel L2 / ratio catch all of them. CPU reference: rel 0.0023, ratio [0.9968, 1.0030]; bf16 add and scale: rel 0.0033, ratio [0.995, 1.004].
+- Verified: BRINGUP_IMPL=reference PASS (pcc 0.999997, rel 0.0023); stub FAIL (PCC). The gate fails with NotImplementedError because there is no device module yet
+  (that is the implement step). Note for implement: `tt/residual.py:TtResidualAdd` is a plain add. ffn_residual also needs the `* layer_scalar` (weight `layer_scalar`, shape [1]).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_ffn_residual.py`
+
+## C.sliding.ffn_residual implement (run1, attempt 1)
+- Reused `tt/residual.py:TtResidualAdd(mesh, scale=...)` (replicated `ttnn.add` then `ttnn.multiply` by a Python float, no collective). No new tt/ file.
+- hooks.py: new `_layer_scalar(spec, layer, loader)` reads `model.language_model.layers.<i>.layer_scalar` ([1]) on the host as a float; `_residual_host_fn` takes an
+  optional `scale`. `device_component` routes `ffn_residual` to it with the layer's scalar, `HybridDeviceModel` does the same per layer, and `ffn_residual` is in
+  DEVICE_STEPS["sliding"]. It is kept out of `_RESIDUAL_STEPS` because those steps have no scalar.
+- Gate PASS: pcc_ffn_residual_L00 0.999995, rel L2 0.0033, row norm ratio [0.9958, 1.0046]. The `FAIL ... pcc=0.000000` line comes from the precompile collect pass
+  (comp_pcc stub), not the real pass.
+- With this step every sliding step is on the device, but each step still goes host -> device -> host (HybridDeviceModel).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_ffn_residual.py`
