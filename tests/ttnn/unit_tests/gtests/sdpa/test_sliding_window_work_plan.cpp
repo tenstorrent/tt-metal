@@ -119,7 +119,7 @@ std::vector<Geometry> geometries() {
 }
 
 // The unbounded reference plan for the same geometry: the local cache holds every group written.
-SlidingQWorkPlan unbounded_plan(const Geometry& g, uint32_t device, uint32_t q_local_start) {
+SlidingQWorkPlan<> unbounded_plan(const Geometry& g, uint32_t device, uint32_t q_local_start) {
     return build_sliding_q_work_plan(
         q_local_start,
         g.k_chunk_tile_rows,
@@ -135,7 +135,7 @@ SlidingQWorkPlan unbounded_plan(const Geometry& g, uint32_t device, uint32_t q_l
 }
 
 // The circular plan: the local cache holds only `slabs` Q-sized slabs, chunk group j in slab j % slabs.
-SlidingQWorkPlan circular_plan(const Geometry& g, uint32_t device, uint32_t q_local_start) {
+SlidingQWorkPlan<> circular_plan(const Geometry& g, uint32_t device, uint32_t q_local_start) {
     return build_sliding_q_work_plan(
         q_local_start,
         g.k_chunk_tile_rows,
@@ -337,6 +337,10 @@ TEST(SlidingWindowWorkPlan, RotatedQueriesCoverExactlyTheirCausalWindows) {
                                         0,
                                         &mapping);
                                     ASSERT_TRUE(plan.is_valid);
+                                    EXPECT_LE(
+                                        plan.source_range_count,
+                                        sliding_q_work_plan_source_ranges(
+                                            chunked_sliding_halo_hop_count(halo, local), sources.count));
                                     if (q >= positions.size()) {
                                         EXPECT_EQ(plan.total_k_chunk_count, 1u);
                                         continue;
@@ -408,25 +412,25 @@ TEST(SlidingWindowWorkPlan, MultiHopGeometry) {
 }
 
 // Multi-hop counterpart of RotatedQueriesCoverExactlyTheirCausalWindows: a window wider than one slab,
-// for aligned and non-wrapping unaligned chunk starts. Every K chunk in each Q block's causal window is
-// read exactly once, and each remote one from its hop's block at the offset that hop's sender wrote it.
+// for aligned and unaligned chunk starts, including ones whose Q wraps a slab. Every K chunk in each Q
+// block's causal window is read exactly once, and each remote one from its hop's block in its segment's
+// slot at the offset that hop's sender wrote it.
 TEST(SlidingWindowWorkPlan, MultiHopQueriesCoverExactlyTheirCausalWindows) {
+    bool saw_wrap = false;
     for (uint32_t ring : {4u, 8u}) {
         for (uint32_t local : {8u, 16u}) {
             const uint32_t group = ring * local;
             const uint32_t capacity = 3 * group;
-            for (uint32_t hops_wanted : {2u, 3u, 4u}) {
+            for (uint32_t hops_wanted : {2u, 3u, 4u, 8u}) {
                 const uint32_t window = hops_wanted * local * 32;
                 const uint32_t halo = chunked_sliding_halo_tile_rows(window, 32, 4);
                 if (chunked_sliding_halo_hop_count(halo, local) > ring) {
                     continue;
                 }
-                for (uint32_t start : {0u, group, 2 * group, group + 1, group + local - 1}) {
+                for (uint32_t start : {0u, 1u, group, 2 * group, group + 1, group + local - 1, group + 2 * local + 3}) {
                     for (uint32_t length : {1u, local + 1, group}) {
                         const uint32_t end = std::min(start + length, capacity);
-                        if (chunked_q_wraps(start, end, local, ring)) {
-                            continue;
-                        }
+                        saw_wrap |= chunked_q_wraps(start, end, local, ring);
                         for (uint32_t device = 0; device < ring; ++device) {
                             std::vector<uint32_t> positions;
                             for (uint32_t token = start; token < end; ++token) {
@@ -444,6 +448,12 @@ TEST(SlidingWindowWorkPlan, MultiHopQueriesCoverExactlyTheirCausalWindows) {
                                 const auto plan = build_sliding_q_work_plan(
                                     q, 4, device, local, ring, window, 32, capacity / ring, 4, end, 0, &mapping);
                                 ASSERT_TRUE(plan.is_valid);
+                                // The kernels size their plan to this bound (SLIDING_MAX_SOURCE_RANGES).
+                                EXPECT_LE(
+                                    plan.source_range_count,
+                                    sliding_q_work_plan_source_ranges(
+                                        chunked_sliding_halo_hop_count(halo, local),
+                                        sliding_halo_sources(mapping, local, ring, halo).count));
                                 if (q >= positions.size()) {
                                     EXPECT_EQ(plan.total_k_chunk_count, 1u);
                                     continue;
@@ -462,19 +472,21 @@ TEST(SlidingWindowWorkPlan, MultiHopQueriesCoverExactlyTheirCausalWindows) {
                                     if (ref.source_ring_id == device) {
                                         continue;
                                     }
-                                    const uint32_t compact = ref.compact_k_chunk * 4;
-                                    ASSERT_LT(compact, halo);
-                                    // The hop this source sits at, its block (hop- or source-keyed), and
-                                    // what that hop's sender shipped into it.
+                                    // The segment slot, the hop this source sits at, its block (hop- or
+                                    // source-keyed), and what that hop's sender shipped into it.
                                     const uint32_t hop = (device + ring - ref.source_ring_id) % ring;
+                                    const auto sources = sliding_halo_sources(mapping, local, ring, halo, 0, hop);
+                                    const uint32_t slot = ref.compact_k_chunk * 4 / halo;
+                                    ASSERT_LT(slot, sources.count);
+                                    const uint32_t compact = ref.compact_k_chunk * 4 - slot * halo;
                                     const uint32_t block =
                                         chunked_sliding_halo_block_dest_row(halo, local, ring, ref.source_ring_id, hop);
                                     const uint32_t tail = chunked_sliding_halo_hop_rows(halo, local, hop);
                                     ASSERT_GE(compact, block);
                                     ASSERT_LT(compact, block + tail);
-                                    const auto sources = sliding_halo_sources(mapping, local, ring, halo, 0, hop);
-                                    EXPECT_EQ(sources.count, 1u);
-                                    EXPECT_EQ(sources.first_start_tile + compact - block, ref.source_k_chunk * 4);
+                                    const uint32_t origin =
+                                        slot == 0 ? sources.first_start_tile : sources.second_start_tile;
+                                    EXPECT_EQ(origin + compact - block, ref.source_k_chunk * 4);
                                 }
                                 EXPECT_EQ(actual, expected);
                             }
@@ -484,6 +496,83 @@ TEST(SlidingWindowWorkPlan, MultiHopQueriesCoverExactlyTheirCausalWindows) {
             }
         }
     }
+    EXPECT_TRUE(saw_wrap);
+}
+
+// End to end over a two-slot buffer: replay every sender's exchanges the way the halo writer lays them out,
+// then check each receiver's work plan reads every remote K chunk from the rows its sender filled with it.
+TEST(SlidingWindowWorkPlan, WrappedMultiHopReceiversReadWhatSendersWrote) {
+    bool saw_two_tails = false;
+    for (uint32_t ring : {4u, 8u}) {
+        for (uint32_t local : {8u, 16u}) {
+            const uint32_t group = ring * local;
+            for (uint32_t hops_wanted : {1u, 2u, 4u}) {
+                const uint32_t window = hops_wanted * local * 32;
+                const uint32_t halo = chunked_sliding_halo_tile_rows(window, 32, 4);
+                if (chunked_sliding_halo_hop_count(halo, local) > ring) {
+                    continue;
+                }
+                for (uint32_t start : {group, group + 1, group + local - 4, group + 3 * local + 5, 2 * group - 1}) {
+                    const uint32_t end = start + group;
+                    ChunkedSlidingHaloLayout layout;
+                    layout.q_local_tile_rows = local;
+                    layout.halo_tile_rows = halo;
+                    layout.ring_size = ring;
+                    layout.logical_k_tile_rows = end;
+                    layout.q_start_tile = start;
+                    layout.halo_slot_count = 2;
+                    // compact[receiver][row] = (source device, source local tile row)
+                    std::map<std::pair<uint32_t, uint32_t>, std::pair<uint32_t, uint32_t>> compact;
+                    for (uint32_t source = 0; source < ring; ++source) {
+                        for (const auto& exchange : plan_chunked_sliding_halo_exchanges(layout, source, true, true)) {
+                            ASSERT_FALSE(exchange.multicast && layout.remote_hop_count() > 1);
+                            for (uint32_t hop = exchange.hop; hop < exchange.hop + exchange.hop_count; ++hop) {
+                                const uint32_t receiver = (source + hop) % ring;
+                                const auto sources = layout.send_sources(source, hop);
+                                saw_two_tails |= sources.count == 2 && hop > 1;
+                                for (uint32_t tail = 0; tail < sources.count; ++tail) {
+                                    const uint32_t dest = layout.dest_row(source, hop, tail);
+                                    const uint32_t origin =
+                                        tail == 0 ? sources.first_start_tile : sources.second_start_tile;
+                                    for (uint32_t i = 0; i < layout.hop_rows(hop); ++i) {
+                                        ASSERT_LT(dest + i, 2 * halo);
+                                        EXPECT_TRUE(
+                                            compact
+                                                .emplace(std::pair{receiver, dest + i}, std::pair{source, origin + i})
+                                                .second);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    for (uint32_t device = 0; device < ring; ++device) {
+                        const auto mapping = build_chunked_q_mapping(start, end, local, ring, device);
+                        for (uint32_t q = 0; q < local; q += 2) {
+                            SCOPED_TRACE(
+                                ::testing::Message() << "ring=" << ring << " local=" << local << " window=" << window
+                                                     << " start=" << start << " device=" << device << " q=" << q);
+                            const auto plan = build_sliding_q_work_plan(
+                                q, 2, device, local, ring, window, 32, 3 * local, 4, end, 0, &mapping);
+                            ASSERT_TRUE(plan.is_valid);
+                            for (uint32_t work = 0; work < plan.total_k_chunk_count; ++work) {
+                                const auto ref = plan.k_chunk_at(work);
+                                if (ref.source_ring_id == device) {
+                                    continue;
+                                }
+                                for (uint32_t row = 0; row < 4; ++row) {
+                                    const auto it = compact.find({device, ref.compact_k_chunk * 4 + row});
+                                    ASSERT_NE(it, compact.end());
+                                    EXPECT_EQ(
+                                        it->second, (std::pair{ref.source_ring_id, ref.source_k_chunk * 4 + row}));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    EXPECT_TRUE(saw_two_tails);
 }
 
 TEST(SlidingWindowWorkPlan, SourceKeyedOnlyForWholeSlabsDividingTheRing) {
@@ -499,7 +588,8 @@ TEST(SlidingWindowWorkPlan, SourceKeyedOnlyForWholeSlabsDividingTheRing) {
 }
 
 // Every receiver gets each remote predecessor's payload exactly once, over unicast or multicast
-// exchanges, and each exchange's routing reaches the receiver its hop names.
+// exchanges, and each exchange's routing reaches the receiver its hop names. A two-slot buffer always
+// gets per-hop unicasts.
 TEST(SlidingWindowWorkPlan, HaloExchangesReachEveryPredecessorOnce) {
     for (uint32_t ring : {2u, 4u, 8u}) {
         for (uint32_t local : {4u, 8u, 16u}) {
@@ -508,22 +598,25 @@ TEST(SlidingWindowWorkPlan, HaloExchangesReachEveryPredecessorOnce) {
                     continue;
                 }
                 for (const bool linear : {true, false}) {
-                    for (const bool multicast : {true, false}) {
+                    for (const auto [allow_multicast, slots] :
+                         {std::pair{true, 1u}, std::pair{false, 1u}, std::pair{true, 2u}}) {
+                        const bool multicast = allow_multicast && slots == 1;
                         ChunkedSlidingHaloLayout layout;
                         layout.q_local_tile_rows = local;
                         layout.halo_tile_rows = hops * local;
                         layout.ring_size = ring;
                         layout.logical_k_tile_rows = 2 * ring * local;
                         layout.q_start_tile = ring * local;
+                        layout.halo_slot_count = slots;
                         const uint32_t remote_hops = layout.remote_hop_count();
                         std::map<std::pair<uint32_t, uint32_t>, uint32_t> received;  // (receiver, hop) -> count
                         for (uint32_t source = 0; source < ring; ++source) {
                             const auto exchanges =
-                                plan_chunked_sliding_halo_exchanges(layout, source, linear, multicast);
+                                plan_chunked_sliding_halo_exchanges(layout, source, linear, allow_multicast);
                             SCOPED_TRACE(
-                                ::testing::Message()
-                                << "ring=" << ring << " local=" << local << " hops=" << hops << " linear=" << linear
-                                << " multicast=" << multicast << " source=" << source);
+                                ::testing::Message() << "ring=" << ring << " local=" << local << " hops=" << hops
+                                                     << " linear=" << linear << " allow_multicast=" << allow_multicast
+                                                     << " slots=" << slots << " source=" << source);
                             if (multicast) {
                                 EXPECT_LE(exchanges.size(), 2u);
                             } else {
