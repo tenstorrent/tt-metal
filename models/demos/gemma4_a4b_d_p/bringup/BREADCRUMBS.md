@@ -888,3 +888,19 @@ Append-only log, one section per task attempt: what was done, decisions and why,
   Profile, last chunk [51200, 56320): chunk_wall_ms 743 (the hybrid took 16502), device 743 ms, host_transfers 0, pcc_chunk_out 0.99891. Attention is 51% (382 ms), experts 29%, router 5.8%, mlp 5.4%.
 - test_contract re-run after the block change: PASS, KV PCC K 0.99447 / V 0.99426 (the same as K.1).
 - Re-run: `BRINGUP_RUNG=s4096 PYTHONPATH=$PWD scripts/run_safe_pytest.sh --no-precompile models/demos/common/bringup/tests/test_ladder.py && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 PYTHONPATH=$PWD scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py`
+
+## P.2 perf (run1, attempt 2): SDPA config A. Gate PASSES
+- Attempt 1 changed no code (its metrics equal the baseline).
+- `tt/attention.py`: `SDPA_PRESETS` / `sdpa_settings()` / `sdpa_compute_config()`. The preset comes from env `GEMMA4_SDPA_CFG`, default `A`; `base` is the bring-up config. Chunk sizes can be overridden with `GEMMA4_SDPA_{SQ,SK,GQ,GK}`.
+  A = HiFi2, fp32_dest_acc off (streaming kernel), packer_l1_acc off, math_approx off, exp_approx on, full grid. It applies to the sliding SDPA and to both global SDPAs (causal at start 0, chunked after). Only the SDPA ops changed; the other matmuls and norms keep _hifi2/_hifi4.
+- Chunk sizes (L1-limited, probed with tt-probe; the probe files are deleted):
+  - Sliding D 256: q256/k512 needs 2.11 MB of CBs (L1 is 1.57 MB), so it uses q256/k256. That shape takes 0.46 ms, against 3.93 ms for base q256/k128.
+  - Global D 512: only q128/k128 (44 ms) and q160/k128 or q160/k64 (35 ms) fit; q256 fits only with k32 (54 ms). It uses q160/k128.
+  - `_fit_chunk` falls back to a power of two <= 128 that divides seq and start, when the preset size does not; for base this equals the old choice.
+- Why global stays at 35 ms: causal/chunked SDPA builds no KV chain forwarding, so each Q chunk re-reads the 51k x 512 K/V from DRAM. A bigger Q chunk is the only config lever (see known_issues Proposed).
+- `bringup/hooks.py`: `Gemma4DeviceModel.perf_settings()` records the preset name, fidelity, fp32, packer, exp_approx and chunk sizes in the profile's settings.
+- Gate (run twice): attention 248.3 / 248.4 ms (< 250), chunk_wall 609.7 / 609.6 ms (< 620), device 609.1, pcc_chunk_out 0.99856, host_transfers 0.
+  The margin is thin but the numbers are deterministic.
+  - `GEMMA4_SDPA_CFG=base`: attention 381.6 ms, wall 743.3 ms, pcc 0.9989113 (identical to the baseline).
+  - Frozen test_c_sliding_attention / test_c_global_attention still pass under A (pcc 0.99987 / 0.99979).
+- Re-run: `TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 PYTHONPATH=$PWD scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py` (prefix `GEMMA4_SDPA_CFG=base` for the old behaviour).

@@ -483,6 +483,21 @@ class Gemma4DeviceModel:
 
         ttnn.synchronize_device(self.mesh)
 
+    def perf_settings(self):
+        """Recorded in the profile: the active SDPA preset (GEMMA4_SDPA_CFG=base selects the bring-up config)."""
+        from models.demos.gemma4_a4b_d_p.tt.attention import sdpa_settings
+
+        c = sdpa_settings()
+        return {
+            "sdpa_cfg": c["name"],
+            "sdpa_fidelity": c["fidelity"],
+            "sdpa_fp32_dest_acc": c["fp32"],
+            "sdpa_packer_l1_acc": c["packer_l1"],
+            "sdpa_exp_approx": c["exp_approx"],
+            "sdpa_sliding_q_k": list(c["sliding"]),
+            "sdpa_global_q_k": list(c["glob"]),
+        }
+
 
 def device_model(mesh, spec, layers, lm_head=True):
     """All-device model (default); BRINGUP_HYBRID=1 selects the hybrid harness (CPU reference + device steps)."""
