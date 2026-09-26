@@ -130,9 +130,12 @@ MINIMAX_H3_PIXEL_STD = _MINIMAX_H3_PIXEL_STD
 # conditioning rows, which sit at max(t, 0.999). See `references.py`.
 MINIMAX_H3_AUDIO_CONDITION_TIMESTEP = 1.0
 
-# Read from the two scheduler_config.json files, which hold nothing else.
-VIDEO_SHIFT = 12.0
-AUDIO_SHIFT = 3.0
+# Read from the two scheduler_config.json files, which hold nothing else. The env overrides exist
+# for adapters distilled against a different grid: lightx2v 768p turbo variants use video shift 6
+# (544p keeps 12; audio stays 3 everywhere). A wrong shift completes and costs quality, not
+# correctness, so nothing downstream can catch it.
+VIDEO_SHIFT = float(os.environ.get("MINIMAX_H3_VIDEO_SHIFT", "12.0"))
+AUDIO_SHIFT = float(os.environ.get("MINIMAX_H3_AUDIO_SHIFT", "3.0"))
 
 # Bumped whenever the on-disk AdaLN table's field layout changes. A file written by another format
 # unpickles into a dataclass whose fields have moved, so it would modulate from whatever survived
