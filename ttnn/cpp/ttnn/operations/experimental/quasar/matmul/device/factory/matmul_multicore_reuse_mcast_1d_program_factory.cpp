@@ -5195,9 +5195,16 @@ m2::DataMovementHardwareConfig make_datamovement_hardware_config(
     tt::tt_metal::NOC noc,
     bool disable_dfb_implicit_sync_for_all = false) {
     if (arch == tt::ARCH::QUASAR) {
-        return m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = disable_dfb_implicit_sync_for_all};
+        return m2::DataMovementHardwareConfig{
+            .config_2xx =
+                m2::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = disable_dfb_implicit_sync_for_all,
+                },
+        };
     }
-    return m2::DataMovementGen1Config{.processor = processor, .noc = noc};
+    return m2::DataMovementHardwareConfig{
+        .config_1xx = m2::DataMovementHardwareConfig::DataMovement1XXConfig{.processor = processor, .noc = noc},
+    };
 }
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 
@@ -5794,13 +5801,11 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         m2::SemaphoreSpec{.unique_id = RO_IN1_RECEIVER_SEM, .target_nodes = all_cores},
     };
 
-    m2::ComputeHardwareConfig compute_hw_config = ttnn::to_compute_hardware_config(
-        device.arch(),
-        ttnn::ComputeKernelConfig{
-            .math_fidelity = math_fidelity,
-            .math_approx_mode = math_approx_mode,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .dst_full_sync_en = false});
+    m2::ComputeHardwareConfig compute_hw_config = ttnn::to_compute_hardware_config(ttnn::ComputeKernelConfig{
+        .math_fidelity = math_fidelity,
+        .math_approx_mode = math_approx_mode,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = false});
 
     // ---- in0 sender kernel CTAs (named) ----
     auto make_in0_sender_cta = [&](uint32_t core_has_output_block_work,
@@ -6811,13 +6816,11 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             .unique_id = RO_IN1_RECEIVER_SEM, .target_nodes = CoreRangeSet(in1_mcast_receiver_cores_bounding_box)},
     };
 
-    m2::ComputeHardwareConfig compute_hw_config = ttnn::to_compute_hardware_config(
-        device.arch(),
-        ttnn::ComputeKernelConfig{
-            .math_fidelity = math_fidelity,
-            .math_approx_mode = math_approx_mode,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .dst_full_sync_en = false});
+    m2::ComputeHardwareConfig compute_hw_config = ttnn::to_compute_hardware_config(ttnn::ComputeKernelConfig{
+        .math_fidelity = math_fidelity,
+        .math_approx_mode = math_approx_mode,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = false});
 
     // The in1 sender multicasts weights/bias over a dest rectangle whose start/end are swapped based
     // on in1_noc (below). The in1 sender/receiver writer kernels MUST issue NoC ops on that same NOC,

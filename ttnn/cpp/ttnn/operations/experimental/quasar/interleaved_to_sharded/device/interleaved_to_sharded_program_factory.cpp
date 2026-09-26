@@ -202,8 +202,7 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
     KernelSpec reader{
         .unique_id = I2S_READER,
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = I2S_INPUT, .accessor_name = "src"}},
-        .hw_config =
-            ttnn::create_reader_datamovement_config(input.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
     if (is_tile) {
         reader.source =
@@ -253,8 +252,7 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
     // Writer kernel.
     KernelSpec writer{
         .unique_id = I2S_WRITER,
-        .hw_config =
-            ttnn::create_writer_datamovement_config(input.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
     if (dst_is_dram) {
         writer.dfb_bindings = {ConsumerOf(I2S_OUTPUT_DFB, "out")};
@@ -304,7 +302,6 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
             .dfb_bindings = {ConsumerOf(I2S_INPUT_DFB, "in0"), ProducerOf(I2S_OUTPUT_DFB, "out")},
             .runtime_arg_schema = {.runtime_arg_names = {"num_units"}},
             .hw_config = ttnn::to_compute_hardware_config(
-                input.device()->arch(),
                 ttnn::ComputeKernelConfig{.math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false}),
         });
     }

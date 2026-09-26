@@ -135,11 +135,11 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCoreSharded::c
 
     // hw_config — Style B (see the interleaved factory for the rationale).
     ComputeHardwareConfig compute_hw_config =
-        ComputeGen1Config{.fpu_math_fidelity = math_fidelity, .enable_32_bit_dest = fp32_dest_acc_en};
+        ComputeHardwareConfig{.fpu_math_fidelity = math_fidelity, .enable_32_bit_dest = fp32_dest_acc_en};
     if (device->arch() == tt::ARCH::QUASAR) {
-        // Gen2 copies the fields the Gen1 config sets (gen2_hardware_configs.md shape 4).
-        // TODO(#52269): Quasar unpack_modes are copied from Gen1 and not yet optimized for Quasar.
-        compute_hw_config = ComputeGen2Config{
+        // Quasar sets the same common fields (gen2_hardware_configs.md shape 4).
+        // TODO(#52269): Quasar unpack_modes are copied from TT-1.x.x and not yet optimized for Quasar.
+        compute_hw_config = ComputeHardwareConfig{
             .fpu_math_fidelity = math_fidelity,
             .enable_32_bit_dest = fp32_dest_acc_en,
         };

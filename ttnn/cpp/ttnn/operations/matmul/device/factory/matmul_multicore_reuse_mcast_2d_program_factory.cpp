@@ -34,7 +34,7 @@ using tt::tt_metal::experimental::AddRuntimeArgsForNode;
 using tt::tt_metal::experimental::AdvancedKernelRunArgs;
 using tt::tt_metal::experimental::ComputeHardwareConfig;
 using tt::tt_metal::experimental::DataflowBufferSpec;
-using tt::tt_metal::experimental::DataMovementGen1Config;
+using tt::tt_metal::experimental::DataMovementHardwareConfig;
 using tt::tt_metal::experimental::DFBBinding;
 using tt::tt_metal::experimental::DFBEndpointType;
 using tt::tt_metal::experimental::DFBSpecName;
@@ -1282,7 +1282,13 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
                              "in0_mcast_dest_noc_end_y"},
                     },
                 .hw_config =
-                    DataMovementGen1Config{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc},
+                    DataMovementHardwareConfig{
+                        .config_1xx =
+                            DataMovementHardwareConfig::DataMovement1XXConfig{
+                                .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                                .noc = in0_noc,
+                            },
+                    },
                 .advanced_options = {.num_runtime_varargs = num_in0_sender_varargs},
             };
             return k;
@@ -1371,7 +1377,14 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
                          "in0_mcast_dest_noc_end_y",
                          "last_block_h"},
                 },
-            .hw_config = DataMovementGen1Config{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc},
+            .hw_config =
+                DataMovementHardwareConfig{
+                    .config_1xx =
+                        DataMovementHardwareConfig::DataMovement1XXConfig{
+                            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                            .noc = in0_noc,
+                        },
+                },
         };
         if (!in0_height_sharded) {
             // Height-sharded in0 arrives resident in the borrowed in0 buffer, so there is no tensor
@@ -1456,7 +1469,14 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
                     {"num_active", 0u},
                 },
             .runtime_arg_schema = {},
-            .hw_config = DataMovementGen1Config{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc},
+            .hw_config =
+                DataMovementHardwareConfig{
+                    .config_1xx =
+                        DataMovementHardwareConfig::DataMovement1XXConfig{
+                            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                            .noc = in1_noc,
+                        },
+                },
         };
         std::vector<std::string> in1_sender_rtas = {
             "in1_tensor_start_tile_id",
@@ -1578,7 +1598,14 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
                         {"MtNt", M * N},
                     },
                 .runtime_arg_schema = {},
-                .hw_config = DataMovementGen1Config{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = noc},
+                .hw_config =
+                    DataMovementHardwareConfig{
+                        .config_1xx =
+                            DataMovementHardwareConfig::DataMovement1XXConfig{
+                                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                                .noc = noc,
+                            },
+                    },
             };
             std::vector<std::string> rtas = {
                 "in1_mcast_sender_noc_x",
@@ -1652,7 +1679,14 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
                 {
                     .runtime_arg_names = {"in0_mcast_sender_noc_x", "in0_mcast_sender_noc_y"},
                 },
-            .hw_config = DataMovementGen1Config{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = noc},
+            .hw_config =
+                DataMovementHardwareConfig{
+                    .config_1xx =
+                        DataMovementHardwareConfig::DataMovement1XXConfig{
+                            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                            .noc = noc,
+                        },
+                },
         };
     };
     if (has_in0_receiver_kernel) {
@@ -1707,8 +1741,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
         }
     }
     if (!unpack_modes_table.empty()) {
-        std::get<tt::tt_metal::experimental::ComputeGen1Config>(compute_hw).unpack_modes =
-            std::move(unpack_modes_table);
+        compute_hw.unpack_modes = std::move(unpack_modes_table);
     }
 
     KernelSpec compute{
@@ -3793,7 +3826,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast2DProgramFacto
     // The legacy ComputeConfigDescriptor this replaces set math_fidelity, fp32_dest_acc_en,
     // dst_full_sync_en and math_approx_mode -- every knob the helper covers -- so the translation
     // carries them all; packer_l1_acc has no Metal 2.0 counterpart and is consumed on the host.
-    auto compute_hw = ttnn::to_compute_hardware_config(device.arch(), compute_kernel_config);
+    auto compute_hw = ttnn::to_compute_hardware_config(compute_kernel_config);
 
     const auto B = fuse_batch ? 1 : get_batch_size(a_shape_padded);
     const auto Mt = get_M_dim(a_shape_padded, in0_tile, fuse_batch);

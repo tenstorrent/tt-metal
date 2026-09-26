@@ -370,7 +370,7 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
                 {"cache_position_modulo", cache_position_modulo},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"cache_start_id", "my_batch_idx", "wait_to_start"}},
-        .hw_config = create_reader_datamovement_config(device->arch()),
+        .hw_config = create_reader_datamovement_config(),
     };
 
     // ---------------- Writer ----------------
@@ -456,24 +456,23 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
                   "send_signal",
                   "send_core_x",
                   "send_core_y"}},
-        .hw_config = create_writer_datamovement_config(device->arch()),
+        .hw_config = create_writer_datamovement_config(),
     };
 
     // ---------------- Compute ----------------
 
-    // Select the compute hardware-config generation for the target arch and map the caller's common
-    // knobs (leaving the per-DFB unpack_modes default for us to set below). Required on Quasar, where a
-    // KernelSpec holds one generation and ValidateProgramSpec rejects a Gen1 config. Unlike the previous
-    // bare ComputeGen1Config (which set only enable_32_bit_dest and otherwise took the struct defaults,
-    // HiFi4/precise), this preserves the caller's compute_kernel_config — whose no-arg TTNN default maps
-    // to LoFi/approximate/double-buffered Dest. That differs only in the fidelity/approx knobs, which do
-    // not affect this op: it untilizes cache/input, patches a row, and re-tilizes (data-format moves) —
-    // there is no fidelity-sensitive FPU or SFPU math, and bfp_pack_precision_mode is left default either way.
-    auto compute_hw_cfg = ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config);
+    // Map the caller's common knobs (leaving the per-DFB unpack_modes default for us to set below).
+    // Unlike a bare ComputeHardwareConfig (which would set only enable_32_bit_dest and otherwise take the
+    // struct defaults, HiFi4/precise), this preserves the caller's compute_kernel_config — whose no-arg
+    // TTNN default maps to LoFi/approximate/double-buffered Dest. That differs only in the fidelity/approx
+    // knobs, which do not affect this op: it untilizes cache/input, patches a row, and re-tilizes
+    // (data-format moves) — there is no fidelity-sensitive FPU or SFPU math, and bfp_pack_precision_mode
+    // is left default either way.
+    auto compute_hw_cfg = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config);
     if (fp32_dest_acc_en) {
         // A 32-bit Dest requires an explicit unpack mode for every Float32 buffer the compute kernel
         // consumes. Legacy named none, which resolved to unpacking into SrcA/B.
-        auto& um = unpack_modes(compute_hw_cfg);
+        auto& um = compute_hw_cfg.unpack_modes;
         const auto require_unpack_mode = [&](const DFBSpecName& dfb, tt::DataFormat format) {
             if (format == tt::DataFormat::Float32) {
                 um.emplace(dfb, UnpackMode::UnpackToSrc);

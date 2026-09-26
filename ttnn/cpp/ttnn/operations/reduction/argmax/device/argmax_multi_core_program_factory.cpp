@@ -482,11 +482,15 @@ ttnn::device_operation::ProgramArtifacts ArgMaxMultiCoreProgramFactory::create_p
                 },
             // Not the reader default placement (that is NOC_0): this kernel is pinned to RISCV_1 on
             // NOC_1, reproduced field-by-field from the pre-Metal-2.0 config.
-            .hw_config = DataMovementHardwareConfig{DataMovementGen1Config{
-                .processor = processor,
-                .noc = noc,
-                .noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
-            }},
+            .hw_config =
+                DataMovementHardwareConfig{
+                    .config_1xx =
+                        DataMovementHardwareConfig::DataMovement1XXConfig{
+                            .processor = processor,
+                            .noc = noc,
+                            .noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
+                        },
+                },
         };
     };
 

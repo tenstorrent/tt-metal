@@ -126,8 +126,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeSingleCoreProgramFactory::creat
             .dfb_spec_name = IN, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_page_id"}},
-        .hw_config =
-            ttnn::create_reader_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ---- Writer ----
@@ -145,8 +144,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeSingleCoreProgramFactory::creat
              {"num_blocks_per_output_column_row", num_blocks_per_column_row},
              {"num_tiles_per_output_block", num_tiles_per_block},
              {"output_single_block_width_size", output_single_block_width_size}},
-        .hw_config =
-            ttnn::create_writer_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ---- Compute (Metal 2.0 fork of untilize) ----
@@ -156,9 +154,9 @@ ttnn::device_operation::ProgramArtifacts UntilizeSingleCoreProgramFactory::creat
     }
     ttnn::ComputeKernelConfig compute_config{
         .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};
-    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(a.device()->arch(), compute_config);
+    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(compute_config);
     if (fp32_dest_acc_en) {
-        std::visit([&](auto& c) { c.unpack_modes.emplace(IN, tt::tt_metal::UnpackMode::UnpackToDest); }, compute_hw);
+        compute_hw.unpack_modes.emplace(IN, tt::tt_metal::UnpackMode::UnpackToDest);
     }
     KernelSpec compute{
         .unique_id = COMPUTE,

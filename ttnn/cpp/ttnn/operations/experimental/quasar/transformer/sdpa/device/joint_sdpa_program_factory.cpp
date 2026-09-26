@@ -406,7 +406,8 @@ ttnn::device_operation::ProgramArtifacts JointSDPADeviceOperation::JointSDPAProg
 
     KernelSpec reader{
         .unique_id = READER,
-        .source = "ttnn/cpp/ttnn/operations/experimental/quasar/transformer/sdpa/device/kernels/dataflow/joint_reader.cpp",
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/quasar/transformer/sdpa/device/kernels/dataflow/joint_reader.cpp",
         .compiler_options = {.defines = base_defines},
         .dfb_bindings =
             {
@@ -446,7 +447,7 @@ ttnn::device_operation::ProgramArtifacts JointSDPADeviceOperation::JointSDPAProg
                   "local_nh_end",
                   "local_q_start",
                   "local_q_end"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     Group<DFBBinding> writer_dfbs = {
@@ -465,7 +466,8 @@ ttnn::device_operation::ProgramArtifacts JointSDPADeviceOperation::JointSDPAProg
 
     KernelSpec writer{
         .unique_id = WRITER,
-        .source = "ttnn/cpp/ttnn/operations/experimental/quasar/transformer/sdpa/device/kernels/dataflow/joint_writer.cpp",
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/quasar/transformer/sdpa/device/kernels/dataflow/joint_writer.cpp",
         .compiler_options = {.defines = writer_defines},
         .dfb_bindings = writer_dfbs,
         .tensor_bindings =
@@ -498,7 +500,7 @@ ttnn::device_operation::ProgramArtifacts JointSDPADeviceOperation::JointSDPAProg
                   "local_nh_end",
                   "local_q_start",
                   "local_q_end"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     Group<DFBBinding> compute_dfbs = {
@@ -573,7 +575,7 @@ ttnn::device_operation::ProgramArtifacts JointSDPADeviceOperation::JointSDPAProg
                   "local_nh_end",
                   "local_q_start",
                   "local_q_end"}},
-        .hw_config = ttnn::to_compute_hardware_config(device->arch(), args.compute_kernel_config),
+        .hw_config = ttnn::to_compute_hardware_config(args.compute_kernel_config),
     };
 
     // ---- Assemble the ProgramSpec ----

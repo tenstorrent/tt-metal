@@ -103,8 +103,7 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
             .dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config =
-            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ---- Writer kernel ----
@@ -122,8 +121,7 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
             {{"float32_dtype", static_cast<uint32_t>(float32_dtype)}, {"unpadded_X_size", unpadded_row_size_bytes}},
         .runtime_arg_schema = {.runtime_arg_names = {"padded_X_size", "start_stick_id", "n_block_reps"}},
     };
-    writer.hw_config =
-        ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true);
+    writer.hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true);
 
     // ---- Compute kernels (full + cliff) ----
     KernelSpec::CompilerOptions::Defines compute_defines;
@@ -133,10 +131,9 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
     auto make_compute_hw = [&]() -> ComputeHardwareConfig {
         ttnn::ComputeKernelConfig cfg{
             .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};
-        ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(device->arch(), cfg);
+        ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(cfg);
         if (fp32_dest_acc_en) {
-            std::visit(
-                [&](auto& c) { c.unpack_modes.emplace(IN_DFB, tt::tt_metal::UnpackMode::UnpackToDest); }, compute_hw);
+            compute_hw.unpack_modes.emplace(IN_DFB, tt::tt_metal::UnpackMode::UnpackToDest);
         }
         return compute_hw;
     };

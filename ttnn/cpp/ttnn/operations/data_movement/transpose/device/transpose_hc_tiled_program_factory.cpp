@@ -113,7 +113,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledProgramFactory::create_
                   "ct",
                   "ctoffs",
                   "wt"}},
-        .hw_config = create_reader_datamovement_config(device->arch()),
+        .hw_config = create_reader_datamovement_config(),
     };
     reader.compile_time_args.insert({"subtile_line_bytes", sub_tile_line_bytes});
     reader.compile_time_args.insert({"float32_dtype", dfb_data_format == tt::DataFormat::Float32 ? 1u : 0u});
@@ -147,7 +147,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledProgramFactory::create_
         }},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = create_writer_datamovement_config(device->arch()),
+        .hw_config = create_writer_datamovement_config(),
     };
 
     spec.kernels.push_back(std::move(reader));
