@@ -18,7 +18,12 @@ import os
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, compute_constants, extract_mesh_config, get_ep_mesh_mapper
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
+    ExpertMapping,
+    compute_constants,
+    extract_mesh_config,
+    get_ep_mesh_mapper,
+)
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
@@ -40,12 +45,17 @@ class TtRMSNorm:
             None
             if weight is None
             else ttnn.from_torch(
-                weight.float().reshape(1, 1, -1, ttnn.TILE_SIZE), device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT,
-                dtype=ttnn.bfloat16, mesh_mapper=_rep(mesh_device),
+                weight.float().reshape(1, 1, -1, ttnn.TILE_SIZE),
+                device=mesh_device,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.bfloat16,
+                mesh_mapper=_rep(mesh_device),
             )
         )
         self.eps = eps
-        self.cfg = ttnn.init_device_compute_kernel_config(mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True)
+        self.cfg = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
+        )
 
     def __call__(self, x):
         return ttnn.rms_norm(x, epsilon=self.eps, weight=self.w, compute_kernel_config=self.cfg)
@@ -71,20 +81,29 @@ class TtDenseMLP:
         col = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=shape, dims=(None, 3))
         row = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=shape, dims=(None, 2))
         to = lambda t, m, name: ttnn.as_tensor(
-            t.float()[None, None], device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=weight_dtype, mesh_mapper=m,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG, cache_file_name=cache_name(mesh_device, cache_prefix, f"mlp.{name}"),
+            t.float()[None, None],
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=weight_dtype,
+            mesh_mapper=m,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_file_name=cache_name(mesh_device, cache_prefix, f"mlp.{name}"),
         )
         self.w_gate = to(sd["gate_proj.weight"].T, col, "gate")
         self.w_up = to(sd["up_proj.weight"].T, col, "up")
         self.w_down = to(sd["down_proj.weight"].T, row, "down")
-        self.cfg = ttnn.init_device_compute_kernel_config(mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, packer_l1_acc=True)
+        self.cfg = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, packer_l1_acc=True
+        )
         self._pcs = {}
 
     def __call__(self, x):
         M, K = x.shape[2], x.shape[3]
         if M not in self._pcs:
-            self._pcs[M] = (best_mm_config(self.mesh_device, M, K, self.w_gate.shape[3]),
-                            best_mm_config(self.mesh_device, M, self.w_down.shape[2], self.w_down.shape[3]))
+            self._pcs[M] = (
+                best_mm_config(self.mesh_device, M, K, self.w_gate.shape[3]),
+                best_mm_config(self.mesh_device, M, self.w_down.shape[2], self.w_down.shape[3]),
+            )
         pc_up, pc_down = self._pcs[M]
         gate = ttnn.linear(x, self.w_gate, dtype=ttnn.bfloat16, compute_kernel_config=self.cfg, program_config=pc_up)
         up = ttnn.linear(x, self.w_up, dtype=ttnn.bfloat16, compute_kernel_config=self.cfg, program_config=pc_up)
@@ -103,22 +122,42 @@ class TtGate:
         self.K, self.E = cfg.num_experts_per_tok, cfg.n_routed_experts
         self.route_scale = cfg.routed_scaling_factor
         self.w = ttnn.as_tensor(
-            sd["weight"].float().T.contiguous()[None, None], device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16,
-            mesh_mapper=_rep(mesh_device), memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            sd["weight"].float().T.contiguous()[None, None],
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=_rep(mesh_device),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_name(mesh_device, cache_prefix, "gate.w"),
         )
         bias = sd["e_score_correction_bias"].float().view(1, 1, 1, -1).expand(1, 1, seq_len_per_chip, -1).contiguous()
         # fp32 bias + logits: the bias sits at ~1-2 where the bf16 step (0.008-0.016) exceeds the typical
         # top-8/top-9 score gap (~0.003-0.01) -> bf16 flips ~16% of tokens' expert choice.
-        self.bias = ttnn.from_torch(bias, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.float32, mesh_mapper=_rep(mesh_device),
-                                    memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        self.cfg = ttnn.init_device_compute_kernel_config(mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True)
+        self.bias = ttnn.from_torch(
+            bias,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.float32,
+            mesh_mapper=_rep(mesh_device),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self.cfg = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
+        )
 
     def __call__(self, x):
         logits = ttnn.linear(x, self.w, dtype=ttnn.float32, compute_kernel_config=self.cfg)
         w, idx = ttnn.experimental.deepseek_prefill.moe_grouped_topk(
-            logits, self.bias, n_groups=1, summed_experts_per_group=1, topk_groups=1, n_activated_experts=self.K,
-            route_scale=self.route_scale, stable_sort=True, epsilon=1e-20, score_func="sigmoid",
+            logits,
+            self.bias,
+            n_groups=1,
+            summed_experts_per_group=1,
+            topk_groups=1,
+            n_activated_experts=self.K,
+            route_scale=self.route_scale,
+            stable_sort=True,
+            epsilon=1e-20,
+            score_func="sigmoid",
         )
         logits.deallocate(True)
         S = x.shape[2]
@@ -129,7 +168,8 @@ class TtGate:
 
 def prepare_expert_weights(sd, cfg: MiMoTextConfig):
     return [
-        {n: sd[f"experts.{e}.{n}.weight"] for n in ("gate_proj", "up_proj", "down_proj")} for e in range(cfg.n_routed_experts)
+        {n: sd[f"experts.{e}.{n}.weight"] for n in ("gate_proj", "up_proj", "down_proj")}
+        for e in range(cfg.n_routed_experts)
     ]
 
 
@@ -138,6 +178,13 @@ def default_expert_dtype():
     the expert weight bandwidth, which bounds the MoE at 64 experts/chip on 2x2 (experts 3.66 -> 2.73 ms at
     640 tok/chip); the source is MXFP4, so the loss is small (6-layer stitched KV PCC >= 0.997 vs >= 0.9994 at bf8)."""
     return {"bf4": ttnn.bfloat4_b, "bf8": ttnn.bfloat8_b}[os.environ.get("MIMO_EXPERT_DTYPE", "bf4")]
+
+
+def routed_expert_hybrid_threshold() -> int | None:
+    """``MIMO_RE_HYBRID_THRESHOLD`` = T sends experts with <= T tokens to the AI-CodeGen ``moe_fused_swiglu`` op and the
+    rest to ``unified_routed_expert_moe`` (DeepSeek / Kimi / GLM use 320). Unset: unified op only."""
+    v = os.environ.get("MIMO_RE_HYBRID_THRESHOLD")
+    return int(v) if v else None
 
 
 def moe_capacity_factor(K: int, E: int, n_dev: int) -> int:
@@ -156,34 +203,74 @@ def moe_capacity_factor(K: int, E: int, n_dev: int) -> int:
 class TtMoE:
     """Expert-parallel routed experts (DeepSeek substrate, SiLU fused expert FFN)."""
 
-    def __init__(self, mesh_device, sd, cfg: MiMoTextConfig, *, seq_len_per_chip, num_links=1, topology=ttnn.Topology.Linear,
-                 weights_dtype=None, cache_prefix=None):
+    def __init__(
+        self,
+        mesh_device,
+        sd,
+        cfg: MiMoTextConfig,
+        *,
+        seq_len_per_chip,
+        num_links=1,
+        topology=ttnn.Topology.Linear,
+        weights_dtype=None,
+        cache_prefix=None,
+    ):
         self.mesh_device = mesh_device
         weights_dtype = weights_dtype or default_expert_dtype()
         E, K, H, I = cfg.n_routed_experts, cfg.num_experts_per_tok, cfg.hidden_size, cfg.moe_intermediate_size
         self.E, self.K, self.H = E, K, H
-        self.gate = TtGate(mesh_device, {k[len("gate.") :]: v for k, v in sd.items() if k.startswith("gate.")}, cfg, seq_len_per_chip,
-                           cache_prefix)
+        self.gate = TtGate(
+            mesh_device,
+            {k[len("gate.") :]: v for k, v in sd.items() if k.startswith("gate.")},
+            cfg,
+            seq_len_per_chip,
+            cache_prefix,
+        )
         mc = extract_mesh_config(mesh_device)
         dgs, ndg = mc.dispatch_group_size, mc.num_dispatch_groups
         n_dev = mesh_device.get_num_devices()
         cap = moe_capacity_factor(K, E, n_dev)
         experts_per_chip, metadata_len, max_buf, max_tok = compute_constants(seq_len_per_chip, E, K, n_dev, dgs, cap)
         table = ExpertMapping.create_dispatch_table(E, dgs, ndg)
-        self.routing_setup = TtMoERoutingSetup(mesh_device, table, num_links=num_links, experts_per_chip=experts_per_chip)
+        self.routing_setup = TtMoERoutingSetup(
+            mesh_device, table, num_links=num_links, experts_per_chip=experts_per_chip
+        )
         self.tt_table = TtDispatchModule.shard_expert_dispatch_table(mesh_device, table, dispatch_axis=0)
         self.dispatch = TtDispatchModule(
-            mesh_device=mesh_device, dispatch_group_size=dgs, experts_per_chip=experts_per_chip, num_routed_experts=E,
-            num_experts_per_tok=K, metadata_len=metadata_len, max_dispatch_buffer_token_size=max_buf,
-            seq_len_per_chip=seq_len_per_chip, emb_dim=H, cluster_axis=0, num_links=num_links, topology=topology, subdevice_id=None,
+            mesh_device=mesh_device,
+            dispatch_group_size=dgs,
+            experts_per_chip=experts_per_chip,
+            num_routed_experts=E,
+            num_experts_per_tok=K,
+            metadata_len=metadata_len,
+            max_dispatch_buffer_token_size=max_buf,
+            seq_len_per_chip=seq_len_per_chip,
+            emb_dim=H,
+            cluster_axis=0,
+            num_links=num_links,
+            topology=topology,
+            subdevice_id=None,
         )
         self.combine = TtCombineModule(
-            mesh_device=mesh_device, dispatch_group_size=dgs, num_dispatch_groups=ndg, experts_per_chip=experts_per_chip,
-            num_experts_per_tok=K, seq_len_per_chip=seq_len_per_chip, cluster_axis=0, num_links=num_links, topology=topology, init_zeros=True,
+            mesh_device=mesh_device,
+            dispatch_group_size=dgs,
+            num_dispatch_groups=ndg,
+            experts_per_chip=experts_per_chip,
+            num_experts_per_tok=K,
+            seq_len_per_chip=seq_len_per_chip,
+            cluster_axis=0,
+            num_links=num_links,
+            topology=topology,
+            init_zeros=True,
         )
         gidx = ttnn.from_torch(
-            ExpertMapping.create_global_expert_idx_table(experts_per_chip=experts_per_chip, dispatch_group_size=dgs, num_dispatch_groups=ndg),
-            mesh_mapper=get_ep_mesh_mapper(mesh_device), layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.uint32,
+            ExpertMapping.create_global_expert_idx_table(
+                experts_per_chip=experts_per_chip, dispatch_group_size=dgs, num_dispatch_groups=ndg
+            ),
+            mesh_mapper=get_ep_mesh_mapper(mesh_device),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            dtype=ttnn.uint32,
         )
         gidx = ttnn.squeeze(ttnn.squeeze(gidx, 0), 0)
         # A complete expert cache loads without touching the torch weights (no gather / transpose / stack).
@@ -194,17 +281,30 @@ class TtMoE:
             init_checker(ec_dir)
             ec_hit = TtRoutedExpert.check_cache_complete(ec_dir, ec_prefix, experts_per_chip, weights_dtype)
         self.expert = TtRoutedExpert(
-            mesh_device=mesh_device, experts_per_chip=experts_per_chip, global_expert_idx_table=gidx, emb_dim=H, hidden_dim=I,
-            max_tokens=max_tok, torch_weights=None if ec_hit else prepare_expert_weights(sd, cfg), activations_dtype=ttnn.bfloat8_b,
-            weights_dtype=weights_dtype, activation=ttnn.RoutedExpertActivation.Silu,
-            weight_cache_path=ec_dir if ec_prefix else None, cache_name_prefix=ec_prefix,
+            mesh_device=mesh_device,
+            experts_per_chip=experts_per_chip,
+            global_expert_idx_table=gidx,
+            emb_dim=H,
+            hidden_dim=I,
+            max_tokens=max_tok,
+            torch_weights=None if ec_hit else prepare_expert_weights(sd, cfg),
+            activations_dtype=ttnn.bfloat8_b,
+            weights_dtype=weights_dtype,
+            activation=ttnn.RoutedExpertActivation.Silu,
+            weight_cache_path=ec_dir if ec_prefix else None,
+            cache_name_prefix=ec_prefix,
+            hybrid_token_threshold=routed_expert_hybrid_threshold(),
         )
-        self.reduce = TtReduceModule(mesh_device=mesh_device, topk_dim=3, cluster_axis=1, num_links=num_links, topology=topology)
+        self.reduce = TtReduceModule(
+            mesh_device=mesh_device, topk_dim=3, cluster_axis=1, num_links=num_links, topology=topology
+        )
 
     def __call__(self, x):
         """x [1,1,S,H] (post-attention-normed, replicated over TP) -> [1,1,S,H]."""
         idx, w = self.gate(x)
-        offsets, counts, regions, _ = self.routing_setup(ttnn_top_k_experts_indices=idx, num_routed_experts=self.E, num_experts_per_tok=self.K)
+        offsets, counts, regions, _ = self.routing_setup(
+            ttnn_top_k_experts_indices=idx, num_routed_experts=self.E, num_experts_per_tok=self.K
+        )
         S = x.shape[2]
         idx = ttnn.reshape(idx, (1, S, self.K))
         w = ttnn.reshape(ttnn.to_layout(w, ttnn.ROW_MAJOR_LAYOUT), (1, S, self.K))
@@ -217,7 +317,9 @@ class TtMoE:
         comb = self.combine(y, meta, counts, regions, seq_len_per_chip=S)
         w = ttnn.to_memory_config(w, ttnn.DRAM_MEMORY_CONFIG)
         idx = ttnn.to_memory_config(idx, ttnn.DRAM_MEMORY_CONFIG)
-        out = self.reduce(comb, weights=w, indices=idx, expert_dispatch_table=self.tt_table)  # [1,S,H/tp] reduce-scattered over TP
+        out = self.reduce(
+            comb, weights=w, indices=idx, expert_dispatch_table=self.tt_table
+        )  # [1,S,H/tp] reduce-scattered over TP
         out = ttnn.unsqueeze(ttnn.squeeze(out, 0), 0) if len(out.shape) == 4 else ttnn.unsqueeze(out, 0)
         if self.mesh_device.shape[1] > 1 and out.shape[-1] < self.H:
             out = ttnn.all_gather(out, dim=-1, cluster_axis=1, topology=ttnn.Topology.Linear)
