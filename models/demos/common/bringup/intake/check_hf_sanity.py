@@ -52,10 +52,13 @@ def load_model(spec):
     ).eval()
 
 
-def smoke(model, tok, prompt_text: str, n: int = 24) -> str:
+def smoke(model, tok, prompt_text: str, n: int = 24, template_kwargs: dict | None = None) -> str:
     if hasattr(tok, "apply_chat_template") and getattr(tok, "chat_template", None):
         text = tok.apply_chat_template(
-            [{"role": "user", "content": prompt_text}], add_generation_prompt=True, tokenize=False
+            [{"role": "user", "content": prompt_text}],
+            add_generation_prompt=True,
+            tokenize=False,
+            **(template_kwargs or {}),
         )
     else:
         text = prompt_text
@@ -92,7 +95,7 @@ def main(argv=None):
     model = load_model(spec)
     sm = spec.get("intake.smoke")
     if sm:
-        answer = smoke(model, tok, sm["prompt"])
+        answer = smoke(model, tok, sm["prompt"], template_kwargs=prompt.template_kwargs(spec))
         ok = sm["expect"].lower() in answer.lower()
         print(f"smoke: {sm['prompt']!r} -> {answer!r} (expect {sm['expect']!r}): {'ok' if ok else 'FAIL'}")
         metrics.record("smoke_ok", int(ok))
