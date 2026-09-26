@@ -484,16 +484,56 @@ def _run_container(args, state: dict, slug: str, demo_dir, commit: str | None) -
     if rc != 0:
         print(f"  [publish-hf] tt-model package failed (rc={rc}).")
         return 4
-    staged = str(Path(out) / slug)
-    push = [ttm, "push", staged]
-    if getattr(args, "public", False):
-        push.append("--public")
-    if getattr(args, "publish", False):
-        push.append("--publish")
-    print(f"  [publish-hf] pushing: {' '.join(push)}")
-    rc = subprocess.run(push).returncode
-    if rc != 0:
-        print(f"  [publish-hf] tt-model push failed (rc={rc}).")
+    staged = Path(out) / slug
+    if not staged.is_dir():
+        # tt-model may name the staged dir after the manifest name; fall back to the newest under --out
+        subs = [p for p in Path(out).iterdir() if p.is_dir()] if Path(out).is_dir() else []
+        if subs:
+            staged = max(subs, key=lambda p: p.stat().st_mtime)
+    # Upload the built bundle OURSELVES (create_repo + upload_large_folder) rather than `tt-model push`:
+    # tt-model's push depends on a huggingface_hub version whose folder-upload API drifts between
+    # releases, so doing it in-process with this interpreter's hub keeps the whole flow one automated
+    # button press. Same repo id every time → updates the one page.
+    print(f"  [publish-hf] uploading built bundle from {staged} → {args.repo}")
+    try:
+        from huggingface_hub import HfApi
+    except Exception:
+        print("  [publish-hf] huggingface_hub not available to upload the bundle " "(pip install huggingface_hub).")
+        return 4
+    token = getattr(args, "token", None) or os.environ.get("HF_TOKEN")
+    if not token:
+        for p in ("~/.cache/huggingface/token", "~/.huggingface/token"):
+            fp = Path(p).expanduser()
+            if fp.is_file() and fp.read_text().strip():
+                token = fp.read_text().strip()
+                break
+    try:
+        api = HfApi(token=token)
+        api.create_repo(
+            args.repo,
+            repo_type="model",
+            private=not (getattr(args, "public", False) or getattr(args, "publish", False)),
+            exist_ok=True,
+        )
+        up = getattr(api, "upload_large_folder", None)
+        if callable(up):
+            up(repo_id=args.repo, folder_path=str(staged), repo_type="model")
+        else:
+            api.upload_folder(
+                repo_id=args.repo,
+                folder_path=str(staged),
+                repo_type="model",
+                commit_message=f"Publish {slug} container bundle (tt_hw_planner)",
+            )
+    except Exception as e:
+        low = str(e).lower()
+        if "401" in str(e) or "unauthorized" in low or "invalid username or password" in low:
+            print(
+                "  [publish-hf] upload rejected (401): set a Hugging Face WRITE token for the "
+                "target org (Auth section / HF_TOKEN)."
+            )
+        else:
+            print(f"  [publish-hf] upload failed: {e}")
         return 4
     print(f"  [publish-hf] published container bundle: https://huggingface.co/{args.repo}")
     return 0
