@@ -850,6 +850,13 @@ tasks:
     - post_moe_norm
     - ffn_combine
     layer: 0
+  frozen:
+    at: '2026-09-26T01:31:25'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_12_ffn_combine.py: 5bf01431c64d45f6e7872c482ff16b6f24ce1eb9a34d9a115617539965860b23
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
 - id: C.sliding.post_ffn_norm
   title: sliding post_ffn_norm (norm) on device, layer 0
   step: implement
