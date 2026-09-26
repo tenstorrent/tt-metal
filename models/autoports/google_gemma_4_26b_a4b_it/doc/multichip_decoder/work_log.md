@@ -114,3 +114,20 @@ The review verified numerical summaries, diagnostic windows, memory arithmetic
 and provenance. No additional arithmetic defect was demonstrated. These gates
 remain work after the separately scoped fabric repair; AutoFix's failed scoped
 workaround is the stopping condition for this attempt, not the review verdict.
+
+## Authorized fabric teardown repair
+
+The separately authorized infrastructure investigation confirmed that all
+post-failure board resets and four-device `tt-smi -ls --local` checks had
+completed with exit 0. A fresh list also showed all four p300c devices before
+the repair. After a deliberate short pause, the router teardown was changed to
+fully drain NoC work and clear the current ERISC's packet tags before the final
+two-ERISC rendezvous and termination publication.
+
+All applicable pre-commit hooks pass. The previously failing model-free
+Watcher control now passes BF16 and FP32 reduce-scatter and exits 0. The
+original EP Watcher probe passes all 16 comparisons, prints `EP_PROBE_PASS`,
+and exits 0 with normal driver shutdown; minimum local PCC is 0.9994366683.
+Full analysis, upstream comparison, rejected bypasses, commands, and remaining
+gates are in `FABRIC_TEARDOWN_INCIDENT.md`. Stage work resumes from this point;
+these focused results do not claim stage completion.

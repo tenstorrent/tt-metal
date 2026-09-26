@@ -1,10 +1,14 @@
-# Gemma4 multichip decoder — blocked attempt
+# Gemma4 multichip decoder — resumed attempt
 
 Stage 04 for `google/gemma-4-26B-A4B-it` starts from the completed
 [optimized decoder](../optimized_decoder/README.md). The TP4 candidate in
 [`multichip_decoder.py`](../../tt/multichip_decoder.py) runs on all four connected
-Blackhole ASICs as a 1x4 FABRIC_1D mesh. It is **not stage-complete**. AutoFix exhausted the source-supported model-scoped
-workaround for a fabric teardown failure; see [AUTOFIX_watcher.md](AUTOFIX_watcher.md).
+Blackhole ASICs as a 1x4 FABRIC_1D mesh. It is **not stage-complete**. AutoFix
+exhausted the source-supported model-scoped workaround for a fabric teardown
+failure. A separately authorized TT-Metal router cleanup now passes the
+model-free and EP Watcher reproducers; see
+[FABRIC_TEARDOWN_INCIDENT.md](FABRIC_TEARDOWN_INCIDENT.md). The remaining
+model, capability, performance, and review gates still belong to this stage.
 
 [Mesh plan](mesh_plan.md), [context contract](../context_contract.json),
 [memory plan](memory_capacity_plan.json), and [work log](work_log.md) record the
@@ -73,14 +77,16 @@ These are warmed **host-wall** timings. EP improves prefill but loses decode;
 no final topology winner or best-possible performance claim is made. A dual
 EP-prefill/TP-decode layout is only a memory-planned future candidate.
 
-All-check Watcher fails after correct work. A model-free reduce-scatter control
-also fails during Ethernet teardown; the supported single-ERISC fallback does
-not fix it. Firmware 19.9.0 exceeds the diagnostic minimum 18.10.0.
+The original all-check Watcher failed after correct work. A model-free
+reduce-scatter control also failed during Ethernet teardown; the supported
+single-ERISC fallback did not fix it. Firmware 19.9.0 exceeds the diagnostic
+minimum 18.10.0.
 [AUTOTRIAGE_watcher.md](AUTOTRIAGE_watcher.md) and
 [AUTOFIX_watcher.md](AUTOFIX_watcher.md) distinguish the observed tag assertion
-from the controls' subsequent heartbeat timeouts. This is not waived as a false
-positive. The source-supported repair belongs to C++ fabric teardown, outside
-this goal's model/tests/docs scope. No infrastructure code was changed.
+from the controls' subsequent heartbeat timeouts. This was not waived as a
+false positive. The separately authorized repair adds the missing full drain
+and packet-tag clear to C++ router teardown. The same model-free control and
+original EP probe now exit 0 with Watcher fully enabled.
 
 After both failures, bounded reset/list passed; the final normal four-chip
 fabric mesh smoke exited 0. Device health recovery does not clear the Watcher
@@ -96,6 +102,7 @@ open. No advertised capability was reduced. The telemetry packet at
 cd88dda8-3baa-459f-9ff7-6beb4847565d.json` records actual accuracy and leaves
 missing target device performance unknown. No full-model/vLLM work or push.
 
-Independent [stage review](stage_review.md) returned **more-work-needed**.
+The pre-repair independent [stage review](stage_review.md) returned
+**more-work-needed**.
 Local blocked-attempt checkpoint: `41a8c80072c3ce2f0480cd4bbfbefeccfedc8ddc`.
 This preserves the work and does not satisfy the completion-commit gate.

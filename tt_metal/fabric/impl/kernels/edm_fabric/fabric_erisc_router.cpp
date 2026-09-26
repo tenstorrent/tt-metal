@@ -2943,11 +2943,16 @@ __attribute__((optimize("Os"))) void teardown(
         }
     }
 
-    // write barrier should be coordinated for dynamic noc mode. Safest is probably to do a `wait_for_other_local_erisc`
-    // followed by master core doing barrier
+    // Drain every NoC transaction issued by this ERISC before handing the core back to firmware. The active-ERISC
+    // firmware requires write-capable command-buffer packet tags to be zero between kernels. Fabric routing uses
+    // explicit transaction IDs, so leaving those tags programmed makes Watcher stop the subordinate ERISC at the
+    // handoff even when all payloads and acknowledgements completed successfully.
+    //
+    // The barrier and tag clear are per ERISC. The following local-ERISC rendezvous prevents the teardown master from
+    // publishing TERMINATED until both router halves have reached a clean handoff state.
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Update here when enabling dynamic noc mode");
-    noc_async_write_barrier();
-    noc_async_atomic_barrier();
+    noc_async_full_barrier();
+    noc_clear_packet_tags(NOC_INDEX);
 
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         wait_for_other_local_erisc();

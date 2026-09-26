@@ -42,3 +42,22 @@
 **Infrastructure blocker remains; no fix accepted.** The model-free control reproduced the teardown failure, the supported scoped fallback failed, and installed firmware exceeds the generic diagnostic's minimum. No further bounded model-scoped remedy has source or experiment support. Preserve numerical EP/full-decoder evidence independently; clean Watcher acceptance and final optimization acceptance remain open.
 
 The next useful change is an authorized infrastructure repair that clears router-owned write-capable packet tags after draining and coordinating sibling ERISCs. It must be compiled and verified with the minimal CCL control, original EP command and required full-decoder Watcher checks. Do not claim that proposed repair is proven until those pass with normal process shutdown.
+
+## Post-stage authorized infrastructure repair
+
+The user subsequently authorized work outside the original model-only stage
+scope. `fabric_erisc_router.cpp` now performs a full NoC barrier and clears the
+current ERISC's packet tags before the final sibling rendezvous and
+`TERMINATED` publication. This mirrors the handoff contract already used by
+the fabric mux without disabling Watcher or skipping shutdown.
+
+The exact model-free BF16/FP32 reduce-scatter control that previously aborted
+now exits 0, including normal Watcher stop and device-driver close. The original
+EP Watcher probe also completes all 16 comparisons, prints `EP_PROBE_PASS`, and
+exits 0. Evidence and the complete causal analysis are in
+`FABRIC_TEARDOWN_INCIDENT.md`, `ccl_watcher_router_fix/`,
+`ep_watcher_router_fix/`, and `ep_watcher_router_fix.json`.
+
+This resolves the recorded infrastructure blocker. It does not retroactively
+turn the earlier stage review into a clean pass or satisfy the remaining
+maximum-context, stack, final-selection, profiling, and review gates.
