@@ -443,7 +443,9 @@ ttnn::Tensor repeat_native(
     // nothing to do!
     if (std::all_of(
             working_repetition_vector.cbegin(), working_repetition_vector.cend(), [](auto x) { return x == 1; })) {
-        return finalize_into_preallocated(input_tensor, optional_output_tensor);
+        // working_tensor holds the rank expansion from match_input_rank. input_tensor does not.
+        return finalize_into_preallocated(
+            ttnn::to_memory_config(working_tensor, output_mem_config), optional_output_tensor);
     }
 
     // Direct prim write only when no later layout/reshard hop will reallocate.
