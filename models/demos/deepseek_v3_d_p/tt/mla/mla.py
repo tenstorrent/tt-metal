@@ -692,20 +692,41 @@ class ttMLA:
 
     @staticmethod
     def kv_cache_to_host(kvpe_cache: MlaKvCache, mesh_device: ttnn.MeshDevice, sp_axis: int = 0):
-        """Read and decode the logical KVPE cache in natural SP order."""
-        host = ttnn.to_torch(
-            kvpe_cache.storage,
-            mesh_composer=ttnn.create_mesh_composer(
-                mesh_device,
-                config=ttnn.MeshComposerConfig(
-                    dims=(2, -1),
-                    mesh_shape_override=ttnn.MeshShape(
-                        mesh_device.shape[sp_axis],  # concat SP shards
-                        1,  # collapse TP replicas
+        """Read and decode the logical KVPE cache in natural sequence order.
+
+        Which reassembly applies is read off the cache's OWN declared distribution rather than passed in,
+        because that is what the writer and the gathers key on too: init_kvpe_cache stamps a rank-2 dim-2
+        sharding when the rows are striped over every mesh coordinate (KV dedup via tp_axis, or full_mesh
+        -- the same striping by two names) and a rank-1 Replicate otherwise. Under the rank-2 topology the
+        second axis holds DISTINCT rows, so collapsing it as a replica would return seq_len/tp of the cache.
+        """
+        storage = kvpe_cache.storage
+        if len(list(storage.tensor_topology().distribution_shape())) == 2:
+            n0, n1 = mesh_device.shape[0], mesh_device.shape[1]
+            sharded = ttnn.to_torch(
+                storage,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
+            )  # [slots, n1, n0 * rows_per_chip, width]
+            rows = sharded.shape[2] // n0
+            # Row-major chip order (axis 0 outer), matching the coordinate order init_kvpe_cache declares.
+            host = torch.cat(
+                [sharded[:, a1 : a1 + 1, a0 * rows : (a0 + 1) * rows] for a0 in range(n0) for a1 in range(n1)],
+                dim=2,
+            )
+        else:
+            host = ttnn.to_torch(
+                storage,
+                mesh_composer=ttnn.create_mesh_composer(
+                    mesh_device,
+                    config=ttnn.MeshComposerConfig(
+                        dims=(2, -1),
+                        mesh_shape_override=ttnn.MeshShape(
+                            mesh_device.shape[sp_axis],  # concat SP shards
+                            1,  # collapse TP replicas
+                        ),
                     ),
                 ),
-            ),
-        )
+            )
         return kvpe_cache.unpack_host(host)
 
     def get_weight_shapes(self) -> dict[str, tuple]:
@@ -1497,6 +1518,7 @@ class ttMLA:
         indexer_indices: Optional[ttnn.Tensor] = None,
         return_indexer_indices: bool = False,
         metadata: Optional[ttnn.Tensor] = None,
+        force_kv_only: bool = False,
     ) -> "ttnn.Tensor | tuple[ttnn.Tensor, Optional[dict]]":
         # Trace-safe metadata path: a 3-tuple of 1-element uint32 DRAM tensors (slot_id, actual_start,
         # actual_end) passed in from outside. When provided, the chunked-prefill ops (update_padded_kv_cache,
@@ -1514,7 +1536,7 @@ class ttMLA:
         if kvpe_cache.geometry != self.kv_cache_geometry:
             raise ValueError(f"MLA configured for KV geometry {self.kv_cache_geometry}, got {kvpe_cache.geometry}")
 
-        if self.kv_only:
+        if self.kv_only or force_kv_only:
             return self._forward_kv_only(
                 hidden_states,
                 rope_tensors,
@@ -1524,6 +1546,7 @@ class ttMLA:
                 actual_end=actual_end,
                 cache_user_id=cache_user_id,
                 index_kv_cache=index_kv_cache,
+                indexer_indices=indexer_indices,
                 metadata=metadata,
             )
 
@@ -1928,6 +1951,7 @@ class ttMLA:
         index_kv_cache: Optional[ttnn.Tensor],
         actual_end: Optional[int] = None,
         metadata: Optional[ttnn.Tensor] = None,
+        indexer_indices: Optional[ttnn.Tensor] = None,
     ) -> None:
         """Last-layer fast path: fill the migratable KVPE cache, then stop before query/attention/output.
 
@@ -1940,8 +1964,7 @@ class ttMLA:
 
         # Sparse decode needs the index key cache for every full-indexer layer even though this fast path
         # skips query construction and scoring. Shared-indexer layers reuse a prior layer's selection and
-        # intentionally own no indexer weights/cache write.
-        if self._has_indexer and not self._indexer_reuse:
+        if self._has_indexer and not self._indexer_reuse and indexer_indices is None:
             assert index_kv_cache is not None, "sparse kv_only requires the caller-owned index key cache"
             self._indexer.write_k(
                 hidden_states,

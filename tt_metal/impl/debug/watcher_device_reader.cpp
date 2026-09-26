@@ -1172,11 +1172,11 @@ void WatcherDeviceReader::Core::DumpSyncRegs() const {
 
     if (hal.has_stream_registers()) {
         uint32_t operand_start_stream = hal.get_operand_start_stream();
-        uint32_t max_cbs = hal.get_arch_num_circular_buffers();
+        uint32_t max_dfbs = hal.get_num_dataflow_buffers();
 
         // Read back all of the stream state, most of it is unused
         std::vector<uint32_t> data;
-        for (uint32_t operand = 0; operand < max_cbs; operand++) {
+        for (uint32_t operand = 0; operand < max_dfbs; operand++) {
             uint32_t base = hal.get_noc_overlay_start_addr() +
                             ((operand_start_stream + operand) * hal.get_noc_stream_reg_space_size());
 

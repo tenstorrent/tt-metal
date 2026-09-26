@@ -44,7 +44,9 @@ golden digests are designed to stand in when the diffusers branch is absent, and
 ## Running the transformer tests with real weights
 
 `MINIMAX_H3_MODEL_PATH` points at a MiniMax-H3 diffusers snapshot (the transformer tests read its
-`transformer/` partition). Without it, the real-weights cases skip and the rest still run.
+`transformer/` partition). Without it, the real-weights cases skip and the rest still run -- or set
+`TT_DIT_ALLOW_HF_DOWNLOAD=1` to fetch the partition instead of skipping (see [Getting the
+weights](#getting-the-weights)).
 
 ```bash
 export MINIMAX_H3_MODEL_PATH=/path/to/MiniMax-H3-diffusers
@@ -192,13 +194,43 @@ uv pip install --python <venv>/bin/python --no-deps \
 environment that `ttnn` was built against. The pinned commit's dependencies are already satisfied by
 an environment that had any recent `diffusers` installed. Re-check `import ttnn` after installing.
 
+### Getting the weights
+
+The tests read a diffusers snapshot of [`MiniMaxAI/MiniMax-H3`](https://huggingface.co/MiniMaxAI/MiniMax-H3).
+Either point `MINIMAX_H3_MODEL_PATH` at one you already have, or let the resolver fetch it:
+
+```bash
+export TT_DIT_ALLOW_HF_DOWNLOAD=1      # opt in once; unset, a missing snapshot just skips
+```
+
+`resolve_weights_dir` (`pipelines/minimax_h3/weights_minimax_h3.py`) tries `MINIMAX_H3_MODEL_PATH`,
+then the HuggingFace cache, then a download -- the same order, and the same
+`TT_DIT_ALLOW_HF_DOWNLOAD=1` opt-in, as the lightx2v loader. With the variable unset an absent
+snapshot still skips rather than pulling 144 GB mid-run.
+
+Only the partitions a test asks for are fetched, so the download is incremental and the repo's
+top-level `FL2VA/` and `Ref2VA/` trees -- self-contained original-format bundles that duplicate the
+root partitions and are never read here -- are skipped:
+
+| Partition | Size | Needed by |
+| --- | --- | --- |
+| `text_encoder/` | 66.7 GB | everything (Qwen3-VL conditioner) |
+| `transformer/` | 66.3 GB | `t2va`, `fl2va` |
+| `transformer_ref/` | 66.3 GB | `ref2va` only |
+| `vae/` | 10.4 GB | everything |
+| `audio_vae/` | 0.6 GB | everything |
+| `tokenizer/`, `processor/`, `scheduler/`, `audio_scheduler/` | ~20 MB | always fetched |
+
+That is ~144 GB for `t2va` / `fl2va` and ~210 GB with `ref2va`, against 498 GB for the whole repo.
+Set `HF_TOKEN` for higher rate limits and faster downloads, and `HF_HOME` to move the cache off `~`.
+
 ## Running `t2va` end to end
 
 One command, prompt in and an mp4 with a soundtrack out, at the production working point
 (1344x768, 124 frames @ 24 fps, 50 scheduler steps -> 49 forwards):
 
 ```bash
-export MINIMAX_H3_MODEL_PATH=/path/to/MiniMax-H3-diffusers
+export MINIMAX_H3_MODEL_PATH=/path/to/MiniMax-H3-diffusers   # or TT_DIT_ALLOW_HF_DOWNLOAD=1
 export TT_DIT_CACHE_DIR=~/tt_dit_cache        # see the warning below
 scripts/run_safe_pytest.sh models/tt_dit/tests/models/minimax_h3/test_pipeline_minimax_h3.py
 ```
@@ -214,7 +246,7 @@ Same command shape, plus a keyframe. `image=` is `fl2va`, `last_image=` is `fl2v
 both together anchors each end of the clip:
 
 ```bash
-export MINIMAX_H3_MODEL_PATH=/path/to/MiniMax-H3-diffusers
+export MINIMAX_H3_MODEL_PATH=/path/to/MiniMax-H3-diffusers   # or TT_DIT_ALLOW_HF_DOWNLOAD=1
 export TT_DIT_CACHE_DIR=~/tt_dit_cache
 scripts/run_safe_pytest.sh models/tt_dit/tests/models/minimax_h3/test_pipeline_fl2va_minimax_h3.py
 ```

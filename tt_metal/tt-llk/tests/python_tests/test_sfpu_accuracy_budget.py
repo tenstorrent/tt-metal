@@ -4,7 +4,7 @@
 """Host-side guards for the SFPU accuracy budget registry.
 
 No kernel, no device: a table and a resolution rule. Both need guarding, because the rule
-reduces a four-dimensional lookup to "most specific key wins" and a budget resolved from
+reduces a five-dimensional lookup to "most specific key wins" and a budget resolved from
 the wrong key is a silently wrong gate, not an error -- and because a *widened* budget is
 invisible to every device test, which it makes pass.
 
@@ -33,10 +33,11 @@ from helpers.sfpu_accuracy_budget import (
     _load_table,
     accuracy_contract,
     resolve_contract,
+    usable_budget_ceiling,
     validate_registry,
 )
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
-from helpers.ulp import ULP_FORMATS
+from helpers.ulp import MAX_MEANINGFUL_ULP, ULP_FORMATS, ulp_dtype
 from helpers.utils import passed_test
 
 TILE_SIZE = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
@@ -177,6 +178,7 @@ def test_the_default_key_matches_every_variant():
     assert DEFAULT.matches(
         BudgetKey(
             approx_mode=ApproximationMode.Yes,
+            input_format=DataFormat.Float32,
             output_format=DataFormat.Float32,
             dest_acc=DestAccumulation.No,
             arch=ChipArchitecture.WORMHOLE,
@@ -241,6 +243,7 @@ def test_a_key_describes_itself_for_an_error_message():
     "field, bogus",
     [
         ("approx_mode", True),
+        ("input_format", "Float32"),
         ("output_format", "Float32"),
         ("dest_acc", True),
         ("dest_acc", False),
@@ -266,6 +269,7 @@ def test_every_budget_key_field_is_guarded():
     # ...and the declared member of each really is accepted.
     assert BudgetKey(
         approx_mode=ApproximationMode.No,
+        input_format=DataFormat.Float16_b,
         output_format=DataFormat.Float32,
         dest_acc=DestAccumulation.Yes,
         arch=ChipArchitecture.WORMHOLE,
@@ -282,13 +286,22 @@ def test_the_registry_resolves_unambiguously_for_every_variant():
 
 
 def test_an_unenrolled_op_keeps_todays_gate():
-    """Enrolment is incremental: nothing changes for an op until it is in the table."""
-    assert MathOperation.Exp not in _SFPU_ACCURACY_BUDGET
-    for fmt in ULP_FORMATS:
-        assert (
-            accuracy_contract(MathOperation.Exp, output_format=fmt, arch=MEASURED_ARCH)
-            is TOLERANCE_CONTRACT
-        )
+    """Enrolment is incremental: nothing changes for an op until it is in the table.
+
+    The op is picked from whatever is still unenrolled rather than named, so enrolling
+    another one later does not turn this into a false failure -- which is exactly what it
+    did when the transcendentals landed and it still named ``Exp``.
+    """
+    unenrolled = sorted(
+        set(MathOperation) - set(_SFPU_ACCURACY_BUDGET), key=lambda op: op.name
+    )
+    assert unenrolled, "every op is enrolled; this test has nothing left to check"
+    for op in unenrolled[:5]:
+        for fmt in ULP_FORMATS:
+            assert (
+                accuracy_contract(op, output_format=fmt, arch=MEASURED_ARCH)
+                is TOLERANCE_CONTRACT
+            ), f"{op.name} is unenrolled but resolves to something other than tolerance"
 
 
 @pytest.mark.parametrize(
@@ -298,9 +311,14 @@ def test_an_unenrolled_op_keeps_todays_gate():
     "op", [MathOperation.SigmoidAppx, MathOperation.GeluAppx], ids=lambda o: o.name
 )
 def test_a_declared_tolerance_survives_an_unswept_architecture(op, arch):
-    """A declared *tolerance* is not a Wormhole measurement, so the arch gate must not
-    take it: downgrading before the lookup would drop SigmoidAppx's and GeluAppx's
-    atol=0.13 everywhere but Wormhole, back to the default those numbers exist to widen.
+    """The arch gate exists to stop *WH-measured step budgets* binding elsewhere. It must
+    not take a declared tolerance with it.
+
+    These two carry ``atol=0.13`` because a coarse 3-segment LUT peaks near its knees --
+    the number they had as ``CUSTOM_TOLERANCES``, which applied on every architecture.
+    Returning the tolerance contract before the registry lookup dropped them back to the
+    default ``atol=0.05`` on Blackhole and Quasar, which is the gate that number exists to
+    widen. Resolving first and downgrading only a ULP contract is what keeps both true.
     """
     contract = accuracy_contract(
         op,
@@ -370,6 +388,15 @@ def test_a_ulp_row_that_names_its_arch_binds_there(arch, monkeypatch):
                 accuracy_contract(op, output_format=DataFormat.Float16_b, arch=other)
                 is TOLERANCE_CONTRACT
             )
+
+
+def test_the_usable_ceiling_is_tighter_than_the_meaningful_one():
+    """Why the emitter's guard moved off ``MAX_MEANINGFUL_ULP``: the two are not close,
+    and the looser one admits budgets that gate nothing."""
+    for fmt in ULP_FORMATS:
+        meaningful = MAX_MEANINGFUL_ULP[ulp_dtype(fmt)]
+        assert usable_budget_ceiling(fmt) < meaningful, fmt.name
+    assert usable_budget_ceiling(DataFormat.Float16_b) == 6.4
 
 
 @pytest.mark.parametrize("enrolled", [False, True], ids=["unenrolled", "enrolled"])

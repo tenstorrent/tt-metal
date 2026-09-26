@@ -208,7 +208,7 @@ LayerNormInterleavedPlan LayerNormMultiCoreProgramFactory::select_plan(
         },
         operation_attributes.program_config);
 
-    IDevice* device = input.device();
+    MeshDevice* device = input.device();
     const auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
     const std::uint32_t tile_height = input.tensor_spec().tile().get_height();
@@ -257,7 +257,7 @@ LayerNormInterleavedPlan LayerNormMultiCoreProgramFactory::select_plan(
     const std::uint32_t residual_tile_size =
         residual.has_value() ? tt::tile_size(datatype_to_dataformat_converter(residual->dtype())) : 0;
 
-    const CoreRangeSet requested_cores = core_range_set.value_or(default_core_range(device));
+    const CoreRangeSet requested_cores = core_range_set.value_or(default_core_range(*device));
     const auto [num_cores, all_cores, core_group_1, core_group_2, rows_per_core_group_1, rows_per_core_group_2] =
         split_work_to_cores(requested_cores, num_tile_rows, true);
 
@@ -465,7 +465,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     //                       Device Setup
     //////////////////////////////////////////////////////////////////////////
     // This should allocate a DRAM buffer on the device
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
 
     ////////////////////////////////////////////////////////////////////////////
     //                Dataflow Buffer Data Format Setup
@@ -524,7 +524,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     uint32_t num_tile_rows = NC * Ht;
 
     // The caller may restrict the program to a subset of the grid; otherwise take the whole of it.
-    CoreRangeSet requested_cores = core_range_set.has_value() ? core_range_set.value() : default_core_range(device);
+    CoreRangeSet requested_cores = core_range_set.has_value() ? core_range_set.value() : default_core_range(*device);
 
     // Use split_work_to_cores to properly distribute tile rows across available cores
     auto
@@ -873,7 +873,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
         // two legacy tile readers, so the schema carries the host's own name for it rather than
         // either kernel's local reading of it.
         .runtime_arg_schema = {.runtime_arg_names = {"NCHt", "Wt", "reader_start", "eps"}},
-        .hw_config = create_reader_datamovement_config(device->arch()),
+        .hw_config = create_reader_datamovement_config(),
     };
     if (input_is_row_major) {
         // Element size of the input tensor, for the row-major reader's address stride arithmetic.
@@ -996,7 +996,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
         // writer_start is a tile-row index for the row-major writer and a flat tile offset for
         // the tile writer, so the schema carries the host's own name for it.
         .runtime_arg_schema = {.runtime_arg_names = {"Wt", "num_tile_rows", "writer_start"}},
-        .hw_config = create_writer_datamovement_config(device->arch()),
+        .hw_config = create_writer_datamovement_config(),
     };
     if (input_is_row_major) {
         // The RM writer needs elem_size to compute per-row NOC write sizes.
@@ -1023,7 +1023,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
                                             : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/"
                                               "compute/layernorm.cpp");
 
-    auto compute_hw = to_compute_hardware_config(device->arch(), compute_kernel_config);
+    auto compute_hw = to_compute_hardware_config(compute_kernel_config);
 
     m2::KernelSpec compute{
         .unique_id = COMPUTE,
@@ -1187,7 +1187,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     // stay legal but become slower than they need to be. They want revisiting before this op
     // targets Gen2.
     {
-        auto& modes = m2::unpack_modes(std::get<m2::ComputeHardwareConfig>(compute.hw_config));
+        auto& modes = std::get<m2::ComputeHardwareConfig>(compute.hw_config).unpack_modes;
         std::vector<m2::DFBSpecName> unpack_to_dest;
         // Each entry is gated on the same condition as its binding: an entry naming a buffer the
         // kernel does not bind is rejected, and legacy set this one from float32_reduction alone,
@@ -1382,8 +1382,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     };
 }
 
-CoreRangeSet LayerNormMultiCoreProgramFactory::default_core_range(IDevice* device) {
-    auto grid_size = device->compute_with_storage_grid_size();
+CoreRangeSet LayerNormMultiCoreProgramFactory::default_core_range(const MeshDevice& device) {
+    auto grid_size = device.compute_with_storage_grid_size();
     return CoreRangeSet({CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1})});
 }
 

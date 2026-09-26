@@ -107,16 +107,13 @@ def use_int32_twos_complement(
     unchanged. Sign-magnitude stimuli would hide the SUM bug where ``INT32_2S_COMP`` corrupts
     negatives, so SUM operands are two's-complement too (for both row and column SUM).
 
-    AVG loads with plain ``INT32`` too on Wormhole, where its divide-by-32 works on the two's-complement
-    sum, so it is two's-complement there. Blackhole's AVG still loads with ``INT32_2S_COMP`` and so keeps
-    sign-magnitude stimuli.
+    AVG loads with plain ``INT32`` too, and its divide-by-32 works on the two's-complement sum, so it is
+    two's-complement on both arches.
     """
     if formats.input_format != DataFormat.Int32:
         return False
-    if reduce_pool == ReducePool.Sum:
+    if reduce_pool in (ReducePool.Sum, ReducePool.Average):
         return True
-    if reduce_pool == ReducePool.Average:
-        return TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
     if reduce_pool in (ReducePool.Max, ReducePool.Min):
         # Both column and row MAX/MIN take two's-complement (row MAX now matches the column path so
         # the chained multi-axis reduce is consistent).
@@ -1047,14 +1044,6 @@ def test_uint32_reduce_column_average_bit31(band):
     """
     if TestConfig.WITH_COVERAGE:
         pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1040")
-
-    # Blackhole's ckernel_sfpu_reduce.h carries the identical defect (#57509 item 2), fixed in
-    # tenstorrent/tt-metal#57661. That PR removes this skip.
-    if TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE:
-        pytest.skip(
-            reason="Blackhole has the same unsigned-average defect; fixed separately in "
-            "https://github.com/tenstorrent/tt-metal/pull/57661"
-        )
 
     column_sums, golden, res = _run_uint32_column_average(_UINT32_AVERAGE_BANDS[band])
 

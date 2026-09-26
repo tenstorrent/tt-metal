@@ -8,6 +8,7 @@
 #include <boost/move/utility_core.hpp>
 #include <fmt/format.h>
 #include <mesh_coord.hpp>
+#include "distributed/mesh_coord_utils.hpp"
 #include <tt_stl/span.hpp>
 #include <algorithm>
 #include <cstddef>

@@ -18,7 +18,8 @@ frame of conditioning rows pinned at `t = 0.999` for every denoising step.
 What runs where
 ---------------
 The packed sequence holds all three modalities at once and is denoised by one 50-layer stack on
-the mesh (TP=4 on axis 0, SP on axis 1 -- 8 on a Galaxy, 32 on a quad; see `_PRESETS_BH`).
+the mesh (TP=4 on axis 0, SP on axis 1 -- 8 on a Galaxy, 32 on a quad; see `_PRESETS_BH` /
+`_PRESETS_WH`).
 Everything that decides *which* row gets which treatment is host-side and
 already gated bit-exact against the reference --- the layout, the fp64 rotary grid, the per-row
 timestep plan, both schedulers. That split is deliberate: those values are checkpoint contracts
@@ -58,6 +59,7 @@ from loguru import logger
 from PIL import Image, ImageOps
 
 import ttnn
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
 
 from ...encoders.qwen3vl.loader_minimax_h3 import (
     MINIMAX_H3_TEXT_ENCODER_LAYER,
@@ -100,6 +102,7 @@ from .packing import (
     build_packed_sequence,
     build_rope_tables,
     build_slot_routing,
+    padded_sequence_length,
     patchify_video_latents,
     prepare_keyframe_image,
     resolve_canvas_size,
@@ -128,6 +131,7 @@ from .policy import (
 )
 from .references import encode_references, prepare_references, reference_condition_shapes, split_condition_blocks
 from .scheduler import MiniMaxH3Scheduler
+from .weights_minimax_h3 import resolve_weights_dir
 
 # ImageNet statistics; the video VAE emits normalized RGB and the pipeline reverts it. Imported from
 # `conditioning` rather than restated: the keyframe path normalizes *into* the VAE with these and the
@@ -288,22 +292,66 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
     },
 }
 
+# Wormhole Galaxy. Same axes as Blackhole -- the shape arguments for TP=4 are architectural, not
+# per-chip -- but two things differ and both are memory, not parallelism:
+#
+#   * `coresident: False`. A Wormhole chip has 12 GB of DRAM against Blackhole's 32 GB, and the DiT
+#     alone fills it. Keeping the text encoder resident beside it (~1.6 GB/device) overflows by a
+#     couple of MB, so each stage is evicted before the next loads. The cost is a text-encoder
+#     reload per request, which is the trade the Residency note above describes.
+#   * `num_links: 4`, matching the 4 KB router payload the Wormhole Galaxy meshes open with.
+#
+# There is no (4, 32) entry: the quad is a Blackhole configuration.
+# TODO: Try to figure out how we can keep components of the the model coresident throughout generation
+# to improve perf. Easy target would be to keep the text encoder resident if possible, might save a
+# few seconds. This will matter when video gen is ~1 minute or so.
+_PRESETS_WH: dict[tuple[int, ...], dict] = {
+    (4, 8): {
+        "tp_axis": 0,
+        "sp_axis": 1,
+        "num_links": 4,
+        "topology": ttnn.Topology.Ring,
+        "coresident": False,
+        "dit_fsdp": True,
+    },
+}
+
+
+def _presets_for_this_arch() -> tuple[str, dict[tuple[int, ...], dict]]:
+    """`(architecture name, preset table)` for the silicon `ttnn` was opened on.
+
+    Matched exactly: Blackhole and Wormhole B0 are the two architectures MiniMax-H3 has been measured
+    on. Anything else (Quasar, a future part) is rejected here instead of falling through to one of
+    the tables, whose settings are tuned to that silicon's DRAM size and fabric.
+    """
+    if is_blackhole():
+        return "Blackhole", _PRESETS_BH
+    if is_wormhole_b0():
+        return "Wormhole", _PRESETS_WH
+    msg = (
+        f"MiniMax-H3 has mesh presets for Blackhole and Wormhole B0 only; this device reports "
+        f"architecture {ttnn.get_arch_name()!r}."
+    )
+    raise NotImplementedError(msg)
+
 
 def resolve_mesh_preset(mesh_shape: tuple[int, ...], *, required: bool = True) -> dict:
-    """The measured defaults for this mesh shape, or `{}` when unlisted and `required` is False.
+    """The measured defaults for this mesh shape on this architecture, or `{}` when unlisted and
+    `required` is False.
 
     An unlisted shape is only an error when something is left to the preset to fill in; a caller that
     passes every parallel setting explicitly is running an untuned shape deliberately.
     """
     shape = tuple(mesh_shape)
-    preset = _PRESETS_BH.get(shape)
+    arch, presets = _presets_for_this_arch()
+    preset = presets.get(shape)
     if preset is None:
         if not required:
             return {}
-        known = ", ".join(str(s) for s in _PRESETS_BH)
+        known = ", ".join(str(s) for s in presets)
         msg = (
-            f"no MiniMax-H3 preset for mesh shape {shape}; known shapes are {known}. Pass tp_axis, "
-            "sp_axis, num_links and topology explicitly to run an untuned shape."
+            f"no MiniMax-H3 preset for mesh shape {shape} on {arch}; known {arch} shapes are {known}. "
+            "Pass tp_axis, sp_axis, num_links and topology explicitly to run an untuned shape."
         )
         raise ValueError(msg)
     return preset
@@ -401,7 +449,7 @@ class MiniMaxH3Pipeline:
         task: str = "t2va",
         audio_split_mode: str = "full",
         audio_t_factor: int | None = None,
-        dit_fsdp: bool = False,
+        dit_fsdp: bool | None = None,
         trace_denoise: bool | None = None,
         bucket_denoise: bool | None = None,
         bucket_ladder: tuple[int, ...] | None = None,
@@ -535,7 +583,14 @@ class MiniMaxH3Pipeline:
         self._vision_config = None
         self._audio_decoder = None
         self._audio_encoder = None
-        self.dit_fsdp = dit_fsdp
+        # `None` takes the preset (Wormhole's 12 GB/chip needs the DiT sharded above 5 s; Blackhole does
+        # not), and MINIMAX_H3_DIT_FSDP=0/1 overrides both, like MINIMAX_H3_AUDIO_T_SHARD above.
+        self.dit_fsdp = preset.get("dit_fsdp", False) if dit_fsdp is None else dit_fsdp
+        env_dit_fsdp = os.environ.get("MINIMAX_H3_DIT_FSDP")
+        if env_dit_fsdp is not None:
+            if env_dit_fsdp not in ("0", "1"):
+                raise ValueError("MINIMAX_H3_DIT_FSDP must be '0' or '1'")
+            self.dit_fsdp = env_dit_fsdp == "1"
         self.last_seq_len: SeqLen | None = None
 
         self._host_log("building the Qwen3-VL text encoder")
@@ -596,7 +651,7 @@ class MiniMaxH3Pipeline:
         task: str = "t2va",
         audio_split_mode: str = "full",
         audio_t_factor: int | None = None,
-        dit_fsdp: bool = False,
+        dit_fsdp: bool | None = None,
         trace_denoise: bool | None = None,
         bucket_denoise: bool | None = None,
         bucket_ladder: tuple[int, ...] | None = None,
@@ -604,21 +659,24 @@ class MiniMaxH3Pipeline:
         vae_output_type: str = "yuv420",
         adaln_slot_roles: tuple[str, ...] | None = None,
         warmup: bool = True,
+        coresident: bool | None = None,
     ) -> "MiniMaxH3Pipeline":
         """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
 
-        The parallel configuration defaults to this mesh shape's entry in `_PRESETS_BH`; pass any of
+        The parallel configuration defaults to this mesh shape's entry in `_PRESETS_BH` / `_PRESETS_WH`; pass any of
         `tp_axis`/`sp_axis`/`num_links`/`topology` to override it.
 
         `trace_denoise` defaults to the mesh preset; `bucket_ladder`, `arena_caps` and `adaln_slot_roles`
         default to the task's envelope.
         """
-        weights_dir = weights_dir or os.environ.get("MINIMAX_H3_MODEL_PATH")
-        if not weights_dir:
-            raise ValueError(
-                "MiniMax-H3 weights directory not set: pass weights_dir=... or set MINIMAX_H3_MODEL_PATH "
-                "to a diffusers snapshot holding transformer/, text_encoder/, vae/ and audio_vae/."
-            )
+        transformer_subfolder = "transformer_ref" if task == "ref2va" else "transformer"
+        weights_dir = resolve_weights_dir(
+            transformer_subfolder,
+            "text_encoder",
+            "vae",
+            "audio_vae",
+            weights_dir=weights_dir,
+        )
         return cls(
             mesh_device=mesh_device,
             weights_dir=weights_dir,
@@ -637,6 +695,7 @@ class MiniMaxH3Pipeline:
             vae_output_type=vae_output_type,
             adaln_slot_roles=adaln_slot_roles,
             warmup=warmup,
+            coresident=coresident,
         )
 
     def _read_config(self, subfolder: str) -> dict:
@@ -2296,11 +2355,10 @@ class MiniMaxH3Pipeline:
         if over:
             raise ValueError(f"request exceeds the arena caps: {', '.join(over)} (see MiniMaxH3ArenaCaps)")
 
-        alignment = self.sp_factor * ttnn.TILE_SIZE
         if self.bucket_denoise:
             rung = self._select_bucket(layout.sequence_length)
         else:
-            rung = ((layout.sequence_length + alignment - 1) // alignment) * alignment
+            rung = padded_sequence_length(layout.sequence_length, self.sp_factor)
         self.last_seq_len = SeqLen(padded=rung, logical=layout.sequence_length)
         self._log(
             f"packed sequence {layout.sequence_length} -> bucket {rung}, "

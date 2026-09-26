@@ -200,7 +200,7 @@
 // Dedicated cached-only pool for DM_LOCAL_CACHED semaphores: whole 64B cache lines that
 // nothing on the NoC/uncached path ever writes, so a cached AMO's line write-back can never
 // clobber NoC-written data. 8B rows indexed by semaphore id: [0] = counter, [1] = the seed
-// protocol word for the generated entry/exit stubs.
+// protocol word for the firmware's cached-pool entry/exit.
 #define MEM_DM_CACHED_SEM_BASE (MEM_NOC_SEM_LOCK_BASE + MEM_NOC_SEM_LOCK_SIZE)
 #define MEM_DM_CACHED_SEM_ROW 8
 #define MEM_DM_CACHED_SEM_SIZE 128  // keep >= NUM_SEMAPHORES * MEM_DM_CACHED_SEM_ROW

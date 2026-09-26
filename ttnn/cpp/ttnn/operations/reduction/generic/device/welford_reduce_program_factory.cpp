@@ -13,7 +13,6 @@
 #include "welford_reduce_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <cstdint>
-#include <variant>
 
 namespace ttnn::prim {
 
@@ -158,7 +157,7 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     const auto is_std = plan.is_std;
     const auto post_mul_scaler_bits = plan.post_mul_scaler_bits;
 
-    tt_metal::IDevice* device = &input.mutable_device();
+    tt_metal::distributed::MeshDevice& device = input.mutable_device();
 
     // Work division:
     // - W-reduce: Work is split by rows of the tile grid (NC * Ht work units).
@@ -219,7 +218,7 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     // Retain Wormhole's lower-overhead single-buffered path here; batch/multi-column reductions
     // use both DST sections now that the compact finaliser writes complete rows.
     const bool compact_hw_single_buffer =
-        use_sfpu_leaf_combine && device->arch() == tt::ARCH::WORMHOLE_B0 && Wt == 1 && reduce_batch_size == 1;
+        use_sfpu_leaf_combine && device.arch() == tt::ARCH::WORMHOLE_B0 && Wt == 1 && reduce_batch_size == 1;
     const auto num_cores = plan.num_cores;
     const auto& all_cores = plan.all_cores;
     const auto& core_group_1 = plan.core_group_1;
@@ -384,7 +383,7 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "src"}},
         .compile_time_args = std::move(reader_ct_args),
         .runtime_arg_schema = {.runtime_arg_names = std::move(reader_rta_names)},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     });
 
     // --- Writer kernel ---
@@ -454,7 +453,7 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "dst"}},
         .compile_time_args = std::move(writer_ct_args),
         .runtime_arg_schema = {.runtime_arg_names = std::move(writer_rta_names)},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     });
 
     // --- Compute kernels ---
@@ -500,48 +499,40 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     // math_approx_mode into sfpu_precision_mode and the caller's dst_full_sync_en into double_buffer_dest, silently
     // changing precision / Dest buffering. (DST_SYNC_FULL is still passed as a *define*, exactly as
     // legacy did.)
-    auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config);
-    // std::visit rather than a Gen1-only get_if: to_compute_hardware_config yields a
-    // ComputeGen2Config on Quasar, and the fields set below exist on both generations. The
-    // explicit-unpack-mode requirement in particular is enforced generation-agnostically, so a
-    // Gen1-only branch would leave FP32 + 32-bit-Dest programs failing ProgramSpec validation there.
-    std::visit(
-        [&](auto& compute_cfg) {
-            compute_cfg.sfpu_precision_mode = Precision::Precise;  // legacy math_approx_mode = false
-            compute_cfg.double_buffer_dest = !compact_hw_single_buffer;
-            // For Float32 input with fp32_dest_acc_en, force unpack-to-dest so that
-            // the unpacker writes full fp32 to DEST instead of routing through SrcA, which would
-            // downcast to TF32, losing precision and even leading to large-mean fp32 variance
-            // silently collapsing to ~0 due to TF32 truncation wiping the bits that are different
-            // between nearby samples.
-            //
-            // Apply this to every Float32 buffer the compute kernel reads back via copy_tile /
-            // transpose_tile:
-            //   - Input: needed on all three reduction paths (H, W, HW) with FP32 input. The Welford
-            //     SFPU intake reads it directly via copy_tile/transpose_tile, so UnpackToDest
-            //     preserves the full FP32 into DEST (there is no input pre-scaling -- see post_mul_scaler).
-            //   - HW-reduce only: combined -- the variance tile is read back after the
-            //     writer-side cross-core re-reduction.
-            if (input_cb_data_format == tt::DataFormat::Float32) {
-                compute_cfg.unpack_modes.emplace(IN_DFB, UnpackMode::UnpackToDest);
-            }
-            if (reduce_hw && fp32_dest_acc_en) {
-                compute_cfg.unpack_modes.emplace(COMBINED_DFB, UnpackMode::UnpackToDest);
-            }
-            // Legacy left every other entry at Default (= UnpackToSrc). Metal 2.0 nonetheless requires an
-            // explicit mode for every Float32 buffer this kernel consumes under a 32-bit Dest register,
-            // so state the legacy value for those.
-            auto require_explicit_unpack_mode = [&](const DFBSpecName& name, tt::DataFormat format) {
-                if (fp32_dest_acc_en && format == tt::DataFormat::Float32) {
-                    compute_cfg.unpack_modes.emplace(name, UnpackMode::UnpackToSrc);
-                }
-            };
-            require_explicit_unpack_mode(IN_DFB, input_cb_data_format);
-            if (reduce_hw) {
-                require_explicit_unpack_mode(COMBINED_DFB, combined_cb_data_format);
-            }
-        },
-        compute_hw);
+    auto compute_hw = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config);
+    compute_hw.sfpu_precision_mode = Precision::Precise;  // legacy math_approx_mode = false
+    compute_hw.double_buffer_dest = !compact_hw_single_buffer;
+    // For Float32 input with fp32_dest_acc_en, force unpack-to-dest so that
+    // the unpacker writes full fp32 to DEST instead of routing through SrcA, which would
+    // downcast to TF32, losing precision and even leading to large-mean fp32 variance
+    // silently collapsing to ~0 due to TF32 truncation wiping the bits that are different
+    // between nearby samples.
+    //
+    // Apply this to every Float32 buffer the compute kernel reads back via copy_tile /
+    // transpose_tile:
+    //   - Input: needed on all three reduction paths (H, W, HW) with FP32 input. The Welford
+    //     SFPU intake reads it directly via copy_tile/transpose_tile, so UnpackToDest
+    //     preserves the full FP32 into DEST (there is no input pre-scaling -- see post_mul_scaler).
+    //   - HW-reduce only: combined -- the variance tile is read back after the
+    //     writer-side cross-core re-reduction.
+    if (input_cb_data_format == tt::DataFormat::Float32) {
+        compute_hw.unpack_modes.emplace(IN_DFB, UnpackMode::UnpackToDest);
+    }
+    if (reduce_hw && fp32_dest_acc_en) {
+        compute_hw.unpack_modes.emplace(COMBINED_DFB, UnpackMode::UnpackToDest);
+    }
+    // Legacy left every other entry at Default (= UnpackToSrc). Metal 2.0 nonetheless requires an
+    // explicit mode for every Float32 buffer this kernel consumes under a 32-bit Dest register,
+    // so state the legacy value for those.
+    auto require_explicit_unpack_mode = [&](const DFBSpecName& name, tt::DataFormat format) {
+        if (fp32_dest_acc_en && format == tt::DataFormat::Float32) {
+            compute_hw.unpack_modes.emplace(name, UnpackMode::UnpackToSrc);
+        }
+    };
+    require_explicit_unpack_mode(IN_DFB, input_cb_data_format);
+    if (reduce_hw) {
+        require_explicit_unpack_mode(COMBINED_DFB, combined_cb_data_format);
+    }
 
     auto make_compute = [&](const KernelSpecName& unique_id) {
         Group<DFBBinding> dfb_bindings = {
@@ -611,7 +602,7 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
             }
         }
     } else {
-        const auto compute_grid = device->compute_with_storage_grid_size();
+        const auto compute_grid = device.compute_with_storage_grid_size();
         cores = grid_to_cores(num_cores, compute_grid.x, compute_grid.y, false);
     }
 

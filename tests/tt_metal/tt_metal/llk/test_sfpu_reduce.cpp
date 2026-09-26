@@ -377,7 +377,7 @@ void run_single_core_sfpu_reduce(
         .num_threads = 1,
         .dfb_bindings = {experimental::ProducerOf(IN_DFB, "out")},
         .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
 
     experimental::KernelSpec writer_spec{
@@ -386,7 +386,7 @@ void run_single_core_sfpu_reduce(
         .num_threads = 1,
         .dfb_bindings = {experimental::ConsumerOf(OUT_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
 
     experimental::KernelSpec::CompilerOptions::Defines defines{
@@ -409,7 +409,7 @@ void run_single_core_sfpu_reduce(
              {"num_blocks", config.num_blocks}},
         // A 32-bit Dest makes the unpack mode a mandatory choice; see unpack_mode_for.
         .hw_config =
-            experimental::ComputeGen2Config{
+            experimental::ComputeHardwareConfig{
                 .enable_32_bit_dest = config.wide_dest || needs_fp32_dest_acc(config.format),
                 .unpack_modes = {{IN_DFB, unpack_mode_for(config.format)}}},
     };

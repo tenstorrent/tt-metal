@@ -49,18 +49,15 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_fp32_accurate_(sfpi::vFloat x) {
     v_if(abs_x >= 0.0f) {
         sfpi::vInt e = sfpi::exexp(r, sfpi::ExponentMode::Biased);
         e += i;
-        // e < 255
-        v_block {
-            sfpi::vInt e_lt_255 = __builtin_rvtt_sfpiadd_i(e.get(), -255, sfpi::SFPIADD_MOD1_CC_LT0);
+        v_if(sfpi::nearby(e < 255)) {
             y = sfpi::setexp(r, e);
-            // e < 1
-            v_if(e_lt_255 < -254) {
+            v_if(sfpi::nearby(e < 1)) {
                 // Underflow, including subnormals.
                 y = 0.0f;
             }
             v_endif;
         }
-        v_endblock;
+        v_endif;
     }
     v_endif;
 

@@ -6,7 +6,6 @@ operands:
   - name: "input_A"
     dims: [32, 32]
     format: "Float16_b"
-    # const_value: 1.0
   - name: "input_B"
     dims: [32, 32]
     format: "Float16_b"

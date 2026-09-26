@@ -489,7 +489,7 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // ------------------------------------------------------------------------
     // Core allocation
     // ------------------------------------------------------------------------
-    IDevice* device = input_tensor.device();
+    MeshDevice* device = input_tensor.device();
     const auto grid_size = device->compute_with_storage_grid_size();
     const auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     const uint32_t max_cores = core_grid.size();

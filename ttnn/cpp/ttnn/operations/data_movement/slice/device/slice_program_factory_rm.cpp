@@ -317,7 +317,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmProgramFactory::create_program_a
     using namespace ttnn::prim::slice_metal2;
 
     const auto& input = tensor_args.input;
-    tt::tt_metal::IDevice* device = input.device();
+    tt::tt_metal::distributed::MeshDevice* device = input.device();
 
     uint32_t num_unpadded_sticks = output.physical_volume() / output.padded_shape()[-1];
 
@@ -406,7 +406,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmProgramFactory::create_program_a
                         "src_offset_bytes",
                     },
             },
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
         // Three num_dims-long blocks: num_unpadded_sticks, num_padded_sticks, then the id_per_dim seed.
         .advanced_options = {.num_runtime_varargs = 3 * num_dims},
     };
@@ -446,7 +446,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmProgramFactory::create_program_a
                         "last_chunk_size",
                     },
             },
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     auto all_cores_vec = corerange_to_cores(all_cores);
