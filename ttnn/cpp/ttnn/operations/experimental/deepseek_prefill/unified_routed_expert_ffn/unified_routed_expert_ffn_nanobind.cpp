@@ -24,7 +24,8 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         .value("Silu", RoutedExpertActivation::Silu)
         .value("SwiGluOai", RoutedExpertActivation::SwiGluOai)
         .value("SituGlu", RoutedExpertActivation::SituGlu)
-        .value("ClampedSiluGlu", RoutedExpertActivation::ClampedSiluGlu);
+        .value("ClampedSiluGlu", RoutedExpertActivation::ClampedSiluGlu)
+        .value("GeluTanh", RoutedExpertActivation::GeluTanh);
 
     // The worker rectangle this op fixes regardless of device grid. Exported so a hybrid forward can
     // pass moe_fused_swiglu the same grid -- that op defaults to the whole device instead -- without

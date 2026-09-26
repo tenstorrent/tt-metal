@@ -249,8 +249,12 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // Single source of truth for the dst-accumulator mode: drives DST_CAPACITY,
     // the ComputeConfig below, and (via -DFP32_DEST_ACC_EN) the compute kernel's
     // SwiGLU-OAI dst budget + SFPU fp32-dest template, so they can't drift.
-    constexpr bool kFp32DestAccEn = false;
-    constexpr uint32_t DST_CAPACITY = kFp32DestAccEn ? 4u : 8u;
+    // bf16 dst for every variant except GeluTanh (Gemma-4 bring-up), which takes the caller's
+    // fp32_dest_acc_en; the other variants stay byte-identical.
+    const bool kFp32DestAccEn = op.activation == RoutedExpertActivation::GeluTanh &&
+                                op.compute_kernel_config.has_value() &&
+                                ttnn::get_fp32_dest_acc_en(op.compute_kernel_config);
+    const uint32_t DST_CAPACITY = kFp32DestAccEn ? 4u : 8u;
     const uint32_t gu_out_subblock_h = 1;
     uint32_t gu_sub_w = 1;
     for (uint32_t cand = DST_CAPACITY; cand >= 1; --cand) {
@@ -1062,6 +1066,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // Clamped SiLU-GLU (DeepSeek V4), with limit=10.0 (ClampedSiluGluConfigDsV4) baked
         // into the kernel.
         compute_defines["CLAMPED_SILU_GLU"] = "1";
+    } else if (op.activation == RoutedExpertActivation::GeluTanh) {
+        // GeGLU (Gemma-4): gelu_tanh(gate) * up. Silu's unary path with gelu_tanh_tile.
+        compute_defines["ROUTED_GELU_TANH"] = "1";  // not GELU_TANH: that name is a KernelActivation enumerator
     }
     if (fuse_bias) {
         // FUSE_BIAS: add gate/up bias (broadcast across rows) before the fused binary
@@ -1070,13 +1077,21 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         compute_defines["FUSE_BIAS"] = "1";
     }
 
+    // Every variant runs LoFi, except GeluTanh (Gemma-4 bring-up), which takes the caller's
+    // math_fidelity: LoFi truncates the bf16 weight mantissa and biases the expert outputs
+    // toward zero (per-token norms up to 7% low on Gemma-4). Other variants stay byte-identical.
+    MathFidelity compute_fidelity = MathFidelity::LoFi;
+    if (op.activation == RoutedExpertActivation::GeluTanh && op.compute_kernel_config.has_value()) {
+        compute_fidelity = ttnn::get_math_fidelity(op.compute_kernel_config);
+    }
+
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/"
         "fused_swiglu.cpp",
         core_range_set,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::LoFi,
+            .math_fidelity = compute_fidelity,
             .fp32_dest_acc_en = kFp32DestAccEn,
             .math_approx_mode = false,
             .compile_args = compute_ct_args,
