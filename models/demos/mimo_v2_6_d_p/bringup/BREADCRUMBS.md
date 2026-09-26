@@ -469,3 +469,71 @@ Results
   trail PCC 0.9991, experts_out 0.9999. The first FAIL/pcc=0 block in each log is the precompile pass.
 
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_sliding_moe_01_attn_norm.py`
+
+## C.sliding_moe.attention test (attempt 1), 2026-09-26
+
+What was done
+- Replaced the rendered `run_component_test` call in `tests/bringup/test_c_sliding_moe_attention.py` with the
+  full_dense attention test body at LAYER = 1. Gated PCC (spec 0.99). Asserted extras: finite output; rel L2 <= 0.02 over
+  the whole chunk and over the first 128 rows; per-token norm ratio in [0.95, 1.05]; worst per-token rel L2 <= 0.08;
+  and a window discriminator: rel L2 to the CPU reference at window 128 must be below rel L2 to the same reference
+  at windows 127 and 129 (the test sets `ref.cfg.sliding_window` and restores it after). Records `rel_l2_*`,
+  `row_norm_ratio_*`, `worst_row_rel_l2_*` and `rel_l2_vs_cpu_window_attention_L01` (informational).
+
+Why (CPU measurements on the golden; scripts were in /tmp and are not kept)
+- On layer 1 the sink takes almost all of the softmax mass (key scores median -26 while the sink is 0.56-1.14).
+  attn_out row norms are 0.007-0.057, so most bugs are loud: RoPE from 0, theta 1e7, no window, non-causal, no sink and
+  a wrong GQA map all fail PCC.
+- Bugs that pass PCC but fail the size checks: sink zero (rel 1.08), sink negated (3.3), no value scale (0.41),
+  window 64 (0.25), no KV prefix (0.085 whole, 0.40 first rows), scale 128^-0.5 (0.90), x1.02 (0.020), zeroed rows
+  (caught by ratio and worst row).
+- The fp32 reference vs golden is already rel 0.0047 with ratio [0.983, 1.015], and the device-noise estimate is rel
+  0.0072, ratio [0.975, 1.022], worst row 0.025. So the Gemma/full_dense ratio [0.97, 1.03] and rel 0.015 were
+  loosened to [0.95, 1.05] and 0.02. The smallest structural bug the size checks catch is 0.085 (x1.02 sits at 0.020).
+- A window off by one (127/129) scores rel 0.010, inside the noise, so it gets the discriminator check. Simulated
+  device output at 127/128/129 (with or without 1% extra noise) is always closest to its own window.
+
+Results
+- BRINGUP_IMPL=reference: PASS (pcc 0.999989, rel 0.0047, first 128 rows 0.0042, ratio [0.9825, 1.0147], worst row
+  0.0176; vs CPU w128 0, w127 0.0085, w129 0.0093). BRINGUP_IMPL=stub: FAIL (PCC).
+- Default (device): FAIL, NotImplementedError "no device sliding attention yet" (implement step next).
+- The first `FAIL ... pcc=0.000000` line in each log comes from the precompile pass.
+
+Notes for implement
+- Mask: key j visible to query i iff i - 128 < j <= i. Only the last 127 rows of the KV prefix are needed
+  (`dctx.extra["state_prefix"]`, key [8, 4096, 192], value [8, 4096, 128], already x 0.707; use [:, :prefix_len]).
+- Sink: an extra softmax column per q head with logit `attention_sink_bias[h]`, probability dropped. Output scales
+  like exp(-sink), so sink precision maps 1:1 onto relative output error.
+- RoPE theta 1e4 on dims [0:64], positions start..start+S.
+
+Re-run
+    PYTHONPATH=$PWD BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_sliding_moe_attention.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_sliding_moe_attention.py
+
+## C.sliding_moe.attention implement (attempt 1), 2026-09-26
+
+What was done
+- `tt/attention.py`: new `TtKVCacheSliding` (contiguous [1, 8, max_seq, 192] sharded by head: KV heads 2r, 2r+1 on
+  chip r, V zero-padded 128 -> 192) and `TtSlidingAttention` (per chip: fused qkv [4096, 16*192 + 2*192 + 2*192]
+  HiFi4 -> nlp_create_qkv_heads -> partial RoPE dims 0-63, theta 1e4, tables built once for max_seq and sliced per chunk
+  -> fill_cache at `start` -> the previous 128 K/V rows sliced back from the cache and concatenated, Q front-padded by 128
+  -> SDPA(is_causal, sliding_window_size=128, attention_sink [1, 16, 1, 1]) -> drop the pad rows -> concat_heads ->
+  row-parallel o_proj -> all_reduce(cluster_axis=1)). Weight building is now shared (`_tp_qkv_o`, general nkv per chip);
+  `TtFullAttention` output is unchanged (full_dense attention test still PCC 0.999987, rel 0.0051).
+- `hooks.py`: `_attention_module` builds the sliding module for sliding layers (swa theta, sink bias);
+  `_new_kv_cache` picks `TtKVCacheSliding`; `DEVICE_STEPS["sliding_moe"] = {attn_norm, attention}` for the hybrid.
+
+Decisions and gotchas
+- The SDPA kernel folds the sink with a truncated-bf16 scale (192^-0.5 -> 0.07178). The row max sits ~28 logits below
+  the sink, so the output was 4-14% too large. Fix: SDPA scale 2^-4 (exact), the factor 1.1547 folded into the Q rows of
+  wqkv, sink / 2^-4 (exact in bf16). Known issue proposed.
+- The sliding SDPA uses its own preset, `MIMO_SLIDING_SDPA_CFG` (default `base`: HiFi4, fp32 dest acc, exact exp,
+  q128/k128). SDPA-only probe (vs CPU chunk_attention, same inputs): A rel 0.017 mean ratio 1.037; HiFi4 without fp32
+  acc 0.016 / 1.032; HiFi2 with fp32 0.014 / 1.056; base 0.005 / 1.004. The sink magnifies QK score errors. It is
+  non-streaming, but the window is only 128 keys. Full layers keep `MIMO_SDPA_CFG` (default A).
+- Gate result: PCC 0.999972, rel 0.0086, first 128 rows 0.0082, norm ratio [0.9747, 1.0209], worst row 0.0255;
+  vs CPU window 128: 0.00708, 127: 0.00802, 129: 0.01419. The margin to window 127 is small (0.0009). Do not add noise
+  to this path (bf8 KV, HiFi2) without re-checking it.
+- Probes ran from a temporary test file in `tt/` (deleted).
+
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_sliding_moe_attention.py`
