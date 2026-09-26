@@ -193,10 +193,12 @@ class EditableWheel(editable_wheel):
 class CMakeBuild(build_ext):
     @staticmethod
     def get_build_env():
-        return {
-            **os.environ.copy(),
-            "CXX": "clang++-20",
-        }
+        env = os.environ.copy()
+        # clang-20 is the default toolchain on x86_64/aarch64; on hosts without it
+        # (e.g. riscv64) leave CXX alone so build_metal.sh picks its per-arch toolchain file.
+        if shutil.which("clang++-20"):
+            env["CXX"] = "clang++-20"
+        return env
 
     @staticmethod
     def get_working_dir():
