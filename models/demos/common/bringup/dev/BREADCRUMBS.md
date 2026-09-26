@@ -387,3 +387,9 @@ Drive this ledger with
   full prefill, position sweep. A pick is now a perf task with a role, so X.2 still stops when only X.3 follows it.
 - Dashboards: a line chart plus table under Chunk timing (standard), a bar block on the teletext Timing page.
 - Gemma X.4 runs the sweep (its X.3 predates F37). Profiler-off probe: 443 / 615 / 781 / 946 / 1112 ms.
+
+## F38 (2026-09-26): chat-template arguments for thinking models
+- MiMo-V2.6's template opens a think block after the generation prompt unless `enable_thinking=false`. Spec
+  `text.template_kwargs` (e.g. `{enable_thinking: false}`) now reaches every `apply_chat_template` call: the canonical
+  prompt (user_turn, model_turn; recorded in prompt.json) and the intake smoke. With it the book is the model's
+  non-thinking reply (`<think></think>` then the text). Selftest pins both paths.

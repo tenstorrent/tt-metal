@@ -16,6 +16,8 @@ spec.yaml ``text``:
                                            #   the model's reply (instruction-tuned models predict model turns only)
                                            # user_turn: the text as one user message
     request: "Recite ..."                  # the user message for model_turn
+    template_kwargs: {enable_thinking: false}   # extra chat-template arguments (thinking models: the book follows an
+                                           #   empty think block, as the model's non-thinking reply)
     bos: true                              # raw only
     length: 56320                          # tokens to build (default: the longest ladder rung)
 
@@ -50,6 +52,11 @@ def ids_hash(ids: list[int]) -> str:
     return hashlib.sha256(json.dumps(ids).encode()).hexdigest()
 
 
+def template_kwargs(spec: Spec) -> dict:
+    """Extra chat-template arguments from spec ``text.template_kwargs`` (prompt wrap and the intake smoke)."""
+    return dict(spec.get("text.template_kwargs") or {})
+
+
 def wrap_mode(spec: Spec) -> str:
     w = spec.get("text.wrap")
     if w is None:
@@ -80,16 +87,18 @@ def build_ids(spec: Spec, tok, n: int) -> tuple[list[int], dict]:
         if spec.get("text.bos", True) and tok.bos_token_id is not None:
             ids = [tok.bos_token_id] + ids
     elif mode == "user_turn":
-        wrapped = tok.apply_chat_template([{"role": "user", "content": text}], tokenize=False)
+        wrapped = tok.apply_chat_template([{"role": "user", "content": text}], tokenize=False, **template_kwargs(spec))
         ids = tok(wrapped, add_special_tokens=False)["input_ids"]
     else:
         request = spec.get("text.request", DEFAULT_REQUEST)
         prefix = tok.apply_chat_template(
-            [{"role": "user", "content": request}], add_generation_prompt=True, tokenize=False
+            [{"role": "user", "content": request}], add_generation_prompt=True, tokenize=False, **template_kwargs(spec)
         )
         pre = tok(prefix, add_special_tokens=False)["input_ids"]
         ids = pre + tok(text, add_special_tokens=False)["input_ids"]
         info.update(request=request, prefix_text=prefix, prefix_tokens=len(pre))
+    if template_kwargs(spec):
+        info["template_kwargs"] = template_kwargs(spec)
     if len(ids) < n:
         raise ValueError(f"text gives {len(ids)} tokens < {n}")
     return ids[:n], info
