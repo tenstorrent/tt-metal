@@ -181,6 +181,7 @@ jobs:
       llk-tests-changed: ${{ steps.find-changes.outputs.llk-tests-changed }}
       llk-perf-changed: ${{ steps.find-changes.outputs.llk-perf-changed }}
       llk-ci-changed: ${{ steps.find-changes.outputs.llk-ci-changed }}
+      test-command-workflow-changed: ${{ steps.find-changes.outputs.test-command-workflow-changed }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
@@ -476,6 +477,31 @@ jobs:
         # Run script that compares the models chart in README.md
         # with the models chart in models/README.md
         python .github/scripts/utils/model-charts-sync.py
+
+  # Recompiles test-command.lock.yml from its source markdown when it changes.
+  update-agentic-workflows:
+    needs: [find-changed-files]
+    if: >-
+      ${{
+        github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        needs.find-changed-files.outputs.test-command-workflow-changed == 'true' &&
+        github.actor != 'github-actions[bot]'
+      }}
+    # github.actor guard: the commit this job pushes must not re-trigger itself.
+    runs-on: ubuntu-slim
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 5
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+      - name: Recompile and commit test-command.lock.yml
+        uses: ./.github/actions/update-agentic-workflows
+        with:
+          workflow-name: test-command
 
   # Full clang-tidy scan (same checks enforced at merge gate).
   # force-scan=true → single full-scan job (avoids 4-way per-target split with high setup overhead).
