@@ -1,0 +1,124 @@
+# Model spec for the gated bring-up framework (models/demos/common/bringup).
+# MiMo-V2.6-Flash-RL (text decoder only; vision, audio and MTP skipped), layers 0-5, chunked prefill on the 4x
+# Blackhole p150b QuietBox. Same target and ladder as the ERNIE and Gemma-4 runs. The full model (~309B params) does
+# not fit the box; layers 0-5 cover all three block types. A subset result is never reported as full-model.
+# Owner delegated every approval for this run (2026-09-26, "do it yourself from beginning to the end").
+model: mimo_v2_6_d_p
+display_name: MiMo-V2.6-Flash-RL (layers 0-5)
+hf_id: XiaomiMiMo/MiMo-V2.6-Flash-RL
+model_dir: models/demos/mimo_v2_6_d_p
+hooks: models.demos.mimo_v2_6_d_p.bringup.hooks
+num_layers: 48
+layers: "0-5"
+box:
+  name: Blackhole QuietBox, 4x p150b, mesh 1x4 (FABRIC_2D)
+  chip: Blackhole p150b
+  mesh: [1, 4]
+  chip_dram_gb: 32
+  device_params: {fabric_config: FABRIC_2D, l1_small_size: 24576}   # owner: always 2D fabric
+  test_timeout_s: 3600
+target: {seq: 56320, chunk: 5120, dtype: bf16}
+ladder:
+  - {name: s4096, seq: 4096, chunk: 2048, full_dumps: true}     # 2k->2k; chunk > sliding window (128)
+  - {name: s16384, seq: 16384, chunk: 8192}                     # 8k->8k
+  - {name: last, seq: 56320, chunk: 5120, golden: s56320, prefix_from_golden: true}   # golden 50k prefix, device 50k->55k
+  - {name: s56320, seq: 56320, chunk: 5120}                     # all 11 chunks on device
+block_types:
+  full_dense:                      # layer 0: full attention (64 Q / 4 KV heads, QK 192, V 128, partial RoPE 64 dims
+    layers: [0]                    #   theta 1e7, no sink) + dense SwiGLU 16384
+    representative: 0
+  sliding_moe:                     # sliding window 128 (64 Q / 8 KV heads, QK 192, V 128, RoPE 64 dims theta 1e4,
+    layers: "1-4,6-10,12-16,18-22,24-28,30-34,36-40,42-46"   # per-head sink bias) + MoE 256 experts top-8
+    representative: 1
+  full_moe:                        # full attention (as layer 0) + MoE (sigmoid noaux_tc router, no shared expert)
+    layers: [5, 11, 17, 23, 29, 35, 41, 47]
+    representative: 5
+state:
+  kind: kv
+  tensors: [key, value]            # key head_dim 192 (RoPE applied), value head_dim 128 (x attention_value_scale)
+  format: separate_k_v
+thresholds: {component: 0.99, block: 0.98, layer: 0.97, state: 0.97, final_hidden: 0.97, top5: 0.9}
+text:                              # instruction-tuned thinking model: the book is the model's non-thinking reply
+  source: models/tt_transformers/tests/tale-of-two-cities.txt.bz2
+  wrap: model_turn
+  request: "Recite the Project Gutenberg text of A Tale of Two Cities by Charles Dickens, from the start."
+  template_kwargs: {enable_thinking: false}
+  min_top1: 0.4
+hf:
+  revision: 5711b268169967567844e1e560e8a3966da959b1
+  parity_seq: 2048                 # > sliding window 128
+  trust_remote_code: true          # modeling_mimo_v2.py ships with the checkpoint
+  custom_loader: true              # fp8 + per-expert mxfp4, ~618 GB bf16 > host RAM: sanity runs on hooks.hf_model (R.2)
+checkpoint:
+  expect:
+    "model.embed_tokens.weight": [152576, 4096]
+    "lm_head.weight": [152576, 4096]
+    "model.norm.weight": [4096]
+    "model.layers.0.self_attn.qkv_proj.weight": [13568, 4096]      # fp8 e4m3, weight_scale_inv per 128x128 block
+    "model.layers.1.self_attn.qkv_proj.weight": [14848, 4096]
+    "model.layers.5.self_attn.qkv_proj.weight": [13568, 4096]
+    "model.layers.*.self_attn.o_proj.weight": [4096, 8192]           # bf16
+    "model.layers.1.self_attn.attention_sink_bias": [64]
+    "model.layers.0.mlp.gate_proj.weight": [16384, 4096]
+    "model.layers.0.mlp.down_proj.weight": [4096, 16384]
+    "model.layers.*.mlp.gate.weight": [256, 4096]
+    "model.layers.*.mlp.gate.e_score_correction_bias": [256]
+    "model.layers.*.mlp.experts.*.gate_proj.weight": [2048, 2048]    # mxfp4 packed 2 per byte, e8m0 scale per 32
+    "model.layers.*.mlp.experts.*.gate_proj.weight_scale": [2048, 128]
+    "model.layers.*.mlp.experts.*.down_proj.weight": [4096, 1024]
+  count:
+    "model.layers.*.self_attn.qkv_proj.weight": 48
+    "model.layers.*.self_attn.attention_sink_bias": 39
+    "model.layers.*.mlp.gate.weight": 47
+  config:
+    num_hidden_layers: 48
+    hidden_size: 4096
+    num_attention_heads: 64
+    num_key_value_heads: 4
+    swa_num_key_value_heads: 8
+    head_dim: 192
+    v_head_dim: 128
+    sliding_window: 128
+    n_routed_experts: 256
+    num_experts_per_tok: 8
+    moe_intermediate_size: 2048
+    intermediate_size: 16384
+contract: {adapter: mimo_v2_6_d_p}
+agents:
+  rules:                           # the owner's rules, shown in every brief
+    - "Always use 2D fabric: the mesh opens with ttnn.FabricConfig.FABRIC_2D (spec box.device_params). Configure CCLs,
+      dispatch and combine for it; never open a device or build a test with FABRIC_1D or FABRIC_1D_RING."
+    - "Text decoder only: never build, load or test the vision encoder, audio encoder or MTP layers."
+    - "Weights: qkv_proj and the dense MLP are fp8 e4m3 with a float32 weight_scale_inv per 128x128 block; experts are
+      mxfp4 (uint8, two e2m1 values per byte, low nibble first unless the HF code says otherwise) with an e8m0
+      weight_scale per 32 input elements; o_proj, norms, router, sink bias and embeddings are bf16. The CPU reference
+      dequantizes these exactly as the HF code / checkpoint define them. On device the experts are bfp8 (never bfp4)."
+    - "The CPU reference (reference role): the full 48-layer model is ~618 GB in bf16 and does not fit this host's
+      503 GB RAM. The R.1 sanity hook hf_model(spec, None) must keep expert weights packed (mxfp4 + scale) and
+      dequantize each expert when it runs, or stream layers; the layer-subset reference (layers 0-5) can be
+      dequantized to bf16 up front. Keep the RL checkpoint's own modeling code as the source of truth."
+  model: null
+  timeout_s: 14400
+  read:
+    reference:
+      - /localdev/dnijemcevic/bringup/mimo_v2_6_d_p/hf/modeling_mimo_v2.py
+      - /localdev/dnijemcevic/bringup/mimo_v2_6_d_p/hf/configuration_mimo_v2.py
+      - models/demos/gemma4_a4b_d_p/reference
+      - models/demos/common/bringup/selftest/fixture_model.py
+    plan:
+      - models/demos/gemma4_a4b_d_p/tt
+      - models/demos/gemma4_a4b_d_p/bringup/plan.yaml
+      - models/demos/gpt_oss_d_p/tt/attention
+      - models/demos/deepseek_v3_d_p/tt/moe
+      - models/demos/ernie45_d_p/tt/moe_unified.py
+    implement:
+      - models/demos/gemma4_a4b_d_p/tt
+      - models/demos/gpt_oss_d_p/tt
+      - models/demos/deepseek_v3_d_p/tt/moe
+      - models/demos/ernie45_d_p/tt
+  policy: {}
+paths:
+  hf: /localdev/dnijemcevic/bringup/mimo_v2_6_d_p/hf
+intake:
+  smoke: {prompt: "What is the capital of France? Answer in one word.", expect: "Paris"}
+dashboard: {styles: [standard, teletext]}   # owner: both
