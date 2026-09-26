@@ -39,14 +39,18 @@ std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(
     tt::tt_fabric::FabricApiType api_type = tt::tt_fabric::FabricApiType::Linear);
 
 // Compute fabric connection RT args without any PD mutation.
-// Pure computation — resolves routing + assembles RT args using caller-provided semaphore IDs.
+// Pure computation — resolves routing + assembles RT args from the caller's semaphore values,
+// which are copied through verbatim. sem_args_are_l1_addresses says they are raw L1 addresses
+// rather than program semaphore ids, so they can be validated here; the kernel must then build
+// those connections with the matching build_from_args parameter.
 // Returns flat vector matching RoutingPlaneConnectionManager::build_from_args() layout.
 std::vector<uint32_t> compute_fabric_connection_rt_args(
     const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
     const std::vector<tt::tt_fabric::FabricNodeId>& dst_nodes,
     const std::vector<uint32_t>& connection_link_indices,
-    const std::vector<uint32_t>& teardown_sem_ids,
-    const std::vector<uint32_t>& buffer_index_sem_ids);
+    const std::vector<uint32_t>& teardown_sem_args,
+    const std::vector<uint32_t>& buffer_index_sem_args,
+    bool sem_args_are_l1_addresses = false);
 
 // Like append_routing_plane_connection_manager_rt_args but does NOT inject kernel defines.
 // Use with get_fabric_kernel_defines() when defines must be set before kernel compilation

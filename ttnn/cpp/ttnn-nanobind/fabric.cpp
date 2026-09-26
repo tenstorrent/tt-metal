@@ -305,19 +305,25 @@ void bind_fabric_api(nb::module_& mod) {
         nb::arg("src_fabric_node_id"),
         nb::arg("dst_nodes"),
         nb::arg("connection_link_indices"),
-        nb::arg("teardown_sem_ids"),
-        nb::arg("buffer_index_sem_ids"),
+        nb::arg("teardown_sem_args"),
+        nb::arg("buffer_index_sem_args"),
+        nb::arg("sem_args_are_l1_addresses") = false,
         R"(
             Compute fabric connection RT args without any PD mutation.
-            Pure computation — resolves routing and assembles the flat RT args vector
-            using caller-provided semaphore IDs. No PD needed.
+            Pure computation — resolves routing and assembles the flat RT args vector from
+            the caller's semaphore values. No PD needed.
+
+            The two semaphore values are copied through verbatim; sem_args_are_l1_addresses
+            says they are raw L1 addresses rather than program semaphore IDs, so they can be
+            validated here. When true both must be 16 B aligned.
 
             Args:
                 src_fabric_node_id: FabricNodeId of the source chip
                 dst_nodes: List of FabricNodeIds of destination chips
                 connection_link_indices: List of link indices (empty for auto-select)
-                teardown_sem_ids: Pre-allocated semaphore IDs (one per connection)
-                buffer_index_sem_ids: Pre-allocated semaphore IDs (one per connection)
+                teardown_sem_args: One per connection — IDs, or addresses when the flag is set
+                buffer_index_sem_args: One per connection — same interpretation
+                sem_args_are_l1_addresses: False (IDs, default) or True (L1 addresses)
 
             Returns:
                 List of runtime args for RoutingPlaneConnectionManager::build_from_args().

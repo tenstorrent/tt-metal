@@ -730,14 +730,35 @@ std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(tt::t
 }
 
 // Compute fabric connection RT args without any PD mutation.
-// Caller provides pre-allocated semaphore IDs (2 per connection: teardown + buffer_index).
-// Returns the flat RT args vector for RoutingPlaneConnectionManager::build_from_args().
+// The two per-connection semaphore values are copied through verbatim -- `kind` only says what
+// they are, so they can be validated here, and the kernel's resolution policy is what reads
+// them. Returns the flat RT args vector for RoutingPlaneConnectionManager::build_from_args().
 std::vector<uint32_t> compute_fabric_connection_rt_args(
     const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
     const std::vector<tt::tt_fabric::FabricNodeId>& dst_nodes,
     const std::vector<uint32_t>& connection_link_indices,
     const std::vector<uint32_t>& teardown_sem_ids,
-    const std::vector<uint32_t>& buffer_index_sem_ids) {
+    const std::vector<uint32_t>& buffer_index_sem_ids,
+    bool sem_args_are_l1_addresses) {
+    if (sem_args_are_l1_addresses) {
+        // The EDM remotely increments the teardown flag and block-reads a 16 B
+        // SenderChannelProducerCursor into the buffer-index address, so both must own an aligned
+        // granule. Catch a stray id here rather than in a kernel dereferencing a small integer.
+        constexpr uint32_t k_sem_address_alignment = 16;
+        const std::pair<const std::vector<uint32_t>&, const char*> arrays[] = {
+            {teardown_sem_ids, "teardown_sem_args"}, {buffer_index_sem_ids, "buffer_index_sem_args"}};
+        for (const auto& [values, name] : arrays) {
+            for (size_t i = 0; i < values.size(); i++) {
+                TT_FATAL(
+                    values[i] % k_sem_address_alignment == 0,
+                    "{}[{}] ({:#x}) must be {} B aligned",
+                    name,
+                    i,
+                    values[i],
+                    k_sem_address_alignment);
+            }
+        }
+    }
     TT_FATAL(
         teardown_sem_ids.size() == dst_nodes.size(),
         "teardown_sem_ids size ({}) must match dst_nodes size ({})",

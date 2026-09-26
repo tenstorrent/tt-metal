@@ -87,7 +87,11 @@ struct WorkerToFabricEdmSenderBase {
 
     WorkerToFabricEdmSenderBase() = default;
 
-    template <ProgrammableCoreType my_core_type>
+    // sem_args_are_l1_addresses: the teardown and buffer-index runtime args are the addresses
+    // themselves, for workers keeping these two semaphores outside the program semaphore
+    // table. Default false resolves them as program semaphore ids. Chosen per call, so one
+    // kernel may mix both.
+    template <ProgrammableCoreType my_core_type, bool sem_args_are_l1_addresses = false>
     static WorkerToFabricEdmSenderBase build_from_args(std::size_t& arg_idx) {
         constexpr bool is_persistent_fabric = true;
         uint8_t direction;
@@ -152,9 +156,17 @@ struct WorkerToFabricEdmSenderBase {
         // codepaths are split
         const StreamId my_fc_stream_channel_id = StreamId{std::numeric_limits<uint32_t>::max()};
 
-        auto worker_teardown_sem_addr =
-            reinterpret_cast<volatile uint32_t* const>(get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++)));
-        const auto worker_buffer_index_semaphore_addr = get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++));
+        const auto resolve_sem_arg = [](uint32_t arg) -> uintptr_t {
+            if constexpr (sem_args_are_l1_addresses) {
+                return static_cast<uintptr_t>(arg);
+            } else {
+                return get_semaphore<my_core_type>(arg);
+            }
+        };
+        const uintptr_t teardown_address = resolve_sem_arg(get_arg_val<uint32_t>(arg_idx++));
+        const uintptr_t buffer_index_address = resolve_sem_arg(get_arg_val<uint32_t>(arg_idx++));
+        auto worker_teardown_sem_addr = reinterpret_cast<volatile uint32_t* const>(teardown_address);
+        const auto worker_buffer_index_semaphore_addr = buffer_index_address;
         return WorkerToFabricEdmSenderBase(
             is_persistent_fabric,
             edm_worker_x,
@@ -224,8 +236,8 @@ struct WorkerToFabricEdmSenderBase {
         this->worker_teardown_addr = worker_teardown_addr;
         ASSERT(is_l1_address(reinterpret_cast<size_t>(worker_teardown_addr)));  // must be a L1 address
         // Local landing zone for the SenderChannelProducerCursor block read back in open_start().
-        // Semaphores are strided by L1_ALIGNMENT (16B), so this address both is 16B aligned and owns
-        // a full 16B slot -- a whole-block read here cannot disturb a neighbouring semaphore.
+        // It must be 16B aligned and own a full 16B slot, so a whole-block read here cannot
+        // disturb a neighbouring semaphore. open_start() asserts the alignment at that read.
         this->local_producer_cursor_addr = local_buffer_index_addr;
         ASSERT(is_l1_address(local_producer_cursor_addr));  // must be a L1 address
         this->edm_buffer_base_addr = edm_buffer_base_addr;
