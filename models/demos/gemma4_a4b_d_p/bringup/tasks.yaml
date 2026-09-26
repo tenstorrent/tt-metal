@@ -1808,6 +1808,13 @@ tasks:
     kind: residual
     layer: 5
     stateful: false
+  frozen:
+    at: '2026-09-26T03:31:43'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_ffn_residual.py: 44954ed8f0a99d5f955538bbd101fe1dcfdddcf602dc7055e138b31b7c1b50f0
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
 - id: S.global.14
   title: 'global block with steps 1-14 on device (last: ffn_residual)'
   step: implement
