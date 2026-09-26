@@ -1563,10 +1563,27 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int, batch: 
             out = _gate_log.read_text(errors="ignore") if _gate_log.exists() else ""
             return _StepResult(False, out + "\n" + str(_he), stalled=True, detail=_he)
 
+    # KEEP THE LOG OF A STEP THAT FAILED. This deleted the gate's own output unconditionally, so the
+    # only trace of a failure was the 15-line tail quoted into `reasons` -- and for a step killed
+    # mid-flight there is no tail worth quoting at all. Measured 2026-09-25: a gate killed at its
+    # budget reported "exceeded 14400s with no verdict (likely device/fabric hang)" and the pytest
+    # output that would have shown WHERE it was when it died had already been removed by this line;
+    # neither operator on either box could produce it afterwards. A failure whose evidence the tool
+    # destroys cannot be diagnosed, only guessed at -- which is what the whole of that day became.
+    #
+    # So the cleanup is conditional on the step having PASSED, and a failure names the file it left
+    # behind. Nothing else changes: the same verdict, the same reasons, one more sentence saying
+    # where to look.
+    _e2e, _e2e_notes = None, []
     try:
         _e2e, _e2e_notes = _retry_after_wedge("G2/G3 tests/e2e", _e2e_once)
     finally:
-        shutil.rmtree(_gate_log.parent, ignore_errors=True)
+        # Also cleaned when the step RAISED: there is no verdict to diagnose, and leaving temp dirs
+        # behind on every exception is its own leak.
+        if _e2e is None or _e2e.ok:
+            shutil.rmtree(_gate_log.parent, ignore_errors=True)
+    if not _e2e.ok and _gate_log.exists():
+        reasons.append(f"G2/G3: the failing run's full output is kept at {_gate_log}")
     pytest_out = _e2e.output
     if _e2e.stalled:
         reasons.append(f"G2/G3: tests/e2e made no forward progress ({_e2e.detail})")
