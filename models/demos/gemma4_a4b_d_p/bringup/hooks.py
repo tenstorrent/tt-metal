@@ -28,7 +28,7 @@ def hf_layers(model):
 
 # Device steps swapped in so far, per block type. Every other step runs on the CPU reference.
 DEVICE_STEPS = {
-    "sliding": {"attn_norm", "attention", "post_attn_norm", "attn_residual", "ffn_norm", "mlp"},
+    "sliding": {"attn_norm", "attention", "post_attn_norm", "attn_residual", "ffn_norm", "mlp", "post_mlp_norm"},
     "global": set(),
 }
 
@@ -40,6 +40,7 @@ _NORM_WEIGHTS = {
     "attn_norm": "input_layernorm.weight",
     "post_attn_norm": "post_attention_layernorm.weight",
     "ffn_norm": "pre_feedforward_layernorm.weight",
+    "post_mlp_norm": "post_feedforward_layernorm_1.weight",
 }
 
 
