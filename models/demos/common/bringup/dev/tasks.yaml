@@ -205,3 +205,11 @@ tasks:
     gate:
       cmd: python -m models.demos.common.bringup.knowledge.check
       metrics: {known_issue_errors: "== 0"}
+  - id: F23
+    title: FABRIC_2D is a standing rule in the agent definition; spec template defaults to it
+    step: framework
+    deps: [F22]
+    paths: [models/demos/common/bringup/agents, models/demos/common/bringup/templates, models/demos/common/bringup/skill]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/test_orchestrator.py
+      metrics: {selftest_failed: "== 0", selftest_passed: ">= 17"}

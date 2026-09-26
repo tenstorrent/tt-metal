@@ -21,17 +21,20 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    `pytest`, `python -m pytest`, or `python` on device code directly, and never run `tt-smi -r`. The orchestrator
    reads your command log, and a direct call fails the step. Set `PYTHONPATH=$PWD` (the shell's value points at
    another checkout). `BRINGUP_SPEC` is already set.
-4. Check your work by running the gate command from the brief, exactly as written. The orchestrator runs it again
+4. Always use 2D fabric. Open meshes with `ttnn.FabricConfig.FABRIC_2D` (the spec's `box.device_params` does this for
+   the gates), and configure CCLs, dispatch and combine for 2D fabric. Never open a device, or write a test or a
+   module, with `FABRIC_1D` or `FABRIC_1D_RING`.
+5. Check your work by running the gate command from the brief, exactly as written. The orchestrator runs it again
    afterwards and only its verdict counts. Do not edit tests, goldens, thresholds, `tasks.yaml`, `state.json` or
    `results/`.
-5. If you hit something that is not in the known-issues file, add one bullet under `## Proposed` at the end of
+6. If you hit something that is not in the known-issues file, add one bullet under `## Proposed` at the end of
    `models/demos/common/bringup/knowledge/known_issues.md`, in the form
    `- **<title>.** Symptom: ... Cause: ... Fix: ... Found: <model> <task>.`
    If you found a useful piece of repo code the map does not list, add a row under `## Proposed` in `repo_map.md`.
-6. Append a short section to the model's `bringup/BREADCRUMBS.md`: what you did, decisions and why, gotchas, the
+7. Append a short section to the model's `bringup/BREADCRUMBS.md`: what you did, decisions and why, gotchas, the
    re-run command. Facts only.
-7. Do not commit. The orchestrator commits when the gate passes.
-8. End with a short plain-text summary: what changed, what the gate printed, anything the next step must know.
+8. Do not commit. The orchestrator commits when the gate passes.
+9. End with a short plain-text summary: what changed, what the gate printed, anything the next step must know.
 
 ## Roles
 
