@@ -1589,7 +1589,12 @@ class MiniMaxH3Pipeline:
             batch_shard_axis = None
             if audio_parallel_config is not None:
                 other = 1 - self._audio_t_axis
-                if tuple(self.mesh_device.shape)[other] >= 2:
+                if ttnn.using_distributed_env():
+                    # `_batch_sharded_to_torch` reads each batch item from one local device, and on a
+                    # multi-host mesh the batch axis's low coordinates all sit on rank 0's slab --
+                    # every other rank raises "no local device holds batch item".
+                    logger.warning("audio batch shard skipped: readback is single-host only")
+                elif tuple(self.mesh_device.shape)[other] >= 2:
                     batch_shard_axis = other
                 else:
                     logger.warning(f"audio batch shard skipped: mesh axis {other} has one device")
