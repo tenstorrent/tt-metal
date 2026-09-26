@@ -606,6 +606,27 @@ def test_scatter_reduction(
     assert device.num_program_cache_entries() == expected_num_cache_entries
 
 
+@pytest.mark.parametrize("index_dtype, max_index", [(ttnn.uint16, 2**16), (ttnn.uint8, 2**8)])
+def test_scatter_reduction_bf16_narrow_index_multi_chunk(index_dtype, max_index, device):
+    # Regression: the bf16 reduction reader typed the chunk offset as the index dtype, so on sticks
+    # longer than one chunk a narrow index truncated it and re-reduced indices from earlier chunks.
+    torch.manual_seed(0)
+    input_shape, index_shape = [1, 200000], [1, 50000]
+
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    torch_index = torch.randint(0, max_index, index_shape)
+    torch_src = torch.randn(index_shape, dtype=torch.bfloat16)
+
+    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    ttnn_index = ttnn.from_torch(torch_index, dtype=index_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    ttnn_src = ttnn.from_torch(torch_src, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    torch_result = torch.scatter(torch_input, -1, index=torch_index, src=torch_src, reduce="add")
+    ttnn_result = ttnn.scatter(ttnn_input, -1, ttnn_index, ttnn_src, reduce="add")
+
+    assert_allclose(ttnn.to_torch(ttnn_result), torch_result)
+
+
 @pytest.mark.parametrize(
     "dim, input_shape, index_shape, source_shape, torch_dtype, input_dtype, index_dtype, source_dtype, expected_message",
     [
