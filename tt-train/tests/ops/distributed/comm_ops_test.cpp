@@ -23,7 +23,26 @@ auto check_board_is_n300() {
     return tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0) == tt::BoardType::N300;
 }
 
+auto check_has_at_least_two_chips() {
+    return tt::umd::Cluster::create_cluster_descriptor()->get_all_chips().size() >= 2U;
+}
+
 }  // namespace
+
+class TwoChipCommOpsTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        if (!check_has_at_least_two_chips()) {
+            GTEST_SKIP() << "Requires at least two chips";
+        }
+        ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 2));
+        ttml::autograd::ctx().set_seed(42);
+    }
+
+    void TearDown() override {
+        ttml::autograd::ctx().close_device();
+    }
+};
 
 class N300CommOpsTest : public ::testing::Test {
 protected:
@@ -96,6 +115,46 @@ TEST_F(N300CommOpsTest, TestAllReduceNotFullyTiled) {
         grad_xtensor[1],
         /* rtol */ 1e-3,
         /* atol */ 1e-2));
+}
+
+TEST_F(TwoChipCommOpsTest, RingShiftSingletonAxisIsIdentity) {
+    using namespace ttml;
+
+    auto* device = &autograd::ctx().get_device();
+    auto input = test_utils::make_uniform_xarray<float>(
+        std::array<std::size_t, 4>{1U, 1U, 32U, 64U}, -1.0F, 1.0F, /* seed */ 123U);
+    auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, /* dim */ 3);
+    auto input_device =
+        core::from_xtensor<float, ttnn::DataType::BFLOAT16>(input, device, ttnn::Layout::TILE, mapper.get());
+    auto input_tensor = autograd::create_tensor(input_device, /* requires_grad */ true);
+
+    auto output = ops::distributed::ring_shift(
+        input_tensor, /* cluster_axis */ 0U, ttnn_fixed::distributed::RingShiftDirection::Forward);
+    EXPECT_NE(output, input_tensor);
+    EXPECT_TRUE(output->get_requires_grad());
+    EXPECT_TRUE(output->get_node().has_value());
+    EXPECT_EQ(output->get_value().tensor_attributes, input_device.tensor_attributes);
+
+    const auto output_host = core::to_xtensor<float>(output->get_value(), core::IdentityComposer{});
+    const auto input_host = core::to_xtensor<float>(input_device, core::IdentityComposer{});
+    ASSERT_EQ(output_host.size(), input_host.size());
+    for (std::size_t i = 0; i < input_host.size(); ++i) {
+        EXPECT_TRUE(xt::allclose(output_host[i], input_host[i], 0.0F, 0.0F));
+    }
+
+    auto upstream_grad = test_utils::make_uniform_xarray<float>(
+        std::array<std::size_t, 4>{1U, 1U, 32U, 64U}, -1.0F, 1.0F, /* seed */ 456U);
+    auto upstream_grad_device =
+        core::from_xtensor<float, ttnn::DataType::BFLOAT16>(upstream_grad, device, ttnn::Layout::TILE, mapper.get());
+    output->set_grad(upstream_grad_device);
+    output->backward();
+
+    const auto grad_host = core::to_xtensor<float>(input_tensor->get_grad(), core::IdentityComposer{});
+    const auto upstream_grad_host = core::to_xtensor<float>(upstream_grad_device, core::IdentityComposer{});
+    ASSERT_EQ(grad_host.size(), upstream_grad_host.size());
+    for (std::size_t i = 0; i < upstream_grad_host.size(); ++i) {
+        EXPECT_TRUE(xt::allclose(grad_host[i], upstream_grad_host[i], 0.0F, 0.0F));
+    }
 }
 
 TEST_F(N300CommOpsTest, TestAllReduceNanoGPT) {
